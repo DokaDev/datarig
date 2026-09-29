@@ -1,6 +1,6 @@
 //! File helpers shared by everything datarig writes.
 
-use std::fs::{self, File};
+use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
@@ -178,7 +178,7 @@ pub fn free_backup(path: &Path) -> PathBuf {
 /// data itself is already on disk.
 fn sync_dir(dir: &Path) {
     #[cfg(unix)]
-    if let Ok(d) = File::open(dir) {
+    if let Ok(d) = fs::File::open(dir) {
         let _ = d.sync_all();
     }
     #[cfg(not(unix))]

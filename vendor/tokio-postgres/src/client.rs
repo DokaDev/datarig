@@ -29,7 +29,8 @@ use std::fmt;
 use std::future;
 #[cfg(feature = "runtime")]
 use std::net::IpAddr;
-#[cfg(feature = "runtime")]
+// datarig: only `Socket::Unix` uses it (upstream: `runtime` alone, unused on Windows).
+#[cfg(all(feature = "runtime", unix))]
 use std::path::PathBuf;
 use std::pin::pin;
 use std::sync::Arc;

@@ -106,6 +106,9 @@ connection):
   collide with this process's (`42P05`, prepared statement already exists).
 - `src/lib.rs`: `mod pipeline` and `pub use pipeline::{Executed, FirstPage}`.
 
+**Warnings on Windows**: `src/client.rs` imports `PathBuf` only on Unix, where
+`Addr::Unix` uses it (upstream imports it on every platform, an unused import on Windows).
+
 Every upstream API behaves as before; only callers of the new functions pipeline.
 
 **Upstream shape.** The additions are shaped so they could be offered upstream as they are:
