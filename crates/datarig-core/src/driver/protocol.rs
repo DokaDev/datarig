@@ -2,6 +2,7 @@
 //! session's channels, progress and results come back as [`DbEvent`]s.
 
 use super::keys::KeyCatalog;
+use super::structure::TableStructure;
 use crate::fault::Fault;
 use crate::sql::complete::Catalog;
 use crate::sql::risk::repeat::NotRepeatable;
@@ -128,6 +129,12 @@ pub enum DbCommand {
     /// The databases of the server the user may connect to (`Capabilities::contexts`):
     /// answered with [`DbEvent::Databases`].
     LoadDatabases,
+    /// The structure of table (or view) `schema.table` (`Capabilities::structure`): answered
+    /// with [`DbEvent::Structure`]. Read from the catalog only, never from the table.
+    LoadStructure {
+        schema: String,
+        table: String,
+    },
     /// Run statements in order, stopping at the first that fails; the last one's result is
     /// the run's answer (`Page`, `Done` or `Failed`). With more than one statement the
     /// session reports each one's start ([`DbEvent::Started`]) and, before the last, its end
@@ -182,6 +189,7 @@ impl DbCommand {
                 | DbCommand::LoadCatalog
                 | DbCommand::LoadKeys
                 | DbCommand::LoadDatabases
+                | DbCommand::LoadStructure { .. }
         )
     }
 }
@@ -250,6 +258,13 @@ pub enum DbEvent {
     Keys(Result<KeyCatalog, DbError>),
     /// The answer to `DbCommand::LoadDatabases`: the databases the user may connect to, by name.
     Databases(Result<Vec<String>, DbError>),
+    /// The answer to `DbCommand::LoadStructure`: the structure of `schema.table`, or why it
+    /// could not be read (a table that no longer exists is the server's error).
+    Structure {
+        schema: String,
+        table: String,
+        result: Result<Box<TableStructure>, DbError>,
+    },
     /// Where the session works, as the server says right after `Connected` of a session opened
     /// in a context of its own (`Capabilities::contexts`; none for the profile's
     /// defaults): its database and the schemas of its search path that exist

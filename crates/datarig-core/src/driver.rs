@@ -4,6 +4,7 @@
 
 pub mod keys;
 mod protocol;
+pub mod structure;
 
 pub use keys::{KeyCatalog, KeyMarks};
 pub use protocol::{Cell, ColumnMeta, ColumnOrigin, DbCommand, DbError, DbEvent, Outcome, SchemaObjects};
@@ -33,6 +34,11 @@ pub struct Capabilities {
     /// caller's choice ([`ConnectOptions::context`]) and says which ones it got
     /// ([`DbEvent::Context`]). The UI names them; how they are applied is the driver's.
     pub contexts: bool,
+    /// Table structure: the metadata session reads one table's columns, keys, indexes,
+    /// constraints, triggers and size estimate when asked (`DbCommand::LoadStructure`, answered
+    /// with [`DbEvent::Structure`]); the explorer shows them under the table's node. Without
+    /// it an open table shows its columns from the completion catalog.
+    pub structure: bool,
 }
 
 /// Where a session works: a database and a schema of the profile's server,
