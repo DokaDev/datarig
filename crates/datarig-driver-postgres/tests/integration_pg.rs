@@ -281,6 +281,280 @@ async fn keys_and_column_origins_mark_a_join() {
     assert_eq!((users.schema.as_str(), users.name.as_str()), ("shop", "users"));
 }
 
+/// A table's structure: exact columns (identity, stored generated, defaults), the
+/// primary key, foreign keys (multi-column, `ON DELETE CASCADE`, `ON UPDATE SET NULL`), indexes
+/// (partial, expression, gin, `INCLUDE`, the key's), checks and triggers (enabled and disabled);
+/// no row estimate before the table is analyzed (never 0), one after; a partitioned table sums
+/// its partitions; a view has its `INSTEAD OF` trigger, a materialized view its index; quoted
+/// names work, and a table that does not exist is the server's error. Each read is one unnamed
+/// statement (one Parse on the wire), and the dev tables are not touched.
+#[tokio::test(flavor = "multi_thread")]
+async fn table_structure_reads_the_catalog_in_one_statement() {
+    use datarig_core::driver::structure::*;
+    let Some(url) = pg_url("table_structure_reads_the_catalog_in_one_statement") else { return };
+    let schema = format!("zz_struct_{}", std::process::id());
+    let _guard = SchemaGuard::new(&url, &schema);
+    let s = &schema;
+    for sql in [
+        format!("CREATE SCHEMA {s}"),
+        format!(
+            "CREATE TABLE {s}.parent (a int, b int, code text, PRIMARY KEY (a, b), CONSTRAINT parent_code_key UNIQUE (code))"
+        ),
+        format!(
+            "CREATE TABLE {s}.child (\
+             id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, pa int NOT NULL, pb int NOT NULL, \
+             qty int NOT NULL DEFAULT 1 CONSTRAINT child_qty_check CHECK (qty > 0), doc jsonb, \
+             twice int GENERATED ALWAYS AS (qty * 2) STORED, note text, \
+             CONSTRAINT child_parent_fkey FOREIGN KEY (pa, pb) REFERENCES {s}.parent (a, b) ON DELETE CASCADE, \
+             CONSTRAINT child_note_fkey FOREIGN KEY (note) REFERENCES {s}.parent (code) ON UPDATE SET NULL)"
+        ),
+        format!("CREATE INDEX child_note_partial ON {s}.child (note) WHERE note IS NOT NULL"),
+        format!("CREATE INDEX child_lower_note ON {s}.child (lower(note))"),
+        format!("CREATE INDEX child_doc_gin ON {s}.child USING gin (doc)"),
+        format!("CREATE UNIQUE INDEX child_pa_key ON {s}.child (pa) INCLUDE (qty)"),
+        format!("CREATE FUNCTION {s}.touch() RETURNS trigger LANGUAGE plpgsql AS $$BEGIN RETURN NEW; END$$"),
+        format!(
+            "CREATE TRIGGER child_touch BEFORE INSERT OR UPDATE ON {s}.child FOR EACH ROW EXECUTE FUNCTION {s}.touch()"
+        ),
+        format!("CREATE TRIGGER child_audit AFTER DELETE ON {s}.child FOR EACH STATEMENT EXECUTE FUNCTION {s}.touch()"),
+        format!("ALTER TABLE {s}.child DISABLE TRIGGER child_audit"),
+        format!("INSERT INTO {s}.parent SELECT g, g, 'c' || g FROM generate_series(1, 3) g"),
+        format!("ANALYZE {s}.parent"),
+        format!("CREATE TABLE {s}.part (id int, at date) PARTITION BY RANGE (at)"),
+        format!("CREATE TABLE {s}.part_2025 PARTITION OF {s}.part FOR VALUES FROM ('2025-01-01') TO ('2026-01-01')"),
+        format!("CREATE TABLE {s}.part_2026 PARTITION OF {s}.part FOR VALUES FROM ('2026-01-01') TO ('2027-01-01')"),
+        format!("INSERT INTO {s}.part SELECT g, date '2025-06-01' + g FROM generate_series(1, 400) g"),
+        format!("CREATE MATERIALIZED VIEW {s}.mv AS SELECT pa, count(*) AS n FROM {s}.child GROUP BY pa"),
+        format!("CREATE INDEX mv_pa ON {s}.mv (pa)"),
+        format!("CREATE VIEW {s}.v AS SELECT id, qty FROM {s}.child"),
+        format!("CREATE TRIGGER v_ins INSTEAD OF INSERT ON {s}.v FOR EACH ROW EXECUTE FUNCTION {s}.touch()"),
+        format!(r#"CREATE TABLE {s}."Odd ""Name""" (x int)"#),
+    ] {
+        pg_clean::run_fresh(&url, &sql).unwrap_or_else(|e| panic!("{e}: {sql}"));
+    }
+    let proxy = pg_proxy::Proxy::start(&pg_proxy::upstream(&url)).await;
+    let mut meta = Conn::open(&proxy.url(&url), SessionRole::Meta).await;
+    meta.wait(|e| matches!(e, DbEvent::Keys(_)), 30).await;
+    let mut read = async |table: &str| {
+        let parses = proxy.sent().iter().filter(|m| matches!(m, pg_proxy::Sent::Parse(_))).count();
+        meta.session.send(DbCommand::LoadStructure { schema: schema.clone(), table: table.to_string() });
+        let ev = meta.wait(|e| matches!(e, DbEvent::Structure { .. }), 30).await;
+        let DbEvent::Structure { schema: sch, table: t, result } = ev else { unreachable!() };
+        assert_eq!((sch.as_str(), t.as_str()), (schema.as_str(), table));
+        let sent = proxy.sent();
+        let new: Vec<_> = sent.iter().filter(|m| matches!(m, pg_proxy::Sent::Parse(_))).skip(parses).collect();
+        assert_eq!(new.len(), 1, "{table}: one statement: {new:?}");
+        result.map(|b| *b)
+    };
+    let child = read("child").await.expect("child");
+    let names = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    let col = |name: &str, ty: &str, not_null: bool, default: Option<&str>, fill: ColumnFill| StructureColumn {
+        name: name.into(),
+        type_name: ty.into(),
+        not_null,
+        default: default.map(str::to_string),
+        fill,
+    };
+    assert_eq!(
+        child.columns,
+        [
+            col("id", "bigint", true, None, ColumnFill::IdentityAlways),
+            col("pa", "integer", true, None, ColumnFill::Default),
+            col("pb", "integer", true, None, ColumnFill::Default),
+            col("qty", "integer", true, Some("1"), ColumnFill::Default),
+            col("doc", "jsonb", false, None, ColumnFill::Default),
+            col("twice", "integer", false, None, ColumnFill::Stored("qty * 2".into())),
+            col("note", "text", false, None, ColumnFill::Default),
+        ]
+    );
+    assert_eq!(
+        child.primary_key,
+        Some(KeyConstraint {
+            name: "child_pkey".into(),
+            columns: names(&["id"]),
+            definition: "PRIMARY KEY (id)".into()
+        })
+    );
+    assert_eq!(
+        child.foreign_keys,
+        [
+            ForeignKey {
+                name: "child_note_fkey".into(),
+                columns: names(&["note"]),
+                ref_schema: schema.clone(),
+                ref_table: "parent".into(),
+                ref_columns: names(&["code"]),
+                on_delete: FkAction::NoAction,
+                on_update: FkAction::SetNull,
+                definition: format!("FOREIGN KEY (note) REFERENCES {s}.parent(code) ON UPDATE SET NULL"),
+            },
+            ForeignKey {
+                name: "child_parent_fkey".into(),
+                columns: names(&["pa", "pb"]),
+                ref_schema: schema.clone(),
+                ref_table: "parent".into(),
+                ref_columns: names(&["a", "b"]),
+                on_delete: FkAction::Cascade,
+                on_update: FkAction::NoAction,
+                definition: format!("FOREIGN KEY (pa, pb) REFERENCES {s}.parent(a, b) ON DELETE CASCADE"),
+            },
+        ]
+    );
+    let index =
+        |name: &str, cols: &[&str], include: &[&str], unique, method: &str, predicate: Option<&str>, key, def: &str| {
+            Index {
+                name: name.into(),
+                columns: names(cols),
+                include: names(include),
+                unique,
+                method: method.into(),
+                predicate: predicate.map(str::to_string),
+                primary: key,
+                constraint: key,
+                definition: def.to_string(),
+            }
+        };
+    assert_eq!(
+        child.indexes,
+        [
+            index(
+                "child_doc_gin",
+                &["doc"],
+                &[],
+                false,
+                "gin",
+                None,
+                false,
+                &format!("CREATE INDEX child_doc_gin ON {s}.child USING gin (doc)")
+            ),
+            index(
+                "child_lower_note",
+                &["lower(note)"],
+                &[],
+                false,
+                "btree",
+                None,
+                false,
+                &format!("CREATE INDEX child_lower_note ON {s}.child USING btree (lower(note))")
+            ),
+            index(
+                "child_note_partial",
+                &["note"],
+                &[],
+                false,
+                "btree",
+                Some("note IS NOT NULL"),
+                false,
+                &format!("CREATE INDEX child_note_partial ON {s}.child USING btree (note) WHERE (note IS NOT NULL)")
+            ),
+            index(
+                "child_pa_key",
+                &["pa"],
+                &["qty"],
+                true,
+                "btree",
+                None,
+                false,
+                &format!("CREATE UNIQUE INDEX child_pa_key ON {s}.child USING btree (pa) INCLUDE (qty)")
+            ),
+            index(
+                "child_pkey",
+                &["id"],
+                &[],
+                true,
+                "btree",
+                None,
+                true,
+                &format!("CREATE UNIQUE INDEX child_pkey ON {s}.child USING btree (id)")
+            ),
+        ]
+    );
+    assert!(child.unique_constraints.is_empty(), "a unique index is no constraint");
+    assert_eq!(
+        child.checks,
+        [CheckConstraint {
+            name: "child_qty_check".into(),
+            expression: "qty > 0".into(),
+            definition: "CHECK (qty > 0)".into()
+        }]
+    );
+    assert_eq!(
+        child.triggers,
+        [
+            Trigger {
+                name: "child_audit".into(),
+                timing: TriggerTiming::After,
+                events: vec![TriggerEvent::Delete],
+                for_each_row: false,
+                function: format!("{s}.touch"),
+                enabled: false,
+                definition: format!(
+                    "CREATE TRIGGER child_audit AFTER DELETE ON {s}.child FOR EACH STATEMENT EXECUTE FUNCTION {s}.touch()"
+                ),
+            },
+            Trigger {
+                name: "child_touch".into(),
+                timing: TriggerTiming::Before,
+                events: vec![TriggerEvent::Insert, TriggerEvent::Update],
+                for_each_row: true,
+                function: format!("{s}.touch"),
+                enabled: true,
+                definition: format!(
+                    "CREATE TRIGGER child_touch BEFORE INSERT OR UPDATE ON {s}.child FOR EACH ROW EXECUTE FUNCTION {s}.touch()"
+                ),
+            },
+        ]
+    );
+    assert_eq!(child.kind, RelationKind::Table);
+    assert_eq!(child.estimated_rows, None, "never analyzed: unknown, not 0");
+    assert!(child.total_bytes.is_some_and(|b| b > 0), "{:?}", child.total_bytes);
+    let m = |c| child.marks(c);
+    assert_eq!(
+        (m("id").pk, m("pa").fk, m("pa").unique, m("note").fk, m("qty").unique),
+        (true, true, true, true, false)
+    );
+
+    let parent = read("parent").await.expect("parent");
+    assert_eq!(parent.estimated_rows, Some(3), "analyzed");
+    assert_eq!(parent.primary_key.as_ref().map(|k| k.columns.clone()), Some(names(&["a", "b"])));
+    assert_eq!(
+        parent.unique_constraints,
+        [KeyConstraint {
+            name: "parent_code_key".into(),
+            columns: names(&["code"]),
+            definition: "UNIQUE (code)".into()
+        }]
+    );
+
+    let part = read("part").await.expect("part");
+    assert_eq!((part.kind, part.estimated_rows), (RelationKind::PartitionedTable, None), "partitions never analyzed");
+    assert!(part.total_bytes.is_some_and(|b| b > 0), "its partitions' size: {:?}", part.total_bytes);
+    pg_clean::run_fresh(&url, &format!("ANALYZE {s}.part")).unwrap();
+    assert_eq!(read("part").await.expect("part").estimated_rows, Some(400), "the partitions' estimates");
+
+    let mv = read("mv").await.expect("mv");
+    assert_eq!(mv.kind, RelationKind::MaterializedView);
+    assert_eq!(mv.indexes.iter().map(|i| i.name.as_str()).collect::<Vec<_>>(), ["mv_pa"]);
+    assert!(mv.total_bytes.is_some());
+    let v = read("v").await.expect("v");
+    assert_eq!((v.kind, v.estimated_rows, v.total_bytes), (RelationKind::View, None, None));
+    assert_eq!(v.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["id", "qty"]);
+    let t = &v.triggers[0];
+    assert_eq!(
+        (t.timing, t.events.as_slice(), t.for_each_row),
+        (TriggerTiming::InsteadOf, [TriggerEvent::Insert].as_slice(), true)
+    );
+
+    let odd = read("Odd \"Name\"").await.expect("a quoted name");
+    assert_eq!(odd.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["x"]);
+    match read("no_such_table").await {
+        Err(DbError::Server(e)) => assert!(e.contains("does not exist"), "{e}"),
+        other => panic!("{other:?}"),
+    }
+    // The metadata session still answers (a failed read leaves nothing open).
+    assert!(read("parent").await.is_ok());
+}
+
 /// One connection per session, named after its role; the metadata session refuses statements.
 #[tokio::test(flavor = "multi_thread")]
 async fn each_session_is_one_connection_named_after_its_role() {

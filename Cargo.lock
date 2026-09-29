@@ -868,6 +868,7 @@ dependencies = [
  "fallible-iterator",
  "futures",
  "postgres-protocol",
+ "serde",
  "serde_json",
  "tokio",
  "tokio-postgres",

@@ -1,5 +1,6 @@
 //! The *meta* connection: schemas, relations and columns for the explorer tree and completion,
-//! and the key constraints of the tables (`Capabilities::key_metadata`). Every read reports its
+//! the key constraints of the tables (`Capabilities::key_metadata`), and one table's structure
+//! when its node opens (`Capabilities::structure`, [`structure`]). Every read reports its
 //! failure: a catalog or key list that could not be read is never sent as an empty one.
 //!
 //! Every read is one unnamed statement, parsed, bound and run in one round trip
@@ -14,6 +15,8 @@ use datarig_core::sql::complete::{Catalog, ColumnInfo, Relation};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_postgres::Client;
 use tokio_postgres::types::Type;
+
+mod structure;
 
 const HIDDEN_SCHEMAS: &str = "n.nspname NOT IN ('pg_catalog', 'information_schema') \
      AND n.nspname NOT LIKE 'pg\\_toast%' AND n.nspname NOT LIKE 'pg\\_temp%'";
@@ -48,6 +51,14 @@ pub(crate) async fn meta_loop(client: Client, mut link: Link, events: UnboundedS
                 DbCommand::LoadCatalog => DbEvent::Catalog(load_catalog(&client).await),
                 DbCommand::LoadKeys => DbEvent::Keys(load_keys(&client, &version).await),
                 DbCommand::LoadDatabases => DbEvent::Databases(load_databases(&client).await),
+                DbCommand::LoadStructure { schema, table } => {
+                    // It reads `attgenerated` and `pg_partition_tree`, as the keys do (12).
+                    let result = match version.clone().and_then(keys_supported) {
+                        Ok(()) => structure::load_structure(&client, &schema, &table).await.map(Box::new),
+                        Err(e) => Err(e),
+                    };
+                    DbEvent::Structure { schema, table, result }
+                }
                 // Statements run on a tab's query session, never on the shared metadata one.
                 DbCommand::Execute { id, .. }
                 | DbCommand::Resume { id, .. }

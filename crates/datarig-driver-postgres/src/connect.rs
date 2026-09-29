@@ -49,7 +49,14 @@ impl Canceller for PgCanceller {
 
 impl Driver for PgDriver {
     fn capabilities(&self) -> Capabilities {
-        Capabilities { server_paging: true, cancel: true, introspection: true, key_metadata: true, contexts: true }
+        Capabilities {
+            server_paging: true,
+            cancel: true,
+            introspection: true,
+            key_metadata: true,
+            contexts: true,
+            structure: true,
+        }
     }
 
     fn connect(

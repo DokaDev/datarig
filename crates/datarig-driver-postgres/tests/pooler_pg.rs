@@ -147,6 +147,14 @@ async fn metadata_session_reads_the_catalog_behind_a_pooler() {
             c.session.send(DbCommand::LoadDatabases);
             let DbEvent::Databases(dbs) = c.wait(|e| matches!(e, DbEvent::Databases(_)), 10).await else { panic!() };
             assert!(dbs.expect("databases").contains(&"datarig".to_string()));
+            // A table's structure (one unnamed statement, as every read here).
+            c.session.send(DbCommand::LoadStructure { schema: "shop".into(), table: "orders".into() });
+            let DbEvent::Structure { result, .. } = c.wait(|e| matches!(e, DbEvent::Structure { .. }), 10).await else {
+                panic!()
+            };
+            let orders = result.expect("structure");
+            assert_eq!(orders.primary_key.map(|k| k.columns), Some(vec!["id".to_string()]));
+            assert!(orders.foreign_keys.iter().any(|f| f.ref_table == "users"));
         }
     }
 }

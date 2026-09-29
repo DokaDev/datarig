@@ -18,12 +18,14 @@ chrono.workspace = true
 fallible-iterator.workspace = true
 futures.workspace = true
 postgres-protocol.workspace = true
+# The table structure comes as one JSON document (one round trip).
+serde.workspace = true
+serde_json.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "sync", "time"] }
 tokio-postgres.workspace = true
 
 [dev-dependencies]
 datarig-core = { workspace = true, features = ["test-util"] }
-serde_json.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "net", "io-util"] }
 
 [lints]
