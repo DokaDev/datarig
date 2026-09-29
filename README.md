@@ -1,0 +1,314 @@
+# datarig
+
+[![CI](https://github.com/DokaDev/datarig/actions/workflows/ci.yml/badge.svg)](https://github.com/DokaDev/datarig/actions/workflows/ci.yml)
+
+A terminal database client: a DataGrip-style workspace for your databases, in the terminal.
+
+datarig is written in Rust with [Ratatui](https://ratatui.rs). It keeps several connections
+open side by side, each with its own tabs, a schema explorer, a SQL editor with vim keys and a
+results grid that pages through large results explicitly instead of loading them whole. It is
+careful by default: dangerous statements ask first, and read-only profiles are enforced by the
+server.
+
+## Status
+
+**Early, pre-release.** There are no release binaries or packages yet; build it from source.
+Only **PostgreSQL** is implemented today. The configuration format, key bindings and behavior
+may still change between commits.
+
+## Features
+
+Everything below works today, with PostgreSQL.
+
+**Workspace**
+- Several connections at once, each with its own metadata session, schema tree and completion
+  catalog. A tab belongs to one connection; tabs of different connections sit side by side.
+- The explorer lists every connection profile, the server's databases, their schemas, tables,
+  views (materialized views with an icon of their own), columns with their key marks (PK, FK,
+  unique) and types.
+  Nerd Font icons are optional (asked once, `:set icons=on|off`).
+- Connection profiles with colors, icons and nested folders; a quick-connect list (`Ctrl+O`)
+  with fuzzy search; a database and schema per tab (`:use db.schema`).
+- Saved queries as plain `.sql` files in folders, autosave of every tab, and the workspace
+  (tabs, cursors, open folders) restored at the next start. Closed consoles go to a trash
+  (`:recover`). A second instance opens read-only instead of fighting over the files.
+- English and Korean UI (`:set language=en|ko|auto`).
+
+**Passwords and connections**
+- Password sources per profile: the OS keychain (every call off the UI thread, with a time
+  limit, so a locked or remote keychain cannot freeze the app), a `0600` secrets file, a command
+  (`password_command`, for example a password manager's CLI), an environment variable, or a
+  prompt on every connect. Plaintext passwords found in the config file are moved to the
+  keychain at launch.
+- Connection URLs (`postgres://user@host:port/db?...`) can be pasted into the profile form.
+- **SSH tunnels** through one bastion per profile: key files (OpenSSH, PEM including AWS `.pem`,
+  PKCS#8, encrypted or not, with certificates), password, ssh-agent, or keyboard-interactive
+  (one-time codes). Host keys are checked against `~/.ssh/known_hosts` (read only; hashed
+  names, wildcards, `@revoked`) and datarig's own `known_hosts`; an unknown or changed key is
+  always asked about, never accepted silently. Every session, cancel request and test
+  connection of the profile goes through the tunnel.
+- **PgBouncer and other transaction poolers**: nothing outside the query session relies on
+  prepared statements, statement names are unique per process, and a profile can turn the
+  server-side statement cache off (`statement_cache = false`). When the server keeps losing
+  prepared statements, the session turns the cache off by itself and says so.
+- A test connection from the profile form, with the server version and the latency (and the
+  tunnel's time).
+
+**SQL editor**
+- A subset of vim: Normal, Insert and Visual modes; `h` `j` `k` `l`, `w` `b` `e`, `0` `^` `$`,
+  `gg` `G`; `i` `a` `I` `A` `o` `O`; `x`, `dd`, `yy`, `p` `P`; `u` and `Ctrl+R`; `v` with `y`,
+  `d` and `x`. Counts, operators with motions, text objects, search and macros are not there
+  yet (their keys are reserved). Commands keep working with a Korean (2-Set) input source: the
+  jamo are read as the QWERTY keys they sit on.
+- Syntax highlighting, completion of schemas, tables and columns (aliases included), and the
+  statement under the cursor marked in the gutter.
+- Run the statement under the cursor (`Ctrl+E`), a selection, or several statements in a row:
+  each statement's outcome is listed in a Messages tab, and every row result gets a result tab
+  of its own. Queries can be cancelled (`Ctrl+C`).
+
+**Results**
+- A grid that shows one page at a time (`n`/`p`), fetched from a server-side portal; the rows
+  already fetched stay in a bounded memory window and spill to a private temporary file past it.
+  An idle portal is closed after a policy's timeout, and a closed result can be re-run from the
+  page you were on when the statement is safe to repeat.
+- A row count on demand, with a label that says whether it matches the pages you saw.
+- An inspector for the selected cell or row (JSON pretty-printed), a cell viewer, and cell,
+  row, column and range selection with the keyboard or the mouse.
+- Copy as TSV (with or without headers), CSV, JSON, indented JSON, Markdown, HTML, XML, an SQL
+  `IN` list, or SQL `INSERT`/`UPDATE` statements (only when the target table is certain), to the
+  system clipboard or through OSC 52 over SSH.
+- Transaction indicators in the tab bar and the status bar (open, aborted, "rollback required"),
+  and questions before closing, quitting or disconnecting would roll back your work.
+
+**Safety**
+- Statements are classified with PostgreSQL's own parser (libpg_query), not with a regular
+  expression: `DROP`, `TRUNCATE`, `UPDATE`/`DELETE` without a real `WHERE`, `ALTER ... TYPE`,
+  `DO`/`CALL`, `COPY` to or from server files or programs, server-side built-ins that act on
+  files or backends, and text the parser rejects all ask before they run.
+- Safety policies per profile (`[policy.<name>]`): `read_only`, which statements need a
+  confirmation (`confirm = "destructive"` or `"writes"`), the idle portal timeout and the spill
+  limit. **Read-only is enforced by the server**: every transaction of a read-only profile is
+  opened `READ ONLY`, so even a function called from a `SELECT` cannot write.
+- `EXPLAIN ANALYZE` of a write is rolled back.
+
+**Keys**
+- A context keymap with a which-key popup after `Space`, keyboard help (`F1` or `Space ?`) with
+  search, a `:` command line (`Ctrl+K` everywhere) that runs commands and finds every action by
+  name, and remapping in the config file. See [docs/keybindings.md](docs/keybindings.md).
+
+**Performance**, held by budgets that CI enforces (`crates/datarig-bench/budgets.toml`,
+[docs/perf.md](docs/perf.md)):
+- One round trip for the first page of a prepared `SELECT`, one for each later page and one
+  for an `INSERT`, counted exactly through a latency proxy, also through an SSH tunnel.
+- Paging through all 4,000,000 rows of the test table stays under 96 MiB of resident memory,
+  growing less than 16 MiB after the in-memory window is full.
+- Keystroke to frame under 25 ms (p95) in a 5 MB SQL file.
+- Idle: under 48 MiB and 1% CPU, and fewer than 0.2 wakeups a second when nothing is waiting.
+- First frame under 250 ms (p95); the release binary is under 16 MiB.
+
+## Not yet (roadmap)
+
+Planned, in no particular order and with no dates:
+
+- Drivers for MySQL/MariaDB, Valkey/Redis and Elasticsearch
+- TLS connections (today every connection is plain TCP; use an SSH tunnel across untrusted
+  networks, and servers that require TLS cannot be reached yet)
+- A server monitor (sessions, locks, activity)
+- Themes
+- The standard (non-vim) editor mode: the setting exists, but the editor keeps vim keys for now
+- More of vim: counts, operators with motions, text objects, search, macros
+- DDL view of tables and other objects
+- Query profiling and charts
+- Multi-hop SSH and importing hosts from `~/.ssh/config`
+- Release binaries and packages
+
+## Install
+
+datarig builds from source with the Rust toolchain. You need:
+
+- Rust **1.93** or newer (`rust-toolchain.toml` pins 1.93.0; rustup installs it
+  automatically).
+- A C compiler and **libclang**, for the `pg_query` crate (it compiles PostgreSQL's parser and
+  generates bindings with bindgen). On macOS the Xcode Command Line Tools have both; on
+  Debian/Ubuntu `apt install clang libclang-dev`; on Windows install LLVM and set
+  `LIBCLANG_PATH` if bindgen does not find it.
+
+```sh
+git clone https://github.com/DokaDev/datarig
+cd datarig
+cargo install --locked --path crates/datarig-tui   # installs the `datarig` binary
+# or: cargo build --release   (the binary is target/release/datarig)
+```
+
+A terminal of at least 80×24 is required. A Nerd Font is optional (for the icons).
+
+## Quick start
+
+```sh
+datarig                # open the workspace; the explorer offers "＋ New connection"
+datarig my-profile     # connect to a profile and open a console
+datarig --config path/to/config.toml
+```
+
+In the workspace, press `Space` and wait to see what follows, or `F1` for the keyboard help.
+`Ctrl+O` picks a connection, `Ctrl+E` runs the statement under the cursor, `Ctrl+C` cancels,
+`:q` closes a tab and `:qa` quits.
+
+To try it against a local test database, start the development PostgreSQL from `dev/` (see
+[Development](#development)) and add a profile with host `127.0.0.1`, port `55432`, user,
+password and database `datarig`, or paste `postgres://datarig@127.0.0.1:55432/datarig` into
+the new-connection form.
+
+## Configuration
+
+The config file is `--config <path>`, else `$XDG_CONFIG_HOME/datarig/config.toml`, else
+`~/.config/datarig/config.toml` (on every OS). The app creates and edits it (comments and key
+order are kept); you can also write it by hand. Passwords are never written to it.
+
+```toml
+version = 2
+language = "en"            # en | ko | auto
+
+[editor]
+mode = "vim"
+
+[[connections]]
+name = "local"
+driver = "postgres"
+host = "127.0.0.1"
+port = 5432
+user = "me"
+database = "app"
+color = "green"
+folder = "dev"
+password_source = "keychain"   # keychain | file | command | env | prompt
+
+[[connections]]
+name = "prod-replica"
+driver = "postgres"
+host = "db.internal"
+port = 5432
+user = "readonly"
+database = "app"
+color = "red"
+folder = "work/prod"
+policy = "prod"
+password_source = "command"
+password_command = "op read op://work/prod-db/password"
+
+[connections.ssh]
+enabled = true
+host = "bastion.example.com"
+user = "ec2-user"
+auth = "key"                   # key | password | agent | keyboard-interactive
+key_file = "~/.ssh/prod.pem"
+
+[policy.prod]
+read_only = true
+confirm = "writes"
+paging_idle_timeout = "10s"
+```
+
+Data (saved queries, datarig's own `known_hosts`) and state (tabs, console buffers) live in the
+platform's data and state directories (`~/.local/share/datarig` and `~/.local/state/datarig`
+on Linux, `~/Library/Application Support/datarig` on macOS, `%APPDATA%\datarig` and
+`%LOCALAPPDATA%\datarig` on Windows), or under `$XDG_DATA_HOME` / `$XDG_STATE_HOME` when set.
+`DATARIG_SECRET_STORE=memory` keeps passwords in memory only and never touches the OS keychain.
+
+## Safety model
+
+- **What asks**: every statement is parsed with PostgreSQL's parser before it is sent. A
+  destructive or unknown statement opens a confirmation with Cancel focused; a policy with
+  `confirm = "writes"` asks for every write.
+- **What is refused**: a read-only profile refuses anything that is not a read, transaction
+  control or a safe session setting before sending it, and the server rejects the rest, because
+  every transaction is opened `READ ONLY`.
+- **What it is not**: the confirmation is a guardrail against mistakes in what the text shows.
+  Functions called from a query, triggers, views and rules are not inspected; a read-only
+  policy is the guarantee.
+- Results that page keep an implicit transaction open on the server; it is closed after the
+  policy's idle timeout (30 s by default) so it does not hold back vacuum.
+
+## SSH tunnels
+
+Each profile can reach its database through one SSH bastion (the profile form's SSH section,
+or `[connections.ssh]`). datarig opens the tunnel itself (pure Rust, no `ssh` binary) and dials
+every connection of the profile through `direct-tcpip` channels; nothing else is requested from
+the server. The key file must not be readable by others, as OpenSSH requires. The key's
+passphrase or the SSH password uses the same sources as database passwords. Keepalives detect a
+dead tunnel, and the explorer marks the profile until the next use reconnects.
+
+## Development
+
+The workspace layout:
+
+| Path | What |
+|---|---|
+| `crates/datarig-core` | UI-free core: driver interface, SQL tooling and the safety classifier, profiles, secrets, config, i18n |
+| `crates/datarig-driver-postgres` | the PostgreSQL driver |
+| `crates/datarig-ssh` | SSH tunnels |
+| `crates/datarig-tui` | the terminal UI and the `datarig` binary |
+| `crates/datarig-bench` | benchmarks and the CI performance budgets |
+| `vendor/tokio-postgres` | a patched tokio-postgres (per-column result formats, pipelining); see [vendor/README.md](vendor/README.md) |
+| `locales` | the UI text catalogs (`en.toml`, `ko.toml`) |
+| `dev` | Docker Compose with PostgreSQL, MySQL, PgBouncer and an SSH bastion for the tests |
+| `docs` | [architecture](docs/architecture.md), [key bindings](docs/keybindings.md), [performance](docs/perf.md) |
+
+Unit and flow tests need nothing else:
+
+```sh
+cargo test --workspace
+```
+
+The integration tests need the services of `dev/`; without their environment variables they
+print `SKIPPED`:
+
+```sh
+cd dev
+docker compose up -d
+docker compose --profile pooler up -d pgbouncer
+sh ssh/make-fixture.sh                       # prints the fixture directory
+docker compose --profile ssh up -d --build ssh-bastion
+cd ..
+
+export DATARIG_TEST_PG_URL=postgres://datarig:datarig@127.0.0.1:55432/datarig
+export DATARIG_TEST_POOLER_URL=postgres://datarig:datarig@127.0.0.1:56432/datarig
+export DATARIG_TEST_SSH_BASTION=127.0.0.1:52222
+export DATARIG_SSH_FIXTURE=$PWD/dev/ssh/.fixture
+export DATARIG_REQUIRE_PG=1 DATARIG_REQUIRE_POOLER=1 DATARIG_REQUIRE_SSH=1   # fail instead of skipping
+cargo test --workspace
+
+# the driver's suite again with every connection going through a dialer, as through a tunnel
+DATARIG_TEST_DIAL=tcp cargo test -p datarig-driver-postgres --test integration_pg
+```
+
+The performance budgets (needs tmux and the database above):
+
+```sh
+cargo build --release -p datarig-tui -p datarig-bench
+./target/release/datarig-bench budget
+```
+
+Before sending a change: `cargo fmt --all --check`, `cargo clippy --workspace --all-targets --
+-D warnings` and the tests. Snapshot tests use [insta](https://insta.rs); after an intended
+rendering change, `INSTA_UPDATE=always cargo test -p datarig-tui` rewrites the snapshots, and
+the diff is part of the review. `docs/keybindings.md` is generated:
+`DATARIG_BLESS=1 cargo test -p datarig-tui --test keybindings_doc`. See
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
+## License
+
+datarig is dual-licensed under either of
+
+- the Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- the MIT license ([LICENSE-MIT](LICENSE-MIT))
+
+at your option. Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in datarig by you, as defined in the Apache-2.0 license, shall be dual licensed as
+above, without any additional terms or conditions.
+
+Third-party code: `vendor/tokio-postgres` keeps its own MIT/Apache-2.0 licenses, and the C code
+built in through `pg_query` (libpg_query, PostgreSQL, protobuf-c, xxHash) has its notices in
+`vendor/licenses/pg_query/`. `scripts/third-party-notices.sh` (cargo-about) writes
+`THIRD-PARTY-NOTICES.html` with the licenses of every crate in the binary; CI builds it as an
+artifact. `cargo deny check` keeps the dependencies to permissive licenses.
