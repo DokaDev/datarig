@@ -100,9 +100,23 @@ fn tree_and_type_icons_are_pinned_by_name() {
             ("nf-md-shape_outline", 0xf0832),
         ]
     );
-    // Every node and category has its own glyph, one column wide, in the Supplementary
-    // Private Use Area-A (where Nerd Fonts v3 puts the Material Design icons).
-    let mut all: Vec<&str> = TREE.iter().map(|t| t.2).chain(TYPES.iter().map(|t| t.2)).collect();
+    let groups: Vec<(&str, u32)> = STRUCTURE.iter().map(|t| (t.1, t.2.chars().next().unwrap() as u32)).collect();
+    assert_eq!(
+        groups,
+        [
+            ("nf-md-table_column", 0xf0835),
+            ("nf-md-key", 0xf0306),
+            ("nf-md-key_link", 0xf119f),
+            ("nf-md-format_list_numbered", 0xf027b),
+            ("nf-md-fingerprint", 0xf0237),
+            ("nf-md-checkbox_marked_outline", 0xf0135),
+            ("nf-md-lightning_bolt", 0xf140b),
+        ]
+    );
+    // Every node, category and structure group has its own glyph, one column wide, in the
+    // Supplementary Private Use Area-A (where Nerd Fonts v3 puts the Material Design icons).
+    let mut all: Vec<&str> =
+        TREE.iter().map(|t| t.2).chain(TYPES.iter().map(|t| t.2)).chain(STRUCTURE.iter().map(|t| t.2)).collect();
     for g in &all {
         let mut chars = g.chars();
         let c = chars.next().unwrap();
@@ -112,7 +126,8 @@ fn tree_and_type_icons_are_pinned_by_name() {
     }
     all.sort_unstable();
     all.dedup();
-    assert_eq!(all.len(), TREE.len() + TYPES.len(), "no glyph twice");
+    assert_eq!(all.len(), TREE.len() + TYPES.len() + STRUCTURE.len(), "no glyph twice");
+    assert_eq!(structure(StructureGroup::Triggers), "\u{f140b}");
     assert_eq!(TreeIcon::MaterializedView.glyph(), "\u{f13a0}");
     assert_ne!(TreeIcon::View.glyph(), TreeIcon::MaterializedView.glyph());
 }

@@ -34,6 +34,16 @@ impl WiredSession {
     /// A query session behind a proxy that delays each direction by `one_way`, of a profile
     /// whose policy is read-only (`read_only`: every transaction is `READ ONLY`) or not.
     pub async fn open(url: &str, one_way: Duration, read_only: bool) -> Result<WiredSession, String> {
+        WiredSession::open_as(url, one_way, read_only, SessionRole::Query).await
+    }
+
+    /// A session of `role` behind the proxy (the metadata session for the explorer's reads).
+    pub async fn open_as(
+        url: &str,
+        one_way: Duration,
+        read_only: bool,
+        role: SessionRole,
+    ) -> Result<WiredSession, String> {
         let d = datarig_core::profile::dsn::parse(url).map_err(|e| format!("{e:?}"))?;
         let p = proxy::start(d.host.clone(), d.port.unwrap_or(5432), one_way).await.map_err(|e| e.to_string())?;
         let cfg = ConnectionConfig {
@@ -47,9 +57,8 @@ impl WiredSession {
             ..ConnectionConfig::default()
         };
         let (tx, rx) = unbounded_channel();
-        let opts =
-            ConnectOptions::new(500, SessionRole::Query, &format!("bench{}", std::process::id())).read_only(read_only);
-        let session = PgDriver.connect(&cfg, SessionRole::Query, opts, tx);
+        let opts = ConnectOptions::new(500, role, &format!("bench{}", std::process::id())).read_only(read_only);
+        let session = PgDriver.connect(&cfg, role, opts, tx);
         let mut s = WiredSession { session, rx, id: 0, counts: p.counts, one_way };
         match s.next(Duration::from_secs(10)).await? {
             DbEvent::Connected => Ok(s),
@@ -348,5 +357,18 @@ pub async fn run(url: &str, one_way: Duration, runs: usize) -> Result<Value, Str
         r.cost("ROLLBACK").await?;
     }
     out.push(report("ro_first_in_block", &first));
+    // The explorer opening a table: its structure, read on the metadata session (after the
+    // reads it makes when it connects).
+    let mut m = WiredSession::open_as(url, one_way, false, SessionRole::Meta).await?;
+    let mut costs = Vec::new();
+    for _ in 0..runs {
+        let load = DbCommand::LoadStructure { schema: "shop".into(), table: "orders".into() };
+        let (c, ev) = m.measure(load, |e| matches!(e, DbEvent::Structure { .. })).await?;
+        if !matches!(ev, DbEvent::Structure { result: Ok(_), .. }) {
+            return Err(format!("table_structure: {ev:?}"));
+        }
+        costs.push(c);
+    }
+    out.push(report("table_structure", &costs));
     Ok(json!({ "one_way_ms": one_way.as_millis() as u64, "scenarios": out }))
 }

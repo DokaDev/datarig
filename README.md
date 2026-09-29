@@ -28,9 +28,17 @@ Everything below works today, with PostgreSQL.
 **Workspace**
 - Several connections at once, each with its own metadata session, schema tree and completion
   catalog. A tab belongs to one connection; tabs of different connections sit side by side.
-- The explorer lists every connection profile, the server's databases, their schemas, tables,
-  views (materialized views with an icon of their own), columns with their key marks (PK, FK,
-  unique) and types.
+- The explorer lists every connection profile, the server's databases, their schemas, tables and
+  views (materialized views with an icon of their own). An open table shows its structure, read
+  from the catalog in one round trip the first time it opens (`r` reads it again; the table
+  itself is never read): the server's estimate of its rows and its size on disk (`~11k rows ·
+  4.2 MB`, or "rows unknown" before it was ever analyzed), then Columns (key marks, type,
+  `not null`, default), Primary Key, Foreign Keys (`Enter` goes to the referenced table),
+  Indexes (columns or expressions, `UNIQUE`, method, partial predicate, whether a key or
+  constraint owns it), Unique and Check Constraints and Triggers (timing, events, row or
+  statement, function, disabled). Views show their columns and triggers, materialized views
+  their columns and indexes. A group with nothing in it is dim, without a count. The explorer
+  is narrow, so the status bar shows the whole line under the cursor.
   Nerd Font icons are optional (asked once, `:set icons=on|off`).
 - Connection profiles with colors, icons and nested folders; a quick-connect list (`Ctrl+O`)
   with fuzzy search; a database and schema per tab (`:use db.schema`).

@@ -88,3 +88,15 @@ fn wrap_words_keeps_words_whole() {
     assert_eq!(wrap_words("a verylongword b", 5), ["a", "veryl", "ongwo", "rd b"]);
     assert_eq!(wrap_words("", 5), [""]);
 }
+
+#[test]
+fn counts_and_sizes_read_short() {
+    let counts =
+        [0, 7, 999, 1_000, 4_249, 9_960, 11_000, 10_999, 999_499, 999_500, 3_140_000, 12_000_000, 2_000_000_000];
+    assert_eq!(
+        counts.map(human_count),
+        ["0", "7", "999", "1k", "4.2k", "10k", "11k", "11k", "999k", "1M", "3.1M", "12M", "2B"]
+    );
+    let sizes = [0, 512, 1023, 1024, 8192, 4_404_019, 19_505_152, 5 << 30, 3 << 40];
+    assert_eq!(sizes.map(human_bytes), ["0 B", "512 B", "1023 B", "1 KB", "8 KB", "4.2 MB", "19 MB", "5 GB", "3 TB"]);
+}

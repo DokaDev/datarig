@@ -86,12 +86,14 @@ fn tree_lazy_load_and_open_table() {
 }
 
 /// The explorer's tree with every kind of node open: a schema, both groups, tables, a view, a
-/// materialized view, key columns and columns of every type category.
+/// materialized view, key columns and columns of every type category (a driver without the
+/// table structure: the columns come from the catalog; `flows_structure` has the structure).
 fn tree_all_kinds(icons: bool) -> Harness {
     use datarig_core::config::IconsSetting;
     use datarig_core::driver::SchemaObjects;
     use datarig_core::sql::complete::{ColumnInfo, Relation};
     let mut h = Harness::connected(Lang::En);
+    h.driver.no_structure.store(true, std::sync::atomic::Ordering::SeqCst);
     h.app.icons = if icons { IconsSetting::On } else { IconsSetting::Off };
     let mut cat = catalog();
     let col = |n: &str, t: &str| ColumnInfo { name: n.into(), type_name: t.into() };

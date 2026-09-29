@@ -1,0 +1,28 @@
+---
+source: crates/datarig-tui/tests/flows_structure.rs
+expression: "h.draw(w, hh).backend()"
+---
+"╭ Explorer ────────────╮ 1 console 1 ○ ×                                        "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ ●  local-pg        ││  local-pg / datarig  127.0.0.1:55432                │"
+"│  ▾  datarig default ││  1 -- datarig 🐘  Ctrl+E: run the statement under the│" Hidden by multi-width symbols: [(41, " ")]
+"│    ▸ 󱋣 analytics     ││  2▎SELECT * FROM shop.users WHERE id <= 8;           │"
+"│    ▸ 󱋣 public        ││  3                                                   │"
+"│    ▾ 󱋣 shop          ││  4 SELECT u.name, o.status, o.total_amount           │"
+"│      ▾ 󱏈 Tables      ││  5 FROM shop.orders o                                │"
+"│        ▸ 󰓫 order_ite…││  6 JOIN shop.users u ON u.id = o.user_id             │"
+"│        ▾ 󰓫 orders    ││  7 WHERE o.status = 'paid';                          │"
+"│            rows unkn…││  8                                                   │"
+"│          ▾ 󰠵 Columns…││  9 SELECT * FROM analytics.events;                   │"
+"│                id …││ 10                                                   │"
+"│               user_…││ 11 SELECT * FROM analytics.events ORDER BY created_at│"
+"│              󰊄 status││ 12                                                   │"
+"│          ▸ 󰌆 Primary…││ 13 SELECT analytics.slow(30);                        │"
+"│          ▾ 󱆟 Foreign…││ 14                                                   │"
+"│            ▾ 󱆟 order…││ 15 SELECT $$a body; with a semicolon$$ AS dollar, 'it│"
+"│                id → …││ 16                                                   │"
+"│            ▸ 󱆟 order…││                                                      │"
+"│            󰉻 Indexes ││                                                      │"
+"│            󰈷 Unique …││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" NORMAL  local-pg · policy: default │ Connected to local-pg     │ Enter open EN "

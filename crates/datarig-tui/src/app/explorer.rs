@@ -9,7 +9,7 @@
 //! profile, an error line).
 
 use super::*;
-use crate::widgets::tree::Node;
+use crate::widgets::tree::{Node, Reveal};
 use datarig_core::profile::folder::FolderPath;
 
 /// What a row of the explorer shows.
@@ -247,9 +247,10 @@ impl App {
     /// server lists, each opening to its schema tree through that database's aux session.
     fn push_databases(&self, id: ProfileId, c: &ProfileConn, depth: usize, rows: &mut Vec<Row>) {
         rows.push(Row { kind: RowKind::Database(id, None), depth });
+        let structured = self.structure_on(id);
         if c.own_open {
-            // An open table's columns come from the completion catalog.
-            for r in c.tree.rows_with(|s, n| column_count(&c.catalog, s, n)) {
+            // An open table shows its structure, or its columns from the completion catalog.
+            for r in c.tree.rows_with(|s, n| column_count(&c.catalog, s, n), structured) {
                 rows.push(Row { kind: RowKind::Node(id, r.node), depth: depth + 1 + r.depth });
             }
         }
@@ -274,12 +275,18 @@ impl App {
                     rows.push(Row { kind: RowKind::DatabaseNote(id, db.clone()), depth: depth + 1 });
                 }
                 Some(a) => {
-                    for r in a.tree.rows_with(|s, n| column_count(&a.catalog, s, n)) {
+                    for r in a.tree.rows_with(|s, n| column_count(&a.catalog, s, n), structured) {
                         rows.push(Row { kind: RowKind::AuxNode(id, db.clone(), r.node), depth: depth + 1 + r.depth });
                     }
                 }
             }
         }
+    }
+
+    /// Profile `id`'s driver reads a table's structure (`Capabilities::structure`): an open
+    /// table shows it instead of its catalog columns.
+    pub(super) fn structure_on(&self, id: ProfileId) -> bool {
+        self.profile(id).and_then(|p| self.driver(&p.driver)).is_some_and(|d| d.capabilities().structure)
     }
 
     /// Ask for the databases of profile `id`'s server for the explorer, once (again after a
@@ -292,6 +299,12 @@ impl App {
         c.databases = None;
         c.databases_asked = true;
         self.send_meta(id, DbCommand::LoadDatabases);
+    }
+
+    /// The whole line of `row` as the explorer draws it (indentation, arrow, icons, marks and
+    /// details), not cut at the explorer's width.
+    pub fn explorer_line_text(&self, row: &Row) -> String {
+        crate::widgets::explorer::row_text(self, row)
     }
 
     /// The row under the explorer's cursor.
@@ -506,8 +519,9 @@ impl App {
                     };
                     let db = db.clone();
                     self.ensure_aux(id, &db);
+                    let structured = self.structure_on(id);
                     let Some(a) = self.conns.aux_mut(id, &db) else { return };
-                    let action = a.tree.refresh(node);
+                    let action = a.tree.refresh(node, structured);
                     self.aux_tree_action(id, &db, action);
                     return;
                 }
@@ -519,10 +533,11 @@ impl App {
                 if matches!(row.kind, RowKind::Profile(_) | RowKind::DatabasesNote(_)) {
                     self.ask_databases(id, true);
                 }
+                let structured = self.structure_on(id);
                 let Some(c) = self.conns.get_mut(id) else { return };
                 c.expanded = true;
                 c.own_open |= matches!(row.kind, RowKind::Database(..));
-                let a = c.tree.refresh(node);
+                let a = c.tree.refresh(node, structured);
                 self.tree_action(id, a);
             }
             ExplorerAction::Filter => self.explorer.filtering = true,
@@ -583,6 +598,24 @@ impl App {
         let cmds = match action {
             TreeAction::None => return,
             TreeAction::LoadObjects(schema) => vec![DbCommand::LoadObjects { schema }],
+            TreeAction::LoadStructure { schema, name } => {
+                if !self.structure_on(id) {
+                    return;
+                }
+                if let Some(a) = self.conns.aux_mut(id, db) {
+                    a.tree.structure_loading(&schema, &name);
+                }
+                vec![DbCommand::LoadStructure { schema, table: name }]
+            }
+            TreeAction::Reveal { schema, name } => {
+                let Some(a) = self.conns.aux_mut(id, db) else { return };
+                let db = db.to_string();
+                return match a.tree.reveal(&schema, &name) {
+                    Reveal::Found(n) => self.explorer.select_kind(RowKind::AuxNode(id, db, n)),
+                    Reveal::Pending(action) => self.aux_tree_action(id, &db, action),
+                    Reveal::Missing => self.reveal_missing(&schema, &name),
+                };
+            }
             TreeAction::LoadSchemas => {
                 if let Some(a) = self.conns.aux_mut(id, db) {
                     a.keys = Keys::Unknown;
@@ -596,6 +629,28 @@ impl App {
             for c in cmds {
                 s.send(c);
             }
+        }
+    }
+
+    /// A foreign key's table is not in the tree (a schema the explorer does not list, or a
+    /// table dropped since): said.
+    pub(super) fn reveal_missing(&mut self, schema: &str, name: &str) {
+        let name = format!("{schema}.{name}");
+        self.flash(Notice::new(Msg::TreeRevealMissing { name }, Level::Warning));
+    }
+
+    /// The objects of `schema` came for profile `id`'s tree (`db`: another database's): the
+    /// cursor goes to the table that waited for them, if one did.
+    pub(super) fn revealed(&mut self, id: ProfileId, db: Option<&str>, schema: &str) {
+        let tree = match db {
+            None => self.conns.get_mut(id).map(|c| &mut c.tree),
+            Some(d) => self.conns.aux_mut(id, d).map(|a| &mut a.tree),
+        };
+        let Some((name, found)) = tree.and_then(|t| t.take_reveal(schema)) else { return };
+        match (found, db) {
+            (Some(n), None) => self.explorer.select_kind(RowKind::Node(id, n)),
+            (Some(n), Some(d)) => self.explorer.select_kind(RowKind::AuxNode(id, d.to_string(), n)),
+            (None, _) => self.reveal_missing(schema, &name),
         }
     }
 
