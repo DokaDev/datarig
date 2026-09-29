@@ -303,3 +303,66 @@ fn shipped_catalogs_pass() {
     let ko = locale("ko", Policy::Required, include_str!("../../../locales/ko.toml"));
     assert_eq!(catalog::check(&[en, ko]), (vec![], vec![]));
 }
+
+/// Keys whose Korean text is rightly the same as the English one. Anything else with the
+/// English text in `ko.toml` is an entry nobody translated.
+const SAME_IN_KO: &[&str] = &[
+    // The product name.
+    "app.title",
+    // Placeholders and punctuation only.
+    "results.title.page_short",
+    "query.done_command",
+    "setting.changed",
+    "detail.preview",
+    "ssh.failed",
+    // SQL's own keyword, shown as the value.
+    "results.null",
+    // Short marks that fit a tab title or a tree row; the help explains them.
+    "tab.read_only",
+    "explorer.read_only",
+    // The input mode indicator shows both scripts in either language.
+    "status.hangul",
+    // Protocol, tool and format names.
+    "form.field.dsn",
+    "form.section.ssh",
+    "form.ssh.auth_agent",
+    "copy.method.osc52",
+    "copy.format.tsv",
+    "copy.format.csv",
+    "copy.format.json",
+    "copy.format.xml",
+    "copy.format.sql",
+    "copy.format.update",
+    "copy.menu.csv",
+    "copy.menu.json",
+    "copy.menu.xml",
+    "copy.menu.markdown",
+    "copy.menu.insert",
+    "copy.menu.update",
+    // Kept in English, as the Korean hint of the same form (`form.ssh.on_hint`) writes it.
+    "form.field.ssh_host",
+];
+
+#[test]
+fn shipped_korean_catalog_translates_every_entry() {
+    let en = locale("en", Policy::Source, include_str!("../../../locales/en.toml"));
+    let ko = locale("ko", Policy::Required, include_str!("../../../locales/ko.toml"));
+    let english = |key: &str| [en.entries.get(key), en.one.get(key)].into_iter().flatten().collect::<Vec<_>>();
+    let mut untranslated = vec![];
+    let mut same = vec![];
+    for (key, text) in &ko.entries {
+        let copied = [Some(text), ko.one.get(key)].into_iter().flatten().any(|t| english(key).contains(&t));
+        match (copied, SAME_IN_KO.contains(&key.as_str())) {
+            (true, false) => untranslated.push(key.as_str()),
+            (true, true) => same.push(key.as_str()),
+            (false, _) => {}
+        }
+    }
+    assert!(
+        untranslated.is_empty(),
+        "ko.toml has the English text for {untranslated:?}; translate it, or add the key to SAME_IN_KO with the reason"
+    );
+    // A key that got a translation leaves the list, so the list stays a list of exceptions.
+    let stale: Vec<_> = SAME_IN_KO.iter().filter(|k| !same.contains(k)).collect();
+    assert!(stale.is_empty(), "SAME_IN_KO lists keys that are translated or gone: {stale:?}");
+}
