@@ -214,7 +214,9 @@ pub struct TableStructure {
     /// The server's estimate of its rows; `None` when it has none (never analyzed) or the
     /// relation has no storage.
     pub estimated_rows: Option<u64>,
-    /// Its size on disk with indexes and TOAST; `None` without storage.
+    /// An estimate of its size on disk with indexes and TOAST, from the server's statistics
+    /// (PostgreSQL: `relpages`, which `VACUUM` and `ANALYZE` keep, so it can be behind; reading
+    /// the exact size would lock the table); `None` without storage or statistics.
     pub total_bytes: Option<u64>,
     pub columns: Vec<StructureColumn>,
     pub primary_key: Option<KeyConstraint>,

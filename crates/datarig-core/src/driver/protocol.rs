@@ -77,6 +77,10 @@ pub enum DbError {
     /// was asked right before (a view, a function of the user's with the name of a built-in,
     /// …): it was not sent.
     NotRepeatable(NotRepeatable),
+    /// A lock another session holds or asked for (an `ALTER TABLE`, a `VACUUM FULL`) was in the
+    /// way of a lookup of the metadata session, which never waits for one: it gave up (at once,
+    /// or after a short `lock_timeout`). Asking again later may work.
+    Locked,
 }
 
 impl DbError {
@@ -96,7 +100,8 @@ impl DbError {
             | DbError::NoResult
             | DbError::Cancelled
             | DbError::ReadWriteRefused
-            | DbError::NotRepeatable(_) => Cow::Borrowed(""),
+            | DbError::NotRepeatable(_)
+            | DbError::Locked => Cow::Borrowed(""),
         }
     }
 }

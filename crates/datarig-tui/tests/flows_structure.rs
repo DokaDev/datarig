@@ -72,7 +72,7 @@ fn an_open_table_shows_its_structure_read_once() {
     assert_eq!(h.explorer_line().trim(), "Loading…");
     h.db(structure("shop", "users", users_structure()));
     for want in [
-        "~11k rows · 4.2 MB",
+        "~11k rows · ~4.2 MB",
         "▾ Columns (5)",
         "PK id  bigint, not null, default nextval('shop.users_id_seq'::regclass)",
         "UQ email  text, not null",
@@ -182,7 +182,7 @@ fn foreign_keys_go_to_the_table_they_reference() {
     h.goto("orders");
     h.key(KeyCode::Char('l'));
     h.db(structure("shop", "orders", orders_structure()));
-    assert!(lines(&mut h).iter().any(|l| l.trim_start().starts_with("rows unknown · 8 KB")));
+    assert!(lines(&mut h).iter().any(|l| l.trim_start().starts_with("rows unknown · ~8 KB")));
     assert!(!lines(&mut h).iter().any(|l| l.contains("~0 rows")));
     assert!(line_of(&mut h, "PK FK id").ends_with("PK FK id  bigint, not null, identity always"));
     h.goto("Foreign Keys (2)");
@@ -249,12 +249,18 @@ fn views_show_the_groups_of_their_kind() {
     m.total_bytes = Some(16_384);
     h.db(structure("shop", "order_summary", m));
     let tree = lines(&mut h);
-    assert!(tree.iter().any(|l| l.trim() == "~950 rows · 16 KB"), "{tree:?}");
+    assert!(tree.iter().any(|l| l.trim() == "~950 rows · ~16 KB"), "{tree:?}");
     assert!(tree.iter().any(|l| l.trim() == "Indexes") && !tree.iter().any(|l| l.trim() == "Triggers"));
+    // No statistics yet (never vacuumed or analyzed): neither estimate, never "0 B".
+    h.db(structure("shop", "order_summary", TableStructure::new(RelationKind::MaterializedView)));
+    let tree = lines(&mut h);
+    assert!(tree.iter().any(|l| l.trim() == "rows and size unknown (no statistics yet)"), "{tree:?}");
+    assert!(!tree.iter().any(|l| l.contains("0 B")), "{tree:?}");
 }
 
 /// A structure that cannot be read says why where it would be; opening the table again asks
-/// again. A server too old says the version it needs.
+/// again. A server too old says the version it needs; a table another session locks says so
+/// (the lookup did not wait for it), and asked again once the lock is gone it opens.
 #[test]
 fn a_structure_that_cannot_be_read_says_why() {
     let mut h = shop_open(false);
@@ -263,13 +269,26 @@ fn a_structure_that_cannot_be_read_says_why() {
     h.sent();
     let error = DbError::from("ERROR: permission denied for table users");
     h.db(DbEvent::Structure { schema: "shop".into(), table: "users".into(), result: Err(error) });
-    assert!(lines(&mut h).iter().any(|l| l.trim() == "(structure unknown: ERROR: permission denied for table users)"));
+    assert!(
+        lines(&mut h).iter().any(|l| l.trim() == "(structure unavailable: ERROR: permission denied for table users)")
+    );
     h.key(KeyCode::Char('h'));
     h.key(KeyCode::Char('l'));
     assert_eq!(asked(&h.sent()), ["shop.users"], "asked again after a failure");
     h.db(DbEvent::Structure { schema: "shop".into(), table: "users".into(), result: Err(DbError::ServerTooOld) });
-    let want = "(structure unknown: PostgreSQL 12 or newer is required for the table structure)";
+    let want = "(structure unavailable: PostgreSQL 12 or newer is required for the table structure)";
     assert!(lines(&mut h).iter().any(|l| l.trim() == want), "{:?}", lines(&mut h));
+    h.key(KeyCode::Char('h'));
+    h.key(KeyCode::Char('l'));
+    assert_eq!(asked(&h.sent()), ["shop.users"]);
+    h.db(DbEvent::Structure { schema: "shop".into(), table: "users".into(), result: Err(DbError::Locked) });
+    let want = "(structure unavailable: the table is locked by another session (try again))";
+    assert!(lines(&mut h).iter().any(|l| l.trim() == want), "{:?}", lines(&mut h));
+    h.key(KeyCode::Char('h'));
+    h.key(KeyCode::Char('l'));
+    assert_eq!(asked(&h.sent()), ["shop.users"], "asked again");
+    h.db(structure("shop", "users", users_structure()));
+    assert!(lines(&mut h).iter().any(|l| l.contains("Columns (5)")), "{:?}", lines(&mut h));
 }
 
 /// A driver without the table structure is never asked for it: an open table shows its

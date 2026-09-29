@@ -6,6 +6,12 @@
 //! Every read is one unnamed statement, parsed, bound and run in one round trip
 //! (`Client::query_typed`): nothing depends on a statement prepared in an earlier transaction,
 //! which a pooler in transaction mode may have run on another server connection.
+//!
+//! A lookup never waits on another session: every read runs in a transaction of its own whose
+//! `lock_timeout` is short ([`read`]), so a read that would wait for a lock (a catalog locked
+//! by a `VACUUM FULL`, a table an `ALTER TABLE` holds) gives up with [`DbError::Locked`] instead
+//! of hanging, and of holding up the sessions queued behind it. The structure also checks for
+//! such a lock before it asks for one ([`structure`]).
 
 use crate::connect::db_error;
 use crate::link::{Link, Next};
@@ -13,13 +19,33 @@ use datarig_core::driver::keys::{Generated, KeyCatalog, KeyKind};
 use datarig_core::driver::{DbCommand, DbError, DbEvent, SchemaObjects};
 use datarig_core::sql::complete::{Catalog, ColumnInfo, Relation};
 use tokio::sync::mpsc::UnboundedSender;
-use tokio_postgres::Client;
-use tokio_postgres::types::Type;
+use tokio_postgres::error::SqlState;
+use tokio_postgres::types::{ToSql, Type};
+use tokio_postgres::{Client, Row};
 
 mod structure;
 
 const HIDDEN_SCHEMAS: &str = "n.nspname NOT IN ('pg_catalog', 'information_schema') \
      AND n.nspname NOT LIKE 'pg\\_toast%' AND n.nspname NOT LIKE 'pg\\_temp%'";
+
+/// What each read starts with: its own read-only transaction, whose waits for a lock end after
+/// 2 s. `SET LOCAL` ends with the transaction, so nothing is left on a server connection a pooler
+/// hands to another client.
+const BEGIN_READ: &str = "BEGIN READ ONLY; SET LOCAL lock_timeout = '2s'";
+
+/// Run the catalog read `sql` in a transaction of its own ([`BEGIN_READ`]). The `BEGIN`, the
+/// statement and the `COMMIT` go out together (one round trip); a failed statement leaves the
+/// transaction aborted, which the `COMMIT` rolls back. A lock wait that timed out (SQLSTATE
+/// `55P03`) is [`DbError::Locked`].
+async fn read(client: &Client, sql: &str, params: &[(&(dyn ToSql + Sync), Type)]) -> Result<Vec<Row>, DbError> {
+    let (begun, rows, _) =
+        tokio::join!(client.batch_execute(BEGIN_READ), client.query_typed(sql, params), client.batch_execute("COMMIT"));
+    let error = |e: tokio_postgres::Error| {
+        if e.code() == Some(&SqlState::LOCK_NOT_AVAILABLE) { DbError::Locked } else { db_error(&e) }
+    };
+    begun.map_err(error)?;
+    rows.map_err(error)
+}
 
 pub(crate) async fn meta_loop(client: Client, mut link: Link, events: UnboundedSender<DbEvent>) {
     let Ok(schemas) = link.guard(None, load_schemas(&client)).await else { return };
@@ -80,35 +106,33 @@ pub(crate) async fn meta_loop(client: Client, mut link: Link, events: UnboundedS
 
 async fn load_schemas(client: &Client) -> Result<Vec<String>, DbError> {
     let sql = format!("SELECT n.nspname FROM pg_namespace n WHERE {HIDDEN_SCHEMAS} ORDER BY n.nspname");
-    let rows = client.query_typed(&sql, &[]).await.map_err(|e| db_error(&e))?;
+    let rows = read(client, &sql, &[]).await?;
     Ok(rows.iter().map(|r| r.get::<_, String>(0)).collect())
 }
 
 /// The databases the user may connect to (templates and databases that refuse connections
 /// left out), by name.
 async fn load_databases(client: &Client) -> Result<Vec<String>, DbError> {
-    let rows = client
-        .query_typed(
-            "SELECT d.datname::text FROM pg_catalog.pg_database d \
-             WHERE d.datallowconn AND NOT d.datistemplate \
-             AND pg_catalog.has_database_privilege(d.datname, 'CONNECT') ORDER BY 1",
-            &[],
-        )
-        .await
-        .map_err(|e| db_error(&e))?;
+    let rows = read(
+        client,
+        "SELECT d.datname::text FROM pg_catalog.pg_database d \
+         WHERE d.datallowconn AND NOT d.datistemplate \
+         AND pg_catalog.has_database_privilege(d.datname, 'CONNECT') ORDER BY 1",
+        &[],
+    )
+    .await?;
     Ok(rows.iter().map(|r| r.get::<_, String>(0)).collect())
 }
 
 async fn load_objects(client: &Client, schema: &str) -> Result<SchemaObjects, DbError> {
-    let rows = client
-        .query_typed(
-            "SELECT c.relname, c.relkind::text FROM pg_class c \
-             JOIN pg_namespace n ON n.oid = c.relnamespace \
-             WHERE n.nspname = $1 AND c.relkind IN ('r', 'p', 'f', 'v', 'm') ORDER BY c.relname",
-            &[(&schema, Type::TEXT)],
-        )
-        .await
-        .map_err(|e| db_error(&e))?;
+    let rows = read(
+        client,
+        "SELECT c.relname, c.relkind::text FROM pg_class c \
+         JOIN pg_namespace n ON n.oid = c.relnamespace \
+         WHERE n.nspname = $1 AND c.relkind IN ('r', 'p', 'f', 'v', 'm') ORDER BY c.relname",
+        &[(&schema, Type::TEXT)],
+    )
+    .await?;
     let mut out = SchemaObjects::default();
     for r in rows {
         let name: String = r.get(0);
@@ -133,7 +157,7 @@ async fn load_catalog(client: &Client) -> Result<Catalog, DbError> {
          WHERE c.relkind IN ('r', 'p', 'f', 'v', 'm') AND {HIDDEN_SCHEMAS} \
          ORDER BY n.nspname, c.relname, a.attnum"
     );
-    let rows = client.query_typed(&sql, &[]).await.map_err(|e| db_error(&e))?;
+    let rows = read(client, &sql, &[]).await?;
     let mut relations: Vec<Relation> = Vec::new();
     for r in rows {
         let (schema, name): (String, String) = (r.get(0), r.get(1));
@@ -180,7 +204,7 @@ async fn load_keys(client: &Client, version: &Result<u32, DbError>) -> Result<Ke
          WHERE c.relkind IN ('r', 'p', 'f', 'v', 'm') AND {HIDDEN_SCHEMAS} \
          ORDER BY c.oid, a.attnum"
     );
-    let rows = client.query_typed(&sql, &[]).await.map_err(|e| db_error(&e))?;
+    let rows = read(client, &sql, &[]).await?;
     // A table and its columns (number, name), in the order they come.
     struct Table {
         schema: String,
@@ -224,7 +248,7 @@ async fn load_keys(client: &Client, version: &Result<u32, DbError>) -> Result<Ke
          JOIN pg_class c ON c.oid = i.indrelid JOIN pg_namespace n ON n.oid = c.relnamespace \
          WHERE i.indisunique AND i.indpred IS NULL AND i.indexprs IS NULL AND {HIDDEN_SCHEMAS}"
     );
-    for r in client.query_typed(&indexes, &[]).await.map_err(|e| db_error(&e))? {
+    for r in read(client, &indexes, &[]).await? {
         let kind = if r.get::<_, bool>(1) { KeyKind::Primary } else { KeyKind::Unique };
         keys.mark(r.get(0), &r.get::<_, Vec<i16>>(2), kind);
     }
@@ -233,7 +257,7 @@ async fn load_keys(client: &Client, version: &Result<u32, DbError>) -> Result<Ke
          JOIN pg_class c ON c.oid = con.conrelid JOIN pg_namespace n ON n.oid = c.relnamespace \
          WHERE con.contype = 'f' AND {HIDDEN_SCHEMAS}"
     );
-    for r in client.query_typed(&foreign, &[]).await.map_err(|e| db_error(&e))? {
+    for r in read(client, &foreign, &[]).await? {
         keys.mark(r.get(0), &r.get::<_, Vec<i16>>(1), KeyKind::Foreign);
     }
     Ok(keys)

@@ -125,10 +125,13 @@ const TEXTS: [&str; 7] = [
 ];
 
 /// The catalog reads of a metadata session work behind the pooler: none of them may depend on
-/// a statement prepared in an earlier transaction.
+/// a statement prepared in an earlier transaction, and the short `lock_timeout` each runs with
+/// is its transaction's only: another client of the pooler never gets it.
 #[tokio::test(flavor = "multi_thread")]
 async fn metadata_session_reads_the_catalog_behind_a_pooler() {
     let Some(url) = pooler_url("metadata_session_reads_the_catalog_behind_a_pooler") else { return };
+    let mut other = Conn::open(&url, SessionRole::Query, false).await;
+    let mut id = 0;
     for _ in 0..10 {
         let mut c = Conn::open(&url, SessionRole::Meta, true).await;
         let DbEvent::Schemas(schemas) = c.wait(|e| matches!(e, DbEvent::Schemas(_)), 10).await else { panic!() };
@@ -155,6 +158,9 @@ async fn metadata_session_reads_the_catalog_behind_a_pooler() {
             let orders = result.expect("structure");
             assert_eq!(orders.primary_key.map(|k| k.columns), Some(vec!["id".to_string()]));
             assert!(orders.foreign_keys.iter().any(|f| f.ref_table == "users"));
+            id += 1;
+            let DbEvent::Page { rows, .. } = other.run(id, "SHOW lock_timeout").await else { panic!() };
+            assert_eq!(rows[0][0].as_deref(), Some("0"), "nothing left on the server connection");
         }
     }
 }
