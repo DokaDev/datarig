@@ -1,0 +1,231 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# A newer push to the same pull request cancels the run it supersedes; pushes to main all run.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+# The toolchain (1.93.0 with rustfmt and clippy) comes from rust-toolchain.toml; rustup on the
+# hosted runners installs it on the first cargo invocation. datarig-core's pg_query dependency
+# compiles libpg_query (C) and runs bindgen: every job that builds it first runs
+# .github/scripts/pg-query-build-deps.sh, which checks for the C compiler and libclang, installs
+# what is missing (apt on Linux, choco on Windows, where it also sets LIBCLANG_PATH) and fails
+# with a clear message otherwise.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: clippy -D warnings
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2
+      - name: C compiler and libclang for pg_query
+        run: bash .github/scripts/pg-query-build-deps.sh
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+  test:
+    name: tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2
+      - name: C compiler and libclang for pg_query
+        run: bash .github/scripts/pg-query-build-deps.sh
+      # Every test target of every crate, so a new test file can never be left out. Without
+      # DATARIG_TEST_PG_URL the PostgreSQL, pooler and SSH integration tests print SKIPPED; the
+      # `integration` job runs them for real. insta never rewrites snapshots under CI, so any
+      # rendering change fails here. The real OS keychain test only runs with
+      # DATARIG_TEST_KEYCHAIN=1 and never when CI is set.
+      - run: cargo test --workspace --locked
+
+  integration:
+    name: integration (PostgreSQL 17, PgBouncer, SSH)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: datarig
+          POSTGRES_PASSWORD: datarig
+          POSTGRES_DB: datarig
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U datarig -d datarig"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      # PgBouncer in transaction mode without prepared statement support, as in
+      # dev/docker-compose.yml (service `pgbouncer`): the driver's pooler_pg tests.
+      pgbouncer:
+        image: edoburu/pgbouncer:v1.25.2-p0
+        env:
+          DATABASE_URL: postgres://datarig:datarig@postgres:5432/datarig
+          AUTH_TYPE: scram-sha-256
+          POOL_MODE: transaction
+          MAX_PREPARED_STATEMENTS: "0"
+          SERVER_ROUND_ROBIN: "1"
+          DEFAULT_POOL_SIZE: "3"
+          MIN_POOL_SIZE: "3"
+          IGNORE_STARTUP_PARAMETERS: extra_float_digits,options
+        ports:
+          - 56432:5432
+    env:
+      DATARIG_TEST_PG_URL: postgres://datarig:datarig@127.0.0.1:55432/datarig
+      # A missing service fails its tests here instead of skipping them.
+      DATARIG_REQUIRE_PG: "1"
+      DATARIG_TEST_POOLER_URL: postgres://datarig:datarig@127.0.0.1:56432/datarig
+      DATARIG_REQUIRE_POOLER: "1"
+      # The SSH bastion started below (datarig-ssh/tests/bastion.rs, datarig-tui/tests/integration_ssh.rs).
+      DATARIG_TEST_SSH_BASTION: 127.0.0.1:52222
+      DATARIG_REQUIRE_SSH: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2
+      - name: C compiler and libclang for pg_query
+        run: bash .github/scripts/pg-query-build-deps.sh
+      - name: Load dev/init/*.sql
+        run: bash .github/scripts/load-test-db.sh
+      # The SSH bastion of dev/ssh on the services' network, so it reaches `postgres` and
+      # `pgbouncer` by name; its keys are made here, never committed.
+      - name: SSH bastion
+        env:
+          NETWORK: ${{ job.services.postgres.network }}
+        run: bash .github/scripts/start-ssh-bastion.sh "$NETWORK"
+      - run: cargo test --workspace --locked
+      # The driver's PostgreSQL suite once more with every session, test connection and cancel
+      # request going through a dialer (a plain TCP one), as they do through an SSH tunnel.
+      - name: The PostgreSQL suite through a dialer
+        env:
+          DATARIG_TEST_DIAL: tcp
+        run: cargo test -p datarig-driver-postgres --test integration_pg --locked
+      # The tests drop the tables they create, even when they fail (tests/pg_clean in the
+      # driver crate): nothing may be left in `public`, which the init scripts leave empty.
+      - name: The tests left the database clean
+        if: ${{ !cancelled() }}
+        env:
+          PGPASSWORD: datarig
+        run: |
+          left=$(psql -h 127.0.0.1 -p 55432 -U datarig -d datarig -Atc \
+            "SELECT string_agg(tablename, ', ') FROM pg_tables WHERE schemaname = 'public'")
+          if [ -n "$left" ]; then
+            echo "tables left in public: $left"
+            exit 1
+          fi
+
+  # Performance budgets (docs/perf.md): round trips per statement through a latency proxy
+  # (exact counts, also through the SSH bastion), memory while paging 4,000,000 rows (flat past
+  # the window of rows kept in memory), keystroke-to-frame time in a 5 MB file, idle memory, CPU
+  # and wakeups, and startup time, held to crates/datarig-bench/budgets.toml. The binary
+  # scenarios run the release build in tmux (a server of their own, `-L perf`).
+  perf:
+    name: performance budgets
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: datarig
+          POSTGRES_PASSWORD: datarig
+          POSTGRES_DB: datarig
+        ports:
+          - 55432:5432
+        options: >-
+          --health-cmd "pg_isready -U datarig -d datarig"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATARIG_TEST_PG_URL: postgres://datarig:datarig@127.0.0.1:55432/datarig
+      DATARIG_SECRET_STORE: memory
+      DATARIG_TEST_SSH_BASTION: 127.0.0.1:52222
+    steps:
+      - uses: actions/checkout@v7
+      - uses: Swatinem/rust-cache@v2
+      - name: C compiler and libclang for pg_query
+        run: bash .github/scripts/pg-query-build-deps.sh
+      - name: Load dev/init/*.sql
+        run: bash .github/scripts/load-test-db.sh
+      - name: SSH bastion
+        env:
+          NETWORK: ${{ job.services.postgres.network }}
+        run: bash .github/scripts/start-ssh-bastion.sh "$NETWORK"
+      - name: tmux
+        run: |
+          if ! command -v tmux >/dev/null; then
+            sudo apt-get update && sudo apt-get install -y tmux
+          fi
+      - run: cargo build --release --locked -p datarig-tui -p datarig-bench
+      - run: ./target/release/datarig-bench budget --scratch "$RUNNER_TEMP/datarig-perf" --out "$RUNNER_TEMP/perf.jsonl"
+      - name: Measurements
+        if: ${{ !cancelled() }}
+        run: cat "$RUNNER_TEMP/perf.jsonl" || true
+
+  # Licenses (permissive only), advisories, bans and sources: deny.toml.
+  deny:
+    name: cargo deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+
+  # RustSec advisories once more with cargo-audit; judged ones are listed with the reason in
+  # .cargo/audit.toml (and in deny.toml).
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: cargo install --locked cargo-audit --version 0.22.2
+      - run: cargo audit
+
+  # THIRD-PARTY-NOTICES.html for the release artifacts (cargo-about, about.toml, about.hbs and
+  # the C code notices of vendor/licenses/pg_query).
+  notices:
+    name: third-party notices
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: cargo install --locked cargo-about --version 0.9.2 --features cli
+      - run: scripts/third-party-notices.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: third-party-notices
+          path: THIRD-PARTY-NOTICES.html
+
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Download actionlint
+        run: bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) 1.7.12
+      - run: ./actionlint -color
