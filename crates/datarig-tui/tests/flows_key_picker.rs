@@ -151,12 +151,15 @@ fn a_key_others_may_read_or_a_putty_key_is_said_so_below_the_field() {
     h.type_text("work");
     h.key(KeyCode::Enter);
     assert_eq!(key_field(&h), "~/.ssh/work.pem");
-    let n = note(&h).expect("a note");
-    assert!(n.contains("mode 644") && n.contains("chmod 600 ~/.ssh/work.pem"), "{n}");
-    let screen = h.screen(120, 40);
-    assert!(screen.contains("chmod 600"), "shown in the form:\n{screen}");
-    // Editing the field clears it.
-    h.key(KeyCode::Backspace);
+    // Unix modes only: Windows has no mode to warn about.
+    if cfg!(unix) {
+        let n = note(&h).expect("a note");
+        assert!(n.contains("mode 644") && n.contains("chmod 600 ~/.ssh/work.pem"), "{n}");
+        let screen = h.screen(120, 40);
+        assert!(screen.contains("chmod 600"), "shown in the form:\n{screen}");
+        // Editing the field clears it.
+        h.key(KeyCode::Backspace);
+    }
     assert_eq!(note(&h), None);
     h.ctrl('o');
     h.type_text("ppk");

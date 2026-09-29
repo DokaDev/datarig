@@ -34,7 +34,9 @@ const DEFAULT_SHAPE: &str = "\x1b[0 q";
 const ENTER: &str = "\x1b[?1049h";
 const LEAVE: &str = "\x1b[?1049l";
 const PASTE_OFF: &str = "\x1b[?2004l";
-const MOUSE_OFF: &str = "\x1b[?1000l";
+/// Mouse capture off. On Windows crossterm turns mouse capture on and off in the console mode
+/// (WinAPI), never in the output, so there is nothing to find there.
+const MOUSE_OFF: Option<&str> = if cfg!(windows) { None } else { Some("\x1b[?1000l") };
 
 thread_local! {
     /// How often raw mode was turned off on this thread.
@@ -60,7 +62,7 @@ fn restoring_pops_the_keys_and_gives_back_the_users_cursor_before_leaving() {
     let r = restore_sequence();
     assert!(r.starts_with(&kitty::pop_sequence()), "{r:?}");
     let at = |s: &str| r.find(s).unwrap_or_else(|| panic!("{s:?} missing from {r:?}"));
-    assert!(at(PASTE_OFF) < at(DEFAULT_SHAPE) && at(MOUSE_OFF) < at(DEFAULT_SHAPE), "{r:?}");
+    assert!(at(PASTE_OFF) < at(DEFAULT_SHAPE) && MOUSE_OFF.is_none_or(|m| at(m) < at(DEFAULT_SHAPE)), "{r:?}");
     assert!(r.ends_with(&format!("{DEFAULT_SHAPE}{LEAVE}")), "{r:?}");
     // Without the kitty flags there is nothing to pop.
     let state = TermState::new();
@@ -107,7 +109,7 @@ fn assert_restored_once(screen: &Screen, raw_before: usize, what: &str) {
     // (A setup that failed before the kitty flags were pushed pops nothing.)
     let tail = &r[kitty::pop_sequence().len()..];
     assert!(text.ends_with(tail), "{what}: ends with the restore: {text:?}");
-    for part in [PASTE_OFF, MOUSE_OFF, DEFAULT_SHAPE, LEAVE] {
+    for part in [Some(PASTE_OFF), MOUSE_OFF, Some(DEFAULT_SHAPE), Some(LEAVE)].into_iter().flatten() {
         assert_eq!(text.matches(part).count(), 1, "{what}: {part:?} once: {text:?}");
     }
     assert_eq!(RAW_OFFS.with(Cell::get), raw_before + 1, "{what}: raw mode off once");

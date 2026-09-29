@@ -966,14 +966,21 @@ fn a_name_too_long_for_the_file_system_says_so_in_words() {
     let cfg = config();
     let mut h = launch(&cfg, &dirs);
     connect(&mut h, "local-pg");
-    // Every part is a valid name; the whole path is longer than any OS allows.
-    let long = vec!["a".repeat(200); 21].join("/");
-    h.command(&format!("w {long}"));
+    // Every part is a valid name; the whole path is longer than any OS allows (Windows, with
+    // long paths as on its CI runners, takes 32,767 characters). Pasted: typed key by key, a
+    // command line this long takes minutes.
+    let long = vec!["a".repeat(200); 170].join("/");
+    let w = |h: &mut Harness| {
+        h.ctrl('k');
+        h.app.handle_event(ratatui::crossterm::event::Event::Paste(format!("w {long}")));
+        h.key(KeyCode::Enter);
+    };
+    w(&mut h);
     let screen = h.screen(200, 30);
     assert!(screen.contains("Not saved: the name is too long for the file system"), "{screen}");
     assert!(!screen.contains("Io(") && !screen.contains("os error"), "no debug text: {screen}");
     h.command("set language=ko");
-    h.command(&format!("w {long}"));
+    w(&mut h);
     let screen = h.screen(200, 30);
     let error = ko(datarig_core::i18n::Label::IoNameTooLong).to_string();
     assert!(screen.contains(&ko_msg(&datarig_core::i18n::Msg::ScriptsSaveFailed { error })), "{screen}");
