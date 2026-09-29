@@ -127,3 +127,62 @@ SELECT TIMESTAMP('2024-01-01 00:00:00') + INTERVAL g HOUR,
 FROM seq;
 -- deliberate duplicate rows (identical values) — why no-PK tables must be read-only
 INSERT INTO audit_log SELECT * FROM audit_log ORDER BY occurred_at LIMIT 5;
+
+-- ── Korean rows ─────────────────────────────────────────────────────
+-- Korean text is written as _utf8mb4 X'' hex literals (the UTF-8 bytes) that the server
+-- decodes when it loads the file, so no Hangul appears in the repository; the English comment
+-- above each row says what it reads.
+
+INSERT INTO users (email, name, nickname, address, phone, bio, profile, is_active, created_at) VALUES
+-- Korean: Hong Gil-dong; nickname "Gil-dong"; Sejong-daero, Jongno-gu, Seoul; bio "Hello. I am a developer who likes databases."
+('hong@example.com', _utf8mb4 X'ED998DEAB8B8EB8F99', _utf8mb4 X'EAB8B8EB8F99EC9DB4', _utf8mb4 X'EC849CEC9AB8ED8AB9EBB384EC8B9C20ECA285EBA19CEAB5AC20EC84B8ECA285EB8C80EBA19C20313735', '010-2024-1009', _utf8mb4 X'EC9588EB8595ED9598EC84B8EC9A942E20EB8DB0EC9DB4ED84B0EBB2A0EC9DB4EC8AA4EBA5BC20ECA28BEC9584ED9598EB8A9420EAB09CEBB09CEC9E90EC9E85EB8B88EB8BA42E', JSON_OBJECT('lang', 'ko', 'city', _utf8mb4 X'EC849CEC9AB8'), 1, '2024-09-10 09:00:00'),
+-- Korean: Kim Min-ji; nickname mixes Latin, emoji and Hangul; Haeundae, Busan; very long Korean bio
+('minji@example.com', _utf8mb4 X'EAB980EBAFBCECA780', _utf8mb4 X'6D696E6A6920E29CA820EBAFBCECA780', _utf8mb4 X'EBB680EC82B0EAB491EC97ADEC8B9C20ED95B4EC9AB4EB8C80EAB5AC20ED95B4EC9AB4EB8C80ED95B4EBB380EBA19C20323634', NULL, REPEAT(_utf8mb4 X'EC9584ECA3BC20EAB8B420EC9E90EAB8B0EC868CEAB09CEC9E85EB8B88EB8BA42E20ED959CEAB5ADEC96B420EBACB8EC9EA5EC9DB420EAB384EC868D20EC9DB4EC96B4ECA791EB8B88EB8BA42E20', 120), JSON_OBJECT('lang', 'ko', 'city', _utf8mb4 X'EBB680EC82B0'), 1, '2024-10-11 10:11:12'),
+-- Korean: Lee Seo-jun; Jeju address with emoji; bio mixes Korean, English, Japanese, Chinese and a flag
+('seojun@example.com', _utf8mb4 X'EC9DB4EC849CECA480', NULL, _utf8mb4 X'ECA09CECA3BCED8AB9EBB384EC9E90ECB998EB8F8420ECA09CECA3BCEC8B9C20ECB2A8EB8BA8EBA19C2032343220F09F8F9DEFB88F', '+82-10-5555-0242', _utf8mb4 X'ED959CEAB5ADEC96B420456E676C69736820E697A5E69CACE8AA9E20E4B8ADE6968720F09F87B0F09F87B720EC849EEC9DB820ED858DEC8AA4ED8AB820E29C85', JSON_OBJECT('lang', 'ko', 'city', _utf8mb4 X'ECA09CECA3BC'), 0, '2024-11-12 13:14:15'),
+-- Korean: name is "Hangul" in decomposed jamo (NFD, 6 code points), nickname uses compatibility jamo (laughter), bio says "The name of this row is in NFD (decomposed jamo) form."
+('nfd@example.com', _utf8mb4 X'E18492E185A1E186ABE18480E185B3E186AF204E4644', _utf8mb4 X'E3858BE3858BE3858B20F09F9882', NULL, NULL, _utf8mb4 X'EC9DB420ED9689EC9D9820EC9DB4EBA684EC9D80204E464428EC9E90EBAAA820EBB684ED95B42920ED9895ED839CEC9E85EB8B88EB8BA42E', JSON_OBJECT('lang', 'ko'), 1, '2024-12-13 16:17:18');
+
+INSERT INTO products (sku, name, category, price, stock, description, attributes, created_at) VALUES
+-- Korean: Wireless Earbuds Pro, home appliances; "Noise cancelling. Bluetooth 5.3, up to 30 hours of playback"
+('SKU-KR-0001', _utf8mb4 X'EBACB4EC84A020EC9DB4EC96B4ED8FB020ED9484EBA19C', _utf8mb4 X'EAB080ECA084', 189000.00, 120, _utf8mb4 X'EB85B8EC9DB4ECA68820ECBA94EC8AACEBA78120ECA780EC9B902E20426C7565746F6F746820352E332C20ECB59CEB8C80203330EC8B9CEAB08420EC9EACEC839D20F09F8EA7', JSON_OBJECT('color', 'black', 'origin', 'KR'), '2024-09-01 00:00:00'),
+-- Korean: Jeju tangerines 5kg, food; out of stock, no description
+('SKU-KR-0002', _utf8mb4 X'ECA09CECA3BC20EAB090EAB7A420356B6720F09F8D8A', _utf8mb4 X'EC8B9DED9288', 32900.00, 0, NULL, NULL, '2024-09-02 00:00:00'),
+-- Korean: Solid wood desk, furniture; very long description; color "walnut"
+('SKU-KR-0003', _utf8mb4 X'EC9B90EBAAA920ECB185EC8381202831323030C39736303029', _utf8mb4 X'EAB080EAB5AC', 459000.00, 7, REPEAT(_utf8mb4 X'ED8ABCED8ABCED959C20EC9B90EBAAA9EC9CBCEBA19C20EBA78CEB93A020ECB185EC8381EC9E85EB8B88EB8BA42E20', 60), JSON_OBJECT('color', _utf8mb4 X'EC9B94EB849B', 'origin', 'KR'), '2024-09-03 00:00:00'),
+-- Korean: Limited edition board game "Hangul Play", toys; "2-6 players, ages 8+. 128 jamo cards included"
+('SKU-KR-0004', _utf8mb4 X'ED959CECA095ED8C9020EBB3B4EB939CEAB28CEC9E8420E3808CED959CEAB88020EB8680EC9DB4E3808D', _utf8mb4 X'EC9984EAB5AC', 45000.00, 33, _utf8mb4 X'327E36EC9DB8EC9AA92C2038EC84B820EC9DB4EC83812E20ED959CEAB88020EC9E90EBAAA820ECB9B4EB939C20313238EC9EA520ED8FACED95A8', JSON_OBJECT('color', 'white', 'origin', 'KR'), '2024-09-04 00:00:00');
+
+INSERT INTO reviews (product_id, user_id, rating, title, body, created_at)
+-- Korean: title "The best", body "Great sound and long battery life. Highly recommended!"
+SELECT p.id, u.id, 5, _utf8mb4 X'ECB59CEAB3A0EC9888EC9A9420F09F918D', _utf8mb4 X'EC9D8CECA788EC9DB420ECA095EBA79020ECA28BEAB3A020EBB0B0ED84B0EBA6ACEB8F8420EC98A4EB9E98EAB080EC9A942E20EAB095EBA0A520ECB694ECB29CED95A9EB8B88EB8BA421', TIMESTAMP '2024-09-20 20:00:00'
+FROM products p, users u WHERE p.sku = 'SKU-KR-0001' AND u.email = 'hong@example.com'
+UNION ALL
+-- Korean: title "So-so", very long body "It was a little uncomfortable to wear."
+SELECT p.id, u.id, 2, _utf8mb4 X'EAB7B8ECA08020EAB7B8EB9E98EC9A94', REPEAT(_utf8mb4 X'ECB0A9EC9AA9EAB090EC9DB420ECA1B0EAB88820EBB688ED8EB8ED9688EC96B4EC9A942E20', 80), TIMESTAMP '2024-10-20 21:00:00'
+FROM products p, users u WHERE p.sku = 'SKU-KR-0001' AND u.email = 'minji@example.com'
+UNION ALL
+-- Korean: no title, body mixes English and Korean: "Delivery was fast but assembly is hard"
+SELECT p.id, u.id, 4, NULL, _utf8mb4 X'44656C697665727920EBB9A8EB9E90EC96B4EC9A9420F09F9A9A2062757420ECA1B0EBA6BDEC9DB420EC96B4EBA0A4EC9B80', TIMESTAMP '2024-11-20 22:00:00'
+FROM products p, users u WHERE p.sku = 'SKU-KR-0003' AND u.email = 'seojun@example.com'
+UNION ALL
+-- Korean: title "Fast delivery", no body
+SELECT p.id, u.id, 3, _utf8mb4 X'EBB0B0EC86A1EC9DB420EBB9A8EB9DBCEC9A9420F09F9A9A', NULL, TIMESTAMP '2024-12-20 23:00:00'
+FROM products p, users u WHERE p.sku = 'SKU-KR-0004' AND u.email = 'nfd@example.com';
+
+-- Korean: memo "Please leave it at the door", shipping method "parcel delivery"
+INSERT INTO orders (user_id, status, total_amount, memo, shipping, ordered_at)
+SELECT id, 'paid', 0, _utf8mb4 X'EBACB820EC959EEC979020EB8693EC958420ECA3BCEC84B8EC9A9420F09F998F', JSON_OBJECT('method', _utf8mb4 X'ED839DEBB0B0', 'fee', 3000), '2024-09-15 12:00:00' FROM users WHERE email = 'hong@example.com';
+INSERT INTO order_items (order_id, line_no, product_id, quantity, unit_price)
+SELECT o.id, l.line_no, p.id, l.qty, p.price
+FROM orders o JOIN users u ON u.id = o.user_id AND u.email = 'hong@example.com',
+     (SELECT 1 AS line_no, 'SKU-KR-0001' AS sku, 1 AS qty UNION ALL SELECT 2, 'SKU-KR-0004', 2) l
+JOIN products p ON p.sku = l.sku;
+UPDATE orders o
+JOIN (SELECT order_id, SUM(quantity * unit_price) AS total FROM order_items GROUP BY order_id) s ON s.order_id = o.id
+JOIN users u ON u.id = o.user_id AND u.email = 'hong@example.com'
+SET o.total_amount = s.total;
+
+-- Korean: note "administrator work"
+INSERT INTO audit_log (occurred_at, actor, action, detail)
+VALUES ('2024-09-30 18:00:00', 'admin_kr', 'export', JSON_OBJECT('ip', '10.0.82.1', 'note', _utf8mb4 X'EAB480EBA6ACEC9E9020EC9E91EC9785'));

@@ -40,8 +40,13 @@ docker compose --profile ssh up -d --build ssh-bastion
   audit_log without a primary key, the `order_summary` view), `analytics.daily_stats`, and
   `analytics.events` with 4,000,000 rows for paging, cancel and memory tests. The first eight
   users are hand-made edge cases: CJK text, emoji and ZWJ sequences, combining marks, full- and
-  half-width characters, tabs and newlines in values, NULLs and very long text.
-- MySQL (`init-mysql/*.sql`): a comparable `shop` schema and about 1,000,000 `events` rows.
+  half-width characters, tabs and newlines in values, NULLs and very long text. The last rows of
+  `02_seed.sql` add Korean users, products, reviews, an order and an audit entry: long Hangul
+  text, Hangul mixed with Latin, other CJK and emoji, compatibility jamo, and a name in
+  decomposed jamo (NFD) for width and normalization checks. Their text is written as `U&''`
+  escapes the server decodes on load, with an English comment on each row.
+- MySQL (`init-mysql/*.sql`): a comparable `shop` schema, the same Korean rows (as
+  `_utf8mb4 X''` hex literals) and about 1,000,000 `events` rows.
 
 The integration tests create and drop their own tables; they leave `public` empty.
 
