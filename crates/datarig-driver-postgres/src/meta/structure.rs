@@ -1,10 +1,25 @@
 //! One table's structure (`DbCommand::LoadStructure`): a single catalog statement that builds
 //! the whole structure as one JSON document on the server, so opening a table's node costs
-//! one round trip. It reads the catalog only (never the table): the size estimate is
-//! `pg_class.reltuples` and `pg_total_relation_size`, summed over the leaf partitions of a
-//! partitioned table.
+//! one round trip. It reads the catalog only (never the table), and it never waits for a lock
+//! another session holds or waits for:
+//!
+//! * the row and size estimates are the statistics in `pg_class` (`reltuples`, and `relpages`
+//!   of the table, its TOAST table and all their indexes, times `block_size`), which `VACUUM`
+//!   and `ANALYZE` keep, summed over the leaf partitions of a partitioned table (found in
+//!   `pg_inherits`). `pg_total_relation_size` and `pg_partition_tree` would lock each relation
+//!   (`AccessShareLock`) and wait behind an `ALTER TABLE` or a `VACUUM FULL`;
+//! * the server deparses defaults, check constraints, indexes and trigger conditions only
+//!   against the open table: `pg_get_expr` with a relation, `pg_get_indexdef`, and
+//!   `pg_get_constraintdef` of a check and `pg_get_triggerdef` of a trigger with `WHEN` lock the
+//!   table (`AccessShareLock`, PostgreSQL 17). They run only when `pg_locks` shows no
+//!   `AccessExclusiveLock` on the table, held or asked for (the only mode that conflicts); when
+//!   there is one the statement answers `locked` and asks for no lock ([`DbError::Locked`]).
+//!   One taken between that check and the deparsing ends the wait after the metadata session's
+//!   `lock_timeout` (the same error).
+//!
+//! The rest (`regclass`, `format_type`, the catalogs' own rows, `pg_get_constraintdef` of a
+//! key) takes no lock on the table.
 
-use crate::connect::db_error;
 use datarig_core::driver::DbError;
 use datarig_core::driver::structure::{
     CheckConstraint, ColumnFill, FkAction, ForeignKey, Index, KeyConstraint, RelationKind, StructureColumn,
@@ -14,31 +29,47 @@ use serde::Deserialize;
 use tokio_postgres::Client;
 use tokio_postgres::types::Type;
 
-/// The statement. `$1` and `$2` are the schema and the table; the cast to `regclass` fails with
-/// the server's own "does not exist" when the table is gone. Rows are counted only where
-/// every leaf partition has an estimate (`-1`: never vacuumed or analyzed).
+/// The statement. `$1` and `$2` are the schema and the table; the cast to `regclass` (which
+/// locks nothing) fails with the server's own "does not exist" when the table is gone. `heaps`
+/// are the relations whose statistics are the table's: itself, or a partitioned table's leaf
+/// partitions. Rows are counted only where every one has an estimate (`reltuples` `-1`: never
+/// vacuumed or analyzed), and the size where every one has statistics (the same, unless it has
+/// pages; a foreign table has no storage).
 const SQL: &str = "\
-WITH rel AS (
-  SELECT c.oid, c.relkind::text AS kind, c.reltuples::float8 AS reltuples
+WITH RECURSIVE rel AS (
+  SELECT c.oid, c.relkind::text AS kind,
+         EXISTS (SELECT 1 FROM pg_catalog.pg_locks l
+           WHERE l.locktype = 'relation' AND l.relation = c.oid AND l.mode = 'AccessExclusiveLock'
+             AND l.database = (SELECT d.oid FROM pg_catalog.pg_database d
+                               WHERE d.datname = pg_catalog.current_database())) AS locked
   FROM pg_catalog.pg_class c
   WHERE c.oid = pg_catalog.format('%I.%I', $1::text, $2::text)::regclass
-), parts AS (
-  SELECT count(*) AS n, bool_and(k.reltuples >= 0) AS known, sum(k.reltuples)::float8 AS reltuples,
-         coalesce(sum(pg_catalog.pg_total_relation_size(t.relid)), 0)::int8 AS bytes
-  FROM rel CROSS JOIN LATERAL pg_catalog.pg_partition_tree(rel.oid) t
-  JOIN pg_catalog.pg_class k ON k.oid = t.relid
-  WHERE rel.kind = 'p' AND t.isleaf
+), tree AS (
+  SELECT rel.oid FROM rel WHERE rel.kind = 'p'
+  UNION ALL
+  SELECT i.inhrelid FROM pg_catalog.pg_inherits i JOIN tree ON i.inhparent = tree.oid
+), heaps AS (
+  SELECT h.relkind, h.reltuples::float8 AS reltuples, h.relpages::int8
+    + coalesce((SELECT sum(x.relpages) FROM pg_catalog.pg_class x
+                WHERE x.oid = h.reltoastrelid
+                   OR x.oid IN (SELECT i.indexrelid FROM pg_catalog.pg_index i
+                                WHERE i.indrelid IN (h.oid, h.reltoastrelid))), 0)::int8 AS pages
+  FROM pg_catalog.pg_class h
+  WHERE h.oid IN (SELECT rel.oid FROM rel WHERE rel.kind IN ('r', 'm') UNION ALL SELECT tree.oid FROM tree)
+    AND h.relkind <> 'p'
+), stats AS (
+  SELECT count(*) AS n, bool_and(h.reltuples >= 0) AS known_rows, sum(h.reltuples)::float8 AS reltuples,
+         bool_and(h.relkind = 'f' OR h.reltuples >= 0 OR h.pages > 0) AS known_size,
+         sum(h.pages)::int8 * pg_catalog.current_setting('block_size')::int8 AS bytes
+  FROM heaps h
 )
-SELECT pg_catalog.json_build_object(
+SELECT CASE WHEN rel.locked THEN pg_catalog.json_build_object('kind', rel.kind, 'locked', true)
+ELSE pg_catalog.json_build_object(
   'kind', rel.kind,
-  'rows', CASE
-    WHEN rel.kind IN ('r', 'm') THEN rel.reltuples
-    WHEN rel.kind = 'p' THEN (SELECT CASE WHEN n = 0 THEN 0 WHEN known THEN reltuples ELSE -1 END FROM parts)
-  END,
-  'bytes', CASE
-    WHEN rel.kind IN ('r', 'm') THEN pg_catalog.pg_total_relation_size(rel.oid)
-    WHEN rel.kind = 'p' THEN (SELECT bytes FROM parts)
-  END,
+  'rows', CASE WHEN rel.kind IN ('r', 'm', 'p') THEN
+    (SELECT CASE WHEN n = 0 THEN 0 WHEN known_rows THEN reltuples ELSE -1 END FROM stats) END,
+  'bytes', CASE WHEN rel.kind IN ('r', 'm', 'p') THEN
+    (SELECT CASE WHEN n = 0 THEN 0 WHEN known_size THEN bytes END FROM stats) END,
   'columns', (
     SELECT pg_catalog.json_agg(pg_catalog.json_build_object(
       'name', a.attname, 'type', pg_catalog.format_type(a.atttypid, a.atttypmod),
@@ -89,19 +120,25 @@ SELECT pg_catalog.json_build_object(
     JOIN pg_catalog.pg_proc p ON p.oid = t.tgfoid
     JOIN pg_catalog.pg_namespace pn ON pn.oid = p.pronamespace
     WHERE t.tgrelid = rel.oid AND NOT t.tgisinternal)
-)::text
+) END::text
 FROM rel";
 
 /// Read the structure of `schema.table` in one round trip.
 pub(crate) async fn load_structure(client: &Client, schema: &str, table: &str) -> Result<TableStructure, DbError> {
-    let row =
-        client.query_typed_one(SQL, &[(&schema, Type::TEXT), (&table, Type::TEXT)]).await.map_err(|e| db_error(&e))?;
-    parse(row.get(0))
+    let rows = super::read(client, SQL, &[(&schema, Type::TEXT), (&table, Type::TEXT)]).await?;
+    match rows.first() {
+        Some(row) => parse(row.get(0)),
+        None => Err(DbError::NoResult),
+    }
 }
 
 #[derive(Deserialize)]
 struct Raw {
     kind: String,
+    /// Another session holds or asked for an `AccessExclusiveLock` on the table: nothing was
+    /// deparsed.
+    #[serde(default)]
+    locked: bool,
     rows: Option<f64>,
     bytes: Option<i64>,
     columns: Option<Vec<RawColumn>>,
@@ -163,6 +200,9 @@ struct RawTrigger {
 /// list (an index, a sequence) is not supported.
 fn parse(json: &str) -> Result<TableStructure, DbError> {
     let raw: Raw = serde_json::from_str(json).map_err(|e| DbError::Server(format!("table structure: {e}")))?;
+    if raw.locked {
+        return Err(DbError::Locked);
+    }
     let kind = match raw.kind.as_str() {
         "r" => RelationKind::Table,
         "p" => RelationKind::PartitionedTable,

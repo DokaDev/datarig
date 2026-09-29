@@ -229,10 +229,11 @@ fn structure_parts(app: &App, tree: &Tree, n: Node) -> Vec<(String, Style)> {
     let on = app.icons_on();
     match n {
         Node::Stats(..) => {
-            let size = human_bytes(st.total_bytes.unwrap_or(0));
-            let text = match st.estimated_rows {
-                Some(r) => app.i18n.msg(&Msg::TreeStats { rows: human_count(r), size }),
-                None => app.i18n.msg(&Msg::TreeStatsRowsUnknown { size }),
+            // Both are estimates from the server's statistics (`VACUUM`, `ANALYZE`).
+            let text = match (st.estimated_rows, st.total_bytes.map(human_bytes)) {
+                (Some(r), Some(size)) => app.i18n.msg(&Msg::TreeStats { rows: human_count(r), size }),
+                (None, Some(size)) => app.i18n.msg(&Msg::TreeStatsRowsUnknown { size }),
+                (_, None) => app.i18n.label(Label::TreeStatsUnknown),
             };
             vec![(text.to_string(), dim)]
         }

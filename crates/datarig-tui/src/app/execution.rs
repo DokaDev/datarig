@@ -1173,6 +1173,9 @@ impl App {
             DbEvent::Structure { result: Err(DbError::ServerTooOld), .. } => {
                 self.i18n.label(Label::TreeStructureTooOld).to_string()
             }
+            DbEvent::Structure { result: Err(DbError::Locked), .. } => {
+                self.i18n.label(Label::TreeStructureLocked).to_string()
+            }
             DbEvent::Schemas(Err(error))
             | DbEvent::Objects { result: Err(error), .. }
             | DbEvent::Structure { result: Err(error), .. }
@@ -1196,6 +1199,7 @@ impl App {
             DbError::NoResult => Label::DbNoResult,
             DbError::Cancelled => Label::QueryCancelled,
             DbError::ReadWriteRefused => Label::DbReadWriteRefused,
+            DbError::Locked => Label::DbLocked,
             DbError::NotRepeatable(r) => return self.i18n.msg(&super::pages::why(r)).to_string(),
             DbError::Settings(f) => {
                 ErrorLog::new(self.paths.errors_log()).record("db.settings", f);

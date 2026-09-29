@@ -31,14 +31,18 @@ Everything below works today, with PostgreSQL.
 - The explorer lists every connection profile, the server's databases, their schemas, tables and
   views (materialized views with an icon of their own). An open table shows its structure, read
   from the catalog in one round trip the first time it opens (`r` reads it again; the table
-  itself is never read): the server's estimate of its rows and its size on disk (`~11k rows ·
-  4.2 MB`, or "rows unknown" before it was ever analyzed), then Columns (key marks, type,
+  itself is never read): the server's estimates of its rows and its size on disk from its
+  statistics, which `VACUUM` and `ANALYZE` keep (`~11k rows · ~4.2 MB`, or "rows unknown"
+  before it was ever analyzed), then Columns (key marks, type,
   `not null`, default), Primary Key, Foreign Keys (`Enter` goes to the referenced table),
   Indexes (columns or expressions, `UNIQUE`, method, partial predicate, whether a key or
   constraint owns it), Unique and Check Constraints and Triggers (timing, events, row or
   statement, function, disabled). Views show their columns and triggers, materialized views
   their columns and indexes. A group with nothing in it is dim, without a count. The explorer
-  is narrow, so the status bar shows the whole line under the cursor.
+  is narrow, so the status bar shows the whole line under the cursor. A lookup never waits on
+  another session: a table another session locks (an `ALTER TABLE`, a `VACUUM FULL`, a
+  migration waiting for its lock) says "structure unavailable: the table is locked by another
+  session (try again)" at once, without asking for a lock that would queue behind it.
   Nerd Font icons are optional (asked once, `:set icons=on|off`).
 - Connection profiles with colors, icons and nested folders; a quick-connect list (`Ctrl+O`)
   with fuzzy search; a database and schema per tab (`:use db.schema`).
