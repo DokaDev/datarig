@@ -974,7 +974,8 @@ impl App {
 const PROMPT_PATH: usize = 36;
 
 /// `path` in at most `max` columns: the home directory as `~`, then, when still too long,
-/// `…/` and the end of the path (the file's name is kept whole).
+/// `…/` and the end of the path (the file's name is kept whole). The path's own separators are
+/// kept: on Windows both `\` and `/` separate (a path typed with `/`, or `~/` before the rest).
 pub fn short_path(path: &Path, home: Option<&Path>, max: usize) -> String {
     let full = match home.and_then(|h| path.strip_prefix(h).ok()) {
         Some(rest) if !rest.as_os_str().is_empty() => format!("~/{}", rest.display()),
@@ -983,17 +984,17 @@ pub fn short_path(path: &Path, home: Option<&Path>, max: usize) -> String {
     if crate::text::width(&full) <= max {
         return full;
     }
-    let sep = std::path::MAIN_SEPARATOR;
-    let parts: Vec<&str> = full.split(sep).collect();
-    let mut tail = parts.last().copied().unwrap_or_default().to_string();
-    for part in parts.iter().rev().skip(1) {
-        let longer = format!("{part}{sep}{tail}");
-        if crate::text::width(&longer) + 2 > max {
+    // Where each separator is; the tail starts after one of them (the last: the file's name).
+    let seps: Vec<usize> = full.match_indices(std::path::is_separator).map(|(at, _)| at).collect();
+    let mut start = seps.last().map_or(0, |at| at + 1);
+    for &at in seps.iter().rev().skip(1) {
+        if crate::text::width(&full[at + 1..]) + 2 > max {
             break;
         }
-        tail = longer;
+        start = at + 1;
     }
-    format!("…{sep}{tail}")
+    let sep = full[..start].chars().next_back().unwrap_or(std::path::MAIN_SEPARATOR);
+    format!("…{sep}{}", &full[start..])
 }
 
 pub fn stage_label(stage: Stage) -> Label {
