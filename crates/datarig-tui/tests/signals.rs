@@ -44,10 +44,16 @@ impl Run {
     /// Start the binary in a new scratch directory `dir`; `None` (with a note) when `script`
     /// cannot start.
     fn start(dir: PathBuf) -> Option<Run> {
+        Run::start_in(dir, false)
+    }
+
+    /// [`Run::start`], with the binary out of the pseudo terminal's session on Linux (see
+    /// [`start`]).
+    fn start_in(dir: PathBuf, own_session: bool) -> Option<Run> {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("config.toml"), "").unwrap();
-        let child = start(&dir, &dir.join("typescript"))?;
+        let child = start(&dir, &dir.join("typescript"), own_session)?;
         Some(Run { child, dir })
     }
 
@@ -78,12 +84,18 @@ fn alive(pid: u32) -> bool {
 }
 
 /// Start the binary inside `script`, recording what it writes to the terminal in `out`.
-fn start(dir: &Path, out: &Path) -> Option<Child> {
+///
+/// `own_session` (Linux only): the binary runs in a session of its own (`setsid -w`), so the
+/// hangup of the pseudo terminal when `script` ends does not reach it. Linux sends the session
+/// leader SIGCONT with SIGHUP, which would resume a stopped binary to handle the hangup; macOS
+/// sends SIGHUP alone, which a stopped binary keeps pending.
+fn start(dir: &Path, out: &Path, own_session: bool) -> Option<Child> {
     let bin = env!("CARGO_BIN_EXE_datarig");
     let config = dir.join("config.toml");
     let mut cmd = Command::new("script");
     if cfg!(target_os = "linux") {
-        let line = format!("{bin} --config {}", config.display());
+        let setsid = if own_session { "setsid -w " } else { "" };
+        let line = format!("{setsid}{bin} --config {}", config.display());
         cmd.args(["-q", "-f", "-e", "-c", &line]).arg(out);
     } else {
         cmd.args(["-q", "-F"]).arg(out).arg(bin).arg("--config").arg(&config);
@@ -175,13 +187,13 @@ fn a_failed_run_leaves_no_process_behind() {
     assert!(!dir.exists(), "{}", dir.display());
 }
 
-/// A run whose `script` ended while the binary still runs (the binary is stopped here, so the
-/// hangup cannot end it, then `script` is killed) still ends the binary: each of the two is
-/// killed if it runs, whatever the other does.
+/// A run whose `script` ended while the binary still runs (the binary is stopped here, and on
+/// Linux in a session of its own, so the hangup cannot end it, then `script` is killed) still
+/// ends the binary: each of the two is killed if it runs, whatever the other does.
 #[test]
 fn a_run_whose_script_ended_first_leaves_no_process_behind() {
     let dir = std::env::temp_dir().join(format!("datarig-signals-{}-orphan", std::process::id()));
-    let Some(mut run) = Run::start(dir.clone()) else { return };
+    let Some(mut run) = Run::start_in(dir.clone(), true) else { return };
     run.drawn();
     let (app, script) = (run.app_pid(), run.child.id());
     let signal = |sig: &str, pid: u32| Command::new("kill").arg(format!("-{sig}")).arg(pid.to_string()).status();
