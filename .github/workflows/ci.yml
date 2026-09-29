@@ -66,8 +66,9 @@ jobs:
       # DATARIG_TEST_PG_URL the PostgreSQL, pooler and SSH integration tests print SKIPPED; the
       # `integration` job runs them for real. insta never rewrites snapshots under CI, so any
       # rendering change fails here. The real OS keychain test only runs with
-      # DATARIG_TEST_KEYCHAIN=1 and never when CI is set.
-      - run: cargo test --workspace --locked
+      # DATARIG_TEST_KEYCHAIN=1 and never when CI is set. --no-fail-fast: a failing test target
+      # does not hide the failures of the targets after it.
+      - run: cargo test --workspace --locked --no-fail-fast
 
   integration:
     name: integration (PostgreSQL 17, PgBouncer, SSH)
