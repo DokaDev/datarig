@@ -282,13 +282,17 @@ fn a_second_lock_fails_until_the_first_is_released() {
         Acquired::Held { .. } => panic!("the first instance owns it"),
     };
     assert!(!first.pid_only);
-    let pid = fs::read_to_string(dir.join(LOCK)).unwrap();
-    assert_eq!(pid.trim(), std::process::id().to_string());
+    // Windows' file locks are mandatory: while held, no other handle reads the file, so a second
+    // instance cannot say who holds it.
+    let holder = if cfg!(windows) { None } else { Some(std::process::id()) };
+    let pid = fs::read_to_string(dir.join(LOCK)).ok().map(|s| s.trim().to_string());
+    assert_eq!(pid, holder.map(|p| p.to_string()));
     match acquire(&dir).unwrap() {
-        Acquired::Held { pid } => assert_eq!(pid, Some(std::process::id()), "says who holds it"),
+        Acquired::Held { pid } => assert_eq!(pid, holder, "says who holds it"),
         Acquired::Owned(_) => panic!("a second lock must fail"),
     }
     drop(first);
+    assert_eq!(fs::read_to_string(dir.join(LOCK)).unwrap().trim(), std::process::id().to_string());
     // Released. (A process another test forks in the meantime shares the file until it runs
     // its program, which closes it; so allow a moment.)
     let owned = (0..100).any(|_| {

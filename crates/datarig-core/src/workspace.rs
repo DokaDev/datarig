@@ -676,7 +676,8 @@ pub struct InstanceLock {
 pub enum Acquired {
     /// This process owns the workspace.
     Owned(InstanceLock),
-    /// Another datarig holds it (its process id, when readable).
+    /// Another datarig holds it (its process id, when readable: never on Windows, whose file
+    /// locks are mandatory, so no other handle reads a held lock file).
     Held { pid: Option<u32> },
 }
 
