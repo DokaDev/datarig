@@ -1,0 +1,28 @@
+---
+source: crates/datarig-tui/tests/ui_snapshots.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 ○ ×                                        "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾╭ New connection ──────────────────────────────────────────────────────────╮t│"
+"│ │  Basic   SSH   Advanced                            Ctrl+N/Ctrl+P section │e│"
+"│ │                                                                          │ │"
+"│ │ Driver            ‹PostgreSQL› MySQL  Redis  Elasticsearch   unsupported │ │"
+"│ │ Name                                                                     │ │"
+"│▸│ Host              localhost                                              │ │"
+"│▸│ Port              5432                                                   │ │"
+"│ │ User                                                                     │ │"
+"│ │ Password storage   Keychain  File  Command  Env ‹Prompt›  ←/→ change     │ │"
+"│ │ Password          asked on every connect, never saved                    │ │"
+"│ │ Database                                                                 │ │"
+"│ │ Keychain unavailable (no keychain on this system); pick another storage  │t│"
+"│ │ DSN               postgres://localhost:5432/?sslmode=prefer              │ │"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ │                    Test    Save    Cancel                                │t│"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ ╰─ Tab/↑↓ move · Ctrl+N/P section · Ctrl+T test · Ctrl+S save · Esc cancel ╯ │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" NORMAL  local-pg · policy: default │ Connected to local-pg                  EN "

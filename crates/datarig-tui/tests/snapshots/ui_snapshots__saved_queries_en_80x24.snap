@@ -1,0 +1,28 @@
+---
+source: crates/datarig-tui/tests/ui_snapshots.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 daily no connection ×                                "
+"│  ＋ New connection   │╭ Query · reports/daily ───────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▸ ○   local-pg        ││ ! No connection · Space c s picks one for this tab   │"
+"│▾ Saved queries 4     ││  1▎select * from shop.orders where status = 'paid';  │"
+"│  ▾ reports           ││                                                      │"
+"│    ▸ old             ││                                                      │"
+"│      daily           ││                                                      │"
+"│  ▸ 売上              ││                                                      │" Hidden by multi-width symbols: [(6, " "), (8, " ")]
+"│    scratch           ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" NORMAL  │      │ Enter open · Tab next pane · : commands · F1 help · q quit EN "

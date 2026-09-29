@@ -1,0 +1,28 @@
+---
+source: crates/datarig-tui/tests/ui_snapshots.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 ○ ×                                        "
+"│ ╭ Keys — Editor (vim Normal) ──────────────────────────────────────────────╮─╮"
+"│▾│ / search all keys · Esc close                                            │t│"
+"│ │──────────────────────────────────────────────────────────────────────────│e│"
+"│ │   Edit this tab's connection profile                Space c e            │ │"
+"│ │   Test this tab's connection                        Space c t            │ │"
+"│ │   Disconnect this tab's connection                  Space c x            │ │"
+"│ │   Reconnect this tab's connection                   Space c r            │ │"
+"│ │   Change this tab's connection                      Space c s            │ │"
+"│ │   Choose this tab's database and schema             Space c d            │ │"
+"│ │   Save query                                        Space s s            │ │"
+"│ │   Save query as…                                    Space s a            │ │"
+"│ │   Rename this saved query                           Space s r            │ │"
+"│ │   Open a saved query                                Space s o            │t│"
+"│ │   Delete this saved query                           Space s d            │ │"
+"│ │   Settings                                          Space ,              │ │"
+"│ │   Keyboard help                                     Space ?              │ │"
+"│ │   Copy selection: Without headers (TSV)             Space r y t          │t│"
+"│ │   Copy selection: With headers (TSV)                Space r y T          │ │"
+"│ │   Copy selection: Comma list                        Space r y l          │ │"
+"│ │   Copy selection: CSV                               Space r y c          │ │"
+"│ ╰─────────────────── ↑↓ move · Enter run/open · l/h open/close · Esc close ╯ │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" NORMAL  local-pg · policy: default │ Connected to local-pg                  EN "

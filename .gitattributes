@@ -1,0 +1,4 @@
+# insta snapshots must keep LF endings on every OS (Windows CI checkout).
+*.snap text eol=lf
+# Generated from the keymap; the test compares it byte for byte (also on Windows).
+docs/keybindings.md text eol=lf

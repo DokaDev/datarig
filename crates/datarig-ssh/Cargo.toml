@@ -1,0 +1,29 @@
+[package]
+name = "datarig-ssh"
+description = "SSH tunnels of datarig: a bastion's direct-tcpip channels as a transport::Dialer"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# The only crate that names russh. Depends on core only (never on a driver or the UI).
+[dependencies]
+datarig-core.workspace = true
+data-encoding.workspace = true
+futures.workspace = true
+hmac.workspace = true
+log.workspace = true
+russh.workspace = true
+sha1.workspace = true
+tokio = { workspace = true, features = ["rt", "net", "time", "sync", "macros", "io-util"] }
+zeroize.workspace = true
+
+[dev-dependencies]
+datarig-core = { workspace = true, features = ["test-util"] }
+# The bastion tests run PostgreSQL sessions through a tunnel (a test-only dependency).
+datarig-driver-postgres.workspace = true
+rand = { version = "0.10", features = ["thread_rng"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "net", "io-util"] }
+
+[lints]
+workspace = true

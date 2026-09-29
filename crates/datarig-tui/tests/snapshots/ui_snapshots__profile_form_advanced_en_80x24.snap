@@ -1,0 +1,28 @@
+---
+source: crates/datarig-tui/tests/ui_snapshots.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 ○ ×                                        "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▸╭ Edit connection — 分析-replica ──────────────────────────────────────────╮t│" Hidden by multi-width symbols: [(23, " "), (25, " ")]
+"│▾│  Basic   SSH   Advanced                            Ctrl+N/Ctrl+P section │e│"
+"│ │                                                                          │ │"
+"│ │ SSL mode          ‹ require ›  ←/→ change                                │ │"
+"│ │ Statement cache   ‹ off ›  ←/→ change · off behind PgBouncer in transac… │ │"
+"│ │ Policy            prod-rules                empty: default               │ │"
+"│▸│ Color             ‹ ● red ›  ←/→ change · Enter list                     │ │"
+"│▸│ Icon              ‹ the driver's icon ›  ←/→ change · Enter list         │ │"
+"│ │ Folder            ‹ work/prod/ ›  ←/→ change · Enter list                │ │"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ │                                                                          │t│"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ │                    Test    Save    Cancel                                │t│"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ ╰─ Tab/↑↓ move · Ctrl+N/P section · Ctrl+T test · Ctrl+S save · Esc cancel ╯ │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" NORMAL  local-pg · policy: default │ Connected to local-pg                  EN "

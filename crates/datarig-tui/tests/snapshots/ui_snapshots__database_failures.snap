@@ -1,0 +1,15 @@
+---
+source: crates/datarig-tui/tests/ui_snapshots.rs
+expression: english_pinned(&out)
+---
+en server        Connection failed: FATAL: database "x" does not exist
+en closed        Connection failed: the server closed the connection
+en no_answer     Connection failed: no answer within 10.0s
+en settings      Connection failed: the connection settings are not valid (details in errors.log)
+en refused       Connection failed: the connection was refused (is the server running?)
+en cut           Connection failed: the connection was cut
+en timed_out     Connection failed: the connection timed out
+en unreachable   Connection failed: the server cannot be reached
+en no_host       Connection failed: the host name could not be resolved
+en other         Connection failed: could not talk to the server (details in errors.log)
+en not_supported Connection failed: this session does not run statements

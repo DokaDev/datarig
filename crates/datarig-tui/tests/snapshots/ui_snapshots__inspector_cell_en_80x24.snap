@@ -1,0 +1,28 @@
+---
+source: crates/datarig-tui/tests/ui_snapshots.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 ● ×                                        "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ ●   local-pg        ││ local-pg / datarig  127.0.0.1:55432 · policy: default│"
+"│  ▾ datarig default   ││  1 -- datarig 🐘  Ctrl+E: run the statement under the│" Hidden by multi-width symbols: [(41, " ")]
+"│    ▸ analytics       ││  2▎SELECT * FROM shop.users WHERE id <= 8;           │"
+"│    ▸ public          ││  3                                                   │"
+"│    ▸ shop            ││  4 SELECT u.name, o.status, o.total_amount           │"
+"│                      ││  5 FROM shop.orders o                                │"
+"│                      ││  6 JOIN shop.users u ON u.id = o.user_id             │"
+"│                      │╰──────────────────────────────────────────────────────╯"
+"│                      │╭ Results · 8 rows ────────────╮╭ [Cell] Row · I ──────╮"
+"│                      ││   │ profile                  ││ profile              │"
+"│                      ││   │ jsonb                    ││ jsonb · 37 characters│"
+"│                      ││ 1 │ {"lang": "ko", "tags": […││                      │"
+"│                      ││ 2 │ {}                       ││ {                    │"
+"│                      ││ 3 │ {"vip": true, "level": 7}││   "lang": "ko",      │"
+"│                      ││ 4 │ {"flags": ["🇰🇷", "🇺🇸"]}  ││   "tags": [          │" Hidden by multi-width symbols: [(43, " "), (49, " ")]
+"│                      ││ 5 │ {"lang": "ja"}           ││     "dev",           │"
+"│                      ││ 6 │ {"lang": "zh"}           ││     "db"             │"
+"│                      ││ 7 │ {"lang": "en"}           ││   ]                  │"
+"│                      ││ 8 │ {"multiline": true}      ││ }                    │"
+"│                      ││                              ││                      │"
+"╰──────────────────────╯╰──────────────────────────────╯╰──────────────────────╯"
+" NORMAL  local-pg · policy: default │ 8 rows · 12ms        │ Enter view cell EN "

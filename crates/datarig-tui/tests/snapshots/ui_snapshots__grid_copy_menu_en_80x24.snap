@@ -1,0 +1,28 @@
+---
+source: crates/datarig-tui/tests/ui_snapshots.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 ● ×                                        "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ ●   local-pg        ││ local-pg / datarig  127.0.0.1:55432 · policy: default│"
+"│  ▾ datarig default   ││  1 -- datarig 🐘  Ctrl+E: run the statement under the│" Hidden by multi-width symbols: [(41, " ")]
+"│    ▸ analytics       ││  2▎SELECT * FROM shop.users WHERE id <= 8;           │"
+"│    ▸ public          ││  3                                                   │"
+"│    ▸ shop            ││  4 SELECT u.name, o.status, o.total_amount           │"
+"│                      ││  5 FROM shop.orders o                                │"
+"│                      ││  6 JOIN shop.users u ON u.id = o.user_id             │"
+"│                      │╰──────────────────────────────────────────────────────╯"
+"│                      │╭ Results · 8 rows ────────────╮╭ [Cell] Row · I ──────╮"
+"│                      ││   │ name                 │ n…││ name                 │"
+"│                      ││   │ text                 │ t…││ text · 3 characters …│"
+"│                      ││ 1 │ 陳大文               │ … ││                      │" Hidden by multi-width symbols: [(31, " "), (33, " "), (35, " ")]
+"│                      ││ 2 │ 林美玲               │ N…││ 林美玲               │" Hidden by multi-width symbols: [(31, " "), (33, " "), (35, " "), (59, " "), (61, " "), (63, " ")]
+"│                      ││ 3 │  ╭───────────────────────────────────────────────╮"
+"│                      ││ 4 │ E│ Results: view cell value                Enter │"
+"│                      ││ 5 │  │ Result detail → show / hide                 i │"
+"│                      ││ 6 │  │ Copy the cell (a selected range as TSV)     y │"
+"│                      ││ 7 │ P│ Copy the row (the selected rows) as TSV     Y │"
+"│                      ││ 8 │  │ Copy selection ▸                              │"
+"│                      ││      │ Copy all fetched rows ▸                       │"
+"╰──────────────────────╯╰──────╰───────────────────────────────────────────────╯"
+" NORMAL  local-pg · policy: default │ 8 rows · 12ms                          EN "

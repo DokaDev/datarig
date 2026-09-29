@@ -1,0 +1,28 @@
+---
+source: crates/datarig-tui/tests/ui_snapshots.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 ○ ×                                        "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ local               ││ local-pg / datarig  127.0.0.1:55432 · policy: default│"
+"│  ▸ ○   scratch       ││  1 -- datarig 🐘  Ctrl+E: run the statement under the│" Hidden by multi-width symbols: [(41, " ")]
+"│▾ work                ││  2▎SELECT * FROM shop.users WHERE id <= 8;           │"
+"│  ▾ prod              ││  3                                                   │"
+"│    ▸ ⠋   orders-prod ││  4 SELECT u.name, o.status, o.total_amount           │"
+"│    ▸ ✕   分析-replica││  5 FROM shop.orders o                                │" Hidden by multi-width symbols: [(12, " "), (14, " ")]
+"│        Connection fa…││  6 JOIN shop.users u ON u.id = o.user_id             │"
+"│  ▸ ○   orders-stage  ││  7 WHERE o.status = 'paid';                          │"
+"│▾ ●   ╭────────────────────────────────────────────────╮                      │"
+"│  ▾ da│ Explorer: open or toggle                 Enter │ts;                   │"
+"│    ▸ │ Explorer: reload                             r │                      │"
+"│    ▸ │ New connection profile                       n │ts ORDER BY created_at│"
+"│    ▸ │ Edit connection profile                      e │                      │"
+"│      │ Duplicate connection profile                 c │                      │"
+"│      │ Explorer: delete profile or empty folder     d │                      │"
+"│      │ Test connection                              t │colon$$ AS dollar, 'it│"
+"│      │ Disconnect                                   x │                      │"
+"│      │ New console on this connection               o │                      │"
+"│      │ Explorer: move profile to a folder           m │                      │"
+"│      │ New folder                                   N │                      │"
+"╰──────╰────────────────────────────────────────────────╯──────────────────────╯"
+" NORMAL  local-pg · policy: default │ Connection failed: password authentic… EN "

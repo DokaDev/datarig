@@ -1,0 +1,28 @@
+---
+source: crates/datarig-tui/tests/ui_snapshots.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 ○ ×                                        "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ ●   local-pg        ││ local-pg / datarig  127.0.0.1:55432 · policy: default│"
+"│  ▾ datarig default   ││  1 -- datarig 🐘  Ctrl+E: run the statement under the│" Hidden by multi-width symbols: [(41, " ")]
+"│    ▸ analytics       ││  2▎SELECT * FROM shop.users WHERE id <= 8;           │"
+"│    ▸ public          ││  3                                                   │"
+"│    ▸ shop            ││  4 SELECT u.name, o.status, o.total_amount           │"
+"│▸ ○   分析-replica    ││  5 FROM shop.orders o                                │" Hidden by multi-width symbols: [(8, " "), (10, " ")]
+"│▸ ○   分析-replica    ││  6 JOIN shop.users u ON u.id = o.user_id             │" Hidden by multi-width symbols: [(8, " "), (10, " ")]
+"│           ╭ New folder ──────────────────────────────────────────╮           │"
+"│           │ 本番                                                 │           │" Hidden by multi-width symbols: [(15, " "), (17, " ")]
+"│           │                                                      │           │"
+"│           │                                                      │           │"
+"│           ╰───────────────────────────── Enter save · Esc cancel ╯ created_at│"
+"│                      ││ 12                                                   │"
+"│                      ││ 13 SELECT analytics.slow(30);                        │"
+"│                      ││ 14                                                   │"
+"│                      ││ 15 SELECT $$a body; with a semicolon$$ AS dollar, 'it│"
+"│                      ││ 16                                                   │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" NORMAL  local-pg · policy: default │ Connected to local-pg                  EN "

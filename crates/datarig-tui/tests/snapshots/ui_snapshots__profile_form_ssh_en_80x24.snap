@@ -1,0 +1,28 @@
+---
+source: crates/datarig-tui/tests/ui_snapshots.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 ○ ×                                        "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾╭ Edit connection — local-pg ──────────────────────────────────────────────╮t│"
+"│ │  Basic   SSH   Advanced                            Ctrl+N/Ctrl+P section │e│"
+"│ │                                                                          │ │"
+"│ │ SSH tunnel        ‹ on ›  ←/→ change · the database host (Basic) is as … │ │"
+"│ │ Bastion           bastion.example.com                                    │ │"
+"│▸│ Port              22                                                     │ │"
+"│▸│ User              ec2-user                                               │ │"
+"│ │ Log in with       ‹key file› password  ssh-agent  server questions       │ │"
+"│ │ Key file          ~/.ssh/prod.pem          […] Ctrl+O browses; ~ is you… │ │"
+"│ │ Password storage  ‹Keychain› File  Command  Env  Prompt                  │ │"
+"│ │ Passphrase                                  empty keeps what is stored;… │ │"
+"│ │ Keepalive, sec                              empty: the default           │t│"
+"│ │ Timeout, sec                                empty: the default           │ │"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ │                    Test    Save    Cancel                                │t│"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ ╰─ Tab/↑↓ move · Ctrl+N/P section · Ctrl+T test · Ctrl+S save · Esc cancel ╯ │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" NORMAL  local-pg · policy: default │ Connected to local-pg                  EN "

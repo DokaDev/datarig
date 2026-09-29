@@ -1,0 +1,28 @@
+---
+source: crates/datarig-tui/tests/ui_snapshots.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 ● ×                                        "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ ●   local-pg        ││ local-pg / datarig  127.0.0.1:55432 · policy: default│"
+"│  ▾ datarig default   ││  1 -- datarig 🐘  Ctrl+E: run the statement under the│" Hidden by multi-width symbols: [(41, " ")]
+"│    ▸ analytics       ││  2▎SELECT * FROM shop.users WHERE id <= 8;           │"
+"│    ▸ public          ││  3                                                   │"
+"│    ▸ shop            ││  4 SELECT u.name, o.status, o.total_amount           │"
+"│                      ││  5 FROM shop.orders o                                │"
+"│                      ││  6 JOIN shop.users u ON u.id = o.user_id             │"
+"│                      │╰──────────────────────────────────────────────────────╯"
+"│                      │╭ Results · 8 rows ────────────╮╭ [Cell] Row · I ──────╮"
+"│                      ││   │ id   │ name              ││ id                   │"
+"│                      ││   │ int8 │ text              ││ int8 · 1 character   │"
+"│                      ││ 1 │    1 │ 陳大文            ││                      │" Hidden by multi-width symbols: [(38, " "), (40, " "), (42, " ")]
+"│                      ││ 2 │    2 │ 林美玲            ││ 1                    │" Hidden by multi-width symbols: [(38, " "), (40, " "), (42, " ")]
+"│                      ││ 3 │    3 │ 張志明            ││                      │" Hidden by multi-width symbols: [(38, " "), (40, " "), (42, " ")]
+"│                      ││ 4 │    4 │ Emoji テスト      ││                      │" Hidden by multi-width symbols: [(44, " "), (46, " "), (48, " ")]
+"│                      ││ 5 │    5 │ 山田太郎          ││                      │" Hidden by multi-width symbols: [(38, " "), (40, " "), (42, " "), (44, " ")]
+"│                      ││ 6 │    6 │ 王小明            ││                      │" Hidden by multi-width symbols: [(38, " "), (40, " "), (42, " ")]
+"│                      ││ 7 │    7 │ Plain ASCII User  ││                      │"
+"│                      ││ 8 │    8 │ 全角 ＡＢＣ 半角 …││                      │" Hidden by multi-width symbols: [(38, " "), (40, " "), (43, " "), (45, " "), (47, " "), (50, " "), (52, " ")]
+"│                      ││                              ││                      │"
+"╰──────────────────────╯╰──────────────────────────────╯╰──────────────────────╯"
+" NORMAL  local-pg · policy: default │ 8 rows · 12ms             │ Ctrl+E run EN "

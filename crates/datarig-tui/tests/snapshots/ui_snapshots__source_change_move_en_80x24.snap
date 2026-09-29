@@ -1,0 +1,28 @@
+---
+source: crates/datarig-tui/tests/ui_snapshots.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 ○ ×                                        "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾╭ Edit connection — local-pg ──────────────────────────────────────────────╮t│"
+"│ │  Basic   SSH   Advanced                            Ctrl+N/Ctrl+P section │e│"
+"│ │                                                                          │ │"
+"│ │ Driver            ‹PostgreSQL› MySQL  Redis  Elasticsearch   unsupported │ │"
+"│ │ Name              local-pg                                               │ │"
+"│▸│ Host              127.0.0.1                                              │ │"
+"│▸│ Port  ╭ Password storage ────────────────────────────────────────╮       │ │"
+"│ │ User  │                                                          │       │ │"
+"│ │ Passwo│ Move the saved password of “local-pg” from the OS        │ge     │ │"
+"│ │ Passwo│ keychain to the secrets file? It is written and checked  │0600)  │ │"
+"│ │ Databa│ there first, then removed from the OS keychain.          │       │ │"
+"│ │       │                                                          │       │t│"
+"│ │ DSN   ╰───────────────────────────── y continue · n/Enter cancel ╯de=dis │ │"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ │                    Test    Save    Cancel                                │t│"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ ╰─ Tab/↑↓ move · Ctrl+N/P section · Ctrl+T test · Ctrl+S save · Esc cancel ╯ │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" NORMAL  local-pg · policy: default │ Connected to local-pg                  EN "

@@ -1,0 +1,493 @@
+# datarig key bindings
+
+<!-- Generated from crates/datarig-tui/src/keymap/defaults.rs and the action registry. Do not edit;
+     run `DATARIG_BLESS=1 cargo test -p datarig-tui --test keybindings_doc` at the repository root. -->
+
+Keys resolve from the current context outwards to `root`; the first binding found wins. Dialogs (`overlay.*`) sit directly under `root`, so only `root` keys pass through them. The cell viewer is not modal: it sits under `workspace`, so the workspace keys (run, …) keep working.
+
+- **[text]** text input: letters, digits, symbols and `Space` are typed. No leader, no Hangul mapping.
+- **[editor]** the query editor: its keys may hide keys of the contexts around it, except protected keys.
+- **Hangul**: outside text input a Korean 2-set jamo or syllable counts as the QWERTY key(s) at its place (U+3153 = `j`, U+D558 = `g k`); the status bar then shows the Korean input-source mark.
+- **R**: repeats while the key is held (terminal auto-repeat).
+- **Key guide**: after `Space` a which-key popup lists the keys that may follow (after 300 ms; `Backspace` goes up a level, `Esc` closes). `Space ?` or `F1` open the keyboard help, the same way everywhere (`?` alone is left to vim's backward search). The help is one list: the sections of the current context first and open, every other context closed below (`Enter`/`l`/`h` or a click opens and closes a section); `/` searches all of them. The status bar shows the most relevant keys of the current context.
+- **Commands**: `:` (outside text input) or `Ctrl+K` (everywhere) opens the command line: a popup near the top of the screen, or the last line with `[commands] position = "bottom"` (the settings screen, `:set commands.position=bottom`). It runs the commands listed at the end (`:conn <profile>`, `:set <setting>=<value>`, …) and finds every action by name; see the tables at the end.
+- **Reserved** keys belong to a widget (vim, standard editing, a dialog) or to an action that is not implemented yet. They cannot be remapped.
+
+Protected keys (no inner context may hide them): `Ctrl+Q` `Ctrl+K` `Ctrl+E` `Ctrl+Enter` `Ctrl+S` `Ctrl+T` `Ctrl+O` `Ctrl+G` `F1` `F6` `Shift+F6` `Ctrl+PageDown` `Ctrl+PageUp` `Space`.
+
+Remap in `config.toml` with `[keymap.<context>]` tables: `"<keys>" = "<action id>"`, or `"none"` to unbind. Key notation: `ctrl+e`, `shift+tab`, `f4`, `pagedown`, `space c n` (a space separates the keys of a sequence), `G` = `shift+g`. Invalid entries are skipped and reported at startup.
+
+```toml
+[keymap.explorer]
+"x" = "explorer.refresh"
+"q" = "none"
+```
+
+## `root`
+
+Works everywhere, also while a dialog is open.
+
+| Keys | Action | Description | R |
+|---|---|---|---|
+| `Ctrl+Q` | `app.quit` | Quit |  |
+| `Ctrl+C` | `query.cancel` | Cancel running query |  |
+| `Ctrl+K` | `commands.open` | Commands |  |
+
+## `workspace`
+
+The workspace without a dialog, including text input in the editor. Inside `root`.
+
+| Keys | Action | Description | R |
+|---|---|---|---|
+| `Ctrl+Enter` | `query.execute_current` | Run statement under cursor |  |
+| `Ctrl+E` | `query.execute_current` | Run statement under cursor |  |
+| `Ctrl+O` | `conn.quick_connect` | Quick connect (go to a profile's tab) |  |
+| `Ctrl+T` | `tab.new_console` | New console tab |  |
+| `Ctrl+W` | `tab.close` | Close tab |  |
+| `Ctrl+S` | `script.save` | Save query |  |
+| `Ctrl+PageDown` | `tab.next` | Next tab | ✓ |
+| `Ctrl+PageUp` | `tab.prev` | Previous tab | ✓ |
+| `F6` | `pane.next` | Focus next pane |  |
+| `Shift+F6` | `pane.prev` | Focus previous pane |  |
+| `Shift+Tab` | `pane.prev` | Focus previous pane |  |
+| `F1` | `help.context` | Keyboard help |  |
+
+Reserved — editor.open_external: `Ctrl+G`
+
+## `nav`
+
+Every pane that is not text input (explorer, results, vim Normal/Visual). Inside `workspace`.
+
+| Keys | Action | Description | R |
+|---|---|---|---|
+| `Tab` | `pane.next` | Focus next pane |  |
+| `:` | `commands.open` | Commands |  |
+| `g t` | `tab.next` | Next tab | ✓ |
+| `g T` | `tab.prev` | Previous tab | ✓ |
+| `Space t n` | `tab.new_console` | New console tab |  |
+| `Space t c` | `tab.close` | Close tab |  |
+| `Space t u` | `tab.reopen_closed` | Reopen closed tab |  |
+| `Space 1` | `tab.goto.1` | Go to tab 1 |  |
+| `Space 2` | `tab.goto.2` | Go to tab 2 |  |
+| `Space 3` | `tab.goto.3` | Go to tab 3 |  |
+| `Space 4` | `tab.goto.4` | Go to tab 4 |  |
+| `Space 5` | `tab.goto.5` | Go to tab 5 |  |
+| `Space 6` | `tab.goto.6` | Go to tab 6 |  |
+| `Space 7` | `tab.goto.7` | Go to tab 7 |  |
+| `Space 8` | `tab.goto.8` | Go to tab 8 |  |
+| `Space 9` | `tab.goto.9` | Go to tab 9 |  |
+| `Space c c` | `conn.quick_connect` | Quick connect (go to a profile's tab) |  |
+| `Space c n` | `conn.new` | New connection profile |  |
+| `Space c e` | `conn.edit_current` | Edit this tab's connection profile |  |
+| `Space c t` | `conn.test_current` | Test this tab's connection |  |
+| `Space c x` | `conn.disconnect_current` | Disconnect this tab's connection |  |
+| `Space c r` | `conn.reconnect_current` | Reconnect this tab's connection |  |
+| `Space c s` | `tab.set_connection` | Change this tab's connection |  |
+| `Space c d` | `tab.set_context` | Choose this tab's database and schema |  |
+| `Space s s` | `script.save` | Save query |  |
+| `Space s a` | `script.save_as` | Save query as… |  |
+| `Space s r` | `script.rename` | Rename this saved query |  |
+| `Space s o` | `script.open` | Open a saved query |  |
+| `Space s d` | `script.delete` | Delete this saved query |  |
+| `Space ,` | `settings.open` | Settings |  |
+| `Space /` | `commands.open` | Commands |  |
+| `Space ?` | `help.context` | Keyboard help |  |
+| `Space r y t` | `results.copy.selection.tsv` | Copy selection: Without headers (TSV) |  |
+| `Space r y T` | `results.copy.selection.tsv_header` | Copy selection: With headers (TSV) |  |
+| `Space r y l` | `results.copy.selection.list` | Copy selection: Comma list |  |
+| `Space r y c` | `results.copy.selection.csv` | Copy selection: CSV |  |
+| `Space r y j` | `results.copy.selection.json` | Copy selection: JSON |  |
+| `Space r y J` | `results.copy.selection.json_pretty` | Copy selection: JSON (pretty) |  |
+| `Space r y m` | `results.copy.selection.markdown` | Copy selection: Markdown |  |
+| `Space r y h` | `results.copy.selection.html` | Copy selection: HTML table |  |
+| `Space r y x` | `results.copy.selection.xml` | Copy selection: XML |  |
+| `Space r y n` | `results.copy.selection.in` | Copy selection: SQL IN clause |  |
+| `Space r y i` | `results.copy.selection.insert` | Copy selection: SQL INSERT |  |
+| `Space r y u` | `results.copy.selection.update` | Copy selection: SQL UPDATE |  |
+| `Space r a t` | `results.copy.all.tsv` | Copy all fetched rows: Without headers (TSV) |  |
+| `Space r a T` | `results.copy.all.tsv_header` | Copy all fetched rows: With headers (TSV) |  |
+| `Space r a l` | `results.copy.all.list` | Copy all fetched rows: Comma list |  |
+| `Space r a c` | `results.copy.all.csv` | Copy all fetched rows: CSV |  |
+| `Space r a j` | `results.copy.all.json` | Copy all fetched rows: JSON |  |
+| `Space r a J` | `results.copy.all.json_pretty` | Copy all fetched rows: JSON (pretty) |  |
+| `Space r a m` | `results.copy.all.markdown` | Copy all fetched rows: Markdown |  |
+| `Space r a h` | `results.copy.all.html` | Copy all fetched rows: HTML table |  |
+| `Space r a x` | `results.copy.all.xml` | Copy all fetched rows: XML |  |
+| `Space r a n` | `results.copy.all.in` | Copy all fetched rows: SQL IN clause |  |
+| `Space r a i` | `results.copy.all.insert` | Copy all fetched rows: SQL INSERT |  |
+| `Space r a u` | `results.copy.all.update` | Copy all fetched rows: SQL UPDATE |  |
+| `Space r i` | `results.detail` | Result detail → show / hide |  |
+| `Space r I` | `results.detail_tab` | Result detail → Cell / Row |  |
+| `Space r h` | `results.panel.toggle` | Results pane → hide / show |  |
+| `Space r z` | `results.panel.maximize` | Results pane → maximise / restore |  |
+| `Space r +` | `results.panel.grow` | Results pane → taller | ✓ |
+| `Space r -` | `results.panel.shrink` | Results pane → shorter | ✓ |
+| `Space r n` | `results.page.next` | Results → next page | ✓ |
+| `Space r p` | `results.page.prev` | Results → previous page | ✓ |
+| `Space r #` | `results.count` | Results → count every row (runs a count query) |  |
+| `Space r ]` | `results.tab.next` | Result tabs → next |  |
+| `Space r [` | `results.tab.prev` | Result tabs → previous |  |
+
+Leader groups (the which-key popup lists what follows):
+
+| Keys | Group |
+|---|---|
+| `Space` | Leader |
+| `Space c` | Connection |
+| `Space t` | Tabs |
+| `Space s` | Saved queries |
+| `Space r` | Results |
+| `Space r y` | Copy selection |
+| `Space r a` | Copy all fetched rows |
+
+## `explorer`
+
+The explorer: folders, connection profiles, their databases and schema trees. Inside `nav`.
+
+| Keys | Action | Description | R |
+|---|---|---|---|
+| `j` | `explorer.down` | Explorer: next item | ✓ |
+| `Down` | `explorer.down` | Explorer: next item | ✓ |
+| `k` | `explorer.up` | Explorer: previous item | ✓ |
+| `Up` | `explorer.up` | Explorer: previous item | ✓ |
+| `l` | `explorer.expand` | Explorer: expand |  |
+| `Right` | `explorer.expand` | Explorer: expand |  |
+| `h` | `explorer.collapse` | Explorer: collapse or go to parent |  |
+| `Left` | `explorer.collapse` | Explorer: collapse or go to parent |  |
+| `Enter` | `explorer.activate` | Explorer: open or toggle |  |
+| `g g` | `explorer.top` | Explorer: first item |  |
+| `G` | `explorer.bottom` | Explorer: last item |  |
+| `r` | `explorer.refresh` | Explorer: reload |  |
+| `/` | `explorer.filter` | Explorer: filter profiles |  |
+| `n` | `conn.new` | New connection profile |  |
+| `e` | `conn.edit` | Edit connection profile |  |
+| `c` | `conn.duplicate` | Duplicate connection profile |  |
+| `d` | `explorer.delete` | Explorer: delete profile or empty folder |  |
+| `t` | `conn.test` | Test connection |  |
+| `x` | `conn.disconnect` | Disconnect |  |
+| `o` | `conn.open_console` | New console on this connection |  |
+| `m` | `explorer.move` | Explorer: move profile to a folder |  |
+| `N` | `folder.new` | New folder |  |
+| `R` | `explorer.rename` | Explorer: rename folder |  |
+| `O` | `explorer.new_console_here` | Explorer: new console in this database or schema |  |
+| `Esc` | `explorer.back` | Explorer: back (cancel a test or connecting, clear the filter) |  |
+| `q` | `app.quit` | Quit |  |
+
+## `explorer.filter` [text]
+
+The `/` filter of the explorer (profile names). Inside `workspace`.
+
+| Keys | Action | Description | R |
+|---|---|---|---|
+| `Esc` | `explorer.filter_clear` | Explorer filter: clear |  |
+| `Enter` | `explorer.filter_accept` | Explorer filter: done |  |
+| `Down` | `explorer.down` | Explorer: next item | ✓ |
+| `Up` | `explorer.up` | Explorer: previous item | ✓ |
+
+Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
+
+## `grid`
+
+The result grid. Inside `nav`.
+
+| Keys | Action | Description | R |
+|---|---|---|---|
+| `h` | `grid.left` | Results: previous column | ✓ |
+| `Left` | `grid.left` | Results: previous column | ✓ |
+| `j` | `grid.down` | Results: next row | ✓ |
+| `Down` | `grid.down` | Results: next row | ✓ |
+| `k` | `grid.up` | Results: previous row | ✓ |
+| `Up` | `grid.up` | Results: previous row | ✓ |
+| `l` | `grid.right` | Results: next column | ✓ |
+| `Right` | `grid.right` | Results: next column | ✓ |
+| `PageDown` | `grid.page_down` | Results: scroll one screen down | ✓ |
+| `PageUp` | `grid.page_up` | Results: scroll one screen up | ✓ |
+| `Ctrl+D` | `grid.half_down` | Results: scroll half a screen down | ✓ |
+| `Ctrl+U` | `grid.half_up` | Results: scroll half a screen up | ✓ |
+| `g g` | `grid.top` | Results: first row of the page |  |
+| `Home` | `grid.top` | Results: first row of the page |  |
+| `G` | `grid.bottom` | Results: last row of the page |  |
+| `End` | `grid.bottom` | Results: last row of the page |  |
+| `0` | `grid.first_col` | Results: first column |  |
+| `$` | `grid.last_col` | Results: last column |  |
+| `Enter` | `grid.view_cell` | Results: view cell value |  |
+| `y` | `grid.copy_cell` | Copy the cell (a selected range as TSV) |  |
+| `Y` | `grid.copy_row` | Copy the row (the selected rows) as TSV |  |
+| `v` | `grid.select` | Select a range of cells (again: cancel) |  |
+| `V` | `grid.select_rows` | Select whole rows (again: cancel) |  |
+| `i` | `results.detail` | Result detail → show / hide |  |
+| `I` | `results.detail_tab` | Result detail → Cell / Row |  |
+| `z` | `results.panel.maximize` | Results pane → maximise / restore |  |
+| `+` | `results.panel.grow` | Results pane → taller | ✓ |
+| `-` | `results.panel.shrink` | Results pane → shorter | ✓ |
+| `n` | `results.page.next` | Results → next page | ✓ |
+| `p` | `results.page.prev` | Results → previous page | ✓ |
+| `#` | `results.count` | Results → count every row (runs a count query) |  |
+| `L` | `results.tab.next` | Result tabs → next |  |
+| `H` | `results.tab.prev` | Result tabs → previous |  |
+| `Esc` | `pane.back` | Back to the editor |  |
+| `q` | `pane.back` | Back to the editor |  |
+
+## `inspector`
+
+The result inspector next to the grid, after a click on it. Inside `nav`.
+
+| Keys | Action | Description | R |
+|---|---|---|---|
+| `Tab` | `results.detail_tab` | Result detail → Cell / Row |  |
+| `Shift+Tab` | `results.detail_tab` | Result detail → Cell / Row |  |
+| `I` | `results.detail_tab` | Result detail → Cell / Row |  |
+| `i` | `results.detail` | Result detail → show / hide |  |
+| `Esc` | `pane.back` | Back to the editor |  |
+| `q` | `pane.back` | Back to the editor |  |
+
+## `welcome`
+
+The welcome panel shown while there is no connection profile. Inside `nav`.
+
+| Keys | Action | Description | R |
+|---|---|---|---|
+| `n` | `conn.new` | New connection profile |  |
+| `Enter` | `conn.new` | New connection profile |  |
+| `q` | `app.quit` | Quit |  |
+
+## `editor.vim.normal` [editor]
+
+Query editor, `[editor] mode = "vim"`, Normal mode. Inside `nav`.
+
+Reserved — vim: `h` `j` `k` `l` `w` `W` `b` `B` `e` `E` `g e` `0` `^` `$` `g g` `G` `f` `F` `t` `T` `;` `,` `%` `{` `}` `(` `)` `[` `]` `H` `M` `L` `Left` `Right` `Up` `Down` `Home` `End` `d` `c` `y` `>` `<` `=` `g ~` `g u` `g U` `1` `2` `3` `4` `5` `6` `7` `8` `9` `.` `"` `x` `X` `s` `S` `r` `R` `p` `P` `u` `Ctrl+R` `J` `~` `i` `a` `I` `A` `o` `O` `v` `V` `Ctrl+V` `Esc` `/` `?` `n` `N` `*` `#` `Ctrl+D` `Ctrl+U` `Ctrl+F` `Ctrl+B` `z z` `z t` `z b` `q`
+
+## `editor.vim.visual` [editor]
+
+Query editor, `[editor] mode = "vim"`, Visual mode. Inside `nav`.
+
+Reserved — vim: `h` `j` `k` `l` `w` `W` `b` `B` `e` `E` `g e` `0` `^` `$` `g g` `G` `f` `F` `t` `T` `;` `,` `%` `{` `}` `(` `)` `[` `]` `H` `M` `L` `Left` `Right` `Up` `Down` `Home` `End` `d` `c` `y` `>` `<` `=` `g ~` `g u` `g U` `1` `2` `3` `4` `5` `6` `7` `8` `9` `.` `"` `x` `X` `s` `S` `r` `R` `p` `P` `u` `Ctrl+R` `J` `~` `i` `a` `I` `A` `o` `O` `v` `V` `Ctrl+V` `Esc` `/` `?` `n` `N` `*` `#` `Ctrl+D` `Ctrl+U` `Ctrl+F` `Ctrl+B` `z z` `z t` `z b` `q`
+
+## `editor.vim.insert` [editor] [text]
+
+Query editor, `[editor] mode = "vim"`, Insert mode. Inside `workspace`.
+
+| Keys | Action | Description | R |
+|---|---|---|---|
+| `Ctrl+N` | `editor.complete` | Show completions |  |
+| `F4` | `editor.complete` | Show completions |  |
+
+Reserved — vim Insert: `Esc` `Enter` `Tab` `Backspace` `Delete` `Left` `Right` `Up` `Down` `Home` `End` `Ctrl+W` `Ctrl+U` `Ctrl+P`
+
+## `editor.standard` [editor] [text]
+
+Query editor, `[editor] mode = "standard"` (its editing keys are not implemented yet). Inside `workspace`.
+
+| Keys | Action | Description | R |
+|---|---|---|---|
+| `Ctrl+N` | `editor.complete` | Show completions |  |
+| `F4` | `editor.complete` | Show completions |  |
+
+Reserved — copy: `Ctrl+C` (with a selection)
+
+Reserved — standard editing: `Ctrl+X` `Ctrl+V` `Ctrl+Z` `Ctrl+Y` `Ctrl+A` `Shift+Left` `Shift+Right` `Shift+Up` `Shift+Down` `Shift+Home` `Shift+End` `Ctrl+Left` `Ctrl+Right` `Ctrl+Backspace` `Tab` `Shift+Tab` `Esc` `Enter` `Backspace` `Delete` `Left` `Right` `Up` `Down` `Home` `End`
+
+## `overlay.commands` [text]
+
+The `:` command line: commands with arguments, and a search over every action. Inside `root`.
+
+Reserved — command line: `Esc` `Enter` `Up` `Down` `Ctrl+P` `Ctrl+N` `Tab` `Shift+Tab`
+
+Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
+
+## `overlay.quick_connect` [text]
+
+Quick connect: a fuzzy list of the connection profiles. Inside `root`.
+
+Reserved — quick connect: `Esc` `Enter` `Up` `Down` `Ctrl+P` `Ctrl+N`
+
+Reserved — quick connect: databases and schemas: `Right` `Left`
+
+Reserved — text input: `Backspace` `Delete` `Home` `End` `Ctrl+U` `Ctrl+A`
+
+## `overlay.profile_form` [text]
+
+Connection profile form. Inside `root`.
+
+| Keys | Action | Description | R |
+|---|---|---|---|
+| `Ctrl+O` | `form.pick_key_file` | Pick the SSH key file |  |
+
+Reserved — profile form: `Tab` `Shift+Tab` `Down` `Up` `Enter` `Esc` `Ctrl+S` `Ctrl+T` `Ctrl+N` `Ctrl+P`
+
+Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
+
+## `overlay.settings`
+
+The settings screen: one list by category, each setting with its description. Inside `root`.
+
+Reserved — settings screen: `j` `k` `Down` `Up` `h` `l` `Left` `Right` `Enter` `Space` `Esc` `q`
+
+## `overlay.chooser`
+
+A list to pick from: a profile's color, icon or folder. Inside `root`.
+
+Reserved — chooser: `j` `k` `Down` `Up` `Enter` `/` `Esc` `q`
+
+## `overlay.chooser.filter` [text]
+
+The `/` filter of a list to pick from. Inside `root`.
+
+Reserved — chooser filter: `Esc` `Enter` `Down` `Up`
+
+Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
+
+## `overlay.name_input` [text]
+
+A name to type: a new or renamed folder. Inside `root`.
+
+Reserved — name input: `Enter` `Esc`
+
+Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
+
+## `overlay.script_tree`
+
+The folder tree of the saved queries (save as, open): the tree has the keyboard. Inside `root`.
+
+Reserved — saved-queries tree: `j` `k` `h` `l` `Up` `Down` `Left` `Right` `Enter` `n` `Tab` `Shift+Tab` `Esc`
+
+## `overlay.script_tree.name` [text]
+
+The folder tree of the saved queries: its name field (save as) or filter (open). Inside `root`.
+
+Reserved — saved-queries tree: name or filter: `Up` `Down` `Enter` `Tab` `Shift+Tab` `Esc`
+
+Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
+
+## `overlay.context_menu`
+
+A right-click menu (the explorer's node, the result grid); the key shown next to an item runs it too. Inside `root`.
+
+Reserved — context menu: `j` `k` `Down` `Up` `Enter` `Esc` `q`
+
+## `overlay.password` [text]
+
+Password prompt. Inside `root`.
+
+Reserved — password prompt: `Esc` `Enter` `Tab` `Shift+Tab`
+
+Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
+
+## `overlay.confirm`
+
+Yes/no confirmation: `y` does it; Enter keeps what the answer would lose (quit, delete, disconnect, close, switch, replace); for a copy it says yes. Inside `root`.
+
+Reserved — confirmation (Enter keeps what would be lost): `y` `n` `Enter` `Esc`
+
+## `overlay.run_confirm`
+
+Before statements that may do harm run: each is listed; Cancel has the focus, `y` or Enter on Run runs them. Inside `root`.
+
+Reserved — run confirmation (Cancel has the focus): `y` `n` `Enter` `Esc` `Tab` `Shift+Tab` `Left` `Right` `h` `l`
+
+## `overlay.icons_ask`
+
+Whether the terminal shows the Nerd Font icons (asked once, with a preview); No has the focus. Inside `root`.
+
+Reserved — the icons question (No has the focus): `y` `n` `Enter` `Esc` `Tab` `Shift+Tab` `Left` `Right` `h` `l`
+
+## `overlay.busy`
+
+A notice that waits for background work (the launch-time move of passwords to the keychain); `Ctrl+C` quits there too. Inside `root`.
+
+| Keys | Action | Description | R |
+|---|---|---|---|
+| `q` | `app.quit` | Quit |  |
+
+## `overlay.cell_viewer`
+
+Cell value viewer. Inside `workspace`.
+
+Reserved — cell viewer: `j` `k` `Down` `Up` `PageDown` `PageUp` `Space` `g g` `G` `Esc` `q`
+
+## `overlay.completion` [text]
+
+Completion popup in the editor (keys it does not use go to the editor). Inside `root`.
+
+Reserved — completion popup: `Up` `Down` `Ctrl+P` `Ctrl+N` `Tab` `Enter` `Esc`
+
+## `overlay.which_key`
+
+Which-key popup of an unfinished leader sequence (other keys continue the sequence). Inside `root`.
+
+Reserved — which-key popup: `Esc` `Backspace`
+
+## `overlay.help`
+
+Keyboard help: one list of every context; the sections of the context it was opened from come first, open. Inside `root`.
+
+Reserved — keyboard help: `j` `k` `Down` `Up` `PageDown` `PageUp` `Enter` `l` `Right` `h` `Left` `/` `Esc` `q`
+
+## `overlay.help.filter` [text]
+
+The `/` filter of the keyboard help. Inside `root`.
+
+Reserved — keyboard help filter: `Esc` `Enter` `Down` `Up`
+
+Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
+
+## `:` commands
+
+Type them after `:` (or `Ctrl+K`). `Tab`/`Shift+Tab`, `↑`/`↓` or `Ctrl+N`/`Ctrl+P` pick an entry, `Enter` runs it (a command that still needs its argument is completed instead), `Esc` or `Backspace` on an empty line closes. Text that is not a command searches the actions by name. A command that cannot run shows an error and the line stays open.
+
+| Command | Aliases | Description |
+|---|---|---|
+| `:conn <profile>` | `:connect` | Connect to a profile |
+| `:set <setting>=<value>` |  | Change a setting |
+| `:help` | `:h` | Keyboard help |
+| `:run` |  | Run statement under cursor |
+| `:cancel` |  | Cancel running query |
+| `:quit` | `:q` | Close the tab (on the last tab: quit) |
+| `:qall` | `:qa` `:quitall` | Quit |
+| `:w [name]` | `:write` | Save (a console asks for a name; with a name: save as) |
+| `:wq [name]` | `:x` | Save, then close the tab (on the last tab: quit) |
+| `:e [name]` | `:edit` | Open a saved query |
+| `:tabnew` |  | New console tab |
+| `:tabclose` |  | Close tab |
+| `:recover` |  | Bring back a closed console (also from earlier runs) |
+| `:settings` |  | Open the settings |
+| `:copy <format>` |  | Copy the selected range, or every fetched row, as… (:copy <format> [selection|all]) |
+| `:use [db][.schema]` |  | Choose this tab's database and schema |
+
+Settings of `:set` (saved to `config.toml` like the matching actions):
+
+| Setting | Values | Description |
+|---|---|---|
+| `language` | `en` `ko` `auto` | UI language |
+| `editor` | `vim` `standard` | Editor keys |
+| `icons` | `on` `off` `auto` | Nerd Font icons |
+| `secrets.default_source` | `auto` `keychain` `file` `command` `env` `prompt` | Password storage of new profiles |
+| `commands.position` | `popup` `bottom` | Command line position |
+| `detail_view` | `panel` `statusbar` | Cell detail |
+| `clipboard` | `auto` `system` `osc52` | Clipboard |
+| `copy_header` | `auto` `on` `off` | Column names in copies |
+| `editor.cursor_shape` | `on` `off` | Cursor shape |
+
+## Command line only
+
+Actions without a default key (the command line finds them by name).
+
+| Action | Description |
+|---|---|
+| `ui.language.en` | Change language → English |
+| `ui.language.ko` | Change language → Korean |
+| `ui.language.auto` | Change language → Auto (system locale) |
+| `editor.mode.vim` | Editor keys → vim |
+| `editor.mode.standard` | Editor keys → standard |
+| `ui.icons.toggle` | Nerd Font icons → on/off |
+| `ui.icons.on` | Nerd Font icons → on |
+| `ui.icons.off` | Nerd Font icons → off |
+| `ui.icons.auto` | Nerd Font icons → ask again (with a preview) |
+| `secrets.default.auto` | New profiles' password → auto (keychain when available) |
+| `secrets.default.keychain` | New profiles' password → OS keychain |
+| `secrets.default.file` | New profiles' password → secrets file |
+| `secrets.default.command` | New profiles' password → command |
+| `secrets.default.env` | New profiles' password → environment variable |
+| `secrets.default.prompt` | New profiles' password → prompt on every connect |
+| `help.all` | Keyboard help: expand all |
+| `explorer.context_menu` | Explorer: actions of this node (menu) |

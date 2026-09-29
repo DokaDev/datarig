@@ -1,0 +1,39 @@
+[package]
+name = "datarig-core"
+description = "UI-independent core of datarig: driver abstraction, SQL tooling, profiles, secrets, config, i18n"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# No UI crates (ratatui/crossterm) and no concrete drivers here.
+[dependencies]
+futures.workspace = true
+keyring.workspace = true
+pg_query.workspace = true
+# Only for its feature: see the workspace manifest.
+prost.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+shell-words.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+toml.workspace = true
+toml_edit.workspace = true
+uuid.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true
+
+# build.rs: checks the locale catalogs and generates the typed message API.
+[build-dependencies]
+toml.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt", "macros", "net", "io-util"] }
+
+[features]
+# `ConnectionConfig::test_db()` and `transport::TcpDialer` for the tests of the other crates.
+test-util = ["tokio/net"]
+
+[lints]
+workspace = true

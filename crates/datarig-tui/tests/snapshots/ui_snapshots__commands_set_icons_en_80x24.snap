@@ -1,0 +1,28 @@
+---
+source: crates/datarig-tui/tests/ui_snapshots.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 ○ ×                                        "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ ●   local-pg        ││ local-pg / datarig  127.0.0.1:55432 · policy: default│"
+"│  ▾ datarig default   ││  1 -- datarig 🐘  Ctrl+E: run the statement under the│" Hidden by multi-width symbols: [(41, " ")]
+"│    ▸ ana╭ Commands ────────────────────────────────────────────────╮         │"
+"│    ▸ pub│ : set icons=                                             │         │"
+"│    ▸ sho├──────────────────────────────────────────────────────────┤         │"
+"│▸ ○   分 │  icons=on    Nerd Font icons → on                        │         │" Hidden by multi-width symbols: [(8, " ")]
+"│▸ ○   分 │  icons=off   Nerd Font icons → off                       │         │" Hidden by multi-width symbols: [(8, " ")]
+"│         │  icons=auto  Nerd Font icons → ask again (with a previe… │         │"
+"│         │  Needs a Nerd Font as the terminal font. Preview:     │         │"
+"│         │   — if these look like □ or ?, turn icons off or        │         │"
+"│         │  install a font from nerdfonts.com. auto: not decided    │         │"
+"│         ╰─────────────────── Tab/↑↓ select · Enter run · Esc close ╯reated_at│"
+"│                      ││ 12                                                   │"
+"│                      ││ 13 SELECT analytics.slow(30);                        │"
+"│                      ││ 14                                                   │"
+"│                      ││ 15 SELECT $$a body; with a semicolon$$ AS dollar, 'it│"
+"│                      ││ 16                                                   │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" COMMAND  local-pg · policy: default │ Connected to local-pg                 EN "

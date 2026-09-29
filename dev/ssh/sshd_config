@@ -1,0 +1,18 @@
+# Only what a tunnel needs: logins with a key (user tunnel) or a password (user pw), local
+# forwarding to the test databases, nothing else.
+Port 22
+HostKey /etc/ssh/ssh_host_ed25519_key
+HostKey /etc/ssh/ssh_host_rsa_key
+PermitRootLogin no
+PubkeyAuthentication yes
+PasswordAuthentication yes
+KbdInteractiveAuthentication no
+AuthorizedKeysFile .ssh/authorized_keys
+AllowUsers tunnel pw
+AllowTcpForwarding local
+PermitOpen postgres:5432 pgbouncer:5432
+AllowAgentForwarding no
+X11Forwarding no
+PermitTTY no
+ClientAliveInterval 0
+LogLevel VERBOSE

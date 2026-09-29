@@ -1,0 +1,11 @@
+---
+source: crates/datarig-tui/tests/ui_snapshots.rs
+expression: out
+---
+icons 80: ╭ Explorer ────────────╮ 1 console 1 ⠋ ×  2 console 2 ○ ×  3 console 3 ! ×      
+last 80: ╭ Explorer ────────────╮‹ 12 conso… ○ ×  13 conso… ○ ×  14 conso… ○ ×           
+last 160: ╭ Explorer ────────────────────────────╮‹ 7 conso… ○ ×  8 conso… ○ ×  9 conso… ○ ×  10 conso… ○ ×  11 conso… ○ ×  12 conso… ○ ×  13 conso… ○ ×  14 conso… ○ ×   
+middle 80: ╭ Explorer ────────────╮‹ 6 conso… ○ ×  7 conso… ○ ×  8 conso… ○ ×             ›
+middle 160: ╭ Explorer ────────────────────────────╮‹ 4 conso… ○ ×  5 conso… ○ ×  6 conso… ○ ×  7 conso… ○ ×  8 conso… ○ ×  9 conso… ○ ×  10 conso… ○ ×  11 conso… ○ ×     ›
+first 80: ╭ Explorer ────────────╮ 1 conso… ⠋ ×  2 conso… ○ ×  3 conso… ! ×              ›
+first 160: ╭ Explorer ────────────────────────────╮ 1 conso… ⠋ ×  2 conso… ○ ×  3 conso… ! ×  4 conso… ○ ×  5 conso… ○ ×  6 conso… ○ ×  7 conso… ○ ×  8 conso… ○ ×        ›

@@ -1,0 +1,28 @@
+---
+source: crates/datarig-tui/tests/flows_layout.rs
+expression: "h.draw(80, 24).backend()"
+---
+"╭ Explorer ────────────╮ 1 console 1 ○ ×  2 shop.users ● ×                      "
+"│  ＋ New connection   │╭ Results · 8 rows ────────────╮╭ [Cell] Row · I ──────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ ●   local-pg        ││   │ id   │ name              ││ id                   │"
+"│  ▾ datarig default   ││   │ int8 │ text              ││ int8 · 1 character   │"
+"│    ▸ analytics       ││ 1 │    1 │ 陳大文            ││                      │" Hidden by multi-width symbols: [(38, " "), (40, " "), (42, " ")]
+"│    ▸ public          ││ 2 │    2 │ 林美玲            ││ 1                    │" Hidden by multi-width symbols: [(38, " "), (40, " "), (42, " ")]
+"│    ▾ shop            ││ 3 │    3 │ 張志明            ││                      │" Hidden by multi-width symbols: [(38, " "), (40, " "), (42, " ")]
+"│      ▾ Tables        ││ 4 │    4 │ Emoji テスト      ││                      │" Hidden by multi-width symbols: [(44, " "), (46, " "), (48, " ")]
+"│        ▸ orders      ││ 5 │    5 │ 山田太郎          ││                      │" Hidden by multi-width symbols: [(38, " "), (40, " "), (42, " "), (44, " ")]
+"│        ▸ users       ││ 6 │    6 │ 王小明            ││                      │" Hidden by multi-width symbols: [(38, " "), (40, " "), (42, " ")]
+"│                      ││ 7 │    7 │ Plain ASCII User  ││                      │"
+"│                      ││ 8 │    8 │ 全角 ＡＢＣ 半角 …││                      │" Hidden by multi-width symbols: [(38, " "), (40, " "), (43, " "), (45, " "), (47, " "), (50, " "), (52, " ")]
+"│                      ││                              ││                      │"
+"│                      ││                              ││                      │"
+"│                      ││                              ││                      │"
+"│                      ││                              ││                      │"
+"│                      ││                              ││                      │"
+"│                      ││                              ││                      │"
+"│                      ││                              ││                      │"
+"│                      ││                              ││                      │"
+"│                      ││                              ││                      │"
+"│                      ││                              ││                      │"
+"╰──────────────────────╯╰──────────────────────────────╯╰──────────────────────╯"
+" local-pg · policy: default │ 8 rows · 3ms      │ Enter open · Tab next pane EN "

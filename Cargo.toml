@@ -1,0 +1,82 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/datarig-core",
+    "crates/datarig-driver-postgres",
+    "crates/datarig-ssh",
+    "crates/datarig-tui",
+    "crates/datarig-bench",
+]
+# A patched dependency, not ours to lint or test (see [patch.crates-io]).
+exclude = ["vendor"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.93"
+# Not on crates.io yet: the PostgreSQL driver needs the patched tokio-postgres of `vendor/`
+# ([patch.crates-io] below), which a published crate cannot carry.
+publish = false
+
+[workspace.dependencies]
+# Internal crates (dependency direction: tui → core ← driver-postgres, tui → ssh → core; bench → all).
+datarig-core = { path = "crates/datarig-core" }
+datarig-driver-postgres = { path = "crates/datarig-driver-postgres" }
+datarig-ssh = { path = "crates/datarig-ssh" }
+datarig-tui = { path = "crates/datarig-tui" }
+
+arboard = { version = "3.6", default-features = false }
+chrono = "0.4.45"
+# known_hosts: hashed host names (`|1|salt|hash`, HMAC-SHA1) and their base64. Already in the
+# tree through russh.
+data-encoding = "2.11"
+crossterm = { version = "0.29", features = ["event-stream"] }
+fallible-iterator = "0.2"
+futures = "0.3"
+hmac = "0.13"
+insta = "1.48.0"
+keyring = "4.2.0"
+log = "0.4"
+# PostgreSQL's own parser (libpg_query), for the safety classifier (sql::risk).
+pg_query = "6.2"
+# pg_query decodes its parse tree with prost, whose default limit of 100 nested messages
+# rejected ordinary queries (about 46 chained operators or 50 JOINs); the classifier bounds
+# the depth itself (sql::risk::MAX_DEPTH) and parses on a thread with a large stack.
+prost = { version = "0.13", default-features = false, features = ["no-recursion-limit"] }
+postgres-protocol = "0.6"
+ratatui = "0.30"
+# Unix: the effective user id (spill directory ownership); already in the tree via crossterm.
+rustix = { version = "1.1", default-features = false, features = ["std", "process"] }
+# SSH tunnels: pure Rust with the `ring` backend
+# (no cmake/nasm), RSA keys, and no compression (never negotiated).
+russh = { version = "0.63.3", default-features = false, features = ["ring", "rsa"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+sha1 = "0.11"
+shell-words = "1.1"
+tokio = "1"
+tokio-postgres = { version = "0.7", features = ["with-chrono-0_4"] }
+toml = "1.1.6"
+toml_edit = "0.25"
+unicode-segmentation = "1"
+unicode-width = "0.2"
+uuid = { version = "1.26", features = ["v4"] }
+zeroize = "1.9"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
+# The query session binds portals with per-column result formats (text for types the driver
+# does not decode from binary); tokio-postgres always asks for binary. See vendor/README.md.
+[patch.crates-io]
+tokio-postgres = { path = "vendor/tokio-postgres" }
+
+# libpg_query's parse tree is decoded (prost) and serialized (serde) by code generated in the
+# pg_query crate: unoptimized, its frames take tens of KiB per level of nesting, so a debug
+# build (the tests) would need far more stack for sql::risk::MAX_DEPTH than a release one.
+[profile.dev.package.pg_query]
+opt-level = 2

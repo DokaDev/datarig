@@ -1,0 +1,28 @@
+---
+source: crates/datarig-tui/tests/ui_snapshots.rs
+expression: english_pinned(&out)
+---
+en kitty=false editor.normal  160:  NORMAL  local-pg · policy: default │ 8 rows · 12ms                                         │ Ctrl+E run · Tab next pane · : commands · F1 help · Space more EN
+en kitty=false editor.normal   80:  NORMAL  local-pg · policy: default │ 8 rows · 12ms             │ Ctrl+E run EN
+en kitty=false editor.visual  160:  VISUAL  local-pg · policy: default │ 8 rows · 12ms                                                         │ Ctrl+E run · : commands · F1 help · Space more EN
+en kitty=false editor.visual   80:  VISUAL  local-pg · policy: default │ 8 rows · 12ms             │ Ctrl+E run EN
+en kitty=false editor.insert  160:  INSERT  local-pg · policy: default │ 8 rows · 12ms                                               │ Ctrl+E run · Ctrl+N complete · Ctrl+K commands · F1 help EN
+en kitty=false editor.insert   80:  INSERT  local-pg · policy: default │ 8 rows · 12ms             │ Ctrl+E run EN
+en kitty=false grid           160:  NORMAL  local-pg · policy: default │ 8 rows · 12ms   │ Enter view cell · n next page · y copy · v select · i detail · I cell/row · Esc back · Tab next pane EN
+en kitty=false grid            80:  NORMAL  local-pg · policy: default │ 8 rows · 12ms        │ Enter view cell EN
+en kitty=false cell_viewer    160:  NORMAL  local-pg · policy: default │ 8 rows · 12ms                                                                           │ Ctrl+E run · Ctrl+K commands EN
+en kitty=false cell_viewer     80:  NORMAL  local-pg · policy: default │ 8 rows · 12ms             │ Ctrl+E run EN
+en kitty=false explorer       160:  NORMAL  local-pg · policy: default │ 8 rows · 12ms                                │ Enter open · Tab next pane · : commands · F1 help · q quit · Space more EN
+en kitty=false explorer        80:  NORMAL  local-pg · policy: default │ 8 rows · 12ms             │ Enter open EN
+en kitty=true editor.normal  160:  NORMAL  local-pg · policy: default │ 8 rows · 12ms                                     │ Ctrl+Enter run · Tab next pane · : commands · F1 help · Space more EN
+en kitty=true editor.normal   80:  NORMAL  local-pg · policy: default │ 8 rows · 12ms         │ Ctrl+Enter run EN
+en kitty=true editor.visual  160:  VISUAL  local-pg · policy: default │ 8 rows · 12ms                                                     │ Ctrl+Enter run · : commands · F1 help · Space more EN
+en kitty=true editor.visual   80:  VISUAL  local-pg · policy: default │ 8 rows · 12ms         │ Ctrl+Enter run EN
+en kitty=true editor.insert  160:  INSERT  local-pg · policy: default │ 8 rows · 12ms                                           │ Ctrl+Enter run · Ctrl+N complete · Ctrl+K commands · F1 help EN
+en kitty=true editor.insert   80:  INSERT  local-pg · policy: default │ 8 rows · 12ms         │ Ctrl+Enter run EN
+en kitty=true grid           160:  NORMAL  local-pg · policy: default │ 8 rows · 12ms   │ Enter view cell · n next page · y copy · v select · i detail · I cell/row · Esc back · Tab next pane EN
+en kitty=true grid            80:  NORMAL  local-pg · policy: default │ 8 rows · 12ms        │ Enter view cell EN
+en kitty=true cell_viewer    160:  NORMAL  local-pg · policy: default │ 8 rows · 12ms                                                                       │ Ctrl+Enter run · Ctrl+K commands EN
+en kitty=true cell_viewer     80:  NORMAL  local-pg · policy: default │ 8 rows · 12ms         │ Ctrl+Enter run EN
+en kitty=true explorer       160:  NORMAL  local-pg · policy: default │ 8 rows · 12ms                                │ Enter open · Tab next pane · : commands · F1 help · q quit · Space more EN
+en kitty=true explorer        80:  NORMAL  local-pg · policy: default │ 8 rows · 12ms             │ Enter open EN

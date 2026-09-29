@@ -1,0 +1,91 @@
+# Development and test services for datarig. See dev/README.md.
+name: datarig-dev
+
+services:
+  postgres:
+    image: postgres:17
+    container_name: datarig-pg
+    environment:
+      POSTGRES_USER: datarig
+      POSTGRES_PASSWORD: datarig
+      POSTGRES_DB: datarig
+      # Password (scram-sha-256) auth, never trust.
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256"
+      LANG: C.UTF-8
+    ports:
+      - "55432:5432"
+    volumes:
+      - ./init:/docker-entrypoint-initdb.d:ro
+      - datarig-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U datarig -d datarig"]
+      interval: 3s
+      timeout: 3s
+      retries: 60
+
+  mysql:
+    image: mysql:8.4
+    container_name: datarig-mysql
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+    environment:
+      MYSQL_USER: datarig
+      MYSQL_PASSWORD: datarig
+      MYSQL_DATABASE: datarig
+      # Root password for admin access; the app itself uses the datarig user above.
+      MYSQL_ROOT_PASSWORD: datarig-root
+    ports:
+      - "53306:3306"
+    volumes:
+      - ./init-mysql:/docker-entrypoint-initdb.d:ro
+      - datarig-mysqldata:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 3s
+      timeout: 3s
+      retries: 60
+
+  # A pooler in front of `postgres` the way many companies run one: transaction mode without
+  # prepared statement support (`max_prepared_statements = 0`, PgBouncer's default before
+  # 1.22), round robin over three server connections so consecutive transactions of one client
+  # land on different ones, and the `options` startup parameter dropped. Only with
+  # `--profile pooler`: `docker compose --profile pooler up -d`.
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.25.2-p0
+    container_name: datarig-pgbouncer
+    profiles: ["pooler"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://datarig:datarig@postgres:5432/datarig
+      AUTH_TYPE: scram-sha-256
+      POOL_MODE: transaction
+      MAX_PREPARED_STATEMENTS: "0"
+      SERVER_ROUND_ROBIN: "1"
+      DEFAULT_POOL_SIZE: "3"
+      MIN_POOL_SIZE: "3"
+      IGNORE_STARTUP_PARAMETERS: extra_float_digits,options
+    ports:
+      - "56432:5432"
+
+  # The SSH bastion of the tests: OpenSSH with a key user (`tunnel`) and a password user
+  # (`pw`, password `datarig-pw`), forwarding only to `postgres` and `pgbouncer`, which the
+  # host reaches through it by those names. Keys are made at test time: `ssh/make-fixture.sh`
+  # writes them to `ssh/.fixture` (or DATARIG_SSH_FIXTURE), then
+  # `docker compose --profile ssh up -d --build ssh-bastion`.
+  ssh-bastion:
+    build: ./ssh
+    image: datarig-ssh-bastion
+    container_name: datarig-ssh-bastion
+    profiles: ["ssh"]
+    volumes:
+      - ${DATARIG_SSH_FIXTURE:-./ssh/.fixture}:/fixture:ro
+    ports:
+      - "127.0.0.1:52222:22"
+
+volumes:
+  datarig-pgdata:
+  datarig-mysqldata:

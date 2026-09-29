@@ -1,0 +1,28 @@
+---
+source: crates/datarig-tui/tests/ui_snapshots.rs
+expression: backend
+---
+"╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
+"│  ＋ New connection   ││                                                      │" Hidden by multi-width symbols: [(4, " ")]
+"│▸╭ Edit connection — local-pg ──────────────────────────────────────────────╮ │"
+"│▾│  Basic   SSH   Advanced                            Ctrl+N/Ctrl+P section │ │"
+"│ │                                                                          │ │"
+"│ │ Driver            ‹PostgreSQL› MySQL  Redis  Elasticsearch   unsupported │ │"
+"│ │ Name              local-pgEPORTS/Daily                                   │ │"
+"│ │ Host              127.0.0.1                                              │ │"
+"│ │ Port              55432                                                  │ │"
+"│ │ User              datarig                                                │ │"
+"│ │ Password storage  ‹Keychain› File  Command  Env  Prompt   ←/→ change     │ │"
+"│ │ Password          •••••••                   kept in the OS keychain      │ │"
+"│ │ Database          datarig                                                │ │"
+"│ │                                                                          │ │"
+"│ │ DSN               postgres://datarig@127.0.0.1:55432/datarig?sslmode=dis │ │"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ │                    Test    Save    Cancel                                │ │"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ ╰─ Tab/↑↓ move · Ctrl+N/P section · Ctrl+T test · Ctrl+S save · Esc cancel ╯ │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+"                                                                             EN "

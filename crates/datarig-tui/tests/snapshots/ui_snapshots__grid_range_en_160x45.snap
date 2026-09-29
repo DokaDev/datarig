@@ -1,0 +1,49 @@
+---
+source: crates/datarig-tui/tests/ui_snapshots.rs
+expression: t.backend()
+---
+"╭ Explorer ────────────────────────────╮ 1 console 1 ● ×                                                                                                        "
+"│  ＋ New connection                   │╭ Query · console 1 ───────────────────────────────────────────────────────────────────────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ ●   local-pg                        ││ local-pg / datarig  127.0.0.1:55432 · policy: default                                    Space c s switch connection │"
+"│  ▾ datarig default                   ││  1 -- datarig 🐘  Ctrl+E: run the statement under the cursor                                                         │" Hidden by multi-width symbols: [(57, " ")]
+"│    ▸ analytics                       ││  2▎SELECT * FROM shop.users WHERE id <= 8;                                                                           │"
+"│    ▸ public                          ││  3                                                                                                                   │"
+"│    ▸ shop                            ││  4 SELECT u.name, o.status, o.total_amount                                                                           │"
+"│                                      ││  5 FROM shop.orders o                                                                                                │"
+"│                                      ││  6 JOIN shop.users u ON u.id = o.user_id                                                                             │"
+"│                                      ││  7 WHERE o.status = 'paid';                                                                                          │"
+"│                                      ││  8                                                                                                                   │"
+"│                                      ││  9 SELECT * FROM analytics.events;                                                                                   │"
+"│                                      ││ 10                                                                                                                   │"
+"│                                      ││ 11 SELECT * FROM analytics.events ORDER BY created_at DESC;                                                          │"
+"│                                      ││ 12                                                                                                                   │"
+"│                                      ││ 13 SELECT analytics.slow(30);                                                                                        │"
+"│                                      ││ 14                                                                                                                   │"
+"│                                      │╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯"
+"│                                      │╭ Results · 8 rows ────────────────────────────────────────────────────╮╭ [Cell] Row · I ──────────────────────────────╮"
+"│                                      ││   │ id   │ name                 │ nickname    │ address              ││ nickname                                     │"
+"│                                      ││   │ int8 │ text                 │ text        │ text                 ││ text · 4 characters · 15 bytes               │"
+"│                                      ││ 1 │    1 │ 陳大文               │ 大文🐘      │ 臺北市信義區信義路五…││                                              │" Hidden by multi-width symbols: [(54, " "), (56, " "), (58, " "), (77, " "), (79, " "), (81, " "), (91, " "), (93, " "), (95, " "), (97, " "), (99, " "), (101, " "), (103, " "), (105, " "), (107, " "), (109, " ")]
+"│                                      ││ 2 │    2 │ 林美玲               │ NULL        │ 高雄市前鎮區成功二路…││ 🔥🚀✨🎉                                     │" Hidden by multi-width symbols: [(54, " "), (56, " "), (58, " "), (91, " "), (93, " "), (95, " "), (97, " "), (99, " "), (101, " "), (103, " "), (105, " "), (107, " "), (109, " "), (115, " "), (117, " "), (119, " "), (121, " ")]
+"│                                      ││ 3 │    3 │ 張志明               │ 👨‍👩‍👧‍👦 family   │ NULL                 ││                                              │" Hidden by multi-width symbols: [(54, " "), (56, " "), (58, " "), (77, " ")]
+"│                                      ││ 4 │    4 │ Emoji テスト         │ 🔥🚀✨🎉    │ 沖縄県那覇市おもろま…││                                              │" Hidden by multi-width symbols: [(60, " "), (62, " "), (64, " "), (77, " "), (79, " "), (81, " "), (83, " "), (91, " "), (93, " "), (95, " "), (97, " "), (99, " "), (101, " "), (103, " "), (105, " "), (107, " "), (109, " ")]
+"│                                      ││ 5 │    5 │ 山田太郎             │ やまだ      │ 東京都渋谷区道玄坂1-…││                                              │" Hidden by multi-width symbols: [(54, " "), (56, " "), (58, " "), (60, " "), (77, " "), (79, " "), (81, " "), (91, " "), (93, " "), (95, " "), (97, " "), (99, " "), (101, " "), (103, " "), (105, " "), (107, " ")]
+"│                                      ││ 6 │    6 │ 王小明               │ NULL        │ 北京市海淀区中关村大…││                                              │" Hidden by multi-width symbols: [(54, " "), (56, " "), (58, " "), (91, " "), (93, " "), (95, " "), (97, " "), (99, " "), (101, " "), (103, " "), (105, " "), (107, " "), (109, " ")]
+"│                                      ││ 7 │    7 │ Plain ASCII User     │ ascii_only  │ 1600 Amphitheatre Pk…││                                              │"
+"│                                      ││ 8 │    8 │ 全角 ＡＢＣ 半角 ｱｲｳ │ é combining │ タブ→入り住所 (tab i…││                                              │" Hidden by multi-width symbols: [(54, " "), (56, " "), (59, " "), (61, " "), (63, " "), (66, " "), (68, " "), (91, " "), (93, " "), (96, " "), (98, " "), (100, " "), (102, " ")]
+"│                                      ││                                                                      ││                                              │"
+"│                                      ││                                                                      ││                                              │"
+"│                                      ││                                                                      ││                                              │"
+"│                                      ││                                                                      ││                                              │"
+"│                                      ││                                                                      ││                                              │"
+"│                                      ││                                                                      ││                                              │"
+"│                                      ││                                                                      ││                                              │"
+"│                                      ││                                                                      ││                                              │"
+"│                                      ││                                                                      ││                                              │"
+"│                                      ││                                                                      ││                                              │"
+"│                                      ││                                                                      ││                                              │"
+"│                                      ││                                                                      ││                                              │"
+"│                                      ││                                                                      ││                                              │"
+"│                                      ││                                                                      ││                                              │"
+"╰──────────────────────────────────────╯╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯"
+" NORMAL  local-pg · policy: default │ Selecting: move to extend · y copies · Esc cancels      │ Enter view cell · n next page · y copy · v select · i detail EN "

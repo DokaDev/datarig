@@ -1,0 +1,49 @@
+---
+source: crates/datarig-tui/tests/ui_snapshots.rs
+expression: backend
+---
+"╭ Explorer ────────────────────────────╮ 1 console 1 ● ×                                                                                                        "
+"│  ＋ New connection                   │╭ Query · console 1 ───────────────────────────────────────────────────────────────────────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ ●  local-pg                        ││  local-pg / datarig  127.0.0.1:55432 · policy: default                                  Space c s switch connection │"
+"│  ▾  datarig default                 ││  1 -- datarig 🐘  Ctrl+E: run the statement under the cursor                                                         │" Hidden by multi-width symbols: [(57, " ")]
+"│    ▸ 󱋣 analytics                     ││  2▎SELECT * FROM shop.users WHERE id <= 8;                                                                           │"
+"│    ▸ 󱋣 public                        ││  3                                                                                                                   │"
+"│    ▸ 󱋣 shop                          ││  4 SELECT u.name, o.status, o.total_amount                                                                           │"
+"│                                      ││  5 FROM shop.orders o                                                                                                │"
+"│                                      ││  6 JOIN shop.users u ON u.id = o.user_id                                                                             │"
+"│                                      ││  7 WHERE o.status = 'paid';                                                                                          │"
+"│                                      ││  8                                                                                                                   │"
+"│                                      ││  9 SELECT * FROM analytics.events;                                                                                   │"
+"│                                      ││ 10                                                                                                                   │"
+"│                                      ││ 11 SELECT * FROM analytics.events ORDER BY created_at DESC;                                                          │"
+"│                                      ││ 12                                                                                                                   │"
+"│                                      ││ 13 SELECT analytics.slow(30);                                                                                        │"
+"│                                      ││ 14                                                                                                                   │"
+"│                                      │╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯"
+"│                                      │╭ Results · 3 rows ────────────────────────────────────────────────────────────────────────────────────────────────────╮"
+"│                                      ││   │  id │  user_id │  email            │ name       │   order_id │  line_no │  product_id │ doubled           │"
+"│                                      ││   │ int8 │ int8      │ text               │ text       │ int8         │ int4      │ int8         │ numeric           │"
+"│                                      ││ 1 │    1 │         1 │ user01@example.com │ ユーザー 1 │            1 │         1 │            7 │       2           │" Hidden by multi-width symbols: [(87, " "), (89, " "), (91, " "), (93, " ")]
+"│                                      ││ 2 │    2 │         1 │ user02@example.com │ ユーザー 2 │            2 │         1 │            7 │       2           │" Hidden by multi-width symbols: [(87, " "), (89, " "), (91, " "), (93, " ")]
+"│                                      ││ 3 │    3 │         1 │ user03@example.com │ ユーザー 3 │            3 │         1 │            7 │       2           │" Hidden by multi-width symbols: [(87, " "), (89, " "), (91, " "), (93, " ")]
+"│                                      ││                                                                                                                      │"
+"│                                      ││                                                                                                                      │"
+"│                                      ││                                                                                                                      │"
+"│                                      ││                                                                                                                      │"
+"│                                      ││                                                                                                                      │"
+"│                                      ││                                                                                                                      │"
+"│                                      ││                                                                                                                      │"
+"│                                      ││                                                                                                                      │"
+"│                                      ││                                                                                                                      │"
+"│                                      ││                                                                                                                      │"
+"│                                      ││                                                                                                                      │"
+"│                                      ││                                                                                                                      │"
+"│                                      ││                                                                                                                      │"
+"│                                      ││                                                                                                                      │"
+"│                                      ││                                                                                                                      │"
+"│                                      ││                                                                                                                      │"
+"│                                      ││                                                                                                                      │"
+"│                                      ││                                                                                                                      │"
+"│                                      ││                                                                                                                      │"
+"╰──────────────────────────────────────╯╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯"
+" NORMAL  local-pg · policy: default │ 3 rows · 3ms    │ Enter view cell · n next page · y copy · v select · i detail · Esc back · Tab next pane · : commands EN "

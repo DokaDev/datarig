@@ -1,0 +1,9 @@
+# `cargo audit` (CI job `audit`): the RustSec advisories of the dependencies.
+[advisories]
+# RUSTSEC-2023-0071 (rsa, "Marvin attack"): the rsa crate's private-key operations are not
+# constant time, so an attacker who can send many chosen ciphertexts to be decrypted and time
+# the answers may recover the private key. datarig uses an RSA private key only to sign its
+# own SSH login, locally, with the user's own key (through russh); it never decrypts, and never
+# runs a private-key operation on data an attacker supplies. There is no fixed version.
+# Revisit when rsa has one, or when russh no longer needs it.
+ignore = ["RUSTSEC-2023-0071"]

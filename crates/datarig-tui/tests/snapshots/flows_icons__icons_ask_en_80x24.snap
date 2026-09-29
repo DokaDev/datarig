@@ -1,0 +1,28 @@
+---
+source: crates/datarig-tui/tests/flows_icons.rs
+expression: "h.draw(80, 24).backend()"
+---
+"╭ Explorer ────────────╮╭ Welcome ─────────────────────────────────────────────╮"
+"│  ＋ New connection   ││                                                      │" Hidden by multi-width symbols: [(4, " ")]
+"│ ╭ New connection ──────────────────────────────────────────────────────────╮ │"
+"│ │  Basic   SSH   Advanced                            Ctrl+N/Ctrl+P section │ │"
+"│ │                                                                          │ │"
+"│ │ Driver            ‹PostgreSQL› MySQL  Redis  Elasticsearch   unsupported │ │"
+"│ │ Name╭ Nerd Font icons ─────────────────────────────────────────────╮     │ │"
+"│ │ Host│ Do these icons show correctly?                               │     │ │"
+"│ │ Port│                                                              │     │ │"
+"│ │ User│                                                      │     │ │"
+"│ │ Pass│                                                              │     │ │"
+"│ │ Pass│ If they look like □, ? or nothing, answer No: text marks     │     │ │"
+"│ │ Data│ (PK, FK) are used. Change it later in the settings (Space ,) │     │ │"
+"│ │     │ or with :set icons=on.                                       │     │ │"
+"│ │ DSN │                                                              │     │ │"
+"│ │     │                         Yes     [ No ]                       │     │ │"
+"│ │     ╰──────────────── y yes · n/Esc no · Tab switch · Enter choose ╯     │ │"
+"│ │                    Test    Save    Cancel                                │ │"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ ╰─ Tab/↑↓ move · Ctrl+N/P section · Ctrl+T test · Ctrl+S save · Esc cancel ╯ │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+"                                                                             EN "

@@ -1,0 +1,55 @@
+---
+source: crates/datarig-tui/tests/ui_snapshots.rs
+expression: english_pinned(&out)
+---
+en workspace.consoles_recovered: Recovered 3 consoles the saved tabs did not list; their tabs say “recovered”
+en workspace.consoles_missing: 1 saved tab's console file was missing; it starts empty
+en workspace.consoles_missing: 2 saved tabs' console files were missing; they start empty
+en workspace.consoles_unreadable: 1 console file could not be read; it was left in /state/consoles
+en workspace.consoles_folder_unreadable: The console folder /state/consoles could not be read (permission denied); consoles that were not listed were not looked for
+en workspace.broken: The saved tabs could not be read (a TOML error on line 3); the file was moved to /state/workspace.toml.bak
+en workspace.broken_kept: The saved tabs could not be read (permission denied); the file was left where it is
+en scripts.index_rebuilt: The index of saved queries could not be read (a TOML error on line 3); it was moved to /data/scripts.toml.bak and rebuilt from the saved queries, keeping 2 connections
+en scripts.index_kept: The index of saved queries could not be read (permission denied) and was left as it is; the connections of saved queries are not remembered this time
+en tab.trash_failed: The closed console could not be moved to the trash (permission denied); it comes back as a recovered tab at the next launch
+en tab.trash_unreadable: The trash of closed consoles could not be read (permission denied)
+en tab.close.console_unsaved: This console's edits could not be saved. Closing the tab loses them.
+en scripts.write_quit_failed: Not saved: permission denied; the tab stays open
+en validate.script_unreadable: a folder on this path can't be read, so datarig can't tell whether the name is taken; nothing was written
+en recover.title: Closed consoles
+en recover.empty: No closed console in the trash
+en command.recover: Bring back a closed console (also from earlier runs)
+en recover.age.minutes: 5 minutes ago
+en recover.age.hours: 1 hour ago
+en recover.age.days: 2 days ago
+en config.save_failed: Could not save config: “editor” does not have the expected form
+en migrate.save_failed: Could not save profile ids to the config file (permission denied); the keychain was not changed
+en migrate.partial: Some passwords could not be moved in the keychain (prod: the keychain is locked or access was denied); datarig tries again at the next launch
+en secret.migrate_failed: Keychain unavailable (no keychain on this system); password left in the config file
+en secret.error.file: Secrets file: a TOML error on line 3
+en secret.unavailable: Keychain unavailable (no keychain on this system); password will be asked when connecting
+en secret.error.keychain: OS keychain: the keychain is locked or access was denied
+en secret.error.command_parse: Password command could not be split: a quote is not closed
+en secret.error.command_start: Password command: cannot run pass (permission denied)
+en source.change.failed: Nothing changed: permission denied
+en source.change.remove_failed: Saved prod, but its old password could not be removed from the OS keychain: the keychain is locked or access was denied
+en form.source.keychain_unavailable: Keychain unavailable (no keychain on this system); pick another storage
+en fault Io(PermissionDenied): permission denied
+en fault Io(Other): an unexpected file system error (details in errors.log)
+en fault Toml { line: Some(3) }: a TOML error on line 3
+en fault Toml { line: None }: a TOML error
+en fault Shape { key: "editor" }: “editor” does not have the expected form
+en fault Keychain(Locked): the keychain is locked or access was denied
+en fault Keychain(NoStore): no keychain on this system
+en fault Keychain(Damaged): a stored entry is damaged
+en fault Keychain(Refused): the keychain refused the entry
+en fault Keychain(Ambiguous): the keychain has more than one entry for this profile
+en fault Keychain(Mismatch): the keychain gave back a different password
+en fault Keychain(Failure): the keychain reported an error (details in errors.log)
+en fault Other: an unexpected error (details in errors.log)
+en error.config: Config error: language = fr is not valid (use auto, en, ko)
+en error.config: Config error: color = reddish in profile “a” is not valid (use red, green, blue, … #rrggbb)
+en error.config: Config error: profile “a” has password_source = "env" but no password_env
+en error.config: Config error: version 9 is newer than this datarig reads (1 to 2)
+en error.config: Config error: page_size = 0 is not valid
+en error.config: Config error: a TOML error on line 1

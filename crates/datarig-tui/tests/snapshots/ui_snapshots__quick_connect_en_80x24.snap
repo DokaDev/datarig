@@ -1,0 +1,28 @@
+---
+source: crates/datarig-tui/tests/ui_snapshots.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 ○ ×                                        "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ local               ││ local-pg / datarig  127.0.0.1:55432 · policy: default│"
+"│  ▸ ○   scratch       ││  1 -- datarig 🐘  Ctrl+E: run the statement under the│" Hidden by multi-width symbols: [(41, " ")]
+"│▾ work                ││  2▎SELECT * FROM shop.users WHERE id <= 8;           │"
+"│  ▾ prod              ││  3                                                   │"
+"│    ▸ ⠋   orders-prod ││  4 SELECT u.name, o.status, o.total_amount           │"
+"│   ╭ Quick connect ───────────────────────────────────────────────────────╮   │"
+"│   │ › type part of a profile name                                        │   │"
+"│  ▸│                                                                      │   │"
+"│▾ ●│ ▸ ●   local-pg                                                       │   │"
+"│  ▾│ ▸ ○   scratch  local/                                                │   │"
+"│   │ ▸ ○   orders-stage  work/                                            │   │"
+"│   │ ▸ ⠋   orders-prod  work/prod/                                        │_at│"
+"│   │ ▸ ✕   分析-replica  work/prod/                                       │   │" Hidden by multi-width symbols: [(13, " "), (15, " ")]
+"│   ╰── Enter pick · → databases, schemas · ← back · ↑↓ select · Esc close ╯   │"
+"│                      ││ 14                                                   │"
+"│                      ││ 15 SELECT $$a body; with a semicolon$$ AS dollar, 'it│"
+"│                      ││ 16                                                   │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" NORMAL  local-pg · policy: default │ Connection failed: password authentic… EN "

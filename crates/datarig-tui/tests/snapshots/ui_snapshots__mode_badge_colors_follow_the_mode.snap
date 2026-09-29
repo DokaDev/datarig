@@ -1,0 +1,9 @@
+---
+source: crates/datarig-tui/tests/ui_snapshots.rs
+expression: "lines.join(\"\\n\")"
+---
+  normal:  NORMAL 
+  insert:  INSERT 
+  visual:  VISUAL 
+ command:  COMMAND 
+standard:  NORMAL

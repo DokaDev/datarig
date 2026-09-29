@@ -1,0 +1,83 @@
+# Performance budgets that CI holds datarig to (`datarig-bench budget`, docs/perf.md).
+#
+# Round trips are exact counts through the latency proxy, so they do not depend on the machine.
+# Memory and wakeups are counts too. Times have a wide margin over what a developer machine
+# measures, because CI runners are slower and shared.
+
+[rtt]
+# One-way latency of the proxy. Long enough that the pieces of one flight always reach the
+# proxy before the server can answer; the counts do not depend on it.
+one_way_ms = 20
+runs = 5
+# Most round trips until the result is in front of the client ("to result") and until the
+# session is quiet again ("total", a trailing COMMIT or close included).
+select_small_cold = { to_result = 2, total = 3 }
+select_small_warm = { to_result = 1, total = 2 }
+select_page_of_4m_cold = { to_result = 2, total = 2 }
+select_page_of_4m_warm = { to_result = 1, total = 1 }
+next_page = { to_result = 1, total = 1 }
+# A count the user asks for, while a result pages (under a savepoint in its
+# transaction) and with no portal open; a result resumed past a closed portal, 500 rows skipped
+# (the page after them comes with the skipped rows). Each first asks the server what only it can
+# tell for the allowlist (views, overloads of built-in names, …): one round trip more. Inside the
+# user's block the savepoint goes out with that question, and the statement is prepared again
+# (as every statement there).
+count_while_paging = { to_result = 2, total = 2 }
+count_idle = { to_result = 2, total = 2 }
+resume_warm = { to_result = 2, total = 2 }
+resume_in_block = { to_result = 3, total = 3 }
+insert = { to_result = 1, total = 1 }
+select_small_in_block = { to_result = 2, total = 3 }
+insert_in_block = { to_result = 1, total = 1 }
+# A read-only policy (every transaction READ ONLY): the same counts as the statements above,
+# because BEGIN READ ONLY and SET TRANSACTION READ ONLY go out in the same write.
+ro_select_small_cold = { to_result = 2, total = 3 }
+ro_select_small_warm = { to_result = 1, total = 2 }
+ro_select_page_of_4m_warm = { to_result = 1, total = 1 }
+ro_set = { to_result = 1, total = 1 }
+ro_first_in_block = { to_result = 2, total = 3 }
+
+[rtt_ssh]
+# The same statements through an SSH tunnel (the proxy sits between the client
+# and the bastion of the tests). The tunnel adds latency to each packet, never a round trip, so
+# the counts are the direct ones. Opening the tunnel (key exchange, host key, login with a key)
+# and a session through it (a channel, then the database's own startup and SCRAM) are counted
+# too: measured 5 and 4 against OpenSSH 10.
+one_way_ms = 20
+runs = 5
+tunnel_open = { to_result = 5, total = 5 }
+session_through_tunnel = { to_result = 4, total = 4 }
+select_small_cold = { to_result = 2, total = 3 }
+select_small_warm = { to_result = 1, total = 2 }
+select_page_of_4m_warm = { to_result = 1, total = 1 }
+next_page = { to_result = 1, total = 1 }
+insert = { to_result = 1, total = 1 }
+
+[paging]
+# SELECT * FROM analytics.events to the end (8,000 pages of 500 rows).
+max_pages = 8000
+# Resident memory of the whole headless app process.
+rss_mib_max = 96
+# Growth from 125,000 rows (the window is full and spilling) to 4,000,000 rows: the rows past the
+# window live on disk, so memory must stay flat.
+rss_growth_mib_max = 16
+
+[editor]
+# Keystroke to frame in a 5 MB file at 160x45 (a developer machine: about 0.5 ms).
+p95_ms_max = 25.0
+# Resident memory after typing in it (the file itself is about 20 MiB of lines).
+rss_mib_max = 160
+
+[idle]
+secs = 20
+rss_mib_max = 48
+# With nothing to do the loop sleeps: no wakeups at all is what it measures.
+wakeups_per_s_max = 0.2
+cpu_pct_max = 1.0
+# A paging countdown on screen: one frame a second (a little more for the rows arriving).
+countdown_frames_per_s_max = 2.0
+
+[startup]
+runs = 10
+first_frame_ms_p95_max = 250.0
+binary_mib_max = 16.0
