@@ -36,6 +36,9 @@ ro_select_small_warm = { to_result = 1, total = 2 }
 ro_select_page_of_4m_warm = { to_result = 1, total = 1 }
 ro_set = { to_result = 1, total = 1 }
 ro_first_in_block = { to_result = 2, total = 3 }
+# Opening a table in the explorer: its whole structure (columns, keys, indexes, constraints,
+# triggers, size estimate) is one catalog statement on the metadata session.
+table_structure = { to_result = 1, total = 1 }
 
 [rtt_ssh]
 # The same statements through an SSH tunnel (the proxy sits between the client
