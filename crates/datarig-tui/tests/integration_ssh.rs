@@ -235,10 +235,15 @@ async fn the_next_statement_after_a_lost_tunnel_connects_again() {
         a.tab().exec.running.is_none() && matches!(a.tab().results, datarig_tui::app::Results::Rows(_))
     })
     .await;
-    // The tunnel's TCP connection ends.
+    // The tunnel's TCP connection ends. The sessions through it may see their end before the
+    // tunnel's own loss arrives (then they say the server closed); the tunnel's words follow.
     cutter.cut();
-    pump(&mut app, &mut rx, 30, |a| !a.conns.is_connected(id) && a.tab().exec.session.is_none()).await;
-    let lost = app.conns.get(id).and_then(|c| c.error.as_ref()).map(|e| e.render(&app.i18n).to_string());
+    let error = |a: &App| a.conns.get(id).and_then(|c| c.error.as_ref()).map(|e| e.render(&a.i18n).to_string());
+    pump(&mut app, &mut rx, 30, |a| {
+        !a.conns.is_connected(id) && a.tab().exec.session.is_none() && error(a).is_some_and(|e| e.starts_with("SSH:"))
+    })
+    .await;
+    let lost = error(&app);
     assert!(lost.as_deref().is_some_and(|e| e.starts_with("SSH:")), "{lost:?}");
     // The next statement connects again and runs once.
     run(&mut app, "SELECT 40 + 2");
