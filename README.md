@@ -16,6 +16,11 @@ server.
 Only **PostgreSQL** is implemented today. The configuration format, key bindings and behavior
 may still change between commits.
 
+Platforms: developed and tested on macOS; CI runs the full test suite on Linux. On Windows CI
+builds datarig, lints it and runs the tests that need no database, but running datarig there
+is untested: the Windows notes below are how it is meant to work, not something anyone has
+tried yet.
+
 ## Features
 
 Everything below works today, with PostgreSQL.
@@ -130,8 +135,8 @@ datarig builds from source with the Rust toolchain. You need:
   automatically).
 - A C compiler and **libclang**, for the `pg_query` crate (it compiles PostgreSQL's parser and
   generates bindings with bindgen). On macOS the Xcode Command Line Tools have both; on
-  Debian/Ubuntu `apt install clang libclang-dev`; on Windows install LLVM and set
-  `LIBCLANG_PATH` if bindgen does not find it.
+  Debian/Ubuntu `apt install clang libclang-dev`; on Windows (untested outside CI) install
+  LLVM and set `LIBCLANG_PATH` if bindgen does not find it.
 
 ```sh
 git clone https://github.com/DokaDev/datarig
@@ -211,8 +216,8 @@ paging_idle_timeout = "10s"
 
 Data (saved queries, datarig's own `known_hosts`) and state (tabs, console buffers) live in the
 platform's data and state directories (`~/.local/share/datarig` and `~/.local/state/datarig`
-on Linux, `~/Library/Application Support/datarig` on macOS, `%APPDATA%\datarig` and
-`%LOCALAPPDATA%\datarig` on Windows), or under `$XDG_DATA_HOME` / `$XDG_STATE_HOME` when set.
+on Linux, `~/Library/Application Support/datarig` on macOS; on Windows, untested,
+`%APPDATA%\datarig` and `%LOCALAPPDATA%\datarig`), or under `$XDG_DATA_HOME` / `$XDG_STATE_HOME` when set.
 `DATARIG_SECRET_STORE=memory` keeps passwords in memory only and never touches the OS keychain.
 
 ## Safety model

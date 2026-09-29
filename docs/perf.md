@@ -48,7 +48,7 @@ DATARIG_TEST_PG_URL=postgres://datarig:datarig@127.0.0.1:55432/datarig \
 | Resident memory while paging 4,000,000 rows, and its growth from 125,000 rows on | Memory, not time; the growth must stay near zero because rows past `result_window_rows` live on disk |
 | Keystroke-to-frame p95 in a 5 MB file | About 0.5 ms on a developer machine against a 25 ms budget |
 | Idle memory, CPU and wakeups; frames per second with a paging countdown | Counts of the binary's own event loop (`DATARIG_BENCH_STATS`) |
-| First frame p95 and binary size | Wide margins (15 ms and 5.5 MiB measured against 250 ms and 16 MiB) |
+| First frame p95 and binary size | The first frame has a wide margin (about 15 ms measured against 250 ms). The binary does not: 13.7 MiB measured on macOS arm64 against 16 MiB; its size on Linux, where the CI job checks it, has not been measured locally |
 
 To change a budget, measure first (`datarig-bench <scenario>` a few times on a quiet
 machine), then keep the headroom the file's comments describe.
