@@ -1,13 +1,18 @@
-//! The schema tree of one connected profile: schema -> Tables / Views -> objects ->
-//! columns, with lazy loading of schema children. An object's columns come from the profile's
-//! completion catalog (no request of their own); the tree only knows which objects are open. The explorer ([`crate::app::explorer`]) shows it under
-//! the profile's node and owns the selection; this is the model and the text of each node.
+//! The schema tree of one connected profile: schema -> Tables / Views -> objects -> their
+//! structure, with lazy loading of schema children. With a driver that reads a table's
+//! structure (`Capabilities::structure`) an open object shows its size estimate and its groups
+//! (Columns, Primary Key, Foreign Keys, Indexes, Unique and Check Constraints, Triggers: those
+//! of its kind, an empty one dim and without a count), read once when it first opens and kept
+//! ([`Tree::structures`]); without it, its columns from the profile's completion catalog. The
+//! explorer ([`crate::app::explorer`]) shows it under the profile's node and owns the
+//! selection; this is the model and the text of each node.
 
 use crate::theme;
 use datarig_core::driver::SchemaObjects;
+use datarig_core::driver::structure::{StructureGroup, TableStructure};
 use datarig_core::i18n::{I18n, Label};
 use ratatui::style::{Modifier, Style};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Children {
@@ -39,17 +44,86 @@ pub enum Group {
     Views,
 }
 
+/// A table's structure as the tree has it.
+#[derive(Clone, Debug)]
+pub enum Structure {
+    Loading,
+    Loaded(Box<TableStructure>),
+    /// Why it could not be read.
+    Failed(String),
+}
+
+/// An object whose structure was asked for: the structure, and which of its groups and items
+/// are open (kept while the object closes, and while it is read again).
+#[derive(Clone, Debug)]
+pub struct ObjectView {
+    pub structure: Structure,
+    pub open_groups: BTreeSet<StructureGroup>,
+    pub open_items: BTreeSet<(StructureGroup, usize)>,
+}
+
+impl ObjectView {
+    /// Loading, with its columns open.
+    fn new() -> Self {
+        Self {
+            structure: Structure::Loading,
+            open_groups: BTreeSet::from([StructureGroup::Columns]),
+            open_items: BTreeSet::new(),
+        }
+    }
+
+    /// The structure, once read.
+    pub fn loaded(&self) -> Option<&TableStructure> {
+        match &self.structure {
+            Structure::Loaded(s) => Some(s),
+            _ => None,
+        }
+    }
+}
+
+/// How many lines item `k` of group `g` opens to: a primary key its columns, a foreign key
+/// the line of what it references; the others none.
+pub fn item_details(s: &TableStructure, g: StructureGroup, k: usize) -> usize {
+    match g {
+        StructureGroup::PrimaryKey => s.primary_key.as_ref().map_or(0, |p| p.columns.len()),
+        StructureGroup::ForeignKeys => usize::from(k < s.foreign_keys.len()),
+        _ => 0,
+    }
+}
+
+/// Where a foreign key's table is (the explorer's jump).
+pub enum Reveal {
+    /// Its node.
+    Found(Node),
+    /// Its schema's objects are being read: the cursor goes there once they come
+    /// ([`Tree::take_reveal`]); the action asks for them.
+    Pending(TreeAction),
+    /// The tree does not have it.
+    Missing,
+}
+
 /// A node below the profile. Schema indices are stable until the schemas are listed again.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Node {
     Schema(usize),
     Group(usize, Group),
     Object(usize, Group, usize),
-    /// Column `k` of an open object, in the catalog's order.
+    /// Column `k` of an open object, in the catalog's order (a driver without the table
+    /// structure).
     Column(usize, Group, usize, usize),
     /// An open object whose columns the catalog does not have (still loading, or it could not
     /// be read).
     NoColumns(usize, Group, usize),
+    /// The size estimate of an open object with storage: `~rows · size`.
+    Stats(usize, Group, usize),
+    /// A group of an open object's structure.
+    StructGroup(usize, Group, usize, StructureGroup),
+    /// Item `k` of a group (a column, a key, an index, …).
+    StructItem(usize, Group, usize, StructureGroup, usize),
+    /// Line `m` under an open item (a primary key's column, a foreign key's reference).
+    StructDetail(usize, Group, usize, StructureGroup, usize, usize),
+    /// An open object whose structure is being read, or why it could not be.
+    StructNote(usize, Group, usize),
     /// Loading the schemas (`None`) or a schema's objects.
     Loading(Option<usize>),
     Empty(usize),
@@ -67,12 +141,31 @@ pub enum TreeAction {
     None,
     LoadObjects(String),
     LoadSchemas,
-    Open { schema: String, name: String },
+    Open {
+        schema: String,
+        name: String,
+    },
+    /// Read the structure of `schema.name` (only with a driver that has it: the explorer
+    /// marks it loading when it asks, [`Tree::structure_loading`]).
+    LoadStructure {
+        schema: String,
+        name: String,
+    },
+    /// Put the cursor on table `schema.name` (a foreign key's target).
+    Reveal {
+        schema: String,
+        name: String,
+    },
 }
 
 pub struct Tree {
     pub schemas: Vec<SchemaNode>,
     pub schemas_loading: bool,
+    /// The structures asked for, by `(schema, object)`: read once when an object first opens,
+    /// again with `r` on it.
+    pub structures: HashMap<(String, String), ObjectView>,
+    /// A table the cursor goes to once its schema's objects are listed.
+    reveal: Option<(String, String)>,
 }
 
 impl Default for Tree {
@@ -83,7 +176,7 @@ impl Default for Tree {
 
 impl Tree {
     pub fn new() -> Self {
-        Self { schemas: Vec::new(), schemas_loading: true }
+        Self { schemas: Vec::new(), schemas_loading: true, structures: HashMap::new(), reveal: None }
     }
 
     pub fn set_schemas(&mut self, names: Vec<String>) {
@@ -112,6 +205,11 @@ impl Tree {
             | Node::Object(i, _, _)
             | Node::Column(i, _, _, _)
             | Node::NoColumns(i, _, _)
+            | Node::Stats(i, _, _)
+            | Node::StructGroup(i, _, _, _)
+            | Node::StructItem(i, _, _, _, _)
+            | Node::StructDetail(i, _, _, _, _, _)
+            | Node::StructNote(i, _, _)
             | Node::Empty(i)
             | Node::Error(i)
             | Node::Loading(Some(i)) => i,
@@ -129,14 +227,15 @@ impl Tree {
         }
     }
 
-    /// The visible nodes, in order (the columns of open objects left out).
+    /// The visible nodes, in order (what open objects show left out).
     pub fn rows(&self) -> Vec<Row> {
-        self.rows_with(|_, _| None)
+        self.rows_with(|_, _| None, false)
     }
 
-    /// The visible nodes, in order, with the columns of open objects: `columns(schema, name)`
-    /// is how many the catalog has (`None`: it does not have the object).
-    pub fn rows_with(&self, columns: impl Fn(&str, &str) -> Option<usize>) -> Vec<Row> {
+    /// The visible nodes, in order, with what open objects show: their structure (`structured`,
+    /// the driver reads it) or their columns, `columns(schema, name)` being how many the
+    /// catalog has (`None`: it does not have the object).
+    pub fn rows_with(&self, columns: impl Fn(&str, &str) -> Option<usize>, structured: bool) -> Vec<Row> {
         let mut out = Vec::new();
         if self.schemas_loading {
             out.push(Row { depth: 0, node: Node::Loading(None) });
@@ -166,6 +265,10 @@ impl Tree {
                                 if !s.open.contains(&(g, j)) {
                                     continue;
                                 }
+                                if structured {
+                                    self.push_structure(&mut out, (i, g, j), &s.name, name);
+                                    continue;
+                                }
                                 match columns(&s.name, name) {
                                     Some(n) => {
                                         out.extend((0..n).map(|k| Row { depth: 3, node: Node::Column(i, g, j, k) }))
@@ -179,6 +282,100 @@ impl Tree {
             }
         }
         out
+    }
+
+    /// The rows of open object `(i, g, j)`, `schema.name`, below it: its size estimate, then
+    /// the groups of its kind, each open one with its items (and an open item its lines).
+    fn push_structure(&self, out: &mut Vec<Row>, (i, g, j): (usize, Group, usize), schema: &str, name: &str) {
+        let view = self.structures.get(&(schema.to_string(), name.to_string()));
+        let Some((view, st)) = view.and_then(|v| v.loaded().map(|s| (v, s))) else {
+            return out.push(Row { depth: 3, node: Node::StructNote(i, g, j) });
+        };
+        if st.kind.has_storage() {
+            out.push(Row { depth: 3, node: Node::Stats(i, g, j) });
+        }
+        for &sg in st.kind.groups() {
+            out.push(Row { depth: 3, node: Node::StructGroup(i, g, j, sg) });
+            if !view.open_groups.contains(&sg) {
+                continue;
+            }
+            for k in 0..st.count(sg) {
+                out.push(Row { depth: 4, node: Node::StructItem(i, g, j, sg, k) });
+                if view.open_items.contains(&(sg, k)) {
+                    let lines = item_details(st, sg, k);
+                    out.extend((0..lines).map(|m| Row { depth: 5, node: Node::StructDetail(i, g, j, sg, k, m) }));
+                }
+            }
+        }
+    }
+
+    /// The view of object `(i, g, j)` (its structure, what of it is open), once asked for.
+    pub fn object_view(&self, i: usize, g: Group, j: usize) -> Option<&ObjectView> {
+        self.structures.get(&self.object_name(i, g, j)?)
+    }
+
+    fn object_view_mut(&mut self, i: usize, g: Group, j: usize) -> Option<&mut ObjectView> {
+        let key = self.object_name(i, g, j)?;
+        self.structures.get_mut(&key)
+    }
+
+    /// The structure of `schema.name` is being read (asked now): what was open stays open.
+    pub fn structure_loading(&mut self, schema: &str, name: &str) {
+        let v = self.structures.entry((schema.to_string(), name.to_string())).or_insert_with(ObjectView::new);
+        v.structure = Structure::Loading;
+    }
+
+    /// The structure of `schema.name` came, or why it could not be read.
+    pub fn set_structure(&mut self, schema: &str, name: &str, result: Result<Box<TableStructure>, String>) {
+        let v = self.structures.entry((schema.to_string(), name.to_string())).or_insert_with(ObjectView::new);
+        v.structure = match result {
+            Ok(s) => Structure::Loaded(s),
+            Err(e) => Structure::Failed(e),
+        };
+    }
+
+    /// Where table `schema.name` is, its schema and group opened (a foreign key's target).
+    pub fn reveal(&mut self, schema: &str, name: &str) -> Reveal {
+        let Some(i) = self.schemas.iter().position(|s| s.name == schema) else { return Reveal::Missing };
+        let s = &mut self.schemas[i];
+        s.expanded = true;
+        match &s.children {
+            Children::Loaded { .. } => match self.find(i, name) {
+                Some(n) => Reveal::Found(n),
+                None => Reveal::Missing,
+            },
+            Children::Loading => {
+                self.reveal = Some((schema.to_string(), name.to_string()));
+                Reveal::Pending(TreeAction::None)
+            }
+            Children::NotLoaded | Children::Failed(_) => {
+                s.children = Children::Loading;
+                self.reveal = Some((schema.to_string(), name.to_string()));
+                Reveal::Pending(TreeAction::LoadObjects(schema.to_string()))
+            }
+        }
+    }
+
+    /// The objects of `schema` came: the table waiting to be revealed there, if one was, with
+    /// its node (`None`: the schema does not have it).
+    pub fn take_reveal(&mut self, schema: &str) -> Option<(String, Option<Node>)> {
+        let (_, name) = self.reveal.take_if(|(s, _)| s == schema)?;
+        let i = self.schemas.iter().position(|s| s.name == schema)?;
+        let node = self.find(i, &name);
+        Some((name, node))
+    }
+
+    /// The node of object `name` of loaded schema `i` (a table first), its group opened.
+    fn find(&mut self, i: usize, name: &str) -> Option<Node> {
+        let s = self.schemas.get_mut(i)?;
+        let Children::Loaded { tables, views, .. } = &s.children else { return None };
+        if let Some(j) = tables.iter().position(|t| t == name) {
+            s.tables_open = true;
+            return Some(Node::Object(i, Group::Tables, j));
+        }
+        let j = views.iter().position(|v| v == name)?;
+        s.views_open = true;
+        Some(Node::Object(i, Group::Views, j))
     }
 
     /// Whether `node` is still in the tree (schemas can change when they are listed again).
@@ -229,8 +426,37 @@ impl Tree {
                 let open = s.open.contains(&(g, j));
                 if want.unwrap_or(!open) {
                     s.open.insert((g, j));
+                    // Its structure is read the first time (again after a failure).
+                    let asked = self.object_view(i, g, j).is_some_and(|v| !matches!(v.structure, Structure::Failed(_)));
+                    if !asked && let Some((schema, name)) = self.object_name(i, g, j) {
+                        return TreeAction::LoadStructure { schema, name };
+                    }
                 } else {
                     s.open.remove(&(g, j));
+                }
+            }
+            Node::StructGroup(i, g, j, sg) => {
+                if self.is_expanded(node).is_none() {
+                    return TreeAction::None;
+                }
+                let Some(v) = self.object_view_mut(i, g, j) else { return TreeAction::None };
+                let open = v.open_groups.contains(&sg);
+                if want.unwrap_or(!open) {
+                    v.open_groups.insert(sg);
+                } else {
+                    v.open_groups.remove(&sg);
+                }
+            }
+            Node::StructItem(i, g, j, sg, k) => {
+                if self.is_expanded(node).is_none() {
+                    return TreeAction::None;
+                }
+                let Some(v) = self.object_view_mut(i, g, j) else { return TreeAction::None };
+                let open = v.open_items.contains(&(sg, k));
+                if want.unwrap_or(!open) {
+                    v.open_items.insert((sg, k));
+                } else {
+                    v.open_items.remove(&(sg, k));
                 }
             }
             _ => {}
@@ -245,23 +471,57 @@ impl Tree {
             Node::Group(i, Group::Tables) => self.schemas.get(i).map(|s| s.tables_open),
             Node::Group(i, Group::Views) => self.schemas.get(i).map(|s| s.views_open),
             Node::Object(i, g, j) => self.schemas.get(i).map(|s| s.open.contains(&(g, j))),
+            // An empty group, and an item with nothing under it, have nothing to open.
+            Node::StructGroup(i, g, j, sg) => {
+                let v = self.object_view(i, g, j)?;
+                (v.loaded()?.count(sg) > 0).then(|| v.open_groups.contains(&sg))
+            }
+            Node::StructItem(i, g, j, sg, k) => {
+                let v = self.object_view(i, g, j)?;
+                (item_details(v.loaded()?, sg, k) > 0).then(|| v.open_items.contains(&(sg, k)))
+            }
             _ => None,
         }
     }
 
-    /// Enter / double-click: an object opens, anything else toggles.
+    /// Enter / double-click: an object opens, a foreign key (or its line) goes to the table it
+    /// references, anything else toggles.
     pub fn activate(&mut self, node: Node) -> TreeAction {
         match node {
             Node::Object(i, g, j) => match self.object_name(i, g, j) {
                 Some((schema, name)) => TreeAction::Open { schema, name },
                 None => TreeAction::None,
             },
+            Node::StructItem(i, g, j, StructureGroup::ForeignKeys, k)
+            | Node::StructDetail(i, g, j, StructureGroup::ForeignKeys, k, _) => {
+                let fk = self.object_view(i, g, j).and_then(|v| v.loaded()).and_then(|s| s.foreign_keys.get(k));
+                match fk {
+                    Some(f) => TreeAction::Reveal { schema: f.ref_schema.clone(), name: f.ref_table.clone() },
+                    None => TreeAction::None,
+                }
+            }
             n => self.set_expanded(n, None),
         }
     }
 
-    /// Reload what `node` shows (`None`: the profile itself, i.e. the schemas).
-    pub fn refresh(&mut self, node: Option<Node>) -> TreeAction {
+    /// Reload what `node` shows (`None`: the profile itself, i.e. the schemas). With the table
+    /// structure (`structured`) an open object, or anything of its structure, reads its
+    /// structure again; otherwise its schema's objects are listed again.
+    pub fn refresh(&mut self, node: Option<Node>, structured: bool) -> TreeAction {
+        let object = match node {
+            Some(Node::Object(i, g, j)) if self.is_expanded(Node::Object(i, g, j)) == Some(true) => Some((i, g, j)),
+            Some(
+                Node::Stats(i, g, j)
+                | Node::StructGroup(i, g, j, _)
+                | Node::StructItem(i, g, j, _, _)
+                | Node::StructDetail(i, g, j, _, _, _)
+                | Node::StructNote(i, g, j),
+            ) => Some((i, g, j)),
+            _ => None,
+        };
+        if structured && let Some((schema, name)) = object.and_then(|(i, g, j)| self.object_name(i, g, j)) {
+            return TreeAction::LoadStructure { schema, name };
+        }
         let schema = match node {
             None | Some(Node::Loading(None)) => None,
             Some(
@@ -270,6 +530,11 @@ impl Tree {
                 | Node::Object(i, _, _)
                 | Node::Column(i, _, _, _)
                 | Node::NoColumns(i, _, _)
+                | Node::Stats(i, _, _)
+                | Node::StructGroup(i, _, _, _)
+                | Node::StructItem(i, _, _, _, _)
+                | Node::StructDetail(i, _, _, _, _, _)
+                | Node::StructNote(i, _, _)
                 | Node::Loading(Some(i))
                 | Node::Empty(i)
                 | Node::Error(i),
@@ -302,8 +567,14 @@ impl Tree {
             Node::Object(i, g, j) => {
                 (self.object_name(i, g, j).map(|(_, n)| n).unwrap_or_default(), Style::new().fg(theme::FG))
             }
-            // Drawn by the explorer from the catalog (see `widgets::explorer`).
-            Node::Column(..) | Node::NoColumns(..) => (String::new(), Style::new()),
+            // Drawn by the explorer from the catalog or the structure (see `widgets::explorer`).
+            Node::Column(..)
+            | Node::NoColumns(..)
+            | Node::Stats(..)
+            | Node::StructGroup(..)
+            | Node::StructItem(..)
+            | Node::StructDetail(..)
+            | Node::StructNote(..) => (String::new(), Style::new()),
             Node::Loading(_) => (i18n.label(Label::TreeLoading).to_string(), dim),
             Node::Empty(_) => (i18n.label(Label::TreeEmpty).to_string(), dim),
             Node::Error(i) => match self.schemas.get(i).map(|s| &s.children) {

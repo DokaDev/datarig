@@ -474,7 +474,14 @@ impl App {
                 let (database, profile) = (a.database.clone(), a.profile);
                 self.use_answered(profile, super::cmdline::UseAsk::Schemas(database), false);
             }
-            DbEvent::Objects { schema, result } => a.tree.set_objects(&schema, result.map_err(|_| text)),
+            DbEvent::Objects { schema, result } => {
+                a.tree.set_objects(&schema, result.map_err(|_| text));
+                let (profile, database) = (a.profile, a.database.clone());
+                self.revealed(profile, Some(&database), &schema);
+            }
+            DbEvent::Structure { schema, table, result } => {
+                a.tree.set_structure(&schema, &table, result.map_err(|_| text))
+            }
             DbEvent::Catalog(Ok(cat)) => a.catalog = cat,
             DbEvent::Keys(Ok(keys)) => a.keys = Keys::Loaded(keys),
             DbEvent::Keys(Err(_)) => a.keys = Keys::Failed(text),
@@ -555,6 +562,10 @@ impl App {
             }
             DbEvent::Objects { schema, result } => {
                 self.conns.entry(id).tree.set_objects(&schema, result.map_err(|_| text));
+                self.revealed(id, None, &schema);
+            }
+            DbEvent::Structure { schema, table, result } => {
+                self.conns.entry(id).tree.set_structure(&schema, &table, result.map_err(|_| text));
             }
             DbEvent::Catalog(Ok(cat)) => {
                 let c = self.conns.entry(id);
@@ -731,6 +742,7 @@ impl App {
             | DbEvent::Objects { .. }
             | DbEvent::Catalog(_)
             | DbEvent::Keys(_)
+            | DbEvent::Structure { .. }
             | DbEvent::Databases(_) => None,
             // Where the session works, as the server says: a chosen schema it does not list
             // does not exist there or cannot be used (said, never taken as fine).
@@ -1157,8 +1169,13 @@ impl App {
             DbEvent::ConnectFailed { error, .. } | DbEvent::Failed { error, .. } | DbEvent::Lost { error } => {
                 self.db_error_text(error)
             }
+            // The version the key metadata needs is the structure's too, in its own words.
+            DbEvent::Structure { result: Err(DbError::ServerTooOld), .. } => {
+                self.i18n.label(Label::TreeStructureTooOld).to_string()
+            }
             DbEvent::Schemas(Err(error))
             | DbEvent::Objects { result: Err(error), .. }
+            | DbEvent::Structure { result: Err(error), .. }
             | DbEvent::Catalog(Err(error))
             | DbEvent::Keys(Err(error)) => self.db_error_text(error),
             _ => String::new(),

@@ -139,5 +139,34 @@ pub fn wrap_words(s: &str, w: usize) -> Vec<String> {
     out
 }
 
+/// `v` with one decimal under 10 and none above (`4.2`, `11`), without a trailing `.0`.
+fn short_number(v: f64) -> String {
+    let one = (v * 10.0).round() / 10.0;
+    if one < 10.0 && one.fract() != 0.0 { format!("{one:.1}") } else { format!("{}", v.round()) }
+}
+
+/// A count in few characters: `950`, `4.2k`, `11k`, `3.1M`, `2B`.
+pub fn human_count(n: u64) -> String {
+    let v = n as f64;
+    match n {
+        0..1_000 => n.to_string(),
+        1_000..999_500 => format!("{}k", short_number(v / 1e3)),
+        999_500..999_500_000 => format!("{}M", short_number(v / 1e6)),
+        _ => format!("{}B", short_number(v / 1e9)),
+    }
+}
+
+/// A size in bytes in few characters: `512 B`, `8 KB`, `4.2 MB`, `19 GB` (units of 1024).
+pub fn human_bytes(n: u64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut v = n as f64;
+    let mut u = 0;
+    while v >= 1023.5 && u + 1 < UNITS.len() {
+        v /= 1024.0;
+        u += 1;
+    }
+    if u == 0 { format!("{n} B") } else { format!("{} {}", short_number(v), UNITS[u]) }
+}
+
 #[cfg(test)]
 mod tests;

@@ -11,6 +11,7 @@
 //! never draws an emoji: every mark is a Nerd Font glyph with icons on and plain text (or
 //! nothing) with icons off.
 
+use datarig_core::driver::structure::StructureGroup;
 use datarig_core::profile::ConnectionConfig;
 
 /// Columns every icon takes (the glyph, then a space).
@@ -158,6 +159,24 @@ impl TreeIcon {
     pub fn glyph(self) -> &'static str {
         TREE.iter().find(|t| t.0 == self).map_or("", |t| t.2)
     }
+}
+
+/// `(group, Nerd Fonts glyph name, glyph)` of the groups of a table's structure in the
+/// explorer: Material Design icons. The items of a group have its icon (a column keeps its key
+/// marks or its type's icon).
+pub const STRUCTURE: [(StructureGroup, &str, &str); 7] = [
+    (StructureGroup::Columns, "nf-md-table_column", "\u{f0835}"),
+    (StructureGroup::PrimaryKey, "nf-md-key", "\u{f0306}"),
+    (StructureGroup::ForeignKeys, "nf-md-key_link", "\u{f119f}"),
+    (StructureGroup::Indexes, "nf-md-format_list_numbered", "\u{f027b}"),
+    (StructureGroup::UniqueConstraints, "nf-md-fingerprint", "\u{f0237}"),
+    (StructureGroup::CheckConstraints, "nf-md-checkbox_marked_outline", "\u{f0135}"),
+    (StructureGroup::Triggers, "nf-md-lightning_bolt", "\u{f140b}"),
+];
+
+/// The icon of a structure group (and of its items).
+pub fn structure(g: StructureGroup) -> &'static str {
+    STRUCTURE.iter().find(|t| t.0 == g).map_or("", |t| t.2)
 }
 
 /// What kind of values a column holds, from its type's name: the explorer draws

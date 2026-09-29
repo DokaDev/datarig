@@ -1,8 +1,10 @@
 //! Input handling: terminal events (keys, paste, mouse) routed to the focused pane, dialog or
 //! screen, plus background [`AppEvent`]s.
 
+use super::explorer::RowKind;
 use super::*;
 use crate::widgets::grid::Shape;
+use crate::widgets::tree::Reveal;
 
 impl App {
     pub fn handle_event(&mut self, ev: Event) {
@@ -371,6 +373,21 @@ impl App {
                 self.reload_keys(id);
             }
             TreeAction::Open { schema, name } => self.open_table(id, None, &schema, &name),
+            TreeAction::LoadStructure { schema, name } => {
+                if !self.structure_on(id) {
+                    return;
+                }
+                self.conns.entry(id).tree.structure_loading(&schema, &name);
+                self.send_meta(id, DbCommand::LoadStructure { schema, table: name });
+            }
+            TreeAction::Reveal { schema, name } => {
+                let Some(c) = self.conns.get_mut(id) else { return };
+                match c.tree.reveal(&schema, &name) {
+                    Reveal::Found(n) => self.explorer.select_kind(RowKind::Node(id, n)),
+                    Reveal::Pending(action) => self.tree_action(id, action),
+                    Reveal::Missing => self.reveal_missing(&schema, &name),
+                }
+            }
         }
     }
 

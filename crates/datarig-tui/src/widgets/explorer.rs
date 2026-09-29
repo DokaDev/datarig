@@ -4,15 +4,18 @@
 //! policy is read-only), the error line under a
 //! failed profile, and under a connected one its server's databases (its own first, marked
 //! `default`), each with its schema tree. With icons on every node of the tree has
-//! an icon of its kind, and a column that is no key the icon of its type.
+//! an icon of its kind, and a column that is no key the icon of its type. An open table shows
+//! its structure (see `widgets::tree`): each group with its icon, each item with its group's.
 
 use crate::app::explorer::{Row, RowKind};
 use crate::app::{App, Keys, NodeState};
-use crate::icons::{self, TreeIcon, TypeCategory};
-use crate::text::{Align, clip, fit, wrap_words};
+use crate::icons::{self, KeyMark, TreeIcon, TypeCategory};
+use crate::text::{Align, clip, fit, human_bytes, human_count, wrap_words};
 use crate::theme;
-use crate::widgets::tree::{Group, Node, Tree};
+use crate::widgets::tree::{Group, Node, ObjectView, Structure, Tree};
 use crate::widgets::{put, spinner_at};
+use datarig_core::driver::KeyMarks;
+use datarig_core::driver::structure::{ColumnFill, FkAction, StructureGroup, TableStructure};
 use datarig_core::i18n::{Label, Msg};
 use datarig_core::sql::complete::Catalog;
 use ratatui::buffer::Buffer;
@@ -79,6 +82,7 @@ fn row_parts(app: &App, row: &Row) -> Vec<(String, Style)> {
                 };
                 vec![(text.to_string(), fg(theme::FG_DIM).add_modifier(Modifier::ITALIC))]
             }
+            (Some(c), n) if is_structure(*n) => structure_parts(app, &c.tree, *n),
             (Some(c), _) => node_parts(app, &c.tree, *n),
             (None, _) => Vec::new(),
         },
@@ -113,6 +117,7 @@ fn row_parts(app: &App, row: &Row) -> Vec<(String, Style)> {
             (Some(_), Node::NoColumns(..)) | (None, _) => {
                 vec![(app.i18n.label(Label::TreeLoading).to_string(), fg(theme::FG_DIM).add_modifier(Modifier::ITALIC))]
             }
+            (Some(a), n) if is_structure(*n) => structure_parts(app, &a.tree, *n),
             (Some(a), _) => node_parts(app, &a.tree, *n),
         },
         RowKind::ScriptsHeader => {
@@ -166,6 +171,212 @@ fn node_parts(app: &App, tree: &Tree, n: Node) -> Vec<(String, Style)> {
     }
 }
 
+/// A node of an open object's structure.
+fn is_structure(n: Node) -> bool {
+    matches!(
+        n,
+        Node::Stats(..) | Node::StructGroup(..) | Node::StructItem(..) | Node::StructDetail(..) | Node::StructNote(..)
+    )
+}
+
+fn group_label(g: StructureGroup) -> Label {
+    match g {
+        StructureGroup::Columns => Label::TreeGroupColumns,
+        StructureGroup::PrimaryKey => Label::TreeGroupPrimaryKey,
+        StructureGroup::ForeignKeys => Label::TreeGroupForeignKeys,
+        StructureGroup::Indexes => Label::TreeGroupIndexes,
+        StructureGroup::UniqueConstraints => Label::TreeGroupUniqueConstraints,
+        StructureGroup::CheckConstraints => Label::TreeGroupCheckConstraints,
+        StructureGroup::Triggers => Label::TreeGroupTriggers,
+    }
+}
+
+/// The color of a structure group's icon: a key's as its column mark, the others as muted as a
+/// group's name.
+fn group_icon_style(g: StructureGroup) -> Style {
+    let color = match g {
+        StructureGroup::PrimaryKey => theme::key_color(KeyMark::Pk),
+        StructureGroup::ForeignKeys => theme::key_color(KeyMark::Fk),
+        StructureGroup::UniqueConstraints => theme::key_color(KeyMark::Uq),
+        _ => theme::FG_MUTED,
+    };
+    Style::new().fg(color)
+}
+
+/// A node of an open object's structure: its size estimate, a group (`Columns (7)`; an empty
+/// one dim, without a count), an item with what it is in dim text, an item's line, or why the
+/// structure is not there.
+fn structure_parts(app: &App, tree: &Tree, n: Node) -> Vec<(String, Style)> {
+    let dim = Style::new().fg(theme::FG_DIM);
+    let (Node::Stats(i, g, j)
+    | Node::StructGroup(i, g, j, _)
+    | Node::StructItem(i, g, j, _, _)
+    | Node::StructDetail(i, g, j, _, _, _)
+    | Node::StructNote(i, g, j)) = n
+    else {
+        return Vec::new();
+    };
+    let view = tree.object_view(i, g, j);
+    let Some(st) = view.and_then(ObjectView::loaded) else {
+        return match view.map(|v| &v.structure) {
+            Some(Structure::Failed(error)) => {
+                let text = app.i18n.msg(&Msg::TreeStructureUnreadable { error: error.clone() });
+                vec![(text.to_string(), Style::new().fg(theme::ERROR))]
+            }
+            _ => vec![(app.i18n.label(Label::TreeLoading).to_string(), dim.add_modifier(Modifier::ITALIC))],
+        };
+    };
+    let on = app.icons_on();
+    match n {
+        Node::Stats(..) => {
+            let size = human_bytes(st.total_bytes.unwrap_or(0));
+            let text = match st.estimated_rows {
+                Some(r) => app.i18n.msg(&Msg::TreeStats { rows: human_count(r), size }),
+                None => app.i18n.msg(&Msg::TreeStatsRowsUnknown { size }),
+            };
+            vec![(text.to_string(), dim)]
+        }
+        Node::StructGroup(.., sg) => {
+            let count = st.count(sg);
+            let mut parts = Vec::new();
+            if on {
+                let style = if count == 0 { dim } else { group_icon_style(sg) };
+                parts.push((format!("{} ", icons::structure(sg)), style));
+            }
+            let label = app.i18n.label(group_label(sg)).to_string();
+            if count == 0 {
+                parts.push((label, dim));
+            } else {
+                parts.push((label, Style::new().fg(theme::FG_MUTED)));
+                // A table has one primary key at most: no count.
+                if sg != StructureGroup::PrimaryKey {
+                    parts.push((format!(" ({count})"), dim));
+                }
+            }
+            parts
+        }
+        Node::StructItem(.., sg, k) => item_parts(app, st, sg, k),
+        Node::StructDetail(.., StructureGroup::PrimaryKey, _, m) => {
+            let col = st.primary_key.as_ref().and_then(|p| p.columns.get(m)).cloned().unwrap_or_default();
+            vec![(col, Style::new().fg(theme::FG))]
+        }
+        Node::StructDetail(.., StructureGroup::ForeignKeys, k, _) => {
+            let Some(f) = st.foreign_keys.get(k) else { return Vec::new() };
+            let mut text =
+                format!("{} → {}.{}({})", f.columns.join(", "), f.ref_schema, f.ref_table, f.ref_columns.join(", "));
+            // `NO ACTION`, the default, is left out.
+            for (what, action) in [("ON DELETE", f.on_delete), ("ON UPDATE", f.on_update)] {
+                if action != FkAction::NoAction {
+                    text.push_str(&format!(" · {what} {}", action.sql()));
+                }
+            }
+            vec![(text, Style::new().fg(theme::FG_MUTED))]
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Item `k` of group `sg`: a column with its key marks (or its type's icon) and `type, not
+/// null, default …`; anything else with its group's icon, its name and what it is.
+fn item_parts(app: &App, st: &TableStructure, sg: StructureGroup, k: usize) -> Vec<(String, Style)> {
+    let on = app.icons_on();
+    let dim = Style::new().fg(theme::FG_DIM);
+    let name = |n: &str| (n.to_string(), Style::new().fg(theme::FG));
+    let icon = if on { vec![(format!("{} ", icons::structure(sg)), group_icon_style(sg))] } else { Vec::new() };
+    let mut parts = match sg {
+        StructureGroup::Columns => {
+            let Some(c) = st.columns.get(k) else { return Vec::new() };
+            let mut parts = mark_parts(st.marks(&c.name), &c.type_name, on);
+            parts.push(name(&c.name));
+            let mut detail = vec![c.type_name.clone()];
+            if c.not_null {
+                detail.push("not null".into());
+            }
+            if let Some(d) = &c.default {
+                detail.push(format!("default {d}"));
+            }
+            match &c.fill {
+                ColumnFill::Default => {}
+                ColumnFill::Stored(e) => detail.push(format!("generated ({e})")),
+                ColumnFill::Virtual(e) => detail.push(format!("generated ({e}) virtual")),
+                ColumnFill::IdentityAlways => detail.push("identity always".into()),
+                ColumnFill::IdentityByDefault => detail.push("identity".into()),
+            }
+            parts.push((format!("  {}", detail.join(", ")), dim));
+            return parts;
+        }
+        StructureGroup::PrimaryKey => {
+            let Some(p) = &st.primary_key else { return Vec::new() };
+            vec![name(&p.name)]
+        }
+        StructureGroup::ForeignKeys => {
+            let Some(f) = st.foreign_keys.get(k) else { return Vec::new() };
+            vec![name(&f.name), (format!("  → {}.{}", f.ref_schema, f.ref_table), dim)]
+        }
+        StructureGroup::Indexes => {
+            let Some(x) = st.indexes.get(k) else { return Vec::new() };
+            let mut detail = format!("({})", x.columns.join(", "));
+            if !x.include.is_empty() {
+                detail.push_str(&format!(" INCLUDE ({})", x.include.join(", ")));
+            }
+            if x.unique {
+                detail.push_str(" UNIQUE");
+            }
+            detail.push_str(&format!(" {}", x.method));
+            if let Some(p) = &x.predicate {
+                detail.push_str(&format!(" WHERE {p}"));
+            }
+            let backs = if x.primary {
+                Some(Label::TreeIndexPrimary)
+            } else if x.constraint {
+                Some(Label::TreeIndexConstraint)
+            } else {
+                None
+            };
+            if let Some(l) = backs {
+                detail.push_str(&format!(" · {}", app.i18n.label(l)));
+            }
+            vec![name(&x.name), (format!("  {detail}"), dim)]
+        }
+        StructureGroup::UniqueConstraints => {
+            let Some(u) = st.unique_constraints.get(k) else { return Vec::new() };
+            vec![name(&u.name), (format!("  ({})", u.columns.join(", ")), dim)]
+        }
+        StructureGroup::CheckConstraints => {
+            let Some(c) = st.checks.get(k) else { return Vec::new() };
+            vec![name(&c.name), (format!("  {}", c.expression), dim)]
+        }
+        StructureGroup::Triggers => {
+            let Some(t) = st.triggers.get(k) else { return Vec::new() };
+            let events: Vec<&str> = t.events.iter().map(|e| e.sql()).collect();
+            let each = if t.for_each_row { "FOR EACH ROW" } else { "FOR EACH STATEMENT" };
+            let detail = format!("  {} {} · {each} · {}()", t.timing.sql(), events.join(" OR "), t.function);
+            let mut parts = vec![name(&t.name), (detail, dim)];
+            if !t.enabled {
+                let off = app.i18n.label(Label::TreeTriggerDisabled);
+                parts.push((format!(" · {off}"), Style::new().fg(theme::WARNING)));
+            }
+            parts
+        }
+    };
+    let mut out = icon;
+    out.append(&mut parts);
+    out
+}
+
+/// A column's key marks (PK/FK/UQ) or, with icons on, the icon of its type's category when it
+/// is no key.
+fn mark_parts(marks: KeyMarks, type_name: &str, on: bool) -> Vec<(String, Style)> {
+    let mut parts: Vec<(String, Style)> = icons::key_marks(marks)
+        .into_iter()
+        .map(|m| (format!("{} ", m.text(on)), Style::new().fg(theme::key_color(m))))
+        .collect();
+    if on && parts.is_empty() {
+        parts.push((format!("{} ", TypeCategory::of(type_name).glyph()), Style::new().fg(theme::FG_DIM)));
+    }
+    parts
+}
+
 /// A column of an open table: its key marks (PK/FK/UQ, from the profile's key cache) or, with
 /// icons on, the icon of its type's category when it is no key, its name and its
 /// type.
@@ -182,17 +393,34 @@ fn column_parts(
         return Vec::new();
     };
     let marks = keys.catalog().map(|keys| keys.marks_by_name(&schema, &table, &col.name)).unwrap_or_default();
-    let on = app.icons_on();
-    let mut parts: Vec<(String, Style)> = icons::key_marks(marks)
-        .into_iter()
-        .map(|m| (format!("{} ", m.text(on)), Style::new().fg(theme::key_color(m))))
-        .collect();
-    if on && parts.is_empty() {
-        parts.push((format!("{} ", TypeCategory::of(&col.type_name).glyph()), Style::new().fg(theme::FG_DIM)));
-    }
+    let mut parts = mark_parts(marks, &col.type_name, app.icons_on());
     parts.push((col.name.clone(), Style::new().fg(theme::FG)));
     parts.push((format!("  {}", col.type_name), Style::new().fg(theme::FG_DIM)));
     parts
+}
+
+/// The whole line of `row` as the explorer draws it, not cut at its width: the indentation, the
+/// arrow and the text.
+pub(crate) fn row_text(app: &App, row: &Row) -> String {
+    let arrow = match app.explorer_arrow(row) {
+        Some(true) => "▾ ",
+        Some(false) => "▸ ",
+        None => "  ",
+    };
+    let text: String = row_parts(app, row).into_iter().map(|(t, _)| t).collect();
+    format!("{}{arrow}{text}", "  ".repeat(row.depth))
+}
+
+/// The whole text of the row under the explorer's cursor when it is part of a table's
+/// structure, for the status bar: the explorer is narrow, and cuts the details of deep lines.
+pub(crate) fn structure_preview(app: &App) -> Option<String> {
+    let row = app.explorer_row()?;
+    let (RowKind::Node(_, n) | RowKind::AuxNode(_, _, n)) = &row.kind else { return None };
+    if !is_structure(*n) {
+        return None;
+    }
+    let text: String = row_parts(app, &row).into_iter().map(|(t, _)| t).collect();
+    Some(text.trim().to_string()).filter(|t| !t.is_empty())
 }
 
 /// Background of a row: the cursor's row is highlighted (dimmer without the focus).

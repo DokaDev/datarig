@@ -51,7 +51,14 @@ pub(crate) fn draw_status(app: &mut App, area: Rect, buf: &mut Buffer) {
         && app.focus == crate::app::Focus::Results
         && app.transient.is_none())
     .then(|| crate::widgets::inspector::preview(app))
-    .flatten();
+    .flatten()
+    // The explorer's line of a table's structure, whole (the explorer cuts deep lines).
+    .or_else(|| {
+        (app.focus == crate::app::Focus::Tree && app.transient.is_none())
+            .then(|| crate::widgets::explorer::structure_preview(app))
+            .flatten()
+            .map(datarig_core::i18n::Localized::verbatim)
+    });
     let status = match preview {
         Some(p) => Some((p, Level::Info, false)),
         None => status,

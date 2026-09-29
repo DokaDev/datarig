@@ -707,10 +707,13 @@ fn right_click_opens_the_nodes_actions_and_runs_them() {
 
 /// Key metadata: read once when the profile connects, marked without a
 /// request per query, read again (and forgotten meanwhile) on a refresh; a failure is said and
-/// never taken for "no keys". Open tables show their columns with the marks.
+/// never taken for "no keys". Open tables show their columns with the marks (a driver without the
+/// table structure).
 #[test]
 fn key_columns_come_from_a_cache_that_a_refresh_renews() {
     let mut h = Harness::connected(Lang::En);
+    // A driver without the table structure: an open table's columns come from the catalog.
+    h.driver.no_structure.store(true, std::sync::atomic::Ordering::SeqCst);
     let pg = id(&h, "local-pg");
     assert!(matches!(h.app.conns.get(pg).unwrap().keys, Keys::Unknown), "not read yet");
     h.db(DbEvent::Keys(Ok(shop_keys())));

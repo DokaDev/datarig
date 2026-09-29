@@ -6,6 +6,7 @@
 #![allow(dead_code)]
 
 use datarig_core::config::Config;
+use datarig_core::driver::structure::TableStructure;
 use datarig_core::driver::{
     Canceller, Capabilities, ColumnMeta, ColumnOrigin, ConnectOptions, DbCommand, DbEvent, Driver, KeyCatalog,
     PingError, PingInfo, Session, SessionRole,
@@ -71,11 +72,21 @@ pub struct FakeDriver {
     pub any_cancel: Arc<AtomicBool>,
     /// The password each `connect` was given, in order.
     pub passwords: Arc<Mutex<Vec<String>>>,
+    /// Without `Capabilities::structure` (as a driver that cannot read a table's structure):
+    /// an open table shows its columns from the completion catalog.
+    pub no_structure: Arc<AtomicBool>,
 }
 
 impl Driver for FakeDriver {
     fn capabilities(&self) -> Capabilities {
-        Capabilities { server_paging: true, cancel: true, introspection: true, key_metadata: true, contexts: true }
+        Capabilities {
+            server_paging: true,
+            cancel: true,
+            introspection: true,
+            key_metadata: true,
+            contexts: true,
+            structure: !self.no_structure.load(Ordering::SeqCst),
+        }
     }
 
     fn connect(
@@ -665,6 +676,30 @@ impl Harness {
             .collect()
     }
 
+    /// The explorer's line under the cursor, whole (indentation, arrow, icons, marks and
+    /// details; the explorer cuts it at its width).
+    pub fn explorer_line(&mut self) -> String {
+        let rows = self.app.explorer_rows();
+        rows.get(self.selected()).map(|r| self.app.explorer_line_text(r)).unwrap_or_default()
+    }
+
+    /// Move the explorer's cursor down (`j`) until its line contains `text`.
+    pub fn goto(&mut self, text: &str) {
+        for _ in 0..300 {
+            if self.explorer_line().contains(text) {
+                return;
+            }
+            let before = self.selected();
+            self.keys("j");
+            if self.selected() == before {
+                break;
+            }
+        }
+        let rows = self.app.explorer_rows();
+        let all: Vec<String> = rows.iter().map(|r| self.app.explorer_line_text(r)).collect();
+        panic!("no explorer line with {text:?} below the cursor:\n{}", all.join("\n"));
+    }
+
     /// Focus the explorer and put its cursor on the profile named `name`.
     pub fn explore(&mut self, name: &str) {
         self.app.focus = Focus::Tree;
@@ -881,6 +916,111 @@ pub fn shop_keys() -> KeyCatalog {
     k.mark(ORDER_ITEMS, &[1], KeyKind::Foreign);
     k.mark(ORDER_ITEMS, &[3], KeyKind::Foreign);
     k
+}
+
+/// The structure of `shop.users` as the driver reports it: about 11,000 rows in 4.2 MB, an
+/// identity-free serial key, a unique email, indexes (one partial), no checks, two triggers (one
+/// disabled), no foreign keys.
+pub fn users_structure() -> TableStructure {
+    use datarig_core::driver::structure::*;
+    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    let col = |name: &str, ty: &str, not_null: bool, default: Option<&str>| StructureColumn {
+        name: name.into(),
+        type_name: ty.into(),
+        not_null,
+        default: default.map(str::to_string),
+        fill: ColumnFill::Default,
+    };
+    let index =
+        |name: &str, cols: &[&str], unique: bool, predicate: Option<&str>, primary: bool, constraint: bool| Index {
+            name: name.into(),
+            columns: s(cols),
+            include: Vec::new(),
+            unique,
+            method: "btree".into(),
+            predicate: predicate.map(str::to_string),
+            primary,
+            constraint,
+            definition: String::new(),
+        };
+    let mut t = TableStructure::new(RelationKind::Table);
+    t.estimated_rows = Some(11_000);
+    t.total_bytes = Some(4_404_019);
+    t.columns = vec![
+        col("id", "bigint", true, Some("nextval('shop.users_id_seq'::regclass)")),
+        col("email", "text", true, None),
+        col("name", "text", true, None),
+        col("nickname", "text", false, None),
+        col("profile", "jsonb", false, Some("'{}'::jsonb")),
+    ];
+    t.primary_key = Some(KeyConstraint { name: "users_pkey".into(), columns: s(&["id"]), definition: String::new() });
+    t.unique_constraints =
+        vec![KeyConstraint { name: "users_email_key".into(), columns: s(&["email"]), definition: String::new() }];
+    t.indexes = vec![
+        index("users_email_key", &["email"], true, None, false, true),
+        index("users_nickname_idx", &["nickname"], false, Some("nickname IS NOT NULL"), false, false),
+        index("users_pkey", &["id"], true, None, true, true),
+    ];
+    t.triggers = vec![
+        Trigger {
+            name: "users_audit".into(),
+            timing: TriggerTiming::After,
+            events: vec![TriggerEvent::Insert, TriggerEvent::Delete],
+            for_each_row: false,
+            function: "shop.audit".into(),
+            enabled: false,
+            definition: String::new(),
+        },
+        Trigger {
+            name: "users_touch".into(),
+            timing: TriggerTiming::Before,
+            events: vec![TriggerEvent::Update],
+            for_each_row: true,
+            function: "shop.touch".into(),
+            enabled: true,
+            definition: String::new(),
+        },
+    ];
+    t
+}
+
+/// The structure of `shop.orders`: never analyzed (no row estimate), a foreign key to
+/// `shop.users` and one to `analytics.events` (`ON DELETE CASCADE ON UPDATE SET NULL`), a check.
+pub fn orders_structure() -> TableStructure {
+    use datarig_core::driver::structure::*;
+    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    let col = |name: &str, ty: &str| StructureColumn {
+        name: name.into(),
+        type_name: ty.into(),
+        not_null: true,
+        default: None,
+        fill: ColumnFill::Default,
+    };
+    let mut t = TableStructure::new(RelationKind::Table);
+    t.total_bytes = Some(8192);
+    t.columns = vec![col("id", "bigint"), col("user_id", "bigint"), col("status", "text")];
+    t.columns[0].fill = ColumnFill::IdentityAlways;
+    t.primary_key = Some(KeyConstraint { name: "orders_pkey".into(), columns: s(&["id"]), definition: String::new() });
+    let fk = |name: &str, cols: &[&str], schema: &str, table: &str, on_delete, on_update| ForeignKey {
+        name: name.into(),
+        columns: s(cols),
+        ref_schema: schema.into(),
+        ref_table: table.into(),
+        ref_columns: s(&["id"]),
+        on_delete,
+        on_update,
+        definition: String::new(),
+    };
+    t.foreign_keys = vec![
+        fk("orders_event_fkey", &["id"], "analytics", "events", FkAction::Cascade, FkAction::SetNull),
+        fk("orders_user_id_fkey", &["user_id"], "shop", "users", FkAction::NoAction, FkAction::NoAction),
+    ];
+    t.checks = vec![CheckConstraint {
+        name: "orders_status_check".into(),
+        expression: "status = ANY (ARRAY['pending'::text, 'paid'::text])".into(),
+        definition: String::new(),
+    }];
+    t
 }
 
 /// The eight hand-crafted edge-case users from `dev/init/02_seed.sql`.
