@@ -395,17 +395,24 @@ pub(crate) fn db_error(e: &tokio_postgres::Error) -> DbError {
     let mut src = std::error::Error::source(e);
     while let Some(inner) = src {
         if let Some(io) = inner.downcast_ref::<std::io::Error>() {
-            // The standard library reports a failed name lookup (getaddrinfo) only in words.
-            kind = if io.to_string().starts_with("failed to lookup address information") {
-                FaultKind::HostNotFound
-            } else {
-                FaultKind::Io(io.kind())
-            };
+            kind = if lookup_failed(io) { FaultKind::HostNotFound } else { FaultKind::Io(io.kind()) };
             break;
         }
         src = inner.source();
     }
     DbError::Connection(Fault::new(kind, chain(e)))
+}
+
+/// Whether `io` is a failed name lookup (getaddrinfo). The standard library reports one only in
+/// words on Unix, and on Windows as the lookup's own Windows Sockets code: WSAHOST_NOT_FOUND,
+/// WSATRY_AGAIN, WSANO_RECOVERY or WSANO_DATA (11001 to 11004), which nothing but a lookup
+/// returns.
+fn lookup_failed(io: &std::io::Error) -> bool {
+    if cfg!(windows) {
+        matches!(io.raw_os_error(), Some(11001..=11004))
+    } else {
+        io.to_string().starts_with("failed to lookup address information")
+    }
 }
 
 /// An error and its sources, as one line (for the error log).
