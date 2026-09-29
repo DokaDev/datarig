@@ -959,12 +959,10 @@ fn keychain_move_notice_en_ko() {
     let _in_runtime = rt.enter();
     let body = "[[connections]]\nname = \"local-pg\"\nhost = \"127.0.0.1\"\nport = 55432\nuser = \"datarig\"\n\
                 password = \"datarig\"\ndatabase = \"datarig\"\n";
-    let dir = std::env::temp_dir().join(format!("datarig-snap-{}-move", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("config.toml");
-    std::fs::write(&path, body).unwrap();
-    let (cfg, _) = datarig_core::config::load(Some(path));
     for lang in [Lang::En, Lang::Ko] {
+        // A file per run, each dropped after its store opens and its move rewrote it.
+        let scratch = MovingConfig::new(&format!("snap-move-{}", lang_tag(lang)), body);
+        let (cfg, _) = datarig_core::config::load(Some(scratch.path.clone()));
         let store = std::sync::Arc::new(GatedStore::default());
         let _open_at_end = store.open_on_drop();
         let (mut h, _rx) = Harness::started(
@@ -975,7 +973,6 @@ fn keychain_move_notice_en_ko() {
         );
         assert_screen!(format!("keychain_move_notice_{}_80x24", lang_tag(lang)), lang, h.draw(80, 24));
     }
-    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // ── key guide: which-key, keyboard help, hint line ────────────────

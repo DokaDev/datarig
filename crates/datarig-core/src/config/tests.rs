@@ -112,10 +112,37 @@ fn profiles<'a>(c: &'a [ConnectionConfig], folders: &'a Folders, last_used: Opti
     Profiles { connections: c, folders, last_used }
 }
 
-fn temp_file(tag: &str) -> PathBuf {
+/// `<tmp>/datarig-cfg-<pid>-<tag>/sub/config.toml`, not created; the directory is removed when
+/// the value is dropped, so a failing test leaves nothing behind either.
+struct TempFile {
+    dir: PathBuf,
+    path: PathBuf,
+}
+
+impl std::ops::Deref for TempFile {
+    type Target = PathBuf;
+    fn deref(&self) -> &PathBuf {
+        &self.path
+    }
+}
+
+impl AsRef<Path> for TempFile {
+    fn as_ref(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TempFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+fn temp_file(tag: &str) -> TempFile {
     let dir = std::env::temp_dir().join(format!("datarig-cfg-{}-{tag}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
-    dir.join("sub").join("config.toml")
+    let path = dir.join("sub").join("config.toml");
+    TempFile { dir, path }
 }
 
 #[test]
@@ -156,7 +183,6 @@ fn save_preserves_comments_and_drops_passwords() {
     assert_eq!(again.connections.len(), 2);
     assert_eq!(again.connections[1].host, "db.example.com");
     assert_eq!(again.connections[0].port, 55432);
-    let _ = std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap());
 }
 
 #[test]
@@ -172,7 +198,6 @@ fn save_creates_missing_file_with_language_only() {
     let path = temp_file("create-en");
     save(&path, settings("en"), None).unwrap();
     assert_eq!(std::fs::read_to_string(&path).unwrap().trim(), "");
-    let _ = std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap());
 }
 
 #[test]
@@ -182,7 +207,6 @@ fn save_refuses_unparseable_file() {
     std::fs::write(&path, "language = \n").unwrap();
     assert!(save(&path, settings("en"), None).is_err());
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "language = \n", "left untouched");
-    let _ = std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap());
 }
 
 #[test]
@@ -232,7 +256,6 @@ fn save_writes_editor_mode_and_keeps_keymap_tables() {
     std::fs::write(&path, "editor = { mode = \"vim\" }\n").unwrap();
     save(&path, Settings { editor_mode: EditorMode::Standard, ..settings("en") }, None).unwrap();
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "editor = { mode = \"standard\" }\n");
-    let _ = std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap());
 }
 
 const ID_A: &str = "3f0b8f5e-6a57-4f7e-9a53-0c1c2b8f9d11";
@@ -305,7 +328,6 @@ fn icons_auto_is_not_decided_yet_and_the_answer_replaces_it() {
     save(&path, Settings { icons: IconsSetting::On, ..settings(DEFAULT_LANGUAGE) }, None).unwrap();
     let after = std::fs::read_to_string(&path).unwrap();
     assert_eq!(after, before.replace("icons = \"auto\"", "icons = \"on\""), "{after}");
-    let _ = std::fs::remove_file(&path);
 }
 
 #[test]
@@ -350,7 +372,6 @@ fn save_matches_tables_by_id_then_by_name_and_writes_version_2_keys() {
     assert!(!text.contains("color"), "{text}");
     let (third, _) = load(Some(path.clone()));
     assert_eq!(third.connections.iter().map(|c| c.id).collect::<Vec<_>>(), [b, a]);
-    let _ = std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap());
 }
 
 #[test]
@@ -369,7 +390,6 @@ fn missing_and_broken_files_need_no_migration() {
     assert!(load(Some(path.clone())).0.needs_migration(), "version 1");
     std::fs::write(&path, "version = 2\n[[connections]]\nname = \"new\"\n").unwrap();
     assert!(load(Some(path.clone())).0.needs_migration(), "a profile without id");
-    let _ = std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap());
 }
 
 #[test]
@@ -455,7 +475,6 @@ fn save_writes_the_source_keys_and_default_source() {
     let text = std::fs::read_to_string(&path).unwrap();
     assert!(!text.contains("password_"), "{text}");
     assert!(!text.contains("default_source") && !text.contains("[secrets]"), "back to the default: gone: {text}");
-    let _ = std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap());
 }
 
 #[test]
@@ -564,7 +583,6 @@ fn step_2_settings_are_read_checked_and_saved_only_when_set() {
     let (cfg, _) = load(Some(path.clone()));
     assert_eq!(cfg.prefs, Prefs::default());
     assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
-    let _ = std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap());
 }
 
 #[test]
@@ -603,7 +621,6 @@ fn a_setting_back_at_its_default_leaves_the_file_with_its_comments() {
     // Nothing changes: the file stays byte for byte.
     save(&path, Settings { prefs, ..settings("en") }, None).unwrap();
     assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
-    let _ = std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap());
 }
 
 #[test]
@@ -661,7 +678,6 @@ fn cursor_shape_is_read_checked_and_saved_next_to_the_editor_mode() {
     assert_eq!(cfg.prefs.cursor_shape, CursorShape::Off);
     save(&path, settings("en"), None).unwrap();
     assert!(!std::fs::read_to_string(&path).unwrap().contains("cursor_shape"), "back at the default, the key goes");
-    let _ = std::fs::remove_file(&path);
 }
 
 /// The server-side statement cache: on unless the profile says `false`, and
@@ -686,7 +702,6 @@ fn statement_cache_is_read_and_written_only_when_off() {
     assert!(err.is_none(), "{err:?}");
     assert!(!back.connections[0].statement_cache && back.connections[1].statement_cache);
     assert_eq!(std::fs::read_to_string(&path).unwrap().matches("statement_cache").count(), 1);
-    let _ = std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap());
 }
 
 /// The SSH tunnel's table: read, checked when on, written back with its
@@ -737,5 +752,4 @@ fn the_ssh_table_is_read_checked_and_written() {
     assert!(matches!(load(Some(path.clone())).1, Some(ConfigError::Syntax(_))));
     let off = SshSettings { enabled: false, ..SshSettings::default() };
     assert_eq!(off.problem(), None);
-    let _ = std::fs::remove_dir_all(path.parent().unwrap().parent().unwrap());
 }

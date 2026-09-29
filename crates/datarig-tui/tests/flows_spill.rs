@@ -15,11 +15,27 @@ use ratatui::crossterm::event::KeyCode;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-fn temp_state(tag: &str) -> PathBuf {
+/// A test's state directory, removed when dropped (after the harness declared below it).
+struct TempState(PathBuf);
+
+impl std::ops::Deref for TempState {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempState {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn temp_state(tag: &str) -> TempState {
     let dir = std::env::temp_dir().join(format!("datarig-flows-spill-{}-{tag}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    dir
+    TempState(dir)
 }
 
 /// Row `i`: its number, a wide text (Hangul from code points) and a NULL or an empty string.
@@ -145,7 +161,6 @@ fn rows_past_the_window_spill_and_read_back_everywhere() {
     assert!(h.sent().is_empty(), "every page came from the rows fetched");
     drop(h);
     assert!(spill_files(&state).is_empty(), "nothing is left at quit");
-    let _ = std::fs::remove_dir_all(&state);
 }
 
 #[test]
@@ -173,7 +188,6 @@ fn the_spill_limit_stops_fetching_and_says_so() {
     h.keys("G");
     h.keys("j");
     assert!(!h.sent().iter().any(|c| matches!(c, DbCommand::FetchMore { .. })));
-    let _ = std::fs::remove_dir_all(&state);
 }
 
 #[test]
@@ -194,7 +208,6 @@ fn spill_files_go_with_their_result() {
     h.command("tabclose");
     assert!(h.app.tabs.is_empty() || !matches!(h.app.tab().results, Results::Rows(_)));
     assert!(data_files(&state).is_empty(), "{:?}", spill_files(&state));
-    let _ = std::fs::remove_dir_all(&state);
 }
 
 /// A process id that is not running: a child that has exited.
@@ -223,7 +236,7 @@ fn a_launch_sweeps_what_a_crashed_run_left() {
     std::fs::write(dir.join("keep.txt"), b"not ours").unwrap();
     let cfg = test_db_config();
     let mut app = new_app(&cfg, Lang::En);
-    app.set_paths(Paths { data: None, state: Some(state.clone()) });
+    app.set_paths(Paths { data: None, state: Some(state.to_path_buf()) });
     app.launch(Startup::Normal);
     for f in &left {
         assert!(!dir.join(f).exists(), "{f} was left by a crashed run");
@@ -231,7 +244,6 @@ fn a_launch_sweeps_what_a_crashed_run_left() {
     assert!(mine.exists(), "a live process's file stays");
     assert!(dir.join("keep.txt").exists());
     drop(app);
-    let _ = std::fs::remove_dir_all(&state);
 }
 
 /// A spill directory that is not private and cannot be made private (here: macOS's immutable
@@ -258,7 +270,6 @@ fn a_spill_dir_that_cannot_be_made_private_is_refused() {
     assert_eq!(mode, 0o755);
     assert_eq!(h.app.tab().exec.paging, Paging::Stopped);
     assert_eq!(rows_of(&h).rows.len(), 1_000, "the rows shown so far stay");
-    let _ = std::fs::remove_dir_all(&state);
 }
 
 /// Dragging past the grid's bottom scrolls over rows that are on disk, and

@@ -455,11 +455,12 @@ async fn a_cancelled_keychain_wait_leaves_no_reading_status() {
 #[tokio::test(flavor = "multi_thread")]
 async fn quitting_while_the_launch_move_waits() {
     for quit in ["q", "ctrl+c", "ctrl+q"] {
-        let dir = std::env::temp_dir().join(format!("datarig-keychain-quit-{}-{quit}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("config.toml");
-        std::fs::write(&path, "[[connections]]\nname = \"local-pg\"\npassword = \"datarig\"\n").unwrap();
+        // Declared before the store's `_release`, so it is dropped after the store answers.
+        let scratch = MovingConfig::new(
+            &format!("keychain-quit-{quit}"),
+            "[[connections]]\nname = \"local-pg\"\npassword = \"datarig\"\n",
+        );
+        let path = scratch.path.clone();
         let (cfg, _) = config::load(Some(path.clone()));
         let store = Held::never();
         let _release = Release(store.clone());
@@ -478,6 +479,5 @@ async fn quitting_while_the_launch_move_waits() {
         let (again, error) = config::load(Some(path.clone()));
         assert!(error.is_none(), "{error:?}");
         assert_eq!(again.connections[0].password, "datarig", "the password is still in the file");
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

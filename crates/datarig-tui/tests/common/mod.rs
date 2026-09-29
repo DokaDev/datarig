@@ -162,6 +162,42 @@ impl Drop for OpenOnDrop {
     }
 }
 
+/// A scratch directory `<tmp>/datarig-<tag>-<pid>` with a `config.toml` of `body` that still
+/// holds a plaintext password, removed on drop. The launch-time move of that password to the
+/// keychain rewrites the file from its own thread once the store answers, even after the test
+/// is done with the app (a real quit ends the process first). Drop this after the store is
+/// released: it waits (up to [`MOVE_LIMIT`]) for that rewrite before removing the directory,
+/// which would otherwise be written again and left behind.
+pub struct MovingConfig {
+    pub dir: std::path::PathBuf,
+    pub path: std::path::PathBuf,
+}
+
+/// How long [`MovingConfig`] waits for the move to rewrite the file.
+pub const MOVE_LIMIT: Duration = Duration::from_secs(5);
+
+impl MovingConfig {
+    pub fn new(tag: &str, body: &str) -> Self {
+        let dir = std::env::temp_dir().join(format!("datarig-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        std::fs::write(&path, body).unwrap();
+        Self { dir, path }
+    }
+}
+
+impl Drop for MovingConfig {
+    fn drop(&mut self) {
+        let t = Instant::now();
+        let moving = |p: &std::path::Path| std::fs::read_to_string(p).is_ok_and(|s| s.contains("password ="));
+        while moving(&self.path) && t.elapsed() < MOVE_LIMIT {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
 impl SecretStore for GatedStore {
     fn get(&self, account: &str) -> Result<Option<String>, datarig_core::secret::Unavailable> {
         if self.forgetful && self.inner.get(account)?.is_some() {
