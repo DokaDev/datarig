@@ -4,6 +4,12 @@ description = "SSH tunnels of datarig: a bastion's direct-tcpip channels as a tr
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 publish.workspace = true
 
 # The only crate that names russh. Depends on core only (never on a driver or the UI).

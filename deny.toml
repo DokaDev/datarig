@@ -1,0 +1,53 @@
+# cargo-deny (https://embarkstudios.github.io/cargo-deny/): `cargo deny check`.
+# CI runs it on every push and pull request.
+
+[graph]
+all-features = true
+
+[advisories]
+# RustSec advisories of every crate in the lock file. Each ignored advisory says why it does not
+# apply; revisit it when a fixed version exists.
+ignore = [
+    # RUSTSEC-2023-0071 (rsa, "Marvin attack"): the rsa crate's private-key operations are not
+    # constant time, so an attacker who can have many chosen ciphertexts decrypted and time the
+    # answers may recover the private key. datarig uses an RSA private key only to sign its own
+    # SSH login, locally, with the user's key (through russh); it never decrypts, and never runs
+    # a private-key operation on data an attacker supplies. There is no fixed version of rsa.
+    { id = "RUSTSEC-2023-0071", reason = "RSA keys only sign the local user's SSH login; no decryption or attacker-chosen input (no fixed version)" },
+]
+
+[licenses]
+# Permissive licenses only. LGPL and MPL are deliberately absent, so a dependency offered under
+# `A OR LGPL`/`A OR MPL` resolves to the permissive choice, and one offered only under those fails.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unlicense",
+    "BSL-1.0",
+    "WTFPL",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "PostgreSQL",
+]
+confidence-threshold = 0.9
+# The list is the project's policy, not an inventory: a license nobody uses yet is fine.
+unused-allowed-license = "allow"
+
+[licenses.private]
+# The workspace's own crates are not published (publish = false) but carry the project license.
+ignore = false
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

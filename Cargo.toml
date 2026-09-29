@@ -14,6 +14,13 @@ exclude = ["vendor"]
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.93"
+license = "MIT OR Apache-2.0"
+description = "A terminal database client: a DataGrip-style workspace for PostgreSQL in the terminal"
+repository = "https://github.com/DokaDev/datarig"
+homepage = "https://github.com/DokaDev/datarig"
+readme = "README.md"
+keywords = ["database", "postgresql", "tui", "sql", "terminal"]
+categories = ["command-line-utilities", "database"]
 # Not on crates.io yet: the PostgreSQL driver needs the patched tokio-postgres of `vendor/`
 # ([patch.crates-io] below), which a published crate cannot carry.
 publish = false

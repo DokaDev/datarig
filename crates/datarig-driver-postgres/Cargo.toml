@@ -4,6 +4,12 @@ description = "PostgreSQL driver for datarig (tokio-postgres)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 publish.workspace = true
 
 [dependencies]
