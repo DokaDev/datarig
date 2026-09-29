@@ -42,10 +42,12 @@ ro_first_in_block = { to_result = 2, total = 3 }
 # and the bastion of the tests). The tunnel adds latency to each packet, never a round trip, so
 # the counts are the direct ones. Opening the tunnel (key exchange, host key, login with a key)
 # and a session through it (a channel, then the database's own startup and SCRAM) are counted
-# too: measured 5 and 4 against OpenSSH 10.
+# too: measured 5 or 6, and 4, against OpenSSH 10. Opening the tunnel is not a fixed count: the
+# server sends its key exchange reply, NEWKEYS and ext-info in one write or in two depending on
+# timing, and the proxy counts a split as another round trip, so the budget allows the 6.
 one_way_ms = 20
 runs = 5
-tunnel_open = { to_result = 5, total = 5 }
+tunnel_open = { to_result = 6, total = 6 }
 session_through_tunnel = { to_result = 4, total = 4 }
 select_small_cold = { to_result = 2, total = 3 }
 select_small_warm = { to_result = 1, total = 2 }
