@@ -230,14 +230,29 @@ Held by CI budgets (`docs/perf.md`).
 
 ## Explorer icons and confirmations
 
-- **Tree icons.** `icons::TREE` (a `TreeIcon` per node kind) and `icons::TYPES` (a
+- **Tree icons.** `icons::TREE` (a `TreeIcon` per node kind), `icons::TYPES` (a
   `TypeCategory` per kind of column type, `TypeCategory::of` reads the type's name as the
-  server formats it) hold Material Design glyphs of Nerd Fonts v3 with their names; a test pins
+  server formats it) and `icons::STRUCTURE` (a glyph per group of a table's structure, which its
+  items share) hold Material Design glyphs of Nerd Fonts v3 with their names; a test pins
   each name to its code point (checked against `glyphnames.json` of 3.5.1). The explorer's
   `node_parts` puts the icon before a node's label only with icons on, so the tree without
   icons is unchanged. `DbEvent::Objects` carries `SchemaObjects` (tables, views, and the names
   of the views that are materialized); `widgets::tree::Children::Loaded` keeps them and
   `Tree::is_materialized` picks the icon.
+- **Table structure.** `driver::structure::TableStructure` (core) is one table's structure as a
+  driver reads it: its kind (`RelationKind::groups` says which groups apply), a row estimate and
+  a size (`None` when unknown: never 0 for "not analyzed"), columns (with `ColumnFill`: default,
+  identity, generated), the primary key, foreign keys, indexes, unique and check constraints and
+  triggers, each constraint, index and trigger with the server's own definition, for a DDL view
+  to reuse. A driver with `Capabilities::structure` answers `DbCommand::LoadStructure` with
+  `DbEvent::Structure` on its metadata session; the PostgreSQL driver builds it as one JSON
+  document in a single unnamed catalog statement (`meta::structure`, one round trip, budget
+  `rtt.table_structure`), never reading the table. The TUI has no SQL for it:
+  `widgets::tree::Tree::structures` caches it per `(schema, table)` with what of it is open,
+  `TreeAction::LoadStructure` asks for it the first time a table opens (again after a failure,
+  or with `r`), another database's through its aux session, and `TreeAction::Reveal` moves the
+  cursor to a foreign key's table (asking for its schema's objects first when needed). Without
+  the capability an open table shows its columns from the completion catalog, as before.
 - **Keychain calls in order.** `App::keychain_job` takes the keychain accounts a job touches;
   `app::keychain::KeychainQueue` gives it a place in each account's queue when it is asked for
   (on the UI thread, a short lock) and its worker waits until it is first in all of them
@@ -427,7 +442,7 @@ The build fails, naming the file, the key and the problem, when a locale misses 
 2. Add it to `members` and to `[workspace.dependencies]` (`datarig-driver-mysql = { path = "crates/datarig-driver-mysql" }`) in the root `Cargo.toml`.
 3. Implement `datarig_core::driver::Driver`:
    - `capabilities()`: turn on only what the driver really supports (`server_paging`, `cancel`, `introspection`, `contexts`, `key_metadata`, ...).
-   - `connect(cfg, role, opts, events)`: for each role (`SessionRole::Meta` for the tree and completion, `SessionRole::Query` for a tab's statements) start a background task with **one connection** and return `Session::new(caps, role, tx, canceller)`. Report `opts.application_name` to the server. Progress and results go out as `DbEvent`s (`Connected` / `ConnectFailed`, `Schemas`, `Objects`, `Catalog`, `Page`, `Done`, `Failed`, `TxOpen`). A metadata session answers `Execute` with `Failed`.
+   - `connect(cfg, role, opts, events)`: for each role (`SessionRole::Meta` for the tree and completion, `SessionRole::Query` for a tab's statements) start a background task with **one connection** and return `Session::new(caps, role, tx, canceller)`. Report `opts.application_name` to the server. Progress and results go out as `DbEvent`s (`Connected` / `ConnectFailed`, `Schemas`, `Objects`, `Catalog`, `Page`, `Done`, `Failed`, `TxOpen`). A metadata session answers `Execute` with `Failed`. With `Capabilities::structure` the metadata session also answers `LoadStructure` with a `driver::structure::TableStructure` (`DbEvent::Structure`), which the explorer shows under an open table.
    - `ping()`: the test connection. It honours the time limit and cancellation (the future being dropped).
    - Export the driver type only (`pub use connect::MySqlDriver;`).
 4. Add the dependency to `datarig-tui`'s `Cargo.toml` and register the name in `driver_for` in `src/drivers.rs` (`"mysql" | "mariadb" => Some(Box::new(MySqlDriver))`). No UI code changes.
