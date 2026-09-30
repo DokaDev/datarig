@@ -656,6 +656,15 @@
 "action.explorer.context_menu" = "Explorer: actions of this node (menu)"
 "action.explorer.new_console_here" = "Explorer: new console in this database or schema"
 "keyctx.overlay.context_menu" = "Actions menu"
+"menu.console_in" = "New console in {place}"
+"menu.rename_query" = "Rename saved query"
+"menu.rename_folder" = "Rename folder"
+"menu.delete_query" = "Delete saved query"
+"menu.delete_folder" = "Delete folder"
+"menu.delete_profile" = "Delete connection profile"
+"menu.move_query" = "Move saved query to a folder"
+"menu.move_folder" = "Move folder into another folder"
+"menu.move_profile" = "Move connection profile to a folder"
 
 # saved queries, autosave, tab restore, second instance
 "explorer.scripts" = "Saved queries"

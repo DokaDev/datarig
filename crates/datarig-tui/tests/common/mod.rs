@@ -709,6 +709,23 @@ impl Harness {
         panic!("no explorer line with {text:?} below the cursor:\n{}", all.join("\n"));
     }
 
+    /// A right click on the explorer row the harness shows as `text` (trimmed), drawn at
+    /// 120x40 first so that the explorer's area is known (the list is not scrolled).
+    pub fn right_click_row(&mut self, text: &str) {
+        use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+        self.draw(120, 40);
+        let i = self.rows().iter().position(|r| r.trim() == text);
+        let i = i.unwrap_or_else(|| panic!("no {text:?} in {:?}", self.rows())) as u16;
+        let area = self.app.explorer.area;
+        assert!(i < area.height, "{text:?} is off screen");
+        self.mouse(MouseEventKind::Down(MouseButton::Right), area.x + 4, area.y + i);
+    }
+
+    /// The labels of the open context menu's items.
+    pub fn menu_labels(&self) -> Vec<String> {
+        self.app.menu_rows().into_iter().map(|(label, _)| label.to_string()).collect()
+    }
+
     /// Focus the explorer and put its cursor on the profile named `name`.
     pub fn explore(&mut self, name: &str) {
         self.app.focus = Focus::Tree;

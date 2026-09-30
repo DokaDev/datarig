@@ -102,18 +102,18 @@ impl App {
         };
         let connected = profile.is_some_and(|id| self.conns.is_connected(id));
         let script = matches!(row, R::Script(_) | R::ScriptFolder(_));
+        let in_database = matches!(row, R::Node(..) | R::AuxNode(..) | R::Database(..) | R::DatabaseNote(..));
         match a {
             Action::Explorer(ExplorerAction::Activate) => !matches!(row, R::NewConnection | R::ScriptsEmpty),
             Action::Explorer(ExplorerAction::Refresh) => connected || script || matches!(row, R::ScriptsHeader),
             Action::Explorer(ExplorerAction::Delete) => matches!(row, R::Profile(_) | R::Folder(_)) || script,
             Action::Explorer(ExplorerAction::Rename) => matches!(row, R::Folder(_)) || script,
             Action::Explorer(ExplorerAction::Move) => profile.is_some() || script,
-            Action::Explorer(ExplorerAction::ConsoleHere) => {
-                matches!(row, R::Node(..) | R::AuxNode(..) | R::Database(..) | R::DatabaseNote(..))
-            }
-            Action::EditProfile | Action::DuplicateProfile | Action::TestConnection | Action::OpenConsole => {
-                profile.is_some()
-            }
+            Action::Explorer(ExplorerAction::ConsoleHere) => in_database,
+            // In a database or schema the console opens there (`O`), not with the profile's
+            // defaults: one console item, which says where.
+            Action::OpenConsole => profile.is_some() && !in_database,
+            Action::EditProfile | Action::DuplicateProfile | Action::TestConnection => profile.is_some(),
             Action::Disconnect => profile.is_some_and(|id| self.conns.state(id) != NodeState::Disconnected),
             // Profile and folder actions of the explorer have nothing to do on the scripts.
             Action::NewProfile | Action::Explorer(ExplorerAction::NewFolder) => {
@@ -138,6 +138,36 @@ impl App {
             }
         }
         out
+    }
+
+    /// The label of explorer action `a` in the menu, for the row it runs on (the cursor's):
+    /// what it deletes, moves or renames there, and where the console opens. `None`: the
+    /// action's own label.
+    fn explorer_menu_label(&self, a: Action) -> Option<Localized> {
+        use explorer::RowKind as R;
+        let row = self.explorer_row()?;
+        let label = match (a, &row.kind) {
+            (Action::Explorer(ExplorerAction::ConsoleHere), _) => {
+                let (id, ctx) = self.console_here_context(&row)?;
+                let place = match (ctx.database, ctx.schema) {
+                    (Some(db), Some(schema)) => format!("{db}.{schema}"),
+                    (None, Some(schema)) => schema,
+                    (Some(db), None) => db,
+                    (None, None) => self.own_database(id),
+                };
+                return Some(self.i18n.msg(&Msg::MenuConsoleIn { place }));
+            }
+            (Action::Explorer(ExplorerAction::Rename), R::Script(_)) => Label::MenuRenameQuery,
+            (Action::Explorer(ExplorerAction::Rename), R::Folder(_) | R::ScriptFolder(_)) => Label::MenuRenameFolder,
+            (Action::Explorer(ExplorerAction::Delete), R::Script(_)) => Label::MenuDeleteQuery,
+            (Action::Explorer(ExplorerAction::Delete), R::Folder(_) | R::ScriptFolder(_)) => Label::MenuDeleteFolder,
+            (Action::Explorer(ExplorerAction::Delete), R::Profile(_)) => Label::MenuDeleteProfile,
+            (Action::Explorer(ExplorerAction::Move), R::Script(_)) => Label::MenuMoveQuery,
+            (Action::Explorer(ExplorerAction::Move), R::ScriptFolder(_)) => Label::MenuMoveFolder,
+            (Action::Explorer(ExplorerAction::Move), _) => Label::MenuMoveProfile,
+            _ => return None,
+        };
+        Some(self.i18n.label(label))
     }
 
     /// Right click on the explorer at (x, y): select the row there (blank space: the
@@ -351,7 +381,10 @@ impl App {
         let keys =
             |a: Action| self.keymap.hint_keys(a, ctx, self.enhanced_keys).map(|k| keys::label(&k)).unwrap_or_default();
         match item {
-            MenuItem::Action(a) => (self.i18n.label(action::spec(a).label), keys(a)),
+            MenuItem::Action(a) => {
+                let own = (ctx == Ctx::Explorer).then(|| self.explorer_menu_label(a)).flatten();
+                (own.unwrap_or_else(|| self.i18n.label(action::spec(a).label)), keys(a))
+            }
             MenuItem::Scope(scope) => {
                 let label = match scope {
                     MenuScope::Copy(CopyScope::Selection) => self.i18n.label(Label::CopyScopeSelection),

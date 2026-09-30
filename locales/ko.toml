@@ -653,6 +653,15 @@
 "action.explorer.context_menu" = "탐색기: 이 항목의 동작 (메뉴)"
 "action.explorer.new_console_here" = "탐색기: 이 데이터베이스나 스키마에 새 콘솔"
 "keyctx.overlay.context_menu" = "동작 메뉴"
+"menu.console_in" = "{place}에 새 콘솔"
+"menu.rename_query" = "저장된 쿼리 이름 바꾸기"
+"menu.rename_folder" = "폴더 이름 바꾸기"
+"menu.delete_query" = "저장된 쿼리 삭제"
+"menu.delete_folder" = "폴더 삭제"
+"menu.delete_profile" = "연결 프로필 삭제"
+"menu.move_query" = "저장된 쿼리를 폴더로 옮기기"
+"menu.move_folder" = "폴더를 다른 폴더로 옮기기"
+"menu.move_profile" = "연결 프로필을 폴더로 옮기기"
 
 # saved queries, autosave, tab restore, second instance
 "explorer.scripts" = "저장된 쿼리"
