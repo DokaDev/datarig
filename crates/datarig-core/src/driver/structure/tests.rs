@@ -20,6 +20,9 @@ fn index(name: &str, columns: &[&str], unique: bool, predicate: Option<&str>) ->
         columns: names(columns),
         options: Vec::new(),
         include: Vec::new(),
+        // An expression is no column.
+        key_columns: columns.iter().map(|c| (!c.contains('(')).then(|| c.to_string())).collect(),
+        include_columns: Vec::new(),
         unique,
         method: "btree".into(),
         predicate: predicate.map(str::to_string),
@@ -78,6 +81,53 @@ fn marks_read_the_keys_as_the_key_catalog_does() {
     assert_eq!(s.count(StructureGroup::PrimaryKey), 1);
     assert_eq!(s.count(StructureGroup::Indexes), 4);
     assert_eq!(s.count(StructureGroup::Triggers), 0);
+}
+
+#[test]
+fn item_columns_follow_each_item() {
+    use StructureGroup::*;
+    let mut s = TableStructure::new(RelationKind::Table);
+    s.columns = ["id", "a", "b"].map(col).to_vec();
+    s.primary_key =
+        Some(KeyConstraint { name: "t_pkey".into(), columns: names(&["b", "a"]), definition: String::new() });
+    s.foreign_keys.push(ForeignKey {
+        name: "t_fkey".into(),
+        columns: names(&["a", "b"]),
+        ref_schema: "s".into(),
+        ref_table: "o".into(),
+        ref_columns: names(&["x", "y"]),
+        on_delete: FkAction::NoAction,
+        on_update: FkAction::NoAction,
+        definition: String::new(),
+    });
+    let mut x = index("t_idx", &["\"a\"", "lower(b)"], false, None);
+    x.key_columns[0] = Some("a".into());
+    x.options = names(&["DESC", ""]);
+    x.include = names(&["id"]);
+    x.include_columns = names(&["id"]);
+    s.indexes.push(x);
+    s.checks.push(CheckConstraint {
+        name: "t_check".into(),
+        expression: "a < b".into(),
+        columns: names(&["a", "b"]),
+        definition: String::new(),
+    });
+    let text = |g, k| s.item_columns(g, k).into_iter().map(|c| c.text).collect::<Vec<_>>();
+    assert_eq!(text(PrimaryKey, 0), ["b", "a"]);
+    assert_eq!(text(CheckConstraints, 0), ["a", "b"]);
+    let fk = s.item_columns(ForeignKeys, 0);
+    assert_eq!(fk.iter().map(|c| c.references.as_deref()).collect::<Vec<_>>(), [Some("x"), Some("y")]);
+    let idx = s.item_columns(Indexes, 0);
+    assert_eq!(text(Indexes, 0), ["a", "lower(b)", "id"], "a column by its name, unquoted");
+    assert_eq!(idx.iter().map(|c| c.column.as_deref()).collect::<Vec<_>>(), [Some("a"), None, Some("id")]);
+    assert_eq!(
+        idx.iter().map(|c| (c.options.as_str(), c.include)).collect::<Vec<_>>(),
+        [("DESC", false), ("", false), ("", true)]
+    );
+    for (g, k) in [(Columns, 0), (Triggers, 0), (Indexes, 1), (UniqueConstraints, 0)] {
+        assert!(s.item_columns(g, k).is_empty(), "{g:?} {k}");
+    }
+    assert_eq!(s.column("b").map(|c| c.name.as_str()), Some("b"));
 }
 
 #[test]

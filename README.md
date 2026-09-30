@@ -42,7 +42,11 @@ Everything below works today, with PostgreSQL.
   table), Indexes (columns or expressions with their order, operator class and collation, as in
   `(created DESC)`, `UNIQUE`, method, partial predicate, whether a key or constraint owns it),
   Unique and Check Constraints and Triggers (timing, events with the columns of `UPDATE OF`,
-  row or statement, `WHEN` condition, function, disabled). Views show their columns and
+  row or statement, `WHEN` condition, function, disabled). Each key, index and check (one that
+  reads columns) opens to `Columns (n)`, which lists the columns it covers in its order, each as
+  the Columns group shows it: an index key with its order, operator class and collation, an
+  expression key as its text, the `INCLUDE` columns last and marked, a foreign key's columns
+  with the column each references (`user_id → users.id`). Views show their columns and
   triggers, materialized views their columns and indexes. The groups start closed, one line
   each (`Columns (27)`, `Primary Key`, `Foreign Keys (5)`); what you open in a table stays open
   when it closes and opens again, for the session. A group with nothing in it is dim,

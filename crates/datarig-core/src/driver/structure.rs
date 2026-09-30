@@ -96,6 +96,34 @@ impl Index {
     }
 }
 
+/// One of the columns a key, an index or a check covers, as the explorer lists them under it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ItemColumn {
+    /// The table's column, by name; `None` for an index key that is an expression.
+    pub column: Option<String>,
+    /// The column's name, or the expression.
+    pub text: String,
+    /// An index key's collation, operator class and order beyond the defaults (`DESC`); empty
+    /// when it has none.
+    pub options: String,
+    /// A column an index only carries (`INCLUDE`).
+    pub include: bool,
+    /// The column a foreign key's column references.
+    pub references: Option<String>,
+}
+
+impl ItemColumn {
+    fn column(name: &str) -> Self {
+        Self {
+            column: Some(name.to_string()),
+            text: name.to_string(),
+            options: String::new(),
+            include: false,
+            references: None,
+        }
+    }
+}
+
 /// A primary key or a unique constraint.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeyConstraint {
@@ -153,6 +181,11 @@ pub struct Index {
     pub options: Vec<String>,
     /// Columns it only carries (`INCLUDE`).
     pub include: Vec<String>,
+    /// For each key, the table's column it is, by name as the catalog has it (unquoted), or
+    /// `None` for an expression.
+    pub key_columns: Vec<Option<String>>,
+    /// The table's columns of `include`, by name.
+    pub include_columns: Vec<String>,
     pub unique: bool,
     /// Its access method (`btree`, `gin`, …).
     pub method: String,
@@ -171,6 +204,8 @@ pub struct CheckConstraint {
     pub name: String,
     /// The condition (`price >= 0::numeric`).
     pub expression: String,
+    /// The table's columns the condition reads, in the catalog's order.
+    pub columns: Vec<String>,
     pub definition: String,
 }
 
@@ -315,6 +350,53 @@ impl TableStructure {
             fk: self.foreign_keys.iter().any(|f| has(&f.columns)),
             unique: unique_index || self.unique_constraints.iter().any(|u| has(&u.columns)),
         }
+    }
+
+    /// The columns item `k` of group `g` covers, in its order: a key's or a check's columns, a
+    /// foreign key's with the column each references, an index's keys (each with its options)
+    /// then the columns it only carries. Columns and triggers have none.
+    pub fn item_columns(&self, g: StructureGroup, k: usize) -> Vec<ItemColumn> {
+        let plain = |cols: &[String]| cols.iter().map(|c| ItemColumn::column(c)).collect();
+        match g {
+            StructureGroup::PrimaryKey => self.primary_key.as_ref().map(|p| plain(&p.columns)).unwrap_or_default(),
+            StructureGroup::UniqueConstraints => {
+                self.unique_constraints.get(k).map(|u| plain(&u.columns)).unwrap_or_default()
+            }
+            StructureGroup::CheckConstraints => self.checks.get(k).map(|c| plain(&c.columns)).unwrap_or_default(),
+            StructureGroup::ForeignKeys => self
+                .foreign_keys
+                .get(k)
+                .map(|f| {
+                    f.columns
+                        .iter()
+                        .enumerate()
+                        .map(|(m, c)| ItemColumn { references: f.ref_columns.get(m).cloned(), ..ItemColumn::column(c) })
+                        .collect()
+                })
+                .unwrap_or_default(),
+            StructureGroup::Indexes => {
+                let Some(x) = self.indexes.get(k) else { return Vec::new() };
+                // A key on a column by the column's name (the definition quotes it as SQL does).
+                let keys = x.columns.iter().enumerate().map(|(m, text)| {
+                    let column = x.key_columns.get(m).cloned().flatten();
+                    ItemColumn {
+                        text: column.clone().unwrap_or_else(|| text.clone()),
+                        column,
+                        options: x.options.get(m).cloned().unwrap_or_default(),
+                        include: false,
+                        references: None,
+                    }
+                });
+                let include = x.include_columns.iter().map(|c| ItemColumn { include: true, ..ItemColumn::column(c) });
+                keys.chain(include).collect()
+            }
+            StructureGroup::Columns | StructureGroup::Triggers => Vec::new(),
+        }
+    }
+
+    /// Column `name`.
+    pub fn column(&self, name: &str) -> Option<&StructureColumn> {
+        self.columns.iter().find(|c| c.name == name)
     }
 
     fn is_column(&self, name: &str) -> bool {

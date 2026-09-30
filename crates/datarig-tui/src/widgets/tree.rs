@@ -4,8 +4,9 @@
 //! line shows. With a driver that reads a table's
 //! structure (`Capabilities::structure`) an open object shows its groups
 //! (Columns, Primary Key, Foreign Keys, Indexes, Unique and Check Constraints, Triggers: those
-//! of its kind, an empty one dim and without a count), read once when it first opens and kept
-//! ([`Tree::structures`]); without it, its columns from the profile's completion catalog. The
+//! of its kind, an empty one dim and without a count; a key, an index or a check opens to the
+//! `Columns` it covers), read once when it first opens and kept ([`Tree::structures`]); without
+//! it, its columns from the profile's completion catalog. The
 //! explorer ([`crate::app::explorer`]) shows it under the profile's node and owns the
 //! selection; this is the model and the text of each node.
 
@@ -57,19 +58,25 @@ pub enum Structure {
     Failed(String),
 }
 
-/// An object whose structure was asked for: the structure, and which of its groups and items
-/// are open (kept while the object closes, and while it is read again).
+/// An object whose structure was asked for: the structure, and which of its groups, items and
+/// items' `Columns` are open (kept while the object closes, and while it is read again).
 #[derive(Clone, Debug)]
 pub struct ObjectView {
     pub structure: Structure,
     pub open_groups: BTreeSet<StructureGroup>,
     pub open_items: BTreeSet<(StructureGroup, usize)>,
+    pub open_columns: BTreeSet<(StructureGroup, usize)>,
 }
 
 impl ObjectView {
     /// Loading, every group closed: the object first shows the lines of its groups.
     fn new() -> Self {
-        Self { structure: Structure::Loading, open_groups: BTreeSet::new(), open_items: BTreeSet::new() }
+        Self {
+            structure: Structure::Loading,
+            open_groups: BTreeSet::new(),
+            open_items: BTreeSet::new(),
+            open_columns: BTreeSet::new(),
+        }
     }
 
     /// The structure, once read.
@@ -81,14 +88,19 @@ impl ObjectView {
     }
 }
 
-/// How many lines item `k` of group `g` opens to: a primary key its columns, a foreign key
-/// the line of what it references; the others none.
+/// How many lines item `k` of group `g` opens to before its `Columns`: a foreign key the line
+/// of what it references; the others none.
 pub fn item_details(s: &TableStructure, g: StructureGroup, k: usize) -> usize {
     match g {
-        StructureGroup::PrimaryKey => s.primary_key.as_ref().map_or(0, |p| p.columns.len()),
         StructureGroup::ForeignKeys => usize::from(k < s.foreign_keys.len()),
         _ => 0,
     }
+}
+
+/// Whether item `k` of group `g` opens at all: to its details, or to the columns it covers
+/// (a key, an index, a check that reads columns).
+fn item_opens(s: &TableStructure, g: StructureGroup, k: usize) -> bool {
+    item_details(s, g, k) > 0 || !s.item_columns(g, k).is_empty()
 }
 
 /// Where a foreign key's table is (the explorer's jump).
@@ -118,8 +130,13 @@ pub enum Node {
     StructGroup(usize, Group, usize, StructureGroup),
     /// Item `k` of a group (a column, a key, an index, …).
     StructItem(usize, Group, usize, StructureGroup, usize),
-    /// Line `m` under an open item (a primary key's column, a foreign key's reference).
+    /// Line `m` under an open item (a foreign key's reference).
     StructDetail(usize, Group, usize, StructureGroup, usize, usize),
+    /// `Columns (n)` under an open item: the columns it covers
+    /// ([`TableStructure::item_columns`]).
+    StructColumns(usize, Group, usize, StructureGroup, usize),
+    /// Column `m` of an open item's open `Columns`.
+    StructColumn(usize, Group, usize, StructureGroup, usize, usize),
     /// An open object whose structure is being read, or why it could not be.
     StructNote(usize, Group, usize),
     /// Loading the schemas (`None`) or a schema's objects.
@@ -206,6 +223,8 @@ impl Tree {
             | Node::StructGroup(i, _, _, _)
             | Node::StructItem(i, _, _, _, _)
             | Node::StructDetail(i, _, _, _, _, _)
+            | Node::StructColumns(i, _, _, _, _)
+            | Node::StructColumn(i, _, _, _, _, _)
             | Node::StructNote(i, _, _)
             | Node::Empty(i)
             | Node::Error(i)
@@ -283,7 +302,9 @@ impl Tree {
         out
     }
 
-    /// The rows of open object `(i, g, j)`, `schema.name`, below it: the groups of its kind, each open one with its items (and an open item its lines).
+    /// The rows of open object `(i, g, j)`, `schema.name`, below it: the groups of its kind,
+    /// each open one with its items, an open item with its lines and its `Columns` (open: the
+    /// columns).
     fn push_structure(&self, out: &mut Vec<Row>, (i, g, j): (usize, Group, usize), schema: &str, name: &str) {
         let view = self.structures.get(&(schema.to_string(), name.to_string()));
         let Some((view, st)) = view.and_then(|v| v.loaded().map(|s| (v, s))) else {
@@ -296,9 +317,18 @@ impl Tree {
             }
             for k in 0..st.count(sg) {
                 out.push(Row { depth: 4, node: Node::StructItem(i, g, j, sg, k) });
-                if view.open_items.contains(&(sg, k)) {
-                    let lines = item_details(st, sg, k);
-                    out.extend((0..lines).map(|m| Row { depth: 5, node: Node::StructDetail(i, g, j, sg, k, m) }));
+                if !view.open_items.contains(&(sg, k)) {
+                    continue;
+                }
+                let lines = item_details(st, sg, k);
+                out.extend((0..lines).map(|m| Row { depth: 5, node: Node::StructDetail(i, g, j, sg, k, m) }));
+                let columns = st.item_columns(sg, k).len();
+                if columns == 0 {
+                    continue;
+                }
+                out.push(Row { depth: 5, node: Node::StructColumns(i, g, j, sg, k) });
+                if view.open_columns.contains(&(sg, k)) {
+                    out.extend((0..columns).map(|m| Row { depth: 6, node: Node::StructColumn(i, g, j, sg, k, m) }));
                 }
             }
         }
@@ -471,6 +501,18 @@ impl Tree {
                     v.open_items.remove(&(sg, k));
                 }
             }
+            Node::StructColumns(i, g, j, sg, k) => {
+                if self.is_expanded(node).is_none() {
+                    return TreeAction::None;
+                }
+                let Some(v) = self.object_view_mut(i, g, j) else { return TreeAction::None };
+                let open = v.open_columns.contains(&(sg, k));
+                if want.unwrap_or(!open) {
+                    v.open_columns.insert((sg, k));
+                } else {
+                    v.open_columns.remove(&(sg, k));
+                }
+            }
             _ => {}
         }
         TreeAction::None
@@ -490,14 +532,18 @@ impl Tree {
             }
             Node::StructItem(i, g, j, sg, k) => {
                 let v = self.object_view(i, g, j)?;
-                (item_details(v.loaded()?, sg, k) > 0).then(|| v.open_items.contains(&(sg, k)))
+                item_opens(v.loaded()?, sg, k).then(|| v.open_items.contains(&(sg, k)))
+            }
+            Node::StructColumns(i, g, j, sg, k) => {
+                let v = self.object_view(i, g, j)?;
+                (!v.loaded()?.item_columns(sg, k).is_empty()).then(|| v.open_columns.contains(&(sg, k)))
             }
             _ => None,
         }
     }
 
-    /// Enter / double-click: an object opens, a foreign key (or its line) goes to the table it
-    /// references, anything else toggles.
+    /// Enter / double-click: an object opens, a foreign key (its line, or one of its columns)
+    /// goes to the table it references, anything else toggles.
     pub fn activate(&mut self, node: Node) -> TreeAction {
         match node {
             Node::Object(i, g, j) => match self.object_name(i, g, j) {
@@ -505,7 +551,8 @@ impl Tree {
                 None => TreeAction::None,
             },
             Node::StructItem(i, g, j, StructureGroup::ForeignKeys, k)
-            | Node::StructDetail(i, g, j, StructureGroup::ForeignKeys, k, _) => {
+            | Node::StructDetail(i, g, j, StructureGroup::ForeignKeys, k, _)
+            | Node::StructColumn(i, g, j, StructureGroup::ForeignKeys, k, _) => {
                 let fk = self.object_view(i, g, j).and_then(|v| v.loaded()).and_then(|s| s.foreign_keys.get(k));
                 match fk {
                     Some(f) => TreeAction::Reveal { schema: f.ref_schema.clone(), name: f.ref_table.clone() },
@@ -526,6 +573,8 @@ impl Tree {
                 Node::StructGroup(i, g, j, _)
                 | Node::StructItem(i, g, j, _, _)
                 | Node::StructDetail(i, g, j, _, _, _)
+                | Node::StructColumns(i, g, j, _, _)
+                | Node::StructColumn(i, g, j, _, _, _)
                 | Node::StructNote(i, g, j),
             ) => Some((i, g, j)),
             _ => None,
@@ -544,6 +593,8 @@ impl Tree {
                 | Node::StructGroup(i, _, _, _)
                 | Node::StructItem(i, _, _, _, _)
                 | Node::StructDetail(i, _, _, _, _, _)
+                | Node::StructColumns(i, _, _, _, _)
+                | Node::StructColumn(i, _, _, _, _, _)
                 | Node::StructNote(i, _, _)
                 | Node::Loading(Some(i))
                 | Node::Empty(i)
@@ -583,6 +634,8 @@ impl Tree {
             | Node::StructGroup(..)
             | Node::StructItem(..)
             | Node::StructDetail(..)
+            | Node::StructColumns(..)
+            | Node::StructColumn(..)
             | Node::StructNote(..) => (String::new(), Style::new()),
             Node::Loading(_) => (i18n.label(Label::TreeLoading).to_string(), dim),
             Node::Empty(_) => (i18n.label(Label::TreeEmpty).to_string(), dim),

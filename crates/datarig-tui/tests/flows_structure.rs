@@ -139,7 +139,8 @@ fn an_open_table_shows_its_structure_read_once() {
     h.goto("users");
     let status = h.status(200, 45);
     assert!(status.contains("users  ~11k rows · ~4.2 MB") && !status.contains("users_"), "{status}");
-    // The primary key opens to its columns.
+    // The primary key opens to its Columns, closed, which open to each column as the table's
+    // Columns group has it.
     h.explore("local-pg");
     h.goto("Primary Key");
     h.key(KeyCode::Char('l'));
@@ -147,7 +148,10 @@ fn an_open_table_shows_its_structure_read_once() {
     assert!(h.explorer_line().ends_with("▸ users_pkey"), "{}", h.explorer_line());
     h.key(KeyCode::Char('l'));
     h.keys("j");
-    assert_eq!(h.explorer_line().trim(), "id");
+    assert_eq!(h.explorer_line().trim(), "▸ Columns (1)");
+    h.key(KeyCode::Char('l'));
+    h.keys("j");
+    assert_eq!(h.explorer_line().trim(), "PK id  bigint, not null, default nextval('shop.users_id_seq'::regclass)");
     // Closed and opened again: nothing is asked, and what was open is open.
     h.explore("local-pg");
     h.goto("users");
@@ -688,4 +692,256 @@ fn estimates_are_worded_in_the_ui_language() {
     assert_ne!(ko, en);
     let l = line_of(&mut h, "users");
     assert!(l.ends_with(&format!("users  {ko} · 1.6 MB")), "{l:?}");
+}
+
+/// `shop.order_items` with keys of several columns: a composite primary key, two foreign keys
+/// (one to another schema), a unique constraint, an index on a column with its collation and
+/// operator class, an expression and a column in `DESC NULLS LAST` order that carries another
+/// (`INCLUDE`), a check on two columns and one on none.
+fn order_items_structure() -> TableStructure {
+    use datarig_core::driver::structure::*;
+    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    let col = |name: &str, ty: &str, not_null: bool, default: Option<&str>| StructureColumn {
+        name: name.into(),
+        type_name: ty.into(),
+        not_null,
+        default: default.map(str::to_string),
+        fill: ColumnFill::Default,
+    };
+    let mut t = TableStructure::new(RelationKind::Table);
+    t.columns = vec![
+        col("order_id", "bigint", true, None),
+        col("line_no", "integer", true, None),
+        col("product_id", "bigint", true, None),
+        col("quantity", "integer", true, Some("1")),
+        col("sku", "text", false, None),
+    ];
+    t.primary_key = Some(KeyConstraint {
+        name: "order_items_pkey".into(),
+        columns: s(&["order_id", "line_no"]),
+        definition: String::new(),
+    });
+    let fk = |name: &str, cols: &[&str], schema: &str, table: &str, refs: &[&str]| ForeignKey {
+        name: name.into(),
+        columns: s(cols),
+        ref_schema: schema.into(),
+        ref_table: table.into(),
+        ref_columns: s(refs),
+        on_delete: FkAction::NoAction,
+        on_update: FkAction::NoAction,
+        definition: String::new(),
+    };
+    t.foreign_keys = vec![
+        fk("order_items_line_fkey", &["order_id", "line_no"], "sales", "lines", &["order_id", "no"]),
+        fk("order_items_product_fkey", &["product_id"], "shop", "products", &["id"]),
+    ];
+    t.unique_constraints = vec![KeyConstraint {
+        name: "order_items_sku_key".into(),
+        columns: s(&["sku", "product_id"]),
+        definition: String::new(),
+    }];
+    t.indexes = vec![Index {
+        name: "order_items_lookup".into(),
+        columns: s(&["sku", "lower(sku)", "quantity"]),
+        options: s(&["COLLATE \"C\" text_pattern_ops", "DESC", "DESC NULLS LAST"]),
+        include: s(&["line_no"]),
+        key_columns: vec![Some("sku".into()), None, Some("quantity".into())],
+        include_columns: s(&["line_no"]),
+        unique: false,
+        method: "btree".into(),
+        predicate: None,
+        primary: false,
+        constraint: false,
+        definition: String::new(),
+    }];
+    let check = |name: &str, expression: &str, cols: &[&str]| CheckConstraint {
+        name: name.into(),
+        expression: expression.into(),
+        columns: s(cols),
+        definition: String::new(),
+    };
+    t.checks = vec![
+        check("order_items_always", "true", &[]),
+        check("order_items_positive", "quantity > 0 AND line_no > 0", &["line_no", "quantity"]),
+    ];
+    t
+}
+
+/// `order_items` open with every group of keys open (their items closed).
+fn order_items_open(icons: bool) -> Harness {
+    let mut h = shop_open(icons);
+    h.goto("order_items");
+    h.key(KeyCode::Char('l'));
+    h.db(structure("shop", "order_items", order_items_structure()));
+    for g in ["Primary Key", "Foreign Keys", "Indexes", "Unique Constraints", "Check Constraints"] {
+        h.goto(g);
+        h.key(KeyCode::Char('l'));
+    }
+    h.explore("local-pg");
+    h
+}
+
+/// Open the item on the line with `item`, then its Columns (the line after its own lines).
+fn open_columns(h: &mut Harness, item: &str) {
+    h.explore("local-pg");
+    h.goto(item);
+    h.key(KeyCode::Char('l'));
+    h.goto("Columns (");
+    h.key(KeyCode::Char('l'));
+}
+
+/// Each key, index and check opens to `Columns (n)`, closed, which opens to the columns it
+/// covers in its order, each as the table's Columns group shows it (marks, `type, not null,
+/// default …`): an index key with its collation, operator class and order, an expression's key
+/// as its text, the columns it carries last, a foreign key's with the column each references
+/// (its schema named when it is another). A foreign key keeps its line of what it references;
+/// a check that reads no column does not open. The status bar shows each line whole.
+#[test]
+fn keys_indexes_and_checks_list_the_columns_they_cover() {
+    let mut h = order_items_open(false);
+    h.goto("order_items_lookup");
+    h.key(KeyCode::Char('l'));
+    h.keys("j");
+    assert_eq!(h.explorer_line().trim(), "▸ Columns (4)", "closed at first");
+    h.key(KeyCode::Char('l'));
+    let tree = lines(&mut h);
+    let at = tree.iter().position(|l| l.trim() == "▾ Columns (4)").unwrap();
+    let got: Vec<&str> = tree[at + 1..at + 5].iter().map(|l| l.trim()).collect();
+    assert_eq!(
+        got,
+        [
+            "UQ sku  text · COLLATE \"C\" text_pattern_ops",
+            "lower(sku)  expression · DESC",
+            "quantity  integer, not null, default 1 · DESC NULLS LAST",
+            "PK FK line_no  integer, not null · include",
+        ]
+    );
+    let indent = |l: &str| l.len() - l.trim_start().len();
+    assert_eq!(indent(&tree[at + 1]), indent(&tree[at]) + 4, "a level below its Columns (no arrow)");
+    for (item, want) in [
+        ("order_items_pkey", vec!["PK FK order_id  bigint, not null", "PK FK line_no  integer, not null"]),
+        ("order_items_sku_key", vec!["UQ sku  text", "FK UQ product_id  bigint, not null"]),
+        ("order_items_positive", vec!["PK FK line_no  integer, not null", "quantity  integer, not null, default 1"]),
+        (
+            "order_items_line_fkey",
+            vec![
+                "PK FK order_id → sales.lines.order_id  bigint, not null",
+                "PK FK line_no → sales.lines.no  integer, not null",
+            ],
+        ),
+        ("order_items_product_fkey", vec!["FK UQ product_id → products.id  bigint, not null"]),
+    ] {
+        open_columns(&mut h, item);
+        let tree = lines(&mut h);
+        let at = tree.iter().position(|l| l.contains(item)).unwrap();
+        let cols = tree[at + 1..].iter().position(|l| l.contains("▾ Columns (")).unwrap() + at + 1;
+        let got: Vec<&str> = tree[cols + 1..cols + 1 + want.len()].iter().map(|l| l.trim()).collect();
+        assert_eq!(got, want, "{item}");
+        assert_eq!(tree[cols].trim(), format!("▾ Columns ({})", want.len()), "{item}");
+    }
+    // A foreign key keeps its line of what it references, before its Columns.
+    let tree = lines(&mut h);
+    let at = tree.iter().position(|l| l.contains("order_items_line_fkey")).unwrap();
+    assert_eq!(tree[at + 1].trim(), "order_id, line_no → sales.lines(order_id, no)");
+    assert_eq!(tree[at + 2].trim(), "▾ Columns (2)");
+    // A check on no column has nothing to open.
+    h.explore("local-pg");
+    h.goto("order_items_always");
+    assert!(h.explorer_line().ends_with("  order_items_always  true"), "{}", h.explorer_line());
+    h.key(KeyCode::Char('l'));
+    assert!(!h.explorer_line().contains('▾'));
+    // The status bar has the whole line under the cursor.
+    h.explore("local-pg");
+    h.goto("quantity  integer, not null, default 1 · DESC");
+    let status = h.status(200, 45);
+    assert!(status.contains("quantity  integer, not null, default 1 · DESC NULLS LAST"), "{status}");
+    h.explore("local-pg");
+    h.goto("order_id → sales.lines.order_id");
+    let status = h.status(200, 45);
+    assert!(status.contains("PK FK order_id → sales.lines.order_id  bigint, not null"), "{status}");
+    // Enter on a foreign key's column goes to the table it references, as on the key.
+    h.explore("local-pg");
+    h.goto("product_id → products.id");
+    h.sent();
+    h.key(KeyCode::Enter);
+    let sent = h.sent();
+    assert!(h.status(160, 45).contains("shop.products is not in the explorer"), "{sent:?}");
+}
+
+/// What is open under an item is remembered with the table's structure: closing the item, the
+/// group or the table and opening it again shows its Columns as they were; another table's
+/// start closed; `r` keeps them. Closing a Columns hides its lines.
+#[test]
+fn open_columns_are_remembered_per_table() {
+    let mut h = order_items_open(false);
+    open_columns(&mut h, "order_items_lookup");
+    open_columns(&mut h, "order_items_pkey");
+    h.sent();
+    let open = |h: &mut Harness| lines(h).iter().filter(|l| l.contains("▾ Columns (")).count();
+    assert_eq!(open(&mut h), 2);
+    // The item closed and opened: its Columns still open.
+    h.explore("local-pg");
+    h.goto("order_items_lookup");
+    h.key(KeyCode::Char('h'));
+    assert_eq!(open(&mut h), 1);
+    h.key(KeyCode::Char('l'));
+    assert_eq!(open(&mut h), 2);
+    // The table closed and opened: the same (nothing asked again).
+    h.explore("local-pg");
+    h.goto("order_items");
+    h.key(KeyCode::Char('h'));
+    h.key(KeyCode::Char('l'));
+    assert!(asked(&h.sent()).is_empty());
+    assert_eq!(open(&mut h), 2);
+    assert!(lines(&mut h).iter().any(|l| l.trim() == "lower(sku)  expression · DESC"));
+    // Read again: still open.
+    h.keys("r");
+    assert_eq!(asked(&h.sent()), ["shop.order_items"]);
+    h.db(structure("shop", "order_items", order_items_structure()));
+    assert_eq!(open(&mut h), 2);
+    // Another table's are its own: closed.
+    h.explore("local-pg");
+    h.goto("users");
+    h.key(KeyCode::Char('l'));
+    h.db(structure("shop", "users", users_structure()));
+    h.goto("Indexes");
+    h.key(KeyCode::Char('l'));
+    h.goto("users_email_key");
+    h.key(KeyCode::Char('l'));
+    h.keys("j");
+    assert_eq!(h.explorer_line().trim(), "▸ Columns (1)");
+    assert_eq!(open(&mut h), 2, "order_items' only");
+    // A Columns closed: its lines go.
+    h.explore("local-pg");
+    h.goto("▾ Columns (4)");
+    h.key(KeyCode::Char('h'));
+    assert!(h.explorer_line().ends_with("▸ Columns (4)"));
+    assert!(!lines(&mut h).iter().any(|l| l.contains("lower(sku)  expression")));
+}
+
+/// Icons on: a Columns line has the Columns group's icon, each column its key marks or its
+/// type's icon, an expression the icon of an unknown type. Drawn, English, icons on and off.
+#[test]
+fn key_columns_icons_on_and_off() {
+    let mut h = order_items_open(true);
+    open_columns(&mut h, "order_items_lookup");
+    open_columns(&mut h, "order_items_line_fkey");
+    for want in [
+        "\u{f0835} Columns (4)",
+        "\u{f0832} lower(sku)  expression · DESC",
+        "\u{f03a0} quantity  integer",
+        "\u{f0835} Columns (2)",
+        "order_id → sales.lines.order_id  bigint",
+    ] {
+        assert!(lines(&mut h).iter().any(|l| l.contains(want)), "{want:?}:\n{}", lines(&mut h).join("\n"));
+    }
+    for icons in [false, true] {
+        let mut h = order_items_open(icons);
+        open_columns(&mut h, "order_items_line_fkey");
+        open_columns(&mut h, "order_items_lookup");
+        h.explore("local-pg");
+        h.goto("order_items_line_fkey");
+        let name = format!("key_columns_{}_en_120x40", if icons { "icons" } else { "text" });
+        insta::assert_snapshot!(name, h.draw(120, 40).backend());
+    }
 }
