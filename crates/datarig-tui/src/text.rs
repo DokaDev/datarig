@@ -89,6 +89,23 @@ pub fn clip(s: &str, w: usize) -> String {
     if width(s) <= w { s.to_string() } else { truncate_exact(s, w).trim_end_matches(' ').to_string() }
 }
 
+/// Shorten `s` to at most `w` columns, keeping its end when that is a short last part: a line
+/// that ends with what to do (`(try again)`) or what it calls (`· shop.touch()`) is cut in its
+/// middle, which a cut at the end would lose. The end kept is the last ` · ` part, or the last
+/// ` (…)` when `s` ends with it, when it takes at most two thirds of `w`; without one `s` is cut
+/// at its end ([`clip`]).
+pub fn clip_middle(s: &str, w: usize) -> String {
+    if width(s) <= w {
+        return s.to_string();
+    }
+    let paren = s.ends_with(')').then(|| s.rfind(" (")).flatten();
+    let at = [s.rfind(" · "), paren].into_iter().flatten().max();
+    match at.map(|i| s.split_at(i)) {
+        Some((head, tail)) if width(tail) <= w * 2 / 3 => format!("{}{tail}", truncate_exact(head, w - width(tail))),
+        _ => clip(s, w),
+    }
+}
+
 /// Word-agnostic hard wrap used by the cell viewer: keeps explicit newlines, expands tabs
 /// to 4 spaces, and breaks lines at grapheme boundaries when they exceed `w` columns.
 pub fn wrap(s: &str, w: usize) -> Vec<String> {

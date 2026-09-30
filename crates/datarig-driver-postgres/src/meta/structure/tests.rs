@@ -43,6 +43,8 @@ fn trigger_types_decode_from_their_bits() {
             tgtype,
             enabled: enabled.into(),
             function: "s.f".into(),
+            update_columns: None,
+            when: false,
             definition: String::new(),
         })
     };
@@ -70,4 +72,48 @@ fn foreign_key_actions_decode() {
         ["a", "r", "c", "n", "d"].map(fk_action),
         [FkAction::NoAction, FkAction::Restrict, FkAction::Cascade, FkAction::SetNull, FkAction::SetDefault]
     );
+}
+
+#[test]
+fn a_trigger_condition_is_its_when_clause() {
+    let when = |def: &str| when_condition(def);
+    assert_eq!(
+        when(
+            "CREATE TRIGGER t BEFORE UPDATE OF n ON s.t FOR EACH ROW WHEN (old.n IS DISTINCT FROM new.n) \
+              EXECUTE FUNCTION s.f()"
+        )
+        .as_deref(),
+        Some("old.n IS DISTINCT FROM new.n")
+    );
+    // The words in a quoted name, a literal of the condition and an argument are not the clause.
+    assert_eq!(
+        when(r#"CREATE TRIGGER "a WHEN (b" AFTER INSERT ON "WHEN (" FOR EACH ROW WHEN (new.c <> ') x ('::text) EXECUTE FUNCTION f('WHEN (', 'it''s)')"#)
+            .as_deref(),
+        Some("new.c <> ') x ('::text")
+    );
+    assert_eq!(when("CREATE TRIGGER t AFTER INSERT ON s.t FOR EACH ROW EXECUTE FUNCTION f('a WHEN (b)')"), None);
+    let t = trigger(RawTrigger {
+        name: "t".into(),
+        tgtype: 1 | 16,
+        enabled: "O".into(),
+        function: "s.f".into(),
+        update_columns: Some(vec!["a".into(), "b".into()]),
+        when: true,
+        definition: "CREATE TRIGGER t AFTER UPDATE OF a, b ON s.t FOR EACH ROW WHEN (new.a > 0 AND (new.b > 0)) EXECUTE FUNCTION s.f()"
+            .into(),
+    });
+    assert_eq!(
+        (t.update_columns.as_slice(), t.condition.as_deref()),
+        (["a", "b"].map(String::from).as_slice(), Some("new.a > 0 AND (new.b > 0)"))
+    );
+}
+
+#[test]
+fn index_options_follow_their_columns() {
+    let raw = r#"{"kind":"r","indexes":[{"name":"i","unique":false,"primary":false,"constraint":false,
+        "method":"btree","columns":["created","lower(code)","id"],"options":["DESC","","COLLATE \"C\" text_pattern_ops"],
+        "include":null,"predicate":null,"definition":""}]}"#;
+    let s = parse(raw).unwrap();
+    assert_eq!(s.indexes[0].keys(), ["created DESC", "lower(code)", "id COLLATE \"C\" text_pattern_ops"]);
+    assert_eq!(s.indexes[0].columns, ["created", "lower(code)", "id"], "the columns alone mark the keys");
 }

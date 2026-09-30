@@ -21,3 +21,11 @@ mod route;
 mod values;
 
 pub use connect::PgDriver;
+
+/// The metadata session's catalog statements, for the integration tests' `EXPLAIN`s. Not an
+/// API.
+#[doc(hidden)]
+pub mod catalog_sql {
+    pub use crate::meta::BEGIN_READ;
+    pub use crate::meta::structure::SQL as TABLE_STRUCTURE;
+}
