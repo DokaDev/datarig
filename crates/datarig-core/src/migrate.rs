@@ -25,7 +25,7 @@
 //!
 //! Blocking (the OS may ask the user for permission), so the TUI runs it off its thread.
 
-use crate::config::{self, CONFIG_VERSION, Config, EditorMode, IconsSetting, Profiles, Settings};
+use crate::config::{self, CONFIG_VERSION, Config, IconsSetting, Profiles, Settings};
 use crate::fault::{Fault, FaultKind, KeychainFault};
 use crate::profile::ProfileId;
 use crate::secret::{DefaultSource, SecretStore, SourceKind, StoreError, Unavailable, store_verified};
@@ -38,7 +38,6 @@ pub struct Input {
     pub language: String,
     pub icons: IconsSetting,
     pub theme: String,
-    pub editor_mode: EditorMode,
     pub default_source: DefaultSource,
     pub prefs: config::Prefs,
 }
@@ -50,7 +49,6 @@ impl Input {
             language: config.language.clone(),
             icons: config.icons,
             theme: config.theme.clone(),
-            editor_mode: config.editor_mode,
             default_source: config.default_source,
             prefs: config.prefs,
         }
@@ -93,7 +91,7 @@ pub struct Report {
 
 /// Run the migration against the keychain `store` and the secrets `file`. See the module docs.
 pub fn run(store: &dyn SecretStore, file: &dyn SecretStore, input: Input) -> Report {
-    let Input { mut config, language, icons, theme, editor_mode, default_source, prefs } = input;
+    let Input { mut config, language, icons, theme, default_source, prefs } = input;
     let old_version = config.version;
     let mut report = Report {
         backup: None,
@@ -110,7 +108,7 @@ pub fn run(store: &dyn SecretStore, file: &dyn SecretStore, input: Input) -> Rep
     let save = |config: &Config, version: u32| {
         config::save(
             &path,
-            Settings { version, language: &language, icons, theme: &theme, editor_mode, default_source, prefs },
+            Settings { version, language: &language, icons, theme: &theme, default_source, prefs },
             Some(Profiles { connections: &config.connections, folders: &config.folders, last_used: config.last_used }),
         )
     };

@@ -3,7 +3,6 @@
 mod common;
 
 use common::*;
-use datarig_core::config::EditorMode;
 use datarig_core::driver::DbCommand;
 use datarig_core::i18n::Lang;
 use datarig_tui::widgets::editor::{Editor, Mode};
@@ -79,9 +78,8 @@ fn dragging_past_the_bottom_scrolls() {
 }
 
 #[test]
-fn standard_mode_selects_too_and_ctrl_e_runs_the_selection() {
+fn ctrl_e_runs_a_dragged_selection() {
     let (mut h, at) = editor_with("SELECT 1;\nSELECT 2;\nSELECT 3;");
-    h.app.editor_mode = EditorMode::Standard;
     h.drag(at(0, 0), &[at(1, 8)]);
     assert_eq!(selection(&h).as_deref(), Some("SELECT 1;\nSELECT 2;"));
     h.sent();

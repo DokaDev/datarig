@@ -46,4 +46,4 @@ expression: backend
 "│                                      ││                                                                                                                      │"
 "│                                      ││                                                                                                                      │"
 "╰──────────────────────────────────────╯╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯"
-" NORMAL  local-pg · policy: prod  READ-ONLY  │ Connected to local-pg                        │ Ctrl+E run · Tab next pane · : commands · F1 help · Space more EN "
+" NORMAL  local-pg · policy: prod  READ-ONLY  │ Connected to local-pg               │ i type · Ctrl+E run · Tab next pane · : commands · F1 help · Space more EN "

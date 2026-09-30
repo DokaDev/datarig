@@ -46,4 +46,4 @@ expression: backend
 "│                                      ││                                                                                                                      │"
 "│                                      ││                                                                                                                      │"
 "╰──────────────────────────────────────╯╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯"
-" NORMAL  local-pg · policy: default │ This tab's connection was lost: server closed the connection unexpectedly    │ Ctrl+E run · Tab next pane · : commands EN "
+" NORMAL  local-pg · policy: default │ This tab's connection was lost: server closed the connection unexpectedly        │ i type · Ctrl+E run · Tab next pane EN "

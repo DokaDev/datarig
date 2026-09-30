@@ -271,8 +271,7 @@ impl App {
             }
             _ => {
                 let ctx = m.ctx;
-                let env = self.key_env();
-                if let (Some(Target::Action(a)), _) = self.keymap.resolve_seq(ctx, &[k], env)
+                if let (Some(Target::Action(a)), _) = self.keymap.resolve_seq(ctx, &[k])
                     && self.overlays.menu().is_some_and(|m| m.items.contains(&MenuItem::Action(a)))
                 {
                     self.menu_run(MenuItem::Action(a));

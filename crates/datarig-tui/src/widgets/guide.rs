@@ -116,11 +116,12 @@ pub(crate) fn draw_help(app: &mut App, area: Rect, buf: &mut Buffer) -> Option<(
     };
     let keys_w = rows
         .iter()
-        .filter_map(|r| if let HelpRow::Entry(e) = r { Some(e) } else { None })
-        .map(|e| {
-            let (k, n) = keys_text(&e.keys, &e.editor_keys);
-            width(&k) + if n.is_empty() { 0 } else { width(&n) + 1 }
+        .filter_map(|r| match r {
+            HelpRow::Entry(e) => Some(keys_text(&e.keys, &e.editor_keys)),
+            HelpRow::Key { keys, .. } => Some((keys.clone(), String::new())),
+            HelpRow::Section { .. } => None,
         })
+        .map(|(k, n)| width(&k) + if n.is_empty() { 0 } else { width(&n) + 1 })
         .max()
         .unwrap_or(0)
         .min(iw / 2);
@@ -153,6 +154,12 @@ pub(crate) fn draw_help(app: &mut App, area: Rect, buf: &mut Buffer) -> Option<(
                     let x = inner.x + inner.width - 1 - keys_w.max(width(&n)) as u16;
                     put(buf, x, y, &n, width(&n), Style::new().fg(th.fg_dim).patch(bg));
                 }
+            }
+            HelpRow::Key { keys, label } => {
+                let label_w = iw.saturating_sub(keys_w + 5);
+                put(buf, inner.x + 3, y, &fit(label, label_w, Align::Left), label_w, Style::new().fg(th.fg).patch(bg));
+                let x = inner.x + inner.width - 1 - keys_w as u16;
+                put(buf, x, y, &clip(keys, keys_w), keys_w, Style::new().fg(th.accent).patch(bg));
             }
             HelpRow::Entry(e) => {
                 let fg = if e.enabled { th.fg } else { th.fg_dim };

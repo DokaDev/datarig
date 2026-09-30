@@ -11,7 +11,8 @@ Keys resolve from the current context outwards to `root`; the first binding foun
 - **R**: repeats while the key is held (terminal auto-repeat).
 - **Key guide**: after `Space` a which-key popup lists the keys that may follow (after 300 ms; `Backspace` goes up a level, `Esc` closes). `Space ?` or `F1` open the keyboard help, the same way everywhere (`?` alone is left to vim's backward search). The help is one list: the sections of the current context first and open, every other context closed below (`Enter`/`l`/`h` or a click opens and closes a section); `/` searches all of them. The status bar shows the most relevant keys of the current context.
 - **Commands**: `:` (outside text input) or `Ctrl+K` (everywhere) opens the command line: a popup near the top of the screen, or the last line with `[commands] position = "bottom"` (the settings screen, `:set commands.position=bottom`). It runs the commands listed at the end (`:conn <profile>`, `:set <setting>=<value>`, …) and finds every action by name; see the tables at the end.
-- **Reserved** keys belong to a widget (vim, standard editing, a dialog) or to an action that is not implemented yet. They cannot be remapped.
+- **Vim**: the editor has vim keys. `i` starts typing and `Esc` stops (the hint line says so). Implemented: the motions `h j k l w b e 0 ^ $ gg G`, the arrows, `Home` and `End`, with counts (`5j`, `10G`); the operators `d c y` with any of them, doubled for whole lines (`dd cc yy`), counts before and after (`3dd`, `d2w`, `2d3w`); `x X s S D C Y p P u Ctrl+R`; `i a I A o O`; Visual mode by character (`v`) and by line (`V`) with `y d x c`, `Y D X C S` (whole lines) and `o` (the other end); in Insert mode `Ctrl+W` (the word before the cursor), `Ctrl+U` (the line before the cursor) and `Enter` keeping the indent. One command is one undo step. There is one register, not the clipboard. A paste from the terminal goes in at the cursor in every mode (over the selection in Visual mode). The other reserved vim keys do nothing yet.
+- **Reserved** keys belong to a widget (vim, a dialog) or to an action that is not implemented yet. They cannot be remapped.
 
 Protected keys (no inner context may hide them): `Ctrl+Q` `Ctrl+K` `Ctrl+E` `Ctrl+Enter` `Ctrl+S` `Ctrl+T` `Ctrl+O` `Ctrl+G` `F1` `F6` `Shift+F6` `Ctrl+PageDown` `Ctrl+PageUp` `Space`.
 
@@ -253,19 +254,19 @@ The welcome panel shown while there is no connection profile. Inside `nav`.
 
 ## `editor.vim.normal` [editor]
 
-Query editor, `[editor] mode = "vim"`, Normal mode. Inside `nav`.
+Query editor, vim Normal mode (`i` starts typing). Inside `nav`.
 
-Reserved — vim: `h` `j` `k` `l` `w` `W` `b` `B` `e` `E` `g e` `0` `^` `$` `g g` `G` `f` `F` `t` `T` `;` `,` `%` `{` `}` `(` `)` `[` `]` `H` `M` `L` `Left` `Right` `Up` `Down` `Home` `End` `d` `c` `y` `>` `<` `=` `g ~` `g u` `g U` `1` `2` `3` `4` `5` `6` `7` `8` `9` `.` `"` `x` `X` `s` `S` `r` `R` `p` `P` `u` `Ctrl+R` `J` `~` `i` `a` `I` `A` `o` `O` `v` `V` `Ctrl+V` `Esc` `/` `?` `n` `N` `*` `#` `Ctrl+D` `Ctrl+U` `Ctrl+F` `Ctrl+B` `z z` `z t` `z b` `q`
+Reserved — vim: `h` `j` `k` `l` `w` `W` `b` `B` `e` `E` `g e` `0` `^` `$` `g g` `G` `f` `F` `t` `T` `;` `,` `%` `{` `}` `(` `)` `[` `]` `H` `M` `L` `Left` `Right` `Up` `Down` `Home` `End` `d` `c` `y` `>` `<` `=` `g ~` `g u` `g U` `1` `2` `3` `4` `5` `6` `7` `8` `9` `.` `"` `x` `X` `D` `C` `Y` `s` `S` `r` `R` `p` `P` `u` `Ctrl+R` `J` `~` `i` `a` `I` `A` `o` `O` `v` `V` `Ctrl+V` `Esc` `/` `?` `n` `N` `*` `#` `Ctrl+D` `Ctrl+U` `Ctrl+F` `Ctrl+B` `z z` `z t` `z b` `q`
 
 ## `editor.vim.visual` [editor]
 
-Query editor, `[editor] mode = "vim"`, Visual mode. Inside `nav`.
+Query editor, vim Visual mode (`v` by character, `V` by line). Inside `nav`.
 
-Reserved — vim: `h` `j` `k` `l` `w` `W` `b` `B` `e` `E` `g e` `0` `^` `$` `g g` `G` `f` `F` `t` `T` `;` `,` `%` `{` `}` `(` `)` `[` `]` `H` `M` `L` `Left` `Right` `Up` `Down` `Home` `End` `d` `c` `y` `>` `<` `=` `g ~` `g u` `g U` `1` `2` `3` `4` `5` `6` `7` `8` `9` `.` `"` `x` `X` `s` `S` `r` `R` `p` `P` `u` `Ctrl+R` `J` `~` `i` `a` `I` `A` `o` `O` `v` `V` `Ctrl+V` `Esc` `/` `?` `n` `N` `*` `#` `Ctrl+D` `Ctrl+U` `Ctrl+F` `Ctrl+B` `z z` `z t` `z b` `q`
+Reserved — vim: `h` `j` `k` `l` `w` `W` `b` `B` `e` `E` `g e` `0` `^` `$` `g g` `G` `f` `F` `t` `T` `;` `,` `%` `{` `}` `(` `)` `[` `]` `H` `M` `L` `Left` `Right` `Up` `Down` `Home` `End` `d` `c` `y` `>` `<` `=` `g ~` `g u` `g U` `1` `2` `3` `4` `5` `6` `7` `8` `9` `.` `"` `x` `X` `D` `C` `Y` `s` `S` `r` `R` `p` `P` `u` `Ctrl+R` `J` `~` `i` `a` `I` `A` `o` `O` `v` `V` `Ctrl+V` `Esc` `/` `?` `n` `N` `*` `#` `Ctrl+D` `Ctrl+U` `Ctrl+F` `Ctrl+B` `z z` `z t` `z b` `q`
 
 ## `editor.vim.insert` [editor] [text]
 
-Query editor, `[editor] mode = "vim"`, Insert mode. Inside `workspace`.
+Query editor, vim Insert mode: typing (`Esc` goes back to Normal). Inside `workspace`.
 
 | Keys | Action | Description | R |
 |---|---|---|---|
@@ -273,19 +274,6 @@ Query editor, `[editor] mode = "vim"`, Insert mode. Inside `workspace`.
 | `F4` | `editor.complete` | Show completions |  |
 
 Reserved — vim Insert: `Esc` `Enter` `Tab` `Backspace` `Delete` `Left` `Right` `Up` `Down` `Home` `End` `Ctrl+W` `Ctrl+U` `Ctrl+P`
-
-## `editor.standard` [editor] [text]
-
-Query editor, `[editor] mode = "standard"` (its editing keys are not implemented yet). Inside `workspace`.
-
-| Keys | Action | Description | R |
-|---|---|---|---|
-| `Ctrl+N` | `editor.complete` | Show completions |  |
-| `F4` | `editor.complete` | Show completions |  |
-
-Reserved — copy: `Ctrl+C` (with a selection)
-
-Reserved — standard editing: `Ctrl+X` `Ctrl+V` `Ctrl+Z` `Ctrl+Y` `Ctrl+A` `Shift+Left` `Shift+Right` `Shift+Up` `Shift+Down` `Shift+Home` `Shift+End` `Ctrl+Left` `Ctrl+Right` `Ctrl+Backspace` `Tab` `Shift+Tab` `Esc` `Enter` `Backspace` `Delete` `Left` `Right` `Up` `Down` `Home` `End`
 
 ## `overlay.commands` [text]
 
@@ -459,7 +447,6 @@ Settings of `:set` (saved to `config.toml` like the matching actions):
 | Setting | Values | Description |
 |---|---|---|
 | `language` | `en` `ko` `auto` | UI language |
-| `editor` | `vim` `standard` | Editor keys |
 | `icons` | `on` `off` `auto` | Nerd Font icons |
 | `secrets.default_source` | `auto` `keychain` `file` `command` `env` `prompt` | Password storage of new profiles |
 | `commands.position` | `popup` `bottom` | Command line position |
@@ -478,8 +465,6 @@ Actions without a default key (the command line finds them by name).
 | `ui.language.en` | Change language → English |
 | `ui.language.ko` | Change language → Korean |
 | `ui.language.auto` | Change language → Auto (system locale) |
-| `editor.mode.vim` | Editor keys → vim |
-| `editor.mode.standard` | Editor keys → standard |
 | `ui.icons.toggle` | Nerd Font icons → on/off |
 | `ui.icons.on` | Nerd Font icons → on |
 | `ui.icons.off` | Nerd Font icons → off |

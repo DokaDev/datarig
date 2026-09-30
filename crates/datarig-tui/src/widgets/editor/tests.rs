@@ -1,10 +1,11 @@
 use super::*;
-use ratatui::crossterm::event::{KeyEventKind, KeyEventState};
+use ratatui::crossterm::event::{KeyCode, KeyEventKind, KeyEventState, KeyModifiers};
 
-fn key(c: KeyCode) -> KeyEvent {
+pub(super) fn key(c: KeyCode) -> KeyEvent {
     KeyEvent { code: c, modifiers: KeyModifiers::NONE, kind: KeyEventKind::Press, state: KeyEventState::NONE }
 }
-fn ctrl(c: char) -> KeyEvent {
+
+pub(super) fn ctrl(c: char) -> KeyEvent {
     KeyEvent {
         code: KeyCode::Char(c),
         modifiers: KeyModifiers::CONTROL,
@@ -12,8 +13,37 @@ fn ctrl(c: char) -> KeyEvent {
         state: KeyEventState::NONE,
     }
 }
-fn typ(e: &mut Editor, s: &str) {
-    for c in s.chars() {
+
+/// Type `keys`: characters, `\n` Enter, `\x1b` Esc, `\x08` Backspace, and Vim's notation
+/// `<Esc>`, `<CR>`, `<BS>`, `<Del>`, `<Tab>`, `<Left>`, `<Right>`, `<Up>`, `<Down>`,
+/// `<Home>`, `<End>`, `<C-x>`.
+pub(super) fn typ(e: &mut Editor, keys: &str) {
+    let mut rest = keys;
+    while let Some(c) = rest.chars().next() {
+        if c == '<'
+            && let Some(end) = rest.find('>')
+        {
+            let name = &rest[1..end];
+            let k = match name {
+                "Esc" => Some(key(KeyCode::Esc)),
+                "CR" => Some(key(KeyCode::Enter)),
+                "BS" => Some(key(KeyCode::Backspace)),
+                "Del" => Some(key(KeyCode::Delete)),
+                "Tab" => Some(key(KeyCode::Tab)),
+                "Left" => Some(key(KeyCode::Left)),
+                "Right" => Some(key(KeyCode::Right)),
+                "Up" => Some(key(KeyCode::Up)),
+                "Down" => Some(key(KeyCode::Down)),
+                "Home" => Some(key(KeyCode::Home)),
+                "End" => Some(key(KeyCode::End)),
+                _ => name.strip_prefix("C-").and_then(|c| c.chars().next()).map(ctrl),
+            };
+            if let Some(k) = k {
+                e.handle_key(k);
+                rest = &rest[end + 1..];
+                continue;
+            }
+        }
         let code = match c {
             '\n' => KeyCode::Enter,
             '\x1b' => KeyCode::Esc,
@@ -21,6 +51,35 @@ fn typ(e: &mut Editor, s: &str) {
             c => KeyCode::Char(c),
         };
         e.handle_key(key(code));
+        rest = &rest[c.len_utf8()..];
+    }
+}
+
+/// An editor with `text` and the cursor at `(row, col)`.
+pub(super) fn at(text: &str, (row, col): (usize, usize)) -> Editor {
+    let mut e = Editor::new(text);
+    e.row = row;
+    e.col = col;
+    e
+}
+
+/// `(text, cursor, keys, text after, cursor after, register after)`.
+pub(super) type Case =
+    (&'static str, (usize, usize), &'static str, &'static str, (usize, usize), Option<(&'static str, bool)>);
+
+/// Run each case from a fresh editor and compare the text, the cursor and the register.
+pub(super) fn check(cases: &[Case]) {
+    for &(text, cursor, keys, want, want_cursor, want_reg) in cases {
+        let mut e = at(text, cursor);
+        typ(&mut e, keys);
+        let reg = e.register().map(|r| (r.text.as_str(), r.linewise));
+        assert_eq!(
+            (e.text().as_str(), (e.row, e.col), reg),
+            (want, want_cursor, want_reg),
+            "{keys:?} on {text:?} at {cursor:?}"
+        );
+        assert_eq!(e.mode, Mode::Normal, "{keys:?}: back in Normal mode");
+        assert_eq!(e.len_bytes(), e.text().len());
     }
 }
 
@@ -53,31 +112,6 @@ fn yy_p_o_a() {
 }
 
 #[test]
-fn word_motions() {
-    let mut e = Editor::new("SELECT u.name, x\n\nFROM t");
-    typ(&mut e, "w");
-    assert_eq!((e.row, e.col), (0, 7));
-    typ(&mut e, "w");
-    assert_eq!((e.row, e.col), (0, 8));
-    typ(&mut e, "ww");
-    assert_eq!((e.row, e.col), (0, 13));
-    typ(&mut e, "ww");
-    assert_eq!((e.row, e.col), (1, 0));
-    typ(&mut e, "w");
-    assert_eq!((e.row, e.col), (2, 0));
-    typ(&mut e, "b");
-    assert_eq!((e.row, e.col), (1, 0));
-    typ(&mut e, "b");
-    assert_eq!((e.row, e.col), (0, 15));
-    typ(&mut e, "0e");
-    assert_eq!((e.row, e.col), (0, 5));
-    typ(&mut e, "G");
-    assert_eq!(e.row, 2);
-    typ(&mut e, "gg");
-    assert_eq!(e.row, 0);
-}
-
-#[test]
 fn grapheme_editing() {
     let mut e = Editor::new("");
     typ(&mut e, "iこんにちは 🐘");
@@ -90,19 +124,11 @@ fn grapheme_editing() {
     assert_eq!(e.text(), "こんにちは ");
     typ(&mut e, "\x1b0x");
     assert_eq!(e.text(), "んにちは ");
-}
-
-#[test]
-fn visual_yank_delete_and_selection() {
-    let mut e = Editor::new("SELECT 1;\nSELECT 2;");
-    typ(&mut e, "vj$");
-    assert_eq!(e.selection().unwrap(), "SELECT 1;\nSELECT 2;");
-    typ(&mut e, "\x1bgg0vey");
-    assert_eq!(e.mode, Mode::Normal);
-    typ(&mut e, "$p");
-    assert_eq!(e.lines[0], "SELECT 1;SELECT");
-    typ(&mut e, "0vld");
-    assert_eq!(e.lines[0], "LECT 1;SELECT");
+    // Operators count graphemes too.
+    typ(&mut e, "0d2l");
+    assert_eq!(e.text(), "ちは ");
+    typ(&mut e, "yl$p");
+    assert_eq!(e.text(), "ちは ち");
 }
 
 #[test]
@@ -113,194 +139,88 @@ fn paste_in_insert() {
     assert_eq!(e.text(), "a\nbx");
 }
 
-/// A small deterministic random source (xorshift).
-struct Rng(u64);
-
-impl Rng {
-    fn next(&mut self) -> u64 {
-        self.0 ^= self.0 << 13;
-        self.0 ^= self.0 >> 7;
-        self.0 ^= self.0 << 17;
-        self.0
-    }
-    fn below(&mut self, n: usize) -> usize {
-        (self.next() % n.max(1) as u64) as usize
-    }
-}
-
-/// SQL-ish text with `;` inside strings, comments, dollar bodies and quoted identifiers, and
-/// tokens that span lines.
-fn sqlish(rng: &mut Rng, pieces: usize) -> String {
-    const P: &[&str] = &[
-        "SELECT 1",
-        ";",
-        ";",
-        " ",
-        "\n",
-        "\n\n",
-        "'a;\nb'",
-        "$$x;\ny$$",
-        "$t$ ; $$ \n $t$",
-        "/* c; /* nested; */ \n */",
-        "-- d;\n",
-        "\"q;\n\"",
-        "E'\\';'",
-        "x.y",
-        "f(",
-        ")",
-        "BEGIN",
-        "'unterminated",
-        "/* open",
-    ];
-    (0..pieces).map(|_| P[rng.below(P.len())]).collect()
-}
-
-/// The lexer state at every line start, from a lex of the whole text.
-fn states_of(text: &str) -> Vec<LineState> {
-    let toks = lex(text);
-    let mut starts = vec![0];
-    starts.extend(text.match_indices('\n').map(|(i, _)| i + 1));
-    let pos = |off: usize| {
-        let line = starts.partition_point(|s| *s <= off) - 1;
-        (line, off - starts[line])
-    };
-    starts
-        .iter()
-        .map(|&p| match toks.iter().find(|t| t.start < p && p < t.end) {
-            Some(t) if matches!(t.kind, Tok::BlockComment | Tok::Str | Tok::Dollar | Tok::QuotedIdent) => {
-                let (line, byte) = pos(t.start);
-                LineState::Inside { line, byte }
-            }
-            _ => LineState::Normal,
-        })
-        .collect()
-}
-
-/// The token kind of every byte of `text`.
-fn kinds(text: &str) -> Vec<Tok> {
-    let mut out = vec![Tok::Whitespace; text.len()];
-    for t in lex(text) {
-        for k in &mut out[t.start..t.end] {
-            *k = t.kind;
-        }
-    }
-    out
-}
-
+/// A paste in Normal mode goes in at the cursor as one undo step (it used to be dropped), and
+/// pastes one after the other keep their order.
 #[test]
-fn line_states_and_screen_tokens_match_a_whole_lex_after_edits() {
-    let mut rng = Rng(0x9E37_79B9_7F4A_7C15);
-    for round in 0..300 {
-        let n = 5 + rng.below(40);
-        let text = sqlish(&mut rng, n);
-        let mut e = Editor::new(&text);
-        // Cache states a few lines at a time (as scrolling does), then edit somewhere and check
-        // again.
-        for upto in (0..e.lines.len()).step_by(1 + rng.below(3)) {
-            e.ensure_states(upto);
-        }
-        assert_eq!(e.states[..e.valid], states_of(&text)[..e.valid], "round {round}: {text:?}");
-        for _ in 0..3 {
-            let len = e.len_bytes();
-            let mut a = rng.below(len + 1);
-            let mut b = (a + rng.below(8)).min(len);
-            let t = e.text();
-            while !t.is_char_boundary(a) {
-                a -= 1;
-            }
-            while !t.is_char_boundary(b) {
-                b += 1;
-            }
-            let n = rng.below(3);
-            let ins = sqlish(&mut rng, n);
-            e.replace_range(a, b, &ins);
-            let t = e.text();
-            assert_eq!(e.len_bytes(), t.len());
-            let want = states_of(&t);
-            e.ensure_states(usize::MAX);
-            assert_eq!(e.states[..e.valid], want[..], "round {round}: {t:?}");
-            // The tokens of any run of lines, lexed from its restart point, are the whole
-            // text's tokens there.
-            let first = rng.below(e.lines.len());
-            let last = first + 1 + rng.below(4);
-            let (base, region) = e.region_text(first, last);
-            let (whole, part) = (kinds(&t), kinds(&region));
-            let from = e.line_start(first) - base;
-            assert_eq!(
-                part[from..],
-                whole[base + from..base + part.len()],
-                "round {round}: {t:?} lines {first}..{last}"
-            );
-        }
-    }
-}
-
-#[test]
-fn the_statement_under_the_cursor_is_the_one_in_the_whole_text() {
-    let mut rng = Rng(0x2545_F491_4F6C_DD1D);
-    for round in 0..200 {
-        let n = 10 + rng.below(60);
-        let text = sqlish(&mut rng, n);
-        let mut e = Editor::new(&text);
-        // Search a single line around the cursor first, so the region has to grow.
-        e.region = 1;
-        let stmts = split(&text);
-        for row in 0..e.lines.len() {
-            for col in 0..=e.gcount(row) {
-                e.row = row;
-                e.col = col;
-                let off = e.offset();
-                let want =
-                    statement_at(&stmts, off).map(|i| (stmts[i].start, stmts[i].end, stmts[i].body(&text).to_string()));
-                assert_eq!(e.current_statement(), want, "round {round}: {text:?} at {off}");
-                let (base, region, c) = e.completion_context();
-                let (a, b) = datarig_core::sql::split::segment_at(&region, c);
-                assert_eq!(
-                    (base + a, base + b),
-                    datarig_core::sql::split::segment_at(&text, off),
-                    "round {round}: {text:?} at {off}"
-                );
-            }
-        }
-    }
-}
-
-#[test]
-fn undo_and_redo_walk_every_step_back_and_forth() {
-    let mut e = Editor::new("alpha beta\ngamma\ndelta;\nepsilon");
-    let mut seen = vec![e.text()];
-    for keys in ["x", "dd", "oNEW line\x1b", "yyP", "jjp", "ia\nb\x08\x08c\x1b", "vjd", "A!\x1b", "Otop\x1b"] {
-        typ(&mut e, keys);
-        if e.text() != *seen.last().unwrap() {
-            seen.push(e.text());
-        }
-    }
-    for want in seen.iter().rev().skip(1) {
-        typ(&mut e, "u");
-        assert_eq!(&e.text(), want);
-    }
+fn paste_in_normal_mode_is_one_undo_step() {
+    let mut e = at("SELECT  FROM t", (0, 7));
+    assert_eq!(e.paste("a,\r\nb"), EdEvent::Changed { typed: None });
+    assert_eq!(e.text(), "SELECT a,\nb FROM t");
+    assert_eq!((e.mode, e.row, e.col), (Mode::Normal, 1, 1), "on the character that was under the cursor");
+    e.paste(", c");
+    assert_eq!(e.text(), "SELECT a,\nb, c FROM t");
     typ(&mut e, "u");
-    assert_eq!(e.text(), seen[0], "nothing more to undo");
-    for want in &seen[1..] {
-        e.handle_key(ctrl('r'));
-        assert_eq!(&e.text(), want);
-    }
-    assert_eq!(e.len_bytes(), e.text().len());
+    assert_eq!(e.text(), "SELECT a,\nb FROM t");
+    typ(&mut e, "u");
+    assert_eq!(e.text(), "SELECT  FROM t");
+    assert_eq!(e.paste(""), EdEvent::None);
+    // An empty line, and the end of a line.
+    let mut e = at("x\n", (1, 0));
+    e.paste("y");
+    assert_eq!((e.text().as_str(), e.row, e.col), ("x\ny", 1, 0));
+}
+
+/// A paste in Visual mode replaces the selection (whole lines by line) as one undo step.
+#[test]
+fn paste_in_visual_mode_replaces_the_selection() {
+    let mut e = at("SELECT old_name FROM t", (0, 7));
+    typ(&mut e, "ve");
+    e.paste("new");
+    assert_eq!((e.text().as_str(), e.mode), ("SELECT new FROM t", Mode::Normal));
+    typ(&mut e, "u");
+    assert_eq!(e.text(), "SELECT old_name FROM t");
+    let mut e = at("a\nb\nc\nd", (1, 0));
+    typ(&mut e, "Vj");
+    e.paste("x\ny\nz");
+    assert_eq!(e.text(), "a\nx\ny\nz\nd");
+    typ(&mut e, "u");
+    assert_eq!(e.text(), "a\nb\nc\nd");
+}
+
+/// Every write to the register can be taken once by the app (to pass on to the clipboard).
+#[test]
+fn register_writes_are_offered_once() {
+    let mut e = at("one two\nthree", (0, 0));
+    assert_eq!(e.take_yank(), None);
+    typ(&mut e, "yw");
+    assert_eq!(e.take_yank(), Some(Register { text: "one ".into(), linewise: false }));
+    assert_eq!(e.take_yank(), None, "taken");
+    typ(&mut e, "jdd");
+    assert_eq!(e.take_yank(), Some(Register { text: "three".into(), linewise: true }));
+    typ(&mut e, "x");
+    assert_eq!(e.take_yank(), Some(Register { text: "o".into(), linewise: false }));
+    typ(&mut e, "vy");
+    assert_eq!(e.take_yank().map(|r| r.text), Some("n".into()));
+    typ(&mut e, "l");
+    assert_eq!(e.take_yank(), None, "a motion writes nothing");
+    assert_eq!(e.register(), Some(&Register { text: "n".into(), linewise: false }));
 }
 
 #[test]
-fn edits_in_a_large_text_touch_only_their_lines() {
-    let text: String = (0..50_000).map(|i| format!("SELECT {i} FROM t WHERE x = '{i};';\n")).collect();
-    let mut e = Editor::new(&text);
-    e.row = 25_000;
-    let v = e.version();
-    typ(&mut e, "A -- note\x1b");
-    assert_ne!(e.version(), v);
-    assert!(e.lines[25_000].ends_with(" -- note"));
-    typ(&mut e, "ddu");
-    assert_eq!(e.lines.len(), 50_001);
-    assert_eq!(e.len_bytes(), e.text().len());
-    let (start, _, body) = e.current_statement().unwrap();
-    assert!(body.starts_with("SELECT 25000 FROM t"), "{body}");
-    assert_eq!(start, e.line_start(25_000));
+fn the_mode_label_tells_visual_by_line() {
+    let mut e = Editor::new("a\nb");
+    assert_eq!(e.mode_label(), Label::StatusModeNormal);
+    typ(&mut e, "v");
+    assert_eq!((e.mode_label(), e.visual_lines()), (Label::StatusModeVisual, false));
+    typ(&mut e, "V");
+    assert_eq!((e.mode_label(), e.visual_lines()), (Label::StatusModeVisualLine, true));
+    typ(&mut e, "<Esc>i");
+    assert_eq!((e.mode_label(), e.visual_lines()), (Label::StatusModeInsert, false));
+}
+
+/// The keymap hands the next key to the editor while an operator or `g` waits for it, not
+/// while only a count was typed.
+#[test]
+fn awaiting_a_key() {
+    let mut e = Editor::new("a b c");
+    for (k, waits) in [("3", false), ("d", true), ("2", true), ("g", true), ("<Esc>", false), ("g", true), ("g", false)]
+    {
+        typ(&mut e, k);
+        assert_eq!(e.awaiting_key(), waits, "after {k}");
+    }
+    typ(&mut e, "v");
+    typ(&mut e, "g");
+    assert!(e.awaiting_key(), "gg in Visual mode");
+    typ(&mut e, "g");
+    assert!(!e.awaiting_key());
 }

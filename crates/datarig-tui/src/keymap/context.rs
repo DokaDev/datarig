@@ -14,7 +14,6 @@
 //! │  │  ├─ editor.vim.normal  [editor]
 //! │  │  └─ editor.vim.visual  [editor]
 //! │  ├─ editor.vim.insert     [editor][text]
-//! │  ├─ editor.standard       [editor][text]
 //! │  ├─ explorer.filter       [text]
 //! │  └─ overlay.cell_viewer
 //! └─ overlay.*              (which-key, help, help filter, command line, quick connect,
@@ -23,7 +22,6 @@
 //!                            confirm, run confirm, completion)
 //! ```
 
-use datarig_core::config::EditorMode;
 use datarig_core::i18n::Label;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -39,7 +37,6 @@ pub enum Ctx {
     VimNormal,
     VimVisual,
     VimInsert,
-    Standard,
     Commands,
     QuickConnect,
     ProfileForm,
@@ -63,7 +60,7 @@ pub enum Ctx {
 }
 
 impl Ctx {
-    pub const ALL: [Ctx; 32] = [
+    pub const ALL: [Ctx; 31] = [
         Ctx::Root,
         Ctx::Workspace,
         Ctx::Nav,
@@ -75,7 +72,6 @@ impl Ctx {
         Ctx::VimNormal,
         Ctx::VimVisual,
         Ctx::VimInsert,
-        Ctx::Standard,
         Ctx::Commands,
         Ctx::QuickConnect,
         Ctx::ProfileForm,
@@ -112,7 +108,6 @@ impl Ctx {
             Ctx::VimNormal => "editor.vim.normal",
             Ctx::VimVisual => "editor.vim.visual",
             Ctx::VimInsert => "editor.vim.insert",
-            Ctx::Standard => "editor.standard",
             Ctx::Commands => "overlay.commands",
             Ctx::QuickConnect => "overlay.quick_connect",
             Ctx::Chooser => "overlay.chooser",
@@ -144,7 +139,7 @@ impl Ctx {
         match self {
             Ctx::Root => None,
             Ctx::Workspace => Some(Ctx::Root),
-            Ctx::Nav | Ctx::VimInsert | Ctx::Standard | Ctx::ExplorerFilter | Ctx::CellViewer => Some(Ctx::Workspace),
+            Ctx::Nav | Ctx::VimInsert | Ctx::ExplorerFilter | Ctx::CellViewer => Some(Ctx::Workspace),
             Ctx::Explorer | Ctx::Grid | Ctx::Inspector | Ctx::Welcome | Ctx::VimNormal | Ctx::VimVisual => {
                 Some(Ctx::Nav)
             }
@@ -163,7 +158,6 @@ impl Ctx {
         matches!(
             self,
             Ctx::VimInsert
-                | Ctx::Standard
                 | Ctx::ExplorerFilter
                 | Ctx::Commands
                 | Ctx::QuickConnect
@@ -179,18 +173,7 @@ impl Ctx {
 
     /// The query editor: its keys may hide the keys of its ancestors (except protected keys).
     pub fn is_editor(self) -> bool {
-        matches!(self, Ctx::VimNormal | Ctx::VimVisual | Ctx::VimInsert | Ctx::Standard)
-    }
-
-    /// The contexts that can be current with editor mode `mode`.
-    pub fn for_mode(mode: EditorMode) -> Vec<Ctx> {
-        Ctx::ALL
-            .into_iter()
-            .filter(|c| match mode {
-                EditorMode::Vim => *c != Ctx::Standard,
-                EditorMode::Standard => !matches!(c, Ctx::VimNormal | Ctx::VimVisual | Ctx::VimInsert),
-            })
-            .collect()
+        matches!(self, Ctx::VimNormal | Ctx::VimVisual | Ctx::VimInsert)
     }
 
     /// One line for `docs/keybindings.md`.
@@ -204,10 +187,9 @@ impl Ctx {
             Ctx::Grid => "The result grid.",
             Ctx::Inspector => "The result inspector next to the grid, after a click on it.",
             Ctx::Welcome => "The welcome panel shown while there is no connection profile.",
-            Ctx::VimNormal => "Query editor, `[editor] mode = \"vim\"`, Normal mode.",
-            Ctx::VimVisual => "Query editor, `[editor] mode = \"vim\"`, Visual mode.",
-            Ctx::VimInsert => "Query editor, `[editor] mode = \"vim\"`, Insert mode.",
-            Ctx::Standard => "Query editor, `[editor] mode = \"standard\"` (its editing keys are not implemented yet).",
+            Ctx::VimNormal => "Query editor, vim Normal mode (`i` starts typing).",
+            Ctx::VimVisual => "Query editor, vim Visual mode (`v` by character, `V` by line).",
+            Ctx::VimInsert => "Query editor, vim Insert mode: typing (`Esc` goes back to Normal).",
             Ctx::Commands => "The `:` command line: commands with arguments, and a search over every action.",
             Ctx::QuickConnect => "Quick connect: a fuzzy list of the connection profiles.",
             Ctx::Chooser => "A list to pick from: a profile's color, icon or folder.",
@@ -257,7 +239,6 @@ impl Ctx {
             Ctx::VimNormal => Label::KeyctxEditorVimNormal,
             Ctx::VimVisual => Label::KeyctxEditorVimVisual,
             Ctx::VimInsert => Label::KeyctxEditorVimInsert,
-            Ctx::Standard => Label::KeyctxEditorStandard,
             Ctx::Commands => Label::KeyctxOverlayCommands,
             Ctx::QuickConnect => Label::KeyctxOverlayQuickConnect,
             Ctx::Chooser => Label::KeyctxOverlayChooser,

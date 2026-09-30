@@ -25,4 +25,4 @@ expression: backend
 "│                      ││  8 │    7                    ││                      │"
 "│                      ││  9 │    8                    ││                      │"
 "╰──────────────────────╯╰──────────────────────────────╯╰──────────────────────╯"
-" NORMAL  local-pg · policy: default │ 500+ rows (more pages) · 5ms           EN "
+" NORMAL  local-pg · policy: default │ 500+ rows (more pages) · 5ms  │ i type EN "

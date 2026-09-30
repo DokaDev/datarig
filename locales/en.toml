@@ -66,6 +66,7 @@
 "status.mode.normal" = "NORMAL"
 "status.mode.insert" = "INSERT"
 "status.mode.visual" = "VISUAL"
+"status.mode.visual_line" = "V-LINE"
 "status.mode.command" = "COMMAND"
 "status.lang" = "EN"
 
@@ -122,7 +123,6 @@
 "command.conn" = "Connect to a profile"
 "command.set" = "Change a setting"
 "setting.language" = "UI language"
-"setting.editor" = "Editor keys"
 "setting.icons" = "Nerd Font icons"
 "setting.icons.help" = "Needs a Nerd Font as the terminal font. Preview: {preview} — if these look like □ or ?, turn icons off or install a font from nerdfonts.com. auto: not decided yet (asks again)."
 
@@ -345,8 +345,6 @@
 
 # Key map
 "status.hangul" = "\uD55C/A"
-"editor.mode.vim_set" = "Editor keys: vim"
-"editor.mode.standard_pending" = "Editor keys: standard. Standard editing arrives in a later version; the editor keeps vim keys until then"
 "keymap.unknown_context" = "Key map: unknown context [keymap.{context}], ignored"
 "keymap.bad_key.empty" = "Key map [{context}] “{key}”: a key is missing; ignored"
 "keymap.bad_key.shifted" = "Key map [{context}] “{key}”: write “{part}” as the character it types; ignored"
@@ -358,8 +356,6 @@
 "keymap.prefix" = "Key map [{context}] “{key}”: clashes with the key sequence “{other}”; ignored"
 "keymap.replaced" = "Key map [{context}] “{key}”: now {action} (was {old})"
 
-"action.editor.mode.vim" = "Editor keys → vim"
-"action.editor.mode.standard" = "Editor keys → standard"
 "action.help.context" = "Keyboard help"
 "action.pane.back" = "Back to the editor"
 "action.explorer.down" = "Explorer: next item"
@@ -401,6 +397,10 @@
 "hint.commands" = "commands"
 "hint.complete" = "complete"
 "hint.cancel" = "cancel"
+"hint.type" = "type"
+"hint.stop_typing" = "stop typing"
+"help.vim.type" = "Start typing (Insert mode)"
+"help.vim.stop_typing" = "Stop typing, back to the vim keys (Normal mode)"
 "help.title" = "Keys — {context}"
 "help.keys" = "↑↓ move · Enter run/open · l/h open/close · Esc close"
 "help.filter.placeholder" = "/ search all keys · Esc close"
@@ -422,7 +422,6 @@
 "keyctx.editor.vim.normal" = "Editor (vim Normal)"
 "keyctx.editor.vim.visual" = "Editor (vim Visual)"
 "keyctx.editor.vim.insert" = "Editor (vim Insert)"
-"keyctx.editor.standard" = "Editor (standard)"
 "keyctx.overlay.commands" = "Commands"
 "keyctx.overlay.profile_form" = "Connection form"
 "keyctx.overlay.password" = "Password prompt"
@@ -821,7 +820,6 @@
 "setting.copy_header.off" = "Never"
 "setting.changed" = "{name}: {value}"
 "setting.language.about" = "The language of the whole UI; English unless set. Auto follows LC_ALL, LC_MESSAGES or LANG. Data and database messages are never translated."
-"setting.editor.about" = "vim: modal keys (Normal, Insert, Visual). standard: the usual desktop keys; its editing keys are not implemented yet."
 "setting.icons.about" = "Nerd Font glyphs for connections, key columns and marks. Needs a Nerd Font as the terminal font. Auto: not decided yet — text marks until you answer the question with a preview (choosing auto asks again)."
 "setting.icons.preview" = "Preview: {preview}"
 "setting.icons.preview_hint" = "If these show as □ or ?, your terminal font lacks Nerd Font glyphs: turn icons off, or install one from nerdfonts.com."

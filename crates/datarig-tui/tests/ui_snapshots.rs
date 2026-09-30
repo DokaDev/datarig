@@ -1014,7 +1014,8 @@ fn keyboard_help_en_ko_sizes() {
         // vim Normal: Space ? (the editor keeps `?`); the same list, other sections closed below.
         let mut h = Harness::connected(lang);
         h.keys(" ?");
-        h.draw(80, 24);
+        // Its section starts with where typing starts and stops.
+        assert_screen!(format!("help_editor_normal_top_{}_80x24", lang_tag(lang)), lang, h.draw(80, 24));
         h.key(KeyCode::PageDown);
         h.key(KeyCode::PageDown);
         assert_screen!(format!("help_editor_normal_{}_80x24", lang_tag(lang)), lang, h.draw(80, 24));
@@ -1539,6 +1540,9 @@ fn unbound_banner_en_ko_sizes() {
             h.keys("dy");
             h.keys(" tu");
             assert_eq!(h.app.tab().profile, None);
+            // The delete's flash is not what this screen shows (in Korean it leaves the hint
+            // line less room than in English).
+            h.app.transient = None;
             assert_screen!(format!("unbound_banner_{}_{w}x{hh}", lang_tag(lang)), lang, h.draw(w, hh));
         }
     }
@@ -1682,18 +1686,17 @@ fn settings_screen_en_ko_sizes() {
             assert_screen!(format!("settings_theme_preview_{}_{w}x{hh}", lang_tag(lang)), lang, h.draw(w, hh));
             h.key(KeyCode::Esc);
             h.command("settings");
-            // The editor keys, the cursor shape, the cell detail, then the clipboard.
-            h.keys("jjjjjj");
+            // The cursor shape, the cell detail, then the clipboard.
+            h.keys("jjjjj");
             assert_screen!(format!("settings_clipboard_{}_{w}x{hh}", lang_tag(lang)), lang, h.draw(w, hh));
         }
     }
 }
 
-/// The mode badge: each mode in its color with dark bold text, COMMAND
-/// while the command line is open, neutral in standard mode.
+/// The mode badge: each mode in its color with dark bold text (Visual by line says V-LINE),
+/// COMMAND while the command line is open.
 #[test]
 fn mode_badge_colors_follow_the_mode() {
-    use datarig_core::config::EditorMode;
     use ratatui::style::Modifier;
     let mut h = Harness::connected(Lang::En);
     let mut lines = Vec::new();
@@ -1722,12 +1725,12 @@ fn mode_badge_colors_follow_the_mode() {
     h.key(KeyCode::Esc);
     h.keys("v");
     badge(&mut h, "visual", theme::DARK.mode_visual);
+    h.keys("V");
+    badge(&mut h, "v-line", theme::DARK.mode_visual);
     h.key(KeyCode::Esc);
     h.ctrl('k');
     badge(&mut h, "command", theme::DARK.mode_command);
     h.key(KeyCode::Esc);
-    h.app.editor_mode = EditorMode::Standard;
-    badge(&mut h, "standard", theme::DARK.mode_neutral);
     insta::assert_snapshot!(lines.join("\n"));
 }
 

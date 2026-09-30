@@ -19,7 +19,7 @@ pub mod keys;
 
 pub use check::{Conflict, ConflictKind, check, check_contexts, check_ids};
 pub use context::Ctx;
-pub use defaults::{BindTarget, Binding, Cond, HINTS, LEADER, PROTECTED, defaults};
+pub use defaults::{BindTarget, Binding, HINTS, LEADER, PROTECTED, VIM_BASICS, defaults};
 pub use keys::{KeyChord, KeyError, parse_keys};
 
 use crate::app::action::{self, Action};
@@ -51,24 +51,8 @@ pub struct Bound {
     pub ctx: Ctx,
     pub keys: Vec<KeyChord>,
     pub target: Target,
-    pub when: Option<Cond>,
     /// Comes from the user's config.
     pub user: bool,
-}
-
-/// Facts the conditional bindings depend on.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct KeyEnv {
-    pub selection: bool,
-}
-
-impl KeyEnv {
-    fn holds(&self, c: Option<Cond>) -> bool {
-        match c {
-            None => true,
-            Some(Cond::Selection) => self.selection,
-        }
-    }
 }
 
 /// Keys typed so far of an unfinished sequence.
@@ -158,7 +142,7 @@ fn resolve(raw: &[Binding]) -> Vec<Bound> {
                 BindTarget::Reserved(note) => Target::Reserved(note),
                 BindTarget::Group(label) => Target::Group(label),
             };
-            Some(Bound { ctx: b.ctx, keys, target, when: b.when, user: false })
+            Some(Bound { ctx: b.ctx, keys, target, user: false })
         })
         .collect()
 }
@@ -214,7 +198,7 @@ impl Keymap {
         if ctx.is_text_input() && (keys[0] == KeyChord::char(' ') || keys.iter().any(KeyChord::is_plain_char)) {
             return Some(IssueKind::TextKey);
         }
-        let same = |b: &Bound| b.ctx == ctx && b.keys == keys && b.when.is_none();
+        let same = |b: &Bound| b.ctx == ctx && b.keys == keys;
         if self.bindings.iter().any(|b| same(b) && matches!(b.target, Target::Reserved(_))) {
             return Some(IssueKind::Reserved);
         }
@@ -230,7 +214,7 @@ impl Keymap {
             .filter_map(|b| if let Target::Action(a) = b.target { Some(a) } else { None })
             .collect();
         self.bindings.retain(|b| !same(b));
-        let new = Bound { ctx, keys, target, when: None, user: true };
+        let new = Bound { ctx, keys, target, user: true };
         self.bindings.push(new.clone());
         let problem = check(&self.bindings).into_iter().find(|c| c.involves(&new) && c.kind != ConflictKind::Shadow);
         if let Some(c) = problem {
@@ -252,11 +236,11 @@ impl Keymap {
     }
 
     /// The binding of exactly `seq` seen from `ctx`, and whether a longer one starts with it.
-    fn lookup(&self, ctx: Ctx, seq: &[KeyChord], env: KeyEnv) -> (Option<&Bound>, bool) {
+    fn lookup(&self, ctx: Ctx, seq: &[KeyChord]) -> (Option<&Bound>, bool) {
         let mut exact = None;
         let mut longer = false;
         for c in ctx.chain() {
-            for b in self.bindings.iter().filter(|b| b.ctx == c && env.holds(b.when)) {
+            for b in self.bindings.iter().filter(|b| b.ctx == c) {
                 if matches!(b.target, Target::Group(_)) {
                     // A group only labels a prefix; its members make the sequence pending.
                     continue;
@@ -272,18 +256,18 @@ impl Keymap {
     }
 
     /// What exactly `seq` is bound to in `ctx`, and whether a longer binding starts with it.
-    pub fn resolve_seq(&self, ctx: Ctx, seq: &[KeyChord], env: KeyEnv) -> (Option<Target>, bool) {
-        let (exact, longer) = self.lookup(ctx, seq, env);
+    pub fn resolve_seq(&self, ctx: Ctx, seq: &[KeyChord]) -> (Option<Target>, bool) {
+        let (exact, longer) = self.lookup(ctx, seq);
         (exact.map(|b| b.target), longer)
     }
 
     /// The keys that may follow `prefix` in `ctx`, sorted by key: actions and groups that
     /// lead to at least one action. Reserved keys and unbound (`"none"`) keys are left out.
-    pub fn children(&self, ctx: Ctx, prefix: &[KeyChord], env: KeyEnv) -> Vec<(KeyChord, Child)> {
+    pub fn children(&self, ctx: Ctx, prefix: &[KeyChord]) -> Vec<(KeyChord, Child)> {
         let mut seen: Vec<KeyChord> = Vec::new();
         let mut out: Vec<(KeyChord, Child)> = Vec::new();
         for c in ctx.chain() {
-            for b in self.bindings.iter().filter(|b| b.ctx == c && env.holds(b.when)) {
+            for b in self.bindings.iter().filter(|b| b.ctx == c) {
                 if b.keys.len() <= prefix.len() || !b.keys.starts_with(prefix) {
                     continue;
                 }
@@ -326,13 +310,13 @@ impl Keymap {
     }
 
     /// Resolve key `k` in context `ctx`, continuing the sequence in `st`.
-    pub fn feed(&self, st: &mut KeyState, ctx: Ctx, k: KeyChord, env: KeyEnv) -> Resolved {
+    pub fn feed(&self, st: &mut KeyState, ctx: Ctx, k: KeyChord) -> Resolved {
         if st.ctx != Some(ctx) {
             st.clear();
         }
         let mut seq = std::mem::take(&mut st.pending);
         seq.push(k);
-        let (exact, longer) = self.lookup(ctx, &seq, env);
+        let (exact, longer) = self.lookup(ctx, &seq);
         if let Some(b) = exact {
             st.clear();
             return match b.target {
@@ -360,7 +344,7 @@ impl Keymap {
             for b in self.bindings.iter().filter(|b| b.ctx == *c && b.target == Target::Action(a)) {
                 let hidden = chain[..depth]
                     .iter()
-                    .any(|inner| self.bindings.iter().any(|x| x.ctx == *inner && x.keys == b.keys && x.when.is_none()));
+                    .any(|inner| self.bindings.iter().any(|x| x.ctx == *inner && x.keys == b.keys));
                 if !hidden && !out.contains(&b.keys) {
                     out.push(b.keys.clone());
                 }
@@ -390,7 +374,7 @@ impl Keymap {
             for b in self.bindings.iter().filter(|b| b.ctx == *c && b.target == Target::Action(a)) {
                 let hidden = chain[..depth]
                     .iter()
-                    .any(|inner| self.bindings.iter().any(|x| x.ctx == *inner && x.keys == b.keys && x.when.is_none()));
+                    .any(|inner| self.bindings.iter().any(|x| x.ctx == *inner && x.keys == b.keys));
                 if hidden || (!enhanced && b.keys == ctrl_enter) {
                     continue;
                 }

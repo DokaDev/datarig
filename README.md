@@ -90,11 +90,16 @@ Everything below works today, with PostgreSQL.
   tunnel's time).
 
 **SQL editor**
-- A subset of vim: Normal, Insert and Visual modes; `h` `j` `k` `l`, `w` `b` `e`, `0` `^` `$`,
-  `gg` `G`; `i` `a` `I` `A` `o` `O`; `x`, `dd`, `yy`, `p` `P`; `u` and `Ctrl+R`; `v` with `y`,
-  `d` and `x`. Counts, operators with motions, text objects, search and macros are not there
-  yet (their keys are reserved). Commands keep working with a Korean (2-Set) input source: the
-  jamo are read as the QWERTY keys they sit on.
+- Vim keys: Normal, Insert and Visual modes. The motions `h` `j` `k` `l`, `w` `b` `e`, `0` `^`
+  `$`, `gg` `G` with counts; the operators `d` `c` `y` with any motion, doubled for lines
+  (`dd` `cc` `yy`), with counts before and after (`3dd`, `d2w`); `x` `X` `s` `S` `D` `C` `Y`,
+  `p` `P`, `u` and `Ctrl+R`; `i` `a` `I` `A` `o` `O`; Visual mode by character (`v`) or by line
+  (`V`). One command is one undo step. The status bar says `i` starts typing and `Esc` stops.
+  Insert mode keeps the usual editing keys (arrows, `Home`/`End`, `Backspace`/`Delete`), plus
+  `Ctrl+W` and `Ctrl+U`, and `Enter` keeps the line's indent; a paste from the terminal goes in
+  at the cursor in every mode. Text objects, `.`, search, registers, the clipboard and macros
+  are not there yet (their keys are reserved). Commands keep working with a Korean (2-Set)
+  input source: the jamo are read as the QWERTY keys they sit on.
 - Syntax highlighting, completion of schemas, tables and columns (aliases included), and the
   statement under the cursor marked in the gutter.
 - Run the statement under the cursor (`Ctrl+E`), a selection, or several statements in a row:
@@ -149,8 +154,8 @@ Planned, in no particular order and with no dates:
 - TLS connections (today every connection is plain TCP; use an SSH tunnel across untrusted
   networks, and servers that require TLS cannot be reached yet)
 - A server monitor (sessions, locks, activity)
-- The standard (non-vim) editor mode: the setting exists, but the editor keeps vim keys for now
-- More of vim: counts, operators with motions, text objects, search, macros
+- More of vim: text objects, `.` repeat, search, registers and the clipboard, block Visual mode,
+  macros
 - DDL view of tables and other objects
 - Query profiling and charts
 - Multi-hop SSH and importing hosts from `~/.ssh/config`
@@ -204,9 +209,6 @@ version = 2
 language = "en"            # en | ko | auto
 theme = "catppuccin"       # see Themes below; terminal when left out
 
-[editor]
-mode = "vim"
-
 [[connections]]
 name = "local"
 driver = "postgres"
@@ -249,6 +251,8 @@ platform's data and state directories (`~/.local/share/datarig` and `~/.local/st
 on Linux, `~/Library/Application Support/datarig` on macOS; on Windows, untested,
 `%APPDATA%\datarig` and `%LOCALAPPDATA%\datarig`), or under `$XDG_DATA_HOME` / `$XDG_STATE_HOME` when set.
 `DATARIG_SECRET_STORE=memory` keeps passwords in memory only and never touches the OS keychain.
+An `[editor] mode` key from an older version is ignored (the editor has vim keys only) and
+dropped the next time the app saves the file.
 
 ## Themes
 

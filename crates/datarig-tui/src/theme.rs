@@ -90,8 +90,6 @@ pub struct Theme {
     pub mode_visual: Color,
     /// While the `:` command line is open.
     pub mode_command: Color,
-    /// `[editor] mode = "standard"`: no modes to tell apart.
-    pub mode_neutral: Color,
     pub mode_fg: Color,
     /// A match of a search in the editor or the grid (not drawn yet).
     pub search_match: Style,
@@ -145,7 +143,6 @@ pub const DARK: Theme = Theme {
     mode_insert: rgb(0x98C379),
     mode_visual: rgb(0xC678DD),
     mode_command: rgb(0xE5935A),
-    mode_neutral: rgb(0x8A93A6),
     mode_fg: rgb(0x14161B),
     // The accent-warm of numbers under the background's text: loud, as a search hit is.
     search_match: Style::new().fg(rgb(0x14161B)).bg(rgb(0xE0A96D)),
@@ -349,7 +346,7 @@ macro_rules! tokens {
 tokens! {
     colors: bg, surface, surface_alt, border, accent, accent_warm, fg, fg_muted, fg_dim, current_stmt_bar, success,
         warning, error, null_fg, key_pk, key_fk, key_uq, mode_normal, mode_insert, mode_visual, mode_command,
-        mode_neutral, mode_fg;
+        mode_fg;
     styles: selection, range, cursor_line, current_stmt, syn_keyword, syn_function, syn_string, syn_number,
         syn_comment, syn_operator, syn_identifier, syn_quoted_ident, search_match, match_paren, read_only_mark,
         danger_mark, plan_hot, plan_misestimate,

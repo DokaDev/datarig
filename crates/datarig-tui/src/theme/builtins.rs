@@ -43,7 +43,6 @@ pub const TERMINAL: Theme = Theme {
     mode_insert: Color::Green,
     mode_visual: Color::Magenta,
     mode_command: Color::Yellow,
-    mode_neutral: Color::DarkGray,
     mode_fg: Color::Black,
     search_match: Style::new().fg(Color::Black).bg(Color::Yellow),
     match_paren: Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD.union(Modifier::UNDERLINED)),
@@ -89,7 +88,6 @@ pub const LIGHT: Theme = Theme {
     mode_insert: rgb(0x1A7F37),
     mode_visual: rgb(0x8250DF),
     mode_command: rgb(0xBC4C00),
-    mode_neutral: rgb(0x57606A),
     mode_fg: rgb(0xFFFFFF),
     search_match: Style::new().fg(rgb(0xFBFBFC)).bg(rgb(0xA45A00)),
     match_paren: Style::new().bg(rgb(0xC9CED6)).add_modifier(Modifier::BOLD),
@@ -135,7 +133,6 @@ pub const HIGH_CONTRAST: Theme = Theme {
     mode_insert: rgb(0x00FF66),
     mode_visual: rgb(0xFF66FF),
     mode_command: rgb(0xFFB000),
-    mode_neutral: rgb(0xD0D0D0),
     mode_fg: rgb(0x000000),
     search_match: Style::new().fg(rgb(0x0A0A0A)).bg(rgb(0xFFB000)),
     match_paren: Style::new().bg(rgb(0xFFFFFF)).add_modifier(Modifier::BOLD),
@@ -182,7 +179,6 @@ pub const CATPPUCCIN_MOCHA: Theme = Theme {
     mode_insert: rgb(0xA6E3A1),
     mode_visual: rgb(0xCBA6F7),
     mode_command: rgb(0xFAB387),
-    mode_neutral: rgb(0x9399B2),
     mode_fg: rgb(0x11111B),
     search_match: Style::new().fg(rgb(0x1E1E2E)).bg(rgb(0xFAB387)),
     match_paren: Style::new().bg(rgb(0x45475A)).add_modifier(Modifier::BOLD),
@@ -231,7 +227,6 @@ pub const CATPPUCCIN_LATTE: Theme = Theme {
     mode_insert: rgb(0x40A02B),
     mode_visual: rgb(0xEA76CB),
     mode_command: rgb(0xFE640B),
-    mode_neutral: rgb(0x9CA0B0),
     mode_fg: rgb(0x11111B),
     search_match: Style::new().fg(rgb(0xEFF1F5)).bg(rgb(0xFE640B)),
     match_paren: Style::new().bg(rgb(0xBCC0CC)).add_modifier(Modifier::BOLD),
@@ -279,7 +274,6 @@ pub const TOKYO_NIGHT_NIGHT: Theme = Theme {
     mode_insert: rgb(0x9ECE6A),
     mode_visual: rgb(0xBB9AF7),
     mode_command: rgb(0xFF9E64),
-    mode_neutral: rgb(0xA9B1D6),
     mode_fg: rgb(0x15161E),
     search_match: Style::new().fg(rgb(0x1A1B26)).bg(rgb(0xFF9E64)),
     match_paren: Style::new().bg(rgb(0x414868)).add_modifier(Modifier::BOLD),
@@ -294,8 +288,7 @@ pub const TOKYO_NIGHT_NIGHT: Theme = Theme {
 /// Moved from the palette so text and marks keep their contrast: `fg` (palette `#3760BF`), `accent`
 /// (palette `#2E7DE9`), `key_pk` (palette `#8C6C3E`), `key_fk` (palette `#2E7DE9`), `key_uq`
 /// (palette `#9854F1`), `mode_normal` (palette `#2E7DE9`), `mode_visual` (palette `#D20065`),
-/// `mode_command` (palette `#B15C00`), `mode_neutral` (palette `#68709A`), `mode_insert` (palette
-/// `#587539`).
+/// `mode_command` (palette `#B15C00`), `mode_insert` (palette `#587539`).
 pub const TOKYO_NIGHT_DAY: Theme = Theme {
     bg: rgb(0xE1E2E7),
     surface: rgb(0xECEEF3),
@@ -330,7 +323,6 @@ pub const TOKYO_NIGHT_DAY: Theme = Theme {
     mode_insert: rgb(0x4A6135),
     mode_visual: rgb(0xB1055A),
     mode_command: rgb(0x884A0A),
-    mode_neutral: rgb(0x52587A),
     mode_fg: rgb(0xE1E2E7),
     search_match: Style::new().fg(rgb(0xE1E2E7)).bg(rgb(0xB15C00)),
     match_paren: Style::new().bg(rgb(0xA8AECB)).add_modifier(Modifier::BOLD),
@@ -377,7 +369,6 @@ pub const GRUVBOX_DARK: Theme = Theme {
     mode_insert: rgb(0xB8BB26),
     mode_visual: rgb(0xD3869B),
     mode_command: rgb(0xFE8019),
-    mode_neutral: rgb(0xA89984),
     mode_fg: rgb(0x282828),
     search_match: Style::new().fg(rgb(0x282828)).bg(rgb(0xFE8019)),
     match_paren: Style::new().bg(rgb(0x504945)).add_modifier(Modifier::BOLD),
@@ -390,8 +381,7 @@ pub const GRUVBOX_DARK: Theme = Theme {
 
 /// Gruvbox light (medium contrast).
 /// Moved from the palette so text and marks keep their contrast: `key_pk` (palette `#AF3A03`),
-/// `warning` (palette `#B57614`), `mode_insert` (palette `#79740E`), `mode_neutral` (palette
-/// `#7C6F64`).
+/// `warning` (palette `#B57614`), `mode_insert` (palette `#79740E`).
 pub const GRUVBOX_LIGHT: Theme = Theme {
     bg: rgb(0xFBF1C7),
     surface: rgb(0xF2E5BC),
@@ -426,7 +416,6 @@ pub const GRUVBOX_LIGHT: Theme = Theme {
     mode_insert: rgb(0x716C11),
     mode_visual: rgb(0x8F3F71),
     mode_command: rgb(0xAF3A03),
-    mode_neutral: rgb(0x73675D),
     mode_fg: rgb(0xFBF1C7),
     search_match: Style::new().fg(rgb(0xFBF1C7)).bg(rgb(0xAF3A03)),
     match_paren: Style::new().bg(rgb(0xD5C4A1)).add_modifier(Modifier::BOLD),
@@ -475,7 +464,6 @@ pub const NORD: Theme = Theme {
     mode_insert: rgb(0xA3BE8C),
     mode_visual: rgb(0xB48EAD),
     mode_command: rgb(0xD08770),
-    mode_neutral: rgb(0xD8DEE9),
     mode_fg: rgb(0x22262F),
     search_match: Style::new().fg(rgb(0x2E3440)).bg(rgb(0xD08770)),
     match_paren: Style::new().bg(rgb(0x4C566A)).add_modifier(Modifier::BOLD),
@@ -522,7 +510,6 @@ pub const DRACULA: Theme = Theme {
     mode_insert: rgb(0x50FA7B),
     mode_visual: rgb(0xFF79C6),
     mode_command: rgb(0xFFB86C),
-    mode_neutral: rgb(0xF8F8F2),
     mode_fg: rgb(0x282A36),
     search_match: Style::new().fg(rgb(0x282A36)).bg(rgb(0xFFB86C)),
     match_paren: Style::new().bg(rgb(0x44475A)).add_modifier(Modifier::BOLD),

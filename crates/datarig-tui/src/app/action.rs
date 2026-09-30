@@ -5,7 +5,7 @@
 use super::copy::{CopyFormat, CopyScope};
 use super::overlay::OverlayKind;
 use super::{App, Focus};
-use datarig_core::config::{EditorMode, IconsSetting};
+use datarig_core::config::IconsSetting;
 use datarig_core::i18n::{I18n, Label, Lang};
 use datarig_core::secret::{DefaultSource, SourceKind};
 
@@ -67,7 +67,6 @@ pub enum Action {
     FocusNext,
     FocusPrev,
     Quit,
-    SetEditorMode(EditorMode),
     /// `icons = on | off | auto`.
     SetIcons(IconsSetting),
     /// Icons on <-> off (from what is shown now).
@@ -370,8 +369,6 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::FocusPrev, "pane.prev", Label::ActionPanePrev, panes),
     act(Action::OpenCommands, "commands.open", Label::ActionCommandsOpen, anywhere),
     act(Action::Quit, "app.quit", Label::ActionAppQuit, anywhere),
-    act(Action::SetEditorMode(EditorMode::Vim), "editor.mode.vim", Label::ActionEditorModeVim, anywhere),
-    act(Action::SetEditorMode(EditorMode::Standard), "editor.mode.standard", Label::ActionEditorModeStandard, anywhere),
     act(Action::OpenSettings, "settings.open", Label::ActionSettingsOpen, anywhere),
     act(Action::ToggleIcons, "ui.icons.toggle", Label::ActionUiIconsToggle, anywhere),
     act(Action::SetIcons(IconsSetting::On), "ui.icons.on", Label::ActionUiIconsOn, anywhere),

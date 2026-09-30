@@ -55,7 +55,6 @@ impl App {
     pub fn setting_value(&self, k: usize) -> Option<usize> {
         let now = |s: &Setting| match s {
             Setting::Language(l) => *l == self.lang_setting,
-            Setting::Editor(m) => *m == self.editor_mode,
             Setting::Icons(i) => *i == self.icons,
             Setting::DefaultSource(d) => *d == self.default_source,
             Setting::CommandsPosition(p) => *p == self.prefs.commands_position,

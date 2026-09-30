@@ -1,33 +1,48 @@
-//! SQL editor with a vim subset. The cursor moves by grapheme cluster and the
-//! screen column is the sum of preceding grapheme widths, so the real terminal
-//! cursor can be placed exactly for IME preedit.
+//! SQL editor with vim keys. The cursor moves by grapheme cluster and the screen column is the
+//! sum of preceding grapheme widths, so the real terminal cursor can be placed exactly for IME
+//! preedit.
 //!
 //! Keys arrive through the keymap (`crate::keymap`): Hangul typed in Normal/Visual mode has
 //! already been turned into QWERTY keys, and app keys (run, commands, leader, …) never get here.
 //!
-//! Large files: the text is a vector of lines and every edit is a splice of
-//! the lines it touches ([`Editor::splice`]); undo keeps what each command changed, not copies
-//! of the text. Highlighting lexes only the lines on screen, from the nearest point where the
-//! lexer's state is known (the state at each line start is cached, and edits invalidate it from
-//! their line on). The statement under the cursor and the completion context are found in a
-//! region of lines around the cursor that holds the `;` around it, with the same result as
-//! splitting the whole text.
+//! The parts:
+//! * `buffer` holds the text as a vector of lines; every edit is a splice of the lines it
+//!   touches ([`Editor::splice`]), and undo keeps what each command changed, not copies of the
+//!   text.
+//! * `lexing` lexes only what is needed: highlighting lexes the lines on screen, from the
+//!   nearest point where the lexer's state is known (the state at each line start is cached,
+//!   and edits invalidate it from their line on). The statement under the cursor and the
+//!   completion context are found in a region of lines around the cursor that holds the `;`
+//!   around it, with the same result as splitting the whole text.
+//! * `motion` says where a motion leads, and the range it covers for an operator
+//!   (exclusive, inclusive or whole lines, as Vim decides).
+//! * `vim` parses Normal-mode commands (`[count] operator [count] motion`, doubled
+//!   operators, the single-key commands) and applies the operators.
+//! * `visual` is Visual mode by character (`v`) or by line (`V`).
+//! * `insert` is Insert mode, with autoindent and `Ctrl+W` / `Ctrl+U`.
+//! * `render` draws.
+//!
+//! One command is one undo step: an operator, a put, a paste, or an Insert session with the
+//! change that started it.
 
-use crate::text::grapheme_width;
-use crate::theme;
+mod buffer;
+mod insert;
+mod lexing;
+mod motion;
+mod render;
+mod vim;
+mod visual;
+
+use buffer::{Step, class, graphemes, next_version};
 use datarig_core::i18n::Label;
-use datarig_core::sql::lexer::{Tok, Token, lex};
-use datarig_core::sql::split::{Statement, split, statement_at};
-use ratatui::buffer::Buffer;
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ratatui::layout::Rect;
-use ratatui::style::Style;
-use unicode_segmentation::UnicodeSegmentation;
+use lexing::{LineState, REGION_LINES};
+use ratatui::crossterm::event::KeyEvent;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
     Normal,
     Insert,
+    /// By character, or by line ([`Editor::visual_lines`]).
     Visual,
 }
 
@@ -53,57 +68,12 @@ pub enum EdEvent {
     Moved,
 }
 
-/// One edit of the text: at byte `at`, `removed` was replaced with `inserted`.
-#[derive(Clone)]
-struct Change {
-    at: usize,
-    removed: String,
-    inserted: String,
-}
-
-/// What one command changed (an Insert session, `x`, `dd`, a put, …), with the cursor before
-/// it and where it was when it was undone.
-#[derive(Clone)]
-struct Step {
-    changes: Vec<Change>,
-    before: (usize, usize),
-    after: (usize, usize),
-}
-
-impl Step {
-    fn bytes(&self) -> usize {
-        self.changes.iter().map(|c| c.removed.len() + c.inserted.len()).sum()
-    }
-}
-
-/// Undo steps kept, and the bytes they may hold together.
-const UNDO_STEPS: usize = 500;
-const UNDO_BYTES: usize = 64 << 20;
-
-/// The lexer's state at the start of a line: between tokens, or inside a token that spans
-/// lines (a block comment, a string, a dollar body, a quoted identifier) that starts at `line`,
-/// `byte`, where lexing can start again.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum LineState {
-    Normal,
-    Inside { line: usize, byte: usize },
-}
-
-/// Lines around the cursor searched first for the `;` around it.
-const REGION_LINES: usize = 64;
-
-/// Text versions, unique across editors: the same number means the same text of the same
-/// editor.
-static VERSIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
-
-fn next_version() -> u64 {
-    VERSIONS.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-}
-
-#[derive(Clone)]
-struct Register {
-    text: String,
-    linewise: bool,
+/// What a yank or a delete put in the register.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Register {
+    pub text: String,
+    /// Whole lines (`yy`, `dj`, `V`…): put as lines of their own.
+    pub linewise: bool,
 }
 
 const TAB_WIDTH: usize = 4;
@@ -114,12 +84,22 @@ pub struct Editor {
     pub col: usize,
     want_x: Option<usize>,
     pub mode: Mode,
+    /// Visual mode takes whole lines (`V`).
+    visual_lines: bool,
     anchor: (usize, usize),
-    pending: Option<char>,
+    /// The Normal/Visual command typed so far (count, operator, `g`).
+    cmd: vim::Pending,
     register: Option<Register>,
+    /// The last write to the register, until the app takes it ([`Editor::take_yank`]).
+    yanked: Option<Register>,
     undo: Vec<Step>,
     redo: Vec<Step>,
     insert_snap: bool,
+    /// Where the Insert session started: `Ctrl+W` and `Ctrl+U` stop there once.
+    ins_start: (usize, usize),
+    /// The line whose only text is the indent Enter, `o` or `O` copied: the indent goes again
+    /// when nothing is typed on it.
+    ai_row: Option<usize>,
     pub top: usize,
     pub left: usize,
     view_h: usize,
@@ -135,39 +115,24 @@ pub struct Editor {
     region: usize,
 }
 
-fn graphemes(s: &str) -> Vec<&str> {
-    s.graphemes(true).collect()
-}
-
-fn gw(g: &str) -> usize {
-    if g == "\t" { TAB_WIDTH } else { grapheme_width(g) }
-}
-
-fn class(g: &str) -> u8 {
-    let c = g.chars().next().unwrap_or(' ');
-    if c.is_whitespace() {
-        0
-    } else if c.is_alphanumeric() || c == '_' || !c.is_ascii() {
-        1
-    } else {
-        2
-    }
-}
-
 impl Editor {
     pub fn new(text: &str) -> Self {
-        let mut e = Self {
-            lines: Vec::new(),
+        Self {
+            lines: text.split('\n').map(str::to_string).collect(),
             row: 0,
             col: 0,
             want_x: None,
             mode: Mode::Normal,
+            visual_lines: false,
             anchor: (0, 0),
-            pending: None,
+            cmd: vim::Pending::default(),
             register: None,
+            yanked: None,
             undo: Vec::new(),
             redo: Vec::new(),
             insert_snap: false,
+            ins_start: (0, 0),
+            ai_row: None,
             top: 0,
             left: 0,
             view_h: 1,
@@ -177,9 +142,7 @@ impl Editor {
             states: Vec::new(),
             valid: 0,
             region: REGION_LINES,
-        };
-        e.lines = text.split('\n').map(str::to_string).collect();
-        e
+        }
     }
 
     /// Bytes of the text.
@@ -197,414 +160,39 @@ impl Editor {
         self.lines.join("\n")
     }
 
-    fn gcount(&self, r: usize) -> usize {
-        self.lines[r].graphemes(true).count()
-    }
-
-    fn byte_at(&self, r: usize, c: usize) -> usize {
-        self.lines[r].graphemes(true).take(c).map(str::len).sum()
-    }
-
-    fn line_start(&self, r: usize) -> usize {
-        self.lines[..r].iter().map(|l| l.len() + 1).sum()
-    }
-
-    fn offset_of(&self, r: usize, c: usize) -> usize {
-        self.line_start(r) + self.byte_at(r, c)
-    }
-
-    /// Byte offset of the cursor in [`Editor::text`].
-    pub fn offset(&self) -> usize {
-        self.offset_of(self.row, self.col)
-    }
-
-    fn pos_of(&self, mut off: usize) -> (usize, usize) {
-        for (r, l) in self.lines.iter().enumerate() {
-            if off <= l.len() {
-                let mut b = off;
-                while !l.is_char_boundary(b) {
-                    b -= 1;
-                }
-                return (r, l[..b].graphemes(true).count());
-            }
-            off -= l.len() + 1;
-        }
-        let r = self.lines.len() - 1;
-        (r, self.gcount(r))
-    }
-
-    /// Line and byte in it of byte offset `off` of the text.
-    fn pos_bytes(&self, mut off: usize) -> (usize, usize) {
-        for (r, l) in self.lines.iter().enumerate() {
-            if off <= l.len() {
-                return (r, off);
-            }
-            off -= l.len() + 1;
-        }
-        let r = self.lines.len() - 1;
-        (r, self.lines[r].len())
-    }
-
-    /// The text from `a` to `b` (line, byte).
-    fn slice(&self, a: (usize, usize), b: (usize, usize)) -> String {
-        if a.0 == b.0 {
-            return self.lines[a.0][a.1..b.1].to_string();
-        }
-        let mut s = String::from(&self.lines[a.0][a.1..]);
-        for l in &self.lines[a.0 + 1..b.0] {
-            s.push('\n');
-            s.push_str(l);
-        }
-        s.push('\n');
-        s.push_str(&self.lines[b.0][..b.1]);
-        s
-    }
-
-    /// Replace bytes `a..b` of the text with `s`, touching only the lines in between; returns
-    /// what was there. Recorded in the current undo step.
-    fn splice(&mut self, a: usize, b: usize, s: &str) -> String {
-        let removed = self.splice_raw(a, b, s);
-        if self.undo.is_empty() {
-            self.undo.push(Step { changes: Vec::new(), before: (self.row, self.col), after: (self.row, self.col) });
-        }
-        if let Some(step) = self.undo.last_mut() {
-            step.changes.push(Change { at: a, removed: removed.clone(), inserted: s.to_string() });
-        }
-        removed
-    }
-
-    fn splice_raw(&mut self, a: usize, b: usize, s: &str) -> String {
-        let (ra, ba) = self.pos_bytes(a);
-        let (rb, bb) = self.pos_bytes(b.max(a));
-        let removed = self.slice((ra, ba), (rb, bb));
-        let mut joined = String::with_capacity(ba + s.len() + self.lines[rb].len() - bb);
-        joined.push_str(&self.lines[ra][..ba]);
-        joined.push_str(s);
-        joined.push_str(&self.lines[rb][bb..]);
-        let new: Vec<String> = joined.split('\n').map(str::to_string).collect();
-        self.lines.splice(ra..=rb, new);
-        self.bytes = self.bytes - removed.len() + s.len();
-        self.version = next_version();
-        // Every state from line `ra` on may have changed. (Line `ra`'s own: a token that ran to
-        // the end of the text exactly at its start grows over it when text is added there.)
-        self.valid = self.valid.min(ra.max(1));
-        removed
-    }
-
-    fn set_cursor_offset(&mut self, off: usize) {
-        let (r, c) = self.pos_of(off.min(self.bytes));
-        self.row = r;
-        self.col = c;
-    }
-
-    fn display_x(&self, r: usize, c: usize) -> usize {
-        self.lines[r].graphemes(true).take(c).map(gw).sum()
-    }
-
-    fn col_for_x(&self, r: usize, x: usize) -> usize {
-        let mut acc = 0;
-        for (i, g) in self.lines[r].graphemes(true).enumerate() {
-            let w = gw(g);
-            if acc + w > x {
-                return i;
-            }
-            acc += w;
-        }
-        self.gcount(r)
-    }
-
-    fn first_nonblank(&self, r: usize) -> usize {
-        graphemes(&self.lines[r]).iter().position(|g| class(g) != 0).unwrap_or(0)
-    }
-
-    fn clamp(&mut self) {
-        self.row = self.row.min(self.lines.len() - 1);
-        let n = self.gcount(self.row);
-        let max = if self.mode == Mode::Insert { n } else { n.saturating_sub(1) };
-        self.col = self.col.min(max);
-    }
-
-    /// Start an undo step: the changes until the next one are undone together.
-    fn snapshot(&mut self) {
-        self.undo.push(Step { changes: Vec::new(), before: (self.row, self.col), after: (self.row, self.col) });
-        let mut bytes: usize = self.undo.iter().map(Step::bytes).sum();
-        while self.undo.len() > UNDO_STEPS || (bytes > UNDO_BYTES && self.undo.len() > 1) {
-            bytes -= self.undo.remove(0).bytes();
-        }
-        self.redo.clear();
-    }
-
-    fn restore(&mut self, from_undo: bool) -> bool {
-        let src = if from_undo { &mut self.undo } else { &mut self.redo };
-        let Some(mut step) = src.pop() else { return false };
-        if from_undo {
-            step.after = (self.row, self.col);
-            for c in step.changes.iter().rev() {
-                self.splice_raw(c.at, c.at + c.inserted.len(), &c.removed);
-            }
-            (self.row, self.col) = step.before;
-            self.redo.push(step);
-        } else {
-            for c in &step.changes {
-                self.splice_raw(c.at, c.at + c.removed.len(), &c.inserted);
-            }
-            (self.row, self.col) = step.after;
-            self.undo.push(step);
-        }
-        self.clamp();
-        true
-    }
-
-    fn enter_insert(&mut self, snapshot: bool) {
-        if snapshot {
-            self.snapshot();
-        }
-        self.insert_snap = true;
-        self.mode = Mode::Insert;
-        self.want_x = None;
-    }
-
-    fn leave_insert(&mut self) {
-        if self.insert_snap && self.undo.last().is_some_and(|s| s.changes.is_empty()) {
-            self.undo.pop();
-        }
-        self.insert_snap = false;
-        self.mode = Mode::Normal;
-        self.col = self.col.saturating_sub(1);
-        self.clamp();
-    }
-
-    fn move_vert(&mut self, delta: isize) {
-        let want = self.want_x.unwrap_or_else(|| self.display_x(self.row, self.col));
-        self.want_x = Some(want);
-        let max = self.lines.len() as isize - 1;
-        self.row = (self.row as isize + delta).clamp(0, max) as usize;
-        self.col = if want == usize::MAX { self.gcount(self.row) } else { self.col_for_x(self.row, want) };
-        self.clamp();
-    }
-
-    fn set_pos(&mut self, r: usize, c: usize) {
-        self.row = r;
-        self.col = c;
-        self.want_x = None;
-        self.clamp();
-    }
-
-    fn word_forward(&mut self) {
-        let (mut r, mut c) = (self.row, self.col);
-        let gs = graphemes(&self.lines[r]);
-        if c < gs.len() {
-            let cls = class(gs[c]);
-            if cls != 0 {
-                while c < gs.len() && class(gs[c]) == cls {
-                    c += 1;
-                }
-            }
-        }
-        loop {
-            let gs = graphemes(&self.lines[r]);
-            while c < gs.len() && class(gs[c]) == 0 {
-                c += 1;
-            }
-            if c < gs.len() {
-                break;
-            }
-            if r + 1 >= self.lines.len() {
-                c = gs.len().saturating_sub(1);
-                break;
-            }
-            r += 1;
-            c = 0;
-            if self.lines[r].is_empty() {
-                break;
-            }
-        }
-        self.set_pos(r, c);
-    }
-
-    fn word_back(&mut self) {
-        let (mut r, mut c) = (self.row, self.col);
-        loop {
-            if c == 0 {
-                if r == 0 {
-                    self.set_pos(0, 0);
-                    return;
-                }
-                r -= 1;
-                c = self.gcount(r);
-                if c == 0 {
-                    self.set_pos(r, 0);
-                    return;
-                }
-            }
-            c -= 1;
-            if class(graphemes(&self.lines[r])[c]) != 0 {
-                break;
-            }
-        }
-        let gs = graphemes(&self.lines[r]);
-        let cls = class(gs[c]);
-        while c > 0 && class(gs[c - 1]) == cls {
-            c -= 1;
-        }
-        self.set_pos(r, c);
-    }
-
-    fn word_end(&mut self) {
-        let (mut r, mut c) = (self.row, self.col + 1);
-        loop {
-            let n = self.gcount(r);
-            if c < n && class(graphemes(&self.lines[r])[c]) != 0 {
-                break;
-            }
-            if c < n {
-                c += 1;
-                continue;
-            }
-            if r + 1 >= self.lines.len() {
-                self.set_pos(r, n.saturating_sub(1));
-                return;
-            }
-            r += 1;
-            c = 0;
-        }
-        let gs = graphemes(&self.lines[r]);
-        let cls = class(gs[c]);
-        while c + 1 < gs.len() && class(gs[c + 1]) == cls {
-            c += 1;
-        }
-        self.set_pos(r, c);
-    }
-
-    /// Shared Normal/Visual motions. Returns true when `c` was a motion.
-    fn motion(&mut self, c: char) -> bool {
-        match c {
-            'h' => self.set_pos(self.row, self.col.saturating_sub(1)),
-            'l' => {
-                let n = self.gcount(self.row);
-                if self.col + 1 < n {
-                    self.set_pos(self.row, self.col + 1);
-                }
-            }
-            'j' => self.move_vert(1),
-            'k' => self.move_vert(-1),
-            'w' => self.word_forward(),
-            'b' => self.word_back(),
-            'e' => self.word_end(),
-            '0' => self.set_pos(self.row, 0),
-            '^' => self.set_pos(self.row, self.first_nonblank(self.row)),
-            '$' => {
-                self.set_pos(self.row, self.gcount(self.row));
-                self.want_x = Some(usize::MAX);
-            }
-            'G' => {
-                let r = self.lines.len() - 1;
-                self.set_pos(r, self.first_nonblank(r));
-            }
-            'g' => self.pending = Some('g'),
-            _ => return false,
-        }
-        true
-    }
-
-    fn arrow_motion(&mut self, code: KeyCode) -> bool {
-        let c = match code {
-            KeyCode::Left => 'h',
-            KeyCode::Right => 'l',
-            KeyCode::Up => 'k',
-            KeyCode::Down => 'j',
-            KeyCode::Home => '0',
-            KeyCode::End => '$',
-            _ => return false,
-        };
-        if self.mode == Mode::Insert {
-            match c {
-                'h' => self.set_pos(self.row, self.col.saturating_sub(1)),
-                'l' => self.set_pos(self.row, self.col + 1),
-                '0' => self.set_pos(self.row, 0),
-                '$' => self.set_pos(self.row, self.gcount(self.row)),
-                _ => self.move_vert(if c == 'j' { 1 } else { -1 }),
-            }
-            true
-        } else {
-            self.motion(c)
+    /// Catalog label of the mode as the status bar shows it (Visual by line is `V-LINE`).
+    pub fn mode_label(&self) -> Label {
+        match self.mode {
+            Mode::Visual if self.visual_lines => Label::StatusModeVisualLine,
+            m => m.label(),
         }
     }
 
-    fn visual_bounds(&self) -> (usize, usize) {
-        let (a, b) = if self.anchor <= (self.row, self.col) {
-            (self.anchor, (self.row, self.col))
-        } else {
-            ((self.row, self.col), self.anchor)
-        };
-        let lo = self.offset_of(a.0, a.1);
-        let gs = graphemes(&self.lines[b.0]);
-        let hi_start = self.offset_of(b.0, b.1);
-        let extra = match gs.get(b.1) {
-            Some(g) => g.len(),
-            None if b.0 + 1 < self.lines.len() => 1,
-            None => 0,
-        };
-        (lo, hi_start + extra)
+    /// Visual mode takes whole lines (`V`).
+    pub fn visual_lines(&self) -> bool {
+        self.mode == Mode::Visual && self.visual_lines
     }
 
-    /// Selected text in Visual mode (for Ctrl+E).
-    pub fn selection(&self) -> Option<String> {
-        (self.mode == Mode::Visual).then(|| {
-            let (a, b) = self.visual_bounds();
-            self.slice(self.pos_bytes(a), self.pos_bytes(b))
-        })
+    /// The register (the text of the last yank or delete).
+    pub fn register(&self) -> Option<&Register> {
+        self.register.as_ref()
     }
 
-    pub fn exit_visual(&mut self) {
-        if self.mode == Mode::Visual {
-            self.mode = Mode::Normal;
-            self.clamp();
-        }
+    /// The last write to the register since the previous call, for the app to pass on (the
+    /// editor never touches the clipboard itself).
+    pub fn take_yank(&mut self) -> Option<Register> {
+        self.yanked.take()
     }
 
-    fn insert_at_cursor(&mut self, s: &str) {
-        if s.is_empty() {
-            return;
-        }
-        let off = self.offset();
-        self.splice(off, off, s);
-        self.set_cursor_offset(off + s.len());
-        self.want_x = None;
-    }
-
-    /// Replace `[a, b)` (byte offsets in the full text) with `s`, cursor after it.
-    pub fn replace_range(&mut self, a: usize, b: usize, s: &str) {
-        self.splice(a, b, s);
-        self.set_cursor_offset(a + s.len());
-        self.want_x = None;
-    }
-
-    fn delete_range(&mut self, a: usize, b: usize) -> String {
-        let removed = self.splice(a, b, "");
-        self.set_cursor_offset(a);
-        removed
-    }
-
-    /// Byte offset of the start of line `r` and of its end (before its line break).
-    fn line_bounds(&self, r: usize) -> (usize, usize) {
-        let start = self.line_start(r);
-        (start, start + self.lines[r].len())
-    }
-
-    /// Bracketed paste: inserted verbatim in Insert mode.
-    pub fn paste(&mut self, text: &str) -> EdEvent {
-        if self.mode != Mode::Insert {
-            return EdEvent::None;
-        }
-        let norm = text.replace("\r\n", "\n").replace('\r', "\n");
-        self.insert_at_cursor(&norm);
-        EdEvent::Changed { typed: None }
+    fn set_register(&mut self, text: String, linewise: bool) {
+        let r = Register { text, linewise };
+        self.yanked = Some(r.clone());
+        self.register = Some(r);
     }
 
     /// A command waits for its next key (`d…`, `y…`, `g…`).
     pub fn awaiting_key(&self) -> bool {
-        self.pending.is_some()
+        self.cmd.awaiting()
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> EdEvent {
@@ -615,395 +203,43 @@ impl Editor {
         }
     }
 
-    fn key_insert(&mut self, key: KeyEvent) -> EdEvent {
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        match key.code {
-            KeyCode::Esc => {
-                self.leave_insert();
-                EdEvent::Moved
-            }
-            KeyCode::Char(c) if !ctrl && !key.modifiers.contains(KeyModifiers::ALT) => {
-                let mut buf = [0u8; 4];
-                self.insert_at_cursor(c.encode_utf8(&mut buf));
-                EdEvent::Changed { typed: Some(c) }
-            }
-            KeyCode::Enter => {
-                self.insert_at_cursor("\n");
-                EdEvent::Changed { typed: None }
-            }
-            KeyCode::Tab => {
-                self.insert_at_cursor("    ");
-                EdEvent::Changed { typed: None }
-            }
-            KeyCode::Backspace => {
-                if self.col > 0 {
-                    let a = self.offset_of(self.row, self.col - 1);
-                    let b = self.offset();
-                    self.delete_range(a, b);
-                } else if self.row > 0 {
-                    let b = self.offset();
-                    self.delete_range(b - 1, b);
-                } else {
-                    return EdEvent::None;
-                }
-                EdEvent::Changed { typed: None }
-            }
-            KeyCode::Delete => {
-                let a = self.offset();
-                let n = self.gcount(self.row);
-                if self.col < n {
-                    let b = self.offset_of(self.row, self.col + 1);
-                    self.delete_range(a, b);
-                } else if self.row + 1 < self.lines.len() {
-                    self.delete_range(a, a + 1);
-                } else {
-                    return EdEvent::None;
-                }
-                EdEvent::Changed { typed: None }
-            }
-            code if self.arrow_motion(code) => EdEvent::Moved,
-            _ => EdEvent::None,
-        }
-    }
-
-    fn key_normal(&mut self, key: KeyEvent) -> EdEvent {
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-        if ctrl {
-            self.pending = None;
-            return match key.code {
-                KeyCode::Char('r') => {
-                    if self.restore(false) {
-                        EdEvent::Changed { typed: None }
-                    } else {
-                        EdEvent::None
-                    }
-                }
-                _ => EdEvent::None,
-            };
-        }
-        let ch = match key.code {
-            KeyCode::Char(c) => Some(c),
-            _ => None,
-        };
-        if let Some(p) = self.pending.take() {
-            return match (p, ch) {
-                ('g', Some('g')) => {
-                    self.set_pos(0, self.first_nonblank(0));
-                    EdEvent::Moved
-                }
-                ('d', Some('d')) => {
-                    self.snapshot();
-                    let (start, end) = self.line_bounds(self.row);
-                    let removed = self.lines[self.row].clone();
-                    if self.row + 1 < self.lines.len() {
-                        self.splice(start, end + 1, "");
-                    } else if self.row > 0 {
-                        self.splice(start - 1, end, "");
-                    } else {
-                        self.splice(start, end, "");
-                    }
-                    self.register = Some(Register { text: removed, linewise: true });
-                    self.row = self.row.min(self.lines.len() - 1);
-                    self.set_pos(self.row, self.first_nonblank(self.row));
-                    EdEvent::Changed { typed: None }
-                }
-                ('y', Some('y')) => {
-                    self.register = Some(Register { text: self.lines[self.row].clone(), linewise: true });
-                    EdEvent::None
-                }
-                _ => EdEvent::None,
-            };
-        }
-        if let Some(c) = ch {
-            if self.motion(c) {
-                return EdEvent::Moved;
-            }
-            return match c {
-                'i' => {
-                    self.enter_insert(true);
-                    EdEvent::Moved
-                }
-                'a' => {
-                    self.enter_insert(true);
-                    if self.gcount(self.row) > 0 {
-                        self.col += 1;
-                    }
-                    EdEvent::Moved
-                }
-                'I' => {
-                    self.enter_insert(true);
-                    self.col = self.first_nonblank(self.row);
-                    EdEvent::Moved
-                }
-                'A' => {
-                    self.enter_insert(true);
-                    self.col = self.gcount(self.row);
-                    EdEvent::Moved
-                }
-                'o' | 'O' => {
-                    self.snapshot();
-                    let (start, end) = self.line_bounds(self.row);
-                    let at = if c == 'o' { self.row + 1 } else { self.row };
-                    self.splice(if c == 'o' { end } else { start }, if c == 'o' { end } else { start }, "\n");
-                    self.row = at;
-                    self.col = 0;
-                    self.enter_insert(false);
-                    EdEvent::Changed { typed: None }
-                }
-                'x' => {
-                    if self.gcount(self.row) == 0 {
-                        return EdEvent::None;
-                    }
-                    self.snapshot();
-                    let a = self.offset();
-                    let b = self.offset_of(self.row, self.col + 1);
-                    let removed = self.delete_range(a, b);
-                    self.register = Some(Register { text: removed, linewise: false });
-                    self.clamp();
-                    EdEvent::Changed { typed: None }
-                }
-                'd' | 'y' => {
-                    self.pending = Some(c);
-                    EdEvent::None
-                }
-                'p' | 'P' => self.put(c == 'p'),
-                'u' => {
-                    if self.restore(true) {
-                        EdEvent::Changed { typed: None }
-                    } else {
-                        EdEvent::None
-                    }
-                }
-                'v' => {
-                    self.mode = Mode::Visual;
-                    self.anchor = (self.row, self.col);
-                    EdEvent::Moved
-                }
-                _ => EdEvent::None,
-            };
-        }
-        if self.arrow_motion(key.code) {
-            return EdEvent::Moved;
-        }
-        EdEvent::None
-    }
-
-    fn put(&mut self, after: bool) -> EdEvent {
-        let Some(reg) = self.register.clone() else { return EdEvent::None };
-        self.snapshot();
-        if reg.linewise {
-            let at = if after { self.row + 1 } else { self.row };
-            let (start, end) = self.line_bounds(self.row);
-            if after {
-                self.splice(end, end, &format!("\n{}", reg.text));
-            } else {
-                self.splice(start, start, &format!("{}\n", reg.text));
-            }
-            self.set_pos(at, self.first_nonblank(at));
-        } else {
-            let mut off = self.offset();
-            if after && self.gcount(self.row) > 0 {
-                off = self.offset_of(self.row, self.col + 1);
-            }
-            self.splice(off, off, &reg.text);
-            let last_len = reg.text.graphemes(true).next_back().map(str::len).unwrap_or(0);
-            self.set_cursor_offset(off + reg.text.len() - last_len);
-            self.want_x = None;
-            self.clamp();
-        }
-        EdEvent::Changed { typed: None }
-    }
-
-    fn key_visual(&mut self, key: KeyEvent) -> EdEvent {
-        if key.modifiers.contains(KeyModifiers::CONTROL) {
+    /// Bracketed paste: typed as it is in Insert mode; in Normal mode inserted at the cursor
+    /// (the cursor ends on the character that was under it, so pastes follow each other), in
+    /// Visual mode in place of the selection. Outside Insert mode it is one undo step.
+    pub fn paste(&mut self, text: &str) -> EdEvent {
+        let norm = text.replace("\r\n", "\n").replace('\r', "\n");
+        if norm.is_empty() {
             return EdEvent::None;
         }
-        if key.code == KeyCode::Esc {
-            self.pending = None;
-            self.exit_visual();
-            return EdEvent::Moved;
-        }
-        let ch = match key.code {
-            KeyCode::Char(c) => Some(c),
-            _ => None,
-        };
-        if let Some('g') = self.pending.take() {
-            if ch == Some('g') {
-                self.set_pos(0, self.first_nonblank(0));
+        self.cmd = vim::Pending::default();
+        let (a, b) = match self.mode {
+            Mode::Insert => {
+                self.ai_row = None;
+                self.insert_at_cursor(&norm);
+                return EdEvent::Changed { typed: None };
             }
-            return EdEvent::Moved;
-        }
-        match ch {
-            Some('y') => {
-                let (a, b) = self.visual_bounds();
-                self.register =
-                    Some(Register { text: self.slice(self.pos_bytes(a), self.pos_bytes(b)), linewise: false });
-                let lo = self.anchor.min((self.row, self.col));
-                self.mode = Mode::Normal;
-                self.set_pos(lo.0, lo.1);
-                EdEvent::Moved
+            Mode::Normal => {
+                let off = self.offset();
+                (off, off)
             }
-            Some('d') | Some('x') => {
-                let (a, b) = self.visual_bounds();
-                self.mode = Mode::Normal;
-                self.snapshot();
-                let removed = self.delete_range(a, b);
-                self.register = Some(Register { text: removed, linewise: false });
-                self.clamp();
-                EdEvent::Changed { typed: None }
-            }
-            Some('v') => {
-                self.exit_visual();
-                EdEvent::Moved
-            }
-            Some(c) if self.motion(c) => EdEvent::Moved,
-            _ if self.arrow_motion(key.code) => EdEvent::Moved,
-            _ => EdEvent::None,
-        }
-    }
-
-    /// Where lexing can start for line `r`: its start, or the start of the token that spans
-    /// into it (from the cached line states; [`Editor::ensure_states`] first).
-    fn restart_of(&self, r: usize) -> (usize, usize) {
-        match self.states.get(r) {
-            Some(LineState::Inside { line, byte }) => (*line, *byte),
-            _ => (r, 0),
-        }
-    }
-
-    /// Make the lexer states of lines `..=upto` current, lexing from the last current one.
-    fn ensure_states(&mut self, upto: usize) {
-        let upto = upto.min(self.lines.len() - 1);
-        if self.valid == 0 {
-            self.states.clear();
-            self.states.push(LineState::Normal);
-            self.valid = 1;
-        }
-        if self.valid > upto {
-            return;
-        }
-        let from = self.valid - 1;
-        let (base_line, base_byte) = self.restart_of(from);
-        let mut region = String::from(&self.lines[base_line][base_byte..]);
-        // Where each line after `base_line` starts in `region`.
-        let mut starts = Vec::with_capacity(upto - base_line);
-        // One line more than asked for (when there is one): a token that spans into line `upto`
-        // must not end where the region ends.
-        let end = (upto + 1).min(self.lines.len() - 1);
-        for r in base_line + 1..=end {
-            region.push('\n');
-            starts.push((r, region.len()));
-            region.push_str(&self.lines[r]);
-        }
-        let toks = lex(&region);
-        // The region's line starts back to (line, byte).
-        let line_of = |off: usize| -> (usize, usize) {
-            match starts.binary_search_by(|(_, s)| s.cmp(&off)) {
-                Ok(i) => (starts[i].0, 0),
-                Err(0) => (base_line, base_byte + off),
-                Err(i) => (starts[i - 1].0, off - starts[i - 1].1),
-            }
-        };
-        self.states.truncate(from + 1);
-        let mut ti = 0;
-        for &(r, at) in &starts {
-            if r <= from || r > upto {
-                continue;
-            }
-            while ti < toks.len() && toks[ti].end <= at {
-                ti += 1;
-            }
-            let state = match toks.get(ti) {
-                Some(t)
-                    if t.start < at
-                        && matches!(t.kind, Tok::BlockComment | Tok::Str | Tok::Dollar | Tok::QuotedIdent) =>
-                {
-                    let (line, byte) = line_of(t.start);
-                    LineState::Inside { line, byte }
-                }
-                _ => LineState::Normal,
-            };
-            self.states.push(state);
-        }
-        self.valid = upto + 1;
-    }
-
-    /// The text of lines `first..last` from where lexing can start for `first`, and the byte
-    /// offset in the whole text where it starts.
-    fn region_text(&mut self, first: usize, last: usize) -> (usize, String) {
-        let first = first.min(self.lines.len() - 1);
-        let last = last.clamp(first + 1, self.lines.len());
-        self.ensure_states(last - 1);
-        let (line, byte) = self.restart_of(first);
-        let base = self.line_start(line) + byte;
-        let mut region = String::from(&self.lines[line][byte..]);
-        for l in &self.lines[line + 1..last] {
-            region.push('\n');
-            region.push_str(l);
-        }
-        (base, region)
-    }
-
-    /// Lines `row - k ..= row + k` from where lexing can start: where they start in the text,
-    /// the text, its tokens, the cursor in it and whether they reach the end of the text.
-    fn region_around(&mut self, k: usize) -> (usize, String, Vec<Token>, usize, bool) {
-        let cursor = self.offset();
-        let n = self.lines.len();
-        let first = self.row.saturating_sub(k);
-        let last = (self.row + k + 1).min(n);
-        let (base, region) = self.region_text(first, last);
-        let toks = lex(&region);
-        (base, region, toks, cursor - base, last == n)
-    }
-
-    /// The statement under the cursor as [`statement_at`] finds it in the split whole text: its
-    /// byte range in the text (to the end of its `;`) and its body. Found in lines around the
-    /// cursor, taking more lines until the answer cannot depend on text outside them.
-    pub fn current_statement(&mut self) -> Option<(usize, usize, String)> {
-        let mut k = self.region.max(1);
-        loop {
-            let (base, region, toks, c, to_end) = self.region_around(k);
-            // The statement the cursor is in must end in the region.
-            if to_end || toks.iter().any(|t| t.kind == Tok::Semi && t.start >= c) {
-                let stmts: Vec<Statement> = split(&region);
-                // A statement before the region's first `;` may have started before the region.
-                let whole_from =
-                    if base == 0 { 0 } else { toks.iter().find(|t| t.kind == Tok::Semi).map_or(usize::MAX, |t| t.end) };
-                match statement_at(&stmts, c) {
-                    Some(i) if stmts[i].start >= whole_from => {
-                        let st = stmts[i];
-                        return Some((base + st.start, base + st.end, st.body(&region).to_string()));
+            Mode::Visual => {
+                let span = match self.visual_target(false) {
+                    vim::Target::Chars { a, b } => (a, b),
+                    // The lines' text, their line breaks stay.
+                    vim::Target::Lines { first, last } => {
+                        (self.line_start(first), self.line_start(last) + self.lines[last].len())
                     }
-                    None if base == 0 => return None,
-                    _ => {}
-                }
+                };
+                self.mode = Mode::Normal;
+                span
             }
-            k = k.saturating_mul(4);
-        }
-    }
-
-    /// Text around the cursor for completion: where it starts in the whole text, the text and
-    /// the cursor in it. It holds the `;`-delimited segment around the cursor whole (a `;`
-    /// before the cursor or the start of the text, one after it or the end of the text).
-    pub fn completion_context(&mut self) -> (usize, String, usize) {
-        let mut k = self.region.max(1);
-        loop {
-            let (base, region, toks, c, to_end) = self.region_around(k);
-            let before = base == 0 || toks.iter().any(|t| t.kind == Tok::Semi && t.start < c);
-            let after = to_end || toks.iter().any(|t| t.kind == Tok::Semi && t.start >= c);
-            if before && after {
-                return (base, region, c);
-            }
-            k = k.saturating_mul(4);
-        }
-    }
-
-    /// The identifier characters right before the cursor (on its line).
-    pub fn ident_before_cursor(&self) -> &str {
-        let line = &self.lines[self.row];
-        let b = self.byte_at(self.row, self.col);
-        let start = line[..b].char_indices().rev().take_while(|(_, c)| c.is_alphanumeric() || *c == '_').last();
-        start.map_or("", |(i, _)| &line[i..b])
+        };
+        self.snapshot();
+        self.splice(a, b, &norm);
+        self.set_cursor_offset(a + norm.len());
+        self.want_x = None;
+        self.clamp();
+        EdEvent::Changed { typed: None }
     }
 
     /// Mouse click at a position relative to the editor's inner area.
@@ -1011,9 +247,14 @@ impl Editor {
         let r = (self.top + y as usize).min(self.lines.len() - 1);
         let tx = (x as usize).saturating_sub(self.gutter);
         let c = self.col_for_x(r, self.left + tx);
+        self.cmd = vim::Pending::default();
+        let from = self.row;
         self.set_pos(r, c);
         if self.mode == Mode::Visual {
             self.mode = Mode::Normal;
+        }
+        if self.mode == Mode::Insert {
+            self.moved_in_insert(from);
         }
         self.clamp();
     }
@@ -1032,7 +273,7 @@ impl Editor {
     /// one to the other (both ends included, grapheme by grapheme), the cursor at `to`. Back
     /// on the anchor it is no selection, just the cursor there.
     pub fn drag_select(&mut self, anchor: (usize, usize), to: (usize, usize)) {
-        self.pending = None;
+        self.cmd = vim::Pending::default();
         let clamp_col = |e: &Self, (r, c): (usize, usize)| {
             let r = r.min(e.lines.len() - 1);
             (r, c.min(e.gcount(r).saturating_sub(1)))
@@ -1043,11 +284,7 @@ impl Editor {
             self.set_pos(to.0, to.1);
             return;
         }
-        if self.mode == Mode::Insert {
-            self.leave_insert();
-        }
-        self.mode = Mode::Visual;
-        self.anchor = anchor;
+        self.enter_visual(false, anchor);
         self.row = to.0;
         self.col = to.1;
         self.want_x = None;
@@ -1076,12 +313,8 @@ impl Editor {
 
     /// Visual from grapheme `a` to `b` (included) of line `r`, the cursor on `b`.
     fn visual_span(&mut self, r: usize, a: usize, b: usize) {
-        self.pending = None;
-        if self.mode == Mode::Insert {
-            self.leave_insert();
-        }
-        self.mode = Mode::Visual;
-        self.anchor = (r, a);
+        self.cmd = vim::Pending::default();
+        self.enter_visual(false, (r, a));
         self.row = r;
         self.col = b;
         self.want_x = None;
@@ -1113,123 +346,6 @@ impl Editor {
         }
         self.row = self.row.min(self.lines.len() - 1);
         self.clamp();
-    }
-
-    /// Screen position of the cursor inside `area` if it were rendered now. `stmt` is the byte
-    /// range of the statement a run would take: its lines get a faint tint and a bar in the
-    /// gutter. With a Visual selection the bar marks the selection's lines instead (a run takes
-    /// the selection), and `stmt` is not used.
-    pub fn render(&mut self, area: Rect, buf: &mut Buffer, stmt: Option<(usize, usize)>) -> (u16, u16) {
-        let th = theme::cur();
-        let h = area.height as usize;
-        let numw = self.lines.len().to_string().len().max(3);
-        self.gutter = numw + 1;
-        self.view_h = h;
-        let text_w = (area.width as usize).saturating_sub(self.gutter).max(1);
-        if self.row < self.top {
-            self.top = self.row;
-        } else if self.row >= self.top + h {
-            self.top = self.row + 1 - h;
-        }
-        let cx = self.display_x(self.row, self.col);
-        if cx < self.left {
-            self.left = cx;
-        } else if cx >= self.left + text_w {
-            self.left = cx + 1 - text_w;
-        }
-
-        // Tokens of the lines on screen, lexed from where the lexer's state is known.
-        let last = (self.top + h).min(self.lines.len());
-        let (base, region) = self.region_text(self.top, last);
-        let toks = lex(&region);
-        let is_fn: Vec<bool> = toks
-            .iter()
-            .enumerate()
-            .map(|(i, t)| t.kind == Tok::Ident && toks.get(i + 1).is_some_and(|n| n.kind == Tok::LParen))
-            .collect();
-        let sel = (self.mode == Mode::Visual).then(|| self.visual_bounds());
-        let stmt = if sel.is_some() { None } else { stmt };
-        // What a run takes: the selection, else the statement under the cursor.
-        let run = sel.or(stmt);
-
-        let mut ti = 0;
-        let mut line_start = self.line_start(self.top.min(self.lines.len()));
-        // Where line `top` starts in `region`.
-        let mut rstart = line_start - base;
-        for vy in 0..h {
-            let r = self.top + vy;
-            let y = area.y + vy as u16;
-            if r >= self.lines.len() {
-                buf.set_style(Rect::new(area.x, y, area.width, 1), th.base());
-                continue;
-            }
-            let line = &self.lines[r];
-            let line_end = line_start + line.len();
-            let in_stmt = stmt.is_some_and(|(a, b)| line_start < b && a <= line_end);
-            let bg = if r == self.row && self.mode != Mode::Visual {
-                th.cursor_line
-            } else if in_stmt {
-                th.current_stmt
-            } else {
-                Style::new().bg(th.bg)
-            };
-            buf.set_style(Rect::new(area.x, y, area.width, 1), Style::new().fg(th.fg).patch(bg));
-            let num_fg = if r == self.row { th.fg } else { th.fg_muted };
-            let num = format!("{:>numw$} ", r + 1);
-            buf.set_stringn(area.x, y, &num, self.gutter, Style::new().fg(num_fg).patch(bg));
-            if run.is_some_and(|(a, b)| line_start < b && a <= line_end) {
-                // The bar sits in the blank between the line number and the text.
-                let style = Style::new().fg(th.current_stmt_bar).patch(bg);
-                buf.set_stringn(area.x + numw as u16, y, "▎", 1, style);
-            }
-
-            let tx0 = area.x + self.gutter as u16;
-            let mut x = 0usize;
-            let mut b = line_start;
-            let mut rb = rstart;
-            for g in line.graphemes(true) {
-                let w = gw(g);
-                while ti < toks.len() && toks[ti].end <= rb {
-                    ti += 1;
-                }
-                let mut style = match toks.get(ti) {
-                    Some(t) if t.start <= rb => th.syntax(t.kind, is_fn[ti]),
-                    _ => Style::new().fg(th.fg),
-                }
-                .patch(bg);
-                if sel.is_some_and(|(a, z)| b >= a && b < z) {
-                    style = style.patch(th.selection);
-                }
-                if x + w > self.left && x < self.left + text_w {
-                    if x < self.left || x + w > self.left + text_w {
-                        // partially visible wide grapheme: blank the visible part
-                        let from = x.max(self.left);
-                        let to = (x + w).min(self.left + text_w);
-                        for px in from..to {
-                            buf.set_stringn(tx0 + (px - self.left) as u16, y, " ", 1, style);
-                        }
-                    } else if g == "\t" {
-                        buf.set_stringn(tx0 + (x - self.left) as u16, y, "    ", w, style);
-                    } else {
-                        buf.set_stringn(tx0 + (x - self.left) as u16, y, g, w, style);
-                    }
-                }
-                x += w;
-                b += g.len();
-                rb += g.len();
-            }
-            if let Some((a, z)) = sel {
-                // show selected line breaks as a one-cell highlight
-                if line_end >= a && line_end < z && x >= self.left && x < self.left + text_w {
-                    buf.set_stringn(tx0 + (x - self.left) as u16, y, " ", 1, th.selection);
-                }
-            }
-            line_start = line_end + 1;
-            rstart += line.len() + 1;
-        }
-        let cy = area.y + (self.row - self.top) as u16;
-        let cxs = area.x + self.gutter as u16 + (cx - self.left) as u16;
-        (cxs.min(area.x + area.width.saturating_sub(1)), cy)
     }
 }
 

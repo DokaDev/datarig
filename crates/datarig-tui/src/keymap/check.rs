@@ -138,10 +138,7 @@ pub fn check_contexts(bindings: &[Bound], contexts: &[Ctx]) -> Vec<Conflict> {
                 } else if prefix {
                     Some(ConflictKind::Prefix)
                 } else if dx == dy {
-                    // Bindings with different conditions may share keys.
-                    (x.when == y.when).then(|| {
-                        if reserved(x) || reserved(y) { ConflictKind::Reserved } else { ConflictKind::Duplicate }
-                    })
+                    Some(if reserved(x) || reserved(y) { ConflictKind::Reserved } else { ConflictKind::Duplicate })
                 } else if inner.target == Target::Disabled || inner.ctx.is_editor() || tabs_its_own(inner, outer) {
                     None
                 } else if reserved(inner) || reserved(outer) {
