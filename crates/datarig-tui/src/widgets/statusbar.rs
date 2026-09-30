@@ -52,10 +52,11 @@ pub(crate) fn draw_status(app: &mut App, area: Rect, buf: &mut Buffer) {
         && app.transient.is_none())
     .then(|| crate::widgets::inspector::preview(app))
     .flatten()
-    // The explorer's line of a table's structure, whole (the explorer cuts deep lines).
+    // The explorer's line of a table's structure, or of an object with its estimates, whole (the
+    // explorer cuts deep lines, and short ones drop the estimates).
     .or_else(|| {
         (app.focus == crate::app::Focus::Tree && app.transient.is_none())
-            .then(|| crate::widgets::explorer::structure_preview(app))
+            .then(|| crate::widgets::explorer::line_preview(app))
             .flatten()
             .map(datarig_core::i18n::Localized::verbatim)
     });

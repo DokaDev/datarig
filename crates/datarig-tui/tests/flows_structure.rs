@@ -1,4 +1,4 @@
-//! A table's structure in the explorer: an open table shows its size estimate and its groups
+//! A table's structure in the explorer: an open table shows its groups
 //! (Columns, Primary Key, Foreign Keys, Indexes, Unique and Check Constraints, Triggers), read
 //! once through the metadata session when it first opens and again with `r`; Enter on a foreign
 //! key goes to the table it references. A fake driver records the requests and the test feeds
@@ -24,7 +24,7 @@ fn shop_open(icons: bool) -> Harness {
     let objects = SchemaObjects {
         tables: vec!["order_items".into(), "orders".into(), "users".into()],
         views: vec!["order_summary".into()],
-        materialized: Default::default(),
+        ..Default::default()
     };
     h.db(DbEvent::Objects { schema: "shop".into(), result: Ok(objects) });
     h.sent();
@@ -57,8 +57,9 @@ fn line_of(h: &mut Harness, text: &str) -> String {
 }
 
 /// Opening a table asks for its structure once, one request (cached: closing and opening it
-/// again asks nothing); until it comes the table says it is loading. Then it shows its size
-/// estimate and the groups of a table, Columns open: each column with its marks and `type, not
+/// again asks nothing); until it comes the table says it is loading. Then its line has the
+/// estimates read with it (no line of its own under it), and it shows the groups of a table,
+/// Columns open: each column with its marks and `type, not
 /// null, default …`. An empty group is dim, without a count, and does not open; the others
 /// open to their items, an index or trigger with what it is. The status bar shows the line under
 /// the cursor whole.
@@ -71,8 +72,12 @@ fn an_open_table_shows_its_structure_read_once() {
     h.keys("j");
     assert_eq!(h.explorer_line().trim(), "Loading…");
     h.db(structure("shop", "users", users_structure()));
+    assert!(line_of(&mut h, "users").ends_with("▾ users  ~11k rows · 4.2 MB"), "{}", line_of(&mut h, "users"));
+    let tree = lines(&mut h);
+    let at = tree.iter().position(|l| l.contains("▾ users")).unwrap();
+    assert!(tree[at + 1].ends_with("▾ Columns (5)"), "the groups right under it: {:?}", tree[at + 1]);
+    assert!(!tree.iter().any(|l| l.contains("~4.2 MB")), "{tree:?}");
     for want in [
-        "~11k rows · ~4.2 MB",
         "▾ Columns (5)",
         "PK id  bigint, not null, default nextval('shop.users_id_seq'::regclass)",
         "UQ email  text, not null",
@@ -116,7 +121,8 @@ fn an_open_table_shows_its_structure_read_once() {
     assert!(status.contains("users_nickname_idx  (nickname DESC) btree WHERE nickname IS NOT NULL"), "{status}");
     h.explore("local-pg");
     h.goto("users");
-    assert!(!h.status(200, 45).contains("users_"), "only for a line of a structure");
+    let status = h.status(200, 45);
+    assert!(status.contains("users  ~11k rows · ~4.2 MB") && !status.contains("users_"), "{status}");
     // The primary key opens to its columns.
     h.explore("local-pg");
     h.goto("Primary Key");
@@ -171,7 +177,8 @@ fn r_reads_a_structure_again() {
     assert!(asked(&sent).is_empty() && sent.iter().any(|c| matches!(c, DbCommand::LoadObjects { .. })), "{sent:?}");
 }
 
-/// A table never analyzed has no row estimate: "rows unknown", never 0 rows. Its foreign keys
+/// A table never analyzed has no row estimate: its line has its size alone, and the status
+/// bar says "rows unknown", never 0 rows. Its foreign keys
 /// name their table and open to the columns and the actions (`NO ACTION` left out); Enter on
 /// one, or on its line, puts the cursor on the table it references: in the same schema at
 /// once, in a schema not read yet once its objects come. A table the explorer does not have is
@@ -182,8 +189,9 @@ fn foreign_keys_go_to_the_table_they_reference() {
     h.goto("orders");
     h.key(KeyCode::Char('l'));
     h.db(structure("shop", "orders", orders_structure()));
-    assert!(lines(&mut h).iter().any(|l| l.trim_start().starts_with("rows unknown · ~8 KB")));
+    assert!(line_of(&mut h, "orders").ends_with("▾ orders  ~8 KB"), "{}", line_of(&mut h, "orders"));
     assert!(!lines(&mut h).iter().any(|l| l.contains("~0 rows")));
+    assert!(h.status(200, 45).contains("orders  rows unknown · ~8 KB"), "{}", h.status(200, 45));
     assert!(line_of(&mut h, "PK FK id").ends_with("PK FK id  bigint, not null, identity always"));
     h.goto("Foreign Keys (2)");
     h.key(KeyCode::Char('l'));
@@ -225,8 +233,8 @@ fn foreign_keys_go_to_the_table_they_reference() {
     assert!(h.status(160, 45).contains("shop.gone is not in the explorer"), "{}", h.status(160, 45));
 }
 
-/// A view shows its columns and triggers only, and no size (it has no storage); a materialized
-/// view its columns and indexes, with its size.
+/// A view shows its columns and triggers only, and no estimates (it has no storage); a
+/// materialized view its columns and indexes, and its estimates on its line.
 #[test]
 fn views_show_the_groups_of_their_kind() {
     let mut h = shop_open(false);
@@ -244,18 +252,23 @@ fn views_show_the_groups_of_their_kind() {
     for absent in ["Indexes", "Primary Key", "rows"] {
         assert!(!below.iter().any(|l| l.contains(absent)), "{absent}: {below:?}");
     }
+    assert!(line_of(&mut h, "order_summary").ends_with("▾ order_summary"), "a view: no estimates");
+    assert!(!h.status(200, 45).contains("order_summary"), "nor in the status bar");
     let mut m = TableStructure::new(RelationKind::MaterializedView);
     m.estimated_rows = Some(950);
     m.total_bytes = Some(16_384);
     h.db(structure("shop", "order_summary", m));
     let tree = lines(&mut h);
-    assert!(tree.iter().any(|l| l.trim() == "~950 rows · ~16 KB"), "{tree:?}");
+    assert!(line_of(&mut h, "order_summary").ends_with("▾ order_summary  ~950 rows · 16 KB"), "{tree:?}");
     assert!(tree.iter().any(|l| l.trim() == "Indexes") && !tree.iter().any(|l| l.trim() == "Triggers"));
-    // No statistics yet (never vacuumed or analyzed): neither estimate, never "0 B".
+    // No statistics yet (never vacuumed or analyzed): nothing on its line, never "0 B"; the
+    // status bar says so.
     h.db(structure("shop", "order_summary", TableStructure::new(RelationKind::MaterializedView)));
     let tree = lines(&mut h);
-    assert!(tree.iter().any(|l| l.trim() == "rows and size unknown (no statistics yet)"), "{tree:?}");
-    assert!(!tree.iter().any(|l| l.contains("0 B")), "{tree:?}");
+    assert!(line_of(&mut h, "order_summary").ends_with("▾ order_summary"), "{tree:?}");
+    assert!(!tree.iter().any(|l| l.contains("0 B") || l.contains("unknown")), "{tree:?}");
+    let status = h.status(200, 45);
+    assert!(status.contains("order_summary  rows and size unknown (no statistics yet)"), "{status}");
 }
 
 /// A structure that cannot be read says why where it would be; opening the table again asks
@@ -303,7 +316,7 @@ fn a_long_line_keeps_its_end_in_the_status_bar() {
         h.key(KeyCode::BackTab);
         h.keys("jjjj");
         h.key(KeyCode::Char('l'));
-        let objects = SchemaObjects { tables: vec!["users".into()], views: vec![], materialized: Default::default() };
+        let objects = SchemaObjects { tables: vec!["users".into()], views: vec![], ..Default::default() };
         h.db(DbEvent::Objects { schema: "shop".into(), result: Ok(objects) });
         h.goto("users");
         h.key(KeyCode::Char('l'));
@@ -345,8 +358,9 @@ fn without_the_capability_columns_come_from_the_catalog() {
     assert!(!lines(&mut h).iter().any(|l| l.contains("Columns")));
 }
 
-/// Another database's tables read their structure through that database's aux metadata
-/// session (never the profile's own), and a foreign key goes to a table of that database.
+/// Another database's tables have their estimates from that database's aux metadata session
+/// and read their structure through it (never the profile's own), and a foreign key goes to a
+/// table of that database.
 #[test]
 fn another_databases_tables_read_through_its_session() {
     let mut h = Harness::connected(Lang::En);
@@ -370,10 +384,12 @@ fn another_databases_tables_read_through_its_session() {
     ev(&mut h, DbEvent::Schemas(Ok(vec!["shop".into()])));
     h.goto("shop");
     h.key(KeyCode::Char('l'));
-    ev(
-        &mut h,
-        DbEvent::Objects { schema: "shop".into(), result: Ok((vec!["orders".into(), "users".into()], vec![]).into()) },
-    );
+    let mut objects: SchemaObjects = (vec!["orders".into(), "users".into()], vec![]).into();
+    objects
+        .stats
+        .insert("users".into(), datarig_core::driver::structure::RelationStats { rows: Some(40), bytes: None });
+    ev(&mut h, DbEvent::Objects { schema: "shop".into(), result: Ok(objects) });
+    assert!(line_of(&mut h, "users").ends_with("▸ users  ~40 rows"), "its estimates with its objects");
     h.sent();
     h.goto("orders");
     h.key(KeyCode::Char('l'));
@@ -386,7 +402,7 @@ fn another_databases_tables_read_through_its_session() {
     h.key(KeyCode::Enter);
     let row = h.app.explorer_rows()[h.selected()].kind.clone();
     assert!(matches!(&row, datarig_tui::app::explorer::RowKind::AuxNode(_, db, _) if db == "sales"), "{row:?}");
-    assert_eq!(h.explorer_line().trim(), "▸ users");
+    assert_eq!(h.explorer_line().trim(), "▸ users  ~40 rows");
 }
 
 /// The structure tree drawn: users and orders open with their groups, English, icons on and
@@ -440,4 +456,170 @@ fn explorer_structure_icons_on_and_off() {
     h.goto("Triggers");
     h.key(KeyCode::Char('l'));
     assert!(line_of(&mut h, "users_touch").contains("\u{f140b} users_touch"), "an item has its group's icon");
+}
+
+/// `shop` listed with the estimates of its relations with storage: two tables with statistics,
+/// one without (`orders`), a foreign table (none: no entry), a view and a materialized view.
+fn shop_with_estimates(lang: Lang) -> Harness {
+    use datarig_core::driver::structure::RelationStats;
+    let mut h = Harness::connected(lang);
+    h.app.icons = IconsSetting::Off;
+    h.key(KeyCode::BackTab);
+    h.keys("jjjj");
+    h.key(KeyCode::Char('l'));
+    let known = |rows, bytes| RelationStats { rows: Some(rows), bytes: Some(bytes) };
+    let objects = SchemaObjects {
+        tables: ["order_items", "orders", "remote_rates", "users"].map(String::from).to_vec(),
+        views: vec!["order_summary".into(), "zz_mv".into()],
+        materialized: ["zz_mv".to_string()].into(),
+        stats: [
+            ("order_items".to_string(), known(150_000, 19_922_944)),
+            ("orders".to_string(), RelationStats::default()),
+            ("users".to_string(), known(5_000, 1_677_722)),
+            ("zz_mv".to_string(), known(950, 16_384)),
+        ]
+        .into(),
+    };
+    h.db(DbEvent::Objects { schema: "shop".into(), result: Ok(objects) });
+    h.sent();
+    h
+}
+
+/// The explorer's inner lines on a `w`x`hh` screen (between its borders).
+fn explorer_screen(h: &mut Harness, w: u16, hh: u16) -> Vec<String> {
+    h.screen(w, hh).lines().filter_map(|l| l.split('│').nth(1).map(str::to_string)).collect()
+}
+
+/// Every table and materialized view of a listed schema has its estimates on its own line,
+/// without being opened (nothing is asked for): the rows and the size, dim, on the right. One
+/// without statistics yet shows nothing there (no "unknown" on the line), nor do a view and a
+/// foreign table. The status bar shows the line under the cursor whole, with the estimates in
+/// words, "unknown" included; a view has no such line.
+#[test]
+fn every_table_line_has_its_estimates() {
+    let mut h = shop_with_estimates(Lang::En);
+    for (name, want) in [
+        ("order_items", "▸ order_items  ~150k rows · 19 MB"),
+        ("orders", "▸ orders"),
+        ("remote_rates", "▸ remote_rates"),
+        ("users", "▸ users  ~5k rows · 1.6 MB"),
+        ("order_summary", "▸ order_summary"),
+        ("zz_mv", "▸ zz_mv  ~950 rows · 16 KB"),
+    ] {
+        let l = line_of(&mut h, name);
+        assert!(l.ends_with(want), "{name}: {l:?}");
+    }
+    assert!(h.sent().is_empty(), "nothing is read for them");
+    // On the right of a 40-column explorer, dim.
+    let screen = explorer_screen(&mut h, 160, 45);
+    let users = screen.iter().find(|l| l.contains("users")).unwrap();
+    assert!(users.ends_with("  ~5k rows · 1.6 MB") && users.starts_with("        ▸ users  "), "{users:?}");
+    let t = h.draw(160, 45);
+    let buf = t.backend().buffer();
+    let y = (0..45).find(|&y| row_text(buf, y).contains("▸ users")).unwrap();
+    let x = row_text(buf, y).find("~5k").unwrap() as u16;
+    assert_eq!(buf[(x, y)].fg, datarig_tui::theme::FG_DIM);
+    assert_eq!(buf[(x - 8, y)].fg, datarig_tui::theme::FG, "the name as before");
+    // The status bar: the whole line, the estimates in words.
+    for (name, want) in [
+        ("order_items", Some("order_items  ~150k rows · ~19 MB")),
+        ("orders", Some("orders  rows and size unknown (no statistics yet)")),
+        ("remote_rates", None),
+        ("order_summary", None),
+        ("zz_mv", Some("zz_mv  ~950 rows · ~16 KB")),
+    ] {
+        h.explore("local-pg");
+        h.goto(name);
+        let status = h.status(200, 45);
+        match want {
+            Some(w) => assert!(status.contains(w), "{name}: {status}"),
+            None => assert!(!status.contains(name) && !status.contains("rows"), "{name}: {status}"),
+        }
+    }
+}
+
+/// The name always wins: the estimates take the room it leaves (two blanks at least), the
+/// size going first, then the rows; a name too long for the explorer is cut as before, and
+/// never for them. 80x24 (a 22-column explorer), 120x40 (28) and 160x45 (38).
+#[test]
+fn the_name_wins_over_the_estimates() {
+    use datarig_core::driver::structure::RelationStats;
+    let mut h = shop_with_estimates(Lang::En);
+    let long = "customer_loyalty_points";
+    let objects = SchemaObjects {
+        tables: vec![long.into(), "order_items".into(), "users".into()],
+        stats: [
+            (long.to_string(), RelationStats { rows: Some(7), bytes: Some(8192) }),
+            ("order_items".to_string(), RelationStats { rows: Some(150_000), bytes: Some(19_922_944) }),
+            ("users".to_string(), RelationStats { rows: Some(5_000), bytes: Some(1_677_722) }),
+        ]
+        .into(),
+        ..Default::default()
+    };
+    h.db(DbEvent::Objects { schema: "shop".into(), result: Ok(objects) });
+    let line = |h: &mut Harness, w, hh, name: &str| {
+        explorer_screen(h, w, hh).into_iter().find(|l| l.contains(&name[..5])).unwrap().trim_end().to_string()
+    };
+    // Room for both, for the rows alone, for none.
+    assert_eq!(line(&mut h, 160, 45, "users"), "        ▸ users      ~5k rows · 1.6 MB");
+    assert_eq!(line(&mut h, 160, 45, "order_items"), "        ▸ order_items       ~150k rows");
+    assert_eq!(line(&mut h, 160, 45, long), "        ▸ customer_loyalty_points");
+    assert_eq!(line(&mut h, 120, 40, "users"), "        ▸ users     ~5k rows");
+    assert_eq!(line(&mut h, 120, 40, "order_items"), "        ▸ order_items");
+    assert_eq!(line(&mut h, 120, 40, long), "        ▸ customer_loyalty_…");
+    assert_eq!(line(&mut h, 80, 24, "users"), "        ▸ users");
+    assert_eq!(line(&mut h, 80, 24, "order_items"), "        ▸ order_items");
+}
+
+/// `r` on the schema, or on a closed table, lists the schema's objects again, and their
+/// estimates with them; a structure read again (`r` on an open table) brings its own.
+#[test]
+fn r_reads_the_estimates_again() {
+    use datarig_core::driver::structure::RelationStats;
+    let mut h = shop_with_estimates(Lang::En);
+    h.goto("users");
+    h.keys("r");
+    let sent = h.sent();
+    assert!(sent.iter().any(|c| matches!(c, DbCommand::LoadObjects { schema } if schema == "shop")), "{sent:?}");
+    let objects = SchemaObjects {
+        tables: vec!["orders".into(), "users".into()],
+        stats: [
+            ("orders".to_string(), RelationStats { rows: Some(50_000), bytes: Some(19_922_944) }),
+            ("users".to_string(), RelationStats { rows: Some(6_000), bytes: Some(2_097_152) }),
+        ]
+        .into(),
+        ..Default::default()
+    };
+    h.db(DbEvent::Objects { schema: "shop".into(), result: Ok(objects) });
+    assert!(line_of(&mut h, "orders").ends_with("▸ orders  ~50k rows · 19 MB"), "analyzed since");
+    assert!(line_of(&mut h, "users").ends_with("▸ users  ~6k rows · 2 MB"));
+    h.explore("local-pg");
+    h.goto("shop");
+    h.keys("r");
+    assert!(h.sent().iter().any(|c| matches!(c, DbCommand::LoadObjects { schema } if schema == "shop")));
+    // An open table's structure, read again, has the estimates of now.
+    h.db(DbEvent::Objects { schema: "shop".into(), result: Ok((vec!["users".into()], vec![]).into()) });
+    h.explore("local-pg");
+    h.goto("users");
+    h.key(KeyCode::Char('l'));
+    h.db(structure("shop", "users", users_structure()));
+    h.sent();
+    h.keys("r");
+    assert_eq!(asked(&h.sent()), ["shop.users"]);
+    let mut again = users_structure();
+    again.estimated_rows = Some(12_000);
+    h.db(structure("shop", "users", again));
+    assert!(line_of(&mut h, "users").ends_with("▾ users  ~12k rows · 4.2 MB"), "{}", line_of(&mut h, "users"));
+}
+
+/// Korean words the rows (from its own catalog), not the English ones.
+#[test]
+fn estimates_are_worded_in_the_ui_language() {
+    use datarig_core::i18n::{I18n, Msg};
+    let mut h = shop_with_estimates(Lang::Ko);
+    let [ko, en] =
+        [Lang::Ko, Lang::En].map(|l| I18n::new(l).msg(&Msg::TreeStatsRows { rows: "5k".into() }).to_string());
+    assert_ne!(ko, en);
+    let l = line_of(&mut h, "users");
+    assert!(l.ends_with(&format!("users  {ko} · 1.6 MB")), "{l:?}");
 }

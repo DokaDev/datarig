@@ -4,18 +4,22 @@
 //! policy is read-only), the error line under a
 //! failed profile, and under a connected one its server's databases (its own first, marked
 //! `default`), each with its schema tree. With icons on every node of the tree has
-//! an icon of its kind, and a column that is no key the icon of its type. An open table shows
+//! an icon of its kind, and a column that is no key the icon of its type. A table or a
+//! materialized view has the estimates of its rows and size after its name, dim and on the
+//! right, as many of them as there is room for (the name first). An open table shows
 //! its structure (see `widgets::tree`): each group with its icon, each item with its group's.
 
 use crate::app::explorer::{Row, RowKind};
 use crate::app::{App, Keys, NodeState};
 use crate::icons::{self, KeyMark, TreeIcon, TypeCategory};
-use crate::text::{Align, clip, fit, human_bytes, human_count, wrap_words};
+use crate::text::{Align, clip, fit, human_bytes, human_count, width, wrap_words};
 use crate::theme;
 use crate::widgets::tree::{Group, Node, ObjectView, Structure, Tree};
 use crate::widgets::{put, spinner_at};
 use datarig_core::driver::KeyMarks;
-use datarig_core::driver::structure::{ColumnFill, FkAction, StructureGroup, TableStructure, TriggerEvent};
+use datarig_core::driver::structure::{
+    ColumnFill, FkAction, RelationStats, StructureGroup, TableStructure, TriggerEvent,
+};
 use datarig_core::i18n::{Label, Msg};
 use datarig_core::sql::complete::Catalog;
 use ratatui::buffer::Buffer;
@@ -173,10 +177,7 @@ fn node_parts(app: &App, tree: &Tree, n: Node) -> Vec<(String, Style)> {
 
 /// A node of an open object's structure.
 fn is_structure(n: Node) -> bool {
-    matches!(
-        n,
-        Node::Stats(..) | Node::StructGroup(..) | Node::StructItem(..) | Node::StructDetail(..) | Node::StructNote(..)
-    )
+    matches!(n, Node::StructGroup(..) | Node::StructItem(..) | Node::StructDetail(..) | Node::StructNote(..))
 }
 
 fn group_label(g: StructureGroup) -> Label {
@@ -203,13 +204,12 @@ fn group_icon_style(g: StructureGroup) -> Style {
     Style::new().fg(color)
 }
 
-/// A node of an open object's structure: its size estimate, a group (`Columns (7)`; an empty
-/// one dim, without a count), an item with what it is in dim text, an item's line, or why the
+/// A node of an open object's structure: a group (`Columns (7)`; an empty one dim, without a
+/// count), an item with what it is in dim text, an item's line, or why the
 /// structure is not there.
 fn structure_parts(app: &App, tree: &Tree, n: Node) -> Vec<(String, Style)> {
     let dim = Style::new().fg(theme::FG_DIM);
-    let (Node::Stats(i, g, j)
-    | Node::StructGroup(i, g, j, _)
+    let (Node::StructGroup(i, g, j, _)
     | Node::StructItem(i, g, j, _, _)
     | Node::StructDetail(i, g, j, _, _, _)
     | Node::StructNote(i, g, j)) = n
@@ -228,15 +228,6 @@ fn structure_parts(app: &App, tree: &Tree, n: Node) -> Vec<(String, Style)> {
     };
     let on = app.icons_on();
     match n {
-        Node::Stats(..) => {
-            // Both are estimates from the server's statistics (`VACUUM`, `ANALYZE`).
-            let text = match (st.estimated_rows, st.total_bytes.map(human_bytes)) {
-                (Some(r), Some(size)) => app.i18n.msg(&Msg::TreeStats { rows: human_count(r), size }),
-                (None, Some(size)) => app.i18n.msg(&Msg::TreeStatsRowsUnknown { size }),
-                (_, None) => app.i18n.label(Label::TreeStatsUnknown),
-            };
-            vec![(text.to_string(), dim)]
-        }
         Node::StructGroup(.., sg) => {
             let count = st.count(sg);
             let mut parts = Vec::new();
@@ -410,34 +401,79 @@ fn column_parts(
     parts
 }
 
+/// The tree `row` is a node of, and the node.
+fn row_node<'a>(app: &'a App, row: &Row) -> Option<(&'a Tree, Node)> {
+    match &row.kind {
+        RowKind::Node(id, n) => Some((&app.conns.get(*id)?.tree, *n)),
+        RowKind::AuxNode(id, db, n) => Some((&app.conns.aux(*id, db)?.tree, *n)),
+        _ => None,
+    }
+}
+
+/// The estimates of the object `row` is, when it has storage and they were read.
+fn row_stats(app: &App, row: &Row) -> Option<RelationStats> {
+    match row_node(app, row)? {
+        (tree, Node::Object(i, g, j)) => tree.object_stats(i, g, j),
+        _ => None,
+    }
+}
+
+/// The estimates as an object's line shows them, the longest first: the rows and the size,
+/// then the rows alone (a short line drops the size first); the size alone when the rows are
+/// not known; nothing when neither is (no statistics yet: the status bar says so).
+fn inline_stats(app: &App, s: RelationStats) -> Vec<String> {
+    let rows = s.rows.map(|r| app.i18n.msg(&Msg::TreeStatsRows { rows: human_count(r) }).to_string());
+    match (rows, s.bytes.map(human_bytes)) {
+        (Some(r), Some(size)) => vec![format!("{r} · {size}"), r],
+        (Some(r), None) => vec![r],
+        (None, Some(size)) => vec![format!("~{size}")],
+        (None, None) => Vec::new(),
+    }
+}
+
+/// The estimates in full words, for the status bar: both are estimates from the server's
+/// statistics (`VACUUM`, `ANALYZE`).
+fn full_stats(app: &App, s: RelationStats) -> String {
+    match (s.rows, s.bytes.map(human_bytes)) {
+        (Some(r), Some(size)) => app.i18n.msg(&Msg::TreeStats { rows: human_count(r), size }).to_string(),
+        (None, Some(size)) => app.i18n.msg(&Msg::TreeStatsRowsUnknown { size }).to_string(),
+        (_, None) => app.i18n.label(Label::TreeStatsUnknown).to_string(),
+    }
+}
+
+/// Blanks at least between an object's name and its estimates.
+const STATS_GAP: usize = 2;
+
 /// The whole line of `row` as the explorer draws it, not cut at its width: the indentation, the
-/// arrow and the text.
+/// arrow and the text (an object's estimates two blanks after its name).
 pub(crate) fn row_text(app: &App, row: &Row) -> String {
     let arrow = match app.explorer_arrow(row) {
         Some(true) => "▾ ",
         Some(false) => "▸ ",
         None => "  ",
     };
-    let text: String = row_parts(app, row).into_iter().map(|(t, _)| t).collect();
+    let mut text: String = row_parts(app, row).into_iter().map(|(t, _)| t).collect();
+    if let Some(stats) = row_stats(app, row).and_then(|s| inline_stats(app, s).into_iter().next()) {
+        text.push_str(&format!("{}{stats}", " ".repeat(STATS_GAP)));
+    }
     format!("{}{arrow}{text}", "  ".repeat(row.depth))
 }
 
-/// The whole text of the row under the explorer's cursor when it is part of a table's
-/// structure, for the status bar: the explorer is narrow, and cuts the details of deep lines.
-/// A structure that could not be read shows why alone (the reason and what to do), which the
+/// The whole text of the row under the explorer's cursor, for the status bar, when it is part
+/// of a table's structure (the explorer is narrow, and cuts the details of deep lines) or an
+/// object with storage: its name and its estimates in words, also when it has none yet. A
+/// structure that could not be read shows why alone (the reason and what to do), which the
 /// explorer's line wraps in "structure unavailable".
-pub(crate) fn structure_preview(app: &App) -> Option<String> {
+pub(crate) fn line_preview(app: &App) -> Option<String> {
     let row = app.explorer_row()?;
-    let (RowKind::Node(_, n) | RowKind::AuxNode(_, _, n)) = &row.kind else { return None };
-    if !is_structure(*n) {
+    let (tree, n) = row_node(app, &row)?;
+    if let (Node::Object(..), Some(stats)) = (n, row_stats(app, &row)) {
+        return Some(format!("{}{}{}", tree.label(n, &app.i18n).0, " ".repeat(STATS_GAP), full_stats(app, stats)));
+    }
+    if !is_structure(n) {
         return None;
     }
-    let tree = match &row.kind {
-        RowKind::AuxNode(id, db, _) => app.conns.aux(*id, db).map(|a| &a.tree),
-        RowKind::Node(id, _) => app.conns.get(*id).map(|c| &c.tree),
-        _ => None,
-    };
-    if let (Node::StructNote(i, g, j), Some(tree)) = (*n, tree)
+    if let Node::StructNote(i, g, j) = n
         && let Some(Structure::Failed(error)) = tree.object_view(i, g, j).map(|v| &v.structure)
     {
         return Some(error.clone());
@@ -476,6 +512,13 @@ fn draw_row(app: &App, row: &Row, line: Rect, bg: Color, buf: &mut Buffer) {
         }
         let used = put(buf, x + cx as u16, y, &text, w - cx, style.bg(bg));
         cx += used as usize;
+    }
+    // An object's estimates on the right, in the room its name leaves: never over the name.
+    let room = w.saturating_sub(cx + STATS_GAP);
+    let stats = row_stats(app, row).map(|s| inline_stats(app, s)).unwrap_or_default();
+    if let Some(text) = stats.into_iter().find(|t| width(t) <= room) {
+        let at = w - width(&text);
+        put(buf, x + at as u16, y, &text, width(&text), Style::new().fg(theme::FG_DIM).bg(bg));
     }
 }
 

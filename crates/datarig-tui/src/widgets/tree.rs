@@ -1,6 +1,8 @@
 //! The schema tree of one connected profile: schema -> Tables / Views -> objects -> their
-//! structure, with lazy loading of schema children. With a driver that reads a table's
-//! structure (`Capabilities::structure`) an open object shows its size estimate and its groups
+//! structure, with lazy loading of schema children. Each object with storage has the estimates
+//! of its rows and size read with its schema's list (and again with its structure), which its
+//! line shows. With a driver that reads a table's
+//! structure (`Capabilities::structure`) an open object shows its groups
 //! (Columns, Primary Key, Foreign Keys, Indexes, Unique and Check Constraints, Triggers: those
 //! of its kind, an empty one dim and without a count), read once when it first opens and kept
 //! ([`Tree::structures`]); without it, its columns from the profile's completion catalog. The
@@ -9,20 +11,22 @@
 
 use crate::theme;
 use datarig_core::driver::SchemaObjects;
-use datarig_core::driver::structure::{StructureGroup, TableStructure};
+use datarig_core::driver::structure::{RelationStats, StructureGroup, TableStructure};
 use datarig_core::i18n::{I18n, Label};
 use ratatui::style::{Modifier, Style};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Children {
     NotLoaded,
     Loading,
-    /// Materialized views are among `views` and named again in `materialized`.
+    /// Materialized views are among `views` and named again in `materialized`; `stats` has the
+    /// estimates of the objects with storage, by name.
     Loaded {
         tables: Vec<String>,
         views: Vec<String>,
         materialized: BTreeSet<String>,
+        stats: BTreeMap<String, RelationStats>,
     },
     Failed(String),
 }
@@ -114,8 +118,6 @@ pub enum Node {
     /// An open object whose columns the catalog does not have (still loading, or it could not
     /// be read).
     NoColumns(usize, Group, usize),
-    /// The size estimate of an open object with storage: `~rows · size`.
-    Stats(usize, Group, usize),
     /// A group of an open object's structure.
     StructGroup(usize, Group, usize, StructureGroup),
     /// Item `k` of a group (a column, a key, an index, …).
@@ -205,7 +207,6 @@ impl Tree {
             | Node::Object(i, _, _)
             | Node::Column(i, _, _, _)
             | Node::NoColumns(i, _, _)
-            | Node::Stats(i, _, _)
             | Node::StructGroup(i, _, _, _)
             | Node::StructItem(i, _, _, _, _)
             | Node::StructDetail(i, _, _, _, _, _)
@@ -221,7 +222,9 @@ impl Tree {
     pub fn set_objects(&mut self, schema: &str, result: Result<SchemaObjects, String>) {
         if let Some(s) = self.schemas.iter_mut().find(|s| s.name == schema) {
             s.children = match result {
-                Ok(SchemaObjects { tables, views, materialized }) => Children::Loaded { tables, views, materialized },
+                Ok(SchemaObjects { tables, views, materialized, stats }) => {
+                    Children::Loaded { tables, views, materialized, stats }
+                }
                 Err(e) => Children::Failed(e),
             };
         }
@@ -284,16 +287,12 @@ impl Tree {
         out
     }
 
-    /// The rows of open object `(i, g, j)`, `schema.name`, below it: its size estimate, then
-    /// the groups of its kind, each open one with its items (and an open item its lines).
+    /// The rows of open object `(i, g, j)`, `schema.name`, below it: the groups of its kind, each open one with its items (and an open item its lines).
     fn push_structure(&self, out: &mut Vec<Row>, (i, g, j): (usize, Group, usize), schema: &str, name: &str) {
         let view = self.structures.get(&(schema.to_string(), name.to_string()));
         let Some((view, st)) = view.and_then(|v| v.loaded().map(|s| (v, s))) else {
             return out.push(Row { depth: 3, node: Node::StructNote(i, g, j) });
         };
-        if st.kind.has_storage() {
-            out.push(Row { depth: 3, node: Node::Stats(i, g, j) });
-        }
         for &sg in st.kind.groups() {
             out.push(Row { depth: 3, node: Node::StructGroup(i, g, j, sg) });
             if !view.open_groups.contains(&sg) {
@@ -325,8 +324,15 @@ impl Tree {
         v.structure = Structure::Loading;
     }
 
-    /// The structure of `schema.name` came, or why it could not be read.
+    /// The structure of `schema.name` came, or why it could not be read. Its estimates, read
+    /// with it, are the object's from now on (its line shows them).
     pub fn set_structure(&mut self, schema: &str, name: &str, result: Result<Box<TableStructure>, String>) {
+        if let Some(st) = result.as_ref().ok().and_then(|s| s.stats())
+            && let Some(Children::Loaded { stats, .. }) =
+                self.schemas.iter_mut().find(|s| s.name == schema).map(|s| &mut s.children)
+        {
+            stats.insert(name.to_string(), st);
+        }
         let v = self.structures.entry((schema.to_string(), name.to_string())).or_insert_with(ObjectView::new);
         v.structure = match result {
             Ok(s) => Structure::Loaded(s),
@@ -391,6 +397,16 @@ impl Tree {
                 let list = if g == Group::Tables { tables } else { views };
                 list.get(j).map(|n| (s.name.clone(), n.clone()))
             }
+            _ => None,
+        }
+    }
+
+    /// The estimates of object `(i, g, j)`: `None` for one without storage (a view, a foreign
+    /// table) or whose estimates were not read.
+    pub fn object_stats(&self, i: usize, g: Group, j: usize) -> Option<RelationStats> {
+        let (_, name) = self.object_name(i, g, j)?;
+        match &self.schemas.get(i)?.children {
+            Children::Loaded { stats, .. } => stats.get(&name).copied(),
             _ => None,
         }
     }
@@ -511,8 +527,7 @@ impl Tree {
         let object = match node {
             Some(Node::Object(i, g, j)) if self.is_expanded(Node::Object(i, g, j)) == Some(true) => Some((i, g, j)),
             Some(
-                Node::Stats(i, g, j)
-                | Node::StructGroup(i, g, j, _)
+                Node::StructGroup(i, g, j, _)
                 | Node::StructItem(i, g, j, _, _)
                 | Node::StructDetail(i, g, j, _, _, _)
                 | Node::StructNote(i, g, j),
@@ -530,7 +545,6 @@ impl Tree {
                 | Node::Object(i, _, _)
                 | Node::Column(i, _, _, _)
                 | Node::NoColumns(i, _, _)
-                | Node::Stats(i, _, _)
                 | Node::StructGroup(i, _, _, _)
                 | Node::StructItem(i, _, _, _, _)
                 | Node::StructDetail(i, _, _, _, _, _)
@@ -570,7 +584,6 @@ impl Tree {
             // Drawn by the explorer from the catalog or the structure (see `widgets::explorer`).
             Node::Column(..)
             | Node::NoColumns(..)
-            | Node::Stats(..)
             | Node::StructGroup(..)
             | Node::StructItem(..)
             | Node::StructDetail(..)

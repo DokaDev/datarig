@@ -171,6 +171,15 @@ async fn introspection_lists_schemas_objects_and_catalog() {
     assert_eq!(objects.tables, ["audit_log", "order_items", "orders", "products", "reviews", "users"]);
     assert_eq!(objects.views, ["order_summary"]);
     assert!(objects.materialized.is_empty(), "order_summary is a plain view");
+    // Every table has its estimates, the same as its structure's (one set of rules); the view none.
+    assert_eq!(objects.stats.keys().collect::<Vec<_>>(), objects.tables.iter().collect::<Vec<_>>());
+    for table in &objects.tables {
+        c.session.send(DbCommand::LoadStructure { schema: "shop".into(), table: table.clone() });
+        let DbEvent::Structure { result, .. } = c.wait(|e| matches!(e, DbEvent::Structure { .. }), 10).await else {
+            unreachable!()
+        };
+        assert_eq!(result.expect(table).stats().as_ref(), objects.stats.get(table), "{table}");
+    }
 }
 
 /// A schema's materialized views are listed with its views and named as materialized (step
@@ -199,6 +208,7 @@ async fn materialized_views_are_views_marked_materialized() {
     assert_eq!(objects.tables, ["p", "t"]);
     assert_eq!(objects.views, ["m", "v"]);
     assert_eq!(objects.materialized.iter().collect::<Vec<_>>(), ["m"]);
+    assert_eq!(objects.stats.keys().collect::<Vec<_>>(), ["m", "p", "t"], "a view has no estimates");
 }
 
 /// Key metadata: the metadata session reports the keys of every table
@@ -585,7 +595,9 @@ async fn table_structure_reads_the_catalog_in_one_statement() {
 /// waits behind no one and no one waits behind it. A partitioned table whose partition is
 /// locked still has its structure and size (statistics: no lock on the partition). Without a
 /// lock the size is the statistics' estimate, in whole pages, and a read after the lock is
-/// gone works.
+/// gone works. Listing the schema's objects with their estimates takes no lock on any of them
+/// either: behind a held or a queued lock it answers at once, the locked table's estimates
+/// included.
 #[tokio::test(flavor = "multi_thread")]
 async fn table_structure_never_waits_for_a_lock() {
     let Some(url) = pg_url("table_structure_never_waits_for_a_lock") else { return };
@@ -622,19 +634,23 @@ async fn table_structure_never_waits_for_a_lock() {
     let mut meta = Conn { session: PgDriver.connect(&cfg, SessionRole::Meta, o, tx), rx };
     meta.wait(|e| matches!(e, DbEvent::Keys(_)), 30).await;
     let mut observer = Conn::open(&url, SessionRole::Query).await;
-    // The structure of `table`, how long it took, and the relation locks the metadata session
-    // held or asked for on the table while it was being read (looked at 300 ms in, or when it
-    // came if it came earlier: none either way).
+    // The structure of `table` (the schema's objects with `None`), how long it took, and the
+    // relation locks the metadata session held or asked for on any relation of the schema while
+    // it was being read (looked at 300 ms in, or when it came if it came earlier: none either
+    // way).
     let mut n = 100;
-    let mut read = async |table: &str| {
+    let mut ask = async |table: Option<&str>| {
         let t0 = Instant::now();
-        meta.session.send(DbCommand::LoadStructure { schema: schema.clone(), table: table.to_string() });
+        meta.session.send(match table {
+            Some(table) => DbCommand::LoadStructure { schema: schema.clone(), table: table.to_string() },
+            None => DbCommand::LoadObjects { schema: schema.clone() },
+        });
         let ev = tokio::time::timeout(Duration::from_millis(300), meta.rx.recv()).await;
         n += 1;
         let sql = format!(
             "SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid \
              WHERE a.application_name = 'datarig-meta-{tag}' AND l.locktype = 'relation' \
-             AND l.relation = '{s}.{table}'::regclass"
+             AND l.relation IN (SELECT c.oid FROM pg_catalog.pg_class c WHERE c.relnamespace = '{s}'::regnamespace)"
         );
         let DbEvent::Page { rows, .. } = observer.run(n, &sql).await else { panic!("pg_locks") };
         let locks = rows[0][0].clone().unwrap_or_default();
@@ -642,35 +658,52 @@ async fn table_structure_never_waits_for_a_lock() {
             Ok(Some(ev)) => ev,
             _ => tokio::time::timeout(Duration::from_secs(10), meta.rx.recv())
                 .await
-                .unwrap_or_else(|_| panic!("{table}: no answer within 10 s ({locks} locks asked for)"))
+                .unwrap_or_else(|_| panic!("{table:?}: no answer within 10 s ({locks} locks asked for)"))
                 .expect("the metadata session ended"),
         };
-        let DbEvent::Structure { result, .. } = ev else { panic!("{ev:?}") };
-        (result.map(|b| *b), t0.elapsed(), locks)
+        (ev, t0.elapsed(), locks)
+    };
+    let structure = |(ev, took, locks)| match ev {
+        DbEvent::Structure { result, .. } => (result.map(|b| *b), took, locks),
+        ev => panic!("{ev:?}"),
+    };
+    let objects = |(ev, took, locks)| match ev {
+        DbEvent::Objects { result, .. } => (result.expect("objects"), took, locks),
+        ev => panic!("{ev:?}"),
     };
 
-    let (t, _, _) = read("t").await;
+    let (t, _, _) = structure(ask(Some("t")).await);
     let t = t.expect("t, not locked");
     assert_eq!(t.estimated_rows, Some(2000));
     let bytes = t.total_bytes.expect("analyzed: a size");
     assert!(bytes > 2000 * 200 && bytes % 8192 == 0, "whole pages of the heap and its indexes: {bytes}");
     assert_eq!(t.checks.len(), 1);
     assert_eq!(t.indexes.len(), 2);
+    let t_stats = t.stats().expect("a table's estimates");
+    // The schema's objects with their estimates, `t` locked: at once, no lock asked for.
+    let listed_at_once = |(listed, took, locks): (datarig_core::driver::SchemaObjects, Duration, String), why: &str| {
+        assert!(took < Duration::from_secs(1), "{why}: at once: {took:?}");
+        assert_eq!(locks, "0", "{why}: no lock asked for on any relation of the schema");
+        assert_eq!(listed.tables, ["p", "p1", "t"], "{why}");
+        assert_eq!(listed.stats["t"], t_stats, "{why}: the locked table's estimates");
+        assert_eq!((listed.stats["p"].rows, listed.stats["p1"].rows), (Some(1000), Some(1000)), "{why}");
+    };
 
     // Held: an open transaction's `LOCK TABLE` on the table and on the partition.
     let mut holder = Conn::open(&url, SessionRole::Query).await;
     assert!(matches!(holder.run(1, "BEGIN").await, DbEvent::Done { .. }));
     let lock = format!("LOCK TABLE {s}.t, {s}.p1 IN ACCESS EXCLUSIVE MODE");
     assert!(matches!(holder.run(2, &lock).await, DbEvent::Done { .. }));
-    let (t, took, locks) = read("t").await;
+    let (t, took, locks) = structure(ask(Some("t")).await);
     assert_eq!(t, Err(DbError::Locked));
     assert!(took < Duration::from_secs(1), "at once: {took:?}");
     assert_eq!(locks, "0", "no lock asked for on the locked table");
-    let (p, took, locks) = read("p").await;
+    let (p, took, locks) = structure(ask(Some("p")).await);
     let p = p.expect("the partitioned table is not locked, only its partition");
     assert!(took < Duration::from_secs(1), "at once: {took:?}");
     assert_eq!(locks, "0", "the parent's lock was taken and let go with the read");
     assert_eq!((p.estimated_rows, p.total_bytes.is_some_and(|b| b > 0)), (Some(1000), true), "{p:?}");
+    listed_at_once(objects(ask(None).await), "held");
     assert!(matches!(holder.run(3, "ROLLBACK").await, DbEvent::Done { .. }));
 
     // Waited for: a reader's transaction holds the table, and a `LOCK TABLE` waits behind it.
@@ -694,25 +727,28 @@ async fn table_structure_never_waits_for_a_lock() {
         assert!(Instant::now() < deadline, "the LOCK TABLE never queued");
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
-    let (t, took, locks) = read("t").await;
+    let (t, took, locks) = structure(ask(Some("t")).await);
     assert_eq!(t, Err(DbError::Locked));
     assert!(took < Duration::from_secs(1), "at once: {took:?}");
     assert_eq!(locks, "0", "not queued behind the waiting lock");
+    listed_at_once(objects(ask(None).await), "waited for");
     assert!(matches!(reader.run(3, "ROLLBACK").await, DbEvent::Done { .. }));
     assert!(matches!(migration.result(2).await, DbEvent::Done { .. }), "the lock was granted");
     assert!(matches!(migration.run(3, "ROLLBACK").await, DbEvent::Done { .. }));
 
     // Asked again once the lock is gone.
-    assert!(read("t").await.0.is_ok());
+    assert!(structure(ask(Some("t")).await).0.is_ok());
 }
 
 /// The size of a table that was never vacuumed or analyzed is unknown, as its rows are: its
 /// heap's `relpages` is still 0 however many rows it has, while its indexes and its TOAST
 /// table's index have pages from their creation on (a text column, a primary key, a partitioned
 /// table's partitions). Once analyzed it is its heap, TOAST table and indexes, as the server
-/// counts them (in whole pages).
+/// counts them (in whole pages). The schema's list has the same estimates for each of them,
+/// read with it (a partitioned table its leaf partitions' sum, each partition its own).
 #[tokio::test(flavor = "multi_thread")]
 async fn table_size_is_unknown_until_the_table_has_statistics() {
+    use datarig_core::driver::structure::RelationStats;
     let Some(url) = pg_url("table_size_is_unknown_until_the_table_has_statistics") else { return };
     let schema = format!("zz_size_{}", std::process::id());
     let _guard = SchemaGuard::new(&url, &schema);
@@ -751,33 +787,48 @@ async fn table_size_is_unknown_until_the_table_has_statistics() {
              FROM pg_catalog.pg_partition_tree('{s}.{table}') r WHERE r.isleaf), 0))::int8"
         );
         let real: u64 = rows_of(observer.run(n, &sql).await)[0][0].as_deref().unwrap().parse().unwrap();
-        (st.estimated_rows, st.total_bytes, real)
+        meta.session.send(DbCommand::LoadObjects { schema: schema.clone() });
+        let DbEvent::Objects { result, .. } = meta.wait(|e| matches!(e, DbEvent::Objects { .. }), 30).await else {
+            unreachable!()
+        };
+        let listed = result.expect("objects").stats;
+        assert_eq!(listed.get(table), st.stats().as_ref(), "{table}: the list's estimates are its structure's");
+        (st.estimated_rows, st.total_bytes, real, listed)
     };
 
     for table in ["text_only", "keyed", "part"] {
-        let (rows, bytes, real) = read(table).await;
+        let (rows, bytes, real, listed) = read(table).await;
         assert!(real > 100_000, "{table} has rows: {real}");
         assert_eq!((rows, bytes), (None, None), "{table}: never analyzed, rows and size unknown");
+        for partition in ["part_a", "part_b"] {
+            assert_eq!(listed[partition], RelationStats::default(), "{partition}: never analyzed");
+        }
     }
     for (table, count) in [("text_only", 5000), ("keyed", 20_000), ("part", 20_000)] {
         pg_clean::run_fresh(&url, &format!("ANALYZE {s}.{table}")).unwrap();
-        let (rows, bytes, real) = read(table).await;
+        let (rows, bytes, real, listed) = read(table).await;
         assert_eq!(rows, Some(count), "{table}");
+        if table == "part" {
+            let [a, b] = ["part_a", "part_b"].map(|p| listed[p]);
+            assert_eq!((a.rows, b.rows), (Some(10_000), Some(10_000)), "each partition its own");
+            assert_eq!(a.bytes.zip(b.bytes).map(|(a, b)| a + b), bytes, "the parent's is their sum");
+        }
         let bytes = bytes.unwrap_or_else(|| panic!("{table}: analyzed, a size"));
         // The server's count adds the free space maps, which the statistics leave out.
         assert!(bytes <= real && bytes >= real * 9 / 10, "{table}: ~{bytes} for {real} bytes");
     }
 }
 
-/// A table's structure stays fast in a database of some thousand relations (a partitioned
-/// table of 2000 partitions and hundreds of small tables): its planned cost grows with the
-/// catalog, not with its square, so it stays under `jit_above_cost`, and the metadata session's
-/// transaction turns JIT off anyway (a JIT compilation of it costs far more than running it).
+/// A table's structure, and the list of a schema's objects with their estimates, stay fast in a
+/// database of some thousand relations (a partitioned table of 2000 partitions and hundreds of
+/// small tables, all in one schema): their planned cost grows with the catalog, not with its
+/// square, so it stays under `jit_above_cost`, and the metadata session's transaction turns JIT
+/// off anyway (a JIT compilation of them costs far more than running them).
 /// Here the database compiles every statement (`jit_above_cost = 0`, inlined and optimized),
 /// so a read that JIT compiled would take hundreds of milliseconds.
 #[tokio::test(flavor = "multi_thread")]
 async fn table_structure_stays_fast_with_thousands_of_relations() {
-    use datarig_driver_postgres::catalog_sql::{BEGIN_READ, TABLE_STRUCTURE};
+    use datarig_driver_postgres::catalog_sql::{BEGIN_READ, SCHEMA_OBJECTS, TABLE_STRUCTURE};
     let Some(url) = pg_url("table_structure_stays_fast_with_thousands_of_relations") else { return };
     let db = format!("zz_many_{}", std::process::id());
     let _db_guard = DatabaseGuard { url: url.clone(), name: db.clone() };
@@ -824,8 +875,12 @@ async fn table_structure_stays_fast_with_thousands_of_relations() {
     assert!(rows[0][0].as_deref().unwrap().parse::<u32>().unwrap() > 7000, "{rows:?}");
     let jit_available = rows[0][1].as_deref() == Some("true");
 
-    for table in ["zz_t", "zz_part"] {
-        let sql = TABLE_STRUCTURE.replace("$1", "'public'").replace("$2", &format!("'{table}'"));
+    let objects = SCHEMA_OBJECTS.replace("$1", "'public'");
+    for (table, sql) in [
+        ("zz_t", TABLE_STRUCTURE.replace("$1", "'public'").replace("$2", "'zz_t'")),
+        ("zz_part", TABLE_STRUCTURE.replace("$1", "'public'").replace("$2", "'zz_part'")),
+        ("the objects of public", objects),
+    ] {
         let explain = |sql: &str| format!("EXPLAIN (ANALYZE, FORMAT JSON) {sql}");
         let plan =
             |ev: DbEvent| -> serde_json::Value { serde_json::from_str(rows_of(ev)[0][0].as_deref().unwrap()).unwrap() };
@@ -861,6 +916,21 @@ async fn table_structure_stays_fast_with_thousands_of_relations() {
         }
         assert!(best < Duration::from_millis(budget), "{table}: {best:?} (budget {budget} ms)");
     }
+    let mut best = Duration::MAX;
+    for _ in 0..3 {
+        let t0 = Instant::now();
+        meta.session.send(DbCommand::LoadObjects { schema: "public".into() });
+        let DbEvent::Objects { result, .. } = meta.wait(|e| matches!(e, DbEvent::Objects { .. }), 30).await else {
+            unreachable!()
+        };
+        best = best.min(t0.elapsed());
+        let objects = result.expect("objects");
+        assert_eq!(objects.tables.len(), 2602);
+        assert_eq!(objects.stats["zz_part"].rows, Some(20_000));
+        assert_eq!(objects.stats["zz_part_7"].rows, Some(10));
+        assert_eq!(objects.stats["zz_t"].rows, Some(100));
+    }
+    assert!(best < Duration::from_millis(300), "the objects of public: {best:?} (budget 300 ms)");
 }
 
 /// One connection per session, named after its role; the metadata session refuses statements.

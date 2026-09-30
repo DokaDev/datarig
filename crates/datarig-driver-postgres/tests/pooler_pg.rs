@@ -145,7 +145,9 @@ async fn metadata_session_reads_the_catalog_behind_a_pooler() {
             let DbEvent::Objects { result, .. } = c.wait(|e| matches!(e, DbEvent::Objects { .. }), 10).await else {
                 panic!()
             };
-            assert!(result.expect("objects").tables.contains(&"users".to_string()));
+            let objects = result.expect("objects");
+            assert!(objects.tables.contains(&"users".to_string()));
+            assert!(objects.stats.contains_key("users"), "the estimates with them");
             c.session.send(DbCommand::LoadKeys);
             let DbEvent::Keys(keys) = c.wait(|e| matches!(e, DbEvent::Keys(_)), 10).await else { panic!() };
             keys.expect("keys");
