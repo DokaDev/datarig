@@ -1,10 +1,11 @@
 //! The settings screen: a large modal with every setting under its category, its
 //! current value (`‹ value ›`) and what that value means; below the list, the selected
 //! setting's description, and for `icons` a preview of the glyphs with the hint to turn them
-//! off when they show as boxes.
+//! off when they show as boxes; for `theme` the terminal's background and the theme being
+//! previewed. A configured theme that is not used is said on top, as a config file with errors.
 
 use crate::app::App;
-use crate::app::command::SETTINGS;
+use crate::app::command::{SETTINGS, Values};
 use crate::app::settings::groups;
 use crate::text::{Align, fit, width, wrap_words};
 use crate::theme;
@@ -38,12 +39,20 @@ pub(crate) fn draw_settings(app: &App, area: Rect, buf: &mut Buffer) {
         put(buf, x, y, &i18n.label(Label::SettingsNotSaved), tw, surface(th.warning));
         y += 1;
     }
+    // The configured theme is not used: why (the terminal theme draws instead).
+    if let Some(p) = app.theme_problem() {
+        for l in wrap_words(&p.render(i18n), tw).into_iter().take(4) {
+            put(buf, x, y, &l, tw, surface(level_color(p.level)));
+            y += 1;
+        }
+    }
     // A blank line on top when there is room for it.
     if inner.height >= 26 {
         y += 1;
     }
     let name_w = SETTINGS.iter().map(|s| width(&i18n.label(s.label))).max().unwrap_or(10).min(tw / 3);
-    let value_w = SETTINGS.iter().flat_map(|s| s.values.iter().map(|v| width(v.0))).max().unwrap_or(6);
+    // The fixed values line up; a longer theme name widens its own row only.
+    let value_w = SETTINGS.iter().flat_map(|s| s.values.fixed().iter().map(|v| width(v.0))).max().unwrap_or(6);
     let mut row = 0;
     let mut selected_spec = None;
     for (group, items) in groups() {
@@ -70,14 +79,14 @@ pub(crate) fn draw_settings(app: &App, area: Rect, buf: &mut Buffer) {
                 Style::new().fg(th.fg).patch(bg),
             );
             cx += name_w as u16 + 2;
-            let value = app.setting_value(k).and_then(|v| spec.values.get(v));
-            let shown = value.map_or("?", |v| v.0);
-            let chosen = format!("‹ {} ›", fit(shown, value_w, Align::Left));
+            let value = app.setting_shown(k);
+            let shown = value.as_ref().map_or("?", |v| v.0.as_str());
+            let chosen = format!("‹ {} ›", fit(shown, value_w.max(width(shown)).min(tw / 3), Align::Left));
             let style = Style::new().fg(th.accent_warm).patch(bg).add_modifier(Modifier::BOLD);
             cx += put(buf, cx, y, &chosen, tw.saturating_sub((cx - x) as usize), style) + 2;
-            if let Some(v) = value {
+            if let Some((_, label)) = value {
                 let left = tw.saturating_sub((cx - x) as usize);
-                put(buf, cx, y, &i18n.label(v.2), left, Style::new().fg(th.fg_muted).patch(bg));
+                put(buf, cx, y, &label, left, Style::new().fg(th.fg_muted).patch(bg));
             }
             if on {
                 selected_spec = Some(spec);
@@ -88,7 +97,6 @@ pub(crate) fn draw_settings(app: &App, area: Rect, buf: &mut Buffer) {
     }
     // The selected setting's description (and the icons' preview).
     let Some(spec) = selected_spec else { return };
-    y += 1;
     let mut lines: Vec<(String, Style)> = Vec::new();
     // For `icons` the preview and its hint come first: they must show on a small screen.
     if spec.key == "icons" {
@@ -97,12 +105,34 @@ pub(crate) fn draw_settings(app: &App, area: Rect, buf: &mut Buffer) {
         let hint = wrap_words(&i18n.label(Label::SettingIconsPreviewHint), tw);
         lines.extend(hint.into_iter().map(|l| (l, surface(th.warning))));
     }
+    // For `theme`: the preview (or why it cannot be used) and the terminal's background.
+    if spec.values == Values::Themes {
+        if let Some(p) = &screen.themes.preview {
+            let name = screen.themes.names.get(p.index).cloned().unwrap_or_default();
+            let (text, color) = match &p.error {
+                Some(e) => (e.render(i18n).to_string(), th.error),
+                None => (
+                    i18n.msg(&Msg::SettingThemePreview { name, current: app.theme_name.clone() }).to_string(),
+                    th.warning,
+                ),
+            };
+            lines.extend(wrap_words(&text, tw).into_iter().map(|l| (l, surface(color))));
+        }
+        let background = match app.background {
+            theme::Background::Light => Label::SettingThemeBackgroundLight,
+            theme::Background::Dark => Label::SettingThemeBackgroundDark,
+            theme::Background::Unknown => Label::SettingThemeBackgroundUnknown,
+        };
+        lines.extend(wrap_words(&i18n.label(background), tw).into_iter().map(|l| (l, surface(th.fg_muted))));
+    }
     lines.extend(wrap_words(&i18n.label(spec.about), tw).into_iter().map(|l| (l, surface(th.fg))));
     if let Some(path) = app.config_file() {
         lines.push((i18n.msg(&Msg::SettingsFile { path }).to_string(), surface(th.fg_dim)));
     }
-    if y < bottom {
-        buf.set_stringn(inner.x, y - 1, "─".repeat(iw), iw, surface(th.border));
+    // The rule above the description, unless the description needs its line.
+    if usize::from(bottom.saturating_sub(y)) > lines.len() {
+        buf.set_stringn(inner.x, y, "─".repeat(iw), iw, surface(th.border));
+        y += 1;
     }
     for (l, style) in lines {
         if y >= bottom {

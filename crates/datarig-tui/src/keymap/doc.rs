@@ -85,7 +85,14 @@ fn commands(s: &mut String) {
     s.push_str("\nSettings of `:set` (saved to `config.toml` like the matching actions):\n\n");
     s.push_str("| Setting | Values | Description |\n|---|---|---|\n");
     for st in command::SETTINGS {
-        let values: Vec<String> = st.values.iter().map(|v| format!("`{}`", v.0)).collect();
+        let values: Vec<String> = match st.values {
+            command::Values::Fixed(v) => v.iter().map(|v| format!("`{}`", v.0)).collect(),
+            command::Values::Themes => crate::theme::NAMES
+                .iter()
+                .map(|n| format!("`{n}`"))
+                .chain(["or the name of a theme file".to_string()])
+                .collect(),
+        };
         s.push_str(&format!("| `{}` | {} | {} |\n", st.key, values.join(" "), en(st.label)));
     }
 }

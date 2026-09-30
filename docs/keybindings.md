@@ -467,6 +467,7 @@ Settings of `:set` (saved to `config.toml` like the matching actions):
 | `clipboard` | `auto` `system` `osc52` | Clipboard |
 | `copy_header` | `auto` `on` `off` | Column names in copies |
 | `editor.cursor_shape` | `on` `off` | Cursor shape |
+| `theme` | `terminal` `dark` `light` `high-contrast` `catppuccin` `catppuccin-latte` `catppuccin-mocha` `tokyo-night` `tokyo-night-day` `tokyo-night-night` `gruvbox` `gruvbox-light` `gruvbox-dark` `nord` `dracula` or the name of a theme file | Theme |
 
 ## Command line only
 

@@ -321,7 +321,27 @@ pub struct SettingSpec {
     pub label: Label,
     pub about: Label,
     pub group: SettingGroup,
-    pub values: &'static [(&'static str, Setting, Label)],
+    pub values: Values,
+}
+
+/// The values of a setting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Values {
+    /// A fixed list: the name `:set` takes, the [`Setting`] it applies and its label.
+    Fixed(&'static [(&'static str, Setting, Label)]),
+    /// Theme names: the built-in ones and the user's theme files, listed when asked (the files
+    /// change while the app runs), so they are names rather than [`Setting`]s.
+    Themes,
+}
+
+impl Values {
+    /// The fixed values (none for [`Values::Themes`]).
+    pub fn fixed(self) -> &'static [(&'static str, Setting, Label)] {
+        match self {
+            Values::Fixed(v) => v,
+            Values::Themes => &[],
+        }
+    }
 }
 
 pub const SETTINGS: &[SettingSpec] = &[
@@ -330,39 +350,39 @@ pub const SETTINGS: &[SettingSpec] = &[
         label: Label::SettingLanguage,
         about: Label::SettingLanguageAbout,
         group: SettingGroup::Language,
-        values: &[
+        values: Values::Fixed(&[
             ("en", Setting::Language(LangSetting::En), Label::ActionUiLanguageEn),
             ("ko", Setting::Language(LangSetting::Ko), Label::ActionUiLanguageKo),
             ("auto", Setting::Language(LangSetting::Auto), Label::ActionUiLanguageAuto),
-        ],
+        ]),
     },
     SettingSpec {
         key: "editor",
         label: Label::SettingEditor,
         about: Label::SettingEditorAbout,
         group: SettingGroup::Editor,
-        values: &[
+        values: Values::Fixed(&[
             ("vim", Setting::Editor(EditorMode::Vim), Label::ActionEditorModeVim),
             ("standard", Setting::Editor(EditorMode::Standard), Label::ActionEditorModeStandard),
-        ],
+        ]),
     },
     SettingSpec {
         key: "icons",
         label: Label::SettingIcons,
         about: Label::SettingIconsAbout,
         group: SettingGroup::Display,
-        values: &[
+        values: Values::Fixed(&[
             ("on", Setting::Icons(IconsSetting::On), Label::ActionUiIconsOn),
             ("off", Setting::Icons(IconsSetting::Off), Label::ActionUiIconsOff),
             ("auto", Setting::Icons(IconsSetting::Auto), Label::ActionUiIconsAuto),
-        ],
+        ]),
     },
     SettingSpec {
         key: "secrets.default_source",
         label: Label::SettingDefaultSource,
         about: Label::SettingDefaultSourceAbout,
         group: SettingGroup::Secrets,
-        values: &[
+        values: Values::Fixed(&[
             ("auto", Setting::DefaultSource(DefaultSource::Auto), Label::ActionSecretsDefaultAuto),
             (
                 "keychain",
@@ -381,67 +401,85 @@ pub const SETTINGS: &[SettingSpec] = &[
                 Setting::DefaultSource(DefaultSource::Kind(SourceKind::Prompt)),
                 Label::ActionSecretsDefaultPrompt,
             ),
-        ],
+        ]),
     },
     SettingSpec {
         key: "commands.position",
         label: Label::SettingCommandsPosition,
         about: Label::SettingCommandsPositionAbout,
         group: SettingGroup::Display,
-        values: &[
+        values: Values::Fixed(&[
             ("popup", Setting::CommandsPosition(CommandsPosition::Popup), Label::SettingCommandsPositionPopup),
             ("bottom", Setting::CommandsPosition(CommandsPosition::Bottom), Label::SettingCommandsPositionBottom),
-        ],
+        ]),
     },
     SettingSpec {
         key: "detail_view",
         label: Label::SettingDetailView,
         about: Label::SettingDetailViewAbout,
         group: SettingGroup::Results,
-        values: &[
+        values: Values::Fixed(&[
             ("panel", Setting::DetailView(DetailView::Panel), Label::SettingDetailViewPanel),
             ("statusbar", Setting::DetailView(DetailView::Statusbar), Label::SettingDetailViewStatusbar),
-        ],
+        ]),
     },
     SettingSpec {
         key: "clipboard",
         label: Label::SettingClipboard,
         about: Label::SettingClipboardAbout,
         group: SettingGroup::Clipboard,
-        values: &[
+        values: Values::Fixed(&[
             ("auto", Setting::Clipboard(ClipboardSetting::Auto), Label::SettingClipboardAuto),
             ("system", Setting::Clipboard(ClipboardSetting::System), Label::SettingClipboardSystem),
             ("osc52", Setting::Clipboard(ClipboardSetting::Osc52), Label::SettingClipboardOsc52),
-        ],
+        ]),
     },
     SettingSpec {
         key: "copy_header",
         label: Label::SettingCopyHeader,
         about: Label::SettingCopyHeaderAbout,
         group: SettingGroup::Clipboard,
-        values: &[
+        values: Values::Fixed(&[
             ("auto", Setting::CopyHeader(CopyHeader::Auto), Label::SettingCopyHeaderAuto),
             ("on", Setting::CopyHeader(CopyHeader::On), Label::SettingCopyHeaderOn),
             ("off", Setting::CopyHeader(CopyHeader::Off), Label::SettingCopyHeaderOff),
-        ],
+        ]),
     },
     SettingSpec {
         key: "editor.cursor_shape",
         label: Label::SettingCursorShape,
         about: Label::SettingCursorShapeAbout,
         group: SettingGroup::Editor,
-        values: &[
+        values: Values::Fixed(&[
             ("on", Setting::CursorShape(CursorShape::On), Label::SettingCursorShapeOn),
             ("off", Setting::CursorShape(CursorShape::Off), Label::SettingCursorShapeOff),
-        ],
+        ]),
+    },
+    SettingSpec {
+        key: "theme",
+        label: Label::SettingTheme,
+        about: Label::SettingThemeAbout,
+        group: SettingGroup::Display,
+        values: Values::Themes,
     },
 ];
 
 impl SettingSpec {
-    /// `en|ko|auto`, for messages.
+    /// `en|ko|auto`, for messages (the built-in names for the theme).
     pub fn value_list(&self) -> String {
-        self.values.iter().map(|v| v.0).collect::<Vec<_>>().join("|")
+        match self.values {
+            Values::Fixed(v) => v.iter().map(|v| v.0).collect::<Vec<_>>().join("|"),
+            Values::Themes => crate::theme::NAMES.join("|"),
+        }
     }
+}
+
+/// What the argument of `:set` asks for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SetValue<'a> {
+    Setting(Setting),
+    /// `theme=<name>`: the app looks the name up.
+    Theme(&'a str),
 }
 
 /// Why `:set` could not apply its argument.
@@ -463,17 +501,21 @@ fn split_setting(arg: &str) -> Option<(&str, &str)> {
 }
 
 /// Read the argument of `:set`.
-pub fn parse_set(arg: &str) -> Result<Setting, SetError> {
+pub fn parse_set(arg: &str) -> Result<SetValue<'_>, SetError> {
     let Some((key, value)) = split_setting(arg) else { return Err(SetError::Usage) };
     if key.is_empty() {
         return Err(SetError::Usage);
     }
     let Some(spec) = SETTINGS.iter().find(|s| s.key == key) else { return Err(SetError::UnknownKey(key.to_string())) };
-    spec.values.iter().find(|v| v.0 == value.to_ascii_lowercase()).map(|v| v.1).ok_or_else(|| SetError::BadValue {
-        key: spec.key,
-        value: value.to_string(),
-        values: spec.value_list(),
-    })
+    if spec.values == Values::Themes && !value.is_empty() {
+        return Ok(SetValue::Theme(value));
+    }
+    let values = spec.values.fixed();
+    values
+        .iter()
+        .find(|v| v.0 == value.to_ascii_lowercase())
+        .map(|v| SetValue::Setting(v.1))
+        .ok_or_else(|| SetError::BadValue { key: spec.key, value: value.to_string(), values: spec.value_list() })
 }
 
 /// `language|editor`, for messages.
@@ -494,6 +536,9 @@ pub enum ArgCompletion {
     SetKey(usize),
     /// A value of a setting: `(setting, value)` indices into [`SETTINGS`].
     SetValue(usize, usize),
+    /// A theme: `(setting, name)`, an index into [`SETTINGS`] and one into the theme names given
+    /// to [`complete_arg`].
+    Theme(usize, usize),
     /// A format of [`super::copy::CopyFormat::MENU`].
     Format(usize),
     /// A format of [`super::copy::CopyFormat::MENU`] and a scope of
@@ -570,7 +615,8 @@ fn rank<'a>(typed: &str, candidates: impl Iterator<Item = (usize, &'a str)>) -> 
 }
 
 /// The completions of the argument `arg` of a command taking `kind`, best first. `names`
-/// are the profile names ([`ArgKind::Profile`]) or the saved queries ([`ArgKind::Script`]).
+/// are the profile names ([`ArgKind::Profile`]), the saved queries ([`ArgKind::Script`]), the
+/// contexts ([`ArgKind::Context`]) or the theme names ([`ArgKind::Setting`]).
 pub fn complete_arg(kind: ArgKind, arg: &str, names: &[&str]) -> Vec<ArgCompletion> {
     match kind {
         ArgKind::Profile => {
@@ -609,11 +655,19 @@ pub fn complete_arg(kind: ArgKind, arg: &str, names: &[&str]) -> Vec<ArgCompleti
         }
         ArgKind::Setting => match split_setting(arg) {
             Some((key, value)) => match SETTINGS.iter().position(|s| s.key == key) {
-                Some(k) => rank(value, SETTINGS[k].values.iter().map(|v| v.0).enumerate())
+                Some(k) if SETTINGS[k].values == Values::Themes => rank(value, names.iter().copied().enumerate())
                     .into_iter()
-                    .filter(|&v| value.is_empty() || SETTINGS[k].values[v].0.starts_with(&value.to_lowercase()))
-                    .map(|v| ArgCompletion::SetValue(k, v))
+                    .filter(|&v| names[v].starts_with(value))
+                    .map(|v| ArgCompletion::Theme(k, v))
                     .collect(),
+                Some(k) => {
+                    let values = SETTINGS[k].values.fixed();
+                    rank(value, values.iter().map(|v| v.0).enumerate())
+                        .into_iter()
+                        .filter(|&v| value.is_empty() || values[v].0.starts_with(&value.to_lowercase()))
+                        .map(|v| ArgCompletion::SetValue(k, v))
+                        .collect()
+                }
                 None => Vec::new(),
             },
             None => rank(arg, SETTINGS.iter().map(|s| s.key).enumerate())

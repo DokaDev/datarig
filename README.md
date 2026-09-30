@@ -66,6 +66,8 @@ Everything below works today, with PostgreSQL.
   (tabs, cursors, open folders) restored at the next start. Closed consoles go to a trash
   (`:recover`). A second instance opens read-only instead of fighting over the files.
 - English and Korean UI (`:set language=en|ko|auto`).
+- Themes: by default the terminal's own colors; built-in truecolor themes and your own theme
+  files ([Themes](#themes)).
 
 **Passwords and connections**
 - Password sources per profile: the OS keychain (every call off the UI thread, with a time
@@ -147,7 +149,6 @@ Planned, in no particular order and with no dates:
 - TLS connections (today every connection is plain TCP; use an SSH tunnel across untrusted
   networks, and servers that require TLS cannot be reached yet)
 - A server monitor (sessions, locks, activity)
-- Themes
 - The standard (non-vim) editor mode: the setting exists, but the editor keeps vim keys for now
 - More of vim: counts, operators with motions, text objects, search, macros
 - DDL view of tables and other objects
@@ -201,6 +202,7 @@ order are kept); you can also write it by hand. Passwords are never written to i
 ```toml
 version = 2
 language = "en"            # en | ko | auto
+theme = "catppuccin"       # see Themes below; terminal when left out
 
 [editor]
 mode = "vim"
@@ -247,6 +249,41 @@ platform's data and state directories (`~/.local/share/datarig` and `~/.local/st
 on Linux, `~/Library/Application Support/datarig` on macOS; on Windows, untested,
 `%APPDATA%\datarig` and `%LOCALAPPDATA%\datarig`), or under `$XDG_DATA_HOME` / `$XDG_STATE_HOME` when set.
 `DATARIG_SECRET_STORE=memory` keeps passwords in memory only and never touches the OS keychain.
+
+## Themes
+
+One setting, `theme` (`:set theme=<name>`, or the settings screen, `Space ,`, where moving over
+the names previews them: `Enter` keeps one, `Esc` goes back):
+
+| `theme` | What it does |
+|---|---|
+| `terminal` | The default: your terminal's own colors and background (its 16 ANSI colors by role) |
+| `dark`, `light`, `high-contrast` | Truecolor themes of datarig |
+| `catppuccin`, `tokyo-night`, `gruvbox` | The light or the dark variant, following the terminal's background |
+| `catppuccin-latte`, `catppuccin-mocha`, `tokyo-night-day`, `tokyo-night-night`, `gruvbox-light`, `gruvbox-dark` | That variant, whatever the background |
+| `nord`, `dracula` | Those palettes (dark) |
+| any other name | Your theme file `themes/<name>.toml`, next to the config file |
+
+The terminal's background is asked once at startup (OSC 11); a terminal that does not answer
+counts as dark, and the settings screen says which it found. A theme file sets some tokens and
+takes the rest from `extends` (a built-in theme; `terminal` without it). Colors are `#rrggbb`,
+an ANSI name (`red`, `bright-black`, …) or `default`:
+
+```toml
+# ~/.config/datarig/themes/mine.toml, used with theme = "mine"
+extends = "dark"
+
+[colors]
+accent = "#89b4fa"
+warning = "yellow"
+
+[styles]
+selection = { bg = "#45475a", modifiers = ["bold"] }
+```
+
+The token names are the fields of `Theme` in `crates/datarig-tui/src/theme.rs`. A mistake in the
+file (an unknown token, a bad color), an unknown name or a file named like a built-in theme is
+reported with the file and line, and the app draws with `terminal` until it is fixed.
 
 ## Safety model
 

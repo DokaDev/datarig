@@ -1,7 +1,9 @@
 //! The `:` command line: its list of candidates, its keys and running what was
 //! chosen or typed. The grammar of the commands is in [`super::command`].
 
-use super::command::{self, ArgCompletion, ArgKind, COMMANDS, CommandSpec, Parsed, SETTINGS, SetError, Setting};
+use super::command::{
+    self, ArgCompletion, ArgKind, COMMANDS, CommandSpec, Parsed, SETTINGS, SetError, SetValue, Setting,
+};
 use super::*;
 use crate::widgets::text_input::InputResult;
 
@@ -275,9 +277,11 @@ impl App {
             let c = COMMANDS.iter().position(|s| s.command == spec.command).unwrap_or(0);
             let scripts = self.script_names();
             let contexts = if kind == ArgKind::Context { self.context_names() } else { Vec::new() };
+            let themes = if kind == ArgKind::Setting { self.theme_names() } else { Vec::new() };
             let names: Vec<&str> = match kind {
                 ArgKind::Script => scripts.iter().map(String::as_str).collect(),
                 ArgKind::Context => contexts.iter().map(String::as_str).collect(),
+                ArgKind::Setting => themes.iter().map(String::as_str).collect(),
                 _ => self.profiles.iter().map(|p| p.name.as_str()).collect(),
             };
             return command::complete_arg(kind, arg, &names)
@@ -422,8 +426,12 @@ impl App {
             }
             Some(CommandItem::Arg { arg: ArgCompletion::SetValue(k, v), .. }) => {
                 self.overlays.close(OverlayKind::Commands);
-                self.apply_setting(SETTINGS[k].values[v].1);
+                self.apply_setting(SETTINGS[k].values.fixed()[v].1);
                 Ok(())
+            }
+            Some(CommandItem::Arg { arg: ArgCompletion::Theme(_, i), .. }) => {
+                let name = self.theme_names().get(i).cloned().unwrap_or_default();
+                self.set_theme(&name).map(|()| self.overlays.close(OverlayKind::Commands))
             }
             Some(CommandItem::Arg { command, arg: ArgCompletion::Format(i) }) => {
                 self.run_command(&COMMANDS[command], super::copy::CopyFormat::MENU[i].name())
@@ -481,7 +489,12 @@ impl App {
             }
             (command::Command::Set, _) => {
                 let setting = match command::parse_set(arg) {
-                    Ok(s) => s,
+                    Ok(SetValue::Setting(s)) => s,
+                    Ok(SetValue::Theme(name)) => {
+                        self.set_theme(name)?;
+                        self.overlays.close(OverlayKind::Commands);
+                        return Ok(());
+                    }
                     Err(SetError::Usage) => return err(Msg::Label(Label::CommandsErrorSetUsage)),
                     Err(SetError::UnknownKey(key)) => {
                         return err(Msg::CommandsErrorSetKey { key, keys: command::setting_keys() });
@@ -662,9 +675,9 @@ impl App {
     fn set_prefs(&mut self, s: Setting, change: impl FnOnce(&mut datarig_core::config::Prefs)) {
         change(&mut self.prefs);
         let saved = self.persist();
-        let spec = SETTINGS.iter().find(|x| x.values.iter().any(|v| v.1 == s));
+        let spec = SETTINGS.iter().find(|x| x.values.fixed().iter().any(|v| v.1 == s));
         let msg = spec.and_then(|spec| {
-            let value = spec.values.iter().find(|v| v.1 == s)?;
+            let value = spec.values.fixed().iter().find(|v| v.1 == s)?;
             Some(Msg::SettingChanged {
                 name: self.i18n.label(spec.label).to_string(),
                 value: self.i18n.label(value.2).to_string(),
@@ -764,8 +777,16 @@ impl App {
                     label: self.i18n.label(SETTINGS[k].label),
                     keys: SETTINGS[k].value_list(),
                 },
+                CommandItem::Arg { arg: ArgCompletion::Theme(k, i), .. } => {
+                    let name = self.theme_names().get(i).cloned().unwrap_or_default();
+                    CommandRow {
+                        name: Localized::verbatim(format!("{}={name}", SETTINGS[k].key)),
+                        label: self.theme_label(&name),
+                        keys: String::new(),
+                    }
+                }
                 CommandItem::Arg { arg: ArgCompletion::SetValue(k, v), .. } => {
-                    let (value, setting, label) = SETTINGS[k].values[v];
+                    let (value, setting, label) = SETTINGS[k].values.fixed()[v];
                     CommandRow {
                         name: Localized::verbatim(format!("{}={value}", SETTINGS[k].key)),
                         label: self.i18n.label(label),

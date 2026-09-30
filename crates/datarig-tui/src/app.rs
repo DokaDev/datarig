@@ -50,6 +50,7 @@ pub mod script_tree;
 pub mod settings;
 mod tab_ops;
 pub mod tabs;
+pub mod themes;
 pub mod tunnel;
 mod update;
 
@@ -408,6 +409,12 @@ pub struct App {
     pub i18n: I18n,
     /// The theme the frames are drawn with (`crate::theme::cur` while drawing).
     pub theme: Arc<crate::theme::Theme>,
+    /// `theme` as the config has it (saved back as it is, also when it does not resolve).
+    pub theme_name: String,
+    /// Why `theme_name` is not the theme drawn (`terminal` is, then).
+    theme_problem: Option<Notice>,
+    /// The terminal's background (a theme family's variant follows it).
+    pub background: crate::theme::Background,
     pub page_size: usize,
     /// Rows of a result kept in memory, and the config's limit of a result's spill file (a
     /// policy may set its own).
@@ -683,9 +690,12 @@ impl App {
         for f in cfg.connections.iter().filter_map(ConnectionConfig::folder_path) {
             folders.insert(&f);
         }
-        Self {
+        let mut app = Self {
             i18n: I18n::new(lang),
-            theme: Arc::new(crate::theme::DARK),
+            theme: Arc::new(crate::theme::TERMINAL),
+            theme_name: cfg.theme.clone(),
+            theme_problem: None,
+            background: crate::theme::Background::Unknown,
             page_size: cfg.page_size,
             result_window_rows: cfg.result_window_rows,
             spill_limit: cfg.spill_limit,
@@ -780,7 +790,9 @@ impl App {
             pending_context: None,
             pending_use: None,
             last_save_folder: None,
-        }
+        };
+        app.load_theme();
+        app
     }
 
     /// Use `store` for passwords. The binary passes the store `DATARIG_SECRET_STORE` picks
@@ -913,6 +925,9 @@ impl App {
             self.notices.extend(notices);
         }
         self.notices.append(&mut self.keymap_notices);
+        if let Some(n) = self.theme_problem.clone() {
+            self.notices.push(n);
+        }
         if self.editor_mode == EditorMode::Standard {
             self.notices.push(Notice::new(Label::EditorModeStandardPending, Level::Warning));
         }

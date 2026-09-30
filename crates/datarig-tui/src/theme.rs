@@ -1,6 +1,13 @@
 //! The theme: the color and style tokens every widget draws with.
 //!
-//! A [`Theme`] is a value; the built-ins are listed in [`BUILTINS`] (`dark`, 24-bit truecolor).
+//! A [`Theme`] is a value. The built-ins are listed in [`BUILTINS`]: `terminal` (the default: the
+//! terminal's own 16 colors), `dark` (24-bit truecolor), `light`, `high-contrast` and the
+//! palettes of Catppuccin, Tokyo Night, Gruvbox, Nord and Dracula. The name of a family with a
+//! light and a dark variant ([`FAMILIES`]: `catppuccin`, `tokyo-night`, `gruvbox`) follows the
+//! terminal's background ([`Background`], asked once at startup); a variant's own name pins it.
+//! A user theme is a file `themes/<name>.toml` next to the config file
+//! ([`datarig_core::theme`]), a built-in theme with some tokens replaced ([`resolve`]).
+//!
 //! Widgets read the current theme once per render with [`cur`]. It is thread-local:
 //! [`crate::screens::draw`] sets it from `App::theme` for the duration of a frame
 //! ([`scope`]), and a thread that never set one (a test rendering a widget, a helper) gets
@@ -9,11 +16,16 @@
 //! Profile colors ([`PROFILE_COLORS`], [`profile_color`]) are not part of a theme: a profile
 //! keeps its color whatever the theme.
 
+use datarig_core::theme::{ColorSpec, ModifierSpec, Problem, StyleSpec, ThemeError, ThemeSpec, Tokens};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use std::cell::RefCell;
+use std::path::Path;
 use std::sync::Arc;
+
+mod builtins;
+pub use builtins::*;
 
 const fn rgb(hex: u32) -> Color {
     Color::Rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8)
@@ -150,7 +162,201 @@ pub const DARK: Theme = Theme {
 };
 
 /// The built-in themes by name.
-pub const BUILTINS: &[(&str, &Theme)] = &[("dark", &DARK)];
+pub const BUILTINS: &[(&str, &Theme)] = &[
+    ("terminal", &TERMINAL),
+    ("dark", &DARK),
+    ("light", &LIGHT),
+    ("high-contrast", &HIGH_CONTRAST),
+    ("catppuccin-latte", &CATPPUCCIN_LATTE),
+    ("catppuccin-mocha", &CATPPUCCIN_MOCHA),
+    ("tokyo-night-day", &TOKYO_NIGHT_DAY),
+    ("tokyo-night-night", &TOKYO_NIGHT_NIGHT),
+    ("gruvbox-light", &GRUVBOX_LIGHT),
+    ("gruvbox-dark", &GRUVBOX_DARK),
+    ("nord", &NORD),
+    ("dracula", &DRACULA),
+];
+
+/// A theme with a light and a dark variant: its own name picks the one that fits the terminal's
+/// background (the dark one when that is not known).
+#[derive(Clone, Copy, Debug)]
+pub struct Family {
+    pub name: &'static str,
+    pub light: &'static str,
+    pub dark: &'static str,
+}
+
+pub const FAMILIES: &[Family] = &[
+    Family { name: "catppuccin", light: "catppuccin-latte", dark: "catppuccin-mocha" },
+    Family { name: "tokyo-night", light: "tokyo-night-day", dark: "tokyo-night-night" },
+    Family { name: "gruvbox", light: "gruvbox-light", dark: "gruvbox-dark" },
+];
+
+/// Every built-in name `theme` takes, in the order the settings screen and the completion list
+/// them (a family before its variants).
+pub const NAMES: &[&str] = &[
+    "terminal",
+    "dark",
+    "light",
+    "high-contrast",
+    "catppuccin",
+    "catppuccin-latte",
+    "catppuccin-mocha",
+    "tokyo-night",
+    "tokyo-night-day",
+    "tokyo-night-night",
+    "gruvbox",
+    "gruvbox-light",
+    "gruvbox-dark",
+    "nord",
+    "dracula",
+];
+
+/// The terminal's background, as its answer to the OSC 11 query at startup says.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Background {
+    Light,
+    Dark,
+    /// No answer (or not asked: not a terminal).
+    #[default]
+    Unknown,
+}
+
+/// The built-in theme `name` (a family's variant for `background`).
+pub fn builtin(name: &str, background: Background) -> Option<&'static Theme> {
+    let name = match FAMILIES.iter().find(|f| f.name == name) {
+        Some(f) if background == Background::Light => f.light,
+        Some(f) => f.dark,
+        None => name,
+    };
+    BUILTINS.iter().find(|(n, _)| *n == name).map(|(_, th)| *th)
+}
+
+/// Every theme name `theme` takes: the built-in ones, then the theme files of `dir` (a file
+/// with a built-in name is left out: it is never used).
+pub fn names(dir: Option<&Path>) -> Vec<String> {
+    let mut out: Vec<String> = NAMES.iter().map(|n| n.to_string()).collect();
+    if let Some(dir) = dir {
+        out.extend(datarig_core::theme::names(dir).into_iter().filter(|n| !NAMES.contains(&n.as_str())));
+    }
+    out
+}
+
+/// The theme `name`: a built-in one, else the file `<dir>/<name>.toml`. A file with a built-in
+/// name is an error (it would silently never be used).
+pub fn resolve(name: &str, background: Background, dir: Option<&Path>) -> Result<Theme, ThemeError> {
+    if let Some(th) = builtin(name, background) {
+        if let Some(path) = dir.map(|d| datarig_core::theme::path(d, name)).filter(|p| p.is_file()) {
+            return Err(ThemeError::Shadows { path });
+        }
+        return Ok(th.clone());
+    }
+    let Some(dir) = dir else { return Err(ThemeError::Unknown { name: name.to_string(), dir: None }) };
+    let spec = datarig_core::theme::load(dir, name, TOKENS)?;
+    let base = match &spec.extends {
+        None => &TERMINAL,
+        Some((base, line)) => builtin(base, background).ok_or_else(|| ThemeError::File {
+            path: datarig_core::theme::path(dir, name),
+            line: Some(*line),
+            problem: Problem::UnknownBase(base.clone()),
+        })?,
+    };
+    Ok(from_spec(&spec, base.clone()))
+}
+
+/// `base` with the tokens of a theme file.
+pub fn from_spec(spec: &ThemeSpec, mut base: Theme) -> Theme {
+    for (name, c) in &spec.colors {
+        if let Some(slot) = color_token(&mut base, name) {
+            *slot = color(*c);
+        }
+    }
+    for (name, s) in &spec.styles {
+        if let Some(slot) = style_token(&mut base, name) {
+            *slot = style(s);
+        }
+    }
+    base
+}
+
+/// The color of a theme file's color.
+pub fn color(c: ColorSpec) -> Color {
+    const ANSI: [Color; 16] = [
+        Color::Black,
+        Color::Red,
+        Color::Green,
+        Color::Yellow,
+        Color::Blue,
+        Color::Magenta,
+        Color::Cyan,
+        Color::Gray,
+        Color::DarkGray,
+        Color::LightRed,
+        Color::LightGreen,
+        Color::LightYellow,
+        Color::LightBlue,
+        Color::LightMagenta,
+        Color::LightCyan,
+        Color::White,
+    ];
+    match c {
+        ColorSpec::Default => Color::Reset,
+        ColorSpec::Ansi(i) => ANSI[usize::from(i) % ANSI.len()],
+        ColorSpec::Rgb(r, g, b) => Color::Rgb(r, g, b),
+    }
+}
+
+fn style(s: &StyleSpec) -> Style {
+    let mut out = Style::new();
+    out.fg = s.fg.map(color);
+    out.bg = s.bg.map(color);
+    for m in &s.modifiers {
+        out = out.add_modifier(match m {
+            ModifierSpec::Bold => Modifier::BOLD,
+            ModifierSpec::Dim => Modifier::DIM,
+            ModifierSpec::Italic => Modifier::ITALIC,
+            ModifierSpec::Underlined => Modifier::UNDERLINED,
+            ModifierSpec::Reversed => Modifier::REVERSED,
+            ModifierSpec::CrossedOut => Modifier::CROSSED_OUT,
+        });
+    }
+    out
+}
+
+/// The tokens a theme file sets by name: the color and the style fields of [`Theme`] (`dim` is
+/// not one; a theme file keeps the dimming of the theme it extends).
+macro_rules! tokens {
+    (colors: $($c:ident),* ; styles: $($s:ident),* $(,)?) => {
+        pub const COLOR_TOKENS: &[&str] = &[$(stringify!($c)),*];
+        pub const STYLE_TOKENS: &[&str] = &[$(stringify!($s)),*];
+
+        fn color_token<'a>(th: &'a mut Theme, name: &str) -> Option<&'a mut Color> {
+            match name {
+                $(stringify!($c) => Some(&mut th.$c),)*
+                _ => None,
+            }
+        }
+
+        fn style_token<'a>(th: &'a mut Theme, name: &str) -> Option<&'a mut Style> {
+            match name {
+                $(stringify!($s) => Some(&mut th.$s),)*
+                _ => None,
+            }
+        }
+    };
+}
+
+tokens! {
+    colors: bg, surface, surface_alt, border, accent, accent_warm, fg, fg_muted, fg_dim, current_stmt_bar, success,
+        warning, error, null_fg, key_pk, key_fk, key_uq, mode_normal, mode_insert, mode_visual, mode_command,
+        mode_neutral, mode_fg;
+    styles: selection, range, cursor_line, current_stmt, syn_keyword, syn_function, syn_string, syn_number,
+        syn_comment, syn_operator, syn_identifier, syn_quoted_ident, search_match, match_paren, read_only_mark,
+        danger_mark, plan_hot, plan_misestimate,
+}
+
+/// The token names of a theme file.
+pub const TOKENS: Tokens = Tokens { colors: COLOR_TOKENS, styles: STYLE_TOKENS };
 
 thread_local! {
     static CURRENT: RefCell<Arc<Theme>> = RefCell::new(Arc::new(DARK));

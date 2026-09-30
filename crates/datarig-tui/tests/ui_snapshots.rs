@@ -1664,7 +1664,7 @@ fn grid_copy_menu_and_range_en_ko_sizes() {
 
 /// The settings screen: categories, current values and what they mean, the selected
 /// setting's description; `icons` shows a preview of the glyphs and the hint (icons on and
-/// off), the clipboard its tmux note.
+/// off), the theme the terminal's background and a preview, the clipboard its tmux note.
 #[test]
 fn settings_screen_en_ko_sizes() {
     for lang in [Lang::En, Lang::Ko] {
@@ -1674,9 +1674,16 @@ fn settings_screen_en_ko_sizes() {
             assert_screen!(format!("settings_icons_{}_{w}x{hh}", lang_tag(lang)), lang, h.draw(w, hh));
             h.app.icons = datarig_core::config::IconsSetting::On;
             assert_screen!(format!("settings_icons_on_{}_{w}x{hh}", lang_tag(lang)), lang, h.draw(w, hh));
-            // Icons, the command line, the editor keys, the cursor shape, the cell detail, then
-            // the clipboard.
-            h.keys("jjjjj");
+            // Icons, the command line, then the theme (the background was not asked).
+            h.keys("jj");
+            assert_screen!(format!("settings_theme_{}_{w}x{hh}", lang_tag(lang)), lang, h.draw(w, hh));
+            // `l` previews the next theme; `Esc` would go back.
+            h.keys("l");
+            assert_screen!(format!("settings_theme_preview_{}_{w}x{hh}", lang_tag(lang)), lang, h.draw(w, hh));
+            h.key(KeyCode::Esc);
+            h.command("settings");
+            // The editor keys, the cursor shape, the cell detail, then the clipboard.
+            h.keys("jjjjjj");
             assert_screen!(format!("settings_clipboard_{}_{w}x{hh}", lang_tag(lang)), lang, h.draw(w, hh));
         }
     }

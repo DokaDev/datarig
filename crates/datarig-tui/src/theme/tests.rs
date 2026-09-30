@@ -94,13 +94,33 @@ fn text(th: &Theme) -> [Color; 10] {
     ]
 }
 
+/// A background is dark when light text reads on it better than dark text.
+fn dark_background(th: &Theme) -> bool {
+    contrast(th.bg, Color::Rgb(255, 255, 255)) > contrast(th.bg, Color::Rgb(0, 0, 0))
+}
+
 #[test]
-fn dark_is_a_builtin() {
+fn every_name_is_a_builtin_or_a_family_of_two_builtins() {
     assert!(BUILTINS.iter().any(|&(name, th)| name == "dark" && *th == DARK));
-    let names: Vec<&str> = BUILTINS.iter().map(|(n, _)| *n).collect();
-    let mut sorted = names.clone();
-    sorted.dedup();
-    assert_eq!(names, sorted, "names are unique");
+    assert!(BUILTINS.iter().any(|&(name, th)| name == "terminal" && *th == TERMINAL));
+    let mut all: Vec<&str> = BUILTINS.iter().map(|(n, _)| *n).chain(FAMILIES.iter().map(|f| f.name)).collect();
+    let n = all.len();
+    all.sort();
+    all.dedup();
+    assert_eq!(all.len(), n, "names are unique");
+    let mut names = NAMES.to_vec();
+    names.sort();
+    assert_eq!(names, all, "NAMES lists every built-in and every family once");
+    for f in FAMILIES {
+        let (light, dark) =
+            (builtin(f.light, Background::Unknown).unwrap(), builtin(f.dark, Background::Unknown).unwrap());
+        assert!(!dark_background(light) && dark_background(dark), "{}", f.name);
+        assert_eq!(builtin(f.name, Background::Light), Some(light), "{}", f.name);
+        assert_eq!(builtin(f.name, Background::Dark), Some(dark), "{}", f.name);
+        assert_eq!(builtin(f.name, Background::Unknown), Some(dark), "{}: no answer is dark", f.name);
+        assert_eq!(builtin(f.light, Background::Dark), Some(light), "a variant's name pins it");
+    }
+    assert_eq!(builtin("nope", Background::Dark), None);
 }
 
 #[test]
@@ -186,13 +206,16 @@ fn key_marks_read_on_the_background_and_differ_in_256_colors() {
     }
 }
 
+/// Profile colors are the same in every theme (a profile's color is the user's choice): they
+/// read as text on `dark`'s background and at least as marks (3:1) on every other dark one.
 #[test]
 fn profile_colors_read_on_the_background_and_differ() {
     use datarig_core::profile::color::{NAMES, ProfileColor};
     assert_eq!(PROFILE_COLORS.len(), NAMES.len());
     for (i, &c) in PROFILE_COLORS.iter().enumerate() {
-        for (name, th) in rgb_themes() {
-            assert!(contrast(c, th.bg) >= 4.5, "{name}: {} on bg: {:.2}", NAMES[i], contrast(c, th.bg));
+        assert!(contrast(c, DARK.bg) >= 4.5, "{} on dark: {:.2}", NAMES[i], contrast(c, DARK.bg));
+        for (name, th) in rgb_themes().filter(|(_, th)| dark_background(th)) {
+            assert!(contrast(c, th.bg) >= 3.0, "{name}: {} on bg: {:.2}", NAMES[i], contrast(c, th.bg));
         }
         assert_eq!(profile_color(ProfileColor::Named(i as u8)), c);
     }
@@ -209,11 +232,210 @@ fn profile_colors_read_on_the_background_and_differ() {
 #[test]
 fn profile_colors_do_not_follow_the_theme() {
     use datarig_core::profile::color::ProfileColor;
-    let mut other = DARK;
-    other.bg = Color::Rgb(250, 250, 250);
-    let before = profile_color(ProfileColor::Named(0));
-    let _theme = scope(Arc::new(other));
-    assert_eq!(profile_color(ProfileColor::Named(0)), before);
+    let before: Vec<Color> = (0..12).map(|i| profile_color(ProfileColor::Named(i))).collect();
+    for (_, th) in BUILTINS {
+        let _theme = scope(Arc::new((*th).clone()));
+        let now: Vec<Color> = (0..12).map(|i| profile_color(ProfileColor::Named(i))).collect();
+        assert_eq!(now, before);
+    }
+}
+
+#[test]
+fn body_and_muted_text_read_on_every_surface() {
+    for (name, th) in rgb_themes() {
+        for bg in [th.bg, th.surface, th.surface_alt, bg(th.selection), bg(th.cursor_line)] {
+            assert!(contrast(th.fg, bg) >= 4.5, "{name}: body text on {bg:?}: {:.2}", contrast(th.fg, bg));
+        }
+        for bg in [th.bg, th.surface, th.surface_alt] {
+            assert!(contrast(th.fg_muted, bg) >= 3.0, "{name}: muted on {bg:?}: {:.2}", contrast(th.fg_muted, bg));
+            for c in [th.accent, th.accent_warm, th.success, th.warning, th.error] {
+                assert!(contrast(c, bg) >= 3.0, "{name}: {c:?} on {bg:?}: {:.2}", contrast(c, bg));
+            }
+        }
+    }
+}
+
+/// The theme of the terminal's colors is about roles: which ANSI color, not which RGB.
+#[test]
+fn the_terminal_theme_uses_the_terminal_colors_by_role() {
+    let th = &TERMINAL;
+    assert_eq!((th.fg, th.bg, th.surface), (Color::Reset, Color::Reset, Color::Reset), "its own text and background");
+    assert_eq!(th.warning, Color::Yellow);
+    assert_eq!(th.error, Color::Red);
+    assert_eq!(th.danger_mark.fg, Some(Color::Red), "danger is the error role");
+    assert_eq!(th.success, Color::Green);
+    // Selection shows without any color: reversed text.
+    assert!(th.selection.add_modifier.contains(Modifier::REVERSED));
+    assert_eq!((th.selection.fg, th.selection.bg), (None, None));
+    // The statement tint is off, its bar stays.
+    assert_eq!(th.current_stmt, Style::new());
+    assert_ne!(th.current_stmt_bar, Color::Reset);
+    assert_eq!(th.dim, Dim::Modifier);
+    // No text role looks like body text, and no mark is invisible without color.
+    for c in [th.accent, th.accent_warm, th.success, th.warning, th.error, th.fg_muted, th.key_pk, th.key_fk, th.key_uq]
+    {
+        assert!(!matches!(c, Color::Reset | Color::Rgb(..) | Color::Indexed(_)), "{c:?}: an ANSI role");
+    }
+    for s in [th.range, th.cursor_line, th.read_only_mark, th.danger_mark, th.search_match, th.match_paren] {
+        assert_ne!(s, Style::new(), "{s:?} shows");
+    }
+    assert!(th.range != th.selection && th.range != th.cursor_line && th.cursor_line != th.selection);
+    let keys = [th.key_pk, th.key_fk, th.key_uq];
+    assert!(keys[0] != keys[1] && keys[1] != keys[2] && keys[0] != keys[2]);
+    let badges = [th.mode_normal, th.mode_insert, th.mode_visual, th.mode_command, th.mode_neutral];
+    for (i, a) in badges.iter().enumerate() {
+        assert_ne!(*a, th.mode_fg);
+        assert!(badges[i + 1..].iter().all(|b| b != a), "{a:?} twice");
+    }
+}
+
+#[test]
+fn warning_read_only_and_danger_stand_apart_in_every_theme() {
+    for (name, th) in BUILTINS.iter().copied() {
+        let (ro, danger) = (th.read_only_mark.fg, th.danger_mark.fg);
+        assert!(ro.is_some() && danger.is_some(), "{name}");
+        assert!(Some(th.warning) != ro && Some(th.warning) != danger && ro != danger, "{name}");
+        assert_ne!(th.warning, th.error, "{name}");
+        for s in [th.read_only_mark, th.danger_mark] {
+            assert!(s.add_modifier.intersects(Modifier::BOLD | Modifier::REVERSED), "{name}: {s:?}");
+        }
+    }
+}
+
+#[test]
+fn every_token_of_a_theme_can_be_set_by_name() {
+    // Listing every field (no `..`): a token added to `Theme` fails to compile here until it is
+    // in the token table too.
+    let Theme {
+        bg: _,
+        surface: _,
+        surface_alt: _,
+        border: _,
+        accent: _,
+        accent_warm: _,
+        fg: _,
+        fg_muted: _,
+        fg_dim: _,
+        selection: _,
+        range: _,
+        cursor_line: _,
+        current_stmt: _,
+        current_stmt_bar: _,
+        success: _,
+        warning: _,
+        error: _,
+        null_fg: _,
+        syn_keyword: _,
+        syn_function: _,
+        syn_string: _,
+        syn_number: _,
+        syn_comment: _,
+        syn_operator: _,
+        syn_identifier: _,
+        syn_quoted_ident: _,
+        key_pk: _,
+        key_fk: _,
+        key_uq: _,
+        mode_normal: _,
+        mode_insert: _,
+        mode_visual: _,
+        mode_command: _,
+        mode_neutral: _,
+        mode_fg: _,
+        search_match: _,
+        match_paren: _,
+        read_only_mark: _,
+        danger_mark: _,
+        plan_hot: _,
+        plan_misestimate: _,
+        dim: _,
+    } = DARK;
+    // Every field above but `dim`.
+    assert_eq!(COLOR_TOKENS.len() + STYLE_TOKENS.len(), 41);
+    let mut th = DARK;
+    for (i, name) in COLOR_TOKENS.iter().enumerate() {
+        *color_token(&mut th, name).unwrap() = Color::Indexed(i as u8);
+    }
+    for (i, name) in STYLE_TOKENS.iter().enumerate() {
+        *style_token(&mut th, name).unwrap() = Style::new().bg(Color::Indexed(100 + i as u8));
+    }
+    assert_eq!((th.bg, th.mode_fg), (Color::Indexed(0), Color::Indexed(22)));
+    assert_eq!(th.plan_misestimate, Style::new().bg(Color::Indexed(117)));
+    assert!(color_token(&mut th, "selection").is_none() && style_token(&mut th, "bg").is_none());
+}
+
+#[test]
+fn file_colors_map_to_the_terminal_palette_or_rgb() {
+    use datarig_core::theme::ColorSpec;
+    assert_eq!(color(ColorSpec::Default), Color::Reset);
+    assert_eq!(color(ColorSpec::Ansi(1)), Color::Red);
+    assert_eq!(color(ColorSpec::Ansi(7)), Color::Gray, "white is palette color 7");
+    assert_eq!(color(ColorSpec::Ansi(8)), Color::DarkGray, "bright-black is palette color 8");
+    assert_eq!(color(ColorSpec::Ansi(15)), Color::White);
+    assert_eq!(color(ColorSpec::Rgb(1, 2, 3)), Color::Rgb(1, 2, 3));
+}
+
+/// A scratch `themes/` directory, removed when dropped.
+struct ThemesDir(std::path::PathBuf);
+
+impl ThemesDir {
+    fn new(tag: &str) -> Self {
+        let d = std::env::temp_dir().join(format!("datarig-theme-{}-{tag}", std::process::id())).join("themes");
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        ThemesDir(d)
+    }
+
+    fn file(&self, name: &str, text: &str) -> &Self {
+        std::fs::write(self.0.join(format!("{name}.toml")), text).unwrap();
+        self
+    }
+}
+
+impl Drop for ThemesDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(self.0.parent().unwrap());
+    }
+}
+
+#[test]
+fn a_theme_file_replaces_tokens_of_the_theme_it_extends() {
+    use datarig_core::theme::{Problem, ThemeError};
+    let d = ThemesDir::new("resolve");
+    d.file(
+        "mine",
+        "extends = \"gruvbox\"\n[colors]\nwarning = \"bright-yellow\"\n[styles]\nselection = { bg = \"#102030\", modifiers = [\"bold\"] }\n",
+    );
+    let dir = Some(d.0.as_path());
+    let light = resolve("mine", Background::Light, dir).unwrap();
+    assert_eq!(light.warning, Color::LightYellow);
+    assert_eq!(light.selection, Style::new().bg(Color::Rgb(0x10, 0x20, 0x30)).add_modifier(Modifier::BOLD));
+    assert_eq!(light.fg, GRUVBOX_LIGHT.fg, "the rest is the base's; a family follows the background");
+    assert_eq!(resolve("mine", Background::Unknown, dir).unwrap().fg, GRUVBOX_DARK.fg);
+    // Without `extends`: the terminal theme.
+    d.file("bare", "[colors]\naccent = \"#ff0000\"\n");
+    let bare = resolve("bare", Background::Dark, dir).unwrap();
+    assert_eq!(bare, Theme { accent: Color::Rgb(255, 0, 0), ..TERMINAL });
+    // Built-in names never read a file; a file with such a name is an error, not ignored.
+    assert_eq!(resolve("nord", Background::Dark, dir).unwrap(), NORD);
+    d.file("nord", "");
+    assert_eq!(resolve("nord", Background::Dark, dir), Err(ThemeError::Shadows { path: d.0.join("nord.toml") }));
+    assert_eq!(
+        names(dir),
+        [NAMES.iter().map(|n| n.to_string()).collect::<Vec<_>>(), vec!["bare".into(), "mine".into()]].concat()
+    );
+    d.file("base", "\n\nextends = \"solarized\"\n");
+    assert_eq!(
+        resolve("base", Background::Dark, dir),
+        Err(ThemeError::File {
+            path: d.0.join("base.toml"),
+            line: Some(3),
+            problem: Problem::UnknownBase("solarized".into())
+        })
+    );
+    assert!(matches!(resolve("gone", Background::Dark, dir), Err(ThemeError::Unknown { .. })));
+    assert_eq!(resolve("mine", Background::Dark, None), Err(ThemeError::Unknown { name: "mine".into(), dir: None }));
+    assert_eq!(resolve("terminal", Background::Dark, None).unwrap(), TERMINAL);
 }
 
 #[test]

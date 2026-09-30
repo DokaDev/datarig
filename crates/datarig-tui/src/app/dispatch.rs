@@ -475,6 +475,7 @@ impl App {
             version: self.config_version,
             language: self.lang_setting.as_str(),
             icons: self.icons,
+            theme: &self.theme_name,
             editor_mode: self.editor_mode,
             default_source: self.default_source,
             prefs: self.prefs,

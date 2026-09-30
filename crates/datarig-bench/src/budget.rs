@@ -92,7 +92,7 @@ pub fn paging(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
 
 pub fn editor(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
     let max = num(b, "editor", "p95_ms_max")?;
-    for what in ["typing_ms", "movement_ms", "scrolling_ms", "normal_edit_ms"] {
+    for what in ["typing_ms", "movement_ms", "scrolling_ms", "normal_edit_ms", "theme_switch_ms"] {
         match f(result, &[what, "p95"]) {
             Some(m) => c.check(&format!("editor {what} p95"), m, max, " ms"),
             None => c.missing(&format!("editor {what} p95")),
