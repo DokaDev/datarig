@@ -102,10 +102,10 @@ fn an_open_table_shows_its_structure_read_once() {
     h.key(KeyCode::Enter);
     for want in [
         "users_email_key  (email) UNIQUE btree · constraint",
-        "users_nickname_idx  (nickname) btree WHERE nickname IS NOT NULL",
+        "users_nickname_idx  (nickname DESC) btree WHERE nickname IS NOT NULL",
         "users_pkey  (id) UNIQUE btree · primary key",
         "users_audit  AFTER INSERT OR DELETE · FOR EACH STATEMENT · shop.audit() · disabled",
-        "users_touch  BEFORE UPDATE · FOR EACH ROW · shop.touch()",
+        "users_touch  BEFORE UPDATE OF name · FOR EACH ROW · WHEN (old.name IS DISTINCT FROM new.name) · shop.touch()",
     ] {
         assert!(lines(&mut h).iter().any(|l| l.contains(want)), "{want:?}:\n{}", lines(&mut h).join("\n"));
     }
@@ -113,7 +113,7 @@ fn an_open_table_shows_its_structure_read_once() {
     h.explore("local-pg");
     h.goto("users_nickname_idx");
     let status = h.status(200, 45);
-    assert!(status.contains("users_nickname_idx  (nickname) btree WHERE nickname IS NOT NULL"), "{status}");
+    assert!(status.contains("users_nickname_idx  (nickname DESC) btree WHERE nickname IS NOT NULL"), "{status}");
     h.explore("local-pg");
     h.goto("users");
     assert!(!h.status(200, 45).contains("users_"), "only for a line of a structure");
@@ -289,6 +289,47 @@ fn a_structure_that_cannot_be_read_says_why() {
     assert_eq!(asked(&h.sent()), ["shop.users"], "asked again");
     h.db(structure("shop", "users", users_structure()));
     assert!(lines(&mut h).iter().any(|l| l.contains("Columns (5)")), "{:?}", lines(&mut h));
+}
+
+/// A line too long for the status bar keeps what matters: the connection's policy gives up its
+/// room when that makes it fit, else the line is cut in its middle, so its end stays (what a trigger calls, what
+/// to do). A structure that could not be read shows why alone there, in English and Korean at
+/// 80 columns: the reason and "try again".
+#[test]
+fn a_long_line_keeps_its_end_in_the_status_bar() {
+    use datarig_core::i18n::{I18n, Label, Msg};
+    for lang in [Lang::En, Lang::Ko] {
+        let mut h = Harness::connected(lang);
+        h.key(KeyCode::BackTab);
+        h.keys("jjjj");
+        h.key(KeyCode::Char('l'));
+        let objects = SchemaObjects { tables: vec!["users".into()], views: vec![], materialized: Default::default() };
+        h.db(DbEvent::Objects { schema: "shop".into(), result: Ok(objects) });
+        h.goto("users");
+        h.key(KeyCode::Char('l'));
+        h.db(DbEvent::Structure { schema: "shop".into(), table: "users".into(), result: Err(DbError::Locked) });
+        h.keys("j");
+        let why = Label::TreeStructureLocked.text(lang);
+        let policy = I18n::new(lang).msg(&Msg::StatusPolicy { name: "default".into() }).to_string();
+        let status = h.status(80, 24);
+        assert!(status.contains(why) && !status.contains(&policy), "{lang:?}: {status}");
+        // With room, the policy stays.
+        let status = h.status(160, 24);
+        assert!(status.contains(why) && status.contains(&policy), "{lang:?}: {status}");
+    }
+    let mut h = shop_open(false);
+    let mut users = users_structure();
+    users.triggers[1].function = "shop.touch_row_before_it_is_written".into();
+    h.goto("users");
+    h.key(KeyCode::Char('l'));
+    h.db(structure("shop", "users", users));
+    h.goto("Triggers");
+    h.key(KeyCode::Char('l'));
+    h.explore("local-pg");
+    h.goto("users_touch");
+    let status = h.status(120, 24);
+    assert!(status.contains("users_touch  BEFORE UPDATE OF name"), "{status}");
+    assert!(status.contains("… · shop.touch_row_before_it_is_written()"), "{status}");
 }
 
 /// A driver without the table structure is never asked for it: an open table shows its

@@ -15,7 +15,7 @@ use crate::theme;
 use crate::widgets::tree::{Group, Node, ObjectView, Structure, Tree};
 use crate::widgets::{put, spinner_at};
 use datarig_core::driver::KeyMarks;
-use datarig_core::driver::structure::{ColumnFill, FkAction, StructureGroup, TableStructure};
+use datarig_core::driver::structure::{ColumnFill, FkAction, StructureGroup, TableStructure, TriggerEvent};
 use datarig_core::i18n::{Label, Msg};
 use datarig_core::sql::complete::Catalog;
 use ratatui::buffer::Buffer;
@@ -316,7 +316,7 @@ fn item_parts(app: &App, st: &TableStructure, sg: StructureGroup, k: usize) -> V
         }
         StructureGroup::Indexes => {
             let Some(x) = st.indexes.get(k) else { return Vec::new() };
-            let mut detail = format!("({})", x.columns.join(", "));
+            let mut detail = format!("({})", x.keys().join(", "));
             if !x.include.is_empty() {
                 detail.push_str(&format!(" INCLUDE ({})", x.include.join(", ")));
             }
@@ -349,9 +349,19 @@ fn item_parts(app: &App, st: &TableStructure, sg: StructureGroup, k: usize) -> V
         }
         StructureGroup::Triggers => {
             let Some(t) = st.triggers.get(k) else { return Vec::new() };
-            let events: Vec<&str> = t.events.iter().map(|e| e.sql()).collect();
+            let events: Vec<String> = t
+                .events
+                .iter()
+                .map(|e| match e {
+                    TriggerEvent::Update if !t.update_columns.is_empty() => {
+                        format!("UPDATE OF {}", t.update_columns.join(", "))
+                    }
+                    e => e.sql().to_string(),
+                })
+                .collect();
             let each = if t.for_each_row { "FOR EACH ROW" } else { "FOR EACH STATEMENT" };
-            let detail = format!("  {} {} · {each} · {}()", t.timing.sql(), events.join(" OR "), t.function);
+            let when = t.condition.as_ref().map(|c| format!(" · WHEN ({c})")).unwrap_or_default();
+            let detail = format!("  {} {} · {each}{when} · {}()", t.timing.sql(), events.join(" OR "), t.function);
             let mut parts = vec![name(&t.name), (detail, dim)];
             if !t.enabled {
                 let off = app.i18n.label(Label::TreeTriggerDisabled);
@@ -414,11 +424,23 @@ pub(crate) fn row_text(app: &App, row: &Row) -> String {
 
 /// The whole text of the row under the explorer's cursor when it is part of a table's
 /// structure, for the status bar: the explorer is narrow, and cuts the details of deep lines.
+/// A structure that could not be read shows why alone (the reason and what to do), which the
+/// explorer's line wraps in "structure unavailable".
 pub(crate) fn structure_preview(app: &App) -> Option<String> {
     let row = app.explorer_row()?;
     let (RowKind::Node(_, n) | RowKind::AuxNode(_, _, n)) = &row.kind else { return None };
     if !is_structure(*n) {
         return None;
+    }
+    let tree = match &row.kind {
+        RowKind::AuxNode(id, db, _) => app.conns.aux(*id, db).map(|a| &a.tree),
+        RowKind::Node(id, _) => app.conns.get(*id).map(|c| &c.tree),
+        _ => None,
+    };
+    if let (Node::StructNote(i, g, j), Some(tree)) = (*n, tree)
+        && let Some(Structure::Failed(error)) = tree.object_view(i, g, j).map(|v| &v.structure)
+    {
+        return Some(error.clone());
     }
     let text: String = row_parts(app, &row).into_iter().map(|(t, _)| t).collect();
     Some(text.trim().to_string()).filter(|t| !t.is_empty())

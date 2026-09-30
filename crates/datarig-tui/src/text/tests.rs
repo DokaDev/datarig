@@ -100,3 +100,23 @@ fn counts_and_sizes_read_short() {
     let sizes = [0, 512, 1023, 1024, 8192, 4_404_019, 19_505_152, 5 << 30, 3 << 40];
     assert_eq!(sizes.map(human_bytes), ["0 B", "512 B", "1023 B", "1 KB", "8 KB", "4.2 MB", "19 MB", "5 GB", "3 TB"]);
 }
+
+#[test]
+fn clip_middle_keeps_the_end() {
+    let lock = "(structure unavailable: the table is locked by another session (try again))";
+    assert_eq!(clip_middle(lock, 200), lock);
+    let short = clip_middle(lock, 50);
+    assert_eq!((width(&short), short.as_str()), (50, "(structure unavailable: the table is… (try again))"));
+    let trigger = "t  BEFORE UPDATE OF name · FOR EACH ROW · WHEN (old.name IS DISTINCT FROM new.name) · shop.touch()";
+    assert_eq!(clip_middle(trigger, 60), "t  BEFORE UPDATE OF name · FOR EACH ROW · WH… · shop.touch()");
+    // No short end to keep: cut at the end.
+    let long = format!("{} ({})", "a".repeat(40), "b".repeat(40));
+    assert_eq!(clip_middle(&long, 30), clip(&long, 30));
+    // Wide graphemes: never over the width.
+    let wide = "(構造を読めません: 別のセッションがテーブルをロックしています (再試行してください))";
+    let tail = width(&wide[wide.rfind(" (").unwrap()..]);
+    for w in 1..width(wide) {
+        let c = clip_middle(wide, w);
+        assert!(width(&c) <= w && (w * 2 / 3 < tail || c.ends_with("))")), "{w}: {c}");
+    }
+}

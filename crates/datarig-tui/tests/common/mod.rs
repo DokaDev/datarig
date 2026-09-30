@@ -935,6 +935,7 @@ pub fn users_structure() -> TableStructure {
         |name: &str, cols: &[&str], unique: bool, predicate: Option<&str>, primary: bool, constraint: bool| Index {
             name: name.into(),
             columns: s(cols),
+            options: Vec::new(),
             include: Vec::new(),
             unique,
             method: "btree".into(),
@@ -961,6 +962,7 @@ pub fn users_structure() -> TableStructure {
         index("users_nickname_idx", &["nickname"], false, Some("nickname IS NOT NULL"), false, false),
         index("users_pkey", &["id"], true, None, true, true),
     ];
+    t.indexes[1].options = s(&["DESC"]);
     t.triggers = vec![
         Trigger {
             name: "users_audit".into(),
@@ -969,6 +971,8 @@ pub fn users_structure() -> TableStructure {
             for_each_row: false,
             function: "shop.audit".into(),
             enabled: false,
+            update_columns: Vec::new(),
+            condition: None,
             definition: String::new(),
         },
         Trigger {
@@ -978,6 +982,8 @@ pub fn users_structure() -> TableStructure {
             for_each_row: true,
             function: "shop.touch".into(),
             enabled: true,
+            update_columns: s(&["name"]),
+            condition: Some("old.name IS DISTINCT FROM new.name".into()),
             definition: String::new(),
         },
     ];

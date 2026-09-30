@@ -18,6 +18,7 @@ fn index(name: &str, columns: &[&str], unique: bool, predicate: Option<&str>) ->
     Index {
         name: name.into(),
         columns: names(columns),
+        options: Vec::new(),
         include: Vec::new(),
         unique,
         method: "btree".into(),

@@ -309,13 +309,17 @@ async fn table_structure_reads_the_catalog_in_one_statement() {
              CONSTRAINT child_parent_fkey FOREIGN KEY (pa, pb) REFERENCES {s}.parent (a, b) ON DELETE CASCADE, \
              CONSTRAINT child_note_fkey FOREIGN KEY (note) REFERENCES {s}.parent (code) ON UPDATE SET NULL)"
         ),
-        format!("CREATE INDEX child_note_partial ON {s}.child (note) WHERE note IS NOT NULL"),
-        format!("CREATE INDEX child_lower_note ON {s}.child (lower(note))"),
+        format!(
+            "CREATE INDEX child_note_partial ON {s}.child (note COLLATE \"C\" text_pattern_ops, qty NULLS FIRST) \
+             WHERE note IS NOT NULL"
+        ),
+        format!("CREATE INDEX child_lower_note ON {s}.child (lower(note) DESC)"),
         format!("CREATE INDEX child_doc_gin ON {s}.child USING gin (doc)"),
         format!("CREATE UNIQUE INDEX child_pa_key ON {s}.child (pa) INCLUDE (qty)"),
         format!("CREATE FUNCTION {s}.touch() RETURNS trigger LANGUAGE plpgsql AS $$BEGIN RETURN NEW; END$$"),
         format!(
-            "CREATE TRIGGER child_touch BEFORE INSERT OR UPDATE ON {s}.child FOR EACH ROW EXECUTE FUNCTION {s}.touch()"
+            "CREATE TRIGGER child_touch BEFORE INSERT OR UPDATE OF qty, note ON {s}.child FOR EACH ROW \
+             WHEN (NEW.note <> ') EXECUTE (') EXECUTE FUNCTION {s}.touch()"
         ),
         format!("CREATE TRIGGER child_audit AFTER DELETE ON {s}.child FOR EACH STATEMENT EXECUTE FUNCTION {s}.touch()"),
         format!("ALTER TABLE {s}.child DISABLE TRIGGER child_audit"),
@@ -406,6 +410,7 @@ async fn table_structure_reads_the_catalog_in_one_statement() {
             Index {
                 name: name.into(),
                 columns: names(cols),
+                options: vec![String::new(); cols.len()],
                 include: names(include),
                 unique,
                 method: method.into(),
@@ -415,61 +420,69 @@ async fn table_structure_reads_the_catalog_in_one_statement() {
                 definition: def.to_string(),
             }
         };
-    assert_eq!(
-        child.indexes,
-        [
-            index(
-                "child_doc_gin",
-                &["doc"],
-                &[],
-                false,
-                "gin",
-                None,
-                false,
-                &format!("CREATE INDEX child_doc_gin ON {s}.child USING gin (doc)")
+    let mut expected = [
+        index(
+            "child_doc_gin",
+            &["doc"],
+            &[],
+            false,
+            "gin",
+            None,
+            false,
+            &format!("CREATE INDEX child_doc_gin ON {s}.child USING gin (doc)"),
+        ),
+        index(
+            "child_lower_note",
+            &["lower(note)"],
+            &[],
+            false,
+            "btree",
+            None,
+            false,
+            &format!("CREATE INDEX child_lower_note ON {s}.child USING btree (lower(note) DESC)"),
+        ),
+        index(
+            "child_note_partial",
+            &["note", "qty"],
+            &[],
+            false,
+            "btree",
+            Some("note IS NOT NULL"),
+            false,
+            &format!(
+                "CREATE INDEX child_note_partial ON {s}.child USING btree \
+                     (note COLLATE \"C\" text_pattern_ops, qty NULLS FIRST) WHERE (note IS NOT NULL)"
             ),
-            index(
-                "child_lower_note",
-                &["lower(note)"],
-                &[],
-                false,
-                "btree",
-                None,
-                false,
-                &format!("CREATE INDEX child_lower_note ON {s}.child USING btree (lower(note))")
-            ),
-            index(
-                "child_note_partial",
-                &["note"],
-                &[],
-                false,
-                "btree",
-                Some("note IS NOT NULL"),
-                false,
-                &format!("CREATE INDEX child_note_partial ON {s}.child USING btree (note) WHERE (note IS NOT NULL)")
-            ),
-            index(
-                "child_pa_key",
-                &["pa"],
-                &["qty"],
-                true,
-                "btree",
-                None,
-                false,
-                &format!("CREATE UNIQUE INDEX child_pa_key ON {s}.child USING btree (pa) INCLUDE (qty)")
-            ),
-            index(
-                "child_pkey",
-                &["id"],
-                &[],
-                true,
-                "btree",
-                None,
-                true,
-                &format!("CREATE UNIQUE INDEX child_pkey ON {s}.child USING btree (id)")
-            ),
-        ]
-    );
+        ),
+        index(
+            "child_pa_key",
+            &["pa"],
+            &["qty"],
+            true,
+            "btree",
+            None,
+            false,
+            &format!("CREATE UNIQUE INDEX child_pa_key ON {s}.child USING btree (pa) INCLUDE (qty)"),
+        ),
+        index(
+            "child_pkey",
+            &["id"],
+            &[],
+            true,
+            "btree",
+            None,
+            true,
+            &format!("CREATE UNIQUE INDEX child_pkey ON {s}.child USING btree (id)"),
+        ),
+    ];
+    // Each key's collation, operator class and order, when not the defaults (no lock: catalogs).
+    expected[1].options = names(&["DESC"]);
+    expected[2].options = names(&["COLLATE \"C\" text_pattern_ops", "NULLS FIRST"]);
+    assert_eq!(child.indexes, expected);
+    for x in &child.indexes {
+        let keys = format!("({})", x.keys().join(", "));
+        assert!(x.definition.contains(&keys), "{keys} as the server prints it: {}", x.definition);
+    }
     assert!(child.unique_constraints.is_empty(), "a unique index is no constraint");
     assert_eq!(
         child.checks,
@@ -489,6 +502,8 @@ async fn table_structure_reads_the_catalog_in_one_statement() {
                 for_each_row: false,
                 function: format!("{s}.touch"),
                 enabled: false,
+                update_columns: Vec::new(),
+                condition: None,
                 definition: format!(
                     "CREATE TRIGGER child_audit AFTER DELETE ON {s}.child FOR EACH STATEMENT EXECUTE FUNCTION {s}.touch()"
                 ),
@@ -500,15 +515,18 @@ async fn table_structure_reads_the_catalog_in_one_statement() {
                 for_each_row: true,
                 function: format!("{s}.touch"),
                 enabled: true,
+                update_columns: names(&["qty", "note"]),
+                condition: Some("new.note <> ') EXECUTE ('::text".into()),
                 definition: format!(
-                    "CREATE TRIGGER child_touch BEFORE INSERT OR UPDATE ON {s}.child FOR EACH ROW EXECUTE FUNCTION {s}.touch()"
+                    "CREATE TRIGGER child_touch BEFORE INSERT OR UPDATE OF qty, note ON {s}.child FOR EACH ROW \
+                     WHEN (new.note <> ') EXECUTE ('::text) EXECUTE FUNCTION {s}.touch()"
                 ),
             },
         ]
     );
     assert_eq!(child.kind, RelationKind::Table);
     assert_eq!(child.estimated_rows, None, "never analyzed: unknown, not 0");
-    assert!(child.total_bytes.is_some_and(|b| b > 0), "{:?}", child.total_bytes);
+    assert_eq!(child.total_bytes, None, "no statistics yet: its indexes' pages are not its size");
     let m = |c| child.marks(c);
     assert_eq!(
         (m("id").pk, m("pa").fk, m("pa").unique, m("note").fk, m("qty").unique),
@@ -538,7 +556,9 @@ async fn table_structure_reads_the_catalog_in_one_statement() {
     let mv = read("mv").await.expect("mv");
     assert_eq!(mv.kind, RelationKind::MaterializedView);
     assert_eq!(mv.indexes.iter().map(|i| i.name.as_str()).collect::<Vec<_>>(), ["mv_pa"]);
-    assert!(mv.total_bytes.is_some());
+    assert_eq!(mv.total_bytes, None, "never analyzed");
+    pg_clean::run_fresh(&url, &format!("ANALYZE {s}.mv")).unwrap();
+    assert!(read("mv").await.expect("mv").total_bytes.is_some_and(|b| b > 0), "analyzed: its index's pages");
     let v = read("v").await.expect("v");
     assert_eq!((v.kind, v.estimated_rows, v.total_bytes), (RelationKind::View, None, None));
     assert_eq!(v.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["id", "qty"]);
@@ -684,6 +704,163 @@ async fn table_structure_never_waits_for_a_lock() {
 
     // Asked again once the lock is gone.
     assert!(read("t").await.0.is_ok());
+}
+
+/// The size of a table that was never vacuumed or analyzed is unknown, as its rows are: its
+/// heap's `relpages` is still 0 however many rows it has, while its indexes and its TOAST
+/// table's index have pages from their creation on (a text column, a primary key, a partitioned
+/// table's partitions). Once analyzed it is its heap, TOAST table and indexes, as the server
+/// counts them (in whole pages).
+#[tokio::test(flavor = "multi_thread")]
+async fn table_size_is_unknown_until_the_table_has_statistics() {
+    let Some(url) = pg_url("table_size_is_unknown_until_the_table_has_statistics") else { return };
+    let schema = format!("zz_size_{}", std::process::id());
+    let _guard = SchemaGuard::new(&url, &schema);
+    let s = &schema;
+    // Autovacuum off: nothing analyzes them behind the test's back.
+    let off = "WITH (autovacuum_enabled = false)";
+    for sql in [
+        format!("CREATE SCHEMA {s}"),
+        format!("CREATE TABLE {s}.text_only (note text) {off}"),
+        format!("INSERT INTO {s}.text_only SELECT repeat('x', 30) FROM generate_series(1, 5000)"),
+        format!("CREATE TABLE {s}.keyed (id int PRIMARY KEY, note text) {off}"),
+        format!("INSERT INTO {s}.keyed SELECT g, repeat('y', 200) FROM generate_series(1, 20000) g"),
+        format!("CREATE TABLE {s}.part (id int, note text) PARTITION BY RANGE (id)"),
+        format!("CREATE TABLE {s}.part_a PARTITION OF {s}.part FOR VALUES FROM (0) TO (10000) {off}"),
+        format!("CREATE TABLE {s}.part_b PARTITION OF {s}.part FOR VALUES FROM (10000) TO (20000) {off}"),
+        format!("CREATE INDEX part_id ON {s}.part (id)"),
+        format!("INSERT INTO {s}.part SELECT g, repeat('z', 100) FROM generate_series(0, 19999) g"),
+    ] {
+        pg_clean::run_fresh(&url, &sql).unwrap_or_else(|e| panic!("{e}: {sql}"));
+    }
+    let mut meta = Conn::open(&url, SessionRole::Meta).await;
+    meta.wait(|e| matches!(e, DbEvent::Keys(_)), 30).await;
+    let mut observer = Conn::open(&url, SessionRole::Query).await;
+    let mut n = 0;
+    let mut read = async |table: &str| {
+        meta.session.send(DbCommand::LoadStructure { schema: schema.clone(), table: table.to_string() });
+        let DbEvent::Structure { result, .. } = meta.wait(|e| matches!(e, DbEvent::Structure { .. }), 30).await else {
+            unreachable!()
+        };
+        let st = result.unwrap_or_else(|e| panic!("{table}: {e:?}"));
+        // What the server counts (it locks the tables: fine here, nothing else holds them).
+        n += 1;
+        let sql = format!(
+            "SELECT (pg_catalog.pg_total_relation_size('{s}.{table}') \
+             + coalesce((SELECT sum(pg_catalog.pg_total_relation_size(r.relid)) \
+             FROM pg_catalog.pg_partition_tree('{s}.{table}') r WHERE r.isleaf), 0))::int8"
+        );
+        let real: u64 = rows_of(observer.run(n, &sql).await)[0][0].as_deref().unwrap().parse().unwrap();
+        (st.estimated_rows, st.total_bytes, real)
+    };
+
+    for table in ["text_only", "keyed", "part"] {
+        let (rows, bytes, real) = read(table).await;
+        assert!(real > 100_000, "{table} has rows: {real}");
+        assert_eq!((rows, bytes), (None, None), "{table}: never analyzed, rows and size unknown");
+    }
+    for (table, count) in [("text_only", 5000), ("keyed", 20_000), ("part", 20_000)] {
+        pg_clean::run_fresh(&url, &format!("ANALYZE {s}.{table}")).unwrap();
+        let (rows, bytes, real) = read(table).await;
+        assert_eq!(rows, Some(count), "{table}");
+        let bytes = bytes.unwrap_or_else(|| panic!("{table}: analyzed, a size"));
+        // The server's count adds the free space maps, which the statistics leave out.
+        assert!(bytes <= real && bytes >= real * 9 / 10, "{table}: ~{bytes} for {real} bytes");
+    }
+}
+
+/// A table's structure stays fast in a database of some thousand relations (a partitioned
+/// table of 2000 partitions and hundreds of small tables): its planned cost grows with the
+/// catalog, not with its square, so it stays under `jit_above_cost`, and the metadata session's
+/// transaction turns JIT off anyway (a JIT compilation of it costs far more than running it).
+/// Here the database compiles every statement (`jit_above_cost = 0`, inlined and optimized),
+/// so a read that JIT compiled would take hundreds of milliseconds.
+#[tokio::test(flavor = "multi_thread")]
+async fn table_structure_stays_fast_with_thousands_of_relations() {
+    use datarig_driver_postgres::catalog_sql::{BEGIN_READ, TABLE_STRUCTURE};
+    let Some(url) = pg_url("table_structure_stays_fast_with_thousands_of_relations") else { return };
+    let db = format!("zz_many_{}", std::process::id());
+    let _db_guard = DatabaseGuard { url: url.clone(), name: db.clone() };
+    pg_clean::run_fresh(&url, &format!("CREATE DATABASE {db}")).unwrap();
+    for setting in ["jit_above_cost", "jit_inline_above_cost", "jit_optimize_above_cost"] {
+        pg_clean::run_fresh(&url, &format!("ALTER DATABASE {db} SET {setting} = 0")).unwrap();
+    }
+    let ctx = datarig_core::driver::SessionContext { database: Some(db.clone()), schema: None };
+    let mut q = Conn::open_in(&url, SessionRole::Query, false, ctx.clone()).await;
+    let mut id = 0;
+    let mut run = async |sql: &str| {
+        id += 1;
+        match q.run(id, sql).await {
+            DbEvent::Failed { error, .. } => panic!("{sql}: {error:?}"),
+            ev => ev,
+        }
+    };
+    // In slices, so no transaction holds thousands of locks.
+    for i in 0..3 {
+        run(&format!(
+            "DO $$BEGIN FOR i IN {} .. {} LOOP \
+             EXECUTE format('CREATE TABLE zz_small_%s (id int PRIMARY KEY, note text)', i); END LOOP; END$$",
+            i * 200,
+            i * 200 + 199
+        ))
+        .await;
+    }
+    run("CREATE TABLE zz_t (id int PRIMARY KEY, note text)").await;
+    run("INSERT INTO zz_t SELECT g, 'n' FROM generate_series(1, 100) g").await;
+    run("CREATE TABLE zz_part (id int, note text) PARTITION BY RANGE (id)").await;
+    for i in 0..10 {
+        run(&format!(
+            "DO $$BEGIN FOR i IN {} .. {} LOOP EXECUTE format(\
+             'CREATE TABLE zz_part_%s PARTITION OF zz_part FOR VALUES FROM (%s) TO (%s)', i, i * 10, i * 10 + 10); \
+             END LOOP; END$$",
+            i * 200,
+            i * 200 + 199
+        ))
+        .await;
+    }
+    run("INSERT INTO zz_part SELECT g, 'n' FROM generate_series(0, 19999) g").await;
+    run("ANALYZE zz_t, zz_part").await;
+    let rows = rows_of(run("SELECT count(*)::text, pg_catalog.pg_jit_available()::text FROM pg_class").await);
+    assert!(rows[0][0].as_deref().unwrap().parse::<u32>().unwrap() > 7000, "{rows:?}");
+    let jit_available = rows[0][1].as_deref() == Some("true");
+
+    for table in ["zz_t", "zz_part"] {
+        let sql = TABLE_STRUCTURE.replace("$1", "'public'").replace("$2", &format!("'{table}'"));
+        let explain = |sql: &str| format!("EXPLAIN (ANALYZE, FORMAT JSON) {sql}");
+        let plan =
+            |ev: DbEvent| -> serde_json::Value { serde_json::from_str(rows_of(ev)[0][0].as_deref().unwrap()).unwrap() };
+        // The planned cost, under the default `jit_above_cost` (100000).
+        let bare = plan(run(&explain(&sql)).await);
+        let cost = bare[0]["Plan"]["Total Cost"].as_f64().unwrap();
+        assert!(cost < 100_000.0, "{table}: planned cost {cost}");
+        // This database compiles every statement, but not in the metadata session's transaction.
+        assert_eq!(bare[0].get("JIT").is_some(), jit_available, "{table}: {bare}");
+        for begin in BEGIN_READ.split(';') {
+            run(begin).await;
+        }
+        let read = plan(run(&explain(&sql)).await);
+        run("COMMIT").await;
+        assert!(read[0].get("JIT").is_none(), "{table}: {read}");
+    }
+
+    let mut meta = Conn::open_in(&url, SessionRole::Meta, false, ctx).await;
+    meta.wait(|e| matches!(e, DbEvent::Keys(_)), 30).await;
+    for (table, rows, budget) in [("zz_t", 100, 100), ("zz_part", 20_000, 200)] {
+        let mut best = Duration::MAX;
+        for _ in 0..3 {
+            let t0 = Instant::now();
+            meta.session.send(DbCommand::LoadStructure { schema: "public".into(), table: table.into() });
+            let DbEvent::Structure { result, .. } = meta.wait(|e| matches!(e, DbEvent::Structure { .. }), 30).await
+            else {
+                unreachable!()
+            };
+            best = best.min(t0.elapsed());
+            let st = result.expect(table);
+            assert_eq!(st.estimated_rows, Some(rows), "{table}");
+            assert!(st.total_bytes.is_some_and(|b| b > 0), "{table}");
+        }
+        assert!(best < Duration::from_millis(budget), "{table}: {best:?} (budget {budget} ms)");
+    }
 }
 
 /// One connection per session, named after its role; the metadata session refuses statements.

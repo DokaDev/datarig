@@ -81,6 +81,21 @@ pub struct StructureColumn {
     pub fill: ColumnFill,
 }
 
+impl Index {
+    /// Its key columns with their options, as the index's definition lists them
+    /// (`created DESC`).
+    pub fn keys(&self) -> Vec<String> {
+        self.columns
+            .iter()
+            .enumerate()
+            .map(|(i, c)| match self.options.get(i).filter(|o| !o.is_empty()) {
+                Some(o) => format!("{c} {o}"),
+                None => c.clone(),
+            })
+            .collect()
+    }
+}
+
 /// A primary key or a unique constraint.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct KeyConstraint {
@@ -132,6 +147,10 @@ pub struct Index {
     pub name: String,
     /// Its key columns, or the expressions it indexes, in order.
     pub columns: Vec<String>,
+    /// For each key column, what the index says of it beyond the defaults, as SQL writes it
+    /// after the column: its collation, operator class and order (`DESC`, `NULLS FIRST`,
+    /// `COLLATE "C" text_pattern_ops`); empty when it has none.
+    pub options: Vec<String>,
     /// Columns it only carries (`INCLUDE`).
     pub include: Vec<String>,
     pub unique: bool,
@@ -203,6 +222,11 @@ pub struct Trigger {
     pub function: String,
     /// It fires (PostgreSQL: not `DISABLE`d).
     pub enabled: bool,
+    /// The columns of `UPDATE OF`: an `UPDATE` fires it only when it sets one of them (empty:
+    /// any `UPDATE`).
+    pub update_columns: Vec<String>,
+    /// The condition of its `WHEN` clause, without the parentheses.
+    pub condition: Option<String>,
     pub definition: String,
 }
 

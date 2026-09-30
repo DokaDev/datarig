@@ -23,15 +23,20 @@ use tokio_postgres::error::SqlState;
 use tokio_postgres::types::{ToSql, Type};
 use tokio_postgres::{Client, Row};
 
-mod structure;
+pub(crate) mod structure;
 
 const HIDDEN_SCHEMAS: &str = "n.nspname NOT IN ('pg_catalog', 'information_schema') \
      AND n.nspname NOT LIKE 'pg\\_toast%' AND n.nspname NOT LIKE 'pg\\_temp%'";
 
 /// What each read starts with: its own read-only transaction, whose waits for a lock end after
-/// 2 s. `SET LOCAL` ends with the transaction, so nothing is left on a server connection a pooler
-/// hands to another client.
-const BEGIN_READ: &str = "BEGIN READ ONLY; SET LOCAL lock_timeout = '2s'";
+/// 2 s, without JIT compilation (PostgreSQL 11 and later: `set_config(…, true)` is a `SET
+/// LOCAL` the older servers, which have no `jit`, skip). A catalog read is short, but a
+/// catalog of some thousand relations can raise its planned cost over `jit_above_cost`, and
+/// compiling it costs far more than running it. Both settings end with the transaction, so
+/// nothing is left on a server connection a pooler hands to another client.
+pub const BEGIN_READ: &str = "BEGIN READ ONLY; SET LOCAL lock_timeout = '2s'; \
+     SELECT pg_catalog.set_config('jit', 'off', true) \
+     WHERE pg_catalog.current_setting('server_version_num')::int >= 110000";
 
 /// Run the catalog read `sql` in a transaction of its own ([`BEGIN_READ`]). The `BEGIN`, the
 /// statement and the `COMMIT` go out together (one round trip); a failed statement leaves the

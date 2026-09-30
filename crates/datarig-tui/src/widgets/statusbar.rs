@@ -1,7 +1,7 @@
 //! The one-line status bar at the bottom of the workspace.
 
 use crate::app::{App, Level};
-use crate::text::{clip, width};
+use crate::text::{clip, clip_middle, width};
 use crate::theme;
 use crate::widgets::SPINNER;
 use datarig_core::i18n::{Label, Msg};
@@ -71,8 +71,10 @@ pub(crate) fn draw_status(app: &mut App, area: Rect, buf: &mut Buffer) {
         segs.push((format!(" {label} "), style));
     }
     let push_sep = |segs: &mut Vec<(String, Style)>| segs.push((sep.to_string(), sep_style));
+    let mut policy_seg = None;
     if let Some((name, color, policy)) = conn {
         segs.push((format!(" {name}"), Style::new().fg(color).bg(theme::SURFACE).add_modifier(Modifier::BOLD)));
+        policy_seg = Some(segs.len());
         segs.push((format!(" · {policy}"), Style::new().fg(theme::FG_MUTED).bg(theme::SURFACE)));
     }
     if let Some(ro) = read_only {
@@ -83,11 +85,6 @@ pub(crate) fn draw_status(app: &mut App, area: Rect, buf: &mut Buffer) {
         push_sep(&mut segs);
         segs.push((tx, Style::new().fg(color).bg(theme::SURFACE).add_modifier(Modifier::BOLD)));
     }
-    // What leads the message: a separator after the segments, else one blank.
-    let lead = if segs.is_empty() { " " } else { sep };
-    let fixed: usize = segs.iter().map(|(s, _)| width(s)).sum::<usize>() + width(&lang) + width(lead);
-    let avail = total.saturating_sub(fixed);
-
     let mut msg_segs: Vec<(String, Style)> = Vec::new();
     if let Some((text, level, running)) = status {
         if running {
@@ -102,6 +99,19 @@ pub(crate) fn draw_status(app: &mut App, area: Rect, buf: &mut Buffer) {
         msg_segs.push((text.to_string(), Style::new().fg(level_color(level)).bg(theme::SURFACE)));
     }
     let msg_w: usize = msg_segs.iter().map(|(s, _)| width(s)).sum();
+    // What leads the message: a separator after the segments, else one blank.
+    let lead = if segs.is_empty() { " " } else { sep };
+    let fixed =
+        |segs: &[(String, Style)]| segs.iter().map(|(s, _)| width(s)).sum::<usize>() + width(&lang) + width(lead);
+    // A message too long for its room takes the policy's when that makes it fit whole (the
+    // badge still says read-only).
+    if let Some(i) = policy_seg
+        && total.saturating_sub(fixed(&segs)) < msg_w
+        && total.saturating_sub(fixed(&segs) - width(&segs[i].0)) >= msg_w
+    {
+        segs.remove(i);
+    }
+    let avail = total.saturating_sub(fixed(&segs));
     // The hint line: as many entries as fit next to the message, best first.
     let hint_segs = |n: usize| -> Vec<(String, Style)> {
         let mut v: Vec<(String, Style)> = Vec::new();
@@ -130,7 +140,8 @@ pub(crate) fn draw_status(app: &mut App, area: Rect, buf: &mut Buffer) {
     let msg_room = avail - hint_w;
     let mut used = 0;
     for (s, st) in msg_segs {
-        let c = clip(&s, msg_room.saturating_sub(used));
+        // Cut in the middle: the end of a message says what to do.
+        let c = clip_middle(&s, msg_room.saturating_sub(used));
         used += width(&c);
         segs.push((c, st));
     }

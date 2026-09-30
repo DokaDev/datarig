@@ -6,7 +6,7 @@
 //! * the row and size estimates are the statistics in `pg_class` (`reltuples`, and `relpages`
 //!   of the table, its TOAST table and all their indexes, times `block_size`), which `VACUUM`
 //!   and `ANALYZE` keep, summed over the leaf partitions of a partitioned table (found in
-//!   `pg_inherits`). `pg_total_relation_size` and `pg_partition_tree` would lock each relation
+//!   `pg_inherits`); unknown until the table itself has statistics. `pg_total_relation_size` and `pg_partition_tree` would lock each relation
 //!   (`AccessShareLock`) and wait behind an `ALTER TABLE` or a `VACUUM FULL`;
 //! * the server deparses defaults, check constraints, indexes and trigger conditions only
 //!   against the open table: `pg_get_expr` with a relation, `pg_get_indexdef`, and
@@ -18,7 +18,9 @@
 //!   `lock_timeout` (the same error).
 //!
 //! The rest (`regclass`, `format_type`, the catalogs' own rows, `pg_get_constraintdef` of a
-//! key) takes no lock on the table.
+//! key) takes no lock on the table: an index key's order, operator class and collation come
+//! from `pg_index` (not `pg_get_indexdef`), a trigger's `UPDATE OF` columns from `tgattr`. Its
+//! `WHEN` condition only `pg_get_triggerdef` prints ([`when_condition`]).
 
 use datarig_core::driver::DbError;
 use datarig_core::driver::structure::{
@@ -33,9 +35,13 @@ use tokio_postgres::types::Type;
 /// locks nothing) fails with the server's own "does not exist" when the table is gone. `heaps`
 /// are the relations whose statistics are the table's: itself, or a partitioned table's leaf
 /// partitions. Rows are counted only where every one has an estimate (`reltuples` `-1`: never
-/// vacuumed or analyzed), and the size where every one has statistics (the same, unless it has
-/// pages; a foreign table has no storage).
-const SQL: &str = "\
+/// vacuumed or analyzed), and the size where every one has statistics of its own (the same,
+/// unless its own `relpages` is set, by a `CREATE INDEX`; a foreign table has no storage): its
+/// indexes and its TOAST table's index have pages from their creation on, which are not its
+/// size. Their TOAST tables and indexes are found in one pass each (semi-joins), not per heap:
+/// the planned cost stays linear in the catalog, under `jit_above_cost` with thousands of
+/// relations and for a table of thousands of partitions.
+pub const SQL: &str = "\
 WITH RECURSIVE rel AS (
   SELECT c.oid, c.relkind::text AS kind,
          EXISTS (SELECT 1 FROM pg_catalog.pg_locks l
@@ -49,18 +55,20 @@ WITH RECURSIVE rel AS (
   UNION ALL
   SELECT i.inhrelid FROM pg_catalog.pg_inherits i JOIN tree ON i.inhparent = tree.oid
 ), heaps AS (
-  SELECT h.relkind, h.reltuples::float8 AS reltuples, h.relpages::int8
-    + coalesce((SELECT sum(x.relpages) FROM pg_catalog.pg_class x
-                WHERE x.oid = h.reltoastrelid
-                   OR x.oid IN (SELECT i.indexrelid FROM pg_catalog.pg_index i
-                                WHERE i.indrelid IN (h.oid, h.reltoastrelid))), 0)::int8 AS pages
+  SELECT h.oid, h.relkind, h.reltuples::float8 AS reltuples, h.relpages::int8 AS relpages, h.reltoastrelid
   FROM pg_catalog.pg_class h
   WHERE h.oid IN (SELECT rel.oid FROM rel WHERE rel.kind IN ('r', 'm') UNION ALL SELECT tree.oid FROM tree)
     AND h.relkind <> 'p'
 ), stats AS (
   SELECT count(*) AS n, bool_and(h.reltuples >= 0) AS known_rows, sum(h.reltuples)::float8 AS reltuples,
-         bool_and(h.relkind = 'f' OR h.reltuples >= 0 OR h.pages > 0) AS known_size,
-         sum(h.pages)::int8 * pg_catalog.current_setting('block_size')::int8 AS bytes
+         bool_and(h.relkind = 'f' OR h.reltuples >= 0 OR h.relpages > 0) AS known_size,
+         (sum(h.relpages)
+          + coalesce((SELECT sum(t.relpages) FROM pg_catalog.pg_class t
+                      WHERE t.oid IN (SELECT x.reltoastrelid FROM heaps x)), 0)
+          + coalesce((SELECT sum(ic.relpages) FROM pg_catalog.pg_index i
+                      JOIN pg_catalog.pg_class ic ON ic.oid = i.indexrelid
+                      WHERE i.indrelid IN (SELECT x.oid FROM heaps x UNION ALL SELECT x.reltoastrelid FROM heaps x)), 0)
+         )::int8 * pg_catalog.current_setting('block_size')::int8 AS bytes
   FROM heaps h
 )
 SELECT CASE WHEN rel.locked THEN pg_catalog.json_build_object('kind', rel.kind, 'locked', true)
@@ -103,6 +111,19 @@ ELSE pg_catalog.json_build_object(
       'method', am.amname,
       'columns', (SELECT pg_catalog.json_agg(pg_catalog.pg_get_indexdef(i.indexrelid, k, true) ORDER BY k)
         FROM pg_catalog.generate_series(1, i.indnkeyatts) k),
+      'options', (SELECT pg_catalog.json_agg(pg_catalog.concat_ws(' ',
+          CASE WHEN i.indcollation[k - 1] <> 0 AND i.indcollation[k - 1] <> coalesce(ta.attcollation, ty.typcollation)
+            THEN 'COLLATE ' || pg_catalog.quote_ident(co.collname) END,
+          CASE WHEN NOT oc.opcdefault THEN pg_catalog.quote_ident(oc.opcname) END,
+          CASE WHEN pg_catalog.pg_indexam_has_property(am.oid, 'can_order') THEN
+            CASE i.indoption[k - 1]::int & 3 WHEN 1 THEN 'DESC NULLS LAST' WHEN 2 THEN 'NULLS FIRST' WHEN 3 THEN 'DESC' END
+          END) ORDER BY k)
+        FROM pg_catalog.generate_series(1, i.indnkeyatts) k
+        LEFT JOIN pg_catalog.pg_attribute ta ON ta.attrelid = i.indrelid AND ta.attnum = i.indkey[k - 1]
+        LEFT JOIN pg_catalog.pg_attribute ia ON ia.attrelid = i.indexrelid AND ia.attnum = k
+        LEFT JOIN pg_catalog.pg_type ty ON ty.oid = ia.atttypid
+        LEFT JOIN pg_catalog.pg_opclass oc ON oc.oid = i.indclass[k - 1]
+        LEFT JOIN pg_catalog.pg_collation co ON co.oid = i.indcollation[k - 1]),
       'include', (SELECT pg_catalog.json_agg(pg_catalog.pg_get_indexdef(i.indexrelid, k, true) ORDER BY k)
         FROM pg_catalog.generate_series(i.indnkeyatts + 1, i.indnatts) k),
       'predicate', pg_catalog.pg_get_expr(i.indpred, i.indrelid, true),
@@ -115,6 +136,10 @@ ELSE pg_catalog.json_build_object(
     SELECT pg_catalog.json_agg(pg_catalog.json_build_object(
       'name', t.tgname, 'type', t.tgtype, 'enabled', t.tgenabled::text,
       'function', pn.nspname || '.' || p.proname,
+      'update_columns', (SELECT pg_catalog.json_agg(a.attname ORDER BY k.i)
+        FROM pg_catalog.unnest(t.tgattr::pg_catalog.int2[]) WITH ORDINALITY k(n, i)
+        JOIN pg_catalog.pg_attribute a ON a.attrelid = t.tgrelid AND a.attnum = k.n),
+      'when', t.tgqual IS NOT NULL,
       'definition', pg_catalog.pg_get_triggerdef(t.oid, true)) ORDER BY t.tgname)
     FROM pg_catalog.pg_trigger t
     JOIN pg_catalog.pg_proc p ON p.oid = t.tgfoid
@@ -181,6 +206,7 @@ struct RawIndex {
     constraint: bool,
     method: String,
     columns: Option<Vec<String>>,
+    options: Option<Vec<String>>,
     include: Option<Vec<String>>,
     predicate: Option<String>,
     definition: String,
@@ -193,6 +219,10 @@ struct RawTrigger {
     tgtype: i32,
     enabled: String,
     function: String,
+    update_columns: Option<Vec<String>>,
+    /// It has a `WHEN` condition, which only `definition` prints.
+    #[serde(default)]
+    when: bool,
     definition: String,
 }
 
@@ -262,6 +292,7 @@ fn parse(json: &str) -> Result<TableStructure, DbError> {
         .map(|i| Index {
             name: i.name,
             columns: i.columns.unwrap_or_default(),
+            options: i.options.unwrap_or_default(),
             include: i.include.unwrap_or_default(),
             unique: i.unique,
             method: i.method,
@@ -320,8 +351,40 @@ fn trigger(t: RawTrigger) -> Trigger {
         for_each_row: t.tgtype & ROW != 0,
         function: t.function,
         enabled: t.enabled != "D",
+        update_columns: t.update_columns.unwrap_or_default(),
+        condition: if t.when { when_condition(&t.definition) } else { None },
         definition: t.definition,
     }
+}
+
+/// The condition of the `WHEN (…)` clause of `definition` (`pg_get_triggerdef`), without its
+/// parentheses. The clause is the first `WHEN (` outside quoted names and string literals (a
+/// name or an argument may contain the words), up to its matching parenthesis.
+fn when_condition(definition: &str) -> Option<String> {
+    let bytes = definition.as_bytes();
+    let (mut quote, mut depth, mut start) = (None, 0usize, None);
+    for (i, &b) in bytes.iter().enumerate() {
+        match (quote, b) {
+            // A doubled quote inside a name or a literal closes and reopens it: the same.
+            (Some(q), _) if b == q => quote = None,
+            (Some(_), _) => {}
+            (None, b'"' | b'\'') => quote = Some(b),
+            (None, b'(') => {
+                if start.is_none() && depth == 0 && definition[..i].ends_with(" WHEN ") {
+                    start = Some(i + 1);
+                }
+                depth += 1;
+            }
+            (None, b')') => {
+                depth = depth.saturating_sub(1);
+                if let Some(s) = start.filter(|_| depth == 0) {
+                    return Some(definition[s..i].to_string());
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 #[cfg(test)]
