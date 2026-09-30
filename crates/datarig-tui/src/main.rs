@@ -83,6 +83,9 @@ fn main() -> ExitCode {
         // the background behind a notice; a direct connection waits for the first frame).
         // Restores the terminal however this block ends (also a setup that fails part way).
         let _restore = term::guard();
+        // The background decides the variant of a theme family; asked before the terminal is set
+        // up and the event stream reads stdin.
+        app.set_background(term::background());
         let (mut terminal, enhanced) = term::setup_terminal()?;
         app.set_keyboard_enhanced(enhanced);
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();

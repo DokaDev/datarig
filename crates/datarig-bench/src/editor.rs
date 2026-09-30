@@ -1,6 +1,6 @@
 //! The editor with a large file: keystroke-to-frame latency (the app handles the key, then
 //! draws the frame at 160x45) for typing, cursor movement and scrolling, the process's memory,
-//! and what an autosave of the file costs.
+//! what an autosave of the file costs, and a theme switch (`:set theme=`) up to its frame.
 
 use crate::apps;
 use crate::grid::wide;
@@ -104,6 +104,12 @@ pub fn run(scratch: &Path, bytes: usize, n: usize) -> Result<Value, String> {
     let edits = keystrokes(&mut app, &mut term, n.min(100), |a, i| apps::char(a, if i % 2 == 0 { 'x' } else { 'u' }));
     let rss_edits = rss_kb(pid).unwrap_or(0);
 
+    // A theme switch: every built-in theme in turn, each drawn at once.
+    let names = datarig_tui::theme::NAMES;
+    let themes = keystrokes(&mut app, &mut term, n.min(200), |a, i| {
+        a.set_theme(names[i % names.len()]).expect("a built-in theme");
+    });
+
     // Autosave: one edit, then the timer that saves it.
     let mut saves = Vec::new();
     for _ in 0..5 {
@@ -128,6 +134,7 @@ pub fn run(scratch: &Path, bytes: usize, n: usize) -> Result<Value, String> {
         "movement_ms": report("movement", &movement),
         "scrolling_ms": report("scrolling", &scrolling),
         "normal_edit_ms": report("x/u edits", &edits),
+        "theme_switch_ms": report("theme", &themes),
         "autosave_ms": report("autosave", &saves),
         "rss_kb": { "before": rss_before, "open": rss_open, "after_typing": rss_typed, "after_edits": rss_edits },
         "console_files": written,

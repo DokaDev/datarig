@@ -102,6 +102,7 @@ fn settings(language: &str) -> Settings<'_> {
         version: 1,
         language,
         icons: IconsSetting::Auto,
+        theme: crate::theme::DEFAULT,
         editor_mode: EditorMode::Vim,
         default_source: DefaultSource::Auto,
         prefs: Prefs::default(),
@@ -328,6 +329,27 @@ fn icons_auto_is_not_decided_yet_and_the_answer_replaces_it() {
     save(&path, Settings { icons: IconsSetting::On, ..settings(DEFAULT_LANGUAGE) }, None).unwrap();
     let after = std::fs::read_to_string(&path).unwrap();
     assert_eq!(after, before.replace("icons = \"auto\"", "icons = \"on\""), "{after}");
+}
+
+#[test]
+fn theme_is_one_top_level_name_written_only_when_not_the_default() {
+    assert_eq!(parse("").unwrap().theme, "terminal", "no key: the default");
+    assert_eq!(parse("theme = \"catppuccin\"").unwrap().theme, "catppuccin");
+    // Any name is read: the UI resolves it (an unknown one never makes the file unusable).
+    assert_eq!(parse("theme = \"no-such-theme\"").unwrap().theme, "no-such-theme");
+    assert!(parse("theme = 3").is_err(), "not a name");
+    let path = temp_file("theme");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let before = "# mine\nlanguage = \"ko\"\n";
+    std::fs::write(&path, before).unwrap();
+    save(&path, Settings { theme: "terminal", ..settings("ko") }, None).unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), before, "the default is not written");
+    save(&path, Settings { theme: "gruvbox-light", ..settings("ko") }, None).unwrap();
+    let after = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(after, format!("{before}theme = \"gruvbox-light\"\n"));
+    assert_eq!(load(Some(path.to_path_buf())).0.theme, "gruvbox-light");
+    save(&path, Settings { theme: "terminal", ..settings("ko") }, None).unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), before, "back to the default: the key goes");
 }
 
 #[test]

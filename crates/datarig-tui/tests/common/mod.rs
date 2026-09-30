@@ -293,13 +293,22 @@ impl FakeClock {
 }
 
 /// `App::new` as the binary makes it, minus the terminal: the icons question is never asked
-/// (`icons = auto` draws text marks), and the clock is a [`FakeClock`].
+/// (`icons = auto` draws text marks), the terminal's background is never asked, and the clock is
+/// a [`FakeClock`].
+///
+/// Colors: with the default theme (`terminal`, no `theme` in `cfg`) the frames are drawn with
+/// `dark`, so tests that compare colors compare RGB tokens (`theme::DARK.*`) whatever the default
+/// is. Only what is drawn changes: `theme_name` stays the default, so nothing of it is saved.
+/// Tests of themes set `theme` in their config (or call `set_theme`).
 pub fn new_app(cfg: &Config, lang: Lang) -> App {
     new_app_with_clock(cfg, lang).0
 }
 
 pub fn new_app_with_clock(cfg: &Config, lang: Lang) -> (App, FakeClock) {
     let mut app = App::new(cfg, None, lang);
+    if cfg.theme == datarig_core::theme::DEFAULT {
+        app.theme = Arc::new(datarig_tui::theme::DARK);
+    }
     let clock = FakeClock::new();
     let c = clock.clone();
     app.set_clock(Arc::new(move || c.now()));

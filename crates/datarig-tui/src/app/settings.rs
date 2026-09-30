@@ -5,16 +5,21 @@
 //! path as `:set` (toml_edit keeps comments and order), so the screen, `:set` and the file
 //! always agree. A config file with errors is said so on top (nothing is saved then).
 //!
+//! The theme row lists the built-in themes and the theme files found when the screen opens;
+//! moving over its values previews a theme (see [`super::themes`]).
+//!
 //! It is a large modal like the profile form rather than a workspace tab: settings are global
 //! and belong to no connection, so a tab would need exceptions in the tab binding, restore
 //! and autosave rules for nothing.
 
-use super::command::{SETTINGS, Setting, SettingGroup};
+use super::command::{SETTINGS, Setting, SettingGroup, Values};
+use super::themes::ThemeRow;
 use super::*;
 
-/// The screen's state: the selected row of [`order`].
+/// The screen's state: the selected row of [`order`], and the theme row's names and preview.
 pub struct SettingsScreen {
     pub selected: usize,
+    pub themes: ThemeRow,
 }
 
 /// The rows: indices into [`SETTINGS`], by category, then in table order.
@@ -42,7 +47,8 @@ impl App {
         self.overlays.close(OverlayKind::Commands);
         self.overlays.close(OverlayKind::WhichKey);
         self.key_state.clear();
-        self.overlays.push(Overlay::Settings(SettingsScreen { selected: 0 }));
+        let themes = ThemeRow { names: self.theme_names(), preview: None };
+        self.overlays.push(Overlay::Settings(SettingsScreen { selected: 0, themes }));
     }
 
     /// The value setting `k` of [`SETTINGS`] has now (an index into its values).
@@ -58,7 +64,32 @@ impl App {
             Setting::CopyHeader(c) => *c == self.prefs.copy_header,
             Setting::CursorShape(c) => *c == self.prefs.cursor_shape,
         };
-        SETTINGS.get(k)?.values.iter().position(|v| now(&v.1))
+        SETTINGS.get(k)?.values.fixed().iter().position(|v| now(&v.1))
+    }
+
+    /// What the settings screen shows for setting `k`: its value's name and label. The theme
+    /// row shows the theme being previewed, else the configured one.
+    pub fn setting_shown(&self, k: usize) -> Option<(String, Localized)> {
+        let spec = SETTINGS.get(k)?;
+        match spec.values {
+            Values::Fixed(values) => {
+                let (name, _, label) = values.get(self.setting_value(k)?)?;
+                Some((name.to_string(), self.i18n.label(*label)))
+            }
+            Values::Themes => {
+                let row = &self.overlays.settings()?.themes;
+                let name = match &row.preview {
+                    Some(p) => row.names.get(p.index)?.clone(),
+                    None => self.theme_name.clone(),
+                };
+                let label = if row.preview.is_none() && self.theme_problem().is_some() {
+                    self.i18n.label(Label::SettingThemeNotUsed)
+                } else {
+                    self.theme_label(&name)
+                };
+                Some((name, label))
+            }
+        }
     }
 
     /// The config file settings are saved to, if there is one.
@@ -87,6 +118,7 @@ impl App {
                 return;
             }
             KeyCode::Esc | KeyCode::Char('q') if !repeat => {
+                self.end_preview();
                 self.overlays.close(OverlayKind::Settings);
                 return;
             }
@@ -98,7 +130,14 @@ impl App {
             return;
         }
         let k = rows[s.selected];
-        let values = SETTINGS[k].values;
+        let Values::Fixed(values) = SETTINGS[k].values else {
+            // The theme row: h/l preview, Enter/Space keep the previewed theme.
+            match key.code {
+                KeyCode::Char('h' | 'l') | KeyCode::Left | KeyCode::Right => self.preview_theme(step),
+                _ => self.keep_preview(),
+            }
+            return;
+        };
         let now = self.setting_value(k).unwrap_or(0) as isize;
         let next = (now + step).rem_euclid(values.len() as isize) as usize;
         self.apply_setting(values[next].1);

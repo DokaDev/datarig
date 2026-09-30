@@ -1,6 +1,14 @@
 use super::*;
 use datarig_core::secret::{DefaultSource, SourceKind};
 
+/// `:set`'s argument, a setting of a fixed list.
+fn set(arg: &str) -> Result<Setting, SetError> {
+    parse_set(arg).map(|v| match v {
+        SetValue::Setting(s) => s,
+        SetValue::Theme(t) => panic!("a theme: {t}"),
+    })
+}
+
 fn name(p: Parsed) -> Option<(&'static str, String, bool)> {
     match p {
         Parsed::Command { spec, arg, arg_started } => Some((spec.name, arg.to_string(), arg_started)),
@@ -48,42 +56,46 @@ fn text_that_does_not_fit_a_command_is_a_search() {
 
 #[test]
 fn set_accepts_known_settings_and_values_only() {
-    assert_eq!(parse_set("language=ko"), Ok(Setting::Language(LangSetting::Ko)));
-    assert_eq!(parse_set("language = auto"), Ok(Setting::Language(LangSetting::Auto)), "spaces around =");
-    assert_eq!(parse_set("language=EN"), Ok(Setting::Language(LangSetting::En)), "values ignore case");
-    assert_eq!(parse_set("editor=standard"), Ok(Setting::Editor(EditorMode::Standard)));
-    assert_eq!(parse_set("editor=vim"), Ok(Setting::Editor(EditorMode::Vim)));
-    assert_eq!(parse_set(""), Err(SetError::Usage));
-    assert_eq!(parse_set("language"), Err(SetError::Usage), "no value");
-    assert_eq!(parse_set("=ko"), Err(SetError::Usage));
-    assert_eq!(parse_set("colour=red"), Err(SetError::UnknownKey("colour".into())));
+    assert_eq!(set("language=ko"), Ok(Setting::Language(LangSetting::Ko)));
+    assert_eq!(set("language = auto"), Ok(Setting::Language(LangSetting::Auto)), "spaces around =");
+    assert_eq!(set("language=EN"), Ok(Setting::Language(LangSetting::En)), "values ignore case");
+    assert_eq!(set("editor=standard"), Ok(Setting::Editor(EditorMode::Standard)));
+    assert_eq!(set("editor=vim"), Ok(Setting::Editor(EditorMode::Vim)));
+    assert_eq!(set(""), Err(SetError::Usage));
+    assert_eq!(set("language"), Err(SetError::Usage), "no value");
+    assert_eq!(set("=ko"), Err(SetError::Usage));
+    assert_eq!(set("colour=red"), Err(SetError::UnknownKey("colour".into())));
     assert_eq!(
-        parse_set("language=fr"),
+        set("language=fr"),
         Err(SetError::BadValue { key: "language", value: "fr".into(), values: "en|ko|auto".into() })
     );
     assert_eq!(
-        parse_set("editor="),
+        set("editor="),
         Err(SetError::BadValue { key: "editor", value: String::new(), values: "vim|standard".into() })
     );
     assert_eq!(
         setting_keys(),
-        "language|editor|icons|secrets.default_source|commands.position|detail_view|clipboard|copy_header|editor.cursor_shape"
+        "language|editor|icons|secrets.default_source|commands.position|detail_view|clipboard|copy_header|editor.cursor_shape|theme"
     );
-    assert_eq!(parse_set("editor.cursor_shape=off"), Ok(Setting::CursorShape(CursorShape::Off)));
-    assert_eq!(parse_set("commands.position=bottom"), Ok(Setting::CommandsPosition(CommandsPosition::Bottom)));
-    assert_eq!(parse_set("clipboard=OSC52"), Ok(Setting::Clipboard(ClipboardSetting::Osc52)));
-    assert_eq!(parse_set("detail_view=statusbar"), Ok(Setting::DetailView(DetailView::Statusbar)));
-    assert_eq!(parse_set("copy_header=off"), Ok(Setting::CopyHeader(CopyHeader::Off)));
+    // A theme is a name the app looks up (built-in or a theme file).
+    assert_eq!(parse_set("theme=gruvbox-light"), Ok(SetValue::Theme("gruvbox-light")));
+    assert_eq!(parse_set("theme = my_Theme"), Ok(SetValue::Theme("my_Theme")), "kept as typed");
     assert_eq!(
-        parse_set("clipboard=pbcopy"),
+        parse_set("theme="),
+        Err(SetError::BadValue { key: "theme", value: String::new(), values: crate::theme::NAMES.join("|") })
+    );
+    assert_eq!(set("editor.cursor_shape=off"), Ok(Setting::CursorShape(CursorShape::Off)));
+    assert_eq!(set("commands.position=bottom"), Ok(Setting::CommandsPosition(CommandsPosition::Bottom)));
+    assert_eq!(set("clipboard=OSC52"), Ok(Setting::Clipboard(ClipboardSetting::Osc52)));
+    assert_eq!(set("detail_view=statusbar"), Ok(Setting::DetailView(DetailView::Statusbar)));
+    assert_eq!(set("copy_header=off"), Ok(Setting::CopyHeader(CopyHeader::Off)));
+    assert_eq!(
+        set("clipboard=pbcopy"),
         Err(SetError::BadValue { key: "clipboard", value: "pbcopy".into(), values: "auto|system|osc52".into() })
     );
+    assert_eq!(set("secrets.default_source=file"), Ok(Setting::DefaultSource(DefaultSource::Kind(SourceKind::File))));
     assert_eq!(
-        parse_set("secrets.default_source=file"),
-        Ok(Setting::DefaultSource(DefaultSource::Kind(SourceKind::File)))
-    );
-    assert_eq!(
-        parse_set("secrets.default_source=vault"),
+        set("secrets.default_source=vault"),
         Err(SetError::BadValue {
             key: "secrets.default_source",
             value: "vault".into(),
@@ -95,8 +107,8 @@ fn set_accepts_known_settings_and_values_only() {
 #[test]
 fn every_setting_value_applies_to_its_own_setting() {
     for s in SETTINGS {
-        for (value, setting, _) in s.values {
-            assert_eq!(parse_set(&format!("{}={value}", s.key)), Ok(*setting));
+        for (value, setting, _) in s.values.fixed() {
+            assert_eq!(set(&format!("{}={value}", s.key)), Ok(*setting));
         }
     }
 }
@@ -126,13 +138,13 @@ fn completes_profile_names() {
 #[test]
 fn completes_setting_keys_then_values() {
     let got = |arg: &str| complete_arg(ArgKind::Setting, arg, &[]);
-    assert_eq!(got(""), [0, 1, 2, 3, 4, 5, 6, 7, 8].map(ArgCompletion::SetKey));
+    assert_eq!(got(""), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map(ArgCompletion::SetKey));
     assert_eq!(got("c"), [4, 6, 7].map(ArgCompletion::SetKey));
     assert_eq!(got("commands.position="), [ArgCompletion::SetValue(4, 0), ArgCompletion::SetValue(4, 1)]);
     assert_eq!(got("sec"), [ArgCompletion::SetKey(3)]);
     assert_eq!(got("secrets.default_source=p"), [ArgCompletion::SetValue(3, 5)]);
     assert_eq!(got("icons=o"), [ArgCompletion::SetValue(2, 0), ArgCompletion::SetValue(2, 1)]);
-    assert_eq!(parse_set("icons=OFF"), Ok(Setting::Icons(datarig_core::config::IconsSetting::Off)));
+    assert_eq!(set("icons=OFF"), Ok(Setting::Icons(datarig_core::config::IconsSetting::Off)));
     assert_eq!(got("l"), [ArgCompletion::SetKey(0)]);
     assert_eq!(got("ed"), [ArgCompletion::SetKey(1), ArgCompletion::SetKey(8)]);
     assert_eq!(got("editor.cursor_shape="), [ArgCompletion::SetValue(8, 0), ArgCompletion::SetValue(8, 1)]);
@@ -142,6 +154,25 @@ fn completes_setting_keys_then_values() {
     assert_eq!(got("editor=s"), [ArgCompletion::SetValue(1, 1)]);
     assert!(got("language=fr").is_empty(), "values are prefixes, not fuzzy");
     assert!(got("colour=").is_empty(), "no values for an unknown setting");
+}
+
+#[test]
+fn completes_theme_names_given_by_the_app() {
+    let themes = ["terminal", "dark", "gruvbox", "gruvbox-light", "gruvbox-dark", "mine"];
+    let got = |arg: &str| -> Vec<&str> {
+        complete_arg(ArgKind::Setting, arg, &themes)
+            .into_iter()
+            .map(|c| match c {
+                ArgCompletion::Theme(9, i) => themes[i],
+                other => panic!("{other:?}"),
+            })
+            .collect()
+    };
+    assert_eq!(complete_arg(ArgKind::Setting, "th", &themes), [ArgCompletion::SetKey(9)]);
+    assert_eq!(got("theme="), themes, "every name, in order");
+    assert_eq!(got("theme=gruvbox"), ["gruvbox", "gruvbox-light", "gruvbox-dark"], "exact first, then prefixes");
+    assert_eq!(got("theme=m"), ["mine"]);
+    assert!(got("theme=zz").is_empty());
 }
 
 #[test]

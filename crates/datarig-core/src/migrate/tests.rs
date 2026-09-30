@@ -225,3 +225,13 @@ fn a_file_profile_moves_its_plaintext_to_the_secrets_file() {
 fn nk(detail: &str) -> crate::fault::Fault {
     crate::fault::Fault::new(crate::fault::FaultKind::Keychain(crate::fault::KeychainFault::NoStore), detail)
 }
+
+#[test]
+fn the_theme_survives_the_migration() {
+    let (path, cfg) = setup("theme", &V1.replace("language = \"ko\"", "language = \"ko\"\ntheme = \"nord\""));
+    let r = run(&Store::default(), &MemoryStore::new(), Input::new(&cfg));
+    assert_eq!(r.version, 2, "{r:?}");
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("theme = \"nord\""), "{text}");
+    cleanup(&path);
+}

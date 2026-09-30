@@ -15,6 +15,9 @@
 //! is version 1 (the original format): it is read as well, and the launch-time migration
 //! upgrades it once (one way: older binaries cannot read version 2).
 //!
+//! `theme` names the color theme: a built-in one or a file of `themes/` next to the config file
+//! (see [`crate::theme`]; the UI resolves the name, so an unknown one never makes the file
+//! unusable).
 //! `[editor] mode` picks the editor key style (`vim` or `standard`), and
 //! `[editor] cursor_shape` whether the cursor shows the editor's mode.
 //! [`Prefs`] holds `[commands] position` (the `:` command line as a popup near
@@ -61,6 +64,8 @@ struct FileConfig {
     language: Option<String>,
     #[serde(default)]
     icons: Option<String>,
+    #[serde(default)]
+    theme: Option<String>,
     #[serde(default)]
     page_size: Option<usize>,
     #[serde(default)]
@@ -366,6 +371,8 @@ pub struct Config {
     pub version: u32,
     pub language: String,
     pub icons: IconsSetting,
+    /// `theme`: the name as written ([`crate::theme::DEFAULT`] without the key).
+    pub theme: String,
     pub page_size: usize,
     /// Rows of a result kept in memory (`result_window_rows`); the rest spill to disk.
     pub result_window_rows: usize,
@@ -401,6 +408,7 @@ impl Default for Config {
             version: CONFIG_VERSION,
             language: DEFAULT_LANGUAGE.into(),
             icons: IconsSetting::default(),
+            theme: crate::theme::DEFAULT.into(),
             page_size: 500,
             result_window_rows: crate::results::WINDOW,
             spill_limit: policy::SpillLimit::default(),
@@ -532,6 +540,7 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
         None => IconsSetting::default(),
         Some(v) => IconsSetting::parse(&v).ok_or_else(|| bad("icons", &v).allowed(Some("auto, on, off")))?,
     };
+    let theme = f.theme.map_or_else(|| crate::theme::DEFAULT.to_string(), |t| t.trim().to_string());
     let page_size = f.page_size.unwrap_or(500);
     if page_size == 0 || page_size > i32::MAX as usize {
         return Err(bad("page_size", page_size));
@@ -665,6 +674,7 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
         version,
         language,
         icons,
+        theme,
         page_size,
         result_window_rows,
         spill_limit,
@@ -820,6 +830,8 @@ pub struct Settings<'a> {
     pub version: u32,
     pub language: &'a str,
     pub icons: IconsSetting,
+    /// `theme`, as the user chose it (also a name that did not resolve: it is kept).
+    pub theme: &'a str,
     pub editor_mode: EditorMode,
     pub default_source: DefaultSource,
     pub prefs: Prefs,
@@ -844,7 +856,7 @@ pub struct Profiles<'a> {
 /// ([`ConnectionConfig::origin`]; a table without `id` right after the migration), so its
 /// comments survive; the `id` is then added as its first key.
 pub fn save(path: &Path, settings: Settings, profiles: Option<Profiles>) -> Result<(), Fault> {
-    let Settings { version, language, icons, editor_mode, default_source, prefs } = settings;
+    let Settings { version, language, icons, theme, editor_mode, default_source, prefs } = settings;
     let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let text = match std::fs::read_to_string(&target) {
         Ok(t) => t,
@@ -861,6 +873,7 @@ pub fn save(path: &Path, settings: Settings, profiles: Option<Profiles>) -> Resu
     let mut orphans = String::new();
     orphans += &setting(root, "language", language.into(), language == DEFAULT_LANGUAGE)?;
     orphans += &setting(root, "icons", icons.as_str().into(), icons == IconsSetting::Auto)?;
+    orphans += &setting(root, "theme", theme.into(), theme == crate::theme::DEFAULT)?;
     orphans +=
         &setting(root, "detail_view", prefs.detail_view.as_str().into(), prefs.detail_view == DetailView::default())?;
     orphans +=
