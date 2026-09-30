@@ -401,6 +401,23 @@ impl App {
         }
     }
 
+    /// The pointer moved over the help's rows (no button): the row under it is selected, and
+    /// the keys go on from there. `false` when nothing changed: no frame is drawn for it.
+    pub(super) fn help_hover(&mut self, m: MouseEvent) -> bool {
+        let Some(h) = self.overlays.help() else { return false };
+        if !h.list.contains(Position::new(m.column, m.row)) {
+            return false;
+        }
+        let i = h.scroll + usize::from(m.row - h.list.y);
+        if i == h.selected || i >= self.help_rows().len() {
+            return false;
+        }
+        if let Some(h) = self.overlays.help_mut() {
+            h.selected = i;
+        }
+        true
+    }
+
     /// Keys of the help's `/` filter (`overlay.help.filter`, text input).
     pub(super) fn help_filter_key(&mut self, key: KeyEvent) {
         let Some(h) = self.overlays.help_mut() else { return };

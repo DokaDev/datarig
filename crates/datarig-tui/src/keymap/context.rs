@@ -216,7 +216,7 @@ impl Ctx {
             Ctx::ScriptTree => "The folder tree of the saved queries (save as, open): the tree has the keyboard.",
             Ctx::ScriptTreeName => "The folder tree of the saved queries: its name field (save as) or filter (open).",
             Ctx::ContextMenu => {
-                "A right-click menu (the explorer's node, the result grid); the key shown next to an item runs it too."
+                "A right-click menu (the explorer's node, the result grid); the key shown next to an item runs it too; the pointer selects the item under it."
             }
             Ctx::ProfileForm => "Connection profile form.",
             Ctx::Settings => "The settings screen: one list by category, each setting with its description.",
@@ -237,7 +237,7 @@ impl Ctx {
             Ctx::Completion => "Completion popup in the editor (keys it does not use go to the editor).",
             Ctx::WhichKey => "Which-key popup of an unfinished leader sequence (other keys continue the sequence).",
             Ctx::Help => {
-                "Keyboard help: one list of every context; the sections of the context it was opened from come first, open."
+                "Keyboard help: one list of every context; the sections of the context it was opened from come first, open; the pointer selects the row under it."
             }
             Ctx::HelpFilter => "The `/` filter of the keyboard help.",
         }

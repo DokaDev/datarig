@@ -8,12 +8,19 @@ use crate::widgets::tree::Reveal;
 
 impl App {
     pub fn handle_event(&mut self, ev: Event) {
-        // A mouse move that is not a drag changes nothing on screen (the terminal reports every
-        // motion while the mouse is captured): the event loop draws no frame for it.
-        if let Event::Mouse(m) = &ev
+        // A mouse move that is not a drag (the terminal reports every motion while the mouse is
+        // captured) only selects the item under the pointer in an open menu or the help; any
+        // other move, and one that stays on the selected item, changes nothing on screen: the
+        // event loop draws no frame for it.
+        if let Event::Mouse(m) = ev
             && m.kind == MouseEventKind::Moved
         {
-            self.idle_event = true;
+            let hovered = match self.overlays.top().map(|o| o.kind()) {
+                Some(OverlayKind::ContextMenu) => self.menu_hover(m),
+                Some(OverlayKind::Help) => self.help_hover(m),
+                _ => false,
+            };
+            self.idle_event = !hovered;
             return;
         }
         match ev {

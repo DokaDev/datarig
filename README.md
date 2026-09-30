@@ -43,7 +43,9 @@ Everything below works today, with PostgreSQL.
   `(created DESC)`, `UNIQUE`, method, partial predicate, whether a key or constraint owns it),
   Unique and Check Constraints and Triggers (timing, events with the columns of `UPDATE OF`,
   row or statement, `WHEN` condition, function, disabled). Views show their columns and
-  triggers, materialized views their columns and indexes. A group with nothing in it is dim,
+  triggers, materialized views their columns and indexes. The groups start closed, one line
+  each (`Columns (27)`, `Primary Key`, `Foreign Keys (5)`); what you open in a table stays open
+  when it closes and opens again, for the session. A group with nothing in it is dim,
   without a count. The explorer is narrow, so the status bar shows the whole line under the
   cursor (a line too long even for the status bar is cut in its middle, so its end stays: what to
   do, what a trigger calls). A

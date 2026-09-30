@@ -361,7 +361,7 @@ Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+
 
 ## `overlay.context_menu`
 
-A right-click menu (the explorer's node, the result grid); the key shown next to an item runs it too. Inside `root`.
+A right-click menu (the explorer's node, the result grid); the key shown next to an item runs it too; the pointer selects the item under it. Inside `root`.
 
 Reserved — context menu: `j` `k` `Down` `Up` `Enter` `Esc` `q`
 
@@ -419,7 +419,7 @@ Reserved — which-key popup: `Esc` `Backspace`
 
 ## `overlay.help`
 
-Keyboard help: one list of every context; the sections of the context it was opened from come first, open. Inside `root`.
+Keyboard help: one list of every context; the sections of the context it was opened from come first, open; the pointer selects the row under it. Inside `root`.
 
 Reserved — keyboard help: `j` `k` `Down` `Up` `PageDown` `PageUp` `Enter` `l` `Right` `h` `Left` `/` `Esc` `q`
 

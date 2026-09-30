@@ -67,13 +67,9 @@ pub struct ObjectView {
 }
 
 impl ObjectView {
-    /// Loading, with its columns open.
+    /// Loading, every group closed: the object first shows the lines of its groups.
     fn new() -> Self {
-        Self {
-            structure: Structure::Loading,
-            open_groups: BTreeSet::from([StructureGroup::Columns]),
-            open_items: BTreeSet::new(),
-        }
+        Self { structure: Structure::Loading, open_groups: BTreeSet::new(), open_items: BTreeSet::new() }
     }
 
     /// The structure, once read.
