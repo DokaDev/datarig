@@ -25,4 +25,4 @@ expression: backend
 "│                      ││  8 │    7                    ││                      │"
 "│                      ││ Showing 500 rows · paging cl…││                      │"
 "╰──────────────────────╯╰──────────────────────────────╯╰──────────────────────╯"
-" NORMAL  local-pg · policy: default │ Showing 500 rows · paging closed — n … EN "
+" NORMAL  local-pg │ Showing 500 rows · paging closed — n runs the SELECT ag… EN "

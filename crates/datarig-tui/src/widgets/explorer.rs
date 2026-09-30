@@ -289,6 +289,10 @@ fn structure_parts(app: &App, tree: &Tree, n: Node) -> Vec<(String, Style)> {
             }
             vec![(text, Style::new().fg(theme::FG_MUTED))]
         }
+        Node::StructDetail(.., StructureGroup::Triggers, k, _) => {
+            let Some(c) = st.triggers.get(k).and_then(|t| t.condition.as_ref()) else { return Vec::new() };
+            vec![(format!("WHEN ({c})"), Style::new().fg(theme::FG_MUTED))]
+        }
         _ => Vec::new(),
     }
 }
@@ -362,8 +366,8 @@ fn item_parts(app: &App, st: &TableStructure, sg: StructureGroup, k: usize) -> V
                 })
                 .collect();
             let each = if t.for_each_row { "FOR EACH ROW" } else { "FOR EACH STATEMENT" };
-            let when = t.condition.as_ref().map(|c| format!(" · WHEN ({c})")).unwrap_or_default();
-            let detail = format!("  {} {} · {each}{when} · {}()", t.timing.sql(), events.join(" OR "), t.function);
+            // Its `WHEN` condition has a line of its own, under it.
+            let detail = format!("  {} {} · {each} · {}()", t.timing.sql(), events.join(" OR "), t.function);
             let mut parts = vec![name(&t.name), (detail, dim)];
             if !t.enabled {
                 let off = app.i18n.label(Label::TreeTriggerDisabled);

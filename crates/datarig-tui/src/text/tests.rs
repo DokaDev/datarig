@@ -107,8 +107,8 @@ fn clip_middle_keeps_the_end() {
     assert_eq!(clip_middle(lock, 200), lock);
     let short = clip_middle(lock, 50);
     assert_eq!((width(&short), short.as_str()), (50, "(structure unavailable: the table is… (try again))"));
-    let trigger = "t  BEFORE UPDATE OF name · FOR EACH ROW · WHEN (old.name IS DISTINCT FROM new.name) · shop.touch()";
-    assert_eq!(clip_middle(trigger, 60), "t  BEFORE UPDATE OF name · FOR EACH ROW · WH… · shop.touch()");
+    let trigger = "t  BEFORE INSERT OR UPDATE OF name, \"Mixed Col\" · FOR EACH ROW · shop.touch()";
+    assert_eq!(clip_middle(trigger, 50), "t  BEFORE INSERT OR UPDATE OF name… · shop.touch()");
     // No short end to keep: cut at the end.
     let long = format!("{} ({})", "a".repeat(40), "b".repeat(40));
     assert_eq!(clip_middle(&long, 30), clip(&long, 30));

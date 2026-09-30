@@ -25,4 +25,4 @@ expression: backend
 "│                      ││                                                      │"
 "│                      ││                                                      │"
 "╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
-" NORMAL  local-pg · policy: default │ This tab's connection was lost: serve… EN "
+" NORMAL  local-pg │ This tab's connection was lost: server closed the conne… EN "

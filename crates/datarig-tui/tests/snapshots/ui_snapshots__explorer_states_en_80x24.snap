@@ -25,4 +25,4 @@ expression: backend
 "│                      ││                                                      │"
 "│                      ││                                                      │"
 "╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
-" NORMAL  local-pg · policy: default │ Connection failed: password authentic… EN "
+" NORMAL  local-pg │ Connection failed: password authentication failed for u… EN "

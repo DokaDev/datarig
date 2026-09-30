@@ -3,8 +3,9 @@
 //! one round trip. It reads the catalog only (never the table), and it never waits for a lock
 //! another session holds or waits for:
 //!
-//! * the row and size estimates are the statistics in `pg_class`, as the explorer's list of a
-//!   schema's objects has them (`stats_ctes!`: no lock on any relation);
+//! * the row and size estimates are the statistics in `pg_class` and the cumulative statistics,
+//!   as the explorer's list of a schema's objects has them (`stats_ctes!`: no lock on any
+//!   relation);
 //! * the server deparses defaults, check constraints, indexes and trigger conditions only
 //!   against the open table: `pg_get_expr` with a relation, `pg_get_indexdef`, and
 //!   `pg_get_constraintdef` of a check and `pg_get_triggerdef` of a trigger with `WHEN` lock the
@@ -119,7 +120,7 @@ ELSE pg_catalog.json_build_object(
     SELECT pg_catalog.json_agg(pg_catalog.json_build_object(
       'name', t.tgname, 'type', t.tgtype, 'enabled', t.tgenabled::text,
       'function', pn.nspname || '.' || p.proname,
-      'update_columns', (SELECT pg_catalog.json_agg(a.attname ORDER BY k.i)
+      'update_columns', (SELECT pg_catalog.json_agg(pg_catalog.quote_ident(a.attname) ORDER BY k.i)
         FROM pg_catalog.unnest(t.tgattr::pg_catalog.int2[]) WITH ORDINALITY k(n, i)
         JOIN pg_catalog.pg_attribute a ON a.attrelid = t.tgrelid AND a.attnum = k.n),
       'when', t.tgqual IS NOT NULL,

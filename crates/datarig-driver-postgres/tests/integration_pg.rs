@@ -345,7 +345,7 @@ async fn table_structure_reads_the_catalog_in_one_statement() {
         format!("CREATE TRIGGER v_ins INSTEAD OF INSERT ON {s}.v FOR EACH ROW EXECUTE FUNCTION {s}.touch()"),
         format!(r#"CREATE TABLE {s}."Odd ""Name""" (x int)"#),
         format!(
-            "CREATE TABLE {s}.keyed (k1 int, k2 text, lo int, hi int, note text, \"Mixed Case\" int, \
+            "CREATE TABLE {s}.keyed (k1 int, k2 text, lo int, hi int, note text, \"Mixed Case\" int, \"user\" int, \
              PRIMARY KEY (k2, k1), CONSTRAINT keyed_pair_key UNIQUE (hi, lo), \
              CONSTRAINT keyed_parent_fkey FOREIGN KEY (hi, lo) REFERENCES {s}.parent (a, b), \
              CONSTRAINT keyed_range_check CHECK (lo < hi))"
@@ -353,6 +353,10 @@ async fn table_structure_reads_the_catalog_in_one_statement() {
         format!(
             "CREATE INDEX keyed_mixed ON {s}.keyed (note COLLATE \"C\" text_pattern_ops, lower(note) DESC, \
              \"Mixed Case\" DESC NULLS LAST) INCLUDE (hi, k1)"
+        ),
+        format!(
+            "CREATE TRIGGER keyed_touch BEFORE UPDATE OF note, \"Mixed Case\", \"user\" ON {s}.keyed \
+             FOR EACH ROW EXECUTE FUNCTION {s}.touch()"
         ),
     ] {
         pg_clean::run_fresh(&url, &sql).unwrap_or_else(|e| panic!("{e}: {sql}"));
@@ -605,6 +609,9 @@ async fn table_structure_reads_the_catalog_in_one_statement() {
             ItemColumn { include: true, ..plain("k1") },
         ]
     );
+    // `UPDATE OF` names its columns as SQL writes them, as the index's keys are.
+    assert_eq!(keyed.triggers[0].update_columns, names(&["note", "\"Mixed Case\"", "\"user\""]));
+    assert!(keyed.indexes[mixed].columns[2].starts_with("\"Mixed Case\""), "{:?}", keyed.indexes[mixed].columns);
     let pkey = keyed.indexes.iter().position(|i| i.name == "keyed_pkey").expect("keyed_pkey");
     assert_eq!(item(StructureGroup::Indexes, pkey), [plain("k2"), plain("k1")]);
 
@@ -870,6 +877,139 @@ async fn table_size_is_unknown_until_the_table_has_statistics() {
         // The server's count adds the free space maps, which the statistics leave out.
         assert!(bytes <= real && bytes >= real * 9 / 10, "{table}: ~{bytes} for {real} bytes");
     }
+}
+
+/// Rows added after the last `ANALYZE` count before the next one: a table analyzed at 1000 rows
+/// that has 200000 now is estimated at 200000 (the live rows of the cumulative statistics), and
+/// its size grows with them, near what the server counts; a partitioned table sums its
+/// partitions'. The schema's list has the same estimates. Neither read asks for a lock on any
+/// relation, also while another session holds a grown partition (`pg_locks`). Rows deleted
+/// since never lower the estimate below the last `ANALYZE`'s, and neither do counters that
+/// count again the rows it saw (no more than twice as many: its estimate stays).
+#[tokio::test(flavor = "multi_thread")]
+async fn estimates_follow_rows_added_since_the_last_analyze() {
+    let Some(url) = pg_url("estimates_follow_rows_added_since_the_last_analyze") else { return };
+    let schema = format!("zz_grow_{}", std::process::id());
+    let _guard = SchemaGuard::new(&url, &schema);
+    let s = &schema;
+    // Autovacuum off: nothing analyzes them behind the test's back.
+    let off = "WITH (autovacuum_enabled = false)";
+    for sql in [
+        format!("CREATE SCHEMA {s}"),
+        format!("CREATE TABLE {s}.t (id int PRIMARY KEY, note text) {off}"),
+        format!("CREATE TABLE {s}.p (id int, note text) PARTITION BY RANGE (id)"),
+        format!("CREATE TABLE {s}.p_a PARTITION OF {s}.p FOR VALUES FROM (0) TO (1000000) {off}"),
+        format!("CREATE TABLE {s}.p_b PARTITION OF {s}.p FOR VALUES FROM (1000000) TO (2000000) {off}"),
+    ] {
+        pg_clean::run_fresh(&url, &sql).unwrap_or_else(|e| panic!("{e}: {sql}"));
+    }
+    // The writer's counters are flushed at once where the server can (PostgreSQL 15 and later;
+    // else within a second or so).
+    let flush = "DO $$BEGIN IF pg_catalog.current_setting('server_version_num')::int >= 150000 THEN \
+                 PERFORM pg_catalog.pg_stat_force_next_flush(); END IF; END$$";
+    let mut writer = Conn::open(&url, SessionRole::Query).await;
+    let mut w = 0;
+    let mut write = async |sql: &str| {
+        w += 1;
+        match writer.run(w, sql).await {
+            DbEvent::Done { .. } => {}
+            ev => panic!("{sql}: {ev:?}"),
+        }
+    };
+    // Analyzed before its counters are flushed: they count its rows again.
+    write(&format!("INSERT INTO {s}.t SELECT g, repeat('x', 100) FROM generate_series(1, 1000) g")).await;
+    write(&format!("INSERT INTO {s}.p SELECT g * 1000, 'n' FROM generate_series(0, 1999) g")).await;
+    write(&format!("ANALYZE {s}.t, {s}.p")).await;
+    write(flush).await;
+    let tag = format!("grow{}", std::process::id());
+    let cfg = ConnectionConfig { name: "it".into(), dsn: Some(url.clone()), ..ConnectionConfig::test_db() };
+    let (tx, rx) = unbounded_channel();
+    let o = ConnectOptions::new(PAGE, SessionRole::Meta, &tag).dialer(dialer());
+    let mut meta = Conn { session: PgDriver.connect(&cfg, SessionRole::Meta, o, tx), rx };
+    meta.wait(|e| matches!(e, DbEvent::Keys(_)), 30).await;
+    let mut observer = Conn::open(&url, SessionRole::Query).await;
+    let mut n = 0;
+    // The estimates of `table` (its structure's, the same in the schema's list), the relation
+    // locks the metadata session held or asked for meanwhile (looked at 300 ms in, or when the
+    // structure came), and how long the structure took.
+    let mut read = async |table: &str| {
+        let t0 = Instant::now();
+        meta.session.send(DbCommand::LoadStructure { schema: schema.clone(), table: table.to_string() });
+        let ev = tokio::time::timeout(Duration::from_millis(300), meta.rx.recv()).await;
+        n += 1;
+        let sql = format!(
+            "SELECT count(*) FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid \
+             WHERE a.application_name = 'datarig-meta-{tag}' AND l.locktype = 'relation' \
+             AND l.relation IN (SELECT c.oid FROM pg_catalog.pg_class c WHERE c.relnamespace = '{s}'::regnamespace)"
+        );
+        let locks = rows_of(observer.run(n, &sql).await)[0][0].clone().unwrap_or_default();
+        let ev = match ev {
+            Ok(Some(ev)) => ev,
+            _ => meta.wait(|e| matches!(e, DbEvent::Structure { .. }), 10).await,
+        };
+        let took = t0.elapsed();
+        let DbEvent::Structure { result, .. } = ev else { panic!("{ev:?}") };
+        let st = result.unwrap_or_else(|e| panic!("{table}: {e:?}"));
+        meta.session.send(DbCommand::LoadObjects { schema: schema.clone() });
+        let DbEvent::Objects { result, .. } = meta.wait(|e| matches!(e, DbEvent::Objects { .. }), 10).await else {
+            unreachable!()
+        };
+        assert_eq!(result.expect("objects").stats.get(table), st.stats().as_ref(), "{table}: the list's are the same");
+        (st.estimated_rows, st.total_bytes, locks, took)
+    };
+    let (rows, small, locks, _) = read("t").await;
+    assert_eq!((rows, locks.as_str()), (Some(1000), "0"));
+    let small = small.expect("analyzed: a size");
+    assert_eq!(read("p").await.0, Some(2000));
+
+    // 199000 more rows (counted with the 1000 counted again).
+    write(&format!("INSERT INTO {s}.t SELECT g, repeat('x', 100) FROM generate_series(1001, 200000) g")).await;
+    write(&format!("INSERT INTO {s}.p SELECT 1000000 + g, 'n' FROM generate_series(1, 48000) g")).await;
+    write(flush).await;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let (rows, bytes, locks, _) = loop {
+        let got = read("t").await;
+        if got.0 != Some(1000) || Instant::now() > deadline {
+            break got;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert_eq!(locks, "0");
+    let rows = rows.expect("rows");
+    assert!((200_000..=201_000).contains(&rows), "the rows added since the ANALYZE: {rows}");
+    let bytes = bytes.expect("a size");
+    // What the server counts (it locks the table: fine here, nothing else holds it).
+    let real = format!("SELECT pg_catalog.pg_total_relation_size('{s}.t')::int8");
+    let mut sizer = Conn::open(&url, SessionRole::Query).await;
+    let real: u64 = rows_of(sizer.run(1, &real).await)[0][0].as_deref().unwrap().parse().unwrap();
+    assert!(bytes > small * 100, "grown with its rows: {small} then {bytes}");
+    assert!(bytes <= real * 3 / 2 && bytes >= real * 2 / 3, "~{bytes} for {real} bytes");
+    assert_eq!(bytes % 8192, 0, "whole pages");
+    let rows = read("p").await.0.expect("rows");
+    assert!((50_000..=51_000).contains(&rows), "the partitions' sum: {rows}");
+
+    // Another session holds the table: the estimates come at once, no lock asked for.
+    let mut holder = Conn::open(&url, SessionRole::Query).await;
+    assert!(matches!(holder.run(1, "BEGIN").await, DbEvent::Done { .. }));
+    let lock = format!("LOCK TABLE {s}.p_b IN ACCESS EXCLUSIVE MODE");
+    assert!(matches!(holder.run(2, &lock).await, DbEvent::Done { .. }));
+    let (held, _, locks, took) = read("p").await;
+    assert_eq!((held, locks.as_str()), (Some(rows), "0"), "a partition held");
+    assert!(took < Duration::from_secs(1), "at once: {took:?}");
+    assert!(matches!(holder.run(3, "ROLLBACK").await, DbEvent::Done { .. }));
+
+    // Rows deleted since: the last ANALYZE's estimate stays the floor.
+    write(&format!("DELETE FROM {s}.t WHERE id > 500")).await;
+    write(flush).await;
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let rows = loop {
+        let rows = read("t").await.0;
+        if rows.is_some_and(|r| r < 200_000) || Instant::now() > deadline {
+            break rows;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    };
+    assert_eq!(rows, Some(1000), "never below the ANALYZE's");
 }
 
 /// A table's structure, and the list of a schema's objects with their estimates, stay fast in a
