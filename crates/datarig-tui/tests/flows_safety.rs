@@ -178,7 +178,7 @@ fn a_policy_that_became_read_only_asks_for_a_reconnect() {
     );
     h.app.profiles[0].policy = Some("prod".into());
     assert!(run(&mut h, "SELECT 1").is_empty(), "not even a read on the old session");
-    assert_eq!(status(&h), Some(Msg::SafetyReadOnlyReconnect { policy: "prod".into() }));
+    assert_eq!(status(&h), Some(Msg::SafetyReadOnlyReconnect { policy: "prod".into(), key: "Space c r".into() }));
 }
 
 /// The markers: `RO` on the tab and in the explorer, a `READ-ONLY` badge in the status bar,

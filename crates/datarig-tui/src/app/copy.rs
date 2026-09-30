@@ -258,7 +258,11 @@ impl App {
         };
         g.shape = shape;
         if g.anchor.is_some() {
-            self.flash(Notice::new(Label::CopySelecting, Level::Info));
+            let (copy, cancel) = (
+                self.key_for(Action::Grid(GridAction::CopyCell), Ctx::Grid),
+                self.key_for(Action::PaneBack, Ctx::Grid),
+            );
+            self.flash(Notice::new(Msg::CopySelecting { copy, cancel }, Level::Info));
         } else {
             self.selecting_done();
         }
@@ -266,7 +270,7 @@ impl App {
 
     /// The selection was dropped: its "Selecting…" notice goes with it.
     pub(super) fn selecting_done(&mut self) {
-        if self.transient.as_ref().is_some_and(|(m, _)| m.msg == Msg::Label(Label::CopySelecting)) {
+        if self.transient.as_ref().is_some_and(|(m, _)| matches!(m.msg, Msg::CopySelecting { .. })) {
             self.transient = None;
         }
     }

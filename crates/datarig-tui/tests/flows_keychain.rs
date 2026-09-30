@@ -12,7 +12,7 @@ use datarig_core::config::{self, Config};
 use datarig_core::driver::DbEvent;
 use datarig_core::fault::{Fault, FaultKind, KeychainFault};
 use datarig_core::i18n::Lang;
-use datarig_core::secret::{MemoryStore, SecretStore, SourceKind, Unavailable};
+use datarig_core::secret::{DeletionLog, Logged, MemoryStore, SecretStore, SourceKind, Unavailable};
 use datarig_tui::app::overlay::OverlayKind;
 use datarig_tui::app::{AppEvent, NodeState, PromptPurpose, Startup, TabKind, TestState};
 use datarig_tui::widgets::editor::Editor;
@@ -210,6 +210,7 @@ async fn the_keychain_wait_is_cancelled_with_esc_or_ctrl_c() {
     let id = h.app.profiles[0].id;
     h.key(KeyCode::Enter);
     assert_eq!(h.app.conns.state(id), NodeState::Connecting);
+    assert!(h.status(160, 45).contains("(Esc cancels)"), "{}", h.status(160, 45));
     h.key(KeyCode::Esc);
     assert_ne!(h.app.conns.state(id), NodeState::Connecting);
     assert!(h.status(160, 45).contains("cancelled"), "{}", h.status(160, 45));
@@ -220,6 +221,8 @@ async fn the_keychain_wait_is_cancelled_with_esc_or_ctrl_c() {
     h.app.focus = datarig_tui::app::Focus::Editor;
     h.ctrl('e');
     assert_eq!(h.app.conns.state(id), NodeState::Connecting);
+    h.app.transient = None; // the earlier "cancelled" flash
+    assert!(h.status(160, 45).contains("(Ctrl+C cancels)"), "{}", h.status(160, 45));
     h.ctrl('c');
     assert_ne!(h.app.conns.state(id), NodeState::Connecting);
     assert!(h.app.conns.get(id).is_none_or(|c| c.pending.is_empty()), "the statement went with it");
@@ -426,6 +429,47 @@ async fn deleting_a_profile_while_its_password_is_written_leaves_nothing() {
     assert!(store.deletes.load(Ordering::SeqCst) >= 1, "the removal ran");
     assert_eq!(store.inner.get(&account).unwrap(), None, "no password left in the keychain");
     assert_eq!(h.app.secrets.session(&account), None);
+}
+
+/// A profile deleted while its new password is being written to a keychain that holds the
+/// write past the limit: the removal is refused while the write hangs. When the write lands
+/// after all, the password it wrote is removed (and the removal logged), not left behind.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_password_written_after_the_limit_for_a_deleted_profile_is_removed() {
+    let cfg = sample_config(None);
+    let account = first_account(&cfg);
+    let gated = Arc::new(GatedStore::default());
+    let _open = gated.open_on_drop();
+    gated.inner.set(&account, "stored-pw").unwrap();
+    let dir = std::env::temp_dir().join(format!("datarig-late-write-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let log = Arc::new(DeletionLog::new(Some(dir.join("secrets.log"))));
+    let store = Arc::new(Logged::new(gated.clone(), "keychain", log));
+    let (mut h, mut rx) = started(&cfg, store, LIMIT, &[]);
+    h.command("conn.edit");
+    pump(&mut h, &mut rx, |h| h.form().reading.is_none()).await;
+    while h.form().focus != datarig_tui::app::profiles::Field::Password {
+        h.key(KeyCode::Tab);
+    }
+    h.type_text("new-pw");
+    h.ctrl('s');
+    gated.wait_until_held();
+    pump(&mut h, &mut rx, |h| flashed(h).contains("did not answer in time")).await;
+    // Deleted while the write still hangs: its removal is refused at once.
+    h.explore("local-pg");
+    h.command("explorer.delete");
+    h.key(KeyCode::Char('y'));
+    assert!(h.app.profiles.iter().all(|p| p.id.account() != account), "deleted");
+    settle(&mut h, &mut rx, LIMIT).await;
+    assert_eq!(gated.inner.get(&account).unwrap().as_deref(), Some("stored-pw"), "refused while the write hangs");
+    // The write lands after all.
+    gated.open();
+    pump(&mut h, &mut rx, |_| gated.inner.get(&account).unwrap().is_none()).await;
+    settle(&mut h, &mut rx, LIMIT).await;
+    assert_eq!(gated.inner.get(&account).unwrap(), None, "no password left in the keychain");
+    let logged = std::fs::read_to_string(dir.join("secrets.log")).unwrap_or_default();
+    assert!(logged.contains(&format!("deleted source=keychain account={account}")), "{logged}");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// After `Esc` ends the wait for the keychain, the status bar does not go back to

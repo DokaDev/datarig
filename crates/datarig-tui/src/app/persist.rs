@@ -382,11 +382,11 @@ impl App {
     }
 
     /// Why a save failed, as a reason (see [`io_reason`]).
-    pub(super) fn save_reason(e: &SaveError) -> Msg {
+    pub(super) fn save_reason(&self, e: &SaveError) -> Msg {
         match e {
             SaveError::Io(kind, _) => io_reason(*kind),
             SaveError::Exists(_) => Msg::Label(Label::IoExists),
-            SaveError::Conflict => Msg::Label(Label::ScriptsConflictLater),
+            SaveError::Conflict => self.conflict_later(),
             SaveError::Missing => Msg::Label(Label::IoNotFound),
         }
     }
@@ -476,11 +476,12 @@ impl App {
                 Saved::Conflict
             }
             Err(e) => {
-                let reason = Self::save_reason(&e);
+                let reason = self.save_reason(&e);
                 if let SaveError::Io(kind, detail) = &e {
                     ErrorLog::new(self.paths.errors_log())
                         .record("scripts.save_failed", &Fault::new(FaultKind::Io(*kind), detail.clone()));
                 }
+                let Some(t) = self.tabs.get_mut(id) else { return Saved::Ok };
                 let first = t.doc.save_error.is_none();
                 t.doc.save_error = Some(reason.clone());
                 // Tried again a moment later.

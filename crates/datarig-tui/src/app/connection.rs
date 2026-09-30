@@ -346,7 +346,7 @@ impl App {
         // The status bar said what the attempt waited for (the keychain, the server): it says
         // now that it was cancelled, not the wait that is over.
         let waiting = |m: &Msg| match m {
-            Msg::ConnReadingKeychain { name: n } | Msg::ConnConnecting { name: n } => *n == name,
+            Msg::ConnReadingKeychain { name: n, .. } | Msg::ConnConnecting { name: n } => *n == name,
             _ => false,
         };
         if self.status.as_ref().is_some_and(|s| waiting(&s.msg)) {

@@ -494,7 +494,7 @@ fn cancel_and_busy_through_key_path() {
     assert!(!h.app.quit && !h.cancelled.load(Ordering::SeqCst));
     h.ctrl('e');
     h.ctrl('e');
-    assert!(h.status(160, 45).contains(ko(datarig_core::i18n::Label::QueryBusy)));
+    assert!(h.status(160, 45).contains(&ko_msg(&datarig_core::i18n::Msg::QueryBusy { key: "Ctrl+C".into() })));
     h.ctrl('c');
     assert!(h.cancelled.load(Ordering::SeqCst), "CancelRequest sent through the session");
     h.db(DbEvent::Failed { id: 1, error: "canceling statement due to user request".into(), cancelled: true });

@@ -9,9 +9,11 @@
 //! right, as many of them as there is room for (the name first). An open table shows
 //! its structure (see `widgets::tree`): each group with its icon, each item with its group's.
 
+use crate::app::action::Action;
 use crate::app::explorer::{Row, RowKind};
 use crate::app::{App, Keys, NodeState};
 use crate::icons::{self, KeyMark, TreeIcon, TypeCategory};
+use crate::keymap::Ctx;
 use crate::text::{Align, clip, fit, human_bytes, human_count, width, wrap_words};
 use crate::theme;
 use crate::widgets::tree::{Group, Node, ObjectView, Structure, Tree};
@@ -147,7 +149,10 @@ fn row_parts(app: &App, row: &Row) -> Vec<(String, Style)> {
             let name = if open { fg(theme::FG).add_modifier(Modifier::BOLD) } else { fg(theme::FG) };
             vec![(icon, fg(theme::ACCENT_WARM)), (datarig_core::scripts::display_name(p, false).to_string(), name)]
         }
-        RowKind::ScriptsEmpty => vec![(app.i18n.label(Label::ExplorerScriptsEmpty).to_string(), fg(theme::FG_DIM))],
+        RowKind::ScriptsEmpty => {
+            let key = app.key_for(Action::ScriptSave, Ctx::Nav);
+            vec![(app.i18n.msg(&Msg::ExplorerScriptsEmpty { key }).to_string(), fg(theme::FG_DIM))]
+        }
     }
 }
 

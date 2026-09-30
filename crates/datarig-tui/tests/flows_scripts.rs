@@ -1633,6 +1633,23 @@ fn open_filters_the_tree_and_the_mouse_picks() {
     assert_eq!(h.app.tab().script(), Some("top.sql"));
 }
 
+#[test]
+fn the_save_key_named_in_messages_follows_the_key_map() {
+    let dirs = Dirs::new("save-key");
+    let mut cfg = config();
+    cfg.keymap = datarig_core::config::parse("[keymap.workspace]\n\"ctrl+s\" = \"none\"\n\"f2\" = \"script.save\"\n")
+        .unwrap()
+        .keymap;
+    let mut h = launch(&cfg, &dirs);
+    connect(&mut h, "local-pg");
+    h.keys(" so");
+    let status = h.status(160, 45);
+    assert!(status.contains("No saved queries yet — F2 in a console saves one"), "{status}");
+    let screen = h.screen(160, 45);
+    let above = screen.lines().filter(|l| !l.contains("No saved queries")).collect::<Vec<_>>().join("\n");
+    assert!(above.contains("F2 in a console saves one"), "the explorer's empty Saved queries: {screen}");
+}
+
 /// The explorer's Saved queries show a folder that cannot be read as such,
 /// `(can't be read)`, with no arrow, never as a folder that opens to nothing.
 #[cfg(unix)]

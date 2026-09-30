@@ -1282,6 +1282,34 @@ fn remapped_keys_run_their_actions_and_bad_entries_are_reported() {
 }
 
 #[test]
+fn messages_name_the_remapped_keys() {
+    let cfg = keymap_config(
+        "[keymap.root]\n\"ctrl+c\" = \"none\"\n\"f8\" = \"query.cancel\"\n\
+         [keymap.nav]\n\"space t u\" = \"none\"\n\"space c r\" = \"none\"\n\"space x r\" = \"conn.reconnect_current\"\n",
+    );
+    let mut h = Harness::with_config(&cfg, Lang::En);
+    h.db(DbEvent::Connected);
+    h.ctrl('e');
+    h.ctrl('e');
+    let status = h.status(160, 45);
+    assert!(status.contains("A query is already running (F8 to cancel)"), "{status}");
+    h.key(KeyCode::F(8));
+    h.db(DbEvent::Failed { id: 1, error: "canceling statement due to user request".into(), cancelled: true });
+    // The busy notice names the cancel key (it quits there).
+    h.app.overlays.push(datarig_tui::app::overlay::Overlay::Busy(datarig_tui::app::overlay::Busy {
+        title: datarig_core::i18n::Label::MigrateTitle,
+        text: datarig_core::i18n::Label::MigrateRunning,
+    }));
+    let screen = h.screen(160, 45);
+    assert!(screen.contains("q/F8 quit"), "{screen}");
+    // An action without a key: the command that runs it, else its name.
+    assert_eq!(h.app.key_for(datarig_tui::app::action::Action::ReconnectCurrent, Ctx::Nav), "Space x r");
+    assert_eq!(h.app.key_for(datarig_tui::app::action::Action::ReopenTab, Ctx::Nav), "Reopen closed tab");
+    assert_eq!(h.app.key_for(datarig_tui::app::action::Action::ScriptSave, Ctx::Busy), ":w");
+    assert_eq!(h.app.key_for(datarig_tui::app::action::Action::ScriptSave, Ctx::Nav), "Ctrl+S");
+}
+
+#[test]
 fn a_bad_key_in_the_key_map_is_reported_in_the_ui_language() {
     let cfg = keymap_config("[keymap.explorer]\n\"hyper+x\" = \"explorer.bottom\"\n\"shift+1\" = \"explorer.top\"\n");
     let mut h = Harness::launched(&cfg, Lang::Ko, Arc::new(MemoryStore::new()), Startup::Normal);

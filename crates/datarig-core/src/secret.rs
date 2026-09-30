@@ -19,7 +19,7 @@ mod memory;
 pub mod source;
 
 pub use file::FileStore;
-pub use guard::{Guarded, KEYCHAIN_TIMEOUT};
+pub use guard::{Call, Guarded, KEYCHAIN_TIMEOUT, Late, LateHook};
 pub use keychain::KeyringStore;
 pub use log::{DeletionLog, Logged};
 pub use memory::MemoryStore;

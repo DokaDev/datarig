@@ -2,8 +2,10 @@
 //! Advanced), the password storage selector, the pickers of color, icon and folder, and the
 //! inline test-connection result line.
 
+use crate::app::action::Action;
 use crate::app::profiles::{BUTTONS, DRIVERS, FIELDS, Field, Section, secret_field, source_choice};
 use crate::app::{App, Level};
+use crate::keymap::Ctx;
 use crate::text::{width, wrap};
 use crate::theme;
 use crate::widgets::dialog::{centered, modal};
@@ -69,6 +71,7 @@ fn selector(buf: &mut Buffer, x: u16, y: u16, room: usize, parts: &[(String, Sty
 /// fields of the current section, the buttons and the test-connection line. Returns the
 /// hardware cursor (the focused text input).
 pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> Option<(u16, u16)> {
+    let pick_key = app.key_for(Action::PickKeyFile, Ctx::ProfileForm);
     let i18n = &app.i18n;
     let profiles = &app.profiles;
     let icons_on = app.icons_on();
@@ -314,22 +317,22 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
             put(buf, after, y, &i18n.label(e.label()), room, Style::new().fg(theme::ERROR).bg(theme::SURFACE));
         } else {
             let hint = match (f, form.source) {
-                (Field::Password, SourceKind::File) => Some(Label::FormPasswordFile),
-                (Field::Password, _) if form.keychain_ok => Some(Label::FormPasswordKeychain),
-                (Field::Password, _) => Some(Label::FormPasswordPrompt),
-                (Field::Command, _) => Some(Label::FormCommandHint),
-                (Field::Env, _) => Some(Label::FormEnvHint),
-                (Field::Policy, _) => Some(Label::FormPolicyHint),
-                (Field::Color | Field::Icon | Field::Folder, _) => Some(Label::FormPickerHint),
-                (Field::SshKeyFile, _) => Some(Label::FormSshKeyHint),
-                (Field::SshSecret, _) => Some(Label::FormSshSecretHint),
-                (Field::SshCommand, _) => Some(Label::FormCommandHint),
-                (Field::SshEnv, _) => Some(Label::FormEnvHint),
-                (Field::SshKeepalive | Field::SshTimeout, _) => Some(Label::FormSshSecondsHint),
+                (Field::SshKeyFile, _) => Some(Msg::FormSshKeyHint { key: pick_key.clone() }),
+                (Field::Password, SourceKind::File) => Some(Label::FormPasswordFile.into()),
+                (Field::Password, _) if form.keychain_ok => Some(Label::FormPasswordKeychain.into()),
+                (Field::Password, _) => Some(Label::FormPasswordPrompt.into()),
+                (Field::Command, _) => Some(Label::FormCommandHint.into()),
+                (Field::Env, _) => Some(Label::FormEnvHint.into()),
+                (Field::Policy, _) => Some(Label::FormPolicyHint.into()),
+                (Field::Color | Field::Icon | Field::Folder, _) => Some(Label::FormPickerHint.into()),
+                (Field::SshSecret, _) => Some(Label::FormSshSecretHint.into()),
+                (Field::SshCommand, _) => Some(Label::FormCommandHint.into()),
+                (Field::SshEnv, _) => Some(Label::FormEnvHint.into()),
+                (Field::SshKeepalive | Field::SshTimeout, _) => Some(Label::FormSshSecondsHint.into()),
                 _ => None,
             };
             if let Some(hint) = hint {
-                put(buf, after, y, &i18n.label(hint), room, dim);
+                put(buf, after, y, &i18n.msg(&hint), room, dim);
             }
         }
     }

@@ -15,13 +15,17 @@
 //!
 //! The calls of one keychain account run one at a time, in the order they were asked for
 //! ([`KeychainQueue`]): a profile deleted while its password is being written loses
-//! the entry after the write, not before it.
+//! the entry after the write, not before it. A call that outlived the keychain's limit keeps
+//! the keychain busy until it returns, and a removal asked for meanwhile is refused: the guard
+//! reports the late answer ([`KeychainDone::Late`]), and the refused removals run again then,
+//! so a password written late for a profile deleted meanwhile does not stay behind.
 
 use super::password::{Plan, Secret};
 use super::*;
 use datarig_core::fault::{ErrorLog, Fault, FaultKind, KeychainFault};
+use datarig_core::profile::ssh::SshSettings;
 use datarig_core::secret::source::{self, SwitchError, Switched};
-use datarig_core::secret::{Guarded, Unavailable};
+use datarig_core::secret::{Call, Guarded, Unavailable};
 use std::collections::HashMap;
 use std::sync::{Condvar, Mutex};
 
@@ -105,8 +109,12 @@ pub enum KeychainDone {
         after: AfterSave,
         result: Result<(), Fault>,
     },
-    /// A password was removed (only a failure matters: the keychain is then known not to work).
-    Removed(Result<bool, Fault>),
+    /// The passwords of `accounts` were removed (only a failure matters: the keychain is then
+    /// known not to work).
+    Removed { accounts: Vec<String>, result: Result<bool, Fault> },
+    /// A `call` on `account` given up on at the limit returned after all (`ok`: it did what it
+    /// was asked).
+    Late { call: Call, account: String, ok: bool },
     /// Step 1 of a source change of the profile form's `profile` (the profile as it will be
     /// saved): the password written to the new store and read back.
     SwitchCopied { profile: Box<ConnectionConfig>, from: SourceKind, to: SourceKind, result: Result<bool, SwitchError> },
@@ -148,7 +156,7 @@ fn no_keychain(fault: &Fault) -> bool {
 }
 
 /// The keychain `store` behind a guard that ends each call within `timeout`.
-pub(super) fn guarded(store: Arc<dyn SecretStore>, timeout: Duration) -> Arc<dyn SecretStore> {
+pub(super) fn guarded(store: Arc<dyn SecretStore>, timeout: Duration) -> Arc<Guarded> {
     Arc::new(Guarded::new(store, timeout))
 }
 
@@ -157,6 +165,16 @@ impl App {
     /// [`App::set_secret_store`] or [`App::set_secret_stores`].
     pub fn set_keychain_timeout(&mut self, timeout: Duration) {
         self.keychain_timeout = timeout;
+    }
+
+    /// Hear of the keychain calls that answer after the limit (with an event loop only:
+    /// headless, every call runs to its end on the UI thread).
+    pub(super) fn hear_late_keychain(&self) {
+        let (Some(guard), Some(tx)) = (&self.keychain_guard, &self.tx) else { return };
+        let tx = tx.clone();
+        guard.on_late(Arc::new(move |l| {
+            let _ = tx.send(AppEvent::Keychain(KeychainDone::Late { call: l.call, account: l.account, ok: l.ok }));
+        }));
     }
 
     /// Run `work` with the stores on a worker, after the jobs asked for earlier on the same
@@ -243,7 +261,12 @@ impl App {
         c.connecting =
             Some(Connecting { name: conn.name.clone(), started, had_password: true, keychain: true, tunnel: None });
         let generation = c.generation;
-        self.show_status(Notice::new(Msg::ConnReadingKeychain { name: conn.name }, Level::Info));
+        // Asked for from the explorer, its back key ends the wait; from a tab, the cancel key.
+        let key = match self.key_context() {
+            Ctx::Explorer => self.key_for(Action::Explorer(ExplorerAction::Back), Ctx::Explorer),
+            _ => self.key_for(Action::CancelQuery, Ctx::Nav),
+        };
+        self.show_status(Notice::new(Msg::ConnReadingKeychain { name: conn.name, key }, Level::Info));
         self.keychain_job(
             read_accounts(&account, legacy.as_deref()),
             move |s| read_keychain(s, &account, legacy.as_deref()),
@@ -309,16 +332,17 @@ impl App {
 
     /// Remove the keychain passwords of `accounts` on a worker.
     pub(super) fn remove_from_keychain(&mut self, accounts: Vec<String>) {
+        let asked = accounts.clone();
         self.keychain_job(
             accounts.clone(),
             move |s| {
                 let mut removed = false;
-                for a in &accounts {
+                for a in &asked {
                     removed |= s.keychain.delete(a).map_err(|Unavailable(e)| e)?;
                 }
                 Ok(removed)
             },
-            KeychainDone::Removed,
+            move |result| KeychainDone::Removed { accounts, result },
         );
     }
 
@@ -354,10 +378,8 @@ impl App {
             KeychainDone::Saved { profile, name, account, secret, after, result } => {
                 self.on_keychain_saved(profile, name, account, secret, after, result)
             }
-            KeychainDone::Removed(result) => match result {
-                Ok(_) => self.keychain_answered(),
-                Err(f) => self.keychain_failed(&f),
-            },
+            KeychainDone::Removed { accounts, result } => self.on_keychain_removed(accounts, result),
+            KeychainDone::Late { call, account, ok } => self.on_keychain_late(call, account, ok),
             KeychainDone::SwitchCopied { profile, from, to, result } => {
                 self.on_switch_copied(*profile, from, to, result)
             }
@@ -486,6 +508,38 @@ impl App {
         };
         if let Some(m) = msg {
             self.flash(m);
+        }
+    }
+
+    fn on_keychain_removed(&mut self, accounts: Vec<String>, result: Result<bool, Fault>) {
+        match result {
+            Ok(_) => self.keychain_answered(),
+            Err(f) => {
+                // Refused while an earlier call still hangs: asked again when it returns.
+                if f.kind == FaultKind::Keychain(KeychainFault::NoAnswer) {
+                    for a in accounts {
+                        if !self.keychain_unremoved.contains(&a) {
+                            self.keychain_unremoved.push(a);
+                        }
+                    }
+                }
+                self.keychain_failed(&f);
+            }
+        }
+    }
+
+    /// A call given up on returned after all: the removals refused meanwhile run now, and a
+    /// password it wrote for a profile that is gone goes too (the removal of a profile deleted
+    /// while its password was written may have come before it).
+    fn on_keychain_late(&mut self, call: Call, account: String, ok: bool) {
+        self.keychain_answered();
+        let mut accounts = std::mem::take(&mut self.keychain_unremoved);
+        let owned = |a: &str| self.profiles.iter().any(|p| p.id.account() == a || SshSettings::account(p.id) == a);
+        if call == Call::Set && ok && !owned(&account) && !accounts.contains(&account) {
+            accounts.push(account);
+        }
+        if !accounts.is_empty() {
+            self.remove_from_keychain(accounts);
         }
     }
 

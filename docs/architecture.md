@@ -191,7 +191,7 @@ Held by CI budgets (`docs/perf.md`).
   thread of its own and gives up after `KEYCHAIN_TIMEOUT` (10 s; `App::set_keychain_timeout`
   in tests) with `KeychainFault::NoAnswer`. A call given up on is left behind (it cannot be
   stopped); while one hangs the next calls fail at once, and once it returns the store is asked
-  again. On top of that `app::keychain` runs every keychain use of the UI on a worker
+  again and the `Guarded::on_late` hook hears of it (`KeychainDone::Late`). On top of that `app::keychain` runs every keychain use of the UI on a worker
   (`App::keychain_job`: a blocking task, inline when headless) and handles the answer as
   `AppEvent::Keychain(KeychainDone)`: the password of a connection attempt (bound to the
   profile and its generation; `Connecting::keychain` lets `Ctrl+C` in a tab cancel it), of a
@@ -227,6 +227,11 @@ Held by CI budgets (`docs/perf.md`).
 - **Run keys the terminal can send.** `keymap::works` leaves `Ctrl+Enter` out of the keyboard
   help, the command line's list and the hints (`Keymap::hint_keys`) when the kitty keyboard
   protocol was not granted; `Ctrl+E` is bound wherever `Ctrl+Enter` is.
+- **Keys in messages follow the keymap.** A message that names an app key has a `{key}`
+  placeholder filled by `App::key_for` (the key the hint line would show in a fixed context);
+  an action without a key there shows the command that runs it (`:w`), else its name, which
+  the command line finds. Keys a dialog reserves for itself (`y`/`n`, its `Esc`) stay written
+  out.
 
 ## Explorer icons and confirmations
 
@@ -304,7 +309,9 @@ Held by CI budgets (`docs/perf.md`).
   (on the UI thread, a short lock) and its worker waits until it is first in all of them
   (`Turn::wait`; dropping the `Turn` leaves the queues, also on a panic). A job waits only for
   earlier jobs, each within the keychain's limit. A write that succeeds for a profile deleted
-  since removes the entry again.
+  since removes the entry again. A removal refused because a call given up on still hangs is
+  kept (`keychain_unremoved`) and runs again when that call returns; a late write for a profile
+  that is gone is removed then too, so no entry outlives its profile.
 - **Confirmations.** `App::confirm_key` maps `Enter` to `n` for every `ConfirmAction` except the
   copies (`Copy`, `FetchThenCopy`), so what would be lost is kept unless `y` is pressed.
 - **The busy notice** has its own context `overlay.busy` (`q` quits; `query.cancel` from the

@@ -493,6 +493,10 @@ pub struct App {
     keychain_timeout: Duration,
     /// Keychain calls of one account run one at a time, in the order asked.
     keychain_queue: keychain::KeychainQueue,
+    /// The keychain's guard, whose late answers come back through `tx`.
+    keychain_guard: Option<Arc<datarig_core::secret::Guarded>>,
+    /// Keychain accounts whose removal was refused while a call hung: removed when it returns.
+    keychain_unremoved: Vec<String>,
     /// Password typed at the prompt of a `prompt` profile, used by the next attempt only.
     prompted: Option<(ProfileId, Secret)>,
     /// Password prompts of other profiles waiting for the open one (one prompt at a time).
@@ -725,6 +729,8 @@ impl App {
             save_on_connect: None,
             keychain_timeout: datarig_core::secret::KEYCHAIN_TIMEOUT,
             keychain_queue: keychain::KeychainQueue::default(),
+            keychain_guard: None,
+            keychain_unremoved: Vec::new(),
             prompted: None,
             prompt_queue: VecDeque::new(),
             pending_save: false,
@@ -785,7 +791,10 @@ impl App {
     /// `DATARIG_SECRET_STORE` picks). Every keychain call ends within the keychain's time
     /// limit ([`App::set_keychain_timeout`]).
     pub fn set_secret_stores(&mut self, mut stores: Stores) {
-        stores.keychain = keychain::guarded(stores.keychain, self.keychain_timeout);
+        let guard = keychain::guarded(stores.keychain, self.keychain_timeout);
+        stores.keychain = guard.clone();
+        self.keychain_guard = Some(guard);
+        self.hear_late_keychain();
         self.secrets = Secrets::with_stores(stores);
     }
 
@@ -881,6 +890,7 @@ impl App {
     /// [`App::first_frame_drawn`].
     pub fn start(&mut self, tx: UnboundedSender<AppEvent>, startup: Startup) {
         self.tx = Some(tx);
+        self.hear_late_keychain();
         self.launch(startup);
     }
 
