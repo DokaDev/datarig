@@ -45,6 +45,22 @@ CI runs all of them, the performance budgets, `cargo deny check` and `cargo audi
 - Keep a pull request to one change, with tests for what it fixes or adds.
 - The code, comments and documentation are in English.
 
+## Releases
+
+Maintainers release by pushing a tag; `.github/workflows/release.yml` does the rest.
+
+1. Set `version` in `[workspace.package]` of `Cargo.toml` (see "Versioning" in the README),
+   run `cargo build` so that `Cargo.lock` follows, and merge that change.
+2. Tag that commit `v<version>` and push the tag (`git tag v0.2.0 && git push origin v0.2.0`).
+
+The workflow fails unless the tag is exactly `v` and the workspace version. It builds the
+archives (macOS and Linux, arm64 and x86_64; Windows x86_64), installs and tests the Homebrew
+formula from them, publishes the GitHub release with generated notes, then updates
+`Formula/datarig.rb` in [DokaDev/homebrew-tap](https://github.com/DokaDev/homebrew-tap) over
+SSH with that repository's deploy key (the `HOMEBREW_TAP_DEPLOY_KEY` secret). A
+`vX.Y.0-rc.N` tag (with that version in `Cargo.toml`) is a GitHub pre-release and leaves the
+tap alone. A pull request that changes the release files runs everything except publishing.
+
 ## License
 
 By contributing, you agree that your contributions are dual-licensed under the MIT and
