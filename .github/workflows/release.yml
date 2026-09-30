@@ -2,10 +2,13 @@ name: Release
 
 # A pushed tag `vX.Y.Z` builds datarig for every target, checks the Homebrew formula by
 # installing it from the fresh archives, publishes a GitHub release (archives, checksums and
-# GitHub's generated notes) and updates the formula in the tap. A `vX.Y.0-rc.N` tag is a
-# pre-release on GitHub only: the tap is left alone. The tag must be the workspace version
-# (.github/scripts/release-version.sh). A pull request that changes the release files, or a
-# manual run, does everything except publishing.
+# GitHub's generated notes) and updates the formula in the tap. A `vX.Y.0-rc.N` tag is always a
+# pre-release on GitHub; whether it also updates the tap depends on whether a stable release
+# exists yet (.github/scripts/release-tap-eligible.sh): until the first one ships, the tap
+# tracks the latest release candidate, so it stays installable during this pre-1.0 phase; once
+# a stable release exists, the tap only tracks stable and later rc tags leave it alone. The tag
+# must be the workspace version (.github/scripts/release-version.sh). A pull request that
+# changes the release files, or a manual run, does everything except publishing.
 on:
   push:
     tags: ["v*"]
@@ -43,10 +46,17 @@ jobs:
       tag: ${{ steps.version.outputs.tag }}
       publish: ${{ steps.version.outputs.publish }}
       prerelease: ${{ steps.version.outputs.prerelease }}
+      tap: ${{ steps.tap.outputs.tap }}
     steps:
       - uses: actions/checkout@v7
       - id: version
         run: bash .github/scripts/release-version.sh
+      - id: tap
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+        run: bash .github/scripts/release-tap-eligible.sh
 
   # THIRD-PARTY-NOTICES.html, the same for every archive (cargo-about reads the dependencies of
   # every target).
@@ -169,13 +179,15 @@ jobs:
           fi
           gh release create "$TAG" --verify-tag --title "$TAG" --generate-notes --notes "$notes" "${flags[@]}" dist/*
 
-  # Not for a release candidate. Without publishing (a pull request, a manual run) it stops
-  # before the push, after checking that the deploy key may write to the tap.
+  # Skipped when plan.outputs.tap is false: a release candidate once a stable release exists
+  # (release-tap-eligible.sh), or a candidate whose eligibility check itself failed (fail
+  # closed). Without publishing (a pull request, a manual run) it stops before the push, after
+  # checking that the deploy key may write to the tap.
   homebrew:
     name: Homebrew tap
     needs: [plan, formula, release]
     if: >-
-      !cancelled() && needs.formula.result == 'success' && needs.plan.outputs.prerelease == 'false'
+      !cancelled() && needs.formula.result == 'success' && needs.plan.outputs.tap == 'true'
       && (needs.release.result == 'success' || needs.plan.outputs.publish == 'false')
     runs-on: ubuntu-latest
     steps:

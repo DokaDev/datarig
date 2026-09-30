@@ -180,7 +180,8 @@ Available from the first release (none has been published yet):
   ```
 
   datarig may be submitted to homebrew-core later, so that `brew install datarig` works
-  without the tap.
+  without the tap. Until 0.1.0, the tap installs the latest release candidate (see
+  [Versioning](#versioning)).
 - **GitHub Releases**: download the archive for your platform from
   [Releases](https://github.com/DokaDev/datarig/releases) and put the `datarig` binary on your
   `PATH`. There are archives for macOS and Linux (arm64 and x86_64) and Windows (x86_64,
@@ -212,8 +213,11 @@ A terminal of at least 80×24 is required. A Nerd Font is optional (for the icon
 Releases follow [Semantic Versioning](https://semver.org), as `0.MINOR.PATCH` until 1.0. A
 patch release only fixes things. A minor release before 1.0 may change the configuration
 formats: the release notes say so, and datarig migrates the files automatically, keeping a
-backup of the old ones. A release candidate (`vX.Y.0-rc.N`) is a GitHub pre-release only, never
-published to Homebrew. 1.0 comes with several databases supported and a stable configuration.
+backup of the old ones. A release candidate (`vX.Y.0-rc.N`) is always a GitHub pre-release;
+until 0.1.0, the tap installs the latest release candidate (there being no stable release yet
+to install instead), so `brew install`/`upgrade` may pick up an rc. Once 0.1.0 ships, the tap
+goes back to tracking stable only, and later release candidates are GitHub pre-releases alone.
+1.0 comes with several databases supported and a stable configuration.
 
 ## Quick start
 
