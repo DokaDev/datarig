@@ -246,7 +246,13 @@ Held by CI budgets (`docs/perf.md`).
   structure's statement uses too, so the list and an open table never disagree: the rules are
   those of the table structure below, grouped by root (every table, partitioned table and
   materialized view of the schema, each partition its own and its parent their sum), in one pass
-  over `pg_inherits`, `pg_class` and `pg_index`, locking no relation. `Tree::set_structure`
+  over `pg_inherits`, `pg_class` and `pg_index`, locking no relation. A heap's rows are its
+  `reltuples`, or the live rows of the cumulative statistics (`pg_stat_get_live_tuples`, the
+  `n_live_tup` of `pg_stat_all_tables`, no lock either) when those are more than twice as many
+  (rows added since the last `ANALYZE`; the counters restart after a statistics reset and can
+  count again rows an `ANALYZE` saw, so they only ever raise the estimate, and only past that
+  margin); its pages then grow in the same proportion (the planner's assumption: as many rows
+  per page as at the last `ANALYZE`). `Tree::set_structure`
   puts a structure's estimates in the list too (`r` on an open table refreshes them). The
   explorer draws them right-aligned after the name in the room it leaves, two blanks at least
   (`explorer::inline_stats`, longest first: rows and size, rows, or the size alone when the rows
@@ -279,13 +285,15 @@ Held by CI budgets (`docs/perf.md`).
   "structure unavailable: the table is locked by another session (try again)". What needs no
   lock comes from the catalogs themselves: an index key's order (`indoption`, for a method that
   orders), operator class and collation when not the defaults (`Index::options`), and a
-  trigger's `UPDATE OF` columns (`tgattr`); a trigger's `WHEN` condition is taken from
+  trigger's `UPDATE OF` columns (`tgattr`, quoted by `quote_ident` as an index's keys are); a trigger's `WHEN` condition is taken from
   `pg_get_triggerdef` (`Trigger::condition`), so only where that runs. The status bar shows the
   line under the explorer's cursor whole (`explorer::line_preview`; for a structure that
-  could not be read, the reason alone); a message too long for it takes the policy's room when that makes it
-  fit whole, else it is cut in its middle when its end is a short last part
-  (`text::clip_middle`: ` · ` and a closing ` (…)`), keeping what to do and what a trigger
-  calls. The TUI has no SQL for it:
+  could not be read, the reason alone); a message too long for it takes the policy's room, then
+  what it needs of the connection's name (which keeps its first 8 columns), and only then is
+  cut in its middle when its end is a short last part (`text::clip_middle`: ` · ` and a closing
+  ` (…)`), keeping what to do and what a trigger calls. A trigger's `WHEN` condition is a line
+  of its own under it (`tree::item_details`), so a long condition never pushes its function
+  out of the status bar. The TUI has no SQL for it:
   `widgets::tree::Tree::structures` caches it per `(schema, table)` with what of it is open,
   `TreeAction::LoadStructure` asks for it the first time a table opens (again after a failure,
   or with `r`), another database's through its aux session, and `TreeAction::Reveal` moves the

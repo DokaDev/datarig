@@ -257,8 +257,8 @@ pub struct Trigger {
     pub function: String,
     /// It fires (PostgreSQL: not `DISABLE`d).
     pub enabled: bool,
-    /// The columns of `UPDATE OF`: an `UPDATE` fires it only when it sets one of them (empty:
-    /// any `UPDATE`).
+    /// The columns of `UPDATE OF`, as SQL writes them (quoted when they need it, as an index's
+    /// keys): an `UPDATE` fires it only when it sets one of them (empty: any `UPDATE`).
     pub update_columns: Vec<String>,
     /// The condition of its `WHEN` clause, without the parentheses.
     pub condition: Option<String>,

@@ -209,15 +209,18 @@ pub const TYPES: [(TypeCategory, &str, &str); 9] = [
 
 impl TypeCategory {
     /// The category of a type named as the server formats it (PostgreSQL's `format_type`:
-    /// `character varying(20)`, `timestamp with time zone`, `integer[]`; MySQL's names too). A
-    /// name it does not know (an enum, a domain, a geometric type) is `Other`.
+    /// `character varying(20)`, `timestamp with time zone`, `interval day to second`, `integer[]`;
+    /// MySQL's names too, `int unsigned`). A name it does not know (an enum, a domain, a
+    /// geometric type) is `Other`.
     pub fn of(type_name: &str) -> Self {
         let t = type_name.trim().to_ascii_lowercase();
         if t.ends_with("[]") {
             return TypeCategory::Array;
         }
-        // The name without its modifiers (`(20)`, `(10,2)`) and quotes (`"char"`).
+        // The name without its modifiers (`(20)`, `(10,2)`), quotes (`"char"`) and MySQL's
+        // `unsigned` and `zerofill`.
         let base = t.split('(').next().unwrap_or("").trim().trim_matches('"');
+        let base = base.trim_end_matches(" zerofill").trim_end_matches(" unsigned").trim_end_matches(" signed");
         let first = base.split_whitespace().next().unwrap_or("");
         match base {
             "text" | "character varying" | "character" | "varchar" | "char" | "bpchar" | "name" | "citext"
@@ -231,8 +234,11 @@ impl TypeCategory {
             "uuid" => TypeCategory::Uuid,
             "bytea" | "bit" | "bit varying" | "varbit" | "blob" | "tinyblob" | "mediumblob" | "longblob" | "binary"
             | "varbinary" => TypeCategory::Binary,
-            // `time`, `timetz`, `timestamp`, `timestamptz` and their `with(out) time zone` forms.
-            _ if matches!(first, "time" | "timetz" | "timestamp" | "timestamptz") => TypeCategory::DateTime,
+            // `time`, `timetz`, `timestamp`, `timestamptz` and their `with(out) time zone` forms, an
+            // `interval` with its fields (`day to second`).
+            _ if matches!(first, "time" | "timetz" | "timestamp" | "timestamptz" | "interval") => {
+                TypeCategory::DateTime
+            }
             _ => TypeCategory::Other,
         }
     }

@@ -26,25 +26,33 @@ use tokio_postgres::{Client, Row};
 
 /// The estimates of rows and size of the relations of a CTE `roots (oid, kind)` (`kind` its
 /// `relkind` as text), as CTEs to follow it in a `WITH RECURSIVE`: `stats (root, known_rows,
-/// reltuples, known_size, bytes)`, one row per root with storage of its own or through its
+/// est_rows, known_size, bytes)`, one row per root with storage of its own or through its
 /// partitions; `stats_rows!` and `stats_bytes!` read it (`LEFT JOIN stats s`). The rules are
 /// the table structure's ([`structure`]) and the explorer's list of a schema's objects alike:
 ///
 /// * `heaps` are the relations whose statistics are a root's: itself (a table, a materialized
 ///   view), or a partitioned table's leaf partitions (found in `pg_inherits`, at any depth);
-/// * rows are counted only where every one has an estimate (`reltuples` `-1`: never vacuumed or
-///   analyzed), and the size where every one has statistics of its own (the same, unless its own
-///   `relpages` is set, by a `CREATE INDEX`; a foreign table has no storage): its indexes and its
-///   TOAST table's index have pages from their creation on, which are not its size;
+/// * a heap's rows are `reltuples` (the last `VACUUM` or `ANALYZE`), or the live rows the
+///   cumulative statistics count (`n_live_tup` of `pg_stat_all_tables`, read with
+///   `pg_stat_get_live_tuples`) when they are more than twice as many: rows added since count
+///   before the next `ANALYZE`. Only then, as the counters are estimates too: they start again
+///   from 0 when the statistics are reset (a crash, `pg_stat_reset`) while `reltuples` stays,
+///   and they count again the rows an `ANALYZE` saw that a session had not reported yet (at
+///   most as many as it saw). Rows deleted since count at the next `ANALYZE`;
+/// * rows are counted only where every heap has an estimate (`reltuples` `-1`: never vacuumed
+///   or analyzed), and the size where every one has statistics of its own (the same, unless its
+///   own `relpages` is set, by a `CREATE INDEX`; a foreign table has no storage): its indexes and
+///   its TOAST table's index have pages from their creation on, which are not its size;
 /// * the size is `relpages` of the heaps, their TOAST tables and all their indexes, times
-///   `block_size`.
+///   `block_size`, each heap's grown as its rows did since `reltuples` (its pages hold as many
+///   rows each as they did then, as the planner assumes), in whole pages.
 ///
-/// It reads `pg_class`, `pg_inherits` and `pg_index` only, and locks no relation (the functions
-/// that give the exact size, `pg_total_relation_size` and `pg_partition_tree`, lock each one and
-/// wait behind an `ALTER TABLE` or a `VACUUM FULL`). TOAST tables and indexes are found in one
-/// pass each, grouped by root, never per heap: the planned cost stays linear in the catalog, under
-/// `jit_above_cost` with thousands of relations, for a table of thousands of partitions and for a
-/// schema of thousands of tables.
+/// It reads `pg_class`, `pg_inherits`, `pg_index` and the cumulative statistics only, and locks
+/// no relation (the functions that give the exact size, `pg_total_relation_size` and
+/// `pg_partition_tree`, lock each one and wait behind an `ALTER TABLE` or a `VACUUM FULL`).
+/// Indexes are found in one pass, grouped by heap, never looked up per heap: the planned cost
+/// stays linear in the catalog, under `jit_above_cost` with thousands of relations, for a table
+/// of thousands of partitions and for a schema of thousands of tables.
 macro_rules! stats_ctes {
     () => {
         "tree AS (
@@ -52,30 +60,34 @@ macro_rules! stats_ctes {
   UNION ALL
   SELECT tree.root, i.inhrelid FROM pg_catalog.pg_inherits i JOIN tree ON i.inhparent = tree.oid
 ), heaps AS (
-  SELECT m.root, h.oid, h.relkind, h.reltuples::float8 AS reltuples, h.relpages::int8 AS relpages, h.reltoastrelid
+  SELECT m.root, h.oid, h.relkind, h.reltuples::float8 AS reltuples, h.relpages::int8 AS relpages, h.reltoastrelid,
+         pg_catalog.pg_stat_get_live_tuples(h.oid)::float8 AS live
   FROM (SELECT r.oid AS root, r.oid FROM roots r WHERE r.kind IN ('r', 'm')
         UNION ALL SELECT tree.root, tree.oid FROM tree) m
   JOIN pg_catalog.pg_class h ON h.oid = m.oid
   WHERE h.relkind <> 'p'
-), toast_pages AS (
-  SELECT x.root, sum(t.relpages)::int8 AS pages
-  FROM heaps x JOIN pg_catalog.pg_class t ON t.oid = x.reltoastrelid
-  GROUP BY x.root
 ), index_pages AS (
-  SELECT x.root, sum(ic.relpages)::int8 AS pages
-  FROM (SELECT y.root, y.oid FROM heaps y UNION ALL SELECT y.root, y.reltoastrelid FROM heaps y) x
+  SELECT x.root, x.heap, sum(ic.relpages)::int8 AS pages
+  FROM (SELECT y.root, y.oid AS heap, y.oid FROM heaps y
+        UNION ALL SELECT y.root, y.oid, y.reltoastrelid FROM heaps y) x
   JOIN pg_catalog.pg_index i ON i.indrelid = x.oid
   JOIN pg_catalog.pg_class ic ON ic.oid = i.indexrelid
-  GROUP BY x.root
-), stats AS (
-  SELECT h.root, bool_and(h.reltuples >= 0) AS known_rows, sum(h.reltuples)::float8 AS reltuples,
-         bool_and(h.relkind = 'f' OR h.reltuples >= 0 OR h.relpages > 0) AS known_size,
-         (sum(h.relpages) + coalesce(max(t.pages), 0) + coalesce(max(ix.pages), 0))::int8
-           * pg_catalog.current_setting('block_size')::int8 AS bytes
+  GROUP BY x.root, x.heap
+), sized AS (
+  SELECT h.root, h.relkind, h.reltuples, h.relpages,
+         CASE WHEN h.live > 2 * h.reltuples AND h.reltuples >= 0 THEN h.live WHEN h.reltuples >= 0 THEN h.reltuples END
+           AS est_rows,
+         (h.relpages + coalesce(t.relpages, 0) + coalesce(ix.pages, 0))::float8 AS pages
   FROM heaps h
-  LEFT JOIN toast_pages t ON t.root = h.root
-  LEFT JOIN index_pages ix ON ix.root = h.root
-  GROUP BY h.root
+  LEFT JOIN pg_catalog.pg_class t ON t.oid = h.reltoastrelid
+  LEFT JOIN index_pages ix ON ix.root = h.root AND ix.heap = h.oid
+), stats AS (
+  SELECT z.root, bool_and(z.est_rows IS NOT NULL) AS known_rows, sum(z.est_rows)::float8 AS est_rows,
+         bool_and(z.relkind = 'f' OR z.reltuples >= 0 OR z.relpages > 0) AS known_size,
+         pg_catalog.round(sum(CASE WHEN z.reltuples > 0 THEN z.pages * z.est_rows / z.reltuples ELSE z.pages END))::int8
+           * pg_catalog.current_setting('block_size')::int8 AS bytes
+  FROM sized z
+  GROUP BY z.root
 )"
     };
 }
@@ -88,7 +100,7 @@ macro_rules! stats_rows {
         concat!(
             "CASE WHEN ",
             $kind,
-            " IN ('r', 'm', 'p') THEN CASE WHEN s.root IS NULL THEN 0 WHEN s.known_rows THEN s.reltuples ELSE -1 END END"
+            " IN ('r', 'm', 'p') THEN CASE WHEN s.root IS NULL THEN 0 WHEN s.known_rows THEN s.est_rows ELSE -1 END END"
         )
     };
 }

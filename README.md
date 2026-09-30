@@ -33,7 +33,8 @@ Everything below works today, with PostgreSQL.
   the server's estimates of its rows and its size on disk on its own line, dim and on the right
   (`orders   ~50k rows · 19 MB`), read with the schema's list in the same round trip from the
   statistics that `VACUUM` and `ANALYZE` keep, without opening it and without a lock on any
-  table (`r` lists them again). The name always wins: on a short line the size goes first, then
+  table (`r` lists them again); a table that has grown to more than twice the rows its last
+  `ANALYZE` saw shows the live rows the server has counted since, its size grown with them. The name always wins: on a short line the size goes first, then
   the rows; a table with no statistics yet shows nothing there, and the status bar says "rows and
   size unknown (no statistics yet)". An open table shows its structure, read
   from the catalog in one round trip the first time it opens (`r` reads it again, and its
@@ -42,7 +43,7 @@ Everything below works today, with PostgreSQL.
   table), Indexes (columns or expressions with their order, operator class and collation, as in
   `(created DESC)`, `UNIQUE`, method, partial predicate, whether a key or constraint owns it),
   Unique and Check Constraints and Triggers (timing, events with the columns of `UPDATE OF`,
-  row or statement, `WHEN` condition, function, disabled). Each key, index and check (one that
+  row or statement, function, disabled; a trigger with a `WHEN` condition opens to it). Each key, index and check (one that
   reads columns) opens to `Columns (n)`, which lists the columns it covers in its order, each as
   the Columns group shows it: an index key with its order, operator class and collation, an
   expression key as its text, the `INCLUDE` columns last and marked, a foreign key's columns

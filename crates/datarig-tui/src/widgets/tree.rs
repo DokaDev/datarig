@@ -89,10 +89,11 @@ impl ObjectView {
 }
 
 /// How many lines item `k` of group `g` opens to before its `Columns`: a foreign key the line
-/// of what it references; the others none.
+/// of what it references, a trigger with a `WHEN` condition the condition; the others none.
 pub fn item_details(s: &TableStructure, g: StructureGroup, k: usize) -> usize {
     match g {
         StructureGroup::ForeignKeys => usize::from(k < s.foreign_keys.len()),
+        StructureGroup::Triggers => usize::from(s.triggers.get(k).is_some_and(|t| t.condition.is_some())),
         _ => 0,
     }
 }

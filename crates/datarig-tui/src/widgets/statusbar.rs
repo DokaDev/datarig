@@ -72,8 +72,9 @@ pub(crate) fn draw_status(app: &mut App, area: Rect, buf: &mut Buffer) {
         segs.push((format!(" {label} "), style));
     }
     let push_sep = |segs: &mut Vec<(String, Style)>| segs.push((sep.to_string(), sep_style));
-    let mut policy_seg = None;
+    let (mut name_seg, mut policy_seg) = (None, None);
     if let Some((name, color, policy)) = conn {
+        name_seg = Some(segs.len());
         segs.push((format!(" {name}"), Style::new().fg(color).bg(theme::SURFACE).add_modifier(Modifier::BOLD)));
         policy_seg = Some(segs.len());
         segs.push((format!(" · {policy}"), Style::new().fg(theme::FG_MUTED).bg(theme::SURFACE)));
@@ -104,13 +105,21 @@ pub(crate) fn draw_status(app: &mut App, area: Rect, buf: &mut Buffer) {
     let lead = if segs.is_empty() { " " } else { sep };
     let fixed =
         |segs: &[(String, Style)]| segs.iter().map(|(s, _)| width(s)).sum::<usize>() + width(&lang) + width(lead);
-    // A message too long for its room takes the policy's when that makes it fit whole (the
-    // badge still says read-only).
+    // A message too long for its room takes the policy's (the badge still says read-only), then
+    // what it needs of the connection's name, which keeps its first [`NAME_MIN`] columns: the
+    // message is cut only when that is not enough.
     if let Some(i) = policy_seg
         && total.saturating_sub(fixed(&segs)) < msg_w
-        && total.saturating_sub(fixed(&segs) - width(&segs[i].0)) >= msg_w
     {
         segs.remove(i);
+    }
+    let over = msg_w.saturating_sub(total.saturating_sub(fixed(&segs)));
+    if let Some(i) = name_seg
+        && over > 0
+    {
+        let name = segs[i].0[1..].to_string();
+        let keep = width(&name).saturating_sub(over).max(NAME_MIN.min(width(&name)));
+        segs[i].0 = format!(" {}", clip(&name, keep));
     }
     let avail = total.saturating_sub(fixed(&segs));
     // The hint line: as many entries as fit next to the message, best first.
@@ -165,6 +174,9 @@ pub(crate) fn draw_status(app: &mut App, area: Rect, buf: &mut Buffer) {
         x += width(&s) as u16;
     }
 }
+
+/// The columns of the connection's name a long message leaves it.
+const NAME_MIN: usize = 8;
 
 /// The mode badge at the left end of the status bar and its style (lualine style): NORMAL,
 /// INSERT and VISUAL in their colors, COMMAND while the `:` command line is open, and a
