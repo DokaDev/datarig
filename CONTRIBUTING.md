@@ -58,8 +58,12 @@ archives (macOS and Linux, arm64 and x86_64; Windows x86_64), installs and tests
 formula from them, publishes the GitHub release with generated notes, then updates
 `Formula/datarig.rb` in [DokaDev/homebrew-tap](https://github.com/DokaDev/homebrew-tap) over
 SSH with that repository's deploy key (the `HOMEBREW_TAP_DEPLOY_KEY` secret). A
-`vX.Y.0-rc.N` tag (with that version in `Cargo.toml`) is a GitHub pre-release and leaves the
-tap alone. A pull request that changes the release files runs everything except publishing.
+`vX.Y.0-rc.N` tag (with that version in `Cargo.toml`) is always a GitHub pre-release. Whether it
+also updates the tap depends on whether a stable release exists yet: until the first one ships,
+the tap tracks the latest release candidate so `brew install`/`upgrade` stays usable during this
+pre-1.0 phase; once a stable release exists, later release candidates go back to being a GitHub
+pre-release only and leave the tap alone. A pull request that changes the release files runs
+everything except publishing.
 
 ## License
 
