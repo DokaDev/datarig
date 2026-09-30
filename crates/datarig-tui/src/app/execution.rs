@@ -53,7 +53,7 @@ impl App {
     /// connects it and runs once it is.
     pub(super) fn run_in(&mut self, id: TabId, statements: Vec<String>) {
         if self.tab_busy(id) {
-            self.flash(Notice::new(Label::QueryBusy, Level::Warning));
+            self.flash_busy();
             return;
         }
         let Some(t) = self.tabs.get(id) else { return };
@@ -79,7 +79,7 @@ impl App {
     /// before, so nothing it refuses ever reaches a session.
     pub(super) fn run_approved(&mut self, id: TabId, statements: Vec<String>) {
         if self.tab_busy(id) {
-            self.flash(Notice::new(Label::QueryBusy, Level::Warning));
+            self.flash_busy();
             return;
         }
         let Some(pid) = self.tabs.get(id).and_then(|t| t.profile) else { return };
@@ -846,10 +846,9 @@ impl App {
                 None
             }
             ev @ (DbEvent::Page { .. } | DbEvent::Done { .. } | DbEvent::Failed { .. })
-                if self
-                    .transient
-                    .as_ref()
-                    .is_some_and(|(m, _)| matches!(m.msg, Msg::Label(Label::QueryBusy | Label::QueryNoStatement))) =>
+                if self.transient.as_ref().is_some_and(|(m, _)| {
+                    matches!(m.msg, Msg::QueryBusy { .. } | Msg::Label(Label::QueryNoStatement))
+                }) =>
             {
                 // A finished query makes a busy/no-statement flash obsolete; show the result instead.
                 self.transient = None;

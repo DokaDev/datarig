@@ -88,7 +88,7 @@ impl App {
             return;
         }
         if t.exec.running.is_some() {
-            return self.flash(Notice::new(Label::QueryBusy, Level::Warning));
+            return self.flash_busy();
         }
         if !more {
             return self.flash(Notice::new(Label::ResultsPageLast, Level::Info));
@@ -187,7 +187,7 @@ impl App {
             return self.flash(Notice::new(Msg::ResultsCountComplete { count }, Level::Info));
         }
         if t.exec.running.is_some() {
-            return self.flash(Notice::new(Label::QueryBusy, Level::Warning));
+            return self.flash_busy();
         }
         let Some(pid) = t.profile else { return };
         if !(self.answer_here() || self.kept_answer_here()) {

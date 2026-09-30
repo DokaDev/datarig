@@ -250,6 +250,27 @@ fn a_guarded_keychain_call_that_does_not_answer_ends_at_the_limit() {
     assert_eq!(g.delete("b"), Ok(true));
 }
 
+/// A call given up on that returns after all is reported to the hook, once the store may be
+/// asked again; calls that answered in time are not.
+#[test]
+fn a_late_answer_is_reported_to_the_hook() {
+    use std::time::Duration;
+    let held = Arc::new(Held::default());
+    held.inner.set("a", "pw").unwrap();
+    let g = Arc::new(Guarded::new(held.clone(), Duration::from_millis(50)));
+    let (tx, rx) = std::sync::mpsc::channel();
+    let g2 = g.clone();
+    g.on_late(Arc::new(move |late| tx.send((late, g2.hanging())).unwrap()));
+    assert!(no_answer(&g.get("a").unwrap_err()));
+    assert!(rx.try_recv().is_err(), "still hanging");
+    held.release();
+    let (late, hanging) = rx.recv_timeout(Duration::from_secs(10)).unwrap();
+    assert_eq!(late, Late { call: Call::Get, account: "a".into(), ok: true });
+    assert!(!hanging, "reported after the store may be asked again");
+    g.set("b", "x").unwrap();
+    assert!(rx.recv_timeout(Duration::from_millis(100)).is_err(), "in time: not late");
+}
+
 #[test]
 fn a_guarded_keychain_passes_slow_answers_and_failures_through() {
     use std::time::Duration;

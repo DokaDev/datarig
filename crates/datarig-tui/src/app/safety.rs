@@ -70,7 +70,10 @@ impl App {
         // read-only on the server, so nothing runs on it until it connects again.
         let t = self.tabs.get(tab)?;
         if t.exec.session.is_some() && !t.exec.read_only {
-            return Some(Notice::new(Msg::SafetyReadOnlyReconnect { policy }, Level::Error));
+            return Some(Notice::new(
+                Msg::SafetyReadOnlyReconnect { policy, key: self.key_for(Action::ReconnectCurrent, Ctx::Nav) },
+                Level::Error,
+            ));
         }
         let mut prepared = self.prepared(tab);
         statements.iter().find_map(|sql| {

@@ -174,7 +174,13 @@ impl App {
         };
         let name = missing.name();
         if !sent {
-            return self.flash(Notice::new(Msg::ContextListStale { name }, Level::Warning));
+            return self.flash(Notice::new(
+                Msg::ContextListStale {
+                    name,
+                    key: self.key_for(Action::Explorer(ExplorerAction::Refresh), Ctx::Explorer),
+                },
+                Level::Warning,
+            ));
         }
         pending.asked.push(ask);
         self.pending_use = Some(pending);
@@ -233,7 +239,13 @@ impl App {
                     UseAsk::Databases => pending.database.clone().unwrap_or_else(|| self.own_database(p)),
                     UseAsk::Schemas(_) => pending.schema.clone().unwrap_or_default(),
                 };
-                self.flash(Notice::new(Msg::ContextListStale { name }, Level::Warning));
+                self.flash(Notice::new(
+                    Msg::ContextListStale {
+                        name,
+                        key: self.key_for(Action::Explorer(ExplorerAction::Refresh), Ctx::Explorer),
+                    },
+                    Level::Warning,
+                ));
             }
             Ok(()) => {
                 // "Asking the server again" is over.

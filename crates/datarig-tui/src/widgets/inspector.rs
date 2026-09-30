@@ -4,8 +4,10 @@
 //! of the selected row as `name: value`, with the column key marks. `Enter` keeps
 //! opening the cell viewer for very long values.
 
+use crate::app::action::{Action, GridAction};
 use crate::app::{App, DetailTab, Keys, Results};
 use crate::icons;
+use crate::keymap::Ctx;
 use crate::text::{clip, sanitize_cell, width, wrap};
 use crate::theme;
 use crate::widgets::grid::{CellRef, ResultSet, viewer_text};
@@ -156,7 +158,14 @@ fn draw_cell(app: &App, rs: &ResultSet, marks: &[KeyMarks], body: Rect, buf: &mu
         y += 1;
     }
     if cut {
-        put(buf, x, y, &app.i18n.label(Label::DetailMore), w, Style::new().fg(theme::ACCENT).bg(theme::BG));
+        put(
+            buf,
+            x,
+            y,
+            &app.i18n.msg(&Msg::DetailMore { key: app.key_for(Action::Grid(GridAction::ViewCell), Ctx::Grid) }),
+            w,
+            Style::new().fg(theme::ACCENT).bg(theme::BG),
+        );
     }
 }
 

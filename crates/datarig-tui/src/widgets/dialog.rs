@@ -1,7 +1,9 @@
 //! Centered modal boxes and the connect-time password prompt.
 
+use crate::app::action::Action;
 use crate::app::overlay::Overlay;
 use crate::app::{App, PromptPurpose};
+use crate::keymap::Ctx;
 use crate::text::{clip, wrap_words};
 use crate::theme;
 use crate::widgets::popup::clear_overlay;
@@ -176,7 +178,7 @@ pub(crate) fn draw_icons_ask(app: &App, area: Rect, buf: &mut Buffer) {
     let w = area.width.saturating_sub(8).min(64);
     let iw = (w as usize).saturating_sub(4);
     let surface = |fg| Style::new().fg(fg).bg(theme::SURFACE);
-    let hint = wrap_words(&app.i18n.label(Label::IconsAskHint), iw);
+    let hint = wrap_words(&app.i18n.msg(&Msg::IconsAskHint { key: app.key_for(Action::OpenSettings, Ctx::Nav) }), iw);
     // Border (2), the question, a blank line, the glyphs, a blank line, the hint, a blank line,
     // the buttons.
     let rect = centered(area, w, (hint.len() + 8) as u16);
@@ -224,7 +226,7 @@ pub(crate) fn draw_busy(app: &App, area: Rect, buf: &mut Buffer) {
     let w = area.width.saturating_sub(4).min(60);
     let lines = wrap_words(&text, (w as usize).saturating_sub(4));
     let rect = centered(area, w, lines.len() as u16 + 4);
-    let inner = modal(rect, &title, &app.i18n.label(Label::BusyKeys), buf);
+    let inner = modal(rect, &title, &app.i18n.msg(&Msg::BusyKeys { keys: app.busy_keys() }), buf);
     for (i, l) in lines.iter().enumerate() {
         put(
             buf,

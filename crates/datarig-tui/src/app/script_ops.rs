@@ -87,7 +87,7 @@ impl App {
             Ok(s) => s,
             Err(scripts::SaveError::Exists(p)) => return Err(exists_label(store, &p)),
             Err(e) => {
-                let error = self.reason_text(&Self::save_reason(&e));
+                let error = self.reason_text(&self.save_reason(&e));
                 self.flash(Notice::new(Msg::ScriptsSaveFailed { error }, Level::Error));
                 return Ok(());
             }
@@ -231,7 +231,7 @@ impl App {
                         self.flash(Notice::new(Msg::ScriptsSaved { name }, Level::Success));
                     }
                     Some(Err(e)) => {
-                        let error = self.reason_text(&Self::save_reason(&e));
+                        let error = self.reason_text(&self.save_reason(&e));
                         self.flash(Notice::new(Msg::ScriptsSaveFailed { error }, Level::Error))
                     }
                     None => {}
@@ -239,7 +239,7 @@ impl App {
             }
             KeyCode::Esc | KeyCode::Char('n') => {
                 self.overlays.close(OverlayKind::Confirm);
-                self.flash(Notice::new(Label::ScriptsConflictLater, Level::Warning));
+                self.flash(Notice::new(self.conflict_later(), Level::Warning));
             }
             _ => {}
         }
@@ -391,7 +391,8 @@ impl App {
     pub(super) fn open_script_chooser(&mut self) {
         self.refresh_scripts();
         if !self.script_list.iter().any(|e| !e.folder) {
-            return self.flash(Notice::new(Label::ScriptsNone, Level::Info));
+            return self
+                .flash(Notice::new(Msg::ScriptsNone { key: self.key_for(Action::ScriptSave, Ctx::Nav) }, Level::Info));
         }
         self.open_script_tree(super::script_tree::TreeMode::Open);
     }
@@ -430,7 +431,11 @@ impl App {
     /// `d` on a saved query (or `Space s d` on its tab): ask first.
     pub(super) fn request_delete_script(&mut self, path: String) {
         let open = self.tabs.find_script(&path).is_some();
-        let details = if open { vec![Msg::Label(Label::ScriptsDeleteOpenTab)] } else { Vec::new() };
+        let details = if open {
+            vec![Msg::ScriptsDeleteOpenTab { key: self.key_for(Action::ReopenTab, Ctx::Nav) }]
+        } else {
+            Vec::new()
+        };
         self.overlays.close(OverlayKind::Commands);
         self.overlays.push(Overlay::Confirm(Confirm {
             title: Label::ExplorerDeleteTitle,

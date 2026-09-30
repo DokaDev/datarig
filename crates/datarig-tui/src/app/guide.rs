@@ -467,4 +467,54 @@ impl App {
         }
         out
     }
+
+    /// The key a message names for `a`: the one the hint line would show in `ctx`. Unbound
+    /// there: the command that runs it (`:cancel`), else its name, which the command line
+    /// finds.
+    pub fn key_for(&self, a: Action, ctx: Ctx) -> String {
+        if let Some(k) = self.keymap.hint_keys(a, ctx, self.enhanced_keys) {
+            return keys::label(&k);
+        }
+        match command::COMMANDS.iter().find(|c| c.action == Some(a)) {
+            Some(c) => format!(":{}", c.name),
+            None => self.i18n.label(action::spec(a).label).to_string(),
+        }
+    }
+
+    /// The keys that quit while the busy notice waits: its own quit key and the cancel key
+    /// (which quits there, having nothing else to cancel).
+    pub fn busy_keys(&self) -> String {
+        let keys: Vec<String> = [Action::Quit, Action::CancelQuery]
+            .into_iter()
+            .filter_map(|a| self.keymap.hint_keys(a, Ctx::Busy, self.enhanced_keys))
+            .map(|k| keys::label(&k))
+            .fold(Vec::new(), |mut v, k| {
+                if !v.contains(&k) {
+                    v.push(k);
+                }
+                v
+            });
+        if keys.is_empty() { self.key_for(Action::Quit, Ctx::Busy) } else { keys.join("/") }
+    }
+
+    /// The keys line of the which-key popup, with the single key that opens the command line
+    /// from it (none bound: the line leaves it out).
+    pub fn which_key_footer(&self) -> Localized {
+        let origin = self.overlays.which_key().map_or(Ctx::Nav, |w| w.origin);
+        match self.keymap.hint_keys(Action::OpenCommands, origin, self.enhanced_keys) {
+            Some(k) if k.len() == 1 => self.i18n.msg(&Msg::WhichkeyKeys { key: keys::label(&k) }),
+            _ => self.i18n.label(Label::WhichkeyKeysPlain),
+        }
+    }
+
+    /// "A query is already running", with the key that cancels it.
+    pub(super) fn flash_busy(&mut self) {
+        let key = self.key_for(Action::CancelQuery, Ctx::Nav);
+        self.flash(Notice::new(Msg::QueryBusy { key }, Level::Warning));
+    }
+
+    /// A save refused because the file changed on disk, with the key that saves again.
+    pub(super) fn conflict_later(&self) -> Msg {
+        Msg::ScriptsConflictLater { key: self.key_for(Action::ScriptSave, Ctx::Nav) }
+    }
 }

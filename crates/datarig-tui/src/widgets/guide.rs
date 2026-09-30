@@ -24,7 +24,7 @@ pub(crate) fn draw_which_key(app: &App, area: Rect, buf: &mut Buffer) {
     let Some((title, all)) = app.which_key_items() else { return };
     let (items, footer): (Vec<_>, Vec<_>) = all.into_iter().partition(|i| !i.footer);
     let footer_h = if footer.is_empty() { 0 } else { 2 };
-    let keys_footer = app.i18n.label(Label::WhichkeyKeys);
+    let keys_footer = app.which_key_footer();
     let inner_w = area.width.saturating_sub(2) as usize;
     let key_w = items.iter().chain(&footer).map(|i| width(&i.key)).max().unwrap_or(1);
     let entry_w = |label: &str| key_w + 2 + width(label);
