@@ -569,7 +569,7 @@ fn disconnect_keeps_the_tabs_and_resets_the_connection() {
     assert_eq!(h.app.tab().editor.text(), SAMPLE_SQL, "the editor text survives");
     assert!(h.app.conns.catalog(h.app.tab().profile).relations.is_empty());
     assert!(h.status(160, 45).contains("Disconnected from local-pg; the open transaction was rolled back"));
-    assert!(h.screen(160, 45).lines().next().unwrap().contains("console 1 ○ ×"));
+    assert!(h.screen(160, 45).lines().next().unwrap().contains("console 1 ×"));
     // Connect another profile from the explorer; its node shows the attempt.
     h.explore("other");
     h.key(KeyCode::Enter);

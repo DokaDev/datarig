@@ -567,7 +567,7 @@ async fn a_restored_tab_connects_only_when_it_runs() {
 
 /// `Ctrl+E` on a restored table tab of a table with more rows
 /// than a page pages in the driver's own transaction, which is not the user's: no user block,
-/// the tab connected (`●`), nothing to ask on quit.
+/// the tab connected (no `◆`), nothing to ask on quit.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_restored_table_tab_pages_outside_any_user_transaction() {
     use datarig_core::workspace::{self, ExplorerState, TabState, WorkspaceState};

@@ -2,7 +2,7 @@
 source: crates/datarig-tui/tests/ui_snapshots.rs
 expression: "h.draw(w, hh).backend()"
 ---
-"╭ Explorer ────────────────────────────╮ 1 console 1 ○ ×                                                                                                        "
+"╭ Explorer ────────────────────────────╮ 1 console 1 ×                                                                                                          "
 "│  ＋ New connection                   │╭ Query · console 1 ───────────────────────────────────────────────────────────────────────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
 "│▾ ●   local-pg                        ││ local-pg / datarig  127.0.0.1:55432 · policy: default                                    Space c s switch connection │"
 "│  ▾ datarig default                   ││  1 -- datarig 🐘  Ctrl+E: run the statement under the cursor                                                         │" Hidden by multi-width symbols: [(57, " ")]

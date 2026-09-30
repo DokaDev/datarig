@@ -90,7 +90,7 @@ fn transactions_and_cancel_stay_in_their_tab() {
     h.tab_db(0, DbEvent::Block(true));
     h.tab_db(0, DbEvent::TxOpen(true));
     assert!(h.status(160, 45).contains("TX open"));
-    // By shape first: `◆`, not the connected `●` in another color.
+    // By shape first: `◆` after the name; the number stays in the profile's color.
     assert!(tab_line(&mut h, 160, 45).contains("console 1 ◆ ×"), "the tab shows its open transaction");
     assert_eq!(tab_state(&h, 0), State::TxOpen, "in the warning color, not the connected accent");
     h.ctrl('t');
@@ -105,11 +105,8 @@ fn transactions_and_cancel_stay_in_their_tab() {
     let line = tab_line(&mut h, 160, 45);
     let spinner = datarig_tui::widgets::SPINNER[0];
     assert!(line.matches(spinner).count() == 2, "both tabs run: {line}");
-    assert_eq!(
-        (tab_state(&h, 0), tab_state(&h, 1)),
-        (State::Running, State::Running),
-        "running shows over the open transaction"
-    );
+    assert!(line.contains(&format!(" {spinner} console 1 ◆ ×")), "the transaction stays marked: {line}");
+    assert_eq!((tab_state(&h, 0), tab_state(&h, 1)), (State::Running, State::Running));
     h.ctrl('c');
     assert!(h.session_cancelled(1), "the active tab's statement");
     assert!(!h.session_cancelled(2), "not the other tab's");
@@ -327,7 +324,8 @@ fn disconnecting_closes_every_tab_session_and_keeps_the_tabs() {
     assert!(h.session_closed(0) && h.session_closed(1));
     assert_eq!(h.app.tabs.len(), 2, "the tabs stay");
     assert!(h.app.current_conn().is_some_and(|c| !c.connected && c.meta.is_none()));
-    assert!(tab_line(&mut h, 160, 45).contains("○"), "{}", tab_line(&mut h, 160, 45));
+    let bar = tab_line(&mut h, 160, 45);
+    assert!(bar.contains("1 console 1 ×") && !bar.contains(['○', '●']), "{bar}");
 }
 
 /// Disconnecting retires every tab session of the profile: a late event of a closed session
@@ -445,36 +443,85 @@ fn a_click_on_the_tab_bar_activates_that_tab() {
     assert!(h.app.tabs.get(second).is_none(), "the tab under the pointer closed");
 }
 
-/// The state mark of a tab, by shape first and in theme colors (never red): `○`
-/// dim with no session, `●` accent once connected, the spinner (accent) while a statement
-/// runs, `◆` warning while the user's transaction is open, `!` warm for an aborted
-/// transaction or a lost connection.
+/// How tab 1 looks on the bar: its number's cell (symbol, color), and the warning mark between
+/// its name and `×` with the mark's color. The bar never shows `○` or `●`.
+fn tab1_look(h: &mut Harness) -> (String, ratatui::style::Color, Option<(String, ratatui::style::Color)>) {
+    let t = h.draw(160, 45);
+    let buf = t.backend().buffer();
+    let x0 = h.app.layout.tree.x + h.app.layout.tree.width;
+    let row: String = (x0..160).map(|x| buf[(x, 0)].symbol()).collect();
+    assert!(!row.contains(['○', '●']), "no connection dot in the tab bar: {row}");
+    let close = (x0..160u16).find(|x| buf[(*x, 0)].symbol() == "×").expect("the close button");
+    let num = &buf[(x0 + 1, 0)];
+    let before = &buf[(close - 2, 0)];
+    let mark = ["◆", "!"].contains(&before.symbol()).then(|| (before.symbol().to_string(), before.fg));
+    (num.symbol().to_string(), num.fg, mark)
+}
+
+/// The tab's number carries its connection, in theme colors (never red): muted with no session,
+/// the profile's color once connected, the status bar's spinner (accent) in its place while a
+/// statement runs; after the name `◆` (warning) while the user's transaction is open, also while
+/// a statement runs in it, and `!` (warm) for an aborted transaction or a lost connection.
 #[test]
-fn the_state_mark_says_what_the_tabs_session_does() {
-    use datarig_tui::theme;
+fn the_tab_number_carries_the_connection_state() {
+    use datarig_tui::theme::{self, Theme};
+    use datarig_tui::widgets::SPINNER;
+    for th in [theme::DARK, theme::TERMINAL] {
+        let mut h = Harness::connected(Lang::En);
+        h.app.theme = std::sync::Arc::new(th.clone());
+        let profile = theme::profile_color(h.app.profiles[0].display_color());
+        let one = |c| ("1".to_string(), c);
+        let look = |h: &mut Harness| {
+            let (n, c, mark) = tab1_look(h);
+            ((n, c), mark)
+        };
+        let warn = |m: &str, c| Some((m.to_string(), c));
+        let Theme { fg_muted, accent, warning, accent_warm, .. } = th;
+        assert_eq!(look(&mut h), (one(fg_muted), None), "no session yet");
+        h.ctrl('e');
+        assert_eq!(look(&mut h), ((SPINNER[0].to_string(), accent), None), "running: the spinner, as wide");
+        assert!(tab_line(&mut h, 160, 45).contains(&format!(" {} console 1 ×", SPINNER[0])));
+        h.tab_db(0, done(last_query_id(&h, 0)));
+        assert_eq!(look(&mut h), (one(profile), None), "connected");
+        h.tab_db(0, DbEvent::Block(true));
+        h.tab_db(0, DbEvent::TxOpen(true));
+        assert_eq!(look(&mut h), (one(profile), warn("◆", warning)), "the user's transaction");
+        h.ctrl('e');
+        assert_eq!(look(&mut h), ((SPINNER[0].to_string(), accent), warn("◆", warning)), "running in it");
+        h.tab_db(0, done(last_query_id(&h, 0)));
+        h.tab_db(0, DbEvent::TxAborted(true));
+        assert_eq!(look(&mut h), (one(profile), warn("!", accent_warm)), "aborted: ROLLBACK required");
+        h.tab_db(0, DbEvent::Lost { error: "gone".into() });
+        assert_eq!(look(&mut h), (one(fg_muted), warn("!", accent_warm)), "lost: not connected");
+        // Icons off: the same (plain Unicode, not Nerd Font glyphs).
+        h.app.icons = datarig_core::config::IconsSetting::Off;
+        assert_eq!(look(&mut h), (one(fg_muted), warn("!", accent_warm)));
+    }
+}
+
+/// A tab whose number shows the spinner is still tab `n`: `Space n`, `g t` and a click on the
+/// spinner reach it (they never read the drawn digit).
+#[test]
+fn a_running_tab_is_still_reached_by_its_number() {
+    use datarig_tui::widgets::SPINNER;
+    use ratatui::crossterm::event::{MouseButton, MouseEventKind};
     let mut h = Harness::connected(Lang::En);
-    let mark = |h: &mut Harness| {
-        let t = h.draw(160, 45);
-        let buf = t.backend().buffer();
-        let close = (0..160u16).find(|x| buf[(*x, 0)].symbol() == "×").expect("the close button");
-        let cell = &buf[(close - 2, 0)];
-        (cell.symbol().to_string(), cell.fg)
-    };
-    assert_eq!(mark(&mut h), ("○".to_string(), theme::DARK.fg_dim), "no session yet");
-    h.ctrl('e');
-    assert_eq!(mark(&mut h), (datarig_tui::widgets::SPINNER[0].to_string(), theme::DARK.accent), "running");
-    h.tab_db(0, done(last_query_id(&h, 0)));
-    assert_eq!(mark(&mut h), ("●".to_string(), theme::DARK.accent), "connected");
-    h.tab_db(0, DbEvent::Block(true));
-    h.tab_db(0, DbEvent::TxOpen(true));
-    assert_eq!(mark(&mut h), ("◆".to_string(), theme::DARK.warning), "a transaction is open: a shape of its own");
-    h.tab_db(0, DbEvent::TxAborted(true));
-    assert_eq!(mark(&mut h), ("!".to_string(), theme::DARK.accent_warm), "aborted: ROLLBACK required");
-    h.tab_db(0, DbEvent::Lost { error: "gone".into() });
-    assert_eq!(mark(&mut h), ("!".to_string(), theme::DARK.accent_warm), "lost");
-    // Icons off: the same marks (plain Unicode, not Nerd Font glyphs).
-    h.app.icons = datarig_core::config::IconsSetting::Off;
-    assert_eq!(mark(&mut h).0, "!");
+    h.ctrl('e'); // tab 1 runs
+    h.ctrl('t');
+    assert_eq!(h.app.tabs.active_index(), 1);
+    let line = tab_line(&mut h, 160, 45);
+    assert!(line.contains(&format!(" {} console 1 ×", SPINNER[0])) && !line.contains(" 1 console 1"), "{line}");
+    h.keys(" 1");
+    assert_eq!(h.app.tabs.active_index(), 0, "Space 1");
+    h.keys("gt");
+    assert_eq!(h.app.tabs.active_index(), 1, "g t");
+    h.keys("gt");
+    assert_eq!(h.app.tabs.active_index(), 0, "g t wraps to the running tab");
+    h.keys(" 2");
+    let x = column_of(&mut h, 160, 45, 0, SPINNER[0]).expect("the spinner is drawn");
+    h.mouse(MouseEventKind::Down(MouseButton::Left), x, 0);
+    assert_eq!(h.app.tabs.active_index(), 0, "a click on the spinner");
+    assert!(h.app.tab().exec.running.is_some(), "still running");
 }
 
 /// A click on a tab's `×` closes it as `Ctrl+W` does: at once when nothing would

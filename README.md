@@ -29,6 +29,9 @@ Everything below works today, with PostgreSQL.
 **Workspace**
 - Several connections at once, each with its own metadata session, schema tree and completion
   catalog. A tab belongs to one connection; tabs of different connections sit side by side.
+  A tab's number shows its connection: in the profile's color while connected, muted while not,
+  and a spinner in its place while a statement runs. `◆` after the name marks your open
+  transaction, `!` an aborted transaction or a lost connection.
 - The explorer lists every connection profile, the server's databases, their schemas, tables and
   views (materialized views with an icon of their own). Each table and materialized view shows
   the server's estimates of its rows and its size on disk on its own line, dim and on the right

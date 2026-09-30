@@ -2,7 +2,7 @@
 source: crates/datarig-tui/tests/ui_snapshots.rs
 expression: backend
 ---
-"╭ Explorer ────────────╮ 1 console 1 ○ ×                                        "
+"╭ Explorer ────────────╮ 1 console 1 ×                                          "
 "│ ╭ Keys — Explorer ─────────────────────────────────────────────────────────╮─╮"
 "│▾│ / search all keys · Esc close                                            │t│"
 "│ │──────────────────────────────────────────────────────────────────────────│e│"

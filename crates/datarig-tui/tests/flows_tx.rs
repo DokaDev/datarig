@@ -221,7 +221,7 @@ fn quit_asks(h: &mut Harness) -> bool {
 }
 
 /// The transaction the app opens to page a result outside the user's block is not
-/// the user's: the tab is connected (`●`), the status bar says no "TX open", and quitting (or
+/// the user's: the tab is connected (no `◆`), the status bar says no "TX open", and quitting (or
 /// closing the tab) asks nothing, since closing the portal of a plain read loses nothing.
 #[test]
 fn the_apps_paging_transaction_is_not_the_users() {
@@ -231,7 +231,7 @@ fn the_apps_paging_transaction_is_not_the_users() {
     assert!(h.app.tab().exec.tx_open, "the server has a transaction open");
     assert_eq!(state(&h), State::Connected);
     let bar = h.screen(160, 45).lines().next().unwrap().to_string();
-    assert!(bar.contains("console 1 ● ×") && !bar.contains('◆'), "{bar}");
+    assert!(bar.contains("console 1 ×") && !bar.contains('◆'), "{bar}");
     let status = h.status(160, 45);
     assert!(!status.contains("TX open"), "{status}");
     h.app.dispatch(datarig_tui::app::action::Action::CloseTab);

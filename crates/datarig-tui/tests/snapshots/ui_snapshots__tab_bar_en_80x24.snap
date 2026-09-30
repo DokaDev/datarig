@@ -2,7 +2,7 @@
 source: crates/datarig-tui/tests/ui_snapshots.rs
 expression: backend
 ---
-"╭ Explorer ────────────╮ 1 console 1 ⠋ ×  2 console 2 ○ ×  3 console 3 ! ×      "
+"╭ Explorer ────────────╮ ⠋ console 1 ◆ ×  2 console 2 ×  3 console 3 ! ×        "
 "│  ＋ New connection   │╭ Query · console 3 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
 "│▾ ●   local-pg        ││ local-pg / datarig  127.0.0.1:55432 · policy: default│"
 "│  ▾ datarig default   ││  1▎select 3                                          │"
