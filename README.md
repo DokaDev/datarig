@@ -160,7 +160,22 @@ Planned, in no particular order and with no dates:
 
 Available from the first release (none has been published yet):
 
-- **Homebrew** (macOS and Linux, arm64 and x86_64): `brew install dokadev/tap/datarig`
+- **Homebrew** (macOS and Linux, arm64 and x86_64), in one line:
+
+  ```sh
+  brew install dokadev/tap/datarig
+  ```
+
+  or add the tap once and use the short name from then on:
+
+  ```sh
+  brew tap dokadev/tap
+  brew install datarig
+  brew upgrade datarig   # later, for a new release
+  ```
+
+  datarig may be submitted to homebrew-core later, so that `brew install datarig` works
+  without the tap.
 - **GitHub Releases**: download the archive for your platform from
   [Releases](https://github.com/DokaDev/datarig/releases) and put the `datarig` binary on your
   `PATH`. There are archives for macOS and Linux (arm64 and x86_64) and Windows (x86_64,
