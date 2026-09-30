@@ -265,7 +265,8 @@ fn brackets_are_no_tab_keys() {
 }
 
 /// `Ctrl+C` cancels the query in every editor mode (it has no copy meaning), and the vim keys
-/// the editor handles are reserved there, `D`, `C`, `Y` and `V` included.
+/// the editor handles are reserved there, `D`, `C`, `Y` and `V` included, the motions,
+/// operators, edits and scrolling keys of more than one stroke too.
 #[test]
 fn ctrl_c_cancels_everywhere_and_vim_keys_reach_the_editor() {
     let km = Keymap::default();
@@ -273,13 +274,22 @@ fn ctrl_c_cancels_everywhere_and_vim_keys_reach_the_editor() {
         assert_eq!(last(&km, ctx, "ctrl+c"), act("query.cancel"), "{ctx:?}");
     }
     for ctx in [Ctx::VimNormal, Ctx::VimVisual] {
-        for key in ["V", "v", "o", "D", "C", "Y", "X", "3", "0", "g g", "esc"] {
+        for key in [
+            "V", "v", "o", "D", "C", "Y", "X", "3", "0", "g g", "esc", "W", "B", "E", "g e", "g E", "f", "F", "t", "T",
+            ";", ",", "%", "{", "}", "H", "M", "L", "r", "J", "g J", "~", ".", ">", "<", "g u", "g U", "g ~", "ctrl+d",
+            "ctrl+u", "ctrl+f", "ctrl+b", "z z", "z t", "z b", "z enter",
+        ] {
             assert_eq!(last(&km, ctx, key), Resolved::Forward(k(key)), "{ctx:?} {key}");
             assert!(km.bindings().iter().any(|b| b.ctx == ctx && b.keys == k(key)), "{key} reserved in {ctx:?}");
         }
     }
     for key in ["ctrl+w", "ctrl+u", "esc", "enter"] {
         assert_eq!(last(&km, Ctx::VimInsert, key), Resolved::Forward(k(key)), "{key}");
+    }
+    // While a command waits for its next key (`d…`, `f…`, `i(`) the keys are resolved in the
+    // workspace: the leader, `:` and the brackets reach the editor as they are.
+    for key in ["space", ":", "(", "}", "w", "j", "g", "G", "tab", "enter", "\""] {
+        assert_eq!(last(&km, Ctx::Workspace, key), Resolved::Forward(k(key)), "{key}");
     }
 }
 

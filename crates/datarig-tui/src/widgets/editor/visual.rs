@@ -1,11 +1,13 @@
-//! Visual mode: by character (`v`) or by whole lines (`V`), the selection as text, and the
-//! operators on it.
+//! Visual mode: by character (`v`) or by whole lines (`V`), the selection as text, text
+//! objects that set or grow it, and the operators on it.
 
 use super::buffer::graphemes;
-use super::motion::Motion;
-use super::vim::{Op, Target};
+use super::edit::Case;
+use super::motion::RangeKind;
+use super::textobj::Object;
+use super::vim::{Op, Target, Token};
 use super::{EdEvent, Editor, Mode, vim};
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
 impl Editor {
     /// Start Visual mode (by line with `lines`) with the other end at `anchor`.
@@ -30,6 +32,12 @@ impl Editor {
     fn visual_ends(&self) -> ((usize, usize), (usize, usize)) {
         let cursor = (self.row, self.col);
         if self.anchor <= cursor { (self.anchor, cursor) } else { (cursor, self.anchor) }
+    }
+
+    /// Where the selection starts (the start of its first line by line).
+    fn visual_start(&self) -> (usize, usize) {
+        let (a, _) = self.visual_ends();
+        if self.visual_lines { (a.0, 0) } else { a }
     }
 
     /// Byte range of the selection: by character both ends included (a selected line end is
@@ -78,43 +86,40 @@ impl Editor {
     }
 
     pub(super) fn key_visual(&mut self, key: KeyEvent) -> EdEvent {
-        if key.modifiers.contains(KeyModifiers::CONTROL) {
-            self.cmd = vim::Pending::default();
-            return EdEvent::None;
-        }
-        if key.code == KeyCode::Esc {
-            self.cmd = vim::Pending::default();
-            self.exit_visual();
-            return EdEvent::Moved;
-        }
-        let ch = match key.code {
-            KeyCode::Char(c) => Some(c),
-            _ => None,
-        };
-        if let Some(d) = ch.and_then(|c| c.to_digit(10))
-            && !self.cmd.waits_g()
-            && self.cmd.digit(d)
-        {
-            return EdEvent::None;
-        }
+        let token = self.token(key, true);
         let (n, explicit) = self.cmd.count();
-        if self.cmd.waits_g() {
-            self.cmd = vim::Pending::default();
-            if ch == Some('g') {
-                self.move_by(Motion::Top, n, explicit);
-            }
-            return EdEvent::Moved;
-        }
-        if ch == Some('g') {
-            self.cmd.set_g();
+        if token == Token::More {
             return EdEvent::None;
         }
         self.cmd = vim::Pending::default();
-        if let Some(m) = ch.map_or_else(|| Motion::of_key(key.code), Motion::of_char) {
-            self.move_by(m, n, explicit);
-            return EdEvent::Moved;
+        match token {
+            Token::Cancel if key.code == KeyCode::Esc => {
+                self.exit_visual();
+                EdEvent::Moved
+            }
+            Token::Motion(m) => {
+                self.move_by(m, n, explicit);
+                EdEvent::Moved
+            }
+            Token::Object(o, around) => self.visual_object(o, around, n),
+            Token::Ctrl(c @ ('d' | 'u')) => self.scroll_half(c == 'd', n, explicit),
+            Token::Ctrl(c @ ('f' | 'b')) => self.scroll_page(c == 'f', n),
+            Token::Z(c) => self.scroll_cursor(c, n, explicit),
+            Token::Replace('\n') => EdEvent::None,
+            Token::Replace(ch) => {
+                self.record_selection();
+                let (to, span) = (self.visual_start(), self.visual_bounds());
+                self.replace_span(ch, span, to)
+            }
+            Token::G(c @ ('u' | 'U' | '~')) => self.visual_case(c),
+            Token::G('J') => self.visual_join(false),
+            Token::Key(c) => self.visual_command(c, n),
+            _ => EdEvent::None,
         }
-        let Some(c) = ch else { return EdEvent::None };
+    }
+
+    /// The command keys of Visual mode.
+    fn visual_command(&mut self, c: char, n: usize) -> EdEvent {
         match c {
             'o' => {
                 let cursor = (self.row, self.col);
@@ -144,15 +149,72 @@ impl Editor {
                 self.apply(Op::Yank, t, to)
             }
             'd' | 'x' | 'D' | 'X' => {
+                self.record_selection();
                 let t = self.visual_target(c.is_ascii_uppercase());
                 self.apply(Op::Delete, t, (self.row, self.col))
             }
             'c' | 's' | 'C' | 'S' => {
+                self.record_selection();
                 let t = self.visual_target(c.is_ascii_uppercase());
                 self.apply(Op::Change, t, (self.row, self.col))
             }
+            'u' | 'U' | '~' => self.visual_case(c),
+            'J' => self.visual_join(true),
+            '>' | '<' => {
+                self.record_selection();
+                let (a, b) = self.visual_ends();
+                self.mode = Mode::Normal;
+                self.shift_lines(a.0, b.0, n, c == '>')
+            }
             _ => EdEvent::None,
         }
+    }
+
+    /// `.` repeats a Visual mode operator on as much text as it took.
+    fn record_selection(&mut self) {
+        let sel = self.selection_input();
+        self.rec.select(sel);
+    }
+
+    /// `u` `U` `~` (and `gu` `gU` `g~`) on the selection.
+    fn visual_case(&mut self, c: char) -> EdEvent {
+        self.record_selection();
+        let case = match c {
+            'u' => Case::Lower,
+            'U' => Case::Upper,
+            _ => Case::Toggle,
+        };
+        let (to, span) = (self.visual_start(), self.visual_bounds());
+        self.mode = Mode::Normal;
+        self.recase_span(case, span, to)
+    }
+
+    /// `J` (`spaces`) and `gJ`: join the selected lines (at least two).
+    fn visual_join(&mut self, spaces: bool) -> EdEvent {
+        self.record_selection();
+        let (a, b) = self.visual_ends();
+        self.mode = Mode::Normal;
+        self.join_lines(a.0, b.0 - a.0 + 1, spaces)
+    }
+
+    /// A text object in Visual mode: it becomes the selection (a word, a string or a block by
+    /// character, paragraphs by line), or grows it when it is more than the cursor.
+    fn visual_object(&mut self, o: Object, around: bool, count: usize) -> EdEvent {
+        let cursor = (self.row, self.col);
+        let grow = (self.anchor != cursor).then_some(self.anchor);
+        let Some(f) = self.object(o, count, around, grow) else { return EdEvent::None };
+        self.anchor = f.start;
+        let end = match f.kind {
+            RangeKind::Exclusive if f.end.1 > 0 => (f.end.0, f.end.1 - 1),
+            RangeKind::Exclusive if f.end.0 > 0 => (f.end.0 - 1, self.gcount(f.end.0 - 1).saturating_sub(1)),
+            _ => f.end,
+        };
+        (self.row, self.col) = end;
+        self.want_x = f.eol.then_some(usize::MAX);
+        if !f.keep {
+            self.visual_lines = f.kind == RangeKind::Linewise;
+        }
+        EdEvent::Moved
     }
 }
 

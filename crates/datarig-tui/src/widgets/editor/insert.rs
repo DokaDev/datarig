@@ -25,6 +25,7 @@ impl Editor {
     }
 
     pub(super) fn leave_insert(&mut self) {
+        self.ins_repeat = None;
         self.drop_autoindent();
         if self.insert_snap {
             self.drop_empty_step();
@@ -44,10 +45,12 @@ impl Editor {
         }
         self.ins_start = (self.row, self.col);
         self.ai_row = None;
+        self.ins_repeat = None;
+        self.rec.moved_in_insert();
     }
 
     /// A line that holds only the indent Enter, `o` or `O` put there loses that indent.
-    fn drop_autoindent(&mut self) {
+    pub(super) fn drop_autoindent(&mut self) {
         let Some(r) = self.ai_row.take() else { return };
         let line = &self.lines[r];
         if !line.is_empty() && indent_of(line).len() == line.len() {

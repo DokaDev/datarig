@@ -22,7 +22,8 @@ pub fn render() -> String {
          - **[text]** text input: letters, digits, symbols and `Space` are typed. No leader, no Hangul mapping.\n\
          - **[editor]** the query editor: its keys may hide keys of the contexts around it, except protected keys.\n\
          - **Hangul**: outside text input a Korean 2-set jamo or syllable counts as the QWERTY key(s) at its \
-         place (U+3153 = `j`, U+D558 = `g k`); the status bar then shows the Korean input-source mark.\n\
+         place (U+3153 = `j`, U+D558 = `g k`); the status bar then shows the Korean input-source mark. The \
+         character vim's `f t F T r` wait for is taken as typed.\n\
          - **R**: repeats while the key is held (terminal auto-repeat).\n\
          - **Key guide**: after `Space` a which-key popup lists the keys that may follow (after 300 ms; \
          `Backspace` goes up a level, `Esc` closes). `Space ?` or `F1` open the keyboard help, the same \
@@ -35,14 +36,23 @@ pub fn render() -> String {
          screen, `:set commands.position=bottom`). It runs the commands listed at the end (`:conn <profile>`, `:set <setting>=<value>`, \
          …) and finds every action by name; see the tables at the end.\n\
          - **Vim**: the editor has vim keys. `i` starts typing and `Esc` stops (the hint line says so). \
-         Implemented: the motions `h j k l w b e 0 ^ $ gg G`, the arrows, `Home` and `End`, with counts \
-         (`5j`, `10G`); the operators `d c y` with any of them, doubled for whole lines (`dd cc yy`), counts \
-         before and after (`3dd`, `d2w`, `2d3w`); `x X s S D C Y p P u Ctrl+R`; `i a I A o O`; Visual mode \
-         by character (`v`) and by line (`V`) with `y d x c`, `Y D X C S` (whole lines) and `o` (the other \
-         end); in Insert mode `Ctrl+W` (the word before the cursor), `Ctrl+U` (the line before the cursor) \
-         and `Enter` keeping the indent. One command is one undo step. There is one register, not the \
-         clipboard. A paste from the terminal goes in at the cursor in every mode (over the selection in \
-         Visual mode). The other reserved vim keys do nothing yet.\n\
+         Implemented, all with counts: the motions `h j k l w b e W B E ge gE 0 ^ $ gg G`, `f F t T ; ,` \
+         (the character is taken as typed, Hangul included), `%` (the matching bracket of `( ) [ ] { }`, \
+         brackets in strings and comments left out; `50%` goes to the middle line), `{ }`, `H M L`, the \
+         arrows, `Home` and `End`; the operators `d c y`, `gu gU g~` (case) and `> <` (indent by 4 \
+         columns, written with spaces as `Tab` types them) with any motion or text object, doubled for \
+         whole lines (`dd cc yy guu gUU g~~ >> <<`), counts before and after (`3dd`, `d2w`, `2d3w`); the \
+         text objects `iw aw iW aW`, `i( a(` (`ib ab`), `i[ a[`, `i{ a{` (`iB aB`), `i< a<`, `i\" a\" \
+         i' a'`, ``i` a` `` and `ip ap`; `x X s S D C Y p P r J gJ ~ u Ctrl+R`; `.` (the last change \
+         again, what was typed in Insert mode included; `3.` with a new count); `i a I A o O` (a count \
+         types the text that many times); scrolling with `Ctrl+D Ctrl+U Ctrl+F Ctrl+B zz zt zb`; Visual \
+         mode by character (`v`) and by line (`V`) with the motions and text objects, `y d x c`, `Y D X \
+         C S` (whole lines), `r J gJ u U ~ > <` and `o` (the other end); in Insert mode `Ctrl+W` (the \
+         word before the cursor), `Ctrl+U` (the line before the cursor) and `Enter` keeping the indent. \
+         One command is one undo step. There is one register, not the clipboard. A paste from the \
+         terminal goes in at the cursor in every mode (over the selection in Visual mode). Unlike Vim, a \
+         tab is 4 columns wide and a completion taken from the popup is not part of what `.` repeats. \
+         The other reserved vim keys do nothing yet.\n\
          - **Reserved** keys belong to a widget (vim, a dialog) or to an action that is not \
          implemented yet. They cannot be remapped.\n\n",
     );

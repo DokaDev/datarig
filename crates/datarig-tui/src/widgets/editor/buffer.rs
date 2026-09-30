@@ -183,8 +183,10 @@ impl Editor {
         self.gcount(r)
     }
 
+    /// The first non-blank of line `r`; on a line of blanks only, its last one (Vim).
     pub(super) fn first_nonblank(&self, r: usize) -> usize {
-        graphemes(&self.lines[r]).iter().position(|g| class(g) != 0).unwrap_or(0)
+        let gs = graphemes(&self.lines[r]);
+        gs.iter().position(|g| class(g) != 0).unwrap_or(gs.len().saturating_sub(1))
     }
 
     /// Keep the cursor on the text: Insert mode may sit after the line's last grapheme, the

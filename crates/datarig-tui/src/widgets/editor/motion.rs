@@ -17,6 +17,13 @@ pub(super) enum Motion {
     WordForward,
     WordBack,
     WordEnd,
+    /// `W`, `B`, `E`: words are runs of non-blanks.
+    BigWordForward,
+    BigWordBack,
+    BigWordEnd,
+    /// `ge`, `gE`: the end of the word before.
+    WordEndBack,
+    BigWordEndBack,
     LineStart,
     FirstNonBlank,
     LineEnd,
@@ -24,6 +31,24 @@ pub(super) enum Motion {
     Top,
     /// `G`: the last line, or line `count`.
     Bottom,
+    /// `f` `F` `t` `T` (`till`: stop next to the character); `again`: repeated by `;` or `,`,
+    /// when `t` does not stay on a character right next to the cursor.
+    Find {
+        ch: char,
+        forward: bool,
+        till: bool,
+        again: bool,
+    },
+    /// `%`: the bracket matching the one under or after the cursor; with a count, that
+    /// percentage of the text.
+    Match,
+    /// `}` and `{`: the next or previous empty line.
+    ParaForward,
+    ParaBack,
+    /// `H`, `M`, `L`: the top, middle or bottom line on screen.
+    ScreenTop,
+    ScreenMiddle,
+    ScreenBottom,
 }
 
 /// How an operator takes the text between the cursor and where a motion leads.
@@ -55,10 +80,29 @@ impl Motion {
             'w' => Motion::WordForward,
             'b' => Motion::WordBack,
             'e' => Motion::WordEnd,
+            'W' => Motion::BigWordForward,
+            'B' => Motion::BigWordBack,
+            'E' => Motion::BigWordEnd,
             '0' => Motion::LineStart,
             '^' => Motion::FirstNonBlank,
             '$' => Motion::LineEnd,
             'G' => Motion::Bottom,
+            '%' => Motion::Match,
+            '}' => Motion::ParaForward,
+            '{' => Motion::ParaBack,
+            'H' => Motion::ScreenTop,
+            'M' => Motion::ScreenMiddle,
+            'L' => Motion::ScreenBottom,
+            _ => return None,
+        })
+    }
+
+    /// The motions after `g` (`gg`, `ge`, `gE`).
+    pub(super) fn of_g(c: char) -> Option<Motion> {
+        Some(match c {
+            'g' => Motion::Top,
+            'e' => Motion::WordEndBack,
+            'E' => Motion::BigWordEndBack,
             _ => return None,
         })
     }
@@ -75,46 +119,70 @@ impl Motion {
         })
     }
 
-    fn kind(self) -> RangeKind {
+    /// How an operator takes the text (`%` with a count takes lines).
+    fn kind(self, explicit: bool) -> RangeKind {
         match self {
             Motion::Left
             | Motion::Right
             | Motion::WordForward
             | Motion::WordBack
+            | Motion::BigWordForward
+            | Motion::BigWordBack
             | Motion::LineStart
-            | Motion::FirstNonBlank => RangeKind::Exclusive,
-            Motion::WordEnd | Motion::LineEnd => RangeKind::Inclusive,
-            Motion::Up | Motion::Down | Motion::Top | Motion::Bottom => RangeKind::Linewise,
+            | Motion::FirstNonBlank
+            | Motion::ParaForward
+            | Motion::ParaBack
+            | Motion::Find { forward: false, .. } => RangeKind::Exclusive,
+            Motion::Match if explicit => RangeKind::Linewise,
+            Motion::WordEnd
+            | Motion::BigWordEnd
+            | Motion::WordEndBack
+            | Motion::BigWordEndBack
+            | Motion::LineEnd
+            | Motion::Match
+            | Motion::Find { forward: true, .. } => RangeKind::Inclusive,
+            Motion::Up
+            | Motion::Down
+            | Motion::Top
+            | Motion::Bottom
+            | Motion::ScreenTop
+            | Motion::ScreenMiddle
+            | Motion::ScreenBottom => RangeKind::Linewise,
         }
     }
 }
 
 /// A walk over the positions Vim's word motions see: every grapheme and the end of each line
-/// (an empty line is only its end).
-struct Walk<'a> {
+/// (an empty line is only its end). `big`: words are runs of non-blanks (`W`, `B`, `E`).
+pub(super) struct Walk<'a> {
     lines: &'a [String],
-    r: usize,
-    c: usize,
+    pub r: usize,
+    pub c: usize,
     gs: Vec<&'a str>,
+    big: bool,
 }
 
 impl<'a> Walk<'a> {
-    fn new(lines: &'a [String], (r, c): Pos) -> Self {
+    pub(super) fn new(lines: &'a [String], (r, c): Pos, big: bool) -> Self {
         let gs = graphemes(&lines[r]);
-        Walk { lines, r, c: c.min(gs.len()), gs }
+        Walk { lines, r, c: c.min(gs.len()), gs, big }
     }
 
-    fn pos(&self) -> Pos {
+    pub(super) fn pos(&self) -> Pos {
         (self.r, self.c)
     }
 
     /// Word class at the position; the end of a line is blank.
-    fn cls(&self) -> u8 {
-        self.gs.get(self.c).map_or(0, |g| class(g))
+    pub(super) fn cls(&self) -> u8 {
+        self.gs.get(self.c).map_or(0, |g| if self.big { class(g).min(1) } else { class(g) })
     }
 
-    fn on_empty_line(&self) -> bool {
+    pub(super) fn on_empty_line(&self) -> bool {
         self.gs.is_empty()
+    }
+
+    pub(super) fn line_len(&self) -> usize {
+        self.gs.len()
     }
 
     fn load(&mut self, r: usize) {
@@ -124,7 +192,7 @@ impl<'a> Walk<'a> {
 
     /// One position on: 0 within the line, 2 onto its end, 1 onto the next line, -1 at the end
     /// of the text (no move).
-    fn inc(&mut self) -> i8 {
+    pub(super) fn inc(&mut self) -> i8 {
         if self.c < self.gs.len() {
             self.c += 1;
             return if self.c < self.gs.len() { 0 } else { 2 };
@@ -139,7 +207,7 @@ impl<'a> Walk<'a> {
 
     /// One position back: 0 within the line, 1 onto the end of the line before, -1 at the
     /// start of the text (no move).
-    fn dec(&mut self) -> i8 {
+    pub(super) fn dec(&mut self) -> i8 {
         if self.c > 0 {
             self.c -= 1;
             return 0;
@@ -151,99 +219,156 @@ impl<'a> Walk<'a> {
         }
         -1
     }
-}
 
-/// `w`: the start of the `count`th next word; stops on an empty line. `eol` (an operator): the
-/// last word ends at the end of its line rather than at the next line's first word.
-fn fwd_word(lines: &[String], from: Pos, count: usize, eol: bool) -> Pos {
-    let mut w = Walk::new(lines, from);
-    for left in (0..count).rev() {
-        let start_class = w.cls();
-        let last_line = w.r + 1 == lines.len();
-        // Always at least one position on, unless at the end of the text.
-        let i = w.inc();
-        if i == -1 || (i >= 1 && last_line) || (i >= 1 && eol && left == 0) {
-            return w.pos();
+    /// Past the graphemes of class `cls`; false at the end (or start) of the text.
+    fn skip(&mut self, cls: u8, forward: bool) -> bool {
+        while self.cls() == cls {
+            if (if forward { self.inc() } else { self.dec() }) == -1 {
+                return false;
+            }
         }
-        if start_class != 0 {
-            while w.cls() == start_class {
-                let i = w.inc();
+        true
+    }
+
+    /// `w`: to the start of the `count`th next word; stops on an empty line. `eol` (an
+    /// operator): the last word ends at the end of its line rather than at the next line's
+    /// first word. False when it started on the last grapheme of the text.
+    pub(super) fn fwd_word(&mut self, count: usize, eol: bool) -> bool {
+        for left in (0..count).rev() {
+            let start_class = self.cls();
+            let last_line = self.r + 1 == self.lines.len();
+            // Always at least one position on, unless at the end of the text.
+            let i = self.inc();
+            if i == -1 || (i >= 1 && last_line) {
+                return false;
+            }
+            if i >= 1 && eol && left == 0 {
+                return true;
+            }
+            if start_class != 0 {
+                while self.cls() == start_class {
+                    let i = self.inc();
+                    if i == -1 || (i >= 1 && eol && left == 0) {
+                        return true;
+                    }
+                }
+            }
+            while self.cls() == 0 {
+                if self.c == 0 && self.on_empty_line() {
+                    break;
+                }
+                let i = self.inc();
                 if i == -1 || (i >= 1 && eol && left == 0) {
-                    return w.pos();
+                    return true;
                 }
             }
         }
-        while w.cls() == 0 {
-            if w.c == 0 && w.on_empty_line() {
-                break;
-            }
-            let i = w.inc();
-            if i == -1 || (i >= 1 && eol && left == 0) {
-                return w.pos();
-            }
-        }
+        true
     }
-    w.pos()
-}
 
-/// `b`: the start of the `count`th word before; stops on an empty line.
-fn bck_word(lines: &[String], from: Pos, count: usize) -> Pos {
-    let mut w = Walk::new(lines, from);
-    'words: for _ in 0..count {
-        if w.dec() == -1 {
-            return w.pos();
-        }
-        while w.cls() == 0 {
-            if w.c == 0 && w.on_empty_line() {
-                continue 'words;
+    /// `b`: to the start of the `count`th word before; stops on an empty line. `stop`: from
+    /// the start of a word, stay on it. False when it started at the start of the text.
+    pub(super) fn bck_word(&mut self, count: usize, mut stop: bool) -> bool {
+        for _ in 0..count {
+            let start_class = self.cls();
+            if self.dec() == -1 {
+                return false;
             }
-            if w.dec() == -1 {
-                return w.pos();
+            if !stop || start_class == self.cls() || start_class == 0 {
+                let mut empty = false;
+                while self.cls() == 0 {
+                    if self.c == 0 && self.on_empty_line() {
+                        empty = true;
+                        break;
+                    }
+                    if self.dec() == -1 {
+                        return true;
+                    }
+                }
+                if !empty && !self.skip(self.cls(), false) {
+                    return true;
+                }
+                if empty {
+                    stop = false;
+                    continue;
+                }
             }
+            self.inc();
+            stop = false;
         }
-        let word = w.cls();
-        while w.cls() == word {
-            if w.dec() == -1 {
-                return w.pos();
-            }
-        }
-        w.inc();
+        true
     }
-    w.pos()
-}
 
-/// `e`: the end of the `count`th word. `stop` (`cw` on a word): from the end of a word, stay
-/// on it instead of going to the end of the next one.
-fn end_word(lines: &[String], from: Pos, count: usize, mut stop: bool) -> Pos {
-    let mut w = Walk::new(lines, from);
-    for _ in 0..count {
-        let start_class = w.cls();
-        if w.inc() == -1 {
-            return w.pos();
+    /// `e`: to the end of the `count`th word. `stop` (`cw` on a word): from the end of a word,
+    /// stay on it instead of going to the end of the next one. `empty`: stop on an empty
+    /// line. False when it ran into the end of the text.
+    pub(super) fn end_word(&mut self, count: usize, mut stop: bool, empty: bool) -> bool {
+        for _ in 0..count {
+            let start_class = self.cls();
+            if self.inc() == -1 {
+                return false;
+            }
+            if self.cls() == start_class && start_class != 0 {
+                if !self.skip(start_class, true) {
+                    return false;
+                }
+            } else if !stop || start_class == 0 {
+                let mut on_empty = false;
+                while self.cls() == 0 {
+                    if self.c == 0 && self.on_empty_line() && empty {
+                        on_empty = true;
+                        break;
+                    }
+                    if self.inc() == -1 {
+                        return false;
+                    }
+                }
+                if on_empty {
+                    stop = false;
+                    continue;
+                }
+                if !self.skip(self.cls(), true) {
+                    return false;
+                }
+            }
+            self.dec();
+            stop = false;
         }
-        if w.cls() == start_class && start_class != 0 {
-            while w.cls() == start_class {
-                if w.inc() == -1 {
-                    return w.pos();
-                }
-            }
-        } else if !stop || start_class == 0 {
-            while w.cls() == 0 {
-                if w.inc() == -1 {
-                    return w.pos();
-                }
-            }
-            let word = w.cls();
-            while w.cls() == word {
-                if w.inc() == -1 {
-                    return w.pos();
-                }
-            }
-        }
-        w.dec();
-        stop = false;
+        true
     }
-    w.pos()
+
+    /// `ge`: to the end of the `count`th word before. `eol`: stop at the end of the line
+    /// before. False when it started at the start of the text.
+    pub(super) fn bckend_word(&mut self, count: usize, eol: bool) -> bool {
+        for _ in 0..count {
+            let start_class = self.cls();
+            let i = self.dec();
+            if i == -1 {
+                return false;
+            }
+            if eol && i == 1 {
+                return true;
+            }
+            if start_class != 0 {
+                while self.cls() == start_class {
+                    let i = self.dec();
+                    if i == -1 || (eol && i == 1) {
+                        return true;
+                    }
+                }
+            }
+            while self.cls() == 0 {
+                if self.c == 0 && self.on_empty_line() {
+                    break;
+                }
+                let i = self.dec();
+                if i == -1 || (eol && i == 1) {
+                    return true;
+                }
+            }
+        }
+        true
+    }
 }
 
 impl Editor {
@@ -252,10 +377,17 @@ impl Editor {
     /// (`G` and `gg` go to line `count`). `op`: for an operator, the end of a line is a place
     /// too (`l` reaches past the last grapheme, a word motion stops at the end of the line of
     /// its last word).
-    pub(super) fn target(&self, m: Motion, count: usize, explicit: bool, op: bool) -> Option<Pos> {
+    pub(super) fn target(&mut self, m: Motion, count: usize, explicit: bool, op: bool) -> Option<Pos> {
+        self.dest(m, count, explicit, op).map(|(p, _)| p)
+    }
+
+    /// [`Editor::target`] and whether an operator takes the grapheme there (`}` at the end of
+    /// the text does).
+    fn dest(&mut self, m: Motion, count: usize, explicit: bool, op: bool) -> Option<(Pos, bool)> {
         let (r, c) = (self.row, self.col);
         let last = self.lines.len() - 1;
-        Some(match m {
+        let walk = |big: bool| Walk::new(&self.lines, (r, c), big);
+        let to = match m {
             Motion::Left if c == 0 => return None,
             Motion::Left => (r, c.saturating_sub(count)),
             Motion::Right => {
@@ -270,9 +402,28 @@ impl Editor {
             Motion::Down => (r.saturating_add(count).min(last), c),
             Motion::Up if r == 0 => return None,
             Motion::Up => (r.saturating_sub(count), c),
-            Motion::WordForward => fwd_word(&self.lines, (r, c), count, op),
-            Motion::WordBack => bck_word(&self.lines, (r, c), count),
-            Motion::WordEnd => end_word(&self.lines, (r, c), count, false),
+            Motion::WordForward | Motion::BigWordForward => {
+                let mut w = walk(m == Motion::BigWordForward);
+                w.fwd_word(count, op);
+                w.pos()
+            }
+            Motion::WordBack | Motion::BigWordBack => {
+                let mut w = walk(m == Motion::BigWordBack);
+                w.bck_word(count, false);
+                w.pos()
+            }
+            Motion::WordEnd | Motion::BigWordEnd => {
+                let mut w = walk(m == Motion::BigWordEnd);
+                w.end_word(count, false, false);
+                w.pos()
+            }
+            Motion::WordEndBack | Motion::BigWordEndBack => {
+                let mut w = walk(m == Motion::BigWordEndBack);
+                if !w.bckend_word(count, false) {
+                    return None;
+                }
+                w.pos()
+            }
             Motion::LineStart => (r, 0),
             Motion::FirstNonBlank => (r, self.first_nonblank(r)),
             Motion::LineEnd if count > 1 && r == last => return None,
@@ -288,7 +439,95 @@ impl Editor {
                 };
                 (r, self.first_nonblank(r))
             }
-        })
+            Motion::Find { ch, forward, till, again } => self.find_char(ch, forward, till, again, count)?,
+            Motion::Match if explicit => {
+                if count > 100 {
+                    return None;
+                }
+                let r = ((count * self.lines.len()).div_ceil(100)).saturating_sub(1).min(last);
+                (r, self.first_nonblank(r))
+            }
+            Motion::Match => self.match_pair()?,
+            Motion::ParaForward | Motion::ParaBack => return self.paragraph(m == Motion::ParaForward, count),
+            Motion::ScreenTop | Motion::ScreenMiddle | Motion::ScreenBottom => {
+                let r = self.screen_line(m, count);
+                (r, self.first_nonblank(r))
+            }
+        };
+        Some((to, false))
+    }
+
+    /// `f` `F` `t` `T` on the cursor's line: the `count`th `ch` after or before the cursor
+    /// (next to it with `till`). A repeated `t` (`again`, count 1) does not stay where it is
+    /// when the character is right next to the cursor.
+    fn find_char(&self, ch: char, forward: bool, till: bool, again: bool, count: usize) -> Option<Pos> {
+        let gs = graphemes(&self.lines[self.row]);
+        let mut col = self.col as isize;
+        let mut stop = !(again && till && count == 1);
+        let dir: isize = if forward { 1 } else { -1 };
+        for _ in 0..count {
+            loop {
+                col += dir;
+                if col < 0 || col as usize >= gs.len() {
+                    return None;
+                }
+                if stop && gs[col as usize].starts_with(ch) {
+                    break;
+                }
+                stop = true;
+            }
+        }
+        if till {
+            col -= dir;
+        }
+        Some((self.row, col as usize))
+    }
+
+    /// `}` / `{` `count` times: the next or previous empty line, or the end (start) of the
+    /// text. Going forward to the end of the text lands on its last grapheme, which an
+    /// operator then takes (Vim). `None` when there is not a paragraph for every count.
+    fn paragraph(&self, forward: bool, count: usize) -> Option<(Pos, bool)> {
+        let n = self.lines.len();
+        let mut curr = self.row;
+        for left in (0..count).rev() {
+            let mut did_skip = false;
+            let mut first = true;
+            loop {
+                if !self.lines[curr].is_empty() {
+                    did_skip = true;
+                }
+                if !first && did_skip && self.lines[curr].is_empty() {
+                    break;
+                }
+                let next = if forward { curr + 1 } else { curr.wrapping_sub(1) };
+                if next >= n {
+                    if left > 0 {
+                        return None;
+                    }
+                    break;
+                }
+                curr = next;
+                first = false;
+            }
+        }
+        let len = self.gcount(curr);
+        if forward && curr == n - 1 && len > 0 {
+            return Some(((curr, len - 1), true));
+        }
+        Some(((curr, 0), false))
+    }
+
+    /// The line `H`, `M` or `L` goes to: `count` lines from the top or the bottom of the lines
+    /// on screen, or the middle one.
+    fn screen_line(&self, m: Motion, count: usize) -> usize {
+        let top = self.top.min(self.lines.len() - 1);
+        let shown = self.view_h.max(1).min(self.lines.len() - top);
+        let bottom = top + shown - 1;
+        match m {
+            Motion::ScreenTop => (top + count - 1).min(bottom),
+            Motion::ScreenBottom => bottom.saturating_sub(count - 1).max(top),
+            _ => top + shown.div_ceil(2) - 1,
+        }
     }
 
     /// Move the cursor `count` times by `m` (it stays when `m` cannot move).
@@ -315,36 +554,41 @@ impl Editor {
         self.clamp();
     }
 
-    /// The text an operator with motion `m` takes; `None` when the motion cannot move. As in
-    /// Vim, an exclusive motion that ends at the start of a later line ends at the end of the
-    /// line before instead, and takes whole lines when it started in the indent (so `dw` on an
-    /// empty line deletes it).
-    pub(super) fn op_range(&self, m: Motion, count: usize, explicit: bool) -> Option<Range> {
-        let to = self.target(m, count, explicit, true)?;
+    /// The text an operator with motion `m` takes; `None` when the motion cannot move.
+    pub(super) fn op_range(&mut self, m: Motion, count: usize, explicit: bool) -> Option<Range> {
+        let (to, inclusive) = self.dest(m, count, explicit, true)?;
         let from = (self.row, self.col);
         let (start, end) = if to < from { (to, from) } else { (from, to) };
-        let kind = m.kind();
+        let kind = if inclusive { RangeKind::Inclusive } else { m.kind(explicit) };
+        Some(self.exclusive_adjusted(Range { start, end, kind }))
+    }
+
+    /// As in Vim, an exclusive range that ends at the start of a later line ends at the end
+    /// of the line before instead, and takes whole lines when it started in the indent (so
+    /// `dw` on an empty line deletes it).
+    pub(super) fn exclusive_adjusted(&self, r: Range) -> Range {
+        let Range { start, end, kind } = r;
         if kind != RangeKind::Exclusive || end.1 != 0 || end.0 == start.0 {
-            return Some(Range { start, end, kind });
+            return r;
         }
         let before = end.0 - 1;
         if graphemes(&self.lines[start.0]).iter().take(start.1).all(|g| class(g) == 0) {
-            return Some(Range { start, end: (before, 0), kind: RangeKind::Linewise });
+            return Range { start, end: (before, 0), kind: RangeKind::Linewise };
         }
-        Some(match self.gcount(before) {
+        match self.gcount(before) {
             0 => Range { start, end: (before, 0), kind: RangeKind::Exclusive },
             n => Range { start, end: (before, n - 1), kind: RangeKind::Inclusive },
-        })
+        }
     }
 
-    /// `cw` with the cursor on a word: to the end of the `count`th word, like `ce`, without the
-    /// blanks after it (Vim). `None` elsewhere (then it is a plain `w`).
-    pub(super) fn cw_range(&self, count: usize) -> Option<Range> {
+    /// `cw` (`cW`) with the cursor on a word: to the end of the `count`th word, like `ce`,
+    /// without the blanks after it (Vim). `None` elsewhere (then it is a plain `w`).
+    pub(super) fn cw_range(&self, count: usize, big: bool) -> Option<Range> {
         let on_word = graphemes(&self.lines[self.row]).get(self.col).is_some_and(|g| class(g) != 0);
-        on_word.then(|| Range {
-            start: (self.row, self.col),
-            end: end_word(&self.lines, (self.row, self.col), count, true),
-            kind: RangeKind::Inclusive,
+        on_word.then(|| {
+            let mut w = Walk::new(&self.lines, (self.row, self.col), big);
+            w.end_word(count, true, false);
+            Range { start: (self.row, self.col), end: w.pos(), kind: RangeKind::Inclusive }
         })
     }
 }

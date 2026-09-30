@@ -107,3 +107,72 @@ fn ctrl_c_in_visual_mode_cancels_the_run() {
     h.ctrl('c');
     assert!(h.session_cancelled(1), "the tab's session was asked to cancel");
 }
+
+/// Text objects, `.` and `u` through the keymap: `f(` then `ci(` and typing changes what is
+/// between the brackets; on the next line `.` does it again, and `u` undoes that in one step.
+/// `dap` takes a paragraph and the blank line after it, and `.` the next one.
+#[test]
+fn text_objects_and_dot_through_the_keymap() {
+    let mut h = editor_with("SELECT count(a, b) FROM t\nSELECT max(c) FROM u");
+    h.keys("f(lci(");
+    assert_eq!((h.app.tab().editor.mode, h.app.key_context()), (Mode::Insert, Ctx::VimInsert));
+    h.type_text("x");
+    h.key(KeyCode::Esc);
+    assert_eq!(h.app.tab().editor.text(), "SELECT count(x) FROM t\nSELECT max(c) FROM u");
+    h.keys("j0f(.");
+    assert_eq!(h.app.tab().editor.text(), "SELECT count(x) FROM t\nSELECT max(x) FROM u");
+    h.keys("u");
+    assert_eq!(h.app.tab().editor.text(), "SELECT count(x) FROM t\nSELECT max(c) FROM u");
+
+    let mut h = editor_with("SELECT 1\nFROM a;\n\nSELECT 2;\n\nSELECT 3;");
+    h.keys("dap");
+    assert_eq!(h.app.tab().editor.text(), "SELECT 2;\n\nSELECT 3;");
+    h.keys(".");
+    assert_eq!(h.app.tab().editor.text(), "SELECT 3;");
+}
+
+/// Keys of more than one stroke reach the editor whole: `g u w` (a case operator and its
+/// motion), `g J`, `>>` and `.`, and `Ctrl+D` scrolls the editor (the grid's `Ctrl+D` is not
+/// taken there).
+#[test]
+fn sequences_and_scrolling_reach_the_editor() {
+    let mut h = editor_with("SELECT ID FROM T\nWHERE X\n  AND Y");
+    h.keys("guw");
+    assert_eq!(h.app.tab().editor.lines[0], "select ID FROM T");
+    h.keys("jgJ");
+    assert_eq!(h.app.tab().editor.lines[1], "WHERE X  AND Y");
+    h.keys(">>");
+    assert_eq!(h.app.tab().editor.lines[1], "    WHERE X  AND Y");
+    h.keys(".");
+    assert_eq!(h.app.tab().editor.lines[1], "        WHERE X  AND Y");
+    let text: Vec<String> = (1..=200).map(|i| format!("SELECT {i};")).collect();
+    let mut h = editor_with(&text.join("\n"));
+    let half = h.app.tab().editor.view_height() / 2;
+    h.ctrl('d');
+    assert_eq!((h.app.tab().editor.row, h.app.tab().editor.top), (half, half));
+    h.keys("G");
+    h.draw(100, 30);
+    h.ctrl('b');
+    assert!(h.app.tab().editor.row < 199, "a page back");
+}
+
+/// The character `f`, `t` and `r` wait for is taken as typed, also Hangul (not the QWERTY key
+/// under it); the jamo that sits on `f` still starts the command.
+#[test]
+fn a_character_argument_is_taken_as_typed() {
+    // SELECT '<two syllables>' x
+    let mut h = editor_with("SELECT '\u{D55C}\u{AE00}' x");
+    h.keys("f");
+    h.type_text("\u{AE00}");
+    assert_eq!(h.app.tab().editor.col, 9, "on the second syllable");
+    h.keys("r");
+    h.type_text("\u{AC00}");
+    assert_eq!(h.app.tab().editor.text(), "SELECT '\u{D55C}\u{AC00}' x");
+    h.keys("0");
+    h.type_text("\u{3139}\u{D55C}"); // the jamo on `f`, then a syllable to find
+    assert_eq!(h.app.tab().editor.col, 8);
+    h.keys("dt");
+    h.type_text("'");
+    assert_eq!(h.app.tab().editor.text(), "SELECT '' x");
+    assert!(!h.app.tab().editor.awaiting_key());
+}

@@ -327,15 +327,15 @@ const ACTIONS: &[(Ctx, &str, &str)] = &[
 /// Every vim command key, including those the editor does not implement yet.
 const VIM: &[&str] = &[
     // motions
-    "h", "j", "k", "l", "w", "W", "b", "B", "e", "E", "g e", "0", "^", "$", "g g", "G", "f", "F", "t", "T", ";", ",",
-    "%", "{", "}", "(", ")", "[", "]", "H", "M", "L", "left", "right", "up", "down", "home", "end",
+    "h", "j", "k", "l", "w", "W", "b", "B", "e", "E", "g e", "g E", "0", "^", "$", "g g", "G", "f", "F", "t", "T", ";",
+    ",", "%", "{", "}", "(", ")", "[", "]", "H", "M", "L", "left", "right", "up", "down", "home", "end",
     // operators (text objects `iw`, `a(`, … follow them)
     "d", "c", "y", ">", "<", "=", "g ~", "g u", "g U", // counts, repeat, registers
     "1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "\"", // edits
-    "x", "X", "D", "C", "Y", "s", "S", "r", "R", "p", "P", "u", "ctrl+r", "J", "~", // modes
+    "x", "X", "D", "C", "Y", "s", "S", "r", "R", "p", "P", "u", "ctrl+r", "J", "g J", "~", // modes
     "i", "a", "I", "A", "o", "O", "v", "V", "ctrl+v", "esc", // search
     "/", "?", "n", "N", "*", "#", // scrolling
-    "ctrl+d", "ctrl+u", "ctrl+f", "ctrl+b", "z z", "z t", "z b",
+    "ctrl+d", "ctrl+u", "ctrl+f", "ctrl+b", "z z", "z t", "z b", "z enter",
     // macros (a later step); also keeps `q` from quitting while editing
     "q",
 ];

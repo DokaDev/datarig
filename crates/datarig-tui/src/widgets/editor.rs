@@ -15,21 +15,30 @@
 //!   completion context are found in a region of lines around the cursor that holds the `;`
 //!   around it, with the same result as splitting the whole text.
 //! * `motion` says where a motion leads, and the range it covers for an operator
-//!   (exclusive, inclusive or whole lines, as Vim decides).
-//! * `vim` parses Normal-mode commands (`[count] operator [count] motion`, doubled
-//!   operators, the single-key commands) and applies the operators.
+//!   (exclusive, inclusive or whole lines, as Vim decides); `brackets` finds matching
+//!   brackets outside strings and comments; `textobj` finds text objects.
+//! * `vim` parses Normal-mode commands (`[count] operator [count] motion|text object`,
+//!   doubled operators, prefixes, character arguments, the single-key commands) and applies
+//!   the operators; `edit` holds the edits that are not deletes or puts (`r`, `J`, case,
+//!   indent), `scroll` the scrolling keys.
 //! * `visual` is Visual mode by character (`v`) or by line (`V`).
 //! * `insert` is Insert mode, with autoindent and `Ctrl+W` / `Ctrl+U`.
+//! * `repeat` records the last change for `.`.
 //! * `render` draws.
 //!
-//! One command is one undo step: an operator, a put, a paste, or an Insert session with the
-//! change that started it.
+//! One command is one undo step: an operator, a put, a paste, a `.`, or an Insert session with
+//! the change that started it.
 
+mod brackets;
 mod buffer;
+mod edit;
 mod insert;
 mod lexing;
 mod motion;
 mod render;
+mod repeat;
+mod scroll;
+mod textobj;
 mod vim;
 mod visual;
 
@@ -87,8 +96,16 @@ pub struct Editor {
     /// Visual mode takes whole lines (`V`).
     visual_lines: bool,
     anchor: (usize, usize),
-    /// The Normal/Visual command typed so far (count, operator, `g`).
+    /// The Normal/Visual command typed so far (count, operator, prefix).
     cmd: vim::Pending,
+    /// The last `f` `F` `t` `T`: its character, forward, till (for `;` and `,`).
+    last_find: Option<(char, bool, bool)>,
+    /// What `.` repeats.
+    rec: repeat::Recorder,
+    /// The count of the Insert session's command (`3ix`).
+    ins_repeat: Option<repeat::InsertRepeat>,
+    /// Lines `Ctrl+D` and `Ctrl+U` scroll, once a count set it (0: half the screen).
+    scroll_lines: usize,
     register: Option<Register>,
     /// The last write to the register, until the app takes it ([`Editor::take_yank`]).
     yanked: Option<Register>,
@@ -126,6 +143,10 @@ impl Editor {
             visual_lines: false,
             anchor: (0, 0),
             cmd: vim::Pending::default(),
+            last_find: None,
+            rec: repeat::Recorder::default(),
+            ins_repeat: None,
+            scroll_lines: 0,
             register: None,
             yanked: None,
             undo: Vec::new(),
@@ -190,14 +211,28 @@ impl Editor {
         self.register = Some(r);
     }
 
-    /// A command waits for its next key (`d…`, `y…`, `g…`).
+    /// A command waits for its next key (`d…`, `g…`, `f…`, `i(`).
     pub fn awaiting_key(&self) -> bool {
         self.cmd.awaiting()
     }
 
+    /// A command waits for a character, to be taken as it is typed (`f`, `t`, `r`): a Hangul
+    /// syllable is that syllable, not the QWERTY keys under it.
+    pub fn awaiting_char(&self) -> bool {
+        self.mode != Mode::Insert && self.cmd.awaiting_char()
+    }
+
     pub fn handle_key(&mut self, key: KeyEvent) -> EdEvent {
+        self.recorded_key(key)
+    }
+
+    /// A key in the current mode.
+    fn dispatch_key(&mut self, key: KeyEvent) -> EdEvent {
         match self.mode {
-            Mode::Insert => self.key_insert(key),
+            Mode::Insert => {
+                self.insert_repeat_key(key);
+                self.key_insert(key)
+            }
             Mode::Normal => self.key_normal(key),
             Mode::Visual => self.key_visual(key),
         }
@@ -216,6 +251,8 @@ impl Editor {
             Mode::Insert => {
                 self.ai_row = None;
                 self.insert_at_cursor(&norm);
+                self.rec.paste(&norm);
+                self.insert_repeat_paste(&norm);
                 return EdEvent::Changed { typed: None };
             }
             Mode::Normal => {
