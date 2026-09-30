@@ -69,3 +69,13 @@ docker compose --profile pooler --profile ssh down -v   # also delete the volume
 
 The data lives in the named volumes `datarig-pgdata` and `datarig-mysqldata`. CI does not use
 this file: `.github/workflows/ci.yml` starts the same images as service containers.
+
+## Vim test cases
+
+The editor's vim tests compare each command with what Neovim does on the same text.
+`vim-cases.py` runs a JSON list of cases in a headless Neovim (without your config) and prints
+the rows for those tables; see the script for the format. It needs `nvim` on `PATH`.
+
+```sh
+python3 dev/vim-cases.py cases.json > rows.rs
+```

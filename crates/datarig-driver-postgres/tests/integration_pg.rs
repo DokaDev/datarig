@@ -306,6 +306,9 @@ async fn table_structure_reads_the_catalog_in_one_statement() {
     let schema = format!("zz_struct_{}", std::process::id());
     let _guard = SchemaGuard::new(&url, &schema);
     let s = &schema;
+    // Autovacuum off where the test expects no statistics yet: nothing analyzes them behind the
+    // test's back (the partitions' 400 rows are enough for it to).
+    let off = "WITH (autovacuum_enabled = false)";
     for sql in [
         format!("CREATE SCHEMA {s}"),
         format!(
@@ -317,7 +320,7 @@ async fn table_structure_reads_the_catalog_in_one_statement() {
              qty int NOT NULL DEFAULT 1 CONSTRAINT child_qty_check CHECK (qty > 0), doc jsonb, \
              twice int GENERATED ALWAYS AS (qty * 2) STORED, note text, \
              CONSTRAINT child_parent_fkey FOREIGN KEY (pa, pb) REFERENCES {s}.parent (a, b) ON DELETE CASCADE, \
-             CONSTRAINT child_note_fkey FOREIGN KEY (note) REFERENCES {s}.parent (code) ON UPDATE SET NULL)"
+             CONSTRAINT child_note_fkey FOREIGN KEY (note) REFERENCES {s}.parent (code) ON UPDATE SET NULL) {off}"
         ),
         format!(
             "CREATE INDEX child_note_partial ON {s}.child (note COLLATE \"C\" text_pattern_ops, qty NULLS FIRST) \
@@ -336,10 +339,14 @@ async fn table_structure_reads_the_catalog_in_one_statement() {
         format!("INSERT INTO {s}.parent SELECT g, g, 'c' || g FROM generate_series(1, 3) g"),
         format!("ANALYZE {s}.parent"),
         format!("CREATE TABLE {s}.part (id int, at date) PARTITION BY RANGE (at)"),
-        format!("CREATE TABLE {s}.part_2025 PARTITION OF {s}.part FOR VALUES FROM ('2025-01-01') TO ('2026-01-01')"),
-        format!("CREATE TABLE {s}.part_2026 PARTITION OF {s}.part FOR VALUES FROM ('2026-01-01') TO ('2027-01-01')"),
+        format!(
+            "CREATE TABLE {s}.part_2025 PARTITION OF {s}.part FOR VALUES FROM ('2025-01-01') TO ('2026-01-01') {off}"
+        ),
+        format!(
+            "CREATE TABLE {s}.part_2026 PARTITION OF {s}.part FOR VALUES FROM ('2026-01-01') TO ('2027-01-01') {off}"
+        ),
         format!("INSERT INTO {s}.part SELECT g, date '2025-06-01' + g FROM generate_series(1, 400) g"),
-        format!("CREATE MATERIALIZED VIEW {s}.mv AS SELECT pa, count(*) AS n FROM {s}.child GROUP BY pa"),
+        format!("CREATE MATERIALIZED VIEW {s}.mv {off} AS SELECT pa, count(*) AS n FROM {s}.child GROUP BY pa"),
         format!("CREATE INDEX mv_pa ON {s}.mv (pa)"),
         format!("CREATE VIEW {s}.v AS SELECT id, qty FROM {s}.child"),
         format!("CREATE TRIGGER v_ins INSTEAD OF INSERT ON {s}.v FOR EACH ROW EXECUTE FUNCTION {s}.touch()"),

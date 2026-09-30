@@ -143,9 +143,11 @@ impl App {
             return;
         }
         // Outside text input, Hangul typed with a Korean input source means the QWERTY keys at
-        // the same places.
+        // the same places; not the character a vim command waits for (`f`, `t`, `r`), which is
+        // taken as it is typed.
+        let literal = matches!(ctx, Ctx::VimNormal | Ctx::VimVisual) && self.tab().editor.awaiting_char();
         let mapped = match chord.code {
-            KeyCode::Char(c) if chord.is_plain_char() && !ctx.is_text_input() => hangul::keys(c),
+            KeyCode::Char(c) if chord.is_plain_char() && !ctx.is_text_input() && !literal => hangul::keys(c),
             _ => None,
         };
         match mapped {

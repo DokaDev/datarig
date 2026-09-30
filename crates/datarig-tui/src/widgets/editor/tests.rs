@@ -67,20 +67,22 @@ pub(super) fn at(text: &str, (row, col): (usize, usize)) -> Editor {
 pub(super) type Case =
     (&'static str, (usize, usize), &'static str, &'static str, (usize, usize), Option<(&'static str, bool)>);
 
-/// Run each case from a fresh editor and compare the text, the cursor and the register.
+/// Run each case from a fresh editor and compare the text, the cursor and the register; the
+/// failures are listed together.
 pub(super) fn check(cases: &[Case]) {
+    let mut failed = Vec::new();
     for &(text, cursor, keys, want, want_cursor, want_reg) in cases {
         let mut e = at(text, cursor);
         typ(&mut e, keys);
         let reg = e.register().map(|r| (r.text.as_str(), r.linewise));
-        assert_eq!(
-            (e.text().as_str(), (e.row, e.col), reg),
-            (want, want_cursor, want_reg),
-            "{keys:?} on {text:?} at {cursor:?}"
-        );
-        assert_eq!(e.mode, Mode::Normal, "{keys:?}: back in Normal mode");
+        let have = (e.text(), (e.row, e.col), reg, e.mode);
+        if have != (want.to_string(), want_cursor, want_reg, Mode::Normal) {
+            failed
+                .push(format!("{keys:?} on {text:?} at {cursor:?}: {have:?}, not {:?}", (want, want_cursor, want_reg)));
+        }
         assert_eq!(e.len_bytes(), e.text().len());
     }
+    assert!(failed.is_empty(), "{} of {} cases:\n{}", failed.len(), cases.len(), failed.join("\n"));
 }
 
 #[test]
@@ -223,4 +225,27 @@ fn awaiting_a_key() {
     assert!(e.awaiting_key(), "gg in Visual mode");
     typ(&mut e, "g");
     assert!(!e.awaiting_key());
+}
+
+/// The keymap takes the character `f`, `t` and `r` wait for as it is typed; a count, an
+/// operator or a text object waits for keys that still are commands.
+#[test]
+fn awaiting_a_character() {
+    let mut e = Editor::new("a b c");
+    for (k, key, char) in [
+        ("f", true, true),
+        ("x", false, false),
+        ("d", true, false),
+        ("t", true, true),
+        ("<Esc>", false, false),
+        ("r", true, true),
+        ("<Esc>", false, false),
+        ("di", true, false),
+        ("<Esc>v", false, false),
+        ("F", true, true),
+        ("<Esc><Esc>i", false, false),
+    ] {
+        typ(&mut e, k);
+        assert_eq!((e.awaiting_key(), e.awaiting_char()), (key, char), "after {k}");
+    }
 }
