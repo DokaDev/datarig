@@ -117,3 +117,31 @@ fn index_options_follow_their_columns() {
     assert_eq!(s.indexes[0].keys(), ["created DESC", "lower(code)", "id COLLATE \"C\" text_pattern_ops"]);
     assert_eq!(s.indexes[0].columns, ["created", "lower(code)", "id"], "the columns alone mark the keys");
 }
+
+#[test]
+fn index_keys_know_their_columns() {
+    use datarig_core::driver::structure::{ItemColumn, StructureGroup};
+    let raw = r#"{"kind":"r","indexes":[{"name":"i","unique":false,"primary":false,"constraint":false,
+        "method":"btree","columns":["\"Created\"","lower(code)"],"options":["DESC",""],
+        "include":["\"Note\""],"key_columns":["Created",null],"include_columns":["Note"],
+        "predicate":null,"definition":""}],
+        "constraints":[{"name":"c","type":"c","columns":["a","b"],"on_delete":" ","on_update":" ",
+        "expression":"a < b","definition":"CHECK (a < b)"}]}"#;
+    let s = parse(raw).unwrap();
+    let col = |c: Option<&str>, text: &str, options: &str, include: bool| ItemColumn {
+        column: c.map(String::from),
+        text: text.into(),
+        options: options.into(),
+        include,
+        references: None,
+    };
+    assert_eq!(
+        s.item_columns(StructureGroup::Indexes, 0),
+        [
+            col(Some("Created"), "Created", "DESC", false),
+            col(None, "lower(code)", "", false),
+            col(Some("Note"), "Note", "", true)
+        ]
+    );
+    assert_eq!(s.checks[0].columns, ["a", "b"], "a check's columns (conkey)");
+}

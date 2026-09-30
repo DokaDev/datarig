@@ -344,6 +344,16 @@ async fn table_structure_reads_the_catalog_in_one_statement() {
         format!("CREATE VIEW {s}.v AS SELECT id, qty FROM {s}.child"),
         format!("CREATE TRIGGER v_ins INSTEAD OF INSERT ON {s}.v FOR EACH ROW EXECUTE FUNCTION {s}.touch()"),
         format!(r#"CREATE TABLE {s}."Odd ""Name""" (x int)"#),
+        format!(
+            "CREATE TABLE {s}.keyed (k1 int, k2 text, lo int, hi int, note text, \"Mixed Case\" int, \
+             PRIMARY KEY (k2, k1), CONSTRAINT keyed_pair_key UNIQUE (hi, lo), \
+             CONSTRAINT keyed_parent_fkey FOREIGN KEY (hi, lo) REFERENCES {s}.parent (a, b), \
+             CONSTRAINT keyed_range_check CHECK (lo < hi))"
+        ),
+        format!(
+            "CREATE INDEX keyed_mixed ON {s}.keyed (note COLLATE \"C\" text_pattern_ops, lower(note) DESC, \
+             \"Mixed Case\" DESC NULLS LAST) INCLUDE (hi, k1)"
+        ),
     ] {
         pg_clean::run_fresh(&url, &sql).unwrap_or_else(|e| panic!("{e}: {sql}"));
     }
@@ -422,6 +432,8 @@ async fn table_structure_reads_the_catalog_in_one_statement() {
                 columns: names(cols),
                 options: vec![String::new(); cols.len()],
                 include: names(include),
+                key_columns: cols.iter().map(|c| Some(c.to_string())).collect(),
+                include_columns: names(include),
                 unique,
                 method: method.into(),
                 predicate: predicate.map(str::to_string),
@@ -487,6 +499,8 @@ async fn table_structure_reads_the_catalog_in_one_statement() {
     ];
     // Each key's collation, operator class and order, when not the defaults (no lock: catalogs).
     expected[1].options = names(&["DESC"]);
+    // An expression is no column of the table.
+    expected[1].key_columns = vec![None];
     expected[2].options = names(&["COLLATE \"C\" text_pattern_ops", "NULLS FIRST"]);
     assert_eq!(child.indexes, expected);
     for x in &child.indexes {
@@ -499,6 +513,7 @@ async fn table_structure_reads_the_catalog_in_one_statement() {
         [CheckConstraint {
             name: "child_qty_check".into(),
             expression: "qty > 0".into(),
+            columns: names(&["qty"]),
             definition: "CHECK (qty > 0)".into()
         }]
     );
@@ -554,6 +569,44 @@ async fn table_structure_reads_the_catalog_in_one_statement() {
             definition: "UNIQUE (code)".into()
         }]
     );
+
+    // The columns each key, index and check covers, from the catalog's positions (`indkey`,
+    // `conkey`, `confkey`): in the key's order, an expression's key none, `INCLUDE` last.
+    let keyed = read("keyed").await.expect("keyed");
+    let item = |g, k| keyed.item_columns(g, k);
+    let plain = |c: &str| ItemColumn {
+        column: Some(c.into()),
+        text: c.into(),
+        options: String::new(),
+        include: false,
+        references: None,
+    };
+    assert_eq!(item(StructureGroup::PrimaryKey, 0), [plain("k2"), plain("k1")]);
+    assert_eq!(item(StructureGroup::UniqueConstraints, 0), [plain("hi"), plain("lo")]);
+    assert_eq!(
+        item(StructureGroup::ForeignKeys, 0),
+        [
+            ItemColumn { references: Some("a".into()), ..plain("hi") },
+            ItemColumn { references: Some("b".into()), ..plain("lo") }
+        ]
+    );
+    assert_eq!(keyed.checks[0].columns, names(&["lo", "hi"]));
+    assert_eq!(item(StructureGroup::CheckConstraints, 0), [plain("lo"), plain("hi")]);
+    let mixed = keyed.indexes.iter().position(|i| i.name == "keyed_mixed").expect("keyed_mixed");
+    assert_eq!(keyed.indexes[mixed].key_columns, [Some("note".to_string()), None, Some("Mixed Case".to_string())]);
+    assert_eq!(keyed.indexes[mixed].include_columns, names(&["hi", "k1"]));
+    assert_eq!(
+        item(StructureGroup::Indexes, mixed),
+        [
+            ItemColumn { options: "COLLATE \"C\" text_pattern_ops".into(), ..plain("note") },
+            ItemColumn { column: None, text: "lower(note)".into(), options: "DESC".into(), ..plain("") },
+            ItemColumn { options: "DESC NULLS LAST".into(), ..plain("Mixed Case") },
+            ItemColumn { include: true, ..plain("hi") },
+            ItemColumn { include: true, ..plain("k1") },
+        ]
+    );
+    let pkey = keyed.indexes.iter().position(|i| i.name == "keyed_pkey").expect("keyed_pkey");
+    assert_eq!(item(StructureGroup::Indexes, pkey), [plain("k2"), plain("k1")]);
 
     let part = read("part").await.expect("part");
     assert_eq!((part.kind, part.estimated_rows), (RelationKind::PartitionedTable, None), "partitions never analyzed");

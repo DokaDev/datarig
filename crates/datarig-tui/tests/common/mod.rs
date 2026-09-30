@@ -937,6 +937,8 @@ pub fn users_structure() -> TableStructure {
             columns: s(cols),
             options: Vec::new(),
             include: Vec::new(),
+            key_columns: cols.iter().map(|c| Some(c.to_string())).collect(),
+            include_columns: Vec::new(),
             unique,
             method: "btree".into(),
             predicate: predicate.map(str::to_string),
@@ -1024,6 +1026,7 @@ pub fn orders_structure() -> TableStructure {
     t.checks = vec![CheckConstraint {
         name: "orders_status_check".into(),
         expression: "status = ANY (ARRAY['pending'::text, 'paid'::text])".into(),
+        columns: s(&["status"]),
         definition: String::new(),
     }];
     t

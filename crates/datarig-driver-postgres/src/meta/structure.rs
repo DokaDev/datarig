@@ -16,7 +16,8 @@
 //!
 //! The rest (`regclass`, `format_type`, the catalogs' own rows, `pg_get_constraintdef` of a
 //! key) takes no lock on the table: an index key's order, operator class and collation come
-//! from `pg_index` (not `pg_get_indexdef`), a trigger's `UPDATE OF` columns from `tgattr`. Its
+//! from `pg_index` (not `pg_get_indexdef`), as do the table's columns each key and `INCLUDE`
+//! column is (`indkey`, 0 for an expression); a trigger's `UPDATE OF` columns from `tgattr`. Its
 //! `WHEN` condition only `pg_get_triggerdef` prints ([`when_condition`]).
 
 use datarig_core::driver::DbError;
@@ -102,6 +103,12 @@ ELSE pg_catalog.json_build_object(
         LEFT JOIN pg_catalog.pg_collation co ON co.oid = i.indcollation[k - 1]),
       'include', (SELECT pg_catalog.json_agg(pg_catalog.pg_get_indexdef(i.indexrelid, k, true) ORDER BY k)
         FROM pg_catalog.generate_series(i.indnkeyatts + 1, i.indnatts) k),
+      'key_columns', (SELECT pg_catalog.json_agg(ta.attname ORDER BY k)
+        FROM pg_catalog.generate_series(1, i.indnkeyatts) k
+        LEFT JOIN pg_catalog.pg_attribute ta ON ta.attrelid = i.indrelid AND ta.attnum = i.indkey[k - 1]),
+      'include_columns', (SELECT pg_catalog.json_agg(ta.attname ORDER BY k)
+        FROM pg_catalog.generate_series(i.indnkeyatts + 1, i.indnatts) k
+        JOIN pg_catalog.pg_attribute ta ON ta.attrelid = i.indrelid AND ta.attnum = i.indkey[k - 1]),
       'predicate', pg_catalog.pg_get_expr(i.indpred, i.indrelid, true),
       'definition', pg_catalog.pg_get_indexdef(i.indexrelid)) ORDER BY ic.relname)
     FROM pg_catalog.pg_index i
@@ -185,6 +192,9 @@ struct RawIndex {
     columns: Option<Vec<String>>,
     options: Option<Vec<String>>,
     include: Option<Vec<String>>,
+    /// Each key's column (`null`: an expression, `indkey` 0).
+    key_columns: Option<Vec<Option<String>>>,
+    include_columns: Option<Vec<String>>,
     predicate: Option<String>,
     definition: String,
 }
@@ -246,6 +256,7 @@ fn parse(json: &str) -> Result<TableStructure, DbError> {
             "c" => s.checks.push(CheckConstraint {
                 name: c.name,
                 expression: c.expression.unwrap_or_default(),
+                columns,
                 definition: c.definition,
             }),
             "f" => s.foreign_keys.push(ForeignKey {
@@ -270,6 +281,8 @@ fn parse(json: &str) -> Result<TableStructure, DbError> {
             columns: i.columns.unwrap_or_default(),
             options: i.options.unwrap_or_default(),
             include: i.include.unwrap_or_default(),
+            key_columns: i.key_columns.unwrap_or_default(),
+            include_columns: i.include_columns.unwrap_or_default(),
             unique: i.unique,
             method: i.method,
             predicate: i.predicate,

@@ -18,7 +18,7 @@ use crate::widgets::tree::{Group, Node, ObjectView, Structure, Tree};
 use crate::widgets::{put, spinner_at};
 use datarig_core::driver::KeyMarks;
 use datarig_core::driver::structure::{
-    ColumnFill, FkAction, RelationStats, StructureGroup, TableStructure, TriggerEvent,
+    ColumnFill, FkAction, ItemColumn, RelationStats, StructureColumn, StructureGroup, TableStructure, TriggerEvent,
 };
 use datarig_core::i18n::{Label, Msg};
 use datarig_core::sql::complete::Catalog;
@@ -177,7 +177,15 @@ fn node_parts(app: &App, tree: &Tree, n: Node) -> Vec<(String, Style)> {
 
 /// A node of an open object's structure.
 fn is_structure(n: Node) -> bool {
-    matches!(n, Node::StructGroup(..) | Node::StructItem(..) | Node::StructDetail(..) | Node::StructNote(..))
+    matches!(
+        n,
+        Node::StructGroup(..)
+            | Node::StructItem(..)
+            | Node::StructDetail(..)
+            | Node::StructColumns(..)
+            | Node::StructColumn(..)
+            | Node::StructNote(..)
+    )
 }
 
 fn group_label(g: StructureGroup) -> Label {
@@ -205,13 +213,15 @@ fn group_icon_style(g: StructureGroup) -> Style {
 }
 
 /// A node of an open object's structure: a group (`Columns (7)`; an empty one dim, without a
-/// count), an item with what it is in dim text, an item's line, or why the
-/// structure is not there.
+/// count), an item with what it is in dim text, an item's line, an item's `Columns (2)` and
+/// each of them, or why the structure is not there.
 fn structure_parts(app: &App, tree: &Tree, n: Node) -> Vec<(String, Style)> {
     let dim = Style::new().fg(theme::FG_DIM);
     let (Node::StructGroup(i, g, j, _)
     | Node::StructItem(i, g, j, _, _)
     | Node::StructDetail(i, g, j, _, _, _)
+    | Node::StructColumns(i, g, j, _, _)
+    | Node::StructColumn(i, g, j, _, _, _)
     | Node::StructNote(i, g, j)) = n
     else {
         return Vec::new();
@@ -248,9 +258,24 @@ fn structure_parts(app: &App, tree: &Tree, n: Node) -> Vec<(String, Style)> {
             parts
         }
         Node::StructItem(.., sg, k) => item_parts(app, st, sg, k),
-        Node::StructDetail(.., StructureGroup::PrimaryKey, _, m) => {
-            let col = st.primary_key.as_ref().and_then(|p| p.columns.get(m)).cloned().unwrap_or_default();
-            vec![(col, Style::new().fg(theme::FG))]
+        // As the table's Columns group, with its icon.
+        Node::StructColumns(.., sg, k) => {
+            let count = st.item_columns(sg, k).len();
+            let mut parts = Vec::new();
+            if on {
+                parts.push((
+                    format!("{} ", icons::structure(StructureGroup::Columns)),
+                    Style::new().fg(theme::FG_MUTED),
+                ));
+            }
+            parts.push((app.i18n.label(Label::TreeGroupColumns).to_string(), Style::new().fg(theme::FG_MUTED)));
+            parts.push((format!(" ({count})"), dim));
+            parts
+        }
+        Node::StructColumn(.., sg, k, m) => {
+            let Some(c) = st.item_columns(sg, k).into_iter().nth(m) else { return Vec::new() };
+            let schema = tree.object_name(i, g, j).map(|(s, _)| s).unwrap_or_default();
+            item_column_parts(st, sg, k, &c, &schema, on)
         }
         Node::StructDetail(.., StructureGroup::ForeignKeys, k, _) => {
             let Some(f) = st.foreign_keys.get(k) else { return Vec::new() };
@@ -280,21 +305,7 @@ fn item_parts(app: &App, st: &TableStructure, sg: StructureGroup, k: usize) -> V
             let Some(c) = st.columns.get(k) else { return Vec::new() };
             let mut parts = mark_parts(st.marks(&c.name), &c.type_name, on);
             parts.push(name(&c.name));
-            let mut detail = vec![c.type_name.clone()];
-            if c.not_null {
-                detail.push("not null".into());
-            }
-            if let Some(d) = &c.default {
-                detail.push(format!("default {d}"));
-            }
-            match &c.fill {
-                ColumnFill::Default => {}
-                ColumnFill::Stored(e) => detail.push(format!("generated ({e})")),
-                ColumnFill::Virtual(e) => detail.push(format!("generated ({e}) virtual")),
-                ColumnFill::IdentityAlways => detail.push("identity always".into()),
-                ColumnFill::IdentityByDefault => detail.push("identity".into()),
-            }
-            parts.push((format!("  {}", detail.join(", ")), dim));
+            parts.push((format!("  {}", column_detail(c)), dim));
             return parts;
         }
         StructureGroup::PrimaryKey => {
@@ -364,6 +375,66 @@ fn item_parts(app: &App, st: &TableStructure, sg: StructureGroup, k: usize) -> V
     let mut out = icon;
     out.append(&mut parts);
     out
+}
+
+/// What a column is, as its line says after its name: `bigint, not null, default …`.
+fn column_detail(c: &StructureColumn) -> String {
+    let mut detail = vec![c.type_name.clone()];
+    if c.not_null {
+        detail.push("not null".into());
+    }
+    if let Some(d) = &c.default {
+        detail.push(format!("default {d}"));
+    }
+    match &c.fill {
+        ColumnFill::Default => {}
+        ColumnFill::Stored(e) => detail.push(format!("generated ({e})")),
+        ColumnFill::Virtual(e) => detail.push(format!("generated ({e}) virtual")),
+        ColumnFill::IdentityAlways => detail.push("identity always".into()),
+        ColumnFill::IdentityByDefault => detail.push("identity".into()),
+    }
+    detail.join(", ")
+}
+
+/// Column `c` of item `k` of group `sg` (in schema `schema`): as the table's Columns group
+/// shows it (its key marks or its type's icon, its name, what it is), a foreign key's with the
+/// column it references (its schema left out when it is the table's), an index key's with its
+/// options, an `INCLUDE` column marked; an expression's key as its text, marked.
+fn item_column_parts(
+    st: &TableStructure,
+    sg: StructureGroup,
+    k: usize,
+    c: &ItemColumn,
+    schema: &str,
+    on: bool,
+) -> Vec<(String, Style)> {
+    let dim = Style::new().fg(theme::FG_DIM);
+    let table_column = c.column.as_deref().and_then(|n| st.column(n));
+    let mut parts = match table_column {
+        Some(col) => mark_parts(st.marks(&col.name), &col.type_name, on),
+        None if on => vec![(format!("{} ", TypeCategory::Other.glyph()), dim)],
+        None => Vec::new(),
+    };
+    parts.push((c.text.clone(), Style::new().fg(theme::FG)));
+    if let (Some(to), Some(f)) = (&c.references, st.foreign_keys.get(k).filter(|_| sg == StructureGroup::ForeignKeys)) {
+        let table =
+            if f.ref_schema == schema { f.ref_table.clone() } else { format!("{}.{}", f.ref_schema, f.ref_table) };
+        parts.push((format!(" → {table}.{to}"), Style::new().fg(theme::FG_MUTED)));
+    }
+    let mut detail = match (table_column, &c.column) {
+        (Some(col), _) => column_detail(col),
+        (None, None) => "expression".to_string(),
+        (None, Some(_)) => String::new(),
+    };
+    for extra in [c.options.as_str(), if c.include { "include" } else { "" }] {
+        if !extra.is_empty() {
+            detail.push_str(&format!("{}{extra}", if detail.is_empty() { "" } else { " · " }));
+        }
+    }
+    if !detail.is_empty() {
+        parts.push((format!("  {detail}"), dim));
+    }
+    parts
 }
 
 /// A column's key marks (PK/FK/UQ) or, with icons on, the icon of its type's category when it
