@@ -10,6 +10,7 @@
 
 use super::*;
 use crate::widgets::tree::{Node, Reveal};
+use datarig_core::driver::SessionContext;
 use datarig_core::profile::folder::FolderPath;
 
 /// What a row of the explorer shows.
@@ -576,7 +577,14 @@ impl App {
     /// anything under one, that database and schema), else with the profile's defaults. The
     /// editor gets the focus; the profile connects when it is not.
     fn console_here(&mut self, row: &Row) {
-        let Some(id) = row.profile() else { return };
+        if let Some((id, context)) = self.console_here_context(row) {
+            self.console_in(id, context);
+        }
+    }
+
+    /// The profile and context of `O` on `row`: see [`App::console_here`].
+    pub(super) fn console_here_context(&self, row: &Row) -> Option<(ProfileId, SessionContext)> {
+        let id = row.profile()?;
         let (db, schema) = match &row.kind {
             RowKind::Node(_, n) => (None, self.conns.get(id).and_then(|c| c.tree.schema_of(*n)).map(str::to_string)),
             RowKind::Database(_, db) => (db.clone(), None),
@@ -587,8 +595,7 @@ impl App {
             }
             _ => (None, None),
         };
-        let context = self.session_context(id, db, schema);
-        self.console_in(id, context);
+        Some((id, self.session_context(id, db, schema)))
     }
 
     /// What a node of the schema tree of profile `id`'s database `db` (not its own) asked for:

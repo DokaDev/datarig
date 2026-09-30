@@ -7,7 +7,7 @@ mod common;
 
 use common::*;
 use datarig_core::config::Config;
-use datarig_core::driver::{DbCommand, DbEvent, SessionRole};
+use datarig_core::driver::{DbCommand, DbEvent, SessionContext, SessionRole};
 use datarig_core::i18n::Lang;
 use datarig_core::profile::{ConnectionConfig, ProfileId};
 use datarig_tui::app::overlay::OverlayKind;
@@ -1020,4 +1020,85 @@ fn enter_keeps_the_profile_and_the_connection() {
     h.command("conn.disconnect");
     h.keys("y");
     assert_eq!(h.app.conns.state(id(&h, "local-pg")), NodeState::Disconnected, "y disconnects");
+}
+
+/// Right click on a database, a schema or a table while the keyboard's cursor is on another
+/// row: the menu has one console item, which says where, and it opens the console there as
+/// `O` does (it opened one with the profile's defaults).
+#[test]
+fn the_menus_console_opens_where_the_click_was() {
+    let mut h = Harness::connected(Lang::En);
+    h.explore("local-pg");
+    h.db(DbEvent::Databases(Ok(vec!["datarig".into(), "sales".into()])));
+    cursor_on(&mut h, "    shop");
+    h.key(KeyCode::Char('l'));
+    h.db(DbEvent::Objects {
+        schema: "shop".into(),
+        result: Ok((vec!["orders".into(), "users".into()], Vec::new()).into()),
+    });
+    let at = |db: Option<&str>, schema: Option<&str>| SessionContext {
+        database: db.map(str::to_string),
+        schema: schema.map(str::to_string),
+    };
+    for (row, label, want) in [
+        ("db:datarig*", "New console in datarig", at(None, None)),
+        ("public", "New console in public", at(None, Some("public"))),
+        ("users", "New console in shop", at(None, Some("shop"))),
+        ("db:sales", "New console in sales", at(Some("sales"), None)),
+    ] {
+        h.explore("local-pg");
+        h.right_click_row(row);
+        let ids = menu_ids(&h);
+        assert!(ids.contains(&"explorer.new_console_here"), "{row}: {ids:?}");
+        assert!(!ids.contains(&"conn.open_console"), "{row}: one console item, {ids:?}");
+        assert!(h.menu_labels().iter().any(|l| l == label), "{row}: {:?}", h.menu_labels());
+        let tabs = h.app.tabs.len();
+        h.keys("O");
+        assert_eq!(h.app.tabs.len(), tabs + 1, "{row}: a new console");
+        assert_eq!(h.app.tab().context, want, "{row}");
+    }
+    // On the profile itself: its defaults, as before.
+    cursor_on(&mut h, "+");
+    h.right_click_row("local-pg");
+    let ids = menu_ids(&h);
+    assert!(ids.contains(&"conn.open_console") && !ids.contains(&"explorer.new_console_here"), "{ids:?}");
+    h.keys("o");
+    assert_eq!(h.app.tab().context, SessionContext::default());
+}
+
+/// The menu of a folder and of a profile, each right-clicked while the keyboard's cursor is on
+/// the other: the items say what they act on and act on the clicked row.
+#[test]
+fn the_menu_of_a_folder_and_of_a_profile() {
+    use datarig_tui::app::chooser::NamePurpose;
+    let mut cfg = sample_config(None);
+    cfg.connections[1].folder = Some("work".into());
+    let mut h = launched(&cfg);
+    assert_eq!(h.rows(), ["+", "work/", "local-pg", "v6"]);
+    // The folder (the cursor on a profile).
+    h.explore("v6");
+    h.right_click_row("work/");
+    let labels = h.menu_labels();
+    for want in ["Rename folder", "Delete folder"] {
+        assert!(labels.iter().any(|l| l == want), "{want}: {labels:?}");
+    }
+    assert!(labels.iter().all(|l| !l.contains("profile or")), "{labels:?}");
+    h.keys("R");
+    let n = h.app.overlays.name_input().expect("the name dialog");
+    assert!(matches!(&n.purpose, NamePurpose::RenameFolder(f) if f.to_string() == "work"));
+    h.key(KeyCode::Esc);
+    // A profile (the cursor on the folder).
+    cursor_on(&mut h, "work/");
+    h.right_click_row("v6");
+    let labels = h.menu_labels();
+    for want in ["Delete connection profile", "Move connection profile to a folder"] {
+        assert!(labels.iter().any(|l| l == want), "{want}: {labels:?}");
+    }
+    h.keys("d");
+    assert!(h.screen(160, 45).contains("Delete the connection profile “v6”?"));
+    h.keys("n");
+    h.right_click_row("v6");
+    h.keys("m");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Chooser));
+    assert_eq!(h.app.selected_profile(), Some(id(&h, "v6")));
 }

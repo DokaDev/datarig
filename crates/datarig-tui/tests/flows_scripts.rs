@@ -382,6 +382,54 @@ fn rename_move_and_delete_from_the_explorer() {
     assert_eq!(h.app.tab().editor.text(), deleted_text);
 }
 
+/// The context menu of a saved query and of its folder, right-clicked while the keyboard's
+/// cursor is on the other one: each item says what it acts on, and acts on the clicked row
+/// (a saved query said "rename folder").
+#[test]
+fn the_menu_of_a_saved_query_and_of_a_folder() {
+    use datarig_tui::app::chooser::NamePurpose;
+    let dirs = Dirs::new("menu");
+    std::fs::create_dir_all(dirs.root.join("data/scripts/a")).unwrap();
+    std::fs::write(dirs.root.join("data/scripts/a/q1.sql"), "select 1").unwrap();
+    let cfg = config();
+    let mut h = launch(&cfg, &dirs);
+    select_row(&mut h, "a/");
+    h.keys("l");
+    // A saved query (the cursor on its folder).
+    h.right_click_row("q1");
+    let labels = h.menu_labels();
+    for want in ["Rename saved query", "Delete saved query", "Move saved query to a folder"] {
+        assert!(labels.iter().any(|l| l == want), "{want}: {labels:?}");
+    }
+    assert!(labels.iter().all(|l| !l.contains("folder") || l == "Move saved query to a folder"), "{labels:?}");
+    h.keys("R");
+    let n = h.app.overlays.name_input().expect("the name dialog");
+    assert_eq!(n.purpose, NamePurpose::RenameScript("a/q1.sql".into()));
+    assert_eq!(n.input.text(), "a/q1");
+    h.key(KeyCode::Esc);
+    h.right_click_row("q1");
+    h.keys("d");
+    assert!(h.screen(120, 40).contains("Delete the saved query “a/q1”?"));
+    h.keys("n");
+    h.right_click_row("q1");
+    h.keys("m");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Chooser));
+    h.key(KeyCode::Esc);
+    // Its folder (the cursor on the saved query).
+    select_row(&mut h, "q1");
+    h.right_click_row("a/");
+    let labels = h.menu_labels();
+    for want in ["Rename folder", "Delete folder", "Move folder into another folder"] {
+        assert!(labels.iter().any(|l| l == want), "{want}: {labels:?}");
+    }
+    assert!(labels.iter().all(|l| !l.contains("query")), "{labels:?}");
+    h.keys("R");
+    let n = h.app.overlays.name_input().expect("the name dialog");
+    assert_eq!(n.purpose, NamePurpose::RenameScriptFolder("a".into()));
+    assert_eq!(n.title, Msg::NameRenameScriptFolder { name: "a".into() });
+    h.key(KeyCode::Esc);
+}
+
 #[test]
 fn reopening_a_closed_script_reads_it_again() {
     let dirs = Dirs::new("reopen");
