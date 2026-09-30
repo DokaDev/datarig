@@ -10,20 +10,22 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 
 pub(crate) fn level_color(l: Level) -> ratatui::style::Color {
+    let th = theme::cur();
     match l {
-        Level::Info => theme::FG,
-        Level::Success => theme::SUCCESS,
-        Level::Warning => theme::WARNING,
-        Level::Error => theme::ERROR,
+        Level::Info => th.fg,
+        Level::Success => th.success,
+        Level::Warning => th.warning,
+        Level::Error => th.error,
     }
 }
 
 pub(crate) fn draw_status(app: &mut App, area: Rect, buf: &mut Buffer) {
-    let bar = Style::new().bg(theme::SURFACE).fg(theme::FG);
+    let th = theme::cur();
+    let bar = Style::new().bg(th.surface).fg(th.fg);
     buf.set_style(area, bar);
     let total = area.width as usize;
     let sep = " │ ";
-    let sep_style = Style::new().fg(theme::BORDER).bg(theme::SURFACE);
+    let sep_style = Style::new().fg(th.border).bg(th.surface);
 
     // The connection's name in its color and its policy, as plain text.
     let conn = app.conn().map(|c| {
@@ -34,11 +36,8 @@ pub(crate) fn draw_status(app: &mut App, area: Rect, buf: &mut Buffer) {
     let read_only = app.conn().is_some_and(|c| app.read_only(c.id)).then(|| app.i18n.label(Label::StatusReadOnly));
     let exec = &app.tab().exec;
     let tx = exec.user_tx().then(|| {
-        let (label, color) = if exec.tx_aborted {
-            (Label::StatusTxAborted, theme::ERROR)
-        } else {
-            (Label::StatusTxOpen, theme::ACCENT_WARM)
-        };
+        let (label, color) =
+            if exec.tx_aborted { (Label::StatusTxAborted, th.error) } else { (Label::StatusTxOpen, th.accent_warm) };
         (app.i18n.label(label).to_string(), color)
     });
     let lang = lang_segment(app);
@@ -75,17 +74,17 @@ pub(crate) fn draw_status(app: &mut App, area: Rect, buf: &mut Buffer) {
     let (mut name_seg, mut policy_seg) = (None, None);
     if let Some((name, color, policy)) = conn {
         name_seg = Some(segs.len());
-        segs.push((format!(" {name}"), Style::new().fg(color).bg(theme::SURFACE).add_modifier(Modifier::BOLD)));
+        segs.push((format!(" {name}"), Style::new().fg(color).bg(th.surface).add_modifier(Modifier::BOLD)));
         policy_seg = Some(segs.len());
-        segs.push((format!(" · {policy}"), Style::new().fg(theme::FG_MUTED).bg(theme::SURFACE)));
+        segs.push((format!(" · {policy}"), Style::new().fg(th.fg_muted).bg(th.surface)));
     }
     if let Some(ro) = read_only {
-        segs.push((" ".to_string(), Style::new().bg(theme::SURFACE)));
-        segs.push((format!(" {ro} "), Style::new().fg(theme::FG).bg(theme::SURFACE_ALT).add_modifier(Modifier::BOLD)));
+        segs.push((" ".to_string(), Style::new().bg(th.surface)));
+        segs.push((format!(" {ro} "), Style::new().fg(th.fg).bg(th.surface_alt).add_modifier(Modifier::BOLD)));
     }
     if let Some((tx, color)) = tx {
         push_sep(&mut segs);
-        segs.push((tx, Style::new().fg(color).bg(theme::SURFACE).add_modifier(Modifier::BOLD)));
+        segs.push((tx, Style::new().fg(color).bg(th.surface).add_modifier(Modifier::BOLD)));
     }
     let mut msg_segs: Vec<(String, Style)> = Vec::new();
     if let Some((text, level, running)) = status {
@@ -96,9 +95,9 @@ pub(crate) fn draw_status(app: &mut App, area: Rect, buf: &mut Buffer) {
                 .running
                 .map(|r| (r.started.elapsed().as_millis() / 100) as usize % SPINNER.len())
                 .unwrap_or(0);
-            msg_segs.push((format!("{} ", SPINNER[frame]), Style::new().fg(theme::ACCENT).bg(theme::SURFACE)));
+            msg_segs.push((format!("{} ", SPINNER[frame]), Style::new().fg(th.accent).bg(th.surface)));
         }
-        msg_segs.push((text.to_string(), Style::new().fg(level_color(level)).bg(theme::SURFACE)));
+        msg_segs.push((text.to_string(), Style::new().fg(level_color(level)).bg(th.surface)));
     }
     let msg_w: usize = msg_segs.iter().map(|(s, _)| width(s)).sum();
     // What leads the message: a separator after the segments, else one blank.
@@ -127,10 +126,10 @@ pub(crate) fn draw_status(app: &mut App, area: Rect, buf: &mut Buffer) {
         let mut v: Vec<(String, Style)> = Vec::new();
         for (i, (k, label)) in hints.iter().take(n).enumerate() {
             if i > 0 {
-                v.push((" · ".to_string(), Style::new().fg(theme::FG_DIM).bg(theme::SURFACE)));
+                v.push((" · ".to_string(), Style::new().fg(th.fg_dim).bg(th.surface)));
             }
-            v.push((k.clone(), Style::new().fg(theme::FG).bg(theme::SURFACE).add_modifier(Modifier::BOLD)));
-            v.push((format!(" {label}"), Style::new().fg(theme::FG_MUTED).bg(theme::SURFACE)));
+            v.push((k.clone(), Style::new().fg(th.fg).bg(th.surface).add_modifier(Modifier::BOLD)));
+            v.push((format!(" {label}"), Style::new().fg(th.fg_muted).bg(th.surface)));
         }
         v
     };
@@ -183,6 +182,7 @@ const NAME_MIN: usize = 8;
 /// neutral badge with `[editor] mode = "standard"`. `None` without an editor (no tab, a table
 /// tab) and a command line.
 pub(crate) fn mode_badge(app: &App) -> Option<(datarig_core::i18n::Localized, Style)> {
+    let th = theme::cur();
     use crate::widgets::editor::Mode;
     let command = app.overlays.is_open(crate::app::overlay::OverlayKind::Commands);
     // No editor on screen: no tab, or a table tab.
@@ -190,18 +190,18 @@ pub(crate) fn mode_badge(app: &App) -> Option<(datarig_core::i18n::Localized, St
         return None;
     }
     let (label, bg) = if command {
-        (Label::StatusModeCommand, theme::MODE_COMMAND)
+        (Label::StatusModeCommand, th.mode_command)
     } else {
         let mode = app.tab().editor.mode;
         let bg = match (app.editor_mode, mode) {
-            (datarig_core::config::EditorMode::Standard, _) => theme::MODE_NEUTRAL,
-            (_, Mode::Normal) => theme::MODE_NORMAL,
-            (_, Mode::Insert) => theme::MODE_INSERT,
-            (_, Mode::Visual) => theme::MODE_VISUAL,
+            (datarig_core::config::EditorMode::Standard, _) => th.mode_neutral,
+            (_, Mode::Normal) => th.mode_normal,
+            (_, Mode::Insert) => th.mode_insert,
+            (_, Mode::Visual) => th.mode_visual,
         };
         (mode.label(), bg)
     };
-    Some((app.i18n.label(label), Style::new().bg(bg).fg(theme::MODE_FG).add_modifier(Modifier::BOLD)))
+    Some((app.i18n.label(label), Style::new().bg(bg).fg(th.mode_fg).add_modifier(Modifier::BOLD)))
 }
 
 /// Right end of the status bar: the Hangul/Latin indicator (`status.hangul`) while Hangul is read as QWERTY keys, then the language.
@@ -212,18 +212,13 @@ pub(crate) fn lang_segment(app: &App) -> String {
 
 /// Draw [`lang_segment`] at the right end of `area`; returns its x.
 pub(crate) fn draw_lang(app: &App, seg: &str, area: Rect, buf: &mut Buffer) -> u16 {
+    let th = theme::cur();
     let x = area.x + area.width - width(seg) as u16;
-    let style = Style::new().fg(theme::ACCENT_WARM).bg(theme::SURFACE).add_modifier(Modifier::BOLD);
+    let style = Style::new().fg(th.accent_warm).bg(th.surface).add_modifier(Modifier::BOLD);
     let lang = format!(" {} ", app.i18n.label(Label::StatusLang));
     let hint_w = width(seg) - width(&lang);
     if hint_w > 0 {
-        buf.set_stringn(
-            x,
-            area.y,
-            &seg[..seg.len() - lang.len()],
-            hint_w,
-            Style::new().fg(theme::WARNING).bg(theme::SURFACE),
-        );
+        buf.set_stringn(x, area.y, &seg[..seg.len() - lang.len()], hint_w, Style::new().fg(th.warning).bg(th.surface));
     }
     buf.set_stringn(x + hint_w as u16, area.y, &lang, width(&lang), style);
     x

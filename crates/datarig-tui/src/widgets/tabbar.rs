@@ -65,12 +65,13 @@ pub fn state(app: &App, tab: &Tab) -> State {
 
 /// The mark and color of `state` (`frame`: the spinner's).
 fn state_mark(state: State, frame: &'static str) -> (&'static str, Color) {
+    let th = theme::cur();
     match state {
-        State::Idle => (IDLE, theme::FG_DIM),
-        State::Connected => (CONNECTED, theme::ACCENT),
-        State::Running => (frame, theme::ACCENT),
-        State::TxOpen => (TX_OPEN, theme::WARNING),
-        State::Trouble => (TROUBLE, theme::ACCENT_WARM),
+        State::Idle => (IDLE, th.fg_dim),
+        State::Connected => (CONNECTED, th.accent),
+        State::Running => (frame, th.accent),
+        State::TxOpen => (TX_OPEN, th.warning),
+        State::Trouble => (TROUBLE, th.accent_warm),
     }
 }
 
@@ -109,17 +110,18 @@ enum PartKind {
 
 /// One tab label, `doc_max` columns at most for the document's name.
 fn label(app: &App, index: usize, tab: &Tab, active: bool, doc_max: usize) -> Vec<Part> {
-    let bg = if active { theme::SURFACE_ALT } else { theme::BG };
+    let th = theme::cur();
+    let bg = if active { th.surface_alt } else { th.bg };
     let part = |text: String, style: Style| Part { text, style, kind: PartKind::Plain };
     let profile = tab.profile.and_then(|id| app.profiles.iter().find(|p| p.id == id));
     // The number in the profile's color: which connection, at a glance.
-    let color = profile.map_or(theme::FG_MUTED, |p| theme::profile_color(p.display_color()));
+    let color = profile.map_or(th.fg_muted, |p| theme::profile_color(p.display_color()));
     let mut num = Style::new().fg(color).bg(bg).add_modifier(Modifier::BOLD);
     if !active {
         num = num.remove_modifier(Modifier::BOLD);
     }
     let mark = |c: Color| Style::new().fg(c).bg(bg);
-    let mut doc = Style::new().fg(if active { theme::FG } else { theme::FG_MUTED }).bg(bg);
+    let mut doc = Style::new().fg(if active { th.fg } else { th.fg_muted }).bg(bg);
     if active {
         doc = doc.add_modifier(Modifier::BOLD);
     }
@@ -130,13 +132,13 @@ fn label(app: &App, index: usize, tab: &Tab, active: bool, doc_max: usize) -> Ve
     }
     parts.push(Part { text: clip(&name, doc_max.max(1)), style: doc, kind: PartKind::Document });
     if tab.doc.conflict || tab.doc.save_error.is_some() {
-        parts.push(part(format!(" {UNSAVED}"), mark(theme::WARNING)));
+        parts.push(part(format!(" {UNSAVED}"), mark(th.warning)));
     }
     match profile {
         Some(p) => {
             // A read-only policy, in words (policies have no color).
             if app.read_only(p.id) {
-                let ro = Style::new().fg(theme::FG).bg(bg).add_modifier(Modifier::BOLD);
+                let ro = Style::new().fg(th.fg).bg(bg).add_modifier(Modifier::BOLD);
                 parts.push(part(format!(" {}", app.i18n.label(Label::TabReadOnly)), ro));
             }
             let frame = tab
@@ -148,16 +150,16 @@ fn label(app: &App, index: usize, tab: &Tab, active: bool, doc_max: usize) -> Ve
         }
         None => {
             let l = if tab.doc.recovered { Label::TabRecovered } else { Label::TabUnbound };
-            parts.push(part(format!(" {}", app.i18n.label(l)), mark(theme::FG_DIM)));
+            parts.push(part(format!(" {}", app.i18n.label(l)), mark(th.fg_dim)));
         }
     }
-    parts.push(part(" ".to_string(), mark(theme::FG_DIM)));
+    parts.push(part(" ".to_string(), mark(th.fg_dim)));
     parts.push(Part {
         text: CLOSE.to_string(),
-        style: mark(if active { theme::FG_MUTED } else { theme::FG_DIM }),
+        style: mark(if active { th.fg_muted } else { th.fg_dim }),
         kind: PartKind::Close,
     });
-    parts.push(part(" ".to_string(), mark(theme::FG_DIM)));
+    parts.push(part(" ".to_string(), mark(th.fg_dim)));
     parts
 }
 
@@ -203,8 +205,9 @@ const DOC_STEPS: [usize; 4] = [24, 16, 10, 6];
 /// Draw the tab bar; returns what each drawn stretch of columns leads to (`[x0, x1)`), exactly
 /// as drawn (a clipped tab counts for the columns it got).
 pub(crate) fn draw_tab_bar(app: &App, area: Rect, buf: &mut Buffer) -> Vec<(u16, u16, TabHit)> {
+    let th = theme::cur();
     let mut hits = Vec::new();
-    buf.set_style(area, Style::new().bg(theme::BG));
+    buf.set_style(area, Style::new().bg(th.bg));
     let total = area.width as usize;
     let active = app.tabs.active_index();
     // Full names when they fit; else shorter ones (the number, RO, state and × stay).
@@ -231,7 +234,7 @@ pub(crate) fn draw_tab_bar(app: &App, area: Rect, buf: &mut Buffer) -> Vec<(u16,
         // One column on each side for the scroll marks.
         window(&widths, active, total.saturating_sub(2))
     };
-    let arrow = Style::new().fg(theme::ACCENT).bg(theme::BG).add_modifier(Modifier::BOLD);
+    let arrow = Style::new().fg(th.accent).bg(th.bg).add_modifier(Modifier::BOLD);
     let mut x = area.x;
     let end = area.x + area.width;
     if first > 0 {

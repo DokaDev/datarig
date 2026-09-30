@@ -21,16 +21,17 @@ use ratatui::style::{Modifier, Style};
 
 /// Test-connection state, wrapped onto at most `lines` rows.
 pub(crate) fn test_line(app: &App, x: u16, y: u16, w: usize, lines: usize, buf: &mut Buffer) {
+    let th = theme::cur();
     // Through a tunnel: one line per stage (the SSH hop, then the database).
     if let Some(stages) = app.test_lines() {
         let frame = app.conn_test.as_ref().map(|t| (t.started.elapsed().as_millis() / 100) as usize).unwrap_or(0);
         for (i, (text, level)) in stages.iter().take(lines).enumerate() {
             let (spin, color) = match level {
-                Level::Info => (format!("{} ", SPINNER[frame % SPINNER.len()]), theme::FG),
+                Level::Info => (format!("{} ", SPINNER[frame % SPINNER.len()]), th.fg),
                 l => (String::new(), level_color(*l)),
             };
             let text = crate::text::clip(&format!("{spin}{text}"), w);
-            put(buf, x, y + i as u16, &text, w, Style::new().fg(color).bg(theme::SURFACE));
+            put(buf, x, y + i as u16, &text, w, Style::new().fg(color).bg(th.surface));
         }
         return;
     }
@@ -39,7 +40,7 @@ pub(crate) fn test_line(app: &App, x: u16, y: u16, w: usize, lines: usize, buf: 
             Level::Info => {
                 let frame =
                     app.conn_test.as_ref().map(|t| (t.started.elapsed().as_millis() / 100) as usize).unwrap_or(0);
-                (format!("{} ", SPINNER[frame % SPINNER.len()]), theme::FG)
+                (format!("{} ", SPINNER[frame % SPINNER.len()]), th.fg)
             }
             l => (String::new(), level_color(l)),
         };
@@ -48,21 +49,22 @@ pub(crate) fn test_line(app: &App, x: u16, y: u16, w: usize, lines: usize, buf: 
         for (i, l) in wrapped.iter().take(n).enumerate() {
             // Clip (with …) only the last visible line.
             let l = if i + 1 == n && wrapped.len() > n { format!("{l}…") } else { l.clone() };
-            put(buf, x, y + i as u16, &l, w, Style::new().fg(color).bg(theme::SURFACE));
+            put(buf, x, y + i as u16, &l, w, Style::new().fg(color).bg(th.surface));
         }
     }
 }
 
 /// One `‹ value ›` selector at (x, y); returns the columns used.
 fn selector(buf: &mut Buffer, x: u16, y: u16, room: usize, parts: &[(String, Style)], focused: bool) -> u16 {
-    let bg = if focused { theme::SELECTION_BG } else { theme::SURFACE_ALT };
+    let th = theme::cur();
+    let bg = if focused { th.selection } else { Style::new().bg(th.surface_alt) };
     let mut cx = x;
-    let mut all = vec![("‹ ".to_string(), Style::new().fg(theme::FG_MUTED))];
+    let mut all = vec![("‹ ".to_string(), Style::new().fg(th.fg_muted))];
     all.extend(parts.iter().cloned());
-    all.push((" ›".to_string(), Style::new().fg(theme::FG_MUTED)));
+    all.push((" ›".to_string(), Style::new().fg(th.fg_muted)));
     for (t, st) in all {
         let left = room.saturating_sub((cx - x) as usize);
-        cx += put(buf, cx, y, &t, left, st.bg(bg));
+        cx += put(buf, cx, y, &t, left, st.patch(bg));
     }
     cx - x
 }
@@ -71,6 +73,7 @@ fn selector(buf: &mut Buffer, x: u16, y: u16, room: usize, parts: &[(String, Sty
 /// fields of the current section, the buttons and the test-connection line. Returns the
 /// hardware cursor (the focused text input).
 pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> Option<(u16, u16)> {
+    let th = theme::cur();
     let pick_key = app.key_for(Action::PickKeyFile, Ctx::ProfileForm);
     let i18n = &app.i18n;
     let profiles = &app.profiles;
@@ -95,15 +98,15 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
     let label_w = FIELDS.iter().map(|f| width(&i18n.label(f.label()))).max().unwrap_or(8) + 2;
     let editing = form.editing;
     let errors = form.errors(|n| profiles.iter().enumerate().any(|(i, p)| p.name == n && Some(i) != editing));
-    let dim = Style::new().fg(theme::FG_DIM).bg(theme::SURFACE);
+    let dim = Style::new().fg(th.fg_dim).bg(th.surface);
     let mut cursor = None;
     // Inputs leave room for their hints (28 columns) and are at most 34 wide.
     let input_w = (iw.saturating_sub(label_w + 4 + 28) as u16).clamp(16, 34);
     let label_style = |focused: bool| {
         if focused {
-            Style::new().fg(theme::ACCENT).bg(theme::SURFACE).add_modifier(Modifier::BOLD)
+            Style::new().fg(th.accent).bg(th.surface).add_modifier(Modifier::BOLD)
         } else {
-            Style::new().fg(theme::FG_MUTED).bg(theme::SURFACE)
+            Style::new().fg(th.fg_muted).bg(th.surface)
         }
     };
     let right = inner.x + inner.width;
@@ -113,9 +116,9 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
     let mut x = inner.x + 1;
     for sec in Section::ALL {
         let style = if sec == form.section {
-            Style::new().fg(theme::BG).bg(theme::ACCENT).add_modifier(Modifier::BOLD)
+            Style::new().fg(th.bg).bg(th.accent).add_modifier(Modifier::BOLD)
         } else {
-            Style::new().fg(theme::FG_MUTED).bg(theme::SURFACE_ALT)
+            Style::new().fg(th.fg_muted).bg(th.surface_alt)
         };
         x += put(buf, x, inner.y, &format!(" {} ", i18n.label(sec.label())), room_from(x), style) + 1;
     }
@@ -161,16 +164,16 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
             f => f.label(),
         };
         put(buf, inner.x + 1, y, &i18n.label(label), label_w, label_style(focused));
-        let field_bg = if focused { theme::SELECTION_BG } else { theme::SURFACE_ALT };
-        let text = |t: &str| (t.to_string(), Style::new().fg(theme::FG));
+        let field_bg = if focused { th.selection } else { Style::new().bg(th.surface_alt) };
+        let text = |t: &str| (t.to_string(), Style::new().fg(th.fg));
         let after = match f {
             Field::Driver => {
                 let mut cx = x;
                 for (i, (_, name)) in DRIVERS.iter().enumerate() {
                     let (t, style) = if i == form.driver {
-                        (format!("‹{name}›"), Style::new().fg(theme::FG).bg(field_bg).add_modifier(Modifier::BOLD))
+                        (format!("‹{name}›"), Style::new().fg(th.fg).patch(field_bg).add_modifier(Modifier::BOLD))
                     } else if form.drivers_enabled[i] {
-                        (format!(" {name} "), Style::new().fg(theme::FG_MUTED).bg(theme::SURFACE))
+                        (format!(" {name} "), Style::new().fg(th.fg_muted).bg(th.surface))
                     } else {
                         (format!(" {name} "), dim.add_modifier(Modifier::CROSSED_OUT))
                     };
@@ -219,11 +222,11 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
                 for (name, chosen) in names {
                     let text = if chosen { format!("‹{name}›") } else { format!(" {name} ") };
                     let style = if chosen && focused {
-                        Style::new().fg(theme::BG).bg(theme::ACCENT).add_modifier(Modifier::BOLD)
+                        Style::new().fg(th.bg).bg(th.accent).add_modifier(Modifier::BOLD)
                     } else if chosen {
-                        Style::new().fg(theme::FG).bg(theme::SURFACE_ALT).add_modifier(Modifier::BOLD)
+                        Style::new().fg(th.fg).bg(th.surface_alt).add_modifier(Modifier::BOLD)
                     } else {
-                        Style::new().fg(theme::FG_MUTED).bg(theme::SURFACE)
+                        Style::new().fg(th.fg_muted).bg(th.surface)
                     };
                     cx += put(buf, cx, y, &text, room_from(cx), style);
                 }
@@ -272,13 +275,13 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
                     // The chosen one in ‹ › (like the SSL mode), so it shows without colors too.
                     let text = if kind == form.source { format!("‹{name}›") } else { format!(" {name} ") };
                     let style = if kind == form.source && focused {
-                        Style::new().fg(theme::BG).bg(theme::ACCENT).add_modifier(Modifier::BOLD)
+                        Style::new().fg(th.bg).bg(th.accent).add_modifier(Modifier::BOLD)
                     } else if kind == form.source {
-                        Style::new().fg(theme::FG).bg(theme::SURFACE_ALT).add_modifier(Modifier::BOLD)
+                        Style::new().fg(th.fg).bg(th.surface_alt).add_modifier(Modifier::BOLD)
                     } else if kind == SourceKind::Keychain && !form.keychain_ok {
                         dim.add_modifier(Modifier::CROSSED_OUT)
                     } else {
-                        Style::new().fg(theme::FG_MUTED).bg(theme::SURFACE)
+                        Style::new().fg(th.fg_muted).bg(th.surface)
                     };
                     cx += put(buf, cx, y, &text, room_from(cx), style);
                 }
@@ -291,7 +294,7 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
                 let cx = inp.render(
                     Rect::new(x, y, input_w, 1),
                     buf,
-                    Style::new().fg(theme::FG).bg(field_bg),
+                    Style::new().fg(th.fg).patch(field_bg),
                     focused,
                     mask,
                     None,
@@ -302,8 +305,7 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
                 if f == Field::SshKeyFile {
                     // The key file picker's button (`Ctrl+O` on the form too).
                     let bx = x + input_w + 1;
-                    let used =
-                        put(buf, bx, y, "[…]", room_from(bx), Style::new().fg(theme::ACCENT).bg(theme::SURFACE_ALT));
+                    let used = put(buf, bx, y, "[…]", room_from(bx), Style::new().fg(th.accent).bg(th.surface_alt));
                     form.key_button = Rect::new(bx, y, used, 1);
                     bx + used - 1
                 } else {
@@ -314,7 +316,7 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
         let after = after + 2;
         let room = room_from(after);
         if let Some((_, e)) = errors.iter().find(|(ef, _)| *ef == f) {
-            put(buf, after, y, &i18n.label(e.label()), room, Style::new().fg(theme::ERROR).bg(theme::SURFACE));
+            put(buf, after, y, &i18n.label(e.label()), room, Style::new().fg(th.error).bg(th.surface));
         } else {
             let hint = match (f, form.source) {
                 (Field::SshKeyFile, _) => Some(Msg::FormSshKeyHint { key: pick_key.clone() }),
@@ -341,7 +343,7 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
         && let Some(note) = form.ssh_key_note.as_ref().filter(|_| form.ssh_fields().contains(&Field::SshKeyFile))
     {
         let text = i18n.msg(note);
-        let style = Style::new().fg(theme::WARNING).bg(theme::SURFACE);
+        let style = Style::new().fg(th.warning).bg(th.surface);
         for (i, l) in wrap(&text, iw.saturating_sub(2)).iter().take(2).enumerate() {
             put(buf, inner.x + 1, inner.y + 12 + i as u16, l, iw.saturating_sub(2), style);
         }
@@ -356,7 +358,7 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
                 inner.y + 10,
                 &note,
                 iw.saturating_sub(2),
-                Style::new().fg(theme::WARNING).bg(theme::SURFACE),
+                Style::new().fg(th.warning).bg(th.surface),
             );
         }
         // DSN (full width) + inline problem
@@ -364,13 +366,13 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
         let focused = form.focus == Field::Dsn;
         put(buf, inner.x + 1, y, &i18n.label(Field::Dsn.label()), label_w, label_style(focused));
         let x = inner.x + 1 + label_w as u16;
-        let field_bg = if focused { theme::SELECTION_BG } else { theme::SURFACE_ALT };
+        let field_bg = if focused { th.selection } else { Style::new().bg(th.surface_alt) };
         let hide = datarig_core::profile::dsn::secret_span(form.dsn.text());
         let dsn_w = inner.width.saturating_sub(label_w as u16 + 2);
         let cx = form.dsn.render(
             Rect::new(x, y, dsn_w, 1),
             buf,
-            Style::new().fg(theme::FG).bg(field_bg),
+            Style::new().fg(th.fg).patch(field_bg),
             focused,
             false,
             hide,
@@ -380,7 +382,7 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
         }
         if let Some(p) = &form.dsn_problem {
             let detail = i18n.msg(&p.message());
-            put(buf, x, y + 1, &detail, dsn_w as usize, Style::new().fg(theme::ERROR).bg(theme::SURFACE));
+            put(buf, x, y + 1, &detail, dsn_w as usize, Style::new().fg(th.error).bg(th.surface));
         }
     }
     // Buttons
@@ -388,9 +390,9 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
     let mut x = inner.x + 1 + label_w as u16;
     for b in BUTTONS {
         let style = if form.focus == b {
-            Style::new().fg(theme::BG).bg(theme::ACCENT).add_modifier(Modifier::BOLD)
+            Style::new().fg(th.bg).bg(th.accent).add_modifier(Modifier::BOLD)
         } else {
-            Style::new().fg(theme::FG).bg(theme::SURFACE_ALT)
+            Style::new().fg(th.fg).bg(th.surface_alt)
         };
         let text = format!(" {} ", i18n.label(b.label()));
         x += put(buf, x, y, &text, room_from(x), style) + 2;

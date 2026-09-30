@@ -121,7 +121,7 @@ fn ctrl_o_opens_the_picker_in_ssh_and_enter_picks_a_key() {
     let key = color_of(&mut h, "id_ed25519");
     let public = color_of(&mut h, "id_ed25519.pub");
     assert_eq!(public, color_of(&mut h, "known_hosts"));
-    assert_eq!(public, datarig_tui::theme::FG_DIM);
+    assert_eq!(public, datarig_tui::theme::DARK.fg_dim);
     assert_ne!(key, public);
     // Typing filters; Enter picks the first match.
     h.type_text("ed2");

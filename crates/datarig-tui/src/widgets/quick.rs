@@ -16,6 +16,7 @@ use ratatui::style::{Modifier, Style};
 
 /// Draw the quick connect list; returns the hardware cursor (its input).
 pub(crate) fn draw_quick_connect(app: &mut App, area: Rect, buf: &mut Buffer) -> Option<(u16, u16)> {
+    let th = theme::cur();
     let q = app.overlays.quick()?;
     let title = app.i18n.label(match q.purpose {
         _ if q.context_of.is_some() => Label::QuickTitleContext,
@@ -29,20 +30,13 @@ pub(crate) fn draw_quick_connect(app: &mut App, area: Rect, buf: &mut Buffer) ->
     let inner = modal(rect, &title, &footer, buf);
     let iw = inner.width as usize;
     let (items, selected) = (q.items.clone(), q.selected);
-    put(
-        buf,
-        inner.x + 1,
-        inner.y,
-        "›",
-        1,
-        Style::new().fg(theme::ACCENT).bg(theme::SURFACE).add_modifier(Modifier::BOLD),
-    );
+    put(buf, inner.x + 1, inner.y, "›", 1, Style::new().fg(th.accent).bg(th.surface).add_modifier(Modifier::BOLD));
     let input = Rect::new(inner.x + 3, inner.y, inner.width.saturating_sub(4), 1);
     let placeholder = app.i18n.label(Label::QuickPlaceholder);
     let icons_on = app.icons_on();
     let (open, open_db) = (q.open.clone(), q.open_db.clone());
     let arrow = |on: bool| if on { "▾ " } else { "▸ " };
-    let dim = Style::new().fg(theme::FG_DIM);
+    let dim = Style::new().fg(th.fg_dim);
     let lines: Vec<Vec<(String, Style)>> = items
         .iter()
         .map(|row| match row {
@@ -56,26 +50,26 @@ pub(crate) fn draw_quick_connect(app: &mut App, area: Rect, buf: &mut Buffer) ->
                             .get(*id)
                             .and_then(|c| c.connecting.as_ref())
                             .map_or("⠋", |c| spinner_at(c.started, app.now())),
-                        theme::ACCENT,
+                        th.accent,
                     ),
                     crate::app::NodeState::Connected => (CONNECTED, color),
-                    crate::app::NodeState::Failed => (FAILED, theme::ERROR),
+                    crate::app::NodeState::Failed => (FAILED, th.error),
                 };
                 vec![
                     (arrow(open.contains(id)).to_string(), dim),
                     (format!("{mark} "), Style::new().fg(mark_color)),
                     (icons::cell(p, icons_on), Style::new().fg(color)),
-                    (p.name.clone(), Style::new().fg(theme::FG)),
+                    (p.name.clone(), Style::new().fg(th.fg)),
                     (p.folder.as_deref().map(|f| format!("  {f}/")).unwrap_or_default(), dim),
                 ]
             }
             QuickRow::Database(id, db) => vec![
                 ("    ".to_string(), dim),
                 (arrow(open_db.contains(&(*id, db.clone()))).to_string(), dim),
-                (db.clone(), Style::new().fg(theme::FG)),
+                (db.clone(), Style::new().fg(th.fg)),
             ],
             QuickRow::Schema(_, _, schema) => {
-                vec![("        ".to_string(), dim), (schema.clone(), Style::new().fg(theme::FG))]
+                vec![("        ".to_string(), dim), (schema.clone(), Style::new().fg(th.fg))]
             }
             QuickRow::Note(_, db, note) => {
                 let text = match note {
@@ -84,7 +78,7 @@ pub(crate) fn draw_quick_connect(app: &mut App, area: Rect, buf: &mut Buffer) ->
                     QuickNote::Failed(e) => e.clone(),
                 };
                 let indent = if db.is_some() { "        " } else { "    " };
-                let style = if matches!(note, QuickNote::Failed(_)) { Style::new().fg(theme::ERROR) } else { dim };
+                let style = if matches!(note, QuickNote::Failed(_)) { Style::new().fg(th.error) } else { dim };
                 vec![(indent.to_string(), dim), (text, style)]
             }
         })
@@ -92,36 +86,22 @@ pub(crate) fn draw_quick_connect(app: &mut App, area: Rect, buf: &mut Buffer) ->
     let first = selected.saturating_sub(rows - 1);
     for (row, parts) in lines.iter().enumerate().skip(first).take(rows) {
         let y = inner.y + 2 + (row - first) as u16;
-        let bg = if row == selected { theme::SELECTION_BG } else { theme::SURFACE };
-        buf.set_stringn(inner.x, y, fit("", iw, Align::Left), iw, Style::new().bg(bg));
+        let bg = if row == selected { th.selection } else { Style::new().bg(th.surface) };
+        buf.set_stringn(inner.x, y, fit("", iw, Align::Left), iw, bg);
         let mut x = inner.x + 1;
         for (text, style) in parts {
             let room = (inner.x + inner.width).saturating_sub(x + 1) as usize;
-            x += put(buf, x, y, text, room, style.bg(bg));
+            x += put(buf, x, y, text, room, style.patch(bg));
         }
     }
     if items.is_empty() {
         let none = app.i18n.label(Label::QuickNone);
-        put(
-            buf,
-            inner.x + 1,
-            inner.y + 2,
-            &none,
-            iw.saturating_sub(2),
-            Style::new().fg(theme::FG_DIM).bg(theme::SURFACE),
-        );
+        put(buf, inner.x + 1, inner.y + 2, &none, iw.saturating_sub(2), Style::new().fg(th.fg_dim).bg(th.surface));
     }
     let q = app.overlays.quick_mut()?;
-    let cx = q.input.render(input, buf, Style::new().fg(theme::FG).bg(theme::SURFACE), true, false, None);
+    let cx = q.input.render(input, buf, Style::new().fg(th.fg).bg(th.surface), true, false, None);
     if q.input.text().is_empty() {
-        put(
-            buf,
-            input.x,
-            input.y,
-            &placeholder,
-            input.width as usize,
-            Style::new().fg(theme::FG_DIM).bg(theme::SURFACE),
-        );
+        put(buf, input.x, input.y, &placeholder, input.width as usize, Style::new().fg(th.fg_dim).bg(th.surface));
     }
     Some((cx, inner.y))
 }

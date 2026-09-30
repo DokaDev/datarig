@@ -40,15 +40,14 @@ pub(crate) fn panel(title: &Localized, focused: bool, width: u16) -> Block<'stat
 
 /// A panel's border and background, without a title.
 fn frame(focused: bool) -> Block<'static> {
-    let border = if focused { theme::ACCENT } else { theme::BORDER };
-    Block::bordered()
-        .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(border).bg(theme::BG))
-        .style(theme::base())
+    let th = theme::cur();
+    let border = if focused { th.accent } else { th.border };
+    Block::bordered().border_type(BorderType::Rounded).border_style(Style::new().fg(border).bg(th.bg)).style(th.base())
 }
 
 fn title_style(focused: bool) -> Style {
-    let style = Style::new().fg(if focused { theme::FG } else { theme::FG_MUTED });
+    let th = theme::cur();
+    let style = Style::new().fg(if focused { th.fg } else { th.fg_muted });
     if focused { style.add_modifier(Modifier::BOLD) } else { style }
 }
 

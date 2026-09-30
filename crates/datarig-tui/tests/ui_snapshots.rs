@@ -25,8 +25,8 @@ fn main_layout_160x45_en() {
     let buf = t.backend().buffer();
     // Whole screen painted with `bg`; focused (editor) border uses `accent` (row 1: the tab
     // bar is above it).
-    assert_eq!(buf[(100, 30)].bg, theme::BG);
-    assert_eq!(buf[(40, 1)].fg, theme::ACCENT);
+    assert_eq!(buf[(100, 30)].bg, theme::DARK.bg);
+    assert_eq!(buf[(40, 1)].fg, theme::DARK.accent);
     assert_eq!(buf[(0, 0)].symbol(), "╭");
 }
 
@@ -201,10 +201,10 @@ fn explorer_tree_icons_on_and_off() {
             .find(|&(x, y)| buf[(x, y)].symbol() == g)
             .unwrap_or_else(|| panic!("{g:?} not drawn"))
     };
-    assert_eq!(buf[at("\u{f13a0}")].fg, theme::ACCENT);
-    assert_eq!(buf[at("\u{f06d0}")].fg, theme::FG_MUTED);
-    assert_eq!(buf[at("\u{f0284}")].fg, theme::FG_DIM);
-    assert_eq!(buf[at("\u{f084}")].fg, theme::KEY_PK);
+    assert_eq!(buf[at("\u{f13a0}")].fg, theme::DARK.accent);
+    assert_eq!(buf[at("\u{f06d0}")].fg, theme::DARK.fg_muted);
+    assert_eq!(buf[at("\u{f0284}")].fg, theme::DARK.fg_dim);
+    assert_eq!(buf[at("\u{f084}")].fg, theme::DARK.key_pk);
 }
 
 #[test]
@@ -233,7 +233,7 @@ fn grid_edge_rows_align_and_truncate() {
     assert!(row8.contains("タブ→入り"), "tab shown as →: {row8}");
     // NULL uses null_fg + italic.
     let x = (res.x..res.x + res.width).find(|&x| buf[(x, first_row + 1)].symbol() == "N").unwrap();
-    assert_eq!(buf[(x, first_row + 1)].fg, theme::NULL_FG);
+    assert_eq!(buf[(x, first_row + 1)].fg, theme::DARK.null_fg);
     assert!(buf[(x, first_row + 1)].modifier.contains(ratatui::style::Modifier::ITALIC));
     assert!(h.status(160, 45).trim_end().ends_with("EN"));
 }
@@ -320,7 +320,7 @@ fn draw_layers(h: &mut Harness, w: u16, hh: u16) -> (Buffer, Buffer, Buffer) {
     let mut t = Terminal::new(TestBackend::new(w, hh)).unwrap();
     t.draw(|f| {
         let area = f.area();
-        f.buffer_mut().set_style(area, theme::base());
+        f.buffer_mut().set_style(area, theme::DARK.base());
         let cursor = screens::draw_screen(f, &mut h.app);
         screen = f.buffer_mut().clone();
         for cell in &mut f.buffer_mut().content {
@@ -407,7 +407,7 @@ fn overlays_clear_only_their_box_and_dim_the_screen() {
             let (screen, marked, real) = draw_layers(&mut h, w, hh);
             // The COMMAND badge of the command line stands out of the dimmed status bar, apart
             // from the command line's box.
-            let badge = |p: ratatui::layout::Position| p.y + 1 == hh && real[p].bg == theme::MODE_COMMAND;
+            let badge = |p: ratatui::layout::Position| p.y + 1 == hh && real[p].bg == theme::DARK.mode_command;
             // The overlay's box: every cell the overlays drew over the marked screen.
             let drawn: Vec<(u16, u16)> = marked
                 .area
@@ -442,7 +442,7 @@ fn overlays_clear_only_their_box_and_dim_the_screen() {
                 // (2) Outside the box the screen keeps its symbols, dimmed.
                 assert_eq!(
                     (m.fg, m.bg),
-                    (theme::dim_fg(s.fg), theme::dim_bg(s.bg)),
+                    (theme::DARK.dim_fg(s.fg), theme::DARK.dim_bg(s.bg)),
                     "{name} {w}x{hh}: not dimmed at {p:?}"
                 );
                 // A wide glyph straddling the box's left border is blanked on purpose.
@@ -584,7 +584,7 @@ fn command_line_en_ko_sizes() {
                 datarig_core::i18n::I18n::new(lang).label(datarig_core::i18n::Label::StatusModeCommand)
             );
             assert!(last.starts_with(&badge), "{last}");
-            assert_eq!(t.backend().buffer()[(0, hh - 1)].bg, theme::MODE_COMMAND);
+            assert_eq!(t.backend().buffer()[(0, hh - 1)].bg, theme::DARK.mode_command);
         }
     }
     // Filtering: fuzzy query narrows and ranks the list.
@@ -870,7 +870,7 @@ fn explorer_at_launch_en_ko_sizes() {
             // The cursor is on the last used profile (row 3: "＋", local-pg, v6, 分析-replica).
             let area = h.app.explorer.area;
             let buf = t.backend().buffer();
-            assert_eq!(buf[(area.x + 3, area.y + 3)].bg, theme::SELECTION_BG);
+            assert_eq!(buf[(area.x + 3, area.y + 3)].bg, theme::DARK.selection.bg.unwrap());
             assert!(row_text(buf, area.y + 3).contains("分析-replica"));
         }
     }
@@ -1609,9 +1609,9 @@ fn grid_key_marks_en_ko_icons_on_off() {
     let buf = t.backend().buffer();
     let y = h.app.layout.results.y + 1;
     let x = (0..160).find(|&x| buf[(x, y)].symbol() == "P").unwrap();
-    assert_eq!(buf[(x, y)].fg, theme::KEY_PK);
+    assert_eq!(buf[(x, y)].fg, theme::DARK.key_pk);
     let x = (0..160).find(|&x| buf[(x, y)].symbol() == "U").unwrap();
-    assert_eq!(buf[(x, y)].fg, theme::KEY_UQ);
+    assert_eq!(buf[(x, y)].fg, theme::DARK.key_uq);
 }
 
 /// The result inspector: the Cell tab with a JSON value pretty-printed, and the Row
@@ -1659,7 +1659,7 @@ fn grid_copy_menu_and_range_en_ko_sizes() {
     let buf = t.backend().buffer();
     let x = h.app.tabs.active().grid.hit_cols[1].0 + 2;
     let y = h.app.layout.results.y + 1 + 2 + 1;
-    assert_eq!(buf[(x, y)].bg, theme::RANGE_BG, "the range's first cell");
+    assert_eq!(buf[(x, y)].bg, theme::DARK.range.bg.unwrap(), "the range's first cell");
 }
 
 /// The settings screen: categories, current values and what they mean, the selected
@@ -1698,26 +1698,29 @@ fn mode_badge_colors_follow_the_mode() {
         let end = 2 + text[1..].find(' ').expect("the badge's end");
         // The status bar after it (dimmed behind the command line).
         let after = buf[(end as u16, 23)].bg;
-        assert!(after == theme::SURFACE || after == theme::dim_bg(theme::SURFACE), "{name}: the badge ends at {end}");
+        assert!(
+            after == theme::DARK.surface || after == theme::DARK.dim_bg(theme::DARK.surface),
+            "{name}: the badge ends at {end}"
+        );
         for x in 0..end as u16 {
             let c = &buf[(x, 23)];
-            assert_eq!((c.bg, c.fg), (bg, theme::MODE_FG), "{name}: cell {x} of {text:?}");
+            assert_eq!((c.bg, c.fg), (bg, theme::DARK.mode_fg), "{name}: cell {x} of {text:?}");
             assert!(c.modifier.contains(Modifier::BOLD), "{name}: bold");
         }
         lines.push(format!("{name:>8}: {}", &text[..end]));
     };
-    badge(&mut h, "normal", theme::MODE_NORMAL);
+    badge(&mut h, "normal", theme::DARK.mode_normal);
     h.keys("i");
-    badge(&mut h, "insert", theme::MODE_INSERT);
+    badge(&mut h, "insert", theme::DARK.mode_insert);
     h.key(KeyCode::Esc);
     h.keys("v");
-    badge(&mut h, "visual", theme::MODE_VISUAL);
+    badge(&mut h, "visual", theme::DARK.mode_visual);
     h.key(KeyCode::Esc);
     h.ctrl('k');
-    badge(&mut h, "command", theme::MODE_COMMAND);
+    badge(&mut h, "command", theme::DARK.mode_command);
     h.key(KeyCode::Esc);
     h.app.editor_mode = EditorMode::Standard;
-    badge(&mut h, "standard", theme::MODE_NEUTRAL);
+    badge(&mut h, "standard", theme::DARK.mode_neutral);
     insta::assert_snapshot!(lines.join("\n"));
 }
 
@@ -1742,11 +1745,11 @@ fn current_statement_is_marked_in_the_gutter() {
         let want = (3..=6).contains(&line);
         assert_eq!(marked(buf, line), want, "line {}: {}", line + 1, row_text(buf, y0 + line));
         if want {
-            assert_eq!(buf[(x_bar, y0 + line)].fg, theme::CURRENT_STMT_BAR);
-            let bg = if line == 4 { theme::CURSOR_LINE_BG } else { theme::CURRENT_STMT_BG };
+            assert_eq!(buf[(x_bar, y0 + line)].fg, theme::DARK.current_stmt_bar);
+            let bg = if line == 4 { theme::DARK.cursor_line.bg.unwrap() } else { theme::DARK.current_stmt.bg.unwrap() };
             assert_eq!(buf[(x_bar + 5, y0 + line)].bg, bg, "line {}", line + 1);
         } else {
-            assert_eq!(buf[(x_bar + 5, y0 + line)].bg, theme::BG, "line {}", line + 1);
+            assert_eq!(buf[(x_bar + 5, y0 + line)].bg, theme::DARK.bg, "line {}", line + 1);
         }
     }
     // It follows the cursor (to the third statement's line; line 8 is blank).
@@ -1759,6 +1762,6 @@ fn current_statement_is_marked_in_the_gutter() {
     let t = h.draw(100, 30);
     let buf = t.backend().buffer();
     assert!(marked(buf, 7) && marked(buf, 8) && !marked(buf, 6) && !marked(buf, 9));
-    assert_eq!(buf[(x_bar + 5, y0 + 6)].bg, theme::BG, "no tint on the statement before");
+    assert_eq!(buf[(x_bar + 5, y0 + 6)].bg, theme::DARK.bg, "no tint on the statement before");
     insta::assert_snapshot!("current_statement_selection", t.backend());
 }

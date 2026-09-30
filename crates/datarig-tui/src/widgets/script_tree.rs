@@ -17,6 +17,7 @@ use ratatui::style::{Modifier, Style};
 
 /// Draw the tree dialog; returns the hardware cursor while its name or filter has the keyboard.
 pub(crate) fn draw_script_tree(app: &mut App, area: Rect, buf: &mut Buffer) -> Option<(u16, u16)> {
+    let th = theme::cur();
     let icons_on = app.icons_on();
     let t = app.overlays.script_tree()?;
     let save = matches!(t.mode, TreeMode::Save { .. });
@@ -70,15 +71,15 @@ pub(crate) fn draw_script_tree(app: &mut App, area: Rect, buf: &mut Buffer) -> O
     for (i, (row, depth)) in rows.iter().enumerate().skip(scroll).take(h) {
         let y = list.y + (i - scroll) as u16;
         let bg = match (i == selected, tree_focus) {
-            (true, true) => theme::SELECTION_BG,
-            (true, false) => theme::SURFACE_ALT,
-            _ => theme::SURFACE,
+            (true, true) => th.selection,
+            (true, false) => Style::new().bg(th.surface_alt),
+            _ => Style::new().bg(th.surface),
         };
-        buf.set_stringn(list.x, y, fit("", iw, Align::Left), iw, Style::new().bg(bg));
+        buf.set_stringn(list.x, y, fit("", iw, Align::Left), iw, bg);
         let mut x = list.x + (*depth * 2) as u16;
         let right = list.x + list.width;
         let room = |x: u16| right.saturating_sub(x + 1) as usize;
-        let dim = Style::new().fg(theme::FG_DIM).bg(bg);
+        let dim = Style::new().fg(th.fg_dim).patch(bg);
         let arrow = match t.is_open(row) {
             Some(true) => "▾ ",
             Some(false) => "▸ ",
@@ -86,22 +87,22 @@ pub(crate) fn draw_script_tree(app: &mut App, area: Rect, buf: &mut Buffer) -> O
         };
         x += put(buf, x, y, arrow, room(x), dim);
         let (text, style) = match row {
-            TreeRow::Up => ("../".to_string(), Style::new().fg(theme::ACCENT).bg(bg)),
+            TreeRow::Up => ("../".to_string(), Style::new().fg(th.accent).patch(bg)),
             TreeRow::Top => (
                 if top.ends_with('/') { top.clone() } else { format!("{top}/") },
-                Style::new().fg(theme::FG).bg(bg).add_modifier(Modifier::BOLD),
+                Style::new().fg(th.fg).patch(bg).add_modifier(Modifier::BOLD),
             ),
             TreeRow::Folder(p) => {
-                (format!("{}/", scripts::display_name(p, true)), Style::new().fg(theme::ACCENT).bg(bg))
+                (format!("{}/", scripts::display_name(p, true)), Style::new().fg(th.accent).patch(bg))
             }
             // Key file mode: the whole name; likely keys stand out, public keys and the like
             // are dimmed.
             TreeRow::File(p) if key_file => {
                 let name = p.rsplit('/').next().unwrap_or(p).to_string();
                 let style = match key_picker::key_look(&name) {
-                    KeyLook::Likely => Style::new().fg(theme::ACCENT_WARM).bg(bg).add_modifier(Modifier::BOLD),
-                    KeyLook::Dim => Style::new().fg(theme::FG_DIM).bg(bg),
-                    KeyLook::Other => Style::new().fg(theme::FG).bg(bg),
+                    KeyLook::Likely => Style::new().fg(th.accent_warm).patch(bg).add_modifier(Modifier::BOLD),
+                    KeyLook::Dim => Style::new().fg(th.fg_dim).patch(bg),
+                    KeyLook::Other => Style::new().fg(th.fg).patch(bg),
                 };
                 (name, style)
             }
@@ -109,31 +110,23 @@ pub(crate) fn draw_script_tree(app: &mut App, area: Rect, buf: &mut Buffer) -> O
                 if icons_on {
                     x += put(buf, x, y, &format!("{} ", icons::SCRIPT), room(x), dim);
                 }
-                (scripts::display_name(p, false).to_string(), Style::new().fg(theme::FG).bg(bg))
+                (scripts::display_name(p, false).to_string(), Style::new().fg(th.fg).patch(bg))
             }
         };
         x += put(buf, x, y, &text, room(x), style);
         if t.unreadable(row) {
-            put(buf, x + 1, y, &unreadable, room(x + 1), Style::new().fg(theme::WARNING).bg(bg));
+            put(buf, x + 1, y, &unreadable, room(x + 1), Style::new().fg(th.warning).patch(bg));
         }
     }
     let rule = inner.y + list_h;
-    buf.set_stringn(inner.x, rule, "─".repeat(iw), iw, Style::new().fg(theme::BORDER).bg(theme::SURFACE));
+    buf.set_stringn(inner.x, rule, "─".repeat(iw), iw, Style::new().fg(th.border).bg(th.surface));
     let fy = rule + 1;
     let label = format!("{field}: ");
-    let lw =
-        put(buf, inner.x + 1, fy, &label, iw.saturating_sub(2), Style::new().fg(theme::FG_MUTED).bg(theme::SURFACE));
+    let lw = put(buf, inner.x + 1, fy, &label, iw.saturating_sub(2), Style::new().fg(th.fg_muted).bg(th.surface));
     // A long error wraps onto the two lines below the field.
     let lines = error.as_ref().map(|e| crate::text::wrap_words(e, iw.saturating_sub(2))).unwrap_or_default();
     for (i, l) in lines.iter().take(2).enumerate() {
-        put(
-            buf,
-            inner.x + 1,
-            fy + 1 + i as u16,
-            l,
-            iw.saturating_sub(2),
-            Style::new().fg(theme::ERROR).bg(theme::SURFACE),
-        );
+        put(buf, inner.x + 1, fy + 1 + i as u16, l, iw.saturating_sub(2), Style::new().fg(th.error).bg(th.surface));
     }
     // The folder the name goes into, before the name.
     let folder = t.folder().map(|f| format!("{f}/")).filter(|_| save).unwrap_or_default();
@@ -144,11 +137,11 @@ pub(crate) fn draw_script_tree(app: &mut App, area: Rect, buf: &mut Buffer) -> O
         fy,
         &folder,
         iw.saturating_sub((ix - inner.x) as usize + 1),
-        Style::new().fg(theme::FG_DIM).bg(theme::SURFACE),
+        Style::new().fg(th.fg_dim).bg(th.surface),
     );
     let t = app.overlays.script_tree_mut()?;
     let input = Rect::new(ix, fy, (inner.x + inner.width).saturating_sub(ix + 1), 1);
-    let bg = if tree_focus { theme::SURFACE } else { theme::SELECTION_BG };
-    let cx = t.input.render(input, buf, Style::new().fg(theme::FG).bg(bg), !tree_focus, false, None);
+    let bg = if tree_focus { Style::new().bg(th.surface) } else { th.selection };
+    let cx = t.input.render(input, buf, Style::new().fg(th.fg).patch(bg), !tree_focus, false, None);
     (!tree_focus).then_some((cx, fy))
 }

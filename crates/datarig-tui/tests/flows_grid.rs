@@ -108,7 +108,7 @@ fn a_clicked_inspector_switches_tabs_with_tab() {
     let status = h.status(160, 45);
     assert!(status.contains("Tab cell/row") && status.contains("Esc back"), "{status}");
     let t = h.draw(160, 45);
-    assert_eq!(t.backend().buffer()[(d.x, d.y)].fg, datarig_tui::theme::ACCENT, "its border shows the focus");
+    assert_eq!(t.backend().buffer()[(d.x, d.y)].fg, datarig_tui::theme::DARK.accent, "its border shows the focus");
     for (key, want) in
         [(KeyCode::Tab, DetailTab::Row), (KeyCode::BackTab, DetailTab::Cell), (KeyCode::Char('I'), DetailTab::Row)]
     {
