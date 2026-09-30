@@ -59,7 +59,7 @@ fn line_of(h: &mut Harness, text: &str) -> String {
 /// Opening a table asks for its structure once, one request (cached: closing and opening it
 /// again asks nothing); until it comes the table says it is loading. Then its line has the
 /// estimates read with it (no line of its own under it), and it shows the groups of a table,
-/// Columns open: each column with its marks and `type, not
+/// every one closed; Columns opens to each column with its marks and `type, not
 /// null, default …`. An empty group is dim, without a count, and does not open; the others
 /// open to their items, an index or trigger with what it is. The status bar shows the line under
 /// the cursor whole.
@@ -75,8 +75,24 @@ fn an_open_table_shows_its_structure_read_once() {
     assert!(line_of(&mut h, "users").ends_with("▾ users  ~11k rows · 4.2 MB"), "{}", line_of(&mut h, "users"));
     let tree = lines(&mut h);
     let at = tree.iter().position(|l| l.contains("▾ users")).unwrap();
-    assert!(tree[at + 1].ends_with("▾ Columns (5)"), "the groups right under it: {:?}", tree[at + 1]);
+    assert!(tree[at + 1].ends_with("▸ Columns (5)"), "the groups right under it: {:?}", tree[at + 1]);
     assert!(!tree.iter().any(|l| l.contains("~4.2 MB")), "{tree:?}");
+    let groups: Vec<&str> = tree[at + 1..at + 8].iter().map(|l| l.trim()).collect();
+    assert_eq!(
+        groups,
+        [
+            "▸ Columns (5)",
+            "▸ Primary Key",
+            "Foreign Keys",
+            "▸ Indexes (3)",
+            "▸ Unique Constraints (1)",
+            "Check Constraints",
+            "▸ Triggers (2)"
+        ],
+        "every group closed"
+    );
+    h.goto("Columns");
+    h.key(KeyCode::Char('l'));
     for want in [
         "▾ Columns (5)",
         "PK id  bigint, not null, default nextval('shop.users_id_seq'::regclass)",
@@ -139,7 +155,44 @@ fn an_open_table_shows_its_structure_read_once() {
     assert!(!lines(&mut h).iter().any(|l| l.contains("Columns")));
     h.key(KeyCode::Char('l'));
     assert!(asked(&h.sent()).is_empty(), "cached");
-    assert!(lines(&mut h).iter().any(|l| l.contains("users_touch")));
+    for want in ["▾ Columns (5)", "nickname  text", "users_touch", "▾ users_pkey"] {
+        assert!(lines(&mut h).iter().any(|l| l.contains(want)), "{want:?}:\n{}", lines(&mut h).join("\n"));
+    }
+    // Closed again, as it was.
+    h.goto("Columns");
+    h.key(KeyCode::Char('h'));
+    h.explore("local-pg");
+    h.goto("users");
+    h.key(KeyCode::Char('h'));
+    h.key(KeyCode::Char('l'));
+    assert!(line_of(&mut h, "Columns").ends_with("▸ Columns (5)") && line_of(&mut h, "Triggers").contains('▾'));
+    assert!(!lines(&mut h).iter().any(|l| l.contains("nickname  text")));
+}
+
+/// What is open is each table's own: another table opens with its groups closed, whatever the
+/// first has open, and each keeps its own while the other changes.
+#[test]
+fn each_table_remembers_its_own_open_groups() {
+    let mut h = shop_open(false);
+    h.goto("users");
+    h.key(KeyCode::Char('l'));
+    h.db(structure("shop", "users", users_structure()));
+    h.goto("Columns");
+    h.key(KeyCode::Char('l'));
+    h.explore("local-pg");
+    h.goto("orders");
+    h.key(KeyCode::Char('l'));
+    h.db(structure("shop", "orders", orders_structure()));
+    let tree = lines(&mut h);
+    let at = tree.iter().position(|l| l.ends_with("▾ orders  ~8 KB")).unwrap();
+    assert!(tree[at + 1].ends_with("▸ Columns (3)"), "{tree:?}");
+    h.goto("Foreign Keys (2)");
+    h.key(KeyCode::Char('l'));
+    // users kept its columns open, orders its foreign keys.
+    let tree = lines(&mut h);
+    let users = tree.iter().position(|l| l.contains("▾ users")).unwrap();
+    assert!(tree[users + 1].ends_with("▾ Columns (5)"), "{tree:?}");
+    assert!(tree[at + 1].ends_with("▸ Columns (3)") && tree.iter().any(|l| l.contains("orders_user_id_fkey")));
 }
 
 /// `r` on an open table (or anything of its structure) reads its structure again: it is loading
@@ -192,6 +245,8 @@ fn foreign_keys_go_to_the_table_they_reference() {
     assert!(line_of(&mut h, "orders").ends_with("▾ orders  ~8 KB"), "{}", line_of(&mut h, "orders"));
     assert!(!lines(&mut h).iter().any(|l| l.contains("~0 rows")));
     assert!(h.status(200, 45).contains("orders  rows unknown · ~8 KB"), "{}", h.status(200, 45));
+    h.goto("Columns");
+    h.key(KeyCode::Char('l'));
     assert!(line_of(&mut h, "PK FK id").ends_with("PK FK id  bigint, not null, identity always"));
     h.goto("Foreign Keys (2)");
     h.key(KeyCode::Char('l'));
@@ -212,6 +267,12 @@ fn foreign_keys_go_to_the_table_they_reference() {
     h.key(KeyCode::Enter);
     assert_eq!(h.rows()[h.selected()].trim(), "users");
     assert!(h.sent().is_empty(), "nothing to read");
+    // Opened there, it shows its groups, closed.
+    h.key(KeyCode::Char('l'));
+    h.db(structure("shop", "users", users_structure()));
+    assert!(h.explorer_line().ends_with("▾ users  ~11k rows · 4.2 MB"), "{}", h.explorer_line());
+    h.keys("j");
+    assert!(h.explorer_line().ends_with("▸ Columns (5)"), "{}", h.explorer_line());
     // Enter on the line of one to a schema not read yet: its objects are asked for, the cursor
     // goes there once they come.
     h.explore("local-pg");
@@ -247,7 +308,7 @@ fn views_show_the_groups_of_their_kind() {
     let tree = lines(&mut h);
     let at = tree.iter().position(|l| l.contains("order_summary")).unwrap();
     let below: Vec<&str> = tree[at + 1..].iter().map(|l| l.trim()).filter(|l| !l.is_empty()).collect();
-    assert_eq!(below.first(), Some(&"▾ Columns (5)"), "{below:?}");
+    assert_eq!(below.first(), Some(&"▸ Columns (5)"), "{below:?}");
     assert!(below.contains(&"Triggers"), "{below:?}");
     for absent in ["Indexes", "Primary Key", "rows"] {
         assert!(!below.iter().any(|l| l.contains(absent)), "{absent}: {below:?}");
@@ -405,8 +466,9 @@ fn another_databases_tables_read_through_its_session() {
     assert_eq!(h.explorer_line().trim(), "▸ users  ~40 rows");
 }
 
-/// The structure tree drawn: users and orders open with their groups, English, icons on and
-/// off, at 80x24 and 120x40. With icons on each group has its icon and each item its group's
+/// The structure tree drawn: users and orders open with their groups (orders its columns and
+/// foreign keys, users its indexes and triggers), English, icons on and off, at 80x24 and
+/// 120x40. With icons on each group has its icon and each item its group's
 /// (a column keeps its key marks or its type's icon).
 #[test]
 fn explorer_structure_icons_on_and_off() {
@@ -416,6 +478,8 @@ fn explorer_structure_icons_on_and_off() {
             h.goto("orders");
             h.key(KeyCode::Char('l'));
             h.db(structure("shop", "orders", orders_structure()));
+            h.goto("Columns");
+            h.key(KeyCode::Char('l'));
             h.goto("Foreign Keys");
             h.key(KeyCode::Char('l'));
             h.goto("orders_event_fkey");
@@ -440,6 +504,8 @@ fn explorer_structure_icons_on_and_off() {
     h.goto("users");
     h.key(KeyCode::Char('l'));
     h.db(structure("shop", "users", users_structure()));
+    h.goto("Columns");
+    h.key(KeyCode::Char('l'));
     for want in [
         "\u{f0835} Columns (5)",
         "\u{f084} id  bigint",

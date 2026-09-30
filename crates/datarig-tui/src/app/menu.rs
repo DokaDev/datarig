@@ -317,6 +317,35 @@ impl App {
         }
     }
 
+    /// The pointer moved over the open menu (no button): the item under it is selected, as the
+    /// keys would, and the keys go on from there. Over another row of the menu than the one whose
+    /// formats are open, the formats close. `false` when nothing changed (off the items, or on
+    /// the selected one): no frame is drawn for it.
+    pub(super) fn menu_hover(&mut self, ev: MouseEvent) -> bool {
+        let Some(m) = self.overlays.menu_mut() else { return false };
+        let at = ratatui::layout::Position::new(ev.column, ev.row);
+        if let Some(sub) = m.sub.as_mut()
+            && sub.list.contains(at)
+        {
+            let i = usize::from(ev.row - sub.list.y);
+            if i >= sub.items.len() || i == sub.selected {
+                return false;
+            }
+            sub.selected = i;
+            return true;
+        }
+        if !m.list.contains(at) {
+            return false;
+        }
+        let i = usize::from(ev.row - m.list.y);
+        if i >= m.items.len() || i == m.selected {
+            return false;
+        }
+        m.selected = i;
+        m.sub = None;
+        true
+    }
+
     /// The label and keys of a menu row (keys in the menu's context).
     fn menu_row(&self, ctx: Ctx, item: MenuItem) -> (Localized, String) {
         let keys =

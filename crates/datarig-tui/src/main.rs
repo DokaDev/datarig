@@ -110,8 +110,8 @@ async fn run(
     let mut signals = Signals::new()?;
     let mut cursor = Cursor::default();
     let mut first_frame = true;
-    // A frame is drawn after anything that may change the screen; a mouse move over the
-    // terminal (reported with every motion) changes nothing.
+    // A frame is drawn after anything that may change the screen; a mouse move (reported
+    // with every motion) changes nothing unless it selects another item of a menu or the help.
     let mut redraw = true;
     while !app.quit {
         if redraw {
