@@ -135,7 +135,7 @@ impl App {
         // The completion popup takes its keys before the editor.
         if self.tab().popup.is_some()
             && self.overlays.is_empty()
-            && matches!(ctx, Ctx::VimInsert | Ctx::Standard)
+            && ctx == Ctx::VimInsert
             && self.keymap.binds(Ctx::Completion, &chord)
         {
             self.key_state.clear();
@@ -169,8 +169,7 @@ impl App {
         } else {
             ctx
         };
-        let env = self.key_env();
-        let r = self.keymap.feed(&mut self.key_state, rctx, k, env);
+        let r = self.keymap.feed(&mut self.key_state, rctx, k);
         self.track_leader(r == Resolved::Pending && !repeat);
         match r {
             Resolved::Action(a) => {
@@ -189,7 +188,7 @@ impl App {
     /// Keys no action claims go to the widget of context `ctx`.
     fn forward(&mut self, ctx: Ctx, keys: &[KeyChord], repeat: bool) {
         match ctx {
-            Ctx::VimNormal | Ctx::VimVisual | Ctx::VimInsert | Ctx::Standard => {
+            Ctx::VimNormal | Ctx::VimVisual | Ctx::VimInsert => {
                 for k in keys {
                     self.editor_key(k.to_event());
                 }

@@ -282,7 +282,7 @@ fn the_terminal_theme_uses_the_terminal_colors_by_role() {
     assert!(th.range != th.selection && th.range != th.cursor_line && th.cursor_line != th.selection);
     let keys = [th.key_pk, th.key_fk, th.key_uq];
     assert!(keys[0] != keys[1] && keys[1] != keys[2] && keys[0] != keys[2]);
-    let badges = [th.mode_normal, th.mode_insert, th.mode_visual, th.mode_command, th.mode_neutral];
+    let badges = [th.mode_normal, th.mode_insert, th.mode_visual, th.mode_command];
     for (i, a) in badges.iter().enumerate() {
         assert_ne!(*a, th.mode_fg);
         assert!(badges[i + 1..].iter().all(|b| b != a), "{a:?} twice");
@@ -340,7 +340,6 @@ fn every_token_of_a_theme_can_be_set_by_name() {
         mode_insert: _,
         mode_visual: _,
         mode_command: _,
-        mode_neutral: _,
         mode_fg: _,
         search_match: _,
         match_paren: _,
@@ -351,7 +350,7 @@ fn every_token_of_a_theme_can_be_set_by_name() {
         dim: _,
     } = DARK;
     // Every field above but `dim`.
-    assert_eq!(COLOR_TOKENS.len() + STYLE_TOKENS.len(), 41);
+    assert_eq!(COLOR_TOKENS.len() + STYLE_TOKENS.len(), 40);
     let mut th = DARK;
     for (i, name) in COLOR_TOKENS.iter().enumerate() {
         *color_token(&mut th, name).unwrap() = Color::Indexed(i as u8);
@@ -359,7 +358,7 @@ fn every_token_of_a_theme_can_be_set_by_name() {
     for (i, name) in STYLE_TOKENS.iter().enumerate() {
         *style_token(&mut th, name).unwrap() = Style::new().bg(Color::Indexed(100 + i as u8));
     }
-    assert_eq!((th.bg, th.mode_fg), (Color::Indexed(0), Color::Indexed(22)));
+    assert_eq!((th.bg, th.mode_fg), (Color::Indexed(0), Color::Indexed(21)));
     assert_eq!(th.plan_misestimate, Style::new().bg(Color::Indexed(117)));
     assert!(color_token(&mut th, "selection").is_none() && style_token(&mut th, "bg").is_none());
 }
@@ -441,7 +440,7 @@ fn a_theme_file_replaces_tokens_of_the_theme_it_extends() {
 #[test]
 fn mode_badges_read_and_differ_in_truecolor_and_256_colors() {
     for (name, th) in rgb_themes() {
-        let badges = [th.mode_normal, th.mode_insert, th.mode_visual, th.mode_command, th.mode_neutral];
+        let badges = [th.mode_normal, th.mode_insert, th.mode_visual, th.mode_command];
         for bg in badges {
             assert!(contrast(th.mode_fg, bg) >= 4.5, "{name}: {bg:?}: {:.2}", contrast(th.mode_fg, bg));
             let (fg256, bg256) = (xterm_rgb(xterm256(th.mode_fg)), xterm_rgb(xterm256(bg)));

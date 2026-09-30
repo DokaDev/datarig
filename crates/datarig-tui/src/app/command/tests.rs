@@ -59,8 +59,7 @@ fn set_accepts_known_settings_and_values_only() {
     assert_eq!(set("language=ko"), Ok(Setting::Language(LangSetting::Ko)));
     assert_eq!(set("language = auto"), Ok(Setting::Language(LangSetting::Auto)), "spaces around =");
     assert_eq!(set("language=EN"), Ok(Setting::Language(LangSetting::En)), "values ignore case");
-    assert_eq!(set("editor=standard"), Ok(Setting::Editor(EditorMode::Standard)));
-    assert_eq!(set("editor=vim"), Ok(Setting::Editor(EditorMode::Vim)));
+    assert_eq!(set("editor=vim"), Err(SetError::UnknownKey("editor".into())), "vim keys only: no editor setting");
     assert_eq!(set(""), Err(SetError::Usage));
     assert_eq!(set("language"), Err(SetError::Usage), "no value");
     assert_eq!(set("=ko"), Err(SetError::Usage));
@@ -70,12 +69,12 @@ fn set_accepts_known_settings_and_values_only() {
         Err(SetError::BadValue { key: "language", value: "fr".into(), values: "en|ko|auto".into() })
     );
     assert_eq!(
-        set("editor="),
-        Err(SetError::BadValue { key: "editor", value: String::new(), values: "vim|standard".into() })
+        set("icons="),
+        Err(SetError::BadValue { key: "icons", value: String::new(), values: "on|off|auto".into() })
     );
     assert_eq!(
         setting_keys(),
-        "language|editor|icons|secrets.default_source|commands.position|detail_view|clipboard|copy_header|editor.cursor_shape|theme"
+        "language|icons|secrets.default_source|commands.position|detail_view|clipboard|copy_header|editor.cursor_shape|theme"
     );
     // A theme is a name the app looks up (built-in or a theme file).
     assert_eq!(parse_set("theme=gruvbox-light"), Ok(SetValue::Theme("gruvbox-light")));
@@ -138,20 +137,20 @@ fn completes_profile_names() {
 #[test]
 fn completes_setting_keys_then_values() {
     let got = |arg: &str| complete_arg(ArgKind::Setting, arg, &[]);
-    assert_eq!(got(""), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map(ArgCompletion::SetKey));
-    assert_eq!(got("c"), [4, 6, 7].map(ArgCompletion::SetKey));
-    assert_eq!(got("commands.position="), [ArgCompletion::SetValue(4, 0), ArgCompletion::SetValue(4, 1)]);
-    assert_eq!(got("sec"), [ArgCompletion::SetKey(3)]);
-    assert_eq!(got("secrets.default_source=p"), [ArgCompletion::SetValue(3, 5)]);
-    assert_eq!(got("icons=o"), [ArgCompletion::SetValue(2, 0), ArgCompletion::SetValue(2, 1)]);
+    assert_eq!(got(""), [0, 1, 2, 3, 4, 5, 6, 7, 8].map(ArgCompletion::SetKey));
+    assert_eq!(got("c"), [3, 5, 6].map(ArgCompletion::SetKey));
+    assert_eq!(got("commands.position="), [ArgCompletion::SetValue(3, 0), ArgCompletion::SetValue(3, 1)]);
+    assert_eq!(got("sec"), [ArgCompletion::SetKey(2)]);
+    assert_eq!(got("secrets.default_source=p"), [ArgCompletion::SetValue(2, 5)]);
+    assert_eq!(got("icons=o"), [ArgCompletion::SetValue(1, 0), ArgCompletion::SetValue(1, 1)]);
     assert_eq!(set("icons=OFF"), Ok(Setting::Icons(datarig_core::config::IconsSetting::Off)));
     assert_eq!(got("l"), [ArgCompletion::SetKey(0)]);
-    assert_eq!(got("ed"), [ArgCompletion::SetKey(1), ArgCompletion::SetKey(8)]);
-    assert_eq!(got("editor.cursor_shape="), [ArgCompletion::SetValue(8, 0), ArgCompletion::SetValue(8, 1)]);
+    assert_eq!(got("ed"), [ArgCompletion::SetKey(7)]);
+    assert_eq!(got("editor.cursor_shape="), [ArgCompletion::SetValue(7, 0), ArgCompletion::SetValue(7, 1)]);
     assert!(got("x").is_empty());
     assert_eq!(got("language="), [0, 1, 2].map(|v| ArgCompletion::SetValue(0, v)), "every value");
     assert_eq!(got("language=k"), [ArgCompletion::SetValue(0, 1)]);
-    assert_eq!(got("editor=s"), [ArgCompletion::SetValue(1, 1)]);
+    assert!(got("editor=s").is_empty(), "no editor setting");
     assert!(got("language=fr").is_empty(), "values are prefixes, not fuzzy");
     assert!(got("colour=").is_empty(), "no values for an unknown setting");
 }
@@ -163,12 +162,12 @@ fn completes_theme_names_given_by_the_app() {
         complete_arg(ArgKind::Setting, arg, &themes)
             .into_iter()
             .map(|c| match c {
-                ArgCompletion::Theme(9, i) => themes[i],
+                ArgCompletion::Theme(8, i) => themes[i],
                 other => panic!("{other:?}"),
             })
             .collect()
     };
-    assert_eq!(complete_arg(ArgKind::Setting, "th", &themes), [ArgCompletion::SetKey(9)]);
+    assert_eq!(complete_arg(ArgKind::Setting, "th", &themes), [ArgCompletion::SetKey(8)]);
     assert_eq!(got("theme="), themes, "every name, in order");
     assert_eq!(got("theme=gruvbox"), ["gruvbox", "gruvbox-light", "gruvbox-dark"], "exact first, then prefixes");
     assert_eq!(got("theme=m"), ["mine"]);

@@ -25,4 +25,4 @@ expression: backend
 "│                      ││ 8 │    8 │ 全角 ＡＢＣ 半角 …││                      │" Hidden by multi-width symbols: [(38, " "), (40, " "), (43, " "), (45, " "), (47, " "), (50, " "), (52, " ")]
 "│                      ││                              ││                      │"
 "╰──────────────────────╯╰──────────────────────────────╯╰──────────────────────╯"
-" NORMAL  local-pg · policy: default │ 8 rows · 12ms             │ Ctrl+E run EN "
+" NORMAL  local-pg · policy: default │ 8 rows · 12ms    │ i type · Ctrl+E run EN "

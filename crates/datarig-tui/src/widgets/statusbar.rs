@@ -178,9 +178,8 @@ pub(crate) fn draw_status(app: &mut App, area: Rect, buf: &mut Buffer) {
 const NAME_MIN: usize = 8;
 
 /// The mode badge at the left end of the status bar and its style (lualine style): NORMAL,
-/// INSERT and VISUAL in their colors, COMMAND while the `:` command line is open, and a
-/// neutral badge with `[editor] mode = "standard"`. `None` without an editor (no tab, a table
-/// tab) and a command line.
+/// INSERT and VISUAL (V-LINE by line) in their colors, COMMAND while the `:` command line is
+/// open. `None` without an editor (no tab, a table tab) and a command line.
 pub(crate) fn mode_badge(app: &App) -> Option<(datarig_core::i18n::Localized, Style)> {
     let th = theme::cur();
     use crate::widgets::editor::Mode;
@@ -192,14 +191,13 @@ pub(crate) fn mode_badge(app: &App) -> Option<(datarig_core::i18n::Localized, St
     let (label, bg) = if command {
         (Label::StatusModeCommand, th.mode_command)
     } else {
-        let mode = app.tab().editor.mode;
-        let bg = match (app.editor_mode, mode) {
-            (datarig_core::config::EditorMode::Standard, _) => th.mode_neutral,
-            (_, Mode::Normal) => th.mode_normal,
-            (_, Mode::Insert) => th.mode_insert,
-            (_, Mode::Visual) => th.mode_visual,
+        let ed = &app.tab().editor;
+        let bg = match ed.mode {
+            Mode::Normal => th.mode_normal,
+            Mode::Insert => th.mode_insert,
+            Mode::Visual => th.mode_visual,
         };
-        (mode.label(), bg)
+        (ed.mode_label(), bg)
     };
     Some((app.i18n.label(label), Style::new().bg(bg).fg(th.mode_fg).add_modifier(Modifier::BOLD)))
 }

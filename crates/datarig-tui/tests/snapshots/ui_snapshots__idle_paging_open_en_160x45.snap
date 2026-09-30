@@ -46,4 +46,4 @@ expression: backend
 "│                                      ││ 21 │   20                                                            ││                                              │"
 "│                                      ││ 22 │   21                                                            ││                                              │"
 "╰──────────────────────────────────────╯╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯"
-" NORMAL  local-pg · policy: default │ 500+ rows (more pages) · 5ms                          │ Ctrl+E run · Tab next pane · : commands · F1 help · Space more EN "
+" NORMAL  local-pg · policy: default │ 500+ rows (more pages) · 5ms                 │ i type · Ctrl+E run · Tab next pane · : commands · F1 help · Space more EN "

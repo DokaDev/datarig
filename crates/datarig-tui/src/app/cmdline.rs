@@ -75,7 +75,6 @@ pub struct CommandRow {
 fn setting_action(s: Setting) -> Option<Action> {
     match s {
         Setting::Language(l) => Some(Action::SetLanguage(l)),
-        Setting::Editor(m) => Some(Action::SetEditorMode(m)),
         Setting::Icons(i) => Some(Action::SetIcons(i)),
         Setting::DefaultSource(d) => Some(Action::SetDefaultSource(d)),
         Setting::CommandsPosition(_)
@@ -660,7 +659,6 @@ impl App {
     pub(super) fn apply_setting(&mut self, s: Setting) {
         match s {
             Setting::Language(l) => self.set_language(l),
-            Setting::Editor(m) => self.set_editor_mode(m),
             Setting::Icons(i) => self.set_icons(i),
             Setting::DefaultSource(d) => self.set_default_source(d),
             Setting::CommandsPosition(p) => self.set_prefs(s, |x| x.commands_position = p),

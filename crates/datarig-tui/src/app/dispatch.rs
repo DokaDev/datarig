@@ -95,7 +95,6 @@ impl App {
                 self.cycle_focus(-1);
             }
             Action::Quit => self.request_quit(),
-            Action::SetEditorMode(m) => self.set_editor_mode(m),
             Action::SetIcons(i) => self.set_icons(i),
             Action::SetDefaultSource(d) => self.set_default_source(d),
             Action::ToggleIcons => self.set_icons(if self.icons_on() { IconsSetting::Off } else { IconsSetting::On }),
@@ -384,17 +383,6 @@ impl App {
         self.quit = true;
     }
 
-    pub(super) fn set_editor_mode(&mut self, m: EditorMode) {
-        self.editor_mode = m;
-        self.key_state.clear();
-        let saved = self.persist();
-        let msg = match m {
-            EditorMode::Vim => Notice::new(Label::EditorModeVimSet, Level::Info),
-            EditorMode::Standard => Notice::new(Label::EditorModeStandardPending, Level::Warning),
-        };
-        self.flash(saved.unwrap_or(msg));
-    }
-
     /// `on` and `off` are saved at once; `auto` (not decided yet) asks the question again,
     /// whose answer is saved.
     pub(super) fn set_icons(&mut self, icons: IconsSetting) {
@@ -476,7 +464,6 @@ impl App {
             language: self.lang_setting.as_str(),
             icons: self.icons,
             theme: &self.theme_name,
-            editor_mode: self.editor_mode,
             default_source: self.default_source,
             prefs: self.prefs,
         };

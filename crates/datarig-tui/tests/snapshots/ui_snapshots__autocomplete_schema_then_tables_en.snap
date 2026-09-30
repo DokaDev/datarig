@@ -31,4 +31,4 @@ expression: backend
 "│                            ││                                                                                        │"
 "│                            ││                                                                                        │"
 "╰────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────╯"
-" INSERT  local-pg · policy: default │ Connected to local-pg         │ Ctrl+E run · Ctrl+N complete · Ctrl+K commands EN "
+" INSERT  local-pg · policy: default │ Connected to local-pg         │ Esc stop typing · Ctrl+E run · Ctrl+N complete EN "

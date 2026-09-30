@@ -2,20 +2,13 @@
 //! table is the single source for key handling, the command line's key column and
 //! `docs/keybindings.md`.
 //!
-//! Reserved keys belong to a widget (the editor's vim or standard keys, a dialog's own keys) or
+//! Reserved keys belong to a widget (the editor's vim keys, a dialog's own keys) or
 //! to an action of a later step. They are not actions: pressing one hands the keys to the
 //! focused widget. Declaring them lets the conflict check keep app bindings off them.
 
 use super::Ctx;
 use super::Ctx::*;
 use datarig_core::i18n::Label;
-
-/// A condition a binding needs to apply.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Cond {
-    /// The editor has a selection (standard mode: `Ctrl+C` copies instead of cancelling).
-    Selection,
-}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BindTarget {
@@ -33,7 +26,6 @@ pub struct Binding {
     pub ctx: Ctx,
     pub keys: &'static str,
     pub target: BindTarget,
-    pub when: Option<Cond>,
 }
 
 /// Keys no inner context may hide: they run, save, open the command line or help and
@@ -137,15 +129,6 @@ pub const HINTS: &[(Ctx, &[(&str, Label)])] = &[
         ],
     ),
     (
-        Standard,
-        &[
-            ("query.execute_current", Label::HintRun),
-            ("editor.complete", Label::HintComplete),
-            ("commands.open", Label::HintCommands),
-            ("help.context", Label::HintHelp),
-        ],
-    ),
-    (
         Inspector,
         &[
             ("results.detail_tab", Label::HintDetailTab),
@@ -156,6 +139,14 @@ pub const HINTS: &[(Ctx, &[(&str, Label)])] = &[
         ],
     ),
     (CellViewer, &[("query.execute_current", Label::HintRun), ("commands.open", Label::HintCommands)]),
+];
+
+/// Where vim starts and stops typing, for people new to it: the hint line of Normal mode
+/// starts with the first key, Insert mode's with the second (short labels), and the keyboard
+/// help opens the editor's sections with both (long labels). Vim keys, not actions.
+pub const VIM_BASICS: &[(Ctx, &str, Label, Label)] = &[
+    (VimNormal, "i", Label::HintType, Label::HelpVimType),
+    (VimInsert, "esc", Label::HintStopTyping, Label::HelpVimStopTyping),
 ];
 
 const ACTIONS: &[(Ctx, &str, &str)] = &[
@@ -331,8 +322,6 @@ const ACTIONS: &[(Ctx, &str, &str)] = &[
     // editor
     (VimInsert, "ctrl+n", "editor.complete"),
     (VimInsert, "f4", "editor.complete"),
-    (Standard, "ctrl+n", "editor.complete"),
-    (Standard, "f4", "editor.complete"),
 ];
 
 /// Every vim command key, including those the editor does not implement yet.
@@ -343,7 +332,7 @@ const VIM: &[&str] = &[
     // operators (text objects `iw`, `a(`, … follow them)
     "d", "c", "y", ">", "<", "=", "g ~", "g u", "g U", // counts, repeat, registers
     "1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "\"", // edits
-    "x", "X", "s", "S", "r", "R", "p", "P", "u", "ctrl+r", "J", "~", // modes
+    "x", "X", "D", "C", "Y", "s", "S", "r", "R", "p", "P", "u", "ctrl+r", "J", "~", // modes
     "i", "a", "I", "A", "o", "O", "v", "V", "ctrl+v", "esc", // search
     "/", "?", "n", "N", "*", "#", // scrolling
     "ctrl+d", "ctrl+u", "ctrl+f", "ctrl+b", "z z", "z t", "z b",
@@ -368,35 +357,6 @@ const VIM_INSERT: &[&str] = &[
     "ctrl+p",
 ];
 
-const STANDARD: &[&str] = &[
-    "ctrl+x",
-    "ctrl+v",
-    "ctrl+z",
-    "ctrl+y",
-    "ctrl+a",
-    "shift+left",
-    "shift+right",
-    "shift+up",
-    "shift+down",
-    "shift+home",
-    "shift+end",
-    "ctrl+left",
-    "ctrl+right",
-    "ctrl+backspace",
-    "tab",
-    "shift+tab",
-    "esc",
-    "enter",
-    "backspace",
-    "delete",
-    "left",
-    "right",
-    "up",
-    "down",
-    "home",
-    "end",
-];
-
 /// Editing keys of a one-line text input.
 const TEXT: &[&str] = &["backspace", "delete", "left", "right", "home", "end", "ctrl+u", "ctrl+a"];
 
@@ -405,7 +365,6 @@ const RESERVED: &[(Ctx, &[&str], &str)] = &[
     (VimNormal, VIM, "vim"),
     (VimVisual, VIM, "vim"),
     (VimInsert, VIM_INSERT, "vim Insert"),
-    (Standard, STANDARD, "standard editing"),
     (Commands, &["esc", "enter", "up", "down", "ctrl+p", "ctrl+n", "tab", "shift+tab"], "command line"),
     (Commands, TEXT, "text input"),
     (ExplorerFilter, TEXT, "text input"),
@@ -461,25 +420,11 @@ const RESERVED: &[(Ctx, &[&str], &str)] = &[
 
 /// Every default binding, in table order.
 pub fn defaults() -> Vec<Binding> {
-    let mut v: Vec<Binding> = ACTIONS
-        .iter()
-        .map(|&(ctx, keys, id)| Binding { ctx, keys, target: BindTarget::Action(id), when: None })
-        .collect();
-    // Standard mode: Ctrl+C copies when there is a selection, otherwise it cancels the query.
-    v.push(Binding {
-        ctx: Standard,
-        keys: "ctrl+c",
-        target: BindTarget::Reserved("copy"),
-        when: Some(Cond::Selection),
-    });
-    v.extend(GROUPS.iter().map(|&(ctx, keys, label)| Binding {
-        ctx,
-        keys,
-        target: BindTarget::Group(label),
-        when: None,
-    }));
+    let mut v: Vec<Binding> =
+        ACTIONS.iter().map(|&(ctx, keys, id)| Binding { ctx, keys, target: BindTarget::Action(id) }).collect();
+    v.extend(GROUPS.iter().map(|&(ctx, keys, label)| Binding { ctx, keys, target: BindTarget::Group(label) }));
     for &(ctx, keys, note) in RESERVED {
-        v.extend(keys.iter().map(|&k| Binding { ctx, keys: k, target: BindTarget::Reserved(note), when: None }));
+        v.extend(keys.iter().map(|&k| Binding { ctx, keys: k, target: BindTarget::Reserved(note) }));
     }
     v
 }

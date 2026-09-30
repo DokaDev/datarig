@@ -3,7 +3,7 @@
 //! the keymap and the action registry, so remapped keys show up everywhere.
 
 use super::*;
-use crate::keymap::{Child, HINTS, LEADER, Target, keys, parse_keys};
+use crate::keymap::{Child, HINTS, LEADER, Target, VIM_BASICS, keys, parse_keys};
 use crate::widgets::text_input::InputResult;
 use ratatui::layout::Position;
 
@@ -59,6 +59,11 @@ pub enum HelpRow {
         count: usize,
     },
     Entry(HelpItem),
+    /// A key the focused widget handles (the vim basics at the top of the editor's sections).
+    Key {
+        keys: String,
+        label: Localized,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -127,7 +132,7 @@ impl App {
             }
             _ => {
                 seq.push(k);
-                match self.keymap.resolve_seq(origin, &seq, self.key_env()) {
+                match self.keymap.resolve_seq(origin, &seq) {
                     (Some(Target::Action(a)), _) => {
                         // An item that cannot run now does nothing.
                         if (action::spec(a).when)(self) {
@@ -141,9 +146,7 @@ impl App {
                         }
                     }
                     // The key that opens the command line here (`:`, as the footer says) opens it.
-                    _ if self.keymap.resolve_seq(origin, &[k], self.key_env()).0
-                        == Some(Target::Action(Action::OpenCommands)) =>
-                    {
+                    _ if self.keymap.resolve_seq(origin, &[k]).0 == Some(Target::Action(Action::OpenCommands)) => {
                         self.overlays.close(OverlayKind::WhichKey);
                         self.dispatch(Action::OpenCommands);
                     }
@@ -159,10 +162,9 @@ impl App {
     /// Title (the keys typed so far and the group's label) and entries of the which-key popup.
     pub fn which_key_items(&self) -> Option<(Localized, Vec<WhichKeyItem>)> {
         let w = self.overlays.which_key()?;
-        let env = self.key_env();
         let items = self
             .keymap
-            .children(w.origin, &w.prefix, env)
+            .children(w.origin, &w.prefix)
             .into_iter()
             .map(|(k, child)| match child {
                 Child::Action(a) => {
@@ -212,10 +214,6 @@ impl App {
         Some((title, items))
     }
 
-    pub(super) fn key_env(&self) -> KeyEnv {
-        KeyEnv { selection: self.tab().editor.mode == Mode::Visual }
-    }
-
     /// Open the keyboard help of the current context: its sections open, the other contexts
     /// closed below (`all`: every section open).
     pub(super) fn open_help(&mut self, all: bool) {
@@ -248,16 +246,24 @@ impl App {
 
     /// The rows of the keyboard help: a header per context, then (when the section is open)
     /// its actions and their keys. The context the help was opened from and its ancestors come
-    /// first, with the keys an inner context hides left out; every other context of the
-    /// current editor mode follows. Sections without an entry matching the filter are left out.
+    /// first, with the keys an inner context hides left out; every other context follows.
+    /// Sections without an entry matching the filter are left out.
     pub fn help_rows(&self) -> Vec<HelpRow> {
         let Some(h) = self.overlays.help() else { return Vec::new() };
         let query = h.filter.text().to_string();
         let chain = h.origin.chain();
-        let others = Ctx::for_mode(self.editor_mode).into_iter().filter(|c| !chain.contains(c));
+        let others = Ctx::ALL.into_iter().filter(|c| !chain.contains(c));
         let sections = chain.iter().map(|&c| (c, Some(h.origin))).chain(others.map(|c| (c, None)));
         let mut rows = Vec::new();
         for (ctx, from) in sections {
+            // The editor's sections open with where typing starts and stops.
+            let basics = if matches!(ctx, Ctx::VimNormal | Ctx::VimInsert) { self.vim_basics() } else { Vec::new() };
+            let basics: Vec<HelpRow> = basics
+                .into_iter()
+                .map(|(_, keys, _, long)| (keys, self.i18n.label(long)))
+                .filter(|(k, l)| [l.as_str(), k.as_str()].iter().any(|t| action::fuzzy_score(&query, t).is_some()))
+                .map(|(keys, label)| HelpRow::Key { keys, label })
+                .collect();
             let items: Vec<HelpItem> = self
                 .keymap
                 .section(ctx, from)
@@ -287,12 +293,13 @@ impl App {
                         .any(|t| action::fuzzy_score(&query, t).is_some())
                 })
                 .collect();
-            if items.is_empty() {
+            if items.is_empty() && basics.is_empty() {
                 continue;
             }
             let open = !query.is_empty() || h.expanded.contains(&ctx);
-            rows.push(HelpRow::Section { ctx, open, count: items.len() });
+            rows.push(HelpRow::Section { ctx, open, count: basics.len() + items.len() });
             if open {
+                rows.extend(basics);
                 rows.extend(items.into_iter().map(HelpRow::Entry));
             }
         }
@@ -439,33 +446,47 @@ impl App {
     }
 
     /// The hint line: the most relevant keys of the current context (key, short label), best
-    /// first, then `Space` when the leader works here. The run key is the one the terminal
+    /// first (in the vim editor where typing starts or stops, after a running query's cancel
+    /// key), then `Space` when the leader works here. The run key is the one the terminal
     /// can send (`Ctrl+Enter` only with the kitty keyboard protocol).
     pub fn hints(&self) -> Vec<(String, Localized)> {
         let ctx = self.key_context();
-        let mut wanted: Vec<(&str, Label)> = Vec::new();
+        let action = |(id, label): (&str, Label)| {
+            let spec = action::by_id(id)?;
+            if !(spec.when)(self) {
+                return None;
+            }
+            let k = self.keymap.hint_keys(spec.action, ctx, self.enhanced_keys)?;
+            Some((keys::label(&k), self.i18n.label(label)))
+        };
+        let mut out = Vec::new();
+        // A running query: its cancel key first, then where typing starts or stops.
         if self.tab_busy(self.tab().id) {
-            wanted.push(("query.cancel", Label::HintCancel));
+            out.extend(action(("query.cancel", Label::HintCancel)));
         }
+        let basics = self.vim_basics().into_iter().filter(|b| b.0 == ctx);
+        out.extend(basics.map(|(_, k, short, _)| (k, self.i18n.label(short))));
         if let Some((_, list)) = HINTS.iter().find(|(c, _)| *c == ctx) {
-            wanted.extend(list.iter().copied());
+            out.extend(list.iter().copied().filter_map(action));
         }
-        let mut out: Vec<(String, Localized)> = wanted
-            .into_iter()
-            .filter_map(|(id, label)| {
-                let spec = action::by_id(id)?;
-                if !(spec.when)(self) {
-                    return None;
-                }
-                let k = self.keymap.hint_keys(spec.action, ctx, self.enhanced_keys)?;
-                Some((keys::label(&k), self.i18n.label(label)))
-            })
-            .collect();
         let leader = parse_keys(LEADER).unwrap_or_default();
-        if !self.keymap.children(ctx, &leader, self.key_env()).is_empty() {
+        if !self.keymap.children(ctx, &leader).is_empty() {
             out.push((keys::label(&leader), self.i18n.label(Label::HintLeader)));
         }
         out
+    }
+
+    /// [`VIM_BASICS`] whose keys still reach the editor in their context (context, key label,
+    /// short and long label).
+    fn vim_basics(&self) -> Vec<(Ctx, String, Label, Label)> {
+        VIM_BASICS
+            .iter()
+            .filter_map(|&(ctx, k, short, long)| {
+                let keys = parse_keys(k).ok()?;
+                matches!(self.keymap.resolve_seq(ctx, &keys).0, Some(Target::Reserved(_)))
+                    .then(|| (ctx, keys::label(&keys), short, long))
+            })
+            .collect()
     }
 
     /// The key a message names for `a`: the one the hint line would show in `ctx`. Unbound

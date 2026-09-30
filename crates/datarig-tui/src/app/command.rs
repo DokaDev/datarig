@@ -13,9 +13,7 @@
 //! [`complete_arg`].
 
 use super::action::{Action, LangSetting};
-use datarig_core::config::{
-    ClipboardSetting, CommandsPosition, CopyHeader, CursorShape, DetailView, EditorMode, IconsSetting,
-};
+use datarig_core::config::{ClipboardSetting, CommandsPosition, CopyHeader, CursorShape, DetailView, IconsSetting};
 use datarig_core::i18n::Label;
 use datarig_core::secret::{DefaultSource, SourceKind};
 
@@ -280,7 +278,6 @@ pub fn parse(input: &str) -> Parsed<'_> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Setting {
     Language(LangSetting),
-    Editor(EditorMode),
     Icons(IconsSetting),
     DefaultSource(DefaultSource),
     CommandsPosition(CommandsPosition),
@@ -354,16 +351,6 @@ pub const SETTINGS: &[SettingSpec] = &[
             ("en", Setting::Language(LangSetting::En), Label::ActionUiLanguageEn),
             ("ko", Setting::Language(LangSetting::Ko), Label::ActionUiLanguageKo),
             ("auto", Setting::Language(LangSetting::Auto), Label::ActionUiLanguageAuto),
-        ]),
-    },
-    SettingSpec {
-        key: "editor",
-        label: Label::SettingEditor,
-        about: Label::SettingEditorAbout,
-        group: SettingGroup::Editor,
-        values: Values::Fixed(&[
-            ("vim", Setting::Editor(EditorMode::Vim), Label::ActionEditorModeVim),
-            ("standard", Setting::Editor(EditorMode::Standard), Label::ActionEditorModeStandard),
         ]),
     },
     SettingSpec {

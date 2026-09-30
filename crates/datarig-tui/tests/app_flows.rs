@@ -249,15 +249,14 @@ fn set_command_changes_and_saves_settings() {
     h.keys(":set");
     h.key(KeyCode::Enter);
     assert_eq!(h.cmdline().unwrap().input.text(), "set ");
-    h.type_text("edi");
+    h.type_text("ico");
     h.key(KeyCode::Enter);
-    assert_eq!(h.cmdline().unwrap().input.text(), "set editor=");
-    h.type_text("st");
+    assert_eq!(h.cmdline().unwrap().input.text(), "set icons=");
+    h.type_text("of");
     h.key(KeyCode::Enter);
-    assert_eq!(h.app.editor_mode, EditorMode::Standard);
-    assert!(std::fs::read_to_string(&path).unwrap().contains("[editor]\nmode = \"standard\""));
+    assert_eq!(h.app.icons, datarig_core::config::IconsSetting::Off);
+    assert!(std::fs::read_to_string(&path).unwrap().contains("icons = \"off\""));
     // Invalid values and settings: a localized error, the command line stays, nothing saved.
-    // (The standard editor is text input now, so `:` would type: Ctrl+K opens the command line.)
     let before = std::fs::read_to_string(&path).unwrap();
     h.command("set language=fr");
     let screen = h.screen(80, 24);
@@ -271,7 +270,7 @@ fn set_command_changes_and_saves_settings() {
     h.key(KeyCode::Esc);
     h.command("set colour=red");
     let error = h.cmdline().and_then(|c| c.error.as_ref()).map(|e| e.render(&h.app.i18n).to_string());
-    let keys = "language|editor|icons|secrets.default_source|commands.position|detail_view|clipboard|copy_header|\
+    let keys = "language|icons|secrets.default_source|commands.position|detail_view|clipboard|copy_header|\
                 editor.cursor_shape|theme";
     let unknown = ko_msg(&datarig_core::i18n::Msg::CommandsErrorSetKey { key: "colour".into(), keys: keys.into() });
     assert_eq!(error.as_deref(), Some(unknown.as_str()));
@@ -1236,7 +1235,6 @@ fn test_connection_cancel_and_stale_results() {
 
 // ── context keymap ─────────────────────────────────────────────────
 
-use datarig_core::config::EditorMode;
 use datarig_tui::app::Focus;
 use datarig_tui::app::overlay::OverlayKind;
 use datarig_tui::keymap::Ctx;
@@ -1411,12 +1409,14 @@ fn explorer_grid_and_editor_keys_follow_the_plan() {
     h.key(KeyCode::F(1));
     assert_eq!(h.overlay_kind(), Some(OverlayKind::Help));
     h.key(KeyCode::Esc);
-    // vim Insert: Ctrl+W is reserved for "delete word" and never closes anything.
+    // vim Insert: Ctrl+W deletes the word before the cursor and never closes anything.
     h.keys("A");
     h.ctrl('w');
     assert!(h.overlay_kind().is_none() && !h.app.quit && h.app.focus == Focus::Editor);
-    assert_eq!(h.app.tab().editor.text(), SAMPLE_SQL);
+    assert_eq!(h.app.tab().editor.text(), SAMPLE_SQL.replacen("id <= 8;", "id <= 8", 1));
     h.key(KeyCode::Esc);
+    h.keys("u");
+    assert_eq!(h.app.tab().editor.text(), SAMPLE_SQL);
     // Grid: `g g` / `G`, and `q` / `Esc` go back to the editor instead of quitting.
     h.key(KeyCode::Tab);
     assert_eq!(h.app.key_context(), Ctx::Grid);
@@ -1460,34 +1460,21 @@ fn explorer_grid_and_editor_keys_follow_the_plan() {
     assert!(h.app.quit);
 }
 
+/// A config file from before the editor had vim keys only may say `[editor] mode`: it loads
+/// without a word, the editor has vim keys, and the next save drops the key (and the table it
+/// leaves empty).
 #[test]
-fn editor_mode_switch_changes_the_editor_context_and_is_saved() {
-    let path = temp_config("mode", "language = \"en\"\n");
+fn a_config_with_the_retired_editor_mode_loads_silently_and_loses_it_on_save() {
+    let path = temp_config("mode", "language = \"en\"\n\n[editor]\nmode = \"standard\"\n");
     let (mut cfg, err) = config::load(Some(path.clone()));
-    assert!(err.is_none());
-    cfg.connections = test_db_config().connections; // the editor shows once there is a profile
-    let mut h = Harness::with_config(&cfg, Lang::En);
-    assert_eq!(h.app.key_context(), Ctx::VimNormal);
-    h.command("editor keys standard");
-    assert_eq!(h.app.editor_mode, EditorMode::Standard);
-    assert_eq!(h.app.key_context(), Ctx::Standard);
-    let st = h.status(160, 45);
-    assert!(st.contains("Standard editing arrives in a later version"), "{st}");
-    assert!(std::fs::read_to_string(&path).unwrap().contains("[editor]\nmode = \"standard\""));
-    // Standard is text input: Space and `?` go to the editor, F1 still opens help.
-    h.keys(" ");
-    assert!(h.overlay_kind().is_none());
-    h.key(KeyCode::F(1));
-    assert_eq!(h.overlay_kind(), Some(OverlayKind::Help));
-    h.key(KeyCode::Esc);
-    h.command("editor keys vim");
-    assert_eq!(h.app.key_context(), Ctx::VimNormal);
-    let (again, _) = config::load(Some(path.clone()));
-    assert_eq!(again.editor_mode, EditorMode::Vim);
-    // Starting in standard mode says once that standard editing is not there yet.
-    let cfg = keymap_config("[editor]\nmode = \"standard\"\n");
+    assert!(err.is_none(), "{err:?}");
+    cfg.connections = test_db_config().connections;
     let mut h = launch(&cfg, Startup::Normal);
-    assert!(h.screen(160, 45).contains("Standard editing arrives in a later version"));
+    let screen = h.screen(160, 45);
+    assert!(!screen.to_lowercase().contains("standard"), "no notice: {screen}");
+    h.command("set language=ko");
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.starts_with("language = \"ko\"\n") && !text.contains("editor") && !text.contains("\nmode"), "{text}");
     cleanup(&path);
 }
 
@@ -1806,7 +1793,7 @@ fn keyboard_help_lists_filters_and_runs_actions() {
     let rest: Vec<Ctx> = sections[4..].iter().map(|s| s.0).collect();
     assert!(sections[4..].iter().all(|s| !s.1), "{sections:?}");
     assert!(rest.contains(&Ctx::Grid) && rest.contains(&Ctx::VimInsert) && rest.contains(&Ctx::Welcome));
-    assert!(!rest.contains(&Ctx::Standard), "only the contexts of the current editor mode");
+    assert!(rest.contains(&Ctx::VimNormal), "the editor's own section: where typing starts and stops");
     let entries = help_entries(&h);
     assert!(entries.contains(&"j / Down = Explorer: next item".to_string()), "{entries:?}");
     // Without the kitty keyboard protocol the terminal cannot send Ctrl+Enter: the help shows
@@ -1845,8 +1832,9 @@ fn keyboard_help_lists_filters_and_runs_actions() {
     h.keys(" ?");
     let entries = help_entries(&h);
     assert!(entries.contains(&"Space ? = Keyboard help".to_string()), "{entries:?}");
-    // vim Normal binds no action of its own (its keys are vim's), so its ancestors lead.
-    assert_eq!(help_sections(&h)[0], (Ctx::Nav, true));
+    // vim Normal binds no action of its own (its keys are vim's): its section says where
+    // typing starts and stops, then its ancestors follow.
+    assert_eq!(help_sections(&h)[..2], [(Ctx::VimNormal, true), (Ctx::Nav, true)]);
     h.key(KeyCode::Esc);
     h.command("keyboard help expand all");
     assert!(h.app.overlays.help().is_some_and(|x| x.origin == Ctx::VimNormal));
@@ -1903,11 +1891,12 @@ fn keyboard_help_sections_open_and_close_by_key_and_mouse() {
 fn hint_line_follows_the_context_and_the_run_key() {
     let mut h = Harness::connected(Lang::En);
     let status = |h: &mut Harness| h.status(160, 45);
-    assert!(status(&mut h).contains("Ctrl+E run · Tab next pane · : commands · F1 help · Space more"));
+    assert!(status(&mut h).contains("i type · Ctrl+E run · Tab next pane · : commands · F1 help · Space more"));
     h.app.set_keyboard_enhanced(true);
-    assert!(status(&mut h).contains("Ctrl+Enter run ·"));
+    assert!(status(&mut h).contains("i type · Ctrl+Enter run ·"));
     h.keys("i");
-    assert!(status(&mut h).contains("Ctrl+Enter run · Ctrl+N complete · Ctrl+K commands · F1 help"));
+    let insert = "Esc stop typing · Ctrl+Enter run · Ctrl+N complete · Ctrl+K commands · F1 help";
+    assert!(status(&mut h).contains(insert), "{}", status(&mut h));
     h.key(KeyCode::Esc);
     h.key(KeyCode::BackTab);
     assert!(status(&mut h).contains("Enter open · Tab next pane · : commands · F1 help · q quit · Space more"));
@@ -1920,7 +1909,7 @@ fn hint_line_follows_the_context_and_the_run_key() {
     // A running query puts Ctrl+C first.
     let mut h = Harness::connected(Lang::En);
     h.ctrl('e');
-    assert!(status(&mut h).contains("Ctrl+C cancel · Ctrl+E run"), "{}", status(&mut h));
+    assert!(status(&mut h).contains("Ctrl+C cancel · i type · Ctrl+E run"), "{}", status(&mut h));
 }
 
 /// The cursor's shape follows the mode: a block in Normal and Visual and in

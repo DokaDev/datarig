@@ -18,8 +18,9 @@
 //! `theme` names the color theme: a built-in one or a file of `themes/` next to the config file
 //! (see [`crate::theme`]; the UI resolves the name, so an unknown one never makes the file
 //! unusable).
-//! `[editor] mode` picks the editor key style (`vim` or `standard`), and
-//! `[editor] cursor_shape` whether the cursor shows the editor's mode.
+//! `[editor] cursor_shape` says whether the cursor shows the editor's mode. The retired
+//! `[editor] mode` key (the editor has vim keys only) is accepted with any value, ignored and
+//! dropped by the next save.
 //! [`Prefs`] holds `[commands] position` (the `:` command line as a popup near
 //! the top, or the bottom line), `detail_view` (the result inspector as a panel or a status bar
 //! preview), `clipboard` (how copies reach the clipboard) and `copy_header`
@@ -115,8 +116,9 @@ struct PolicySection {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct EditorSection {
-    #[serde(default)]
-    mode: Option<String>,
+    /// Retired: read so that files that have it still load, never used.
+    #[serde(default, rename = "mode")]
+    _mode: Option<serde::de::IgnoredAny>,
     #[serde(default)]
     cursor_shape: Option<String>,
 }
@@ -301,33 +303,6 @@ impl Default for Prefs {
 /// `[keymap.<context>]` tables: context name -> key notation -> action id (or `"none"`).
 pub type KeymapConfig = BTreeMap<String, BTreeMap<String, String>>;
 
-/// Key style of the query editor (`[editor] mode`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum EditorMode {
-    /// Modal vim keys (the default).
-    #[default]
-    Vim,
-    /// Modeless editing with the usual desktop keys.
-    Standard,
-}
-
-impl EditorMode {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            EditorMode::Vim => "vim",
-            EditorMode::Standard => "standard",
-        }
-    }
-
-    pub fn parse(s: &str) -> Option<Self> {
-        match s {
-            "vim" => Some(EditorMode::Vim),
-            "standard" => Some(EditorMode::Standard),
-            _ => None,
-        }
-    }
-}
-
 /// `icons`: Nerd Font icons next to profiles.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum IconsSetting {
@@ -384,7 +359,6 @@ pub struct Config {
     /// Profile connected to most recently (the explorer puts its cursor there at launch). A v1
     /// file's profile name is resolved to that profile's id.
     pub last_used: Option<ProfileId>,
-    pub editor_mode: EditorMode,
     /// `[secrets] default_source`.
     pub default_source: DefaultSource,
     /// `[commands] position`, `detail_view`, `clipboard`, `copy_header`.
@@ -415,7 +389,6 @@ impl Default for Config {
             connections: Vec::new(),
             folders: Folders::default(),
             last_used: None,
-            editor_mode: EditorMode::default(),
             default_source: DefaultSource::default(),
             prefs: Prefs::default(),
             keymap: KeymapConfig::new(),
@@ -555,14 +528,7 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
         None => policy::SpillLimit::default(),
         Some(v) => policy::parse_size(v).map_err(|e| bad("spill_limit", e).allowed(Some(SIZES)))?,
     };
-    let (editor_mode, cursor_shape) = match f.editor {
-        None => (None, None),
-        Some(e) => (e.mode, e.cursor_shape),
-    };
-    let editor_mode = match editor_mode {
-        None => EditorMode::default(),
-        Some(m) => EditorMode::parse(&m).ok_or_else(|| bad("editor.mode", &m).allowed(Some("vim, standard")))?,
-    };
+    let cursor_shape = f.editor.and_then(|e| e.cursor_shape);
     let default_source = match f.secrets.and_then(|s| s.default_source) {
         None => DefaultSource::default(),
         Some(v) => DefaultSource::parse(&v).ok_or_else(|| {
@@ -681,7 +647,6 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
         connections,
         folders,
         last_used,
-        editor_mode,
         default_source,
         prefs,
         keymap: f.keymap,
@@ -742,7 +707,7 @@ fn same(a: &Value, b: &Value) -> bool {
     }
 }
 
-/// [`setting`] for `key` of the table `table` (`[editor] mode`, also an inline table). A table
+/// [`setting`] for `key` of the table `table` (`[editor] cursor_shape`, also an inline table). A table
 /// the setting emptied goes too, unless comments hang on it.
 fn nested_setting(doc: &mut DocumentMut, table: &str, key: &str, (v, default): (Value, bool)) -> Result<String, Fault> {
     let shape = || Fault::new(FaultKind::Shape { key: table.into() }, format!("{table} must be a table"));
@@ -772,6 +737,33 @@ fn nested_setting(doc: &mut DocumentMut, table: &str, key: &str, (v, default): (
         _ => return Err(shape()),
     };
     Ok(orphans)
+}
+
+/// Remove the retired `key` of the table `table` (also an inline table), with the comments
+/// around it kept as [`remove_keeping_comments`] does. A table left empty goes too, unless
+/// comments hang on it.
+fn retire(doc: &mut DocumentMut, table: &str, key: &str) -> String {
+    match doc.get_mut(table) {
+        Some(Item::Table(t)) if t.contains_key(key) => {
+            let orphans = remove_keeping_comments(t, key);
+            let commented = [t.decor().prefix(), t.decor().suffix()]
+                .into_iter()
+                .flatten()
+                .any(|r| r.as_str().is_some_and(|s| s.contains('#')));
+            if t.is_empty() && !commented {
+                doc.remove(table);
+            }
+            orphans
+        }
+        Some(Item::Value(Value::InlineTable(t))) if t.contains_key(key) => {
+            t.remove(key);
+            if t.is_empty() {
+                doc.remove(table);
+            }
+            String::new()
+        }
+        _ => String::new(),
+    }
 }
 
 /// Remove `key` from `t`, moving the comments around it (the lines before it, the comment after
@@ -832,7 +824,6 @@ pub struct Settings<'a> {
     pub icons: IconsSetting,
     /// `theme`, as the user chose it (also a name that did not resolve: it is kept).
     pub theme: &'a str,
-    pub editor_mode: EditorMode,
     pub default_source: DefaultSource,
     pub prefs: Prefs,
 }
@@ -856,7 +847,7 @@ pub struct Profiles<'a> {
 /// ([`ConnectionConfig::origin`]; a table without `id` right after the migration), so its
 /// comments survive; the `id` is then added as its first key.
 pub fn save(path: &Path, settings: Settings, profiles: Option<Profiles>) -> Result<(), Fault> {
-    let Settings { version, language, icons, theme, editor_mode, default_source, prefs } = settings;
+    let Settings { version, language, icons, theme, default_source, prefs } = settings;
     let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let text = match std::fs::read_to_string(&target) {
         Ok(t) => t,
@@ -882,8 +873,7 @@ pub fn save(path: &Path, settings: Settings, profiles: Option<Profiles>) -> Resu
         &setting(root, "copy_header", prefs.copy_header.as_str().into(), prefs.copy_header == CopyHeader::default())?;
     let osc = i64::try_from(prefs.osc52_max_bytes).unwrap_or(i64::MAX);
     orphans += &setting(root, "osc52_max_bytes", osc.into(), prefs.osc52_max_bytes == OSC52_MAX_BYTES)?;
-    let mode = (editor_mode.as_str().into(), editor_mode == EditorMode::Vim);
-    orphans += &nested_setting(&mut doc, "editor", "mode", mode)?;
+    orphans += &retire(&mut doc, "editor", "mode");
     let shape = (prefs.cursor_shape.as_str().into(), prefs.cursor_shape == CursorShape::default());
     orphans += &nested_setting(&mut doc, "editor", "cursor_shape", shape)?;
     let source = (default_source.as_str().into(), default_source == DefaultSource::Auto);

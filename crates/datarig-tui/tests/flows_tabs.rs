@@ -252,7 +252,7 @@ fn tab_keys_move_between_tabs() {
     h.key(KeyCode::Esc);
     h.type_text("\u{314E}\u{3145}");
     assert_eq!(h.app.tabs.active_index(), 1);
-    // F6 moves between panes (standard editing takes Tab); no results pane before a run.
+    // F6 moves between panes (Insert mode types Tab); no results pane before a run.
     assert_eq!(h.app.focus, datarig_tui::app::Focus::Editor);
     h.key(KeyCode::F(6));
     assert_eq!(h.app.focus, datarig_tui::app::Focus::Tree);

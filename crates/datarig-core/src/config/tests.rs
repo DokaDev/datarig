@@ -103,7 +103,6 @@ fn settings(language: &str) -> Settings<'_> {
         language,
         icons: IconsSetting::Auto,
         theme: crate::theme::DEFAULT,
-        editor_mode: EditorMode::Vim,
         default_source: DefaultSource::Auto,
         prefs: Prefs::default(),
     }
@@ -211,52 +210,64 @@ fn save_refuses_unparseable_file() {
 }
 
 #[test]
-fn editor_mode_and_keymap_are_read() {
-    let cfg = parse("").unwrap();
-    assert_eq!(cfg.editor_mode, EditorMode::Vim, "vim is the default");
-    assert!(cfg.keymap.is_empty());
+fn keymap_is_read() {
+    assert!(parse("").unwrap().keymap.is_empty());
     let cfg = parse(
-        "[editor]\nmode = \"standard\"\n\n[keymap.explorer]\n\"x\" = \"conn.disconnect\"\n\"ctrl+w\" = \"none\"\n\
+        "[keymap.explorer]\n\"x\" = \"conn.disconnect\"\n\"ctrl+w\" = \"none\"\n\
          [keymap.nav]\n\"space t d\" = \"tab.close\"\n",
     )
     .unwrap();
-    assert_eq!(cfg.editor_mode, EditorMode::Standard);
     assert_eq!(cfg.keymap["explorer"]["x"], "conn.disconnect");
     assert_eq!(cfg.keymap["explorer"]["ctrl+w"], "none");
     assert_eq!(cfg.keymap["nav"]["space t d"], "tab.close");
     // Content is not validated by core (unknown contexts and actions are the TUI's business),
-    // but the shape is: a wrong mode, an unknown [editor] key or a non-string action fail.
+    // but the shape is: an unknown [editor] key or a non-string action fail.
     assert!(parse("[keymap.nowhere]\n\"q\" = \"no.such.action\"\n").is_ok());
-    assert!(format!("{:?}", parse("[editor]\nmode = \"emacs\"\n").unwrap_err()).contains("editor.mode"));
     assert!(parse("[editor]\nmodee = \"vim\"\n").is_err());
     assert!(parse("[keymap.explorer]\n\"x\" = 1\n").is_err());
 }
 
+/// `[editor] mode` (the retired choice between vim and standard keys) loads with any value,
+/// changes nothing and is gone after the next save; the comments and keys around it stay.
 #[test]
-fn save_writes_editor_mode_and_keeps_keymap_tables() {
-    let path = temp_file("editor");
+fn the_retired_editor_mode_is_ignored_and_dropped_on_save() {
+    for value in ["\"vim\"", "\"standard\"", "\"bogus\"", "3"] {
+        let cfg = parse(&format!("[editor]\nmode = {value}\n")).unwrap();
+        assert_eq!(cfg.prefs, Prefs::default(), "{value}");
+    }
+    let cfg = parse("[editor]\nmode = \"standard\"\ncursor_shape = \"off\"\n").unwrap();
+    assert_eq!(cfg.prefs.cursor_shape, CursorShape::Off, "the other keys of the table still count");
+    assert!(parse("[editor]\nmode = \"vim\"\nshape = \"off\"\n").is_err(), "unknown keys still fail");
+
+    let path = temp_file("retired_mode");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let original = "language = \"en\"\n\n[keymap.explorer] # mine\n\"x\" = \"explorer.refresh\" # keep\n";
-    std::fs::write(&path, original).unwrap();
-    // `vim` is the default: not added to a file that never had it.
-    save(&path, settings("en"), None).unwrap();
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
-    save(&path, Settings { editor_mode: EditorMode::Standard, ..settings("en") }, None).unwrap();
-    let text = std::fs::read_to_string(&path).unwrap();
-    assert!(text.contains("[keymap.explorer] # mine\n\"x\" = \"explorer.refresh\" # keep\n"), "{text}");
-    let (cfg, err) = load(Some(path.clone()));
-    assert!(err.is_none(), "{err:?}");
-    assert_eq!(cfg.editor_mode, EditorMode::Standard);
-    assert_eq!(cfg.keymap["explorer"]["x"], "explorer.refresh");
-    // Back to the default, the key goes (and the table it emptied).
-    save(&path, settings("en"), None).unwrap();
-    let (cfg, _) = load(Some(path.clone()));
-    assert_eq!(cfg.editor_mode, EditorMode::Vim);
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
-    // An inline table works too.
-    std::fs::write(&path, "editor = { mode = \"vim\" }\n").unwrap();
-    save(&path, Settings { editor_mode: EditorMode::Standard, ..settings("en") }, None).unwrap();
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), "editor = { mode = \"standard\" }\n");
+    let cases = [
+        // The table it leaves empty goes.
+        ("language = \"ko\"\n\n[editor]\nmode = \"standard\"\n", "language = \"ko\"\n"),
+        ("editor = { mode = \"vim\" }\nlanguage = \"ko\"\n", "language = \"ko\"\n"),
+        // Comments and the order of the rest survive.
+        (
+            "language = \"ko\"\n\n[editor]\n# keys\nmode = \"bogus\" # old\ncursor_shape = \"off\" # bar\n\n\
+             [commands]\nposition = \"bottom\"\n",
+            "language = \"ko\"\n\n[editor]\n# keys\n# old\ncursor_shape = \"off\" # bar\n\n\
+             [commands]\nposition = \"bottom\"\n",
+        ),
+        (
+            "[editor] # mine\nmode = \"vim\"\n\n[keymap.explorer]\n\"x\" = \"explorer.refresh\" # keep\n",
+            "[editor] # mine\n\n[keymap.explorer]\n\"x\" = \"explorer.refresh\" # keep\n",
+        ),
+        ("editor = { mode = \"vim\", cursor_shape = \"off\" }\n", "editor = { cursor_shape = \"off\" }\n"),
+    ];
+    for (before, after) in cases {
+        std::fs::write(&path, before).unwrap();
+        let (cfg, err) = load(Some(path.clone()));
+        assert!(err.is_none(), "{err:?}");
+        let s = Settings { language: &cfg.language, prefs: cfg.prefs, ..settings("en") };
+        save(&path, s, None).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), after, "{before}");
+        let (_, err) = load(Some(path.clone()));
+        assert!(err.is_none(), "{err:?}");
+    }
 }
 
 const ID_A: &str = "3f0b8f5e-6a57-4f7e-9a53-0c1c2b8f9d11";
@@ -621,11 +632,12 @@ fn a_setting_back_at_its_default_leaves_the_file_with_its_comments() {
     let path = temp_file("defaults");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let original = "# my settings\nclipboard = \"osc52\" # over ssh\ncopy_header = \"off\"\nicons = \"auto\" # said on purpose\n\
-                    osc52_max_bytes = 5000\n\n[editor] # keys\nmode = \"standard\"\n\n[commands]\n# where : opens\nposition = \"bottom\"\n";
+                    osc52_max_bytes = 5000\n\n[editor] # keys\ncursor_shape = \"off\"\n\n[commands]\n# where : opens\nposition = \"bottom\"\n";
     std::fs::write(&path, original).unwrap();
     let (cfg, err) = load(Some(path.clone()));
     assert!(err.is_none(), "{err:?}");
-    // clipboard, osc52_max_bytes, editor.mode and commands.position go back to their defaults.
+    // clipboard, osc52_max_bytes, editor.cursor_shape and commands.position go back to their
+    // defaults.
     let prefs = Prefs { copy_header: CopyHeader::Off, ..Prefs::default() };
     assert_ne!(cfg.prefs, prefs);
     save(&path, Settings { prefs, ..settings("en") }, None).unwrap();
@@ -639,7 +651,7 @@ fn a_setting_back_at_its_default_leaves_the_file_with_its_comments() {
     );
     let (back, err) = load(Some(path.clone()));
     assert!(err.is_none(), "{err:?}");
-    assert_eq!((back.prefs, back.editor_mode, back.icons), (prefs, EditorMode::Vim, IconsSetting::Auto));
+    assert_eq!((back.prefs, back.icons), (prefs, IconsSetting::Auto));
     // Nothing changes: the file stays byte for byte.
     save(&path, Settings { prefs, ..settings("en") }, None).unwrap();
     assert_eq!(std::fs::read_to_string(&path).unwrap(), text);
@@ -669,13 +681,13 @@ fn result_window_and_spill_limit() {
     }
 }
 
-/// `[editor] cursor_shape`: on unless the file says off, next to the editor
-/// mode in the same table; checked and saved like the other settings.
+/// `[editor] cursor_shape`: on unless the file says off; checked and saved like the other
+/// settings.
 #[test]
-fn cursor_shape_is_read_checked_and_saved_next_to_the_editor_mode() {
+fn cursor_shape_is_read_checked_and_saved() {
     assert_eq!(parse("").unwrap().prefs.cursor_shape, CursorShape::On);
-    let cfg = parse("[editor]\nmode = \"standard\"\ncursor_shape = \"OFF\"\n").unwrap();
-    assert_eq!((cfg.editor_mode, cfg.prefs.cursor_shape), (EditorMode::Standard, CursorShape::Off));
+    let cfg = parse("[editor]\ncursor_shape = \"OFF\"\n").unwrap();
+    assert_eq!(cfg.prefs.cursor_shape, CursorShape::Off);
     assert_eq!(
         parse("[editor]\ncursor_shape = \"bar\"\n").unwrap_err(),
         ConfigError::Value {
@@ -687,14 +699,14 @@ fn cursor_shape_is_read_checked_and_saved_next_to_the_editor_mode() {
     );
     let path = temp_file("cursor_shape");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let original = "[editor] # mine\nmode = \"vim\"\n";
+    let original = "[editor] # mine\n";
     std::fs::write(&path, original).unwrap();
     save(&path, settings("en"), None).unwrap();
     assert_eq!(std::fs::read_to_string(&path).unwrap(), original, "the default is not written");
     let prefs = Prefs { cursor_shape: CursorShape::Off, ..Prefs::default() };
     save(&path, Settings { prefs, ..settings("en") }, None).unwrap();
     let text = std::fs::read_to_string(&path).unwrap();
-    assert!(text.contains("[editor] # mine\nmode = \"vim\"\ncursor_shape = \"off\"\n"), "{text}");
+    assert!(text.contains("[editor] # mine\ncursor_shape = \"off\"\n"), "{text}");
     let (cfg, err) = load(Some(path.clone()));
     assert!(err.is_none(), "{err:?}");
     assert_eq!(cfg.prefs.cursor_shape, CursorShape::Off);

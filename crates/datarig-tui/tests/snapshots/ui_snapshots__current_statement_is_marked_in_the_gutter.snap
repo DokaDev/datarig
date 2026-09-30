@@ -31,4 +31,4 @@ expression: t.backend()
 "│                       ││                                                                         │"
 "│                       ││                                                                         │"
 "╰───────────────────────╯╰─────────────────────────────────────────────────────────────────────────╯"
-" NORMAL  local-pg · policy: default │ Connected to local-pg         │ Ctrl+E run · Tab next pane EN "
+" NORMAL  local-pg · policy: default │ Connected to local-pg                │ i type · Ctrl+E run EN "

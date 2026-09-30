@@ -34,7 +34,16 @@ pub fn render() -> String {
          near the top of the screen, or the last line with `[commands] position = \"bottom\"` (the settings \
          screen, `:set commands.position=bottom`). It runs the commands listed at the end (`:conn <profile>`, `:set <setting>=<value>`, \
          …) and finds every action by name; see the tables at the end.\n\
-         - **Reserved** keys belong to a widget (vim, standard editing, a dialog) or to an action that is not \
+         - **Vim**: the editor has vim keys. `i` starts typing and `Esc` stops (the hint line says so). \
+         Implemented: the motions `h j k l w b e 0 ^ $ gg G`, the arrows, `Home` and `End`, with counts \
+         (`5j`, `10G`); the operators `d c y` with any of them, doubled for whole lines (`dd cc yy`), counts \
+         before and after (`3dd`, `d2w`, `2d3w`); `x X s S D C Y p P u Ctrl+R`; `i a I A o O`; Visual mode \
+         by character (`v`) and by line (`V`) with `y d x c`, `Y D X C S` (whole lines) and `o` (the other \
+         end); in Insert mode `Ctrl+W` (the word before the cursor), `Ctrl+U` (the line before the cursor) \
+         and `Enter` keeping the indent. One command is one undo step. There is one register, not the \
+         clipboard. A paste from the terminal goes in at the cursor in every mode (over the selection in \
+         Visual mode). The other reserved vim keys do nothing yet.\n\
+         - **Reserved** keys belong to a widget (vim, a dialog) or to an action that is not \
          implemented yet. They cannot be remapped.\n\n",
     );
     let protected: Vec<String> =
@@ -158,10 +167,7 @@ fn section(s: &mut String, km: &Keymap, ctx: Ctx) {
         let list: Vec<String> = own
             .iter()
             .filter(|b| b.target == Target::Reserved(n))
-            .map(|b| {
-                let cond = if b.when.is_some() { " (with a selection)" } else { "" };
-                format!("`{}`{cond}", keys::label(&b.keys))
-            })
+            .map(|b| format!("`{}`", keys::label(&b.keys)))
             .collect();
         s.push_str(&format!("\nReserved — {n}: {}\n", list.join(" ")));
     }

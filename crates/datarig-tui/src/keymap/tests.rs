@@ -1,6 +1,5 @@
 use super::*;
 use crate::app::action::{Action, ExplorerAction, spec};
-use datarig_core::config::EditorMode;
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 use std::collections::BTreeMap;
 
@@ -10,7 +9,7 @@ fn k(s: &str) -> Vec<KeyChord> {
 
 fn feed_all(km: &Keymap, ctx: Ctx, keys: &str) -> Vec<Resolved> {
     let mut st = KeyState::default();
-    k(keys).into_iter().map(|c| km.feed(&mut st, ctx, c, KeyEnv::default())).collect()
+    k(keys).into_iter().map(|c| km.feed(&mut st, ctx, c)).collect()
 }
 
 /// The result of the last key of `keys`.
@@ -87,33 +86,24 @@ fn contexts_form_the_planned_tree() {
     assert_eq!(Ctx::CellViewer.chain(), [Ctx::CellViewer, Ctx::Workspace, Ctx::Root], "not modal");
     assert_eq!(Ctx::HelpFilter.chain(), [Ctx::HelpFilter, Ctx::Root]);
     assert!(Ctx::HelpFilter.is_text_input() && !Ctx::Help.is_text_input() && !Ctx::WhichKey.is_text_input());
-    assert!(Ctx::Standard.is_text_input() && Ctx::Standard.is_editor());
+    assert!(Ctx::VimInsert.is_text_input() && Ctx::VimInsert.is_editor());
     assert!(!Ctx::VimNormal.is_text_input() && Ctx::VimNormal.is_editor());
     assert!(!Ctx::Explorer.is_editor() && !Ctx::Explorer.is_text_input());
-    let vim = Ctx::for_mode(EditorMode::Vim);
-    let std = Ctx::for_mode(EditorMode::Standard);
-    assert!(vim.contains(&Ctx::VimInsert) && !vim.contains(&Ctx::Standard));
-    assert!(std.contains(&Ctx::Standard) && !std.contains(&Ctx::VimNormal) && std.contains(&Ctx::Explorer));
 }
 
 // ── the default table ────────────────────────────────────────────────────────
 
 #[test]
-fn default_table_is_conflict_free_in_both_editor_modes() {
+fn default_table_is_conflict_free() {
     let raw = defaults();
     assert_eq!(check_ids(&raw), Vec::<String>::new(), "every default parses and names a real action");
     let km = Keymap::default();
     assert_eq!(km.bindings().len(), raw.len());
-    for mode in [EditorMode::Vim, EditorMode::Standard] {
-        let conflicts: Vec<String> =
-            check_contexts(km.bindings(), &Ctx::for_mode(mode)).iter().map(ToString::to_string).collect();
-        assert!(conflicts.is_empty(), "{mode:?}:\n{}", conflicts.join("\n"));
-    }
+    let conflicts: Vec<String> = check_contexts(km.bindings(), &Ctx::ALL).iter().map(ToString::to_string).collect();
+    assert!(conflicts.is_empty(), "{}", conflicts.join("\n"));
     // Every action has at least one key or is reachable from the command line only on purpose.
     let commands_only = [
         "explorer.context_menu",
-        "editor.mode.vim",
-        "editor.mode.standard",
         "help.all",
         "ui.icons.on",
         "ui.icons.off",
@@ -137,7 +127,7 @@ fn default_table_is_conflict_free_in_both_editor_modes() {
 }
 
 fn bound(ctx: Ctx, keys: &str, target: Target) -> Bound {
-    Bound { ctx, keys: k(keys), target, when: None, user: false }
+    Bound { ctx, keys: k(keys), target, user: false }
 }
 
 fn with(extra: Vec<Bound>) -> Vec<Bound> {
@@ -178,7 +168,7 @@ fn conflict_check_catches_all_seven_kinds() {
     let refresh_in_editor = with(vec![bound(Ctx::VimNormal, "d", refresh)]);
     assert_eq!(kinds(&refresh_in_editor), [ConflictKind::Reserved]);
     // 5. an unknown action id in the raw table
-    let raw = [Binding { ctx: Ctx::Explorer, keys: "w", target: BindTarget::Action("no.such.action"), when: None }];
+    let raw = [Binding { ctx: Ctx::Explorer, keys: "w", target: BindTarget::Action("no.such.action") }];
     let ids = check_ids(&raw);
     assert!(ids.len() == 1 && ids[0].contains("UnknownAction") && ids[0].contains("no.such.action"), "{ids:?}");
     // 6. a character or a leader sequence in a text input context
@@ -187,7 +177,7 @@ fn conflict_check_catches_all_seven_kinds() {
     // 7. hiding a protected key, even from the editor
     assert_eq!(kinds(&with(vec![bound(Ctx::VimNormal, "ctrl+e", res)])), [ConflictKind::Protected]);
     assert_eq!(kinds(&with(vec![bound(Ctx::VimNormal, "space", res)])), [ConflictKind::Protected], "the leader");
-    assert_eq!(kinds(&with(vec![bound(Ctx::Standard, "f1", res)])), [ConflictKind::Protected]);
+    assert_eq!(kinds(&with(vec![bound(Ctx::VimInsert, "f1", res)])), [ConflictKind::Protected]);
     // The message names the context, the keys and both sides.
     let msg = check(&dup)[0].to_string();
     assert!(msg.contains("explorer") && msg.contains("x = explorer.refresh"), "{msg}");
@@ -219,9 +209,9 @@ fn innermost_context_wins_and_sequences_complete() {
     assert_eq!(last(&km, Ctx::Explorer, "space esc"), Resolved::Unbound(k("space esc")));
     // Switching context drops a pending sequence.
     let mut st = KeyState::default();
-    assert_eq!(km.feed(&mut st, Ctx::Explorer, KeyChord::char('g'), KeyEnv::default()), Resolved::Pending);
+    assert_eq!(km.feed(&mut st, Ctx::Explorer, KeyChord::char('g')), Resolved::Pending);
     assert_eq!(st.pending(), k("g"));
-    assert_eq!(km.feed(&mut st, Ctx::VimInsert, KeyChord::char('g'), KeyEnv::default()), Resolved::Forward(k("g")));
+    assert_eq!(km.feed(&mut st, Ctx::VimInsert, KeyChord::char('g')), Resolved::Forward(k("g")));
     assert!(st.pending().is_empty());
 }
 
@@ -239,7 +229,7 @@ fn editor_keys_win_inside_the_editor_except_protected_keys() {
     assert_eq!(last(&km, Ctx::VimNormal, "g T"), act("tab.prev"));
     assert_eq!(last(&km, Ctx::VimNormal, "q"), Resolved::Forward(k("q")), "q no longer quits from the editor");
     // Protected keys work in every mode.
-    for ctx in [Ctx::VimNormal, Ctx::VimVisual, Ctx::VimInsert, Ctx::Standard] {
+    for ctx in [Ctx::VimNormal, Ctx::VimVisual, Ctx::VimInsert] {
         assert_eq!(last(&km, ctx, "ctrl+e"), act("query.execute_current"), "{ctx:?}");
         assert_eq!(last(&km, ctx, "ctrl+k"), act("commands.open"), "{ctx:?}");
         assert_eq!(last(&km, ctx, "f1"), act("help.context"), "{ctx:?}");
@@ -249,14 +239,13 @@ fn editor_keys_win_inside_the_editor_except_protected_keys() {
     assert_eq!(last(&km, Ctx::VimNormal, "ctrl+w"), act("tab.close"));
     assert_eq!(last(&km, Ctx::Explorer, "ctrl+w"), act("tab.close"));
     // Tab keys that work in every editor mode (protected).
-    for ctx in [Ctx::VimNormal, Ctx::VimVisual, Ctx::VimInsert, Ctx::Standard] {
+    for ctx in [Ctx::VimNormal, Ctx::VimVisual, Ctx::VimInsert] {
         assert_eq!(last(&km, ctx, "ctrl+t"), act("tab.new_console"), "{ctx:?}");
         assert_eq!(last(&km, ctx, "ctrl+pagedown"), act("tab.next"), "{ctx:?}");
         assert_eq!(last(&km, ctx, "f6"), act("pane.next"), "{ctx:?}");
     }
     assert_eq!(last(&km, Ctx::VimInsert, "ctrl+n"), act("editor.complete"));
     assert_eq!(last(&km, Ctx::VimInsert, "shift+tab"), act("pane.prev"));
-    assert_eq!(last(&km, Ctx::Standard, "shift+tab"), Resolved::Forward(k("shift+tab")), "outdent");
 }
 
 /// `[` and `]` are no tab keys: in the editor they are vim's
@@ -275,15 +264,23 @@ fn brackets_are_no_tab_keys() {
     assert_eq!(tab_keys, ["ctrl+pagedown", "g t"]);
 }
 
+/// `Ctrl+C` cancels the query in every editor mode (it has no copy meaning), and the vim keys
+/// the editor handles are reserved there, `D`, `C`, `Y` and `V` included.
 #[test]
-fn standard_ctrl_c_copies_only_with_a_selection() {
+fn ctrl_c_cancels_everywhere_and_vim_keys_reach_the_editor() {
     let km = Keymap::default();
-    let c = k("ctrl+c")[0];
-    let mut st = KeyState::default();
-    let sel = KeyEnv { selection: true };
-    assert_eq!(km.feed(&mut st, Ctx::Standard, c, sel), Resolved::Forward(vec![c]));
-    assert_eq!(km.feed(&mut st, Ctx::Standard, c, KeyEnv::default()), act("query.cancel"));
-    assert_eq!(km.feed(&mut st, Ctx::VimVisual, c, sel), act("query.cancel"), "vim keeps Ctrl+C for cancel");
+    for ctx in [Ctx::VimNormal, Ctx::VimVisual, Ctx::VimInsert] {
+        assert_eq!(last(&km, ctx, "ctrl+c"), act("query.cancel"), "{ctx:?}");
+    }
+    for ctx in [Ctx::VimNormal, Ctx::VimVisual] {
+        for key in ["V", "v", "o", "D", "C", "Y", "X", "3", "0", "g g", "esc"] {
+            assert_eq!(last(&km, ctx, key), Resolved::Forward(k(key)), "{ctx:?} {key}");
+            assert!(km.bindings().iter().any(|b| b.ctx == ctx && b.keys == k(key)), "{key} reserved in {ctx:?}");
+        }
+    }
+    for key in ["ctrl+w", "ctrl+u", "esc", "enter"] {
+        assert_eq!(last(&km, Ctx::VimInsert, key), Resolved::Forward(k(key)), "{key}");
+    }
 }
 
 #[test]
@@ -295,7 +292,7 @@ fn text_input_takes_letters_space_and_hangul_as_text() {
         }
         let mut st = KeyState::default();
         assert_eq!(
-            km.feed(&mut st, ctx, KeyChord::char('\u{3153}'), KeyEnv::default()),
+            km.feed(&mut st, ctx, KeyChord::char('\u{3153}')),
             Resolved::Forward(vec![KeyChord::char('\u{3153}')]),
             "{ctx:?}"
         );
@@ -410,7 +407,7 @@ fn keybindings_doc_lists_every_context_and_action() {
     for s in action::REGISTRY {
         assert!(doc.contains(&format!("`{}`", s.id)), "{}", s.id);
     }
-    assert!(doc.contains("| `editor.mode.standard` | Editor keys → standard |"));
+    assert!(!doc.contains("standard"), "vim keys only");
     assert!(doc.contains("| `Ctrl+E` | `query.execute_current` | Run statement under cursor |  |"));
     assert!(doc.contains("| `j` | `explorer.down` | Explorer: next item | ✓ |"));
     let hangul = |c: &char| ('\u{AC00}'..='\u{D7A3}').contains(c) || ('\u{3130}'..='\u{318F}').contains(c);
@@ -423,9 +420,8 @@ fn keybindings_doc_lists_every_context_and_action() {
 #[test]
 fn leader_groups_list_only_what_leads_to_an_action() {
     let km = Keymap::default();
-    let env = KeyEnv::default();
     let shown = |ctx, prefix: &str| -> Vec<(String, Child)> {
-        km.children(ctx, &k(prefix), env).into_iter().map(|(c, child)| (c.label(), child)).collect()
+        km.children(ctx, &k(prefix)).into_iter().map(|(c, child)| (c.label(), child)).collect()
     };
     let root = shown(Ctx::Explorer, "space");
     let keys: Vec<&str> = root.iter().map(|(k, _)| k.as_str()).collect();
@@ -449,7 +445,7 @@ fn leader_groups_list_only_what_leads_to_an_action() {
     // No leader while typing; an empty group resolves to nothing.
     assert!(shown(Ctx::VimInsert, "space").is_empty());
     assert_eq!(last(&km, Ctx::Explorer, "space m"), Resolved::Unbound(k("space m")));
-    assert_eq!(km.resolve_seq(Ctx::Explorer, &k("space c"), env), (None, true));
+    assert_eq!(km.resolve_seq(Ctx::Explorer, &k("space c")), (None, true));
     // A user action on a group's keys clashes with the group.
     let (km2, issues) = user(&[("nav", "space c", "explorer.top")]);
     assert!(matches!(issues[..], [Issue { kind: IssueKind::Prefix(_), .. }]), "{issues:?}");
@@ -465,7 +461,7 @@ fn hint_keys_prefer_the_innermost_usable_key() {
     assert_eq!(hint("query.execute_current", Ctx::VimNormal, false).as_deref(), Some("Ctrl+E"));
     assert_eq!(hint("query.execute_current", Ctx::VimNormal, true).as_deref(), Some("Ctrl+Enter"));
     // A single key before a sequence: the help shows as F1 everywhere.
-    for ctx in [Ctx::Explorer, Ctx::Grid, Ctx::VimNormal, Ctx::VimVisual, Ctx::VimInsert, Ctx::Standard] {
+    for ctx in [Ctx::Explorer, Ctx::Grid, Ctx::VimNormal, Ctx::VimVisual, Ctx::VimInsert] {
         assert_eq!(hint("help.context", ctx, false).as_deref(), Some("F1"), "{ctx:?}");
     }
     assert_eq!(hint("commands.open", Ctx::Explorer, false).as_deref(), Some(":"));
@@ -481,13 +477,13 @@ fn hint_keys_prefer_the_innermost_usable_key() {
 #[test]
 fn help_sections_show_keys_the_editor_takes() {
     let km = Keymap::default();
+    let close = action::by_id("tab.close").unwrap().action;
+    let ws = km.section(Ctx::Workspace, Some(Ctx::VimInsert));
+    let e = ws.iter().find(|e| e.action == close).unwrap();
+    assert_eq!((e.keys.len(), e.editor_keys.clone()), (0, vec![k("ctrl+w")]), "vim Insert deletes a word");
+    // From vim Normal nothing of the workspace is hidden; without a context every key shows.
     let prev = action::by_id("pane.prev").unwrap().action;
-    let ws = km.section(Ctx::Workspace, Some(Ctx::Standard));
-    let e = ws.iter().find(|e| e.action == prev).unwrap();
-    assert_eq!(e.keys, [k("shift+f6")], "Shift+F6 still moves between panes");
-    assert_eq!(e.editor_keys, [k("shift+tab")], "standard editing outdents");
-    // From vim Insert nothing is hidden; without a context every key shows.
-    let e = km.section(Ctx::Workspace, Some(Ctx::VimInsert)).into_iter().find(|e| e.action == prev).unwrap();
+    let e = km.section(Ctx::Workspace, Some(Ctx::VimNormal)).into_iter().find(|e| e.action == prev).unwrap();
     assert_eq!((e.keys.len(), e.editor_keys.len()), (2, 0));
     assert!(km.section(Ctx::VimInsert, None).iter().any(|e| e.keys.contains(&k("ctrl+n"))));
     assert!(km.section(Ctx::CellViewer, None).is_empty(), "its keys are the widget's");

@@ -65,13 +65,13 @@ use crate::drivers::{DriverLookup, driver_for};
 use crate::input::hangul;
 use crate::input::keyboard::{self, KeyUse};
 use crate::input::kitty;
-use crate::keymap::{Ctx, IssueKind, KeyChord, KeyEnv, KeyError, KeyState, Keymap, Resolved};
+use crate::keymap::{Ctx, IssueKind, KeyChord, KeyError, KeyState, Keymap, Resolved};
 use crate::widgets::editor::{EdEvent, Editor, Mode};
 use crate::widgets::grid::{GridState, ResultSet, viewer_text};
 use crate::widgets::text_input::TextInput;
 use crate::widgets::tree::TreeAction;
 use action::{Action, ExplorerAction, GridAction, LangSetting, REGISTRY};
-use datarig_core::config::{self, Config, ConfigError, EditorMode, IconsSetting, Profiles, Settings};
+use datarig_core::config::{self, Config, ConfigError, IconsSetting, Profiles, Settings};
 use datarig_core::driver::{ConnectOptions, DbCommand, DbEvent, Outcome, PingError, PingInfo, Session, SessionRole};
 use datarig_core::i18n::{I18n, Label, Lang, Localized, Msg, detect_lang};
 use datarig_core::migrate::{self, Keychain};
@@ -449,8 +449,6 @@ pub struct App {
     /// indicator `status.hangul` for a while).
     pub hangul_hint: Option<Instant>,
     pub lang_setting: LangSetting,
-    /// `[editor] mode`: kept and written back with the other settings.
-    pub editor_mode: EditorMode,
     /// `[secrets] default_source`: the password source a new profile starts with.
     pub default_source: DefaultSource,
     /// Step 2's settings: the command line's position, the result inspector's form, the
@@ -716,7 +714,6 @@ impl App {
             keymap_notices: keymap_issues.iter().map(issue_msg).collect(),
             hangul_hint: None,
             lang_setting: LangSetting::parse(&cfg.language),
-            editor_mode: cfg.editor_mode,
             default_source: cfg.default_source,
             prefs: cfg.prefs,
             detail: Detail::default(),
@@ -927,9 +924,6 @@ impl App {
         self.notices.append(&mut self.keymap_notices);
         if let Some(n) = self.theme_problem.clone() {
             self.notices.push(n);
-        }
-        if self.editor_mode == EditorMode::Standard {
-            self.notices.push(Notice::new(Label::EditorModeStandardPending, Level::Warning));
         }
         if let Some(e) = &self.status
             && matches!(e.msg, Msg::ErrorConfig { .. })
@@ -1211,11 +1205,10 @@ impl App {
                 Focus::Results => Ctx::Grid,
                 Focus::Inspector if self.inspector_shown() => Ctx::Inspector,
                 Focus::Inspector => Ctx::Grid,
-                Focus::Editor => match (self.editor_mode, self.tab().editor.mode) {
-                    (EditorMode::Standard, _) => Ctx::Standard,
-                    (EditorMode::Vim, Mode::Normal) => Ctx::VimNormal,
-                    (EditorMode::Vim, Mode::Insert) => Ctx::VimInsert,
-                    (EditorMode::Vim, Mode::Visual) => Ctx::VimVisual,
+                Focus::Editor => match self.tab().editor.mode {
+                    Mode::Normal => Ctx::VimNormal,
+                    Mode::Insert => Ctx::VimInsert,
+                    Mode::Visual => Ctx::VimVisual,
                 },
             },
         }
