@@ -406,6 +406,8 @@ impl Default for Detail {
 
 pub struct App {
     pub i18n: I18n,
+    /// The theme the frames are drawn with (`crate::theme::cur` while drawing).
+    pub theme: Arc<crate::theme::Theme>,
     pub page_size: usize,
     /// Rows of a result kept in memory, and the config's limit of a result's spill file (a
     /// policy may set its own).
@@ -683,6 +685,7 @@ impl App {
         }
         Self {
             i18n: I18n::new(lang),
+            theme: Arc::new(crate::theme::DARK),
             page_size: cfg.page_size,
             result_window_rows: cfg.result_window_rows,
             spill_limit: cfg.spill_limit,

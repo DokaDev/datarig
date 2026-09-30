@@ -15,7 +15,7 @@ use crate::app::{App, Keys, NodeState};
 use crate::icons::{self, KeyMark, TreeIcon, TypeCategory};
 use crate::keymap::Ctx;
 use crate::text::{Align, clip, fit, human_bytes, human_count, width, wrap_words};
-use crate::theme;
+use crate::theme::{self, Theme};
 use crate::widgets::tree::{Group, Node, ObjectView, Structure, Tree};
 use crate::widgets::{put, spinner_at};
 use datarig_core::driver::KeyMarks;
@@ -35,12 +35,13 @@ pub const FAILED: &str = "✕";
 
 /// One drawn row: `(text, style)` parts after the indentation and the arrow.
 fn row_parts(app: &App, row: &Row) -> Vec<(String, Style)> {
+    let th = theme::cur();
     let fg = |c: Color| Style::new().fg(c);
     match &row.kind {
         RowKind::NewConnection => {
-            vec![(format!("＋ {}", app.i18n.label(Label::ExplorerNewConnection)), fg(theme::ACCENT))]
+            vec![(format!("＋ {}", app.i18n.label(Label::ExplorerNewConnection)), fg(th.accent))]
         }
-        RowKind::Folder(f) => vec![(f.name().to_string(), fg(theme::FG_MUTED).add_modifier(Modifier::BOLD))],
+        RowKind::Folder(f) => vec![(f.name().to_string(), fg(th.fg_muted).add_modifier(Modifier::BOLD))],
         RowKind::Profile(id) => {
             let Some(p) = app.profile(*id) else { return Vec::new() };
             let color = theme::profile_color(p.display_color());
@@ -49,35 +50,35 @@ fn row_parts(app: &App, row: &Row) -> Vec<(String, Style)> {
                 NodeState::Disconnected => (DISCONNECTED.to_string(), fg(color)),
                 NodeState::Connecting => {
                     let started = app.conns.get(*id).and_then(|c| c.connecting.as_ref()).map(|c| c.started);
-                    (started.map_or("⠋", |t| spinner_at(t, app.now())).to_string(), fg(theme::ACCENT))
+                    (started.map_or("⠋", |t| spinner_at(t, app.now())).to_string(), fg(th.accent))
                 }
                 NodeState::Connected => (CONNECTED.to_string(), fg(color)),
-                NodeState::Failed => (FAILED.to_string(), fg(theme::ERROR)),
+                NodeState::Failed => (FAILED.to_string(), fg(th.error)),
             };
-            let mut name = fg(theme::FG);
+            let mut name = fg(th.fg);
             if state == NodeState::Connected {
                 name = name.add_modifier(Modifier::BOLD);
             }
             let mut parts = vec![
                 mark,
-                (" ".into(), fg(theme::FG)),
+                (" ".into(), fg(th.fg)),
                 (icons::cell(p, app.icons_on()), fg(color)),
                 (p.name.clone(), name),
             ];
             // Through an SSH tunnel: a small mark.
             if p.tunnel().is_some() {
-                parts.push((format!(" {}", icons::tunnel(app.icons_on())), fg(theme::FG_MUTED)));
+                parts.push((format!(" {}", icons::tunnel(app.icons_on())), fg(th.fg_muted)));
             }
             // A read-only policy, in words (policies have no color).
             if app.read_only(*id) {
                 let ro = app.i18n.label(Label::ExplorerReadOnly);
-                parts.push((format!(" {ro}"), fg(theme::FG_MUTED).add_modifier(Modifier::BOLD)));
+                parts.push((format!(" {ro}"), fg(th.fg_muted).add_modifier(Modifier::BOLD)));
             }
             parts
         }
         RowKind::ProfileError(id) => {
             let text = app.conns.get(*id).and_then(|c| c.error.as_ref()).map(|e| e.render(&app.i18n).to_string());
-            vec![(text.unwrap_or_default(), fg(theme::ERROR))]
+            vec![(text.unwrap_or_default(), fg(th.error))]
         }
         RowKind::Node(id, n) => match (app.conns.get(*id), n) {
             (Some(c), Node::Column(i, g, j, k)) => column_parts(app, (&c.tree, &c.catalog, &c.keys), (*i, *g, *j), *k),
@@ -86,7 +87,7 @@ fn row_parts(app: &App, row: &Row) -> Vec<(String, Style)> {
                     Some(e) => app.i18n.msg(&Msg::TreeColumnsUnreadable { error: e.clone() }),
                     None => app.i18n.label(Label::TreeLoading),
                 };
-                vec![(text.to_string(), fg(theme::FG_DIM).add_modifier(Modifier::ITALIC))]
+                vec![(text.to_string(), fg(th.fg_dim).add_modifier(Modifier::ITALIC))]
             }
             (Some(c), n) if is_structure(*n) => structure_parts(app, &c.tree, *n),
             (Some(c), _) => node_parts(app, &c.tree, *n),
@@ -96,19 +97,18 @@ fn row_parts(app: &App, row: &Row) -> Vec<(String, Style)> {
         RowKind::Database(id, db) => {
             let name = db.clone().unwrap_or_else(|| app.own_database(*id));
             let icon = if app.icons_on() { format!("{} ", icons::DATABASE) } else { String::new() };
-            let mut parts = vec![(icon, fg(theme::ACCENT)), (name, fg(theme::FG))];
+            let mut parts = vec![(icon, fg(th.accent)), (name, fg(th.fg))];
             if db.is_none() {
-                parts.push((format!(" {}", app.i18n.label(Label::ExplorerDatabaseDefault)), fg(theme::FG_DIM)));
+                parts.push((format!(" {}", app.i18n.label(Label::ExplorerDatabaseDefault)), fg(th.fg_dim)));
             }
             parts
         }
         RowKind::DatabasesNote(id) => match app.conns.get(*id).and_then(|c| c.databases.as_ref()) {
-            Some(Err(e)) => vec![(
-                app.i18n.msg(&Msg::ExplorerDatabasesUnreadable { error: e.clone() }).to_string(),
-                fg(theme::ERROR),
-            )],
+            Some(Err(e)) => {
+                vec![(app.i18n.msg(&Msg::ExplorerDatabasesUnreadable { error: e.clone() }).to_string(), fg(th.error))]
+            }
             _ => {
-                vec![(app.i18n.label(Label::TreeLoading).to_string(), fg(theme::FG_DIM).add_modifier(Modifier::ITALIC))]
+                vec![(app.i18n.label(Label::TreeLoading).to_string(), fg(th.fg_dim).add_modifier(Modifier::ITALIC))]
             }
         },
         RowKind::DatabaseNote(id, db) => {
@@ -116,12 +116,12 @@ fn row_parts(app: &App, row: &Row) -> Vec<(String, Style)> {
                 Some(Err(e)) => e,
                 _ => String::new(),
             };
-            vec![(app.i18n.msg(&Msg::ExplorerDatabaseUnreadable { error }).to_string(), fg(theme::ERROR))]
+            vec![(app.i18n.msg(&Msg::ExplorerDatabaseUnreadable { error }).to_string(), fg(th.error))]
         }
         RowKind::AuxNode(id, db, n) => match (app.conns.aux(*id, db), n) {
             (Some(a), Node::Column(i, g, j, k)) => column_parts(app, (&a.tree, &a.catalog, &a.keys), (*i, *g, *j), *k),
             (Some(_), Node::NoColumns(..)) | (None, _) => {
-                vec![(app.i18n.label(Label::TreeLoading).to_string(), fg(theme::FG_DIM).add_modifier(Modifier::ITALIC))]
+                vec![(app.i18n.label(Label::TreeLoading).to_string(), fg(th.fg_dim).add_modifier(Modifier::ITALIC))]
             }
             (Some(a), n) if is_structure(*n) => structure_parts(app, &a.tree, *n),
             (Some(a), _) => node_parts(app, &a.tree, *n),
@@ -129,35 +129,36 @@ fn row_parts(app: &App, row: &Row) -> Vec<(String, Style)> {
         RowKind::ScriptsHeader => {
             let n = app.script_list.iter().filter(|e| !e.folder).count() as u64;
             vec![
-                (app.i18n.label(Label::ExplorerScripts).to_string(), fg(theme::ACCENT).add_modifier(Modifier::BOLD)),
-                (format!(" {n}"), fg(theme::FG_DIM)),
+                (app.i18n.label(Label::ExplorerScripts).to_string(), fg(th.accent).add_modifier(Modifier::BOLD)),
+                (format!(" {n}"), fg(th.fg_dim)),
             ]
         }
         RowKind::ScriptFolder(p) => {
             let mut parts = vec![(
                 datarig_core::scripts::display_name(p, true).to_string(),
-                fg(theme::FG_MUTED).add_modifier(Modifier::BOLD),
+                fg(th.fg_muted).add_modifier(Modifier::BOLD),
             )];
             if app.script_unreadable(p) {
-                parts.push((format!(" {}", app.i18n.label(Label::ScriptTreeUnreadable)), fg(theme::WARNING)));
+                parts.push((format!(" {}", app.i18n.label(Label::ScriptTreeUnreadable)), fg(th.warning)));
             }
             parts
         }
         RowKind::Script(p) => {
             let icon = if app.icons_on() { format!("{} ", icons::SCRIPT) } else { String::new() };
             let open = app.tabs.find_script(p).is_some();
-            let name = if open { fg(theme::FG).add_modifier(Modifier::BOLD) } else { fg(theme::FG) };
-            vec![(icon, fg(theme::ACCENT_WARM)), (datarig_core::scripts::display_name(p, false).to_string(), name)]
+            let name = if open { fg(th.fg).add_modifier(Modifier::BOLD) } else { fg(th.fg) };
+            vec![(icon, fg(th.accent_warm)), (datarig_core::scripts::display_name(p, false).to_string(), name)]
         }
         RowKind::ScriptsEmpty => {
             let key = app.key_for(Action::ScriptSave, Ctx::Nav);
-            vec![(app.i18n.msg(&Msg::ExplorerScriptsEmpty { key }).to_string(), fg(theme::FG_DIM))]
+            vec![(app.i18n.msg(&Msg::ExplorerScriptsEmpty { key }).to_string(), fg(th.fg_dim))]
         }
     }
 }
 
 /// A node of a schema tree: its icon with icons on, then its label.
 fn node_parts(app: &App, tree: &Tree, n: Node) -> Vec<(String, Style)> {
+    let th = theme::cur();
     let icon = match n {
         _ if !app.icons_on() => None,
         Node::Schema(_) => Some(TreeIcon::Schema),
@@ -173,7 +174,7 @@ fn node_parts(app: &App, tree: &Tree, n: Node) -> Vec<(String, Style)> {
         // A group's icon is as muted as its name; a schema's and an object's in the accent, as
         // a database's.
         Some(i) => {
-            let color = if matches!(n, Node::Group(..)) { theme::FG_MUTED } else { theme::ACCENT };
+            let color = if matches!(n, Node::Group(..)) { th.fg_muted } else { th.accent };
             vec![(format!("{} ", i.glyph()), Style::new().fg(color)), label]
         }
         None => vec![label],
@@ -208,11 +209,12 @@ fn group_label(g: StructureGroup) -> Label {
 /// The color of a structure group's icon: a key's as its column mark, the others as muted as a
 /// group's name.
 fn group_icon_style(g: StructureGroup) -> Style {
+    let th = theme::cur();
     let color = match g {
-        StructureGroup::PrimaryKey => theme::key_color(KeyMark::Pk),
-        StructureGroup::ForeignKeys => theme::key_color(KeyMark::Fk),
-        StructureGroup::UniqueConstraints => theme::key_color(KeyMark::Uq),
-        _ => theme::FG_MUTED,
+        StructureGroup::PrimaryKey => th.key_color(KeyMark::Pk),
+        StructureGroup::ForeignKeys => th.key_color(KeyMark::Fk),
+        StructureGroup::UniqueConstraints => th.key_color(KeyMark::Uq),
+        _ => th.fg_muted,
     };
     Style::new().fg(color)
 }
@@ -221,7 +223,8 @@ fn group_icon_style(g: StructureGroup) -> Style {
 /// count), an item with what it is in dim text, an item's line, an item's `Columns (2)` and
 /// each of them, or why the structure is not there.
 fn structure_parts(app: &App, tree: &Tree, n: Node) -> Vec<(String, Style)> {
-    let dim = Style::new().fg(theme::FG_DIM);
+    let th = theme::cur();
+    let dim = Style::new().fg(th.fg_dim);
     let (Node::StructGroup(i, g, j, _)
     | Node::StructItem(i, g, j, _, _)
     | Node::StructDetail(i, g, j, _, _, _)
@@ -236,7 +239,7 @@ fn structure_parts(app: &App, tree: &Tree, n: Node) -> Vec<(String, Style)> {
         return match view.map(|v| &v.structure) {
             Some(Structure::Failed(error)) => {
                 let text = app.i18n.msg(&Msg::TreeStructureUnreadable { error: error.clone() });
-                vec![(text.to_string(), Style::new().fg(theme::ERROR))]
+                vec![(text.to_string(), Style::new().fg(th.error))]
             }
             _ => vec![(app.i18n.label(Label::TreeLoading).to_string(), dim.add_modifier(Modifier::ITALIC))],
         };
@@ -254,7 +257,7 @@ fn structure_parts(app: &App, tree: &Tree, n: Node) -> Vec<(String, Style)> {
             if count == 0 {
                 parts.push((label, dim));
             } else {
-                parts.push((label, Style::new().fg(theme::FG_MUTED)));
+                parts.push((label, Style::new().fg(th.fg_muted)));
                 // A table has one primary key at most: no count.
                 if sg != StructureGroup::PrimaryKey {
                     parts.push((format!(" ({count})"), dim));
@@ -268,12 +271,9 @@ fn structure_parts(app: &App, tree: &Tree, n: Node) -> Vec<(String, Style)> {
             let count = st.item_columns(sg, k).len();
             let mut parts = Vec::new();
             if on {
-                parts.push((
-                    format!("{} ", icons::structure(StructureGroup::Columns)),
-                    Style::new().fg(theme::FG_MUTED),
-                ));
+                parts.push((format!("{} ", icons::structure(StructureGroup::Columns)), Style::new().fg(th.fg_muted)));
             }
-            parts.push((app.i18n.label(Label::TreeGroupColumns).to_string(), Style::new().fg(theme::FG_MUTED)));
+            parts.push((app.i18n.label(Label::TreeGroupColumns).to_string(), Style::new().fg(th.fg_muted)));
             parts.push((format!(" ({count})"), dim));
             parts
         }
@@ -292,11 +292,11 @@ fn structure_parts(app: &App, tree: &Tree, n: Node) -> Vec<(String, Style)> {
                     text.push_str(&format!(" · {what} {}", action.sql()));
                 }
             }
-            vec![(text, Style::new().fg(theme::FG_MUTED))]
+            vec![(text, Style::new().fg(th.fg_muted))]
         }
         Node::StructDetail(.., StructureGroup::Triggers, k, _) => {
             let Some(c) = st.triggers.get(k).and_then(|t| t.condition.as_ref()) else { return Vec::new() };
-            vec![(format!("WHEN ({c})"), Style::new().fg(theme::FG_MUTED))]
+            vec![(format!("WHEN ({c})"), Style::new().fg(th.fg_muted))]
         }
         _ => Vec::new(),
     }
@@ -305,9 +305,10 @@ fn structure_parts(app: &App, tree: &Tree, n: Node) -> Vec<(String, Style)> {
 /// Item `k` of group `sg`: a column with its key marks (or its type's icon) and `type, not
 /// null, default …`; anything else with its group's icon, its name and what it is.
 fn item_parts(app: &App, st: &TableStructure, sg: StructureGroup, k: usize) -> Vec<(String, Style)> {
+    let th = theme::cur();
     let on = app.icons_on();
-    let dim = Style::new().fg(theme::FG_DIM);
-    let name = |n: &str| (n.to_string(), Style::new().fg(theme::FG));
+    let dim = Style::new().fg(th.fg_dim);
+    let name = |n: &str| (n.to_string(), Style::new().fg(th.fg));
     let icon = if on { vec![(format!("{} ", icons::structure(sg)), group_icon_style(sg))] } else { Vec::new() };
     let mut parts = match sg {
         StructureGroup::Columns => {
@@ -376,7 +377,7 @@ fn item_parts(app: &App, st: &TableStructure, sg: StructureGroup, k: usize) -> V
             let mut parts = vec![name(&t.name), (detail, dim)];
             if !t.enabled {
                 let off = app.i18n.label(Label::TreeTriggerDisabled);
-                parts.push((format!(" · {off}"), Style::new().fg(theme::WARNING)));
+                parts.push((format!(" · {off}"), Style::new().fg(th.warning)));
             }
             parts
         }
@@ -417,18 +418,19 @@ fn item_column_parts(
     schema: &str,
     on: bool,
 ) -> Vec<(String, Style)> {
-    let dim = Style::new().fg(theme::FG_DIM);
+    let th = theme::cur();
+    let dim = Style::new().fg(th.fg_dim);
     let table_column = c.column.as_deref().and_then(|n| st.column(n));
     let mut parts = match table_column {
         Some(col) => mark_parts(st.marks(&col.name), &col.type_name, on),
         None if on => vec![(format!("{} ", TypeCategory::Other.glyph()), dim)],
         None => Vec::new(),
     };
-    parts.push((c.text.clone(), Style::new().fg(theme::FG)));
+    parts.push((c.text.clone(), Style::new().fg(th.fg)));
     if let (Some(to), Some(f)) = (&c.references, st.foreign_keys.get(k).filter(|_| sg == StructureGroup::ForeignKeys)) {
         let table =
             if f.ref_schema == schema { f.ref_table.clone() } else { format!("{}.{}", f.ref_schema, f.ref_table) };
-        parts.push((format!(" → {table}.{to}"), Style::new().fg(theme::FG_MUTED)));
+        parts.push((format!(" → {table}.{to}"), Style::new().fg(th.fg_muted)));
     }
     let mut detail = match (table_column, &c.column) {
         (Some(col), _) => column_detail(col),
@@ -449,12 +451,13 @@ fn item_column_parts(
 /// A column's key marks (PK/FK/UQ) or, with icons on, the icon of its type's category when it
 /// is no key.
 fn mark_parts(marks: KeyMarks, type_name: &str, on: bool) -> Vec<(String, Style)> {
+    let th = theme::cur();
     let mut parts: Vec<(String, Style)> = icons::key_marks(marks)
         .into_iter()
-        .map(|m| (format!("{} ", m.text(on)), Style::new().fg(theme::key_color(m))))
+        .map(|m| (format!("{} ", m.text(on)), Style::new().fg(th.key_color(m))))
         .collect();
     if on && parts.is_empty() {
-        parts.push((format!("{} ", TypeCategory::of(type_name).glyph()), Style::new().fg(theme::FG_DIM)));
+        parts.push((format!("{} ", TypeCategory::of(type_name).glyph()), Style::new().fg(th.fg_dim)));
     }
     parts
 }
@@ -468,6 +471,7 @@ fn column_parts(
     (i, g, j): (usize, Group, usize),
     k: usize,
 ) -> Vec<(String, Style)> {
+    let th = theme::cur();
     let Some((schema, table)) = tree.object_name(i, g, j) else { return Vec::new() };
     let Some(col) =
         catalog.relations.iter().find(|r| r.schema == schema && r.name == table).and_then(|r| r.columns.get(k))
@@ -476,8 +480,8 @@ fn column_parts(
     };
     let marks = keys.catalog().map(|keys| keys.marks_by_name(&schema, &table, &col.name)).unwrap_or_default();
     let mut parts = mark_parts(marks, &col.type_name, app.icons_on());
-    parts.push((col.name.clone(), Style::new().fg(theme::FG)));
-    parts.push((format!("  {}", col.type_name), Style::new().fg(theme::FG_DIM)));
+    parts.push((col.name.clone(), Style::new().fg(th.fg)));
+    parts.push((format!("  {}", col.type_name), Style::new().fg(th.fg_dim)));
     parts
 }
 
@@ -563,18 +567,19 @@ pub(crate) fn line_preview(app: &App) -> Option<String> {
 }
 
 /// Background of a row: the cursor's row is highlighted (dimmer without the focus).
-fn row_bg(selected: bool, focused: bool) -> Color {
+fn row_bg(th: &Theme, selected: bool, focused: bool) -> Style {
     match (selected, focused) {
-        (true, true) => theme::SELECTION_BG,
-        (true, false) => theme::CURSOR_LINE_BG,
-        _ => theme::BG,
+        (true, true) => th.selection,
+        (true, false) => th.cursor_line,
+        _ => Style::new().bg(th.bg),
     }
 }
 
 /// Draw one row on the one-line `line`.
-fn draw_row(app: &App, row: &Row, line: Rect, bg: Color, buf: &mut Buffer) {
+fn draw_row(app: &App, row: &Row, line: Rect, bg: Style, buf: &mut Buffer) {
+    let th = theme::cur();
     let (x, y, w) = (line.x, line.y, line.width as usize);
-    buf.set_stringn(x, y, fit("", w, Align::Left), w, Style::new().bg(bg));
+    buf.set_stringn(x, y, fit("", w, Align::Left), w, bg);
     let indent = row.depth * 2;
     let arrow = match app.explorer_arrow(row) {
         Some(true) => "▾ ",
@@ -583,14 +588,14 @@ fn draw_row(app: &App, row: &Row, line: Rect, bg: Color, buf: &mut Buffer) {
     };
     let mut cx = indent;
     if cx < w {
-        put(buf, x + cx as u16, y, arrow, w - cx, Style::new().fg(theme::FG_MUTED).bg(bg));
+        put(buf, x + cx as u16, y, arrow, w - cx, Style::new().fg(th.fg_muted).patch(bg));
     }
     cx += 2;
     for (text, style) in row_parts(app, row) {
         if cx >= w {
             break;
         }
-        let used = put(buf, x + cx as u16, y, &text, w - cx, style.bg(bg));
+        let used = put(buf, x + cx as u16, y, &text, w - cx, style.patch(bg));
         cx += used as usize;
     }
     // An object's estimates on the right, in the room its name leaves: never over the name.
@@ -598,12 +603,13 @@ fn draw_row(app: &App, row: &Row, line: Rect, bg: Color, buf: &mut Buffer) {
     let stats = row_stats(app, row).map(|s| inline_stats(app, s)).unwrap_or_default();
     if let Some(text) = stats.into_iter().find(|t| width(t) <= room) {
         let at = w - width(&text);
-        put(buf, x + at as u16, y, &text, width(&text), Style::new().fg(theme::FG_DIM).bg(bg));
+        put(buf, x + at as u16, y, &text, width(&text), Style::new().fg(th.fg_dim).patch(bg));
     }
 }
 
 /// The explorer inside `area`; returns the hardware cursor while the filter is typed.
 pub(crate) fn draw_explorer(app: &mut App, area: Rect, buf: &mut Buffer, focused: bool) -> Option<(u16, u16)> {
+    let th = theme::cur();
     let rows = app.explorer_rows();
     let sel = app.explorer.index(&rows);
     let w = area.width as usize;
@@ -613,9 +619,9 @@ pub(crate) fn draw_explorer(app: &mut App, area: Rect, buf: &mut Buffer, focused
     // The `/` filter line while it is typed or set.
     let filter_shown = app.explorer.filtering || !app.explorer.filter.text().is_empty();
     if filter_shown && area.height > 2 {
-        let style = Style::new().fg(theme::FG).bg(theme::SURFACE);
+        let style = Style::new().fg(th.fg).bg(th.surface);
         buf.set_style(Rect::new(area.x, y, area.width, 1), style);
-        put(buf, area.x, y, "/", 1, Style::new().fg(theme::ACCENT).bg(theme::SURFACE).add_modifier(Modifier::BOLD));
+        put(buf, area.x, y, "/", 1, Style::new().fg(th.accent).bg(th.surface).add_modifier(Modifier::BOLD));
         let input = Rect::new(area.x + 2, y, area.width.saturating_sub(2), 1);
         let filtering = app.explorer.filtering;
         let cx = app.explorer.filter.render(input, buf, style, filtering, false, None);
@@ -630,7 +636,7 @@ pub(crate) fn draw_explorer(app: &mut App, area: Rect, buf: &mut Buffer, focused
     // The first row is pinned; the others scroll below it.
     let first = rows.first().cloned();
     if let Some(r) = &first {
-        draw_row(app, r, Rect::new(area.x, y, area.width, 1), row_bg(sel == 0, focused), buf);
+        draw_row(app, r, Rect::new(area.x, y, area.width, 1), row_bg(&th, sel == 0, focused), buf);
     }
     let list = Rect::new(area.x, y, area.width, bottom - y);
     app.explorer.area = list;
@@ -649,7 +655,7 @@ pub(crate) fn draw_explorer(app: &mut App, area: Rect, buf: &mut Buffer, focused
     let scroll = app.explorer.scroll;
     for (i, r) in rows.iter().enumerate().skip(1 + scroll).take(h) {
         let ry = y + (i - 1 - scroll) as u16;
-        draw_row(app, r, Rect::new(area.x, ry, area.width, 1), row_bg(i == sel, focused), buf);
+        draw_row(app, r, Rect::new(area.x, ry, area.width, 1), row_bg(&th, i == sel, focused), buf);
     }
     // Empty states: no profile at all, or none matching the filter.
     if n == 0 && h > 1 {
@@ -664,8 +670,8 @@ pub(crate) fn draw_explorer(app: &mut App, area: Rect, buf: &mut Buffer, focused
         };
         let mut ly = y + 1;
         for (text, style) in [
-            (title, Style::new().fg(theme::FG).bg(theme::BG).add_modifier(Modifier::BOLD)),
-            (hint, Style::new().fg(theme::FG_MUTED).bg(theme::BG)),
+            (title, Style::new().fg(th.fg).bg(th.bg).add_modifier(Modifier::BOLD)),
+            (hint, Style::new().fg(th.fg_muted).bg(th.bg)),
         ] {
             for l in wrap_words(&text, w.saturating_sub(2)) {
                 if ly >= bottom {

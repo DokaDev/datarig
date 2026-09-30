@@ -45,7 +45,7 @@ fn selected_is(h: &mut Harness, name: &str) -> bool {
     let buf = t.backend().buffer();
     (0..45).any(|y| {
         let line = row_text(buf, y);
-        line.contains(name) && (0..160).any(|x| buf[(x, y)].bg == datarig_tui::theme::SELECTION_BG)
+        line.contains(name) && (0..160).any(|x| buf[(x, y)].bg == datarig_tui::theme::DARK.selection.bg.unwrap())
     })
 }
 

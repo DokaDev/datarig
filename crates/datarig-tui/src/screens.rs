@@ -27,16 +27,19 @@ use workspace::draw_workspace;
 pub const MIN_W: u16 = 80;
 pub const MIN_H: u16 = 24;
 
+/// Draws a frame with `app.theme` as the current theme ([`theme::cur`]).
 pub fn draw(f: &mut Frame, app: &mut App) {
+    let _theme = theme::scope(app.theme.clone());
+    let th = theme::cur();
     let area = f.area();
-    f.buffer_mut().set_style(area, theme::base());
+    f.buffer_mut().set_style(area, th.base());
     if area.width < MIN_W || area.height < MIN_H {
         app.layout = Layout { too_small: true, ..Layout::default() };
         let msg = app.i18n.msg(&Msg::ScreenTooSmall { width: MIN_W.to_string(), height: MIN_H.to_string() });
         let msg = clip(&msg, area.width as usize);
         let x = area.x + (area.width.saturating_sub(width(&msg) as u16)) / 2;
         let y = area.y + area.height / 2;
-        f.buffer_mut().set_stringn(x, y, &msg, area.width as usize, Style::new().fg(theme::WARNING).bg(theme::BG));
+        f.buffer_mut().set_stringn(x, y, &msg, area.width as usize, Style::new().fg(th.warning).bg(th.bg));
         return;
     }
     let cursor = draw_screen(f, app);
@@ -45,6 +48,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
 /// The workspace below the overlays; returns where the hardware cursor belongs.
 pub fn draw_screen(f: &mut Frame, app: &mut App) -> Option<(u16, u16)> {
+    let _theme = theme::scope(app.theme.clone());
     draw_workspace(f, app)
 }
 
@@ -52,13 +56,15 @@ pub fn draw_screen(f: &mut Frame, app: &mut App) -> Option<(u16, u16)> {
 /// its own box; before the top one the rest of the frame is dimmed, so the screen stays
 /// visible behind it. The top overlay owns the hardware cursor.
 pub fn draw_overlays(f: &mut Frame, app: &mut App, screen_cursor: Option<(u16, u16)>) {
+    let _theme = theme::scope(app.theme.clone());
+    let th = theme::cur();
     let area = f.area();
     let content = Rect::new(area.x, area.y, area.width, area.height - 1);
     let mut hw_cursor = screen_cursor;
     let kinds: Vec<OverlayKind> = app.overlays.iter().map(Overlay::kind).collect();
     for (i, &kind) in kinds.iter().enumerate() {
         if i + 1 == kinds.len() {
-            theme::dim_area(f.buffer_mut(), area);
+            th.dim_area(f.buffer_mut(), area);
         }
         hw_cursor = match kind {
             OverlayKind::CellViewer => {

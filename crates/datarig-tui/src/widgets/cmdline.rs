@@ -101,36 +101,38 @@ fn draw_entries(
     bg: ratatui::style::Color,
     buf: &mut Buffer,
 ) {
+    let th = theme::cur();
     if p.rows.is_empty() {
-        put(buf, x + 2, list_y, &p.empty, iw.saturating_sub(4), Style::new().fg(theme::FG_DIM).bg(bg));
+        put(buf, x + 2, list_y, &p.empty, iw.saturating_sub(4), Style::new().fg(th.fg_dim).bg(bg));
     }
     let name_w = p.rows.iter().map(|r| width(&r.name)).max().unwrap_or(0).min(NAME_MAX).min(iw / 2);
     let offset = selected.unwrap_or(0).saturating_sub(n - 1);
     for (row, (i, r)) in p.rows.iter().enumerate().skip(offset).take(n).enumerate() {
         let y = list_y + row as u16;
-        let rbg = if Some(i) == selected { theme::SELECTION_BG } else { bg };
-        buf.set_style(Rect::new(x, y, iw as u16, 1), Style::new().bg(rbg));
+        let rbg = if Some(i) == selected { th.selection } else { Style::new().bg(bg) };
+        buf.set_style(Rect::new(x, y, iw as u16, 1), rbg);
         let kw = width(&r.keys);
         let keys_room = if kw > 0 && kw + name_w + 12 <= iw { kw + 2 } else { 0 };
         let mut cx = x + 2;
         if name_w > 0 {
-            let style = Style::new().fg(theme::ACCENT).bg(rbg).add_modifier(Modifier::BOLD);
+            let style = Style::new().fg(th.accent).patch(rbg).add_modifier(Modifier::BOLD);
             put(buf, cx, y, &fit(&r.name, name_w, Align::Left), name_w, style);
             cx += name_w as u16 + 2;
         }
         let label_w = (x as usize + iw).saturating_sub(cx as usize + keys_room + 1);
-        put(buf, cx, y, &fit(&r.label, label_w, Align::Left), label_w, Style::new().fg(theme::FG).bg(rbg));
+        put(buf, cx, y, &fit(&r.label, label_w, Align::Left), label_w, Style::new().fg(th.fg).patch(rbg));
         if keys_room > 0 {
             let kx = x + iw as u16 - 1 - kw as u16;
-            put(buf, kx, y, &r.keys, kw, Style::new().fg(theme::FG_MUTED).bg(rbg));
+            put(buf, kx, y, &r.keys, kw, Style::new().fg(th.fg_muted).patch(rbg));
         }
     }
 }
 
 /// The note and the error under the entries, from `y` down.
 fn draw_notes(p: &Parts, x: u16, mut y: u16, iw: usize, bg: ratatui::style::Color, buf: &mut Buffer) {
+    let th = theme::cur();
     for l in &p.note {
-        put(buf, x + 2, y, l, iw.saturating_sub(4), Style::new().fg(theme::FG_MUTED).bg(bg));
+        put(buf, x + 2, y, l, iw.saturating_sub(4), Style::new().fg(th.fg_muted).bg(bg));
         y += 1;
     }
     if let Some((lines, level)) = &p.error {
@@ -162,10 +164,11 @@ fn draw_input(
     bg: ratatui::style::Color,
     buf: &mut Buffer,
 ) -> Option<(u16, u16)> {
+    let th = theme::cur();
     let c = app.overlays.command_line_mut()?;
-    let line = Style::new().fg(theme::FG).bg(bg);
+    let line = Style::new().fg(th.fg).bg(bg);
     buf.set_style(Rect::new(x, y, iw as u16, 1), line);
-    buf.set_stringn(x + pad, y, ":", 1, Style::new().fg(theme::ACCENT).bg(bg).add_modifier(Modifier::BOLD));
+    buf.set_stringn(x + pad, y, ":", 1, Style::new().fg(th.accent).bg(bg).add_modifier(Modifier::BOLD));
     let hint_w = width(&p.keys_hint);
     let show_hint = hint && (c.input.text().is_empty() || iw >= 60 + hint_w);
     let hint_room = if show_hint && hint_w + 24 <= iw { hint_w + 2 } else { 0 };
@@ -179,12 +182,12 @@ fn draw_input(
             y,
             &p.placeholder,
             input_area.width.saturating_sub(1) as usize,
-            Style::new().fg(theme::FG_DIM).bg(bg),
+            Style::new().fg(th.fg_dim).bg(bg),
         );
     }
     if hint_room > 0 {
         let hx = x + iw as u16 - hint_w as u16;
-        put(buf, hx, y, &p.keys_hint, hint_w, Style::new().fg(theme::FG_MUTED).bg(bg));
+        put(buf, hx, y, &p.keys_hint, hint_w, Style::new().fg(th.fg_muted).bg(bg));
     }
     Some((cx, y))
 }
@@ -192,6 +195,7 @@ fn draw_input(
 /// The popup: a box near the top, the input on its first line, a rule, then the entries, the
 /// note and the error.
 fn draw_popup(app: &mut App, p: Parts, area: Rect, buf: &mut Buffer) -> Option<(u16, u16)> {
+    let th = theme::cur();
     let w = popup_width(area);
     let x = area.x + (area.width - w) / 2;
     let top = area.y + (area.height / 6).max(1);
@@ -204,15 +208,15 @@ fn draw_popup(app: &mut App, p: Parts, area: Rect, buf: &mut Buffer) -> Option<(
     clear_overlay(rect, buf);
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(theme::ACCENT).bg(theme::SURFACE))
-        .style(Style::new().fg(theme::FG).bg(theme::SURFACE))
+        .border_style(Style::new().fg(th.accent).bg(th.surface))
+        .style(Style::new().fg(th.fg).bg(th.surface))
         .title(ratatui::text::Line::from(ratatui::text::Span::styled(
             format!(" {} ", p.title),
-            Style::new().fg(theme::FG).add_modifier(Modifier::BOLD),
+            Style::new().fg(th.fg).add_modifier(Modifier::BOLD),
         )));
     // The keys on the bottom border, when they fit.
     let block = if width(&p.keys_hint) + 6 <= w as usize {
-        let keys = ratatui::text::Span::styled(format!(" {} ", p.keys_hint), Style::new().fg(theme::FG_MUTED));
+        let keys = ratatui::text::Span::styled(format!(" {} ", p.keys_hint), Style::new().fg(th.fg_muted));
         block.title_bottom(ratatui::text::Line::from(keys).right_aligned())
     } else {
         block
@@ -220,18 +224,19 @@ fn draw_popup(app: &mut App, p: Parts, area: Rect, buf: &mut Buffer) -> Option<(
     let inner = block.inner(rect);
     block.render(rect, buf);
     let iw = inner.width as usize;
-    let cursor = draw_input(app, &p, (inner.x, inner.y), iw, 1, false, theme::SURFACE, buf);
+    let cursor = draw_input(app, &p, (inner.x, inner.y), iw, 1, false, th.surface, buf);
     // A rule under the input, joined to the box's sides.
-    let rule = Style::new().fg(theme::ACCENT).bg(theme::SURFACE);
+    let rule = Style::new().fg(th.accent).bg(th.surface);
     buf.set_stringn(rect.x, inner.y + 1, format!("├{}┤", "─".repeat(iw)), iw + 2, rule);
     let selected = selected_entry(app);
-    draw_entries(&p, selected, inner.x, inner.y + 2, iw, n, theme::SURFACE, buf);
-    draw_notes(&p, inner.x, inner.y + 2 + n as u16, iw, theme::SURFACE, buf);
+    draw_entries(&p, selected, inner.x, inner.y + 2, iw, n, th.surface, buf);
+    draw_notes(&p, inner.x, inner.y + 2 + n as u16, iw, th.surface, buf);
     cursor
 }
 
 /// Neovim style: the input on the last line, the entries rising above it.
 fn draw_bottom(app: &mut App, p: Parts, area: Rect, buf: &mut Buffer) -> Option<(u16, u16)> {
+    let th = theme::cur();
     let max_rows = ((area.height as usize).saturating_sub(2) / 2).clamp(1, MAX_ROWS);
     let n = p.rows.len().clamp(1, max_rows);
     let extra = p.extra();
@@ -239,12 +244,12 @@ fn draw_bottom(app: &mut App, p: Parts, area: Rect, buf: &mut Buffer) -> Option<
     let top = area.y + area.height - box_h;
     let rect = Rect::new(area.x, top, area.width, box_h);
     clear_overlay(rect, buf);
-    let surface = Style::new().fg(theme::FG).bg(theme::SURFACE);
+    let surface = Style::new().fg(th.fg).bg(th.surface);
     buf.set_style(rect, surface);
     let iw = area.width as usize;
 
     // Top edge with the title.
-    let edge = Style::new().fg(theme::BORDER).bg(theme::SURFACE);
+    let edge = Style::new().fg(th.border).bg(th.surface);
     buf.set_stringn(area.x, top, "─".repeat(iw), iw, edge);
     put(
         buf,
@@ -252,15 +257,15 @@ fn draw_bottom(app: &mut App, p: Parts, area: Rect, buf: &mut Buffer) -> Option<
         top,
         &format!(" {} ", p.title),
         iw.saturating_sub(4),
-        Style::new().fg(theme::FG).bg(theme::SURFACE).add_modifier(Modifier::BOLD),
+        Style::new().fg(th.fg).bg(th.surface).add_modifier(Modifier::BOLD),
     );
     let selected = selected_entry(app);
-    draw_entries(&p, selected, area.x, top + 1, iw, n, theme::SURFACE, buf);
-    draw_notes(&p, area.x, top + 1 + n as u16, iw, theme::SURFACE, buf);
+    draw_entries(&p, selected, area.x, top + 1, iw, n, th.surface, buf);
+    draw_notes(&p, area.x, top + 1 + n as u16, iw, th.surface, buf);
     // The COMMAND badge where the status bar starts, then the input.
     let y = area.y + area.height - 1;
     let bw = draw_badge(app, area.x, y, buf);
-    draw_input(app, &p, (area.x + bw, y), iw - usize::from(bw), u16::from(bw > 0), true, theme::BG, buf)
+    draw_input(app, &p, (area.x + bw, y), iw - usize::from(bw), u16::from(bw > 0), true, th.bg, buf)
 }
 
 /// The mode badge (COMMAND) at (x, y), as the status bar draws it; returns its width.

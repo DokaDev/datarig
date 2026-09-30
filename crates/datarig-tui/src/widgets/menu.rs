@@ -52,6 +52,7 @@ fn draw_box(
     area: Rect,
     buf: &mut Buffer,
 ) -> (Rect, Rect) {
+    let th = theme::cur();
     let key_w = rows.iter().map(|(_, k)| width(k)).max().unwrap_or(0);
     let w = box_width(rows).min(area.width);
     let h = (rows.len() as u16 + 2).min(area.height);
@@ -61,22 +62,22 @@ fn draw_box(
     clear_overlay(rect, buf);
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(theme::ACCENT).bg(theme::SURFACE))
-        .style(Style::new().bg(theme::SURFACE).fg(theme::FG));
+        .border_style(Style::new().fg(th.accent).bg(th.surface))
+        .style(Style::new().bg(th.surface).fg(th.fg));
     let inner = block.inner(rect);
     block.render(rect, buf);
     let iw = inner.width as usize;
     for (i, (label, keys)) in rows.iter().enumerate().take(inner.height as usize) {
         let ry = inner.y + i as u16;
         let bg = match (i == selected, active) {
-            (true, true) => theme::SELECTION_BG,
-            (true, false) => theme::CURSOR_LINE_BG,
-            _ => theme::SURFACE,
+            (true, true) => th.selection,
+            (true, false) => th.cursor_line,
+            _ => Style::new().bg(th.surface),
         };
-        buf.set_stringn(inner.x, ry, fit("", iw, Align::Left), iw, Style::new().bg(bg));
-        put(buf, inner.x + 1, ry, label, iw.saturating_sub(key_w + 3), Style::new().fg(theme::FG).bg(bg));
+        buf.set_stringn(inner.x, ry, fit("", iw, Align::Left), iw, bg);
+        put(buf, inner.x + 1, ry, label, iw.saturating_sub(key_w + 3), Style::new().fg(th.fg).patch(bg));
         let kx = inner.x + inner.width - 1 - width(keys) as u16;
-        let style = Style::new().fg(theme::ACCENT_WARM).bg(bg).add_modifier(Modifier::BOLD);
+        let style = Style::new().fg(th.accent_warm).patch(bg).add_modifier(Modifier::BOLD);
         put(buf, kx, ry, keys, key_w, style);
     }
     (rect, Rect::new(inner.x, inner.y, inner.width, inner.height.min(rows.len() as u16)))

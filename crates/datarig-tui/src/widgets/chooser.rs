@@ -16,6 +16,7 @@ use ratatui::style::{Modifier, Style};
 
 /// Draw the chooser; returns the hardware cursor while its filter is typed.
 pub(crate) fn draw_chooser(app: &mut App, area: Rect, buf: &mut Buffer) -> Option<(u16, u16)> {
+    let th = theme::cur();
     let icons_on = app.icons_on();
     let c = app.overlays.chooser()?;
     let title = app.i18n.label(c.title);
@@ -26,49 +27,35 @@ pub(crate) fn draw_chooser(app: &mut App, area: Rect, buf: &mut Buffer) -> Optio
     let rect = centered(area, w, rows as u16 + 4);
     let inner = modal(rect, &title, &footer, buf);
     let iw = inner.width as usize;
-    let filter_style = Style::new().fg(theme::FG).bg(theme::SURFACE);
-    put(
-        buf,
-        inner.x + 1,
-        inner.y,
-        "/",
-        1,
-        Style::new().fg(theme::ACCENT).bg(theme::SURFACE).add_modifier(Modifier::BOLD),
-    );
+    let filter_style = Style::new().fg(th.fg).bg(th.surface);
+    put(buf, inner.x + 1, inner.y, "/", 1, Style::new().fg(th.accent).bg(th.surface).add_modifier(Modifier::BOLD));
     let first = c.selected.saturating_sub(rows - 1);
     for (row, &i) in visible.iter().enumerate().skip(first).take(rows) {
         let y = inner.y + 2 + (row - first) as u16;
-        let bg = if row == c.selected { theme::SELECTION_BG } else { theme::SURFACE };
-        buf.set_stringn(inner.x, y, fit("", iw, Align::Left), iw, Style::new().bg(bg));
+        let bg = if row == c.selected { th.selection } else { Style::new().bg(th.surface) };
+        buf.set_stringn(inner.x, y, fit("", iw, Align::Left), iw, bg);
         let (value, text) = &c.items[i];
         // What the item looks like: the color's dot, the icon's glyph.
         let lead = match (&c.purpose, value) {
             (ChooserPurpose::Form(Field::Color), Some(v)) => {
                 ProfileColor::parse(v).map(|pc| ("● ", theme::profile_color(pc)))
             }
-            (ChooserPurpose::Form(Field::Color), None) => Some(("○ ", theme::FG_MUTED)),
+            (ChooserPurpose::Form(Field::Color), None) => Some(("○ ", th.fg_muted)),
             _ => None,
         };
         let mut x = inner.x + 1;
         if let Some((dot, color)) = lead {
-            x += put(buf, x, y, dot, 2, Style::new().fg(color).bg(bg));
+            x += put(buf, x, y, dot, 2, Style::new().fg(color).patch(bg));
         }
         if let (ChooserPurpose::Form(Field::Icon), true) = (&c.purpose, icons_on) {
             let glyph = value.as_deref().and_then(icons::by_name).unwrap_or(icons::UNKNOWN_DRIVER);
-            x += put(buf, x, y, &format!("{glyph} "), 2, Style::new().fg(theme::FG).bg(bg));
+            x += put(buf, x, y, &format!("{glyph} "), 2, Style::new().fg(th.fg).patch(bg));
         }
-        put(buf, x, y, text, (inner.x + inner.width).saturating_sub(x + 1) as usize, Style::new().fg(theme::FG).bg(bg));
+        put(buf, x, y, text, (inner.x + inner.width).saturating_sub(x + 1) as usize, Style::new().fg(th.fg).patch(bg));
     }
     if visible.is_empty() {
         let none = app.i18n.label(Label::ChooserNone);
-        put(
-            buf,
-            inner.x + 1,
-            inner.y + 2,
-            &none,
-            iw.saturating_sub(2),
-            Style::new().fg(theme::FG_DIM).bg(theme::SURFACE),
-        );
+        put(buf, inner.x + 1, inner.y + 2, &none, iw.saturating_sub(2), Style::new().fg(th.fg_dim).bg(th.surface));
     }
     let c = app.overlays.chooser_mut()?;
     let filtering = c.filtering;
@@ -79,6 +66,7 @@ pub(crate) fn draw_chooser(app: &mut App, area: Rect, buf: &mut Buffer) -> Optio
 
 /// Draw the name input; returns the hardware cursor (its input).
 pub(crate) fn draw_name_input(app: &mut App, area: Rect, buf: &mut Buffer) -> Option<(u16, u16)> {
+    let th = theme::cur();
     let n = app.overlays.name_input()?;
     let title = app.i18n.msg(&n.title);
     let footer = app.i18n.label(Label::NameKeys);
@@ -96,11 +84,11 @@ pub(crate) fn draw_name_input(app: &mut App, area: Rect, buf: &mut Buffer) -> Op
             inner.y + 2 + i as u16,
             l,
             (inner.width as usize).saturating_sub(2),
-            Style::new().fg(theme::ERROR).bg(theme::SURFACE),
+            Style::new().fg(th.error).bg(th.surface),
         );
     }
     let n = app.overlays.name_input_mut()?;
     let input = Rect::new(inner.x + 1, inner.y, inner.width.saturating_sub(2), 1);
-    let cx = n.input.render(input, buf, Style::new().fg(theme::FG).bg(theme::SELECTION_BG), true, false, None);
+    let cx = n.input.render(input, buf, Style::new().fg(th.fg).patch(th.selection), true, false, None);
     Some((cx, inner.y))
 }

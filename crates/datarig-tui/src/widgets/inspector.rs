@@ -96,11 +96,13 @@ pub(crate) fn draw_inspector(app: &mut App, area: Rect, buf: &mut Buffer) {
 }
 
 fn dim() -> Style {
-    Style::new().fg(theme::FG_DIM).bg(theme::BG)
+    let th = theme::cur();
+    Style::new().fg(th.fg_dim).bg(th.bg)
 }
 
 /// The key marks in their colors from `x`; returns the columns used.
-fn put_marks(m: KeyMarks, on: bool, x: u16, y: u16, room: usize, bg: ratatui::style::Color, buf: &mut Buffer) -> u16 {
+fn put_marks(m: KeyMarks, on: bool, x: u16, y: u16, room: usize, bg: Style, buf: &mut Buffer) -> u16 {
+    let th = theme::cur();
     let mut used = 0u16;
     for k in icons::key_marks(m) {
         let text = format!("{} ", k.text(on));
@@ -108,7 +110,7 @@ fn put_marks(m: KeyMarks, on: bool, x: u16, y: u16, room: usize, bg: ratatui::st
         if used as usize + tw >= room {
             break;
         }
-        buf.set_stringn(x + used, y, &text, tw, Style::new().fg(theme::key_color(k)).bg(bg));
+        buf.set_stringn(x + used, y, &text, tw, Style::new().fg(th.key_color(k)).patch(bg));
         used += tw as u16;
     }
     used
@@ -116,14 +118,16 @@ fn put_marks(m: KeyMarks, on: bool, x: u16, y: u16, room: usize, bg: ratatui::st
 
 /// The Cell tab: the column's marks and name, its type and length, then the value wrapped.
 fn draw_cell(app: &App, rs: &ResultSet, marks: &[KeyMarks], body: Rect, buf: &mut Buffer) {
+    let th = theme::cur();
     let t = app.tab();
     let (row, col) = (t.grid.row.min(rs.rows.len() - 1), t.grid.col.min(rs.columns.len().saturating_sub(1)));
     let Some(column) = rs.columns.get(col) else { return };
     let w = body.width as usize - 1;
     let x = body.x + 1;
     let mut y = body.y;
-    let bold = Style::new().fg(theme::FG).bg(theme::BG).add_modifier(Modifier::BOLD);
-    let used = put_marks(marks.get(col).copied().unwrap_or_default(), app.icons_on(), x, y, w, theme::BG, buf);
+    let bold = Style::new().fg(th.fg).bg(th.bg).add_modifier(Modifier::BOLD);
+    let used =
+        put_marks(marks.get(col).copied().unwrap_or_default(), app.icons_on(), x, y, w, Style::new().bg(th.bg), buf);
     put(buf, x + used, y, &column.meta.name, w.saturating_sub(used as usize), bold);
     y += 1;
     let not_read = app.i18n.label(Label::ResultsNotRead);
@@ -145,9 +149,9 @@ fn draw_cell(app: &App, rs: &ResultSet, marks: &[KeyMarks], body: Rect, buf: &mu
     let null = app.i18n.label(Label::ResultsNull);
     let text = viewer_text(rs, &t.grid, &null, &not_read).map(|(_, t)| t).unwrap_or_default();
     let style = if value.is_none() {
-        Style::new().fg(theme::NULL_FG).bg(theme::BG).add_modifier(Modifier::ITALIC)
+        Style::new().fg(th.null_fg).bg(th.bg).add_modifier(Modifier::ITALIC)
     } else {
-        Style::new().fg(theme::FG).bg(theme::BG)
+        Style::new().fg(th.fg).bg(th.bg)
     };
     let lines = wrap(&text, w);
     let room = (bottom - y) as usize;
@@ -164,7 +168,7 @@ fn draw_cell(app: &App, rs: &ResultSet, marks: &[KeyMarks], body: Rect, buf: &mu
             y,
             &app.i18n.msg(&Msg::DetailMore { key: app.key_for(Action::Grid(GridAction::ViewCell), Ctx::Grid) }),
             w,
-            Style::new().fg(theme::ACCENT).bg(theme::BG),
+            Style::new().fg(th.accent).bg(th.bg),
         );
     }
 }
@@ -172,6 +176,7 @@ fn draw_cell(app: &App, rs: &ResultSet, marks: &[KeyMarks], body: Rect, buf: &mu
 /// The Row tab: every column of the selected row, `name: value` on one line each (key marks
 /// first), the selected column highlighted and kept in view.
 fn draw_row(app: &App, rs: &ResultSet, marks: &[KeyMarks], body: Rect, buf: &mut Buffer) {
+    let th = theme::cur();
     let t = app.tab();
     let row = t.grid.row.min(rs.rows.len() - 1);
     let w = body.width as usize - 1;
@@ -189,21 +194,21 @@ fn draw_row(app: &App, rs: &ResultSet, marks: &[KeyMarks], body: Rect, buf: &mut
     let on = app.icons_on();
     for (ci, column) in rs.columns.iter().enumerate().skip(first).take(room) {
         let selected = ci == t.grid.col;
-        let bg = if selected { theme::SELECTION_BG } else { theme::BG };
-        buf.set_style(Rect::new(body.x, y, body.width, 1), Style::new().bg(bg));
+        let bg = if selected { th.selection } else { Style::new().bg(th.bg) };
+        buf.set_style(Rect::new(body.x, y, body.width, 1), bg);
         let mut cx = x + put_marks(marks.get(ci).copied().unwrap_or_default(), on, x, y, w, bg, buf);
         let name = format!("{}: ", column.meta.name);
         let left = w.saturating_sub((cx - x) as usize);
-        cx += put(buf, cx, y, &name, left, Style::new().fg(theme::FG_MUTED).bg(bg).add_modifier(Modifier::BOLD));
+        cx += put(buf, cx, y, &name, left, Style::new().fg(th.fg_muted).patch(bg).add_modifier(Modifier::BOLD));
         let left = w.saturating_sub((cx - x) as usize);
         match rs.cell(row, ci) {
             CellRef::Here(Some(v)) => {
-                put(buf, cx, y, &clip(&sanitize_cell(v), left), left, Style::new().fg(theme::FG).bg(bg))
+                put(buf, cx, y, &clip(&sanitize_cell(v), left), left, Style::new().fg(th.fg).patch(bg))
             }
             CellRef::Here(None) | CellRef::Missing => {
-                put(buf, cx, y, &null, left, Style::new().fg(theme::NULL_FG).bg(bg).add_modifier(Modifier::ITALIC))
+                put(buf, cx, y, &null, left, Style::new().fg(th.null_fg).patch(bg).add_modifier(Modifier::ITALIC))
             }
-            CellRef::NotRead => put(buf, cx, y, &app.i18n.label(Label::ResultsNotRead), left, dim().bg(bg)),
+            CellRef::NotRead => put(buf, cx, y, &app.i18n.label(Label::ResultsNotRead), left, dim().patch(bg)),
         };
         y += 1;
     }

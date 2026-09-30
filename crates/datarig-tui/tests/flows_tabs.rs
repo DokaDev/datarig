@@ -460,18 +460,18 @@ fn the_state_mark_says_what_the_tabs_session_does() {
         let cell = &buf[(close - 2, 0)];
         (cell.symbol().to_string(), cell.fg)
     };
-    assert_eq!(mark(&mut h), ("○".to_string(), theme::FG_DIM), "no session yet");
+    assert_eq!(mark(&mut h), ("○".to_string(), theme::DARK.fg_dim), "no session yet");
     h.ctrl('e');
-    assert_eq!(mark(&mut h), (datarig_tui::widgets::SPINNER[0].to_string(), theme::ACCENT), "running");
+    assert_eq!(mark(&mut h), (datarig_tui::widgets::SPINNER[0].to_string(), theme::DARK.accent), "running");
     h.tab_db(0, done(last_query_id(&h, 0)));
-    assert_eq!(mark(&mut h), ("●".to_string(), theme::ACCENT), "connected");
+    assert_eq!(mark(&mut h), ("●".to_string(), theme::DARK.accent), "connected");
     h.tab_db(0, DbEvent::Block(true));
     h.tab_db(0, DbEvent::TxOpen(true));
-    assert_eq!(mark(&mut h), ("◆".to_string(), theme::WARNING), "a transaction is open: a shape of its own");
+    assert_eq!(mark(&mut h), ("◆".to_string(), theme::DARK.warning), "a transaction is open: a shape of its own");
     h.tab_db(0, DbEvent::TxAborted(true));
-    assert_eq!(mark(&mut h), ("!".to_string(), theme::ACCENT_WARM), "aborted: ROLLBACK required");
+    assert_eq!(mark(&mut h), ("!".to_string(), theme::DARK.accent_warm), "aborted: ROLLBACK required");
     h.tab_db(0, DbEvent::Lost { error: "gone".into() });
-    assert_eq!(mark(&mut h), ("!".to_string(), theme::ACCENT_WARM), "lost");
+    assert_eq!(mark(&mut h), ("!".to_string(), theme::DARK.accent_warm), "lost");
     // Icons off: the same marks (plain Unicode, not Nerd Font glyphs).
     h.app.icons = datarig_core::config::IconsSetting::Off;
     assert_eq!(mark(&mut h).0, "!");

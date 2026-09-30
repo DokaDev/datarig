@@ -1120,6 +1120,7 @@ impl Editor {
     /// gutter. With a Visual selection the bar marks the selection's lines instead (a run takes
     /// the selection), and `stmt` is not used.
     pub fn render(&mut self, area: Rect, buf: &mut Buffer, stmt: Option<(usize, usize)>) -> (u16, u16) {
+        let th = theme::cur();
         let h = area.height as usize;
         let numw = self.lines.len().to_string().len().max(3);
         self.gutter = numw + 1;
@@ -1159,26 +1160,26 @@ impl Editor {
             let r = self.top + vy;
             let y = area.y + vy as u16;
             if r >= self.lines.len() {
-                buf.set_style(Rect::new(area.x, y, area.width, 1), theme::base());
+                buf.set_style(Rect::new(area.x, y, area.width, 1), th.base());
                 continue;
             }
             let line = &self.lines[r];
             let line_end = line_start + line.len();
             let in_stmt = stmt.is_some_and(|(a, b)| line_start < b && a <= line_end);
             let bg = if r == self.row && self.mode != Mode::Visual {
-                theme::CURSOR_LINE_BG
+                th.cursor_line
             } else if in_stmt {
-                theme::CURRENT_STMT_BG
+                th.current_stmt
             } else {
-                theme::BG
+                Style::new().bg(th.bg)
             };
-            buf.set_style(Rect::new(area.x, y, area.width, 1), Style::new().bg(bg).fg(theme::FG));
-            let num_fg = if r == self.row { theme::FG } else { theme::FG_MUTED };
+            buf.set_style(Rect::new(area.x, y, area.width, 1), Style::new().fg(th.fg).patch(bg));
+            let num_fg = if r == self.row { th.fg } else { th.fg_muted };
             let num = format!("{:>numw$} ", r + 1);
-            buf.set_stringn(area.x, y, &num, self.gutter, Style::new().fg(num_fg).bg(bg));
+            buf.set_stringn(area.x, y, &num, self.gutter, Style::new().fg(num_fg).patch(bg));
             if run.is_some_and(|(a, b)| line_start < b && a <= line_end) {
                 // The bar sits in the blank between the line number and the text.
-                let style = Style::new().fg(theme::CURRENT_STMT_BAR).bg(bg);
+                let style = Style::new().fg(th.current_stmt_bar).patch(bg);
                 buf.set_stringn(area.x + numw as u16, y, "▎", 1, style);
             }
 
@@ -1192,12 +1193,12 @@ impl Editor {
                     ti += 1;
                 }
                 let mut style = match toks.get(ti) {
-                    Some(t) if t.start <= rb => theme::syntax(t.kind, is_fn[ti]),
-                    _ => Style::new().fg(theme::FG),
+                    Some(t) if t.start <= rb => th.syntax(t.kind, is_fn[ti]),
+                    _ => Style::new().fg(th.fg),
                 }
-                .bg(bg);
+                .patch(bg);
                 if sel.is_some_and(|(a, z)| b >= a && b < z) {
-                    style = style.bg(theme::SELECTION_BG);
+                    style = style.patch(th.selection);
                 }
                 if x + w > self.left && x < self.left + text_w {
                     if x < self.left || x + w > self.left + text_w {
@@ -1220,7 +1221,7 @@ impl Editor {
             if let Some((a, z)) = sel {
                 // show selected line breaks as a one-cell highlight
                 if line_end >= a && line_end < z && x >= self.left && x < self.left + text_w {
-                    buf.set_stringn(tx0 + (x - self.left) as u16, y, " ", 1, Style::new().bg(theme::SELECTION_BG));
+                    buf.set_stringn(tx0 + (x - self.left) as u16, y, " ", 1, th.selection);
                 }
             }
             line_start = line_end + 1;

@@ -25,20 +25,21 @@ pub(crate) fn centered(area: Rect, w: u16, h: u16) -> Rect {
 
 /// Clear `rect` and draw a rounded modal box; returns the inner area.
 pub(crate) fn modal(rect: Rect, title: &Localized, footer: &Localized, buf: &mut Buffer) -> Rect {
+    let th = theme::cur();
     clear_overlay(rect, buf);
     let mut block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(theme::ACCENT).bg(theme::SURFACE))
-        .style(Style::new().bg(theme::SURFACE).fg(theme::FG))
+        .border_style(Style::new().fg(th.accent).bg(th.surface))
+        .style(Style::new().bg(th.surface).fg(th.fg))
         .title(Line::from(Span::styled(
             format!(" {} ", clip(title, (rect.width as usize).saturating_sub(6))),
-            Style::new().fg(theme::FG).add_modifier(Modifier::BOLD),
+            Style::new().fg(th.fg).add_modifier(Modifier::BOLD),
         )));
     if !footer.is_empty() {
         block = block.title_bottom(
             Line::from(Span::styled(
                 format!(" {} ", clip(footer, (rect.width as usize).saturating_sub(4))),
-                Style::new().fg(theme::FG_MUTED),
+                Style::new().fg(th.fg_muted),
             ))
             .right_aligned(),
         );
@@ -50,6 +51,7 @@ pub(crate) fn modal(rect: Rect, title: &Localized, footer: &Localized, buf: &mut
 
 /// A yes/no confirmation: its question in the warning color, its keys in the footer.
 pub(crate) fn draw_confirm(app: &App, area: Rect, buf: &mut Buffer) {
+    let th = theme::cur();
     let Some(c) = app.overlays.confirm() else { return };
     let (title, text, keys) = (app.i18n.label(c.title), app.i18n.msg(&c.text), app.i18n.label(c.keys));
     let w = area.width.saturating_sub(8).min(60);
@@ -69,7 +71,7 @@ pub(crate) fn draw_confirm(app: &App, area: Rect, buf: &mut Buffer) {
             inner.y + 1 + i as u16,
             l,
             (inner.width as usize).saturating_sub(2),
-            Style::new().fg(theme::WARNING).bg(theme::SURFACE),
+            Style::new().fg(th.warning).bg(th.surface),
         );
     }
 }
@@ -78,26 +80,27 @@ pub(crate) fn draw_confirm(app: &App, area: Rect, buf: &mut Buffer) {
 /// policy, each statement that asks with why, its target and its first line, then the buttons,
 /// Cancel first. As many statements as fit are listed; the rest are counted.
 pub(crate) fn draw_run_confirm(app: &App, area: Rect, buf: &mut Buffer) {
+    let th = theme::cur();
     let Some(c) = app.overlays.run_confirm() else { return };
     let title = app.i18n.msg(&Msg::SafetyConfirmTitle { count: c.items.len() as u64 });
     let keys = app.i18n.label(Label::SafetyConfirmKeys);
     let w = area.width.saturating_sub(4).min(120);
     let iw = (w as usize).saturating_sub(4);
-    let surface = |fg| Style::new().fg(fg).bg(theme::SURFACE);
+    let surface = |fg| Style::new().fg(fg).bg(th.surface);
     let total = c.statements.len();
     // Each statement: why (and its target), then its first line.
     let mut items: Vec<[Vec<(String, Style)>; 2]> = Vec::new();
     for d in &c.items {
         let mut head = vec![
-            (format!("{}/{total}  ", d.index + 1), surface(theme::FG_DIM)),
-            (crate::app::safety::why_text(&app.i18n, d), surface(theme::WARNING).add_modifier(Modifier::BOLD)),
+            (format!("{}/{total}  ", d.index + 1), surface(th.fg_dim)),
+            (crate::app::safety::why_text(&app.i18n, d), surface(th.warning).add_modifier(Modifier::BOLD)),
         ];
         if let Some(t) = &d.target {
             let target = app.i18n.msg(&Msg::SafetyConfirmTarget { target: t.clone() });
-            head.push((format!("  {target}"), surface(theme::FG)));
+            head.push((format!("  {target}"), surface(th.fg)));
         }
         let sql = crate::app::runlog::excerpt(&d.sql, iw.saturating_sub(6));
-        items.push([head, vec![(format!("     {sql}"), surface(theme::FG_MUTED))]]);
+        items.push([head, vec![(format!("     {sql}"), surface(th.fg_muted))]]);
     }
     // Border (2), the connection, a blank line, the statements, a blank line, the buttons.
     let fixed = 6usize;
@@ -129,11 +132,11 @@ pub(crate) fn draw_run_confirm(app: &App, area: Rect, buf: &mut Buffer) {
                 format!("{} {}", crate::widgets::explorer::CONNECTED, p.name),
                 surface(color).add_modifier(Modifier::BOLD),
             ),
-            (format!(" · {}", app.i18n.msg(&Msg::StatusPolicy { name: policy })), surface(theme::FG_MUTED)),
+            (format!(" · {}", app.i18n.msg(&Msg::StatusPolicy { name: policy })), surface(th.fg_muted)),
         ];
         if values.read_only {
             let ro = app.i18n.label(Label::StatusReadOnly);
-            parts.push((format!("  {ro}"), surface(theme::FG).add_modifier(Modifier::BOLD)));
+            parts.push((format!("  {ro}"), surface(th.fg).add_modifier(Modifier::BOLD)));
         }
         line(buf, y, &parts);
     }
@@ -145,7 +148,7 @@ pub(crate) fn draw_run_confirm(app: &App, area: Rect, buf: &mut Buffer) {
     }
     if more > 0 {
         let text = app.i18n.msg(&Msg::SafetyConfirmMore { count: more as u64 });
-        line(buf, y, &[(text.to_string(), surface(theme::FG_DIM))]);
+        line(buf, y, &[(text.to_string(), surface(th.fg_dim))]);
         y += 1;
     }
     // The buttons, Cancel first; the focused one is in brackets (so it shows without color)
@@ -154,9 +157,9 @@ pub(crate) fn draw_run_confirm(app: &App, area: Rect, buf: &mut Buffer) {
         let label = app.i18n.label(label);
         let text = if focused { format!("[ {label} ]") } else { format!("  {label}  ") };
         let style = if focused {
-            Style::new().fg(theme::FG).bg(theme::SELECTION_BG).add_modifier(Modifier::BOLD | Modifier::REVERSED)
+            Style::new().fg(th.fg).patch(th.selection).add_modifier(Modifier::BOLD | Modifier::REVERSED)
         } else {
-            surface(theme::FG_MUTED)
+            surface(th.fg_muted)
         };
         (text, style)
     };
@@ -173,18 +176,19 @@ pub(crate) fn draw_run_confirm(app: &App, area: Rect, buf: &mut Buffer) {
 /// terminal draws them), what to answer when they look wrong, and the buttons, Yes then No; No
 /// has the focus at first.
 pub(crate) fn draw_icons_ask(app: &App, area: Rect, buf: &mut Buffer) {
+    let th = theme::cur();
     let Some(q) = app.overlays.icons_ask() else { return };
     let (title, keys) = (app.i18n.label(Label::IconsAskTitle), app.i18n.label(Label::IconsAskKeys));
     let w = area.width.saturating_sub(8).min(64);
     let iw = (w as usize).saturating_sub(4);
-    let surface = |fg| Style::new().fg(fg).bg(theme::SURFACE);
+    let surface = |fg| Style::new().fg(fg).bg(th.surface);
     let hint = wrap_words(&app.i18n.msg(&Msg::IconsAskHint { key: app.key_for(Action::OpenSettings, Ctx::Nav) }), iw);
     // Border (2), the question, a blank line, the glyphs, a blank line, the hint, a blank line,
     // the buttons.
     let rect = centered(area, w, (hint.len() + 8) as u16);
     let inner = modal(rect, &title, &keys, buf);
     let x = inner.x + 1;
-    put(buf, x, inner.y, &app.i18n.label(Label::IconsAskQuestion), iw, surface(theme::FG).add_modifier(Modifier::BOLD));
+    put(buf, x, inner.y, &app.i18n.label(Label::IconsAskQuestion), iw, surface(th.fg).add_modifier(Modifier::BOLD));
     let glyphs = format!(
         "{}   {} {} {}   {}",
         crate::icons::preview(),
@@ -193,18 +197,18 @@ pub(crate) fn draw_icons_ask(app: &App, area: Rect, buf: &mut Buffer) {
         crate::icons::KEY_UQ,
         crate::icons::TABLE
     );
-    put(buf, x + 2, inner.y + 2, &glyphs, iw.saturating_sub(2), surface(theme::ACCENT));
+    put(buf, x + 2, inner.y + 2, &glyphs, iw.saturating_sub(2), surface(th.accent));
     for (i, l) in hint.iter().enumerate() {
-        put(buf, x, inner.y + 4 + i as u16, l, iw, surface(theme::FG_MUTED));
+        put(buf, x, inner.y + 4 + i as u16, l, iw, surface(th.fg_muted));
     }
     // The focused button is in brackets (so it shows without color) and reversed.
     let button = |label: Label, focused: bool| {
         let label = app.i18n.label(label);
         let text = if focused { format!("[ {label} ]") } else { format!("  {label}  ") };
         let style = if focused {
-            Style::new().fg(theme::FG).bg(theme::SELECTION_BG).add_modifier(Modifier::BOLD | Modifier::REVERSED)
+            Style::new().fg(th.fg).patch(th.selection).add_modifier(Modifier::BOLD | Modifier::REVERSED)
         } else {
-            surface(theme::FG_MUTED)
+            surface(th.fg_muted)
         };
         (text, style)
     };
@@ -218,6 +222,7 @@ pub(crate) fn draw_icons_ask(app: &App, area: Rect, buf: &mut Buffer) {
 
 /// The busy notice: a small box with its text, waiting for background work.
 pub(crate) fn draw_busy(app: &App, area: Rect, buf: &mut Buffer) {
+    let th = theme::cur();
     let Some(b) = app.overlays.iter().find_map(|o| if let Overlay::Busy(b) = o { Some(b) } else { None }) else {
         return;
     };
@@ -234,12 +239,13 @@ pub(crate) fn draw_busy(app: &App, area: Rect, buf: &mut Buffer) {
             inner.y + 1 + i as u16,
             l,
             (inner.width as usize).saturating_sub(2),
-            Style::new().fg(theme::FG).bg(theme::SURFACE),
+            Style::new().fg(th.fg).bg(th.surface),
         );
     }
 }
 
 pub(crate) fn draw_prompt(app: &mut App, area: Rect, buf: &mut Buffer) -> Option<(u16, u16)> {
+    let th = theme::cur();
     let p = app.overlays.prompt()?;
     let title = match &p.title {
         Some(t) => app.i18n.msg(t),
@@ -270,30 +276,23 @@ pub(crate) fn draw_prompt(app: &mut App, area: Rect, buf: &mut Buffer) -> Option
     let inner = modal(rect, &title, &footer, buf);
     let iw = inner.width as usize;
     for (i, l) in err_lines.iter().take(err_n).enumerate() {
-        put(
-            buf,
-            inner.x + 1,
-            inner.y + i as u16,
-            l,
-            iw.saturating_sub(2),
-            Style::new().fg(err_color).bg(theme::SURFACE),
-        );
+        put(buf, inner.x + 1, inner.y + i as u16, l, iw.saturating_sub(2), Style::new().fg(err_color).bg(th.surface));
     }
     let y = inner.y + err_n as u16 + 1;
-    let lw = put(buf, inner.x + 1, y, &label, iw / 3, Style::new().fg(theme::ACCENT).bg(theme::SURFACE)) + 2;
+    let lw = put(buf, inner.x + 1, y, &label, iw / 3, Style::new().fg(th.accent).bg(th.surface)) + 2;
     let input = Rect::new(inner.x + 1 + lw, y, inner.width.saturating_sub(lw + 2), 1);
     let cy = y + 2;
     let cursor = if keychain {
-        let bg = if save_focus { theme::SELECTION_BG } else { theme::SURFACE };
+        let bg = if save_focus { th.selection } else { Style::new().bg(th.surface) };
         let text = format!("[{}] {save_label}", if save { "x" } else { " " });
-        put(buf, inner.x + 1, cy, &text, iw.saturating_sub(2), Style::new().fg(theme::FG).bg(bg));
+        put(buf, inner.x + 1, cy, &text, iw.saturating_sub(2), Style::new().fg(th.fg).patch(bg));
         save_focus.then_some((inner.x + 2, cy))
     } else {
-        put(buf, inner.x + 1, cy, &save_label, iw.saturating_sub(2), Style::new().fg(theme::FG_DIM).bg(theme::SURFACE));
+        put(buf, inner.x + 1, cy, &save_label, iw.saturating_sub(2), Style::new().fg(th.fg_dim).bg(th.surface));
         None
     };
     let p = app.overlays.prompt_mut()?;
-    let bg = if save_focus { theme::SURFACE_ALT } else { theme::SELECTION_BG };
-    let cx = p.input.render(input, buf, Style::new().fg(theme::FG).bg(bg), !save_focus, mask, None);
+    let bg = if save_focus { Style::new().bg(th.surface_alt) } else { th.selection };
+    let cx = p.input.render(input, buf, Style::new().fg(th.fg).patch(bg), !save_focus, mask, None);
     cursor.or(Some((cx, y)))
 }

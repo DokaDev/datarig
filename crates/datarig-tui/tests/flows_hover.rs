@@ -46,8 +46,8 @@ fn the_pointer_selects_the_menu_item_under_it() {
     // Onto the fourth item: selected, drawn as the keys' selection.
     assert!(hover(&mut h, list.x + 2, list.y + 3), "the selection moved: a frame");
     assert_eq!(menu_selected(&h), 3);
-    assert_eq!(row_bg(&mut h, list, list.y + 3), datarig_tui::theme::SELECTION_BG);
-    assert_eq!(row_bg(&mut h, list, list.y), datarig_tui::theme::SURFACE);
+    assert_eq!(row_bg(&mut h, list, list.y + 3), datarig_tui::theme::DARK.selection.bg.unwrap());
+    assert_eq!(row_bg(&mut h, list, list.y), datarig_tui::theme::DARK.surface);
     // Along the same item, onto the border, off the menu: nothing changes, no frame.
     assert!(!hover(&mut h, list.x + 6, list.y + 3));
     assert!(!hover(&mut h, list.x + 2, list.y - 1));

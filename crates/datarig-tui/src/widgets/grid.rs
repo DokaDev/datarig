@@ -388,7 +388,8 @@ pub fn render(
     focused: bool,
     look: Look,
 ) {
-    buf.set_style(area, theme::base());
+    let th = theme::cur();
+    buf.set_style(area, th.base());
     st.hit_cols.clear();
     if area.height < 3 || area.width < 8 || rs.columns.is_empty() {
         return;
@@ -441,11 +442,11 @@ pub fn render(
         }
     }
 
-    let header_style = Style::new().bg(theme::SURFACE).fg(theme::FG).add_modifier(Modifier::BOLD);
-    let type_style = Style::new().bg(theme::SURFACE).fg(theme::FG_MUTED);
-    let sep_style = |bg| Style::new().fg(theme::BORDER).bg(bg);
+    let header_style = Style::new().bg(th.surface).fg(th.fg).add_modifier(Modifier::BOLD);
+    let type_style = Style::new().bg(th.surface).fg(th.fg_muted);
+    let sep_style = |bg| Style::new().fg(th.border).bg(bg);
     let y0 = area.y;
-    buf.set_style(Rect::new(area.x, y0, area.width, 2), Style::new().bg(theme::SURFACE));
+    buf.set_style(Rect::new(area.x, y0, area.width, 2), Style::new().bg(th.surface));
     st.data_y = y0 + 2;
     st.header_y = y0;
     st.gutter_x = (area.x, area.x + gutter as u16);
@@ -470,16 +471,13 @@ pub fn render(
         let col = &rs.columns[ci];
         // Whole selected columns: their headers too.
         let whole = st.shape == Shape::Cols && range.as_ref().is_some_and(|(_, cr)| cr.contains(&ci));
-        let (header_style, type_style) = if whole {
-            (header_style.bg(theme::RANGE_BG), type_style.bg(theme::RANGE_BG))
-        } else {
-            (header_style, type_style)
-        };
+        let (header_style, type_style) =
+            if whole { (header_style.patch(th.range), type_style.patch(th.range)) } else { (header_style, type_style) };
         if whole {
-            buf.set_style(Rect::new(cx + 1, y0, (w + 2) as u16, 2), Style::new().bg(theme::RANGE_BG));
+            buf.set_style(Rect::new(cx + 1, y0, (w + 2) as u16, 2), th.range);
         }
-        buf.set_stringn(cx, y0, "│", 1, sep_style(theme::SURFACE));
-        buf.set_stringn(cx, y0 + 1, "│", 1, sep_style(theme::SURFACE));
+        buf.set_stringn(cx, y0, "│", 1, sep_style(th.surface));
+        buf.set_stringn(cx, y0 + 1, "│", 1, sep_style(th.surface));
         // The key marks in their colors, then the name.
         let mut hx = cx + 2;
         let mut left = w;
@@ -489,7 +487,7 @@ pub fn render(
             if mw >= left {
                 break;
             }
-            buf.set_stringn(hx, y0, &text, mw, header_style.fg(theme::key_color(m)));
+            buf.set_stringn(hx, y0, &text, mw, header_style.fg(th.key_color(m)));
             hx += mw as u16;
             left -= mw;
         }
@@ -503,23 +501,23 @@ pub fn render(
             break;
         }
         let y = st.data_y + vy as u16;
-        let zebra = if r % 2 == 1 { theme::SURFACE_ALT } else { theme::BG };
+        let zebra = if r % 2 == 1 { th.surface_alt } else { th.bg };
         buf.set_style(Rect::new(area.x, y, area.width, 1), Style::new().bg(zebra));
         // Whole selected rows: their numbers too.
         let whole = st.shape == Shape::Rows && range.as_ref().is_some_and(|(rr, _)| rr.contains(&r));
-        let num_bg = if whole { theme::RANGE_BG } else { zebra };
-        let num_style = Style::new().bg(num_bg).fg(if r == st.row { theme::ACCENT } else { theme::FG_MUTED });
+        let num_bg = if whole { th.range } else { Style::new().bg(zebra) };
+        let num_style = num_bg.fg(if r == st.row { th.accent } else { th.fg_muted });
         buf.set_stringn(area.x, y, fit(&(r + 1).to_string(), gutter - 1, Align::Right), gutter - 1, num_style);
         for &(cx, ci, w) in &layout {
             let col = &rs.columns[ci];
             let selected = r == st.row && ci == st.col;
             let in_range = range.as_ref().is_some_and(|(rr, cr)| rr.contains(&r) && cr.contains(&ci));
             let bg = if selected {
-                if focused { theme::SELECTION_BG } else { theme::CURSOR_LINE_BG }
+                if focused { th.selection } else { th.cursor_line }
             } else if in_range {
-                theme::RANGE_BG
+                th.range
             } else {
-                zebra
+                Style::new().bg(zebra)
             };
             buf.set_stringn(cx, y, "│", 1, sep_style(zebra));
             let (text, is_null) = match rs.cell(r, ci) {
@@ -529,13 +527,13 @@ pub fn render(
             };
             let align = if col.meta.numeric && !is_null { Align::Right } else { Align::Left };
             let style = if is_null {
-                Style::new().fg(theme::NULL_FG).add_modifier(Modifier::ITALIC)
+                Style::new().fg(th.null_fg).add_modifier(Modifier::ITALIC)
             } else {
-                Style::new().fg(theme::FG)
+                Style::new().fg(th.fg)
             }
-            .bg(bg);
+            .patch(bg);
             let cell_w = (w + 2).min((right - cx - 1) as usize);
-            buf.set_stringn(cx + 1, y, " ".repeat(cell_w), cell_w, Style::new().bg(bg));
+            buf.set_stringn(cx + 1, y, " ".repeat(cell_w), cell_w, bg);
             buf.set_stringn(cx + 2, y, fit(&text, w, align), w, style);
         }
     }

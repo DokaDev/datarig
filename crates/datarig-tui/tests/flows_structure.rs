@@ -631,8 +631,8 @@ fn every_table_line_has_its_estimates() {
     let buf = t.backend().buffer();
     let y = (0..45).find(|&y| row_text(buf, y).contains("▸ users")).unwrap();
     let x = row_text(buf, y).find("~5k").unwrap() as u16;
-    assert_eq!(buf[(x, y)].fg, datarig_tui::theme::FG_DIM);
-    assert_eq!(buf[(x - 8, y)].fg, datarig_tui::theme::FG, "the name as before");
+    assert_eq!(buf[(x, y)].fg, datarig_tui::theme::DARK.fg_dim);
+    assert_eq!(buf[(x - 8, y)].fg, datarig_tui::theme::DARK.fg, "the name as before");
     // The status bar: the whole line, the estimates in words.
     for (name, want) in [
         ("order_items", Some("order_items  ~150k rows · ~19 MB")),

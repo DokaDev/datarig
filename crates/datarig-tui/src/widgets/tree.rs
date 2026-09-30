@@ -617,17 +617,18 @@ impl Tree {
 
     /// The text of `node` and its style.
     pub fn label(&self, node: Node, i18n: &I18n) -> (String, Style) {
-        let dim = Style::new().fg(theme::FG_DIM).add_modifier(Modifier::ITALIC);
+        let th = theme::cur();
+        let dim = Style::new().fg(th.fg_dim).add_modifier(Modifier::ITALIC);
         match node {
             Node::Schema(i) => {
-                (self.schemas.get(i).map(|s| s.name.clone()).unwrap_or_default(), Style::new().fg(theme::FG))
+                (self.schemas.get(i).map(|s| s.name.clone()).unwrap_or_default(), Style::new().fg(th.fg))
             }
             Node::Group(_, g) => (
                 i18n.label(if g == Group::Tables { Label::TreeGroupTables } else { Label::TreeGroupViews }).to_string(),
-                Style::new().fg(theme::FG_MUTED),
+                Style::new().fg(th.fg_muted),
             ),
             Node::Object(i, g, j) => {
-                (self.object_name(i, g, j).map(|(_, n)| n).unwrap_or_default(), Style::new().fg(theme::FG))
+                (self.object_name(i, g, j).map(|(_, n)| n).unwrap_or_default(), Style::new().fg(th.fg))
             }
             // Drawn by the explorer from the catalog or the structure (see `widgets::explorer`).
             Node::Column(..)
@@ -641,7 +642,7 @@ impl Tree {
             Node::Loading(_) => (i18n.label(Label::TreeLoading).to_string(), dim),
             Node::Empty(_) => (i18n.label(Label::TreeEmpty).to_string(), dim),
             Node::Error(i) => match self.schemas.get(i).map(|s| &s.children) {
-                Some(Children::Failed(e)) => (e.clone(), Style::new().fg(theme::ERROR)),
+                Some(Children::Failed(e)) => (e.clone(), Style::new().fg(th.error)),
                 _ => (String::new(), Style::new()),
             },
         }

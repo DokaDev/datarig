@@ -22,6 +22,7 @@ use ratatui::widgets::Widget;
 
 /// Explorer, editor, results and status bar. Returns where the hardware cursor belongs.
 pub(crate) fn draw_workspace(f: &mut Frame, app: &mut App) -> Option<(u16, u16)> {
+    let th = theme::cur();
     let area = f.area();
     // A second instance says so on a line of its own at the top.
     let banner = u16::from(app.read_only);
@@ -31,12 +32,12 @@ pub(crate) fn draw_workspace(f: &mut Frame, app: &mut App) -> Option<(u16, u16)>
         .split(area);
     if app.read_only {
         let r = rows[0];
-        f.buffer_mut().set_style(r, Style::new().bg(theme::WARNING).fg(theme::BG));
+        f.buffer_mut().set_style(r, Style::new().bg(th.warning).fg(th.bg));
         let text = match app.workspace_newer {
             Some(version) => app.i18n.msg(&Msg::WorkspaceNewer { version: version.to_string() }),
             None => app.i18n.label(Label::WorkspaceReadOnly),
         };
-        let style = Style::new().fg(theme::BG).bg(theme::WARNING).add_modifier(Modifier::BOLD);
+        let style = Style::new().fg(th.bg).bg(th.warning).add_modifier(Modifier::BOLD);
         let mark = crate::icons::warning(app.icons_on());
         put(f.buffer_mut(), r.x + 1, r.y, &format!("{mark} {text}"), r.width.saturating_sub(2) as usize, style);
     }
@@ -206,8 +207,9 @@ fn draw_results_pane(app: &mut App, area: Rect, buf: &mut Buffer) {
 /// alone; `earlier run` goes first.
 /// Records where each tab is.
 fn draw_strip(app: &mut App, area: Rect, buf: &mut Buffer) {
+    let th = theme::cur();
     use crate::widgets::grid::TxMark;
-    let bg = theme::SURFACE;
+    let bg = th.surface;
     buf.set_style(area, Style::new().bg(bg));
     let t = app.tab();
     let active = |i: Option<usize>| match (t.exec.view, i) {
@@ -221,9 +223,9 @@ fn draw_strip(app: &mut App, area: Rect, buf: &mut Buffer) {
     };
     let tx = tx.map(|mark| {
         let (label, color) = match mark {
-            TxMark::InTx(_) => (Label::ResultsTxOpen, theme::WARNING),
-            TxMark::Ended => (Label::ResultsTxEnded, theme::FG_MUTED),
-            TxMark::RolledBack => (Label::ResultsTxRolledBack, theme::ERROR),
+            TxMark::InTx(_) => (Label::ResultsTxOpen, th.warning),
+            TxMark::Ended => (Label::ResultsTxEnded, th.fg_muted),
+            TxMark::RolledBack => (Label::ResultsTxRolledBack, th.error),
         };
         (app.i18n.label(label).to_string(), color)
     });
@@ -263,7 +265,7 @@ fn draw_strip(app: &mut App, area: Rect, buf: &mut Buffer) {
     let mut hits = Vec::new();
     let mut x = area.x + 1;
     let end = area.x + area.width - (tx_w as u16).min(area.width);
-    let dim = Style::new().fg(theme::FG_DIM).bg(bg);
+    let dim = Style::new().fg(th.fg_dim).bg(bg);
     let mut next = 0;
     for k in shown {
         if k > next && x < end {
@@ -275,9 +277,9 @@ fn draw_strip(app: &mut App, area: Rect, buf: &mut Buffer) {
         let on = active(*i);
         let text = if on { format!("[{label}]") } else { format!(" {label} ") };
         let style = if on {
-            Style::new().fg(theme::ACCENT).bg(bg).add_modifier(Modifier::BOLD)
+            Style::new().fg(th.accent).bg(bg).add_modifier(Modifier::BOLD)
         } else {
-            Style::new().fg(theme::FG_MUTED).bg(bg)
+            Style::new().fg(th.fg_muted).bg(bg)
         };
         // Whole labels only (H/L reach the ones left out).
         if x as usize + crate::text::width(&text) > end as usize {
@@ -345,44 +347,42 @@ fn strip_window(items: &[(Option<usize>, String)], at: Option<usize>, room: usiz
 /// The Messages of the last run: each statement, its number, its first line
 /// and what it did (and how long it took); then the app's notes about the run.
 fn draw_messages(app: &mut App, area: Rect, buf: &mut Buffer) {
+    let th = theme::cur();
     use crate::app::runlog::StatementOutcome as O;
-    buf.set_style(area, theme::base());
+    buf.set_style(area, th.base());
     let log = &app.tab().exec.run;
     let mut lines: Vec<Vec<(String, Style)>> = Vec::new();
     let num_w = log.len().to_string().len();
     let sql_w = (area.width as usize / 2).clamp(12, 60);
     for (i, s) in log.statements.iter().enumerate() {
         let (text, color) = match &s.outcome {
-            O::Waiting => (app.i18n.label(Label::MessagesWaiting).to_string(), theme::FG_DIM),
-            O::Running => (app.i18n.label(Label::MessagesRunning).to_string(), theme::ACCENT),
+            O::Waiting => (app.i18n.label(Label::MessagesWaiting).to_string(), th.fg_dim),
+            O::Running => (app.i18n.label(Label::MessagesRunning).to_string(), th.accent),
             O::Rows { count, more: false } => {
-                (app.i18n.msg(&Msg::MessagesRows { count: *count }).to_string(), theme::SUCCESS)
+                (app.i18n.msg(&Msg::MessagesRows { count: *count }).to_string(), th.success)
             }
             O::Rows { count, more: true } => {
-                (app.i18n.msg(&Msg::MessagesRowsMore { count: *count }).to_string(), theme::SUCCESS)
+                (app.i18n.msg(&Msg::MessagesRowsMore { count: *count }).to_string(), th.success)
             }
-            O::Affected(n) => (app.i18n.msg(&Msg::MessagesAffected { count: *n }).to_string(), theme::SUCCESS),
-            O::Command(tag) => (tag.clone(), theme::SUCCESS),
-            O::Failed(e) => (app.i18n.msg(&Msg::QueryError { error: e.clone() }).to_string(), theme::ERROR),
-            O::Cancelled => (app.i18n.label(Label::QueryCancelled).to_string(), theme::WARNING),
-            O::NotRun => (app.i18n.label(Label::MessagesNotRun).to_string(), theme::FG_DIM),
+            O::Affected(n) => (app.i18n.msg(&Msg::MessagesAffected { count: *n }).to_string(), th.success),
+            O::Command(tag) => (tag.clone(), th.success),
+            O::Failed(e) => (app.i18n.msg(&Msg::QueryError { error: e.clone() }).to_string(), th.error),
+            O::Cancelled => (app.i18n.label(Label::QueryCancelled).to_string(), th.warning),
+            O::NotRun => (app.i18n.label(Label::MessagesNotRun).to_string(), th.fg_dim),
         };
         let elapsed = s.elapsed.map(|d| format!(" · {}", datarig_core::i18n::fmt_elapsed(d))).unwrap_or_default();
         let sql = crate::app::runlog::excerpt(&s.sql, sql_w);
         lines.push(vec![
-            (format!("{:>num_w$}  ", i + 1), Style::new().fg(theme::FG_MUTED).bg(theme::BG)),
+            (format!("{:>num_w$}  ", i + 1), Style::new().fg(th.fg_muted).bg(th.bg)),
             (
                 format!("{}  ", crate::text::fit(&sql, sql_w, crate::text::Align::Left)),
-                Style::new().fg(theme::FG).bg(theme::BG),
+                Style::new().fg(th.fg).bg(th.bg),
             ),
-            (format!("{text}{elapsed}"), Style::new().fg(color).bg(theme::BG)),
+            (format!("{text}{elapsed}"), Style::new().fg(color).bg(th.bg)),
         ]);
     }
     if log.is_empty() {
-        lines.push(vec![(
-            app.i18n.label(Label::MessagesEmpty).to_string(),
-            Style::new().fg(theme::FG_DIM).bg(theme::BG),
-        )]);
+        lines.push(vec![(app.i18n.label(Label::MessagesEmpty).to_string(), Style::new().fg(th.fg_dim).bg(th.bg))]);
     }
     // A note is shown whole (why a statement failed and how to run it, a reason
     // the status bar cuts): wrapped at words, its later lines under its text. The app's own
@@ -392,7 +392,7 @@ fn draw_messages(app: &mut App, area: Rect, buf: &mut Buffer) {
         let color = crate::widgets::statusbar::level_color(n.level);
         for (i, l) in crate::text::wrap_words(&n.render(&app.i18n), note_w).into_iter().enumerate() {
             let text = format!("{} {l}", if i == 0 { "·" } else { " " });
-            lines.push(vec![(text, Style::new().fg(color).bg(theme::BG))]);
+            lines.push(vec![(text, Style::new().fg(color).bg(th.bg))]);
         }
     }
     let h = area.height as usize;
@@ -421,8 +421,9 @@ fn name_style(p: &datarig_core::profile::ConnectionConfig, bg: ratatui::style::C
 /// its color), where it points, its policy (and read-only), and the key that switches the
 /// tab to another connection.
 fn draw_connection_bar(app: &App, area: Rect, buf: &mut Buffer) {
+    let th = theme::cur();
     let Some(p) = app.conn() else { return };
-    let bg = theme::SURFACE;
+    let bg = th.surface;
     buf.set_style(area, Style::new().bg(bg));
     let (endpoint, database, _) = p.endpoint();
     // Where the tab works: the server's answer once its session connected, else
@@ -442,16 +443,13 @@ fn draw_connection_bar(app: &App, area: Rect, buf: &mut Buffer) {
     // warning color, for as long as that is so.
     let missing = app.schema_missing(t);
     let schema = t.context.schema.clone().filter(|s| !s.is_empty()).map(|s| {
-        let style = if missing {
-            Style::new().fg(theme::WARNING).bg(bg).add_modifier(Modifier::BOLD)
-        } else {
-            name_style(p, bg)
-        };
+        let style =
+            if missing { Style::new().fg(th.warning).bg(bg).add_modifier(Modifier::BOLD) } else { name_style(p, bg) };
         (format!(" / {s}{}", if missing { "?" } else { "" }), style)
     });
     let policy = app.i18n.msg(&Msg::StatusPolicy { name: p.policy.clone().unwrap_or_else(|| "default".into()) });
     let name = name_style(p, bg);
-    let muted = Style::new().fg(theme::FG_MUTED).bg(bg);
+    let muted = Style::new().fg(th.fg_muted).bg(bg);
     let mut parts: Vec<(String, Style)> = Vec::new();
     if app.icons_on() {
         parts.push((crate::icons::cell(p, true), name));
@@ -461,7 +459,7 @@ fn draw_connection_bar(app: &App, area: Rect, buf: &mut Buffer) {
     parts.push((format!("  {endpoint}"), muted));
     parts.push((format!(" · {policy}"), muted));
     if app.read_only(p.id) {
-        let ro = Style::new().fg(theme::FG).bg(theme::SURFACE_ALT).add_modifier(Modifier::BOLD);
+        let ro = Style::new().fg(th.fg).bg(th.surface_alt).add_modifier(Modifier::BOLD);
         parts.push((" ".to_string(), muted));
         parts.push((format!(" {} ", app.i18n.label(Label::StatusReadOnly)), ro));
     }
@@ -508,6 +506,7 @@ fn draw_connection_bar(app: &App, area: Rect, buf: &mut Buffer) {
 /// Returns the title, and the texts of the right side from the longest to the shortest (the
 /// shortest is the state alone, without the marks) with their style.
 fn results_title(app: &App) -> (datarig_core::i18n::Localized, Option<(Vec<String>, Style)>) {
+    let th = theme::cur();
     let t = app.tab();
     let Results::Rows(rs) = &t.results else { return (app.i18n.label(Label::PaneResultsTitle), None) };
     if t.exec.view == ResultView::Messages && !t.is_table() {
@@ -526,8 +525,8 @@ fn results_title(app: &App) -> (datarig_core::i18n::Localized, Option<(Vec<Strin
     // The portal belongs to the last statement of the rows' run.
     let answer = t.exec.shown.is_some() && t.exec.shown == t.answer_index();
     let paging = if answer { t.exec.paging } else { Paging::None };
-    let warn = Style::new().fg(theme::WARNING).bg(theme::BG);
-    let muted = Style::new().fg(theme::FG_MUTED).bg(theme::BG);
+    let warn = Style::new().fg(th.warning).bg(th.bg);
+    let muted = Style::new().fg(th.fg_muted).bg(th.bg);
     let mut states: Vec<String> = Vec::new();
     let mut style = muted;
     if t.exec.running.is_some_and(|r| r.count) {
@@ -585,12 +584,13 @@ fn results_title(app: &App) -> (datarig_core::i18n::Localized, Option<(Vec<Strin
 /// Launch messages (migration, key map problems, an unknown profile) from line `y` down to
 /// `bottom`; returns the next free line.
 fn draw_notices(app: &App, x: u16, mut y: u16, w: usize, bottom: u16, buf: &mut Buffer) -> u16 {
+    let th = theme::cur();
     for n in &app.notices {
         for l in wrap(&n.render(&app.i18n), w) {
             if y >= bottom {
                 return y;
             }
-            put(buf, x, y, &l, w, Style::new().fg(crate::widgets::statusbar::level_color(n.level)).bg(theme::BG));
+            put(buf, x, y, &l, w, Style::new().fg(crate::widgets::statusbar::level_color(n.level)).bg(th.bg));
             y += 1;
         }
     }
@@ -600,6 +600,7 @@ fn draw_notices(app: &App, x: u16, mut y: u16, w: usize, bottom: u16, buf: &mut 
 /// The first line of the editor of a tab without a connection: why, and the key that picks
 /// one (a profile that is not among the profiles says so: the config may be unreadable).
 fn draw_unbound_banner(app: &App, area: Rect, buf: &mut Buffer) {
+    let th = theme::cur();
     let key = app
         .keymap
         .hint_keys(Action::SetTabConnection, Ctx::Nav, app.enhanced_keys)
@@ -610,7 +611,7 @@ fn draw_unbound_banner(app: &App, area: Rect, buf: &mut Buffer) {
     } else {
         app.i18n.msg(&Msg::BannerUnbound { key })
     };
-    let style = Style::new().fg(theme::BG).bg(theme::WARNING).add_modifier(Modifier::BOLD);
+    let style = Style::new().fg(th.bg).bg(th.warning).add_modifier(Modifier::BOLD);
     buf.set_style(area, style);
     let mark = crate::icons::warning(app.icons_on());
     put(buf, area.x + 1, area.y, &format!("{mark} {text}"), area.width.saturating_sub(2) as usize, style);
@@ -619,6 +620,7 @@ fn draw_unbound_banner(app: &App, area: Rect, buf: &mut Buffer) {
 /// The workspace without a tab (profiles exist): how to open one — pick a connection in the
 /// explorer or quick connect — with the keys, and the launch messages.
 fn draw_empty(app: &mut App, area: Rect, buf: &mut Buffer) {
+    let th = theme::cur();
     let block = panel(&app.i18n.label(Label::EmptyTitle), false, area.width);
     let inner = block.inner(area);
     block.render(area, buf);
@@ -632,12 +634,12 @@ fn draw_empty(app: &mut App, area: Rect, buf: &mut Buffer) {
             .map(|k| crate::keymap::keys::label(&k))
             .unwrap_or_default()
     };
-    let bold = Style::new().fg(theme::FG).bg(theme::BG).add_modifier(Modifier::BOLD);
+    let bold = Style::new().fg(th.fg).bg(th.bg).add_modifier(Modifier::BOLD);
     put(buf, x, y, &app.i18n.label(Label::EmptyHeadline), w, bold);
     y += 1;
     let pick = app.i18n.msg(&Msg::EmptyPick { key: keys(Action::QuickConnect) });
     for l in wrap_words(&pick, w) {
-        put(buf, x, y, &l, w, Style::new().fg(theme::FG_MUTED).bg(theme::BG));
+        put(buf, x, y, &l, w, Style::new().fg(th.fg_muted).bg(th.bg));
         y += 1;
     }
     y += 1;
@@ -655,9 +657,9 @@ fn draw_empty(app: &mut App, area: Rect, buf: &mut Buffer) {
         if y >= bottom {
             return;
         }
-        put(buf, x, y, k, key_w, Style::new().fg(theme::ACCENT_WARM).bg(theme::BG).add_modifier(Modifier::BOLD));
+        put(buf, x, y, k, key_w, Style::new().fg(th.accent_warm).bg(th.bg).add_modifier(Modifier::BOLD));
         let lx = x + key_w as u16 + 2;
-        put(buf, lx, y, label, w.saturating_sub(key_w + 2), Style::new().fg(theme::FG).bg(theme::BG));
+        put(buf, lx, y, label, w.saturating_sub(key_w + 2), Style::new().fg(th.fg).bg(th.bg));
         y += 1;
     }
     y += 1;
@@ -667,6 +669,7 @@ fn draw_empty(app: &mut App, area: Rect, buf: &mut Buffer) {
 /// The welcome panel (no profile yet): what datarig is, and the keys that get
 /// started (new connection, paste a URL, keyboard help).
 fn draw_welcome(app: &mut App, area: Rect, buf: &mut Buffer) {
+    let th = theme::cur();
     let block = panel(&app.i18n.label(Label::WelcomeTitle), app.focus != Focus::Tree, area.width);
     let inner = block.inner(area);
     block.render(area, buf);
@@ -675,11 +678,11 @@ fn draw_welcome(app: &mut App, area: Rect, buf: &mut Buffer) {
     let bottom = inner.y + inner.height;
     let mut y = inner.y + 1;
     // The name as text, icons on or off.
-    let name = Style::new().fg(theme::ACCENT).bg(theme::BG).add_modifier(Modifier::BOLD);
+    let name = Style::new().fg(th.accent).bg(th.bg).add_modifier(Modifier::BOLD);
     put(buf, x, y, "datarig", w, name);
     y += 1;
     for l in wrap_words(&app.i18n.label(Label::WelcomeTagline), w) {
-        put(buf, x, y, &l, w, Style::new().fg(theme::FG_MUTED).bg(theme::BG));
+        put(buf, x, y, &l, w, Style::new().fg(th.fg_muted).bg(th.bg));
         y += 1;
     }
     y += 1;
@@ -689,7 +692,7 @@ fn draw_welcome(app: &mut App, area: Rect, buf: &mut Buffer) {
         y,
         &app.i18n.label(Label::WelcomeEmpty),
         w,
-        Style::new().fg(theme::FG).bg(theme::BG).add_modifier(Modifier::BOLD),
+        Style::new().fg(th.fg).bg(th.bg).add_modifier(Modifier::BOLD),
     );
     y += 2;
     let keys = |a: Action| {
@@ -709,19 +712,20 @@ fn draw_welcome(app: &mut App, area: Rect, buf: &mut Buffer) {
         if y >= bottom {
             return;
         }
-        put(buf, x, y, k, key_w, Style::new().fg(theme::ACCENT_WARM).bg(theme::BG).add_modifier(Modifier::BOLD));
+        put(buf, x, y, k, key_w, Style::new().fg(th.accent_warm).bg(th.bg).add_modifier(Modifier::BOLD));
         let lx = x + key_w as u16 + 2;
-        put(buf, lx, y, label, w.saturating_sub(key_w + 2), Style::new().fg(theme::FG).bg(theme::BG));
+        put(buf, lx, y, label, w.saturating_sub(key_w + 2), Style::new().fg(th.fg).bg(th.bg));
         y += 1;
     }
     if y < bottom {
-        put(buf, x, y, &app.i18n.label(Label::WelcomePaste), w, Style::new().fg(theme::FG_MUTED).bg(theme::BG));
+        put(buf, x, y, &app.i18n.label(Label::WelcomePaste), w, Style::new().fg(th.fg_muted).bg(th.bg));
     }
     y += 2;
     draw_notices(app, x, y, w, bottom, buf);
 }
 
 pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
+    let th = theme::cur();
     let msg_line = |buf: &mut Buffer, text: &str, color| {
         for (i, l) in wrap(text, area.width as usize).iter().take(area.height as usize).enumerate() {
             buf.set_stringn(
@@ -729,7 +733,7 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
                 area.y + i as u16,
                 l,
                 area.width.saturating_sub(1) as usize,
-                Style::new().fg(color).bg(theme::BG),
+                Style::new().fg(color).bg(th.bg),
             );
         }
     };
@@ -761,7 +765,7 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
             } else {
                 app.i18n.msg(&Msg::ResultsEmpty { run: app.run_key().into() })
             };
-            msg_line(buf, &t, theme::FG_DIM);
+            msg_line(buf, &t, th.fg_dim);
             let lines = wrap(&t, area.width as usize).len() as u16;
             let w = area.width.saturating_sub(1) as usize;
             draw_notices(app, area.x + 1, area.y + lines + 1, w, area.y + area.height, buf);
@@ -785,12 +789,12 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
                 _ => app.i18n.msg(&Msg::ResultsPagingClosed { count }),
             };
             let y = area.y + area.height - 1;
-            buf.set_style(Rect { y, height: 1, ..area }, Style::new().bg(theme::SURFACE));
+            buf.set_style(Rect { y, height: 1, ..area }, Style::new().bg(th.surface));
             let w = area.width.saturating_sub(1) as usize;
-            buf.set_stringn(area.x + 1, y, clip(&text, w), w, Style::new().fg(theme::WARNING).bg(theme::SURFACE));
+            buf.set_stringn(area.x + 1, y, clip(&text, w), w, Style::new().fg(th.warning).bg(th.surface));
         }
         Results::Rows(rs) => crate::widgets::grid::render(rs, &mut t.grid, area, buf, &app.i18n, focused, look),
-        Results::Message(m) => msg_line(buf, &m.render(&app.i18n), theme::SUCCESS),
+        Results::Message(m) => msg_line(buf, &m.render(&app.i18n), th.success),
         Results::Error(e) => {
             // In a run of several statements: which one failed.
             let log = &t.exec.run;
@@ -803,9 +807,9 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
                 },
                 None => Msg::QueryError { error: e.clone() },
             };
-            msg_line(buf, &app.i18n.msg(&msg), theme::ERROR)
+            msg_line(buf, &app.i18n.msg(&msg), th.error)
         }
-        Results::Cancelled => msg_line(buf, &app.i18n.label(Label::QueryCancelled), theme::WARNING),
+        Results::Cancelled => msg_line(buf, &app.i18n.label(Label::QueryCancelled), th.warning),
     }
     // Rows of the spill file that could not be read are shown as not read, and said so.
     if let Some(fault) = app.tabs.active_mut().grid.read_error.take() {

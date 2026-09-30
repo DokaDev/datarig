@@ -25,6 +25,7 @@ pub(crate) fn clear_overlay(rect: Rect, buf: &mut Buffer) {
 }
 
 pub(crate) fn draw_popup(app: &App, cursor: (u16, u16), screen: Rect, buf: &mut Buffer) {
+    let th = theme::cur();
     let Some(p) = &app.tab().popup else { return };
     let kinds: Vec<Localized> = p.items.iter().map(|c| app.i18n.label(c.kind.label())).collect();
     let name_w = p.items.iter().map(|c| width(&c.label)).max().unwrap_or(1).min(40);
@@ -44,24 +45,24 @@ pub(crate) fn draw_popup(app: &App, cursor: (u16, u16), screen: Rect, buf: &mut 
     clear_overlay(rect, buf);
     Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(theme::BORDER).bg(theme::SURFACE))
-        .style(Style::new().bg(theme::SURFACE).fg(theme::FG))
+        .border_style(Style::new().fg(th.border).bg(th.surface))
+        .style(Style::new().bg(th.surface).fg(th.fg))
         .render(rect, buf);
     for (i, c) in p.items.iter().enumerate() {
         let yy = rect.y + 1 + i as u16;
         if yy >= rect.y + rect.height - 1 {
             break;
         }
-        let bg = if i == p.selected { theme::SELECTION_BG } else { theme::SURFACE };
+        let bg = if i == p.selected { th.selection } else { Style::new().bg(th.surface) };
         let mut line = vec![
             (" ".to_string(), Style::new()),
-            (fit(&c.label, name_w, Align::Left), Style::new().fg(theme::FG)),
+            (fit(&c.label, name_w, Align::Left), Style::new().fg(th.fg)),
             ("  ".to_string(), Style::new()),
-            (fit(&kinds[i], kind_w, Align::Left), Style::new().fg(theme::FG_DIM)),
+            (fit(&kinds[i], kind_w, Align::Left), Style::new().fg(th.fg_dim)),
         ];
         if type_w > 0 {
             line.push(("  ".into(), Style::new()));
-            line.push((fit(c.detail.as_deref().unwrap_or(""), type_w, Align::Left), Style::new().fg(theme::FG_MUTED)));
+            line.push((fit(c.detail.as_deref().unwrap_or(""), type_w, Align::Left), Style::new().fg(th.fg_muted)));
         }
         line.push((" ".into(), Style::new()));
         let mut xx = rect.x + 1;
@@ -72,13 +73,14 @@ pub(crate) fn draw_popup(app: &App, cursor: (u16, u16), screen: Rect, buf: &mut 
             }
             let room = (end - xx) as usize;
             let s = if width(&s) > room { fit(&s, room, Align::Left) } else { s };
-            buf.set_stringn(xx, yy, &s, room, st.bg(bg));
+            buf.set_stringn(xx, yy, &s, room, st.patch(bg));
             xx += width(&s) as u16;
         }
     }
 }
 
 pub(crate) fn draw_viewer(app: &mut App, content: Rect, buf: &mut Buffer) {
+    let th = theme::cur();
     let Some(v) = app.overlays.viewer_mut() else { return };
     // Only the box is cleared; the panels stay visible (dimmed) around it.
     let w = (content.width as u32 * 8 / 10) as u16;
@@ -89,13 +91,13 @@ pub(crate) fn draw_viewer(app: &mut App, content: Rect, buf: &mut Buffer) {
     let close = app.i18n.label(datarig_core::i18n::Label::CellViewerClose);
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
-        .border_style(Style::new().fg(theme::ACCENT).bg(theme::SURFACE))
-        .style(Style::new().bg(theme::SURFACE).fg(theme::FG))
+        .border_style(Style::new().fg(th.accent).bg(th.surface))
+        .style(Style::new().bg(th.surface).fg(th.fg))
         .title(Line::from(Span::styled(
             format!(" {} ", clip(&title, w as usize - 6)),
-            Style::new().fg(theme::FG).add_modifier(Modifier::BOLD),
+            Style::new().fg(th.fg).add_modifier(Modifier::BOLD),
         )))
-        .title_bottom(Line::from(Span::styled(format!(" {close} "), Style::new().fg(theme::FG_MUTED))).right_aligned());
+        .title_bottom(Line::from(Span::styled(format!(" {close} "), Style::new().fg(th.fg_muted))).right_aligned());
     let inner = block.inner(rect);
     block.render(rect, buf);
     let text_w = inner.width.saturating_sub(2) as usize;
@@ -104,6 +106,6 @@ pub(crate) fn draw_viewer(app: &mut App, content: Rect, buf: &mut Buffer) {
     v.view_h = vh;
     v.scroll = v.scroll.min(lines.len().saturating_sub(vh));
     for (i, l) in lines.iter().skip(v.scroll).take(vh).enumerate() {
-        buf.set_stringn(inner.x + 1, inner.y + i as u16, l, text_w, Style::new().fg(theme::FG).bg(theme::SURFACE));
+        buf.set_stringn(inner.x + 1, inner.y + i as u16, l, text_w, Style::new().fg(th.fg).bg(th.surface));
     }
 }
