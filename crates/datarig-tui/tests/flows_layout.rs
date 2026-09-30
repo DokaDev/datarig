@@ -180,7 +180,7 @@ fn a_small_terminal_keeps_both_panes_usable() {
         assert!(grid.iter().any(|l| l.contains(row)), "{row}: {screen}");
     }
     let console = i18n.msg(&datarig_core::i18n::Msg::TabConsole { n: "1".into() }).to_string();
-    assert!(lines[0].contains(&format!("1 {console} ● ×")), "{}", lines[0]);
+    assert!(lines[0].contains(&format!("1 {console} ×")), "{}", lines[0]);
 }
 
 #[test]
@@ -204,7 +204,7 @@ fn a_table_opens_in_a_tab_of_its_own() {
     h.key(KeyCode::Tab);
     assert_eq!(h.app.focus, Focus::Tree);
     let bar = h.screen(160, 45).lines().next().unwrap().to_string();
-    assert!(bar.contains("1 console 1 ○ ×") && bar.contains("2 shop.users ● ×"), "{bar}");
+    assert!(bar.contains("1 console 1 ×") && bar.contains("2 shop.users ×"), "{bar}");
     insta::assert_snapshot!("table_tab_en_160x45", h.draw(160, 45).backend());
     insta::assert_snapshot!("table_tab_en_80x24", h.draw(80, 24).backend());
     // Opening it again goes to its tab: nothing runs again.
@@ -230,16 +230,13 @@ fn tabs_are_named_by_their_document_with_the_connection_attached() {
     h.ctrl('t');
     h.ctrl('t');
     let bar = h.screen(160, 45).lines().next().unwrap().to_string();
-    assert!(
-        bar.contains("1 console 1 ○ ×") && bar.contains("2 console 2 ○ ×") && bar.contains("3 console 3 ○ ×"),
-        "{bar}"
-    );
+    assert!(bar.contains("1 console 1 ×") && bar.contains("2 console 2 ×") && bar.contains("3 console 3 ×"), "{bar}");
     // A closed console's number is free again.
     h.keys(" 2");
     h.ctrl('w');
     h.ctrl('t');
     let bar = h.screen(160, 45).lines().next().unwrap().to_string();
-    assert!(bar.contains("console 2 ○ ×"), "{bar}");
+    assert!(bar.contains("console 2 ×"), "{bar}");
     // The editor's first line: the connection, where it points, the policy, the switch key.
     let screen = h.screen(160, 45);
     let bar = screen.lines().nth(2).unwrap();
@@ -250,7 +247,7 @@ fn tabs_are_named_by_their_document_with_the_connection_attached() {
     let console = i18n.msg(&datarig_core::i18n::Msg::TabConsole { n: "1".into() }).to_string();
     let switch = i18n.msg(&datarig_core::i18n::Msg::ConnbarSwitch { key: "Space c s".into() }).to_string();
     let wide = ko.screen(160, 45);
-    assert!(wide.lines().next().unwrap().contains(&format!("1 {console} ○ ×")), "{wide}");
+    assert!(wide.lines().next().unwrap().contains(&format!("1 {console} ×")), "{wide}");
     assert!(wide.lines().nth(2).unwrap().contains(&switch), "{wide}");
     // A narrow pane keeps the connection whole and leaves the key to which-key and the help.
     let narrow = ko.screen(80, 24);
@@ -364,11 +361,12 @@ fn a_table_tab_says_why_it_cannot_be_saved_or_switched() {
 }
 
 /// A tab's title is its number
-/// in the profile's color, its document, `RO` for a read-only policy, its state mark and `×`;
-/// no icon or letters of the profile (its name is on the editor's first line). The marks are
-/// plain Unicode, the same with icons on and off; a table tab keeps its table glyph with icons
-/// on. At 120 columns everything is whole; at 80 the names give way first, and the active tab
-/// keeps its number, state and `×`. In English and Korean (read from the catalog).
+/// (in the profile's color once connected, muted before, the spinner while it runs), its
+/// document, `RO` for a read-only policy, a warning mark if any and `×`; no icon or letters of
+/// the profile (its name is on the editor's first line). The marks are plain Unicode, the same
+/// with icons on and off; a table tab keeps its table glyph with icons on. At 120 columns
+/// everything is whole; at 80 the names give way first, and the active tab keeps its number
+/// (here its spinner) and `×`. In English and Korean (read from the catalog).
 #[test]
 fn tab_titles_are_number_document_state_and_close() {
     use datarig_core::config::IconsSetting;
@@ -378,34 +376,34 @@ fn tab_titles_are_number_document_state_and_close() {
         let mut h = Harness::connected(lang);
         h.ctrl('t');
         open_users(&mut h);
-        let color = datarig_tui::theme::profile_color(h.app.profiles[0].display_color());
+        let th = datarig_tui::theme::DARK;
         for icons in [IconsSetting::Off, IconsSetting::On] {
             h.app.icons = icons;
             let (bar, x0) = tab_bar_row(&mut h, 120, 30);
-            assert!(bar.contains(&format!("1 {} ○ ×", console("1"))), "{bar}");
-            assert!(bar.contains(&format!("2 {} ○ ×", console("2"))), "{bar}");
+            assert!(bar.contains(&format!("1 {} ×", console("1"))), "{bar}");
+            assert!(bar.contains(&format!("2 {} ×", console("2"))), "{bar}");
             let table = if icons == IconsSetting::On {
                 format!("{} shop.users", datarig_tui::icons::TABLE)
             } else {
                 "shop.users".to_string()
             };
-            assert!(bar.contains(&format!("3 {table} ⠋ ×")), "the table tab runs: {bar}");
+            assert!(bar.contains(&format!(" ⠋ {table} ×")), "the table tab runs: {bar}");
             assert!(
                 !bar.contains("local-pg") && !bar.contains("loc ") && !bar.contains('·'),
                 "no name, no chip: {bar}"
             );
             let glyph = datarig_tui::icons::glyph(&h.app.profiles[0]);
             assert!(!bar.contains(glyph), "no profile icon: {bar}");
-            // The numbers are drawn in the profile's color.
+            // Not connected yet: the consoles' numbers muted; the table tab's spinner in the accent.
             let t = h.draw(120, 30);
             let buf = t.backend().buffer();
-            for n in ["1", "2", "3"] {
+            for (n, color) in [("1", th.fg_muted), ("2", th.fg_muted), ("⠋", th.accent)] {
                 let at = (x0..120).find(|x| buf[(*x, 0)].symbol() == n && buf[(*x + 1, 0)].symbol() == " ").unwrap();
                 assert_eq!(buf[(at, 0)].fg, color, "{n}: {bar}");
             }
-            // 80 columns: shorter names; the active (table) tab keeps number, state and ×.
+            // 80 columns: shorter names; the active (table) tab keeps its spinner and ×.
             let (bar, _) = tab_bar_row(&mut h, 80, 30);
-            assert!(bar.contains("3 ") && bar.contains("⠋ ×"), "{bar}");
+            assert!(bar.contains(" ⠋ ") && !bar.contains(" 3 "), "{bar}");
             assert!(bar.matches('×').count() >= 2, "{bar}");
             assert!(datarig_tui::text::width(&bar) <= 80, "{bar}");
         }
@@ -616,7 +614,7 @@ fn answer_paging(h: &mut Harness) {
     h.tab_db(index, DbEvent::Page { id, columns, rows, more: true, elapsed: Duration::from_millis(3) });
 }
 
-/// The active tab pages in a transaction that is not the user's: `●`, no "TX open",
+/// The active tab pages in a transaction that is not the user's: connected, no `◆`, no "TX open",
 /// no label of the user's transaction, and nothing to ask about a rollback.
 fn assert_not_the_users_tx(h: &mut Harness) {
     use datarig_tui::widgets::tabbar::{self, State};
@@ -625,7 +623,7 @@ fn assert_not_the_users_tx(h: &mut Harness) {
     assert_eq!(tabbar::state(&h.app, h.app.tab()), State::Connected);
     let screen = h.screen(160, 45);
     let bar = screen.lines().next().unwrap();
-    assert!(bar.contains("shop.users ● ×") && !bar.contains('◆'), "{bar}");
+    assert!(bar.contains("shop.users ×") && !bar.contains('◆'), "{bar}");
     let status = screen.lines().last().unwrap();
     assert!(!status.contains("TX open"), "{status}");
     assert!(!screen.contains("uncommitted (in tx)"), "{screen}");

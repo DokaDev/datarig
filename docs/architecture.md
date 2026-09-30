@@ -222,7 +222,12 @@ Held by CI budgets (`docs/perf.md`).
   row (`gutter_x`, `header_y`) for the clicks; `Drag::Grid` carries the shape, and `drag_at`
   lets the wheel extend a drag.
 - **The tab bar** (`widgets::tabbar`): `tabbar::state` reads a tab's session into a `State`
-  (idle, connected, running, open transaction, trouble) drawn as a mark in theme colors;
+  (idle, connected, running, open transaction, trouble). The number carries the connection:
+  the profile's color while the tab's session is connected, `fg_muted` while it is not, the
+  status bar's spinner frame (as wide as the number) while a statement runs; only the
+  warnings get a mark after the name, `◆` (`warning`, kept while a statement runs in the
+  user's transaction) and `!` (`accent_warm`). Clicks and `Space n` go by the tab's index
+  (`TabHit`), never by the drawn digit;
   labels are `Part`s whose document part shortens first when the tabs do not fit, and the `×`
   part records a `TabHit::Close` of its own, which `tab_bar_click` sends down the `Ctrl+W`
   path (`ConfirmAction::CloseTab` keeps the tab on Enter).

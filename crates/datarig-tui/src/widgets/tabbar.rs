@@ -1,14 +1,15 @@
-//! The tab bar above the editor: each tab is `<n> <document> [RO] <state> ×`. The number is drawn in the
-//! profile's color (prod and dev stay apart without a chip; the profile's name is on the
-//! editor's first line), the document is a console's `console <n>`, a saved query's name or a
-//! table tab's `schema.table`, `*` marks a text that could not be saved, `RO` a read-only
-//! policy. The state mark says what the tab's own session does, by shape first ([`State`]):
-//! `○` no session (the normal idle state: sessions open lazily), `●` connected, a spinner while
-//! a statement runs or waits, `◆` in the warning color while the user's transaction is open,
-//! `!` for a lost connection, a failed profile or an aborted transaction. `×` closes the tab
-//! as `Ctrl+W` does. A tab without a connection says so in the state's place. When the tabs do
-//! not fit, the documents' names are shortened first, then the bar scrolls to keep the active
-//! tab visible and `‹` / `›` show that more tabs are hidden.
+//! The tab bar above the editor: each tab is `<n> <document> [RO] [<mark>] ×`. The number carries
+//! the tab's connection: drawn in the profile's color while its session is connected (prod and
+//! dev stay apart without a chip; the profile's name is on the editor's first line), muted while
+//! it is not (the normal idle state: sessions open lazily), and replaced by the status bar's
+//! spinner while a statement runs or waits. The document is a console's `console <n>`, a saved
+//! query's name or a table tab's `schema.table`, `*` marks a text that could not be saved, `RO`
+//! a read-only policy. A mark after it warns, by shape first ([`State`]): `◆` in the warning
+//! color while the user's transaction is open, `!` for a lost connection, a failed profile or
+//! an aborted transaction; a tab with nothing to warn about has no mark. `×` closes the tab as
+//! `Ctrl+W` does. A tab without a connection says so in the mark's place. When the tabs do not
+//! fit, the documents' names are shortened first, then the bar scrolls to keep the active tab
+//! visible and `‹` / `›` show that more tabs are hidden.
 
 use crate::app::{App, NodeState, SessionState, Tab};
 use crate::icons;
@@ -19,10 +20,8 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 
-/// The state marks (plain Unicode, not Nerd Font glyphs: the same with icons off).
-pub const IDLE: &str = "○";
-pub const CONNECTED: &str = "●";
-/// Its own shape, not only another color.
+/// The warning marks (plain Unicode, not Nerd Font glyphs: the same with icons off), each its
+/// own shape, not only another color.
 pub const TX_OPEN: &str = "◆";
 pub const TROUBLE: &str = "!";
 /// The close button.
@@ -30,14 +29,15 @@ pub const CLOSE: &str = "×";
 /// The tab's text could not be saved (a failed write, or its file changed on disk).
 pub const UNSAVED: &str = "*";
 
-/// What a tab's own session is doing, as its state mark shows it.
+/// What a tab's own session is doing, as its number and mark show it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum State {
-    /// No session (not connected yet, or closed): `○`, dim.
+    /// No session (not connected yet, or closed): the number muted, no mark.
     Idle,
-    /// Connected and idle: `●`, the accent color.
+    /// Connected and idle: the number in the profile's color, no mark.
     Connected,
-    /// A statement runs or waits for its connection: a spinner frame, the accent color.
+    /// A statement runs or waits for its connection: a spinner frame (the accent color) in the
+    /// number's place; `◆` stays while it runs in the user's transaction.
     Running,
     /// The user's transaction is open: `◆`, the warning color.
     TxOpen,
@@ -63,15 +63,20 @@ pub fn state(app: &App, tab: &Tab) -> State {
     }
 }
 
-/// The mark and color of `state` (`frame`: the spinner's).
-fn state_mark(state: State, frame: &'static str) -> (&'static str, Color) {
+/// Whether tab `tab`'s own session is connected (its number in the profile's color).
+fn connected(tab: &Tab) -> bool {
+    tab.exec.session.is_some() && tab.exec.state != SessionState::Lost
+}
+
+/// The warning mark and color of `state`, if any (`user_tx`: the user's transaction is open,
+/// which a running statement does not hide).
+fn warning_mark(state: State, user_tx: bool) -> Option<(&'static str, Color)> {
     let th = theme::cur();
     match state {
-        State::Idle => (IDLE, th.fg_dim),
-        State::Connected => (CONNECTED, th.accent),
-        State::Running => (frame, th.accent),
-        State::TxOpen => (TX_OPEN, th.warning),
-        State::Trouble => (TROUBLE, th.accent_warm),
+        State::TxOpen => Some((TX_OPEN, th.warning)),
+        State::Running if user_tx => Some((TX_OPEN, th.warning)),
+        State::Trouble => Some((TROUBLE, th.accent_warm)),
+        _ => None,
     }
 }
 
@@ -114,8 +119,21 @@ fn label(app: &App, index: usize, tab: &Tab, active: bool, doc_max: usize) -> Ve
     let bg = if active { th.surface_alt } else { th.bg };
     let part = |text: String, style: Style| Part { text, style, kind: PartKind::Plain };
     let profile = tab.profile.and_then(|id| app.profiles.iter().find(|p| p.id == id));
-    // The number in the profile's color: which connection, at a glance.
-    let color = profile.map_or(th.fg_muted, |p| theme::profile_color(p.display_color()));
+    let state = profile.map(|_| state(app, tab));
+    // The number in the profile's color once connected: which connection, at a glance; muted
+    // while it is not; the spinner in its place (as wide) while a statement runs.
+    let n = (index + 1).to_string();
+    let (n, color) = match (profile, state) {
+        (_, Some(State::Running)) => {
+            let frame = tab
+                .exec
+                .running
+                .map_or(crate::widgets::SPINNER[0], |r| crate::widgets::spinner_at(r.started, app.now()));
+            (format!("{frame:<w$}", w = n.len()), th.accent)
+        }
+        (Some(p), _) if connected(tab) => (n, theme::profile_color(p.display_color())),
+        _ => (n, th.fg_muted),
+    };
     let mut num = Style::new().fg(color).bg(bg).add_modifier(Modifier::BOLD);
     if !active {
         num = num.remove_modifier(Modifier::BOLD);
@@ -125,7 +143,7 @@ fn label(app: &App, index: usize, tab: &Tab, active: bool, doc_max: usize) -> Ve
     if active {
         doc = doc.add_modifier(Modifier::BOLD);
     }
-    let mut parts = vec![part(format!(" {} ", index + 1), num)];
+    let mut parts = vec![part(format!(" {n} "), num)];
     let mut name = document_name(app, tab);
     if tab.is_table() && app.icons_on() {
         name = format!("{} {name}", icons::TABLE);
@@ -141,12 +159,9 @@ fn label(app: &App, index: usize, tab: &Tab, active: bool, doc_max: usize) -> Ve
                 let ro = Style::new().fg(th.fg).bg(bg).add_modifier(Modifier::BOLD);
                 parts.push(part(format!(" {}", app.i18n.label(Label::TabReadOnly)), ro));
             }
-            let frame = tab
-                .exec
-                .running
-                .map_or(crate::widgets::SPINNER[0], |r| crate::widgets::spinner_at(r.started, app.now()));
-            let (m, c) = state_mark(state(app, tab), frame);
-            parts.push(part(format!(" {m}"), mark(c)));
+            if let Some((m, c)) = state.and_then(|s| warning_mark(s, tab.exec.user_tx())) {
+                parts.push(part(format!(" {m}"), mark(c)));
+            }
         }
         None => {
             let l = if tab.doc.recovered { Label::TabRecovered } else { Label::TabUnbound };
@@ -210,7 +225,7 @@ pub(crate) fn draw_tab_bar(app: &App, area: Rect, buf: &mut Buffer) -> Vec<(u16,
     buf.set_style(area, Style::new().bg(th.bg));
     let total = area.width as usize;
     let active = app.tabs.active_index();
-    // Full names when they fit; else shorter ones (the number, RO, state and × stay).
+    // Full names when they fit; else shorter ones (the number, RO, mark and × stay).
     let make = |max: usize| -> Vec<Vec<Part>> {
         app.tabs.iter().enumerate().map(|(i, t)| label(app, i, t, i == active, max)).collect()
     };

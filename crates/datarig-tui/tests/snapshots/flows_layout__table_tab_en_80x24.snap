@@ -2,7 +2,7 @@
 source: crates/datarig-tui/tests/flows_layout.rs
 expression: "h.draw(80, 24).backend()"
 ---
-"╭ Explorer ────────────╮ 1 console 1 ○ ×  2 shop.users ● ×                      "
+"╭ Explorer ────────────╮ 1 console 1 ×  2 shop.users ×                          "
 "│  ＋ New connection   │╭ Results · 8 rows ────────────╮╭ [Cell] Row · I ──────╮" Hidden by multi-width symbols: [(4, " ")]
 "│▾ ●   local-pg        ││   │ id   │ name              ││ id                   │"
 "│  ▾ datarig default   ││   │ int8 │ text              ││ int8 · 1 character   │"

@@ -2,7 +2,7 @@
 source: crates/datarig-tui/tests/flows_safety.rs
 expression: backend
 ---
-"╭ Explorer ────────────╮ 1 console 1 RO ○ ×                                     "
+"╭ Explorer ────────────╮ 1 console 1 RO ×                                       "
 "│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
 "│▾ ●   local-pg RO     ││ local-pg / datarig  127.0.0.1:55432  READ-ONLY       │"
 "│  ▾ datarig default   ││  1 -- datarig 🐘  Ctrl+E: run the statement under the│" Hidden by multi-width symbols: [(41, " ")]

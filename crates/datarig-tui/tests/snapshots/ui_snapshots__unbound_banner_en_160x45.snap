@@ -2,7 +2,7 @@
 source: crates/datarig-tui/tests/ui_snapshots.rs
 expression: backend
 ---
-"╭ Explorer ────────────────────────────╮ 1 console 1 ○ ×  2 console 2 no connection ×                                                                           "
+"╭ Explorer ────────────────────────────╮ 1 console 1 ×  2 console 2 no connection ×                                                                             "
 "│  ＋ New connection                   │╭ Query · console 2 ───────────────────────────────────────────────────────────────────────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
 "│▸ ⠋   local-pg                        ││ ! No connection · Space c s picks one for this tab                                                                   │"
 "│▸ ○   分析-replica                    ││  1▎select 'kept';                                                                                                    │" Hidden by multi-width symbols: [(8, " "), (10, " ")]

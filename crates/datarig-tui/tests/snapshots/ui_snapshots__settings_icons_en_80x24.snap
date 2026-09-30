@@ -2,7 +2,7 @@
 source: crates/datarig-tui/tests/ui_snapshots.rs
 expression: backend
 ---
-"╭ Explorer ────────────╮ 1 console 1 ○ ×                                        "
+"╭ Explorer ────────────╮ 1 console 1 ×                                          "
 "│ ╭ Settings ────────────────────────────────────────────────────────────────╮─╮"
 "│▾│ Display                                                                  │t│"
 "│ │   Nerd Font icons           ‹ auto      ›  Nerd Font icons → ask again … │e│"

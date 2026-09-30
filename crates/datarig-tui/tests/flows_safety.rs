@@ -188,7 +188,7 @@ fn read_only_markers_on_the_tab_the_explorer_and_the_status_bar() {
     let mut h = connected(Some("prod"), Lang::En);
     let screen = h.screen(160, 45);
     let lines: Vec<&str> = screen.lines().collect();
-    assert!(lines[0].contains("console 1 RO ○ ×"), "tab bar: {}", lines[0]);
+    assert!(lines[0].contains("console 1 RO ×"), "tab bar: {}", lines[0]);
     assert!(screen.contains("local-pg RO"), "explorer");
     assert!(lines[44].contains("policy: prod  READ-ONLY "), "status bar: {}", lines[44]);
     let mut h = connected(None, Lang::En);
