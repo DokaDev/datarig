@@ -91,6 +91,7 @@ fn tree_lazy_load_and_open_table() {
 fn tree_all_kinds(icons: bool) -> Harness {
     use datarig_core::config::IconsSetting;
     use datarig_core::driver::SchemaObjects;
+    use datarig_core::driver::structure::RelationStats;
     use datarig_core::sql::complete::{ColumnInfo, Relation};
     let mut h = Harness::connected(Lang::En);
     h.driver.no_structure.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -122,6 +123,13 @@ fn tree_all_kinds(icons: bool) -> Harness {
         tables: vec!["users".into(), "zz_types".into()],
         views: vec!["order_summary".into(), "zz_mv".into()],
         materialized: ["zz_mv".to_string()].into(),
+        // Estimates on the lines of a table and a materialized view; none yet for zz_types.
+        stats: [
+            ("users".to_string(), RelationStats { rows: Some(11_000), bytes: Some(4_404_019) }),
+            ("zz_types".to_string(), RelationStats::default()),
+            ("zz_mv".to_string(), RelationStats { rows: Some(950), bytes: Some(16_384) }),
+        ]
+        .into(),
     };
     h.db(DbEvent::Objects { schema: "shop".into(), result: Ok(objects) });
     h.keys("jj"); // Tables, users

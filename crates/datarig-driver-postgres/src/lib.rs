@@ -26,6 +26,6 @@ pub use connect::PgDriver;
 /// API.
 #[doc(hidden)]
 pub mod catalog_sql {
-    pub use crate::meta::BEGIN_READ;
     pub use crate::meta::structure::SQL as TABLE_STRUCTURE;
+    pub use crate::meta::{BEGIN_READ, SCHEMA_OBJECTS};
 }

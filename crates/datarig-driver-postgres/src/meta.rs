@@ -16,12 +16,93 @@
 use crate::connect::db_error;
 use crate::link::{Link, Next};
 use datarig_core::driver::keys::{Generated, KeyCatalog, KeyKind};
+use datarig_core::driver::structure::RelationStats;
 use datarig_core::driver::{DbCommand, DbError, DbEvent, SchemaObjects};
 use datarig_core::sql::complete::{Catalog, ColumnInfo, Relation};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::{ToSql, Type};
 use tokio_postgres::{Client, Row};
+
+/// The estimates of rows and size of the relations of a CTE `roots (oid, kind)` (`kind` its
+/// `relkind` as text), as CTEs to follow it in a `WITH RECURSIVE`: `stats (root, known_rows,
+/// reltuples, known_size, bytes)`, one row per root with storage of its own or through its
+/// partitions; `stats_rows!` and `stats_bytes!` read it (`LEFT JOIN stats s`). The rules are
+/// the table structure's ([`structure`]) and the explorer's list of a schema's objects alike:
+///
+/// * `heaps` are the relations whose statistics are a root's: itself (a table, a materialized
+///   view), or a partitioned table's leaf partitions (found in `pg_inherits`, at any depth);
+/// * rows are counted only where every one has an estimate (`reltuples` `-1`: never vacuumed or
+///   analyzed), and the size where every one has statistics of its own (the same, unless its own
+///   `relpages` is set, by a `CREATE INDEX`; a foreign table has no storage): its indexes and its
+///   TOAST table's index have pages from their creation on, which are not its size;
+/// * the size is `relpages` of the heaps, their TOAST tables and all their indexes, times
+///   `block_size`.
+///
+/// It reads `pg_class`, `pg_inherits` and `pg_index` only, and locks no relation (the functions
+/// that give the exact size, `pg_total_relation_size` and `pg_partition_tree`, lock each one and
+/// wait behind an `ALTER TABLE` or a `VACUUM FULL`). TOAST tables and indexes are found in one
+/// pass each, grouped by root, never per heap: the planned cost stays linear in the catalog, under
+/// `jit_above_cost` with thousands of relations, for a table of thousands of partitions and for a
+/// schema of thousands of tables.
+macro_rules! stats_ctes {
+    () => {
+        "tree AS (
+  SELECT r.oid AS root, r.oid FROM roots r WHERE r.kind = 'p'
+  UNION ALL
+  SELECT tree.root, i.inhrelid FROM pg_catalog.pg_inherits i JOIN tree ON i.inhparent = tree.oid
+), heaps AS (
+  SELECT m.root, h.oid, h.relkind, h.reltuples::float8 AS reltuples, h.relpages::int8 AS relpages, h.reltoastrelid
+  FROM (SELECT r.oid AS root, r.oid FROM roots r WHERE r.kind IN ('r', 'm')
+        UNION ALL SELECT tree.root, tree.oid FROM tree) m
+  JOIN pg_catalog.pg_class h ON h.oid = m.oid
+  WHERE h.relkind <> 'p'
+), toast_pages AS (
+  SELECT x.root, sum(t.relpages)::int8 AS pages
+  FROM heaps x JOIN pg_catalog.pg_class t ON t.oid = x.reltoastrelid
+  GROUP BY x.root
+), index_pages AS (
+  SELECT x.root, sum(ic.relpages)::int8 AS pages
+  FROM (SELECT y.root, y.oid FROM heaps y UNION ALL SELECT y.root, y.reltoastrelid FROM heaps y) x
+  JOIN pg_catalog.pg_index i ON i.indrelid = x.oid
+  JOIN pg_catalog.pg_class ic ON ic.oid = i.indexrelid
+  GROUP BY x.root
+), stats AS (
+  SELECT h.root, bool_and(h.reltuples >= 0) AS known_rows, sum(h.reltuples)::float8 AS reltuples,
+         bool_and(h.relkind = 'f' OR h.reltuples >= 0 OR h.relpages > 0) AS known_size,
+         (sum(h.relpages) + coalesce(max(t.pages), 0) + coalesce(max(ix.pages), 0))::int8
+           * pg_catalog.current_setting('block_size')::int8 AS bytes
+  FROM heaps h
+  LEFT JOIN toast_pages t ON t.root = h.root
+  LEFT JOIN index_pages ix ON ix.root = h.root
+  GROUP BY h.root
+)"
+    };
+}
+
+/// The row estimate of a root of kind `kind` joined to its `stats_ctes!` row as `s`: `-1`
+/// unknown, `NULL` without storage (a view, a foreign table). A partitioned table without
+/// partitions (no heaps, no row) has none: 0.
+macro_rules! stats_rows {
+    ($kind:literal) => {
+        concat!(
+            "CASE WHEN ",
+            $kind,
+            " IN ('r', 'm', 'p') THEN CASE WHEN s.root IS NULL THEN 0 WHEN s.known_rows THEN s.reltuples ELSE -1 END END"
+        )
+    };
+}
+
+/// The size estimate in bytes, as `stats_rows!`: `NULL` unknown or without storage.
+macro_rules! stats_bytes {
+    ($kind:literal) => {
+        concat!(
+            "CASE WHEN ",
+            $kind,
+            " IN ('r', 'm', 'p') THEN CASE WHEN s.root IS NULL THEN 0 WHEN s.known_size THEN s.bytes END END"
+        )
+    };
+}
 
 pub(crate) mod structure;
 
@@ -129,19 +210,35 @@ async fn load_databases(client: &Client) -> Result<Vec<String>, DbError> {
     Ok(rows.iter().map(|r| r.get::<_, String>(0)).collect())
 }
 
+/// A schema's relations with the estimates of those with storage (`stats_ctes!`), in one
+/// statement.
+pub const SCHEMA_OBJECTS: &str = concat!(
+    "WITH RECURSIVE roots AS (
+  SELECT c.oid, c.relname, c.relkind::text AS kind
+  FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname = $1 AND c.relkind IN ('r', 'p', 'f', 'v', 'm')
+), ",
+    stats_ctes!(),
+    "
+SELECT r.relname, r.kind, (",
+    stats_rows!("r.kind"),
+    ")::float8, (",
+    stats_bytes!("r.kind"),
+    ")::int8
+FROM roots r LEFT JOIN stats s ON s.root = r.oid
+ORDER BY r.relname"
+);
+
 async fn load_objects(client: &Client, schema: &str) -> Result<SchemaObjects, DbError> {
-    let rows = read(
-        client,
-        "SELECT c.relname, c.relkind::text FROM pg_class c \
-         JOIN pg_namespace n ON n.oid = c.relnamespace \
-         WHERE n.nspname = $1 AND c.relkind IN ('r', 'p', 'f', 'v', 'm') ORDER BY c.relname",
-        &[(&schema, Type::TEXT)],
-    )
-    .await?;
+    let rows = read(client, SCHEMA_OBJECTS, &[(&schema, Type::TEXT)]).await?;
     let mut out = SchemaObjects::default();
     for r in rows {
         let name: String = r.get(0);
-        match r.get::<_, String>(1).as_str() {
+        let kind: String = r.get(1);
+        if matches!(kind.as_str(), "r" | "p" | "m") {
+            out.stats.insert(name.clone(), relation_stats(r.get(2), r.get(3)));
+        }
+        match kind.as_str() {
             "m" => {
                 out.materialized.insert(name.clone());
                 out.views.push(name);
@@ -151,6 +248,12 @@ async fn load_objects(client: &Client, schema: &str) -> Result<SchemaObjects, Db
         }
     }
     Ok(out)
+}
+
+/// The estimates as `stats_rows!` and `stats_bytes!` read them: a row estimate of `-1` is
+/// none yet (never vacuumed or analyzed), which is not "no rows".
+pub(crate) fn relation_stats(rows: Option<f64>, bytes: Option<i64>) -> RelationStats {
+    RelationStats { rows: rows.filter(|r| *r >= 0.0).map(|r| r.round() as u64), bytes: bytes.map(|b| b.max(0) as u64) }
 }
 
 async fn load_catalog(client: &Client) -> Result<Catalog, DbError> {

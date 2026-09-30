@@ -28,6 +28,7 @@
 "tree.group.check_constraints" = "검사 제약 조건"
 "tree.group.triggers" = "트리거"
 "tree.stats" = "~{rows}행 · ~{size}"
+"tree.stats_rows" = "~{rows}행"
 "tree.stats_rows_unknown" = "행 수 알 수 없음 · ~{size}"
 "tree.stats_unknown" = "행 수와 크기 알 수 없음 (통계 없음)"
 "tree.structure_unreadable" = "(구조를 불러올 수 없음: {error})"

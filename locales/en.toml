@@ -30,6 +30,7 @@
 "tree.group.check_constraints" = "Check Constraints"
 "tree.group.triggers" = "Triggers"
 "tree.stats" = "~{rows} rows · ~{size}"
+"tree.stats_rows" = "~{rows} rows"
 "tree.stats_rows_unknown" = "rows unknown · ~{size}"
 "tree.stats_unknown" = "rows and size unknown (no statistics yet)"
 "tree.structure_unreadable" = "(structure unavailable: {error})"

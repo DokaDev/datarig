@@ -29,11 +29,15 @@ Everything below works today, with PostgreSQL.
 - Several connections at once, each with its own metadata session, schema tree and completion
   catalog. A tab belongs to one connection; tabs of different connections sit side by side.
 - The explorer lists every connection profile, the server's databases, their schemas, tables and
-  views (materialized views with an icon of their own). An open table shows its structure, read
-  from the catalog in one round trip the first time it opens (`r` reads it again; the table
-  itself is never read): the server's estimates of its rows and its size on disk from its
-  statistics, which `VACUUM` and `ANALYZE` keep (`~11k rows · ~4.2 MB`, or "rows and size
-  unknown (no statistics yet)" before it was ever vacuumed or analyzed), then Columns (key
+  views (materialized views with an icon of their own). Each table and materialized view shows
+  the server's estimates of its rows and its size on disk on its own line, dim and on the right
+  (`orders   ~50k rows · 19 MB`), read with the schema's list in the same round trip from the
+  statistics that `VACUUM` and `ANALYZE` keep, without opening it and without a lock on any
+  table (`r` lists them again). The name always wins: on a short line the size goes first, then
+  the rows; a table with no statistics yet shows nothing there, and the status bar says "rows and
+  size unknown (no statistics yet)". An open table shows its structure, read
+  from the catalog in one round trip the first time it opens (`r` reads it again, and its
+  estimates with it; the table itself is never read): Columns (key
   marks, type, `not null`, default), Primary Key, Foreign Keys (`Enter` goes to the referenced
   table), Indexes (columns or expressions with their order, operator class and collation, as in
   `(created DESC)`, `UNIQUE`, method, partial predicate, whether a key or constraint owns it),

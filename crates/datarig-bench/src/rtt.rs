@@ -370,5 +370,16 @@ pub async fn run(url: &str, one_way: Duration, runs: usize) -> Result<Value, Str
         costs.push(c);
     }
     out.push(report("table_structure", &costs));
+    // The explorer opening a schema: its objects with the estimates of their rows and size.
+    let mut costs = Vec::new();
+    for _ in 0..runs {
+        let load = DbCommand::LoadObjects { schema: "shop".into() };
+        let (c, ev) = m.measure(load, |e| matches!(e, DbEvent::Objects { .. })).await?;
+        if !matches!(&ev, DbEvent::Objects { result: Ok(o), .. } if o.stats.contains_key("orders")) {
+            return Err(format!("schema_objects: {ev:?}"));
+        }
+        costs.push(c);
+    }
+    out.push(report("schema_objects", &costs));
     Ok(json!({ "one_way_ms": one_way.as_millis() as u64, "scenarios": out }))
 }

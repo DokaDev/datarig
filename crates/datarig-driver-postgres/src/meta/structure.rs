@@ -3,11 +3,8 @@
 //! one round trip. It reads the catalog only (never the table), and it never waits for a lock
 //! another session holds or waits for:
 //!
-//! * the row and size estimates are the statistics in `pg_class` (`reltuples`, and `relpages`
-//!   of the table, its TOAST table and all their indexes, times `block_size`), which `VACUUM`
-//!   and `ANALYZE` keep, summed over the leaf partitions of a partitioned table (found in
-//!   `pg_inherits`); unknown until the table itself has statistics. `pg_total_relation_size` and `pg_partition_tree` would lock each relation
-//!   (`AccessShareLock`) and wait behind an `ALTER TABLE` or a `VACUUM FULL`;
+//! * the row and size estimates are the statistics in `pg_class`, as the explorer's list of a
+//!   schema's objects has them (`stats_ctes!`: no lock on any relation);
 //! * the server deparses defaults, check constraints, indexes and trigger conditions only
 //!   against the open table: `pg_get_expr` with a relation, `pg_get_indexdef`, and
 //!   `pg_get_constraintdef` of a check and `pg_get_triggerdef` of a trigger with `WHEN` lock the
@@ -32,17 +29,10 @@ use tokio_postgres::Client;
 use tokio_postgres::types::Type;
 
 /// The statement. `$1` and `$2` are the schema and the table; the cast to `regclass` (which
-/// locks nothing) fails with the server's own "does not exist" when the table is gone. `heaps`
-/// are the relations whose statistics are the table's: itself, or a partitioned table's leaf
-/// partitions. Rows are counted only where every one has an estimate (`reltuples` `-1`: never
-/// vacuumed or analyzed), and the size where every one has statistics of its own (the same,
-/// unless its own `relpages` is set, by a `CREATE INDEX`; a foreign table has no storage): its
-/// indexes and its TOAST table's index have pages from their creation on, which are not its
-/// size. Their TOAST tables and indexes are found in one pass each (semi-joins), not per heap:
-/// the planned cost stays linear in the catalog, under `jit_above_cost` with thousands of
-/// relations and for a table of thousands of partitions.
-pub const SQL: &str = "\
-WITH RECURSIVE rel AS (
+/// locks nothing) fails with the server's own "does not exist" when the table is gone. The row
+/// and size estimates are the explorer's list's (`stats_ctes!`, for the one root).
+pub const SQL: &str = concat!(
+    "WITH RECURSIVE rel AS (
   SELECT c.oid, c.relkind::text AS kind,
          EXISTS (SELECT 1 FROM pg_catalog.pg_locks l
            WHERE l.locktype = 'relation' AND l.relation = c.oid AND l.mode = 'AccessExclusiveLock'
@@ -50,34 +40,20 @@ WITH RECURSIVE rel AS (
                                WHERE d.datname = pg_catalog.current_database())) AS locked
   FROM pg_catalog.pg_class c
   WHERE c.oid = pg_catalog.format('%I.%I', $1::text, $2::text)::regclass
-), tree AS (
-  SELECT rel.oid FROM rel WHERE rel.kind = 'p'
-  UNION ALL
-  SELECT i.inhrelid FROM pg_catalog.pg_inherits i JOIN tree ON i.inhparent = tree.oid
-), heaps AS (
-  SELECT h.oid, h.relkind, h.reltuples::float8 AS reltuples, h.relpages::int8 AS relpages, h.reltoastrelid
-  FROM pg_catalog.pg_class h
-  WHERE h.oid IN (SELECT rel.oid FROM rel WHERE rel.kind IN ('r', 'm') UNION ALL SELECT tree.oid FROM tree)
-    AND h.relkind <> 'p'
-), stats AS (
-  SELECT count(*) AS n, bool_and(h.reltuples >= 0) AS known_rows, sum(h.reltuples)::float8 AS reltuples,
-         bool_and(h.relkind = 'f' OR h.reltuples >= 0 OR h.relpages > 0) AS known_size,
-         (sum(h.relpages)
-          + coalesce((SELECT sum(t.relpages) FROM pg_catalog.pg_class t
-                      WHERE t.oid IN (SELECT x.reltoastrelid FROM heaps x)), 0)
-          + coalesce((SELECT sum(ic.relpages) FROM pg_catalog.pg_index i
-                      JOIN pg_catalog.pg_class ic ON ic.oid = i.indexrelid
-                      WHERE i.indrelid IN (SELECT x.oid FROM heaps x UNION ALL SELECT x.reltoastrelid FROM heaps x)), 0)
-         )::int8 * pg_catalog.current_setting('block_size')::int8 AS bytes
-  FROM heaps h
-)
+), roots AS (
+  SELECT rel.oid, rel.kind FROM rel
+), ",
+    stats_ctes!(),
+    "
 SELECT CASE WHEN rel.locked THEN pg_catalog.json_build_object('kind', rel.kind, 'locked', true)
 ELSE pg_catalog.json_build_object(
   'kind', rel.kind,
-  'rows', CASE WHEN rel.kind IN ('r', 'm', 'p') THEN
-    (SELECT CASE WHEN n = 0 THEN 0 WHEN known_rows THEN reltuples ELSE -1 END FROM stats) END,
-  'bytes', CASE WHEN rel.kind IN ('r', 'm', 'p') THEN
-    (SELECT CASE WHEN n = 0 THEN 0 WHEN known_size THEN bytes END FROM stats) END,
+  'rows', ",
+    stats_rows!("rel.kind"),
+    ",
+  'bytes', ",
+    stats_bytes!("rel.kind"),
+    ",
   'columns', (
     SELECT pg_catalog.json_agg(pg_catalog.json_build_object(
       'name', a.attname, 'type', pg_catalog.format_type(a.atttypid, a.atttypmod),
@@ -146,7 +122,8 @@ ELSE pg_catalog.json_build_object(
     JOIN pg_catalog.pg_namespace pn ON pn.oid = p.pronamespace
     WHERE t.tgrelid = rel.oid AND NOT t.tgisinternal)
 ) END::text
-FROM rel";
+FROM rel LEFT JOIN stats s ON s.root = rel.oid"
+);
 
 /// Read the structure of `schema.table` in one round trip.
 pub(crate) async fn load_structure(client: &Client, schema: &str, table: &str) -> Result<TableStructure, DbError> {
@@ -242,9 +219,8 @@ fn parse(json: &str) -> Result<TableStructure, DbError> {
         _ => return Err(DbError::NotSupported),
     };
     let mut s = TableStructure::new(kind);
-    // `-1`: no estimate yet (never vacuumed or analyzed), which is not "no rows".
-    s.estimated_rows = raw.rows.filter(|r| *r >= 0.0).map(|r| r.round() as u64);
-    s.total_bytes = raw.bytes.map(|b| b.max(0) as u64);
+    let stats = super::relation_stats(raw.rows, raw.bytes);
+    (s.estimated_rows, s.total_bytes) = (stats.rows, stats.bytes);
     s.columns = raw
         .columns
         .unwrap_or_default()

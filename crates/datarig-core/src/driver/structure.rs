@@ -230,6 +230,18 @@ pub struct Trigger {
     pub definition: String,
 }
 
+/// The server's estimates of a relation's rows and size (a table, a partitioned table's
+/// partitions, a materialized view), from its statistics: `None` for one it has none of yet
+/// (never vacuumed or analyzed), which is not 0. The explorer shows them on the relation's line
+/// (listed with the schema's objects, `SchemaObjects::stats`) and again when it opens
+/// ([`TableStructure::stats`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RelationStats {
+    pub rows: Option<u64>,
+    /// With its indexes and TOAST (see [`TableStructure::total_bytes`]).
+    pub bytes: Option<u64>,
+}
+
 /// The structure of one relation. Every list is in the server's order: columns by position,
 /// the rest by name.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -252,6 +264,11 @@ pub struct TableStructure {
 }
 
 impl TableStructure {
+    /// Its estimates, for a relation with storage.
+    pub fn stats(&self) -> Option<RelationStats> {
+        self.kind.has_storage().then_some(RelationStats { rows: self.estimated_rows, bytes: self.total_bytes })
+    }
+
     /// An empty structure of a relation of kind `kind`.
     pub fn new(kind: RelationKind) -> Self {
         Self {

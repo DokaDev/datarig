@@ -2,29 +2,32 @@
 //! session's channels, progress and results come back as [`DbEvent`]s.
 
 use super::keys::KeyCatalog;
-use super::structure::TableStructure;
+use super::structure::{RelationStats, TableStructure};
 use crate::fault::Fault;
 use crate::sql::complete::Catalog;
 use crate::sql::risk::repeat::NotRepeatable;
 use crate::transport::DialError;
 use std::borrow::Cow;
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 /// The tables and views of a schema (`DbCommand::LoadObjects`), by name, each list sorted.
 /// Materialized views are listed with the views and named again in `materialized` (the
-/// explorer draws them with an icon of their own).
+/// explorer draws them with an icon of their own). `stats` has the estimates of each relation
+/// with storage (tables, partitioned tables, materialized views), by name, read with the list:
+/// a view or a foreign table has none, nor do the objects of a driver that does not read them.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SchemaObjects {
     pub tables: Vec<String>,
     pub views: Vec<String>,
     pub materialized: BTreeSet<String>,
+    pub stats: BTreeMap<String, RelationStats>,
 }
 
 impl From<(Vec<String>, Vec<String>)> for SchemaObjects {
-    /// Tables and views, none of them materialized.
+    /// Tables and views, none of them materialized, without estimates.
     fn from((tables, views): (Vec<String>, Vec<String>)) -> Self {
-        Self { tables, views, materialized: BTreeSet::new() }
+        Self { tables, views, ..Self::default() }
     }
 }
 

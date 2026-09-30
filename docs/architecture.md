@@ -236,12 +236,26 @@ Held by CI budgets (`docs/perf.md`).
   items share) hold Material Design glyphs of Nerd Fonts v3 with their names; a test pins
   each name to its code point (checked against `glyphnames.json` of 3.5.1). The explorer's
   `node_parts` puts the icon before a node's label only with icons on, so the tree without
-  icons is unchanged. `DbEvent::Objects` carries `SchemaObjects` (tables, views, and the names
-  of the views that are materialized); `widgets::tree::Children::Loaded` keeps them and
+  icons is unchanged. `DbEvent::Objects` carries `SchemaObjects` (tables, views, the names
+  of the views that are materialized, and `stats`: the `RelationStats` of each relation with
+  storage); `widgets::tree::Children::Loaded` keeps them and
   `Tree::is_materialized` picks the icon.
+- **Estimates on the object lines.** The PostgreSQL driver lists a schema's objects with their
+  row and size estimates in one statement (`meta::SCHEMA_OBJECTS`, one round trip as before,
+  budget `rtt.schema_objects`). The estimates are the `stats_ctes!` of `meta`, which the table
+  structure's statement uses too, so the list and an open table never disagree: the rules are
+  those of the table structure below, grouped by root (every table, partitioned table and
+  materialized view of the schema, each partition its own and its parent their sum), in one pass
+  over `pg_inherits`, `pg_class` and `pg_index`, locking no relation. `Tree::set_structure`
+  puts a structure's estimates in the list too (`r` on an open table refreshes them). The
+  explorer draws them right-aligned after the name in the room it leaves, two blanks at least
+  (`explorer::inline_stats`, longest first: rows and size, rows, or the size alone when the rows
+  are unknown), and the status bar the whole line with the estimates in words, "unknown"
+  included (`explorer::line_preview`).
 - **Table structure.** `driver::structure::TableStructure` (core) is one table's structure as a
   driver reads it: its kind (`RelationKind::groups` says which groups apply), a row estimate and
-  a size (both estimates from the statistics; `None` when unknown: never 0 for "not analyzed"), columns (with `ColumnFill`: default,
+  a size (both estimates from the statistics; `None` when unknown: never 0 for "not analyzed";
+  `TableStructure::stats`), columns (with `ColumnFill`: default,
   identity, generated), the primary key, foreign keys, indexes, unique and check constraints and
   triggers, each constraint, index and trigger with the server's own definition, for a DDL view
   to reuse. A driver with `Capabilities::structure` answers `DbCommand::LoadStructure` with
@@ -249,7 +263,7 @@ Held by CI budgets (`docs/perf.md`).
   document in a single unnamed catalog statement (`meta::structure`, one round trip, budget
   `rtt.table_structure`), never reading the table and never waiting for a lock on it: the size
   is `relpages` of the table, its TOAST table and their indexes (of the leaf partitions of a
-  partitioned table, found through `pg_inherits`) times `block_size`, since
+  partitioned table, found through `pg_inherits`) times `block_size` (`meta::stats_ctes!`), since
   `pg_total_relation_size` and `pg_partition_tree` lock each relation. Whether it is known is
   the heap's own statistics (`reltuples` or `relpages` of the table, or of every leaf
   partition): an index and a TOAST table's index have pages from their creation on, so a table
@@ -267,7 +281,7 @@ Held by CI budgets (`docs/perf.md`).
   orders), operator class and collation when not the defaults (`Index::options`), and a
   trigger's `UPDATE OF` columns (`tgattr`); a trigger's `WHEN` condition is taken from
   `pg_get_triggerdef` (`Trigger::condition`), so only where that runs. The status bar shows the
-  line under the explorer's cursor whole (`explorer::structure_preview`; for a structure that
+  line under the explorer's cursor whole (`explorer::line_preview`; for a structure that
   could not be read, the reason alone); a message too long for it takes the policy's room when that makes it
   fit whole, else it is cut in its middle when its end is a short last part
   (`text::clip_middle`: ` · ` and a closing ` (…)`), keeping what to do and what a trigger
