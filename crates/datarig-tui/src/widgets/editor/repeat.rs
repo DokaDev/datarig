@@ -85,6 +85,13 @@ impl Recorder {
         }
     }
 
+    /// Text pasted into the search prompt of the command being typed (`d/`).
+    pub(super) fn prompt_paste(&mut self, text: &str) {
+        if !self.replaying {
+            self.inputs.push(Input::Paste(text.to_string()));
+        }
+    }
+
     /// `Ctrl+R` and the register's name put `text` in the Insert session: `.` types the text
     /// again, not what the register holds then (Vim).
     pub(super) fn register_text(&mut self, text: &str) {

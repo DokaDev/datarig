@@ -91,7 +91,7 @@ pub struct Theme {
     /// While the `:` command line is open.
     pub mode_command: Color,
     pub mode_fg: Color,
-    /// A match of a search in the editor or the grid (not drawn yet).
+    /// A match of the editor's search (`/`, `n`, `*`, …) on the lines on screen.
     pub search_match: Style,
     /// The bracket matching the one at the editor's cursor (not drawn yet).
     pub match_paren: Style,

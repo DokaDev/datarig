@@ -25,6 +25,7 @@
 //! * `insert` is Insert mode, with autoindent, `Ctrl+W` / `Ctrl+U` and `Ctrl+R {register}`.
 //! * `registers` holds what yanks and deletes wrote, as Vim's registers do.
 //! * `repeat` records the last change for `.`.
+//! * `search` is `/`, `?`, `n`, `N`, `*`, `#` and the highlight of their matches.
 //! * `render` draws.
 //!
 //! One command is one undo step: an operator, a put, a paste, a `.`, or an Insert session with
@@ -40,6 +41,7 @@ mod registers;
 mod render;
 mod repeat;
 mod scroll;
+mod search;
 mod textobj;
 mod vim;
 mod visual;
@@ -49,6 +51,7 @@ use datarig_core::i18n::Label;
 use lexing::{LineState, REGION_LINES};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 pub use registers::{RegKind, RegProblem, Register, Yank};
+pub use search::{SearchNotice, SearchWork};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -118,6 +121,14 @@ pub struct Editor {
     /// The last register write for the system clipboard, until the app takes it
     /// ([`Editor::take_yank`]).
     yanked: Option<Yank>,
+    /// The `/` or `?` prompt, while it is open.
+    prompt: Option<search::Prompt>,
+    last_search: Option<search::Last>,
+    /// The matches of the last search are highlighted (until `:nohlsearch`).
+    hl: bool,
+    /// What the last search had to say, until the app takes it.
+    search_notice: Option<SearchNotice>,
+    search_work: SearchWork,
     undo: Vec<Step>,
     redo: Vec<Step>,
     insert_snap: bool,
@@ -167,6 +178,11 @@ impl Editor {
             clip_unread: false,
             problem: None,
             yanked: None,
+            prompt: None,
+            last_search: None,
+            hl: false,
+            search_notice: None,
+            search_work: SearchWork::default(),
             undo: Vec::new(),
             redo: Vec::new(),
             insert_snap: false,
@@ -247,6 +263,9 @@ impl Editor {
     /// in Insert mode): the app reads the clipboard only then, and gives the editor what it
     /// read first ([`Editor::set_clipboard_text`]).
     pub fn reads_clipboard(&self, key: &KeyEvent) -> bool {
+        if self.prompt.is_some() {
+            return false;
+        }
         let c = match key.code {
             KeyCode::Char(c) if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => c,
             _ => return false,
@@ -304,7 +323,7 @@ impl Editor {
     /// A command waits for a character, to be taken as it is typed (`f`, `t`, `r`): a Hangul
     /// syllable is that syllable, not the QWERTY keys under it.
     pub fn awaiting_char(&self) -> bool {
-        self.mode != Mode::Insert && self.cmd.awaiting_char()
+        self.mode != Mode::Insert && self.prompt.is_none() && self.cmd.awaiting_char()
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> EdEvent {
@@ -316,6 +335,7 @@ impl Editor {
     /// A key in the current mode.
     fn dispatch_key(&mut self, key: KeyEvent) -> EdEvent {
         let ev = match self.mode {
+            _ if self.prompt.is_some() => self.prompt_key(key),
             Mode::Insert => {
                 self.insert_repeat_key(key);
                 self.key_insert(key)
@@ -331,11 +351,15 @@ impl Editor {
 
     /// Bracketed paste: typed as it is in Insert mode; in Normal mode inserted at the cursor
     /// (the cursor ends on the character that was under it, so pastes follow each other), in
-    /// Visual mode in place of the selection. Outside Insert mode it is one undo step.
+    /// Visual mode in place of the selection. Outside Insert mode it is one undo step. Into
+    /// the search prompt, it is part of the pattern (on one line).
     pub fn paste(&mut self, text: &str) -> EdEvent {
         let norm = text.replace("\r\n", "\n").replace('\r', "\n");
         if norm.is_empty() {
             return EdEvent::None;
+        }
+        if self.prompt.is_some() {
+            return self.prompt_paste(&norm);
         }
         self.cmd = vim::Pending::default();
         let (a, b) = match self.mode {
@@ -372,8 +396,13 @@ impl Editor {
         EdEvent::Changed { typed: None }
     }
 
-    /// Mouse click at a position relative to the editor's inner area.
+    /// Mouse click at a position relative to the editor's inner area. While the search prompt
+    /// is open the click only closes it (as `Esc`): the line under the prompt is not on screen.
     pub fn click(&mut self, x: u16, y: u16) {
+        if self.prompt.is_some() {
+            self.close_prompt();
+            return;
+        }
         let r = (self.top + y as usize).min(self.lines.len() - 1);
         let tx = (x as usize).saturating_sub(self.gutter);
         let c = self.col_for_x(r, self.left + tx);
@@ -403,6 +432,7 @@ impl Editor {
     /// one to the other (both ends included, grapheme by grapheme), the cursor at `to`. Back
     /// on the anchor it is no selection, just the cursor there.
     pub fn drag_select(&mut self, anchor: (usize, usize), to: (usize, usize)) {
+        self.close_prompt();
         self.cmd = vim::Pending::default();
         let clamp_col = |e: &Self, (r, c): (usize, usize)| {
             let r = r.min(e.lines.len() - 1);
@@ -443,6 +473,7 @@ impl Editor {
 
     /// Visual from grapheme `a` to `b` (included) of line `r`, the cursor on `b`.
     fn visual_span(&mut self, r: usize, a: usize, b: usize) {
+        self.close_prompt();
         self.cmd = vim::Pending::default();
         self.enter_visual(false, (r, a));
         self.row = r;

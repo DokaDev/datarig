@@ -375,3 +375,161 @@ fn visual_put_and_empty_registers() {
     assert_eq!(notice(&mut h).as_deref(), Some("Nothing in register \"q"));
     assert_eq!(clip.read_count(), 1);
 }
+
+/// Whether any cell of the editor's text area has the search highlight.
+fn highlighted(h: &mut Harness) -> Vec<(u16, u16)> {
+    let t = h.draw(100, 30);
+    let area = h.app.layout.editor_text;
+    let bg = datarig_tui::theme::DARK.search_match.bg;
+    let buf = t.backend().buffer();
+    let mut at = Vec::new();
+    for y in area.y..area.y + area.height {
+        for x in area.x..area.x + area.width {
+            if Some(buf[(x, y)].bg) == bg {
+                at.push((x, y));
+            }
+        }
+    }
+    at
+}
+
+/// `/` opens a prompt on the editor's last line (its own key context: what is typed is the
+/// pattern, `:` and Hangul included); the cursor shows the match while typing, `Esc` puts it
+/// back, `Enter` searches and the matches stay highlighted until `:noh`, which the next search
+/// undoes.
+#[test]
+fn search_prompt_highlight_and_noh() {
+    let mut h = editor_with("SELECT a:b FROM t\nSELECT b FROM u\nSELECT '\u{AC00}' FROM v");
+    h.keys("/");
+    assert_eq!(h.app.key_context(), Ctx::VimSearch);
+    h.type_text("FROM u");
+    assert_eq!((h.app.tab().editor.row, h.app.tab().editor.col), (1, 9), "the preview");
+    let area = h.app.layout.editor_text;
+    let screen = h.screen(100, 30);
+    let prompt = screen.lines().nth((area.y + area.height - 1) as usize).unwrap_or_default();
+    assert!(prompt.contains("/FROM u"), "{prompt:?}");
+    h.key(KeyCode::Esc);
+    assert_eq!((h.app.key_context(), h.app.tab().editor.row, h.app.tab().editor.col), (Ctx::VimNormal, 0, 0));
+    assert!(highlighted(&mut h).is_empty());
+
+    h.keys("/");
+    h.type_text("a:b");
+    h.key(KeyCode::Enter);
+    assert_eq!((h.app.key_context(), h.app.tab().editor.col), (Ctx::VimNormal, 7));
+    assert_eq!(highlighted(&mut h).len(), 3, "a:b");
+    h.keys(":");
+    h.type_text("noh");
+    h.key(KeyCode::Enter);
+    assert!(h.cmdline().is_none());
+    assert!(highlighted(&mut h).is_empty());
+    h.keys("n");
+    assert_eq!(highlighted(&mut h).len(), 3, "the next search shows them again");
+
+    // Hangul in the prompt is the pattern, not the QWERTY keys under it.
+    h.keys("/");
+    h.type_text("\u{AC00}");
+    h.key(KeyCode::Enter);
+    assert_eq!((h.app.tab().editor.row, h.app.tab().editor.col), (2, 8));
+    // An operator takes the text up to the match.
+    h.keys("ggd/");
+    h.type_text("FROM");
+    h.key(KeyCode::Enter);
+    assert_eq!(h.app.tab().editor.lines[0], "FROM t");
+}
+
+/// An invalid pattern, a pattern that matches nothing and going around the end each say so, in
+/// each language; the cursor stays.
+#[test]
+fn search_notices_in_each_language() {
+    for lang in [Lang::En, Lang::Ko] {
+        let mut h = Harness::connected(lang);
+        h.app.tab_mut().editor = Editor::new("one (two)\nthree");
+        h.keys("w/");
+        h.type_text("(tw");
+        h.key(KeyCode::Enter);
+        let i18n = datarig_core::i18n::I18n::new(lang);
+        let want = i18n.msg(&datarig_core::i18n::Msg::EditorSearchInvalid { error: "unclosed group".into() });
+        assert_eq!(notice(&mut h).as_deref(), Some(want.as_ref()));
+        assert_eq!((h.app.tab().editor.row, h.app.tab().editor.col), (0, 4));
+        h.keys("/");
+        h.type_text("four");
+        h.key(KeyCode::Enter);
+        let want = i18n.msg(&datarig_core::i18n::Msg::EditorSearchNotFound { pattern: "four".into() });
+        assert_eq!(notice(&mut h).as_deref(), Some(want.as_ref()));
+        h.keys("/");
+        h.type_text("one");
+        h.key(KeyCode::Enter);
+        let want = i18n.label(datarig_core::i18n::Label::EditorSearchWrappedBottom);
+        assert_eq!(notice(&mut h).as_deref(), Some(want.as_ref()));
+        assert_eq!((h.app.tab().editor.row, h.app.tab().editor.col), (0, 0));
+    }
+    let mut h = editor_with("x");
+    h.keys("n");
+    assert_eq!(notice(&mut h).as_deref(), Some("No previous search pattern"));
+}
+
+/// A paste while the prompt is open goes into the pattern and leaves the text alone.
+#[test]
+fn a_paste_goes_into_the_search_prompt() {
+    let mut h = editor_with("SELECT 1;\nSELECT 2;");
+    h.keys("/");
+    h.app.handle_event(Event::Paste("2;".into()));
+    assert_eq!(h.app.tab().editor.text(), "SELECT 1;\nSELECT 2;");
+    h.key(KeyCode::Enter);
+    assert_eq!((h.app.tab().editor.row, h.app.tab().editor.col), (1, 7));
+}
+
+/// While the prompt is open: `Ctrl+W` deletes a word of the pattern (it never closes the tab),
+/// `Ctrl+C` closes the prompt (and still cancels a running query), and any other key of the app
+/// closes it as `Esc` first: `Ctrl+E` runs the statement where the cursor was, not where the
+/// prompt previewed it, and a pane switch leaves no prompt behind. A click only closes it.
+#[test]
+fn app_keys_and_clicks_close_the_search_prompt() {
+    let mut h = editor_with("SELECT 1;\nSELECT 2;");
+    h.keys("/");
+    h.type_text("SELECT 2");
+    h.ctrl('w');
+    assert_eq!(h.app.tabs.len(), 1, "no tab closed");
+    assert_eq!(h.app.key_context(), Ctx::VimSearch);
+    h.type_text("2");
+    assert_eq!(h.app.tab().editor.row, 1, "the preview");
+    h.sent();
+    h.ctrl('e');
+    assert_eq!(statements(&h.sent()), ["SELECT 1"]);
+    assert!(!h.app.tab().editor.searching());
+    assert_eq!(h.app.tab().editor.row, 0);
+
+    h.keys("/");
+    h.type_text("2");
+    h.ctrl('c');
+    assert_eq!((h.app.tab().editor.searching(), h.app.tab().editor.row), (false, 0));
+
+    h.keys("/");
+    h.type_text("2");
+    h.key_mod(KeyCode::BackTab, ratatui::crossterm::event::KeyModifiers::SHIFT);
+    assert_eq!((h.app.tab().editor.searching(), h.app.tab().editor.row), (false, 0));
+
+    // A click on the prompt's line: the prompt closes, the cursor stays where it was.
+    h.app.focus = datarig_tui::app::Focus::Editor;
+    h.keys("/");
+    h.type_text("2");
+    h.draw(100, 30);
+    let area = h.app.layout.editor_text;
+    use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+    h.mouse(MouseEventKind::Down(MouseButton::Left), area.x + 6, area.y + area.height - 1);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), area.x + 6, area.y + area.height - 1);
+    assert_eq!((h.app.tab().editor.searching(), h.app.tab().editor.row), (false, 0));
+}
+
+/// Ctrl+C with a query running and the prompt open cancels the query too.
+#[test]
+fn ctrl_c_in_the_search_prompt_still_cancels_the_run() {
+    let mut h = editor_with("SELECT pg_sleep(10);");
+    h.ctrl('e');
+    assert!(h.app.tab().exec.running.is_some());
+    h.keys("/");
+    h.type_text("x");
+    h.ctrl('c');
+    assert!(h.session_cancelled(1), "the tab's session was asked to cancel");
+    assert!(!h.app.tab().editor.searching());
+}

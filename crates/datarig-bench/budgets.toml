@@ -76,6 +76,12 @@ rss_growth_mib_max = 16
 p95_ms_max = 25.0
 # Resident memory after typing in it (the file itself is about 20 MiB of lines).
 rss_mib_max = 160
+# Search (`/` with a pattern found nowhere, key by key, and `n`): the most bytes one key
+# searched, in passes over the text (a miss searches it once, `n` up to the next match; a
+# count is bounded too, see the editor's search tests), and the most lines one frame highlighted (only those on screen; the editor has fewer
+# rows than the 45 of the terminal). Their times are held to `p95_ms_max` above.
+search_passes_max = 1.0
+highlight_lines_max = 45
 
 [idle]
 secs = 20

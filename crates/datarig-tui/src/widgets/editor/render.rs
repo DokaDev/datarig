@@ -1,5 +1,6 @@
 //! Drawing: line numbers, the bar of what a run takes, syntax colors of the lines on screen
-//! (lexed from the cached line states), the selection and the cursor line.
+//! (lexed from the cached line states), the matches of a search on them, the selection, the
+//! cursor line, and the search prompt on the last line while it is open.
 
 use super::buffer::gw;
 use super::{Editor, Mode};
@@ -14,10 +15,16 @@ impl Editor {
     /// Screen position of the cursor inside `area` if it were rendered now. `stmt` is the byte
     /// range of the statement a run would take: its lines get a faint tint and a bar in the
     /// gutter. With a Visual selection the bar marks the selection's lines instead (a run takes
-    /// the selection), and `stmt` is not used.
+    /// the selection), and `stmt` is not used. While the search prompt is open it takes the
+    /// last line, and the cursor is in it.
     pub fn render(&mut self, area: Rect, buf: &mut Buffer, stmt: Option<(usize, usize)>) -> (u16, u16) {
         let th = theme::cur();
-        let h = area.height as usize;
+        if self.prompt.is_some() && area.height == 1 {
+            // No room for the text: the prompt takes the only line.
+            return self.render_prompt(area, buf, area.y);
+        }
+        let prompt_h = u16::from(self.prompt.is_some());
+        let h = (area.height - prompt_h) as usize;
         let numw = self.lines.len().to_string().len().max(3);
         self.gutter = numw + 1;
         self.view_h = h;
@@ -47,6 +54,10 @@ impl Editor {
         let stmt = if sel.is_some() { None } else { stmt };
         // What a run takes: the selection, else the statement under the cursor.
         let run = sel.or(stmt);
+
+        // The matches of the search on the lines on screen, found line by line as they are drawn.
+        let hl = self.highlight_re();
+        let mut highlighted = 0;
 
         let mut ti = 0;
         let mut line_start = self.line_start(self.top.min(self.lines.len()));
@@ -80,6 +91,8 @@ impl Editor {
             }
 
             let tx0 = area.x + self.gutter as u16;
+            let mut matches = hl.map(|re| re.find_iter(line).filter(|m| !m.is_empty()).peekable());
+            highlighted += usize::from(hl.is_some());
             let mut x = 0usize;
             let mut b = line_start;
             let mut rb = rstart;
@@ -93,6 +106,14 @@ impl Editor {
                     _ => Style::new().fg(th.fg),
                 }
                 .patch(bg);
+                if let Some(ms) = matches.as_mut() {
+                    let lb = b - line_start;
+                    // A match on any byte of the grapheme marks it (one may start inside it).
+                    while ms.next_if(|m| m.end() <= lb).is_some() {}
+                    if ms.peek().is_some_and(|m| m.start() < lb + g.len()) {
+                        style = style.patch(th.search_match);
+                    }
+                }
                 if sel.is_some_and(|(a, z)| b >= a && b < z) {
                     style = style.patch(th.selection);
                 }
@@ -123,8 +144,22 @@ impl Editor {
             line_start = line_end + 1;
             rstart += line.len() + 1;
         }
+        self.search_work.highlighted += highlighted;
         let cy = area.y + (self.row - self.top) as u16;
         let cxs = area.x + self.gutter as u16 + (cx - self.left) as u16;
+        if prompt_h > 0 {
+            return self.render_prompt(area, buf, area.y + h as u16);
+        }
         (cxs.min(area.x + area.width.saturating_sub(1)), cy)
+    }
+
+    /// The search prompt on line `y` of `area`; where the cursor is in it.
+    fn render_prompt(&mut self, area: Rect, buf: &mut Buffer, y: u16) -> (u16, u16) {
+        let th = theme::cur();
+        let Some(p) = self.prompt.as_mut() else { return (area.x, y) };
+        let style = Style::new().fg(th.fg).bg(th.bg);
+        buf.set_stringn(area.x, y, if p.forward { "/" } else { "?" }, 1, style);
+        let input = Rect::new(area.x + 1, y, area.width.saturating_sub(1), 1);
+        (p.input.render(input, buf, style, true, false, None), y)
     }
 }

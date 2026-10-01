@@ -62,3 +62,18 @@ fn paste_strips_newlines() {
     assert_eq!(t.text(), "ax yb");
     assert_eq!(t.cursor(), 4);
 }
+
+#[test]
+fn delete_word_back_takes_a_word_or_a_run_of_symbols() {
+    let mut t = TextInput::default();
+    typ(&mut t, "a.b foo_1  ");
+    assert_eq!(t.delete_word_back(), InputResult::Changed);
+    assert_eq!(t.text(), "a.b ");
+    t.delete_word_back();
+    assert_eq!(t.text(), "a.");
+    t.delete_word_back();
+    assert_eq!(t.text(), "a");
+    t.delete_word_back();
+    assert_eq!((t.text(), t.cursor()), ("", 0));
+    assert_eq!(t.delete_word_back(), InputResult::Ignored);
+}

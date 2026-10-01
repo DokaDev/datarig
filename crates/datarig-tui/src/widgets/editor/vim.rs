@@ -205,6 +205,7 @@ impl Editor {
                 return if p == 'z' && key.code == KeyCode::Enter && !ctrl { Token::Z('\n') } else { Token::Cancel };
             };
             return match p {
+                'g' if matches!(c, '*' | '#') => self.search_word(c == '*', false).map_or(Token::Cancel, Token::Motion),
                 'g' => Motion::of_g(c).map_or(Token::G(c), Token::Motion),
                 'z' => Token::Z(c),
                 _ => Object::of_char(c).map_or(Token::Cancel, |o| Token::Object(o, p == 'a')),
@@ -228,6 +229,9 @@ impl Editor {
             'f' | 'F' | 't' | 'T' => self.cmd.arg = Some(c),
             'r' if self.cmd.op.is_none() => self.cmd.arg = Some(c),
             '"' if self.cmd.op.is_none() => self.cmd.reg_wait = true,
+            '/' | '?' => self.open_prompt(c == '/'),
+            'n' | 'N' => return self.search_again(c == 'n').map_or(Token::Cancel, Token::Motion),
+            '*' | '#' => return self.search_word(c == '*', true).map_or(Token::Cancel, Token::Motion),
             ';' | ',' => {
                 return match self.last_find {
                     Some((ch, forward, till)) => {
@@ -317,7 +321,7 @@ impl Editor {
     }
 
     /// A motion key: moves the cursor, or ends the pending operator.
-    fn motion_key(&mut self, m: Motion) -> EdEvent {
+    pub(super) fn motion_key(&mut self, m: Motion) -> EdEvent {
         let (n, explicit) = self.cmd.count();
         let op = self.cmd.op;
         self.end_command();
@@ -338,7 +342,7 @@ impl Editor {
             _ => None,
         };
         // Vim's rule: a delete over these motions goes to `"1` even within a line.
-        self.reg_one = matches!(m, Motion::Match | Motion::ParaForward | Motion::ParaBack);
+        self.reg_one = matches!(m, Motion::Match | Motion::ParaForward | Motion::ParaBack | Motion::Search { .. });
         let Some(r) = cw.or_else(|| self.op_range(m, n, explicit)) else {
             if op == Op::Change && matches!(m, Motion::Left | Motion::Right) {
                 return self.start_insert(true, (self.row, self.col));

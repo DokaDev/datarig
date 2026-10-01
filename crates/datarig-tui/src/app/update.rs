@@ -3,7 +3,7 @@
 
 use super::explorer::RowKind;
 use super::*;
-use crate::widgets::editor::RegProblem;
+use crate::widgets::editor::{RegProblem, SearchNotice};
 use crate::widgets::grid::Shape;
 use crate::widgets::tree::Reveal;
 
@@ -122,9 +122,12 @@ impl App {
             self.paste_dsn(text);
         } else if self.overlays.is_empty() && self.focus == Focus::Editor && !self.profiles.is_empty() {
             let t = self.tab_mut();
-            t.editor.paste(text);
+            let ev = t.editor.paste(text);
             t.popup = None;
-            self.edited();
+            // Into the search prompt, the text is not changed.
+            if matches!(ev, EdEvent::Changed { .. }) {
+                self.edited();
+            }
         }
     }
 
@@ -179,6 +182,10 @@ impl App {
         self.track_leader(r == Resolved::Pending && !repeat);
         match r {
             Resolved::Action(a) => {
+                // An app key closes the search prompt first, as `Esc` (the cursor goes back):
+                // a run, a tab or pane switch never sees the cursor where the prompt previewed
+                // it. `Ctrl+C` there still cancels the running query.
+                self.close_search_prompt();
                 if !repeat || action::spec(a).repeatable {
                     self.dispatch(a);
                 }
@@ -191,10 +198,19 @@ impl App {
         }
     }
 
+    /// Close the active editor's search prompt as `Esc` does; whether it was open.
+    fn close_search_prompt(&mut self) -> bool {
+        if self.tabs.is_empty() || !self.tab().editor.searching() {
+            return false;
+        }
+        self.tab_mut().editor.close_prompt();
+        true
+    }
+
     /// Keys no action claims go to the widget of context `ctx`.
     fn forward(&mut self, ctx: Ctx, keys: &[KeyChord], repeat: bool) {
         match ctx {
-            Ctx::VimNormal | Ctx::VimVisual | Ctx::VimInsert => {
+            Ctx::VimNormal | Ctx::VimVisual | Ctx::VimInsert | Ctx::VimSearch => {
                 for k in keys {
                     self.editor_key(k.to_event());
                 }
@@ -361,6 +377,7 @@ impl App {
         let t = self.tabs.active_mut();
         let ev = t.editor.handle_key(key);
         let problem = t.editor.take_register_problem();
+        let search = t.editor.take_search_notice();
         if let Some(y) = t.editor.take_yank() {
             self.editor_yanked(y);
         }
@@ -370,6 +387,19 @@ impl App {
                 RegProblem::ReadOnly(c) => Msg::EditorRegisterReadOnly { name: format!("\"{c}") },
             };
             self.flash(Notice::new(msg, Level::Warning));
+        }
+        if let Some(n) = search {
+            let (msg, level) = match n {
+                SearchNotice::Wrapped { bottom: true } => {
+                    (Msg::Label(Label::EditorSearchWrappedBottom), Level::Warning)
+                }
+                SearchNotice::Wrapped { bottom: false } => (Msg::Label(Label::EditorSearchWrappedTop), Level::Warning),
+                SearchNotice::NotFound(pattern) => (Msg::EditorSearchNotFound { pattern }, Level::Error),
+                SearchNotice::Invalid(error) => (Msg::EditorSearchInvalid { error }, Level::Error),
+                SearchNotice::NoPrevious => (Msg::Label(Label::EditorSearchNoPrevious), Level::Error),
+                SearchNotice::NoWord => (Msg::Label(Label::EditorSearchNoWord), Level::Error),
+            };
+            self.flash(Notice::new(msg, level));
         }
         if matches!(ev, EdEvent::Changed { .. }) {
             self.edited();
@@ -454,6 +484,10 @@ impl App {
 
     pub(super) fn handle_mouse(&mut self, m: MouseEvent) {
         if self.layout.too_small {
+            return;
+        }
+        // A click while the search prompt is open only closes it.
+        if matches!(m.kind, MouseEventKind::Down(_)) && self.close_search_prompt() {
             return;
         }
         let (x, y) = (m.column, m.row);

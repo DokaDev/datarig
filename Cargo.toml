@@ -52,6 +52,9 @@ pg_query = "6.2"
 prost = { version = "0.13", default-features = false, features = ["no-recursion-limit"] }
 postgres-protocol = "0.6"
 ratatui = "0.30"
+# The editor's search (`/`, `?`, `*`): Rust regular expressions, linear time, Unicode-aware.
+# Already in the tree on Windows (through keyring).
+regex = "1.13"
 # Unix: the effective user id (spill directory ownership); already in the tree via crossterm.
 rustix = { version = "1.1", default-features = false, features = ["std", "process"] }
 # SSH tunnels: pure Rust with the `ring` backend

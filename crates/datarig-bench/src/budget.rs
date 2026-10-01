@@ -92,7 +92,8 @@ pub fn paging(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
 
 pub fn editor(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
     let max = num(b, "editor", "p95_ms_max")?;
-    for what in ["typing_ms", "movement_ms", "scrolling_ms", "normal_edit_ms", "vim_ms", "theme_switch_ms"] {
+    let keys = ["typing_ms", "movement_ms", "scrolling_ms", "normal_edit_ms", "vim_ms", "theme_switch_ms"];
+    for what in keys.into_iter().chain(["search_miss_ms", "search_next_ms"]) {
         match f(result, &[what, "p95"]) {
             Some(m) => c.check(&format!("editor {what} p95"), m, max, " ms"),
             None => c.missing(&format!("editor {what} p95")),
@@ -101,6 +102,25 @@ pub fn editor(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
     match f(result, &["rss_kb", "after_edits"]) {
         Some(k) => c.check("editor RSS", k / MIB, num(b, "editor", "rss_mib_max")?, " MiB"),
         None => c.missing("editor RSS"),
+    }
+    // Search work, counted: the bytes one key searched, in passes over the text, and the lines
+    // one frame highlighted.
+    let passes = num(b, "editor", "search_passes_max")?;
+    for (what, key) in [("editor / miss", "miss_bytes_max"), ("editor n", "next_bytes_max")] {
+        match (f(result, &["search", key]), f(result, &["search", "text_bytes"])) {
+            // Nothing searched at all means the search did not run: not measured.
+            (Some(b), Some(text)) if text > 0.0 && b > 0.0 => {
+                c.check(&format!("{what} bytes searched per key"), b / text, passes, " passes")
+            }
+            _ => c.missing(&format!("{what} bytes searched per key")),
+        }
+    }
+    match f(result, &["search", "highlight_lines_max"]) {
+        // The matches of `n` are on screen: a frame that highlighted nothing did not draw them.
+        Some(l) if l > 0.0 => {
+            c.check("editor lines highlighted per frame", l, num(b, "editor", "highlight_lines_max")?, " lines")
+        }
+        _ => c.missing("editor lines highlighted per frame"),
     }
     Ok(())
 }

@@ -495,3 +495,14 @@ fn syntax_styles_are_the_theme_tokens() {
     assert_eq!(th.syntax(Tok::Keyword, true), th.syn_function);
     assert_eq!(th.syntax(Tok::Whitespace, false), Style::new().fg(th.fg));
 }
+
+/// A search match shows on any line of the editor: its own background (the cursor line and
+/// the statement tint only patch theirs), unlike the selection's and the cursor line's.
+#[test]
+fn search_matches_show_in_every_theme() {
+    for (name, th) in BUILTINS.iter().copied() {
+        let s = th.search_match;
+        assert!(s.bg.is_some_and(|bg| bg != th.bg) && s.fg.is_some(), "{name}: {s:?}");
+        assert!(s != th.selection && s.bg != th.cursor_line.bg && s.bg != th.current_stmt.bg, "{name}");
+    }
+}

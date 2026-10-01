@@ -1,7 +1,9 @@
 //! The editor with a large file: keystroke-to-frame latency (the app handles the key, then
 //! draws the frame at 160x45) for typing, cursor movement, scrolling and vim's other motions
-//! and edits, the process's memory, what an autosave of the file costs, and a theme switch
-//! (`:set theme=`) up to its frame.
+//! and edits, the process's memory, what an autosave of the file costs, a theme switch
+//! (`:set theme=`) up to its frame, and search: `/` with a pattern that is nowhere (each key
+//! searches the whole text) and `n`, with the bytes each key searched and the lines each frame
+//! highlighted counted.
 
 use crate::apps;
 use crate::grid::wide;
@@ -44,6 +46,36 @@ pub fn generate(bytes: usize) -> String {
         }
     }
     s
+}
+
+/// The most work of one keystroke and its frame: bytes searched, lines highlighted.
+#[derive(Default)]
+struct MostWork {
+    bytes: usize,
+    highlighted: usize,
+}
+
+/// Time `n` keystrokes from `each(i)`, each followed by a frame, and count the search work
+/// of each.
+fn search_keys(
+    app: &mut App,
+    term: &mut Terminal<TestBackend>,
+    n: usize,
+    mut each: impl FnMut(&mut App, usize),
+) -> (Vec<f64>, MostWork) {
+    let mut out = Vec::with_capacity(n);
+    let mut most = MostWork::default();
+    app.tab_mut().editor.take_search_work();
+    for i in 0..n {
+        let t = Instant::now();
+        each(app, i);
+        apps::draw(term, app);
+        out.push(ms(t.elapsed()));
+        let w = app.tab_mut().editor.take_search_work();
+        most.bytes = most.bytes.max(w.bytes);
+        most.highlighted = most.highlighted.max(w.highlighted);
+    }
+    (out, most)
 }
 
 /// Time `n` keystrokes from `each(i)`, each followed by a frame.
@@ -119,6 +151,29 @@ pub fn run(scratch: &Path, bytes: usize, n: usize) -> Result<Value, String> {
     });
     let rss_edits = rss_kb(pid).unwrap_or(0);
 
+    // Search: `/`, a pattern found nowhere typed key by key (each key searches the whole text
+    // for the cursor's preview), `Enter` (once more, and the notice); then `n` over a word on
+    // every few lines, its matches highlighted.
+    // A command the keys above left unfinished (`g` of `ge`) is dropped first.
+    apps::key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+    let nowhere = "zq_nowhere";
+    let (search_miss, miss) = search_keys(&mut app, &mut term, n, |a, i| match i % (nowhere.len() + 2) {
+        0 => apps::char(a, '/'),
+        k if k <= nowhere.len() => apps::char(a, nowhere.as_bytes()[k - 1] as char),
+        _ => apps::key(a, KeyCode::Enter, KeyModifiers::NONE),
+    });
+    if app.tab().editor.searching() {
+        apps::key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+    }
+    for c in "/orders".chars() {
+        apps::char(&mut app, c);
+    }
+    apps::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+    let (search_next, next) = search_keys(&mut app, &mut term, n, |a, _| apps::char(a, 'n'));
+    let rows = app.layout.editor_text.height;
+    // What a search of the whole text searches: each line with its line break.
+    let text_bytes = app.tab().editor.len_bytes() + 1;
+
     // A theme switch: every built-in theme in turn, each drawn at once.
     let names = datarig_tui::theme::NAMES;
     let themes = keystrokes(&mut app, &mut term, n.min(200), |a, i| {
@@ -151,6 +206,15 @@ pub fn run(scratch: &Path, bytes: usize, n: usize) -> Result<Value, String> {
         "normal_edit_ms": report("x/u edits", &edits),
         "vim_ms": report("vim", &vim),
         "theme_switch_ms": report("theme", &themes),
+        "search_miss_ms": report("/ miss", &search_miss),
+        "search_next_ms": report("n", &search_next),
+        "search": {
+            "miss_bytes_max": miss.bytes,
+            "next_bytes_max": next.bytes,
+            "highlight_lines_max": miss.highlighted.max(next.highlighted),
+            "editor_rows": rows,
+            "text_bytes": text_bytes,
+        },
         "autosave_ms": report("autosave", &saves),
         "rss_kb": { "before": rss_before, "open": rss_open, "after_typing": rss_typed, "after_edits": rss_edits },
         "console_files": written,
