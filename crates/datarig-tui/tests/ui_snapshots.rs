@@ -1686,8 +1686,8 @@ fn settings_screen_en_ko_sizes() {
             assert_screen!(format!("settings_theme_preview_{}_{w}x{hh}", lang_tag(lang)), lang, h.draw(w, hh));
             h.key(KeyCode::Esc);
             h.command("settings");
-            // The cursor shape, the cell detail, then the clipboard.
-            h.keys("jjjjj");
+            // The cursor shape, yanks to the clipboard, the cell detail, then the clipboard.
+            h.keys("jjjjjj");
             assert_screen!(format!("settings_clipboard_{}_{w}x{hh}", lang_tag(lang)), lang, h.draw(w, hh));
         }
     }

@@ -569,6 +569,7 @@ fn step_2_settings_are_read_checked_and_saved_only_when_set() {
             copy_header: CopyHeader::Off,
             osc52_max_bytes: OSC52_MAX_BYTES,
             cursor_shape: CursorShape::On,
+            editor_clipboard: EditorClipboard::On,
         }
     );
     assert_eq!(parse("osc52_max_bytes = 5000\n").unwrap().prefs.osc52_max_bytes, 5000);
@@ -712,6 +713,41 @@ fn cursor_shape_is_read_checked_and_saved() {
     assert_eq!(cfg.prefs.cursor_shape, CursorShape::Off);
     save(&path, settings("en"), None).unwrap();
     assert!(!std::fs::read_to_string(&path).unwrap().contains("cursor_shape"), "back at the default, the key goes");
+}
+
+/// `[editor] clipboard`: on unless the file says off; next to `cursor_shape` in the same
+/// table, checked, and written only when off.
+#[test]
+fn editor_clipboard_is_read_checked_and_saved() {
+    assert_eq!(parse("").unwrap().prefs.editor_clipboard, EditorClipboard::On);
+    let cfg = parse("[editor]\ncursor_shape = \"off\"\nclipboard = \"Off\"\n").unwrap();
+    assert_eq!((cfg.prefs.editor_clipboard, cfg.prefs.cursor_shape), (EditorClipboard::Off, CursorShape::Off));
+    assert_eq!(parse("editor = { clipboard = \"off\" }\n").unwrap().prefs.editor_clipboard, EditorClipboard::Off);
+    assert_eq!(
+        parse("[editor]\nclipboard = \"unnamedplus\"\n").unwrap_err(),
+        ConfigError::Value {
+            key: "editor.clipboard".into(),
+            value: "unnamedplus".into(),
+            profile: None,
+            allowed: Some("on, off")
+        }
+    );
+    let path = temp_file("editor_clipboard");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let original = "[editor]\ncursor_shape = \"off\"\n";
+    std::fs::write(&path, original).unwrap();
+    let shape = Prefs { cursor_shape: CursorShape::Off, ..Prefs::default() };
+    save(&path, Settings { prefs: shape, ..settings("en") }, None).unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), original, "the default is not written");
+    let prefs = Prefs { editor_clipboard: EditorClipboard::Off, ..shape };
+    save(&path, Settings { prefs, ..settings("en") }, None).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(text, "[editor]\ncursor_shape = \"off\"\nclipboard = \"off\"\n");
+    let (cfg, err) = load(Some(path.clone()));
+    assert!(err.is_none(), "{err:?}");
+    assert_eq!(cfg.prefs, prefs);
+    save(&path, Settings { prefs: shape, ..settings("en") }, None).unwrap();
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), original, "back at the default, the key goes");
 }
 
 /// The server-side statement cache: on unless the profile says `false`, and

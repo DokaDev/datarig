@@ -11,6 +11,11 @@
 //! otherwise the copy fails with a message that says why. The app never writes to the terminal itself:
 //! an OSC 52 sequence waits in the app until the binary writes it out
 //! ([`crate::app::App::take_terminal_output`]).
+//!
+//! Reading is only for the editor's `"+p` (and `"*p`, `Ctrl+R +`), when the user asks for it,
+//! and only from the system clipboard: OSC 52 reads are not used (most terminals refuse them,
+//! and a program that can read the clipboard at will is a risk), so with the `osc52` plan the
+//! terminal's own paste is the way.
 
 use datarig_core::config::ClipboardSetting;
 
@@ -51,6 +56,8 @@ pub fn in_ssh(env: impl Fn(&str) -> Option<String>) -> bool {
 pub trait SystemClipboard: Send {
     /// Put `text` on the clipboard; the OS's reason when it cannot (for the error log).
     fn set_text(&mut self, text: &str) -> Result<(), String>;
+    /// The clipboard's text; the OS's reason when there is none (empty, not text, no access).
+    fn get_text(&mut self) -> Result<String, String>;
 }
 
 /// Opens the system clipboard (the OS's reason when there is none).
@@ -67,6 +74,9 @@ struct Arboard(arboard::Clipboard);
 impl SystemClipboard for Arboard {
     fn set_text(&mut self, text: &str) -> Result<(), String> {
         self.0.set_text(text).map_err(|e| e.to_string())
+    }
+    fn get_text(&mut self) -> Result<String, String> {
+        self.0.get_text().map_err(|e| e.to_string())
     }
 }
 

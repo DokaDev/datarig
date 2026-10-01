@@ -233,17 +233,25 @@ impl SecretStore for GatedStore {
     }
 }
 
-/// A system clipboard that records what it was given (`broken`: it cannot be opened).
+/// A system clipboard that records what it was given (`broken`: it cannot be opened) and
+/// holds text to read (the last text given, or [`FakeClipboard::hold`]), counting the reads.
 #[derive(Clone, Default)]
 pub struct FakeClipboard {
     pub texts: Arc<Mutex<Vec<String>>>,
     pub broken: bool,
+    pub content: Arc<Mutex<Option<String>>>,
+    pub reads: Arc<Mutex<usize>>,
 }
 
 impl datarig_tui::clipboard::SystemClipboard for FakeClipboard {
     fn set_text(&mut self, text: &str) -> Result<(), String> {
         self.texts.lock().unwrap().push(text.to_string());
+        *self.content.lock().unwrap() = Some(text.to_string());
         Ok(())
+    }
+    fn get_text(&mut self) -> Result<String, String> {
+        *self.reads.lock().unwrap() += 1;
+        self.content.lock().unwrap().clone().ok_or_else(|| "the clipboard is empty".to_string())
     }
 }
 
@@ -267,6 +275,21 @@ impl FakeClipboard {
     /// The last text copied to it.
     pub fn last(&self) -> Option<String> {
         self.texts.lock().unwrap().last().cloned()
+    }
+
+    /// Every text copied to it, in order.
+    pub fn all(&self) -> Vec<String> {
+        self.texts.lock().unwrap().clone()
+    }
+
+    /// Put `text` on it, as another program would.
+    pub fn hold(&self, text: &str) {
+        *self.content.lock().unwrap() = Some(text.to_string());
+    }
+
+    /// How many times it was read.
+    pub fn read_count(&self) -> usize {
+        *self.reads.lock().unwrap()
     }
 }
 

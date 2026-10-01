@@ -6,6 +6,10 @@
 //! the grid's menu, `Space r y`/`Space r a` or `:copy <format> [selection|all]`. The text goes to the clipboard the `clipboard` setting picks
 //! ([`crate::clipboard`]) and the status bar says how.
 //!
+//! The editor's registers reach the clipboard here too ([`App::editor_yanked`]): yanks and
+//! deletes that name no register when `[editor] clipboard` is on, and `"+` / `"*` always; `"+p`
+//! reads it ([`App::editor_clipboard_text`]), only then.
+//!
 //! Only rows already fetched are copied; when the server has more, the notice says so. More
 //! than [`LARGE_COPY`] rows ask first. The rows are written a chunk at a time
 //! ([`export::Writer`]), read from the result's spill file when they are not in memory, so a
@@ -13,12 +17,21 @@
 
 use super::*;
 use crate::clipboard::{self, Method, Plan};
+use crate::widgets::editor::Yank;
 use crate::widgets::grid::Shape;
-use datarig_core::config::{ClipboardSetting, CopyHeader};
+use datarig_core::config::{ClipboardSetting, CopyHeader, EditorClipboard};
 use datarig_core::driver::keys::{InsertPlan, NotInsertable, NotUpdatable, insert_into, insert_source, update_source};
 use datarig_core::export::{self, Kind, Target};
 use datarig_core::fault::{ErrorLog, Fault};
 use std::ops::Range;
+
+/// The reasons a register write did not reach the clipboard that were said already: each is
+/// said once a session (else every `x` would say it again).
+#[derive(Debug, Default)]
+pub(super) struct YankNotices {
+    too_long: bool,
+    failed: bool,
+}
 
 /// Copies of more rows than this ask first.
 pub const LARGE_COPY: usize = 10_000;
@@ -643,6 +656,65 @@ impl App {
         }
         self.terminal_out.push(clipboard::osc52(text));
         Ok(Method::Osc52)
+    }
+
+    /// A register write of the editor: to the system clipboard the `clipboard` setting picks,
+    /// when `[editor] clipboard` is on or the write names `"+` / `"*`. One the clipboard cannot
+    /// take stays in the register, and the notice says why (each reason once a session); the
+    /// edit is done either way.
+    pub(super) fn editor_yanked(&mut self, y: Yank) {
+        if y.register == '"' && self.prefs.editor_clipboard == EditorClipboard::Off {
+            return;
+        }
+        let msg = match self.deliver(&y.reg.clipboard_text()) {
+            Ok(_) => return,
+            Err(Msg::CopyTooLongForOsc52 { size, limit }) => {
+                if std::mem::replace(&mut self.yank_notices.too_long, true) {
+                    return;
+                }
+                Msg::EditorClipboardTooLong { size, limit }
+            }
+            Err(Msg::CopyFailed { error }) => {
+                if std::mem::replace(&mut self.yank_notices.failed, true) {
+                    return;
+                }
+                Msg::EditorClipboardFailed { error }
+            }
+            Err(other) => other,
+        };
+        self.flash(Notice::new(msg, Level::Warning));
+    }
+
+    /// The system clipboard's text for `"+p` / `"*p` / `Ctrl+R +`, read now; `None` with a
+    /// notice when it cannot be: with the `osc52` plan (over SSH) it is never read (the
+    /// terminal's paste is the way), and a failed read says why.
+    pub(super) fn editor_clipboard_text(&mut self) -> Option<String> {
+        let ssh = clipboard::in_ssh(|k| (self.env)(k));
+        if clipboard::plan(self.prefs.clipboard, ssh) == Plan::Osc52 {
+            self.flash(Notice::new(Label::EditorClipboardNoRead, Level::Warning));
+            return None;
+        }
+        match self.system_paste() {
+            Ok(text) => Some(text),
+            Err(e) => {
+                ErrorLog::new(self.paths.errors_log()).record("paste.system", &Fault::other(e.clone()));
+                self.flash(Notice::new(Msg::EditorClipboardReadFailed { error: e }, Level::Warning));
+                None
+            }
+        }
+    }
+
+    /// The system clipboard's text, opening it on first use (a failure drops it, so the next
+    /// use opens it again).
+    fn system_paste(&mut self) -> Result<String, String> {
+        if self.clipboard.is_none() {
+            self.clipboard = Some((self.clipboard_opener)()?);
+        }
+        let result = self.clipboard.as_mut().map_or_else(|| Err("no system clipboard".to_string()), |c| c.get_text());
+        if result.is_err() {
+            self.clipboard = None;
+        }
+        result
     }
 
     /// Put `text` on the system clipboard, opening it on first use (a failure drops it, so the

@@ -1,8 +1,11 @@
 //! Insert mode: typing, Enter with the line's indent (autoindent), Tab, Backspace, Delete,
-//! `Ctrl+W` (the word before the cursor) and `Ctrl+U` (the line before the cursor), arrows.
+//! `Ctrl+W` (the word before the cursor), `Ctrl+U` (the line before the cursor), `Ctrl+R`
+//! and a register's name (its text, as it is; `Ctrl+R Ctrl+R`, `Ctrl+O`, `Ctrl+P` the same),
+//! arrows. What a session types becomes the `".` register when it ends.
 
 use super::buffer::{class, graphemes, indent_of};
 use super::motion::{Motion, Pos};
+use super::registers::{self, RegKind};
 use super::{EdEvent, Editor, Mode};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use unicode_segmentation::UnicodeSegmentation;
@@ -21,16 +24,20 @@ impl Editor {
         self.clamp();
         self.ins_start = (self.row, self.col);
         self.ai_row = None;
+        self.ins_text.clear();
         EdEvent::Moved
     }
 
     pub(super) fn leave_insert(&mut self) {
         self.ins_repeat = None;
+        self.ins_reg = false;
         self.drop_autoindent();
         if self.insert_snap {
             self.drop_empty_step();
         }
         self.insert_snap = false;
+        let typed = std::mem::take(&mut self.ins_text);
+        self.regs.set_inserted(typed);
         self.mode = Mode::Normal;
         self.col = self.col.saturating_sub(1);
         self.clamp();
@@ -46,6 +53,8 @@ impl Editor {
         self.ins_start = (self.row, self.col);
         self.ai_row = None;
         self.ins_repeat = None;
+        self.ins_reg = false;
+        self.ins_text.clear();
         self.rec.moved_in_insert();
     }
 
@@ -69,6 +78,17 @@ impl Editor {
 
     pub(super) fn key_insert(&mut self, key: KeyEvent) -> EdEvent {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        if std::mem::take(&mut self.ins_reg) {
+            return match key.code {
+                // `Ctrl+R Ctrl+R x` and the like put the text as it is, as `Ctrl+R x` does.
+                KeyCode::Char('r' | 'o' | 'p') if ctrl => {
+                    self.ins_reg = true;
+                    EdEvent::None
+                }
+                KeyCode::Char(c) if !ctrl && !key.modifiers.contains(KeyModifiers::ALT) => self.insert_register(c),
+                _ => EdEvent::None,
+            };
+        }
         match key.code {
             KeyCode::Esc => {
                 self.leave_insert();
@@ -88,6 +108,7 @@ impl Editor {
                     self.splice(at, at + blanks, "");
                 }
                 self.insert_at_cursor(&format!("\n{indent}"));
+                self.ins_text.push('\n');
                 self.ai_row = (!indent.is_empty()).then_some(self.row);
                 return EdEvent::Changed { typed: None };
             }
@@ -102,28 +123,36 @@ impl Editor {
         }
         self.ai_row = None;
         match key.code {
+            KeyCode::Char('r') if ctrl => {
+                self.ins_reg = true;
+                self.rec.register_wait();
+                EdEvent::None
+            }
             KeyCode::Char('w') if ctrl => self.delete_before(true),
             KeyCode::Char('u') if ctrl => self.delete_before(false),
             KeyCode::Char(c) if !ctrl && !key.modifiers.contains(KeyModifiers::ALT) => {
                 let mut buf = [0u8; 4];
                 self.insert_at_cursor(c.encode_utf8(&mut buf));
+                self.ins_text.push(c);
                 EdEvent::Changed { typed: Some(c) }
             }
             KeyCode::Tab => {
                 self.insert_at_cursor("    ");
+                self.ins_text.push_str("    ");
                 EdEvent::Changed { typed: None }
             }
             KeyCode::Backspace => {
-                if self.col > 0 {
+                let removed = if self.col > 0 {
                     let a = self.offset_of(self.row, self.col - 1);
                     let b = self.offset();
-                    self.delete_range(a, b);
+                    self.delete_range(a, b)
                 } else if self.row > 0 {
                     let b = self.offset();
-                    self.delete_range(b - 1, b);
+                    self.delete_range(b - 1, b)
                 } else {
                     return EdEvent::None;
-                }
+                };
+                self.untyped(&removed);
                 self.deleted_back();
                 EdEvent::Changed { typed: None }
             }
@@ -141,6 +170,35 @@ impl Editor {
                 EdEvent::Changed { typed: None }
             }
             _ => EdEvent::None,
+        }
+    }
+
+    /// `Ctrl+R` and register `c`: its text goes in at the cursor as it is (whole lines with a
+    /// line break after the last one, a block's pieces on lines of their own). A name that is
+    /// not a register, or an empty register, puts nothing.
+    fn insert_register(&mut self, c: char) -> EdEvent {
+        if !registers::is_name(c) {
+            return EdEvent::None;
+        }
+        let Some(reg) = self.put_source(c) else { return EdEvent::None };
+        let text = match reg.kind {
+            RegKind::Linewise => format!("{}\n", reg.text),
+            RegKind::Charwise | RegKind::Blockwise => reg.text.clone(),
+        };
+        if text.is_empty() {
+            return EdEvent::None;
+        }
+        self.ai_row = None;
+        self.insert_at_cursor(&text);
+        self.ins_text.push_str(&text);
+        self.rec.register_text(&text);
+        EdEvent::Changed { typed: None }
+    }
+
+    /// Text this session typed was deleted again: `".` loses it too.
+    fn untyped(&mut self, removed: &str) {
+        if let Some(rest) = self.ins_text.strip_suffix(removed) {
+            self.ins_text.truncate(rest.len());
         }
     }
 
@@ -168,7 +226,8 @@ impl Editor {
                 return EdEvent::None;
             }
             let b = self.offset();
-            self.delete_range(b - 1, b);
+            let removed = self.delete_range(b - 1, b);
+            self.untyped(&removed);
             self.deleted_back();
             return EdEvent::Changed { typed: None };
         }
@@ -196,7 +255,8 @@ impl Editor {
         }
         let a = self.offset_of(r, to);
         let b = self.offset();
-        self.delete_range(a, b);
+        let removed = self.delete_range(a, b);
+        self.untyped(&removed);
         self.deleted_back();
         EdEvent::Changed { typed: None }
     }

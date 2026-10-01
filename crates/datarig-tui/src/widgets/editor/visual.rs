@@ -1,13 +1,15 @@
 //! Visual mode: by character (`v`) or by whole lines (`V`), the selection as text, text
-//! objects that set or grow it, and the operators on it.
+//! objects that set or grow it, the operators on it, and `p` / `P` (a register in its place).
 
-use super::buffer::graphemes;
+use super::buffer::{UNDO_BYTES, graphemes};
 use super::edit::Case;
 use super::motion::RangeKind;
+use super::registers::RegKind;
 use super::textobj::Object;
 use super::vim::{Op, Target, Token};
-use super::{EdEvent, Editor, Mode, vim};
+use super::{EdEvent, Editor, Mode};
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
+use unicode_segmentation::UnicodeSegmentation;
 
 impl Editor {
     /// Start Visual mode (by line with `lines`) with the other end at `anchor`.
@@ -91,7 +93,7 @@ impl Editor {
         if token == Token::More {
             return EdEvent::None;
         }
-        self.cmd = vim::Pending::default();
+        self.end_command();
         match token {
             Token::Cancel if key.code == KeyCode::Esc => {
                 self.exit_visual();
@@ -159,6 +161,7 @@ impl Editor {
                 self.apply(Op::Change, t, (self.row, self.col))
             }
             'u' | 'U' | '~' => self.visual_case(c),
+            'p' | 'P' => self.visual_put(c == 'P', n),
             'J' => self.visual_join(true),
             '>' | '<' => {
                 self.record_selection();
@@ -168,6 +171,78 @@ impl Editor {
             }
             _ => EdEvent::None,
         }
+    }
+
+    /// `p` / `P`: the selection is replaced by the register the command names (else the
+    /// unnamed one), `n` times. With `p` the text replaced goes to the registers as a delete
+    /// without a register does (Neovim); with `P` (`keep`) nowhere. An empty register still
+    /// takes the selection away (and `.` repeats only that, as Neovim does). By line, the lines' text is replaced; a register of lines
+    /// into a selection by character goes on lines of its own between the two ends.
+    fn visual_put(&mut self, keep: bool, n: usize) -> EdEvent {
+        let name = self.reg.unwrap_or('"');
+        if matches!(name, '+' | '*') {
+            self.rec.put_clipboard();
+        }
+        // Neovim's `.` repeats it as a delete of as much text: nothing is put.
+        let src = if self.rec.replaying() { None } else { self.put_source(name) };
+        if src.as_ref().is_some_and(|r| self.put_size(r, n) > UNDO_BYTES) {
+            return EdEvent::None;
+        }
+        self.record_selection();
+        let t = self.visual_target(false);
+        self.mode = Mode::Normal;
+        self.snapshot();
+        self.reg = None;
+        match t {
+            Target::Lines { first, last } => {
+                let text = self.lines[first..=last].join("\n");
+                match &src {
+                    Some(r) => {
+                        let put = match r.kind {
+                            RegKind::Charwise => r.text.repeat(n),
+                            RegKind::Linewise | RegKind::Blockwise => vec![r.text.as_str(); n].join("\n"),
+                        };
+                        let (a, b) = (self.line_start(first), self.line_start(last) + self.lines[last].len());
+                        self.splice(a, b, &put);
+                    }
+                    None => {
+                        let (a, b) = self.lines_span(first, last);
+                        self.splice(a, b, "");
+                    }
+                }
+                if !keep {
+                    self.delete_to_register(text, RegKind::Linewise);
+                }
+                let r = first.min(self.lines.len() - 1);
+                self.set_pos(r, self.first_nonblank(r));
+            }
+            Target::Chars { a, b } => {
+                let text = self.delete_range(a, b);
+                if !keep {
+                    self.delete_to_register(text, RegKind::Charwise);
+                }
+                self.set_cursor_offset(a);
+                match src {
+                    Some(r) if r.kind == RegKind::Blockwise => self.put_block(&r.text, false, n),
+                    Some(r) if r.kind == RegKind::Linewise => {
+                        let lines = vec![r.text.as_str(); n].join("\n");
+                        self.splice(a, a, &format!("\n{lines}\n"));
+                        let row = self.pos_bytes(a).0 + 1;
+                        self.set_pos(row, self.first_nonblank(row));
+                    }
+                    Some(r) if !r.text.is_empty() => {
+                        let put = r.text.repeat(n);
+                        self.splice(a, a, &put);
+                        let last = put.graphemes(true).next_back().map_or(0, str::len);
+                        self.set_cursor_offset(a + put.len() - last);
+                        self.want_x = None;
+                    }
+                    _ => {}
+                }
+                self.clamp();
+            }
+        }
+        EdEvent::Changed { typed: None }
     }
 
     /// `.` repeats a Visual mode operator on as much text as it took.

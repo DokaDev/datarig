@@ -104,7 +104,9 @@ fn space_comma_and_the_command_open_it_and_changes_are_live_and_saved() {
     h.command("settings");
     assert_eq!(h.overlay_kind(), Some(OverlayKind::Settings));
     let clipboard = ko(datarig_core::i18n::Label::SettingClipboard);
-    assert!(row(&mut h, clipboard).contains("‹ system"), "{}", row(&mut h, clipboard));
+    // (The editor's "yanks to the clipboard" row has the word too: the row with the value.)
+    let screen = h.screen(160, 45);
+    assert!(screen.lines().any(|l| l.contains(clipboard) && l.contains("‹ system")), "{screen}");
     let _ = std::fs::remove_dir_all(path.parent().unwrap());
 }
 

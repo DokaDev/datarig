@@ -354,6 +354,7 @@ const VIM_INSERT: &[&str] = &[
     "end",
     "ctrl+w",
     "ctrl+u",
+    "ctrl+r",
     "ctrl+p",
 ];
 

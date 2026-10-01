@@ -1,6 +1,7 @@
 //! Repeating: `.` replays the last change, recorded as the keys that made it (its count
 //! apart, which `N.` replaces) and the Insert session it started; a count before `i a I A o O`
-//! types the session's text that many times.
+//! types the session's text that many times. A change that named a numbered register takes
+//! the next one when repeated (`"1p` then `.` puts `"2`, as Vim does).
 
 use super::motion::Motion;
 use super::{EdEvent, Editor, Mode};
@@ -10,7 +11,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Input {
     Key(KeyEvent),
-    /// A paste from the terminal in Insert mode.
+    /// A paste from the terminal in Insert mode, or the text `Ctrl+R` put there.
     Paste(String),
     /// The selection a Visual mode operator took, as much text from the cursor again: `lines`
     /// lines (whole with `by_line`), and on one line `cols` graphemes, on more the last line
@@ -23,11 +24,27 @@ pub(super) enum Input {
     },
 }
 
-/// The last change: its inputs and its count (0: none).
+/// The last change: its inputs and its count (0: none); `clipboard`: it puts the system
+/// clipboard's text (`"+p`), which the app reads again for `.`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(super) struct Change {
     inputs: Vec<Input>,
     count: usize,
+    clipboard: bool,
+}
+
+impl Change {
+    /// A numbered register the change names, `"1`–`"8`, becomes the next one.
+    fn next_numbered(&mut self) {
+        let key = |c: char| Input::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+        let at = usize::from(matches!(self.inputs.first(), Some(Input::Select { .. }))).min(self.inputs.len());
+        if let [q, Input::Key(k), ..] = &mut self.inputs[at..]
+            && *q == key('"')
+            && let KeyCode::Char(d @ '1'..='8') = k.code
+        {
+            k.code = KeyCode::Char((d as u8 + 1) as char);
+        }
+    }
 }
 
 /// What is being recorded for `.`.
@@ -42,6 +59,10 @@ pub(super) struct Recorder {
     skip: bool,
     /// A replay is running: nothing is recorded.
     replaying: bool,
+    /// The command puts the system clipboard's text.
+    clipboard: bool,
+    /// Where the inputs of the `Ctrl+R` being typed start.
+    reg_from: Option<usize>,
     last: Option<Change>,
 }
 
@@ -62,6 +83,41 @@ impl Recorder {
         if self.inserting && !self.replaying {
             self.inputs.push(Input::Paste(text.to_string()));
         }
+    }
+
+    /// `Ctrl+R` and the register's name put `text` in the Insert session: `.` types the text
+    /// again, not what the register holds then (Vim).
+    pub(super) fn register_text(&mut self, text: &str) {
+        if let Some(n) = self.reg_from.take()
+            && self.inserting
+            && !self.replaying
+        {
+            self.inputs.truncate(n);
+            self.inputs.push(Input::Paste(text.to_string()));
+        }
+    }
+
+    /// `Ctrl+R` was typed (its key is the last input): the keys up to the register's name
+    /// give way to the text it puts.
+    pub(super) fn register_wait(&mut self) {
+        self.reg_from = (self.inserting && !self.replaying).then(|| self.inputs.len().saturating_sub(1));
+    }
+
+    /// A replay of `.` is running.
+    pub(super) fn replaying(&self) -> bool {
+        self.replaying
+    }
+
+    /// The command puts the system clipboard's text.
+    pub(super) fn put_clipboard(&mut self) {
+        if !self.replaying {
+            self.clipboard = true;
+        }
+    }
+
+    /// `.` would put the system clipboard's text.
+    pub(super) fn puts_clipboard(&self) -> bool {
+        self.last.as_ref().is_some_and(|c| c.clipboard)
     }
 
     /// The cursor moved in Insert mode without typing: what is typed from here on is what
@@ -112,6 +168,7 @@ impl Editor {
         }
         if self.cmd.is_empty() {
             self.rec.inputs.clear();
+            self.rec.clipboard = false;
             self.rec.skip = false;
             // An Insert session left without a key of its own (a mouse drag) is over.
             self.rec.inserting = false;
@@ -136,7 +193,7 @@ impl Editor {
 
     fn save_change(&mut self) {
         let inputs = std::mem::take(&mut self.rec.inputs);
-        self.rec.last = Some(Change { inputs, count: self.rec.count });
+        self.rec.last = Some(Change { inputs, count: self.rec.count, clipboard: self.rec.clipboard });
     }
 
     /// A key in Insert mode for the count of the command that started it: kept, and at `Esc`
@@ -145,9 +202,12 @@ impl Editor {
         let Some(rep) = self.ins_repeat.as_mut() else { return };
         if Motion::of_key(key.code).is_some() {
             self.ins_repeat = None;
-        } else if key.code != KeyCode::Esc {
+        } else if key.code != KeyCode::Esc || self.ins_reg {
             rep.inputs.push(Input::Key(key));
         } else if let Some(rep) = self.ins_repeat.take() {
+            // Typed again, not recorded again (for `.` or `".`).
+            let (replaying, typed) = (self.rec.replaying, self.ins_text.clone());
+            self.rec.replaying = true;
             for _ in 1..rep.count {
                 if rep.lines {
                     // On a new line below, the one just typed losing its indent if that is all
@@ -169,6 +229,8 @@ impl Editor {
                     }
                 }
             }
+            self.rec.replaying = replaying;
+            self.ins_text = typed;
         }
     }
 
@@ -187,6 +249,7 @@ impl Editor {
         if let Some(n) = count {
             change.count = n;
         }
+        change.next_numbered();
         let version = self.version;
         self.rec.replaying = true;
         let key = |c: char| KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE);
