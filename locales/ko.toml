@@ -65,6 +65,7 @@
 "status.mode.insert" = "입력"
 "status.mode.visual" = "선택"
 "status.mode.visual_line" = "줄 선택"
+"status.mode.visual_block" = "블록 선택"
 "status.mode.command" = "명령"
 "status.lang" = "KO"
 

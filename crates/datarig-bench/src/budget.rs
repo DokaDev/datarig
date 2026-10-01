@@ -125,6 +125,25 @@ pub fn editor(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
     Ok(())
 }
 
+/// Visual block operators over the whole text: the slowest key with its frame, and the bytes
+/// one key walked, in passes over the text.
+pub fn editor_block(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
+    match f(result, &["keys_ms", "max"]) {
+        Some(m) => {
+            c.check("editor block over the whole text, slowest key", m, num(b, "editor", "block_ms_max")?, " ms")
+        }
+        None => c.missing("editor block over the whole text, slowest key"),
+    }
+    match (f(result, &["bytes_max"]), f(result, &["text_bytes"])) {
+        // Nothing walked means no block operator ran: not measured.
+        (Some(w), Some(text)) if text > 0.0 && w > 0.0 => {
+            c.check("editor block bytes walked per key", w / text, num(b, "editor", "block_passes_max")?, " passes")
+        }
+        _ => c.missing("editor block bytes walked per key"),
+    }
+    Ok(())
+}
+
 pub fn idle(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
     if result["connected"] != true {
         c.missing("idle: the profile connected");

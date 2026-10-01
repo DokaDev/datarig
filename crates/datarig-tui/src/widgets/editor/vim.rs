@@ -8,7 +8,7 @@ use super::motion::{Motion, Range, RangeKind};
 use super::registers::{self, RegKind, RegProblem, Register, Registers};
 use super::repeat::InsertRepeat;
 use super::textobj::Object;
-use super::{EdEvent, Editor, Mode};
+use super::{EdEvent, Editor, Mode, Sel};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -275,6 +275,7 @@ impl Editor {
             (Token::Key(c) | Token::G(c), Some(op)) if c == op.last_key() => self.apply_lines(op, n),
             (_, Some(_)) => EdEvent::None,
             (Token::Ctrl('r'), None) => self.undo_redo(false, n),
+            (Token::Ctrl('v'), None) => self.enter_visual(Sel::Block, (self.row, self.col)),
             (Token::Ctrl(c @ ('d' | 'u')), None) => self.scroll_half(c == 'd', n, explicit),
             (Token::Ctrl(c @ ('f' | 'b')), None) => self.scroll_page(c == 'f', n),
             (Token::Z(c), None) => self.scroll_cursor(c, n, explicit),
@@ -311,8 +312,8 @@ impl Editor {
             'o' | 'O' => self.open_line(c == 'o'),
             'p' | 'P' => self.put(c == 'p', n),
             'u' => self.undo_redo(true, n),
-            'v' => self.enter_visual(false, (self.row, self.col)),
-            'V' => self.enter_visual(true, (self.row, self.col)),
+            'v' => self.enter_visual(Sel::Chars, (self.row, self.col)),
+            'V' => self.enter_visual(Sel::Lines, (self.row, self.col)),
             'J' => self.join_lines(self.row, n, true),
             '~' => self.tilde(n),
             '.' => self.dot(explicit.then_some(n)),
@@ -592,35 +593,46 @@ impl Editor {
     /// cursor (`after`) or the cursor's, on its line and the ones below (added when the text
     /// ends first); lines too short get blanks up to that column, and each piece is filled
     /// with blanks to the block's width when text follows it. The cursor goes to the block's
-    /// first character (Vim).
+    /// first character (Vim). One splice over the lines it changes.
     pub(super) fn put_block(&mut self, text: &str, after: bool, n: usize) {
         let pieces: Vec<&str> = text.split('\n').collect();
         let width = pieces.iter().map(|p| graphemes_width(p)).max().unwrap_or(0);
         let (row, col) = (self.row, self.col);
         let col = if after && self.gcount(row) > 0 { col + 1 } else { col };
         let x = self.display_x(row, col);
+        let last = (row + pieces.len() - 1).min(self.lines.len() - 1);
+        let mut out = String::new();
         for (i, piece) in pieces.iter().enumerate() {
-            let r = row + i;
-            if r == self.lines.len() {
-                let end = self.bytes;
-                self.splice(end, end, "\n");
-            }
+            let line = self.lines.get(row + i).map_or("", String::as_str);
             // The column on this line: past its end, blanks lead up to it; inside a wide
             // character, the block goes before it after blanks up to the column (Vim).
-            let c = self.col_for_x(r, x);
-            let pad = x.saturating_sub(self.display_x(r, c));
-            let tail = c < self.gcount(r);
+            let (mut at, mut at_x) = (line.len(), 0);
+            for (b, g) in line.grapheme_indices(true) {
+                if at_x + gw(g) > x {
+                    at = b;
+                    break;
+                }
+                at_x += gw(g);
+            }
+            let tail = at < line.len();
             let fill = " ".repeat(width - graphemes_width(piece));
-            let mut s = " ".repeat(pad);
+            if i > 0 {
+                out.push('\n');
+            }
+            out.push_str(&line[..at]);
+            out.push_str(&" ".repeat(x.saturating_sub(at_x)));
             for k in 0..n {
-                s.push_str(piece);
+                out.push_str(piece);
                 if tail || k + 1 < n {
-                    s.push_str(&fill);
+                    out.push_str(&fill);
                 }
             }
-            let off = self.offset_of(r, c);
-            self.splice(off, off, &s);
+            out.push_str(&line[at..]);
         }
+        self.block_work += out.len();
+        let (a, _) = self.line_bounds(row);
+        let (_, b) = self.line_bounds(last);
+        self.splice(a, b, &out);
         self.set_pos(row, col);
     }
 

@@ -44,7 +44,8 @@ pub fn render() -> String {
          whole lines (`dd cc yy guu gUU g~~ >> <<`), counts before and after (`3dd`, `d2w`, `2d3w`); the \
          text objects `iw aw iW aW`, `i( a(` (`ib ab`), `i[ a[`, `i{ a{` (`iB aB`), `i< a<`, `i\" a\" \
          i' a'`, ``i` a` `` and `ip ap`; `x X s S D C Y p P r J gJ ~ u Ctrl+R`; `.` (the last change \
-         again, what was typed in Insert mode included; `3.` with a new count); `i a I A o O` (a count \
+         again, what was typed in Insert mode included; `3.` with a new count, except for a Visual mode \
+         operator, which keeps its own as in Vim); `i a I A o O` (a count \
          types the text that many times); scrolling with `Ctrl+D Ctrl+U Ctrl+F Ctrl+B zz zt zb`; search \
          with `/` and `?` (a prompt on the editor's last line: the cursor shows the match while the \
          pattern is typed, `Enter` searches, `Esc` or any key of the app goes back, `Ctrl+W` deletes a \
@@ -59,9 +60,18 @@ pub fn render() -> String {
          backslash; a match lies within one line, and search offsets (`/foo/e`) are not supported; Visual \
          mode by character (`v`) and by line (`V`) with the motions and text objects, `y d x c`, `Y D X \
          C S` (whole lines), `r J gJ u U ~ > <`, `o` (the other end) and `p P` (a register in place of the \
-         selection; `P` keeps the replaced text out of the registers); in Insert mode `Ctrl+W` (the \
-         word before the cursor), `Ctrl+U` (the line before the cursor), `Ctrl+R {register}` (its text) \
-         and `Enter` keeping the indent. One command is one undo step. Registers as in Vim: `\"x` before a \
+         selection; `P` keeps the replaced text out of the registers); Visual mode by block (`Ctrl+V`; \
+         `v`, `V` and `Ctrl+V` switch between the three, the same key again leaves): screen columns, a \
+         wide character or a tab partly inside handled as Vim does, `$` to the end of every line, `o` \
+         and `O` (the other corners), `y Y d x X D` (`D` to the ends of the lines), `c s C`, `I` and `A` \
+         (what Insert mode types goes on every line of the block when it ends; `A` fills short lines \
+         with blanks first, `$A` appends at each line's end; a count types it that many times), `r` \
+         (`r Enter` breaks the lines), `~ u U gu gU g~`, `> <` with a count, `J gJ`, `S R` (whole \
+         lines) and `p P` (a block register as a block, lines below or above, text of one line on \
+         every line of the block); `.` repeats a block operator on a block of the same size from the \
+         cursor (after `p` only the delete); a paste from the terminal replaces the block; in Insert \
+         mode `Ctrl+W` (the word before the cursor), `Ctrl+U` (the line before the cursor), `Ctrl+R \
+         {register}` (its text) and `Enter` keeping the indent. One command is one undo step. Registers as in Vim: `\"x` before a \
          command in Normal and Visual mode (`\"ayy`, `2\"ap`), the unnamed one, `\"a`-`\"z` (`\"A`-`\"Z` \
          append), `\"0` (the last yank), `\"1`-`\"9` (the last deletes of lines; `.` after `\"1p` puts \
          `\"2`), `\"-` (small deletes), `\"_` (nothing kept), `\".` (the text last typed in Insert mode), `\"/` \

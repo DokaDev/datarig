@@ -82,6 +82,15 @@ rss_mib_max = 160
 # rows than the 45 of the terminal). Their times are held to `p95_ms_max` above.
 search_passes_max = 1.0
 highlight_lines_max = 45
+# Visual block over the whole file (`gg Ctrl+V G $` then `y`, `d`, `u`, and `I` on every line;
+# the `editor_block` scenario, in a process of its own so the copies of the whole text it leaves
+# in registers and undo steps do not count in the other scenarios' memory): the most bytes one
+# key's block operator walked, in passes over the text (`d` after `$`: the line widths, the
+# yank, the new lines, the splice; a pass per line of the block would be quadratic), and, as for
+# the keystrokes above, a time with a wide margin: the slowest of those keys with its frame
+# (a developer machine: about 130 ms, for `d`).
+block_ms_max = 500.0
+block_passes_max = 4.0
 
 [idle]
 secs = 20

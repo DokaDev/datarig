@@ -6,8 +6,8 @@
 //!                               [--delay-ms MS] [--max-pages N] [--idle-secs S]
 //! ```
 //!
-//! Scenarios: `rtt`, `rtt_ssh`, `paging`, `editor`, `grid`, `idle`, `startup`, or `all`. The
-//! PostgreSQL ones (`rtt`, `rtt_ssh`, `paging`, `idle`) need `DATARIG_TEST_PG_URL` and the test
+//! Scenarios: `rtt`, `rtt_ssh`, `paging`, `editor`, `editor_block`, `grid`, `idle`, `startup`, or
+//! `all`. The PostgreSQL ones (`rtt`, `rtt_ssh`, `paging`, `idle`) need `DATARIG_TEST_PG_URL` and the test
 //! database of `dev/init`; `rtt_ssh` also the SSH bastion of the tests (see `ssh.rs`).
 //! `idle` and `startup` run the release binary in `tmux -L perf`.
 //!
@@ -72,10 +72,14 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         }
     }
     if o.scenarios.iter().any(|s| s == "all") {
-        o.scenarios = ["rtt", "rtt_ssh", "editor", "grid", "startup", "idle", "paging"].map(String::from).to_vec();
+        o.scenarios = ["rtt", "rtt_ssh", "editor", "grid", "startup", "idle", "paging", "editor_block"]
+            .map(String::from)
+            .to_vec();
     }
     if o.scenarios.is_empty() {
-        return Err("name a scenario: rtt, rtt_ssh, paging, editor, grid, idle, startup, all or budget".into());
+        return Err(
+            "name a scenario: rtt, rtt_ssh, paging, editor, editor_block, grid, idle, startup, all or budget".into()
+        );
     }
     Ok(o)
 }
@@ -93,6 +97,7 @@ async fn scenario(name: &str, o: &Opts) -> Result<Value, String> {
         "rtt_ssh" => ssh::run(&pg_url()?, &o.scratch, o.delay, o.runs.unwrap_or(20)).await,
         "paging" => paging::run(&pg_url()?, &o.scratch, "SELECT * FROM analytics.events", o.max_pages, 250).await,
         "editor" => editor::run(&o.scratch, 5 * 1024 * 1024, o.runs.unwrap_or(300)),
+        "editor_block" => editor::block_in_own_process(&o.scratch, 5 * 1024 * 1024),
         "grid" => grid::run(2_000, 24, o.runs.unwrap_or(400)),
         "idle" => idle::idle(&o.scratch, &o.bin, &pg_url()?, o.idle_secs),
         "startup" => idle::startup(&o.scratch, &o.bin, o.runs.unwrap_or(20)),
@@ -140,6 +145,8 @@ async fn budget(o: &Opts) -> Result<Vec<String>, String> {
     budget::rtt_section(&mut c, &b, "rtt_ssh", &run("rtt_ssh", r))?;
     let r = editor::run(&o.scratch, 5 * 1024 * 1024, 100)?;
     budget::editor(&mut c, &b, &run("editor", r))?;
+    let r = editor::block_in_own_process(&o.scratch, 5 * 1024 * 1024)?;
+    budget::editor_block(&mut c, &b, &run("editor_block", r))?;
     let r = paging::run(&url, &o.scratch, "SELECT * FROM analytics.events", int("paging", "max_pages")?, 250).await?;
     budget::paging(&mut c, &b, &run("paging", r))?;
     let r = idle::idle(&o.scratch, &o.bin, &url, int("idle", "secs")? as u64)?;

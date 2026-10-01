@@ -67,6 +67,7 @@
 "status.mode.insert" = "INSERT"
 "status.mode.visual" = "VISUAL"
 "status.mode.visual_line" = "V-LINE"
+"status.mode.visual_block" = "V-BLOCK"
 "status.mode.command" = "COMMAND"
 "status.lang" = "EN"
 
