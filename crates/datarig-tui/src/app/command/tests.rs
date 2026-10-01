@@ -74,7 +74,7 @@ fn set_accepts_known_settings_and_values_only() {
     );
     assert_eq!(
         setting_keys(),
-        "language|icons|secrets.default_source|commands.position|detail_view|clipboard|copy_header|editor.cursor_shape|theme"
+        "language|icons|secrets.default_source|commands.position|detail_view|clipboard|copy_header|editor.cursor_shape|editor.clipboard|theme"
     );
     // A theme is a name the app looks up (built-in or a theme file).
     assert_eq!(parse_set("theme=gruvbox-light"), Ok(SetValue::Theme("gruvbox-light")));
@@ -84,6 +84,7 @@ fn set_accepts_known_settings_and_values_only() {
         Err(SetError::BadValue { key: "theme", value: String::new(), values: crate::theme::NAMES.join("|") })
     );
     assert_eq!(set("editor.cursor_shape=off"), Ok(Setting::CursorShape(CursorShape::Off)));
+    assert_eq!(set("editor.clipboard=off"), Ok(Setting::EditorClipboard(datarig_core::config::EditorClipboard::Off)));
     assert_eq!(set("commands.position=bottom"), Ok(Setting::CommandsPosition(CommandsPosition::Bottom)));
     assert_eq!(set("clipboard=OSC52"), Ok(Setting::Clipboard(ClipboardSetting::Osc52)));
     assert_eq!(set("detail_view=statusbar"), Ok(Setting::DetailView(DetailView::Statusbar)));
@@ -137,7 +138,7 @@ fn completes_profile_names() {
 #[test]
 fn completes_setting_keys_then_values() {
     let got = |arg: &str| complete_arg(ArgKind::Setting, arg, &[]);
-    assert_eq!(got(""), [0, 1, 2, 3, 4, 5, 6, 7, 8].map(ArgCompletion::SetKey));
+    assert_eq!(got(""), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map(ArgCompletion::SetKey));
     assert_eq!(got("c"), [3, 5, 6].map(ArgCompletion::SetKey));
     assert_eq!(got("commands.position="), [ArgCompletion::SetValue(3, 0), ArgCompletion::SetValue(3, 1)]);
     assert_eq!(got("sec"), [ArgCompletion::SetKey(2)]);
@@ -145,7 +146,7 @@ fn completes_setting_keys_then_values() {
     assert_eq!(got("icons=o"), [ArgCompletion::SetValue(1, 0), ArgCompletion::SetValue(1, 1)]);
     assert_eq!(set("icons=OFF"), Ok(Setting::Icons(datarig_core::config::IconsSetting::Off)));
     assert_eq!(got("l"), [ArgCompletion::SetKey(0)]);
-    assert_eq!(got("ed"), [ArgCompletion::SetKey(7)]);
+    assert_eq!(got("ed"), [ArgCompletion::SetKey(7), ArgCompletion::SetKey(8)]);
     assert_eq!(got("editor.cursor_shape="), [ArgCompletion::SetValue(7, 0), ArgCompletion::SetValue(7, 1)]);
     assert!(got("x").is_empty());
     assert_eq!(got("language="), [0, 1, 2].map(|v| ArgCompletion::SetValue(0, v)), "every value");
@@ -162,12 +163,12 @@ fn completes_theme_names_given_by_the_app() {
         complete_arg(ArgKind::Setting, arg, &themes)
             .into_iter()
             .map(|c| match c {
-                ArgCompletion::Theme(8, i) => themes[i],
+                ArgCompletion::Theme(9, i) => themes[i],
                 other => panic!("{other:?}"),
             })
             .collect()
     };
-    assert_eq!(complete_arg(ArgKind::Setting, "th", &themes), [ArgCompletion::SetKey(8)]);
+    assert_eq!(complete_arg(ArgKind::Setting, "th", &themes), [ArgCompletion::SetKey(9)]);
     assert_eq!(got("theme="), themes, "every name, in order");
     assert_eq!(got("theme=gruvbox"), ["gruvbox", "gruvbox-light", "gruvbox-dark"], "exact first, then prefixes");
     assert_eq!(got("theme=m"), ["mine"]);

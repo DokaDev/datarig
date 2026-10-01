@@ -462,6 +462,8 @@ pub struct App {
     clipboard: Option<Box<dyn crate::clipboard::SystemClipboard>>,
     /// Text for the terminal (OSC 52 copies) the binary writes before the next frame.
     terminal_out: Vec<String>,
+    /// Why editor yanks did not reach the clipboard, as said so far.
+    yank_notices: copy::YankNotices,
     /// A large copy waiting for its confirmation.
     pending_copy: Option<(copy::Intent, copy::CopyRequest)>,
     /// "Fetch every row, then copy" waiting for its confirmation: the format.
@@ -720,6 +722,7 @@ impl App {
             clipboard_opener: crate::clipboard::none(),
             clipboard: None,
             terminal_out: Vec::new(),
+            yank_notices: copy::YankNotices::default(),
             pending_copy: None,
             pending_fetch_copy: None,
             fetch_copy: None,

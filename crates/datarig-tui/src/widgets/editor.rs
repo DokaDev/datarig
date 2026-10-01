@@ -22,7 +22,8 @@
 //!   the operators; `edit` holds the edits that are not deletes or puts (`r`, `J`, case,
 //!   indent), `scroll` the scrolling keys.
 //! * `visual` is Visual mode by character (`v`) or by line (`V`).
-//! * `insert` is Insert mode, with autoindent and `Ctrl+W` / `Ctrl+U`.
+//! * `insert` is Insert mode, with autoindent, `Ctrl+W` / `Ctrl+U` and `Ctrl+R {register}`.
+//! * `registers` holds what yanks and deletes wrote, as Vim's registers do.
 //! * `repeat` records the last change for `.`.
 //! * `render` draws.
 //!
@@ -35,6 +36,7 @@ mod edit;
 mod insert;
 mod lexing;
 mod motion;
+mod registers;
 mod render;
 mod repeat;
 mod scroll;
@@ -45,7 +47,8 @@ mod visual;
 use buffer::{Step, class, graphemes, next_version};
 use datarig_core::i18n::Label;
 use lexing::{LineState, REGION_LINES};
-use ratatui::crossterm::event::KeyEvent;
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+pub use registers::{RegKind, RegProblem, Register, Yank};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
@@ -77,14 +80,6 @@ pub enum EdEvent {
     Moved,
 }
 
-/// What a yank or a delete put in the register.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Register {
-    pub text: String,
-    /// Whole lines (`yy`, `dj`, `V`…): put as lines of their own.
-    pub linewise: bool,
-}
-
 const TAB_WIDTH: usize = 4;
 
 pub struct Editor {
@@ -106,9 +101,23 @@ pub struct Editor {
     ins_repeat: Option<repeat::InsertRepeat>,
     /// Lines `Ctrl+D` and `Ctrl+U` scroll, once a count set it (0: half the screen).
     scroll_lines: usize,
-    register: Option<Register>,
-    /// The last write to the register, until the app takes it ([`Editor::take_yank`]).
-    yanked: Option<Register>,
+    regs: registers::Registers,
+    /// The register the command being run names (`"a`), if any.
+    reg: Option<char>,
+    /// The command's delete goes to `"1` whatever its size (the motions Vim does it for).
+    reg_one: bool,
+    /// Insert mode waits for the register of `Ctrl+R`.
+    ins_reg: bool,
+    /// What this Insert session typed (the `".` register once it ends).
+    ins_text: String,
+    /// The app could not read the system clipboard for the key being handled: `"+` puts
+    /// nothing, and keeps what it held.
+    clip_unread: bool,
+    /// Why the last command did nothing with a register, until the app takes it.
+    problem: Option<RegProblem>,
+    /// The last register write for the system clipboard, until the app takes it
+    /// ([`Editor::take_yank`]).
+    yanked: Option<Yank>,
     undo: Vec<Step>,
     redo: Vec<Step>,
     insert_snap: bool,
@@ -134,6 +143,9 @@ pub struct Editor {
 
 impl Editor {
     pub fn new(text: &str) -> Self {
+        let mut regs = registers::Registers::default();
+        // Vim's `".` starts empty, not unset.
+        regs.set_inserted(String::new());
         Self {
             lines: text.split('\n').map(str::to_string).collect(),
             row: 0,
@@ -147,7 +159,13 @@ impl Editor {
             rec: repeat::Recorder::default(),
             ins_repeat: None,
             scroll_lines: 0,
-            register: None,
+            regs,
+            reg: None,
+            reg_one: false,
+            ins_reg: false,
+            ins_text: String::new(),
+            clip_unread: false,
+            problem: None,
             yanked: None,
             undo: Vec::new(),
             redo: Vec::new(),
@@ -194,25 +212,92 @@ impl Editor {
         self.mode == Mode::Visual && self.visual_lines
     }
 
-    /// The register (the text of the last yank or delete).
-    pub fn register(&self) -> Option<&Register> {
-        self.register.as_ref()
+    /// Register `name` (`"` the unnamed one, the text of the last yank or delete).
+    pub fn register(&self, name: char) -> Option<&Register> {
+        self.regs.get(name)
     }
 
-    /// The last write to the register since the previous call, for the app to pass on (the
-    /// editor never touches the clipboard itself).
-    pub fn take_yank(&mut self) -> Option<Register> {
+    /// The last register write for the system clipboard since the previous call, for the app
+    /// to pass on (the editor never touches the clipboard itself).
+    pub fn take_yank(&mut self) -> Option<Yank> {
         self.yanked.take()
     }
 
-    fn set_register(&mut self, text: String, linewise: bool) {
-        let r = Register { text, linewise };
-        self.yanked = Some(r.clone());
-        self.register = Some(r);
+    /// A yank into the register the command names (none: `"0`).
+    fn yank_to_register(&mut self, text: String, kind: RegKind) {
+        let y = self.regs.yank(self.reg, Register::new(text, kind));
+        self.offer(y);
     }
 
-    /// A command waits for its next key (`d…`, `g…`, `f…`, `i(`).
+    /// Deleted text into the register the command names, and the delete ring or `"-`.
+    fn delete_to_register(&mut self, text: String, kind: RegKind) {
+        let ring = kind == RegKind::Linewise || text.contains('\n') || self.reg_one;
+        let y = self.regs.delete(self.reg, Register::new(text, kind), ring);
+        self.offer(y);
+    }
+
+    /// Keep `y` for the app; nothing (`C` on an empty line) never empties the clipboard.
+    fn offer(&mut self, y: Option<Yank>) {
+        if let Some(y) = y.filter(|y| !y.reg.text.is_empty() || y.reg.kind != RegKind::Charwise) {
+            self.yanked = Some(y);
+        }
+    }
+
+    /// Whether `key` puts the system clipboard's text (`"+p`, `"*P`, `.` repeating one, `Ctrl+R +`
+    /// in Insert mode): the app reads the clipboard only then, and gives the editor what it
+    /// read first ([`Editor::set_clipboard_text`]).
+    pub fn reads_clipboard(&self, key: &KeyEvent) -> bool {
+        let c = match key.code {
+            KeyCode::Char(c) if !key.modifiers.intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) => c,
+            _ => return false,
+        };
+        match self.mode {
+            Mode::Insert => self.ins_reg && matches!(c, '+' | '*'),
+            Mode::Visual => matches!(c, 'p' | 'P') && self.cmd.ready(|r| matches!(r, Some('+' | '*'))),
+            Mode::Normal => match c {
+                'p' | 'P' => self.cmd.ready(|r| matches!(r, Some('+' | '*'))),
+                '.' => self.cmd.ready(|r| r.is_none()) && self.rec.puts_clipboard(),
+                _ => false,
+            },
+        }
+    }
+
+    /// The system clipboard's text for the command the next key finishes, as the app read it
+    /// (`None`: it could not, and the command puts nothing).
+    pub fn set_clipboard_text(&mut self, text: Option<&str>) {
+        match text {
+            Some(t) => self.regs.set_clipboard(Register::from_clipboard(t)),
+            // Unknown is not empty: what `"+` held stays, the command puts nothing.
+            None => self.clip_unread = true,
+        }
+    }
+
+    /// Why the last command did nothing with a register (an empty one for a put, one that
+    /// takes no yank), for the app to say; once.
+    pub fn take_register_problem(&mut self) -> Option<RegProblem> {
+        self.problem.take()
+    }
+
+    /// The text a put or `Ctrl+R` takes from register `name`: none when it is empty (said,
+    /// except for `"_`) or when the app could not read the system clipboard for `"+` / `"*`
+    /// (the app said that).
+    fn put_source(&mut self, name: char) -> Option<Register> {
+        if matches!(name, '+' | '*') && self.clip_unread {
+            return None;
+        }
+        let reg = self.regs.get(name).cloned();
+        if reg.is_none() && name != '_' {
+            self.problem = Some(RegProblem::Empty(name));
+        }
+        reg
+    }
+
+    /// A command waits for its next key (`d…`, `g…`, `f…`, `i(`, `"a…`), or Insert mode for
+    /// the register of `Ctrl+R`.
     pub fn awaiting_key(&self) -> bool {
+        if self.mode == Mode::Insert {
+            return self.ins_reg;
+        }
         self.cmd.awaiting()
     }
 
@@ -223,19 +308,25 @@ impl Editor {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> EdEvent {
-        self.recorded_key(key)
+        let ev = self.recorded_key(key);
+        self.clip_unread = false;
+        ev
     }
 
     /// A key in the current mode.
     fn dispatch_key(&mut self, key: KeyEvent) -> EdEvent {
-        match self.mode {
+        let ev = match self.mode {
             Mode::Insert => {
                 self.insert_repeat_key(key);
                 self.key_insert(key)
             }
             Mode::Normal => self.key_normal(key),
             Mode::Visual => self.key_visual(key),
-        }
+        };
+        // The command that named a register is over.
+        self.reg = None;
+        self.reg_one = false;
+        ev
     }
 
     /// Bracketed paste: typed as it is in Insert mode; in Normal mode inserted at the cursor
@@ -250,7 +341,9 @@ impl Editor {
         let (a, b) = match self.mode {
             Mode::Insert => {
                 self.ai_row = None;
+                self.ins_reg = false;
                 self.insert_at_cursor(&norm);
+                self.ins_text.push_str(&norm);
                 self.rec.paste(&norm);
                 self.insert_repeat_paste(&norm);
                 return EdEvent::Changed { typed: None };

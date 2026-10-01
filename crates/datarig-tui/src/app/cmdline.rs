@@ -81,7 +81,8 @@ fn setting_action(s: Setting) -> Option<Action> {
         | Setting::DetailView(_)
         | Setting::Clipboard(_)
         | Setting::CopyHeader(_)
-        | Setting::CursorShape(_) => None,
+        | Setting::CursorShape(_)
+        | Setting::EditorClipboard(_) => None,
     }
 }
 
@@ -666,6 +667,7 @@ impl App {
             Setting::Clipboard(c) => self.set_prefs(s, |x| x.clipboard = c),
             Setting::CopyHeader(c) => self.set_prefs(s, |x| x.copy_header = c),
             Setting::CursorShape(c) => self.set_prefs(s, |x| x.cursor_shape = c),
+            Setting::EditorClipboard(c) => self.set_prefs(s, |x| x.editor_clipboard = c),
         }
     }
 

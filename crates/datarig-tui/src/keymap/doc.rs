@@ -47,9 +47,19 @@ pub fn render() -> String {
          again, what was typed in Insert mode included; `3.` with a new count); `i a I A o O` (a count \
          types the text that many times); scrolling with `Ctrl+D Ctrl+U Ctrl+F Ctrl+B zz zt zb`; Visual \
          mode by character (`v`) and by line (`V`) with the motions and text objects, `y d x c`, `Y D X \
-         C S` (whole lines), `r J gJ u U ~ > <` and `o` (the other end); in Insert mode `Ctrl+W` (the \
-         word before the cursor), `Ctrl+U` (the line before the cursor) and `Enter` keeping the indent. \
-         One command is one undo step. There is one register, not the clipboard. A paste from the \
+         C S` (whole lines), `r J gJ u U ~ > <`, `o` (the other end) and `p P` (a register in place of the \
+         selection; `P` keeps the replaced text out of the registers); in Insert mode `Ctrl+W` (the \
+         word before the cursor), `Ctrl+U` (the line before the cursor), `Ctrl+R {register}` (its text) \
+         and `Enter` keeping the indent. One command is one undo step. Registers as in Vim: `\"x` before a \
+         command in Normal and Visual mode (`\"ayy`, `2\"ap`), the unnamed one, `\"a`-`\"z` (`\"A`-`\"Z` \
+         append), `\"0` (the last yank), `\"1`-`\"9` (the last deletes of lines; `.` after `\"1p` puts \
+         `\"2`), `\"-` (small deletes), `\"_` (nothing kept), `\".` (the text last typed in Insert mode) and `\"+` \
+         `\"*` (the system clipboard); `\":` `\"%` `\"#` `\"/` are not kept (a put from them says the register \
+         is empty). As in \
+         Vim with `clipboard=unnamedplus`, a yank, delete or change without a register also goes to the \
+         system clipboard, through the `clipboard` setting's way (`[editor] clipboard = \"off\"` keeps them \
+         in the editor); `\"a` and `\"_` never do. `\"+p` reads the system clipboard only when typed, and \
+         not over OSC 52 (the terminal's own paste works there). A paste from the \
          terminal goes in at the cursor in every mode (over the selection in Visual mode). Unlike Vim, a \
          tab is 4 columns wide and a completion taken from the popup is not part of what `.` repeats. \
          The other reserved vim keys do nothing yet.\n\

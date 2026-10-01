@@ -3,6 +3,7 @@
 
 use super::explorer::RowKind;
 use super::*;
+use crate::widgets::editor::RegProblem;
 use crate::widgets::grid::Shape;
 use crate::widgets::tree::Reveal;
 
@@ -144,10 +145,13 @@ impl App {
         }
         // Outside text input, Hangul typed with a Korean input source means the QWERTY keys at
         // the same places; not the character a vim command waits for (`f`, `t`, `r`), which is
-        // taken as it is typed.
+        // taken as it is typed. The register after `Ctrl+R` in Insert mode is a key too.
         let literal = matches!(ctx, Ctx::VimNormal | Ctx::VimVisual) && self.tab().editor.awaiting_char();
+        let register = ctx == Ctx::VimInsert && self.tab().editor.awaiting_key();
         let mapped = match chord.code {
-            KeyCode::Char(c) if chord.is_plain_char() && !ctx.is_text_input() && !literal => hangul::keys(c),
+            KeyCode::Char(c) if chord.is_plain_char() && (!ctx.is_text_input() || register) && !literal => {
+                hangul::keys(c)
+            }
             _ => None,
         };
         match mapped {
@@ -349,8 +353,24 @@ impl App {
     }
 
     pub(super) fn editor_key(&mut self, key: KeyEvent) {
+        // The system clipboard is read only for the command that puts it (`"+p`).
+        if self.tab().editor.reads_clipboard(&key) {
+            let text = self.editor_clipboard_text();
+            self.tab_mut().editor.set_clipboard_text(text.as_deref());
+        }
         let t = self.tabs.active_mut();
         let ev = t.editor.handle_key(key);
+        let problem = t.editor.take_register_problem();
+        if let Some(y) = t.editor.take_yank() {
+            self.editor_yanked(y);
+        }
+        if let Some(p) = problem {
+            let msg = match p {
+                RegProblem::Empty(c) => Msg::EditorRegisterEmpty { name: format!("\"{c}") },
+                RegProblem::ReadOnly(c) => Msg::EditorRegisterReadOnly { name: format!("\"{c}") },
+            };
+            self.flash(Notice::new(msg, Level::Warning));
+        }
         if matches!(ev, EdEvent::Changed { .. }) {
             self.edited();
         }

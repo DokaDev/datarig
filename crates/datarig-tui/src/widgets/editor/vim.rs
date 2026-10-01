@@ -1,10 +1,11 @@
-//! Normal mode: the command parser (`[count] operator [count] motion|text object`, doubled
-//! operators `dd cc yy >> << guu gUU g~~`, prefixes `g` and `z`, the character argument of
-//! `f t F T r`, the single-key commands) and the operators on a range of text.
+//! Normal mode: the command parser (`["x] [count] operator [count] motion|text object`,
+//! doubled operators `dd cc yy >> << guu gUU g~~`, prefixes `g` and `z`, the character
+//! argument of `f t F T r`, the single-key commands) and the operators on a range of text.
 
-use super::buffer::{UNDO_BYTES, class, indent_of};
+use super::buffer::{UNDO_BYTES, class, gw, indent_of};
 use super::edit::Case;
 use super::motion::{Motion, Range, RangeKind};
+use super::registers::{self, RegKind, RegProblem, Register, Registers};
 use super::repeat::InsertRepeat;
 use super::textobj::Object;
 use super::{EdEvent, Editor, Mode};
@@ -64,12 +65,17 @@ impl Op {
     }
 }
 
-/// A command typed so far: counts (0: none), the operator, a prefix waiting for its second
-/// key (`g`, `z`, or `i`/`a` of a text object), a command waiting for a character (`f`, `t`,
-/// `F`, `T`, `r`).
+/// A command typed so far: counts (0: none), the register (`"x`), the operator, a prefix
+/// waiting for its second key (`g`, `z`, or `i`/`a` of a text object), a command waiting for a
+/// character (`f`, `t`, `F`, `T`, `r`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct Pending {
     count: usize,
+    /// The count typed before the register (`2"a3yy` takes 6 lines).
+    reg_count: usize,
+    reg: Option<char>,
+    /// `"` was typed: the register's name comes next.
+    reg_wait: bool,
     op: Option<Op>,
     op_count: usize,
     prefix: Option<char>,
@@ -77,9 +83,15 @@ pub(super) struct Pending {
 }
 
 impl Pending {
-    /// The command waits for a key the keymap should hand over (`d…`, `g…`, `f…`).
+    /// The command waits for a key the keymap should hand over (`d…`, `g…`, `f…`, `"a…`).
     pub(super) fn awaiting(&self) -> bool {
-        self.op.is_some() || self.prefix.is_some() || self.arg.is_some()
+        self.op.is_some() || self.prefix.is_some() || self.arg.is_some() || self.reg_wait || self.reg.is_some()
+    }
+
+    /// The next key starts the command itself (no operator, prefix or argument waits) and
+    /// `reg` holds for the register typed so far.
+    pub(super) fn ready(&self, reg: impl Fn(Option<char>) -> bool) -> bool {
+        self.op.is_none() && self.prefix.is_none() && self.arg.is_none() && !self.reg_wait && reg(self.reg)
     }
 
     /// The command waits for a character, taken as it is typed (`f`, `t`, `r`).
@@ -95,13 +107,22 @@ impl Pending {
     /// The count of the command (the counts before and after the operator multiply) and
     /// whether one was typed.
     pub(super) fn count(&self) -> (usize, bool) {
-        let n = self.count.max(1).saturating_mul(self.op_count.max(1)).min(MAX_COUNT);
-        (n, self.count > 0 || self.op_count > 0)
+        let n = [self.reg_count, self.count, self.op_count].iter().fold(1usize, |n, c| n.saturating_mul((*c).max(1)));
+        (n.min(MAX_COUNT), self.reg_count + self.count + self.op_count > 0)
     }
 
     /// The last key went to a count.
     pub(super) fn counted(&self, before: &Pending) -> bool {
         (self.count, self.op_count) != (before.count, before.op_count) && self.count + self.op_count > 0
+    }
+
+    /// The register `"` names: the count typed so far stays apart from the one that may follow.
+    fn set_reg(&mut self, c: char) {
+        self.reg = Some(c);
+        if self.count > 0 {
+            self.reg_count = self.reg_count.max(1).saturating_mul(self.count).min(MAX_COUNT);
+            self.count = 0;
+        }
     }
 
     /// Take digit `d` as part of a count; false when it is not one (`0` is a motion unless a
@@ -152,6 +173,16 @@ impl Editor {
             KeyCode::Char(c) => Some(c),
             _ => None,
         };
+        if self.cmd.reg_wait {
+            self.cmd.reg_wait = false;
+            return match ch {
+                Some(c) if plain && registers::is_name(c) => {
+                    self.cmd.set_reg(c);
+                    Token::More
+                }
+                _ => Token::Cancel,
+            };
+        }
         if let Some(cmd) = self.cmd.arg.take() {
             let arg = match key.code {
                 KeyCode::Char(c) if plain => c,
@@ -196,6 +227,7 @@ impl Editor {
             'i' | 'a' if objects => self.cmd.prefix = Some(c),
             'f' | 'F' | 't' | 'T' => self.cmd.arg = Some(c),
             'r' if self.cmd.op.is_none() => self.cmd.arg = Some(c),
+            '"' if self.cmd.op.is_none() => self.cmd.reg_wait = true,
             ';' | ',' => {
                 return match self.last_find {
                     Some((ch, forward, till)) => {
@@ -207,6 +239,11 @@ impl Editor {
             c => return Motion::of_char(c).map_or(Token::Key(c), Token::Motion),
         }
         Token::More
+    }
+
+    /// The command typed so far is complete: it runs with the register it names.
+    pub(super) fn end_command(&mut self) {
+        self.reg = std::mem::take(&mut self.cmd).reg;
     }
 
     pub(super) fn key_normal(&mut self, key: KeyEvent) -> EdEvent {
@@ -228,7 +265,7 @@ impl Editor {
             }
             _ => {}
         }
-        self.cmd = Pending::default();
+        self.end_command();
         match (token, op) {
             (Token::Object(o, around), Some(op)) => self.apply_object(op, o, around, n),
             (Token::Key(c) | Token::G(c), Some(op)) if c == op.last_key() => self.apply_lines(op, n),
@@ -283,7 +320,7 @@ impl Editor {
     fn motion_key(&mut self, m: Motion) -> EdEvent {
         let (n, explicit) = self.cmd.count();
         let op = self.cmd.op;
-        self.cmd = Pending::default();
+        self.end_command();
         match op {
             None => {
                 self.move_by(m, n, explicit);
@@ -300,6 +337,8 @@ impl Editor {
             (Op::Change, Motion::WordForward | Motion::BigWordForward) => self.cw_range(n, m == Motion::BigWordForward),
             _ => None,
         };
+        // Vim's rule: a delete over these motions goes to `"1` even within a line.
+        self.reg_one = matches!(m, Motion::Match | Motion::ParaForward | Motion::ParaBack);
         let Some(r) = cw.or_else(|| self.op_range(m, n, explicit)) else {
             if op == Op::Change && matches!(m, Motion::Left | Motion::Right) {
                 return self.start_insert(true, (self.row, self.col));
@@ -391,6 +430,12 @@ impl Editor {
         if self.mode == Mode::Visual {
             self.mode = Mode::Normal;
         }
+        // A register Vim fills itself (`".`, `"%`…) takes no yank: the command fails.
+        if matches!(op, Op::Delete | Op::Change | Op::Yank) && !Registers::can_write(self.reg) {
+            self.problem = self.reg.map(RegProblem::ReadOnly);
+            self.clamp();
+            return EdEvent::Moved;
+        }
         match (op, t) {
             (Op::Shift { right }, Target::Lines { first, last }) => self.shift_lines(first, last, 1, right),
             (Op::Shift { right }, Target::Chars { a, b }) => {
@@ -408,25 +453,25 @@ impl Editor {
             }
             (Op::Yank, Target::Chars { a, b }) => {
                 let text = self.slice(self.pos_bytes(a), self.pos_bytes(b));
-                self.set_register(text, false);
+                self.yank_to_register(text, RegKind::Charwise);
                 self.set_pos(to.0, to.1);
                 EdEvent::Moved
             }
             (Op::Yank, Target::Lines { first, last }) => {
-                self.set_register(self.lines[first..=last].join("\n"), true);
+                self.yank_to_register(self.lines[first..=last].join("\n"), RegKind::Linewise);
                 self.set_pos(to.0, to.1);
                 EdEvent::Moved
             }
             (Op::Delete, Target::Chars { a, b }) => {
                 self.snapshot();
                 let text = self.delete_range(a, b);
-                self.set_register(text, false);
+                self.delete_to_register(text, RegKind::Charwise);
                 self.clamp();
                 EdEvent::Changed { typed: None }
             }
             (Op::Delete, Target::Lines { first, last }) => {
                 self.snapshot();
-                self.set_register(self.lines[first..=last].join("\n"), true);
+                self.delete_to_register(self.lines[first..=last].join("\n"), RegKind::Linewise);
                 let (a, b) = self.lines_span(first, last);
                 self.splice(a, b, "");
                 let r = first.min(self.lines.len() - 1);
@@ -441,14 +486,14 @@ impl Editor {
                     self.set_cursor_offset(a);
                     String::new()
                 };
-                self.set_register(text, false);
+                self.delete_to_register(text, RegKind::Charwise);
                 let at = (self.row, self.col);
                 self.start_insert(false, at);
                 EdEvent::Changed { typed: None }
             }
             (Op::Change, Target::Lines { first, last }) => {
                 self.snapshot();
-                self.set_register(self.lines[first..=last].join("\n"), true);
+                self.delete_to_register(self.lines[first..=last].join("\n"), RegKind::Linewise);
                 let indent = indent_of(&self.lines[first]).to_string();
                 let a = self.line_start(first);
                 let b = self.line_start(last) + self.lines[last].len();
@@ -482,15 +527,26 @@ impl Editor {
         (at, indent.graphemes(true).count())
     }
 
-    /// `p` / `P`: the register `n` times after or before the cursor (lines below or above
-    /// its line).
+    /// `p` / `P`: the register the command names (the unnamed one) `n` times after or before
+    /// the cursor (lines below or above its line, a block from the next or the cursor's
+    /// column down).
     fn put(&mut self, after: bool, n: usize) -> EdEvent {
-        let Some(reg) = self.register.clone() else { return EdEvent::None };
-        if reg.text.len().saturating_mul(n) > UNDO_BYTES {
+        let name = self.reg.unwrap_or('"');
+        if matches!(name, '+' | '*') {
+            self.rec.put_clipboard();
+        }
+        let Some(reg) = self.put_source(name) else { return EdEvent::None };
+        if (reg.kind == RegKind::Charwise && reg.text.is_empty()) || self.put_size(&reg, n) > UNDO_BYTES {
             return EdEvent::None;
         }
         self.snapshot();
-        if reg.linewise {
+        if name == '.' {
+            // Vim puts `".` by typing it again: the register then holds what was put.
+            self.regs.set_inserted(reg.text.repeat(n));
+        }
+        if reg.kind == RegKind::Blockwise {
+            self.put_block(&reg.text, after, n);
+        } else if reg.linewise() {
             let text = vec![reg.text.as_str(); n].join("\n");
             let at = if after { self.row + 1 } else { self.row };
             let (start, end) = self.line_bounds(self.row);
@@ -515,6 +571,55 @@ impl Editor {
         EdEvent::Changed { typed: None }
     }
 
+    /// The bytes putting `reg` `n` times may add (a block's pieces with the blanks that fill
+    /// them, and the blanks before them, counted at most).
+    pub(super) fn put_size(&self, reg: &Register, n: usize) -> usize {
+        if reg.kind != RegKind::Blockwise {
+            return reg.text.len().saturating_mul(n);
+        }
+        let pieces = reg.text.split('\n').count();
+        let width = reg.text.split('\n').map(graphemes_width).max().unwrap_or(0);
+        let x = self.display_x(self.row, self.col) + 1;
+        n.saturating_mul(reg.text.len().saturating_add(pieces.saturating_mul(width)))
+            .saturating_add(pieces.saturating_mul(x))
+    }
+
+    /// Put block `text` (one piece per line) `n` times side by side, from the column after the
+    /// cursor (`after`) or the cursor's, on its line and the ones below (added when the text
+    /// ends first); lines too short get blanks up to that column, and each piece is filled
+    /// with blanks to the block's width when text follows it. The cursor goes to the block's
+    /// first character (Vim).
+    pub(super) fn put_block(&mut self, text: &str, after: bool, n: usize) {
+        let pieces: Vec<&str> = text.split('\n').collect();
+        let width = pieces.iter().map(|p| graphemes_width(p)).max().unwrap_or(0);
+        let (row, col) = (self.row, self.col);
+        let col = if after && self.gcount(row) > 0 { col + 1 } else { col };
+        let x = self.display_x(row, col);
+        for (i, piece) in pieces.iter().enumerate() {
+            let r = row + i;
+            if r == self.lines.len() {
+                let end = self.bytes;
+                self.splice(end, end, "\n");
+            }
+            // The column on this line: past its end, blanks lead up to it; inside a wide
+            // character, the block goes before it after blanks up to the column (Vim).
+            let c = self.col_for_x(r, x);
+            let pad = x.saturating_sub(self.display_x(r, c));
+            let tail = c < self.gcount(r);
+            let fill = " ".repeat(width - graphemes_width(piece));
+            let mut s = " ".repeat(pad);
+            for k in 0..n {
+                s.push_str(piece);
+                if tail || k + 1 < n {
+                    s.push_str(&fill);
+                }
+            }
+            let off = self.offset_of(r, c);
+            self.splice(off, off, &s);
+        }
+        self.set_pos(row, col);
+    }
+
     /// `u` / `Ctrl+R`, `n` times.
     fn undo_redo(&mut self, undo: bool, n: usize) -> EdEvent {
         self.rec.skip();
@@ -527,6 +632,11 @@ impl Editor {
         }
         if any { EdEvent::Changed { typed: None } } else { EdEvent::None }
     }
+}
+
+/// Display width of `s`.
+fn graphemes_width(s: &str) -> usize {
+    s.graphemes(true).map(gw).sum()
 }
 
 #[cfg(test)]

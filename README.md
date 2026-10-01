@@ -101,14 +101,20 @@ Everything below works today, with PostgreSQL.
   `i<`, `i"` `i'` `` i` ``, `ip` `ap`, inner and around), doubled for lines (`dd` `cc` `yy`
   `>>`); `x` `X` `s` `S` `D` `C` `Y`, `p` `P`, `r`, `J` `gJ`, `~`, `u` and `Ctrl+R`; `.` repeats
   the last change, what was typed included; `i` `a` `I` `A` `o` `O`; `Ctrl+D` `Ctrl+U` `Ctrl+F`
-  `Ctrl+B` and `zz` `zt` `zb` scroll; Visual mode by character (`v`) or by line (`V`). One
-  command is one undo step. The status bar says `i` starts typing and `Esc` stops. Insert mode
-  keeps the usual editing keys (arrows, `Home`/`End`, `Backspace`/`Delete`), plus `Ctrl+W` and
-  `Ctrl+U`, and `Enter` keeps the line's indent; a paste from the terminal goes in at the cursor
-  in every mode. Search, registers, the clipboard and macros are not there yet (their keys are
-  reserved). Commands keep working with a Korean (2-Set) input source: the jamo are read as the
-  QWERTY keys they sit on, and the character `f`, `t` or `r` waits for is taken as typed. The
-  supported keys are listed in [docs/keybindings.md](docs/keybindings.md).
+  `Ctrl+B` and `zz` `zt` `zb` scroll; Visual mode by character (`v`) or by line (`V`), where `p`
+  and `P` put a register in place of the selection. One command is one undo step. The status bar
+  says `i` starts typing and `Esc` stops. Insert mode keeps the usual editing keys (arrows,
+  `Home`/`End`, `Backspace`/`Delete`), plus `Ctrl+W`, `Ctrl+U` and `Ctrl+R {register}`, and
+  `Enter` keeps the line's indent; a paste from the terminal goes in at the cursor in every
+  mode. Registers work as in Vim (`"a`-`"z` and `"A`-`"Z` to append, `"0`, the `"1`-`"9` delete
+  ring, `"-`, `"_`, `".`, `"+`/`"*`; `":` `"%` `"#` `"/` are not kept), and like Vim with
+  `clipboard=unnamedplus` every yank, delete or change without a register also goes to the
+  system clipboard (or through OSC 52 over SSH; `[editor] clipboard = "off"` turns that off).
+  `"+p` reads the system clipboard only when you type it; over SSH use the terminal's paste.
+  Search and macros are not there yet (their keys are reserved). Commands keep working with a
+  Korean (2-Set) input source: the jamo are read as the QWERTY keys they sit on, and the
+  character `f`, `t` or `r` waits for is taken as typed. The supported keys are listed in
+  [docs/keybindings.md](docs/keybindings.md).
 - Syntax highlighting, completion of schemas, tables and columns (aliases included), and the
   statement under the cursor marked in the gutter.
 - Run the statement under the cursor (`Ctrl+E`), a selection, or several statements in a row:
@@ -163,7 +169,7 @@ Planned, in no particular order and with no dates:
 - TLS connections (today every connection is plain TCP; use an SSH tunnel across untrusted
   networks, and servers that require TLS cannot be reached yet)
 - A server monitor (sessions, locks, activity)
-- More of vim: search, registers and the clipboard, block Visual mode, macros
+- More of vim: search, block Visual mode, macros
 - DDL view of tables and other objects
 - Query profiling and charts
 - Multi-hop SSH and importing hosts from `~/.ssh/config`

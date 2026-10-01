@@ -18,7 +18,8 @@
 //! `theme` names the color theme: a built-in one or a file of `themes/` next to the config file
 //! (see [`crate::theme`]; the UI resolves the name, so an unknown one never makes the file
 //! unusable).
-//! `[editor] cursor_shape` says whether the cursor shows the editor's mode. The retired
+//! `[editor] cursor_shape` says whether the cursor shows the editor's mode, `[editor] clipboard`
+//! whether yanks and deletes without a register also go to the system clipboard. The retired
 //! `[editor] mode` key (the editor has vim keys only) is accepted with any value, ignored and
 //! dropped by the next save.
 //! [`Prefs`] holds `[commands] position` (the `:` command line as a popup near
@@ -121,6 +122,8 @@ struct EditorSection {
     _mode: Option<serde::de::IgnoredAny>,
     #[serde(default)]
     cursor_shape: Option<String>,
+    #[serde(default)]
+    clipboard: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -268,6 +271,26 @@ impl Choice for CursorShape {
     }
 }
 
+/// `[editor] clipboard`: whether a yank, delete or change that names no register also goes to
+/// the system clipboard (as Vim's `clipboard=unnamedplus`). `"+` and `"*` always do.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum EditorClipboard {
+    #[default]
+    On,
+    /// Only `"+` and `"*` reach the system clipboard.
+    Off,
+}
+
+impl Choice for EditorClipboard {
+    const ALL: &'static [Self] = &[EditorClipboard::On, EditorClipboard::Off];
+    fn as_str(self) -> &'static str {
+        match self {
+            EditorClipboard::On => "on",
+            EditorClipboard::Off => "off",
+        }
+    }
+}
+
 /// The default of `osc52_max_bytes`: about 100 KB of base64 (75 KB of text). Terminals and
 /// tmux drop longer OSC 52 sequences silently (tmux 3.x, many terminals cap them near here).
 pub const OSC52_MAX_BYTES: usize = 100_000;
@@ -285,6 +308,8 @@ pub struct Prefs {
     pub osc52_max_bytes: usize,
     /// `[editor] cursor_shape`.
     pub cursor_shape: CursorShape,
+    /// `[editor] clipboard`.
+    pub editor_clipboard: EditorClipboard,
 }
 
 impl Default for Prefs {
@@ -296,6 +321,7 @@ impl Default for Prefs {
             copy_header: CopyHeader::default(),
             osc52_max_bytes: OSC52_MAX_BYTES,
             cursor_shape: CursorShape::default(),
+            editor_clipboard: EditorClipboard::default(),
         }
     }
 }
@@ -528,7 +554,7 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
         None => policy::SpillLimit::default(),
         Some(v) => policy::parse_size(v).map_err(|e| bad("spill_limit", e).allowed(Some(SIZES)))?,
     };
-    let cursor_shape = f.editor.and_then(|e| e.cursor_shape);
+    let (cursor_shape, editor_clipboard) = f.editor.map(|e| (e.cursor_shape, e.clipboard)).unwrap_or_default();
     let default_source = match f.secrets.and_then(|s| s.default_source) {
         None => DefaultSource::default(),
         Some(v) => DefaultSource::parse(&v).ok_or_else(|| {
@@ -546,6 +572,7 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
             Some(n) => return Err(bad("osc52_max_bytes", n)),
         },
         cursor_shape: choice("editor.cursor_shape", cursor_shape, "on, off")?,
+        editor_clipboard: choice("editor.clipboard", editor_clipboard, "on, off")?,
     };
     let mut policies = Policies::default();
     for (name, p) in &f.policy {
@@ -876,6 +903,8 @@ pub fn save(path: &Path, settings: Settings, profiles: Option<Profiles>) -> Resu
     orphans += &retire(&mut doc, "editor", "mode");
     let shape = (prefs.cursor_shape.as_str().into(), prefs.cursor_shape == CursorShape::default());
     orphans += &nested_setting(&mut doc, "editor", "cursor_shape", shape)?;
+    let clip = (prefs.editor_clipboard.as_str().into(), prefs.editor_clipboard == EditorClipboard::default());
+    orphans += &nested_setting(&mut doc, "editor", "clipboard", clip)?;
     let source = (default_source.as_str().into(), default_source == DefaultSource::Auto);
     orphans += &nested_setting(&mut doc, "secrets", "default_source", source)?;
     let position = (prefs.commands_position.as_str().into(), prefs.commands_position == CommandsPosition::default());

@@ -654,6 +654,9 @@ impl datarig_tui::clipboard::SystemClipboard for KeptClipboard {
         self.0.lock().unwrap().push(text.to_string());
         Ok(())
     }
+    fn get_text(&mut self) -> Result<String, String> {
+        self.0.lock().unwrap().last().cloned().ok_or_else(|| "empty".to_string())
+    }
 }
 
 /// Against the real server: the key marks of a JOIN across shop.orders, users
@@ -1116,6 +1119,9 @@ impl datarig_tui::clipboard::SystemClipboard for Recorder {
     fn set_text(&mut self, text: &str) -> Result<(), String> {
         self.0.lock().unwrap().push(text.to_string());
         Ok(())
+    }
+    fn get_text(&mut self) -> Result<String, String> {
+        self.0.lock().unwrap().last().cloned().ok_or_else(|| "empty".to_string())
     }
 }
 

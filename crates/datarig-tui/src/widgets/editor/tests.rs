@@ -74,7 +74,7 @@ pub(super) fn check(cases: &[Case]) {
     for &(text, cursor, keys, want, want_cursor, want_reg) in cases {
         let mut e = at(text, cursor);
         typ(&mut e, keys);
-        let reg = e.register().map(|r| (r.text.as_str(), r.linewise));
+        let reg = e.register('"').map(|r| (r.text.as_str(), r.linewise()));
         let have = (e.text(), (e.row, e.col), reg, e.mode);
         if have != (want.to_string(), want_cursor, want_reg, Mode::Normal) {
             failed
@@ -179,23 +179,32 @@ fn paste_in_visual_mode_replaces_the_selection() {
     assert_eq!(e.text(), "a\nb\nc\nd");
 }
 
-/// Every write to the register can be taken once by the app (to pass on to the clipboard).
+/// Every register write the system clipboard would get can be taken once by the app: those
+/// without a register (`"` for the app) and those into `"+` / `"*`, not those into another
+/// named register or `"_`.
 #[test]
 fn register_writes_are_offered_once() {
+    let yank = |register: char, text: &str, kind: RegKind| Some(Yank { register, reg: Register::new(text, kind) });
     let mut e = at("one two\nthree", (0, 0));
     assert_eq!(e.take_yank(), None);
     typ(&mut e, "yw");
-    assert_eq!(e.take_yank(), Some(Register { text: "one ".into(), linewise: false }));
+    assert_eq!(e.take_yank(), yank('"', "one ", RegKind::Charwise));
     assert_eq!(e.take_yank(), None, "taken");
     typ(&mut e, "jdd");
-    assert_eq!(e.take_yank(), Some(Register { text: "three".into(), linewise: true }));
+    assert_eq!(e.take_yank(), yank('"', "three", RegKind::Linewise));
     typ(&mut e, "x");
-    assert_eq!(e.take_yank(), Some(Register { text: "o".into(), linewise: false }));
+    assert_eq!(e.take_yank(), yank('"', "o", RegKind::Charwise));
     typ(&mut e, "vy");
-    assert_eq!(e.take_yank().map(|r| r.text), Some("n".into()));
+    assert_eq!(e.take_yank().map(|y| y.reg.text), Some("n".into()));
     typ(&mut e, "l");
     assert_eq!(e.take_yank(), None, "a motion writes nothing");
-    assert_eq!(e.register(), Some(&Register { text: "n".into(), linewise: false }));
+    assert_eq!(e.register('"'), Some(&Register::new("n", RegKind::Charwise)));
+    typ(&mut e, "\"ayw\"Ayw\"_x");
+    assert_eq!(e.take_yank(), None, "named registers and the black hole stay in the editor");
+    typ(&mut e, "\"+yw");
+    assert_eq!(e.take_yank(), yank('+', " ", RegKind::Charwise));
+    typ(&mut e, "\"*dd");
+    assert_eq!(e.take_yank(), yank('*', "n two", RegKind::Linewise));
 }
 
 #[test]

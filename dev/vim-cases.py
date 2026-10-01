@@ -15,10 +15,20 @@ cases.json is a list of cases:
     [text, row, col, keys, {"lines": H, "top": T}] -> a view row, H lines on screen from line
                                                     T: (text, cursor, H, T, keys, cursor after,
                                                     top line after)
+    [text, row, col, keys, {"regs": "a1-", "set": {"a": ["x", "v"]}}]
+                                                 -> a register row: (text, cursor, registers
+                                                    set before, keys, text after, cursor after,
+                                                    the registers named in "regs" after)
+
+In a register row a register is (name, text, kind) and kind is 'v' (by character), 'V' (by
+line, its text without the last line break) or 'b' (a block); a register that is empty after
+is None. "set" is optional and fills registers before the keys (setreg()). `"` names the
+unnamed register.
 
 Rows and columns count from 0, columns in characters (not bytes). Keys use Vim's `:normal`
 notation (`<Esc>`, `<CR>`, `<C-d>`). Hangul in the output is written as \\u{...} escapes.
-The options match the editor: autoindent, 4-column indent written with spaces, no line wrap,
+Neovim's clipboard provider is turned off, so a case never reads or writes the system clipboard
+(leave the `"+` and `"*` registers out of the cases). The options match the editor: autoindent, 4-column indent written with spaces, no line wrap,
 `startofline`, no `joinspaces`, `;` after `t` not staying next to its character.
 
 A command that fails in Neovim ends `:normal` there, so a case whose keys fail before the last
@@ -34,14 +44,17 @@ OPTIONS = ("set nofixeol noeol autoindent sol backspace=indent,eol,start sw=4 ts
            "nojoinspaces so=0 nowrap cpo-=; nosmartindent")
 
 
-def run(text, row, col, keys, lines=None, top=None):
-    """Neovim's text, cursor (row, byte column), register and top line after `keys`."""
+def run(text, row, col, keys, lines=None, top=None, regs="", preset=None):
+    """Neovim's text, cursor (row, byte column), register and top line after `keys`; `regs`:
+    the registers to read after, `preset`: {name: [text, kind]} set before."""
     with tempfile.TemporaryDirectory() as d:
         src, out, script = (os.path.join(d, n) for n in ("in.txt", "out.json", "run.vim"))
         with open(src, "w") as f:
             f.write(text)
         k = keys.replace("\\", "\\\\").replace("<", "\\<").replace('"', '\\"')
-        cmds = [OPTIONS, "silent! nunmap Y"]
+        cmds = ["let g:loaded_clipboard_provider = 1", OPTIONS, "silent! nunmap Y"]
+        for name, (value, kind) in (preset or {}).items():
+            cmds.append(f"call setreg({json.dumps(name)}, {json.dumps(value)}, {json.dumps(kind)})")
         if lines:
             cmds.append(f"set lines={lines + 2}")
         cmds.append(f"call cursor({row + 1}, {col + 1})")
@@ -52,7 +65,8 @@ def run(text, row, col, keys, lines=None, top=None):
             "let p = getcurpos()",
             "call writefile([json_encode({'text': join(getline(1, '$'), \"\\n\"), 'row': p[1] - 1,"
             " 'col': p[2] - 1, 'reg': getreg('\"'), 'regtype': getregtype('\"'), 'top': line('w0') - 1,"
-            f" 'mode': mode(), 'lines': winheight(0)}})], '{out}')",
+            f" 'mode': mode(), 'lines': winheight(0),"
+            f" 'regs': map({json.dumps(list(regs))}, '[getreg(v:val), getregtype(v:val)]')}})], '{out}')",
             "qa!",
         ]
         with open(script, "w") as f:
@@ -66,6 +80,15 @@ def run(text, row, col, keys, lines=None, top=None):
     if o["mode"] != "n":
         print(f"{keys!r} on {text!r}: Neovim ended in mode {o['mode']!r}", file=sys.stderr)
     return o
+
+
+def rust_reg(value, regtype):
+    """A register as the register rows write it: `Some(("text", 'v'))` or `None`."""
+    if regtype == "":
+        return "None"
+    if regtype == "V":
+        return f"Some(({rust(value.removesuffix(chr(10)))}, 'V'))"
+    return f"Some(({rust(value)}, '{'b' if regtype.startswith(chr(22)) else 'v'}'))"
 
 
 def rust(s):
@@ -86,10 +109,18 @@ def main():
         cases = json.load(f)
     for case in cases:
         text, row, col, keys = case[:4]
-        view = case[4] if len(case) > 4 else None
+        opts = case[4] if len(case) > 4 else {}
+        view = opts if "lines" in opts else None
         byte_col = len(text.split("\n")[row][:col].encode())
-        o = run(text, row, byte_col, keys, *(view["lines"], view.get("top", 0)) if view else ())
+        o = run(text, row, byte_col, keys, *(view["lines"], view.get("top", 0)) if view else (None, None),
+                regs=opts.get("regs", ""), preset=opts.get("set"))
         at = (o["row"], char_col(o["text"].split("\n")[o["row"]], o["col"]))
+        if "regs" in opts:
+            kind = {"v": "v", "V": "V", "b": "b"}
+            preset = ", ".join(f"('{n}', {rust(v)}, '{kind[k[0]]}')" for n, (v, k) in opts.get("set", {}).items())
+            after = ", ".join(f"('{n}', {rust_reg(*r)})" for n, r in zip(opts["regs"], o["regs"]))
+            print(f"    ({rust(text)}, ({row}, {col}), &[{preset}], {rust(keys)}, {rust(o['text'])}, {at}, &[{after}]),")
+            continue
         if view:
             print(f"    ({rust(text)}, ({row}, {col}), {view['lines']}, {view.get('top', 0)}, {rust(keys)}, {at}, {o['top']}),")
             continue

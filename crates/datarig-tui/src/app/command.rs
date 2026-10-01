@@ -13,7 +13,9 @@
 //! [`complete_arg`].
 
 use super::action::{Action, LangSetting};
-use datarig_core::config::{ClipboardSetting, CommandsPosition, CopyHeader, CursorShape, DetailView, IconsSetting};
+use datarig_core::config::{
+    ClipboardSetting, CommandsPosition, CopyHeader, CursorShape, DetailView, EditorClipboard, IconsSetting,
+};
 use datarig_core::i18n::Label;
 use datarig_core::secret::{DefaultSource, SourceKind};
 
@@ -285,6 +287,7 @@ pub enum Setting {
     Clipboard(ClipboardSetting),
     CopyHeader(CopyHeader),
     CursorShape(CursorShape),
+    EditorClipboard(EditorClipboard),
 }
 
 /// The categories of the settings screen, in its order.
@@ -440,6 +443,16 @@ pub const SETTINGS: &[SettingSpec] = &[
         values: Values::Fixed(&[
             ("on", Setting::CursorShape(CursorShape::On), Label::SettingCursorShapeOn),
             ("off", Setting::CursorShape(CursorShape::Off), Label::SettingCursorShapeOff),
+        ]),
+    },
+    SettingSpec {
+        key: "editor.clipboard",
+        label: Label::SettingEditorClipboard,
+        about: Label::SettingEditorClipboardAbout,
+        group: SettingGroup::Editor,
+        values: Values::Fixed(&[
+            ("on", Setting::EditorClipboard(EditorClipboard::On), Label::SettingEditorClipboardOn),
+            ("off", Setting::EditorClipboard(EditorClipboard::Off), Label::SettingEditorClipboardOff),
         ]),
     },
     SettingSpec {
