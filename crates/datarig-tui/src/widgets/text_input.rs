@@ -69,6 +69,30 @@ impl TextInput {
         self.cursor = self.text[..b + s.len()].graphemes(true).count();
     }
 
+    /// Delete the word before the cursor (`Ctrl+W` where an input takes it): the blanks
+    /// before it, then a run of letters, digits and `_`, or of other symbols.
+    pub fn delete_word_back(&mut self) -> InputResult {
+        let gs: Vec<&str> = self.text.graphemes(true).take(self.cursor).collect();
+        let word = |g: &str| g.chars().next().is_some_and(|c| c.is_alphanumeric() || c == '_');
+        let mut a = gs.len();
+        while a > 0 && gs[a - 1].chars().all(char::is_whitespace) {
+            a -= 1;
+        }
+        if a > 0 {
+            let w = word(gs[a - 1]);
+            while a > 0 && word(gs[a - 1]) == w && !gs[a - 1].chars().all(char::is_whitespace) {
+                a -= 1;
+            }
+        }
+        if a == gs.len() {
+            return InputResult::Ignored;
+        }
+        let (from, to) = (self.byte_at(a), self.byte_at(self.cursor));
+        self.text.drain(from..to);
+        self.cursor = a;
+        InputResult::Changed
+    }
+
     pub fn handle_key(&mut self, k: &KeyEvent) -> InputResult {
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         let alt = k.modifiers.contains(KeyModifiers::ALT);

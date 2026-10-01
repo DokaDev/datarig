@@ -334,7 +334,7 @@ const VIM: &[&str] = &[
     "1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "\"", // edits
     "x", "X", "D", "C", "Y", "s", "S", "r", "R", "p", "P", "u", "ctrl+r", "J", "g J", "~", // modes
     "i", "a", "I", "A", "o", "O", "v", "V", "ctrl+v", "esc", // search
-    "/", "?", "n", "N", "*", "#", // scrolling
+    "/", "?", "n", "N", "*", "#", "g *", "g #", // scrolling
     "ctrl+d", "ctrl+u", "ctrl+f", "ctrl+b", "z z", "z t", "z b", "z enter",
     // macros (a later step); also keeps `q` from quitting while editing
     "q",
@@ -366,6 +366,8 @@ const RESERVED: &[(Ctx, &[&str], &str)] = &[
     (VimNormal, VIM, "vim"),
     (VimVisual, VIM, "vim"),
     (VimInsert, VIM_INSERT, "vim Insert"),
+    (VimSearch, &["esc", "enter", "ctrl+w"], "vim search"),
+    (VimSearch, TEXT, "text input"),
     (Commands, &["esc", "enter", "up", "down", "ctrl+p", "ctrl+n", "tab", "shift+tab"], "command line"),
     (Commands, TEXT, "text input"),
     (ExplorerFilter, TEXT, "text input"),

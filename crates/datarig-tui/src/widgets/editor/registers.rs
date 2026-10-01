@@ -3,7 +3,8 @@
 //! one line, shifted down by each new one), `"-` (smaller deletes), `"_` (throws the text away)
 //! and `"+` / `"*` (the system clipboard: the editor keeps what went there or what the app read
 //! from it for a put, the app does the reading and writing). `".` holds the text the last
-//! Insert session typed; `":` `"%` `"#` `"/` are names Vim knows that hold nothing here.
+//! Insert session typed, `"/` the pattern of the last search; `":` `"%` `"#` are names Vim knows
+//! that hold nothing here.
 //!
 //! A write that Vim with `clipboard=unnamedplus` would send to the system clipboard (any yank,
 //! delete or change without a register, and `"+` / `"*`) is offered to the app as a [`Yank`].
@@ -108,6 +109,8 @@ pub(super) struct Registers {
     clipboard: Option<Register>,
     /// `".`: what the last Insert session typed.
     inserted: Option<Register>,
+    /// `"/`: the pattern of the last search.
+    search: Option<Register>,
     /// The register the unnamed one stands for (the one written last).
     last: Option<char>,
 }
@@ -123,6 +126,7 @@ impl Registers {
             '-' => self.small.as_ref(),
             '+' | '*' => self.clipboard.as_ref(),
             '.' => self.inserted.as_ref(),
+            '/' => self.search.as_ref(),
             _ => None,
         }
     }
@@ -135,6 +139,11 @@ impl Registers {
     /// What the last Insert session typed (`".`).
     pub(super) fn set_inserted(&mut self, text: String) {
         self.inserted = Some(Register::new(text, RegKind::Charwise));
+    }
+
+    /// The pattern of the last search (`"/`).
+    pub(super) fn set_search(&mut self, pattern: String) {
+        self.search = Some(Register::new(pattern, RegKind::Charwise));
     }
 
     /// Put `reg` in register `c`, appending for `A`–`Z`; it becomes the unnamed register.

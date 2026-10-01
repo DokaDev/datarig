@@ -506,6 +506,13 @@ impl App {
                 self.overlays.close(OverlayKind::Commands);
                 self.apply_setting(setting);
             }
+            (command::Command::NoHighlight, _) => {
+                if !arg.is_empty() {
+                    return err(Msg::CommandsErrorNoArgs { name });
+                }
+                self.overlays.close(OverlayKind::Commands);
+                self.tabs.iter_mut().for_each(|t| t.editor.clear_highlight());
+            }
             (command::Command::Recover, _) => {
                 if !arg.is_empty() {
                     return err(Msg::CommandsErrorNoArgs { name });

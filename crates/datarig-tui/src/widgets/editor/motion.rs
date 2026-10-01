@@ -1,8 +1,8 @@
 //! Motions: where one leads with a count, and the text it covers for an operator. The word
 //! motions follow Vim's rules, which walk every grapheme and the end of each line.
 
-use super::Editor;
 use super::buffer::{class, graphemes};
+use super::{Editor, Mode};
 use ratatui::crossterm::event::KeyCode;
 
 /// A text position: line and grapheme (the grapheme count of the line is its end).
@@ -49,6 +49,12 @@ pub(super) enum Motion {
     ScreenTop,
     ScreenMiddle,
     ScreenBottom,
+    /// `/`, `?`, `n`, `N`, `*`, `#`: the next match of the last search forward or back, from
+    /// the cursor or from column `from` of its line (the start of the word of `*`).
+    Search {
+        forward: bool,
+        from: Option<usize>,
+    },
 }
 
 /// How an operator takes the text between the cursor and where a motion leads.
@@ -132,6 +138,7 @@ impl Motion {
             | Motion::FirstNonBlank
             | Motion::ParaForward
             | Motion::ParaBack
+            | Motion::Search { .. }
             | Motion::Find { forward: false, .. } => RangeKind::Exclusive,
             Motion::Match if explicit => RangeKind::Linewise,
             Motion::WordEnd
@@ -453,6 +460,13 @@ impl Editor {
                 let r = self.screen_line(m, count);
                 (r, self.first_nonblank(r))
             }
+            Motion::Search { forward, from } => {
+                let (r, c) = self.search_target(forward, from, count)?;
+                // A match at the end of a line: Visual mode takes the line break there, anything
+                // else stops on the last grapheme (Vim keeps the cursor on the text).
+                let c = if self.mode == Mode::Visual { c } else { c.min(self.gcount(r).saturating_sub(1)) };
+                (r, c)
+            }
         };
         Some((to, false))
     }
@@ -536,6 +550,10 @@ impl Editor {
         match m {
             Motion::Up | Motion::Down => self.move_vert(r as isize - self.row as isize),
             Motion::LineEnd => {
+                self.set_pos(r, c);
+                self.want_x = Some(usize::MAX);
+            }
+            Motion::Search { .. } if c > 0 && c >= self.gcount(r) => {
                 self.set_pos(r, c);
                 self.want_x = Some(usize::MAX);
             }

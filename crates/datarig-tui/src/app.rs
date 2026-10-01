@@ -1208,6 +1208,7 @@ impl App {
                 Focus::Results => Ctx::Grid,
                 Focus::Inspector if self.inspector_shown() => Ctx::Inspector,
                 Focus::Inspector => Ctx::Grid,
+                Focus::Editor if self.tab().editor.searching() => Ctx::VimSearch,
                 Focus::Editor => match self.tab().editor.mode {
                     Mode::Normal => Ctx::VimNormal,
                     Mode::Insert => Ctx::VimInsert,

@@ -13,6 +13,7 @@
 
 use crate::app::App;
 use crate::input::kitty;
+use crate::keymap::Ctx;
 use crate::widgets::editor::Mode;
 use datarig_core::config::CursorShape as CursorSetting;
 use ratatui::crossterm::cursor::SetCursorStyle;
@@ -49,7 +50,12 @@ pub fn cursor_shape(app: &App) -> Option<CursorShape> {
         return None;
     }
     let ctx = app.key_context();
-    let bar = if ctx.is_editor() { app.tab().editor.mode == Mode::Insert } else { ctx.is_text_input() };
+    let bar = match ctx {
+        // The search prompt is typed into, whatever the editor's mode.
+        Ctx::VimSearch => true,
+        _ if ctx.is_editor() => app.tab().editor.mode == Mode::Insert,
+        _ => ctx.is_text_input(),
+    };
     Some(if bar { CursorShape::Bar } else { CursorShape::Block })
 }
 

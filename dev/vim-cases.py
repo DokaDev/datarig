@@ -20,6 +20,10 @@ cases.json is a list of cases:
                                                     set before, keys, text after, cursor after,
                                                     the registers named in "regs" after)
 
+Any case may add {"vim": KEYS}: the keys Neovim gets in place of `keys`, for a command whose
+notation differs between the two (a search pattern: the editor's are Rust regular expressions,
+`/\\bab\\b<CR>` where Vim types `/\\<ab\\><CR>`). The row keeps `keys`.
+
 In a register row a register is (name, text, kind) and kind is 'v' (by character), 'V' (by
 line, its text without the last line break) or 'b' (a block); a register that is empty after
 is None. "set" is optional and fills registers before the keys (setreg()). `"` names the
@@ -112,7 +116,7 @@ def main():
         opts = case[4] if len(case) > 4 else {}
         view = opts if "lines" in opts else None
         byte_col = len(text.split("\n")[row][:col].encode())
-        o = run(text, row, byte_col, keys, *(view["lines"], view.get("top", 0)) if view else (None, None),
+        o = run(text, row, byte_col, opts.get("vim", keys), *(view["lines"], view.get("top", 0)) if view else (None, None),
                 regs=opts.get("regs", ""), preset=opts.get("set"))
         at = (o["row"], char_col(o["text"].split("\n")[o["row"]], o["col"]))
         if "regs" in opts:

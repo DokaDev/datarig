@@ -107,11 +107,16 @@ Everything below works today, with PostgreSQL.
   `Home`/`End`, `Backspace`/`Delete`), plus `Ctrl+W`, `Ctrl+U` and `Ctrl+R {register}`, and
   `Enter` keeps the line's indent; a paste from the terminal goes in at the cursor in every
   mode. Registers work as in Vim (`"a`-`"z` and `"A`-`"Z` to append, `"0`, the `"1`-`"9` delete
-  ring, `"-`, `"_`, `".`, `"+`/`"*`; `":` `"%` `"#` `"/` are not kept), and like Vim with
+  ring, `"-`, `"_`, `".`, `"/`, `"+`/`"*`; `":` `"%` `"#` are not kept), and like Vim with
   `clipboard=unnamedplus` every yank, delete or change without a register also goes to the
   system clipboard (or through OSC 52 over SSH; `[editor] clipboard = "off"` turns that off).
   `"+p` reads the system clipboard only when you type it; over SSH use the terminal's paste.
-  Search and macros are not there yet (their keys are reserved). Commands keep working with a
+  Search with `/` and `?` (a prompt on the editor's last line; the cursor shows the match as
+  you type), `n` `N`, `*` `#` and `g*` `g#`, with counts and after an operator (`d/from`);
+  matches on screen stay highlighted until `:noh`. Search patterns are
+  [Rust regular expressions](https://docs.rs/regex/latest/regex/#syntax), not Vim's: case
+  sensitive unless the pattern starts with `(?i)`, `\b` for a word boundary, and a match never
+  spans two lines. Macros are not there yet (their keys are reserved). Commands keep working with a
   Korean (2-Set) input source: the jamo are read as the QWERTY keys they sit on, and the
   character `f`, `t` or `r` waits for is taken as typed. The supported keys are listed in
   [docs/keybindings.md](docs/keybindings.md).
@@ -169,7 +174,7 @@ Planned, in no particular order and with no dates:
 - TLS connections (today every connection is plain TCP; use an SSH tunnel across untrusted
   networks, and servers that require TLS cannot be reached yet)
 - A server monitor (sessions, locks, activity)
-- More of vim: search, block Visual mode, macros
+- More of vim: block Visual mode, marks, macros, `:s`
 - DDL view of tables and other objects
 - Query profiling and charts
 - Multi-hop SSH and importing hosts from `~/.ssh/config`

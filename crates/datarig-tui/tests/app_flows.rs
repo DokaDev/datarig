@@ -1402,6 +1402,8 @@ fn explorer_grid_and_editor_keys_follow_the_plan() {
     // Editor Normal: `q` no longer quits; `?` is vim's (backward search), not help.
     h.keys("q?");
     assert!(!h.app.quit && h.overlay_kind().is_none());
+    assert_eq!(h.app.key_context(), Ctx::VimSearch, "the search prompt");
+    h.key(KeyCode::Esc);
     // Space ? and F1 are help there.
     h.keys(" ?");
     assert_eq!(h.overlay_kind(), Some(OverlayKind::Help));

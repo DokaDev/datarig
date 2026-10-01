@@ -45,7 +45,18 @@ pub fn render() -> String {
          text objects `iw aw iW aW`, `i( a(` (`ib ab`), `i[ a[`, `i{ a{` (`iB aB`), `i< a<`, `i\" a\" \
          i' a'`, ``i` a` `` and `ip ap`; `x X s S D C Y p P r J gJ ~ u Ctrl+R`; `.` (the last change \
          again, what was typed in Insert mode included; `3.` with a new count); `i a I A o O` (a count \
-         types the text that many times); scrolling with `Ctrl+D Ctrl+U Ctrl+F Ctrl+B zz zt zb`; Visual \
+         types the text that many times); scrolling with `Ctrl+D Ctrl+U Ctrl+F Ctrl+B zz zt zb`; search \
+         with `/` and `?` (a prompt on the editor's last line: the cursor shows the match while the \
+         pattern is typed, `Enter` searches, `Esc` or any key of the app goes back, `Ctrl+W` deletes a \
+         word; an empty pattern takes the last one), `n` `N`, `*` `#` (the word under the cursor, as a \
+         whole word) and `g*` `g#` (also inside longer words), with counts and after an operator \
+         (`d/from` `Enter`, `yn`: up to the match, without it; a match at the end of a line stops on \
+         its last character, as in Vim); \
+         the matches on screen stay highlighted until `:nohlsearch` (`:noh`) and the next search shows \
+         them again. Search patterns are Rust regular expressions \
+         (<https://docs.rs/regex/latest/regex/#syntax>), not Vim's: case-sensitive (`(?i)` at the start \
+         ignores case), `\\b` for a word boundary (Vim's `\\<` `\\>`), `.` `*` `+` `?` `(` `)` `|` without a \
+         backslash; a match lies within one line, and search offsets (`/foo/e`) are not supported; Visual \
          mode by character (`v`) and by line (`V`) with the motions and text objects, `y d x c`, `Y D X \
          C S` (whole lines), `r J gJ u U ~ > <`, `o` (the other end) and `p P` (a register in place of the \
          selection; `P` keeps the replaced text out of the registers); in Insert mode `Ctrl+W` (the \
@@ -53,9 +64,9 @@ pub fn render() -> String {
          and `Enter` keeping the indent. One command is one undo step. Registers as in Vim: `\"x` before a \
          command in Normal and Visual mode (`\"ayy`, `2\"ap`), the unnamed one, `\"a`-`\"z` (`\"A`-`\"Z` \
          append), `\"0` (the last yank), `\"1`-`\"9` (the last deletes of lines; `.` after `\"1p` puts \
-         `\"2`), `\"-` (small deletes), `\"_` (nothing kept), `\".` (the text last typed in Insert mode) and `\"+` \
-         `\"*` (the system clipboard); `\":` `\"%` `\"#` `\"/` are not kept (a put from them says the register \
-         is empty). As in \
+         `\"2`), `\"-` (small deletes), `\"_` (nothing kept), `\".` (the text last typed in Insert mode), `\"/` \
+         (the last search pattern) and `\"+` `\"*` (the system clipboard); `\":` `\"%` `\"#` are not kept (a put \
+         from them says the register is empty). As in \
          Vim with `clipboard=unnamedplus`, a yank, delete or change without a register also goes to the \
          system clipboard, through the `clipboard` setting's way (`[editor] clipboard = \"off\"` keeps them \
          in the editor); `\"a` and `\"_` never do. `\"+p` reads the system clipboard only when typed, and \

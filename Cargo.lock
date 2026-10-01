@@ -904,6 +904,7 @@ dependencies = [
  "insta",
  "log",
  "ratatui",
+ "regex",
  "serde_json",
  "terminal-colorsaurus",
  "tokio",

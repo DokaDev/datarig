@@ -54,6 +54,8 @@ pub enum Command {
     /// `:use <db>`, `:use <db>.<schema>`, `:use .<schema>`: the active tab's
     /// database and schema; alone, pick them.
     Use,
+    /// `:nohlsearch`: no search highlight in the editors until the next search.
+    NoHighlight,
 }
 
 /// The type of a command's argument (it decides the completions).
@@ -223,6 +225,14 @@ pub const COMMANDS: &[CommandSpec] = &[
         arg: Some(ArgKind::Context),
         label: Label::ActionTabSetContext,
         action: Some(Action::SetTabContext),
+    },
+    CommandSpec {
+        command: Command::NoHighlight,
+        name: "nohlsearch",
+        aliases: &["noh", "nohl"],
+        arg: None,
+        label: Label::CommandNohlsearch,
+        action: None,
     },
 ];
 

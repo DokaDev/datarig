@@ -776,6 +776,38 @@ fn registers_as_vim() {
 
 /// `.` after a put from a numbered register puts the next one (`"1p...` puts `"1` to `"4`),
 /// also after an undo (`"1pu.u.`), and stops at `"9`.
+/// `"/` holds the last search's pattern; a delete over a search motion goes to `"1` even
+/// within a line, as Neovim does it.
+#[test]
+fn searches_and_registers_as_vim() {
+    const CASES: &[RegCase] = &[
+        ("ab\nab", (0, 0), &[], "/b<CR>", "ab\nab", (0, 1), &[('/', Some(("b", 'v')))]),
+        (
+            "select a, b from t\nwhere a = 1 and b = 2\norder by a, b\n  -- a comment about a\nselect b from u",
+            (0, 0),
+            &[],
+            "d/from<CR>",
+            "from t\nwhere a = 1 and b = 2\norder by a, b\n  -- a comment about a\nselect b from u",
+            (0, 0),
+            &[
+                ('"', Some(("select a, b ", 'v'))),
+                ('1', Some(("select a, b ", 'v'))),
+                ('-', Some(("select a, b ", 'v'))),
+            ],
+        ),
+        (
+            "select a, b from t\nwhere a = 1 and b = 2\norder by a, b\n  -- a comment about a\nselect b from u",
+            (0, 0),
+            &[],
+            "/a<CR>?<CR>",
+            "select a, b from t\nwhere a = 1 and b = 2\norder by a, b\n  -- a comment about a\nselect b from u",
+            (3, 21),
+            &[('/', Some(("a", 'v')))],
+        ),
+    ];
+    check(CASES);
+}
+
 #[test]
 fn repeating_a_numbered_put_takes_the_next_register() {
     let mut e = at("a\nb\nc\nd\ne", (0, 0));
