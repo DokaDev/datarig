@@ -41,6 +41,36 @@ fn v_then_j_then_ctrl_e_runs_the_selected_lines() {
     assert_eq!(h.app.tab().editor.mode, Mode::Normal, "the run ends Visual mode");
 }
 
+/// `Ctrl+V` selects a block through the keymap and the status bar says V-BLOCK; `y` puts its
+/// pieces in the register and on the system clipboard (each line with its line break, as Vim
+/// writes a block there), and `I` types on every line of it. Ctrl+E on a block runs its text.
+#[test]
+fn ctrl_v_selects_a_block_that_reaches_the_clipboard() {
+    let mut h = editor_with("SELECT a1, b1;\nSELECT a2, b2;\nSELECT a3, b3;");
+    let clip = FakeClipboard::attach(&mut h, false, &[]);
+    h.keys("w");
+    h.ctrl('v');
+    assert_eq!((h.app.tab().editor.mode, h.app.key_context()), (Mode::Visual, Ctx::VimVisual));
+    assert!(h.status(100, 30).contains("V-BLOCK"), "{}", h.status(100, 30));
+    h.keys("jjly");
+    assert_eq!(h.app.tab().editor.mode, Mode::Normal);
+    assert_eq!(clip.last().as_deref(), Some("a1\na2\na3\n"));
+    assert!(!h.status(100, 30).contains("V-BLOCK"));
+    h.ctrl('v');
+    h.keys("jjIx_");
+    h.key(KeyCode::Esc);
+    assert_eq!(h.app.tab().editor.text(), "SELECT x_a1, b1;\nSELECT x_a2, b2;\nSELECT x_a3, b3;");
+
+    let mut h = editor_with("SELECT 1; -- one\nSELECT 22; -- two");
+    h.ctrl('v');
+    h.keys("jf;");
+    assert_eq!(h.app.tab().editor.selection().as_deref(), Some("SELECT 1; \nSELECT 22;"));
+    h.sent();
+    h.ctrl('e');
+    assert_eq!(statements(&h.sent()), ["SELECT 1", "SELECT 22"]);
+    assert_eq!(h.app.tab().editor.mode, Mode::Normal, "the run ends Visual mode");
+}
+
 /// Operators, counts and `D`/`C`/`Y` reach the editor through the keymap, also after a count
 /// or an operator that waits for its motion (`d` then `g g`).
 #[test]

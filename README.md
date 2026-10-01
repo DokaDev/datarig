@@ -102,7 +102,11 @@ Everything below works today, with PostgreSQL.
   `>>`); `x` `X` `s` `S` `D` `C` `Y`, `p` `P`, `r`, `J` `gJ`, `~`, `u` and `Ctrl+R`; `.` repeats
   the last change, what was typed included; `i` `a` `I` `A` `o` `O`; `Ctrl+D` `Ctrl+U` `Ctrl+F`
   `Ctrl+B` and `zz` `zt` `zb` scroll; Visual mode by character (`v`) or by line (`V`), where `p`
-  and `P` put a register in place of the selection. One command is one undo step. The status bar
+  and `P` put a register in place of the selection, and by block (`Ctrl+V`): screen columns, so
+  wide characters (Hangul, CJK) line up, `$` to each line's end, `o` `O`, `y` `d` `c` `D` `C`,
+  `I` and `A` (what you type goes on every line of the block), `r` `~` `u` `U` `>` `<` `J` and
+  `p` `P`, as Vim does them; `.` repeats a block operator on a block of the same size. One
+  command is one undo step. The status bar
   says `i` starts typing and `Esc` stops. Insert mode keeps the usual editing keys (arrows,
   `Home`/`End`, `Backspace`/`Delete`), plus `Ctrl+W`, `Ctrl+U` and `Ctrl+R {register}`, and
   `Enter` keeps the line's indent; a paste from the terminal goes in at the cursor in every
@@ -174,7 +178,7 @@ Planned, in no particular order and with no dates:
 - TLS connections (today every connection is plain TCP; use an SSH tunnel across untrusted
   networks, and servers that require TLS cannot be reached yet)
 - A server monitor (sessions, locks, activity)
-- More of vim: block Visual mode, marks, macros, `:s`
+- More of vim: marks (and `gv`), macros, `:s`
 - DDL view of tables and other objects
 - Query profiling and charts
 - Multi-hop SSH and importing hosts from `~/.ssh/config`

@@ -193,7 +193,7 @@ impl Ctx {
             Ctx::Inspector => "The result inspector next to the grid, after a click on it.",
             Ctx::Welcome => "The welcome panel shown while there is no connection profile.",
             Ctx::VimNormal => "Query editor, vim Normal mode (`i` starts typing).",
-            Ctx::VimVisual => "Query editor, vim Visual mode (`v` by character, `V` by line).",
+            Ctx::VimVisual => "Query editor, vim Visual mode (`v` by character, `V` by line, `Ctrl+V` by block).",
             Ctx::VimInsert => "Query editor, vim Insert mode: typing (`Esc` goes back to Normal).",
             Ctx::VimSearch => {
                 "The search prompt of `/` and `?` on the editor's last line: `Enter` searches, `Esc` goes back to where the cursor was."

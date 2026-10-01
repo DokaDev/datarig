@@ -21,7 +21,8 @@
 //!   doubled operators, prefixes, character arguments, the single-key commands) and applies
 //!   the operators; `edit` holds the edits that are not deletes or puts (`r`, `J`, case,
 //!   indent), `scroll` the scrolling keys.
-//! * `visual` is Visual mode by character (`v`) or by line (`V`).
+//! * `visual` is Visual mode by character (`v`) or by line (`V`), `block` by block
+//!   (`Ctrl+V`): a rectangle of screen columns and the operators on it.
 //! * `insert` is Insert mode, with autoindent, `Ctrl+W` / `Ctrl+U` and `Ctrl+R {register}`.
 //! * `registers` holds what yanks and deletes wrote, as Vim's registers do.
 //! * `repeat` records the last change for `.`.
@@ -31,6 +32,7 @@
 //! One command is one undo step: an operator, a put, a paste, a `.`, or an Insert session with
 //! the change that started it.
 
+mod block;
 mod brackets;
 mod buffer;
 mod edit;
@@ -57,7 +59,8 @@ pub use search::{SearchNotice, SearchWork};
 pub enum Mode {
     Normal,
     Insert,
-    /// By character, or by line ([`Editor::visual_lines`]).
+    /// By character, by line ([`Editor::visual_lines`]) or by block
+    /// ([`Editor::visual_block`]).
     Visual,
 }
 
@@ -70,6 +73,14 @@ impl Mode {
             Mode::Visual => Label::StatusModeVisual,
         }
     }
+}
+
+/// What Visual mode selects: characters (`v`), whole lines (`V`) or a block (`Ctrl+V`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Sel {
+    Chars,
+    Lines,
+    Block,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -91,8 +102,8 @@ pub struct Editor {
     pub col: usize,
     want_x: Option<usize>,
     pub mode: Mode,
-    /// Visual mode takes whole lines (`V`).
-    visual_lines: bool,
+    /// What Visual mode selects.
+    sel: Sel,
     anchor: (usize, usize),
     /// The Normal/Visual command typed so far (count, operator, prefix).
     cmd: vim::Pending,
@@ -121,6 +132,13 @@ pub struct Editor {
     /// The last register write for the system clipboard, until the app takes it
     /// ([`Editor::take_yank`]).
     yanked: Option<Yank>,
+    /// The Insert session of a block's `I`, `A` or `c`: what it types goes on the block's
+    /// other lines when it ends.
+    block_insert: Option<block::BlockInsert>,
+    /// The width of the block `.` selects again (`usize::MAX`: to the ends of the lines).
+    redo_width: Option<usize>,
+    /// Bytes the block operators walked, for the benchmark.
+    block_work: usize,
     /// The `/` or `?` prompt, while it is open.
     prompt: Option<search::Prompt>,
     last_search: Option<search::Last>,
@@ -163,7 +181,7 @@ impl Editor {
             col: 0,
             want_x: None,
             mode: Mode::Normal,
-            visual_lines: false,
+            sel: Sel::Chars,
             anchor: (0, 0),
             cmd: vim::Pending::default(),
             last_find: None,
@@ -178,6 +196,9 @@ impl Editor {
             clip_unread: false,
             problem: None,
             yanked: None,
+            block_insert: None,
+            redo_width: None,
+            block_work: 0,
             prompt: None,
             last_search: None,
             hl: false,
@@ -215,17 +236,24 @@ impl Editor {
         self.lines.join("\n")
     }
 
-    /// Catalog label of the mode as the status bar shows it (Visual by line is `V-LINE`).
+    /// Catalog label of the mode as the status bar shows it (Visual by line is `V-LINE`, by
+    /// block `V-BLOCK`).
     pub fn mode_label(&self) -> Label {
-        match self.mode {
-            Mode::Visual if self.visual_lines => Label::StatusModeVisualLine,
-            m => m.label(),
+        match (self.mode, self.sel) {
+            (Mode::Visual, Sel::Lines) => Label::StatusModeVisualLine,
+            (Mode::Visual, Sel::Block) => Label::StatusModeVisualBlock,
+            (m, _) => m.label(),
         }
     }
 
     /// Visual mode takes whole lines (`V`).
     pub fn visual_lines(&self) -> bool {
-        self.mode == Mode::Visual && self.visual_lines
+        self.mode == Mode::Visual && self.sel == Sel::Lines
+    }
+
+    /// Visual mode takes a block (`Ctrl+V`).
+    pub fn visual_block(&self) -> bool {
+        self.mode == Mode::Visual && self.sel == Sel::Block
     }
 
     /// Register `name` (`"` the unnamed one, the text of the last yank or delete).
@@ -252,9 +280,10 @@ impl Editor {
         self.offer(y);
     }
 
-    /// Keep `y` for the app; nothing (`C` on an empty line) never empties the clipboard.
+    /// Keep `y` for the app; nothing (`C` on an empty line, a block yank of nothing) never
+    /// empties the clipboard.
     fn offer(&mut self, y: Option<Yank>) {
-        if let Some(y) = y.filter(|y| !y.reg.text.is_empty() || y.reg.kind != RegKind::Charwise) {
+        if let Some(y) = y.filter(|y| !y.reg.text.is_empty() || y.reg.kind == RegKind::Linewise) {
             self.yanked = Some(y);
         }
     }
@@ -351,7 +380,8 @@ impl Editor {
 
     /// Bracketed paste: typed as it is in Insert mode; in Normal mode inserted at the cursor
     /// (the cursor ends on the character that was under it, so pastes follow each other), in
-    /// Visual mode in place of the selection. Outside Insert mode it is one undo step. Into
+    /// Visual mode in place of the selection (a block's text goes, the paste goes in where it
+    /// started). Outside Insert mode it is one undo step. Into
     /// the search prompt, it is part of the pattern (on one line).
     pub fn paste(&mut self, text: &str) -> EdEvent {
         let norm = text.replace("\r\n", "\n").replace('\r', "\n");
@@ -376,6 +406,7 @@ impl Editor {
                 let off = self.offset();
                 (off, off)
             }
+            Mode::Visual if self.sel == Sel::Block => return self.paste_over_block(&norm),
             Mode::Visual => {
                 let span = match self.visual_target(false) {
                     vim::Target::Chars { a, b } => (a, b),
@@ -444,7 +475,7 @@ impl Editor {
             self.set_pos(to.0, to.1);
             return;
         }
-        self.enter_visual(false, anchor);
+        self.enter_visual(Sel::Chars, anchor);
         self.row = to.0;
         self.col = to.1;
         self.want_x = None;
@@ -475,7 +506,7 @@ impl Editor {
     fn visual_span(&mut self, r: usize, a: usize, b: usize) {
         self.close_prompt();
         self.cmd = vim::Pending::default();
-        self.enter_visual(false, (r, a));
+        self.enter_visual(Sel::Chars, (r, a));
         self.row = r;
         self.col = b;
         self.want_x = None;

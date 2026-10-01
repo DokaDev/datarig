@@ -1,6 +1,7 @@
 //! Drawing: line numbers, the bar of what a run takes, syntax colors of the lines on screen
-//! (lexed from the cached line states), the matches of a search on them, the selection, the
-//! cursor line, and the search prompt on the last line while it is open.
+//! (lexed from the cached line states), the matches of a search on them, the selection (a
+//! block: the characters with a column in it), the cursor line, and the search prompt on the
+//! last line while it is open.
 
 use super::buffer::gw;
 use super::{Editor, Mode};
@@ -50,10 +51,13 @@ impl Editor {
             .enumerate()
             .map(|(i, t)| t.kind == Tok::Ident && toks.get(i + 1).is_some_and(|n| n.kind == Tok::LParen))
             .collect();
-        let sel = (self.mode == Mode::Visual).then(|| self.visual_bounds());
-        let stmt = if sel.is_some() { None } else { stmt };
+        let block = self.visual_block().then(|| self.block());
+        let sel = (self.mode == Mode::Visual && block.is_none()).then(|| self.visual_bounds());
+        // The lines of a block, as bytes of the text for the bar of what a run takes.
+        let block_bytes = block.map(|b| (self.line_bounds(b.first).0, self.line_bounds(b.last).1));
+        let stmt = if sel.is_some() || block.is_some() { None } else { stmt };
         // What a run takes: the selection, else the statement under the cursor.
-        let run = sel.or(stmt);
+        let run = sel.or(block_bytes).or(stmt);
 
         // The matches of the search on the lines on screen, found line by line as they are drawn.
         let hl = self.highlight_re();
@@ -72,6 +76,10 @@ impl Editor {
             }
             let line = &self.lines[r];
             let line_end = line_start + line.len();
+            // The columns of the block on this line (to its end after `$`).
+            let cols = block
+                .filter(|b| (b.first..=b.last).contains(&r))
+                .map(|b| (b.start, if b.max { usize::MAX } else { b.end }));
             let in_stmt = stmt.is_some_and(|(a, b)| line_start < b && a <= line_end);
             let bg = if r == self.row && self.mode != Mode::Visual {
                 th.cursor_line
@@ -115,6 +123,10 @@ impl Editor {
                     }
                 }
                 if sel.is_some_and(|(a, z)| b >= a && b < z) {
+                    style = style.patch(th.selection);
+                }
+                // A character partly in the block is marked whole.
+                if cols.is_some_and(|(s, e)| x + w.max(1) > s && x <= e) {
                     style = style.patch(th.selection);
                 }
                 if x + w > self.left && x < self.left + text_w {

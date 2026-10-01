@@ -19,6 +19,8 @@ pub(super) struct Step {
     changes: Vec<Change>,
     before: (usize, usize),
     after: (usize, usize),
+    /// A redo too puts the cursor where it was before (Vim, after a block's `A`).
+    redo_before: bool,
 }
 
 impl Step {
@@ -135,7 +137,8 @@ impl Editor {
     pub(super) fn splice(&mut self, a: usize, b: usize, s: &str) -> String {
         let removed = self.splice_raw(a, b, s);
         if self.undo.is_empty() {
-            self.undo.push(Step { changes: Vec::new(), before: (self.row, self.col), after: (self.row, self.col) });
+            let at = (self.row, self.col);
+            self.undo.push(Step { changes: Vec::new(), before: at, after: at, redo_before: false });
         }
         if let Some(step) = self.undo.last_mut() {
             step.changes.push(Change { at: a, removed: removed.clone(), inserted: s.to_string() });
@@ -189,12 +192,12 @@ impl Editor {
         gs.iter().position(|g| class(g) != 0).unwrap_or(gs.len().saturating_sub(1))
     }
 
-    /// Keep the cursor on the text: Insert mode may sit after the line's last grapheme, the
-    /// other modes on it.
+    /// Keep the cursor on the text: Insert mode and a Visual block (as Vim's Visual mode) may
+    /// sit after the line's last grapheme, the other modes on it.
     pub(super) fn clamp(&mut self) {
         self.row = self.row.min(self.lines.len() - 1);
         let n = self.gcount(self.row);
-        let max = if self.mode == Mode::Insert { n } else { n.saturating_sub(1) };
+        let max = if self.mode == Mode::Insert || self.visual_block() { n } else { n.saturating_sub(1) };
         self.col = self.col.min(max);
     }
 
@@ -207,12 +210,26 @@ impl Editor {
 
     /// Start an undo step: the changes until the next one are undone together.
     pub(super) fn snapshot(&mut self) {
-        self.undo.push(Step { changes: Vec::new(), before: (self.row, self.col), after: (self.row, self.col) });
+        let at = (self.row, self.col);
+        self.undo.push(Step { changes: Vec::new(), before: at, after: at, redo_before: false });
         let mut bytes: usize = self.undo.iter().map(Step::bytes).sum();
         while self.undo.len() > UNDO_STEPS || (bytes > UNDO_BYTES && self.undo.len() > 1) {
             bytes -= self.undo.remove(0).bytes();
         }
         self.redo.clear();
+    }
+
+    /// A redo of the current undo step puts the cursor where it was before it, as its undo does.
+    pub(super) fn redo_to_before(&mut self) {
+        if let Some(s) = self.undo.last_mut() {
+            s.redo_before = true;
+        }
+    }
+
+    /// The splices of the last undo step.
+    #[cfg(test)]
+    pub(super) fn last_step_changes(&self) -> usize {
+        self.undo.last().map_or(0, |s| s.changes.len())
     }
 
     /// Drop the current undo step if it changed nothing (an Insert session without typing).
@@ -237,7 +254,7 @@ impl Editor {
             for c in &step.changes {
                 self.splice_raw(c.at, c.at + c.removed.len(), &c.inserted);
             }
-            (self.row, self.col) = step.after;
+            (self.row, self.col) = if step.redo_before { step.before } else { step.after };
             self.undo.push(step);
         }
         self.clamp();

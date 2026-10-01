@@ -5,7 +5,7 @@ use crate::widgets::editor::{Editor, Mode};
 /// `(text, cursor, registers set before as (name, text, kind), keys, text after, cursor after,
 /// registers after as (name, (text, kind)))`; a kind is `'v'` (by character), `'V'` (by line)
 /// or `'b'` (a block).
-type RegCase = (
+pub(in crate::widgets::editor) type RegCase = (
     &'static str,
     (usize, usize),
     &'static [(char, &'static str, char)],
@@ -33,7 +33,7 @@ fn letter(k: RegKind) -> char {
 
 /// Run each case from a fresh editor and compare the text, the cursor and the registers; the
 /// failures are listed together.
-fn check(cases: &[RegCase]) {
+pub(in crate::widgets::editor) fn check(cases: &[RegCase]) {
     let mut failed = Vec::new();
     for &(text, cursor, set, keys, want, want_cursor, want_regs) in cases {
         let mut e = at(text, cursor);

@@ -265,7 +265,7 @@ fn brackets_are_no_tab_keys() {
 }
 
 /// `Ctrl+C` cancels the query in every editor mode (it has no copy meaning), and the vim keys
-/// the editor handles are reserved there, `D`, `C`, `Y` and `V` included, the motions,
+/// the editor handles are reserved there, `D`, `C`, `Y`, `V` and `Ctrl+V` included, the motions,
 /// operators, edits and scrolling keys of more than one stroke too.
 #[test]
 fn ctrl_c_cancels_everywhere_and_vim_keys_reach_the_editor() {
@@ -277,7 +277,7 @@ fn ctrl_c_cancels_everywhere_and_vim_keys_reach_the_editor() {
         for key in [
             "V", "v", "o", "D", "C", "Y", "X", "3", "0", "g g", "esc", "W", "B", "E", "g e", "g E", "f", "F", "t", "T",
             ";", ",", "%", "{", "}", "H", "M", "L", "r", "J", "g J", "~", ".", ">", "<", "g u", "g U", "g ~", "ctrl+d",
-            "ctrl+u", "ctrl+f", "ctrl+b", "z z", "z t", "z b", "z enter",
+            "ctrl+u", "ctrl+f", "ctrl+b", "z z", "z t", "z b", "z enter", "ctrl+v", "I", "A", "O",
         ] {
             assert_eq!(last(&km, ctx, key), Resolved::Forward(k(key)), "{ctx:?} {key}");
             assert!(km.bindings().iter().any(|b| b.ctx == ctx && b.keys == k(key)), "{key} reserved in {ctx:?}");

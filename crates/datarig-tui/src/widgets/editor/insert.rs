@@ -41,6 +41,7 @@ impl Editor {
         self.mode = Mode::Normal;
         self.col = self.col.saturating_sub(1);
         self.clamp();
+        self.finish_block_insert();
     }
 
     /// The cursor moved without typing (arrows, a click) from line `from`: Insert starts again

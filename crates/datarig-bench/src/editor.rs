@@ -1,9 +1,10 @@
 //! The editor with a large file: keystroke-to-frame latency (the app handles the key, then
 //! draws the frame at 160x45) for typing, cursor movement, scrolling and vim's other motions
 //! and edits, the process's memory, what an autosave of the file costs, a theme switch
-//! (`:set theme=`) up to its frame, and search: `/` with a pattern that is nowhere (each key
+//! (`:set theme=`) up to its frame, search: `/` with a pattern that is nowhere (each key
 //! searches the whole text) and `n`, with the bytes each key searched and the lines each frame
-//! highlighted counted.
+//! highlighted counted. `block` (the `editor_block` scenario, in a process of its own):
+//! Visual block operators over the whole text, with the bytes they walked counted.
 
 use crate::apps;
 use crate::grid::wide;
@@ -224,4 +225,70 @@ pub fn run(scratch: &Path, bytes: usize, n: usize) -> Result<Value, String> {
         n.min(100)
     );
     Ok(out)
+}
+
+/// Set in the process [`block_in_own_process`] starts: it runs [`block`] itself.
+const IN_PROCESS: &str = "DATARIG_BENCH_BLOCK_IN_PROCESS";
+
+/// [`block`] in a process of its own (this binary again): the copies of the whole text it
+/// leaves in the registers and the undo steps, and the memory the allocator keeps after them,
+/// stay out of this process, whose memory the other scenarios measure.
+pub fn block_in_own_process(scratch: &Path, bytes: usize) -> Result<Value, String> {
+    if std::env::var(IN_PROCESS).is_ok_and(|v| v == "1") {
+        return block(scratch, bytes);
+    }
+    let out = scratch.join("editor-block.jsonl");
+    let _ = std::fs::remove_file(&out);
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let status = std::process::Command::new(exe)
+        .arg("editor_block")
+        .arg("--scratch")
+        .arg(scratch)
+        .arg("--out")
+        .arg(&out)
+        .env(IN_PROCESS, "1")
+        .status()
+        .map_err(|e| e.to_string())?;
+    let text = std::fs::read_to_string(&out).map_err(|e| format!("{}: {e}", out.display()))?;
+    let record: Value =
+        serde_json::from_str(text.lines().last().unwrap_or("")).map_err(|e| format!("{}: {e}", out.display()))?;
+    match record.get("result") {
+        Some(r) if status.success() => Ok(r.clone()),
+        _ => Err(format!("editor_block: {}", record.get("error").unwrap_or(&Value::Null))),
+    }
+}
+
+/// Visual block operators over the whole of a file of about `bytes` bytes (`gg Ctrl+V G`, to
+/// the line ends with `$`): `y`, `d` and `u`, `I` on every line and `u`; each key with its
+/// frame, and the bytes the block operators walked for it counted.
+pub fn block(scratch: &Path, bytes: usize) -> Result<Value, String> {
+    let text = generate(bytes);
+    let lines = text.lines().count();
+    let state = scratch.join("editor-block-state");
+    let _ = std::fs::remove_dir_all(&state);
+    std::fs::create_dir_all(&state).map_err(|e| e.to_string())?;
+    let mut app = apps::offline(&text, Some(state));
+    drop(text);
+    let mut term = apps::terminal();
+    apps::draw(&mut term, &mut app);
+    println!("editor_block: {bytes} bytes, {lines} lines");
+    let keys = [
+        "g", "g", "C-v", "G", "$", "y", "g", "g", "C-v", "G", "$", "d", "u", "g", "g", "C-v", "G", "l", "I", "x",
+        "Esc", "u",
+    ];
+    app.tab_mut().editor.take_block_work();
+    let mut walked = 0;
+    let times = keystrokes(&mut app, &mut term, keys.len(), |a, i| {
+        match keys[i] {
+            "C-v" => apps::key(a, KeyCode::Char('v'), KeyModifiers::CONTROL),
+            "Esc" => apps::key(a, KeyCode::Esc, KeyModifiers::NONE),
+            k => apps::char(a, k.chars().next().unwrap_or(' ')),
+        }
+        walked = walked.max(a.tab_mut().editor.take_block_work());
+    });
+    let s = Summary::of(&times);
+    println!("  block      {}", s.line(" ms"));
+    let text_bytes = app.tab().editor.len_bytes() + 1;
+    println!("  bytes one key walked: {walked} ({:.2} passes over the text)", walked as f64 / text_bytes as f64);
+    Ok(json!({ "bytes": bytes, "lines": lines, "keys_ms": s.json(), "bytes_max": walked, "text_bytes": text_bytes }))
 }

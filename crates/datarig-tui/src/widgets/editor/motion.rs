@@ -399,7 +399,7 @@ impl Editor {
             Motion::Left => (r, c.saturating_sub(count)),
             Motion::Right => {
                 let n = self.gcount(r);
-                let max = if op { n } else { n.saturating_sub(1) };
+                let max = if op || self.visual_block() { n } else { n.saturating_sub(1) };
                 if c >= max {
                     return None;
                 }
@@ -550,6 +550,8 @@ impl Editor {
         match m {
             Motion::Up | Motion::Down => self.move_vert(r as isize - self.row as isize),
             Motion::LineEnd => {
+                // A Visual block takes the line's end too.
+                let c = if self.visual_block() { self.gcount(r) } else { c };
                 self.set_pos(r, c);
                 self.want_x = Some(usize::MAX);
             }

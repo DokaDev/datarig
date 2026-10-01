@@ -1,10 +1,11 @@
 //! Repeating: `.` replays the last change, recorded as the keys that made it (its count
-//! apart, which `N.` replaces) and the Insert session it started; a count before `i a I A o O`
+//! apart, which `N.` replaces, except for a Visual mode operator: Vim keeps its count) and the
+//! Insert session it started; a count before `i a I A o O`
 //! types the session's text that many times. A change that named a numbered register takes
 //! the next one when repeated (`"1p` then `.` puts `"2`, as Vim does).
 
 use super::motion::Motion;
-use super::{EdEvent, Editor, Mode};
+use super::{EdEvent, Editor, Mode, Sel};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 /// One input of a recorded change.
@@ -22,6 +23,19 @@ pub(super) enum Input {
         by_line: bool,
         eol: bool,
     },
+    /// The block a Visual mode operator took, as large a block from the cursor again: `lines`
+    /// lines, `width` screen columns (`usize::MAX`: to the end of each line, after `$`).
+    Block {
+        lines: usize,
+        width: usize,
+    },
+}
+
+impl Input {
+    /// The selection a Visual mode operator took.
+    fn is_selection(&self) -> bool {
+        matches!(self, Input::Select { .. } | Input::Block { .. })
+    }
 }
 
 /// The last change: its inputs and its count (0: none); `clipboard`: it puts the system
@@ -37,7 +51,7 @@ impl Change {
     /// A numbered register the change names, `"1`–`"8`, becomes the next one.
     fn next_numbered(&mut self) {
         let key = |c: char| Input::Key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
-        let at = usize::from(matches!(self.inputs.first(), Some(Input::Select { .. }))).min(self.inputs.len());
+        let at = usize::from(self.inputs.first().is_some_and(Input::is_selection)).min(self.inputs.len());
         if let [q, Input::Key(k), ..] = &mut self.inputs[at..]
             && *q == key('"')
             && let KeyCode::Char(d @ '1'..='8') = k.code
@@ -232,7 +246,7 @@ impl Editor {
                         Input::Paste(s) => {
                             self.insert_at_cursor(s);
                         }
-                        Input::Select { .. } => {}
+                        Input::Select { .. } | Input::Block { .. } => {}
                     }
                 }
             }
@@ -253,7 +267,9 @@ impl Editor {
     pub(super) fn dot(&mut self, count: Option<usize>) -> EdEvent {
         self.rec.skip();
         let Some(mut change) = self.rec.last.clone() else { return EdEvent::None };
-        if let Some(n) = count {
+        if let Some(n) = count
+            && !change.inputs.first().is_some_and(Input::is_selection)
+        {
             change.count = n;
         }
         change.next_numbered();
@@ -274,11 +290,13 @@ impl Editor {
                     self.paste(s);
                 }
                 Input::Select { lines, cols, by_line, eol } => self.select_again(*lines, *cols, *by_line, *eol),
+                Input::Block { lines, width } => self.select_block_again(*lines, *width),
             }
         }
         if self.mode == Mode::Insert {
             self.dispatch_key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         }
+        self.redo_width = None;
         self.rec.replaying = false;
         self.rec.last = Some(change);
         if self.version != version { EdEvent::Changed { typed: None } } else { EdEvent::Moved }
@@ -286,6 +304,11 @@ impl Editor {
 
     /// What a Visual mode operator records of its selection.
     pub(super) fn selection_input(&self) -> Input {
+        if self.sel == Sel::Block {
+            let b = self.block();
+            let width = if b.max { usize::MAX } else { b.end - b.start + 1 };
+            return Input::Block { lines: b.last - b.first + 1, width };
+        }
         let (a, b) = if self.anchor <= (self.row, self.col) {
             (self.anchor, (self.row, self.col))
         } else {
@@ -294,13 +317,13 @@ impl Editor {
         let lines = b.0 - a.0 + 1;
         let cols = if lines == 1 { b.1 - a.1 + 1 } else { b.1 };
         let eol = b == (self.row, self.col) && self.want_x == Some(usize::MAX);
-        Input::Select { lines, cols, by_line: self.visual_lines, eol }
+        Input::Select { lines, cols, by_line: self.sel == Sel::Lines, eol }
     }
 
     /// Visual mode over as much text from the cursor as [`Input::Select`] says.
     fn select_again(&mut self, lines: usize, cols: usize, by_line: bool, eol: bool) {
         let cmd = self.cmd;
-        self.enter_visual(by_line, (self.row, self.col));
+        self.enter_visual(if by_line { Sel::Lines } else { Sel::Chars }, (self.row, self.col));
         self.cmd = cmd;
         let r = (self.row + lines - 1).min(self.lines.len() - 1);
         let len = self.gcount(r);
@@ -308,6 +331,17 @@ impl Editor {
         self.row = r;
         self.col = c.min(len.saturating_sub(1));
         self.want_x = (eol || c >= len).then_some(usize::MAX);
+    }
+
+    /// A block as [`Input::Block`] says, from the cursor: its left column is the cursor's.
+    fn select_block_again(&mut self, lines: usize, width: usize) {
+        let cmd = self.cmd;
+        self.enter_visual(Sel::Block, (self.row, self.col));
+        self.cmd = cmd;
+        self.row = (self.row + lines - 1).min(self.lines.len() - 1);
+        self.clamp();
+        self.want_x = (width == usize::MAX).then_some(usize::MAX);
+        self.redo_width = Some(width);
     }
 }
 

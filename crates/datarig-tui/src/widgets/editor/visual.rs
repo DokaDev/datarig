@@ -1,5 +1,6 @@
 //! Visual mode: by character (`v`) or by whole lines (`V`), the selection as text, text
 //! objects that set or grow it, the operators on it, and `p` / `P` (a register in its place).
+//! A block (`Ctrl+V`) has its own operators (`block`).
 
 use super::buffer::{UNDO_BYTES, graphemes};
 use super::edit::Case;
@@ -7,19 +8,30 @@ use super::motion::RangeKind;
 use super::registers::RegKind;
 use super::textobj::Object;
 use super::vim::{Op, Target, Token};
-use super::{EdEvent, Editor, Mode};
+use super::{EdEvent, Editor, Mode, Sel};
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use unicode_segmentation::UnicodeSegmentation;
 
 impl Editor {
-    /// Start Visual mode (by line with `lines`) with the other end at `anchor`.
-    pub(super) fn enter_visual(&mut self, lines: bool, anchor: (usize, usize)) -> EdEvent {
+    /// Start Visual mode selecting `sel` with the other end at `anchor`.
+    pub(super) fn enter_visual(&mut self, sel: Sel, anchor: (usize, usize)) -> EdEvent {
         if self.mode == Mode::Insert {
             self.leave_insert();
         }
         self.mode = Mode::Visual;
-        self.visual_lines = lines;
+        self.sel = sel;
         self.anchor = anchor;
+        EdEvent::Moved
+    }
+
+    /// `v`, `V`, `Ctrl+V` in Visual mode: the selection becomes `sel`, or Visual mode ends
+    /// when it is that already.
+    pub(super) fn switch_visual(&mut self, sel: Sel) -> EdEvent {
+        if self.sel == sel {
+            self.exit_visual();
+        } else {
+            self.sel = sel;
+        }
         EdEvent::Moved
     }
 
@@ -39,7 +51,7 @@ impl Editor {
     /// Where the selection starts (the start of its first line by line).
     fn visual_start(&self) -> (usize, usize) {
         let (a, _) = self.visual_ends();
-        if self.visual_lines { (a.0, 0) } else { a }
+        if self.sel == Sel::Lines { (a.0, 0) } else { a }
     }
 
     /// Byte range of the selection: by character both ends included (a selected line end is
@@ -48,7 +60,7 @@ impl Editor {
     pub(super) fn visual_bounds(&self) -> (usize, usize) {
         let (a, b) = self.visual_ends();
         let more = |r: usize| usize::from(r + 1 < self.lines.len());
-        if self.visual_lines {
+        if self.sel == Sel::Lines {
             let (start, _) = self.line_bounds(a.0);
             let (_, end) = self.line_bounds(b.0);
             return (start, end + more(b.0));
@@ -70,7 +82,7 @@ impl Editor {
     /// `Y`, `C` in Visual mode).
     pub(super) fn visual_target(&self, lines: bool) -> Target {
         let (a, b) = self.visual_ends();
-        if lines || self.visual_lines {
+        if lines || self.sel == Sel::Lines {
             Target::Lines { first: a.0, last: b.0 }
         } else {
             let (a, b) = self.visual_bounds();
@@ -79,8 +91,11 @@ impl Editor {
     }
 
     /// Selected text in Visual mode (for Ctrl+E): whole lines without the last line break by
-    /// line.
+    /// line, a block's pieces as `y` takes them.
     pub fn selection(&self) -> Option<String> {
+        if self.visual_block() {
+            return Some(self.selected_block_text());
+        }
         (self.mode == Mode::Visual).then(|| match self.visual_target(false) {
             Target::Chars { a, b } => self.slice(self.pos_bytes(a), self.pos_bytes(b)),
             Target::Lines { first, last } => self.lines[first..=last].join("\n"),
@@ -106,7 +121,11 @@ impl Editor {
             Token::Object(o, around) => self.visual_object(o, around, n),
             Token::Ctrl(c @ ('d' | 'u')) => self.scroll_half(c == 'd', n, explicit),
             Token::Ctrl(c @ ('f' | 'b')) => self.scroll_page(c == 'f', n),
+            Token::Ctrl('v') => self.switch_visual(Sel::Block),
             Token::Z(c) => self.scroll_cursor(c, n, explicit),
+            Token::Replace(ch) if self.sel == Sel::Block => self.block_replace(ch),
+            Token::G(c @ ('u' | 'U' | '~')) if self.sel == Sel::Block => self.block_case(c),
+            Token::Key(c) if self.sel == Sel::Block => self.block_command(c, n),
             Token::Replace('\n') => EdEvent::None,
             Token::Replace(ch) => {
                 self.record_selection();
@@ -121,7 +140,7 @@ impl Editor {
     }
 
     /// The command keys of Visual mode.
-    fn visual_command(&mut self, c: char, n: usize) -> EdEvent {
+    pub(super) fn visual_command(&mut self, c: char, n: usize) -> EdEvent {
         match c {
             'o' => {
                 let cursor = (self.row, self.col);
@@ -130,16 +149,10 @@ impl Editor {
                 self.want_x = None;
                 EdEvent::Moved
             }
-            'v' | 'V' if self.visual_lines == (c == 'V') => {
-                self.exit_visual();
-                EdEvent::Moved
-            }
-            'v' | 'V' => {
-                self.visual_lines = c == 'V';
-                EdEvent::Moved
-            }
+            'v' => self.switch_visual(Sel::Chars),
+            'V' => self.switch_visual(Sel::Lines),
             'y' | 'Y' => {
-                let lines = c == 'Y' || self.visual_lines;
+                let lines = c == 'Y' || self.sel == Sel::Lines;
                 let (a, _) = self.visual_ends();
                 // By line the cursor keeps its column when it is above the other end.
                 let to = match lines {
@@ -286,8 +299,10 @@ impl Editor {
         };
         (self.row, self.col) = end;
         self.want_x = f.eol.then_some(usize::MAX);
-        if !f.keep {
-            self.visual_lines = f.kind == RangeKind::Linewise;
+        // A word keeps a block a block (Vim); the other objects choose characters or lines.
+        let word_in_block = self.sel == Sel::Block && matches!(o, Object::Word { .. });
+        if !f.keep && !word_in_block {
+            self.sel = if f.kind == RangeKind::Linewise { Sel::Lines } else { Sel::Chars };
         }
         EdEvent::Moved
     }
