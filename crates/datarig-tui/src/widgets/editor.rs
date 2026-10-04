@@ -454,6 +454,7 @@ impl Editor {
             Mode::Insert => {
                 self.ai_row = None;
                 self.ins_reg = false;
+                self.pairs_shift(self.row, norm.matches('\n').count() as isize);
                 self.insert_at_cursor(&norm);
                 self.ins_text.push_str(&norm);
                 self.rec.paste(&norm);

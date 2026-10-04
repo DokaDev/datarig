@@ -252,6 +252,8 @@ impl Editor {
             let (replaying, typed) = (self.rec.replaying, self.ins_text.clone());
             self.rec.replaying = true;
             for _ in 1..rep.count {
+                // After the closing characters the session put in: `(x)` again, not inside it.
+                self.step_over_pairs();
                 if rep.lines {
                     // On a new line below, the one just typed losing its indent if that is all
                     // there is on it.

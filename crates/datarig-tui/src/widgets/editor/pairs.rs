@@ -143,15 +143,25 @@ impl Editor {
         lex(&more).iter().any(|u| u.start == t.start && u.end > t.end)
     }
 
-    /// The Insert session ended or the cursor moved: no pair is pending any more. A line break
-    /// typed in a pair takes its closing character to the new line.
+    /// The Insert session ended or the cursor moved: no pair is pending any more.
     pub(super) fn forget_pairs(&mut self) {
         self.pairs.clear();
     }
 
-    pub(super) fn pairs_line_broken(&mut self, row: usize) {
-        for p in self.pairs.iter_mut().filter(|p| p.0 == row) {
-            p.0 += 1;
+    /// `n` line breaks went in at the cursor on line `row` (or, negative, the break before
+    /// `row` went): the pending closing characters, all after the cursor, move with the text.
+    pub(super) fn pairs_shift(&mut self, row: usize, n: isize) {
+        for p in self.pairs.iter_mut().filter(|p| p.0 >= row) {
+            p.0 = p.0.saturating_add_signed(n);
+        }
+    }
+
+    /// Step over the pending closing characters right after the cursor (before a count types
+    /// the session's text again after it).
+    pub(super) fn step_over_pairs(&mut self) {
+        while self.pair_closer().is_some() {
+            self.pairs.pop();
+            self.col += 1;
         }
     }
 }

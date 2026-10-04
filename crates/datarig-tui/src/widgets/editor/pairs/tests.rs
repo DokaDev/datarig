@@ -105,3 +105,30 @@ fn off_by_default() {
     typ(&mut e, "i(\"'");
     assert_eq!(e.text(), "(\"'");
 }
+
+/// Lines put in or taken out before the closing character (a register of several lines, a
+/// paste, Backspace at a line's start) keep it pending: it is still stepped over.
+#[test]
+fn the_closing_character_is_followed_across_lines() {
+    check(&[
+        ("a\nb", (0, 0), "yjo(<C-r>\"x)<Esc>", "a\n(a\nb\nx)\nb", (3, 1)),
+        ("", (0, 0), "i(<CR><BS>x)", "(x)", (0, 3)),
+        ("", (0, 0), "i(<CR><CR><C-w><C-w>x)", "(x)", (0, 3)),
+    ]);
+    let mut e = on("", (0, 0));
+    typ(&mut e, "i(");
+    e.paste("1,\n2");
+    typ(&mut e, ")");
+    assert_eq!(e.text(), "(1,\n2)");
+}
+
+/// A count types what the session put in that many times, its closing characters included:
+/// `3i(x<Esc>` is `(x)(x)(x)`.
+#[test]
+fn a_count_repeats_the_whole_pair() {
+    check(&[
+        ("", (0, 0), "3i(x<Esc>", "(x)(x)(x)", (0, 7)),
+        ("", (0, 0), "2if('a<Esc>", "f('a')f('a')", (0, 9)),
+        ("", (0, 0), "2o(<Esc>", "\n()\n()", (2, 0)),
+    ]);
+}

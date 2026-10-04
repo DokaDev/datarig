@@ -109,7 +109,7 @@ impl Editor {
                 let indent = indent_of(&line[..upto]).to_string();
                 let blanks = indent_of(&line[upto..]).len();
                 self.drop_autoindent();
-                self.pairs_line_broken(self.row);
+                self.pairs_shift(self.row, 1);
                 if blanks > 0 {
                     let at = self.offset();
                     self.splice(at, at + blanks, "");
@@ -165,6 +165,7 @@ impl Editor {
                     let b = self.offset();
                     self.delete_range(a, b)
                 } else if self.row > 0 {
+                    self.pairs_shift(self.row, -1);
                     let b = self.offset();
                     self.delete_range(b - 1, b)
                 } else {
@@ -208,6 +209,7 @@ impl Editor {
             return EdEvent::None;
         }
         self.ai_row = None;
+        self.pairs_shift(self.row, text.matches('\n').count() as isize);
         self.insert_at_cursor(&text);
         self.ins_text.push_str(&text);
         self.rec.register_text(&text);
@@ -244,6 +246,7 @@ impl Editor {
             if r == 0 {
                 return EdEvent::None;
             }
+            self.pairs_shift(r, -1);
             let b = self.offset();
             let removed = self.delete_range(b - 1, b);
             self.untyped(&removed);
