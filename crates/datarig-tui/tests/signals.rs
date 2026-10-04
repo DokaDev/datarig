@@ -347,7 +347,8 @@ fn sigterm_during_the_editor_ends_datarig_after_it() {
     let text = run.output();
     let (entered, left) = screens(&text);
     assert_eq!((entered, left), (2, 2), "{text:?}");
-    assert!(text.trim_end().ends_with("\x1b[?1049l"), "ends on the main screen: {text:?}");
+    // (Linux's `script` adds a line of its own at the end.)
+    assert!(text.rfind("\x1b[?1049l") > text.rfind("\x1b[?1049h"), "ends on the main screen: {text:?}");
 }
 
 /// `Ctrl+Z`: the terminal is restored and the process group gets SIGTSTP; once it runs again

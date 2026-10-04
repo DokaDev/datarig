@@ -225,7 +225,8 @@ fn ctrl_z_and_suspend_ask_the_binary_to_stop_everywhere_in_the_workspace() {
         assert_eq!(h.app.take_effect(), None, "Ctrl+Z does nothing on Windows");
         h.command("suspend");
         assert_eq!(h.app.take_effect(), None);
-        assert!(h.status(100, 30).contains("Suspending is not supported on Windows"));
+        // Said on the command line, which stays open.
+        assert!(h.screen(160, 30).contains("Suspending is not supported on Windows"), "{}", h.screen(160, 30));
         return;
     }
     // Normal, Insert (the text stays as typed), Visual, the explorer, the grid.
