@@ -3,7 +3,7 @@
 
 use super::explorer::RowKind;
 use super::*;
-use crate::widgets::editor::{RegProblem, SearchNotice};
+use crate::widgets::editor::{MarkNotice, RegProblem, SearchNotice};
 use crate::widgets::grid::Shape;
 use crate::widgets::tree::Reveal;
 
@@ -378,6 +378,8 @@ impl App {
         let ev = t.editor.handle_key(key);
         let problem = t.editor.take_register_problem();
         let search = t.editor.take_search_notice();
+        let mark = t.editor.take_mark_notice();
+        let ex = t.editor.take_ex_notice();
         if let Some(y) = t.editor.take_yank() {
             self.editor_yanked(y);
         }
@@ -400,6 +402,16 @@ impl App {
                 SearchNotice::NoWord => (Msg::Label(Label::EditorSearchNoWord), Level::Error),
             };
             self.flash(Notice::new(msg, level));
+        }
+        if let Some(n) = mark {
+            let msg = match n {
+                MarkNotice::NotSet(c) => Msg::EditorMarkNotSet { mark: c.to_string() },
+                MarkNotice::Unknown(c) => Msg::EditorMarkUnknown { mark: c.to_string() },
+            };
+            self.flash(Notice::new(msg, Level::Error));
+        }
+        if let Some(e) = ex {
+            self.flash(Notice::new(super::cmdline::ex_error(e), Level::Error));
         }
         if matches!(ev, EdEvent::Changed { .. }) {
             self.edited();

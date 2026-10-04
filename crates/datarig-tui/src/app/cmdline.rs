@@ -5,6 +5,7 @@ use super::command::{
     self, ArgCompletion, ArgKind, COMMANDS, CommandSpec, Parsed, SETTINGS, SetError, SetValue, Setting,
 };
 use super::*;
+use crate::widgets::editor::{ExDone, ExError, MarkNotice, SearchNotice, is_ex};
 use crate::widgets::text_input::InputResult;
 
 /// A name `:use` looked for in a list read earlier and did not find there.
@@ -93,11 +94,18 @@ impl App {
         if self.overlays.is_open(OverlayKind::Commands) {
             self.overlays.close(OverlayKind::Commands);
         } else if !self.layout.too_small {
+            let editor = self.focus == Focus::Editor && !self.tabs.is_empty();
             let t = self.tab_mut();
             t.popup = None;
             t.completion_due = None;
+            // From the editor, the line starts with the range Vim puts there (`'<,'>` in
+            // Visual mode, `.,.+2` after a count).
+            let mut input = TextInput::default();
+            if editor {
+                input.set(&t.editor.cmdline_range());
+            }
             self.overlays.push(Overlay::Commands(CommandLine {
-                input: TextInput::default(),
+                input,
                 items: Vec::new(),
                 selected: 0,
                 error: None,
@@ -290,6 +298,19 @@ impl App {
                 .collect();
         }
         let text = input.trim();
+        // A line number or `:s` goes to the editor (first, so `Enter` runs it; `:s` also lists
+        // the commands it starts, `:set` …).
+        if is_ex(text) && !self.tabs.is_empty() {
+            let mut out = vec![CommandItem::Ex];
+            if !text.contains(char::is_whitespace) {
+                out.extend(
+                    (0..COMMANDS.len())
+                        .filter(|&i| COMMANDS[i].starts_with(text) && self.command_available(&COMMANDS[i]))
+                        .map(CommandItem::Command),
+                );
+            }
+            return out;
+        }
         // A command typed by its name that cannot run here lists nothing, so `Enter` says it is
         // not available (never runs an action whose name merely matches the letters).
         if COMMANDS.iter().any(|c| c.is_named(text) && !self.command_available(c)) {
@@ -398,6 +419,10 @@ impl App {
         let Some(c) = self.overlays.command_line() else { return };
         let input = c.input.text().to_string();
         let result = match c.items.get(c.selected).copied() {
+            Some(CommandItem::Ex) => {
+                self.run_ex(&input);
+                Ok(())
+            }
             Some(CommandItem::Action(i)) => {
                 self.overlays.close(OverlayKind::Commands);
                 self.dispatch(REGISTRY[i].action);
@@ -655,6 +680,35 @@ impl App {
         Ok(())
     }
 
+    /// Run `text` as an editor command on the active tab's editor, which gets the focus; what
+    /// it found or why it could not run is said.
+    fn run_ex(&mut self, text: &str) {
+        self.overlays.close(OverlayKind::Commands);
+        self.focus = Focus::Editor;
+        let t = self.tab_mut();
+        let version = t.editor.version();
+        let result = t.editor.ex(text);
+        let changed = t.editor.version() != version;
+        let notice = match result {
+            Ok(ExDone::Substituted { count, lines }) if count > 2 => {
+                let msg = if lines == 1 {
+                    Msg::EditorExSubstitutedOneLine { count: count as u64 }
+                } else {
+                    Msg::EditorExSubstituted { count: count as u64, lines: lines.to_string() }
+                };
+                Some(Notice::new(msg, Level::Info))
+            }
+            Ok(_) => None,
+            Err(e) => Some(Notice::new(ex_error(e), Level::Error)),
+        };
+        if changed {
+            self.edited();
+        }
+        if let Some(n) = notice {
+            self.flash(n);
+        }
+    }
+
     /// The saved queries as `:e` takes them: paths without the extension.
     fn script_names(&self) -> Vec<String> {
         self.script_list
@@ -713,6 +767,11 @@ impl App {
         c.items
             .iter()
             .map(|item| match *item {
+                CommandItem::Ex => CommandRow {
+                    name: Localized::verbatim(format!(":{}", c.input.text().trim())),
+                    label: self.i18n.label(Label::CommandEx),
+                    keys: String::new(),
+                },
                 CommandItem::Action(i) => CommandRow {
                     name: Localized::verbatim(""),
                     label: self.i18n.label(REGISTRY[i].label),
@@ -802,5 +861,23 @@ impl App {
                 }
             })
             .collect()
+    }
+}
+
+/// What an editor command that could not run says.
+pub(super) fn ex_error(e: ExError) -> Msg {
+    match e {
+        ExError::Unsupported(command) => Msg::EditorExUnsupported { command },
+        ExError::InvalidRange => Msg::Label(Label::EditorExInvalidRange),
+        ExError::Backwards => Msg::Label(Label::EditorExBackwards),
+        ExError::Confirm => Msg::Label(Label::EditorExConfirm),
+        ExError::Trailing(text) => Msg::EditorExTrailing { text },
+        ExError::Mark(MarkNotice::NotSet(c)) => Msg::EditorMarkNotSet { mark: c.to_string() },
+        ExError::Mark(MarkNotice::Unknown(c)) => Msg::EditorMarkUnknown { mark: c.to_string() },
+        ExError::Pattern(SearchNotice::NotFound(pattern)) => Msg::EditorSearchNotFound { pattern },
+        ExError::Pattern(SearchNotice::Invalid(error)) => Msg::EditorSearchInvalid { error },
+        ExError::Pattern(SearchNotice::NoPrevious) => Msg::Label(Label::EditorSearchNoPrevious),
+        ExError::Pattern(SearchNotice::NoWord) => Msg::Label(Label::EditorSearchNoWord),
+        ExError::Pattern(SearchNotice::Wrapped { .. }) => Msg::Label(Label::EditorSearchWrappedBottom),
     }
 }

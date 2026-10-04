@@ -4,6 +4,7 @@
 
 use super::buffer::{UNDO_BYTES, class, gw, indent_of};
 use super::edit::Case;
+use super::marks::Hint;
 use super::motion::{Motion, Range, RangeKind};
 use super::registers::{self, RegKind, RegProblem, Register, Registers};
 use super::repeat::InsertRepeat;
@@ -26,6 +27,8 @@ pub(super) enum Op {
     Shift {
         right: bool,
     },
+    /// `gc`: comment the lines out or back in.
+    Comment,
 }
 
 impl Op {
@@ -46,6 +49,7 @@ impl Op {
             'u' => Some(Op::Case(Case::Lower)),
             'U' => Some(Op::Case(Case::Upper)),
             '~' => Some(Op::Case(Case::Toggle)),
+            'c' => Some(Op::Comment),
             _ => None,
         }
     }
@@ -61,13 +65,14 @@ impl Op {
             Op::Case(Case::Lower) => 'u',
             Op::Case(Case::Upper) => 'U',
             Op::Case(Case::Toggle) => '~',
+            Op::Comment => 'c',
         }
     }
 }
 
 /// A command typed so far: counts (0: none), the register (`"x`), the operator, a prefix
 /// waiting for its second key (`g`, `z`, or `i`/`a` of a text object), a command waiting for a
-/// character (`f`, `t`, `F`, `T`, `r`).
+/// character (`f`, `t`, `F`, `T`, `r`, `m`, `'`, `` ` ``).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(super) struct Pending {
     count: usize,
@@ -94,9 +99,10 @@ impl Pending {
         self.op.is_none() && self.prefix.is_none() && self.arg.is_none() && !self.reg_wait && reg(self.reg)
     }
 
-    /// The command waits for a character, taken as it is typed (`f`, `t`, `r`).
+    /// The command waits for a character, taken as it is typed (`f`, `t`, `r`); a mark's
+    /// name (`m`, `'`, `` ` ``) is a key, as a register's is.
     pub(super) fn awaiting_char(&self) -> bool {
-        self.arg.is_some()
+        matches!(self.arg, Some('f' | 'F' | 't' | 'T' | 'r'))
     }
 
     /// Nothing typed yet: the next key starts a command.
@@ -154,6 +160,8 @@ pub(super) enum Token {
     Ctrl(char),
     /// `r` and its character.
     Replace(char),
+    /// `m` and the mark's name.
+    Mark(char),
 }
 
 /// The text an operator works on: bytes of the text, or whole lines.
@@ -190,8 +198,16 @@ impl Editor {
                 KeyCode::Tab => '\t',
                 _ => return Token::Cancel,
             };
-            if cmd == 'r' {
-                return Token::Replace(arg);
+            match cmd {
+                'r' => return Token::Replace(arg),
+                'm' => return Token::Mark(arg),
+                '\'' | '`' => {
+                    let line = cmd == '\'';
+                    return self
+                        .mark_target(arg, line)
+                        .map_or(Token::Cancel, |to| Token::Motion(Motion::Mark { to, line }));
+                }
+                _ => {}
             }
             let (forward, till) = (cmd.is_ascii_lowercase(), cmd == 't' || cmd == 'T');
             self.last_find = Some((arg, forward, till));
@@ -227,7 +243,8 @@ impl Editor {
             'z' if self.cmd.op.is_none() => self.cmd.prefix = Some(c),
             'i' | 'a' if objects => self.cmd.prefix = Some(c),
             'f' | 'F' | 't' | 'T' => self.cmd.arg = Some(c),
-            'r' if self.cmd.op.is_none() => self.cmd.arg = Some(c),
+            'r' | 'm' if self.cmd.op.is_none() => self.cmd.arg = Some(c),
+            '\'' | '`' => self.cmd.arg = Some(c),
             '"' if self.cmd.op.is_none() => self.cmd.reg_wait = true,
             '/' | '?' => self.open_prompt(c == '/'),
             'n' | 'N' => return self.search_again(c == 'n').map_or(Token::Cancel, Token::Motion),
@@ -257,8 +274,8 @@ impl Editor {
         match token {
             Token::More => return EdEvent::None,
             Token::Motion(m) => return self.motion_key(m),
-            // A second `g` prefix: `gugu`.
-            Token::G(c) if op.is_some() && Op::of_g(c) == op => {}
+            // A second `g` prefix: `gugu` (not `gcgc`: Neovim's is a text object).
+            Token::G(c) if op.is_some() && Op::of_g(c) == op && op != Some(Op::Comment) => {}
             Token::G(c) if op.is_none() && Op::of_g(c).is_some() => {
                 self.cmd.op = Op::of_g(c);
                 return EdEvent::None;
@@ -272,7 +289,8 @@ impl Editor {
         self.end_command();
         match (token, op) {
             (Token::Object(o, around), Some(op)) => self.apply_object(op, o, around, n),
-            (Token::Key(c) | Token::G(c), Some(op)) if c == op.last_key() => self.apply_lines(op, n),
+            (Token::Key(c), Some(op)) if c == op.last_key() => self.apply_lines(op, n),
+            (Token::G(c), Some(op)) if c == op.last_key() && op != Op::Comment => self.apply_lines(op, n),
             (_, Some(_)) => EdEvent::None,
             (Token::Ctrl('r'), None) => self.undo_redo(false, n),
             (Token::Ctrl('v'), None) => self.enter_visual(Sel::Block, (self.row, self.col)),
@@ -280,7 +298,10 @@ impl Editor {
             (Token::Ctrl(c @ ('f' | 'b')), None) => self.scroll_page(c == 'f', n),
             (Token::Z(c), None) => self.scroll_cursor(c, n, explicit),
             (Token::Replace(c), None) => self.replace_chars(c, n),
+            (Token::Mark(c), None) => self.set_mark(c),
             (Token::G('J'), None) => self.join_lines(self.row, n, false),
+            (Token::G('&'), None) => self.sub_again(true, 1),
+            (Token::Key('&'), None) => self.sub_again(false, n),
             (Token::Key(c), None) => self.command(c, n, explicit),
             _ => EdEvent::None,
         }
@@ -326,6 +347,9 @@ impl Editor {
         let (n, explicit) = self.cmd.count();
         let op = self.cmd.op;
         self.end_command();
+        if m.is_jump() {
+            self.marks.set_pc((self.row, self.col));
+        }
         match op {
             None => {
                 self.move_by(m, n, explicit);
@@ -364,8 +388,10 @@ impl Editor {
     /// Operator `op` over range `r`. An empty range (`di(` in `()`) takes nothing, not even
     /// the register: the cursor goes there, and a change starts Insert mode there.
     fn apply_range(&mut self, op: Op, mut r: Range) -> EdEvent {
-        if let Op::Shift { right } = op {
-            return self.shift_lines(r.start.0, r.end.0, 1, right);
+        match op {
+            Op::Shift { right } => return self.shift_lines(r.start.0, r.end.0, 1, right),
+            Op::Comment => return self.comment_lines(r.start.0, r.end.0, r.start),
+            _ => {}
         }
         if r.kind == RangeKind::Exclusive && r.start == r.end {
             if op == Op::Change {
@@ -405,7 +431,7 @@ impl Editor {
         }
         let last = (self.row + n - 1).min(end);
         let to = match op {
-            Op::Case(_) => (self.row, self.col).min((last, self.first_nonblank(last))),
+            Op::Case(_) | Op::Comment => (self.row, self.col).min((last, self.first_nonblank(last))),
             _ => (self.row, self.col),
         };
         self.apply(op, Target::Lines { first: self.row, last }, to)
@@ -442,6 +468,11 @@ impl Editor {
             return EdEvent::Moved;
         }
         match (op, t) {
+            (Op::Comment, Target::Lines { first, last }) => self.comment_lines(first, last, to),
+            (Op::Comment, Target::Chars { a, b }) => {
+                let (first, last) = (self.pos_bytes(a).0, self.pos_bytes(b).0);
+                self.comment_lines(first, last, to)
+            }
             (Op::Shift { right }, Target::Lines { first, last }) => self.shift_lines(first, last, 1, right),
             (Op::Shift { right }, Target::Chars { a, b }) => {
                 let (first, last) = (self.pos_bytes(a).0, self.pos_bytes(b).0);
@@ -478,7 +509,9 @@ impl Editor {
                 self.snapshot();
                 self.delete_to_register(self.lines[first..=last].join("\n"), RegKind::Linewise);
                 let (a, b) = self.lines_span(first, last);
+                self.mark_hint = Some(Hint::Lines { first, last, keep_first: false });
                 self.splice(a, b, "");
+                self.marks.set_change((first, 0));
                 let r = first.min(self.lines.len() - 1);
                 self.set_pos(r, self.first_nonblank(r));
                 EdEvent::Changed { typed: None }
@@ -502,6 +535,7 @@ impl Editor {
                 let indent = indent_of(&self.lines[first]).to_string();
                 let a = self.line_start(first);
                 let b = self.line_start(last) + self.lines[last].len();
+                self.mark_hint = Some(Hint::Lines { first, last, keep_first: true });
                 self.splice(a, b, &indent);
                 self.start_insert(false, (first, indent.graphemes(true).count()));
                 self.ai_row = (!indent.is_empty()).then_some(first);
@@ -527,6 +561,7 @@ impl Editor {
         if below {
             self.splice(end, end, &format!("\n{indent}"));
         } else {
+            self.mark_hint = Some(Hint::Above);
             self.splice(start, start, &format!("{indent}\n"));
         }
         (at, indent.graphemes(true).count())
@@ -558,6 +593,7 @@ impl Editor {
             if after {
                 self.splice(end, end, &format!("\n{text}"));
             } else {
+                self.mark_hint = Some(Hint::Above);
                 self.splice(start, start, &format!("{text}\n"));
             }
             self.set_pos(at, self.first_nonblank(at));
@@ -636,9 +672,11 @@ impl Editor {
         self.set_pos(row, col);
     }
 
-    /// `u` / `Ctrl+R`, `n` times.
+    /// `u` / `Ctrl+R`, `n` times. Where the cursor was becomes the context mark, as for a
+    /// jump (Vim).
     fn undo_redo(&mut self, undo: bool, n: usize) -> EdEvent {
         self.rec.skip();
+        self.marks.set_pc((self.row, self.col));
         let mut any = false;
         for _ in 0..n {
             if !self.restore(undo) {

@@ -334,7 +334,8 @@ const VIM: &[&str] = &[
     "1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "\"", // edits
     "x", "X", "D", "C", "Y", "s", "S", "r", "R", "p", "P", "u", "ctrl+r", "J", "g J", "~", // modes
     "i", "a", "I", "A", "o", "O", "v", "V", "ctrl+v", "esc", // search
-    "/", "?", "n", "N", "*", "#", "g *", "g #", // scrolling
+    "/", "?", "n", "N", "*", "#", "g *", "g #", // marks, comments
+    "m", "'", "`", "g c", "&", "g &", // scrolling
     "ctrl+d", "ctrl+u", "ctrl+f", "ctrl+b", "z z", "z t", "z b", "z enter",
     // macros (a later step); also keeps `q` from quitting while editing
     "q",

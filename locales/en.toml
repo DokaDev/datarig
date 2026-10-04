@@ -782,6 +782,7 @@
 "tab.untrash_failed" = "The closed console could not be brought back ({error}); it stays in the trash"
 "command.recover" = "Bring back a closed console (also from earlier runs)"
 "command.nohlsearch" = "Clear the search highlight in the editor (until the next search)"
+"command.ex" = "Editor: go to a line, or substitute with :s (Rust regular expressions)"
 "recover.title" = "Closed consoles"
 "recover.empty" = "No closed console in the trash"
 "recover.unreadable" = "cannot be read ({error})"
@@ -942,6 +943,15 @@
 "editor.search.invalid" = "Not a valid search pattern (Rust regular expression syntax): {error}"
 "editor.search.no_previous" = "No previous search pattern"
 "editor.search.no_word" = "No word under the cursor to search for"
+"editor.mark.not_set" = "Mark not set: {mark}"
+"editor.mark.unknown" = "Not a mark the editor keeps: {mark} (it keeps a-z, ' ` < > and .)"
+"editor.ex.unsupported" = "Not an editor command: :{command} (the editor takes a line number, :s and :&)"
+"editor.ex.invalid_range" = "Invalid range: a line past the end of the text"
+"editor.ex.backwards" = "Backwards range: the first line comes after the last"
+"editor.ex.confirm" = "The c flag (confirm each match) is not supported"
+"editor.ex.trailing" = "Not a flag of :s: {text} (g, i, I, e, & are)"
+"editor.ex.substituted" = { one = "{count} substitution on {lines} lines", other = "{count} substitutions on {lines} lines" }
+"editor.ex.substituted_one_line" = { one = "{count} substitution on one line", other = "{count} substitutions on one line" }
 "editor.clipboard.too_long" = "Kept in the editor's register, not sent to the clipboard: {size} of base64 is more than OSC 52 may carry ({limit}, osc52_max_bytes). Not said again until you restart."
 "editor.clipboard.failed" = "Kept in the editor's register, not sent to the clipboard: {error}. Not said again until you restart."
 "editor.clipboard.no_read" = "The clipboard cannot be read through the terminal (OSC 52 only writes to it): paste with the terminal's own paste key instead (Cmd+V on macOS, Ctrl+Shift+V in most Linux terminals)"

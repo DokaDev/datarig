@@ -563,3 +563,125 @@ fn ctrl_c_in_the_search_prompt_still_cancels_the_run() {
     assert!(h.session_cancelled(1), "the tab's session was asked to cancel");
     assert!(!h.app.tab().editor.searching());
 }
+
+/// Marks through the keymap: `ma`, a jump to it by line and by place, `''` back, a mark's
+/// name typed in Hangul (the QWERTY key at its place), and `gcc`.
+#[test]
+fn marks_and_comments_reach_the_editor() {
+    let mut h = editor_with("select 1;\n  select 2;\nselect 3;");
+    h.keys("jlllma");
+    h.keys("G'a");
+    assert_eq!((h.app.tab().editor.row, h.app.tab().editor.col), (1, 2));
+    h.keys("G`a");
+    assert_eq!((h.app.tab().editor.row, h.app.tab().editor.col), (1, 3));
+    h.keys("''");
+    assert_eq!((h.app.tab().editor.row, h.app.tab().editor.col), (2, 0));
+    h.keys("m");
+    h.type_text("\u{3142}"); // the jamo on `q`
+    h.keys("gg`q");
+    assert_eq!((h.app.tab().editor.row, h.app.tab().editor.col), (2, 0));
+    h.keys("gcc");
+    assert_eq!(h.app.tab().editor.text(), "select 1;\n  select 2;\n-- select 3;");
+    h.keys("kgcc");
+    assert_eq!(h.app.tab().editor.text(), "select 1;\n  -- select 2;\n-- select 3;");
+    h.keys("u");
+    assert_eq!(h.app.tab().editor.text(), "select 1;\n  select 2;\n-- select 3;");
+}
+
+/// A jump to a mark that is not set, or that the editor does not keep, says so in each
+/// language; the cursor stays.
+#[test]
+fn mark_notices_in_each_language() {
+    for lang in [Lang::En, Lang::Ko] {
+        let mut h = Harness::connected(lang);
+        h.app.tab_mut().editor = Editor::new("one\ntwo");
+        h.keys("j'z");
+        let i18n = datarig_core::i18n::I18n::new(lang);
+        let want = i18n.msg(&datarig_core::i18n::Msg::EditorMarkNotSet { mark: "z".into() });
+        assert_eq!(notice(&mut h).as_deref(), Some(want.as_ref()));
+        h.keys("d`b");
+        assert_eq!(
+            notice(&mut h).as_deref(),
+            Some(i18n.msg(&datarig_core::i18n::Msg::EditorMarkNotSet { mark: "b".into() }).as_ref())
+        );
+        h.keys("mA");
+        let want = i18n.msg(&datarig_core::i18n::Msg::EditorMarkUnknown { mark: "A".into() });
+        assert_eq!(notice(&mut h).as_deref(), Some(want.as_ref()));
+        h.keys("'A");
+        assert_eq!(notice(&mut h).as_deref(), Some(want.as_ref()));
+        assert_eq!(h.app.tab().editor.text(), "one\ntwo");
+        assert_eq!((h.app.tab().editor.row, h.app.tab().editor.col), (1, 0));
+    }
+}
+
+/// `:` from the editor: `%s` replaces as one undo step, `Visual` mode starts the line with
+/// `'<,'>` (and ends), a count with `.,.+N`, a line number moves the cursor; the editor
+/// command is the first entry, so `Enter` runs it.
+#[test]
+fn ex_commands_through_the_command_line() {
+    let mut h = editor_with("select a\nfrom t\nwhere a = 1");
+    h.keys(":");
+    h.type_text("%s/a/b/g");
+    assert_eq!(h.cmdline().unwrap().items.first(), Some(&datarig_tui::app::CommandItem::Ex));
+    h.key(KeyCode::Enter);
+    assert!(h.cmdline().is_none());
+    assert_eq!(h.app.tab().editor.text(), "select b\nfrom t\nwhere b = 1");
+    assert_eq!((h.app.tab().editor.row, h.app.tab().editor.col), (2, 0));
+    h.keys("u");
+    assert_eq!(h.app.tab().editor.text(), "select a\nfrom t\nwhere a = 1");
+    h.keys("ggVj:");
+    assert_eq!(h.cmdline().unwrap().input.text(), "'<,'>");
+    assert_eq!(h.app.tab().editor.mode, Mode::Normal);
+    h.type_text("s/^/-- /");
+    h.key(KeyCode::Enter);
+    assert_eq!(h.app.tab().editor.text(), "-- select a\n-- from t\nwhere a = 1");
+    h.keys("3:");
+    assert_eq!(h.cmdline().unwrap().input.text(), ".,.+2");
+    h.key(KeyCode::Esc);
+    h.keys(":");
+    h.type_text("3");
+    h.key(KeyCode::Enter);
+    assert_eq!((h.app.tab().editor.row, h.app.tab().editor.col), (2, 0));
+    // `:s` lists the editor command first, and `:set` after it.
+    h.keys(":");
+    h.type_text("s");
+    let items = &h.cmdline().unwrap().items;
+    assert_eq!(items.first(), Some(&datarig_tui::app::CommandItem::Ex));
+    assert!(items.len() > 1);
+    h.key(KeyCode::Esc);
+}
+
+/// What `:s` says when it finds nothing or cannot run, in each language, and its count of
+/// substitutions on more than two.
+#[test]
+fn ex_notices_in_each_language() {
+    for lang in [Lang::En, Lang::Ko] {
+        let mut h = Harness::connected(lang);
+        h.app.tab_mut().editor = Editor::new("a a a\nb");
+        let i18n = datarig_core::i18n::I18n::new(lang);
+        let run = |h: &mut Harness, cmd: &str| {
+            h.keys(":");
+            h.type_text(cmd);
+            h.key(KeyCode::Enter);
+            assert!(h.cmdline().is_none(), "{cmd}");
+        };
+        run(&mut h, "s/z/y/");
+        let want = i18n.msg(&datarig_core::i18n::Msg::EditorSearchNotFound { pattern: "z".into() });
+        assert_eq!(notice(&mut h).as_deref(), Some(want.as_ref()));
+        run(&mut h, "s/a/b/c");
+        assert_eq!(notice(&mut h).as_deref(), Some(i18n.label(datarig_core::i18n::Label::EditorExConfirm).as_ref()));
+        run(&mut h, "2d");
+        let want = i18n.msg(&datarig_core::i18n::Msg::EditorExUnsupported { command: "d".into() });
+        assert_eq!(notice(&mut h).as_deref(), Some(want.as_ref()));
+        run(&mut h, "1,5s/a/b/");
+        assert_eq!(
+            notice(&mut h).as_deref(),
+            Some(i18n.label(datarig_core::i18n::Label::EditorExInvalidRange).as_ref())
+        );
+        assert_eq!(h.app.tab().editor.text(), "a a a\nb");
+        run(&mut h, "s/a/b/g");
+        let want = i18n.msg(&datarig_core::i18n::Msg::EditorExSubstitutedOneLine { count: 3 });
+        assert_eq!(notice(&mut h).as_deref(), Some(want.as_ref()));
+        assert_eq!(h.app.tab().editor.text(), "b b b\nb");
+    }
+}
