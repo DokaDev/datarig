@@ -864,3 +864,17 @@ fn names_that_differ_in_case_only_can_stay() {
     h.ctrl('s');
     assert!(h.form_open(), "a new one cannot");
 }
+
+/// The name "save as tunnel preset" offers: the bastion's first name, `tunnel` for an address.
+#[test]
+fn save_as_tunnel_preset_offers_a_name_from_the_bastion() {
+    let dir = scratch("save-as-name");
+    let mut cfg = own_tunnel_config(&dir);
+    cfg.connections[0].ssh.as_mut().unwrap().host = "10.0.0.5".into();
+    let mut h = harness_with(&cfg);
+    h.explore("local-pg");
+    h.keys("e");
+    h.ctrl('n');
+    h.key_mod(KeyCode::Char('b'), KeyModifiers::CONTROL);
+    assert_eq!(h.app.overlays.name_input().expect("asked").input.text(), "tunnel");
+}

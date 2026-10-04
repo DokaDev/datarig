@@ -456,7 +456,9 @@ impl App {
         f.attempted = was;
         let host = f.ssh_host.text().trim().to_string();
         let taken = |n: &str| self.presets.iter().any(|p| preset::same_name(&p.name, n));
-        let base = host.split('.').next().filter(|h| !h.is_empty()).unwrap_or("tunnel").to_string();
+        // The bastion's first name (`bastion` of `bastion.example.com`); an address names nothing.
+        let ip = host.trim_matches(['[', ']']).parse::<std::net::IpAddr>().is_ok();
+        let base = host.split('.').next().filter(|h| !h.is_empty() && !ip).unwrap_or("tunnel").to_string();
         let name = if taken(&base) { profiles::copy_name(&base, taken) } else { base };
         self.overlays.push(Overlay::NameInput(NameInput {
             title: Label::TunnelSaveAsTitle.into(),
