@@ -56,6 +56,8 @@ pub enum Command {
     Use,
     /// `:nohlsearch`: no search highlight in the editors until the next search.
     NoHighlight,
+    /// `:suspend`: stop until the shell's `fg` (Unix; elsewhere it says it is not supported).
+    Suspend,
 }
 
 /// The type of a command's argument (it decides the completions).
@@ -233,6 +235,15 @@ pub const COMMANDS: &[CommandSpec] = &[
         arg: None,
         label: Label::CommandNohlsearch,
         action: None,
+    },
+    CommandSpec {
+        command: Command::Suspend,
+        name: "suspend",
+        aliases: &["sus", "stop"],
+        arg: None,
+        label: Label::ActionAppSuspend,
+        // Listed everywhere; without the action (Windows) it says that it is not supported.
+        action: if super::effects::SUSPEND_SUPPORTED { Some(Action::Suspend) } else { None },
     },
 ];
 

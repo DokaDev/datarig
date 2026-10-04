@@ -9,12 +9,14 @@
 //! * [`icons`] — Nerd Font icons of connection profiles.
 //! * [`clipboard`] — where copies go: the system clipboard or OSC 52.
 //! * [`terminal`] — the terminal modes the binary sets and restores, and the cursor's shape.
+//! * [`external`] — editing a query in the user's own editor (`$VISUAL` / `$EDITOR`).
 //!
 //! UI-independent logic lives in `datarig-core`; drivers are registered in `drivers`.
 
 pub mod app;
 pub mod clipboard;
 pub mod drivers;
+pub mod external;
 pub mod icons;
 pub mod input;
 pub mod keymap;

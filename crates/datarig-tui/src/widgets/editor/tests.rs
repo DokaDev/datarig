@@ -301,3 +301,65 @@ fn awaiting_a_character() {
         assert_eq!((e.awaiting_key(), e.awaiting_char()), (key, char), "after {k}");
     }
 }
+
+/// What an external editor saved: one undo step, only the changed middle spliced (marks
+/// before and after it keep their places), the cursor on its line and column as far as they
+/// exist, Normal mode; the same text changes nothing.
+#[test]
+fn replace_text_is_one_undo_step_that_keeps_the_marks_around_the_change() {
+    let mut e = at("SELECT 1;\nSELECT 2;\nSELECT 3;", (0, 0));
+    typ(&mut e, "majjmbk");
+    let version = e.version();
+    assert!(!e.replace_text("SELECT 1;\nSELECT 2;\nSELECT 3;"));
+    assert_eq!(e.version(), version, "the same text: nothing changes");
+    assert!(e.replace_text("SELECT 1;\nSELECT 22, 'x';\nSELECT 3;"));
+    assert_eq!(e.text(), "SELECT 1;\nSELECT 22, 'x';\nSELECT 3;");
+    assert_eq!((e.row, e.col), (1, 0));
+    assert_eq!((e.marks.get('a').ok(), e.marks.get('b').ok()), (Some((0, 0)), Some((2, 0))));
+    assert_eq!(e.last_step_changes(), 1);
+    typ(&mut e, "u");
+    assert_eq!(e.text(), "SELECT 1;\nSELECT 2;\nSELECT 3;");
+    typ(&mut e, "<C-r>");
+    assert_eq!(e.text(), "SELECT 1;\nSELECT 22, 'x';\nSELECT 3;");
+    // A shorter text: the cursor stays on the text.
+    assert!(e.replace_text("x"));
+    assert_eq!((e.text().as_str(), e.row, e.col), ("x", 0, 0));
+    assert!(e.replace_text(""));
+    assert_eq!(e.text(), "");
+    typ(&mut e, "uu");
+    assert_eq!(e.text(), "SELECT 1;\nSELECT 22, 'x';\nSELECT 3;");
+    assert_eq!(e.len_bytes(), e.text().len());
+}
+
+/// The common start and end are cut on character boundaries: `é` (C3 A9) and `ê` (C3 AA)
+/// share their first byte, U+AC00 and U+AC01 (Hangul syllables) their first two.
+#[test]
+fn replace_text_cuts_on_character_boundaries() {
+    for (old, new) in [
+        ("café", "cafê"),
+        ("\u{AC00}\u{B098}", "\u{AC01}\u{B098}"),
+        ("ab\u{AC00}", "ab\u{AC01}"),
+        ("é", "ê"),
+        ("aé", "a"),
+        ("x", "xé"),
+    ] {
+        let mut e = Editor::new(old);
+        assert!(e.replace_text(new), "{old} -> {new}");
+        assert_eq!(e.text(), new);
+        assert_eq!(e.len_bytes(), new.len());
+        typ(&mut e, "u");
+        assert_eq!(e.text(), old);
+    }
+}
+
+/// From Insert or Visual mode (or with the search prompt open) it ends in Normal mode.
+#[test]
+fn replace_text_ends_in_normal_mode() {
+    for keys in ["A typed", "vl", "/SEL", "d"] {
+        let mut e = at("SELECT 1", (0, 0));
+        typ(&mut e, keys);
+        assert!(e.replace_text("SELECT 2"), "{keys}");
+        assert_eq!((e.mode, e.awaiting_key(), e.searching()), (Mode::Normal, false, false), "{keys}");
+        assert_eq!(e.text(), "SELECT 2");
+    }
+}

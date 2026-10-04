@@ -2,7 +2,8 @@
 //! [`datarig_tui::terminal::TermState`] (alternate screen, mouse, bracketed paste, the kitty
 //! keyboard flags). One process-wide state is undone exactly once, by [`Guard`] (a normal exit,
 //! an error, a failed setup) or by the panic hook, whichever comes first. Before any of it, the
-//! terminal's background is asked for once ([`background`]).
+//! terminal's background is asked for once ([`background`]). [`release`] and [`reclaim`] hand
+//! the terminal over for a while (an external editor, a suspend) and take it back.
 
 use datarig_tui::terminal::{self, TermState};
 use datarig_tui::theme::Background;
@@ -64,4 +65,29 @@ pub(crate) fn setup_terminal() -> io::Result<(Terminal<CrosstermBackend<Stdout>>
     let enhanced = supports_keyboard_enhancement().unwrap_or(false);
     STATE.enter(&mut io::stdout(), enhanced)?;
     Ok((Terminal::new(CrosstermBackend::new(io::stdout()))?, enhanced))
+}
+
+/// Give the terminal back as it was before the program (raw mode off, the main screen, no
+/// mouse or paste modes, the user's cursor shape), for an external editor or a suspend.
+pub(crate) fn release() -> io::Result<()> {
+    STATE.restore(&mut io::stdout(), raw_off)
+}
+
+/// Take the terminal again after [`release`]: raw mode, the alternate screen, mouse, paste
+/// and, with `enhanced`, the kitty keyboard flags, as [`setup_terminal`] set them. The caller
+/// redraws the whole screen.
+pub(crate) fn reclaim(enhanced: bool) -> io::Result<()> {
+    enable_raw_mode()?;
+    STATE.raw_on();
+    STATE.enter(&mut io::stdout(), enhanced)
+}
+
+/// Stop the program the way a shell's job control does (`Ctrl+Z` in Vim), between
+/// [`release`] and [`reclaim`]: the process group gets `SIGTSTP`; this returns once the shell
+/// continues it (`fg`).
+#[cfg(unix)]
+pub(crate) fn stop() -> io::Result<()> {
+    // The whole process group, as Vim does: a wrapper script that started datarig stops too,
+    // so the shell sees the job stop.
+    rustix::process::kill_current_process_group(rustix::process::Signal::TSTP).map_err(io::Error::from)
 }

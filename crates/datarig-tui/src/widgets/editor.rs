@@ -473,6 +473,47 @@ impl Editor {
         EdEvent::Changed { typed: None }
     }
 
+    /// Replace the whole text with `text` (what an external editor saved) as one undo step, in
+    /// Normal mode. Only the part between what both texts start and end with changes, so marks
+    /// before and after it stay; the cursor keeps its line and column as far as they still
+    /// exist. `false` when the text was the same.
+    pub fn replace_text(&mut self, text: &str) -> bool {
+        if self.prompt.is_some() {
+            self.close_prompt();
+        }
+        match self.mode {
+            Mode::Insert => self.leave_insert(),
+            Mode::Visual => self.exit_visual(),
+            Mode::Normal => {}
+        }
+        self.cmd = vim::Pending::default();
+        let old = self.text();
+        if old == text {
+            return false;
+        }
+        let (old, new) = (old.as_bytes(), text.as_bytes());
+        let mut pre = old.iter().zip(new).take_while(|(a, b)| a == b).count();
+        while !(text.is_char_boundary(pre) && self.text_boundary(pre)) {
+            pre -= 1;
+        }
+        let max = old.len().min(new.len()) - pre;
+        let mut suf = old.iter().rev().zip(new.iter().rev()).take(max).take_while(|(a, b)| a == b).count();
+        while !(text.is_char_boundary(new.len() - suf) && self.text_boundary(old.len() - suf)) {
+            suf -= 1;
+        }
+        let (row, col) = (self.row, self.col);
+        self.snapshot();
+        self.splice(pre, old.len() - suf, &text[pre..new.len() - suf]);
+        self.set_pos(row, col);
+        true
+    }
+
+    /// Byte `off` of the text starts a character (or is its end).
+    fn text_boundary(&self, off: usize) -> bool {
+        let (r, b) = self.pos_bytes(off);
+        self.lines[r].is_char_boundary(b)
+    }
+
     /// Mouse click at a position relative to the editor's inner area. While the search prompt
     /// is open the click only closes it (as `Esc`): the line under the prompt is not on screen.
     pub fn click(&mut self, x: u16, y: u16) {

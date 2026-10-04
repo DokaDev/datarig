@@ -143,6 +143,8 @@
 "action.pane.prev" = "Focus previous pane"
 "action.commands.open" = "Commands"
 "action.app.quit" = "Quit"
+"action.editor.open_external" = "Edit the query in your own editor ($VISUAL, $EDITOR)"
+"action.app.suspend" = "Suspend datarig (the shell's fg brings it back)"
 
 # Connection profiles (iteration 2)
 "quit.title" = "Quit datarig?"
@@ -1180,3 +1182,21 @@
 "theme.problem.bad_modifier" = "“{value}” is not a modifier (bold, dim, italic, underlined, reversed, crossed-out)"
 "theme.problem.unknown_base" = "extends = “{name}”: not a built-in theme"
 "theme.not_used" = "Theme not used: {error}. Drawing with the terminal theme."
+
+# The external editor (Ctrl+G) and suspending (Ctrl+Z)
+"external.unchanged" = "No change from the editor"
+"external.replaced" = "Text replaced with the editor's (u undoes it)"
+"external.copied" = "The edited query is in a new console (the table tab keeps its query)"
+"external.stale" = "The tab changed while the editor was open: the edited text is in a new console"
+"external.no_state_dir" = "No state directory for the editor's file (no home directory is known): nothing was opened"
+"external.file" = "Could not write the file for the editor: {error}"
+"external.terminal" = "Could not hand the terminal to the editor: {error}"
+"external.command" = "${var} is not a command that can run: {error}"
+"external.spawn" = "Could not start the editor {program}: {error} (set $VISUAL or $EDITOR)"
+"external.exit_code" = "The editor {program} ended with exit code {code}: the text is unchanged"
+"external.exit_signal" = "The editor {program} was ended by signal {signal}: the text is unchanged"
+"external.exit_other" = "The editor {program} failed ({how}): the text is unchanged"
+"external.read" = "Could not read the editor's file back: {error}. The text is unchanged"
+"external.not_utf8" = "The editor saved text that is not UTF-8: the text is unchanged"
+"suspend.unsupported" = "Suspending is not supported on Windows"
+"suspend.failed" = "Could not suspend: {error}"

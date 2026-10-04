@@ -29,6 +29,7 @@ mod conn;
 mod connection;
 pub mod copy;
 mod dispatch;
+pub mod effects;
 mod execution;
 pub mod explorer;
 pub mod guide;
@@ -464,6 +465,11 @@ pub struct App {
     clipboard: Option<Box<dyn crate::clipboard::SystemClipboard>>,
     /// Text for the terminal (OSC 52 copies) the binary writes before the next frame.
     terminal_out: Vec<String>,
+    /// What the binary is to do with the terminal handed over (an external editor, a
+    /// suspend).
+    effect: Option<effects::Effect>,
+    /// The tab the external editor is open for.
+    editing: Option<effects::PendingEdit>,
     /// Why editor yanks did not reach the clipboard, as said so far.
     yank_notices: copy::YankNotices,
     /// A large copy waiting for its confirmation.
@@ -724,6 +730,8 @@ impl App {
             clipboard_opener: crate::clipboard::none(),
             clipboard: None,
             terminal_out: Vec::new(),
+            effect: None,
+            editing: None,
             yank_notices: copy::YankNotices::default(),
             pending_copy: None,
             pending_fetch_copy: None,

@@ -40,6 +40,10 @@ pub enum Action {
     CancelQuery,
     OpenCommands,
     ShowCompletions,
+    /// The active tab's text in the user's editor (`$VISUAL`, `$EDITOR`).
+    ExternalEdit,
+    /// Stop until the shell's `fg` (Unix job control).
+    Suspend,
     NewProfile,
     /// Test the selected profile (explorer) or the active tab's profile.
     TestConnection,
@@ -209,6 +213,11 @@ fn anywhere(_: &App) -> bool {
     true
 }
 
+/// The platform can suspend the program (Unix).
+fn can_suspend(_: &App) -> bool {
+    super::effects::SUSPEND_SUPPORTED
+}
+
 /// There are profiles, so the tabs and the editor are shown (otherwise the welcome panel).
 fn in_workspace(a: &App) -> bool {
     !a.profiles.is_empty()
@@ -349,6 +358,7 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::RunStatement, "query.execute_current", Label::ActionQueryExecuteCurrent, has_tab),
     act(Action::CancelQuery, "query.cancel", Label::ActionQueryCancel, has_tab),
     act(Action::ShowCompletions, "editor.complete", Label::ActionEditorComplete, has_tab),
+    act(Action::ExternalEdit, "editor.open_external", Label::ActionEditorOpenExternal, has_tab),
     act(Action::QuickConnect, "conn.quick_connect", Label::ActionConnQuickConnect, in_workspace),
     act(Action::NewProfile, "conn.new", Label::ActionConnNew, anywhere),
     act(Action::EditProfile, "conn.edit", Label::ActionConnEdit, explorer_profile),
@@ -369,6 +379,7 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::FocusPrev, "pane.prev", Label::ActionPanePrev, panes),
     act(Action::OpenCommands, "commands.open", Label::ActionCommandsOpen, anywhere),
     act(Action::Quit, "app.quit", Label::ActionAppQuit, anywhere),
+    act(Action::Suspend, "app.suspend", Label::ActionAppSuspend, can_suspend),
     act(Action::OpenSettings, "settings.open", Label::ActionSettingsOpen, anywhere),
     act(Action::ToggleIcons, "ui.icons.toggle", Label::ActionUiIconsToggle, anywhere),
     act(Action::SetIcons(IconsSetting::On), "ui.icons.on", Label::ActionUiIconsOn, anywhere),

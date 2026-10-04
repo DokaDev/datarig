@@ -163,6 +163,8 @@ const ACTIONS: &[(Ctx, &str, &str)] = &[
     (Workspace, "ctrl+enter", "query.execute_current"),
     (Workspace, "ctrl+e", "query.execute_current"),
     (Workspace, "ctrl+o", "conn.quick_connect"),
+    (Workspace, "ctrl+g", "editor.open_external"),
+    (Workspace, "ctrl+z", "app.suspend"),
     (Workspace, "ctrl+t", "tab.new_console"),
     (Workspace, "ctrl+w", "tab.close"),
     (Workspace, "ctrl+s", "script.save"),
@@ -363,7 +365,6 @@ const VIM_INSERT: &[&str] = &[
 const TEXT: &[&str] = &["backspace", "delete", "left", "right", "home", "end", "ctrl+u", "ctrl+a"];
 
 const RESERVED: &[(Ctx, &[&str], &str)] = &[
-    (Workspace, &["ctrl+g"], "editor.open_external"),
     (VimNormal, VIM, "vim"),
     (VimVisual, VIM, "vim"),
     (VimInsert, VIM_INSERT, "vim Insert"),

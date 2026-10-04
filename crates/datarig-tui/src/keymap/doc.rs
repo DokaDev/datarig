@@ -97,6 +97,16 @@ pub fn render() -> String {
          terminal goes in at the cursor in every mode (over the selection in Visual mode). Unlike Vim, a \
          tab is 4 columns wide and a completion taken from the popup is not part of what `.` repeats. \
          The other reserved vim keys do nothing yet.\n\
+         - **Your editor and suspending**: `Ctrl+G` opens the tab's query in your own editor \
+         (`$VISUAL`, else `$EDITOR`, else `vi`; split into words like a shell does, `code -w` \
+         included, but no shell runs it) on a private file in the state directory, removed afterwards. \
+         What it saves replaces the text as one undo step; quitting without saving changes nothing, \
+         and an editor that fails (Vim's `:cq`) leaves the text as it was. A table tab's query goes as \
+         a copy, and an edited copy opens in a new console. `Ctrl+Z` (and `:suspend`, `:sus`, `:stop`) \
+         stops datarig as `Ctrl+Z` stops Vim; the shell's `fg` brings it back (Unix only; on Windows \
+         `:suspend` says it is not supported). `Ctrl+C` stays the query cancel. Meanwhile a running \
+         query goes on on the server: with the editor open its results arrive and wait; while \
+         suspended the whole program is stopped, so they are read after `fg`.\n\
          - **Reserved** keys belong to a widget (vim, a dialog) or to an action that is not \
          implemented yet. They cannot be remapped.\n\n",
     );
