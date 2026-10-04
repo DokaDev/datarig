@@ -6,6 +6,7 @@
 use super::buffer::{class, graphemes, indent_of};
 use super::marks::Hint;
 use super::motion::{Motion, Pos};
+use super::pairs::Pair;
 use super::registers::{self, RegKind};
 use super::{EdEvent, Editor, Mode};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -26,10 +27,12 @@ impl Editor {
         self.ins_start = (self.row, self.col);
         self.ai_row = None;
         self.ins_text.clear();
+        self.forget_pairs();
         EdEvent::Moved
     }
 
     pub(super) fn leave_insert(&mut self) {
+        self.forget_pairs();
         self.ins_repeat = None;
         self.ins_reg = false;
         self.drop_autoindent();
@@ -57,6 +60,7 @@ impl Editor {
         self.ins_repeat = None;
         self.ins_reg = false;
         self.ins_text.clear();
+        self.forget_pairs();
         self.rec.moved_in_insert();
     }
 
@@ -105,6 +109,7 @@ impl Editor {
                 let indent = indent_of(&line[..upto]).to_string();
                 let blanks = indent_of(&line[upto..]).len();
                 self.drop_autoindent();
+                self.pairs_line_broken(self.row);
                 if blanks > 0 {
                     let at = self.offset();
                     self.splice(at, at + blanks, "");
@@ -134,6 +139,11 @@ impl Editor {
             KeyCode::Char('w') if ctrl => self.delete_before(true),
             KeyCode::Char('u') if ctrl => self.delete_before(false),
             KeyCode::Char(c) if !ctrl && !key.modifiers.contains(KeyModifiers::ALT) => {
+                if let Some(p) = self.pair_for(c) {
+                    self.apply_pair(p);
+                    self.record_pair(p);
+                    return if p == Pair::Over { EdEvent::Moved } else { EdEvent::Changed { typed: Some(c) } };
+                }
                 let mut buf = [0u8; 4];
                 self.insert_at_cursor(c.encode_utf8(&mut buf));
                 self.ins_text.push(c);
@@ -145,6 +155,11 @@ impl Editor {
                 EdEvent::Changed { typed: None }
             }
             KeyCode::Backspace => {
+                if let Some(p) = self.pair_backspace() {
+                    self.apply_pair(p);
+                    self.record_pair(p);
+                    return EdEvent::Changed { typed: None };
+                }
                 let removed = if self.col > 0 {
                     let a = self.offset_of(self.row, self.col - 1);
                     let b = self.offset();
@@ -160,6 +175,7 @@ impl Editor {
                 EdEvent::Changed { typed: None }
             }
             KeyCode::Delete => {
+                self.forget_pairs();
                 let a = self.offset();
                 let n = self.gcount(self.row);
                 if self.col < n {
@@ -199,7 +215,7 @@ impl Editor {
     }
 
     /// Text this session typed was deleted again: `".` loses it too.
-    fn untyped(&mut self, removed: &str) {
+    pub(super) fn untyped(&mut self, removed: &str) {
         if let Some(rest) = self.ins_text.strip_suffix(removed) {
             self.ins_text.truncate(rest.len());
         }

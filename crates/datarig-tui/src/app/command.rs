@@ -14,7 +14,7 @@
 
 use super::action::{Action, LangSetting};
 use datarig_core::config::{
-    ClipboardSetting, CommandsPosition, CopyHeader, CursorShape, DetailView, EditorClipboard, FormatIndent,
+    AutoPairs, ClipboardSetting, CommandsPosition, CopyHeader, CursorShape, DetailView, EditorClipboard, FormatIndent,
     IconsSetting, KeywordCase,
 };
 use datarig_core::i18n::Label;
@@ -323,6 +323,7 @@ pub enum Setting {
     EditorClipboard(EditorClipboard),
     FormatCase(KeywordCase),
     FormatIndent(FormatIndent),
+    AutoPairs(AutoPairs),
 }
 
 /// The categories of the settings screen, in its order.
@@ -516,6 +517,16 @@ pub const SETTINGS: &[SettingSpec] = &[
         values: Values::Fixed(&[
             ("4", Setting::FormatIndent(FormatIndent::Four), Label::SettingFormatIndentFour),
             ("2", Setting::FormatIndent(FormatIndent::Two), Label::SettingFormatIndentTwo),
+        ]),
+    },
+    SettingSpec {
+        key: "editor.auto_pairs",
+        label: Label::SettingAutoPairs,
+        about: Label::SettingAutoPairsAbout,
+        group: SettingGroup::Editor,
+        values: Values::Fixed(&[
+            ("off", Setting::AutoPairs(AutoPairs::Off), Label::SettingAutoPairsOff),
+            ("on", Setting::AutoPairs(AutoPairs::On), Label::SettingAutoPairsOn),
         ]),
     },
 ];

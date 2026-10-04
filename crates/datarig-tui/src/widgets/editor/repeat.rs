@@ -5,6 +5,7 @@
 //! the next one when repeated (`"1p` then `.` puts `"2`, as Vim does).
 
 use super::motion::Motion;
+use super::pairs::Pair;
 use super::{EdEvent, Editor, Mode, Sel};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -14,6 +15,8 @@ pub(super) enum Input {
     Key(KeyEvent),
     /// A paste from the terminal in Insert mode, or the text `Ctrl+R` put there.
     Paste(String),
+    /// What auto-pairs did for the key typed there.
+    Pair(Pair),
     /// The selection a Visual mode operator took, as much text from the cursor again: `lines`
     /// lines (whole with `by_line`), and on one line `cols` graphemes, on more the last line
     /// up to column `cols`; `eol`: with the line break of the last line.
@@ -111,6 +114,16 @@ impl Recorder {
     pub(super) fn prompt_paste(&mut self, text: &str) {
         if !self.replaying {
             self.inputs.push(Input::Paste(text.to_string()));
+        }
+    }
+
+    /// Auto-pairs did `p` for the key just recorded: `.` does `p` again in place of the key.
+    pub(super) fn pair(&mut self, p: Pair) {
+        if self.inserting
+            && !self.replaying
+            && let Some(last @ Input::Key(_)) = self.inputs.last_mut()
+        {
+            *last = Input::Pair(p);
         }
     }
 
@@ -255,12 +268,23 @@ impl Editor {
                         Input::Paste(s) => {
                             self.insert_at_cursor(s);
                         }
+                        Input::Pair(p) => self.apply_pair(*p),
                         Input::Select { .. } | Input::Block { .. } => {}
                     }
                 }
             }
             self.rec.replaying = replaying;
             self.ins_text = typed;
+        }
+    }
+
+    /// Auto-pairs did `p` for the key just typed: recorded in its place for `.` and the count.
+    pub(super) fn record_pair(&mut self, p: Pair) {
+        self.rec.pair(p);
+        if let Some(rep) = self.ins_repeat.as_mut()
+            && let Some(last @ Input::Key(_)) = rep.inputs.last_mut()
+        {
+            *last = Input::Pair(p);
         }
     }
 
@@ -298,6 +322,7 @@ impl Editor {
                 Input::Paste(s) => {
                     self.paste(s);
                 }
+                Input::Pair(p) => self.apply_pair(*p),
                 Input::Select { lines, cols, by_line, eol } => self.select_again(*lines, *cols, *by_line, *eol),
                 Input::Block { lines, width } => self.select_block_again(*lines, *width),
             }

@@ -114,7 +114,10 @@ Everything below works today, with PostgreSQL.
   says `i` starts typing and `Esc` stops. Insert mode keeps the usual editing keys (arrows,
   `Home`/`End`, `Backspace`/`Delete`), plus `Ctrl+W`, `Ctrl+U` and `Ctrl+R {register}`, and
   `Enter` keeps the line's indent; a paste from the terminal goes in at the cursor in every
-  mode. Registers work as in Vim (`"a`-`"z` and `"A`-`"Z` to append, `"0`, the `"1`-`"9` delete
+  mode. Auto-pairs are off by default, as in Vim; `[editor] auto_pairs = "on"` makes `( [ { ' "`
+  and `` ` `` put their closing character after the cursor (not inside strings or comments,
+  not before a word, never for a paste), step over it when you type it, and delete the empty
+  pair on `Backspace`. Registers work as in Vim (`"a`-`"z` and `"A`-`"Z` to append, `"0`, the `"1`-`"9` delete
   ring, `"-`, `"_`, `".`, `"/`, `"+`/`"*`; `":` `"%` `"#` are not kept), and like Vim with
   `clipboard=unnamedplus` every yank, delete or change without a register also goes to the
   system clipboard (or through OSC 52 over SSH; `[editor] clipboard = "off"` turns that off).
