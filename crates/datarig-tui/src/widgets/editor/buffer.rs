@@ -1,6 +1,6 @@
 //! The text: lines, positions and byte offsets, edits as splices, and undo.
 
-use super::marks::{Edit, Saved};
+use super::marks::{Edit, Hint, Saved};
 use super::{Editor, Mode, TAB_WIDTH};
 use crate::text::grapheme_width;
 use unicode_segmentation::UnicodeSegmentation;
@@ -69,6 +69,13 @@ pub(super) fn class(g: &str) -> u8 {
 /// The leading blanks of `line`.
 pub(super) fn indent_of(line: &str) -> &str {
     &line[..line.len() - line.trim_start_matches([' ', '\t']).len()]
+}
+
+/// How an undo or redo that takes out `out` and puts in `put` moves the marks: whole lines put
+/// in (a deleted line coming back) take the marks of the line there down, as Vim's line-based
+/// undo does. Only at a line's start, where `put` ending in a line break begins a line.
+fn above(out: &str, put: &str) -> Option<Hint> {
+    (out.is_empty() && put.ends_with('\n')).then_some(Hint::Above)
 }
 
 impl Editor {
@@ -165,15 +172,18 @@ impl Editor {
         joined.push_str(s);
         joined.push_str(&self.lines[rb][bb..]);
         let new: Vec<String> = joined.split('\n').map(str::to_string).collect();
-        // `'.`: where the change starts; the line a line break at the end of a line adds, or
-        // the line after the first of lines joined, as Vim puts it.
+        // `'.`: where the change starts; the line a line break at the end of a line adds (not
+        // one typed there), or the line after the first of lines joined, as Vim puts it.
         let ins = new.len() - 1;
-        self.splice_at = if (rb == ra && ba == self.lines[ra].len() && s.starts_with('\n')) || (rb > ra && ins == 0) {
-            (ra + 1, 0)
-        } else {
-            (ra, self.lines[ra][..ba].graphemes(true).count())
-        };
-        let e = Edit { ra, ba, rb, bb, ins, ends_line: s.ends_with('\n'), hint: self.mark_hint.take() };
+        let typed = self.mark_hint == Some(Hint::Split);
+        self.splice_at =
+            if !typed && ((rb == ra && ba == self.lines[ra].len() && s.starts_with('\n')) || (rb > ra && ins == 0)) {
+                (ra + 1, 0)
+            } else {
+                (ra, self.lines[ra][..ba].graphemes(true).count())
+            };
+        self.splice_rows = (ra, ins);
+        let e = Edit { ra, ba, rb, bb, ins, hint: self.mark_hint.take() };
         self.marks.adjust(&e, &self.lines, |r| new.get(r.wrapping_sub(ra)).cloned());
         self.lines.splice(ra..=rb, new);
         self.bytes = self.bytes - removed.len() + s.len();
@@ -273,18 +283,22 @@ impl Editor {
         if from_undo {
             step.after = (self.row, self.col);
             for c in step.changes.iter().rev() {
+                self.mark_hint = above(&c.inserted, &c.removed);
                 self.splice_raw(c.at, c.at + c.inserted.len(), &c.removed);
             }
             (self.row, self.col) = step.before;
         } else {
             for c in &step.changes {
+                self.mark_hint = above(&c.removed, &c.inserted);
                 self.splice_raw(c.at, c.at + c.removed.len(), &c.inserted);
             }
             (self.row, self.col) = if step.redo_before { step.before } else { step.after };
         }
         // Vim puts `'.` on the changed line's start, and the marks the change moved or deleted
         // back where they were.
-        self.marks.set_change((self.splice_at.0, 0));
+        // The first line an undo changed, the last one a redo did.
+        let (ra, ins) = self.splice_rows;
+        self.marks.set_change((if from_undo { ra } else { ra + ins }, 0));
         self.marks.swap(&mut step.marks, marks);
         if from_undo {
             self.redo.push(step)

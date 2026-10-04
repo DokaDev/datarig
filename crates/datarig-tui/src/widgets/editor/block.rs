@@ -15,6 +15,7 @@
 
 use super::buffer::{UNDO_BYTES, graphemes, gw};
 use super::edit::{Case, recase};
+use super::marks::Hint;
 use super::registers::{RegKind, RegProblem, Registers};
 use super::repeat::{Input, InsertRepeat};
 use super::{EdEvent, Editor, Mode, Sel};
@@ -462,7 +463,10 @@ impl Editor {
         let (a, _) = self.line_bounds(first);
         let end = a + self.lines[first..=last].iter().map(|l| l.len() + 1).sum::<usize>() - 1;
         self.block_work += self.lines[..first].len() + (end - a);
+        // `'.` at the block's top left, where the operator put the cursor (Vim).
+        let col = if self.row == first { self.col } else { 0 };
         self.splice(a, end, new);
+        self.marks.set_change((first, col));
     }
 
     /// Lines `first..=last` made by `f` from each line (`None`: it stays), spliced in one go
@@ -751,6 +755,10 @@ impl Editor {
             let old = &line[p.col..p.col + p.len];
             Some(format!("{}{}{}", &line[..p.col], recase(old, case), &line[p.col + p.len..]))
         });
+        if changed {
+            // Vim's case operators put `'.` at the line's start.
+            self.marks.set_change((b.first, 0));
+        }
         self.clamp();
         if changed { EdEvent::Changed { typed: None } } else { EdEvent::Moved }
     }
@@ -806,6 +814,7 @@ impl Editor {
                     self.splice(end, end, &format!("\n{text}"));
                     at + 1
                 } else {
+                    self.mark_hint = Some(Hint::Above);
                     self.splice(start, start, &format!("{text}\n"));
                     at
                 };

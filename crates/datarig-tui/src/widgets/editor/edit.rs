@@ -188,6 +188,10 @@ impl Editor {
                 self.splice(a, a + len, &new);
             }
         }
+        if changed {
+            // On the first line, as Vim puts it, not the last one changed.
+            self.marks.set_change((first, 0));
+        }
         self.set_pos(first, self.first_nonblank(first));
         if changed { EdEvent::Changed { typed: None } } else { EdEvent::Moved }
     }

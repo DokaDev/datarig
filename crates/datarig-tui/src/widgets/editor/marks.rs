@@ -53,20 +53,23 @@ pub(super) enum Hint {
     /// Lines `first..=last` are joined into the first: for each line after it, the byte of
     /// the joined line where its text starts and the bytes it lost before that (its indent).
     Join { first: usize, at: Vec<(usize, usize)> },
-    /// A line break typed into a line: its marks stay on the first part, even at its start
-    /// (where lines put above it would take them down).
+    /// A line break typed into a line (`'.` stays on the line it was typed in).
     Split,
+    /// Lines put above the splice's line, which moves down with its marks (`O`, `P`).
+    Above,
+    /// Line `first + i` of the old text goes to line `rows[i]` (a `:s` whose replacements add
+    /// line breaks); a mark keeps its column.
+    Rows { first: usize, rows: Vec<usize> },
 }
 
 /// A splice as the marks see it: bytes `ba` of line `ra` to `bb` of line `rb` replaced with
-/// text of `ins` line breaks (`ends_line`: the text ends with one).
+/// text of `ins` line breaks.
 pub(super) struct Edit {
     pub ra: usize,
     pub ba: usize,
     pub rb: usize,
     pub bb: usize,
     pub ins: usize,
-    pub ends_line: bool,
     pub hint: Option<Hint>,
 }
 
@@ -113,9 +116,13 @@ impl Edit {
                 _ if r > rb => To::Row(shifted(r)),
                 _ => To::Stay,
             },
+            Some(Hint::Rows { first, rows }) => match r.checked_sub(*first).and_then(|i| rows.get(i)) {
+                Some(&to) => To::Row(to),
+                None if r > rb => To::Row(shifted(r)),
+                None => To::Stay,
+            },
             _ if r > rb => To::Row(shifted(r)),
-            // Lines put above a line (`O`, `P`, the undo of a delete) take its marks down.
-            None if rem == 0 && self.ba == 0 && self.ends_line => To::Row(r + ins),
+            Some(Hint::Above) if rem == 0 && self.ba == 0 => To::Row(r + ins),
             _ if rem == ins || rem == 0 || (ins > 0 && rem < ins) => To::Stay,
             // Whole lines out: their marks go, the line after takes their place.
             _ if ins == 0 && self.ba == 0 && self.bb == 0 => match r < rb {
@@ -227,8 +234,10 @@ impl Marks {
         self.change = Some(at);
     }
 
+    /// The marks as an undo step keeps them; the selection of a Visual mode operator under way
+    /// is already the last one (Vim sets it before the change).
     pub(super) fn save(&self) -> Saved {
-        Saved { named: self.named, visual: self.visual }
+        Saved { named: self.named, visual: self.pending.or(self.visual) }
     }
 
     /// An undo or redo of a change is over, `before` being the marks when it started: the

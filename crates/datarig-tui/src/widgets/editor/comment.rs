@@ -65,6 +65,9 @@ impl Editor {
         let new = toggle(&self.lines[first..=last]);
         let changed = new.iter().zip(&self.lines[first..=last]).any(|(n, o)| n != o);
         self.set_pos(to.0, to.1);
+        // Neovim counts it as a change even when the lines stay as they are.
+        self.marks.set_change((first, 0));
+        self.rec.repeat_unchanged();
         if changed {
             let byte = self.byte_at(self.row, self.col);
             self.snapshot();

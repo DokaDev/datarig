@@ -13,7 +13,7 @@
 //! (first: the last flags again); `c` (confirm) is not supported. Any delimiter that is not a
 //! letter, a digit, a blank, `\`, `"` or `|` works. One `:s` is one undo step.
 
-use super::marks::MarkNotice;
+use super::marks::{Hint, MarkNotice};
 use super::motion::Pos;
 use super::search::{SearchNotice, summary};
 use super::{EdEvent, Editor};
@@ -100,8 +100,12 @@ impl Editor {
     /// Run Ex command `text` (what follows `:`). The cursor's place before a jump or a
     /// substitute becomes the context mark, as in Vim.
     pub fn ex(&mut self, text: &str) -> Result<ExDone, ExError> {
-        let (range, rest) = self.ex_range(text.trim())?;
+        let (range, jump, rest) = self.ex_range(text.trim())?;
         let command = command(rest.trim_start())?;
+        if let Some(a) = jump {
+            self.row = (a.max(1) as usize - 1).min(self.lines.len() - 1);
+            self.clamp();
+        }
         let cursor = (self.row, self.col);
         let done = match command {
             Command::Go => {
@@ -121,15 +125,9 @@ impl Editor {
             }
             Command::Again { keep, flags } => {
                 let lines = self.lines_of(range)?;
-                let mut f = parse_flags(flags)?;
                 let last = self.last_sub.clone().ok_or(ExError::Pattern(SearchNotice::NoPrevious))?;
-                if keep {
-                    f = Flags {
-                        all: f.all != last.flags.all,
-                        ignore_case: f.ignore_case.or(last.flags.ignore_case),
-                        quiet: f.quiet || last.flags.quiet,
-                    };
-                }
+                let flags = if keep { format!("&{flags}") } else { flags.to_string() };
+                let f = parse_flags(&flags, Some(last.flags))?;
                 self.substitute(&last.pattern, &last.replacement, f, lines)?
             }
         };
@@ -137,40 +135,56 @@ impl Editor {
         Ok(done)
     }
 
-    /// `&` (`:s` again on the cursor's line with its flags, as Neovim's `:&&`) and `g&`
-    /// (`all`: every line, the last search's pattern, the last flags). Not repeated by `.`.
-    pub(super) fn sub_again(&mut self, all: bool) -> EdEvent {
+    /// `&` (`:s` again with its flags on the cursor's line, `n` lines from it with a count, as
+    /// Neovim's `:&&`) and `g&` (`all`: every line, the last search's pattern, the last
+    /// flags). Not repeated by `.`. What went wrong is kept for the app to say.
+    pub(super) fn sub_again(&mut self, all: bool, n: usize) -> EdEvent {
         self.rec.skip();
         let version = self.version;
         let r = match (all, self.last_sub.clone()) {
             (_, None) => Err(ExError::Pattern(SearchNotice::NoPrevious)),
-            (false, Some(last)) => self.substitute(&last.pattern, &last.replacement, last.flags, (self.row, self.row)),
+            (false, Some(_)) if self.row + n > self.lines.len() => Err(ExError::InvalidRange),
+            (false, Some(last)) => {
+                self.substitute(&last.pattern, &last.replacement, last.flags, (self.row, self.row + n - 1))
+            }
             (true, Some(last)) => {
                 let pattern = self.last_search.as_ref().map_or(last.pattern.clone(), |l| l.re.as_str().to_string());
                 self.substitute(&pattern, &last.replacement, last.flags, (0, self.lines.len() - 1))
             }
         };
-        if let Err(ExError::Pattern(n)) = r {
-            self.search_notice = Some(n);
+        if let Err(e) = r {
+            self.ex_notice = Some(e);
         }
         if self.version != version { EdEvent::Changed { typed: None } } else { EdEvent::Moved }
     }
 
-    /// The range at the start of `text` (as Vim's line numbers, first and last) and the rest.
-    fn ex_range<'a>(&self, text: &'a str) -> Result<(Range, &'a str), ExError> {
+    /// Why the last `&` or `g&` did nothing, for the app to say; once.
+    pub fn take_ex_notice(&mut self) -> Option<ExError> {
+        self.ex_notice.take()
+    }
+
+    /// The range at the start of `text` (as Vim's line numbers, first and last), the line
+    /// the cursor goes to before the command runs (the first of `a;b`), and the rest.
+    fn ex_range<'a>(&self, text: &'a str) -> Result<(Range, Option<Line>, &'a str), ExError> {
         if let Some(rest) = text.strip_prefix('%') {
-            return Ok((Some((1, self.lines.len() as Line)), rest));
+            return Ok((Some((1, self.lines.len() as Line)), None, rest));
         }
         let cursor = self.row as Line + 1;
-        let (Some(a), rest) = self.address(text, cursor)? else { return Ok((None, text)) };
-        let mut s = rest.trim_start();
-        let Some(sep) = s.chars().next().filter(|c| matches!(c, ',' | ';')) else { return Ok((Some((a, a)), s)) };
-        s = &s[1..];
-        // After `;` the second address counts from the first.
-        let base = if sep == ';' { a } else { cursor };
-        match self.address(s, base)? {
-            (Some(b), rest) => Ok((Some((a, b)), rest)),
-            (None, rest) => Ok((Some((a, a)), rest)),
+        let (a, rest) = match self.address(text, cursor)? {
+            // `,5` and `;5` start at the cursor's line.
+            (None, rest) if rest.starts_with([',', ';']) => (cursor, rest),
+            (None, rest) => return Ok((None, None, rest)),
+            (Some(a), rest) => (a, rest),
+        };
+        let s = rest.trim_start();
+        let Some(sep) = s.chars().next().filter(|c| matches!(c, ',' | ';')) else {
+            return Ok((Some((a, a)), None, s));
+        };
+        // After `;` the second address counts from the first, where the cursor goes.
+        let (base, jump) = if sep == ';' { (a, Some(a)) } else { (cursor, None) };
+        match self.address(&s[1..], base)? {
+            (Some(b), rest) => Ok((Some((a, b)), jump, rest)),
+            (None, rest) => Ok((Some((a, a)), jump, rest)),
         }
     }
 
@@ -223,8 +237,8 @@ impl Editor {
         let delim = args.chars().next().filter(|&c| delimiter(c));
         let Some(delim) = delim else {
             // `:s` alone or with flags: the last one again with those flags.
-            let flags = parse_flags(args)?;
             let last = self.last_sub.clone().ok_or(ExError::Pattern(SearchNotice::NoPrevious))?;
+            let flags = parse_flags(args, Some(last.flags))?;
             return self.substitute(&last.pattern, &last.replacement, flags, lines);
         };
         let body = &args[delim.len_utf8()..];
@@ -236,7 +250,7 @@ impl Editor {
             }
             None => (String::new(), ""),
         };
-        let flags = parse_flags(flags)?;
+        let flags = parse_flags(flags, self.last_sub.as_ref().map(|l| l.flags))?;
         // `~` is the previous replacement.
         let replacement = tilde(&replacement, self.last_sub.as_ref().map_or("", |l| l.replacement.as_str()));
         let pattern = match pattern.as_str() {
@@ -290,13 +304,18 @@ impl Editor {
         };
         let mut text = String::new();
         let mut it = changed.iter().peekable();
+        // Where each line lands, after the line breaks the replacements before it added.
+        let mut rows = Vec::with_capacity(b - a + 1);
+        let mut added = 0;
         for r in a..=b {
             if r > a {
                 text.push('\n');
             }
+            rows.push(r + added);
             match it.peek() {
                 Some((cr, new)) if *cr == r => {
                     text.push_str(new);
+                    added += new.matches('\n').count();
                     it.next();
                 }
                 _ => text.push_str(&self.lines[r]),
@@ -309,9 +328,12 @@ impl Editor {
         self.snapshot();
         let (start, _) = self.line_bounds(a);
         let (_, end) = self.line_bounds(b);
+        // The last line changed is the text's last.
+        let last_row = b + added;
+        if added > 0 {
+            self.mark_hint = Some(Hint::Rows { first: a, rows });
+        }
         self.splice(start, end, &text);
-        // The last line changed is the text's last, after the line breaks added before it.
-        let last_row = a + text.matches('\n').count();
         self.set_pos(last_row, self.first_nonblank(last_row));
         Ok(ExDone::Substituted { count, lines: changed.len() })
     }
@@ -384,17 +406,22 @@ fn regex_syntax_meta(c: char) -> bool {
     regex::escape(c.encode_utf8(&mut [0; 4])).len() > c.len_utf8()
 }
 
-fn parse_flags(s: &str) -> Result<Flags, ExError> {
-    let mut f = Flags::default();
-    for (i, c) in s.trim().char_indices() {
+/// The flags of `:s` (`&` first: `last`'s, the previous substitute's, then the others on top of
+/// them). Only blanks may follow them.
+fn parse_flags(s: &str, last: Option<Flags>) -> Result<Flags, ExError> {
+    let s = s.trim_end();
+    let (mut f, rest) = match s.strip_prefix('&') {
+        Some(rest) => (last.unwrap_or_default(), rest),
+        None => (Flags::default(), s),
+    };
+    for (i, c) in rest.char_indices() {
         match c {
-            '&' if i == 0 => {}
             'g' => f.all = !f.all,
             'i' => f.ignore_case = Some(true),
             'I' => f.ignore_case = Some(false),
             'e' => f.quiet = true,
             'c' => return Err(ExError::Confirm),
-            _ => return Err(ExError::Trailing(s.trim()[i..].to_string())),
+            _ => return Err(ExError::Trailing(rest[i..].trim().to_string())),
         }
     }
     Ok(f)
@@ -519,12 +546,13 @@ fn replace_line(re: &Regex, line: &str, template: &[Piece], all: bool) -> Option
         let m = caps.get(0).expect("group 0 is the match");
         if m.is_empty() && last_end == Some(m.start()) {
             // An empty match right after a match is not one (Vim, and Rust's own iteration).
+            // Vim stops when that reaches the end of the line.
             match next_char(line, m.start()) {
-                Some(next) => {
+                Some(next) if next < line.len() => {
                     at = next;
                     continue;
                 }
-                None => break,
+                _ => break,
             }
         }
         out.push_str(&line[copied..m.start()]);

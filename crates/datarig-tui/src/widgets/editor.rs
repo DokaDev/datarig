@@ -157,13 +157,17 @@ pub struct Editor {
     search_work: SearchWork,
     /// The last `:s`, for `:&`, `&` and `g&`.
     last_sub: Option<ex::LastSub>,
+    /// Why the last `&` or `g&` did nothing, until the app takes it.
+    ex_notice: Option<ExError>,
     marks: marks::Marks,
     /// Why the last jump to a mark did not happen, until the app takes it.
     mark_notice: Option<MarkNotice>,
     /// How the lines of the next splice map for the marks, when its bytes alone do not say.
     mark_hint: Option<marks::Hint>,
-    /// Where the last splice changed the text (`'.` after a change).
+    /// Where the last splice changed the text (`'.` after a change), and its first line and
+    /// the line breaks it put in (`'.` after an undo or redo).
     splice_at: (usize, usize),
+    splice_rows: (usize, usize),
     undo: Vec<Step>,
     redo: Vec<Step>,
     insert_snap: bool,
@@ -225,10 +229,12 @@ impl Editor {
             search_notice: None,
             search_work: SearchWork::default(),
             last_sub: None,
+            ex_notice: None,
             marks: marks::Marks::new(start),
             mark_notice: None,
             mark_hint: None,
             splice_at: (0, 0),
+            splice_rows: (0, 0),
             undo: Vec::new(),
             redo: Vec::new(),
             insert_snap: false,

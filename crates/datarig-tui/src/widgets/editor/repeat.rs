@@ -71,6 +71,9 @@ pub(super) struct Recorder {
     inserting: bool,
     /// The command is not a change to repeat (`u`, `Ctrl+R`, `.`).
     skip: bool,
+    /// The command is a change to repeat even though the text stayed as it was (`gc` over
+    /// blank lines, as Neovim records it).
+    unchanged: bool,
     /// A replay is running: nothing is recorded.
     replaying: bool,
     /// The command puts the system clipboard's text.
@@ -83,6 +86,11 @@ pub(super) struct Recorder {
 impl Recorder {
     pub(super) fn skip(&mut self) {
         self.skip = true;
+    }
+
+    /// The command repeats with `.` even if it changed nothing.
+    pub(super) fn repeat_unchanged(&mut self) {
+        self.unchanged = true;
     }
 
     /// Record the selection a Visual mode operator takes, before its keys.
@@ -191,6 +199,7 @@ impl Editor {
             self.rec.inputs.clear();
             self.rec.clipboard = false;
             self.rec.skip = false;
+            self.rec.unchanged = false;
             // An Insert session left without a key of its own (a mouse drag) is over.
             self.rec.inserting = false;
         }
@@ -205,7 +214,7 @@ impl Editor {
             self.rec.count = if explicit { n } else { 0 };
             if self.mode == Mode::Insert {
                 self.rec.inserting = true;
-            } else if self.version != version {
+            } else if self.version != version || self.rec.unchanged {
                 self.save_change();
             }
         }

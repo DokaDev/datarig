@@ -3,8 +3,9 @@
 //! and edits, the process's memory, what an autosave of the file costs, a theme switch
 //! (`:set theme=`) up to its frame, search: `/` with a pattern that is nowhere (each key
 //! searches the whole text) and `n`, with the bytes each key searched and the lines each frame
-//! highlighted counted, and `:%s` over the whole text with the bytes it searched. `block` (the `editor_block` scenario, in a process of its own):
-//! Visual block operators over the whole text, with the bytes they walked counted.
+//! highlighted counted, and `:%s` over the whole text with the bytes it searched. `block` (the
+//! `editor_block` scenario, in a process of its own): Visual block operators over the whole
+//! text, with the bytes they walked counted.
 
 use crate::apps;
 use crate::grid::wide;

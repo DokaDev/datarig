@@ -865,7 +865,7 @@ impl App {
 }
 
 /// What an editor command that could not run says.
-fn ex_error(e: ExError) -> Msg {
+pub(super) fn ex_error(e: ExError) -> Msg {
     match e {
         ExError::Unsupported(command) => Msg::EditorExUnsupported { command },
         ExError::InvalidRange => Msg::Label(Label::EditorExInvalidRange),

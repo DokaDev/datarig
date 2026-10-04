@@ -300,8 +300,8 @@ impl Editor {
             (Token::Replace(c), None) => self.replace_chars(c, n),
             (Token::Mark(c), None) => self.set_mark(c),
             (Token::G('J'), None) => self.join_lines(self.row, n, false),
-            (Token::G('&'), None) => self.sub_again(true),
-            (Token::Key('&'), None) => self.sub_again(false),
+            (Token::G('&'), None) => self.sub_again(true, 1),
+            (Token::Key('&'), None) => self.sub_again(false, n),
             (Token::Key(c), None) => self.command(c, n, explicit),
             _ => EdEvent::None,
         }
@@ -561,6 +561,7 @@ impl Editor {
         if below {
             self.splice(end, end, &format!("\n{indent}"));
         } else {
+            self.mark_hint = Some(Hint::Above);
             self.splice(start, start, &format!("{indent}\n"));
         }
         (at, indent.graphemes(true).count())
@@ -592,6 +593,7 @@ impl Editor {
             if after {
                 self.splice(end, end, &format!("\n{text}"));
             } else {
+                self.mark_hint = Some(Hint::Above);
                 self.splice(start, start, &format!("{text}\n"));
             }
             self.set_pos(at, self.first_nonblank(at));
