@@ -34,8 +34,15 @@ impl App {
     }
 
     /// Format bytes `a..b` of the active tab's text: replaced only when the formatter changed
-    /// nothing but the layout; otherwise the text stays and a notice says where it stopped.
+    /// nothing but the layout; otherwise the text stays and a notice says where it stopped. A
+    /// selection that starts or ends inside a token (in a comment, a string, a dollar body) is
+    /// not formatted: its text means something else on its own.
     fn format_span(&mut self, a: usize, b: usize) {
+        let editor = &mut self.tab_mut().editor;
+        if let Some(off) = [a, b].into_iter().find(|&off| editor.splits_token(off)) {
+            let line = editor.line_of(off) + 1;
+            return self.flash(Notice::new(Msg::EditorFormatRefused { line: line.to_string() }, Level::Warning));
+        }
         let opts = Options { case: self.prefs.format_case, indent: self.prefs.format_indent.spaces() };
         let editor = &self.tab().editor;
         let text = editor.text_between(a, b);

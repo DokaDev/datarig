@@ -4,6 +4,7 @@
 use super::Sel;
 use super::vim::Target;
 use super::{EdEvent, Editor, Mode};
+use datarig_core::sql::lexer::{Tok, lex};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 impl Editor {
@@ -34,6 +35,17 @@ impl Editor {
         let (row, byte) = self.pos_bytes(a);
         let before = &self.lines[row][..byte];
         if before.bytes().all(|c| c == b' ' || c == b'\t') { before.to_string() } else { String::new() }
+    }
+
+    /// Byte `off` lies inside a token of the text around it (a word, a string, a comment, a
+    /// dollar body, also one that starts on an earlier line), not between two: text from there
+    /// is not SQL of its own.
+    pub fn splits_token(&mut self, off: usize) -> bool {
+        let row = self.pos_bytes(off).0;
+        // One line more: a token that goes on past `off`'s line ends after it.
+        let (base, region) = self.region_text(row, row + 2);
+        let at = off - base;
+        lex(&region).iter().any(|t| t.kind != Tok::Whitespace && t.start < at && at < t.end)
     }
 
     /// The line (from 0) of byte `off`.

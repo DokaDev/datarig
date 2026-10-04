@@ -745,3 +745,31 @@ fn comment_toggle_action_is_gc() {
     h.keys("ec");
     assert_eq!(h.app.tab().editor.text(), "select 1;\nselect 2;");
 }
+
+/// A selection or range that starts or ends inside a comment, a string or a dollar body is
+/// not formatted (its text would read as code on its own): refused, text unchanged.
+#[test]
+fn format_refuses_a_selection_inside_a_token() {
+    for (text, keys) in [
+        ("-- select a, b from t where x = 1", "wv$"),
+        ("select 'note: select  a,b   from t' as s", "f:wvf'h"),
+        ("create function f() returns int language sql as $$\n  select   1,2   from t\n$$;", "jV"),
+    ] {
+        let mut h = editor_with(text);
+        h.keys(keys);
+        h.key(KeyCode::Char(' '));
+        h.keys("ef");
+        assert_eq!(h.app.tab().editor.text(), text, "{keys}");
+        assert!(h.status(160, 30).contains("Not formatted"), "{}", h.status(160, 30));
+    }
+    let text = "select $$\n  select   1,2   from t\n$$;";
+    let mut h = editor_with(text);
+    h.command("2format");
+    assert_eq!(h.app.tab().editor.text(), text, ":2format inside the body");
+    // Whole tokens selected: formatted.
+    let mut h = editor_with("select 1 , 2");
+    h.keys("v$");
+    h.key(KeyCode::Char(' '));
+    h.keys("ef");
+    assert_eq!(h.app.tab().editor.text(), "select\n    1,\n    2");
+}
