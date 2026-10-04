@@ -55,6 +55,12 @@ pub(super) enum Motion {
         forward: bool,
         from: Option<usize>,
     },
+    /// `'a` (`line`: to the first non-blank of its line, taking whole lines) and `` `a ``: a
+    /// mark, found where it is when the key is typed.
+    Mark {
+        to: Pos,
+        line: bool,
+    },
 }
 
 /// How an operator takes the text between the cursor and where a motion leads.
@@ -125,9 +131,28 @@ impl Motion {
         })
     }
 
+    /// A jump: the cursor's place before it becomes the context mark (`''`).
+    pub(super) fn is_jump(self) -> bool {
+        matches!(
+            self,
+            Motion::Top
+                | Motion::Bottom
+                | Motion::Match
+                | Motion::ParaForward
+                | Motion::ParaBack
+                | Motion::ScreenTop
+                | Motion::ScreenMiddle
+                | Motion::ScreenBottom
+                | Motion::Search { .. }
+                | Motion::Mark { .. }
+        )
+    }
+
     /// How an operator takes the text (`%` with a count takes lines).
     fn kind(self, explicit: bool) -> RangeKind {
         match self {
+            Motion::Mark { line: true, .. } => RangeKind::Linewise,
+            Motion::Mark { line: false, .. } => RangeKind::Exclusive,
             Motion::Left
             | Motion::Right
             | Motion::WordForward
@@ -460,6 +485,7 @@ impl Editor {
                 let r = self.screen_line(m, count);
                 (r, self.first_nonblank(r))
             }
+            Motion::Mark { to, .. } => to,
             Motion::Search { forward, from } => {
                 let (r, c) = self.search_target(forward, from, count)?;
                 // A match at the end of a line: Visual mode takes the line break there, anything

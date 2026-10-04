@@ -942,6 +942,8 @@
 "editor.search.invalid" = "Not a valid search pattern (Rust regular expression syntax): {error}"
 "editor.search.no_previous" = "No previous search pattern"
 "editor.search.no_word" = "No word under the cursor to search for"
+"editor.mark.not_set" = "Mark not set: {mark}"
+"editor.mark.unknown" = "Not a mark the editor keeps: {mark} (it keeps a-z, ' ` < > and .)"
 "editor.clipboard.too_long" = "Kept in the editor's register, not sent to the clipboard: {size} of base64 is more than OSC 52 may carry ({limit}, osc52_max_bytes). Not said again until you restart."
 "editor.clipboard.failed" = "Kept in the editor's register, not sent to the clipboard: {error}. Not said again until you restart."
 "editor.clipboard.no_read" = "The clipboard cannot be read through the terminal (OSC 52 only writes to it): paste with the terminal's own paste key instead (Cmd+V on macOS, Ctrl+Shift+V in most Linux terminals)"

@@ -2,6 +2,7 @@
 //! lines), `~` and the case operators `gu` `gU` `g~`, and the indent operators `>` `<`.
 
 use super::buffer::indent_of;
+use super::marks::Hint;
 use super::{EdEvent, Editor, Mode, TAB_WIDTH};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use unicode_segmentation::UnicodeSegmentation;
@@ -104,9 +105,11 @@ impl Editor {
         self.snapshot();
         let mut joined = self.lines[first].clone();
         let mut col = 0;
+        // Where each joined line's text starts, and the indent it lost, for its marks.
+        let mut at = Vec::new();
         for r in first + 1..=last {
-            let next = &self.lines[r];
-            let next = if spaces { next.trim_start_matches([' ', '\t']) } else { next.as_str() };
+            let line = &self.lines[r];
+            let next = if spaces { line.trim_start_matches([' ', '\t']) } else { line.as_str() };
             let mut sep = "";
             if spaces && !next.is_empty() && !joined.is_empty() && !next.starts_with(')') {
                 match joined.chars().next_back() {
@@ -116,10 +119,12 @@ impl Editor {
             }
             col = joined.len();
             joined.push_str(sep);
+            at.push((joined.len(), line.len() - next.len()));
             joined.push_str(next);
         }
         let (a, _) = self.line_bounds(first);
         let (_, b) = self.line_bounds(last);
+        self.mark_hint = Some(Hint::Join { first, at });
         self.splice(a, b, &joined);
         let c = self.lines[first][..col].graphemes(true).count();
         self.set_pos(first, c);

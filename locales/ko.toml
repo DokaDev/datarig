@@ -939,6 +939,8 @@
 "editor.search.invalid" = "올바른 검색 패턴이 아닙니다 (Rust 정규식 문법). 정규식 라이브러리의 오류 메시지: {error}"
 "editor.search.no_previous" = "이전에 검색한 패턴이 없습니다"
 "editor.search.no_word" = "커서 아래에 검색할 단어가 없습니다"
+"editor.mark.not_set" = "설정되지 않은 마크입니다: {mark}"
+"editor.mark.unknown" = "편집기에서 쓰지 않는 마크입니다: {mark} (a-z, ' ` < > . 만 씁니다)"
 "editor.clipboard.too_long" = "편집기 레지스터에만 담고 클립보드로는 보내지 않았습니다: base64로 {size}라 OSC 52 한도({limit}, osc52_max_bytes)를 넘습니다. 앱을 다시 시작할 때까지는 알리지 않습니다."
 "editor.clipboard.failed" = "편집기 레지스터에만 담고 클립보드로는 보내지 않았습니다: {error}. 앱을 다시 시작할 때까지는 알리지 않습니다."
 "editor.clipboard.no_read" = "터미널을 통해서는 클립보드를 읽을 수 없습니다(OSC 52는 쓰기만 됩니다). 터미널의 붙여넣기 키(macOS는 Cmd+V, 대부분의 Linux 터미널은 Ctrl+Shift+V)로 붙여넣으세요"

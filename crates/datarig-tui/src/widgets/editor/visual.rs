@@ -4,6 +4,7 @@
 
 use super::buffer::{UNDO_BYTES, graphemes};
 use super::edit::Case;
+use super::marks::{Hint, Selection};
 use super::motion::RangeKind;
 use super::registers::RegKind;
 use super::textobj::Object;
@@ -37,9 +38,25 @@ impl Editor {
 
     pub fn exit_visual(&mut self) {
         if self.mode == Mode::Visual {
+            self.keep_selection();
             self.mode = Mode::Normal;
             self.clamp();
         }
+    }
+
+    /// The selection as the marks keep it, in Visual mode.
+    pub(super) fn selection_marks(&self) -> Option<Selection> {
+        (self.mode == Mode::Visual).then(|| Selection {
+            start: self.anchor,
+            end: (self.row, self.col),
+            lines: self.sel == Sel::Lines,
+        })
+    }
+
+    /// Visual mode ends here: `'<` and `'>` take its selection.
+    pub(super) fn keep_selection(&mut self) {
+        self.marks.selecting(self.selection_marks());
+        self.marks.selected();
     }
 
     /// The selection's ends in text order.
@@ -115,9 +132,14 @@ impl Editor {
                 EdEvent::Moved
             }
             Token::Motion(m) => {
+                if m.is_jump() {
+                    self.marks.set_pc((self.row, self.col));
+                }
                 self.move_by(m, n, explicit);
                 EdEvent::Moved
             }
+            Token::Mark(c) => self.set_mark(c),
+            Token::G('c') => self.visual_comment(),
             Token::Object(o, around) => self.visual_object(o, around, n),
             Token::Ctrl(c @ ('d' | 'u')) => self.scroll_half(c == 'd', n, explicit),
             Token::Ctrl(c @ ('f' | 'b')) => self.scroll_page(c == 'f', n),
@@ -216,10 +238,12 @@ impl Editor {
                             RegKind::Linewise | RegKind::Blockwise => vec![r.text.as_str(); n].join("\n"),
                         };
                         let (a, b) = (self.line_start(first), self.line_start(last) + self.lines[last].len());
+                        self.mark_hint = Some(Hint::Lines { first, last, keep_first: false });
                         self.splice(a, b, &put);
                     }
                     None => {
                         let (a, b) = self.lines_span(first, last);
+                        self.mark_hint = Some(Hint::Lines { first, last, keep_first: false });
                         self.splice(a, b, "");
                     }
                 }
@@ -275,6 +299,20 @@ impl Editor {
         let (to, span) = (self.visual_start(), self.visual_bounds());
         self.mode = Mode::Normal;
         self.recase_span(case, span, to)
+    }
+
+    /// `gc` on the selected lines; the cursor goes to the selection's start (by line, the
+    /// first line's start, or the cursor's column when the cursor is on it), as `y` puts it.
+    fn visual_comment(&mut self) -> EdEvent {
+        self.record_selection();
+        let (a, b) = self.visual_ends();
+        let to = match self.sel {
+            Sel::Lines if self.row < self.anchor.0 => (a.0, self.col),
+            Sel::Lines => (a.0, 0),
+            _ => a,
+        };
+        self.mode = Mode::Normal;
+        self.comment_lines(a.0, b.0, to)
     }
 
     /// `J` (`spaces`) and `gJ`: join the selected lines (at least two).

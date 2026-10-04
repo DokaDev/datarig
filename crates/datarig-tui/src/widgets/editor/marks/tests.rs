@@ -1,0 +1,951 @@
+use super::super::Mode;
+use super::super::tests::{at, typ};
+use super::MarkNotice;
+
+/// `(text, cursor, keys, text after, cursor after, marks after)`: a mark's position, or `None`
+/// when it is not set.
+type MarkCase = (
+    &'static str,
+    (usize, usize),
+    &'static str,
+    &'static str,
+    (usize, usize),
+    &'static [(char, Option<(usize, usize)>)],
+);
+
+/// Run each case from a fresh editor and compare the text, the cursor and the marks; the
+/// failures are listed together.
+fn check(cases: &[MarkCase]) {
+    let mut failed = Vec::new();
+    for &(text, cursor, keys, want, want_cursor, want_marks) in cases {
+        let mut e = at(text, cursor);
+        typ(&mut e, keys);
+        let marks: Vec<(char, Option<(usize, usize)>)> =
+            want_marks.iter().map(|&(c, _)| (c, e.marks.get(c).ok())).collect();
+        let have = (e.text(), (e.row, e.col), marks, e.mode);
+        if have != (want.to_string(), want_cursor, want_marks.to_vec(), Mode::Normal) {
+            failed.push(format!(
+                "{keys:?} on {text:?} at {cursor:?}: {have:?}, not {:?}",
+                (want, want_cursor, want_marks)
+            ));
+        }
+    }
+    assert!(failed.is_empty(), "{} of {} cases:\n{}", failed.len(), cases.len(), failed.join("\n"));
+}
+
+/// `m`, `'`, `` ` ``, the context mark of the jumps, `'<` `'>` and `'.`, and how marks move with
+/// the lines around them, as Neovim does (`dev/vim-cases.py`).
+#[test]
+fn marks_move_as_vim() {
+    const CASES: &[MarkCase] = &[
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            "majj'a",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            &[('a', Some((1, 2))), ('\'', Some((3, 2)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            "majj`a",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            &[('a', Some((1, 2))), ('\'', Some((3, 2)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (3, 6),
+            "majk0`a",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (3, 6),
+            &[('a', Some((3, 6))), ('\'', Some((3, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (3, 6),
+            "ma'a",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (3, 0),
+            &[('a', Some((3, 6))), ('\'', Some((3, 6)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (3, 6),
+            "ma`a",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (3, 6),
+            &[('a', Some((3, 6))), ('\'', Some((0, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (3, 6),
+            "mal`a",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (3, 6),
+            &[('a', Some((3, 6))), ('\'', Some((3, 7)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (0, 3),
+            "majjmbgg'b`a",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (0, 3),
+            &[('a', Some((0, 3))), ('b', Some((2, 3))), ('\'', Some((2, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 2),
+            "G''",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 0),
+            &[('\'', Some((4, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 2),
+            "G``",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 2),
+            &[('\'', Some((4, 0))), ('`', Some((4, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 2),
+            "G''''",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (4, 0),
+            &[('\'', Some((2, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 2),
+            "gg",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (0, 0),
+            &[('\'', Some((2, 2)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 2),
+            "3G",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 0),
+            &[('\'', Some((2, 2)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (4, 2),
+            "G",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (4, 0),
+            &[('\'', Some((4, 2)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (4, 2),
+            "Gkk",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 0),
+            &[('\'', Some((4, 2)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (4, 2),
+            "ggjjjj",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (4, 0),
+            &[('\'', Some((4, 2)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (0, 0),
+            "/order<CR>",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (4, 0),
+            &[('\'', Some((0, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (0, 0),
+            "/order<CR>''",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (0, 0),
+            &[('\'', Some((4, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (4, 0),
+            "?from<CR>",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 0),
+            &[('\'', Some((4, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (0, 0),
+            "/a<CR>n",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (4, 9),
+            &[('\'', Some((0, 7)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (0, 7),
+            "*",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (4, 9),
+            &[('\'', Some((0, 7)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (0, 0),
+            "/zzz<CR>",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (0, 0),
+            &[('\'', Some((0, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\n\nwhere x = 1\norder by a",
+            (0, 3),
+            "}",
+            "select a,\n  b\nfrom t\n\nwhere x = 1\norder by a",
+            (3, 0),
+            &[('\'', Some((0, 3)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\n\nwhere x = 1\norder by a",
+            (5, 3),
+            "{",
+            "select a,\n  b\nfrom t\n\nwhere x = 1\norder by a",
+            (3, 0),
+            &[('\'', Some((5, 3)))],
+        ),
+        ("select (a,\n  b\n) from t", (0, 7), "%", "select (a,\n  b\n) from t", (2, 0), &[('\'', Some((0, 7)))]),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (3, 3),
+            "H",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (0, 0),
+            &[('\'', Some((3, 3)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 3),
+            "jjkk",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 3),
+            &[('\'', Some((0, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 3),
+            "vG<Esc>",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (4, 0),
+            &[('\'', Some((2, 3))), ('<', Some((2, 3))), ('>', Some((4, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            "majjd'a",
+            "select a,\norder by a",
+            (1, 0),
+            &[('a', None), ('\'', Some((0, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            "majjd`a",
+            "select a,\n  ere x = 1\norder by a",
+            (1, 2),
+            &[('a', Some((1, 2))), ('\'', Some((1, 4)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            "majjy'a",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            &[('a', Some((1, 2))), ('\'', Some((3, 2)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            "majjy`a",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            &[('a', Some((1, 2))), ('\'', Some((3, 2)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (3, 4),
+            "makkd'a",
+            "select a,\norder by a",
+            (1, 0),
+            &[('a', None), ('\'', Some((0, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (3, 4),
+            "makkd`a",
+            "select a,\n  e x = 1\norder by a",
+            (1, 2),
+            &[('a', Some((1, 6))), ('\'', Some((0, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (3, 0),
+            "makkd`a",
+            "select a,\nwhere x = 1\norder by a",
+            (1, 0),
+            &[('a', Some((1, 0))), ('\'', Some((0, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            "majjd'aj.",
+            "select a,\norder by a",
+            (1, 0),
+            &[('a', None), ('\'', Some((0, 0)))],
+        ),
+        ("select a,\n  b\nfrom t\nwhere x = 1\norder by a", (1, 2), "dG", "select a,", (0, 0), &[('\'', Some((0, 0)))]),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            "yG",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            &[('\'', Some((0, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            "'z",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            &[('z', None), ('\'', Some((0, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            "d'z",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            &[('z', None), ('\'', Some((0, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            "m'gg``",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            &[('\'', Some((0, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            "jvjma<Esc>",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (3, 2),
+            &[('a', Some((3, 2))), ('<', Some((2, 2))), ('>', Some((3, 2)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 2),
+            "majdd",
+            "select a,\n  b\nfrom t\norder by a",
+            (3, 0),
+            &[('a', Some((2, 2))), ('.', Some((3, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 2),
+            "makdd",
+            "select a,\nfrom t\nwhere x = 1\norder by a",
+            (1, 0),
+            &[('a', Some((1, 2))), ('.', Some((1, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 2),
+            "madd",
+            "select a,\n  b\nwhere x = 1\norder by a",
+            (2, 0),
+            &[('a', None), ('.', Some((2, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (4, 2),
+            "madd",
+            "select a,\n  b\nfrom t\nwhere x = 1",
+            (3, 0),
+            &[('a', None), ('.', Some((4, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (3, 2),
+            "majdd",
+            "select a,\n  b\nfrom t\nwhere x = 1",
+            (3, 0),
+            &[('a', Some((3, 2))), ('.', Some((4, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 2),
+            "mak3dd",
+            "select a,\norder by a",
+            (1, 0),
+            &[('a', None), ('.', Some((1, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 2),
+            "maggdG",
+            "",
+            (0, 0),
+            &[('a', None), ('.', Some((0, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 2),
+            "maddugg",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (0, 0),
+            &[('a', Some((2, 2))), ('.', Some((2, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 2),
+            "maddu<C-r>",
+            "select a,\n  b\nwhere x = 1\norder by a",
+            (2, 0),
+            &[('a', None)],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 2),
+            "makddu",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            &[('a', Some((2, 2))), ('.', Some((1, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 2),
+            "makddjmbu",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            &[('a', Some((2, 2))), ('b', Some((3, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 2),
+            "makddjmbu<C-r>gg",
+            "select a,\nfrom t\nwhere x = 1\norder by a",
+            (0, 0),
+            &[('a', Some((1, 2))), ('b', Some((2, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 2),
+            "maggyyp",
+            "select a,\nselect a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 0),
+            &[('a', Some((3, 2))), ('.', Some((1, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 2),
+            "mayyP",
+            "select a,\n  b\nfrom t\nfrom t\nwhere x = 1\norder by a",
+            (2, 0),
+            &[('a', Some((3, 2))), ('.', Some((2, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 2),
+            "mayyp",
+            "select a,\n  b\nfrom t\nfrom t\nwhere x = 1\norder by a",
+            (3, 0),
+            &[('a', Some((2, 2))), ('.', Some((3, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 2),
+            "makyy3p",
+            "select a,\n  b\n  b\n  b\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 2),
+            &[('a', Some((5, 2))), ('.', Some((2, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 2),
+            "maO<Esc>",
+            "select a,\n  b\n\nfrom t\nwhere x = 1\norder by a",
+            (2, 0),
+            &[('a', Some((3, 2))), ('.', Some((2, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 2),
+            "mao<Esc>",
+            "select a,\n  b\nfrom t\n\nwhere x = 1\norder by a",
+            (3, 0),
+            &[('a', Some((2, 2))), ('.', Some((3, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 2),
+            "makO<Esc>",
+            "select a,\n\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 0),
+            &[('a', Some((3, 2))), ('.', Some((1, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 2),
+            "mai<CR><Esc>",
+            "select a,\n  b\nfr\nom t\nwhere x = 1\norder by a",
+            (3, 0),
+            &[('a', Some((2, 2))), ('.', Some((2, 2)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 2),
+            "majmbkJ",
+            "select a,\n  b\nfrom t where x = 1\norder by a",
+            (2, 6),
+            &[('a', Some((2, 2))), ('b', Some((2, 9))), ('.', Some((3, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            "majlmbjmckkk3J",
+            "select a, b from t\nwhere x = 1\norder by a",
+            (0, 11),
+            &[('a', Some((0, 10))), ('b', Some((0, 15))), ('c', Some((1, 3))), ('.', Some((1, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            "majlmbjmckkkgJ",
+            "select a,  b\nfrom t\nwhere x = 1\norder by a",
+            (0, 9),
+            &[('a', Some((0, 11))), ('b', Some((1, 3))), ('c', Some((2, 3)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            "majlmbjmckkJu",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            &[('a', Some((1, 2))), ('b', Some((2, 3))), ('c', Some((3, 3)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 3),
+            "makmbjjmckcjx<Esc>",
+            "select a,\n  b\nx\norder by a",
+            (2, 0),
+            &[('a', Some((2, 3))), ('b', Some((1, 2))), ('c', None), ('.', Some((2, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 3),
+            "makkmbjjjmckkvjd",
+            "select a,\n   t\nwhere x = 1\norder by a",
+            (1, 2),
+            &[
+                ('a', Some((1, 5))),
+                ('b', Some((0, 3))),
+                ('c', Some((2, 3))),
+                ('.', Some((2, 0))),
+                ('<', Some((1, 2))),
+                ('>', Some((1, 5))),
+            ],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 3),
+            "makkmbjjjmckkhvjjd",
+            "select a,\n ere x = 1\norder by a",
+            (1, 1),
+            &[
+                ('a', None),
+                ('b', Some((0, 3))),
+                ('c', Some((1, 4))),
+                ('.', Some((2, 0))),
+                ('<', Some((1, 1))),
+                ('>', Some((1, 2))),
+            ],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 3),
+            "mad}",
+            "select a,\n  b\nfro",
+            (2, 2),
+            &[('a', Some((2, 3)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 3),
+            "maj>>",
+            "select a,\n  b\nfrom t\n    where x = 1\norder by a",
+            (3, 4),
+            &[('a', Some((2, 3))), ('.', Some((3, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 3),
+            "ma>>",
+            "select a,\n  b\n    from t\nwhere x = 1\norder by a",
+            (2, 4),
+            &[('a', Some((2, 3))), ('.', Some((2, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            "ma<<",
+            "select a,\nb\nfrom t\nwhere x = 1\norder by a",
+            (1, 0),
+            &[('a', Some((1, 2))), ('.', Some((1, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 3),
+            "magcc",
+            "select a,\n  b\n-- from t\nwhere x = 1\norder by a",
+            (2, 0),
+            &[('a', Some((2, 3))), ('.', Some((2, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 3),
+            "x",
+            "select a,\n  b\nfro t\nwhere x = 1\norder by a",
+            (2, 3),
+            &[('.', Some((2, 3)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 3),
+            "x`.",
+            "select a,\n  b\nfro t\nwhere x = 1\norder by a",
+            (2, 3),
+            &[('.', Some((2, 3)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 3),
+            "xgg'.",
+            "select a,\n  b\nfro t\nwhere x = 1\norder by a",
+            (2, 0),
+            &[('.', Some((2, 3)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 5),
+            "x`.",
+            "select a,\n  b\nfrom \nwhere x = 1\norder by a",
+            (2, 4),
+            &[('.', Some((2, 5)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 3),
+            "rx",
+            "select a,\n  b\nfrox t\nwhere x = 1\norder by a",
+            (2, 3),
+            &[('.', Some((2, 3)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 3),
+            "~",
+            "select a,\n  b\nfroM t\nwhere x = 1\norder by a",
+            (2, 4),
+            &[('.', Some((2, 3)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 3),
+            "ylp",
+            "select a,\n  b\nfromm t\nwhere x = 1\norder by a",
+            (2, 4),
+            &[('.', Some((2, 4)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 3),
+            "ylP",
+            "select a,\n  b\nfromm t\nwhere x = 1\norder by a",
+            (2, 3),
+            &[('.', Some((2, 3)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 3),
+            "ix<Esc>",
+            "select a,\n  b\nfroxm t\nwhere x = 1\norder by a",
+            (2, 3),
+            &[('.', Some((2, 3)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 3),
+            "Ax<Esc>",
+            "select a,\n  b\nfrom tx\nwhere x = 1\norder by a",
+            (2, 6),
+            &[('.', Some((2, 6)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 3),
+            "ox<Esc>",
+            "select a,\n  b\nfrom t\nx\nwhere x = 1\norder by a",
+            (3, 0),
+            &[('.', Some((3, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 3),
+            "xu",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 3),
+            &[('.', Some((2, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            "vjl<Esc>",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 3),
+            &[('<', Some((1, 2))), ('>', Some((2, 3)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (3, 4),
+            "vkh<Esc>",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 3),
+            &[('<', Some((2, 3))), ('>', Some((3, 4)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 4),
+            "Vk<Esc>",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            &[('<', Some((1, 0))), ('>', Some((2, usize::MAX)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            "<C-v>jjl<Esc>",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (3, 3),
+            &[('<', Some((1, 2))), ('>', Some((3, 3)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 4),
+            "<C-v>kh<Esc>",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            &[('<', Some((1, 2))), ('>', Some((2, 4)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            "vjl<Esc>gg`>",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 3),
+            &[('<', Some((1, 2))), ('>', Some((2, 3))), ('\'', Some((0, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            "vjl<Esc>G`<",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            &[('<', Some((1, 2))), ('>', Some((2, 3))), ('\'', Some((4, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            "Vj<Esc>gg`>",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (2, 5),
+            &[('<', Some((1, 0))), ('>', Some((2, usize::MAX))), ('\'', Some((0, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            "Vj<Esc>G'<",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            &[('<', Some((1, 0))), ('>', Some((2, usize::MAX))), ('\'', Some((4, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            "Vj<Esc>Gd'<",
+            "select a,",
+            (0, 0),
+            &[('<', Some((1, 0))), ('>', Some((1, usize::MAX)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            "vjd",
+            "select a,\n  m t\nwhere x = 1\norder by a",
+            (1, 2),
+            &[('<', Some((1, 2))), ('>', Some((1, 4)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            "Vjd",
+            "select a,\nwhere x = 1\norder by a",
+            (1, 0),
+            &[('<', Some((1, 0))), ('>', Some((1, usize::MAX)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            "Vjy",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 0),
+            &[('<', Some((1, 0))), ('>', Some((2, usize::MAX)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (1, 2),
+            "vjgggg<Esc>",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (0, 0),
+            &[('<', Some((0, 0))), ('>', Some((1, 2))), ('\'', Some((2, 2)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (0, 0),
+            "Vj<Esc>jjvj<Esc>",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (4, 0),
+            &[('<', Some((3, 0))), ('>', Some((4, 0)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (3, 2),
+            "Vj<Esc>ggdd",
+            "  b\nfrom t\nwhere x = 1\norder by a",
+            (0, 2),
+            &[('<', Some((2, 0))), ('>', Some((3, usize::MAX)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (3, 2),
+            "Vj<Esc>Gdd",
+            "select a,\n  b\nfrom t\nwhere x = 1",
+            (3, 0),
+            &[('<', Some((3, 0))), ('>', Some((4, usize::MAX)))],
+        ),
+        (
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (0, 2),
+            "m<jjjm>",
+            "select a,\n  b\nfrom t\nwhere x = 1\norder by a",
+            (3, 2),
+            &[('<', Some((0, 2))), ('>', Some((3, 2)))],
+        ),
+        (
+            "\u{C120}\u{D0DD} a,\n  \u{D55C}\u{AE00} b\nfrom t",
+            (1, 3),
+            "majk`a",
+            "\u{C120}\u{D0DD} a,\n  \u{D55C}\u{AE00} b\nfrom t",
+            (1, 3),
+            &[('a', Some((1, 3))), ('\'', Some((0, 0)))],
+        ),
+        (
+            "\u{C120}\u{D0DD} a,\n  \u{D55C}\u{AE00} b\nfrom t",
+            (1, 3),
+            "majkJ",
+            "\u{C120}\u{D0DD} a,\n  \u{D55C}\u{AE00} b from t",
+            (1, 6),
+            &[('a', Some((1, 3)))],
+        ),
+        (
+            "\u{C120}\u{D0DD} a,\n  \u{D55C}\u{AE00} b\nfrom t",
+            (1, 4),
+            "makJ`a",
+            "\u{C120}\u{D0DD} a, \u{D55C}\u{AE00} b\nfrom t",
+            (0, 8),
+            &[('a', Some((0, 8)))],
+        ),
+    ];
+    check(CASES);
+}
+
+/// A jump to a mark that is not set, or that the editor does not keep, moves nothing and says
+/// why; `m` with a name it does not keep says so too and sets nothing.
+#[test]
+fn unset_and_unknown_marks_are_said() {
+    let mut e = at("one\ntwo\nthree", (1, 1));
+    typ(&mut e, "'z");
+    assert_eq!(e.take_mark_notice(), Some(MarkNotice::NotSet('z')));
+    typ(&mut e, "d`z");
+    assert_eq!(e.take_mark_notice(), Some(MarkNotice::NotSet('z')));
+    assert_eq!((e.text(), (e.row, e.col)), ("one\ntwo\nthree".to_string(), (1, 1)));
+    for keys in ["mA", "m1", "'A", "`[", "m["] {
+        typ(&mut e, keys);
+        let c = keys.chars().nth(1).unwrap();
+        assert_eq!(e.take_mark_notice(), Some(MarkNotice::Unknown(c)), "{keys}");
+    }
+    assert!(!e.awaiting_key());
+    assert_eq!(e.take_mark_notice(), None);
+    assert_eq!((e.row, e.col), (1, 1));
+    // `'<` before any Visual selection, `'.` before any change.
+    typ(&mut e, "'<");
+    assert_eq!(e.take_mark_notice(), Some(MarkNotice::NotSet('<')));
+    typ(&mut e, "`.");
+    assert_eq!(e.take_mark_notice(), Some(MarkNotice::NotSet('.')));
+    assert_eq!(e.visual_marks(), None);
+}
+
+/// A block operator, `gc` and `>` change lines in place: every mark stays on its line.
+#[test]
+fn edits_in_place_keep_the_marks() {
+    let mut e = at("select a,\n  b\nfrom t", (1, 2));
+    typ(&mut e, "mbjmcgg<C-v>jjIx<Esc>gcGVG>");
+    assert_eq!(e.text(), "    -- xselect a,\n    -- x  b\n    -- xfrom t");
+    assert_eq!((e.marks.get('b'), e.marks.get('c')), (Ok((1, 2)), Ok((2, 2))));
+    typ(&mut e, "uuu");
+    assert_eq!(e.text(), "select a,\n  b\nfrom t");
+    assert_eq!((e.marks.get('b'), e.marks.get('c')), (Ok((1, 2)), Ok((2, 2))));
+}
+
+/// A paste over a Visual selection, and a click out of one, keep it for `'<` `'>`.
+#[test]
+fn a_paste_or_a_click_ends_a_selection_for_the_marks() {
+    let mut e = at("one two\nthree", (0, 0));
+    typ(&mut e, "vl");
+    e.paste("X");
+    assert_eq!(e.text(), "Xe two\nthree");
+    assert_eq!((e.marks.get('<'), e.marks.get('>')), (Ok((0, 0)), Ok((0, 1))));
+    typ(&mut e, "jVj");
+    e.click(0, 0);
+    assert_eq!(e.visual_marks(), Some((1, 1)));
+}
+
+/// `gcgc` is not `gcc` (Neovim's is the comment text object): nothing happens.
+#[test]
+fn gc_doubled_with_its_prefix_does_nothing() {
+    let mut e = at("a\nb", (0, 0));
+    typ(&mut e, "gcgc");
+    assert_eq!(e.text(), "a\nb");
+    assert!(!e.awaiting_key());
+}

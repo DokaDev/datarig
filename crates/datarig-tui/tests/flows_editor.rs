@@ -563,3 +563,53 @@ fn ctrl_c_in_the_search_prompt_still_cancels_the_run() {
     assert!(h.session_cancelled(1), "the tab's session was asked to cancel");
     assert!(!h.app.tab().editor.searching());
 }
+
+/// Marks through the keymap: `ma`, a jump to it by line and by place, `''` back, a mark's
+/// name typed in Hangul (the QWERTY key at its place), and `gcc`.
+#[test]
+fn marks_and_comments_reach_the_editor() {
+    let mut h = editor_with("select 1;\n  select 2;\nselect 3;");
+    h.keys("jlllma");
+    h.keys("G'a");
+    assert_eq!((h.app.tab().editor.row, h.app.tab().editor.col), (1, 2));
+    h.keys("G`a");
+    assert_eq!((h.app.tab().editor.row, h.app.tab().editor.col), (1, 3));
+    h.keys("''");
+    assert_eq!((h.app.tab().editor.row, h.app.tab().editor.col), (2, 0));
+    h.keys("m");
+    h.type_text("\u{3142}"); // the jamo on `q`
+    h.keys("gg`q");
+    assert_eq!((h.app.tab().editor.row, h.app.tab().editor.col), (2, 0));
+    h.keys("gcc");
+    assert_eq!(h.app.tab().editor.text(), "select 1;\n  select 2;\n-- select 3;");
+    h.keys("kgcc");
+    assert_eq!(h.app.tab().editor.text(), "select 1;\n  -- select 2;\n-- select 3;");
+    h.keys("u");
+    assert_eq!(h.app.tab().editor.text(), "select 1;\n  select 2;\n-- select 3;");
+}
+
+/// A jump to a mark that is not set, or that the editor does not keep, says so in each
+/// language; the cursor stays.
+#[test]
+fn mark_notices_in_each_language() {
+    for lang in [Lang::En, Lang::Ko] {
+        let mut h = Harness::connected(lang);
+        h.app.tab_mut().editor = Editor::new("one\ntwo");
+        h.keys("j'z");
+        let i18n = datarig_core::i18n::I18n::new(lang);
+        let want = i18n.msg(&datarig_core::i18n::Msg::EditorMarkNotSet { mark: "z".into() });
+        assert_eq!(notice(&mut h).as_deref(), Some(want.as_ref()));
+        h.keys("d`b");
+        assert_eq!(
+            notice(&mut h).as_deref(),
+            Some(i18n.msg(&datarig_core::i18n::Msg::EditorMarkNotSet { mark: "b".into() }).as_ref())
+        );
+        h.keys("mA");
+        let want = i18n.msg(&datarig_core::i18n::Msg::EditorMarkUnknown { mark: "A".into() });
+        assert_eq!(notice(&mut h).as_deref(), Some(want.as_ref()));
+        h.keys("'A");
+        assert_eq!(notice(&mut h).as_deref(), Some(want.as_ref()));
+        assert_eq!(h.app.tab().editor.text(), "one\ntwo");
+        assert_eq!((h.app.tab().editor.row, h.app.tab().editor.col), (1, 0));
+    }
+}

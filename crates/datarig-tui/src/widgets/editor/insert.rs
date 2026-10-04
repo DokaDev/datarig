@@ -4,6 +4,7 @@
 //! arrows. What a session types becomes the `".` register when it ends.
 
 use super::buffer::{class, graphemes, indent_of};
+use super::marks::Hint;
 use super::motion::{Motion, Pos};
 use super::registers::{self, RegKind};
 use super::{EdEvent, Editor, Mode};
@@ -108,6 +109,7 @@ impl Editor {
                     let at = self.offset();
                     self.splice(at, at + blanks, "");
                 }
+                self.mark_hint = Some(Hint::Split);
                 self.insert_at_cursor(&format!("\n{indent}"));
                 self.ins_text.push('\n');
                 self.ai_row = (!indent.is_empty()).then_some(self.row);

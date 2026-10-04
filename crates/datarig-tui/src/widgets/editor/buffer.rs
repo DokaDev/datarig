@@ -1,5 +1,6 @@
 //! The text: lines, positions and byte offsets, edits as splices, and undo.
 
+use super::marks::{Edit, Saved};
 use super::{Editor, Mode, TAB_WIDTH};
 use crate::text::grapheme_width;
 use unicode_segmentation::UnicodeSegmentation;
@@ -21,6 +22,8 @@ pub(super) struct Step {
     after: (usize, usize),
     /// A redo too puts the cursor where it was before (Vim, after a block's `A`).
     redo_before: bool,
+    /// The marks before it, for its undo to put back (and the other way for its redo).
+    marks: Saved,
 }
 
 impl Step {
@@ -136,9 +139,16 @@ impl Editor {
     /// what was there. Recorded in the current undo step.
     pub(super) fn splice(&mut self, a: usize, b: usize, s: &str) -> String {
         let removed = self.splice_raw(a, b, s);
+        self.marks.set_change(self.splice_at);
         if self.undo.is_empty() {
             let at = (self.row, self.col);
-            self.undo.push(Step { changes: Vec::new(), before: at, after: at, redo_before: false });
+            self.undo.push(Step {
+                changes: Vec::new(),
+                before: at,
+                after: at,
+                redo_before: false,
+                marks: self.marks.save(),
+            });
         }
         if let Some(step) = self.undo.last_mut() {
             step.changes.push(Change { at: a, removed: removed.clone(), inserted: s.to_string() });
@@ -155,6 +165,16 @@ impl Editor {
         joined.push_str(s);
         joined.push_str(&self.lines[rb][bb..]);
         let new: Vec<String> = joined.split('\n').map(str::to_string).collect();
+        // `'.`: where the change starts; the line a line break at the end of a line adds, or
+        // the line after the first of lines joined, as Vim puts it.
+        let ins = new.len() - 1;
+        self.splice_at = if (rb == ra && ba == self.lines[ra].len() && s.starts_with('\n')) || (rb > ra && ins == 0) {
+            (ra + 1, 0)
+        } else {
+            (ra, self.lines[ra][..ba].graphemes(true).count())
+        };
+        let e = Edit { ra, ba, rb, bb, ins, ends_line: s.ends_with('\n'), hint: self.mark_hint.take() };
+        self.marks.adjust(&e, &self.lines, |r| new.get(r.wrapping_sub(ra)).cloned());
         self.lines.splice(ra..=rb, new);
         self.bytes = self.bytes - removed.len() + s.len();
         self.version = next_version();
@@ -211,7 +231,13 @@ impl Editor {
     /// Start an undo step: the changes until the next one are undone together.
     pub(super) fn snapshot(&mut self) {
         let at = (self.row, self.col);
-        self.undo.push(Step { changes: Vec::new(), before: at, after: at, redo_before: false });
+        self.undo.push(Step {
+            changes: Vec::new(),
+            before: at,
+            after: at,
+            redo_before: false,
+            marks: self.marks.save(),
+        });
         let mut bytes: usize = self.undo.iter().map(Step::bytes).sum();
         while self.undo.len() > UNDO_STEPS || (bytes > UNDO_BYTES && self.undo.len() > 1) {
             bytes -= self.undo.remove(0).bytes();
@@ -243,19 +269,27 @@ impl Editor {
     pub(super) fn restore(&mut self, from_undo: bool) -> bool {
         let src = if from_undo { &mut self.undo } else { &mut self.redo };
         let Some(mut step) = src.pop() else { return false };
+        let marks = self.marks.save();
         if from_undo {
             step.after = (self.row, self.col);
             for c in step.changes.iter().rev() {
                 self.splice_raw(c.at, c.at + c.inserted.len(), &c.removed);
             }
             (self.row, self.col) = step.before;
-            self.redo.push(step);
         } else {
             for c in &step.changes {
                 self.splice_raw(c.at, c.at + c.removed.len(), &c.inserted);
             }
             (self.row, self.col) = if step.redo_before { step.before } else { step.after };
-            self.undo.push(step);
+        }
+        // Vim puts `'.` on the changed line's start, and the marks the change moved or deleted
+        // back where they were.
+        self.marks.set_change((self.splice_at.0, 0));
+        self.marks.swap(&mut step.marks, marks);
+        if from_undo {
+            self.redo.push(step)
+        } else {
+            self.undo.push(step)
         }
         self.clamp();
         true

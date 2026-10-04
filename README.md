@@ -120,7 +120,11 @@ Everything below works today, with PostgreSQL.
   matches on screen stay highlighted until `:noh`. Search patterns are
   [Rust regular expressions](https://docs.rs/regex/latest/regex/#syntax), not Vim's: case
   sensitive unless the pattern starts with `(?i)`, `\b` for a word boundary, and a match never
-  spans two lines. Macros are not there yet (their keys are reserved). Commands keep working with a
+  spans two lines. Marks: `m{a-z}`, `'a` and `` `a `` (also after an operator, `d'a`), `''`
+  back to where the last jump left from, `'<` `'>` for the last Visual selection and `'.` for the
+  last change; marks follow their lines through edits and come back on undo. `gc` comments lines
+  out with `-- ` or back in as Neovim does (`gcc`, `gc{motion}`, `gc` in Visual mode).
+  Macros are not there yet (their keys are reserved). Commands keep working with a
   Korean (2-Set) input source: the jamo are read as the QWERTY keys they sit on, and the
   character `f`, `t` or `r` waits for is taken as typed. The supported keys are listed in
   [docs/keybindings.md](docs/keybindings.md).
@@ -178,7 +182,7 @@ Planned, in no particular order and with no dates:
 - TLS connections (today every connection is plain TCP; use an SSH tunnel across untrusted
   networks, and servers that require TLS cannot be reached yet)
 - A server monitor (sessions, locks, activity)
-- More of vim: marks (and `gv`), macros, `:s`
+- More of vim: `gv`, macros, `:s`
 - DDL view of tables and other objects
 - Query profiling and charts
 - Multi-hop SSH and importing hosts from `~/.ssh/config`

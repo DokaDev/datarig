@@ -20,6 +20,10 @@ cases.json is a list of cases:
                                                     set before, keys, text after, cursor after,
                                                     the registers named in "regs" after)
 
+    [text, row, col, keys, {"marks": "a'<"}]   -> a mark row: (text, cursor, keys, text after,
+                                                    cursor after, the marks named after:
+                                                    (name, Some((row, col))) or (name, None))
+
 Any case may add {"vim": KEYS}: the keys Neovim gets in place of `keys`, for a command whose
 notation differs between the two (a search pattern: the editor's are Rust regular expressions,
 `/\\bab\\b<CR>` where Vim types `/\\<ab\\><CR>`). The row keeps `keys`.
@@ -28,6 +32,9 @@ In a register row a register is (name, text, kind) and kind is 'v' (by character
 line, its text without the last line break) or 'b' (a block); a register that is empty after
 is None. "set" is optional and fills registers before the keys (setreg()). `"` names the
 unnamed register.
+
+In a mark row a mark's column past the end of its line counts on in characters, and the end
+mark of a Visual selection by line (Vim's MAXCOL) is `usize::MAX`.
 
 Rows and columns count from 0, columns in characters (not bytes). Keys use Vim's `:normal`
 notation (`<Esc>`, `<CR>`, `<C-d>`). Hangul in the output is written as \\u{...} escapes.
@@ -45,12 +52,13 @@ import sys
 import tempfile
 
 OPTIONS = ("set nofixeol noeol autoindent sol backspace=indent,eol,start sw=4 ts=4 sts=0 et "
-           "nojoinspaces so=0 nowrap cpo-=; nosmartindent")
+           "nojoinspaces so=0 nowrap cpo-=; nosmartindent commentstring=--\\ %s")
 
 
-def run(text, row, col, keys, lines=None, top=None, regs="", preset=None):
+def run(text, row, col, keys, lines=None, top=None, regs="", preset=None, marks=""):
     """Neovim's text, cursor (row, byte column), register and top line after `keys`; `regs`:
-    the registers to read after, `preset`: {name: [text, kind]} set before."""
+    the registers to read after, `preset`: {name: [text, kind]} set before, `marks`: the marks
+    to read after."""
     with tempfile.TemporaryDirectory() as d:
         src, out, script = (os.path.join(d, n) for n in ("in.txt", "out.json", "run.vim"))
         with open(src, "w") as f:
@@ -70,7 +78,8 @@ def run(text, row, col, keys, lines=None, top=None, regs="", preset=None):
             "call writefile([json_encode({'text': join(getline(1, '$'), \"\\n\"), 'row': p[1] - 1,"
             " 'col': p[2] - 1, 'reg': getreg('\"'), 'regtype': getregtype('\"'), 'top': line('w0') - 1,"
             f" 'mode': mode(), 'lines': winheight(0),"
-            f" 'regs': map({json.dumps(list(regs))}, '[getreg(v:val), getregtype(v:val)]')}})], '{out}')",
+            f" 'regs': map({json.dumps(list(regs))}, '[getreg(v:val), getregtype(v:val)]'),"
+            f" 'marks': map({json.dumps(list(marks))}, 'getpos(\"''\" . v:val)[1:2]')}})], '{out}')",
             "qa!",
         ]
         with open(script, "w") as f:
@@ -106,6 +115,17 @@ def char_col(line, byte_col):
     return len(line.encode()[:byte_col].decode(errors="ignore"))
 
 
+def rust_mark(lines, lnum, col):
+    """A mark as the mark rows write it: `Some((row, col))` or `None`."""
+    if lnum == 0:
+        return "None"
+    if col == 2147483647:
+        return f"Some(({lnum - 1}, usize::MAX))"
+    line = lines[lnum - 1] if lnum - 1 < len(lines) else ""
+    over = max(0, col - 1 - len(line.encode()))
+    return f"Some(({lnum - 1}, {char_col(line, col - 1) + over}))"
+
+
 def main():
     if len(sys.argv) != 2:
         sys.exit(__doc__)
@@ -117,8 +137,14 @@ def main():
         view = opts if "lines" in opts else None
         byte_col = len(text.split("\n")[row][:col].encode())
         o = run(text, row, byte_col, opts.get("vim", keys), *(view["lines"], view.get("top", 0)) if view else (None, None),
-                regs=opts.get("regs", ""), preset=opts.get("set"))
+                regs=opts.get("regs", ""), preset=opts.get("set"), marks=opts.get("marks", ""))
         at = (o["row"], char_col(o["text"].split("\n")[o["row"]], o["col"]))
+        if "marks" in opts:
+            lines = o["text"].split("\n")
+            name = lambda n: "'\\''" if n == "'" else f"'{n}'"
+            marks = ", ".join(f"({name(n)}, {rust_mark(lines, *m)})" for n, m in zip(opts["marks"], o["marks"]))
+            print(f"    ({rust(text)}, ({row}, {col}), {rust(keys)}, {rust(o['text'])}, {at}, &[{marks}]),")
+            continue
         if "regs" in opts:
             kind = {"v": "v", "V": "V", "b": "b"}
             preset = ", ".join(f"('{n}', {rust(v)}, '{kind[k[0]]}')" for n, (v, k) in opts.get("set", {}).items())

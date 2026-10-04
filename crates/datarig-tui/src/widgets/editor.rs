@@ -26,6 +26,8 @@
 //! * `insert` is Insert mode, with autoindent, `Ctrl+W` / `Ctrl+U` and `Ctrl+R {register}`.
 //! * `registers` holds what yanks and deletes wrote, as Vim's registers do.
 //! * `repeat` records the last change for `.`.
+//! * `marks` keeps the marks (`m`, `'`, `` ` ``) on their lines through the edits;
+//!   `comment` is `gc`.
 //! * `search` is `/`, `?`, `n`, `N`, `*`, `#` and the highlight of their matches.
 //! * `render` draws.
 //!
@@ -35,9 +37,11 @@
 mod block;
 mod brackets;
 mod buffer;
+mod comment;
 mod edit;
 mod insert;
 mod lexing;
+mod marks;
 mod motion;
 mod registers;
 mod render;
@@ -51,6 +55,7 @@ mod visual;
 use buffer::{Step, class, graphemes, next_version};
 use datarig_core::i18n::Label;
 use lexing::{LineState, REGION_LINES};
+pub use marks::MarkNotice;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 pub use registers::{RegKind, RegProblem, Register, Yank};
 pub use search::{SearchNotice, SearchWork};
@@ -147,6 +152,13 @@ pub struct Editor {
     /// What the last search had to say, until the app takes it.
     search_notice: Option<SearchNotice>,
     search_work: SearchWork,
+    marks: marks::Marks,
+    /// Why the last jump to a mark did not happen, until the app takes it.
+    mark_notice: Option<MarkNotice>,
+    /// How the lines of the next splice map for the marks, when its bytes alone do not say.
+    mark_hint: Option<marks::Hint>,
+    /// Where the last splice changed the text (`'.` after a change).
+    splice_at: (usize, usize),
     undo: Vec<Step>,
     redo: Vec<Step>,
     insert_snap: bool,
@@ -204,6 +216,10 @@ impl Editor {
             hl: false,
             search_notice: None,
             search_work: SearchWork::default(),
+            marks: marks::Marks::default(),
+            mark_notice: None,
+            mark_hint: None,
+            splice_at: (0, 0),
             undo: Vec::new(),
             redo: Vec::new(),
             insert_snap: false,
@@ -358,11 +374,14 @@ impl Editor {
     pub fn handle_key(&mut self, key: KeyEvent) -> EdEvent {
         let ev = self.recorded_key(key);
         self.clip_unread = false;
+        self.marks.check_pc((self.row, self.col));
         ev
     }
 
     /// A key in the current mode.
     fn dispatch_key(&mut self, key: KeyEvent) -> EdEvent {
+        // The selection as it is before the key: the marks keep it if the key ends Visual mode.
+        self.marks.selecting(self.selection_marks());
         let ev = match self.mode {
             _ if self.prompt.is_some() => self.prompt_key(key),
             Mode::Insert => {
@@ -375,6 +394,9 @@ impl Editor {
         // The command that named a register is over.
         self.reg = None;
         self.reg_one = false;
+        if self.mode != Mode::Visual {
+            self.marks.selected();
+        }
         ev
     }
 
@@ -384,6 +406,15 @@ impl Editor {
     /// started). Outside Insert mode it is one undo step. Into
     /// the search prompt, it is part of the pattern (on one line).
     pub fn paste(&mut self, text: &str) -> EdEvent {
+        self.marks.selecting(self.selection_marks());
+        let ev = self.paste_text(text);
+        if self.mode != Mode::Visual {
+            self.marks.selected();
+        }
+        ev
+    }
+
+    fn paste_text(&mut self, text: &str) -> EdEvent {
         let norm = text.replace("\r\n", "\n").replace('\r', "\n");
         if norm.is_empty() {
             return EdEvent::None;
@@ -439,10 +470,11 @@ impl Editor {
         let c = self.col_for_x(r, self.left + tx);
         self.cmd = vim::Pending::default();
         let from = self.row;
-        self.set_pos(r, c);
         if self.mode == Mode::Visual {
+            self.keep_selection();
             self.mode = Mode::Normal;
         }
+        self.set_pos(r, c);
         if self.mode == Mode::Insert {
             self.moved_in_insert(from);
         }

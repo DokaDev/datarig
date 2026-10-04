@@ -57,7 +57,18 @@ pub fn render() -> String {
          them again. Search patterns are Rust regular expressions \
          (<https://docs.rs/regex/latest/regex/#syntax>), not Vim's: case-sensitive (`(?i)` at the start \
          ignores case), `\\b` for a word boundary (Vim's `\\<` `\\>`), `.` `*` `+` `?` `(` `)` `|` without a \
-         backslash; a match lies within one line, and search offsets (`/foo/e`) are not supported; Visual \
+         backslash; a match lies within one line, and search offsets (`/foo/e`) are not supported; marks: \
+         `m{a-z}` sets one at the cursor, `'{a-z}` goes to its line (the first non-blank) and `` `{a-z} `` \
+         to its place, also after an operator (`d'a` takes whole lines, `` y`a `` the characters up to \
+         it); `''` and ``` `` ``` go back to where the last jump left from (`G`, `gg`, `%`, `{`, `}`, `H`, \
+         `M`, `L`, a search, a mark; `m'` sets it), `'<` `'>` (`` `< `` `` `> ``) to the ends of the last \
+         Visual selection and `'.` to the last change; marks move with their lines as lines are added \
+         or deleted above them and go with a deleted line, an undo puts them back, and `'A`-`'Z`, `'0`-`'9`, \
+         `'[` `']` `'^` are not kept (they say so); `gc` comments lines out with `-- ` or back in, as \
+         Neovim's built-in commenting does: `gcc` (with a count), `gc` with a motion or text object and \
+         `gc` in Visual mode take whole lines; when every line that is not blank starts with `--` they \
+         lose it, otherwise each gets `-- ` after the smallest indent (a blank line `--`), and `.` \
+         repeats it; Visual \
          mode by character (`v`) and by line (`V`) with the motions and text objects, `y d x c`, `Y D X \
          C S` (whole lines), `r J gJ u U ~ > <`, `o` (the other end) and `p P` (a register in place of the \
          selection; `P` keeps the replaced text out of the registers); Visual mode by block (`Ctrl+V`; \
@@ -108,6 +119,11 @@ pub fn render() -> String {
         }
     }
     s
+}
+
+/// `text` as Markdown code: a backtick in it takes two around it.
+fn code(text: &str) -> String {
+    if text.contains('`') { format!("`` {text} ``") } else { format!("`{text}`") }
 }
 
 /// The `:` commands and the settings of `:set`.
@@ -205,11 +221,8 @@ fn section(s: &mut String, km: &Keymap, ctx: Ctx) {
         }
     }
     for n in notes {
-        let list: Vec<String> = own
-            .iter()
-            .filter(|b| b.target == Target::Reserved(n))
-            .map(|b| format!("`{}`", keys::label(&b.keys)))
-            .collect();
+        let list: Vec<String> =
+            own.iter().filter(|b| b.target == Target::Reserved(n)).map(|b| code(&keys::label(&b.keys))).collect();
         s.push_str(&format!("\nReserved — {n}: {}\n", list.join(" ")));
     }
 }

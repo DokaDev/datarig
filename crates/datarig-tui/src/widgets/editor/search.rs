@@ -329,6 +329,7 @@ impl Editor {
         if self.mode == Mode::Visual {
             let (n, explicit) = self.cmd.count();
             self.end_command();
+            self.marks.set_pc((self.row, self.col));
             self.move_by(m, n, explicit);
             return EdEvent::Moved;
         }
