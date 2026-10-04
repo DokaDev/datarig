@@ -400,7 +400,7 @@ impl App {
     }
 
     /// How profile `c` reaches its database (see [`route`]).
-    pub(crate) fn route_of<'a>(&'a self, c: &'a ConnectionConfig) -> Result<Route<'a>, RouteError> {
+    pub fn route_of<'a>(&'a self, c: &'a ConnectionConfig) -> Result<Route<'a>, RouteError> {
         route(c, &self.presets)
     }
 

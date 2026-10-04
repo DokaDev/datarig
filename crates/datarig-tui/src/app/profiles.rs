@@ -385,6 +385,9 @@ pub struct ProfileForm {
     /// "Save as tunnel preset": a new preset of this name made of the bastion fields when the
     /// form is saved (the profile then names it, and its own settings move into it).
     pub new_preset: Option<String>,
+    /// The profile named a preset and had its own tunnel on (an error of the profile): the form
+    /// shows the preset picked, its own tunnel off, and says so; saving keeps what is picked.
+    pub ssh_both: bool,
     pub ssh_host: TextInput,
     pub ssh_port: TextInput,
     pub ssh_user: TextInput,
@@ -472,6 +475,7 @@ impl ProfileForm {
             ssh_preset: c.tunnel.clone(),
             presets: Vec::new(),
             new_preset: None,
+            ssh_both: false,
             ssh_host: TextInput::new(c.ssh.as_ref().map_or("", |s| s.host.as_str())),
             ssh_port: TextInput::new(&c.ssh.as_ref().map_or(22, |s| s.port).to_string()),
             ssh_user: TextInput::new(c.ssh.as_ref().map_or("", |s| s.user.as_str())),
@@ -494,6 +498,10 @@ impl ProfileForm {
             dsn_problem: None,
             attempted: false,
         };
+        if c.tunnel.is_some() && f.ssh_enabled {
+            f.ssh_enabled = false;
+            f.ssh_both = true;
+        }
         match &c.dsn {
             // A DSN that could not be converted at load time: show it and its problem.
             Some(raw) => {

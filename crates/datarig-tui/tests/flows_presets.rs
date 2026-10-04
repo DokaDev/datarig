@@ -646,3 +646,221 @@ fn the_context_menu_of_a_preset() {
     h.right_click_row("[tunnels]");
     assert_eq!(h.menu_labels(), ["Explorer: open or toggle", "New SSH tunnel"]);
 }
+
+/// A profile with its own tunnel, its secret in the secrets file; a scratch config file.
+fn own_tunnel_config(dir: &Scratch) -> Config {
+    let mut cfg = config(Some(dir));
+    cfg.tunnels.clear();
+    cfg.connections[0].tunnel = None;
+    cfg.connections[2].tunnel = None;
+    let mut own = bastion();
+    own.set_source(datarig_core::secret::PasswordSource::File);
+    cfg.connections[0].ssh = Some(own);
+    cfg
+}
+
+/// Save as tunnel preset while the form also moves the secret from the secrets file to the
+/// keychain: the secret is read where it is (the file), written where the preset keeps it.
+#[test]
+fn save_as_tunnel_preset_reads_the_secret_where_it_was_saved() {
+    let dir = scratch("save-as-store");
+    let mut h = harness_with(&own_tunnel_config(&dir));
+    let id = id_of(&h, "local-pg");
+    let stores = h.app.secrets.stores().clone();
+    stores.file.set(&SshSettings::account(id), "in-file").unwrap();
+    h.explore("local-pg");
+    h.keys("e");
+    h.ctrl('n');
+    // The secret's storage: the keychain (from the file).
+    while h.form().focus != datarig_tui::app::profiles::Field::SshSource {
+        h.key(KeyCode::Tab);
+    }
+    h.key(KeyCode::Left);
+    assert_eq!(h.form().ssh_source, SourceKind::Keychain);
+    h.key_mod(KeyCode::Char('b'), KeyModifiers::CONTROL);
+    h.key(KeyCode::Enter);
+    h.ctrl('s');
+    let p = h.app.presets.first().expect("made").clone();
+    assert_eq!(p.settings.source().kind(), SourceKind::Keychain);
+    assert_eq!(stores.keychain.get(&p.id.account()).unwrap().as_deref(), Some("in-file"));
+    assert_eq!(stores.file.get(&SshSettings::account(id)).unwrap(), None, "moved out of the file");
+}
+
+/// A secret typed in the form is the one the preset uses from now on (not an older one this
+/// session remembered).
+#[test]
+fn save_as_tunnel_preset_takes_the_typed_secret_over_the_sessions() {
+    let dir = scratch("save-as-typed");
+    let mut h = harness_with(&own_tunnel_config(&dir));
+    let id = id_of(&h, "local-pg");
+    h.app.secrets.remember(&SshSettings::account(id), "old-session");
+    h.explore("local-pg");
+    h.keys("e");
+    h.ctrl('n');
+    while h.form().focus != datarig_tui::app::profiles::Field::SshSecret {
+        h.key(KeyCode::Tab);
+    }
+    h.type_text("typed-new");
+    h.key_mod(KeyCode::Char('b'), KeyModifiers::CONTROL);
+    h.key(KeyCode::Enter);
+    h.ctrl('s');
+    let p = h.app.presets.first().expect("made").clone();
+    assert_eq!(h.app.secrets.session(&p.id.account()), Some("typed-new"));
+    assert_eq!(h.app.secrets.session(&SshSettings::account(id)), None);
+    assert_eq!(h.app.secrets.stores().file.get(&p.id.account()).unwrap().as_deref(), Some("typed-new"));
+}
+
+/// The config cannot be written: nothing of "save as tunnel preset" happens (no preset in
+/// memory either, so a later save cannot write one), the form stays open and the profile's own
+/// secret stays where it is.
+#[test]
+fn save_as_tunnel_preset_that_cannot_be_written_changes_nothing() {
+    let dir = scratch("save-as-fail");
+    let mut cfg = own_tunnel_config(&dir);
+    // A folder where the file should be: every write fails.
+    let path = dir.0.join("config.toml");
+    std::fs::create_dir_all(&path).unwrap();
+    cfg.path = Some(path);
+    let mut h = harness_with(&cfg);
+    let id = id_of(&h, "local-pg");
+    let stores = h.app.secrets.stores().clone();
+    stores.file.set(&SshSettings::account(id), "in-file").unwrap();
+    h.explore("local-pg");
+    h.keys("e");
+    h.ctrl('n');
+    h.key_mod(KeyCode::Char('b'), KeyModifiers::CONTROL);
+    h.key(KeyCode::Enter);
+    h.ctrl('s');
+    assert!(h.form_open(), "the form stays");
+    assert!(h.app.presets.is_empty());
+    let c = h.app.profile(id).unwrap();
+    assert_eq!((c.tunnel.as_deref(), c.ssh.as_ref().map(|s| s.enabled)), (None, Some(true)));
+    assert_eq!(stores.file.get(&SshSettings::account(id)).unwrap().as_deref(), Some("in-file"));
+}
+
+/// The database password's storage and "save as tunnel preset" in one save: one at a time.
+#[test]
+fn save_as_tunnel_preset_waits_for_a_password_storage_change() {
+    let dir = scratch("save-as-source");
+    let mut h = harness_with(&own_tunnel_config(&dir));
+    h.explore("local-pg");
+    h.keys("e");
+    while h.form().focus != datarig_tui::app::profiles::Field::Source {
+        h.key(KeyCode::Tab);
+    }
+    h.key(KeyCode::Right);
+    h.ctrl('n');
+    h.key_mod(KeyCode::Char('b'), KeyModifiers::CONTROL);
+    h.key(KeyCode::Enter);
+    h.ctrl('s');
+    assert!(h.form_open());
+    assert!(h.app.presets.is_empty());
+    let said = h.app.transient.as_ref().map(|(n, _)| n.render(&h.app.i18n).to_string()).unwrap_or_default();
+    assert!(said.contains("password storage first"), "{said}");
+}
+
+/// A profile edited to another tunnel while its preset's connection opened: it does not take
+/// that connection (nobody else needs it, so it closes).
+#[test]
+fn a_profile_edited_while_its_preset_opened_does_not_take_the_connection() {
+    let mut h = harness();
+    let a = id_of(&h, "local-pg");
+    connect(&mut h, "local-pg");
+    // Saved meanwhile without the preset (as its form does).
+    h.app.profiles.iter_mut().find(|p| p.id == a).unwrap().tunnel = None;
+    let fake = Arc::new(FakeTunnel::default());
+    shared(&mut h, 1, TunnelEvent::Opened(fake.clone()));
+    assert!(h.driver.sessions.lock().unwrap().is_empty(), "nothing through it");
+    assert!(fake.closed());
+    assert_ne!(h.app.conns.state(a), NodeState::Connecting);
+    assert!(h.app.conns.get(a).unwrap().tunnel.is_none());
+}
+
+/// A preset deleted while its connection opens: the attempts waiting for it end (the preset is
+/// gone), its questions go, and a late connection is closed.
+#[test]
+fn deleting_a_preset_while_it_opens_ends_its_attempts() {
+    let dir = scratch("delete-opening");
+    let mut h = harness_with(&config(Some(&dir)));
+    connect(&mut h, "local-pg");
+    let (tx, mut rx) = oneshot::channel();
+    shared(&mut h, 1, TunnelEvent::Ask(TunnelAsk::Secret(SecretAsk::Password { wrong: false }, tx)));
+    assert!(h.prompt().is_some());
+    h.app.overlays.close(OverlayKind::Password);
+    h.app.focus = datarig_tui::app::Focus::Tree;
+    h.app.explorer.select_kind(datarig_tui::app::explorer::RowKind::Tunnel(office(&h)));
+    h.keys("d");
+    h.key(KeyCode::Char('y'));
+    assert!(h.app.presets.is_empty());
+    assert!(rx.try_recv().is_err(), "the question was dropped");
+    assert_eq!(h.app.conns.state(id_of(&h, "local-pg")), NodeState::Failed);
+    assert!(h.node_error("local-pg").is_some_and(|e| e.contains("“office”, which does not exist")));
+    let late = Arc::new(FakeTunnel::default());
+    shared(&mut h, 1, TunnelEvent::Opened(late.clone()));
+    assert!(late.closed());
+}
+
+/// A profile listed under a preset only leads to that profile: `d` there deletes nothing, and
+/// its menu has nothing else.
+#[test]
+fn a_profile_under_a_preset_only_leads_to_it() {
+    let mut h = harness();
+    let office = office(&h);
+    h.app.tunnels_open.insert(office);
+    let local = id_of(&h, "local-pg");
+    h.app.focus = datarig_tui::app::Focus::Tree;
+    h.app.explorer.select_kind(datarig_tui::app::explorer::RowKind::TunnelUser(office, local));
+    h.keys("d");
+    assert!(h.app.overlays.confirm().is_none());
+    h.keys("e");
+    assert!(!h.form_open());
+    h.right_click_row("@local-pg");
+    assert_eq!(h.menu_labels(), ["Explorer: open or toggle"]);
+}
+
+/// A profile that named a preset and had its own tunnel on: its form shows the preset picked
+/// and its own tunnel off, and says so; saving keeps that (no longer both).
+#[test]
+fn the_form_of_a_profile_with_both_tunnels_keeps_the_preset_when_saved() {
+    let dir = scratch("both");
+    let mut cfg = config(Some(&dir));
+    cfg.connections[0].ssh = Some(bastion());
+    let mut h = harness_with(&cfg);
+    let id = id_of(&h, "local-pg");
+    h.explore("local-pg");
+    h.keys("e");
+    h.ctrl('n');
+    assert_eq!(h.form().ssh_choice(), datarig_tui::app::profiles::SshChoice::Preset("office".into()));
+    assert!(!h.form().ssh_enabled);
+    let screen = h.screen(110, 30);
+    assert!(screen.contains("had its own SSH tunnel on"), "{screen}");
+    h.ctrl('s');
+    let c = h.app.profile(id).unwrap();
+    assert_eq!(c.tunnel.as_deref(), Some("office"));
+    assert_eq!(c.ssh.as_ref().map(|s| s.enabled), Some(false), "kept, off");
+    assert!(h.app.route_of(c).is_ok());
+}
+
+/// Presets whose names differ only in case (a hand-written file): each can still be saved
+/// under its own name; no new one may take such a name.
+#[test]
+fn names_that_differ_in_case_only_can_stay() {
+    let dir = scratch("case");
+    let mut cfg = config(Some(&dir));
+    cfg.tunnels.push(TunnelPreset::new("Office", bastion()));
+    let mut h = harness_with(&cfg);
+    let upper = h.app.presets.iter().find(|p| p.name == "Office").unwrap().id;
+    h.app.focus = datarig_tui::app::Focus::Tree;
+    h.app.explorer.select_kind(datarig_tui::app::explorer::RowKind::Tunnel(upper));
+    h.keys("e");
+    h.ctrl('s');
+    assert!(!h.form_open(), "saved under its own name");
+    h.app.explorer.select_kind(datarig_tui::app::explorer::RowKind::Tunnel(upper));
+    h.keys("c");
+    for _ in 0.."Office-copy".len() {
+        h.key(KeyCode::Backspace);
+    }
+    h.type_text("OFFICE");
+    h.ctrl('s');
+    assert!(h.form_open(), "a new one cannot");
+}

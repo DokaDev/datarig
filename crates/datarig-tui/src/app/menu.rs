@@ -103,7 +103,11 @@ impl App {
         let connected = profile.is_some_and(|id| self.conns.is_connected(id));
         let script = matches!(row, R::Script(_) | R::ScriptFolder(_));
         let in_database = matches!(row, R::Node(..) | R::AuxNode(..) | R::Database(..) | R::DatabaseNote(..));
-        let preset = matches!(row, R::Tunnel(_) | R::TunnelError(_) | R::TunnelUser(..));
+        let preset = matches!(row, R::Tunnel(_) | R::TunnelError(_));
+        // A profile listed under a preset: `Enter` goes to it, nothing else.
+        if matches!(row, R::TunnelUser(..)) {
+            return a == Action::Explorer(ExplorerAction::Activate);
+        }
         let tunnels = preset || matches!(row, R::TunnelsHeader | R::TunnelsEmpty);
         // The "Tunnels" section: a new preset, and a preset's edit, copy, delete and test.
         if tunnels {

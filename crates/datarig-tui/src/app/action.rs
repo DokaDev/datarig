@@ -285,9 +285,10 @@ fn action_profile(a: &App) -> bool {
 
 /// The profile form's own tunnel can become a tunnel preset.
 fn own_tunnel_field(a: &App) -> bool {
-    a.overlays
-        .form()
-        .is_some_and(|f| !f.is_tunnel() && f.section == super::profiles::Section::Ssh && f.ssh_enabled && !f.saving)
+    a.config_writable()
+        && a.overlays
+            .form()
+            .is_some_and(|f| !f.is_tunnel() && f.section == super::profiles::Section::Ssh && f.ssh_enabled && !f.saving)
 }
 
 /// Tunnel presets can be made: the config file can be written.

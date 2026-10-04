@@ -117,7 +117,8 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
     let editing = form.editing;
     let errors = match form.kind {
         FormKind::Tunnel { id, .. } => {
-            form.errors(|n| presets.iter().any(|p| p.id != id && datarig_core::profile::tunnel::same_name(&p.name, n)))
+            let original = form.original_name.clone();
+            form.errors(|n| crate::app::presets::name_taken(presets, id, original.as_deref(), n))
         }
         FormKind::Profile => {
             form.errors(|n| profiles.iter().enumerate().any(|(i, p)| p.name == n && Some(i) != editing))
@@ -431,6 +432,14 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
             if let Some(hint) = hint {
                 put(buf, after, y, &i18n.msg(&hint), room, dim);
             }
+        }
+    }
+    // The profile named a preset and had its own tunnel on: which one the form keeps.
+    if form.section == Section::Ssh && form.ssh_both {
+        let text = i18n.label(Label::FormSshBoth);
+        let style = Style::new().fg(th.warning).bg(th.surface);
+        for (i, l) in wrap(&text, iw.saturating_sub(2)).iter().take(2).enumerate() {
+            put(buf, inner.x + 1, inner.y + 12 + i as u16, l, iw.saturating_sub(2), style);
         }
     }
     // A tunnel form's profiles, below its fields.

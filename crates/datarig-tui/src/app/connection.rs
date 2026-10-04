@@ -31,6 +31,8 @@ impl App {
         // sent (never a direct connection instead).
         if let Err(e) = self.route_of(&conn) {
             let m = self.route_error_notice(&conn.name, &e);
+            // A tunnel it still held (its preset deleted or renamed since) is let go.
+            self.close_tunnel(id);
             self.attempt_failed(id, m.clone());
             self.status = Some(m);
             return;
@@ -90,6 +92,7 @@ impl App {
             }),
             Err(e) => {
                 let m = self.route_error_notice(&conn.name, &e);
+                self.close_tunnel(conn.id);
                 return self.attempt_failed(conn.id, m);
             }
         };

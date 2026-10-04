@@ -135,6 +135,7 @@ impl App {
         };
         if waiting.is_empty() {
             self.shared.remove(serial);
+            self.shared_saves.remove(&serial);
             return self.close_handle(handle);
         }
         e.state = SharedState::Open(handle.clone());
@@ -152,10 +153,33 @@ impl App {
         for (p, _) in waiting {
             self.attach_shared(p, serial);
         }
+        // None of them took it (each was edited meanwhile): nobody needs it.
+        if self.shared.get(serial).is_some_and(|e| e.users.is_empty())
+            && let Some(SharedTunnel { state: SharedState::Open(h), .. }) = self.shared.remove(serial)
+        {
+            self.close_handle(h);
+        }
     }
 
-    /// Profile `id`'s attempt takes the open shared connection `serial` and goes on.
+    /// Profile `id`'s attempt takes the open shared connection `serial` and goes on, if the
+    /// profile still names that preset with those settings (it may have been edited, or the
+    /// preset changed or deleted, while it opened); otherwise the attempt ends.
     fn attach_shared(&mut self, id: ProfileId, serial: u64) {
+        let Some((tunnel, settings)) = self.shared.get(serial).map(|e| (e.tunnel, e.settings.clone())) else { return };
+        let still = self.profile(id).is_some_and(
+            |p| matches!(self.route_of(p), Ok(Route::Preset(t)) if t.id == tunnel && t.settings == settings),
+        );
+        if !still {
+            let name = self.profile(id).map(|p| p.name.clone()).unwrap_or_default();
+            if let Some(c) = self.conns.get_mut(id) {
+                c.tunnel_wait = None;
+            }
+            if let Some(e) = self.shared.get_mut(serial) {
+                e.waiting.retain(|(p, _)| *p != id);
+            }
+            self.attempt_failed(id, Notice::new(Msg::ConnCancelled { name }, Level::Warning));
+            return self.prune_shared();
+        }
         let Some(e) = self.shared.get_mut(serial) else { return };
         let Some(handle) = e.open().cloned() else { return };
         e.users.insert(id);
@@ -211,6 +235,33 @@ impl App {
         self.shared.lost.insert(e.tunnel, m.clone());
         for p in users {
             self.lost_through(p, m.clone());
+        }
+    }
+
+    /// Preset `tunnel` was deleted: its connections still opening are given up (their questions
+    /// dropped, a late connection closed), and the attempts waiting for them end saying the
+    /// preset is gone. Open ones stay with the profiles on them until they disconnect.
+    pub(crate) fn give_up_openings(&mut self, tunnel: TunnelId, name: &str) {
+        let openings: Vec<u64> = self
+            .shared
+            .list
+            .iter()
+            .filter(|e| e.tunnel == tunnel && matches!(e.state, SharedState::Opening(_)))
+            .map(|e| e.serial)
+            .collect();
+        for serial in openings {
+            let waiting = self.current_waiters(serial);
+            self.shared.remove(serial);
+            self.shared_saves.remove(&serial);
+            self.drop_asks(|o| o == Owner::Shared(serial));
+            for (p, _) in waiting {
+                let Some(profile) = self.profile(p).map(|c| c.name.clone()) else { continue };
+                if let Some(c) = self.conns.get_mut(p) {
+                    c.tunnel_wait = None;
+                }
+                let m = self.route_error_notice(&profile, &RouteError::NotFound(name.to_string()));
+                self.attempt_failed(p, m);
+            }
         }
     }
 

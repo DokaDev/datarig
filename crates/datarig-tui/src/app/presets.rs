@@ -23,20 +23,36 @@ use datarig_core::secret::source;
 pub const PROBE_MAX: usize = 4;
 
 /// A secret to move once the profile form that made a preset of its own tunnel is saved: from
-/// the profile's tunnel account to the preset's, in the store of `kind`.
+/// the profile's tunnel account in the store it used (`from_kind`, as saved before the form) to
+/// the preset's account in the store the preset uses (`to_kind`); `None`: a source that stores
+/// none.
 pub(super) struct SecretMove {
     pub name: String,
-    pub kind: SourceKind,
+    pub from_kind: Option<SourceKind>,
+    pub to_kind: Option<SourceKind>,
     pub from: String,
     pub to: String,
     pub typed: Option<String>,
+}
+
+/// Whether preset `id` (named `original` when the form opened) cannot be named `n`: another
+/// preset has that name, or one a person would take for it (case aside). A name the file
+/// already had, and that only differs in case from another's, may stay.
+pub fn name_taken(presets: &[TunnelPreset], id: TunnelId, original: Option<&str>, n: &str) -> bool {
+    presets.iter().any(|p| p.id != id && (p.name == n || (preset::same_name(&p.name, n) && original != Some(n))))
 }
 
 impl App {
     /// The explorer shows the "Tunnels" section: there are presets, or profiles and a config
     /// file the app can write (a preset can be made).
     pub fn tunnels_shown(&self) -> bool {
-        !self.presets.is_empty() || (!self.profiles.is_empty() && self.config_path.is_some() && !self.config_broken)
+        !self.presets.is_empty() || (!self.profiles.is_empty() && self.config_writable())
+    }
+
+    /// Changes can be written to the config file (there is one, and it was read without
+    /// errors).
+    pub fn config_writable(&self) -> bool {
+        self.config_path.is_some() && !self.config_broken
     }
 
     /// Preset `id`.
@@ -44,12 +60,11 @@ impl App {
         self.presets.iter().find(|p| p.id == id)
     }
 
-    /// The preset the explorer's cursor is on (its row, its error line or a profile under it).
+    /// The preset the explorer's cursor is on (its row or its error line). A profile listed
+    /// under a preset is only a way to that profile (`Enter`): no preset's action runs on it.
     pub fn selected_tunnel(&self) -> Option<TunnelId> {
         match self.explorer_row()?.kind {
-            explorer::RowKind::Tunnel(id)
-            | explorer::RowKind::TunnelError(id)
-            | explorer::RowKind::TunnelUser(id, _) => Some(id),
+            explorer::RowKind::Tunnel(id) | explorer::RowKind::TunnelError(id) => Some(id),
             _ => None,
         }
     }
@@ -100,8 +115,8 @@ impl App {
         let Some(form) = self.overlays.form_mut().filter(|f| !f.saving && f.is_tunnel()) else { return };
         form.attempted = true;
         let FormKind::Tunnel { id, editing } = form.kind else { return };
-        let presets = &self.presets;
-        let taken = |n: &str| presets.iter().any(|p| p.id != id && preset::same_name(&p.name, n));
+        let (presets, original) = (&self.presets, form.original_name.clone());
+        let taken = |n: &str| name_taken(presets, id, original.as_deref(), n);
         if !form.errors(taken).is_empty() {
             return;
         }
@@ -170,8 +185,9 @@ impl App {
                     _ => {
                         if from == SourceKind::Keychain {
                             self.remove_from_keychain(vec![account.clone()]);
-                        } else {
-                            let _ = self.secrets.remove_in(from, &account);
+                        } else if let Err(e) = self.secrets.remove_in(from, &account) {
+                            let m = Notice::new(self.source_error(&e), Level::Warning);
+                            self.flash(m);
                         }
                     }
                 }
@@ -265,13 +281,17 @@ impl App {
             let error = self.fault_text("config.save_failed", &fault);
             return self.flash(Notice::new(Msg::ConfigSaveFailed { error }, Level::Error));
         }
+        self.give_up_openings(id, &p.name);
         let account = id.account();
         self.secrets.forget(&account);
+        let mut warn = None;
         if p.settings.auth.has_secret() {
             match p.settings.source().kind() {
                 SourceKind::Keychain => self.remove_from_keychain(vec![account]),
                 SourceKind::File => {
-                    let _ = self.secrets.remove_in(SourceKind::File, &account);
+                    if let Err(e) = self.secrets.remove_in(SourceKind::File, &account) {
+                        warn = Some(Notice::new(self.source_error(&e), Level::Warning));
+                    }
                 }
                 _ => {}
             }
@@ -285,7 +305,7 @@ impl App {
             0 => Notice::new(Msg::TunnelDeleted { name: p.name }, Level::Success),
             _ => Notice::new(Msg::TunnelDeletedUsed { name: p.name, count }, Level::Warning),
         };
-        self.flash(msg);
+        self.flash(warn.unwrap_or(msg));
     }
 
     // ── test ────────────────────────────────────────────────────────────────
@@ -423,6 +443,9 @@ impl App {
     /// `Ctrl+B` in the profile form's own tunnel: name the preset its bastion fields become when
     /// the form is saved. The fields must be complete first.
     pub(super) fn open_save_as_tunnel(&mut self) {
+        if !self.config_writable() {
+            return self.flash(Notice::new(Label::ConfigReadonly, Level::Warning));
+        }
         let Some(f) = self.overlays.form_mut().filter(|f| !f.is_tunnel() && f.ssh_enabled) else { return };
         let was = f.attempted;
         f.attempted = true;
@@ -464,20 +487,25 @@ impl App {
     /// removed; a typed one is written instead). Unknown is not absent: a store that cannot be
     /// read keeps the old copy, and the preset asks for its secret at its first connect.
     pub(super) fn move_secret_to_preset(&mut self, m: SecretMove) {
-        if let Some(pw) = self.secrets.session(&m.from).map(str::to_string) {
+        // The session's copy follows (a secret typed in the form is the newer one).
+        let session = m.typed.clone().or_else(|| self.secrets.session(&m.from).map(str::to_string));
+        if let Some(pw) = session.filter(|_| m.to_kind.is_some()) {
             self.secrets.remember(&m.to, &pw);
-            self.secrets.forget(&m.from);
         }
-        let SecretMove { name, kind, from, to, typed } = m;
+        self.secrets.forget(&m.from);
+        let SecretMove { name, from_kind, to_kind, from, to, typed } = m;
+        let keychain = from_kind == Some(SourceKind::Keychain) || to_kind == Some(SourceKind::Keychain);
         let accounts = vec![from.clone(), to.clone()];
         let work = move |s: &Stores| {
-            source::rekey_copy(s, kind, &from, &to, typed.as_deref()).map(|copied| {
-                let mut out = source::rekey_remove(s, kind, &from);
-                out.copied = copied;
-                out
-            })
+            let copied = match to_kind {
+                Some(k) => source::rekey_copy(s, from_kind, &from, k, &to, typed.as_deref())?,
+                None => false,
+            };
+            let mut out = from_kind.map(|k| source::rekey_remove(s, k, &from)).unwrap_or_default();
+            out.copied = copied;
+            Ok(out)
         };
-        if kind == SourceKind::Keychain {
+        if keychain {
             self.keychain_job(accounts, work, move |result| keychain::KeychainDone::SecretMoved { name, result });
         } else {
             let result = work(self.secrets.stores());

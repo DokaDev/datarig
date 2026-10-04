@@ -1055,20 +1055,27 @@ fn write_ssh(profile: &mut Table, ssh: &SshSettings) {
 /// was read with) and updated in place, under its current name; the tables of presets that are
 /// gone are removed. Tables keep their places in the file, handed out in the presets' order.
 fn write_tunnels(doc: &mut DocumentMut, presets: &[TunnelPreset]) -> Result<(), Fault> {
+    let shape = || Fault::new(FaultKind::Shape { key: "tunnels".into() }, "tunnels must be a table of tables");
+    // Each preset's table as the file has it: a table, or an inline table (written back as a
+    // table, in place of it).
+    let as_table = |v: &Item| match v {
+        Item::Table(t) => Some(t.clone()),
+        Item::Value(Value::InlineTable(t)) => Some(t.clone().into_table()),
+        _ => None,
+    };
     let old: Vec<(String, Table)> = match doc.get("tunnels") {
         None => Vec::new(),
-        Some(Item::Table(t)) => {
-            t.iter().filter_map(|(k, v)| v.as_table().map(|t| (k.to_string(), t.clone()))).collect()
-        }
-        Some(_) => {
-            return Err(Fault::new(FaultKind::Shape { key: "tunnels".into() }, "tunnels must be a table of tables"));
-        }
+        Some(item) => match item.as_table_like() {
+            Some(t) => t.iter().filter_map(|(k, v)| as_table(v).map(|t| (k.to_string(), t))).collect(),
+            None => return Err(shape()),
+        },
     };
     if presets.is_empty() && old.is_empty() {
         return Ok(());
     }
     let mut parent = match doc.remove("tunnels") {
         Some(Item::Table(t)) => t,
+        Some(Item::Value(Value::InlineTable(t))) => t.into_table(),
         _ => {
             let mut t = Table::new();
             t.set_implicit(true);
@@ -1097,7 +1104,14 @@ fn write_tunnels(doc: &mut DocumentMut, presets: &[TunnelPreset]) -> Result<(), 
         t.set_position(positions.get(i).copied());
         parent.insert(&p.name, Item::Table(t));
     }
-    doc.insert("tunnels", Item::Table(parent));
+    // No preset left: the table goes too, unless comments hang on it.
+    let commented = [parent.decor().prefix(), parent.decor().suffix()]
+        .into_iter()
+        .flatten()
+        .any(|r| r.as_str().is_some_and(|s| s.contains('#')));
+    if !parent.is_empty() || commented {
+        doc.insert("tunnels", Item::Table(parent));
+    }
     Ok(())
 }
 

@@ -42,7 +42,7 @@ pub mod paging;
 pub mod pane;
 mod password;
 mod persist;
-mod presets;
+pub mod presets;
 pub mod profiles;
 pub mod quick;
 pub mod runlog;

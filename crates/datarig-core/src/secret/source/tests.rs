@@ -185,7 +185,10 @@ fn rekey_moves_a_secret_to_another_account_without_losing_it() {
     // The old copy, written under the new account and read back; removed only in step 3.
     let s = stores();
     s.keychain.set("profile:a:ssh", "pass").unwrap();
-    assert_eq!(rekey_copy(&s, SourceKind::Keychain, "profile:a:ssh", "tunnel:t", None), Ok(true));
+    assert_eq!(
+        rekey_copy(&s, Some(SourceKind::Keychain), "profile:a:ssh", SourceKind::Keychain, "tunnel:t", None),
+        Ok(true)
+    );
     assert_eq!(s.keychain.get("tunnel:t").unwrap().as_deref(), Some("pass"));
     assert_eq!(s.keychain.get("profile:a:ssh").unwrap().as_deref(), Some("pass"), "kept until step 3");
     let r = rekey_remove(&s, SourceKind::Keychain, "profile:a:ssh");
@@ -194,27 +197,47 @@ fn rekey_moves_a_secret_to_another_account_without_losing_it() {
     // A typed one wins over the stored one; the secrets file works the same way.
     let s = stores();
     s.file.set("profile:a:ssh", "old").unwrap();
-    assert_eq!(rekey_copy(&s, SourceKind::File, "profile:a:ssh", "tunnel:t", Some("new")), Ok(true));
+    assert_eq!(
+        rekey_copy(&s, Some(SourceKind::File), "profile:a:ssh", SourceKind::File, "tunnel:t", Some("new")),
+        Ok(true)
+    );
     assert_eq!(s.file.get("tunnel:t").unwrap().as_deref(), Some("new"));
     // Nothing stored and nothing typed: nothing written.
     let s = stores();
-    assert_eq!(rekey_copy(&s, SourceKind::Keychain, "profile:a:ssh", "tunnel:t", None), Ok(false));
+    assert_eq!(
+        rekey_copy(&s, Some(SourceKind::Keychain), "profile:a:ssh", SourceKind::Keychain, "tunnel:t", None),
+        Ok(false)
+    );
     assert_eq!(s.keychain.get("tunnel:t").unwrap(), None);
     // A source that stores nothing has nothing to move.
-    assert_eq!(rekey_copy(&s, SourceKind::Prompt, "profile:a:ssh", "tunnel:t", Some("x")), Ok(false));
+    assert_eq!(
+        rekey_copy(&s, Some(SourceKind::Keychain), "profile:a:ssh", SourceKind::Prompt, "tunnel:t", Some("x")),
+        Ok(false)
+    );
     // Unknown is not absent: a keychain that cannot be read stops the move before anything is
     // written (and the old copy is never removed).
     let s = Stores { keychain: Arc::new(MemoryStore::unavailable("locked")), ..stores() };
     assert_eq!(
-        rekey_copy(&s, SourceKind::Keychain, "profile:a:ssh", "tunnel:t", None),
+        rekey_copy(&s, Some(SourceKind::Keychain), "profile:a:ssh", SourceKind::Keychain, "tunnel:t", None),
         Err(SwitchError::Read(SourceError::Keychain(nk("locked"))))
     );
     // The new copy reads back different: stop.
     let s = Stores { keychain: Arc::new(Forgetful), ..stores() };
     assert_eq!(
-        rekey_copy(&s, SourceKind::Keychain, "profile:a:ssh", "tunnel:t", Some("x")),
+        rekey_copy(&s, Some(SourceKind::Keychain), "profile:a:ssh", SourceKind::Keychain, "tunnel:t", Some("x")),
         Err(SwitchError::Mismatch(SourceKind::Keychain))
     );
+    // From the secrets file into the keychain (the source changed with the move); from a
+    // source that stores nothing, only a typed one.
+    let s = stores();
+    s.file.set("profile:a:ssh", "in-file").unwrap();
+    assert_eq!(
+        rekey_copy(&s, Some(SourceKind::File), "profile:a:ssh", SourceKind::Keychain, "tunnel:t", None),
+        Ok(true)
+    );
+    assert_eq!(s.keychain.get("tunnel:t").unwrap().as_deref(), Some("in-file"));
+    assert_eq!(rekey_copy(&s, None, "profile:a:ssh", SourceKind::File, "tunnel:u", None), Ok(false));
+    assert_eq!(rekey_copy(&s, None, "profile:a:ssh", SourceKind::File, "tunnel:u", Some("typed")), Ok(true));
     // Removing the old copy fails: said, nothing else changes.
     let s = Stores { keychain: Arc::new(MemoryStore::unavailable("locked")), ..stores() };
     assert_eq!(

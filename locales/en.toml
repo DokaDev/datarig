@@ -1261,4 +1261,6 @@
 "form.ssh.preset_hint" = "shared: one SSH connection for every profile on it; edit it in the explorer's Tunnels"
 "form.ssh.save_as_preset" = "save as tunnel preset {key}"
 "form.ssh.preset_gone" = "No tunnel is named “{name}”: this profile does not connect until you pick another"
+"tunnel.save_as_with_source_change" = "Save the change of the password storage first, then save this SSH tunnel as a preset"
+"form.ssh.both" = "This profile named a tunnel preset and had its own SSH tunnel on, so it did not connect. The preset is picked here and its own tunnel is off: save to keep that, or pick another."
 "config.error.tunnel_missing" = "tunnel “{tunnel}” has no {key}"

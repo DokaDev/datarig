@@ -990,3 +990,42 @@ fn a_preset() -> crate::profile::tunnel::TunnelPreset {
         },
     )
 }
+
+/// Presets written as inline tables (under `[tunnels]`, or a `tunnels = { … }` key) are found,
+/// updated, renamed and removed like the others: a deleted one never comes back, a renamed one
+/// never stays under its old name with the same id.
+#[test]
+fn inline_tunnel_tables_are_rewritten_not_left_behind() {
+    let path = temp_file("tunnels-inline");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    for text in [
+        "[tunnels]\noffice = { host = \"b\", user = \"u\", auth = \"agent\" }\nlab = { host = \"l\", user = \"u\", auth = \"agent\" }\n",
+        "tunnels = { office = { host = \"b\", user = \"u\", auth = \"agent\" }, lab = { host = \"l\", user = \"u\", auth = \"agent\" } }\n",
+        "tunnels.office.host = \"b\"\ntunnels.office.user = \"u\"\ntunnels.office.auth = \"agent\"\n[tunnels.lab]\nhost = \"l\"\nuser = \"u\"\nauth = \"agent\"\n",
+    ] {
+        std::fs::write(&path, text).unwrap();
+        let (cfg, err) = load(Some(path.clone()));
+        assert!(err.is_none(), "{err:?}\n{text}");
+        // `office` renamed, `lab` deleted.
+        let mut tunnels: Vec<_> = cfg.tunnels.iter().filter(|t| t.name == "office").cloned().collect();
+        tunnels[0].name = "hq".into();
+        let save_with = |t: &[crate::profile::tunnel::TunnelPreset]| {
+            save(
+                &path,
+                settings("auto"),
+                Some(Profiles { connections: &[], tunnels: t, folders: &cfg.folders, last_used: None }),
+            )
+        };
+        save_with(&tunnels).unwrap();
+        let (back, err) = load(Some(path.clone()));
+        assert!(err.is_none(), "{err:?}\n{}", std::fs::read_to_string(&path).unwrap());
+        let names: Vec<&str> = back.tunnels.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, ["hq"], "{}", std::fs::read_to_string(&path).unwrap());
+        assert_eq!(back.tunnels[0].id, tunnels[0].id);
+        // None left: nothing of them stays.
+        save_with(&[]).unwrap();
+        let (back, err) = load(Some(path.clone()));
+        assert!(err.is_none(), "{err:?}");
+        assert!(back.tunnels.is_empty(), "{}", std::fs::read_to_string(&path).unwrap());
+    }
+}

@@ -1258,4 +1258,6 @@
 "form.ssh.preset_hint" = "공유: 이 터널을 쓰는 프로필은 SSH 연결 하나를 함께 씀 · 탐색기의 터널에서 편집"
 "form.ssh.save_as_preset" = "터널 프리셋으로 저장 {key}"
 "form.ssh.preset_gone" = "“{name}” 터널이 없습니다: 다른 터널을 고를 때까지 이 프로필은 연결되지 않습니다"
+"tunnel.save_as_with_source_change" = "비밀번호 저장 위치 변경을 먼저 저장한 뒤 이 SSH 터널을 프리셋으로 저장하세요"
+"form.ssh.both" = "이 프로필은 터널 프리셋을 쓰면서 자체 SSH 터널도 켜져 있어 연결되지 않았습니다. 여기서는 프리셋을 고르고 자체 터널을 껐습니다: 저장하면 그대로 남고, 다른 것을 골라도 됩니다."
 "config.error.tunnel_missing" = "터널 “{tunnel}”에 {key}이(가) 없음"
