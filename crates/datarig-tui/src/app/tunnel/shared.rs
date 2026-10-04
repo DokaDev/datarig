@@ -165,7 +165,15 @@ impl App {
     /// profile still names that preset with those settings (it may have been edited, or the
     /// preset changed or deleted, while it opened); otherwise the attempt ends.
     fn attach_shared(&mut self, id: ProfileId, serial: u64) {
-        let Some((tunnel, settings)) = self.shared.get(serial).map(|e| (e.tunnel, e.settings.clone())) else { return };
+        let entry = self.shared.get(serial).filter(|e| e.open().is_some()).map(|e| (e.tunnel, e.settings.clone()));
+        // Gone (or closed) before this attempt took it: the attempt ends instead of waiting.
+        let Some((tunnel, settings)) = entry else {
+            let name = self.profile(id).map(|p| p.name.clone()).unwrap_or_default();
+            if let Some(c) = self.conns.get_mut(id) {
+                c.tunnel_wait = None;
+            }
+            return self.attempt_failed(id, Notice::new(Msg::ConnCancelled { name }, Level::Warning));
+        };
         let still = self.profile(id).is_some_and(
             |p| matches!(self.route_of(p), Ok(Route::Preset(t)) if t.id == tunnel && t.settings == settings),
         );

@@ -834,6 +834,10 @@ fn the_form_of_a_profile_with_both_tunnels_keeps_the_preset_when_saved() {
     assert!(!h.form().ssh_enabled);
     let screen = h.screen(110, 30);
     assert!(screen.contains("had its own SSH tunnel on"), "{screen}");
+    // Another pick: the line goes; back to the preset and saved.
+    h.key(KeyCode::Right);
+    assert!(!h.form().ssh_both && !h.screen(110, 30).contains("had its own SSH tunnel on"));
+    h.key(KeyCode::Left);
     h.ctrl('s');
     let c = h.app.profile(id).unwrap();
     assert_eq!(c.tunnel.as_deref(), Some("office"));

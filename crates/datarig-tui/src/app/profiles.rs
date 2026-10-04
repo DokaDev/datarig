@@ -572,6 +572,8 @@ impl ProfileForm {
     }
 
     fn set_ssh_choice(&mut self, c: SshChoice) {
+        // Picked here: no longer both.
+        self.ssh_both = false;
         match c {
             SshChoice::Off => (self.ssh_preset, self.ssh_enabled) = (None, false),
             SshChoice::Preset(p) => (self.ssh_preset, self.ssh_enabled) = (Some(p), false),
