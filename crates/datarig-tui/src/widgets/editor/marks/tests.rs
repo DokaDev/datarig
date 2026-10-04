@@ -1,37 +1,5 @@
-use super::super::Mode;
-use super::super::tests::{at, typ};
+use super::super::tests::{MarkCase, at, check_marks as check, typ};
 use super::MarkNotice;
-
-/// `(text, cursor, keys, text after, cursor after, marks after)`: a mark's position, or `None`
-/// when it is not set.
-type MarkCase = (
-    &'static str,
-    (usize, usize),
-    &'static str,
-    &'static str,
-    (usize, usize),
-    &'static [(char, Option<(usize, usize)>)],
-);
-
-/// Run each case from a fresh editor and compare the text, the cursor and the marks; the
-/// failures are listed together.
-fn check(cases: &[MarkCase]) {
-    let mut failed = Vec::new();
-    for &(text, cursor, keys, want, want_cursor, want_marks) in cases {
-        let mut e = at(text, cursor);
-        typ(&mut e, keys);
-        let marks: Vec<(char, Option<(usize, usize)>)> =
-            want_marks.iter().map(|&(c, _)| (c, e.marks.get(c).ok())).collect();
-        let have = (e.text(), (e.row, e.col), marks, e.mode);
-        if have != (want.to_string(), want_cursor, want_marks.to_vec(), Mode::Normal) {
-            failed.push(format!(
-                "{keys:?} on {text:?} at {cursor:?}: {have:?}, not {:?}",
-                (want, want_cursor, want_marks)
-            ));
-        }
-    }
-    assert!(failed.is_empty(), "{} of {} cases:\n{}", failed.len(), cases.len(), failed.join("\n"));
-}
 
 /// `m`, `'`, `` ` ``, the context mark of the jumps, `'<` `'>` and `'.`, and how marks move with
 /// the lines around them, as Neovim does (`dev/vim-cases.py`).

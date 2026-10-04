@@ -29,6 +29,7 @@
 //! * `marks` keeps the marks (`m`, `'`, `` ` ``) on their lines through the edits;
 //!   `comment` is `gc`.
 //! * `search` is `/`, `?`, `n`, `N`, `*`, `#` and the highlight of their matches.
+//! * `ex` runs the commands the app's `:` line hands over: a line range, `:s`, `:&`.
 //! * `render` draws.
 //!
 //! One command is one undo step: an operator, a put, a paste, a `.`, or an Insert session with
@@ -39,6 +40,7 @@ mod brackets;
 mod buffer;
 mod comment;
 mod edit;
+mod ex;
 mod insert;
 mod lexing;
 mod marks;
@@ -54,6 +56,7 @@ mod visual;
 
 use buffer::{Step, class, graphemes, next_version};
 use datarig_core::i18n::Label;
+pub use ex::{ExDone, ExError, is_ex};
 use lexing::{LineState, REGION_LINES};
 pub use marks::MarkNotice;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -152,6 +155,8 @@ pub struct Editor {
     /// What the last search had to say, until the app takes it.
     search_notice: Option<SearchNotice>,
     search_work: SearchWork,
+    /// The last `:s`, for `:&`, `&` and `g&`.
+    last_sub: Option<ex::LastSub>,
     marks: marks::Marks,
     /// Why the last jump to a mark did not happen, until the app takes it.
     mark_notice: Option<MarkNotice>,
@@ -187,8 +192,11 @@ impl Editor {
         let mut regs = registers::Registers::default();
         // Vim's `".` starts empty, not unset.
         regs.set_inserted(String::new());
+        let lines: Vec<String> = text.split('\n').map(str::to_string).collect();
+        // Vim opens a text on its first line's first non-blank.
+        let start = (0, buffer::graphemes(&lines[0]).iter().position(|g| buffer::class(g) != 0).unwrap_or(0));
         Self {
-            lines: text.split('\n').map(str::to_string).collect(),
+            lines,
             row: 0,
             col: 0,
             want_x: None,
@@ -216,7 +224,8 @@ impl Editor {
             hl: false,
             search_notice: None,
             search_work: SearchWork::default(),
-            marks: marks::Marks::default(),
+            last_sub: None,
+            marks: marks::Marks::new(start),
             mark_notice: None,
             mark_hint: None,
             splice_at: (0, 0),
@@ -552,6 +561,26 @@ impl Editor {
             return self.drag_select((r, 0), (r, 0));
         }
         self.visual_span(r, 0, n - 1);
+    }
+
+    /// The range the `:` line starts with, as Vim puts it there: `'<,'>` in Visual mode
+    /// (which ends, the cursor going to the selection's start as for an operator), `.,.+2`
+    /// after a count of 3; else nothing. A command being typed is dropped.
+    pub fn cmdline_range(&mut self) -> String {
+        let (n, explicit) = self.cmd.count();
+        self.cmd = vim::Pending::default();
+        self.close_prompt();
+        if self.mode == Mode::Visual {
+            let to = self.selection_start();
+            self.exit_visual();
+            self.set_pos(to.0, to.1);
+            return "'<,'>".to_string();
+        }
+        match (explicit, n) {
+            (false, _) => String::new(),
+            (true, 1) => ".".to_string(),
+            (true, n) => format!(".,.+{}", n - 1),
+        }
     }
 
     /// Lines shown by the last render.

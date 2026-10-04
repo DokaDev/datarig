@@ -16,10 +16,22 @@ pub(super) fn ctrl(c: char) -> KeyEvent {
 
 /// Type `keys`: characters, `\n` Enter, `\x1b` Esc, `\x08` Backspace, and Vim's notation
 /// `<Esc>`, `<CR>`, `<BS>`, `<Del>`, `<Tab>`, `<Left>`, `<Right>`, `<Up>`, `<Down>`,
-/// `<Home>`, `<End>`, `<C-x>`.
+/// `<Home>`, `<End>`, `<C-x>`. `:` up to `<CR>` in Normal or Visual mode is an Ex command.
 pub(super) fn typ(e: &mut Editor, keys: &str) {
     let mut rest = keys;
     while let Some(c) = rest.chars().next() {
+        // `:` and a command up to `<CR>`, as the app's command line hands it over.
+        if c == ':'
+            && e.mode != Mode::Insert
+            && !e.awaiting_key()
+            && !e.searching()
+            && let Some(end) = rest.find("<CR>")
+        {
+            let line = e.cmdline_range() + &rest[1..end];
+            let _ = e.ex(&line);
+            rest = &rest[end + 4..];
+            continue;
+        }
         if c == '<'
             && let Some(end) = rest.find('>')
         {
@@ -81,6 +93,37 @@ pub(super) fn check(cases: &[Case]) {
                 .push(format!("{keys:?} on {text:?} at {cursor:?}: {have:?}, not {:?}", (want, want_cursor, want_reg)));
         }
         assert_eq!(e.len_bytes(), e.text().len());
+    }
+    assert!(failed.is_empty(), "{} of {} cases:\n{}", failed.len(), cases.len(), failed.join("\n"));
+}
+
+/// `(text, cursor, keys, text after, cursor after, marks after)`: a mark's position, or `None`
+/// when it is not set.
+pub(super) type MarkCase = (
+    &'static str,
+    (usize, usize),
+    &'static str,
+    &'static str,
+    (usize, usize),
+    &'static [(char, Option<(usize, usize)>)],
+);
+
+/// Run each case from a fresh editor and compare the text, the cursor and the marks; the
+/// failures are listed together.
+pub(super) fn check_marks(cases: &[MarkCase]) {
+    let mut failed = Vec::new();
+    for &(text, cursor, keys, want, want_cursor, want_marks) in cases {
+        let mut e = at(text, cursor);
+        typ(&mut e, keys);
+        let marks: Vec<(char, Option<(usize, usize)>)> =
+            want_marks.iter().map(|&(c, _)| (c, e.marks.get(c).ok())).collect();
+        let have = (e.text(), (e.row, e.col), marks, e.mode);
+        if have != (want.to_string(), want_cursor, want_marks.to_vec(), Mode::Normal) {
+            failed.push(format!(
+                "{keys:?} on {text:?} at {cursor:?}: {have:?}, not {:?}",
+                (want, want_cursor, want_marks)
+            ));
+        }
     }
     assert!(failed.is_empty(), "{} of {} cases:\n{}", failed.len(), cases.len(), failed.join("\n"));
 }

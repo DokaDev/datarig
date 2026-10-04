@@ -206,6 +206,8 @@ pub enum CommandItem {
     Command(usize),
     /// A completion of the argument of the command `command` (index into `COMMANDS`).
     Arg { command: usize, arg: command::ArgCompletion },
+    /// The text typed, as an editor command (a line number, `:s`).
+    Ex,
 }
 
 /// The `:` command line: an input line and the matching commands, arguments and actions (a

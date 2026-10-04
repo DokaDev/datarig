@@ -68,7 +68,9 @@ pub fn render() -> String {
          Neovim's built-in commenting does: `gcc` (with a count), `gc` with a motion or text object and \
          `gc` in Visual mode take whole lines; when every line that is not blank starts with `--` they \
          lose it, otherwise each gets `-- ` after the smallest indent (a blank line `--`), and `.` \
-         repeats it; Visual \
+         repeats it; editor commands on the `:` line (see the end); `&` runs the last `:s` again on \
+         the cursor's line with its flags (as Neovim's `&`, Vim's `:&&`) and `g&` on every line with \
+         the last search pattern; Visual \
          mode by character (`v`) and by line (`V`) with the motions and text objects, `y d x c`, `Y D X \
          C S` (whole lines), `r J gJ u U ~ > <`, `o` (the other end) and `p P` (a register in place of the \
          selection; `P` keeps the replaced text out of the registers); Visual mode by block (`Ctrl+V`; \
@@ -133,6 +135,26 @@ fn commands(s: &mut String) {
          pick an entry, `Enter` runs it (a command that still needs its argument is completed instead), `Esc` or \
          `Backspace` on an empty line closes. Text that is not a command searches the actions by name. A command \
          that cannot run shows an error and the line stays open.\n\n",
+    );
+    s.push_str(
+        "Editor commands (from the editor, `:` starts the line with `'<,'>` in Visual mode and with \
+         `.,.+2` after a count of 3, as Vim does; the command runs in the active tab's editor):\n\n\
+         - A line range alone goes to its last line (the first non-blank): `:12`, `:$`, `:+3`, `:-`, \
+         `:'a`. Addresses are a number, `.`, `$`, `'x` (a mark: `'a`-`'z`, `'<`, `'>`, `''`, `'.`), each \
+         with `+n` / `-n`; `a,b`, `a;b` (the second counted from the first) and `%` (every line).\n\
+         - `:[range]s/pattern/replacement/[flags]` (`:substitute`) replaces in the range's lines (the \
+         cursor's line without one) as one undo step; the cursor goes to the last line changed. The \
+         pattern is a Rust regular expression, as in search (an empty one is the last search's), and \
+         becomes the last search. The replacement is Vim's: `&` or `\\0` the match, `\\1`-`\\9` a group \
+         (an absent one is empty), `~` the previous replacement, `\\r` a line break (`\\n` too; in Vim \
+         it is a NUL), `\\t` a tab, `\\u` `\\l` the next character upper or lower case, `\\U` `\\L` up \
+         to `\\E` or `\\e`, a backslash before any other character that character (`\\&`, `\\~`, `\\\\`, \
+         the delimiter); `$1` is plain text. Flags: `g` (every match in a line), `i` / `I` (ignore \
+         case, or not), `e` (no error when nothing matches), `&` first (the last flags again); `c` \
+         (confirm) is not supported and says so. Any delimiter that is not a letter, digit, blank, \
+         `\\`, `\"` or `|` works (`:s#a/b#c#`). `:s` alone and `:&` repeat the last `:s` without its \
+         flags, `:&&` with them. Nothing matched: \"Pattern not found\". An editor command closes the line; \
+         what went wrong is said in the status bar.\n\n",
     );
     s.push_str("| Command | Aliases | Description |\n|---|---|---|\n");
     for c in command::COMMANDS {

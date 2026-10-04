@@ -300,6 +300,8 @@ impl Editor {
             (Token::Replace(c), None) => self.replace_chars(c, n),
             (Token::Mark(c), None) => self.set_mark(c),
             (Token::G('J'), None) => self.join_lines(self.row, n, false),
+            (Token::G('&'), None) => self.sub_again(true),
+            (Token::Key('&'), None) => self.sub_again(false),
             (Token::Key(c), None) => self.command(c, n, explicit),
             _ => EdEvent::None,
         }
@@ -668,9 +670,11 @@ impl Editor {
         self.set_pos(row, col);
     }
 
-    /// `u` / `Ctrl+R`, `n` times.
+    /// `u` / `Ctrl+R`, `n` times. Where the cursor was becomes the context mark, as for a
+    /// jump (Vim).
     fn undo_redo(&mut self, undo: bool, n: usize) -> EdEvent {
         self.rec.skip();
+        self.marks.set_pc((self.row, self.col));
         let mut any = false;
         for _ in 0..n {
             if !self.restore(undo) {

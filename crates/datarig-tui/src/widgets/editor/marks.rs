@@ -148,14 +148,12 @@ pub(super) struct Marks {
     change: Option<Pos>,
 }
 
-impl Default for Marks {
-    fn default() -> Self {
-        // A new text's context mark is its first line, as in Vim.
-        Marks { named: [None; 26], visual: None, pending: None, pc: Some((0, 0)), prev_pc: None, change: None }
-    }
-}
-
 impl Marks {
+    /// The marks of a new text: its context mark is where the cursor starts, as in Vim.
+    pub(super) fn new(start: Pos) -> Self {
+        Marks { named: [None; 26], visual: None, pending: None, pc: Some(start), prev_pc: None, change: None }
+    }
+
     /// The position of mark `c`. A Visual mark by line has the column `usize::MAX` at the
     /// line's end.
     pub(super) fn get(&self, c: char) -> Result<Pos, MarkNotice> {

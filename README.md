@@ -124,6 +124,11 @@ Everything below works today, with PostgreSQL.
   back to where the last jump left from, `'<` `'>` for the last Visual selection and `'.` for the
   last change; marks follow their lines through edits and come back on undo. `gc` comments lines
   out with `-- ` or back in as Neovim does (`gcc`, `gc{motion}`, `gc` in Visual mode).
+  On the `:` line the editor takes a line number (`:12`, `:$`, `:'a`) and `:s`
+  (`:%s/old/new/g`, `:'<,'>s/^/-- /`, `:&&`, and `&` / `g&` in Normal mode): the pattern is a
+  Rust regular expression as in search, the replacement Vim's (`&`, `\1`, `\r`, `\u`, `~`; `$`
+  is plain text), flags `g` `i` `I` `e` (`c`, confirm, is not supported). One `:s` is one undo
+  step.
   Macros are not there yet (their keys are reserved). Commands keep working with a
   Korean (2-Set) input source: the jamo are read as the QWERTY keys they sit on, and the
   character `f`, `t` or `r` waits for is taken as typed. The supported keys are listed in
@@ -182,7 +187,7 @@ Planned, in no particular order and with no dates:
 - TLS connections (today every connection is plain TCP; use an SSH tunnel across untrusted
   networks, and servers that require TLS cannot be reached yet)
 - A server monitor (sessions, locks, activity)
-- More of vim: `gv`, macros, `:s`
+- More of vim: `gv`, macros, Ex commands other than `:{n}` and `:s` (`:d`, `:g`, …)
 - DDL view of tables and other objects
 - Query profiling and charts
 - Multi-hop SSH and importing hosts from `~/.ssh/config`

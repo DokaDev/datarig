@@ -301,16 +301,22 @@ impl Editor {
         self.recase_span(case, span, to)
     }
 
-    /// `gc` on the selected lines; the cursor goes to the selection's start (by line, the
-    /// first line's start, or the cursor's column when the cursor is on it), as `y` puts it.
-    fn visual_comment(&mut self) -> EdEvent {
-        self.record_selection();
-        let (a, b) = self.visual_ends();
-        let to = match self.sel {
+    /// Where an operator leaves the cursor: the selection's start (by line, the first line's
+    /// start, or the cursor's column when the cursor is on it).
+    pub(super) fn selection_start(&self) -> (usize, usize) {
+        let (a, _) = self.visual_ends();
+        match self.sel {
             Sel::Lines if self.row < self.anchor.0 => (a.0, self.col),
             Sel::Lines => (a.0, 0),
             _ => a,
-        };
+        }
+    }
+
+    /// `gc` on the selected lines; the cursor goes to the selection's start, as `y` puts it.
+    fn visual_comment(&mut self) -> EdEvent {
+        self.record_selection();
+        let (a, b) = self.visual_ends();
+        let to = self.selection_start();
         self.mode = Mode::Normal;
         self.comment_lines(a.0, b.0, to)
     }

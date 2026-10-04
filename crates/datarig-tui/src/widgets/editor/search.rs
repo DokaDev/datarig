@@ -34,6 +34,12 @@ pub(super) struct Last {
     forward: bool,
 }
 
+impl Last {
+    pub(super) fn forward(&self) -> bool {
+        self.forward
+    }
+}
+
 /// What a search has to say, for the app to show.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SearchNotice {
@@ -337,7 +343,7 @@ impl Editor {
     }
 
     /// Make `re` the last search (and the `"/` register); the highlight comes back on.
-    fn set_search(&mut self, re: Regex, forward: bool) {
+    pub(super) fn set_search(&mut self, re: Regex, forward: bool) {
         self.regs.set_search(re.as_str().to_string());
         self.last_search = Some(Last { re, forward });
         self.hl = true;
