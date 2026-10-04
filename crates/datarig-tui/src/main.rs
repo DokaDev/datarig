@@ -152,10 +152,16 @@ async fn run(
         }
         redraw = !app.take_idle_event();
         if let Some(effect) = app.take_effect() {
-            // Stopped first, so it reads none of the keys meant for the editor or the shell;
-            // a new one starts after (keys that arrive meanwhile wait in the terminal).
+            // Stopped first, so it reads none of the keys meant for the editor or the shell; a
+            // new one starts after. (Keys read together with the one that asked for this, a
+            // fast paste or typing ahead, are delivered after it.)
             drop(events);
-            handover(&mut app, effect, enhanced, &mut signals)?;
+            if let Err(e) = handover(&mut app, effect, enhanced, &mut signals).await {
+                // The terminal is gone (it hung up while the editor ran): write what can be
+                // written, the editor's text included, as on SIGHUP.
+                app.quit_on_signal();
+                return Err(e);
+            }
             events = EventStream::new();
             // Everything is drawn again, the cursor's shape included: on a cleared screen, by
             // a terminal whose last frame is blank (`Terminal::clear` would ask the terminal
@@ -209,17 +215,17 @@ async fn wait(
 
 /// Do `effect` with the terminal handed over: the external editor or a suspend. The app hears
 /// what came of it. `Err` only when the terminal could not be taken back.
-fn handover(app: &mut App, effect: Effect, enhanced: bool, signals: &mut Signals) -> io::Result<()> {
+async fn handover(app: &mut App, effect: Effect, enhanced: bool, signals: &mut Signals) -> io::Result<()> {
     match effect {
         Effect::Edit { text, dir } => {
-            let env = |k: &str| std::env::var_os(k).map(|v| v.to_string_lossy().into_owned());
-            let edited = match external::editor_command(env) {
-                Ok(cmd) => external::edit(dir.as_deref(), &text, &cmd, &mut Term { enhanced })?,
-                Err(f) => Edited::Failed(f),
+            let (edited, reclaimed) = match external::editor_command(|k: &str| std::env::var_os(k)) {
+                Ok(cmd) => external::edit(dir.as_deref(), &text, &cmd, &mut Term { enhanced }),
+                Err(f) => (Edited::Failed(f), Ok(())),
             };
             // Ctrl+C or Ctrl+\ in the editor reached this process too: they were the editor's.
-            signals.drop_interrupts();
+            signals.drop_interrupts().await;
             app.external_edit_done(edited);
+            reclaimed?;
         }
         #[cfg(unix)]
         Effect::Suspend => {
@@ -236,6 +242,10 @@ fn handover(app: &mut App, effect: Effect, enhanced: bool, signals: &mut Signals
     }
     Ok(())
 }
+
+/// How long after the external editor SIGINT and SIGQUIT still count as its own.
+#[cfg(unix)]
+const INTERRUPT_GRACE: std::time::Duration = std::time::Duration::from_millis(50);
 
 /// The binary's terminal, handed to the external editor and taken back.
 struct Term {
@@ -292,11 +302,18 @@ impl Signals {
         std::future::pending::<()>().await
     }
 
-    /// Forget the SIGINT and SIGQUIT received so far.
-    fn drop_interrupts(&mut self) {
+    /// Forget the SIGINT and SIGQUIT received so far. One that came just before may still be
+    /// on its way from the signal handler to its stream, so they are taken for a short while.
+    async fn drop_interrupts(&mut self) {
         #[cfg(unix)]
-        for s in &mut self.interrupt {
-            while let Some(Some(())) = futures::FutureExt::now_or_never(s.recv()) {}
+        {
+            let until = tokio::time::Instant::now() + INTERRUPT_GRACE;
+            loop {
+                let each = self.interrupt.iter_mut().map(|s| Box::pin(s.recv()));
+                if tokio::time::timeout_at(until, futures::future::select_all(each)).await.is_err() {
+                    break;
+                }
+            }
         }
     }
 }

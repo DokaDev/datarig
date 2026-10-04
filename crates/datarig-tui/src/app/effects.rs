@@ -139,6 +139,7 @@ fn failure(f: EditFailure) -> Msg {
     match f {
         EditFailure::NoStateDir => Msg::Label(Label::ExternalNoStateDir),
         EditFailure::File(error) => Msg::ExternalFile { error },
+        EditFailure::Terminal(error) => Msg::ExternalTerminal { error },
         EditFailure::Command { var, error } => Msg::ExternalCommand { var: var.to_string(), error },
         EditFailure::Spawn { program, error } => Msg::ExternalSpawn { program, error },
         EditFailure::Exit { program, how: Ended::Code(code) } => {

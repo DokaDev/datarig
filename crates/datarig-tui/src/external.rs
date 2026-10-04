@@ -11,6 +11,7 @@
 //! The binary hands the terminal over around the editor ([`Handover`]); tests use a fake one
 //! and a script in place of the editor.
 
+use std::ffi::OsString;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -36,6 +37,8 @@ pub enum EditFailure {
     NoStateDir,
     /// The file for the editor could not be made.
     File(String),
+    /// The terminal could not be handed to the editor (it did not run).
+    Terminal(String),
     /// `$VISUAL` / `$EDITOR` does not split into words (an open quote).
     Command { var: &'static str, error: String },
     /// The editor did not start.
@@ -76,10 +79,13 @@ pub trait Handover {
 }
 
 /// The editor `env` names: `$VISUAL`, else `$EDITOR`, else [`DEFAULT_EDITOR`]. An empty or blank
-/// variable counts as unset; one that does not split is an error (it is not skipped).
-pub fn editor_command(env: impl Fn(&str) -> Option<String>) -> Result<EditorCommand, EditFailure> {
+/// variable counts as unset; one that is not UTF-8 or does not split is an error (it is not
+/// skipped).
+pub fn editor_command(env: impl Fn(&str) -> Option<OsString>) -> Result<EditorCommand, EditFailure> {
     for var in ["VISUAL", "EDITOR"] {
         let Some(value) = env(var) else { continue };
+        let value =
+            value.into_string().map_err(|_| EditFailure::Command { var, error: "not valid UTF-8".to_string() })?;
         let words = shell_words::split(&value).map_err(|e| EditFailure::Command { var, error: e.to_string() })?;
         let mut words = words.into_iter();
         if let Some(program) = words.next() {
@@ -89,34 +95,33 @@ pub fn editor_command(env: impl Fn(&str) -> Option<String>) -> Result<EditorComm
     Ok(EditorCommand { var: None, program: DEFAULT_EDITOR.to_string(), args: Vec::new() })
 }
 
-/// Edit `text` with `cmd` in a new file under `dir` (`None`: there is no state directory).
-/// `Err` only when the terminal could not be taken back; everything else is an [`Edited`].
-pub fn edit(dir: Option<&Path>, text: &str, cmd: &EditorCommand, term: &mut impl Handover) -> io::Result<Edited> {
-    let Some(dir) = dir else { return Ok(Edited::Failed(EditFailure::NoStateDir)) };
+/// Edit `text` with `cmd` in a new file under `dir` (`None`: there is no state directory):
+/// what came back, and whether the terminal was taken back. What the editor saved is read
+/// even when the terminal could not be taken back (the program then ends, and saves it).
+pub fn edit(dir: Option<&Path>, text: &str, cmd: &EditorCommand, term: &mut impl Handover) -> (Edited, io::Result<()>) {
+    let Some(dir) = dir else { return (Edited::Failed(EditFailure::NoStateDir), Ok(())) };
     let written = format!("{text}\n");
     let file = match TempFile::create(dir, written.as_bytes()) {
         Ok(f) => f,
-        Err(e) => return Ok(Edited::Failed(EditFailure::File(e.to_string()))),
+        Err(e) => return (Edited::Failed(EditFailure::File(e.to_string())), Ok(())),
     };
     let mut command = Command::new(&cmd.program);
     command.args(&cmd.args).arg(&file.path);
-    term.release()?;
-    let status = command.status();
-    term.reclaim()?;
-    let status = match status {
-        Ok(s) => s,
-        Err(e) => {
-            return Ok(Edited::Failed(EditFailure::Spawn { program: cmd.program.clone(), error: e.to_string() }));
-        }
-    };
-    if !status.success() {
-        return Ok(Edited::Failed(EditFailure::Exit { program: cmd.program.clone(), how: ended(status) }));
+    if let Err(e) = term.release() {
+        let failed = Edited::Failed(EditFailure::Terminal(e.to_string()));
+        return (failed, term.reclaim());
     }
-    let bytes = match fs::read(&file.path) {
-        Ok(b) => b,
-        Err(e) => return Ok(Edited::Failed(EditFailure::Read(e.to_string()))),
+    let status = command.status();
+    let reclaimed = term.reclaim();
+    let edited = match status {
+        Err(e) => Edited::Failed(EditFailure::Spawn { program: cmd.program.clone(), error: e.to_string() }),
+        Ok(s) if !s.success() => Edited::Failed(EditFailure::Exit { program: cmd.program.clone(), how: ended(s) }),
+        Ok(_) => match fs::read(&file.path) {
+            Ok(bytes) => read_back(text, written.as_bytes(), bytes),
+            Err(e) => Edited::Failed(EditFailure::Read(e.to_string())),
+        },
     };
-    Ok(read_back(text, written.as_bytes(), bytes))
+    (edited, reclaimed)
 }
 
 /// What the file holding `written` (the text `text` and a line break) says now.
@@ -153,7 +158,9 @@ impl TempFile {
         static NEXT: AtomicU64 = AtomicU64::new(0);
         private_dir(dir)?;
         let n = NEXT.fetch_add(1, Ordering::SeqCst);
-        let path = dir.join(format!("query-{}-{n}.sql", std::process::id()));
+        // The time too: a file left by a process that was killed may have this process's id.
+        let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+        let path = dir.join(format!("query-{}-{nanos}-{n}.sql", std::process::id()));
         let mut opts = fs::OpenOptions::new();
         opts.write(true).create_new(true);
         #[cfg(unix)]

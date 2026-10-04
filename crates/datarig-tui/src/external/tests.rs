@@ -1,8 +1,9 @@
 use super::*;
 use std::collections::HashMap;
+use std::ffi::OsString;
 
-fn env(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<String> {
-    let map: HashMap<String, String> = vars.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
+fn env(vars: &[(&str, &str)]) -> impl Fn(&str) -> Option<OsString> {
+    let map: HashMap<String, OsString> = vars.iter().map(|(k, v)| (k.to_string(), OsString::from(v))).collect();
     move |k| map.get(k).cloned()
 }
 
@@ -42,6 +43,16 @@ fn a_variable_that_does_not_split_is_an_error() {
     assert!(matches!(err, EditFailure::Command { var: "VISUAL", .. }), "{err:?}");
 }
 
+/// A variable that is not UTF-8 is said, not mangled into another program's name.
+#[cfg(unix)]
+#[test]
+fn a_variable_that_is_not_utf8_is_an_error() {
+    use std::os::unix::ffi::OsStringExt;
+    let bad = OsString::from_vec(vec![b'v', 0xff]);
+    let err = editor_command(|k: &str| (k == "EDITOR").then(|| bad.clone())).unwrap_err();
+    assert_eq!(err, EditFailure::Command { var: "EDITOR", error: "not valid UTF-8".into() });
+}
+
 #[test]
 fn what_the_editor_saved_comes_back_without_the_last_line_break() {
     let w = "SELECT 1\n".as_bytes();
@@ -59,7 +70,9 @@ fn what_the_editor_saved_comes_back_without_the_last_line_break() {
 fn without_a_state_directory_nothing_runs() {
     let mut term = FakeTerm::default();
     let cmd = EditorCommand { var: None, program: "false".into(), args: vec![] };
-    assert_eq!(edit(None, "x", &cmd, &mut term).unwrap(), Edited::Failed(EditFailure::NoStateDir));
+    let (out, reclaimed) = edit(None, "x", &cmd, &mut term);
+    assert_eq!(out, Edited::Failed(EditFailure::NoStateDir));
+    assert!(reclaimed.is_ok());
     assert_eq!(term.calls, Vec::<&str>::new());
 }
 
@@ -70,12 +83,16 @@ struct FakeTerm {
     calls: Vec<&'static str>,
     watch: Option<PathBuf>,
     seen: Vec<(PathBuf, Vec<u8>, u32)>,
+    fail_release: bool,
     fail_reclaim: bool,
 }
 
 impl Handover for FakeTerm {
     fn release(&mut self) -> io::Result<()> {
         self.calls.push("release");
+        if self.fail_release {
+            return Err(io::Error::other("no terminal"));
+        }
         if let Some(dir) = &self.watch {
             for e in fs::read_dir(dir)? {
                 let p = e?.path();
@@ -117,7 +134,8 @@ mod scripts {
     fn run(root: &Path, text: &str, body: &str) -> (Edited, FakeTerm) {
         let dir = root.join("state").join("edit");
         let mut term = FakeTerm { watch: Some(dir.clone()), ..Default::default() };
-        let out = edit(Some(&dir), text, &script(root, body), &mut term).unwrap();
+        let (out, reclaimed) = edit(Some(&dir), text, &script(root, body), &mut term);
+        reclaimed.unwrap();
         (out, term)
     }
 
@@ -177,7 +195,7 @@ mod scripts {
         let mut cmd = script(&root, &body);
         cmd.args.extend(["-w".to_string(), "two words".to_string()]);
         let dir = root.join("state").join("edit");
-        let out = edit(Some(&dir), "x", &cmd, &mut FakeTerm::default()).unwrap();
+        let (out, _) = edit(Some(&dir), "x", &cmd, &mut FakeTerm::default());
         assert_eq!(out, Edited::Unchanged);
         let args = fs::read_to_string(&log).unwrap();
         let parts: Vec<&str> = args.trim_end_matches('|').split('|').collect();
@@ -197,7 +215,7 @@ mod scripts {
             args: vec![],
         };
         let mut term = FakeTerm { watch: Some(dir.clone()), ..Default::default() };
-        let out = edit(Some(&dir), "x", &cmd, &mut term).unwrap();
+        let (out, _) = edit(Some(&dir), "x", &cmd, &mut term);
         assert!(matches!(out, Edited::Failed(EditFailure::Spawn { .. })), "{out:?}");
         assert_eq!(term.calls, ["release", "reclaim"]);
         assert!(!term.seen[0].0.exists(), "removed");
@@ -211,20 +229,40 @@ mod scripts {
         fs::write(root.join("state"), "a file").unwrap();
         let dir = root.join("state").join("edit");
         let mut term = FakeTerm::default();
-        let out = edit(Some(&dir), "x", &script(&root, "exit 0\n"), &mut term).unwrap();
+        let (out, _) = edit(Some(&dir), "x", &script(&root, "exit 0\n"), &mut term);
         assert!(matches!(out, Edited::Failed(EditFailure::File(_))), "{out:?}");
         assert!(term.calls.is_empty());
         fs::remove_dir_all(&root).unwrap();
     }
 
-    /// A terminal that cannot be taken back ends the program (an error); the file goes anyway.
+    /// A terminal that cannot be taken back is an error (the program ends), but what the
+    /// editor saved still comes back, so the program can save it; the file goes anyway.
     #[test]
-    fn a_terminal_that_cannot_be_taken_back_is_an_error() {
+    fn a_terminal_that_cannot_be_taken_back_still_brings_the_text_back() {
         let root = scratch("reclaim");
         let dir = root.join("state").join("edit");
         let mut term = FakeTerm { watch: Some(dir.clone()), fail_reclaim: true, ..Default::default() };
-        assert!(edit(Some(&dir), "x", &script(&root, "exit 0\n"), &mut term).is_err());
+        let (out, reclaimed) = edit(Some(&dir), "x", &script(&root, "printf 'y\\n' > \"$1\"\n"), &mut term);
+        assert!(reclaimed.is_err());
+        assert_eq!(out, Edited::Changed("y".into()));
         assert!(!term.seen[0].0.exists());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A terminal that cannot be given away: the editor does not run, it is taken back.
+    #[test]
+    fn a_terminal_that_cannot_be_given_away_runs_nothing() {
+        let root = scratch("release");
+        let dir = root.join("state").join("edit");
+        let ran = root.join("ran");
+        let mut term = FakeTerm { fail_release: true, ..Default::default() };
+        let body = format!("touch '{}'\n", ran.display());
+        let (out, reclaimed) = edit(Some(&dir), "x", &script(&root, &body), &mut term);
+        assert!(matches!(out, Edited::Failed(EditFailure::Terminal(_))), "{out:?}");
+        assert!(reclaimed.is_ok());
+        assert_eq!(term.calls, ["release", "reclaim"]);
+        assert!(!ran.exists());
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 0, "the file is removed");
         fs::remove_dir_all(&root).unwrap();
     }
 }

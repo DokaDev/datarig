@@ -1187,6 +1187,7 @@
 "external.stale" = "편집기가 열려 있는 동안 탭이 바뀌어, 편집한 텍스트를 새 콘솔에 열었습니다"
 "external.no_state_dir" = "편집기용 파일을 둘 상태 디렉터리가 없어(홈 디렉터리를 모름) 아무것도 열지 않았습니다"
 "external.file" = "편집기용 파일을 쓰지 못했습니다: {error}"
+"external.terminal" = "편집기에 터미널을 넘기지 못했습니다: {error}"
 "external.command" = "${var} 값을 실행할 명령으로 읽을 수 없습니다: {error}"
 "external.spawn" = "편집기 {program}을(를) 시작하지 못했습니다: {error} ($VISUAL이나 $EDITOR를 설정하세요)"
 "external.exit_code" = "편집기 {program}이(가) 종료 코드 {code}로 끝나 텍스트를 바꾸지 않았습니다"

@@ -1190,6 +1190,7 @@
 "external.stale" = "The tab changed while the editor was open: the edited text is in a new console"
 "external.no_state_dir" = "No state directory for the editor's file (no home directory is known): nothing was opened"
 "external.file" = "Could not write the file for the editor: {error}"
+"external.terminal" = "Could not hand the terminal to the editor: {error}"
 "external.command" = "${var} is not a command that can run: {error}"
 "external.spawn" = "Could not start the editor {program}: {error} (set $VISUAL or $EDITOR)"
 "external.exit_code" = "The editor {program} ended with exit code {code}: the text is unchanged"

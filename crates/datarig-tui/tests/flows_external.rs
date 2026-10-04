@@ -136,6 +136,10 @@ fn a_failure_keeps_the_text_and_says_why() {
         ),
         (EditFailure::File("Permission denied".into()), "Could not write the file for the editor: Permission denied"),
         (EditFailure::NoStateDir, "No state directory for the editor's file"),
+        (
+            EditFailure::Terminal("Input/output error".into()),
+            "Could not hand the terminal to the editor: Input/output error",
+        ),
     ];
     for (failure, said) in cases {
         let mut h = editor_with("SELECT 1");
