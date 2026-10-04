@@ -79,9 +79,11 @@ struct TableRef {
     alias: Option<String>,
 }
 
+/// The name a token stands for: a quoted one as written, a bare one folded to lower case as
+/// the server folds it (ASCII letters only).
 fn unquote(tok: &Token, src: &str) -> String {
     let t = tok.text(src);
-    if tok.kind == Tok::QuotedIdent { t.trim_matches('"').replace("\"\"", "\"") } else { t.to_string() }
+    if tok.kind == Tok::QuotedIdent { t.trim_matches('"').replace("\"\"", "\"") } else { t.to_ascii_lowercase() }
 }
 
 fn is_name(t: &Token) -> bool {
@@ -538,10 +540,19 @@ fn select_list_names(body: &[&Token], src: &str) -> Vec<String> {
             if !is_name(last) {
                 return None;
             }
-            let chain = item.iter().enumerate().all(|(i, t)| if i % 2 == 0 { is_name(t) } else { t.kind == Tok::Dot });
+            // A column reference (`x`, `t.x`), `… AS x`, or `x` right after a name, a
+            // literal or `)` that ends what comes before it (`t.y x`, `count(*) n`, `1 one`).
+            let chain = |s: &[&Token]| {
+                s.iter().enumerate().all(|(i, t)| if i % 2 == 0 { is_name(t) } else { t.kind == Tok::Dot })
+            };
             let named = match before.last() {
                 None => true,
-                Some(p) => chain || kw(p, src, &["AS"]) || !matches!(p.kind, Tok::Dot | Tok::Op | Tok::Comma),
+                Some(p) if kw(p, src, &["AS"]) => true,
+                Some(p) => {
+                    chain(item)
+                        || (chain(before) && before.len() % 2 == 1)
+                        || matches!(p.kind, Tok::RParen | Tok::Number | Tok::Str)
+                }
             };
             named.then(|| unquote(last, src))
         })

@@ -305,3 +305,23 @@ fn prefix_matches_first_then_subsequences() {
     let r = run("SELECT * FROM shop.orders WHERE ta|");
     assert_eq!(labels(&r), ["table", "status", "total_amount"], "a keyword's prefix match comes first");
 }
+
+/// A `WITH` query's bare names are folded to lower case, as the server reads them: a name
+/// written `Recent` is the relation `recent`, and is offered (and inserted) as such.
+#[test]
+fn with_query_names_fold_to_lower_case() {
+    let r = run("WITH Recent AS (SELECT id FROM shop.users) SELECT * FROM Rec|");
+    assert_eq!(labels(&r)[0], "recent");
+    let r = run("with r as (select Amount, t.Total, x AS Big, \"Kept\" from t) select r.|");
+    assert_eq!(labels(&r), ["amount", "total", "big", "\"Kept\""]);
+    let r = run("with r(A, \"B\") as (select 1, 2) select r.|");
+    assert_eq!(labels(&r), ["a", "\"B\""]);
+}
+
+/// Only a select-list item that really ends in its name gives a column: not an expression
+/// ending in a keyword's operand (`a and b`, `not c`) or a collation.
+#[test]
+fn with_query_columns_are_only_names_written_as_such() {
+    let r = run("with r as (select a and b, not c, x collate \"C\", count(*) n, 1 one, y z from t) select r.|");
+    assert_eq!(labels(&r), ["n", "one", "z"]);
+}
