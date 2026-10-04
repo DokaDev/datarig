@@ -103,6 +103,20 @@ impl App {
         let connected = profile.is_some_and(|id| self.conns.is_connected(id));
         let script = matches!(row, R::Script(_) | R::ScriptFolder(_));
         let in_database = matches!(row, R::Node(..) | R::AuxNode(..) | R::Database(..) | R::DatabaseNote(..));
+        let preset = matches!(row, R::Tunnel(_) | R::TunnelError(_) | R::TunnelUser(..));
+        let tunnels = preset || matches!(row, R::TunnelsHeader | R::TunnelsEmpty);
+        // The "Tunnels" section: a new preset, and a preset's edit, copy, delete and test.
+        if tunnels {
+            return match a {
+                Action::NewProfile | Action::NewTunnel => true,
+                Action::Explorer(ExplorerAction::Activate) => !matches!(row, R::TunnelsEmpty),
+                Action::EditProfile
+                | Action::DuplicateProfile
+                | Action::TestConnection
+                | Action::Explorer(ExplorerAction::Delete) => preset,
+                _ => false,
+            };
+        }
         match a {
             Action::Explorer(ExplorerAction::Activate) => !matches!(row, R::NewConnection | R::ScriptsEmpty),
             Action::Explorer(ExplorerAction::Refresh) => connected || script || matches!(row, R::ScriptsHeader),
@@ -165,6 +179,18 @@ impl App {
             (Action::Explorer(ExplorerAction::Move), R::Script(_)) => Label::MenuMoveQuery,
             (Action::Explorer(ExplorerAction::Move), R::ScriptFolder(_)) => Label::MenuMoveFolder,
             (Action::Explorer(ExplorerAction::Move), _) => Label::MenuMoveProfile,
+            (
+                Action::NewProfile,
+                R::TunnelsHeader | R::TunnelsEmpty | R::Tunnel(_) | R::TunnelError(_) | R::TunnelUser(..),
+            ) => Label::MenuNewTunnel,
+            (Action::EditProfile, R::Tunnel(_) | R::TunnelError(_) | R::TunnelUser(..)) => Label::MenuEditTunnel,
+            (Action::DuplicateProfile, R::Tunnel(_) | R::TunnelError(_) | R::TunnelUser(..)) => {
+                Label::MenuDuplicateTunnel
+            }
+            (Action::TestConnection, R::Tunnel(_) | R::TunnelError(_) | R::TunnelUser(..)) => Label::MenuTestTunnel,
+            (Action::Explorer(ExplorerAction::Delete), R::Tunnel(_) | R::TunnelError(_) | R::TunnelUser(..)) => {
+                Label::MenuDeleteTunnel
+            }
             _ => return None,
         };
         Some(self.i18n.label(label))

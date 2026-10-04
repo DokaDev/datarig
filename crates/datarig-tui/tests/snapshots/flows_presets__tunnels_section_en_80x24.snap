@@ -1,21 +1,21 @@
 ---
-source: crates/datarig-tui/tests/ui_snapshots.rs
+source: crates/datarig-tui/tests/flows_presets.rs
 expression: backend
 ---
 "╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
 "│  ＋ New connection   ││                                                      │" Hidden by multi-width symbols: [(4, " ")]
-"│▸ ○   local-pg        ││  No open tabs                                        │"
-"│▾ Tunnels 0           ││  Pick a connection in the explorer, or press         │"
-"│    n here makes an S…││  Ctrl+O.                                             │"
+"│▸ ⠋   local-pg SSH    ││  No open tabs                                        │"
+"│▸ ○   v6 SSH          ││  Pick a connection in the explorer, or press         │"
+"│▸ ✕   分析-replica SSH││  Ctrl+O.                                             │" Hidden by multi-width symbols: [(8, " "), (10, " ")]
+"│    SSH: the connecti…││                                                      │"
+"│▾ Tunnels 2           ││  Enter      Connect and open a console               │"
+"│  ▾ ● office  ec2-use…││  Ctrl+O     Quick connect                            │"
+"│      ⠋   local-pg    ││  Ctrl+T     New console tab                          │"
+"│      ○   v6          ││  Space t u  Reopen a closed tab                      │"
+"│  ▸ ✕ lab  ec2-user@l…││  n          New connection                           │"
+"│      SSH: the connec…││  F1         Keyboard help                            │"
+"│                      ││  :          Commands                                 │"
 "│                      ││                                                      │"
-"│                      ││  Enter      Connect and open a console               │"
-"│                      ││  Ctrl+O     Quick connect                            │"
-"│         ╭ Keychain ────────────────────────────────────────────────╮         │"
-"│         │                                                          │         │"
-"│         │ Moving saved passwords to the system keychain… (your OS  │         │"
-"│         │ may ask for permission)                                  │         │"
-"│         │                                                          │         │"
-"│         ╰─────────────────────────────────────────── q/Ctrl+C quit ╯         │"
 "│                      ││                                                      │"
 "│                      ││                                                      │"
 "│                      ││                                                      │"
@@ -25,4 +25,4 @@ expression: backend
 "│                      ││                                                      │"
 "│                      ││                                                      │"
 "╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
-"                                                                             EN "
+" ● office  ec2-user@bastion.example.com · open · 1 connection on it          EN "

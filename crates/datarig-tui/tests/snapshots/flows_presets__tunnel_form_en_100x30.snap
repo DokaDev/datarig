@@ -1,0 +1,34 @@
+---
+source: crates/datarig-tui/tests/flows_presets.rs
+expression: backend
+---
+"╭ Explorer ─────────────╮╭ Workspace ──────────────────────────────────────────────────────────────╮"
+"│  ＋ New connection    ││                                                                         │" Hidden by multi-width symbols: [(4, " ")]
+"│▸ ⠋   local-pg SSH     ││  No open tabs                                                           │"
+"│▸ ○   v6 SSH           ││  Pick a connection in the explorer, or press Ctrl+O.                    │"
+"│▸ ✕   分析-replica SSH ││                                                                         │" Hidden by multi-width symbols: [(8, " "), (10, " ")]
+"│ ╭ SSH tunnel — office ─────────────────────────────────────────────────────────────────────────╮ │"
+"│▾│  SSH tunnel                                   profiles that pick it share one SSH connection │ │"
+"│ │                                                                                              │ │"
+"│ │ Name              office                                                                     │ │"
+"│ │ Bastion           bastion.example.com                                                        │ │"
+"│ │ Port              22                                                                         │ │"
+"│ │ User              ec2-user                                                                   │ │"
+"│ │ Log in with        key file ‹password› ssh-agent  server questions                           │ │"
+"│ │ Password storage  ‹Keychain› File  Command  Env  Prompt                                      │ │"
+"│ │ SSH password                                          empty keeps what is stored; asked for… │ │"
+"│ │ Keepalive, sec                                        empty: the default                     │ │"
+"│ │ Timeout, sec                                          empty: the default                     │ │"
+"│ │                                                                                              │ │"
+"│ │                                                                                              │ │"
+"│ │ Used by           local-pg, v6                                                               │ │"
+"│ │                    Test    Save    Cancel                                                    │ │"
+"│ │                                                                                              │ │"
+"│ │                                                                                              │ │"
+"│ ╰──────────────────────────────────────── Tab/↑↓ move · Ctrl+T test · Ctrl+S save · Esc cancel ╯ │"
+"│                       ││                                                                         │"
+"│                       ││                                                                         │"
+"│                       ││                                                                         │"
+"│                       ││                                                                         │"
+"╰───────────────────────╯╰─────────────────────────────────────────────────────────────────────────╯"
+" ● office  ec2-user@bastion.example.com · open · 1 connection on it                              EN "

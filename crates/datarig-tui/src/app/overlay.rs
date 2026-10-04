@@ -56,6 +56,8 @@ pub enum ConfirmAction {
     /// Trust the host key an SSH tunnel asks about; written to datarig's
     /// known_hosts only. Cancel is the default.
     TrustHostKey,
+    /// Delete this tunnel preset (and its saved secret).
+    DeleteTunnel(datarig_core::profile::tunnel::TunnelId),
 }
 
 /// A yes/no question: `y` yes, `n`/`Esc` no; `Enter` no when the answer would lose something

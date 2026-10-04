@@ -42,6 +42,7 @@ pub mod paging;
 pub mod pane;
 mod password;
 mod persist;
+mod presets;
 pub mod profiles;
 pub mod quick;
 pub mod runlog;
@@ -85,6 +86,7 @@ use datarig_core::sql::complete::{Candidate, complete_in};
 use datarig_core::sql::split::split;
 use explorer::Explorer;
 use overlay::{Busy, Confirm, ConfirmAction, Overlay, OverlayKind, Overlays};
+pub use presets::PROBE_MAX;
 use quick::QuickPurpose;
 use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::Rect;
@@ -274,6 +276,9 @@ pub enum TestState {
     Cancelled,
     /// The password source failed before the server was asked.
     Source(SourceError),
+    /// A tunnel preset's test: what it reached through the tunnel, each address with its time
+    /// or why not (in words).
+    Reached(Vec<(String, Result<Duration, String>)>),
 }
 
 pub struct ConnTest {
@@ -283,6 +288,9 @@ pub struct ConnTest {
     abort: Option<AbortHandle>,
     /// Through the profile's SSH tunnel: how far that got.
     pub tunnel: Option<TunnelTest>,
+    /// A tunnel preset's test: after the tunnel, channels to its profiles' database addresses
+    /// are tried instead of a database.
+    pub probe: bool,
 }
 
 /// The SSH tunnel of a test connection: each stage shows while it runs,
@@ -323,6 +331,10 @@ pub enum AppEvent {
     Tunnel { profile: ProfileId, generation: u64, ev: tunnel::TunnelEvent },
     /// The tunnel of test connection `seq`.
     TestTunnel { seq: u64, ev: tunnel::TunnelEvent },
+    /// The shared connection `serial` of a tunnel preset.
+    SharedTunnel { serial: u64, ev: tunnel::TunnelEvent },
+    /// What test `seq` of a tunnel preset reached through it.
+    TestProbe { seq: u64, probes: Vec<tunnel::Probe> },
 }
 
 /// Which session a driver event comes from.
@@ -435,6 +447,10 @@ pub struct App {
     pub explorer: Explorer,
     /// All profiles (passwords excluded unless still in the file as legacy plaintext).
     pub profiles: Vec<ConnectionConfig>,
+    /// The tunnel presets (`[tunnels.<name>]`), by name.
+    pub presets: Vec<datarig_core::profile::tunnel::TunnelPreset>,
+    /// The presets' shared SSH connections.
+    pub shared: tunnel::SharedTunnels,
     pub status: Option<Notice>,
     pub transient: Option<(Notice, Instant)>,
     pub quit: bool,
@@ -553,6 +569,15 @@ pub struct App {
     pub tunnel_requests: Vec<(ProfileId, u64)>,
     /// Headless: the test connections that asked for a tunnel.
     pub test_tunnel_requests: Vec<u64>,
+    /// Headless: the shared connections of presets asked for (by serial).
+    pub shared_tunnel_requests: Vec<u64>,
+    /// A secret typed for a preset's shared connection with "save", written once it opened:
+    /// (store, secret) by serial.
+    shared_saves: std::collections::HashMap<u64, (SourceKind, String)>,
+    /// The explorer's "Tunnels" section is open.
+    pub tunnels_expanded: bool,
+    /// The presets whose profiles the explorer lists under them.
+    pub tunnels_open: std::collections::BTreeSet<datarig_core::profile::tunnel::TunnelId>,
     /// The profile form's tunnel secret, applied once its save went through.
     pending_tunnel_secret: Option<tunnel::FormSecret>,
     /// Host key questions of tunnels, the first one shown.
@@ -618,6 +643,21 @@ fn test_msg(i18n: &I18n, t: &ConnTest) -> Notice {
     if let Some(tt) = &t.tunnel {
         let host = tt.host.clone();
         match (state, tt.opened) {
+            (TestState::Running, Some(ssh)) if t.probe => {
+                return Notice::new(Msg::TestSshProbing { host, elapsed: ssh }, Level::Info);
+            }
+            (TestState::Reached(v), Some(ssh)) if v.is_empty() => {
+                return Notice::new(Msg::TestTunnelOkNoTargets { host, elapsed: ssh }, Level::Success);
+            }
+            (TestState::Reached(v), Some(ssh)) => {
+                return match reached_failures(v) {
+                    None => Notice::new(
+                        Msg::TestTunnelOk { host, elapsed: ssh, targets: reached_targets(v) },
+                        Level::Success,
+                    ),
+                    Some(error) => Notice::new(Msg::TestTunnelProbeFailed { host, elapsed: ssh, error }, Level::Error),
+                };
+            }
             (TestState::Running, None) => {
                 let stage = i18n.label(tunnel::stage_label(tt.stage.unwrap_or(datarig_ssh::tunnel::Stage::Connecting)));
                 return Notice::new(
@@ -649,7 +689,22 @@ fn test_msg(i18n: &I18n, t: &ConnTest) -> Notice {
         TestState::Timeout(d) => Notice::new(Msg::TestTimeout { elapsed: *d }, Level::Error),
         TestState::Cancelled => Notice::new(Label::TestCancelled, Level::Warning),
         TestState::Source(e) => Notice::new(password::source_error_msg(i18n, e), Level::Error),
+        TestState::Reached(v) => match reached_failures(v) {
+            None => Notice::new(Msg::TestReached { targets: reached_targets(v) }, Level::Success),
+            Some(error) => Notice::new(Msg::TestFailed { error }, Level::Error),
+        },
     }
+}
+
+/// The addresses a preset's test reached: `host:port, …`.
+fn reached_targets(v: &[(String, Result<Duration, String>)]) -> String {
+    v.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>().join(", ")
+}
+
+/// The addresses a preset's test did not reach, each with why (`None`: it reached them all).
+fn reached_failures(v: &[(String, Result<Duration, String>)]) -> Option<String> {
+    let failed: Vec<String> = v.iter().filter_map(|(t, r)| r.as_ref().err().map(|e| format!("{t}: {e}"))).collect();
+    (!failed.is_empty()).then(|| failed.join("; "))
 }
 
 /// Startup notice for a `[keymap.*]` entry that was skipped (or replaced a default).
@@ -713,6 +768,8 @@ impl App {
             tabs,
             explorer: Explorer::default(),
             profiles: cfg.connections.clone(),
+            presets: cfg.tunnels.clone(),
+            shared: tunnel::SharedTunnels::default(),
             status: status.clone(),
             transient: None,
             quit: false,
@@ -774,6 +831,10 @@ impl App {
             tunnels: None,
             tunnel_requests: Vec::new(),
             test_tunnel_requests: Vec::new(),
+            shared_tunnel_requests: Vec::new(),
+            shared_saves: std::collections::HashMap::new(),
+            tunnels_expanded: true,
+            tunnels_open: std::collections::BTreeSet::new(),
             pending_tunnel_secret: None,
             host_keys: VecDeque::new(),
             secret_waits: VecDeque::new(),
@@ -1464,6 +1525,22 @@ impl App {
             // Timed out, cancelled, or a source failed before the tunnel opened.
             (_, None, None) => whole(),
         };
+        if t.probe {
+            let probe = match (&t.state, tt.opened) {
+                (TestState::Running, None) => line(Label::TestLineProbeWaiting.into(), Level::Info),
+                (_, None) => line(Label::TestLineProbeNotRun.into(), Level::Warning),
+                (TestState::Running, Some(_)) => line(Label::TestLineProbeRunning.into(), Level::Info),
+                (TestState::Reached(v), Some(_)) if v.is_empty() => {
+                    line(Label::TestLineProbeNone.into(), Level::Success)
+                }
+                (TestState::Reached(v), Some(_)) => match reached_failures(v) {
+                    None => line(Msg::TestLineProbeOk { targets: reached_targets(v) }, Level::Success),
+                    Some(error) => line(Msg::TestLineProbeFailed { error }, Level::Error),
+                },
+                (_, Some(_)) => whole(),
+            };
+            return Some(vec![ssh, probe]);
+        }
         let db = match (&t.state, tt.opened) {
             (TestState::Running, None) => line(Label::TestLineDbWaiting.into(), Level::Info),
             (_, None) => line(Label::TestLineDbNotRun.into(), Level::Warning),
@@ -1559,6 +1636,11 @@ pub fn config_error_msg(i18n: &I18n, e: &ConfigError) -> Msg {
         }
         ConfigError::SshMissing { key, profile } => {
             Msg::ConfigErrorSshMissing { key: key.to_string(), profile: profile.clone() }
+        }
+        ConfigError::TunnelName(name) => Msg::ConfigErrorTunnelName { name: name.clone() },
+        ConfigError::DuplicateTunnelId(id) => Msg::ConfigErrorDuplicateTunnelId { id: id.clone() },
+        ConfigError::TunnelMissing { key, tunnel } => {
+            Msg::ConfigErrorTunnelMissing { key: key.to_string(), tunnel: tunnel.clone() }
         }
     }
 }

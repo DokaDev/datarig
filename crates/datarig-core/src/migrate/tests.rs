@@ -235,3 +235,22 @@ fn the_theme_survives_the_migration() {
     assert!(text.contains("theme = \"nord\""), "{text}");
     cleanup(&path);
 }
+
+/// Tunnel presets without an `id` get theirs written at launch, like profiles: a secret saved
+/// under it is found again at the next launch, whatever the preset is named then.
+#[test]
+fn tunnel_presets_get_their_ids_written() {
+    let body = "version = 2\n\n[tunnels.office] # the office bastion\nhost = \"b\"\nuser = \"u\"\nauth = \"agent\"\n";
+    let (path, cfg) = setup("tunnel-ids", body);
+    assert!(cfg.needs_migration(), "an id to write");
+    let id = cfg.tunnels[0].id;
+    let r = run(&Store::default(), &MemoryStore::new(), Input::new(&cfg));
+    assert_eq!((r.save_failed, r.final_save_failed), (None, None));
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains(&format!("[tunnels.office] # the office bastion\nid = \"{id}\"\n")), "{text}");
+    let (again, err) = config::load(Some(path.clone()));
+    assert!(err.is_none(), "{err:?}");
+    assert_eq!(again.tunnels[0].id, id);
+    assert!(!again.needs_migration());
+    cleanup(&path);
+}

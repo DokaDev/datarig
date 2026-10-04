@@ -48,6 +48,7 @@ The TUI has one screen, the workspace; dialogs sit on top of it in the overlay s
 ```
 App
 ├─ profiles, folders, last_used   the config's profiles (by id), folder tree and expanded folders
+├─ presets, shared                the tunnel presets and their shared SSH connections
 ├─ conns: ConnectionManager       ProfileId → ProfileConn (app/conn.rs)
 │    ProfileConn { meta: Option<Session>, generation, connected, connecting, error,
 │                  tree (schemas), catalog, resolved (profile + password of the attempt),
@@ -424,6 +425,16 @@ Held by CI budgets (`docs/perf.md`).
 - **The profile** (`core::profile::ssh::SshSettings`, `[connections.ssh]`): one bastion (no
   multi-hop and no `~/.ssh/config` import yet), its secret under its
   own account `profile:<id>:ssh` with the same five sources as the database password.
+- **Tunnel presets** (`core::profile::tunnel`): `TunnelPreset` (`[tunnels.<name>]`: the keys of
+  `[connections.ssh]` but `enabled`, and a stable `id`, a `TunnelId`, assigned at load and written
+  by the launch-time migration like a profile's), its secret under `tunnel:<id>` (a rename keeps
+  it). A profile names one with `tunnel = "<name>"`; `tunnel::route` says how it reaches its
+  database: `Direct`, `Inline` (its own table, on) or `Preset`, or a `RouteError` (`NotFound`: no
+  preset of that name; `Both`: a preset and its own table on), which is an error of that profile
+  (its node and status bar say it; the connect, the test and every dial stop there), never a
+  direct connection. A malformed preset (its name, a missing key, a duplicate id) is an error of
+  the file, as a profile's is. `config::save` finds a preset's table by its id (else the name it
+  was read with) and writes it under its current name, comments kept.
 - **The app** (`app/tunnel.rs`): a profile whose tunnel is on opens it once its database password
   is known (`start_connect`), or reuses its open one when the settings are the same; every
   session of the profile (`open_session`: `ConnectOptions::dialer`), its cancels and its aux
@@ -437,14 +448,47 @@ Held by CI budgets (`docs/perf.md`).
   it) and keeps the attempt's own timeout from running. Disconnect, delete, cancel and a connect
   failure that asks for nothing close the tunnel; a lost one marks the node
   (`ProfileConn::tunnel_lost`) and the next use connects again.
+- **Shared connections** (`app/tunnel/shared.rs`): the profiles of one preset share a
+  `SharedTunnel` (`App::shared`, by serial): `Opening(stage)` with the attempts waiting for it
+  (`(profile, generation)`), then `Open(handle)` with its `users`. The first attempt opens it
+  (`tunnel::Owner::Shared(serial)`: its questions and stages come back as `AppEvent::SharedTunnel`);
+  an attempt that comes while it opens waits for the same one (one host key question, one secret
+  prompt naming every profile waiting; a secret saved with the prompt's checkbox goes to the
+  preset's store once it opened); one that comes while it is open takes it at once. Each profile
+  on it holds the handle in `ProfileConn::tunnel` with `shared: Some((serial, preset))`;
+  `App::close_tunnel` lets go of it and the last one closes it. An opening no current attempt
+  waits for any more is given up (its questions dropped, a late connection closed). Its loss
+  (keepalives, closed) marks every profile on it as an own tunnel's loss does, and the preset's
+  explorer row says why (`SharedTunnels::lost`) until it opens again. A shared connection keeps
+  the settings it opened with: a preset changed while in use opens a new one for the attempts
+  that come after (`tunnel_ready` compares the settings and the preset), while the profiles on
+  the old one keep it until they connect again (the last one closes it).
+- **Presets in the app** (`app/presets.rs`): the explorer's "Tunnels" section (shown when there
+  are presets, or profiles and a config file the app can write: `RowKind::TunnelsHeader`,
+  `Tunnel`, `TunnelError`, `TunnelUser`, `TunnelsEmpty`), its state per preset
+  (`App::preset_state`: closed, opening, open with its profiles, lost). The profile form edits a
+  preset too (`FormKind::Tunnel`: its name and the SSH section's bastion fields); a profile form's
+  SSH section starts with a picker (`SshChoice`: off, a preset, this profile only). Saving a
+  preset writes the config first (a rename moves the profiles that name it along) and then its
+  secret: a typed one to its store; a store it left gives its copy to the new one (copied, read
+  back, then removed). "Save as tunnel preset" (`form.save_as_tunnel`) makes, when the profile
+  form is saved, a preset of the profile's own tunnel: one config write (the preset, and the
+  profile naming it without its own table), then the secret moves from `profile:<id>:ssh` to
+  `tunnel:<id>` (`source::rekey_copy`, then `rekey_remove`; a store that cannot be read keeps the
+  old copy). Deleting a preset asks first (the profiles that name it listed; they keep the name
+  and do not connect until another is picked), then writes the config and removes its secret.
+  A preset's test (`App::start_preset_test`) is a throwaway tunnel of its settings, then a
+  `direct-tcpip` channel opened and closed to each database address of its profiles (at most
+  `PROBE_MAX`), nothing sent (`AppEvent::TestProbe`).
 - **Test connection**: a throwaway tunnel of the form's settings; the stage while it opens, then
   its time next to the database's result (`TunnelTest`, `test_msg`).
 - **Tests**: an SSH server in the test process (`datarig-ssh/tests/tunnel.rs`: host keys, every
   login, refused channels, timeouts, keepalive loss, a scratch `ssh-agent`); a real OpenSSH bastion
   (`dev/ssh`, compose profile `ssh`, a CI step; keys made at test time by
   `make-fixture.sh`) in front of PostgreSQL and PgBouncer (`datarig-ssh/tests/bastion.rs`,
-  `datarig-tui/tests/integration_ssh.rs`); the app's flows with a recorded tunnel
-  (`flows_tunnel.rs`); round trips through the tunnel (`[rtt_ssh]` budgets); `cargo audit`.
+  `datarig-tui/tests/integration_ssh.rs`, where two profiles of one preset go through one TCP
+  connection of a counting proxy); the app's flows with a recorded tunnel (`flows_tunnel.rs`,
+  `flows_presets.rs`); round trips through the tunnel (`[rtt_ssh]` budgets); `cargo audit`.
 
 ## Decision: PostgreSQL's parser for safety classification
 

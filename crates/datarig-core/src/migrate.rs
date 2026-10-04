@@ -3,7 +3,8 @@
 //! passwords. Running it again gives the same result.
 //!
 //! 1. A version 1 file is copied to `config.toml.v1.bak` once (an existing backup is kept).
-//! 2. Profiles without an `id` already got one in memory when the file was loaded.
+//! 2. Profiles and tunnel presets without an `id` already got one in memory when the file was
+//!    loaded.
 //! 3. The file is saved with the ids first. If that fails, stop: the keychain is not touched,
 //!    this run works with the ids in memory, and the caller warns.
 //! 4. Keychain: one probe first. An unavailable store (headless Linux, WSL, …) makes the
@@ -109,7 +110,12 @@ pub fn run(store: &dyn SecretStore, file: &dyn SecretStore, input: Input) -> Rep
         config::save(
             &path,
             Settings { version, language: &language, icons, theme: &theme, default_source, prefs },
-            Some(Profiles { connections: &config.connections, folders: &config.folders, last_used: config.last_used }),
+            Some(Profiles {
+                connections: &config.connections,
+                tunnels: &config.tunnels,
+                folders: &config.folders,
+                last_used: config.last_used,
+            }),
         )
     };
     // 1. Backup of a version 1 file (never overwritten).

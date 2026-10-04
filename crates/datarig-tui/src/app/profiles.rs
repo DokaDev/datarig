@@ -1,15 +1,20 @@
 //! Connection profile form state: a large dialog with three
 //! sections. **Basic**: the driver (only registered drivers can be picked), the required fields
 //! first, the password storage selector whose field follows the chosen source, and a DSN
-//! kept in two-way sync with the fields. **SSH**: the tunnel through one
-//! bastion, off by default. **Advanced**: SSL mode, the server-side statement cache, policy name,
-//! color, icon and folder. No I/O here; `App` persists and tests.
+//! kept in two-way sync with the fields. **SSH**: the tunnel: none (the default), a tunnel
+//! preset, or one of this profile only (its bastion's fields), which "save as tunnel preset"
+//! turns into a new preset when the form is saved. **Advanced**: SSL mode, the server-side
+//! statement cache, policy name, color, icon and folder. No I/O here; `App` persists and tests.
+//!
+//! The same form edits a tunnel preset ([`FormKind::Tunnel`]): its name and the SSH section's
+//! bastion fields, nothing else.
 
 use crate::widgets::text_input::{InputResult, TextInput};
 use datarig_core::i18n::{Label, Msg};
 use datarig_core::profile::color::{self, ProfileColor};
 use datarig_core::profile::dsn::{self, Dsn, DsnError};
 use datarig_core::profile::ssh::{SshAuth, SshSettings};
+use datarig_core::profile::tunnel::{self, TunnelId, TunnelPreset};
 use datarig_core::profile::{ConnectionConfig, SSL_MODES};
 use datarig_core::secret::command;
 use datarig_core::secret::source::valid_env_name;
@@ -235,11 +240,36 @@ impl Field {
     }
 }
 
+/// What the SSH section's picker of a profile form has picked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SshChoice {
+    /// No tunnel: the database directly.
+    Off,
+    /// The tunnel preset of this name.
+    Preset(String),
+    /// A tunnel of this profile only (`[connections.ssh]`).
+    Inline,
+}
+
+/// What the form edits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FormKind {
+    Profile,
+    /// A tunnel preset with this id (a new one for a new preset or a copy); `editing`: one that
+    /// exists.
+    Tunnel {
+        id: TunnelId,
+        editing: bool,
+    },
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FieldError {
     Required,
     Port,
     NameTaken,
+    /// Not a name a tunnel preset can have (blanks around it, a control character, too long).
+    TunnelName,
     /// Not an environment variable name.
     EnvName,
     /// The command cannot be split (an unclosed quote).
@@ -254,6 +284,7 @@ impl FieldError {
             FieldError::Required => Label::ValidateRequired,
             FieldError::Port => Label::ValidatePort,
             FieldError::NameTaken => Label::ValidateNameTaken,
+            FieldError::TunnelName => Label::ValidateTunnelName,
             FieldError::EnvName => Label::ValidateEnvName,
             FieldError::CommandSyntax => Label::ValidateCommandSyntax,
             FieldError::Seconds => Label::ValidateSeconds,
@@ -290,6 +321,8 @@ pub enum FormOutcome {
 }
 
 pub struct ProfileForm {
+    /// A profile, or a tunnel preset.
+    pub kind: FormKind,
     /// Index in the profile list being edited; `None` for a new or duplicated profile.
     pub editing: Option<usize>,
     /// Name before editing (the form's title).
@@ -340,10 +373,18 @@ pub struct ProfileForm {
     /// A keychain write of the save is running: the form waits for it (at most the keychain's
     /// time limit).
     pub saving: bool,
-    /// The SSH tunnel. `ssh_had`: the profile has tunnel settings (kept when
-    /// turned off); a profile that never had any gets none until it is turned on.
+    /// The SSH tunnel. `ssh_enabled`: the profile's own (the bastion fields below);
+    /// `ssh_had`: the profile has settings of its own (kept when turned off or when a preset
+    /// is picked); a profile that never had any gets none until they are turned on.
     pub ssh_enabled: bool,
     ssh_had: bool,
+    /// The tunnel preset picked (its name); `None`: none. Never together with `ssh_enabled`.
+    pub ssh_preset: Option<String>,
+    /// The saved presets the picker offers.
+    pub presets: Vec<TunnelPreset>,
+    /// "Save as tunnel preset": a new preset of this name made of the bastion fields when the
+    /// form is saved (the profile then names it, and its own settings move into it).
+    pub new_preset: Option<String>,
     pub ssh_host: TextInput,
     pub ssh_port: TextInput,
     pub ssh_user: TextInput,
@@ -361,6 +402,8 @@ pub struct ProfileForm {
     pub ssh_key_note: Option<Msg>,
     /// Where the key file field's `[…]` button was drawn (mouse), kept by the renderer.
     pub key_button: ratatui::layout::Rect,
+    /// Where the "save as tunnel preset" button was drawn (mouse), kept by the renderer.
+    pub preset_button: ratatui::layout::Rect,
     pub focus: Field,
     pub dsn_problem: Option<DsnProblem>,
     /// Save was attempted: "required" errors are shown from now on.
@@ -396,6 +439,7 @@ impl ProfileForm {
             base.origin = None;
         }
         let mut f = Self {
+            kind: FormKind::Profile,
             editing,
             original_name: editing.map(|_| c.name.clone()),
             base,
@@ -425,6 +469,9 @@ impl ProfileForm {
             saving: false,
             ssh_enabled: c.ssh.as_ref().is_some_and(|s| s.enabled),
             ssh_had: c.ssh.is_some(),
+            ssh_preset: c.tunnel.clone(),
+            presets: Vec::new(),
+            new_preset: None,
             ssh_host: TextInput::new(c.ssh.as_ref().map_or("", |s| s.host.as_str())),
             ssh_port: TextInput::new(&c.ssh.as_ref().map_or(22, |s| s.port).to_string()),
             ssh_user: TextInput::new(c.ssh.as_ref().map_or("", |s| s.user.as_str())),
@@ -442,6 +489,7 @@ impl ProfileForm {
             ),
             ssh_key_note: None,
             key_button: Default::default(),
+            preset_button: Default::default(),
             focus: Field::Name,
             dsn_problem: None,
             attempted: false,
@@ -455,6 +503,97 @@ impl ProfileForm {
             None => f.sync_dsn(),
         }
         f
+    }
+
+    /// A form for tunnel preset `p` (`None`: a new one; `copy`: a new one with `p`'s settings
+    /// and `name`).
+    pub fn for_tunnel(p: Option<&TunnelPreset>, copy: Option<String>) -> Self {
+        let settings =
+            p.map(|p| p.settings.clone()).unwrap_or_else(|| SshSettings { enabled: true, ..SshSettings::default() });
+        let name = copy.clone().or_else(|| p.map(|p| p.name.clone())).unwrap_or_default();
+        let c = ConnectionConfig {
+            name,
+            ssh: Some(SshSettings { enabled: true, ..settings }),
+            ..ConnectionConfig::default()
+        };
+        let editing = p.is_some() && copy.is_none();
+        let mut f = Self::from_profile(&c, String::new(), None);
+        f.kind = FormKind::Tunnel { id: p.filter(|_| editing).map_or_else(TunnelId::new, |p| p.id), editing };
+        f.original_name = p.filter(|_| editing).map(|p| p.name.clone());
+        f.section = Section::Ssh;
+        f.focus = Field::Name;
+        f
+    }
+
+    /// The form edits a tunnel preset.
+    pub fn is_tunnel(&self) -> bool {
+        matches!(self.kind, FormKind::Tunnel { .. })
+    }
+
+    /// The preset the tunnel form describes (its typed secret aside).
+    pub fn to_preset(&self) -> Option<TunnelPreset> {
+        let FormKind::Tunnel { id, .. } = self.kind else { return None };
+        let name = self.name.text().trim().to_string();
+        let origin = self.original_name.clone();
+        Some(TunnelPreset { id, name, settings: SshSettings { enabled: true, ..self.ssh_settings() }, origin })
+    }
+
+    /// What the SSH section's picker offers, in order: none, each preset (the one the profile
+    /// names stays there even when no preset has that name, and a preset this form makes is
+    /// there too), then the profile's own tunnel.
+    pub fn ssh_choices(&self) -> Vec<SshChoice> {
+        let mut names: Vec<String> = self.presets.iter().map(|p| p.name.clone()).collect();
+        for extra in [self.base.tunnel.clone(), self.new_preset.clone()].into_iter().flatten() {
+            if !names.contains(&extra) {
+                names.push(extra);
+            }
+        }
+        let mut out = vec![SshChoice::Off];
+        out.extend(names.into_iter().map(SshChoice::Preset));
+        out.push(SshChoice::Inline);
+        out
+    }
+
+    /// The picker's choice.
+    pub fn ssh_choice(&self) -> SshChoice {
+        match (&self.ssh_preset, self.ssh_enabled) {
+            (Some(p), _) => SshChoice::Preset(p.clone()),
+            (None, true) => SshChoice::Inline,
+            (None, false) => SshChoice::Off,
+        }
+    }
+
+    fn set_ssh_choice(&mut self, c: SshChoice) {
+        match c {
+            SshChoice::Off => (self.ssh_preset, self.ssh_enabled) = (None, false),
+            SshChoice::Preset(p) => (self.ssh_preset, self.ssh_enabled) = (Some(p), false),
+            SshChoice::Inline => (self.ssh_preset, self.ssh_enabled) = (None, true),
+        }
+    }
+
+    fn cycle_ssh_choice(&mut self, d: isize) {
+        let all = self.ssh_choices();
+        let i = all.iter().position(|c| *c == self.ssh_choice()).unwrap_or(0) as isize;
+        let next = all[(i + d).rem_euclid(all.len() as isize) as usize].clone();
+        self.set_ssh_choice(next);
+    }
+
+    /// The preset picked, when it is a saved one.
+    pub fn picked_preset(&self) -> Option<&TunnelPreset> {
+        let name = self.ssh_preset.as_deref()?;
+        self.presets.iter().find(|p| p.name == name)
+    }
+
+    /// The preset picked is the one this form makes ("save as tunnel preset").
+    pub fn new_preset_picked(&self) -> bool {
+        self.new_preset.is_some() && self.new_preset == self.ssh_preset
+    }
+
+    /// "Save as tunnel preset" named `name`: the picker shows the preset the save makes of the
+    /// bastion fields.
+    pub fn save_as_preset(&mut self, name: &str) {
+        self.new_preset = Some(name.to_string());
+        self.set_ssh_choice(SshChoice::Preset(name.to_string()));
     }
 
     /// Put the focus on field `f`, in its section.
@@ -560,6 +699,12 @@ impl ProfileForm {
     /// The fields `Tab` visits in the current section, then the buttons: the storage
     /// selector shows only the field of its source.
     pub fn fields(&self) -> Vec<Field> {
+        if self.is_tunnel() {
+            let mut out = vec![Field::Name];
+            out.extend(self.ssh_fields());
+            out.extend(BUTTONS);
+            return out;
+        }
         if self.section == Section::Ssh {
             let mut out = self.ssh_fields();
             out.extend(BUTTONS);
@@ -582,12 +727,23 @@ impl ProfileForm {
         out
     }
 
-    /// The SSH section's fields as the tunnel is set up: the switch alone while it is off; the
-    /// key file only for a key, the secret's source and field only for a key or a password.
+    /// The SSH section's fields as the tunnel is set up: the picker alone while there is none
+    /// or a preset is picked; the key file only for a key, the secret's source and field only
+    /// for a key or a password. A tunnel form has no picker.
     pub fn ssh_fields(&self) -> Vec<Field> {
         if !self.ssh_enabled {
             return vec![Field::SshEnabled];
         }
+        if self.is_tunnel() {
+            let mut out = self.inline_fields();
+            out.retain(|f| *f != Field::SshEnabled);
+            return out;
+        }
+        self.inline_fields()
+    }
+
+    /// The SSH section's fields of a tunnel of its own (the picker first).
+    fn inline_fields(&self) -> Vec<Field> {
         let secret = self.ssh_auth.has_secret();
         let shown = match self.ssh_source {
             SourceKind::Keychain | SourceKind::File => Some(Field::SshSecret),
@@ -630,10 +786,17 @@ impl ProfileForm {
         s
     }
 
-    /// The passphrase or password typed in the SSH section for a source that stores it.
+    /// The passphrase or password typed in the SSH section for a source that stores it, while
+    /// the bastion fields are the profile's own tunnel.
     pub fn ssh_typed_secret(&self) -> Option<String> {
+        self.typed_bastion_secret().filter(|_| self.ssh_enabled)
+    }
+
+    /// The passphrase or password typed for the bastion fields, for a source that stores it
+    /// (also once they became a preset this form makes).
+    pub fn typed_bastion_secret(&self) -> Option<String> {
         let stores = matches!(self.ssh_source, SourceKind::Keychain | SourceKind::File);
-        (self.ssh_enabled && self.ssh_auth.has_secret() && stores && !self.ssh_secret.text().is_empty())
+        (self.ssh_auth.has_secret() && stores && !self.ssh_secret.text().is_empty())
             .then(|| self.ssh_secret.text().to_string())
     }
 
@@ -656,8 +819,12 @@ impl ProfileForm {
         self.ssh_source = all[i as usize];
     }
 
-    /// Next / previous section (`Ctrl+N` / `Ctrl+P`); the focus goes to its first field.
+    /// Next / previous section (`Ctrl+N` / `Ctrl+P`); the focus goes to its first field. A
+    /// tunnel form has one section.
     fn cycle_section(&mut self, d: isize) {
+        if self.is_tunnel() {
+            return;
+        }
         let n = Section::ALL.len() as isize;
         let i = Section::ALL.iter().position(|s| *s == self.section).unwrap_or(0) as isize;
         self.section = Section::ALL[(i + d).rem_euclid(n) as usize];
@@ -815,7 +982,7 @@ impl ProfileForm {
                 self.statement_cache = !self.statement_cache
             }
             KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.focus == Field::SshEnabled => {
-                self.ssh_enabled = !self.ssh_enabled
+                self.cycle_ssh_choice(if k.code == KeyCode::Left { -1 } else { 1 })
             }
             KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.focus == Field::SshAuth => {
                 self.cycle_ssh_auth(if k.code == KeyCode::Left { -1 } else { 1 })
@@ -844,6 +1011,19 @@ impl ProfileForm {
     /// "Required" errors appear only after a save attempt; format errors appear at once.
     pub fn errors(&self, taken: impl Fn(&str) -> bool) -> Vec<(Field, FieldError)> {
         let mut out = Vec::new();
+        if self.is_tunnel() {
+            // A preset's name is written as typed (blanks around it are an error, not trimmed).
+            let name = self.name.text();
+            match tunnel::name_problem(name) {
+                Some(tunnel::NameProblem::Empty) if self.attempted => out.push((Field::Name, FieldError::Required)),
+                Some(tunnel::NameProblem::Empty) => {}
+                Some(_) => out.push((Field::Name, FieldError::TunnelName)),
+                None if taken(name) => out.push((Field::Name, FieldError::NameTaken)),
+                None => {}
+            }
+            out.extend(self.ssh_errors());
+            return out;
+        }
         let name = self.name.text().trim();
         if name.is_empty() {
             if self.attempted {
@@ -887,7 +1067,7 @@ impl ProfileForm {
     }
 
     /// Errors of the SSH section, when the tunnel is on: every field that needs one.
-    fn ssh_errors(&self) -> Vec<(Field, FieldError)> {
+    pub fn ssh_errors(&self) -> Vec<(Field, FieldError)> {
         let mut out = Vec::new();
         if !self.ssh_enabled {
             return out;
@@ -956,13 +1136,32 @@ impl ProfileForm {
             database: self.database.text().to_string(),
             sslmode: SSL_MODES[self.sslmode].to_string(),
             statement_cache: self.statement_cache,
-            // Kept when it existed (also off); new only once turned on.
-            ssh: (self.ssh_had || self.ssh_enabled).then(|| self.ssh_settings()),
+            // Kept when it existed (also off or with a preset picked); new only once turned on;
+            // moved into the preset this form makes, when that one is picked.
+            ssh: (!self.new_preset_picked() && (self.ssh_had || self.ssh_enabled)).then(|| self.ssh_settings()),
+            tunnel: self.ssh_preset.clone(),
             dsn: None,
             ..self.base.clone()
         };
         c.set_source(self.password_source());
         c
+    }
+
+    /// The profile a test connection of the form tries: [`Self::to_profile`], but with the
+    /// preset this form makes still the profile's own tunnel (it is not saved yet).
+    pub fn to_test_profile(&self) -> ConnectionConfig {
+        let mut c = self.to_profile();
+        if self.new_preset_picked() {
+            c.tunnel = None;
+            c.ssh = Some(SshSettings { enabled: true, ..self.ssh_settings() });
+        }
+        c
+    }
+
+    /// The preset "save as tunnel preset" makes when the form is saved, when it is picked.
+    pub fn made_preset(&self) -> Option<TunnelPreset> {
+        let name = self.new_preset.as_deref().filter(|_| self.new_preset_picked())?;
+        Some(TunnelPreset::new(name, SshSettings { enabled: true, ..self.ssh_settings() }))
     }
 
     /// The folder a new profile goes to (the explorer's folder when it was opened there).

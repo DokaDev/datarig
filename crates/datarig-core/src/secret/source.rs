@@ -338,5 +338,47 @@ pub fn switch_remove(stores: &Stores, from: SourceKind, to: SourceKind, account:
     out
 }
 
+/// Step 1 of moving a stored secret from account `from` to account `to` of the store of `kind`
+/// (a profile's own tunnel secret becoming a tunnel preset's): the secret (`typed`, else the old
+/// copy) written under `to` and read back. `Ok(true)` when one was written (there may be none:
+/// nothing typed and nothing stored). The caller then saves the config, and only then removes
+/// the old copy ([`rekey_remove`]); any failure here leaves the old copy where it is.
+pub fn rekey_copy(
+    stores: &Stores,
+    kind: SourceKind,
+    from: &str,
+    to: &str,
+    typed: Option<&str>,
+) -> Result<bool, SwitchError> {
+    let Some(store) = store_of(stores, kind) else { return Ok(false) };
+    if kind == SourceKind::File {
+        stores.check_file().map_err(|e| SwitchError::Read(SourceError::File(e)))?;
+    }
+    let secret = match typed.filter(|t| !t.is_empty()) {
+        Some(t) => t.to_string(),
+        None => match store.get(from).map_err(|Unavailable(e)| SwitchError::Read(store_failure(kind, e)))? {
+            Some(s) => s,
+            None => return Ok(false),
+        },
+    };
+    match store_verified(store, to, &secret) {
+        Ok(()) => Ok(true),
+        Err(StoreError::Mismatch) => Err(SwitchError::Mismatch(kind)),
+        Err(StoreError::Unavailable(e)) => Err(SwitchError::Write(store_failure(kind, e))),
+    }
+}
+
+/// Step 3 of a move ([`rekey_copy`]), once the config no longer uses `from`: its copy removed.
+pub fn rekey_remove(stores: &Stores, kind: SourceKind, from: &str) -> Switched {
+    let mut out = Switched::default();
+    if let Some(store) = store_of(stores, kind) {
+        match store.delete(from) {
+            Ok(removed) => out.removed = removed,
+            Err(Unavailable(e)) => out.remove_failed = Some(store_failure(kind, e)),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests;

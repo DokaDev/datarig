@@ -702,6 +702,16 @@ impl Harness {
                     RowKind::ScriptFolder(p) => format!("{}/", datarig_core::scripts::display_name(p, true)),
                     RowKind::Script(p) => datarig_core::scripts::display_name(p, false).to_string(),
                     RowKind::ScriptsEmpty => "(none)".to_string(),
+                    // Tunnels: `~name` (its error line `!`), its profiles `@name`.
+                    RowKind::TunnelsHeader => "[tunnels]".to_string(),
+                    RowKind::Tunnel(id) => {
+                        format!("~{}", self.app.preset(*id).map(|p| p.name.clone()).unwrap_or_default())
+                    }
+                    RowKind::TunnelError(_) => "!".to_string(),
+                    RowKind::TunnelUser(_, id) => {
+                        format!("@{}", self.app.profile(*id).map(|p| p.name.clone()).unwrap_or_default())
+                    }
+                    RowKind::TunnelsEmpty => "(no tunnels)".to_string(),
                 };
                 format!("{}{text}", "  ".repeat(r.depth))
             })

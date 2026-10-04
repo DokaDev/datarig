@@ -7,6 +7,16 @@
 //! closed one, which fails at once. Opening always starts here, from the UI; nothing reopens a
 //! tunnel by itself. After it is lost, the next use of the profile connects again.
 //!
+//! A profile's tunnel is its own (`[connections.ssh]`) or a tunnel preset it names
+//! ([`route`]). The profiles using a preset at the same time share one SSH connection
+//! ([`SharedTunnel`]): the first one's attempt opens it (one login, one host key question, one
+//! secret prompt, whatever number of profiles wait for it), the others take it as it is, and it
+//! closes when the last of them lets it go (disconnect, delete, a failed attempt). Its loss ends
+//! every profile on it. A preset changed while in use opens a new connection for the profiles
+//! that connect from then on; the ones on the old connection keep it until they connect again.
+//! A preset that is not there, or both a preset and the profile's own tunnel, is an error of the
+//! profile ([`RouteError`]): it never connects directly.
+//!
 //! Opening runs on a task: the tunnel's secret is read there (the keychain never on the UI
 //! thread), and every question for the user comes back as an [`AppEvent::Tunnel`] with a
 //! channel for the answer: a host key (a confirmation, Cancel the default), a password, a key's
@@ -19,6 +29,7 @@ use super::password::{EnvLookup, Secret};
 use super::*;
 use datarig_core::fault::ErrorLog;
 use datarig_core::profile::ssh::{SshAuth, SshSettings};
+use datarig_core::profile::tunnel::{Route, RouteError, TunnelId, TunnelPreset, route};
 use datarig_core::secret::Lookup;
 use datarig_core::secret::source;
 use datarig_core::transport::{BoxedStream, DialError, Dialer, DialerRef};
@@ -28,8 +39,11 @@ use datarig_ssh::tunnel::{
     SshError, Stage,
 };
 use futures::future::BoxFuture;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use tokio::sync::oneshot;
+
+mod shared;
 
 /// An open tunnel as the app holds it.
 pub trait OpenTunnel: Dialer {
@@ -45,7 +59,6 @@ pub trait OpenTunnel: Dialer {
 
 /// What opening a tunnel needs; its secret is read on the opening task.
 pub struct TunnelRequest {
-    pub profile: ProfileId,
     pub settings: SshSettings,
     /// Typed earlier in this session (kept like a prompted database password).
     pub session_secret: Option<String>,
@@ -130,13 +143,95 @@ impl Dialer for ClosedTunnel {
 pub struct ProfileTunnel {
     pub handle: Arc<dyn OpenTunnel>,
     pub settings: SshSettings,
+    /// The shared connection of a preset it is (its serial and the preset); `None`: the
+    /// profile's own.
+    pub shared: Option<(u64, TunnelId)>,
 }
 
-/// What a tunnel was opened for: a connection attempt of a profile, or a test connection.
+/// What a tunnel was opened for: a connection attempt of a profile, a test connection, or a
+/// preset's shared connection (by its serial).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Owner {
     Attempt { profile: ProfileId, generation: u64 },
     Test(u64),
+    Shared(u64),
+}
+
+/// The SSH connection of a tunnel preset, shared by the profiles that use the preset at the same
+/// time.
+pub struct SharedTunnel {
+    /// Its own number: its events carry it, and a number no entry has any more is stale.
+    pub serial: u64,
+    pub tunnel: TunnelId,
+    /// The settings it opens (or opened) with.
+    pub settings: SshSettings,
+    pub state: SharedState,
+    /// The profiles on it (their sessions dial through it).
+    pub users: BTreeSet<ProfileId>,
+    /// The attempts waiting for it to open: (profile, generation).
+    pub waiting: Vec<(ProfileId, u64)>,
+}
+
+pub enum SharedState {
+    /// Opening, at this stage.
+    Opening(Stage),
+    Open(Arc<dyn OpenTunnel>),
+}
+
+impl SharedTunnel {
+    /// Its handle while it is open.
+    pub fn open(&self) -> Option<&Arc<dyn OpenTunnel>> {
+        match &self.state {
+            SharedState::Open(h) if h.is_open() => Some(h),
+            _ => None,
+        }
+    }
+}
+
+/// The shared connections of the presets.
+#[derive(Default)]
+pub struct SharedTunnels {
+    pub list: Vec<SharedTunnel>,
+    seq: u64,
+    /// Why the last connection of a preset ended (its explorer row says so until it opens
+    /// again).
+    pub lost: HashMap<TunnelId, Notice>,
+}
+
+impl SharedTunnels {
+    pub fn get(&self, serial: u64) -> Option<&SharedTunnel> {
+        self.list.iter().find(|e| e.serial == serial)
+    }
+
+    fn get_mut(&mut self, serial: u64) -> Option<&mut SharedTunnel> {
+        self.list.iter_mut().find(|e| e.serial == serial)
+    }
+
+    fn remove(&mut self, serial: u64) -> Option<SharedTunnel> {
+        let i = self.list.iter().position(|e| e.serial == serial)?;
+        Some(self.list.remove(i))
+    }
+}
+
+/// Where a preset's connection is (its explorer row).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PresetState {
+    Closed,
+    /// An attempt waits for it to open.
+    Opening,
+    /// Open, with this many profiles on it.
+    Open(usize),
+    /// Its last connection was lost (why: [`SharedTunnels::lost`]).
+    Dead,
+}
+
+/// What a test of a preset reached through it: a database address of a profile using it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Probe {
+    pub host: String,
+    pub port: u16,
+    /// A channel to it opened after this long, or why not.
+    pub result: Result<Duration, DialError>,
 }
 
 /// The asker of a tunnel: its questions go to the app as events of its owner.
@@ -150,6 +245,7 @@ impl AppAsker {
         let _ = self.tx.send(match self.owner {
             Owner::Attempt { profile, generation } => AppEvent::Tunnel { profile, generation, ev },
             Owner::Test(seq) => AppEvent::TestTunnel { seq, ev },
+            Owner::Shared(serial) => AppEvent::SharedTunnel { serial, ev },
         });
     }
 
@@ -303,35 +399,61 @@ impl App {
         self.tunnels = Some(tunnels);
     }
 
+    /// How profile `c` reaches its database (see [`route`]).
+    pub(crate) fn route_of<'a>(&'a self, c: &'a ConnectionConfig) -> Result<Route<'a>, RouteError> {
+        route(c, &self.presets)
+    }
+
+    /// What profile `name`'s node says when its tunnel setting is wrong.
+    pub(super) fn route_error_notice(&self, name: &str, e: &RouteError) -> Notice {
+        let name = name.to_string();
+        let msg = match e {
+            RouteError::NotFound(tunnel) => Msg::TunnelNotFound { name, tunnel: tunnel.clone() },
+            RouteError::Both { tunnel } => Msg::TunnelBoth { name, tunnel: tunnel.clone() },
+        };
+        Notice::new(msg, Level::Error)
+    }
+
     /// The dialer sessions of profile `id` use: its open tunnel, a closed one while its tunnel
-    /// is on but not open, `None` without a tunnel.
+    /// is on but not open (or its tunnel setting is wrong), `None` without a tunnel.
     pub(super) fn dialer_of(&self, cfg: &ConnectionConfig) -> Option<DialerRef> {
-        cfg.tunnel()?;
+        if matches!(self.route_of(cfg), Ok(Route::Direct)) {
+            return None;
+        }
         let open = self.conns.get(cfg.id).and_then(|c| c.tunnel.as_ref()).filter(|t| t.handle.is_open());
         Some(match open {
-            Some(t) => DialerRef(t.handle.clone() as Arc<dyn Dialer>),
-            None => DialerRef(Arc::new(ClosedTunnel)),
+            Some(t) if self.route_of(cfg).is_ok() => DialerRef(t.handle.clone() as Arc<dyn Dialer>),
+            _ => DialerRef(Arc::new(ClosedTunnel)),
         })
     }
 
-    /// Profile `id`'s tunnel is open with `settings`.
-    pub(super) fn tunnel_ready(&self, id: ProfileId, settings: &SshSettings) -> bool {
+    /// Profile `id`'s tunnel is open with `settings`, and is the shared one of `preset` (`None`:
+    /// its own).
+    pub(super) fn tunnel_ready(&self, id: ProfileId, settings: &SshSettings, preset: Option<TunnelId>) -> bool {
         self.conns
             .get(id)
             .and_then(|c| c.tunnel.as_ref())
-            .is_some_and(|t| t.handle.is_open() && t.settings == *settings)
+            .is_some_and(|t| t.handle.is_open() && t.settings == *settings && t.shared.map(|(_, p)| p) == preset)
     }
 
-    /// Close profile `id`'s tunnel (its sessions' channels end with it).
+    /// Let go of profile `id`'s tunnel: its own closes (its sessions' channels end with it); a
+    /// preset's shared one closes when no other profile is on it.
     pub(super) fn close_tunnel(&mut self, id: ProfileId) {
-        if let Some(t) = self.conns.get_mut(id).and_then(|c| c.tunnel.take()) {
-            let close = t.handle.close();
-            match self.tx {
-                Some(_) => {
-                    tokio::spawn(close);
-                }
-                None => drop(close),
+        let Some(t) = self.conns.get_mut(id).and_then(|c| c.tunnel.take()) else { return };
+        match t.shared {
+            Some((serial, _)) => self.release_shared(serial, id),
+            None => self.close_handle(t.handle),
+        }
+    }
+
+    /// Close an open tunnel (on a task when there is an event loop).
+    fn close_handle(&self, handle: Arc<dyn OpenTunnel>) {
+        let close = handle.close();
+        match self.tx {
+            Some(_) => {
+                tokio::spawn(close);
             }
+            None => drop(close),
         }
     }
 
@@ -351,19 +473,17 @@ impl App {
         (self.env)("HOME").or_else(|| (self.env)("USERPROFILE")).filter(|h| !h.is_empty()).map(PathBuf::from)
     }
 
-    /// What opening the tunnel `settings` of profile `id` for `owner` needs (`typed`: a
-    /// secret typed in the profile form, used before the stored one).
-    fn tunnel_request(
+    /// What opening the tunnel `settings` (its secret under `account`) for `owner` needs
+    /// (`typed`: a secret typed in a form, used before the stored one).
+    pub(super) fn tunnel_request(
         &self,
-        id: ProfileId,
+        account: String,
         settings: SshSettings,
         tx: UnboundedSender<AppEvent>,
         owner: Owner,
         typed: Option<String>,
     ) -> TunnelRequest {
-        let account = SshSettings::account(id);
         TunnelRequest {
-            profile: id,
             session_secret: typed.or_else(|| self.secrets.session(&account).map(str::to_string)),
             account,
             settings,
@@ -382,7 +502,12 @@ impl App {
     /// test's task. Its questions are asked like a connect's; nothing typed is saved.
     pub(super) fn start_tunnel_test(&mut self, cfg: ConnectionConfig, command: Option<String>) {
         use datarig_core::secret::command as cmd;
-        let Some(settings) = cfg.tunnel().cloned() else { return };
+        // The preset's settings and secret, or the profile's own.
+        let (settings, account, own) = match self.route_of(&cfg) {
+            Ok(Route::Preset(p)) => (p.settings.clone(), p.id.account(), false),
+            Ok(Route::Inline(s)) => (s.clone(), SshSettings::account(cfg.id), true),
+            _ => return,
+        };
         self.clear_test();
         self.test_seq += 1;
         let seq = self.test_seq;
@@ -395,7 +520,12 @@ impl App {
             how: None,
             failure: None,
         });
-        let typed = self.overlays.form().filter(|f| f.profile_id() == cfg.id).and_then(|f| f.ssh_typed_secret());
+        // A secret typed in the form is the profile's own tunnel's.
+        let typed = self
+            .overlays
+            .form()
+            .filter(|f| own && f.profile_id() == cfg.id)
+            .and_then(super::profiles::ProfileForm::typed_bastion_secret);
         let mut state = TestState::Running;
         let abort = match (self.driver(&cfg.driver), self.tunnels.clone(), self.tx.clone()) {
             (None, _, _) => {
@@ -409,7 +539,7 @@ impl App {
                 None
             }
             (Some(d), Some(tunnels), Some(tx)) => {
-                let request = self.tunnel_request(cfg.id, settings, tx.clone(), Owner::Test(seq), typed);
+                let request = self.tunnel_request(account, settings, tx.clone(), Owner::Test(seq), typed);
                 let open = tunnels.open(request);
                 let task = tokio::spawn(async move {
                     let start = Instant::now();
@@ -447,7 +577,7 @@ impl App {
                 None
             }
         };
-        self.conn_test = Some(ConnTest { seq, started: Instant::now(), state, abort, tunnel });
+        self.conn_test = Some(ConnTest { seq, started: Instant::now(), state, abort, tunnel, probe: false });
         self.report_test();
     }
 
@@ -487,7 +617,14 @@ impl App {
     /// Open profile `conn`'s tunnel for the attempt in progress; `cfg` (the profile with its
     /// resolved database password) waits for it.
     pub(super) fn open_tunnel(&mut self, conn: &ConnectionConfig, cfg: ConnectionConfig) {
-        let Some(settings) = conn.tunnel().cloned() else { return };
+        let settings = match self.route_of(conn) {
+            Ok(Route::Preset(p)) => {
+                let p = p.clone();
+                return self.open_shared(conn, p, cfg);
+            }
+            Ok(Route::Inline(s)) => s.clone(),
+            _ => return,
+        };
         let id = conn.id;
         self.close_tunnel(id);
         let generation = self.conns.entry(id).generation;
@@ -508,7 +645,8 @@ impl App {
             self.tunnel_requests.push((id, generation));
             return;
         };
-        let request = self.tunnel_request(id, settings, tx.clone(), Owner::Attempt { profile: id, generation }, None);
+        let owner = Owner::Attempt { profile: id, generation };
+        let request = self.tunnel_request(SshSettings::account(id), settings, tx.clone(), owner, None);
         let open = tunnels.open(request);
         tokio::spawn(async move {
             let ev = match open.await {
@@ -564,12 +702,20 @@ impl App {
     }
 
     fn tunnel_opened(&mut self, id: ProfileId, generation: u64, handle: Arc<dyn OpenTunnel>) {
-        let Some(p) = self.profile(id).cloned() else { return };
-        let Some(settings) = p.tunnel().cloned() else { return };
+        let Some(p) = self.profile(id).cloned() else { return self.close_handle(handle) };
+        // Its own tunnel was turned off (or a preset picked) while it opened: not this one.
+        let Some(settings) = p.inline_ssh().cloned() else {
+            self.close_handle(handle);
+            if let Some(c) = self.conns.get_mut(id) {
+                c.tunnel_wait = None;
+            }
+            let m = Notice::new(Msg::ConnCancelled { name: p.name.clone() }, Level::Warning);
+            return self.attempt_failed(id, m);
+        };
         let now = self.now();
         let c = self.conns.entry(id);
         let cfg = c.tunnel_wait.take();
-        c.tunnel = Some(ProfileTunnel { handle: handle.clone(), settings });
+        c.tunnel = Some(ProfileTunnel { handle: handle.clone(), settings, shared: None });
         c.tunnel_lost = None;
         if let Some(k) = c.connecting.as_mut() {
             // The database's own connect timeout starts now.
@@ -595,20 +741,23 @@ impl App {
         if let Some(c) = self.conns.get_mut(id) {
             c.tunnel_wait = None;
         }
-        let text = match &e {
+        let name = self.profile(id).map(|p| p.name.clone()).unwrap_or_default();
+        let m = self.tunnel_failure_notice(&e, &name);
+        self.attempt_failed(id, m.clone());
+        self.status = Some(m);
+    }
+
+    /// A tunnel that did not open, in words (`name`: whose settings miss a key file).
+    fn tunnel_failure_notice(&self, e: &TunnelFailure, name: &str) -> Notice {
+        let text = match e {
             TunnelFailure::Ssh(e) => self.ssh_error_text(e),
             TunnelFailure::Source(e) => self.i18n.msg(&self.source_error(e)).to_string(),
             TunnelFailure::NoKeyFile => self
                 .i18n
-                .msg(&Msg::ConfigErrorSshMissing {
-                    key: "key_file".into(),
-                    profile: self.profile(id).map(|p| p.name.clone()).unwrap_or_default(),
-                })
+                .msg(&Msg::ConfigErrorSshMissing { key: "key_file".into(), profile: name.to_string() })
                 .to_string(),
         };
-        let m = Notice::new(Msg::SshFailed { error: text }, Level::Error);
-        self.attempt_failed(id, m.clone());
-        self.status = Some(m);
+        Notice::new(Msg::SshFailed { error: text }, Level::Error)
     }
 
     /// Profile `id`'s tunnel ended: its sessions end with it (each says so); the profile shows
@@ -622,17 +771,32 @@ impl App {
         if loss == Loss::ClosedByApp {
             return;
         }
-        let host = t.settings.host.clone();
-        let msg = match &loss {
+        let m = self.loss_notice(&t.settings.host, &loss);
+        self.lost_through(id, m);
+    }
+
+    /// A tunnel to `host` ended for `loss`, in words (the details go to the error log).
+    fn loss_notice(&self, host: &str, loss: &Loss) -> Notice {
+        let host = host.to_string();
+        let msg = match loss {
             Loss::Keepalive => Msg::SshLostKeepalive { host },
             Loss::Closed(_) => Msg::SshLostClosed { host },
             Loss::Failed(_) | Loss::ClosedByApp => Msg::SshLostFailed { host },
         };
-        if let Loss::Closed(detail) | Loss::Failed(detail) = &loss {
+        if let Loss::Closed(detail) | Loss::Failed(detail) = loss {
             ErrorLog::new(self.paths.errors_log())
                 .record("ssh.lost", &datarig_core::fault::Fault::other(detail.clone()));
         }
-        let m = Notice::new(msg, Level::Error);
+        Notice::new(msg, Level::Error)
+    }
+
+    /// Profile `id`'s tunnel ended (`m` says why; the tunnel is already let go): see
+    /// [`App::tunnel_lost`].
+    fn lost_through(&mut self, id: ProfileId, m: Notice) {
+        // An attempt that was still connecting through it ends with it.
+        if self.conns.get(id).is_some_and(|c| c.connecting.is_some()) {
+            self.abort_connect(id, m.clone());
+        }
         let c = self.conns.entry(id);
         c.tunnel_lost = Some(m.clone());
         c.connected = false;
@@ -658,12 +822,21 @@ impl App {
         }
     }
 
-    /// The tunnel of `owner` is still wanted: its attempt is the current one, or its test runs.
+    /// The tunnel of `owner` is still wanted: its attempt is the current one, its test runs, or
+    /// a current attempt waits for the shared connection.
     fn owner_current(&self, owner: Owner) -> bool {
         match owner {
             Owner::Attempt { profile, generation } => self.conns.is_current(profile, generation),
             Owner::Test(seq) => self.conn_test.as_ref().is_some_and(|t| t.seq == seq && t.state == TestState::Running),
+            Owner::Shared(serial) => self.shared.get(serial).is_some_and(|e| {
+                matches!(e.state, SharedState::Opening(_)) && e.waiting.iter().any(|w| self.waits_for_tunnel(*w))
+            }),
         }
+    }
+
+    /// The attempt `(profile, generation)` is the current one and waits for its tunnel.
+    fn waits_for_tunnel(&self, (profile, generation): (ProfileId, u64)) -> bool {
+        self.conns.is_current(profile, generation) && self.conns.get(profile).is_some_and(|c| c.tunnel_wait.is_some())
     }
 
     /// The next host key question, when no other shows.
@@ -716,10 +889,12 @@ impl App {
     }
 
     /// Profile `id`'s attempt ended: the questions its tunnel asked are answered "no" and
-    /// their dialogs close.
+    /// their dialogs close; it no longer waits for a preset's shared connection (whose
+    /// questions go too when no other attempt waits for it).
     pub(super) fn drop_tunnel_asks(&mut self, id: ProfileId) {
         self.drop_asks(|o| matches!(o, Owner::Attempt { profile, .. } if profile == id));
         self.tunnel_saves.remove(&id);
+        self.leave_shared_waits(id);
     }
 
     /// The questions of the tunnels `of` selects are answered "no" and their dialogs close.
@@ -765,6 +940,7 @@ impl App {
         let (testing, id) = match w.owner {
             Owner::Attempt { profile, .. } => (false, profile),
             Owner::Test(_) => (true, ProfileId::new()),
+            Owner::Shared(_) => (false, ProfileId::new()),
         };
         let target = format!("{}@{}", ssh.user.trim(), ssh.host.trim());
         let (title, field, echo, storable) = match &w.ask {
@@ -799,7 +975,14 @@ impl App {
         let error = match (wrong, &w.ask) {
             (true, SecretAsk::Passphrase { .. }) => Notice::new(Label::SshPassphraseWrong, Level::Warning),
             (true, _) => Notice::new(Label::SshPasswordWrong, Level::Warning),
-            _ => Notice::new(Msg::SshPromptWhy { name: w.name.clone() }, Level::Info),
+            _ => match w.owner {
+                // One prompt for every profile waiting for the preset's connection.
+                Owner::Shared(serial) => {
+                    let names = self.shared_waiters(serial).join(", ");
+                    Notice::new(Msg::SshPromptWhyPreset { tunnel: w.name.clone(), names }, Level::Info)
+                }
+                _ => Notice::new(Msg::SshPromptWhy { name: w.name.clone() }, Level::Info),
+            },
         };
         self.overlays.push(Overlay::Password(PasswordPrompt {
             id,
@@ -823,6 +1006,20 @@ impl App {
         match answer {
             Some((text, save, save_to)) => {
                 let storable = matches!(w.ask, SecretAsk::Password { .. } | SecretAsk::Passphrase { .. });
+                if let (true, Owner::Shared(serial)) = (storable, w.owner)
+                    && let Some(tunnel) = self.shared.get(serial).map(|e| e.tunnel)
+                {
+                    // The preset's: kept for this session, written to its store once it opened.
+                    self.secrets.remember(&tunnel.account(), &text);
+                    match (save, save_to) {
+                        (true, Some(kind)) => {
+                            self.shared_saves.insert(serial, (kind, text.clone()));
+                        }
+                        _ => {
+                            self.shared_saves.remove(&serial);
+                        }
+                    }
+                }
                 if let (true, Owner::Attempt { profile, generation }) = (storable, w.owner) {
                     // Kept for this session (a reconnect after a loss does not ask again), and
                     // written to the tunnel's store once it opened, when asked to.

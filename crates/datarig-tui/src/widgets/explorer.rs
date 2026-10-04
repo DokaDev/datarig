@@ -8,6 +8,9 @@
 //! materialized view has the estimates of its rows and size after its name, dim and on the
 //! right, as many of them as there is room for (the name first). An open table shows
 //! its structure (see `widgets::tree`): each group with its icon, each item with its group's.
+//! The "Tunnels" section lists the tunnel presets: each with the state of its shared connection
+//! (`○` closed, a spinner while it opens, `●` open, `✕` lost), its bastion and how many
+//! profiles name it, and under it, opened, those profiles.
 
 use crate::app::action::Action;
 use crate::app::explorer::{Row, RowKind};
@@ -65,9 +68,12 @@ fn row_parts(app: &App, row: &Row) -> Vec<(String, Style)> {
                 (icons::cell(p, app.icons_on()), fg(color)),
                 (p.name.clone(), name),
             ];
-            // Through an SSH tunnel: a small mark.
-            if p.tunnel().is_some() {
-                parts.push((format!(" {}", icons::tunnel(app.icons_on())), fg(th.fg_muted)));
+            // Through an SSH tunnel: a small mark (in the error color when its tunnel setting is
+            // wrong: a preset that is not there, or two tunnels).
+            match app.route_of(p) {
+                Ok(datarig_core::profile::tunnel::Route::Direct) => {}
+                Ok(_) => parts.push((format!(" {}", icons::tunnel(app.icons_on())), fg(th.fg_muted))),
+                Err(_) => parts.push((format!(" {}", icons::tunnel(app.icons_on())), fg(th.error))),
             }
             // A read-only policy, in words (policies have no color).
             if app.read_only(*id) {
@@ -153,7 +159,77 @@ fn row_parts(app: &App, row: &Row) -> Vec<(String, Style)> {
             let key = app.key_for(Action::ScriptSave, Ctx::Nav);
             vec![(app.i18n.msg(&Msg::ExplorerScriptsEmpty { key }).to_string(), fg(th.fg_dim))]
         }
+        RowKind::TunnelsHeader => {
+            vec![
+                (app.i18n.label(Label::ExplorerTunnels).to_string(), fg(th.accent).add_modifier(Modifier::BOLD)),
+                (format!(" {}", app.presets.len()), fg(th.fg_dim)),
+            ]
+        }
+        RowKind::TunnelsEmpty => {
+            let key = app.key_for(Action::NewProfile, Ctx::Explorer);
+            vec![(app.i18n.msg(&Msg::ExplorerTunnelsEmpty { key }).to_string(), fg(th.fg_dim))]
+        }
+        RowKind::Tunnel(id) => tunnel_parts(app, *id),
+        RowKind::TunnelError(id) => {
+            let text = app.shared.lost.get(id).map(|e| e.render(&app.i18n).to_string());
+            vec![(text.unwrap_or_default(), fg(th.error))]
+        }
+        RowKind::TunnelUser(_, pid) => {
+            let Some(p) = app.profile(*pid) else { return Vec::new() };
+            let color = theme::profile_color(p.display_color());
+            let mark = match app.conns.state(*pid) {
+                NodeState::Connected => (CONNECTED.to_string(), fg(color)),
+                NodeState::Failed => (FAILED.to_string(), fg(th.error)),
+                NodeState::Connecting => {
+                    let started = app.conns.get(*pid).and_then(|c| c.connecting.as_ref()).map(|c| c.started);
+                    (started.map_or("⠋", |t| spinner_at(t, app.now())).to_string(), fg(th.accent))
+                }
+                NodeState::Disconnected => (DISCONNECTED.to_string(), fg(color)),
+            };
+            vec![
+                mark,
+                (" ".into(), fg(th.fg)),
+                (icons::cell(p, app.icons_on()), fg(color)),
+                (p.name.clone(), fg(th.fg_muted)),
+            ]
+        }
     }
+}
+
+/// A tunnel preset: the state of its shared connection, its icon and name, its bastion, and how
+/// many profiles name it.
+fn tunnel_parts(app: &App, id: datarig_core::profile::tunnel::TunnelId) -> Vec<(String, Style)> {
+    use crate::app::tunnel::PresetState;
+    let th = theme::cur();
+    let fg = |c: Color| Style::new().fg(c);
+    let Some(p) = app.preset(id) else { return Vec::new() };
+    let state = app.preset_state(id);
+    let mark = match state {
+        PresetState::Closed => (DISCONNECTED.to_string(), fg(th.fg_muted)),
+        PresetState::Opening => {
+            let started = app.conns.attempt().map(|c| c.started);
+            (started.map_or("⠋", |t| spinner_at(t, app.now())).to_string(), fg(th.accent))
+        }
+        PresetState::Open(_) => (CONNECTED.to_string(), fg(th.success)),
+        PresetState::Dead => (FAILED.to_string(), fg(th.error)),
+    };
+    let icon = if app.icons_on() { format!("{} ", icons::TUNNEL) } else { String::new() };
+    let mut name = fg(th.fg);
+    if matches!(state, PresetState::Open(_)) {
+        name = name.add_modifier(Modifier::BOLD);
+    }
+    let mut parts = vec![mark, (" ".into(), fg(th.fg)), (icon, fg(th.accent)), (p.name.clone(), name)];
+    parts.push((format!("  {}", App::bastion_text(&p.settings)), fg(th.fg_dim)));
+    let users = app.preset_users(&p.name).len() as u64;
+    let detail = match state {
+        PresetState::Open(n) => Some(Msg::ExplorerTunnelOpen { count: n as u64 }),
+        _ if users > 0 => Some(Msg::ExplorerTunnelUsers { count: users }),
+        _ => None,
+    };
+    if let Some(m) = detail {
+        parts.push((format!(" · {}", app.i18n.msg(&m)), fg(th.fg_dim)));
+    }
+    parts
 }
 
 /// A node of a schema tree: its icon with icons on, then its label.
@@ -543,13 +619,20 @@ pub(crate) fn row_text(app: &App, row: &Row) -> String {
     format!("{}{arrow}{text}", "  ".repeat(row.depth))
 }
 
-/// The whole text of the row under the explorer's cursor, for the status bar, when it is part
-/// of a table's structure (the explorer is narrow, and cuts the details of deep lines) or an
-/// object with storage: its name and its estimates in words, also when it has none yet. A
-/// structure that could not be read shows why alone (the reason and what to do), which the
-/// explorer's line wraps in "structure unavailable".
+/// The whole text of the row under the explorer's cursor, for the status bar, when it is a
+/// tunnel preset (or why its connection was lost), part of a table's structure (the explorer is
+/// narrow, and cuts the details of deep lines) or an object with storage: its name and its
+/// estimates in words, also when it has none yet. A structure that could not be read shows why
+/// alone (the reason and what to do), which the explorer's line wraps in "structure
+/// unavailable".
 pub(crate) fn line_preview(app: &App) -> Option<String> {
     let row = app.explorer_row()?;
+    // A tunnel preset: its whole line (the explorer is narrow; its bastion and state follow the
+    // name), or why its connection was lost.
+    if matches!(row.kind, RowKind::Tunnel(_) | RowKind::TunnelError(_)) {
+        let text: String = row_parts(app, &row).into_iter().map(|(t, _)| t).collect();
+        return Some(text.trim().to_string()).filter(|t| !t.is_empty());
+    }
     let (tree, n) = row_node(app, &row)?;
     if let (Node::Object(..), Some(stats)) = (n, row_stats(app, &row)) {
         return Some(format!("{}{}{}", tree.label(n, &app.i18n).0, " ".repeat(STATS_GAP), full_stats(app, stats)));

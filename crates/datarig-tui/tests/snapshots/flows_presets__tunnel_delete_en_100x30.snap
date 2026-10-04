@@ -1,0 +1,34 @@
+---
+source: crates/datarig-tui/tests/flows_presets.rs
+expression: backend
+---
+"╭ Explorer ─────────────╮╭ Workspace ──────────────────────────────────────────────────────────────╮"
+"│  ＋ New connection    ││                                                                         │" Hidden by multi-width symbols: [(4, " ")]
+"│▸ ⠋   local-pg SSH     ││  No open tabs                                                           │"
+"│▸ ○   v6 SSH           ││  Pick a connection in the explorer, or press Ctrl+O.                    │"
+"│▸ ✕   分析-replica SSH ││                                                                         │" Hidden by multi-width symbols: [(8, " "), (10, " ")]
+"│    SSH: the connectio…││  Enter      Connect and open a console                                  │"
+"│▾ Tunnels 2            ││  Ctrl+O     Quick connect                                               │"
+"│  ▾ ● office  ec2-user…││  Ctrl+T     New console tab                                             │"
+"│      ⠋   local-pg     ││  Space t u  Reopen a closed tab                                         │"
+"│      ○   v6       ╭ Delete ──────────────────────────────────────────────────╮                   │"
+"│  ▸ ✕ lab  ec2-user│                                                          │                   │"
+"│      SSH: the conn│ Delete the SSH tunnel “office”?                          │                   │"
+"│                   │ 2 profiles use it (local-pg, v6): they will not connect  │                   │"
+"│                   │ until you pick another tunnel in their forms (never      │                   │"
+"│                   │ directly).                                               │                   │"
+"│                   │ Its open connection stays until the profiles on it       │                   │"
+"│                   │ disconnect.                                              │                   │"
+"│                   │ Its SSH secret saved in the OS keychain is removed too.  │                   │"
+"│                   │                                                          │                   │"
+"│                   ╰─────────────────────────────── y delete · n/Enter cancel ╯                   │"
+"│                       ││                                                                         │"
+"│                       ││                                                                         │"
+"│                       ││                                                                         │"
+"│                       ││                                                                         │"
+"│                       ││                                                                         │"
+"│                       ││                                                                         │"
+"│                       ││                                                                         │"
+"│                       ││                                                                         │"
+"╰───────────────────────╯╰─────────────────────────────────────────────────────────────────────────╯"
+" ● office  ec2-user@bastion.example.com · open · 1 connection on it                              EN "

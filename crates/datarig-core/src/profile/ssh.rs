@@ -61,7 +61,7 @@ pub const DEFAULT_KEEPALIVE: u64 = 15;
 pub const DEFAULT_TIMEOUT: u64 = 10;
 
 /// The profile's tunnel settings.
-#[derive(Clone, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SshSettings {
     #[serde(default)]
@@ -94,6 +94,24 @@ pub struct SshSettings {
 
 fn default_port() -> u16 {
     22
+}
+
+/// Manual impl so `{:?}` never prints the secret's command (it may carry a secret of its own,
+/// as `password_command` may).
+impl std::fmt::Debug for SshSettings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SshSettings")
+            .field("enabled", &self.enabled)
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("user", &self.user)
+            .field("auth", &self.auth)
+            .field("key_file", &self.key_file)
+            .field("secret_source", &self.source())
+            .field("keepalive", &self.keepalive)
+            .field("timeout", &self.timeout)
+            .finish()
+    }
 }
 
 impl Default for SshSettings {

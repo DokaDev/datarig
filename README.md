@@ -85,6 +85,11 @@ Everything below works today, with PostgreSQL.
   names, wildcards, `@revoked`) and datarig's own `known_hosts`; an unknown or changed key is
   always asked about, never accepted silently. Every session, cancel request and test
   connection of the profile goes through the tunnel.
+- **Tunnel presets**: named SSH tunnels in the explorer's **Tunnels** section (make, edit, copy,
+  delete, test), which profiles pick in their form. Profiles that use the same preset at the
+  same time share one SSH connection: one login, one host key question, one secret prompt; it
+  closes when the last of them disconnects. A tunnel of a profile's own still works, and its
+  form can save it as a preset (see [SSH tunnels](#ssh-tunnels)).
 - **PgBouncer and other transaction poolers**: nothing outside the query session relies on
   prepared statements, statement names are unique per process, and a profile can turn the
   server-side statement cache off (`statement_cache = false`). When the server keeps losing
@@ -300,12 +305,25 @@ folder = "work/prod"
 policy = "prod"
 password_source = "command"
 password_command = "op read op://work/prod-db/password"
+tunnel = "office"              # the tunnel preset below
 
-[connections.ssh]
+[[connections]]
+name = "lab"
+driver = "postgres"
+host = "10.0.3.7"
+user = "me"
+database = "lab"
+
+[connections.ssh]              # a tunnel of this profile only
 enabled = true
+host = "lab-bastion.example.com"
+user = "me"
+auth = "agent"                 # key | password | agent | keyboard-interactive
+
+[tunnels.office]               # profiles that name it share one SSH connection
 host = "bastion.example.com"
 user = "ec2-user"
-auth = "key"                   # key | password | agent | keyboard-interactive
+auth = "key"
 key_file = "~/.ssh/prod.pem"
 
 [policy.prod]
@@ -373,12 +391,40 @@ reported with the file and line, and the app draws with `terminal` until it is f
 
 ## SSH tunnels
 
-Each profile can reach its database through one SSH bastion (the profile form's SSH section,
-or `[connections.ssh]`). datarig opens the tunnel itself (pure Rust, no `ssh` binary) and dials
-every connection of the profile through `direct-tcpip` channels; nothing else is requested from
-the server. The key file must not be readable by others, as OpenSSH requires. The key's
-passphrase or the SSH password uses the same sources as database passwords. Keepalives detect a
-dead tunnel, and the explorer marks the profile until the next use reconnects.
+Each profile can reach its database through one SSH bastion. datarig opens the tunnel itself
+(pure Rust, no `ssh` binary) and dials every connection of the profile through `direct-tcpip`
+channels; nothing else is requested from the server. The key file must not be readable by
+others, as OpenSSH requires. The key's passphrase or the SSH password uses the same sources as
+database passwords. Keepalives detect a dead tunnel, and the explorer marks the profile until
+the next use reconnects.
+
+The profile form's SSH section picks the tunnel: **off**, a **tunnel preset**, or **this profile
+only** (its own bastion fields, `[connections.ssh]`).
+
+- **Tunnel presets** (`[tunnels.<name>]`, the profile names one with `tunnel = "<name>"`) live in
+  the explorer's **Tunnels** section, below the connections: `n` makes one, `e` edits it (its name
+  too: the profiles that name it follow), `c` copies it, `d` deletes it, `t` tests it, and `Enter`
+  shows the profiles that name it. Each preset shows whether its connection is closed, opening,
+  open (and how many profiles are on it) or lost (and why).
+- Profiles that use the same preset at the same time share **one SSH connection**: the first one
+  opens it (one login, one host key question, one secret prompt, for every profile waiting), the
+  others take it as it is, and it closes when the last of them disconnects. When it is lost,
+  every profile on it says so, and each connects again on its next use.
+- A preset's secret (the key's passphrase or the password) is kept once, under the preset's own
+  keychain or secrets-file account, which a rename keeps. Deleting a preset asks first, lists the
+  profiles that use it and removes its saved secret.
+- A preset changed while profiles are connected through it: they keep the connection they have
+  until they connect again; the next connect uses the new settings.
+- A profile whose preset does not exist (or that names a preset and has its own tunnel turned on)
+  does not connect and says why; it **never** connects directly instead.
+- "Save as tunnel preset" (`Ctrl+B` in the form's own tunnel) makes a preset of the profile's own
+  tunnel when the form is saved: the settings move to the preset and the profile names it; its
+  stored secret is copied to the preset (and read back) before the old copy is removed. A secret
+  that cannot be read stays where it was and is asked for at the next connect.
+- Testing a preset opens its SSH connection and then one `direct-tcpip` channel to each database
+  address of the profiles that use it (opened and closed again; nothing is sent to a database).
+- The app never rewrites the config on its own: presets change only when you save a form, rename
+  or delete one.
 
 ## Development
 

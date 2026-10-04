@@ -1,9 +1,14 @@
 //! The connection profile form: a large centered dialog with section tabs (Basic /
 //! Advanced), the password storage selector, the pickers of color, icon and folder, and the
-//! inline test-connection result line.
+//! inline test-connection result line. The SSH section's first row picks the tunnel: none, a
+//! tunnel preset (shown, not edited, here), or one of this profile only (its fields, and a
+//! button that makes a preset of them). The tunnel form is the same dialog with the SSH
+//! section alone, the preset's name first.
 
 use crate::app::action::Action;
-use crate::app::profiles::{BUTTONS, DRIVERS, FIELDS, Field, Section, secret_field, source_choice};
+use crate::app::profiles::{
+    BUTTONS, DRIVERS, FIELDS, Field, FormKind, Section, SshChoice, secret_field, source_choice,
+};
 use crate::app::{App, Level};
 use crate::keymap::Ctx;
 use crate::text::{width, wrap};
@@ -75,8 +80,10 @@ fn selector(buf: &mut Buffer, x: u16, y: u16, room: usize, parts: &[(String, Sty
 pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> Option<(u16, u16)> {
     let th = theme::cur();
     let pick_key = app.key_for(Action::PickKeyFile, Ctx::ProfileForm);
+    let save_as_key = app.key_for(Action::SaveAsTunnel, Ctx::ProfileForm);
     let i18n = &app.i18n;
     let profiles = &app.profiles;
+    let presets = &app.presets;
     let icons_on = app.icons_on();
     let keychain_error = app
         .secrets
@@ -86,18 +93,36 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
         .unwrap_or_default();
     let form = app.overlays.form_mut()?;
     form.key_button = Rect::default();
-    let title = match &form.original_name {
-        Some(n) => i18n.msg(&Msg::FormTitleEdit { name: n.clone() }),
-        None => i18n.label(Label::FormTitleNew),
+    form.preset_button = Rect::default();
+    let tunnel_form = form.is_tunnel();
+    let title = match (&form.original_name, tunnel_form) {
+        (Some(n), false) => i18n.msg(&Msg::FormTitleEdit { name: n.clone() }),
+        (None, false) => i18n.label(Label::FormTitleNew),
+        (Some(n), true) => i18n.msg(&Msg::TunnelFormTitleEdit { name: n.clone() }),
+        (None, true) => i18n.label(Label::TunnelFormTitleNew),
     };
-    let footer = i18n.label(Label::FormKeys);
+    let footer = i18n.label(if tunnel_form { Label::TunnelFormKeys } else { Label::FormKeys });
     let w = area.width.saturating_sub(4).min(100);
     let rect = centered(area, w, 19);
     let inner = modal(rect, &title, &footer, buf);
     let iw = inner.width as usize;
-    let label_w = FIELDS.iter().map(|f| width(&i18n.label(f.label()))).max().unwrap_or(8) + 2;
+    let label_w = FIELDS
+        .iter()
+        .map(|f| f.label())
+        .chain([Label::FormFieldTunnelUsedBy])
+        .map(|l| width(&i18n.label(l)))
+        .max()
+        .unwrap_or(8)
+        + 2;
     let editing = form.editing;
-    let errors = form.errors(|n| profiles.iter().enumerate().any(|(i, p)| p.name == n && Some(i) != editing));
+    let errors = match form.kind {
+        FormKind::Tunnel { id, .. } => {
+            form.errors(|n| presets.iter().any(|p| p.id != id && datarig_core::profile::tunnel::same_name(&p.name, n)))
+        }
+        FormKind::Profile => {
+            form.errors(|n| profiles.iter().enumerate().any(|(i, p)| p.name == n && Some(i) != editing))
+        }
+    };
     let dim = Style::new().fg(th.fg_dim).bg(th.surface);
     let mut cursor = None;
     // Inputs leave room for their hints (28 columns) and are at most 34 wide.
@@ -112,21 +137,27 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
     let right = inner.x + inner.width;
     let room_from = |x: u16| right.saturating_sub(x + 1) as usize;
 
-    // Section tabs.
+    // Section tabs (a tunnel form has one).
     let mut x = inner.x + 1;
-    for sec in Section::ALL {
+    let tab = |sec: Section| match (sec, tunnel_form) {
+        (Section::Ssh, true) => Label::TunnelFormSection,
+        (s, _) => s.label(),
+    };
+    let sections: &[Section] = if tunnel_form { &[Section::Ssh] } else { &Section::ALL };
+    for &sec in sections {
         let style = if sec == form.section {
             Style::new().fg(th.bg).bg(th.accent).add_modifier(Modifier::BOLD)
         } else {
             Style::new().fg(th.fg_muted).bg(th.surface_alt)
         };
-        x += put(buf, x, inner.y, &format!(" {} ", i18n.label(sec.label())), room_from(x), style) + 1;
+        x += put(buf, x, inner.y, &format!(" {} ", i18n.label(tab(sec))), room_from(x), style) + 1;
     }
-    let hint = i18n.label(Label::FormSectionsHint);
+    let hint = i18n.label(if tunnel_form { Label::TunnelFormHint } else { Label::FormSectionsHint });
     let hx = right.saturating_sub(width(&hint) as u16 + 1).max(x + 1);
     put(buf, hx, inner.y, &hint, room_from(hx), dim);
 
     let rows: Vec<Option<Field>> = match form.section {
+        _ if tunnel_form => form.fields().into_iter().filter(|f| !f.is_button()).map(Some).collect(),
         Section::Basic => vec![
             Some(Field::Driver),
             Some(Field::Name),
@@ -198,13 +229,77 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
                 continue;
             }
             Field::SshEnabled => {
-                let (state, hint) = match form.ssh_enabled {
-                    true => (Label::FormSshOn, Label::FormSshOnHint),
-                    false => (Label::FormSshOff, Label::FormSshOffHint),
+                let choice = form.ssh_choice();
+                let (value, hint) = match &choice {
+                    SshChoice::Off => (i18n.label(Label::FormSshOff).to_string(), i18n.label(Label::FormSshOffHint)),
+                    SshChoice::Inline => (i18n.label(Label::FormSshOwn).to_string(), i18n.label(Label::FormSshOnHint)),
+                    SshChoice::Preset(name) if form.new_preset_picked() => (
+                        i18n.msg(&Msg::FormSshPresetNew { name: name.clone() }).to_string(),
+                        i18n.label(Label::FormSshPresetNewHint),
+                    ),
+                    SshChoice::Preset(name) if form.picked_preset().is_none() => (
+                        i18n.msg(&Msg::FormSshPresetMissing { name: name.clone() }).to_string(),
+                        i18n.label(Label::FormSshPresetMissingHint),
+                    ),
+                    SshChoice::Preset(name) => (name.clone(), i18n.label(Label::FormSshPresetHint)),
                 };
-                let used = selector(buf, x, y, room_from(x), &[text(&i18n.label(state))], focused);
-                let hint = format!("{} · {}", i18n.label(Label::FormSslmodeHint), i18n.label(hint));
-                put(buf, x + used + 2, y, &hint, room_from(x + used + 2), dim);
+                let used = selector(buf, x, y, room_from(x), &[text(&value)], focused);
+                let mut hx = x + used + 2;
+                if choice == SshChoice::Inline {
+                    // "Save as tunnel preset" (its key on the form too).
+                    let label = i18n.msg(&Msg::FormSshSaveAsPreset { key: save_as_key.clone() }).to_string();
+                    let b = put(
+                        buf,
+                        hx,
+                        y,
+                        &format!("[{label}]"),
+                        room_from(hx),
+                        Style::new().fg(th.accent).bg(th.surface_alt),
+                    );
+                    form.preset_button = Rect::new(hx, y, b, 1);
+                    hx += b + 2;
+                }
+                let hint = format!("{} · {hint}", i18n.label(Label::FormSslmodeHint));
+                put(buf, hx, y, &hint, room_from(hx), dim);
+                // A preset is shown here, not edited: its bastion, its login and who else uses it.
+                if let SshChoice::Preset(name) = &choice {
+                    let shown = form
+                        .picked_preset()
+                        .map(|p| p.settings.clone())
+                        .or_else(|| form.new_preset_picked().then(|| form.ssh_settings()));
+                    let mut lines: Vec<(Label, String, Style)> = Vec::new();
+                    match &shown {
+                        Some(s) => {
+                            lines.push((
+                                Label::FormFieldSshHost,
+                                crate::app::App::bastion_text(s),
+                                Style::new().fg(th.fg),
+                            ));
+                            let mut login = i18n.label(ssh_auth_choice(s.auth)).to_string();
+                            if let (SshAuth::Key, Some(k)) = (s.auth, s.key_file.as_deref()) {
+                                login.push_str(&format!(" · {k}"));
+                            }
+                            lines.push((Label::FormFieldSshAuth, login, Style::new().fg(th.fg)));
+                        }
+                        None => {
+                            let text = i18n.msg(&Msg::FormSshPresetGone { name: name.clone() }).to_string();
+                            lines.push((Label::FormFieldSshEnabled, text, Style::new().fg(th.error)));
+                        }
+                    }
+                    let others: Vec<String> = profiles
+                        .iter()
+                        .filter(|p| p.tunnel.as_deref() == Some(name.as_str()) && p.id != form.profile_id())
+                        .map(|p| p.name.clone())
+                        .collect();
+                    if !others.is_empty() {
+                        lines.push((Label::FormFieldTunnelUsedBy, others.join(", "), Style::new().fg(th.fg_muted)));
+                    }
+                    for (i, (label, value, style)) in lines.into_iter().enumerate() {
+                        let ly = y + 1 + i as u16;
+                        put(buf, inner.x + 1, ly, &i18n.label(label), label_w, label_style(false));
+                        put(buf, x, ly, &value, room_from(x), style.bg(th.surface));
+                    }
+                }
                 continue;
             }
             Field::SshAuth | Field::SshSource => {
@@ -336,6 +431,19 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
             if let Some(hint) = hint {
                 put(buf, after, y, &i18n.msg(&hint), room, dim);
             }
+        }
+    }
+    // A tunnel form's profiles, below its fields.
+    if let FormKind::Tunnel { editing: true, .. } = form.kind
+        && let Some(name) = form.original_name.as_ref()
+        && form.ssh_key_note.is_none()
+    {
+        let users: Vec<String> =
+            profiles.iter().filter(|p| p.tunnel.as_deref() == Some(name.as_str())).map(|p| p.name.clone()).collect();
+        if !users.is_empty() {
+            let y = inner.y + 13;
+            put(buf, inner.x + 1, y, &i18n.label(Label::FormFieldTunnelUsedBy), label_w, label_style(false));
+            put(buf, inner.x + 1 + label_w as u16, y, &users.join(", "), iw.saturating_sub(label_w + 2), dim);
         }
     }
     // What the key file picker said about the file it picked, below the fields.

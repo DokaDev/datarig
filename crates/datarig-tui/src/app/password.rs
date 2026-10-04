@@ -405,6 +405,9 @@ impl App {
     /// `Ctrl+S` in the form. A profile whose stored password would move or be removed (its
     /// source changes from the keychain or the secrets file) asks first.
     pub(super) fn save_form(&mut self) {
+        if self.overlays.form().is_some_and(ProfileForm::is_tunnel) {
+            return self.save_tunnel_form();
+        }
         let Some(form) = self.overlays.form_mut().filter(|f| !f.saving) else { return };
         form.attempted = true;
         let editing = form.editing;
@@ -413,11 +416,18 @@ impl App {
         if !form.errors(taken).is_empty() || form.dsn_problem.is_some() {
             return;
         }
+        // A preset of the same name made since the form opened ("save as tunnel preset").
+        if let Some(name) = form.made_preset().map(|p| p.name)
+            && self.presets.iter().any(|p| datarig_core::profile::tunnel::same_name(&p.name, &name))
+        {
+            return self.flash(Notice::new(Msg::TunnelNameTaken { name }, Level::Warning));
+        }
         // The tunnel's secret is written (or moved out of a store it left) once the profile is
-        // saved.
+        // saved; made into a preset, it moves to the preset (`apply_form`).
         let (id, typed, new) = (form.profile_id(), form.ssh_typed_secret(), form.to_profile().ssh);
         let old = editing.and_then(|i| self.profiles.get(i)).and_then(|p| p.ssh.clone());
-        self.pending_tunnel_secret = Some(super::tunnel::FormSecret { id, old, new, typed });
+        self.pending_tunnel_secret =
+            (!form.new_preset_picked()).then_some(super::tunnel::FormSecret { id, old, new, typed });
         let Some(form) = self.overlays.form() else { return };
         let (from, to) = (form.original_source(), form.source);
         match from {
@@ -460,6 +470,24 @@ impl App {
         let Some(form) = self.overlays.form() else { return };
         let editing = form.editing;
         let mut p = form.to_profile();
+        // "Save as tunnel preset": the preset is saved with the profile (one write), then the
+        // profile's tunnel secret moves to it.
+        let made = form.made_preset();
+        let secret_move = made.as_ref().and_then(|t| {
+            let kind =
+                Some(t.settings.source().kind()).filter(|k| t.settings.auth.has_secret() && k.stores_secret())?;
+            Some(super::presets::SecretMove {
+                name: t.name.clone(),
+                kind,
+                from: datarig_core::profile::ssh::SshSettings::account(p.id),
+                to: t.id.account(),
+                typed: form.typed_bastion_secret(),
+            })
+        });
+        if let Some(t) = made.clone() {
+            self.presets.push(t);
+            self.presets.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        }
         let pw = form.password.text().to_string();
         let keep_unread = pw.is_empty() && form.password_unread;
         let from = form.original_source().unwrap_or(form.source);
@@ -502,6 +530,8 @@ impl App {
         }
         let idx = self.put_profile(editing, p.clone());
         let saved = self.persist();
+        // The file kept the profile's own tunnel when the save failed: its secret stays there.
+        let written = !saved.as_ref().is_some_and(|m| matches!(m.msg, Msg::ConfigSaveFailed { .. }));
         self.form_saved(idx);
         let msg = match (warn, saved) {
             (Some(e), _) => Notice::new(e, Level::Warning),
@@ -509,6 +539,9 @@ impl App {
             (None, None) => Notice::new(Msg::ProfilesSaved { name: p.name.clone() }, Level::Success),
         };
         self.flash(msg);
+        if let Some(m) = secret_move.filter(|_| written) {
+            self.move_secret_to_preset(m);
+        }
         match keychain {
             Some(Some((pw, plaintext))) => self.save_to_keychain(&p, pw, AfterSave::Form { plaintext }),
             Some(None) => {

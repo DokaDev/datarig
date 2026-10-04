@@ -27,6 +27,14 @@ impl App {
             let m = Notice::new(Msg::ConnUnknownDriver { driver: conn.driver.clone() }, Level::Error);
             return self.attempt_failed(id, m);
         }
+        // A tunnel setting that names no preset, or two tunnels at once: nothing is asked or
+        // sent (never a direct connection instead).
+        if let Err(e) = self.route_of(&conn) {
+            let m = self.route_error_notice(&conn.name, &e);
+            self.attempt_failed(id, m.clone());
+            self.status = Some(m);
+            return;
+        }
         self.show_status(Notice::new(Msg::ConnConnecting { name: conn.name.clone() }, Level::Info));
         match self.plan_password(&conn) {
             password::Plan::Ready(pw) => self.start_connect(conn, pw),
@@ -70,10 +78,26 @@ impl App {
         }
         let mut cfg = conn.clone();
         cfg.password = password;
+        let route = match self.route_of(&conn) {
+            Ok(r) => r.settings().cloned().map(|s| {
+                (
+                    s,
+                    match r {
+                        datarig_core::profile::tunnel::Route::Preset(p) => Some(p.id),
+                        _ => None,
+                    },
+                )
+            }),
+            Err(e) => {
+                let m = self.route_error_notice(&conn.name, &e);
+                return self.attempt_failed(conn.id, m);
+            }
+        };
         // Through its SSH tunnel: opened first (or the open one, when its settings are the
-        // same); the attempt goes on once it is open.
-        if let Some(settings) = conn.tunnel()
-            && !self.tunnel_ready(conn.id, settings)
+        // same; a preset's shared one when another profile opened it); the attempt goes on once
+        // it is open.
+        if let Some((settings, preset)) = route
+            && !self.tunnel_ready(conn.id, &settings, preset)
         {
             let started = self.now();
             let c = self.conns.entry(conn.id);
@@ -633,8 +657,10 @@ impl App {
 
     pub(super) fn start_test(&mut self, cfg: ConnectionConfig) {
         // Through its SSH tunnel (a throwaway one: the form may hold settings not saved yet).
-        if cfg.tunnel().is_some() {
-            return self.start_tunnel_test(cfg, None);
+        match self.route_of(&cfg) {
+            Ok(datarig_core::profile::tunnel::Route::Direct) => {}
+            Ok(_) => return self.start_tunnel_test(cfg, None),
+            Err(e) => return self.route_test_failed(&cfg, &e),
         }
         self.clear_test();
         self.test_seq += 1;
@@ -660,7 +686,7 @@ impl App {
             // Headless tests inject the result through `on_app_event`.
             (Some(_), None) => None,
         };
-        self.conn_test = Some(ConnTest { seq, started: Instant::now(), state, abort, tunnel: None });
+        self.conn_test = Some(ConnTest { seq, started: Instant::now(), state, abort, tunnel: None, probe: false });
         self.report_test();
     }
 
@@ -683,6 +709,9 @@ impl App {
             Form(ConnectionConfig, Option<String>),
             Profile(ConnectionConfig),
         }
+        if self.overlays.form().is_some_and(super::profiles::ProfileForm::is_tunnel) {
+            return self.test_tunnel_form();
+        }
         // The form's fields a connection needs are checked as Save checks them: a missing
         // database host (or user, port, a tunnel field) is marked and nothing is tried.
         if let Some(f) = self.overlays.form_mut() {
@@ -703,7 +732,7 @@ impl App {
                 // The typed password of a storing source, unless it could not be loaded.
                 let typed = (f.source.stores_secret() && !(f.password.text().is_empty() && f.password_unread))
                     .then(|| f.password.text().to_string());
-                Some(Target::Form(f.to_profile(), typed))
+                Some(Target::Form(f.to_test_profile(), typed))
             }
             None => profile.and_then(|id| self.profile(id)).cloned().map(Target::Profile),
         };
@@ -721,8 +750,11 @@ impl App {
     /// (headless: here), then the server is asked.
     pub(super) fn start_test_with_command(&mut self, cfg: ConnectionConfig, cmd: String) {
         use datarig_core::secret::command;
-        if cfg.tunnel().is_some() && self.tx.is_some() {
-            return self.start_tunnel_test(cfg, Some(cmd));
+        match self.route_of(&cfg) {
+            Ok(datarig_core::profile::tunnel::Route::Direct) => {}
+            Ok(_) if self.tx.is_some() => return self.start_tunnel_test(cfg, Some(cmd)),
+            Ok(_) => {}
+            Err(e) => return self.route_test_failed(&cfg, &e),
         }
         let Some(tx) = self.tx.clone() else {
             match command::run(&cmd, command::TIMEOUT) {
@@ -761,7 +793,26 @@ impl App {
             state: TestState::Running,
             abort: Some(task.abort_handle()),
             tunnel: None,
+            probe: false,
         });
+    }
+
+    /// A test of `cfg`, whose tunnel setting is wrong: it fails at once, saying why (nothing is
+    /// tried, never directly).
+    fn route_test_failed(&mut self, cfg: &ConnectionConfig, e: &datarig_core::profile::tunnel::RouteError) {
+        self.clear_test();
+        self.test_seq += 1;
+        let text = self.route_error_notice(&cfg.name, e).render(&self.i18n).to_string();
+        let seq = self.test_seq;
+        self.conn_test = Some(ConnTest {
+            seq,
+            started: Instant::now(),
+            state: TestState::Failed(text),
+            abort: None,
+            tunnel: None,
+            probe: false,
+        });
+        self.report_test();
     }
 
     pub(super) fn on_ping(&mut self, seq: u64, result: Result<PingInfo, PingError>) {
@@ -821,6 +872,7 @@ impl App {
         };
         let mut form = form;
         form.folders = self.folders.iter().map(ToString::to_string).collect();
+        form.presets = self.presets.clone();
         for (i, (name, _)) in crate::app::profiles::DRIVERS.iter().enumerate() {
             form.drivers_enabled[i] = self.driver(name).is_some();
         }

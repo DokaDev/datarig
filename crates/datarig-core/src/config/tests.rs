@@ -109,7 +109,7 @@ fn settings(language: &str) -> Settings<'_> {
 }
 
 fn profiles<'a>(c: &'a [ConnectionConfig], folders: &'a Folders, last_used: Option<ProfileId>) -> Profiles<'a> {
-    Profiles { connections: c, folders, last_used }
+    Profiles { connections: c, tunnels: &[], folders, last_used }
 }
 
 /// `<tmp>/datarig-cfg-<pid>-<tag>/sub/config.toml`, not created; the directory is removed when
@@ -787,7 +787,7 @@ fn the_ssh_table_is_read_checked_and_written() {
     std::fs::write(&path, text).unwrap();
     let (mut cfg, err) = load(Some(path.clone()));
     assert!(err.is_none(), "{err:?}");
-    let ssh = cfg.connections[0].tunnel().expect("on");
+    let ssh = cfg.connections[0].inline_ssh().expect("on");
     assert_eq!(
         (ssh.host.as_str(), ssh.port, ssh.user.as_str(), ssh.auth),
         ("bastion.example.com", 22, "ec2-user", SshAuth::Key)
@@ -809,7 +809,7 @@ fn the_ssh_table_is_read_checked_and_written() {
     let (back, err) = load(Some(path.clone()));
     assert!(err.is_none(), "{err:?}");
     assert_eq!(back.connections[0].ssh, cfg.connections[0].ssh);
-    assert!(back.connections[0].tunnel().is_none(), "off");
+    assert!(back.connections[0].inline_ssh().is_none(), "off");
     // Never set up: no table.
     let mut plain = back.connections.clone();
     plain[0].ssh = None;
@@ -822,4 +822,171 @@ fn the_ssh_table_is_read_checked_and_written() {
     assert!(matches!(load(Some(path.clone())).1, Some(ConfigError::Syntax(_))));
     let off = SshSettings { enabled: false, ..SshSettings::default() };
     assert_eq!(off.problem(), None);
+}
+
+/// Tunnel presets: read with their ids (a new one when missing), checked, named by profiles,
+/// written back with their comments, moved to a new name when renamed, removed when gone.
+#[test]
+fn tunnel_presets_are_read_checked_and_written() {
+    use crate::profile::ssh::SshAuth;
+    use crate::profile::tunnel::{RouteError, TunnelPreset, route};
+    let path = temp_file("tunnels");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let text = "version = 2\n\n[tunnels.office] # the office bastion\nhost = \"bastion.example.com\" # jump host\n\
+                user = \"ec2-user\"\nkey_file = \"~/.ssh/office.pem\"\n\n[tunnels.lab]\nhost = \"lab\"\nport = 2222\n\
+                user = \"me\"\nauth = \"password\"\nsecret_source = \"file\"\n\n\
+                [[connections]]\nname = \"orders\"\nhost = \"orders-db\"\ntunnel = \"office\"\n\n\
+                [[connections]]\nname = \"local\"\n";
+    std::fs::write(&path, text).unwrap();
+    let (mut cfg, err) = load(Some(path.clone()));
+    assert!(err.is_none(), "{err:?}");
+    assert!(cfg.ids_assigned && cfg.needs_migration(), "presets without ids get them written");
+    let names: Vec<&str> = cfg.tunnels.iter().map(|t| t.name.as_str()).collect();
+    assert_eq!(names, ["lab", "office"]);
+    let office = &cfg.tunnels[1];
+    assert!(office.settings.enabled);
+    assert_eq!(
+        (office.settings.host.as_str(), office.settings.port, office.settings.auth),
+        ("bastion.example.com", 22, SshAuth::Key)
+    );
+    assert_eq!(cfg.tunnels[0].settings.port, 2222);
+    assert_eq!(cfg.connections[0].tunnel.as_deref(), Some("office"));
+    assert_eq!(route(&cfg.connections[0], &cfg.tunnels).unwrap().settings(), Some(&office.settings));
+    // Saved: the ids are written first; the comments stay.
+    save(
+        &path,
+        settings("auto"),
+        Some(Profiles { connections: &cfg.connections, tunnels: &cfg.tunnels, folders: &cfg.folders, last_used: None }),
+    )
+    .unwrap();
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(written.contains("[tunnels.office] # the office bastion"), "{written}");
+    assert!(written.contains("host = \"bastion.example.com\" # jump host"), "{written}");
+    assert!(written.contains(&format!("id = \"{}\"", cfg.tunnels[1].id)), "{written}");
+    assert!(written.contains("tunnel = \"office\""), "{written}");
+    assert!(!written.contains("enabled"), "a preset has no switch: {written}");
+    let (back, err) = load(Some(path.clone()));
+    assert!(err.is_none(), "{err:?}");
+    assert!(!back.ids_assigned);
+    assert_eq!(
+        back.tunnels,
+        cfg.tunnels.iter().map(|t| TunnelPreset { origin: Some(t.name.clone()), ..t.clone() }).collect::<Vec<_>>()
+    );
+    // Renamed (the profile follows, as the app does it), changed and one removed: the table
+    // moves to its new name with its comments; the removed one is gone.
+    let id = cfg.tunnels[1].id;
+    cfg.tunnels.remove(0);
+    cfg.tunnels[0].name = "hq".into();
+    cfg.tunnels[0].settings.keepalive = Some(30);
+    cfg.connections[0].tunnel = Some("hq".into());
+    save(
+        &path,
+        settings("auto"),
+        Some(Profiles { connections: &cfg.connections, tunnels: &cfg.tunnels, folders: &cfg.folders, last_used: None }),
+    )
+    .unwrap();
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(written.contains("[tunnels.hq] # the office bastion"), "{written}");
+    assert!(
+        written.contains("keepalive = 30") && !written.contains("[tunnels.lab]") && !written.contains("office]"),
+        "{written}"
+    );
+    let (back, err) = load(Some(path.clone()));
+    assert!(err.is_none(), "{err:?}");
+    assert_eq!((back.tunnels.len(), back.tunnels[0].id, back.tunnels[0].name.as_str()), (1, id, "hq"));
+    assert_eq!(back.connections[0].tunnel.as_deref(), Some("hq"));
+    // None left: no table at all, and a profile without a preset has no key.
+    let mut conns = back.connections.clone();
+    conns[0].tunnel = None;
+    save(
+        &path,
+        settings("auto"),
+        Some(Profiles { connections: &conns, tunnels: &[], folders: &back.folders, last_used: None }),
+    )
+    .unwrap();
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(!written.contains("tunnel"), "{written}");
+    // A new preset in a file that had none.
+    let new = TunnelPreset::new("new one", back.tunnels[0].settings.clone());
+    save(
+        &path,
+        settings("auto"),
+        Some(Profiles {
+            connections: &conns,
+            tunnels: std::slice::from_ref(&new),
+            folders: &back.folders,
+            last_used: None,
+        }),
+    )
+    .unwrap();
+    let (back, err) = load(Some(path.clone()));
+    assert!(err.is_none(), "{err:?}");
+    assert_eq!((back.tunnels[0].name.as_str(), back.tunnels[0].id), ("new one", new.id));
+    // Both a preset and its own tunnel on, or a name no preset has: an error of that profile
+    // only (the file loads; the profile does not connect).
+    let both = "[tunnels.office]\nhost = \"b\"\nuser = \"u\"\nauth = \"agent\"\n[[connections]]\nname = \"p\"\ntunnel = \"office\"\n\
+                [connections.ssh]\nenabled = true\nhost = \"b\"\nuser = \"u\"\nauth = \"agent\"\n";
+    let cfg = parse(both).unwrap();
+    assert_eq!(route(&cfg.connections[0], &cfg.tunnels), Err(RouteError::Both { tunnel: "office".into() }));
+    let cfg = parse("[[connections]]\nname = \"p\"\ntunnel = \"nowhere\"\n").unwrap();
+    assert_eq!(route(&cfg.connections[0], &cfg.tunnels), Err(RouteError::NotFound("nowhere".into())));
+}
+
+#[test]
+fn bad_tunnel_presets_are_errors_of_the_file() {
+    let ok = "host = \"b\"\nuser = \"u\"\nauth = \"agent\"\n";
+    assert!(parse(&format!("[tunnels.a]\n{ok}")).is_ok());
+    assert_eq!(parse(&format!("[tunnels.\" a\"]\n{ok}")).unwrap_err(), ConfigError::TunnelName(" a".into()));
+    assert_eq!(
+        parse("[tunnels.a]\nhost = \"b\"\nauth = \"agent\"\n").unwrap_err(),
+        ConfigError::TunnelMissing { key: "user", tunnel: "a".into() }
+    );
+    assert_eq!(
+        parse("[tunnels.a]\nhost = \"b\"\nuser = \"u\"\n").unwrap_err(),
+        ConfigError::TunnelMissing { key: "key_file", tunnel: "a".into() },
+        "a key file, unless it logs in another way"
+    );
+    assert!(matches!(
+        parse(&format!("[tunnels.a]\n{ok}port = 0\n")).unwrap_err(),
+        ConfigError::Value { key, .. } if key == "tunnels.a.port"
+    ));
+    // `enabled` belongs to a profile's own table only; unknown keys are refused.
+    assert!(matches!(parse(&format!("[tunnels.a]\n{ok}enabled = true\n")).unwrap_err(), ConfigError::Syntax(_)));
+    let id = crate::profile::tunnel::TunnelId::new();
+    let twice = format!("[tunnels.a]\nid = \"{id}\"\n{ok}[tunnels.b]\nid = \"{id}\"\n{ok}");
+    assert_eq!(parse(&twice).unwrap_err(), ConfigError::DuplicateTunnelId(id.to_string()));
+    assert!(matches!(
+        parse("[[connections]]\nname = \"p\"\ntunnel = \" \"\n").unwrap_err(),
+        ConfigError::Value { key, profile: Some(p), .. } if key == "tunnel" && p == "p"
+    ));
+    // `tunnels` must be a table of tables when the app saves.
+    let path = temp_file("tunnels-shape");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "tunnels = 3\n").unwrap();
+    let t = a_preset();
+    assert!(
+        save(
+            &path,
+            settings("auto"),
+            Some(Profiles {
+                connections: &[],
+                tunnels: std::slice::from_ref(&t),
+                folders: &Folders::default(),
+                last_used: None
+            })
+        )
+        .is_err()
+    );
+}
+
+fn a_preset() -> crate::profile::tunnel::TunnelPreset {
+    crate::profile::tunnel::TunnelPreset::new(
+        "a",
+        crate::profile::ssh::SshSettings {
+            host: "b".into(),
+            user: "u".into(),
+            auth: crate::profile::ssh::SshAuth::Agent,
+            ..Default::default()
+        },
+    )
 }
