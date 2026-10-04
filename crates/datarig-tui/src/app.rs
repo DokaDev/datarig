@@ -191,6 +191,8 @@ pub struct Popup {
     pub items: Vec<Candidate>,
     pub selected: usize,
     pub replace_start: usize,
+    /// Bytes after the cursor the accepted label replaces too (a closing `"`).
+    pub trail: usize,
 }
 
 pub struct Viewer {

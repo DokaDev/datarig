@@ -138,7 +138,12 @@ Everything below works today, with PostgreSQL.
   character `f`, `t` or `r` waits for is taken as typed. The supported keys are listed in
   [docs/keybindings.md](docs/keybindings.md).
 - Syntax highlighting, completion of schemas, tables and columns (aliases included), and the
-  statement under the cursor marked in the gutter.
+  statement under the cursor marked in the gutter. Completion inserts names as SQL: a name that
+  is not a plain lower-case word (`MixedCase`, `Order Lines`) or is a reserved word goes in
+  quoted, also when you started it with `"`. The statement's `WITH` queries are offered as
+  tables, with their columns when the query lists them or names them in its select list. Names
+  that start with what you typed come first, then names that contain its letters in order
+  (`oi` finds `order_items`); keywords only by their start.
 - Run the statement under the cursor (`Ctrl+E`), a selection, or several statements in a row:
   each statement's outcome is listed in a Messages tab, and every row result gets a result tab
   of its own. Queries can be cancelled (`Ctrl+C`).

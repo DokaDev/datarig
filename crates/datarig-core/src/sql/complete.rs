@@ -1,7 +1,12 @@
 //! Context-aware completion on top of the tolerant lexer. Works on incomplete SQL
 //! because it only looks at the token stream of the `;`-segment around the cursor.
+//!
+//! Names are offered as SQL: quoted when PostgreSQL would not read them back bare
+//! ([`sql_ident`]), and always quoted after an opening `"`. A name matches when the typed
+//! prefix starts it; names the typed letters only appear in, in order, follow those.
 
-use super::lexer::{KEYWORDS, Tok, Token, lex};
+use super::ident::sql_ident;
+use super::lexer::{KEYWORDS, Tok, Token, is_space, lex};
 use super::split::segment_at;
 use crate::i18n::Label;
 
@@ -58,8 +63,11 @@ pub struct Candidate {
 pub struct Completion {
     pub items: Vec<Candidate>,
     /// Byte offset (in the full source) where the typed prefix starts; accepting a candidate
-    /// replaces `replace_start..cursor` with the label.
+    /// replaces `replace_start..cursor + trail` with the label.
     pub replace_start: usize,
+    /// Bytes after the cursor that the label replaces too: the closing `"` of a quoted name
+    /// being typed (`"Mi|"`), which the label brings itself.
+    pub trail: usize,
 }
 
 pub const MAX_ITEMS: usize = 10;
@@ -177,11 +185,51 @@ fn starts_ci(s: &str, prefix: &str) -> bool {
     s.to_lowercase().starts_with(&prefix.to_lowercase())
 }
 
-fn columns_of(rel: &Relation, prefix: &str) -> Vec<Candidate> {
+/// Whether the letters of `typed` appear in `name` in order (case-insensitive).
+fn subsequence_ci(name: &str, typed: &str) -> bool {
+    let mut it = name.chars().flat_map(char::to_lowercase);
+    typed.chars().flat_map(char::to_lowercase).all(|t| it.any(|c| c == t))
+}
+
+/// How well a name matches what was typed: [`PREFIX`] when the prefix starts it,
+/// [`SUBSEQUENCE`] when its letters only appear in it in order.
+fn rank(name: &str, typed: &str) -> Option<u8> {
+    if starts_ci(name, typed) {
+        Some(PREFIX)
+    } else if subsequence_ci(name, typed) {
+        Some(SUBSEQUENCE)
+    } else {
+        None
+    }
+}
+
+const PREFIX: u8 = 0;
+const SUBSEQUENCE: u8 = 1;
+
+/// A candidate and how well it matched ([`rank`]).
+type Ranked = (u8, Candidate);
+
+/// The prefix being typed and how names are written for it.
+struct Typed {
+    text: String,
+    /// After an opening `"`: every name is written quoted.
+    quoted: bool,
+}
+
+impl Typed {
+    fn ident(&self, name: &str) -> String {
+        if self.quoted { format!("\"{}\"", name.replace('"', "\"\"")) } else { sql_ident(name) }
+    }
+}
+
+fn columns_of(rel: &Relation, typed: &Typed) -> Vec<Ranked> {
     rel.columns
         .iter()
-        .filter(|c| starts_ci(&c.name, prefix))
-        .map(|c| Candidate { label: c.name.clone(), kind: Kind::Column, detail: Some(c.type_name.clone()) })
+        .filter_map(|c| {
+            let detail = (!c.type_name.is_empty()).then(|| c.type_name.clone());
+            rank(&c.name, &typed.text)
+                .map(|m| (m, Candidate { label: typed.ident(&c.name), kind: Kind::Column, detail }))
+        })
         .collect()
 }
 
@@ -199,19 +247,32 @@ pub fn complete(src: &str, cursor: usize, cat: &Catalog, force: bool) -> Option<
 /// [`complete`] for a session whose search path is `path` (a tab's schema): an
 /// unqualified name resolves in the first schema of `path` that has it, and in a table position
 /// the relations of `path`'s schemas are offered by their bare name, before every relation
-/// qualified.
+/// qualified. The `WITH` queries of the statement come before the catalog's relations.
 pub fn complete_in(src: &str, cursor: usize, cat: &Catalog, force: bool, path: &[String]) -> Option<Completion> {
     let (seg_start, seg_end) = segment_at(src, cursor);
     let seg = &src[seg_start..seg_end];
     let cur = cursor - seg_start;
     let toks = lex(seg);
 
-    // No completion inside strings, comments, quoted identifiers or dollar bodies.
+    // A quoted name being typed: its opening `"` is before the cursor, with no other `"`
+    // between, and after the cursor comes the end, a space or the closing `"`. (A `"` typed
+    // before other quoted names pairs with the next `"`: `SELECT "Mi| FROM "t"`.)
+    let open_quote = toks.iter().find(|t| {
+        t.kind == Tok::QuotedIdent
+            && t.start < cur
+            && cur <= t.end
+            && !(closed(t, seg) && cur == t.end)
+            && !seg[t.start + 1..cur].contains('"')
+            && seg[cur..t.end].chars().next().is_none_or(|c| c == '"' || is_space(c))
+    });
+
+    // No completion inside strings, comments, other quoted identifiers or dollar bodies.
     for t in &toks {
         let inside = match t.kind {
             Tok::LineComment => t.start < cur && cur <= t.end,
             Tok::BlockComment | Tok::Dollar => t.start < cur && (cur < t.end || !closed(t, seg)),
-            Tok::Str | Tok::QuotedIdent => t.start < cur && (cur < t.end || !closed(t, seg)),
+            Tok::Str => t.start < cur && (cur < t.end || !closed(t, seg)),
+            Tok::QuotedIdent => open_quote != Some(t) && t.start < cur && (cur < t.end || !closed(t, seg)),
             _ => false,
         };
         if inside {
@@ -220,10 +281,17 @@ pub fn complete_in(src: &str, cursor: usize, cat: &Catalog, force: bool, path: &
     }
 
     // Prefix being typed.
-    let (prefix_start, prefix) = match toks.iter().find(|t| t.is_word() && t.start < cur && cur <= t.end) {
-        Some(t) => (t.start, &seg[t.start..cur]),
-        None => (cur, ""),
+    let (prefix_start, typed, trail) = match open_quote {
+        Some(t) => {
+            let trail = usize::from(seg[cur..].starts_with('"') && closed(t, seg) && cur + 1 == t.end);
+            (t.start, Typed { text: seg[t.start + 1..cur].replace("\"\"", "\""), quoted: true }, trail)
+        }
+        None => match toks.iter().find(|t| t.is_word() && t.start < cur && cur <= t.end) {
+            Some(t) => (t.start, Typed { text: seg[t.start..cur].to_string(), quoted: false }, 0),
+            None => (cur, Typed { text: String::new(), quoted: false }, 0),
+        },
     };
+    let prefix = typed.text.as_str();
     let before: Vec<&Token> = toks.iter().filter(|t| t.end <= prefix_start && !t.is_trivia()).collect();
 
     // `qualifier.` or `schema.table.` right before the prefix.
@@ -239,88 +307,245 @@ pub fn complete_in(src: &str, cursor: usize, cat: &Catalog, force: bool, path: &
         _ => None,
     };
 
-    if prefix.is_empty() && qualifier.is_none() && !force {
+    if prefix.is_empty() && qualifier.is_none() && !force && !typed.quoted {
         return None;
     }
 
-    let refs = table_refs(&toks, seg);
-    let mut items: Vec<Candidate> = Vec::new();
+    // The statement's tables and `WITH` queries. An open quote runs to the end of the text, so
+    // they are read with the name being typed left out.
+    let rest;
+    let (ctx_src, ctx_toks) = match open_quote {
+        Some(t) => {
+            rest = format!("{}{}", &seg[..t.start], &seg[cur + trail..]);
+            (rest.as_str(), lex(&rest))
+        }
+        None => (seg, toks.clone()),
+    };
+    let refs = table_refs(&ctx_toks, ctx_src);
+    let ctes = with_queries(&ctx_toks, ctx_src);
+    let resolve = |schema: Option<&str>, name: &str| -> Option<&Relation> {
+        match schema {
+            None => ctes.iter().find(|c| c.name.eq_ignore_ascii_case(name)).or_else(|| find_rel(cat, None, name, path)),
+            Some(_) => find_rel(cat, schema, name, path),
+        }
+    };
+    let mut items: Vec<Ranked> = Vec::new();
 
     if let Some((qs, q)) = qualifier {
         if let Some(s) = qs {
             if let Some(rel) = find_rel(cat, Some(&s), &q, path) {
-                items.extend(columns_of(rel, prefix));
+                items.extend(columns_of(rel, &typed));
             }
         } else if let Some(rel) = refs
             .iter()
             .filter(|r| r.alias.as_deref().is_some_and(|a| a.eq_ignore_ascii_case(&q)))
             .chain(refs.iter().filter(|r| r.alias.is_none() && r.name.eq_ignore_ascii_case(&q)))
-            .find_map(|r| find_rel(cat, r.schema.as_deref(), &r.name, path))
+            .find_map(|r| resolve(r.schema.as_deref(), &r.name))
         {
-            items.extend(columns_of(rel, prefix));
+            items.extend(columns_of(rel, &typed));
         } else if cat.schemas.iter().any(|s| s.eq_ignore_ascii_case(&q)) {
-            let mut rels: Vec<&Relation> = cat
+            let mut rels: Vec<(u8, &Relation)> = cat
                 .relations
                 .iter()
-                .filter(|r| r.schema.eq_ignore_ascii_case(&q) && starts_ci(&r.name, prefix))
+                .filter(|r| r.schema.eq_ignore_ascii_case(&q))
+                .filter_map(|r| rank(&r.name, prefix).map(|m| (m, r)))
                 .collect();
-            rels.sort_by(|a, b| a.name.cmp(&b.name));
-            items.extend(rels.into_iter().map(|r| relation_candidate(r, r.name.clone())));
-        } else if let Some(rel) = find_rel(cat, None, &q, path) {
-            items.extend(columns_of(rel, prefix));
+            rels.sort_by(|a, b| a.1.name.cmp(&b.1.name));
+            items.extend(rels.into_iter().map(|(m, r)| (m, relation_candidate(r, typed.ident(&r.name)))));
+        } else if let Some(rel) = resolve(None, &q) {
+            items.extend(columns_of(rel, &typed));
         }
     } else if in_table_position(&before, seg) {
-        items.extend(cat.schemas.iter().filter(|s| starts_ci(s, prefix)).map(|s| Candidate {
-            label: s.clone(),
-            kind: Kind::Schema,
-            detail: None,
+        // The statement's `WITH` queries hide relations of the same name.
+        items.extend(ctes.iter().filter_map(|c| {
+            rank(&c.name, prefix)
+                .map(|m| (m, Candidate { label: typed.ident(&c.name), kind: Kind::Table, detail: None }))
+        }));
+        items.extend(cat.schemas.iter().filter_map(|s| {
+            rank(s, prefix).map(|m| (m, Candidate { label: typed.ident(s), kind: Kind::Schema, detail: None }))
         }));
         // The relations the search path reaches, by their bare name (the first schema of the
         // path that has a name wins, as the server resolves it) ...
         let on_path = |r: &Relation| path.iter().any(|p| p.eq_ignore_ascii_case(&r.schema));
-        let mut bare: Vec<&Relation> = cat
+        let mut bare: Vec<(u8, &Relation)> = cat
             .relations
             .iter()
-            .filter(|r| on_path(r) && starts_ci(&r.name, prefix))
-            .filter(|r| find_rel(cat, None, &r.name, path).is_some_and(|f| std::ptr::eq(f, *r)))
+            .filter(|r| on_path(r) && !ctes.iter().any(|c| c.name.eq_ignore_ascii_case(&r.name)))
+            .filter_map(|r| rank(&r.name, prefix).map(|m| (m, r)))
+            .filter(|(_, r)| find_rel(cat, None, &r.name, path).is_some_and(|f| std::ptr::eq(f, *r)))
             .collect();
-        bare.sort_by(|a, b| a.name.cmp(&b.name));
-        items.extend(bare.into_iter().map(|r| relation_candidate(r, r.name.clone())));
+        bare.sort_by(|a, b| a.1.name.cmp(&b.1.name));
+        items.extend(bare.into_iter().map(|(m, r)| (m, relation_candidate(r, typed.ident(&r.name)))));
         // ... then every relation qualified.
-        let mut rels: Vec<(String, &Relation)> = cat
+        let mut rels: Vec<(u8, String, &Relation)> = cat
             .relations
             .iter()
-            .map(|r| (format!("{}.{}", r.schema, r.name), r))
-            .filter(|(full, r)| starts_ci(full, prefix) || starts_ci(&r.name, prefix))
+            .filter_map(|r| {
+                let full = format!("{}.{}", r.schema, r.name);
+                let m = rank(&full, prefix).into_iter().chain(rank(&r.name, prefix)).min()?;
+                Some((m, full, r))
+            })
             .collect();
-        rels.sort_by(|a, b| a.0.cmp(&b.0));
-        items.extend(rels.into_iter().map(|(full, r)| relation_candidate(r, full)));
+        rels.sort_by(|a, b| a.1.cmp(&b.1));
+        items.extend(rels.into_iter().map(|(m, _, r)| {
+            (m, relation_candidate(r, format!("{}.{}", typed.ident(&r.schema), typed.ident(&r.name))))
+        }));
     } else {
         let mut seen = std::collections::HashSet::new();
         for r in &refs {
-            if let Some(rel) = find_rel(cat, r.schema.as_deref(), &r.name, path) {
-                for c in columns_of(rel, prefix) {
-                    if seen.insert(c.label.to_lowercase()) {
+            if let Some(rel) = resolve(r.schema.as_deref(), &r.name) {
+                for c in columns_of(rel, &typed) {
+                    if seen.insert(c.1.label.to_lowercase()) {
                         items.push(c);
                     }
                 }
             }
         }
-        if !prefix.is_empty() || force {
+        // Keywords match by their prefix only, and are never quoted.
+        if (!prefix.is_empty() || force) && !typed.quoted {
             let lower = !prefix.is_empty() && prefix.chars().all(|c| !c.is_uppercase());
-            items.extend(KEYWORDS.iter().filter(|k| starts_ci(k, prefix)).map(|k| Candidate {
-                label: if lower { k.to_lowercase() } else { k.to_string() },
-                kind: Kind::Keyword,
-                detail: None,
+            items.extend(KEYWORDS.iter().filter(|k| starts_ci(k, prefix)).map(|k| {
+                let label = if lower { k.to_lowercase() } else { k.to_string() };
+                (PREFIX, Candidate { label, kind: Kind::Keyword, detail: None })
             }));
         }
     }
 
+    // Prefix matches first, each group in its order.
+    items.sort_by_key(|(m, _)| *m);
+    let mut items: Vec<Candidate> = items.into_iter().map(|(_, c)| c).collect();
     items.truncate(MAX_ITEMS);
     if items.is_empty() {
         return None;
     }
-    Some(Completion { items, replace_start: seg_start + prefix_start })
+    Some(Completion { items, replace_start: seg_start + prefix_start, trail })
+}
+
+/// The `WITH` queries of a statement (`WITH a AS (…), b(x, y) AS (…)`, also nested ones) as
+/// relations without a schema. Their columns are the written column list, else the names of
+/// the query's select list that can be read without running it (`x`, `t.x`, `… AS x`, `… x`);
+/// other items (`*`, an expression without a name) are left out.
+fn with_queries(toks: &[Token], src: &str) -> Vec<Relation> {
+    let sig: Vec<&Token> = toks.iter().filter(|t| !t.is_trivia()).collect();
+    let mut out = Vec::new();
+    for (i, t) in sig.iter().enumerate() {
+        if !kw(t, src, &["WITH"]) {
+            continue;
+        }
+        let mut j = i + 1;
+        if sig.get(j).is_some_and(|t| t.kind == Tok::Ident && t.text(src).eq_ignore_ascii_case("recursive"))
+            && sig.get(j + 1).is_some_and(|t| is_name(t))
+        {
+            j += 1;
+        }
+        while let Some(name) = sig.get(j).filter(|t| is_name(t)) {
+            let name = unquote(name, src);
+            j += 1;
+            let mut listed = None;
+            if sig.get(j).is_some_and(|t| t.kind == Tok::LParen) {
+                let close = matching_paren(&sig, j);
+                listed = Some(sig[j + 1..close].iter().filter(|t| is_name(t)).map(|t| unquote(t, src)).collect());
+                j = close + 1;
+            }
+            if !sig.get(j).is_some_and(|t| kw(t, src, &["AS"])) {
+                break;
+            }
+            j += 1;
+            if sig.get(j).is_some_and(|t| kw(t, src, &["NOT"])) {
+                j += 1;
+            }
+            if sig.get(j).is_some_and(|t| kw(t, src, &["MATERIALIZED"])) {
+                j += 1;
+            }
+            if !sig.get(j).is_some_and(|t| t.kind == Tok::LParen) {
+                break;
+            }
+            let close = matching_paren(&sig, j);
+            let names: Vec<String> = listed.unwrap_or_else(|| select_list_names(&sig[j + 1..close], src));
+            let columns = names.into_iter().map(|name| ColumnInfo { name, type_name: String::new() }).collect();
+            out.push(Relation { schema: String::new(), name, is_view: false, columns });
+            j = close + 1;
+            if !sig.get(j).is_some_and(|t| t.kind == Tok::Comma) {
+                break;
+            }
+            j += 1;
+        }
+    }
+    out
+}
+
+/// The index of the `)` closing the `(` at `open`, or the end when it is not closed.
+fn matching_paren(sig: &[&Token], open: usize) -> usize {
+    let mut depth = 0;
+    for (i, t) in sig.iter().enumerate().skip(open) {
+        match t.kind {
+            Tok::LParen => depth += 1,
+            Tok::RParen => {
+                depth -= 1;
+                if depth == 0 {
+                    return i;
+                }
+            }
+            _ => {}
+        }
+    }
+    sig.len()
+}
+
+/// The column names of a query's select list that are written in it (see [`with_queries`]).
+fn select_list_names(body: &[&Token], src: &str) -> Vec<String> {
+    const END: &[&str] = &[
+        "FROM",
+        "WHERE",
+        "GROUP",
+        "HAVING",
+        "ORDER",
+        "LIMIT",
+        "OFFSET",
+        "UNION",
+        "INTERSECT",
+        "EXCEPT",
+        "WINDOW",
+        "FETCH",
+        "FOR",
+        "INTO",
+    ];
+    let Some(start) = body.iter().position(|t| kw(t, src, &["SELECT"])) else { return Vec::new() };
+    let mut items: Vec<Vec<&Token>> = vec![Vec::new()];
+    let mut depth = 0;
+    for t in &body[start + 1..] {
+        match t.kind {
+            Tok::LParen => depth += 1,
+            Tok::RParen => depth -= 1,
+            Tok::Comma if depth == 0 => {
+                items.push(Vec::new());
+                continue;
+            }
+            _ if depth == 0 && kw(t, src, END) => break,
+            _ => {}
+        }
+        items.last_mut().expect("one item at least").push(t);
+    }
+    items
+        .iter()
+        .filter_map(|item| {
+            // `DISTINCT` / `ALL` before the first item.
+            let item = match item.first() {
+                Some(t) if kw(t, src, &["DISTINCT", "ALL"]) => &item[1..],
+                _ => &item[..],
+            };
+            let (last, before) = item.split_last()?;
+            if !is_name(last) {
+                return None;
+            }
+            let chain = item.iter().enumerate().all(|(i, t)| if i % 2 == 0 { is_name(t) } else { t.kind == Tok::Dot });
+            let named = match before.last() {
+                None => true,
+                Some(p) => chain || kw(p, src, &["AS"]) || !matches!(p.kind, Tok::Dot | Tok::Op | Tok::Comma),
+            };
+            named.then(|| unquote(last, src))
+        })
+        .collect()
 }
 
 fn closed(t: &Token, src: &str) -> bool {

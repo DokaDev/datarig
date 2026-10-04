@@ -431,6 +431,54 @@ fn completion_trigger_rules() {
     assert!(items.len() < n && items[0].label == "users", "{items:?}");
 }
 
+/// An accepted name is SQL: a mixed-case name goes in quoted, also after an opening `"` the
+/// user typed (which it replaces with the closing one), and a `WITH` query is a table.
+#[test]
+fn completion_inserts_names_as_sql() {
+    use datarig_core::sql::complete::{ColumnInfo, Relation};
+    let mut h = Harness::connected(Lang::En);
+    let mut cat = catalog();
+    let col = |n: &str| ColumnInfo { name: n.into(), type_name: "text".into() };
+    cat.relations.push(Relation {
+        schema: "shop".into(),
+        name: "Order Lines".into(),
+        is_view: false,
+        columns: vec![col("Mixed Col"), col("MixedCase")],
+    });
+    h.db(DbEvent::Catalog(Ok(cat)));
+    h.keys("ggdGi");
+    h.keys("SELECT  FROM shop.ord");
+    h.settle();
+    h.key(KeyCode::Tab);
+    assert_eq!(h.app.tab().editor.text(), "SELECT  FROM shop.\"Order Lines\"");
+    h.key(KeyCode::Esc);
+    h.keys("06la");
+    h.keys("mixedc");
+    h.settle();
+    assert_eq!(h.popup().expect("popup").items[0].label, "\"MixedCase\"");
+    h.key(KeyCode::Tab);
+    assert_eq!(h.app.tab().editor.text(), "SELECT \"MixedCase\" FROM shop.\"Order Lines\"");
+    h.key(KeyCode::Esc);
+    h.keys("A");
+    // An opening quote, then the closing one already there: both are replaced.
+    h.keys(" WHERE \"\"");
+    h.key(KeyCode::Left);
+    h.keys("mi");
+    h.ctrl('n');
+    assert_eq!(h.popup().expect("popup").items[0].label, "\"Mixed Col\"");
+    h.key(KeyCode::Enter);
+    let text = h.app.tab().editor.text();
+    assert_eq!(text, "SELECT \"MixedCase\" FROM shop.\"Order Lines\" WHERE \"Mixed Col\"");
+    assert_eq!(h.app.tab().editor.offset(), text.len(), "the cursor after the name");
+    // A WITH query.
+    h.key(KeyCode::Esc);
+    h.keys("ggdGi");
+    h.keys("WITH recent AS (SELECT id FROM shop.orders) SELECT * FROM rec");
+    h.settle();
+    let p = h.popup().expect("popup");
+    assert_eq!(p.items[0].label, "recent");
+}
+
 // ── connection profiles ──────────────────────────────────────────────────────
 
 fn temp_config(tag: &str, body: &str) -> PathBuf {
