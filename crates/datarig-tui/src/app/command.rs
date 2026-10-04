@@ -14,7 +14,8 @@
 
 use super::action::{Action, LangSetting};
 use datarig_core::config::{
-    ClipboardSetting, CommandsPosition, CopyHeader, CursorShape, DetailView, EditorClipboard, IconsSetting,
+    ClipboardSetting, CommandsPosition, CopyHeader, CursorShape, DetailView, EditorClipboard, FormatIndent,
+    IconsSetting, KeywordCase,
 };
 use datarig_core::i18n::Label;
 use datarig_core::secret::{DefaultSource, SourceKind};
@@ -58,6 +59,9 @@ pub enum Command {
     NoHighlight,
     /// `:suspend`: stop until the shell's `fg` (Unix; elsewhere it says it is not supported).
     Suspend,
+    /// `:format`: format the statement under the cursor (`:'<,'>format`, with a range, is the
+    /// editor's).
+    Format,
 }
 
 /// The type of a command's argument (it decides the completions).
@@ -245,6 +249,14 @@ pub const COMMANDS: &[CommandSpec] = &[
         // Listed everywhere; without the action (Windows) it says that it is not supported.
         action: if super::effects::SUSPEND_SUPPORTED { Some(Action::Suspend) } else { None },
     },
+    CommandSpec {
+        command: Command::Format,
+        name: "format",
+        aliases: &[],
+        arg: None,
+        label: Label::ActionEditorFormat,
+        action: Some(Action::FormatSql),
+    },
 ];
 
 impl CommandSpec {
@@ -309,6 +321,8 @@ pub enum Setting {
     CopyHeader(CopyHeader),
     CursorShape(CursorShape),
     EditorClipboard(EditorClipboard),
+    FormatCase(KeywordCase),
+    FormatIndent(FormatIndent),
 }
 
 /// The categories of the settings screen, in its order.
@@ -482,6 +496,27 @@ pub const SETTINGS: &[SettingSpec] = &[
         about: Label::SettingThemeAbout,
         group: SettingGroup::Display,
         values: Values::Themes,
+    },
+    SettingSpec {
+        key: "editor.format_keyword_case",
+        label: Label::SettingFormatKeywordCase,
+        about: Label::SettingFormatKeywordCaseAbout,
+        group: SettingGroup::Editor,
+        values: Values::Fixed(&[
+            ("preserve", Setting::FormatCase(KeywordCase::Preserve), Label::SettingFormatKeywordCasePreserve),
+            ("upper", Setting::FormatCase(KeywordCase::Upper), Label::SettingFormatKeywordCaseUpper),
+            ("lower", Setting::FormatCase(KeywordCase::Lower), Label::SettingFormatKeywordCaseLower),
+        ]),
+    },
+    SettingSpec {
+        key: "editor.format_indent",
+        label: Label::SettingFormatIndent,
+        about: Label::SettingFormatIndentAbout,
+        group: SettingGroup::Editor,
+        values: Values::Fixed(&[
+            ("4", Setting::FormatIndent(FormatIndent::Four), Label::SettingFormatIndentFour),
+            ("2", Setting::FormatIndent(FormatIndent::Two), Label::SettingFormatIndentTwo),
+        ]),
     },
 ];
 

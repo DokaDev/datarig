@@ -439,7 +439,7 @@ fn leader_groups_list_only_what_leads_to_an_action() {
     let keys: Vec<&str> = root.iter().map(|(k, _)| k.as_str()).collect();
     assert_eq!(
         keys,
-        [",", "/", "1", "2", "3", "4", "5", "6", "7", "8", "9", "?", "c", "r", "s", "t"],
+        [",", "/", "1", "2", "3", "4", "5", "6", "7", "8", "9", "?", "c", "e", "r", "s", "t"],
         "the monitor has no action yet"
     );
     assert!(root.contains(&("r".into(), Child::Group(Some(Label::GroupResult)))));

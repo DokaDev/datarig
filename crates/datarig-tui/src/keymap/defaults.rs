@@ -61,6 +61,7 @@ const GROUPS: &[(Ctx, &str, Label)] = &[
     (Nav, "space r y", Label::GroupCopySelection),
     (Nav, "space r a", Label::GroupCopyAll),
     (Nav, "space m", Label::GroupMonitor),
+    (Nav, "space e", Label::GroupEditor),
 ];
 
 /// The hint line: per context, the most relevant actions, best first, with their
@@ -205,6 +206,8 @@ const ACTIONS: &[(Ctx, &str, &str)] = &[
     (Nav, "space s r", "script.rename"),
     (Nav, "space s o", "script.open"),
     (Nav, "space s d", "script.delete"),
+    (Nav, "space e f", "editor.format"),
+    (Nav, "space e c", "editor.comment_toggle"),
     (Nav, "space ,", "settings.open"),
     (Nav, "space /", "commands.open"),
     (Nav, "space ?", "help.context"),

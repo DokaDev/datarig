@@ -22,6 +22,7 @@ prost.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 shell-words.workspace = true
+sqlformat.workspace = true
 tokio = { workspace = true, features = ["sync"] }
 toml.workspace = true
 toml_edit.workspace = true

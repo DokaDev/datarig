@@ -63,6 +63,8 @@ impl App {
             Setting::CopyHeader(c) => *c == self.prefs.copy_header,
             Setting::CursorShape(c) => *c == self.prefs.cursor_shape,
             Setting::EditorClipboard(c) => *c == self.prefs.editor_clipboard,
+            Setting::FormatCase(c) => *c == self.prefs.format_case,
+            Setting::FormatIndent(i) => *i == self.prefs.format_indent,
         };
         SETTINGS.get(k)?.values.fixed().iter().position(|v| now(&v.1))
     }

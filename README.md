@@ -127,7 +127,8 @@ Everything below works today, with PostgreSQL.
   spans two lines. Marks: `m{a-z}`, `'a` and `` `a `` (also after an operator, `d'a`), `''`
   back to where the last jump left from, `'<` `'>` for the last Visual selection and `'.` for the
   last change; marks follow their lines through edits and come back on undo. `gc` comments lines
-  out with `-- ` or back in as Neovim does (`gcc`, `gc{motion}`, `gc` in Visual mode).
+  out with `-- ` or back in as Neovim does (`gcc`, `gc{motion}`, `gc` in Visual mode; also
+  `Space e c`).
   On the `:` line the editor takes a line number (`:12`, `:$`, `:'a`) and `:s`
   (`:%s/old/new/g`, `:'<,'>s/^/-- /`, `:&&`, and `&` / `g&` in Normal mode): the pattern is a
   Rust regular expression as in search, the replacement Vim's (`&`, `\1`, `\r`, `\u`, `~`; `$`
@@ -144,6 +145,14 @@ Everything below works today, with PostgreSQL.
   tables, with their columns when the query lists them or names them in its select list. Names
   that start with what you typed come first, then names that contain its letters in order
   (`oi` finds `order_items`); keywords only by their start.
+- A formatter you run yourself (`Space e f`, `:format`, `:'<,'>format`; never automatic): it
+  lays out the statement under the cursor or the selection, as one undo step. It changes only
+  the layout (line breaks, indent of 4 or 2 spaces, and keyword case if you ask for it with
+  `[editor] format_keyword_case = "upper"` or `"lower"`); names, strings, comments and
+  dollar-quoted bodies stay exactly as written. Every result is checked token by token against
+  the original, and when anything else would change (operator characters split, strings
+  joined across a line break, `U&'...'`, psql meta-commands) it refuses, says on which line, and
+  leaves the text alone.
 - Run the statement under the cursor (`Ctrl+E`), a selection, or several statements in a row:
   each statement's outcome is listed in a Messages tab, and every row result gets a result tab
   of its own. Queries can be cancelled (`Ctrl+C`).

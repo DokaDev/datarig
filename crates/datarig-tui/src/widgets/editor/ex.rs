@@ -1,7 +1,7 @@
 //! The editor's Ex commands, typed on the app's `:` command line: a line range (`12`, `.`,
 //! `$`, `'a`, `'<`, `%`, with `+n` / `-n` offsets, `a,b` and `a;b`), alone to go to its last
-//! line, or before `:s` (`:substitute`), `:&` and `:&&`; and `&` (as Neovim's, with the
-//! flags) / `g&` in Normal mode.
+//! line, or before `:s` (`:substitute`), `:&`, `:&&` and `:format` (the lines go to the app's
+//! formatter); and `&` (as Neovim's, with the flags) / `g&` in Normal mode.
 //!
 //! `:s/pattern/replacement/flags`: the pattern is a Rust regular expression, as search's is (an
 //! empty one is the last search's); a match lies within one line. The replacement is Vim's:
@@ -47,6 +47,8 @@ pub enum ExDone {
     Substituted { count: usize, lines: usize },
     /// Nothing matched, and the `e` flag said not to mind.
     Nothing,
+    /// `:{range}format`: lines `first..=last` (from 0) are for the app's formatter.
+    Format { first: usize, last: usize },
 }
 
 /// The flags of a substitute.
@@ -94,6 +96,8 @@ enum Command<'a> {
     Substitute(&'a str),
     /// `:&` (`keep`: `:&&`, with the last flags) and the flags after it.
     Again { keep: bool, flags: &'a str },
+    /// `:format`: the app formats the lines.
+    Format,
 }
 
 impl Editor {
@@ -122,6 +126,10 @@ impl Editor {
             Command::Substitute(args) => {
                 let lines = self.lines_of(range)?;
                 self.substitute_args(args, lines)?
+            }
+            Command::Format => {
+                let (first, last) = self.lines_of(range)?;
+                return Ok(ExDone::Format { first, last });
             }
             Command::Again { keep, flags } => {
                 let lines = self.lines_of(range)?;
@@ -354,6 +362,9 @@ fn command(s: &str) -> Result<Command<'_>, ExError> {
     let name = &s[..name_len];
     if !name.is_empty() && "substitute".starts_with(name) {
         return Ok(Command::Substitute(&s[name_len..]));
+    }
+    if s.trim_end() == "format" {
+        return Ok(Command::Format);
     }
     Err(ExError::Unsupported(s.to_string()))
 }

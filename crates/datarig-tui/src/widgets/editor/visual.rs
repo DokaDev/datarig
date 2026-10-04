@@ -60,7 +60,7 @@ impl Editor {
     }
 
     /// The selection's ends in text order.
-    fn visual_ends(&self) -> ((usize, usize), (usize, usize)) {
+    pub(super) fn visual_ends(&self) -> ((usize, usize), (usize, usize)) {
         let cursor = (self.row, self.col);
         if self.anchor <= cursor { (self.anchor, cursor) } else { (cursor, self.anchor) }
     }
