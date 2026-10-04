@@ -1,7 +1,8 @@
 //! A profile through the real SSH bastion of the tests, driven through `App`
 //! like the binary does: the explorer connects, the host key is asked about and trusted in
 //! datarig's own file, the database behind the bastion answers, a lost tunnel shows on the
-//! node and the next use connects again.
+//! node and the next use connects again. Two profiles naming one tunnel preset share one SSH
+//! connection.
 //!
 //! Needs the bastion of `dev/docker-compose.yml` (profile `ssh`) and its fixture:
 //! `DATARIG_SSH_FIXTURE` and `DATARIG_TEST_SSH_BASTION` (see `datarig-ssh/tests/bastion.rs`).
@@ -144,6 +145,8 @@ async fn a_profile_connects_through_the_bastion() {
 struct Cutter {
     port: u16,
     conns: Arc<std::sync::Mutex<Vec<tokio::task::AbortHandle>>>,
+    /// Connections it took so far.
+    accepted: Arc<std::sync::atomic::AtomicUsize>,
     task: tokio::task::JoinHandle<()>,
 }
 
@@ -152,9 +155,11 @@ impl Cutter {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         let conns: Arc<std::sync::Mutex<Vec<tokio::task::AbortHandle>>> = Default::default();
-        let c = conns.clone();
+        let accepted: Arc<std::sync::atomic::AtomicUsize> = Default::default();
+        let (c, n) = (conns.clone(), accepted.clone());
         let task = tokio::spawn(async move {
             while let Ok((mut inbound, _)) = listener.accept().await {
+                n.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 let to = to.clone();
                 let h = tokio::spawn(async move {
                     if let Ok(mut out) = tokio::net::TcpStream::connect((to.0.as_str(), to.1)).await {
@@ -164,7 +169,12 @@ impl Cutter {
                 c.lock().unwrap().push(h.abort_handle());
             }
         });
-        Cutter { port, conns, task }
+        Cutter { port, conns, accepted, task }
+    }
+
+    /// Connections it took so far.
+    fn accepted(&self) -> usize {
+        self.accepted.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// End every connection through it (the proxy keeps listening).
@@ -271,4 +281,83 @@ async fn the_next_statement_after_a_lost_tunnel_connects_again() {
     assert!(said, "said: {notices:?} {status:?}");
     let run_log: Vec<&str> = app.tab().exec.run.statements.iter().map(|s| s.sql.as_str()).collect();
     assert_eq!(run_log, ["SELECT 40 + 2"], "only the new statement ran");
+}
+
+/// Two profiles that name the same tunnel preset reach the database behind the bastion through
+/// ONE SSH connection: the proxy in front of the bastion sees one TCP connection for both (and
+/// one host key question was asked). Its loss ends both, each saying why.
+#[tokio::test(flavor = "multi_thread")]
+async fn two_profiles_on_one_preset_share_one_ssh_connection() {
+    use datarig_core::profile::tunnel::TunnelPreset;
+    use datarig_tui::app::explorer::RowKind;
+    use datarig_tui::app::tunnel::PresetState;
+    let Some(b) = bastion("two_profiles_on_one_preset_share_one_ssh_connection") else { return };
+    let cutter = Cutter::start((b.host.clone(), b.port)).await;
+    let home = scratch("shared-home");
+    let data = scratch("shared-data");
+    let preset = TunnelPreset::new(
+        "office",
+        SshSettings {
+            host: "127.0.0.1".into(),
+            port: cutter.port,
+            user: "tunnel".into(),
+            auth: SshAuth::Key,
+            key_file: Some(b.fixture.join("id_ed25519").display().to_string()),
+            keepalive: Some(1),
+            ..SshSettings::default()
+        },
+    );
+    let profile = |name: &str| ConnectionConfig {
+        name: name.into(),
+        host: "postgres".into(),
+        port: 5432,
+        tunnel: Some("office".into()),
+        ..ConnectionConfig::test_db()
+    };
+    let (orders, billing) = (profile("a-orders"), profile("b-billing"));
+    let store = Arc::new(MemoryStore::new());
+    for p in [&orders, &billing] {
+        store.set(&p.id.account(), "datarig").unwrap();
+    }
+    let (a, bid, tid) = (orders.id, billing.id, preset.id);
+    let cfg = Config { connections: vec![orders, billing], tunnels: vec![preset], ..Config::default() };
+    let mut app = App::new(&cfg, None, Lang::En);
+    app.set_secret_store(store as Arc<dyn SecretStore>);
+    let state = scratch("shared-state");
+    app.set_paths(Paths { data: Some(data.to_path_buf()), state: Some(state.to_path_buf()) });
+    let h = home.to_path_buf();
+    app.set_env_lookup(Arc::new(move |k: &str| (k == "HOME").then(|| h.display().to_string())));
+    app.set_tunnels(Arc::new(SshTunnels));
+    let (tx, mut rx) = unbounded_channel();
+    app.start(tx, Startup::Normal);
+    // Both connect at once: one host key question for the two.
+    app.explorer.select_kind(RowKind::Profile(a));
+    key(&mut app, KeyCode::Enter);
+    app.explorer.select_kind(RowKind::Profile(bid));
+    key(&mut app, KeyCode::Enter);
+    pump(&mut app, &mut rx, 20, |a| a.overlays.confirm().is_some_and(|c| c.action == ConfirmAction::TrustHostKey))
+        .await;
+    key(&mut app, KeyCode::Char('y'));
+    pump(&mut app, &mut rx, 30, |app| app.conns.is_connected(a) && app.conns.is_connected(bid)).await;
+    // Both read their catalogs through it.
+    pump(&mut app, &mut rx, 20, |app| {
+        [a, bid].iter().all(|p| app.conns.catalog(Some(*p)).schemas.iter().any(|s| s == "shop"))
+    })
+    .await;
+    assert_eq!(cutter.accepted(), 1, "one SSH connection for both profiles");
+    assert_eq!(app.preset_state(tid), PresetState::Open(2));
+    assert!(app.overlays.confirm().is_none(), "one question");
+    // Its loss ends both.
+    cutter.cut();
+    let error = |app: &App, p| app.conns.get(p).and_then(|c| c.error.as_ref()).map(|e| e.render(&app.i18n).to_string());
+    pump(&mut app, &mut rx, 30, |app| {
+        [a, bid].iter().all(|p| !app.conns.is_connected(*p) && error(app, *p).is_some_and(|e| e.starts_with("SSH:")))
+    })
+    .await;
+    assert_eq!(app.preset_state(tid), PresetState::Dead);
+    // One of them again: a new connection (and still one at a time).
+    app.explorer.select_kind(RowKind::Profile(a));
+    key(&mut app, KeyCode::Enter);
+    pump(&mut app, &mut rx, 30, |app| app.conns.is_connected(a)).await;
+    assert_eq!(cutter.accepted(), 2);
 }

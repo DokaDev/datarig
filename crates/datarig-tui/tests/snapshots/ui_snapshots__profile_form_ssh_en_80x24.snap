@@ -7,7 +7,7 @@ expression: backend
 "│▾╭ Edit connection — local-pg ──────────────────────────────────────────────╮t│"
 "│ │  Basic   SSH   Advanced                            Ctrl+N/Ctrl+P section │e│"
 "│ │                                                                          │ │"
-"│ │ SSH tunnel        ‹ on ›  ←/→ change · the database host (Basic) is as … │ │"
+"│ │ SSH tunnel        ‹ this profile only ›  [save as tunnel preset Ctrl+B]  │ │"
 "│ │ Bastion           bastion.example.com                                    │ │"
 "│▸│ Port              22                                                     │ │"
 "│▸│ User              ec2-user                                               │ │"

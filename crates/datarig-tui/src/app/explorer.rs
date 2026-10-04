@@ -2,6 +2,9 @@
 //! nested folders, with its connection state (`○ ⠋ ● ✕`), an error line under a failed node,
 //! and the schema tree of a connected profile below it. It replaces the startup picker: the
 //! profile keys (connect, new console, edit, duplicate, delete, test, disconnect) work here.
+//! Below the profiles, the "Tunnels" section lists the tunnel presets, each with the state of
+//! its shared connection and, opened, the profiles that name it; the same keys make, edit,
+//! copy, delete and test them.
 //!
 //! The rows are built from the profiles, the folders and the connections whenever they are
 //! needed ([`App::explorer_rows`]). The cursor remembers its row, not its index, so it stays on
@@ -42,6 +45,16 @@ pub enum RowKind {
     Script(String),
     /// The section is open and empty: how to save one.
     ScriptsEmpty,
+    /// "Tunnels", the head of the tunnel presets' section.
+    TunnelsHeader,
+    /// A tunnel preset.
+    Tunnel(datarig_core::profile::tunnel::TunnelId),
+    /// Why the preset's last connection ended, under it.
+    TunnelError(datarig_core::profile::tunnel::TunnelId),
+    /// A profile that names the preset, under it (opened).
+    TunnelUser(datarig_core::profile::tunnel::TunnelId, ProfileId),
+    /// The section is open and has no preset: how to make one.
+    TunnelsEmpty,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -144,8 +157,45 @@ impl App {
     pub fn explorer_rows(&self) -> Vec<Row> {
         let mut rows = vec![Row { kind: RowKind::NewConnection, depth: 0 }];
         self.push_level(None, 0, &mut rows);
+        self.push_tunnels(&mut rows);
         self.push_scripts(&mut rows);
         rows
+    }
+
+    /// The "Tunnels" section: the head, then the presets by name (with a filter, the ones whose
+    /// name or bastion matches), each with why its connection was lost and, opened, its
+    /// profiles.
+    fn push_tunnels(&self, rows: &mut Vec<Row>) {
+        if !self.tunnels_shown() {
+            return;
+        }
+        let q = self.explorer.filter.text().trim().to_lowercase();
+        let filtering = !q.is_empty();
+        let matches = |p: &datarig_core::profile::tunnel::TunnelPreset| {
+            [p.name.clone(), App::bastion_text(&p.settings)].iter().any(|t| t.to_lowercase().contains(&q))
+        };
+        if filtering && !self.presets.iter().any(matches) {
+            return;
+        }
+        rows.push(Row { kind: RowKind::TunnelsHeader, depth: 0 });
+        if !self.tunnels_expanded && !filtering {
+            return;
+        }
+        if self.presets.is_empty() {
+            rows.push(Row { kind: RowKind::TunnelsEmpty, depth: 1 });
+            return;
+        }
+        for p in self.presets.iter().filter(|p| !filtering || matches(p)) {
+            rows.push(Row { kind: RowKind::Tunnel(p.id), depth: 1 });
+            if self.preset_state(p.id) == super::tunnel::PresetState::Dead {
+                rows.push(Row { kind: RowKind::TunnelError(p.id), depth: 2 });
+            }
+            if self.tunnels_open.contains(&p.id) {
+                for c in self.preset_users(&p.name) {
+                    rows.push(Row { kind: RowKind::TunnelUser(p.id, c.id), depth: 2 });
+                }
+            }
+        }
     }
 
     /// The "Saved queries" section: the header, then the folders and scripts that are open
@@ -380,6 +430,12 @@ impl App {
             // A folder that cannot be read has nothing to open (never shown as an empty one).
             RowKind::ScriptFolder(p) if self.script_unreadable(p) => None,
             RowKind::ScriptFolder(p) => Some(self.script_folders.contains(p) || self.filtering_on()),
+            RowKind::TunnelsHeader => Some(self.tunnels_expanded || self.filtering_on()),
+            // Only one some profile names has something to open.
+            RowKind::Tunnel(id) => self
+                .preset(*id)
+                .filter(|p| !self.preset_users(&p.name).is_empty())
+                .map(|_| self.tunnels_open.contains(id)),
             _ => None,
         }
     }
@@ -470,7 +526,23 @@ impl App {
                     self.mark_workspace();
                 }
             }
-            RowKind::NewConnection | RowKind::Script(_) | RowKind::ScriptsEmpty => {}
+            RowKind::TunnelsHeader => self.tunnels_expanded = want.unwrap_or(!self.tunnels_expanded),
+            RowKind::Tunnel(id) => {
+                let open = self.tunnels_open.contains(id);
+                if self.row_expanded(row).is_some() && want.unwrap_or(!open) != open {
+                    if open {
+                        self.tunnels_open.remove(id);
+                    } else {
+                        self.tunnels_open.insert(*id);
+                    }
+                }
+            }
+            RowKind::NewConnection
+            | RowKind::Script(_)
+            | RowKind::ScriptsEmpty
+            | RowKind::TunnelError(_)
+            | RowKind::TunnelUser(..)
+            | RowKind::TunnelsEmpty => {}
         }
     }
 
@@ -564,6 +636,7 @@ impl App {
             ExplorerAction::Rename => self.open_rename(),
             ExplorerAction::Delete => match row.kind {
                 RowKind::Profile(id) => self.request_delete_profile(id),
+                RowKind::Tunnel(id) | RowKind::TunnelError(id) => self.request_delete_tunnel(id),
                 RowKind::Folder(f) => self.request_delete_folder(f),
                 RowKind::Script(p) => self.request_delete_script(p),
                 RowKind::ScriptFolder(p) => self.request_delete_script_folder(p),
@@ -669,7 +742,12 @@ impl App {
                 let p = p.clone();
                 self.open_script(&p);
             }
-            RowKind::ScriptsEmpty => {}
+            RowKind::ScriptsEmpty | RowKind::TunnelsEmpty | RowKind::TunnelError(_) => {}
+            // The profile's own row, in the connections above.
+            RowKind::TunnelUser(_, id) => {
+                let id = *id;
+                self.reveal_profile(id);
+            }
             RowKind::Node(id, n) => {
                 let id = *id;
                 let Some(c) = self.conns.get_mut(id) else { return };

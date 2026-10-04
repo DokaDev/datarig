@@ -119,6 +119,8 @@ fn default_table_is_conflict_free() {
         "secrets.default.command",
         "secrets.default.env",
         "secrets.default.prompt",
+        // `n` in the explorer's "Tunnels" section makes one too.
+        "tunnel.new",
     ];
     for s in action::REGISTRY {
         let bound = km.bindings().iter().any(|b| b.target == Target::Action(s.action));

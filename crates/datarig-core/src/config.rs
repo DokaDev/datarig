@@ -37,12 +37,15 @@
 //! rewrites them — the TUI validates the entries at startup.
 //! `[policy.<name>]` tables are the safety policies profiles name (see [`crate::policy`]);
 //! they are read only (saving keeps them as they are).
+//! `[tunnels.<name>]` tables are the tunnel presets profiles name with `tunnel = "<name>"` (see
+//! [`crate::profile::tunnel`]); each has a stable `id`, assigned like a profile's.
 
 use crate::fault::{Fault, FaultKind};
 use crate::policy::{self, Policies, Policy};
 use crate::profile::color::ProfileColor;
 use crate::profile::folder::{FolderPath, Folders};
 use crate::profile::ssh::{SshProblem, SshSettings};
+use crate::profile::tunnel::{self, TunnelId, TunnelPreset, TunnelSection};
 use crate::profile::{ConnectionConfig, ProfileId};
 use crate::secret::source::{DefaultSource, SourceKind, valid_env_name};
 use serde::Deserialize;
@@ -98,6 +101,8 @@ struct FileConfig {
     keymap: KeymapConfig,
     #[serde(default)]
     policy: BTreeMap<String, PolicySection>,
+    #[serde(default)]
+    tunnels: BTreeMap<String, TunnelSection>,
 }
 
 /// `[policy.<name>]`.
@@ -380,6 +385,8 @@ pub struct Config {
     /// The most a result's spill file may take (`spill_limit`; a policy may set its own).
     pub spill_limit: policy::SpillLimit,
     pub connections: Vec<ConnectionConfig>,
+    /// `[tunnels.<name>]` tables, by name.
+    pub tunnels: Vec<TunnelPreset>,
     /// Every folder (`folders` plus the folders of the profiles).
     pub folders: Folders,
     /// Profile connected to most recently (the explorer puts its cursor there at launch). A v1
@@ -398,7 +405,7 @@ pub struct Config {
     pub path: Option<PathBuf>,
     /// The file exists (a missing default file has nothing to migrate).
     pub exists: bool,
-    /// Some profiles had no `id` in the file and got a new one in memory.
+    /// Some profiles or tunnel presets had no `id` in the file and got a new one in memory.
     pub ids_assigned: bool,
 }
 
@@ -413,6 +420,7 @@ impl Default for Config {
             result_window_rows: crate::results::WINDOW,
             spill_limit: policy::SpillLimit::default(),
             connections: Vec::new(),
+            tunnels: Vec::new(),
             folders: Folders::default(),
             last_used: None,
             default_source: DefaultSource::default(),
@@ -474,6 +482,12 @@ pub enum ConfigError {
     Missing { key: &'static str, profile: String, source: &'static str },
     /// Profile `profile`'s SSH tunnel is on but `ssh.<key>` is empty.
     SshMissing { key: &'static str, profile: String },
+    /// `[tunnels.<name>]` has a name a preset cannot have.
+    TunnelName(String),
+    /// Two tunnel presets have this id.
+    DuplicateTunnelId(String),
+    /// Tunnel preset `tunnel` has no `<key>`.
+    TunnelMissing { key: &'static str, tunnel: String },
 }
 
 /// A [`ConfigError::Value`] for a top-level key.
@@ -603,9 +617,35 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
     for s in &f.folders {
         folders.insert(&FolderPath::parse(s).map_err(|_| bad("folders", s))?);
     }
+    let mut ids_assigned = false;
+    let mut tunnels = Vec::new();
+    let mut tunnel_ids = HashSet::new();
+    for (name, t) in f.tunnels {
+        if tunnel::name_problem(&name).is_some() {
+            return Err(ConfigError::TunnelName(name));
+        }
+        let mut p = t.into_preset(&name);
+        if p.id.is_unset() {
+            p.id = TunnelId::new();
+            ids_assigned = true;
+        } else if !tunnel_ids.insert(p.id) {
+            return Err(ConfigError::DuplicateTunnelId(p.id.to_string()));
+        }
+        match p.settings.problem() {
+            Some(SshProblem::Missing(key)) => return Err(ConfigError::TunnelMissing { key, tunnel: name }),
+            Some(SshProblem::Invalid(key)) => {
+                let value = match key {
+                    "port" => p.settings.port.to_string(),
+                    _ => p.settings.secret_env.clone().unwrap_or_default(),
+                };
+                return Err(bad(&format!("tunnels.{name}.{key}"), value));
+            }
+            None => {}
+        }
+        tunnels.push(p);
+    }
     let mut connections = f.connections;
     let mut seen = HashSet::new();
-    let mut ids_assigned = false;
     for c in &mut connections {
         if c.id.is_unset() {
             c.id = ProfileId::new();
@@ -654,6 +694,10 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
                 None => {}
             }
         }
+        // A preset is named by its name: an empty one names none (and is not "no tunnel").
+        if c.tunnel.as_deref().is_some_and(|t| t.trim().is_empty()) {
+            return Err(bad("tunnel", "\"\"").in_profile(&c.name));
+        }
         c.origin = Some(c.name.clone());
         c.normalize();
     }
@@ -672,6 +716,7 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
         result_window_rows,
         spill_limit,
         connections,
+        tunnels,
         folders,
         last_used,
         default_source,
@@ -855,24 +900,26 @@ pub struct Settings<'a> {
     pub prefs: Prefs,
 }
 
-/// The profile part of the file: `[[connections]]`, `folders` and `last_used`.
+/// The profile part of the file: `[[connections]]`, `[tunnels.*]`, `folders` and `last_used`.
 #[derive(Clone, Copy)]
 pub struct Profiles<'a> {
     pub connections: &'a [ConnectionConfig],
+    pub tunnels: &'a [TunnelPreset],
     pub folders: &'a Folders,
     /// `None` removes the key.
     pub last_used: Option<ProfileId>,
 }
 
-/// Write the settings and (when `profiles` is `Some`) the connection profiles, folders and
-/// `last_used` into the file at `path`, preserving everything else in it (comments, key order,
+/// Write the settings and (when `profiles` is `Some`) the connection profiles, tunnel presets,
+/// folders and `last_used` into the file at `path`, preserving everything else in it (comments, key order,
 /// `[keymap.*]`). Creates the file and its directory if needed. Symlinked config files
 /// (dotfiles) are written through to their target. The write is atomic
 /// ([`crate::fsutil::atomic_write`]).
 ///
 /// A profile's table is found by its `id`, else by its name when it was read
 /// ([`ConnectionConfig::origin`]; a table without `id` right after the migration), so its
-/// comments survive; the `id` is then added as its first key.
+/// comments survive; the `id` is then added as its first key. A tunnel preset's table is found
+/// the same way ([`TunnelPreset::origin`]), and moves to its new name when it was renamed.
 pub fn save(path: &Path, settings: Settings, profiles: Option<Profiles>) -> Result<(), Fault> {
     let Settings { version, language, icons, theme, default_source, prefs } = settings;
     let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
@@ -913,7 +960,7 @@ pub fn save(path: &Path, settings: Settings, profiles: Option<Profiles>) -> Resu
         let trailing = doc.trailing().as_str().unwrap_or_default().to_string();
         doc.set_trailing(format!("{trailing}{orphans}"));
     }
-    if let Some(Profiles { connections: conns, folders, last_used }) = profiles {
+    if let Some(Profiles { connections: conns, tunnels, folders, last_used }) = profiles {
         match last_used {
             Some(id) => set(doc.as_table_mut(), "last_used", id.to_string()),
             None => {
@@ -961,6 +1008,7 @@ pub fn save(path: &Path, settings: Settings, profiles: Option<Profiles>) -> Resu
             } else {
                 set(&mut t, "statement_cache", false);
             }
+            set_opt(&mut t, "tunnel", c.tunnel.as_deref());
             match &c.ssh {
                 Some(ssh) => write_ssh(&mut t, ssh),
                 None => {
@@ -986,6 +1034,7 @@ pub fn save(path: &Path, settings: Settings, profiles: Option<Profiles>) -> Resu
             arr.push(t);
         }
         doc.insert("connections", Item::ArrayOfTables(arr));
+        write_tunnels(&mut doc, tunnels)?;
     }
     crate::fsutil::atomic_write(&target, doc.to_string().as_bytes()).map_err(|e| Fault::io_at(&e, &target))
 }
@@ -998,31 +1047,100 @@ fn write_ssh(profile: &mut Table, ssh: &SshSettings) {
         _ => Table::new(),
     };
     set(&mut t, "enabled", ssh.enabled);
-    set(&mut t, "host", ssh.host.as_str());
+    write_ssh_keys(&mut t, ssh);
+    profile.insert("ssh", Item::Table(t));
+}
+
+/// The `[tunnels.<name>]` tables: each preset's table is found by its `id` (else by the name it
+/// was read with) and updated in place, under its current name; the tables of presets that are
+/// gone are removed. Tables keep their places in the file, handed out in the presets' order.
+fn write_tunnels(doc: &mut DocumentMut, presets: &[TunnelPreset]) -> Result<(), Fault> {
+    let shape = || Fault::new(FaultKind::Shape { key: "tunnels".into() }, "tunnels must be a table of tables");
+    // Each preset's table as the file has it: a table, or an inline table (written back as a
+    // table, in place of it).
+    let as_table = |v: &Item| match v {
+        Item::Table(t) => Some(t.clone()),
+        Item::Value(Value::InlineTable(t)) => Some(t.clone().into_table()),
+        _ => None,
+    };
+    let old: Vec<(String, Table)> = match doc.get("tunnels") {
+        None => Vec::new(),
+        Some(item) => match item.as_table_like() {
+            Some(t) => t.iter().filter_map(|(k, v)| as_table(v).map(|t| (k.to_string(), t))).collect(),
+            None => return Err(shape()),
+        },
+    };
+    if presets.is_empty() && old.is_empty() {
+        return Ok(());
+    }
+    let mut parent = match doc.remove("tunnels") {
+        Some(Item::Table(t)) => t,
+        Some(Item::Value(Value::InlineTable(t))) => t.into_table(),
+        _ => {
+            let mut t = Table::new();
+            t.set_implicit(true);
+            t
+        }
+    };
+    for (k, _) in &old {
+        parent.remove(k);
+    }
+    let mut positions: Vec<isize> = old.iter().filter_map(|(_, t)| t.position()).collect();
+    positions.sort_unstable();
+    for (i, p) in presets.iter().enumerate() {
+        let id = p.id.to_string();
+        let found = old
+            .iter()
+            .find(|(_, t)| t.get("id").and_then(Item::as_str) == Some(id.as_str()))
+            .or_else(|| p.origin.as_deref().and_then(|o| old.iter().find(|(k, t)| !t.contains_key("id") && k == o)));
+        let mut t = match found {
+            Some((_, t)) if t.contains_key("id") => t.clone(),
+            Some((_, t)) => with_id_first(t, &id),
+            None => with_id_first(&Table::new(), &id),
+        };
+        set(&mut t, "id", id.as_str());
+        t.remove("enabled");
+        write_ssh_keys(&mut t, &p.settings);
+        t.set_position(positions.get(i).copied());
+        parent.insert(&p.name, Item::Table(t));
+    }
+    // No preset left: the table goes too, unless comments hang on it.
+    let commented = [parent.decor().prefix(), parent.decor().suffix()]
+        .into_iter()
+        .flatten()
+        .any(|r| r.as_str().is_some_and(|s| s.contains('#')));
+    if !parent.is_empty() || commented {
+        doc.insert("tunnels", Item::Table(parent));
+    }
+    Ok(())
+}
+
+/// The keys of a tunnel's settings but `enabled`, updated in place; the defaults are left out.
+fn write_ssh_keys(t: &mut Table, ssh: &SshSettings) {
+    set(t, "host", ssh.host.as_str());
     if ssh.port == 22 {
         t.remove("port");
     } else {
-        set(&mut t, "port", i64::from(ssh.port));
+        set(t, "port", i64::from(ssh.port));
     }
-    set(&mut t, "user", ssh.user.as_str());
-    set(&mut t, "auth", ssh.auth.as_str());
-    set_opt(&mut t, "key_file", ssh.key_file.as_deref());
-    set_opt(&mut t, "secret_source", ssh.secret_source.map(SourceKind::as_str));
-    set_opt(&mut t, "secret_command", ssh.secret_command.as_deref());
-    set_opt(&mut t, "secret_env", ssh.secret_env.as_deref());
+    set(t, "user", ssh.user.as_str());
+    set(t, "auth", ssh.auth.as_str());
+    set_opt(t, "key_file", ssh.key_file.as_deref());
+    set_opt(t, "secret_source", ssh.secret_source.map(SourceKind::as_str));
+    set_opt(t, "secret_command", ssh.secret_command.as_deref());
+    set_opt(t, "secret_env", ssh.secret_env.as_deref());
     match ssh.keepalive {
-        Some(k) => set(&mut t, "keepalive", i64::try_from(k).unwrap_or(i64::MAX)),
+        Some(k) => set(t, "keepalive", i64::try_from(k).unwrap_or(i64::MAX)),
         None => {
             t.remove("keepalive");
         }
     }
     match ssh.timeout {
-        Some(k) => set(&mut t, "timeout", i64::try_from(k).unwrap_or(i64::MAX)),
+        Some(k) => set(t, "timeout", i64::try_from(k).unwrap_or(i64::MAX)),
         None => {
             t.remove("timeout");
         }
     }
-    profile.insert("ssh", Item::Table(t));
 }
 
 #[cfg(test)]

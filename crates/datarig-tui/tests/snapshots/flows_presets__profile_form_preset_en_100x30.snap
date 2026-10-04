@@ -1,0 +1,34 @@
+---
+source: crates/datarig-tui/tests/flows_presets.rs
+expression: backend
+---
+"╭ Explorer ─────────────╮╭ Workspace ──────────────────────────────────────────────────────────────╮"
+"│  ＋ New connection    ││                                                                         │" Hidden by multi-width symbols: [(4, " ")]
+"│▸ ⠋   local-pg SSH     ││  No open tabs                                                           │"
+"│▸ ○   v6 SSH           ││  Pick a connection in the explorer, or press Ctrl+O.                    │"
+"│▸ ✕   分析-replica SSH ││                                                                         │" Hidden by multi-width symbols: [(8, " "), (10, " ")]
+"│ ╭ Edit connection — v6 ────────────────────────────────────────────────────────────────────────╮ │"
+"│▾│  Basic   SSH   Advanced                                                Ctrl+N/Ctrl+P section │ │"
+"│ │                                                                                              │ │"
+"│ │ SSH tunnel        ‹ office ›  ←/→ change · shared: one SSH connection for every profile on … │ │"
+"│ │ Bastion           ec2-user@bastion.example.com                                               │ │"
+"│ │ Log in with       password                                                                   │ │"
+"│ │ Used by           local-pg                                                                   │ │"
+"│ │                                                                                              │ │"
+"│ │                                                                                              │ │"
+"│ │                                                                                              │ │"
+"│ │                                                                                              │ │"
+"│ │                                                                                              │ │"
+"│ │                                                                                              │ │"
+"│ │                                                                                              │ │"
+"│ │                                                                                              │ │"
+"│ │                    Test    Save    Cancel                                                    │ │"
+"│ │                                                                                              │ │"
+"│ │                                                                                              │ │"
+"│ ╰───────────────────── Tab/↑↓ move · Ctrl+N/P section · Ctrl+T test · Ctrl+S save · Esc cancel ╯ │"
+"│                       ││                                                                         │"
+"│                       ││                                                                         │"
+"│                       ││                                                                         │"
+"│                       ││                                                                         │"
+"╰───────────────────────╯╰─────────────────────────────────────────────────────────────────────────╯"
+" SSH: the connection to lab-bastion.internal was lost (no reply to keepalives)                   EN "

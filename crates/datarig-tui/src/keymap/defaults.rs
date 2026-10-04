@@ -159,6 +159,7 @@ const ACTIONS: &[(Ctx, &str, &str)] = &[
     (Busy, "q", "app.quit"),
     // the profile form: the SSH key file picker
     (ProfileForm, "ctrl+o", "form.pick_key_file"),
+    (ProfileForm, "ctrl+b", "form.save_as_tunnel"),
     // workspace
     (Workspace, "ctrl+enter", "query.execute_current"),
     (Workspace, "ctrl+e", "query.execute_current"),

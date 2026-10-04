@@ -61,6 +61,8 @@ pub enum NamePurpose {
     RenameScript(String),
     /// Rename this folder of the saved queries.
     RenameScriptFolder(String),
+    /// The name of the tunnel preset the profile form's own tunnel becomes when it is saved.
+    SaveAsTunnel,
 }
 
 pub struct NameInput {
@@ -289,6 +291,7 @@ impl App {
                 let i = self.profiles.iter().position(|p| p.id == id);
                 self.open_form(i, false);
             }
+            Some(explorer::RowKind::Tunnel(id)) => self.open_tunnel_form(Some(id), false),
             Some(explorer::RowKind::Script(p)) => self.open_rename_script(p, false),
             Some(explorer::RowKind::ScriptFolder(p)) => self.open_rename_script(p, true),
             _ => {}
@@ -315,7 +318,10 @@ impl App {
         let Some(n) = self.overlays.name_input() else { return };
         let typed = n.input.text().trim().to_string();
         let purpose = n.purpose.clone();
+        // A preset's name is taken as typed (blanks around it are an error, not trimmed).
+        let raw = n.input.text().to_string();
         let script = match &purpose {
+            NamePurpose::SaveAsTunnel => Some(self.save_as_tunnel_named(&raw)),
             NamePurpose::NewScriptFolder { parent } => Some(self.new_script_folder(parent.clone(), &typed)),
             NamePurpose::RenameScript(from) => Some(self.rename_script(&from.clone(), &typed, false)),
             NamePurpose::RenameScriptFolder(from) => Some(self.rename_script(&from.clone(), &typed, true)),

@@ -52,6 +52,13 @@ fn profile_icon_falls_back_to_the_driver_and_off_keeps_alignment() {
 }
 
 #[test]
+fn the_tunnel_mark_is_pinned_and_has_a_text_form_without_icons() {
+    // nf-md-ssh (Nerd Fonts 3.5.1 glyphnames.json): a profile's tunnel and the tunnel presets.
+    assert_eq!((TUNNEL, tunnel(true), tunnel(false)), ("\u{f08c0}", "\u{f08c0}", "SSH"));
+    assert_eq!(width(TUNNEL), 1);
+}
+
+#[test]
 fn warning_has_a_text_form_without_icons() {
     // nf-fa-warning (Nerd Fonts 3.5.1 glyphnames.json).
     assert_eq!((warning(true), warning(false)), ("\u{f071}", "!"));

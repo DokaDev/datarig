@@ -1215,7 +1215,7 @@ impl App {
 
     /// A failure of the transport a session reaches its server through (a tunnel),
     /// in words; the far end's message or the fault's detail goes to the error log.
-    fn dial_error_text(&self, e: &DialError) -> String {
+    pub(super) fn dial_error_text(&self, e: &DialError) -> String {
         let log = |f: &datarig_core::fault::Fault| ErrorLog::new(self.paths.errors_log()).record("db.transport", f);
         let msg = match e {
             DialError::NotOpen => return self.i18n.label(Label::DialNotOpen).to_string(),

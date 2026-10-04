@@ -71,6 +71,8 @@ impl App {
             AppEvent::Keychain(done) => self.on_keychain_done(done),
             AppEvent::Tunnel { profile, generation, ev } => self.on_tunnel_event(profile, generation, ev),
             AppEvent::TestTunnel { seq, ev } => self.on_test_tunnel_event(seq, ev),
+            AppEvent::SharedTunnel { serial, ev } => self.on_shared_event(serial, ev),
+            AppEvent::TestProbe { seq, probes } => self.on_test_probe(seq, probes),
         }
         // What an open quick connect list waits for may have arrived.
         if self.overlays.quick().is_some() {
@@ -258,13 +260,17 @@ impl App {
     }
 
     /// The mouse on the profile form: a click on the key file field's `[…]` button opens the
-    /// key file picker.
+    /// key file picker; one on "save as tunnel preset" asks for the preset's name.
     pub(super) fn form_mouse(&mut self, m: MouseEvent) {
         let Some(f) = self.overlays.form() else { return };
-        let b = f.key_button;
-        let on = m.column >= b.x && m.column < b.x + b.width && m.row >= b.y && m.row < b.y + b.height;
-        if m.kind == MouseEventKind::Down(MouseButton::Left) && on && !f.saving {
+        let on = |b: Rect| m.column >= b.x && m.column < b.x + b.width && m.row >= b.y && m.row < b.y + b.height;
+        if m.kind != MouseEventKind::Down(MouseButton::Left) || f.saving {
+            return;
+        }
+        if on(f.key_button) {
             self.open_key_picker();
+        } else if on(f.preset_button) {
+            self.open_save_as_tunnel();
         }
     }
 

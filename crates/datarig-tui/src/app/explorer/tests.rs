@@ -27,6 +27,11 @@ fn rows(a: &App) -> Vec<String> {
                 RowKind::ScriptFolder(p) => format!("{p}/"),
                 RowKind::Script(p) => p,
                 RowKind::ScriptsEmpty => "(none)".to_string(),
+                RowKind::TunnelsHeader => "[tunnels]".to_string(),
+                RowKind::Tunnel(id) => format!("~{}", a.preset(id).unwrap().name),
+                RowKind::TunnelError(_) => "!".to_string(),
+                RowKind::TunnelUser(_, id) => format!("@{}", a.profile(id).unwrap().name),
+                RowKind::TunnelsEmpty => "(no tunnels)".to_string(),
             };
             format!("{}{t}", "  ".repeat(r.depth))
         })

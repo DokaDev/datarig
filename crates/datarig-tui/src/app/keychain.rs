@@ -24,6 +24,7 @@ use super::password::{Plan, Secret};
 use super::*;
 use datarig_core::fault::{ErrorLog, Fault, FaultKind, KeychainFault};
 use datarig_core::profile::ssh::SshSettings;
+use datarig_core::profile::tunnel::TunnelId;
 use datarig_core::secret::source::{self, SwitchError, Switched};
 use datarig_core::secret::{Call, Guarded, Unavailable};
 use std::collections::HashMap;
@@ -120,6 +121,19 @@ pub enum KeychainDone {
     SwitchCopied { profile: Box<ConnectionConfig>, from: SourceKind, to: SourceKind, result: Result<bool, SwitchError> },
     /// Step 3 of the source change of profile `name`: the old copy removed.
     SwitchRemoved { name: String, from: SourceKind, to: SourceKind, copied: bool, out: Switched },
+    /// `secret` was written for tunnel preset `tunnel` (named `name`) under `account`;
+    /// `announce`: the status bar says so.
+    PresetSaved {
+        tunnel: TunnelId,
+        name: String,
+        account: String,
+        secret: Secret,
+        announce: bool,
+        result: Result<(), Fault>,
+    },
+    /// A secret moved between the accounts of tunnel preset `name` (made from a profile's own
+    /// tunnel) or between its stores: copied, then the old copy removed.
+    SecretMoved { name: String, result: Result<Switched, SwitchError> },
 }
 
 /// Who wrote a password to the keychain.
@@ -280,8 +294,14 @@ impl App {
         self.clear_test();
         self.test_seq += 1;
         let seq = self.test_seq;
-        self.conn_test =
-            Some(ConnTest { seq, started: Instant::now(), state: TestState::Running, abort: None, tunnel: None });
+        self.conn_test = Some(ConnTest {
+            seq,
+            started: Instant::now(),
+            state: TestState::Running,
+            abort: None,
+            tunnel: None,
+            probe: false,
+        });
         self.report_test();
         let cfg = Box::new(c);
         self.keychain_job(
@@ -386,7 +406,94 @@ impl App {
             KeychainDone::SwitchRemoved { name, from, to, copied, out } => {
                 self.on_switch_removed(name, from, to, copied, out)
             }
+            KeychainDone::PresetSaved { tunnel, name, account, secret, announce, result } => {
+                self.on_preset_saved(tunnel, name, account, secret, announce, result)
+            }
+            KeychainDone::SecretMoved { name, result } => self.on_secret_moved(name, result),
         }
+    }
+
+    /// Write `pw` as tunnel preset `tunnel`'s secret (under `account`) on a worker; kept for this
+    /// session until it is written.
+    pub(super) fn save_preset_secret_to_keychain(
+        &mut self,
+        tunnel: TunnelId,
+        name: String,
+        account: String,
+        pw: String,
+        announce: bool,
+    ) {
+        self.secrets.remember(&account, &pw);
+        let secret = Secret(pw);
+        let written = secret.clone();
+        let key = account.clone();
+        self.keychain_job(
+            vec![account.clone()],
+            move |s| s.keychain.set(&key, &written.0).map_err(|Unavailable(e)| e),
+            move |result| KeychainDone::PresetSaved { tunnel, name, account, secret, announce, result },
+        );
+    }
+
+    fn on_preset_saved(
+        &mut self,
+        tunnel: TunnelId,
+        name: String,
+        account: String,
+        secret: Secret,
+        announce: bool,
+        result: Result<(), Fault>,
+    ) {
+        match result {
+            // Written for a preset deleted since: the secret does not stay behind.
+            Ok(()) if !self.presets.iter().any(|p| p.id == tunnel) => {
+                self.keychain_answered();
+                self.secrets.forget(&account);
+                self.remove_from_keychain(vec![account]);
+            }
+            Ok(()) => {
+                self.keychain_answered();
+                if self.secrets.session(&account) == Some(secret.0.as_str()) {
+                    self.secrets.forget(&account);
+                }
+                if announce {
+                    self.flash(Notice::new(Msg::TunnelSecretSaved { name }, Level::Success));
+                }
+            }
+            // Not stored: remembered for this session only.
+            Err(fault) => {
+                self.keychain_failed(&fault);
+                self.flash(Notice::new(self.source_error(&SourceError::Keychain(fault)), Level::Warning));
+            }
+        }
+    }
+
+    /// A secret of tunnel preset `name` was moved (see [`KeychainDone::SecretMoved`]).
+    pub(super) fn on_secret_moved(&mut self, name: String, result: Result<Switched, SwitchError>) {
+        let m = match result {
+            Ok(Switched { remove_failed: Some(e), .. }) => {
+                if let SourceError::Keychain(f) = &e {
+                    self.keychain_failed(f);
+                }
+                let error = self.i18n.msg(&self.source_error(&e)).to_string();
+                Notice::new(Msg::TunnelSecretOldKept { name, error }, Level::Warning)
+            }
+            Ok(_) => return,
+            Err(e) => {
+                if let SwitchError::Read(SourceError::Keychain(f)) | SwitchError::Write(SourceError::Keychain(f)) = &e {
+                    self.keychain_failed(f);
+                }
+                let error = match e {
+                    SwitchError::Read(e) | SwitchError::Write(e) => self.i18n.msg(&self.source_error(&e)).to_string(),
+                    SwitchError::Mismatch(to) => {
+                        let to = self.source_text(to);
+                        self.i18n.msg(&Msg::SourceChangeMismatch { to }).to_string()
+                    }
+                    SwitchError::Config(f) => self.fault_text("tunnel.secret_move", &f),
+                };
+                Notice::new(Msg::TunnelSecretNotMoved { name, error }, Level::Warning)
+            }
+        };
+        self.flash(m);
     }
 
     fn on_keychain_connect(&mut self, id: ProfileId, generation: u64, result: Result<Option<Secret>, Fault>) {
@@ -534,7 +641,10 @@ impl App {
     fn on_keychain_late(&mut self, call: Call, account: String, ok: bool) {
         self.keychain_answered();
         let mut accounts = std::mem::take(&mut self.keychain_unremoved);
-        let owned = |a: &str| self.profiles.iter().any(|p| p.id.account() == a || SshSettings::account(p.id) == a);
+        let owned = |a: &str| {
+            self.profiles.iter().any(|p| p.id.account() == a || SshSettings::account(p.id) == a)
+                || self.presets.iter().any(|t| t.id.account() == a)
+        };
         if call == Call::Set && ok && !owned(&account) && !accounts.contains(&account) {
             accounts.push(account);
         }

@@ -53,3 +53,12 @@ fn the_source_and_the_account() {
     let id = crate::profile::ProfileId::new();
     assert_eq!(SshSettings::account(id), format!("profile:{id}:ssh"));
 }
+
+#[test]
+fn debug_never_prints_the_secrets_command() {
+    let mut s = on();
+    s.set_source(PasswordSource::Command("echo hunter2".into()));
+    let out = format!("{s:?}");
+    assert!(!out.contains("hunter2"), "{out}");
+    assert!(out.contains("Command(<set>)"), "{out}");
+}

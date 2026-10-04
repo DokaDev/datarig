@@ -309,6 +309,7 @@ Connection profile form. Inside `root`.
 | Keys | Action | Description | R |
 |---|---|---|---|
 | `Ctrl+O` | `form.pick_key_file` | Pick the SSH key file |  |
+| `Ctrl+B` | `form.save_as_tunnel` | Profile form: save this profile's SSH tunnel as a tunnel preset |  |
 
 Reserved — profile form: `Tab` `Shift+Tab` `Down` `Up` `Enter` `Esc` `Ctrl+S` `Ctrl+T` `Ctrl+N` `Ctrl+P`
 
@@ -479,6 +480,7 @@ Actions without a default key (the command line finds them by name).
 
 | Action | Description |
 |---|---|
+| `tunnel.new` | New SSH tunnel (shared by profiles) |
 | `ui.language.en` | Change language → English |
 | `ui.language.ko` | Change language → Korean |
 | `ui.language.auto` | Change language → Auto (system locale) |

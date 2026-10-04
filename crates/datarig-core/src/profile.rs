@@ -8,6 +8,7 @@ pub mod color;
 pub mod dsn;
 pub mod folder;
 pub mod ssh;
+pub mod tunnel;
 
 use crate::secret::{PasswordSource, SourceKind};
 use serde::{Deserialize, Deserializer};
@@ -145,10 +146,14 @@ pub struct ConnectionConfig {
     /// when the server keeps losing them.
     #[serde(default = "yes")]
     pub statement_cache: bool,
-    /// The SSH tunnel (`[connections.ssh]`); `None`: never set up. Kept when
-    /// turned off (see [`Self::tunnel`]).
+    /// The SSH tunnel of this profile only (`[connections.ssh]`); `None`: never set up. Kept
+    /// when turned off (see [`Self::inline_ssh`]).
     #[serde(default)]
     pub ssh: Option<ssh::SshSettings>,
+    /// The tunnel preset the profile connects through (`tunnel = "<name>"`, see
+    /// [`tunnel::route`]).
+    #[serde(default)]
+    pub tunnel: Option<String>,
     /// Name of this profile's table in the file, used to update it in place on save when the
     /// table has no `id` yet (the first save after the migration).
     #[serde(skip)]
@@ -176,6 +181,7 @@ impl fmt::Debug for ConnectionConfig {
             .field("password_source", &self.source())
             .field("statement_cache", &self.statement_cache)
             .field("ssh", &self.ssh)
+            .field("tunnel", &self.tunnel)
             .field("origin", &self.origin)
             .finish()
     }
@@ -223,6 +229,7 @@ impl Default for ConnectionConfig {
             password_env: None,
             statement_cache: true,
             ssh: None,
+            tunnel: None,
             origin: None,
         }
     }
@@ -255,8 +262,8 @@ impl ConnectionConfig {
         }
     }
 
-    /// The SSH tunnel the profile connects through, when it is on.
-    pub fn tunnel(&self) -> Option<&ssh::SshSettings> {
+    /// The profile's own SSH tunnel, when it is on (a preset it names is [`tunnel::route`]'s).
+    pub fn inline_ssh(&self) -> Option<&ssh::SshSettings> {
         self.ssh.as_ref().filter(|s| s.enabled)
     }
 

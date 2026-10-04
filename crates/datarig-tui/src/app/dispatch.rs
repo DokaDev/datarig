@@ -45,16 +45,28 @@ impl App {
             }
             Action::ExternalEdit => self.request_external_edit(),
             Action::Suspend => self.request_suspend(),
-            Action::NewProfile => self.open_form(None, false),
-            Action::TestConnection => {
-                let p = self.action_profile();
-                self.test_in_context(p)
+            // In the "Tunnels" section: a new preset.
+            Action::NewProfile if self.focus == Focus::Tree && self.in_tunnels_section() => {
+                self.open_tunnel_form(None, false)
             }
+            Action::NewProfile => self.open_form(None, false),
+            Action::NewTunnel => self.open_tunnel_form(None, false),
+            Action::SaveAsTunnel => self.open_save_as_tunnel(),
+            Action::TestConnection => match self.selected_tunnel().filter(|_| self.focus == Focus::Tree) {
+                Some(id) if !self.overlays.is_open(OverlayKind::ProfileForm) => self.test_tunnel(id),
+                _ => {
+                    let p = self.action_profile();
+                    self.test_in_context(p)
+                }
+            },
             Action::TestCurrent => {
                 let p = self.tab().profile;
                 self.test_in_context(p)
             }
             Action::QuickConnect => self.open_quick(QuickPurpose::Open),
+            Action::EditProfile | Action::DuplicateProfile if self.selected_tunnel().is_some() => {
+                self.open_tunnel_form(self.selected_tunnel(), a == Action::DuplicateProfile)
+            }
             Action::EditProfile | Action::DuplicateProfile => {
                 let i = self.selected_profile().and_then(|id| self.profiles.iter().position(|p| p.id == id));
                 if i.is_some() {
@@ -325,6 +337,7 @@ impl App {
                     ConfirmAction::FetchThenCopy => self.fetch_then_copy(),
                     ConfirmAction::OverwriteScript => self.overwrite_confirmed(),
                     ConfirmAction::TrustHostKey => self.host_key_answered(true),
+                    ConfirmAction::DeleteTunnel(id) => self.delete_tunnel(id),
                 }
             }
             KeyCode::Char('n') | KeyCode::Esc if keeps => self.confirm_kept(),
@@ -460,7 +473,12 @@ impl App {
         let Some(path) = self.config_path.clone() else {
             return Ok(self.config_broken.then(|| Notice::new(Label::ConfigReadonly, Level::Warning)));
         };
-        let profiles = Profiles { connections: &self.profiles, folders: &self.folders, last_used: self.last_used };
+        let profiles = Profiles {
+            connections: &self.profiles,
+            tunnels: &self.presets,
+            folders: &self.folders,
+            last_used: self.last_used,
+        };
         let settings = Settings {
             version: self.config_version,
             language: self.lang_setting.as_str(),

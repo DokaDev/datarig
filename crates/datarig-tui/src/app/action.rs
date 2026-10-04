@@ -105,6 +105,10 @@ pub enum Action {
     ScriptDelete,
     /// The profile form: pick the SSH key file in a tree of the file system.
     PickKeyFile,
+    /// A new tunnel preset (the tunnel form).
+    NewTunnel,
+    /// The profile form: its own tunnel becomes a tunnel preset when the form is saved.
+    SaveAsTunnel,
     /// The settings screen.
     OpenSettings,
     /// Show or hide the result detail (the inspector panel, or the status bar preview).
@@ -268,9 +272,28 @@ fn explorer_profile(a: &App) -> bool {
     explorer_focused(a) && a.selected_profile().is_some()
 }
 
-/// There is a profile to act on: the explorer's selection, else the active tab's.
+/// The explorer has the focus and its cursor is on a profile or a tunnel preset.
+fn explorer_profile_or_tunnel(a: &App) -> bool {
+    explorer_focused(a) && (a.selected_profile().is_some() || a.selected_tunnel().is_some())
+}
+
+/// There is a profile to act on (the explorer's selection, else the active tab's), or the
+/// explorer's cursor is on a tunnel preset.
 fn action_profile(a: &App) -> bool {
-    a.action_profile().is_some()
+    a.action_profile().is_some() || (explorer_focused(a) && a.selected_tunnel().is_some())
+}
+
+/// The profile form's own tunnel can become a tunnel preset.
+fn own_tunnel_field(a: &App) -> bool {
+    a.config_writable()
+        && a.overlays
+            .form()
+            .is_some_and(|f| !f.is_tunnel() && f.section == super::profiles::Section::Ssh && f.ssh_enabled && !f.saving)
+}
+
+/// Tunnel presets can be made: the config file can be written.
+fn presets_writable(a: &App) -> bool {
+    a.tunnels_shown()
 }
 
 /// Saved queries can be kept (there is a data directory).
@@ -361,8 +384,9 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::ExternalEdit, "editor.open_external", Label::ActionEditorOpenExternal, has_tab),
     act(Action::QuickConnect, "conn.quick_connect", Label::ActionConnQuickConnect, in_workspace),
     act(Action::NewProfile, "conn.new", Label::ActionConnNew, anywhere),
-    act(Action::EditProfile, "conn.edit", Label::ActionConnEdit, explorer_profile),
-    act(Action::DuplicateProfile, "conn.duplicate", Label::ActionConnDuplicate, explorer_profile),
+    act(Action::EditProfile, "conn.edit", Label::ActionConnEdit, explorer_profile_or_tunnel),
+    act(Action::DuplicateProfile, "conn.duplicate", Label::ActionConnDuplicate, explorer_profile_or_tunnel),
+    act(Action::NewTunnel, "tunnel.new", Label::ActionTunnelNew, presets_writable),
     act(Action::TestConnection, "conn.test", Label::ActionConnTest, action_profile),
     act(Action::Disconnect, "conn.disconnect", Label::ActionConnDisconnect, explorer_profile),
     act(Action::OpenConsole, "conn.open_console", Label::ActionConnOpenConsole, explorer_profile),
@@ -442,6 +466,7 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::ScriptOpen, "script.open", Label::ActionScriptOpen, scripts),
     act(Action::ScriptDelete, "script.delete", Label::ActionScriptDelete, tab_script),
     act(Action::PickKeyFile, "form.pick_key_file", Label::ActionFormPickKeyFile, key_file_field),
+    act(Action::SaveAsTunnel, "form.save_as_tunnel", Label::ActionFormSaveAsTunnel, own_tunnel_field),
     act(Action::Help, "help.context", Label::ActionHelpContext, help_available),
     act(Action::HelpAll, "help.all", Label::ActionHelpAll, help_available),
     act(Action::PaneBack, "pane.back", Label::ActionPaneBack, results_focused),
