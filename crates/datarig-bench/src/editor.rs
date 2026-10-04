@@ -3,9 +3,9 @@
 //! and edits, the process's memory, what an autosave of the file costs, a theme switch
 //! (`:set theme=`) up to its frame, search: `/` with a pattern that is nowhere (each key
 //! searches the whole text) and `n`, with the bytes each key searched and the lines each frame
-//! highlighted counted, and `:%s` over the whole text with the bytes it searched. `block` (the
-//! `editor_block` scenario, in a process of its own): Visual block operators over the whole
-//! text, with the bytes they walked counted.
+//! highlighted counted. `block` (the `editor_block` scenario, in a process of its own): Visual
+//! block operators over the whole text, with the bytes they walked counted, and `:%s` over the
+//! whole text with the bytes it searched.
 
 use crate::apps;
 use crate::grid::wide;
@@ -182,28 +182,6 @@ pub fn run(scratch: &Path, bytes: usize, n: usize) -> Result<Value, String> {
         a.set_theme(names[i % names.len()]).expect("a built-in theme");
     });
 
-    // `:%s` over the whole text through the command line (`:`, the command typed, `Enter`,
-    // the frame), then `u`: the bytes one substitute searched, in passes over the text, and its
-    // time. It replaces a word on every few lines, so the whole text is one undo step.
-    let mut subst = Vec::new();
-    let (mut subst_bytes, mut subst_changed) = (0, true);
-    for _ in 0..3 {
-        let version = app.tab().editor.version();
-        app.tab_mut().editor.take_search_work();
-        let t = Instant::now();
-        apps::char(&mut app, ':');
-        for c in "%s/orders/ORDERS/g".chars() {
-            apps::char(&mut app, c);
-        }
-        apps::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
-        apps::draw(&mut term, &mut app);
-        subst.push(ms(t.elapsed()));
-        subst_bytes = subst_bytes.max(app.tab_mut().editor.take_search_work().bytes);
-        subst_changed &= app.tab().editor.version() != version;
-        apps::char(&mut app, 'u');
-        apps::draw(&mut term, &mut app);
-    }
-
     // Autosave: one edit, then the timer that saves it.
     let mut saves = Vec::new();
     for _ in 0..5 {
@@ -237,12 +215,6 @@ pub fn run(scratch: &Path, bytes: usize, n: usize) -> Result<Value, String> {
             "next_bytes_max": next.bytes,
             "highlight_lines_max": miss.highlighted.max(next.highlighted),
             "editor_rows": rows,
-            "text_bytes": text_bytes,
-        },
-        "subst_ms": report(":%s", &subst),
-        "subst": {
-            // Nothing searched means the command did not run: not measured.
-            "bytes_max": if subst_changed { subst_bytes } else { 0 },
             "text_bytes": text_bytes,
         },
         "autosave_ms": report("autosave", &saves),
@@ -319,5 +291,39 @@ pub fn block(scratch: &Path, bytes: usize) -> Result<Value, String> {
     println!("  block      {}", s.line(" ms"));
     let text_bytes = app.tab().editor.len_bytes() + 1;
     println!("  bytes one key walked: {walked} ({:.2} passes over the text)", walked as f64 / text_bytes as f64);
-    Ok(json!({ "bytes": bytes, "lines": lines, "keys_ms": s.json(), "bytes_max": walked, "text_bytes": text_bytes }))
+
+    // Here too, for the copies it leaves in the undo steps: `:%s` over the whole text through the command line (`:`, the command typed, `Enter`,
+    // the frame), then `u`: the bytes one substitute searched, in passes over the text, and its
+    // time. It replaces a word on every few lines, so the whole text is one undo step.
+    let mut subst = Vec::new();
+    let (mut subst_bytes, mut subst_changed) = (0, true);
+    for _ in 0..3 {
+        let version = app.tab().editor.version();
+        app.tab_mut().editor.take_search_work();
+        let t = Instant::now();
+        apps::char(&mut app, ':');
+        for c in "%s/orders/ORDERS/g".chars() {
+            apps::char(&mut app, c);
+        }
+        apps::key(&mut app, KeyCode::Enter, KeyModifiers::NONE);
+        apps::draw(&mut term, &mut app);
+        subst.push(ms(t.elapsed()));
+        subst_bytes = subst_bytes.max(app.tab_mut().editor.take_search_work().bytes);
+        subst_changed &= app.tab().editor.version() != version;
+        apps::char(&mut app, 'u');
+        apps::draw(&mut term, &mut app);
+    }
+
+    let subst = Summary::of(&subst);
+    println!("  :%s        {}", subst.line(" ms"));
+    Ok(json!({
+        "bytes": bytes,
+        "lines": lines,
+        "keys_ms": s.json(),
+        "bytes_max": walked,
+        "text_bytes": text_bytes,
+        "subst_ms": subst.json(),
+        // Nothing searched means the command did not run: not measured.
+        "subst_bytes_max": if subst_changed { subst_bytes } else { 0 },
+    }))
 }

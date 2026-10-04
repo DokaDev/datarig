@@ -115,17 +115,6 @@ pub fn editor(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
             _ => c.missing(&format!("{what} bytes searched per key")),
         }
     }
-    // `:%s` over the whole text: each line searched once, and a one-shot time.
-    match (f(result, &["subst", "bytes_max"]), f(result, &["subst", "text_bytes"])) {
-        (Some(w), Some(text)) if text > 0.0 && w > 0.0 => {
-            c.check("editor :%s bytes searched", w / text, num(b, "editor", "subst_passes_max")?, " passes")
-        }
-        _ => c.missing("editor :%s bytes searched"),
-    }
-    match f(result, &["subst_ms", "max"]) {
-        Some(m) => c.check("editor :%s over the whole text, slowest", m, num(b, "editor", "subst_ms_max")?, " ms"),
-        None => c.missing("editor :%s over the whole text, slowest"),
-    }
     match f(result, &["search", "highlight_lines_max"]) {
         // The matches of `n` are on screen: a frame that highlighted nothing did not draw them.
         Some(l) if l > 0.0 => {
@@ -137,7 +126,7 @@ pub fn editor(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
 }
 
 /// Visual block operators over the whole text: the slowest key with its frame, and the bytes
-/// one key walked, in passes over the text.
+/// one key walked, in passes over the text; `:%s` over the whole text likewise.
 pub fn editor_block(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
     match f(result, &["keys_ms", "max"]) {
         Some(m) => {
@@ -151,6 +140,17 @@ pub fn editor_block(c: &mut Checks, b: &Table, result: &Value) -> Result<(), Str
             c.check("editor block bytes walked per key", w / text, num(b, "editor", "block_passes_max")?, " passes")
         }
         _ => c.missing("editor block bytes walked per key"),
+    }
+    // `:%s` over the whole text: each line searched once, and a one-shot time.
+    match (f(result, &["subst_bytes_max"]), f(result, &["text_bytes"])) {
+        (Some(w), Some(text)) if text > 0.0 && w > 0.0 => {
+            c.check("editor :%s bytes searched", w / text, num(b, "editor", "subst_passes_max")?, " passes")
+        }
+        _ => c.missing("editor :%s bytes searched"),
+    }
+    match f(result, &["subst_ms", "max"]) {
+        Some(m) => c.check("editor :%s over the whole text, slowest", m, num(b, "editor", "subst_ms_max")?, " ms"),
+        None => c.missing("editor :%s over the whole text, slowest"),
     }
     Ok(())
 }

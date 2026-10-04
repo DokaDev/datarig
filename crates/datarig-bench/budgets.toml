@@ -82,11 +82,6 @@ rss_mib_max = 160
 # rows than the 45 of the terminal). Their times are held to `p95_ms_max` above.
 search_passes_max = 1.0
 highlight_lines_max = 45
-# `:%s/orders/ORDERS/g` over the whole file through the command line (one undo step): the bytes
-# it searched, in passes over the text (each line once), and the slowest of three, typed with
-# its frame, held to a one-shot time with a wide margin (a developer machine: see the run).
-subst_passes_max = 1.0
-subst_ms_max = 1000.0
 # Visual block over the whole file (`gg Ctrl+V G $` then `y`, `d`, `u`, and `I` on every line;
 # the `editor_block` scenario, in a process of its own so the copies of the whole text it leaves
 # in registers and undo steps do not count in the other scenarios' memory): the most bytes one
@@ -96,6 +91,12 @@ subst_ms_max = 1000.0
 # (a developer machine: about 130 ms, for `d`).
 block_ms_max = 500.0
 block_passes_max = 4.0
+# `:%s/orders/ORDERS/g` over the whole file through the command line, one undo step (also in the
+# `editor_block` process, for the copies of the text it leaves in the undo steps): the bytes it
+# searched, in passes over the text (each line once), and the slowest of three, typed with its
+# frame, held to a one-shot time with a wide margin (a developer machine: about 55 ms).
+subst_passes_max = 1.0
+subst_ms_max = 1000.0
 
 [idle]
 secs = 20
