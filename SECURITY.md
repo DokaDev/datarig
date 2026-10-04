@@ -19,4 +19,4 @@ the confirmation or read-only enforcement the safety model promises.
 
 ## Supported versions
 
-datarig is pre-release. Fixes go to the `main` branch only.
+datarig is pre-1.0: only the latest release is supported, and fixes go into the next release.
