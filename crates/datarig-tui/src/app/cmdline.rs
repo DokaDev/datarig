@@ -538,6 +538,16 @@ impl App {
                 self.overlays.close(OverlayKind::Commands);
                 self.tabs.iter_mut().for_each(|t| t.editor.clear_highlight());
             }
+            (command::Command::Suspend, _) => {
+                if !arg.is_empty() {
+                    return err(Msg::CommandsErrorNoArgs { name });
+                }
+                if !super::effects::SUSPEND_SUPPORTED {
+                    return err(Msg::Label(Label::SuspendUnsupported));
+                }
+                self.overlays.close(OverlayKind::Commands);
+                self.dispatch(Action::Suspend);
+            }
             (command::Command::Recover, _) => {
                 if !arg.is_empty() {
                     return err(Msg::CommandsErrorNoArgs { name });

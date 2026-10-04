@@ -43,6 +43,8 @@ impl App {
                     self.update_completion(true);
                 }
             }
+            Action::ExternalEdit => self.request_external_edit(),
+            Action::Suspend => self.request_suspend(),
             Action::NewProfile => self.open_form(None, false),
             Action::TestConnection => {
                 let p = self.action_profile();

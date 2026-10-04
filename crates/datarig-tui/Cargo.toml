@@ -30,10 +30,14 @@ log.workspace = true
 ratatui.workspace = true
 regex.workspace = true
 serde_json.workspace = true
+shell-words.workspace = true
 terminal-colorsaurus.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "sync", "time", "signal"] }
 unicode-segmentation.workspace = true
 unicode-width.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true
 
 [dev-dependencies]
 datarig-core = { workspace = true, features = ["test-util"] }

@@ -137,6 +137,12 @@ Everything below works today, with PostgreSQL.
 - Run the statement under the cursor (`Ctrl+E`), a selection, or several statements in a row:
   each statement's outcome is listed in a Messages tab, and every row result gets a result tab
   of its own. Queries can be cancelled (`Ctrl+C`).
+- `Ctrl+G` opens the query in your own editor (`$VISUAL`, else `$EDITOR`, else `vi`; for
+  example `EDITOR="code -w"`), run directly without a shell on a private temporary file; what you
+  save replaces the text as one undo step, and quitting without saving (or Vim's `:cq`) changes
+  nothing. A table tab's query opens as a copy that comes back in a new console. `Ctrl+Z` (or
+  `:suspend`) suspends datarig like Vim, and `fg` brings it back (not on Windows). A running
+  query keeps running on the server meanwhile.
 
 **Results**
 - A grid that shows one page at a time (`n`/`p`), fetched from a server-side portal; the rows

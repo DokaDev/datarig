@@ -1,7 +1,9 @@
 //! The real binary in a pseudo terminal (`script`), ended from outside with SIGTERM or SIGHUP:
 //! it restores the terminal as on a normal quit (alternate screen left, mouse and bracketed
 //! paste off, the cursor shown with the user's shape) and writes the console it was editing.
-//! Unix only; skipped with a visible note when `script` is not there.
+//! It also hands the terminal to an external editor (`Ctrl+G`, a script in place of the
+//! editor) and suspends (`Ctrl+Z`), taking the terminal back after. Unix only; skipped with a
+//! visible note when `script` is not there.
 //!
 //! Every path out of a test (an assertion that fails, a timeout) kills and reaps what it
 //! started ([`Run`]): `script` puts the binary in raw mode on a pseudo terminal of its own, so
@@ -50,11 +52,49 @@ impl Run {
     /// [`Run::start`], with the binary out of the pseudo terminal's session on Linux (see
     /// [`start`]).
     fn start_in(dir: PathBuf, own_session: bool) -> Option<Run> {
+        Run::start_with(dir, own_session, "", &[], &[])
+    }
+
+    /// [`Run::start_in`] with `config` as the config file, `files` (path in the directory,
+    /// text) written first, and `env` set for the binary.
+    fn start_with(
+        dir: PathBuf,
+        own_session: bool,
+        config: &str,
+        files: &[(&str, &str)],
+        env: &[(&str, String)],
+    ) -> Option<Run> {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("config.toml"), "").unwrap();
-        let child = start(&dir, &dir.join("typescript"), own_session)?;
+        std::fs::write(dir.join("config.toml"), config).unwrap();
+        for (path, text) in files {
+            let path = dir.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, text).unwrap();
+        }
+        let child = start(&dir, &dir.join("typescript"), own_session, env)?;
         Some(Run { child, dir })
+    }
+
+    /// Type `bytes` on the pseudo terminal.
+    fn type_bytes(&mut self, bytes: &[u8]) {
+        let stdin = self.child.stdin.as_mut().expect("stdin");
+        stdin.write_all(bytes).unwrap();
+        stdin.flush().unwrap();
+    }
+
+    /// Type `bytes` until `done` (the workspace is restored after the first frame, so a key
+    /// typed at once may find no tab yet), at most 20 seconds.
+    fn type_until(&mut self, bytes: &[u8], what: &str, mut done: impl FnMut() -> bool) {
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !done() {
+            assert!(Instant::now() < deadline, "timed out waiting for {what}");
+            self.type_bytes(bytes);
+            let wait = Instant::now() + Duration::from_secs(1);
+            while !done() && Instant::now() < wait {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+        }
     }
 
     /// What the binary wrote to its terminal so far.
@@ -89,7 +129,7 @@ fn alive(pid: u32) -> bool {
 /// hangup of the pseudo terminal when `script` ends does not reach it. Linux sends the session
 /// leader SIGCONT with SIGHUP, which would resume a stopped binary to handle the hangup; macOS
 /// sends SIGHUP alone, which a stopped binary keeps pending.
-fn start(dir: &Path, out: &Path, own_session: bool) -> Option<Child> {
+fn start(dir: &Path, out: &Path, own_session: bool, env: &[(&str, String)]) -> Option<Child> {
     let bin = env!("CARGO_BIN_EXE_datarig");
     let config = dir.join("config.toml");
     let mut cmd = Command::new("script");
@@ -108,6 +148,9 @@ fn start(dir: &Path, out: &Path, own_session: bool) -> Option<Child> {
         .env("DATARIG_STATE_DIR", dir.join("state"))
         .env("TERM", "xterm-256color")
         .env_remove("TMUX")
+        .env_remove("VISUAL")
+        .env_remove("EDITOR")
+        .envs(env.iter().map(|(k, v)| (*k, v.as_str())))
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -209,4 +252,138 @@ fn a_run_whose_script_ended_first_leaves_no_process_behind() {
     }
     assert!(!left, "the binary still runs");
     assert!(!dir.exists(), "{}", dir.display());
+}
+
+/// A profile (never connected here) so the workspace shows, and a console that comes back as
+/// a recovered tab holding `SELECT 1`. No icons question.
+const WITH_TAB: &str = "version = 2\nicons = \"off\"\n\n[[connections]]\nname = \"t\"\ndriver = \"postgres\"\n\
+                        host = \"127.0.0.1\"\nport = 1\nuser = \"u\"\ndatabase = \"d\"\npassword_source = \"prompt\"\n";
+
+/// The text of the console files in `dir`'s state directory.
+fn consoles(dir: &Path) -> Vec<String> {
+    let Ok(rd) = std::fs::read_dir(dir.join("state/consoles")) else { return Vec::new() };
+    rd.filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "sql"))
+        .filter_map(|p| std::fs::read_to_string(p).ok())
+        .collect()
+}
+
+/// How often the alternate screen was entered and left in `text`.
+fn screens(text: &str) -> (usize, usize) {
+    (text.matches("\x1b[?1049h").count(), text.matches("\x1b[?1049l").count())
+}
+
+/// `Ctrl+G`: the editor (a script here) runs with the file as its last argument, without a shell
+/// (an argument with a space stays one), on the terminal (its stdin is a terminal), on a file
+/// only its owner reads; the alternate screen is left for it and entered again after. SIGINT
+/// and SIGQUIT sent while it runs (the editor's Ctrl+C) do not end datarig, and what the editor
+/// saved is the console's text.
+#[test]
+fn ctrl_g_hands_the_terminal_to_the_editor_and_takes_its_text() {
+    let dir = std::env::temp_dir().join(format!("datarig-signals-{}-editor", std::process::id()));
+    // The file is the last argument.
+    let editor = format!(
+        "printf '%s|' \"$@\" > '{d}/args'\n\
+         for f; do :; done\n\
+         if [ -t 0 ]; then echo tty > '{d}/stdin'; fi\n\
+         ls -l \"$f\" | cut -c1-10 > '{d}/mode'\n\
+         cat \"$f\" > '{d}/given'\n\
+         kill -INT $PPID\n\
+         kill -QUIT $PPID\n\
+         sleep 0.3\n\
+         printf 'SELECT 2\\n' > \"$f\"\n",
+        d = dir.display()
+    );
+    let visual = format!("sh '{}' 'two words'", dir.join("my editor.sh").display());
+    let files = [("state/consoles/zz.sql", "SELECT 1"), ("my editor.sh", editor.as_str())];
+    let Some(mut run) = Run::start_with(dir.clone(), false, WITH_TAB, &files, &[("VISUAL", visual)]) else { return };
+    run.drawn();
+    let pid = run.app_pid();
+    run.type_until(b"\x07", "the editor to run", || dir.join("args").exists());
+    wait_for("the screen to come back", 20, || dir.join("given").exists() && screens(&run.output()).0 >= 2);
+    let args = std::fs::read_to_string(dir.join("args")).unwrap();
+    let args: Vec<&str> = args.trim_end_matches('|').split('|').collect();
+    assert_eq!(args[0], "two words", "{args:?}");
+    assert!(
+        args[1].starts_with(&dir.join("state/edit/").display().to_string()) && args[1].ends_with(".sql"),
+        "{args:?}"
+    );
+    assert_eq!(std::fs::read_to_string(dir.join("stdin")).unwrap().trim(), "tty");
+    assert_eq!(std::fs::read_to_string(dir.join("mode")).unwrap().trim(), "-rw-------");
+    assert_eq!(std::fs::read_to_string(dir.join("given")).unwrap(), "SELECT 1\n");
+    assert!(!Path::new(args[1]).exists(), "the file is removed");
+    let text = run.output();
+    let first = text.find("\x1b[?1049h").unwrap();
+    let left = first + text[first..].find("\x1b[?1049l").expect("left for the editor");
+    assert!(text[left..].contains("\x1b[?1049h"), "entered again");
+    assert!(text[first..left].contains("\x1b[?2004l") && text[first..left].contains("\x1b[0 q"), "restored first");
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(
+        alive(pid) && run.child.try_wait().ok().flatten().is_none(),
+        "SIGINT/SIGQUIT during the editor ended datarig"
+    );
+    run.type_bytes(b"\x11"); // Ctrl+Q
+    wait_for("the binary to end", 20, || run.child.try_wait().ok().flatten().is_some());
+    assert!(consoles(&dir).iter().any(|t| t == "SELECT 2"), "{:?}", consoles(&dir));
+}
+
+/// SIGTERM while the editor runs ends datarig once the editor has ended, with the edited text
+/// written and the terminal restored.
+#[test]
+fn sigterm_during_the_editor_ends_datarig_after_it() {
+    let dir = std::env::temp_dir().join(format!("datarig-signals-{}-editor-term", std::process::id()));
+    let editor = format!(
+        "touch '{d}/started'\nkill -TERM $PPID\nsleep 0.3\nprintf 'SELECT 3\\n' > \"$1\"\ntouch '{d}/done'\n",
+        d = dir.display()
+    );
+    let visual = format!("sh '{}'", dir.join("ed.sh").display());
+    let files = [("state/consoles/zz.sql", "SELECT 1"), ("ed.sh", editor.as_str())];
+    let Some(mut run) = Run::start_with(dir.clone(), false, WITH_TAB, &files, &[("VISUAL", visual)]) else { return };
+    run.drawn();
+    run.type_until(b"\x07", "the editor to run", || dir.join("started").exists());
+    wait_for("the binary to end", 20, || run.child.try_wait().ok().flatten().is_some());
+    assert!(dir.join("done").exists(), "the editor ran to its end");
+    assert!(consoles(&dir).iter().any(|t| t == "SELECT 3"), "{:?}", consoles(&dir));
+    let text = run.output();
+    let (entered, left) = screens(&text);
+    assert_eq!((entered, left), (2, 2), "{text:?}");
+    assert!(text.trim_end().ends_with("\x1b[?1049l"), "ends on the main screen: {text:?}");
+}
+
+/// `Ctrl+Z`: the terminal is restored and the process group gets SIGTSTP; once it runs again
+/// (`fg`: SIGCONT here) the alternate screen is entered again and the app goes on. (In the
+/// pseudo terminal of `script` the binary leads a process group the shell does not control, so
+/// the system may drop the stop; the test sends SIGCONT when it did stop.)
+#[test]
+fn ctrl_z_suspends_and_comes_back() {
+    let dir = std::env::temp_dir().join(format!("datarig-signals-{}-suspend", std::process::id()));
+    let Some(mut run) = Run::start_with(dir.clone(), false, WITH_TAB, &[], &[]) else { return };
+    run.drawn();
+    let pid = run.app_pid();
+    let typescript = dir.join("typescript");
+    let given_back = || screens(&String::from_utf8_lossy(&std::fs::read(&typescript).unwrap_or_default())).1 >= 1;
+    run.type_until(b"\x1a", "the terminal to be given back", given_back);
+    let stopped = || {
+        Command::new("ps")
+            .args(["-o", "stat=", "-p", &pid.to_string()])
+            .output()
+            .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains('T'))
+    };
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while screens(&run.output()).0 < 2 {
+        assert!(Instant::now() < deadline, "timed out waiting for the screen to come back");
+        if stopped() {
+            let _ = Command::new("kill").arg("-CONT").arg(pid.to_string()).status();
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let text = run.output();
+    let first = text.find("\x1b[?1049h").unwrap();
+    let left = first + text[first..].find("\x1b[?1049l").unwrap();
+    assert!(text[first..left].contains("\x1b[0 q"), "the user's cursor shape first");
+    assert!(alive(pid));
+    run.type_bytes(b"\x11");
+    wait_for("the binary to end", 20, || run.child.try_wait().ok().flatten().is_some());
+    let (entered, left) = screens(&run.output());
+    assert_eq!((entered, left), (2, 2));
 }

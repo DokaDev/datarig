@@ -8,8 +8,9 @@
 //! terminal gets its user's default shape back: [`TermState::restore`] runs on a normal exit,
 //! when an error ends the program, when setting the terminal up fails part way, and from the
 //! panic hook ([`Guard`] and the binary's hook share one [`TermState`], and only the first call
-//! writes). There is no suspend today (raw mode turns `Ctrl+Z` into a key); one would call
-//! `restore` before it stops and set up again after.
+//! writes). Handing the terminal over for a while (an external editor, a suspend with
+//! `Ctrl+Z`) is a `restore` followed by raw mode and [`TermState::enter`] again: the state is
+//! marked again, so whatever happens after it is undone once more.
 
 use crate::app::App;
 use crate::input::kitty;
@@ -120,10 +121,10 @@ impl TermState {
         Ok(())
     }
 
-    /// Undo what was turned on, once (later calls do nothing): `raw_off` for raw mode, then on
-    /// `out` the kitty flags popped, bracketed paste and mouse capture off, the user's default
-    /// cursor shape and the main screen. Every step is tried even when one fails; the first
-    /// failure comes back.
+    /// Undo what was turned on, once (later calls do nothing until it is turned on again):
+    /// `raw_off` for raw mode, then on `out` the kitty flags popped, bracketed paste and mouse
+    /// capture off, the user's default cursor shape and the main screen. Every step is tried
+    /// even when one fails; the first failure comes back.
     pub fn restore(&self, out: &mut impl Write, raw_off: impl FnOnce()) -> io::Result<()> {
         if self.raw.swap(false, Ordering::SeqCst) {
             raw_off();

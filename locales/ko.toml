@@ -141,6 +141,8 @@
 "action.pane.prev" = "이전 패널로 이동"
 "action.commands.open" = "명령"
 "action.app.quit" = "종료"
+"action.editor.open_external" = "내 편집기로 쿼리 편집 ($VISUAL, $EDITOR)"
+"action.app.suspend" = "datarig 일시 중지 (셸에서 fg로 돌아옴)"
 
 # Connection profiles
 "quit.title" = "datarig를 종료할까요?"
@@ -1177,3 +1179,20 @@
 "theme.problem.bad_modifier" = "“{value}”은(는) 수식자가 아닙니다 (bold, dim, italic, underlined, reversed, crossed-out)"
 "theme.problem.unknown_base" = "extends = “{name}”: 기본 제공 테마가 아닙니다"
 "theme.not_used" = "테마를 쓰지 않음: {error}. terminal 테마로 그립니다."
+
+# The external editor (Ctrl+G) and suspending (Ctrl+Z)
+"external.unchanged" = "편집기에서 바뀐 내용이 없습니다"
+"external.replaced" = "편집기의 텍스트로 바꿨습니다 (u로 되돌림)"
+"external.copied" = "편집한 쿼리를 새 콘솔에 열었습니다 (테이블 탭의 쿼리는 그대로)"
+"external.stale" = "편집기가 열려 있는 동안 탭이 바뀌어, 편집한 텍스트를 새 콘솔에 열었습니다"
+"external.no_state_dir" = "편집기용 파일을 둘 상태 디렉터리가 없어(홈 디렉터리를 모름) 아무것도 열지 않았습니다"
+"external.file" = "편집기용 파일을 쓰지 못했습니다: {error}"
+"external.command" = "${var} 값을 실행할 명령으로 읽을 수 없습니다: {error}"
+"external.spawn" = "편집기 {program}을(를) 시작하지 못했습니다: {error} ($VISUAL이나 $EDITOR를 설정하세요)"
+"external.exit_code" = "편집기 {program}이(가) 종료 코드 {code}로 끝나 텍스트를 바꾸지 않았습니다"
+"external.exit_signal" = "편집기 {program}이(가) 시그널 {signal}로 끝나 텍스트를 바꾸지 않았습니다"
+"external.exit_other" = "편집기 {program}이(가) 실패해({how}) 텍스트를 바꾸지 않았습니다"
+"external.read" = "편집기의 파일을 다시 읽지 못했습니다: {error}. 텍스트는 그대로입니다"
+"external.not_utf8" = "편집기가 UTF-8이 아닌 텍스트를 저장해 텍스트를 바꾸지 않았습니다"
+"suspend.unsupported" = "Windows에서는 일시 중지를 지원하지 않습니다"
+"suspend.failed" = "일시 중지하지 못했습니다: {error}"

@@ -176,3 +176,57 @@ fn every_exit_path_gives_the_cursor_back() {
     assert!(panicked.is_err());
     assert_restored_once(&screen, raw, "panic hook, then the guard");
 }
+
+/// Handing the terminal to an external editor or suspending: `restore`, then raw mode and
+/// `enter` again. A panic while it is handed over (the editor's path) leaves it restored and
+/// writes nothing more; one after it was taken back restores it once more; and the screen
+/// always ends restored, raw mode off as often as it was turned on.
+#[test]
+fn the_terminal_is_restored_after_a_panic_while_handed_over_or_after() {
+    let handover = |state: &TermState, out: &mut Screen| -> io::Result<()> {
+        state.restore(out, raw_off)?;
+        Ok(())
+    };
+    let take_back = |state: &TermState, out: &mut Screen| -> io::Result<()> {
+        state.raw_on();
+        state.enter(out, true)
+    };
+    let count = |s: &Screen, part: &str| s.text().matches(part).count();
+
+    // A panic while the editor has the terminal: the guard finds nothing to undo.
+    let (state, screen, raw) = (TermState::new(), Screen::default(), RAW_OFFS.with(Cell::get));
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = program(&state, &screen, |_, out| {
+            handover(&state, out)?;
+            panic!("a bug in the editor's path");
+        });
+    }));
+    assert!(panicked.is_err());
+    assert_restored_once(&screen, raw, "panic while handed over");
+
+    // Taken back, then a panic: restored again, once.
+    let (state, screen, raw) = (TermState::new(), Screen::default(), RAW_OFFS.with(Cell::get));
+    let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = program(&state, &screen, |_, out| {
+            handover(&state, out)?;
+            take_back(&state, out)?;
+            panic!("a bug after the editor");
+        });
+    }));
+    assert!(panicked.is_err());
+    let text = screen.text();
+    assert_eq!((count(&screen, ENTER), count(&screen, LEAVE)), (2, 2), "{text:?}");
+    assert!(text.ends_with(&restore_sequence()), "ends restored, the kitty flags popped: {text:?}");
+    assert_eq!(RAW_OFFS.with(Cell::get), raw + 2);
+
+    // Taken back, then a normal exit.
+    let (state, screen, raw) = (TermState::new(), Screen::default(), RAW_OFFS.with(Cell::get));
+    program(&state, &screen, |_, out| {
+        handover(&state, out)?;
+        take_back(&state, out)
+    })
+    .unwrap();
+    assert_eq!((count(&screen, ENTER), count(&screen, LEAVE)), (2, 2));
+    assert!(screen.text().ends_with(&restore_sequence()));
+    assert_eq!(RAW_OFFS.with(Cell::get), raw + 2);
+}
