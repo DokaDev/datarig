@@ -6,8 +6,8 @@
 //!                               [--delay-ms MS] [--max-pages N] [--idle-secs S]
 //! ```
 //!
-//! Scenarios: `rtt`, `rtt_ssh`, `paging`, `editor`, `editor_block`, `grid`, `idle`, `startup`, or
-//! `all`. The PostgreSQL ones (`rtt`, `rtt_ssh`, `paging`, `idle`) need `DATARIG_TEST_PG_URL` and the test
+//! Scenarios: `rtt`, `rtt_ssh`, `paging`, `editor`, `editor_block`, `grid`, `plan`, `idle`,
+//! `startup`, or `all`. The PostgreSQL ones (`rtt`, `rtt_ssh`, `paging`, `idle`) need `DATARIG_TEST_PG_URL` and the test
 //! database of `dev/init`; `rtt_ssh` also the SSH bastion of the tests (see `ssh.rs`).
 //! `idle` and `startup` run the release binary in `tmux -L perf`.
 //!
@@ -20,6 +20,7 @@ mod editor;
 mod grid;
 mod idle;
 mod paging;
+mod plan;
 mod proxy;
 mod rtt;
 mod ssh;
@@ -72,13 +73,14 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         }
     }
     if o.scenarios.iter().any(|s| s == "all") {
-        o.scenarios = ["rtt", "rtt_ssh", "editor", "grid", "startup", "idle", "paging", "editor_block"]
+        o.scenarios = ["rtt", "rtt_ssh", "editor", "grid", "plan", "startup", "idle", "paging", "editor_block"]
             .map(String::from)
             .to_vec();
     }
     if o.scenarios.is_empty() {
         return Err(
-            "name a scenario: rtt, rtt_ssh, paging, editor, editor_block, grid, idle, startup, all or budget".into()
+            "name a scenario: rtt, rtt_ssh, paging, editor, editor_block, grid, plan, idle, startup, all or budget"
+                .into(),
         );
     }
     Ok(o)
@@ -99,6 +101,7 @@ async fn scenario(name: &str, o: &Opts) -> Result<Value, String> {
         "editor" => editor::run(&o.scratch, 5 * 1024 * 1024, o.runs.unwrap_or(300)),
         "editor_block" => editor::block_in_own_process(&o.scratch, 5 * 1024 * 1024),
         "grid" => grid::run(2_000, 24, o.runs.unwrap_or(400)),
+        "plan" => plan::run(PLAN_JOINS, PLAN_PARTITIONS, o.runs.unwrap_or(300)),
         "idle" => idle::idle(&o.scratch, &o.bin, &pg_url()?, o.idle_secs),
         "startup" => idle::startup(&o.scratch, &o.bin, o.runs.unwrap_or(20)),
         _ => Err(format!("unknown scenario {name}")),
@@ -120,6 +123,10 @@ fn record(o: &Opts, record: &Value) {
         }
     }
 }
+
+/// The plan of the `plan` scenario: this many joins deep, over this many partitions.
+const PLAN_JOINS: usize = 40;
+const PLAN_PARTITIONS: usize = 500;
 
 /// Every scenario, held to the budgets.
 async fn budget(o: &Opts) -> Result<Vec<String>, String> {
@@ -147,6 +154,8 @@ async fn budget(o: &Opts) -> Result<Vec<String>, String> {
     budget::editor(&mut c, &b, &run("editor", r))?;
     let r = editor::block_in_own_process(&o.scratch, 5 * 1024 * 1024)?;
     budget::editor_block(&mut c, &b, &run("editor_block", r))?;
+    let r = plan::run(PLAN_JOINS, PLAN_PARTITIONS, 200)?;
+    budget::plan(&mut c, &b, &run("plan", r))?;
     let r = paging::run(&url, &o.scratch, "SELECT * FROM analytics.events", int("paging", "max_pages")?, 250).await?;
     budget::paging(&mut c, &b, &run("paging", r))?;
     let r = idle::idle(&o.scratch, &o.bin, &url, int("idle", "secs")? as u64)?;

@@ -1,0 +1,10 @@
+Sort  (cost=4984.32..4984.33 rows=4 width=45)
+  Sort Key: (count(*)) DESC
+  ->  HashAggregate  (cost=4984.23..4984.28 rows=4 width=45)
+        Group Key: c.region
+        ->  Hash Join  (cost=28.50..4109.84 rows=116586 width=10)
+              Hash Cond: (o.customer = c.id)
+              ->  Seq Scan on zz_orders o  (cost=0.00..3774.00 rows=116586 width=9)
+                    Filter: (created >= '2024-06-01'::date)
+              ->  Hash  (cost=16.00..16.00 rows=1000 width=9)
+                    ->  Seq Scan on zz_customers c  (cost=0.00..16.00 rows=1000 width=9)

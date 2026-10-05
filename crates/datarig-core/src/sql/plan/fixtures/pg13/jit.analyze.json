@@ -1,0 +1,89 @@
+[
+  {
+    "Plan": {
+      "Node Type": "Aggregate",
+      "Strategy": "Plain",
+      "Partial Mode": "Simple",
+      "Parallel Aware": false,
+      "Startup Cost": 4284.86,
+      "Total Cost": 4284.87,
+      "Plan Rows": 1,
+      "Plan Width": 40,
+      "Actual Startup Time": 307.102,
+      "Actual Total Time": 307.107,
+      "Actual Rows": 1,
+      "Actual Loops": 1,
+      "Shared Hit Blocks": 1282,
+      "Shared Read Blocks": 0,
+      "Shared Dirtied Blocks": 0,
+      "Shared Written Blocks": 0,
+      "Local Hit Blocks": 0,
+      "Local Read Blocks": 0,
+      "Local Dirtied Blocks": 0,
+      "Local Written Blocks": 0,
+      "Temp Read Blocks": 0,
+      "Temp Written Blocks": 0,
+      "Plans": [
+        {
+          "Node Type": "Seq Scan",
+          "Parent Relationship": "Outer",
+          "Parallel Aware": false,
+          "Relation Name": "zz_orders",
+          "Alias": "zz_orders",
+          "Startup Cost": 0.00,
+          "Total Cost": 4277.35,
+          "Plan Rows": 1001,
+          "Plan Width": 9,
+          "Actual Startup Time": 251.137,
+          "Actual Total Time": 297.682,
+          "Actual Rows": 28600,
+          "Actual Loops": 1,
+          "Filter": "((customer % 7) = 3)",
+          "Rows Removed by Filter": 171400,
+          "Shared Hit Blocks": 1275,
+          "Shared Read Blocks": 0,
+          "Shared Dirtied Blocks": 0,
+          "Shared Written Blocks": 0,
+          "Local Hit Blocks": 0,
+          "Local Read Blocks": 0,
+          "Local Dirtied Blocks": 0,
+          "Local Written Blocks": 0,
+          "Temp Read Blocks": 0,
+          "Temp Written Blocks": 0
+        }
+      ]
+    },
+    "Planning": {
+      "Shared Hit Blocks": 84,
+      "Shared Read Blocks": 0,
+      "Shared Dirtied Blocks": 0,
+      "Shared Written Blocks": 0,
+      "Local Hit Blocks": 0,
+      "Local Read Blocks": 0,
+      "Local Dirtied Blocks": 0,
+      "Local Written Blocks": 0,
+      "Temp Read Blocks": 0,
+      "Temp Written Blocks": 0
+    },
+    "Planning Time": 0.988,
+    "Triggers": [
+    ],
+    "JIT": {
+      "Functions": 5,
+      "Options": {
+        "Inlining": true,
+        "Optimization": true,
+        "Expressions": true,
+        "Deforming": true
+      },
+      "Timing": {
+        "Generation": 0.322,
+        "Inlining": 105.368,
+        "Optimization": 105.235,
+        "Emission": 40.536,
+        "Total": 251.461
+      }
+    },
+    "Execution Time": 416.786
+  }
+]

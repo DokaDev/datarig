@@ -1,0 +1,7 @@
+HashAggregate  (cost=1305.70..1305.75 rows=5 width=11)
+  Group Key: zz_events.kind
+  ->  Append  (cost=0.00..1161.86 rows=28770 width=3)
+        ->  Seq Scan on zz_events_q1 zz_events_1  (cost=0.00..509.00 rows=16440 width=3)
+              Filter: ((at >= '2024-02-01'::date) AND (at <= '2024-05-15'::date))
+        ->  Seq Scan on zz_events_q2 zz_events_2  (cost=0.00..509.01 rows=12330 width=3)
+              Filter: ((at >= '2024-02-01'::date) AND (at <= '2024-05-15'::date))

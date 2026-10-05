@@ -109,22 +109,30 @@ impl App {
             || t.exec.kept_log.is_some()
             || (rows && t.exec.view == super::tabs::ResultView::Messages)
             || t.result_tabs().len() > 1
+            // A plan: its rows, the plan and the Messages to switch between.
+            || t.exec.plan.is_some()
     }
 
     /// Show the result tab `delta` places away (the row results of the run in their order,
-    /// then its Messages), wrapping around.
+    /// its plan when it has one, then its Messages), wrapping around.
     pub(super) fn cycle_result_tab(&mut self, delta: isize) {
+        use super::tabs::ResultView;
         let t = self.tab_mut();
-        let tabs = t.result_tabs();
-        let n = tabs.len() as isize + 1;
+        let mut views: Vec<(ResultView, Option<usize>)> =
+            t.result_tabs().into_iter().map(|i| (ResultView::Rows, Some(i))).collect();
+        if t.exec.plan.is_some() {
+            views.push((ResultView::Plan, None));
+        }
+        views.push((ResultView::Messages, None));
+        let n = views.len() as isize;
         let now = match (t.exec.view, t.exec.shown) {
-            (super::tabs::ResultView::Rows, Some(i)) => tabs.iter().position(|x| *x == i).unwrap_or(0) as isize,
-            _ => n - 1,
+            (ResultView::Rows, Some(i)) => views.iter().position(|v| *v == (ResultView::Rows, Some(i))),
+            (view, _) => views.iter().position(|v| v.0 == view),
         };
-        let next = (now + delta).rem_euclid(n) as usize;
-        match tabs.get(next) {
-            Some(&i) => t.show_result(i),
-            None => t.exec.view = super::tabs::ResultView::Messages,
+        let next = (now.unwrap_or(0) as isize + delta).rem_euclid(n) as usize;
+        match views[next] {
+            (ResultView::Rows, Some(i)) => t.show_result(i),
+            (view, _) => t.exec.view = view,
         }
     }
 

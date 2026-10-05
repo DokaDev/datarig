@@ -235,6 +235,8 @@ fn draw_results_pane(app: &mut App, area: Rect, buf: &mut Buffer) {
     };
     if app.tab().exec.view == ResultView::Messages && !app.tab().is_table() {
         draw_messages(app, content, buf);
+    } else if app.plan_shown() {
+        crate::widgets::plan::draw_plan(app, content, buf);
     } else {
         draw_results(app, content, buf);
     }
@@ -257,9 +259,9 @@ fn draw_strip(app: &mut App, area: Rect, buf: &mut Buffer) {
     let bg = th.surface;
     buf.set_style(area, Style::new().bg(bg));
     let t = app.tab();
-    let active = |i: Option<usize>| match (t.exec.view, i) {
-        (ResultView::Messages, None) => true,
+    let active = |(i, view): (Option<usize>, ResultView)| match (t.exec.view, i) {
         (ResultView::Rows, Some(i)) => t.exec.shown == Some(i) && matches!(t.results, Results::Rows(_)),
+        (shown, None) => shown == view,
         _ => false,
     };
     let tx = match (&t.results, t.exec.view) {
@@ -275,16 +277,24 @@ fn draw_strip(app: &mut App, area: Rect, buf: &mut Buffer) {
         (app.i18n.label(label).to_string(), color)
     });
     let tabs = t.result_tabs();
-    let labels = |short: bool| -> Vec<(Option<usize>, String)> {
-        let mut v: Vec<(Option<usize>, String)> = tabs
+    let plan = t.exec.plan.is_some();
+    type Item = ((Option<usize>, ResultView), String);
+    let labels = |short: bool| -> Vec<Item> {
+        let mut v: Vec<Item> = tabs
             .iter()
             .map(|&i| {
                 let n = (i + 1).to_string();
-                (Some(i), if short { n } else { app.i18n.msg(&Msg::ResultsTabResult { n }).to_string() })
+                (
+                    (Some(i), ResultView::Rows),
+                    if short { n } else { app.i18n.msg(&Msg::ResultsTabResult { n }).to_string() },
+                )
             })
             .collect();
+        if plan {
+            v.push(((None, ResultView::Plan), app.i18n.label(Label::ResultsTabPlan).to_string()));
+        }
         let m = if short { Label::ResultsTabMessagesShort } else { Label::ResultsTabMessages };
-        v.push((None, app.i18n.label(m).to_string()));
+        v.push(((None, ResultView::Messages), app.i18n.label(m).to_string()));
         v
     };
     let room = (area.width as usize).saturating_sub(1);
@@ -318,8 +328,8 @@ fn draw_strip(app: &mut App, area: Rect, buf: &mut Buffer) {
             x += 2;
         }
         next = k + 1;
-        let (i, label) = &items[k];
-        let on = active(*i);
+        let (key, label) = &items[k];
+        let on = active(*key);
         let text = if on { format!("[{label}]") } else { format!(" {label} ") };
         let style = if on {
             Style::new().fg(th.accent).bg(bg).add_modifier(Modifier::BOLD)
@@ -331,7 +341,7 @@ fn draw_strip(app: &mut App, area: Rect, buf: &mut Buffer) {
             break;
         }
         let w = put(buf, x, area.y, &text, (end - x) as usize, style);
-        hits.push((x, x + w, *i));
+        hits.push((x, x + w, key.0, key.1));
         x += w + 1;
     }
     if let Some(e) = earlier.filter(|e| x as usize + crate::text::width(e) <= end as usize) {
@@ -350,7 +360,7 @@ fn draw_strip(app: &mut App, area: Rect, buf: &mut Buffer) {
 /// fit; else the shown one (`at`) and Messages, and the others nearest the shown one while they
 /// fit, with room for a `…` where some are left out. `None` when the shown one and Messages do
 /// not fit.
-fn strip_window(items: &[(Option<usize>, String)], at: Option<usize>, room: usize) -> Option<Vec<usize>> {
+fn strip_window<K>(items: &[(K, String)], at: Option<usize>, room: usize) -> Option<Vec<usize>> {
     let w = |k: usize| crate::text::width(&items[k].1) + 3;
     let last = items.len().checked_sub(1)?;
     let cost = |shown: &[usize]| {
@@ -553,6 +563,10 @@ fn draw_connection_bar(app: &App, area: Rect, buf: &mut Buffer) {
 fn results_title(app: &App) -> (datarig_core::i18n::Localized, Option<(Vec<String>, Style)>) {
     let th = theme::cur();
     let t = app.tab();
+    if let (ResultView::Plan, Some(p)) = (t.exec.view, &t.exec.plan) {
+        let view = app.i18n.label(p.view.label()).to_string();
+        return (app.i18n.msg(&Msg::PanePlanTitle { view }), None);
+    }
     let Results::Rows(rs) = &t.results else { return (app.i18n.label(Label::PaneResultsTitle), None) };
     if t.exec.view == ResultView::Messages && !t.is_table() {
         return (app.i18n.label(Label::PaneResultsTitle), None);

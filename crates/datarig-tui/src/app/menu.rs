@@ -15,7 +15,7 @@
 //! What the menu was opened on is kept: when it has changed by the time an item is picked (the
 //! tree was reloaded, the result was replaced, the tab went), nothing runs.
 
-use super::action::PanelAction;
+use super::action::{PanelAction, PlanAction, PlanView};
 use super::copy::{CopyFormat, CopyScope};
 use super::tabs::ResultView;
 use super::*;
@@ -55,7 +55,19 @@ const RESULTS_MENU: &[Action] =
     &[Action::CountRows, Action::ResultTab(true), Action::ResultTab(false), Action::Panel(PanelAction::Maximize)];
 
 /// The editor's actions for the statement under the cursor or the selection.
-const EDITOR_MENU: &[Action] = &[Action::RunStatement, Action::FormatSql, Action::ToggleComment];
+const EDITOR_MENU: &[Action] =
+    &[Action::RunStatement, Action::FormatSql, Action::ToggleComment, Action::Explain(false), Action::Explain(true)];
+
+/// The Plan tab's actions for the selected node and the plan, then its pane's: the views.
+const PLAN_MENU: &[Action] =
+    &[Action::Plan(PlanAction::Detail), Action::Plan(PlanAction::CopyText), Action::Plan(PlanAction::CopyJson)];
+const PLAN_PANE_MENU: &[Action] = &[
+    Action::Plan(PlanAction::View(PlanView::Tree)),
+    Action::Plan(PlanAction::View(PlanView::Raw)),
+    Action::ResultTab(true),
+    Action::ResultTab(false),
+    Action::Panel(PanelAction::Maximize),
+];
 
 /// A DDL tab's actions for its text, and its pane's.
 const DDL_MENU: &[Action] = &[Action::ReloadDdl, Action::DdlToConsole, Action::CopyDdl];
@@ -128,6 +140,8 @@ pub enum MenuTarget {
         cell: Option<(usize, usize)>,
         range: Option<((usize, usize), crate::widgets::grid::Shape)>,
     },
+    /// The active tab's plan: the run and statement it came from, its view and selected node.
+    Plan { tab: TabId, binding: u64, query: u64, index: usize, view: PlanView, node: usize },
     /// The active tab's editor: its text, cursor and mode.
     Editor { tab: TabId, binding: u64, version: u64, cursor: (usize, usize), mode: Mode },
     /// The active tab.
@@ -415,6 +429,7 @@ impl App {
                 Some(MenuTarget::Explorer(row, key))
             }
             MenuTarget::Grid { .. } => self.grid_target(),
+            MenuTarget::Plan { .. } => self.plan_target(),
             MenuTarget::Editor { .. } => self.editor_target(),
             MenuTarget::Tab { .. } => self.tab_target(),
             MenuTarget::Welcome => self.profiles.is_empty().then_some(MenuTarget::Welcome),
@@ -438,6 +453,50 @@ impl App {
             cell: rows.then_some((t.grid.row, t.grid.col)),
             range: t.grid.anchor.filter(|_| rows).map(|a| (a, t.grid.shape)),
         })
+    }
+
+    fn plan_target(&self) -> Option<MenuTarget> {
+        if !self.plan_shown() || !matches!(self.focus, Focus::Results | Focus::Inspector) {
+            return None;
+        }
+        let t = self.tab();
+        let p = t.exec.plan.as_ref()?;
+        Some(MenuTarget::Plan {
+            tab: t.id,
+            binding: t.binding,
+            query: t.exec.query_id,
+            index: p.index,
+            view: p.view,
+            node: p.selected,
+        })
+    }
+
+    /// The Plan tab's menu: the selected node's and the plan's actions, then the views.
+    fn open_plan_menu(&mut self, at: (u16, u16)) {
+        let back = self.focus;
+        self.focus = Focus::Results;
+        let Some(target) = self.plan_target() else {
+            self.focus = back;
+            return;
+        };
+        let (own, pane) = (self.available(PLAN_MENU), self.available(PLAN_PANE_MENU));
+        self.push_menu_from(back, Ctx::Plan, target, own, pane, at);
+        if !self.overlays.is_open(OverlayKind::ContextMenu) {
+            self.focus = back;
+        }
+    }
+
+    /// The Plan tab's menu next to its selected node (the pane's corner when it is not drawn).
+    fn open_plan_menu_here(&mut self) {
+        let r = self.layout.results;
+        let at = self
+            .tab()
+            .exec
+            .plan
+            .as_ref()
+            .and_then(|p| p.hits.iter().find(|(_, i)| *i == p.selected).map(|(rect, _)| (rect.x + 2, rect.y)))
+            .unwrap_or((r.x + 2, r.y + 1));
+        self.open_plan_menu(at);
     }
 
     fn editor_target(&self) -> Option<MenuTarget> {
@@ -564,6 +623,10 @@ impl App {
     /// elsewhere the cell there is selected (the range dropped) and the menu is for it.
     pub(super) fn open_grid_menu(&mut self, x: u16, y: u16) {
         self.focus = Focus::Results;
+        if self.plan_shown() {
+            self.plan_click(x, y, false);
+            return self.open_plan_menu((x, y));
+        }
         let t = self.tabs.active_mut();
         if let (ResultView::Rows, Results::Rows(rs)) = (t.exec.view, &t.results) {
             let (total, ncols) = (rs.rows.len(), rs.columns.len());
@@ -695,6 +758,7 @@ impl App {
             Focus::Tree => self.open_context_menu_here(),
             // No tab: only the explorer is there.
             _ if self.tabs.is_empty() => self.open_context_menu_here(),
+            Focus::Results | Focus::Inspector if self.plan_shown() => self.open_plan_menu_here(),
             Focus::Results | Focus::Inspector => self.open_results_menu_here(),
             Focus::Editor => {
                 self.close_search_prompt();
@@ -1034,7 +1098,13 @@ impl App {
                 self.i18n.label(Label::MenuHeadingSelection)
             }
             (Heading::Target, MenuTarget::Editor { .. }) => self.i18n.label(Label::MenuHeadingStatement),
+            // The selected node, as the tree names it.
+            (Heading::Target, MenuTarget::Plan { node, .. }) => {
+                let name = self.tab().exec.plan.as_ref().map(|p| p.plan.label(*node)).unwrap_or_default();
+                Localized::verbatim(name)
+            }
             (Heading::Target, _) => self.i18n.label(Label::AppTitle),
+            (Heading::Pane, MenuTarget::Plan { .. }) => self.i18n.label(Label::ResultsTabPlan),
             (Heading::Pane, MenuTarget::Explorer(..)) => self.i18n.label(Label::PaneTreeTitle),
             (Heading::Pane, MenuTarget::Grid { .. }) => self.i18n.label(Label::PaneResultsTitle),
             (Heading::Pane, MenuTarget::Editor { .. }) => self.i18n.label(Label::PaneEditorTitle),

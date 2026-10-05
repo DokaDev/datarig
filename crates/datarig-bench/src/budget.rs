@@ -125,6 +125,22 @@ pub fn editor(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
     Ok(())
 }
 
+/// A large plan in every view of the Plan tab: the slowest key with its frame, and the nodes
+/// one frame walked, as a multiple of the plan's nodes.
+pub fn plan(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
+    match f(result, &["frame_ms", "p95"]) {
+        Some(m) => c.check("plan key+frame p95", m, num(b, "plan", "p95_ms_max")?, " ms"),
+        None => c.missing("plan key+frame p95"),
+    }
+    match f(result, &["work_per_node_max"]) {
+        Some(w) if w > 0.0 => {
+            c.check("plan nodes walked per frame", w, num(b, "plan", "work_per_node_max")?, "x nodes")
+        }
+        _ => c.missing("plan nodes walked per frame"),
+    }
+    Ok(())
+}
+
 /// Visual block operators over the whole text: the slowest key with its frame, and the bytes
 /// one key walked, in passes over the text; `:%s` over the whole text likewise.
 pub fn editor_block(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {

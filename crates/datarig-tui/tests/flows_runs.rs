@@ -277,7 +277,7 @@ fn every_row_result_of_a_run_has_a_tab_and_messages_list_the_run() {
     insta::assert_snapshot!("result_tabs_messages_en_80x24", h.draw(80, 24).backend());
     // A click on a result tab of the strip shows it.
     h.draw(160, 45);
-    let (x0, _, _) = h.app.strip_hits().into_iter().find(|(_, _, i)| *i == Some(0)).unwrap();
+    let (x0, ..) = h.app.strip_hits().into_iter().find(|(_, _, i, _)| *i == Some(0)).unwrap();
     h.mouse(
         ratatui::crossterm::event::MouseEventKind::Down(ratatui::crossterm::event::MouseButton::Left),
         x0 + 1,
@@ -441,7 +441,10 @@ fn a_narrow_strip_keeps_the_shown_tab_and_messages() {
         // Every shown tab is where the strip says (for the mouse).
         h.draw(80, 24);
         let hits = h.app.strip_hits();
-        assert!(hits.iter().any(|(_, _, i)| *i == Some(2)) && hits.iter().any(|(_, _, i)| i.is_none()), "{hits:?}");
+        assert!(
+            hits.iter().any(|(_, _, i, _)| *i == Some(2)) && hits.iter().any(|(_, _, i, _)| i.is_none()),
+            "{hits:?}"
+        );
         // With the inspector next to the grid (a narrower strip, the transaction first) the
         // shown one still shows.
         h.app.detail.visible = true;

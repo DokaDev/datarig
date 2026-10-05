@@ -54,6 +54,14 @@ fn profile_icon_falls_back_to_the_driver_and_off_keeps_alignment() {
 }
 
 #[test]
+fn the_hot_plan_node_mark_is_pinned() {
+    // nf-md-fire (Nerd Fonts 3.4.0 glyphnames.json): a hot node of a query plan; with icons
+    // off the plan says "hot" in words.
+    assert_eq!(HOT, "\u{f0238}");
+    assert_eq!(width(HOT), 1);
+}
+
+#[test]
 fn the_tunnel_mark_is_pinned_and_has_a_text_form_without_icons() {
     // nf-md-ssh (Nerd Fonts 3.5.1 glyphnames.json): a profile's tunnel and the tunnel presets.
     assert_eq!((TUNNEL, tunnel(true), tunnel(false)), ("\u{f08c0}", "\u{f08c0}", "SSH"));

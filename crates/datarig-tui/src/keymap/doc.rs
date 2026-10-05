@@ -189,6 +189,7 @@ fn commands(s: &mut String) {
             Some(ArgKind::Format) => " <format>",
             Some(ArgKind::Context) => " [db][.schema]",
             Some(ArgKind::Object) => " [schema.name]",
+            Some(ArgKind::Analyze) => " [analyze]",
             None => "",
         };
         let aliases: Vec<String> = c.aliases.iter().map(|a| format!("`:{a}`")).collect();

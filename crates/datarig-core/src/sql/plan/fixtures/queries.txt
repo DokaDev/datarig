@@ -1,0 +1,11 @@
+simple|SELECT * FROM zz_orders WHERE amount > 100 AND customer < 50
+join|SELECT c.region, count(*), sum(o.amount) FROM zz_orders o JOIN zz_customers c ON c.id = o.customer WHERE o.created >= '2024-06-01' GROUP BY c.region ORDER BY 2 DESC
+nested|SELECT c.name, o.amount FROM zz_customers c JOIN zz_orders o ON o.customer = c.id WHERE c.id < 3 ORDER BY o.amount DESC LIMIT 20
+parallel|SELECT customer, count(*), avg(amount) FROM zz_orders WHERE amount > 10 GROUP BY customer
+subplans|SELECT c.id, (SELECT max(o.amount) FROM zz_orders o WHERE o.customer = c.id) AS top, c.id = (SELECT min(id) FROM zz_customers) AS first FROM zz_customers c WHERE c.region = 'north'
+cte|WITH big AS MATERIALIZED (SELECT customer, sum(amount) AS s FROM zz_orders GROUP BY customer) SELECT a.customer FROM big a JOIN big b ON a.customer = b.customer + 1 WHERE a.s > b.s
+partition|SELECT kind, count(*) FROM zz_events WHERE at BETWEEN '2024-02-01' AND '2024-05-15' GROUP BY kind
+never|SELECT * FROM zz_customers c WHERE c.id < 0 AND EXISTS (SELECT 1 FROM zz_orders o WHERE o.customer = c.id)
+insert|INSERT INTO zz_orders SELECT g + 1000000, 1, 1, date '2024-01-01' FROM generate_series(1, 50) g
+update|UPDATE zz_customers SET name = name WHERE id < 10
+jit|SELECT sum(amount * 2), count(DISTINCT customer) FROM zz_orders WHERE customer % 7 = 3

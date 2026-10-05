@@ -1,0 +1,78 @@
+[
+  {
+    "Plan": {
+      "Node Type": "ModifyTable",
+      "Operation": "Insert",
+      "Parallel Aware": false,
+      "Relation Name": "zz_orders",
+      "Alias": "zz_orders",
+      "Startup Cost": 0.00,
+      "Total Cost": 0.63,
+      "Plan Rows": 50,
+      "Plan Width": 44,
+      "Actual Startup Time": 0.889,
+      "Actual Total Time": 0.889,
+      "Actual Rows": 0,
+      "Actual Loops": 1,
+      "Shared Hit Blocks": 217,
+      "Shared Read Blocks": 0,
+      "Shared Dirtied Blocks": 2,
+      "Shared Written Blocks": 1,
+      "Local Hit Blocks": 0,
+      "Local Read Blocks": 0,
+      "Local Dirtied Blocks": 0,
+      "Local Written Blocks": 0,
+      "Temp Read Blocks": 0,
+      "Temp Written Blocks": 0,
+      "Plans": [
+        {
+          "Node Type": "Function Scan",
+          "Parent Relationship": "Member",
+          "Parallel Aware": false,
+          "Function Name": "generate_series",
+          "Alias": "g",
+          "Startup Cost": 0.00,
+          "Total Cost": 0.63,
+          "Plan Rows": 50,
+          "Plan Width": 44,
+          "Actual Startup Time": 0.052,
+          "Actual Total Time": 0.061,
+          "Actual Rows": 50,
+          "Actual Loops": 1,
+          "Shared Hit Blocks": 0,
+          "Shared Read Blocks": 0,
+          "Shared Dirtied Blocks": 0,
+          "Shared Written Blocks": 0,
+          "Local Hit Blocks": 0,
+          "Local Read Blocks": 0,
+          "Local Dirtied Blocks": 0,
+          "Local Written Blocks": 0,
+          "Temp Read Blocks": 0,
+          "Temp Written Blocks": 0
+        }
+      ]
+    },
+    "Planning": {
+      "Shared Hit Blocks": 0,
+      "Shared Read Blocks": 0,
+      "Shared Dirtied Blocks": 0,
+      "Shared Written Blocks": 0,
+      "Local Hit Blocks": 0,
+      "Local Read Blocks": 0,
+      "Local Dirtied Blocks": 0,
+      "Local Written Blocks": 0,
+      "Temp Read Blocks": 0,
+      "Temp Written Blocks": 0
+    },
+    "Planning Time": 0.127,
+    "Triggers": [
+      {
+        "Trigger Name": "zz_orders_audit",
+        "Relation": "zz_orders",
+        "Time": 3.177,
+        "Calls": 50
+      }
+    ],
+    "Execution Time": 10.521
+  }
+]

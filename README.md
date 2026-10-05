@@ -192,6 +192,18 @@ Everything below works today, with PostgreSQL.
   system clipboard or through OSC 52 over SSH.
 - Transaction indicators in the tab bar and the status bar (open, aborted, "rollback required"),
   and questions before closing, quitting or disconnecting would roll back your work.
+- Query plans (PostgreSQL): `Space e x` (or `:explain`) runs the statement under the cursor as
+  `EXPLAIN (FORMAT JSON)`, `Space e a` (or `:explain analyze`) as `EXPLAIN (ANALYZE, BUFFERS,
+  FORMAT JSON)`, through the same checks as any run (a write under `ANALYZE` is rolled back, a
+  read-only profile refuses it); an `EXPLAIN (FORMAT JSON …)` you type yourself shows the same
+  way. The Plan tab shows the plan as a tree with each node's estimated and actual rows (and
+  loops), self and total time, a bar of its share of the whole colored by heat, and its
+  buffers; nodes that take a fifth of the time or more are marked hot, and an estimate ten times
+  off or more is marked with how far and which way. `Enter` shows the selected node's detail
+  (conditions, filters and the rows they removed, buffers, workers, loops, output). Without
+  `ANALYZE` the numbers are the planner's estimated costs, and the tab says so. `v` cycles the
+  views, `9` shows the plan as `psql` prints it (written from the JSON; nothing is run again),
+  `y`/`Y` copy it as text or JSON.
 
 **Safety**
 - Statements are classified with PostgreSQL's own parser (libpg_query), not with a regular
@@ -220,7 +232,7 @@ Everything below works today, with PostgreSQL.
   for an `INSERT`, counted exactly through a latency proxy, also through an SSH tunnel.
 - Paging through all 4,000,000 rows of the test table stays under 96 MiB of resident memory,
   growing less than 16 MiB after the in-memory window is full.
-- Keystroke to frame under 25 ms (p95) in a 5 MB SQL file.
+- Keystroke to frame under 25 ms (p95) in a 5 MB SQL file, and in a plan of hundreds of nodes.
 - Idle: under 48 MiB and 1% CPU, and fewer than 0.2 wakeups a second when nothing is waiting.
 - First frame under 250 ms (p95); the release binary is under 16 MiB.
 
@@ -236,6 +248,7 @@ Planned, in no particular order and with no dates:
 - DDL of objects the explorer does not list yet (functions on their own, sequences, types),
   and from the other drivers
 - Query profiling and charts
+- Comparing two plans of a statement (before and after a change), and plans of the other drivers
 - Multi-hop SSH and importing hosts from `~/.ssh/config`
 
 ## Install

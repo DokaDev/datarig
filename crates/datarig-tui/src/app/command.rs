@@ -65,6 +65,9 @@ pub enum Command {
     /// `:ddl [name]`: the DDL of what the name names on the active tab's connection; alone, of
     /// the explorer's object or the table tab's table.
     Ddl,
+    /// `:explain [analyze]`: the plan of the statement under the cursor (with `analyze`, run
+    /// and measured).
+    Explain,
 }
 
 /// The type of a command's argument (it decides the completions).
@@ -86,12 +89,14 @@ pub enum ArgKind {
     /// An object's name as SQL writes it (`schema.name`, `"Mixed"`, `f(int)`); may be left
     /// out.
     Object,
+    /// `analyze`; may be left out.
+    Analyze,
 }
 
 impl ArgKind {
     /// The command also runs without it.
     pub fn optional(self) -> bool {
-        matches!(self, ArgKind::NewScript | ArgKind::Context | ArgKind::Script | ArgKind::Object)
+        matches!(self, ArgKind::NewScript | ArgKind::Context | ArgKind::Script | ArgKind::Object | ArgKind::Analyze)
     }
 }
 
@@ -270,6 +275,14 @@ pub const COMMANDS: &[CommandSpec] = &[
         arg: Some(ArgKind::Object),
         label: Label::CommandDdl,
         action: None,
+    },
+    CommandSpec {
+        command: Command::Explain,
+        name: "explain",
+        aliases: &[],
+        arg: Some(ArgKind::Analyze),
+        label: Label::CommandExplain,
+        action: Some(Action::Explain(false)),
     },
 ];
 
@@ -709,8 +722,8 @@ pub fn complete_arg(kind: ArgKind, arg: &str, names: &[&str]) -> Vec<ArgCompleti
         ArgKind::Context => {
             rank(arg, names.iter().copied().enumerate()).into_iter().map(ArgCompletion::Context).collect()
         }
-        // A new name, or any object's: nothing to pick from.
-        ArgKind::NewScript | ArgKind::Object => Vec::new(),
+        // A new name, or any object's: nothing to pick from (`analyze` is the only word).
+        ArgKind::NewScript | ArgKind::Object | ArgKind::Analyze => Vec::new(),
         ArgKind::Format => {
             use super::copy::{CopyFormat, CopyScope};
             let names = CopyFormat::MENU.map(|f| f.name());

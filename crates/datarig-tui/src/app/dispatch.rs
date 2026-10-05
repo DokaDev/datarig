@@ -183,6 +183,8 @@ impl App {
             Action::DdlToConsole => self.ddl_to_console(),
             Action::CopyDdl => self.copy_ddl(),
             Action::ResultTab(next) => self.cycle_result_tab(if next { 1 } else { -1 }),
+            Action::Explain(analyze) => self.explain(analyze),
+            Action::Plan(p) => self.plan_action(p),
         }
     }
 

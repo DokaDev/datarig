@@ -1,0 +1,6 @@
+Aggregate  (cost=4284.86..4284.87 rows=1 width=40)
+  ->  Seq Scan on zz_orders  (cost=0.00..4277.35 rows=1001 width=9)
+        Filter: ((customer % 7) = 3)
+JIT:
+  Functions: 5
+  Options: Inlining true, Optimization true, Expressions true, Deforming true

@@ -1,0 +1,13 @@
+Seq Scan on zz_customers c  (cost=0.32..134930.89 rows=250 width=37)
+  Filter: (region = 'north'::text)
+  InitPlan 3
+    ->  Result  (cost=0.31..0.32 rows=1 width=4)
+          InitPlan 2
+            ->  Limit  (cost=0.28..0.31 rows=1 width=4)
+                  ->  Index Only Scan using zz_customers_pkey on zz_customers  (cost=0.28..35.27 rows=1000 width=4)
+  SubPlan 1
+    ->  Aggregate  (cost=539.64..539.65 rows=1 width=32)
+          ->  Bitmap Heap Scan on zz_orders o  (cost=5.84..539.14 rows=200 width=5)
+                Recheck Cond: (customer = c.id)
+                ->  Bitmap Index Scan on zz_orders_customer  (cost=0.00..5.79 rows=200 width=0)
+                      Index Cond: (customer = c.id)

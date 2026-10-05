@@ -18,6 +18,7 @@ export DATARIG_TEST_PG_URL=postgres://datarig:datarig@127.0.0.1:55432/datarig
 | `editor` | Opens a generated 5 MB SQL file in a headless app and draws each frame at 160x45 | Keystroke-to-frame time for typing, cursor movement, scrolling, Normal-mode edits and vim's other motions (`%`, `{`/`}`, `f`, `H`/`M`/`L`, `Ctrl+D`, a text object, `.`), and of a theme switch; memory; autosave time |
 | `editor_block` | The same file: Visual block operators over all of it (`gg Ctrl+V G $` with `y`, `d`, `u`, then `I` on every line), in a process of its own (the bench binary again), so the copies of the whole text it leaves in registers and undo steps never count in another scenario's memory | Key + frame time, the bytes one key's block operator walks |
 | `grid` | 2,000 rows × 24 columns of wide CJK text in the grid at 160x45 | Key + frame time |
+| `plan` | A plan of 666 nodes (40 joins deep, each with a subplan, parallel workers, a CTE, an `Append` over 500 partitions) in each view of the Plan tab at 160x45 while the selection moves | Key + frame time, and the nodes each frame walked as a multiple of the plan's nodes |
 | `idle` | Runs the release binary in `tmux -L perf` with one connection and three tabs, still for `--idle-secs` (60), then 20 seconds with a paging countdown on screen | Resident memory, CPU, event loop wakeups and frames per second |
 | `startup` | Starts the release binary in `tmux -L perf` `--runs` times | Process start to first frame, binary size |
 

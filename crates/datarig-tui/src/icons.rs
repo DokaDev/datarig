@@ -90,6 +90,9 @@ pub fn tunnel(on: bool) -> &'static str {
 /// connection. `!` with icons off (never an emoji).
 pub const WARNING: &str = "\u{f071}";
 
+/// A hot node of a query plan: nf-md-fire.
+pub const HOT: &str = "\u{f0238}";
+
 /// The warning mark: the glyph, or `!` with icons off.
 pub fn warning(on: bool) -> &'static str {
     if on { WARNING } else { "!" }

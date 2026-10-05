@@ -1,0 +1,35 @@
+[
+  {
+    "Plan": {
+      "Node Type": "ModifyTable",
+      "Operation": "Update",
+      "Parallel Aware": false,
+      "Async Capable": false,
+      "Relation Name": "zz_customers",
+      "Alias": "zz_customers",
+      "Startup Cost": 0.28,
+      "Total Cost": 8.45,
+      "Plan Rows": 0,
+      "Plan Width": 0,
+      "Disabled": false,
+      "Plans": [
+        {
+          "Node Type": "Index Scan",
+          "Parent Relationship": "Outer",
+          "Parallel Aware": false,
+          "Async Capable": false,
+          "Scan Direction": "Forward",
+          "Index Name": "zz_customers_pkey",
+          "Relation Name": "zz_customers",
+          "Alias": "zz_customers",
+          "Startup Cost": 0.28,
+          "Total Cost": 8.45,
+          "Plan Rows": 10,
+          "Plan Width": 10,
+          "Disabled": false,
+          "Index Cond": "(id < 10)"
+        }
+      ]
+    }
+  }
+]

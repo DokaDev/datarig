@@ -1,0 +1,5 @@
+Bitmap Heap Scan on zz_orders  (cost=115.77..1547.11 rows=3238 width=17)
+  Recheck Cond: (customer < 50)
+  Filter: (amount > '100'::numeric)
+  ->  Bitmap Index Scan on zz_orders_customer  (cost=0.00..114.96 rows=10489 width=0)
+        Index Cond: (customer < 50)

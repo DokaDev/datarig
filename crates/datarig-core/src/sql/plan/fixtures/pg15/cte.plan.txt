@@ -1,0 +1,13 @@
+Merge Join  (cost=4426.16..4533.66 rows=1667 width=4)
+  Merge Cond: (a.customer = ((b.customer + 1)))
+  Join Filter: (a.s > b.s)
+  CTE big
+    ->  HashAggregate  (cost=4274.00..4286.50 rows=1000 width=36)
+          Group Key: zz_orders.customer
+          ->  Seq Scan on zz_orders  (cost=0.00..3274.00 rows=200000 width=9)
+  ->  Sort  (cost=69.83..72.33 rows=1000 width=36)
+        Sort Key: a.customer
+        ->  CTE Scan on big a  (cost=0.00..20.00 rows=1000 width=36)
+  ->  Sort  (cost=69.83..72.33 rows=1000 width=36)
+        Sort Key: ((b.customer + 1))
+        ->  CTE Scan on big b  (cost=0.00..20.00 rows=1000 width=36)

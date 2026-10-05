@@ -114,3 +114,12 @@ countdown_frames_per_s_max = 2.0
 runs = 10
 first_frame_ms_p95_max = 250.0
 binary_mib_max = 16.0
+
+[plan]
+# A plan of 666 nodes (40 joins deep with a subplan each, parallel workers, a CTE, an Append
+# over 500 partitions) in each view of the Plan tab at 160x45 while the selection moves: the
+# key with its frame (a developer machine: about 0.5 ms), and the nodes the view walked in one
+# frame, as a multiple of the plan's nodes (a developer machine: 1.4 in the tree, which reads
+# every node once to draw its guides; the raw text walks only the lines on screen).
+p95_ms_max = 25.0
+work_per_node_max = 3.0

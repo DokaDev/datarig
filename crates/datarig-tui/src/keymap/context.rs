@@ -10,6 +10,7 @@
 //! │  │  ├─ explorer
 //! │  │  ├─ grid
 //! │  │  ├─ inspector          (the result inspector panel, once clicked)
+//! │  │  ├─ plan               (the Plan tab of the results pane)
 //! │  │  ├─ welcome            (no profiles: the panel on the right)
 //! │  │  ├─ editor.vim.normal  [editor]
 //! │  │  │  └─ editor.ddl      [editor]   (a DDL tab's read-only text, vim Normal)
@@ -35,6 +36,7 @@ pub enum Ctx {
     ExplorerFilter,
     Grid,
     Inspector,
+    Plan,
     Welcome,
     VimNormal,
     VimVisual,
@@ -64,7 +66,7 @@ pub enum Ctx {
 }
 
 impl Ctx {
-    pub const ALL: [Ctx; 33] = [
+    pub const ALL: [Ctx; 34] = [
         Ctx::Root,
         Ctx::Workspace,
         Ctx::Nav,
@@ -72,6 +74,7 @@ impl Ctx {
         Ctx::ExplorerFilter,
         Ctx::Grid,
         Ctx::Inspector,
+        Ctx::Plan,
         Ctx::Welcome,
         Ctx::VimNormal,
         Ctx::VimVisual,
@@ -110,6 +113,7 @@ impl Ctx {
             Ctx::ExplorerFilter => "explorer.filter",
             Ctx::Grid => "grid",
             Ctx::Inspector => "inspector",
+            Ctx::Plan => "plan",
             Ctx::Welcome => "welcome",
             Ctx::VimNormal => "editor.vim.normal",
             Ctx::VimVisual => "editor.vim.visual",
@@ -148,7 +152,7 @@ impl Ctx {
             Ctx::Root => None,
             Ctx::Workspace => Some(Ctx::Root),
             Ctx::Nav | Ctx::VimInsert | Ctx::VimSearch | Ctx::ExplorerFilter | Ctx::CellViewer => Some(Ctx::Workspace),
-            Ctx::Explorer | Ctx::Grid | Ctx::Inspector | Ctx::Welcome | Ctx::VimNormal | Ctx::VimVisual => {
+            Ctx::Explorer | Ctx::Grid | Ctx::Inspector | Ctx::Plan | Ctx::Welcome | Ctx::VimNormal | Ctx::VimVisual => {
                 Some(Ctx::Nav)
             }
             Ctx::Ddl => Some(Ctx::VimNormal),
@@ -197,6 +201,9 @@ impl Ctx {
             Ctx::ExplorerFilter => "The `/` filter of the explorer (profile names).",
             Ctx::Grid => "The result grid.",
             Ctx::Inspector => "The result inspector next to the grid, after a click on it.",
+            Ctx::Plan => {
+                "The Plan tab of the results pane (an `EXPLAIN (FORMAT JSON)` result): `j`/`k` select a node, `h`/`l` close and open its children, `Enter` shows its detail, `v`/`V` and the digits pick a view, `y`/`Y` copy the plan as text or JSON."
+            }
             Ctx::Welcome => "The welcome panel shown while there is no connection profile.",
             Ctx::VimNormal => "Query editor, vim Normal mode (`i` starts typing).",
             Ctx::VimVisual => "Query editor, vim Visual mode (`v` by character, `V` by line, `Ctrl+V` by block).",
@@ -252,6 +259,7 @@ impl Ctx {
             Ctx::ExplorerFilter => Label::KeyctxExplorerFilter,
             Ctx::Grid => Label::KeyctxGrid,
             Ctx::Inspector => Label::KeyctxInspector,
+            Ctx::Plan => Label::KeyctxPlan,
             Ctx::Welcome => Label::KeyctxWelcome,
             Ctx::VimNormal => Label::KeyctxEditorVimNormal,
             Ctx::VimVisual => Label::KeyctxEditorVimVisual,

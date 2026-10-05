@@ -153,6 +153,8 @@ pub enum ResultView {
     Rows,
     /// Every statement of the last run and what it did, and the app's notes about it.
     Messages,
+    /// The plan of a statement of the run (`TabSession::plan`).
+    Plan,
 }
 
 /// The tab's query session and what runs on it.
@@ -200,6 +202,9 @@ pub struct TabSession {
     pub replace_pending: bool,
     /// The first line of the Messages list on screen.
     pub messages_scroll: usize,
+    /// The plan a statement of the row results' run returned (`EXPLAIN (FORMAT JSON)`), and
+    /// how it is shown. It goes with those row results.
+    pub plan: Option<super::plan::PlanTab>,
     /// Where the run's last statement's result came from: paging past its
     /// closed portal and counting happen only on that profile, binding and session.
     pub origin: Option<super::pages::Origin>,
@@ -259,6 +264,7 @@ impl TabSession {
             kept_log: None,
             replace_pending: false,
             messages_scroll: 0,
+            plan: None,
             origin: None,
             resuming: None,
             want_page: None,
@@ -531,6 +537,7 @@ impl Tab {
     /// The row results of the run before go (the running run delivered its first rows).
     pub fn drop_rows(&mut self) {
         self.exec.steps.clear();
+        self.exec.plan = None;
         self.exec.kept_log = None;
         self.exec.shown = None;
         self.exec.replace_pending = false;
@@ -559,6 +566,12 @@ impl Tab {
             _ if answered => self.exec.view = ResultView::Rows,
             Some(i) => self.show_result(i),
             None => self.exec.view = ResultView::Messages,
+        }
+        // The rows shown are a plan: the plan instead.
+        if self.exec.view == ResultView::Rows
+            && self.exec.plan.as_ref().is_some_and(|p| Some(p.index) == self.exec.shown)
+        {
+            self.exec.view = ResultView::Plan;
         }
     }
 

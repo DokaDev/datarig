@@ -1314,6 +1314,68 @@ async fn explain_analyze_delete_asks_and_leaves_the_rows() {
     assert_eq!(obs.column(&count).await, ["4"], "the user's own change is committed");
 }
 
+/// The explain actions on a real server: `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` of an
+/// INSERT (with a trigger that writes elsewhere) runs, shows its measured plan in the Plan tab,
+/// and keeps nothing: neither the rows nor what the trigger wrote. A plain EXPLAIN only plans.
+#[tokio::test(flavor = "multi_thread")]
+async fn explain_analyze_of_an_insert_shows_its_plan_and_is_rolled_back() {
+    use datarig_core::i18n::Label;
+    use datarig_tui::app::action::Action;
+    use datarig_tui::app::tabs::ResultView;
+    let Some(url) = pg_url("explain_analyze_of_an_insert_shows_its_plan_and_is_rolled_back") else { return };
+    let tag = format!("plan{}", std::process::id());
+    let (table, audit) = (format!("public.it_plan_{tag}"), format!("public.it_plan_audit_{tag}"));
+    let function = format!("public.it_plan_fn_{tag}");
+    let _guard = pg_clean::TableGuard::new(&url, &[&table, &audit]);
+    // Dropped first (with its trigger), also when an assertion fails.
+    struct DropFunction(String, String);
+    impl Drop for DropFunction {
+        fn drop(&mut self) {
+            let _ = pg_clean::run_fresh(&self.0, &format!("DROP FUNCTION IF EXISTS {}() CASCADE", self.1));
+        }
+    }
+    let _function = DropFunction(url.clone(), function.clone());
+    pg_clean::run_fresh(&url, &format!("CREATE TABLE {table} AS SELECT generate_series(1, 3) AS x")).unwrap();
+    pg_clean::run_fresh(&url, &format!("CREATE TABLE {audit} (x int)")).unwrap();
+    pg_clean::run_fresh(
+        &url,
+        &format!(
+            "CREATE FUNCTION {function}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN INSERT INTO {audit} VALUES (NEW.x); RETURN NEW; END $$"
+        ),
+    )
+    .unwrap();
+    pg_clean::run_fresh(
+        &url,
+        &format!("CREATE TRIGGER it_plan_trigger AFTER INSERT ON {table} FOR EACH ROW EXECUTE FUNCTION {function}()"),
+    )
+    .unwrap();
+    let mut obs = Observer::open(&url).await;
+    let (mut app, mut rx) = safety_app(&url, &tag, None).await;
+    app.tab_mut().editor =
+        datarig_tui::widgets::editor::Editor::new(&format!("INSERT INTO {table} SELECT generate_series(10, 14);"));
+    app.dispatch(Action::Explain(true));
+    assert!(app.overlays.run_confirm().is_none(), "an INSERT does not ask under the default policy");
+    pump(&mut app, &mut rx, 10, |a| idle(a, 0)).await;
+    let t = app.tab();
+    assert_eq!(t.exec.view, ResultView::Plan, "{:?}", app.status);
+    let plan = &t.exec.plan.as_ref().expect("a plan").plan;
+    assert_eq!(plan.nodes[0].op, "Insert");
+    assert!(plan.analyzed && plan.execution_ms.is_some());
+    assert!(plan.nodes[0].actual.is_some_and(|a| a.loops == 1.0));
+    assert_eq!(plan.triggers.len(), 1, "{:?}", plan.footer);
+    assert_eq!(plan.triggers[0].calls, 5.0);
+    assert_eq!(app.status.as_ref().map(|n| n.msg.clone()), Some(Label::SafetyExplainRolledBack.into()));
+    pump(&mut app, &mut rx, 10, |a| !a.tab().exec.tx_open).await;
+    assert_eq!(obs.column(&format!("SELECT count(*) FROM {table}")).await, ["3"], "rolled back");
+    assert_eq!(obs.column(&format!("SELECT count(*) FROM {audit}")).await, ["0"], "the trigger's write too");
+    // A plain EXPLAIN plans only: estimates.
+    app.dispatch(Action::Explain(false));
+    pump(&mut app, &mut rx, 10, |a| idle(a, 0)).await;
+    let plan = &app.tab().exec.plan.as_ref().expect("a plan").plan;
+    assert!(!plan.analyzed && plan.nodes[0].cost.is_some());
+    assert_eq!(plan.measure(), datarig_core::sql::plan::Measure::Cost);
+}
+
 /// A read-only policy: the app refuses a DELETE and sends nothing; a writing function called
 /// from a SELECT reaches the server, which refuses it; nothing changes.
 #[tokio::test(flavor = "multi_thread")]

@@ -1,0 +1,15 @@
+CREATE TABLE zz_orders (id int PRIMARY KEY, customer int NOT NULL, amount numeric NOT NULL, created date NOT NULL);
+INSERT INTO zz_orders SELECT g, g % 1000, (g % 97) * 1.5, date '2024-01-01' + (g % 365) FROM generate_series(1, 200000) g;
+CREATE INDEX zz_orders_customer ON zz_orders (customer);
+CREATE TABLE zz_customers (id int PRIMARY KEY, name text NOT NULL, region text NOT NULL);
+INSERT INTO zz_customers SELECT g, 'c' || g, (ARRAY['north','south','east','west'])[1 + g % 4] FROM generate_series(0, 999) g;
+CREATE TABLE zz_events (id bigint, at date NOT NULL, kind text) PARTITION BY RANGE (at);
+CREATE TABLE zz_events_q1 PARTITION OF zz_events FOR VALUES FROM ('2024-01-01') TO ('2024-04-01');
+CREATE TABLE zz_events_q2 PARTITION OF zz_events FOR VALUES FROM ('2024-04-01') TO ('2024-07-01');
+CREATE TABLE zz_events_q3 PARTITION OF zz_events FOR VALUES FROM ('2024-07-01') TO ('2024-10-01');
+CREATE TABLE zz_events_q4 PARTITION OF zz_events FOR VALUES FROM ('2024-10-01') TO ('2025-01-01');
+INSERT INTO zz_events SELECT g, date '2024-01-01' + (g % 365), 'k' || (g % 5) FROM generate_series(1, 100000) g;
+CREATE TABLE zz_audit (id serial, note text);
+CREATE FUNCTION zz_audit_fn() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN INSERT INTO zz_audit (note) VALUES ('order ' || NEW.id); RETURN NEW; END $$;
+CREATE TRIGGER zz_orders_audit AFTER INSERT ON zz_orders FOR EACH ROW EXECUTE FUNCTION zz_audit_fn();
+VACUUM ANALYZE;

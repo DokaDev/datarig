@@ -834,6 +834,9 @@ impl App {
                 }
                 let count = match (columns, t.exec.steps.get_mut(&index)) {
                     (Some(cols), _) => {
+                        if let Some((plan, json)) = super::plan::plan_of(&cols, &rows, more) {
+                            t.exec.plan = Some(super::plan::PlanTab::new(plan, index, &json));
+                        }
                         let store = datarig_core::results::RowStore::new(rows, spill, limits);
                         let rs = ResultSet::new(cols, store, more, &null);
                         let n = rs.rows.len();
@@ -939,6 +942,8 @@ impl App {
                 t.exec.succeeded(None);
                 t.exec.running = None;
                 let count = rows.len();
+                // A plan (`EXPLAIN (FORMAT JSON)`): shown as one; its rows stay a result tab.
+                let plan = if t.is_table() { None } else { super::plan::plan_of(&cols, &rows, more) };
                 let store = datarig_core::results::RowStore::new(rows, spill, limits);
                 // The run's answer: its own result tab, shown.
                 if t.exec.replace_pending {
@@ -952,6 +957,10 @@ impl App {
                 t.exec.origin = origin;
                 t.exec.shown = t.exec.run.len().checked_sub(1);
                 t.exec.view = super::tabs::ResultView::Rows;
+                if let Some((plan, json)) = plan {
+                    t.exec.plan = Some(super::plan::PlanTab::new(plan, t.exec.shown.unwrap_or(0), &json));
+                    t.exec.view = super::tabs::ResultView::Plan;
+                }
                 t.exec.run.answered(StatementOutcome::Rows { count: count as u64, more }, Some(elapsed));
                 Some(if std::mem::take(&mut t.exec.explain_rolled_back) {
                     Notice::new(Label::SafetyExplainRolledBack, Level::Info)

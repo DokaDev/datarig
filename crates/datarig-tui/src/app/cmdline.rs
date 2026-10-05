@@ -563,6 +563,16 @@ impl App {
                 self.ddl_command(arg.trim())?;
                 self.overlays.close(OverlayKind::Commands);
             }
+            (command::Command::Explain, _) => {
+                let analyze = match arg.trim() {
+                    "" => false,
+                    a if a.eq_ignore_ascii_case("analyze") || a.eq_ignore_ascii_case("analyse") => true,
+                    _ => return err(Msg::Label(Label::PlanCommandUsage)),
+                };
+                self.overlays.close(OverlayKind::Commands);
+                self.focus = Focus::Editor;
+                self.dispatch(Action::Explain(analyze));
+            }
             (command::Command::Recover, _) => {
                 if !arg.is_empty() {
                     return err(Msg::CommandsErrorNoArgs { name });
@@ -836,6 +846,7 @@ impl App {
                             ArgKind::Format => (Label::CommandsArgFormat, false),
                             ArgKind::Context => (Label::CommandsArgContext, true),
                             ArgKind::Object => (Label::CommandsArgObject, true),
+                            ArgKind::Analyze => (Label::CommandsArgAnalyze, true),
                         };
                         let arg = arg.text(self.i18n.lang);
                         name.push_str(&if optional { format!(" [{arg}]") } else { format!(" {arg}") });

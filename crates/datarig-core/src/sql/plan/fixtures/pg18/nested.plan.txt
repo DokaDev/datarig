@@ -1,0 +1,10 @@
+Limit  (cost=1489.59..1489.64 rows=20 width=9)
+  ->  Sort  (cost=1489.59..1491.09 rows=600 width=9)
+        Sort Key: o.amount DESC
+        ->  Nested Loop  (cost=5.84..1473.62 rows=600 width=9)
+              ->  Seq Scan on zz_customers c  (cost=0.00..18.50 rows=3 width=8)
+                    Filter: (id < 3)
+              ->  Bitmap Heap Scan on zz_orders o  (cost=5.84..483.04 rows=200 width=9)
+                    Recheck Cond: (c.id = customer)
+                    ->  Bitmap Index Scan on zz_orders_customer  (cost=0.00..5.79 rows=200 width=0)
+                          Index Cond: (customer = c.id)
