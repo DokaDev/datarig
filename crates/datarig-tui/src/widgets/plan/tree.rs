@@ -38,8 +38,12 @@ impl Col {
     }
 }
 
-/// The columns that fit `w` next to a name of at least 20 columns, in their order.
-fn columns(plan: &Plan, w: usize) -> Vec<Col> {
+/// The columns that fit `w` next to a name of at least 20 columns, in their order (`compact`:
+/// the share only).
+fn columns(plan: &Plan, w: usize, compact: bool) -> Vec<Col> {
+    if compact {
+        return if w > 20 + Col::Share.width() { vec![Col::Share] } else { Vec::new() };
+    }
     let analyzed = plan.analyzed;
     let buffers = plan.nodes.iter().any(|n| n.buffers.is_some());
     // Most needed first; a column is shown when it and every one before it fit.
@@ -65,10 +69,11 @@ fn columns(plan: &Plan, w: usize) -> Vec<Col> {
     order.into_iter().filter(|c| shown.contains(c)).collect()
 }
 
-pub(super) fn draw(cx: &Look, p: &mut PlanTab, area: Rect, buf: &mut Buffer) {
+/// The tree in `area`; `compact`: with the share column only (under the summary's cards).
+pub(super) fn draw(cx: &Look, p: &mut PlanTab, area: Rect, compact: bool, buf: &mut Buffer) {
     let th = cx.th;
     let plan = p.plan.clone();
-    let cols = columns(&plan, area.width as usize);
+    let cols = columns(&plan, area.width as usize, compact);
     let cols_w: usize = cols.iter().map(|c| c.width() + 1).sum();
     let name_w = (area.width as usize).saturating_sub(cols_w + 1);
     // The header.

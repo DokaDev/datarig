@@ -123,6 +123,7 @@ binary_mib_max = 17.0
 # over 500 partitions) in each view of the Plan tab at 160x45 while the selection moves: the
 # key with its frame (a developer machine: about 0.5 ms), and the nodes the view walked in one
 # frame, as a multiple of the plan's nodes (a developer machine: 1.4 in the tree, which reads
-# every node once to draw its guides; the raw text walks only the lines on screen).
+# every node once to draw its guides, and in the icicle and the flame graph, laid out in one
+# pass; the treemap walks the nodes with a share once; the raw text only the lines on screen).
 p95_ms_max = 25.0
 work_per_node_max = 3.0

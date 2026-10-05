@@ -7,8 +7,11 @@
 //! their place are cut with `…`; markers (hot, misestimate) are kept.
 
 mod detail;
+mod icicle;
 mod raw;
+mod summary;
 mod tree;
+mod treemap;
 
 use crate::app::plan::{PlanTab, PlanView};
 use crate::app::{App, Focus};
@@ -63,7 +66,11 @@ pub(crate) fn draw_plan(app: &mut App, area: Rect, buf: &mut Buffer) {
     let (view, side) = split_detail(&p, body);
     if view.height > 0 && view.width > 0 {
         match p.view {
-            PlanView::Tree => tree::draw(&cx, &mut p, view, buf),
+            PlanView::Tree => tree::draw(&cx, &mut p, view, false, buf),
+            PlanView::Summary => summary::draw(&cx, &mut p, view, buf),
+            PlanView::Icicle => icicle::draw(&cx, &mut p, view, false, buf),
+            PlanView::Flame => icicle::draw(&cx, &mut p, view, true, buf),
+            PlanView::Treemap => treemap::draw(&cx, &mut p, view, buf),
             PlanView::Raw => raw::draw(&cx, &mut p, view, buf),
         }
     }
@@ -143,6 +150,37 @@ fn view_bar(cx: &Look, p: &mut PlanTab, area: Rect, buf: &mut Buffer) {
         let t = clip(&note, room);
         let at = end - 1 - width(&t) as u16;
         put(buf, at, area.y, &t, room, note_style);
+    }
+}
+
+/// The selected node in one line, for the views whose boxes may be too small to name it: its
+/// name, its own and total time (by cost: costs, said to be estimated) and its share.
+pub(crate) fn info_line(cx: &Look, plan: &Plan, i: usize, area: Rect, buf: &mut Buffer) {
+    let th = cx.th;
+    buf.set_style(area, Style::new().bg(th.surface));
+    let Some(n) = plan.nodes.get(i) else { return };
+    let label = plan.label(i);
+    let share = fmt_share(plan.share(i));
+    let msg = match plan.measure() {
+        Measure::Time => {
+            let own = n.self_ms.map_or_else(String::new, fmt_ms);
+            let total = n.total_ms.map_or_else(String::new, fmt_ms);
+            Msg::PlanInfoTime { label, own, share, total }
+        }
+        Measure::Cost => {
+            let own = n.self_cost.map_or_else(String::new, fmt_num);
+            let total = n.cost.map_or_else(String::new, |c| fmt_num(c.1));
+            Msg::PlanInfoCost { label, own, share, total }
+        }
+    };
+    let mut x = area.x + 1;
+    let end = area.x + area.width.saturating_sub(1);
+    let style = Style::new().fg(th.fg).bg(th.surface);
+    x += put(buf, x, area.y, &cx.i18n.msg(&msg), end.saturating_sub(x) as usize, style);
+    for (t, s) in markers(cx, plan, i) {
+        if x + 1 < end {
+            x += 1 + put(buf, x + 1, area.y, &t, (end - x - 1) as usize, Style::new().bg(th.surface).patch(s));
+        }
     }
 }
 

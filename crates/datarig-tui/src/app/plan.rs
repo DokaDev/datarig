@@ -20,17 +20,31 @@ use datarig_core::sql::plan::{self, Plan};
 pub enum PlanView {
     /// The node tree with its numbers per node (the default).
     Tree,
+    /// Cards of what to look at first (the slowest node, the worst estimate, disk reads, the
+    /// times) above a compact tree.
+    Summary,
+    /// One row per depth, each node as wide as its share of its parent's time, parents on top.
+    Icicle,
+    /// The icicle upside down: parents at the bottom.
+    Flame,
+    /// Rectangles whose area is each node's own time.
+    Treemap,
     /// The text `psql` shows for `EXPLAIN`, written from the plan.
     Raw,
 }
 
 impl PlanView {
     /// Every view, in the order `v` goes through them.
-    pub const ALL: [PlanView; 2] = [PlanView::Tree, PlanView::Raw];
+    pub const ALL: [PlanView; 6] =
+        [PlanView::Tree, PlanView::Summary, PlanView::Icicle, PlanView::Flame, PlanView::Treemap, PlanView::Raw];
 
     pub fn label(self) -> Label {
         match self {
             PlanView::Tree => Label::PlanViewTree,
+            PlanView::Summary => Label::PlanViewSummary,
+            PlanView::Icicle => Label::PlanViewIcicle,
+            PlanView::Flame => Label::PlanViewFlame,
+            PlanView::Treemap => Label::PlanViewTreemap,
             PlanView::Raw => Label::PlanViewRaw,
         }
     }
@@ -44,7 +58,7 @@ impl PlanView {
 
     /// The tree's folds apply (the other views show every node).
     pub fn folds(self) -> bool {
-        matches!(self, PlanView::Tree)
+        matches!(self, PlanView::Tree | PlanView::Summary)
     }
 }
 

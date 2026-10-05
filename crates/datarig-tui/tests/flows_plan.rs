@@ -315,14 +315,18 @@ fn a_plan_of_a_statement_before_the_last_is_kept_with_its_index() {
 fn views_switch_without_asking_the_server() {
     let mut h = shown(18, "subplans.analyze.json");
     h.sent();
-    h.keys("v");
-    assert_eq!(plan(&h).view, PlanView::Raw);
+    // `v` goes through every view and around; `V` back.
+    let mut seen = Vec::new();
+    for _ in 0..PlanView::ALL.len() {
+        h.keys("v");
+        seen.push(plan(&h).view);
+    }
+    assert_eq!(seen.last(), Some(&PlanView::Tree), "around the end");
+    assert_eq!(seen.len(), PlanView::ALL.len());
+    h.keys("V");
+    assert_eq!(plan(&h).view, PlanView::Raw, "around the start");
     insta::assert_snapshot!("plan_raw_en_160x45", h.draw(160, 45).backend());
     insta::assert_snapshot!("plan_raw_en_80x24", h.draw(80, 24).backend());
-    h.keys("v");
-    assert_eq!(plan(&h).view, PlanView::Tree, "around the end");
-    h.keys("V");
-    assert_eq!(plan(&h).view, PlanView::Raw);
     h.keys("1");
     assert_eq!(plan(&h).view, PlanView::Tree);
     h.keys("9");
@@ -602,4 +606,83 @@ fn the_raw_text_moves_sideways_only_as_far_as_its_longest_line() {
     let screen = h.screen(160, 45);
     assert!(plan(&h).pan < 200, "{}", plan(&h).pan);
     assert!(screen.contains("rows=") || screen.contains("loops="), "the ends of the longest lines show:\n{screen}");
+}
+
+/// The summary, icicle, flame and treemap views of a measured plan and of estimates: each in a
+/// wide and a narrow pane, every node it draws where the pointer selects it.
+#[test]
+fn the_summary_icicle_flame_and_treemap_views() {
+    let mut h = shown(17, "join.analyze.json");
+    for (key, view, name) in [
+        ("2", PlanView::Summary, "summary"),
+        ("3", PlanView::Icicle, "icicle"),
+        ("4", PlanView::Flame, "flame"),
+        ("7", PlanView::Treemap, "treemap"),
+    ] {
+        h.keys(key);
+        assert_eq!(plan(&h).view, view);
+        insta::assert_snapshot!(format!("plan_{name}_en_160x45"), h.draw(160, 45).backend());
+        insta::assert_snapshot!(format!("plan_{name}_en_80x24"), h.draw(80, 24).backend());
+    }
+    // Estimates: the costliest node, the total cost, never time.
+    let mut h = shown(17, "join.plan.json");
+    h.keys("2");
+    let screen = h.screen(160, 45);
+    for want in ["Costliest node (estimated)", "Estimated cost", "(estimated, not time)", "needs ANALYZE"] {
+        assert!(screen.contains(want), "{want}:\n{screen}");
+    }
+    assert!(!screen.contains(" ms"), "{screen}");
+    h.keys("3");
+    let screen = h.screen(160, 45);
+    assert!(screen.contains("own cost") && screen.contains("(estimated)"), "{screen}");
+}
+
+/// What the summary's cards name, the icicle's bars and the treemap's rectangles select when
+/// clicked.
+#[test]
+fn the_new_views_select_what_is_clicked() {
+    let mut h = shown(18, "subplans.analyze.json");
+    let slowest = plan(&h).plan.slowest().unwrap();
+    assert_eq!(plan(&h).plan.nodes[slowest].op, "Bitmap Heap Scan");
+    h.keys("2");
+    h.draw(160, 45);
+    let (card, i) = plan(&h).hits[0];
+    assert_eq!(i, slowest, "the first card is the slowest node");
+    h.mouse(MouseEventKind::Down(MouseButton::Left), card.x + 3, card.y + 1);
+    assert_eq!(plan(&h).selected, slowest);
+    // No misestimate here (the index scan under min()'s Limit stops early on purpose): that
+    // card names no node.
+    assert_eq!(plan(&h).plan.worst_misestimate(), None);
+    assert!(h.screen(160, 45).contains("none: every estimate within ×10"));
+    assert!(!plan(&h).hits.iter().any(|(r, _)| r.y == card.y && r.x != card.x));
+    // A plan with one: its card selects it.
+    let json = r#"[{"Plan": {"Node Type": "Hash Join", "Startup Cost": 0, "Total Cost": 20, "Plan Rows": 10, "Plan Width": 4,
+        "Actual Startup Time": 0.1, "Actual Total Time": 9.0, "Actual Rows": 10, "Actual Loops": 1, "Plans": [
+        {"Node Type": "Seq Scan", "Relation Name": "t", "Parent Relationship": "Outer", "Startup Cost": 0, "Total Cost": 10,
+         "Plan Rows": 5, "Plan Width": 4, "Actual Startup Time": 0.1, "Actual Total Time": 8.0, "Actual Rows": 5000, "Actual Loops": 1}]},
+        "Execution Time": 9.5}]"#;
+    let (mut h, id, _) = explain("SELECT * FROM t;", " ea");
+    h.db(plan_page(id, json));
+    h.app.focus = Focus::Results;
+    h.keys("2");
+    h.draw(160, 45);
+    let (card, i) = plan(&h).hits[1];
+    assert_eq!(i, 1, "the worst estimate: the scan, ×1000");
+    h.keys("gg");
+    h.mouse(MouseEventKind::Down(MouseButton::Left), card.x + 3, card.y + 1);
+    assert_eq!(plan(&h).selected, 1);
+    let mut h = shown(18, "subplans.analyze.json");
+    for key in ["3", "4", "7"] {
+        h.keys(key);
+        h.keys("gg");
+        h.draw(160, 45);
+        let (rect, i) = plan(&h).hits.iter().copied().find(|(_, i)| *i == slowest).unwrap_or_else(|| panic!("{key}"));
+        h.mouse(MouseEventKind::Down(MouseButton::Left), rect.x, rect.y);
+        assert_eq!((plan(&h).selected, i), (slowest, slowest), "{key}");
+        let screen = h.screen(160, 45);
+        assert!(
+            screen.contains("Bitmap Heap Scan on zz_orders o · self 64.2 ms (77%) · total 71.2 ms"),
+            "{key}:\n{screen}"
+        );
+    }
 }

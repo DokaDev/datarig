@@ -281,6 +281,10 @@ The Plan tab of the results pane (an `EXPLAIN (FORMAT JSON)` result): `j`/`k` se
 | `v` | `plan.view.next` | Plan: next view |  |
 | `V` | `plan.view.prev` | Plan: previous view |  |
 | `1` | `plan.view.tree` | Plan view: tree |  |
+| `2` | `plan.view.summary` | Plan view: summary cards |  |
+| `3` | `plan.view.icicle` | Plan view: icicle (width = time) |  |
+| `4` | `plan.view.flame` | Plan view: flame graph (width = time) |  |
+| `7` | `plan.view.treemap` | Plan view: treemap (area = own time) |  |
 | `9` | `plan.view.raw` | Plan view: raw text (as psql shows it) |  |
 | `<` | `plan.pan_left` | Plan: move the view left | ✓ |
 | `>` | `plan.pan_right` | Plan: move the view right | ✓ |
