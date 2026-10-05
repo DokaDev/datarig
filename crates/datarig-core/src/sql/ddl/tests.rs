@@ -27,6 +27,7 @@ fn seq(schema: &str, name: &str, type_name: &str) -> SequenceDdl {
         max,
         cache: 1,
         cycle: false,
+        unlogged: false,
     }
 }
 
@@ -542,6 +543,7 @@ ALTER TABLE shop.users ENABLE ALWAYS TRIGGER users_touch;
                      BEGIN RETURN NEW; END$function$\n"
             .into(),
         comment: Some("Sets updated_at.".into()),
+        grants: None,
     };
     let want = "\
 -- Reconstructed by datarig from the catalog (not pg_dump)
@@ -565,4 +567,89 @@ fn storage_parameters_quote_what_is_not_a_plain_value() {
     assert_eq!(option("x=a b", ""), "x='a b'");
     assert_eq!(option("x=it's", ""), "x='it''s'");
     assert_eq!(option("x=", ""), "x=''");
+}
+
+#[test]
+fn a_functions_privileges_other_than_the_defaults() {
+    let f = |grants: Option<Vec<Grant>>| FunctionDdl {
+        schema: "s".into(),
+        name: "pay".into(),
+        arguments: "amount integer".into(),
+        procedure: false,
+        owner: "o".into(),
+        definition: "CREATE OR REPLACE FUNCTION s.pay(amount integer) …\n".into(),
+        comment: None,
+        grants,
+    };
+    let text = |g| ddl_text(&DdlSource::Function(f(g)));
+    // The defaults: nothing said.
+    assert!(!text(None).contains("GRANT") && !text(None).contains("REVOKE"));
+    // `PUBLIC` lost `EXECUTE`, one role has it: both said.
+    let got = text(Some(vec![grant(Some("billing"), "EXECUTE", false)]));
+    assert!(got.contains("\nREVOKE ALL ON FUNCTION s.pay(amount integer) FROM PUBLIC;\n"), "{got}");
+    assert!(got.contains("\nGRANT EXECUTE ON FUNCTION s.pay(amount integer) TO billing;\n"), "{got}");
+    // `PUBLIC` keeps it and another role gets it too: only the grant.
+    let got = text(Some(vec![grant(None, "EXECUTE", false), grant(Some("ops"), "EXECUTE", true)]));
+    assert!(!got.contains("REVOKE"), "{got}");
+    assert!(got.contains("\nGRANT EXECUTE ON FUNCTION s.pay(amount integer) TO ops WITH GRANT OPTION;\n"), "{got}");
+    // Nobody but the owner: revoked from `PUBLIC`.
+    let got = text(Some(Vec::new()));
+    assert!(got.contains("REVOKE ALL ON FUNCTION s.pay(amount integer) FROM PUBLIC;"), "{got}");
+}
+
+#[test]
+fn a_partitions_and_a_childs_own_defaults_and_not_null() {
+    let mut s = TableStructure::new(RelationKind::Table);
+    s.columns =
+        vec![col("k", "integer", true, None), col("v", "integer", true, Some("5")), col("w", "text", false, None)];
+    let mut r = RelationDdl::new("s", "p1", "o", s);
+    r.partition_of = Some(PartitionOf { schema: "s".into(), name: "p".into(), bound: "FOR VALUES IN (1)".into() });
+    for c in &mut r.columns {
+        c.local = false;
+    }
+    r.columns[1].own_default = true;
+    r.columns[1].own_not_null = true;
+    r.columns[2].own_default = true;
+    let got = ddl_text(&DdlSource::Relation(Box::new(r)));
+    for line in [
+        "ALTER TABLE ONLY s.p1 ALTER COLUMN v SET DEFAULT 5;",
+        "ALTER TABLE ONLY s.p1 ALTER COLUMN v SET NOT NULL;",
+        "ALTER TABLE ONLY s.p1 ALTER COLUMN w DROP DEFAULT;",
+    ] {
+        assert!(got.contains(&format!("\n{line}\n")), "{line}\n{got}");
+    }
+    assert!(!got.contains("COLUMN k"), "the parent's as it is: {got}");
+}
+
+#[test]
+fn typed_tables_foreign_column_options_named_not_null_and_unlogged_sequences() {
+    let mut s = TableStructure::new(RelationKind::Table);
+    s.columns = vec![col("id", "integer", true, Some("0")), col("name", "text", false, None)];
+    let mut r = RelationDdl::new("s", "people", "o", s);
+    r.of_type = Some("s.person".into());
+    let got = ddl_text(&DdlSource::Relation(Box::new(r)));
+    assert!(got.contains("CREATE TABLE s.people OF s.person (\n    id WITH OPTIONS DEFAULT 0 NOT NULL\n);"), "{got}");
+
+    let mut s = TableStructure::new(RelationKind::ForeignTable);
+    s.columns = vec![col("id", "integer", false, None)];
+    let mut r = RelationDdl::new("s", "remote", "o", s);
+    r.columns[0].fdw_options = vec!["column_name=ID".into()];
+    r.foreign = Some(ForeignTable { server: "srv".into(), options: Vec::new() });
+    let got = ddl_text(&DdlSource::Relation(Box::new(r)));
+    assert!(got.contains("    id integer OPTIONS (column_name 'ID')\n"), "{got}");
+
+    let mut s = TableStructure::new(RelationKind::Table);
+    s.columns = vec![col("id", "bigint", true, Some("nextval('s.t_id_seq'::regclass)")), col("x", "text", true, None)];
+    let mut r = RelationDdl::new("s", "t", "o", s);
+    r.unlogged = true;
+    r.sequences.push(OwnedSequence {
+        column: "id".into(),
+        sequence: SequenceDdl { unlogged: true, ..seq("s", "t_id_seq", "bigint") },
+    });
+    r.not_null_constraints = vec![("x_required".into(), "x".into(), "NOT NULL x NO INHERIT".into())];
+    let got = ddl_text(&DdlSource::Relation(Box::new(r)));
+    assert!(got.contains("CREATE UNLOGGED SEQUENCE s.t_id_seq;"), "{got}");
+    assert!(got.contains("    x text,\n"), "no inline NOT NULL: {got}");
+    assert!(got.contains("    CONSTRAINT x_required NOT NULL x NO INHERIT\n"), "{got}");
+    assert!(got.contains("    id bigint DEFAULT nextval('s.t_id_seq'::regclass) NOT NULL,\n"), "{got}");
 }

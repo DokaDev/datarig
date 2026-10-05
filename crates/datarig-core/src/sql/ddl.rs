@@ -119,6 +119,10 @@ fn column_line(r: &RelationDdl, i: usize) -> String {
     let c = &r.structure.columns[i];
     let extra = r.columns.get(i);
     let mut s = format!("{} {}", sql_ident(&c.name), c.type_name);
+    if let Some(opts) = extra.map(|e| &e.fdw_options).filter(|o| !o.is_empty()) {
+        let opts: Vec<String> = opts.iter().map(|o| fdw_option(o)).collect();
+        s.push_str(&format!(" OPTIONS ({})", opts.join(", ")));
+    }
     if let Some((schema, name)) = extra.and_then(|e| e.collation.as_ref()) {
         s.push_str(&format!(" COLLATE {}", qualified(schema, name)));
     }
@@ -147,10 +151,25 @@ fn column_line(r: &RelationDdl, i: usize) -> String {
         ColumnFill::IdentityAlways => s.push_str(&identity(true)),
         ColumnFill::IdentityByDefault => s.push_str(&identity(false)),
     }
-    if c.not_null {
+    // A named `NOT NULL` constraint is a line of its own.
+    if c.not_null && !r.not_null_constraints.iter().any(|(_, col, _)| *col == c.name) {
         s.push_str(" NOT NULL");
     }
     s
+}
+
+/// A typed table's line for a column with a default or `NOT NULL` of its own: `name WITH
+/// OPTIONS …`; `None` for a column that is the type's as it is.
+fn typed_column_line(r: &RelationDdl, i: usize) -> Option<String> {
+    let c = &r.structure.columns[i];
+    let mut s = String::new();
+    if let (ColumnFill::Default, Some(d)) = (&c.fill, &c.default) {
+        s.push_str(&format!(" DEFAULT {d}"));
+    }
+    if c.not_null && !r.not_null_constraints.iter().any(|(_, col, _)| *col == c.name) {
+        s.push_str(" NOT NULL");
+    }
+    (!s.is_empty()).then(|| format!("{} WITH OPTIONS{s}", sql_ident(&c.name)))
 }
 
 /// The table's own constraints (not inherited ones), as `CONSTRAINT name definition`: the
@@ -165,6 +184,7 @@ fn constraint_lines(r: &RelationDdl) -> Vec<String> {
     }
     v.extend(s.unique_constraints.iter().filter(|k| own(&k.name)).map(|k| line(&k.name, &k.definition)));
     v.extend(s.checks.iter().filter(|k| own(&k.name)).map(|k| line(&k.name, &k.definition)));
+    v.extend(r.not_null_constraints.iter().filter(|(n, _, _)| own(n)).map(|(n, _, d)| line(n, d)));
     v.extend(r.exclusions.iter().filter(|(n, _)| own(n)).map(|(n, d)| line(n, d)));
     v.extend(s.foreign_keys.iter().filter(|k| own(&k.name)).map(|k| line(&k.name, &k.definition)));
     v
@@ -245,9 +265,10 @@ fn relation(r: &RelationDdl) -> Vec<String> {
     for o in &r.sequences {
         let opts = sequence_options(&o.sequence, true);
         let seq = qualified(&o.sequence.schema, &o.sequence.name);
+        let create = if o.sequence.unlogged { "CREATE UNLOGGED SEQUENCE" } else { "CREATE SEQUENCE" };
         out.push(match opts.is_empty() {
-            true => format!("CREATE SEQUENCE {seq};"),
-            false => format!("CREATE SEQUENCE {seq}\n    {};", opts.join("\n    ")),
+            true => format!("{create} {seq};"),
+            false => format!("{create} {seq}\n    {};", opts.join("\n    ")),
         });
     }
     out.push(match kind {
@@ -261,6 +282,23 @@ fn relation(r: &RelationDdl) -> Vec<String> {
             if let Some(d) = &c.default {
                 out.push(format!("ALTER VIEW {name} ALTER COLUMN {} SET DEFAULT {d};", sql_ident(&c.name)));
             }
+        }
+    }
+    // What a column that comes from a parent has of its own.
+    let created = r.partition_of.is_none() && r.of_type.is_none();
+    for (c, col) in r.structure.columns.iter().zip(&r.columns) {
+        if created && col.local {
+            continue;
+        }
+        let alter = format!("ALTER TABLE ONLY {name} ALTER COLUMN {}", sql_ident(&c.name));
+        if col.own_default {
+            out.push(match (&c.fill, &c.default) {
+                (ColumnFill::Default, Some(d)) => format!("{alter} SET DEFAULT {d};"),
+                _ => format!("{alter} DROP DEFAULT;"),
+            });
+        }
+        if col.own_not_null {
+            out.push(format!("{alter} SET NOT NULL;"));
         }
     }
     for c in &r.columns {
@@ -366,6 +404,16 @@ fn create_table(r: &RelationDdl, name: &str) -> String {
     s.push_str(name);
     let constraints = constraint_lines(r);
     match &r.partition_of {
+        // A typed table's columns are its type's: their defaults and its constraints.
+        None if r.of_type.is_some() => {
+            s.push_str(&format!(" OF {}", r.of_type.as_deref().unwrap_or_default()));
+            let mut lines: Vec<String> =
+                (0..r.structure.columns.len()).filter_map(|i| typed_column_line(r, i)).collect();
+            lines.extend(constraints);
+            if !lines.is_empty() {
+                s.push_str(&format!(" (\n    {}\n)", lines.join(",\n    ")));
+            }
+        }
         // A partition's columns are its parent's: only its own constraints.
         Some(p) => {
             s.push_str(&format!(" PARTITION OF {}", qualified(&p.schema, &p.name)));
@@ -490,6 +538,16 @@ fn function(f: &FunctionDdl) -> Vec<String> {
     out.push(format!("ALTER {word} {signature} OWNER TO {};", sql_ident(&f.owner)));
     if let Some(c) = &f.comment {
         out.push(comment_line(&format!("{word} {signature}"), c));
+    }
+    // Privileges other than the defaults: `PUBLIC` may lose `EXECUTE` (which a new function
+    // has), and others get theirs.
+    if let Some(grants) = &f.grants {
+        let public_execute = |g: &Grant| g.grantee.is_none() && g.privilege == "EXECUTE" && !g.grantable;
+        if !grants.iter().any(public_execute) {
+            out.push(format!("REVOKE ALL ON {word} {signature} FROM PUBLIC;"));
+        }
+        let rest: Vec<Grant> = grants.iter().filter(|g| !public_execute(g)).cloned().collect();
+        out.extend(grant_lines(&rest, &format!("{word} {signature}"), None));
     }
     out
 }

@@ -93,7 +93,8 @@ macro_rules! sequence_json {
     () => {
         "pg_catalog.json_build_object('schema', seqn.nspname, 'name', seq.relname,
         'type', pg_catalog.format_type(sq.seqtypid, NULL), 'start', sq.seqstart, 'increment', sq.seqincrement,
-        'min', sq.seqmin, 'max', sq.seqmax, 'cache', sq.seqcache, 'cycle', sq.seqcycle)"
+        'min', sq.seqmin, 'max', sq.seqmax, 'cache', sq.seqcache, 'cycle', sq.seqcycle,
+        'unlogged', seq.relpersistence = 'u')"
     };
 }
 
@@ -127,7 +128,7 @@ pub const RELATION: &str = concat!(
   SELECT rel.oid FROM rel
   UNION SELECT i.indrelid FROM rel JOIN pg_catalog.pg_index i ON i.indexrelid = rel.oid
   UNION SELECT dep.refobjid FROM rel
-    JOIN pg_catalog.pg_rewrite w ON w.ev_class = rel.oid
+    JOIN pg_catalog.pg_rewrite w ON w.ev_class = rel.oid AND w.ev_type = '1'
     JOIN pg_catalog.pg_depend dep ON dep.classid = 'pg_catalog.pg_rewrite'::pg_catalog.regclass AND dep.objid = w.oid
   WHERE dep.refclassid = 'pg_catalog.pg_class'::pg_catalog.regclass
   UNION SELECT dep.refobjid FROM rel
@@ -174,6 +175,7 @@ ELSE pg_catalog.json_build_object('relation', pg_catalog.json_build_object(
     'tablespace', CASE WHEN c.reltablespace <> 0 THEN
       (SELECT ts.spcname FROM pg_catalog.pg_tablespace ts WHERE ts.oid = c.reltablespace) END,
     'partition_key', CASE WHEN c.relkind = 'p' THEN pg_catalog.pg_get_partkeydef(c.oid) END,
+    'of_type', CASE WHEN c.reloftype <> 0 THEN pg_catalog.format_type(c.reloftype, NULL) END,
     'partition_of', CASE WHEN c.relispartition THEN (
       SELECT pg_catalog.json_build_array(pn.nspname, p.relname, pg_catalog.pg_get_expr(c.relpartbound, c.oid))
       FROM pg_catalog.pg_inherits h
@@ -200,6 +202,16 @@ ELSE pg_catalog.json_build_object('relation', pg_catalog.json_build_object(
         'compression', pg_catalog.to_jsonb(a) ->> 'attcompression',
         'statistics', a.attstattarget,
         'options', a.attoptions,
+        'fdw_options', a.attfdwoptions,
+        'default_tree', (SELECT ad.adbin::text FROM pg_catalog.pg_attrdef ad
+          WHERE ad.adrelid = c.oid AND ad.adnum = a.attnum),
+        'parent', CASE WHEN NOT a.attislocal THEN (
+          SELECT pg_catalog.json_build_object('default_tree', pd.adbin::text, 'not_null', pa.attnotnull)
+          FROM pg_catalog.pg_inherits h
+          JOIN pg_catalog.pg_attribute pa ON pa.attrelid = h.inhparent AND pa.attname = a.attname
+            AND NOT pa.attisdropped
+          LEFT JOIN pg_catalog.pg_attrdef pd ON pd.adrelid = pa.attrelid AND pd.adnum = pa.attnum
+          WHERE h.inhrelid = c.oid ORDER BY h.inhseqno LIMIT 1) END,
         'comment', ",
     description!("pg_class", "c.oid", "a.attnum"),
     ",
@@ -236,12 +248,15 @@ ELSE pg_catalog.json_build_object('relation', pg_catalog.json_build_object(
       SELECT pg_catalog.json_agg(pg_catalog.json_build_object(
         'name', con.conname, 'type', con.contype::text,
         'inherited', NOT con.conislocal OR con.conparentid <> 0,
-        'definition', CASE WHEN con.contype = 'x' THEN pg_catalog.pg_get_constraintdef(con.oid, true) END,
+        'definition', CASE WHEN con.contype IN ('x', 'n') THEN pg_catalog.pg_get_constraintdef(con.oid, true) END,
+        'column', CASE WHEN con.contype = 'n' THEN (SELECT ca.attname FROM pg_catalog.pg_attribute ca
+          WHERE ca.attrelid = con.conrelid AND ca.attnum = con.conkey[1]) END,
+        'no_inherit', con.connoinherit,
         'comment', ",
     description!("pg_constraint", "con.oid", "0"),
     ") ORDER BY con.conname)
       FROM pg_catalog.pg_constraint con
-      WHERE con.conrelid = c.oid AND con.contype IN ('p', 'u', 'c', 'f', 'x')),
+      WHERE con.conrelid = c.oid AND con.contype IN ('p', 'u', 'c', 'f', 'x', 'n')),
     'indexes', (
       SELECT pg_catalog.json_agg(pg_catalog.json_build_object(
         'name', ic.relname,
@@ -341,6 +356,10 @@ ELSE pg_catalog.json_build_object('function', (
     'procedure', p.prokind = 'p',
     'owner', pg_catalog.pg_get_userbyid(p.proowner),
     'definition', pg_catalog.pg_get_functiondef(p.oid),
+    'default_acl', p.proacl IS NULL,
+    'grants', ",
+    grants_json!("p.proacl", "p.proowner"),
+    ",
     'comment', ",
     description!("pg_proc", "p.oid", "0"),
     ")
@@ -453,6 +472,8 @@ struct RawSequence {
     max: i64,
     cache: i64,
     cycle: bool,
+    #[serde(default)]
+    unlogged: bool,
 }
 
 impl From<RawSequence> for SequenceDdl {
@@ -467,6 +488,7 @@ impl From<RawSequence> for SequenceDdl {
             max: s.max,
             cache: s.cache,
             cycle: s.cycle,
+            unlogged: s.unlogged,
         }
     }
 }
@@ -483,9 +505,20 @@ struct RawColumn {
     compression: Option<String>,
     statistics: Option<i32>,
     options: Option<Vec<String>>,
+    fdw_options: Option<Vec<String>>,
+    /// Its default's stored expression (compared with its parent's, never deparsed here).
+    default_tree: Option<String>,
+    /// A column that comes from a parent: the parent's default and `NOT NULL`.
+    parent: Option<RawParentColumn>,
     comment: Option<String>,
     grants: Option<Vec<RawGrant>>,
     identity: Option<RawSequence>,
+}
+
+#[derive(Deserialize)]
+struct RawParentColumn {
+    default_tree: Option<String>,
+    not_null: bool,
 }
 
 #[derive(Deserialize)]
@@ -501,6 +534,10 @@ struct RawConstraint {
     kind: String,
     inherited: bool,
     definition: Option<String>,
+    /// A `NOT NULL` constraint's column.
+    column: Option<String>,
+    #[serde(default)]
+    no_inherit: bool,
     comment: Option<String>,
 }
 
@@ -542,6 +579,7 @@ struct RawRelation {
     toast_options: Option<Vec<String>>,
     tablespace: Option<String>,
     partition_key: Option<String>,
+    of_type: Option<String>,
     partition_of: Option<(String, String, String)>,
     inherits: Option<Vec<(String, String)>>,
     view: Option<String>,
@@ -589,6 +627,9 @@ struct RawFunction {
     procedure: bool,
     owner: String,
     definition: String,
+    /// `proacl` is `NULL`: the default privileges.
+    default_acl: bool,
+    grants: Option<Vec<RawGrant>>,
     comment: Option<String>,
 }
 
@@ -679,6 +720,7 @@ fn parse(json: &str) -> Result<DdlSource, DbError> {
             owner: f.owner,
             definition: f.definition,
             comment: f.comment,
+            grants: (!f.default_acl).then(|| grants(f.grants)),
         }));
     }
     let (Some(structure), Some(d)) = (raw.relation, raw.ddl) else { return Err(DbError::NoResult) };
@@ -694,15 +736,21 @@ fn relation(structure: datarig_core::driver::structure::TableStructure, d: RawRe
     r.toast_options = d.toast_options.unwrap_or_default();
     r.tablespace = d.tablespace;
     r.partition_key = d.partition_key;
+    r.of_type = d.of_type;
     r.partition_of = d.partition_of.map(|(schema, name, bound)| PartitionOf { schema, name, bound });
     r.inherits = d.inherits.unwrap_or_default();
     r.view_definition = d.view;
     r.foreign = d.server.map(|server| ForeignTable { server, options: d.server_options.unwrap_or_default() });
+    let not_null = |name: &str| r.structure.column(name).is_some_and(|c| c.not_null);
     r.columns = d
         .columns
         .unwrap_or_default()
         .into_iter()
         .map(|c| ColumnDdl {
+            // A default or `NOT NULL` that its parent does not have is its own.
+            own_default: c.parent.as_ref().is_some_and(|p| p.default_tree != c.default_tree),
+            own_not_null: c.parent.as_ref().is_some_and(|p| !p.not_null) && not_null(&c.name),
+            fdw_options: c.fdw_options.unwrap_or_default(),
             name: c.name,
             local: c.local,
             collation: c.collation,
@@ -725,6 +773,14 @@ fn relation(structure: datarig_core::driver::structure::TableStructure, d: RawRe
     for c in d.constraints.unwrap_or_default() {
         if c.inherited {
             r.inherited_constraints.push(c.name.clone());
+        }
+        // A `NOT NULL` constraint (PostgreSQL 18) is said as one only when it is more than the
+        // column's `NOT NULL`: a name of its own, or `NO INHERIT`.
+        if let (true, Some(column), Some(def)) = (c.kind == "n", &c.column, &c.definition) {
+            let default_name = format!("{}_{column}_not_null", d.name);
+            if !c.inherited && (c.name != default_name || c.no_inherit) {
+                r.not_null_constraints.push((c.name.clone(), column.clone(), def.clone()));
+            }
         }
         if let (true, Some(def)) = (c.kind == "x", c.definition) {
             r.exclusions.push((c.name.clone(), def));
@@ -756,6 +812,8 @@ fn relation(structure: datarig_core::driver::structure::TableStructure, d: RawRe
         ("n", _) => ReplicaIdentity::Nothing,
         ("f", _) => ReplicaIdentity::Full,
         ("i", Some(name)) => ReplicaIdentity::Index(name),
+        // Its index was dropped: the server then acts as with `NOTHING` (as documented).
+        ("i", None) => ReplicaIdentity::Nothing,
         _ => ReplicaIdentity::Default,
     };
     r.triggers = d

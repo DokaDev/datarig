@@ -86,6 +86,8 @@ pub struct SequenceDdl {
     pub max: i64,
     pub cache: i64,
     pub cycle: bool,
+    /// `UNLOGGED` (PostgreSQL 15; a sequence an unlogged table owns).
+    pub unlogged: bool,
 }
 
 /// What a column has beyond the structure's (the same order as the structure's columns).
@@ -104,6 +106,13 @@ pub struct ColumnDdl {
     pub statistics: Option<i32>,
     /// Its attribute options (`n_distinct=100`).
     pub options: Vec<String>,
+    /// A foreign table column's options (`column_name=id`).
+    pub fdw_options: Vec<String>,
+    /// A column that comes from a parent (a partition's, an inheriting table's) with a default
+    /// of its own: the structure's default (none: it dropped the parent's).
+    pub own_default: bool,
+    /// Such a column is `NOT NULL` where its parent's is not.
+    pub own_not_null: bool,
     /// An identity column's sequence.
     pub identity: Option<SequenceDdl>,
     pub comment: Option<String>,
@@ -221,6 +230,11 @@ pub struct RelationDdl {
     pub inherited_constraints: Vec<String>,
     /// Exclusion constraints (the structure has no group for them): name and definition.
     pub exclusions: Vec<(String, String)>,
+    /// `NOT NULL` constraints with a name of their own or `NO INHERIT` (PostgreSQL 18): name,
+    /// column and definition. Their columns are not marked `NOT NULL` inline.
+    pub not_null_constraints: Vec<(String, String, String)>,
+    /// A typed table's type (`OF type`): its columns are the type's.
+    pub of_type: Option<String>,
     /// Indexes that are a partition of the parent's index (the parent's DDL creates them).
     pub inherited_indexes: Vec<String>,
     pub replica_identity: ReplicaIdentity,
@@ -263,6 +277,8 @@ impl RelationDdl {
             columns,
             inherited_constraints: Vec::new(),
             exclusions: Vec::new(),
+            not_null_constraints: Vec::new(),
+            of_type: None,
             inherited_indexes: Vec::new(),
             replica_identity: ReplicaIdentity::Default,
             row_security: false,
@@ -316,4 +332,7 @@ pub struct FunctionDdl {
     /// The server's `CREATE OR REPLACE FUNCTION` statement.
     pub definition: String,
     pub comment: Option<String>,
+    /// The privileges granted on it, when they are not the defaults (`EXECUTE` to `PUBLIC`):
+    /// `None` for the defaults. The owner's are left out.
+    pub grants: Option<Vec<Grant>>,
 }

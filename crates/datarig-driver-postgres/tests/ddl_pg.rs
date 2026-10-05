@@ -222,7 +222,9 @@ async fn every_part_of_a_ddl_round_trips() {
     let Some(url) = pg_url("every_part_of_a_ddl_round_trips") else { return };
     let pid = std::process::id();
     let (s, role) = (format!("zz_ddl_rt_{pid}"), format!("zz_ddl_role_{pid}"));
+    let fdw = format!("zz_ddl_fdw_{pid}");
     let _role = cleanup(&url, format!("DROP ROLE IF EXISTS {role}"));
+    let _fdw = cleanup(&url, format!("DROP FOREIGN DATA WRAPPER IF EXISTS {fdw} CASCADE"));
     let _schema = cleanup(&url, format!("DROP SCHEMA IF EXISTS {s} CASCADE"));
     let tag = format!("zzddlrt{pid}");
     let mut q = Conn::open(&url, SessionRole::Query, &tag).await;
@@ -264,7 +266,7 @@ async fn every_part_of_a_ddl_round_trips() {
         format!("GRANT SELECT, UPDATE ON {s}.\"Users\" TO {role}"),
         format!("GRANT SELECT (name) ON {s}.teams TO {role} WITH GRANT OPTION"),
         format!(
-            "CREATE UNLOGGED TABLE {s}.scratch (k int) WITH (autovacuum_enabled = false, toast.autovacuum_enabled = false)"
+            "CREATE UNLOGGED TABLE {s}.scratch (k serial) WITH (autovacuum_enabled = false, toast.autovacuum_enabled = false)"
         ),
         format!(
             "CREATE TABLE {s}.events (id int NOT NULL, at date NOT NULL, PRIMARY KEY (id, at)) PARTITION BY RANGE (at)"
@@ -292,6 +294,37 @@ async fn every_part_of_a_ddl_round_trips() {
     if v >= 18 {
         fixture.push(format!("CREATE TABLE {s}.virt (a int, b int GENERATED ALWAYS AS (a * 3) VIRTUAL)"));
     }
+    // A function whose privileges are not the defaults; a partition and an inheriting table
+    // with a default and a NOT NULL of their own; a typed table; a foreign table with column
+    // options; NOT NULL constraints with a name of their own and NO INHERIT (18).
+    let person = format!("CREATE TYPE {s}.person AS (id int, name text)");
+    fixture.extend([
+        format!("CREATE FUNCTION {s}.pay(amount int) RETURNS int LANGUAGE sql SECURITY DEFINER AS 'SELECT amount'"),
+        format!("REVOKE EXECUTE ON FUNCTION {s}.pay(int) FROM PUBLIC"),
+        format!("GRANT EXECUTE ON FUNCTION {s}.pay(int) TO {role}"),
+        format!("ALTER TABLE {s}.events ADD COLUMN note text"),
+        format!(
+            "CREATE TABLE {s}.events_2025 PARTITION OF {s}.events (at WITH OPTIONS DEFAULT '2025-06-01') \
+             FOR VALUES FROM ('2025-01-01') TO ('2026-01-01')"
+        ),
+        format!("ALTER TABLE ONLY {s}.events_2025 ALTER COLUMN note SET NOT NULL"),
+        format!("ALTER TABLE {s}.base ALTER COLUMN b SET DEFAULT 'parent'"),
+        format!("ALTER TABLE ONLY {s}.child ALTER COLUMN b SET DEFAULT 'child'"),
+        format!("ALTER TABLE ONLY {s}.child ALTER COLUMN id SET NOT NULL"),
+        person.clone(),
+        format!(
+            "CREATE TABLE {s}.people OF {s}.person (id WITH OPTIONS PRIMARY KEY, name WITH OPTIONS DEFAULT 'anon')"
+        ),
+        format!("CREATE FOREIGN DATA WRAPPER {fdw}"),
+        format!("CREATE SERVER {fdw}_srv FOREIGN DATA WRAPPER {fdw}"),
+        format!(
+            "CREATE FOREIGN TABLE {s}.remote (id int OPTIONS (column_name 'ID'), v text) \
+             SERVER {fdw}_srv OPTIONS (table_name 'r')"
+        ),
+    ]);
+    if v >= 18 {
+        fixture.push(format!("CREATE TABLE {s}.nn (a int CONSTRAINT a_required NOT NULL, b int NOT NULL NO INHERIT)"));
+    }
     q.run(fixture).await.unwrap();
     let trigger_fn =
         DdlObject::TriggerFunction { schema: s.clone(), table: "Users".into(), trigger: "users_touch".into() };
@@ -303,6 +336,12 @@ async fn every_part_of_a_ddl_round_trips() {
     );
     if v >= 18 {
         objects.push(relation(&s, "virt"));
+    }
+    let pay = DdlObject::Named { name: format!("{s}.pay(int)"), schema: None };
+    objects.push(pay.clone());
+    objects.extend(["events_2025", "people", "remote"].map(|n| relation(&s, n)));
+    if v >= 18 {
+        objects.push(relation(&s, "nn"));
     }
     let mut meta = Conn::open(&url, SessionRole::Meta, &tag).await;
     let mut before = Vec::new();
@@ -355,8 +394,45 @@ async fn every_part_of_a_ddl_round_trips() {
     if v >= 18 {
         assert!(before[10].contains("    b integer GENERATED ALWAYS AS (a * 3) VIRTUAL\n"), "{}", before[10]);
     }
+    let text_of = |o: &DdlObject| before[objects.iter().position(|x| x == o).unwrap()].as_str();
+    let pay_text = text_of(&pay);
+    for part in [
+        format!("REVOKE ALL ON FUNCTION {s}.pay(amount integer) FROM PUBLIC;"),
+        format!("GRANT EXECUTE ON FUNCTION {s}.pay(amount integer) TO {role};"),
+    ] {
+        assert!(pay_text.contains(&part), "{part}\n---\n{pay_text}");
+    }
+    let p2025 = text_of(&relation(&s, "events_2025"));
+    for part in [
+        format!("ALTER TABLE ONLY {s}.events_2025 ALTER COLUMN at SET DEFAULT '2025-06-01'::date;"),
+        format!("ALTER TABLE ONLY {s}.events_2025 ALTER COLUMN note SET NOT NULL;"),
+    ] {
+        assert!(p2025.contains(&part), "{part}\n---\n{p2025}");
+    }
+    assert!(!p2025.contains("COLUMN id"), "the parent's as it is: {p2025}");
+    let child = text_of(&relation(&s, "child"));
+    for part in [
+        format!("ALTER TABLE ONLY {s}.child ALTER COLUMN b SET DEFAULT 'child'::text;"),
+        format!("ALTER TABLE ONLY {s}.child ALTER COLUMN id SET NOT NULL;"),
+    ] {
+        assert!(child.contains(&part), "{part}\n---\n{child}");
+    }
+    let people = text_of(&relation(&s, "people"));
+    assert!(people.contains(&format!("CREATE TABLE {s}.people OF {s}.person (")), "{people}");
+    assert!(people.contains("    name WITH OPTIONS DEFAULT 'anon'::text,"), "{people}");
+    let remote = text_of(&relation(&s, "remote"));
+    assert!(remote.contains("    id integer OPTIONS (column_name 'ID'),"), "{remote}");
+    let scratch = text_of(&relation(&s, "scratch"));
+    let create = if v >= 15 { "CREATE UNLOGGED SEQUENCE" } else { "CREATE SEQUENCE" };
+    assert!(scratch.contains(&format!("{create} {s}.scratch_k_seq\n    AS integer;")), "{scratch}");
+    if v >= 18 {
+        let nn = text_of(&relation(&s, "nn"));
+        assert!(nn.contains("    CONSTRAINT a_required NOT NULL a,"), "{nn}");
+        assert!(nn.contains("NOT NULL b NO INHERIT"), "{nn}");
+        assert!(nn.contains("    a integer,\n"), "no inline NOT NULL: {nn}");
+    }
 
-    q.run(vec![format!("DROP SCHEMA {s} CASCADE"), format!("CREATE SCHEMA {s}")]).await.unwrap();
+    q.run(vec![format!("DROP SCHEMA {s} CASCADE"), format!("CREATE SCHEMA {s}"), person]).await.unwrap();
     for (o, text) in objects.iter().zip(&before) {
         q.run(statements(text)).await.unwrap_or_else(|e| panic!("{o:?}: {e}\n{text}"));
     }
@@ -452,7 +528,7 @@ async fn a_ddl_never_waits_for_a_lock() {
          WHERE a.application_name = 'datarig-meta-{tag}' AND l.locktype = 'relation' \
          AND l.relation IN (SELECT c.oid FROM pg_catalog.pg_class c WHERE c.relnamespace = '{s}'::regnamespace)"
     );
-    // The DDL of `object`, how long it took, and the relation locks of the schema the
+    // The DDL of `object`, how long it took to come, and the relation locks of the schema the
     // metadata session held or asked for (300 ms in, or when it answered, whichever came first).
     let mut ask = async |meta: &mut Conn, object: DdlObject| {
         meta.next += 1;
@@ -460,13 +536,17 @@ async fn a_ddl_never_waits_for_a_lock() {
         let t0 = Instant::now();
         meta.session.send(DbCommand::LoadDdl { id, object });
         let first = tokio::time::timeout(Duration::from_millis(300), meta.rx.recv()).await;
+        let came = t0.elapsed();
         let locks = observer.one(&locks_sql).await;
-        let ev = match first {
-            Ok(Some(ev)) => ev,
-            _ => meta.wait(|e| matches!(e, DbEvent::Ddl { .. }), 10).await,
+        let (ev, took) = match first {
+            Ok(Some(ev)) => (ev, came),
+            _ => {
+                let ev = meta.wait(|e| matches!(e, DbEvent::Ddl { .. }), 10).await;
+                (ev, t0.elapsed())
+            }
         };
         let DbEvent::Ddl { result, .. } = ev else { panic!("{ev:?}") };
-        (result, t0.elapsed(), locks)
+        (result, took, locks)
     };
     let trigger = DdlObject::Trigger { schema: s.clone(), table: "base".into(), name: "t".into() };
     let function = DdlObject::TriggerFunction { schema: s.clone(), table: "base".into(), trigger: "t".into() };
