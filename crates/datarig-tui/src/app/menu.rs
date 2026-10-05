@@ -63,6 +63,10 @@ const PLAN_MENU: &[Action] =
     &[Action::Plan(PlanAction::Detail), Action::Plan(PlanAction::CopyText), Action::Plan(PlanAction::CopyJson)];
 const PLAN_PANE_MENU: &[Action] = &[
     Action::Plan(PlanAction::View(PlanView::Tree)),
+    Action::Plan(PlanAction::View(PlanView::Summary)),
+    Action::Plan(PlanAction::View(PlanView::Icicle)),
+    Action::Plan(PlanAction::View(PlanView::Flame)),
+    Action::Plan(PlanAction::View(PlanView::Treemap)),
     Action::Plan(PlanAction::View(PlanView::Raw)),
     Action::ResultTab(true),
     Action::ResultTab(false),
