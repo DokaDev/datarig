@@ -328,7 +328,7 @@ impl App {
             KeyCode::Tab | KeyCode::Enter => {
                 let label = p.items[p.selected].label.clone();
                 let start = p.replace_start;
-                let end = t.editor.offset();
+                let end = t.editor.offset() + p.trail;
                 if start <= end {
                     t.editor.replace_range(start, end, &label);
                 }
@@ -355,6 +355,7 @@ impl App {
             items: c.items,
             selected: 0,
             replace_start: base + c.replace_start,
+            trail: c.trail,
         });
     }
 

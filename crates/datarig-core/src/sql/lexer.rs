@@ -192,7 +192,7 @@ fn is_ident_continue(c: char) -> bool {
 }
 
 /// `space` of scan.l: ASCII whitespace only.
-fn is_space(c: char) -> bool {
+pub fn is_space(c: char) -> bool {
     matches!(c, ' ' | '\t' | '\n' | '\r' | '\x0c' | '\x0b')
 }
 

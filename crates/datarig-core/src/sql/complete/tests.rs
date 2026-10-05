@@ -173,3 +173,155 @@ fn public_follows_the_chosen_schema() {
     let r = at("SELECT * FROM use|");
     assert_eq!(r.iter().filter(|l| *l == "users").count(), 1, "one bare name, the first schema's: {r:?}");
 }
+
+/// A catalog with names PostgreSQL reads back only when they are quoted.
+fn mixed() -> Catalog {
+    let mut c = cat();
+    let col = |n: &str| ColumnInfo { name: n.into(), type_name: "text".into() };
+    c.schemas.push("Sales".into());
+    c.relations.push(Relation {
+        schema: "Sales".into(),
+        name: "Order Lines".into(),
+        is_view: false,
+        columns: vec![col("Mixed Col"), col("MixedCase"), col("plain"), col("select"), col("say \"hi\"")],
+    });
+    c.relations.push(Relation {
+        schema: "public".into(),
+        name: "Accounts".into(),
+        is_view: false,
+        columns: vec![col("Id"), col("owner")],
+    });
+    c
+}
+
+fn run_in(c: &Catalog, src_with_bar: &str) -> Option<Completion> {
+    let cursor = src_with_bar.find('|').unwrap();
+    let src = src_with_bar.replacen('|', "", 1);
+    complete(&src, cursor, c, false)
+}
+
+fn labels_in(c: &Catalog, src_with_bar: &str) -> Vec<String> {
+    run_in(c, src_with_bar).map(|c| c.items.into_iter().map(|i| i.label).collect()).unwrap_or_default()
+}
+
+/// Accepting a candidate puts SQL in the text: names that are not plain lower-case words (or
+/// are reserved keywords) come quoted, with `"` doubled. They match what was typed without
+/// quotes, case-insensitively.
+#[test]
+fn names_that_need_quotes_are_inserted_quoted() {
+    let c = mixed();
+    let src = "SELECT mi| FROM \"Sales\".\"Order Lines\"";
+    assert_eq!(labels_in(&c, src), ["\"Mixed Col\"", "\"MixedCase\""]);
+    assert_eq!(labels_in(&c, "SELECT sel| FROM \"Sales\".\"Order Lines\""), ["\"select\"", "select"]);
+    assert_eq!(labels_in(&c, "SELECT sa| FROM \"Sales\".\"Order Lines\""), ["\"say \"\"hi\"\"\""]);
+    assert_eq!(labels_in(&c, "SELECT pl| FROM \"Sales\".\"Order Lines\""), ["plain"]);
+    assert_eq!(labels_in(&c, "SELECT o.| FROM \"Sales\".\"Order Lines\" o")[..2], ["\"Mixed Col\"", "\"MixedCase\""]);
+    // Tables and schemas.
+    let r = labels_in(&c, "SELECT * FROM acc|");
+    assert_eq!(r, ["\"Accounts\"", "public.\"Accounts\""]);
+    let r = labels_in(&c, "SELECT * FROM sal|");
+    assert_eq!(r[..2], ["\"Sales\"", "\"Sales\".\"Order Lines\""]);
+    assert_eq!(labels_in(&c, "SELECT * FROM \"Sales\".|"), ["\"Order Lines\""]);
+    assert_eq!(labels_in(&c, "SELECT a.| FROM \"Accounts\" a"), ["\"Id\"", "owner"]);
+}
+
+/// After an opening `"` the rest is matched (case-insensitively) and every name is quoted; the
+/// accepted name replaces the quote too, and the closing `"` an editor put right after the
+/// cursor. Keywords are not offered there. The statement's other tables are still read.
+#[test]
+fn an_opening_quote_completes_quoted_names() {
+    let c = mixed();
+    let src = "SELECT \"Mi| FROM \"Sales\".\"Order Lines\"";
+    let done = run_in(&c, src).expect("completes after a quote");
+    let names: Vec<_> = done.items.iter().map(|i| i.label.as_str()).collect();
+    assert_eq!(names, ["\"Mixed Col\"", "\"MixedCase\""]);
+    assert_eq!((done.replace_start, done.trail), (7, 0));
+    // With the closing quote already there.
+    let done = run_in(&c, "SELECT \"pl|\" FROM \"Sales\".\"Order Lines\"").expect("before a closing quote");
+    assert_eq!(done.items[0].label, "\"plain\"");
+    assert_eq!((done.replace_start, done.trail), (7, 1));
+    // An empty quote offers every column; no keywords.
+    let r = labels_in(&c, "SELECT \"| FROM \"Accounts\"");
+    assert_eq!(r, ["\"Id\"", "\"owner\""]);
+    let r = labels_in(&c, "SELECT * FROM \"acc|");
+    assert_eq!(r, ["\"Accounts\"", "\"public\".\"Accounts\""]);
+    // Inside a finished quoted name (not at its end) there is nothing, as before.
+    assert!(labels_in(&c, "SELECT \"Mi|xed\" FROM \"Accounts\"").is_empty());
+    assert!(labels_in(&c, "SELECT \"Id\"| FROM \"Accounts\"").is_empty());
+}
+
+/// `WITH` queries are tables of the statement: offered first in a table position (hiding a
+/// catalog table of the same name), with the columns of their written list or of their select
+/// list.
+#[test]
+fn with_queries_are_tables_with_their_columns() {
+    let src = "WITH recent(oid, who) AS (SELECT id, user_id FROM shop.orders),\n\
+               totals AS MATERIALIZED (SELECT o.user_id, sum(o.total_amount) AS spent, count(*) n, \
+               o.status::text, 1 + 2, * FROM shop.orders o GROUP BY 1),\n\
+               users AS (SELECT DISTINCT \"Who Am I\" FROM shop.users)\n";
+    let at = |tail: &str| {
+        let s = format!("{src}{tail}");
+        let cursor = s.find('|').unwrap();
+        complete(&s.replace('|', ""), cursor, &cat(), true)
+            .map(|c| c.items.into_iter().map(|i| (i.label, i.kind)).collect::<Vec<_>>())
+            .unwrap_or_default()
+    };
+    let r = at("SELECT * FROM |");
+    assert_eq!(labels(&r)[..3], ["recent", "totals", "users"], "{r:?}");
+    assert_eq!(r[0].1, Kind::Table);
+    assert_eq!(labels(&r).iter().filter(|l| **l == "users").count(), 1, "the WITH query hides shop.users: {r:?}");
+    let r = at("SELECT * FROM t|");
+    assert_eq!(labels(&r)[0], "totals");
+    assert_eq!(labels(&at("SELECT r.| FROM recent r")), ["oid", "who"]);
+    assert_eq!(labels(&at("SELECT totals.| FROM totals")), ["user_id", "spent", "n"]);
+    assert_eq!(labels(&at("SELECT sp| FROM totals")), ["spent"]);
+    assert_eq!(labels(&at("SELECT u.| FROM users u")), ["\"Who Am I\""]);
+    // Columns of a WITH query have no type.
+    let s = format!("{src}SELECT sp FROM totals");
+    let c = complete(&s, s.len() - " FROM totals".len(), &cat(), false).unwrap();
+    assert_eq!(c.items[0].detail, None);
+    // `WITH RECURSIVE`, and a WITH query still being written.
+    let r = run("WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM t) SELECT t.| FROM t");
+    assert_eq!(labels(&r), ["n"]);
+    let r = run("WITH a AS (SELECT id, email FROM shop.users) SELECT a.|");
+    assert_eq!(labels(&r), ["id", "email"]);
+    let r = run("WITH a AS (SELECT id FROM shop.users), b AS (SELECT a.| FROM a");
+    assert_eq!(labels(&r), ["id"], "a later WITH query still being written reads an earlier one");
+    // Not WITH queries: `WITH TIME ZONE`, `WITH (options)`.
+    let r = run("CREATE TABLE zz (t timestamp WITH TIME ZONE) WITH (fillfactor = 70); SELECT * FROM ti|");
+    assert!(!labels(&r).contains(&"time"), "{r:?}");
+}
+
+/// Names that start with what was typed come first; then names the typed letters appear in,
+/// in order (`oi` → `order_items`). Keywords match by their start only.
+#[test]
+fn prefix_matches_first_then_subsequences() {
+    let r = run("SELECT * FROM shop.oi|");
+    assert_eq!(labels(&r), ["order_items"]);
+    let r = run("SELECT * FROM shop.us|");
+    assert_eq!(labels(&r), ["users", "products"], "prefix first, then a subsequence");
+    let r = run("SELECT * FROM shop.users WHERE nm|");
+    assert_eq!(labels(&r), ["name", "nickname"], "no keyword by its letters (NUMERIC)");
+    let r = run("SELECT * FROM shop.orders WHERE ta|");
+    assert_eq!(labels(&r), ["table", "status", "total_amount"], "a keyword's prefix match comes first");
+}
+
+/// A `WITH` query's bare names are folded to lower case, as the server reads them: a name
+/// written `Recent` is the relation `recent`, and is offered (and inserted) as such.
+#[test]
+fn with_query_names_fold_to_lower_case() {
+    let r = run("WITH Recent AS (SELECT id FROM shop.users) SELECT * FROM Rec|");
+    assert_eq!(labels(&r)[0], "recent");
+    let r = run("with r as (select Amount, t.Total, x AS Big, \"Kept\" from t) select r.|");
+    assert_eq!(labels(&r), ["amount", "total", "big", "\"Kept\""]);
+    let r = run("with r(A, \"B\") as (select 1, 2) select r.|");
+    assert_eq!(labels(&r), ["a", "\"B\""]);
+}
+
+/// Only a select-list item that really ends in its name gives a column: not an expression
+/// ending in a keyword's operand (`a and b`, `not c`) or a collation.
+#[test]
+fn with_query_columns_are_only_names_written_as_such() {
+    let r = run("with r as (select a and b, not c, x collate \"C\", count(*) n, 1 one, y z from t) select r.|");
+    assert_eq!(labels(&r), ["n", "one", "z"]);
+}
