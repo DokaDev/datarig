@@ -35,6 +35,7 @@ pub(crate) fn draw_context_menu(app: &mut App, area: Rect, buf: &mut Buffer) -> 
     let x = ax.min(area.x + area.width - w);
     let y = (ay + 1).min(area.y + area.height - h);
     let rect = Rect::new(x, y, w, h);
+    m.area = rect;
     clear_overlay(rect, buf);
     let block = Block::bordered()
         .border_type(BorderType::Rounded)
@@ -63,7 +64,9 @@ pub(crate) fn draw_context_menu(app: &mut App, area: Rect, buf: &mut Buffer) -> 
     let list = Rect::new(inner.x, inner.y + 1, inner.width, inner.height - 1);
     let visible = list.height as usize;
     if m.selected < m.scroll {
-        m.scroll = m.selected;
+        // Its section's heading stays in sight above the first item.
+        let heading = m.selected > 0 && lines.get(m.selected - 1).is_some_and(|l| l.0);
+        m.scroll = m.selected - usize::from(heading);
     } else if visible > 0 && m.selected >= m.scroll + visible {
         m.scroll = m.selected + 1 - visible;
     }

@@ -115,9 +115,12 @@ impl Editor {
         let (a, b) = self.visual_ends();
         match self.sel {
             Sel::Lines => (a.0..=b.0).contains(&at.0),
+            // The block's columns are screen columns: a wide character takes two, and after `$`
+            // it goes to every line's end.
             Sel::Block => {
-                let (l, r) = (self.anchor.1.min(self.col), self.anchor.1.max(self.col));
-                (a.0..=b.0).contains(&at.0) && (l..=r).contains(&at.1)
+                let bl = self.block();
+                let x = self.display_x(at.0, at.1);
+                (bl.first..=bl.last).contains(&at.0) && x >= bl.start && (bl.max || x <= bl.end)
             }
             Sel::Chars => (a..=b).contains(&at),
         }

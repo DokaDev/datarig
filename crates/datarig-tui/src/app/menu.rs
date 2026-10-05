@@ -51,7 +51,8 @@ const GRID_MENU: &[Action] = &[
 ];
 
 /// The results pane's actions, after the copies of every row.
-const RESULTS_MENU: &[Action] = &[Action::CountRows, Action::Panel(PanelAction::Maximize)];
+const RESULTS_MENU: &[Action] =
+    &[Action::CountRows, Action::ResultTab(true), Action::ResultTab(false), Action::Panel(PanelAction::Maximize)];
 
 /// The editor's actions for the statement under the cursor or the selection.
 const EDITOR_MENU: &[Action] = &[Action::RunStatement, Action::FormatSql, Action::ToggleComment];
@@ -109,8 +110,8 @@ pub enum MenuItem {
 /// What the menu was opened on, as it was then. An item runs only while it is still so.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MenuTarget {
-    /// An explorer row, with its name as shown (a reloaded tree may put another node under the
-    /// same position).
+    /// An explorer row, and the names of what a schema tree's node stands for (a reloaded tree
+    /// may put another node in its place).
     Explorer(explorer::Row, String),
     /// The active tab's results: the result shown, its selected cell (when it has rows) and
     /// selected range.
@@ -170,6 +171,10 @@ pub struct ContextMenu {
     /// The explorer's own wording of an action for the row, as it was when the menu opened
     /// (where the console opens, what is deleted).
     names: Vec<(Action, Localized)>,
+    /// The explorer row's or the tab's name as shown when the menu opened (its heading).
+    title: String,
+    /// The focus to give back when the menu closes without running anything.
+    back: Focus,
     /// What was typed to filter the items.
     pub filter: TextInput,
     /// The lines shown: headings and the items that match the filter.
@@ -182,6 +187,8 @@ pub struct ContextMenu {
     pub at: (u16, u16),
     /// Screen area of the lines, kept by the renderer (mouse).
     pub list: Rect,
+    /// Screen area of the whole box, kept by the renderer (a click there keeps it open).
+    pub area: Rect,
     /// The open submenu, which has the keys.
     pub sub: Option<SubMenu>,
 }
@@ -229,8 +236,10 @@ impl ContextMenu {
     }
 }
 
-/// How well `query` matches one of `texts`: 0 when one starts with it, 1 when a word of one
-/// does, 2 when one has its letters in order (case ignored); `None` otherwise.
+/// How well `query` matches the label shown, `texts[0]`, or one of the other `texts` (its English
+/// label, its id): 0 when the label starts with it, 1 when a word of the label does, 2 when the
+/// label has its letters in order (case ignored); 3 to 5 the same for another text, which ranks
+/// below anything the label matches; `None` when nothing matches.
 fn rank(query: &str, texts: &[&str]) -> Option<u8> {
     let q = query.trim().to_lowercase();
     if q.is_empty() {
@@ -238,16 +247,19 @@ fn rank(query: &str, texts: &[&str]) -> Option<u8> {
     }
     texts
         .iter()
-        .filter_map(|t| {
+        .enumerate()
+        .filter_map(|(i, t)| {
+            let below = if i == 0 { 0 } else { 3 };
             let t = t.to_lowercase();
             let word_start = |i: usize| i == 0 || t[..i].chars().next_back().is_some_and(|c| !c.is_alphanumeric());
-            if t.starts_with(&q) {
+            let r = if t.starts_with(&q) {
                 Some(0)
             } else if t.match_indices(&q).any(|(i, _)| word_start(i)) {
                 Some(1)
             } else {
                 action::fuzzy_score(&q, &t).map(|_| 2)
-            }
+            };
+            r.map(|r| r + below)
         })
         .min()
 }
@@ -383,8 +395,8 @@ impl App {
         match like {
             MenuTarget::Explorer(..) => {
                 let row = self.explorer_row().filter(|_| self.focus == Focus::Tree)?;
-                let text = crate::widgets::explorer::row_name(self, &row);
-                Some(MenuTarget::Explorer(row, text))
+                let key = crate::widgets::explorer::row_key(self, &row);
+                Some(MenuTarget::Explorer(row, key))
             }
             MenuTarget::Grid { .. } => self.grid_target(),
             MenuTarget::Editor { .. } => self.editor_target(),
@@ -399,7 +411,8 @@ impl App {
             return None;
         }
         let t = self.tab();
-        let rows = matches!(&t.results, Results::Rows(rs) if !rs.rows.is_empty());
+        // The Messages of a run hide the grid: no cell to act on then.
+        let rows = t.exec.view == ResultView::Rows && matches!(&t.results, Results::Rows(rs) if !rs.rows.is_empty());
         Some(MenuTarget::Grid {
             tab: t.id,
             binding: t.binding,
@@ -435,6 +448,20 @@ impl App {
 
     /// Open a menu of `own` and `pane` items for `target` at `at` (nothing when both are empty).
     fn push_menu(&mut self, ctx: Ctx, target: MenuTarget, own: Vec<MenuItem>, pane: Vec<MenuItem>, at: (u16, u16)) {
+        self.push_menu_from(self.focus, ctx, target, own, pane, at);
+    }
+
+    /// [`App::push_menu`], giving the focus back to `back` when it closes without running
+    /// anything.
+    fn push_menu_from(
+        &mut self,
+        back: Focus,
+        ctx: Ctx,
+        target: MenuTarget,
+        own: Vec<MenuItem>,
+        pane: Vec<MenuItem>,
+        at: (u16, u16),
+    ) {
         if own.is_empty() && pane.is_empty() {
             return;
         }
@@ -443,6 +470,13 @@ impl App {
             t.popup = None;
             t.completion_due = None;
         }
+        let title = match &target {
+            MenuTarget::Explorer(row, _) => crate::widgets::explorer::row_name(self, row),
+            MenuTarget::Tab { tab, .. } => {
+                self.tabs.get(*tab).map(|t| crate::widgets::tabbar::document_name(self, t)).unwrap_or_default()
+            }
+            _ => String::new(),
+        };
         let names = match &target {
             MenuTarget::Explorer(row, _) => own
                 .iter()
@@ -458,12 +492,15 @@ impl App {
             own,
             pane,
             names,
+            title,
+            back,
             filter: TextInput::default(),
             lines: Vec::new(),
             selected: 0,
             scroll: 0,
             at,
             list: Rect::default(),
+            area: Rect::default(),
             sub: None,
         }));
         self.menu_refilter();
@@ -492,9 +529,9 @@ impl App {
         self.explorer.filtering = false;
         let Some(row) = self.explorer_row() else { return };
         let (own, pane) = self.explorer_sections(&row);
-        let text = crate::widgets::explorer::row_name(self, &row);
+        let key = crate::widgets::explorer::row_key(self, &row);
         let items = |v: Vec<Action>| v.into_iter().map(MenuItem::Action).collect();
-        self.push_menu(Ctx::Explorer, MenuTarget::Explorer(row, text), items(own), items(pane), at);
+        self.push_menu(Ctx::Explorer, MenuTarget::Explorer(row, key), items(own), items(pane), at);
     }
 
     /// `explorer.context_menu`, or the action menu in the explorer: the menu next to the
@@ -512,7 +549,7 @@ impl App {
     pub(super) fn open_grid_menu(&mut self, x: u16, y: u16) {
         self.focus = Focus::Results;
         let t = self.tabs.active_mut();
-        if let Results::Rows(rs) = &t.results {
+        if let (ResultView::Rows, Results::Rows(rs)) = (t.exec.view, &t.results) {
             let (total, ncols) = (rs.rows.len(), rs.columns.len());
             let on_range = t.grid.cell_at(x, y, total).is_some_and(|c| t.grid.in_range(c, total, ncols));
             if !on_range && t.grid.click(x, y, rs.rows.len()) {
@@ -524,6 +561,9 @@ impl App {
 
     /// The results' menu: the selected cell's or range's actions, then the pane's.
     fn open_results_menu(&mut self, at: (u16, u16)) {
+        // The grid's actions are the grid's: from the inspector the focus goes there, and back
+        // when the menu closes without running anything.
+        let back = self.focus;
         self.focus = Focus::Results;
         let Some(target) = self.grid_target() else { return };
         let rows = matches!(&target, MenuTarget::Grid { cell: Some(_), .. });
@@ -537,7 +577,10 @@ impl App {
             }
         }
         pane.extend(self.available(RESULTS_MENU));
-        self.push_menu(Ctx::Grid, target, own, pane, at);
+        self.push_menu_from(back, Ctx::Grid, target, own, pane, at);
+        if !self.overlays.is_open(OverlayKind::ContextMenu) {
+            self.focus = back;
+        }
     }
 
     /// The results' menu next to the grid's selected cell (the grid's corner without one).
@@ -717,6 +760,14 @@ impl App {
         m.sub = Some(SubMenu { scope, items, selected: 0, list: Rect::default() });
     }
 
+    /// Close the menu without running anything: the focus goes back where it was.
+    fn menu_dismiss(&mut self) {
+        if let Some(m) = self.overlays.menu() {
+            self.focus = m.back;
+        }
+        self.overlays.close(OverlayKind::ContextMenu);
+    }
+
     /// Whether what the menu was opened on is still what it was.
     fn menu_current(&self) -> bool {
         self.overlays.menu().is_some_and(|m| self.menu_target_now(&m.target).as_ref() == Some(&m.target))
@@ -726,7 +777,7 @@ impl App {
     /// what the menu was opened on has changed since: that is said, and the menu closes.
     fn menu_run(&mut self, item: MenuItem) {
         if !matches!(item, MenuItem::Scope(_)) && !self.menu_current() {
-            self.overlays.close(OverlayKind::ContextMenu);
+            self.menu_dismiss();
             return self.flash(Notice::new(Label::MenuStale, Level::Warning));
         }
         match item {
@@ -770,15 +821,20 @@ impl App {
                 KeyCode::Up | KeyCode::BackTab if plain => sub.selected = (sub.selected + n - 1) % n,
                 KeyCode::Char('p') if ctrl => sub.selected = (sub.selected + n - 1) % n,
                 _ if repeat => {}
-                KeyCode::Esc | KeyCode::Left => m.sub = None,
-                KeyCode::Enter | KeyCode::Right => {
+                KeyCode::Esc | KeyCode::Left if k.mods.is_empty() => m.sub = None,
+                KeyCode::Enter | KeyCode::Right if k.mods.is_empty() => {
                     let item = sub.items[sub.selected.min(sub.items.len() - 1)];
                     self.menu_run(item);
                 }
-                // A format's key (as after `Space r y`).
+                // A format's key (as after `Space r y`); Hangul typed with a Korean input source
+                // is the QWERTY key at its place, as outside the menu.
                 KeyCode::Char(c) if plain => {
+                    let key = match crate::input::hangul::keys(c).as_deref() {
+                        Some([k]) => *k,
+                        _ => c,
+                    };
                     if let Some(item) =
-                        sub.items.iter().copied().find(|i| matches!(i, MenuItem::Copy(_, f) if f.key() == c))
+                        sub.items.iter().copied().find(|i| matches!(i, MenuItem::Copy(_, f) if f.key() == key))
                     {
                         self.menu_run(item);
                     }
@@ -793,9 +849,10 @@ impl App {
             KeyCode::Up if k.mods.is_empty() => m.step(-1),
             KeyCode::BackTab => m.step(-1),
             KeyCode::Char('p') if ctrl => m.step(-1),
-            KeyCode::Esc | KeyCode::Enter if repeat => {}
-            KeyCode::Esc => self.overlays.close(OverlayKind::ContextMenu),
-            KeyCode::Enter => {
+            // With a modifier (`Ctrl+Enter`) they are the keys of items, below.
+            KeyCode::Esc | KeyCode::Enter if repeat && k.mods.is_empty() => {}
+            KeyCode::Esc if k.mods.is_empty() => self.menu_dismiss(),
+            KeyCode::Enter if k.mods.is_empty() => {
                 if let Some(item) = m.selected_item() {
                     self.menu_run(item);
                 }
@@ -811,12 +868,17 @@ impl App {
             _ => match m.filter.handle_key(&k.to_event()) {
                 InputResult::Changed => self.menu_refilter(),
                 InputResult::Moved => {}
-                // Not text: a key shown next to an item runs it.
+                // Not text: the key shown next to an item of the menu (filtered out or not) or of the
+                // actions listed runs it.
                 _ if repeat => {}
                 _ => {
                     let ctx = m.ctx;
+                    let item = |a: Action| {
+                        let it = MenuItem::Action(a);
+                        m.own.contains(&it) || m.pane.contains(&it) || m.lines.contains(&MenuLine::Item(it))
+                    };
                     if let (Some(Target::Action(a)), _) = self.keymap.resolve_seq(ctx, &[k])
-                        && self.overlays.menu().is_some_and(|m| m.lines.contains(&MenuLine::Item(MenuItem::Action(a))))
+                        && item(a)
                     {
                         self.menu_run(MenuItem::Action(a));
                     }
@@ -840,8 +902,8 @@ impl App {
     }
 
     /// Mouse while the menu is open: a click on an item runs it (on a scope: opens its
-    /// formats), on a heading does nothing, anywhere else closes it; the wheel moves the
-    /// selection.
+    /// formats), elsewhere in the box (a heading, the filter, the border) does nothing, outside
+    /// it closes it; the wheel moves the selection.
     pub(super) fn menu_mouse(&mut self, ev: MouseEvent) {
         let Some(m) = self.overlays.menu_mut() else { return };
         let at = ratatui::layout::Position::new(ev.column, ev.row);
@@ -870,8 +932,8 @@ impl App {
                         m.sub = None;
                         self.menu_run(item);
                     }
-                } else {
-                    self.overlays.close(OverlayKind::ContextMenu);
+                } else if !m.area.contains(at) {
+                    self.menu_dismiss();
                 }
             }
             _ => {}
@@ -936,7 +998,9 @@ impl App {
     fn menu_heading(&self, m: &ContextMenu, h: Heading) -> Localized {
         match (h, &m.target) {
             (Heading::AllActions, _) => self.i18n.label(Label::MenuHeadingAllActions),
-            (Heading::Target, MenuTarget::Explorer(_, text)) => Localized::verbatim(text.clone()),
+            (Heading::Target, MenuTarget::Explorer(..) | MenuTarget::Tab { .. }) => {
+                Localized::verbatim(m.title.clone())
+            }
             (Heading::Target, MenuTarget::Grid { range: Some(_), .. }) => self.i18n.label(Label::MenuHeadingSelection),
             (Heading::Target, MenuTarget::Grid { cell: Some((row, col)), .. }) => {
                 let column = match &self.tab().results {
@@ -949,9 +1013,6 @@ impl App {
                 self.i18n.label(Label::MenuHeadingSelection)
             }
             (Heading::Target, MenuTarget::Editor { .. }) => self.i18n.label(Label::MenuHeadingStatement),
-            (Heading::Target, MenuTarget::Tab { tab, .. }) => Localized::verbatim(
-                self.tabs.get(*tab).map(|t| crate::widgets::tabbar::document_name(self, t)).unwrap_or_default(),
-            ),
             (Heading::Target, _) => self.i18n.label(Label::AppTitle),
             (Heading::Pane, MenuTarget::Explorer(..)) => self.i18n.label(Label::PaneTreeTitle),
             (Heading::Pane, MenuTarget::Grid { .. }) => self.i18n.label(Label::PaneResultsTitle),
@@ -1020,6 +1081,8 @@ mod tests {
         assert_eq!(rank("ell", &["Copy the cell"]), Some(2), "inside a word: letters in order");
         assert_eq!(rank("xyz", &["Copy the cell"]), None);
         assert_eq!(rank("", &["anything"]), Some(0));
-        assert_eq!(rank("grid.c", &["View cell", "grid.copy_cell"]), Some(0), "the best of the texts");
+        assert_eq!(rank("grid.c", &["View cell", "grid.copy_cell"]), Some(3), "another text: below the label");
+        assert_eq!(rank("t", &["Close tab", "Close tab", "tab.close"]), Some(1), "the label's word first");
+        assert_eq!(rank("xyz", &["Copy", "xyz.copy"]), Some(3));
     }
 }

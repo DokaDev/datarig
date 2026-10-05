@@ -413,3 +413,198 @@ fn snapshots_of_the_menus() {
     h.keys(" tm");
     insta::assert_snapshot!("action_menu_tab_en_120x34", h.draw(120, 34).backend());
 }
+
+/// A profile's menu while it connects: its mark and spinner change, the profile does not, so
+/// its items run (Disconnect is how a hanging attempt is stopped).
+#[test]
+fn a_profiles_menu_runs_while_its_spinner_turns() {
+    use datarig_tui::app::NodeState;
+    let mut h = Harness::new(Lang::En);
+    let id = h.app.profiles.iter().find(|p| p.name == "local-pg").unwrap().id;
+    h.explore("local-pg");
+    h.key(KeyCode::Enter);
+    assert_eq!(h.app.conns.state(id), NodeState::Connecting);
+    h.draw(120, 30);
+    h.keys("  ");
+    h.advance(Duration::from_millis(450));
+    h.draw(120, 30);
+    h.menu_pick("Disconnect");
+    assert_eq!(h.app.conns.state(id), NodeState::Disconnected, "{}", h.status(120, 30));
+    // A connect that finishes while the menu is open changes nothing either.
+    h.key(KeyCode::Enter);
+    h.keys("  ");
+    h.db(DbEvent::Connected);
+    h.menu_pick("Test connection");
+    assert!(!h.status(120, 30).contains("Not run"), "{}", h.status(120, 30));
+}
+
+/// The results pane showing a run's Messages: the menu has no cell items (the grid is hidden),
+/// and a right click there leaves the hidden grid's selection alone.
+#[test]
+fn the_messages_view_has_no_cell_items() {
+    let mut h = with_edge_results(Lang::En);
+    h.key(KeyCode::Tab);
+    h.keys("jl");
+    h.keys("L");
+    assert_eq!(h.app.tab().exec.view, datarig_tui::app::tabs::ResultView::Messages);
+    h.draw(120, 34);
+    h.keys("  ");
+    assert!(menu_open(&h));
+    let shown = lines(&h);
+    assert!(!ids(&h).contains(&"grid.view_cell") && !shown.iter().any(|l| l.starts_with("# Cell")), "{shown:?}");
+    assert!(ids(&h).contains(&"results.tab.prev"), "{shown:?}");
+    h.key(KeyCode::Esc);
+    let r = h.app.layout.results;
+    h.mouse(MouseEventKind::Down(MouseButton::Right), r.x + 10, r.y + 4);
+    assert_eq!((h.app.tab().grid.row, h.app.tab().grid.col), (1, 1), "the hidden grid's cell stays");
+}
+
+/// `Ctrl+Enter` (the kitty keyboard protocol) is the key shown next to "Run statement": it runs
+/// that, not the item selected.
+#[test]
+fn a_modified_enter_runs_the_item_whose_key_it_is() {
+    let mut h = Harness::connected(Lang::En);
+    h.app.enhanced_keys = true;
+    h.draw(120, 30);
+    h.keys("  ");
+    assert!(lines(&h).iter().any(|l| l.starts_with("Run statement") && l.ends_with("Ctrl+Enter")));
+    h.type_text("fo");
+    assert!(selected(&h).starts_with("Format"));
+    let text = h.app.tab().editor.text();
+    h.sent();
+    h.key_mod(KeyCode::Enter, KeyModifiers::CONTROL);
+    assert!(matches!(&h.sent()[..], [DbCommand::Execute { .. }]), "run");
+    assert_eq!(h.app.tab().editor.text(), text, "not formatted");
+}
+
+/// The copy formats' letters typed with a Korean input source are the QWERTY keys at their
+/// places, as they are outside the menu.
+#[test]
+fn the_copy_formats_take_hangul_as_their_keys() {
+    let mut h = with_edge_results(Lang::En);
+    let clip = FakeClipboard::attach(&mut h, false, &[]);
+    h.key(KeyCode::Tab);
+    h.draw(160, 45);
+    h.keys("  ");
+    (0..4).for_each(|_| h.key(KeyCode::Down));
+    assert_eq!(selected(&h), "Copy selection ▸");
+    h.key(KeyCode::Enter);
+    assert!(h.app.overlays.menu().unwrap().sub.is_some());
+    // The jamo on the `j` key: JSON.
+    h.type_text("\u{3153}");
+    assert!(!menu_open(&h));
+    assert!(clip.last().is_some_and(|t| t.starts_with('[')), "{:?}", clip.last());
+}
+
+/// From the inspector the menu is the grid's; closed without running anything, the focus is
+/// the inspector's again.
+#[test]
+fn the_inspector_keeps_the_focus_after_the_menu() {
+    let mut h = with_edge_results(Lang::En);
+    h.key(KeyCode::Tab);
+    h.draw(160, 45);
+    h.app.focus = Focus::Inspector;
+    h.keys("  ");
+    assert!(menu_open(&h));
+    h.key(KeyCode::Esc);
+    assert_eq!(h.app.focus, Focus::Inspector);
+}
+
+/// What the filter matches in the label shown ranks above what it matches only in an action's
+/// id: `f` selects the first label with a word that starts with it, not "New folder" (whose id,
+/// `folder.new`, starts with it).
+#[test]
+fn the_label_shown_ranks_above_the_id() {
+    let mut h = Harness::connected(Lang::En);
+    h.explore("local-pg");
+    h.keys("  ");
+    h.type_text("f");
+    assert_eq!(selected(&h), "Move connection profile to a folder");
+}
+
+/// Scrolled back to a section's first item, its heading is on screen too.
+#[test]
+fn a_scrolled_menu_shows_the_heading_of_the_first_item() {
+    let mut h = with_edge_results(Lang::En);
+    h.key(KeyCode::Tab);
+    h.draw(120, 24);
+    h.keys("  ");
+    // No item of the grid's menu matches: every copy action, more than fit.
+    h.type_text("results.copy");
+    h.draw(120, 24);
+    assert_eq!(lines(&h)[0], "# All actions");
+    h.key(KeyCode::Up);
+    h.draw(120, 24);
+    assert!(h.app.overlays.menu().unwrap().scroll > 0, "the last item is far down");
+    h.key(KeyCode::Down);
+    let screen = h.screen(120, 24);
+    assert_eq!(h.app.overlays.menu().unwrap().scroll, 0);
+    assert!(screen.contains("All actions"), "{screen}");
+}
+
+/// A click in the box that is not on an item (the filter, a heading, the border) keeps the menu.
+#[test]
+fn a_click_on_the_filter_keeps_the_menu() {
+    let mut h = Harness::connected(Lang::En);
+    h.explore("local-pg");
+    h.draw(120, 30);
+    h.keys("  ");
+    h.draw(120, 30);
+    let list = h.app.overlays.menu().unwrap().list;
+    // The filter's row, the left border, the top border, a heading.
+    for (x, y) in [(list.x + 3, list.y - 1), (list.x - 1, list.y + 2), (list.x + 3, list.y - 2), (list.x + 3, list.y)] {
+        h.mouse(MouseEventKind::Down(MouseButton::Left), x, y);
+        assert!(menu_open(&h), "({x}, {y})");
+    }
+    h.mouse(MouseEventKind::Down(MouseButton::Left), list.x + list.width + 3, list.y + 1);
+    assert!(!menu_open(&h), "outside: closed");
+}
+
+/// The copy formats of a menu whose result was replaced since copy nothing.
+#[test]
+fn the_formats_of_a_stale_menu_copy_nothing() {
+    let mut h = with_edge_results(Lang::En);
+    let clip = FakeClipboard::attach(&mut h, false, &[]);
+    h.ctrl('e');
+    let id = h.app.tab().exec.query_id;
+    h.key(KeyCode::Tab);
+    h.keys("jjl");
+    h.keys("  ");
+    (0..4).for_each(|_| h.key(KeyCode::Down));
+    h.key(KeyCode::Enter);
+    let (cols, rows) = edge_rows();
+    h.db(DbEvent::Page { id, columns: Some(cols), rows, more: false, elapsed: Duration::from_millis(3) });
+    h.keys("c");
+    assert!(clip.last().is_none(), "nothing copied");
+    assert!(!menu_open(&h));
+    assert!(h.status(160, 45).contains("Not run"));
+}
+
+/// An editor menu whose text changed since runs nothing; a key bound in the pane but not shown
+/// in the menu does nothing.
+#[test]
+fn an_editor_menu_whose_text_changed_runs_nothing() {
+    let mut h = Harness::connected(Lang::En);
+    h.keys("  ");
+    // Ctrl+O (quick connect) is not in the menu: nothing.
+    h.ctrl('o');
+    assert!(menu_open(&h));
+    assert!(h.app.tab_mut().editor.replace_text("SELECT 2;"));
+    h.sent();
+    h.key(KeyCode::Enter);
+    assert!(h.sent().is_empty(), "not run");
+    assert!(h.status(120, 30).contains("Not run"));
+}
+
+/// A tab menu whose tab is not the active one any more runs nothing on the active one.
+#[test]
+fn a_tab_menu_of_another_tab_closes_nothing() {
+    let mut h = Harness::connected(Lang::En);
+    h.ctrl('t');
+    h.draw(120, 30);
+    h.keys(" tm");
+    h.app.dispatch(datarig_tui::app::action::Action::PrevTab);
+    let tabs = h.app.tabs.len();
+    h.key(KeyCode::Enter);
+    assert_eq!(h.app.tabs.len(), tabs, "no tab closed");
+}
