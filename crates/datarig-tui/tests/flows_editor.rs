@@ -773,3 +773,20 @@ fn format_refuses_a_selection_inside_a_token() {
     h.keys("ef");
     assert_eq!(h.app.tab().editor.text(), "select\n    1,\n    2");
 }
+
+/// `[editor] auto_pairs` (off by default, `:set editor.auto_pairs=on`): brackets and quotes
+/// typed in Insert mode close themselves; a paste never does.
+#[test]
+fn auto_pairs_follow_the_setting() {
+    let mut h = editor_with("");
+    h.keys("icount(");
+    assert_eq!(h.app.tab().editor.text(), "count(", "off by default");
+    h.key(KeyCode::Esc);
+    h.keys("dd");
+    h.command("set editor.auto_pairs=on");
+    h.keys("iselect count(*");
+    h.keys(") from \"t");
+    assert_eq!(h.app.tab().editor.text(), "select count(*) from \"t\"");
+    h.app.handle_event(Event::Paste(" where f('x".into()));
+    assert_eq!(h.app.tab().editor.text(), "select count(*) from \"t where f('x\"", "a paste is not paired");
+}

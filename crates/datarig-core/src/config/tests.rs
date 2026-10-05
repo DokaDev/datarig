@@ -572,6 +572,7 @@ fn step_2_settings_are_read_checked_and_saved_only_when_set() {
             editor_clipboard: EditorClipboard::On,
             format_case: KeywordCase::Preserve,
             format_indent: FormatIndent::Four,
+            auto_pairs: AutoPairs::Off,
         }
     );
     assert_eq!(parse("osc52_max_bytes = 5000\n").unwrap().prefs.osc52_max_bytes, 5000);
@@ -643,6 +644,16 @@ fn formatter_settings() {
         );
     }
     assert!(parse("[editor]\nformat_indent = \"2\"\n").is_err(), "a number, not a string");
+    assert_eq!(parse("[editor]\nauto_pairs = \"on\"\n").unwrap().prefs.auto_pairs, AutoPairs::On);
+    assert_eq!(
+        parse("[editor]\nauto_pairs = \"yes\"\n").unwrap_err(),
+        ConfigError::Value {
+            key: "editor.auto_pairs".into(),
+            value: "yes".into(),
+            profile: None,
+            allowed: Some("off, on")
+        }
+    );
     let path = temp_file("format");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, "").unwrap();

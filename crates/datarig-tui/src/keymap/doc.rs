@@ -85,7 +85,11 @@ pub fn render() -> String {
          every line of the block); `.` repeats a block operator on a block of the same size from the \
          cursor (after `p` only the delete); a paste from the terminal replaces the block; in Insert \
          mode `Ctrl+W` (the word before the cursor), `Ctrl+U` (the line before the cursor), `Ctrl+R \
-         {register}` (its text) and `Enter` keeping the indent. One command is one undo step. Registers as in Vim: `\"x` before a \
+         {register}` (its text) and `Enter` keeping the indent; with `[editor] auto_pairs = \"on\"` (off \
+         by default, as Vim types) `( [ { ' \" `` ` `` also put their closing character after the \
+         cursor, typing it there steps over it and `Backspace` deletes the empty pair (only pairs it \
+         put in; never inside strings, quoted names, comments or dollar bodies, before a word, or \
+         for a paste; `.` repeats what it did). One command is one undo step. Registers as in Vim: `\"x` before a \
          command in Normal and Visual mode (`\"ayy`, `2\"ap`), the unnamed one, `\"a`-`\"z` (`\"A`-`\"Z` \
          append), `\"0` (the last yank), `\"1`-`\"9` (the last deletes of lines; `.` after `\"1p` puts \
          `\"2`), `\"-` (small deletes), `\"_` (nothing kept), `\".` (the text last typed in Insert mode), `\"/` \

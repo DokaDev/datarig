@@ -85,7 +85,8 @@ fn setting_action(s: Setting) -> Option<Action> {
         | Setting::CursorShape(_)
         | Setting::EditorClipboard(_)
         | Setting::FormatCase(_)
-        | Setting::FormatIndent(_) => None,
+        | Setting::FormatIndent(_)
+        | Setting::AutoPairs(_) => None,
     }
 }
 
@@ -757,6 +758,7 @@ impl App {
             Setting::EditorClipboard(c) => self.set_prefs(s, |x| x.editor_clipboard = c),
             Setting::FormatCase(c) => self.set_prefs(s, |x| x.format_case = c),
             Setting::FormatIndent(i) => self.set_prefs(s, |x| x.format_indent = i),
+            Setting::AutoPairs(a) => self.set_prefs(s, |x| x.auto_pairs = a),
         }
     }
 

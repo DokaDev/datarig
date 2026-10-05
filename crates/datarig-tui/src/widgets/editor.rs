@@ -23,7 +23,8 @@
 //!   indent), `scroll` the scrolling keys.
 //! * `visual` is Visual mode by character (`v`) or by line (`V`), `block` by block
 //!   (`Ctrl+V`): a rectangle of screen columns and the operators on it.
-//! * `insert` is Insert mode, with autoindent, `Ctrl+W` / `Ctrl+U` and `Ctrl+R {register}`.
+//! * `insert` is Insert mode, with autoindent, `Ctrl+W` / `Ctrl+U` and `Ctrl+R {register}`;
+//!   `pairs` the closing brackets and quotes it may add (`[editor] auto_pairs`).
 //! * `registers` holds what yanks and deletes wrote, as Vim's registers do.
 //! * `repeat` records the last change for `.`.
 //! * `marks` keeps the marks (`m`, `'`, `` ` ``) on their lines through the edits;
@@ -46,6 +47,7 @@ mod insert;
 mod lexing;
 mod marks;
 mod motion;
+mod pairs;
 mod registers;
 mod render;
 mod repeat;
@@ -191,6 +193,12 @@ pub struct Editor {
     valid: usize,
     /// Lines searched first around the cursor (smaller in tests).
     region: usize,
+    /// `[editor] auto_pairs`: brackets and quotes typed in Insert mode get their closing
+    /// character (`pairs`).
+    pub auto_pairs: bool,
+    /// The closing characters auto-pairs put in during this Insert session, last on top: their
+    /// line and bytes from the line's end.
+    pairs: Vec<(usize, usize, char)>,
 }
 
 impl Editor {
@@ -251,6 +259,8 @@ impl Editor {
             states: Vec::new(),
             valid: 0,
             region: REGION_LINES,
+            auto_pairs: false,
+            pairs: Vec::new(),
         }
     }
 
@@ -444,6 +454,7 @@ impl Editor {
             Mode::Insert => {
                 self.ai_row = None;
                 self.ins_reg = false;
+                self.pairs_shift(self.row, norm.matches('\n').count() as isize);
                 self.insert_at_cursor(&norm);
                 self.ins_text.push_str(&norm);
                 self.rec.paste(&norm);

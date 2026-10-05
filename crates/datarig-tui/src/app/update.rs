@@ -381,7 +381,9 @@ impl App {
             let text = self.editor_clipboard_text();
             self.tab_mut().editor.set_clipboard_text(text.as_deref());
         }
+        let pairs = self.prefs.auto_pairs == datarig_core::config::AutoPairs::On;
         let t = self.tabs.active_mut();
+        t.editor.auto_pairs = pairs;
         let ev = t.editor.handle_key(key);
         let problem = t.editor.take_register_problem();
         let search = t.editor.take_search_notice();
