@@ -145,27 +145,46 @@ pub(super) fn draw(cx: &Look, p: &mut PlanTab, area: Rect, buf: &mut Buffer) {
         } else {
             line
         };
+        // The frame cell by cell (only what is on screen), the two lines of text inside it by
+        // display width (a wide character takes two columns), each cut to the screen.
+        let text_style = if sel { th.base().patch(super::selected_style(cx)) } else { th.base() };
+        for k in 0..BOX_H {
+            for j in 0..BOX_W {
+                let s = match (k, j) {
+                    (0, 0) => "╭",
+                    (0, j) if j == BOX_W - 1 => "╮",
+                    (k, 0) if k == BOX_H - 1 => "╰",
+                    (k, j) if k == BOX_H - 1 && j == BOX_W - 1 => "╯",
+                    (0, _) => "─",
+                    (k, _) if k == BOX_H - 1 => "─",
+                    (_, 0) => "│",
+                    (_, j) if j == BOX_W - 1 => "│",
+                    _ => " ",
+                };
+                let style = if s == " " { text_style } else { frame };
+                put_at(buf, x + j, y + k, s, style);
+            }
+        }
         let inner = BOX_W - 2;
-        let label = plan.label(i);
         let numbers = format!("{} · {}", fmt_weight(&plan, plan.weight(i)), fmt_share(share));
         let marks: String = markers(cx, &plan, i).into_iter().map(|(t, _)| format!(" {t}")).collect();
-        let rows = [
-            format!("╭{}╮", "─".repeat(inner)),
-            format!("│{}│", crate::text::fit(&label, inner, crate::text::Align::Left)),
-            format!("│{}│", crate::text::fit(&format!("{numbers}{marks}"), inner, crate::text::Align::Left)),
-            format!("╰{}╯", "─".repeat(inner)),
+        let lines = [
+            (plan.label(i), text_style),
+            (format!("{numbers}{marks}"), text_style.patch(super::on_line(cx, heat(th, share), sel))),
         ];
-        let text_style = if sel { th.base().patch(super::selected_style(cx)) } else { th.base() };
-        for (k, r) in rows.iter().enumerate() {
-            for (j, ch) in r.chars().enumerate() {
-                let edge = k == 0 || k == rows.len() - 1 || j == 0 || j + 1 == r.chars().count();
-                let style = if edge { frame } else { text_style };
-                let style = match (k, edge) {
-                    (2, false) => style.patch(super::on_line(cx, heat(th, share), sel)),
-                    _ => style,
-                };
-                put_at(buf, x + j, y + k, &ch.to_string(), style);
+        for (k, (t, style)) in lines.iter().enumerate() {
+            let (lx, ly) = (x as isize + 1 - ox, (y + 1 + k) as isize - oy);
+            if ly < 0 || ly >= vh as isize {
+                continue;
             }
+            // Columns of the text hidden at the left of the screen are skipped.
+            let skip = (-lx).max(0) as usize;
+            let room = inner.saturating_sub(skip).min(vw.saturating_sub(lx.max(0) as usize));
+            if room == 0 {
+                continue;
+            }
+            let shown = super::raw::skip_cols(&crate::text::fit(t, inner, crate::text::Align::Left), skip);
+            crate::widgets::put(buf, view.x + 1 + lx.max(0) as u16, view.y + ly as u16, &shown, room, *style);
         }
         // Where the pointer finds it: the part on screen.
         let x0 = sx.max(0) as u16;

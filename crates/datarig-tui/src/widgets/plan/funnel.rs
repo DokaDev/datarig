@@ -65,9 +65,12 @@ pub(super) fn draw(cx: &Look, p: &mut PlanTab, area: Rect, buf: &mut Buffer) {
         let color = if off { th.plan_misestimate } else { Style::new().fg(th.accent) };
         let pad = (band_w - w) / 2;
         put(buf, band_x + pad as u16, y, &"█".repeat(w), w, base.patch(on_line(cx, color, sel)));
-        // The numbers.
+        // The numbers, as far as they fit.
         let mut x = band_x + band_w as u16 + 1;
         let end = area.x + area.width - 1;
+        if x + 7 > end {
+            continue;
+        }
         x += put(buf, x, y, &fit(&fmt_num(r), 7, Align::Right), 7, base);
         if let Some(removed) = n.removed.filter(|r| *r > 0.0) {
             let t = cx.i18n.msg(&Msg::PlanFunnelRemoved { rows: fmt_num(removed) }).to_string();

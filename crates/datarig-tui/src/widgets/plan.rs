@@ -60,30 +60,35 @@ pub(crate) fn draw_plan(app: &mut App, area: Rect, buf: &mut Buffer) {
     // Taken out while it is drawn (it keeps what the frame drew: hits, scroll).
     let Some(mut p) = app.tabs.active_mut().exec.plan.take() else { return };
     let cx = Look { i18n: &app.i18n, th: &th, icons, focused };
+    draw_into(&cx, &mut p, area, buf);
+    app.tabs.active_mut().exec.plan = Some(p);
+}
+
+/// The plan `p` in `area`: the views' line, the view and the detail.
+pub(crate) fn draw_into(cx: &Look, p: &mut PlanTab, area: Rect, buf: &mut Buffer) {
     p.hits.clear();
     p.view_hits.clear();
     if area.height > 0 {
-        view_bar(&cx, &mut p, Rect { height: 1, ..area }, buf);
+        view_bar(cx, p, Rect { height: 1, ..area }, buf);
     }
     let body = Rect { y: area.y + 1, height: area.height.saturating_sub(1), ..area };
-    let (view, side) = split_detail(&p, body);
+    let (view, side) = split_detail(p, body);
     if view.height > 0 && view.width > 0 {
         match p.view {
-            PlanView::Tree => tree::draw(&cx, &mut p, view, false, buf),
-            PlanView::Summary => summary::draw(&cx, &mut p, view, buf),
-            PlanView::Icicle => icicle::draw(&cx, &mut p, view, false, buf),
-            PlanView::Flame => icicle::draw(&cx, &mut p, view, true, buf),
-            PlanView::Timeline => timeline::draw(&cx, &mut p, view, buf),
-            PlanView::Rows => funnel::draw(&cx, &mut p, view, buf),
-            PlanView::Treemap => treemap::draw(&cx, &mut p, view, buf),
-            PlanView::Boxes => boxes::draw(&cx, &mut p, view, buf),
-            PlanView::Raw => raw::draw(&cx, &mut p, view, buf),
+            PlanView::Tree => tree::draw(cx, p, view, false, buf),
+            PlanView::Summary => summary::draw(cx, p, view, buf),
+            PlanView::Icicle => icicle::draw(cx, p, view, false, buf),
+            PlanView::Flame => icicle::draw(cx, p, view, true, buf),
+            PlanView::Timeline => timeline::draw(cx, p, view, buf),
+            PlanView::Rows => funnel::draw(cx, p, view, buf),
+            PlanView::Treemap => treemap::draw(cx, p, view, buf),
+            PlanView::Boxes => boxes::draw(cx, p, view, buf),
+            PlanView::Raw => raw::draw(cx, p, view, buf),
         }
     }
     if let Some((side, beside)) = side {
-        detail::draw(&cx, &p, side, beside, buf);
+        detail::draw(cx, p, side, beside, buf);
     }
-    app.tabs.active_mut().exec.plan = Some(p);
 }
 
 /// Where the view and the detail go: the detail on the right when the pane is wide (`true`),

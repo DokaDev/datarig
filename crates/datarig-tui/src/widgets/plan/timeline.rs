@@ -38,12 +38,14 @@ pub(super) fn draw(cx: &Look, p: &mut PlanTab, area: Rect, buf: &mut Buffer) {
     let legend = cx.i18n.label(if time { Label::PlanTimelineLegend } else { Label::PlanTimelineLegendCost });
     let legend_style = if time { muted } else { Style::new().fg(th.warning).bg(th.bg) };
     put(buf, area.x + 1, area.y, &legend, name_w, legend_style);
-    if axis_w >= 12 {
+    let (mid, end) = (at(max / 2.0), at(max));
+    // `0`, the middle and the end, when they fit apart (a number far larger than a server
+    // writes may not).
+    if axis_w >= 12 && mid.len() + end.len() + 4 <= axis_w {
         put(buf, axis_x, area.y, "0", 1, muted);
-        let mid = at(max / 2.0);
-        put(buf, axis_x + (axis_w / 2) as u16 - (mid.len() / 2) as u16, area.y, &mid, axis_w / 2, muted);
-        let end = at(max);
-        put(buf, axis_x + axis_w as u16 - end.len() as u16, area.y, &end, end.len(), muted);
+        let half = (axis_w / 2).saturating_sub(mid.len() / 2) as u16;
+        put(buf, axis_x + half, area.y, &mid, mid.len(), muted);
+        put(buf, axis_x + (axis_w - end.len()) as u16, area.y, &end, end.len(), muted);
     }
     let rows = Rect { y: area.y + 1, height: area.height - 1, ..area };
     let order = p.visible();

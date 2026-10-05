@@ -137,3 +137,80 @@ fn row_flow_bands_grow_with_the_rows_on_a_log_scale() {
     let (ten, hundred) = (funnel::thickness(10.0, 1e6), funnel::thickness(100.0, 1e6));
     assert!(ten > 0.0 && hundred > ten && hundred < 0.5);
 }
+
+/// Each view at every small size stays inside its area (cells around it untouched) and never
+/// panics, also with numbers far larger than a server writes and wide characters in names.
+#[test]
+fn every_view_stays_inside_its_area_at_every_small_size() {
+    use crate::app::plan::{PlanTab, PlanView};
+    use datarig_core::sql::plan::pg::parse;
+    use ratatui::buffer::Buffer;
+    let json = r#"[{"Plan": {"Node Type": "Hash Join", "Join Type": "Semi", "Startup Cost": 1e20, "Total Cost": 1e40,
+        "Plan Rows": 1e15, "Plan Width": 4, "Actual Startup Time": 0.5, "Actual Total Time": 9e9, "Actual Rows": 3e12,
+        "Actual Loops": 1, "Plans": [
+        {"Node Type": "Seq Scan", "Relation Name": "표시", "Alias": "表", "Parent Relationship": "Outer",
+         "Startup Cost": 0, "Total Cost": 5e39, "Plan Rows": 7, "Plan Width": 4, "Actual Startup Time": 0.1,
+         "Actual Total Time": 4e9, "Actual Rows": 1e12, "Actual Loops": 3, "Rows Removed by Filter": 1e9},
+        {"Node Type": "Seq Scan", "Relation Name": "t", "Parent Relationship": "Inner", "Startup Cost": 0,
+         "Total Cost": 1, "Plan Rows": 1, "Plan Width": 4, "Actual Startup Time": 0, "Actual Total Time": 0,
+         "Actual Rows": 0, "Actual Loops": 0}]}, "Execution Time": 9.1e9}]"#;
+    let th = crate::theme::DARK;
+    let i18n = datarig_core::i18n::I18n::new(datarig_core::i18n::Lang::En);
+    for view in PlanView::ALL {
+        for detail in [false, true] {
+            for w in 0..48u16 {
+                for h in 0..14u16 {
+                    let mut p = PlanTab::new(parse(json).unwrap(), 0, 0, json);
+                    p.view = view;
+                    p.detail = detail;
+                    let outer = Rect { x: 0, y: 0, width: w + 6, height: h + 4 };
+                    let mut buf = Buffer::empty(outer);
+                    for c in buf.content.iter_mut() {
+                        c.set_symbol("X");
+                    }
+                    let area = Rect { x: 3, y: 2, width: w, height: h };
+                    let cx = Look { i18n: &i18n, th: &th, icons: true, focused: true };
+                    draw_into(&cx, &mut p, area, &mut buf);
+                    for y in 0..outer.height {
+                        for x in 0..outer.width {
+                            let inside = x >= area.x && x < area.x + w && y >= area.y && y < area.y + h;
+                            if !inside {
+                                assert_eq!(buf[(x, y)].symbol(), "X", "{view:?} detail {detail} at {w}x{h}: ({x},{y})");
+                            }
+                        }
+                    }
+                    for (r, _) in &p.hits {
+                        assert!(
+                            r.x >= area.x && r.y >= area.y && r.right() <= area.right() && r.bottom() <= area.bottom(),
+                            "{view:?} {w}x{h}: {r:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// A box's right edge stays where it is with wide characters in its name.
+#[test]
+fn boxes_keep_their_edges_with_wide_characters() {
+    use crate::app::plan::{PlanTab, PlanView};
+    use datarig_core::sql::plan::pg::parse;
+    use ratatui::buffer::Buffer;
+    let json = r#"{"Plan": {"Node Type": "Seq Scan", "Relation Name": "주문내역테이블", "Alias": "주", "Startup Cost": 0, "Total Cost": 1, "Plan Rows": 1, "Plan Width": 4}}"#;
+    let mut p = PlanTab::new(parse(json).unwrap(), 0, 0, json);
+    p.view = PlanView::Boxes;
+    let th = crate::theme::DARK;
+    let i18n = datarig_core::i18n::I18n::new(datarig_core::i18n::Lang::En);
+    let cx = Look { i18n: &i18n, th: &th, icons: true, focused: false };
+    let area = Rect { x: 0, y: 0, width: 60, height: 12 };
+    let mut buf = Buffer::empty(area);
+    draw_into(&cx, &mut p, area, &mut buf);
+    let (r, _) = p.hits[0];
+    for y in r.y..r.y + 4 {
+        let right = buf[(r.x + boxes::BOX_W as u16 - 1, y)].symbol().to_string();
+        assert!(["│", "╮", "╯"].contains(&right.as_str()), "line {y}: {right:?}");
+    }
+    let row: String = (r.x..r.x + boxes::BOX_W as u16).map(|x| buf[(x, r.y + 1)].symbol().to_string()).collect();
+    assert!(row.contains('\u{C8FC}'), "{row}");
+}
