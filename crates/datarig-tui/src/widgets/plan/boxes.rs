@@ -168,6 +168,16 @@ pub(super) fn draw(cx: &Look, p: &mut PlanTab, area: Rect, buf: &mut Buffer) {
         let inner = BOX_W - 2;
         let numbers = format!("{} · {}", fmt_weight(&plan, plan.weight(i)), fmt_share(share));
         let marks: String = markers(cx, &plan, i).into_iter().map(|(t, _)| format!(" {t}")).collect();
+        // A subplan's name in its top border (`╭ InitPlan 1 ───╮`).
+        if let Some(sub) = &plan.nodes[i].subplan {
+            let (lx, ly) = (x as isize + 2 - ox, y as isize - oy);
+            if ly >= 0 && (ly as usize) < vh && lx < vw as isize {
+                let skip = (-lx).max(0) as usize;
+                let title = super::raw::skip_cols(&crate::text::clip(&format!(" {sub} "), BOX_W - 4), skip);
+                let room = vw.saturating_sub(lx.max(0) as usize).min(BOX_W - 4);
+                crate::widgets::put(buf, view.x + 1 + lx.max(0) as u16, view.y + ly as u16, &title, room, frame);
+            }
+        }
         let lines = [
             (plan.label(i), text_style),
             (format!("{numbers}{marks}"), text_style.patch(super::on_line(cx, heat(th, share), sel))),

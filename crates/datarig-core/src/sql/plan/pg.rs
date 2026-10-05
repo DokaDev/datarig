@@ -9,8 +9,9 @@
 //! zero. A CTE (an `InitPlan` named `CTE …`) runs inside the CTE scans that read it, not where
 //! it hangs: it is not taken from its parent; its time is taken from those scans instead, in
 //! plan order (which scan ran it is not reported). Another `InitPlan` runs when a node reads its
-//! value, often a scan below its parent: its time is then also inside that scan's, so self times
-//! can add up to a little more than the whole.
+//! value: when the parent's other children already hold its time (a gather evaluates it before
+//! its workers start, a scan's filter reads it), it is taken from the node below that holds it
+//! instead (found down the longest child), so it never counts twice.
 //! By cost, a node's self cost is its total cost less its children's (every child: a parent's
 //! cost includes its subplans').
 
@@ -778,6 +779,49 @@ fn derive(plan: &mut Plan) {
         });
         plan.nodes[i].self_ms = self_ms;
         plan.nodes[i].self_cost = self_cost;
+    }
+    // An InitPlan runs where its value is first needed. When its parent's other children
+    // already hold its time (their totals and its own add up to more than the parent's), it
+    // ran inside one of them (a gather evaluates it before its workers start, a scan's filter
+    // reads it): it is given back to the parent and taken from the node on the way down
+    // (through the child that took longest) whose own time holds it.
+    let initplan = |n: &PlanNode| n.relationship.as_deref() == Some("InitPlan") && !n.elsewhere;
+    for i in 0..len {
+        let n = &plan.nodes[i];
+        let (Some(total), Some(_)) = (n.total_ms, n.self_ms) else { continue };
+        let x: f64 =
+            n.children.iter().filter(|&&c| initplan(&plan.nodes[c])).filter_map(|&c| plan.nodes[c].total_ms).sum();
+        let others: Vec<usize> =
+            n.children.iter().copied().filter(|&c| !initplan(&plan.nodes[c]) && !plan.nodes[c].elsewhere).collect();
+        let rest: f64 = others.iter().filter_map(|&c| plan.nodes[c].total_ms).sum();
+        if x <= 0.0 || rest + x <= total * (1.0 + 1e-9) {
+            continue;
+        }
+        // Down the longest child while it still holds the InitPlan's time.
+        let longest = |at: &[usize]| {
+            at.iter().copied().filter(|&c| plan.nodes[c].total_ms.is_some_and(|t| t >= x)).max_by(|&a, &b| {
+                plan.nodes[a].total_ms.unwrap_or(0.0).total_cmp(&plan.nodes[b].total_ms.unwrap_or(0.0))
+            })
+        };
+        let mut at = longest(&others);
+        let mut found = None;
+        while let Some(c) = at {
+            if plan.nodes[c].self_ms.is_some_and(|s| s >= x) {
+                found = Some(c);
+                break;
+            }
+            let kids: Vec<usize> = plan.nodes[c]
+                .children
+                .iter()
+                .copied()
+                .filter(|&k| !initplan(&plan.nodes[k]) && !plan.nodes[k].elsewhere)
+                .collect();
+            at = longest(&kids);
+        }
+        if let Some(c) = found {
+            plan.nodes[c].self_ms = plan.nodes[c].self_ms.map(|s| s - x);
+            plan.nodes[i].self_ms = Some((total - rest).max(0.0));
+        }
     }
     // A CTE's time is spent in the scans that read it: taken from them, in plan order.
     for c in 0..len {

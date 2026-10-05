@@ -410,3 +410,22 @@ fn the_text_of_a_very_deep_plan_has_a_bounded_indent() {
     assert!(widest < 1000, "{widest}");
     // A plan of a usual depth is written exactly (the fixtures).
 }
+
+/// An InitPlan whose value a parallel part needs runs before the workers start, inside the
+/// gather (captured from PostgreSQL 17 on the test database: `fixtures/pg17/
+/// initplan_parallel.analyze.json`). Its time is taken from the gather, not from the node it
+/// hangs under (whose child's total already holds it): never counted twice.
+#[test]
+fn an_initplan_run_inside_a_child_is_taken_from_where_it_ran() {
+    let plan = parse(&fixture(17, "initplan_parallel.analyze.json")).unwrap();
+    let n = |i: usize| plan.nodes[i].self_ms.unwrap();
+    assert_eq!(plan.nodes[1].subplan.as_deref(), Some("InitPlan 1"));
+    let gm = find(&plan, "Gather Merge");
+    assert!(close(n(0), 669.666 - 669.609), "the root keeps its own time: {}", n(0));
+    assert!(close(n(gm), 669.589 - 445.854 - 208.229), "the gather ran the InitPlan: {}", n(gm));
+    let sum: f64 = (0..plan.nodes.len()).map(n).sum();
+    assert!(close(sum, 669.666), "the parts add up to the whole: {sum}");
+    // An InitPlan its parent itself runs (no child holds its time) is taken from the parent.
+    let plan = parse(&fixture(18, "subplans.analyze.json")).unwrap();
+    assert!(close(plan.nodes[0].self_ms.unwrap(), 80.545 - 0.042 - 0.319 * 250.0));
+}
