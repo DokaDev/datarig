@@ -484,6 +484,10 @@ async fn each_kind_of_object_and_what_is_not_there() {
     assert!(meta.ddl(relation("shop", "users")).await.0.is_ok());
 }
 
+/// Faster than the metadata session's `lock_timeout` (2 s): an answer that waited for a lock
+/// would come only after it (as `Locked`); this one did not wait (machine load allowed for).
+const AT_ONCE: Duration = Duration::from_millis(1900);
+
 /// A DDL never waits on another session, and never makes one wait. Another session's `ACCESS
 /// EXCLUSIVE` lock, held or queued behind a reader, on the object or on a relation reading its
 /// definition would lock (a view's base table, the table a policy's subquery reads, an index's
@@ -575,14 +579,14 @@ async fn a_ddl_never_waits_for_a_lock() {
     for o in locked {
         let (r, took, locks) = ask(&mut meta, o.clone()).await;
         assert_eq!(r, Err(DbError::Locked), "{o:?}");
-        assert!(took < Duration::from_secs(1), "{o:?}: at once: {took:?}");
+        assert!(took < AT_ONCE, "{o:?}: at once: {took:?}");
         assert_eq!(locks, "0", "{o:?}: no lock held or asked for");
     }
     // What does not read the base table answers.
     for o in [function.clone(), relation(&s, "guarded"), relation(&s, "other")] {
         let (r, took, locks) = ask(&mut meta, o.clone()).await;
         assert!(r.is_ok(), "{o:?}: {r:?}");
-        assert!(took < Duration::from_secs(1), "{o:?}: at once: {took:?}");
+        assert!(took < AT_ONCE, "{o:?}: at once: {took:?}");
         assert_eq!(locks, "0", "{o:?}: nothing left held");
     }
     holder.run(vec!["ROLLBACK".into()]).await.unwrap();
@@ -591,7 +595,7 @@ async fn a_ddl_never_waits_for_a_lock() {
     holder.run(vec!["BEGIN".into(), format!("LOCK TABLE {s}.other IN ACCESS EXCLUSIVE MODE")]).await.unwrap();
     let (r, took, locks) = ask(&mut meta, relation(&s, "guarded")).await;
     assert_eq!((r, locks.as_str()), (Err(DbError::Locked), "0"), "the policy's table");
-    assert!(took < Duration::from_secs(1), "at once: {took:?}");
+    assert!(took < AT_ONCE, "at once: {took:?}");
     holder.run(vec!["ROLLBACK".into()]).await.unwrap();
 
     // Held on the view itself (an `ALTER VIEW`).
@@ -622,7 +626,7 @@ async fn a_ddl_never_waits_for_a_lock() {
     for o in [relation(&s, "base"), relation(&s, "v")] {
         let (r, took, locks) = ask(&mut meta, o.clone()).await;
         assert_eq!(r, Err(DbError::Locked), "{o:?}");
-        assert!(took < Duration::from_secs(1), "{o:?}: at once: {took:?}");
+        assert!(took < AT_ONCE, "{o:?}: at once: {took:?}");
         assert_eq!(locks, "0", "{o:?}: not queued behind the waiting lock");
     }
     reader.run(vec!["ROLLBACK".into()]).await.unwrap();
