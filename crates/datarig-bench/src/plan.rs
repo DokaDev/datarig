@@ -128,9 +128,18 @@ pub fn run(joins: usize, partitions: usize, n: usize) -> Result<Value, String> {
     let mut term = apps::terminal();
     let mut views = serde_json::Map::new();
     let (mut all_frames, mut worst_work) = (Vec::new(), 0u64);
-    for (digit, view) in
-        [('1', "tree"), ('2', "summary"), ('3', "icicle"), ('4', "flame"), ('7', "treemap"), ('9', "raw")]
-    {
+    let every = [
+        ('1', "tree"),
+        ('2', "summary"),
+        ('3', "icicle"),
+        ('4', "flame"),
+        ('5', "timeline"),
+        ('6', "rows"),
+        ('7', "treemap"),
+        ('8', "boxes"),
+        ('9', "raw"),
+    ];
+    for (digit, view) in every {
         apps::key(&mut app, KeyCode::Char(digit), KeyModifiers::NONE);
         apps::key(&mut app, KeyCode::Char('g'), KeyModifiers::NONE);
         apps::key(&mut app, KeyCode::Char('g'), KeyModifiers::NONE);

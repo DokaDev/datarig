@@ -27,16 +27,31 @@ pub enum PlanView {
     Icicle,
     /// The icicle upside down: parents at the bottom.
     Flame,
+    /// Each node's time from its start to its first and its last row, on one axis.
+    Timeline,
+    /// The rows each node passed up, as bands as thick as their number (a funnel).
+    Rows,
     /// Rectangles whose area is each node's own time.
     Treemap,
+    /// Boxes joined by lines, a large plan moved around in.
+    Boxes,
     /// The text `psql` shows for `EXPLAIN`, written from the plan.
     Raw,
 }
 
 impl PlanView {
     /// Every view, in the order `v` goes through them.
-    pub const ALL: [PlanView; 6] =
-        [PlanView::Tree, PlanView::Summary, PlanView::Icicle, PlanView::Flame, PlanView::Treemap, PlanView::Raw];
+    pub const ALL: [PlanView; 9] = [
+        PlanView::Tree,
+        PlanView::Summary,
+        PlanView::Icicle,
+        PlanView::Flame,
+        PlanView::Timeline,
+        PlanView::Rows,
+        PlanView::Treemap,
+        PlanView::Boxes,
+        PlanView::Raw,
+    ];
 
     pub fn label(self) -> Label {
         match self {
@@ -44,7 +59,10 @@ impl PlanView {
             PlanView::Summary => Label::PlanViewSummary,
             PlanView::Icicle => Label::PlanViewIcicle,
             PlanView::Flame => Label::PlanViewFlame,
+            PlanView::Timeline => Label::PlanViewTimeline,
+            PlanView::Rows => Label::PlanViewRows,
             PlanView::Treemap => Label::PlanViewTreemap,
+            PlanView::Boxes => Label::PlanViewBoxes,
             PlanView::Raw => Label::PlanViewRaw,
         }
     }
@@ -58,7 +76,7 @@ impl PlanView {
 
     /// The tree's folds apply (the other views show every node).
     pub fn folds(self) -> bool {
-        matches!(self, PlanView::Tree | PlanView::Summary)
+        matches!(self, PlanView::Tree | PlanView::Summary | PlanView::Timeline | PlanView::Rows)
     }
 }
 
@@ -212,7 +230,9 @@ impl PlanTab {
     }
 
     fn act(&mut self, a: PlanAction) {
-        self.detached = false;
+        // A key brings the selection back into view; moving the view sideways keeps it where
+        // it was put.
+        self.detached = matches!(a, PlanAction::PanLeft | PlanAction::PanRight);
         let order = self.visible();
         let at = order.iter().position(|i| *i == self.selected).unwrap_or(0);
         let page = self.page.max(1);
@@ -366,6 +386,7 @@ impl App {
         let Some(p) = self.tab_mut().exec.plan.as_mut() else { return };
         if sideways {
             p.pan = (p.pan as isize + d.signum() * 4).max(0) as usize;
+            p.detached = true;
         } else {
             p.scroll = (p.scroll as isize + d).max(0) as usize;
             p.detached = true;

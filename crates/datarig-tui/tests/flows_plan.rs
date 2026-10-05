@@ -338,9 +338,10 @@ fn views_switch_without_asking_the_server() {
     assert_eq!((h.app.tab().exec.view, plan(&h).view), (ResultView::Plan, PlanView::Tree));
     // A click on a view's name.
     h.draw(160, 45);
-    let (rect, _) = *plan(&h).view_hits.iter().find(|(_, v)| *v == PlanView::Raw).unwrap();
+    let (rect, view) = *plan(&h).view_hits.iter().find(|(_, v)| *v != PlanView::Tree).unwrap();
     h.mouse(MouseEventKind::Down(MouseButton::Left), rect.x + 1, rect.y);
-    assert_eq!(plan(&h).view, PlanView::Raw);
+    assert_eq!(plan(&h).view, view);
+    h.keys("9");
     assert!(h.sent().is_empty(), "nothing was asked of the server");
     // The raw text is the plan's text as psql shows it, built from the JSON.
     let screen = h.screen(160, 45);
@@ -685,4 +686,90 @@ fn the_new_views_select_what_is_clicked() {
             "{key}:\n{screen}"
         );
     }
+}
+
+/// The timeline, row flow and box views of a measured plan and of estimates.
+#[test]
+fn the_timeline_row_flow_and_box_views() {
+    let mut h = shown(18, "subplans.analyze.json");
+    for (key, view, name) in
+        [("5", PlanView::Timeline, "timeline"), ("6", PlanView::Rows, "rows"), ("8", PlanView::Boxes, "boxes")]
+    {
+        h.keys(key);
+        assert_eq!(plan(&h).view, view);
+        insta::assert_snapshot!(format!("plan_{name}_en_160x45"), h.draw(160, 45).backend());
+        insta::assert_snapshot!(format!("plan_{name}_en_80x24"), h.draw(80, 24).backend());
+    }
+    h.keys("5");
+    let screen = h.screen(160, 45);
+    for want in ["░ to the first row · █ to the last · per loop", "80.5 ms", "SubPlan 1: Aggregate", "per loop ×250"]
+    {
+        assert!(screen.contains(want), "{want}:\n{screen}");
+    }
+    h.keys("6");
+    let screen = h.screen(160, 45);
+    for want in ["every loop (log scale)", "50.0k", "−750 filtered"] {
+        assert!(screen.contains(want), "{want}:\n{screen}");
+    }
+    // Estimates: costs on the timeline's axis and estimated rows in the flow, said so.
+    let mut h = shown(17, "join.plan.json");
+    h.keys("5");
+    let screen = h.screen(160, 45);
+    assert!(
+        screen.contains("estimated cost, not time") && screen.contains("4985") && !screen.contains(" ms"),
+        "{screen}"
+    );
+    h.keys("6");
+    let screen = h.screen(160, 45);
+    assert!(screen.contains("Estimated rows per loop (log scale): not measured (no ANALYZE)"), "{screen}");
+    insta::assert_snapshot!("plan_timeline_estimates_en_160x45", h.draw(160, 45).backend());
+}
+
+/// A plan wider than the screen in the box diagram: the view follows the selected box, `<` and
+/// `>` move it sideways (it stays there until a key moves the selection), a click selects.
+#[test]
+fn the_box_diagram_follows_the_selection_and_moves_sideways() {
+    let scan = |p: usize| {
+        format!(
+            r#"{{"Node Type": "Seq Scan", "Relation Name": "events_p{p}", "Alias": "events_p{p}", "Parent Relationship": "Member", "Startup Cost": 0, "Total Cost": 10, "Plan Rows": 100, "Plan Width": 4, "Actual Startup Time": 0.01, "Actual Total Time": {}, "Actual Rows": 100, "Actual Loops": 1}}"#,
+            0.1 + p as f64 / 100.0
+        )
+    };
+    let scans: Vec<String> = (0..40).map(scan).collect();
+    let json = format!(
+        r#"[{{"Plan": {{"Node Type": "Append", "Startup Cost": 0, "Total Cost": 400, "Plan Rows": 4000, "Plan Width": 4, "Actual Startup Time": 0.01, "Actual Total Time": 30.0, "Actual Rows": 4000, "Actual Loops": 1, "Plans": [{}]}}, "Execution Time": 31.0}}]"#,
+        scans.join(",")
+    );
+    let (mut h, id, _) = explain("SELECT * FROM events;", " ea");
+    h.db(plan_page(id, &json));
+    h.app.focus = Focus::Results;
+    h.keys("8");
+    h.draw(160, 45);
+    // The root sits over the middle of its 40 children: the view starts there.
+    let middle = plan(&h).pan;
+    assert!(middle > 0 && plan(&h).hits.iter().any(|(_, i)| *i == 0), "{middle}");
+    h.keys("j");
+    h.draw(160, 45);
+    assert_eq!(plan(&h).pan, 0, "the first child is at the left");
+    h.keys("G");
+    h.draw(160, 45);
+    let last = plan(&h).plan.nodes.len() - 1;
+    assert!(plan(&h).pan > middle, "moved to the last box");
+    assert!(plan(&h).hits.iter().any(|(_, i)| *i == last), "the selected box is on screen");
+    let screen = h.screen(160, 45);
+    assert!(screen.contains("events_p39") || screen.contains("Seq Scan on events_p3"), "{screen}");
+    // Sideways, and it stays there.
+    let pan = plan(&h).pan;
+    h.keys("<<");
+    h.draw(160, 45);
+    assert_eq!(plan(&h).pan, pan - 16);
+    h.draw(160, 45);
+    assert_eq!(plan(&h).pan, pan - 16, "a frame does not move it back");
+    h.keys("k");
+    h.draw(160, 45);
+    assert!(plan(&h).hits.iter().any(|(_, i)| *i == last - 1), "a key brings the selection back into view");
+    // A click on a box selects it.
+    let (rect, i) = plan(&h).hits.iter().copied().find(|(_, i)| *i == 0).unwrap_or(plan(&h).hits[0]);
+    h.mouse(MouseEventKind::Down(MouseButton::Left), rect.x + 2, rect.y + 1);
+    assert_eq!(plan(&h).selected, i);
 }

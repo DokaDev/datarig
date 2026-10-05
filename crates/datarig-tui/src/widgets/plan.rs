@@ -6,10 +6,13 @@
 //! frame ([`work`] counts it), so a plan of hundreds of nodes stays fast. Names too long for
 //! their place are cut with `…`; markers (hot, misestimate) are kept.
 
+mod boxes;
 mod detail;
+mod funnel;
 mod icicle;
 mod raw;
 mod summary;
+mod timeline;
 mod tree;
 mod treemap;
 
@@ -57,27 +60,35 @@ pub(crate) fn draw_plan(app: &mut App, area: Rect, buf: &mut Buffer) {
     // Taken out while it is drawn (it keeps what the frame drew: hits, scroll).
     let Some(mut p) = app.tabs.active_mut().exec.plan.take() else { return };
     let cx = Look { i18n: &app.i18n, th: &th, icons, focused };
+    draw_into(&cx, &mut p, area, buf);
+    app.tabs.active_mut().exec.plan = Some(p);
+}
+
+/// The plan `p` in `area`: the views' line, the view and the detail.
+pub(crate) fn draw_into(cx: &Look, p: &mut PlanTab, area: Rect, buf: &mut Buffer) {
     p.hits.clear();
     p.view_hits.clear();
     if area.height > 0 {
-        view_bar(&cx, &mut p, Rect { height: 1, ..area }, buf);
+        view_bar(cx, p, Rect { height: 1, ..area }, buf);
     }
     let body = Rect { y: area.y + 1, height: area.height.saturating_sub(1), ..area };
-    let (view, side) = split_detail(&p, body);
+    let (view, side) = split_detail(p, body);
     if view.height > 0 && view.width > 0 {
         match p.view {
-            PlanView::Tree => tree::draw(&cx, &mut p, view, false, buf),
-            PlanView::Summary => summary::draw(&cx, &mut p, view, buf),
-            PlanView::Icicle => icicle::draw(&cx, &mut p, view, false, buf),
-            PlanView::Flame => icicle::draw(&cx, &mut p, view, true, buf),
-            PlanView::Treemap => treemap::draw(&cx, &mut p, view, buf),
-            PlanView::Raw => raw::draw(&cx, &mut p, view, buf),
+            PlanView::Tree => tree::draw(cx, p, view, false, buf),
+            PlanView::Summary => summary::draw(cx, p, view, buf),
+            PlanView::Icicle => icicle::draw(cx, p, view, false, buf),
+            PlanView::Flame => icicle::draw(cx, p, view, true, buf),
+            PlanView::Timeline => timeline::draw(cx, p, view, buf),
+            PlanView::Rows => funnel::draw(cx, p, view, buf),
+            PlanView::Treemap => treemap::draw(cx, p, view, buf),
+            PlanView::Boxes => boxes::draw(cx, p, view, buf),
+            PlanView::Raw => raw::draw(cx, p, view, buf),
         }
     }
     if let Some((side, beside)) = side {
-        detail::draw(&cx, &p, side, beside, buf);
+        detail::draw(cx, p, side, beside, buf);
     }
-    app.tabs.active_mut().exec.plan = Some(p);
 }
 
 /// Where the view and the detail go: the detail on the right when the pane is wide (`true`),
@@ -125,28 +136,76 @@ fn view_bar(cx: &Look, p: &mut PlanTab, area: Rect, buf: &mut Buffer) {
         None => note,
     };
     let end = area.x + area.width;
+    // The note on the right comes first (it says whether the numbers are times or costs); the
+    // views' names take the rest: all of them, or the shown one and as many around it as fit,
+    // `…` where some are left out (`v`, the digits, the menu and `:` reach them).
+    let note_w = (width(&note) as u16).min(area.width.saturating_sub(2));
+    let names: Vec<(PlanView, String)> = PlanView::ALL
+        .iter()
+        .map(|v| {
+            let name = cx.i18n.label(v.label()).to_string();
+            (*v, if *v == p.view { format!("[{name}]") } else { format!(" {name} ") })
+        })
+        .collect();
+    let room = area.width.saturating_sub(note_w + 4) as usize;
+    let cost = |shown: &[usize]| -> usize {
+        let gaps = shown.windows(2).filter(|w| w[1] > w[0] + 1).count()
+            + usize::from(shown.first().is_some_and(|f| *f > 0))
+            + usize::from(shown.last().is_some_and(|l| *l + 1 < names.len()));
+        shown.iter().map(|&k| width(&names[k].1) + 1).sum::<usize>() + 2 * gaps
+    };
+    let at = PlanView::ALL.iter().position(|v| *v == p.view).unwrap_or(0);
+    let all: Vec<usize> = (0..names.len()).collect();
+    let shown = if cost(&all) <= room {
+        all
+    } else {
+        let mut shown = vec![at];
+        let (mut left, mut right) = (at.checked_sub(1), (at + 1 < names.len()).then_some(at + 1));
+        while left.is_some() || right.is_some() {
+            for side in [&mut right, &mut left] {
+                let Some(k) = *side else { continue };
+                let mut more = shown.clone();
+                more.push(k);
+                more.sort_unstable();
+                if cost(&more) > room {
+                    *side = None;
+                    continue;
+                }
+                shown = more;
+                *side = if k > at { Some(k + 1).filter(|k| *k < names.len()) } else { k.checked_sub(1) };
+            }
+        }
+        shown
+    };
     let mut x = area.x + 1;
-    let names: Vec<(PlanView, String)> =
-        PlanView::ALL.iter().map(|v| (*v, cx.i18n.label(v.label()).to_string())).collect();
-    for (v, name) in names {
-        let on = v == p.view;
-        let text = if on { format!("[{name}]") } else { format!(" {name} ") };
-        let w = width(&text) as u16;
+    let dim = Style::new().fg(th.fg_dim).bg(th.surface);
+    let mut next = 0;
+    for k in shown {
+        if k > next && x + 2 <= end {
+            put(buf, x, area.y, "…", 1, dim);
+            x += 2;
+        }
+        next = k + 1;
+        let (v, text) = &names[k];
+        let w = width(text) as u16;
         if x + w > end {
             break;
         }
-        let style = if on {
+        let style = if *v == p.view {
             Style::new().fg(th.accent).bg(th.surface).add_modifier(Modifier::BOLD)
         } else {
             Style::new().fg(th.fg_muted).bg(th.surface)
         };
-        put(buf, x, area.y, &text, (end - x) as usize, style);
-        p.view_hits.push((Rect { x, y: area.y, width: w, height: 1 }, v));
+        put(buf, x, area.y, text, (end - x) as usize, style);
+        p.view_hits.push((Rect { x, y: area.y, width: w, height: 1 }, *v));
         x += w + 1;
     }
-    // The note on the right, when there is room after the names.
-    let room = end.saturating_sub(x + 2) as usize;
-    if room >= 8 {
+    if next < names.len() && x + 2 <= end {
+        put(buf, x, area.y, "…", 1, dim);
+        x += 2;
+    }
+    let room = end.saturating_sub(x + 1) as usize;
+    if room >= 4 {
         let t = clip(&note, room);
         let at = end - 1 - width(&t) as u16;
         put(buf, at, area.y, &t, room, note_style);
@@ -182,6 +241,24 @@ pub(crate) fn info_line(cx: &Look, plan: &Plan, i: usize, area: Rect, buf: &mut 
             x += 1 + put(buf, x + 1, area.y, &t, (end - x - 1) as usize, Style::new().bg(th.surface).patch(s));
         }
     }
+}
+
+/// Node `i` named on one line, after its subplan's name when it has one (`SubPlan 1: Aggregate`),
+/// indented by its depth (at most a third of `w`), in `w` columns.
+pub(crate) fn indented_name(plan: &Plan, i: usize, w: usize) -> String {
+    let n = &plan.nodes[i];
+    let indent = " ".repeat((n.depth * 2).min(w / 3));
+    let name = match &n.subplan {
+        Some(sub) => format!("{indent}{sub}: {}", plan.label(i)),
+        None => format!("{indent}{}", plan.label(i)),
+    };
+    crate::text::fit(&name, w, crate::text::Align::Left)
+}
+
+/// The width of the names in the views that list nodes beside a band (timeline, row flow):
+/// two fifths of the view, within limits.
+pub(crate) fn label_column(w: u16) -> usize {
+    (w as usize * 2 / 5).clamp(16, 48).min((w as usize).saturating_sub(12))
 }
 
 /// The color of a share of the whole: hot, warm (a twentieth or more) or cool.

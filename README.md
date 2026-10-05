@@ -206,9 +206,14 @@ Everything below works today, with PostgreSQL.
   views, and the digits pick one: `1` the tree; `2` summary cards (the slowest node and its
   share, the worst row estimate, disk reads and the cache hit ratio, planning and execution
   time) above a compact tree; `3` an icicle and `4` a flame graph (each node as wide as its
-  share of its parent's time); `7` a treemap (area = each node's own time); `9` the plan as
-  `psql` prints it (written from the JSON; nothing is run again). `y`/`Y` copy it as text or
-  JSON.
+  share of its parent's time); `5` a timeline (each node's time to its first and its last row
+  on one axis, per loop; needs `ANALYZE`, else the estimated startup and total cost, said so);
+  `6` the row flow (the rows each node passes up as a band, thick by their number, with the
+  rows its filters removed); `7` a treemap (area = each node's own time); `8` a box diagram
+  (boxes joined by lines; a large plan is moved around in with the selection, `<` `>` and the
+  wheel); `9` the plan as `psql` prints it (written from the JSON; nothing is run again).
+  `y`/`Y` copy it as text or JSON. Large plans stay readable and fast: names are cut, layouts
+  are bounded, and only what is on screen is drawn.
 
 **Safety**
 - Statements are classified with PostgreSQL's own parser (libpg_query), not with a regular
