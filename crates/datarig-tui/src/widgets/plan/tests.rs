@@ -111,3 +111,29 @@ fn icicle_ctes_do_not_shrink_their_siblings() {
         }
     }
 }
+
+#[test]
+fn boxes_put_leaves_side_by_side_and_parents_over_their_middle() {
+    use datarig_core::sql::plan::pg::parse;
+    let leaf = r#"{"Node Type": "Seq Scan"}"#;
+    let json = format!(
+        r#"{{"Plan": {{"Node Type": "Hash Join", "Plans": [{leaf}, {{"Node Type": "Hash", "Plans": [{leaf}, {leaf}]}}]}}}}"#
+    );
+    let plan = parse(&json).unwrap();
+    let at = boxes::layout(&plan);
+    let pitch = boxes::BOX_W + 2;
+    // Nodes: 0 join, 1 scan, 2 hash, 3 scan, 4 scan.
+    assert_eq!(at[1], (0, 6));
+    assert_eq!(at[3], (pitch, 12));
+    assert_eq!(at[4], (2 * pitch, 12));
+    assert_eq!(at[2], ((1.5 * pitch as f64).round() as usize, 6), "over the middle of its children");
+    assert_eq!(at[0].1, 0);
+}
+
+#[test]
+fn row_flow_bands_grow_with_the_rows_on_a_log_scale() {
+    assert_eq!(funnel::thickness(0.0, 1000.0), 0.0);
+    assert_eq!(funnel::thickness(1000.0, 1000.0), 1.0);
+    let (ten, hundred) = (funnel::thickness(10.0, 1e6), funnel::thickness(100.0, 1e6));
+    assert!(ten > 0.0 && hundred > ten && hundred < 0.5);
+}
