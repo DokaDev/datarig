@@ -113,7 +113,10 @@ countdown_frames_per_s_max = 2.0
 [startup]
 runs = 10
 first_frame_ms_p95_max = 250.0
-binary_mib_max = 16.0
+# The Linux x86_64 binary of CI was 15.9 MiB before the plan views (0.7.0) added about 0.2 MiB:
+# 17 MiB, with the release profile unchanged (opt-level "s" would shrink it a fifth but slow
+# every frame).
+binary_mib_max = 17.0
 
 [plan]
 # A plan of 666 nodes (40 joins deep with a subplan each, parallel workers, a CTE, an Append

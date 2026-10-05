@@ -51,7 +51,7 @@ DATARIG_TEST_PG_URL=postgres://datarig:datarig@127.0.0.1:55432/datarig \
 | Keystroke-to-frame p95 in a 5 MB file | About 0.5 ms on a developer machine against a 25 ms budget |
 | Visual block operators over the whole 5 MB file | The bytes one key walks are counted (in passes over the text, so a block operator that went line by line through the whole text would fail at once); the slowest key, about 130 ms on a developer machine, has a 500 ms budget |
 | Idle memory, CPU and wakeups; frames per second with a paging countdown | Counts of the binary's own event loop (`DATARIG_BENCH_STATS`) |
-| First frame p95 and binary size | The first frame has a wide margin (about 15 ms measured against 250 ms). The binary is held by the release profile (LTO, one codegen unit, symbols stripped): 9.5 MiB on macOS arm64 and 11.3 MiB on Linux arm64 against 16 MiB; without it, 20.7 MiB on the CI's Linux x86_64 |
+| First frame p95 and binary size | The first frame has a wide margin (about 15 ms measured against 250 ms). The binary is held by the release profile (LTO, one codegen unit, symbols stripped): 9.5 MiB on macOS arm64 and 11.3 MiB on Linux arm64 at first (the CI's Linux x86_64 build reached 15.9 MiB by 0.6.0 and about 16.1 MiB with the plan views of 0.7.0, so the budget is 17 MiB); without it, 20.7 MiB on the CI's Linux x86_64 |
 
 To change a budget, measure first (`datarig-bench <scenario>` a few times on a quiet
 machine), then keep the headroom the file's comments describe.

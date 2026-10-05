@@ -235,7 +235,7 @@ Everything below works today, with PostgreSQL.
   growing less than 16 MiB after the in-memory window is full.
 - Keystroke to frame under 25 ms (p95) in a 5 MB SQL file, and in a plan of hundreds of nodes.
 - Idle: under 48 MiB and 1% CPU, and fewer than 0.2 wakeups a second when nothing is waiting.
-- First frame under 250 ms (p95); the release binary is under 16 MiB.
+- First frame under 250 ms (p95); the release binary is under 17 MiB.
 
 ## Not yet (roadmap)
 

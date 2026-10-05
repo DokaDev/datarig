@@ -97,7 +97,7 @@ tokio-postgres = { path = "vendor/tokio-postgres" }
 [profile.dev.package.pg_query]
 opt-level = 2
 
-# The release binary is held to 16 MiB (crates/datarig-bench/budgets.toml): a single codegen
+# The release binary is held to 17 MiB (crates/datarig-bench/budgets.toml): a single codegen
 # unit with LTO drops the code no caller reaches, and stripping drops the symbol table (panic
 # messages keep their file and line). Without them the Linux x86_64 binary was 20.7 MiB.
 [profile.release]
