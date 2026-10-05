@@ -116,7 +116,9 @@ macro_rules! stats_bytes {
     };
 }
 
+#[macro_use]
 pub(crate) mod structure;
+pub(crate) mod ddl;
 
 const HIDDEN_SCHEMAS: &str = "n.nspname NOT IN ('pg_catalog', 'information_schema') \
      AND n.nspname NOT LIKE 'pg\\_toast%' AND n.nspname NOT LIKE 'pg\\_temp%'";
@@ -182,6 +184,14 @@ pub(crate) async fn meta_loop(client: Client, mut link: Link, events: UnboundedS
                         Err(e) => Err(e),
                     };
                     DbEvent::Structure { schema, table, result }
+                }
+                DbCommand::LoadDdl { id, object } => {
+                    // It reads the structure's parts (12).
+                    let result = match version.clone().and_then(keys_supported) {
+                        Ok(()) => ddl::load_ddl(&client, &object).await,
+                        Err(e) => Err(e),
+                    };
+                    DbEvent::Ddl { id, result }
                 }
                 // Statements run on a tab's query session, never on the shared metadata one.
                 DbCommand::Execute { id, .. }

@@ -11,6 +11,7 @@
 //!
 //! The tests only read: nothing is created behind the pooler.
 
+use datarig_core::driver::ddl::DdlObject;
 use datarig_core::driver::{ConnectOptions, DbCommand, DbEvent, Driver, Session, SessionContext, SessionRole};
 use datarig_core::profile::ConnectionConfig;
 use datarig_driver_postgres::PgDriver;
@@ -134,6 +135,9 @@ async fn metadata_session_reads_the_catalog_behind_a_pooler() {
     let mut id = 0;
     let DbEvent::Page { rows, .. } = other.run(id, "SHOW jit").await else { panic!() };
     let jit = rows[0][0].clone();
+    id += 1;
+    let DbEvent::Page { rows, .. } = other.run(id, "SHOW search_path").await else { panic!() };
+    let path = rows[0][0].clone();
     for _ in 0..10 {
         let mut c = Conn::open(&url, SessionRole::Meta, true).await;
         let DbEvent::Schemas(schemas) = c.wait(|e| matches!(e, DbEvent::Schemas(_)), 10).await else { panic!() };
@@ -162,6 +166,18 @@ async fn metadata_session_reads_the_catalog_behind_a_pooler() {
             let orders = result.expect("structure");
             assert_eq!(orders.primary_key.map(|k| k.columns), Some(vec!["id".to_string()]));
             assert!(orders.foreign_keys.iter().any(|f| f.ref_table == "users"));
+            // A table's DDL: its lookup and search path are settings of its own transaction.
+            let object = DdlObject::Relation { schema: "shop".into(), name: "orders".into() };
+            c.session.send(DbCommand::LoadDdl { id: 1, object });
+            let DbEvent::Ddl { result, .. } = c.wait(|e| matches!(e, DbEvent::Ddl { .. }), 10).await else { panic!() };
+            assert!(result.is_ok(), "{result:?}");
+            id += 1;
+            let DbEvent::Page { rows, .. } = other.run(id, "SHOW search_path").await else { panic!() };
+            assert_eq!(rows[0][0], path, "nothing left on the server connection");
+            id += 1;
+            let target = "SELECT coalesce(current_setting('datarig.ddl_target', true), '')";
+            let DbEvent::Page { rows, .. } = other.run(id, target).await else { panic!() };
+            assert_eq!(rows[0][0].as_deref(), Some(""), "nothing left on the server connection");
             id += 1;
             let DbEvent::Page { rows, .. } = other.run(id, "SHOW lock_timeout").await else { panic!() };
             assert_eq!(rows[0][0].as_deref(), Some("0"), "nothing left on the server connection");

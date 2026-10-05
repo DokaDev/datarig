@@ -56,6 +56,7 @@ impl Driver for PgDriver {
             key_metadata: true,
             contexts: true,
             structure: true,
+            ddl: true,
         }
     }
 

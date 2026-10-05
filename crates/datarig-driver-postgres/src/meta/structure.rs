@@ -30,33 +30,13 @@ use serde::Deserialize;
 use tokio_postgres::Client;
 use tokio_postgres::types::Type;
 
-/// The statement. `$1` and `$2` are the schema and the table; the cast to `regclass` (which
-/// locks nothing) fails with the server's own "does not exist" when the table is gone. The row
-/// and size estimates are the explorer's list's (`stats_ctes!`, for the one root).
-pub const SQL: &str = concat!(
-    "WITH RECURSIVE rel AS (
-  SELECT c.oid, c.relkind::text AS kind,
-         EXISTS (SELECT 1 FROM pg_catalog.pg_locks l
-           WHERE l.locktype = 'relation' AND l.relation = c.oid AND l.mode = 'AccessExclusiveLock'
-             AND l.database = (SELECT d.oid FROM pg_catalog.pg_database d
-                               WHERE d.datname = pg_catalog.current_database())) AS locked
-  FROM pg_catalog.pg_class c
-  WHERE c.oid = pg_catalog.format('%I.%I', $1::text, $2::text)::regclass
-), roots AS (
-  SELECT rel.oid, rel.kind FROM rel
-), ",
-    stats_ctes!(),
-    "
-SELECT CASE WHEN rel.locked THEN pg_catalog.json_build_object('kind', rel.kind, 'locked', true)
-ELSE pg_catalog.json_build_object(
-  'kind', rel.kind,
-  'rows', ",
-    stats_rows!("rel.kind"),
-    ",
-  'bytes', ",
-    stats_bytes!("rel.kind"),
-    ",
-  'columns', (
+/// The structure's columns, constraints, indexes and triggers as `json_build_object` arguments
+/// (`'columns', …, 'triggers', …`), of the relation `rel.oid`. Every deparsing function among
+/// them locks the relation (see the module's documentation): they run only when it is not
+/// locked. The DDL's statement has them too ([`super::ddl`]).
+macro_rules! structure_parts {
+    () => {
+        "  'columns', (
     SELECT pg_catalog.json_agg(pg_catalog.json_build_object(
       'name', a.attname, 'type', pg_catalog.format_type(a.atttypid, a.atttypmod),
       'not_null', a.attnotnull, 'default', pg_catalog.pg_get_expr(d.adbin, d.adrelid, true),
@@ -128,7 +108,39 @@ ELSE pg_catalog.json_build_object(
     FROM pg_catalog.pg_trigger t
     JOIN pg_catalog.pg_proc p ON p.oid = t.tgfoid
     JOIN pg_catalog.pg_namespace pn ON pn.oid = p.pronamespace
-    WHERE t.tgrelid = rel.oid AND NOT t.tgisinternal)
+    WHERE t.tgrelid = rel.oid AND NOT t.tgisinternal)"
+    };
+}
+
+/// The statement. `$1` and `$2` are the schema and the table; the cast to `regclass` (which
+/// locks nothing) fails with the server's own "does not exist" when the table is gone. The row
+/// and size estimates are the explorer's list's (`stats_ctes!`, for the one root).
+pub const SQL: &str = concat!(
+    "WITH RECURSIVE rel AS (
+  SELECT c.oid, c.relkind::text AS kind,
+         EXISTS (SELECT 1 FROM pg_catalog.pg_locks l
+           WHERE l.locktype = 'relation' AND l.relation = c.oid AND l.mode = 'AccessExclusiveLock'
+             AND l.database = (SELECT d.oid FROM pg_catalog.pg_database d
+                               WHERE d.datname = pg_catalog.current_database())) AS locked
+  FROM pg_catalog.pg_class c
+  WHERE c.oid = pg_catalog.format('%I.%I', $1::text, $2::text)::regclass
+), roots AS (
+  SELECT rel.oid, rel.kind FROM rel
+), ",
+    stats_ctes!(),
+    "
+SELECT CASE WHEN rel.locked THEN pg_catalog.json_build_object('kind', rel.kind, 'locked', true)
+ELSE pg_catalog.json_build_object(
+  'kind', rel.kind,
+  'rows', ",
+    stats_rows!("rel.kind"),
+    ",
+  'bytes', ",
+    stats_bytes!("rel.kind"),
+    ",
+",
+    structure_parts!(),
+    "
 ) END::text
 FROM rel LEFT JOIN stats s ON s.root = rel.oid"
 );
@@ -143,7 +155,7 @@ pub(crate) async fn load_structure(client: &Client, schema: &str, table: &str) -
 }
 
 #[derive(Deserialize)]
-struct Raw {
+pub(crate) struct Raw {
     kind: String,
     /// Another session holds or asked for an `AccessExclusiveLock` on the table: nothing was
     /// deparsed.
@@ -218,6 +230,11 @@ struct RawTrigger {
 /// list (an index, a sequence) is not supported.
 fn parse(json: &str) -> Result<TableStructure, DbError> {
     let raw: Raw = serde_json::from_str(json).map_err(|e| DbError::Server(format!("table structure: {e}")))?;
+    model(raw)
+}
+
+/// The structure the statement's document describes (see [`parse`]).
+pub(crate) fn model(raw: Raw) -> Result<TableStructure, DbError> {
     if raw.locked {
         return Err(DbError::Locked);
     }

@@ -1,6 +1,7 @@
 //! Messages between the UI and a driver [`Session`](super::Session): commands go in on the
 //! session's channels, progress and results come back as [`DbEvent`]s.
 
+use super::ddl::{DdlObject, DdlSource};
 use super::keys::KeyCatalog;
 use super::structure::{RelationStats, TableStructure};
 use crate::fault::Fault;
@@ -84,6 +85,9 @@ pub enum DbError {
     /// way of a lookup of the metadata session, which never waits for one: it gave up (at once,
     /// or after a short `lock_timeout`). Asking again later may work.
     Locked,
+    /// The object a lookup names does not exist (any more): renamed or dropped since it was
+    /// listed, or a name that names nothing.
+    NotFound,
 }
 
 impl DbError {
@@ -104,7 +108,8 @@ impl DbError {
             | DbError::Cancelled
             | DbError::ReadWriteRefused
             | DbError::NotRepeatable(_)
-            | DbError::Locked => Cow::Borrowed(""),
+            | DbError::Locked
+            | DbError::NotFound => Cow::Borrowed(""),
         }
     }
 }
@@ -142,6 +147,14 @@ pub enum DbCommand {
     LoadStructure {
         schema: String,
         table: String,
+    },
+    /// The DDL of `object` (`Capabilities::ddl`): answered with [`DbEvent::Ddl`] of the same
+    /// `id`. Read from the catalog only, never waiting for a lock: an object another session
+    /// locks (or one of the relations reading its definition would lock) answers
+    /// [`DbError::Locked`], with nothing read.
+    LoadDdl {
+        id: u64,
+        object: DdlObject,
     },
     /// Run statements in order, stopping at the first that fails; the last one's result is
     /// the run's answer (`Page`, `Done` or `Failed`). With more than one statement the
@@ -198,6 +211,7 @@ impl DbCommand {
                 | DbCommand::LoadKeys
                 | DbCommand::LoadDatabases
                 | DbCommand::LoadStructure { .. }
+                | DbCommand::LoadDdl { .. }
         )
     }
 }
@@ -272,6 +286,12 @@ pub enum DbEvent {
         schema: String,
         table: String,
         result: Result<Box<TableStructure>, DbError>,
+    },
+    /// The answer to `DbCommand::LoadDdl` `id`: the object's DDL as the catalog has it, or why
+    /// it could not be read.
+    Ddl {
+        id: u64,
+        result: Result<DdlSource, DbError>,
     },
     /// Where the session works, as the server says right after `Connected` of a session opened
     /// in a context of its own (`Capabilities::contexts`; none for the profile's

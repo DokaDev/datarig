@@ -4,6 +4,7 @@
 
 use crate::proxy;
 use crate::stats::{Summary, ms};
+use datarig_core::driver::ddl::DdlObject;
 use datarig_core::driver::{ConnectOptions, DbCommand, DbEvent, Driver, Session, SessionRole};
 use datarig_core::profile::ConnectionConfig;
 use datarig_driver_postgres::PgDriver;
@@ -370,6 +371,18 @@ pub async fn run(url: &str, one_way: Duration, runs: usize) -> Result<Value, Str
         costs.push(c);
     }
     out.push(report("table_structure", &costs));
+    // Show DDL of a table: its structure and what its `CREATE` needs, one catalog read.
+    let mut costs = Vec::new();
+    for i in 0..runs {
+        let object = DdlObject::Relation { schema: "shop".into(), name: "orders".into() };
+        let load = DbCommand::LoadDdl { id: i as u64, object };
+        let (c, ev) = m.measure(load, |e| matches!(e, DbEvent::Ddl { .. })).await?;
+        if !matches!(ev, DbEvent::Ddl { result: Ok(_), .. }) {
+            return Err(format!("table_ddl: {ev:?}"));
+        }
+        costs.push(c);
+    }
+    out.push(report("table_ddl", &costs));
     // The explorer opening a schema: its objects with the estimates of their rows and size.
     let mut costs = Vec::new();
     for _ in 0..runs {

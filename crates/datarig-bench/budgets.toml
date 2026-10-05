@@ -42,6 +42,9 @@ table_structure = { to_result = 1, total = 1 }
 # Opening a schema in the explorer: its tables and views with the estimates of each one's rows
 # and size, one catalog statement too.
 schema_objects = { to_result = 1, total = 1 }
+# Show DDL of a table: its structure and what its CREATE statement needs, the lookup, the search
+# path and the lock check go out together (one catalog read in one transaction).
+table_ddl = { to_result = 1, total = 1 }
 
 [rtt_ssh]
 # The same statements through an SSH tunnel (the proxy sits between the client

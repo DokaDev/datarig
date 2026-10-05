@@ -343,6 +343,7 @@
 "db.read_only_per_transaction" = "{name}: the server ignored the read-only session default (a connection pooler?); each transaction is made READ ONLY instead"
 "db.statement_cache_off" = "{name}: the server-side statement cache is off for this connection: prepared statements kept vanishing (a connection pooler such as PgBouncer in transaction mode?). Turn it off in the profile's Advanced section to skip this"
 "db.locked" = "another session's lock was in the way and the lookup did not wait for it (try again)"
+"db.not_found" = "it does not exist (any more): renamed or dropped?"
 "db.read_write_refused" = "not sent: the session is read-only and this statement asks for read-write"
 "query.lost" = "This tab's connection was lost: {error}"
 "query.reconnected" = "Reconnected"
