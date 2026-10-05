@@ -344,6 +344,8 @@ const SAME_IN_KO: &[&str] = &[
     // A file, its line and the (already translated) problem, in the compilers' form.
     "theme.file_error",
     "theme.file_error_no_line",
+    // The word typed after `:explain`, as SQL spells it.
+    "commands.arg.analyze",
 ];
 
 #[test]

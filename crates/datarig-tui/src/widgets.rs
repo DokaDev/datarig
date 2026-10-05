@@ -5,6 +5,7 @@
 
 pub mod editor;
 pub mod grid;
+pub mod plan;
 pub mod tabbar;
 pub mod text_input;
 pub mod tree;

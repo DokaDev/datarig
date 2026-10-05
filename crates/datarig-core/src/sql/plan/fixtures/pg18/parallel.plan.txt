@@ -1,0 +1,8 @@
+Finalize HashAggregate  (cost=2932.50..2945.00 rows=1000 width=44)
+  Group Key: customer
+  ->  Gather  (cost=2896.00..2908.50 rows=2400 width=44)
+        Workers Planned: 2
+        ->  Partial HashAggregate  (cost=2896.00..2908.50 rows=1000 width=44)
+              Group Key: customer
+              ->  Parallel Seq Scan on zz_orders  (cost=0.00..2315.67 rows=77378 width=9)
+                    Filter: (amount > '10'::numeric)

@@ -4,6 +4,7 @@
 
 use super::copy::{CopyFormat, CopyScope};
 use super::overlay::OverlayKind;
+pub use super::plan::{PlanAction, PlanView};
 use super::{App, Focus};
 use datarig_core::config::IconsSetting;
 use datarig_core::i18n::{I18n, Label, Lang};
@@ -144,6 +145,11 @@ pub enum Action {
     DdlToConsole,
     /// The DDL tab's whole text to the clipboard.
     CopyDdl,
+    /// The statement under the cursor (or the one selected) as `EXPLAIN (FORMAT JSON)`; with
+    /// `true`, `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)`: run and measured, a write rolled back.
+    Explain(bool),
+    /// The Plan tab of the results pane.
+    Plan(PlanAction),
 }
 
 /// What the results pane of a query tab does.
@@ -392,6 +398,21 @@ fn result_tabs(a: &App) -> bool {
     pane_shown(a) && a.tab().ran && !a.tab().result_tabs().is_empty()
 }
 
+/// The active tab has a plan (a view of it can be chosen).
+fn has_plan(a: &App) -> bool {
+    has_tab(a) && a.tab().exec.plan.is_some()
+}
+
+/// The active tab shows its plan.
+fn plan_shown(a: &App) -> bool {
+    has_tab(a) && a.plan_shown()
+}
+
+/// The Plan tab has the focus.
+fn plan_focused(a: &App) -> bool {
+    plan_shown(a) && matches!(a.focus, Focus::Results | Focus::Inspector)
+}
+
 /// The pane is shown and not maximised: its height can change.
 fn pane_sized(a: &App) -> bool {
     pane_shown(a) && !a.tab().pane.maximized
@@ -408,6 +429,7 @@ const fn mv(action: Action, id: &'static str, label: Label, when: fn(&App) -> bo
 
 use ExplorerAction as E;
 use GridAction as G;
+use PlanAction as P;
 
 /// Every action, in command-line order.
 pub const REGISTRY: &[ActionSpec] = &[
@@ -416,6 +438,8 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::ShowCompletions, "editor.complete", Label::ActionEditorComplete, has_tab),
     act(Action::ExternalEdit, "editor.open_external", Label::ActionEditorOpenExternal, has_tab),
     act(Action::FormatSql, "editor.format", Label::ActionEditorFormat, query_tab),
+    act(Action::Explain(false), "query.explain", Label::ActionQueryExplain, query_tab),
+    act(Action::Explain(true), "query.explain_analyze", Label::ActionQueryExplainAnalyze, query_tab),
     act(Action::ToggleComment, "editor.comment_toggle", Label::ActionEditorCommentToggle, query_tab),
     act(Action::QuickConnect, "conn.quick_connect", Label::ActionConnQuickConnect, in_workspace),
     act(Action::NewProfile, "conn.new", Label::ActionConnNew, anywhere),
@@ -722,6 +746,23 @@ pub const REGISTRY: &[ActionSpec] = &[
     mv(Action::PageNext, "results.page.next", Label::ActionResultsPageNext, rows_shown),
     mv(Action::PagePrev, "results.page.prev", Label::ActionResultsPagePrev, rows_shown),
     act(Action::CountRows, "results.count", Label::ActionResultsCount, rows_shown),
+    mv(Action::Plan(P::Down), "plan.down", Label::ActionPlanDown, plan_focused),
+    mv(Action::Plan(P::Up), "plan.up", Label::ActionPlanUp, plan_focused),
+    act(Action::Plan(P::Top), "plan.top", Label::ActionPlanTop, plan_focused),
+    act(Action::Plan(P::Bottom), "plan.bottom", Label::ActionPlanBottom, plan_focused),
+    mv(Action::Plan(P::PageDown), "plan.page_down", Label::ActionPlanPageDown, plan_focused),
+    mv(Action::Plan(P::PageUp), "plan.page_up", Label::ActionPlanPageUp, plan_focused),
+    act(Action::Plan(P::Expand), "plan.expand", Label::ActionPlanExpand, plan_focused),
+    act(Action::Plan(P::Collapse), "plan.collapse", Label::ActionPlanCollapse, plan_focused),
+    act(Action::Plan(P::Detail), "plan.detail", Label::ActionPlanDetail, plan_shown),
+    act(Action::Plan(P::NextView(true)), "plan.view.next", Label::ActionPlanViewNext, has_plan),
+    act(Action::Plan(P::NextView(false)), "plan.view.prev", Label::ActionPlanViewPrev, has_plan),
+    act(Action::Plan(P::View(PlanView::Tree)), "plan.view.tree", Label::ActionPlanViewTree, has_plan),
+    act(Action::Plan(P::View(PlanView::Raw)), "plan.view.raw", Label::ActionPlanViewRaw, has_plan),
+    mv(Action::Plan(P::PanLeft), "plan.pan_left", Label::ActionPlanPanLeft, plan_focused),
+    mv(Action::Plan(P::PanRight), "plan.pan_right", Label::ActionPlanPanRight, plan_focused),
+    act(Action::Plan(P::CopyText), "plan.copy_text", Label::ActionPlanCopyText, has_plan),
+    act(Action::Plan(P::CopyJson), "plan.copy_json", Label::ActionPlanCopyJson, has_plan),
 ];
 
 pub fn spec(a: Action) -> &'static ActionSpec {

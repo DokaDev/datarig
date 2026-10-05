@@ -93,6 +93,8 @@ Every pane that is not text input (explorer, results, vim Normal/Visual). Inside
 | `Space s d` | `script.delete` | Delete this saved query |  |
 | `Space e f` | `editor.format` | Format the statement under the cursor or the selection (only its layout) |  |
 | `Space e c` | `editor.comment_toggle` | Comment the line or the selected lines out with -- (or back in) |  |
+| `Space e x` | `query.explain` | Explain: the statement's plan (nothing runs) |  |
+| `Space e a` | `query.explain_analyze` | Explain analyze: run and measure the statement (writes rolled back) |  |
 | `Space Space` | `menu.open` | Action menu |  |
 | `Shift+F10` | `menu.open` | Action menu |  |
 | `Menu` | `menu.open` | Action menu |  |
@@ -249,6 +251,46 @@ The result inspector next to the grid, after a click on it. Inside `nav`.
 | `Shift+Tab` | `results.detail_tab` | Result detail → Cell / Row |  |
 | `I` | `results.detail_tab` | Result detail → Cell / Row |  |
 | `i` | `results.detail` | Result detail → show / hide |  |
+| `Esc` | `pane.back` | Back to the editor |  |
+| `q` | `pane.back` | Back to the editor |  |
+
+## `plan`
+
+The Plan tab of the results pane (an `EXPLAIN (FORMAT JSON)` result): `j`/`k` select a node, `h`/`l` close and open its children, `Enter` shows its detail, `v`/`V` and the digits pick a view, `y`/`Y` copy the plan as text or JSON. Inside `nav`.
+
+| Keys | Action | Description | R |
+|---|---|---|---|
+| `j` | `plan.down` | Plan: next node | ✓ |
+| `Down` | `plan.down` | Plan: next node | ✓ |
+| `k` | `plan.up` | Plan: previous node | ✓ |
+| `Up` | `plan.up` | Plan: previous node | ✓ |
+| `g g` | `plan.top` | Plan: first node |  |
+| `Home` | `plan.top` | Plan: first node |  |
+| `G` | `plan.bottom` | Plan: last node |  |
+| `End` | `plan.bottom` | Plan: last node |  |
+| `PageDown` | `plan.page_down` | Plan: a page down | ✓ |
+| `Ctrl+D` | `plan.page_down` | Plan: a page down | ✓ |
+| `PageUp` | `plan.page_up` | Plan: a page up | ✓ |
+| `Ctrl+U` | `plan.page_up` | Plan: a page up | ✓ |
+| `l` | `plan.expand` | Plan: show the node's children (or go to the first) |  |
+| `Right` | `plan.expand` | Plan: show the node's children (or go to the first) |  |
+| `h` | `plan.collapse` | Plan: hide the node's children (or go to its parent) |  |
+| `Left` | `plan.collapse` | Plan: hide the node's children (or go to its parent) |  |
+| `Enter` | `plan.detail` | Plan: show or hide the selected node's detail |  |
+| `i` | `plan.detail` | Plan: show or hide the selected node's detail |  |
+| `v` | `plan.view.next` | Plan: next view |  |
+| `V` | `plan.view.prev` | Plan: previous view |  |
+| `1` | `plan.view.tree` | Plan view: tree |  |
+| `9` | `plan.view.raw` | Plan view: raw text (as psql shows it) |  |
+| `<` | `plan.pan_left` | Plan: move the view left | ✓ |
+| `>` | `plan.pan_right` | Plan: move the view right | ✓ |
+| `y` | `plan.copy_text` | Plan: copy as text (as psql shows it) |  |
+| `Y` | `plan.copy_json` | Plan: copy its JSON |  |
+| `z` | `results.panel.maximize` | Results pane → maximise / restore |  |
+| `+` | `results.panel.grow` | Results pane → taller | ✓ |
+| `-` | `results.panel.shrink` | Results pane → shorter | ✓ |
+| `L` | `results.tab.next` | Result tabs → next |  |
+| `H` | `results.tab.prev` | Result tabs → previous |  |
 | `Esc` | `pane.back` | Back to the editor |  |
 | `q` | `pane.back` | Back to the editor |  |
 
@@ -483,6 +525,7 @@ An editor command closes the line; what went wrong is said in the status bar.
 | `:suspend` | `:sus` `:stop` | Suspend datarig (the shell's fg brings it back) |
 | `:format` |  | Format the statement under the cursor or the selection (only its layout) |
 | `:ddl [schema.name]` |  | Show the DDL of the explorer's object, the table tab's table, or a name (:ddl [schema.name]) |
+| `:explain [analyze]` |  | The plan of the statement under the cursor (:explain analyze runs and measures it; a write is rolled back) |
 
 Settings of `:set` (saved to `config.toml` like the matching actions):
 

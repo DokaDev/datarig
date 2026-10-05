@@ -1,0 +1,5 @@
+Nested Loop Semi Join  (cost=0.57..4.68 rows=1 width=13)
+  ->  Index Scan using zz_customers_pkey on zz_customers c  (cost=0.28..4.29 rows=1 width=13)
+        Index Cond: (id < 0)
+  ->  Index Only Scan using zz_orders_customer on zz_orders o  (cost=0.29..7.79 rows=200 width=4)
+        Index Cond: (customer = c.id)

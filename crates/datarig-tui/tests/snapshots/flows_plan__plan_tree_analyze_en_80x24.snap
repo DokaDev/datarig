@@ -1,0 +1,28 @@
+---
+source: crates/datarig-tui/tests/flows_plan.rs
+expression: "h.draw(80, 24).backend()"
+---
+"╭ Explorer ────────────╮ 1 console 1 ×                                          "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ ●   local-pg        ││ local-pg / datarig  127.0.0.1:55432 · policy: default│"
+"│  ▾ datarig default   ││  1▎SELECT * FROM t;                                  │"
+"│    ▸ analytics       ││                                                      │"
+"│    ▸ public          ││                                                      │"
+"│    ▸ shop            ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      │╰──────────────────────────────────────────────────────╯"
+"│                      │╭ Plan · Tree ─────────────────────────────────────────╮"
+"│                      ││  Result 1  [Plan]  Messages                          │"
+"│                      ││ [Tree]  Raw   execution 133.0 ms · planning 7.803 ms │"
+"│                      ││ Node                              self share         │"
+"│                      ││ ▾ Finalize HashAggregate       11.3 ms ▊           8%│"
+"│                      ││ └─▾ Gather hot                 40.6 ms ██▊        30%│"
+"│                      ││   └─▾ Partial HashAggr… hot    54.7 ms ███▊       41%│"
+"│                      ││     └── Parallel Seq Scan      26.0 ms █▊         19%│"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" NORMAL  local-pg · policy: default │ 1 row · 3ms   │ Enter detail · v views EN "

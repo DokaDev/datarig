@@ -1,0 +1,76 @@
+[
+  {
+    "Plan": {
+      "Node Type": "ModifyTable",
+      "Operation": "Update",
+      "Parallel Aware": false,
+      "Relation Name": "zz_customers",
+      "Alias": "zz_customers",
+      "Startup Cost": 0.28,
+      "Total Cost": 8.45,
+      "Plan Rows": 10,
+      "Plan Width": 19,
+      "Actual Startup Time": 0.302,
+      "Actual Total Time": 0.303,
+      "Actual Rows": 0,
+      "Actual Loops": 1,
+      "Shared Hit Blocks": 58,
+      "Shared Read Blocks": 0,
+      "Shared Dirtied Blocks": 0,
+      "Shared Written Blocks": 0,
+      "Local Hit Blocks": 0,
+      "Local Read Blocks": 0,
+      "Local Dirtied Blocks": 0,
+      "Local Written Blocks": 0,
+      "Temp Read Blocks": 0,
+      "Temp Written Blocks": 0,
+      "Plans": [
+        {
+          "Node Type": "Index Scan",
+          "Parent Relationship": "Member",
+          "Parallel Aware": false,
+          "Scan Direction": "Forward",
+          "Index Name": "zz_customers_pkey",
+          "Relation Name": "zz_customers",
+          "Alias": "zz_customers",
+          "Startup Cost": 0.28,
+          "Total Cost": 8.45,
+          "Plan Rows": 10,
+          "Plan Width": 19,
+          "Actual Startup Time": 0.024,
+          "Actual Total Time": 0.028,
+          "Actual Rows": 10,
+          "Actual Loops": 1,
+          "Index Cond": "(id < 10)",
+          "Rows Removed by Index Recheck": 0,
+          "Shared Hit Blocks": 3,
+          "Shared Read Blocks": 0,
+          "Shared Dirtied Blocks": 0,
+          "Shared Written Blocks": 0,
+          "Local Hit Blocks": 0,
+          "Local Read Blocks": 0,
+          "Local Dirtied Blocks": 0,
+          "Local Written Blocks": 0,
+          "Temp Read Blocks": 0,
+          "Temp Written Blocks": 0
+        }
+      ]
+    },
+    "Planning": {
+      "Shared Hit Blocks": 71,
+      "Shared Read Blocks": 0,
+      "Shared Dirtied Blocks": 0,
+      "Shared Written Blocks": 0,
+      "Local Hit Blocks": 0,
+      "Local Read Blocks": 0,
+      "Local Dirtied Blocks": 0,
+      "Local Written Blocks": 0,
+      "Temp Read Blocks": 0,
+      "Temp Written Blocks": 0
+    },
+    "Planning Time": 0.826,
+    "Triggers": [
+    ],
+    "Execution Time": 0.826
+  }
+]

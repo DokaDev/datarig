@@ -44,6 +44,7 @@ pub mod paging;
 pub mod pane;
 mod password;
 mod persist;
+pub mod plan;
 pub mod presets;
 pub mod profiles;
 pub mod quick;
@@ -633,7 +634,7 @@ pub struct App {
     unknown_tabs: Vec<String>,
     /// Where each result tab of the strip was drawn last: its columns and the statement it
     /// shows (`None`: Messages).
-    pub(crate) strip_hits: Vec<(u16, u16, Option<usize>)>,
+    pub(crate) strip_hits: Vec<(u16, u16, Option<usize>, tabs::ResultView)>,
     /// The folder of the saved queries saved into last this run (the tree dialog's default).
     pub(crate) last_save_folder: Option<String>,
     /// The database and schema `:use` named for a tab, while the switch waits for its confirm.
@@ -1285,6 +1286,7 @@ impl App {
                 _ if self.profiles.is_empty() => Ctx::Welcome,
                 // No tab: the empty state has no keys of its own.
                 _ if self.tabs.is_empty() => Ctx::Explorer,
+                Focus::Results | Focus::Inspector if self.plan_shown() => Ctx::Plan,
                 Focus::Results => Ctx::Grid,
                 Focus::Inspector if self.inspector_shown() => Ctx::Inspector,
                 Focus::Inspector => Ctx::Grid,
@@ -1312,8 +1314,8 @@ impl App {
         self.tab_hits.clone()
     }
 
-    /// Where each result tab of the strip was drawn last (tests click them).
-    pub fn strip_hits(&self) -> Vec<(u16, u16, Option<usize>)> {
+    /// Where each result tab of the strip was drawn last, and what it shows (tests click them).
+    pub fn strip_hits(&self) -> Vec<(u16, u16, Option<usize>, tabs::ResultView)> {
         self.strip_hits.clone()
     }
 

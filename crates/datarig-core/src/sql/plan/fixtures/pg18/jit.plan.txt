@@ -1,0 +1,8 @@
+Aggregate  (cost=4337.25..4337.26 rows=1 width=40)
+  ->  Sort  (cost=4327.24..4329.74 rows=1001 width=9)
+        Sort Key: customer
+        ->  Seq Scan on zz_orders  (cost=0.00..4277.35 rows=1001 width=9)
+              Filter: ((customer % 7) = 3)
+JIT:
+  Functions: 7
+  Options: Inlining true, Optimization true, Expressions true, Deforming true

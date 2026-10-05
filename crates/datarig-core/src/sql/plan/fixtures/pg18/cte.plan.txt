@@ -1,0 +1,10 @@
+Hash Join  (cost=4319.00..4356.50 rows=333 width=4)
+  Hash Cond: ((b.customer + 1) = a.customer)
+  Join Filter: (a.s > b.s)
+  CTE big
+    ->  HashAggregate  (cost=4274.00..4286.50 rows=1000 width=36)
+          Group Key: zz_orders.customer
+          ->  Seq Scan on zz_orders  (cost=0.00..3274.00 rows=200000 width=9)
+  ->  CTE Scan on big b  (cost=0.00..20.00 rows=1000 width=36)
+  ->  Hash  (cost=20.00..20.00 rows=1000 width=36)
+        ->  CTE Scan on big a  (cost=0.00..20.00 rows=1000 width=36)

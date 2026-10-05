@@ -1,0 +1,3 @@
+Update on zz_customers  (cost=0.28..8.45 rows=0 width=0)
+  ->  Index Scan using zz_customers_pkey on zz_customers  (cost=0.28..8.45 rows=10 width=10)
+        Index Cond: (id < 10)

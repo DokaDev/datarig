@@ -1,0 +1,2 @@
+Insert on zz_orders  (cost=0.00..0.63 rows=50 width=44)
+  ->  Function Scan on generate_series g  (cost=0.00..0.63 rows=50 width=44)

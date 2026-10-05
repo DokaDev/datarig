@@ -506,3 +506,26 @@ fn search_matches_show_in_every_theme() {
         assert!(s != th.selection && s.bg != th.cursor_line.bg && s.bg != th.current_stmt.bg, "{name}");
     }
 }
+
+/// A plan's hot node and its misestimate marks show without color (a modifier), stand apart
+/// from body text and from each other, and read on the background, the surface and the cursor
+/// line (the selection of a pane without the focus). On the selection itself they keep only
+/// their modifier (the views draw them so).
+#[test]
+fn plan_marks_show_and_read_in_every_theme() {
+    for (name, th) in BUILTINS.iter().copied() {
+        for (token, s) in [("plan_hot", th.plan_hot), ("plan_misestimate", th.plan_misestimate)] {
+            assert!(!s.add_modifier.is_empty(), "{name}: {token} shows without color");
+            assert!(s.fg.is_some() && s.fg != Some(th.fg), "{name}: {token} looks like body text");
+        }
+        assert_ne!(th.plan_hot, th.plan_misestimate, "{name}");
+    }
+    for (name, th) in rgb_themes() {
+        for bg in [th.bg, th.surface, bg(th.cursor_line)] {
+            for (token, s) in [("plan_hot", th.plan_hot), ("plan_misestimate", th.plan_misestimate)] {
+                let c = contrast(fg(s), bg);
+                assert!(c >= 3.0, "{name}: {token} on {bg:?}: {c:.2}");
+            }
+        }
+    }
+}

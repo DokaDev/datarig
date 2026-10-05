@@ -1,0 +1,58 @@
+[
+  {
+    "Plan": {
+      "Node Type": "Aggregate",
+      "Strategy": "Hashed",
+      "Partial Mode": "Simple",
+      "Parallel Aware": false,
+      "Async Capable": false,
+      "Startup Cost": 1305.70,
+      "Total Cost": 1305.75,
+      "Plan Rows": 5,
+      "Plan Width": 11,
+      "Group Key": ["zz_events.kind"],
+      "Planned Partitions": 0,
+      "Plans": [
+        {
+          "Node Type": "Append",
+          "Parent Relationship": "Outer",
+          "Parallel Aware": false,
+          "Async Capable": false,
+          "Startup Cost": 0.00,
+          "Total Cost": 1161.86,
+          "Plan Rows": 28770,
+          "Plan Width": 3,
+          "Subplans Removed": 0,
+          "Plans": [
+            {
+              "Node Type": "Seq Scan",
+              "Parent Relationship": "Member",
+              "Parallel Aware": false,
+              "Async Capable": false,
+              "Relation Name": "zz_events_q1",
+              "Alias": "zz_events_1",
+              "Startup Cost": 0.00,
+              "Total Cost": 509.00,
+              "Plan Rows": 16440,
+              "Plan Width": 3,
+              "Filter": "((at >= '2024-02-01'::date) AND (at <= '2024-05-15'::date))"
+            },
+            {
+              "Node Type": "Seq Scan",
+              "Parent Relationship": "Member",
+              "Parallel Aware": false,
+              "Async Capable": false,
+              "Relation Name": "zz_events_q2",
+              "Alias": "zz_events_2",
+              "Startup Cost": 0.00,
+              "Total Cost": 509.01,
+              "Plan Rows": 12330,
+              "Plan Width": 3,
+              "Filter": "((at >= '2024-02-01'::date) AND (at <= '2024-05-15'::date))"
+            }
+          ]
+        }
+      ]
+    }
+  }
+]

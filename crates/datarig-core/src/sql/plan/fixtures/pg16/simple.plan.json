@@ -1,0 +1,31 @@
+[
+  {
+    "Plan": {
+      "Node Type": "Bitmap Heap Scan",
+      "Parallel Aware": false,
+      "Async Capable": false,
+      "Relation Name": "zz_orders",
+      "Alias": "zz_orders",
+      "Startup Cost": 111.99,
+      "Total Cost": 1535.81,
+      "Plan Rows": 3135,
+      "Plan Width": 17,
+      "Recheck Cond": "(customer < 50)",
+      "Filter": "(amount > '100'::numeric)",
+      "Plans": [
+        {
+          "Node Type": "Bitmap Index Scan",
+          "Parent Relationship": "Outer",
+          "Parallel Aware": false,
+          "Async Capable": false,
+          "Index Name": "zz_orders_customer",
+          "Startup Cost": 0.00,
+          "Total Cost": 111.20,
+          "Plan Rows": 9988,
+          "Plan Width": 0,
+          "Index Cond": "(customer < 50)"
+        }
+      ]
+    }
+  }
+]

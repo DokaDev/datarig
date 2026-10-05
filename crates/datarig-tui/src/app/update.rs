@@ -527,7 +527,11 @@ impl App {
             // Sideways (a trackpad, a tilting wheel): the grid's columns.
             MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight if inside(l.results) => {
                 let d = if m.kind == MouseEventKind::ScrollRight { 1 } else { -1 };
-                self.scroll_grid(0, d);
+                if self.plan_shown() {
+                    self.plan_scroll(d, true);
+                } else {
+                    self.scroll_grid(0, d);
+                }
             }
             MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
                 let d = if m.kind == MouseEventKind::ScrollDown { WHEEL_STEP } else { -WHEEL_STEP };
@@ -542,6 +546,8 @@ impl App {
                 } else if inside(l.results) && self.tab().exec.view == tabs::ResultView::Messages {
                     let s = &mut self.tab_mut().exec.messages_scroll;
                     *s = (*s as isize + d).max(0) as usize;
+                } else if inside(l.results) && self.plan_shown() {
+                    self.plan_scroll(d, m.modifiers.contains(KeyModifiers::SHIFT));
                 } else if inside(l.results) && m.modifiers.contains(KeyModifiers::SHIFT) {
                     // Shift+wheel: the columns, one a notch.
                     self.scroll_grid(0, d.signum());
@@ -681,12 +687,18 @@ impl App {
         } else if inside(l.strip) {
             // A result tab of the strip.
             self.focus = Focus::Results;
-            let hit = self.strip_hits.iter().find(|(a, b, _)| x >= *a && x < *b).map(|h| h.2);
+            let hit = self.strip_hits.iter().find(|(a, b, ..)| x >= *a && x < *b).map(|h| (h.2, h.3));
             match hit {
-                Some(Some(i)) => self.tab_mut().show_result(i),
-                Some(None) => self.tab_mut().exec.view = tabs::ResultView::Messages,
+                Some((Some(i), _)) => self.tab_mut().show_result(i),
+                Some((None, view)) => self.tab_mut().exec.view = view,
                 None => {}
             }
+        } else if inside(l.results) && self.plan_shown() {
+            self.focus = Focus::Results;
+            if double {
+                self.last_click = None;
+            }
+            self.plan_click(x, y, double);
         } else if inside(l.results) {
             self.focus = Focus::Results;
             let t = self.tabs.active_mut();
