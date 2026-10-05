@@ -145,6 +145,7 @@ impl Editor {
     /// Replace bytes `a..b` of the text with `s`, touching only the lines in between; returns
     /// what was there. Recorded in the current undo step.
     pub(super) fn splice(&mut self, a: usize, b: usize, s: &str) -> String {
+        debug_assert!(!self.read_only, "a read-only text is never changed");
         let removed = self.splice_raw(a, b, s);
         self.marks.set_change(self.splice_at);
         if self.undo.is_empty() {

@@ -36,6 +36,8 @@ pub enum ExError {
     Trailing(String),
     /// What a search would say: an invalid pattern, no match, no pattern before.
     Pattern(SearchNotice),
+    /// The command would change a read-only text.
+    ReadOnly,
 }
 
 /// What an Ex command did.
@@ -106,6 +108,9 @@ impl Editor {
     pub fn ex(&mut self, text: &str) -> Result<ExDone, ExError> {
         let (range, jump, rest) = self.ex_range(text.trim())?;
         let command = command(rest.trim_start())?;
+        if self.read_only && !matches!(command, Command::Go) {
+            return Err(ExError::ReadOnly);
+        }
         if let Some(a) = jump {
             self.row = (a.max(1) as usize - 1).min(self.lines.len() - 1);
             self.clamp();

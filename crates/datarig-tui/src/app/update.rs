@@ -128,6 +128,9 @@ impl App {
             let t = self.tab_mut();
             let ev = t.editor.paste(text);
             t.popup = None;
+            if t.editor.take_refused() {
+                self.say_read_only();
+            }
             // Into the search prompt, the text is not changed.
             if matches!(ev, EdEvent::Changed { .. }) {
                 self.edited();
@@ -214,7 +217,7 @@ impl App {
     /// Keys no action claims go to the widget of context `ctx`.
     fn forward(&mut self, ctx: Ctx, keys: &[KeyChord], repeat: bool) {
         match ctx {
-            Ctx::VimNormal | Ctx::VimVisual | Ctx::VimInsert | Ctx::VimSearch => {
+            Ctx::VimNormal | Ctx::VimVisual | Ctx::VimInsert | Ctx::VimSearch | Ctx::Ddl => {
                 for k in keys {
                     self.editor_key(k.to_event());
                 }
@@ -387,6 +390,7 @@ impl App {
         let t = self.tabs.active_mut();
         t.editor.auto_pairs = pairs;
         let ev = t.editor.handle_key(key);
+        let refused = t.editor.take_refused();
         let problem = t.editor.take_register_problem();
         let search = t.editor.take_search_notice();
         let mark = t.editor.take_mark_notice();
@@ -423,6 +427,9 @@ impl App {
         }
         if let Some(e) = ex {
             self.flash(Notice::new(super::cmdline::ex_error(e), Level::Error));
+        }
+        if refused {
+            self.say_read_only();
         }
         if matches!(ev, EdEvent::Changed { .. }) {
             self.edited();

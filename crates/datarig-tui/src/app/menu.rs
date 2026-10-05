@@ -57,6 +57,10 @@ const RESULTS_MENU: &[Action] =
 /// The editor's actions for the statement under the cursor or the selection.
 const EDITOR_MENU: &[Action] = &[Action::RunStatement, Action::FormatSql, Action::ToggleComment];
 
+/// A DDL tab's actions for its text, and its pane's.
+const DDL_MENU: &[Action] = &[Action::ReloadDdl, Action::DdlToConsole, Action::CopyDdl];
+const DDL_PANE_MENU: &[Action] = &[Action::ExternalEdit];
+
 /// The query pane's own actions.
 const QUERY_MENU: &[Action] = &[
     Action::ExternalEdit,
@@ -306,6 +310,10 @@ impl App {
             Action::Explorer(ExplorerAction::Rename) => matches!(row, R::Folder(_)) || script,
             Action::Explorer(ExplorerAction::Move) => profile.is_some() || script,
             Action::Explorer(ExplorerAction::ConsoleHere) => in_database,
+            // On a relation or what is under it (an index, a trigger: its own); a trigger's
+            // function on a trigger.
+            Action::Explorer(ExplorerAction::ShowDdl) => self.ddl_menu(row, false),
+            Action::Explorer(ExplorerAction::ShowFunctionDdl) => self.ddl_menu(row, true),
             // In a database or schema the console opens there (`O`), not with the profile's
             // defaults: one console item, which says where.
             Action::OpenConsole => profile.is_some() && !in_database,
@@ -317,6 +325,12 @@ impl App {
             }
             _ => true,
         }
+    }
+
+    /// Whether "Show DDL" (`function`: the trigger function's) has an object on `row`, with a
+    /// driver that reads DDL.
+    fn ddl_menu(&self, row: &explorer::RowKind, function: bool) -> bool {
+        self.ddl_object_of_row(row, function).is_some_and(|(id, _, _)| self.ddl_on(id))
     }
 
     /// The explorer's actions for `row`, in its binding order: the row's own, and the pane's.
@@ -365,6 +379,8 @@ impl App {
                 };
                 return Some(self.i18n.msg(&Msg::MenuConsoleIn { place }));
             }
+            (Action::Explorer(ExplorerAction::ShowDdl), _) => Label::MenuShowDdl,
+            (Action::Explorer(ExplorerAction::ShowFunctionDdl), _) => Label::MenuShowFunctionDdl,
             (Action::Explorer(ExplorerAction::Rename), R::Script(_)) => Label::MenuRenameQuery,
             (Action::Explorer(ExplorerAction::Rename), R::Folder(_) | R::ScriptFolder(_)) => Label::MenuRenameFolder,
             (Action::Explorer(ExplorerAction::Delete), R::Script(_)) => Label::MenuDeleteQuery,
@@ -612,12 +628,17 @@ impl App {
     /// The editor's menu: the statement's (or the selection's) actions, then the pane's.
     fn open_editor_menu(&mut self, at: (u16, u16)) {
         let Some(target) = self.editor_target() else { return };
+        let ddl = self.tab().is_ddl();
         let ctx = match self.tab().editor.mode {
+            Mode::Normal if ddl => Ctx::Ddl,
             Mode::Normal => Ctx::VimNormal,
             Mode::Visual => Ctx::VimVisual,
             Mode::Insert => Ctx::VimInsert,
         };
-        let (own, pane) = (self.available(EDITOR_MENU), self.available(QUERY_MENU));
+        let (own, pane) = match ddl {
+            true => (self.available(DDL_MENU), self.available(DDL_PANE_MENU)),
+            false => (self.available(EDITOR_MENU), self.available(QUERY_MENU)),
+        };
         self.push_menu(ctx, target, own, pane, at);
     }
 

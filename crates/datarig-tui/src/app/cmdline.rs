@@ -559,6 +559,10 @@ impl App {
                 self.focus = Focus::Editor;
                 self.dispatch(Action::FormatSql);
             }
+            (command::Command::Ddl, _) => {
+                self.ddl_command(arg.trim())?;
+                self.overlays.close(OverlayKind::Commands);
+            }
             (command::Command::Recover, _) => {
                 if !arg.is_empty() {
                     return err(Msg::CommandsErrorNoArgs { name });
@@ -574,6 +578,15 @@ impl App {
                 self.close_or_quit();
             }
             (command::Command::Write | command::Command::WriteQuit, _) => {
+                // A table tab's query and a DDL tab's text are not saved (as `Ctrl+S` says).
+                if !self.tabs.is_empty() && !self.tab().is_query() {
+                    self.overlays.close(OverlayKind::Commands);
+                    match self.tab().is_ddl() {
+                        true => self.say_read_only(),
+                        false => self.flash(Notice::new(Label::TableTabNoSave, Level::Info)),
+                    }
+                    return Ok(());
+                }
                 if !self.scripts_available() {
                     return err(Msg::Label(Label::ScriptsNoDataDir));
                 }
@@ -726,6 +739,7 @@ impl App {
                 return self.format_lines(first, last);
             }
             Ok(_) => None,
+            Err(ExError::ReadOnly) => return self.say_read_only(),
             Err(e) => Some(Notice::new(ex_error(e), Level::Error)),
         };
         if changed {
@@ -821,6 +835,7 @@ impl App {
                             ArgKind::NewScript => (Label::CommandsArgScript, true),
                             ArgKind::Format => (Label::CommandsArgFormat, false),
                             ArgKind::Context => (Label::CommandsArgContext, true),
+                            ArgKind::Object => (Label::CommandsArgObject, true),
                         };
                         let arg = arg.text(self.i18n.lang);
                         name.push_str(&if optional { format!(" [{arg}]") } else { format!(" {arg}") });
@@ -898,6 +913,7 @@ impl App {
 pub(super) fn ex_error(e: ExError) -> Msg {
     match e {
         ExError::Unsupported(command) => Msg::EditorExUnsupported { command },
+        ExError::ReadOnly => Msg::Label(Label::EditorReadOnly),
         ExError::InvalidRange => Msg::Label(Label::EditorExInvalidRange),
         ExError::Backwards => Msg::Label(Label::EditorExBackwards),
         ExError::Confirm => Msg::Label(Label::EditorExConfirm),

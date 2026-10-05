@@ -26,6 +26,7 @@ fn sample() -> WorkspaceState {
                 top: 3,
                 console: 2,
                 table: None,
+                ddl: None,
                 results: Some(PaneState { share: 35, hidden: true, maximized: false }),
                 database: Some("sales".into()),
                 schema: Some("shop".into()),
@@ -39,6 +40,7 @@ fn sample() -> WorkspaceState {
                 top: 0,
                 console: 0,
                 table: None,
+                ddl: None,
                 results: None,
                 database: None,
                 schema: Some("Sales 2026".into()),
@@ -52,6 +54,7 @@ fn sample() -> WorkspaceState {
                 top: 0,
                 console: 0,
                 table: Some(("shop".into(), "Order Items".into())),
+                ddl: None,
                 results: Some(PaneState { share: 50, hidden: false, maximized: true }),
                 database: None,
                 schema: None,
@@ -75,6 +78,49 @@ fn the_state_file_round_trips() {
     assert!(text.contains("version = 3") && text.contains("kind = \"script\""), "{text}");
     assert!(text.contains("context = { database = \"sales\", schema = \"shop\" }"), "{text}");
     assert!(text.contains("kind = \"table\"") && text.contains("table = \"Order Items\""), "{text}");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn ddl_tabs_round_trip_with_their_objects() {
+    use crate::driver::ddl::DdlObject;
+    let dir = temp_dir("ddl");
+    let p = ProfileId::new();
+    let tab = |object: DdlObject, database: Option<&str>| TabState {
+        id: new_id(),
+        kind: TabKind::Ddl,
+        script: None,
+        profile: Some(p),
+        cursor: (3, 1),
+        top: 0,
+        console: 0,
+        table: None,
+        ddl: Some(object),
+        results: None,
+        database: database.map(str::to_string),
+        schema: None,
+    };
+    let s = WorkspaceState {
+        tabs: vec![
+            tab(DdlObject::Relation { schema: "shop".into(), name: "Order Items".into() }, None),
+            tab(DdlObject::Index { schema: "shop".into(), name: "users_pkey".into() }, Some("sales")),
+            tab(DdlObject::Trigger { schema: "shop".into(), table: "users".into(), name: "touch".into() }, None),
+            tab(DdlObject::TriggerFunction { schema: "s".into(), table: "t".into(), trigger: "x".into() }, None),
+            tab(DdlObject::Named { name: "\"Mixed\".f(int)".into(), schema: Some("shop".into()) }, None),
+            tab(DdlObject::Named { name: "users".into(), schema: None }, None),
+        ],
+        ..WorkspaceState::default()
+    };
+    save(&dir, &s).unwrap();
+    let text = fs::read_to_string(dir.join(FILE)).unwrap();
+    assert!(text.contains("kind = \"ddl\"") && text.contains("object = \"trigger_function\""), "{text}");
+    assert_eq!(load(&dir).state, s);
+    // Saved again over itself: nothing is lost or doubled.
+    save(&dir, &s).unwrap();
+    assert_eq!(load(&dir).state, s);
+    // A DDL tab whose object cannot be read back is left out, like a table tab without a table.
+    fs::write(dir.join(FILE), "version = 3\n[[tabs]]\nkind = \"ddl\"\nobject = \"trigger\"\nschema = \"s\"\n").unwrap();
+    assert!(load(&dir).state.tabs.is_empty());
     let _ = fs::remove_dir_all(&dir);
 }
 

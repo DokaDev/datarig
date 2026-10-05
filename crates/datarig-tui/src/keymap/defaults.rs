@@ -113,6 +113,16 @@ pub const HINTS: &[(Ctx, &[(&str, Label)])] = &[
         ],
     ),
     (
+        Ddl,
+        &[
+            ("ddl.reload", Label::HintReload),
+            ("ddl.open_console", Label::HintToConsole),
+            ("pane.next", Label::HintPane),
+            ("commands.open", Label::HintCommands),
+            ("help.context", Label::HintHelp),
+        ],
+    ),
+    (
         VimVisual,
         &[
             ("query.execute_current", Label::HintRun),
@@ -240,6 +250,8 @@ const ACTIONS: &[(Ctx, &str, &str)] = &[
     (Explorer, "N", "folder.new"),
     (Explorer, "R", "explorer.rename"),
     (Explorer, "O", "explorer.new_console_here"),
+    (Explorer, "D", "explorer.show_ddl"),
+    (Explorer, "F", "explorer.show_function_ddl"),
     (Explorer, "esc", "explorer.back"),
     (Explorer, "q", "app.quit"),
     (ExplorerFilter, "esc", "explorer.filter_clear"),
@@ -331,6 +343,9 @@ const ACTIONS: &[(Ctx, &str, &str)] = &[
     (Grid, "q", "pane.back"),
     // editor
     (VimInsert, "ctrl+n", "editor.complete"),
+    // a DDL tab (read-only): read again, open in a console
+    (Ddl, "r", "ddl.reload"),
+    (Ddl, "o", "ddl.open_console"),
     (VimInsert, "f4", "editor.complete"),
 ];
 

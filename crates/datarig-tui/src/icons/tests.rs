@@ -6,6 +6,8 @@ fn every_glyph_is_one_private_use_char_one_column_wide() {
     let glyphs = CURATED.iter().map(|c| c.2).chain(DRIVERS.iter().map(|d| d.2)).chain([
         UNKNOWN_DRIVER,
         SCRIPT,
+        TABLE,
+        DDL,
         WARNING,
         KEY_PK,
         KEY_FK,
@@ -56,6 +58,12 @@ fn the_tunnel_mark_is_pinned_and_has_a_text_form_without_icons() {
     // nf-md-ssh (Nerd Fonts 3.5.1 glyphnames.json): a profile's tunnel and the tunnel presets.
     assert_eq!((TUNNEL, tunnel(true), tunnel(false)), ("\u{f08c0}", "\u{f08c0}", "SSH"));
     assert_eq!(width(TUNNEL), 1);
+}
+
+#[test]
+fn the_ddl_tab_icon_is_pinned() {
+    // nf-fa-code (Nerd Fonts 3.5.1 glyphnames.json: "fa-code", code f121).
+    assert_eq!(DDL, "\u{f121}");
 }
 
 #[test]

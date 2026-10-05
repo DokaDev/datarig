@@ -591,6 +591,7 @@ async fn a_restored_table_tab_pages_outside_any_user_transaction() {
         top: 0,
         console: 0,
         table: Some(("analytics".into(), "events".into())),
+        ddl: None,
         results: None,
         database: None,
         schema: None,

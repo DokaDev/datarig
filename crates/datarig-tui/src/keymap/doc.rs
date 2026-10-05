@@ -188,6 +188,7 @@ fn commands(s: &mut String) {
             Some(ArgKind::NewScript) => " [name]",
             Some(ArgKind::Format) => " <format>",
             Some(ArgKind::Context) => " [db][.schema]",
+            Some(ArgKind::Object) => " [schema.name]",
             None => "",
         };
         let aliases: Vec<String> = c.aliases.iter().map(|a| format!("`:{a}`")).collect();

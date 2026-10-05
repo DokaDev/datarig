@@ -23,9 +23,10 @@ pub fn results_rows(height: u16, share: u16) -> u16 {
 
 impl App {
     /// The active tab shows a results pane: a table tab always; a query tab once it ran
-    /// something (or while launch notices wait to be read there), unless the user hid it.
+    /// something (or while launch notices wait to be read there), unless the user hid it; a DDL
+    /// tab never (it has no results).
     pub fn results_shown(&self) -> bool {
-        if self.tabs.is_empty() || self.profiles.is_empty() {
+        if self.tabs.is_empty() || self.profiles.is_empty() || self.tab().is_ddl() {
             return false;
         }
         let t = self.tab();
@@ -138,7 +139,7 @@ impl App {
         let rows = bottom.saturating_sub(y.max(body.y));
         let share = (u32::from(rows) * 100 / u32::from(body.height)) as u16;
         let t = self.tab_mut();
-        if !t.is_table() {
+        if t.is_query() {
             t.pane.share = PaneLayout::clamped(share);
             self.mark_workspace();
         }

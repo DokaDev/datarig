@@ -242,6 +242,16 @@ impl App {
             tab.context = datarig_core::driver::SessionContext { database: t.database.clone(), schema: None };
             return Some(tab);
         }
+        if let (workspace::TabKind::Ddl, Some(object)) = (t.kind, &t.ddl) {
+            // Its object, not read: nothing is sent until the user asks.
+            let mut tab = Tab::new(TabId(0), TabKind::Ddl, profile, Editor::read_only(""));
+            tab.doc.ddl = Some(super::tabs::DdlTab::new(object.clone()));
+            tab.doc.written = true;
+            tab.doc.kept_profile = kept;
+            tab.pane = pane;
+            tab.context = datarig_core::driver::SessionContext { database: t.database.clone(), schema: None };
+            return Some(tab);
+        }
         let (text, stamp, script, written) = match (&t.kind, &t.script) {
             (workspace::TabKind::Script, Some(path)) => {
                 let read = self.scripts.as_ref().map(|s| s.read(path));
@@ -303,6 +313,7 @@ impl App {
             .map(|t| TabState {
                 id: t.doc.console_id.clone(),
                 kind: match (&t.doc.table, &t.doc.script) {
+                    _ if t.doc.ddl.is_some() => workspace::TabKind::Ddl,
                     (Some(_), _) => workspace::TabKind::Table,
                     (None, Some(_)) => workspace::TabKind::Script,
                     (None, None) => workspace::TabKind::Console,
@@ -313,6 +324,7 @@ impl App {
                 top: t.editor.top,
                 console: if t.kind == TabKind::Console { t.doc.console_no } else { 0 },
                 table: t.doc.table.as_ref().map(|r| (r.schema.clone(), r.name.clone())),
+                ddl: t.doc.ddl.as_ref().map(|d| d.object.clone()),
                 results: Some(workspace::PaneState {
                     share: t.pane.share,
                     hidden: t.pane.hidden,
@@ -434,8 +446,8 @@ impl App {
         let Some(t) = self.tabs.get_mut(id) else { return Saved::Ok };
         t.doc.save_due = None;
         t.doc.unsaved_since = None;
-        // A table tab's query is not a text anybody wrote: it has no file.
-        if t.is_table() {
+        // A table tab's query and a DDL tab's text are not texts anybody wrote: no file.
+        if !t.is_query() {
             return Saved::Ok;
         }
         let version = t.editor.version();

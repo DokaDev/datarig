@@ -2,7 +2,7 @@
 //! or the welcome panel while there is no profile; the status bar at the bottom.
 
 use crate::app::action::Action;
-use crate::app::tabs::ResultView;
+use crate::app::tabs::{DdlState, ResultView};
 use crate::app::{App, Focus, Layout, Paging, Results};
 use crate::keymap::Ctx;
 use crate::text::{clip, wrap, wrap_words};
@@ -123,7 +123,10 @@ fn draw_editor(app: &mut App, area: Rect, buf: &mut Buffer) -> (u16, u16) {
         Some(p) => datarig_core::scripts::stem_path(p).to_string(),
         None => crate::widgets::tabbar::document_name(app, app.tab()),
     };
-    let title = app.i18n.msg(&Msg::PaneEditorScript { name });
+    let title = match app.tab().is_ddl() {
+        true => app.i18n.msg(&Msg::PaneEditorDdl { name }),
+        false => app.i18n.msg(&Msg::PaneEditorScript { name }),
+    };
     let eb = panel(&title, app.focus == Focus::Editor, area.width);
     let mut einner = eb.inner(area);
     eb.render(area, buf);
@@ -138,14 +141,55 @@ fn draw_editor(app: &mut App, area: Rect, buf: &mut Buffer) -> (u16, u16) {
     }
     app.layout.editor = area;
     app.layout.editor_text = einner;
+    // A DDL tab not read (yet, or locked, or failed): what it is waiting for, never a part of
+    // an earlier read.
+    if let Some(text) = ddl_state_text(app) {
+        let th = theme::cur();
+        let color = match app.tab().doc.ddl.as_ref().map(|d| &d.state) {
+            Some(DdlState::Locked) => th.warning,
+            Some(DdlState::Failed(_)) => th.error,
+            _ => th.fg_dim,
+        };
+        for (i, l) in
+            wrap_words(&text, einner.width.saturating_sub(1) as usize).iter().take(einner.height as usize).enumerate()
+        {
+            buf.set_stringn(
+                einner.x + 1,
+                einner.y + i as u16,
+                l,
+                einner.width.saturating_sub(1) as usize,
+                Style::new().fg(color).bg(th.bg),
+            );
+        }
+        return (einner.x, einner.y);
+    }
+    let ddl = app.tab().is_ddl();
     let editor = &mut app.tabs.active_mut().editor;
     // The statement a run would take (the selection instead, while there is one: the editor
     // marks it itself).
     let stmt = match editor.mode {
         crate::widgets::editor::Mode::Visual => None,
+        // A DDL tab runs nothing.
+        _ if ddl => None,
         _ => editor.current_statement().map(|(start, end, _)| (start, end)),
     };
     editor.render(einner, buf, stmt)
+}
+
+/// What a DDL tab shows instead of its text while it has none: not read yet, waiting, locked
+/// (only that: nothing was read) or why it could not be read, with the key that reads it.
+fn ddl_state_text(app: &App) -> Option<String> {
+    let d = app.tab().doc.ddl.as_ref()?;
+    let key = app.key_for(Action::ReloadDdl, Ctx::Ddl);
+    let msg = match &d.state {
+        DdlState::Loaded => return None,
+        DdlState::NotLoaded => Msg::DdlStateNotLoaded { key },
+        DdlState::Connecting => Msg::Label(Label::DdlStateConnecting),
+        DdlState::Loading => Msg::Label(Label::DdlStateLoading),
+        DdlState::Locked => Msg::DdlStateLocked { key },
+        DdlState::Failed(error) => Msg::DdlStateFailed { error: error.clone(), key },
+    };
+    Some(app.i18n.msg(&msg).to_string())
 }
 
 /// The results pane: the title with the paging state on its right, the grid, and the

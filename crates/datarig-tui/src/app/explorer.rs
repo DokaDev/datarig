@@ -634,6 +634,8 @@ impl App {
             ExplorerAction::Move => self.open_move(),
             ExplorerAction::NewFolder => self.open_new_folder(),
             ExplorerAction::Rename => self.open_rename(),
+            ExplorerAction::ShowDdl => self.explorer_show_ddl(false),
+            ExplorerAction::ShowFunctionDdl => self.explorer_show_ddl(true),
             ExplorerAction::Delete => match row.kind {
                 RowKind::Profile(id) => self.request_delete_profile(id),
                 RowKind::Tunnel(id) | RowKind::TunnelError(id) => self.request_delete_tunnel(id),

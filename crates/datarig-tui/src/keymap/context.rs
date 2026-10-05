@@ -12,6 +12,7 @@
 //! │  │  ├─ inspector          (the result inspector panel, once clicked)
 //! │  │  ├─ welcome            (no profiles: the panel on the right)
 //! │  │  ├─ editor.vim.normal  [editor]
+//! │  │  │  └─ editor.ddl      [editor]   (a DDL tab's read-only text, vim Normal)
 //! │  │  └─ editor.vim.visual  [editor]
 //! │  ├─ editor.vim.insert     [editor][text]
 //! │  ├─ editor.vim.search     [editor][text]   (the `/` and `?` prompt)
@@ -39,6 +40,7 @@ pub enum Ctx {
     VimVisual,
     VimInsert,
     VimSearch,
+    Ddl,
     Commands,
     QuickConnect,
     ProfileForm,
@@ -62,7 +64,7 @@ pub enum Ctx {
 }
 
 impl Ctx {
-    pub const ALL: [Ctx; 32] = [
+    pub const ALL: [Ctx; 33] = [
         Ctx::Root,
         Ctx::Workspace,
         Ctx::Nav,
@@ -75,6 +77,7 @@ impl Ctx {
         Ctx::VimVisual,
         Ctx::VimInsert,
         Ctx::VimSearch,
+        Ctx::Ddl,
         Ctx::Commands,
         Ctx::QuickConnect,
         Ctx::ProfileForm,
@@ -112,6 +115,7 @@ impl Ctx {
             Ctx::VimVisual => "editor.vim.visual",
             Ctx::VimInsert => "editor.vim.insert",
             Ctx::VimSearch => "editor.vim.search",
+            Ctx::Ddl => "editor.ddl",
             Ctx::Commands => "overlay.commands",
             Ctx::QuickConnect => "overlay.quick_connect",
             Ctx::Chooser => "overlay.chooser",
@@ -147,6 +151,7 @@ impl Ctx {
             Ctx::Explorer | Ctx::Grid | Ctx::Inspector | Ctx::Welcome | Ctx::VimNormal | Ctx::VimVisual => {
                 Some(Ctx::Nav)
             }
+            Ctx::Ddl => Some(Ctx::VimNormal),
             _ => Some(Ctx::Root),
         }
     }
@@ -179,7 +184,7 @@ impl Ctx {
 
     /// The query editor: its keys may hide the keys of its ancestors (except protected keys).
     pub fn is_editor(self) -> bool {
-        matches!(self, Ctx::VimNormal | Ctx::VimVisual | Ctx::VimInsert | Ctx::VimSearch)
+        matches!(self, Ctx::VimNormal | Ctx::VimVisual | Ctx::VimInsert | Ctx::VimSearch | Ctx::Ddl)
     }
 
     /// One line for `docs/keybindings.md`.
@@ -198,6 +203,9 @@ impl Ctx {
             Ctx::VimInsert => "Query editor, vim Insert mode: typing (`Esc` goes back to Normal).",
             Ctx::VimSearch => {
                 "The search prompt of `/` and `?` on the editor's last line: `Enter` searches, `Esc` goes back to where the cursor was."
+            }
+            Ctx::Ddl => {
+                "A DDL tab in vim Normal mode: its text is read-only (moving, selecting, searching and yanking work; edits are refused); `r` reads it again, `o` opens it in a new console."
             }
             Ctx::Commands => "The `:` command line: commands with arguments, and a search over every action.",
             Ctx::QuickConnect => "Quick connect: a fuzzy list of the connection profiles.",
@@ -249,6 +257,7 @@ impl Ctx {
             Ctx::VimVisual => Label::KeyctxEditorVimVisual,
             Ctx::VimInsert => Label::KeyctxEditorVimInsert,
             Ctx::VimSearch => Label::KeyctxEditorVimSearch,
+            Ctx::Ddl => Label::KeyctxEditorDdl,
             Ctx::Commands => Label::KeyctxOverlayCommands,
             Ctx::QuickConnect => Label::KeyctxOverlayQuickConnect,
             Ctx::Chooser => Label::KeyctxOverlayChooser,

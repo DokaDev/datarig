@@ -164,6 +164,20 @@ pub(super) enum Token {
     Mark(char),
 }
 
+/// Whether Normal-mode command `token` (after operator `op`, if one is pending) changes the
+/// text: an operator other than a yank, a put, an undo or redo, a repeat, Insert mode, or one of
+/// the commands that edit (`x`, `r`, `J`, `~`, `&`, …). Yanks, motions, Visual mode, marks,
+/// search and scrolling do not.
+fn changes(token: Token, op: Option<Op>) -> bool {
+    match (token, op) {
+        (_, Some(op)) => op != Op::Yank,
+        (Token::Key(c), None) => Op::of(c).is_some_and(|o| o != Op::Yank) || "xXsDCSiaIAoOpPuJ~.&".contains(c),
+        (Token::G(c), None) => Op::of_g(c).is_some() || matches!(c, 'J' | '&'),
+        (Token::Replace(_) | Token::Ctrl('r'), None) => true,
+        _ => false,
+    }
+}
+
 /// The text an operator works on: bytes of the text, or whole lines.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Target {
@@ -271,6 +285,9 @@ impl Editor {
         let token = self.token(key, self.cmd.op.is_some());
         let (n, explicit) = self.cmd.count();
         let op = self.cmd.op;
+        if self.read_only && changes(token, op) {
+            return self.refuse();
+        }
         match token {
             Token::More => return EdEvent::None,
             Token::Motion(m) => return self.motion_key(m),

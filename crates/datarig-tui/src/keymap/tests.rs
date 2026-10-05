@@ -121,6 +121,8 @@ fn default_table_is_conflict_free() {
         "secrets.default.prompt",
         // `n` in the explorer's "Tunnels" section makes one too.
         "tunnel.new",
+        // The DDL tab's menu; `y` yanks a part of the text (to the clipboard by default).
+        "ddl.copy",
     ];
     for s in action::REGISTRY {
         let bound = km.bindings().iter().any(|b| b.target == Target::Action(s.action));

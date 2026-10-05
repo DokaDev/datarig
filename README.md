@@ -63,6 +63,19 @@ Everything below works today, with PostgreSQL.
   at once when the lock is already there, after at most 2 s when it is taken while the
   structure is being read.
   Nerd Font icons are optional (asked once, `:set icons=on|off`).
+- Show DDL (PostgreSQL): `D` on a table, view, materialized view, index or trigger in the
+  explorer (or its menu, or `:ddl [schema.name]`), `F` on a trigger for its function, opens its
+  `CREATE` statements in a read-only tab, rebuilt from the catalog in one round trip and marked
+  as such (`-- Reconstructed by datarig from the catalog (not pg_dump)`): owned sequences,
+  columns with their collations, defaults, identity and generated expressions, constraints,
+  partitioning or inheritance, storage parameters, owner, indexes, triggers, row-level security
+  and policies, comments and grants (not rows, sequence values, rules, extended statistics or
+  security labels). Every name the server prints is qualified. The text can be moved in,
+  searched and yanked like any other; edits are refused. `o` opens it in a new console on the
+  same connection, `r` (or the run key) reads it again; a tab restored at the next start waits
+  for that. Reading it never waits on another session: when the object, or a table its
+  definition reads (a view's tables, a policy's subquery), is locked by another session, the tab
+  says so and shows nothing of the DDL.
 - Connection profiles with colors, icons and nested folders; a quick-connect list (`Ctrl+O`)
   with fuzzy search; a database and schema per tab (`:use db.schema`).
 - Saved queries as plain `.sql` files in folders, autosave of every tab, and the workspace
@@ -220,7 +233,8 @@ Planned, in no particular order and with no dates:
   networks, and servers that require TLS cannot be reached yet)
 - A server monitor (sessions, locks, activity)
 - More of vim: `gv`, macros, Ex commands other than `:{n}` and `:s` (`:d`, `:g`, …)
-- DDL view of tables and other objects
+- DDL of objects the explorer does not list yet (functions on their own, sequences, types),
+  and from the other drivers
 - Query profiling and charts
 - Multi-hop SSH and importing hosts from `~/.ssh/config`
 

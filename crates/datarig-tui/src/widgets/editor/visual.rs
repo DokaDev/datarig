@@ -144,6 +144,13 @@ impl Editor {
         if token == Token::More {
             return EdEvent::None;
         }
+        // Read-only: moving, the other end (`o`, `O`), the kind of selection and yanks only.
+        if self.read_only && matches!(token, Token::Replace(_) | Token::G(_) | Token::Key(_)) {
+            let reads = matches!(token, Token::Key('o' | 'O' | 'v' | 'V' | 'y' | 'Y'));
+            if !reads {
+                return self.refuse();
+            }
+        }
         self.end_command();
         match token {
             Token::Cancel if key.code == KeyCode::Esc => {

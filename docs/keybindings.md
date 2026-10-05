@@ -179,6 +179,8 @@ The explorer: folders, connection profiles, their databases and schema trees. In
 | `N` | `folder.new` | New folder |  |
 | `R` | `explorer.rename` | Explorer: rename folder |  |
 | `O` | `explorer.new_console_here` | Explorer: new console in this database or schema |  |
+| `D` | `explorer.show_ddl` | Explorer: show the DDL of the table, view, index or trigger |  |
+| `F` | `explorer.show_function_ddl` | Explorer: show the DDL of the trigger's function |  |
 | `Esc` | `explorer.back` | Explorer: back (cancel a test or connecting, clear the filter) |  |
 | `q` | `app.quit` | Quit |  |
 
@@ -290,6 +292,15 @@ The search prompt of `/` and `?` on the editor's last line: `Enter` searches, `E
 Reserved — vim search: `Esc` `Enter` `Ctrl+W`
 
 Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
+
+## `editor.ddl` [editor]
+
+A DDL tab in vim Normal mode: its text is read-only (moving, selecting, searching and yanking work; edits are refused); `r` reads it again, `o` opens it in a new console. Inside `editor.vim.normal`.
+
+| Keys | Action | Description | R |
+|---|---|---|---|
+| `r` | `ddl.reload` | DDL tab: read the DDL again |  |
+| `o` | `ddl.open_console` | DDL tab: open the DDL in a new console |  |
 
 ## `overlay.commands` [text]
 
@@ -471,6 +482,7 @@ An editor command closes the line; what went wrong is said in the status bar.
 | `:nohlsearch` | `:noh` `:nohl` | Clear the search highlight in the editor (until the next search) |
 | `:suspend` | `:sus` `:stop` | Suspend datarig (the shell's fg brings it back) |
 | `:format` |  | Format the statement under the cursor or the selection (only its layout) |
+| `:ddl [schema.name]` |  | Show the DDL of the explorer's object, the table tab's table, or a name (:ddl [schema.name]) |
 
 Settings of `:set` (saved to `config.toml` like the matching actions):
 
@@ -512,3 +524,4 @@ Actions without a default key (the command line finds them by name).
 | `secrets.default.prompt` | New profiles' password → prompt on every connect |
 | `help.all` | Keyboard help: expand all |
 | `explorer.context_menu` | Explorer: actions of this node (menu) |
+| `ddl.copy` | DDL tab: copy the whole DDL |

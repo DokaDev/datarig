@@ -199,6 +199,12 @@ pub struct Editor {
     /// The closing characters auto-pairs put in during this Insert session, last on top: their
     /// line and bytes from the line's end.
     pairs: Vec<(usize, usize, char)>,
+    /// A text to read, not to change (a DDL tab): moving, selecting, yanking, searching and
+    /// marks work; a command that would change the text does nothing and says so
+    /// ([`Editor::take_refused`]), and Insert mode never starts.
+    pub read_only: bool,
+    /// The last key or paste was refused for [`Editor::read_only`], until the app takes it.
+    refused: bool,
 }
 
 impl Editor {
@@ -261,7 +267,27 @@ impl Editor {
             region: REGION_LINES,
             auto_pairs: false,
             pairs: Vec::new(),
+            read_only: false,
+            refused: false,
         }
+    }
+
+    /// A read-only editor of `text` ([`Editor::read_only`]).
+    pub fn read_only(text: &str) -> Self {
+        Self { read_only: true, ..Self::new(text) }
+    }
+
+    /// Whether the last key or paste would have changed a read-only text (and did nothing),
+    /// for the app to say; once.
+    pub fn take_refused(&mut self) -> bool {
+        std::mem::take(&mut self.refused)
+    }
+
+    /// A command that would change the text of a read-only editor: it is dropped and said.
+    fn refuse(&mut self) -> EdEvent {
+        self.cmd = vim::Pending::default();
+        self.refused = true;
+        EdEvent::None
     }
 
     /// Bytes of the text.
@@ -392,6 +418,12 @@ impl Editor {
         self.cmd.awaiting()
     }
 
+    /// A Normal or Visual command is being typed: a count, a register, an operator, a prefix
+    /// or a command waiting for its argument.
+    pub fn command_started(&self) -> bool {
+        !self.cmd.is_empty()
+    }
+
     /// A command waits for a character, to be taken as it is typed (`f`, `t`, `r`): a Hangul
     /// syllable is that syllable, not the QWERTY keys under it.
     pub fn awaiting_char(&self) -> bool {
@@ -448,6 +480,9 @@ impl Editor {
         }
         if self.prompt.is_some() {
             return self.prompt_paste(&norm);
+        }
+        if self.read_only {
+            return self.refuse();
         }
         self.cmd = vim::Pending::default();
         let (a, b) = match self.mode {

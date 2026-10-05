@@ -81,16 +81,17 @@ fn warning_mark(state: State, user_tx: bool) -> Option<(&'static str, Color)> {
 }
 
 /// The name of the document a tab shows: a saved query's name, a console's
-/// `console <n>`, a table tab's `schema.table` (`database.schema.table` in another database than
-/// the profile's own).
+/// `console <n>`, a table tab's `schema.table`, a DDL tab's object (`database.` before either in
+/// another database than the profile's own).
 pub(crate) fn document_name(app: &App, tab: &Tab) -> String {
     if let Some(path) = tab.script() {
         return datarig_core::scripts::display_name(path, false).to_string();
     }
-    if let Some(t) = &tab.doc.table {
+    let object = tab.doc.table.as_ref().map(|t| t.label()).or_else(|| tab.doc.ddl.as_ref().map(|d| d.label()));
+    if let Some(name) = object {
         return match app.other_database(tab) {
-            Some(db) => format!("{db}.{}", t.label()),
-            None => t.label(),
+            Some(db) => format!("{db}.{name}"),
+            None => name,
         };
     }
     app.i18n.msg(&Msg::TabConsole { n: tab.doc.console_no.to_string() }).to_string()
@@ -147,6 +148,13 @@ fn label(app: &App, index: usize, tab: &Tab, active: bool, doc_max: usize) -> Ve
     let mut name = document_name(app, tab);
     if tab.is_table() && app.icons_on() {
         name = format!("{} {name}", icons::TABLE);
+    }
+    // A DDL tab says so, with its icon or in words.
+    if tab.is_ddl() {
+        name = match app.icons_on() {
+            true => format!("{} {name}", icons::DDL),
+            false => app.i18n.msg(&Msg::TabDdl { name }).to_string(),
+        };
     }
     parts.push(Part { text: clip(&name, doc_max.max(1)), style: doc, kind: PartKind::Document });
     if tab.doc.conflict || tab.doc.save_error.is_some() {
