@@ -650,12 +650,28 @@ fn the_new_views_select_what_is_clicked() {
     assert_eq!(i, slowest, "the first card is the slowest node");
     h.mouse(MouseEventKind::Down(MouseButton::Left), card.x + 3, card.y + 1);
     assert_eq!(plan(&h).selected, slowest);
-    // Worst estimate: the Index Only Scan under the Limit (1000 estimated, 1 read).
-    let worst = plan(&h).plan.worst_misestimate().unwrap().0;
+    // No misestimate here (the index scan under min()'s Limit stops early on purpose): that
+    // card names no node.
+    assert_eq!(plan(&h).plan.worst_misestimate(), None);
+    assert!(h.screen(160, 45).contains("none: every estimate within ×10"));
+    assert!(!plan(&h).hits.iter().any(|(r, _)| r.y == card.y && r.x != card.x));
+    // A plan with one: its card selects it.
+    let json = r#"[{"Plan": {"Node Type": "Hash Join", "Startup Cost": 0, "Total Cost": 20, "Plan Rows": 10, "Plan Width": 4,
+        "Actual Startup Time": 0.1, "Actual Total Time": 9.0, "Actual Rows": 10, "Actual Loops": 1, "Plans": [
+        {"Node Type": "Seq Scan", "Relation Name": "t", "Parent Relationship": "Outer", "Startup Cost": 0, "Total Cost": 10,
+         "Plan Rows": 5, "Plan Width": 4, "Actual Startup Time": 0.1, "Actual Total Time": 8.0, "Actual Rows": 5000, "Actual Loops": 1}]},
+        "Execution Time": 9.5}]"#;
+    let (mut h, id, _) = explain("SELECT * FROM t;", " ea");
+    h.db(plan_page(id, json));
+    h.app.focus = Focus::Results;
+    h.keys("2");
+    h.draw(160, 45);
     let (card, i) = plan(&h).hits[1];
-    assert_eq!(i, worst);
+    assert_eq!(i, 1, "the worst estimate: the scan, ×1000");
+    h.keys("gg");
     h.mouse(MouseEventKind::Down(MouseButton::Left), card.x + 3, card.y + 1);
-    assert_eq!(plan(&h).selected, worst);
+    assert_eq!(plan(&h).selected, 1);
+    let mut h = shown(18, "subplans.analyze.json");
     for key in ["3", "4", "7"] {
         h.keys(key);
         h.keys("gg");
