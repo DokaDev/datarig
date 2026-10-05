@@ -93,6 +93,10 @@ Every pane that is not text input (explorer, results, vim Normal/Visual). Inside
 | `Space s d` | `script.delete` | Delete this saved query |  |
 | `Space e f` | `editor.format` | Format the statement under the cursor or the selection (only its layout) |  |
 | `Space e c` | `editor.comment_toggle` | Comment the line or the selected lines out with -- (or back in) |  |
+| `Space Space` | `menu.open` | Action menu |  |
+| `Shift+F10` | `menu.open` | Action menu |  |
+| `Menu` | `menu.open` | Action menu |  |
+| `Space t m` | `tab.menu` | Tab menu |  |
 | `Space ,` | `settings.open` | Settings |  |
 | `Space /` | `commands.open` | Commands |  |
 | `Space ?` | `help.context` | Keyboard help |  |
@@ -360,11 +364,13 @@ Reserved — saved-queries tree: name or filter: `Up` `Down` `Enter` `Tab` `Shif
 
 Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
 
-## `overlay.context_menu`
+## `overlay.context_menu` [text]
 
-A right-click menu (the explorer's node, the result grid); the key shown next to an item runs it too; the pointer selects the item under it. Inside `root`.
+The action menu: a right click (an explorer node, the grid, a tab, the editor) opens it at the pointer; `Space Space`, `Shift+F10` or the Menu key next to the selection, `Space t m` under the active tab. The selection's actions come first, then the pane's, each with its key in that pane. Typing filters it (when nothing in it matches, every action is searched); the arrows, `Ctrl+N`/`Ctrl+P` and `Tab` move, `Enter` runs, `Esc` closes (`Backspace` on an empty filter does not); a shown key that is not a character (`Ctrl+…`, `F…`) runs its item; the pointer selects the item under it. Inside `root`.
 
-Reserved — context menu: `j` `k` `Down` `Up` `Enter` `Esc` `q`
+Reserved — action menu: `Down` `Up` `Ctrl+N` `Ctrl+P` `Tab` `Shift+Tab` `Enter` `Esc`
+
+Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
 
 ## `overlay.password` [text]
 

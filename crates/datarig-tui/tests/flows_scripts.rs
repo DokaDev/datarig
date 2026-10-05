@@ -402,17 +402,17 @@ fn the_menu_of_a_saved_query_and_of_a_folder() {
         assert!(labels.iter().any(|l| l == want), "{want}: {labels:?}");
     }
     assert!(labels.iter().all(|l| !l.contains("folder") || l == "Move saved query to a folder"), "{labels:?}");
-    h.keys("R");
+    h.menu_pick("Rename saved query");
     let n = h.app.overlays.name_input().expect("the name dialog");
     assert_eq!(n.purpose, NamePurpose::RenameScript("a/q1.sql".into()));
     assert_eq!(n.input.text(), "a/q1");
     h.key(KeyCode::Esc);
     h.right_click_row("q1");
-    h.keys("d");
+    h.menu_pick("Delete saved query");
     assert!(h.screen(120, 40).contains("Delete the saved query “a/q1”?"));
     h.keys("n");
     h.right_click_row("q1");
-    h.keys("m");
+    h.menu_pick("Move saved query to a folder");
     assert_eq!(h.overlay_kind(), Some(OverlayKind::Chooser));
     h.key(KeyCode::Esc);
     // Its folder (the cursor on the saved query).
@@ -423,7 +423,7 @@ fn the_menu_of_a_saved_query_and_of_a_folder() {
         assert!(labels.iter().any(|l| l == want), "{want}: {labels:?}");
     }
     assert!(labels.iter().all(|l| !l.contains("query")), "{labels:?}");
-    h.keys("R");
+    h.menu_pick("Rename folder");
     let n = h.app.overlays.name_input().expect("the name dialog");
     assert_eq!(n.purpose, NamePurpose::RenameScriptFolder("a".into()));
     assert_eq!(n.title, Msg::NameRenameScriptFolder { name: "a".into() });

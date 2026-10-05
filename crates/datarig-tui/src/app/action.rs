@@ -48,6 +48,10 @@ pub enum Action {
     FormatSql,
     /// Comment lines out or back in, as `gc`.
     ToggleComment,
+    /// The action menu of the focused pane, next to its selection.
+    OpenMenu,
+    /// The action menu of the active tab, under it in the tab bar.
+    TabMenu,
     NewProfile,
     /// Test the selected profile (explorer) or the active tab's profile.
     TestConnection,
@@ -258,6 +262,16 @@ fn panes(a: &App) -> bool {
     !a.layout.too_small && !a.overlays.is_open(OverlayKind::CellViewer) && (a.profiles.is_empty() || !a.tabs.is_empty())
 }
 
+/// The panes are drawn (a menu opens next to what they show).
+fn drawn(a: &App) -> bool {
+    !a.layout.too_small
+}
+
+/// There is a tab and the tab bar is drawn.
+fn tab_drawn(a: &App) -> bool {
+    has_tab(a) && drawn(a)
+}
+
 /// The keyboard help would open below a password prompt, so not while one is open.
 fn help_available(a: &App) -> bool {
     !a.overlays.is_open(OverlayKind::Password)
@@ -408,6 +422,7 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::FocusNext, "pane.next", Label::ActionPaneNext, panes),
     act(Action::FocusPrev, "pane.prev", Label::ActionPanePrev, panes),
     act(Action::OpenCommands, "commands.open", Label::ActionCommandsOpen, anywhere),
+    act(Action::OpenMenu, "menu.open", Label::ActionMenuOpen, drawn),
     act(Action::Quit, "app.quit", Label::ActionAppQuit, anywhere),
     act(Action::Suspend, "app.suspend", Label::ActionAppSuspend, can_suspend),
     act(Action::OpenSettings, "settings.open", Label::ActionSettingsOpen, anywhere),
@@ -453,6 +468,7 @@ pub const REGISTRY: &[ActionSpec] = &[
     ),
     act(Action::NewTab, "tab.new_console", Label::ActionTabNewConsole, in_workspace),
     act(Action::CloseTab, "tab.close", Label::ActionTabClose, has_tab),
+    act(Action::TabMenu, "tab.menu", Label::ActionTabMenu, tab_drawn),
     act(Action::ReopenTab, "tab.reopen_closed", Label::ActionTabReopenClosed, in_workspace),
     mv(Action::NextTab, "tab.next", Label::ActionTabNext, has_tab),
     mv(Action::PrevTab, "tab.prev", Label::ActionTabPrev, has_tab),

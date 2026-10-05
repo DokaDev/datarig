@@ -619,6 +619,33 @@ pub(crate) fn row_text(app: &App, row: &Row) -> String {
     format!("{}{arrow}{text}", "  ".repeat(row.depth))
 }
 
+/// What `row` stands for, whatever it shows now (a connection's state, estimates, key marks):
+/// for a node of a schema tree the names of its schema and object, which its kind holds only as
+/// places in lists that a reload may change; nothing for other rows, whose kind says it all.
+pub(crate) fn row_key(app: &App, row: &Row) -> String {
+    let Some((tree, n)) = row_node(app, row) else { return String::new() };
+    let object = match n {
+        Node::Object(i, g, j)
+        | Node::NoColumns(i, g, j)
+        | Node::StructNote(i, g, j)
+        | Node::Column(i, g, j, ..)
+        | Node::StructGroup(i, g, j, ..)
+        | Node::StructItem(i, g, j, ..)
+        | Node::StructDetail(i, g, j, ..)
+        | Node::StructColumns(i, g, j, ..)
+        | Node::StructColumn(i, g, j, ..) => tree.object_name(i, g, j).map(|(_, o)| o),
+        _ => None,
+    };
+    format!("{}\n{}", tree.schema_of(n).unwrap_or_default(), object.unwrap_or_default())
+}
+
+/// The text of `row` without its indentation, arrow and estimates, blanks folded (the action
+/// menu's heading).
+pub(crate) fn row_name(app: &App, row: &Row) -> String {
+    let text: String = row_parts(app, row).into_iter().map(|(t, _)| t).collect();
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// The whole text of the row under the explorer's cursor, for the status bar, when it is a
 /// tunnel preset (or why its connection was lost), part of a table's structure (the explorer is
 /// narrow, and cuts the details of deep lines) or an object with storage: its name and its

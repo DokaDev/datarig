@@ -668,6 +668,16 @@
 "menu.move_query" = "저장된 쿼리를 폴더로 옮기기"
 "menu.move_folder" = "폴더를 다른 폴더로 옮기기"
 "menu.move_profile" = "연결 프로필을 폴더로 옮기기"
+# the action menu (right click, Space Space, Shift+F10, the Menu key)
+"action.menu.open" = "동작 메뉴"
+"action.tab.menu" = "탭 메뉴"
+"menu.heading.cell" = "{column} 셀, {row}행"
+"menu.heading.selection" = "선택 영역"
+"menu.heading.statement" = "커서가 있는 문장"
+"menu.heading.all_actions" = "모든 동작"
+"menu.no_match" = "맞는 동작이 없습니다"
+"menu.filter_hint" = "입력해서 거르기"
+"menu.stale" = "실행하지 않았습니다: 메뉴를 연 대상이 바뀌었습니다. 메뉴를 다시 여세요"
 
 # saved queries, autosave, tab restore, second instance
 "explorer.scripts" = "저장된 쿼리"

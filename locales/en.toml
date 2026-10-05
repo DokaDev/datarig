@@ -661,7 +661,7 @@
 "keyctx.overlay.script_tree.name" = "Saved queries tree: name or filter"
 "action.explorer.context_menu" = "Explorer: actions of this node (menu)"
 "action.explorer.new_console_here" = "Explorer: new console in this database or schema"
-"keyctx.overlay.context_menu" = "Actions menu"
+"keyctx.overlay.context_menu" = "Action menu"
 "menu.console_in" = "New console in {place}"
 "menu.rename_query" = "Rename saved query"
 "menu.rename_folder" = "Rename folder"
@@ -671,6 +671,16 @@
 "menu.move_query" = "Move saved query to a folder"
 "menu.move_folder" = "Move folder into another folder"
 "menu.move_profile" = "Move connection profile to a folder"
+# the action menu (right click, Space Space, Shift+F10, the Menu key)
+"action.menu.open" = "Action menu"
+"action.tab.menu" = "Tab menu"
+"menu.heading.cell" = "Cell {column}, row {row}"
+"menu.heading.selection" = "Selection"
+"menu.heading.statement" = "Statement under the cursor"
+"menu.heading.all_actions" = "All actions"
+"menu.no_match" = "No action matches"
+"menu.filter_hint" = "type to filter"
+"menu.stale" = "Not run: what the menu was opened on has changed. Open the menu again"
 
 # saved queries, autosave, tab restore, second instance
 "explorer.scripts" = "Saved queries"

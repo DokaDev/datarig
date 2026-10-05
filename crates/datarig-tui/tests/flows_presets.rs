@@ -642,9 +642,17 @@ fn the_context_menu_of_a_preset() {
             "Test SSH tunnel"
         ]
     );
+    // The keyboard opens the same menu on the row under the cursor.
+    let by_mouse = h.menu_labels();
+    h.key(KeyCode::Esc);
+    h.keys("  ");
+    assert_eq!(h.menu_labels(), by_mouse, "Space Space");
     h.key(KeyCode::Esc);
     h.right_click_row("[tunnels]");
     assert_eq!(h.menu_labels(), ["Explorer: open or toggle", "New SSH tunnel"]);
+    h.key(KeyCode::Esc);
+    h.key_mod(KeyCode::F(10), ratatui::crossterm::event::KeyModifiers::SHIFT);
+    assert_eq!(h.menu_labels(), ["Explorer: open or toggle", "New SSH tunnel"], "Shift+F10");
 }
 
 /// A profile with its own tunnel, its secret in the secrets file; a scratch config file.

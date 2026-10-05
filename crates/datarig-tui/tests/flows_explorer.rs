@@ -654,7 +654,6 @@ fn right_click_opens_the_nodes_actions_and_runs_them() {
         [
             "explorer.activate",
             "explorer.refresh",
-            "conn.new",
             "conn.edit",
             "conn.duplicate",
             "explorer.delete",
@@ -662,6 +661,9 @@ fn right_click_opens_the_nodes_actions_and_runs_them() {
             "conn.disconnect",
             "conn.open_console",
             "explorer.move",
+            // The pane's, after the node's.
+            "explorer.filter",
+            "conn.new",
             "folder.new",
         ]
     );
@@ -670,13 +672,13 @@ fn right_click_opens_the_nodes_actions_and_runs_them() {
     assert!(h.app.overlays.menu().unwrap().actions().iter().all(|a| help.contains(a)));
     let screen = h.screen(120, 30);
     assert!(screen.contains("Edit connection profile") && screen.contains(" e │"), "{screen}");
-    // The key shown next to an item runs it: `e` edits.
-    h.keys("e");
+    // Typing filters; Enter runs the item found.
+    h.menu_pick("Edit connection profile");
     assert!(h.form_open());
     h.key(KeyCode::Esc);
-    // j/k and Enter: the second item reloads the schemas.
+    // The arrows and Enter: the second item reloads the schemas.
     right_click(&mut h, 1);
-    h.keys("j");
+    h.key(KeyCode::Down);
     h.key(KeyCode::Enter);
     assert!(h.overlay_kind().is_none());
     assert!(h.sent().iter().any(|c| matches!(c, DbCommand::LoadSchemas)));
@@ -691,18 +693,21 @@ fn right_click_opens_the_nodes_actions_and_runs_them() {
     assert!(h.overlay_kind().is_none());
     right_click(&mut h, 25);
     assert_eq!(h.selected(), 0, "blank space: the New connection row");
-    assert_eq!(menu_ids(&h), ["conn.new", "folder.new"]);
-    // A click outside closes it; a click on an item runs it.
+    assert_eq!(menu_ids(&h), ["explorer.filter", "conn.new", "folder.new"]);
+    // A click on a heading does nothing; a click on an item runs it.
     use ratatui::crossterm::event::{Event, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
     h.draw(120, 30);
     let list = h.app.overlays.menu().unwrap().list;
-    h.app.handle_event(Event::Mouse(MouseEvent {
-        kind: MouseEventKind::Down(MouseButton::Left),
-        column: list.x + 2,
-        row: list.y,
-        modifiers: KeyModifiers::NONE,
-    }));
-    assert!(h.form_open(), "the first item: new connection");
+    let line = h.app.menu_lines().iter().position(|(_, l, _)| *l == "New connection profile").unwrap() as u16;
+    for row in [list.y, list.y + line] {
+        h.app.handle_event(Event::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: list.x + 2,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }));
+    }
+    assert!(h.form_open(), "the heading did nothing; the item: new connection");
 }
 
 /// Key metadata: read once when the profile connects, marked without a
@@ -1053,7 +1058,7 @@ fn the_menus_console_opens_where_the_click_was() {
         assert!(!ids.contains(&"conn.open_console"), "{row}: one console item, {ids:?}");
         assert!(h.menu_labels().iter().any(|l| l == label), "{row}: {:?}", h.menu_labels());
         let tabs = h.app.tabs.len();
-        h.keys("O");
+        h.menu_pick(label);
         assert_eq!(h.app.tabs.len(), tabs + 1, "{row}: a new console");
         assert_eq!(h.app.tab().context, want, "{row}");
     }
@@ -1062,7 +1067,7 @@ fn the_menus_console_opens_where_the_click_was() {
     h.right_click_row("local-pg");
     let ids = menu_ids(&h);
     assert!(ids.contains(&"conn.open_console") && !ids.contains(&"explorer.new_console_here"), "{ids:?}");
-    h.keys("o");
+    h.menu_pick("New console on this connection");
     assert_eq!(h.app.tab().context, SessionContext::default());
 }
 
@@ -1083,7 +1088,7 @@ fn the_menu_of_a_folder_and_of_a_profile() {
         assert!(labels.iter().any(|l| l == want), "{want}: {labels:?}");
     }
     assert!(labels.iter().all(|l| !l.contains("profile or")), "{labels:?}");
-    h.keys("R");
+    h.menu_pick("Rename folder");
     let n = h.app.overlays.name_input().expect("the name dialog");
     assert!(matches!(&n.purpose, NamePurpose::RenameFolder(f) if f.to_string() == "work"));
     h.key(KeyCode::Esc);
@@ -1094,11 +1099,11 @@ fn the_menu_of_a_folder_and_of_a_profile() {
     for want in ["Delete connection profile", "Move connection profile to a folder"] {
         assert!(labels.iter().any(|l| l == want), "{want}: {labels:?}");
     }
-    h.keys("d");
+    h.menu_pick("Delete connection profile");
     assert!(h.screen(160, 45).contains("Delete the connection profile “v6”?"));
     h.keys("n");
     h.right_click_row("v6");
-    h.keys("m");
+    h.menu_pick("Move connection profile to a folder");
     assert_eq!(h.overlay_kind(), Some(OverlayKind::Chooser));
     assert_eq!(h.app.selected_profile(), Some(id(&h, "v6")));
 }

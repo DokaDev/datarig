@@ -754,6 +754,16 @@ impl Harness {
         self.mouse(MouseEventKind::Down(MouseButton::Right), area.x + 4, area.y + i);
     }
 
+    /// Run the open menu's item `label`: type it (the menu's filter) and press Enter. The item
+    /// must be the one selected then.
+    pub fn menu_pick(&mut self, label: &str) {
+        self.type_text(label);
+        let m = self.app.overlays.menu().expect("a menu");
+        let selected = self.app.menu_lines().get(m.selected).map(|(_, l, _)| l.to_string());
+        assert_eq!(selected.as_deref(), Some(label), "{:?}", self.menu_labels());
+        self.key(KeyCode::Enter);
+    }
+
     /// The labels of the open context menu's items.
     pub fn menu_labels(&self) -> Vec<String> {
         self.app.menu_rows().into_iter().map(|(label, _)| label.to_string()).collect()

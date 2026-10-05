@@ -107,6 +107,25 @@ impl Editor {
         }
     }
 
+    /// Whether the text position `at` (line, grapheme) is in the Visual selection.
+    pub fn in_selection(&self, at: (usize, usize)) -> bool {
+        if self.mode != Mode::Visual {
+            return false;
+        }
+        let (a, b) = self.visual_ends();
+        match self.sel {
+            Sel::Lines => (a.0..=b.0).contains(&at.0),
+            // The block's columns are screen columns: a wide character takes two, and after `$`
+            // it goes to every line's end.
+            Sel::Block => {
+                let bl = self.block();
+                let x = self.display_x(at.0, at.1);
+                (bl.first..=bl.last).contains(&at.0) && x >= bl.start && (bl.max || x <= bl.end)
+            }
+            Sel::Chars => (a..=b).contains(&at),
+        }
+    }
+
     /// Selected text in Visual mode (for Ctrl+E): whole lines without the last line break by
     /// line, a block's pieces as `y` takes them.
     pub fn selection(&self) -> Option<String> {

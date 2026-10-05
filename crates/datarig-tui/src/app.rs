@@ -363,6 +363,8 @@ pub struct Layout {
     pub detail: Rect,
     /// The editor's text (inside its border, below a banner), as drawn last.
     pub editor_text: Rect,
+    /// Where the editor's cursor was drawn last (the action menu opens there).
+    pub editor_cursor: (u16, u16),
     /// The editor and the results pane together (a query tab), for resizing the pane.
     pub body: Rect,
     /// The results pane's top border while both panes are drawn: dragging it resizes them.

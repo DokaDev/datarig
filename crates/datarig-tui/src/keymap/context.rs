@@ -19,7 +19,7 @@
 //! │  └─ overlay.cell_viewer
 //! └─ overlay.*              (which-key, help, help filter, command line, quick connect,
 //!                            profile form, settings, chooser, chooser filter, name input,
-//!                            saved-queries tree and its name field, context menu, password,
+//!                            saved-queries tree and its name field, action menu, password,
 //!                            confirm, run confirm, completion)
 //! ```
 
@@ -173,6 +173,7 @@ impl Ctx {
                 | Ctx::Password
                 | Ctx::Completion
                 | Ctx::HelpFilter
+                | Ctx::ContextMenu
         )
     }
 
@@ -206,7 +207,7 @@ impl Ctx {
             Ctx::ScriptTree => "The folder tree of the saved queries (save as, open): the tree has the keyboard.",
             Ctx::ScriptTreeName => "The folder tree of the saved queries: its name field (save as) or filter (open).",
             Ctx::ContextMenu => {
-                "A right-click menu (the explorer's node, the result grid); the key shown next to an item runs it too; the pointer selects the item under it."
+                "The action menu: a right click (an explorer node, the grid, a tab, the editor) opens it at the pointer; `Space Space`, `Shift+F10` or the Menu key next to the selection, `Space t m` under the active tab. The selection's actions come first, then the pane's, each with its key in that pane. Typing filters it (when nothing in it matches, every action is searched); the arrows, `Ctrl+N`/`Ctrl+P` and `Tab` move, `Enter` runs, `Esc` closes (`Backspace` on an empty filter does not); a shown key that is not a character (`Ctrl+…`, `F…`) runs its item; the pointer selects the item under it."
             }
             Ctx::ProfileForm => "Connection profile form.",
             Ctx::Settings => "The settings screen: one list by category, each setting with its description.",

@@ -319,7 +319,7 @@ fn copy_as_every_format_through_keys_commands_and_the_menu() {
         assert!(screen.contains(want), "{want}:\n{screen}");
     }
     assert!(!screen.contains("Fetch every row"), "every row is fetched");
-    h.keys("jjjjj");
+    (0..5).for_each(|_| h.key(KeyCode::Down));
     h.key(KeyCode::Enter);
     let screen = h.screen(160, 45);
     for want in ["Without headers (TSV)", "JSON (pretty)", "SQL IN clause", "SQL UPDATE"] {
@@ -341,8 +341,8 @@ fn copy_as_every_format_through_keys_commands_and_the_menu() {
     assert_eq!(clip.last().unwrap().lines().count(), 1, "a comma list of every fetched row");
     // The key shown next to an item of the first level runs it.
     click(&mut h, x, y, MouseButton::Right);
-    h.keys("y");
-    assert_eq!(clip.last().as_deref(), Some("張志明"), "the key shown next to an item runs it");
+    h.menu_pick("Copy the cell (a selected range as TSV)");
+    assert_eq!(clip.last().as_deref(), Some("張志明"), "typing finds the item, Enter runs it");
     assert!(h.overlay_kind().is_none());
 }
 
@@ -609,7 +609,7 @@ fn fetch_every_row_then_copy() {
     assert!(screen.contains("Copy the 600 fetched rows (the server has more) ▸"), "{screen}");
     assert!(screen.contains("Fetch every row, then copy ▸"), "{screen}");
     // The last scope: its formats, then CSV.
-    h.keys("jjjjjj");
+    (0..6).for_each(|_| h.key(KeyCode::Down));
     h.key(KeyCode::Enter);
     h.keys("c");
     assert_eq!(h.overlay_kind(), Some(OverlayKind::Confirm));
@@ -645,7 +645,7 @@ fn fetch_every_row_then_copy() {
     h.draw(160, 45);
     let copies = clip.texts.lock().unwrap().len();
     open_menu(&mut h);
-    h.keys("jjjjjj");
+    (0..6).for_each(|_| h.key(KeyCode::Down));
     h.key(KeyCode::Enter);
     h.keys("t");
     h.keys("y");
@@ -684,7 +684,7 @@ fn a_fetch_then_copy_stops_on_cancel_and_never_outlives_its_result() {
         h.draw(160, 45);
         let (x, y) = (h.app.tab().grid.hit_cols[0].0 + 2, h.app.tab().grid.data_y);
         click(h, x, y, MouseButton::Right);
-        h.keys("jjjjjj");
+        (0..6).for_each(|_| h.key(KeyCode::Down));
         h.key(KeyCode::Enter);
         h.keys("c");
         h.sent();

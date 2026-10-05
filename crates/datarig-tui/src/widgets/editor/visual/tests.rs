@@ -298,3 +298,28 @@ fn the_mouse_selects_by_character() {
     e.click(0, 0);
     assert_eq!(e.mode, Mode::Normal);
 }
+
+/// Whether a position is in the Visual selection (a right click there keeps it): by character,
+/// by line, and a block by screen columns (a wide character takes two; after `$` to every
+/// line's end).
+#[test]
+fn in_selection_follows_what_is_selected() {
+    let mut e = at("one two\nthree\nfour", (0, 4));
+    typ(&mut e, "vj");
+    assert!(e.in_selection((0, 4)) && e.in_selection((0, 6)) && e.in_selection((1, 4)));
+    assert!(!e.in_selection((0, 3)) && !e.in_selection((1, 5)) && !e.in_selection((2, 0)));
+    let mut e = at("one two\nthree\nfour", (1, 2));
+    typ(&mut e, "V");
+    assert!(e.in_selection((1, 0)) && e.in_selection((1, 4)) && !e.in_selection((0, 6)));
+    assert!(!at("one", (0, 0)).in_selection((0, 0)), "Normal mode selects nothing");
+    // Two wide characters, then ASCII: the block from (0, 0) to (1, 1) is columns 0 and 1.
+    let mut e = at("\u{AC00}\u{B098}\u{B2E4}abc\nabcdef", (0, 0));
+    typ(&mut e, "<C-v>jl");
+    assert!(e.in_selection((0, 0)), "the first wide character, columns 0 and 1");
+    assert!(!e.in_selection((0, 1)), "the second starts at column 2: outside");
+    assert!(e.in_selection((1, 0)) && e.in_selection((1, 1)) && !e.in_selection((1, 2)));
+    // After `$`: to every line's end.
+    let mut e = at("ab\nabcdef", (0, 1));
+    typ(&mut e, "<C-v>j$");
+    assert!(e.in_selection((1, 5)) && e.in_selection((0, 1)) && !e.in_selection((1, 0)));
+}

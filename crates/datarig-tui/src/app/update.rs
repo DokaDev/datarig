@@ -95,6 +95,8 @@ impl App {
         } else if let Some(h) = self.overlays.help_mut().filter(|h| h.filtering) {
             h.filter.insert_str(text);
             self.help_select_first_entry();
+        } else if self.overlays.top().is_some_and(|o| o.kind() == OverlayKind::ContextMenu) {
+            self.menu_paste(text);
         } else if let Some(p) = self.overlays.prompt_mut() {
             if !p.save_focus {
                 p.input.insert_str(text);
@@ -201,7 +203,7 @@ impl App {
     }
 
     /// Close the active editor's search prompt as `Esc` does; whether it was open.
-    fn close_search_prompt(&mut self) -> bool {
+    pub(super) fn close_search_prompt(&mut self) -> bool {
         if self.tabs.is_empty() || !self.tab().editor.searching() {
             return false;
         }
@@ -554,6 +556,21 @@ impl App {
                 if inside(l.results) && !self.overlays.is_open(OverlayKind::CellViewer) =>
             {
                 self.open_grid_menu(x, y);
+            }
+            MouseEventKind::Down(MouseButton::Right) if inside(l.tab_bar) && !self.tabs.is_empty() => {
+                self.tab_bar_menu(x, y)
+            }
+            // The welcome panel (no profile yet), or a query tab's editor.
+            MouseEventKind::Down(MouseButton::Right) if inside(l.editor) && self.profiles.is_empty() => {
+                self.open_welcome_menu((x, y))
+            }
+            MouseEventKind::Down(MouseButton::Right)
+                if inside(l.editor)
+                    && !self.tabs.is_empty()
+                    && self.editor_shown()
+                    && !self.overlays.is_open(OverlayKind::CellViewer) =>
+            {
+                self.open_editor_menu_at(x, y)
             }
             MouseEventKind::Down(MouseButton::Left) if inside(l.tab_bar) && !self.tabs.is_empty() => {
                 self.tab_bar_click(x, false)

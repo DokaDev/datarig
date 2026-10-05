@@ -439,9 +439,13 @@ fn leader_groups_list_only_what_leads_to_an_action() {
     let keys: Vec<&str> = root.iter().map(|(k, _)| k.as_str()).collect();
     assert_eq!(
         keys,
-        [",", "/", "1", "2", "3", "4", "5", "6", "7", "8", "9", "?", "c", "e", "r", "s", "t"],
+        [",", "/", "1", "2", "3", "4", "5", "6", "7", "8", "9", "?", "Space", "c", "e", "r", "s", "t"],
         "the monitor has no action yet"
     );
+    // `Space Space`: the action menu, listed with the groups.
+    assert!(root.contains(&("Space".into(), Child::Action(action::by_id("menu.open").unwrap().action))));
+    let tabs: Vec<String> = shown(Ctx::VimVisual, "space t").into_iter().map(|(k, _)| k).collect();
+    assert_eq!(tabs, ["c", "m", "n", "u"]);
     assert!(root.contains(&("r".into(), Child::Group(Some(Label::GroupResult)))));
     assert!(root.contains(&("s".into(), Child::Group(Some(Label::GroupScript)))));
     assert!(root.contains(&("t".into(), Child::Group(Some(Label::GroupTab)))));

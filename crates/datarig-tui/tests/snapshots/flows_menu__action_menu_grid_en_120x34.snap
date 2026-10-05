@@ -1,0 +1,38 @@
+---
+source: crates/datarig-tui/tests/flows_menu.rs
+expression: "h.draw(120, 34).backend()"
+---
+"╭ Explorer ──────────────────╮ 1 console 1 ×                                                                            "
+"│  ＋ New connection         │╭ Query · console 1 ─────────────────────────────────────────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ ●   local-pg              ││ local-pg / datarig  127.0.0.1:55432 · policy: default      Space c s switch connection │"
+"│  ▾ datarig default         ││  1 -- datarig 🐘  Ctrl+E: run the statement under the cursor                           │" Hidden by multi-width symbols: [(47, " ")]
+"│    ▸ analytics             ││  2▎SELECT * FROM shop.users WHERE id <= 8;                                             │"
+"│    ▸ public                ││  3                                                                                     │"
+"│    ▸ shop                  ││  4 SELECT u.name, o.status, o.total_amount                                             │"
+"│                            ││  5 FROM shop.orders o                                                                  │"
+"│                            ││  6 JOIN shop.users u ON u.id = o.user_id                                               │"
+"│                            ││  7 WHERE o.status = 'paid';                                                            │"
+"│                            ││  8                                                                                     │"
+"│                            ││  9 SELECT * FROM analytics.events;                                                     │"
+"│                            ││ 10                                                                                     │"
+"│                            │╰────────────────────────────────────────────────────────────────────────────────────────╯"
+"│                            │╭ Results · 8 rows ──────────────────────────────────╮╭ [Cell] Row · I ──────────────────╮"
+"│                            ││   │ id   │ name                 │ nickname    │ ad…││ id                               │"
+"│                            ││   │ int8 │ text                 │ text        │ te…││ int8 · 1 character               │"
+"│                            ││ 1 │    1 │ 陳大文               │ 大文🐘      │ 臺…││                                  │" Hidden by multi-width symbols: [(44, " "), (46, " "), (48, " "), (67, " "), (69, " "), (71, " "), (81, " ")]
+"│                            ││ 2 │╭────────────────────────────────────────────────────────╮                          │"
+"│                            ││ 3 ││ › type to filter                                       │                          │"
+"│                            ││ 4 ││ Cell id, row 2                                         │                          │"
+"│                            ││ 5 ││  Results: view cell value                        Enter │                          │"
+"│                            ││ 6 ││  Result detail → show / hide                         i │                          │"
+"│                            ││ 7 ││  Copy the cell (a selected range as TSV)             y │                          │"
+"│                            ││ 8 ││  Copy the row (the selected rows) as TSV             Y │                          │"
+"│                            ││    │  Copy selection ▸                                      │                          │"
+"│                            ││    │ Results                                                │                          │"
+"│                            ││    │  Copy all fetched rows ▸                               │                          │"
+"│                            ││    │  Results → count every row (runs a count query)      # │                          │"
+"│                            ││    │  Result tabs → next                                  L │                          │"
+"│                            ││    │  Result tabs → previous                              H │                          │"
+"│                            ││    │  Results pane → maximise / restore                   z │                          │"
+"╰────────────────────────────╯╰────╰────────────────────────────────────────────────────────╯──────────────────────────╯"
+" NORMAL  local-pg · policy: default │ 8 rows · 12ms                                                                  EN "

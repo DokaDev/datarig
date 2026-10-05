@@ -97,6 +97,7 @@ pub(crate) fn draw_workspace(f: &mut Frame, app: &mut App) -> Option<(u16, u16)>
         Some(area) => draw_editor(app, area, f.buffer_mut()),
         None => (0, 0),
     };
+    app.layout.editor_cursor = cursor;
     if let Some(area) = results_area {
         draw_results_pane(app, area, f.buffer_mut());
     }

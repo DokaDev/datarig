@@ -42,7 +42,7 @@ fn row_bg(h: &mut Harness, list: Rect, y: u16) -> ratatui::style::Color {
 #[test]
 fn the_pointer_selects_the_menu_item_under_it() {
     let (mut h, list) = profile_menu();
-    assert_eq!(menu_selected(&h), 0);
+    assert_eq!(menu_selected(&h), 1, "the first item, under the node's heading");
     // Onto the fourth item: selected, drawn as the keys' selection.
     assert!(hover(&mut h, list.x + 2, list.y + 3), "the selection moved: a frame");
     assert_eq!(menu_selected(&h), 3);
@@ -56,10 +56,13 @@ fn the_pointer_selects_the_menu_item_under_it() {
     assert_eq!(menu_selected(&h), 3, "leaving the menu keeps the selection");
     assert_eq!(h.overlay_kind(), Some(OverlayKind::ContextMenu));
     // The keys go on from the item the pointer chose.
-    h.keys("j");
+    h.key(KeyCode::Down);
+    assert_eq!(menu_selected(&h), 4);
+    // A heading is not selected.
+    assert!(!hover(&mut h, list.x + 2, list.y));
     assert_eq!(menu_selected(&h), 4);
     // Enter runs the item under the pointer: the second reloads the schemas.
-    assert!(hover(&mut h, list.x + 2, list.y + 1));
+    assert!(hover(&mut h, list.x + 2, list.y + 2));
     h.sent();
     h.key(KeyCode::Enter);
     assert!(h.overlay_kind().is_none());
@@ -69,13 +72,13 @@ fn the_pointer_selects_the_menu_item_under_it() {
 #[test]
 fn a_click_after_the_pointer_moved_runs_the_item_under_it() {
     let (mut h, list) = profile_menu();
-    for y in list.y..list.y + 4 {
+    for y in list.y..list.y + 5 {
         hover(&mut h, list.x + 2, y);
     }
-    assert!(hover(&mut h, list.x + 2, list.y + 2));
-    assert_eq!(menu_selected(&h), 2);
-    h.mouse(MouseEventKind::Down(MouseButton::Left), list.x + 2, list.y + 2);
-    assert!(h.form_open(), "the third item: a new connection");
+    assert!(hover(&mut h, list.x + 2, list.y + 3));
+    assert_eq!(menu_selected(&h), 3);
+    h.mouse(MouseEventKind::Down(MouseButton::Left), list.x + 2, list.y + 3);
+    assert!(h.form_open(), "the third item: edit the profile");
 }
 
 /// The grid's menu with the formats of a copy scope open: the pointer selects a format; over
@@ -88,7 +91,7 @@ fn the_pointer_selects_in_the_copy_formats_and_leaves_them_for_another_item() {
     h.draw(160, 45);
     let (x, y) = (h.app.tabs.active().grid.hit_cols[1].0 + 2, h.app.layout.results.y + 3 + 2);
     h.mouse(MouseEventKind::Down(MouseButton::Right), x, y);
-    h.keys("jjjjj");
+    (0..5).for_each(|_| h.key(KeyCode::Down));
     h.key(KeyCode::Enter);
     h.draw(160, 45);
     let m = h.app.overlays.menu().unwrap();
@@ -161,6 +164,7 @@ fn moves_off_the_menus_draw_no_frame() {
             frames += usize::from(hover(&mut h, x, y));
         }
     }
-    let items = h.app.overlays.menu().unwrap().items.len().min(usize::from(list.height));
-    assert_eq!(frames, items - 1, "the first item was selected already");
+    let m = h.app.overlays.menu().unwrap();
+    let items = (0..usize::from(list.height)).filter(|i| m.item_at(*i).is_some()).count();
+    assert_eq!(frames, items - 1, "the first item was selected already; headings select nothing");
 }
