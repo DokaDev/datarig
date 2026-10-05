@@ -58,7 +58,7 @@ App
 │                                       editor, results, exec: TabSession }
 ├─ explorer: Explorer             cursor (a row, not an index), scroll, `/` filter (app/explorer.rs)
 └─ overlays                       command line, quick connect, profile form, chooser, name input,
-                                  context menu, password prompt, confirmation, help, which-key, …
+                                  action menu, password prompt, confirmation, help, which-key, …
 ```
 
 - **A profile's connection is its metadata session.** Several profiles can be connected at once, each with its own session, schema tree and completion catalog. Its node state (`○ ⠋ ● ✕`) comes from `ProfileConn::state()`; a failed attempt keeps its error for the line under the node.
@@ -108,6 +108,7 @@ Held by CI budgets (`docs/perf.md`).
 - **Runs of several statements**: still one `DbCommand::Execute`; the driver reports `DbEvent::Started`/`Finished` per statement and stops between statements when the session's canceller flagged a cancel (`DbError::Cancelled`). The tab keeps the run as an ordered list of per-statement outcomes (`app::runlog::RunLog`); the last statement's rows are the tab's result.
 - **Driver replies**: the query session's `Reply` answers a run by value (`page`, `done`, `fail`, `closed`), so a second terminal event does not compile; the steps of a run hand the reply back while the run goes on.
 - **Copies** (`app::copy`): a scope (`CopyScope`: the selection, or every fetched row) and a format (`CopyFormat::MENU`, written by `core::export`); `Action::Copy(scope, format)` is one registry entry per pair, so keys, the command line and the menus share them. The grid's context menu has a second level (`app::menu::SubMenu`). SQL UPDATE is planned by `driver::keys::update_source` (the INSERT allowlist plus the table's whole primary key).
+- **Action menu** (`app::menu`, drawn by `widgets::menu`): one `ContextMenu` overlay for a right click (at the pointer) and `menu.open` / `tab.menu` (next to the selection). It holds the items for what it was opened on and the pane's, the filter (`overlay.context_menu` is a text-input context) and a `MenuTarget`: the explorer row and its name, the grid's result, cell and range, the editor's text version, cursor and mode, or the tab, with the tab's binding. An item runs only while `menu_target_now` still equals it, so a menu left open while the tree was reloaded or a result replaced never acts on something else. The filter ranks prefix matches, then word starts, then letters in order (`menu::rank`); with no match it lists `action::search`, the command line's search.
 - **Inspector focus**: `Focus::Inspector` and the key context `inspector`; the conflict check allows exactly one shadowing there (its tab switch over `pane.next`/`pane.prev`).
 
 ## Safety

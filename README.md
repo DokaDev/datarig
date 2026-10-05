@@ -195,6 +195,11 @@ Everything below works today, with PostgreSQL.
 - A context keymap with a which-key popup after `Space`, keyboard help (`F1` or `Space ?`) with
   search, a `:` command line (`Ctrl+K` everywhere) that runs commands and finds every action by
   name, and remapping in the config file. See [docs/keybindings.md](docs/keybindings.md).
+- One action menu for the mouse and the keyboard: a right click on an explorer node, the result
+  grid, a tab or the editor opens it at the pointer; `Space Space` (or `Shift+F10`, or the Menu
+  key where the terminal reports it) opens it next to the selection, and `Space t m` under the
+  active tab. It lists what you can do with the selected thing, then with the pane, each with
+  its key. Type to filter it; when nothing in it matches, every action is searched.
 
 **Performance**, held by budgets that CI enforces (`crates/datarig-bench/budgets.toml`,
 [docs/perf.md](docs/perf.md)):

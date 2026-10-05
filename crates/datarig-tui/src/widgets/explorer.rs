@@ -619,6 +619,13 @@ pub(crate) fn row_text(app: &App, row: &Row) -> String {
     format!("{}{arrow}{text}", "  ".repeat(row.depth))
 }
 
+/// The text of `row` without its indentation, arrow and estimates, blanks folded (the action
+/// menu's heading).
+pub(crate) fn row_name(app: &App, row: &Row) -> String {
+    let text: String = row_parts(app, row).into_iter().map(|(t, _)| t).collect();
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// The whole text of the row under the explorer's cursor, for the status bar, when it is a
 /// tunnel preset (or why its connection was lost), part of a table's structure (the explorer is
 /// narrow, and cuts the details of deep lines) or an object with storage: its name and its

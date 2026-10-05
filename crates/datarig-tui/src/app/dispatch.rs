@@ -44,6 +44,8 @@ impl App {
                 }
             }
             Action::ExternalEdit => self.request_external_edit(),
+            Action::OpenMenu => self.open_action_menu(),
+            Action::TabMenu => self.open_tab_menu_here(),
             Action::Suspend => self.request_suspend(),
             Action::FormatSql => self.format_sql(),
             Action::ToggleComment => self.toggle_comment(),

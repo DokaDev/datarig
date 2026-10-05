@@ -33,6 +33,8 @@ const NAMES: &[(&str, &str, KeyCode)] = &[
     ("end", "End", KeyCode::End),
     ("pageup", "PageUp", KeyCode::PageUp),
     ("pagedown", "PageDown", KeyCode::PageDown),
+    // The context menu key (reported by terminals with the kitty keyboard protocol).
+    ("menu", "Menu", KeyCode::Menu),
 ];
 
 /// Accepted spellings besides the canonical names.
