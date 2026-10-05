@@ -86,6 +86,7 @@ impl Driver for FakeDriver {
             key_metadata: true,
             contexts: true,
             structure: !self.no_structure.load(Ordering::SeqCst),
+            ddl: true,
         }
     }
 

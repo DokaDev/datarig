@@ -2,6 +2,7 @@
 //! [`DbEvent`] channels and never sees driver types. Implementations live in their own crates
 //! (`datarig-driver-postgres`); the front end maps a profile's `driver` name to one of them.
 
+pub mod ddl;
 pub mod keys;
 mod protocol;
 pub mod structure;
@@ -39,6 +40,11 @@ pub struct Capabilities {
     /// with [`DbEvent::Structure`]); the explorer shows them under the table's node. Without
     /// it an open table shows its columns from the completion catalog.
     pub structure: bool,
+    /// DDL: the metadata session reads what an object's `CREATE` statement needs from the
+    /// catalog when asked (`DbCommand::LoadDdl`, answered with [`DbEvent::Ddl`]), never
+    /// waiting for a lock; the UI shows it as SQL in a read-only tab. PostgreSQL answers with
+    /// the catalog's parts (`ddl::DdlSource`), which `sql::ddl` writes out.
+    pub ddl: bool,
 }
 
 /// Where a session works: a database and a schema of the profile's server,

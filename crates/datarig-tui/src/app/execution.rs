@@ -615,6 +615,8 @@ impl App {
             | DbEvent::Started { .. }
             | DbEvent::StepRows { .. }
             | DbEvent::Finished { .. } => {}
+            // Nothing asks the metadata session for an object's DDL yet.
+            DbEvent::Ddl { .. } => {}
         }
     }
 
@@ -743,6 +745,7 @@ impl App {
             | DbEvent::Catalog(_)
             | DbEvent::Keys(_)
             | DbEvent::Structure { .. }
+            | DbEvent::Ddl { .. }
             | DbEvent::Databases(_) => None,
             // Where the session works, as the server says: a chosen schema it does not list
             // does not exist there or cannot be used (said, never taken as fine).
@@ -1199,6 +1202,7 @@ impl App {
             DbError::Cancelled => Label::QueryCancelled,
             DbError::ReadWriteRefused => Label::DbReadWriteRefused,
             DbError::Locked => Label::DbLocked,
+            DbError::NotFound => Label::DbNotFound,
             DbError::NotRepeatable(r) => return self.i18n.msg(&super::pages::why(r)).to_string(),
             DbError::Settings(f) => {
                 ErrorLog::new(self.paths.errors_log()).record("db.settings", f);

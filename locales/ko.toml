@@ -341,6 +341,7 @@
 "db.read_only_per_transaction" = "{name}: 서버가 읽기 전용 세션 기본값을 무시했습니다(연결 풀러?). 대신 모든 트랜잭션을 READ ONLY로 만듭니다"
 "db.statement_cache_off" = "{name}: 이 연결에서는 서버 측 문장 캐시를 껐습니다. 준비된 문장이 계속 사라졌습니다(트랜잭션 모드의 PgBouncer 같은 연결 풀러?). 프로필의 고급 섹션에서 끄면 이 과정을 건너뜁니다"
 "db.locked" = "다른 세션의 잠금이 있어 기다리지 않고 조회를 멈췄습니다 (다시 시도하세요)"
+"db.not_found" = "없습니다 (이름이 바뀌었거나 삭제되었을 수 있습니다)"
 "db.read_write_refused" = "보내지 않음: 세션이 읽기 전용인데 이 문은 읽기-쓰기를 요구합니다"
 "query.lost" = "이 탭의 연결이 끊어졌습니다: {error}"
 "query.reconnected" = "다시 연결했습니다"
