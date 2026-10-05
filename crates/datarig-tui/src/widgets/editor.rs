@@ -418,6 +418,12 @@ impl Editor {
         self.cmd.awaiting()
     }
 
+    /// A Normal or Visual command is being typed: a count, a register, an operator, a prefix
+    /// or a command waiting for its argument.
+    pub fn command_started(&self) -> bool {
+        !self.cmd.is_empty()
+    }
+
     /// A command waits for a character, to be taken as it is typed (`f`, `t`, `r`): a Hangul
     /// syllable is that syllable, not the QWERTY keys under it.
     pub fn awaiting_char(&self) -> bool {

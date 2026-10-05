@@ -578,6 +578,15 @@ impl App {
                 self.close_or_quit();
             }
             (command::Command::Write | command::Command::WriteQuit, _) => {
+                // A table tab's query and a DDL tab's text are not saved (as `Ctrl+S` says).
+                if !self.tabs.is_empty() && !self.tab().is_query() {
+                    self.overlays.close(OverlayKind::Commands);
+                    match self.tab().is_ddl() {
+                        true => self.say_read_only(),
+                        false => self.flash(Notice::new(Label::TableTabNoSave, Level::Info)),
+                    }
+                    return Ok(());
+                }
                 if !self.scripts_available() {
                     return err(Msg::Label(Label::ScriptsNoDataDir));
                 }

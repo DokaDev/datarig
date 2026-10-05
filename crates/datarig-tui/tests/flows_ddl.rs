@@ -290,6 +290,7 @@ fn indexes_triggers_and_trigger_functions() {
         definition: "CREATE OR REPLACE FUNCTION shop.touch()\n RETURNS trigger\n LANGUAGE plpgsql\nAS $f$BEGIN RETURN NEW; END$f$\n"
             .into(),
         comment: None,
+        grants: None,
     };
     let id = h.app.tab().doc.ddl.as_ref().unwrap().request.unwrap();
     h.db(answer(id, Ok(DdlSource::Function(f))));
@@ -492,4 +493,73 @@ fn a_driver_without_ddl_says_so() {
     assert!(h.status(120, 30).contains("This connection's driver cannot show DDL"));
     h.right_click_row("users");
     assert!(!h.menu_labels().contains(&"Show DDL".to_string()), "{:?}", h.menu_labels());
+}
+
+/// `:w` (and `:w name`, `:wq`) in a DDL tab saves nothing and the tab stays a DDL tab (it
+/// never becomes a saved query the run key would run); a table tab's query neither.
+#[test]
+fn w_in_a_ddl_or_table_tab_saves_nothing() {
+    let (mut h, text) = users_open();
+    for cmd in ["w", "w zz_saved", "wq"] {
+        h.command(cmd);
+        assert!(h.app.tab().is_ddl(), "{cmd}");
+        assert_eq!(h.app.tab().doc.script, None, "{cmd}");
+        assert!(h.status(120, 30).contains("read-only"), "{cmd}");
+    }
+    assert_eq!(h.app.tab().editor.text(), text);
+    // The run key still reads it again, never runs it.
+    h.sent();
+    h.ctrl('e');
+    let sent = h.sent();
+    assert!(sent.iter().all(|c| !matches!(c, DbCommand::Execute { .. })), "{sent:?}");
+    assert_eq!(asked(&sent).len(), 1);
+}
+
+/// A tab waiting for its profile to connect stops waiting when the user disconnects it.
+#[test]
+fn disconnecting_ends_the_wait_for_the_connection() {
+    let (mut h, _) = users_open();
+    let p = h.app.tab().profile.unwrap();
+    h.app.dispatch(datarig_tui::app::action::Action::DisconnectCurrent);
+    if h.overlay_kind().is_some() {
+        h.keys("y");
+    }
+    h.app.focus = Focus::Editor;
+    h.keys("r");
+    assert_eq!(state(&h), DdlState::Connecting);
+    h.app.dispatch(datarig_tui::app::action::Action::DisconnectCurrent);
+    if h.overlay_kind().is_some() {
+        h.keys("y");
+    }
+    assert!(!h.app.conns.is_connected(p));
+    assert_eq!(state(&h), DdlState::NotLoaded, "not waiting any more");
+}
+
+/// A count typed in a DDL tab is the editor's: `3r` neither reads again nor leaves the count
+/// for the next key.
+#[test]
+fn a_count_is_never_left_behind_by_the_tabs_own_keys() {
+    let (mut h, text) = users_open();
+    h.sent();
+    h.keys("3r");
+    assert!(asked(&h.sent()).is_empty(), "a count then r is vim's (refused), not a read");
+    h.key(KeyCode::Esc);
+    h.keys("ggj");
+    assert_eq!(h.app.tab().editor.row, 1, "no count left behind");
+    assert_eq!(h.app.tab().editor.text(), text);
+}
+
+/// A relation read with `:ddl name` and then with `D` is one tab.
+#[test]
+fn a_typed_name_and_the_explorer_find_the_same_tab() {
+    let mut h = shop_open();
+    h.command("ddl shop.users");
+    let id = asked(&h.sent())[0].0;
+    h.db(answer(id, Ok(users_ddl())));
+    let tab = h.app.tab().id;
+    h.app.focus = Focus::Tree;
+    h.goto("users");
+    h.keys("D");
+    assert_eq!(h.app.tab().id, tab, "the same tab");
+    assert!(asked(&h.sent()).is_empty());
 }

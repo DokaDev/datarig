@@ -463,6 +463,9 @@ impl App {
             let c = self.conns.entry(id);
             c.expand_on_connect = true;
             self.connect(id);
+        } else {
+            // A DDL tab that waited for this connection waits no more (`r` reads it).
+            self.ddl_stop(id, None, super::tabs::DdlState::NotLoaded, true);
         }
         if self.quitting.is_some() && !self.any_running() {
             self.finish_quit();

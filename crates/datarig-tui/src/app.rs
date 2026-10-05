@@ -1289,11 +1289,11 @@ impl App {
                 Focus::Inspector if self.inspector_shown() => Ctx::Inspector,
                 Focus::Inspector => Ctx::Grid,
                 Focus::Editor if self.tab().editor.searching() => Ctx::VimSearch,
-                // A DDL tab's own keys, unless a vim command waits for its next key (`f`, `m`).
+                // A DDL tab's own keys, unless a vim command is being typed (a count, `f`, `m`).
                 Focus::Editor
                     if self.tab().is_ddl()
                         && self.tab().editor.mode == Mode::Normal
-                        && !self.tab().editor.awaiting_key() =>
+                        && !self.tab().editor.command_started() =>
                 {
                     Ctx::Ddl
                 }

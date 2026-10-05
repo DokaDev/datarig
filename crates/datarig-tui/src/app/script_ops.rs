@@ -80,6 +80,10 @@ impl App {
         let Some(store) = self.scripts.as_ref() else { return Err(Label::ScriptsNoDataDir) };
         let path = path.to_string();
         let Some(t) = self.tabs.get(tab) else { return Ok(()) };
+        // Only a console or a saved query becomes one (never a table's query or a DDL).
+        if !t.is_query() {
+            return Err(Label::EditorReadOnly);
+        }
         let (text, profile, console) = (t.editor.text(), t.saved_profile(), t.doc.console_id.clone());
         let was_console = t.doc.script.is_none();
         let written = if replace { store.save(&path, &text, None) } else { store.create(&path, &text) };

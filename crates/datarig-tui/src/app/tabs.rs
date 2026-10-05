@@ -897,7 +897,8 @@ impl TabManager {
     }
 
     /// The DDL tab of `object` on `profile` in `database` (`None`: the profile's own), if one
-    /// is open.
+    /// is open: asked for as `object`, or read as what `object` names (a name typed with `:ddl`
+    /// that turned out to be that relation).
     pub fn find_ddl(
         &self,
         profile: ProfileId,
@@ -909,7 +910,7 @@ impl TabManager {
             .find(|t| {
                 t.profile == Some(profile)
                     && t.context.database.as_deref() == database
-                    && t.doc.ddl.as_ref().is_some_and(|d| d.object == *object)
+                    && t.doc.ddl.as_ref().is_some_and(|d| d.object == *object || d.name == Some(object.label()))
             })
             .map(|t| t.id)
     }
