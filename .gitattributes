@@ -2,3 +2,5 @@
 *.snap text eol=lf
 # Generated from the keymap; the test compares it byte for byte (also on Windows).
 docs/keybindings.md text eol=lf
+# EXPLAIN output captured from the servers; the test compares the text form byte for byte.
+crates/datarig-core/src/sql/plan/fixtures/** text eol=lf
