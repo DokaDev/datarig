@@ -7,7 +7,10 @@
 //! the same time, so the total is divided by the number of processes (the gather's child's
 //! loops per gather loop). Its self time is its total less its children's totals, never below
 //! zero. A CTE (an `InitPlan` named `CTE …`) runs inside the CTE scans that read it, not where
-//! it hangs: it is not taken from its parent; its time is taken from those scans instead.
+//! it hangs: it is not taken from its parent; its time is taken from those scans instead, in
+//! plan order (which scan ran it is not reported). Another `InitPlan` runs when a node reads its
+//! value, often a scan below its parent: its time is then also inside that scan's, so self times
+//! can add up to a little more than the whole.
 //! By cost, a node's self cost is its total cost less its children's (every child: a parent's
 //! cost includes its subplans').
 
@@ -423,18 +426,42 @@ fn properties(doc: &Doc, obj: usize, buffers: Option<Buffers>) -> Vec<(String, S
     if let Some(s) = buffers.as_ref().and_then(buffers_text) {
         out.push(("Buffers".into(), s));
     }
-    let io: Vec<String> = members
+    // `I/O Timings: shared read=1.000 write=2.000, temp read=3.000` (PostgreSQL 16 on), or
+    // `read=… write=…` before it.
+    let io: Vec<String> = ["", "Shared ", "Local ", "Temp "]
         .iter()
-        .filter(|(k, _)| k.ends_with("I/O Read Time") || k.ends_with("I/O Write Time"))
-        .filter_map(|(k, v)| {
-            let ms = doc.num(*v).filter(|ms| *ms > 0.0)?;
-            let what = k.replace(" I/O Read Time", " read").replace(" I/O Write Time", " write");
-            let what = what.replace("I/O Read Time", "read").replace("I/O Write Time", "write");
-            Some(format!("{}={ms:.3}", what.to_lowercase()))
+        .filter_map(|group| {
+            let t = |what: &str| n(&format!("{group}I/O {what} Time")).filter(|ms| *ms > 0.0);
+            let parts: Vec<String> = [("read", t("Read")), ("write", t("Write"))]
+                .into_iter()
+                .filter_map(|(w, ms)| ms.map(|ms| format!("{w}={ms:.3}")))
+                .collect();
+            let label = group.trim().to_lowercase();
+            (!parts.is_empty()).then(|| [label, parts.join(" ")].join(" ").trim().to_string())
         })
         .collect();
     if !io.is_empty() {
-        out.push(("I/O Timings".into(), io.join(" ")));
+        out.push(("I/O Timings".into(), io.join(", ")));
+    }
+    // Incremental sort: `Full-sort Groups: 2  Sort Method: quicksort  Average Memory: 26kB …`.
+    for key in ["Full-sort Groups", "Pre-sorted Groups"] {
+        let Some(g) = doc.field(obj, key) else { continue };
+        let mut line = num(doc, g, "Group Count").map_or_else(String::new, whole);
+        if let Some(m) = doc.field(g, "Sort Methods Used").and_then(|m| doc.scalar_text(m)) {
+            let plural = if m.contains(", ") { "s" } else { "" };
+            line.push_str(&format!("  Sort Method{plural}: {m}"));
+        }
+        for (space, label) in [("Sort Space Memory", "Memory"), ("Sort Space Disk", "Disk")] {
+            if let Some(sp) = doc.field(g, space) {
+                for (k, l) in [("Average Sort Space Used", "Average"), ("Peak Sort Space Used", "Peak")] {
+                    if let Some(v) = num(doc, sp, k) {
+                        line.push_str(&format!("  {l} {label}: {}kB", whole(v)));
+                    }
+                }
+            }
+        }
+        out.push((key.to_string(), line));
+        used.push(key);
     }
     if let Some(records) = n("WAL Records") {
         let mut wal = format!("records={}", whole(records));
@@ -471,7 +498,11 @@ fn properties(doc: &Doc, obj: usize, buffers: Option<Buffers>) -> Vec<(String, S
     ]);
     // Whatever else the node says (a key of a newer version), as it says it.
     for (k, v) in members {
-        if used.contains(&k.as_str()) || k.ends_with("I/O Read Time") || k.ends_with("I/O Write Time") {
+        if used.contains(&k.as_str())
+            || k.ends_with("I/O Read Time")
+            || k.ends_with("I/O Write Time")
+            || k.ends_with(" Groups")
+        {
             continue;
         }
         let shown = match doc.get(*v) {
@@ -489,18 +520,58 @@ fn properties(doc: &Doc, obj: usize, buffers: Option<Buffers>) -> Vec<(String, S
     if let Some(w) = doc.field(obj, "Workers") {
         for &item in doc.items(w) {
             let no = num(doc, item, "Worker Number").map_or_else(String::new, whole);
-            let rest: Vec<String> = doc
-                .members(item)
-                .iter()
-                .filter(|(k, _)| k != "Worker Number")
-                .filter_map(|(k, v)| doc.scalar_text(*v).map(|s| format!("{k}: {s}")))
-                .collect();
-            if !rest.is_empty() {
-                out.push((format!("Worker {no}"), rest.join("  ")));
-            }
+            out.push((format!("Worker {no}"), worker(doc, item)));
         }
     }
     out
+}
+
+/// A parallel worker's own numbers as psql writes them after `Worker N:`: its measurement, its
+/// sort or hash aggregate, then anything else it says.
+fn worker(doc: &Doc, w: usize) -> String {
+    let n = |k: &str| num(doc, w, k);
+    let mut parts: Vec<String> = Vec::new();
+    let mut used = vec!["Worker Number"];
+    if let (Some(rows), Some(loops)) = (n("Actual Rows"), n("Actual Loops")) {
+        let rows = match doc.field(w, "Actual Rows").map(|v| doc.get(v)) {
+            Some(Value::Number(t, _)) => t.clone(),
+            _ => whole(rows),
+        };
+        let time = match (n("Actual Startup Time"), n("Actual Total Time")) {
+            (Some(a), Some(b)) => format!("time={a:.3}..{b:.3} "),
+            _ => String::new(),
+        };
+        parts.push(format!(" actual {time}rows={rows} loops={}", whole(loops)));
+        used.extend(["Actual Rows", "Actual Loops", "Actual Startup Time", "Actual Total Time"]);
+    }
+    if let Some(method) = text(doc, w, "Sort Method") {
+        let space = match (text(doc, w, "Sort Space Type"), n("Sort Space Used")) {
+            (Some(t), Some(u)) => format!("  {t}: {}kB", whole(u)),
+            _ => String::new(),
+        };
+        parts.push(format!("Sort Method: {method}{space}"));
+        used.extend(["Sort Method", "Sort Space Type", "Sort Space Used"]);
+    }
+    if let Some(b) = n("HashAgg Batches") {
+        let mem = n("Peak Memory Usage").map(|m| format!("  Memory Usage: {}kB", whole(m))).unwrap_or_default();
+        let disk =
+            n("Disk Usage").filter(|_| b > 1.0).map(|d| format!("  Disk Usage: {}kB", whole(d))).unwrap_or_default();
+        parts.push(format!("Batches: {}{mem}{disk}", whole(b)));
+        used.extend(["HashAgg Batches", "Peak Memory Usage", "Disk Usage"]);
+    }
+    if let Some(b) = read_buffers(doc, w).as_ref().and_then(buffers_text) {
+        parts.push(format!("Buffers: {b}"));
+    }
+    used.extend(BUFFER_KEYS);
+    for (k, v) in doc.members(w) {
+        if used.contains(&k.as_str()) {
+            continue;
+        }
+        if let Some(s) = doc.scalar_text(*v) {
+            parts.push(format!("{k}: {s}"));
+        }
+    }
+    parts.join("  ")
 }
 
 /// A number as the server wrote it.
@@ -511,12 +582,22 @@ fn whole_or_text(doc: &Doc, v: usize, n: f64) -> String {
     }
 }
 
-/// An object's members on one line: `Key: value  Key: value`.
+/// An object's members on one line: `Key: value  Key: value`; objects in it as deep as
+/// [`FLAT_DEPTH`], `…` past that (a value can nest deeper than any stack).
 fn flat(doc: &Doc, obj: usize) -> String {
+    flat_at(doc, obj, 0)
+}
+
+const FLAT_DEPTH: usize = 32;
+
+fn flat_at(doc: &Doc, obj: usize, depth: usize) -> String {
+    if depth >= FLAT_DEPTH {
+        return "…".into();
+    }
     doc.members(obj)
         .iter()
         .filter_map(|(k, v)| match doc.get(*v) {
-            Value::Object(_) => Some(format!("{k}: {}", flat(doc, *v))),
+            Value::Object(_) => Some(format!("{k}: {}", flat_at(doc, *v, depth + 1))),
             _ => doc.scalar_text(*v).map(|s| format!("{k}: {s}")),
         })
         .collect::<Vec<_>>()
@@ -633,9 +714,34 @@ fn timings(doc: &Doc, obj: usize) -> String {
         .join(", ")
 }
 
+/// Whether node `i`'s parent may stop reading it before its end: under a `Limit` (within the
+/// same subplan), or the inner side of a semi or anti join.
+fn stops_early(plan: &Plan, i: usize) -> bool {
+    let mut at = i;
+    while let Some(p) = plan.nodes[at].parent {
+        let (node, parent) = (&plan.nodes[at], &plan.nodes[p]);
+        if parent.op.ends_with("Limit") {
+            return true;
+        }
+        let semi = parent.op.contains("Semi Join") || parent.op.contains("Anti Join");
+        if semi && node.relationship.as_deref() == Some("Inner") {
+            return true;
+        }
+        // A subplan runs on its own: what is above it does not stop it.
+        if matches!(node.relationship.as_deref(), Some("InitPlan" | "SubPlan")) {
+            return false;
+        }
+        at = p;
+    }
+    false
+}
+
 /// Total and self times and self costs (see the module's comment).
 fn derive(plan: &mut Plan) {
     let len = plan.nodes.len();
+    for i in 0..len {
+        plan.nodes[i].early_stop = stops_early(plan, i);
+    }
     // Processes that ran each node at the same time: 1 outside a parallel part.
     let mut processes = vec![1.0_f64; len];
     for i in 0..len {
@@ -655,6 +761,9 @@ fn derive(plan: &mut Plan) {
     let cte = |n: &PlanNode| {
         n.relationship.as_deref() == Some("InitPlan") && n.subplan.as_ref().is_some_and(|s| s.starts_with("CTE "))
     };
+    for n in plan.nodes.iter_mut() {
+        n.elsewhere = cte(n);
+    }
     for i in 0..len {
         let n = &plan.nodes[i];
         let kids = n.children.clone();

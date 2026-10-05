@@ -91,6 +91,12 @@ pub struct PlanNode {
     pub self_ms: Option<f64>,
     /// Estimated total cost less its children's.
     pub self_cost: Option<f64>,
+    /// Its parent may stop reading it before its end (a limit, the inner side of a semi join):
+    /// fewer rows than estimated is then no misestimate.
+    pub early_stop: bool,
+    /// Its time is counted inside other nodes that read it (a CTE inside its scans), not in its
+    /// parent's.
+    pub elsewhere: bool,
 }
 
 /// What `ANALYZE` measured on a node: averages per loop, as the server reports them.
@@ -257,7 +263,9 @@ impl Plan {
         let a = n.actual.filter(|a| a.loops > 0.0)?;
         let est = n.plan_rows?.max(1.0);
         let act = a.rows.max(1.0);
-        Some(RowsOff { ratio: (est / act).max(act / est), under: act > est })
+        let off = RowsOff { ratio: (est / act).max(act / est), under: act > est };
+        // Stopped early on purpose: fewer rows tell nothing about the estimate.
+        (off.under || !n.early_stop).then_some(off)
     }
 
     /// [`Plan::rows_off`] when it is a misestimate (at least [`MISESTIMATE`] apart).

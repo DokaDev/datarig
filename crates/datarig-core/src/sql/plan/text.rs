@@ -4,6 +4,14 @@
 
 use super::Plan;
 
+/// At most this many spaces in front of a line: a plan deeper than about a hundred levels keeps
+/// its deeper lines at this indent instead of growing without end.
+const MAX_INDENT: usize = 600;
+
+fn indent(n: usize) -> String {
+    " ".repeat(n.min(MAX_INDENT))
+}
+
 /// The text's lines, each with the node it belongs to (`None`: the statement's lines after the
 /// tree).
 pub fn lines(plan: &Plan) -> Vec<(String, Option<usize>)> {
@@ -19,10 +27,10 @@ pub fn lines(plan: &Plan) -> Vec<(String, Option<usize>)> {
             Some(at) => {
                 let mut arrow = at;
                 if let Some(name) = &n.subplan {
-                    out.push((format!("{}{name}", " ".repeat(at)), Some(i)));
+                    out.push((format!("{}{name}", indent(at)), Some(i)));
                     arrow += 2;
                 }
-                out.push((format!("{}->  {}", " ".repeat(arrow), node_line(plan, i)), Some(i)));
+                out.push((format!("{}->  {}", indent(arrow), node_line(plan, i)), Some(i)));
                 arrow + 6
             }
         };
@@ -30,7 +38,7 @@ pub fn lines(plan: &Plan) -> Vec<(String, Option<usize>)> {
             out.push((node_line(plan, i), Some(i)));
         }
         for (k, v) in &n.properties {
-            out.push((format!("{}{k}: {v}", " ".repeat(props)), Some(i)));
+            out.push((format!("{}{k}: {v}", indent(props)), Some(i)));
         }
         for &c in n.children.iter().rev() {
             stack.push((c, Some(props)));

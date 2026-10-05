@@ -835,7 +835,7 @@ impl App {
                 let count = match (columns, t.exec.steps.get_mut(&index)) {
                     (Some(cols), _) => {
                         if let Some((plan, json)) = super::plan::plan_of(&cols, &rows, more) {
-                            t.exec.plan = Some(super::plan::PlanTab::new(plan, index, &json));
+                            t.exec.plan = Some(super::plan::PlanTab::new(plan, t.exec.query_id, index, &json));
                         }
                         let store = datarig_core::results::RowStore::new(rows, spill, limits);
                         let rs = ResultSet::new(cols, store, more, &null);
@@ -958,7 +958,8 @@ impl App {
                 t.exec.shown = t.exec.run.len().checked_sub(1);
                 t.exec.view = super::tabs::ResultView::Rows;
                 if let Some((plan, json)) = plan {
-                    t.exec.plan = Some(super::plan::PlanTab::new(plan, t.exec.shown.unwrap_or(0), &json));
+                    let (query, index) = (t.exec.query_id, t.exec.shown.unwrap_or(0));
+                    t.exec.plan = Some(super::plan::PlanTab::new(plan, query, index, &json));
                     t.exec.view = super::tabs::ResultView::Plan;
                 }
                 t.exec.run.answered(StatementOutcome::Rows { count: count as u64, more }, Some(elapsed));

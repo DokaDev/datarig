@@ -555,3 +555,51 @@ fn hot_and_misestimate_use_the_themes_tokens() {
         assert!(cell.modifier.contains(th.plan_hot.add_modifier), "{name}");
     }
 }
+
+/// A menu opened on a plan while another run is going is about that plan: when the other run's
+/// plan arrives, the menu's items do not act on it.
+#[test]
+fn a_menu_opened_on_a_plan_is_stale_once_the_running_runs_plan_arrives() {
+    let mut h = shown(17, "join.analyze.json");
+    h.app.run(vec!["EXPLAIN (FORMAT JSON) SELECT 2".into()]);
+    let (id, _) = sent_one(&mut h);
+    h.app.focus = Focus::Results;
+    h.keys("  ");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ContextMenu));
+    h.db(plan_page(id, &fixture(17, "join.plan.json")));
+    h.menu_pick("Plan view: raw text (as psql shows it)");
+    assert!(h.status(160, 45).contains("Not run: what the menu was opened on has changed"), "{}", h.status(160, 45));
+    assert_eq!(plan(&h).view, PlanView::Tree);
+}
+
+/// A node selected in a view that shows every node is shown by the tree too: the closed nodes
+/// above it open.
+#[test]
+fn a_selection_made_in_another_view_is_shown_in_the_tree() {
+    let mut h = shown(18, "subplans.analyze.json");
+    h.keys("jh");
+    assert!(plan(&h).collapsed[1]);
+    h.keys("9jj");
+    let selected = plan(&h).selected;
+    let mut above = plan(&h).plan.nodes[selected].parent;
+    while above.is_some_and(|a| a != 1) {
+        above = above.and_then(|a| plan(&h).plan.nodes[a].parent);
+    }
+    assert_eq!(above, Some(1), "inside the node closed in the tree");
+    h.keys("1");
+    assert!(!plan(&h).collapsed[1], "opened");
+    assert!(plan(&h).visible().contains(&selected));
+}
+
+/// Long raw lines move sideways only as far as the longest one.
+#[test]
+fn the_raw_text_moves_sideways_only_as_far_as_its_longest_line() {
+    let mut h = shown(18, "subplans.analyze.json");
+    h.keys("9");
+    for _ in 0..100 {
+        h.keys(">");
+    }
+    let screen = h.screen(160, 45);
+    assert!(plan(&h).pan < 200, "{}", plan(&h).pan);
+    assert!(screen.contains("rows=") || screen.contains("loops="), "the ends of the longest lines show:\n{screen}");
+}

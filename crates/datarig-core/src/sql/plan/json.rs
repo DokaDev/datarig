@@ -27,7 +27,7 @@ pub struct Doc {
 pub struct JsonError(pub usize);
 
 /// At most this many values: a plan of a hundred thousand nodes has fewer than this many.
-pub const MAX_VALUES: usize = 20_000_000;
+pub const MAX_VALUES: usize = 5_000_000;
 
 impl Doc {
     pub fn get(&self, i: usize) -> &Value {
@@ -176,12 +176,12 @@ pub fn parse(text: &str) -> Result<Doc, JsonError> {
             }
             Some(c) if *c == b'-' || c.is_ascii_digit() => {
                 let start = i;
-                i += 1;
-                while i < b.len() && matches!(b[i], b'0'..=b'9' | b'.' | b'e' | b'E' | b'+' | b'-') {
-                    i += 1;
-                }
+                i = number(b, i).ok_or(JsonError(start))?;
                 let t = &text[start..i];
                 let n: f64 = t.parse().map_err(|_| JsonError(start))?;
+                if !n.is_finite() {
+                    return Err(JsonError(start));
+                }
                 doc.values.push(Value::Number(t.to_string(), n));
                 None
             }
@@ -255,6 +255,39 @@ fn close(stack: &mut Vec<Open>, i: &mut usize, b: &[u8]) -> Result<Option<Option
     }
 }
 
+/// The end of the number starting at `b[i]`, as JSON writes one: `-?(0|[1-9][0-9]*)(\.[0-9]+)?
+/// ([eE][+-]?[0-9]+)?`.
+fn number(b: &[u8], mut i: usize) -> Option<usize> {
+    let digits = |i: usize| b[i..].iter().take_while(|c| c.is_ascii_digit()).count();
+    if b.get(i) == Some(&b'-') {
+        i += 1;
+    }
+    match b.get(i) {
+        Some(b'0') => i += 1,
+        Some(b'1'..=b'9') => i += digits(i),
+        _ => return None,
+    }
+    if b.get(i) == Some(&b'.') {
+        let d = digits(i + 1);
+        if d == 0 {
+            return None;
+        }
+        i += 1 + d;
+    }
+    if matches!(b.get(i), Some(b'e' | b'E')) {
+        i += 1;
+        if matches!(b.get(i), Some(b'+' | b'-')) {
+            i += 1;
+        }
+        let d = digits(i);
+        if d == 0 {
+            return None;
+        }
+        i += d;
+    }
+    Some(i)
+}
+
 fn skip_ws(b: &[u8], mut i: usize) -> usize {
     while i < b.len() && matches!(b[i], b' ' | b'\t' | b'\n' | b'\r') {
         i += 1;
@@ -321,7 +354,7 @@ fn string(b: &[u8], i: usize) -> Result<(String, usize), JsonError> {
 }
 
 fn hex4(b: &[u8], i: usize) -> Result<u32, JsonError> {
-    let s = b.get(i..i + 4).ok_or(JsonError(i))?;
+    let s = b.get(i..i + 4).filter(|h| h.iter().all(u8::is_ascii_hexdigit)).ok_or(JsonError(i))?;
     let s = std::str::from_utf8(s).map_err(|_| JsonError(i))?;
     u32::from_str_radix(s, 16).map_err(|_| JsonError(i))
 }

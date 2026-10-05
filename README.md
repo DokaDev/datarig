@@ -199,7 +199,8 @@ Everything below works today, with PostgreSQL.
   way. The Plan tab shows the plan as a tree with each node's estimated and actual rows (and
   loops), self and total time, a bar of its share of the whole colored by heat, and its
   buffers; nodes that take a fifth of the time or more are marked hot, and an estimate ten times
-  off or more is marked with how far and which way. `Enter` shows the selected node's detail
+  off or more is marked with how far and which way (fewer rows than estimated under a `LIMIT`
+  or on the inner side of a semi or anti join are no misestimate: the node was stopped early). `Enter` shows the selected node's detail
   (conditions, filters and the rows they removed, buffers, workers, loops, output). Without
   `ANALYZE` the numbers are the planner's estimated costs, and the tab says so. `v` cycles the
   views, `9` shows the plan as `psql` prints it (written from the JSON; nothing is run again),

@@ -319,3 +319,94 @@ fn the_plan_column_is_recognised() {
     assert!(!is_plan_column("QUERY PLAN", "text"), "the text form is not read");
     assert!(!is_plan_column("plan", "json"));
 }
+
+/// A deeply nested object under a key the reader does not know is said up to a depth, never
+/// walked by recursion as deep as it goes (a hostile `QUERY PLAN` value).
+#[test]
+fn a_deeply_nested_unknown_object_is_cut_not_recursed() {
+    let depth = 200_000;
+    let mut s = String::from(r#"{"Plan": {"Node Type": "Result", "Odd": "#);
+    s.push_str(&r#"{"a": "#.repeat(depth));
+    s.push('1');
+    s.push_str(&"}".repeat(depth));
+    s.push_str(r#"}, "Odd Too": "#);
+    s.push_str(&r#"{"a": "#.repeat(depth));
+    s.push('1');
+    s.push_str(&"}".repeat(depth + 1));
+    let plan = parse(&s).unwrap();
+    let odd = &plan.nodes[0].properties.iter().find(|(k, _)| k == "Odd").unwrap().1;
+    assert!(odd.starts_with("a: a: ") && odd.ends_with('…') && odd.len() < 400, "{}", &odd[..80.min(odd.len())]);
+    assert!(plan.footer[0].0.starts_with("Odd Too: a: a: "));
+}
+
+/// A node that a parent stops reading early (under a Limit, the inner side of a semi or anti
+/// join) returns fewer rows than estimated by design: not a misestimate that way; more rows
+/// than estimated still is.
+#[test]
+fn fewer_rows_than_estimated_under_an_early_stop_is_no_misestimate() {
+    // ORDER BY … LIMIT 20: the Sort returns 20 of its 600.
+    let plan = parse(&fixture(18, "nested.analyze.json")).unwrap();
+    let sort = find(&plan, "Sort");
+    assert!(plan.nodes[sort].actual.unwrap().rows < 30.0);
+    assert_eq!(plan.misestimate(sort), None);
+    // min(id) through an InitPlan's Limit: the index scan returns 1 of 1000.
+    let plan = parse(&fixture(18, "subplans.analyze.json")).unwrap();
+    assert_eq!(plan.misestimate(find(&plan, "Index Only Scan")), None);
+    assert_eq!(plan.worst_misestimate(), None);
+    // More rows than estimated under a Limit is still off.
+    let n = r#"{"Node Type": "Limit", "Startup Cost": 0, "Total Cost": 1, "Plan Rows": 10, "Plan Width": 4,
+        "Actual Startup Time": 0, "Actual Total Time": 1, "Actual Rows": 10, "Actual Loops": 1, "Plans": [
+        {"Node Type": "Seq Scan", "Parent Relationship": "Outer", "Startup Cost": 0, "Total Cost": 1,
+         "Plan Rows": 1, "Plan Width": 4, "Actual Startup Time": 0, "Actual Total Time": 1,
+         "Actual Rows": 100, "Actual Loops": 1}]}"#;
+    let plan = parse(&format!(r#"{{"Plan": {n}}}"#)).unwrap();
+    assert!(plan.misestimate(1).is_some_and(|o| o.under));
+    // The inner side of a semi join.
+    let n = r#"{"Node Type": "Nested Loop", "Join Type": "Semi", "Plans": [
+        {"Node Type": "Seq Scan", "Parent Relationship": "Outer", "Plan Rows": 10, "Actual Rows": 10, "Actual Loops": 1},
+        {"Node Type": "Index Scan", "Parent Relationship": "Inner", "Plan Rows": 500, "Actual Rows": 1, "Actual Loops": 10}]}"#;
+    let plan = parse(&format!(r#"{{"Plan": {n}}}"#)).unwrap();
+    assert_eq!(plan.misestimate(2), None);
+    assert!(plan.misestimate(1).is_none());
+}
+
+/// psql's lines that the plain JSON fixtures do not show: I/O timings, incremental sort groups,
+/// a parallel worker's numbers.
+#[test]
+fn analyze_only_lines_read_as_psql_writes_them() {
+    let n = r#"{"Node Type": "Incremental Sort", "Startup Cost": 0, "Total Cost": 1, "Plan Rows": 1, "Plan Width": 4,
+        "Sort Key": ["a", "b"], "Presorted Key": ["a"],
+        "Full-sort Groups": {"Group Count": 2, "Sort Methods Used": ["quicksort"], "Sort Space Memory": {"Average Sort Space Used": 26, "Peak Sort Space Used": 27}},
+        "Shared I/O Read Time": 1.5, "Shared I/O Write Time": 0.25, "Temp I/O Read Time": 2.0,
+        "Workers": [{"Worker Number": 0, "Actual Startup Time": 0.1, "Actual Total Time": 2.5, "Actual Rows": 10, "Actual Loops": 1, "Sort Method": "quicksort", "Sort Space Used": 25, "Sort Space Type": "Memory"}]}"#;
+    let plan = parse(&format!(r#"{{"Plan": {n}}}"#)).unwrap();
+    let p = |k: &str| plan.nodes[0].properties.iter().find(|(key, _)| key == k).map(|(_, v)| v.clone());
+    assert_eq!(
+        p("Full-sort Groups").as_deref(),
+        Some("2  Sort Method: quicksort  Average Memory: 26kB  Peak Memory: 27kB")
+    );
+    assert_eq!(p("I/O Timings").as_deref(), Some("shared read=1.500 write=0.250, temp read=2.000"));
+    assert_eq!(
+        p("Worker 0").as_deref(),
+        Some(" actual time=0.100..2.500 rows=10 loops=1  Sort Method: quicksort  Memory: 25kB")
+    );
+    let n = r#"{"Node Type": "Seq Scan", "I/O Read Time": 3.0, "I/O Write Time": 0.0}"#;
+    let plan = parse(&format!(r#"{{"Plan": {n}}}"#)).unwrap();
+    assert_eq!(plan.nodes[0].properties, [("I/O Timings".to_string(), "read=3.000".to_string())]);
+}
+
+/// The text of a very deep chain stays bounded: its indent stops growing.
+#[test]
+fn the_text_of_a_very_deep_plan_has_a_bounded_indent() {
+    let depth = 5_000;
+    let mut s = String::from(r#"{"Plan": "#);
+    s.push_str(&r#"{"Node Type": "Limit", "Plans": ["#.repeat(depth));
+    s.push_str(r#"{"Node Type": "Result"}"#);
+    s.push_str(&"]}".repeat(depth));
+    s.push('}');
+    let plan = parse(&s).unwrap();
+    let lines = text::lines(&plan);
+    let widest = lines.iter().map(|(l, _)| l.len()).max().unwrap();
+    assert!(widest < 1000, "{widest}");
+    // A plan of a usual depth is written exactly (the fixtures).
+}

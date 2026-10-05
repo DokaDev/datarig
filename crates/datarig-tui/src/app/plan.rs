@@ -78,6 +78,8 @@ pub enum PlanAction {
 pub struct RawText {
     pub lines: Vec<(String, Option<usize>)>,
     pub first: Vec<usize>,
+    /// The widest line, in columns.
+    pub widest: usize,
 }
 
 impl RawText {
@@ -90,7 +92,8 @@ impl RawText {
 /// A tab's plan and how it is shown.
 pub struct PlanTab {
     pub plan: Arc<Plan>,
-    /// The statement of its run it came from.
+    /// The run it came from (its query id) and the statement of that run.
+    pub query: u64,
     pub index: usize,
     /// The JSON as the server sent it (copied as it is).
     pub json: Arc<str>,
@@ -118,10 +121,11 @@ pub struct PlanTab {
 }
 
 impl PlanTab {
-    pub fn new(plan: Plan, index: usize, json: &str) -> Self {
+    pub fn new(plan: Plan, query: u64, index: usize, json: &str) -> Self {
         let n = plan.nodes.len();
         Self {
             plan: Arc::new(plan),
+            query,
             index,
             json: json.into(),
             view: PlanView::Tree,
@@ -150,7 +154,8 @@ impl PlanTab {
                         first[*n] = at;
                     }
                 }
-                Arc::new(RawText { lines, first })
+                let widest = lines.iter().map(|(l, _)| crate::text::width(l)).max().unwrap_or(0);
+                Arc::new(RawText { lines, first, widest })
             })
             .clone()
     }
@@ -199,13 +204,14 @@ impl PlanTab {
         let page = self.page.max(1);
         let to = |k: usize| order.get(k.min(order.len().saturating_sub(1))).copied().unwrap_or(0);
         let n = &self.plan.nodes[self.selected];
+        // A node selected where every node shows opens the closed nodes above it (`select`).
         match a {
-            PlanAction::Down => self.selected = to(at + 1),
-            PlanAction::Up => self.selected = to(at.saturating_sub(1)),
-            PlanAction::Top => self.selected = to(0),
-            PlanAction::Bottom => self.selected = to(usize::MAX),
-            PlanAction::PageDown => self.selected = to(at + page),
-            PlanAction::PageUp => self.selected = to(at.saturating_sub(page)),
+            PlanAction::Down => self.select(to(at + 1)),
+            PlanAction::Up => self.select(to(at.saturating_sub(1))),
+            PlanAction::Top => self.select(to(0)),
+            PlanAction::Bottom => self.select(to(usize::MAX)),
+            PlanAction::PageDown => self.select(to(at + page)),
+            PlanAction::PageUp => self.select(to(at.saturating_sub(page))),
             PlanAction::Expand if self.view.folds() && self.collapsed[self.selected] => {
                 self.collapsed[self.selected] = false
             }
@@ -219,7 +225,7 @@ impl PlanTab {
             }
             PlanAction::Collapse => {
                 if let Some(p) = n.parent {
-                    self.selected = p;
+                    self.select(p);
                 }
             }
             PlanAction::Detail => self.detail = !self.detail,

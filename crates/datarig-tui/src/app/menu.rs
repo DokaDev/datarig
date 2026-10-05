@@ -464,7 +464,7 @@ impl App {
         Some(MenuTarget::Plan {
             tab: t.id,
             binding: t.binding,
-            query: t.exec.query_id,
+            query: p.query,
             index: p.index,
             view: p.view,
             node: p.selected,

@@ -15,8 +15,10 @@ pub(super) fn draw(cx: &Look, p: &mut PlanTab, area: Rect, buf: &mut Buffer) {
     let th = cx.th;
     let plan = p.plan.clone();
     let selected = p.selected;
-    let pan = p.pan;
     let raw = p.raw();
+    // Sideways only as far as the longest line.
+    p.pan = p.pan.min(raw.widest.saturating_sub(area.width.saturating_sub(2) as usize));
+    let pan = p.pan;
     let lines = &raw.lines;
     let head = raw.node_line(&plan, selected);
     let top = super::follow(p, head, lines.len(), area.height as usize);

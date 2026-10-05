@@ -45,3 +45,13 @@ fn buffers_add_up_and_say_their_hit_ratio() {
     assert_eq!(Buffers::default().hit_ratio(), None);
     assert!(Buffers::default().is_empty() && !b.is_empty());
 }
+
+#[test]
+fn json_refuses_numbers_and_escapes_json_does_not_allow() {
+    for bad in ["01", "1.", "-.5", "-", "+1", "1e", "1e400", r#""\u+123""#, r#""\u12g4""#, ".5"] {
+        assert!(json(bad).is_err(), "{bad}");
+    }
+    for good in ["0", "-0", "10", "1.5", "1e5", "1E+5", "-2.5e-3"] {
+        assert!(json(good).is_ok(), "{good}");
+    }
+}
