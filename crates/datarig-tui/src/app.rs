@@ -28,6 +28,7 @@ pub mod command;
 mod conn;
 mod connection;
 pub mod copy;
+mod ddl;
 mod dispatch;
 pub mod effects;
 mod execution;
@@ -596,6 +597,8 @@ pub struct App {
     instance: String,
     test_seq: u64,
     query_seq: u64,
+    /// Last DDL request id handed out (a DDL tab waits for the answer of its own).
+    ddl_seq: u64,
     last_click: Option<(Instant, u16, u16)>,
     /// Clicks in a row at the same place (1, 2 for a double click, 3 for a triple click).
     clicks: u8,
@@ -847,6 +850,7 @@ impl App {
             instance: std::process::id().to_string(),
             test_seq: 0,
             query_seq: 0,
+            ddl_seq: 0,
             last_click: None,
             clicks: 0,
             drag: None,
@@ -1285,6 +1289,14 @@ impl App {
                 Focus::Inspector if self.inspector_shown() => Ctx::Inspector,
                 Focus::Inspector => Ctx::Grid,
                 Focus::Editor if self.tab().editor.searching() => Ctx::VimSearch,
+                // A DDL tab's own keys, unless a vim command waits for its next key (`f`, `m`).
+                Focus::Editor
+                    if self.tab().is_ddl()
+                        && self.tab().editor.mode == Mode::Normal
+                        && !self.tab().editor.awaiting_key() =>
+                {
+                    Ctx::Ddl
+                }
                 Focus::Editor => match self.tab().editor.mode {
                     Mode::Normal => Ctx::VimNormal,
                     Mode::Insert => Ctx::VimInsert,

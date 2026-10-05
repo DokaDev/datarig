@@ -241,6 +241,9 @@ impl App {
     /// closes their connections; the server rolls back open transactions).
     pub(super) fn close_profile_sessions(&mut self, id: ProfileId) {
         self.close_tab_sessions(|t| t.profile == Some(id));
+        // A DDL that was asked for is never answered now (one waiting for the connection
+        // still waits: a new attempt may follow).
+        self.ddl_stop(id, None, super::tabs::DdlState::NotLoaded, false);
         if let Some(s) = self.conns.get_mut(id).and_then(|c| c.meta.take()) {
             s.close();
         }
@@ -304,6 +307,7 @@ impl App {
             _ => {}
         }
         self.quick_connected(id);
+        self.ddl_connected(id);
         // The explorer's node is open: its databases level asks for the server's databases.
         if self.conns.get(id).is_some_and(|c| c.expanded) {
             self.ask_databases(id, false);
@@ -333,6 +337,8 @@ impl App {
     /// Profile `id`'s attempt ended without a connection (`why`): its node shows the error and
     /// what waited for it is dropped.
     pub(super) fn attempt_failed(&mut self, id: ProfileId, why: Notice) {
+        let text = self.i18n.msg(&why.msg).to_string();
+        self.ddl_stop(id, None, super::tabs::DdlState::Failed(text), true);
         self.drop_pending(id);
         let c = self.conns.entry(id);
         c.connecting = None;

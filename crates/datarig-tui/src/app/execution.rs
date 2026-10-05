@@ -278,6 +278,8 @@ impl App {
 
     /// Drop every statement waiting for profile `id` (its attempt ended); each tab says so.
     pub(super) fn drop_pending(&mut self, id: ProfileId) {
+        // A DDL tab that waited reads on `r`.
+        self.ddl_stop(id, None, super::tabs::DdlState::NotLoaded, true);
         let pending = self.conns.get_mut(id).map(|c| std::mem::take(&mut c.pending)).unwrap_or_default();
         let name = self.profile(id).map(|p| p.name.clone()).unwrap_or_default();
         for q in pending {
@@ -437,6 +439,14 @@ impl App {
             _ => String::new(),
         };
         let Some(a) = self.conns.aux_by_id(id) else { return };
+        let (profile, database) = (a.profile, a.database.clone());
+        if let DbEvent::Ddl { id: request, result } = ev {
+            return self.ddl_answered(profile, Some(&database), request, result);
+        }
+        if matches!(ev, DbEvent::ConnectFailed { .. } | DbEvent::Lost { .. }) {
+            self.ddl_stop(profile, Some(Some(&database)), super::tabs::DdlState::Failed(text.clone()), true);
+        }
+        let Some(a) = self.conns.aux_by_id(id) else { return };
         match ev {
             // It opens again on the next use; why it failed is said, and where it
             // was not read yet, what the picker and the explorer show.
@@ -535,7 +545,9 @@ impl App {
                     Some(_) => self.conns.get_mut(id).map(|c| std::mem::take(&mut c.pending)).unwrap_or_default(),
                     None => Vec::new(),
                 };
+                let ddl = if ask.is_some() { self.ddl_waiting(id) } else { Vec::new() };
                 self.attempt_failed(id, reason.clone());
+                self.ddl_wait_again(&ddl);
                 // A tunnel stays open only for the password asked for now.
                 if ask.is_none() {
                     self.close_tunnel(id);
@@ -598,6 +610,8 @@ impl App {
                 // Lost with its tunnel: the tunnel's words.
                 let lost = self.conns.get(id).and_then(|c| c.tunnel_lost.clone());
                 let m = lost.unwrap_or_else(|| Notice::new(Msg::ConnLost { name, error: text }, Level::Error));
+                let why = self.i18n.msg(&m.msg).to_string();
+                self.ddl_stop(id, Some(None), super::tabs::DdlState::Failed(why), true);
                 let c = self.conns.entry(id);
                 c.meta = None;
                 c.connected = false;
@@ -615,8 +629,7 @@ impl App {
             | DbEvent::Started { .. }
             | DbEvent::StepRows { .. }
             | DbEvent::Finished { .. } => {}
-            // Nothing asks the metadata session for an object's DDL yet.
-            DbEvent::Ddl { .. } => {}
+            DbEvent::Ddl { id: request, result } => self.ddl_answered(id, None, request, result),
         }
     }
 

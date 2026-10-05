@@ -314,6 +314,34 @@ Held by CI budgets (`docs/perf.md`).
   or with `r`), another database's through its aux session, and `TreeAction::Reveal` moves the
   cursor to a foreign key's table (asking for its schema's objects first when needed). Without
   the capability an open table shows its columns from the completion catalog, as before.
+- **Show DDL.** A driver with `Capabilities::ddl` answers `DbCommand::LoadDdl { id, object }`
+  (`driver::ddl::DdlObject`: a relation, an index, a trigger, a trigger's function, or a name the
+  user typed with the tab's schema) with `DbEvent::Ddl { id, result }` on the metadata session
+  of the tab's database: the catalog's parts as `driver::ddl::DdlSource` (a relation's
+  `TableStructure` plus what its `CREATE` needs), which `sql::ddl::ddl_text` (core, pure, golden
+  tests) writes out in `pg_dump`'s order under the header `-- Reconstructed by datarig from the
+  catalog (not pg_dump)`, names through `sql::ident::sql_ident`. The PostgreSQL driver
+  (`meta::ddl`) pipelines, in one read-only transaction and one round trip (budget
+  `rtt.table_ddl`): the lookup into the transaction-local setting `datarig.ddl_target` (`r:`,
+  `t:` or `f:` and an `oid`; a typed name in the tab's schema first), `search_path = ''` so every
+  printed name is qualified, and the statement of that kind (`meta::ddl::RELATION`, which
+  includes `structure_parts!`, `TRIGGER`, `FUNCTION`). Each statement checks `pg_locks` for an
+  `AccessExclusiveLock`, held or waited for, on the relations its deparsing locks — the object,
+  an index's or trigger's table, the relations a view's rule, a policy or an SQL-standard
+  function body depend on (`pg_depend`), as probed on PostgreSQL 13 to 18 — and answers
+  `locked` with nothing deparsed when there is one (`DbError::Locked`); `aclexplode`,
+  `pg_get_userbyid`, comments, sequences and a string-bodied function lock nothing. In the TUI
+  a DDL tab (`TabKind::Ddl`, `tabs::DdlTab`) holds its object, its state (`DdlState`: not
+  read, waiting for the connection, reading, read, locked, failed) and the id of the request it
+  waits for (`App::ddl_seq`): `app::ddl` sends it on the metadata session of the tab's profile
+  and database (an aux one for another database) and takes only the answer of that request from
+  that session; a session that ends, a failed attempt or a closed connection ends the wait. Its
+  editor is read-only (`Editor::read_only`: the Normal and Visual commands that change the text,
+  Insert mode, puts, pastes and `:s` are refused before anything happens, and the app says so);
+  in Normal mode its keys are the context `editor.ddl` (`r` reads again, `o` opens the text in a
+  new console through `console_with`), below `editor.vim.normal`. The run key reads it again; a
+  restored or reopened tab (`workspace.toml` kind `ddl`) is not read until asked. Without the
+  capability `D` says the driver cannot show DDL.
 - **Keychain calls in order.** `App::keychain_job` takes the keychain accounts a job touches;
   `app::keychain::KeychainQueue` gives it a place in each account's queue when it is asked for
   (on the UI thread, a short lock) and its worker waits until it is first in all of them

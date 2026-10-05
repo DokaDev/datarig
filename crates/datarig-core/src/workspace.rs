@@ -26,7 +26,7 @@
 //!
 //! [[tabs]]
 //! id = "7d7c…"            # console file name
-//! kind = "console"        # console | script | table
+//! kind = "console"        # console | script | table | ddl
 //! console = 1             # the console's number (`console 1`)
 //! profile = "3f0b8f5e-…"  # none: a tab without a connection
 //! cursor = [12, 4]
@@ -45,7 +45,19 @@
 //! schema = "shop"
 //! table = "users"
 //! profile = "3f0b8f5e-…"
+//!
+//! [[tabs]]
+//! id = "e5f6…"
+//! kind = "ddl"
+//! object = "trigger"      # relation | index | trigger | trigger_function | named
+//! schema = "shop"
+//! on = "users"            # a trigger's table (and the table of a trigger's function)
+//! name = "users_touch"    # the trigger's name (a named one: the name as typed)
+//! profile = "3f0b8f5e-…"
 //! ```
+//!
+//! The `ddl` kind came within version 3: an earlier build keeps such a tab as one of a kind it
+//! does not know (below).
 //!
 //! Version 2 added `console`, the `table` kind and `results`; version 3
 //! a query tab's `context` (its database and schema). A file of an earlier
@@ -97,6 +109,8 @@ pub enum TabKind {
     Script,
     /// A table or view opened from the explorer (no console file).
     Table,
+    /// An object's DDL (no console file; not read again until asked).
+    Ddl,
 }
 
 /// The share of a results pane whose file does not say it (percent of the height).
@@ -129,6 +143,8 @@ pub struct TabState {
     pub console: u32,
     /// A table tab's schema and table.
     pub table: Option<(String, String)>,
+    /// A DDL tab's object.
+    pub ddl: Option<crate::driver::ddl::DdlObject>,
     /// The results pane (`None`: not written, the defaults).
     pub results: Option<PaneState>,
     /// A query tab's database and schema (each `None`: the profile's default).
@@ -239,6 +255,7 @@ fn parse(text: &str) -> Result<(WorkspaceState, u64), Fault> {
             Some("console") => TabKind::Console,
             Some("script") => TabKind::Script,
             Some("table") => TabKind::Table,
+            Some("ddl") => TabKind::Ddl,
             // A later version's kind: kept, never dropped (a table without a kind is not a
             // tab of any version).
             Some(_) => {
@@ -260,6 +277,10 @@ fn parse(text: &str) -> Result<(WorkspaceState, u64), Fault> {
             _ => None,
         };
         if kind == TabKind::Table && table.is_none() {
+            continue;
+        }
+        let ddl = if kind == TabKind::Ddl { ddl_object(&text) } else { None };
+        if kind == TabKind::Ddl && ddl.is_none() {
             continue;
         }
         if let (TabKind::Console, Some(i)) = (kind, &id)
@@ -288,6 +309,7 @@ fn parse(text: &str) -> Result<(WorkspaceState, u64), Fault> {
             top: int(t.get("top")),
             console: u32::try_from(int(t.get("console"))).unwrap_or(0),
             table,
+            ddl,
             results,
             database: context_text("database"),
             schema: context_text("schema"),
@@ -332,8 +354,10 @@ pub fn save(state: &Path, s: &WorkspaceState) -> io::Result<()> {
 /// `results`.
 const TOP_KEYS: [&str; 4] = ["version", "active", "explorer", "tabs"];
 const EXPLORER_KEYS: [&str; 3] = ["expanded_folders", "scripts_expanded", "script_folders"];
-const TAB_KEYS: [&str; 11] =
-    ["id", "kind", "script", "console", "schema", "table", "profile", "cursor", "top", "results", "context"];
+const TAB_KEYS: [&str; 14] = [
+    "id", "kind", "script", "console", "schema", "table", "profile", "cursor", "top", "results", "context", "object",
+    "on", "name",
+];
 const RESULTS_KEYS: [&str; 3] = ["share", "hidden", "maximized"];
 const CONTEXT_KEYS: [&str; 2] = ["database", "schema"];
 
@@ -345,6 +369,14 @@ fn tab_key(t: &dyn toml_edit::TableLike) -> Option<String> {
         "console" => Some(format!("console:{}", text("id"))),
         "script" => Some(format!("script:{}", text("script"))),
         "table" => Some(format!("table:{}:{}.{}", text("profile"), text("schema"), text("table"))),
+        "ddl" => Some(format!(
+            "ddl:{}:{}:{}.{}.{}",
+            text("profile"),
+            text("object"),
+            text("schema"),
+            text("on"),
+            text("name")
+        )),
         _ => None,
     }
 }
@@ -414,6 +446,41 @@ fn merge(old: &toml_edit::DocumentMut, new: &mut toml_edit::DocumentMut) {
     }
 }
 
+/// A DDL tab's object from its keys (`object`, `schema`, `on`, `name`); `None` when they do not
+/// make one.
+fn ddl_object(text: &dyn Fn(&str) -> Option<String>) -> Option<crate::driver::ddl::DdlObject> {
+    use crate::driver::ddl::DdlObject as O;
+    let (schema, on, name) = (text("schema"), text("on"), text("name"));
+    Some(match text("object")?.as_str() {
+        "relation" => O::Relation { schema: schema?, name: name? },
+        "index" => O::Index { schema: schema?, name: name? },
+        "trigger" => O::Trigger { schema: schema?, table: on?, name: name? },
+        "trigger_function" => O::TriggerFunction { schema: schema?, table: on?, trigger: name? },
+        "named" => O::Named { name: name?, schema },
+        _ => return None,
+    })
+}
+
+/// The keys of a DDL tab's object (see [`ddl_object`]).
+fn write_ddl_object(tt: &mut toml_edit::Table, o: &crate::driver::ddl::DdlObject) {
+    use crate::driver::ddl::DdlObject as O;
+    let (object, schema, on, name) = match o {
+        O::Relation { schema, name } => ("relation", Some(schema), None, name),
+        O::Index { schema, name } => ("index", Some(schema), None, name),
+        O::Trigger { schema, table, name } => ("trigger", Some(schema), Some(table), name),
+        O::TriggerFunction { schema, table, trigger } => ("trigger_function", Some(schema), Some(table), trigger),
+        O::Named { name, schema } => ("named", schema.as_ref(), None, name),
+    };
+    tt["object"] = toml_edit::value(object);
+    if let Some(s) = schema {
+        tt["schema"] = toml_edit::value(s.as_str());
+    }
+    if let Some(t) = on {
+        tt["on"] = toml_edit::value(t.as_str());
+    }
+    tt["name"] = toml_edit::value(name.as_str());
+}
+
 /// The document of `s`, as this version writes it.
 fn build(s: &WorkspaceState) -> toml_edit::DocumentMut {
     let mut doc = toml_edit::DocumentMut::new();
@@ -433,6 +500,7 @@ fn build(s: &WorkspaceState) -> toml_edit::DocumentMut {
             TabKind::Console => "console",
             TabKind::Script => "script",
             TabKind::Table => "table",
+            TabKind::Ddl => "ddl",
         });
         if let Some(p) = &t.script {
             tt["script"] = toml_edit::value(p.as_str());
@@ -443,6 +511,9 @@ fn build(s: &WorkspaceState) -> toml_edit::DocumentMut {
         if let Some((schema, name)) = &t.table {
             tt["schema"] = toml_edit::value(schema.as_str());
             tt["table"] = toml_edit::value(name.as_str());
+        }
+        if let Some(o) = &t.ddl {
+            write_ddl_object(&mut tt, o);
         }
         if let Some(p) = t.profile {
             tt["profile"] = toml_edit::value(p.to_string());

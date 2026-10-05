@@ -620,7 +620,7 @@ impl App {
     }
 
     /// How the status bar names `m`.
-    fn method_text(&self, m: Method) -> String {
+    pub(super) fn method_text(&self, m: Method) -> String {
         let tmux = (self.env)("TMUX").is_some_and(|v| !v.is_empty());
         let label = match m {
             Method::System => Label::CopyMethodSystem,
@@ -634,7 +634,7 @@ impl App {
     ///
     /// A copy longer than `osc52_max_bytes` of base64 never goes through OSC 52 (the terminal
     /// would drop it silently): `auto` tries the system clipboard instead, also over SSH.
-    fn deliver(&mut self, text: &str) -> Result<Method, Msg> {
+    pub(super) fn deliver(&mut self, text: &str) -> Result<Method, Msg> {
         let ssh = clipboard::in_ssh(|k| (self.env)(k));
         let plan = clipboard::plan(self.prefs.clipboard, ssh);
         let (len, max) = (clipboard::osc52_len(text), self.prefs.osc52_max_bytes);

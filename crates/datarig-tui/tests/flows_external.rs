@@ -176,7 +176,7 @@ fn a_table_tabs_query_goes_as_a_copy_and_comes_back_in_a_new_console() {
     assert_eq!(t.context, h.app.tabs.get(table).unwrap().context, "the same database and schema");
     assert_eq!(h.app.focus, Focus::Editor);
     assert_eq!(h.app.tabs.get(table).unwrap().editor.text(), query, "the table tab keeps its query");
-    assert!(h.status(100, 30).contains("The edited query is in a new console"));
+    assert!(h.status(100, 30).contains("The edited text is in a new console"));
 }
 
 /// The answer is bound to the tab and its text as they were: when they changed meanwhile, the

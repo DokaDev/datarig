@@ -15,6 +15,8 @@ impl App {
             // A table tab has neither a text to save nor a connection to switch: said, not
             // silently ignored.
             let table = !self.profiles.is_empty() && !self.tabs.is_empty() && self.tab().is_table();
+            // A DDL tab is read-only and stays where it was opened: said too.
+            let ddl = !self.profiles.is_empty() && !self.tabs.is_empty() && self.tab().is_ddl();
             match a {
                 Action::ScriptSave | Action::ScriptSaveAs if table => {
                     self.flash(Notice::new(Label::TableTabNoSave, Level::Info));
@@ -22,11 +24,19 @@ impl App {
                 Action::SetTabConnection | Action::SetTabContext if table => {
                     self.flash(Notice::new(Label::TableTabNoRebind, Level::Info))
                 }
+                Action::ScriptSave | Action::ScriptSaveAs | Action::FormatSql | Action::ToggleComment if ddl => {
+                    self.say_read_only();
+                }
+                Action::SetTabConnection | Action::SetTabContext if ddl => {
+                    self.flash(Notice::new(Label::DdlNoRebind, Level::Info))
+                }
                 _ => {}
             }
             return;
         }
         match a {
+            // A DDL tab has nothing to run: the run key reads its DDL again.
+            Action::RunStatement if self.tab().is_ddl() => self.load_ddl(self.tab().id),
             Action::RunStatement => {
                 if !self.layout.too_small {
                     let t = self.tab_mut();
@@ -169,6 +179,9 @@ impl App {
             Action::PageNext => self.page_next(),
             Action::PagePrev => self.page_prev(),
             Action::CountRows => self.count_rows(),
+            Action::ReloadDdl => self.load_ddl(self.tab().id),
+            Action::DdlToConsole => self.ddl_to_console(),
+            Action::CopyDdl => self.copy_ddl(),
             Action::ResultTab(next) => self.cycle_result_tab(if next { 1 } else { -1 }),
         }
     }

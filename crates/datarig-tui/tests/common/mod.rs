@@ -75,6 +75,8 @@ pub struct FakeDriver {
     /// Without `Capabilities::structure` (as a driver that cannot read a table's structure):
     /// an open table shows its columns from the completion catalog.
     pub no_structure: Arc<AtomicBool>,
+    /// Without `Capabilities::ddl` (as a driver that cannot show an object's DDL).
+    pub no_ddl: Arc<AtomicBool>,
 }
 
 impl Driver for FakeDriver {
@@ -86,7 +88,7 @@ impl Driver for FakeDriver {
             key_metadata: true,
             contexts: true,
             structure: !self.no_structure.load(Ordering::SeqCst),
-            ddl: true,
+            ddl: !self.no_ddl.load(Ordering::SeqCst),
         }
     }
 

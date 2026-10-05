@@ -104,6 +104,7 @@ impl Home {
                             top: 0,
                             console: 0,
                             table: None,
+                            ddl: None,
                             results: None,
                             database: None,
                             schema: None,

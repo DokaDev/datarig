@@ -138,6 +138,12 @@ pub enum Action {
     PagePrev,
     /// Count every row of the shown result (`SELECT count(*)`, sent for the user).
     CountRows,
+    /// Read the DDL tab's object again.
+    ReloadDdl,
+    /// The DDL tab's text in a new console on the same connection.
+    DdlToConsole,
+    /// The DDL tab's whole text to the clipboard.
+    CopyDdl,
 }
 
 /// What the results pane of a query tab does.
@@ -181,6 +187,10 @@ pub enum ExplorerAction {
     ContextMenu,
     /// A new console in the selected schema (or with the selected profile's defaults).
     ConsoleHere,
+    /// The DDL of the table, view, index or trigger under the cursor, in a DDL tab.
+    ShowDdl,
+    /// The DDL of the function of the trigger under the cursor, in a DDL tab.
+    ShowFunctionDdl,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -240,10 +250,15 @@ fn has_tab(a: &App) -> bool {
     in_workspace(a) && !a.tabs.is_empty()
 }
 
-/// The active tab is a query tab (a console or a saved query), not a table tab: it has a
-/// text to save and a connection it can switch.
+/// The active tab is a query tab (a console or a saved query), not a table or DDL tab: it has
+/// a text to save and a connection it can switch.
 fn query_tab(a: &App) -> bool {
-    has_tab(a) && !a.tab().is_table()
+    has_tab(a) && a.tab().is_query()
+}
+
+/// The active tab is a DDL tab.
+fn ddl_tab(a: &App) -> bool {
+    has_tab(a) && a.tab().is_ddl()
 }
 
 /// The active tab is a query tab on a profile (its database and schema can change).
@@ -363,12 +378,12 @@ fn detail_panel(a: &App) -> bool {
 /// The active tab is a query tab (console or saved query) that ran something: its results
 /// pane can be hidden or shown.
 fn pane_known(a: &App) -> bool {
-    has_tab(a) && !a.tab().is_table() && a.tab().ran
+    has_tab(a) && a.tab().is_query() && a.tab().ran
 }
 
 /// The active query tab shows its results pane.
 fn pane_shown(a: &App) -> bool {
-    has_tab(a) && !a.tab().is_table() && a.results_shown()
+    has_tab(a) && a.tab().is_query() && a.results_shown()
 }
 
 /// The results pane of a query tab has more than one result tab (the Messages of its last run
@@ -525,6 +540,16 @@ pub const REGISTRY: &[ActionSpec] = &[
         Label::ActionExplorerNewConsoleHere,
         explorer_profile,
     ),
+    act(Action::Explorer(E::ShowDdl), "explorer.show_ddl", Label::ActionExplorerShowDdl, explorer_focused),
+    act(
+        Action::Explorer(E::ShowFunctionDdl),
+        "explorer.show_function_ddl",
+        Label::ActionExplorerShowFunctionDdl,
+        explorer_focused,
+    ),
+    act(Action::ReloadDdl, "ddl.reload", Label::ActionDdlReload, ddl_tab),
+    act(Action::DdlToConsole, "ddl.open_console", Label::ActionDdlOpenConsole, ddl_tab),
+    act(Action::CopyDdl, "ddl.copy", Label::ActionDdlCopy, ddl_tab),
     mv(Action::Grid(G::Left), "grid.left", Label::ActionGridLeft, grid_focused),
     mv(Action::Grid(G::Right), "grid.right", Label::ActionGridRight, grid_focused),
     mv(Action::Grid(G::Down), "grid.down", Label::ActionGridDown, grid_focused),

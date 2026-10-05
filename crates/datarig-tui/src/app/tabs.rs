@@ -28,6 +28,50 @@ pub enum TabKind {
     /// A table or view opened from the explorer: its query is the document,
     /// the results take the whole tab, and there is no editor to show.
     Table,
+    /// An object's DDL, read from the catalog: a read-only editor takes the whole tab, and
+    /// there are no results.
+    Ddl,
+}
+
+/// What a DDL tab shows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DdlState {
+    /// Not read since the tab was restored or brought back: nothing is sent until the user
+    /// asks (`r`, the run key).
+    NotLoaded,
+    /// Waiting for its profile to connect.
+    Connecting,
+    /// Asked for, not answered yet.
+    Loading,
+    /// Read: the editor has it.
+    Loaded,
+    /// Another session's lock was in the way: nothing was read (never a part of the DDL).
+    Locked,
+    /// Why it could not be read.
+    Failed(String),
+}
+
+/// A DDL tab's object and where its reading is.
+#[derive(Clone, Debug)]
+pub struct DdlTab {
+    pub object: datarig_core::driver::ddl::DdlObject,
+    pub state: DdlState,
+    /// The request whose answer the tab waits for: answers to any other one are stale.
+    pub request: Option<u64>,
+    /// The object as the catalog named it, once read (a name the user typed may differ).
+    pub name: Option<String>,
+}
+
+impl DdlTab {
+    /// `object`, not read yet.
+    pub fn new(object: datarig_core::driver::ddl::DdlObject) -> Self {
+        Self { object, state: DdlState::NotLoaded, request: None, name: None }
+    }
+
+    /// Its name: as the catalog named it once read, else its object's.
+    pub fn label(&self) -> String {
+        self.name.clone().unwrap_or_else(|| self.object.label())
+    }
 }
 
 /// The table or view a table tab shows.
@@ -339,6 +383,8 @@ pub struct Doc {
     pub console_no: u32,
     /// The table a table tab shows.
     pub table: Option<TableRef>,
+    /// The object a DDL tab shows.
+    pub ddl: Option<DdlTab>,
 }
 
 impl Doc {
@@ -359,6 +405,7 @@ impl Doc {
             kept_profile: None,
             console_no: 0,
             table: None,
+            ddl: None,
         }
     }
 }
@@ -423,6 +470,17 @@ impl Tab {
     /// A table tab (no editor on screen, the results take the whole tab).
     pub fn is_table(&self) -> bool {
         self.kind == TabKind::Table
+    }
+
+    /// A DDL tab (a read-only editor takes the whole tab, no results).
+    pub fn is_ddl(&self) -> bool {
+        self.kind == TabKind::Ddl
+    }
+
+    /// A query tab: a console or a saved query, whose text is the user's (it is saved, it
+    /// runs, its connection can change).
+    pub fn is_query(&self) -> bool {
+        matches!(self.kind, TabKind::Console | TabKind::Script)
     }
 
     /// The run the row results came from: an earlier run when the last one returned none.
@@ -628,6 +686,8 @@ pub struct ClosedTab {
     pub trashed: Option<String>,
     /// A table tab's table.
     pub table: Option<TableRef>,
+    /// A DDL tab's object.
+    pub ddl: Option<datarig_core::driver::ddl::DdlObject>,
     pub pane: PaneLayout,
     pub context: SessionContext,
 }
@@ -740,6 +800,7 @@ impl TabManager {
             index,
             trashed: None,
             table: tab.doc.table.clone(),
+            ddl: tab.doc.ddl.as_ref().map(|d| d.object.clone()),
             pane: tab.pane,
             context: tab.context.clone(),
         });
@@ -794,8 +855,13 @@ impl TabManager {
             t.doc.table = c.table;
             t.pane = c.pane;
             t.context = c.context;
-            if t.is_table() {
-                // Its query is not a text anybody wrote: nothing to save.
+            // Not read again by itself: `r` reads it.
+            if let Some(object) = c.ddl {
+                t.editor = Editor::read_only("");
+                t.doc.ddl = Some(DdlTab::new(object));
+            }
+            if t.is_table() || t.is_ddl() {
+                // Not a text anybody wrote (a table's query, an object's DDL): nothing to save.
                 t.doc.saved = t.editor.text();
                 t.doc.written = true;
             }
@@ -826,6 +892,24 @@ impl TabManager {
                     && t.profile == Some(profile)
                     && t.context.database.as_deref() == database
                     && t.doc.table.as_ref() == Some(table)
+            })
+            .map(|t| t.id)
+    }
+
+    /// The DDL tab of `object` on `profile` in `database` (`None`: the profile's own), if one
+    /// is open.
+    pub fn find_ddl(
+        &self,
+        profile: ProfileId,
+        database: Option<&str>,
+        object: &datarig_core::driver::ddl::DdlObject,
+    ) -> Option<TabId> {
+        self.tabs
+            .iter()
+            .find(|t| {
+                t.profile == Some(profile)
+                    && t.context.database.as_deref() == database
+                    && t.doc.ddl.as_ref().is_some_and(|d| d.object == *object)
             })
             .map(|t| t.id)
     }

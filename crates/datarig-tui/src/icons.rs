@@ -63,6 +63,9 @@ pub const SCRIPT: &str = "\u{f1c9}";
 /// A table tab (nf-fa-table); with icons off the tab shows the name alone.
 pub const TABLE: &str = "\u{f0ce}";
 
+/// A DDL tab (nf-fa-code); with icons off the tab says `DDL` in words.
+pub const DDL: &str = "\u{f121}";
+
 /// A database of a server in the explorer (Font Awesome `database`).
 pub const DATABASE: &str = "\u{f1c0}";
 

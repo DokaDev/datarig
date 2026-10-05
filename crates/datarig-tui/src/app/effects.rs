@@ -5,8 +5,8 @@
 //! running, and what arrives for it is applied once the app runs again.
 //!
 //! The editor's text replaces the tab's as one undo step (`u` undoes it). A table tab's query
-//! is not a text anybody wrote: the editor gets a copy, and an edited copy opens in a new
-//! console on the same connection, database and schema.
+//! and a DDL tab's text are not texts anybody wrote: the editor gets a copy, and an edited copy
+//! opens in a new console on the same connection, database and schema.
 
 use super::*;
 use crate::external::{EditFailure, Edited, Ended};
@@ -50,7 +50,9 @@ impl App {
         if self.effect.is_some() {
             return;
         }
-        let copy = self.tab().is_table();
+        // A table tab's query and a DDL tab's text are not the tab's to change: a copy, which
+        // goes to a new console.
+        let copy = !self.tab().is_query();
         if !copy {
             for _ in 0..3 {
                 let e = &self.tab().editor;
@@ -104,7 +106,7 @@ impl App {
 
     /// A new console after the active tab, holding `text`, on `profile` in `context` (the
     /// profile connects when it is not connected); the editor gets the focus.
-    fn console_with(&mut self, text: &str, profile: Option<ProfileId>, context: SessionContext) {
+    pub(super) fn console_with(&mut self, text: &str, profile: Option<ProfileId>, context: SessionContext) {
         match profile {
             Some(id) => self.console_in(id, context),
             None => {

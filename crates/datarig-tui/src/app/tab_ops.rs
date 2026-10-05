@@ -235,7 +235,7 @@ impl App {
         }
         let Some(t) = self.tabs.get(id) else { return };
         let (running, tx) = (t.exec.running.is_some(), t.exec.tx_at_risk());
-        let console = (t.script().is_none() && !t.is_table()).then(|| (t.doc.console_id.clone(), t.editor.text()));
+        let console = (t.script().is_none() && t.is_query()).then(|| (t.doc.console_id.clone(), t.editor.text()));
         let queued = self.take_queued(id).is_some();
         if running {
             self.cancel_in(id);
