@@ -19,7 +19,9 @@
 //! (see [`crate::theme`]; the UI resolves the name, so an unknown one never makes the file
 //! unusable).
 //! `[editor] cursor_shape` says whether the cursor shows the editor's mode, `[editor] clipboard`
-//! whether yanks and deletes without a register also go to the system clipboard. The retired
+//! whether yanks and deletes without a register also go to the system clipboard,
+//! `[editor] format_keyword_case` and `format_indent` how the formatter writes keywords and how
+//! far it indents (see [`crate::sql::format`]). The retired
 //! `[editor] mode` key (the editor has vim keys only) is accepted with any value, ignored and
 //! dropped by the next save.
 //! [`Prefs`] holds `[commands] position` (the `:` command line as a popup near
@@ -48,6 +50,7 @@ use crate::profile::ssh::{SshProblem, SshSettings};
 use crate::profile::tunnel::{self, TunnelId, TunnelPreset, TunnelSection};
 use crate::profile::{ConnectionConfig, ProfileId};
 use crate::secret::source::{DefaultSource, SourceKind, valid_env_name};
+pub use crate::sql::format::KeywordCase;
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -129,6 +132,10 @@ struct EditorSection {
     cursor_shape: Option<String>,
     #[serde(default)]
     clipboard: Option<String>,
+    #[serde(default)]
+    format_keyword_case: Option<String>,
+    #[serde(default)]
+    format_indent: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -296,6 +303,45 @@ impl Choice for EditorClipboard {
     }
 }
 
+/// `[editor] format_keyword_case`: how the formatter writes keywords.
+impl Choice for KeywordCase {
+    const ALL: &'static [Self] = &[KeywordCase::Preserve, KeywordCase::Upper, KeywordCase::Lower];
+    fn as_str(self) -> &'static str {
+        match self {
+            KeywordCase::Preserve => "preserve",
+            KeywordCase::Upper => "upper",
+            KeywordCase::Lower => "lower",
+        }
+    }
+}
+
+/// `[editor] format_indent`: the spaces of one indent level of the formatter.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FormatIndent {
+    #[default]
+    Four,
+    Two,
+}
+
+impl FormatIndent {
+    pub fn spaces(self) -> u8 {
+        match self {
+            FormatIndent::Four => 4,
+            FormatIndent::Two => 2,
+        }
+    }
+}
+
+impl Choice for FormatIndent {
+    const ALL: &'static [Self] = &[FormatIndent::Four, FormatIndent::Two];
+    fn as_str(self) -> &'static str {
+        match self {
+            FormatIndent::Four => "4",
+            FormatIndent::Two => "2",
+        }
+    }
+}
+
 /// The default of `osc52_max_bytes`: about 100 KB of base64 (75 KB of text). Terminals and
 /// tmux drop longer OSC 52 sequences silently (tmux 3.x, many terminals cap them near here).
 pub const OSC52_MAX_BYTES: usize = 100_000;
@@ -315,6 +361,10 @@ pub struct Prefs {
     pub cursor_shape: CursorShape,
     /// `[editor] clipboard`.
     pub editor_clipboard: EditorClipboard,
+    /// `[editor] format_keyword_case`.
+    pub format_case: KeywordCase,
+    /// `[editor] format_indent`.
+    pub format_indent: FormatIndent,
 }
 
 impl Default for Prefs {
@@ -327,6 +377,8 @@ impl Default for Prefs {
             osc52_max_bytes: OSC52_MAX_BYTES,
             cursor_shape: CursorShape::default(),
             editor_clipboard: EditorClipboard::default(),
+            format_case: KeywordCase::default(),
+            format_indent: FormatIndent::default(),
         }
     }
 }
@@ -568,7 +620,8 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
         None => policy::SpillLimit::default(),
         Some(v) => policy::parse_size(v).map_err(|e| bad("spill_limit", e).allowed(Some(SIZES)))?,
     };
-    let (cursor_shape, editor_clipboard) = f.editor.map(|e| (e.cursor_shape, e.clipboard)).unwrap_or_default();
+    let (cursor_shape, editor_clipboard, format_case, format_indent) =
+        f.editor.map(|e| (e.cursor_shape, e.clipboard, e.format_keyword_case, e.format_indent)).unwrap_or_default();
     let default_source = match f.secrets.and_then(|s| s.default_source) {
         None => DefaultSource::default(),
         Some(v) => DefaultSource::parse(&v).ok_or_else(|| {
@@ -587,6 +640,12 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
         },
         cursor_shape: choice("editor.cursor_shape", cursor_shape, "on, off")?,
         editor_clipboard: choice("editor.clipboard", editor_clipboard, "on, off")?,
+        format_case: choice("editor.format_keyword_case", format_case, "preserve, upper, lower")?,
+        format_indent: match format_indent {
+            None => FormatIndent::default(),
+            Some(n) => FormatIndent::parse(&n.to_string())
+                .ok_or_else(|| bad("editor.format_indent", n).allowed(Some("4, 2")))?,
+        },
     };
     let mut policies = Policies::default();
     for (name, p) in &f.policy {
@@ -952,6 +1011,10 @@ pub fn save(path: &Path, settings: Settings, profiles: Option<Profiles>) -> Resu
     orphans += &nested_setting(&mut doc, "editor", "cursor_shape", shape)?;
     let clip = (prefs.editor_clipboard.as_str().into(), prefs.editor_clipboard == EditorClipboard::default());
     orphans += &nested_setting(&mut doc, "editor", "clipboard", clip)?;
+    let case = (prefs.format_case.as_str().into(), prefs.format_case == KeywordCase::default());
+    orphans += &nested_setting(&mut doc, "editor", "format_keyword_case", case)?;
+    let indent = (i64::from(prefs.format_indent.spaces()).into(), prefs.format_indent == FormatIndent::default());
+    orphans += &nested_setting(&mut doc, "editor", "format_indent", indent)?;
     let source = (default_source.as_str().into(), default_source == DefaultSource::Auto);
     orphans += &nested_setting(&mut doc, "secrets", "default_source", source)?;
     let position = (prefs.commands_position.as_str().into(), prefs.commands_position == CommandsPosition::default());

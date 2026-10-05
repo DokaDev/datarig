@@ -570,6 +570,8 @@ fn step_2_settings_are_read_checked_and_saved_only_when_set() {
             osc52_max_bytes: OSC52_MAX_BYTES,
             cursor_shape: CursorShape::On,
             editor_clipboard: EditorClipboard::On,
+            format_case: KeywordCase::Preserve,
+            format_indent: FormatIndent::Four,
         }
     );
     assert_eq!(parse("osc52_max_bytes = 5000\n").unwrap().prefs.osc52_max_bytes, 5000);
@@ -617,6 +619,40 @@ fn step_2_settings_are_read_checked_and_saved_only_when_set() {
     let (cfg, _) = load(Some(path.clone()));
     assert_eq!(cfg.prefs, Prefs::default());
     assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
+}
+
+/// `[editor] format_keyword_case` and `format_indent`: read, checked, written only when not
+/// the default (the indent as a number).
+#[test]
+fn formatter_settings() {
+    let cfg = parse("[editor]\nformat_keyword_case = \"UPPER\"\nformat_indent = 2\n").unwrap();
+    assert_eq!((cfg.prefs.format_case, cfg.prefs.format_indent), (KeywordCase::Upper, FormatIndent::Two));
+    for (text, key, value, allowed) in [
+        (
+            "[editor]\nformat_keyword_case = \"title\"\n",
+            "editor.format_keyword_case",
+            "title",
+            "preserve, upper, lower",
+        ),
+        ("[editor]\nformat_indent = 3\n", "editor.format_indent", "3", "4, 2"),
+    ] {
+        assert_eq!(
+            parse(text).unwrap_err(),
+            ConfigError::Value { key: key.into(), value: value.into(), profile: None, allowed: Some(allowed) },
+            "{text}"
+        );
+    }
+    assert!(parse("[editor]\nformat_indent = \"2\"\n").is_err(), "a number, not a string");
+    let path = temp_file("format");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "").unwrap();
+    let prefs = Prefs { format_case: KeywordCase::Lower, format_indent: FormatIndent::Two, ..Prefs::default() };
+    save(&path, Settings { prefs, ..settings("en") }, None).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("[editor]\nformat_keyword_case = \"lower\"\nformat_indent = 2\n"), "{text}");
+    assert_eq!(load(Some(path.clone())).0.prefs, prefs);
+    save(&path, settings("en"), None).unwrap();
+    assert!(!std::fs::read_to_string(&path).unwrap().contains("format"), "back at the defaults, the keys go");
 }
 
 #[test]

@@ -45,6 +45,8 @@ impl App {
             }
             Action::ExternalEdit => self.request_external_edit(),
             Action::Suspend => self.request_suspend(),
+            Action::FormatSql => self.format_sql(),
+            Action::ToggleComment => self.toggle_comment(),
             // In the "Tunnels" section: a new preset.
             Action::NewProfile if self.focus == Focus::Tree && self.in_tunnels_section() => {
                 self.open_tunnel_form(None, false)

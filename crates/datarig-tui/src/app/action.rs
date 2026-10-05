@@ -44,6 +44,10 @@ pub enum Action {
     ExternalEdit,
     /// Stop until the shell's `fg` (Unix job control).
     Suspend,
+    /// Format the statement under the cursor or the selection (`:format`).
+    FormatSql,
+    /// Comment lines out or back in, as `gc`.
+    ToggleComment,
     NewProfile,
     /// Test the selected profile (explorer) or the active tab's profile.
     TestConnection,
@@ -382,6 +386,8 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::CancelQuery, "query.cancel", Label::ActionQueryCancel, has_tab),
     act(Action::ShowCompletions, "editor.complete", Label::ActionEditorComplete, has_tab),
     act(Action::ExternalEdit, "editor.open_external", Label::ActionEditorOpenExternal, has_tab),
+    act(Action::FormatSql, "editor.format", Label::ActionEditorFormat, query_tab),
+    act(Action::ToggleComment, "editor.comment_toggle", Label::ActionEditorCommentToggle, query_tab),
     act(Action::QuickConnect, "conn.quick_connect", Label::ActionConnQuickConnect, in_workspace),
     act(Action::NewProfile, "conn.new", Label::ActionConnNew, anywhere),
     act(Action::EditProfile, "conn.edit", Label::ActionConnEdit, explorer_profile_or_tunnel),

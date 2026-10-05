@@ -685,3 +685,91 @@ fn ex_notices_in_each_language() {
         assert_eq!(h.app.tab().editor.text(), "b b b\nb");
     }
 }
+
+/// `:format` lays out the statement under the cursor as one undo step; `Space e f` formats the
+/// Visual selection; `:'<,'>format` the lines; the keyword case and indent come from the
+/// settings. What would change more than the layout is refused, and the text stays.
+#[test]
+fn format_is_an_action_that_only_changes_the_layout() {
+    let mut h = editor_with("select 1;\nselect a,b from t where x=1;\nselect 3;");
+    h.keys("j");
+    h.command("format");
+    assert_eq!(
+        h.app.tab().editor.text(),
+        "select 1;\nselect\n    a,\n    b\nfrom\n    t\nwhere\n    x = 1;\nselect 3;"
+    );
+    assert!(h.status(160, 30).contains("Formatted (u undoes it)"), "{}", h.status(160, 30));
+    h.keys("u");
+    assert_eq!(h.app.tab().editor.text(), "select 1;\nselect a,b from t where x=1;\nselect 3;");
+    // Settings: upper-case keywords, two spaces.
+    h.command("set editor.format_keyword_case=upper");
+    h.command("set editor.format_indent=2");
+    h.key(KeyCode::Char(' '));
+    h.keys("ef");
+    assert_eq!(h.app.tab().editor.text(), "select 1;\nSELECT\n  a,\n  b\nFROM\n  t\nWHERE\n  x = 1;\nselect 3;");
+    // Again: nothing to change.
+    h.command("format");
+    assert!(h.status(160, 30).contains("Already formatted"), "{}", h.status(160, 30));
+    // The Visual selection, and a range of lines.
+    let mut h = editor_with("select 1 , 2;\n  select a from t;");
+    h.keys("v$");
+    h.key(KeyCode::Char(' '));
+    h.keys("ef");
+    assert_eq!(h.app.tab().editor.text(), "select\n    1,\n    2;\n  select a from t;");
+    assert_eq!(h.app.tab().editor.mode, Mode::Normal);
+    h.keys("GV");
+    h.keys(":");
+    h.type_text("format");
+    h.key(KeyCode::Enter);
+    assert_eq!(h.app.tab().editor.text(), "select\n    1,\n    2;\n  select\n      a\n  from\n      t;");
+    // Refused: `U&'…'` would come apart. The text stays, and the notice gives the line.
+    let mut h = editor_with("select 1;\nselect U&'d\\0061t' from t;");
+    h.keys("j");
+    h.command("format");
+    assert_eq!(h.app.tab().editor.text(), "select 1;\nselect U&'d\\0061t' from t;");
+    let status = h.status(160, 30);
+    assert!(status.contains("Not formatted") && status.contains("(line 2)"), "{status}");
+}
+
+/// `Space e c` is `gcc` (and `gc` in Visual mode), so `.` repeats it.
+#[test]
+fn comment_toggle_action_is_gc() {
+    let mut h = editor_with("select 1;\nselect 2;");
+    h.key(KeyCode::Char(' '));
+    h.keys("ec");
+    assert_eq!(h.app.tab().editor.text(), "-- select 1;\nselect 2;");
+    h.keys("j.");
+    assert_eq!(h.app.tab().editor.text(), "-- select 1;\n-- select 2;");
+    h.keys("ggVj");
+    h.key(KeyCode::Char(' '));
+    h.keys("ec");
+    assert_eq!(h.app.tab().editor.text(), "select 1;\nselect 2;");
+}
+
+/// A selection or range that starts or ends inside a comment, a string or a dollar body is
+/// not formatted (its text would read as code on its own): refused, text unchanged.
+#[test]
+fn format_refuses_a_selection_inside_a_token() {
+    for (text, keys) in [
+        ("-- select a, b from t where x = 1", "wv$"),
+        ("select 'note: select  a,b   from t' as s", "f:wvf'h"),
+        ("create function f() returns int language sql as $$\n  select   1,2   from t\n$$;", "jV"),
+    ] {
+        let mut h = editor_with(text);
+        h.keys(keys);
+        h.key(KeyCode::Char(' '));
+        h.keys("ef");
+        assert_eq!(h.app.tab().editor.text(), text, "{keys}");
+        assert!(h.status(160, 30).contains("Not formatted"), "{}", h.status(160, 30));
+    }
+    let text = "select $$\n  select   1,2   from t\n$$;";
+    let mut h = editor_with(text);
+    h.command("2format");
+    assert_eq!(h.app.tab().editor.text(), text, ":2format inside the body");
+    // Whole tokens selected: formatted.
+    let mut h = editor_with("select 1 , 2");
+    h.keys("v$");
+    h.key(KeyCode::Char(' '));
+    h.keys("ef");
+    assert_eq!(h.app.tab().editor.text(), "select\n    1,\n    2");
+}

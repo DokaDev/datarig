@@ -68,7 +68,8 @@ pub fn render() -> String {
          Neovim's built-in commenting does: `gcc` (with a count), `gc` with a motion or text object and \
          `gc` in Visual mode take whole lines; when every line that is not blank starts with `--` they \
          lose it, otherwise each gets `-- ` after the smallest indent (a blank line `--`), and `.` \
-         repeats it; editor commands on the `:` line (see the end); `&` runs the last `:s` again on \
+         repeats it (the action `editor.comment_toggle`, `Space e c`, is the same as `gcc`, or `gc` in \
+         Visual mode); editor commands on the `:` line (see the end); `&` runs the last `:s` again on \
          the cursor's line with its flags (as Neovim's `&`, Vim's `:&&`) and `g&` on every line with \
          the last search pattern; Visual \
          mode by character (`v`) and by line (`V`) with the motions and text objects, `y d x c`, `Y D X \
@@ -163,8 +164,16 @@ fn commands(s: &mut String) {
          case, or not), `e` (no error when nothing matches), `&` first (the last flags again); `c` \
          (confirm) is not supported and says so. Any delimiter that is not a letter, digit, blank, \
          `\\`, `\"` or `|` works (`:s#a/b#c#`). `:s` alone and `:&` repeat the last `:s` without its \
-         flags, `:&&` with them. Nothing matched: \"Pattern not found\". An editor command closes the line; \
-         what went wrong is said in the status bar.\n\n",
+         flags, `:&&` with them. Nothing matched: \"Pattern not found\".\n\
+         - `:[range]format` formats the range's lines (`:'<,'>format`, `:%format`); `:format` without \
+         a range, and `Space e f` (`editor.format`), format the statement under the cursor or the \
+         Visual selection. The formatter is never run on its own. It changes only the layout: where \
+         lines break, the indent (`[editor] format_indent`) and, if asked, the case of keywords \
+         (`[editor] format_keyword_case`). Names, strings, comments and dollar-quoted bodies stay as \
+         written. When its result would differ in anything else (an operator written apart, strings \
+         joined across a line break, `U&'…'`, a psql `\\command`) it changes nothing and says on which \
+         line. One format is one undo step.\n\n\
+         An editor command closes the line; what went wrong is said in the status bar.\n\n",
     );
     s.push_str("| Command | Aliases | Description |\n|---|---|---|\n");
     for c in command::COMMANDS {

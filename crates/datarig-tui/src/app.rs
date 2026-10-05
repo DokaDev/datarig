@@ -32,6 +32,7 @@ mod dispatch;
 pub mod effects;
 mod execution;
 pub mod explorer;
+mod format;
 pub mod guide;
 pub mod key_picker;
 mod keychain;

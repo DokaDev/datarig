@@ -83,7 +83,9 @@ fn setting_action(s: Setting) -> Option<Action> {
         | Setting::Clipboard(_)
         | Setting::CopyHeader(_)
         | Setting::CursorShape(_)
-        | Setting::EditorClipboard(_) => None,
+        | Setting::EditorClipboard(_)
+        | Setting::FormatCase(_)
+        | Setting::FormatIndent(_) => None,
     }
 }
 
@@ -548,6 +550,14 @@ impl App {
                 self.overlays.close(OverlayKind::Commands);
                 self.dispatch(Action::Suspend);
             }
+            (command::Command::Format, _) => {
+                if !arg.is_empty() {
+                    return err(Msg::CommandsErrorNoArgs { name });
+                }
+                self.overlays.close(OverlayKind::Commands);
+                self.focus = Focus::Editor;
+                self.dispatch(Action::FormatSql);
+            }
             (command::Command::Recover, _) => {
                 if !arg.is_empty() {
                     return err(Msg::CommandsErrorNoArgs { name });
@@ -708,6 +718,12 @@ impl App {
                 };
                 Some(Notice::new(msg, Level::Info))
             }
+            Ok(ExDone::Format { first, last }) => {
+                if changed {
+                    self.edited();
+                }
+                return self.format_lines(first, last);
+            }
             Ok(_) => None,
             Err(e) => Some(Notice::new(ex_error(e), Level::Error)),
         };
@@ -739,6 +755,8 @@ impl App {
             Setting::CopyHeader(c) => self.set_prefs(s, |x| x.copy_header = c),
             Setting::CursorShape(c) => self.set_prefs(s, |x| x.cursor_shape = c),
             Setting::EditorClipboard(c) => self.set_prefs(s, |x| x.editor_clipboard = c),
+            Setting::FormatCase(c) => self.set_prefs(s, |x| x.format_case = c),
+            Setting::FormatIndent(i) => self.set_prefs(s, |x| x.format_indent = i),
         }
     }
 

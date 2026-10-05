@@ -30,6 +30,7 @@
 //!   `comment` is `gc`.
 //! * `search` is `/`, `?`, `n`, `N`, `*`, `#` and the highlight of their matches.
 //! * `ex` runs the commands the app's `:` line hands over: a line range, `:s`, `:&`.
+//! * `target` is what the app's actions on SQL take (the formatter, the comment toggle).
 //! * `render` draws.
 //!
 //! One command is one undo step: an operator, a put, a paste, a `.`, or an Insert session with
@@ -50,6 +51,7 @@ mod render;
 mod repeat;
 mod scroll;
 mod search;
+mod target;
 mod textobj;
 mod vim;
 mod visual;
