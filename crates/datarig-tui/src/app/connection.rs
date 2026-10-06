@@ -348,8 +348,15 @@ impl App {
         c.error = Some(why);
         let tabs: Vec<TabId> = self.tabs.iter().filter(|t| t.profile == Some(id)).map(|t| t.id).collect();
         for t in tabs {
-            if let Some(t) = self.tabs.get_mut(t) {
-                t.exec.running = None;
+            // A run in progress ends here, cancelled, as on a disconnect.
+            if let Some(t) = self.tabs.get_mut(t)
+                && t.exec.running.take().is_some_and(|r| !r.fetch && !r.count)
+            {
+                t.exec.run.answered(super::runlog::StatementOutcome::Cancelled, None);
+                if !matches!(t.results, Results::Rows(_)) {
+                    t.results = Results::Cancelled;
+                }
+                t.run_ended(true);
             }
             self.settle_run_hints(t);
         }
@@ -425,6 +432,7 @@ impl App {
         // What waits for this connection is dropped (it never runs).
         let queued = self.conns.get_mut(id).map(|c| std::mem::take(&mut c.pending)).unwrap_or_default();
         for q in &queued {
+            self.unstage_run(q.tab);
             self.tab_status(q.tab, Notice::new(Label::QueryCancelled, Level::Warning));
         }
         for t in &tabs {
@@ -438,6 +446,10 @@ impl App {
             // A run in progress ends here, cancelled (its session's answers are not read).
             if t.exec.running.take().is_some_and(|r| !r.fetch && !r.count) {
                 t.exec.run.answered(super::runlog::StatementOutcome::Cancelled, None);
+                if !matches!(t.results, Results::Rows(_)) {
+                    t.results = Results::Cancelled;
+                }
+                t.run_ended(true);
                 stopped.push(t.id);
             }
             t.exec.tx_open = false;

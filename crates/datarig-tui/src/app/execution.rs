@@ -35,7 +35,11 @@ impl App {
             self.flash(Notice::new(Label::QueryNoStatement, Level::Warning));
             return;
         }
-        ed.stage_run(&stmts, spans);
+        // Refused while the tab runs or waits: what its run took stays staged for it.
+        if self.tab_busy(self.tab().id) {
+            return self.flash_busy();
+        }
+        self.tab_mut().editor.stage_run(&stmts, spans);
         self.run(stmts);
     }
 
@@ -50,7 +54,6 @@ impl App {
     /// connects it and runs once it is.
     pub(super) fn run_in(&mut self, id: TabId, statements: Vec<String>) {
         if self.tab_busy(id) {
-            self.unstage_run(id);
             self.flash_busy();
             return;
         }
@@ -79,7 +82,6 @@ impl App {
     /// before, so nothing it refuses ever reaches a session.
     pub(super) fn run_approved(&mut self, id: TabId, statements: Vec<String>) {
         if self.tab_busy(id) {
-            self.unstage_run(id);
             self.flash_busy();
             return;
         }
@@ -100,7 +102,7 @@ impl App {
             return;
         }
         if t.exec.session.is_none() && !self.open_query_session(id) {
-            return;
+            return self.unstage_run(id);
         }
         self.query_seq += 1;
         let qid = self.query_seq;

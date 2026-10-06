@@ -46,8 +46,9 @@ impl App {
         if t.editor.last_run() != Some(query) {
             return;
         }
-        // Once: a hint that says it already keeps the time it said it with.
-        let due = |i: usize| t.editor.run_hint_kind(query, i).is_some_and(|k| k != HintKind::RolledBack);
+        // Once: only a hint that says the statement went well is amended (one that says it
+        // rolled back, failed or was cancelled is final).
+        let due = |i: usize| t.editor.run_hint_kind(query, i) == Some(HintKind::Ok);
         if !t.exec.run.statements.iter().enumerate().any(|(i, s)| s.rolled_back && due(i)) {
             return;
         }

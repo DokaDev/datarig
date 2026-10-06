@@ -331,7 +331,13 @@ impl App {
         // The rows or the scroll may change: the highlight under the pointer goes.
         q.hover = None;
         match key.code {
-            KeyCode::Esc => self.overlays.close(OverlayKind::QuickConnect),
+            KeyCode::Esc => {
+                // A run that waited for the tab's connection is not run.
+                if let QuickPurpose::Bind { tab, run: Some(_) } = q.purpose {
+                    self.unstage_run(tab);
+                }
+                self.overlays.close(OverlayKind::QuickConnect)
+            }
             KeyCode::Enter if !repeat => {
                 let Some(q) = self.overlays.quick() else { return };
                 let purpose = q.purpose.clone();

@@ -183,3 +183,32 @@ fn a_change_before_a_statement_that_moves_its_bounds_drops_its_hint() {
         assert_eq!(e.run_hints().count(), 0, "{keys_:?}: {:?}", e.text());
     }
 }
+
+/// A change after a statement's `;` cannot change it: its hint is not checked again (nothing
+/// lexed), however long the statement is. A change before it is checked.
+#[test]
+fn a_change_after_a_closed_statement_does_not_check_it_again() {
+    let mut e = hinted("SELECT 1;\nSELECT 2;");
+    e.take_check_work();
+    keys(&mut e, "jA -- x\x1b");
+    assert_eq!(e.run_hints().count(), 1);
+    assert_eq!(e.take_check_work(), 0, "after its `;`");
+    keys(&mut e, "ggO\x1b");
+    assert_eq!(e.run_hints().count(), 1);
+    assert!(e.take_check_work() > 0, "before it: checked");
+}
+
+/// A selection of a whole statement without its `;` runs that statement: it gets its hint.
+#[test]
+fn a_whole_statement_selected_without_its_semicolon_gets_its_hint() {
+    let mut e = Editor::new("SELECT 0;\nSELECT 1;\nSELECT 2;");
+    keys(&mut e, "j0vt;");
+    assert_eq!(run(&mut e, 1), ["SELECT 1"]);
+    e.finish_run(1, vec![hint("one")]);
+    assert_eq!(e.run_hints().count(), 1);
+    // Text put between it and its `;` changes it.
+    keys(&mut e, "j0f;i x\x1b");
+    assert_eq!(e.run_hints().count(), 1, "another line");
+    keys(&mut e, "k0f;i x\x1b");
+    assert_eq!(e.run_hints().count(), 0, "{:?}", e.text());
+}

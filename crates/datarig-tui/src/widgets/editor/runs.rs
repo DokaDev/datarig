@@ -22,6 +22,7 @@ use super::lexing::REGION_LINES;
 use super::{Editor, Sel};
 use datarig_core::sql::lexer::{Tok, lex};
 use datarig_core::sql::split::split;
+use std::collections::{HashMap, HashSet};
 
 /// Hints kept at most; past it the oldest go.
 const MAX_HINTS: usize = 256;
@@ -36,13 +37,14 @@ pub struct Span {
     closed: bool,
     /// Its own text changed since the run took it.
     edited: bool,
-    /// The version of the text it was last found to be a statement of.
-    checked: Option<u64>,
+    /// It was found to be a statement of the text, and no change since could make it another
+    /// (a change after its `;` cannot).
+    checked: bool,
 }
 
 impl Span {
     pub fn new(start: usize, end: usize, closed: bool) -> Self {
-        Self { start, end, closed, edited: false, checked: None }
+        Self { start, end, closed, edited: false, checked: false }
     }
 
     /// Bytes `a..b` were replaced with `ins` (`blank`: only blanks, put in without removing
@@ -55,9 +57,13 @@ impl Span {
             // it).
             self.start = shift(self.start);
             self.end = shift(self.end);
+            // What comes before it may make it another statement (a `;`, a comment opened).
+            self.checked = false;
         } else if a > self.end || (a == self.end && (self.closed || blank)) {
             // After it. Right after a statement without `;` text goes on it, except blanks (a
-            // new line below it).
+            // new line below it); it is checked again. After its `;` nothing can change it:
+            // the text is lexed from left to right.
+            self.checked &= self.closed;
         } else {
             self.edited = true;
             self.start = self.start.min(a);
@@ -220,6 +226,17 @@ impl Editor {
         if self.active_run() != Some(query) {
             return;
         }
+        // Only the statements that get a hint are checked, and only as many as are kept.
+        if let Some((_, spans)) = self.runs.active.as_mut() {
+            let mut kept = 0;
+            for (s, h) in spans.iter_mut().zip(&hints).rev() {
+                if h.is_none() || kept == MAX_HINTS {
+                    s.edited = true;
+                } else {
+                    kept += 1;
+                }
+            }
+        }
         self.check_spans(true, |_| false);
         let Some((_, spans)) = self.runs.active.take() else { return };
         for (index, (span, hint)) in spans.into_iter().zip(hints).enumerate() {
@@ -235,6 +252,11 @@ impl Editor {
     /// The query id of the last run whose statements got their hints.
     pub fn last_run(&self) -> Option<u64> {
         self.runs.last
+    }
+
+    /// Bytes the checks of run spans against the text lexed since the last call (the benchmark).
+    pub fn take_check_work(&mut self) -> usize {
+        std::mem::take(&mut self.check_work)
     }
 
     /// What the hint of statement `index` of run `query` says, if it has one.
@@ -270,15 +292,16 @@ impl Editor {
         self.runs.hints.iter().map(|h| (&h.span, &h.hint))
     }
 
-    /// Check the spans of the hints `pick` takes (and of the run in progress with `active`) that were not checked
-    /// since the text last changed: one that is no longer exactly a statement of the text is
-    /// edited, and its hint goes. The lines around them are split as the whole text would be:
-    /// from where the lexer's state is known, a statement counted only past the first `;` (unless
-    /// from the text's start) and up to the last `;` (unless to its end); more lines when a span
-    /// is not inside that.
+    /// Check the spans of the hints `pick` takes (and of the run in progress with `active`)
+    /// that a change may have touched since they were last checked: one that is no longer a
+    /// statement of the text is edited, and its hint goes. A span that is a statement's text
+    /// without its `;` (a selection that stopped before it) holds, and takes the `;` from then
+    /// on. The lines around them are split as the whole text would be: from where the lexer's
+    /// state is known, a statement counted only past the first `;` (unless from the text's
+    /// start) and up to the last `;` (unless to its end); more lines when a span is not inside
+    /// that.
     pub(super) fn check_spans(&mut self, active: bool, pick: impl Fn(&Span) -> bool) {
-        let version = self.version;
-        let unchecked = |s: &Span| !s.edited && s.checked != Some(version);
+        let unchecked = |s: &Span| !s.edited && !s.checked;
         let run = self.runs.active.iter().filter(|_| active).flat_map(|(_, s)| s.iter());
         let hinted = self.runs.hints.iter().map(|h| &h.span).filter(|s| pick(s));
         let mut todo: Vec<(usize, usize)> =
@@ -286,16 +309,18 @@ impl Editor {
         if todo.is_empty() {
             return;
         }
+        let picked: HashSet<(usize, usize)> = todo.iter().copied().collect();
         let lo = todo.iter().map(|s| s.0).min().unwrap_or(0);
         let hi = todo.iter().map(|s| s.1).max().unwrap_or(0);
         let n = self.lines.len();
         let (lo_line, hi_line) = (self.pos_bytes(lo).0, self.pos_bytes(hi).0);
         let mut k = REGION_LINES;
-        let mut holds: Vec<(usize, usize)> = Vec::new();
-        let mut broken: Vec<(usize, usize)> = Vec::new();
+        // The spans that hold, with the end and `;` of their statement.
+        let mut holds: HashMap<(usize, usize), (usize, bool)> = HashMap::new();
         loop {
             let (first, last) = (lo_line.saturating_sub(k), (hi_line + k + 1).min(n));
             let (base, region) = self.region_text(first, last);
+            self.check_work += region.len();
             let toks = lex(&region);
             let mut semis = toks.iter().filter(|t| t.kind == Tok::Semi);
             let from = if base == 0 { 0 } else { semis.next().map_or(usize::MAX, |t| base + t.end) };
@@ -304,21 +329,21 @@ impl Editor {
             } else {
                 toks.iter().rfind(|t| t.kind == Tok::Semi).map_or(0, |t| base + t.end)
             };
-            let stmts: Vec<(usize, usize)> = split(&region).iter().map(|st| (base + st.start, base + st.end)).collect();
+            // Each statement by its start: its body's end and its end.
+            let stmts: HashMap<usize, (usize, usize)> =
+                split(&region).iter().map(|st| (base + st.start, (base + st.body_end, base + st.end))).collect();
             let whole = base == 0 && last == n;
             todo.retain(|&(a, b)| {
                 if a >= from && b <= to {
-                    if stmts.binary_search(&(a, b)).is_ok() {
-                        holds.push((a, b))
-                    } else {
-                        broken.push((a, b))
+                    match stmts.get(&a) {
+                        Some(&(body, end)) if b == end || b == body => {
+                            holds.insert((a, b), (end, end > body));
+                        }
+                        _ => {}
                     }
                     false
-                } else if whole {
-                    broken.push((a, b));
-                    false
                 } else {
-                    true
+                    !whole
                 }
             });
             if todo.is_empty() {
@@ -328,13 +353,14 @@ impl Editor {
         }
         let hints = self.runs.hints.iter_mut().map(|h| &mut h.span);
         for s in hints.chain(self.runs.active.iter_mut().flat_map(|(_, s)| s.iter_mut())) {
-            if !unchecked(s) {
+            if !unchecked(s) || !picked.contains(&(s.start, s.end)) {
                 continue;
             }
-            if holds.contains(&(s.start, s.end)) {
-                s.checked = Some(version);
-            } else if broken.contains(&(s.start, s.end)) {
-                s.edited = true;
+            match holds.get(&(s.start, s.end)) {
+                Some(&(end, closed)) => {
+                    (s.end, s.closed, s.checked) = (end, closed, true);
+                }
+                None => s.edited = true,
             }
         }
         self.runs.hints.retain(|h| !h.span.edited);

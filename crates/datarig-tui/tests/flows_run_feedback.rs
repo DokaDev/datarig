@@ -522,3 +522,49 @@ fn an_error_hint_is_cleaned_like_a_cell() {
     assert_eq!(hint, datarig_tui::text::sanitize_cell("ERROR: a\x1b[2Jb\tc\u{9b}d"));
     assert!(!hint.chars().any(char::is_control), "{hint:?}");
 }
+
+/// A disconnected tab: `Ctrl+E` connects again and the statement waits for it.
+fn waiting() -> Harness {
+    let mut h = harness("SELECT 1;");
+    h.keys(" cx");
+    assert!(h.app.current_conn().is_none_or(|c| !c.connected));
+    h.ctrl('e');
+    assert!(h.app.is_queued(h.app.tab().id), "waits for the connection");
+    h
+}
+
+/// A run that waits for its connection keeps what `Ctrl+E` took: a second `Ctrl+E` refused
+/// meanwhile does not replace or drop it, and the run is marked once it is sent.
+#[test]
+fn a_waiting_run_keeps_its_marks() {
+    let mut h = waiting();
+    h.ctrl('e');
+    assert!(h.app.tab().editor.has_staged_run(), "a refused Ctrl+E keeps the waiting run's statements");
+    h.sent();
+    h.db(DbEvent::Connected);
+    let sent = h.sent();
+    let Some(DbCommand::Execute { id, .. }) = sent.iter().find(|c| matches!(c, DbCommand::Execute { .. })) else {
+        panic!("{sent:?}")
+    };
+    assert_eq!(h.app.tab().editor.active_run(), Some(*id), "marked once sent");
+}
+
+/// A run that never starts leaves nothing staged: disconnected while it waited, or quick
+/// connect closed for a tab without a connection.
+#[test]
+fn a_run_that_never_starts_leaves_nothing_staged() {
+    let mut h = waiting();
+    h.keys(" cx");
+    if h.overlay_kind().is_some() {
+        h.keys("y");
+    }
+    assert!(!h.app.is_queued(h.app.tab().id));
+    assert!(!h.app.tab().editor.has_staged_run(), "disconnected while it waited");
+
+    let mut h = harness("SELECT 1;");
+    h.app.tab_mut().profile = None;
+    h.ctrl('e');
+    assert!(h.overlay_kind().is_some(), "quick connect");
+    h.key(KeyCode::Esc);
+    assert!(!h.app.tab().editor.has_staged_run(), "quick connect closed");
+}

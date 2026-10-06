@@ -313,6 +313,9 @@ impl App {
             let key = self.key_for(Action::RunStatement, Ctx::VimNormal);
             return self.flash(Notice::new(Msg::PlanAlreadyExplain { key }, Level::Warning));
         }
+        if self.tab_busy(self.tab().id) {
+            return self.flash_busy();
+        }
         let sql = plan::explain_sql(&stmt, analyze);
         self.tab_mut().editor.stage_run(std::slice::from_ref(&sql), spans);
         self.run(vec![sql]);

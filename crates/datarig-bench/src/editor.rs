@@ -6,7 +6,8 @@
 //! searches the whole text) and `n`, with the bytes each key searched and the lines each frame
 //! highlighted counted. `block` (the `editor_block` scenario, in a process of its own): Visual
 //! block operators over the whole text, with the bytes they walked counted, and `:%s` over the
-//! whole text with the bytes it searched.
+//! whole text with the bytes it searched, and typing right after a hinted statement of 100,000
+//! lines (an INSERT of about 4.7 MB) with the bytes the hint checks lexed per key counted.
 
 use crate::apps;
 use crate::grid::wide;
@@ -255,6 +256,42 @@ pub fn run(scratch: &Path, bytes: usize, n: usize) -> Result<Value, String> {
     Ok(out)
 }
 
+/// A hinted `INSERT` of 100,000 lines (about 4.7 MB) with `SELECT 1;` on the line after it,
+/// the cursor there: `n` keys typed at its end, each with its frame. The key times and the most
+/// bytes one key's frame lexed to check the hint against the text.
+fn hinted_statement(n: usize) -> (Vec<f64>, usize) {
+    let mut text = String::from("INSERT INTO shop.audit_log (id, note) VALUES\n");
+    for i in 0..100_000 {
+        text.push_str(&format!("  ({i}, 'a note of row {i}, written for the bench'),\n"));
+    }
+    text.truncate(text.len() - 2);
+    text.push_str(";\nSELECT 1;");
+    let mut app = apps::offline(&text, None);
+    drop(text);
+    let mut term = apps::terminal();
+    let ed = &mut app.tab_mut().editor;
+    let (stmts, spans) = ed.run_statements();
+    ed.stage_run(&stmts, spans);
+    ed.start_run(1, &stmts);
+    let hint = RunHint { kind: HintKind::Ok, text: "100,000 rows affected \u{b7} 3.1s \u{b7} 14:03".into() };
+    ed.finish_run(1, vec![Some(hint)]);
+    apps::char(&mut app, 'G');
+    apps::char(&mut app, 'A');
+    apps::draw(&mut term, &mut app);
+    app.tab_mut().editor.take_check_work();
+    let typed = " -- a comment typed after it";
+    let (mut times, mut most) = (Vec::with_capacity(n), 0);
+    for i in 0..n {
+        let t = Instant::now();
+        apps::char(&mut app, typed.as_bytes()[i % typed.len()] as char);
+        apps::draw(&mut term, &mut app);
+        times.push(ms(t.elapsed()));
+        most = most.max(app.tab_mut().editor.take_check_work());
+    }
+    println!("  hinted statement: the most bytes one key's hint checks lexed: {most}");
+    (times, most)
+}
+
 /// Set in the process [`block_in_own_process`] starts: it runs [`block`] itself.
 const IN_PROCESS: &str = "DATARIG_BENCH_BLOCK_IN_PROCESS";
 
@@ -343,6 +380,11 @@ pub fn block(scratch: &Path, bytes: usize) -> Result<Value, String> {
 
     let subst = Summary::of(&subst);
     println!("  :%s        {}", subst.line(" ms"));
+    drop(app);
+    // Here too, for the copies of the big statement it lexes once (its run's end).
+    let (hinted, hinted_work) = hinted_statement(100);
+    let hinted = Summary::of(&hinted);
+    println!("  hinted     {}", hinted.line(" ms"));
     Ok(json!({
         "bytes": bytes,
         "lines": lines,
@@ -352,5 +394,7 @@ pub fn block(scratch: &Path, bytes: usize) -> Result<Value, String> {
         "subst_ms": subst.json(),
         // Nothing searched means the command did not run: not measured.
         "subst_bytes_max": if subst_changed { subst_bytes } else { 0 },
+        "hinted_typing_ms": hinted.json(),
+        "hinted_check_bytes_max": hinted_work,
     }))
 }

@@ -217,6 +217,8 @@ pub struct Editor {
     pub run_hints: bool,
     /// Nerd Font glyphs are drawn (the `icons` setting); else text marks.
     pub icons: bool,
+    /// Bytes the checks of run spans against the text lexed, for the benchmark.
+    check_work: usize,
 }
 
 impl Editor {
@@ -285,6 +287,7 @@ impl Editor {
             running: None,
             run_hints: true,
             icons: false,
+            check_work: 0,
         }
     }
 
