@@ -592,8 +592,8 @@ impl Tab {
 
     /// The tab's session was closed under it (a disconnect, the profile connected again, its
     /// attempt failed): nothing that session would answer is read. A run in progress ends here,
-    /// cancelled, once, with the reason in its Messages; a count or a fetch of more rows just
-    /// stops; no portal stays open, and the user's transaction is gone (the next run says so).
+    /// cancelled, once, with the reason in its Messages; a count or a fetch of more rows stops
+    /// and says so (Messages and the tab's status); no portal stays open, and the user's transaction is gone (the next run says so).
     /// Whether a run ended.
     pub fn session_closed(&mut self) -> bool {
         self.exec.lost_tx |= self.exec.tx_at_risk();
@@ -608,7 +608,20 @@ impl Tab {
                 self.run_ended(true);
                 true
             }
-            _ => false,
+            // A count or a fetch of more rows stops; said where it was announced, so its
+            // announcement is not the last word.
+            Some(r) => {
+                let label = if r.count {
+                    datarig_core::i18n::Label::ResultsCountSessionClosed
+                } else {
+                    datarig_core::i18n::Label::ResultsFetchSessionClosed
+                };
+                let note = Notice::new(label, super::Level::Warning);
+                self.exec.run.notes.push(note.clone());
+                self.status = Some(note);
+                false
+            }
+            None => false,
         };
         self.exec.resuming = None;
         self.exec.want_page = None;

@@ -620,3 +620,38 @@ fn a_run_that_never_starts_leaves_nothing_staged() {
     h.key(KeyCode::Esc);
     assert!(!h.app.tab().editor.has_staged_run(), "quick connect closed");
 }
+
+/// The profile connects again from another tab while this one's session is open (its connection
+/// was lost meanwhile): this tab's session is closed under it. Back on this tab.
+fn reconnect_from_another_tab(h: &mut Harness) {
+    let pid = h.app.tab().profile.unwrap();
+    let c = h.app.conns.entry(pid);
+    c.resolved = None;
+    c.connected = false;
+    h.ctrl('t');
+    h.app.tab_mut().editor = Editor::new("SELECT 2;");
+    h.ctrl('e');
+    h.db(DbEvent::Connected);
+    h.app.tabs.activate(0);
+}
+
+/// A count or a fetch of more rows whose session is closed under it stops, and says so where
+/// its announcement was: in the tab's Messages and its status.
+#[test]
+fn a_count_or_fetch_whose_session_closed_says_it_stopped() {
+    use datarig_core::i18n::{Label, Msg};
+    for (key, label) in [("#", Label::ResultsCountSessionClosed), ("n", Label::ResultsFetchSessionClosed)] {
+        let mut h = harness("SELECT a FROM t;");
+        let (id, _) = run(&mut h);
+        h.db(rows(id, 500, true));
+        h.key(KeyCode::Tab);
+        h.keys(key);
+        assert!(h.app.tab().exec.running.is_some(), "{key}: sent");
+        reconnect_from_another_tab(&mut h);
+        let t = h.app.tab();
+        assert!(t.exec.running.is_none(), "{key}");
+        let want = Msg::Label(label);
+        assert_eq!(t.exec.run.notes.last().map(|n| &n.msg), Some(&want), "{key}: {:?}", t.exec.run.notes);
+        assert_eq!(t.status.as_ref().map(|n| &n.msg), Some(&want), "{key}");
+    }
+}

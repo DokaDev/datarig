@@ -320,6 +320,10 @@ fn hinted_statement(n: usize) -> Result<(Vec<f64>, Value), String> {
     ] {
         let (t, most) =
             hinted_typing(text, run_line, type_line, n, true).ok_or(format!("hinted {name}: the hint went"))?;
+        // Typing above the statement checks its hint each key: nothing lexed means no check ran.
+        if name != "after" && most == 0 {
+            return Err(format!("hinted {name}: no key checked the hint"));
+        }
         let s = Summary::of(&t);
         println!("  hinted {name}: {}; the most bytes one key's hint checks lexed: {most}", s.line(" ms"));
         // The same keys with the hints off: what the frame costs without them.

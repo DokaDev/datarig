@@ -271,3 +271,102 @@ fn changes_before_a_statement_keep_or_drop_its_hint_as_the_text_says() {
         assert_eq!(e.run_hints().count(), usize::from(kept), "{text:?} then {keys_:?}: {:?}", e.text());
     }
 }
+
+/// A `;` the check found before a moved statement becomes the bound it relies on next: lines
+/// put above a hinted statement end with their own `;`, then that `;` is deleted while the line
+/// before it holds only a comment, and the statement before runs into it: its hint goes.
+#[test]
+fn a_semicolon_found_by_the_check_is_the_bound_from_then_on() {
+    let mut e = Editor::new("SELECT 0;\n\nSELECT 1;");
+    keys(&mut e, "G");
+    run(&mut e, 1);
+    e.finish_run(1, vec![hint("one")]);
+    assert_eq!(e.run_hints().count(), 1);
+    for k in ["ggji;\x1b", "O-- the end\x1b", "OSELECT 5\x1b"] {
+        keys(&mut e, k);
+        assert_eq!(e.run_hints().count(), 1, "{k:?}: {:?}", e.text());
+    }
+    keys(&mut e, "jjx");
+    assert_eq!(e.text(), "SELECT 0;\nSELECT 5\n-- the end\n\nSELECT 1;");
+    assert_eq!(e.run_hints().count(), 0, "`SELECT 5 … SELECT 1` is one statement now");
+}
+
+/// A small generator of the same pseudo-random sequence on every run.
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+
+    fn below(&mut self, n: usize) -> usize {
+        (self.next() % n.max(1) as u64) as usize
+    }
+}
+
+/// Pieces of text that open, close or end things for the lexer and the splitter.
+const PIECES: &[&str] = &[
+    "SELECT 1", ";", " ", "\n", "\n", "\n", "/*", "*/", "'", "\"", "$$", "$f$", "--", "-- c\n", "E'\\", "x", ";\n",
+    "\n;", "\n;\n", "\r\n", "/* /* */", "\\x\n", ".5", "$1", "U&'", "\n\n",
+];
+
+fn boundary(t: &str, mut i: usize) -> usize {
+    while !t.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
+/// Every hint left is exactly a statement of the text (as the whole text splits) with the
+/// text it had when it ran.
+fn hints_are_statements(e: &mut Editor, ran: &HashMap<usize, String>, ctx: &str) {
+    e.check_spans(false, |_| true);
+    let text = e.text();
+    let stmts = split(&text);
+    for h in &e.runs.hints {
+        let (a, b) = (h.span.start, h.span.end);
+        let statement = stmts.iter().any(|s| s.start == a && s.end == b);
+        assert!(statement && text.get(a..b) == Some(ran[&h.index].as_str()), "{ctx}: ({a}, {b}) in {text:?}");
+    }
+}
+
+/// Random texts before hinted statements and random changes, mostly before the last of them,
+/// checked after most changes: a hint never stays on text that is not its statement.
+#[test]
+fn hints_never_stay_on_text_that_is_not_their_statement() {
+    for seed in 1..=20_000u64 {
+        let mut r = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+        let mut pre = String::new();
+        for _ in 0..3 + r.below(15) {
+            pre.push_str(PIECES[r.below(PIECES.len())]);
+        }
+        let text = format!("{pre};\n\nSELECT 2;\nSELECT 3;");
+        let mut e = Editor::new(&text);
+        keys(&mut e, "ggVG");
+        let stmts = run(&mut e, 1);
+        let ran: HashMap<usize, String> = spans(&e).iter().map(|&(a, b)| text[a..b].to_string()).enumerate().collect();
+        e.finish_run(1, (0..stmts.len()).map(|_| hint("h")).collect());
+        hints_are_statements(&mut e, &ran, &format!("seed {seed}"));
+        for step in 0..40 {
+            let Some(last) = e.runs.hints.last().map(|h| h.span.start) else { break };
+            let t = e.text();
+            let a = boundary(&t, r.below(last + 1));
+            let (b, ins) = match r.below(3) {
+                0 => (a, PIECES[r.below(PIECES.len())]),
+                1 => (boundary(&t, (a + 1 + r.below(3)).min(t.len())).max(a), ""),
+                _ => (boundary(&t, (a + r.below(3)).min(t.len())).max(a), PIECES[r.below(PIECES.len())]),
+            };
+            e.splice_raw(a, b, ins);
+            if r.below(4) != 0 {
+                hints_are_statements(
+                    &mut e,
+                    &ran,
+                    &format!("seed {seed}, step {step}, ({a}, {b}, {ins:?}) after {t:?}"),
+                );
+            }
+        }
+    }
+}

@@ -315,9 +315,10 @@ impl Editor {
     /// Whether span `s`, a statement when last checked, still starts that statement after
     /// changes only before it (from `moved_from` on): lexed from where the lexer's state is
     /// known on the line of the first change, up to and with the span's first token. Its own
-    /// text is unchanged, so starting it is being it.
-    fn still_starts_its_statement(&mut self, s: &Span) -> bool {
-        let Some(from) = s.moved_from else { return false };
+    /// text is unchanged, so starting it is being it. When it does, where its lead starts now:
+    /// after the `;` found there, else where it started.
+    fn still_starts_its_statement(&mut self, s: &Span) -> Option<usize> {
+        let from = s.moved_from?;
         // The line before the first change: its state is known lexing up to that change's line
         // only (never the lines after it, which may be the long statement itself).
         let r = self.pos_bytes(from).0.saturating_sub(1);
@@ -326,7 +327,7 @@ impl Editor {
         let r0 = self.line_start(line) + byte;
         let (sl, sb) = self.pos_bytes(s.start);
         if r0 > s.start || sb > self.lines[sl].len() {
-            return false;
+            return None;
         }
         // Its first token, lexed alone (its text is unchanged): it must come out whole after
         // the text before it, or that text swallowed it (a comment or a string not closed).
@@ -335,9 +336,9 @@ impl Editor {
         while !rest.is_char_boundary(cut) {
             cut -= 1;
         }
-        let Some(head) = lex(&rest[..cut]).first().copied() else { return false };
+        let head = lex(&rest[..cut]).first().copied()?;
         if head.is_trivia() || (head.end == cut && cut < rest.len()) {
-            return false;
+            return None;
         }
         let head_text = &rest[..head.end];
         let mut text = self.slice((line, byte), (sl, sb));
@@ -346,13 +347,20 @@ impl Editor {
         self.check_work += text.len();
         let toks = lex(&text);
         if !toks.iter().any(|t| t.start == at && t.end == text.len() && t.kind == head.kind) {
-            return false;
+            return None;
         }
         let before: Vec<_> = toks.iter().take_while(|t| t.end <= at).collect();
         let semi = before.iter().rposition(|t| t.kind == Tok::Semi);
         let lead = &before[semi.map_or(0, |i| i + 1)..];
-        // After a `;` lexed here, or (none) after the one before it, which did not change.
-        lead.iter().all(|t| t.is_trivia()) && (semi.is_some() || (s.bound != usize::MAX && s.bound <= r0))
+        if !lead.iter().all(|t| t.is_trivia()) {
+            return None;
+        }
+        // After a `;` lexed here (its lead starts after it from now on), or (none) after the one
+        // before it, which did not change.
+        match semi {
+            Some(i) => Some(r0 + before[i].end),
+            None => (s.bound != usize::MAX && s.bound <= r0).then_some(s.bound),
+        }
     }
 
     /// Check the spans of the hints `pick` takes (and of the run in progress with `active`)
@@ -377,13 +385,14 @@ impl Editor {
             quick.extend(spans.iter().enumerate().filter(|(_, s)| moved(s)).map(|(i, s)| (n_hints + i, *s)));
         }
         for (i, s) in quick {
-            let holds = self.still_starts_its_statement(&s);
+            let bound = self.still_starts_its_statement(&s);
             let span = match self.runs.active.as_mut() {
                 Some((_, spans)) if i >= n_hints => &mut spans[i - n_hints],
                 _ => &mut self.runs.hints[i].span,
             };
             span.moved_from = None;
-            span.checked = holds;
+            span.checked = bound.is_some();
+            span.bound = bound.unwrap_or(usize::MAX);
         }
         let unchecked = |s: &Span| !s.edited && !s.checked;
         let run = self.runs.active.iter().filter(|_| active).flat_map(|(_, s)| s.iter());

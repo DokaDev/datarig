@@ -1178,6 +1178,8 @@
 "table_tab.no_rebind" = "A table tab stays on the connection it was opened from (open the table from another connection instead)"
 "results.count.rebound" = "Count stopped: the tab switched to another connection"
 "results.fetch.rebound" = "Fetching the next page stopped: the tab switched to another connection"
+"results.count.session_closed" = "Count stopped: the tab's connection was closed"
+"results.fetch.session_closed" = "Fetching the next page stopped: the tab's connection was closed"
 
 # SSH tunnels
 "ssh.unavailable" = "SSH tunnels are not available in this build"
