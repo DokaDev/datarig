@@ -53,6 +53,12 @@ pub const TERMINAL: Theme = Theme {
     danger_mark: Style::new().fg(Color::Red).add_modifier(Modifier::BOLD),
     plan_hot: Style::new().fg(Color::Magenta).add_modifier(Modifier::BOLD),
     plan_misestimate: Style::new().fg(Color::Yellow).add_modifier(Modifier::UNDERLINED),
+    chart_1: Color::Blue,
+    chart_2: Color::Yellow,
+    chart_3: Color::Green,
+    chart_4: Color::Magenta,
+    chart_5: Color::Cyan,
+    chart_6: Color::Red,
     dim: Dim::Modifier,
 };
 
@@ -101,6 +107,12 @@ pub const LIGHT: Theme = Theme {
     danger_mark: Style::new().fg(rgb(0xC0262D)).add_modifier(Modifier::BOLD),
     plan_hot: Style::new().fg(rgb(0xA45A00)).add_modifier(Modifier::BOLD),
     plan_misestimate: Style::new().fg(rgb(0x8A6100)).add_modifier(Modifier::UNDERLINED),
+    chart_1: rgb(0x0550AE),
+    chart_2: rgb(0xA45A00),
+    chart_3: rgb(0x1A7F37),
+    chart_4: rgb(0x8250DF),
+    chart_5: rgb(0x0A7E78),
+    chart_6: rgb(0xC0262D),
     dim: Dim::Blend { toward: rgb(0x808080), keep: 55 },
 };
 
@@ -149,6 +161,12 @@ pub const HIGH_CONTRAST: Theme = Theme {
     danger_mark: Style::new().fg(rgb(0xFF4040)).add_modifier(Modifier::BOLD),
     plan_hot: Style::new().fg(rgb(0xFFB000)).add_modifier(Modifier::BOLD),
     plan_misestimate: Style::new().fg(rgb(0xFFFF00)).add_modifier(Modifier::UNDERLINED),
+    chart_1: rgb(0x66B3FF),
+    chart_2: rgb(0xFFB000),
+    chart_3: rgb(0x00FF66),
+    chart_4: rgb(0xFF66FF),
+    chart_5: rgb(0x00E5FF),
+    chart_6: rgb(0xFF4040),
     dim: Dim::Blend { toward: rgb(0x000000), keep: 55 },
 };
 
@@ -198,6 +216,12 @@ pub const CATPPUCCIN_MOCHA: Theme = Theme {
     danger_mark: Style::new().fg(rgb(0xF38BA8)).add_modifier(Modifier::BOLD),
     plan_hot: Style::new().fg(rgb(0xFAB387)).add_modifier(Modifier::BOLD),
     plan_misestimate: Style::new().fg(rgb(0xF9E2AF)).add_modifier(Modifier::UNDERLINED),
+    chart_1: rgb(0x89B4FA),
+    chart_2: rgb(0xFAB387),
+    chart_3: rgb(0xA6E3A1),
+    chart_4: rgb(0xCBA6F7),
+    chart_5: rgb(0x94E2D5),
+    chart_6: rgb(0xF38BA8),
     dim: Dim::Blend { toward: rgb(0x101019), keep: 57 },
 };
 
@@ -249,6 +273,13 @@ pub const CATPPUCCIN_LATTE: Theme = Theme {
     danger_mark: Style::new().fg(rgb(0xD20F39)).add_modifier(Modifier::BOLD),
     plan_hot: Style::new().fg(rgb(0xD85509)).add_modifier(Modifier::BOLD),
     plan_misestimate: Style::new().fg(rgb(0xB07017)).add_modifier(Modifier::UNDERLINED),
+    chart_1: rgb(0x1A5AD8),
+    chart_2: rgb(0xD85509),
+    chart_3: rgb(0x3A9027),
+    chart_4: rgb(0x7E35DE),
+    // Teal, darkened to read on the cursor line.
+    chart_5: rgb(0x13878D),
+    chart_6: rgb(0xD20F39),
     dim: Dim::Blend { toward: rgb(0x808080), keep: 78 },
 };
 
@@ -299,6 +330,12 @@ pub const TOKYO_NIGHT_NIGHT: Theme = Theme {
     danger_mark: Style::new().fg(rgb(0xF7768E)).add_modifier(Modifier::BOLD),
     plan_hot: Style::new().fg(rgb(0xFF9E64)).add_modifier(Modifier::BOLD),
     plan_misestimate: Style::new().fg(rgb(0xE0AF68)).add_modifier(Modifier::UNDERLINED),
+    chart_1: rgb(0x7AA2F7),
+    chart_2: rgb(0xFF9E64),
+    chart_3: rgb(0x9ECE6A),
+    chart_4: rgb(0xBB9AF7),
+    chart_5: rgb(0x7DCFFF),
+    chart_6: rgb(0xF7768E),
     dim: Dim::Blend { toward: rgb(0x0E0F15), keep: 60 },
 };
 
@@ -351,6 +388,12 @@ pub const TOKYO_NIGHT_DAY: Theme = Theme {
     danger_mark: Style::new().fg(rgb(0xC64343)).add_modifier(Modifier::BOLD),
     plan_hot: Style::new().fg(rgb(0xB15C00)).add_modifier(Modifier::BOLD),
     plan_misestimate: Style::new().fg(rgb(0x8C6C3E)).add_modifier(Modifier::UNDERLINED),
+    chart_1: rgb(0x285FAD),
+    chart_2: rgb(0xB15C00),
+    chart_3: rgb(0x587539),
+    chart_4: rgb(0x7645BA),
+    chart_5: rgb(0x007197),
+    chart_6: rgb(0xC64343),
     dim: Dim::Blend { toward: rgb(0x808080), keep: 79 },
 };
 
@@ -400,6 +443,13 @@ pub const GRUVBOX_DARK: Theme = Theme {
     danger_mark: Style::new().fg(rgb(0xFB4934)).add_modifier(Modifier::BOLD),
     plan_hot: Style::new().fg(rgb(0xFE8019)).add_modifier(Modifier::BOLD),
     plan_misestimate: Style::new().fg(rgb(0xFABD2F)).add_modifier(Modifier::UNDERLINED),
+    chart_1: rgb(0x83A598),
+    chart_2: rgb(0xFE8019),
+    chart_3: rgb(0xB8BB26),
+    chart_4: rgb(0xD3869B),
+    // Yellow: the aqua is too near the blue in 256 colors.
+    chart_5: rgb(0xFABD2F),
+    chart_6: rgb(0xFB4934),
     dim: Dim::Blend { toward: rgb(0x161616), keep: 57 },
 };
 
@@ -450,6 +500,12 @@ pub const GRUVBOX_LIGHT: Theme = Theme {
     danger_mark: Style::new().fg(rgb(0x9D0006)).add_modifier(Modifier::BOLD),
     plan_hot: Style::new().fg(rgb(0xAF3A03)).add_modifier(Modifier::BOLD),
     plan_misestimate: Style::new().fg(rgb(0xAA7016)).add_modifier(Modifier::UNDERLINED),
+    chart_1: rgb(0x076678),
+    chart_2: rgb(0xAF3A03),
+    chart_3: rgb(0x79740E),
+    chart_4: rgb(0x8F3F71),
+    chart_5: rgb(0x427B58),
+    chart_6: rgb(0x9D0006),
     dim: Dim::Blend { toward: rgb(0x606060), keep: 60 },
 };
 
@@ -501,6 +557,13 @@ pub const NORD: Theme = Theme {
     danger_mark: Style::new().fg(rgb(0xBF616A)).add_modifier(Modifier::BOLD),
     plan_hot: Style::new().fg(rgb(0xD08770)).add_modifier(Modifier::BOLD),
     plan_misestimate: Style::new().fg(rgb(0xEBCB8B)).add_modifier(Modifier::UNDERLINED),
+    chart_1: rgb(0x88C0D0),
+    chart_2: rgb(0xD08770),
+    chart_3: rgb(0xA3BE8C),
+    chart_4: rgb(0xC3A5BD),
+    chart_5: rgb(0xEBCB8B),
+    // A blue apart from the frost ones (Nord has no sixth color that reads on its cursor line).
+    chart_6: rgb(0x8C8CF0),
     dim: Dim::Blend { toward: rgb(0x191D23), keep: 61 },
 };
 
@@ -550,5 +613,11 @@ pub const DRACULA: Theme = Theme {
     danger_mark: Style::new().fg(rgb(0xFF5555)).add_modifier(Modifier::BOLD),
     plan_hot: Style::new().fg(rgb(0xFFB86C)).add_modifier(Modifier::BOLD),
     plan_misestimate: Style::new().fg(rgb(0xF1FA8C)).add_modifier(Modifier::UNDERLINED),
+    chart_1: rgb(0x8BE9FD),
+    chart_2: rgb(0xFFB86C),
+    chart_3: rgb(0x50FA7B),
+    chart_4: rgb(0xBD93F9),
+    chart_5: rgb(0xFF79C6),
+    chart_6: rgb(0xFF5555),
     dim: Dim::Blend { toward: rgb(0x16171E), keep: 55 },
 };

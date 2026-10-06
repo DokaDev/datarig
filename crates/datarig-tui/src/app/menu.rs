@@ -15,12 +15,13 @@
 //! What the menu was opened on is kept: when it has changed by the time an item is picked (the
 //! tree was reloaded, the result was replaced, the tab went), nothing runs.
 
-use super::action::{PanelAction, PlanAction, PlanView};
+use super::action::{ChartAction, PanelAction, PlanAction, PlanView};
 use super::copy::{CopyFormat, CopyScope};
 use super::tabs::ResultView;
 use super::*;
 use crate::keymap::{Target, keys};
 use crate::widgets::text_input::InputResult;
+use datarig_core::chart::Kind as ChartKind;
 
 /// Explorer actions that are not about a node (moving the cursor, quitting): never in the menu.
 const NOT_IN_MENU: &[Action] = &[
@@ -52,6 +53,7 @@ const GRID_MENU: &[Action] = &[
 
 /// The results pane's actions, after the copies of every row.
 const RESULTS_MENU: &[Action] = &[
+    Action::Chart(ChartAction::Toggle),
     Action::ExplainAsPlan,
     Action::CountRows,
     Action::ResultTab(true),
@@ -76,6 +78,24 @@ const PLAN_PANE_MENU: &[Action] = &[
     Action::Plan(PlanAction::View(PlanView::Treemap)),
     Action::Plan(PlanAction::View(PlanView::Boxes)),
     Action::Plan(PlanAction::View(PlanView::Raw)),
+    Action::ResultTab(true),
+    Action::ResultTab(false),
+    Action::Panel(PanelAction::Maximize),
+];
+
+/// The Chart tab's actions for the point at the cursor and the chart, then its pane's: the
+/// kinds and the columns.
+const CHART_MENU: &[Action] =
+    &[Action::Chart(ChartAction::GotoRow), Action::Chart(ChartAction::CopyData), Action::Chart(ChartAction::CopyText)];
+const CHART_PANE_MENU: &[Action] = &[
+    Action::Chart(ChartAction::Kind(ChartKind::Bar)),
+    Action::Chart(ChartAction::Kind(ChartKind::HBar)),
+    Action::Chart(ChartAction::Kind(ChartKind::Line)),
+    Action::Chart(ChartAction::PickX),
+    Action::Chart(ChartAction::PickY),
+    Action::Chart(ChartAction::PickBy),
+    Action::Chart(ChartAction::Log),
+    Action::Chart(ChartAction::Toggle),
     Action::ResultTab(true),
     Action::ResultTab(false),
     Action::Panel(PanelAction::Maximize),
@@ -160,6 +180,8 @@ pub enum MenuTarget {
     },
     /// The active tab's plan: the run and statement it came from, its view and selected node.
     Plan { tab: TabId, binding: u64, query: u64, index: usize, view: PlanView, node: usize },
+    /// The active tab's chart: the result it draws, what it draws and the point at its cursor.
+    Chart { tab: TabId, binding: u64, result: u64, spec: datarig_core::chart::Spec, point: usize },
     /// The active tab's editor: its text, cursor and mode.
     Editor { tab: TabId, binding: u64, version: u64, cursor: (usize, usize), mode: Mode },
     /// The active tab.
@@ -448,6 +470,7 @@ impl App {
             }
             MenuTarget::Grid { .. } => self.grid_target(),
             MenuTarget::Plan { .. } => self.plan_target(),
+            MenuTarget::Chart { .. } => self.chart_target(),
             MenuTarget::Editor { .. } => self.editor_target(),
             MenuTarget::Tab { .. } => self.tab_target(),
             MenuTarget::Welcome => self.profiles.is_empty().then_some(MenuTarget::Welcome),
@@ -515,6 +538,50 @@ impl App {
             .and_then(|p| p.hits.iter().find(|(_, i)| *i == p.selected).map(|(rect, _)| (rect.x + 2, rect.y)))
             .unwrap_or((r.x + 2, r.y + 1));
         self.open_plan_menu(at);
+    }
+
+    fn chart_target(&self) -> Option<MenuTarget> {
+        if !self.chart_shown() || !matches!(self.focus, Focus::Results | Focus::Inspector) {
+            return None;
+        }
+        let t = self.tab();
+        let c = t.exec.chart.as_ref()?;
+        Some(MenuTarget::Chart {
+            tab: t.id,
+            binding: t.binding,
+            result: c.result,
+            spec: c.spec.clone(),
+            point: c.cursor,
+        })
+    }
+
+    /// The Chart tab's menu: the point's and the chart's actions, then the kinds and columns.
+    fn open_chart_menu(&mut self, at: (u16, u16)) {
+        let back = self.focus;
+        self.focus = Focus::Results;
+        self.chart_sync();
+        let Some(target) = self.chart_target() else {
+            self.focus = back;
+            return;
+        };
+        let (own, pane) = (self.available(CHART_MENU), self.available(CHART_PANE_MENU));
+        self.push_menu_from(back, Ctx::Chart, target, own, pane, at);
+        if !self.overlays.is_open(OverlayKind::ContextMenu) {
+            self.focus = back;
+        }
+    }
+
+    /// The Chart tab's menu next to the cursor's point (the plot's corner when it is not drawn).
+    fn open_chart_menu_here(&mut self) {
+        let r = self.layout.results;
+        let at = self
+            .tab()
+            .exec
+            .chart
+            .as_ref()
+            .and_then(|c| c.hits.iter().find(|(_, i)| *i == c.cursor).map(|(rect, _)| (rect.x + 1, rect.y)))
+            .unwrap_or((r.x + 2, r.y + 1));
+        self.open_chart_menu(at);
     }
 
     fn editor_target(&self) -> Option<MenuTarget> {
@@ -644,6 +711,10 @@ impl App {
         if self.plan_shown() {
             self.plan_click(x, y, false);
             return self.open_plan_menu((x, y));
+        }
+        if self.chart_shown() {
+            self.chart_click(x, y);
+            return self.open_chart_menu((x, y));
         }
         let t = self.tabs.active_mut();
         if let (ResultView::Rows, Results::Rows(rs)) = (t.exec.view, &t.results) {
@@ -784,6 +855,7 @@ impl App {
             // No tab: only the explorer is there.
             _ if self.tabs.is_empty() => self.open_context_menu_here(),
             Focus::Results | Focus::Inspector if self.plan_shown() => self.open_plan_menu_here(),
+            Focus::Results | Focus::Inspector if self.chart_shown() => self.open_chart_menu_here(),
             Focus::Results | Focus::Inspector => self.open_results_menu_here(),
             Focus::Editor => {
                 self.close_search_prompt();
@@ -1128,8 +1200,19 @@ impl App {
                 let name = self.tab().exec.plan.as_ref().map(|p| p.plan.label(*node)).unwrap_or_default();
                 Localized::verbatim(name)
             }
+            // The point at the cursor, as the chart labels it.
+            (Heading::Target, MenuTarget::Chart { point, .. }) => {
+                let c = self.tab().exec.chart.as_ref();
+                let p = c.and_then(|c| c.model()).and_then(|m| m.points.get(*point).cloned());
+                match p {
+                    Some(p) if p.others => self.i18n.label(Label::ChartOthers),
+                    Some(p) => Localized::verbatim(crate::text::sanitize_cell(&p.label)),
+                    None => self.i18n.label(Label::ResultsTabChart),
+                }
+            }
             (Heading::Target, _) => self.i18n.label(Label::AppTitle),
             (Heading::Pane, MenuTarget::Plan { .. }) => self.i18n.label(Label::ResultsTabPlan),
+            (Heading::Pane, MenuTarget::Chart { .. }) => self.i18n.label(Label::ResultsTabChart),
             (Heading::Pane, MenuTarget::Explorer(..)) => self.i18n.label(Label::PaneTreeTitle),
             (Heading::Pane, MenuTarget::Grid { .. }) => self.i18n.label(Label::PaneResultsTitle),
             (Heading::Pane, MenuTarget::Editor { .. }) => self.i18n.label(Label::PaneEditorTitle),

@@ -18,6 +18,10 @@ pub enum ChooserPurpose {
     MoveScript(String),
     /// Bring back the picked closed console from the trash (`:recover`).
     Recover,
+    /// A chart's X column, value columns or series column, for the result with this id.
+    ChartX(u64),
+    ChartY(u64),
+    ChartBy(u64),
 }
 
 pub struct Chooser {
@@ -190,6 +194,10 @@ impl App {
         let Some(c) = self.overlays.chooser() else { return };
         let Some(&i) = c.visible().get(c.selected) else { return };
         let (value, purpose) = (c.items[i].0.clone(), c.purpose.clone());
+        // A chart's list closes itself (its values stay open to pick more).
+        if self.chart_picked(&purpose, value.clone()) {
+            return;
+        }
         self.overlays.close(OverlayKind::Chooser);
         match purpose {
             ChooserPurpose::Form(f) => {
@@ -204,6 +212,7 @@ impl App {
                     self.untrash(&name);
                 }
             }
+            ChooserPurpose::ChartX(_) | ChooserPurpose::ChartY(_) | ChooserPurpose::ChartBy(_) => {}
         }
     }
 

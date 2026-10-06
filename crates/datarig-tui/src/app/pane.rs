@@ -263,15 +263,21 @@ impl App {
             || t.result_tabs().len() > 1
             // A plan: its rows, the plan and the Messages to switch between.
             || t.exec.plan.is_some()
+            // A chart: the rows and the chart.
+            || (t.exec.chart.is_some() && rows)
     }
 
     /// Show the result tab `delta` places away (the row results of the run in their order,
-    /// its plan when it has one, then its Messages), wrapping around.
+    /// the chart of the shown one, its plan when it has one, then its Messages), wrapping
+    /// around.
     pub(super) fn cycle_result_tab(&mut self, delta: isize) {
         use super::tabs::ResultView;
         let t = self.tab_mut();
         let mut views: Vec<(ResultView, Option<usize>)> =
             t.result_tabs().into_iter().map(|i| (ResultView::Rows, Some(i))).collect();
+        if t.exec.chart.is_some() && matches!(t.results, Results::Rows(_)) {
+            views.push((ResultView::Chart, None));
+        }
         if t.exec.plan.is_some() {
             views.push((ResultView::Plan, None));
         }

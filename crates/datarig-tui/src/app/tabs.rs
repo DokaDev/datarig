@@ -157,6 +157,8 @@ pub enum ResultView {
     Messages,
     /// The plan of a statement of the run (`TabSession::plan`).
     Plan,
+    /// The shown row result as a chart (`TabSession::chart`).
+    Chart,
 }
 
 /// The tab's query session and what runs on it.
@@ -207,6 +209,9 @@ pub struct TabSession {
     /// The plan a statement of the row results' run returned (`EXPLAIN (FORMAT JSON)`), and
     /// how it is shown. It goes with those row results.
     pub plan: Option<super::plan::PlanTab>,
+    /// The chart of the shown row result and what it draws, once asked for: it follows the
+    /// result shown (a later run's too, keeping the columns chosen while they are there).
+    pub chart: Option<super::chart::ChartTab>,
     /// Where the run's last statement's result came from: paging past its
     /// closed portal and counting happen only on that profile, binding and session.
     pub origin: Option<super::pages::Origin>,
@@ -270,6 +275,7 @@ impl TabSession {
             replace_pending: false,
             messages_scroll: 0,
             plan: None,
+            chart: None,
             origin: None,
             resuming: None,
             want_page: None,
@@ -569,6 +575,8 @@ impl Tab {
         let last = self.result_tabs().last().copied().filter(|_| self.exec.kept_log.is_none());
         match last {
             _ if failed => self.exec.view = ResultView::Messages,
+            // A chart shown before the run shows the run's rows.
+            _ if answered && self.exec.view == ResultView::Chart && self.exec.chart.is_some() => {}
             _ if answered => self.exec.view = ResultView::Rows,
             Some(i) => self.show_result(i),
             None => self.exec.view = ResultView::Messages,

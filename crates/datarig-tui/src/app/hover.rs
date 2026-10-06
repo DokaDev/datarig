@@ -21,6 +21,8 @@ pub enum PointerOn {
     PageNext,
     /// A view's name on the Plan tab's first line.
     PlanView(super::plan::PlanView),
+    /// A kind or a column choice on the Chart tab's first lines.
+    Chart(super::chart::ChartHit),
 }
 
 impl App {
@@ -57,6 +59,9 @@ impl App {
         } else if !self.tabs.is_empty() && self.plan_shown() && l.results.contains(at) {
             let plan = self.tab().exec.plan.as_ref();
             plan.and_then(|p| p.view_hits.iter().find(|(r, _)| r.contains(at))).map(|h| PointerOn::PlanView(h.1))
+        } else if !self.tabs.is_empty() && self.chart_shown() && l.results.contains(at) {
+            let chart = self.tab().exec.chart.as_ref();
+            chart.and_then(|c| c.field_hits.iter().find(|(r, _)| r.contains(at))).map(|h| PointerOn::Chart(h.1))
         } else {
             None
         };

@@ -22,6 +22,7 @@
 //! that sent them; events of closed or replaced sessions are dropped.
 
 pub mod action;
+pub mod chart;
 pub mod chooser;
 pub mod cmdline;
 pub mod command;
@@ -1367,6 +1368,7 @@ impl App {
                 // No tab: the empty state has no keys of its own.
                 _ if self.tabs.is_empty() => Ctx::Explorer,
                 Focus::Results | Focus::Inspector if self.plan_shown() => Ctx::Plan,
+                Focus::Results | Focus::Inspector if self.chart_shown() => Ctx::Chart,
                 Focus::Results => Ctx::Grid,
                 Focus::Inspector if self.inspector_shown() => Ctx::Inspector,
                 Focus::Inspector => Ctx::Grid,

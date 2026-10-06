@@ -425,6 +425,7 @@ impl App {
     fn focus_ctx(&self) -> Ctx {
         match self.focus {
             Focus::Results if self.plan_shown() => Ctx::Plan,
+            Focus::Results if self.chart_shown() => Ctx::Chart,
             Focus::Results => Ctx::Grid,
             _ => self.key_context(),
         }
