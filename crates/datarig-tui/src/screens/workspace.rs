@@ -2,6 +2,7 @@
 //! or the welcome panel while there is no profile; the status bar at the bottom.
 
 use crate::app::action::Action;
+use crate::app::hover::PointerOn;
 use crate::app::tabs::{DdlState, ResultView};
 use crate::app::{App, Focus, Layout, Paging, Results};
 use crate::keymap::Ctx;
@@ -42,6 +43,7 @@ pub(crate) fn draw_workspace(f: &mut Frame, app: &mut App) -> Option<(u16, u16)>
         put(f.buffer_mut(), r.x + 1, r.y, &format!("{mark} {text}"), r.width.saturating_sub(2) as usize, style);
     }
     let rows = [rows[1], rows[2]];
+    let old_pages = (app.layout.page_prev, app.layout.page_next);
     // A zoomed pane takes the tabs' place and the explorer's; a hidden explorer leaves its
     // place to the tabs. `Layout` records what is drawn, for the mouse too.
     let zoom = app.zoomed();
@@ -85,7 +87,14 @@ pub(crate) fn draw_workspace(f: &mut Frame, app: &mut App) -> Option<(u16, u16)>
     app.layout = Layout { tree, explorer_edge: edge(tree), body, ..base };
 
     app.layout.tab_bar = bar_and_panes[0];
-    app.tab_hits = draw_tab_bar(app, bar_and_panes[0], f.buffer_mut());
+    let mut hits = draw_tab_bar(app, bar_and_panes[0], f.buffer_mut());
+    // The bar laid out otherwise (a tab closed, added, scrolled, the screen resized): what was
+    // under the pointer is not there any more.
+    if hits != app.tab_hits && matches!(app.pointer_on, Some(PointerOn::Tab(_))) {
+        app.pointer_on = None;
+        hits = draw_tab_bar(app, bar_and_panes[0], f.buffer_mut());
+    }
+    app.tab_hits = hits;
 
     // A table tab: its results at full height. A query tab: the editor, and below it the
     // results pane once it ran, sized or hidden per tab. A zoomed pane: that pane alone.
@@ -119,6 +128,17 @@ pub(crate) fn draw_workspace(f: &mut Frame, app: &mut App) -> Option<(u16, u16)>
     app.layout.editor_cursor = cursor;
     if let Some(area) = results_area {
         draw_results_pane(app, area, f.buffer_mut());
+    }
+    // The paging arrows: highlighted under the pointer, unless they moved since.
+    if (app.layout.page_prev, app.layout.page_next) != old_pages
+        && matches!(app.pointer_on, Some(PointerOn::PagePrev | PointerOn::PageNext))
+    {
+        app.pointer_on = None;
+    }
+    match app.pointer_hover() {
+        Some(PointerOn::PagePrev) => f.buffer_mut().set_style(app.layout.page_prev, crate::widgets::pointer_style()),
+        Some(PointerOn::PageNext) => f.buffer_mut().set_style(app.layout.page_next, crate::widgets::pointer_style()),
+        _ => {}
     }
 
     draw_status(app, rows[1], f.buffer_mut());
@@ -251,11 +271,15 @@ fn draw_results_pane(app: &mut App, area: Rect, buf: &mut Buffer) {
     rb.render(grid_area, buf);
     // A query tab that ran: the result tabs of its last run and its Messages on the first line.
     let strip = app.strip_shown() && rinner.height > 2;
-    app.strip_hits.clear();
+    let old_strip = std::mem::take(&mut app.strip_hits);
     let content = if strip {
         let line = Rect { height: 1, ..rinner };
         app.layout.strip = line;
         draw_strip(app, line, buf);
+        if app.strip_hits != old_strip && matches!(app.pointer_on, Some(PointerOn::Strip(..))) {
+            app.pointer_on = None;
+            draw_strip(app, line, buf);
+        }
         Rect { y: rinner.y + 1, height: rinner.height - 1, ..rinner }
     } else {
         app.layout.strip = Rect::default();
@@ -364,6 +388,8 @@ fn draw_strip(app: &mut App, area: Rect, buf: &mut Buffer) {
         } else {
             Style::new().fg(th.fg_muted).bg(bg)
         };
+        let hovered = app.pointer_hover() == Some(PointerOn::Strip(key.0, key.1));
+        let style = if hovered { style.patch(crate::widgets::pointer_style()) } else { style };
         // Whole labels only (H/L reach the ones left out).
         if x as usize + crate::text::width(&text) > end as usize {
             break;

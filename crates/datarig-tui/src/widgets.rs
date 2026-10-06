@@ -101,5 +101,12 @@ pub(crate) fn put(buf: &mut Buffer, x: u16, y: u16, text: &str, w: usize, style:
     width(&t) as u16
 }
 
+/// A small clickable target under the pointer (a tab's `×`, a scroll mark, a result tab, a
+/// paging arrow): the text on the selection, as a selected row reads on every theme.
+pub(crate) fn pointer_style() -> Style {
+    let th = theme::cur();
+    Style::new().fg(th.fg).patch(th.selection).add_modifier(Modifier::BOLD)
+}
+
 #[cfg(test)]
 mod tests;

@@ -10,13 +10,21 @@ use crate::widgets::tree::Reveal;
 impl App {
     pub fn handle_event(&mut self, ev: Event) {
         // A mouse move that is not a drag (the terminal reports every motion while the mouse is
-        // captured) only selects the item under the pointer in an open menu, the help or a
-        // dialog's list, or highlights a dialog's button; any other move, and one that stays on
-        // the same item, changes nothing on screen: the event loop draws no frame for it.
+        // captured) only selects the item under the pointer in an open menu or the help, or
+        // highlights a dialog's button or row or a small target of the workspace (a tab's `×`);
+        // any other move, and one that stays on the same item, changes nothing on screen: the
+        // event loop draws no frame for it.
         if let Event::Mouse(m) = ev
             && m.kind == MouseEventKind::Moved
         {
-            let hovered = self.modal_open() && self.overlay_hover(m);
+            let hovered = if self.modal_open() {
+                // Under a dialog the workspace draws no highlight (`App::pointer_hover`); it is
+                // dropped so none comes back where the pointer no longer is.
+                self.pointer_on = None;
+                self.overlay_hover(m)
+            } else {
+                self.workspace_hover(m)
+            };
             self.idle_event = !hovered;
             return;
         }

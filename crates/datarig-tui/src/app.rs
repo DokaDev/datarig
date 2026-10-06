@@ -36,6 +36,7 @@ mod execution;
 pub mod explorer;
 mod format;
 pub mod guide;
+pub mod hover;
 pub mod key_picker;
 mod keychain;
 pub mod menu;
@@ -658,6 +659,8 @@ pub struct App {
     pending_use: Option<cmdline::PendingUse>,
     /// Where each tab and scroll mark of the document tab bar was drawn last.
     pub(crate) tab_hits: Vec<(u16, u16, crate::widgets::tabbar::TabHit)>,
+    /// The small clickable target under the pointer (drawn highlighted).
+    pub pointer_on: Option<hover::PointerOn>,
 }
 
 fn test_msg(i18n: &I18n, t: &ConnTest) -> Notice {
@@ -883,6 +886,7 @@ impl App {
             unknown_tabs: Vec::new(),
             strip_hits: Vec::new(),
             tab_hits: Vec::new(),
+            pointer_on: None,
             pending_context: None,
             pending_use: None,
             last_save_folder: None,
