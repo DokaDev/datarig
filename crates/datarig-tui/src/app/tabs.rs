@@ -212,6 +212,9 @@ pub struct TabSession {
     pub resuming: Option<super::pages::Resuming>,
     /// The page to show once the page being fetched arrives.
     pub want_page: Option<usize>,
+    /// The driver said the coming first page of the running query is not held
+    /// (`DbEvent::Released`): with more rows after it, its paging is `Paging::Released`.
+    pub released: bool,
     /// The statement whose rows are being counted.
     pub count_for: Option<usize>,
     /// How many of the user's transactions began in this tab (the open one's number).
@@ -268,6 +271,7 @@ impl TabSession {
             origin: None,
             resuming: None,
             want_page: None,
+            released: false,
             count_for: None,
             tx_epoch: 0,
             rerun_ok: false,

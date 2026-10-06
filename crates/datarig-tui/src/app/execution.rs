@@ -111,6 +111,7 @@ impl App {
             }
             t.exec.want_page = None;
             t.exec.resuming = None;
+            t.exec.released = false;
             t.exec.query_id = qid;
             // The row results stay until this run delivers its first rows:
             // a run without rows (a COMMIT) leaves them on screen, from an earlier run.
@@ -135,7 +136,8 @@ impl App {
             t.ran = true;
             t.pane.hidden = false;
         }
-        self.send_tab(id, DbCommand::Execute { id: qid, statements });
+        let paging = self.tabs.get(id).map(|t| self.paging_mode(t)).unwrap_or_default();
+        self.send_tab(id, DbCommand::Execute { id: qid, statements, paging });
     }
 
     /// Open tab `id`'s query session with its profile's password (the first run, or the next
@@ -356,6 +358,7 @@ impl App {
     pub fn on_db_event(&mut self, ev: DbEvent) {
         let target = match &ev {
             DbEvent::Page { .. }
+            | DbEvent::Released { .. }
             | DbEvent::Done { .. }
             | DbEvent::Failed { .. }
             | DbEvent::TxOpen(_)
@@ -619,7 +622,8 @@ impl App {
                 self.status = Some(m);
             }
             // Statement events never come from the metadata session.
-            DbEvent::Page { .. }
+            DbEvent::Released { .. }
+            | DbEvent::Page { .. }
             | DbEvent::Done { .. }
             | DbEvent::Failed { .. }
             | DbEvent::TxOpen(_)
@@ -682,10 +686,12 @@ impl App {
         let text = self.event_error_text(&ev);
         // A statement run again for the user that the allowlist refused (the server's side of
         // it, asked right before): said as a refusal, with the reason.
+        let released = self.tabs.get(id).is_some_and(|t| t.exec.paging == Paging::Released);
         let refused = match &ev {
             DbEvent::Failed { error: DbError::NotRepeatable(r), .. } => {
                 let why = self.i18n.msg(&super::pages::why(r)).to_string();
-                Some(Notice::new(Msg::ResultsPageRefused { why }, Level::Warning))
+                let m = if released { Msg::ResultsPageRefusedNoHold { why } } else { Msg::ResultsPageRefused { why } };
+                Some(Notice::new(m, Level::Warning))
             }
             _ => None,
         };
@@ -713,7 +719,14 @@ impl App {
         // other outcome of this session means no portal is open. A portal read inside the
         // user's own transaction is never closed for being idle.
         let in_block = t.exec.in_block;
-        let paging = |more: bool| if more { Paging::Open { since: now, in_block } } else { Paging::None };
+        // A first page the driver did not hold (`DbEvent::Released` came before it): nothing is
+        // open past it.
+        let released = t.exec.released && matches!(ev, DbEvent::Page { columns: Some(_), .. });
+        let paging = |more: bool| match (more, released) {
+            (false, _) => Paging::None,
+            (true, true) => Paging::Released,
+            (true, false) => Paging::Open { since: now, in_block },
+        };
         let notice = match ev {
             DbEvent::Connected => {
                 t.exec.state = SessionState::Ready;
@@ -781,6 +794,12 @@ impl App {
             }
             DbEvent::TxAborted(aborted) => {
                 t.exec.tx_aborted = aborted;
+                None
+            }
+            // The coming first page of the running query is not held: past it the statement can
+            // only run again.
+            DbEvent::Released { id: qid } => {
+                t.exec.released = qid == t.exec.query_id;
                 None
             }
             // The user's own transaction: results read in it are labelled,
@@ -878,6 +897,7 @@ impl App {
             DbEvent::Page { columns: Some(cols), rows, more, elapsed, .. } if t.exec.resuming.is_some() => {
                 let r = t.exec.resuming.take();
                 t.exec.running = None;
+                t.exec.released = false;
                 let same = r.as_ref().is_some_and(|r| {
                     r.columns.len() == cols.len()
                         && r.columns.iter().zip(&cols).all(|((n, ty), c)| *n == c.name && *ty == c.type_name)
@@ -913,10 +933,13 @@ impl App {
                         stop.take().or(announced).or(Some(rows_msg(n, more, elapsed)))
                     }
                     _ => {
-                        // Not the result it was: nothing is added, and its portal goes.
+                        // Not the result it was: nothing is added, and its portal goes (one
+                        // not held is gone already).
                         if more {
                             t.exec.paging = Paging::None;
-                            close_portal = Some(t.exec.query_id);
+                            if !released {
+                                close_portal = Some(t.exec.query_id);
+                            }
                         }
                         Some(Notice::new(Label::ResultsPageColumnsChanged, Level::Warning))
                     }
@@ -941,6 +964,7 @@ impl App {
             DbEvent::Page { columns: Some(cols), rows, more, elapsed, .. } => {
                 t.exec.succeeded(None);
                 t.exec.running = None;
+                t.exec.released = false;
                 let count = rows.len();
                 // A plan (`EXPLAIN (FORMAT JSON)`): shown as one; its rows stay a result tab.
                 let plan = if t.is_table() { None } else { super::plan::plan_of(&cols, &rows, more) };
@@ -963,12 +987,26 @@ impl App {
                     t.exec.view = super::tabs::ResultView::Plan;
                 }
                 t.exec.run.answered(StatementOutcome::Rows { count: count as u64, more }, Some(elapsed));
-                Some(if std::mem::take(&mut t.exec.explain_rolled_back) {
-                    Notice::new(Label::SafetyExplainRolledBack, Level::Info)
+                // Not held: the next page runs the statement again when the allowlist lets it;
+                // otherwise the first page is all there is, and the user learns why and what to do.
+                let refusal = if released && more { risk::repeat::repeatable(t.answer_sql()).err() } else { None };
+                if released && more {
+                    t.exec.rerun_ok = refusal.is_none();
+                }
+                if let Some(r) = refusal {
+                    let why = self.i18n.msg(&super::pages::why(&r)).to_string();
+                    let m = Notice::new(Msg::ResultsFirstPageOnly { count: count as u64, why }, Level::Warning);
+                    t.exec.run.notes.push(m.clone());
+                    t.exec.explain_rolled_back = false;
+                    Some(m)
                 } else {
-                    // The warning would stay behind the grid, in Messages.
-                    t.session_path_note().unwrap_or_else(|| rows_msg(count, more, elapsed))
-                })
+                    Some(if std::mem::take(&mut t.exec.explain_rolled_back) {
+                        Notice::new(Label::SafetyExplainRolledBack, Level::Info)
+                    } else {
+                        // The warning would stay behind the grid, in Messages.
+                        t.session_path_note().unwrap_or_else(|| rows_msg(count, more, elapsed))
+                    })
+                }
             }
             DbEvent::Page { columns: None, rows, more, elapsed, .. } => {
                 t.exec.running = None;

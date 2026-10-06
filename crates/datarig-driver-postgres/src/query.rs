@@ -68,7 +68,7 @@ use crate::connect::{db_error, is_cancel};
 use crate::link::{Closed, Link, Next};
 use crate::route::Cancel;
 use crate::values::{Raw, format_code, format_value, is_json, is_numeric, type_display};
-use datarig_core::driver::{Cell, ColumnMeta, ColumnOrigin, DbCommand, DbError, DbEvent, Outcome};
+use datarig_core::driver::{Cell, ColumnMeta, ColumnOrigin, DbCommand, DbError, DbEvent, Outcome, PagingMode};
 use datarig_core::sql::lexer::{Tok, Token, lex};
 use datarig_core::sql::risk::{self, Class};
 use std::collections::{HashMap, VecDeque};
@@ -396,17 +396,17 @@ pub(crate) async fn query_loop(
     let mut prepared = Prepared { off: !settings.statement_cache, ..Prepared::default() };
     loop {
         let stop = match link.next().await {
-            Next::Command(DbCommand::Execute { id, statements }) => {
+            Next::Command(DbCommand::Execute { id, statements, paging }) => {
                 let mut s = State { tx: &mut tx, prepared: &mut prepared };
-                match execute(&mut client, &mut link, &env, &mut s, id, statements, None).await {
+                match execute(&mut client, &mut link, &env, &mut s, id, statements, None, paging).await {
                     Ok(()) => continue,
                     Err(stop) => stop,
                 }
             }
             // Run again past `skip` rows: an `Execute` of one statement that drops them first.
-            Next::Command(DbCommand::Resume { id, sql, skip }) => {
+            Next::Command(DbCommand::Resume { id, sql, skip, paging }) => {
                 let mut s = State { tx: &mut tx, prepared: &mut prepared };
-                match execute(&mut client, &mut link, &env, &mut s, id, vec![sql], Some(skip)).await {
+                match execute(&mut client, &mut link, &env, &mut s, id, vec![sql], Some(skip), paging).await {
                     Ok(()) => continue,
                     Err(stop) => stop,
                 }
@@ -833,8 +833,10 @@ async fn no_rows_done<'a>(
 }
 
 /// Run `statements`; for the last row-returning one keep the portal open and serve
-/// `FetchMore` requests. A command that ends the open portal is processed next. The run ends
-/// with exactly one terminal event ([`Reply`]).
+/// `FetchMore` requests (`PagingMode::Hold`, or inside the user's block), or end it with its
+/// first page (`PagingMode::NoHold`). A command that ends the open portal is processed next.
+/// The run ends with exactly one terminal event ([`Reply`]).
+#[allow(clippy::too_many_arguments)]
 async fn execute(
     client: &mut Client,
     link: &mut Link,
@@ -843,9 +845,10 @@ async fn execute(
     id: u64,
     statements: Vec<String>,
     resume: Option<u64>,
+    paging: PagingMode,
 ) -> Result<(), Stop> {
     let reply = Reply::new(env.events, id);
-    match run(client, link, env, s, reply, statements, resume).await {
+    match run(client, link, env, s, reply, statements, resume, paging).await {
         Ok(()) => Ok(()),
         Err(Halted { stop, reply }) => {
             match (&stop, reply) {
@@ -859,6 +862,7 @@ async fn execute(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run<'a>(
     client: &mut Client,
     link: &mut Link,
@@ -867,6 +871,7 @@ async fn run<'a>(
     reply: Reply<'a>,
     statements: Vec<String>,
     resume: Option<u64>,
+    paging: PagingMode,
 ) -> Result<(), Halted<'a>> {
     let n = statements.len();
     if s.tx.unsure {
@@ -911,7 +916,8 @@ async fn run<'a>(
     let mut reply = reply;
     for (i, sql) in statements.iter().enumerate() {
         let (skip, resume) = (resume.unwrap_or(0), resume.is_some());
-        let step = Step { last: i + 1 == n, index: i, start: Instant::now(), skip, resume };
+        let hold = paging == PagingMode::Hold;
+        let step = Step { last: i + 1 == n, index: i, start: Instant::now(), skip, resume, hold };
         if n > 1 {
             // Cancelled between two statements: the rest does not run.
             if i > 0 && env.cancel.load(Ordering::SeqCst) {
@@ -1307,6 +1313,9 @@ struct Step {
     skip: u64,
     /// The app runs it again for the user (`Resume`), not the user.
     resume: bool,
+    /// A last statement's result with more rows keeps its portal open outside the user's block
+    /// (`PagingMode::Hold`); otherwise it ends with its first page.
+    hold: bool,
 }
 
 /// How a row-returning statement ended.
@@ -1338,7 +1347,7 @@ async fn portal<'a>(
     step: Step,
     opened: bool,
 ) -> Result<After<'a>, Halted<'a>> {
-    let Step { last, start, index, skip, resume } = step;
+    let Step { last, start, index, skip, resume, hold } = step;
     // `EXPLAIN ANALYZE` ran its statement only to measure it: its transaction is rolled back.
     let keep = !rolls_back(sql);
     let id = reply.id;
@@ -1360,9 +1369,17 @@ async fn portal<'a>(
     // user did in it.
     let savepoint = resume && tx.block;
     //
+    // No hold (`PagingMode::NoHold`), outside the user's block: the last statement's portal and
+    // its transaction end with its first page, and nothing stays open on the server while the
+    // user reads it (no lock, no snapshot, no transaction). The `COMMIT` (`ROLLBACK` for `EXPLAIN
+    // ANALYZE`) goes out after the Execute in the same write, so the page is read and the
+    // transaction ended in one round trip; a `Resume` whose skipped rows need more than its first
+    // request reads them first and ends it right after.
+    let release = last && !hold && !tx.block;
+    //
     // With the cache off its transaction began before the statement was parsed (`opened`,
     // [`prepare_opened`]).
-    let txn = if tx.block {
+    let mut txn = if tx.block {
         client.transaction_in_block_with(tx.take_first(env))
     } else if opened {
         client.transaction_opened()
@@ -1377,7 +1394,16 @@ async fn portal<'a>(
     // with the last chunk (one round trip when they fit in one).
     let max_rows = if skip > 0 { skip_chunk(skip, page_size) } else { ask(page_size, &carry) };
     let formats = formats_of(stmt);
-    let first = match halt!(link.guard(token, txn.bind_first_page(stmt, &formats, max_rows)).await, Some(reply)) {
+    // The first request reads everything the page needs (the skipped rows, the page and the
+    // row that tells whether more follow): it can end the transaction too.
+    let end_now = release && skip.saturating_add(page_size as u64 + 1) <= max_rows as u64;
+    let bound = if end_now {
+        let end = if keep { "COMMIT" } else { "ROLLBACK" };
+        halt!(link.guard(token, txn.bind_first_page_then(stmt, &formats, max_rows, end)).await, Some(reply))
+    } else {
+        halt!(link.guard(token, txn.bind_first_page(stmt, &formats, max_rows)).await, Some(reply))
+    };
+    let first = match bound {
         Ok(first) => first,
         Err(e) => {
             if savepoint {
@@ -1516,6 +1542,20 @@ async fn portal<'a>(
                 Ok(After::Failed)
             }
         };
+    }
+    if release {
+        // Not held: the portal goes and its transaction ends now (already, when the first
+        // request ended it), before the page is the answer; past the page the app can only run
+        // the statement again.
+        drop(portal);
+        if let Err(e) = halt!(finish(txn, keep, link).await, Some(reply)) {
+            reply.fail_with(&e);
+            return Ok(After::Failed);
+        }
+        env.report(tx, tx.block);
+        let _ = env.events.send(DbEvent::Released { id });
+        reply.page(columns, rows, true, start.elapsed());
+        return Ok(After::Done);
     }
     // The portal stays open for more rows, and with it the transaction that holds it.
     env.report(tx, true);

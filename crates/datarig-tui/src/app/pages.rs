@@ -1,8 +1,9 @@
 //! Explicit pagination: the grid shows one page of a result at a time.
 //! Pages already fetched come from the result's rows (in memory or its spill file); the page
-//! past them is fetched while the portal is open, or, once it closed, by running the statement
-//! again when it is on the plain-`SELECT` allowlist (`sql::risk::repeat`), which the app
-//! announces; anything else is refused with the reason. The rows are counted only when the user
+//! past them is fetched while the portal is open, or, once it closed or when it was never held
+//! (`paging = "no_hold"`), by running the statement again when it is on the plain-`SELECT`
+//! allowlist (`sql::risk::repeat`), which the app announces; anything else is refused with the
+//! reason. The rows are counted only when the user
 //! asks, with a `SELECT count(*)` of the same allowlist. Both go through the same read-only and
 //! confirm checks as a run, on the session the result came from.
 
@@ -137,9 +138,14 @@ impl App {
         let Some(t) = self.tabs.get(id) else { return };
         let Some(pid) = t.profile else { return };
         let sql = t.shown_sql().to_string();
+        // Never held: the first page is all that was read, and the refusal says what to do.
+        let released = t.exec.paging == Paging::Released;
+        let refused = |why| {
+            if released { Msg::ResultsPageRefusedNoHold { why } } else { Msg::ResultsPageRefused { why } }
+        };
         if let Err(r) = repeat::repeatable(&sql) {
             let why = self.i18n.msg(&why(&r)).to_string();
-            return self.tab_status(id, Notice::new(Msg::ResultsPageRefused { why }, Level::Warning));
+            return self.tab_status(id, Notice::new(refused(why), Level::Warning));
         }
         let statements = vec![sql.clone()];
         if let Some(refused) = self.unsupported(&statements).or_else(|| self.read_only_refusal(id, pid, &statements)) {
@@ -147,18 +153,20 @@ impl App {
         }
         if !self.dangerous(id, pid, &statements).is_empty() {
             let why = self.i18n.label(Label::RepeatWrites).to_string();
-            return self.tab_status(id, Notice::new(Msg::ResultsPageRefused { why }, Level::Warning));
+            return self.tab_status(id, Notice::new(refused(why), Level::Warning));
         }
         let Some(t) = self.tabs.get(id) else { return };
+        let paging = self.paging_mode(t);
         let Results::Rows(rs) = &t.results else { return };
         let skip = rs.rows.len() as u64;
         let columns = rs.columns.iter().map(|c| (c.meta.name.clone(), c.meta.type_name.clone())).collect();
         let size = self.page_size as u64;
         let (from, to) = (datarig_core::i18n::fmt_count(skip + 1), datarig_core::i18n::fmt_count(skip + size));
-        let note = if repeat::ordered(&sql) {
-            Notice::new(Msg::ResultsPageResumed { from, to }, Level::Info)
-        } else {
-            Notice::new(Msg::ResultsPageResumedUnordered { from, to }, Level::Warning)
+        let note = match (repeat::ordered(&sql), released) {
+            (true, false) => Notice::new(Msg::ResultsPageResumed { from, to }, Level::Info),
+            (false, false) => Notice::new(Msg::ResultsPageResumedUnordered { from, to }, Level::Warning),
+            (true, true) => Notice::new(Msg::ResultsPageRerun { from, to }, Level::Info),
+            (false, true) => Notice::new(Msg::ResultsPageRerunUnordered { from, to }, Level::Warning),
         };
         self.query_seq += 1;
         let qid = self.query_seq;
@@ -166,10 +174,11 @@ impl App {
         let Some(t) = self.tabs.get_mut(id) else { return };
         t.exec.query_id = qid;
         t.exec.resuming = Some(Resuming { columns, skip, page });
+        t.exec.released = false;
         t.exec.running = Some(Running { id: qid, started: now, fetch: true, count: false, cancelling: None });
         t.exec.run.notes.push(note.clone());
         self.tab_status(id, note);
-        self.send_tab(id, DbCommand::Resume { id: qid, sql, skip });
+        self.send_tab(id, DbCommand::Resume { id: qid, sql, skip, paging });
     }
 
     /// `#`: count the rows of the shown result, when the user asks: `SELECT count(*)` of its

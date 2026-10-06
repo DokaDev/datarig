@@ -10,6 +10,7 @@
 mod common;
 
 use common::{Answers, TestAsker, scratch};
+use datarig_core::driver::PagingMode;
 use datarig_core::driver::{ConnectOptions, DbCommand, DbEvent, Driver, SessionRole};
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::transport::{DialError, Dialer, DialerRef, Refusal};
@@ -127,7 +128,11 @@ async fn a_session_pages_and_cancels_through_the_bastion() {
     let mut next =
         async || tokio::time::timeout(Duration::from_secs(20), rx.recv()).await.expect("event").expect("open");
     assert!(matches!(next().await, DbEvent::Connected));
-    session.send(DbCommand::Execute { id: 1, statements: vec!["SELECT g FROM generate_series(1, 250) g".into()] });
+    session.send(DbCommand::Execute {
+        id: 1,
+        statements: vec!["SELECT g FROM generate_series(1, 250) g".into()],
+        paging: PagingMode::Hold,
+    });
     let mut rows = 0;
     loop {
         match next().await {
@@ -143,7 +148,11 @@ async fn a_session_pages_and_cancels_through_the_bastion() {
         }
     }
     assert_eq!(rows, 250);
-    session.send(DbCommand::Execute { id: 2, statements: vec!["SELECT pg_sleep(60)".into()] });
+    session.send(DbCommand::Execute {
+        id: 2,
+        statements: vec!["SELECT pg_sleep(60)".into()],
+        paging: PagingMode::Hold,
+    });
     tokio::time::sleep(Duration::from_millis(500)).await;
     let t0 = Instant::now();
     session.cancel();

@@ -6,7 +6,9 @@
 // * `Transaction::bind_first_page`: [BEGIN] + Bind + Describe (portal) + Execute(max_rows),
 //   the first rows of a portal together with the portal's current description (the `BEGIN`
 //   may be several statements: `BEGIN READ ONLY` and `SET LOCAL search_path …`, or `SET
-//   TRANSACTION READ ONLY` in the caller's block);
+//   TRANSACTION READ ONLY` in the caller's block); `Transaction::bind_first_page_then` sends
+//   `COMMIT` (or `ROLLBACK`) after the Execute too, so the transaction ends in the same round
+//   trip and nothing stays open;
 // * `Client::execute_pipelined`: [before] + Parse + Describe (statement) + Bind +
 //   Execute(max_rows) of the unnamed statement + [after], for a statement expected to return
 //   no rows (`before`/`after`: e.g. `BEGIN READ ONLY` and `COMMIT`);
@@ -131,6 +133,8 @@ pub(crate) struct FirstPageRequest {
     portal: String,
     /// How many statements went out before the Bind.
     begins: usize,
+    /// A statement went out after the Execute (`encode_first_page_then`).
+    end: bool,
 }
 
 /// Skips the three answers to a statement sent with [`simple`].
@@ -151,6 +155,18 @@ pub(crate) fn encode_first_page(
     max_rows: i32,
     begin: &[String],
 ) -> Result<FirstPageRequest, Error> {
+    encode_first_page_then(client, statement, result_formats, max_rows, begin, None)
+}
+
+/// `encode_first_page` with a statement without rows (`COMMIT`) sent after the Execute.
+pub(crate) fn encode_first_page_then(
+    client: &InnerClient,
+    statement: &Statement,
+    result_formats: &[i16],
+    max_rows: i32,
+    begin: &[String],
+    end: Option<&str>,
+) -> Result<FirstPageRequest, Error> {
     let portal = format!("q{}", NEXT_ID.fetch_add(1, Ordering::SeqCst));
     let buf = client.with_buf(|buf| {
         for b in begin {
@@ -159,10 +175,13 @@ pub(crate) fn encode_first_page(
         crate::query::encode_bind_with_formats(statement, std::iter::empty::<&str>(), &portal, result_formats, buf)?;
         frontend::describe(b'P', &portal, buf).map_err(Error::encode)?;
         frontend::execute(&portal, max_rows, buf).map_err(Error::encode)?;
+        if let Some(end) = end {
+            simple(end, buf)?;
+        }
         frontend::sync(buf);
         Ok::<_, Error>(buf.split().freeze())
     })?;
-    Ok(FirstPageRequest { buf, portal, begins: begin.len() })
+    Ok(FirstPageRequest { buf, portal, begins: begin.len(), end: end.is_some() })
 }
 
 pub(crate) async fn read_first_page(
@@ -170,8 +189,12 @@ pub(crate) async fn read_first_page(
     statement: &Statement,
     request: FirstPageRequest,
 ) -> Result<FirstPage, Error> {
-    let FirstPageRequest { buf, portal: name, begins } = request;
-    let messages = read_all(client, buf).await?;
+    let FirstPageRequest { buf, portal: name, begins, end } = request;
+    let mut messages = read_all(client, buf).await?;
+    if end {
+        let tail = messages.split_off(messages.len().saturating_sub(3));
+        skip_simple(&mut tail.into_iter())?;
+    }
     let mut it = messages.into_iter();
     for _ in 0..begins {
         skip_simple(&mut it)?;

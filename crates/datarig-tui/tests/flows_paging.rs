@@ -11,6 +11,7 @@
 mod common;
 
 use common::*;
+use datarig_core::driver::PagingMode;
 use datarig_core::driver::{DbCommand, DbError, DbEvent, Outcome};
 use datarig_core::i18n::Lang;
 use datarig_core::policy::Policy;
@@ -59,7 +60,7 @@ fn fetches(cmds: &[DbCommand]) -> usize {
 fn resumes(cmds: &[DbCommand]) -> Vec<(u64, String, u64)> {
     cmds.iter()
         .filter_map(|c| match c {
-            DbCommand::Resume { id, sql, skip } => Some((*id, sql.clone(), *skip)),
+            DbCommand::Resume { id, sql, skip, paging: PagingMode::NoHold } => Some((*id, sql.clone(), *skip)),
             _ => None,
         })
         .collect()

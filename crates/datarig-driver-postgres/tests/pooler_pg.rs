@@ -11,6 +11,7 @@
 //!
 //! The tests only read: nothing is created behind the pooler.
 
+use datarig_core::driver::PagingMode;
 use datarig_core::driver::ddl::DdlObject;
 use datarig_core::driver::{ConnectOptions, DbCommand, DbEvent, Driver, Session, SessionContext, SessionRole};
 use datarig_core::profile::ConnectionConfig;
@@ -76,7 +77,7 @@ impl Conn {
     }
 
     async fn run(&mut self, id: u64, sql: &str) -> DbEvent {
-        self.session.send(DbCommand::Execute { id, statements: vec![sql.to_string()] });
+        self.session.send(DbCommand::Execute { id, statements: vec![sql.to_string()], paging: PagingMode::Hold });
         self.wait(
             |e| matches!(e, DbEvent::Page { id: i, .. } | DbEvent::Done { id: i, .. } | DbEvent::Failed { id: i, .. } if *i == id),
             30,

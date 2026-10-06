@@ -114,6 +114,8 @@ struct FileConfig {
 #[serde(deny_unknown_fields)]
 struct PolicySection {
     #[serde(default)]
+    paging: Option<String>,
+    #[serde(default)]
     paging_idle_timeout: Option<toml::Value>,
     #[serde(default)]
     spill_limit: Option<toml::Value>,
@@ -678,6 +680,10 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
     let mut policies = Policies::default();
     for (name, p) in &f.policy {
         let mut pol = Policy::default();
+        if let Some(v) = &p.paging {
+            pol.paging = policy::parse_paging(v)
+                .ok_or_else(|| bad(&format!("policy.{name}.paging"), v).allowed(Some("no_hold, hold")))?;
+        }
         if let Some(v) = &p.paging_idle_timeout {
             pol.paging_idle_timeout = policy::parse_timeout(v).map_err(|e| {
                 bad(&format!("policy.{name}.paging_idle_timeout"), e)

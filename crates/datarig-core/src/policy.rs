@@ -3,11 +3,22 @@
 //!
 //! In the config file a policy is a `[policy.<name>]` table with these items:
 //!
-//! * `paging_idle_timeout` — how long a result that has more rows may keep its server-side
-//!   portal open without a fetch. A duration: seconds as a number, or a string with a
-//!   unit (`"90s"`, `"5m"`, `"1h"`); `0` or `"off"` never closes it. Default 30s. Suggested:
-//!   shorter (e.g. `"10s"`) for production-like policies, where an open implicit transaction
-//!   holds a snapshot and blocks vacuum, and `"off"` for a local database.
+//! * `paging` — what a result with more rows than a page keeps on the server, outside the
+//!   user's own transaction block: `"no_hold"` (default) keeps nothing: the first page comes
+//!   back and its server-side portal and the transaction it needs end in the same request, so
+//!   no lock, snapshot or transaction stays while the user reads; the next page runs the
+//!   statement again (only a statement on the plain-`SELECT` allowlist, announced), and any
+//!   other statement shows its first page only. `"hold"` keeps the portal open, and with it the
+//!   transaction and the locks its statement took (an `ACCESS SHARE` lock on every table read,
+//!   which an `ALTER TABLE` of another session waits for, and every statement queued behind
+//!   that one with it), until the result is read to its end or closed after
+//!   `paging_idle_timeout`; the next page is fetched from it. Inside the user's `BEGIN` block a
+//!   result's portal always lives in the block, whatever this says.
+//! * `paging_idle_timeout` — with `paging = "hold"`, how long a result that has more rows may
+//!   keep its server-side portal open without a fetch. A duration: seconds as a number, or a
+//!   string with a unit (`"90s"`, `"5m"`, `"1h"`); `0` or `"off"` never closes it. Default
+//!   30s. Suggested: shorter (e.g. `"10s"`) where an open transaction holds locks and a
+//!   snapshot and blocks vacuum, and `"off"` for a local database.
 //! * `spill_limit` — the most a result's rows may take on disk: past the
 //!   config's `result_window_rows`, rows go to a temporary file, and fetching stops when it
 //!   reaches this size. Bytes as a number, or a string with a unit (`"512MB"`, `"2GB"`; KB, MB
@@ -30,6 +41,7 @@
 //! An item a table leaves out has its built-in default; `[policy.default]` changes the values of
 //! the built-in `default` policy. A profile naming a policy that is not defined gets `default`.
 
+pub use crate::driver::PagingMode;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
@@ -41,7 +53,9 @@ pub const DEFAULT: &str = "default";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Policy {
-    /// `None`: an idle result's portal stays open.
+    /// Whether a result with more rows keeps its portal (and transaction) open.
+    pub paging: PagingMode,
+    /// `None`: an idle result's portal stays open (`PagingMode::Hold`).
     pub paging_idle_timeout: Option<Duration>,
     /// `None`: the config's `spill_limit`.
     pub spill_limit: Option<SpillLimit>,
@@ -53,6 +67,7 @@ pub struct Policy {
 impl Default for Policy {
     fn default() -> Self {
         Self {
+            paging: PagingMode::NoHold,
             paging_idle_timeout: Some(PAGING_IDLE_TIMEOUT),
             spill_limit: None,
             read_only: false,
@@ -135,6 +150,15 @@ impl Policies {
     pub fn get(&self, name: Option<&str>) -> Policy {
         let name = name.unwrap_or(DEFAULT);
         self.0.get(name).or_else(|| self.0.get(DEFAULT)).cloned().unwrap_or_default()
+    }
+}
+
+/// A `paging` value: `"no_hold"` or `"hold"` (case and surrounding spaces do not matter).
+pub fn parse_paging(s: &str) -> Option<PagingMode> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "no_hold" => Some(PagingMode::NoHold),
+        "hold" => Some(PagingMode::Hold),
+        _ => None,
     }
 }
 

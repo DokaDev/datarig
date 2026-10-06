@@ -10,15 +10,22 @@
 one_way_ms = 20
 runs = 5
 # Most round trips until the result is in front of the client ("to result") and until the
-# session is quiet again ("total", a trailing COMMIT or close included).
-select_small_cold = { to_result = 2, total = 3 }
-select_small_warm = { to_result = 1, total = 2 }
+# session is quiet again ("total", a trailing COMMIT or close included). By default
+# (`paging = "no_hold"`) the first page's COMMIT goes out with it: nothing follows the page, and
+# a large result keeps nothing open either.
+select_small_cold = { to_result = 2, total = 2 }
+select_small_warm = { to_result = 1, total = 1 }
 select_page_of_4m_cold = { to_result = 2, total = 2 }
 select_page_of_4m_warm = { to_result = 1, total = 1 }
+# `paging = "hold"`: a result that fits in a page commits after it; a large one keeps its portal
+# (and its transaction) open, and the next page is fetched from it.
+hold_select_small_warm = { to_result = 1, total = 2 }
+hold_select_page_of_4m_warm = { to_result = 1, total = 1 }
 next_page = { to_result = 1, total = 1 }
 # A count the user asks for, while a result pages (under a savepoint in its
-# transaction) and with no portal open; a result resumed past a closed portal, 500 rows skipped
-# (the page after them comes with the skipped rows). Each first asks the server what only it can
+# transaction, `paging = "hold"`) and with no portal open; a result resumed past a closed portal
+# or one never held (the next page of the default), 500 rows skipped (the page after them comes
+# with the skipped rows, and its COMMIT with them). Each first asks the server what only it can
 # tell for the allowlist (views, overloads of built-in names, …): one round trip more. Inside the
 # user's block the savepoint goes out with that question, and the statement is prepared again
 # (as every statement there).
@@ -31,8 +38,8 @@ select_small_in_block = { to_result = 2, total = 3 }
 insert_in_block = { to_result = 1, total = 1 }
 # A read-only policy (every transaction READ ONLY): the same counts as the statements above,
 # because BEGIN READ ONLY and SET TRANSACTION READ ONLY go out in the same write.
-ro_select_small_cold = { to_result = 2, total = 3 }
-ro_select_small_warm = { to_result = 1, total = 2 }
+ro_select_small_cold = { to_result = 2, total = 2 }
+ro_select_small_warm = { to_result = 1, total = 1 }
 ro_select_page_of_4m_warm = { to_result = 1, total = 1 }
 ro_set = { to_result = 1, total = 1 }
 ro_first_in_block = { to_result = 2, total = 3 }
@@ -58,8 +65,8 @@ one_way_ms = 20
 runs = 5
 tunnel_open = { to_result = 6, total = 6 }
 session_through_tunnel = { to_result = 4, total = 4 }
-select_small_cold = { to_result = 2, total = 3 }
-select_small_warm = { to_result = 1, total = 2 }
+select_small_cold = { to_result = 2, total = 2 }
+select_small_warm = { to_result = 1, total = 1 }
 select_page_of_4m_warm = { to_result = 1, total = 1 }
 next_page = { to_result = 1, total = 1 }
 insert = { to_result = 1, total = 1 }

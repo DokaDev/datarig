@@ -72,11 +72,17 @@ trip per step. These additions put the steps of one request into one write with 
     (`BEGIN`, `SET LOCAL search_path …`, then `COMMIT`: the server resolves names when it
     parses, so a session whose search path is set per transaction behind a pooler parses with
     it). It answers a `Statement` like `Client::prepare`.
+  - `encode_first_page_then`: `encode_first_page` with a statement sent after the Execute
+    (`COMMIT` or `ROLLBACK`, as Parse/Bind/Execute of the unnamed statement), so the
+    transaction, and the portal with it, ends in the round trip that read the first rows;
+    `read_first_page` skips its three answers.
   - Both read the whole response up to its `ReadyForQuery` before looking up any type: a
     lookup is a request of its own, answered after this one.
 - `src/transaction.rs`: a `begin` flag (`BEGIN` not sent yet) and the statements sent as that
   `BEGIN` (`begin_sql`, a list); `new_datarig`;
-  `Transaction::bind_first_page` (sends the pending `BEGIN` with the first page); `commit`,
+  `Transaction::bind_first_page` (sends the pending `BEGIN` with the first page) and
+  `bind_first_page_then` (also ends the transaction in the same write; marks it done when that
+  succeeded); `commit`,
   `rollback` and `Drop` send nothing while `BEGIN` has not been sent or for a handle on the
   caller's own block (`done`); `_savepoint` sets the new field.
 - `src/client.rs`: `Client::transaction_pipelined` (a transaction whose `BEGIN` goes out with

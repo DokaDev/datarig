@@ -518,6 +518,7 @@ fn policy_tables_are_read() {
 paging_idle_timeout = "10s"
 
 [policy.local]
+paging = "hold"
 paging_idle_timeout = "off"
 
 [policy.plain]
@@ -538,6 +539,12 @@ confirm = "writes"
     assert_eq!(get("plain"), Some(crate::policy::PAGING_IDLE_TIMEOUT), "a missing item has its default");
     assert_eq!(cfg.policies.get(None).paging_idle_timeout, Some(crate::policy::PAGING_IDLE_TIMEOUT));
 
+    let paging = |n: &str| cfg.policies.get(Some(n)).paging;
+    assert_eq!(paging("local"), crate::policy::PagingMode::Hold);
+    assert_eq!(paging("plain"), crate::policy::PagingMode::NoHold, "no-hold is the default");
+    assert_eq!(cfg.policies.get(None).paging, crate::policy::PagingMode::NoHold);
+    let e = parse("[policy.x]\npaging = \"keep\"").unwrap_err();
+    assert!(format!("{e:?}").contains("policy.x.paging"), "{e:?}");
     let e = parse("[policy.x]\npaging_idle_timeout = \"soon\"").unwrap_err();
     assert!(format!("{e:?}").contains("policy.x.paging_idle_timeout"), "{e:?}");
     let e = parse("[policy.x]\nconfirm = \"never\"").unwrap_err();
