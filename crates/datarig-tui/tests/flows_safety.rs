@@ -1054,3 +1054,44 @@ fn copy_through_the_connection_is_refused_as_not_supported_yet() {
         assert!(h.screen(160, 45).contains("Not run: COPY … FROM STDIN and COPY … TO STDOUT are not supported yet"));
     }
 }
+
+/// The mouse on the run confirmation: the pointer on Run underlines it but Cancel keeps the
+/// focus (Enter still cancels); a click on Cancel cancels, one on Run runs, one outside does
+/// nothing.
+#[test]
+fn the_run_confirmation_takes_clicks_and_the_pointer_moves_no_focus() {
+    use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+    let click = |h: &mut Harness, (x, y): (u16, u16)| h.mouse(MouseEventKind::Down(MouseButton::Left), x, y);
+    let buttons = |h: &mut Harness| {
+        h.draw(160, 45);
+        let r = &h.app.overlays.run_confirm().expect("asked").buttons.rects;
+        (r[0], r[1])
+    };
+    let mut h = connected(None, Lang::En);
+    run(&mut h, "DROP TABLE shop.orders");
+    let (cancel, run_b) = buttons(&mut h);
+    h.mouse(MouseEventKind::Moved, run_b.x + 1, run_b.y);
+    assert!(!h.app.take_idle_event(), "the highlight is a frame");
+    let c = h.app.overlays.run_confirm().unwrap();
+    assert!(!c.run_focused && c.buttons.hover == Some(1));
+    let t = h.draw(160, 45);
+    let cell = &t.backend().buffer()[(run_b.x + 2, run_b.y)];
+    assert!(cell.modifier.contains(ratatui::style::Modifier::UNDERLINED));
+    h.key(KeyCode::Enter);
+    assert_eq!(h.overlay_kind(), None);
+    assert!(executes(&mut h).is_empty(), "Enter after the pointer was on Run still cancels");
+    run(&mut h, "DROP TABLE shop.orders");
+    let (cancel2, _) = buttons(&mut h);
+    assert_eq!(cancel, cancel2);
+    click(&mut h, (0, 0));
+    click(&mut h, (cancel.x + cancel.width + 1, cancel.y));
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::RunConfirm), "outside and between: nothing");
+    click(&mut h, (cancel.x + 1, cancel.y));
+    assert_eq!(h.overlay_kind(), None);
+    assert!(executes(&mut h).is_empty());
+    assert_eq!(status(&h), Some(Msg::Label(Label::SafetyConfirmCancelled)));
+    run(&mut h, "DROP TABLE shop.orders");
+    let (_, run_b) = buttons(&mut h);
+    click(&mut h, (run_b.x + 1, run_b.y));
+    assert_eq!(executes(&mut h), [vec!["DROP TABLE shop.orders".to_string()]]);
+}

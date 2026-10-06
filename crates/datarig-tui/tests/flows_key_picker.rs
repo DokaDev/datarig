@@ -273,3 +273,30 @@ fn browsing_reads_no_file() {
     assert_eq!(key_field(&h), "~/.ssh/id_locked");
     assert_eq!(note(&h), None, "its mode is 000: nobody else may read it");
 }
+
+/// A click on the picker's filter line puts the keyboard and the cursor there; one on a row
+/// gives the keyboard back to the tree.
+#[test]
+fn a_click_on_the_filter_types_there() {
+    use datarig_tui::app::script_tree::TreeFocus;
+    let home = home("field");
+    let mut h = form(&home, None);
+    h.ctrl('o');
+    h.key(KeyCode::Tab);
+    assert_eq!(h.app.overlays.script_tree().unwrap().focus, TreeFocus::Tree);
+    let t = h.draw(120, 40);
+    let buf = t.backend().buffer();
+    let (x, y) = (0..40u16)
+        .find_map(|y| {
+            let row = row_text(buf, y);
+            row.find("Filter or path: ").map(|i| (datarig_tui::text::width(&row[..i]) as u16, y))
+        })
+        .unwrap_or_else(|| panic!("the filter line:\n{}", h.screen(120, 40)));
+    h.mouse(MouseEventKind::Down(MouseButton::Left), x + 20, y);
+    assert_eq!(h.app.overlays.script_tree().unwrap().focus, TreeFocus::Name);
+    h.type_text("ed2");
+    assert_eq!(h.app.overlays.script_tree().unwrap().input.text(), "ed2");
+    let list = h.app.overlays.script_tree().unwrap().list;
+    h.mouse(MouseEventKind::Down(MouseButton::Left), list.x + 3, list.y);
+    assert_eq!(h.app.overlays.script_tree().unwrap().focus, TreeFocus::Tree);
+}

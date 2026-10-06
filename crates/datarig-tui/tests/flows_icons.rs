@@ -170,3 +170,25 @@ fn a_config_with_errors_is_not_asked_until_it_is_fixed() {
     assert!(asking(&launched(&cfg, Lang::En, true).app));
     cleanup(&path);
 }
+
+/// The mouse on the icons question: the pointer underlines Yes without moving the focus (Enter
+/// still says no); a click on Yes says yes.
+#[test]
+fn the_icons_question_takes_clicks() {
+    use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+    let path = temp_config("mouse", "");
+    let (cfg, _) = config::load(Some(path.clone()));
+    let mut h = launched(&cfg, Lang::En, true);
+    h.draw(80, 24);
+    let yes = h.app.overlays.icons_ask().unwrap().buttons.rects[0];
+    h.mouse(MouseEventKind::Moved, yes.x + 1, yes.y);
+    assert!(!h.app.take_idle_event());
+    let q = h.app.overlays.icons_ask().unwrap();
+    assert!(!q.yes_focused && q.buttons.hover == Some(0));
+    h.mouse(MouseEventKind::Down(MouseButton::Left), 0, 0);
+    assert!(asking(&h.app), "a click outside does nothing");
+    h.mouse(MouseEventKind::Down(MouseButton::Left), yes.x + 1, yes.y);
+    assert!(!asking(&h.app) && h.app.icons_on());
+    assert_eq!(h.app.icons, IconsSetting::On);
+    cleanup(&path);
+}

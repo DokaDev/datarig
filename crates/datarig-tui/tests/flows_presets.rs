@@ -890,3 +890,39 @@ fn save_as_tunnel_preset_offers_a_name_from_the_bastion() {
     h.key_mod(KeyCode::Char('b'), KeyModifiers::CONTROL);
     assert_eq!(h.app.overlays.name_input().expect("asked").input.text(), "tunnel");
 }
+
+/// The tunnel form by mouse: fields by a click, the login by a click on its value, Save by its
+/// button; the form keeps its one section (a click on a field never shows another).
+#[test]
+fn the_tunnel_form_is_filled_and_saved_by_mouse() {
+    use datarig_tui::app::profiles::{Field, FormHit, Section};
+    use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+    let dir = scratch("mouse");
+    let mut cfg = config(Some(&dir));
+    cfg.tunnels.clear();
+    cfg.connections[0].tunnel = None;
+    cfg.connections[2].tunnel = None;
+    let mut h = harness_with(&cfg);
+    h.app.focus = datarig_tui::app::Focus::Tree;
+    h.app.explorer.select_kind(datarig_tui::app::explorer::RowKind::TunnelsEmpty);
+    h.keys("n");
+    assert!(h.form().is_tunnel());
+    let hit = |h: &mut Harness, want: FormHit| {
+        h.draw(100, 30);
+        let (r, _) = *h.form().hits.iter().find(|(_, x)| *x == want).unwrap_or_else(|| panic!("{want:?}"));
+        h.mouse(MouseEventKind::Down(MouseButton::Left), r.x + r.width / 2, r.y);
+    };
+    h.type_text("hq");
+    hit(&mut h, FormHit::Input(Field::SshHost));
+    assert_eq!(h.form().focus, Field::SshHost);
+    assert_eq!(h.form().section, Section::Ssh, "a tunnel form keeps its section");
+    h.type_text("bastion.example.com");
+    hit(&mut h, FormHit::Field(Field::SshUser));
+    h.type_text("ec2-user");
+    hit(&mut h, FormHit::Choice(Field::SshAuth, 2));
+    assert_eq!(h.form().ssh_auth, SshAuth::Agent);
+    hit(&mut h, FormHit::Button(Field::Save));
+    assert!(!h.form_open(), "saved");
+    let p = h.app.presets.first().expect("made");
+    assert_eq!((p.name.as_str(), p.settings.auth, p.settings.user.as_str()), ("hq", SshAuth::Agent, "ec2-user"));
+}

@@ -617,3 +617,36 @@ fn the_passphrase_prompt_keeps_its_words_with_a_long_key_path() {
         assert!(title.contains(&word) && title.contains("…/secrets/bastion-prod.pem"), "{lang:?}: {title}");
     }
 }
+
+/// The host key question by mouse: a click on Cancel keeps the host untrusted, one on Trust
+/// trusts it; the pointer on Trust does not move the default (Enter still cancels).
+#[test]
+fn a_host_key_question_takes_clicks() {
+    use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+    let (mut h, id) = harness();
+    let generation = connect(&mut h, id);
+    let buttons = |h: &mut Harness| {
+        h.draw(100, 30);
+        let c = h.app.overlays.confirm().expect("asked");
+        assert_eq!(c.action, ConfirmAction::TrustHostKey);
+        (c.buttons.rects[0], c.buttons.rects[1])
+    };
+    let (tx, mut rx) = oneshot::channel();
+    tunnel(&mut h, id, generation, TunnelEvent::Ask(TunnelAsk::HostKey(question(Vec::new()), tx)));
+    let (_, trust) = buttons(&mut h);
+    assert!(h.screen(100, 30).contains("[ Cancel ]     Trust"));
+    h.mouse(MouseEventKind::Moved, trust.x + 1, trust.y);
+    h.key(KeyCode::Enter);
+    assert_eq!(rx.try_recv(), Ok(false), "Enter cancels after the pointer was on Trust");
+    let (tx, mut rx) = oneshot::channel();
+    tunnel(&mut h, id, generation, TunnelEvent::Ask(TunnelAsk::HostKey(question(Vec::new()), tx)));
+    let (cancel, _) = buttons(&mut h);
+    h.mouse(MouseEventKind::Down(MouseButton::Left), cancel.x + 1, cancel.y);
+    assert_eq!(rx.try_recv(), Ok(false));
+    assert!(h.app.overlays.confirm().is_none());
+    let (tx, mut rx) = oneshot::channel();
+    tunnel(&mut h, id, generation, TunnelEvent::Ask(TunnelAsk::HostKey(question(Vec::new()), tx)));
+    let (_, trust) = buttons(&mut h);
+    h.mouse(MouseEventKind::Down(MouseButton::Left), trust.x + 1, trust.y);
+    assert_eq!(rx.try_recv(), Ok(true));
+}
