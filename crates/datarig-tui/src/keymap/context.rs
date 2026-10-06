@@ -218,10 +218,10 @@ impl Ctx {
                 "The `:` command line: commands with arguments, and a search over every action; a click runs an entry, the wheel moves the selection."
             }
             Ctx::QuickConnect => {
-                "Quick connect: a fuzzy list of the connection profiles; a click picks a row (on `▸` it lists the databases), the pointer and the wheel select."
+                "Quick connect: a fuzzy list of the connection profiles; a click picks a row (on `▸` it lists the databases), the wheel selects, the pointer only highlights."
             }
             Ctx::Chooser => {
-                "A list to pick from: a profile's color, icon or folder; a click picks a row, the pointer and the wheel select."
+                "A list to pick from: a profile's color, icon or folder; a click picks a row, the wheel selects, the pointer only highlights."
             }
             Ctx::ChooserFilter => "The `/` filter of a list to pick from.",
             Ctx::NameInput => "A name to type: a new or renamed folder; OK and Cancel take a click.",
@@ -234,11 +234,11 @@ impl Ctx {
                 "Connection profile form. With the mouse: a click focuses a field (in a text, the cursor goes there), picks a value, steps a `‹ value ›` (its arrows; the value opens a list), switches the section or presses a button."
             }
             Ctx::Settings => {
-                "The settings screen: one list by category, each setting with its description; a click selects a row and its `‹`/`›` change the value, the pointer and the wheel select."
+                "The settings screen: one list by category, each setting with its description; a click selects a row and its `‹`/`›` change the value, the wheel selects, the pointer only highlights."
             }
             Ctx::Password => "Password prompt; a click on the field, the checkbox, OK or Cancel.",
             Ctx::Confirm => {
-                "Yes/no confirmation: `y` does it; Enter keeps what the answer would lose (quit, delete, disconnect, close, switch, replace); for a copy it says yes. A click on a button does what its key does; the pointer only underlines it (Enter stays on the safe one)."
+                "Yes/no confirmation: `y` does it; Enter keeps what the answer would lose (quit, delete, disconnect, close, switch, replace); for a copy it says yes. A button acts on its release (pressed and released on it, not right after the question appeared) and does what its key does; the pointer only underlines it (Enter stays on the safe one)."
             }
             Ctx::RunConfirm => {
                 "Before statements that may do harm run: each is listed; Cancel has the focus, `y` or Enter on Run runs them, as a click on Run does (the pointer does not move the focus)."

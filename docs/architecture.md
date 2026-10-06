@@ -95,7 +95,7 @@ Held by CI budgets (`docs/perf.md`).
 
 - **Result rows** (`datarig-core::results`): a `RowStore` per result keeps `result_window_rows` rows in memory and writes every row past that to a spill file (`results::spill`: one `0600` file per result in `<state>/spill`, a varint encoding of the decoded cells, the offset of every 256th row in memory). The window follows the pages and moves to the rows the grid shows, reading ahead; `for_each_chunk` streams rows for copies (`export::Writer` writes any format a chunk at a time with the same text as all at once). A row not in memory is `Row::NotRead`, never an empty row. The file stops at `spill_limit` (config, policy) and fetching stops with it. Files are deleted with their result and at quit; a launch deletes only the files of a process id that is not running and whose `datarig-spill-<pid>.lock` nobody holds.
 - **Editor** (`widgets/editor.rs` and its modules): lines, edits as splices of the lines they touch, undo as the changes of each command (`buffer`). Vim's command grammar is parsed in `vim` (`["x] [count] operator [count] motion|text object`, doubled operators, the `g`/`z` prefixes and the character after `f t r`); a motion (`motion`) or a text object (`textobj`) gives where it leads and, for an operator, a range that is exclusive, inclusive or whole lines, with Vim's adjustments; `%` and the bracket objects find brackets with the lexer's tokens (`brackets`), so brackets in strings and comments do not count; the operators apply to a range or to the Visual selection (`visual`, by character or by line) as one undo step. `.` (`repeat`) replays the keys of the last change (its count apart, an Insert session's keys included, a Visual operator's selection as its size) through the same parser; the tests compare every command with what Neovim does on the same text. Registers (`registers`) follow Vim: named ones with append, `"0`, the `"1`-`"9` delete ring, `"-`, `"_`, and `"+`/`"*`, by character, by line or as a block. A write Vim with `clipboard=unnamedplus` would send to the clipboard is offered to the app (`Editor::take_yank`, routed by `App::editor_yanked` through the copy path and `[editor] clipboard`); for `"+p` the app asks `Editor::reads_clipboard` before the key and reads the system clipboard only then (`SystemClipboard::get_text`, never over OSC 52). The widget never touches the clipboard. The lexer state at each line start is cached (between tokens, or inside a token that spans lines, with its start) and invalidated from an edited line on; a frame lexes the lines on screen from the nearest known state. The statement under the cursor and the completer's text come from lines around the cursor, taking more until the `;` around it are in them; this equals splitting the whole text (tested on random texts).
-- **Event loop** (`main.rs`): it sleeps until `App::next_tick` (100 ms only while something counts in tenths or animates; else the earliest autosave, portal close or countdown second; none when nothing waits) and draws no frame for a mouse move, unless the move selects another item of an open menu, the keyboard help or a dialog's list, or changes which dialog button is highlighted (`App::menu_hover`, `App::help_hover`, `App::overlay_hover`; the terminal reports motion without a button through crossterm's any-event tracking, `?1003h`).
+- **Event loop** (`main.rs`): it sleeps until `App::next_tick` (100 ms only while something counts in tenths or animates; else the earliest autosave, portal close or countdown second; none when nothing waits) and draws no frame for a mouse move, unless the move selects another item of an open menu or the keyboard help, or changes which dialog button or list row is highlighted (`App::menu_hover`, `App::help_hover`, `App::overlay_hover`; the terminal reports motion without a button through crossterm's any-event tracking, `?1003h`).
 - **Round trips**: see the vendored tokio-postgres decision below.
 
 ## Terminal, runs and copies
@@ -389,10 +389,17 @@ Held by CI budgets (`docs/perf.md`).
   hidden span it was drawn with so `TextInput::click` puts the cursor before the grapheme under
   the pointer (wide letters and its scroll included). A click does what the key for it does
   (a confirmation's button sends its key through `confirm_key`, a form button is `Enter` on it),
-  so the key paths stay the only ones that act. The pointer only highlights a button
-  (`Buttons::hover`, `ProfileForm::hover`); the focus, what `Enter` presses, never moves to it,
-  so a destructive confirmation's default stays the safe button. In the list pickers it selects
-  the row, as in the menu. A click outside a dialog does nothing (the menu alone closes on one).
+  so the key paths stay the only ones that act. A button acts as a GUI button: a press arms it
+  and the release over the same button presses it (`Buttons::press`, `ProfileForm::armed`), and
+  presses in the first `overlay::ARM_DELAY` (400 ms by the app's clock) after the buttons were
+  first drawn are ignored, so a dialog that appears under a clicking pointer (a host key
+  question, a conflict, the second press of a double click) does not take that click. The
+  pointer only highlights a button or a list row (`Buttons::hover`, `ProfileForm::hover`, the
+  `hover` of `Chooser`, `QuickConnect` and `SettingsScreen`); the focus and the selection, what
+  `Enter` acts on, never move to it, so a destructive confirmation's default stays the safe
+  button and a twitch of the pointer never changes what quick connect picks (the menu and the
+  keyboard help, where the pointer selects, aside). A selector's `›` is clickable only where it
+  was drawn. A click outside a dialog does nothing (the menu alone closes on one).
 
 ## Connection poolers
 

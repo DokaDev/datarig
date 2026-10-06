@@ -365,7 +365,7 @@ Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+
 
 ## `overlay.quick_connect` [text]
 
-Quick connect: a fuzzy list of the connection profiles; a click picks a row (on `▸` it lists the databases), the pointer and the wheel select. Inside `root`.
+Quick connect: a fuzzy list of the connection profiles; a click picks a row (on `▸` it lists the databases), the wheel selects, the pointer only highlights. Inside `root`.
 
 Reserved — quick connect: `Esc` `Enter` `Up` `Down` `Ctrl+P` `Ctrl+N`
 
@@ -388,13 +388,13 @@ Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+
 
 ## `overlay.settings`
 
-The settings screen: one list by category, each setting with its description; a click selects a row and its `‹`/`›` change the value, the pointer and the wheel select. Inside `root`.
+The settings screen: one list by category, each setting with its description; a click selects a row and its `‹`/`›` change the value, the wheel selects, the pointer only highlights. Inside `root`.
 
 Reserved — settings screen: `j` `k` `Down` `Up` `h` `l` `Left` `Right` `Enter` `Space` `Esc` `q`
 
 ## `overlay.chooser`
 
-A list to pick from: a profile's color, icon or folder; a click picks a row, the pointer and the wheel select. Inside `root`.
+A list to pick from: a profile's color, icon or folder; a click picks a row, the wheel selects, the pointer only highlights. Inside `root`.
 
 Reserved — chooser: `j` `k` `Down` `Up` `Enter` `/` `Esc` `q`
 
@@ -446,7 +446,7 @@ Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+
 
 ## `overlay.confirm`
 
-Yes/no confirmation: `y` does it; Enter keeps what the answer would lose (quit, delete, disconnect, close, switch, replace); for a copy it says yes. A click on a button does what its key does; the pointer only underlines it (Enter stays on the safe one). Inside `root`.
+Yes/no confirmation: `y` does it; Enter keeps what the answer would lose (quit, delete, disconnect, close, switch, replace); for a copy it says yes. A button acts on its release (pressed and released on it, not right after the question appeared) and does what its key does; the pointer only underlines it (Enter stays on the safe one). Inside `root`.
 
 Reserved — confirmation (Enter keeps what would be lost): `y` `n` `Enter` `Esc`
 

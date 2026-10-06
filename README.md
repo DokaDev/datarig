@@ -244,9 +244,11 @@ Everything below works today, with PostgreSQL.
   its key. Type to filter it; when nothing in it matches, every action is searched.
 - The dialogs take the mouse too: the profile and tunnel forms (fields, the cursor in a text,
   choices, sections, buttons), the settings, the confirmations, the password prompt, the lists
-  to pick from, quick connect and the command line. The pointer underlines a button but never
-  moves the focus, so `Enter` in a confirmation still keeps; a click outside a dialog does
-  nothing. Text inputs have no mouse selection.
+  to pick from, quick connect and the command line. A button acts when it is pressed and
+  released on it, and not in the first moment after its dialog appeared. The pointer only
+  highlights a button or a row and never moves the focus or the selection, so `Enter` in a
+  confirmation still keeps; a click outside a dialog does nothing. Text inputs have no mouse
+  selection.
 
 **Performance**, held by budgets that CI enforces (`crates/datarig-bench/budgets.toml`,
 [docs/perf.md](docs/perf.md)):
