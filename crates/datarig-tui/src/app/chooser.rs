@@ -30,6 +30,9 @@ pub struct Chooser {
     /// The `/` filter has the keyboard (`overlay.chooser.filter`).
     pub filtering: bool,
     pub purpose: ChooserPurpose,
+    /// First row shown, and where the rows were drawn (mouse), kept by the renderer.
+    pub scroll: usize,
+    pub list: ratatui::layout::Rect,
 }
 
 impl Chooser {
@@ -39,7 +42,7 @@ impl Chooser {
         (0..self.items.len()).filter(|&i| q.is_empty() || self.items[i].1.to_lowercase().contains(&q)).collect()
     }
 
-    fn step(&mut self, d: isize) {
+    pub(super) fn step(&mut self, d: isize) {
         let n = self.visible().len();
         if n > 0 {
             self.selected = (self.selected as isize + d).clamp(0, n as isize - 1) as usize;
@@ -71,6 +74,7 @@ pub struct NameInput {
     /// Why the last `Enter` did not apply; typing clears it.
     pub error: Option<Label>,
     pub purpose: NamePurpose,
+    pub buttons: super::overlay::Buttons,
 }
 
 fn folder_error(e: &FolderError) -> Label {
@@ -110,6 +114,8 @@ impl App {
             selected,
             filter: TextInput::default(),
             filtering: false,
+            scroll: 0,
+            list: Default::default(),
             purpose: ChooserPurpose::Form(f),
         }));
     }
@@ -132,6 +138,8 @@ impl App {
             selected,
             filter: TextInput::default(),
             filtering: false,
+            scroll: 0,
+            list: Default::default(),
             purpose: ChooserPurpose::MoveProfile(id),
         }));
     }
@@ -168,7 +176,7 @@ impl App {
     }
 
     /// `Enter` in the chooser: apply the selected item.
-    fn chooser_pick(&mut self) {
+    pub(super) fn chooser_pick(&mut self) {
         let Some(c) = self.overlays.chooser() else { return };
         let Some(&i) = c.visible().get(c.selected) else { return };
         let (value, purpose) = (c.items[i].0.clone(), c.purpose.clone());
@@ -234,6 +242,8 @@ impl App {
             selected: 0,
             filter: TextInput::default(),
             filtering: false,
+            scroll: 0,
+            list: Default::default(),
             purpose: ChooserPurpose::Recover,
         }));
     }
@@ -273,6 +283,7 @@ impl App {
             input: TextInput::default(),
             error: None,
             purpose: NamePurpose::NewFolder { parent },
+            buttons: Default::default(),
         }));
     }
 
@@ -285,6 +296,7 @@ impl App {
                     input: TextInput::new(f.name()),
                     error: None,
                     purpose: NamePurpose::RenameFolder(f),
+                    buttons: Default::default(),
                 }));
             }
             Some(explorer::RowKind::Profile(id)) => {

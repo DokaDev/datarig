@@ -29,6 +29,7 @@ mod conn;
 mod connection;
 pub mod copy;
 mod ddl;
+mod dialog_mouse;
 mod dispatch;
 pub mod effects;
 mod execution;
@@ -230,6 +231,9 @@ pub struct CommandLine {
     /// `Tab`/`↑`/`↓` picked an entry since the input last changed. Until then `Enter` on a
     /// `:use` argument runs what was typed, never the top completion.
     pub picked: bool,
+    /// Where the entries were drawn and the first one shown (mouse), kept by the renderer.
+    pub list: ratatui::layout::Rect,
+    pub offset: usize,
 }
 
 /// Password asked at connect time: a `prompt` profile (every time), or no/wrong stored
@@ -270,6 +274,9 @@ pub struct PasswordPrompt {
     pub field: PromptField,
     /// Show what is typed (a keyboard-interactive question that says so).
     pub echo: bool,
+    /// Where the checkbox was drawn, and the buttons (kept by the renderer, for the mouse).
+    pub checkbox: ratatui::layout::Rect,
+    pub buttons: overlay::Buttons,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -206,6 +206,7 @@ impl App {
             action: ConfirmAction::ScriptConflict(id),
             folder: None,
             path: None,
+            buttons: Default::default(),
         }));
     }
 
@@ -302,7 +303,13 @@ impl App {
             let name = display_name(&path, false).to_string();
             (Msg::NameRenameScript { name }, stem_path(&path).to_string(), NamePurpose::RenameScript(path))
         };
-        self.overlays.push(Overlay::NameInput(NameInput { title, input: TextInput::new(&text), error: None, purpose }));
+        self.overlays.push(Overlay::NameInput(NameInput {
+            title,
+            input: TextInput::new(&text),
+            error: None,
+            purpose,
+            buttons: Default::default(),
+        }));
     }
 
     /// Rename (or move) saved query or folder `from` to what the user typed; its open tabs
@@ -373,6 +380,8 @@ impl App {
             selected,
             filter: TextInput::default(),
             filtering: false,
+            scroll: 0,
+            list: Default::default(),
             purpose: ChooserPurpose::MoveScript(path),
         }));
     }
@@ -449,6 +458,7 @@ impl App {
             action: ConfirmAction::DeleteScript,
             folder: None,
             path: Some(path),
+            buttons: Default::default(),
         }));
     }
 
@@ -470,6 +480,7 @@ impl App {
             action: ConfirmAction::DeleteScriptFolder,
             folder: None,
             path: Some(path),
+            buttons: Default::default(),
         }));
     }
 

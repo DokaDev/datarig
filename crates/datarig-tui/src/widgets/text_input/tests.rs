@@ -77,3 +77,36 @@ fn delete_word_back_takes_a_word_or_a_run_of_symbols() {
     assert_eq!((t.text(), t.cursor()), ("", 0));
     assert_eq!(t.delete_word_back(), InputResult::Ignored);
 }
+
+#[test]
+fn a_click_puts_the_cursor_under_the_pointer_as_drawn() {
+    let mut buf = Buffer::empty(Rect::new(0, 0, 20, 1));
+    let mut t = TextInput::new("a日本b");
+    assert!(!t.click(3, 0), "not drawn yet: no hit");
+    t.render(Rect::new(2, 0, 10, 1), &mut buf, Style::new(), false, false, None);
+    // Columns from 2: a, 日 (3-4), 本 (5-6), b (7), then past the text.
+    assert!(t.click(2, 0));
+    assert_eq!(t.cursor(), 0);
+    assert!(t.click(4, 0), "the second half of a wide letter: before it");
+    assert_eq!(t.cursor(), 1);
+    assert!(t.click(5, 0));
+    assert_eq!(t.cursor(), 2);
+    assert!(t.click(11, 0), "past the text: the end");
+    assert_eq!(t.cursor(), 4);
+    assert!(!t.click(12, 0) && !t.click(1, 0) && !t.click(3, 1), "off the input");
+    // Scrolled: a click counts from the first column shown.
+    let mut s = TextInput::new("あいうえおかき");
+    s.render(Rect::new(0, 0, 6, 1), &mut buf, Style::new(), true, false, None);
+    assert!(s.click(0, 0));
+    assert_eq!(s.cursor(), 4, "the view starts in the middle of お (it ends at the cursor)");
+    // Masked: one column a grapheme, whatever its width.
+    let mut p = TextInput::new("日本語");
+    p.render(Rect::new(0, 0, 10, 1), &mut buf, Style::new(), true, true, None);
+    assert!(p.click(1, 0));
+    assert_eq!(p.cursor(), 1);
+    // A hidden part of a DSN: one column per hidden grapheme.
+    let mut d = TextInput::new("pg://u:pw@h");
+    d.render(Rect::new(0, 0, 20, 1), &mut buf, Style::new(), false, false, Some((7, 9)));
+    assert!(d.click(9, 0));
+    assert_eq!(d.cursor(), 9, "the `@` after the hidden password");
+}

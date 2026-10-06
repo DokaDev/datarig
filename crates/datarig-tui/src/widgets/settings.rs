@@ -17,7 +17,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 
-pub(crate) fn draw_settings(app: &App, area: Rect, buf: &mut Buffer) {
+pub(crate) fn draw_settings(app: &mut App, area: Rect, buf: &mut Buffer) {
     let th = theme::cur();
     let Some(screen) = app.overlays.settings() else { return };
     let i18n = &app.i18n;
@@ -55,6 +55,7 @@ pub(crate) fn draw_settings(app: &App, area: Rect, buf: &mut Buffer) {
     let value_w = SETTINGS.iter().flat_map(|s| s.values.fixed().iter().map(|v| width(v.0))).max().unwrap_or(6);
     let mut row = 0;
     let mut selected_spec = None;
+    let mut rows = Vec::new();
     for (group, items) in groups() {
         if y >= bottom {
             break;
@@ -83,7 +84,9 @@ pub(crate) fn draw_settings(app: &App, area: Rect, buf: &mut Buffer) {
             let shown = value.as_ref().map_or("?", |v| v.0.as_str());
             let chosen = format!("‹ {} ›", fit(shown, value_w.max(width(shown)).min(tw / 3), Align::Left));
             let style = Style::new().fg(th.accent_warm).patch(bg).add_modifier(Modifier::BOLD);
-            cx += put(buf, cx, y, &chosen, tw.saturating_sub((cx - x) as usize), style) + 2;
+            let used = put(buf, cx, y, &chosen, tw.saturating_sub((cx - x) as usize), style);
+            rows.push((Rect::new(inner.x, y, inner.width, 1), row, Rect::new(cx, y, used, 1)));
+            cx += used + 2;
             if let Some((_, label)) = value {
                 let left = tw.saturating_sub((cx - x) as usize);
                 put(buf, cx, y, &label, left, Style::new().fg(th.fg_muted).patch(bg));
@@ -95,8 +98,12 @@ pub(crate) fn draw_settings(app: &App, area: Rect, buf: &mut Buffer) {
             y += 1;
         }
     }
+    if let Some(s) = app.overlays.settings_mut() {
+        s.rows = rows;
+    }
     // The selected setting's description (and the icons' preview).
     let Some(spec) = selected_spec else { return };
+    let Some(screen) = app.overlays.settings() else { return };
     let mut lines: Vec<(String, Style)> = Vec::new();
     // For `icons` the preview and its hint come first: they must show on a small screen.
     if spec.key == "icons" {

@@ -83,15 +83,35 @@ pub(crate) fn draw_quick_connect(app: &mut App, area: Rect, buf: &mut Buffer) ->
             }
         })
         .collect();
-    let first = selected.saturating_sub(rows - 1);
+    // Keep the selection on screen; the rows stay put while it moves among them.
+    let q = app.overlays.quick_mut()?;
+    if selected < q.scroll {
+        q.scroll = selected;
+    } else if selected >= q.scroll + rows {
+        q.scroll = selected + 1 - rows;
+    }
+    q.scroll = q.scroll.min(items.len().saturating_sub(rows));
+    q.list = Rect::new(inner.x, inner.y + 2, inner.width, rows as u16);
+    q.arrows.clear();
+    let first = q.scroll;
     for (row, parts) in lines.iter().enumerate().skip(first).take(rows) {
         let y = inner.y + 2 + (row - first) as u16;
         let bg = if row == selected { th.selection } else { Style::new().bg(th.surface) };
         buf.set_stringn(inner.x, y, fit("", iw, Align::Left), iw, bg);
+        // Which part is the row's `▸`/`▾`.
+        let arrow_part = match items[row] {
+            QuickRow::Profile(_) => Some(0),
+            QuickRow::Database(..) => Some(1),
+            _ => None,
+        };
         let mut x = inner.x + 1;
-        for (text, style) in parts {
+        for (i, (text, style)) in parts.iter().enumerate() {
             let room = (inner.x + inner.width).saturating_sub(x + 1) as usize;
-            x += put(buf, x, y, text, room, style.patch(bg));
+            let used = put(buf, x, y, text, room, style.patch(bg));
+            if arrow_part == Some(i) && used > 0 {
+                q.arrows.push((Rect::new(x, y, used, 1), row));
+            }
+            x += used;
         }
     }
     if items.is_empty() {

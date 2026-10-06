@@ -9,6 +9,8 @@ fn commands() -> Overlay {
         selected: 0,
         error: None,
         picked: false,
+        list: Default::default(),
+        offset: 0,
     })
 }
 

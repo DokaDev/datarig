@@ -287,6 +287,7 @@ impl App {
             action: ConfirmAction::Quit,
             folder: None,
             path: None,
+            buttons: Default::default(),
         }));
     }
 

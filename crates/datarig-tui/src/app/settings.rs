@@ -20,6 +20,9 @@ use super::*;
 pub struct SettingsScreen {
     pub selected: usize,
     pub themes: ThemeRow,
+    /// Each row drawn (mouse), kept by the renderer: its line, its index in [`order`] and where
+    /// its `‹ value ›` is.
+    pub rows: Vec<(ratatui::layout::Rect, usize, ratatui::layout::Rect)>,
 }
 
 /// The rows: indices into [`SETTINGS`], by category, then in table order.
@@ -48,7 +51,7 @@ impl App {
         self.overlays.close(OverlayKind::WhichKey);
         self.key_state.clear();
         let themes = ThemeRow { names: self.theme_names(), preview: None };
-        self.overlays.push(Overlay::Settings(SettingsScreen { selected: 0, themes }));
+        self.overlays.push(Overlay::Settings(SettingsScreen { selected: 0, themes, rows: Vec::new() }));
     }
 
     /// The value setting `k` of [`SETTINGS`] has now (an index into its values).

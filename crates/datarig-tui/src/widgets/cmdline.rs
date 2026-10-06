@@ -89,7 +89,7 @@ fn selected_entry(app: &App) -> Option<usize> {
 }
 
 /// The entries from `list_y` down, `n` of them, the selected one kept in view, across
-/// `x..x + iw`; `bg` is the list's background.
+/// `x..x + iw`; `bg` is the list's background. Returns the first entry shown.
 #[allow(clippy::too_many_arguments)]
 fn draw_entries(
     p: &Parts,
@@ -100,7 +100,7 @@ fn draw_entries(
     n: usize,
     bg: ratatui::style::Color,
     buf: &mut Buffer,
-) {
+) -> usize {
     let th = theme::cur();
     if p.rows.is_empty() {
         put(buf, x + 2, list_y, &p.empty, iw.saturating_sub(4), Style::new().fg(th.fg_dim).bg(bg));
@@ -125,6 +125,14 @@ fn draw_entries(
             let kx = x + iw as u16 - 1 - kw as u16;
             put(buf, kx, y, &r.keys, kw, Style::new().fg(th.fg_muted).patch(rbg));
         }
+    }
+    offset
+}
+
+/// Keep where the entries were drawn, for the mouse.
+fn keep_list(app: &mut App, list: Rect, offset: usize) {
+    if let Some(c) = app.overlays.command_line_mut() {
+        (c.list, c.offset) = (list, offset);
     }
 }
 
@@ -229,7 +237,8 @@ fn draw_popup(app: &mut App, p: Parts, area: Rect, buf: &mut Buffer) -> Option<(
     let rule = Style::new().fg(th.accent).bg(th.surface);
     buf.set_stringn(rect.x, inner.y + 1, format!("├{}┤", "─".repeat(iw)), iw + 2, rule);
     let selected = selected_entry(app);
-    draw_entries(&p, selected, inner.x, inner.y + 2, iw, n, th.surface, buf);
+    let offset = draw_entries(&p, selected, inner.x, inner.y + 2, iw, n, th.surface, buf);
+    keep_list(app, Rect::new(inner.x, inner.y + 2, iw as u16, n.min(p.rows.len()) as u16), offset);
     draw_notes(&p, inner.x, inner.y + 2 + n as u16, iw, th.surface, buf);
     cursor
 }
@@ -260,7 +269,8 @@ fn draw_bottom(app: &mut App, p: Parts, area: Rect, buf: &mut Buffer) -> Option<
         Style::new().fg(th.fg).bg(th.surface).add_modifier(Modifier::BOLD),
     );
     let selected = selected_entry(app);
-    draw_entries(&p, selected, area.x, top + 1, iw, n, th.surface, buf);
+    let offset = draw_entries(&p, selected, area.x, top + 1, iw, n, th.surface, buf);
+    keep_list(app, Rect::new(area.x, top + 1, iw as u16, n.min(p.rows.len()) as u16), offset);
     draw_notes(&p, area.x, top + 1 + n as u16, iw, th.surface, buf);
     // The COMMAND badge where the status bar starts, then the input.
     let y = area.y + area.height - 1;

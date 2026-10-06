@@ -17,6 +17,30 @@ use super::{CommandLine, PasswordPrompt, Viewer};
 use datarig_core::i18n::{Label, Msg};
 use datarig_core::profile::ProfileId;
 use datarig_core::profile::folder::FolderPath;
+use ratatui::crossterm::event::KeyCode;
+use ratatui::layout::{Position, Rect};
+
+/// A dialog's buttons as last drawn (kept by the renderer, so a click hits what is on screen)
+/// and the one under the pointer. The pointer only highlights a button: the focus, what `Enter`
+/// presses, stays where the keys put it.
+#[derive(Clone, Debug, Default)]
+pub struct Buttons {
+    pub rects: Vec<Rect>,
+    pub hover: Option<usize>,
+}
+
+impl Buttons {
+    /// The button at (x, y).
+    pub fn at(&self, x: u16, y: u16) -> Option<usize> {
+        self.rects.iter().position(|r| r.contains(Position::new(x, y)))
+    }
+
+    /// The pointer moved to (x, y): `true` when another button (or none) is under it now.
+    pub fn hover(&mut self, x: u16, y: u16) -> bool {
+        let h = self.at(x, y);
+        std::mem::replace(&mut self.hover, h) != h
+    }
+}
 
 /// What a yes/no confirmation does on "yes".
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,6 +97,49 @@ pub struct Confirm {
     pub folder: Option<FolderPath>,
     /// The saved query or folder the action is about.
     pub path: Option<String>,
+    pub buttons: Buttons,
+}
+
+impl Confirm {
+    /// The buttons, the safe one first: each one's label and the key it presses, and the one
+    /// `Enter` presses (none for the conflict question, where `Enter` does nothing).
+    pub fn buttons(&self) -> (Vec<(Label, KeyCode)>, Option<usize>) {
+        let (no, yes) = match self.action {
+            ConfirmAction::ScriptConflict(_) if self.keys == Label::ScriptsConflictMissingKeys => {
+                return (
+                    vec![(Label::DialogButtonLater, KeyCode::Esc), (Label::DialogButtonSaveAgain, KeyCode::Char('o'))],
+                    None,
+                );
+            }
+            ConfirmAction::ScriptConflict(_) => {
+                let buttons = vec![
+                    (Label::DialogButtonLater, KeyCode::Esc),
+                    (Label::DialogButtonReload, KeyCode::Char('r')),
+                    (Label::DialogButtonOverwrite, KeyCode::Char('o')),
+                ];
+                return (buttons, None);
+            }
+            ConfirmAction::Quit => (Label::DialogButtonStay, Label::DialogButtonQuit),
+            ConfirmAction::ChangeSource => (Label::DialogButtonCancel, Label::DialogButtonContinue),
+            ConfirmAction::CloseTab(_) => (Label::DialogButtonKeep, Label::DialogButtonClose),
+            ConfirmAction::Disconnect { .. } => (Label::DialogButtonStay, Label::DialogButtonDisconnect),
+            ConfirmAction::DeleteProfile(_)
+            | ConfirmAction::DeleteFolder
+            | ConfirmAction::DeleteScript
+            | ConfirmAction::DeleteScriptFolder
+            | ConfirmAction::DeleteTunnel(_) => (Label::DialogButtonCancel, Label::DialogButtonDelete),
+            ConfirmAction::SetConnection(_) | ConfirmAction::SetContext(_) => {
+                (Label::DialogButtonKeep, Label::DialogButtonSwitch)
+            }
+            ConfirmAction::OverwriteScript => (Label::DialogButtonKeep, Label::DialogButtonReplace),
+            ConfirmAction::Copy => (Label::DialogButtonCancel, Label::DialogButtonCopy),
+            ConfirmAction::FetchThenCopy => (Label::DialogButtonCancel, Label::DialogButtonFetchCopy),
+            ConfirmAction::TrustHostKey => (Label::DialogButtonCancel, Label::DialogButtonTrust),
+        };
+        // `Enter` says yes only to a copy (see `App::confirm_key`).
+        let enter = if matches!(self.action, ConfirmAction::Copy | ConfirmAction::FetchThenCopy) { 1 } else { 0 };
+        (vec![(no, KeyCode::Char('n')), (yes, KeyCode::Char('y'))], Some(enter))
+    }
 }
 
 /// The question whether the terminal shows the Nerd Font icons, with a preview
@@ -82,6 +149,7 @@ pub struct Confirm {
 pub struct IconsAsk {
     /// "Yes" has the focus (it starts on "No").
     pub yes_focused: bool,
+    pub buttons: Buttons,
 }
 
 /// The question before statements that may do harm run: every
@@ -98,6 +166,7 @@ pub struct RunConfirm {
     pub items: Vec<super::safety::Dangerous>,
     /// "Run" has the focus (it starts on "Cancel").
     pub run_focused: bool,
+    pub buttons: Buttons,
 }
 
 /// A notice that waits for background work (moving passwords to the keychain). It has no keys

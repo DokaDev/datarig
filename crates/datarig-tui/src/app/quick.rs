@@ -79,6 +79,11 @@ pub struct QuickConnect {
     pub context_of: Option<ProfileId>,
     /// The row the cursor goes to once it is listed (where the tab works now).
     pub want: Option<QuickRow>,
+    /// First row shown, where the rows were drawn and each `▸`/`▾` with its row (mouse), kept
+    /// by the renderer.
+    pub scroll: usize,
+    pub list: ratatui::layout::Rect,
+    pub arrows: Vec<(ratatui::layout::Rect, usize)>,
 }
 
 impl App {
@@ -101,6 +106,9 @@ impl App {
             open_db: BTreeSet::new(),
             context_of: None,
             want: None,
+            scroll: 0,
+            list: Default::default(),
+            arrows: Vec::new(),
         }));
         self.refresh_quick();
     }

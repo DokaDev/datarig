@@ -387,8 +387,8 @@ impl App {
         }
     }
 
-    /// Mouse in the keyboard help: a click selects a row (and opens or closes a section), the
-    /// wheel moves the selection.
+    /// Mouse in the keyboard help: a click selects a row (and opens or closes a section), one on
+    /// the search line types the filter there; the wheel moves the selection.
     pub(super) fn help_mouse(&mut self, m: MouseEvent) {
         let Some(h) = self.overlays.help() else { return };
         let (list, scroll) = (h.list, h.scroll);
@@ -402,6 +402,13 @@ impl App {
                         h.selected = i;
                     }
                     self.help_activate(i, false);
+                }
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                if let Some(h) = self.overlays.help_mut()
+                    && h.filter.click(m.column, m.row)
+                {
+                    h.filtering = true;
                 }
             }
             _ => {}

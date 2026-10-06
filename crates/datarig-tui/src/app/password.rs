@@ -269,6 +269,8 @@ impl App {
             title: None,
             field: Label::FormFieldPassword.into(),
             echo: false,
+            checkbox: Default::default(),
+            buttons: Default::default(),
         }));
     }
 
@@ -453,6 +455,7 @@ impl App {
                     action: ConfirmAction::ChangeSource,
                     folder: None,
                     path: None,
+                    buttons: Default::default(),
                 }));
             }
             _ => self.apply_form(),
