@@ -678,6 +678,11 @@ impl App {
     /// The results' menu next to the grid's selected cell (the grid's corner without one).
     fn open_results_menu_here(&mut self) {
         let r = self.layout.results;
+        // The inspector zoomed: the grid is not drawn, the menu opens in the inspector's corner.
+        if r.width == 0 {
+            let d = self.layout.detail;
+            return self.open_results_menu((d.x + 2, d.y + 1));
+        }
         let g = &self.tab().grid;
         let shown = g.row >= g.top && g.row < g.top + g.page_rows.max(1);
         let y = if shown { g.data_y + (g.row - g.top) as u16 } else { g.data_y };

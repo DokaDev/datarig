@@ -523,6 +523,11 @@ impl App {
         if matches!(m.kind, MouseEventKind::Down(_)) && self.close_search_prompt() {
             return;
         }
+        // A press starts afresh: a drag whose release never came (let go outside the window)
+        // is over.
+        if m.kind == MouseEventKind::Down(MouseButton::Left) {
+            self.drag = None;
+        }
         let (x, y) = (m.column, m.row);
         let inside = |r: Rect| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height;
         let l = self.layout;

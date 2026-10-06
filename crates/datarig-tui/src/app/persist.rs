@@ -580,13 +580,7 @@ impl App {
         }
         // A pane that is not drawn (a table tab's editor, a hidden results pane) never keeps
         // the focus.
-        self.fix_focus();
-        self.fix_zoom(moved);
-        // The explorer has the focus: it is shown again.
-        if self.focus == Focus::Tree && self.explorer.hidden {
-            self.explorer.hidden = false;
-            self.mark_workspace();
-        }
+        self.settle_panes(moved);
         if self.focus != self.last_focus {
             self.last_focus = self.focus;
             if self.focus == Focus::Tree {

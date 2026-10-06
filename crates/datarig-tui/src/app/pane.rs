@@ -146,7 +146,9 @@ impl App {
     /// pane came back) the focus goes to the zoomed pane. The zoom of a pane that went away
     /// ends, but the results' waits for them, as their maximise did.
     pub(super) fn fix_zoom(&mut self, moved: bool) {
-        if self.tabs.is_empty() || self.profiles.is_empty() {
+        // The action menu moves the focus to the pane whose actions it lists while it is open
+        // (the grid's, from the inspector): not a move of the user's.
+        if self.tabs.is_empty() || self.profiles.is_empty() || self.overlays.is_open(OverlayKind::ContextMenu) {
             return;
         }
         let Some(z) = self.tab().pane.zoom else { return };
@@ -165,6 +167,31 @@ impl App {
         } else {
             self.focus = z;
         }
+    }
+
+    /// The focus is on the hidden explorer and nothing zooms it: moved there (or with nothing
+    /// else to focus), it is shown again; otherwise (another tab became active, a zoom of it
+    /// ended) the focus goes to the editor or the results and it stays hidden.
+    pub(super) fn fix_explorer(&mut self, moved: bool) {
+        if self.focus != Focus::Tree || !self.explorer.hidden || self.zoomed() == Some(Focus::Tree) {
+            return;
+        }
+        let other = [Focus::Editor, Focus::Results].into_iter().find(|f| self.focusable(*f));
+        match other {
+            Some(f) if !moved && !self.tabs.is_empty() && !self.profiles.is_empty() => self.focus = f,
+            _ => {
+                self.explorer.hidden = false;
+                self.mark_workspace();
+            }
+        }
+    }
+
+    /// Keep the focus, the zoom and the explorer together (`moved`: the focus was moved by the
+    /// user): after every input, and after the events that change what the panes show.
+    pub(super) fn settle_panes(&mut self, moved: bool) {
+        self.fix_focus();
+        self.fix_zoom(moved);
+        self.fix_explorer(moved);
     }
 
     /// `explorer.toggle`: hide the explorer (the focus leaves it for the editor or the results)
@@ -197,19 +224,20 @@ impl App {
     }
 
     /// The explorer is to be `width` columns wide (a key, a drag of its border): kept within its
-    /// limits for the workspace as drawn. Past a limit it already has, the preference there is
-    /// stays (a terminal narrower for a while does not overwrite a wider one).
+    /// limits for the workspace as drawn.
     pub(super) fn resize_explorer(&mut self, width: u16) {
         let total = self.layout.workspace.width;
         if total == 0 {
             return;
         }
         let w = explorer_width(total, Some(width));
-        let at_limit = w != width && w == explorer_width(total, self.explorer.width);
-        if !at_limit && self.explorer.width != Some(w) {
-            self.explorer.width = Some(w);
-            self.mark_workspace();
+        // Nothing changes on screen (a press on the border, a key at a limit): the preference
+        // stays as it is, a wider one or none (the default, following the terminal's width).
+        if w == explorer_width(total, self.explorer.width) {
+            return;
         }
+        self.explorer.width = Some(w);
+        self.mark_workspace();
     }
 
     /// The results pane of the active query tab has its result tab strip: when there is more

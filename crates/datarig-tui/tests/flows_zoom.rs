@@ -358,3 +358,111 @@ fn the_explorers_layout_survives_a_restart() {
     h.draw(160, 45);
     assert_eq!(h.app.layout.tree.width, 44);
 }
+
+/// Focus the inspector by a click and zoom it.
+fn zoomed_inspector() -> Harness {
+    let mut h = with_results();
+    let d = h.app.layout.detail;
+    h.mouse(MouseEventKind::Down(MouseButton::Left), d.x + 5, d.y + 4);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), d.x + 5, d.y + 4);
+    h.keys(" z");
+    assert_eq!((h.app.focus, zoom(&h)), (Focus::Inspector, Some(Focus::Inspector)));
+    h.draw(160, 45);
+    h
+}
+
+/// The action menu of a zoomed inspector (the grid's actions) keeps the zoom under it and after
+/// it, and opens in the inspector's corner, not at the screen's edge.
+#[test]
+fn the_menu_of_a_zoomed_inspector_keeps_the_zoom() {
+    let mut h = zoomed_inspector();
+    h.keys("  ");
+    assert!(h.app.overlays.menu().is_some());
+    assert_eq!(zoom(&h), Some(Focus::Inspector), "under the menu");
+    assert_eq!(h.app.overlays.menu().unwrap().at, (2, 2), "the inspector's corner");
+    h.draw(160, 45);
+    assert_eq!(h.app.layout.detail.width, 160, "still drawn zoomed");
+    h.key(KeyCode::Esc);
+    assert_eq!((h.app.focus, zoom(&h)), (Focus::Inspector, Some(Focus::Inspector)));
+}
+
+/// A tab whose explorer is zoomed does not show the explorer another tab hid: the hidden state
+/// is for every tab, the zoom only draws it there.
+#[test]
+fn a_zoomed_explorer_in_one_tab_keeps_it_hidden_in_another() {
+    let mut h = with_results();
+    h.key(KeyCode::BackTab);
+    h.keys(" z");
+    assert_eq!(zoom(&h), Some(Focus::Tree));
+    h.ctrl('t');
+    h.keys(" b");
+    assert!(h.app.explorer.hidden);
+    h.key_mod(KeyCode::PageUp, KeyModifiers::CONTROL);
+    assert_eq!((h.app.focus, zoom(&h)), (Focus::Tree, Some(Focus::Tree)), "the zoomed explorer, focused");
+    h.draw(160, 45);
+    assert_eq!(h.app.layout.tree.width, 160);
+    h.key_mod(KeyCode::PageDown, KeyModifiers::CONTROL);
+    assert!(h.app.explorer.hidden, "still hidden in the other tab");
+    assert_eq!(h.app.focus, Focus::Editor, "the focus left the hidden explorer");
+    // Ending the explorer's zoom leaves it hidden, the focus on the editor.
+    h.key_mod(KeyCode::PageUp, KeyModifiers::CONTROL);
+    h.keys(" z");
+    assert_eq!((h.app.focus, h.app.explorer.hidden), (Focus::Editor, true));
+}
+
+/// A press on the explorer's border whose release was lost (let go outside the window): the
+/// next press starts afresh, so a drag in the explorer does not resize it.
+#[test]
+fn a_lost_release_does_not_keep_a_border_drag() {
+    let mut h = with_results();
+    let edge = h.app.layout.explorer_edge;
+    h.mouse(MouseEventKind::Down(MouseButton::Left), edge.x, 10);
+    h.mouse(MouseEventKind::Down(MouseButton::Left), 5, 8);
+    h.mouse(MouseEventKind::Drag(MouseButton::Left), 20, 8);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), 20, 8);
+    assert_eq!(h.app.explorer.width, None);
+    // The results' divider, the same.
+    let (divider, share) = (h.app.layout.divider, h.app.tab().pane.share);
+    h.mouse(MouseEventKind::Down(MouseButton::Left), divider.x + 20, divider.y);
+    let e = h.app.layout.editor_text;
+    h.mouse(MouseEventKind::Down(MouseButton::Left), e.x + 2, e.y);
+    h.mouse(MouseEventKind::Drag(MouseButton::Left), e.x + 2, e.y + 3);
+    assert_eq!(h.app.tab().pane.share, share);
+}
+
+/// A press on the border that changes nothing on screen keeps the preference: a wider one drawn
+/// narrower on a small terminal, and none (the default, which follows the terminal's width).
+#[test]
+fn touching_the_border_keeps_the_explorers_preference() {
+    let mut h = with_results();
+    for pref in [Some(96), None] {
+        h.app.explorer.width = pref;
+        h.draw(80, 24);
+        let e = h.app.layout.explorer_edge;
+        h.drag((e.x, 5), &[(e.x, 6), (e.x, 9)]);
+        assert_eq!(h.app.explorer.width, pref);
+    }
+}
+
+/// A results zoom waiting for the results (an earlier build's maximise) takes the focus when
+/// the run that brings them starts in the background (queued while the profile's password is
+/// read, sent once the connection is up), not only at the next key: the next key never goes to
+/// the hidden editor.
+#[test]
+fn results_arriving_for_a_waiting_zoom_take_the_focus() {
+    let mut h = Harness::new(Lang::En);
+    assert_eq!(h.app.focus, Focus::Editor);
+    h.app.tabs.active_mut().pane.zoom = Some(Focus::Results);
+    // The password not read yet (a keychain read off the UI thread): the run is queued.
+    let id = h.app.profiles[0].id;
+    let profile = h.app.conns.entry(id).resolved.take();
+    h.ctrl('e');
+    assert_eq!((h.app.tab().ran, h.app.zoomed()), (false, None), "the run waits");
+    h.app.conns.entry(id).resolved = profile;
+    h.db(datarig_core::driver::DbEvent::Connected);
+    assert!(h.app.tab().ran, "the queued run started");
+    assert_eq!(h.app.zoomed(), Some(Focus::Results));
+    assert_eq!(h.app.focus, Focus::Results, "the focus is on the zoomed results");
+    h.keys("i");
+    assert_eq!(h.app.tab().editor.mode, datarig_tui::widgets::editor::Mode::Normal, "nothing typed into the editor");
+}
