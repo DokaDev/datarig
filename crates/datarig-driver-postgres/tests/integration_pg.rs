@@ -3209,6 +3209,12 @@ async fn the_allowlist_question_alone_changes_nothing() {
     assert!(view(c.check_repeat(14, "SELECT * FROM zz_check_v").await));
     let DbEvent::Page { rows, .. } = c.run(5, "SELECT count(*) FROM zz_check").await else { panic!() };
     assert_eq!(rows[0][0].as_deref(), Some("2"));
+    // And no savepoint of the question is left in it (looking for one aborts the block).
+    let sp = datarig_driver_postgres::count_savepoint();
+    let DbEvent::Failed { error: DbError::Server(e), .. } = c.run(16, &format!("RELEASE SAVEPOINT {sp}")).await else {
+        panic!("{sp} is left")
+    };
+    assert!(e.contains(sp), "{e}");
     let _ = c.run(6, "ROLLBACK").await;
     // While a portal pages.
     let sql = "SELECT g FROM generate_series(1, 2345) g ORDER BY g";

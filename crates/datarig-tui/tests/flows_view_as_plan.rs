@@ -606,3 +606,74 @@ fn a_press_on_another_tab_ends_the_first_wait_with_a_word() {
     h.db(DbEvent::RepeatChecked { id, result: Ok(()) });
     assert!(runs(&mut h).is_empty());
 }
+
+#[test]
+fn a_question_on_another_tab_ends_the_first_wait_too() {
+    let mut h = text_plan("EXPLAIN SELECT * FROM t;");
+    let first = h.app.tab().id;
+    h.keys("P");
+    let id = check_sent(&mut h).expect("asked");
+    h.app.focus = Focus::Editor;
+    h.ctrl('t');
+    h.sent();
+    ran(&mut h, "EXPLAIN ANALYZE SELECT a FROM t;", |q| text_page(q, TEXT_PLAN));
+    h.keys("P");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Confirm), "the ANALYZE question");
+    let t = h.app.tabs.get(first).expect("the first tab");
+    assert_eq!(t.status.as_ref().map(|n| n.msg.clone()), Some(Label::PlanAsPlanStale.into()));
+    h.key(KeyCode::Esc);
+    h.db(DbEvent::RepeatChecked { id, result: Ok(()) });
+    assert!(runs(&mut h).is_empty());
+}
+
+#[test]
+fn the_asking_status_goes_with_the_wait() {
+    use datarig_core::driver::DbError;
+    use datarig_core::sql::risk::repeat::NotRepeatable;
+    let asking = Label::PlanAsPlanChecking.text(Lang::En);
+    // Ctrl+C ends the wait: once the notice of the moment is gone, the bar says it ended.
+    let mut h = text_plan("EXPLAIN SELECT * FROM t;");
+    h.keys("P");
+    h.ctrl('c');
+    h.app.transient = None;
+    let line = h.status(220, H);
+    assert!(!line.contains(asking) && line.contains(Label::PlanAsPlanWaitEnded.text(Lang::En)), "{line}");
+    // The self-opened question declined: not "asking" any more either.
+    let mut h = text_plan("EXPLAIN SELECT * FROM v;");
+    h.keys("P");
+    let id = check_sent(&mut h).expect("asked");
+    h.db(DbEvent::RepeatChecked { id, result: Err(DbError::NotRepeatable(NotRepeatable::NotATable("v".into()))) });
+    let line = h.status(220, H);
+    assert!(!line.contains(asking), "the question replaces it: {line}");
+    h.draw(W, H);
+    h.advance(Duration::from_millis(500));
+    h.key(KeyCode::Esc);
+    h.app.transient = None;
+    let line = h.status(220, H);
+    assert!(!line.contains(asking) && line.contains(Label::SafetyConfirmCancelled.text(Lang::En)), "{line}");
+}
+
+#[test]
+fn a_self_opened_question_takes_no_key_before_it_is_armed() {
+    use datarig_core::driver::DbError;
+    use datarig_core::sql::risk::repeat::NotRepeatable;
+    // The focus moved to the editor while the server was asked: an `n`, Esc or Enter typed as
+    // the question comes up does not dismiss it unseen.
+    let mut h = text_plan("EXPLAIN SELECT * FROM v;");
+    h.keys("P");
+    let id = check_sent(&mut h).expect("asked");
+    h.app.focus = Focus::Editor;
+    h.db(DbEvent::RepeatChecked { id, result: Err(DbError::NotRepeatable(NotRepeatable::NotATable("v".into()))) });
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Confirm));
+    h.draw(W, H);
+    for k in [KeyCode::Char('n'), KeyCode::Esc, KeyCode::Enter, KeyCode::Char('y')] {
+        h.key(k);
+        assert_eq!(h.overlay_kind(), Some(OverlayKind::Confirm), "{k:?} before it is armed");
+    }
+    assert!(runs(&mut h).is_empty());
+    // Armed: it answers as any question does.
+    h.advance(Duration::from_millis(500));
+    h.key(KeyCode::Char('n'));
+    assert_eq!(h.overlay_kind(), None);
+    assert!(runs(&mut h).is_empty());
+}

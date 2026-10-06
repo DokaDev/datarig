@@ -302,9 +302,12 @@ pub struct AsPlan {
     /// The allowlist's question to the server (`DbCommand::CheckRepeat`) this waits for
     /// instead of the user's answer.
     check: Option<u64>,
-    /// Its question opened by itself (on the server's answer): `y` counts only once the
+    /// Its question opened by itself (on the server's answer): it takes keys only once the
     /// dialog has been on screen for [`super::overlay::ARM_DELAY`].
     own: bool,
+    /// What the tab's status said before it said it was asking the server (put back when the
+    /// question replaces that).
+    before: Option<Notice>,
 }
 
 impl AsPlan {
@@ -529,7 +532,12 @@ impl App {
             analyze: json.analyze,
             check: None,
             own: false,
+            before: None,
         };
+        // One wait at a time: one on another tab ends here, said there.
+        if let Some(old) = self.pending_as_plan.take().filter(|o| o.check.is_some() && o.tab != id) {
+            self.tab_status(old.tab, Notice::new(Label::PlanAsPlanStale, Level::Warning));
+        }
         if json.evaluates {
             return self.ask_as_plan(p);
         }
@@ -538,11 +546,8 @@ impl App {
         self.query_seq += 1;
         let check = self.query_seq;
         self.send_tab(id, DbCommand::CheckRepeat { id: check, sql: json.statement });
-        // One wait at a time: one on another tab ends here, said there.
-        if let Some(old) = self.pending_as_plan.take().filter(|o| o.check.is_some() && o.tab != id) {
-            self.tab_status(old.tab, Notice::new(Label::PlanAsPlanStale, Level::Warning));
-        }
-        self.pending_as_plan = Some(AsPlan { check: Some(check), ..p });
+        let before = self.tab().status.clone();
+        self.pending_as_plan = Some(AsPlan { check: Some(check), before, ..p });
         self.tab_status(id, Notice::new(Label::PlanAsPlanChecking, Level::Info));
     }
 
@@ -586,7 +591,17 @@ impl App {
                 self.tab_status(p.tab, n.clone());
                 self.flash(n);
             }
-            Err(_) => self.ask_as_plan(AsPlan { own: true, ..p }),
+            Err(_) => {
+                // The question replaces "asking the server".
+                let (tab, before) = (p.tab, p.before.clone());
+                if let Some(t) = self.tabs.get_mut(tab) {
+                    t.status = before.clone();
+                }
+                if self.tab().id == tab {
+                    self.status = before;
+                }
+                self.ask_as_plan(AsPlan { own: true, ..p })
+            }
         }
     }
 
@@ -611,15 +626,24 @@ impl App {
     pub(super) fn end_as_plan_wait(&mut self) {
         let Some(p) = self.pending_as_plan.take_if(|p| p.check.is_some()) else { return };
         let n = Notice::new(Label::PlanAsPlanWaitEnded, Level::Warning);
-        if self.tabs.is_empty() || self.tab().id == p.tab || self.tabs.get(p.tab).is_none() {
+        // Its tab's last outcome (no longer "asking"), and a notice of the moment when the tab
+        // is the active one or is gone.
+        let here = self.tabs.is_empty() || self.tab().id == p.tab || self.tabs.get(p.tab).is_none();
+        self.tab_status(p.tab, n.clone());
+        if here {
             self.flash(n);
-        } else {
-            self.tab_status(p.tab, n);
         }
     }
 
-    /// The question opened by itself and `y` came before it was armed (on screen for
-    /// [`super::overlay::ARM_DELAY`]): ignored, as a click would be.
+    /// The question was answered no: not run, said on its tab.
+    pub(super) fn as_plan_declined(&mut self) {
+        if let Some(p) = self.pending_as_plan.take() {
+            self.tab_status(p.tab, Notice::new(Label::SafetyConfirmCancelled, Level::Warning));
+        }
+    }
+
+    /// The question opened by itself and is not armed yet (on screen for
+    /// [`super::overlay::ARM_DELAY`]): a key that comes now is ignored, as a click would be.
     pub(super) fn as_plan_unarmed(&self) -> bool {
         let own = self.pending_as_plan.as_ref().is_some_and(|p| p.own);
         let shown = self.overlays.confirm().and_then(|c| c.buttons.press.shown_at);

@@ -1448,6 +1448,10 @@ async fn a_text_explain_viewed_as_a_plan_keeps_its_options() {
     press(&mut app, 'P');
     pump(&mut app, &mut rx, 10, |a| a.overlays.confirm().is_some()).await;
     assert!(idle(&app, 0), "nothing runs before the answer");
+    // The question opened by itself: it takes keys once it has been on screen a moment.
+    let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 40)).unwrap();
+    t.draw(|f| datarig_tui::screens::draw(f, &mut app)).unwrap();
+    tokio::time::sleep(datarig_tui::app::overlay::ARM_DELAY + Duration::from_millis(50)).await;
     app.handle_event(Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
     assert!(app.overlays.confirm().is_none() && idle(&app, 0));
     assert_eq!(app.tab().exec.view, ResultView::Rows, "still the text plan");

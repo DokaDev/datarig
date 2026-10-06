@@ -1870,7 +1870,7 @@ async fn checked_repeat_in(
 /// count says whether it saw the transaction's one snapshot. No round trip of its own.
 const ISOLATION: &str = "SELECT pg_catalog.current_setting('transaction_isolation')";
 
-/// Back to before the session's count savepoint ([`Env::savepoint`]) when a count failed, was
+/// Back to before the driver's count savepoint ([`Env::savepoint`]) when a count failed, was
 /// cancelled or was refused, or after the allowlist's question.
 fn count_undo(env: &Env<'_>) -> String {
     let sp = env.savepoint;

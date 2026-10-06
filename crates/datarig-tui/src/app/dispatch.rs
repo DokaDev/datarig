@@ -332,8 +332,9 @@ impl App {
                 | ConfirmAction::OverwriteScript
                 | ConfirmAction::CloseTab(_)
         );
-        // A question that opened by itself takes no `y` typed as it came up.
-        if action == ConfirmAction::ExplainAgain && code == KeyCode::Char('y') && self.as_plan_unarmed() {
+        // A question that opened by itself takes no key typed as it came up (it is neither
+        // run nor dismissed unseen); once armed it answers as any question does.
+        if action == ConfirmAction::ExplainAgain && self.as_plan_unarmed() {
             return;
         }
         match code {
@@ -390,7 +391,7 @@ impl App {
                     self.pending_fetch_copy = None;
                 }
                 if action == ConfirmAction::ExplainAgain {
-                    self.pending_as_plan = None;
+                    self.as_plan_declined();
                 }
             }
             _ => {}
