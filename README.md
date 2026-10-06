@@ -13,7 +13,7 @@ server.
 ## Status
 
 **Early, pre-1.0.** Releases have binaries for macOS, Linux and Windows and a Homebrew
-formula ([Install](#install)); the latest is 0.8.0. Only **PostgreSQL** is implemented today. The configuration format, key bindings and behavior may still change
+formula ([Install](#install)); the latest is 0.9.0. Only **PostgreSQL** is implemented today. The configuration format, key bindings and behavior may still change
 between releases (see [Versioning](#versioning)).
 
 Platforms: developed and tested on macOS; CI runs the full test suite on Linux. On Windows CI
