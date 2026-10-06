@@ -1,9 +1,11 @@
 //! Drawing: line numbers, the bar of what a run takes, syntax colors of the lines on screen
 //! (lexed from the cached line states), the matches of a search on them, the selection (a
-//! block: the characters with a column in it), the cursor line, and the search prompt on the
-//! last line while it is open.
+//! block: the characters with a column in it), the cursor line, the statement that runs now
+//! (its tint, and a spinner in the gutter), the hints of finished runs after their
+//! statements' last lines, and the search prompt on the last line while it is open.
 
 use super::buffer::gw;
+use super::runs::{HintKind, RunHint};
 use super::{Editor, Mode};
 use crate::theme;
 use datarig_core::sql::lexer::{Tok, lex};
@@ -11,6 +13,12 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
 use unicode_segmentation::UnicodeSegmentation;
+
+/// Columns between a line's text and its hint.
+const HINT_GAP: usize = 2;
+
+/// The fewest columns a hint is drawn in: its mark, a blank, a character and `…`.
+const HINT_MIN: usize = 4;
 
 impl Editor {
     /// Screen position of the cursor inside `area` if it were rendered now. `stmt` is the byte
@@ -58,6 +66,9 @@ impl Editor {
         let stmt = if sel.is_some() || block.is_some() { None } else { stmt };
         // What a run takes: the selection, else the statement under the cursor.
         let run = sel.or(block_bytes).or(stmt);
+        // The statement running now, and the spinner frame for its gutter.
+        let running = self.running_span();
+        let hints = if self.run_hints { &self.runs.hints[..] } else { &[] };
 
         // The matches of the search on the lines on screen, found line by line as they are drawn.
         let hl = self.highlight_re();
@@ -81,8 +92,11 @@ impl Editor {
                 .filter(|b| (b.first..=b.last).contains(&r))
                 .map(|b| (b.start, if b.max { usize::MAX } else { b.end }));
             let in_stmt = stmt.is_some_and(|(a, b)| line_start < b && a <= line_end);
+            let in_running = running.filter(|(s, _)| line_start < s.end && s.start <= line_end);
             let bg = if r == self.row && self.mode != Mode::Visual {
                 th.cursor_line
+            } else if in_running.is_some() {
+                th.running_stmt
             } else if in_stmt {
                 th.current_stmt
             } else {
@@ -92,7 +106,12 @@ impl Editor {
             let num_fg = if r == self.row { th.fg } else { th.fg_muted };
             let num = format!("{:>numw$} ", r + 1);
             buf.set_stringn(area.x, y, &num, self.gutter, Style::new().fg(num_fg).patch(bg));
-            if run.is_some_and(|(a, b)| line_start < b && a <= line_end) {
+            if let Some((s, frame)) = in_running {
+                // The spinner on its first line on screen, the bar on the others.
+                let style = Style::new().fg(th.running_stmt_bar).patch(bg);
+                let mark = if line_start <= s.start || vy == 0 { frame } else { "▎" };
+                buf.set_stringn(area.x + numw as u16, y, mark, 1, style);
+            } else if run.is_some_and(|(a, b)| line_start < b && a <= line_end) {
                 // The bar sits in the blank between the line number and the text.
                 let style = Style::new().fg(th.current_stmt_bar).patch(bg);
                 buf.set_stringn(area.x + numw as u16, y, "▎", 1, style);
@@ -147,6 +166,14 @@ impl Editor {
                 b += g.len();
                 rb += g.len();
             }
+            // The hint of the last statement that ends on this line, after its text.
+            let hint = hints.iter().filter(|h| line_start <= h.span.end && h.span.end <= line_end);
+            if let Some(h) = hint.max_by_key(|h| h.span.end).map(|h| &h.hint) {
+                let room = (self.left + text_w).saturating_sub(x + HINT_GAP);
+                if x + HINT_GAP >= self.left {
+                    self.draw_hint(buf, tx0 + (x + HINT_GAP - self.left) as u16, y, room, h, bg);
+                }
+            }
             if let Some((a, z)) = sel {
                 // show selected line breaks as a one-cell highlight
                 if line_end >= a && line_end < z && x >= self.left && x < self.left + text_w {
@@ -163,6 +190,29 @@ impl Editor {
             return self.render_prompt(area, buf, area.y + h as u16);
         }
         (cxs.min(area.x + area.width.saturating_sub(1)), cy)
+    }
+
+    /// Hint `h` at `x`, `y` in at most `room` columns: its mark, a blank and its text, cut
+    /// with `…` when it does not fit; nothing when not even a few characters of it would.
+    fn draw_hint(&self, buf: &mut Buffer, x: u16, y: u16, room: usize, h: &RunHint, bg: Style) {
+        let th = theme::cur();
+        if room < HINT_MIN {
+            return;
+        }
+        let style = Style::new().fg(th.fg).patch(bg).patch(th.run_hint);
+        let mark = match h.kind {
+            HintKind::Ok => th.success,
+            HintKind::Failed => th.error,
+            HintKind::RolledBack | HintKind::Cancelled => th.warning,
+        };
+        buf.set_stringn(x, y, h.kind.mark(self.icons), 1, style.fg(mark));
+        let room = room - 2;
+        if crate::text::width(&h.text) <= room {
+            buf.set_stringn(x + 2, y, &h.text, room, style);
+        } else {
+            let (end, _) = buf.set_stringn(x + 2, y, &h.text, room - 1, style);
+            buf.set_stringn(end, y, "\u{2026}", 1, style);
+        }
     }
 
     /// The search prompt on line `y` of `area`; where the cursor is in it.

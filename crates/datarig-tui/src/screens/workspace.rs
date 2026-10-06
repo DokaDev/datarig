@@ -212,7 +212,19 @@ fn draw_editor(app: &mut App, area: Rect, buf: &mut Buffer) -> (u16, u16) {
         return (einner.x, einner.y);
     }
     let ddl = app.tab().is_ddl();
+    // The statement of the run marked on the text that runs now (not a fetch of more rows or a
+    // count), with the spinner's frame.
+    let (now, icons, hints) = (app.now(), app.icons_on(), app.prefs.run_hints == datarig_core::config::RunHints::On);
+    let t = app.tab();
+    let running = t
+        .exec
+        .running
+        .filter(|r| !r.fetch && !r.count && t.editor.active_run() == Some(r.id))
+        .and_then(|r| t.exec.run.current().map(|i| (i, crate::widgets::spinner_at(r.started, now))));
     let editor = &mut app.tabs.active_mut().editor;
+    editor.set_running(running);
+    editor.run_hints = hints;
+    editor.icons = icons;
     // The statement a run would take (the selection instead, while there is one: the editor
     // marks it itself).
     let stmt = match editor.mode {

@@ -1,0 +1,14 @@
+---
+source: crates/datarig-tui/tests/flows_run_feedback.rs
+expression: "editor.join(\"\\n\")"
+---
+╭ Explorer ────────────╮ ⠋ console 1 ×                                          
+│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮
+│▾ ●   local-pg        ││ local-pg / datarig  127.0.0.1:55432 · policy: default│
+│  ▾ datarig default   ││  1 SELECT 1;                                         │
+│    ▸ analytics       ││  2⠋SELECT 2 FROM t                                   │
+│    ▸ public          ││  3▎WHERE a > 1;                                      │
+│    ▸ shop            ││  4▎SELECT 3;                                         │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      │╰──────────────────────────────────────────────────────╯

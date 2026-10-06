@@ -897,6 +897,7 @@ name = "datarig-tui"
 version = "0.9.0"
 dependencies = [
  "arboard",
+ "chrono",
  "crossterm",
  "datarig-core",
  "datarig-driver-postgres",

@@ -182,7 +182,12 @@ Everything below works today, with PostgreSQL.
   leaves the text alone.
 - Run the statement under the cursor (`Ctrl+E`), a selection, or several statements in a row:
   each statement's outcome is listed in a Messages tab, and every row result gets a result tab
-  of its own. Queries can be cancelled (`Ctrl+C`).
+  of its own. Queries can be cancelled (`Ctrl+C`). While a run goes on, the statement it is
+  executing has a tint of its own and a spinner in the gutter, wherever the cursor goes and
+  whatever you edit around it. When it ends, a dim hint after each statement's last line says
+  what it did (`✓ 128 rows · 42ms · 14:03`, rows affected, the error, rolled back, cancelled);
+  the hint is not part of the text (never yanked, saved or searched) and goes when you edit the
+  statement. `[editor] run_hints = "off"` turns the hints off.
 - `Ctrl+G` opens the query in your own editor (`$VISUAL`, else `$EDITOR`, else `vi`; for
   example `EDITOR="code -w"`), run directly without a shell on a private temporary file; what you
   save replaces the text as one undo step, and quitting without saving (or Vim's `:cq`) changes

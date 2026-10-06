@@ -50,6 +50,7 @@ pub mod plan;
 pub mod presets;
 pub mod profiles;
 pub mod quick;
+mod run_hints;
 pub mod runlog;
 pub mod safety;
 mod script_ops;
@@ -89,7 +90,6 @@ use datarig_core::profile::folder::{FolderPath, Folders};
 use datarig_core::profile::{ConnectionConfig, ProfileId};
 use datarig_core::secret::{DefaultSource, MemoryStore, SecretStore, Secrets, SourceError, SourceKind, Stores};
 use datarig_core::sql::complete::{Candidate, complete_in};
-use datarig_core::sql::split::split;
 use explorer::Explorer;
 use overlay::{Busy, Confirm, ConfirmAction, Overlay, OverlayKind, Overlays};
 pub use presets::PROBE_MAX;
@@ -367,6 +367,17 @@ pub enum EventTarget {
 /// Where the app reads the time for its timers and countdowns (tests use a fake one).
 pub type Clock = Arc<dyn Fn() -> Instant + Send + Sync>;
 
+/// Where the app reads the local time of day (hour, minute) a run's hint shows (tests use a
+/// fixed one).
+pub type TimeOfDay = Arc<dyn Fn() -> (u32, u32) + Send + Sync>;
+
+/// The local time of day by the system's clock and time zone.
+fn local_time_of_day() -> (u32, u32) {
+    use chrono::Timelike;
+    let now = chrono::Local::now();
+    (now.hour(), now.minute())
+}
+
 #[derive(Default, Clone, Copy, Debug)]
 pub struct Layout {
     /// The area the explorer and the tabs (their bar and panes) share, between the banner and
@@ -525,6 +536,7 @@ pub struct App {
     /// `[policy.<name>]` tables; the connected profile's policy applies to its tabs.
     pub policies: Policies,
     clock: Clock,
+    time_of_day: TimeOfDay,
     pub secrets: Secrets,
     /// Dialogs on top of the workspace (command line, profile form, password prompt, …).
     pub overlays: Overlays,
@@ -828,6 +840,7 @@ impl App {
             config_problem: status.clone(),
             policies: cfg.policies.clone(),
             clock: Arc::new(Instant::now),
+            time_of_day: Arc::new(local_time_of_day),
             secrets: Secrets::new(Arc::new(MemoryStore::new())),
             overlays: Overlays::default(),
             conn_test: None,
@@ -959,6 +972,17 @@ impl App {
     /// the caller).
     pub fn set_clock(&mut self, clock: Clock) {
         self.clock = clock;
+    }
+
+    /// Read the local time of day from `time_of_day` (tests pass a fixed one).
+    pub fn set_time_of_day(&mut self, time_of_day: TimeOfDay) {
+        self.time_of_day = time_of_day;
+    }
+
+    /// The local time of day as a run's hint shows it (`14:03`).
+    pub fn time_of_day(&self) -> String {
+        let (h, m) = (self.time_of_day)();
+        format!("{h:02}:{m:02}")
     }
 
     /// The current time of the app's clock.

@@ -271,7 +271,7 @@ fn set_command_changes_and_saves_settings() {
     h.command("set colour=red");
     let error = h.cmdline().and_then(|c| c.error.as_ref()).map(|e| e.render(&h.app.i18n).to_string());
     let keys = "language|icons|secrets.default_source|commands.position|detail_view|clipboard|copy_header|\
-                editor.cursor_shape|editor.clipboard|theme|editor.format_keyword_case|editor.format_indent|editor.auto_pairs";
+                editor.cursor_shape|editor.clipboard|theme|editor.format_keyword_case|editor.format_indent|editor.auto_pairs|editor.run_hints";
     let unknown = ko_msg(&datarig_core::i18n::Msg::CommandsErrorSetKey { key: "colour".into(), keys: keys.into() });
     assert_eq!(error.as_deref(), Some(unknown.as_str()));
     // The error wraps in the popup instead of being cut.

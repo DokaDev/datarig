@@ -270,6 +270,13 @@ fn the_terminal_theme_uses_the_terminal_colors_by_role() {
     // The statement tint is off, its bar stays.
     assert_eq!(th.current_stmt, Style::new());
     assert_ne!(th.current_stmt_bar, Color::Reset);
+    // So is the running statement's: its bar is another color, and its hint is muted text
+    // that shows without color too.
+    assert_eq!(th.running_stmt, Style::new());
+    assert!(!matches!(th.running_stmt_bar, Color::Reset | Color::Rgb(..) | Color::Indexed(_)));
+    assert_ne!(th.running_stmt_bar, th.current_stmt_bar);
+    assert_eq!(th.run_hint.fg, Some(th.fg_muted));
+    assert!(th.run_hint.add_modifier.contains(Modifier::ITALIC));
     assert_eq!(th.dim, Dim::Modifier);
     // No text role looks like body text, and no mark is invisible without color.
     for c in [th.accent, th.accent_warm, th.success, th.warning, th.error, th.fg_muted, th.key_pk, th.key_fk, th.key_uq]
@@ -321,6 +328,9 @@ fn every_token_of_a_theme_can_be_set_by_name() {
         cursor_line: _,
         current_stmt: _,
         current_stmt_bar: _,
+        running_stmt: _,
+        running_stmt_bar: _,
+        run_hint: _,
         success: _,
         warning: _,
         error: _,
@@ -350,7 +360,7 @@ fn every_token_of_a_theme_can_be_set_by_name() {
         dim: _,
     } = DARK;
     // Every field above but `dim`.
-    assert_eq!(COLOR_TOKENS.len() + STYLE_TOKENS.len(), 40);
+    assert_eq!(COLOR_TOKENS.len() + STYLE_TOKENS.len(), 43);
     let mut th = DARK;
     for (i, name) in COLOR_TOKENS.iter().enumerate() {
         *color_token(&mut th, name).unwrap() = Color::Indexed(i as u8);
@@ -358,8 +368,8 @@ fn every_token_of_a_theme_can_be_set_by_name() {
     for (i, name) in STYLE_TOKENS.iter().enumerate() {
         *style_token(&mut th, name).unwrap() = Style::new().bg(Color::Indexed(100 + i as u8));
     }
-    assert_eq!((th.bg, th.mode_fg), (Color::Indexed(0), Color::Indexed(21)));
-    assert_eq!(th.plan_misestimate, Style::new().bg(Color::Indexed(117)));
+    assert_eq!((th.bg, th.mode_fg), (Color::Indexed(0), Color::Indexed(22)));
+    assert_eq!(th.plan_misestimate, Style::new().bg(Color::Indexed(119)));
     assert!(color_token(&mut th, "selection").is_none() && style_token(&mut th, "bg").is_none());
 }
 
@@ -525,6 +535,51 @@ fn plan_marks_show_and_read_in_every_theme() {
             for (token, s) in [("plan_hot", th.plan_hot), ("plan_misestimate", th.plan_misestimate)] {
                 let c = contrast(fg(s), bg);
                 assert!(c >= 3.0, "{name}: {token} on {bg:?}: {c:.2}");
+            }
+        }
+    }
+}
+
+/// The statement that runs now stands apart from the one a run would take: its own tint and a
+/// bar of another color that reads on every line background it may sit on (3:1, a non-text
+/// mark) and differs from the run target's bar also in 256 colors. Its text stays readable.
+#[test]
+fn the_running_statement_stands_apart_from_the_run_target() {
+    for (name, th) in rgb_themes() {
+        let (tint, target, cursor_line) = (bg(th.running_stmt), bg(th.current_stmt), bg(th.cursor_line));
+        assert!(tint != target && tint != cursor_line && tint != bg(th.selection) && tint != th.bg, "{name}");
+        assert!(contrast(th.fg, tint) >= 4.5, "{name}: body text on the tint: {:.2}", contrast(th.fg, tint));
+        assert_ne!(xterm256(tint), xterm256(th.bg), "{name}: the tint vanishes in 256 colors");
+        for bg in [th.bg, tint, target, cursor_line] {
+            let c = contrast(th.running_stmt_bar, bg);
+            assert!(c >= 3.0, "{name}: bar on {bg:?}: {c:.2}");
+            assert_ne!(xterm256(th.running_stmt_bar), xterm256(bg), "{name}: bar on {bg:?} in 256 colors");
+        }
+        assert_ne!(xterm256(th.running_stmt_bar), xterm256(th.current_stmt_bar), "{name}: the two bars in 256 colors");
+    }
+    for (name, th) in BUILTINS.iter().copied() {
+        assert_ne!(th.running_stmt_bar, th.current_stmt_bar, "{name}");
+    }
+}
+
+/// A run's hint is dim but readable on every line background (3:1, as muted text), never
+/// looks like the statement's text (another color and a modifier), and its marks (the
+/// success, error and warning roles) read there too.
+#[test]
+fn run_hints_read_and_stay_apart_from_text() {
+    for (name, th) in BUILTINS.iter().copied() {
+        let s = th.run_hint;
+        assert!(s.fg.is_some_and(|c| c != th.fg) && !s.add_modifier.is_empty(), "{name}: {s:?}");
+        assert!(s.bg.is_none(), "{name}: the hint keeps the line's background");
+    }
+    for (name, th) in rgb_themes() {
+        for bg in [th.bg, bg(th.cursor_line), bg(th.current_stmt), bg(th.running_stmt)] {
+            let c = contrast(fg(th.run_hint), bg);
+            assert!(c >= 3.0, "{name}: hint on {bg:?}: {c:.2}");
+            assert_ne!(xterm256(fg(th.run_hint)), xterm256(bg), "{name}: hint on {bg:?} in 256 colors");
+            for mark in [th.success, th.error, th.warning] {
+                let c = contrast(mark, bg);
+                assert!(c >= 3.0, "{name}: {mark:?} on {bg:?}: {c:.2}");
             }
         }
     }

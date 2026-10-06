@@ -300,14 +300,7 @@ impl App {
     /// `query.explain` / `query.explain_analyze`: the statement under the cursor, or the one
     /// statement selected, as `EXPLAIN (… FORMAT JSON)`, run like any statement.
     pub(super) fn explain(&mut self, analyze: bool) {
-        let ed = &mut self.tab_mut().editor;
-        let stmts: Vec<String> = match ed.selection() {
-            Some(sel) => {
-                ed.exit_visual();
-                split(&sel).iter().map(|s| s.body(&sel).to_string()).collect()
-            }
-            None => ed.current_statement().map(|(_, _, body)| vec![body]).unwrap_or_default(),
-        };
+        let (stmts, spans) = self.tab_mut().editor.run_statements();
         let stmt = match &stmts[..] {
             [] => return self.flash(Notice::new(Label::QueryNoStatement, Level::Warning)),
             [one] => one.trim().to_string(),
@@ -320,7 +313,9 @@ impl App {
             let key = self.key_for(Action::RunStatement, Ctx::VimNormal);
             return self.flash(Notice::new(Msg::PlanAlreadyExplain { key }, Level::Warning));
         }
-        self.run(vec![plan::explain_sql(&stmt, analyze)]);
+        let sql = plan::explain_sql(&stmt, analyze);
+        self.tab_mut().editor.stage_run(std::slice::from_ref(&sql), spans);
+        self.run(vec![sql]);
     }
 
     /// The active tab shows a plan.

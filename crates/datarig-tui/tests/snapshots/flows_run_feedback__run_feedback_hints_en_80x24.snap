@@ -1,22 +1,22 @@
 ---
-source: crates/datarig-tui/tests/flows_runs.rs
-expression: "h.draw(80, 24).backend()"
+source: crates/datarig-tui/tests/flows_run_feedback.rs
+expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×                                          "
 "│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
 "│▾ ●   local-pg        ││ local-pg / datarig  127.0.0.1:55432 · policy: default│"
-"│  ▾ datarig default   ││  1 SELECT a FROM t;  ✓ 3 rows · 4ms · 14:03          │"
-"│    ▸ analytics       ││  2 UPDATE t SET a = a WHERE a > 0;  ✓ 3 rows affecte…│"
-"│    ▸ public          ││  3▎SELECT b FROM u;  ✓ 7 rows · 4ms · 14:03          │"
-"│    ▸ shop            ││                                                      │"
+"│  ▾ datarig default   ││  1 SELECT 1;  ✓ 1,200 rows affected · 42ms · 14:03   │"
+"│    ▸ analytics       ││  2 SELECT 2 FROM t                                   │"
+"│    ▸ public          ││  3 WHERE a > 1;  ✗ ERROR: relation "t" does not exist│"
+"│    ▸ shop            ││  4▎SELECT 3;                                         │"
 "│                      ││                                                      │"
 "│                      ││                                                      │"
 "│                      │╰──────────────────────────────────────────────────────╯"
 "│                      │╭ Results ─────────────────────────────────────────────╮"
-"│                      ││  Result 1   Result 3  [Messages]                     │"
-"│                      ││ 1  SELECT a FROM t              3 rows · 4ms         │"
-"│                      ││ 2  UPDATE t SET a = a WHERE a…  3 rows affected · 4ms│"
-"│                      ││ 3  SELECT b FROM u              7 rows · 4ms         │"
+"│                      ││ [Messages]                                           │"
+"│                      ││ 1  SELECT 1                     1,200 rows affected …│"
+"│                      ││ 2  SELECT 2 FROM t…             Error: ERROR: relati…│"
+"│                      ││ 3  SELECT 3                     not run              │"
 "│                      ││                                                      │"
 "│                      ││                                                      │"
 "│                      ││                                                      │"
@@ -25,4 +25,4 @@ expression: "h.draw(80, 24).backend()"
 "│                      ││                                                      │"
 "│                      ││                                                      │"
 "╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
-" NORMAL  local-pg · policy: default │ 7 rows · 4ms         │ Enter view cell EN "
+" NORMAL  local-pg │ Statement 2 of 3 failed (SELECT 2 FROM t…): ERROR: rela… EN "

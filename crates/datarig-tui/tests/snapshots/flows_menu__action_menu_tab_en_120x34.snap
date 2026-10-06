@@ -6,7 +6,7 @@ expression: "h.draw(120, 34).backend()"
 "│  ＋ New connection         │╭───────────────────────────────────────────────────╮────────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
 "│▾ ●   local-pg              ││ › type to filter                                  │lt      Space c s switch connection │"
 "│  ▾ datarig default         ││ console 1                                         │he cursor                           │"
-"│    ▸ analytics             ││  Close tab                                 Ctrl+W │                                    │"
+"│    ▸ analytics             ││  Close tab                                 Ctrl+W │s · 12ms · 14:03                    │"
 "│    ▸ public                ││  Save query                                Ctrl+S │                                    │"
 "│    ▸ shop                  ││  Save query as…                         Space s a │                                    │"
 "│                            ││  Change this tab's connection           Space c s │                                    │"

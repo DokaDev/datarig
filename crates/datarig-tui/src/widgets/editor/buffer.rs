@@ -186,6 +186,7 @@ impl Editor {
         self.splice_rows = (ra, ins);
         let e = Edit { ra, ba, rb, bb, ins, hint: self.mark_hint.take() };
         self.marks.adjust(&e, &self.lines, |r| new.get(r.wrapping_sub(ra)).cloned());
+        self.runs.adjust(a, b.max(a), s);
         self.lines.splice(ra..=rb, new);
         self.bytes = self.bytes - removed.len() + s.len();
         self.version = next_version();
