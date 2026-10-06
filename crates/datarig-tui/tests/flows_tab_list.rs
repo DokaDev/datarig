@@ -474,3 +474,134 @@ fn snapshot_of_the_tab_list() {
     let y = row("Recently closed");
     assert!(buf[(col(y, "Recently closed"), y)].modifier.contains(Modifier::BOLD));
 }
+
+/// A console closed in this session keeps its number: a new console takes another one, so the
+/// list never shows two entries of the same name and the closed one comes back as listed.
+#[test]
+fn a_new_console_does_not_take_the_number_of_a_closed_one() {
+    let mut h = four_tabs();
+    h.keys(" 2");
+    h.ctrl('w'); // console 2 closed
+    h.ctrl('t');
+    assert_eq!(active(&h), "console 5", "the closed console's number is held");
+    open_list(&mut h);
+    let all = names(&h);
+    let mut unique = all.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), all.len(), "no two entries of the same name: {all:?}");
+    while selected(&h) != "console 2" {
+        h.key(KeyCode::Down);
+    }
+    h.key(KeyCode::Enter);
+    assert_eq!(active(&h), "console 2", "it comes back as it was listed");
+}
+
+/// The best match is selected whichever section it is in.
+#[test]
+fn the_best_match_is_selected_across_both_sections() {
+    let mut h = four_tabs();
+    h.keys(" 3");
+    h.ctrl('w'); // console 3 closed; console 4 is tab 3 now
+    open_list(&mut h);
+    h.type_text("3");
+    assert_eq!(names(&h)[0], "console 4", "the open ones still come first");
+    assert_eq!(selected(&h), "console 3", "a name beats a tab number");
+}
+
+/// On a theme whose alternate surface is its surface (the terminal theme), the row under the
+/// pointer is underlined instead, in the tab list and the other lists.
+#[test]
+fn the_hover_shows_on_the_terminal_theme() {
+    use datarig_tui::theme;
+    let mut h = four_tabs();
+    h.app.theme = std::sync::Arc::new(theme::TERMINAL.clone());
+    assert_eq!(theme::TERMINAL.surface_alt, theme::TERMINAL.surface);
+    open_list(&mut h);
+    let (x, y) = row_of(&mut h, "console 1");
+    h.mouse(MouseEventKind::Moved, x, y);
+    let t = h.draw(W, H);
+    assert!(t.backend().buffer()[(x, y)].modifier.contains(Modifier::UNDERLINED), "the tab list's hovered row");
+    // Quick connect (three profiles: the second row is not the selected one).
+    let mut h = Harness::with_config(&sample_config(None), Lang::En);
+    h.app.theme = std::sync::Arc::new(theme::TERMINAL.clone());
+    h.ctrl('o');
+    h.draw(W, H);
+    let q = h.app.overlays.quick().unwrap().list;
+    h.mouse(MouseEventKind::Moved, q.x + 3, q.y + 1);
+    let t = h.draw(W, H);
+    assert!(t.backend().buffer()[(q.x + 3, q.y + 1)].modifier.contains(Modifier::UNDERLINED), "quick connect");
+    // A theme with an alternate surface keeps its background and no underline.
+    h.app.theme = std::sync::Arc::new(theme::DARK.clone());
+    let t = h.draw(W, H);
+    let cell = &t.backend().buffer()[(q.x + 3, q.y + 1)];
+    assert_eq!(cell.bg, theme::DARK.surface_alt);
+    assert!(!cell.modifier.contains(Modifier::UNDERLINED));
+}
+
+/// A table tab in another database than its profile's own keeps its `database.` prefix once
+/// closed, as the tab bar showed it.
+#[test]
+fn a_closed_tab_of_another_database_keeps_its_database_in_its_name() {
+    let mut h = Harness::connected(Lang::En);
+    open_users(&mut h);
+    let id = h.app.tab().id;
+    h.app.tabs.get_mut(id).unwrap().context.database = Some("lab".into());
+    open_list(&mut h);
+    assert_eq!(names(&h)[0], "lab.shop.users");
+    h.key(KeyCode::Esc);
+    h.ctrl('w');
+    // Its first page is still loading: closing asks first.
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Confirm));
+    h.keys("y");
+    open_list(&mut h);
+    assert_eq!(names(&h).last().map(String::as_str), Some("lab.shop.users"), "{:?}", names(&h));
+}
+
+/// Ctrl+D on a tab that is not the active one leaves the status line alone.
+#[test]
+fn closing_another_tab_keeps_the_status_line() {
+    use datarig_tui::app::{Level, Notice};
+    let mut h = four_tabs();
+    open_list(&mut h);
+    h.app.status = Some(Notice::new(datarig_core::i18n::Label::TabReopenNone, Level::Info));
+    assert_eq!(selected(&h), "console 3");
+    h.ctrl('d');
+    assert_eq!(h.app.tabs.len(), 3);
+    assert!(h.status(W, H).contains("No closed tab to reopen"), "{}", h.status(W, H));
+}
+
+/// A closed saved query whose file is open again in another tab is not listed twice: picking
+/// its closed row would only go to that tab.
+#[test]
+fn a_closed_saved_query_open_again_is_not_listed_as_closed() {
+    let root = std::env::temp_dir().join(format!("datarig-tab-list-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let (mut app, clock) = new_app_with_clock(&test_db_config(), Lang::En);
+    let store = std::sync::Arc::new(datarig_core::secret::MemoryStore::new());
+    app.set_secret_store(store.clone() as std::sync::Arc<dyn datarig_core::secret::SecretStore>);
+    app.set_paths(datarig_core::paths::Paths { data: Some(root.join("data")), state: Some(root.join("state")) });
+    let driver = FakeDriver::default();
+    let fake = driver.clone();
+    app.set_drivers(std::sync::Arc::new(move |name: &str| {
+        matches!(name, "postgres")
+            .then(|| std::sync::Arc::new(fake.clone()) as std::sync::Arc<dyn datarig_core::driver::Driver>)
+    }));
+    app.launch(datarig_tui::app::Startup::Normal);
+    let mut h = Harness { app, cancelled: driver.any_cancel.clone(), driver, store, clock };
+    h.explore("local-pg");
+    h.key(KeyCode::Enter);
+    h.meta_db("local-pg", DbEvent::Connected);
+    h.key(KeyCode::Tab);
+    assert_eq!(h.app.focus, Focus::Editor);
+    type_sql(&mut h, "select 42");
+    h.command("w mine");
+    assert_eq!(h.app.tab().script(), Some("mine.sql"), "saved");
+    h.ctrl('w');
+    h.command("e mine");
+    assert_eq!(h.app.tab().script(), Some("mine.sql"), "open again");
+    open_list(&mut h);
+    let listed = names(&h).iter().filter(|n| n.as_str() == "mine").count();
+    let _ = std::fs::remove_dir_all(&root);
+    assert_eq!(listed, 1, "{:?}", names(&h));
+}

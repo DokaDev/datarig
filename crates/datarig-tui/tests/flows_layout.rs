@@ -238,12 +238,15 @@ fn tabs_are_named_by_their_document_with_the_connection_attached() {
     h.ctrl('t');
     let bar = h.screen(160, 45).lines().next().unwrap().to_string();
     assert!(bar.contains("1 console 1 ×") && bar.contains("2 console 2 ×") && bar.contains("3 console 3 ×"), "{bar}");
-    // A closed console's number is free again.
+    // A closed console holds its number while it can come back: a new one takes the next.
     h.keys(" 2");
     h.ctrl('w');
     h.ctrl('t');
     let bar = h.screen(160, 45).lines().next().unwrap().to_string();
-    assert!(bar.contains("console 2 ×"), "{bar}");
+    assert!(bar.contains("console 4 ×") && !bar.contains("console 2 ×"), "{bar}");
+    h.keys(" tu");
+    let bar = h.screen(160, 45).lines().next().unwrap().to_string();
+    assert!(bar.contains("console 2 ×"), "it comes back as it was: {bar}");
     // The editor's first line: the connection, where it points, the policy, the switch key.
     let screen = h.screen(160, 45);
     let bar = screen.lines().nth(2).unwrap();

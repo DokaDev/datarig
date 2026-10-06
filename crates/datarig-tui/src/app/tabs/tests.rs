@@ -172,9 +172,10 @@ fn tabs_by_recent_use_put_the_active_one_first_and_restored_ones_in_bar_order() 
     assert_eq!(older.text, "c");
     assert_eq!(m.closed().map(|c| c.text.clone()).collect::<Vec<_>>(), ["d"]);
     assert!(m.take_closed_serial(closed[1]).is_none(), "taken once");
-    // Its number taken meanwhile: the lowest free one.
+    // A new console skips the numbers closed consoles hold (4, "d"'s); "c"'s 3 was given back
+    // when it left the list, so the new one takes it and "c" gets the lowest free one.
     let new = m.open(TabKind::Console, None, ed("e"));
     assert_eq!(m.get(new).unwrap().doc.console_no, 3);
     let back = m.reopen_closed(older);
-    assert_eq!(m.get(back).unwrap().doc.console_no, 4);
+    assert_eq!(m.get(back).unwrap().doc.console_no, 5);
 }

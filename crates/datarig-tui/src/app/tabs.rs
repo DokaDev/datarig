@@ -709,7 +709,8 @@ pub struct ClosedTab {
     pub ddl: Option<datarig_core::driver::ddl::DdlObject>,
     pub pane: PaneLayout,
     pub context: SessionContext,
-    /// A console's number as its tab showed it (it gets the lowest free one when it comes back).
+    /// A console's number as its tab showed it: held while it is on the closed list, so it comes
+    /// back with it (unless another tab took it meanwhile: one restored or renumbered).
     pub console_no: u32,
     /// Which closed tab this is, for the life of the process (the tab list picks one by it).
     pub serial: u64,
@@ -934,9 +935,13 @@ impl TabManager {
         id
     }
 
-    /// The lowest console number no open tab has.
+    /// The lowest console number no open tab and no console on the closed list has.
     pub fn free_console_no(&self) -> u32 {
-        (1..).find(|n| !self.tabs.iter().any(|t| t.doc.console_no == *n)).unwrap_or(1)
+        let held = |n: u32| {
+            self.tabs.iter().any(|t| t.doc.console_no == n)
+                || self.closed.iter().any(|c| c.kind == TabKind::Console && c.console_no == n)
+        };
+        (1..).find(|n| !held(*n)).unwrap_or(1)
     }
 
     /// Tab `id` became a console (a saved query whose file went away): it gets a number.

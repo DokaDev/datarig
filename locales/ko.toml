@@ -589,7 +589,7 @@
 "quick.none" = "맞는 프로필이 없습니다"
 "tab_list.title" = "탭"
 "tab_list.keys" = "Enter 탭으로 이동 · Ctrl+D 탭 닫기 · ↑↓ 선택 · Esc 닫기"
-"tab_list.placeholder" = "탭·연결·데이터베이스·종류 일부를 입력"
+"tab_list.placeholder" = "이름·연결·데이터베이스·스키마·종류·번호 일부를 입력"
 "tab_list.closed" = "최근에 닫은 탭"
 "tab_list.none" = "맞는 탭이 없습니다"
 "tab_list.kind.console" = "콘솔"

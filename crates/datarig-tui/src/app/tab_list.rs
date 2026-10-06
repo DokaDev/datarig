@@ -101,7 +101,7 @@ impl App {
         let Some(l) = self.overlays.tab_list() else { return };
         let query = l.filter.text().trim().to_string();
         let (before, at) = (l.entries.get(l.selected).copied(), l.selected);
-        let ranked = |entries: Vec<(TabEntry, Vec<String>)>| -> Vec<TabEntry> {
+        let ranked = |entries: Vec<(TabEntry, Vec<String>)>| -> Vec<(u8, TabEntry)> {
             let mut hits: Vec<(u8, usize, TabEntry)> = entries
                 .into_iter()
                 .enumerate()
@@ -111,7 +111,7 @@ impl App {
                 })
                 .collect();
             hits.sort_by_key(|&(r, i, _)| (r, i));
-            hits.into_iter().map(|(_, _, e)| e).collect()
+            hits.into_iter().map(|(r, _, e)| (r, e)).collect()
         };
         let open: Vec<(TabEntry, Vec<String>)> = self
             .tabs
@@ -120,16 +120,25 @@ impl App {
             .filter_map(|id| self.tabs.get(id))
             .map(|t| (TabEntry::Open(t.id), self.open_texts(t)))
             .collect();
-        let closed: Vec<(TabEntry, Vec<String>)> =
-            self.tabs.closed().map(|c| (TabEntry::Closed(c.serial), self.closed_texts(c))).collect();
-        let mut entries = ranked(open);
-        let open_count = entries.len();
-        entries.extend(ranked(closed));
+        // A saved query open again in another tab is that tab (bringing it back goes there).
+        let closed: Vec<(TabEntry, Vec<String>)> = self
+            .tabs
+            .closed()
+            .filter(|c| c.script.as_ref().is_none_or(|p| self.tabs.find_script(p).is_none()))
+            .map(|c| (TabEntry::Closed(c.serial), self.closed_texts(c)))
+            .collect();
+        let mut ranks = ranked(open);
+        let open_count = ranks.len();
+        ranks.extend(ranked(closed));
+        // Each part keeps its place; the best match of both is selected (the open one on a tie).
+        let best = ranks.iter().enumerate().min_by_key(|(i, (r, _))| (*r, *i)).map_or(0, |(i, _)| i);
+        let entries: Vec<TabEntry> = ranks.into_iter().map(|(_, e)| e).collect();
         let Some(l) = self.overlays.tab_list_mut() else { return };
         let last = entries.len().saturating_sub(1);
         l.selected = match select {
             Select::Previous if query.is_empty() && open_count > 1 => 1,
-            Select::Previous | Select::First => 0,
+            Select::Previous => 0,
+            Select::First => best,
             Select::Same => match before.and_then(|b| entries.iter().position(|e| *e == b)) {
                 Some(i) => i,
                 // An open tab that went: the one in its place, staying among the open ones.
@@ -199,7 +208,11 @@ impl App {
             return datarig_core::scripts::display_name(path, false).to_string();
         }
         if let Some(name) = c.table.as_ref().map(|t| t.label()).or_else(|| c.ddl.as_ref().map(|d| d.label())) {
-            return name;
+            // As the tab bar showed it: another database than the profile's own goes first.
+            return match self.database_other_than_own(c.profile, &c.context) {
+                Some(db) => format!("{db}.{name}"),
+                None => name,
+            };
         }
         self.i18n.msg(&Msg::TabConsole { n: c.console_no.to_string() }).to_string()
     }

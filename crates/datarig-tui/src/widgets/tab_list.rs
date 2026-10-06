@@ -132,7 +132,7 @@ pub(crate) fn draw_tab_list(app: &mut App, area: Rect, buf: &mut Buffer) -> Opti
                 let bg = if *index == selected {
                     th.selection
                 } else if hover == Some(*index) {
-                    Style::new().bg(th.surface_alt)
+                    crate::widgets::hover_style()
                 } else {
                     Style::new().bg(th.surface)
                 };

@@ -253,7 +253,8 @@ impl App {
         if running {
             self.cancel_in(id);
         }
-        if self.tab().id == id {
+        let was_active = self.tab().id == id;
+        if was_active {
             self.leave_tab();
         }
         if let Some(mut closed) = self.tabs.close(id)
@@ -267,7 +268,13 @@ impl App {
         {
             self.trash_closed(&state, &c, &text);
         }
-        self.entered_tab();
+        // Another tab than the active one (the tab list's `Ctrl+D`): the active tab and the
+        // status line stay; only the workspace state is written.
+        if was_active {
+            self.entered_tab();
+        } else {
+            self.save_workspace();
+        }
         if self.tabs.is_empty() {
             self.focus = Focus::Tree;
         }

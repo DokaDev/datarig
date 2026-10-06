@@ -592,7 +592,7 @@
 "quick.none" = "No matching profiles"
 "tab_list.title" = "Tabs"
 "tab_list.keys" = "Enter go · Ctrl+D close tab · ↑↓ select · Esc close"
-"tab_list.placeholder" = "type part of a tab, connection, database or kind"
+"tab_list.placeholder" = "type part of a name, connection, database, schema, kind or number"
 "tab_list.closed" = "Recently closed"
 "tab_list.none" = "No matching tabs"
 "tab_list.kind.console" = "console"

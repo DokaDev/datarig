@@ -15,7 +15,7 @@ expression: backend
 "│                            ││                                                                                        │"
 "│                            ││                                                                                        │"
 "│         ╭ Tabs ────────────────────────────────────────────────────────────────────────────────────────────╮         │"
-"│         │ › type part of a tab, connection, database or kind                                               │         │"
+"│         │ › type part of a name, connection, database, schema, kind or number                              │         │"
 "│         │                                                                                                  │         │"
 "│         │  2    console 2   console    local-pg · datarig                                                  │         │"
 "│         │  ⠋    shop.users  table      local-pg · datarig                                                  │         │"
