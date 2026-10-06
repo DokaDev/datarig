@@ -82,7 +82,8 @@ rss_growth_mib_max = 16
 
 [editor]
 # Keystroke to frame in a 5 MB file at 160x45 (a developer machine: about 0.5 ms). A theme
-# switch (`:set theme=`, then its frame) is held to the same budget.
+# switch (`:set theme=`, then its frame), and moving among the hints of finished runs (every
+# statement around the cursor has one), are held to the same budget.
 p95_ms_max = 25.0
 # Resident memory after typing in it (the file itself is about 20 MiB of lines).
 rss_mib_max = 160

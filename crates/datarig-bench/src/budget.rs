@@ -92,7 +92,8 @@ pub fn paging(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
 
 pub fn editor(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
     let max = num(b, "editor", "p95_ms_max")?;
-    let keys = ["typing_ms", "movement_ms", "scrolling_ms", "normal_edit_ms", "vim_ms", "theme_switch_ms"];
+    let keys =
+        ["typing_ms", "movement_ms", "scrolling_ms", "normal_edit_ms", "vim_ms", "run_hints_ms", "theme_switch_ms"];
     for what in keys.into_iter().chain(["search_miss_ms", "search_next_ms"]) {
         match f(result, &[what, "p95"]) {
             Some(m) => c.check(&format!("editor {what} p95"), m, max, " ms"),

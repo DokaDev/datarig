@@ -1,6 +1,7 @@
 //! The editor with a large file: keystroke-to-frame latency (the app handles the key, then
 //! draws the frame at 160x45) for typing, cursor movement, scrolling and vim's other motions
-//! and edits, the process's memory, what an autosave of the file costs, a theme switch
+//! and edits, moving and scrolling among the hints of finished runs (each statement around the
+//! cursor has one, as many as the editor keeps), the process's memory, what an autosave of the file costs, a theme switch
 //! (`:set theme=`) up to its frame, search: `/` with a pattern that is nowhere (each key
 //! searches the whole text) and `n`, with the bytes each key searched and the lines each frame
 //! highlighted counted. `block` (the `editor_block` scenario, in a process of its own): Visual
@@ -11,6 +12,7 @@ use crate::apps;
 use crate::grid::wide;
 use crate::stats::{Summary, ms, rss_kb};
 use datarig_tui::app::App;
+use datarig_tui::widgets::editor::{HintKind, RunHint};
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
@@ -153,6 +155,29 @@ pub fn run(scratch: &Path, bytes: usize, n: usize) -> Result<Value, String> {
     });
     let rss_edits = rss_kb(pid).unwrap_or(0);
 
+    // Run hints: every statement around the cursor ran (as `Ctrl+E` marks a run and its end),
+    // so each has a hint after its last line; then moving and scrolling among them. They stay
+    // for the scenarios below.
+    apps::key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+    let ed = &mut app.tab_mut().editor;
+    let middle = ed.row;
+    for (q, row) in (middle.saturating_sub(400)..middle + 400).step_by(2).enumerate() {
+        ed.row = row.min(lines.saturating_sub(1));
+        let (stmts, spans) = ed.run_statements();
+        ed.stage_run(&stmts, spans);
+        ed.start_run(q as u64, &stmts);
+        let hint = RunHint { kind: HintKind::Ok, text: "128 rows \u{b7} 42ms \u{b7} 14:03".into() };
+        ed.finish_run(q as u64, vec![Some(hint); stmts.len()]);
+    }
+    ed.row = middle;
+    let hinted = ed.run_hints().count();
+    let hint_keys = ['j', 'j', 'k', 'w', 'j', 'b', 'j', 'j'];
+    let hints = keystrokes(&mut app, &mut term, n, |a, i| match i % 10 {
+        8 => apps::key(a, KeyCode::Char('d'), KeyModifiers::CONTROL),
+        9 => apps::key(a, KeyCode::Char('u'), KeyModifiers::CONTROL),
+        k => apps::char(a, hint_keys[k % hint_keys.len()]),
+    });
+
     // Search: `/`, a pattern found nowhere typed key by key (each key searches the whole text
     // for the cursor's preview), `Enter` (once more, and the notice); then `n` over a word on
     // every few lines, its matches highlighted.
@@ -207,6 +232,8 @@ pub fn run(scratch: &Path, bytes: usize, n: usize) -> Result<Value, String> {
         "scrolling_ms": report("scrolling", &scrolling),
         "normal_edit_ms": report("x/u edits", &edits),
         "vim_ms": report("vim", &vim),
+        "run_hints_ms": report("run hints", &hints),
+        "run_hints": hinted,
         "theme_switch_ms": report("theme", &themes),
         "search_miss_ms": report("/ miss", &search_miss),
         "search_next_ms": report("n", &search_next),
