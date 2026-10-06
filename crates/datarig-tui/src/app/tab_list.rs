@@ -130,7 +130,12 @@ impl App {
         l.selected = match select {
             Select::Previous if query.is_empty() && open_count > 1 => 1,
             Select::Previous | Select::First => 0,
-            Select::Same => before.and_then(|b| entries.iter().position(|e| *e == b)).unwrap_or(at).min(last),
+            Select::Same => match before.and_then(|b| entries.iter().position(|e| *e == b)) {
+                Some(i) => i,
+                // An open tab that went: the one in its place, staying among the open ones.
+                None if matches!(before, Some(TabEntry::Open(_))) && open_count > 0 => at.min(open_count - 1),
+                None => at.min(last),
+            },
         };
         // Other entries: the highlight under the pointer goes.
         if l.entries != entries {
@@ -197,6 +202,20 @@ impl App {
             return name;
         }
         self.i18n.msg(&Msg::TabConsole { n: c.console_no.to_string() }).to_string()
+    }
+
+    /// The names of the open list's entries, in order (open tabs, then closed ones).
+    pub fn tab_list_names(&self) -> Vec<String> {
+        let Some(l) = self.overlays.tab_list() else { return Vec::new() };
+        l.entries
+            .iter()
+            .filter_map(|e| match *e {
+                TabEntry::Open(id) => self.tabs.get(id).map(|t| crate::widgets::tabbar::document_name(self, t)),
+                TabEntry::Closed(serial) => {
+                    self.tabs.closed().find(|c| c.serial == serial).map(|c| self.closed_name(c))
+                }
+            })
+            .collect()
     }
 
     /// Keys of the tab list (`overlay.tab_list`, text input): typing filters it; `↓`/`↑`,

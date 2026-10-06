@@ -31,6 +31,12 @@ Everything below works today, with PostgreSQL.
   A tab's number shows its connection: in the profile's color while connected, muted while not,
   and a spinner in its place while a statement runs. `◆` after the name marks your open
   transaction, `!` an aborted transaction or a lost connection.
+- A tab list (`Space t t`, `:tabs`, `:ls` or `:buffers`, also in the action menu), as nvim's
+  `:buffers` or Telescope's buffer picker: the open tabs, the most recently used first with the
+  previous one selected (`Enter` goes back to it), then the tabs closed in this session. Each
+  row shows the tab's number, name, kind and connection, database and schema, with the tab
+  bar's marks. Type to filter by any of them; `Enter` goes to a tab or brings a closed one back,
+  `Ctrl+D` closes the selected tab (asking first as `Ctrl+W` does).
 - The explorer lists every connection profile, the server's databases, their schemas, tables and
   views (materialized views with an icon of their own). Each table and materialized view shows
   the server's estimates of its rows and its size on disk on its own line, dim and on the right

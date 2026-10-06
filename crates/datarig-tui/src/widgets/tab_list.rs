@@ -31,7 +31,8 @@ struct Parts {
     kind: String,
     /// The profile's icon cell and its color, and where the tab works.
     icon: Option<(String, Color)>,
-    place: Option<String>,
+    /// Where it works, or what it says without a connection.
+    place: Result<String, Label>,
     marks: Vec<(String, Style)>,
 }
 
@@ -57,7 +58,9 @@ pub(crate) fn draw_tab_list(app: &mut App, area: Rect, buf: &mut Buffer) -> Opti
                     name: tabbar::document_name(app, t),
                     kind: app.i18n.label(kind_label(t.kind)).to_string(),
                     icon: profile.map(|p| (icons::cell(p, icons_on), theme::profile_color(p.display_color()))),
-                    place: app.tab_place(t.profile, &t.context),
+                    place: app
+                        .tab_place(t.profile, &t.context)
+                        .ok_or_else(|| tabbar::unbound(app, t).unwrap_or(Label::TabUnbound)),
                     marks: tabbar::marks(app, t, th.surface),
                 }
             }
@@ -69,7 +72,7 @@ pub(crate) fn draw_tab_list(app: &mut App, area: Rect, buf: &mut Buffer) -> Opti
                     name: app.closed_name(c),
                     kind: app.i18n.label(kind_label(c.kind)).to_string(),
                     icon: profile.map(|p| (icons::cell(p, icons_on), theme::profile_color(p.display_color()))),
-                    place: app.tab_place(c.profile, &c.context),
+                    place: app.tab_place(c.profile, &c.context).ok_or(Label::TabUnbound),
                     marks: Vec::new(),
                 }
             }
@@ -94,10 +97,11 @@ pub(crate) fn draw_tab_list(app: &mut App, area: Rect, buf: &mut Buffer) -> Opti
         || lines.iter().filter_map(|l| if let Line::Entry { parts, .. } = l { Some(parts) } else { None });
     let num_w = entry_parts().map(|p| width(&p.number.0)).max().unwrap_or(0).max(2);
     let kind_w = entry_parts().map(|p| width(&p.kind)).max().unwrap_or(0);
+    // Each mark has a blank before it.
     let marks_w = entry_parts().map(|p| p.marks.iter().map(|m| width(&m.0)).sum::<usize>()).max().unwrap_or(0);
     let name_max = entry_parts().map(|p| width(&p.name)).max().unwrap_or(0);
-    // One blank at each side, two between the columns.
-    let rest = iw.saturating_sub(2 + num_w + 2 + 2 + kind_w + 2 + marks_w);
+    // One blank at each side, two between the columns (the marks bring one of their own).
+    let rest = iw.saturating_sub(2 + num_w + marks_w + 2 + 2 + kind_w + 2);
     let name_w = name_max.min(rest * 11 / 20).max(rest.min(8));
     let place_w = rest.saturating_sub(name_w);
     // Keep the selection on screen; the lines stay put while it moves among them.
@@ -148,7 +152,11 @@ pub(crate) fn draw_tab_list(app: &mut App, area: Rect, buf: &mut Buffer) -> Opti
                     name = name.add_modifier(Modifier::BOLD);
                 }
                 col(&format!("{:>num_w$}", parts.number.0), num_w, number, &mut x);
-                col("", 2, dim, &mut x);
+                let marks_end = x + marks_w as u16;
+                for (text, style) in &parts.marks {
+                    col(text, width(text), *style, &mut x);
+                }
+                col("", usize::from(marks_end - x) + 2, dim, &mut x);
                 col(&parts.name, name_w, name, &mut x);
                 col("", 2, dim, &mut x);
                 col(&parts.kind, kind_w, Style::new().fg(th.fg_muted), &mut x);
@@ -159,11 +167,9 @@ pub(crate) fn draw_tab_list(app: &mut App, area: Rect, buf: &mut Buffer) -> Opti
                     col(icon, used, Style::new().fg(*color), &mut x);
                     left -= used;
                 }
-                let place = parts.place.clone().unwrap_or_else(|| app.i18n.label(Label::TabUnbound).to_string());
-                col(&place, left, Style::new().fg(th.fg_muted), &mut x);
-                for (text, style) in &parts.marks {
-                    let w = width(text);
-                    col(text, w, *style, &mut x);
+                match &parts.place {
+                    Ok(place) => col(place, left, Style::new().fg(th.fg_muted), &mut x),
+                    Err(l) => col(&app.i18n.label(*l), left, dim, &mut x),
                 }
             }
         }
