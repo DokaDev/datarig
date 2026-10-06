@@ -314,7 +314,7 @@ impl App {
             return;
         }
         // `Enter` keeps whatever the answer would lose (Cancel is the default): only `y` quits,
-        // deletes, disconnects, closes, switches or replaces (steps 2.7.1, 2.7.4 and 2.7.5).
+        // deletes, disconnects, closes, switches or replaces.
         // `Enter` says yes only to a copy, which loses nothing.
         let enter_yes = matches!(action, ConfirmAction::Copy | ConfirmAction::FetchThenCopy);
         let code = if key.code == KeyCode::Enter && !enter_yes { KeyCode::Char('n') } else { key.code };
