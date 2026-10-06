@@ -297,6 +297,27 @@ pub struct AsPlan {
     /// The statement of the result, and what runs.
     sql: String,
     json: String,
+    /// It has `ANALYZE` (what its question says).
+    analyze: bool,
+    /// The allowlist's question to the server (`DbCommand::CheckRepeat`) this waits for
+    /// instead of the user's answer.
+    check: Option<u64>,
+}
+
+impl AsPlan {
+    /// Its tab still shows the result it was asked from, on the same binding and session.
+    fn holds(&self, app: &App) -> bool {
+        app.tab().id == self.tab
+            && app.tabs.get(self.tab).is_some_and(|t| {
+                t.binding == self.binding
+                    && t.exec.generation == self.generation
+                    && t.exec.session.is_some()
+                    && t.exec.query_id == self.query
+                    && t.exec.shown == self.index
+                    && t.exec.view == super::tabs::ResultView::Rows
+                    && t.shown_sql() == self.sql
+            })
+    }
 }
 
 /// [`App::text_plan`] of one result: the tab, its run, the result tab, whether its rows are
@@ -394,19 +415,25 @@ impl App {
             && self.text_plan().explain
     }
 
-    /// The key that runs `a` where the focus is (the results pane's own keys there), else the
-    /// workspace's (the leader keys).
-    fn key_here(&self, a: Action) -> String {
-        let ctx = match self.focus {
+    /// The key context where the focus is (the results pane's own there).
+    fn focus_ctx(&self) -> Ctx {
+        match self.focus {
             Focus::Results if self.plan_shown() => Ctx::Plan,
             Focus::Results => Ctx::Grid,
             _ => self.key_context(),
-        };
-        let keys = self.keymap.hint_keys(a, ctx, self.enhanced_keys);
-        match keys.or_else(|| self.keymap.hint_keys(a, Ctx::Nav, self.enhanced_keys)) {
-            Some(k) => crate::keymap::keys::label(&k),
-            None => self.key_for(a, Ctx::Nav),
         }
+    }
+
+    /// The key bound to `a` where the focus is, if any: never one of another context (in
+    /// vim's Insert mode the leader keys would type text).
+    fn key_here(&self, a: Action) -> Option<String> {
+        self.keymap.hint_keys(a, self.focus_ctx(), self.enhanced_keys).map(|k| crate::keymap::keys::label(&k))
+    }
+
+    /// [`App::key_here`], else the key that opens the command line there, where `a` is found
+    /// by its name.
+    fn key_or_commands(&self, a: Action) -> String {
+        self.key_here(a).unwrap_or_else(|| self.key_for(Action::OpenCommands, self.focus_ctx()))
     }
 
     /// The line under a text plan that offers to view it as one, when it can be asked again,
@@ -415,8 +442,11 @@ impl App {
         if !self.text_plan_shown() || !self.text_plan().rewritable {
             return None;
         }
-        let key = self.key_here(Action::ExplainAsPlan);
-        Some(self.i18n.msg(&Msg::PlanAsPlanHint { key }).to_string())
+        let msg = match self.key_here(Action::ExplainAsPlan) {
+            Some(key) => Msg::PlanAsPlanHint { key },
+            None => Msg::PlanAsPlanHintCommands { key: self.key_for(Action::OpenCommands, self.focus_ctx()) },
+        };
+        Some(self.i18n.msg(&msg).to_string())
     }
 
     /// `results.view_as_plan` is not available: why, in the words that help (the text plan is
@@ -431,10 +461,13 @@ impl App {
             .into_iter()
             .any(|i| !is_plan(i) && log.statements.get(i).is_some_and(|s| plan::is_explain(&s.sql)));
         let notice = if text_plan && !self.results_shown() {
-            let key = self.key_here(Action::Panel(super::action::PanelAction::Toggle));
+            let key = self.key_or_commands(Action::Panel(super::action::PanelAction::Toggle));
             Notice::new(Msg::PlanAsPlanShowFirst { key }, Level::Info)
         } else if text_plan {
-            let key = format!("{}/{}", self.key_here(Action::ResultTab(false)), self.key_here(Action::ResultTab(true)));
+            let key = match (self.key_here(Action::ResultTab(false)), self.key_here(Action::ResultTab(true))) {
+                (Some(prev), Some(next)) => format!("{prev}/{next}"),
+                _ => self.key_or_commands(Action::ResultTab(true)),
+            };
             Notice::new(Msg::PlanAsPlanShowFirst { key }, Level::Info)
         } else if t.exec.view == ResultView::Rows && t.exec.shown.is_some_and(is_plan) {
             Notice::new(Label::PlanAsPlanAlreadyJson, Level::Info)
@@ -452,7 +485,7 @@ impl App {
     pub(super) fn explain_as_plan(&mut self) {
         let t = self.tab();
         let (id, sql) = (t.id, t.shown_sql().to_string());
-        if self.tab_busy(id) {
+        if self.tab_busy(id) || self.pending_as_plan.as_ref().is_some_and(|p| p.tab == id && p.check.is_some()) {
             return self.flash_busy();
         }
         let json = match plan::explain::json(&sql) {
@@ -479,11 +512,7 @@ impl App {
         {
             return self.tab_status(id, refused);
         }
-        if !json.evaluates {
-            return self.run(vec![json.sql]);
-        }
-        let excerpt = super::runlog::excerpt(&json.sql, 60);
-        self.pending_as_plan = Some(AsPlan {
+        let p = AsPlan {
             tab: id,
             binding: t.binding,
             generation: t.exec.generation,
@@ -491,15 +520,54 @@ impl App {
             index: t.exec.shown,
             sql,
             json: json.sql,
-        });
-        let (title, text) = if json.analyze {
+            analyze: json.analyze,
+            check: None,
+        };
+        if json.evaluates {
+            return self.ask_as_plan(p);
+        }
+        // Its text is on the allowlist: what only the server can tell (a view, a name a user's
+        // function or operator shadows) is asked first; the answer runs it or asks.
+        self.query_seq += 1;
+        let check = self.query_seq;
+        self.send_tab(id, DbCommand::CheckRepeat { id: check, sql: json.statement });
+        self.pending_as_plan = Some(AsPlan { check: Some(check), ..p });
+    }
+
+    /// Ask whether to run `p` again, saying what runs.
+    fn ask_as_plan(&mut self, p: AsPlan) {
+        let excerpt = super::runlog::excerpt(&p.json, 60);
+        let (title, text) = if p.analyze {
             (Label::PlanAsPlanAnalyzeTitle, Msg::PlanAsPlanAnalyzeText { sql: excerpt })
         } else {
             (Label::PlanAsPlanAgainTitle, Msg::PlanAsPlanAgainText { sql: excerpt })
         };
+        self.pending_as_plan = Some(AsPlan { check: None, ..p });
         self.confirm(title, title, Label::PlanAsPlanAnalyzeKeys, ConfirmAction::ExplainAgain);
         if let Some(c) = self.overlays.confirm_mut() {
             c.text = text;
+        }
+    }
+
+    /// The server answered the allowlist's question `check` for a text plan of tab `tab`: it
+    /// runs when the server has nothing against it, else it asks; an answer for a result that
+    /// changed meanwhile is dropped.
+    pub(super) fn as_plan_checked(
+        &mut self,
+        tab: TabId,
+        check: u64,
+        result: Result<(), datarig_core::driver::DbError>,
+    ) {
+        if !self.pending_as_plan.as_ref().is_some_and(|p| p.tab == tab && p.check == Some(check)) {
+            return;
+        }
+        let Some(p) = self.pending_as_plan.take() else { return };
+        if !p.holds(self) {
+            return self.tab_status(p.tab, Notice::new(Label::PlanAsPlanStale, Level::Warning));
+        }
+        match result {
+            Ok(()) => self.run_in(p.tab, vec![p.json]),
+            Err(_) => self.ask_as_plan(p),
         }
     }
 
@@ -507,16 +575,7 @@ impl App {
     /// it was asked from, on the same binding and session.
     pub(super) fn explain_as_plan_confirmed(&mut self) {
         let Some(p) = self.pending_as_plan.take() else { return };
-        let holds = self.tabs.get(p.tab).is_some_and(|t| {
-            t.binding == p.binding
-                && t.exec.generation == p.generation
-                && t.exec.session.is_some()
-                && t.exec.query_id == p.query
-                && t.exec.shown == p.index
-                && t.exec.view == super::tabs::ResultView::Rows
-                && t.shown_sql() == p.sql
-        });
-        if !holds || self.tab().id != p.tab {
+        if !p.holds(self) {
             return self.tab_status(p.tab, Notice::new(Label::PlanAsPlanStale, Level::Warning));
         }
         self.run_in(p.tab, vec![p.json]);

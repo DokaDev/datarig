@@ -1403,7 +1403,8 @@ async fn a_text_explain_viewed_as_a_plan_keeps_its_options() {
             assert!(app.overlays.confirm().is_some(), "{sql}: ANALYZE asks");
             press(app, 'y');
         }
-        pump(app, rx, 10, |a| idle(a, 0)).await;
+        // Without a question the server is asked the allowlist's question first, then it runs.
+        pump(app, rx, 10, |a| idle(a, 0) && a.tab().exec.view == ResultView::Plan).await;
         assert_eq!(app.tab().exec.view, ResultView::Plan, "{sql}: {:?}", app.status);
     }
     let plan = |app: &App| app.tab().exec.plan.as_ref().expect("a plan").plan.clone();
@@ -1431,6 +1432,25 @@ async fn a_text_explain_viewed_as_a_plan_keeps_its_options() {
     as_plan(&mut app, &mut rx, &format!("EXPLAIN SELECT x FROM {table}"), false).await;
     let p = plan(&app);
     assert!(!p.analyzed && p.nodes[0].cost.is_some());
+    // A view: its text is on the allowlist, the server's half is not (a view may hide what the
+    // planner folds). It asks; Enter keeps, nothing runs.
+    let view = format!("public.it_asplan_v_{tag}");
+    struct DropView(String, String);
+    impl Drop for DropView {
+        fn drop(&mut self) {
+            let _ = pg_clean::run_fresh(&self.0, &format!("DROP VIEW IF EXISTS {}", self.1));
+        }
+    }
+    let _view = DropView(url.clone(), view.clone());
+    pg_clean::run_fresh(&url, &format!("CREATE VIEW {view} AS SELECT x FROM {table}")).unwrap();
+    run_and_wait(&mut app, &mut rx, &format!("EXPLAIN SELECT * FROM {view}"), None).await;
+    app.focus = Focus::Results;
+    press(&mut app, 'P');
+    pump(&mut app, &mut rx, 10, |a| a.overlays.confirm().is_some()).await;
+    assert!(idle(&app, 0), "nothing runs before the answer");
+    app.handle_event(Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
+    assert!(app.overlays.confirm().is_none() && idle(&app, 0));
+    assert_eq!(app.tab().exec.view, ResultView::Rows, "still the text plan");
     // A write under ANALYZE runs again, and is rolled back again.
     as_plan(&mut app, &mut rx, &format!("EXPLAIN ANALYZE DELETE FROM {table} WHERE x = 2"), true).await;
     assert_eq!(plan(&app).nodes[0].op, "Delete");

@@ -10,9 +10,13 @@
 //! did (`ANALYZE`): a text the two read differently is refused, never run.
 //!
 //! Running it again may run more than the planner even without `ANALYZE`: the server evaluates
-//! an `EXECUTE`'s parameters to plan it. [`JsonExplain::evaluates`] is an allowlist: only a
-//! text both readings show to be planned only (no `ANALYZE`, no `EXECUTE`, a plain read to the
-//! parser that runs no code it cannot see) is free of it.
+//! an `EXECUTE`'s parameters to plan it, and the planner folds immutable and stable functions,
+//! also those a view, a user operator or an overload of a built-in name hides. So it is free of
+//! a question only on the allowlist of what the app may run again unasked
+//! ([`risk::repeat`](crate::sql::risk::repeat)): no `ANALYZE`, no `EXECUTE`, and the statement
+//! it wraps ([`JsonExplain::statement`]) a plain `SELECT` its text check takes. What only the
+//! server can tell (a view, a shadowed name) is asked of the server right before
+//! (`repeat::check_query`), as before a re-run for the next page.
 //!
 //! [`risk`]: crate::sql::risk
 
@@ -26,9 +30,12 @@ pub struct JsonExplain {
     /// It has `ANALYZE`: the statement runs again (a write is rolled back by the driver).
     pub analyze: bool,
     /// Running it again runs something beyond planning, or may: `ANALYZE`, an `EXECUTE` (its
-    /// parameters are evaluated to plan it), or what the parser cannot show to be a plain read.
-    /// Asked about first; only `ANALYZE` is rolled back.
+    /// parameters are evaluated to plan it), or a statement off the allowlist of
+    /// `risk::repeat`. Asked about first; only `ANALYZE` is rolled back. When it is `false`,
+    /// the server's half of that allowlist is still to be asked for [`JsonExplain::statement`].
     pub evaluates: bool,
+    /// The statement the `EXPLAIN` wraps, as written (a trailing `;` left out).
+    pub statement: String,
 }
 
 /// Why a text is not asked again for a JSON plan.
@@ -57,7 +64,8 @@ pub fn json(sql: &str) -> Result<JsonExplain, NotJson> {
     }
     let analyze = out.analyze || before == Explain::Analyze;
     let plain = risk.class == risk::Class::Read && risk.danger.is_none() && !risk.runs_code && !risk.writes;
-    Ok(JsonExplain { analyze, evaluates: out.evaluates || analyze || !plain, ..out })
+    let allowed = risk::repeat::repeatable(&out.statement).is_ok();
+    Ok(JsonExplain { analyze, evaluates: out.evaluates || analyze || !plain || !allowed, ..out })
 }
 
 /// [`json`] as the lexer reads `sql`, without the parser's check.
@@ -110,7 +118,7 @@ pub fn json_text(sql: &str) -> Result<JsonExplain, NotJson> {
             + sql[w.end..].chars().take_while(|c| crate::sql::lexer::is_space(*c)).map(char::len_utf8).sum::<usize>();
     }
     out.push_str(&sql[at..]);
-    Ok(JsonExplain { sql: out, analyze, evaluates: analyze || execute })
+    Ok(JsonExplain { sql: out, analyze, evaluates: analyze || execute, statement: statement(sql, &rest[i]) })
 }
 
 /// `EXPLAIN (option [value], …) statement` (`rest`: the tokens after `EXPLAIN`, from the `(`):
@@ -176,7 +184,12 @@ fn options(sql: &str, rest: &[Token]) -> Result<JsonExplain, NotJson> {
         at = end;
     }
     out.push_str(&sql[at..]);
-    Ok(JsonExplain { sql: out, analyze, evaluates: analyze })
+    Ok(JsonExplain { sql: out, analyze, evaluates: analyze, statement: statement(sql, &rest[close + 1]) })
+}
+
+/// The statement from its first token `first` on, without a trailing `;`.
+fn statement(sql: &str, first: &Token) -> String {
+    sql[first.start..].trim_end_matches(|c: char| c == ';' || crate::sql::lexer::is_space(c)).to_string()
 }
 
 /// An option's name as the server compares it: a word in lower case, a quoted name as it is.

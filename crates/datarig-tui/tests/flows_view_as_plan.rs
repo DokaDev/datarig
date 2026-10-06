@@ -102,6 +102,18 @@ fn said(h: &mut Harness, l: Label) {
     assert!(line.contains(l.text(Lang::En)), "{l:?}: {line}");
 }
 
+/// The server is asked the allowlist's question first (`CheckRepeat`): it answers that it has
+/// nothing against the statement.
+fn allowed(h: &mut Harness) {
+    let sent = h.sent();
+    let Some(DbCommand::CheckRepeat { id, .. }) =
+        sent.iter().find(|c| matches!(c, DbCommand::CheckRepeat { .. })).cloned()
+    else {
+        panic!("the server is asked first: {sent:?}")
+    };
+    h.db(DbEvent::RepeatChecked { id, result: Ok(()) });
+}
+
 fn status(h: &Harness) -> Option<Msg> {
     h.app.status.as_ref().map(|n| n.msg.clone())
 }
@@ -132,8 +144,10 @@ fn a_text_plan_offers_to_be_viewed_as_a_plan_and_opens_it() {
     remember_english("text_plan_hint_en_100x30", h.draw(W, H).backend().buffer());
     // Nothing ran by itself.
     assert!(runs(&mut h).is_empty());
-    // `P`: the same statement as JSON, its options kept; its plan opens.
+    // `P`: the same statement as JSON, its options kept, once the server allows it; its plan
+    // opens.
     h.keys("P");
+    allowed(&mut h);
     let (id, sql) = sent_one(&mut h);
     assert_eq!(sql, "EXPLAIN (VERBOSE, COSTS off, FORMAT JSON) SELECT * FROM t WHERE a > 1");
     assert!(h.app.overlays.confirm().is_none(), "a plain EXPLAIN does not ask");
@@ -184,6 +198,7 @@ fn the_leader_key_and_the_menu_view_it_as_a_plan_too() {
     let mut h = text_plan("EXPLAIN SELECT * FROM t;");
     h.app.focus = Focus::Editor;
     h.keys(" ep");
+    allowed(&mut h);
     assert_eq!(sent_one(&mut h).1, "EXPLAIN (FORMAT JSON) SELECT * FROM t");
     // The results' action menu lists it first among the pane's actions.
     let mut h = text_plan("EXPLAIN SELECT * FROM t;");
@@ -191,6 +206,7 @@ fn the_leader_key_and_the_menu_view_it_as_a_plan_too() {
     let label = Label::ActionResultsViewAsPlan.text(Lang::En);
     assert!(h.menu_labels().iter().any(|l| l == label), "{:?}", h.menu_labels());
     h.menu_pick(label);
+    allowed(&mut h);
     assert_eq!(sent_one(&mut h).1, "EXPLAIN (FORMAT JSON) SELECT * FROM t");
     // Another result's menu does not offer it.
     let mut h = Harness::connected(Lang::En);
@@ -295,13 +311,16 @@ fn a_read_only_profile_refuses_analyze_of_a_write_before_asking() {
     assert_eq!(h.overlay_kind(), None);
     assert!(runs(&mut h).is_empty());
     assert!(matches!(status(&h), Some(Msg::SafetyReadOnlyBlocked { .. })), "{:?}", status(&h));
-    // A plain EXPLAIN of a write only plans: it runs.
+    // A plain EXPLAIN of a write only plans, but it is off the allowlist of what runs again
+    // unasked: it asks, and runs on read-only.
     let mut cfg = cfg.clone();
     cfg.connections[0].policy = Some("ro".into());
     let mut h = Harness::with_config(&cfg, Lang::En);
     h.db(DbEvent::Connected);
     ran(&mut h, "EXPLAIN DELETE FROM t WHERE a = 1;", |id| text_page(id, TEXT_PLAN));
     h.keys("P");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Confirm));
+    h.keys("y");
     assert_eq!(sent_one(&mut h).1, "EXPLAIN (FORMAT JSON) DELETE FROM t WHERE a = 1");
 }
 
@@ -449,4 +468,55 @@ fn the_hint_follows_the_result_shown_from_run_to_run() {
     assert!(!h.screen(W, H).contains("view as plan"), "{}", h.screen(W, H));
     ran(&mut h, "EXPLAIN SELECT a FROM t;", |id| text_page(id, TEXT_PLAN));
     assert!(h.screen(W, H).contains(HINT));
+}
+
+#[test]
+fn in_insert_mode_the_hint_names_no_key_that_would_type() {
+    let mut h = text_plan("EXPLAIN SELECT * FROM t;");
+    h.app.focus = Focus::Editor;
+    h.keys("i");
+    let screen = h.screen(W, H);
+    assert!(!screen.contains("Space e p"), "{screen}");
+    assert!(screen.contains("text plan · Ctrl+K “view as plan”"), "{screen}");
+}
+
+#[test]
+fn a_plain_explain_runs_again_only_once_the_server_allows_it() {
+    use datarig_core::driver::DbError;
+    use datarig_core::sql::risk::repeat::NotRepeatable;
+    // The text is on the allowlist: the server is asked first (views, overloads), not the
+    // statement.
+    let check = |h: &mut Harness| -> u64 {
+        let sent = h.sent();
+        assert!(!sent.iter().any(|c| matches!(c, DbCommand::Execute { .. })), "nothing runs yet: {sent:?}");
+        let Some(DbCommand::CheckRepeat { id, sql }) =
+            sent.into_iter().find(|c| matches!(c, DbCommand::CheckRepeat { .. }))
+        else {
+            panic!("the server is asked first")
+        };
+        assert_eq!(sql, "SELECT * FROM t");
+        id
+    };
+    let mut h = text_plan("EXPLAIN SELECT * FROM t;");
+    h.keys("P");
+    let id = check(&mut h);
+    assert_eq!(h.overlay_kind(), None);
+    h.db(DbEvent::RepeatChecked { id, result: Ok(()) });
+    assert_eq!(sent_one(&mut h).1, "EXPLAIN (FORMAT JSON) SELECT * FROM t");
+    // The server says no (a view, a shadowed name): it asks, Enter keeps, y runs.
+    let mut h = text_plan("EXPLAIN SELECT * FROM t;");
+    h.keys("P");
+    let id = check(&mut h);
+    h.db(DbEvent::RepeatChecked { id, result: Err(DbError::NotRepeatable(NotRepeatable::NotATable("t".into()))) });
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Confirm));
+    assert!(h.screen(W, H).contains("Run this EXPLAIN again?"));
+    h.key(KeyCode::Enter);
+    assert!(runs(&mut h).is_empty());
+    // An answer for a result that changed since is dropped.
+    let mut h = text_plan("EXPLAIN SELECT * FROM t;");
+    h.keys("P");
+    let id = check(&mut h);
+    ran(&mut h, "SELECT a FROM t;", |q| text_page(q, &["1"]));
+    h.db(DbEvent::RepeatChecked { id, result: Ok(()) });
+    assert!(runs(&mut h).is_empty() && h.overlay_kind().is_none());
 }

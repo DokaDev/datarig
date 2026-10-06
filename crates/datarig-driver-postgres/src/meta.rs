@@ -203,6 +203,7 @@ pub(crate) async fn meta_loop(client: Client, mut link: Link, events: UnboundedS
                 DbCommand::Count { id, .. } => {
                     DbEvent::Counted { id, result: Err(DbError::NotSupported), snapshot: false }
                 }
+                DbCommand::CheckRepeat { id, .. } => DbEvent::RepeatChecked { id, result: Err(DbError::NotSupported) },
             }
         };
         let Ok(ev) = link.guard(None, request).await else { return };

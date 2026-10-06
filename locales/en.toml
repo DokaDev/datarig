@@ -1396,6 +1396,7 @@
 "plan.already_explain" = "This statement is an EXPLAIN already: {key} runs it (a JSON plan shows in the Plan tab)"
 "action.results.view_as_plan" = "View as plan: the text EXPLAIN again as JSON"
 "plan.as_plan.hint" = "text plan · {key} view as plan"
+"plan.as_plan.hint_commands" = "text plan · {key} “view as plan”"
 "plan.as_plan.not_explain" = "View as plan works on the result of a text EXPLAIN"
 "plan.as_plan.already_json" = "This EXPLAIN asks for JSON already: nothing to view differently"
 "plan.as_plan.several" = "Not run: the result's text holds more than one statement"
@@ -1409,7 +1410,7 @@
 "plan.as_plan.batch" = "Not run: this result came with other statements, which are not run again; run the EXPLAIN on its own"
 "plan.as_plan.show_first" = "View as plan acts on the shown text plan: show it first ({key})"
 "plan.as_plan.again_title" = "Run this EXPLAIN again?"
-"plan.as_plan.again_text" = "Viewing this plan as a plan asks the server again ({sql}), which evaluates again what it needs to plan the statement (an EXECUTE's parameters). That is not rolled back."
+"plan.as_plan.again_text" = "Viewing this plan as a plan asks the server again ({sql}). Planning it may evaluate again what the statement calls (an EXECUTE's parameters, functions a view, an operator or an overload hides that the planner folds); that is not rolled back."
 "plan.copied" = { one = "Copied the plan as text ({count} line, {method})", other = "Copied the plan as text ({count} lines, {method})" }
 "plan.copied_json" = { one = "Copied the plan's JSON ({count} line, {method})", other = "Copied the plan's JSON ({count} lines, {method})" }
 "results.tab.plan" = "Plan"

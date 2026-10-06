@@ -114,7 +114,10 @@ fn a_single_result_has_no_tabs_to_move_between() {
         outcome: datarig_core::driver::Outcome::Command("SET".into()),
         elapsed: Duration::from_millis(1),
     });
+    // The results pane has the focus, where the keys would show.
+    h.app.focus = Focus::Results;
     let screen = h.screen(120, 30);
+    assert!(h.app.layout.strip.height == 1, "the strip is shown (a run of several):\n{screen}");
     assert!(!screen.contains("H/L"), "{screen}");
 }
 

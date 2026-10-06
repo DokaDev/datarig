@@ -3172,6 +3172,56 @@ async fn a_count_in_the_users_block_keeps_the_block() {
     assert!(!events.iter().any(|e| matches!(e, DbEvent::TxOpen(true))), "{events:?}");
 }
 
+impl Conn {
+    /// Send `CheckRepeat` and wait for its answer (and nothing but one).
+    async fn check_repeat(&mut self, id: u64, sql: &str) -> Result<(), DbError> {
+        self.session.send(DbCommand::CheckRepeat { id, sql: sql.to_string() });
+        let DbEvent::RepeatChecked { id: got, result } =
+            self.wait(|e| matches!(e, DbEvent::RepeatChecked { .. }), 30).await
+        else {
+            unreachable!()
+        };
+        assert_eq!(got, id);
+        let more = self.drain(150).await;
+        assert!(!more.iter().any(|e| matches!(e, DbEvent::RepeatChecked { .. })), "one answer: {more:?}");
+        result
+    }
+}
+
+/// The allowlist's question alone: a view is refused by the server's half and text off the
+/// allowlist is never sent, outside a transaction, inside the user's block (which it leaves
+/// as it was, not aborted) and while a portal pages (which pages on).
+#[tokio::test(flavor = "multi_thread")]
+async fn the_allowlist_question_alone_changes_nothing() {
+    use datarig_core::sql::risk::repeat::NotRepeatable;
+    let Some(url) = pg_url("the_allowlist_question_alone_changes_nothing") else { return };
+    let mut c = Conn::open(&url, SessionRole::Query).await;
+    let _ = c.run(1, "CREATE TEMP TABLE zz_check (x int)").await;
+    let _ = c.run(2, "CREATE TEMP VIEW zz_check_v AS SELECT x FROM zz_check").await;
+    let view = |r: Result<(), DbError>| matches!(r, Err(DbError::NotRepeatable(NotRepeatable::NotATable(_))));
+    assert_eq!(c.check_repeat(10, "SELECT * FROM zz_check").await, Ok(()));
+    assert!(view(c.check_repeat(11, "SELECT * FROM zz_check_v").await));
+    assert!(matches!(c.check_repeat(12, "DELETE FROM zz_check").await, Err(DbError::NotRepeatable(_))));
+    // Inside the user's block: its changes stay, and it is not aborted.
+    let _ = c.run(3, "BEGIN").await;
+    let _ = c.run(4, "INSERT INTO zz_check VALUES (1), (2)").await;
+    assert_eq!(c.check_repeat(13, "SELECT * FROM zz_check").await, Ok(()));
+    assert!(view(c.check_repeat(14, "SELECT * FROM zz_check_v").await));
+    let DbEvent::Page { rows, .. } = c.run(5, "SELECT count(*) FROM zz_check").await else { panic!() };
+    assert_eq!(rows[0][0].as_deref(), Some("2"));
+    let _ = c.run(6, "ROLLBACK").await;
+    // While a portal pages.
+    let sql = "SELECT g FROM generate_series(1, 2345) g ORDER BY g";
+    c.session.send(DbCommand::Execute { id: 7, statements: vec![sql.into()], paging: PagingMode::Hold });
+    let DbEvent::Page { more: true, .. } = c.result(7).await else { panic!("a page with more") };
+    assert!(view(c.check_repeat(15, "SELECT * FROM zz_check_v").await));
+    c.session.send(DbCommand::FetchMore { id: 7 });
+    let DbEvent::Page { columns: None, rows, more: true, .. } = c.result(7).await else { panic!("the next page") };
+    assert_eq!(rows[0][0].as_deref(), Some("501"));
+    c.session.send(DbCommand::ClosePortal { id: 7 });
+    c.wait(|e| matches!(e, DbEvent::TxOpen(false)), 10).await;
+}
+
 /// On a read-only session a count runs in a read-only transaction.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_count_on_a_read_only_session_is_read_only() {

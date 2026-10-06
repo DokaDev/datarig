@@ -218,8 +218,11 @@ Everything below works today, with PostgreSQL.
   read-only profile refuses it); an `EXPLAIN (FORMAT JSON …)` you type yourself shows the same
   way. A text `EXPLAIN` you ran stays rows, with a line under them: `P` in the results (or
   `Space e p`, or the action menu) plans that same statement again with `FORMAT JSON`, keeping
-  its other options, and opens its plan; never by itself. With `ANALYZE` (the statement runs
-  again, rolled back) or an `EXECUTE` (its parameters are evaluated again) it asks first. It is
+  its other options, and opens its plan; never by itself. It goes without a question only when
+  the statement it wraps is a plain `SELECT` the app would also run again for a next page (the
+  same allowlist, its server check included: no view, no user operator or overloaded name);
+  anything else asks first, saying what runs again (`ANALYZE` runs the statement, rolled back;
+  an `EXECUTE`'s parameters or what a view hides are evaluated to plan it, not rolled back). It is
   refused when the tab ran other statements since, when the result came with other statements,
   or when the tab's connection, database or session changed: the plan could differ there. The Plan tab shows the plan as a tree with each node's estimated and actual rows (and
   loops), self and total time, a bar of its share of the whole colored by heat, and its

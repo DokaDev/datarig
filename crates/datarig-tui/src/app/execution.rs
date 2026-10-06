@@ -382,6 +382,7 @@ impl App {
             | DbEvent::TxAborted(_)
             | DbEvent::Block(_)
             | DbEvent::Counted { .. }
+            | DbEvent::RepeatChecked { .. }
             | DbEvent::Started { .. }
             | DbEvent::StepRows { .. }
             | DbEvent::Finished { .. } => EventTarget::Tab(self.tab().id),
@@ -659,6 +660,7 @@ impl App {
             | DbEvent::TxAborted(_)
             | DbEvent::Block(_)
             | DbEvent::Counted { .. }
+            | DbEvent::RepeatChecked { .. }
             | DbEvent::Started { .. }
             | DbEvent::StepRows { .. }
             | DbEvent::Finished { .. } => {}
@@ -852,6 +854,8 @@ impl App {
             DbEvent::Counted { id: qid, result, snapshot } => {
                 return self.on_counted(id, qid, result, snapshot);
             }
+            // The server's half of the allowlist, for a text plan to view as a plan.
+            DbEvent::RepeatChecked { id: check, result } => return self.as_plan_checked(id, check, result),
             DbEvent::Lost { .. } => {
                 t.exec.session = None;
                 t.exec.unsure();

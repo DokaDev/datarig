@@ -150,8 +150,8 @@ fn what_runs_again_beyond_planning_is_said() {
     ] {
         assert!(json(sql).unwrap_or_else(|e| panic!("{sql}: {e:?}")).evaluates, "{sql}");
     }
-    // Planning only: nothing runs again.
-    for sql in ["EXPLAIN SELECT * FROM t WHERE a > 1", "EXPLAIN (COSTS off) DELETE FROM t WHERE a = 1"] {
+    // Planning only a plain SELECT: nothing runs again (the server still has its say).
+    for sql in ["EXPLAIN SELECT * FROM t WHERE a > 1", "EXPLAIN (COSTS off) SELECT a FROM t ORDER BY a"] {
         assert!(!json(sql).unwrap().evaluates, "{sql}");
     }
 }
@@ -179,4 +179,24 @@ fn a_false_analyze_is_read_in_any_case_and_quoting() {
     ] {
         assert!(!json_text(sql).unwrap().analyze, "{sql}");
     }
+}
+
+#[test]
+fn only_what_the_repeat_allowlist_takes_is_free_of_the_question() {
+    // A user operator, a user type, a volatile call or anything but a plain SELECT is off the
+    // allowlist of what may run again: asked about.
+    for sql in [
+        "EXPLAIN SELECT 1 === 1",
+        "EXPLAIN SELECT a::my_type FROM t",
+        "EXPLAIN (COSTS off) DELETE FROM t WHERE a = 1",
+        "EXPLAIN SELECT * FROM t FOR UPDATE",
+    ] {
+        assert!(json(sql).unwrap_or_else(|e| panic!("{sql}: {e:?}")).evaluates, "{sql}");
+    }
+    // A plain SELECT on it: what the server must still confirm (views, overloads) goes with it.
+    let j = json("EXPLAIN (VERBOSE) SELECT * FROM t WHERE a > 1;").unwrap();
+    assert!(!j.evaluates);
+    assert_eq!(j.statement, "SELECT * FROM t WHERE a > 1");
+    let j = json("explain analyze verbose /* c */ select 1").unwrap();
+    assert_eq!(j.statement, "select 1");
 }

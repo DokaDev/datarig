@@ -425,6 +425,15 @@ pub(crate) async fn query_loop(
                 }
                 Err(Closed) => Stop::Closed,
             },
+            Next::Command(DbCommand::CheckRepeat { id, sql }) => {
+                match check_repeat(&client, &mut link, &env, &mut tx, &sql).await {
+                    Ok(result) => {
+                        let _ = events.send(DbEvent::RepeatChecked { id, result });
+                        continue;
+                    }
+                    Err(Closed) => Stop::Closed,
+                }
+            }
             // A fetch for a result whose portal is gone (complete, failed or closed): answered
             // with an empty last page, so the UI never waits for it.
             Next::Command(DbCommand::FetchMore { id }) => {
@@ -1604,6 +1613,11 @@ async fn portal<'a>(
                 let (result, snapshot) = halt!(counted_in(&txn, link, env, &sql).await, None);
                 let _ = env.events.send(DbEvent::Counted { id: cid, result, snapshot });
             }
+            // So is the allowlist's question, which leaves the portal paging too.
+            Next::Command(DbCommand::CheckRepeat { id: cid, sql }) => {
+                let result = halt!(checked_repeat_in(&txn, link, env, &sql).await, None);
+                let _ = env.events.send(DbEvent::RepeatChecked { id: cid, result });
+            }
             Next::Command(DbCommand::FetchMore { .. } | DbCommand::ClosePortal { .. }) => {}
             Next::Command(other) => {
                 link.requeue(other);
@@ -1784,6 +1798,52 @@ async fn counted_in(
     };
     let _ = link.guard(None, txn.batch_execute(COUNT_UNDO)).await?;
     Ok((Err(counted), false))
+}
+
+/// The allowlist's question about `sql` alone (`DbCommand::CheckRepeat`) while no portal is
+/// open: inside the user's block under a savepoint rolled back to after it (so a failure does
+/// not abort the block), otherwise as a query of its own. One round trip.
+async fn check_repeat(
+    client: &Client,
+    link: &mut Link,
+    env: &Env<'_>,
+    tx: &mut Tx,
+    sql: &str,
+) -> Result<Result<(), DbError>, Closed> {
+    let check = match check_text(sql) {
+        Ok(check) => check,
+        Err(why) => return Ok(Err(why)),
+    };
+    if tx.block {
+        let first = tx.take_first_text(env);
+        let asked = format!("{first}SAVEPOINT {COUNT_SAVEPOINT}; {check}");
+        let (_, answer) = checked(link, env, client.simple_query(&asked)).await?;
+        let undone = link.guard(None, client.batch_execute(COUNT_UNDO)).await?;
+        if answer.is_err() || undone.is_err() {
+            probe(client, link, env, tx).await?;
+        }
+        return Ok(answer);
+    }
+    let path = env.path_text();
+    Ok(checked(link, env, client.simple_query(&format!("{path}{check}"))).await?.1)
+}
+
+/// [`check_repeat`] while a portal is open, in its transaction under a savepoint: the portal
+/// goes on paging after it.
+async fn checked_repeat_in(
+    txn: &Transaction<'_>,
+    link: &mut Link,
+    env: &Env<'_>,
+    sql: &str,
+) -> Result<Result<(), DbError>, Closed> {
+    let check = match check_text(sql) {
+        Ok(check) => check,
+        Err(why) => return Ok(Err(why)),
+    };
+    let asked = format!("SAVEPOINT {COUNT_SAVEPOINT}; {check}");
+    let (_, answer) = checked(link, env, txn.simple_query(&asked)).await?;
+    let _ = link.guard(None, txn.batch_execute(COUNT_UNDO)).await?;
+    Ok(answer)
 }
 
 /// Asked with the allowlist's question before a count in a transaction: its isolation, so the
