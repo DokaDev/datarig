@@ -55,6 +55,7 @@ pub mod safety;
 mod script_ops;
 pub mod script_tree;
 pub mod settings;
+pub mod tab_list;
 mod tab_ops;
 pub mod tabs;
 pub mod themes;
@@ -1227,8 +1228,17 @@ impl App {
     /// The database tab `t` works in when it is not its profile's own: its
     /// catalog, keys and schemas come from a metadata session of their own.
     pub fn other_database<'a>(&self, t: &'a Tab) -> Option<&'a str> {
-        let db = t.context.database.as_deref()?;
-        let own = t.profile.and_then(|p| self.profile(p)).map(|c| c.endpoint().1);
+        self.database_other_than_own(t.profile, &t.context)
+    }
+
+    /// The database of `context` when it is not profile `profile`'s own.
+    pub fn database_other_than_own<'a>(
+        &self,
+        profile: Option<ProfileId>,
+        context: &'a datarig_core::driver::SessionContext,
+    ) -> Option<&'a str> {
+        let db = context.database.as_deref()?;
+        let own = profile.and_then(|p| self.profile(p)).map(|c| c.endpoint().1);
         (own.as_deref() != Some(db)).then_some(db)
     }
 
@@ -1309,6 +1319,7 @@ impl App {
             Some(Overlay::ProfileForm(_)) => Ctx::ProfileForm,
             Some(Overlay::Settings(_)) => Ctx::Settings,
             Some(Overlay::QuickConnect(_)) => Ctx::QuickConnect,
+            Some(Overlay::TabList(_)) => Ctx::TabList,
             Some(Overlay::NameInput(_)) => Ctx::NameInput,
             Some(Overlay::ScriptTree(t)) if t.focus == script_tree::TreeFocus::Name => Ctx::ScriptTreeName,
             Some(Overlay::ScriptTree(_)) => Ctx::ScriptTree,

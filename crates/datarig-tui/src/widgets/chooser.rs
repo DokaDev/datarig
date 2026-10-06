@@ -48,7 +48,7 @@ pub(crate) fn draw_chooser(app: &mut App, area: Rect, buf: &mut Buffer) -> Optio
         let bg = if row == c.selected {
             th.selection
         } else if c.hover == Some(row) {
-            Style::new().bg(th.surface_alt)
+            crate::widgets::hover_style()
         } else {
             Style::new().bg(th.surface)
         };

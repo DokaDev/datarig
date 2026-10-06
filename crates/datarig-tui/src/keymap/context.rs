@@ -20,7 +20,7 @@
 //! │  ├─ explorer.filter       [text]
 //! │  └─ overlay.cell_viewer
 //! └─ overlay.*              (which-key, help, help filter, command line, quick connect,
-//!                            profile form, settings, chooser, chooser filter, name input,
+//!                            tab list, profile form, settings, chooser, chooser filter, name input,
 //!                            saved-queries tree and its name field, action menu, password,
 //!                            confirm, run confirm, completion)
 //! ```
@@ -45,6 +45,7 @@ pub enum Ctx {
     Ddl,
     Commands,
     QuickConnect,
+    TabList,
     ProfileForm,
     Settings,
     Chooser,
@@ -66,7 +67,7 @@ pub enum Ctx {
 }
 
 impl Ctx {
-    pub const ALL: [Ctx; 34] = [
+    pub const ALL: [Ctx; 35] = [
         Ctx::Root,
         Ctx::Workspace,
         Ctx::Nav,
@@ -83,6 +84,7 @@ impl Ctx {
         Ctx::Ddl,
         Ctx::Commands,
         Ctx::QuickConnect,
+        Ctx::TabList,
         Ctx::ProfileForm,
         Ctx::Settings,
         Ctx::Chooser,
@@ -122,6 +124,7 @@ impl Ctx {
             Ctx::Ddl => "editor.ddl",
             Ctx::Commands => "overlay.commands",
             Ctx::QuickConnect => "overlay.quick_connect",
+            Ctx::TabList => "overlay.tab_list",
             Ctx::Chooser => "overlay.chooser",
             Ctx::ChooserFilter => "overlay.chooser.filter",
             Ctx::NameInput => "overlay.name_input",
@@ -175,6 +178,7 @@ impl Ctx {
                 | Ctx::ExplorerFilter
                 | Ctx::Commands
                 | Ctx::QuickConnect
+                | Ctx::TabList
                 | Ctx::ProfileForm
                 | Ctx::ChooserFilter
                 | Ctx::NameInput
@@ -219,6 +223,9 @@ impl Ctx {
             }
             Ctx::QuickConnect => {
                 "Quick connect: a fuzzy list of the connection profiles; a click picks a row (on `▸` it lists the databases), the wheel selects, the pointer only highlights."
+            }
+            Ctx::TabList => {
+                "The tab list (`Space t t`, `:tabs`, `:ls`, `:buffers`): the open tabs, the most recently active first, then the tabs closed in this run. Typing filters by name, connection, database, schema, kind or number; the arrows, `Ctrl+N`/`Ctrl+P` and `Tab` move, `Enter` goes to the tab (brings a closed one back), `Ctrl+D` closes the selected tab (asking as `Ctrl+W` does), `Esc` closes the list (`Backspace` on an empty filter does not). A click picks an entry, the wheel selects, the pointer only highlights."
             }
             Ctx::Chooser => {
                 "A list to pick from: a profile's color, icon or folder; a click picks a row, the wheel selects, the pointer only highlights."
@@ -278,6 +285,7 @@ impl Ctx {
             Ctx::Ddl => Label::KeyctxEditorDdl,
             Ctx::Commands => Label::KeyctxOverlayCommands,
             Ctx::QuickConnect => Label::KeyctxOverlayQuickConnect,
+            Ctx::TabList => Label::KeyctxOverlayTabList,
             Ctx::Chooser => Label::KeyctxOverlayChooser,
             Ctx::ChooserFilter => Label::KeyctxOverlayChooserFilter,
             Ctx::NameInput => Label::KeyctxOverlayNameInput,

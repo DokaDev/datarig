@@ -709,6 +709,11 @@ pub struct ClosedTab {
     pub ddl: Option<datarig_core::driver::ddl::DdlObject>,
     pub pane: PaneLayout,
     pub context: SessionContext,
+    /// A console's number as its tab showed it (0: not a console): held while it is on the
+    /// closed list, so it comes back with it (should another tab have it, a free one).
+    pub console_no: u32,
+    /// Which closed tab this is, for the life of the process (the tab list picks one by it).
+    pub serial: u64,
 }
 
 /// The open tabs in display order. There may be none (the workspace then shows its empty
@@ -726,6 +731,8 @@ pub struct TabManager {
     closed: VecDeque<ClosedTab>,
     /// The tab each profile used last.
     last_used: HashMap<ProfileId, TabId>,
+    /// The tabs made active, most recent first (this run only; see [`TabManager::by_recent`]).
+    recent: Vec<TabId>,
 }
 
 impl Default for TabManager {
@@ -740,6 +747,7 @@ impl Default for TabManager {
             generation: 0,
             closed: VecDeque::new(),
             last_used: HashMap::new(),
+            recent: Vec::new(),
         }
     }
 }
@@ -789,6 +797,9 @@ impl TabManager {
         if let Some(p) = t.profile {
             self.last_used.insert(p, t.id);
         }
+        let id = t.id;
+        self.recent.retain(|r| *r != id);
+        self.recent.insert(0, id);
         self.active = index;
         true
     }
@@ -808,6 +819,8 @@ impl TabManager {
         let index = self.position(id)?;
         let tab = self.tabs.remove(index);
         self.last_used.retain(|_, t| *t != id);
+        self.recent.retain(|r| *r != id);
+        let serial = self.new_id().0;
         self.closed.push_back(ClosedTab {
             kind: tab.kind,
             script: tab.doc.script.clone(),
@@ -822,6 +835,8 @@ impl TabManager {
             ddl: tab.doc.ddl.as_ref().map(|d| d.object.clone()),
             pane: tab.pane,
             context: tab.context.clone(),
+            console_no: tab.doc.console_no,
+            serial,
         });
         while self.closed.len() > REOPEN_LIMIT {
             self.closed.pop_front();
@@ -842,6 +857,33 @@ impl TabManager {
     /// The most recently closed tab, taken off the list (see [`TabManager::reopen`]).
     pub fn take_closed(&mut self) -> Option<ClosedTab> {
         self.closed.pop_back()
+    }
+
+    /// Closed tab `serial`, taken off the list.
+    pub fn take_closed_serial(&mut self, serial: u64) -> Option<ClosedTab> {
+        let i = self.closed.iter().position(|c| c.serial == serial)?;
+        self.closed.remove(i)
+    }
+
+    /// The closed tabs, newest first.
+    pub fn closed(&self) -> impl Iterator<Item = &ClosedTab> {
+        self.closed.iter().rev()
+    }
+
+    /// The open tabs by when they were last active: the active one, the ones made active
+    /// before it from the most recent, then the ones not made active in this run in the tab
+    /// bar's order.
+    pub fn by_recent(&self) -> Vec<TabId> {
+        let mut order: Vec<TabId> = Vec::with_capacity(self.tabs.len());
+        if !self.tabs.is_empty() {
+            order.push(self.active().id);
+        }
+        for id in self.recent.iter().chain(self.tabs.iter().map(|t| &t.id)) {
+            if !order.contains(id) && self.get(*id).is_some() {
+                order.push(*id);
+            }
+        }
+        order
     }
 
     /// The most recently closed tab (still on the list).
@@ -867,7 +909,12 @@ impl TabManager {
         editor.row = c.cursor.0;
         editor.col = c.cursor.1;
         let id = self.insert(c.index, c.kind, c.profile, editor);
+        // A console keeps its number unless another tab took it meanwhile.
+        let taken = self.tabs.iter().any(|t| t.id != id && t.doc.console_no == c.console_no);
         if let Some(t) = self.get_mut(id) {
+            if t.kind == TabKind::Console && c.console_no != 0 && !taken {
+                t.doc.console_no = c.console_no;
+            }
             t.doc.console_id = c.console_id;
             t.doc.script = c.script;
             t.doc.kept_profile = c.kept_profile;
@@ -888,9 +935,13 @@ impl TabManager {
         id
     }
 
-    /// The lowest console number no open tab has.
+    /// The lowest console number no open tab and no console on the closed list has.
     pub fn free_console_no(&self) -> u32 {
-        (1..).find(|n| !self.tabs.iter().any(|t| t.doc.console_no == *n)).unwrap_or(1)
+        let held = |n: u32| {
+            self.tabs.iter().any(|t| t.doc.console_no == n)
+                || self.closed.iter().any(|c| c.kind == TabKind::Console && c.console_no == n)
+        };
+        (1..).find(|n| !held(*n)).unwrap_or(1)
     }
 
     /// Tab `id` became a console (a saved query whose file went away): it gets a number.

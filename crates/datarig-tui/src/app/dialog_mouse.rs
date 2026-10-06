@@ -60,6 +60,7 @@ impl App {
             OverlayKind::NameInput => self.name_mouse(m),
             OverlayKind::Chooser => self.chooser_mouse(m),
             OverlayKind::QuickConnect => self.quick_mouse(m),
+            OverlayKind::TabList => self.tab_list_mouse(m),
             OverlayKind::Settings => self.settings_mouse(m),
             OverlayKind::Commands => self.command_mouse(m),
             OverlayKind::CellViewer | OverlayKind::WhichKey | OverlayKind::Busy => {}
@@ -82,6 +83,9 @@ impl App {
         }
         if let Some(q) = self.overlays.quick_mut() {
             q.press.disarm();
+        }
+        if let Some(l) = self.overlays.tab_list_mut() {
+            l.press.disarm();
         }
         if let Some(c) = self.overlays.command_line_mut() {
             c.press.disarm();
@@ -106,6 +110,7 @@ impl App {
                 let h = row_at(q.list, q.scroll, q.items.len(), x, y).filter(|i| *i != q.selected);
                 std::mem::replace(&mut q.hover, h) != h
             }
+            Some(OverlayKind::TabList) => self.tab_list_hover(m),
             Some(OverlayKind::Settings) => {
                 let Some(s) = self.overlays.settings_mut() else { return false };
                 let h = s.rows.iter().find(|r| r.line.contains(Position::new(x, y))).map(|r| r.row);

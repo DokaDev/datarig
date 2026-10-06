@@ -71,7 +71,7 @@ pub(crate) fn draw_settings(app: &mut App, area: Rect, buf: &mut Buffer) {
             let bg = if on {
                 th.selection
             } else if screen.hover == Some(row) {
-                Style::new().bg(th.surface_alt)
+                crate::widgets::hover_style()
             } else {
                 Style::new().bg(th.surface)
             };

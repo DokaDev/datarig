@@ -141,3 +141,41 @@ fn generations_are_never_reused() {
     let b = m.next_generation();
     assert!(b > a);
 }
+
+#[test]
+fn tabs_by_recent_use_put_the_active_one_first_and_restored_ones_in_bar_order() {
+    let mut m = TabManager::default();
+    // Restored tabs are not made active one by one: the bar's order is the seed.
+    let ids: Vec<TabId> = ["a", "b", "c", "d"]
+        .iter()
+        .map(|t| m.insert_tab(usize::MAX, Tab::new(TabId(0), TabKind::Console, None, ed(t))))
+        .collect();
+    m.activate(1);
+    assert_eq!(m.by_recent(), [ids[1], ids[0], ids[2], ids[3]]);
+    m.activate(3);
+    m.cycle(1); // wraps to the first
+    assert_eq!(m.by_recent(), [ids[0], ids[3], ids[1], ids[2]]);
+    // Closing the active tab: its neighbour is active, the closed one is gone.
+    m.close(ids[0]);
+    assert_eq!(m.active().id, ids[1]);
+    assert_eq!(m.by_recent(), [ids[1], ids[3], ids[2]]);
+    // A tab that comes back is active.
+    let back = m.reopen().unwrap();
+    assert_eq!(m.by_recent(), [back, ids[1], ids[3], ids[2]]);
+    assert_eq!(m.active().doc.console_no, 1, "a console comes back with its number");
+    // The closed tabs, newest first, each found by its serial.
+    m.close(ids[2]);
+    m.close(ids[3]);
+    let closed: Vec<u64> = m.closed().map(|c| c.serial).collect();
+    assert_eq!(closed.len(), 2);
+    let older = m.take_closed_serial(closed[1]).unwrap();
+    assert_eq!(older.text, "c");
+    assert_eq!(m.closed().map(|c| c.text.clone()).collect::<Vec<_>>(), ["d"]);
+    assert!(m.take_closed_serial(closed[1]).is_none(), "taken once");
+    // A new console skips the numbers closed consoles hold (4, "d"'s); "c"'s 3 was given back
+    // when it left the list, so the new one takes it and "c" gets the lowest free one.
+    let new = m.open(TabKind::Console, None, ed("e"));
+    assert_eq!(m.get(new).unwrap().doc.console_no, 3);
+    let back = m.reopen_closed(older);
+    assert_eq!(m.get(back).unwrap().doc.console_no, 5);
+}

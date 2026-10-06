@@ -110,6 +110,9 @@ impl App {
         }
         if let Some(t) = self.tabs.get_mut(tab) {
             t.kind = TabKind::Script;
+            // A saved query has no console number: it is free for the next console (one is
+            // given again if the query turns back into a console).
+            t.doc.console_no = 0;
             t.doc.script = Some(path.clone());
             t.doc.saved = text;
             t.doc.written = true;
@@ -496,6 +499,8 @@ impl App {
                 t.doc.saved = t.editor.text();
                 t.doc.written = true;
             }
+            // A console has a number (one opened as a saved query never had one).
+            self.tabs.number_console(id);
             self.close_tab(id);
         }
         let rows = self.explorer_rows();

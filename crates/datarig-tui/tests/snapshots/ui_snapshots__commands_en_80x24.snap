@@ -20,7 +20,7 @@ expression: backend
 "│         │  :wq, :x [<name>]           Save, t…  Ctrl+S / Space s s │         │"
 "│         │  :tabnew                    New con…  Ctrl+T / Space t n │         │"
 "│         │  :tabclose                  Close t…  Ctrl+W / Space t c │llar, 'it│"
-"│         │  :recover                   Bring back a closed console… │         │"
+"│         │  :tabs, :ls, :buffers       List tabs          Space t t │         │"
 "│         ╰─────────────────── Tab/↑↓ select · Enter run · Esc close ╯         │"
 "│                      ││                                                      │"
 "│                      ││                                                      │"

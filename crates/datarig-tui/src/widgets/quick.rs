@@ -102,7 +102,7 @@ pub(crate) fn draw_quick_connect(app: &mut App, area: Rect, buf: &mut Buffer) ->
         let bg = if row == selected {
             th.selection
         } else if hover == Some(row) {
-            Style::new().bg(th.surface_alt)
+            crate::widgets::hover_style()
         } else {
             Style::new().bg(th.surface)
         };

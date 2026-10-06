@@ -147,6 +147,7 @@ impl App {
             Action::NewTab => self.new_tab(),
             Action::CloseTab => self.request_close_tab(),
             Action::ReopenTab => self.reopen_tab(),
+            Action::TabList => self.open_tab_list(),
             Action::NextTab => self.switch_tab(|t| {
                 t.cycle(1);
                 true

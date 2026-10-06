@@ -104,6 +104,8 @@ pub enum Action {
     CloseTab,
     /// Bring the most recently closed tab back.
     ReopenTab,
+    /// The list of the open and recently closed tabs.
+    TabList,
     NextTab,
     PrevTab,
     /// Tab 1..9.
@@ -297,6 +299,11 @@ fn drawn(a: &App) -> bool {
 /// There is a tab and the tab bar is drawn.
 fn tab_drawn(a: &App) -> bool {
     has_tab(a) && drawn(a)
+}
+
+/// The tab list can open: there are profiles and the panes are drawn.
+fn tab_list(a: &App) -> bool {
+    in_workspace(a) && drawn(a)
 }
 
 /// The keyboard help would open below a password prompt, so not while one is open.
@@ -525,6 +532,7 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::CloseTab, "tab.close", Label::ActionTabClose, has_tab),
     act(Action::TabMenu, "tab.menu", Label::ActionTabMenu, tab_drawn),
     act(Action::ReopenTab, "tab.reopen_closed", Label::ActionTabReopenClosed, in_workspace),
+    act(Action::TabList, "tab.list", Label::ActionTabList, tab_list),
     mv(Action::NextTab, "tab.next", Label::ActionTabNext, has_tab),
     mv(Action::PrevTab, "tab.prev", Label::ActionTabPrev, has_tab),
     act(Action::GotoTab(1), "tab.goto.1", Label::ActionTabGoto1, has_tab),

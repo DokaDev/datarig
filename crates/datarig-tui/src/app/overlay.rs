@@ -1,6 +1,6 @@
 //! Dialogs shown on top of the workspace, kept in one stack. The last entry has the keyboard
 //! and is drawn last. Entries are kept in a fixed rank order (cell viewer < profile form < settings <
-//! keyboard help < which-key < quick connect < context menu < saved-queries tree < name input <
+//! keyboard help < which-key < quick connect < tab list < context menu < saved-queries tree < name input <
 //! chooser <
 //! confirmation < run confirmation < busy notice < password prompt < command line), so a dialog that opens later but ranks lower —
 //! e.g. a password prompt raised by a connection event while the command line is open — goes
@@ -250,6 +250,8 @@ pub enum Overlay {
     WhichKey(WhichKey),
     /// Fuzzy profile switcher (`Ctrl+O`).
     QuickConnect(QuickConnect),
+    /// The open and recently closed tabs (`Space t t`, `:tabs`).
+    TabList(super::tab_list::TabList),
     /// A right-click menu: the explorer's actions for a node, or the result grid's.
     ContextMenu(ContextMenu),
     /// The folder tree of the saved queries: "save as" and "open".
@@ -280,6 +282,7 @@ pub enum OverlayKind {
     Help,
     WhichKey,
     QuickConnect,
+    TabList,
     ContextMenu,
     ScriptTree,
     NameInput,
@@ -301,6 +304,7 @@ impl Overlay {
             Overlay::Help(_) => OverlayKind::Help,
             Overlay::WhichKey(_) => OverlayKind::WhichKey,
             Overlay::QuickConnect(_) => OverlayKind::QuickConnect,
+            Overlay::TabList(_) => OverlayKind::TabList,
             Overlay::ContextMenu(_) => OverlayKind::ContextMenu,
             Overlay::ScriptTree(_) => OverlayKind::ScriptTree,
             Overlay::NameInput(_) => OverlayKind::NameInput,
@@ -360,6 +364,7 @@ impl Overlays {
             Some(Overlay::ProfileForm(f)) => f.press = Press::default(),
             Some(Overlay::Chooser(c)) => c.press = Press::default(),
             Some(Overlay::QuickConnect(q)) => q.press = Press::default(),
+            Some(Overlay::TabList(l)) => l.press = Press::default(),
             Some(Overlay::Commands(c)) => c.press = Press::default(),
             _ => {}
         }
@@ -432,6 +437,14 @@ impl Overlays {
 
     pub fn quick_mut(&mut self) -> Option<&mut QuickConnect> {
         self.0.iter_mut().find_map(|o| if let Overlay::QuickConnect(q) = o { Some(q) } else { None })
+    }
+
+    pub fn tab_list(&self) -> Option<&super::tab_list::TabList> {
+        self.0.iter().find_map(|o| if let Overlay::TabList(l) = o { Some(l) } else { None })
+    }
+
+    pub fn tab_list_mut(&mut self) -> Option<&mut super::tab_list::TabList> {
+        self.0.iter_mut().find_map(|o| if let Overlay::TabList(l) = o { Some(l) } else { None })
     }
 
     pub fn prompt(&self) -> Option<&PasswordPrompt> {

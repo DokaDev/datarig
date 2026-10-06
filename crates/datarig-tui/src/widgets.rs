@@ -23,6 +23,7 @@ pub(crate) mod quick;
 pub(crate) mod script_tree;
 pub(crate) mod settings;
 pub(crate) mod statusbar;
+pub(crate) mod tab_list;
 
 use crate::text::{clip, width};
 use crate::theme;
@@ -99,6 +100,18 @@ pub(crate) fn put(buf: &mut Buffer, x: u16, y: u16, text: &str, w: usize, style:
     let t = clip(text, w);
     buf.set_stringn(x, y, &t, w, style);
     width(&t) as u16
+}
+
+/// A list row under the pointer (not the selected one): the theme's alternate surface, or
+/// underlined where that is the surface itself (the terminal theme), which would draw nothing.
+/// How far the alternate surface stands out is the theme's (faint on some light and dark ones).
+pub(crate) fn hover_style() -> Style {
+    let th = theme::cur();
+    if th.surface_alt == th.surface {
+        Style::new().bg(th.surface).add_modifier(Modifier::UNDERLINED)
+    } else {
+        Style::new().bg(th.surface_alt)
+    }
 }
 
 /// A small clickable target under the pointer (a tab's `×`, a scroll mark, a result tab, a

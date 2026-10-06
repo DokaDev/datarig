@@ -719,3 +719,30 @@ fn an_arm_does_not_survive_a_move_without_a_button() {
     h.mouse(MouseEventKind::Up(MouseButton::Left), r.x + 1, r.y);
     assert!(!h.app.quit, "a stray release acted on an old press");
 }
+
+/// On the terminal theme (its alternate surface is its surface) the row under the pointer is
+/// underlined in a picker's list and in the settings, as in the tab list and quick connect.
+#[test]
+fn the_pointers_row_is_underlined_on_the_terminal_theme() {
+    use datarig_tui::theme;
+    let terminal = || std::sync::Arc::new(theme::TERMINAL.clone());
+    let mut h = new_form();
+    h.app.theme = terminal();
+    click_on(&mut h, " Advanced ", 2);
+    click_on(&mut h, "auto (from the name)", 2);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Chooser));
+    h.draw(W, H);
+    let list = h.app.overlays.chooser().unwrap().list;
+    assert!(hover(&mut h, list.x + 2, list.y + 3));
+    let t = h.draw(W, H);
+    assert!(t.backend().buffer()[(list.x + 2, list.y + 3)].modifier.contains(Modifier::UNDERLINED), "the chooser");
+    let mut h = Harness::connected(Lang::En);
+    h.app.theme = terminal();
+    h.command("settings");
+    h.draw(W, H);
+    let selected = h.app.overlays.settings().unwrap().selected;
+    let r = *h.app.overlays.settings().unwrap().rows.iter().find(|r| r.row == selected + 2).unwrap();
+    assert!(hover(&mut h, r.line.x + 3, r.line.y));
+    let t = h.draw(W, H);
+    assert!(t.backend().buffer()[(r.line.x + 3, r.line.y)].modifier.contains(Modifier::UNDERLINED), "the settings");
+}

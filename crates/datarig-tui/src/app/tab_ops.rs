@@ -197,10 +197,17 @@ impl App {
     /// console that closes goes to the trash, where `Space t u` finds it.
     pub(super) fn request_close_tab(&mut self) {
         let id = self.tab().id;
+        self.request_close(id);
+    }
+
+    /// Close tab `id` (the active one or another, from the tab list) as `Ctrl+W` closes the
+    /// active one: written first, and asked first when something would be lost.
+    pub(super) fn request_close(&mut self, id: TabId) {
+        let Some(t) = self.tabs.get(id) else { return };
         // The tab is written first; a saved query that changed on disk asks what to do.
-        if self.tab().dirty() && !self.tab().doc.conflict {
+        if t.dirty() && !t.doc.conflict {
             self.save_tab(id);
-            if self.tab().doc.conflict {
+            if self.tabs.get(id).is_some_and(|t| t.doc.conflict) {
                 return;
             }
         }
@@ -213,17 +220,16 @@ impl App {
                 ConfirmAction::CloseTab(id),
             );
         }
+        let Some(t) = self.tabs.get(id) else { return };
         if self.unsaved(Some(id)) > 0 {
             let details = self.unsaved_error(Some(id)).into_iter().collect();
-            let text =
-                if self.tab().script().is_some() { Label::TabCloseUnsaved } else { Label::TabCloseConsoleUnsaved };
+            let text = if t.script().is_some() { Label::TabCloseUnsaved } else { Label::TabCloseConsoleUnsaved };
             self.confirm(Label::TabCloseTitle, text, Label::TabCloseKeys, ConfirmAction::CloseTab(id));
             if let Some(c) = self.overlays.confirm_mut() {
                 c.details = details;
             }
             return;
         }
-        let t = self.tab();
         let texts = [Label::TabCloseRunning, Label::TabCloseTx, Label::TabCloseRunningTx, Label::TabCloseQueued];
         match at_risk(t.exec.running.is_some(), self.is_queued(id), t.exec.tx_at_risk(), texts) {
             None => self.close_tab(id),
@@ -247,7 +253,8 @@ impl App {
         if running {
             self.cancel_in(id);
         }
-        if self.tab().id == id {
+        let was_active = self.tab().id == id;
+        if was_active {
             self.leave_tab();
         }
         if let Some(mut closed) = self.tabs.close(id)
@@ -261,7 +268,13 @@ impl App {
         {
             self.trash_closed(&state, &c, &text);
         }
-        self.entered_tab();
+        // Another tab than the active one (the tab list's `Ctrl+D`): the active tab and the
+        // status line stay; only the workspace state is written.
+        if was_active {
+            self.entered_tab();
+        } else {
+            self.save_workspace();
+        }
         if self.tabs.is_empty() {
             self.focus = Focus::Tree;
         }
@@ -275,6 +288,7 @@ impl App {
         if self.quitting.is_some() && !self.any_running() {
             self.finish_quit();
         }
+        self.refresh_tab_list();
     }
 
     /// The console `id` of a tab just closed, with `text`, goes to the trash. Text nobody
@@ -306,7 +320,7 @@ impl App {
     /// back (from earlier runs too); a trashed file that cannot be read is skipped (and said
     /// so) for the next one, and stays in the trash.
     pub(super) fn reopen_tab(&mut self) {
-        let Some(mut c) = self.tabs.take_closed() else {
+        let Some(c) = self.tabs.take_closed() else {
             let newest = self.state_dir().map(|s| workspace::list_trash(&s));
             return match newest {
                 Some(Ok(list)) if !list.is_empty() => self.untrash_newest(&list),
@@ -317,6 +331,18 @@ impl App {
                 _ => self.flash(Notice::new(Label::TabReopenNone, Level::Info)),
             };
         };
+        self.bring_back(c);
+    }
+
+    /// Closed tab `serial` (the tab list's pick) comes back as `Space t u` brings the newest.
+    pub(super) fn reopen_closed(&mut self, serial: u64) {
+        if let Some(c) = self.tabs.take_closed_serial(serial) {
+            self.bring_back(c);
+        }
+    }
+
+    /// Closed tab `c`, taken off the list, comes back and becomes active.
+    fn bring_back(&mut self, mut c: tabs::ClosedTab) {
         let mut written = false;
         if let (Some(name), Some(state)) = (c.trashed.clone(), self.state_dir()) {
             // Its file comes back out of the trash (under a new id); the text is the same.
@@ -407,9 +433,18 @@ impl App {
     fn take_from_trash(&mut self, name: &str) -> Result<(), UntrashError> {
         let Some(state) = self.state_dir() else { return Ok(()) };
         let (id, text) = workspace::untrash(&state, name)?;
+        // Closed in this run: it comes back under its own number when that is free, as
+        // `Space t u` brings it.
+        let no = self.tabs.closed().find(|c| c.trashed.as_deref() == Some(name)).map(|c| c.console_no);
         self.tabs.forget_trashed(name);
         self.leave_tab();
         let tab = self.tabs.open(TabKind::Console, None, Editor::new(&text));
+        let taken = |n: u32| self.tabs.iter().any(|t| t.id != tab && t.doc.console_no == n);
+        if let Some(n) = no.filter(|n| *n != 0 && !taken(*n))
+            && let Some(t) = self.tabs.get_mut(tab)
+        {
+            t.doc.console_no = n;
+        }
         if let Some(t) = self.tabs.get_mut(tab) {
             t.doc.console_id = id;
             t.doc.saved = text;
