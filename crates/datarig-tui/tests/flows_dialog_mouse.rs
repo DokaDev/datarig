@@ -393,7 +393,9 @@ fn quick_connect_takes_clicks_the_wheel_and_the_pointer() {
     let at = (q.list.x + 8, q.list.y + (i - q.scroll) as u16);
     click(&mut h, at);
     assert!(h.overlay_kind().is_none(), "picked");
-    assert_eq!(h.connecting().map(|c| c.0).as_deref(), Some("v6"));
+    // (The `▸` above asked for local-pg's databases: it connects too.)
+    let v6 = h.app.profiles.iter().find(|p| p.name == "v6").unwrap().id;
+    assert_eq!(h.app.conns.state(v6), datarig_tui::app::NodeState::Connecting);
 }
 
 /// The settings: a click on `›` changes the value, on a row selects it; the wheel and the
