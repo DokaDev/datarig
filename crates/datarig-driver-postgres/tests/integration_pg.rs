@@ -4134,3 +4134,187 @@ async fn a_dial_that_fails_fails_the_connect() {
         other => panic!("{other:?}"),
     }
 }
+
+// ── results not held (`PagingMode::NoHold`) ───────────────────────────────
+
+/// What the server shows of the session tagged `tag`: its state in `pg_stat_activity` (`idle`,
+/// `idle in transaction`, …) and how many locks it holds or waits for in `pg_locks`.
+async fn server_view(observer: &mut Conn, id: u64, tag: &str) -> (String, String) {
+    let sql = format!(
+        "SELECT a.state, (SELECT count(*) FROM pg_catalog.pg_locks l WHERE l.pid = a.pid) \
+         FROM pg_catalog.pg_stat_activity a WHERE a.application_name = 'datarig-q-{tag}'"
+    );
+    let DbEvent::Page { rows, .. } = observer.run(id, &sql).await else { panic!("pg_stat_activity") };
+    assert_eq!(rows.len(), 1, "one session tagged {tag}: {rows:?}");
+    (rows[0][0].clone().unwrap_or_default(), rows[0][1].clone().unwrap_or_default())
+}
+
+/// Run `ALTER TABLE` on `table` from `migration` as a deploy would, giving up after a short
+/// `lock_timeout`; whether it went through (`Err` with the server's message when it did not).
+async fn alter_quickly(migration: &mut Conn, id: u64, table: &str, column: &str) -> Result<(), String> {
+    let statements = vec![
+        "BEGIN".to_string(),
+        "SET LOCAL lock_timeout = '500ms'".to_string(),
+        format!("ALTER TABLE {table} ADD COLUMN {column} int"),
+        "COMMIT".to_string(),
+    ];
+    migration.session.send(DbCommand::Execute { id, statements, paging: PagingMode::Hold });
+    match migration.result(id).await {
+        DbEvent::Done { .. } => Ok(()),
+        DbEvent::Failed { error, .. } => {
+            assert!(matches!(migration.run(id + 1, "ROLLBACK").await, DbEvent::Done { .. }));
+            Err(error.raw().to_string())
+        }
+        ev => panic!("{ev:?}"),
+    }
+}
+
+/// By default nothing of a result stays on the server: its first page comes with the portal
+/// and its transaction already ended (`Released` right before the page, no `TxOpen`), so the
+/// session is idle (not idle in transaction) and holds no lock while the page is on screen, and
+/// a deploy's `ALTER TABLE` with a short `lock_timeout` goes through. The next page runs the
+/// statement again (`Resume`), continues after the rows shown, and leaves nothing either; the
+/// last page is not released (nothing was left to release).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_result_not_held_leaves_no_lock_and_no_transaction() {
+    let Some(url) = pg_url("a_result_not_held_leaves_no_lock_and_no_transaction") else { return };
+    let tag = format!("nohold{}", std::process::id());
+    let table = format!("public.it_nohold_{}", std::process::id());
+    let _guard = pg_clean::TableGuard::new(&url, &[&table]);
+    let (mut q, mut obs) = tagged(&url, &tag).await;
+    let create = format!("CREATE TABLE {table} AS SELECT g AS x FROM generate_series(1, 1200) g");
+    assert!(matches!(obs.run(1, &create).await, DbEvent::Done { .. }));
+    let sql = format!("SELECT x FROM {table} ORDER BY x");
+    q.session.send(DbCommand::Execute { id: 1, statements: vec![sql.clone()], paging: PagingMode::NoHold });
+    let mut events = Vec::new();
+    loop {
+        let ev = q.wait(|_| true, 30).await;
+        let page = matches!(ev, DbEvent::Page { id: 1, .. } | DbEvent::Failed { id: 1, .. });
+        events.push(ev);
+        if page {
+            break;
+        }
+    }
+    assert!(matches!(events[..], [.., DbEvent::Released { id: 1 }, DbEvent::Page { more: true, .. }]), "{events:?}");
+    assert!(!events.iter().any(|e| matches!(e, DbEvent::TxOpen(true))), "never reported open: {events:?}");
+    let DbEvent::Page { rows, .. } = events.last().unwrap() else { unreachable!() };
+    assert_eq!((rows.len(), rows[0][0].as_deref(), rows[PAGE - 1][0].as_deref()), (PAGE, Some("1"), Some("500")));
+    assert_eq!(server_view(&mut obs, 2, &tag).await, ("idle".to_string(), "0".to_string()), "nothing held");
+    let mut migration = Conn::open(&url, SessionRole::Query).await;
+    assert_eq!(alter_quickly(&mut migration, 1, &table, "y").await, Ok(()), "the deploy is not blocked");
+    // The next page: the statement again, after the 500 rows shown.
+    q.session.send(DbCommand::Resume { id: 2, sql: sql.clone(), skip: 500, paging: PagingMode::NoHold });
+    let released = q.wait(|e| matches!(e, DbEvent::Released { .. } | DbEvent::Page { .. }), 30).await;
+    assert!(matches!(released, DbEvent::Released { id: 2 }), "{released:?}");
+    let DbEvent::Page { columns: Some(_), rows, more: true, .. } = q.result(2).await else { panic!("page 2") };
+    assert_eq!((rows[0][0].as_deref(), rows[PAGE - 1][0].as_deref()), (Some("501"), Some("1000")));
+    assert_eq!(server_view(&mut obs, 3, &tag).await, ("idle".to_string(), "0".to_string()));
+    assert_eq!(alter_quickly(&mut migration, 3, &table, "z").await, Ok(()));
+    // The last page ends the result: nothing to release.
+    q.session.send(DbCommand::Resume { id: 3, sql, skip: 1000, paging: PagingMode::NoHold });
+    let DbEvent::Page { rows, more: false, .. } = q.result(3).await else { panic!("the last page") };
+    assert_eq!((rows.len(), rows[199][0].as_deref()), (200, Some("1200")));
+    let events = q.drain(150).await;
+    assert!(!events.iter().any(|e| matches!(e, DbEvent::Released { .. } | DbEvent::TxOpen(true))), "{events:?}");
+    assert_eq!(server_view(&mut obs, 4, &tag).await, ("idle".to_string(), "0".to_string()));
+}
+
+/// `PagingMode::Hold` is the behaviour before no-hold became the default: the portal stays
+/// open in a transaction of its own, which holds `ACCESS SHARE` on the table, so a deploy's
+/// `ALTER TABLE` waits and gives up at its `lock_timeout`; once the portal closes it goes
+/// through.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_held_result_keeps_its_transaction_and_lock_until_closed() {
+    let Some(url) = pg_url("a_held_result_keeps_its_transaction_and_lock_until_closed") else { return };
+    let tag = format!("hold{}", std::process::id());
+    let table = format!("public.it_hold_{}", std::process::id());
+    let _guard = pg_clean::TableGuard::new(&url, &[&table]);
+    let (mut q, mut obs) = tagged(&url, &tag).await;
+    let create = format!("CREATE TABLE {table} AS SELECT g AS x FROM generate_series(1, 1200) g");
+    assert!(matches!(obs.run(1, &create).await, DbEvent::Done { .. }));
+    let sql = format!("SELECT x FROM {table} ORDER BY x");
+    q.session.send(DbCommand::Execute { id: 1, statements: vec![sql], paging: PagingMode::Hold });
+    q.wait(|e| matches!(e, DbEvent::TxOpen(true)), 10).await;
+    let DbEvent::Page { more: true, .. } = q.result(1).await else { panic!("a page with more") };
+    let (state, locks) = server_view(&mut obs, 2, &tag).await;
+    assert_eq!(state, "idle in transaction");
+    assert_ne!(locks, "0", "the portal's transaction holds its locks");
+    let mut migration = Conn::open(&url, SessionRole::Query).await;
+    let blocked = alter_quickly(&mut migration, 1, &table, "y").await;
+    assert!(blocked.as_ref().is_err_and(|e| e.contains("lock timeout")), "{blocked:?}");
+    q.session.send(DbCommand::FetchMore { id: 1 });
+    let DbEvent::Page { rows, .. } = q.result(1).await else { panic!("the next page") };
+    assert_eq!(rows[0][0].as_deref(), Some("501"), "fetched from the open portal");
+    q.session.send(DbCommand::ClosePortal { id: 1 });
+    q.wait(|e| matches!(e, DbEvent::TxOpen(false)), 10).await;
+    assert_eq!(server_view(&mut obs, 3, &tag).await, ("idle".to_string(), "0".to_string()));
+    assert_eq!(alter_quickly(&mut migration, 3, &table, "y").await, Ok(()));
+}
+
+/// Inside the user's block a result is never released, whatever the paging: its portal lives
+/// in the block and pages from it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_result_in_the_users_block_is_held_without_hold_too() {
+    let Some(url) = pg_url("a_result_in_the_users_block_is_held_without_hold_too") else { return };
+    let mut c = Conn::open(&url, SessionRole::Query).await;
+    assert!(matches!(c.run(1, "BEGIN").await, DbEvent::Done { .. }));
+    let sql = "SELECT g FROM generate_series(1, 1200) g";
+    c.session.send(DbCommand::Execute { id: 2, statements: vec![sql.into()], paging: PagingMode::NoHold });
+    let DbEvent::Page { more: true, .. } = c.result(2).await else { panic!("a page with more") };
+    c.session.send(DbCommand::FetchMore { id: 2 });
+    let DbEvent::Page { columns: None, rows, more: true, .. } = c.result(2).await else { panic!("the next page") };
+    assert_eq!(rows[0][0].as_deref(), Some("501"));
+    assert!(matches!(c.run(3, "ROLLBACK").await, DbEvent::Done { .. }));
+    let events = c.drain(150).await;
+    assert!(!events.iter().any(|e| matches!(e, DbEvent::Released { .. })), "{events:?}");
+}
+
+/// On a read-only session a result not held reads in a read-only transaction, its first page
+/// and the statement run again alike.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_result_not_held_is_read_only_on_a_read_only_session() {
+    let Some(url) = pg_url("a_result_not_held_is_read_only_on_a_read_only_session") else { return };
+    let mut c = Conn::open_with(&url, SessionRole::Query, true).await;
+    let sql = "SELECT current_setting('transaction_read_only') FROM generate_series(1, 700)";
+    c.session.send(DbCommand::Execute { id: 1, statements: vec![sql.into()], paging: PagingMode::NoHold });
+    let DbEvent::Page { rows, more: true, .. } = c.result(1).await else { panic!("a page") };
+    assert_eq!(rows[0][0].as_deref(), Some("on"));
+    c.session.send(DbCommand::Resume { id: 2, sql: sql.into(), skip: 500, paging: PagingMode::NoHold });
+    let DbEvent::Page { rows, more: false, .. } = c.result(2).await else { panic!("the rest") };
+    assert_eq!((rows.len(), rows[0][0].as_deref()), (200, Some("on")));
+}
+
+/// A statement that writes and returns more rows than a page, not held: its first page is
+/// shown once its `COMMIT` (sent with it) succeeded, and the rest of its rows are gone with the
+/// transaction (what it wrote stays). When that `COMMIT` fails (a deferred constraint) the run
+/// fails, no page is shown, and the session goes on outside any transaction. A big skip (more
+/// than one request of skipped rows) is ended right after its page too, before the page.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_write_not_held_is_shown_only_once_committed() {
+    let Some(url) = pg_url("a_write_not_held_is_shown_only_once_committed") else { return };
+    let mut c = Conn::open(&url, SessionRole::Query).await;
+    let create = "CREATE TEMP TABLE zz_nohold_w (x int UNIQUE DEFERRABLE INITIALLY DEFERRED)";
+    assert!(matches!(c.run(1, create).await, DbEvent::Done { .. }));
+    let insert = "INSERT INTO zz_nohold_w SELECT g FROM generate_series(1, 700) g RETURNING x";
+    c.session.send(DbCommand::Execute { id: 2, statements: vec![insert.into()], paging: PagingMode::NoHold });
+    let DbEvent::Page { rows, more: true, .. } = c.result(2).await else { panic!("a page with more") };
+    assert_eq!(rows.len(), PAGE);
+    let DbEvent::Page { rows, .. } = c.run(3, "SELECT count(*) FROM zz_nohold_w").await else { panic!() };
+    assert_eq!(rows[0][0].as_deref(), Some("700"), "committed");
+    let twice = "INSERT INTO zz_nohold_w SELECT 1 FROM generate_series(1, 600) RETURNING x";
+    c.session.send(DbCommand::Execute { id: 4, statements: vec![twice.into()], paging: PagingMode::NoHold });
+    let DbEvent::Failed { error: DbError::Server(e), .. } = c.result(4).await else { panic!("the COMMIT fails") };
+    assert!(e.contains("duplicate key"), "{e}");
+    let DbEvent::Page { rows, .. } = c.run(5, "SELECT count(*) FROM zz_nohold_w").await else {
+        panic!("the session goes on, outside any transaction")
+    };
+    assert_eq!(rows[0][0].as_deref(), Some("700"));
+    let sql = "SELECT g FROM generate_series(1, 25000) g ORDER BY g";
+    c.session.send(DbCommand::Resume { id: 6, sql: sql.into(), skip: 12_000, paging: PagingMode::NoHold });
+    let DbEvent::Page { rows, more: true, .. } = c.result(6).await else { panic!("a page") };
+    assert_eq!(rows[0][0].as_deref(), Some("12001"));
+    let events = c.drain(150).await;
+    assert!(!events.iter().any(|e| matches!(e, DbEvent::TxOpen(true))), "nothing stays open: {events:?}");
+    // Ended: a statement that cannot run in a transaction block runs.
+    assert!(matches!(c.run(7, "VACUUM zz_nohold_w").await, DbEvent::Done { .. }), "no transaction open");
+}
