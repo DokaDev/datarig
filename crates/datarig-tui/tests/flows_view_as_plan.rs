@@ -98,7 +98,7 @@ fn text_plan(sql: &str) -> Harness {
 
 /// The status line says `l` (a notice of the moment, or the tab's last outcome).
 fn said(h: &mut Harness, l: Label) {
-    let line = h.status(W, H);
+    let line = h.status(220, H);
     assert!(line.contains(l.text(Lang::En)), "{l:?}: {line}");
 }
 
@@ -339,4 +339,114 @@ fn the_text_plan_screens_in_korean() {
     check_localized("text_plan_hint_ko_100x30", Lang::Ko, h.draw(W, H).backend().buffer());
     h.keys("P");
     check_localized("text_plan_analyze_confirm_ko_100x30", Lang::Ko, h.draw(W, H).backend().buffer());
+}
+
+#[test]
+fn an_execute_is_asked_about_since_its_parameters_run_again() {
+    // Without ANALYZE too: the server evaluates the parameters to plan it.
+    let mut h = text_plan("EXPLAIN EXECUTE p(nextval('s'));");
+    h.keys("P");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Confirm), "it asks");
+    assert!(runs(&mut h).is_empty(), "nothing runs before the answer");
+    let screen = h.screen(W, H);
+    assert!(screen.contains("Run this EXPLAIN again?"), "{screen}");
+    assert!(screen.contains("not rolled back"), "{screen}");
+    h.key(KeyCode::Enter);
+    assert!(runs(&mut h).is_empty(), "Enter keeps");
+}
+
+#[test]
+fn the_hint_names_the_key_of_the_focused_pane() {
+    let mut h = text_plan("EXPLAIN SELECT * FROM t;");
+    h.app.focus = Focus::Editor;
+    let screen = h.screen(W, H);
+    assert!(screen.contains("text plan · Space e p view as plan"), "{screen}");
+    h.app.focus = Focus::Results;
+    assert!(h.screen(W, H).contains(HINT));
+}
+
+#[test]
+fn a_result_with_statements_run_since_or_beside_it_is_refused() {
+    // A later run without rows changed the session (a setting): the rows stay, from an
+    // earlier run, and the plan now could differ.
+    let mut h = text_plan("EXPLAIN SELECT * FROM t;");
+    h.app.tab_mut().editor = Editor::new("SET enable_seqscan = off;");
+    h.app.focus = Focus::Editor;
+    h.sent();
+    h.ctrl('e');
+    let (id, _) = sent_one(&mut h);
+    h.db(DbEvent::Done {
+        id,
+        outcome: datarig_core::driver::Outcome::Command("SET".into()),
+        elapsed: Duration::from_millis(1),
+    });
+    h.app.tab_mut().show_result(0);
+    h.app.focus = Focus::Results;
+    assert!(!h.screen(W, H).contains("view as plan"), "no offer for rows of an earlier run");
+    h.keys("P");
+    assert!(runs(&mut h).is_empty());
+    said(&mut h, Label::PlanAsPlanSince);
+    // A result of a run of several statements: what ran beside it is not run again.
+    let mut h = Harness::connected(Lang::En);
+    h.app.tab_mut().editor = Editor::new("SET work_mem = '1GB';\nEXPLAIN SELECT * FROM t;");
+    h.sent();
+    h.keys("ggVG");
+    h.ctrl('e');
+    let (id, _) = runs(&mut h).pop().expect("a run");
+    h.db(text_page(id, TEXT_PLAN));
+    h.app.focus = Focus::Results;
+    assert!(!h.screen(W, H).contains("view as plan"), "no offer for a result of several");
+    h.keys("P");
+    assert!(runs(&mut h).is_empty());
+    said(&mut h, Label::PlanAsPlanBatch);
+    // The session the result came from is gone (disconnected): its settings went with it.
+    let mut h = text_plan("EXPLAIN SELECT * FROM t;");
+    h.keys(" cx");
+    h.sent();
+    h.app.focus = Focus::Results;
+    h.keys("P");
+    assert!(runs(&mut h).is_empty());
+    said(&mut h, Label::PlanAsPlanMoved);
+}
+
+#[test]
+fn an_unavailable_view_as_plan_says_why() {
+    // The text plan is not the shown view: the keys that show it are named.
+    let mut h = text_plan("EXPLAIN SELECT * FROM t;");
+    h.key(KeyCode::Char('L'));
+    assert_eq!(h.app.tab().exec.view, ResultView::Messages);
+    h.keys(" ep");
+    assert!(runs(&mut h).is_empty());
+    let line = h.status(W, H);
+    assert!(line.contains("show it first (H/L)"), "{line}");
+    // A JSON plan's rows: a plan already.
+    let mut h = Harness::connected(Lang::En);
+    ran(&mut h, "EXPLAIN (FORMAT JSON) SELECT * FROM t;", |id| plan_page(id, &fixture(17, "join.plan.json")));
+    h.key(KeyCode::Char('H'));
+    h.keys("P");
+    said(&mut h, Label::PlanAsPlanAlreadyJson);
+    // The results pane is hidden.
+    let mut h = text_plan("EXPLAIN SELECT * FROM t;");
+    h.app.focus = Focus::Editor;
+    h.keys(" rh");
+    h.keys(" ep");
+    assert!(runs(&mut h).is_empty());
+    let line = h.status(W, H);
+    assert!(line.contains("show it first"), "{line}");
+}
+
+#[test]
+fn the_hint_follows_the_result_shown_from_run_to_run() {
+    let mut h = text_plan("EXPLAIN SELECT * FROM t;");
+    assert!(h.screen(W, H).contains(HINT));
+    // While the next run waits, its rows replace these in the same place: the hint follows.
+    h.app.focus = Focus::Editor;
+    h.app.tab_mut().editor = Editor::new("SELECT a FROM t;");
+    h.ctrl('e');
+    let (id, _) = sent_one(&mut h);
+    assert!(!h.screen(W, H).contains("view as plan"), "the earlier rows, while the run waits");
+    h.db(text_page(id, &["1"]));
+    assert!(!h.screen(W, H).contains("view as plan"), "{}", h.screen(W, H));
+    ran(&mut h, "EXPLAIN SELECT a FROM t;", |id| text_page(id, TEXT_PLAN));
+    assert!(h.screen(W, H).contains(HINT));
 }

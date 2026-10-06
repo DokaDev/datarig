@@ -122,7 +122,11 @@ impl App {
             // The row results stay until this run delivers its first rows:
             // a run without rows (a COMMIT) leaves them on screen, from an earlier run.
             let has_rows = matches!(t.results, Results::Rows(_)) || !t.exec.steps.is_empty();
-            let log = super::runlog::RunLog { binding: t.binding, ..super::runlog::RunLog::new(&statements) };
+            let log = super::runlog::RunLog {
+                binding: t.binding,
+                generation: t.exec.generation,
+                ..super::runlog::RunLog::new(&statements)
+            };
             let before = std::mem::replace(&mut t.exec.run, log);
             if has_rows && t.exec.kept_log.is_none() {
                 t.exec.kept_log = Some(before);

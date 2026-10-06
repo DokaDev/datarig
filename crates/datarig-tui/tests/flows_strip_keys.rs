@@ -141,3 +141,15 @@ fn connected(mut h: Harness) -> Harness {
     h.sent();
     h
 }
+
+#[test]
+fn the_keys_show_only_where_they_work() {
+    // The editor has the focus: H and L are vim motions there, so the strip says nothing.
+    let mut h = two_results(Harness::connected(Lang::En));
+    h.app.focus = Focus::Editor;
+    let (line, _, _) = strip_line(&mut h, 120);
+    assert!(!line.contains("H/L"), "{line}");
+    h.app.focus = Focus::Results;
+    let (line, _, _) = strip_line(&mut h, 120);
+    assert!(line.contains("H/L"), "{line}");
+}

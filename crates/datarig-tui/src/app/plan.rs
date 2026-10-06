@@ -286,16 +286,26 @@ impl PlanTab {
     }
 }
 
-/// An `EXPLAIN ANALYZE` waiting for its confirmation to run again as JSON, and the result it
+/// An `EXPLAIN` waiting for its confirmation to run again as JSON, and the result it
 /// was asked from: it runs only while the tab still shows that result, on the same binding.
 pub struct AsPlan {
     tab: TabId,
     binding: u64,
+    generation: u64,
     query: u64,
     index: Option<usize>,
     /// The statement of the result, and what runs.
     sql: String,
     json: String,
+}
+
+/// [`App::text_plan`] of one result: the tab, its run, the result tab, whether its rows are
+/// from an earlier run, and the length of its statement name the result.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TextPlan {
+    key: (TabId, u64, Option<usize>, bool, usize),
+    explain: bool,
+    rewritable: bool,
 }
 
 /// What a refusal of `results.view_as_plan` says.
@@ -350,6 +360,28 @@ impl App {
         self.run(vec![sql]);
     }
 
+    /// What the active tab's shown rows are for `results.view_as_plan`, worked out once per
+    /// result (the hint asks every frame): their statement is an `EXPLAIN` that is not a plan
+    /// yet, and the lexer can ask it again as JSON.
+    fn text_plan(&self) -> TextPlan {
+        let t = self.tab();
+        let key = (t.id, t.exec.query_id, t.exec.shown, t.exec.kept_log.is_some(), t.shown_sql().len());
+        if let Some(c) = self.text_plan_cache.get().filter(|c| c.key == key) {
+            return c;
+        }
+        let sql = t.shown_sql();
+        let explain = t.exec.shown.is_some()
+            && t.exec.plan.as_ref().is_none_or(|p| Some(p.index) != t.exec.shown)
+            && plan::is_explain(sql);
+        // Rows of an earlier run (statements ran since) or of a run of several are not asked
+        // again: no offer.
+        let alone = t.exec.kept_log.is_none() && !t.rows_log().several();
+        let rewritable = explain && alone && plan::explain::json_text(sql).is_ok();
+        let c = TextPlan { key, explain, rewritable };
+        self.text_plan_cache.set(Some(c));
+        c
+    }
+
     /// The active tab shows the rows of an `EXPLAIN` that are not a plan (a text plan):
     /// `results.view_as_plan` acts on them.
     pub fn text_plan_shown(&self) -> bool {
@@ -359,22 +391,64 @@ impl App {
         let t = self.tab();
         t.exec.view == super::tabs::ResultView::Rows
             && matches!(t.results, Results::Rows(_))
-            && t.exec.shown.is_some()
-            && t.exec.plan.as_ref().is_none_or(|p| Some(p.index) != t.exec.shown)
-            && plan::is_explain(t.shown_sql())
+            && self.text_plan().explain
     }
 
-    /// The line under a text plan that offers to view it as one, when it can be asked again.
+    /// The key that runs `a` where the focus is (the results pane's own keys there), else the
+    /// workspace's (the leader keys).
+    fn key_here(&self, a: Action) -> String {
+        let ctx = match self.focus {
+            Focus::Results if self.plan_shown() => Ctx::Plan,
+            Focus::Results => Ctx::Grid,
+            _ => self.key_context(),
+        };
+        let keys = self.keymap.hint_keys(a, ctx, self.enhanced_keys);
+        match keys.or_else(|| self.keymap.hint_keys(a, Ctx::Nav, self.enhanced_keys)) {
+            Some(k) => crate::keymap::keys::label(&k),
+            None => self.key_for(a, Ctx::Nav),
+        }
+    }
+
+    /// The line under a text plan that offers to view it as one, when it can be asked again,
+    /// with the key that does it where the focus is.
     pub fn text_plan_hint(&self) -> Option<String> {
-        if !self.text_plan_shown() || plan::explain::json_text(self.tab().shown_sql()).is_err() {
+        if !self.text_plan_shown() || !self.text_plan().rewritable {
             return None;
         }
-        let key = self.key_for(Action::ExplainAsPlan, Ctx::Grid);
+        let key = self.key_here(Action::ExplainAsPlan);
         Some(self.i18n.msg(&Msg::PlanAsPlanHint { key }).to_string())
     }
 
+    /// `results.view_as_plan` is not available: why, in the words that help (the text plan is
+    /// in another result tab or the pane is hidden, the rows are a plan already).
+    pub(super) fn explain_as_plan_unavailable(&mut self) {
+        use super::tabs::ResultView;
+        let t = self.tab();
+        let log = t.rows_log();
+        let is_plan = |i: usize| t.exec.plan.as_ref().is_some_and(|p| p.index == i);
+        let text_plan = t
+            .result_tabs()
+            .into_iter()
+            .any(|i| !is_plan(i) && log.statements.get(i).is_some_and(|s| plan::is_explain(&s.sql)));
+        let notice = if text_plan && !self.results_shown() {
+            let key = self.key_here(Action::Panel(super::action::PanelAction::Toggle));
+            Notice::new(Msg::PlanAsPlanShowFirst { key }, Level::Info)
+        } else if text_plan {
+            let key = format!("{}/{}", self.key_here(Action::ResultTab(false)), self.key_here(Action::ResultTab(true)));
+            Notice::new(Msg::PlanAsPlanShowFirst { key }, Level::Info)
+        } else if t.exec.view == ResultView::Rows && t.exec.shown.is_some_and(is_plan) {
+            Notice::new(Label::PlanAsPlanAlreadyJson, Level::Info)
+        } else {
+            Notice::new(Label::PlanAsPlanNotExplain, Level::Info)
+        };
+        self.flash(notice);
+    }
+
     /// `results.view_as_plan`: the statement of the shown text plan with `FORMAT JSON`, run like
-    /// any statement (its `ANALYZE` asks first). What the editor holds now does not matter.
+    /// any statement. What the editor holds now does not matter. It is refused unless the tab
+    /// is still where those rows were read, on the same session, with nothing run since or
+    /// beside it (a setting, a temporary table, a prepared statement would make it another
+    /// plan); what runs more than the planner (`ANALYZE`, an `EXECUTE`'s parameters) asks first.
     pub(super) fn explain_as_plan(&mut self) {
         let t = self.tab();
         let (id, sql) = (t.id, t.shown_sql().to_string());
@@ -386,9 +460,18 @@ impl App {
             Err(e) => return self.flash(not_json(e)),
         };
         let t = self.tab();
-        // Its rows were read on another connection, database or schema than the tab's now.
-        if t.rows_log().binding != t.binding {
+        let log = t.rows_log();
+        // Read on another connection, database or schema than the tab's now, or on a session
+        // that is gone (what it set went with it).
+        if log.binding != t.binding || t.exec.session.is_none() || log.generation != t.exec.generation {
             return self.flash(Notice::new(Label::PlanAsPlanMoved, Level::Warning));
+        }
+        // Statements ran since (the rows are from an earlier run), or beside it.
+        if t.exec.kept_log.is_some() {
+            return self.flash(Notice::new(Label::PlanAsPlanSince, Level::Warning));
+        }
+        if log.several() {
+            return self.flash(Notice::new(Label::PlanAsPlanBatch, Level::Warning));
         }
         // A read-only profile refuses it now rather than after the question.
         if let Some(pid) = t.profile
@@ -396,35 +479,38 @@ impl App {
         {
             return self.tab_status(id, refused);
         }
-        if !json.analyze {
+        if !json.evaluates {
             return self.run(vec![json.sql]);
         }
         let excerpt = super::runlog::excerpt(&json.sql, 60);
         self.pending_as_plan = Some(AsPlan {
             tab: id,
             binding: t.binding,
+            generation: t.exec.generation,
             query: t.exec.query_id,
             index: t.exec.shown,
             sql,
             json: json.sql,
         });
-        self.confirm(
-            Label::PlanAsPlanAnalyzeTitle,
-            Label::PlanAsPlanAnalyzeTitle,
-            Label::PlanAsPlanAnalyzeKeys,
-            ConfirmAction::ExplainAgain,
-        );
+        let (title, text) = if json.analyze {
+            (Label::PlanAsPlanAnalyzeTitle, Msg::PlanAsPlanAnalyzeText { sql: excerpt })
+        } else {
+            (Label::PlanAsPlanAgainTitle, Msg::PlanAsPlanAgainText { sql: excerpt })
+        };
+        self.confirm(title, title, Label::PlanAsPlanAnalyzeKeys, ConfirmAction::ExplainAgain);
         if let Some(c) = self.overlays.confirm_mut() {
-            c.text = Msg::PlanAsPlanAnalyzeText { sql: excerpt };
+            c.text = text;
         }
     }
 
-    /// Running the `EXPLAIN ANALYZE` again was confirmed: it runs while its tab still shows
-    /// the result it was asked from, on the same binding.
+    /// Running the `EXPLAIN` again was confirmed: it runs while its tab still shows the result
+    /// it was asked from, on the same binding and session.
     pub(super) fn explain_as_plan_confirmed(&mut self) {
         let Some(p) = self.pending_as_plan.take() else { return };
         let holds = self.tabs.get(p.tab).is_some_and(|t| {
             t.binding == p.binding
+                && t.exec.generation == p.generation
+                && t.exec.session.is_some()
                 && t.exec.query_id == p.query
                 && t.exec.shown == p.index
                 && t.exec.view == super::tabs::ResultView::Rows

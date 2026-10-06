@@ -429,10 +429,11 @@ fn draw_strip(app: &mut App, area: Rect, buf: &mut Buffer) {
 }
 
 /// The keys of the previous and next result tab in the results pane (`H/L`), when there are
-/// tabs to move between and both are bound there.
+/// tabs to move between, the pane has the focus and both are bound there.
 fn strip_keys(app: &App) -> Option<String> {
     let t = app.tab();
-    if t.result_tabs().is_empty() {
+    // Elsewhere (the editor) these keys are the focused pane's own.
+    if t.result_tabs().is_empty() || app.focus != Focus::Results {
         return None;
     }
     let ctx = if app.plan_shown() { Ctx::Plan } else { Ctx::Grid };

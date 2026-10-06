@@ -137,3 +137,46 @@ fn the_lexer_alone_says_the_same_for_the_hint() {
     assert_eq!(json_text("SELECT 1"), Err(NotJson::NotExplain));
     assert_eq!(json_text("EXPLAIN (FORMAT JSON) SELECT 1"), Err(NotJson::AlreadyJson));
 }
+
+#[test]
+fn what_runs_again_beyond_planning_is_said() {
+    // An EXECUTE's parameters are evaluated to plan it, a plain EXPLAIN too: it runs again.
+    for sql in [
+        "EXPLAIN EXECUTE p(nextval('s'))",
+        "EXPLAIN EXECUTE p",
+        "EXPLAIN (VERBOSE) EXECUTE p(1)",
+        "EXPLAIN CREATE TABLE zz_t AS EXECUTE p(f())",
+        "EXPLAIN ANALYZE SELECT 1",
+    ] {
+        assert!(json(sql).unwrap_or_else(|e| panic!("{sql}: {e:?}")).evaluates, "{sql}");
+    }
+    // Planning only: nothing runs again.
+    for sql in ["EXPLAIN SELECT * FROM t WHERE a > 1", "EXPLAIN (COSTS off) DELETE FROM t WHERE a = 1"] {
+        assert!(!json(sql).unwrap().evaluates, "{sql}");
+    }
+}
+
+#[test]
+fn the_legacy_form_keeps_its_comments_and_hints() {
+    assert_eq!(
+        ok("EXPLAIN ANALYZE /*+ SeqScan(t) */ SELECT 1"),
+        ("EXPLAIN (ANALYZE, FORMAT JSON) /*+ SeqScan(t) */ SELECT 1".into(), true)
+    );
+    assert_eq!(
+        ok("EXPLAIN /*x*/ ANALYZE /*y*/ VERBOSE /*z*/ SELECT 1"),
+        ("EXPLAIN (ANALYZE, VERBOSE, FORMAT JSON) /*x*/ /*y*/ /*z*/ SELECT 1".into(), true)
+    );
+    assert_eq!(ok("EXPLAIN -- why\nSELECT 1"), ("EXPLAIN (FORMAT JSON) -- why\nSELECT 1".into(), false));
+}
+
+#[test]
+fn a_false_analyze_is_read_in_any_case_and_quoting() {
+    for sql in [
+        "EXPLAIN (ANALYZE 'FALSE') SELECT 1",
+        "EXPLAIN (ANALYZE \"Off\") SELECT 1",
+        "EXPLAIN (ANALYZE $$off$$) SELECT 1",
+        "EXPLAIN (ANALYZE FALSE) SELECT 1",
+    ] {
+        assert!(!json_text(sql).unwrap().analyze, "{sql}");
+    }
+}
