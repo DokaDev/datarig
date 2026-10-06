@@ -414,10 +414,14 @@ mod terminal {
             let (other, table, n) = (other.clone(), table.clone(), count.fetch_add(1, Ordering::SeqCst));
             Box::pin(async move {
                 if n < times {
-                    // Always another type than the one before.
-                    static FLIP: AtomicUsize = AtomicUsize::new(0);
-                    let ty = if FLIP.fetch_add(1, Ordering::SeqCst).is_multiple_of(2) { "int8" } else { "int4" };
-                    other.batch_execute(&format!("ALTER TABLE {table} ALTER a TYPE {ty}")).await.expect("alter");
+                    // Always another type than the table has now (tests running in parallel each
+                    // flip their own table).
+                    let flip = format!(
+                        "DO $$ BEGIN IF (SELECT atttypid FROM pg_attribute WHERE attrelid = '{table}'::regclass \
+                         AND attname = 'a') = 'int4'::regtype THEN ALTER TABLE {table} ALTER a TYPE int8; \
+                         ELSE ALTER TABLE {table} ALTER a TYPE int4; END IF; END $$"
+                    );
+                    other.batch_execute(&flip).await.expect("alter");
                 }
             })
         })
