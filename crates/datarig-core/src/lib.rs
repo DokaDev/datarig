@@ -12,6 +12,7 @@
 //! * [`scripts`] — saved queries and their index; [`workspace`] — tab restore and the instance
 //!   lock.
 //! * [`results`] — the rows of a result: a window in memory, the rest in a spill file.
+//! * [`chart`] — a result's rows as the numbers of a chart (columns, axes, sums).
 //! * [`export`] — result rows as TSV, CSV, JSON, a Markdown table or SQL INSERT statements.
 //! * [`transport`] — how a driver reaches a server through a tunnel (a [`transport::Dialer`]).
 //! * [`theme`] — user theme files (`themes/<name>.toml`), read and checked.
@@ -20,6 +21,7 @@
 //!
 //! This crate must never depend on a UI crate (ratatui/crossterm) or on a concrete driver.
 
+pub mod chart;
 pub mod config;
 pub mod driver;
 pub mod export;
