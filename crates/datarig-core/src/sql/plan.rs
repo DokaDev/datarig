@@ -14,6 +14,7 @@
 //! statement's execution time (by cost: of the plan's total cost). Its row estimate is off when
 //! the estimated and actual rows per loop differ by a factor of [`MISESTIMATE`] or more.
 
+pub mod explain;
 pub mod json;
 pub mod pg;
 pub mod text;

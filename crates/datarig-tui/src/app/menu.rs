@@ -51,8 +51,13 @@ const GRID_MENU: &[Action] = &[
 ];
 
 /// The results pane's actions, after the copies of every row.
-const RESULTS_MENU: &[Action] =
-    &[Action::CountRows, Action::ResultTab(true), Action::ResultTab(false), Action::Panel(PanelAction::Maximize)];
+const RESULTS_MENU: &[Action] = &[
+    Action::ExplainAsPlan,
+    Action::CountRows,
+    Action::ResultTab(true),
+    Action::ResultTab(false),
+    Action::Panel(PanelAction::Maximize),
+];
 
 /// The editor's actions for the statement under the cursor or the selection.
 const EDITOR_MENU: &[Action] =

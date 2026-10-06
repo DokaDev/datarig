@@ -96,6 +96,7 @@ Every pane that is not text input (explorer, results, vim Normal/Visual). Inside
 | `Space e c` | `editor.comment_toggle` | Comment the line or the selected lines out with -- (or back in) |  |
 | `Space e x` | `query.explain` | Explain: the statement's plan (nothing runs) |  |
 | `Space e a` | `query.explain_analyze` | Explain analyze: run and measure the statement (writes rolled back) |  |
+| `Space e p` | `results.view_as_plan` | View as plan: the text EXPLAIN again as JSON |  |
 | `Space Space` | `menu.open` | Action menu |  |
 | `Shift+F10` | `menu.open` | Action menu |  |
 | `Menu` | `menu.open` | Action menu |  |
@@ -241,6 +242,7 @@ The result grid. Inside `nav`.
 | `n` | `results.page.next` | Results → next page | ✓ |
 | `p` | `results.page.prev` | Results → previous page | ✓ |
 | `#` | `results.count` | Results → count every row (runs a count query) |  |
+| `P` | `results.view_as_plan` | View as plan: the text EXPLAIN again as JSON |  |
 | `L` | `results.tab.next` | Result tabs → next |  |
 | `H` | `results.tab.prev` | Result tabs → previous |  |
 | `Esc` | `pane.back` | Back to the editor |  |

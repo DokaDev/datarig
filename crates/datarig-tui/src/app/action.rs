@@ -156,6 +156,9 @@ pub enum Action {
     /// The statement under the cursor (or the one selected) as `EXPLAIN (FORMAT JSON)`; with
     /// `true`, `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)`: run and measured, a write rolled back.
     Explain(bool),
+    /// The shown result of a text `EXPLAIN`, asked again as `FORMAT JSON` (its other options
+    /// kept) and shown as a plan; with `ANALYZE` it asks first.
+    ExplainAsPlan,
     /// The Plan tab of the results pane.
     Plan(PlanAction),
 }
@@ -409,6 +412,11 @@ fn pane_shown(a: &App) -> bool {
 /// count) to switch between.
 fn result_tabs(a: &App) -> bool {
     pane_shown(a) && a.tab().ran && !a.tab().result_tabs().is_empty()
+}
+
+/// The active query tab shows the rows of an `EXPLAIN` that are not a plan yet (a text plan).
+fn text_plan_shown(a: &App) -> bool {
+    rows_shown(a) && a.tab().is_query() && a.text_plan_shown()
 }
 
 /// The active tab has a plan (a view of it can be chosen).
@@ -774,6 +782,7 @@ pub const REGISTRY: &[ActionSpec] = &[
     mv(Action::PageNext, "results.page.next", Label::ActionResultsPageNext, rows_shown),
     mv(Action::PagePrev, "results.page.prev", Label::ActionResultsPagePrev, rows_shown),
     act(Action::CountRows, "results.count", Label::ActionResultsCount, rows_shown),
+    act(Action::ExplainAsPlan, "results.view_as_plan", Label::ActionResultsViewAsPlan, text_plan_shown),
     mv(Action::Plan(P::Down), "plan.down", Label::ActionPlanDown, plan_focused),
     mv(Action::Plan(P::Up), "plan.up", Label::ActionPlanUp, plan_focused),
     act(Action::Plan(P::Top), "plan.top", Label::ActionPlanTop, plan_focused),

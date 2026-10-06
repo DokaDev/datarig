@@ -1394,6 +1394,17 @@
 "plan.command_usage" = ":explain shows the plan of the statement under the cursor; :explain analyze runs and measures it"
 "plan.one_statement" = { one = "Explain takes one statement; the selection has {count}", other = "Explain takes one statement; the selection has {count}" }
 "plan.already_explain" = "This statement is an EXPLAIN already: {key} runs it (a JSON plan shows in the Plan tab)"
+"action.results.view_as_plan" = "View as plan: the text EXPLAIN again as JSON"
+"plan.as_plan.hint" = "text plan · {key} view as plan"
+"plan.as_plan.not_explain" = "View as plan works on the result of a text EXPLAIN"
+"plan.as_plan.already_json" = "This EXPLAIN asks for JSON already: nothing to view differently"
+"plan.as_plan.several" = "Not run: the result's text holds more than one statement"
+"plan.as_plan.unreadable" = "Not run: the EXPLAIN's options or statement could not be read safely"
+"plan.as_plan.moved" = "Not run: the tab's connection or database changed since this result"
+"plan.as_plan.stale" = "Not run: the result changed before it could be viewed as a plan"
+"plan.as_plan.analyze_title" = "Run EXPLAIN ANALYZE again?"
+"plan.as_plan.analyze_text" = "This plan came from EXPLAIN ANALYZE: viewing it as a plan runs the statement again ({sql}). A write is rolled back; sequence values it uses stay used."
+"plan.as_plan.analyze_keys" = "y run · n/Enter cancel"
 "plan.copied" = { one = "Copied the plan as text ({count} line, {method})", other = "Copied the plan as text ({count} lines, {method})" }
 "plan.copied_json" = { one = "Copied the plan's JSON ({count} line, {method})", other = "Copied the plan's JSON ({count} lines, {method})" }
 "results.tab.plan" = "Plan"

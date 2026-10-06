@@ -7,6 +7,12 @@
 //! one row with one `json` column named `QUERY PLAN` that reads as a plan is shown as one, so
 //! an `EXPLAIN (FORMAT JSON …)` typed by hand is too.
 //!
+//! A text `EXPLAIN` (any other format) stays rows, with a line under them that offers
+//! `results.view_as_plan`: the statement that produced those rows (not the editor's text) is
+//! asked again with `FORMAT JSON` and its other options kept, through the same path of a run.
+//! Never by itself: with `ANALYZE` the statement runs again, so it asks first; a result whose
+//! tab moved to another connection or database since is refused.
+//!
 //! A plan belongs to the run it came from, like its rows: a later run that delivers rows
 //! replaces it; one that delivers none leaves it (from an earlier run). Its views are drawn
 //! from the plan as it was read; switching views, the raw text and a copy never ask the server
@@ -280,6 +286,29 @@ impl PlanTab {
     }
 }
 
+/// An `EXPLAIN ANALYZE` waiting for its confirmation to run again as JSON, and the result it
+/// was asked from: it runs only while the tab still shows that result, on the same binding.
+pub struct AsPlan {
+    tab: TabId,
+    binding: u64,
+    query: u64,
+    index: Option<usize>,
+    /// The statement of the result, and what runs.
+    sql: String,
+    json: String,
+}
+
+/// What a refusal of `results.view_as_plan` says.
+fn not_json(e: plan::explain::NotJson) -> Notice {
+    use plan::explain::NotJson;
+    match e {
+        NotJson::NotExplain => Notice::new(Label::PlanAsPlanNotExplain, Level::Info),
+        NotJson::AlreadyJson => Notice::new(Label::PlanAsPlanAlreadyJson, Level::Info),
+        NotJson::Several => Notice::new(Label::PlanAsPlanSeveral, Level::Warning),
+        NotJson::Unreadable => Notice::new(Label::PlanAsPlanUnreadable, Level::Warning),
+    }
+}
+
 /// The plan a result is, when it is one: one row of one `json` column the source names as its
 /// plan (PostgreSQL: `QUERY PLAN`), complete, whose text reads as a plan. Its JSON comes too.
 pub(super) fn plan_of(
@@ -319,6 +348,92 @@ impl App {
         let sql = plan::explain_sql(&stmt, analyze);
         self.tab_mut().editor.stage_run(std::slice::from_ref(&sql), spans);
         self.run(vec![sql]);
+    }
+
+    /// The active tab shows the rows of an `EXPLAIN` that are not a plan (a text plan):
+    /// `results.view_as_plan` acts on them.
+    pub fn text_plan_shown(&self) -> bool {
+        if self.tabs.is_empty() {
+            return false;
+        }
+        let t = self.tab();
+        t.exec.view == super::tabs::ResultView::Rows
+            && matches!(t.results, Results::Rows(_))
+            && t.exec.shown.is_some()
+            && t.exec.plan.as_ref().is_none_or(|p| Some(p.index) != t.exec.shown)
+            && plan::is_explain(t.shown_sql())
+    }
+
+    /// The line under a text plan that offers to view it as one, when it can be asked again.
+    pub fn text_plan_hint(&self) -> Option<String> {
+        if !self.text_plan_shown() || plan::explain::json_text(self.tab().shown_sql()).is_err() {
+            return None;
+        }
+        let key = self.key_for(Action::ExplainAsPlan, Ctx::Grid);
+        Some(self.i18n.msg(&Msg::PlanAsPlanHint { key }).to_string())
+    }
+
+    /// `results.view_as_plan`: the statement of the shown text plan with `FORMAT JSON`, run like
+    /// any statement (its `ANALYZE` asks first). What the editor holds now does not matter.
+    pub(super) fn explain_as_plan(&mut self) {
+        let t = self.tab();
+        let (id, sql) = (t.id, t.shown_sql().to_string());
+        if self.tab_busy(id) {
+            return self.flash_busy();
+        }
+        let json = match plan::explain::json(&sql) {
+            Ok(j) => j,
+            Err(e) => return self.flash(not_json(e)),
+        };
+        let t = self.tab();
+        // Its rows were read on another connection, database or schema than the tab's now.
+        if t.rows_log().binding != t.binding {
+            return self.flash(Notice::new(Label::PlanAsPlanMoved, Level::Warning));
+        }
+        // A read-only profile refuses it now rather than after the question.
+        if let Some(pid) = t.profile
+            && let Some(refused) = self.read_only_refusal(id, pid, std::slice::from_ref(&json.sql))
+        {
+            return self.tab_status(id, refused);
+        }
+        if !json.analyze {
+            return self.run(vec![json.sql]);
+        }
+        let excerpt = super::runlog::excerpt(&json.sql, 60);
+        self.pending_as_plan = Some(AsPlan {
+            tab: id,
+            binding: t.binding,
+            query: t.exec.query_id,
+            index: t.exec.shown,
+            sql,
+            json: json.sql,
+        });
+        self.confirm(
+            Label::PlanAsPlanAnalyzeTitle,
+            Label::PlanAsPlanAnalyzeTitle,
+            Label::PlanAsPlanAnalyzeKeys,
+            ConfirmAction::ExplainAgain,
+        );
+        if let Some(c) = self.overlays.confirm_mut() {
+            c.text = Msg::PlanAsPlanAnalyzeText { sql: excerpt };
+        }
+    }
+
+    /// Running the `EXPLAIN ANALYZE` again was confirmed: it runs while its tab still shows
+    /// the result it was asked from, on the same binding.
+    pub(super) fn explain_as_plan_confirmed(&mut self) {
+        let Some(p) = self.pending_as_plan.take() else { return };
+        let holds = self.tabs.get(p.tab).is_some_and(|t| {
+            t.binding == p.binding
+                && t.exec.query_id == p.query
+                && t.exec.shown == p.index
+                && t.exec.view == super::tabs::ResultView::Rows
+                && t.shown_sql() == p.sql
+        });
+        if !holds || self.tab().id != p.tab {
+            return self.tab_status(p.tab, Notice::new(Label::PlanAsPlanStale, Level::Warning));
+        }
+        self.run_in(p.tab, vec![p.json]);
     }
 
     /// The active tab shows a plan.

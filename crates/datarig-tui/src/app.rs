@@ -529,6 +529,9 @@ pub struct App {
     pending_copy: Option<(copy::Intent, copy::CopyRequest)>,
     /// "Fetch every row, then copy" waiting for its confirmation: the format.
     pending_fetch_copy: Option<(copy::Intent, copy::CopyFormat)>,
+    /// An `EXPLAIN ANALYZE` to run again as JSON once confirmed, with the result it was
+    /// asked from.
+    pending_as_plan: Option<plan::AsPlan>,
     /// A copy waiting for the rest of a tab's rows.
     fetch_copy: Option<(copy::Intent, copy::CopyRequest)>,
     /// Why the config file could not be used (the settings screen says so; nothing is saved).
@@ -836,6 +839,7 @@ impl App {
             yank_notices: copy::YankNotices::default(),
             pending_copy: None,
             pending_fetch_copy: None,
+            pending_as_plan: None,
             fetch_copy: None,
             config_problem: status.clone(),
             policies: cfg.policies.clone(),

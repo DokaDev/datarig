@@ -57,6 +57,9 @@ pub struct StatementRun {
 pub struct RunLog {
     pub statements: Vec<StatementRun>,
     pub notes: Vec<super::Notice>,
+    /// The tab's binding when the run was sent (its profile, database and schema): what its
+    /// results were read from.
+    pub binding: u64,
 }
 
 impl RunLog {
@@ -71,7 +74,7 @@ impl RunLog {
                 rolled_back: false,
             })
             .collect();
-        Self { statements, notes: Vec::new() }
+        Self { statements, notes: Vec::new(), binding: 0 }
     }
 
     pub fn len(&self) -> usize {
