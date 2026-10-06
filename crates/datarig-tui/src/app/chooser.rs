@@ -33,6 +33,8 @@ pub struct Chooser {
     /// First row shown, and where the rows were drawn (mouse), kept by the renderer.
     pub scroll: usize,
     pub list: ratatui::layout::Rect,
+    /// The row under the pointer (highlighted; the selection does not move to it).
+    pub hover: Option<usize>,
 }
 
 impl Chooser {
@@ -116,6 +118,7 @@ impl App {
             filtering: false,
             scroll: 0,
             list: Default::default(),
+            hover: None,
             purpose: ChooserPurpose::Form(f),
         }));
     }
@@ -140,6 +143,7 @@ impl App {
             filtering: false,
             scroll: 0,
             list: Default::default(),
+            hover: None,
             purpose: ChooserPurpose::MoveProfile(id),
         }));
     }
@@ -244,6 +248,7 @@ impl App {
             filtering: false,
             scroll: 0,
             list: Default::default(),
+            hover: None,
             purpose: ChooserPurpose::Recover,
         }));
     }

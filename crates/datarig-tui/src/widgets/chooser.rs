@@ -42,7 +42,13 @@ pub(crate) fn draw_chooser(app: &mut App, area: Rect, buf: &mut Buffer) -> Optio
     let c = app.overlays.chooser()?;
     for (row, &i) in visible.iter().enumerate().skip(first).take(rows) {
         let y = inner.y + 2 + (row - first) as u16;
-        let bg = if row == c.selected { th.selection } else { Style::new().bg(th.surface) };
+        let bg = if row == c.selected {
+            th.selection
+        } else if c.hover == Some(row) {
+            Style::new().bg(th.surface_alt)
+        } else {
+            Style::new().bg(th.surface)
+        };
         buf.set_stringn(inner.x, y, fit("", iw, Align::Left), iw, bg);
         let (value, text) = &c.items[i];
         // What the item looks like: the color's dot, the icon's glyph.
@@ -77,6 +83,7 @@ pub(crate) fn draw_chooser(app: &mut App, area: Rect, buf: &mut Buffer) -> Optio
 /// Draw the name input; returns the hardware cursor (its input).
 pub(crate) fn draw_name_input(app: &mut App, area: Rect, buf: &mut Buffer) -> Option<(u16, u16)> {
     let th = theme::cur();
+    let now = app.now();
     let n = app.overlays.name_input()?;
     let title = app.i18n.msg(&n.title);
     let footer = app.i18n.label(Label::NameKeys);
@@ -101,7 +108,7 @@ pub(crate) fn draw_name_input(app: &mut App, area: Rect, buf: &mut Buffer) -> Op
     }
     let labels = [app.i18n.label(Label::DialogButtonOk), app.i18n.label(Label::DialogButtonCancel)];
     let n = app.overlays.name_input_mut()?;
-    n.buttons.rects = button_row(buf, inner, inner.y + 3 + errors, &labels, Some(0), n.buttons.hover);
+    button_row(buf, inner, inner.y + 3 + errors, &labels, Some(0), &mut n.buttons, now);
     let input = Rect::new(inner.x + 1, inner.y, inner.width.saturating_sub(2), 1);
     let cx = n.input.render(input, buf, Style::new().fg(th.fg).patch(th.selection), true, false, None);
     Some((cx, inner.y))

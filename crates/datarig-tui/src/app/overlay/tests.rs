@@ -72,7 +72,7 @@ fn a_confirmations_buttons_put_the_safe_one_first_and_enter_on_it() {
 
 #[test]
 fn buttons_say_which_one_is_under_the_pointer_and_whether_that_changed() {
-    let mut b = Buttons { rects: vec![Rect::new(10, 5, 6, 1), Rect::new(19, 5, 8, 1)], hover: None };
+    let mut b = Buttons { rects: vec![Rect::new(10, 5, 6, 1), Rect::new(19, 5, 8, 1)], ..Default::default() };
     assert_eq!(b.at(10, 5), Some(0));
     assert_eq!(b.at(16, 5), None, "between them");
     assert_eq!(b.at(26, 5), Some(1));
@@ -82,4 +82,24 @@ fn buttons_say_which_one_is_under_the_pointer_and_whether_that_changed() {
     assert!(b.hover(12, 5));
     assert!(b.hover(12, 6), "off them");
     assert_eq!(b.hover, None);
+}
+
+#[test]
+fn a_button_acts_on_the_release_over_the_one_pressed_once_armed() {
+    use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+    let (down, up) = (MouseEventKind::Down(MouseButton::Left), MouseEventKind::Up(MouseButton::Left));
+    let t0 = Instant::now();
+    let mut b = Buttons { rects: vec![Rect::new(10, 5, 6, 1), Rect::new(19, 5, 8, 1)], ..Default::default() };
+    // Not drawn yet: nothing is armed.
+    assert_eq!(b.press(down, 20, 5, t0), None);
+    assert_eq!(b.press(up, 20, 5, t0), None);
+    b.shown_at = Some(t0);
+    let late = t0 + ARM_DELAY;
+    assert_eq!(b.press(down, 20, 5, t0 + ARM_DELAY / 2), None);
+    assert_eq!(b.press(up, 20, 5, late), None, "pressed within the delay");
+    assert_eq!(b.press(down, 20, 5, late), None, "a press only arms");
+    assert_eq!(b.press(up, 20, 5, late), Some(1));
+    assert_eq!(b.press(down, 20, 5, late), None);
+    assert_eq!(b.press(up, 11, 5, late), None, "released over the other button");
+    assert_eq!(b.press(up, 20, 5, late), None, "a release disarms");
 }

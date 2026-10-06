@@ -34,7 +34,10 @@ fn find(h: &mut Harness, text: &str) -> (u16, u16) {
     find_nth(h, text, 0)
 }
 
+/// A press and a release at (x, y), once the dialog's buttons take presses (past the arming
+/// delay after it was first drawn).
 fn click(h: &mut Harness, (x, y): (u16, u16)) {
+    h.advance(std::time::Duration::from_millis(500));
     h.mouse(MouseEventKind::Down(MouseButton::Left), x, y);
     h.mouse(MouseEventKind::Up(MouseButton::Left), x, y);
 }
@@ -154,7 +157,7 @@ fn section_tabs_selectors_and_the_ssh_choices_take_clicks() {
 }
 
 /// A picker's value opens its list; a click on a row picks it; the wheel moves the selection
-/// and the pointer selects the row under it.
+/// and the pointer highlights the row under it (the selection stays).
 #[test]
 fn a_pickers_list_takes_clicks_the_wheel_and_the_pointer() {
     let mut h = new_form();
@@ -168,9 +171,11 @@ fn a_pickers_list_takes_clicks_the_wheel_and_the_pointer() {
     wheel(&mut h, true, (list.x + 2, list.y));
     assert_eq!(sel(&h), 1);
     assert!(hover(&mut h, list.x + 2, list.y + 3), "another row: a frame");
-    assert_eq!(sel(&h), 3);
+    assert_eq!((sel(&h), h.app.overlays.chooser().unwrap().hover), (1, Some(3)));
     assert!(!hover(&mut h, list.x + 5, list.y + 3), "the same row: none");
+    assert!(hover(&mut h, list.x + 2, list.y + 1), "onto the selected row: the highlight goes");
     assert!(!hover(&mut h, 0, 0), "off the list: none");
+    assert_eq!(h.app.overlays.chooser().unwrap().hover, None);
     let value = h.app.overlays.chooser().unwrap().items[3].0.clone();
     click(&mut h, (list.x + 2, list.y + 3));
     assert_eq!(h.overlay_kind(), Some(OverlayKind::ProfileForm));
@@ -361,7 +366,7 @@ fn the_name_input_takes_clicks() {
 }
 
 /// Quick connect: a click on `▸` lists the profile's databases, one on a row picks it; the
-/// wheel and the pointer move the selection.
+/// wheel moves the selection, the pointer highlights a row.
 #[test]
 fn quick_connect_takes_clicks_the_wheel_and_the_pointer() {
     let mut h = launched();
@@ -375,7 +380,7 @@ fn quick_connect_takes_clicks_the_wheel_and_the_pointer() {
     wheel(&mut h, true, (list.x + 4, list.y));
     assert_eq!(sel(&h), 1);
     assert!(hover(&mut h, list.x + 6, list.y + 2));
-    assert_eq!(sel(&h), 2);
+    assert_eq!((sel(&h), h.app.overlays.quick().unwrap().hover), (1, Some(2)), "the pointer only highlights");
     assert!(!hover(&mut h, list.x + 7, list.y + 2));
     // The arrow of the first profile: its databases are asked for (it opens).
     let (arrow, row) = h.app.overlays.quick().unwrap().arrows[0];
@@ -398,8 +403,8 @@ fn quick_connect_takes_clicks_the_wheel_and_the_pointer() {
     assert_eq!(h.app.conns.state(v6), datarig_tui::app::NodeState::Connecting);
 }
 
-/// The settings: a click on `›` changes the value, on a row selects it; the wheel and the
-/// pointer move the selection.
+/// The settings: a click on `›` changes the value, on a row selects it; the wheel moves the
+/// selection, the pointer highlights a row.
 #[test]
 fn the_settings_take_clicks_the_wheel_and_the_pointer() {
     let mut h = Harness::connected(Lang::En);
@@ -409,21 +414,25 @@ fn the_settings_take_clicks_the_wheel_and_the_pointer() {
     let sel = |h: &Harness| h.app.overlays.settings().unwrap().selected;
     // A row with fixed values (not the theme's).
     let fixed = |i: usize| h.app.setting_value(datarig_tui::app::settings::order()[i]).is_some();
-    let (line, i, value) = *rows.iter().skip(1).find(|(_, i, _)| fixed(*i)).unwrap();
+    let r = *rows.iter().skip(1).find(|r| fixed(r.row)).unwrap();
+    let (line, i) = (r.line, r.row);
     click(&mut h, (line.x + 3, line.y));
     assert_eq!(sel(&h), i);
     let k = datarig_tui::app::settings::order()[i];
     let before = h.app.setting_value(k);
-    click(&mut h, (value.x + value.width - 1, value.y));
+    click(&mut h, (r.next.x + 1, r.next.y));
     assert_ne!(h.app.setting_value(k), before, "› changed it");
-    click(&mut h, (value.x, value.y));
+    click(&mut h, (r.prev.x, r.prev.y));
     assert_eq!(h.app.setting_value(k), before, "‹ changed it back");
     wheel(&mut h, true, (line.x + 3, line.y));
     assert_eq!(sel(&h), i + 1);
-    let (line4, i4, _) = *rows.iter().find(|(_, r, _)| *r == i + 3).unwrap();
-    assert!(hover(&mut h, line4.x + 3, line4.y));
-    assert_eq!(sel(&h), i4);
-    assert!(!hover(&mut h, line4.x + 9, line4.y));
+    // The pointer highlights a row; the selection stays.
+    let r4 = *rows.iter().find(|r| r.row == i + 3).unwrap();
+    assert!(hover(&mut h, r4.line.x + 3, r4.line.y));
+    assert_eq!((sel(&h), h.app.overlays.settings().unwrap().hover), (i + 1, Some(i + 3)));
+    assert!(!hover(&mut h, r4.line.x + 9, r4.line.y));
+    let t = h.draw(W, H);
+    assert_eq!(t.backend().buffer()[(r4.line.x + 3, r4.line.y)].bg, datarig_tui::theme::DARK.surface_alt);
     click(&mut h, (0, 0));
     assert_eq!(h.overlay_kind(), Some(OverlayKind::Settings), "a click outside closes nothing");
 }
@@ -512,4 +521,126 @@ fn moves_off_the_buttons_draw_no_frame() {
         frames += usize::from(hover(&mut h, x, r.y));
     }
     assert_eq!(frames, 6, "Test, Save, Cancel: in and out of each");
+}
+
+// ── buttons act on a release over the button pressed, once the dialog was shown a moment ──
+
+/// Wait past the arming delay of a dialog just drawn.
+fn armed(h: &mut Harness) {
+    h.advance(std::time::Duration::from_millis(500));
+}
+
+fn quit_confirm() -> Harness {
+    let mut h = Harness::connected(Lang::En);
+    h.db(DbEvent::Block(true));
+    h.db(DbEvent::TxOpen(true));
+    h.ctrl('q');
+    h.draw(W, H);
+    h
+}
+
+/// A press on Quit released off it does nothing (a press-drag-away), even after the delay.
+#[test]
+fn a_press_released_off_the_button_does_nothing() {
+    let mut h = quit_confirm();
+    armed(&mut h);
+    let r = h.app.overlays.confirm().unwrap().buttons.rects[1];
+    h.mouse(MouseEventKind::Down(MouseButton::Left), r.x + 1, r.y);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), r.x + 1, r.y + 3);
+    assert!(!h.app.quit, "released off Quit");
+    // Pressed on Stay and released on Quit: nothing either.
+    let stay = h.app.overlays.confirm().unwrap().buttons.rects[0];
+    h.mouse(MouseEventKind::Down(MouseButton::Left), stay.x + 1, stay.y);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), r.x + 1, r.y);
+    assert!(!h.app.quit && h.app.overlays.confirm().is_some());
+    // Pressed and released on Quit: it quits.
+    h.mouse(MouseEventKind::Down(MouseButton::Left), r.x + 1, r.y);
+    assert!(!h.app.quit, "a press alone does nothing");
+    h.mouse(MouseEventKind::Up(MouseButton::Left), r.x + 1, r.y);
+    assert!(h.app.quit);
+}
+
+/// A dialog that appears under a clicking pointer does not take that click: presses in the
+/// first moment after it was first drawn are ignored.
+#[test]
+fn a_press_right_after_a_dialog_appears_is_ignored() {
+    let mut h = quit_confirm();
+    let r = h.app.overlays.confirm().unwrap().buttons.rects[1];
+    h.mouse(MouseEventKind::Down(MouseButton::Left), r.x + 1, r.y);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), r.x + 1, r.y);
+    assert!(!h.app.quit, "pressed at once");
+    h.advance(std::time::Duration::from_millis(200));
+    h.mouse(MouseEventKind::Down(MouseButton::Left), r.x + 1, r.y);
+    h.advance(std::time::Duration::from_millis(300));
+    h.mouse(MouseEventKind::Up(MouseButton::Left), r.x + 1, r.y);
+    assert!(!h.app.quit, "pressed within the delay, released after it");
+    h.mouse(MouseEventKind::Down(MouseButton::Left), r.x + 1, r.y);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), r.x + 1, r.y);
+    assert!(h.app.quit, "pressed after the delay");
+}
+
+/// The pointer only highlights a row of quick connect: a twitch never changes what Enter picks.
+#[test]
+fn the_pointer_does_not_change_what_enter_picks_in_quick_connect() {
+    let mut h = launched();
+    h.ctrl('o');
+    h.draw(W, H);
+    let q = h.app.overlays.quick().unwrap();
+    assert_eq!(q.selected, 0);
+    let list = q.list;
+    h.mouse(MouseEventKind::Moved, list.x + 5, list.y + 2);
+    assert_eq!(h.app.overlays.quick().unwrap().selected, 0, "a pointer move changed the keyboard's choice");
+}
+
+/// The same in a picker's list and in the settings.
+#[test]
+fn the_pointer_does_not_change_the_selection_of_a_picker_or_the_settings() {
+    let mut h = new_form();
+    click_on(&mut h, " Advanced ", 2);
+    click_on(&mut h, "auto (from the name)", 2);
+    h.draw(W, H);
+    let list = h.app.overlays.chooser().unwrap().list;
+    h.mouse(MouseEventKind::Moved, list.x + 2, list.y + 3);
+    assert_eq!(h.app.overlays.chooser().unwrap().selected, 0);
+    let mut h = Harness::connected(Lang::En);
+    h.command("settings");
+    h.draw(W, H);
+    let line = h.app.overlays.settings().unwrap().rows[3].line;
+    h.mouse(MouseEventKind::Moved, line.x + 3, line.y);
+    assert_eq!(h.app.overlays.settings().unwrap().selected, 0);
+}
+
+/// The settings' wheel moves one row and stops at the ends.
+#[test]
+fn the_settings_wheel_stops_at_the_ends() {
+    let mut h = launched();
+    h.command("settings");
+    h.draw(W, H);
+    let r = h.app.overlays.settings().unwrap().rows[0].line;
+    wheel(&mut h, false, (r.x + 2, r.y));
+    assert_eq!(h.app.overlays.settings().unwrap().selected, 0, "not wrapped to the last row");
+    let mut prev = 0;
+    for _ in 0..40 {
+        wheel(&mut h, true, (r.x + 2, r.y));
+        let now = h.app.overlays.settings().unwrap().selected;
+        assert!(now == prev + 1 || now == prev, "one notch down went from row {prev} to row {now}");
+        prev = now;
+    }
+    assert_eq!(prev, datarig_tui::app::settings::order().len() - 1);
+}
+
+/// A `‹ value ›` cut by the box: its last drawn columns are the value, not `›`.
+#[test]
+fn a_clipped_selector_has_no_next_zone_on_its_value() {
+    let mut h = new_form();
+    click_on(&mut h, " Advanced ", 2);
+    h.app.overlays.form_mut().unwrap().folder = Some("f".repeat(200));
+    let t = h.draw(80, 24);
+    let buf = t.backend().buffer();
+    let y = (0..24).find(|y| row_text(buf, *y).contains("Folder")).unwrap();
+    let row = row_text(buf, y);
+    assert!(!row.contains('›'), "clipped: {row}");
+    // The last column of the value inside the box.
+    let last = (0..80u16).rev().find(|x| buf[(*x, y)].symbol() == "f").unwrap();
+    assert_eq!(h.form().hit_at(last, y), Some(FormHit::Value(Field::Folder)));
 }

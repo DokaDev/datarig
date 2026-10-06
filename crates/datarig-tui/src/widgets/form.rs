@@ -60,11 +60,15 @@ pub(crate) fn test_line(app: &App, x: u16, y: u16, w: usize, lines: usize, buf: 
 }
 
 /// Where a `‹ value ›` selector of field `f` drawn at (x, y), `used` columns wide, is clicked:
-/// its `‹`, its value and its `›`.
-fn selector_hits(hits: &mut Vec<(Rect, FormHit)>, f: Field, x: u16, y: u16, used: u16) {
+/// its `‹`, its value and its `›` (only when `whole`: a selector the box cut off ends in its
+/// value).
+fn selector_hits(hits: &mut Vec<(Rect, FormHit)>, f: Field, x: u16, y: u16, (used, whole): (u16, bool)) {
+    let arrows = if whole { 4 } else { 2 };
     hits.push((Rect::new(x, y, used.min(2), 1), FormHit::Prev(f)));
-    hits.push((Rect::new(x + 2, y, used.saturating_sub(4), 1), FormHit::Value(f)));
-    hits.push((Rect::new((x + used).saturating_sub(2), y, used.min(2), 1), FormHit::Next(f)));
+    hits.push((Rect::new(x + 2, y, used.saturating_sub(arrows), 1), FormHit::Value(f)));
+    if whole {
+        hits.push((Rect::new((x + used).saturating_sub(2), y, used.min(2), 1), FormHit::Next(f)));
+    }
 }
 
 /// The underline of the button under the pointer.
@@ -72,19 +76,21 @@ fn hovered(style: Style, on: bool) -> Style {
     if on { style.add_modifier(Modifier::UNDERLINED) } else { style }
 }
 
-/// One `‹ value ›` selector at (x, y); returns the columns used.
-fn selector(buf: &mut Buffer, x: u16, y: u16, room: usize, parts: &[(String, Style)], focused: bool) -> u16 {
+/// One `‹ value ›` selector at (x, y); returns the columns used and whether all of it fit.
+fn selector(buf: &mut Buffer, x: u16, y: u16, room: usize, parts: &[(String, Style)], focused: bool) -> (u16, bool) {
     let th = theme::cur();
     let bg = if focused { th.selection } else { Style::new().bg(th.surface_alt) };
     let mut cx = x;
     let mut all = vec![("‹ ".to_string(), Style::new().fg(th.fg_muted))];
     all.extend(parts.iter().cloned());
     all.push((" ›".to_string(), Style::new().fg(th.fg_muted)));
+    let mut full = 0;
     for (t, st) in all {
         let left = room.saturating_sub((cx - x) as usize);
         cx += put(buf, cx, y, &t, left, st.patch(bg));
+        full += width(&t);
     }
-    cx - x
+    (cx - x, usize::from(cx - x) == full)
 }
 
 /// The profile form: a large centered dialog with its section tabs (Basic / Advanced), the
@@ -104,7 +110,9 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
         .as_ref()
         .map(|f| i18n.msg(&crate::app::fault_reason(f)).to_string())
         .unwrap_or_default();
+    let now = app.now();
     let form = app.overlays.form_mut()?;
+    form.shown_at.get_or_insert(now);
     let mut hits: Vec<(Rect, FormHit)> = Vec::new();
     let hover = form.hover;
     let tunnel_form = form.is_tunnel();
@@ -243,8 +251,9 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
                 continue;
             }
             Field::SslMode => {
-                let used = selector(buf, x, y, room_from(x), &[text(SSL_MODES[form.sslmode])], focused);
-                selector_hits(&mut hits, f, x, y, used);
+                let drawn = selector(buf, x, y, room_from(x), &[text(SSL_MODES[form.sslmode])], focused);
+                selector_hits(&mut hits, f, x, y, drawn);
+                let used = drawn.0;
                 put(buf, x + used + 2, y, &i18n.label(Label::FormSslmodeHint), room_from(x + used + 2), dim);
                 continue;
             }
@@ -263,8 +272,9 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
                     ),
                     SshChoice::Preset(name) => (name.clone(), i18n.label(Label::FormSshPresetHint)),
                 };
-                let used = selector(buf, x, y, room_from(x), &[text(&value)], focused);
-                selector_hits(&mut hits, f, x, y, used);
+                let drawn = selector(buf, x, y, room_from(x), &[text(&value)], focused);
+                selector_hits(&mut hits, f, x, y, drawn);
+                let used = drawn.0;
                 let mut hx = x + used + 2;
                 if choice == SshChoice::Inline {
                     // "Save as tunnel preset" (its key on the form too).
@@ -352,8 +362,9 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
             }
             Field::StatementCache => {
                 let state = if form.statement_cache { Label::FormCacheOn } else { Label::FormCacheOff };
-                let used = selector(buf, x, y, room_from(x), &[text(&i18n.label(state))], focused);
-                selector_hits(&mut hits, f, x, y, used);
+                let drawn = selector(buf, x, y, room_from(x), &[text(&i18n.label(state))], focused);
+                selector_hits(&mut hits, f, x, y, drawn);
+                let used = drawn.0;
                 let hint = format!("{} · {}", i18n.label(Label::FormSslmodeHint), i18n.label(Label::FormCacheHint));
                 put(buf, x + used + 2, y, &hint, room_from(x + used + 2), dim);
                 continue;
@@ -365,8 +376,9 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
                     None => i18n.label(Label::ChooserColorAuto).to_string(),
                 };
                 let parts = [("● ".to_string(), Style::new().fg(color)), text(&name)];
-                let used = selector(buf, x, y, room_from(x), &parts, focused);
-                selector_hits(&mut hits, f, x, y, used);
+                let drawn = selector(buf, x, y, room_from(x), &parts, focused);
+                selector_hits(&mut hits, f, x, y, drawn);
+                let used = drawn.0;
                 x + used
             }
             Field::Icon => {
@@ -380,8 +392,9 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
                     .and_then(crate::icons::by_name)
                     .unwrap_or_else(|| crate::icons::for_driver(DRIVERS[form.driver].0));
                 let cell = if icons_on { format!("{glyph} ") } else { String::new() };
-                let used = selector(buf, x, y, room_from(x), &[text(&format!("{cell}{name}"))], focused);
-                selector_hits(&mut hits, f, x, y, used);
+                let drawn = selector(buf, x, y, room_from(x), &[text(&format!("{cell}{name}"))], focused);
+                selector_hits(&mut hits, f, x, y, drawn);
+                let used = drawn.0;
                 x + used
             }
             Field::Folder => {
@@ -389,8 +402,9 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
                     Some(f) => format!("{f}/"),
                     None => i18n.label(Label::ChooserFolderTop).to_string(),
                 };
-                let used = selector(buf, x, y, room_from(x), &[text(&name)], focused);
-                selector_hits(&mut hits, f, x, y, used);
+                let drawn = selector(buf, x, y, room_from(x), &[text(&name)], focused);
+                selector_hits(&mut hits, f, x, y, drawn);
+                let used = drawn.0;
                 x + used
             }
             Field::Source => {

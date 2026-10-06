@@ -84,6 +84,8 @@ pub struct QuickConnect {
     pub scroll: usize,
     pub list: ratatui::layout::Rect,
     pub arrows: Vec<(ratatui::layout::Rect, usize)>,
+    /// The row under the pointer (highlighted; the selection does not move to it).
+    pub hover: Option<usize>,
 }
 
 impl App {
@@ -109,6 +111,7 @@ impl App {
             scroll: 0,
             list: Default::default(),
             arrows: Vec::new(),
+            hover: None,
         }));
         self.refresh_quick();
     }

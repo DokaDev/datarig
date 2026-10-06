@@ -241,7 +241,10 @@ fn the_button_opens_the_picker_and_the_action_is_registered() {
             row.find("[…]").map(|i| (datarig_tui::text::width(&row[..i]) as u16, y))
         })
         .expect("the button");
+    // A button: a press and its release, past the arming delay after the form appeared.
+    h.advance(std::time::Duration::from_millis(500));
     h.mouse(MouseEventKind::Down(MouseButton::Left), x + 1, y);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), x + 1, y);
     assert_eq!(h.app.overlays.top().map(|o| o.kind()), Some(OverlayKind::ScriptTree));
     assert_eq!(picker_root(&h), home.0.join(".ssh"));
     h.key(KeyCode::Esc);

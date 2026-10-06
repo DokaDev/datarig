@@ -641,12 +641,20 @@ fn a_host_key_question_takes_clicks() {
     let (tx, mut rx) = oneshot::channel();
     tunnel(&mut h, id, generation, TunnelEvent::Ask(TunnelAsk::HostKey(question(Vec::new()), tx)));
     let (cancel, _) = buttons(&mut h);
+    h.advance(Duration::from_millis(500));
     h.mouse(MouseEventKind::Down(MouseButton::Left), cancel.x + 1, cancel.y);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), cancel.x + 1, cancel.y);
     assert_eq!(rx.try_recv(), Ok(false));
     assert!(h.app.overlays.confirm().is_none());
     let (tx, mut rx) = oneshot::channel();
     tunnel(&mut h, id, generation, TunnelEvent::Ask(TunnelAsk::HostKey(question(Vec::new()), tx)));
     let (_, trust) = buttons(&mut h);
+    // A press at once on the question that just appeared is not taken.
     h.mouse(MouseEventKind::Down(MouseButton::Left), trust.x + 1, trust.y);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), trust.x + 1, trust.y);
+    assert!(rx.try_recv().is_err(), "not answered yet");
+    h.advance(Duration::from_millis(500));
+    h.mouse(MouseEventKind::Down(MouseButton::Left), trust.x + 1, trust.y);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), trust.x + 1, trust.y);
     assert_eq!(rx.try_recv(), Ok(true));
 }

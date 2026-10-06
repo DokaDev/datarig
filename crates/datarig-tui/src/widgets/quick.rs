@@ -29,7 +29,7 @@ pub(crate) fn draw_quick_connect(app: &mut App, area: Rect, buf: &mut Buffer) ->
     let rect = centered(area, w, rows as u16 + 4);
     let inner = modal(rect, &title, &footer, buf);
     let iw = inner.width as usize;
-    let (items, selected) = (q.items.clone(), q.selected);
+    let (items, selected, hover) = (q.items.clone(), q.selected, q.hover);
     put(buf, inner.x + 1, inner.y, "›", 1, Style::new().fg(th.accent).bg(th.surface).add_modifier(Modifier::BOLD));
     let input = Rect::new(inner.x + 3, inner.y, inner.width.saturating_sub(4), 1);
     let placeholder = app.i18n.label(Label::QuickPlaceholder);
@@ -96,7 +96,13 @@ pub(crate) fn draw_quick_connect(app: &mut App, area: Rect, buf: &mut Buffer) ->
     let first = q.scroll;
     for (row, parts) in lines.iter().enumerate().skip(first).take(rows) {
         let y = inner.y + 2 + (row - first) as u16;
-        let bg = if row == selected { th.selection } else { Style::new().bg(th.surface) };
+        let bg = if row == selected {
+            th.selection
+        } else if hover == Some(row) {
+            Style::new().bg(th.surface_alt)
+        } else {
+            Style::new().bg(th.surface)
+        };
         buf.set_stringn(inner.x, y, fit("", iw, Align::Left), iw, bg);
         // Which part is the row's `▸`/`▾`.
         let arrow_part = match items[row] {

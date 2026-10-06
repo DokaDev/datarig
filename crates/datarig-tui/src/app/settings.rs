@@ -20,9 +20,21 @@ use super::*;
 pub struct SettingsScreen {
     pub selected: usize,
     pub themes: ThemeRow,
-    /// Each row drawn (mouse), kept by the renderer: its line, its index in [`order`] and where
-    /// its `‹ value ›` is.
-    pub rows: Vec<(ratatui::layout::Rect, usize, ratatui::layout::Rect)>,
+    /// Each row drawn (mouse), kept by the renderer.
+    pub rows: Vec<SettingsRow>,
+    /// The row under the pointer (highlighted; the selection does not move to it).
+    pub hover: Option<usize>,
+}
+
+/// A row of the settings as drawn: its line, its index in [`order`], and its `‹`, value and `›`
+/// (`next` is empty when the box cut the value off before it).
+#[derive(Clone, Copy, Debug)]
+pub struct SettingsRow {
+    pub line: ratatui::layout::Rect,
+    pub row: usize,
+    pub prev: ratatui::layout::Rect,
+    pub value: ratatui::layout::Rect,
+    pub next: ratatui::layout::Rect,
 }
 
 /// The rows: indices into [`SETTINGS`], by category, then in table order.
@@ -51,7 +63,7 @@ impl App {
         self.overlays.close(OverlayKind::WhichKey);
         self.key_state.clear();
         let themes = ThemeRow { names: self.theme_names(), preview: None };
-        self.overlays.push(Overlay::Settings(SettingsScreen { selected: 0, themes, rows: Vec::new() }));
+        self.overlays.push(Overlay::Settings(SettingsScreen { selected: 0, themes, rows: Vec::new(), hover: None }));
     }
 
     /// The value setting `k` of [`SETTINGS`] has now (an index into its values).

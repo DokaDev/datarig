@@ -1,10 +1,12 @@
 //! The mouse on the dialogs. Every dialog keeps where its renderer drew what can be clicked
 //! (buttons, rows, inputs, the profile form's parts), so a click hits what is on screen, and a
 //! click does what the key for it does: a button presses its key, a row is picked as `Enter`
-//! picks it. A click outside a dialog does nothing (the menu alone closes on one). The pointer
-//! (no button pressed) highlights the button under it without moving the focus, so `Enter`
-//! still presses the safe one; in the lists (chooser, quick connect, settings) it selects the
-//! row as in the menu. A move that changes nothing draws no frame.
+//! picks it. A button acts as a GUI button does: a press arms it and the release over the same
+//! button presses it, and presses right after the dialog first appeared are ignored
+//! ([`super::overlay::ARM_DELAY`]). A click outside a dialog does nothing (the menu alone
+//! closes on one). The pointer (no button pressed) only highlights the button or the row under
+//! it: the focus and the selection, what `Enter` acts on, stay where the keys put them (the menu
+//! and the keyboard help, where it selects, aside). A move that changes nothing draws no frame.
 
 use super::profiles::FormHit;
 use super::quick::QuickRow;
@@ -79,34 +81,20 @@ impl App {
             Some(OverlayKind::NameInput) => self.overlays.name_input_mut().is_some_and(|n| n.buttons.hover(x, y)),
             Some(OverlayKind::Chooser) => {
                 let Some(c) = self.overlays.chooser_mut() else { return false };
-                match row_at(c.list, c.scroll, c.visible().len(), x, y) {
-                    Some(i) if i != c.selected => {
-                        c.selected = i;
-                        true
-                    }
-                    _ => false,
-                }
+                // Over the selected row the highlight would not show.
+                let h = row_at(c.list, c.scroll, c.visible().len(), x, y).filter(|i| *i != c.selected);
+                std::mem::replace(&mut c.hover, h) != h
             }
             Some(OverlayKind::QuickConnect) => {
                 let Some(q) = self.overlays.quick_mut() else { return false };
-                match row_at(q.list, q.scroll, q.items.len(), x, y) {
-                    Some(i) if i != q.selected => {
-                        q.selected = i;
-                        q.want = None;
-                        true
-                    }
-                    _ => false,
-                }
+                let h = row_at(q.list, q.scroll, q.items.len(), x, y).filter(|i| *i != q.selected);
+                std::mem::replace(&mut q.hover, h) != h
             }
             Some(OverlayKind::Settings) => {
                 let Some(s) = self.overlays.settings_mut() else { return false };
-                match s.rows.iter().find(|(r, ..)| r.contains(Position::new(x, y))).map(|(_, i, _)| *i) {
-                    Some(i) if i != s.selected => {
-                        s.selected = i;
-                        true
-                    }
-                    _ => false,
-                }
+                let h = s.rows.iter().find(|r| r.line.contains(Position::new(x, y))).map(|r| r.row);
+                let h = h.filter(|i| *i != s.selected);
+                std::mem::replace(&mut s.hover, h) != h
             }
             _ => false,
         }
@@ -115,14 +103,27 @@ impl App {
     /// The mouse on the profile form: a section's tab shows it; a field's line focuses the
     /// field, its input puts the cursor under the pointer; a value shown side by side is
     /// picked; a selector's `‹`/`›` are the arrow keys and its value is `Space` (`Enter` on a
-    /// picker opens its list); a button is pressed as `Enter` presses it; `[…]` opens the key file
-    /// picker and "save as tunnel preset" asks for the preset's name. Nothing while it saves.
+    /// picker opens its list); a button (on the release over the button pressed, as on the other
+    /// dialogs) is pressed as `Enter` presses it, `[…]` opens the key file picker and "save as
+    /// tunnel preset" asks for the preset's name. Nothing while it saves.
     pub(super) fn form_mouse(&mut self, m: MouseEvent) {
-        if !click(&m) {
-            return;
-        }
+        let now = self.now();
         let Some(f) = self.overlays.form_mut().filter(|f| !f.saving) else { return };
-        let Some(hit) = f.hit_at(m.column, m.row) else { return };
+        let at = f.hit_at(m.column, m.row);
+        let hit = match m.kind {
+            MouseEventKind::Down(MouseButton::Left) if at.is_some_and(FormHit::is_button) => {
+                let ready = f.shown_at.is_some_and(|t| now.saturating_duration_since(t) >= super::overlay::ARM_DELAY);
+                f.armed = at.filter(|_| ready);
+                return;
+            }
+            MouseEventKind::Down(MouseButton::Left) => {
+                f.armed = None;
+                at
+            }
+            MouseEventKind::Up(MouseButton::Left) => f.armed.take().filter(|a| at == Some(*a)),
+            _ => None,
+        };
+        let Some(hit) = hit else { return };
         match hit {
             FormHit::Section(s) => f.open_section(s),
             FormHit::Field(field) => f.focus = field,
@@ -162,36 +163,41 @@ impl App {
         std::mem::replace(&mut f.hover, h) != h
     }
 
-    /// A click on a confirmation's button presses its key (`y`, `n`, `r`, `o`, `Esc`).
+    /// A button of a confirmation presses its key (`y`, `n`, `r`, `o`, `Esc`).
     fn confirm_mouse(&mut self, m: MouseEvent) {
-        let Some(c) = self.overlays.confirm().filter(|_| click(&m)) else { return };
-        let Some(i) = c.buttons.at(m.column, m.row) else { return };
+        let now = self.now();
+        let Some(c) = self.overlays.confirm_mut() else { return };
+        let Some(i) = c.buttons.press(m.kind, m.column, m.row, now) else { return };
         let Some(code) = c.buttons().0.get(i).map(|b| b.1) else { return };
         self.confirm_key(press(code), false);
     }
 
-    /// A click on Cancel or Run answers the run confirmation.
+    /// Cancel or Run answers the run confirmation.
     fn run_confirm_mouse(&mut self, m: MouseEvent) {
-        let Some(c) = self.overlays.run_confirm().filter(|_| click(&m)) else { return };
-        let Some(i) = c.buttons.at(m.column, m.row) else { return };
+        let now = self.now();
+        let Some(c) = self.overlays.run_confirm_mut() else { return };
+        let Some(i) = c.buttons.press(m.kind, m.column, m.row, now) else { return };
         self.run_confirm_key(press(if i == 1 { KeyCode::Char('y') } else { KeyCode::Char('n') }), false);
     }
 
-    /// A click on Yes or No answers the icons question.
+    /// Yes or No answers the icons question.
     fn icons_ask_mouse(&mut self, m: MouseEvent) {
-        let Some(q) = self.overlays.icons_ask().filter(|_| click(&m)) else { return };
-        let Some(i) = q.buttons.at(m.column, m.row) else { return };
+        let now = self.now();
+        let Some(q) = self.overlays.icons_ask_mut() else { return };
+        let Some(i) = q.buttons.press(m.kind, m.column, m.row, now) else { return };
         self.icons_ask_key(press(if i == 0 { KeyCode::Char('y') } else { KeyCode::Char('n') }), false);
     }
 
     /// The password prompt: the field takes the focus and the cursor, the checkbox is ticked or
     /// cleared (and takes the focus), OK sends as `Enter`, Cancel closes as `Esc`.
     fn prompt_mouse(&mut self, m: MouseEvent) {
-        let Some(p) = self.overlays.prompt_mut().filter(|_| click(&m)) else { return };
+        let now = self.now();
+        let Some(p) = self.overlays.prompt_mut() else { return };
         let (x, y) = (m.column, m.row);
-        match p.buttons.at(x, y) {
+        match p.buttons.press(m.kind, x, y, now) {
             Some(0) => return self.prompt_key(press(KeyCode::Enter), false),
             Some(_) => return self.prompt_key(press(KeyCode::Esc), false),
+            None if !click(&m) || p.buttons.at(x, y).is_some() => return,
             None => {}
         }
         if p.save_to.is_some() && p.checkbox.contains(Position::new(x, y)) {
@@ -204,13 +210,15 @@ impl App {
 
     /// The name input: the cursor under the pointer; OK as `Enter`, Cancel as `Esc`.
     fn name_mouse(&mut self, m: MouseEvent) {
-        let Some(n) = self.overlays.name_input_mut().filter(|_| click(&m)) else { return };
-        match n.buttons.at(m.column, m.row) {
+        let now = self.now();
+        let Some(n) = self.overlays.name_input_mut() else { return };
+        match n.buttons.press(m.kind, m.column, m.row, now) {
             Some(0) => self.name_key(press(KeyCode::Enter), false),
             Some(_) => self.name_key(press(KeyCode::Esc), false),
-            None => {
+            None if click(&m) => {
                 n.input.click(m.column, m.row);
             }
+            None => {}
         }
     }
 
@@ -261,24 +269,27 @@ impl App {
     }
 
     /// The settings: a click on a row selects it; on its `‹` or `›` the previous or next value
-    /// (`h`/`l`), on the value itself what `Enter` does; the wheel moves the selection.
+    /// (`h`/`l`), on the value itself what `Enter` does; the wheel moves the selection one row,
+    /// stopping at the ends.
     fn settings_mouse(&mut self, m: MouseEvent) {
         let Some(s) = self.overlays.settings_mut() else { return };
         if let Some(d) = wheel(&m) {
-            return self.settings_key(press(if d > 0 { KeyCode::Char('j') } else { KeyCode::Char('k') }), false);
-        }
-        let at = Position::new(m.column, m.row);
-        let Some(&(_, i, value)) = s.rows.iter().find(|(r, ..)| r.contains(at)).filter(|_| click(&m)) else { return };
-        s.selected = i;
-        if !value.contains(at) {
+            // One row a notch, stopping at the ends.
+            let last = super::settings::order().len().saturating_sub(1);
+            s.selected = s.selected.saturating_add_signed(d).min(last);
             return;
         }
-        let code = if m.column < value.x + 2 {
+        let at = Position::new(m.column, m.row);
+        let Some(r) = s.rows.iter().find(|r| r.line.contains(at)).filter(|_| click(&m)).cloned() else { return };
+        s.selected = r.row;
+        let code = if r.prev.contains(at) {
             KeyCode::Char('h')
-        } else if m.column + 2 >= value.x + value.width {
+        } else if r.next.contains(at) {
             KeyCode::Char('l')
-        } else {
+        } else if r.value.contains(at) {
             KeyCode::Enter
+        } else {
+            return;
         };
         self.settings_key(press(code), false);
     }

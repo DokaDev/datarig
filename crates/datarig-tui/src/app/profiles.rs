@@ -438,6 +438,9 @@ pub struct ProfileForm {
     pub hits: Vec<(ratatui::layout::Rect, FormHit)>,
     /// The button under the pointer (drawn highlighted; the focus does not move to it).
     pub hover: Option<FormHit>,
+    /// When the form was first drawn, and the button a press armed (it acts on the release).
+    pub shown_at: Option<std::time::Instant>,
+    pub armed: Option<FormHit>,
     pub focus: Field,
     pub dsn_problem: Option<DsnProblem>,
     /// Save was attempted: "required" errors are shown from now on.
@@ -525,6 +528,8 @@ impl ProfileForm {
             ssh_key_note: None,
             hits: Vec::new(),
             hover: None,
+            shown_at: None,
+            armed: None,
             focus: Field::Name,
             dsn_problem: None,
             attempted: false,

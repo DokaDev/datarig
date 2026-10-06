@@ -910,7 +910,9 @@ fn the_tunnel_form_is_filled_and_saved_by_mouse() {
     let hit = |h: &mut Harness, want: FormHit| {
         h.draw(100, 30);
         let (r, _) = *h.form().hits.iter().find(|(_, x)| *x == want).unwrap_or_else(|| panic!("{want:?}"));
+        h.advance(std::time::Duration::from_millis(500));
         h.mouse(MouseEventKind::Down(MouseButton::Left), r.x + r.width / 2, r.y);
+        h.mouse(MouseEventKind::Up(MouseButton::Left), r.x + r.width / 2, r.y);
     };
     h.type_text("hq");
     hit(&mut h, FormHit::Input(Field::SshHost));

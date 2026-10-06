@@ -187,7 +187,10 @@ fn the_icons_question_takes_clicks() {
     assert!(!q.yes_focused && q.buttons.hover == Some(0));
     h.mouse(MouseEventKind::Down(MouseButton::Left), 0, 0);
     assert!(asking(&h.app), "a click outside does nothing");
+    h.advance(std::time::Duration::from_millis(500));
     h.mouse(MouseEventKind::Down(MouseButton::Left), yes.x + 1, yes.y);
+    assert!(asking(&h.app), "a press alone does nothing");
+    h.mouse(MouseEventKind::Up(MouseButton::Left), yes.x + 1, yes.y);
     assert!(!asking(&h.app) && h.app.icons_on());
     assert_eq!(h.app.icons, IconsSetting::On);
     cleanup(&path);

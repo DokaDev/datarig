@@ -17,15 +17,24 @@ use super::{CommandLine, PasswordPrompt, Viewer};
 use datarig_core::i18n::{Label, Msg};
 use datarig_core::profile::ProfileId;
 use datarig_core::profile::folder::FolderPath;
-use ratatui::crossterm::event::KeyCode;
+use ratatui::crossterm::event::{KeyCode, MouseButton, MouseEventKind};
 use ratatui::layout::{Position, Rect};
+use std::time::{Duration, Instant};
 
-/// A dialog's buttons as last drawn (kept by the renderer, so a click hits what is on screen)
-/// and the one under the pointer. The pointer only highlights a button: the focus, what `Enter`
-/// presses, stays where the keys put it.
+/// How long a dialog's buttons ignore presses after the dialog was first drawn: one that
+/// appears under a clicking pointer (a question raised in the background, the second press of a
+/// double click) does not take that click.
+pub const ARM_DELAY: Duration = Duration::from_millis(400);
+
+/// A dialog's buttons as last drawn (kept by the renderer, so a click hits what is on screen),
+/// when they were first drawn, the one a press armed and the one under the pointer. A button
+/// acts as a GUI button does: on the release over the button that was pressed. The pointer only
+/// highlights a button: the focus, what `Enter` presses, stays where the keys put it.
 #[derive(Clone, Debug, Default)]
 pub struct Buttons {
     pub rects: Vec<Rect>,
+    pub shown_at: Option<Instant>,
+    pub armed: Option<usize>,
     pub hover: Option<usize>,
 }
 
@@ -39,6 +48,21 @@ impl Buttons {
     pub fn hover(&mut self, x: u16, y: u16) -> bool {
         let h = self.at(x, y);
         std::mem::replace(&mut self.hover, h) != h
+    }
+
+    /// A left press or release at (x, y) at `now`: a press arms the button under it (none in
+    /// the first [`ARM_DELAY`] after the buttons were first drawn); the release over the armed
+    /// button returns it, the button to press. Anything else does nothing.
+    pub fn press(&mut self, kind: MouseEventKind, x: u16, y: u16, now: Instant) -> Option<usize> {
+        match kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                let ready = self.shown_at.is_some_and(|t| now.saturating_duration_since(t) >= ARM_DELAY);
+                self.armed = self.at(x, y).filter(|_| ready);
+                None
+            }
+            MouseEventKind::Up(MouseButton::Left) => self.armed.take().filter(|i| self.at(x, y) == Some(*i)),
+            _ => None,
+        }
     }
 }
 

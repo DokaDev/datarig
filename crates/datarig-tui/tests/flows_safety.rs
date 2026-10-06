@@ -1061,7 +1061,12 @@ fn copy_through_the_connection_is_refused_as_not_supported_yet() {
 #[test]
 fn the_run_confirmation_takes_clicks_and_the_pointer_moves_no_focus() {
     use ratatui::crossterm::event::{MouseButton, MouseEventKind};
-    let click = |h: &mut Harness, (x, y): (u16, u16)| h.mouse(MouseEventKind::Down(MouseButton::Left), x, y);
+    // A press and its release, past the arming delay.
+    let click = |h: &mut Harness, (x, y): (u16, u16)| {
+        h.advance(Duration::from_millis(500));
+        h.mouse(MouseEventKind::Down(MouseButton::Left), x, y);
+        h.mouse(MouseEventKind::Up(MouseButton::Left), x, y);
+    };
     let buttons = |h: &mut Harness| {
         h.draw(160, 45);
         let r = &h.app.overlays.run_confirm().expect("asked").buttons.rects;

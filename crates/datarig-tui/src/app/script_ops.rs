@@ -382,6 +382,7 @@ impl App {
             filtering: false,
             scroll: 0,
             list: Default::default(),
+            hover: None,
             purpose: ChooserPurpose::MoveScript(path),
         }));
     }
