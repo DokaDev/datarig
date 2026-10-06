@@ -9,7 +9,10 @@
 //! touching its bytes (text joined to a statement without `;`, a `;` deleted, a comment or a
 //! string opened earlier): a span is checked against the text before its hint is drawn or
 //! made ([`Editor::check_spans`]), and one that is no longer exactly a statement is edited
-//! too. A hint goes with the first change of its statement; a run whose statement was edited
+//! too. A span checked before changes only before it lexes the text from the first of them up
+//! to its first token: it still starts the same statement when a `;` there is followed by
+//! blanks and comments only, or when there is none and nothing changed before its previous
+//! `;`. A hint goes with the first change of its statement; a run whose statement was edited
 //! while it ran gets no hint for it (its answer is about text that is no longer there), and the
 //! statement stays marked while it runs.
 //!
@@ -40,11 +43,16 @@ pub struct Span {
     /// It was found to be a statement of the text, and no change since could make it another
     /// (a change after its `;` cannot).
     checked: bool,
+    /// Since it was checked, the text changed before it from this byte on (only before it).
+    moved_from: Option<usize>,
+    /// Where its statement's lead starts: the end of the `;` before it, 0 at the text's start,
+    /// `usize::MAX` when not known (as of its last check, moved with the text).
+    bound: usize,
 }
 
 impl Span {
     pub fn new(start: usize, end: usize, closed: bool) -> Self {
-        Self { start, end, closed, edited: false, checked: false }
+        Self { start, end, closed, edited: false, checked: false, moved_from: None, bound: usize::MAX }
     }
 
     /// Bytes `a..b` were replaced with `ins` (`blank`: only blanks, put in without removing
@@ -57,13 +65,25 @@ impl Span {
             // it).
             self.start = shift(self.start);
             self.end = shift(self.end);
-            // What comes before it may make it another statement (a `;`, a comment opened).
-            self.checked = false;
+            // What comes before it may make it another statement (a `;`, a comment opened):
+            // checked again from here.
+            if self.checked {
+                self.moved_from = Some(self.moved_from.map_or(a, |m| m.min(a)));
+                self.bound = match self.bound {
+                    usize::MAX => usize::MAX,
+                    x if b <= x => shift(x),
+                    x if a < x => usize::MAX,
+                    x => x,
+                };
+            }
         } else if a > self.end || (a == self.end && (self.closed || blank)) {
             // After it. Right after a statement without `;` text goes on it, except blanks (a
             // new line below it); it is checked again. After its `;` nothing can change it:
             // the text is lexed from left to right.
             self.checked &= self.closed;
+            if !self.checked {
+                self.moved_from = None;
+            }
         } else {
             self.edited = true;
             self.start = self.start.min(a);
@@ -292,6 +312,57 @@ impl Editor {
         self.runs.hints.iter().map(|h| (&h.span, &h.hint))
     }
 
+    /// Whether span `s`, a statement when last checked, still starts that statement after
+    /// changes only before it (from `moved_from` on): lexed from where the lexer's state is
+    /// known on the line of the first change, up to and with the span's first token. Its own
+    /// text is unchanged, so starting it is being it. When it does, where its lead starts now:
+    /// after the `;` found there, else where it started.
+    fn still_starts_its_statement(&mut self, s: &Span) -> Option<usize> {
+        let from = s.moved_from?;
+        // The line before the first change: its state is known lexing up to that change's line
+        // only (never the lines after it, which may be the long statement itself).
+        let r = self.pos_bytes(from).0.saturating_sub(1);
+        self.ensure_states(r);
+        let (line, byte) = self.restart_of(r);
+        let r0 = self.line_start(line) + byte;
+        let (sl, sb) = self.pos_bytes(s.start);
+        if r0 > s.start || sb > self.lines[sl].len() {
+            return None;
+        }
+        // Its first token, lexed alone (its text is unchanged): it must come out whole after
+        // the text before it, or that text swallowed it (a comment or a string not closed).
+        let rest = &self.lines[sl][sb..];
+        let mut cut = rest.len().min(64);
+        while !rest.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        let head = lex(&rest[..cut]).first().copied()?;
+        if head.is_trivia() || (head.end == cut && cut < rest.len()) {
+            return None;
+        }
+        let head_text = &rest[..head.end];
+        let mut text = self.slice((line, byte), (sl, sb));
+        let at = text.len();
+        text.push_str(head_text);
+        self.check_work += text.len();
+        let toks = lex(&text);
+        if !toks.iter().any(|t| t.start == at && t.end == text.len() && t.kind == head.kind) {
+            return None;
+        }
+        let before: Vec<_> = toks.iter().take_while(|t| t.end <= at).collect();
+        let semi = before.iter().rposition(|t| t.kind == Tok::Semi);
+        let lead = &before[semi.map_or(0, |i| i + 1)..];
+        if !lead.iter().all(|t| t.is_trivia()) {
+            return None;
+        }
+        // After a `;` lexed here (its lead starts after it from now on), or (none) after the one
+        // before it, which did not change.
+        match semi {
+            Some(i) => Some(r0 + before[i].end),
+            None => (s.bound != usize::MAX && s.bound <= r0).then_some(s.bound),
+        }
+    }
+
     /// Check the spans of the hints `pick` takes (and of the run in progress with `active`)
     /// that a change may have touched since they were last checked: one that is no longer a
     /// statement of the text is edited, and its hint goes. A span that is a statement's text
@@ -301,6 +372,28 @@ impl Editor {
     /// start) and up to the last `;` (unless to its end); more lines when a span is not inside
     /// that.
     pub(super) fn check_spans(&mut self, active: bool, pick: impl Fn(&Span) -> bool) {
+        // Spans that only moved: checked up to their first token.
+        let moved = |s: &Span| !s.edited && s.checked && s.moved_from.is_some();
+        let mut quick: Vec<(usize, Span)> = Vec::new();
+        for (i, h) in self.runs.hints.iter().enumerate() {
+            if moved(&h.span) && pick(&h.span) {
+                quick.push((i, h.span));
+            }
+        }
+        let n_hints = self.runs.hints.len();
+        if active && let Some((_, spans)) = &self.runs.active {
+            quick.extend(spans.iter().enumerate().filter(|(_, s)| moved(s)).map(|(i, s)| (n_hints + i, *s)));
+        }
+        for (i, s) in quick {
+            let bound = self.still_starts_its_statement(&s);
+            let span = match self.runs.active.as_mut() {
+                Some((_, spans)) if i >= n_hints => &mut spans[i - n_hints],
+                _ => &mut self.runs.hints[i].span,
+            };
+            span.moved_from = None;
+            span.checked = bound.is_some();
+            span.bound = bound.unwrap_or(usize::MAX);
+        }
         let unchecked = |s: &Span| !s.edited && !s.checked;
         let run = self.runs.active.iter().filter(|_| active).flat_map(|(_, s)| s.iter());
         let hinted = self.runs.hints.iter().map(|h| &h.span).filter(|s| pick(s));
@@ -316,7 +409,7 @@ impl Editor {
         let (lo_line, hi_line) = (self.pos_bytes(lo).0, self.pos_bytes(hi).0);
         let mut k = REGION_LINES;
         // The spans that hold, with the end and `;` of their statement.
-        let mut holds: HashMap<(usize, usize), (usize, bool)> = HashMap::new();
+        let mut holds: HashMap<(usize, usize), (usize, bool, usize)> = HashMap::new();
         loop {
             let (first, last) = (lo_line.saturating_sub(k), (hi_line + k + 1).min(n));
             let (base, region) = self.region_text(first, last);
@@ -329,15 +422,25 @@ impl Editor {
             } else {
                 toks.iter().rfind(|t| t.kind == Tok::Semi).map_or(0, |t| base + t.end)
             };
-            // Each statement by its start: its body's end and its end.
+            // Each statement by its start: its body's end and its end; and their ends in order.
+            let split = split(&region);
             let stmts: HashMap<usize, (usize, usize)> =
-                split(&region).iter().map(|st| (base + st.start, (base + st.body_end, base + st.end))).collect();
+                split.iter().map(|st| (base + st.start, (base + st.body_end, base + st.end))).collect();
+            let ends: Vec<usize> = split.iter().map(|st| base + st.end).collect();
             let whole = base == 0 && last == n;
             todo.retain(|&(a, b)| {
                 if a >= from && b <= to {
                     match stmts.get(&a) {
                         Some(&(body, end)) if b == end || b == body => {
-                            holds.insert((a, b), (end, end > body));
+                            // The `;` before it: the end of the statement before it, or the
+                            // text's start.
+                            let before = ends.partition_point(|&e| e <= a);
+                            let bound = match before {
+                                0 if base == 0 => 0,
+                                0 => usize::MAX,
+                                i => ends[i - 1],
+                            };
+                            holds.insert((a, b), (end, end > body, bound));
                         }
                         _ => {}
                     }
@@ -357,8 +460,8 @@ impl Editor {
                 continue;
             }
             match holds.get(&(s.start, s.end)) {
-                Some(&(end, closed)) => {
-                    (s.end, s.closed, s.checked) = (end, closed, true);
+                Some(&(end, closed, bound)) => {
+                    (s.end, s.closed, s.checked, s.bound, s.moved_from) = (end, closed, true, bound, None);
                 }
                 None => s.edited = true,
             }

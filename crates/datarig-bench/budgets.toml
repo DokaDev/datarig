@@ -92,10 +92,13 @@ rss_mib_max = 160
 # count is bounded too, see the editor's search tests), and the most lines one frame highlighted (only those on screen; the editor has fewer
 # rows than the 45 of the terminal). Their times are held to `p95_ms_max` above.
 search_passes_max = 1.0
-# A hint after a statement of 100,000 lines (an INSERT of about 4.7 MB) on screen while keys are
-# typed right after it (in the `editor_block` process, for the copies of the statement its run's
-# end lexes once): the most bytes one key's frame lexed to check the hint against the text
-# (a change after a statement's `;` cannot change it: nothing). Its time is held to `p95_ms_max`.
+# A hinted statement of about 4.7 MB on screen while keys are typed next to it (in the
+# `editor_block` process, for the copies of the statement its run's end lexes once): after an
+# INSERT of 100,000 lines, above the same INSERT on one line, and above a statement under a
+# comment header of 100,000 lines. The most bytes one key's frame lexed to check the hint
+# against the text: nothing after a statement's `;` (a change there cannot change it), the
+# changed line up to the statement's first token before it. The hint must still be there. The
+# time of typing after the INSERT is held to `p95_ms_max`.
 hint_check_bytes_max = 65536
 highlight_lines_max = 45
 # Visual block over the whole file (`gg Ctrl+V G $` then `y`, `d`, `u`, and `I` on every line;

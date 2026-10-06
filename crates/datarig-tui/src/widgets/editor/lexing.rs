@@ -21,7 +21,7 @@ pub(super) const REGION_LINES: usize = 64;
 impl Editor {
     /// Where lexing can start for line `r`: its start, or the start of the token that spans
     /// into it (from the cached line states; [`Editor::ensure_states`] first).
-    fn restart_of(&self, r: usize) -> (usize, usize) {
+    pub(super) fn restart_of(&self, r: usize) -> (usize, usize) {
         match self.states.get(r) {
             Some(LineState::Inside { line, byte }) => (*line, *byte),
             _ => (r, 0),

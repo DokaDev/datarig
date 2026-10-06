@@ -212,3 +212,161 @@ fn a_whole_statement_selected_without_its_semicolon_gets_its_hint() {
     keys(&mut e, "k0f;i x\x1b");
     assert_eq!(e.run_hints().count(), 0, "{:?}", e.text());
 }
+
+/// A change before a hinted statement lexes only from the line it is on (from where the
+/// lexer's state is known) up to the statement's first token, not the statement nor the text
+/// back to the previous `;`: under a long comment header, and above a huge statement on one
+/// line, the hint stays and a key costs a line.
+#[test]
+fn a_change_before_a_statement_lexes_only_up_to_it() {
+    let header = "-- a line of the header that tells what the script does\n".repeat(20_000);
+    let mut e = Editor::new(&format!("{header}SELECT 1;"));
+    assert!(e.text().len() > 1_000_000);
+    keys(&mut e, "G");
+    run(&mut e, 1);
+    e.finish_run(1, vec![hint("one")]);
+    assert_eq!(e.run_hints().count(), 1);
+    keys(&mut e, "k");
+    e.take_check_work();
+    for _ in 0..5 {
+        keys(&mut e, "A x\x1b");
+        assert_eq!(e.run_hints().count(), 1);
+        let work = e.take_check_work();
+        assert!(work > 0 && work < 1_000, "under the header: {work} bytes");
+    }
+    let values: String = (0..50_000).map(|i| format!("({i}, 'row {i}'), ")).collect();
+    let mut e = Editor::new(&format!("SELECT 0;\n-- the rows\nINSERT INTO t VALUES {values}(0, 'end');"));
+    keys(&mut e, "G");
+    run(&mut e, 1);
+    e.finish_run(1, vec![hint("one")]);
+    assert_eq!(e.run_hints().count(), 1);
+    keys(&mut e, "k");
+    e.take_check_work();
+    for _ in 0..5 {
+        keys(&mut e, "A x\x1b");
+        assert_eq!(e.run_hints().count(), 1);
+        let work = e.take_check_work();
+        assert!(work > 0 && work < 1_000, "above a huge line: {work} bytes");
+    }
+}
+
+/// Changes before a statement are told apart: a line with its own `;` keeps the hint; a line
+/// joined to it, a lone `;` deleted, keep nothing.
+#[test]
+fn changes_before_a_statement_keep_or_drop_its_hint_as_the_text_says() {
+    for (text, keys_, kept) in [
+        ("SELECT 0;\nSELECT 1;", "ggox;\x1b", true),
+        ("SELECT 0;\nSELECT 1;", "ggOSELECT 9;\x1b", true),
+        ("SELECT 0;\nSELECT 1;", "ggoSELECT 9\x1b", false),
+        ("SELECT 0\n;\nSELECT 1;", "jx", false),
+        ("SELECT 0;\n-- c\nSELECT 1;", "jA */\x1b", true),
+        ("SELECT 0;\n-- c\nSELECT 1;", "jI/*\x1b", false),
+    ] {
+        let mut e = Editor::new(text);
+        keys(&mut e, "G");
+        run(&mut e, 1);
+        e.finish_run(1, vec![hint("one")]);
+        assert_eq!(e.run_hints().count(), 1, "{text:?}");
+        keys(&mut e, keys_);
+        assert_eq!(e.run_hints().count(), usize::from(kept), "{text:?} then {keys_:?}: {:?}", e.text());
+    }
+}
+
+/// A `;` the check found before a moved statement becomes the bound it relies on next: lines
+/// put above a hinted statement end with their own `;`, then that `;` is deleted while the line
+/// before it holds only a comment, and the statement before runs into it: its hint goes.
+#[test]
+fn a_semicolon_found_by_the_check_is_the_bound_from_then_on() {
+    let mut e = Editor::new("SELECT 0;\n\nSELECT 1;");
+    keys(&mut e, "G");
+    run(&mut e, 1);
+    e.finish_run(1, vec![hint("one")]);
+    assert_eq!(e.run_hints().count(), 1);
+    for k in ["ggji;\x1b", "O-- the end\x1b", "OSELECT 5\x1b"] {
+        keys(&mut e, k);
+        assert_eq!(e.run_hints().count(), 1, "{k:?}: {:?}", e.text());
+    }
+    keys(&mut e, "jjx");
+    assert_eq!(e.text(), "SELECT 0;\nSELECT 5\n-- the end\n\nSELECT 1;");
+    assert_eq!(e.run_hints().count(), 0, "`SELECT 5 … SELECT 1` is one statement now");
+}
+
+/// A small generator of the same pseudo-random sequence on every run.
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+
+    fn below(&mut self, n: usize) -> usize {
+        (self.next() % n.max(1) as u64) as usize
+    }
+}
+
+/// Pieces of text that open, close or end things for the lexer and the splitter.
+const PIECES: &[&str] = &[
+    "SELECT 1", ";", " ", "\n", "\n", "\n", "/*", "*/", "'", "\"", "$$", "$f$", "--", "-- c\n", "E'\\", "x", ";\n",
+    "\n;", "\n;\n", "\r\n", "/* /* */", "\\x\n", ".5", "$1", "U&'", "\n\n",
+];
+
+fn boundary(t: &str, mut i: usize) -> usize {
+    while !t.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
+/// Every hint left is exactly a statement of the text (as the whole text splits) with the
+/// text it had when it ran.
+fn hints_are_statements(e: &mut Editor, ran: &HashMap<usize, String>, ctx: &str) {
+    e.check_spans(false, |_| true);
+    let text = e.text();
+    let stmts = split(&text);
+    for h in &e.runs.hints {
+        let (a, b) = (h.span.start, h.span.end);
+        let statement = stmts.iter().any(|s| s.start == a && s.end == b);
+        assert!(statement && text.get(a..b) == Some(ran[&h.index].as_str()), "{ctx}: ({a}, {b}) in {text:?}");
+    }
+}
+
+/// Random texts before hinted statements and random changes, mostly before the last of them,
+/// checked after most changes: a hint never stays on text that is not its statement.
+#[test]
+fn hints_never_stay_on_text_that_is_not_their_statement() {
+    for seed in 1..=20_000u64 {
+        let mut r = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+        let mut pre = String::new();
+        for _ in 0..3 + r.below(15) {
+            pre.push_str(PIECES[r.below(PIECES.len())]);
+        }
+        let text = format!("{pre};\n\nSELECT 2;\nSELECT 3;");
+        let mut e = Editor::new(&text);
+        keys(&mut e, "ggVG");
+        let stmts = run(&mut e, 1);
+        let ran: HashMap<usize, String> = spans(&e).iter().map(|&(a, b)| text[a..b].to_string()).enumerate().collect();
+        e.finish_run(1, (0..stmts.len()).map(|_| hint("h")).collect());
+        hints_are_statements(&mut e, &ran, &format!("seed {seed}"));
+        for step in 0..40 {
+            let Some(last) = e.runs.hints.last().map(|h| h.span.start) else { break };
+            let t = e.text();
+            let a = boundary(&t, r.below(last + 1));
+            let (b, ins) = match r.below(3) {
+                0 => (a, PIECES[r.below(PIECES.len())]),
+                1 => (boundary(&t, (a + 1 + r.below(3)).min(t.len())).max(a), ""),
+                _ => (boundary(&t, (a + r.below(3)).min(t.len())).max(a), PIECES[r.below(PIECES.len())]),
+            };
+            e.splice_raw(a, b, ins);
+            if r.below(4) != 0 {
+                hints_are_statements(
+                    &mut e,
+                    &ran,
+                    &format!("seed {seed}, step {step}, ({a}, {b}, {ins:?}) after {t:?}"),
+                );
+            }
+        }
+    }
+}

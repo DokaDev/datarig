@@ -490,6 +490,58 @@ fn a_run_stopped_by_a_rebind_or_a_disconnect_says_cancelled_at_once() {
     assert!(h.app.tab().exec.running.is_none());
     assert_eq!(h.app.tab().editor.active_run(), None);
     assert_eq!(after(&mut h, "SELECT 1;"), "\u{2298} cancelled");
+    ended_by_closed_session(&h);
+}
+
+/// The tab's run ended cancelled because its session was closed under it: once, said in its
+/// Messages with the reason, and nothing of that session (paging, transaction) is left.
+fn ended_by_closed_session(h: &Harness) {
+    let t = h.app.tab();
+    assert!(t.exec.running.is_none());
+    let outcomes: Vec<_> = t.exec.run.statements.iter().map(|s| s.outcome.clone()).collect();
+    assert_eq!(outcomes, [datarig_tui::app::runlog::StatementOutcome::Cancelled]);
+    assert!(matches!(t.results, datarig_tui::app::Results::Cancelled));
+    assert_eq!(t.exec.view, datarig_tui::app::tabs::ResultView::Messages);
+    let reason = datarig_core::i18n::Msg::Label(datarig_core::i18n::Label::QueryCancelledSessionClosed);
+    assert_eq!(t.exec.run.notes.iter().filter(|n| n.msg == reason).count(), 1, "{:?}", t.exec.run.notes);
+    assert!(!t.exec.tx_open && t.exec.paging == datarig_tui::app::Paging::None);
+}
+
+/// Another tab connects the profile again while this tab's statement runs (its connection was
+/// lost meanwhile): that tab's session is closed under the run, which ends there, cancelled,
+/// with exactly one terminal outcome; a late answer of the closed session changes nothing.
+/// The same when that attempt then fails.
+#[test]
+fn a_reconnect_ends_a_running_tabs_run_once() {
+    for fails in [false, true] {
+        let mut h = harness("SELECT 1;");
+        h.db(DbEvent::Block(true));
+        h.db(DbEvent::TxOpen(true));
+        let (id, _) = run(&mut h);
+        let (first, old) = (h.app.tab().id, h.app.tab().exec.generation);
+        let pid = h.app.tab().profile.unwrap();
+        // The tunnel was lost: the profile is no longer resolved, the tab's session not told yet.
+        let c = h.app.conns.entry(pid);
+        c.resolved = None;
+        c.connected = false;
+        h.ctrl('t');
+        h.app.tab_mut().editor = Editor::new("SELECT 2;");
+        h.ctrl('e');
+        assert!(h.app.is_queued(h.app.tab().id), "the other tab waits for the new attempt");
+        if fails {
+            h.db(DbEvent::ConnectFailed { error: DbError::from("no route to host"), auth: false });
+        } else {
+            h.db(DbEvent::Connected);
+        }
+        assert!(h.app.tabs.activate(0) || h.app.tab().id == first);
+        assert_eq!(h.app.tab().id, first);
+        ended_by_closed_session(&h);
+        assert_eq!(after(&mut h, "SELECT 1;"), "\u{2298} cancelled");
+        let before = h.app.tab().exec.run.clone();
+        let target = datarig_tui::app::EventTarget::Tab(first);
+        h.app.on_app_event(datarig_tui::app::AppEvent::Db { target, generation: old, ev: rows(id, 1, false) });
+        assert_eq!(h.app.tab().exec.run, before, "a late answer of the closed session");
+    }
 }
 
 /// What `Ctrl+E` took is kept for its run only: a run refused (busy, read-only, unsupported)
@@ -567,4 +619,39 @@ fn a_run_that_never_starts_leaves_nothing_staged() {
     assert!(h.overlay_kind().is_some(), "quick connect");
     h.key(KeyCode::Esc);
     assert!(!h.app.tab().editor.has_staged_run(), "quick connect closed");
+}
+
+/// The profile connects again from another tab while this one's session is open (its connection
+/// was lost meanwhile): this tab's session is closed under it. Back on this tab.
+fn reconnect_from_another_tab(h: &mut Harness) {
+    let pid = h.app.tab().profile.unwrap();
+    let c = h.app.conns.entry(pid);
+    c.resolved = None;
+    c.connected = false;
+    h.ctrl('t');
+    h.app.tab_mut().editor = Editor::new("SELECT 2;");
+    h.ctrl('e');
+    h.db(DbEvent::Connected);
+    h.app.tabs.activate(0);
+}
+
+/// A count or a fetch of more rows whose session is closed under it stops, and says so where
+/// its announcement was: in the tab's Messages and its status.
+#[test]
+fn a_count_or_fetch_whose_session_closed_says_it_stopped() {
+    use datarig_core::i18n::{Label, Msg};
+    for (key, label) in [("#", Label::ResultsCountSessionClosed), ("n", Label::ResultsFetchSessionClosed)] {
+        let mut h = harness("SELECT a FROM t;");
+        let (id, _) = run(&mut h);
+        h.db(rows(id, 500, true));
+        h.key(KeyCode::Tab);
+        h.keys(key);
+        assert!(h.app.tab().exec.running.is_some(), "{key}: sent");
+        reconnect_from_another_tab(&mut h);
+        let t = h.app.tab();
+        assert!(t.exec.running.is_none(), "{key}");
+        let want = Msg::Label(label);
+        assert_eq!(t.exec.run.notes.last().map(|n| &n.msg), Some(&want), "{key}: {:?}", t.exec.run.notes);
+        assert_eq!(t.status.as_ref().map(|n| &n.msg), Some(&want), "{key}");
+    }
 }
