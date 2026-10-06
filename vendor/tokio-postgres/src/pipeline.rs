@@ -220,8 +220,13 @@ pub(crate) async fn first_page_of(
         Some(Message::BindComplete) => {}
         _ => return Err(Error::unexpected_message()),
     }
-    // Closed on the server when dropped (or with its transaction).
-    let portal = Portal::new(client, name, statement.clone());
+    // Closed on the server when dropped (or with its transaction); one whose transaction ended
+    // in this request (`end`) is gone already.
+    let portal = if end {
+        Portal::ended(client, name, statement.clone())
+    } else {
+        Portal::new(client, name, statement.clone())
+    };
     let columns = match it.next() {
         Some(Message::RowDescription(body)) => columns_of(client, &body, statement.columns()).await?,
         Some(Message::NoData) => Vec::new(),

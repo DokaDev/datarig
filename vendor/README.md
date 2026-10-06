@@ -77,7 +77,9 @@ trip per step. These additions put the steps of one request into one write with 
     transaction, and the portal with it, ends in the round trip that read the first rows;
     `read_first_page` skips its three answers. `send_first_page` and `first_page_of` are its two
     halves (the response, then the page with its types looked up), so `bind_first_page_then`
-    marks the transaction done as soon as the response says `COMMIT` succeeded.
+    marks the transaction done as soon as the response says `COMMIT` succeeded. The portal of
+    such a page is made with `Portal::ended` (`src/portal.rs`): it ended with its transaction,
+    so dropping it sends no `Close` (which would be a request, and a round trip, of its own).
   - Both read the whole response up to its `ReadyForQuery` before looking up any type: a
     lookup is a request of its own, answered after this one.
 - `src/transaction.rs`: a `begin` flag (`BEGIN` not sent yet) and the statements sent as that
