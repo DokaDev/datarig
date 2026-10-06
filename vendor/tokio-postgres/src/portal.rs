@@ -9,10 +9,16 @@ struct Inner {
     client: Weak<InnerClient>,
     name: String,
     statement: Statement,
+    // datarig: the portal ended with its transaction in the request that bound it (a pipelined
+    // `COMMIT`): there is nothing to close, and a `Close` would be a request of its own.
+    ended: bool,
 }
 
 impl Drop for Inner {
     fn drop(&mut self) {
+        if self.ended {
+            return;
+        }
         if let Some(client) = self.client.upgrade() {
             let buf = client.with_buf(|buf| {
                 frontend::close(b'P', &self.name, buf).unwrap();
@@ -37,6 +43,17 @@ impl Portal {
             client: Arc::downgrade(client),
             name,
             statement,
+            ended: false,
+        }))
+    }
+
+    // datarig: a portal that already ended with its transaction (see `Inner::ended`).
+    pub(crate) fn ended(client: &Arc<InnerClient>, name: String, statement: Statement) -> Portal {
+        Portal(Arc::new(Inner {
+            client: Arc::downgrade(client),
+            name,
+            statement,
+            ended: true,
         }))
     }
 

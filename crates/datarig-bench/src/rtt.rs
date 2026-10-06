@@ -4,6 +4,7 @@
 
 use crate::proxy;
 use crate::stats::{Summary, ms};
+use datarig_core::driver::PagingMode;
 use datarig_core::driver::ddl::DdlObject;
 use datarig_core::driver::{ConnectOptions, DbCommand, DbEvent, Driver, Session, SessionRole};
 use datarig_core::profile::ConnectionConfig;
@@ -18,6 +19,9 @@ pub struct WiredSession {
     id: u64,
     pub counts: std::sync::Arc<proxy::Counts>,
     one_way: Duration,
+    /// What a result with more rows keeps: `NoHold` as the app by default, `Hold` for the
+    /// scenarios of `paging = "hold"`.
+    pub paging: PagingMode,
 }
 
 /// What one statement cost.
@@ -60,7 +64,7 @@ impl WiredSession {
         let (tx, rx) = unbounded_channel();
         let opts = ConnectOptions::new(500, role, &format!("bench{}", std::process::id())).read_only(read_only);
         let session = PgDriver.connect(&cfg, role, opts, tx);
-        let mut s = WiredSession { session, rx, id: 0, counts: p.counts, one_way };
+        let mut s = WiredSession { session, rx, id: 0, counts: p.counts, one_way, paging: PagingMode::NoHold };
         match s.next(Duration::from_secs(10)).await? {
             DbEvent::Connected => Ok(s),
             ev => Err(format!("connect: {ev:?}")),
@@ -75,7 +79,7 @@ impl WiredSession {
         counts: std::sync::Arc<proxy::Counts>,
         one_way: Duration,
     ) -> Result<WiredSession, String> {
-        let mut s = WiredSession { session, rx, id: 0, counts, one_way };
+        let mut s = WiredSession { session, rx, id: 0, counts, one_way, paging: PagingMode::NoHold };
         match s.next(Duration::from_secs(20)).await? {
             DbEvent::Connected => Ok(s),
             ev => Err(format!("connect: {ev:?}")),
@@ -105,15 +109,15 @@ impl WiredSession {
         }
     }
 
-    /// Run `sql` and measure it. A result with more rows is closed afterwards, outside the
-    /// measurement.
+    /// Run `sql` and measure it. A result with more rows held open is closed afterwards, outside
+    /// the measurement.
     pub async fn cost(&mut self, sql: &str) -> Result<(Cost, DbEvent), String> {
         self.quiet().await;
         self.id += 1;
         let id = self.id;
         let before = self.counts.flights();
         let t0 = Instant::now();
-        self.session.send(DbCommand::Execute { id, statements: vec![sql.to_string()] });
+        self.session.send(DbCommand::Execute { id, statements: vec![sql.to_string()], paging: self.paging });
         let ev = loop {
             match self.next(Duration::from_secs(60)).await? {
                 ev @ (DbEvent::Page { id: i, .. } | DbEvent::Done { id: i, .. } | DbEvent::Failed { id: i, .. })
@@ -139,13 +143,13 @@ impl WiredSession {
 }
 
 impl WiredSession {
-    /// Run `sql` (a result with more than a page), then fetch `pages` more pages and measure
-    /// each; the portal is closed afterwards.
+    /// Run `sql` (a result with more than a page) holding its portal, then fetch `pages` more
+    /// pages and measure each; the portal is closed afterwards.
     pub async fn next_pages(&mut self, sql: &str, pages: usize) -> Result<Vec<Cost>, String> {
         self.quiet().await;
         self.id += 1;
         let id = self.id;
-        self.session.send(DbCommand::Execute { id, statements: vec![sql.to_string()] });
+        self.session.send(DbCommand::Execute { id, statements: vec![sql.to_string()], paging: PagingMode::Hold });
         self.page(id).await?;
         let mut costs = Vec::new();
         for _ in 0..pages {
@@ -264,20 +268,29 @@ pub async fn run(url: &str, one_way: Duration, runs: usize) -> Result<Value, Str
     // A temporary table: it goes away with the session, whatever happens.
     s.cost("CREATE TEMP TABLE zz_bench_rtt (x int)").await?;
     let small = "SELECT id, event_type, created_at FROM analytics.events WHERE id <= 100";
+    // The default (`paging = "no_hold"`): the first page's `COMMIT` goes out with it, so the
+    // session is quiet once the page is there, a page of a large result too.
     out.push(scenario(&mut s, "select_small_cold", runs, 0, |i| format!("{small} AND {i} >= 0")).await?);
     out.push(scenario(&mut s, "select_small_warm", runs, 1, |_| small.to_string()).await?);
     let big = "SELECT * FROM analytics.events";
     out.push(scenario(&mut s, "select_page_of_4m_cold", runs, 0, |i| format!("{big} WHERE {i} >= 0")).await?);
     out.push(scenario(&mut s, "select_page_of_4m_warm", runs, 1, |_| big.to_string()).await?);
+    // `paging = "hold"`: a result that fits in a page commits after it (one round trip more in
+    // total); a large one keeps its portal, and its next page is one round trip.
+    s.paging = PagingMode::Hold;
+    out.push(scenario(&mut s, "hold_select_small_warm", runs, 1, |_| small.to_string()).await?);
+    out.push(scenario(&mut s, "hold_select_page_of_4m_warm", runs, 1, |_| big.to_string()).await?);
     let pages = s.next_pages(big, runs).await?;
     out.push(report("next_page", &pages));
+    s.paging = PagingMode::NoHold;
     // A count the user asks for, while a result pages (under a savepoint in
-    // the portal's transaction) and with no portal open; and a result resumed past a closed
-    // portal (its statement prepared already).
+    // the portal's transaction, `paging = "hold"`) and with no portal open; and a result resumed
+    // past a closed portal or one never held (its statement prepared already): the next page
+    // of the default, whose `COMMIT` goes out with it.
     let count = datarig_core::sql::risk::repeat::count_query(small).map_err(|e| format!("{e:?}"))?;
     let counted = |e: &DbEvent| matches!(e, DbEvent::Counted { .. });
     let paging = s.next_id();
-    s.session.send(DbCommand::Execute { id: paging, statements: vec![big.to_string()] });
+    s.session.send(DbCommand::Execute { id: paging, statements: vec![big.to_string()], paging: PagingMode::Hold });
     s.page(paging).await?;
     let mut costs = Vec::new();
     for _ in 0..runs {
@@ -301,7 +314,7 @@ pub async fn run(url: &str, one_way: Duration, runs: usize) -> Result<Value, Str
     let mut costs = Vec::new();
     for i in 0..=runs {
         let id = s.next_id();
-        let resume = DbCommand::Resume { id, sql: big.to_string(), skip: 500 };
+        let resume = DbCommand::Resume { id, sql: big.to_string(), skip: 500, paging: PagingMode::NoHold };
         let (c, ev) = s
             .measure(resume, |e| matches!(e, DbEvent::Page { id: p, .. } | DbEvent::Failed { id: p, .. } if *p == id))
             .await?;
@@ -321,7 +334,7 @@ pub async fn run(url: &str, one_way: Duration, runs: usize) -> Result<Value, Str
     let mut costs = Vec::new();
     for i in 0..=runs {
         let id = s.next_id();
-        let resume = DbCommand::Resume { id, sql: big.to_string(), skip: 500 };
+        let resume = DbCommand::Resume { id, sql: big.to_string(), skip: 500, paging: PagingMode::Hold };
         let (c, ev) = s
             .measure(resume, |e| matches!(e, DbEvent::Page { id: p, .. } | DbEvent::Failed { id: p, .. } if *p == id))
             .await?;

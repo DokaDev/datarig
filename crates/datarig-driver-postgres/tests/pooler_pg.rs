@@ -11,6 +11,7 @@
 //!
 //! The tests only read: nothing is created behind the pooler.
 
+use datarig_core::driver::PagingMode;
 use datarig_core::driver::ddl::DdlObject;
 use datarig_core::driver::{ConnectOptions, DbCommand, DbEvent, Driver, Session, SessionContext, SessionRole};
 use datarig_core::profile::ConnectionConfig;
@@ -76,7 +77,7 @@ impl Conn {
     }
 
     async fn run(&mut self, id: u64, sql: &str) -> DbEvent {
-        self.session.send(DbCommand::Execute { id, statements: vec![sql.to_string()] });
+        self.session.send(DbCommand::Execute { id, statements: vec![sql.to_string()], paging: PagingMode::Hold });
         self.wait(
             |e| matches!(e, DbEvent::Page { id: i, .. } | DbEvent::Done { id: i, .. } | DbEvent::Failed { id: i, .. } if *i == id),
             30,
@@ -276,5 +277,73 @@ async fn read_only_session_in_a_schema_behind_a_pooler() {
             assert!(!matches!(ev, DbEvent::Failed { .. }), "cache {cache}, step {i} {sql}: {ev:?}");
         }
         assert!(c.cache_off <= usize::from(cache), "said at most once, and only when it was on");
+    }
+}
+
+/// Results not held (the default) behind the pooler, with the cache off and on, on a read-only
+/// session in a schema of its own (the pooler drops both startup options): each first page and
+/// each statement run again for the next page is one transaction that starts with `BEGIN READ
+/// ONLY` and the search path and ends with its page, so every row reads read-only in the
+/// schema, the pages follow each other, and other clients of the pooler get none of it.
+#[tokio::test(flavor = "multi_thread")]
+async fn results_not_held_page_behind_a_pooler() {
+    let Some(url) = pooler_url("results_not_held_page_behind_a_pooler") else { return };
+    let sql = "SELECT id, current_setting('transaction_read_only') AS ro, current_setting('search_path') AS path \
+               FROM users ORDER BY id";
+    for cache in [false, true] {
+        let context = SessionContext { database: None, schema: Some("shop".into()) };
+        let opts = ConnectOptions::new(PAGE, SessionRole::Query, "pool")
+            .read_only(true)
+            .context(context)
+            .statement_cache(cache);
+        let mut c = Conn::open_with(&url, SessionRole::Query, opts).await;
+        let mut id = 0;
+        for round in 0..10 {
+            id += 1;
+            c.session.send(DbCommand::Execute { id, statements: vec![sql.into()], paging: PagingMode::NoHold });
+            let first = c
+                .wait(|e| matches!(e, DbEvent::Released { .. } | DbEvent::Page { .. } | DbEvent::Failed { .. }), 30)
+                .await;
+            assert!(matches!(first, DbEvent::Released { .. }), "cache {cache}, round {round}: {first:?}");
+            let DbEvent::Page { rows: page1, more: true, .. } = c.wait(|e| matches!(e, DbEvent::Page { .. }), 30).await
+            else {
+                panic!("cache {cache}, round {round}: a page with more")
+            };
+            id += 1;
+            c.session.send(DbCommand::Resume { id, sql: sql.into(), skip: PAGE as u64, paging: PagingMode::NoHold });
+            let page2 = match c
+                .wait(|e| matches!(e, DbEvent::Page { id: i, .. } | DbEvent::Failed { id: i, .. } if *i == id), 30)
+                .await
+            {
+                DbEvent::Page { rows, .. } => rows,
+                ev => panic!("cache {cache}, round {round}: {ev:?}"),
+            };
+            assert!(!page2.is_empty(), "cache {cache}, round {round}");
+            let ids = |rows: &[Vec<Option<String>>]| -> Vec<i64> {
+                rows.iter().map(|r| r[0].as_deref().unwrap_or_default().parse().unwrap()).collect()
+            };
+            assert!(ids(&page1).last() < ids(&page2).first(), "cache {cache}: the next page follows");
+            for row in page1.iter().chain(&page2) {
+                assert_eq!(row[1].as_deref(), Some("on"), "cache {cache}, round {round}: read-only");
+                assert!(row[2].as_deref().is_some_and(|p| p.contains("shop")), "cache {cache}: {row:?}");
+            }
+        }
+        assert!(c.cache_off <= usize::from(cache), "said at most once, and only when it was on");
+    }
+    // Nothing of it stays on the pooler's server connections.
+    let mut other = Conn::open(&url, SessionRole::Query, false).await;
+    for id in 0..12 {
+        let DbEvent::Page { rows, .. } = other
+            .run(
+                id,
+                "SELECT current_setting('transaction_read_only'), \
+                                                       current_setting('search_path')",
+            )
+            .await
+        else {
+            panic!()
+        };
+        assert_eq!(rows[0][0].as_deref(), Some("off"), "{rows:?}");
+        assert!(!rows[0][1].as_deref().unwrap_or_default().contains("shop"), "{rows:?}");
     }
 }

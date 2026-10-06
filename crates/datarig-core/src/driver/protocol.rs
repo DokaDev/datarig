@@ -129,6 +129,22 @@ impl From<String> for DbError {
     }
 }
 
+/// What happens to a result that has more rows than its first page, outside the user's own
+/// transaction block (inside it a result's portal always lives in the block, and ends with it).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PagingMode {
+    /// The first page comes back and the session keeps nothing open: the server-side cursor and
+    /// the transaction it needs end in the same request (so no lock, snapshot or transaction is
+    /// left while the user reads), and [`DbEvent::Released`] comes before the page. Past it
+    /// the app can only run the statement again (`Resume`).
+    #[default]
+    NoHold,
+    /// The cursor stays open, and with it the transaction that holds it (and the locks its
+    /// statement took), until the result is read to its end, `ClosePortal` closes it, or the next
+    /// command ends it; `FetchMore` reads the next page from it.
+    Hold,
+}
+
 #[derive(Clone, Debug)]
 pub enum DbCommand {
     LoadSchemas,
@@ -160,10 +176,12 @@ pub enum DbCommand {
     /// the run's answer (`Page`, `Done` or `Failed`). With more than one statement the
     /// session reports each one's start ([`DbEvent::Started`]) and, before the last, its end
     /// ([`DbEvent::Finished`]); a cancel between two statements stops the rest
-    /// ([`DbError::Cancelled`]).
+    /// ([`DbError::Cancelled`]). `paging`: what happens to the last statement's result when it
+    /// has more rows than a page (outside the user's block).
     Execute {
         id: u64,
         statements: Vec<String>,
+        paging: PagingMode,
     },
     FetchMore {
         id: u64,
@@ -193,11 +211,12 @@ pub enum DbCommand {
     /// its columns and `more` (an empty last page when the result now has no more than `skip`
     /// rows), `Done` or `Failed`; later pages come with `FetchMore`. Inside the user's block it
     /// runs under a savepoint, released when its portal ends and rolled back to when it fails
-    /// or is cancelled.
+    /// or is cancelled. `paging` as for `Execute`.
     Resume {
         id: u64,
         sql: String,
         skip: u64,
+        paging: PagingMode,
     },
 }
 
@@ -300,6 +319,14 @@ pub enum DbEvent {
     Context {
         database: String,
         schemas: Vec<String>,
+    },
+    /// Sent right before the first `Page` of result `id` (a run's answer, or a `Resume`'s) when
+    /// that page has more rows after it and the session did not keep them ([`PagingMode::NoHold`],
+    /// outside the user's block): its server-side cursor and the transaction it needed have
+    /// ended already. Nothing can be fetched from it (a `FetchMore` would get an empty last
+    /// page); past the page the statement can only run again. Never sent for a result held open.
+    Released {
+        id: u64,
     },
     /// `columns` is `Some` for the first page of a result set.
     Page {

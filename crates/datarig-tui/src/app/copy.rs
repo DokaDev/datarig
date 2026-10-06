@@ -534,10 +534,16 @@ impl App {
             && t.exec.running.is_none()
     }
 
+    /// Why the rest of the active tab's rows cannot be fetched: nothing was held after the
+    /// first page (`paging = "no_hold"`), or the portal closed.
+    fn fetch_unavailable(&self) -> Label {
+        if self.tab().exec.paging == Paging::Released { Label::CopyFetchNoHold } else { Label::CopyFetchUnavailable }
+    }
+
     /// "Fetch every row, then copy as `format`": ask first, with the rows fetched so far.
     pub(super) fn ask_fetch_then_copy(&mut self, format: CopyFormat) {
         if !self.can_fetch_rest() {
-            return self.flash(Notice::new(Label::CopyFetchUnavailable, Level::Warning));
+            return self.flash(Notice::new(self.fetch_unavailable(), Level::Warning));
         }
         let count = match &self.tab().results {
             Results::Rows(rs) => rs.rows.len() as u64,
@@ -560,7 +566,7 @@ impl App {
             return self.tab_status(intent.tab, Notice::new(Label::CopyStale, Level::Warning));
         }
         if !self.can_fetch_rest() {
-            return self.flash(Notice::new(Label::CopyFetchUnavailable, Level::Warning));
+            return self.flash(Notice::new(self.fetch_unavailable(), Level::Warning));
         }
         self.fetch_copy = Some((intent, CopyRequest { what: CopyWhat::Every, format, into: None }));
         self.fetch_page(intent.tab);

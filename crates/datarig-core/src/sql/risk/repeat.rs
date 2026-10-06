@@ -1,8 +1,9 @@
 //! Which statements the app may run again, or count, on the user's behalf:
 //! the **plain-`SELECT` allowlist**.
 //!
-//! Paging is explicit: a result's portal may be closed before the user has seen every row (the
-//! policy's `paging_idle_timeout`, another statement run in the tab). The app then fetches the
+//! Paging is explicit: a result's portal may be closed before the user has seen every row (never
+//! held, the policy's `paging = "no_hold"`; the policy's `paging_idle_timeout`; another statement
+//! run in the tab). The app then fetches the
 //! next page only by running the same statement again and skipping the rows it has, and it
 //! counts a result's rows only when the user asks, with `SELECT count(*) FROM (<statement>)`.
 //! Both run the user's statement again, so both are allowed only for a statement that cannot

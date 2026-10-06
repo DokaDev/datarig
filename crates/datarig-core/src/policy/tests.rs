@@ -37,6 +37,16 @@ fn profiles_get_their_policy_or_default() {
 }
 
 #[test]
+fn paging_modes() {
+    assert_eq!(parse_paging("no_hold"), Some(PagingMode::NoHold));
+    assert_eq!(parse_paging(" HOLD "), Some(PagingMode::Hold));
+    for bad in ["", "nohold", "no-hold", "keep", "off"] {
+        assert_eq!(parse_paging(bad), None, "{bad:?}");
+    }
+    assert_eq!(Policy::default().paging, PagingMode::NoHold, "nothing is held by default");
+}
+
+#[test]
 fn spill_limits() {
     let v = |s: &str| toml::Value::String(s.into());
     assert_eq!(parse_size(&v("512MB")), Ok(SpillLimit(Some(512 << 20))));

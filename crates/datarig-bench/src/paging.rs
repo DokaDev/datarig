@@ -1,5 +1,5 @@
 //! Paging a large result to its end with `n` (the next page), as a user
-//! holding the key would: the time of each page (key press to the page in the grid) and the
+//! holding the key would (its portal held, `paging = "hold"`): the time of each page (key press to the page in the grid) and the
 //! process's resident memory as rows pile up.
 
 use crate::apps;
@@ -26,6 +26,10 @@ pub async fn run(
     let state = scratch.join("paging-state");
     let _ = std::fs::remove_dir_all(&state);
     let (mut app, mut rx) = apps::connected(url, &state).await?;
+    // The portal is held and each page fetched from it (`paging = "hold"`): without it every
+    // page would run the statement again, skipping the rows before it.
+    let hold = datarig_core::policy::Policy { paging: datarig_core::driver::PagingMode::Hold, ..Default::default() };
+    app.policies.insert(datarig_core::policy::DEFAULT, hold);
     let mut term = apps::terminal();
     let pid = std::process::id();
     let rss0 = rss_kb(pid).unwrap_or(0);

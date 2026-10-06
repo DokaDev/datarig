@@ -1,14 +1,17 @@
-//! Paging a result (policy `paging_idle_timeout`): a
-//! result with more rows keeps its server-side portal open, and outside the user's transaction
-//! the transaction of its own that holds it. When nobody fetches from it for the policy's
-//! timeout, the app asks the driver to close it (`DbCommand::ClosePortal`). A portal inside the
-//! user's own transaction (`BEGIN`) is never closed for being idle: the user reads uncommitted
-//! changes there, and the portal ends with the transaction anyway. The user's transaction is
-//! never ended by this: only the portal closes.
+//! Paging a result (policy `paging`). Outside the user's own transaction (`BEGIN`) a result
+//! with more rows than a page keeps nothing open by default (`paging = "no_hold"`): the driver
+//! ends its server-side portal and the transaction that held it with the first page
+//! (`DbEvent::Released`), so no lock, snapshot or transaction stays while the user reads it.
+//! With `paging = "hold"` the portal stays open, and with it the transaction of its own that
+//! holds it; when nobody fetches from it for the policy's `paging_idle_timeout`, the app asks
+//! the driver to close it (`DbCommand::ClosePortal`). A portal inside the user's own
+//! transaction is never closed for being idle, whatever the policy says: the user reads
+//! uncommitted changes there, and the portal ends with the transaction anyway. The user's
+//! transaction is never ended by this: only the portal closes.
 //!
 //! Pages are explicit: the grid shows one page of the fetched rows at a
-//! time; the next page past them is fetched while the portal is open, or, once it closed, by
-//! running the statement again when it is on the plain-`SELECT` allowlist
+//! time; the next page past them is fetched while the portal is open, or, once it closed (or
+//! was never held), by running the statement again when it is on the plain-`SELECT` allowlist
 //! (`sql::risk::repeat`), announced; anything else is refused.
 
 use std::time::{Duration, Instant};
@@ -24,6 +27,9 @@ pub enum Paging {
     /// page that arrived last). `in_block`: the portal lives in the user's own transaction, and
     /// is never closed for being idle.
     Open { since: Instant, in_block: bool },
+    /// Nothing was held (`paging = "no_hold"`): the portal and its transaction ended with the
+    /// first page; the server may have more, which only running the statement again shows.
+    Released,
     /// Closed after the idle timeout; the rows already fetched stay, and the server may have
     /// more.
     ClosedIdle,
@@ -56,11 +62,11 @@ impl Paging {
         self.left(now, timeout).is_some_and(|l| l.is_zero())
     }
 
-    /// The portal was closed while the server may still have rows (idle, another statement
-    /// ran, a fetch failed or was cancelled): past the fetched rows the statement can only be
-    /// run again.
+    /// The portal was closed while the server may still have rows (never held, idle, another
+    /// statement ran, a fetch failed or was cancelled): past the fetched rows the statement can
+    /// only be run again.
     pub fn closed(&self) -> bool {
-        matches!(self, Paging::ClosedIdle | Paging::Replaced | Paging::Interrupted)
+        matches!(self, Paging::Released | Paging::ClosedIdle | Paging::Replaced | Paging::Interrupted)
     }
 }
 

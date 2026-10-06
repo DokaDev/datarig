@@ -941,6 +941,13 @@ impl App {
         (self.clock)()
     }
 
+    /// `paging` of the policy of tab `t`'s profile: whether a result with more rows keeps its
+    /// portal (and the transaction that holds it) open.
+    pub fn paging_mode(&self, t: &Tab) -> datarig_core::driver::PagingMode {
+        let policy = t.profile.and_then(|id| self.profile(id)).and_then(|c| c.policy.as_deref());
+        self.policies.get(policy).paging
+    }
+
     /// `paging_idle_timeout` of the policy of tab `t`'s profile (`None`: never close).
     pub fn paging_timeout(&self, t: &Tab) -> Option<Duration> {
         let policy = t.profile.and_then(|id| self.profile(id)).and_then(|c| c.policy.as_deref());

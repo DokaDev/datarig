@@ -598,6 +598,14 @@ fn results_title(app: &App) -> (datarig_core::i18n::Localized, Option<(Vec<Strin
             style = warn;
         }
         (Paging::Open { .. }, None) => states.push(app.i18n.label(Label::ResultsTitlePaging).to_string()),
+        // Nothing held on the server: the next page runs the statement again, or there is none.
+        (Paging::Released, _) if rs.more && app.can_run_again() => {
+            states.push(app.i18n.label(Label::ResultsTitlePagingNoHold).to_string());
+        }
+        (Paging::Released, _) if rs.more => {
+            states.push(app.i18n.label(Label::ResultsTitleFirstPageOnly).to_string());
+            style = warn;
+        }
         (Paging::ClosedIdle | Paging::Replaced | Paging::Interrupted, _) if rs.more => {
             states.push(app.i18n.label(Label::ResultsTitlePagingClosed).to_string());
             style = warn;
@@ -829,8 +837,8 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
             let w = area.width.saturating_sub(1) as usize;
             draw_notices(app, area.x + 1, area.y + lines + 1, w, area.y + area.height, buf);
         }
-        // A result whose portal was closed for being idle, or whose fetching stopped at its
-        // spill limit, keeps its rows and says so below them.
+        // A result whose portal was closed for being idle (or never held), or whose fetching
+        // stopped at its spill limit, keeps its rows and says so below them.
         Results::Rows(rs)
             if answer
                 && ((rs.more && t.exec.paging.closed()) || t.exec.paging == Paging::Stopped)
@@ -841,6 +849,10 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
             let count = rs.rows.len() as u64;
             let text = match t.exec.paging {
                 Paging::Stopped => app.i18n.msg(&Msg::ResultsPagingStopped { count }),
+                Paging::Released if run_again => {
+                    app.i18n.msg(&Msg::ResultsPagingNoHold { count, key: next_key.clone() })
+                }
+                Paging::Released => app.i18n.msg(&Msg::ResultsPagingFirstPageOnly { count }),
                 // The next page runs the statement again when it may.
                 _ if run_again => app.i18n.msg(&Msg::ResultsPagingClosedRerun { count, key: next_key.clone() }),
                 Paging::Replaced => app.i18n.msg(&Msg::ResultsPagingReplaced { count }),

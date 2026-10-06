@@ -8,7 +8,7 @@ mod protocol;
 pub mod structure;
 
 pub use keys::{KeyCatalog, KeyMarks};
-pub use protocol::{Cell, ColumnMeta, ColumnOrigin, DbCommand, DbError, DbEvent, Outcome, SchemaObjects};
+pub use protocol::{Cell, ColumnMeta, ColumnOrigin, DbCommand, DbError, DbEvent, Outcome, PagingMode, SchemaObjects};
 
 use crate::profile::ConnectionConfig;
 use crate::transport::DialerRef;

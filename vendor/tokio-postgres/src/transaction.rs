@@ -320,6 +320,38 @@ impl<'a> Transaction<'a> {
         crate::pipeline::read_first_page(self.client.inner(), statement, request).await
     }
 
+    /// datarig: `bind_first_page`, then `end` (`COMMIT` or `ROLLBACK`, Parse/Bind/Execute of
+    /// the unnamed statement) after the Execute, in the same write: the transaction ends in
+    /// the round trip that read the first rows, and the portal with it, whether it ran to its end
+    /// or not. Once the response says `end` succeeded the transaction is over (`commit`,
+    /// `rollback` and dropping it send nothing more), even when looking up a column's type after
+    /// it fails. When the statement or `end` fails the transaction is left as after a failed
+    /// `bind_first_page` (aborted, or ended by a failed `COMMIT`): roll it back (a `ROLLBACK`
+    /// with no transaction open only warns).
+    pub async fn bind_first_page_then(
+        &mut self,
+        statement: &Statement,
+        result_formats: &[i16],
+        max_rows: i32,
+        end: &str,
+    ) -> Result<crate::pipeline::FirstPage, Error> {
+        let begin: &[String] =
+            if self.begin.load(std::sync::atomic::Ordering::SeqCst) { &self.begin_sql } else { &[] };
+        let request = crate::pipeline::encode_first_page_then(
+            self.client.inner(),
+            statement,
+            result_formats,
+            max_rows,
+            begin,
+            Some(end),
+        )?;
+        self.begin.store(false, std::sync::atomic::Ordering::SeqCst);
+        let messages = crate::pipeline::send_first_page(self.client.inner(), &request).await?;
+        // `end` succeeded: the transaction is over, whatever reading the page still costs.
+        self.done = true;
+        crate::pipeline::first_page_of(self.client.inner(), statement, request, messages).await
+    }
+
     /// Continues execution of a portal, returning a stream of the resulting rows.
     ///
     /// Unlike `query`, portals can be incrementally evaluated by limiting the number of rows returned in each call to

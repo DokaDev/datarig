@@ -180,10 +180,12 @@ Everything below works today, with PostgreSQL.
   query keeps running on the server meanwhile.
 
 **Results**
-- A grid that shows one page at a time (`n`/`p`), fetched from a server-side portal; the rows
-  already fetched stay in a bounded memory window and spill to a private temporary file past it.
-  An idle portal is closed after a policy's timeout, and a closed result can be re-run from the
-  page you were on when the statement is safe to repeat.
+- A grid that shows one page at a time (`n`/`p`); the rows already fetched stay in a bounded
+  memory window and spill to a private temporary file past it. By default nothing stays open on
+  the server between pages: the first page ends its transaction, and the next page runs the
+  statement again when it is safe to repeat (said each time); otherwise you see the first page
+  and why. A policy can keep the server-side cursor open instead (`paging = "hold"`, see
+  [Paging and locks](#paging-and-locks)).
 - A row count on demand, with a label that says whether it matches the pages you saw.
 - An inspector for the selected cell or row (JSON pretty-printed), a cell viewer, and cell,
   row, column and range selection with the keyboard or the mouse.
@@ -221,8 +223,8 @@ Everything below works today, with PostgreSQL.
   `DO`/`CALL`, `COPY` to or from server files or programs, server-side built-ins that act on
   files or backends, and text the parser rejects all ask before they run.
 - Safety policies per profile (`[policy.<name>]`): `read_only`, which statements need a
-  confirmation (`confirm = "destructive"` or `"writes"`), the idle portal timeout and the spill
-  limit. **Read-only is enforced by the server**: every transaction of a read-only profile is
+  confirmation (`confirm = "destructive"` or `"writes"`), whether results hold a server-side
+  cursor (`paging`) and for how long when idle, and the spill limit. **Read-only is enforced by the server**: every transaction of a read-only profile is
   opened `READ ONLY`, so even a function called from a `SELECT` cannot write.
 - `EXPLAIN ANALYZE` of a write is rolled back.
 
@@ -388,7 +390,11 @@ key_file = "~/.ssh/prod.pem"
 [policy.prod]
 read_only = true
 confirm = "writes"
-paging_idle_timeout = "10s"
+# paging = "no_hold" is the default: nothing stays open between pages
+
+[policy.local]
+paging = "hold"                # keep the cursor (and its transaction) open while you page
+paging_idle_timeout = "10s"    # with "hold": close it after 10 s without a page (default 30 s)
 ```
 
 Data (saved queries, datarig's own `known_hosts`) and state (tabs, console buffers) live in the
@@ -445,8 +451,29 @@ reported with the file and line, and the app draws with `terminal` until it is f
 - **What it is not**: the confirmation is a guardrail against mistakes in what the text shows.
   Functions called from a query, triggers, views and rules are not inspected; a read-only
   policy is the guarantee.
-- Results that page keep an implicit transaction open on the server; it is closed after the
-  policy's idle timeout (30 s by default) so it does not hold back vacuum.
+- **Paging leaves nothing open by default** (see below): datarig never keeps a transaction,
+  a lock or a snapshot open while you read a result, unless your policy asks for it.
+
+### Paging and locks
+
+A result with more rows than a page can be paged two ways, chosen per policy with `paging`.
+Inside your own `BEGIN` … `COMMIT` block both behave the same: the result's cursor lives in
+your transaction and pages from it, and ends with it.
+
+| | `paging = "no_hold"` (default) | `paging = "hold"` |
+|---|---|---|
+| After the first page | The cursor and its transaction end in the same round trip | The cursor stays open in a transaction of its own |
+| Held on the server while you read | Nothing: no transaction, no lock, no snapshot | The transaction, its snapshot, and an `ACCESS SHARE` lock on every table the statement read |
+| Next page (`n`) | Runs the statement again and skips the rows you have, only for a plain `SELECT` that is safe to repeat (said each time; the rows may differ if the data changed) | Read from the open cursor |
+| Statement not safe to repeat (a write, a volatile function, a view, …) | You see the first page, and why; to see more, page it yourself with `LIMIT`/`OFFSET` or use `"hold"` | Read from the open cursor |
+| Until | — | The result is read to its end, another statement runs in the tab, or `paging_idle_timeout` passes without a page (30 s by default; `"off"` never) |
+
+Why the default changed in 0.8.0: an `ACCESS SHARE` lock held by an idle result makes a
+deploy's `ALTER TABLE` wait, and every query that comes after the `ALTER TABLE` waits behind it.
+A held transaction also keeps vacuum from cleaning up. Use `"hold"` for a local database, or
+when you walk a large result page by page (with no hold each page runs the statement again and
+skips the rows before it, which costs more the deeper you go). A row count (`#`) never keeps
+anything open of its own.
 
 ## SSH tunnels
 

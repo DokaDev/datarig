@@ -6,6 +6,7 @@
 #![allow(dead_code)]
 
 use datarig_core::config::Config;
+use datarig_core::driver::PagingMode;
 use datarig_core::driver::structure::TableStructure;
 use datarig_core::driver::{
     Canceller, Capabilities, ColumnMeta, ColumnOrigin, ConnectOptions, DbCommand, DbEvent, Driver, KeyCatalog,
@@ -1153,7 +1154,7 @@ pub fn with_edge_results(lang: Lang) -> Harness {
     h.ctrl('e');
     let sent = h.sent();
     assert!(
-        matches!(&sent[..], [DbCommand::Execute { id: 1, statements }] if statements == &["SELECT * FROM shop.users WHERE id <= 8"]),
+        matches!(&sent[..], [DbCommand::Execute { id: 1, statements, paging: PagingMode::NoHold }] if statements == &["SELECT * FROM shop.users WHERE id <= 8"]),
         "{sent:?}"
     );
     let (cols, rows) = edge_rows();

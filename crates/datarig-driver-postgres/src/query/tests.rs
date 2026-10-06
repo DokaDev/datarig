@@ -259,7 +259,7 @@ fn statements_that_deallocate_prepared_statements() {
 mod terminal {
     use super::super::{BeforeBind, Env, Prepared, Reply, State, Tx, execute};
     use crate::link::Link;
-    use datarig_core::driver::{DbCommand, DbError, DbEvent};
+    use datarig_core::driver::{DbCommand, DbError, DbEvent, PagingMode};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
@@ -320,6 +320,8 @@ mod terminal {
         prepared: Prepared,
         id: u64,
         cancel: Arc<AtomicBool>,
+        /// What a result with more rows keeps (`Hold` unless a test says otherwise).
+        paging: PagingMode,
     }
 
     impl Session {
@@ -340,6 +342,7 @@ mod terminal {
                 prepared: Prepared::default(),
                 id: 0,
                 cancel: Arc::new(AtomicBool::new(false)),
+                paging: PagingMode::Hold,
             }
         }
 
@@ -357,7 +360,7 @@ mod terminal {
             };
             let mut s = State { tx: &mut self.tx, prepared: &mut self.prepared };
             let statements = statements.iter().map(|s| s.to_string()).collect();
-            let run = execute(&mut self.client, &mut self.link, &env, &mut s, self.id, statements, None);
+            let run = execute(&mut self.client, &mut self.link, &env, &mut s, self.id, statements, None, self.paging);
             tokio::time::timeout(std::time::Duration::from_secs(20), run).await.expect("the run returns").ok();
             let mut events = Vec::new();
             while let Ok(ev) = self.rx.try_recv() {
@@ -380,7 +383,16 @@ mod terminal {
                 before_bind: hook,
             };
             let mut s = State { tx: &mut self.tx, prepared: &mut self.prepared };
-            let run = execute(&mut self.client, &mut self.link, &env, &mut s, self.id, vec![sql.to_string()], None);
+            let run = execute(
+                &mut self.client,
+                &mut self.link,
+                &env,
+                &mut s,
+                self.id,
+                vec![sql.to_string()],
+                None,
+                self.paging,
+            );
             tokio::time::timeout(std::time::Duration::from_secs(20), run).await.expect("the run returns").ok();
             let mut terminal = Vec::new();
             while let Ok(ev) = self.rx.try_recv() {
@@ -402,10 +414,14 @@ mod terminal {
             let (other, table, n) = (other.clone(), table.clone(), count.fetch_add(1, Ordering::SeqCst));
             Box::pin(async move {
                 if n < times {
-                    // Always another type than the one before.
-                    static FLIP: AtomicUsize = AtomicUsize::new(0);
-                    let ty = if FLIP.fetch_add(1, Ordering::SeqCst).is_multiple_of(2) { "int8" } else { "int4" };
-                    other.batch_execute(&format!("ALTER TABLE {table} ALTER a TYPE {ty}")).await.expect("alter");
+                    // Always another type than the table has now (tests running in parallel each
+                    // flip their own table).
+                    let flip = format!(
+                        "DO $$ BEGIN IF (SELECT atttypid FROM pg_attribute WHERE attrelid = '{table}'::regclass \
+                         AND attname = 'a') = 'int4'::regtype THEN ALTER TABLE {table} ALTER a TYPE int8; \
+                         ELSE ALTER TABLE {table} ALTER a TYPE int4; END IF; END $$"
+                    );
+                    other.batch_execute(&flip).await.expect("alter");
                 }
             })
         })
@@ -446,6 +462,41 @@ mod terminal {
             // The session goes on.
             assert!(matches!(s.run("SELECT 1", None).await, DbEvent::Page { .. }));
         }
+    }
+
+    /// The same with nothing held (`PagingMode::NoHold`, whose first page ends its transaction
+    /// in the same request): stale twice fails once, stale once is prepared again and runs, and
+    /// no transaction is left open either way, for a result with more rows than a page too.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_statement_stale_without_hold_fails_once_and_leaves_nothing_open() {
+        let Some(url) = pg_url("a_statement_stale_without_hold_fails_once_and_leaves_nothing_open") else { return };
+        let table = format!("public.zz_stale_nohold_{}", std::process::id());
+        let _drop = TableGuard(url.clone(), table.clone());
+        let (other, _) = connect(&url).await;
+        let other = Arc::new(other);
+        other
+            .batch_execute(&format!("CREATE TABLE {table} (a int4); INSERT INTO {table} SELECT generate_series(1, 25)"))
+            .await
+            .unwrap();
+        let mut s = Session::open(&url).await;
+        s.paging = PagingMode::NoHold;
+        let sql = format!("SELECT a FROM {table} ORDER BY a");
+        let hook = alter(&other, &table, 2);
+        match s.run(&sql, Some(hook.as_ref())).await {
+            DbEvent::Failed { error: DbError::SchemaChanged, cancelled: false, .. } => {}
+            ev => panic!("{ev:?}"),
+        }
+        assert!(!s.tx.block && !s.tx.reported, "nothing stays open");
+        let hook = alter(&other, &table, 1);
+        let events = s.run_all(&[&sql], Some(hook.as_ref())).await;
+        let released = events.iter().position(|e| matches!(e, DbEvent::Released { .. }));
+        let page = events.iter().position(|e| matches!(e, DbEvent::Page { columns: Some(_), more: true, .. }));
+        assert!(released.is_some() && released < page, "released before its page: {events:?}");
+        assert!(!events.iter().any(|e| matches!(e, DbEvent::TxOpen(true))), "{events:?}");
+        assert!(!s.tx.block && !s.tx.reported);
+        // The connection is idle, not in a transaction: a statement that needs no transaction runs.
+        let idle = s.client.simple_query("SELECT pg_catalog.now() = pg_catalog.statement_timestamp()").await.unwrap();
+        assert!(idle.iter().any(|m| matches!(m, tokio_postgres::SimpleQueryMessage::Row(r) if r.get(0) == Some("t"))));
     }
 
     /// Statements deallocated behind the session's back (`26000`) are prepared again once,

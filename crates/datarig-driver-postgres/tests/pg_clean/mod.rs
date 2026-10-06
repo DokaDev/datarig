@@ -19,6 +19,7 @@
 //! * CI checks after `cargo test` that `public` has no tables left; locally
 //!   `psql … -c "\dt public.*"` should list none.
 
+use datarig_core::driver::PagingMode;
 use datarig_core::driver::{ConnectOptions, DbCommand, DbEvent, Driver, SessionRole};
 use datarig_core::profile::ConnectionConfig;
 use datarig_driver_postgres::PgDriver;
@@ -77,7 +78,7 @@ pub fn run_fresh(url: &str, sql: &str) -> Result<(), String> {
             let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
             let opts = ConnectOptions::new(1, SessionRole::Query, "it-clean");
             let session = PgDriver.connect(&cfg, SessionRole::Query, opts, tx);
-            session.send(DbCommand::Execute { id: 1, statements: vec![sql] });
+            session.send(DbCommand::Execute { id: 1, statements: vec![sql], paging: PagingMode::Hold });
             loop {
                 match tokio::time::timeout(Duration::from_secs(20), rx.recv()).await {
                     Ok(Some(DbEvent::Done { .. } | DbEvent::Page { .. })) => return Ok(()),

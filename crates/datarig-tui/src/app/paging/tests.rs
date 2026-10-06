@@ -22,7 +22,9 @@ fn an_open_portal_counts_down_from_its_last_page() {
 fn nothing_is_due_without_an_open_portal_or_a_timeout() {
     let t0 = Instant::now();
     let later = t0 + Duration::from_secs(3600);
-    for p in [Paging::None, Paging::ClosedIdle, Paging::Replaced, Paging::Interrupted, Paging::Stopped] {
+    for p in
+        [Paging::None, Paging::Released, Paging::ClosedIdle, Paging::Replaced, Paging::Interrupted, Paging::Stopped]
+    {
         assert_eq!(p.left(later, T), None);
         assert!(!p.due(later, T));
     }
@@ -54,4 +56,11 @@ fn remaining_time_rounds_up_to_whole_seconds() {
     assert_eq!(fmt_left(Duration::from_millis(23_400)), "24s");
     assert_eq!(fmt_left(Duration::from_millis(1)), "1s");
     assert_eq!(fmt_left(Duration::ZERO), "0s");
+}
+
+#[test]
+fn a_result_held_by_nothing_is_closed_past_its_rows() {
+    assert!(Paging::Released.closed(), "the next page runs the statement again (or is refused)");
+    assert!(!Paging::Open { since: Instant::now(), in_block: false }.closed());
+    assert!(!Paging::Stopped.closed() && !Paging::None.closed());
 }

@@ -14,6 +14,7 @@
 mod pg_clean;
 
 use datarig_core::config::Config;
+use datarig_core::driver::PagingMode;
 use datarig_core::i18n::Lang;
 use datarig_core::profile::{ConnectionConfig, ProfileId};
 use datarig_core::secret::{MemoryStore, SecretStore};
@@ -222,7 +223,7 @@ impl Observer {
         use datarig_core::driver::{DbCommand, DbEvent};
         self.seq += 1;
         let id = self.seq;
-        self.session.send(DbCommand::Execute { id, statements: vec![sql.to_string()] });
+        self.session.send(DbCommand::Execute { id, statements: vec![sql.to_string()], paging: PagingMode::Hold });
         loop {
             match tokio::time::timeout(Duration::from_secs(10), self.rx.recv()).await {
                 Ok(Some(DbEvent::Page { id: i, rows, .. })) if i == id => {
@@ -362,7 +363,9 @@ async fn idle_paging_portal_closes_outside_the_users_transaction_only() {
     let store = Arc::new(MemoryStore::new());
     store.set(&p.id.account(), &pw).unwrap();
     let mut cfg = Config { connections: vec![p], ..Config::default() };
-    cfg.policies.insert("it-short", Policy { paging_idle_timeout: Some(Duration::from_secs(5)), ..Policy::default() });
+    let short =
+        Policy { paging: PagingMode::Hold, paging_idle_timeout: Some(Duration::from_secs(5)), ..Policy::default() };
+    cfg.policies.insert("it-short", short);
     let mut app = App::new(&cfg, None, Lang::En);
     app.set_secret_store(store as Arc<dyn SecretStore>);
     app.set_instance_tag(&tag);
@@ -565,9 +568,9 @@ async fn a_restored_tab_connects_only_when_it_runs() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// `Ctrl+E` on a restored table tab of a table with more rows
-/// than a page pages in the driver's own transaction, which is not the user's: no user block,
-/// the tab connected (no `◆`), nothing to ask on quit.
+/// `Ctrl+E` on a restored table tab of a table with more rows than a page: by default nothing
+/// is held (the driver's own transaction ended with the first page), so the session is idle on
+/// the server, there is no user block, the tab is connected (no `◆`), and quitting asks nothing.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_restored_table_tab_pages_outside_any_user_transaction() {
     use datarig_core::workspace::{self, ExplorerState, TabState, WorkspaceState};
@@ -612,12 +615,11 @@ async fn a_restored_table_tab_pages_outside_any_user_transaction() {
     assert!(app.tab().is_table());
     assert!(obs.connections(&tag).await.is_empty(), "restored: nothing sent");
     app.execute_current();
-    pump(&mut app, &mut rx, 10, |a| matches!(a.tab().exec.paging, Paging::Open { .. }) && a.tab().exec.tx_open).await;
+    pump(&mut app, &mut rx, 10, |a| a.tab().exec.paging == Paging::Released).await;
     let state = format!("SELECT state FROM pg_stat_activity WHERE application_name = 'datarig-q-{tag}'");
-    assert_eq!(obs.column(&state).await, ["idle in transaction"], "the portal's own transaction");
+    assert_eq!(obs.column(&state).await, ["idle"], "the portal's own transaction ended with the page");
     let e = &app.tab().exec;
-    assert!(!e.in_block && !e.user_tx() && !e.tx_at_risk(), "not the user's transaction");
-    assert!(matches!(e.paging, Paging::Open { in_block: false, .. }));
+    assert!(!e.tx_open && !e.in_block && !e.user_tx() && !e.tx_at_risk(), "no transaction");
     assert_eq!(tabbar::state(&app, app.tab()), State::Connected);
     app.dispatch(Action::Quit);
     assert!(app.quit && app.overlays.confirm().is_none(), "quitting asks nothing");
@@ -1256,6 +1258,7 @@ async fn safety_app(url: &str, tag: &str, policy: Option<&str>) -> (App, Unbound
     store.set(&p.id.account(), &pw).unwrap();
     let mut cfg = Config { connections: vec![p], ..Config::default() };
     cfg.policies.insert("it-ro", Policy { read_only: true, ..Policy::default() });
+    cfg.policies.insert("it-hold", Policy { paging: PagingMode::Hold, ..Policy::default() });
     let mut app = App::new(&cfg, None, Lang::En);
     app.set_secret_store(store as Arc<dyn SecretStore>);
     app.set_instance_tag(tag);
@@ -1535,13 +1538,14 @@ fn shown_page(app: &App) -> (Option<String>, usize) {
     (first, rs.rows.len())
 }
 
-/// A page fetched with `n`, a count asked for with `#`, a SELECT run again past a portal that
-/// another statement closed, and a portal inside the user's transaction that stays open.
+/// `paging = "hold"`: a page fetched with `n`, a count asked for with `#`, a SELECT run again
+/// past a portal that another statement closed, and a portal inside the user's transaction that
+/// stays open.
 #[tokio::test(flavor = "multi_thread")]
 async fn pages_counts_and_re_runs_on_a_real_server() {
     use datarig_tui::app::{Focus, Paging};
     let Some(url) = pg_url("pages_counts_and_re_runs_on_a_real_server") else { return };
-    let (mut app, mut rx) = safety_app(&url, &format!("pg{}", std::process::id()), None).await;
+    let (mut app, mut rx) = safety_app(&url, &format!("pg{}", std::process::id()), Some("it-hold")).await;
     let sql = "SELECT g FROM generate_series(1, 1234) g ORDER BY g";
     run_and_wait(&mut app, &mut rx, sql, None).await;
     assert_eq!(shown_page(&app), (Some("1".into()), 500));
@@ -1610,7 +1614,7 @@ async fn a_select_run_again_in_the_users_transaction_never_aborts_it() {
     assert_eq!(shown_page(&app).1, 500);
     run_and_wait(&mut app, &mut rx, "BEGIN", None).await;
     run_and_wait(&mut app, &mut rx, "INSERT INTO zz_work VALUES (1)", None).await;
-    assert_eq!(app.tab().exec.paging, Paging::Replaced);
+    assert_eq!(app.tab().exec.paging, Paging::Released, "nothing was held");
     app.focus = Focus::Results;
     press(&mut app, 'L'); // from Messages back to the kept rows
     assert_eq!(shown_page(&app), (Some("0".into()), 500));
@@ -1655,7 +1659,7 @@ async fn a_view_or_an_overload_is_never_run_again_on_a_real_server() {
         ("SELECT abs('x') AS a FROM generate_series(1, 1200)", "is also named abs"),
     ] {
         run_and_wait(&mut app, &mut rx, sql, None).await;
-        assert!(matches!(app.tab().exec.paging, Paging::Open { .. }), "{sql}");
+        assert_eq!(app.tab().exec.paging, Paging::Released, "{sql}");
         app.focus = Focus::Results;
         press(&mut app, '#');
         pump(&mut app, &mut rx, 10, |a| idle(a, 0)).await;
@@ -1679,6 +1683,71 @@ async fn a_view_or_an_overload_is_never_run_again_on_a_real_server() {
     press(&mut app, '#');
     pump(&mut app, &mut rx, 10, |a| idle(a, 0)).await;
     assert_eq!(counted(&app), Some(1200));
+}
+
+/// By default (`paging = "no_hold"`) on a real server: while the first page of a large result
+/// is on screen the tab's session is idle (not in a transaction) and holds no lock, so a
+/// deploy's `ALTER TABLE` with a short `lock_timeout` goes through; `n` runs the SELECT again for
+/// the next page (announced) and continues where the rows end, leaving nothing open either; a
+/// count runs on its own and says it counted the rows now. A statement that is not run again
+/// shows its first page only, says why, and `n` sends nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn pages_not_held_leave_nothing_open_on_a_real_server() {
+    use datarig_tui::app::{Focus, Paging, Results};
+    let Some(url) = pg_url("pages_not_held_leave_nothing_open_on_a_real_server") else { return };
+    let tag = format!("nh{}", std::process::id());
+    let table = format!("public.it_nh_{tag}");
+    let _guard = pg_clean::TableGuard::new(&url, &[&table]);
+    pg_clean::run_fresh(&url, &format!("CREATE TABLE {table} AS SELECT g FROM generate_series(1, 1234) g")).unwrap();
+    let (mut app, mut rx) = safety_app(&url, &tag, None).await;
+    let mut obs = Observer::open(&url).await;
+    let held = format!(
+        "SELECT a.state || ' ' || (SELECT count(*) FROM pg_catalog.pg_locks l WHERE l.pid = a.pid) \
+         FROM pg_catalog.pg_stat_activity a WHERE a.application_name = 'datarig-q-{tag}'"
+    );
+    let alter = |column: &str| {
+        format!(
+            "DO $$ BEGIN SET LOCAL lock_timeout = '500ms'; \
+             EXECUTE 'ALTER TABLE {table} ADD COLUMN {column} int'; END $$"
+        )
+    };
+    let status = |a: &App| a.tab().status.as_ref().map(|n| n.render(&a.i18n).to_string()).unwrap_or_default();
+    run_and_wait(&mut app, &mut rx, &format!("SELECT g FROM {table} ORDER BY g"), None).await;
+    assert_eq!(shown_page(&app), (Some("1".into()), 500));
+    assert_eq!(app.tab().exec.paging, Paging::Released);
+    assert!(!app.tab().exec.tx_open);
+    assert_eq!(obs.column(&held).await, ["idle 0"], "idle, no lock, while the page is on screen");
+    pg_clean::run_fresh(&url, &alter("y")).expect("the deploy's ALTER TABLE is not blocked");
+    app.focus = Focus::Results;
+    press(&mut app, 'n');
+    assert!(app.tab().exec.running.is_some(), "the SELECT runs again");
+    assert!(status(&app).contains("Ran the SELECT again for rows 501–1,000"), "{}", status(&app));
+    pump(&mut app, &mut rx, 10, |a| idle(a, 0)).await;
+    assert_eq!(shown_page(&app), (Some("501".into()), 1000));
+    assert_eq!(app.tab().exec.paging, Paging::Released);
+    assert_eq!(obs.column(&held).await, ["idle 0"]);
+    pg_clean::run_fresh(&url, &alter("z")).expect("not blocked after the next page either");
+    press(&mut app, '#');
+    pump(&mut app, &mut rx, 10, |a| idle(a, 0)).await;
+    assert!(matches!(&app.tab().results, Results::Rows(rs) if rs.counted == Some(1234) && rs.counted_now));
+    assert_eq!(obs.column(&held).await, ["idle 0"], "the count left nothing open");
+    press(&mut app, 'n');
+    pump(&mut app, &mut rx, 10, |a| idle(a, 0)).await;
+    assert_eq!(shown_page(&app), (Some("1001".into()), 1234));
+    assert!(matches!(&app.tab().results, Results::Rows(rs) if !rs.more));
+    assert_eq!(app.tab().exec.paging, Paging::None);
+
+    // Not run again for the user: the first page only, with why and what to do.
+    run_and_wait(&mut app, &mut rx, &format!("SELECT g, random() AS r FROM {table}"), None).await;
+    assert_eq!(app.tab().exec.paging, Paging::Released);
+    let s = status(&app);
+    assert!(s.contains("First 500 rows only") && s.contains("random") && s.contains("paging = \"hold\""), "{s}");
+    app.focus = Focus::Results;
+    press(&mut app, 'n');
+    assert!(app.tab().exec.running.is_none(), "nothing is sent");
+    assert!(status(&app).contains("Only the first page was read"), "{}", status(&app));
+    assert_eq!(shown_page(&app).1, 500);
+    assert_eq!(obs.column(&held).await, ["idle 0"]);
 }
 
 /// Runs a drop statement (`url`, `sql`) at the end of a test, also when it fails.

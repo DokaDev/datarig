@@ -1,5 +1,7 @@
-//! Paging through the real `App` event path with a fake clock (policy
-//! `paging_idle_timeout`, explicit pages). The grid shows one page at a time:
+//! Paging through the real `App` event path with a fake clock (policy `paging` and
+//! `paging_idle_timeout`, explicit pages). A result the driver did not hold (`Released` before
+//! its first page, the default `paging = "no_hold"`) pages only by running its SELECT again; the
+//! other tests answer as a driver holding the portal does. The grid shows one page at a time:
 //! `n`/`p` (and the title's `‹`/`›`) move between pages, pages already fetched come from the
 //! result's rows without a command, the page past them is fetched while the portal is open.
 //! The results title says where the pages are on its right, in parentheses. A portal outside
@@ -11,6 +13,7 @@
 mod common;
 
 use common::*;
+use datarig_core::driver::PagingMode;
 use datarig_core::driver::{DbCommand, DbError, DbEvent, Outcome};
 use datarig_core::i18n::Lang;
 use datarig_core::policy::Policy;
@@ -59,7 +62,7 @@ fn fetches(cmds: &[DbCommand]) -> usize {
 fn resumes(cmds: &[DbCommand]) -> Vec<(u64, String, u64)> {
     cmds.iter()
         .filter_map(|c| match c {
-            DbCommand::Resume { id, sql, skip } => Some((*id, sql.clone(), *skip)),
+            DbCommand::Resume { id, sql, skip, paging: PagingMode::NoHold } => Some((*id, sql.clone(), *skip)),
             _ => None,
         })
         .collect()
@@ -829,4 +832,224 @@ fn the_run_again_hint_goes_with_the_session() {
     h.keys("n");
     assert!(resumes(&h.sent()).is_empty(), "refused");
     assert!(h.status(200, 45).contains("This result's session is gone"));
+}
+
+/// Run the statement under the cursor and answer as the driver does when nothing is held
+/// (`paging = "no_hold"`, the default): `Released`, then a first page of `n` rows with more after
+/// it, and no transaction reported open. Returns the statement id.
+fn first_page_released(h: &mut Harness, n: usize) -> u64 {
+    h.ctrl('e');
+    let id = h.app.tab().exec.query_id;
+    let index = h.app.tabs.active_index();
+    let columns = Some(vec![meta("id", "int8", true, false)]);
+    h.tab_db(index, DbEvent::Released { id });
+    h.tab_db(index, DbEvent::Page { id, columns, rows: page(0, n), more: true, elapsed: Duration::from_millis(2) });
+    id
+}
+
+/// By default the app asks for nothing to be held, and a result whose portal the driver
+/// released says so: no countdown, no timer, no close request ever; the title says the next
+/// page runs again and the footer says nothing is held. `n` runs the SELECT again for the next
+/// page (announced as such), whose answer is released too and continues the result.
+#[test]
+fn a_result_not_held_pages_by_running_its_select_again() {
+    let mut h = Harness::connected(Lang::En);
+    h.app.detail.visible = false;
+    let id = first_page_released(&mut h, 500);
+    let sent = h.sent();
+    assert!(
+        sent.iter().any(|c| matches!(c, DbCommand::Execute { id: i, paging: PagingMode::NoHold, .. } if *i == id)),
+        "{sent:?}"
+    );
+    assert_eq!(h.app.tab().exec.paging, Paging::Released);
+    assert!(!h.app.tab().exec.tx_open);
+    assert!(!h.app.needs_tick(), "nothing counts down");
+    assert_eq!(h.app.next_tick(h.clock.now()), None);
+    let title = results_title(&mut h, 160, 45);
+    assert!(title.contains("Results · rows 1–500") && title.contains("(page 1 / ? · next page re-runs) ›"), "{title}");
+    let screen = h.screen(160, 45);
+    assert!(
+        screen.contains(
+            "Showing 500 rows · nothing is held open on the server — n runs the SELECT again for the next page"
+        ),
+        "{screen}"
+    );
+    h.advance(3600 * SEC);
+    assert!(h.sent().is_empty(), "no close request, no fetch: nothing is open");
+
+    h.key(KeyCode::Tab); // results
+    h.keys("n");
+    let sent = h.sent();
+    assert_eq!(fetches(&sent), 0, "nothing to fetch from");
+    let [(rid, sql, skip)] = &resumes(&sent)[..] else { panic!("{sent:?}") };
+    assert_eq!((sql.as_str(), *skip), ("SELECT * FROM shop.users WHERE id <= 8", 500));
+    let status = h.app.tab().status.as_ref().map(|n| n.render(&h.app.i18n).to_string()).unwrap_or_default();
+    assert!(
+        status
+            .contains("Ran the SELECT again for rows 501–1,000 (nothing is held open between pages); without ORDER BY"),
+        "{status}"
+    );
+    assert!(
+        h.app
+            .tab()
+            .exec
+            .run
+            .notes
+            .iter()
+            .any(|n| matches!(n.msg, datarig_core::i18n::Msg::ResultsPageRerunUnordered { .. }))
+    );
+    let columns = Some(vec![meta("id", "int8", true, false)]);
+    h.tab_db(0, DbEvent::Released { id: *rid });
+    h.tab_db(0, DbEvent::Page { id: *rid, columns, rows: page(500, 500), more: true, elapsed: SEC / 100 });
+    assert_eq!(first_shown(&h).as_deref(), Some("500"));
+    assert!(matches!(&h.app.tab().results, Results::Rows(rs) if rs.rows.len() == 1000 && rs.more));
+    assert_eq!(h.app.tab().exec.paging, Paging::Released);
+    let title = results_title(&mut h, 160, 45);
+    assert!(
+        title.contains("Results · rows 501–1,000") && title.contains("(page 2 / ? · next page re-runs)"),
+        "{title}"
+    );
+    // Nothing is offered that would need the portal: the rest cannot be fetched for a copy.
+    let (x, y) = (h.app.tab().grid.hit_cols[0].0 + 2, h.app.tab().grid.data_y);
+    h.mouse(MouseEventKind::Down(MouseButton::Right), x, y);
+    let screen = h.screen(160, 45);
+    assert!(screen.contains("(the server has more)") && !screen.contains("Fetch every row"), "{screen}");
+    h.key(KeyCode::Esc);
+    h.advance(3600 * SEC);
+    assert!(close_requests(&h.sent()).is_empty());
+}
+
+/// A statement that is not run again for the user, not held: its first page is all there is,
+/// and the app says why and what to do (LIMIT/OFFSET, or the hold policy), in the status bar,
+/// in Messages, in the title and below the rows; the next page is refused with the same advice
+/// and nothing is sent.
+#[test]
+fn a_result_not_held_that_is_not_run_again_shows_its_first_page_only() {
+    let mut h = Harness::connected(Lang::En);
+    h.app.detail.visible = false;
+    h.app.tab_mut().editor = Editor::new("SELECT random() FROM generate_series(1, 5000)");
+    first_page_released(&mut h, 500);
+    h.sent();
+    let status = h.status(400, 45);
+    assert!(
+        status.contains("First 500 rows only: the statement stopped after its first page")
+            && status.contains("nothing is held open on the server")
+            && status.contains("it calls random")
+            && status.contains("LIMIT/OFFSET, or set paging = \"hold\" in the profile's policy"),
+        "{status}"
+    );
+    assert!(
+        h.app
+            .tab()
+            .exec
+            .run
+            .notes
+            .iter()
+            .any(|n| matches!(n.msg, datarig_core::i18n::Msg::ResultsFirstPageOnly { .. }))
+    );
+    assert!(results_title(&mut h, 160, 45).contains("(page 1 / ? · first page only)"));
+    let screen = h.screen(200, 45);
+    assert!(screen.contains("Showing the first 500 rows only · this statement is not run again for you"), "{screen}");
+    h.key(KeyCode::Tab);
+    h.keys("n");
+    assert!(h.sent().is_empty(), "nothing is sent");
+    let status = h.status(400, 45);
+    assert!(
+        status.contains("Only the first page was read: the statement stopped there and is not run again for you")
+            && status.contains("paging = \"hold\""),
+        "{status}"
+    );
+}
+
+/// `paging = "hold"`: the app asks the driver to hold the portal (today's behaviour before
+/// no-hold became the default), and a page with more rows counts down to the idle close.
+#[test]
+fn a_hold_policy_asks_for_the_portal_to_be_held() {
+    let mut cfg = test_db_config();
+    cfg.connections[0].policy = Some("browse".into());
+    cfg.policies.insert("browse", Policy { paging: PagingMode::Hold, ..Policy::default() });
+    let mut h = Harness::with_config(&cfg, Lang::En);
+    h.db(DbEvent::Connected);
+    let id = first_page(&mut h, 500, true);
+    let sent = h.sent();
+    assert!(
+        sent.iter().any(|c| matches!(c, DbCommand::Execute { id: i, paging: PagingMode::Hold, .. } if *i == id)),
+        "{sent:?}"
+    );
+    assert!(matches!(h.app.tab().exec.paging, Paging::Open { in_block: false, .. }));
+    assert!(results_title(&mut h, 160, 45).contains("(page 1 / ? · 30s)"));
+    h.advance(30 * SEC);
+    assert_eq!(close_requests(&h.sent()), [id]);
+    // Past the closed portal the statement runs again, held again.
+    h.key(KeyCode::Tab);
+    h.keys("n");
+    let sent = h.sent();
+    assert!(sent.iter().any(|c| matches!(c, DbCommand::Resume { paging: PagingMode::Hold, .. })), "{sent:?}");
+}
+
+/// `Released` counts only for the run it names, and only for that run's first page: one of an
+/// earlier run is ignored (the page stays held), one followed by the run's failure leaves
+/// nothing behind for the next run, and a write not held says its changes are complete instead
+/// of suggesting to page it.
+#[test]
+fn released_goes_with_its_own_run_only() {
+    let mut h = Harness::connected(Lang::En);
+    h.ctrl('e');
+    let id = h.app.tab().exec.query_id;
+    h.tab_db(0, DbEvent::Released { id: id - 1 });
+    let columns = Some(vec![meta("id", "int8", true, false)]);
+    h.tab_db(0, DbEvent::Page { id, columns: columns.clone(), rows: page(0, 500), more: true, elapsed: SEC / 100 });
+    assert!(matches!(h.app.tab().exec.paging, Paging::Open { .. }), "an earlier run's Released is not this one's");
+    // Released, then the run fails: the next run's page is held.
+    h.ctrl('e');
+    let id = h.app.tab().exec.query_id;
+    h.tab_db(0, DbEvent::Released { id });
+    h.tab_db(0, DbEvent::Failed { id, error: DbError::Server("ERROR: boom".into()), cancelled: false });
+    assert!(!h.app.tab().exec.released);
+    h.ctrl('e');
+    let id = h.app.tab().exec.query_id;
+    h.tab_db(0, DbEvent::Page { id, columns: columns.clone(), rows: page(0, 500), more: true, elapsed: SEC / 100 });
+    assert!(matches!(h.app.tab().exec.paging, Paging::Open { .. }));
+    // A write not held: its changes are complete, and running it again would write again.
+    h.app.tab_mut().editor =
+        Editor::new("INSERT INTO shop.users (email) SELECT 'x' FROM generate_series(1, 900) RETURNING id");
+    h.sent();
+    h.ctrl('e');
+    if h.app.overlays.run_confirm().is_some() {
+        h.keys("y");
+    }
+    let id = h.app.tab().exec.query_id;
+    h.tab_db(0, DbEvent::Released { id });
+    h.tab_db(0, DbEvent::Page { id, columns, rows: page(0, 500), more: true, elapsed: SEC / 100 });
+    assert_eq!(h.app.tab().exec.paging, Paging::Released);
+    let status = h.status(400, 45);
+    assert!(status.contains("changes are committed in full") && !status.contains("LIMIT/OFFSET"), "{status}");
+    h.key(KeyCode::Tab);
+    h.keys("n");
+    assert!(resumes(&h.sent()).is_empty());
+    let status = h.status(400, 45);
+    assert!(status.contains("Running it again would change rows again"), "{status}");
+}
+
+/// `EXPLAIN ANALYZE` of a write is rolled back: a long plan that is not held never says the
+/// statement's changes are committed.
+#[test]
+fn a_long_explain_analyze_of_a_write_is_not_called_committed() {
+    let mut h = Harness::connected(Lang::En);
+    h.app.tab_mut().editor = Editor::new("EXPLAIN ANALYZE UPDATE shop.users SET email = email WHERE id < 0");
+    h.sent();
+    h.ctrl('e');
+    if h.app.overlays.run_confirm().is_some() {
+        h.keys("y");
+    }
+    let id = h.app.tab().exec.query_id;
+    let columns = Some(vec![meta("QUERY PLAN", "text", false, false)]);
+    h.tab_db(0, DbEvent::Released { id });
+    h.tab_db(0, DbEvent::Page { id, columns, rows: page(0, 500), more: true, elapsed: SEC / 100 });
+    let status = h.status(400, 45);
+    assert!(!status.contains("committed in full"), "{status}");
+    h.key(KeyCode::Tab);
+    h.keys("n");
+    let status = h.status(400, 45);
+    assert!(!status.contains("committed in full") && !status.contains("change rows again"), "{status}");
 }

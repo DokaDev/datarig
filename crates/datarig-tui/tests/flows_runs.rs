@@ -5,6 +5,7 @@
 mod common;
 
 use common::*;
+use datarig_core::driver::PagingMode;
 use datarig_core::driver::{DbCommand, DbError, DbEvent, Outcome};
 use datarig_core::i18n::Lang;
 use datarig_tui::app::Results;
@@ -25,7 +26,7 @@ fn run_three() -> (Harness, u64) {
     h.sent();
     h.ctrl('e');
     let sent = h.sent();
-    let [DbCommand::Execute { id, statements }] = &sent[..] else { panic!("{sent:?}") };
+    let [DbCommand::Execute { id, statements, paging: PagingMode::NoHold }] = &sent[..] else { panic!("{sent:?}") };
     assert_eq!(statements, &["INSERT INTO t VALUES (1)", "SELECT 1/0", "SELECT * FROM t"], "one run, in order");
     (h, *id)
 }

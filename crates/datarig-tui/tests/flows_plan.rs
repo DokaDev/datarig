@@ -8,6 +8,7 @@ mod common;
 
 use common::*;
 use datarig_core::config::Config;
+use datarig_core::driver::PagingMode;
 use datarig_core::driver::{DbCommand, DbEvent, Outcome};
 use datarig_core::i18n::{Label, Lang, Msg};
 use datarig_core::policy::{Confirm, Policy};
@@ -40,7 +41,9 @@ fn plan_page(id: u64, json: &str) -> DbEvent {
 /// The one statement of the run `h` just sent, and the run's id.
 fn sent_one(h: &mut Harness) -> (u64, String) {
     let sent = h.sent();
-    let [DbCommand::Execute { id, statements }] = &sent[..] else { panic!("one run: {sent:?}") };
+    let [DbCommand::Execute { id, statements, paging: PagingMode::NoHold }] = &sent[..] else {
+        panic!("one run: {sent:?}")
+    };
     let [sql] = &statements[..] else { panic!("one statement: {statements:?}") };
     (*id, sql.clone())
 }
@@ -284,7 +287,7 @@ fn a_plan_of_a_statement_before_the_last_is_kept_with_its_index() {
     h.keys("ggVG");
     h.ctrl('e');
     let (id, statements) = match &h.sent()[..] {
-        [DbCommand::Execute { id, statements }] => (*id, statements.clone()),
+        [DbCommand::Execute { id, statements, paging: PagingMode::NoHold }] => (*id, statements.clone()),
         s => panic!("{s:?}"),
     };
     assert_eq!(statements.len(), 2);

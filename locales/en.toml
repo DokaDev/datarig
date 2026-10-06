@@ -14,6 +14,8 @@
 "results.title.in_tx" = "in tx"
 "results.title.paging_closed" = "paging closed"
 "results.title.paging_stopped" = "fetching stopped"
+"results.title.paging_no_hold" = "next page re-runs"
+"results.title.first_page_only" = "first page only"
 "results.title.counting" = "counting…"
 "results.title.counted" = { one = "{count} row", other = "{count} rows" }
 "results.title.counted_now" = { one = "{count} row now", other = "{count} rows now" }
@@ -1058,6 +1060,7 @@
 "copy.fetch.keys" = "y/Enter fetch and copy · n cancel"
 "copy.fetch.failed" = "Not copied: fetching the rest of the rows did not finish"
 "copy.fetch.unavailable" = "The rest of the rows can no longer be fetched (paging closed): run the statement again"
+"copy.fetch.no_hold" = "The rest of the rows cannot be fetched: nothing is held open on the server after the first page. Copy the rows shown, or set paging = \"hold\" in the profile's policy"
 
 # Layout, result tabs, pagination
 "action.results.panel.toggle" = "Results pane → hide / show"
@@ -1094,6 +1097,13 @@
 "results.paging_closed_rerun" = { one = "Showing {count} row · paging closed — {key} runs the SELECT again for the next page", other = "Showing {count} rows · paging closed — {key} runs the SELECT again for the next page" }
 "results.paging_replaced" = { one = "Showing {count} row · paging closed: another statement ran — run it again to load more", other = "Showing {count} rows · paging closed: another statement ran — run it again to load more" }
 "results.paging_interrupted" = { one = "Showing {count} row · fetching the next page stopped (failed or cancelled) — run it again to load more", other = "Showing {count} rows · fetching the next page stopped (failed or cancelled) — run it again to load more" }
+"results.paging_no_hold" = { one = "Showing {count} row · nothing is held open on the server — {key} runs the SELECT again for the next page", other = "Showing {count} rows · nothing is held open on the server — {key} runs the SELECT again for the next page" }
+"results.paging_first_page_only" = { one = "Showing the first {count} row only · this statement is not run again for you — see Messages for how to see more", other = "Showing the first {count} rows only · this statement is not run again for you — see Messages for how to see more" }
+"results.first_page_only" = { one = "First {count} row only: the statement stopped after its first page (a function it calls ran for those rows only), nothing is held open on the server, and it is not run again for you ({why}). To see more, page it yourself with LIMIT/OFFSET, or set paging = \"hold\" in the profile's policy", other = "First {count} rows only: the statement stopped after its first page (a function it calls ran for those rows only), nothing is held open on the server, and it is not run again for you ({why}). To see more, page it yourself with LIMIT/OFFSET, or set paging = \"hold\" in the profile's policy" }
+"results.first_page_only_write" = { one = "First {count} row only: the statement's changes are committed in full, and the rows it returned after its first page were not kept. Running it again would change rows again: query the table to see them", other = "First {count} rows only: the statement's changes are committed in full, and the rows it returned after its first page were not kept. Running it again would change rows again: query the table to see them" }
+"results.page.refused_no_hold" = "Only the first page was read: the statement stopped there and is not run again for you ({why}). Page it yourself with LIMIT/OFFSET, or set paging = \"hold\" in the profile's policy"
+"results.page.rerun" = "Ran the SELECT again for rows {from}–{to} (nothing is held open between pages); they may differ if the data changed"
+"results.page.rerun_unordered" = "Ran the SELECT again for rows {from}–{to} (nothing is held open between pages); without ORDER BY the server may return its rows in another order, so rows may repeat or be missing, and they may differ if the data changed"
 "repeat.not_one" = "it is not one statement"
 "repeat.not_select" = "it is not a plain SELECT"
 "repeat.writes" = "it may write, lock rows or act on the server"
