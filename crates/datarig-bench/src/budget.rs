@@ -92,7 +92,8 @@ pub fn paging(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
 
 pub fn editor(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
     let max = num(b, "editor", "p95_ms_max")?;
-    let keys = ["typing_ms", "movement_ms", "scrolling_ms", "normal_edit_ms", "vim_ms", "theme_switch_ms"];
+    let keys =
+        ["typing_ms", "movement_ms", "scrolling_ms", "normal_edit_ms", "vim_ms", "run_hints_ms", "theme_switch_ms"];
     for what in keys.into_iter().chain(["search_miss_ms", "search_next_ms"]) {
         match f(result, &[what, "p95"]) {
             Some(m) => c.check(&format!("editor {what} p95"), m, max, " ms"),
@@ -144,6 +145,20 @@ pub fn plan(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
 /// Visual block operators over the whole text: the slowest key with its frame, and the bytes
 /// one key walked, in passes over the text; `:%s` over the whole text likewise.
 pub fn editor_block(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
+    // Typing right after a hinted statement of 4.7 MB: the key with its frame, and what one
+    // key's frame lexed to check the hint against the text.
+    match f(result, &["hinted_typing_ms", "p95"]) {
+        Some(m) => {
+            c.check("editor typing after a hinted 4.7 MB statement p95", m, num(b, "editor", "p95_ms_max")?, " ms")
+        }
+        None => c.missing("editor typing after a hinted 4.7 MB statement p95"),
+    }
+    match f(result, &["hinted_check_bytes_max"]) {
+        Some(bytes) => {
+            c.check("editor hint check bytes per key", bytes, num(b, "editor", "hint_check_bytes_max")?, " B")
+        }
+        None => c.missing("editor hint check bytes per key"),
+    }
     match f(result, &["keys_ms", "max"]) {
         Some(m) => {
             c.check("editor block over the whole text, slowest key", m, num(b, "editor", "block_ms_max")?, " ms")

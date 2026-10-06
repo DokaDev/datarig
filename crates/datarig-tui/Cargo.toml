@@ -21,6 +21,7 @@ path = "src/main.rs"
 
 [dependencies]
 arboard.workspace = true
+chrono.workspace = true
 datarig-core.workspace = true
 datarig-driver-postgres.workspace = true
 datarig-ssh.workspace = true

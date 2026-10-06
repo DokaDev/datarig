@@ -65,6 +65,14 @@ pub struct Theme {
     /// The bar in the editor's gutter next to the statement a run would take (or the
     /// selection): subtle, but it stays visible where the tint does not (256 colors).
     pub current_stmt_bar: Color,
+    /// A tint behind the statement that runs now, apart from [`Self::current_stmt`] (the
+    /// built-ins blend 12% of [`Self::accent_warm`] into the background; `terminal` makes it bold).
+    pub running_stmt: Style,
+    /// The bar and the spinner in the editor's gutter next to the statement that runs now.
+    pub running_stmt_bar: Color,
+    /// The hint after a statement's last line that says what its last run did: dim, never
+    /// read as text of the statement.
+    pub run_hint: Style,
     pub success: Color,
     pub warning: Color,
     pub error: Color,
@@ -124,6 +132,9 @@ pub const DARK: Theme = Theme {
     cursor_line: Style::new().bg(rgb(0x1F2530)),
     current_stmt: Style::new().bg(rgb(0x1A2129)),
     current_stmt_bar: rgb(0x3F8F87),
+    running_stmt: Style::new().bg(rgb(0x2C2825)),
+    running_stmt_bar: rgb(0xE0A96D),
+    run_hint: Style::new().fg(rgb(0x8A93A6)).add_modifier(Modifier::ITALIC),
     success: rgb(0x8FC77A),
     warning: rgb(0xE6C35C),
     error: rgb(0xE06C75),
@@ -344,10 +355,11 @@ macro_rules! tokens {
 }
 
 tokens! {
-    colors: bg, surface, surface_alt, border, accent, accent_warm, fg, fg_muted, fg_dim, current_stmt_bar, success,
+    colors: bg, surface, surface_alt, border, accent, accent_warm, fg, fg_muted, fg_dim, current_stmt_bar, running_stmt_bar,
+        success,
         warning, error, null_fg, key_pk, key_fk, key_uq, mode_normal, mode_insert, mode_visual, mode_command,
         mode_fg;
-    styles: selection, range, cursor_line, current_stmt, syn_keyword, syn_function, syn_string, syn_number,
+    styles: selection, range, cursor_line, current_stmt, running_stmt, run_hint, syn_keyword, syn_function, syn_string, syn_number,
         syn_comment, syn_operator, syn_identifier, syn_quoted_ident, search_match, match_paren, read_only_mark,
         danger_mark, plan_hot, plan_misestimate,
 }

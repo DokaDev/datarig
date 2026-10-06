@@ -86,7 +86,8 @@ fn setting_action(s: Setting) -> Option<Action> {
         | Setting::EditorClipboard(_)
         | Setting::FormatCase(_)
         | Setting::FormatIndent(_)
-        | Setting::AutoPairs(_) => None,
+        | Setting::AutoPairs(_)
+        | Setting::RunHints(_) => None,
     }
 }
 
@@ -786,6 +787,7 @@ impl App {
             Setting::FormatCase(c) => self.set_prefs(s, |x| x.format_case = c),
             Setting::FormatIndent(i) => self.set_prefs(s, |x| x.format_indent = i),
             Setting::AutoPairs(a) => self.set_prefs(s, |x| x.auto_pairs = a),
+            Setting::RunHints(h) => self.set_prefs(s, |x| x.run_hints = h),
         }
     }
 

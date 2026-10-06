@@ -320,8 +320,8 @@ impl FakeClock {
 }
 
 /// `App::new` as the binary makes it, minus the terminal: the icons question is never asked
-/// (`icons = auto` draws text marks), the terminal's background is never asked, and the clock is
-/// a [`FakeClock`].
+/// (`icons = auto` draws text marks), the terminal's background is never asked, the clock is
+/// a [`FakeClock`] and the time of day (a run's hint says when it ended) is 14:03.
 ///
 /// Colors: with the default theme (`terminal`, no `theme` in `cfg`) the frames are drawn with
 /// `dark`, so tests that compare colors compare RGB tokens (`theme::DARK.*`) whatever the default
@@ -339,6 +339,7 @@ pub fn new_app_with_clock(cfg: &Config, lang: Lang) -> (App, FakeClock) {
     let clock = FakeClock::new();
     let c = clock.clone();
     app.set_clock(Arc::new(move || c.now()));
+    app.set_time_of_day(Arc::new(|| (14, 3)));
     (app, clock)
 }
 

@@ -47,6 +47,8 @@ pub struct StatementRun {
     pub outcome: StatementOutcome,
     /// How long it ran (once it ended).
     pub elapsed: Option<Duration>,
+    /// It ended the user's transaction, and that rolled back.
+    pub rolled_back: bool,
 }
 
 /// The statements of a run, in order, and what the app says about the run beyond them (a count
@@ -62,7 +64,12 @@ impl RunLog {
     pub fn new(statements: &[String]) -> Self {
         let statements = statements
             .iter()
-            .map(|sql| StatementRun { sql: sql.clone(), outcome: StatementOutcome::Waiting, elapsed: None })
+            .map(|sql| StatementRun {
+                sql: sql.clone(),
+                outcome: StatementOutcome::Waiting,
+                elapsed: None,
+                rolled_back: false,
+            })
             .collect();
         Self { statements, notes: Vec::new() }
     }
@@ -83,6 +90,19 @@ impl RunLog {
     /// The statement running now, if the driver said which.
     pub fn running(&self) -> Option<usize> {
         self.statements.iter().position(|s| s.outcome == StatementOutcome::Running)
+    }
+
+    /// The statement the run is at: the running one, else the first that did not end (one not
+    /// started yet: the driver says when a run of several moves on).
+    pub fn current(&self) -> Option<usize> {
+        self.running().or_else(|| self.statements.iter().position(|s| !s.outcome.ended()))
+    }
+
+    /// Statement `index` ended the user's transaction by rolling it back.
+    pub fn rolled_back(&mut self, index: usize) {
+        if let Some(s) = self.statements.get_mut(index) {
+            s.rolled_back = true;
+        }
     }
 
     /// Statement `index` started.
@@ -115,7 +135,7 @@ impl RunLog {
     /// that did not end). After a failure or a cancel the statements after it did not run.
     /// Returns that statement's index.
     pub fn answered(&mut self, outcome: StatementOutcome, elapsed: Option<Duration>) -> Option<usize> {
-        let i = self.running().or_else(|| self.statements.iter().position(|s| !s.outcome.ended()))?;
+        let i = self.current()?;
         let stop = matches!(outcome, StatementOutcome::Failed(_) | StatementOutcome::Cancelled);
         let s = &mut self.statements[i];
         s.outcome = outcome;

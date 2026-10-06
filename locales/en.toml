@@ -370,6 +370,13 @@
 "query.lost" = "This tab's connection was lost: {error}"
 "query.reconnected" = "Reconnected"
 "query.reconnected_tx" = "Reconnected; the transaction that was open is gone"
+"editor.hint.rows" = { one = "{count} row · {elapsed} · {time}", other = "{count} rows · {elapsed} · {time}" }
+"editor.hint.more_rows" = { one = "{count}+ rows · {elapsed} · {time}", other = "{count}+ rows · {elapsed} · {time}" }
+"editor.hint.affected" = { one = "{count} row affected · {elapsed} · {time}", other = "{count} rows affected · {elapsed} · {time}" }
+"editor.hint.command" = "{tag} · {elapsed} · {time}"
+"editor.hint.plan" = "plan · {elapsed} · {time}"
+"editor.hint.rolled_back" = "rolled back · {elapsed} · {time}"
+"editor.hint.cancelled" = "cancelled"
 
 # Key map
 "status.hangul" = "\uD55C/A"
@@ -1000,6 +1007,10 @@
 "setting.auto_pairs.about" = "Whether ( [ { ' \" and ` typed in Insert mode also put their closing character after the cursor (typing it there steps over it, Backspace deletes the empty pair). Never inside strings or comments, before a word, or for a paste. Off is how Vim types."
 "setting.auto_pairs.off" = "Off, every key types itself"
 "setting.auto_pairs.on" = "On, brackets and quotes close themselves"
+"setting.run_hints" = "Run hints"
+"setting.run_hints.about" = "Whether a dim hint after a statement's last line says what its last run did (rows, rows affected, the error, rolled back or cancelled, how long it took and when). The hint is not part of the text: it is never yanked, saved or searched, and it goes when the statement is edited."
+"setting.run_hints.on" = "On, the outcome after each statement run"
+"setting.run_hints.off" = "Off, the editor shows the text only"
 "editor.register.empty" = "Nothing in register {name}"
 "editor.register.read_only" = "Register {name} takes no yank or delete"
 "editor.search.wrapped_bottom" = "Search hit the bottom, continuing at the top"

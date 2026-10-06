@@ -565,6 +565,7 @@ Settings of `:set` (saved to `config.toml` like the matching actions):
 | `editor.format_keyword_case` | `preserve` `upper` `lower` | Formatter: keywords |
 | `editor.format_indent` | `4` `2` | Formatter: indent |
 | `editor.auto_pairs` | `off` `on` | Auto-pairs |
+| `editor.run_hints` | `on` `off` | Run hints |
 
 ## Command line only
 

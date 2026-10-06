@@ -22,7 +22,8 @@
 //! whether yanks and deletes without a register also go to the system clipboard,
 //! `[editor] format_keyword_case` and `format_indent` how the formatter writes keywords and how
 //! far it indents (see [`crate::sql::format`]), `[editor] auto_pairs` whether brackets and
-//! quotes typed in Insert mode get their closing character. The retired
+//! quotes typed in Insert mode get their closing character, `[editor] run_hints` whether the
+//! editor shows what a statement's last run did after its last line. The retired
 //! `[editor] mode` key (the editor has vim keys only) is accepted with any value, ignored and
 //! dropped by the next save.
 //! [`Prefs`] holds `[commands] position` (the `:` command line as a popup near
@@ -141,6 +142,8 @@ struct EditorSection {
     format_indent: Option<i64>,
     #[serde(default)]
     auto_pairs: Option<String>,
+    #[serde(default)]
+    run_hints: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -366,6 +369,25 @@ impl Choice for AutoPairs {
     }
 }
 
+/// `[editor] run_hints`: whether the editor shows what a statement's last run did (its rows,
+/// its error, …) as a dim hint after its last line (on by default).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RunHints {
+    #[default]
+    On,
+    Off,
+}
+
+impl Choice for RunHints {
+    const ALL: &'static [Self] = &[RunHints::On, RunHints::Off];
+    fn as_str(self) -> &'static str {
+        match self {
+            RunHints::On => "on",
+            RunHints::Off => "off",
+        }
+    }
+}
+
 /// The default of `osc52_max_bytes`: about 100 KB of base64 (75 KB of text). Terminals and
 /// tmux drop longer OSC 52 sequences silently (tmux 3.x, many terminals cap them near here).
 pub const OSC52_MAX_BYTES: usize = 100_000;
@@ -391,6 +413,8 @@ pub struct Prefs {
     pub format_indent: FormatIndent,
     /// `[editor] auto_pairs`.
     pub auto_pairs: AutoPairs,
+    /// `[editor] run_hints`.
+    pub run_hints: RunHints,
 }
 
 impl Default for Prefs {
@@ -406,6 +430,7 @@ impl Default for Prefs {
             format_case: KeywordCase::default(),
             format_indent: FormatIndent::default(),
             auto_pairs: AutoPairs::default(),
+            run_hints: RunHints::default(),
         }
     }
 }
@@ -647,9 +672,9 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
         None => policy::SpillLimit::default(),
         Some(v) => policy::parse_size(v).map_err(|e| bad("spill_limit", e).allowed(Some(SIZES)))?,
     };
-    let (cursor_shape, editor_clipboard, format_case, format_indent, auto_pairs) = f
+    let (cursor_shape, editor_clipboard, format_case, format_indent, auto_pairs, run_hints) = f
         .editor
-        .map(|e| (e.cursor_shape, e.clipboard, e.format_keyword_case, e.format_indent, e.auto_pairs))
+        .map(|e| (e.cursor_shape, e.clipboard, e.format_keyword_case, e.format_indent, e.auto_pairs, e.run_hints))
         .unwrap_or_default();
     let default_source = match f.secrets.and_then(|s| s.default_source) {
         None => DefaultSource::default(),
@@ -676,6 +701,7 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
                 .ok_or_else(|| bad("editor.format_indent", n).allowed(Some("4, 2")))?,
         },
         auto_pairs: choice("editor.auto_pairs", auto_pairs, "off, on")?,
+        run_hints: choice("editor.run_hints", run_hints, "on, off")?,
     };
     let mut policies = Policies::default();
     for (name, p) in &f.policy {
@@ -1051,6 +1077,8 @@ pub fn save(path: &Path, settings: Settings, profiles: Option<Profiles>) -> Resu
     orphans += &nested_setting(&mut doc, "editor", "format_indent", indent)?;
     let pairs = (prefs.auto_pairs.as_str().into(), prefs.auto_pairs == AutoPairs::default());
     orphans += &nested_setting(&mut doc, "editor", "auto_pairs", pairs)?;
+    let hints = (prefs.run_hints.as_str().into(), prefs.run_hints == RunHints::default());
+    orphans += &nested_setting(&mut doc, "editor", "run_hints", hints)?;
     let source = (default_source.as_str().into(), default_source == DefaultSource::Auto);
     orphans += &nested_setting(&mut doc, "secrets", "default_source", source)?;
     let position = (prefs.commands_position.as_str().into(), prefs.commands_position == CommandsPosition::default());

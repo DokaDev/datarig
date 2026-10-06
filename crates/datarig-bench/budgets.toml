@@ -82,7 +82,8 @@ rss_growth_mib_max = 16
 
 [editor]
 # Keystroke to frame in a 5 MB file at 160x45 (a developer machine: about 0.5 ms). A theme
-# switch (`:set theme=`, then its frame) is held to the same budget.
+# switch (`:set theme=`, then its frame), and moving among the hints of finished runs (every
+# statement around the cursor has one), are held to the same budget.
 p95_ms_max = 25.0
 # Resident memory after typing in it (the file itself is about 20 MiB of lines).
 rss_mib_max = 160
@@ -91,6 +92,11 @@ rss_mib_max = 160
 # count is bounded too, see the editor's search tests), and the most lines one frame highlighted (only those on screen; the editor has fewer
 # rows than the 45 of the terminal). Their times are held to `p95_ms_max` above.
 search_passes_max = 1.0
+# A hint after a statement of 100,000 lines (an INSERT of about 4.7 MB) on screen while keys are
+# typed right after it (in the `editor_block` process, for the copies of the statement its run's
+# end lexes once): the most bytes one key's frame lexed to check the hint against the text
+# (a change after a statement's `;` cannot change it: nothing). Its time is held to `p95_ms_max`.
+hint_check_bytes_max = 65536
 highlight_lines_max = 45
 # Visual block over the whole file (`gg Ctrl+V G $` then `y`, `d`, `u`, and `I` on every line;
 # the `editor_block` scenario, in a process of its own so the copies of the whole text it leaves

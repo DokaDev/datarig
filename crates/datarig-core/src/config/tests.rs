@@ -580,6 +580,7 @@ fn step_2_settings_are_read_checked_and_saved_only_when_set() {
             format_case: KeywordCase::Preserve,
             format_indent: FormatIndent::Four,
             auto_pairs: AutoPairs::Off,
+            run_hints: RunHints::On,
         }
     );
     assert_eq!(parse("osc52_max_bytes = 5000\n").unwrap().prefs.osc52_max_bytes, 5000);
@@ -661,6 +662,17 @@ fn formatter_settings() {
             allowed: Some("off, on")
         }
     );
+    assert_eq!(parse("").unwrap().prefs.run_hints, RunHints::On, "hints are on by default");
+    assert_eq!(parse("[editor]\nrun_hints = \"off\"\n").unwrap().prefs.run_hints, RunHints::Off);
+    assert_eq!(
+        parse("[editor]\nrun_hints = \"no\"\n").unwrap_err(),
+        ConfigError::Value {
+            key: "editor.run_hints".into(),
+            value: "no".into(),
+            profile: None,
+            allowed: Some("on, off")
+        }
+    );
     let path = temp_file("format");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(&path, "").unwrap();
@@ -671,6 +683,13 @@ fn formatter_settings() {
     assert_eq!(load(Some(path.clone())).0.prefs, prefs);
     save(&path, settings("en"), None).unwrap();
     assert!(!std::fs::read_to_string(&path).unwrap().contains("format"), "back at the defaults, the keys go");
+    let prefs = Prefs { run_hints: RunHints::Off, ..Prefs::default() };
+    save(&path, Settings { prefs, ..settings("en") }, None).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("[editor]\nrun_hints = \"off\"\n"), "{text}");
+    assert_eq!(load(Some(path.clone())).0.prefs, prefs);
+    save(&path, settings("en"), None).unwrap();
+    assert!(!std::fs::read_to_string(&path).unwrap().contains("run_hints"), "on is the default: the key goes");
 }
 
 #[test]

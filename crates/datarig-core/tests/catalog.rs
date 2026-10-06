@@ -312,6 +312,7 @@ const SAME_IN_KO: &[&str] = &[
     // Placeholders and punctuation only.
     "results.title.page_short",
     "query.done_command",
+    "editor.hint.command",
     "setting.changed",
     "detail.preview",
     "ssh.failed",

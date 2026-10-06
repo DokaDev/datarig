@@ -32,6 +32,8 @@
 //! * `search` is `/`, `?`, `n`, `N`, `*`, `#` and the highlight of their matches.
 //! * `ex` runs the commands the app's `:` line hands over: a line range, `:s`, `:&`.
 //! * `target` is what the app's actions on SQL take (the formatter, the comment toggle).
+//! * `runs` keeps where the statements of a run are in the text, as edits move them: the one
+//!   running is drawn apart, and each one's outcome is a hint after its last line.
 //! * `render` draws.
 //!
 //! One command is one undo step: an operator, a put, a paste, a `.`, or an Insert session with
@@ -51,6 +53,7 @@ mod pairs;
 mod registers;
 mod render;
 mod repeat;
+mod runs;
 mod scroll;
 mod search;
 mod target;
@@ -65,6 +68,7 @@ use lexing::{LineState, REGION_LINES};
 pub use marks::MarkNotice;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 pub use registers::{RegKind, RegProblem, Register, Yank};
+pub use runs::{HintKind, RunHint, Span};
 pub use search::{SearchNotice, SearchWork};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -205,6 +209,16 @@ pub struct Editor {
     pub read_only: bool,
     /// The last key or paste was refused for [`Editor::read_only`], until the app takes it.
     refused: bool,
+    /// The statements of the run in progress and the hints of the runs that ended.
+    runs: runs::Runs,
+    /// The statement of the run in progress that runs now and the spinner frame for it.
+    running: Option<(usize, &'static str)>,
+    /// `[editor] run_hints`: the hints of the runs that ended are drawn.
+    pub run_hints: bool,
+    /// Nerd Font glyphs are drawn (the `icons` setting); else text marks.
+    pub icons: bool,
+    /// Bytes the checks of run spans against the text lexed, for the benchmark.
+    check_work: usize,
 }
 
 impl Editor {
@@ -269,6 +283,11 @@ impl Editor {
             pairs: Vec::new(),
             read_only: false,
             refused: false,
+            runs: runs::Runs::default(),
+            running: None,
+            run_hints: true,
+            icons: false,
+            check_work: 0,
         }
     }
 

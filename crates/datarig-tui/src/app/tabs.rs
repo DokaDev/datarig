@@ -618,9 +618,7 @@ impl Tab {
     pub fn ending_rolled_back(&self) -> bool {
         use super::runlog::StatementOutcome as O;
         let log = &self.exec.run;
-        let s =
-            log.running().or_else(|| log.statements.iter().rposition(|s| !matches!(s.outcome, O::Waiting | O::NotRun)));
-        let Some(s) = s.and_then(|i| log.statements.get(i)) else { return false };
+        let Some(s) = self.ending_statement().and_then(|i| log.statements.get(i)) else { return false };
         let words: Vec<String> = datarig_core::sql::lexer::lex(&s.sql)
             .into_iter()
             .filter(|t| t.is_word())
@@ -634,6 +632,14 @@ impl Tab {
             Some("COMMIT" | "END") => self.exec.tx_aborted || matches!(s.outcome, O::Failed(_)),
             _ => false,
         }
+    }
+
+    /// The statement of the last run that ended the user's transaction: the running one, else
+    /// the last that ran.
+    pub fn ending_statement(&self) -> Option<usize> {
+        use super::runlog::StatementOutcome as O;
+        let log = &self.exec.run;
+        log.running().or_else(|| log.statements.iter().rposition(|s| !matches!(s.outcome, O::Waiting | O::NotRun)))
     }
 
     /// The shown row result.

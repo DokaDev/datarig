@@ -28,17 +28,18 @@ impl App {
     /// Ctrl+Enter / Ctrl+E: statement under the cursor, or the Visual selection.
     pub fn execute_current(&mut self) {
         let ed = &mut self.tab_mut().editor;
-        let stmts: Vec<String> = if let Some(sel) = ed.selection() {
-            ed.exit_visual();
-            split(&sel).iter().map(|s| s.body(&sel).to_string()).collect()
-        } else {
-            // The statement the editor highlights (found around the cursor, as in the whole text).
-            ed.current_statement().map(|(_, _, body)| vec![body]).unwrap_or_default()
-        };
+        // The selection's statements, else the statement the editor highlights (found around
+        // the cursor, as in the whole text); with their places, to mark them while they run.
+        let (stmts, spans) = ed.run_statements();
         if stmts.is_empty() {
             self.flash(Notice::new(Label::QueryNoStatement, Level::Warning));
             return;
         }
+        // Refused while the tab runs or waits: what its run took stays staged for it.
+        if self.tab_busy(self.tab().id) {
+            return self.flash_busy();
+        }
+        self.tab_mut().editor.stage_run(&stmts, spans);
         self.run(stmts);
     }
 
@@ -62,9 +63,11 @@ impl App {
         };
         // Checked before anything is queued or sent.
         if let Some(refused) = self.unsupported(&statements) {
+            self.unstage_run(id);
             return self.tab_status(id, refused);
         }
         if let Some(refused) = self.read_only_refusal(id, pid, &statements) {
+            self.unstage_run(id);
             return self.tab_status(id, refused);
         }
         let items = self.dangerous(id, pid, &statements);
@@ -84,6 +87,7 @@ impl App {
         }
         let Some(pid) = self.tabs.get(id).and_then(|t| t.profile) else { return };
         if let Some(refused) = self.read_only_refusal(id, pid, &statements) {
+            self.unstage_run(id);
             return self.tab_status(id, refused);
         }
         let Some(t) = self.tabs.get(id) else { return };
@@ -98,7 +102,7 @@ impl App {
             return;
         }
         if t.exec.session.is_none() && !self.open_query_session(id) {
-            return;
+            return self.unstage_run(id);
         }
         self.query_seq += 1;
         let qid = self.query_seq;
@@ -113,6 +117,8 @@ impl App {
             t.exec.resuming = None;
             t.exec.released = false;
             t.exec.query_id = qid;
+            // Marked on the editor's text when that is where the user ran them from.
+            t.editor.start_run(qid, &statements);
             // The row results stay until this run delivers its first rows:
             // a run without rows (a COMMIT) leaves them on screen, from an earlier run.
             let has_rows = matches!(t.results, Results::Rows(_)) || !t.exec.steps.is_empty();
@@ -188,6 +194,7 @@ impl App {
             return self.cancel_connect(p);
         }
         if self.take_queued(id).is_some() {
+            self.unstage_run(id);
             return self.tab_status(id, Notice::new(Label::QueryCancelled, Level::Warning));
         }
         // A copy that fetches every row first stops now: a page that lands after this asks
@@ -237,8 +244,11 @@ impl App {
             t.results = Results::Cancelled;
         }
         if !r.fetch && !r.count {
+            // The statement it was at is cancelled (its hint says so).
+            t.exec.run.answered(StatementOutcome::Cancelled, None);
             t.run_ended(true);
         }
+        self.settle_run_hints(id);
         self.tab_status(id, Notice::new(Label::QueryCancelUnanswered, Level::Warning));
     }
 
@@ -273,6 +283,7 @@ impl App {
     /// profile it waited for).
     pub(super) fn drop_queued(&mut self, id: TabId, why: impl FnOnce(String) -> Msg) {
         if let Some(q) = self.take_queued(id) {
+            self.unstage_run(id);
             let name = self.profile(q.profile).map(|p| p.name.clone()).unwrap_or_default();
             self.tab_status(id, Notice::new(why(name), Level::Warning));
         }
@@ -285,6 +296,7 @@ impl App {
         let pending = self.conns.get_mut(id).map(|c| std::mem::take(&mut c.pending)).unwrap_or_default();
         let name = self.profile(id).map(|p| p.name.clone()).unwrap_or_default();
         for q in pending {
+            self.unstage_run(q.tab);
             self.tab_status(q.tab, Notice::new(Msg::QueryQueuedFailed { name: name.clone() }, Level::Warning));
         }
     }
@@ -381,7 +393,10 @@ impl App {
     pub(super) fn on_target_event(&mut self, target: EventTarget, ev: DbEvent) {
         match target {
             EventTarget::Meta(id) => self.meta_event(id, ev),
-            EventTarget::Tab(id) => self.tab_event(id, ev),
+            EventTarget::Tab(id) => {
+                self.tab_event(id, ev);
+                self.settle_run_hints(id);
+            }
             EventTarget::Aux(id) => self.aux_event(id, ev),
         }
         // A run that started or ended may show or hide a pane (a results zoom waiting for them).
@@ -822,6 +837,9 @@ impl App {
             }
             DbEvent::Block(false) => {
                 let rolled_back = t.ending_rolled_back();
+                if let Some(i) = t.ending_statement().filter(|_| rolled_back) {
+                    t.exec.run.rolled_back(i);
+                }
                 t.block_ended(rolled_back);
                 None
             }

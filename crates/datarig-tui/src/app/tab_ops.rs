@@ -102,6 +102,8 @@ impl App {
             t.status = Some(Notice::new(Msg::ResultsPagingClosed { count }, level));
         }
         self.tabs.bind_in(tab, Some(id), context);
+        // A run it stopped says so on its statements now.
+        self.settle_run_hints(tab);
         if self.tab().id == tab {
             self.entered_tab();
         }
