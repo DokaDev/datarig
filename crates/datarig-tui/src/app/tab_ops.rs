@@ -433,9 +433,18 @@ impl App {
     fn take_from_trash(&mut self, name: &str) -> Result<(), UntrashError> {
         let Some(state) = self.state_dir() else { return Ok(()) };
         let (id, text) = workspace::untrash(&state, name)?;
+        // Closed in this run: it comes back under its own number when that is free, as
+        // `Space t u` brings it.
+        let no = self.tabs.closed().find(|c| c.trashed.as_deref() == Some(name)).map(|c| c.console_no);
         self.tabs.forget_trashed(name);
         self.leave_tab();
         let tab = self.tabs.open(TabKind::Console, None, Editor::new(&text));
+        let taken = |n: u32| self.tabs.iter().any(|t| t.id != tab && t.doc.console_no == n);
+        if let Some(n) = no.filter(|n| *n != 0 && !taken(*n))
+            && let Some(t) = self.tabs.get_mut(tab)
+        {
+            t.doc.console_no = n;
+        }
         if let Some(t) = self.tabs.get_mut(tab) {
             t.doc.console_id = id;
             t.doc.saved = text;

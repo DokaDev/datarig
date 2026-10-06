@@ -103,7 +103,8 @@ pub(crate) fn put(buf: &mut Buffer, x: u16, y: u16, text: &str, w: usize, style:
 }
 
 /// A list row under the pointer (not the selected one): the theme's alternate surface, or
-/// underlined where that is the surface itself (the terminal theme), so it always shows.
+/// underlined where that is the surface itself (the terminal theme), which would draw nothing.
+/// How far the alternate surface stands out is the theme's (faint on some light and dark ones).
 pub(crate) fn hover_style() -> Style {
     let th = theme::cur();
     if th.surface_alt == th.surface {

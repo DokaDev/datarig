@@ -709,8 +709,8 @@ pub struct ClosedTab {
     pub ddl: Option<datarig_core::driver::ddl::DdlObject>,
     pub pane: PaneLayout,
     pub context: SessionContext,
-    /// A console's number as its tab showed it: held while it is on the closed list, so it comes
-    /// back with it (unless another tab took it meanwhile: one restored or renumbered).
+    /// A console's number as its tab showed it (0: not a console): held while it is on the
+    /// closed list, so it comes back with it (should another tab have it, a free one).
     pub console_no: u32,
     /// Which closed tab this is, for the life of the process (the tab list picks one by it).
     pub serial: u64,

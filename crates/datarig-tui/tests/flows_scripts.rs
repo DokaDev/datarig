@@ -1744,3 +1744,93 @@ fn a_name_a_folder_has_says_so() {
     assert!(screen.contains("a folder has this name"), "{screen}");
     assert!(!screen.contains("a saved query with this name exists"), "{screen}");
 }
+
+/// The console numbers of the open tabs, in the tab bar's order.
+fn console_nos(h: &Harness) -> Vec<u32> {
+    h.app.tabs.iter().map(|t| t.doc.console_no).collect()
+}
+
+/// A saved query deleted from the explorer closes as a console with a number of its own: the
+/// tab list names it as one, and it comes back under that name.
+#[test]
+fn a_deleted_saved_query_is_listed_as_a_numbered_console() {
+    let dirs = Dirs::new("deleted-numbered");
+    std::fs::create_dir_all(dirs.root.join("data/scripts")).unwrap();
+    std::fs::write(dirs.root.join("data/scripts/q1.sql"), "select 1").unwrap();
+    let cfg = config();
+    let mut h = launch(&cfg, &dirs);
+    select_row(&mut h, "q1");
+    h.key(KeyCode::Enter);
+    assert_eq!(h.app.tab().script(), Some("q1.sql"));
+    select_row(&mut h, "q1");
+    h.keys("dy");
+    assert!(h.app.tabs.is_empty(), "its tab closed");
+    h.app.focus = Focus::Editor;
+    h.keys(" tt");
+    assert_eq!(h.app.tab_list_names(), ["console 1"], "a console with a number, never 0");
+    h.key(KeyCode::Enter);
+    assert_eq!(console_nos(&h), [1], "back as listed");
+    assert_eq!(h.app.tab().editor.text(), "select 1");
+}
+
+/// A console saved as a saved query gives its number back: once that query is closed and its
+/// file gone, it comes back as a console under a free number, never the number of an open one.
+#[test]
+fn a_console_saved_as_a_query_gives_its_number_back() {
+    let dirs = Dirs::new("saved-number");
+    let cfg = config();
+    let mut h = launch(&cfg, &dirs);
+    connect(&mut h, "local-pg");
+    h.ctrl('t');
+    type_sql(&mut h, "select 2");
+    save_as(&mut h, "foo");
+    assert_eq!(h.app.tab().doc.console_no, 0, "a saved query has no console number");
+    h.ctrl('w');
+    h.ctrl('t');
+    assert_eq!(console_nos(&h), [1, 2], "the number is free for the next console");
+    type_sql(&mut h, "select 22");
+    h.ctrl('w');
+    if h.overlay_kind().is_some() {
+        h.keys("y");
+    }
+    std::fs::remove_file(dirs.script("foo.sql")).unwrap();
+    h.keys(" tt");
+    let names = h.app.tab_list_names();
+    let mut unique = names.clone();
+    unique.sort();
+    unique.dedup();
+    assert_eq!(unique.len(), names.len(), "no two entries of one name: {names:?}");
+    let i = names.iter().position(|n| n == "foo").unwrap();
+    while h.app.overlays.tab_list().unwrap().selected < i {
+        h.key(KeyCode::Down);
+    }
+    h.key(KeyCode::Enter);
+    let mut nos = console_nos(&h);
+    nos.sort();
+    nos.dedup();
+    assert_eq!(nos.len(), h.app.tabs.len(), "every console has its own number: {:?}", console_nos(&h));
+}
+
+/// `:recover` of a console closed in this run brings it back under its own number when that is
+/// free, as `Space t u` and the tab list do.
+#[test]
+fn recover_keeps_a_closed_consoles_number() {
+    let dirs = Dirs::new("recover-number");
+    let cfg = config();
+    let mut h = launch(&cfg, &dirs);
+    connect(&mut h, "local-pg");
+    h.ctrl('t');
+    type_sql(&mut h, "select 2");
+    h.ctrl('t');
+    type_sql(&mut h, "select 3");
+    assert_eq!(console_nos(&h), [1, 2, 3]);
+    h.keys(" 2");
+    save_as(&mut h, "two"); // console 2's number is free now
+    h.keys(" 3");
+    h.ctrl('w'); // console 3 to the trash
+    h.command("recover");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Chooser));
+    h.key(KeyCode::Enter);
+    assert_eq!(h.app.tab().editor.text(), "select 3");
+    assert_eq!(h.app.tab().doc.console_no, 3, "back under its own number");
+}
