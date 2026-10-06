@@ -466,3 +466,42 @@ fn results_arriving_for_a_waiting_zoom_take_the_focus() {
     h.keys("i");
     assert_eq!(h.app.tab().editor.mode, datarig_tui::widgets::editor::Mode::Normal, "nothing typed into the editor");
 }
+
+/// A press taken by something else than the panes (here the action menu, which it closes)
+/// also ends a border drag whose release never came: the next drag in the explorer does not
+/// resize it.
+#[test]
+fn a_press_on_the_menu_ends_a_lost_border_drag() {
+    let mut h = with_results();
+    let edge = h.app.layout.explorer_edge;
+    h.mouse(MouseEventKind::Down(MouseButton::Left), edge.x, 10);
+    h.mouse(MouseEventKind::Down(MouseButton::Right), 5, 8);
+    assert!(h.app.overlays.menu().is_some());
+    h.draw(160, 45);
+    h.mouse(MouseEventKind::Down(MouseButton::Left), 100, 40);
+    h.mouse(MouseEventKind::Drag(MouseButton::Left), 20, 8);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), 20, 8);
+    assert_eq!(h.app.explorer.width, None);
+}
+
+/// A driver event that gave the focus to a zoomed pane is not taken for a move of the user's
+/// at the next input: switching to another zoomed tab keeps that tab's zoom.
+#[test]
+fn a_focus_given_by_an_event_does_not_end_the_next_tabs_zoom() {
+    let mut h = Harness::new(Lang::En);
+    assert_eq!(h.app.focus, Focus::Editor);
+    h.ctrl('t');
+    h.app.tabs.active_mut().ran = true;
+    h.app.tabs.active_mut().pane.zoom = Some(Focus::Editor);
+    h.key_mod(KeyCode::PageUp, KeyModifiers::CONTROL);
+    assert_eq!(h.app.tabs.active_index(), 0);
+    h.app.tabs.active_mut().pane.zoom = Some(Focus::Results);
+    let id = h.app.profiles[0].id;
+    let profile = h.app.conns.entry(id).resolved.take();
+    h.ctrl('e');
+    h.app.conns.entry(id).resolved = profile;
+    h.db(datarig_core::driver::DbEvent::Connected);
+    assert_eq!(h.app.focus, Focus::Results, "the event focused the zoomed results");
+    h.key_mod(KeyCode::PageDown, KeyModifiers::CONTROL);
+    assert_eq!((h.app.focus, zoom(&h)), (Focus::Editor, Some(Focus::Editor)));
+}

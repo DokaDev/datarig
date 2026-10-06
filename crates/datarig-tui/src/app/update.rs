@@ -24,6 +24,14 @@ impl App {
             self.idle_event = !hovered;
             return;
         }
+        // A press starts afresh, whatever takes it (a dialog, the menu, the pane): a drag whose
+        // release never came (let go outside the window) is over.
+        if let Event::Mouse(m) = ev
+            && m.kind == MouseEventKind::Down(MouseButton::Left)
+        {
+            self.drag = None;
+            self.drag_at = None;
+        }
         match ev {
             Event::Key(k) => {
                 let k = keyboard::normalize(k);
@@ -522,11 +530,6 @@ impl App {
         // A click while the search prompt is open only closes it.
         if matches!(m.kind, MouseEventKind::Down(_)) && self.close_search_prompt() {
             return;
-        }
-        // A press starts afresh: a drag whose release never came (let go outside the window)
-        // is over.
-        if m.kind == MouseEventKind::Down(MouseButton::Left) {
-            self.drag = None;
         }
         let (x, y) = (m.column, m.row);
         let inside = |r: Rect| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height;

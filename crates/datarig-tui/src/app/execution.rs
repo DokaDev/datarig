@@ -386,7 +386,12 @@ impl App {
         }
         // A run that started or ended may show or hide a pane (a results zoom waiting for them).
         if !self.tabs.is_empty() && !self.profiles.is_empty() {
+            let before = self.focus;
             self.settle_panes(false);
+            // Not a move of the user's: the next input compares against where it is now.
+            if self.focus != before {
+                self.last_focus = self.focus;
+            }
         }
         // "Quit anyway" waits for the running queries to stop.
         if self.quitting.is_some() && !self.any_running() {
