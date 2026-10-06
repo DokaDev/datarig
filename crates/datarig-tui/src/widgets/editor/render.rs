@@ -171,7 +171,7 @@ impl Editor {
             if let Some(h) = hint.max_by_key(|h| h.span.end).map(|h| &h.hint) {
                 let room = (self.left + text_w).saturating_sub(x + HINT_GAP);
                 if x + HINT_GAP >= self.left {
-                    self.draw_hint(buf, tx0 + (x + HINT_GAP - self.left) as u16, y, room, h, bg);
+                    self.draw_hint(buf, (tx0 + (x + HINT_GAP - self.left) as u16, y), room, h, bg);
                 }
             }
             if let Some((a, z)) = sel {
@@ -194,11 +194,11 @@ impl Editor {
 
     /// Hint `h` at `x`, `y` in at most `room` columns: its mark, a blank and its text, cut
     /// with `…` when it does not fit; nothing when not even a few characters of it would.
-    fn draw_hint(&self, buf: &mut Buffer, x: u16, y: u16, room: usize, h: &RunHint, bg: Style) {
-        let th = theme::cur();
+    fn draw_hint(&self, buf: &mut Buffer, (x, y): (u16, u16), room: usize, h: &RunHint, bg: Style) {
         if room < HINT_MIN {
             return;
         }
+        let th = theme::cur();
         let style = Style::new().fg(th.fg).patch(bg).patch(th.run_hint);
         let mark = match h.kind {
             HintKind::Ok => th.success,
