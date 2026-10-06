@@ -16,6 +16,7 @@ mod timeline;
 mod tree;
 mod treemap;
 
+use crate::app::hover::PointerOn;
 use crate::app::plan::{PlanTab, PlanView};
 use crate::app::{App, Focus};
 use crate::text::{clip, width};
@@ -49,6 +50,9 @@ pub(crate) struct Look<'a> {
     pub th: &'a Theme,
     pub icons: bool,
     pub focused: bool,
+    /// A view's name under the pointer, where the last frame drew it (highlighted only if it is
+    /// drawn there again).
+    pub hover: Option<(Rect, PlanView)>,
 }
 
 /// The active tab's plan, in `area` (inside the results pane, below its strip).
@@ -59,8 +63,16 @@ pub(crate) fn draw_plan(app: &mut App, area: Rect, buf: &mut Buffer) {
     let icons = app.icons_on();
     // Taken out while it is drawn (it keeps what the frame drew: hits, scroll).
     let Some(mut p) = app.tabs.active_mut().exec.plan.take() else { return };
-    let cx = Look { i18n: &app.i18n, th: &th, icons, focused };
+    let hover = match app.pointer_hover() {
+        Some(PointerOn::PlanView(v)) => p.view_hits.iter().find(|h| h.1 == v).copied(),
+        _ => None,
+    };
+    let cx = Look { i18n: &app.i18n, th: &th, icons, focused, hover };
     draw_into(&cx, &mut p, area, buf);
+    // Laid out otherwise: the name under the pointer is not there any more.
+    if matches!(app.pointer_on, Some(PointerOn::PlanView(_))) && !hover.is_some_and(|h| p.view_hits.contains(&h)) {
+        app.pointer_on = None;
+    }
     app.tabs.active_mut().exec.plan = Some(p);
 }
 
@@ -196,8 +208,10 @@ fn view_bar(cx: &Look, p: &mut PlanTab, area: Rect, buf: &mut Buffer) {
         } else {
             Style::new().fg(th.fg_muted).bg(th.surface)
         };
+        let r = Rect { x, y: area.y, width: w, height: 1 };
+        let style = if cx.hover == Some((r, *v)) { style.patch(crate::widgets::pointer_style()) } else { style };
         put(buf, x, area.y, text, (end - x) as usize, style);
-        p.view_hits.push((Rect { x, y: area.y, width: w, height: 1 }, *v));
+        p.view_hits.push((r, *v));
         x += w + 1;
     }
     if next < names.len() && x + 2 <= end {

@@ -442,6 +442,7 @@ impl App {
             action,
             folder: None,
             path: None,
+            buttons: Default::default(),
         }));
     }
 }

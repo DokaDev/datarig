@@ -95,7 +95,7 @@ Held by CI budgets (`docs/perf.md`).
 
 - **Result rows** (`datarig-core::results`): a `RowStore` per result keeps `result_window_rows` rows in memory and writes every row past that to a spill file (`results::spill`: one `0600` file per result in `<state>/spill`, a varint encoding of the decoded cells, the offset of every 256th row in memory). The window follows the pages and moves to the rows the grid shows, reading ahead; `for_each_chunk` streams rows for copies (`export::Writer` writes any format a chunk at a time with the same text as all at once). A row not in memory is `Row::NotRead`, never an empty row. The file stops at `spill_limit` (config, policy) and fetching stops with it. Files are deleted with their result and at quit; a launch deletes only the files of a process id that is not running and whose `datarig-spill-<pid>.lock` nobody holds.
 - **Editor** (`widgets/editor.rs` and its modules): lines, edits as splices of the lines they touch, undo as the changes of each command (`buffer`). Vim's command grammar is parsed in `vim` (`["x] [count] operator [count] motion|text object`, doubled operators, the `g`/`z` prefixes and the character after `f t r`); a motion (`motion`) or a text object (`textobj`) gives where it leads and, for an operator, a range that is exclusive, inclusive or whole lines, with Vim's adjustments; `%` and the bracket objects find brackets with the lexer's tokens (`brackets`), so brackets in strings and comments do not count; the operators apply to a range or to the Visual selection (`visual`, by character or by line) as one undo step. `.` (`repeat`) replays the keys of the last change (its count apart, an Insert session's keys included, a Visual operator's selection as its size) through the same parser; the tests compare every command with what Neovim does on the same text. Registers (`registers`) follow Vim: named ones with append, `"0`, the `"1`-`"9` delete ring, `"-`, `"_`, and `"+`/`"*`, by character, by line or as a block. A write Vim with `clipboard=unnamedplus` would send to the clipboard is offered to the app (`Editor::take_yank`, routed by `App::editor_yanked` through the copy path and `[editor] clipboard`); for `"+p` the app asks `Editor::reads_clipboard` before the key and reads the system clipboard only then (`SystemClipboard::get_text`, never over OSC 52). The widget never touches the clipboard. The lexer state at each line start is cached (between tokens, or inside a token that spans lines, with its start) and invalidated from an edited line on; a frame lexes the lines on screen from the nearest known state. The statement under the cursor and the completer's text come from lines around the cursor, taking more until the `;` around it are in them; this equals splitting the whole text (tested on random texts).
-- **Event loop** (`main.rs`): it sleeps until `App::next_tick` (100 ms only while something counts in tenths or animates; else the earliest autosave, portal close or countdown second; none when nothing waits) and draws no frame for a mouse move, unless the move selects another item of an open menu or the keyboard help (`App::menu_hover`, `App::help_hover`; the terminal reports motion without a button through crossterm's any-event tracking, `?1003h`).
+- **Event loop** (`main.rs`): it sleeps until `App::next_tick` (100 ms only while something counts in tenths or animates; else the earliest autosave, portal close or countdown second; none when nothing waits) and draws no frame for a mouse move, unless the move selects another item of an open menu or the keyboard help, or changes which dialog button or list row, or which small target of the workspace, is highlighted (`App::menu_hover`, `App::help_hover`, `App::overlay_hover`, `App::workspace_hover`; the terminal reports motion without a button through crossterm's any-event tracking, `?1003h`).
 - **Round trips**: see the vendored tokio-postgres decision below.
 
 ## Terminal, runs and copies
@@ -238,6 +238,14 @@ Held by CI budgets (`docs/perf.md`).
   labels are `Part`s whose document part shortens first when the tabs do not fit, and the `×`
   part records a `TabHit::Close` of its own, which `tab_bar_click` sends down the `Ctrl+W`
   path (`ConfirmAction::CloseTab` keeps the tab on Enter).
+- **The pointer on the workspace's small targets** (`app::hover`): the tab bar's tabs, `×` and
+  scroll marks, the result tab strip's entries, the paging arrows and the Plan tab's view names.
+  `App::workspace_hover` finds the target under the pointer in the hits the last frame drew
+  (`tab_hits`, `strip_hits`, `Layout::page_prev`/`page_next`, `PlanTab::view_hits`) and keeps it
+  in `App::pointer_on`; a frame that lays those hits out otherwise (a tab closed or added, the bar
+  scrolled, a resize) drops it before it is drawn, so no light is left on something else, and
+  none is drawn under a dialog. The light is `widgets::pointer_style` (the text on the
+  selection, readable on every theme; the rest of a tab is underlined).
 - **Run keys the terminal can send.** `keymap::works` leaves `Ctrl+Enter` out of the keyboard
   help, the command line's list and the hints (`Keymap::hint_keys`) when the kitty keyboard
   protocol was not granted; `Ctrl+E` is bound wherever `Ctrl+Enter` is.
@@ -375,9 +383,36 @@ Held by CI budgets (`docs/perf.md`).
   (`ScriptTree`) in `TreeMode::KeyFile`: `root` is a folder of the file system, `entries` are
   listed a folder at a time (`ScriptTree::load`, `read_dir` and a `stat` for links; no file is
   opened), `TreeRow::Up` re-roots at the parent. `form.pick_key_file` (`Ctrl+O` in
-  `overlay.profile_form`) and the field's `[…]` button (`App::form_mouse`, `ProfileForm::
-  key_button`) open it; a pick sets `ProfileForm::ssh_key_note` from the file's mode and name
+  `overlay.profile_form`) and the field's `[…]` button (`App::form_mouse`, `FormHit::KeyFile`)
+  open it; a pick sets `ProfileForm::ssh_key_note` from the file's mode and name
   (`key_picker::key_note`).
+
+- **The mouse on dialogs** (`app/dialog_mouse.rs`). While a dialog is on top, `App::overlay_mouse`
+  sends the mouse to it and `App::overlay_hover` the pointer's moves; a screen too small to draw
+  hits nothing. Hit-testing reads only what the renderer kept from the frame on screen, on the
+  overlay itself (a new dialog starts with nothing to hit): `Buttons` (each button's rect and the
+  one under the pointer), a list's rect and first row (`Chooser`, `QuickConnect`, `CommandLine`,
+  `ScriptTree`, `Help`, the settings' `rows`), the profile form's `hits` (`FormHit` per rect,
+  clipped to the box, the last drawn on top), and `TextInput`, which keeps the area, mask and
+  hidden span it was drawn with so `TextInput::click` puts the cursor before the grapheme under
+  the pointer (wide letters and its scroll included). A click does what the key for it does
+  (a confirmation's button sends its key through `confirm_key`, a form button is `Enter` on it),
+  so the key paths stay the only ones that act. A button, a list row (chooser, quick connect)
+  and a command line entry act as a GUI button: a press arms it and the release over the same
+  target acts (`overlay::Press`); presses in the first `overlay::ARM_DELAY` (400 ms by the app's
+  clock) after the dialog came on top are ignored (the clock starts when it is drawn as the top
+  overlay and starts again after another dialog covered it), and a move with no button held
+  drops an arm whose release was lost. So a dialog that appears under a clicking pointer (a host
+  key question, a conflict, one uncovered by a prompt that closed, the second press of a double
+  click) does not take that click. Focusing a field, placing the cursor and stepping a value act
+  on the press. The
+  pointer only highlights a button or a list row (`Buttons::hover`, `ProfileForm::hover`, the
+  `hover` of `Chooser`, `QuickConnect` and `SettingsScreen`); the focus and the selection, what
+  `Enter` acts on, never move to it, so a destructive confirmation's default stays the safe
+  button and a twitch of the pointer never changes what quick connect picks (the menu and the
+  keyboard help, where the pointer selects, aside); a key, the wheel or new rows drop a list's
+  highlight. A selector's `›` is clickable only where it was drawn. A click outside a dialog
+  does nothing (the menu alone closes on one).
 
 ## Connection poolers
 

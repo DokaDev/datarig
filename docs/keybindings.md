@@ -357,7 +357,7 @@ A DDL tab in vim Normal mode: its text is read-only (moving, selecting, searchin
 
 ## `overlay.commands` [text]
 
-The `:` command line: commands with arguments, and a search over every action. Inside `root`.
+The `:` command line: commands with arguments, and a search over every action; a click runs an entry, the wheel moves the selection. Inside `root`.
 
 Reserved — command line: `Esc` `Enter` `Up` `Down` `Ctrl+P` `Ctrl+N` `Tab` `Shift+Tab`
 
@@ -365,7 +365,7 @@ Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+
 
 ## `overlay.quick_connect` [text]
 
-Quick connect: a fuzzy list of the connection profiles. Inside `root`.
+Quick connect: a fuzzy list of the connection profiles; a click picks a row (on `▸` it lists the databases), the wheel selects, the pointer only highlights. Inside `root`.
 
 Reserved — quick connect: `Esc` `Enter` `Up` `Down` `Ctrl+P` `Ctrl+N`
 
@@ -375,7 +375,7 @@ Reserved — text input: `Backspace` `Delete` `Home` `End` `Ctrl+U` `Ctrl+A`
 
 ## `overlay.profile_form` [text]
 
-Connection profile form. Inside `root`.
+Connection profile form. With the mouse: a click focuses a field (in a text, the cursor goes there), picks a value, steps a `‹ value ›` (its arrows; the value opens a list), switches the section or presses a button. Inside `root`.
 
 | Keys | Action | Description | R |
 |---|---|---|---|
@@ -388,13 +388,13 @@ Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+
 
 ## `overlay.settings`
 
-The settings screen: one list by category, each setting with its description. Inside `root`.
+The settings screen: one list by category, each setting with its description; a click selects a row and its `‹`/`›` change the value, the wheel selects, the pointer only highlights. Inside `root`.
 
 Reserved — settings screen: `j` `k` `Down` `Up` `h` `l` `Left` `Right` `Enter` `Space` `Esc` `q`
 
 ## `overlay.chooser`
 
-A list to pick from: a profile's color, icon or folder. Inside `root`.
+A list to pick from: a profile's color, icon or folder; a click picks a row, the wheel selects, the pointer only highlights. Inside `root`.
 
 Reserved — chooser: `j` `k` `Down` `Up` `Enter` `/` `Esc` `q`
 
@@ -408,7 +408,7 @@ Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+
 
 ## `overlay.name_input` [text]
 
-A name to type: a new or renamed folder. Inside `root`.
+A name to type: a new or renamed folder; OK and Cancel take a click. Inside `root`.
 
 Reserved — name input: `Enter` `Esc`
 
@@ -438,7 +438,7 @@ Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+
 
 ## `overlay.password` [text]
 
-Password prompt. Inside `root`.
+Password prompt; a click on the field, the checkbox, OK or Cancel. Inside `root`.
 
 Reserved — password prompt: `Esc` `Enter` `Tab` `Shift+Tab`
 
@@ -446,19 +446,19 @@ Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+
 
 ## `overlay.confirm`
 
-Yes/no confirmation: `y` does it; Enter keeps what the answer would lose (quit, delete, disconnect, close, switch, replace); for a copy it says yes. Inside `root`.
+Yes/no confirmation: `y` does it; Enter keeps what the answer would lose (quit, delete, disconnect, close, switch, replace); for a copy it says yes. A button acts on its release (pressed and released on it, not right after the question appeared) and does what its key does; the pointer only underlines it (Enter stays on the safe one). Inside `root`.
 
 Reserved — confirmation (Enter keeps what would be lost): `y` `n` `Enter` `Esc`
 
 ## `overlay.run_confirm`
 
-Before statements that may do harm run: each is listed; Cancel has the focus, `y` or Enter on Run runs them. Inside `root`.
+Before statements that may do harm run: each is listed; Cancel has the focus, `y` or Enter on Run runs them, as a click on Run does (the pointer does not move the focus). Inside `root`.
 
 Reserved — run confirmation (Cancel has the focus): `y` `n` `Enter` `Esc` `Tab` `Shift+Tab` `Left` `Right` `h` `l`
 
 ## `overlay.icons_ask`
 
-Whether the terminal shows the Nerd Font icons (asked once, with a preview); No has the focus. Inside `root`.
+Whether the terminal shows the Nerd Font icons (asked once, with a preview); No has the focus; a click on Yes or No answers. Inside `root`.
 
 Reserved — the icons question (No has the focus): `y` `n` `Enter` `Esc` `Tab` `Shift+Tab` `Left` `Right` `h` `l`
 

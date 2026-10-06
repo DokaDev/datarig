@@ -1053,3 +1053,23 @@ fn a_long_explain_analyze_of_a_write_is_not_called_committed() {
     let status = h.status(400, 45);
     assert!(!status.contains("committed in full") && !status.contains("change rows again"), "{status}");
 }
+
+/// The title's paging arrows light up under the pointer, and go out when it leaves.
+#[test]
+fn the_title_arrows_light_up_under_the_pointer() {
+    let mut h = Harness::connected(Lang::En);
+    first_page(&mut h, 500, true);
+    h.draw(160, 45);
+    let next = h.app.layout.page_next;
+    assert!(next.width > 0, "the arrows are drawn");
+    h.mouse(MouseEventKind::Moved, next.x, next.y);
+    assert!(!h.app.take_idle_event(), "a frame");
+    assert_eq!(h.app.pointer_on, Some(datarig_tui::app::hover::PointerOn::PageNext));
+    let sel = datarig_tui::theme::DARK.selection.bg.unwrap();
+    let t = h.draw(160, 45);
+    assert_eq!(t.backend().buffer()[(next.x, next.y)].bg, sel);
+    h.mouse(MouseEventKind::Moved, next.x, next.y + 3);
+    assert!(!h.app.take_idle_event());
+    let t = h.draw(160, 45);
+    assert_ne!(t.backend().buffer()[(next.x, next.y)].bg, sel);
+}

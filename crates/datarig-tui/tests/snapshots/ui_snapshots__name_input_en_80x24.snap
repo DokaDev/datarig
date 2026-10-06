@@ -10,13 +10,13 @@ expression: backend
 "│    ▸ public          ││  3                                                   │"
 "│    ▸ shop            ││  4 SELECT u.name, o.status, o.total_amount           │"
 "│▸ ○   分析-replica    ││  5 FROM shop.orders o                                │" Hidden by multi-width symbols: [(8, " "), (10, " ")]
-"│▸ ○   分析-replica    ││  6 JOIN shop.users u ON u.id = o.user_id             │" Hidden by multi-width symbols: [(8, " "), (10, " ")]
-"│           ╭ New folder ──────────────────────────────────────────╮           │"
+"│▸ ○   分析-╭ New folder ──────────────────────────────────────────╮           │" Hidden by multi-width symbols: [(8, " "), (10, " ")]
 "│           │ 本番                                                 │           │" Hidden by multi-width symbols: [(15, " "), (17, " ")]
 "│           │                                                      │           │"
 "│           │                                                      │           │"
-"│           ╰───────────────────────────── Enter save · Esc cancel ╯ created_at│"
-"│                      ││ 12                                                   │"
+"│           │                                                      │           │"
+"│           │                 [ OK ]     Cancel                    │ created_at│"
+"│           ╰───────────────────────────── Enter save · Esc cancel ╯           │"
 "│                      ││ 13 SELECT analytics.slow(30);                        │"
 "│                      ││ 14                                                   │"
 "│                      ││ 15 SELECT $$a body; with a semicolon$$ AS dollar, 'it│"

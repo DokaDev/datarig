@@ -508,6 +508,7 @@ impl App {
             action: ConfirmAction::DeleteProfile(id),
             folder: None,
             path: None,
+            buttons: Default::default(),
         }));
     }
 
@@ -600,6 +601,7 @@ impl App {
             action: ConfirmAction::DeleteFolder,
             folder: Some(f),
             path: None,
+            buttons: Default::default(),
         }));
     }
 

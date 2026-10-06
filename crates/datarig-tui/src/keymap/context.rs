@@ -214,27 +214,37 @@ impl Ctx {
             Ctx::Ddl => {
                 "A DDL tab in vim Normal mode: its text is read-only (moving, selecting, searching and yanking work; edits are refused); `r` reads it again, `o` opens it in a new console."
             }
-            Ctx::Commands => "The `:` command line: commands with arguments, and a search over every action.",
-            Ctx::QuickConnect => "Quick connect: a fuzzy list of the connection profiles.",
-            Ctx::Chooser => "A list to pick from: a profile's color, icon or folder.",
+            Ctx::Commands => {
+                "The `:` command line: commands with arguments, and a search over every action; a click runs an entry, the wheel moves the selection."
+            }
+            Ctx::QuickConnect => {
+                "Quick connect: a fuzzy list of the connection profiles; a click picks a row (on `▸` it lists the databases), the wheel selects, the pointer only highlights."
+            }
+            Ctx::Chooser => {
+                "A list to pick from: a profile's color, icon or folder; a click picks a row, the wheel selects, the pointer only highlights."
+            }
             Ctx::ChooserFilter => "The `/` filter of a list to pick from.",
-            Ctx::NameInput => "A name to type: a new or renamed folder.",
+            Ctx::NameInput => "A name to type: a new or renamed folder; OK and Cancel take a click.",
             Ctx::ScriptTree => "The folder tree of the saved queries (save as, open): the tree has the keyboard.",
             Ctx::ScriptTreeName => "The folder tree of the saved queries: its name field (save as) or filter (open).",
             Ctx::ContextMenu => {
                 "The action menu: a right click (an explorer node, the grid, a tab, the editor) opens it at the pointer; `Space Space`, `Shift+F10` or the Menu key next to the selection, `Space t m` under the active tab. The selection's actions come first, then the pane's, each with its key in that pane. Typing filters it (when nothing in it matches, every action is searched); the arrows, `Ctrl+N`/`Ctrl+P` and `Tab` move, `Enter` runs, `Esc` closes (`Backspace` on an empty filter does not); a shown key that is not a character (`Ctrl+…`, `F…`) runs its item; the pointer selects the item under it."
             }
-            Ctx::ProfileForm => "Connection profile form.",
-            Ctx::Settings => "The settings screen: one list by category, each setting with its description.",
-            Ctx::Password => "Password prompt.",
+            Ctx::ProfileForm => {
+                "Connection profile form. With the mouse: a click focuses a field (in a text, the cursor goes there), picks a value, steps a `‹ value ›` (its arrows; the value opens a list), switches the section or presses a button."
+            }
+            Ctx::Settings => {
+                "The settings screen: one list by category, each setting with its description; a click selects a row and its `‹`/`›` change the value, the wheel selects, the pointer only highlights."
+            }
+            Ctx::Password => "Password prompt; a click on the field, the checkbox, OK or Cancel.",
             Ctx::Confirm => {
-                "Yes/no confirmation: `y` does it; Enter keeps what the answer would lose (quit, delete, disconnect, close, switch, replace); for a copy it says yes."
+                "Yes/no confirmation: `y` does it; Enter keeps what the answer would lose (quit, delete, disconnect, close, switch, replace); for a copy it says yes. A button acts on its release (pressed and released on it, not right after the question appeared) and does what its key does; the pointer only underlines it (Enter stays on the safe one)."
             }
             Ctx::RunConfirm => {
-                "Before statements that may do harm run: each is listed; Cancel has the focus, `y` or Enter on Run runs them."
+                "Before statements that may do harm run: each is listed; Cancel has the focus, `y` or Enter on Run runs them, as a click on Run does (the pointer does not move the focus)."
             }
             Ctx::IconsAsk => {
-                "Whether the terminal shows the Nerd Font icons (asked once, with a preview); No has the focus."
+                "Whether the terminal shows the Nerd Font icons (asked once, with a preview); No has the focus; a click on Yes or No answers."
             }
             Ctx::Busy => {
                 "A notice that waits for background work (the launch-time move of passwords to the keychain); `Ctrl+C` quits there too."

@@ -29,12 +29,14 @@ mod conn;
 mod connection;
 pub mod copy;
 mod ddl;
+mod dialog_mouse;
 mod dispatch;
 pub mod effects;
 mod execution;
 pub mod explorer;
 mod format;
 pub mod guide;
+pub mod hover;
 pub mod key_picker;
 mod keychain;
 pub mod menu;
@@ -230,6 +232,11 @@ pub struct CommandLine {
     /// `Tab`/`↑`/`↓` picked an entry since the input last changed. Until then `Enter` on a
     /// `:use` argument runs what was typed, never the top completion.
     pub picked: bool,
+    /// Where the entries were drawn and the first one shown (mouse), kept by the renderer, and
+    /// the entry a press armed (it runs on the release).
+    pub list: ratatui::layout::Rect,
+    pub offset: usize,
+    pub press: overlay::Press<usize>,
 }
 
 /// Password asked at connect time: a `prompt` profile (every time), or no/wrong stored
@@ -270,6 +277,9 @@ pub struct PasswordPrompt {
     pub field: PromptField,
     /// Show what is typed (a keyboard-interactive question that says so).
     pub echo: bool,
+    /// Where the checkbox was drawn, and the buttons (kept by the renderer, for the mouse).
+    pub checkbox: ratatui::layout::Rect,
+    pub buttons: overlay::Buttons,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -651,6 +661,10 @@ pub struct App {
     pending_use: Option<cmdline::PendingUse>,
     /// Where each tab and scroll mark of the document tab bar was drawn last.
     pub(crate) tab_hits: Vec<(u16, u16, crate::widgets::tabbar::TabHit)>,
+    /// The small clickable target under the pointer (drawn highlighted).
+    pub pointer_on: Option<hover::PointerOn>,
+    /// The kind of the top dialog the last frame saw (`App::note_top`).
+    last_top: Option<OverlayKind>,
 }
 
 fn test_msg(i18n: &I18n, t: &ConnTest) -> Notice {
@@ -876,6 +890,8 @@ impl App {
             unknown_tabs: Vec::new(),
             strip_hits: Vec::new(),
             tab_hits: Vec::new(),
+            pointer_on: None,
+            last_top: None,
             pending_context: None,
             pending_use: None,
             last_save_folder: None,

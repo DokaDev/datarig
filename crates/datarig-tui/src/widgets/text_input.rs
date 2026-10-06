@@ -2,7 +2,8 @@
 //!
 //! Same rules as the editor: the cursor moves by grapheme cluster, the screen
 //! column is the sum of preceding grapheme widths, and [`TextInput::render`] returns where the
-//! real terminal cursor belongs so IME preedit shows up in place.
+//! real terminal cursor belongs so IME preedit shows up in place. It remembers where and how it
+//! was drawn, so [`TextInput::click`] puts the cursor under the pointer. There is no selection.
 
 use crate::text::grapheme_width;
 use ratatui::buffer::Buffer;
@@ -25,6 +26,10 @@ pub struct TextInput {
     cursor: usize,
     /// First visible display column.
     scroll: usize,
+    /// Where the last render drew it, and what it masked (for the mouse).
+    drawn: Rect,
+    drawn_mask: bool,
+    drawn_hide: Option<(usize, usize)>,
 }
 
 pub const MASK: &str = "•";
@@ -146,6 +151,28 @@ impl TextInput {
         }
     }
 
+    /// A click at screen (x, y): on the input as last drawn, the cursor goes before the grapheme
+    /// under the pointer (either half of a wide one), or to the end past the text. `false` when
+    /// the click is not on the input.
+    pub fn click(&mut self, x: u16, y: u16) -> bool {
+        let a = self.drawn;
+        if !a.contains(ratatui::layout::Position::new(x, y)) {
+            return false;
+        }
+        let col = self.scroll + usize::from(x - a.x);
+        let mut at = 0;
+        let mut cursor = None;
+        for (i, (_, w)) in cells(&self.text, self.drawn_mask, self.drawn_hide).into_iter().enumerate() {
+            if col < at + w {
+                cursor = Some(i);
+                break;
+            }
+            at += w;
+        }
+        self.cursor = cursor.unwrap_or_else(|| self.len());
+        true
+    }
+
     /// Draw into a one-line `area` (`mask` replaces every grapheme with `•`, `hide` masks a
     /// byte range, e.g. a password inside a DSN). An unfocused input shows its beginning.
     /// Returns the screen column of the cursor.
@@ -159,18 +186,12 @@ impl TextInput {
         hide: Option<(usize, usize)>,
     ) -> u16 {
         let w = area.width as usize;
+        (self.drawn, self.drawn_mask, self.drawn_hide) = (area, mask, hide);
         if w == 0 {
             return area.x;
         }
         buf.set_stringn(area.x, area.y, " ".repeat(w), w, style);
-        // (display text, width) per grapheme
-        let mut cells: Vec<(&str, usize)> = Vec::new();
-        let mut b = 0;
-        for g in self.text.graphemes(true) {
-            let hidden = mask || hide.is_some_and(|(s, e)| b >= s && b < e);
-            b += g.len();
-            cells.push(if hidden { (MASK, 1) } else { (g, grapheme_width(g)) });
-        }
+        let cells = cells(&self.text, mask, hide);
         let cursor_x: usize = cells.iter().take(self.cursor).map(|c| c.1).sum();
         // Keep one column free for the cursor at the end.
         if !focused {
@@ -197,6 +218,19 @@ impl TextInput {
         }
         area.x + (cursor_x.saturating_sub(self.scroll)).min(w - 1) as u16
     }
+}
+
+/// (shown text, width) of each grapheme of `text`: `mask` shows every one as `•`, `hide` the
+/// ones in a byte range.
+fn cells(text: &str, mask: bool, hide: Option<(usize, usize)>) -> Vec<(&str, usize)> {
+    let mut b = 0;
+    text.graphemes(true)
+        .map(|g| {
+            let hidden = mask || hide.is_some_and(|(s, e)| b >= s && b < e);
+            b += g.len();
+            if hidden { (MASK, 1) } else { (g, grapheme_width(g)) }
+        })
+        .collect()
 }
 
 #[cfg(test)]

@@ -229,6 +229,10 @@ const DOC_STEPS: [usize; 4] = [24, 16, 10, 6];
 /// as drawn (a clipped tab counts for the columns it got).
 pub(crate) fn draw_tab_bar(app: &App, area: Rect, buf: &mut Buffer) -> Vec<(u16, u16, TabHit)> {
     let th = theme::cur();
+    let hover = match app.pointer_hover() {
+        Some(crate::app::hover::PointerOn::Tab(h)) => Some(h),
+        _ => None,
+    };
     let mut hits = Vec::new();
     buf.set_style(area, Style::new().bg(th.bg));
     let total = area.width as usize;
@@ -258,10 +262,11 @@ pub(crate) fn draw_tab_bar(app: &App, area: Rect, buf: &mut Buffer) -> Vec<(u16,
         window(&widths, active, total.saturating_sub(2))
     };
     let arrow = Style::new().fg(th.accent).bg(th.bg).add_modifier(Modifier::BOLD);
+    let mark = |h: TabHit| if hover == Some(h) { arrow.patch(crate::widgets::pointer_style()) } else { arrow };
     let mut x = area.x;
     let end = area.x + area.width;
     if first > 0 {
-        buf.set_string(x, area.y, "‹", arrow);
+        buf.set_string(x, area.y, "‹", mark(TabHit::More(first - 1)));
         hits.push((x, x + 1, TabHit::More(first - 1)));
         x += 1;
     }
@@ -275,7 +280,13 @@ pub(crate) fn draw_tab_bar(app: &App, area: Rect, buf: &mut Buffer) -> Vec<(u16,
             }
             let s = clip(&p.text, (stop - x) as usize);
             let from = x;
-            buf.set_stringn(x, area.y, &s, (stop - x) as usize, p.style);
+            // Under the pointer: the `×` stands out; the rest of the tab is underlined.
+            let style = match (p.kind == PartKind::Close, hover) {
+                (true, Some(TabHit::Close(i))) if i == index => p.style.patch(crate::widgets::pointer_style()),
+                (false, Some(TabHit::Tab(i))) if i == index => p.style.add_modifier(Modifier::UNDERLINED),
+                _ => p.style,
+            };
+            buf.set_stringn(x, area.y, &s, (stop - x) as usize, style);
             x += width(&s) as u16;
             // The close button has a hit of its own, exactly where it is drawn.
             if p.kind == PartKind::Close && x > from {
@@ -291,7 +302,7 @@ pub(crate) fn draw_tab_bar(app: &App, area: Rect, buf: &mut Buffer) -> Vec<(u16,
         }
     }
     if last + 1 < labels.len() {
-        buf.set_string(end - 1, area.y, "›", arrow);
+        buf.set_string(end - 1, area.y, "›", mark(TabHit::More(last + 1)));
         hits.push((end - 1, end, TabHit::More(last + 1)));
     }
     hits

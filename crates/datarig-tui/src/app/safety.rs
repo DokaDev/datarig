@@ -139,6 +139,7 @@ impl App {
             statements,
             items,
             run_focused: false,
+            buttons: Default::default(),
         }));
     }
 

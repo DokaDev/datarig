@@ -6,7 +6,7 @@
 
 use crate::app::App;
 use crate::app::command::{SETTINGS, Values};
-use crate::app::settings::groups;
+use crate::app::settings::{SettingsRow, groups};
 use crate::text::{Align, fit, width, wrap_words};
 use crate::theme;
 use crate::widgets::dialog::{centered, modal};
@@ -17,7 +17,7 @@ use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 
-pub(crate) fn draw_settings(app: &App, area: Rect, buf: &mut Buffer) {
+pub(crate) fn draw_settings(app: &mut App, area: Rect, buf: &mut Buffer) {
     let th = theme::cur();
     let Some(screen) = app.overlays.settings() else { return };
     let i18n = &app.i18n;
@@ -55,6 +55,7 @@ pub(crate) fn draw_settings(app: &App, area: Rect, buf: &mut Buffer) {
     let value_w = SETTINGS.iter().flat_map(|s| s.values.fixed().iter().map(|v| width(v.0))).max().unwrap_or(6);
     let mut row = 0;
     let mut selected_spec = None;
+    let mut rows = Vec::new();
     for (group, items) in groups() {
         if y >= bottom {
             break;
@@ -67,7 +68,13 @@ pub(crate) fn draw_settings(app: &App, area: Rect, buf: &mut Buffer) {
             }
             let spec = &SETTINGS[k];
             let on = row == screen.selected;
-            let bg = if on { th.selection } else { Style::new().bg(th.surface) };
+            let bg = if on {
+                th.selection
+            } else if screen.hover == Some(row) {
+                Style::new().bg(th.surface_alt)
+            } else {
+                Style::new().bg(th.surface)
+            };
             buf.set_style(Rect::new(inner.x, y, inner.width, 1), bg);
             let mut cx = x + 2;
             put(
@@ -83,7 +90,17 @@ pub(crate) fn draw_settings(app: &App, area: Rect, buf: &mut Buffer) {
             let shown = value.as_ref().map_or("?", |v| v.0.as_str());
             let chosen = format!("‹ {} ›", fit(shown, value_w.max(width(shown)).min(tw / 3), Align::Left));
             let style = Style::new().fg(th.accent_warm).patch(bg).add_modifier(Modifier::BOLD);
-            cx += put(buf, cx, y, &chosen, tw.saturating_sub((cx - x) as usize), style) + 2;
+            let used = put(buf, cx, y, &chosen, tw.saturating_sub((cx - x) as usize), style);
+            // The arrows only where they were drawn.
+            let whole = usize::from(used) == width(&chosen);
+            rows.push(SettingsRow {
+                line: Rect::new(inner.x, y, inner.width, 1),
+                row,
+                prev: Rect::new(cx, y, used.min(2), 1),
+                value: Rect::new(cx + used.min(2), y, used.saturating_sub(if whole { 4 } else { 2 }), 1),
+                next: if whole { Rect::new(cx + used - 2, y, 2, 1) } else { Rect::default() },
+            });
+            cx += used + 2;
             if let Some((_, label)) = value {
                 let left = tw.saturating_sub((cx - x) as usize);
                 put(buf, cx, y, &label, left, Style::new().fg(th.fg_muted).patch(bg));
@@ -95,8 +112,12 @@ pub(crate) fn draw_settings(app: &App, area: Rect, buf: &mut Buffer) {
             y += 1;
         }
     }
+    if let Some(s) = app.overlays.settings_mut() {
+        s.rows = rows;
+    }
     // The selected setting's description (and the icons' preview).
     let Some(spec) = selected_spec else { return };
+    let Some(screen) = app.overlays.settings() else { return };
     let mut lines: Vec<(String, Style)> = Vec::new();
     // For `icons` the preview and its hint come first: they must show on a small screen.
     if spec.key == "icons" {

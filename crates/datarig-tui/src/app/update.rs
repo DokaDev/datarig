@@ -10,16 +10,20 @@ use crate::widgets::tree::Reveal;
 impl App {
     pub fn handle_event(&mut self, ev: Event) {
         // A mouse move that is not a drag (the terminal reports every motion while the mouse is
-        // captured) only selects the item under the pointer in an open menu or the help; any
-        // other move, and one that stays on the selected item, changes nothing on screen: the
+        // captured) only selects the item under the pointer in an open menu or the help, or
+        // highlights a dialog's button or row or a small target of the workspace (a tab's `×`);
+        // any other move, and one that stays on the same item, changes nothing on screen: the
         // event loop draws no frame for it.
         if let Event::Mouse(m) = ev
             && m.kind == MouseEventKind::Moved
         {
-            let hovered = match self.overlays.top().map(|o| o.kind()) {
-                Some(OverlayKind::ContextMenu) => self.menu_hover(m),
-                Some(OverlayKind::Help) => self.help_hover(m),
-                _ => false,
+            let hovered = if self.modal_open() {
+                // Under a dialog the workspace draws no highlight (`App::pointer_hover`); it is
+                // dropped so none comes back where the pointer no longer is.
+                self.pointer_on = None;
+                self.overlay_hover(m)
+            } else {
+                self.workspace_hover(m)
             };
             self.idle_event = !hovered;
             return;
@@ -40,17 +44,8 @@ impl App {
                     u => self.handle_key(k, u == KeyUse::Repeat),
                 }
             }
-            Event::Mouse(m) if self.overlays.top().is_some_and(|o| o.kind() == OverlayKind::Help) => self.help_mouse(m),
-            Event::Mouse(m) if self.overlays.top().is_some_and(|o| o.kind() == OverlayKind::ScriptTree) => {
-                self.script_tree_mouse(m)
-            }
-            Event::Mouse(m) if self.overlays.top().is_some_and(|o| o.kind() == OverlayKind::ProfileForm) => {
-                self.form_mouse(m)
-            }
-            Event::Mouse(m) if self.overlays.top().is_some_and(|o| o.kind() == OverlayKind::ContextMenu) => {
-                self.menu_mouse(m)
-            }
-            Event::Mouse(m) if !self.modal_open() => self.handle_mouse(m),
+            Event::Mouse(m) if self.modal_open() => self.overlay_mouse(m),
+            Event::Mouse(m) => self.handle_mouse(m),
             Event::Paste(text) => self.paste(&text),
             _ => {}
         }
@@ -269,21 +264,6 @@ impl App {
             _ => {
                 p.input.handle_key(&key);
             }
-        }
-    }
-
-    /// The mouse on the profile form: a click on the key file field's `[…]` button opens the
-    /// key file picker; one on "save as tunnel preset" asks for the preset's name.
-    pub(super) fn form_mouse(&mut self, m: MouseEvent) {
-        let Some(f) = self.overlays.form() else { return };
-        let on = |b: Rect| m.column >= b.x && m.column < b.x + b.width && m.row >= b.y && m.row < b.y + b.height;
-        if m.kind != MouseEventKind::Down(MouseButton::Left) || f.saving {
-            return;
-        }
-        if on(f.key_button) {
-            self.open_key_picker();
-        } else if on(f.preset_button) {
-            self.open_save_as_tunnel();
         }
     }
 

@@ -169,7 +169,7 @@ fn every_view_stays_inside_its_area_at_every_small_size() {
                         c.set_symbol("X");
                     }
                     let area = Rect { x: 3, y: 2, width: w, height: h };
-                    let cx = Look { i18n: &i18n, th: &th, icons: true, focused: true };
+                    let cx = Look { i18n: &i18n, th: &th, icons: true, focused: true, hover: None };
                     draw_into(&cx, &mut p, area, &mut buf);
                     for y in 0..outer.height {
                         for x in 0..outer.width {
@@ -202,7 +202,7 @@ fn boxes_keep_their_edges_with_wide_characters() {
     p.view = PlanView::Boxes;
     let th = crate::theme::DARK;
     let i18n = datarig_core::i18n::I18n::new(datarig_core::i18n::Lang::En);
-    let cx = Look { i18n: &i18n, th: &th, icons: true, focused: false };
+    let cx = Look { i18n: &i18n, th: &th, icons: true, focused: false, hover: None };
     let area = Rect { x: 0, y: 0, width: 60, height: 12 };
     let mut buf = Buffer::empty(area);
     draw_into(&cx, &mut p, area, &mut buf);

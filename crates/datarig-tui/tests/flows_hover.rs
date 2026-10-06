@@ -7,9 +7,12 @@ mod common;
 use common::*;
 use datarig_core::driver::DbCommand;
 use datarig_core::i18n::Lang;
+use datarig_tui::app::hover::PointerOn;
 use datarig_tui::app::overlay::OverlayKind;
+use datarig_tui::widgets::tabbar::TabHit;
 use ratatui::crossterm::event::{KeyCode, MouseButton, MouseEventKind};
 use ratatui::layout::Rect;
+use ratatui::style::Modifier;
 
 /// Move the pointer to (x, y); `true` when the move needs a frame.
 fn hover(h: &mut Harness, x: u16, y: u16) -> bool {
@@ -128,15 +131,22 @@ fn the_pointer_selects_in_the_keyboard_help() {
     assert_eq!(h.overlay_kind(), Some(OverlayKind::Help), "moving runs nothing");
 }
 
-/// A burst of moves over the panes, the tab bar, the status line and a menu's surroundings
-/// draws no frame and changes nothing on screen.
+/// A burst of moves over the panes, the status line and a menu's surroundings draws no frame
+/// and changes nothing on screen (the tab bar and the result tab strip, whose targets light up
+/// under the pointer, aside).
 #[test]
 fn moves_off_the_menus_draw_no_frame() {
     let mut h = with_edge_results(Lang::En);
     let before = h.screen(160, 45);
+    let (bar, strip) = (h.app.layout.tab_bar, h.app.layout.strip);
     let mut frames = 0;
     for i in 0..2_000u16 {
-        if hover(&mut h, i % 160, (i / 160) % 45) {
+        let (x, y) = (i % 160, (i / 160) % 45);
+        let at = ratatui::layout::Position::new(x, y);
+        if bar.contains(at) || strip.contains(at) {
+            continue;
+        }
+        if hover(&mut h, x, y) {
             frames += 1;
         }
     }
@@ -167,4 +177,107 @@ fn moves_off_the_menus_draw_no_frame() {
     let m = h.app.overlays.menu().unwrap();
     let items = (0..usize::from(list.height)).filter(|i| m.item_at(*i).is_some()).count();
     assert_eq!(frames, items - 1, "the first item was selected already; headings select nothing");
+}
+
+// ── the workspace's small targets: the tab bar (the strip: flows_runs, the arrows: flows_paging) ──
+
+/// Two console tabs, connected, drawn at 100x30; the hits of the tab bar.
+fn two_tabs() -> Harness {
+    let mut h = Harness::connected(Lang::En);
+    h.ctrl('t');
+    assert_eq!(h.app.tabs.len(), 2);
+    h.draw(100, 30);
+    h
+}
+
+fn hit_x(h: &Harness, want: TabHit) -> u16 {
+    h.app.tab_hits().iter().find(|t| t.2 == want).unwrap_or_else(|| panic!("{want:?}")).0
+}
+
+/// The `×` of a tab lights up under the pointer (the text on the selection), the rest of the
+/// tab is underlined; leaving clears it; moves along the same target draw nothing.
+#[test]
+fn the_pointer_lights_up_a_tabs_close_button() {
+    let mut h = two_tabs();
+    let y = h.app.layout.tab_bar.y;
+    let x = hit_x(&h, TabHit::Close(0));
+    let plain = h.draw(100, 30).backend().buffer()[(x, y)].clone();
+    assert!(hover(&mut h, x, y), "onto the ×: a frame");
+    assert_eq!(h.app.pointer_on, Some(PointerOn::Tab(TabHit::Close(0))));
+    let t = h.draw(100, 30);
+    let cell = &t.backend().buffer()[(x, y)];
+    assert_eq!(cell.symbol(), "×");
+    assert_eq!(cell.bg, datarig_tui::theme::DARK.selection.bg.unwrap());
+    assert!(cell.modifier.contains(Modifier::BOLD) && cell != &plain);
+    // The tab's body: underlined, the × back as it was.
+    let body = hit_x(&h, TabHit::Tab(0));
+    assert!(hover(&mut h, body, y));
+    assert!(!hover(&mut h, body + 1, y), "along the same tab: no frame");
+    let t = h.draw(100, 30);
+    assert!(t.backend().buffer()[(body + 1, y)].modifier.contains(Modifier::UNDERLINED));
+    assert_eq!(t.backend().buffer()[(x, y)], plain);
+    // Off the bar: cleared, as before.
+    assert!(hover(&mut h, body, y + 5));
+    assert_eq!(h.app.pointer_on, None);
+    assert!(!hover(&mut h, body, y + 6));
+    let t = h.draw(100, 30);
+    assert!(!t.backend().buffer()[(body + 1, y)].modifier.contains(Modifier::UNDERLINED));
+}
+
+/// On every built-in theme the lit `×` differs from the plain one and its text reads (not the
+/// background's color; the terminal theme reverses it).
+#[test]
+fn a_lit_close_button_reads_on_every_built_in_theme() {
+    for (name, theme) in datarig_tui::theme::BUILTINS {
+        let mut h = two_tabs();
+        h.app.theme = std::sync::Arc::new((*theme).clone());
+        let y = h.app.layout.tab_bar.y;
+        let x = hit_x(&h, TabHit::Close(0));
+        let plain = h.draw(100, 30).backend().buffer()[(x, y)].clone();
+        hover(&mut h, x, y);
+        let lit = h.draw(100, 30).backend().buffer()[(x, y)].clone();
+        assert_ne!(lit, plain, "{name}: the × lights up");
+        if *name == "terminal" {
+            assert!(lit.modifier.contains(Modifier::REVERSED), "{name}: reversed");
+        } else {
+            assert_ne!(lit.fg, lit.bg, "{name}: its text reads");
+            assert_eq!(lit.bg, theme.selection.bg.unwrap(), "{name}: on the selection");
+        }
+    }
+}
+
+/// The light goes when the bar is laid out otherwise: a tab closed (by that very ×), a tab
+/// added, the screen resized.
+#[test]
+fn a_lit_close_button_goes_out_when_the_bar_changes() {
+    let mut h = two_tabs();
+    let y = h.app.layout.tab_bar.y;
+    let x = hit_x(&h, TabHit::Close(0));
+    hover(&mut h, x, y);
+    h.mouse(MouseEventKind::Down(MouseButton::Left), x, y);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), x, y);
+    assert_eq!(h.app.tabs.len(), 1, "closed");
+    let t = h.draw(100, 30);
+    assert_eq!(h.app.pointer_on, None, "nothing lit after the close");
+    let buf = t.backend().buffer();
+    let sel = datarig_tui::theme::DARK.selection.bg.unwrap();
+    assert!((0..100).all(|x| buf[(x, y)].bg != sel), "no cell of the bar is lit");
+    // A tab added, and a resize.
+    let x = hit_x(&h, TabHit::Close(0));
+    hover(&mut h, x, y);
+    h.ctrl('t');
+    h.draw(100, 30);
+    assert_eq!(h.app.pointer_on, None, "a tab added");
+    let x = hit_x(&h, TabHit::Close(1));
+    hover(&mut h, x, y);
+    assert!(h.app.pointer_on.is_some());
+    h.draw(90, 30);
+    assert_eq!(h.app.pointer_on, None, "resized");
+    // A dialog over the bar draws no light.
+    h.draw(100, 30);
+    let x = hit_x(&h, TabHit::Close(1));
+    hover(&mut h, x, y);
+    h.keys(":");
+    let t = h.draw(100, 30);
+    assert_ne!(t.backend().buffer()[(x, y)].bg, sel, "not lit under the command line");
 }

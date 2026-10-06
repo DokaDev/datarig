@@ -310,6 +310,37 @@ impl DsnProblem {
     }
 }
 
+/// What a click on the form hits.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FormHit {
+    /// A section's tab.
+    Section(Section),
+    /// A field's line: the focus goes there.
+    Field(Field),
+    /// A text field's input: the focus, and the cursor under the pointer.
+    Input(Field),
+    /// One of the values a field shows side by side (driver, storage, SSH login), by index.
+    Choice(Field, usize),
+    /// The `‹` or `›` of a `‹ value ›` selector: the previous or the next value.
+    Prev(Field),
+    Next(Field),
+    /// A selector's value: the next one, or the list of a picker.
+    Value(Field),
+    /// Test, Save or Cancel.
+    Button(Field),
+    /// The key file field's `[…]`.
+    KeyFile,
+    /// "Save as tunnel preset".
+    SaveAsPreset,
+}
+
+impl FormHit {
+    /// A button: drawn highlighted under the pointer.
+    pub fn is_button(self) -> bool {
+        matches!(self, FormHit::Button(_) | FormHit::KeyFile | FormHit::SaveAsPreset)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FormOutcome {
     None,
@@ -403,10 +434,12 @@ pub struct ProfileForm {
     /// What the key file picker said about the file it picked: others may read
     /// it, a PuTTY key, no file there. Editing the field clears it.
     pub ssh_key_note: Option<Msg>,
-    /// Where the key file field's `[…]` button was drawn (mouse), kept by the renderer.
-    pub key_button: ratatui::layout::Rect,
-    /// Where the "save as tunnel preset" button was drawn (mouse), kept by the renderer.
-    pub preset_button: ratatui::layout::Rect,
+    /// What was drawn where (mouse), kept by the renderer; a later entry lies on an earlier one.
+    pub hits: Vec<(ratatui::layout::Rect, FormHit)>,
+    /// The button under the pointer (drawn highlighted; the focus does not move to it).
+    pub hover: Option<FormHit>,
+    /// The button a press armed (it acts on the release).
+    pub press: super::overlay::Press<FormHit>,
     pub focus: Field,
     pub dsn_problem: Option<DsnProblem>,
     /// Save was attempted: "required" errors are shown from now on.
@@ -492,8 +525,9 @@ impl ProfileForm {
                 &c.ssh.as_ref().and_then(|s| s.timeout).map(|k| k.to_string()).unwrap_or_default(),
             ),
             ssh_key_note: None,
-            key_button: Default::default(),
-            preset_button: Default::default(),
+            hits: Vec::new(),
+            hover: None,
+            press: Default::default(),
             focus: Field::Name,
             dsn_problem: None,
             attempted: false,
@@ -837,8 +871,47 @@ impl ProfileForm {
         }
         let n = Section::ALL.len() as isize;
         let i = Section::ALL.iter().position(|s| *s == self.section).unwrap_or(0) as isize;
-        self.section = Section::ALL[(i + d).rem_euclid(n) as usize];
+        self.open_section(Section::ALL[(i + d).rem_euclid(n) as usize]);
+    }
+
+    /// Show section `s` (a click on its tab); the focus goes to its first field.
+    pub fn open_section(&mut self, s: Section) {
+        if self.is_tunnel() || s == self.section {
+            return;
+        }
+        self.section = s;
         self.focus = self.fields()[usize::from(self.section == Section::Basic)];
+    }
+
+    /// What was drawn at (x, y), the topmost first.
+    pub fn hit_at(&self, x: u16, y: u16) -> Option<FormHit> {
+        let at = ratatui::layout::Position::new(x, y);
+        self.hits.iter().rev().find(|(r, _)| r.contains(at)).map(|(_, h)| *h)
+    }
+
+    /// Value `i` of field `f` among those it shows side by side, as the arrows would pick it
+    /// (a driver the app has no driver for and the keychain while it does not work are not).
+    pub fn pick(&mut self, f: Field, i: usize) {
+        let keychain = |k: SourceKind| k != SourceKind::Keychain || self.keychain_ok;
+        match f {
+            Field::Driver if self.drivers_enabled.get(i) == Some(&true) => self.driver = i,
+            Field::Source => {
+                if let Some(&k) = SourceKind::ALL.get(i).filter(|k| keychain(**k)) {
+                    self.source = k;
+                }
+            }
+            Field::SshAuth => {
+                if let Some(&a) = SshAuth::ALL.get(i) {
+                    self.ssh_auth = a;
+                }
+            }
+            Field::SshSource => {
+                if let Some(&k) = SourceKind::ALL.get(i).filter(|k| keychain(**k)) {
+                    self.ssh_source = k;
+                }
+            }
+            _ => {}
+        }
     }
 
     /// The choices of a picker field, in order: `None` (automatic / driver / top level) first.

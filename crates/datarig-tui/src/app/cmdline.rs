@@ -113,6 +113,9 @@ impl App {
                 selected: 0,
                 error: None,
                 picked: false,
+                list: Default::default(),
+                offset: 0,
+                press: Default::default(),
             }));
             self.refresh_commands();
         }
@@ -409,7 +412,7 @@ impl App {
     /// `Enter`: run the selected entry. A command that still needs its argument, or a setting
     /// without its value, is completed into the input instead. With nothing listed, the typed
     /// text runs as a command; what cannot run shows an error and the command line stays.
-    fn command_enter(&mut self) {
+    pub(super) fn command_enter(&mut self) {
         // A typed `:use` argument runs as it is (a completion only once picked).
         if let Some((spec, arg)) = self.typed_context() {
             if let Err(e) = self.run_command(spec, &arg)

@@ -242,6 +242,15 @@ Everything below works today, with PostgreSQL.
   key where the terminal reports it) opens it next to the selection, and `Space t m` under the
   active tab. It lists what you can do with the selected thing, then with the pane, each with
   its key. Type to filter it; when nothing in it matches, every action is searched.
+- The tab bar's `×`, its tabs and scroll marks, the result tabs, the paging arrows and the
+  plan's view names light up under the pointer.
+- The dialogs take the mouse too: the profile and tunnel forms (fields, the cursor in a text,
+  choices, sections, buttons), the settings, the confirmations, the password prompt, the lists
+  to pick from, quick connect and the command line. A button or a list row acts when it is
+  pressed and released on it, and not in the first moment after its dialog came on top. The pointer only
+  highlights a button or a row and never moves the focus or the selection, so `Enter` in a
+  confirmation still keeps; a click outside a dialog does nothing. Text inputs have no mouse
+  selection.
 
 **Performance**, held by budgets that CI enforces (`crates/datarig-bench/budgets.toml`,
 [docs/perf.md](docs/perf.md)):

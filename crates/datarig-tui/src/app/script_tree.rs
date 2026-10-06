@@ -310,6 +310,7 @@ impl App {
                     input: TextInput::default(),
                     error: None,
                     purpose: NamePurpose::NewScriptFolder { parent },
+                    buttons: Default::default(),
                 }));
             }
             _ if tree => {}
@@ -408,6 +409,7 @@ impl App {
             action: ConfirmAction::OverwriteScript,
             folder: None,
             path: Some(path),
+            buttons: Default::default(),
         }));
     }
 
@@ -458,7 +460,8 @@ impl App {
 
     /// The mouse on the tree dialog: a click selects a row (on a folder's arrow, or again on
     /// the selected folder, it opens or closes it; again on a file of the open dialog, it opens
-    /// it); the wheel scrolls the rows.
+    /// it), one on the name or filter puts the keyboard and the cursor there; the wheel scrolls
+    /// the rows.
     pub(super) fn script_tree_mouse(&mut self, m: MouseEvent) {
         let Some(t) = self.overlays.script_tree_mut() else { return };
         let (x, y) = (m.column, m.row);
@@ -492,6 +495,7 @@ impl App {
                     _ => {}
                 }
             }
+            MouseEventKind::Down(MouseButton::Left) if t.input.click(x, y) => t.focus = TreeFocus::Name,
             _ => {}
         }
     }

@@ -617,3 +617,98 @@ fn the_passphrase_prompt_keeps_its_words_with_a_long_key_path() {
         assert!(title.contains(&word) && title.contains("…/secrets/bastion-prod.pem"), "{lang:?}: {title}");
     }
 }
+
+/// The host key question by mouse: a click on Cancel keeps the host untrusted, one on Trust
+/// trusts it; the pointer on Trust does not move the default (Enter still cancels).
+#[test]
+fn a_host_key_question_takes_clicks() {
+    use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+    let (mut h, id) = harness();
+    let generation = connect(&mut h, id);
+    let buttons = |h: &mut Harness| {
+        h.draw(100, 30);
+        let c = h.app.overlays.confirm().expect("asked");
+        assert_eq!(c.action, ConfirmAction::TrustHostKey);
+        (c.buttons.rects[0], c.buttons.rects[1])
+    };
+    let (tx, mut rx) = oneshot::channel();
+    tunnel(&mut h, id, generation, TunnelEvent::Ask(TunnelAsk::HostKey(question(Vec::new()), tx)));
+    let (_, trust) = buttons(&mut h);
+    assert!(h.screen(100, 30).contains("[ Cancel ]     Trust"));
+    h.mouse(MouseEventKind::Moved, trust.x + 1, trust.y);
+    h.key(KeyCode::Enter);
+    assert_eq!(rx.try_recv(), Ok(false), "Enter cancels after the pointer was on Trust");
+    let (tx, mut rx) = oneshot::channel();
+    tunnel(&mut h, id, generation, TunnelEvent::Ask(TunnelAsk::HostKey(question(Vec::new()), tx)));
+    let (cancel, _) = buttons(&mut h);
+    h.advance(Duration::from_millis(500));
+    h.mouse(MouseEventKind::Down(MouseButton::Left), cancel.x + 1, cancel.y);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), cancel.x + 1, cancel.y);
+    assert_eq!(rx.try_recv(), Ok(false));
+    assert!(h.app.overlays.confirm().is_none());
+    let (tx, mut rx) = oneshot::channel();
+    tunnel(&mut h, id, generation, TunnelEvent::Ask(TunnelAsk::HostKey(question(Vec::new()), tx)));
+    let (_, trust) = buttons(&mut h);
+    // A press at once on the question that just appeared is not taken.
+    h.mouse(MouseEventKind::Down(MouseButton::Left), trust.x + 1, trust.y);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), trust.x + 1, trust.y);
+    assert!(rx.try_recv().is_err(), "not answered yet");
+    h.advance(Duration::from_millis(500));
+    h.mouse(MouseEventKind::Down(MouseButton::Left), trust.x + 1, trust.y);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), trust.x + 1, trust.y);
+    assert_eq!(rx.try_recv(), Ok(true));
+}
+
+/// A host key question uncovered by a dialog that closes (here the password prompt above it)
+/// does not take a press at once: its buttons arm only after it was on top a moment.
+#[test]
+fn a_question_uncovered_by_a_closing_dialog_ignores_a_press_at_once() {
+    use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+    let (mut h, id) = harness();
+    let generation = connect(&mut h, id);
+    let (ktx, mut krx) = oneshot::channel();
+    tunnel(&mut h, id, generation, TunnelEvent::Ask(TunnelAsk::HostKey(question(Vec::new()), ktx)));
+    let (stx, _srx) = oneshot::channel();
+    tunnel(&mut h, id, generation, TunnelEvent::Ask(TunnelAsk::Secret(SecretAsk::Password { wrong: false }, stx)));
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Password), "the prompt is on top of the question");
+    h.draw(100, 30);
+    h.advance(Duration::from_secs(5));
+    h.type_text("pw");
+    h.key(KeyCode::Enter);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Confirm), "the question is on top now");
+    h.draw(100, 30);
+    let trust = h.app.overlays.confirm().unwrap().buttons.rects[1];
+    h.mouse(MouseEventKind::Down(MouseButton::Left), trust.x + 1, trust.y);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), trust.x + 1, trust.y);
+    assert!(krx.try_recv().is_err(), "trusted by a press the moment the question came on top");
+    // A moment later it does.
+    h.advance(Duration::from_millis(500));
+    h.mouse(MouseEventKind::Down(MouseButton::Left), trust.x + 1, trust.y);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), trust.x + 1, trust.y);
+    assert_eq!(krx.try_recv(), Ok(true));
+}
+
+/// A question covered and uncovered only while the screen was too small to draw (no frame of
+/// it covered) still waits the arming delay once the screen grows back.
+#[test]
+fn a_question_covered_only_while_the_screen_is_too_small_waits_again() {
+    use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+    let (mut h, id) = harness();
+    let generation = connect(&mut h, id);
+    let (ktx, mut krx) = oneshot::channel();
+    tunnel(&mut h, id, generation, TunnelEvent::Ask(TunnelAsk::HostKey(question(Vec::new()), ktx)));
+    h.draw(100, 30);
+    h.advance(Duration::from_secs(5));
+    h.draw(40, 10);
+    let (stx, _srx) = oneshot::channel();
+    tunnel(&mut h, id, generation, TunnelEvent::Ask(TunnelAsk::Secret(SecretAsk::Password { wrong: false }, stx)));
+    h.draw(40, 10);
+    h.type_text("pw");
+    h.key(KeyCode::Enter);
+    h.draw(40, 10);
+    h.draw(100, 30);
+    let trust = h.app.overlays.confirm().unwrap().buttons.rects[1];
+    h.mouse(MouseEventKind::Down(MouseButton::Left), trust.x + 1, trust.y);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), trust.x + 1, trust.y);
+    assert!(krx.try_recv().is_err(), "trusted at once after the screen grew back");
+}

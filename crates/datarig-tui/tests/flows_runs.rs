@@ -454,3 +454,28 @@ fn a_narrow_strip_keeps_the_shown_tab_and_messages() {
         assert!(strip.contains("[3]") && strip.contains(&tx), "{lang:?}: {strip}");
     }
 }
+
+/// Move the pointer to (x, y); `true` when the move needs a frame.
+fn hover(h: &mut Harness, x: u16, y: u16) -> bool {
+    h.mouse(ratatui::crossterm::event::MouseEventKind::Moved, x, y);
+    !h.app.take_idle_event()
+}
+
+/// The result tab strip's entries light up under the pointer.
+#[test]
+fn the_pointer_lights_up_a_result_tab() {
+    let (mut h, _) = run_two_results(Lang::En);
+    h.draw(160, 45);
+    let hits = h.app.strip_hits();
+    assert!(hits.len() >= 2, "{hits:?}");
+    let (a, b, i, view) = hits[1];
+    let y = h.app.layout.strip.y;
+    assert!(hover(&mut h, a, y));
+    assert_eq!(h.app.pointer_on, Some(datarig_tui::app::hover::PointerOn::Strip(i, view)));
+    assert!(!hover(&mut h, b - 1, y), "along the same entry: no frame");
+    let t = h.draw(160, 45);
+    assert_eq!(t.backend().buffer()[(a + 1, y)].bg, datarig_tui::theme::DARK.selection.bg.unwrap());
+    assert!(hover(&mut h, b + 3, y + 4), "off the strip");
+    let t = h.draw(160, 45);
+    assert_ne!(t.backend().buffer()[(a + 1, y)].bg, datarig_tui::theme::DARK.selection.bg.unwrap());
+}

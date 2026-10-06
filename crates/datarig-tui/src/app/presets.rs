@@ -265,6 +265,7 @@ impl App {
             action: ConfirmAction::DeleteTunnel(id),
             folder: None,
             path: None,
+            buttons: Default::default(),
         }));
     }
 
@@ -465,6 +466,7 @@ impl App {
             input: TextInput::new(&name),
             error: None,
             purpose: NamePurpose::SaveAsTunnel,
+            buttons: Default::default(),
         }));
     }
 

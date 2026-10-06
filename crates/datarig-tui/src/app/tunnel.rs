@@ -885,6 +885,7 @@ impl App {
             action: ConfirmAction::TrustHostKey,
             folder: None,
             path: None,
+            buttons: Default::default(),
         }));
     }
 
@@ -997,6 +998,8 @@ impl App {
             title: Some(title),
             field,
             echo,
+            checkbox: Default::default(),
+            buttons: Default::default(),
         }));
     }
 
