@@ -129,10 +129,12 @@ fn draw_entries(
     offset
 }
 
-/// Keep where the entries were drawn, for the mouse.
+/// Keep where the entries were drawn, for the mouse (the command line is always on top).
 fn keep_list(app: &mut App, list: Rect, offset: usize) {
+    let now = app.now();
     if let Some(c) = app.overlays.command_line_mut() {
         (c.list, c.offset) = (list, offset);
+        c.press.drawn(true, now);
     }
 }
 

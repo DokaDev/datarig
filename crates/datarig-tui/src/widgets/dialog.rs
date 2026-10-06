@@ -1,7 +1,7 @@
 //! Centered modal boxes and the connect-time password prompt.
 
 use crate::app::action::Action;
-use crate::app::overlay::{Buttons, Overlay};
+use crate::app::overlay::{Buttons, Overlay, OverlayKind};
 use crate::app::{App, PromptPurpose};
 use crate::keymap::Ctx;
 use crate::text::{clip, wrap_words};
@@ -51,7 +51,7 @@ pub(crate) fn modal(rect: Rect, title: &Localized, footer: &Localized, buf: &mut
 }
 
 /// A row of buttons centered in `inner` at `y`, three columns apart, kept in `buttons` for the
-/// mouse (where each was drawn, and from `now` the first time). The one `Enter` presses
+/// mouse (where each was drawn; `top`: the dialog is on top, its arming clock runs from `now`). The one `Enter` presses
 /// (`focus`) is in brackets (so it shows without color) and reversed, the others are raised;
 /// the one under the pointer is underlined, the focus does not move to it. Nothing is drawn
 /// below the box.
@@ -62,9 +62,9 @@ pub(crate) fn button_row(
     labels: &[Localized],
     focus: Option<usize>,
     buttons: &mut Buttons,
-    now: Instant,
+    (top, now): (bool, Instant),
 ) {
-    buttons.shown_at.get_or_insert(now);
+    buttons.press.drawn(top, now);
     buttons.rects = button_rects(buf, inner, y, labels, focus, buttons.hover);
 }
 
@@ -111,7 +111,7 @@ fn button_rects(
 /// the one `Enter` presses focused) and its keys in the footer.
 pub(crate) fn draw_confirm(app: &mut App, area: Rect, buf: &mut Buffer) {
     let th = theme::cur();
-    let now = app.now();
+    let when = (app.overlays.top().map(|o| o.kind()) == Some(OverlayKind::Confirm), app.now());
     let Some(c) = app.overlays.confirm() else { return };
     let (title, text, keys) = (app.i18n.label(c.title), app.i18n.msg(&c.text), app.i18n.label(c.keys));
     let w = area.width.saturating_sub(8).min(60);
@@ -139,7 +139,7 @@ pub(crate) fn draw_confirm(app: &mut App, area: Rect, buf: &mut Buffer) {
         );
     }
     let Some(c) = app.overlays.confirm_mut() else { return };
-    button_row(buf, inner, inner.y + 2 + n as u16, &labels, focus, &mut c.buttons, now);
+    button_row(buf, inner, inner.y + 2 + n as u16, &labels, focus, &mut c.buttons, when);
 }
 
 /// The run confirmation: the connection (its name in its color) and its
@@ -147,7 +147,7 @@ pub(crate) fn draw_confirm(app: &mut App, area: Rect, buf: &mut Buffer) {
 /// Cancel first. As many statements as fit are listed; the rest are counted.
 pub(crate) fn draw_run_confirm(app: &mut App, area: Rect, buf: &mut Buffer) {
     let th = theme::cur();
-    let now = app.now();
+    let when = (app.overlays.top().map(|o| o.kind()) == Some(OverlayKind::RunConfirm), app.now());
     let Some(c) = app.overlays.run_confirm() else { return };
     let title = app.i18n.msg(&Msg::SafetyConfirmTitle { count: c.items.len() as u64 });
     let keys = app.i18n.label(Label::SafetyConfirmKeys);
@@ -222,7 +222,7 @@ pub(crate) fn draw_run_confirm(app: &mut App, area: Rect, buf: &mut Buffer) {
     let labels = [app.i18n.label(Label::SafetyConfirmCancel), app.i18n.label(Label::SafetyConfirmRun)];
     let focus = Some(usize::from(c.run_focused));
     let Some(c) = app.overlays.run_confirm_mut() else { return };
-    button_row(buf, inner, y + 1, &labels, focus, &mut c.buttons, now);
+    button_row(buf, inner, y + 1, &labels, focus, &mut c.buttons, when);
 }
 
 /// The icons question: a live preview of a few Nerd Font glyphs (drawn as the
@@ -230,7 +230,7 @@ pub(crate) fn draw_run_confirm(app: &mut App, area: Rect, buf: &mut Buffer) {
 /// has the focus at first.
 pub(crate) fn draw_icons_ask(app: &mut App, area: Rect, buf: &mut Buffer) {
     let th = theme::cur();
-    let now = app.now();
+    let when = (app.overlays.top().map(|o| o.kind()) == Some(OverlayKind::IconsAsk), app.now());
     let Some(q) = app.overlays.icons_ask() else { return };
     let (title, keys) = (app.i18n.label(Label::IconsAskTitle), app.i18n.label(Label::IconsAskKeys));
     let w = area.width.saturating_sub(8).min(64);
@@ -259,7 +259,7 @@ pub(crate) fn draw_icons_ask(app: &mut App, area: Rect, buf: &mut Buffer) {
     let focus = Some(usize::from(!q.yes_focused));
     let by = inner.y + 5 + hint.len() as u16;
     let Some(q) = app.overlays.icons_ask_mut() else { return };
-    button_row(buf, inner, by, &labels, focus, &mut q.buttons, now);
+    button_row(buf, inner, by, &labels, focus, &mut q.buttons, when);
 }
 
 /// The busy notice: a small box with its text, waiting for background work.
@@ -288,7 +288,7 @@ pub(crate) fn draw_busy(app: &App, area: Rect, buf: &mut Buffer) {
 
 pub(crate) fn draw_prompt(app: &mut App, area: Rect, buf: &mut Buffer) -> Option<(u16, u16)> {
     let th = theme::cur();
-    let now = app.now();
+    let when = (app.overlays.top().map(|o| o.kind()) == Some(OverlayKind::Password), app.now());
     let p = app.overlays.prompt()?;
     let title = match &p.title {
         Some(t) => app.i18n.msg(t),
@@ -340,7 +340,7 @@ pub(crate) fn draw_prompt(app: &mut App, area: Rect, buf: &mut Buffer) -> Option
     let labels = [app.i18n.label(Label::DialogButtonOk), app.i18n.label(Label::DialogButtonCancel)];
     let p = app.overlays.prompt_mut()?;
     p.checkbox = checkbox;
-    button_row(buf, inner, cy + 2, &labels, Some(0), &mut p.buttons, now);
+    button_row(buf, inner, cy + 2, &labels, Some(0), &mut p.buttons, when);
     let bg = if save_focus { Style::new().bg(th.surface_alt) } else { th.selection };
     let cx = p.input.render(input, buf, Style::new().fg(th.fg).patch(bg), !save_focus, mask, None);
     cursor.or(Some((cx, y)))

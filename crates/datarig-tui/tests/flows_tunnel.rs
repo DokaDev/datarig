@@ -658,3 +658,32 @@ fn a_host_key_question_takes_clicks() {
     h.mouse(MouseEventKind::Up(MouseButton::Left), trust.x + 1, trust.y);
     assert_eq!(rx.try_recv(), Ok(true));
 }
+
+/// A host key question uncovered by a dialog that closes (here the password prompt above it)
+/// does not take a press at once: its buttons arm only after it was on top a moment.
+#[test]
+fn a_question_uncovered_by_a_closing_dialog_ignores_a_press_at_once() {
+    use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+    let (mut h, id) = harness();
+    let generation = connect(&mut h, id);
+    let (ktx, mut krx) = oneshot::channel();
+    tunnel(&mut h, id, generation, TunnelEvent::Ask(TunnelAsk::HostKey(question(Vec::new()), ktx)));
+    let (stx, _srx) = oneshot::channel();
+    tunnel(&mut h, id, generation, TunnelEvent::Ask(TunnelAsk::Secret(SecretAsk::Password { wrong: false }, stx)));
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Password), "the prompt is on top of the question");
+    h.draw(100, 30);
+    h.advance(Duration::from_secs(5));
+    h.type_text("pw");
+    h.key(KeyCode::Enter);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Confirm), "the question is on top now");
+    h.draw(100, 30);
+    let trust = h.app.overlays.confirm().unwrap().buttons.rects[1];
+    h.mouse(MouseEventKind::Down(MouseButton::Left), trust.x + 1, trust.y);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), trust.x + 1, trust.y);
+    assert!(krx.try_recv().is_err(), "trusted by a press the moment the question came on top");
+    // A moment later it does.
+    h.advance(Duration::from_millis(500));
+    h.mouse(MouseEventKind::Down(MouseButton::Left), trust.x + 1, trust.y);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), trust.x + 1, trust.y);
+    assert_eq!(krx.try_recv(), Ok(true));
+}

@@ -125,6 +125,7 @@ impl App {
     pub(super) fn settings_key(&mut self, key: KeyEvent, repeat: bool) {
         let rows = order();
         let Some(s) = self.overlays.settings_mut() else { return };
+        s.hover = None;
         let n = rows.len();
         let step = match key.code {
             KeyCode::Char('j') | KeyCode::Down => {

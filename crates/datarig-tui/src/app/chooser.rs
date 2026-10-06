@@ -35,6 +35,8 @@ pub struct Chooser {
     pub list: ratatui::layout::Rect,
     /// The row under the pointer (highlighted; the selection does not move to it).
     pub hover: Option<usize>,
+    /// The row a press armed (it is picked on the release).
+    pub press: super::overlay::Press<usize>,
 }
 
 impl Chooser {
@@ -119,6 +121,7 @@ impl App {
             scroll: 0,
             list: Default::default(),
             hover: None,
+            press: Default::default(),
             purpose: ChooserPurpose::Form(f),
         }));
     }
@@ -144,6 +147,7 @@ impl App {
             scroll: 0,
             list: Default::default(),
             hover: None,
+            press: Default::default(),
             purpose: ChooserPurpose::MoveProfile(id),
         }));
     }
@@ -151,6 +155,8 @@ impl App {
     /// Keys of the chooser list (`overlay.chooser`) and its filter (`overlay.chooser.filter`).
     pub(super) fn chooser_key(&mut self, key: KeyEvent, repeat: bool) {
         let Some(c) = self.overlays.chooser_mut() else { return };
+        // The rows or the scroll may change: the highlight under the pointer goes.
+        c.hover = None;
         if c.filtering {
             match key.code {
                 KeyCode::Esc => {
@@ -249,6 +255,7 @@ impl App {
             scroll: 0,
             list: Default::default(),
             hover: None,
+            press: Default::default(),
             purpose: ChooserPurpose::Recover,
         }));
     }

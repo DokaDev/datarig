@@ -111,8 +111,9 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
         .map(|f| i18n.msg(&crate::app::fault_reason(f)).to_string())
         .unwrap_or_default();
     let now = app.now();
+    let top = app.overlays.top().map(|o| o.kind()) == Some(crate::app::overlay::OverlayKind::ProfileForm);
     let form = app.overlays.form_mut()?;
-    form.shown_at.get_or_insert(now);
+    form.press.drawn(top, now);
     let mut hits: Vec<(Rect, FormHit)> = Vec::new();
     let hover = form.hover;
     let tunnel_form = form.is_tunnel();

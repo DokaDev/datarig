@@ -1,12 +1,15 @@
 //! The mouse on the dialogs. Every dialog keeps where its renderer drew what can be clicked
 //! (buttons, rows, inputs, the profile form's parts), so a click hits what is on screen, and a
 //! click does what the key for it does: a button presses its key, a row is picked as `Enter`
-//! picks it. A button acts as a GUI button does: a press arms it and the release over the same
-//! button presses it, and presses right after the dialog first appeared are ignored
-//! ([`super::overlay::ARM_DELAY`]). A click outside a dialog does nothing (the menu alone
-//! closes on one). The pointer (no button pressed) only highlights the button or the row under
-//! it: the focus and the selection, what `Enter` acts on, stay where the keys put them (the menu
-//! and the keyboard help, where it selects, aside). A move that changes nothing draws no frame.
+//! picks it. A button, a list row or a command line entry acts as a GUI button does: a press
+//! arms it and the release over the same target acts, presses right after the dialog came on
+//! top are ignored ([`super::overlay::ARM_DELAY`]) and a move with no button held drops an arm
+//! (its release was lost). Focusing a field, placing the cursor and stepping a value act on
+//! the press. A click outside a dialog does nothing (the menu alone closes on one). The pointer
+//! (no button pressed) only highlights the button or the row under it: the focus and the
+//! selection, what `Enter` acts on, stay where the keys put them (the menu and the keyboard
+//! help, where it selects, aside); a change of the list drops the highlight. A move that changes
+//! nothing draws no frame.
 
 use super::profiles::FormHit;
 use super::quick::QuickRow;
@@ -70,6 +73,19 @@ impl App {
             return false;
         }
         let (x, y) = (m.column, m.row);
+        // A move has no button held: a press it armed lost its release.
+        if let Some(f) = self.overlays.form_mut() {
+            f.press.disarm();
+        }
+        if let Some(c) = self.overlays.chooser_mut() {
+            c.press.disarm();
+        }
+        if let Some(q) = self.overlays.quick_mut() {
+            q.press.disarm();
+        }
+        if let Some(c) = self.overlays.command_line_mut() {
+            c.press.disarm();
+        }
         match self.overlays.top().map(|o| o.kind()) {
             Some(OverlayKind::ContextMenu) => self.menu_hover(m),
             Some(OverlayKind::Help) => self.help_hover(m),
@@ -110,17 +126,18 @@ impl App {
         let now = self.now();
         let Some(f) = self.overlays.form_mut().filter(|f| !f.saving) else { return };
         let at = f.hit_at(m.column, m.row);
+        // Buttons act on the release; the other parts (they focus, place the cursor, pick a
+        // value) on the press.
         let hit = match m.kind {
             MouseEventKind::Down(MouseButton::Left) if at.is_some_and(FormHit::is_button) => {
-                let ready = f.shown_at.is_some_and(|t| now.saturating_duration_since(t) >= super::overlay::ARM_DELAY);
-                f.armed = at.filter(|_| ready);
+                f.press.press(m.kind, at, now);
                 return;
             }
             MouseEventKind::Down(MouseButton::Left) => {
-                f.armed = None;
+                f.press.disarm();
                 at
             }
-            MouseEventKind::Up(MouseButton::Left) => f.armed.take().filter(|a| at == Some(*a)),
+            MouseEventKind::Up(MouseButton::Left) => f.press.press(m.kind, at, now),
             _ => None,
         };
         let Some(hit) = hit else { return };
@@ -222,49 +239,54 @@ impl App {
         }
     }
 
-    /// The chooser: a click on a row picks it (as `Enter`), one on the filter line types the
-    /// filter there; the wheel moves the selection.
+    /// The chooser: a click on a row picks it (as `Enter`, on the release over the row pressed),
+    /// one on the filter line types the filter there; the wheel moves the selection.
     fn chooser_mouse(&mut self, m: MouseEvent) {
+        let now = self.now();
         let Some(c) = self.overlays.chooser_mut() else { return };
         if let Some(d) = wheel(&m) {
+            c.hover = None;
             return c.step(d);
         }
-        if !click(&m) {
-            return;
-        }
-        if let Some(i) = row_at(c.list, c.scroll, c.visible().len(), m.column, m.row) {
+        let row = row_at(c.list, c.scroll, c.visible().len(), m.column, m.row);
+        if let Some(i) = c.press.press(m.kind, row, now) {
             c.selected = i;
             self.chooser_pick();
-        } else if c.filter.click(m.column, m.row) {
+        } else if click(&m) && row.is_none() && c.filter.click(m.column, m.row) {
             c.filtering = true;
         }
     }
 
     /// Quick connect: a click on a row picks it (as `Enter`), one on its `▸`/`▾` lists or hides
-    /// what is under it (as `→`/`←`), one on the input puts the cursor there; the wheel moves
-    /// the selection.
+    /// what is under it (as `→`/`←`), both on the release over what was pressed; one on the
+    /// input puts the cursor there; the wheel moves the selection.
     fn quick_mouse(&mut self, m: MouseEvent) {
+        let now = self.now();
         let Some(q) = self.overlays.quick_mut() else { return };
         let (x, y) = (m.column, m.row);
         if let Some(d) = wheel(&m) {
             return self.quick_key(press(if d > 0 { KeyCode::Down } else { KeyCode::Up }), false);
         }
-        if !click(&m) {
-            return;
-        }
-        if let Some(&(_, i)) = q.arrows.iter().find(|(r, _)| r.contains(Position::new(x, y))) {
-            q.selected = i;
-            let open = match q.items.get(i) {
-                Some(QuickRow::Profile(p)) => q.open.contains(p),
-                Some(QuickRow::Database(p, db)) => q.open_db.contains(&(*p, db.clone())),
-                _ => return,
-            };
-            self.quick_key(press(if open { KeyCode::Left } else { KeyCode::Right }), false);
-        } else if let Some(i) = row_at(q.list, q.scroll, q.items.len(), x, y) {
-            q.selected = i;
-            self.quick_key(press(KeyCode::Enter), false);
-        } else {
-            q.input.click(x, y);
+        let arrow = q.arrows.iter().find(|(r, _)| r.contains(Position::new(x, y))).map(|a| (a.1, true));
+        let hit = arrow.or_else(|| row_at(q.list, q.scroll, q.items.len(), x, y).map(|i| (i, false)));
+        match q.press.press(m.kind, hit, now) {
+            Some((i, true)) => {
+                q.selected = i;
+                let open = match q.items.get(i) {
+                    Some(QuickRow::Profile(p)) => q.open.contains(p),
+                    Some(QuickRow::Database(p, db)) => q.open_db.contains(&(*p, db.clone())),
+                    _ => return,
+                };
+                self.quick_key(press(if open { KeyCode::Left } else { KeyCode::Right }), false);
+            }
+            Some((i, false)) => {
+                q.selected = i;
+                self.quick_key(press(KeyCode::Enter), false);
+            }
+            None if click(&m) && hit.is_none() => {
+                q.input.click(x, y);
+            }
+            None => {}
         }
     }
 
@@ -294,21 +316,20 @@ impl App {
         self.settings_key(press(code), false);
     }
 
-    /// The command line: a click on an entry runs it (as `Enter` on it), one on the input puts
-    /// the cursor there; the wheel moves the selection.
+    /// The command line: a click on an entry runs it (as `Enter` on it, on the release over the
+    /// entry pressed), one on the input puts the cursor there; the wheel moves the selection.
     fn command_mouse(&mut self, m: MouseEvent) {
+        let now = self.now();
         let Some(c) = self.overlays.command_line_mut() else { return };
         if let Some(d) = wheel(&m) {
             return self.command_key(press(if d > 0 { KeyCode::Down } else { KeyCode::Up }), false);
         }
-        if !click(&m) {
-            return;
-        }
-        if let Some(i) = row_at(c.list, c.offset, c.items.len(), m.column, m.row) {
+        let row = row_at(c.list, c.offset, c.items.len(), m.column, m.row);
+        if let Some(i) = c.press.press(m.kind, row, now) {
             c.selected = i;
             c.picked = true;
             self.command_enter();
-        } else {
+        } else if click(&m) && row.is_none() {
             c.input.click(m.column, m.row);
         }
     }

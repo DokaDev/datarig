@@ -115,6 +115,7 @@ impl App {
                 picked: false,
                 list: Default::default(),
                 offset: 0,
+                press: Default::default(),
             }));
             self.refresh_commands();
         }

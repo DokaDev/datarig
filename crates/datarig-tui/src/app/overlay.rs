@@ -21,20 +21,64 @@ use ratatui::crossterm::event::{KeyCode, MouseButton, MouseEventKind};
 use ratatui::layout::{Position, Rect};
 use std::time::{Duration, Instant};
 
-/// How long a dialog's buttons ignore presses after the dialog was first drawn: one that
-/// appears under a clicking pointer (a question raised in the background, the second press of a
-/// double click) does not take that click.
+/// How long a dialog's buttons and rows ignore presses after the dialog came on top: one that
+/// appears under a clicking pointer (a question raised in the background or uncovered by a
+/// dialog that closed, the second press of a double click) does not take that click.
 pub const ARM_DELAY: Duration = Duration::from_millis(400);
 
+/// What a press on a dialog armed: its buttons and list rows act as GUI buttons do, on the
+/// release over the target that was pressed. The clock starts when the dialog is first drawn
+/// on top; while another dialog covers it, it starts again (nothing pressed before counts).
+#[derive(Clone, Debug)]
+pub struct Press<T> {
+    pub shown_at: Option<Instant>,
+    pub armed: Option<T>,
+}
+
+impl<T> Default for Press<T> {
+    fn default() -> Self {
+        Press { shown_at: None, armed: None }
+    }
+}
+
+impl<T: Copy + PartialEq> Press<T> {
+    /// The dialog was drawn (`top`: on top, where the mouse reaches it).
+    pub fn drawn(&mut self, top: bool, now: Instant) {
+        if top {
+            self.shown_at.get_or_insert(now);
+        } else {
+            *self = Press::default();
+        }
+    }
+
+    /// A left press or release on `hit` at `now`: a press arms it (nothing in the first
+    /// [`ARM_DELAY`] after the dialog came on top); the release over the armed target returns
+    /// it, the target to act on. Anything else does nothing.
+    pub fn press(&mut self, kind: MouseEventKind, hit: Option<T>, now: Instant) -> Option<T> {
+        match kind {
+            MouseEventKind::Down(MouseButton::Left) => {
+                let ready = self.shown_at.is_some_and(|t| now.saturating_duration_since(t) >= ARM_DELAY);
+                self.armed = hit.filter(|_| ready);
+                None
+            }
+            MouseEventKind::Up(MouseButton::Left) => self.armed.take().filter(|a| hit == Some(*a)),
+            _ => None,
+        }
+    }
+
+    /// The pointer moved with no button held: a press is not in progress (its release was lost).
+    pub fn disarm(&mut self) {
+        self.armed = None;
+    }
+}
+
 /// A dialog's buttons as last drawn (kept by the renderer, so a click hits what is on screen),
-/// when they were first drawn, the one a press armed and the one under the pointer. A button
-/// acts as a GUI button does: on the release over the button that was pressed. The pointer only
-/// highlights a button: the focus, what `Enter` presses, stays where the keys put it.
+/// what a press armed and the one under the pointer. The pointer only highlights a button: the
+/// focus, what `Enter` presses, stays where the keys put it.
 #[derive(Clone, Debug, Default)]
 pub struct Buttons {
     pub rects: Vec<Rect>,
-    pub shown_at: Option<Instant>,
-    pub armed: Option<usize>,
+    pub press: Press<usize>,
     pub hover: Option<usize>,
 }
 
@@ -44,25 +88,18 @@ impl Buttons {
         self.rects.iter().position(|r| r.contains(Position::new(x, y)))
     }
 
-    /// The pointer moved to (x, y): `true` when another button (or none) is under it now.
+    /// The pointer moved to (x, y): `true` when another button (or none) is under it now. A move
+    /// has no button held: it drops an arm.
     pub fn hover(&mut self, x: u16, y: u16) -> bool {
+        self.press.disarm();
         let h = self.at(x, y);
         std::mem::replace(&mut self.hover, h) != h
     }
 
-    /// A left press or release at (x, y) at `now`: a press arms the button under it (none in
-    /// the first [`ARM_DELAY`] after the buttons were first drawn); the release over the armed
-    /// button returns it, the button to press. Anything else does nothing.
+    /// A left press or release at (x, y) at `now` ([`Press::press`]): the button to press.
     pub fn press(&mut self, kind: MouseEventKind, x: u16, y: u16, now: Instant) -> Option<usize> {
-        match kind {
-            MouseEventKind::Down(MouseButton::Left) => {
-                let ready = self.shown_at.is_some_and(|t| now.saturating_duration_since(t) >= ARM_DELAY);
-                self.armed = self.at(x, y).filter(|_| ready);
-                None
-            }
-            MouseEventKind::Up(MouseButton::Left) => self.armed.take().filter(|i| self.at(x, y) == Some(*i)),
-            _ => None,
-        }
+        let hit = self.at(x, y);
+        self.press.press(kind, hit, now)
     }
 }
 

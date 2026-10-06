@@ -246,8 +246,8 @@ Everything below works today, with PostgreSQL.
   plan's view names light up under the pointer.
 - The dialogs take the mouse too: the profile and tunnel forms (fields, the cursor in a text,
   choices, sections, buttons), the settings, the confirmations, the password prompt, the lists
-  to pick from, quick connect and the command line. A button acts when it is pressed and
-  released on it, and not in the first moment after its dialog appeared. The pointer only
+  to pick from, quick connect and the command line. A button or a list row acts when it is
+  pressed and released on it, and not in the first moment after its dialog came on top. The pointer only
   highlights a button or a row and never moves the focus or the selection, so `Enter` in a
   confirmation still keeps; a click outside a dialog does nothing. Text inputs have no mouse
   selection.

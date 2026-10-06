@@ -397,17 +397,22 @@ Held by CI budgets (`docs/perf.md`).
   hidden span it was drawn with so `TextInput::click` puts the cursor before the grapheme under
   the pointer (wide letters and its scroll included). A click does what the key for it does
   (a confirmation's button sends its key through `confirm_key`, a form button is `Enter` on it),
-  so the key paths stay the only ones that act. A button acts as a GUI button: a press arms it
-  and the release over the same button presses it (`Buttons::press`, `ProfileForm::armed`), and
-  presses in the first `overlay::ARM_DELAY` (400 ms by the app's clock) after the buttons were
-  first drawn are ignored, so a dialog that appears under a clicking pointer (a host key
-  question, a conflict, the second press of a double click) does not take that click. The
+  so the key paths stay the only ones that act. A button, a list row (chooser, quick connect)
+  and a command line entry act as a GUI button: a press arms it and the release over the same
+  target acts (`overlay::Press`); presses in the first `overlay::ARM_DELAY` (400 ms by the app's
+  clock) after the dialog came on top are ignored (the clock starts when it is drawn as the top
+  overlay and starts again after another dialog covered it), and a move with no button held
+  drops an arm whose release was lost. So a dialog that appears under a clicking pointer (a host
+  key question, a conflict, one uncovered by a prompt that closed, the second press of a double
+  click) does not take that click. Focusing a field, placing the cursor and stepping a value act
+  on the press. The
   pointer only highlights a button or a list row (`Buttons::hover`, `ProfileForm::hover`, the
   `hover` of `Chooser`, `QuickConnect` and `SettingsScreen`); the focus and the selection, what
   `Enter` acts on, never move to it, so a destructive confirmation's default stays the safe
   button and a twitch of the pointer never changes what quick connect picks (the menu and the
-  keyboard help, where the pointer selects, aside). A selector's `›` is clickable only where it
-  was drawn. A click outside a dialog does nothing (the menu alone closes on one).
+  keyboard help, where the pointer selects, aside); a key, the wheel or new rows drop a list's
+  highlight. A selector's `›` is clickable only where it was drawn. A click outside a dialog
+  does nothing (the menu alone closes on one).
 
 ## Connection poolers
 

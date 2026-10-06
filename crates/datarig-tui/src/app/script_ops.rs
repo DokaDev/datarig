@@ -383,6 +383,7 @@ impl App {
             scroll: 0,
             list: Default::default(),
             hover: None,
+            press: Default::default(),
             purpose: ChooserPurpose::MoveScript(path),
         }));
     }

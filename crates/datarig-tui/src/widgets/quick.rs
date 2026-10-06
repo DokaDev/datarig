@@ -84,7 +84,10 @@ pub(crate) fn draw_quick_connect(app: &mut App, area: Rect, buf: &mut Buffer) ->
         })
         .collect();
     // Keep the selection on screen; the rows stay put while it moves among them.
+    let top = app.overlays.top().map(|o| o.kind()) == Some(crate::app::overlay::OverlayKind::QuickConnect);
+    let now = app.now();
     let q = app.overlays.quick_mut()?;
+    q.press.drawn(top, now);
     if selected < q.scroll {
         q.scroll = selected;
     } else if selected >= q.scroll + rows {

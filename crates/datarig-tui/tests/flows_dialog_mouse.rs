@@ -644,3 +644,78 @@ fn a_clipped_selector_has_no_next_zone_on_its_value() {
     let last = (0..80u16).rev().find(|x| buf[(*x, y)].symbol() == "f").unwrap();
     assert_eq!(h.form().hit_at(last, y), Some(FormHit::Value(Field::Folder)));
 }
+
+/// A list row of a dialog that just appeared does not take a press at once, and a row acts on
+/// the release over the row pressed: quick connect picks nothing on a press right after it
+/// opened (with a run waiting, that pick would run it), nor on a press dragged to another row.
+#[test]
+fn list_rows_act_on_the_release_and_not_right_after_the_list_appeared() {
+    let mut h = launched();
+    h.ctrl('o');
+    h.draw(W, H);
+    let q = h.app.overlays.quick().unwrap();
+    let (x, y) = (q.list.x + 8, q.list.y);
+    h.mouse(MouseEventKind::Down(MouseButton::Left), x, y);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), x, y);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::QuickConnect), "a press right after it appeared picked a row");
+    h.advance(std::time::Duration::from_millis(500));
+    h.mouse(MouseEventKind::Down(MouseButton::Left), x, y);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), x, y + 2);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::QuickConnect), "released on another row");
+    h.mouse(MouseEventKind::Down(MouseButton::Left), x, y);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::QuickConnect), "a press alone picks nothing");
+    h.mouse(MouseEventKind::Up(MouseButton::Left), x, y);
+    assert_eq!(h.overlay_kind(), None, "picked on the release");
+}
+
+/// The command line's entries too.
+#[test]
+fn command_line_entries_act_on_the_release_after_the_delay() {
+    let mut h = Harness::connected(Lang::En);
+    h.key(KeyCode::Esc);
+    h.keys(":");
+    h.type_text("settings");
+    h.draw(W, H);
+    let list = h.cmdline().unwrap().list;
+    h.mouse(MouseEventKind::Down(MouseButton::Left), list.x + 2, list.y);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), list.x + 2, list.y);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Commands), "a press right after it appeared ran it");
+}
+
+/// A list's highlight does not outlive a change of the list: typing a filter clears it.
+#[test]
+fn a_lists_highlight_goes_when_the_list_changes() {
+    let mut h = launched();
+    h.ctrl('o');
+    h.draw(W, H);
+    let list = h.app.overlays.quick().unwrap().list;
+    h.mouse(MouseEventKind::Moved, list.x + 6, list.y + 1);
+    assert_eq!(h.app.overlays.quick().unwrap().hover, Some(1));
+    h.type_text("v");
+    assert_eq!(h.app.overlays.quick().unwrap().hover, None, "the filter changed the rows");
+    // The same in a picker: the wheel moves the selection (and may scroll).
+    let mut h = new_form();
+    click_on(&mut h, " Advanced ", 2);
+    click_on(&mut h, "auto (from the name)", 2);
+    h.draw(W, H);
+    let list = h.app.overlays.chooser().unwrap().list;
+    h.mouse(MouseEventKind::Moved, list.x + 2, list.y + 3);
+    assert_eq!(h.app.overlays.chooser().unwrap().hover, Some(3));
+    h.key(KeyCode::Down);
+    assert_eq!(h.app.overlays.chooser().unwrap().hover, None, "a key moved the selection");
+}
+
+/// An arm does not survive a lost release: a move with no button held drops it, so a later
+/// release over the button does nothing.
+#[test]
+fn an_arm_does_not_survive_a_move_without_a_button() {
+    let mut h = quit_confirm();
+    armed(&mut h);
+    let r = h.app.overlays.confirm().unwrap().buttons.rects[1];
+    h.mouse(MouseEventKind::Down(MouseButton::Left), r.x + 1, r.y);
+    // The release was lost (outside the window); the pointer comes back without a button.
+    h.mouse(MouseEventKind::Moved, r.x + 1, r.y + 2);
+    h.mouse(MouseEventKind::Moved, r.x + 1, r.y);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), r.x + 1, r.y);
+    assert!(!h.app.quit, "a stray release acted on an old press");
+}

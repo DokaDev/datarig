@@ -86,6 +86,8 @@ pub struct QuickConnect {
     pub arrows: Vec<(ratatui::layout::Rect, usize)>,
     /// The row under the pointer (highlighted; the selection does not move to it).
     pub hover: Option<usize>,
+    /// The row a press armed, and whether on its `▸`/`▾` (it acts on the release).
+    pub press: super::overlay::Press<(usize, bool)>,
 }
 
 impl App {
@@ -112,6 +114,7 @@ impl App {
             list: Default::default(),
             arrows: Vec::new(),
             hover: None,
+            press: Default::default(),
         }));
         self.refresh_quick();
     }
@@ -287,6 +290,10 @@ impl App {
             q.selected = i;
             q.want = None;
         }
+        // Other rows (typed, or listed since): the highlight under the pointer goes.
+        if q.items != rows {
+            q.hover = None;
+        }
         q.items = rows;
     }
 
@@ -321,6 +328,8 @@ impl App {
         let n = q.items.len().max(1);
         let row = q.items.get(q.selected).cloned();
         q.want = None;
+        // The rows or the scroll may change: the highlight under the pointer goes.
+        q.hover = None;
         match key.code {
             KeyCode::Esc => self.overlays.close(OverlayKind::QuickConnect),
             KeyCode::Enter if !repeat => {

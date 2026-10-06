@@ -11,6 +11,7 @@ fn commands() -> Overlay {
         picked: false,
         list: Default::default(),
         offset: 0,
+        press: Default::default(),
     })
 }
 
@@ -93,7 +94,7 @@ fn a_button_acts_on_the_release_over_the_one_pressed_once_armed() {
     // Not drawn yet: nothing is armed.
     assert_eq!(b.press(down, 20, 5, t0), None);
     assert_eq!(b.press(up, 20, 5, t0), None);
-    b.shown_at = Some(t0);
+    b.press.drawn(true, t0);
     let late = t0 + ARM_DELAY;
     assert_eq!(b.press(down, 20, 5, t0 + ARM_DELAY / 2), None);
     assert_eq!(b.press(up, 20, 5, late), None, "pressed within the delay");
@@ -102,4 +103,27 @@ fn a_button_acts_on_the_release_over_the_one_pressed_once_armed() {
     assert_eq!(b.press(down, 20, 5, late), None);
     assert_eq!(b.press(up, 11, 5, late), None, "released over the other button");
     assert_eq!(b.press(up, 20, 5, late), None, "a release disarms");
+}
+
+#[test]
+fn a_press_counts_from_when_the_dialog_came_on_top() {
+    use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+    let (down, up) = (MouseEventKind::Down(MouseButton::Left), MouseEventKind::Up(MouseButton::Left));
+    let t0 = Instant::now();
+    let mut p: Press<usize> = Press::default();
+    p.drawn(false, t0);
+    assert_eq!(p.shown_at, None, "covered: no clock");
+    let later = t0 + ARM_DELAY * 3;
+    p.drawn(true, later);
+    assert_eq!(p.press(down, Some(1), later), None);
+    assert_eq!(p.press(up, Some(1), later), None, "on top only now");
+    p.drawn(true, later + ARM_DELAY);
+    assert_eq!(p.shown_at, Some(later), "redraws keep the clock");
+    p.press(down, Some(1), later + ARM_DELAY);
+    p.drawn(false, later + ARM_DELAY);
+    assert_eq!((p.shown_at, p.armed), (None, None), "covered again: the clock and the arm go");
+    p.drawn(true, later + ARM_DELAY * 2);
+    p.press(down, Some(1), later + ARM_DELAY * 3);
+    p.disarm();
+    assert_eq!(p.press(up, Some(1), later + ARM_DELAY * 3), None, "disarmed");
 }

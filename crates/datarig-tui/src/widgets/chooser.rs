@@ -2,6 +2,7 @@
 
 use crate::app::App;
 use crate::app::chooser::ChooserPurpose;
+use crate::app::overlay::OverlayKind;
 use crate::app::profiles::Field;
 use crate::icons;
 use crate::text::{Align, fit};
@@ -30,7 +31,9 @@ pub(crate) fn draw_chooser(app: &mut App, area: Rect, buf: &mut Buffer) -> Optio
     let filter_style = Style::new().fg(th.fg).bg(th.surface);
     put(buf, inner.x + 1, inner.y, "/", 1, Style::new().fg(th.accent).bg(th.surface).add_modifier(Modifier::BOLD));
     // Keep the selection on screen; the rows stay put while it moves among them.
+    let when = (app.overlays.top().map(|o| o.kind()) == Some(OverlayKind::Chooser), app.now());
     let c = app.overlays.chooser_mut()?;
+    c.press.drawn(when.0, when.1);
     if c.selected < c.scroll {
         c.scroll = c.selected;
     } else if c.selected >= c.scroll + rows {
@@ -83,7 +86,7 @@ pub(crate) fn draw_chooser(app: &mut App, area: Rect, buf: &mut Buffer) -> Optio
 /// Draw the name input; returns the hardware cursor (its input).
 pub(crate) fn draw_name_input(app: &mut App, area: Rect, buf: &mut Buffer) -> Option<(u16, u16)> {
     let th = theme::cur();
-    let now = app.now();
+    let when = (app.overlays.top().map(|o| o.kind()) == Some(OverlayKind::NameInput), app.now());
     let n = app.overlays.name_input()?;
     let title = app.i18n.msg(&n.title);
     let footer = app.i18n.label(Label::NameKeys);
@@ -108,7 +111,7 @@ pub(crate) fn draw_name_input(app: &mut App, area: Rect, buf: &mut Buffer) -> Op
     }
     let labels = [app.i18n.label(Label::DialogButtonOk), app.i18n.label(Label::DialogButtonCancel)];
     let n = app.overlays.name_input_mut()?;
-    button_row(buf, inner, inner.y + 3 + errors, &labels, Some(0), &mut n.buttons, now);
+    button_row(buf, inner, inner.y + 3 + errors, &labels, Some(0), &mut n.buttons, when);
     let input = Rect::new(inner.x + 1, inner.y, inner.width.saturating_sub(2), 1);
     let cx = n.input.render(input, buf, Style::new().fg(th.fg).patch(th.selection), true, false, None);
     Some((cx, inner.y))

@@ -232,9 +232,11 @@ pub struct CommandLine {
     /// `Tab`/`↑`/`↓` picked an entry since the input last changed. Until then `Enter` on a
     /// `:use` argument runs what was typed, never the top completion.
     pub picked: bool,
-    /// Where the entries were drawn and the first one shown (mouse), kept by the renderer.
+    /// Where the entries were drawn and the first one shown (mouse), kept by the renderer, and
+    /// the entry a press armed (it runs on the release).
     pub list: ratatui::layout::Rect,
     pub offset: usize,
+    pub press: overlay::Press<usize>,
 }
 
 /// Password asked at connect time: a `prompt` profile (every time), or no/wrong stored
