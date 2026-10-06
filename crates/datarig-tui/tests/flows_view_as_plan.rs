@@ -677,3 +677,29 @@ fn a_self_opened_question_takes_no_key_before_it_is_armed() {
     assert_eq!(h.overlay_kind(), None);
     assert!(runs(&mut h).is_empty());
 }
+
+#[test]
+fn a_session_closed_under_the_wait_ends_it_once() {
+    // A disconnect closes the tab's session (`Tab::session_closed`): the wait was no run, so
+    // only its own end is said, once; the closed session's answer is never read.
+    let mut h = text_plan("EXPLAIN SELECT * FROM t;");
+    let tab = h.app.tab().id;
+    h.keys("P");
+    let id = check_sent(&mut h).expect("asked");
+    h.app.focus = Focus::Editor;
+    h.keys(" cx");
+    let ended = |h: &Harness| {
+        let t = h.app.tabs.get(tab).expect("the tab");
+        t.status.as_ref().map(|n| n.msg.clone()) == Some(Label::PlanAsPlanWaitEnded.into())
+    };
+    assert!(ended(&h));
+    // The disconnect's own notice of the moment goes first; then the bar says the wait ended.
+    h.app.transient = None;
+    said(&mut h, Label::PlanAsPlanWaitEnded);
+    let notes = h.app.tab().exec.run.notes.len();
+    h.db(DbEvent::RepeatChecked { id, result: Ok(()) });
+    h.keys("j");
+    assert!(runs(&mut h).is_empty() && h.overlay_kind().is_none());
+    assert!(ended(&h), "said once, nothing after");
+    assert_eq!(h.app.tab().exec.run.notes.len(), notes, "no note of a cancelled run");
+}
