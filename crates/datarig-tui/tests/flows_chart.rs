@@ -359,6 +359,24 @@ fn columns_change_with_the_list_keys_and_the_mouse() {
     h.key(KeyCode::Enter);
     assert_eq!(chart(&mut h).spec.by, Some(0));
     assert_eq!(chart(&mut h).spec.ys, [2]);
+    // No split again: the values stay as they are (the one left).
+    h.keys("s");
+    h.keys("j");
+    h.key(KeyCode::Enter);
+    assert_eq!(chart(&mut h).spec.ys, [3], "split: the one value is replaced");
+    h.keys("b");
+    h.keys("k");
+    h.key(KeyCode::Enter);
+    assert_eq!((chart(&mut h).spec.by, chart(&mut h).spec.ys.clone()), (None, vec![3]));
+    h.keys("s");
+    h.keys("k");
+    h.key(KeyCode::Enter);
+    h.key(KeyCode::Esc);
+    assert_eq!(chart(&mut h).spec.ys, [2, 3]);
+    h.keys("b");
+    h.keys("k");
+    h.key(KeyCode::Enter);
+    assert_eq!(chart(&mut h).spec.ys, [2, 3], "choosing no split keeps every value");
     // The mouse: the X choice on the columns' line opens the list, a row picks.
     h.keys("x");
     h.key(KeyCode::Esc);
@@ -586,6 +604,17 @@ fn the_pointer_picks_points_and_the_wheel_moves_the_cursor() {
     let plot = chart(&mut h).plot;
     click(&mut h, (plot.x + plot.width - 1, plot.y + 2));
     assert_eq!(chart(&mut h).cursor, 29);
+    // A right click on the kinds or the columns' line changes nothing: it opens the menu.
+    let at = find(&mut h, " Bars ", 120, 34);
+    h.mouse(MouseEventKind::Down(MouseButton::Right), at.0 + 2, at.1);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ContextMenu));
+    assert_eq!(chart(&mut h).spec.kind, datarig_core::chart::Kind::Line);
+    h.key(KeyCode::Esc);
+    let at = find(&mut h, "linear scale", 120, 34);
+    h.mouse(MouseEventKind::Down(MouseButton::Right), at.0 + 2, at.1);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ContextMenu), "no column list under it");
+    assert!(!chart(&mut h).spec.log);
+    h.key(KeyCode::Esc);
     // A right click: the chart's menu, on the point there.
     h.mouse(MouseEventKind::Down(MouseButton::Right), plot.x, plot.y + 2);
     assert_eq!(h.overlay_kind(), Some(OverlayKind::ContextMenu));

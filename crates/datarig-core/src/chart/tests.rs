@@ -299,3 +299,60 @@ fn kinds_go_around() {
     assert_eq!(Kind::Line.step(1), Kind::Bar);
     assert!(Kind::HBar.bars() && !Kind::Line.bars());
 }
+
+#[test]
+fn sums_that_overflow_are_left_out_and_axes_stay_finite() {
+    let cols = [meta("k", "text", false), meta("v", "float8", true)];
+    let data = rows(&[&[Some("a"), Some("1e308")], &[Some("a"), Some("1e308")], &[Some("b"), Some("1")]]);
+    let spec = Spec { kind: Kind::Bar, x: Some(0), ys: vec![1], by: None, log: false };
+    let m = build(&spec, &cols, &data).unwrap();
+    assert!(m.series[0].values.iter().flatten().all(|v| v.is_finite()), "{:?}", m.series[0].values);
+    assert_eq!(m.skipped.bad_y, 1, "the value that overflowed the sum");
+    // An axis over something infinite is a plain one, at once.
+    for t in [
+        scale::linear(0.0, f64::INFINITY, 6, true),
+        scale::linear(f64::NAN, 1.0, 6, false),
+        scale::log(1.0, f64::INFINITY, 6),
+    ] {
+        assert!(t.lo.is_finite() && t.hi.is_finite() && t.values.len() <= 16, "{t:?}");
+    }
+}
+
+#[test]
+fn a_null_by_value_makes_no_point() {
+    let cols = [meta("day", "date", false), meta("shop", "text", false), meta("n", "int4", true)];
+    let data = rows(&[
+        &[Some("2026-10-01"), Some("a"), Some("1")],
+        &[Some("2026-10-02"), None, Some("5")],
+        &[Some("2026-10-03"), Some("a"), Some("2")],
+    ]);
+    let spec = Spec { kind: Kind::Line, x: Some(0), ys: vec![2], by: Some(1), log: false };
+    let m = build(&spec, &cols, &data).unwrap();
+    assert_eq!(m.points.iter().map(|p| p.label.as_str()).collect::<Vec<_>>(), ["2026-10-01", "2026-10-03"]);
+    assert_eq!(m.skipped.null_by, 1);
+}
+
+#[test]
+fn one_row_of_several_numbers_compares_them_as_bars() {
+    let cols = [meta("a", "int8", true), meta("b", "int8", true), meta("c", "int8", true)];
+    let data = rows(&[&[Some("1"), Some("2"), Some("3")]]);
+    let roles = roles(&cols, &data);
+    let spec = infer(&roles, &data, 1).unwrap();
+    assert_eq!(spec, Spec { kind: Kind::Bar, x: None, ys: vec![0, 1, 2], by: None, log: false });
+    let m = build(&spec, &cols, &data).unwrap();
+    assert_eq!(m.series.len(), 3);
+    // One number of one row: nothing to compare.
+    let spec = Spec { ys: vec![0], ..spec };
+    assert_eq!(build(&spec, &cols, &data), Err(Unsuitable::OnePoint));
+}
+
+#[test]
+fn locale_money_and_other_minus_signs_are_not_misread() {
+    // Grouped with dots and a decimal comma: not guessed.
+    assert_eq!(number("1.234,56 \u{20AC}"), None);
+    assert_eq!(number("1,23"), None);
+    assert_eq!(number("12,34,567.00"), None);
+    assert_eq!(number("$1,234,567.25"), Some(1_234_567.25));
+    assert_eq!(number("\u{2212}5"), Some(-5.0));
+    assert_eq!(number("\u{2212}$5.00"), Some(-5.0));
+}

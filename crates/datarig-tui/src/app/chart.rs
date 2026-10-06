@@ -159,7 +159,10 @@ impl ChartTab {
     /// The numbers for `rs` as the choice is now: read again when the result, its rows or the
     /// choice changed.
     fn build(&mut self, rs: &ResultSet) {
-        let source = Source { result: rs.id, rows: rs.rows.len(), spec: self.spec.clone() };
+        // The scale and the bars' direction draw the same numbers.
+        let kind = if self.spec.kind.bars() { Kind::Bar } else { Kind::Line };
+        let spec = Spec { kind, log: false, ..self.spec.clone() };
+        let source = Source { result: rs.id, rows: rs.rows.len(), spec };
         if self.built.as_ref().is_some_and(|(s, _)| *s == source) {
             return;
         }
@@ -168,7 +171,7 @@ impl ChartTab {
             None => {
                 let columns: Vec<datarig_core::driver::ColumnMeta> =
                     rs.columns.iter().map(|c| c.meta.clone()).collect();
-                let mut b = chart::Builder::new(&self.spec, &columns, &self.roles);
+                let mut b = chart::Builder::new(&source.spec, &columns, &self.roles);
                 let mut at = 0;
                 let read = rs.rows.for_each_chunk(0..rs.rows.len(), 4096, |chunk| {
                     for r in chunk {
@@ -242,6 +245,18 @@ impl ChartTab {
             ChartAction::Log => self.spec.log = !self.spec.log,
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+impl ChartTab {
+    pub(crate) fn for_tests(rs: &ResultSet) -> ChartTab {
+        ChartTab::of(rs)
+    }
+
+    pub(crate) fn rebuild_for_tests(&mut self, rs: &ResultSet) {
+        self.unsuitable = None;
+        self.build(rs);
     }
 }
 
@@ -481,7 +496,10 @@ impl App {
             }
             P::ChartBy(_) => {
                 c.spec.by = col;
-                c.spec.ys.truncate(1);
+                // One value is split; no split keeps the values there are.
+                if col.is_some() {
+                    c.spec.ys.truncate(1);
+                }
                 c.series = 0;
             }
             _ => {
@@ -522,13 +540,13 @@ impl App {
         true
     }
 
-    /// A click on the Chart tab: a kind or a column choice on its first lines, else the point
-    /// there. Whether it was on a point.
-    pub(super) fn chart_click(&mut self, x: u16, y: u16) -> bool {
+    /// A click on the Chart tab: a kind or a column choice on its first lines (`fields`: a left
+    /// click), else the point there. Whether it was on a point.
+    pub(super) fn chart_click(&mut self, x: u16, y: u16, fields: bool) -> bool {
         let at = |r: &Rect| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height;
         let t = self.tab_mut();
         let Some(c) = t.exec.chart.as_mut() else { return false };
-        let hit = c.field_hits.iter().find(|(r, _)| at(r)).map(|h| h.1);
+        let hit = c.field_hits.iter().find(|(r, _)| at(r)).map(|h| h.1).filter(|_| fields);
         match hit {
             Some(ChartHit::Kind(k)) => c.spec.kind = k,
             Some(ChartHit::Log) => c.spec.log = !c.spec.log,

@@ -204,8 +204,9 @@ impl Series {
 
     /// Add point `j`'s value to point `i`'s (the first row of the sum is no longer one row's).
     fn absorb(&mut self, i: usize, v: Option<f64>, rows: u32) {
-        if let Some(v) = v {
-            self.values[i] = Some(self.values[i].unwrap_or(0.0) + v);
+        let sum = v.map(|v| self.values[i].unwrap_or(0.0) + v).filter(|s| s.is_finite());
+        if sum.is_some() {
+            self.values[i] = sum;
         }
         self.rows[i] += rows;
         self.first[i] = None;
@@ -229,19 +230,18 @@ pub struct Model {
     pub other_series: usize,
     /// Values of zero or less (a logarithmic axis leaves them out).
     pub nonpositive: usize,
+    /// The series come from a column's values: a series has no row at a point of another one
+    /// (its line goes on past it).
+    pub split: bool,
+    /// The smallest and largest value, and of the positive ones.
+    span: Option<(f64, f64)>,
+    positive: Option<(f64, f64)>,
 }
 
 impl Model {
     /// The smallest and the largest value drawn (`log`: of the positive ones).
     pub fn range(&self, log: bool) -> Option<(f64, f64)> {
-        let mut r: Option<(f64, f64)> = None;
-        for v in self.series.iter().flat_map(|s| s.values.iter().flatten()) {
-            if log && *v <= 0.0 {
-                continue;
-            }
-            r = Some(r.map_or((*v, *v), |(a, b)| (a.min(*v), b.max(*v))));
-        }
-        r
+        if log { self.positive } else { self.span }
     }
 
     /// The first and the last point's place (points are in X order).
@@ -336,6 +336,11 @@ pub fn infer(roles: &[Role], sample: &[Vec<Cell>], rows: usize) -> Result<Spec, 
             .then(|| categories.iter().copied().find(|&c| c != x && (2..=AUTO_BY).contains(&distinct(sample, c))))
             .flatten()
     };
+    // One row: its numbers side by side.
+    if rows == 1 {
+        let x = categories.first().copied().or(time);
+        return Ok(Spec { kind: Kind::Bar, x, ys: ys(None), by: None, log: false });
+    }
     if let Some(x) = time {
         let ys = ys(None);
         let by = by(x, &ys);
@@ -398,7 +403,7 @@ pub fn number(text: &str) -> Option<f64> {
     if let Ok(v) = t.parse::<f64>() {
         return v.is_finite().then_some(v);
     }
-    let (neg, rest) = match t.strip_prefix('-') {
+    let (neg, rest) = match t.strip_prefix(['-', '\u{2212}']) {
         Some(r) => (true, r),
         None if t.len() > 2 && t.starts_with('(') && t.ends_with(')') => (true, &t[1..t.len() - 1]),
         None => (false, t),
@@ -407,6 +412,15 @@ pub fn number(text: &str) -> Option<f64> {
     let digits = rest.trim_matches(|c: char| c == '$' || c == ' ' || (!c.is_ascii() && !c.is_alphanumeric()));
     let starts = digits.bytes().next().is_some_and(|b| b.is_ascii_digit());
     if !starts || !digits.bytes().all(|b| b.is_ascii_digit() || b == b',' || b == b'.') {
+        return None;
+    }
+    // Commas only as thousands separators before a decimal point (a decimal comma, or groups of
+    // another size, are another locale's: not guessed).
+    let (whole, frac) = digits.split_once('.').unwrap_or((digits, ""));
+    let mut groups = whole.split(',');
+    let first = groups.next().unwrap_or("");
+    let grouped = first.len() <= 3 && groups.all(|g| g.len() == 3);
+    if frac.contains(',') || (whole.contains(',') && (!grouped || first.is_empty())) {
         return None;
     }
     let v: f64 = digits.replace(',', "").parse().ok()?;
@@ -459,6 +473,11 @@ impl<'a> Builder<'a> {
     /// Row `row` of the result (its cells).
     pub fn push(&mut self, row: usize, cells: &[Cell]) {
         self.rows += 1;
+        // A row without a series makes no point.
+        if self.spec.by.is_some_and(|by| cells.get(by).is_none_or(Option::is_none)) {
+            self.skipped.null_by += 1;
+            return;
+        }
         let p = match self.spec.x {
             None => self.new_point((row + 1).to_string(), (row + 1) as f64, row),
             Some(x) => {
@@ -501,10 +520,8 @@ impl<'a> Builder<'a> {
         self.points[p].rows += 1;
         match self.spec.by {
             Some(by) => {
-                let Some(name) = cells.get(by).and_then(Option::as_deref) else {
-                    self.skipped.null_by += 1;
-                    return;
-                };
+                // Not NULL: checked before the point was made.
+                let Some(name) = cells.get(by).and_then(Option::as_deref) else { return };
                 let s = match self.names.get(name) {
                     Some(&s) => s,
                     None => {
@@ -547,7 +564,13 @@ impl<'a> Builder<'a> {
             return;
         };
         let s = &mut self.series[s];
-        s.values[p] = Some(s.values[p].unwrap_or(0.0) + v);
+        let sum = s.values[p].unwrap_or(0.0) + v;
+        // A sum past the largest number is not drawn (counted as a value left out).
+        if !sum.is_finite() {
+            self.skipped.bad_y += 1;
+            return;
+        }
+        s.values[p] = Some(sum);
         s.rows[p] += 1;
         s.first[p].get_or_insert(row);
     }
@@ -627,10 +650,14 @@ impl<'a> Builder<'a> {
             return Err(Unsuitable::NoValues);
         }
         let with_values = (0..points.len()).filter(|&i| series.iter().any(|s| s.values[i].is_some())).count();
-        if with_values < 2 {
+        // One point is a comparison only between several series, as bars.
+        if with_values < 2 && !(with_values == 1 && spec.kind.bars() && series.len() >= 2) {
             return Err(Unsuitable::OnePoint);
         }
-        let nonpositive = values.filter(|v| **v <= 0.0).count();
+        let nonpositive = values.clone().filter(|v| **v <= 0.0).count();
+        let widen = |r: Option<(f64, f64)>, v: f64| Some(r.map_or((v, v), |(a, b): (f64, f64)| (a.min(v), b.max(v))));
+        let span = values.clone().fold(None, |r, v| widen(r, *v));
+        let positive = values.filter(|v| **v > 0.0).fold(None, |r, v| widen(r, *v));
         let merged =
             series.iter().filter(|s| !s.others).any(|s| s.rows.iter().zip(&points).any(|(n, p)| *n > 1 && !p.others));
         Ok(Model {
@@ -644,6 +671,9 @@ impl<'a> Builder<'a> {
             other_points,
             other_series,
             nonpositive,
+            split: spec.by.is_some(),
+            span,
+            positive,
         })
     }
 }

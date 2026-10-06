@@ -43,7 +43,9 @@ fn date(b: &[u8]) -> Option<(i64, &[u8])> {
     let (month, n) = digits(b, 2, 2)?;
     let b = b[n..].strip_prefix(b"-")?;
     let (day, n) = digits(b, 2, 2)?;
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let days = [31, if leap { 29 } else { 28 }, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    if !(1..=12).contains(&month) || day < 1 || day > days[(month - 1) as usize] {
         return None;
     }
     Some((days_from_civil(year, month as u32, day as u32), &b[n..]))
@@ -66,12 +68,15 @@ fn clock(b: &[u8]) -> Option<f64> {
             if k == 0 {
                 return None;
             }
-            let frac: f64 = std::str::from_utf8(&rest[..k]).ok()?.parse::<f64>().ok()? / 10f64.powi(k as i32);
+            // Nanoseconds are as fine as a chart places anything.
+            let d = k.min(9);
+            let frac: f64 = std::str::from_utf8(&rest[..d]).ok()?.parse::<f64>().ok()? / 10f64.powi(d as i32);
             secs += frac;
             b = &rest[k..];
         }
     }
-    if h > 24 || m > 59 || secs >= 61.0 {
+    // `24:00:00` is the end of a day; a leap second may be written.
+    if h > 24 || m > 59 || secs >= 61.0 || (h == 24 && (m > 0 || secs > 0.0)) {
         return None;
     }
     zone(b)?;
@@ -150,7 +155,15 @@ mod tests {
         assert_eq!(parse("14:03:07.5+0530").map(|p| p.secs), Some(50_587.5));
         assert_eq!(parse("12345-01-01").map(|p| p.date), Some(true));
         assert_eq!(parse("1969-12-31").map(|p| p.secs), Some(-DAY));
+        // The end of a day; days a month does not have; a fraction of any length.
+        assert_eq!(parse("2026-10-07 24:00:00").map(|p| p.secs), parse("2026-10-08").map(|p| p.secs));
+        assert_eq!(parse(&format!("10:00:00.{}", "1".repeat(400))).map(|p| p.secs), Some(36_000.111_111_111));
         for bad in [
+            "2026-02-31",
+            "2025-02-29",
+            "2026-04-31",
+            "24:30",
+            "24:00:01",
             "",
             "infinity",
             "-infinity",

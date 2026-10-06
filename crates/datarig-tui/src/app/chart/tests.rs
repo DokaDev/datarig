@@ -99,3 +99,20 @@ fn a_chart_follows_another_result_keeping_the_columns_chosen_by_name() {
     c.build(&empty);
     assert!(c.model().is_some());
 }
+
+#[test]
+fn the_scale_and_the_bars_direction_reuse_the_numbers() {
+    let rs = result(&[("k", "text", false), ("a", "int4", true)], &[&["x", "1"], &["y", "3"]]);
+    let mut c = ChartTab::of(&rs);
+    c.build(&rs);
+    crate::widgets::chart::take_work();
+    c.act(ChartAction::Log);
+    c.build(&rs);
+    c.act(ChartAction::Kind(Kind::HBar));
+    c.build(&rs);
+    assert_eq!(crate::widgets::chart::take_work(), 0, "nothing read again");
+    assert!(c.model().is_some());
+    c.act(ChartAction::Kind(Kind::Line));
+    c.build(&rs);
+    assert_eq!(crate::widgets::chart::take_work(), 2, "lines keep every point: read again");
+}

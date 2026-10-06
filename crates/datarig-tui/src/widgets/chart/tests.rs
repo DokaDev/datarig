@@ -91,3 +91,58 @@ fn points_place_by_their_value_or_their_index() {
     let m = b.finish().unwrap();
     assert_eq!((0..3).map(|i| x_frac(&m, i, m.x_range())).collect::<Vec<_>>(), [0.0, 0.1, 1.0]);
 }
+
+/// Draw `c` into a buffer exactly `w`×`h` (what a copy of the drawing does).
+fn draw_exact(c: &mut ChartTab, w: u16, h: u16) {
+    let th = crate::theme::DARK;
+    let i18n = I18n::new(datarig_core::i18n::Lang::En);
+    let cx = Look { i18n: &i18n, th: &th, focused: true, hover: None, keys: Default::default() };
+    let area = Rect::new(0, 0, w, h);
+    let mut buf = Buffer::empty(area);
+    draw_into(&cx, c, Info { rows: 2, more: false }, area, &mut buf);
+}
+
+#[test]
+fn many_series_in_a_narrow_pane_stay_inside_it() {
+    let cols: Vec<(String, &str, bool)> = (0..6).map(|i| (format!("v{i}"), "float8", true)).collect();
+    let cols: Vec<ColumnMeta> = cols.iter().map(|(n, t, num)| meta(n, t, *num)).collect();
+    let rows: Vec<Vec<Option<String>>> =
+        (0..2).map(|r| (0..6).map(|i| Some(format!("-0.00000{}", r + i + 1))).collect()).collect();
+    let rs = crate::widgets::grid::ResultSet::in_memory(cols, rows, false, "NULL");
+    for kind in [Kind::Bar, Kind::HBar, Kind::Line] {
+        let mut c = crate::app::chart::ChartTab::for_tests(&rs);
+        c.spec = Spec { kind, x: None, ys: (0..6).collect(), by: None, log: false };
+        c.rebuild_for_tests(&rs);
+        for w in 1..=40 {
+            for h in 1..=16 {
+                draw_exact(&mut c, w, h);
+            }
+        }
+    }
+}
+
+#[test]
+fn lines_split_by_a_column_join_their_own_points() {
+    let cols = [meta("day", "date", false), meta("region", "text", false), meta("n", "int4", true)];
+    let rows: Vec<Vec<Option<String>>> = (1..=8)
+        .map(|d| {
+            vec![
+                Some(format!("2026-10-{d:02}")),
+                Some(if d % 2 == 0 { "a" } else { "b" }.to_string()),
+                Some(d.to_string()),
+            ]
+        })
+        .collect();
+    let spec = Spec { kind: Kind::Line, x: Some(0), ys: vec![2], by: Some(1), log: false };
+    let roles = roles(&cols, &rows);
+    let mut b = Builder::new(&spec, &cols, &roles);
+    for (i, r) in rows.iter().enumerate() {
+        b.push(i, r);
+    }
+    let m = b.finish().unwrap();
+    let t = scale::linear(0.0, 8.0, 3, false);
+    let r = rasterize(&m, &t, 40, 8);
+    let dots: u32 = r.cells.iter().map(|c| c.0.count_ones()).sum();
+    // Eight points, joined by four segments a series: far more dots than points.
+    assert!(dots > 40, "{dots} dots: the lines were broken at the other series' days");
+}

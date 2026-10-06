@@ -452,6 +452,10 @@ fn bars(cx: &Look, c: &mut ChartTab, m: &Model, area: Rect, buf: &mut Buffer) {
     // at most 16 columns a bar); when they all fit they spread over the whole width.
     let natural = plot.width as usize / n.max(1);
     let gw = natural.max(k + 1).min(k * 16 + 4);
+    // Not even one group of a column a bar: too narrow.
+    if gw > plot.width as usize {
+        return message(cx, &[cx.i18n.label(Label::ChartTooSmall).to_string()], area, buf);
+    }
     let fits = (plot.width as usize / gw).max(1).min(n);
     let span = if fits == n && natural <= k * 16 + 4 { plot.width as usize } else { fits * gw };
     let start = |j: usize| plot.x + (j * span / fits) as u16;
@@ -487,7 +491,7 @@ fn bars(cx: &Look, c: &mut ChartTab, m: &Model, area: Rect, buf: &mut Buffer) {
                     }
                 };
                 if glyph != " " {
-                    for dx in 0..bw as u16 {
+                    for dx in (0..bw as u16).filter(|dx| x + dx < plot.x + plot.width) {
                         buf[(x + dx, y)].set_symbol(glyph).set_style(style);
                     }
                 }
@@ -689,7 +693,9 @@ fn rasterize(m: &Model, t: &scale::Ticks, w: u16, h: u16) -> Raster {
         let mut broken = true;
         for (i, v) in series.values.iter().enumerate() {
             let Some(f) = v.and_then(|v| t.at(v)) else {
-                broken = true;
+                // Split by a column, a series has no row at the other series' points: its line
+                // goes on past them.
+                broken |= !m.split || series.rows[i] > 0;
                 continue;
             };
             let y = ((1.0 - f.clamp(0.0, 1.0)) * (dh - 1) as f64).round() as usize;

@@ -716,7 +716,7 @@ impl App {
         } else if inside(l.results) && self.chart_shown() {
             self.focus = Focus::Results;
             // A second click on the same point shows its row.
-            if self.chart_click(x, y) && double {
+            if self.chart_click(x, y, true) && double {
                 self.last_click = None;
                 self.chart_action(super::chart::ChartAction::GotoRow);
             }

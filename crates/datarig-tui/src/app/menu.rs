@@ -709,7 +709,8 @@ impl App {
             return self.open_plan_menu((x, y));
         }
         if self.chart_shown() {
-            self.chart_click(x, y);
+            // The point there; the kinds and columns open their own choices on a left click only.
+            self.chart_click(x, y, false);
             return self.open_chart_menu((x, y));
         }
         let t = self.tabs.active_mut();

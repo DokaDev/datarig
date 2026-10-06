@@ -61,6 +61,8 @@ pub fn nice(x: f64) -> f64 {
 /// A linear axis over `min..max` with at most `max_ticks` ticks (at least 2), starting and
 /// ending on a tick; with `zero` it includes 0 (bars grow from it).
 pub fn linear(min: f64, max: f64, max_ticks: usize, zero: bool) -> Ticks {
+    // Nothing finite to place: a plain axis.
+    let (min, max) = if min.is_finite() && max.is_finite() { (min, max) } else { (0.0, 0.0) };
     let (mut min, mut max) = if min <= max { (min, max) } else { (max, min) };
     if zero {
         min = min.min(0.0);
@@ -76,7 +78,7 @@ pub fn linear(min: f64, max: f64, max_ticks: usize, zero: bool) -> Ticks {
     }
     let n = max_ticks.max(2);
     let mut step = nice((max - min) / (n - 1) as f64);
-    loop {
+    for _ in 0..64 {
         let (a, b) = ((min / step).floor(), (max / step).ceil());
         if b - a < n as f64 || step > (max - min) * 4.0 {
             let values = (a as i64..=b as i64).map(|k| k as f64 * step).collect();
@@ -84,14 +86,16 @@ pub fn linear(min: f64, max: f64, max_ticks: usize, zero: bool) -> Ticks {
         }
         step = nice(step * 1.5);
     }
+    // A range a step cannot cover in so many ticks (too wide for `f64`): its ends.
+    Ticks { lo: min, hi: max, step: max - min, values: vec![min, max], log: false }
 }
 
 /// A logarithmic axis over the positive `min..max`: from the power of ten at or below `min`
 /// to the one at or above `max`, a tick on each power (every other one, … when there are more
 /// than `max_ticks`).
 pub fn log(min: f64, max: f64, max_ticks: usize) -> Ticks {
-    let min = if min > 0.0 { min } else { 1.0 };
-    let max = max.max(min);
+    let min = if min > 0.0 && min.is_finite() { min } else { 1.0 };
+    let max = if max.is_finite() { max.max(min) } else { min };
     let a = min.log10().floor() as i32;
     let mut b = max.log10().ceil() as i32;
     if b <= a {
