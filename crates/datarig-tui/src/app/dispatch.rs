@@ -136,10 +136,13 @@ impl App {
                 if self.tab_mut().grid.anchor.take().is_some() {
                     self.selecting_done();
                 } else {
-                    // Back to the editor; a table tab (or maximised results) has none on screen.
+                    // Back to the editor (a zoom of the results ends); a table tab has none.
                     self.focus = if self.editor_shown() { Focus::Editor } else { Focus::Tree };
                 }
             }
+            Action::Zoom => self.toggle_zoom(),
+            Action::ToggleExplorer => self.toggle_explorer(),
+            Action::ExplorerWidth(wider) => self.step_explorer(wider),
             Action::Copy(scope, f) => self.copy_scoped(scope, f),
             Action::NewTab => self.new_tab(),
             Action::CloseTab => self.request_close_tab(),

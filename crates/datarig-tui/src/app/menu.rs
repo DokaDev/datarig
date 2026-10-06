@@ -106,6 +106,12 @@ const TAB_MENU: &[Action] = &[
 /// The tab bar's own actions.
 const TABS_MENU: &[Action] = &[Action::NewTab, Action::ReopenTab, Action::ScriptOpen];
 
+/// The layout's actions, after the editor's own (the tab bar's also resize the explorer; the
+/// results' zoom is their maximise).
+const LAYOUT_MENU: &[Action] = &[Action::Zoom, Action::ToggleExplorer];
+const EXPLORER_LAYOUT_MENU: &[Action] =
+    &[Action::Zoom, Action::ToggleExplorer, Action::ExplorerWidth(false), Action::ExplorerWidth(true)];
+
 /// The welcome panel's (no profile yet).
 const WELCOME_MENU: &[Action] = &[Action::NewProfile, Action::OpenSettings, Action::Help];
 
@@ -705,10 +711,11 @@ impl App {
             Mode::Visual => Ctx::VimVisual,
             Mode::Insert => Ctx::VimInsert,
         };
-        let (own, pane) = match ddl {
+        let (own, mut pane) = match ddl {
             true => (self.available(DDL_MENU), self.available(DDL_PANE_MENU)),
             false => (self.available(EDITOR_MENU), self.available(QUERY_MENU)),
         };
+        pane.extend(self.available(LAYOUT_MENU));
         self.push_menu(ctx, target, own, pane, at);
     }
 
@@ -735,7 +742,8 @@ impl App {
         // Disconnecting a tab's profile that is not connected does nothing.
         let off = self.tab().profile.is_none_or(|id| self.conns.state(id) == NodeState::Disconnected);
         own.retain(|i| !(off && *i == MenuItem::Action(Action::DisconnectCurrent)));
-        let pane = self.available(TABS_MENU);
+        let mut pane = self.available(TABS_MENU);
+        pane.extend(self.available(EXPLORER_LAYOUT_MENU));
         self.push_menu(Ctx::Nav, target, own, pane, at);
     }
 

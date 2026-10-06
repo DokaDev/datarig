@@ -22,9 +22,9 @@ expression: "h.draw(120, 34).backend()"
 "│                            ││ │  Change this tab's connection                                              Space c s │"
 "│                            ││ │  Choose this tab's database and schema                                     Space c d │"
 "│                            ││ │  Results pane → hide / show                                                Space r h │"
+"│                            ││ │  Toggle pane zoom                                                            Space z │"
+"│                            ││ │  Toggle explorer                                                             Space b │"
 "│                            ││ ╰──────────────────────────────────────────────────────────────────────────────────────╯"
-"│                            ││ 5 │    5 │ 山田太郎             │ やまだ      │ 東…││                                  │" Hidden by multi-width symbols: [(44, " "), (46, " "), (48, " "), (50, " "), (67, " "), (69, " "), (71, " "), (81, " ")]
-"│                            ││ 6 │    6 │ 王小明               │ NULL        │ 北…││                                  │" Hidden by multi-width symbols: [(44, " "), (46, " "), (48, " "), (81, " ")]
 "│                            ││ 7 │    7 │ Plain ASCII User     │ ascii_only  │ 16…││                                  │"
 "│                            ││ 8 │    8 │ 全角 ＡＢＣ 半角 ｱｲｳ │ é combining │ タ…││                                  │" Hidden by multi-width symbols: [(44, " "), (46, " "), (49, " "), (51, " "), (53, " "), (56, " "), (58, " "), (81, " ")]
 "│                            ││                                                    ││                                  │"

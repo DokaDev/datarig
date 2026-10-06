@@ -94,6 +94,11 @@ pub struct Explorer {
     pub filtering: bool,
     /// Screen area of the rows (mouse), kept by the renderer.
     pub area: Rect,
+    /// The user hid the explorer (the panes take the whole width); focusing it shows it again.
+    pub hidden: bool,
+    /// The width the user chose, in columns (`None`: [`App::explorer_width`]'s default); kept
+    /// as chosen, drawn within the limits of the terminal's width.
+    pub width: Option<u16>,
 }
 
 impl Default for Explorer {
@@ -106,6 +111,8 @@ impl Default for Explorer {
             filter: TextInput::default(),
             filtering: false,
             area: Rect::default(),
+            hidden: false,
+            width: None,
         }
     }
 }

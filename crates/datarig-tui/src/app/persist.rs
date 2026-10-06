@@ -132,6 +132,8 @@ impl App {
             self.scripts_expanded = ws.explorer.scripts_expanded;
         }
         self.script_folders = ws.explorer.script_folders.iter().cloned().collect();
+        self.explorer.hidden = ws.explorer.hidden;
+        self.explorer.width = ws.explorer.width;
         let mut problems = ConsoleProblems::default();
         let mut restored: Vec<Tab> = Vec::new();
         let mut active = 0;
@@ -226,7 +228,7 @@ impl App {
         let pane = t.results.map_or_else(super::tabs::PaneLayout::default, |r| super::tabs::PaneLayout {
             share: super::tabs::PaneLayout::clamped(r.share),
             hidden: r.hidden,
-            maximized: r.maximized,
+            zoom: r.maximized.then_some(Focus::Results),
         });
         if let (workspace::TabKind::Table, Some((schema, name))) = (t.kind, &t.table) {
             // Its query, not run: nothing is sent until the user asks.
@@ -328,7 +330,7 @@ impl App {
                 results: Some(workspace::PaneState {
                     share: t.pane.share,
                     hidden: t.pane.hidden,
-                    maximized: t.pane.maximized,
+                    maximized: t.pane.zoom == Some(Focus::Results),
                 }),
                 database: t.context.database.clone(),
                 schema: t.context.schema.clone(),
@@ -340,6 +342,8 @@ impl App {
                 expanded_folders: self.folders.expanded().map(ToString::to_string).collect(),
                 scripts_expanded: self.scripts_expanded,
                 script_folders: self.script_folders.iter().cloned().collect(),
+                hidden: self.explorer.hidden,
+                width: self.explorer.width,
             },
             tabs,
             unknown_tabs: self.unknown_tabs.clone(),
@@ -557,11 +561,14 @@ impl App {
         self.workspace_due.is_some() || self.tabs.iter().any(|t| t.doc.save_due.is_some())
     }
 
-    /// After every input: a change of focus into the explorer rescans the saved queries, and a
+    /// After every input: the focus stays on a drawn pane (a move of it ends a zoom or shows the
+    /// hidden explorer), a change of focus into the explorer rescans the saved queries, and a
     /// restored (or opened) tab whose profile is not connected connects once its editor or
     /// results have the focus; a tab only made active while the explorer keeps the
     /// focus connects nothing.
     pub(super) fn after_input(&mut self) {
+        // The input moved the focus itself (not one of the corrections below).
+        let moved = self.focus != self.last_focus;
         // Without a tab only the explorer can have the focus (the welcome panel stands in for
         // the tabs while there is no profile).
         if self.tabs.is_empty() && !self.profiles.is_empty() {
@@ -574,6 +581,12 @@ impl App {
         // A pane that is not drawn (a table tab's editor, a hidden results pane) never keeps
         // the focus.
         self.fix_focus();
+        self.fix_zoom(moved);
+        // The explorer has the focus: it is shown again.
+        if self.focus == Focus::Tree && self.explorer.hidden {
+            self.explorer.hidden = false;
+            self.mark_workspace();
+        }
         if self.focus != self.last_focus {
             self.last_focus = self.focus;
             if self.focus == Focus::Tree {

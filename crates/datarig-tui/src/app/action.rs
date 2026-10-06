@@ -92,6 +92,12 @@ pub enum Action {
     HelpAll,
     /// Result grid -> editor.
     PaneBack,
+    /// The focused pane takes the whole workspace, or back (tmux's zoom).
+    Zoom,
+    /// Hide the explorer (the panes take the whole width) or show it again.
+    ToggleExplorer,
+    /// The explorer wider (`true`) or narrower by a step.
+    ExplorerWidth(bool),
     /// A new console tab on the current connection.
     NewTab,
     /// Close the active tab (asks first when a query runs or a transaction is open).
@@ -157,7 +163,7 @@ pub enum Action {
 pub enum PanelAction {
     /// Hide it (the editor takes the height) or show it again.
     Toggle,
-    /// The results take the whole height, or back.
+    /// The results take the whole workspace, or back: their zoom ([`Action::Zoom`] on them).
     Maximize,
     /// Taller by a step.
     Grow,
@@ -413,9 +419,19 @@ fn plan_focused(a: &App) -> bool {
     plan_shown(a) && matches!(a.focus, Focus::Results | Focus::Inspector)
 }
 
-/// The pane is shown and not maximised: its height can change.
+/// The pane is shown and nothing is zoomed: its height can change.
 fn pane_sized(a: &App) -> bool {
-    pane_shown(a) && !a.tab().pane.maximized
+    pane_shown(a) && a.zoomed().is_none()
+}
+
+/// A pane can be zoomed: there is a tab and the panes are drawn.
+fn zoomable(a: &App) -> bool {
+    tab_drawn(a)
+}
+
+/// The explorer is drawn next to the panes (not zoomed, not hidden): its width can change.
+fn explorer_sized(a: &App) -> bool {
+    drawn(a) && a.zoomed().is_none() && a.explorer_shown() && a.layout.tree.width > 0
 }
 
 const fn act(action: Action, id: &'static str, label: Label, when: fn(&App) -> bool) -> ActionSpec {
@@ -531,6 +547,10 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::Help, "help.context", Label::ActionHelpContext, help_available),
     act(Action::HelpAll, "help.all", Label::ActionHelpAll, help_available),
     act(Action::PaneBack, "pane.back", Label::ActionPaneBack, results_focused),
+    act(Action::Zoom, "pane.zoom", Label::ActionPaneZoom, zoomable),
+    act(Action::ToggleExplorer, "explorer.toggle", Label::ActionExplorerToggle, tab_drawn),
+    mv(Action::ExplorerWidth(true), "explorer.wider", Label::ActionExplorerWider, explorer_sized),
+    mv(Action::ExplorerWidth(false), "explorer.narrower", Label::ActionExplorerNarrower, explorer_sized),
     mv(Action::Explorer(E::Down), "explorer.down", Label::ActionExplorerDown, explorer_focused),
     mv(Action::Explorer(E::Up), "explorer.up", Label::ActionExplorerUp, explorer_focused),
     act(Action::Explorer(E::Expand), "explorer.expand", Label::ActionExplorerExpand, explorer_focused),

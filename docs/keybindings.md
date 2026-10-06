@@ -99,6 +99,10 @@ Every pane that is not text input (explorer, results, vim Normal/Visual). Inside
 | `Shift+F10` | `menu.open` | Action menu |  |
 | `Menu` | `menu.open` | Action menu |  |
 | `Space t m` | `tab.menu` | Tab menu |  |
+| `Space z` | `pane.zoom` | Toggle pane zoom |  |
+| `Space b` | `explorer.toggle` | Toggle explorer |  |
+| `Space >` | `explorer.wider` | Widen explorer | ✓ |
+| `Space <` | `explorer.narrower` | Narrow explorer | ✓ |
 | `Space ,` | `settings.open` | Settings |  |
 | `Space /` | `commands.open` | Commands |  |
 | `Space ?` | `help.context` | Keyboard help |  |
@@ -129,7 +133,7 @@ Every pane that is not text input (explorer, results, vim Normal/Visual). Inside
 | `Space r i` | `results.detail` | Result detail → show / hide |  |
 | `Space r I` | `results.detail_tab` | Result detail → Cell / Row |  |
 | `Space r h` | `results.panel.toggle` | Results pane → hide / show |  |
-| `Space r z` | `results.panel.maximize` | Results pane → maximise / restore |  |
+| `Space r z` | `results.panel.maximize` | Results pane → zoom (maximise) / restore |  |
 | `Space r +` | `results.panel.grow` | Results pane → taller | ✓ |
 | `Space r -` | `results.panel.shrink` | Results pane → shorter | ✓ |
 | `Space r n` | `results.page.next` | Results → next page | ✓ |
@@ -230,7 +234,7 @@ The result grid. Inside `nav`.
 | `V` | `grid.select_rows` | Select whole rows (again: cancel) |  |
 | `i` | `results.detail` | Result detail → show / hide |  |
 | `I` | `results.detail_tab` | Result detail → Cell / Row |  |
-| `z` | `results.panel.maximize` | Results pane → maximise / restore |  |
+| `z` | `results.panel.maximize` | Results pane → zoom (maximise) / restore |  |
 | `+` | `results.panel.grow` | Results pane → taller | ✓ |
 | `-` | `results.panel.shrink` | Results pane → shorter | ✓ |
 | `n` | `results.page.next` | Results → next page | ✓ |
@@ -293,7 +297,7 @@ The Plan tab of the results pane (an `EXPLAIN (FORMAT JSON)` result): `j`/`k` se
 | `>` | `plan.pan_right` | Plan: move the view right | ✓ |
 | `y` | `plan.copy_text` | Plan: copy as text (as psql shows it) |  |
 | `Y` | `plan.copy_json` | Plan: copy its JSON |  |
-| `z` | `results.panel.maximize` | Results pane → maximise / restore |  |
+| `z` | `results.panel.maximize` | Results pane → zoom (maximise) / restore |  |
 | `+` | `results.panel.grow` | Results pane → taller | ✓ |
 | `-` | `results.panel.shrink` | Results pane → shorter | ✓ |
 | `L` | `results.tab.next` | Result tabs → next |  |

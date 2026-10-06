@@ -81,6 +81,11 @@ Everything below works today, with PostgreSQL.
 - Saved queries as plain `.sql` files in folders, autosave of every tab, and the workspace
   (tabs, cursors, open folders) restored at the next start. Closed consoles go to a trash
   (`:recover`). A second instance opens read-only instead of fighting over the files.
+- The layout: `Space z` zooms the focused pane (explorer, editor, results or inspector) to the
+  whole workspace and back, as tmux does (`ZOOM` in the status bar; moving the focus to another
+  pane ends it; the results' `z` is the same zoom). `Space b` hides or shows the explorer;
+  `Space <` / `Space >` or a drag of its right border resize it, and a drag of the results' top
+  border resizes them. The explorer's width and whether it is hidden are kept across restarts.
 - English and Korean UI (`:set language=en|ko|auto`).
 - Themes: by default the terminal's own colors; built-in truecolor themes and your own theme
   files ([Themes](#themes)).

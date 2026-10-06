@@ -70,6 +70,11 @@ pub(crate) fn draw_status(app: &mut App, area: Rect, buf: &mut Buffer) {
     if let Some((label, style)) = mode_badge(app) {
         segs.push((format!(" {label} "), style));
     }
+    // A pane is zoomed to the whole workspace (the others are there, not drawn).
+    if app.zoomed().is_some() {
+        let zoom = app.i18n.label(Label::StatusZoom);
+        segs.push((format!(" {zoom} "), Style::new().fg(th.mode_fg).bg(th.accent).add_modifier(Modifier::BOLD)));
+    }
     let push_sep = |segs: &mut Vec<(String, Style)>| segs.push((sep.to_string(), sep_style));
     let (mut name_seg, mut policy_seg) = (None, None);
     if let Some((name, color, policy)) = conn {

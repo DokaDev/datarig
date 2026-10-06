@@ -38,7 +38,7 @@ expression: backend
 "│                                      ││            │  Results → count every row (runs a count query)      # │││                                              │"
 "│                                      ││            │  Result tabs → next                                  L │││                                              │"
 "│                                      ││            │  Result tabs → previous                              H │││                                              │"
-"│                                      ││            │  Results pane → maximise / restore                   z │││                                              │"
+"│                                      ││            │  Results pane → zoom (maximise) / restore            z │││                                              │"
 "│                                      ││            ╰────────────────────────────────────────────────────────╯││                                              │"
 "│                                      ││                                                                      ││                                              │"
 "│                                      ││                                                                      ││                                              │"

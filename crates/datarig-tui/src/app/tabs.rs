@@ -1,7 +1,7 @@
 //! Workspace tabs: each tab has its own editor, results and
 //! query session. [`TabManager`] keeps them in order, knows the active one and hands out ids.
 
-use super::{Notice, Paging, Popup, Results, Running};
+use super::{Focus, Notice, Paging, Popup, Results, Running};
 use crate::widgets::editor::Editor;
 use crate::widgets::grid::GridState;
 use datarig_core::driver::{Session, SessionContext};
@@ -94,8 +94,9 @@ impl TableRef {
     }
 }
 
-/// How a query tab lays out its results pane below the editor: its share of
-/// the height, hidden or shown, maximised or not. Kept per tab and in `workspace.toml`.
+/// How a tab lays out its panes: a query tab's results pane below the editor (its share of the
+/// height, hidden or shown), and the pane zoomed to the whole workspace, if any. Kept per tab;
+/// in `workspace.toml` all but a zoom of another pane than the results (`maximized`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PaneLayout {
     /// Percent of the editor and results area the results take ([`PaneLayout::MIN`] to
@@ -103,8 +104,9 @@ pub struct PaneLayout {
     pub share: u16,
     /// The user hid the pane; the next run shows it again.
     pub hidden: bool,
-    /// The results take the whole height (the editor is not drawn).
-    pub maximized: bool,
+    /// The pane zoomed to the whole workspace (tmux style; the others are not drawn), or none.
+    /// `Results` is the results pane with its inspector, and also the results' "maximise".
+    pub zoom: Option<Focus>,
 }
 
 impl PaneLayout {
@@ -122,7 +124,7 @@ impl PaneLayout {
 
 impl Default for PaneLayout {
     fn default() -> Self {
-        Self { share: Self::DEFAULT_SHARE, hidden: false, maximized: false }
+        Self { share: Self::DEFAULT_SHARE, hidden: false, zoom: None }
     }
 }
 

@@ -1,0 +1,38 @@
+---
+source: crates/datarig-tui/tests/flows_zoom.rs
+expression: "h.draw(120, 34).backend()"
+---
+"╭ Explorer ──────────────────────────────────╮ 1 console 1 ×                                                            "
+"│  ＋ New connection                         │╭ Query · console 1 ─────────────────────────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ ●   local-pg                              ││ local-pg / datarig  127.0.0.1:55432 · policy: default                  │"
+"│  ▾ datarig default                         ││  1 -- datarig 🐘  Ctrl+E: run the statement under the cursor           │" Hidden by multi-width symbols: [(63, " ")]
+"│    ▸ analytics                             ││  2▎SELECT * FROM shop.users WHERE id <= 8;                             │"
+"│    ▸ public                                ││  3                                                                     │"
+"│    ▸ shop                                  ││  4 SELECT u.name, o.status, o.total_amount                             │"
+"│                                            ││  5 FROM shop.orders o                                                  │"
+"│                                            ││  6 JOIN shop.users u ON u.id = o.user_id                               │"
+"│                                            ││  7 WHERE o.status = 'paid';                                            │"
+"│                                            ││  8                                                                     │"
+"│                                            ││  9 SELECT * FROM analytics.events;                                     │"
+"│                                            ││ 10                                                                     │"
+"│                                            │╰────────────────────────────────────────────────────────────────────────╯"
+"│                                            │╭ Results · 8 rows ─────────────────────────╮╭ [Cell] Row · I ───────────╮"
+"│                                            ││   │ id   │ name                 │ nickname││ id                        │"
+"│                                            ││   │ int8 │ text                 │ text    ││ int8 · 1 character        │"
+"│                                            ││ 1 │    1 │ 陳大文               │ 大文🐘  ││                           │" Hidden by multi-width symbols: [(60, " "), (62, " "), (64, " "), (83, " "), (85, " "), (87, " ")]
+"│                                            ││ 2 │    2 │ 林美玲               │ NULL    ││ 1                         │" Hidden by multi-width symbols: [(60, " "), (62, " "), (64, " ")]
+"│                                            ││ 3 │    3 │ 張志明               │ 👨‍👩‍👧‍👦 fami…││                           │" Hidden by multi-width symbols: [(60, " "), (62, " "), (64, " "), (83, " ")]
+"│                                            ││ 4 │    4 │ Emoji テスト         │ 🔥🚀✨🎉││                           │" Hidden by multi-width symbols: [(66, " "), (68, " "), (70, " "), (83, " "), (85, " "), (87, " "), (89, " ")]
+"│                                            ││ 5 │    5 │ 山田太郎             │ やまだ  ││                           │" Hidden by multi-width symbols: [(60, " "), (62, " "), (64, " "), (66, " "), (83, " "), (85, " "), (87, " ")]
+"│                                            ││ 6 │    6 │ 王小明               │ NULL    ││                           │" Hidden by multi-width symbols: [(60, " "), (62, " "), (64, " ")]
+"│                                            ││ 7 │    7 │ Plain ASCII User     │ ascii_o…││                           │"
+"│                                            ││ 8 │    8 │ 全角 ＡＢＣ 半角 ｱｲｳ │ é combi…││                           │" Hidden by multi-width symbols: [(60, " "), (62, " "), (65, " "), (67, " "), (69, " "), (72, " "), (74, " ")]
+"│                                            ││                                           ││                           │"
+"│                                            ││                                           ││                           │"
+"│                                            ││                                           ││                           │"
+"│                                            ││                                           ││                           │"
+"│                                            ││                                           ││                           │"
+"│                                            ││                                           ││                           │"
+"│                                            ││                                           ││                           │"
+"╰────────────────────────────────────────────╯╰───────────────────────────────────────────╯╰───────────────────────────╯"
+" NORMAL  local-pg · policy: default │ 8 rows · 12ms     │ i type · Ctrl+E run · Tab next pane · : commands · F1 help EN "
