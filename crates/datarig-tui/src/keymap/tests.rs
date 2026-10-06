@@ -450,7 +450,7 @@ fn leader_groups_list_only_what_leads_to_an_action() {
     // `Space Space`: the action menu, listed with the groups.
     assert!(root.contains(&("Space".into(), Child::Action(action::by_id("menu.open").unwrap().action))));
     let tabs: Vec<String> = shown(Ctx::VimVisual, "space t").into_iter().map(|(k, _)| k).collect();
-    assert_eq!(tabs, ["c", "m", "n", "u"]);
+    assert_eq!(tabs, ["c", "m", "n", "t", "u"]);
     assert!(root.contains(&("r".into(), Child::Group(Some(Label::GroupResult)))));
     assert!(root.contains(&("s".into(), Child::Group(Some(Label::GroupScript)))));
     assert!(root.contains(&("t".into(), Child::Group(Some(Label::GroupTab)))));

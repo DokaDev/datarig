@@ -100,6 +100,8 @@ impl App {
             self.help_select_first_entry();
         } else if self.overlays.top().is_some_and(|o| o.kind() == OverlayKind::ContextMenu) {
             self.menu_paste(text);
+        } else if self.overlays.top().is_some_and(|o| o.kind() == OverlayKind::TabList) {
+            self.tab_list_paste(text);
         } else if let Some(p) = self.overlays.prompt_mut() {
             if !p.save_focus {
                 p.input.insert_str(text);
@@ -229,6 +231,7 @@ impl App {
             Ctx::Password => keys.iter().for_each(|k| self.prompt_key(k.to_event(), repeat)),
             Ctx::ExplorerFilter => keys.iter().for_each(|k| self.explorer_filter_key(k.to_event())),
             Ctx::QuickConnect => keys.iter().for_each(|k| self.quick_key(k.to_event(), repeat)),
+            Ctx::TabList => keys.iter().for_each(|k| self.tab_list_key(k.to_event(), repeat)),
             Ctx::Chooser | Ctx::ChooserFilter => keys.iter().for_each(|k| self.chooser_key(k.to_event(), repeat)),
             Ctx::NameInput => keys.iter().for_each(|k| self.name_key(k.to_event(), repeat)),
             Ctx::ScriptTree | Ctx::ScriptTreeName => {

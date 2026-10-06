@@ -114,17 +114,15 @@ enum PartKind {
     Close,
 }
 
-/// One tab label, `doc_max` columns at most for the document's name.
-fn label(app: &App, index: usize, tab: &Tab, active: bool, doc_max: usize) -> Vec<Part> {
+/// The number of tab `index` as the tab bar shows it, and its color: the profile's color once
+/// its session is connected (which connection, at a glance), muted while it is not, the spinner
+/// in its place (as wide) while a statement runs.
+pub(crate) fn number(app: &App, index: usize, tab: &Tab) -> (String, Color) {
     let th = theme::cur();
-    let bg = if active { th.surface_alt } else { th.bg };
-    let part = |text: String, style: Style| Part { text, style, kind: PartKind::Plain };
     let profile = tab.profile.and_then(|id| app.profiles.iter().find(|p| p.id == id));
     let state = profile.map(|_| state(app, tab));
-    // The number in the profile's color once connected: which connection, at a glance; muted
-    // while it is not; the spinner in its place (as wide) while a statement runs.
     let n = (index + 1).to_string();
-    let (n, color) = match (profile, state) {
+    match (profile, state) {
         (_, Some(State::Running)) => {
             let frame = tab
                 .exec
@@ -134,7 +132,44 @@ fn label(app: &App, index: usize, tab: &Tab, active: bool, doc_max: usize) -> Ve
         }
         (Some(p), _) if connected(tab) => (n, theme::profile_color(p.display_color())),
         _ => (n, th.fg_muted),
-    };
+    }
+}
+
+/// The marks after a tab's name, each with a blank before it, on background `bg`: `*` (its
+/// text could not be saved), `RO`, the warning mark of its session, or what it says without a
+/// connection.
+pub(crate) fn marks(app: &App, tab: &Tab, bg: Color) -> Vec<(String, Style)> {
+    let th = theme::cur();
+    let mark = |c: Color| Style::new().fg(c).bg(bg);
+    let mut out = Vec::new();
+    if tab.doc.conflict || tab.doc.save_error.is_some() {
+        out.push((format!(" {UNSAVED}"), mark(th.warning)));
+    }
+    match tab.profile.and_then(|id| app.profiles.iter().find(|p| p.id == id)) {
+        Some(p) => {
+            // A read-only policy, in words (policies have no color).
+            if app.read_only(p.id) {
+                let ro = Style::new().fg(th.fg).bg(bg).add_modifier(Modifier::BOLD);
+                out.push((format!(" {}", app.i18n.label(Label::TabReadOnly)), ro));
+            }
+            if let Some((m, c)) = warning_mark(state(app, tab), tab.exec.user_tx()) {
+                out.push((format!(" {m}"), mark(c)));
+            }
+        }
+        None => {
+            let l = if tab.doc.recovered { Label::TabRecovered } else { Label::TabUnbound };
+            out.push((format!(" {}", app.i18n.label(l)), mark(th.fg_dim)));
+        }
+    }
+    out
+}
+
+/// One tab label, `doc_max` columns at most for the document's name.
+fn label(app: &App, index: usize, tab: &Tab, active: bool, doc_max: usize) -> Vec<Part> {
+    let th = theme::cur();
+    let bg = if active { th.surface_alt } else { th.bg };
+    let part = |text: String, style: Style| Part { text, style, kind: PartKind::Plain };
+    let (n, color) = number(app, index, tab);
     let mut num = Style::new().fg(color).bg(bg).add_modifier(Modifier::BOLD);
     if !active {
         num = num.remove_modifier(Modifier::BOLD);
@@ -157,25 +192,7 @@ fn label(app: &App, index: usize, tab: &Tab, active: bool, doc_max: usize) -> Ve
         };
     }
     parts.push(Part { text: clip(&name, doc_max.max(1)), style: doc, kind: PartKind::Document });
-    if tab.doc.conflict || tab.doc.save_error.is_some() {
-        parts.push(part(format!(" {UNSAVED}"), mark(th.warning)));
-    }
-    match profile {
-        Some(p) => {
-            // A read-only policy, in words (policies have no color).
-            if app.read_only(p.id) {
-                let ro = Style::new().fg(th.fg).bg(bg).add_modifier(Modifier::BOLD);
-                parts.push(part(format!(" {}", app.i18n.label(Label::TabReadOnly)), ro));
-            }
-            if let Some((m, c)) = state.and_then(|s| warning_mark(s, tab.exec.user_tx())) {
-                parts.push(part(format!(" {m}"), mark(c)));
-            }
-        }
-        None => {
-            let l = if tab.doc.recovered { Label::TabRecovered } else { Label::TabUnbound };
-            parts.push(part(format!(" {}", app.i18n.label(l)), mark(th.fg_dim)));
-        }
-    }
+    parts.extend(marks(app, tab, bg).into_iter().map(|(text, style)| part(text, style)));
     parts.push(part(" ".to_string(), mark(th.fg_dim)));
     parts.push(Part {
         text: CLOSE.to_string(),

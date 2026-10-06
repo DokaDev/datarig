@@ -104,11 +104,11 @@ const TAB_MENU: &[Action] = &[
 ];
 
 /// The tab bar's own actions.
-const TABS_MENU: &[Action] = &[Action::NewTab, Action::ReopenTab, Action::ScriptOpen];
+const TABS_MENU: &[Action] = &[Action::NewTab, Action::TabList, Action::ReopenTab, Action::ScriptOpen];
 
 /// The layout's actions, after the editor's own (the tab bar's also resize the explorer; the
 /// results' zoom is their maximise).
-const LAYOUT_MENU: &[Action] = &[Action::Zoom, Action::ToggleExplorer];
+const LAYOUT_MENU: &[Action] = &[Action::TabList, Action::Zoom, Action::ToggleExplorer];
 const EXPLORER_LAYOUT_MENU: &[Action] =
     &[Action::Zoom, Action::ToggleExplorer, Action::ExplorerWidth(false), Action::ExplorerWidth(true)];
 
@@ -271,7 +271,7 @@ impl ContextMenu {
 /// label, its id): 0 when the label starts with it, 1 when a word of the label does, 2 when the
 /// label has its letters in order (case ignored); 3 to 5 the same for another text, which ranks
 /// below anything the label matches; `None` when nothing matches.
-fn rank(query: &str, texts: &[&str]) -> Option<u8> {
+pub(super) fn rank(query: &str, texts: &[&str]) -> Option<u8> {
     let q = query.trim().to_lowercase();
     if q.is_empty() {
         return Some(0);

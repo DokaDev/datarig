@@ -69,6 +69,7 @@ Every pane that is not text input (explorer, results, vim Normal/Visual). Inside
 | `Space t n` | `tab.new_console` | New console tab |  |
 | `Space t c` | `tab.close` | Close tab |  |
 | `Space t u` | `tab.reopen_closed` | Reopen closed tab |  |
+| `Space t t` | `tab.list` | List tabs |  |
 | `Space 1` | `tab.goto.1` | Go to tab 1 |  |
 | `Space 2` | `tab.goto.2` | Go to tab 2 |  |
 | `Space 3` | `tab.goto.3` | Go to tab 3 |  |
@@ -373,6 +374,14 @@ Reserved — quick connect: databases and schemas: `Right` `Left`
 
 Reserved — text input: `Backspace` `Delete` `Home` `End` `Ctrl+U` `Ctrl+A`
 
+## `overlay.tab_list` [text]
+
+The tab list (`Space t t`, `:tabs`, `:ls`, `:buffers`): the open tabs, the most recently active first, then the tabs closed in this run. Typing filters by name, connection, database, schema, kind or number; the arrows, `Ctrl+N`/`Ctrl+P` and `Tab` move, `Enter` goes to the tab (brings a closed one back), `Ctrl+D` closes the selected tab (asking as `Ctrl+W` does), `Esc` closes the list (`Backspace` on an empty filter does not). A click picks an entry, the wheel selects, the pointer only highlights. Inside `root`.
+
+Reserved — tab list: `Down` `Up` `Ctrl+N` `Ctrl+P` `Tab` `Shift+Tab` `Enter` `Esc` `Ctrl+D`
+
+Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
+
 ## `overlay.profile_form` [text]
 
 Connection profile form. With the mouse: a click focuses a field (in a text, the cursor goes there), picks a value, steps a `‹ value ›` (its arrows; the value opens a list), switches the section or presses a button. Inside `root`.
@@ -528,6 +537,7 @@ An editor command closes the line; what went wrong is said in the status bar.
 | `:e [name]` | `:edit` | Open a saved query |
 | `:tabnew` |  | New console tab |
 | `:tabclose` |  | Close tab |
+| `:tabs` | `:ls` `:buffers` | List tabs |
 | `:recover` |  | Bring back a closed console (also from earlier runs) |
 | `:settings` |  | Open the settings |
 | `:copy <format>` |  | Copy the selected range, or every fetched row, as… (:copy <format> [selection|all]) |

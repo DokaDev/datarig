@@ -206,6 +206,7 @@ const ACTIONS: &[(Ctx, &str, &str)] = &[
     (Nav, "space t n", "tab.new_console"),
     (Nav, "space t c", "tab.close"),
     (Nav, "space t u", "tab.reopen_closed"),
+    (Nav, "space t t", "tab.list"),
     (Nav, "space 1", "tab.goto.1"),
     (Nav, "space 2", "tab.goto.2"),
     (Nav, "space 3", "tab.goto.3"),
@@ -460,6 +461,9 @@ const RESERVED: &[(Ctx, &[&str], &str)] = &[
     // editing keys.
     (QuickConnect, &["right", "left"], "quick connect: databases and schemas"),
     (QuickConnect, &["backspace", "delete", "home", "end", "ctrl+u", "ctrl+a"], "text input"),
+    // Typing filters the list: the arrows, `Ctrl+N`/`Ctrl+P` and `Tab` move.
+    (TabList, &["down", "up", "ctrl+n", "ctrl+p", "tab", "shift+tab", "enter", "esc", "ctrl+d"], "tab list"),
+    (TabList, TEXT, "text input"),
     (
         ProfileForm,
         &["tab", "shift+tab", "down", "up", "enter", "esc", "ctrl+s", "ctrl+t", "ctrl+n", "ctrl+p"],

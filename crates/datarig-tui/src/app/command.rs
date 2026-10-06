@@ -44,6 +44,8 @@ pub enum Command {
     TabNew,
     /// `:tabclose`: close the active tab.
     TabClose,
+    /// `:tabs`, `:ls`, `:buffers`: the tab list.
+    Tabs,
     /// `:recover`: pick a closed console from the trash and bring it back.
     Recover,
     /// `:settings`: the settings screen.
@@ -210,6 +212,14 @@ pub const COMMANDS: &[CommandSpec] = &[
         arg: None,
         label: Label::ActionTabClose,
         action: Some(Action::CloseTab),
+    },
+    CommandSpec {
+        command: Command::Tabs,
+        name: "tabs",
+        aliases: &["ls", "buffers"],
+        arg: None,
+        label: Label::ActionTabList,
+        action: Some(Action::TabList),
     },
     CommandSpec {
         command: Command::Recover,

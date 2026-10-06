@@ -324,6 +324,7 @@ const SAME_IN_KO: &[&str] = &[
     "status.hangul",
     // Protocol, tool and format names.
     "form.field.dsn",
+    "tab_list.kind.ddl",
     "form.section.ssh",
     "form.ssh.auth_agent",
     "copy.method.osc52",

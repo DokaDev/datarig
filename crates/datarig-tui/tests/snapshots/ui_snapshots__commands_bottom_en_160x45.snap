@@ -45,5 +45,5 @@ expression: backend
 "  :wq, :x [<name>]           Save, then close the tab (on the last tab: quit)                                                                Ctrl+S / Space s s "
 "  :tabnew                    New console tab                                                                                                 Ctrl+T / Space t n "
 "  :tabclose                  Close tab                                                                                                       Ctrl+W / Space t c "
-"  :recover                   Bring back a closed console (also from earlier runs)                                                                               "
+"  :tabs, :ls, :buffers       List tabs                                                                                                                Space t t "
 " COMMAND  : type a command or an action name                                                                               Tab/↑↓ select · Enter run · Esc close"

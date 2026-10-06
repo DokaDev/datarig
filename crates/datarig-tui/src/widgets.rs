@@ -23,6 +23,7 @@ pub(crate) mod quick;
 pub(crate) mod script_tree;
 pub(crate) mod settings;
 pub(crate) mod statusbar;
+pub(crate) mod tab_list;
 
 use crate::text::{clip, width};
 use crate::theme;

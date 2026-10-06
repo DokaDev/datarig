@@ -55,6 +55,7 @@ pub mod safety;
 mod script_ops;
 pub mod script_tree;
 pub mod settings;
+pub mod tab_list;
 mod tab_ops;
 pub mod tabs;
 pub mod themes;
@@ -1309,6 +1310,7 @@ impl App {
             Some(Overlay::ProfileForm(_)) => Ctx::ProfileForm,
             Some(Overlay::Settings(_)) => Ctx::Settings,
             Some(Overlay::QuickConnect(_)) => Ctx::QuickConnect,
+            Some(Overlay::TabList(_)) => Ctx::TabList,
             Some(Overlay::NameInput(_)) => Ctx::NameInput,
             Some(Overlay::ScriptTree(t)) if t.focus == script_tree::TreeFocus::Name => Ctx::ScriptTreeName,
             Some(Overlay::ScriptTree(_)) => Ctx::ScriptTree,
