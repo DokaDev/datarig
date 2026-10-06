@@ -162,6 +162,7 @@ fn tabs_by_recent_use_put_the_active_one_first_and_restored_ones_in_bar_order() 
     // A tab that comes back is active.
     let back = m.reopen().unwrap();
     assert_eq!(m.by_recent(), [back, ids[1], ids[3], ids[2]]);
+    assert_eq!(m.active().doc.console_no, 1, "a console comes back with its number");
     // The closed tabs, newest first, each found by its serial.
     m.close(ids[2]);
     m.close(ids[3]);
@@ -171,4 +172,9 @@ fn tabs_by_recent_use_put_the_active_one_first_and_restored_ones_in_bar_order() 
     assert_eq!(older.text, "c");
     assert_eq!(m.closed().map(|c| c.text.clone()).collect::<Vec<_>>(), ["d"]);
     assert!(m.take_closed_serial(closed[1]).is_none(), "taken once");
+    // Its number taken meanwhile: the lowest free one.
+    let new = m.open(TabKind::Console, None, ed("e"));
+    assert_eq!(m.get(new).unwrap().doc.console_no, 3);
+    let back = m.reopen_closed(older);
+    assert_eq!(m.get(back).unwrap().doc.console_no, 4);
 }

@@ -908,7 +908,12 @@ impl TabManager {
         editor.row = c.cursor.0;
         editor.col = c.cursor.1;
         let id = self.insert(c.index, c.kind, c.profile, editor);
+        // A console keeps its number unless another tab took it meanwhile.
+        let taken = self.tabs.iter().any(|t| t.id != id && t.doc.console_no == c.console_no);
         if let Some(t) = self.get_mut(id) {
+            if t.kind == TabKind::Console && c.console_no != 0 && !taken {
+                t.doc.console_no = c.console_no;
+            }
             t.doc.console_id = c.console_id;
             t.doc.script = c.script;
             t.doc.kept_profile = c.kept_profile;
