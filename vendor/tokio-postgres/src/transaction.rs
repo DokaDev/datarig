@@ -323,10 +323,11 @@ impl<'a> Transaction<'a> {
     /// datarig: `bind_first_page`, then `end` (`COMMIT` or `ROLLBACK`, Parse/Bind/Execute of
     /// the unnamed statement) after the Execute, in the same write: the transaction ends in
     /// the round trip that read the first rows, and the portal with it, whether it ran to its end
-    /// or not. Answered once `end` succeeded; the transaction is over then (`commit`, `rollback`
-    /// and dropping it send nothing more). When the statement or `end` fails the transaction is
-    /// left as after a failed `bind_first_page` (aborted, or ended by a failed `COMMIT`): roll it
-    /// back (a `ROLLBACK` with no transaction open only warns).
+    /// or not. Once the response says `end` succeeded the transaction is over (`commit`,
+    /// `rollback` and dropping it send nothing more), even when looking up a column's type after
+    /// it fails. When the statement or `end` fails the transaction is left as after a failed
+    /// `bind_first_page` (aborted, or ended by a failed `COMMIT`): roll it back (a `ROLLBACK`
+    /// with no transaction open only warns).
     pub async fn bind_first_page_then(
         &mut self,
         statement: &Statement,
@@ -345,9 +346,10 @@ impl<'a> Transaction<'a> {
             Some(end),
         )?;
         self.begin.store(false, std::sync::atomic::Ordering::SeqCst);
-        let page = crate::pipeline::read_first_page(self.client.inner(), statement, request).await?;
+        let messages = crate::pipeline::send_first_page(self.client.inner(), &request).await?;
+        // `end` succeeded: the transaction is over, whatever reading the page still costs.
         self.done = true;
-        Ok(page)
+        crate::pipeline::first_page_of(self.client.inner(), statement, request, messages).await
     }
 
     /// Continues execution of a portal, returning a stream of the resulting rows.

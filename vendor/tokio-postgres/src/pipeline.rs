@@ -189,8 +189,25 @@ pub(crate) async fn read_first_page(
     statement: &Statement,
     request: FirstPageRequest,
 ) -> Result<FirstPage, Error> {
-    let FirstPageRequest { buf, portal: name, begins, end } = request;
-    let mut messages = read_all(client, buf).await?;
+    let messages = read_all(client, request.buf.clone()).await?;
+    first_page_of(client, statement, request, messages).await
+}
+
+/// Sends the request of `encode_first_page_then` and reads its whole response: once this
+/// succeeded, the statement after the Execute (the `COMMIT`) has too.
+pub(crate) async fn send_first_page(client: &InnerClient, request: &FirstPageRequest) -> Result<Vec<Message>, Error> {
+    read_all(client, request.buf.clone()).await
+}
+
+/// The first page in `messages`, the response to `request` (types it does not know yet are
+/// looked up now, each a request of its own).
+pub(crate) async fn first_page_of(
+    client: &Arc<InnerClient>,
+    statement: &Statement,
+    request: FirstPageRequest,
+    mut messages: Vec<Message>,
+) -> Result<FirstPage, Error> {
+    let FirstPageRequest { portal: name, begins, end, .. } = request;
     if end {
         let tail = messages.split_off(messages.len().saturating_sub(3));
         skip_simple(&mut tail.into_iter())?;

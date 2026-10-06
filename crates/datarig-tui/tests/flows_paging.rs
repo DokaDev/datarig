@@ -932,7 +932,8 @@ fn a_result_not_held_that_is_not_run_again_shows_its_first_page_only() {
     h.sent();
     let status = h.status(400, 45);
     assert!(
-        status.contains("First 500 rows only: nothing is held open on the server after the first page")
+        status.contains("First 500 rows only: the statement stopped after its first page")
+            && status.contains("nothing is held open on the server")
             && status.contains("it calls random")
             && status.contains("LIMIT/OFFSET, or set paging = \"hold\" in the profile's policy"),
         "{status}"
@@ -954,7 +955,7 @@ fn a_result_not_held_that_is_not_run_again_shows_its_first_page_only() {
     assert!(h.sent().is_empty(), "nothing is sent");
     let status = h.status(400, 45);
     assert!(
-        status.contains("Only the first page was read and this statement is not run again for you")
+        status.contains("Only the first page was read: the statement stopped there and is not run again for you")
             && status.contains("paging = \"hold\""),
         "{status}"
     );
@@ -984,4 +985,48 @@ fn a_hold_policy_asks_for_the_portal_to_be_held() {
     h.keys("n");
     let sent = h.sent();
     assert!(sent.iter().any(|c| matches!(c, DbCommand::Resume { paging: PagingMode::Hold, .. })), "{sent:?}");
+}
+
+/// `Released` counts only for the run it names, and only for that run's first page: one of an
+/// earlier run is ignored (the page stays held), one followed by the run's failure leaves
+/// nothing behind for the next run, and a write not held says its changes are complete instead
+/// of suggesting to page it.
+#[test]
+fn released_goes_with_its_own_run_only() {
+    let mut h = Harness::connected(Lang::En);
+    h.ctrl('e');
+    let id = h.app.tab().exec.query_id;
+    h.tab_db(0, DbEvent::Released { id: id - 1 });
+    let columns = Some(vec![meta("id", "int8", true, false)]);
+    h.tab_db(0, DbEvent::Page { id, columns: columns.clone(), rows: page(0, 500), more: true, elapsed: SEC / 100 });
+    assert!(matches!(h.app.tab().exec.paging, Paging::Open { .. }), "an earlier run's Released is not this one's");
+    // Released, then the run fails: the next run's page is held.
+    h.ctrl('e');
+    let id = h.app.tab().exec.query_id;
+    h.tab_db(0, DbEvent::Released { id });
+    h.tab_db(0, DbEvent::Failed { id, error: DbError::Server("ERROR: boom".into()), cancelled: false });
+    assert!(!h.app.tab().exec.released);
+    h.ctrl('e');
+    let id = h.app.tab().exec.query_id;
+    h.tab_db(0, DbEvent::Page { id, columns: columns.clone(), rows: page(0, 500), more: true, elapsed: SEC / 100 });
+    assert!(matches!(h.app.tab().exec.paging, Paging::Open { .. }));
+    // A write not held: its changes are complete, and running it again would write again.
+    h.app.tab_mut().editor =
+        Editor::new("INSERT INTO shop.users (email) SELECT 'x' FROM generate_series(1, 900) RETURNING id");
+    h.sent();
+    h.ctrl('e');
+    if h.app.overlays.run_confirm().is_some() {
+        h.keys("y");
+    }
+    let id = h.app.tab().exec.query_id;
+    h.tab_db(0, DbEvent::Released { id });
+    h.tab_db(0, DbEvent::Page { id, columns, rows: page(0, 500), more: true, elapsed: SEC / 100 });
+    assert_eq!(h.app.tab().exec.paging, Paging::Released);
+    let status = h.status(400, 45);
+    assert!(status.contains("changes are committed in full") && !status.contains("LIMIT/OFFSET"), "{status}");
+    h.key(KeyCode::Tab);
+    h.keys("n");
+    assert!(resumes(&h.sent()).is_empty());
+    let status = h.status(400, 45);
+    assert!(status.contains("Running it again would change rows again"), "{status}");
 }

@@ -1454,26 +1454,26 @@ async fn closing_the_session_cancels_the_running_statement() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_terminated_backend_fails_the_statement_then_reports_lost_once() {
     let Some(url) = pg_url("a_terminated_backend_fails_the_statement_then_reports_lost_once") else { return };
-    let tag = format!("lost{}", std::process::id());
-    let (mut q, mut obs) = tagged(&url, &tag).await;
-    q.session.send(DbCommand::Execute {
-        id: 1,
-        statements: vec!["SELECT pg_sleep(30)".into()],
-        paging: PagingMode::Hold,
-    });
-    started(&mut obs, &tag).await;
-    let kill =
-        format!("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = 'datarig-q-{tag}'");
-    let DbEvent::Page { .. } = obs.run(1, &kill).await else { panic!("terminate") };
-    let mut seen = Vec::new();
-    loop {
-        match tokio::time::timeout(Duration::from_secs(5), q.rx.recv()).await {
-            Ok(Some(DbEvent::TxOpen(_))) => {}
-            Ok(Some(ev)) => seen.push(ev),
-            Ok(None) | Err(_) => break,
+    // Held or not: the first page and its pipelined COMMIT go out in one write either way.
+    for (paging, mode) in [(PagingMode::Hold, "h"), (PagingMode::NoHold, "n")] {
+        let tag = format!("lost{mode}{}", std::process::id());
+        let (mut q, mut obs) = tagged(&url, &tag).await;
+        q.session.send(DbCommand::Execute { id: 1, statements: vec!["SELECT pg_sleep(30)".into()], paging });
+        started(&mut obs, &tag).await;
+        let kill = format!(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = 'datarig-q-{tag}'"
+        );
+        let DbEvent::Page { .. } = obs.run(1, &kill).await else { panic!("terminate") };
+        let mut seen = Vec::new();
+        loop {
+            match tokio::time::timeout(Duration::from_secs(5), q.rx.recv()).await {
+                Ok(Some(DbEvent::TxOpen(_))) => {}
+                Ok(Some(ev)) => seen.push(ev),
+                Ok(None) | Err(_) => break,
+            }
         }
+        assert!(matches!(&seen[..], [DbEvent::Failed { id: 1, .. }, DbEvent::Lost { .. }]), "{paging:?}: {seen:?}");
     }
-    assert!(matches!(&seen[..], [DbEvent::Failed { id: 1, .. }, DbEvent::Lost { .. }]), "{seen:?}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2281,17 +2281,21 @@ async fn pipelined_statements_keep_the_transaction_rules() {
 }
 
 /// Cancelling a first page that is still running (its BEGIN, Bind and Execute went out in one
-/// write) fails it as cancelled and ends the transaction it started; inside the user's block the
-/// block stays, aborted, until the user ends it.
+/// write, and its COMMIT when it is not held) fails it as cancelled and ends the transaction it
+/// started; inside the user's block the block stays, aborted, until the user ends it, whatever
+/// the paging.
 #[tokio::test(flavor = "multi_thread")]
 async fn cancelling_a_first_page_ends_its_transaction() {
     let Some(url) = pg_url("cancelling_a_first_page_ends_its_transaction") else { return };
     let (mut s, _wire) = wired(&url, ONE_WAY).await;
     let slow = "SELECT pg_sleep(0.5), x FROM generate_series(1, 20) x";
-    for round in 0..2 {
+    // Held, and not held (its COMMIT went out with it too, after the Execute that is cancelled).
+    for (round, paging) in
+        [PagingMode::Hold, PagingMode::NoHold, PagingMode::Hold, PagingMode::NoHold].into_iter().enumerate()
+    {
         s.id += 1;
         let id = s.id;
-        s.c.session.send(DbCommand::Execute { id, statements: vec![slow.into()], paging: PagingMode::Hold });
+        s.c.session.send(DbCommand::Execute { id, statements: vec![slow.into()], paging });
         tokio::time::sleep(Duration::from_millis(400)).await;
         s.c.session.cancel();
         match s.c.result(id).await {
@@ -2305,7 +2309,7 @@ async fn cancelling_a_first_page_ends_its_transaction() {
     assert!(s.settled().await);
     s.id += 1;
     let id = s.id;
-    s.c.session.send(DbCommand::Execute { id, statements: vec![slow.into()], paging: PagingMode::Hold });
+    s.c.session.send(DbCommand::Execute { id, statements: vec![slow.into()], paging: PagingMode::NoHold });
     tokio::time::sleep(Duration::from_millis(400)).await;
     s.c.session.cancel();
     let ev = s.c.result(id).await;
@@ -2432,7 +2436,9 @@ async fn every_run_ends_while_the_table_keeps_changing() {
     for i in 0..RUNS {
         s.id += 1;
         let id = s.id;
-        s.c.session.send(DbCommand::Execute { id, statements: vec![sql.clone()], paging: PagingMode::Hold });
+        // Held and not held in turn (not held, the first page's COMMIT goes out with it).
+        let paging = if i % 2 == 0 { PagingMode::Hold } else { PagingMode::NoHold };
+        s.c.session.send(DbCommand::Execute { id, statements: vec![sql.clone()], paging });
         let ended = tokio::time::timeout(PER_RUN, async {
             loop {
                 match s.c.rx.recv().await {

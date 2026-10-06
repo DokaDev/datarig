@@ -75,7 +75,9 @@ trip per step. These additions put the steps of one request into one write with 
   - `encode_first_page_then`: `encode_first_page` with a statement sent after the Execute
     (`COMMIT` or `ROLLBACK`, as Parse/Bind/Execute of the unnamed statement), so the
     transaction, and the portal with it, ends in the round trip that read the first rows;
-    `read_first_page` skips its three answers.
+    `read_first_page` skips its three answers. `send_first_page` and `first_page_of` are its two
+    halves (the response, then the page with its types looked up), so `bind_first_page_then`
+    marks the transaction done as soon as the response says `COMMIT` succeeded.
   - Both read the whole response up to its `ReadyForQuery` before looking up any type: a
     lookup is a request of its own, answered after this one.
 - `src/transaction.rs`: a `begin` flag (`BEGIN` not sent yet) and the statements sent as that

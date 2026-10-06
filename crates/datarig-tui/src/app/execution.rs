@@ -799,7 +799,9 @@ impl App {
             // The coming first page of the running query is not held: past it the statement can
             // only run again.
             DbEvent::Released { id: qid } => {
-                t.exec.released = qid == t.exec.query_id;
+                if qid == t.exec.query_id {
+                    t.exec.released = true;
+                }
                 None
             }
             // The user's own transaction: results read in it are labelled,
@@ -949,6 +951,7 @@ impl App {
             DbEvent::Done { .. } | DbEvent::Failed { .. } if t.exec.resuming.is_some() => {
                 t.exec.resuming = None;
                 t.exec.running = None;
+                t.exec.released = false;
                 // Refused: the next page no longer offers to run it again.
                 t.exec.rerun_ok &= refused.is_none();
                 let m = if let Some(m) = refused {
@@ -994,8 +997,10 @@ impl App {
                     t.exec.rerun_ok = refusal.is_none();
                 }
                 if let Some(r) = refusal {
-                    let why = self.i18n.msg(&super::pages::why(&r)).to_string();
-                    let m = Notice::new(Msg::ResultsFirstPageOnly { count: count as u64, why }, Level::Warning);
+                    let m = Notice::new(
+                        super::pages::first_page_only(&self.i18n, t.answer_sql(), &r, count as u64),
+                        Level::Warning,
+                    );
                     t.exec.run.notes.push(m.clone());
                     t.exec.explain_rolled_back = false;
                     Some(m)
@@ -1062,6 +1067,7 @@ impl App {
             DbEvent::Done { outcome, elapsed, .. } => {
                 t.exec.succeeded(None);
                 t.exec.running = None;
+                t.exec.released = false;
                 // Rows an earlier run left on screen keep their paging state (closed).
                 if t.exec.kept_log.is_none() {
                     t.exec.paging = Paging::None;
@@ -1093,6 +1099,7 @@ impl App {
             DbEvent::Failed { cancelled, .. } => {
                 // The failed statement and the ones after it (never run) are unknown.
                 t.exec.unsure();
+                t.exec.released = false;
                 let was_fetch = t.exec.running.is_some_and(|r| r.fetch);
                 fetch_failed = was_fetch;
                 t.exec.running = None;

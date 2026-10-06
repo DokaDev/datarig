@@ -9,9 +9,11 @@
 //! transaction goes out in that write too ([`Transaction::bind_first_page_then`]): the first page
 //! leaves nothing open on the server (no transaction, no lock, no snapshot), whether more rows
 //! follow or not, and past it the app can only run the statement again (`Resume`); with
-//! `PagingMode::Hold` the portal and its transaction stay open while more rows follow. A statement the lexer knows returns no rows (DML without `RETURNING`, DDL,
-//! transaction control, ...: [`returns_no_rows`]) is parsed, bound and executed in one write
-//! ([`Client::execute_pipelined`]). Each later page is one round trip (Execute + Sync).
+//! `PagingMode::Hold` the portal and its transaction stay open while more rows follow. A
+//! statement the lexer knows returns no rows (DML without `RETURNING`, DDL, transaction control,
+//! ...: [`returns_no_rows`]) is parsed, bound and executed in one write
+//! ([`Client::execute_pipelined`]). Each later page of a held result is one round trip (Execute
+//! + Sync).
 //!
 //! Transactions: after a successful transaction control statement (`BEGIN`, `COMMIT`, ...) the
 //! session knows the block state from the statement itself ([`tx_after`]) and asks the server
@@ -1336,9 +1338,11 @@ enum After<'a> {
     Stale { all: bool, reply: Reply<'a> },
 }
 
-/// Run a row-returning statement through a portal. The last statement of a run keeps the
-/// portal open while more rows follow and serves `FetchMore` until the result is complete, a
-/// `ClosePortal` for it arrives, or another command ends it (that one is processed next).
+/// Run a row-returning statement through a portal. The last statement of a run held
+/// (`PagingMode::Hold`, or inside the user's block) keeps the portal open while more rows follow
+/// and serves `FetchMore` until the result is complete, a `ClosePortal` for it arrives, or
+/// another command ends it (that one is processed next); one not held ends its portal and
+/// transaction with its first page (`DbEvent::Released` before the page when more rows follow).
 #[allow(clippy::too_many_arguments)]
 async fn portal<'a>(
     client: &mut Client,

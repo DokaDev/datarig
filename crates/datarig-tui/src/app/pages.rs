@@ -48,6 +48,17 @@ pub(super) fn why(r: &NotRepeatable) -> Msg {
     }
 }
 
+/// Why a result not held shows `count` rows only (its statement `sql` is not run again for the
+/// user, for `r`): a statement that changes rows ran to its end and is committed (running it
+/// again would change rows again), anything else stopped after its first page.
+pub(super) fn first_page_only(i18n: &I18n, sql: &str, r: &NotRepeatable, count: u64) -> Msg {
+    if datarig_core::sql::risk::classify(sql).writes {
+        Msg::ResultsFirstPageOnlyWrite { count }
+    } else {
+        Msg::ResultsFirstPageOnly { count, why: i18n.msg(&why(r)).to_string() }
+    }
+}
+
 impl App {
     /// The origin of tab `t`'s results as they would be recorded now.
     pub(super) fn origin_now(t: &Tab) -> Option<Origin> {
@@ -144,6 +155,14 @@ impl App {
             if released { Msg::ResultsPageRefusedNoHold { why } } else { Msg::ResultsPageRefused { why } }
         };
         if let Err(r) = repeat::repeatable(&sql) {
+            if released && datarig_core::sql::risk::classify(&sql).writes {
+                let count = match &t.results {
+                    Results::Rows(rs) => rs.rows.len() as u64,
+                    _ => 0,
+                };
+                let m = first_page_only(&self.i18n, &sql, &r, count);
+                return self.tab_status(id, Notice::new(m, Level::Warning));
+            }
             let why = self.i18n.msg(&why(&r)).to_string();
             return self.tab_status(id, Notice::new(refused(why), Level::Warning));
         }
