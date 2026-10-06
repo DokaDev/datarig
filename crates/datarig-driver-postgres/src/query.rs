@@ -185,8 +185,7 @@ struct Env<'a> {
     /// Sent first in every transaction (a search path per transaction), if anything.
     path: Option<&'a str>,
     /// The name of the savepoint a count or the allowlist's question runs under inside a
-    /// transaction: made for the session ([`count_savepoint`]), so it is never one of the
-    /// user's own.
+    /// transaction ([`count_savepoint`]): never one of the user's own.
     savepoint: &'a str,
     /// Tests: runs right before each row-returning statement is bound (e.g. DDL on another
     /// connection, to make its prepared statement stale at will).
@@ -392,7 +391,6 @@ pub(crate) async fn query_loop(
     events: UnboundedSender<DbEvent>,
     settings: Settings,
 ) {
-    let savepoint = count_savepoint();
     let env = Env {
         events: &events,
         token: &token,
@@ -400,7 +398,7 @@ pub(crate) async fn query_loop(
         page_size: settings.page_size,
         read_only: settings.read_only,
         path: settings.path.as_deref(),
-        savepoint: &savepoint,
+        savepoint: count_savepoint(),
         #[cfg(test)]
         before_bind: None,
     };
@@ -1689,13 +1687,15 @@ fn skip_chunk(left: u64, page_size: usize) -> i32 {
     i32::try_from(want.min(SKIP_CHUNK.max(page_size as u64 + 1))).unwrap_or(i32::MAX)
 }
 
-/// The savepoint a count runs in inside a transaction.
-/// A savepoint name no other session (nor the user) uses: `datarig_count_` and 16 random hex
-/// digits.
-fn count_savepoint() -> String {
+/// The savepoint a count or the allowlist's question runs under inside a transaction: a name
+/// the user does not use, `datarig_count_` and 16 random hex digits, made once per process.
+pub fn count_savepoint() -> &'static str {
     use std::hash::{BuildHasher, Hasher};
-    let n = std::collections::hash_map::RandomState::new().build_hasher().finish();
-    format!("datarig_count_{n:016x}")
+    static NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    NAME.get_or_init(|| {
+        let n = std::collections::hash_map::RandomState::new().build_hasher().finish();
+        format!("datarig_count_{n:016x}")
+    })
 }
 
 /// The count in a simple query's answer (its first row's first value).

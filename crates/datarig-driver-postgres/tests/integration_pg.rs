@@ -3512,24 +3512,23 @@ async fn the_server_is_asked_before_a_statement_runs_again() {
     let DbEvent::Page { rows, more: true, .. } = c.result(7).await else { panic!("a page") };
     assert_eq!(rows[0][0].as_deref(), Some("11"));
     let _ = c.run(8, "SELECT 1").await;
-    // Refused inside the user's block: the block is as it was, and no savepoint is left.
-    let _ = c.run(9, "BEGIN").await;
-    let _ = c.run(10, "CREATE TEMP TABLE zz_kept (x int)").await;
-    let _ = c.run(11, "INSERT INTO zz_kept VALUES (1)").await;
-    assert_eq!(refused(c.count(12, &count_of("SELECT * FROM v")).await), N::NotATable("v".into()));
-    c.session.send(DbCommand::Resume { id: 13, sql: "SELECT abs('x')".into(), skip: 1, paging: PagingMode::Hold });
-    assert!(matches!(c.result(13).await, DbEvent::Failed { error: DbError::NotRepeatable(_), .. }));
-    assert_eq!(cell(&c.run(14, "SELECT count(*) FROM zz_kept").await).as_deref(), Some("1"));
-    for sp in ["datarig_resume", "datarig_count"] {
+    // Refused inside the user's block: the block is as it was, and no savepoint is left. Each
+    // savepoint is looked for in a block of its own (a failed RELEASE aborts the block).
+    for sp in ["datarig_resume", datarig_driver_postgres::count_savepoint()] {
+        let _ = c.run(9, "BEGIN").await;
+        let _ = c.run(10, "CREATE TEMP TABLE zz_kept (x int)").await;
+        let _ = c.run(11, "INSERT INTO zz_kept VALUES (1)").await;
+        assert_eq!(refused(c.count(12, &count_of("SELECT * FROM v")).await), N::NotATable("v".into()));
+        c.session.send(DbCommand::Resume { id: 13, sql: "SELECT abs('x')".into(), skip: 1, paging: PagingMode::Hold });
+        assert!(matches!(c.result(13).await, DbEvent::Failed { error: DbError::NotRepeatable(_), .. }));
+        assert_eq!(cell(&c.run(14, "SELECT count(*) FROM zz_kept").await).as_deref(), Some("1"));
         let DbEvent::Failed { error: DbError::Server(e), .. } = c.run(15, &format!("RELEASE SAVEPOINT {sp}")).await
         else {
             panic!("{sp} is left")
         };
         assert!(e.contains(sp), "{e}");
         let _ = c.run(16, "ROLLBACK").await;
-        let _ = c.run(17, "BEGIN").await;
     }
-    let _ = c.run(18, "ROLLBACK").await;
 }
 
 /// The allowlist's built-in operators and types (`risk::repeat::OPERATORS`, `TYPES`) are
