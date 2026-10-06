@@ -302,6 +302,9 @@ pub struct AsPlan {
     /// The allowlist's question to the server (`DbCommand::CheckRepeat`) this waits for
     /// instead of the user's answer.
     check: Option<u64>,
+    /// Its question opened by itself (on the server's answer): `y` counts only once the
+    /// dialog has been on screen for [`super::overlay::ARM_DELAY`].
+    own: bool,
 }
 
 impl AsPlan {
@@ -485,7 +488,10 @@ impl App {
     pub(super) fn explain_as_plan(&mut self) {
         let t = self.tab();
         let (id, sql) = (t.id, t.shown_sql().to_string());
-        if self.tab_busy(id) || self.pending_as_plan.as_ref().is_some_and(|p| p.tab == id && p.check.is_some()) {
+        if self.waiting_as_plan(id) {
+            return self.flash(Notice::new(Label::PlanAsPlanChecking, Level::Info));
+        }
+        if self.tab_busy(id) {
             return self.flash_busy();
         }
         let json = match plan::explain::json(&sql) {
@@ -522,6 +528,7 @@ impl App {
             json: json.sql,
             analyze: json.analyze,
             check: None,
+            own: false,
         };
         if json.evaluates {
             return self.ask_as_plan(p);
@@ -531,7 +538,12 @@ impl App {
         self.query_seq += 1;
         let check = self.query_seq;
         self.send_tab(id, DbCommand::CheckRepeat { id: check, sql: json.statement });
+        // One wait at a time: one on another tab ends here, said there.
+        if let Some(old) = self.pending_as_plan.take().filter(|o| o.check.is_some() && o.tab != id) {
+            self.tab_status(old.tab, Notice::new(Label::PlanAsPlanStale, Level::Warning));
+        }
         self.pending_as_plan = Some(AsPlan { check: Some(check), ..p });
+        self.tab_status(id, Notice::new(Label::PlanAsPlanChecking, Level::Info));
     }
 
     /// Ask whether to run `p` again, saying what runs.
@@ -544,7 +556,7 @@ impl App {
         };
         self.pending_as_plan = Some(AsPlan { check: None, ..p });
         self.confirm(title, title, Label::PlanAsPlanAnalyzeKeys, ConfirmAction::ExplainAgain);
-        if let Some(c) = self.overlays.confirm_mut() {
+        if let Some(c) = self.overlays.confirm_mut().filter(|c| c.action == ConfirmAction::ExplainAgain) {
             c.text = text;
         }
     }
@@ -567,8 +579,51 @@ impl App {
         }
         match result {
             Ok(()) => self.run_in(p.tab, vec![p.json]),
-            Err(_) => self.ask_as_plan(p),
+            // Never over a dialog or into what the user types: the next press asks.
+            Err(_) if self.overlays.top().is_some() || self.key_context().is_text_input() => {
+                let key = self.key_or_commands(Action::ExplainAsPlan);
+                let n = Notice::new(Msg::PlanAsPlanAskAgain { key }, Level::Warning);
+                self.tab_status(p.tab, n.clone());
+                self.flash(n);
+            }
+            Err(_) => self.ask_as_plan(AsPlan { own: true, ..p }),
         }
+    }
+
+    /// Tab `tab` waits for the server's answer to view its text plan as a plan.
+    pub(super) fn waiting_as_plan(&self, tab: TabId) -> bool {
+        self.pending_as_plan.as_ref().is_some_and(|p| p.tab == tab && p.check.is_some())
+    }
+
+    /// A wait for the server's answer lives only while its tab is there with the same
+    /// session: when that is gone (lost, replaced, the tab closed) the answer never comes, so
+    /// the wait ends here, said once. Called after every event.
+    pub(super) fn sweep_as_plan(&mut self) {
+        let Some(p) = self.pending_as_plan.as_ref().filter(|p| p.check.is_some()) else { return };
+        let alive = self.tabs.get(p.tab).is_some_and(|t| t.exec.generation == p.generation && t.exec.session.is_some());
+        if !alive {
+            self.end_as_plan_wait();
+        }
+    }
+
+    /// End the wait for the server's answer, if there is one: said on its tab (a notice of the
+    /// moment when it is the active one, its last outcome otherwise).
+    pub(super) fn end_as_plan_wait(&mut self) {
+        let Some(p) = self.pending_as_plan.take_if(|p| p.check.is_some()) else { return };
+        let n = Notice::new(Label::PlanAsPlanWaitEnded, Level::Warning);
+        if self.tabs.is_empty() || self.tab().id == p.tab || self.tabs.get(p.tab).is_none() {
+            self.flash(n);
+        } else {
+            self.tab_status(p.tab, n);
+        }
+    }
+
+    /// The question opened by itself and `y` came before it was armed (on screen for
+    /// [`super::overlay::ARM_DELAY`]): ignored, as a click would be.
+    pub(super) fn as_plan_unarmed(&self) -> bool {
+        let own = self.pending_as_plan.as_ref().is_some_and(|p| p.own);
+        let shown = self.overlays.confirm().and_then(|c| c.buttons.press.shown_at);
+        own && shown.is_none_or(|t| self.now().saturating_duration_since(t) < super::overlay::ARM_DELAY)
     }
 
     /// Running the `EXPLAIN` again was confirmed: it runs while its tab still shows the result

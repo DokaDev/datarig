@@ -332,6 +332,10 @@ impl App {
                 | ConfirmAction::OverwriteScript
                 | ConfirmAction::CloseTab(_)
         );
+        // A question that opened by itself takes no `y` typed as it came up.
+        if action == ConfirmAction::ExplainAgain && code == KeyCode::Char('y') && self.as_plan_unarmed() {
+            return;
+        }
         match code {
             KeyCode::Char('y') | KeyCode::Enter if !repeat => {
                 self.overlays.close(OverlayKind::Confirm);

@@ -209,8 +209,10 @@ pub enum DbCommand {
     /// as before a `Resume` or a `Count`, without running `sql`: answered with exactly one
     /// [`DbEvent::RepeatChecked`] of the same `id` (a statement whose text is off the
     /// allowlist answers [`DbError::NotRepeatable`] without asking). It reads the catalog only;
-    /// inside the user's block or a portal's transaction it runs under a savepoint rolled back
-    /// to after it, so it changes nothing there. A cancel stops it.
+    /// inside the user's block or a portal's transaction it runs under a savepoint of the
+    /// session's own (never one of the user's names) rolled back to after it, so it changes
+    /// nothing there; inside an aborted block it is not asked and answers a refusal. A cancel
+    /// stops it.
     CheckRepeat {
         id: u64,
         sql: String,

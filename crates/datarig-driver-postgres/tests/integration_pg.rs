@@ -3222,6 +3222,39 @@ async fn the_allowlist_question_alone_changes_nothing() {
     c.wait(|e| matches!(e, DbEvent::TxOpen(false)), 10).await;
 }
 
+/// The driver's own savepoint never meets one of the user's, whatever its name: inside an
+/// aborted block the allowlist's question is not asked (a refusal, so the app asks the user),
+/// and a count there leaves the user's `datarig_count` savepoint (and the block) as they were.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_users_own_savepoints_are_never_the_drivers() {
+    use datarig_core::sql::risk::repeat::NotRepeatable;
+    let Some(url) = pg_url("the_users_own_savepoints_are_never_the_drivers") else { return };
+    let mut c = Conn::open(&url, SessionRole::Query).await;
+    let _ = c.run(1, "CREATE TEMP TABLE zz_sp (x int)").await;
+    let _ = c.run(2, "BEGIN").await;
+    let _ = c.run(3, "INSERT INTO zz_sp VALUES (1)").await;
+    let _ = c.run(4, "SAVEPOINT datarig_count").await;
+    let _ = c.run(5, "INSERT INTO zz_sp VALUES (2)").await;
+    let _ = c.run(6, "SELECT 1/0").await;
+    // Aborted: refused without asking the server.
+    assert_eq!(c.check_repeat(10, "SELECT * FROM zz_sp").await, Err(DbError::NotRepeatable(NotRepeatable::Unreadable)));
+    assert!(c.count(11, &count_of("SELECT * FROM zz_sp")).await.is_err());
+    // Still aborted, and the user's savepoint is still there to go back to.
+    let DbEvent::Failed { .. } = c.run(7, "SELECT 1").await else { panic!("the block stays aborted") };
+    let DbEvent::Done { .. } = c.run(8, "ROLLBACK TO SAVEPOINT datarig_count").await else {
+        panic!("the user's savepoint is there")
+    };
+    let DbEvent::Page { rows, .. } = c.run(9, "SELECT count(*) FROM zz_sp").await else { panic!() };
+    assert_eq!(rows[0][0].as_deref(), Some("1"));
+    // In a healthy block a count and the question leave the user's savepoint too.
+    assert_eq!(c.count(12, &count_of("SELECT * FROM zz_sp")).await, Ok(1));
+    assert_eq!(c.check_repeat(13, "SELECT * FROM zz_sp").await, Ok(()));
+    let DbEvent::Done { .. } = c.run(14, "RELEASE SAVEPOINT datarig_count").await else {
+        panic!("the user's savepoint is still there")
+    };
+    let _ = c.run(15, "ROLLBACK").await;
+}
+
 /// On a read-only session a count runs in a read-only transaction.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_count_on_a_read_only_session_is_read_only() {

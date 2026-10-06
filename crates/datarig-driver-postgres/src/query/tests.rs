@@ -356,6 +356,7 @@ mod terminal {
                 page_size: 10,
                 read_only: false,
                 path: None,
+                savepoint: "datarig_count_test",
                 before_bind: hook,
             };
             let mut s = State { tx: &mut self.tx, prepared: &mut self.prepared };
@@ -380,6 +381,7 @@ mod terminal {
                 page_size: 10,
                 read_only: false,
                 path: None,
+                savepoint: "datarig_count_test",
                 before_bind: hook,
             };
             let mut s = State { tx: &mut self.tx, prepared: &mut self.prepared };

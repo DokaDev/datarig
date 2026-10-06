@@ -184,6 +184,10 @@ struct Env<'a> {
     read_only: bool,
     /// Sent first in every transaction (a search path per transaction), if anything.
     path: Option<&'a str>,
+    /// The name of the savepoint a count or the allowlist's question runs under inside a
+    /// transaction: made for the session ([`count_savepoint`]), so it is never one of the
+    /// user's own.
+    savepoint: &'a str,
     /// Tests: runs right before each row-returning statement is bound (e.g. DDL on another
     /// connection, to make its prepared statement stale at will).
     #[cfg(test)]
@@ -388,6 +392,7 @@ pub(crate) async fn query_loop(
     events: UnboundedSender<DbEvent>,
     settings: Settings,
 ) {
+    let savepoint = count_savepoint();
     let env = Env {
         events: &events,
         token: &token,
@@ -395,6 +400,7 @@ pub(crate) async fn query_loop(
         page_size: settings.page_size,
         read_only: settings.read_only,
         path: settings.path.as_deref(),
+        savepoint: &savepoint,
         #[cfg(test)]
         before_bind: None,
     };
@@ -1684,7 +1690,13 @@ fn skip_chunk(left: u64, page_size: usize) -> i32 {
 }
 
 /// The savepoint a count runs in inside a transaction.
-const COUNT_SAVEPOINT: &str = "datarig_count";
+/// A savepoint name no other session (nor the user) uses: `datarig_count_` and 16 random hex
+/// digits.
+fn count_savepoint() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    let n = std::collections::hash_map::RandomState::new().build_hasher().finish();
+    format!("datarig_count_{n:016x}")
+}
 
 /// The count in a simple query's answer (its first row's first value).
 fn count_of(msgs: &[SimpleQueryMessage]) -> Result<u64, DbError> {
@@ -1731,10 +1743,11 @@ async fn count(
         Ok(check) => check,
         Err(why) => return Ok((Err(why), false)),
     };
+    let sp = env.savepoint;
     if tx.block {
         let first = tx.take_first_text(env);
-        let asked = format!("{first}SAVEPOINT {COUNT_SAVEPOINT}; {ISOLATION}; {check}");
-        let text = format!("{sql}; RELEASE SAVEPOINT {COUNT_SAVEPOINT}");
+        let asked = format!("{first}SAVEPOINT {sp}; {ISOLATION}; {check}");
+        let text = format!("{sql}; RELEASE SAVEPOINT {sp}");
         let (fixed, answer) = checked(link, env, client.simple_query(&asked)).await?;
         let counted = match answer {
             Ok(()) => match link.guard(Some(env.token), client.simple_query(&text)).await? {
@@ -1745,7 +1758,7 @@ async fn count(
         };
         // Back to before the count (an aborted block refuses this too, and stays as it was);
         // the probe tells the block's state either way.
-        let _ = link.guard(None, client.batch_execute(COUNT_UNDO)).await?;
+        let _ = link.guard(None, client.batch_execute(&count_undo(env))).await?;
         probe(client, link, env, tx).await?;
         return Ok((Err(counted), false));
     }
@@ -1786,8 +1799,9 @@ async fn counted_in(
         Ok(check) => check,
         Err(why) => return Ok((Err(why), false)),
     };
-    let asked = format!("SAVEPOINT {COUNT_SAVEPOINT}; {ISOLATION}; {check}");
-    let text = format!("{sql}; RELEASE SAVEPOINT {COUNT_SAVEPOINT}");
+    let sp = env.savepoint;
+    let asked = format!("SAVEPOINT {sp}; {ISOLATION}; {check}");
+    let text = format!("{sql}; RELEASE SAVEPOINT {sp}");
     let (fixed, answer) = checked(link, env, txn.simple_query(&asked)).await?;
     let counted = match answer {
         Ok(()) => match link.guard(Some(env.token), txn.simple_query(&text)).await? {
@@ -1796,7 +1810,7 @@ async fn counted_in(
         },
         Err(why) => why,
     };
-    let _ = link.guard(None, txn.batch_execute(COUNT_UNDO)).await?;
+    let _ = link.guard(None, txn.batch_execute(&count_undo(env))).await?;
     Ok((Err(counted), false))
 }
 
@@ -1814,11 +1828,16 @@ async fn check_repeat(
         Ok(check) => check,
         Err(why) => return Ok(Err(why)),
     };
+    let sp = env.savepoint;
+    // An aborted block takes nothing but its end: not asked, refused (the user is asked).
+    if tx.block && tx.aborted {
+        return Ok(Err(DbError::NotRepeatable(risk::repeat::NotRepeatable::Unreadable)));
+    }
     if tx.block {
         let first = tx.take_first_text(env);
-        let asked = format!("{first}SAVEPOINT {COUNT_SAVEPOINT}; {check}");
+        let asked = format!("{first}SAVEPOINT {sp}; {check}");
         let (_, answer) = checked(link, env, client.simple_query(&asked)).await?;
-        let undone = link.guard(None, client.batch_execute(COUNT_UNDO)).await?;
+        let undone = link.guard(None, client.batch_execute(&count_undo(env))).await?;
         if answer.is_err() || undone.is_err() {
             probe(client, link, env, tx).await?;
         }
@@ -1840,9 +1859,10 @@ async fn checked_repeat_in(
         Ok(check) => check,
         Err(why) => return Ok(Err(why)),
     };
-    let asked = format!("SAVEPOINT {COUNT_SAVEPOINT}; {check}");
+    let sp = env.savepoint;
+    let asked = format!("SAVEPOINT {sp}; {check}");
     let (_, answer) = checked(link, env, txn.simple_query(&asked)).await?;
-    let _ = link.guard(None, txn.batch_execute(COUNT_UNDO)).await?;
+    let _ = link.guard(None, txn.batch_execute(&count_undo(env))).await?;
     Ok(answer)
 }
 
@@ -1850,8 +1870,12 @@ async fn checked_repeat_in(
 /// count says whether it saw the transaction's one snapshot. No round trip of its own.
 const ISOLATION: &str = "SELECT pg_catalog.current_setting('transaction_isolation')";
 
-/// Back to before [`COUNT_SAVEPOINT`] when a count failed, was cancelled or was refused.
-const COUNT_UNDO: &str = "ROLLBACK TO SAVEPOINT datarig_count; RELEASE SAVEPOINT datarig_count";
+/// Back to before the session's count savepoint ([`Env::savepoint`]) when a count failed, was
+/// cancelled or was refused, or after the allowlist's question.
+fn count_undo(env: &Env<'_>) -> String {
+    let sp = env.savepoint;
+    format!("ROLLBACK TO SAVEPOINT {sp}; RELEASE SAVEPOINT {sp}")
+}
 
 /// The query that asks the server what only it can tell for the allowlist about `sql`
 /// (`risk::repeat::check_query` of the objects it names) right before the app runs it again or

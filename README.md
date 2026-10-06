@@ -220,7 +220,9 @@ Everything below works today, with PostgreSQL.
   `Space e p`, or the action menu) plans that same statement again with `FORMAT JSON`, keeping
   its other options, and opens its plan; never by itself. It goes without a question only when
   the statement it wraps is a plain `SELECT` the app would also run again for a next page (the
-  same allowlist, its server check included: no view, no user operator or overloaded name);
+  same allowlist, its server check included: no view, no user operator or overloaded name;
+  like that allowlist it trusts functions to be labelled honestly, so a function wrongly
+  declared `IMMUTABLE` or `STABLE` can still run while the statement is planned);
   anything else asks first, saying what runs again (`ANALYZE` runs the statement, rolled back;
   an `EXECUTE`'s parameters or what a view hides are evaluated to plan it, not rolled back). It is
   refused when the tab ran other statements since, when the result came with other statements,

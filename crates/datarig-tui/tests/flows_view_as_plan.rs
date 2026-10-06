@@ -520,3 +520,89 @@ fn a_plain_explain_runs_again_only_once_the_server_allows_it() {
     h.db(DbEvent::RepeatChecked { id, result: Ok(()) });
     assert!(runs(&mut h).is_empty() && h.overlay_kind().is_none());
 }
+
+/// The `CheckRepeat` just sent, if one was.
+fn check_sent(h: &mut Harness) -> Option<u64> {
+    h.sent().into_iter().find_map(|c| match c {
+        DbCommand::CheckRepeat { id, .. } => Some(id),
+        _ => None,
+    })
+}
+
+#[test]
+fn a_wait_for_the_server_ends_with_its_session_or_a_cancel() {
+    use datarig_core::driver::DbError;
+    // The session is lost while the server is asked: the wait ends, said once, and the next
+    // press asks again (not "a query is running").
+    let mut h = text_plan("EXPLAIN SELECT * FROM t;");
+    h.keys("P");
+    assert!(check_sent(&mut h).is_some());
+    h.tab_db(0, DbEvent::Lost { error: DbError::Server("gone".into()) });
+    said(&mut h, Label::PlanAsPlanWaitEnded);
+    ran(&mut h, "EXPLAIN SELECT a FROM t;", |id| text_page(id, TEXT_PLAN));
+    h.keys("P");
+    assert!(check_sent(&mut h).is_some(), "asked again");
+    // Ctrl+C on the tab ends the wait too, and a late answer does nothing.
+    let mut h = text_plan("EXPLAIN SELECT * FROM t;");
+    h.keys("P");
+    let id = check_sent(&mut h).expect("asked");
+    h.ctrl('c');
+    said(&mut h, Label::PlanAsPlanWaitEnded);
+    h.db(DbEvent::RepeatChecked { id, result: Ok(()) });
+    assert!(runs(&mut h).is_empty() && h.overlay_kind().is_none());
+    h.keys("P");
+    assert!(check_sent(&mut h).is_some(), "asked again");
+}
+
+#[test]
+fn the_wait_is_shown_and_a_late_question_never_lands_on_what_the_user_does() {
+    use datarig_core::driver::DbError;
+    use datarig_core::sql::risk::repeat::NotRepeatable;
+    let refused = || Err(DbError::NotRepeatable(NotRepeatable::NotATable("v".into())));
+    let mut h = text_plan("EXPLAIN SELECT * FROM v;");
+    h.keys("P");
+    let id = check_sent(&mut h).expect("asked");
+    said(&mut h, Label::PlanAsPlanChecking);
+    // A second press says it waits, it does not claim a query runs.
+    h.keys("P");
+    said(&mut h, Label::PlanAsPlanChecking);
+    // The command line is open when the refusal comes: no question over it, a notice instead.
+    h.keys(":");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Commands));
+    h.db(DbEvent::RepeatChecked { id, result: refused() });
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Commands));
+    let line = h.status(220, H);
+    assert!(line.contains("press P again"), "{line}");
+    h.key(KeyCode::Esc);
+    // Asked again with nothing on top: the question opens, and takes no `y` before it is armed.
+    h.keys("P");
+    let id = check_sent(&mut h).expect("asked again");
+    h.db(DbEvent::RepeatChecked { id, result: refused() });
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Confirm));
+    h.draw(W, H);
+    h.keys("y");
+    assert!(runs(&mut h).is_empty(), "a `y` typed as it opened does not run it");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Confirm));
+    h.advance(Duration::from_millis(500));
+    h.keys("y");
+    assert_eq!(sent_one(&mut h).1, "EXPLAIN (FORMAT JSON) SELECT * FROM v");
+}
+
+#[test]
+fn a_press_on_another_tab_ends_the_first_wait_with_a_word() {
+    let mut h = text_plan("EXPLAIN SELECT * FROM t;");
+    let first = h.app.tab().id;
+    h.keys("P");
+    let id = check_sent(&mut h).expect("asked");
+    h.app.focus = Focus::Editor;
+    h.ctrl('t');
+    h.sent();
+    ran(&mut h, "EXPLAIN SELECT a FROM t;", |q| text_page(q, TEXT_PLAN));
+    h.keys("P");
+    assert!(check_sent(&mut h).is_some());
+    let t = h.app.tabs.get(first).expect("the first tab");
+    assert_eq!(t.status.as_ref().map(|n| n.msg.clone()), Some(Label::PlanAsPlanStale.into()));
+    // Its late answer does nothing.
+    h.db(DbEvent::RepeatChecked { id, result: Ok(()) });
+    assert!(runs(&mut h).is_empty());
+}
