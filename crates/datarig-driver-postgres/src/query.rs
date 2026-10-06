@@ -5,7 +5,11 @@
 //! trip when the statement is prepared already and two when it is not. `BEGIN` (outside the
 //! user's block), Bind, Describe, Execute and Sync of the first page go out in one write
 //! ([`Transaction::bind_first_page`]); prepared statements are kept per session by their text
-//! ([`Prepared`]). A statement the lexer knows returns no rows (DML without `RETURNING`, DDL,
+//! ([`Prepared`]). By default (`PagingMode::NoHold`) the `COMMIT` that ends the portal's
+//! transaction goes out in that write too ([`Transaction::bind_first_page_then`]): the first page
+//! leaves nothing open on the server (no transaction, no lock, no snapshot), whether more rows
+//! follow or not, and past it the app can only run the statement again (`Resume`); with
+//! `PagingMode::Hold` the portal and its transaction stay open while more rows follow. A statement the lexer knows returns no rows (DML without `RETURNING`, DDL,
 //! transaction control, ...: [`returns_no_rows`]) is parsed, bound and executed in one write
 //! ([`Client::execute_pipelined`]). Each later page is one round trip (Execute + Sync).
 //!

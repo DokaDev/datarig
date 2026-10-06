@@ -1,5 +1,7 @@
-//! Paging through the real `App` event path with a fake clock (policy
-//! `paging_idle_timeout`, explicit pages). The grid shows one page at a time:
+//! Paging through the real `App` event path with a fake clock (policy `paging` and
+//! `paging_idle_timeout`, explicit pages). A result the driver did not hold (`Released` before
+//! its first page, the default `paging = "no_hold"`) pages only by running its SELECT again; the
+//! other tests answer as a driver holding the portal does. The grid shows one page at a time:
 //! `n`/`p` (and the title's `‹`/`›`) move between pages, pages already fetched come from the
 //! result's rows without a command, the page past them is fetched while the portal is open.
 //! The results title says where the pages are on its right, in parentheses. A portal outside
