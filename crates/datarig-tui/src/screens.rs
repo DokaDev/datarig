@@ -32,6 +32,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     let _theme = theme::scope(app.theme.clone());
     let th = theme::cur();
     let area = f.area();
+    app.note_top();
     f.buffer_mut().set_style(area, th.base());
     if area.width < MIN_W || area.height < MIN_H {
         app.layout = Layout { too_small: true, ..Layout::default() };

@@ -687,3 +687,28 @@ fn a_question_uncovered_by_a_closing_dialog_ignores_a_press_at_once() {
     h.mouse(MouseEventKind::Up(MouseButton::Left), trust.x + 1, trust.y);
     assert_eq!(krx.try_recv(), Ok(true));
 }
+
+/// A question covered and uncovered only while the screen was too small to draw (no frame of
+/// it covered) still waits the arming delay once the screen grows back.
+#[test]
+fn a_question_covered_only_while_the_screen_is_too_small_waits_again() {
+    use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+    let (mut h, id) = harness();
+    let generation = connect(&mut h, id);
+    let (ktx, mut krx) = oneshot::channel();
+    tunnel(&mut h, id, generation, TunnelEvent::Ask(TunnelAsk::HostKey(question(Vec::new()), ktx)));
+    h.draw(100, 30);
+    h.advance(Duration::from_secs(5));
+    h.draw(40, 10);
+    let (stx, _srx) = oneshot::channel();
+    tunnel(&mut h, id, generation, TunnelEvent::Ask(TunnelAsk::Secret(SecretAsk::Password { wrong: false }, stx)));
+    h.draw(40, 10);
+    h.type_text("pw");
+    h.key(KeyCode::Enter);
+    h.draw(40, 10);
+    h.draw(100, 30);
+    let trust = h.app.overlays.confirm().unwrap().buttons.rects[1];
+    h.mouse(MouseEventKind::Down(MouseButton::Left), trust.x + 1, trust.y);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), trust.x + 1, trust.y);
+    assert!(krx.try_recv().is_err(), "trusted at once after the screen grew back");
+}

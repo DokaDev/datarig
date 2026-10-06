@@ -663,6 +663,8 @@ pub struct App {
     pub(crate) tab_hits: Vec<(u16, u16, crate::widgets::tabbar::TabHit)>,
     /// The small clickable target under the pointer (drawn highlighted).
     pub pointer_on: Option<hover::PointerOn>,
+    /// The kind of the top dialog the last frame saw (`App::note_top`).
+    last_top: Option<OverlayKind>,
 }
 
 fn test_msg(i18n: &I18n, t: &ConnTest) -> Notice {
@@ -889,6 +891,7 @@ impl App {
             strip_hits: Vec::new(),
             tab_hits: Vec::new(),
             pointer_on: None,
+            last_top: None,
             pending_context: None,
             pending_use: None,
             last_save_folder: None,

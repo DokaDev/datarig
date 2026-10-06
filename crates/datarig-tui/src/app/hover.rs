@@ -24,6 +24,16 @@ pub enum PointerOn {
 }
 
 impl App {
+    /// Every frame, also one too small to draw: a dialog that came on top since the last one
+    /// (opened, or uncovered by one that closed) starts its arming clock over, even when no
+    /// frame showed it covered.
+    pub fn note_top(&mut self) {
+        let top = self.overlays.top().map(|o| o.kind());
+        if std::mem::replace(&mut self.last_top, top) != top {
+            self.overlays.rearm_top();
+        }
+    }
+
     /// The target drawn highlighted: none while a dialog is open.
     pub(crate) fn pointer_hover(&self) -> Option<PointerOn> {
         self.pointer_on.filter(|_| !self.modal_open())

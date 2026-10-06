@@ -349,6 +349,22 @@ impl Overlays {
         self.0.is_empty()
     }
 
+    /// The top dialog's arming clock and arm start over (it just came on top).
+    pub fn rearm_top(&mut self) {
+        match self.0.last_mut() {
+            Some(Overlay::Confirm(c)) => c.buttons.press = Press::default(),
+            Some(Overlay::RunConfirm(c)) => c.buttons.press = Press::default(),
+            Some(Overlay::IconsAsk(q)) => q.buttons.press = Press::default(),
+            Some(Overlay::Password(p)) => p.buttons.press = Press::default(),
+            Some(Overlay::NameInput(n)) => n.buttons.press = Press::default(),
+            Some(Overlay::ProfileForm(f)) => f.press = Press::default(),
+            Some(Overlay::Chooser(c)) => c.press = Press::default(),
+            Some(Overlay::QuickConnect(q)) => q.press = Press::default(),
+            Some(Overlay::Commands(c)) => c.press = Press::default(),
+            _ => {}
+        }
+    }
+
     /// A dialog that blocks the screen below it (everything but the cell viewer).
     pub fn modal(&self) -> bool {
         self.0.iter().any(|o| o.kind() != OverlayKind::CellViewer)
