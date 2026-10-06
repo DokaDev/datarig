@@ -5,7 +5,7 @@ expression: "h.draw(W, H).backend()"
 "╭ Explorer ─────────────╮ 1 console 1 ×                                                             "
 "│  ＋ New connection    │╭ Query · console 1 ──────────────────────────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
 "│▾ ●   local-pg         ││ local-pg / datarig  127.0.0.1:55432 · policy: default                   │"
-"│  ▾ datarig default    ││  1▎EXPLAIN ANALYZE SELECT * FROM t;                                     │"
+"│  ▾ datarig default    ││  1▎EXPLAIN ANALYZE SELECT * FROM t;  ✓ 2 rows · 2ms · 14:03             │"
 "│    ▸ analytics        ││                                                                         │"
 "│    ▸ public           ││                                                                         │"
 "│    ▸ shop             ││                                                                         │"
