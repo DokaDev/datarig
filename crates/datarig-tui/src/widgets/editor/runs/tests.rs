@@ -34,8 +34,8 @@ fn spans_follow_edits_before_them_and_note_edits_of_their_text() {
     let mut s = Span::new(10, 20, true);
     s.adjust(0, 0, 3, false);
     assert_eq!((s.start, s.end, s.edited), (13, 23, false), "typed before it");
-    s.adjust(13, 13, 2, false);
-    assert_eq!((s.start, s.end, s.edited), (15, 25, false), "typed right before its first character");
+    s.adjust(13, 13, 2, true);
+    assert_eq!((s.start, s.end, s.edited), (15, 25, false), "blanks typed right before its first character");
     s.adjust(25, 25, 4, false);
     assert_eq!((s.start, s.end, s.edited), (15, 25, false), "typed right after its `;`");
     s.adjust(30, 40, 0, false);
@@ -50,6 +50,10 @@ fn spans_follow_edits_before_them_and_note_edits_of_their_text() {
     assert!(!s.edited);
     s.adjust(8, 8, 1, false);
     assert!(s.edited);
+    // Text typed right before its first character joins it (`EXPLAIN `, `-- `).
+    let mut s = Span::new(10, 20, true);
+    s.adjust(10, 10, 8, false);
+    assert!(s.edited, "typed right before its first character");
     // Deleted with what is around it.
     let mut s = Span::new(10, 20, true);
     s.adjust(5, 25, 0, false);
@@ -125,5 +129,57 @@ fn hint_marks_are_glyphs_or_text_never_emoji() {
         for on in [true, false] {
             assert_eq!(crate::text::width(k.mark(on)), 1, "{k:?}");
         }
+    }
+}
+
+/// Run `text`'s statement under the cursor (the first line) as query 1 and finish it with a
+/// hint; the editor.
+fn hinted(text: &str) -> Editor {
+    let mut e = Editor::new(text);
+    run(&mut e, 1);
+    e.finish_run(1, vec![hint("one")]);
+    assert_eq!(e.run_hints().count(), 1);
+    e
+}
+
+/// Text joined to a statement changes it: its hint goes. A statement without `;` continued on
+/// its line or the next, a word put before it, `gcc` commenting it out.
+#[test]
+fn joining_text_to_a_statement_is_an_edit_of_it() {
+    for (text, keys_) in [
+        ("SELECT 1", "A FROM t\x1b"),
+        ("SELECT 1", "oWHERE false\x1b"),
+        ("SELECT 1;", "0iEXPLAIN \x1b"),
+        ("SELECT 1;", "gcc"),
+    ] {
+        let mut e = hinted(text);
+        keys(&mut e, keys_);
+        assert_eq!(e.run_hints().count(), 0, "{text:?} then {keys_:?}: {:?}", e.text());
+    }
+    // Blank lines, and a statement of its own after the `;`, leave it.
+    for (text, keys_) in [("SELECT 1", "o\x1b"), ("SELECT 1;", "A SELECT 2;\x1b"), ("SELECT 1;", "O\x1b")] {
+        let mut e = hinted(text);
+        keys(&mut e, keys_);
+        assert_eq!(e.run_hints().count(), 1, "{text:?} then {keys_:?}: {:?}", e.text());
+    }
+    // The same while it runs: its answer never attaches to the changed text.
+    let mut e = Editor::new("SELECT 1");
+    run(&mut e, 1);
+    keys(&mut e, "A FROM t\x1b");
+    e.finish_run(1, vec![hint("one")]);
+    assert_eq!(e.run_hints().count(), 0);
+}
+
+/// A change before a statement that moves its bounds (a `;` deleted, a comment or a string
+/// opened) drops its hint, though the change is not in its text.
+#[test]
+fn a_change_before_a_statement_that_moves_its_bounds_drops_its_hint() {
+    for keys_ in ["gg$x", "ggI/* \x1b", "ggA '\x1b"] {
+        let mut e = Editor::new("SELECT 0;\nSELECT 1;");
+        keys(&mut e, "j");
+        run(&mut e, 1);
+        e.finish_run(1, vec![hint("one")]);
+        keys(&mut e, keys_);
+        assert_eq!(e.run_hints().count(), 0, "{keys_:?}: {:?}", e.text());
     }
 }

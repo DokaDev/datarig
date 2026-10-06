@@ -50,6 +50,7 @@ impl App {
     /// connects it and runs once it is.
     pub(super) fn run_in(&mut self, id: TabId, statements: Vec<String>) {
         if self.tab_busy(id) {
+            self.unstage_run(id);
             self.flash_busy();
             return;
         }
@@ -59,9 +60,11 @@ impl App {
         };
         // Checked before anything is queued or sent.
         if let Some(refused) = self.unsupported(&statements) {
+            self.unstage_run(id);
             return self.tab_status(id, refused);
         }
         if let Some(refused) = self.read_only_refusal(id, pid, &statements) {
+            self.unstage_run(id);
             return self.tab_status(id, refused);
         }
         let items = self.dangerous(id, pid, &statements);
@@ -76,11 +79,13 @@ impl App {
     /// before, so nothing it refuses ever reaches a session.
     pub(super) fn run_approved(&mut self, id: TabId, statements: Vec<String>) {
         if self.tab_busy(id) {
+            self.unstage_run(id);
             self.flash_busy();
             return;
         }
         let Some(pid) = self.tabs.get(id).and_then(|t| t.profile) else { return };
         if let Some(refused) = self.read_only_refusal(id, pid, &statements) {
+            self.unstage_run(id);
             return self.tab_status(id, refused);
         }
         let Some(t) = self.tabs.get(id) else { return };
@@ -187,6 +192,7 @@ impl App {
             return self.cancel_connect(p);
         }
         if self.take_queued(id).is_some() {
+            self.unstage_run(id);
             return self.tab_status(id, Notice::new(Label::QueryCancelled, Level::Warning));
         }
         // A copy that fetches every row first stops now: a page that lands after this asks
@@ -275,6 +281,7 @@ impl App {
     /// profile it waited for).
     pub(super) fn drop_queued(&mut self, id: TabId, why: impl FnOnce(String) -> Msg) {
         if let Some(q) = self.take_queued(id) {
+            self.unstage_run(id);
             let name = self.profile(q.profile).map(|p| p.name.clone()).unwrap_or_default();
             self.tab_status(id, Notice::new(why(name), Level::Warning));
         }
@@ -287,6 +294,7 @@ impl App {
         let pending = self.conns.get_mut(id).map(|c| std::mem::take(&mut c.pending)).unwrap_or_default();
         let name = self.profile(id).map(|p| p.name.clone()).unwrap_or_default();
         for q in pending {
+            self.unstage_run(q.tab);
             self.tab_status(q.tab, Notice::new(Msg::QueryQueuedFailed { name: name.clone() }, Level::Warning));
         }
     }

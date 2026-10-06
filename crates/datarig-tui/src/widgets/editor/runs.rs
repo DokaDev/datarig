@@ -4,16 +4,23 @@
 //!
 //! Each statement is a [`Span`] of bytes that every change of the text moves
 //! ([`Runs::adjust`], called by each splice): a change before it shifts it, a change after it
-//! leaves it, and a change inside it marks it edited. A hint goes with the first change of its
-//! statement's text; a run whose statement was edited while it ran gets no hint for it (its
-//! answer is about text that is no longer there), and the statement stays marked while it runs.
+//! leaves it, and a change inside it (or text put right before its first character) marks it
+//! edited. A change next to it or before it can also change what the statement is without
+//! touching its bytes (text joined to a statement without `;`, a `;` deleted, a comment or a
+//! string opened earlier): a span is checked against the text before its hint is drawn or
+//! made ([`Editor::check_spans`]), and one that is no longer exactly a statement is edited
+//! too. A hint goes with the first change of its statement; a run whose statement was edited
+//! while it ran gets no hint for it (its answer is about text that is no longer there), and the
+//! statement stays marked while it runs.
 //!
 //! A run is bound to the app's query id: the app stages the statements the user asked to run
 //! ([`Editor::stage_run`]), binds them to the query id when it sends them
 //! ([`Editor::start_run`]) and hands the outcomes back when that run ended
 //! ([`Editor::finish_run`]). An editor replaced in its tab drops all of it.
 
+use super::lexing::REGION_LINES;
 use super::{Editor, Sel};
+use datarig_core::sql::lexer::{Tok, lex};
 use datarig_core::sql::split::split;
 
 /// Hints kept at most; past it the oldest go.
@@ -29,11 +36,13 @@ pub struct Span {
     closed: bool,
     /// Its own text changed since the run took it.
     edited: bool,
+    /// The version of the text it was last found to be a statement of.
+    checked: Option<u64>,
 }
 
 impl Span {
     pub fn new(start: usize, end: usize, closed: bool) -> Self {
-        Self { start, end, closed, edited: false }
+        Self { start, end, closed, edited: false, checked: None }
     }
 
     /// Bytes `a..b` were replaced with `ins` (`blank`: only blanks, put in without removing
@@ -41,8 +50,9 @@ impl Span {
     fn adjust(&mut self, a: usize, b: usize, ins: usize, blank: bool) {
         let delta = ins as isize - (b - a) as isize;
         let shift = |x: usize| (x as isize + delta).max(0) as usize;
-        if b <= self.start {
-            // Before it (text typed right before its first character included).
+        if b < self.start || (b == self.start && (a < b || blank)) {
+            // Before it; blanks typed right before its first character too (text there joins
+            // it).
             self.start = shift(self.start);
             self.end = shift(self.end);
         } else if a > self.end || (a == self.end && (self.closed || blank)) {
@@ -187,6 +197,17 @@ impl Editor {
         self.runs.active = Some((query, spans));
     }
 
+    /// What was staged is not run (refused, dropped at the confirmation or while it waited):
+    /// nothing a later run could take is left.
+    pub fn unstage_run(&mut self) {
+        self.runs.staged = None;
+    }
+
+    /// Statements staged for a run that was not sent yet.
+    pub fn has_staged_run(&self) -> bool {
+        self.runs.staged.is_some()
+    }
+
     /// The query id of the run marked on the text, while it runs.
     pub fn active_run(&self) -> Option<u64> {
         self.runs.active.as_ref().map(|(q, _)| *q)
@@ -199,6 +220,7 @@ impl Editor {
         if self.active_run() != Some(query) {
             return;
         }
+        self.check_spans(true, |_| false);
         let Some((_, spans)) = self.runs.active.take() else { return };
         for (index, (span, hint)) in spans.into_iter().zip(hints).enumerate() {
             if let Some(hint) = hint.filter(|_| !span.edited) {
@@ -213,6 +235,11 @@ impl Editor {
     /// The query id of the last run whose statements got their hints.
     pub fn last_run(&self) -> Option<u64> {
         self.runs.last
+    }
+
+    /// What the hint of statement `index` of run `query` says, if it has one.
+    pub fn run_hint_kind(&self, query: u64, index: usize) -> Option<HintKind> {
+        self.runs.hints.iter().find(|h| h.query == query && h.index == index).map(|h| h.hint.kind)
     }
 
     /// What statement `index` of run `query` did, as the app learned after the run ended (the
@@ -237,9 +264,80 @@ impl Editor {
         spans.get(i).map(|s| (*s, frame))
     }
 
-    /// The hints, oldest first (tests).
-    pub fn run_hints(&self) -> impl Iterator<Item = (&Span, &RunHint)> {
+    /// The hints, oldest first, each checked against the text (tests, the benchmark).
+    pub fn run_hints(&mut self) -> impl Iterator<Item = (&Span, &RunHint)> {
+        self.check_spans(false, |_| true);
         self.runs.hints.iter().map(|h| (&h.span, &h.hint))
+    }
+
+    /// Check the spans of the hints `pick` takes (and of the run in progress with `active`) that were not checked
+    /// since the text last changed: one that is no longer exactly a statement of the text is
+    /// edited, and its hint goes. The lines around them are split as the whole text would be:
+    /// from where the lexer's state is known, a statement counted only past the first `;` (unless
+    /// from the text's start) and up to the last `;` (unless to its end); more lines when a span
+    /// is not inside that.
+    pub(super) fn check_spans(&mut self, active: bool, pick: impl Fn(&Span) -> bool) {
+        let version = self.version;
+        let unchecked = |s: &Span| !s.edited && s.checked != Some(version);
+        let run = self.runs.active.iter().filter(|_| active).flat_map(|(_, s)| s.iter());
+        let hinted = self.runs.hints.iter().map(|h| &h.span).filter(|s| pick(s));
+        let mut todo: Vec<(usize, usize)> =
+            hinted.chain(run).filter(|s| unchecked(s)).map(|s| (s.start, s.end)).collect();
+        if todo.is_empty() {
+            return;
+        }
+        let lo = todo.iter().map(|s| s.0).min().unwrap_or(0);
+        let hi = todo.iter().map(|s| s.1).max().unwrap_or(0);
+        let n = self.lines.len();
+        let (lo_line, hi_line) = (self.pos_bytes(lo).0, self.pos_bytes(hi).0);
+        let mut k = REGION_LINES;
+        let mut holds: Vec<(usize, usize)> = Vec::new();
+        let mut broken: Vec<(usize, usize)> = Vec::new();
+        loop {
+            let (first, last) = (lo_line.saturating_sub(k), (hi_line + k + 1).min(n));
+            let (base, region) = self.region_text(first, last);
+            let toks = lex(&region);
+            let mut semis = toks.iter().filter(|t| t.kind == Tok::Semi);
+            let from = if base == 0 { 0 } else { semis.next().map_or(usize::MAX, |t| base + t.end) };
+            let to = if last == n {
+                usize::MAX
+            } else {
+                toks.iter().rfind(|t| t.kind == Tok::Semi).map_or(0, |t| base + t.end)
+            };
+            let stmts: Vec<(usize, usize)> = split(&region).iter().map(|st| (base + st.start, base + st.end)).collect();
+            let whole = base == 0 && last == n;
+            todo.retain(|&(a, b)| {
+                if a >= from && b <= to {
+                    if stmts.binary_search(&(a, b)).is_ok() {
+                        holds.push((a, b))
+                    } else {
+                        broken.push((a, b))
+                    }
+                    false
+                } else if whole {
+                    broken.push((a, b));
+                    false
+                } else {
+                    true
+                }
+            });
+            if todo.is_empty() {
+                break;
+            }
+            k = k.saturating_mul(4);
+        }
+        let hints = self.runs.hints.iter_mut().map(|h| &mut h.span);
+        for s in hints.chain(self.runs.active.iter_mut().flat_map(|(_, s)| s.iter_mut())) {
+            if !unchecked(s) {
+                continue;
+            }
+            if holds.contains(&(s.start, s.end)) {
+                s.checked = Some(version);
+            } else if broken.contains(&(s.start, s.end)) {
+                s.edited = true;
+            }
+        }
+        self.runs.hints.retain(|h| !h.span.edited);
     }
 }
 

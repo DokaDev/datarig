@@ -68,6 +68,12 @@ impl Editor {
         let run = sel.or(block_bytes).or(stmt);
         // The statement running now, and the spinner frame for its gutter.
         let running = self.running_span();
+        if self.run_hints && !self.runs.hints.is_empty() && last > self.top {
+            // The hints on screen are drawn only while their statements are what they were.
+            let from = self.line_start(self.top);
+            let to = self.line_start(last - 1) + self.lines[last - 1].len();
+            self.check_spans(false, |s| (from..=to).contains(&s.end));
+        }
         let hints = if self.run_hints { &self.runs.hints[..] } else { &[] };
 
         // The matches of the search on the lines on screen, found line by line as they are drawn.

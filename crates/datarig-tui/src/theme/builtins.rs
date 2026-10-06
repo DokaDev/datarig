@@ -7,8 +7,8 @@ use ratatui::style::{Color, Modifier, Style};
 
 /// The terminal's own colors: its foreground and background, and the 16 ANSI colors by role
 /// (errors red, warnings yellow, …), so the terminal's palette decides how they look. A selection
-/// is reversed text, the statement tint is off (its gutter bar stays), and the screen behind a
-/// dialog is dimmed with [`Modifier::DIM`].
+/// is reversed text, the run target's tint is off (its gutter bar stays), the statement that runs
+/// is bold, and the screen behind a dialog is dimmed with [`Modifier::DIM`].
 pub const TERMINAL: Theme = Theme {
     bg: Color::Reset,
     surface: Color::Reset,
@@ -24,7 +24,7 @@ pub const TERMINAL: Theme = Theme {
     cursor_line: Style::new().add_modifier(Modifier::UNDERLINED),
     current_stmt: Style::new(),
     current_stmt_bar: Color::Blue,
-    running_stmt: Style::new(),
+    running_stmt: Style::new().add_modifier(Modifier::BOLD),
     running_stmt_bar: Color::Yellow,
     run_hint: Style::new().fg(Color::DarkGray).add_modifier(Modifier::ITALIC),
     success: Color::Green,

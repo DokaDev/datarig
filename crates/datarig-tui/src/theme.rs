@@ -66,7 +66,7 @@ pub struct Theme {
     /// selection): subtle, but it stays visible where the tint does not (256 colors).
     pub current_stmt_bar: Color,
     /// A tint behind the statement that runs now, apart from [`Self::current_stmt`] (the
-    /// built-ins blend 12% of [`Self::accent_warm`] into the background).
+    /// built-ins blend 12% of [`Self::accent_warm`] into the background; `terminal` makes it bold).
     pub running_stmt: Style,
     /// The bar and the spinner in the editor's gutter next to the statement that runs now.
     pub running_stmt_bar: Color,

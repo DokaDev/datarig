@@ -270,9 +270,13 @@ fn the_terminal_theme_uses_the_terminal_colors_by_role() {
     // The statement tint is off, its bar stays.
     assert_eq!(th.current_stmt, Style::new());
     assert_ne!(th.current_stmt_bar, Color::Reset);
-    // So is the running statement's: its bar is another color, and its hint is muted text
-    // that shows without color too.
-    assert_eq!(th.running_stmt, Style::new());
+    // The running statement shows without color, apart from the run target, the cursor line
+    // and the selection (bold text); its bar is another color, and its hint is muted text that
+    // shows without color too.
+    assert!(!th.running_stmt.add_modifier.is_empty(), "{:?}", th.running_stmt);
+    for other in [th.current_stmt, th.cursor_line, th.selection] {
+        assert_ne!(th.running_stmt.add_modifier, other.add_modifier, "{other:?}");
+    }
     assert!(!matches!(th.running_stmt_bar, Color::Reset | Color::Rgb(..) | Color::Indexed(_)));
     assert_ne!(th.running_stmt_bar, th.current_stmt_bar);
     assert_eq!(th.run_hint.fg, Some(th.fg_muted));

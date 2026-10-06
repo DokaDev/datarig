@@ -13,6 +13,13 @@ use crate::widgets::editor::{HintKind, RunHint};
 use datarig_core::sql::risk;
 
 impl App {
+    /// What tab `id`'s editor staged for a run is not run.
+    pub(super) fn unstage_run(&mut self, id: TabId) {
+        if let Some(t) = self.tabs.get_mut(id) {
+            t.editor.unstage_run();
+        }
+    }
+
     /// Tab `id`'s run marked on its editor ended: its statements get their hints.
     pub(super) fn settle_run_hints(&mut self, id: TabId) {
         let Some(t) = self.tabs.get(id) else { return };
@@ -36,12 +43,17 @@ impl App {
     fn amend_rolled_back(&mut self, id: TabId) {
         let Some(t) = self.tabs.get(id) else { return };
         let query = t.exec.query_id;
-        if t.editor.last_run() != Some(query) || !t.exec.run.statements.iter().any(|s| s.rolled_back) {
+        if t.editor.last_run() != Some(query) {
+            return;
+        }
+        // Once: a hint that says it already keeps the time it said it with.
+        let due = |i: usize| t.editor.run_hint_kind(query, i).is_some_and(|k| k != HintKind::RolledBack);
+        if !t.exec.run.statements.iter().enumerate().any(|(i, s)| s.rolled_back && due(i)) {
             return;
         }
         let time = &self.time_of_day();
         let amend: Vec<(usize, RunHint)> = (t.exec.run.statements.iter().enumerate())
-            .filter(|(_, s)| s.rolled_back)
+            .filter(|(i, s)| s.rolled_back && due(*i))
             .filter_map(|(i, s)| Some((i, self.run_hint(s, false, time)?)))
             .collect();
         if let Some(t) = self.tabs.get_mut(id) {
@@ -62,7 +74,9 @@ impl App {
             StatementOutcome::Waiting | StatementOutcome::Running | StatementOutcome::NotRun => return None,
             StatementOutcome::Failed(e) => {
                 let line = e.lines().map(str::trim).find(|l| !l.is_empty()).unwrap_or_default();
-                return Some(RunHint { kind: HintKind::Failed, text: line.to_string() });
+                // Cleaned as a grid cell is: a tab is a mark, other control characters are
+                // replacement characters.
+                return Some(RunHint { kind: HintKind::Failed, text: crate::text::sanitize_cell(line) });
             }
             StatementOutcome::Cancelled => (HintKind::Cancelled, Msg::Label(Label::EditorHintCancelled)),
             _ if rolled_back => (HintKind::RolledBack, Msg::EditorHintRolledBack { elapsed, time }),

@@ -346,8 +346,12 @@ impl App {
         c.expand_on_connect = false;
         c.console = None;
         c.error = Some(why);
-        for t in self.tabs.iter_mut().filter(|t| t.profile == Some(id)) {
-            t.exec.running = None;
+        let tabs: Vec<TabId> = self.tabs.iter().filter(|t| t.profile == Some(id)).map(|t| t.id).collect();
+        for t in tabs {
+            if let Some(t) = self.tabs.get_mut(t) {
+                t.exec.running = None;
+            }
+            self.settle_run_hints(t);
         }
     }
 
@@ -429,8 +433,13 @@ impl App {
         self.close_profile_sessions(id);
         self.close_tunnel(id);
         self.drop_tunnel_asks(id);
+        let mut stopped = Vec::new();
         for t in self.tabs.iter_mut().filter(|t| t.profile == Some(id)) {
-            t.exec.running = None;
+            // A run in progress ends here, cancelled (its session's answers are not read).
+            if t.exec.running.take().is_some_and(|r| !r.fetch && !r.count) {
+                t.exec.run.answered(super::runlog::StatementOutcome::Cancelled, None);
+                stopped.push(t.id);
+            }
             t.exec.tx_open = false;
             // The server rolls the user's transaction back when its session ends.
             t.block_ended(true);
@@ -439,6 +448,9 @@ impl App {
         }
         self.conns.next_generation(id);
         self.conns.entry(id).reset();
+        for t in stopped {
+            self.settle_run_hints(t);
+        }
         if matches!(self.explorer.cursor(), explorer::RowKind::Node(p, _)
             | explorer::RowKind::AuxNode(p, _, _)
             | explorer::RowKind::Database(p, _)
@@ -628,6 +640,8 @@ impl App {
             self.switch_tab(|m| m.position(t).is_some_and(|i| m.activate(i)));
             let not_loaded = self.tabs.get(t).is_some_and(|tab| !tab.ran) && !self.tab_busy(t);
             if not_loaded {
+                // Its query, not what `Ctrl+E` took in it before.
+                self.unstage_run(t);
                 self.run_in(t, vec![table.query()]);
             }
             return;

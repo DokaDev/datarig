@@ -236,7 +236,7 @@ fn editing_a_statement_drops_its_hint_only() {
     assert_eq!(after(&mut h, "SELECT 2;"), "\u{2713} 1 row · 42ms · 14:03");
     h.keys("u");
     assert_eq!(after(&mut h, "SELECT 1;"), "");
-    assert_eq!(h.app.tab().editor.run_hints().count(), 1);
+    assert_eq!(h.app.tab_mut().editor.run_hints().count(), 1);
 }
 
 /// Statements edited while their run goes on: one that runs stays marked (it still runs, as
@@ -261,7 +261,7 @@ fn a_statement_edited_while_it_runs_gets_no_hint() {
     assert_eq!(after(&mut h, "SELECT 1; -- x"), "\u{2713} SELECT 1 · 42ms · 14:03", "text after its `;`");
     assert_eq!(after(&mut h, "ELECT 2;"), "", "edited while it ran: no hint");
     assert_eq!(after(&mut h, "ELECT 3;"), "", "edited before it ran: no hint");
-    assert_eq!(h.app.tab().editor.run_hints().count(), 1);
+    assert_eq!(h.app.tab_mut().editor.run_hints().count(), 1);
 }
 
 /// Answers bound to another run, another session generation or another editor never attach.
@@ -295,7 +295,7 @@ fn stale_answers_never_attach() {
     h.app.tab_mut().editor = Editor::new("SELECT 1;\nSELECT 2;");
     assert!(!running(&mut h, "SELECT 2;"));
     h.db(rows(third, 3, false));
-    assert_eq!(h.app.tab().editor.run_hints().count(), 0);
+    assert_eq!(h.app.tab_mut().editor.run_hints().count(), 0);
 }
 
 /// At 80 columns the editor's text is 50 wide: a hint that fits is whole, one with room for a
@@ -448,4 +448,77 @@ fn snapshot_of_a_run_and_its_hints() {
     assert_eq!(buf[(hx, hy)].fg, DARK.error);
     assert_eq!(find(buf, "WHERE a > 1;").unwrap().1, hy, "after the statement's last line");
     assert_eq!(after(&mut h, "SELECT 3;"), "", "the statement that did not run has none");
+}
+
+/// A rolled-back hint is amended once, when the driver says the block ended: later events of
+/// the session never stamp it with a new time.
+#[test]
+fn a_rolled_back_hint_keeps_its_time() {
+    let mut h = harness("BEGIN;\nROLLBACK;");
+    let (id, _) = run(&mut h);
+    h.db(done(id, Outcome::Command("BEGIN".into())));
+    h.db(DbEvent::Block(true));
+    h.db(DbEvent::TxOpen(true));
+    h.keys("G");
+    let (id, _) = run(&mut h);
+    h.db(done(id, Outcome::Command("ROLLBACK".into())));
+    h.db(DbEvent::Block(false));
+    h.db(DbEvent::TxOpen(false));
+    assert_eq!(after(&mut h, "ROLLBACK;"), "\u{21ba} rolled back · 42ms · 14:03");
+    h.app.set_time_of_day(Arc::new(|| (15, 27)));
+    h.db(DbEvent::TxAborted(false));
+    h.db(DbEvent::TxOpen(false));
+    assert_eq!(after(&mut h, "ROLLBACK;"), "\u{21ba} rolled back · 42ms · 14:03");
+}
+
+/// A run stopped by a change of the tab's connection or context, or by a disconnect, says it
+/// was cancelled at once (no event of the session comes for it).
+#[test]
+fn a_run_stopped_by_a_rebind_or_a_disconnect_says_cancelled_at_once() {
+    let mut h = harness("SELECT 1;");
+    run(&mut h);
+    h.command("use .shop");
+    h.keys("y");
+    assert!(h.app.tab().exec.running.is_none());
+    assert_eq!(h.app.tab().editor.active_run(), None, "the mark ends with the run");
+    assert_eq!(after(&mut h, "SELECT 1;"), "\u{2298} cancelled");
+
+    let mut h = harness("SELECT 1;");
+    run(&mut h);
+    h.keys(" cx");
+    h.keys("y");
+    assert!(h.app.tab().exec.running.is_none());
+    assert_eq!(h.app.tab().editor.active_run(), None);
+    assert_eq!(after(&mut h, "SELECT 1;"), "\u{2298} cancelled");
+}
+
+/// What `Ctrl+E` took is kept for its run only: a run refused (busy, read-only, unsupported)
+/// or dropped at the confirmation leaves nothing that a later run from elsewhere could take.
+#[test]
+fn a_refused_or_dropped_run_leaves_nothing_staged() {
+    let mut h = harness("SELECT 1;\nDELETE FROM t;");
+    let (id, _) = run(&mut h);
+    h.ctrl('e');
+    assert!(h.status(100, 30).contains("already running"));
+    assert!(!h.app.tab().editor.has_staged_run(), "busy: refused");
+    h.db(rows(id, 1, false));
+    h.keys("j");
+    h.ctrl('e');
+    assert_eq!(h.overlay_kind(), Some(datarig_tui::app::overlay::OverlayKind::RunConfirm));
+    h.key(KeyCode::Esc);
+    assert!(h.sent().is_empty());
+    assert!(!h.app.tab().editor.has_staged_run(), "dropped at the confirmation");
+}
+
+/// The error a hint shows is cleaned as grid cells are: a tab is a mark, other control
+/// characters are replacement characters, never dropped silently.
+#[test]
+fn an_error_hint_is_cleaned_like_a_cell() {
+    let mut h = harness("SELECT 1;");
+    let (id, _) = run(&mut h);
+    let error = DbError::from("ERROR: a\x1b[2Jb\tc\u{9b}d\nDETAIL: more");
+    h.db(DbEvent::Failed { id, error, cancelled: false });
+    let hint = h.app.tab_mut().editor.run_hints().next().map(|(_, h)| h.text.clone()).unwrap();
+    assert_eq!(hint, datarig_tui::text::sanitize_cell("ERROR: a\x1b[2Jb\tc\u{9b}d"));
+    assert!(!hint.chars().any(char::is_control), "{hint:?}");
 }

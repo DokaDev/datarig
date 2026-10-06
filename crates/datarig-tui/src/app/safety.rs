@@ -169,11 +169,15 @@ impl App {
     fn run_confirm_answered(&mut self, run: bool) {
         let Some(c) = self.overlays.take_run_confirm() else { return };
         if !run {
+            self.unstage_run(c.tab);
             return self.tab_status(c.tab, Notice::new(Label::SafetyConfirmCancelled, Level::Warning));
         }
         match self.tabs.get(c.tab).map(|t| (t.profile, t.binding)) {
             Some((Some(p), b)) if p == c.profile && b == c.binding => self.run_approved(c.tab, c.statements),
-            Some(_) => self.tab_status(c.tab, Notice::new(Label::SafetyConfirmMoved, Level::Warning)),
+            Some(_) => {
+                self.unstage_run(c.tab);
+                self.tab_status(c.tab, Notice::new(Label::SafetyConfirmMoved, Level::Warning))
+            }
             None => {}
         }
     }
