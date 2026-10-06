@@ -6,8 +6,9 @@
 //! searches the whole text) and `n`, with the bytes each key searched and the lines each frame
 //! highlighted counted. `block` (the `editor_block` scenario, in a process of its own): Visual
 //! block operators over the whole text, with the bytes they walked counted, and `:%s` over the
-//! whole text with the bytes it searched, and typing right after a hinted statement of 100,000
-//! lines (an INSERT of about 4.7 MB) with the bytes the hint checks lexed per key counted.
+//! whole text with the bytes it searched, and typing next to a hinted statement of about 4.7 MB
+//! (after a 100,000-line INSERT, above the same INSERT on one line, above a statement under a
+//! 100,000-line comment header) with the bytes the hint checks lexed per key counted.
 
 use crate::apps;
 use crate::grid::wide;
@@ -256,30 +257,32 @@ pub fn run(scratch: &Path, bytes: usize, n: usize) -> Result<Value, String> {
     Ok(out)
 }
 
-/// A hinted `INSERT` of 100,000 lines (about 4.7 MB) with `SELECT 1;` on the line after it,
-/// the cursor there: `n` keys typed at its end, each with its frame. The key times and the most
-/// bytes one key's frame lexed to check the hint against the text.
-fn hinted_statement(n: usize) -> (Vec<f64>, usize) {
-    let mut text = String::from("INSERT INTO shop.audit_log (id, note) VALUES\n");
-    for i in 0..100_000 {
-        text.push_str(&format!("  ({i}, 'a note of row {i}, written for the bench'),\n"));
+/// Typing next to a hinted statement, `n` keys each with its frame: the key times and the most
+/// bytes one key's frame lexed to check the hint against the text; `None` when the hint is not
+/// there after the keys (then nothing was checked, and the bytes would say nothing).
+///
+/// `text` is the editor's text; the statement on its line `run_line` is run and gets its hint;
+/// then the keys go at the end of line `type_line`.
+fn hinted_typing(text: &str, run_line: usize, type_line: usize, n: usize, hints: bool) -> Option<(Vec<f64>, usize)> {
+    let mut app = apps::offline(text, None);
+    if !hints {
+        app.prefs.run_hints = datarig_core::config::RunHints::Off;
     }
-    text.truncate(text.len() - 2);
-    text.push_str(";\nSELECT 1;");
-    let mut app = apps::offline(&text, None);
-    drop(text);
     let mut term = apps::terminal();
     let ed = &mut app.tab_mut().editor;
+    ed.row = run_line;
     let (stmts, spans) = ed.run_statements();
     ed.stage_run(&stmts, spans);
     ed.start_run(1, &stmts);
     let hint = RunHint { kind: HintKind::Ok, text: "100,000 rows affected \u{b7} 3.1s \u{b7} 14:03".into() };
     ed.finish_run(1, vec![Some(hint)]);
-    apps::char(&mut app, 'G');
+    ed.row = type_line;
+    // The statement's first lines on screen too, below the line typed on.
+    ed.top = type_line.saturating_sub(5);
     apps::char(&mut app, 'A');
     apps::draw(&mut term, &mut app);
     app.tab_mut().editor.take_check_work();
-    let typed = " -- a comment typed after it";
+    let typed = " -- a comment typed here";
     let (mut times, mut most) = (Vec::with_capacity(n), 0);
     for i in 0..n {
         let t = Instant::now();
@@ -288,8 +291,49 @@ fn hinted_statement(n: usize) -> (Vec<f64>, usize) {
         times.push(ms(t.elapsed()));
         most = most.max(app.tab_mut().editor.take_check_work());
     }
-    println!("  hinted statement: the most bytes one key's hint checks lexed: {most}");
-    (times, most)
+    let kept = app.tab_mut().editor.run_hints().count() == 1;
+    (kept || !hints).then_some((times, most))
+}
+
+/// Typing next to a hinted statement of about 4.7 MB, three ways: after an `INSERT` of 100,000
+/// lines (on the line after it), above the same `INSERT` written on one line (on the line before
+/// it), and above a hinted `SELECT 1;` under a comment header of 100,000 lines (on the header's
+/// last line). The key times of the first (the other two draw a 4.7 MB line or lex it for the
+/// highlighter, as without hints), and per way the most bytes one key's hint checks lexed.
+fn hinted_statement(n: usize) -> Result<(Vec<f64>, Value), String> {
+    let mut rows = String::from("INSERT INTO shop.audit_log (id, note) VALUES\n");
+    for i in 0..100_000 {
+        rows.push_str(&format!("  ({i}, 'a note of row {i}, written for the bench'),\n"));
+    }
+    rows.truncate(rows.len() - 2);
+    rows.push(';');
+    let after = format!("{rows}\nSELECT 1;");
+    let lines = after.lines().count();
+    let one_line = format!("SELECT 0;\n-- the rows\n{}", rows.replace('\n', " "));
+    let header = format!("{}SELECT 1;", "-- a line of the header that says what the script does\n".repeat(100_000));
+    let mut out = serde_json::Map::new();
+    let mut times = Vec::new();
+    for (name, text, run_line, type_line) in [
+        ("after", &after, 0, lines - 1),
+        ("above_one_line", &one_line, 2, 1),
+        ("above_header", &header, 100_000, 99_999),
+    ] {
+        let (t, most) =
+            hinted_typing(text, run_line, type_line, n, true).ok_or(format!("hinted {name}: the hint went"))?;
+        let s = Summary::of(&t);
+        println!("  hinted {name}: {}; the most bytes one key's hint checks lexed: {most}", s.line(" ms"));
+        // The same keys with the hints off: what the frame costs without them.
+        if let Some((off, _)) = hinted_typing(text, run_line, type_line, n, false) {
+            println!("  hinted {name}, hints off: {}", Summary::of(&off).line(" ms"));
+            out.insert(format!("{name}_hints_off_ms"), Summary::of(&off).json());
+        }
+        out.insert(format!("{name}_check_bytes_max"), json!(most));
+        out.insert(format!("{name}_ms"), s.json());
+        if name == "after" {
+            times = t;
+        }
+    }
+    Ok((times, Value::Object(out)))
 }
 
 /// Set in the process [`block_in_own_process`] starts: it runs [`block`] itself.
@@ -382,7 +426,7 @@ pub fn block(scratch: &Path, bytes: usize) -> Result<Value, String> {
     println!("  :%s        {}", subst.line(" ms"));
     drop(app);
     // Here too, for the copies of the big statement it lexes once (its run's end).
-    let (hinted, hinted_work) = hinted_statement(100);
+    let (hinted, hinted_ways) = hinted_statement(100)?;
     let hinted = Summary::of(&hinted);
     println!("  hinted     {}", hinted.line(" ms"));
     Ok(json!({
@@ -395,6 +439,6 @@ pub fn block(scratch: &Path, bytes: usize) -> Result<Value, String> {
         // Nothing searched means the command did not run: not measured.
         "subst_bytes_max": if subst_changed { subst_bytes } else { 0 },
         "hinted_typing_ms": hinted.json(),
-        "hinted_check_bytes_max": hinted_work,
+        "hinted": hinted_ways,
     }))
 }

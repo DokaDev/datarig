@@ -56,6 +56,7 @@
 "query.cancelling" = "Cancelling…"
 "query.cancelled" = "Query cancelled"
 "query.cancelled_rebound" = "Query cancelled by the connection change"
+"query.cancelled_session_closed" = "Cancelled: the tab's connection was closed while it ran"
 "query.cancel_unanswered" = "Query cancelled: the connection did not answer, so it was closed (the next run reconnects)"
 "query.error" = "Error: {error}"
 "query.no_statement" = "No statement under cursor"

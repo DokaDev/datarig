@@ -212,3 +212,62 @@ fn a_whole_statement_selected_without_its_semicolon_gets_its_hint() {
     keys(&mut e, "k0f;i x\x1b");
     assert_eq!(e.run_hints().count(), 0, "{:?}", e.text());
 }
+
+/// A change before a hinted statement lexes only from the line it is on (from where the
+/// lexer's state is known) up to the statement's first token, not the statement nor the text
+/// back to the previous `;`: under a long comment header, and above a huge statement on one
+/// line, the hint stays and a key costs a line.
+#[test]
+fn a_change_before_a_statement_lexes_only_up_to_it() {
+    let header = "-- a line of the header that tells what the script does\n".repeat(20_000);
+    let mut e = Editor::new(&format!("{header}SELECT 1;"));
+    assert!(e.text().len() > 1_000_000);
+    keys(&mut e, "G");
+    run(&mut e, 1);
+    e.finish_run(1, vec![hint("one")]);
+    assert_eq!(e.run_hints().count(), 1);
+    keys(&mut e, "k");
+    e.take_check_work();
+    for _ in 0..5 {
+        keys(&mut e, "A x\x1b");
+        assert_eq!(e.run_hints().count(), 1);
+        let work = e.take_check_work();
+        assert!(work > 0 && work < 1_000, "under the header: {work} bytes");
+    }
+    let values: String = (0..50_000).map(|i| format!("({i}, 'row {i}'), ")).collect();
+    let mut e = Editor::new(&format!("SELECT 0;\n-- the rows\nINSERT INTO t VALUES {values}(0, 'end');"));
+    keys(&mut e, "G");
+    run(&mut e, 1);
+    e.finish_run(1, vec![hint("one")]);
+    assert_eq!(e.run_hints().count(), 1);
+    keys(&mut e, "k");
+    e.take_check_work();
+    for _ in 0..5 {
+        keys(&mut e, "A x\x1b");
+        assert_eq!(e.run_hints().count(), 1);
+        let work = e.take_check_work();
+        assert!(work > 0 && work < 1_000, "above a huge line: {work} bytes");
+    }
+}
+
+/// Changes before a statement are told apart: a line with its own `;` keeps the hint; a line
+/// joined to it, a lone `;` deleted, keep nothing.
+#[test]
+fn changes_before_a_statement_keep_or_drop_its_hint_as_the_text_says() {
+    for (text, keys_, kept) in [
+        ("SELECT 0;\nSELECT 1;", "ggox;\x1b", true),
+        ("SELECT 0;\nSELECT 1;", "ggOSELECT 9;\x1b", true),
+        ("SELECT 0;\nSELECT 1;", "ggoSELECT 9\x1b", false),
+        ("SELECT 0\n;\nSELECT 1;", "jx", false),
+        ("SELECT 0;\n-- c\nSELECT 1;", "jA */\x1b", true),
+        ("SELECT 0;\n-- c\nSELECT 1;", "jI/*\x1b", false),
+    ] {
+        let mut e = Editor::new(text);
+        keys(&mut e, "G");
+        run(&mut e, 1);
+        e.finish_run(1, vec![hint("one")]);
+        assert_eq!(e.run_hints().count(), 1, "{text:?}");
+        keys(&mut e, keys_);
+        assert_eq!(e.run_hints().count(), usize::from(kept), "{text:?} then {keys_:?}: {:?}", e.text());
+    }
+}

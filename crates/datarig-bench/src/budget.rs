@@ -153,11 +153,15 @@ pub fn editor_block(c: &mut Checks, b: &Table, result: &Value) -> Result<(), Str
         }
         None => c.missing("editor typing after a hinted 4.7 MB statement p95"),
     }
-    match f(result, &["hinted_check_bytes_max"]) {
-        Some(bytes) => {
-            c.check("editor hint check bytes per key", bytes, num(b, "editor", "hint_check_bytes_max")?, " B")
+    // Typing next to it three ways (the hint still there after the keys, else not measured):
+    // the bytes one key's frame lexed to check the hint against the text.
+    let max = num(b, "editor", "hint_check_bytes_max")?;
+    for way in ["after", "above_one_line", "above_header"] {
+        let what = format!("editor hint check bytes per key, typing {}", way.replace('_', " "));
+        match f(result, &["hinted", &format!("{way}_check_bytes_max")]) {
+            Some(bytes) => c.check(&what, bytes, max, " B"),
+            None => c.missing(&what),
         }
-        None => c.missing("editor hint check bytes per key"),
     }
     match f(result, &["keys_ms", "max"]) {
         Some(m) => {

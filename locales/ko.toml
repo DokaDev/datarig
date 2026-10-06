@@ -54,6 +54,7 @@
 "query.cancelling" = "취소하는 중…"
 "query.cancelled" = "쿼리를 취소했습니다"
 "query.cancelled_rebound" = "연결을 바꿔서 쿼리를 취소했습니다"
+"query.cancelled_session_closed" = "취소됨: 실행 중에 탭의 연결이 닫혔습니다"
 "query.cancel_unanswered" = "쿼리를 취소했습니다: 연결이 응답하지 않아 연결을 닫았습니다 (다음 실행 때 다시 연결합니다)"
 "query.error" = "오류: {error}"
 "query.no_statement" = "커서 위치에 실행할 문장이 없습니다"

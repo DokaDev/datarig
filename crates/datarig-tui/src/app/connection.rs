@@ -228,12 +228,20 @@ impl App {
     /// generation, so a late event of a closed session (e.g. `TxOpen(true)`) is dropped.
     fn close_tab_sessions(&mut self, which: impl Fn(&Tab) -> bool) {
         let generation = self.tabs.next_generation();
+        let mut ended = Vec::new();
         for t in self.tabs.iter_mut().filter(|t| which(t)) {
             if let Some(s) = t.exec.session.take() {
                 s.close();
+                // What ran in it ends with it: its answers are never read (a new generation).
+                if t.session_closed() {
+                    ended.push(t.id);
+                }
             }
             t.exec.state = SessionState::Idle;
             t.exec.generation = generation;
+        }
+        for id in ended {
+            self.settle_run_hints(id);
         }
     }
 
@@ -348,15 +356,12 @@ impl App {
         c.error = Some(why);
         let tabs: Vec<TabId> = self.tabs.iter().filter(|t| t.profile == Some(id)).map(|t| t.id).collect();
         for t in tabs {
-            // A run in progress ends here, cancelled, as on a disconnect.
+            // Their sessions were closed when the attempt began (`connect`), which ended their
+            // runs; one still marked running (its session never opened) ends here the same way.
             if let Some(t) = self.tabs.get_mut(t)
-                && t.exec.running.take().is_some_and(|r| !r.fetch && !r.count)
+                && t.exec.running.is_some()
             {
-                t.exec.run.answered(super::runlog::StatementOutcome::Cancelled, None);
-                if !matches!(t.results, Results::Rows(_)) {
-                    t.results = Results::Cancelled;
-                }
-                t.run_ended(true);
+                t.session_closed();
             }
             self.settle_run_hints(t);
         }
@@ -441,20 +446,17 @@ impl App {
         self.close_profile_sessions(id);
         self.close_tunnel(id);
         self.drop_tunnel_asks(id);
+        // Their runs ended with their sessions (`close_profile_sessions`); a tab whose run waited
+        // for its connection to open its session ends here.
         let mut stopped = Vec::new();
         for t in self.tabs.iter_mut().filter(|t| t.profile == Some(id)) {
-            // A run in progress ends here, cancelled (its session's answers are not read).
-            if t.exec.running.take().is_some_and(|r| !r.fetch && !r.count) {
-                t.exec.run.answered(super::runlog::StatementOutcome::Cancelled, None);
-                if !matches!(t.results, Results::Rows(_)) {
-                    t.results = Results::Cancelled;
-                }
-                t.run_ended(true);
+            if t.exec.running.is_some() && t.session_closed() {
                 stopped.push(t.id);
             }
             t.exec.tx_open = false;
             // The server rolls the user's transaction back when its session ends.
             t.block_ended(true);
+            // Closed by the user, who was told: the next run does not say it again.
             t.exec.lost_tx = false;
             t.exec.paging = Paging::None;
         }
