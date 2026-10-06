@@ -36,8 +36,8 @@ pub struct TabList {
     pub rows: Vec<(Rect, usize)>,
     /// The entry under the pointer (highlighted; the selection does not move to it).
     pub hover: Option<usize>,
-    /// The entry a press armed (it is picked on the release over it).
-    pub press: Press<usize>,
+    /// The entry a press armed (it is picked on the release over it, if it is still listed).
+    pub press: Press<TabEntry>,
 }
 
 impl TabList {
@@ -290,9 +290,12 @@ impl App {
             _ => {}
         }
         let row = l.rows.iter().find(|(r, _)| r.contains(at)).map(|r| r.1);
-        if let Some(i) = l.press.press(m.kind, row, now) {
-            l.selected = i;
-            self.tab_list_pick(i);
+        let entry = row.and_then(|i| l.entries.get(i).copied());
+        if let Some(e) = l.press.press(m.kind, entry, now) {
+            if let Some(i) = l.entries.iter().position(|x| *x == e) {
+                l.selected = i;
+                self.tab_list_pick(i);
+            }
         } else if m.kind == MouseEventKind::Down(MouseButton::Left) && row.is_none() {
             l.filter.click(m.column, m.row);
         }

@@ -352,6 +352,18 @@ fn the_mouse_picks_on_release_hovers_without_selecting_and_waits_for_the_list() 
     press(&mut h, c2);
     release(&mut h, c2);
     assert_eq!((h.overlay_kind(), active(&h)), (None, "console 2".to_string()));
+    // A press arms the entry, not the row: when the entries change before the release (as if
+    // the tab under the pointer went), the row's new entry is not picked.
+    open_list(&mut h);
+    h.draw(W, H);
+    h.advance(Duration::from_millis(500));
+    let c3 = row_of(&mut h, "console 3");
+    press(&mut h, c3);
+    let id = h.app.tabs.iter().find(|t| t.doc.console_no == 3).unwrap().id;
+    let gone = datarig_tui::app::tab_list::TabEntry::Open(id);
+    h.app.overlays.tab_list_mut().unwrap().entries.retain(|e| *e != gone);
+    release(&mut h, c3);
+    assert_eq!((h.overlay_kind(), active(&h)), (Some(OverlayKind::TabList), "console 2".to_string()));
 }
 
 #[test]
