@@ -1030,3 +1030,26 @@ fn released_goes_with_its_own_run_only() {
     let status = h.status(400, 45);
     assert!(status.contains("Running it again would change rows again"), "{status}");
 }
+
+/// `EXPLAIN ANALYZE` of a write is rolled back: a long plan that is not held never says the
+/// statement's changes are committed.
+#[test]
+fn a_long_explain_analyze_of_a_write_is_not_called_committed() {
+    let mut h = Harness::connected(Lang::En);
+    h.app.tab_mut().editor = Editor::new("EXPLAIN ANALYZE UPDATE shop.users SET email = email WHERE id < 0");
+    h.sent();
+    h.ctrl('e');
+    if h.app.overlays.run_confirm().is_some() {
+        h.keys("y");
+    }
+    let id = h.app.tab().exec.query_id;
+    let columns = Some(vec![meta("QUERY PLAN", "text", false, false)]);
+    h.tab_db(0, DbEvent::Released { id });
+    h.tab_db(0, DbEvent::Page { id, columns, rows: page(0, 500), more: true, elapsed: SEC / 100 });
+    let status = h.status(400, 45);
+    assert!(!status.contains("committed in full"), "{status}");
+    h.key(KeyCode::Tab);
+    h.keys("n");
+    let status = h.status(400, 45);
+    assert!(!status.contains("committed in full") && !status.contains("change rows again"), "{status}");
+}
