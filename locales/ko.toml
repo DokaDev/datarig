@@ -166,6 +166,7 @@
 "tab.closed_queued" = "탭을 닫았습니다. 연결을 기다리던 문장은 버렸습니다"
 "tab.reopen_none" = "다시 열 탭이 없습니다"
 "status.read_only" = "읽기 전용"
+"status.zoom" = "확대"
 "tab.read_only" = "RO"
 "explorer.database_default" = "기본"
 "explorer.databases_unreadable" = "데이터베이스 목록을 읽을 수 없습니다: {error}"
@@ -364,6 +365,10 @@
 
 "action.help.context" = "키 도움말"
 "action.pane.back" = "편집기로 돌아가기"
+"action.pane.zoom" = "패널 확대 전환"
+"action.explorer.toggle" = "탐색기 표시 전환"
+"action.explorer.wider" = "탐색기 넓히기"
+"action.explorer.narrower" = "탐색기 좁히기"
 "action.explorer.down" = "탐색기: 다음 항목"
 "action.explorer.up" = "탐색기: 이전 항목"
 "action.explorer.expand" = "탐색기: 펼치기"
@@ -1061,7 +1066,7 @@
 
 # Layout, result tabs, pagination
 "action.results.panel.toggle" = "결과 패널 → 숨기기 / 보이기"
-"action.results.panel.maximize" = "결과 패널 → 최대화 / 되돌리기"
+"action.results.panel.maximize" = "결과 패널 → 확대(최대화) / 되돌리기"
 "action.results.panel.grow" = "결과 패널 → 높이 늘리기"
 "action.results.panel.shrink" = "결과 패널 → 높이 줄이기"
 "tab.console" = "콘솔 {n}"

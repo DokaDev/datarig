@@ -19,11 +19,18 @@ pub(super) fn at_risk(running: bool, queued: bool, tx: bool, texts: [Label; 4]) 
 }
 
 impl App {
-    /// `Ctrl+T`: a new, empty console tab on the active tab's profile, else on the profile
-    /// selected in the explorer, else on one picked in the quick connect list.
+    /// `Ctrl+T`: a new, empty console tab. In the explorer, where its selected row is, as
+    /// the row's menu opens it (its profile, database and schema: [`App::console_here`]);
+    /// elsewhere (or on a row without a profile) on the active tab's profile, else on one picked
+    /// in the quick connect list.
     pub(super) fn new_tab(&mut self) {
-        let from_explorer = || if self.focus == Focus::Tree { self.selected_profile() } else { None };
-        match self.tab().profile.or_else(from_explorer) {
+        if self.focus == Focus::Tree
+            && let Some(row) = self.explorer_row()
+            && self.console_here(&row)
+        {
+            return;
+        }
+        match self.tab().profile {
             Some(id) => {
                 self.open_console(id, true);
             }

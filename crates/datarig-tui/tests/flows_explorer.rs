@@ -1071,6 +1071,62 @@ fn the_menus_console_opens_where_the_click_was() {
     assert_eq!(h.app.tab().context, SessionContext::default());
 }
 
+/// A way to press a key (or run a command) in a test.
+type Press = fn(&mut Harness);
+
+/// A new console from the keyboard in the explorer (`Ctrl+T`, `Space t n`, `:tab.new_console`)
+/// opens where the selected row is, as the row's menu does: the database and schema of a
+/// database, a schema or a table, the profile's defaults on the profile; never the active tab's
+/// binding with the schema dropped.
+#[test]
+fn a_new_console_from_the_explorer_opens_where_the_row_is() {
+    let mut h = Harness::connected(Lang::En);
+    h.explore("local-pg");
+    h.db(DbEvent::Databases(Ok(vec!["datarig".into(), "sales".into()])));
+    cursor_on(&mut h, "    shop");
+    h.key(KeyCode::Char('l'));
+    h.db(DbEvent::Objects {
+        schema: "shop".into(),
+        result: Ok((vec!["orders".into(), "users".into()], Vec::new()).into()),
+    });
+    let at = |db: Option<&str>, schema: Option<&str>| SessionContext {
+        database: db.map(str::to_string),
+        schema: schema.map(str::to_string),
+    };
+    let keys: [(&str, Press); 3] = [
+        ("Ctrl+T", |h| h.ctrl('t')),
+        ("Space t n", |h| h.keys(" tn")),
+        (":tab.new_console", |h| h.command("tab.new_console")),
+    ];
+    for (row, want) in [
+        ("db:datarig*", at(None, None)),
+        ("    public", at(None, Some("public"))),
+        ("users", at(None, Some("shop"))),
+        ("db:sales", at(Some("sales"), None)),
+        ("local-pg", SessionContext::default()),
+    ] {
+        for (name, press) in keys {
+            h.explore("local-pg");
+            h.app.focus = Focus::Tree;
+            let rows = h.app.explorer_rows();
+            let i =
+                h.rows().iter().position(|r| r.trim() == row.trim()).unwrap_or_else(|| panic!("{row}: {:?}", h.rows()));
+            h.app.explorer.select(&rows, i);
+            let tabs = h.app.tabs.len();
+            press(&mut h);
+            assert_eq!(h.app.tabs.len(), tabs + 1, "{row} {name}: a new console");
+            assert_eq!(h.app.tab().profile, Some(id(&h, "local-pg")), "{row} {name}");
+            assert_eq!(h.app.tab().context, want, "{row} {name}");
+            assert_eq!(h.app.focus, Focus::Editor, "{row} {name}");
+        }
+    }
+    // The menu's console item on the same row binds the same.
+    h.explore("local-pg");
+    h.right_click_row("public");
+    h.menu_pick("New console in public");
+    assert_eq!(h.app.tab().context, at(None, Some("public")));
+}
+
 /// The menu of a folder and of a profile, each right-clicked while the keyboard's cursor is on
 /// the other: the items say what they act on and act on the clicked row.
 #[test]

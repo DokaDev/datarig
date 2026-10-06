@@ -42,7 +42,7 @@ expression: backend
 "╭ Space r — Results ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮"
 "│ #  Results → count every row (runs a count query)   ]  Result tabs → next                               p  Results → previous page                           │"
 "│ +  Results pane → taller                            a  +Copy all fetched rows                           y  +Copy selection                                   │"
-"│ -  Results pane → shorter                           h  Results pane → hide / show                       z  Results pane → maximise / restore                 │"
+"│ -  Results pane → shorter                           h  Results pane → hide / show                       z  Results pane → zoom (maximise) / restore          │"
 "│ I  Result detail → Cell / Row                       i  Result detail → show / hide                                                                           │"
 "│ [  Result tabs → previous                           n  Results → next page                                                                                   │"
 "╰───────────────────────────────────────────────────────────────────────────────────────────────────────────────────── Esc close · Backspace back · : commands ╯"

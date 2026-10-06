@@ -169,6 +169,7 @@
 "tab.reopen_none" = "No closed tab to reopen"
 "status.policy" = "policy: {name}"
 "status.read_only" = "READ-ONLY"
+"status.zoom" = "ZOOM"
 "tab.read_only" = "RO"
 "explorer.database_default" = "default"
 "explorer.databases_unreadable" = "The databases can't be read: {error}"
@@ -366,6 +367,10 @@
 
 "action.help.context" = "Keyboard help"
 "action.pane.back" = "Back to the editor"
+"action.pane.zoom" = "Toggle pane zoom"
+"action.explorer.toggle" = "Toggle explorer"
+"action.explorer.wider" = "Widen explorer"
+"action.explorer.narrower" = "Narrow explorer"
 "action.explorer.down" = "Explorer: next item"
 "action.explorer.up" = "Explorer: previous item"
 "action.explorer.expand" = "Explorer: expand"
@@ -1064,7 +1069,7 @@
 
 # Layout, result tabs, pagination
 "action.results.panel.toggle" = "Results pane → hide / show"
-"action.results.panel.maximize" = "Results pane → maximise / restore"
+"action.results.panel.maximize" = "Results pane → zoom (maximise) / restore"
 "action.results.panel.grow" = "Results pane → taller"
 "action.results.panel.shrink" = "Results pane → shorter"
 "tab.console" = "console {n}"

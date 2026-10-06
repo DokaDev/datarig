@@ -93,22 +93,29 @@ fn the_results_pane_hides_maximises_and_resizes_by_keys() {
     h.keys(" r+");
     h.draw(160, 45);
     assert!(h.app.layout.results.height > small);
-    // Maximised: the editor is not drawn and cannot have the focus.
+    // Maximised (the results' zoom): the editor and the explorer are not drawn.
     h.keys("z");
     h.draw(160, 45);
-    assert!(h.app.tab().pane.maximized);
-    assert_eq!(h.app.layout.editor.height, 0);
-    assert_eq!(h.app.layout.results.height, 43);
+    assert_eq!(h.app.tab().pane.zoom, Some(Focus::Results));
+    assert_eq!((h.app.layout.editor.height, h.app.layout.tree.width), (0, 0));
+    let l = h.app.layout;
+    assert_eq!((l.results.height, l.results.width + l.detail.width), (43, 160), "with the inspector");
+    // Tab moves on to the next pane (the explorer, after the results), which ends the zoom.
     h.key(KeyCode::Tab);
-    assert_eq!(h.app.focus, Focus::Tree, "Tab skips the editor that is not drawn");
+    assert_eq!(h.app.focus, Focus::Tree);
+    assert_eq!(h.app.tab().pane.zoom, None);
+    // Esc goes back to the editor, which ends it too.
+    h.key(KeyCode::Tab);
     h.key(KeyCode::Tab);
     assert_eq!(h.app.focus, Focus::Results);
-    // Esc goes back to the explorer (there is no editor on screen).
+    h.keys("z");
     h.key(KeyCode::Esc);
-    assert_eq!(h.app.focus, Focus::Tree);
+    assert_eq!((h.app.focus, h.app.tab().pane.zoom), (Focus::Editor, None));
     h.key(KeyCode::Tab);
     h.keys("z");
-    assert!(!h.app.tab().pane.maximized);
+    assert_eq!(h.app.tab().pane.zoom, Some(Focus::Results));
+    h.keys("z");
+    assert_eq!(h.app.tab().pane.zoom, None);
     // Hidden: the editor takes the height back and the focus goes to it; a run shows it again.
     h.keys(" rh");
     assert!(h.app.tab().pane.hidden);
@@ -122,7 +129,7 @@ fn the_results_pane_hides_maximises_and_resizes_by_keys() {
     assert!(!h.app.tab().pane.hidden, "a run shows the pane again");
     // The pane keys are actions: the command line runs them too.
     h.command("results pane maximise");
-    assert!(h.app.tab().pane.maximized);
+    assert_eq!(h.app.tab().pane.zoom, Some(Focus::Results));
 }
 
 #[test]
@@ -292,10 +299,18 @@ fn the_layout_survives_a_restart() {
     run_rows(&mut h, 3);
     h.key(KeyCode::Tab); // results
     h.keys("---");
-    h.keys("z");
+    h.key(KeyCode::BackTab); // the editor
     open_users(&mut h);
     assert!(h.app.tab().is_table());
     answer(&mut h, 2);
+    // The console's results zoomed; a switch of tabs keeps it.
+    h.keys(" 1");
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Tab);
+    assert_eq!(h.app.focus, Focus::Results);
+    h.keys("z");
+    h.key_mod(KeyCode::PageDown, ratatui::crossterm::event::KeyModifiers::CONTROL);
+    assert!(h.app.tab().is_table());
     h.app.dispatch(datarig_tui::app::action::Action::Quit);
     assert!(h.app.quit);
     let text = std::fs::read_to_string(state.0.join("workspace.toml")).unwrap();
@@ -305,7 +320,7 @@ fn the_layout_survives_a_restart() {
     let mut h = launch(&cfg, &state);
     assert_eq!(h.app.tabs.len(), 2);
     let first = h.app.tabs.iter().next().unwrap();
-    assert_eq!((first.doc.console_no, first.pane.share, first.pane.maximized), (1, 45, true));
+    assert_eq!((first.doc.console_no, first.pane.share, first.pane.zoom), (1, 45, Some(Focus::Results)));
     assert!(h.app.tab().is_table(), "the table tab is the active one");
     assert_eq!(h.app.tab().doc.table.as_ref().unwrap().label(), "shop.users");
     // Focusing it neither connects nor runs: it says how to load it.

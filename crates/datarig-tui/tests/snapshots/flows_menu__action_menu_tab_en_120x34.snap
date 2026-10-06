@@ -16,11 +16,11 @@ expression: "h.draw(120, 34).backend()"
 "│                            ││ Tabs                                              │                                    │"
 "│                            ││  New console tab                           Ctrl+T │                                    │"
 "│                            ││  Reopen closed tab                      Space t u │────────────────────────────────────╯"
-"│                            │╰───────────────────────────────────────────────────╯╮╭ [Cell] Row · I ──────────────────╮"
-"│                            ││   │ id   │ name                 │ nickname    │ ad…││ id                               │"
-"│                            ││   │ int8 │ text                 │ text        │ te…││ int8 · 1 character               │"
-"│                            ││ 1 │    1 │ 陳大文               │ 大文🐘      │ 臺…││                                  │" Hidden by multi-width symbols: [(44, " "), (46, " "), (48, " "), (67, " "), (69, " "), (71, " "), (81, " ")]
-"│                            ││ 2 │    2 │ 林美玲               │ NULL        │ 高…││ 2                                │" Hidden by multi-width symbols: [(44, " "), (46, " "), (48, " "), (81, " ")]
+"│                            ││  Toggle pane zoom                         Space z │╮╭ [Cell] Row · I ──────────────────╮"
+"│                            ││  Toggle explorer                          Space b │││ id                               │"
+"│                            ││  Narrow explorer                          Space < │││ int8 · 1 character               │"
+"│                            ││  Widen explorer                           Space > │││                                  │"
+"│                            │╰───────────────────────────────────────────────────╯││ 2                                │"
 "│                            ││ 3 │    3 │ 張志明               │ 👨‍👩‍👧‍👦 family   │ NU…││                                  │" Hidden by multi-width symbols: [(44, " "), (46, " "), (48, " "), (67, " ")]
 "│                            ││ 4 │    4 │ Emoji テスト         │ 🔥🚀✨🎉    │ 沖…││                                  │" Hidden by multi-width symbols: [(50, " "), (52, " "), (54, " "), (67, " "), (69, " "), (71, " "), (73, " "), (81, " ")]
 "│                            ││ 5 │    5 │ 山田太郎             │ やまだ      │ 東…││                                  │" Hidden by multi-width symbols: [(44, " "), (46, " "), (48, " "), (50, " "), (67, " "), (69, " "), (71, " "), (81, " ")]

@@ -441,7 +441,10 @@ fn leader_groups_list_only_what_leads_to_an_action() {
     let keys: Vec<&str> = root.iter().map(|(k, _)| k.as_str()).collect();
     assert_eq!(
         keys,
-        [",", "/", "1", "2", "3", "4", "5", "6", "7", "8", "9", "?", "Space", "c", "e", "r", "s", "t"],
+        [
+            ",", "/", "1", "2", "3", "4", "5", "6", "7", "8", "9", "<", ">", "?", "Space", "b", "c", "e", "r", "s",
+            "t", "z"
+        ],
         "the monitor has no action yet"
     );
     // `Space Space`: the action menu, listed with the groups.

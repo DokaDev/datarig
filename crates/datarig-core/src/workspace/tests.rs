@@ -15,6 +15,8 @@ fn sample() -> WorkspaceState {
             expanded_folders: vec!["work".into(), "work/prod".into()],
             scripts_expanded: true,
             script_folders: vec!["売上".into()],
+            hidden: true,
+            width: Some(31),
         },
         tabs: vec![
             TabState {
@@ -489,6 +491,31 @@ fn keys_this_version_does_not_know_are_written_back() {
     assert_eq!(again.state.tabs[2].results.map(|r| r.share), Some(DEFAULT_SHARE));
     save(&dir, &again.state).unwrap();
     check();
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The explorer's `hidden` and `width`: a file without them (an earlier build's) reads as shown at
+/// the default width; a width that is no width is the default; no width written drops the one
+/// the file had (it is a key this version knows).
+#[test]
+fn the_explorers_hidden_and_width_read_with_defaults() {
+    let dir = temp_dir("explorer");
+    fs::write(dir.join(FILE), "version = 3\nactive = 0\n\n[explorer]\nscripts_expanded = true\n").unwrap();
+    let l = load(&dir);
+    assert!(l.state.explorer.scripts_expanded);
+    assert_eq!((l.state.explorer.hidden, l.state.explorer.width), (false, None));
+    for (text, want) in
+        [("width = 0", None), ("width = -3", None), ("width = \"wide\"", None), ("width = 44", Some(44))]
+    {
+        fs::write(dir.join(FILE), format!("version = 3\nactive = 0\n\n[explorer]\nhidden = true\n{text}\n")).unwrap();
+        let l = load(&dir);
+        assert_eq!((l.state.explorer.hidden, l.state.explorer.width), (true, want), "{text}");
+    }
+    let mut s = load(&dir).state;
+    s.explorer.width = None;
+    save(&dir, &s).unwrap();
+    let written = fs::read_to_string(dir.join(FILE)).unwrap();
+    assert!(written.contains("hidden = true") && !written.contains("width"), "{written}");
     let _ = fs::remove_dir_all(&dir);
 }
 

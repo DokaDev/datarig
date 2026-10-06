@@ -24,6 +24,14 @@ impl App {
             self.idle_event = !hovered;
             return;
         }
+        // A press starts afresh, whatever takes it (a dialog, the menu, the pane): a drag whose
+        // release never came (let go outside the window) is over.
+        if let Event::Mouse(m) = ev
+            && m.kind == MouseEventKind::Down(MouseButton::Left)
+        {
+            self.drag = None;
+            self.drag_at = None;
+        }
         match ev {
             Event::Key(k) => {
                 let k = keyboard::normalize(k);
@@ -309,8 +317,11 @@ impl App {
     pub(super) fn cycle_focus(&mut self, d: i32) {
         // The panes on screen, in order: a table tab has no editor, a query tab shows its
         // results once it ran.
-        let order: Vec<Focus> =
-            [Focus::Tree, Focus::Editor, Focus::Results].into_iter().filter(|f| self.focusable(*f)).collect();
+        // A hidden explorer is skipped (its own key shows it again).
+        let order: Vec<Focus> = [Focus::Tree, Focus::Editor, Focus::Results]
+            .into_iter()
+            .filter(|f| self.focusable(*f) && (*f != Focus::Tree || self.explorer_shown()))
+            .collect();
         let n = order.len() as i32;
         // The inspector counts as the results' place.
         let now = if self.focus == Focus::Inspector { Focus::Results } else { self.focus };
@@ -591,6 +602,12 @@ impl App {
             MouseEventKind::Down(MouseButton::Middle) if inside(l.tab_bar) && !self.tabs.is_empty() => {
                 self.tab_bar_click(x, true)
             }
+            // The explorer's right border: a drag resizes it.
+            MouseEventKind::Down(MouseButton::Left)
+                if inside(l.explorer_edge) && !self.overlays.is_open(OverlayKind::CellViewer) =>
+            {
+                self.drag = Some(Drag::ExplorerEdge);
+            }
             MouseEventKind::Down(MouseButton::Left) => {
                 if self.overlays.is_open(OverlayKind::CellViewer) {
                     return;
@@ -762,6 +779,8 @@ impl App {
                 t.editor.drag_select(anchor, to);
             }
             Some(Drag::Divider) if !self.tabs.is_empty() => self.drag_divider(y),
+            // The border follows the pointer: the explorer ends on its column.
+            Some(Drag::ExplorerEdge) => self.resize_explorer((x + 1).saturating_sub(self.layout.workspace.x)),
             Some(Drag::Grid { anchor, shape }) if self.focus == Focus::Results && !self.tabs.is_empty() => {
                 self.drag_at = Some((x, y));
                 let t = self.tabs.active_mut();

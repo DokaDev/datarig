@@ -42,28 +42,37 @@ pub(crate) fn draw_workspace(f: &mut Frame, app: &mut App) -> Option<(u16, u16)>
         put(f.buffer_mut(), r.x + 1, r.y, &format!("{mark} {text}"), r.width.saturating_sub(2) as usize, style);
     }
     let rows = [rows[1], rows[2]];
-    let tree_w = (area.width * 25 / 100).clamp(24, 40);
+    // A zoomed pane takes the tabs' place and the explorer's; a hidden explorer leaves its
+    // place to the tabs. `Layout` records what is drawn, for the mouse too.
+    let zoom = app.zoomed();
+    let tree_w = match zoom.is_none() && app.explorer_shown() {
+        true => crate::app::pane::explorer_width(rows[0].width, app.explorer.width),
+        false => 0,
+    };
     let cols = RLayout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Length(tree_w), Constraint::Min(1)])
         .split(rows[0]);
-
-    // Explorer
-    let tb = panel(&app.i18n.label(Label::PaneTreeTitle), app.focus == Focus::Tree, cols[0].width);
-    let inner = tb.inner(cols[0]);
-    tb.render(cols[0], f.buffer_mut());
-    let focused = app.focus == Focus::Tree;
-    let filter_cursor = draw_explorer(app, inner, f.buffer_mut(), focused);
+    let (tree, right) = (cols[0], cols[1]);
+    let mut filter_cursor = None;
+    if tree.width > 0 {
+        filter_cursor = draw_tree(app, tree, f.buffer_mut());
+    }
+    let base = Layout { workspace: rows[0], ..Layout::default() };
+    let edge = |tree: Rect| match tree.width {
+        0 => Rect::default(),
+        w => Rect { x: tree.x + w - 1, width: 1, ..tree },
+    };
 
     if app.profiles.is_empty() {
-        app.layout = Layout { tree: cols[0], editor: cols[1], results: Rect::default(), ..Layout::default() };
-        draw_welcome(app, cols[1], f.buffer_mut());
+        app.layout = Layout { tree, explorer_edge: edge(tree), editor: right, ..base };
+        draw_welcome(app, right, f.buffer_mut());
         draw_status(app, rows[1], f.buffer_mut());
         return filter_cursor;
     }
     if app.tabs.is_empty() {
-        app.layout = Layout { tree: cols[0], editor: cols[1], results: Rect::default(), ..Layout::default() };
-        draw_empty(app, cols[1], f.buffer_mut());
+        app.layout = Layout { tree, explorer_edge: edge(tree), editor: right, ..base };
+        draw_empty(app, right, f.buffer_mut());
         draw_status(app, rows[1], f.buffer_mut());
         return filter_cursor;
     }
@@ -71,27 +80,37 @@ pub(crate) fn draw_workspace(f: &mut Frame, app: &mut App) -> Option<(u16, u16)>
     let bar_and_panes = RLayout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(1)])
-        .split(cols[1]);
+        .split(right);
     let body = bar_and_panes[1];
-    app.layout = Layout { tree: cols[0], body, ..Layout::default() };
+    app.layout = Layout { tree, explorer_edge: edge(tree), body, ..base };
 
     app.layout.tab_bar = bar_and_panes[0];
     app.tab_hits = draw_tab_bar(app, bar_and_panes[0], f.buffer_mut());
 
     // A table tab: its results at full height. A query tab: the editor, and below it the
-    // results pane once it ran, sized, hidden or maximised per tab.
-    let (editor_area, results_area) = if app.tab().is_table() {
-        (None, Some(body))
-    } else if !app.results_shown() {
-        (Some(body), None)
-    } else if app.tab().pane.maximized {
-        (None, Some(body))
-    } else {
-        let rows = crate::app::pane::results_rows(body.height, app.tab().pane.share);
-        let editor = Rect { height: body.height - rows, ..body };
-        let results = Rect { y: body.y + body.height - rows, height: rows, ..body };
-        app.layout.divider = Rect { height: 1, ..results };
-        (Some(editor), Some(results))
+    // results pane once it ran, sized or hidden per tab. A zoomed pane: that pane alone.
+    let (editor_area, results_area) = match zoom {
+        Some(Focus::Tree) => {
+            app.layout.tree = body;
+            filter_cursor = draw_tree(app, body, f.buffer_mut());
+            (None, None)
+        }
+        Some(Focus::Inspector) => {
+            app.layout.detail = body;
+            crate::widgets::inspector::draw_inspector(app, body, f.buffer_mut());
+            (None, None)
+        }
+        Some(Focus::Editor) => (Some(body), None),
+        Some(Focus::Results) => (None, Some(body)),
+        None if app.tab().is_table() => (None, Some(body)),
+        None if !app.results_shown() => (Some(body), None),
+        None => {
+            let rows = crate::app::pane::results_rows(body.height, app.tab().pane.share);
+            let editor = Rect { height: body.height - rows, ..body };
+            let results = Rect { y: body.y + body.height - rows, height: rows, ..body };
+            app.layout.divider = Rect { height: 1, ..results };
+            (Some(editor), Some(results))
+        }
     };
     let cursor = match editor_area {
         Some(area) => draw_editor(app, area, f.buffer_mut()),
@@ -113,6 +132,15 @@ pub(crate) fn draw_workspace(f: &mut Frame, app: &mut App) -> Option<(u16, u16)>
     } else {
         (app.focus == Focus::Editor && editor_area.is_some()).then_some(cursor)
     }
+}
+
+/// The explorer in `area`, with its border. Returns where the filter's cursor is.
+fn draw_tree(app: &mut App, area: Rect, buf: &mut Buffer) -> Option<(u16, u16)> {
+    let focused = app.focus == Focus::Tree;
+    let tb = panel(&app.i18n.label(Label::PaneTreeTitle), focused, area.width);
+    let inner = tb.inner(area);
+    tb.render(area, buf);
+    draw_explorer(app, inner, buf, focused)
 }
 
 /// The editor pane of a query tab: the connection bar (or the unbound banner) on its first

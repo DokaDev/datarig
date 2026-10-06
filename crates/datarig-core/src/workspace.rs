@@ -23,6 +23,8 @@
 //! expanded_folders = ["work", "work/prod"]
 //! scripts_expanded = true
 //! script_folders = ["reports"]
+//! hidden = false          # the explorer is hidden (the panes take the whole width)
+//! width = 32              # its width in columns; none: the default for the terminal's width
 //!
 //! [[tabs]]
 //! id = "7d7c…"            # console file name
@@ -56,8 +58,9 @@
 //! profile = "3f0b8f5e-…"
 //! ```
 //!
-//! The `ddl` kind came within version 3: an earlier build keeps such a tab as one of a kind it
-//! does not know (below).
+//! The `ddl` kind and the explorer's `hidden` and `width` came within version 3: an earlier
+//! build keeps such a tab as one of a kind it does not know, and those keys as keys it does not
+//! know (below).
 //!
 //! Version 2 added `console`, the `table` kind and `results`; version 3
 //! a query tab's `context` (its database and schema). A file of an earlier
@@ -122,6 +125,8 @@ pub struct PaneState {
     /// Percent of the height the results take.
     pub share: u16,
     pub hidden: bool,
+    /// The results pane is zoomed: it takes the whole workspace (the app's other zooms, of the
+    /// explorer or the editor, are not kept).
     pub maximized: bool,
 }
 
@@ -160,6 +165,10 @@ pub struct ExplorerState {
     pub scripts_expanded: bool,
     /// Open folders of the saved queries.
     pub script_folders: Vec<String>,
+    /// The explorer is hidden.
+    pub hidden: bool,
+    /// The explorer's width the user chose, in columns (`None`: the default).
+    pub width: Option<u16>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -241,6 +250,12 @@ fn parse(text: &str) -> Result<(WorkspaceState, u64), Fault> {
             expanded_folders: strings(e.get("expanded_folders")),
             scripts_expanded: e.get("scripts_expanded").and_then(toml::Value::as_bool).unwrap_or(false),
             script_folders: strings(e.get("script_folders")),
+            hidden: e.get("hidden").and_then(toml::Value::as_bool).unwrap_or(false),
+            width: e
+                .get("width")
+                .and_then(toml::Value::as_integer)
+                .and_then(|w| u16::try_from(w).ok())
+                .filter(|w| *w > 0),
         };
     }
     let mut consoles = std::collections::HashSet::new();
@@ -353,7 +368,7 @@ pub fn save(state: &Path, s: &WorkspaceState) -> io::Result<()> {
 /// The keys of the file this version writes, at the top, in `[explorer]`, in a tab and in its
 /// `results`.
 const TOP_KEYS: [&str; 4] = ["version", "active", "explorer", "tabs"];
-const EXPLORER_KEYS: [&str; 3] = ["expanded_folders", "scripts_expanded", "script_folders"];
+const EXPLORER_KEYS: [&str; 5] = ["expanded_folders", "scripts_expanded", "script_folders", "hidden", "width"];
 const TAB_KEYS: [&str; 14] = [
     "id", "kind", "script", "console", "schema", "table", "profile", "cursor", "top", "results", "context", "object",
     "on", "name",
@@ -491,6 +506,10 @@ fn build(s: &WorkspaceState) -> toml_edit::DocumentMut {
     e["expanded_folders"] = list(&s.explorer.expanded_folders);
     e["scripts_expanded"] = toml_edit::value(s.explorer.scripts_expanded);
     e["script_folders"] = list(&s.explorer.script_folders);
+    e["hidden"] = toml_edit::value(s.explorer.hidden);
+    if let Some(w) = s.explorer.width {
+        e["width"] = toml_edit::value(i64::from(w));
+    }
     doc["explorer"] = toml_edit::Item::Table(e);
     let mut tabs = toml_edit::ArrayOfTables::new();
     for t in &s.tabs {

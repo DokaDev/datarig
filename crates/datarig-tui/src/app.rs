@@ -358,7 +358,13 @@ pub type Clock = Arc<dyn Fn() -> Instant + Send + Sync>;
 
 #[derive(Default, Clone, Copy, Debug)]
 pub struct Layout {
+    /// The area the explorer and the tabs (their bar and panes) share, between the banner and
+    /// the status bar: the explorer's width is measured against it.
+    pub workspace: Rect,
+    /// The explorer as drawn (the whole tab area when it is zoomed; empty when hidden).
     pub tree: Rect,
+    /// The explorer's right border while it is drawn next to the panes: dragging it resizes it.
+    pub explorer_edge: Rect,
     pub editor: Rect,
     pub results: Rect,
     /// The inspector panel next to the results (empty when it is not shown).
@@ -391,6 +397,8 @@ enum Drag {
     Grid { anchor: (usize, usize), shape: crate::widgets::grid::Shape },
     /// The divider between the editor and the results pane.
     Divider,
+    /// The explorer's right border.
+    ExplorerEdge,
 }
 
 /// The tabs of the result inspector.
@@ -1068,6 +1076,13 @@ impl App {
 
     fn run_startup(&mut self, startup: Startup) {
         self.focus = Focus::Tree;
+        // A hidden explorer stays hidden: the restored tab has the focus (its connection
+        // starts with the first key, as when the user moves there).
+        if self.explorer.hidden && !self.tabs.is_empty() && !self.profiles.is_empty() {
+            self.focus =
+                [Focus::Editor, Focus::Results].into_iter().find(|f| self.focusable(*f)).unwrap_or(Focus::Tree);
+            self.last_focus = self.focus;
+        }
         let last = self.last_used.filter(|id| self.profile(*id).is_some()).or(self.profiles_sorted_first());
         if let Some(id) = last {
             self.reveal_profile(id);
