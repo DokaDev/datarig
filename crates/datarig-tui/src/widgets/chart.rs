@@ -169,11 +169,22 @@ fn kind_bar(cx: &Look, c: &mut ChartTab, info: Info, area: Rect, buf: &mut Buffe
     let th = cx.th;
     buf.set_style(area, Style::new().bg(th.surface));
     let count = info.rows as u64;
-    let (note, style) = if info.more {
-        (cx.i18n.msg(&Msg::ChartRowsMore { count }), Style::new().fg(th.warning).bg(th.surface))
+    let (long, short, style) = if info.more {
+        (
+            cx.i18n.msg(&Msg::ChartRowsMore { count }),
+            cx.i18n.msg(&Msg::ChartRowsMoreShort { count }),
+            Style::new().fg(th.warning).bg(th.surface),
+        )
     } else {
-        (cx.i18n.msg(&Msg::ChartRows { count }), Style::new().fg(th.fg_muted).bg(th.surface))
+        (
+            cx.i18n.msg(&Msg::ChartRows { count }),
+            cx.i18n.msg(&Msg::ChartRowsShort { count }),
+            Style::new().fg(th.fg_muted).bg(th.surface),
+        )
     };
+    // The kinds take what they need; the note its long form when it fits after them.
+    let kinds: u16 = Kind::ALL.iter().map(|k| width(&cx.i18n.label(kind_label(*k))) as u16 + 3).sum();
+    let note = if kinds + width(&long) as u16 + 3 <= area.width { long } else { short };
     let note_w = width(&note) as u16;
     let mut x = area.x + 1;
     let end = area.x + area.width;
@@ -199,8 +210,6 @@ fn kind_bar(cx: &Look, c: &mut ChartTab, info: Info, area: Rect, buf: &mut Buffe
     }
     if x + note_w + 2 <= end {
         put(buf, end - note_w - 1, area.y, &note, note_w as usize, style);
-    } else if x + 4 < end {
-        put(buf, x + 1, area.y, &note, (end - x - 2) as usize, style);
     }
 }
 
@@ -385,8 +394,8 @@ fn point_label(cx: &Look, m: &Model, i: usize) -> String {
 }
 
 /// The value axis' labels in a gutter left of `plot` (right-aligned), a tick on the axis line
-/// at each.
-fn y_axis(cx: &Look, t: &scale::Ticks, labels: &[String], gutter: u16, plot: Rect, buf: &mut Buffer) {
+/// at each: for bars on the cell a bar of that value reaches, for lines on the dot's cell.
+fn y_axis(cx: &Look, t: &scale::Ticks, labels: &[String], gutter: u16, plot: Rect, bars: bool, buf: &mut Buffer) {
     let th = cx.th;
     let axis = plot.x - 1;
     let muted = Style::new().fg(th.fg_muted).bg(th.bg);
@@ -397,7 +406,9 @@ fn y_axis(cx: &Look, t: &scale::Ticks, labels: &[String], gutter: u16, plot: Rec
     let mut used = None;
     for (v, label) in t.values.iter().zip(labels) {
         let Some(f) = t.at(*v) else { continue };
-        let y = plot.y + plot.height - 1 - (f * f64::from(plot.height - 1)).round() as u16;
+        let h = f64::from(plot.height);
+        let r = if bars { (f * h).round().min(h - 1.0) } else { (f * (h - 1.0)).round() };
+        let y = plot.y + plot.height - 1 - r.max(0.0) as u16;
         if used == Some(y) {
             continue;
         }
@@ -435,26 +446,27 @@ fn bars(cx: &Look, c: &mut ChartTab, m: &Model, area: Rect, buf: &mut Buffer) {
         return message(cx, &[cx.i18n.label(Label::ChartTooSmall).to_string()], area, buf);
     }
     c.plot = plot;
-    y_axis(cx, &ticks, &labels, gutter, plot, buf);
+    y_axis(cx, &ticks, &labels, gutter, plot, true, buf);
     let (n, k) = (m.points.len(), m.series.len().max(1));
+    // Groups as wide as the plot allows (bars of at least a column with a gap between groups,
+    // at most 16 columns a bar); when they all fit they spread over the whole width.
     let natural = plot.width as usize / n.max(1);
     let gw = natural.max(k + 1).min(k * 16 + 4);
     let fits = (plot.width as usize / gw).max(1).min(n);
+    let span = if fits == n && natural <= k * 16 + 4 { plot.width as usize } else { fits * gw };
+    let start = |j: usize| plot.x + (j * span / fits) as u16;
     let bw = ((gw - 1) / k).max(1);
-    let pad = (gw - bw * k) / 2;
     scroll_to(c, fits, n);
     let cursor_bg = th.cursor_line.bg.filter(|_| cx.focused);
     let label_y = plot.y + plot.height + 1;
     for i in c.offset..(c.offset + fits).min(n) {
         work(1);
-        let gx = plot.x + ((i - c.offset) * gw) as u16;
+        let (gx, gwi) = (start(i - c.offset), start(i - c.offset + 1) - start(i - c.offset));
+        let pad = (usize::from(gwi) - bw * k) / 2;
         if i == c.cursor
             && let Some(bg) = cursor_bg
         {
-            buf.set_style(
-                Rect::new(gx, plot.y, (gw as u16).min(plot.x + plot.width - gx), plot.height),
-                Style::new().bg(bg),
-            );
+            buf.set_style(Rect::new(gx, plot.y, gwi.min(plot.x + plot.width - gx), plot.height), Style::new().bg(bg));
         }
         for (s, series) in m.series.iter().enumerate() {
             let Some(v) = series.values[i] else { continue };
@@ -481,7 +493,7 @@ fn bars(cx: &Look, c: &mut ChartTab, m: &Model, area: Rect, buf: &mut Buffer) {
                 }
             }
         }
-        c.hits.push((Rect::new(gx, plot.y, gw as u16, plot.height + 2), i));
+        c.hits.push((Rect::new(gx, plot.y, gwi, plot.height + 2), i));
     }
     // The axis line, and the labels under the groups (every few when they are narrow).
     let line = Style::new().fg(th.border).bg(th.bg);
@@ -501,10 +513,10 @@ fn bars(cx: &Look, c: &mut ChartTab, m: &Model, area: Rect, buf: &mut Buffer) {
         drawn.push(c.cursor);
     }
     for i in drawn {
-        let gx = plot.x + ((i - c.offset) * gw) as u16;
+        let (gx, gwi) = (start(i - c.offset), usize::from(start(i - c.offset + 1) - start(i - c.offset)));
         let label = clip(&point_label(cx, m, i), room);
         let lw = width(&label);
-        let x = if every == 1 { gx + ((gw.saturating_sub(lw)) / 2) as u16 } else { gx };
+        let x = if every == 1 { gx + ((gwi.saturating_sub(lw)) / 2) as u16 } else { gx };
         let style = if i == c.cursor { label_style(cx) } else { muted };
         let x = x.min((plot.x + plot.width).saturating_sub(lw as u16));
         put(buf, x, label_y, &label, (plot.x + plot.width - x) as usize, style);
@@ -655,6 +667,10 @@ fn x_frac(m: &Model, i: usize, span: (f64, f64)) -> f64 {
     }
 }
 
+/// A dot column of a series: its first, last, lowest and highest dot, and whether the line is
+/// broken before it.
+type Column = (usize, usize, usize, usize, bool);
+
 /// The lines of `m` in braille dots in a `w`×`h` plot.
 fn rasterize(m: &Model, t: &scale::Ticks, w: u16, h: u16) -> Raster {
     let (dw, dh) = (usize::from(w) * 2, usize::from(h) * 4);
@@ -668,9 +684,8 @@ fn rasterize(m: &Model, t: &scale::Ticks, w: u16, h: u16) -> Raster {
         cell.1 = s as u8 + 1;
     };
     for (s, series) in m.series.iter().enumerate() {
-        // Per dot column: the first, last, lowest and highest dot, and whether the line is
-        // broken before it (a point without a value).
-        let mut cols: Vec<Option<(usize, usize, usize, usize, bool)>> = vec![None; dw];
+        // Per dot column (a point without a value breaks the line).
+        let mut cols: Vec<Option<Column>> = vec![None; dw];
         let mut broken = true;
         for (i, v) in series.values.iter().enumerate() {
             let Some(f) = v.and_then(|v| t.at(v)) else {
@@ -733,7 +748,7 @@ fn line(cx: &Look, c: &mut ChartTab, m: &Model, area: Rect, buf: &mut Buffer) {
         return message(cx, &[cx.i18n.label(Label::ChartTooSmall).to_string()], area, buf);
     }
     c.plot = plot;
-    y_axis(cx, &ticks, &labels, gutter, plot, buf);
+    y_axis(cx, &ticks, &labels, gutter, plot, false, buf);
     let key = (m.points.len() as u64, m.series.len(), plot.width, plot.height, c.spec.log);
     if c.raster.as_ref().is_none_or(|r| r.key != key) {
         let mut r = rasterize(m, &ticks, plot.width, plot.height);
@@ -771,7 +786,7 @@ fn line(cx: &Look, c: &mut ChartTab, m: &Model, area: Rect, buf: &mut Buffer) {
     put(buf, plot.x - 1, ay, "└", 1, line);
     put(buf, plot.x, ay, &"─".repeat(plot.width as usize), plot.width as usize, line);
     let muted = Style::new().fg(th.fg_muted).bg(th.bg);
-    let mut free = plot.x;
+    let mut free = area.x;
     for (col, label) in x_ticks(cx, m, plot.width) {
         let at = plot.x + col;
         put(buf, at, ay, "┬", 1, line);
@@ -866,14 +881,14 @@ fn readout(cx: &Look, c: &ChartTab, m: &Model, area: Rect, buf: &mut Buffer) {
     let muted = Style::new().fg(th.fg_muted).bg(th.bg);
     text(&mut x, "▸ ", bold);
     text(&mut x, &point_label(cx, m, c.cursor), bold);
-    // The cells as the row has them, when the point is one row (no binary rounding).
+    // A value of one row as the row has it (no binary rounding), when that row was read.
     let cell = |s: usize| -> Option<String> {
-        if p.rows != 1 || p.others {
+        let series = m.series.get(s)?;
+        if p.others || series.rows.get(c.cursor) != Some(&1) {
             return None;
         }
-        let (row, at, cells) = c.row.as_ref()?;
-        let _ = row;
-        if Some(*at) != p.first_row {
+        let (_, at, cells) = c.row.as_ref()?;
+        if series.first.get(c.cursor).copied().flatten() != Some(*at) {
             return None;
         }
         let col = if c.spec.by.is_some() { *c.spec.ys.first()? } else { *c.spec.ys.get(s)? };
@@ -884,7 +899,7 @@ fn readout(cx: &Look, c: &ChartTab, m: &Model, area: Rect, buf: &mut Buffer) {
         let name =
             if series.others { cx.i18n.label(Label::ChartOthers).to_string() } else { sanitize_cell(&series.name) };
         let value = match series.values[c.cursor] {
-            Some(v) => cell(s).filter(|_| series.values[c.cursor].is_some()).unwrap_or_else(|| scale::plain(v)),
+            Some(v) => cell(s).unwrap_or_else(|| scale::plain(v)),
             None => "–".into(),
         };
         let (ns, vs) = if s == c.series && m.series.len() > 1 {
@@ -898,13 +913,15 @@ fn readout(cx: &Look, c: &ChartTab, m: &Model, area: Rect, buf: &mut Buffer) {
         text(&mut x, &format!("{name} "), ns);
         text(&mut x, &value, vs);
     }
+    // The rows of the selected series' value (of the point when it has none).
+    let summed = m.series.get(c.series).and_then(|s| s.rows.get(c.cursor)).copied().filter(|n| *n > 0);
+    let count = summed.map_or(p.rows as u64, u64::from);
+    let row = crate::app::chart::ChartTab::row_of(m, c.cursor, c.series).map_or(0, |r| r + 1).to_string();
     let rows: Localized = if p.others {
         cx.i18n.msg(&Msg::ChartReadoutOthers { count: m.other_points as u64 })
-    } else if p.rows > 1 {
-        let row = p.first_row.map_or(0, |r| r + 1).to_string();
-        cx.i18n.msg(&Msg::ChartReadoutRows { count: p.rows as u64, row })
+    } else if count > 1 {
+        cx.i18n.msg(&Msg::ChartReadoutRows { count, row })
     } else {
-        let row = p.first_row.map_or(0, |r| r + 1).to_string();
         cx.i18n.msg(&Msg::ChartReadoutRow { row })
     };
     text(&mut x, " · ", muted);

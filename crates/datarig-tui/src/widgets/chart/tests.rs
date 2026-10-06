@@ -1,1 +1,93 @@
+use super::*;
+use datarig_core::chart::{Builder, Kind, Spec, roles};
+use datarig_core::driver::ColumnMeta;
 
+fn meta(name: &str, ty: &str, numeric: bool) -> ColumnMeta {
+    ColumnMeta { name: name.into(), type_name: ty.into(), numeric, json: false, origin: None }
+}
+
+/// A line chart's model of `values` over the row number.
+fn line_of(values: &[Option<f64>]) -> Model {
+    let cols = [meta("n", "float8", true)];
+    let spec = Spec { kind: Kind::Line, x: None, ys: vec![0], by: None, log: false };
+    let rows: Vec<Vec<Option<String>>> = values.iter().map(|v| vec![v.map(|v| v.to_string())]).collect();
+    let roles = roles(&cols, &rows);
+    let mut b = Builder::new(&spec, &cols, &roles);
+    for (i, r) in rows.iter().enumerate() {
+        b.push(i, r);
+    }
+    b.finish().unwrap()
+}
+
+#[test]
+fn bars_fill_eighths_from_a_baseline_on_a_cell_boundary() {
+    let t = scale::linear(0.0, 100.0, 6, true);
+    // 10 cells: 50 fills 40 eighths from 0.
+    assert_eq!(bar_cells(&t, 50.0, 10), Some((0, 40)));
+    assert_eq!(bar_cells(&t, 100.0, 10), Some((0, 80)));
+    // A small value shows at least an eighth; zero shows nothing.
+    assert_eq!(bar_cells(&t, 0.01, 10), Some((0, 1)));
+    assert_eq!(bar_cells(&t, 0.0, 10), Some((0, 0)));
+    // Negative values grow down from a baseline rounded to a cell boundary.
+    let t = scale::linear(-50.0, 100.0, 4, true);
+    let (base, at) = bar_cells(&t, -25.0, 9).unwrap();
+    assert_eq!(base % 8, 0);
+    assert!(at < base, "{base} {at}");
+    // A log axis has no zero: bars start at its bottom, values of zero or less are not drawn.
+    let t = scale::log(1.0, 1000.0, 5);
+    assert_eq!(bar_cells(&t, 1000.0, 3), Some((0, 24)));
+    assert_eq!(bar_cells(&t, 1.0, 3), Some((0, 1)));
+    assert_eq!(bar_cells(&t, 0.0, 3), None);
+    assert_eq!(bar_cells(&t, -4.0, 3), None);
+}
+
+#[test]
+fn lines_stay_in_their_plot_and_break_at_missing_values() {
+    let m = line_of(&[Some(0.0), Some(10.0), None, Some(5.0), Some(10.0)]);
+    let t = scale::linear(0.0, 10.0, 3, false);
+    let r = rasterize(&m, &t, 10, 3);
+    assert_eq!(r.cells.len(), 30);
+    assert_eq!(r.cols.len(), 5);
+    assert_eq!((r.cols[0], r.cols[4]), (0, 9), "the first and last point at the ends");
+    // Bottom-left dot (the first value, 0) and top-right (the last, 10).
+    assert_ne!(r.cells[20].0 & dot_bit(0, 3), 0);
+    assert_ne!(r.cells[9].0 & dot_bit(1, 0), 0);
+    // No line through the missing value: the columns between points 1 and 3 hold only
+    // what those points drew.
+    let between = (r.cols[1] + 1..r.cols[3]).filter(|&x| (0..3).any(|y| r.cells[y * 10 + x as usize].0 != 0)).count();
+    assert_eq!(between, 0, "{:?}", r.cells);
+}
+
+#[test]
+fn a_large_line_chart_walks_each_point_and_dot_column_a_bounded_number_of_times() {
+    let n = 100_000;
+    let values: Vec<Option<f64>> = (0..n).map(|i| Some(((i * 7919) % 1000) as f64)).collect();
+    let m = line_of(&values);
+    let t = scale::linear(0.0, 1000.0, 5, false);
+    take_work();
+    let r = rasterize(&m, &t, 100, 20);
+    let walked = take_work();
+    assert!(walked <= 2 * n as u64 + 200, "{walked}");
+    // Every column has dots: the values jump about.
+    assert!((0..100).all(|x| (0..20).any(|y| r.cells[y * 100 + x].0 != 0)));
+}
+
+#[test]
+fn points_place_by_their_value_or_their_index() {
+    let m = line_of(&[Some(1.0), Some(2.0), Some(3.0)]);
+    assert_eq!((0..3).map(|i| x_frac(&m, i, m.x_range())).collect::<Vec<_>>(), [0.0, 0.5, 1.0]);
+    let cols = [meta("x", "int4", true), meta("y", "int4", true)];
+    let spec = Spec { kind: Kind::Line, x: Some(0), ys: vec![1], by: None, log: false };
+    let rows = vec![
+        vec![Some("0".to_string()), Some("1".to_string())],
+        vec![Some("1".into()), Some("1".into())],
+        vec![Some("10".into()), Some("1".into())],
+    ];
+    let roles = roles(&cols, &rows);
+    let mut b = Builder::new(&spec, &cols, &roles);
+    for (i, r) in rows.iter().enumerate() {
+        b.push(i, r);
+    }
+    let m = b.finish().unwrap();
+    assert_eq!((0..3).map(|i| x_frac(&m, i, m.x_range())).collect::<Vec<_>>(), [0.0, 0.1, 1.0]);
+}

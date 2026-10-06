@@ -129,6 +129,11 @@ fn rows_with_the_same_x_are_summed_and_nulls_are_counted() {
     assert_eq!(m.series[0].name, "qty");
     assert_eq!(m.series[0].values, [Some(3.0), Some(3.0), None]);
     assert_eq!(m.series[1].values, [Some(1.5), None, Some(1200.25)]);
+    // What each value sums, and its first row: "abc" is not a number, so tea's price is one row.
+    assert_eq!(m.series[0].rows, [2, 1, 0]);
+    assert_eq!(m.series[0].first, [Some(0), Some(1), None]);
+    assert_eq!(m.series[1].rows, [1, 0, 1]);
+    assert_eq!(m.series[1].first, [Some(0), None, Some(4)]);
     assert_eq!(m.skipped, Skipped { null_x: 1, bad_x: 0, null_y: 2, bad_y: 1, null_by: 0 });
     assert_eq!(m.skipped.nulls(), 3);
     assert!(m.merged);
@@ -195,6 +200,12 @@ fn a_by_column_splits_one_value_into_series_and_too_many_go_to_others() {
     assert_eq!(others.values, [Some(1.0 + 3.0 + 5.0), Some(2.0 + 4.0 + 6.0)]);
     assert_eq!(m.other_series, 3);
     assert_eq!(m.skipped.null_by, 1);
+    // A series per shop: each value is one row (the day has several, one per shop).
+    assert!(!m.merged);
+    assert_eq!(m.series[0].rows, [1, 1]);
+    assert_eq!(m.series[0].first, [Some(2), Some(3)]);
+    assert_eq!(others.rows, [3, 3]);
+    assert_eq!(others.first, [None, None]);
 }
 
 #[test]
@@ -212,6 +223,8 @@ fn too_many_bars_keep_the_largest_and_sum_the_rest() {
     assert!(others.others && others.first_row.is_none());
     assert_eq!(others.rows, 71);
     assert_eq!(m.series[0].values.last(), Some(&Some((0..71).sum::<i32>() as f64)));
+    assert_eq!((m.series[0].rows.last(), m.series[0].first.last()), (Some(&71), Some(&None)));
+    assert_eq!(m.series[0].first[0], Some(71));
     assert!(m.points.iter().enumerate().all(|(i, p)| p.x == i as f64));
     // Lines keep every point.
     let spec = Spec { kind: Kind::Line, ..spec };

@@ -1,0 +1,34 @@
+---
+source: crates/datarig-tui/tests/flows_chart.rs
+expression: "h.draw(100, 30).backend()"
+---
+"╭ Explorer ─────────────╮ 1 console 1 ×                                                             "
+"│  ＋ New connection    │╭ Query · console 1 ──────────────────────────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ ●   local-pg         ││ local-pg / datarig  127.0.0.1:55432 · policy: default                   │"
+"│  ▾ datarig default    ││  1 -- datarig 🐘  Ctrl+E: run the statement under the cursor            │" Hidden by multi-width symbols: [(42, " ")]
+"│    ▸ analytics        ││  2▎SELECT * FROM shop.users WHERE id <= 8;                              │"
+"│    ▸ public           ││  3                                                                      │"
+"│    ▸ shop             ││  4 SELECT u.name, o.status, o.total_amount                              │"
+"│                       ││  5 FROM shop.orders o                                                   │"
+"│                       ││  6 JOIN shop.users u ON u.id = o.user_id                                │"
+"│                       ││  7 WHERE o.status = 'paid';                                             │"
+"│                       ││  8                                                                      │"
+"│                       │╰─────────────────────────────────────────────────────────────────────────╯"
+"│                       │╭ Chart · Bars ───────────────────────────────────────────────────────────╮"
+"│                       ││  Result 1  [Chart]  Messages                                        H/L │"
+"│                       ││ [Bars]  Horizontal bars   Line                           5 fetched rows │"
+"│                       ││ X product · Y sold · by none · linear scale                             │"
+"│                       ││  40┤             ████████████                                           │"
+"│                       ││    │             ████████████                                           │"
+"│                       ││  20┤             ████████████                             ▆▆▆▆▆▆▆▆▆▆▆▆  │"
+"│                       ││    │▂▂▂▂▂▂▂▂▂▂▂▂ ████████████                             ████████████  │"
+"│                       ││   0┤████████████ ████████████                             ████████████  │"
+"│                       ││    │                           ████████████                             │"
+"│                       ││    │                           ▔▔▔▔▔▔▔▔▔▔▔▔                             │"
+"│                       ││ -20┤                                                                    │"
+"│                       ││    └─────────────────────────────────────────────────────────────────── │"
+"│                       ││       green tea    espresso    橙子汁 juice  lemon cake   hot chocola…  │" Hidden by multi-width symbols: [(59, " "), (61, " "), (63, " ")]
+"│                       ││ ▸ green tea · sold 12 · row 1                                           │"
+"│                       ││ 1 NULL skipped                                                          │"
+"╰───────────────────────╯╰─────────────────────────────────────────────────────────────────────────╯"
+" NORMAL  local-pg · policy: default │ 5 rows · 3ms   │ v kind · x X · s values · y copy · c rows EN "

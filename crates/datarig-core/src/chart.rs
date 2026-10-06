@@ -185,6 +185,31 @@ pub struct Series {
     pub others: bool,
     /// `None`: no value at that point (every value NULL or not a number, or no row).
     pub values: Vec<Option<f64>>,
+    /// How many values each point's value sums, and the row of the first one.
+    pub rows: Vec<u32>,
+    pub first: Vec<Option<usize>>,
+}
+
+impl Series {
+    fn new(name: String, others: bool, points: usize) -> Series {
+        Series { name, others, values: vec![None; points], rows: vec![0; points], first: vec![None; points] }
+    }
+
+    /// Only the points at `order`, in that order.
+    fn pick(&mut self, order: &[usize]) {
+        self.values = order.iter().map(|&i| self.values[i]).collect();
+        self.rows = order.iter().map(|&i| self.rows[i]).collect();
+        self.first = order.iter().map(|&i| self.first[i]).collect();
+    }
+
+    /// Add point `j`'s value to point `i`'s (the first row of the sum is no longer one row's).
+    fn absorb(&mut self, i: usize, v: Option<f64>, rows: u32) {
+        if let Some(v) = v {
+            self.values[i] = Some(self.values[i].unwrap_or(0.0) + v);
+        }
+        self.rows[i] += rows;
+        self.first[i] = None;
+    }
 }
 
 /// The numbers of a chart.
@@ -415,11 +440,7 @@ impl<'a> Builder<'a> {
             None => spec
                 .ys
                 .iter()
-                .map(|&y| Series {
-                    name: columns.get(y).map(|c| c.name.clone()).unwrap_or_default(),
-                    others: false,
-                    values: Vec::new(),
-                })
+                .map(|&y| Series::new(columns.get(y).map(|c| c.name.clone()).unwrap_or_default(), false, 0))
                 .collect(),
         };
         Self {
@@ -488,20 +509,19 @@ impl<'a> Builder<'a> {
                     Some(&s) => s,
                     None => {
                         let s = self.series.len();
-                        let values = vec![None; self.points.len()];
-                        self.series.push(Series { name: name.to_string(), others: false, values });
+                        self.series.push(Series::new(name.to_string(), false, self.points.len()));
                         self.names.insert(name.to_string(), s);
                         s
                     }
                 };
                 if let Some(&y) = self.spec.ys.first() {
-                    self.add(s, p, cells.get(y).and_then(Option::as_deref));
+                    self.add(s, p, row, cells.get(y).and_then(Option::as_deref));
                 }
             }
             None => {
                 for s in 0..self.spec.ys.len() {
                     let y = self.spec.ys[s];
-                    self.add(s, p, cells.get(y).and_then(Option::as_deref));
+                    self.add(s, p, row, cells.get(y).and_then(Option::as_deref));
                 }
             }
         }
@@ -511,11 +531,13 @@ impl<'a> Builder<'a> {
         self.points.push(Point { label, x, first_row: Some(row), rows: 0, others: false });
         for s in &mut self.series {
             s.values.push(None);
+            s.rows.push(0);
+            s.first.push(None);
         }
         self.points.len() - 1
     }
 
-    fn add(&mut self, s: usize, p: usize, cell: Option<&str>) {
+    fn add(&mut self, s: usize, p: usize, row: usize, cell: Option<&str>) {
         let Some(text) = cell else {
             self.skipped.null_y += 1;
             return;
@@ -524,8 +546,10 @@ impl<'a> Builder<'a> {
             self.skipped.bad_y += 1;
             return;
         };
-        let slot = &mut self.series[s].values[p];
-        *slot = Some(slot.unwrap_or(0.0) + v);
+        let s = &mut self.series[s];
+        s.values[p] = Some(s.values[p].unwrap_or(0.0) + v);
+        s.rows[p] += 1;
+        s.first[p].get_or_insert(row);
     }
 
     pub fn finish(self) -> Result<Model, Unsuitable> {
@@ -542,27 +566,25 @@ impl<'a> Builder<'a> {
             order.sort_by(|&a, &b| points[a].x.total_cmp(&points[b].x));
             points = order.iter().map(|&i| points[i].clone()).collect();
             for s in &mut series {
-                s.values = order.iter().map(|&i| s.values[i]).collect();
+                s.pick(&order);
             }
         }
         let mut other_series = 0;
         if series.len() > MAX_SERIES {
             let keep = largest(series.len(), MAX_SERIES - 1, |i| total(&series[i].values));
-            let mut others = vec![None; points.len()];
+            let mut others = Series::new(String::new(), true, points.len());
             let mut kept = Vec::new();
             for (i, s) in series.into_iter().enumerate() {
                 if keep.contains(&i) {
                     kept.push(s);
                 } else {
                     other_series += 1;
-                    for (o, v) in others.iter_mut().zip(&s.values) {
-                        if let Some(v) = v {
-                            *o = Some(o.unwrap_or(0.0) + v);
-                        }
+                    for p in 0..points.len() {
+                        others.absorb(p, s.values[p], s.rows[p]);
                     }
                 }
             }
-            kept.push(Series { name: String::new(), others: true, values: others });
+            kept.push(others);
             series = kept;
         }
         let mut other_points = 0;
@@ -580,9 +602,16 @@ impl<'a> Builder<'a> {
                 }
             }
             for s in &mut series {
-                let rest = (0..points.len()).filter(|i| !keep.contains(i)).filter_map(|i| s.values[i]);
-                let rest = rest.fold(None, |a: Option<f64>, v| Some(a.unwrap_or(0.0) + v));
-                s.values = kept.iter().map(|&i| s.values[i]).chain(std::iter::once(rest)).collect();
+                // The others bar at the end: the first left-out point, with the rest summed in.
+                let rest: Vec<usize> = (0..points.len()).filter(|i| !keep.contains(i)).collect();
+                let order: Vec<usize> = kept.iter().copied().chain(rest.first().copied()).collect();
+                let (values, rows) = (s.values.clone(), s.rows.clone());
+                s.pick(&order);
+                let last = order.len() - 1;
+                s.first[last] = None;
+                for &i in &rest[1..] {
+                    s.absorb(last, values[i], rows[i]);
+                }
             }
             points = kept.into_iter().map(|i| points[i].clone()).chain(std::iter::once(sum)).collect();
         }
@@ -602,7 +631,8 @@ impl<'a> Builder<'a> {
             return Err(Unsuitable::OnePoint);
         }
         let nonpositive = values.filter(|v| **v <= 0.0).count();
-        let merged = points.iter().any(|p| !p.others && p.rows > 1);
+        let merged =
+            series.iter().filter(|s| !s.others).any(|s| s.rows.iter().zip(&points).any(|(n, p)| *n > 1 && !p.others));
         Ok(Model {
             kind: spec.kind,
             axis,

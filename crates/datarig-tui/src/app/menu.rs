@@ -546,13 +546,9 @@ impl App {
         }
         let t = self.tab();
         let c = t.exec.chart.as_ref()?;
-        Some(MenuTarget::Chart {
-            tab: t.id,
-            binding: t.binding,
-            result: c.result,
-            spec: c.spec.clone(),
-            point: c.cursor,
-        })
+        // The result shown now (the chart follows it only when it is drawn).
+        let Results::Rows(rs) = &t.results else { return None };
+        Some(MenuTarget::Chart { tab: t.id, binding: t.binding, result: rs.id, spec: c.spec.clone(), point: c.cursor })
     }
 
     /// The Chart tab's menu: the point's and the chart's actions, then the kinds and columns.

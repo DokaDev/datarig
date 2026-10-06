@@ -41,7 +41,7 @@ impl Ticks {
 
 /// The step `x` rounded up to 1, 2 or 5 times a power of ten.
 pub fn nice(x: f64) -> f64 {
-    if !(x > 0.0) || !x.is_finite() {
+    if x.is_nan() || x <= 0.0 || !x.is_finite() {
         return 1.0;
     }
     let p = 10f64.powf(x.log10().floor());
@@ -66,7 +66,7 @@ pub fn linear(min: f64, max: f64, max_ticks: usize, zero: bool) -> Ticks {
         min = min.min(0.0);
         max = max.max(0.0);
     }
-    if !(max > min) {
+    if max.partial_cmp(&min) != Some(std::cmp::Ordering::Greater) {
         // One value: a range around it.
         let d = if min == 0.0 { 1.0 } else { min.abs() * 0.1 };
         (min, max) = if zero && min >= 0.0 { (0.0, min + d) } else { (min - d, max + d) };
@@ -237,7 +237,7 @@ pub fn times(min: f64, max: f64, max_ticks: usize, kind: TimeKind) -> Vec<(f64, 
     let months = (y1 - y0) * 12 + i64::from(m1) - i64::from(m0) + 1;
     let every = [1i64, 2, 3, 6, 12, 24, 60, 120, 240, 600, 1200, 6000]
         .into_iter()
-        .find(|&e| months / e <= n as i64 - 1)
+        .find(|&e| months / e < n as i64)
         .unwrap_or(12_000);
     let mut out = Vec::new();
     let mut i = (y0 * 12 + i64::from(m0) - 1).div_euclid(every) * every;

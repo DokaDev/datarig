@@ -1578,3 +1578,5 @@
 "chart.pick.by" = "차트: 값을 계열로 나눌 열"
 "chart.pick.stale" = "적용하지 않음: 목록을 연 뒤 결과가 바뀌었습니다."
 "chart.too_many_series" = "값 열은 최대 {count}개입니다"
+"chart.rows_short" = "{count}행"
+"chart.rows_more_short" = "{count}+행"

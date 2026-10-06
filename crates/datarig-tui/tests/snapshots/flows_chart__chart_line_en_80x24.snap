@@ -1,0 +1,28 @@
+---
+source: crates/datarig-tui/tests/flows_chart.rs
+expression: "h.draw(80, 24).backend()"
+---
+"╭ Explorer ────────────╮ 1 console 1 ×                                          "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ ●   local-pg        ││ local-pg / datarig  127.0.0.1:55432 · policy: default│"
+"│  ▾ datarig default   ││  1 -- datarig 🐘  Ctrl+E: run the statement under the│" Hidden by multi-width symbols: [(41, " ")]
+"│    ▸ analytics       ││  2▎SELECT * FROM shop.users WHERE id <= 8;           │"
+"│    ▸ public          ││  3                                                   │"
+"│    ▸ shop            ││  4 SELECT u.name, o.status, o.total_amount           │"
+"│                      ││  5 FROM shop.orders o                                │"
+"│                      ││  6 JOIN shop.users u ON u.id = o.user_id             │"
+"│                      │╰──────────────────────────────────────────────────────╯"
+"│                      │╭ Chart · Line ────────────────────────────────────────╮"
+"│                      ││  Result 1  [Chart]  Messages                     H/L │"
+"│                      ││  Bars   Horizontal bars  [Line]             30+ rows │"
+"│                      ││ X day · Y orders, refunds · by none · linear scale   │"
+"│                      ││ 100┤┊     ⢠    ⡴⡀      ⢀    ⢠    ⡜⡄      ⢀    ⡰⡀   ⡜ │"
+"│                      ││    │⢀⠞⡄  ⢠⠃⢇ ⢀⠜ ⢣ ⡰⡀  ⢀⠎⢆  ⢠⠃⢇ ⢀⠜ ⢱ ⡠⢆  ⢀⠎⢆  ⡰⠁⢣ ⢀⠜  │"
+"│                      ││    │⠊⢀⠼⡒⣤⠃ ⠸⣠⠞⢢ ⠘⡴⣁⢵⠒⣄⠎ ⣘⡤⡲⠱⡀⠸⣠⡪⠔⠊⢎⠖⠁⢘⡤⢲⠻⡀⠘⣄⡴⢣ ⠘⡤⢃⡠⠔ │"
+"│                      ││   0┤⠊⠁ ⠱⠛⡤⠔⠉⠁  ⠣⠒⠉  ⢣⠞⠔⠊ ⠘⠁ ⠱⠒⠁   ⠈⠖⠊⠁⠱⠃ ⠑⠉⠘⠁ ⢣⠤⠊⠁   │"
+"│                      ││    └─────────────────────┬──────────────────────┬─── │"
+"│                      ││                     2026-09-14            2026-09-28 │"
+"│                      ││ ■ orders  ■ refunds                                  │"
+"│                      ││ ▸ 2026-09-01 · orders 37 · refunds 13 · row 1        │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" NORMAL  local-pg · policy: default │ 30+ rows (more pages) · 3ms   │ v kind EN "

@@ -1581,3 +1581,5 @@
 "chart.pick.by" = "Chart: split the values into series by"
 "chart.pick.stale" = "Not applied: the result changed since the list opened."
 "chart.too_many_series" = { one = "At most {count} value column", other = "At most {count} value columns" }
+"chart.rows_short" = { one = "{count} row", other = "{count} rows" }
+"chart.rows_more_short" = { one = "{count}+ row", other = "{count}+ rows" }

@@ -202,6 +202,13 @@ impl ChartTab {
         }
     }
 
+    /// The row the value of `series` at `point` comes from (its first, when it sums several),
+    /// else the point's first row; `None` for "others".
+    pub fn row_of(m: &Model, point: usize, series: usize) -> Option<usize> {
+        let p = m.points.get(point).filter(|p| !p.others)?;
+        m.series.get(series).and_then(|s| s.first.get(point).copied().flatten()).or(p.first_row)
+    }
+
     /// Move the cursor `d` points along the X axis.
     fn step(&mut self, d: isize) {
         let n = self.model().map_or(0, |m| m.points.len());
@@ -272,7 +279,7 @@ impl App {
             _ => None,
         };
         // The cursor's row, read once for the readout (it may be in the spill file).
-        let want = c.model().and_then(|m| m.points.get(c.cursor)).and_then(|p| p.first_row);
+        let want = c.model().and_then(|m| ChartTab::row_of(m, c.cursor, c.series));
         let have = c.row.as_ref().map(|(r, i, _)| (*r, *i));
         match want {
             Some(i) if have != Some((rs.id, i)) => {
@@ -364,8 +371,11 @@ impl App {
         self.chart_sync();
         let t = self.tab_mut();
         let Some(c) = t.exec.chart.as_ref() else { return };
-        let Some(p) = c.model().and_then(|m| m.points.get(c.cursor)) else { return };
-        let Some(row) = p.first_row else {
+        let Some(m) = c.model() else { return };
+        if c.cursor >= m.points.len() {
+            return;
+        }
+        let Some(row) = ChartTab::row_of(m, c.cursor, c.series) else {
             return self.flash(Notice::new(Label::ChartOthersNoRow, Level::Info));
         };
         let col = c.spec.x.or(c.spec.ys.first().copied()).unwrap_or(0);
@@ -383,6 +393,8 @@ impl App {
 
     /// A list of the result's columns to choose the X axis, the values or the series from.
     fn open_chart_picker(&mut self, a: ChartAction) {
+        // A row of the list: the column's index, and its text.
+        type Item = (Option<String>, String);
         use super::chooser::{Chooser, ChooserPurpose};
         self.chart_sync();
         let row_number = self.i18n.label(Label::ChartRowNumber).to_string();
@@ -395,7 +407,7 @@ impl App {
             _ => "a",
         };
         let col = |i: usize| (Some(i.to_string()), format!("{} {}", kind(c.roles[i]), c.names[i]));
-        let (title, items, current, purpose): (Label, Vec<(Option<String>, String)>, Option<String>, _) = match a {
+        let (title, items, current, purpose): (Label, Vec<Item>, Option<String>, _) = match a {
             ChartAction::PickX => {
                 let mut items = vec![(None, row_number)];
                 items.extend((0..c.names.len()).filter(|&i| c.roles[i].x()).map(col));
