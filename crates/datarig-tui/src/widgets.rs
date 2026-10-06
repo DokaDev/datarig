@@ -102,6 +102,17 @@ pub(crate) fn put(buf: &mut Buffer, x: u16, y: u16, text: &str, w: usize, style:
     width(&t) as u16
 }
 
+/// A list row under the pointer (not the selected one): the theme's alternate surface, or
+/// underlined where that is the surface itself (the terminal theme), so it always shows.
+pub(crate) fn hover_style() -> Style {
+    let th = theme::cur();
+    if th.surface_alt == th.surface {
+        Style::new().bg(th.surface).add_modifier(Modifier::UNDERLINED)
+    } else {
+        Style::new().bg(th.surface_alt)
+    }
+}
+
 /// A small clickable target under the pointer (a tab's `×`, a scroll mark, a result tab, a
 /// paging arrow): the text on the selection, as a selected row reads on every theme.
 pub(crate) fn pointer_style() -> Style {
