@@ -637,7 +637,9 @@ impl App {
                 }
             }
             ExplorerAction::ContextMenu => self.open_context_menu_here(),
-            ExplorerAction::ConsoleHere => self.console_here(&row),
+            ExplorerAction::ConsoleHere => {
+                self.console_here(&row);
+            }
             ExplorerAction::Move => self.open_move(),
             ExplorerAction::NewFolder => self.open_new_folder(),
             ExplorerAction::Rename => self.open_rename(),
@@ -654,14 +656,15 @@ impl App {
         }
     }
 
-    /// `O`: a new console on the row's profile, in the database and schema of the
-    /// row (a database node is that database with its default schema; a schema, or
-    /// anything under one, that database and schema), else with the profile's defaults. The
-    /// editor gets the focus; the profile connects when it is not.
-    fn console_here(&mut self, row: &Row) {
-        if let Some((id, context)) = self.console_here_context(row) {
-            self.console_in(id, context);
-        }
+    /// `O`, the menu's console item and a new console from the explorer (`Ctrl+T`): a new
+    /// console on the row's profile, in the database and schema of the row (a database node is
+    /// that database with its default schema; a schema, or anything under one, that database and
+    /// schema), else with the profile's defaults. The editor gets the focus; the profile
+    /// connects when it is not. `false`: the row has no profile.
+    pub(super) fn console_here(&mut self, row: &Row) -> bool {
+        let Some((id, context)) = self.console_here_context(row) else { return false };
+        self.console_in(id, context);
+        true
     }
 
     /// The profile and context of `O` on `row`: see [`App::console_here`].
