@@ -204,6 +204,19 @@ pub enum DbCommand {
         id: u64,
         sql: String,
     },
+    /// Ask the server only what it can tell for the allowlist of `sql::risk::repeat` about
+    /// `sql` (views, names a user's function or operator shadows, …: `repeat::check_query`),
+    /// as before a `Resume` or a `Count`, without running `sql`: answered with exactly one
+    /// [`DbEvent::RepeatChecked`] of the same `id` (a statement whose text is off the
+    /// allowlist answers [`DbError::NotRepeatable`] without asking). It reads the catalog only;
+    /// inside the user's block or a portal's transaction it runs under a savepoint of the
+    /// driver's own (never one of the user's names) rolled back to after it, so it changes
+    /// nothing there; inside an aborted block it is not asked and answers a refusal. A cancel
+    /// stops it.
+    CheckRepeat {
+        id: u64,
+        sql: String,
+    },
     /// Fetch past a result whose portal was closed: run `sql` again as run
     /// `id` (one statement, the app's allowlist of `sql::risk::repeat`, whose server side is
     /// asked first: a statement it refuses fails with [`DbError::NotRepeatable`] and is not
@@ -388,6 +401,12 @@ pub enum DbEvent {
         id: u64,
         result: Result<u64, DbError>,
         snapshot: bool,
+    },
+    /// The answer to [`DbCommand::CheckRepeat`] `id`: `Ok` when the server has nothing against
+    /// running the statement again.
+    RepeatChecked {
+        id: u64,
+        result: Result<(), DbError>,
     },
     /// Whether the open transaction block is aborted: a statement in it failed, so the server
     /// refuses everything but `ROLLBACK` (or `ROLLBACK TO SAVEPOINT`) until it ends. Sent when

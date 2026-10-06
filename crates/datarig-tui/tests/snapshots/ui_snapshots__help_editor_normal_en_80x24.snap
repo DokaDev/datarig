@@ -22,7 +22,7 @@ expression: backend
 "│ │   Comment the line or the selected lines… Space e c                      │t│"
 "│ │   Explain: the statement's plan (nothing… Space e x                      │ │"
 "│ │   Explain analyze: run and measure the s… Space e a                      │ │"
-"│ │   Action menu                             Space Space / Shift+F10 / Menu │ │"
+"│ │   View as plan: the text EXPLAIN again a… Space e p                      │ │"
 "│ ╰─────────────────── ↑↓ move · Enter run/open · l/h open/close · Esc close ╯ │"
 "╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
 " NORMAL  local-pg · policy: default │ Connected to local-pg                  EN "

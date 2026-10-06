@@ -9,6 +9,11 @@ use crate::widgets::tree::Reveal;
 
 impl App {
     pub fn handle_event(&mut self, ev: Event) {
+        self.handle_event_here(ev);
+        self.sweep_as_plan();
+    }
+
+    fn handle_event_here(&mut self, ev: Event) {
         // A mouse move that is not a drag (the terminal reports every motion while the mouse is
         // captured) only selects the item under the pointer in an open menu or the help, or
         // highlights a dialog's button or row or a small target of the workspace (a tab's `×`);
@@ -58,6 +63,11 @@ impl App {
     }
 
     pub fn on_app_event(&mut self, ev: AppEvent) {
+        self.on_app_event_here(ev);
+        self.sweep_as_plan();
+    }
+
+    fn on_app_event_here(&mut self, ev: AppEvent) {
         match ev {
             AppEvent::Db { target, generation, ev } if self.is_current(target, generation) => {
                 self.on_target_event(target, ev)

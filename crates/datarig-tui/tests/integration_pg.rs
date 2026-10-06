@@ -1379,6 +1379,89 @@ async fn explain_analyze_of_an_insert_shows_its_plan_and_is_rolled_back() {
     assert_eq!(plan.measure(), datarig_core::sql::plan::Measure::Cost);
 }
 
+/// View as plan on a real server: a text `EXPLAIN` asked again as JSON keeps its options
+/// (VERBOSE's output lists, COSTS off, ANALYZE with TIMING off, BUFFERS; the legacy
+/// `EXPLAIN ANALYZE VERBOSE` form too), and a write under ANALYZE, run again, is rolled back.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_text_explain_viewed_as_a_plan_keeps_its_options() {
+    use datarig_tui::app::tabs::ResultView;
+    let Some(url) = pg_url("a_text_explain_viewed_as_a_plan_keeps_its_options") else { return };
+    let tag = format!("asplan{}", std::process::id());
+    let table = format!("public.it_asplan_{tag}");
+    let _guard = pg_clean::TableGuard::new(&url, &[&table]);
+    pg_clean::run_fresh(&url, &format!("CREATE TABLE {table} AS SELECT generate_series(1, 3) AS x")).unwrap();
+    let mut obs = Observer::open(&url).await;
+    let (mut app, mut rx) = safety_app(&url, &tag, None).await;
+    // Run the text EXPLAIN `sql`, then view it as a plan (`y`: the ANALYZE question).
+    async fn as_plan(app: &mut App, rx: &mut UnboundedReceiver<AppEvent>, sql: &str, analyze: bool) {
+        run_and_wait(app, rx, sql, None).await;
+        assert_eq!(app.tab().exec.view, ResultView::Rows, "{sql}: a text plan stays rows ({:?})", app.status);
+        assert!(app.text_plan_hint().is_some(), "{sql}: the hint");
+        app.focus = Focus::Results;
+        press(app, 'P');
+        if analyze {
+            assert!(app.overlays.confirm().is_some(), "{sql}: ANALYZE asks");
+            press(app, 'y');
+        }
+        // Without a question the server is asked the allowlist's question first, then it runs.
+        pump(app, rx, 10, |a| idle(a, 0) && a.tab().exec.view == ResultView::Plan).await;
+        assert_eq!(app.tab().exec.view, ResultView::Plan, "{sql}: {:?}", app.status);
+    }
+    let plan = |app: &App| app.tab().exec.plan.as_ref().expect("a plan").plan.clone();
+    let has = |p: &datarig_core::sql::plan::Plan, key: &str| {
+        p.nodes.iter().any(|n| n.properties.iter().any(|(k, _)| k == key))
+    };
+    as_plan(
+        &mut app,
+        &mut rx,
+        &format!(
+            "EXPLAIN (ANALYZE, VERBOSE, COSTS off, TIMING off, BUFFERS, FORMAT YAML) SELECT x FROM {table} WHERE x > 1"
+        ),
+        true,
+    )
+    .await;
+    let p = plan(&app);
+    assert!(p.analyzed && !p.timed, "measured, without times");
+    assert!(p.nodes.iter().all(|n| n.cost.is_none()), "COSTS off");
+    assert!(has(&p, "Output"), "VERBOSE: {:?}", p.nodes[0].properties);
+    assert!(p.buffers().is_some(), "BUFFERS");
+    // The legacy form, and a plain EXPLAIN that only plans (no question).
+    as_plan(&mut app, &mut rx, &format!("explain analyze verbose SELECT x FROM {table}"), true).await;
+    let p = plan(&app);
+    assert!(p.analyzed && p.timed && has(&p, "Output"));
+    as_plan(&mut app, &mut rx, &format!("EXPLAIN SELECT x FROM {table}"), false).await;
+    let p = plan(&app);
+    assert!(!p.analyzed && p.nodes[0].cost.is_some());
+    // A view: its text is on the allowlist, the server's half is not (a view may hide what the
+    // planner folds). It asks; Enter keeps, nothing runs.
+    let view = format!("public.it_asplan_v_{tag}");
+    struct DropView(String, String);
+    impl Drop for DropView {
+        fn drop(&mut self) {
+            let _ = pg_clean::run_fresh(&self.0, &format!("DROP VIEW IF EXISTS {}", self.1));
+        }
+    }
+    let _view = DropView(url.clone(), view.clone());
+    pg_clean::run_fresh(&url, &format!("CREATE VIEW {view} AS SELECT x FROM {table}")).unwrap();
+    run_and_wait(&mut app, &mut rx, &format!("EXPLAIN SELECT * FROM {view}"), None).await;
+    app.focus = Focus::Results;
+    press(&mut app, 'P');
+    pump(&mut app, &mut rx, 10, |a| a.overlays.confirm().is_some()).await;
+    assert!(idle(&app, 0), "nothing runs before the answer");
+    // The question opened by itself: it takes keys once it has been on screen a moment.
+    let mut t = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 40)).unwrap();
+    t.draw(|f| datarig_tui::screens::draw(f, &mut app)).unwrap();
+    tokio::time::sleep(datarig_tui::app::overlay::ARM_DELAY + Duration::from_millis(50)).await;
+    app.handle_event(Event::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)));
+    assert!(app.overlays.confirm().is_none() && idle(&app, 0));
+    assert_eq!(app.tab().exec.view, ResultView::Rows, "still the text plan");
+    // A write under ANALYZE runs again, and is rolled back again.
+    as_plan(&mut app, &mut rx, &format!("EXPLAIN ANALYZE DELETE FROM {table} WHERE x = 2"), true).await;
+    assert_eq!(plan(&app).nodes[0].op, "Delete");
+    pump(&mut app, &mut rx, 10, |a| !a.tab().exec.tx_open).await;
+    assert_eq!(obs.column(&format!("SELECT count(*) FROM {table}")).await, ["3"], "rolled back");
+}
+
 /// A read-only policy: the app refuses a DELETE and sends nothing; a writing function called
 /// from a SELECT reaches the server, which refuses it; nothing changes.
 #[tokio::test(flavor = "multi_thread")]

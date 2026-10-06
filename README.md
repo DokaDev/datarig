@@ -182,7 +182,9 @@ Everything below works today, with PostgreSQL.
   leaves the text alone.
 - Run the statement under the cursor (`Ctrl+E`), a selection, or several statements in a row:
   each statement's outcome is listed in a Messages tab, and every row result gets a result tab
-  of its own. Queries can be cancelled (`Ctrl+C`). While a run goes on, the statement it is
+  of its own (in the results pane `H`/`L` move between them, as the right end of the tab strip
+  says when there is room; `Space r [` / `Space r ]` from anywhere). Queries can be cancelled
+  (`Ctrl+C`). While a run goes on, the statement it is
   executing has a tint of its own and a spinner in the gutter, wherever the cursor goes and
   whatever you edit around it. When it ends, a dim hint after each statement's last line says
   what it did (`✓ 128 rows · 42ms · 14:03`, rows affected, the error, rolled back, cancelled);
@@ -214,7 +216,17 @@ Everything below works today, with PostgreSQL.
   `EXPLAIN (FORMAT JSON)`, `Space e a` (or `:explain analyze`) as `EXPLAIN (ANALYZE, BUFFERS,
   FORMAT JSON)`, through the same checks as any run (a write under `ANALYZE` is rolled back, a
   read-only profile refuses it); an `EXPLAIN (FORMAT JSON …)` you type yourself shows the same
-  way. The Plan tab shows the plan as a tree with each node's estimated and actual rows (and
+  way. A text `EXPLAIN` you ran stays rows, with a line under them: `P` in the results (or
+  `Space e p`, or the action menu) plans that same statement again with `FORMAT JSON`, keeping
+  its other options, and opens its plan; never by itself. It goes without a question only when
+  the statement it wraps is a plain `SELECT` the app would also run again for a next page (the
+  same allowlist, its server check included: no view, no user operator or overloaded name;
+  like that allowlist it trusts functions to be labelled honestly, so a function wrongly
+  declared `IMMUTABLE` or `STABLE` can still run while the statement is planned);
+  anything else asks first, saying what runs again (`ANALYZE` runs the statement, rolled back;
+  an `EXECUTE`'s parameters or what a view hides are evaluated to plan it, not rolled back). It is
+  refused when the tab ran other statements since, when the result came with other statements,
+  or when the tab's connection, database or session changed: the plan could differ there. The Plan tab shows the plan as a tree with each node's estimated and actual rows (and
   loops), self and total time, a bar of its share of the whole colored by heat, and its
   buffers; nodes that take a fifth of the time or more are marked hot, and an estimate ten times
   off or more is marked with how far and which way (fewer rows than estimated under a `LIMIT`

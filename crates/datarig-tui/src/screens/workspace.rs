@@ -411,7 +411,13 @@ fn draw_strip(app: &mut App, area: Rect, buf: &mut Buffer) {
         x += w + 1;
     }
     if let Some(e) = earlier.filter(|e| x as usize + crate::text::width(e) <= end as usize) {
-        put(buf, x, area.y, &e, (end - x) as usize, dim);
+        x += put(buf, x, area.y, &e, (end - x) as usize, dim) + 1;
+    }
+    // The keys that move between the result tabs, at the right end when they fit after the
+    // tabs (the keys bound in the results pane, remapping included).
+    if let Some(keys) = strip_keys(app).filter(|k| x as usize + crate::text::width(k) + 1 < end as usize) {
+        let w = crate::text::width(&keys) as u16;
+        put(buf, end - w - 1, area.y, &keys, w as usize, dim);
     }
     if let Some((text, color)) = tx {
         let w = crate::text::width(&text) as u16;
@@ -420,6 +426,21 @@ fn draw_strip(app: &mut App, area: Rect, buf: &mut Buffer) {
         put(buf, at, area.y, &text, room, Style::new().fg(color).bg(bg).add_modifier(Modifier::BOLD));
     }
     app.strip_hits = hits;
+}
+
+/// The keys of the previous and next result tab in the results pane (`H/L`), when there are
+/// tabs to move between, the pane has the focus and both are bound there.
+fn strip_keys(app: &App) -> Option<String> {
+    let t = app.tab();
+    // Elsewhere (the editor) these keys are the focused pane's own.
+    if t.result_tabs().is_empty() || app.focus != Focus::Results {
+        return None;
+    }
+    let ctx = if app.plan_shown() { Ctx::Plan } else { Ctx::Grid };
+    let key = |next| {
+        app.keymap.hint_keys(Action::ResultTab(next), ctx, app.enhanced_keys).map(|k| crate::keymap::keys::label(&k))
+    };
+    Some(format!("{}/{}", key(false)?, key(true)?))
 }
 
 /// Which of the strip's `items` (Messages last) to draw in `room` columns: every one when they
@@ -889,6 +910,7 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
         .map(|k| crate::keymap::keys::label(&k))
         .unwrap_or_default();
     let run_again = app.can_run_again();
+    let text_plan = app.text_plan_hint();
     let t = app.tabs.active_mut();
     match &mut t.results {
         Results::Empty => {
@@ -929,6 +951,16 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
             buf.set_style(Rect { y, height: 1, ..area }, Style::new().bg(th.surface));
             let w = area.width.saturating_sub(1) as usize;
             buf.set_stringn(area.x + 1, y, clip(&text, w), w, Style::new().fg(th.warning).bg(th.surface));
+        }
+        // A text plan: the line below its rows offers to view it as a plan.
+        Results::Rows(rs) if area.height > 3 && text_plan.is_some() => {
+            let grid = Rect { height: area.height - 1, ..area };
+            crate::widgets::grid::render(rs, &mut t.grid, grid, buf, &app.i18n, focused, look);
+            let y = area.y + area.height - 1;
+            buf.set_style(Rect { y, height: 1, ..area }, Style::new().bg(th.surface));
+            let w = area.width.saturating_sub(1) as usize;
+            let text = text_plan.unwrap_or_default();
+            buf.set_stringn(area.x + 1, y, clip(&text, w), w, Style::new().fg(th.fg_dim).bg(th.surface));
         }
         Results::Rows(rs) => crate::widgets::grid::render(rs, &mut t.grid, area, buf, &app.i18n, focused, look),
         Results::Message(m) => msg_line(buf, &m.render(&app.i18n), th.success),

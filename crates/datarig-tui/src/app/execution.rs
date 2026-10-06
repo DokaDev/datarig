@@ -122,7 +122,12 @@ impl App {
             // The row results stay until this run delivers its first rows:
             // a run without rows (a COMMIT) leaves them on screen, from an earlier run.
             let has_rows = matches!(t.results, Results::Rows(_)) || !t.exec.steps.is_empty();
-            let before = std::mem::replace(&mut t.exec.run, super::runlog::RunLog::new(&statements));
+            let log = super::runlog::RunLog {
+                binding: t.binding,
+                generation: t.exec.generation,
+                ..super::runlog::RunLog::new(&statements)
+            };
+            let before = std::mem::replace(&mut t.exec.run, log);
             if has_rows && t.exec.kept_log.is_none() {
                 t.exec.kept_log = Some(before);
             }
@@ -186,6 +191,10 @@ impl App {
     /// Cancel what runs in tab `id`: its running statement, or the statement that waits for
     /// its connection (dropped, never run).
     pub(super) fn cancel_in(&mut self, id: TabId) {
+        // A wait for the server's answer to view a text plan as a plan ends (said once).
+        if self.waiting_as_plan(id) {
+            self.end_as_plan_wait();
+        }
         // Its profile's password is being read from the keychain (it may not answer): the
         // attempt ends, and what waited for it with it.
         if let Some(p) = self.tabs.get(id).and_then(|t| t.profile)
@@ -368,6 +377,11 @@ impl App {
     /// connection, tree and catalog events belong to the profile's metadata session, statement
     /// events to the active tab's query session.
     pub fn on_db_event(&mut self, ev: DbEvent) {
+        self.on_db_event_here(ev);
+        self.sweep_as_plan();
+    }
+
+    fn on_db_event_here(&mut self, ev: DbEvent) {
         let target = match &ev {
             DbEvent::Page { .. }
             | DbEvent::Released { .. }
@@ -377,6 +391,7 @@ impl App {
             | DbEvent::TxAborted(_)
             | DbEvent::Block(_)
             | DbEvent::Counted { .. }
+            | DbEvent::RepeatChecked { .. }
             | DbEvent::Started { .. }
             | DbEvent::StepRows { .. }
             | DbEvent::Finished { .. } => EventTarget::Tab(self.tab().id),
@@ -654,6 +669,7 @@ impl App {
             | DbEvent::TxAborted(_)
             | DbEvent::Block(_)
             | DbEvent::Counted { .. }
+            | DbEvent::RepeatChecked { .. }
             | DbEvent::Started { .. }
             | DbEvent::StepRows { .. }
             | DbEvent::Finished { .. } => {}
@@ -847,6 +863,8 @@ impl App {
             DbEvent::Counted { id: qid, result, snapshot } => {
                 return self.on_counted(id, qid, result, snapshot);
             }
+            // The server's half of the allowlist, for a text plan to view as a plan.
+            DbEvent::RepeatChecked { id: check, result } => return self.as_plan_checked(id, check, result),
             DbEvent::Lost { .. } => {
                 t.exec.session = None;
                 t.exec.unsure();

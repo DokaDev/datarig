@@ -22,6 +22,11 @@ mod values;
 
 pub use connect::PgDriver;
 
+/// The name of the savepoint counts and the allowlist's question run under, for the
+/// integration tests that check none is left. Not an API.
+#[doc(hidden)]
+pub use query::count_savepoint;
+
 /// The metadata session's catalog statements, for the integration tests' `EXPLAIN`s. Not an
 /// API.
 #[doc(hidden)]

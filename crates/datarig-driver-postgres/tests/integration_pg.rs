@@ -3172,6 +3172,95 @@ async fn a_count_in_the_users_block_keeps_the_block() {
     assert!(!events.iter().any(|e| matches!(e, DbEvent::TxOpen(true))), "{events:?}");
 }
 
+impl Conn {
+    /// Send `CheckRepeat` and wait for its answer (and nothing but one).
+    async fn check_repeat(&mut self, id: u64, sql: &str) -> Result<(), DbError> {
+        self.session.send(DbCommand::CheckRepeat { id, sql: sql.to_string() });
+        let DbEvent::RepeatChecked { id: got, result } =
+            self.wait(|e| matches!(e, DbEvent::RepeatChecked { .. }), 30).await
+        else {
+            unreachable!()
+        };
+        assert_eq!(got, id);
+        let more = self.drain(150).await;
+        assert!(!more.iter().any(|e| matches!(e, DbEvent::RepeatChecked { .. })), "one answer: {more:?}");
+        result
+    }
+}
+
+/// The allowlist's question alone: a view is refused by the server's half and text off the
+/// allowlist is never sent, outside a transaction, inside the user's block (which it leaves
+/// as it was, not aborted) and while a portal pages (which pages on).
+#[tokio::test(flavor = "multi_thread")]
+async fn the_allowlist_question_alone_changes_nothing() {
+    use datarig_core::sql::risk::repeat::NotRepeatable;
+    let Some(url) = pg_url("the_allowlist_question_alone_changes_nothing") else { return };
+    let mut c = Conn::open(&url, SessionRole::Query).await;
+    let _ = c.run(1, "CREATE TEMP TABLE zz_check (x int)").await;
+    let _ = c.run(2, "CREATE TEMP VIEW zz_check_v AS SELECT x FROM zz_check").await;
+    let view = |r: Result<(), DbError>| matches!(r, Err(DbError::NotRepeatable(NotRepeatable::NotATable(_))));
+    assert_eq!(c.check_repeat(10, "SELECT * FROM zz_check").await, Ok(()));
+    assert!(view(c.check_repeat(11, "SELECT * FROM zz_check_v").await));
+    assert!(matches!(c.check_repeat(12, "DELETE FROM zz_check").await, Err(DbError::NotRepeatable(_))));
+    // Inside the user's block: its changes stay, and it is not aborted.
+    let _ = c.run(3, "BEGIN").await;
+    let _ = c.run(4, "INSERT INTO zz_check VALUES (1), (2)").await;
+    assert_eq!(c.check_repeat(13, "SELECT * FROM zz_check").await, Ok(()));
+    assert!(view(c.check_repeat(14, "SELECT * FROM zz_check_v").await));
+    let DbEvent::Page { rows, .. } = c.run(5, "SELECT count(*) FROM zz_check").await else { panic!() };
+    assert_eq!(rows[0][0].as_deref(), Some("2"));
+    // And no savepoint of the question is left in it (looking for one aborts the block).
+    let sp = datarig_driver_postgres::count_savepoint();
+    let DbEvent::Failed { error: DbError::Server(e), .. } = c.run(16, &format!("RELEASE SAVEPOINT {sp}")).await else {
+        panic!("{sp} is left")
+    };
+    assert!(e.contains(sp), "{e}");
+    let _ = c.run(6, "ROLLBACK").await;
+    // While a portal pages.
+    let sql = "SELECT g FROM generate_series(1, 2345) g ORDER BY g";
+    c.session.send(DbCommand::Execute { id: 7, statements: vec![sql.into()], paging: PagingMode::Hold });
+    let DbEvent::Page { more: true, .. } = c.result(7).await else { panic!("a page with more") };
+    assert!(view(c.check_repeat(15, "SELECT * FROM zz_check_v").await));
+    c.session.send(DbCommand::FetchMore { id: 7 });
+    let DbEvent::Page { columns: None, rows, more: true, .. } = c.result(7).await else { panic!("the next page") };
+    assert_eq!(rows[0][0].as_deref(), Some("501"));
+    c.session.send(DbCommand::ClosePortal { id: 7 });
+    c.wait(|e| matches!(e, DbEvent::TxOpen(false)), 10).await;
+}
+
+/// The driver's own savepoint never meets one of the user's, whatever its name: inside an
+/// aborted block the allowlist's question is not asked (a refusal, so the app asks the user),
+/// and a count there leaves the user's `datarig_count` savepoint (and the block) as they were.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_users_own_savepoints_are_never_the_drivers() {
+    use datarig_core::sql::risk::repeat::NotRepeatable;
+    let Some(url) = pg_url("the_users_own_savepoints_are_never_the_drivers") else { return };
+    let mut c = Conn::open(&url, SessionRole::Query).await;
+    let _ = c.run(1, "CREATE TEMP TABLE zz_sp (x int)").await;
+    let _ = c.run(2, "BEGIN").await;
+    let _ = c.run(3, "INSERT INTO zz_sp VALUES (1)").await;
+    let _ = c.run(4, "SAVEPOINT datarig_count").await;
+    let _ = c.run(5, "INSERT INTO zz_sp VALUES (2)").await;
+    let _ = c.run(6, "SELECT 1/0").await;
+    // Aborted: refused without asking the server.
+    assert_eq!(c.check_repeat(10, "SELECT * FROM zz_sp").await, Err(DbError::NotRepeatable(NotRepeatable::Unreadable)));
+    assert!(c.count(11, &count_of("SELECT * FROM zz_sp")).await.is_err());
+    // Still aborted, and the user's savepoint is still there to go back to.
+    let DbEvent::Failed { .. } = c.run(7, "SELECT 1").await else { panic!("the block stays aborted") };
+    let DbEvent::Done { .. } = c.run(8, "ROLLBACK TO SAVEPOINT datarig_count").await else {
+        panic!("the user's savepoint is there")
+    };
+    let DbEvent::Page { rows, .. } = c.run(9, "SELECT count(*) FROM zz_sp").await else { panic!() };
+    assert_eq!(rows[0][0].as_deref(), Some("1"));
+    // In a healthy block a count and the question leave the user's savepoint too.
+    assert_eq!(c.count(12, &count_of("SELECT * FROM zz_sp")).await, Ok(1));
+    assert_eq!(c.check_repeat(13, "SELECT * FROM zz_sp").await, Ok(()));
+    let DbEvent::Done { .. } = c.run(14, "RELEASE SAVEPOINT datarig_count").await else {
+        panic!("the user's savepoint is still there")
+    };
+    let _ = c.run(15, "ROLLBACK").await;
+}
+
 /// On a read-only session a count runs in a read-only transaction.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_count_on_a_read_only_session_is_read_only() {
@@ -3429,24 +3518,23 @@ async fn the_server_is_asked_before_a_statement_runs_again() {
     let DbEvent::Page { rows, more: true, .. } = c.result(7).await else { panic!("a page") };
     assert_eq!(rows[0][0].as_deref(), Some("11"));
     let _ = c.run(8, "SELECT 1").await;
-    // Refused inside the user's block: the block is as it was, and no savepoint is left.
-    let _ = c.run(9, "BEGIN").await;
-    let _ = c.run(10, "CREATE TEMP TABLE zz_kept (x int)").await;
-    let _ = c.run(11, "INSERT INTO zz_kept VALUES (1)").await;
-    assert_eq!(refused(c.count(12, &count_of("SELECT * FROM v")).await), N::NotATable("v".into()));
-    c.session.send(DbCommand::Resume { id: 13, sql: "SELECT abs('x')".into(), skip: 1, paging: PagingMode::Hold });
-    assert!(matches!(c.result(13).await, DbEvent::Failed { error: DbError::NotRepeatable(_), .. }));
-    assert_eq!(cell(&c.run(14, "SELECT count(*) FROM zz_kept").await).as_deref(), Some("1"));
-    for sp in ["datarig_resume", "datarig_count"] {
+    // Refused inside the user's block: the block is as it was, and no savepoint is left. Each
+    // savepoint is looked for in a block of its own (a failed RELEASE aborts the block).
+    for sp in ["datarig_resume", datarig_driver_postgres::count_savepoint()] {
+        let _ = c.run(9, "BEGIN").await;
+        let _ = c.run(10, "CREATE TEMP TABLE zz_kept (x int)").await;
+        let _ = c.run(11, "INSERT INTO zz_kept VALUES (1)").await;
+        assert_eq!(refused(c.count(12, &count_of("SELECT * FROM v")).await), N::NotATable("v".into()));
+        c.session.send(DbCommand::Resume { id: 13, sql: "SELECT abs('x')".into(), skip: 1, paging: PagingMode::Hold });
+        assert!(matches!(c.result(13).await, DbEvent::Failed { error: DbError::NotRepeatable(_), .. }));
+        assert_eq!(cell(&c.run(14, "SELECT count(*) FROM zz_kept").await).as_deref(), Some("1"));
         let DbEvent::Failed { error: DbError::Server(e), .. } = c.run(15, &format!("RELEASE SAVEPOINT {sp}")).await
         else {
             panic!("{sp} is left")
         };
         assert!(e.contains(sp), "{e}");
         let _ = c.run(16, "ROLLBACK").await;
-        let _ = c.run(17, "BEGIN").await;
     }
-    let _ = c.run(18, "ROLLBACK").await;
 }
 
 /// The allowlist's built-in operators and types (`risk::repeat::OPERATORS`, `TYPES`) are

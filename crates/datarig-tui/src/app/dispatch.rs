@@ -30,6 +30,10 @@ impl App {
                 Action::SetTabConnection | Action::SetTabContext if ddl => {
                     self.flash(Notice::new(Label::DdlNoRebind, Level::Info))
                 }
+                // Another result: said, as a key that does nothing would leave the user guessing.
+                Action::ExplainAsPlan if !self.tabs.is_empty() && self.tab().is_query() => {
+                    self.explain_as_plan_unavailable()
+                }
                 _ => {}
             }
             return;
@@ -188,6 +192,7 @@ impl App {
             Action::CopyDdl => self.copy_ddl(),
             Action::ResultTab(next) => self.cycle_result_tab(if next { 1 } else { -1 }),
             Action::Explain(analyze) => self.explain(analyze),
+            Action::ExplainAsPlan => self.explain_as_plan(),
             Action::Plan(p) => self.plan_action(p),
         }
     }
@@ -327,6 +332,11 @@ impl App {
                 | ConfirmAction::OverwriteScript
                 | ConfirmAction::CloseTab(_)
         );
+        // A question that opened by itself takes no key typed as it came up (it is neither
+        // run nor dismissed unseen); once armed it answers as any question does.
+        if action == ConfirmAction::ExplainAgain && self.as_plan_unarmed() {
+            return;
+        }
         match code {
             KeyCode::Char('y') | KeyCode::Enter if !repeat => {
                 self.overlays.close(OverlayKind::Confirm);
@@ -362,6 +372,7 @@ impl App {
                     ConfirmAction::OverwriteScript => self.overwrite_confirmed(),
                     ConfirmAction::TrustHostKey => self.host_key_answered(true),
                     ConfirmAction::DeleteTunnel(id) => self.delete_tunnel(id),
+                    ConfirmAction::ExplainAgain => self.explain_as_plan_confirmed(),
                 }
             }
             KeyCode::Char('n') | KeyCode::Esc if keeps => self.confirm_kept(),
@@ -378,6 +389,9 @@ impl App {
                 }
                 if action == ConfirmAction::FetchThenCopy {
                     self.pending_fetch_copy = None;
+                }
+                if action == ConfirmAction::ExplainAgain {
+                    self.as_plan_declined();
                 }
             }
             _ => {}

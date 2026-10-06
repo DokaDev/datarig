@@ -143,6 +143,9 @@ pub enum ConfirmAction {
     TrustHostKey,
     /// Delete this tunnel preset (and its saved secret).
     DeleteTunnel(datarig_core::profile::tunnel::TunnelId),
+    /// Run an `EXPLAIN ANALYZE` again to view its text plan as a plan (the statement waits in
+    /// `App::pending_as_plan`). Cancel is the default.
+    ExplainAgain,
 }
 
 /// A yes/no question: `y` yes, `n`/`Esc` no; `Enter` no when the answer would lose something
@@ -196,6 +199,7 @@ impl Confirm {
             ConfirmAction::Copy => (Label::DialogButtonCancel, Label::DialogButtonCopy),
             ConfirmAction::FetchThenCopy => (Label::DialogButtonCancel, Label::DialogButtonFetchCopy),
             ConfirmAction::TrustHostKey => (Label::DialogButtonCancel, Label::DialogButtonTrust),
+            ConfirmAction::ExplainAgain => (Label::DialogButtonCancel, Label::SafetyConfirmRun),
         };
         // `Enter` says yes only to a copy (see `App::confirm_key`).
         let enter = if matches!(self.action, ConfirmAction::Copy | ConfirmAction::FetchThenCopy) { 1 } else { 0 };

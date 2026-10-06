@@ -184,6 +184,9 @@ struct Env<'a> {
     read_only: bool,
     /// Sent first in every transaction (a search path per transaction), if anything.
     path: Option<&'a str>,
+    /// The name of the savepoint a count or the allowlist's question runs under inside a
+    /// transaction ([`count_savepoint`]): never one of the user's own.
+    savepoint: &'a str,
     /// Tests: runs right before each row-returning statement is bound (e.g. DDL on another
     /// connection, to make its prepared statement stale at will).
     #[cfg(test)]
@@ -395,6 +398,7 @@ pub(crate) async fn query_loop(
         page_size: settings.page_size,
         read_only: settings.read_only,
         path: settings.path.as_deref(),
+        savepoint: count_savepoint(),
         #[cfg(test)]
         before_bind: None,
     };
@@ -425,6 +429,15 @@ pub(crate) async fn query_loop(
                 }
                 Err(Closed) => Stop::Closed,
             },
+            Next::Command(DbCommand::CheckRepeat { id, sql }) => {
+                match check_repeat(&client, &mut link, &env, &mut tx, &sql).await {
+                    Ok(result) => {
+                        let _ = events.send(DbEvent::RepeatChecked { id, result });
+                        continue;
+                    }
+                    Err(Closed) => Stop::Closed,
+                }
+            }
             // A fetch for a result whose portal is gone (complete, failed or closed): answered
             // with an empty last page, so the UI never waits for it.
             Next::Command(DbCommand::FetchMore { id }) => {
@@ -1604,6 +1617,11 @@ async fn portal<'a>(
                 let (result, snapshot) = halt!(counted_in(&txn, link, env, &sql).await, None);
                 let _ = env.events.send(DbEvent::Counted { id: cid, result, snapshot });
             }
+            // So is the allowlist's question, which leaves the portal paging too.
+            Next::Command(DbCommand::CheckRepeat { id: cid, sql }) => {
+                let result = halt!(checked_repeat_in(&txn, link, env, &sql).await, None);
+                let _ = env.events.send(DbEvent::RepeatChecked { id: cid, result });
+            }
             Next::Command(DbCommand::FetchMore { .. } | DbCommand::ClosePortal { .. }) => {}
             Next::Command(other) => {
                 link.requeue(other);
@@ -1669,8 +1687,16 @@ fn skip_chunk(left: u64, page_size: usize) -> i32 {
     i32::try_from(want.min(SKIP_CHUNK.max(page_size as u64 + 1))).unwrap_or(i32::MAX)
 }
 
-/// The savepoint a count runs in inside a transaction.
-const COUNT_SAVEPOINT: &str = "datarig_count";
+/// The savepoint a count or the allowlist's question runs under inside a transaction: a name
+/// the user does not use, `datarig_count_` and 16 random hex digits, made once per process.
+pub fn count_savepoint() -> &'static str {
+    use std::hash::{BuildHasher, Hasher};
+    static NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    NAME.get_or_init(|| {
+        let n = std::collections::hash_map::RandomState::new().build_hasher().finish();
+        format!("datarig_count_{n:016x}")
+    })
+}
 
 /// The count in a simple query's answer (its first row's first value).
 fn count_of(msgs: &[SimpleQueryMessage]) -> Result<u64, DbError> {
@@ -1717,10 +1743,11 @@ async fn count(
         Ok(check) => check,
         Err(why) => return Ok((Err(why), false)),
     };
+    let sp = env.savepoint;
     if tx.block {
         let first = tx.take_first_text(env);
-        let asked = format!("{first}SAVEPOINT {COUNT_SAVEPOINT}; {ISOLATION}; {check}");
-        let text = format!("{sql}; RELEASE SAVEPOINT {COUNT_SAVEPOINT}");
+        let asked = format!("{first}SAVEPOINT {sp}; {ISOLATION}; {check}");
+        let text = format!("{sql}; RELEASE SAVEPOINT {sp}");
         let (fixed, answer) = checked(link, env, client.simple_query(&asked)).await?;
         let counted = match answer {
             Ok(()) => match link.guard(Some(env.token), client.simple_query(&text)).await? {
@@ -1731,7 +1758,7 @@ async fn count(
         };
         // Back to before the count (an aborted block refuses this too, and stays as it was);
         // the probe tells the block's state either way.
-        let _ = link.guard(None, client.batch_execute(COUNT_UNDO)).await?;
+        let _ = link.guard(None, client.batch_execute(&count_undo(env))).await?;
         probe(client, link, env, tx).await?;
         return Ok((Err(counted), false));
     }
@@ -1772,8 +1799,9 @@ async fn counted_in(
         Ok(check) => check,
         Err(why) => return Ok((Err(why), false)),
     };
-    let asked = format!("SAVEPOINT {COUNT_SAVEPOINT}; {ISOLATION}; {check}");
-    let text = format!("{sql}; RELEASE SAVEPOINT {COUNT_SAVEPOINT}");
+    let sp = env.savepoint;
+    let asked = format!("SAVEPOINT {sp}; {ISOLATION}; {check}");
+    let text = format!("{sql}; RELEASE SAVEPOINT {sp}");
     let (fixed, answer) = checked(link, env, txn.simple_query(&asked)).await?;
     let counted = match answer {
         Ok(()) => match link.guard(Some(env.token), txn.simple_query(&text)).await? {
@@ -1782,16 +1810,72 @@ async fn counted_in(
         },
         Err(why) => why,
     };
-    let _ = link.guard(None, txn.batch_execute(COUNT_UNDO)).await?;
+    let _ = link.guard(None, txn.batch_execute(&count_undo(env))).await?;
     Ok((Err(counted), false))
+}
+
+/// The allowlist's question about `sql` alone (`DbCommand::CheckRepeat`) while no portal is
+/// open: inside the user's block under a savepoint rolled back to after it (so a failure does
+/// not abort the block), otherwise as a query of its own. One round trip.
+async fn check_repeat(
+    client: &Client,
+    link: &mut Link,
+    env: &Env<'_>,
+    tx: &mut Tx,
+    sql: &str,
+) -> Result<Result<(), DbError>, Closed> {
+    let check = match check_text(sql) {
+        Ok(check) => check,
+        Err(why) => return Ok(Err(why)),
+    };
+    let sp = env.savepoint;
+    // An aborted block takes nothing but its end: not asked, refused (the user is asked).
+    if tx.block && tx.aborted {
+        return Ok(Err(DbError::NotRepeatable(risk::repeat::NotRepeatable::Unreadable)));
+    }
+    if tx.block {
+        let first = tx.take_first_text(env);
+        let asked = format!("{first}SAVEPOINT {sp}; {check}");
+        let (_, answer) = checked(link, env, client.simple_query(&asked)).await?;
+        let undone = link.guard(None, client.batch_execute(&count_undo(env))).await?;
+        if answer.is_err() || undone.is_err() {
+            probe(client, link, env, tx).await?;
+        }
+        return Ok(answer);
+    }
+    let path = env.path_text();
+    Ok(checked(link, env, client.simple_query(&format!("{path}{check}"))).await?.1)
+}
+
+/// [`check_repeat`] while a portal is open, in its transaction under a savepoint: the portal
+/// goes on paging after it.
+async fn checked_repeat_in(
+    txn: &Transaction<'_>,
+    link: &mut Link,
+    env: &Env<'_>,
+    sql: &str,
+) -> Result<Result<(), DbError>, Closed> {
+    let check = match check_text(sql) {
+        Ok(check) => check,
+        Err(why) => return Ok(Err(why)),
+    };
+    let sp = env.savepoint;
+    let asked = format!("SAVEPOINT {sp}; {check}");
+    let (_, answer) = checked(link, env, txn.simple_query(&asked)).await?;
+    let _ = link.guard(None, txn.batch_execute(&count_undo(env))).await?;
+    Ok(answer)
 }
 
 /// Asked with the allowlist's question before a count in a transaction: its isolation, so the
 /// count says whether it saw the transaction's one snapshot. No round trip of its own.
 const ISOLATION: &str = "SELECT pg_catalog.current_setting('transaction_isolation')";
 
-/// Back to before [`COUNT_SAVEPOINT`] when a count failed, was cancelled or was refused.
-const COUNT_UNDO: &str = "ROLLBACK TO SAVEPOINT datarig_count; RELEASE SAVEPOINT datarig_count";
+/// Back to before the driver's count savepoint ([`Env::savepoint`]) when a count failed, was
+/// cancelled or was refused, or after the allowlist's question.
+fn count_undo(env: &Env<'_>) -> String {
+    let sp = env.savepoint;
+    format!("ROLLBACK TO SAVEPOINT {sp}; RELEASE SAVEPOINT {sp}")
+}
 
 /// The query that asks the server what only it can tell for the allowlist about `sql`
 /// (`risk::repeat::check_query` of the objects it names) right before the app runs it again or
