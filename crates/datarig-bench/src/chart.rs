@@ -2,7 +2,8 @@
 //! the rows kept in memory) drawn as lines and as bars at 160x45 while the cursor moves.
 //! Measured: the frame that reads the rows (once per result and choice), the key + frame time
 //! after it, and the work per frame (`widgets::chart`'s count: rows read, points and dot columns
-//! walked, cells painted).
+//! walked, cells painted). It runs in a process of its own (the bench binary again), so the
+//! memory its rows took never counts in another scenario's.
 
 use crate::apps;
 use crate::stats::{Summary, ms};
@@ -32,6 +33,37 @@ pub fn rows(n: usize) -> (Vec<ColumnMeta>, Vec<Vec<Option<String>>>) {
         })
         .collect();
     (columns, rows)
+}
+
+/// Set in the process [`run_in_own_process`] starts: it runs [`run`] itself.
+const IN_PROCESS: &str = "DATARIG_BENCH_CHART_IN_PROCESS";
+
+/// [`run`] in a process of its own.
+pub fn run_in_own_process(scratch: &std::path::Path, n_rows: usize, n: usize) -> Result<Value, String> {
+    if std::env::var(IN_PROCESS).is_ok_and(|v| v == "1") {
+        return run(scratch, n_rows, n);
+    }
+    let out = scratch.join("chart.jsonl");
+    let _ = std::fs::remove_file(&out);
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let status = std::process::Command::new(exe)
+        .arg("chart")
+        .arg("--scratch")
+        .arg(scratch)
+        .arg("--out")
+        .arg(&out)
+        .arg("--runs")
+        .arg(n.to_string())
+        .env(IN_PROCESS, "1")
+        .status()
+        .map_err(|e| e.to_string())?;
+    let text = std::fs::read_to_string(&out).map_err(|e| format!("{}: {e}", out.display()))?;
+    let record: Value =
+        serde_json::from_str(text.lines().last().unwrap_or("")).map_err(|e| format!("{}: {e}", out.display()))?;
+    match record.get("result") {
+        Some(r) if status.success() => Ok(r.clone()),
+        _ => Err(format!("chart: {}", record.get("error").unwrap_or(&Value::Null))),
+    }
 }
 
 pub fn run(scratch: &std::path::Path, n_rows: usize, n: usize) -> Result<Value, String> {

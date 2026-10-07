@@ -104,7 +104,7 @@ async fn scenario(name: &str, o: &Opts) -> Result<Value, String> {
         "editor_block" => editor::block_in_own_process(&o.scratch, 5 * 1024 * 1024),
         "grid" => grid::run(2_000, 24, o.runs.unwrap_or(400)),
         "plan" => plan::run(PLAN_JOINS, PLAN_PARTITIONS, o.runs.unwrap_or(300)),
-        "chart" => chart::run(&o.scratch, CHART_ROWS, o.runs.unwrap_or(300)),
+        "chart" => chart::run_in_own_process(&o.scratch, CHART_ROWS, o.runs.unwrap_or(300)),
         "idle" => idle::idle(&o.scratch, &o.bin, &pg_url()?, o.idle_secs),
         "startup" => idle::startup(&o.scratch, &o.bin, o.runs.unwrap_or(20)),
         _ => Err(format!("unknown scenario {name}")),
@@ -162,7 +162,7 @@ async fn budget(o: &Opts) -> Result<Vec<String>, String> {
     budget::editor_block(&mut c, &b, &run("editor_block", r))?;
     let r = plan::run(PLAN_JOINS, PLAN_PARTITIONS, 200)?;
     budget::plan(&mut c, &b, &run("plan", r))?;
-    let r = chart::run(&o.scratch, CHART_ROWS, 200)?;
+    let r = chart::run_in_own_process(&o.scratch, CHART_ROWS, 200)?;
     budget::chart(&mut c, &b, &run("chart", r))?;
     let r = paging::run(&url, &o.scratch, "SELECT * FROM analytics.events", int("paging", "max_pages")?, 250).await?;
     budget::paging(&mut c, &b, &run("paging", r))?;
