@@ -13,8 +13,9 @@ server.
 ## Status
 
 **Early, pre-1.0.** Releases have binaries for macOS, Linux and Windows and a Homebrew
-formula ([Install](#install)); the latest is 0.11.0. Only **PostgreSQL** is implemented today. The configuration format, key bindings and behavior may still change
-between releases (see [Versioning](#versioning)).
+formula ([Install](#install)); the latest is 0.11.0. **PostgreSQL** is implemented, and
+**MySQL** in part (see [MySQL](#mysql) for what it does and does not do yet). The configuration
+format, key bindings and behavior may still change between releases (see [Versioning](#versioning)).
 
 Platforms: developed and tested on macOS; CI runs the full test suite on Linux. On Windows CI
 builds datarig, lints it and runs the tests that need no database, but running datarig there
@@ -23,7 +24,7 @@ tried yet.
 
 ## Features
 
-Everything below works today, with PostgreSQL.
+Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts work with MySQL.
 
 **Workspace**
 - Several connections at once, each with its own metadata session, schema tree and completion
@@ -307,7 +308,9 @@ Everything below works today, with PostgreSQL.
 
 Planned, in no particular order and with no dates:
 
-- Drivers for MySQL/MariaDB, Valkey/Redis and Elasticsearch
+- MySQL: table structure beyond columns, DDL, copy as SQL, row counts and the plan view; MariaDB
+  as a driver of its own
+- Drivers for Valkey/Redis and Elasticsearch
 - TLS connections (today every connection is plain TCP; use an SSH tunnel across untrusted
   networks, and servers that require TLS cannot be reached yet)
 - A server monitor (sessions, locks, activity)
@@ -530,6 +533,73 @@ A held transaction also keeps vacuum from cleaning up. Use `"hold"` for a local 
 when you walk a large result page by page (with no hold each page runs the statement again and
 skips the rows before it, which costs more the deeper you go). A row count (`#`) never keeps
 anything open of its own.
+
+## MySQL
+
+MySQL 8.0, 8.4 and 9.x (tested on 8.0.45, 8.4.11 and 9.7.2). MySQL 5.7 and older are refused
+with their version. MariaDB 10.6 and newer is a best effort: it connects and runs statements, and
+is tested only lightly.
+
+**What works**
+- Connecting directly or through an SSH tunnel or tunnel preset (the driver talks over the
+  tunnel's channel; no local port is opened), `caching_sha2_password` and
+  `mysql_native_password`, and the test connection.
+- Running statements: one per request (datarig splits scripts itself, `DELIMITER` included; the
+  client never asks the server to run several statements from one request, and `LOAD DATA
+  LOCAL` is off). The editor and the risk checks read the text in the session's sql mode
+  (`ANSI_QUOTES`, `NO_BACKSLASH_ESCAPES`).
+- Values as the server writes them: `DECIMAL` exact, unsigned integers in full, `BIT` as `b'…'`,
+  binary values as `0x…`, `JSON`, dates and times with their fractions, `TIME` as an interval
+  (negative, or over 24 hours), zero dates (`0000-00-00`) as text, `ENUM`/`SET` as text,
+  `GEOMETRY` as bytes.
+- Rows affected, the last insert id, warnings and the server's info line in Messages; errors as
+  the `mysql` client shows them (`ERROR 1146 (42S02): …`).
+- Cancel (`Ctrl+C`): `KILL QUERY` from a connection of its own, never `KILL`. A `SLEEP()` that
+  is stopped returns 1, as in the `mysql` client.
+- Transactions as the server reports them after each statement; a statement that commits your
+  open transaction by itself (DDL and others) is noted in Messages.
+- The explorer: the server's databases right under the profile (a MySQL database is the
+  schema), their tables and views with the server's estimates (`~rows · size`), and the columns
+  of a table; completion; `:use db` and the database picker (`Space c d`).
+- Marks, hints, charts, and copying rows as TSV, CSV or JSON.
+
+**What does not work yet**
+- Table structure beyond the columns (keys, indexes, constraints, triggers), DDL, copy as SQL
+  `INSERT`, the row count (`#`) and the plan view (`EXPLAIN` runs and shows its text).
+- TLS: a server that requires it (`require_secure_transport`) cannot be reached yet, and is said
+  so.
+- A `USE` typed in a console is not followed by the header and completion; use `:use`.
+- The estimates are the server's (`TABLE_ROWS`), which can be far off for InnoDB. A view whose
+  table was dropped is listed without columns. On a server with tens of thousands of tables the
+  explorer's catalog read may hit its 10-second limit.
+
+**Paging and locks.** As on PostgreSQL, nothing is held open while you read a result by default.
+The query session keeps `sql_select_limit` at a page and one row, so the first page is read to
+the end of the statement and its metadata lock is released; the next page runs the statement
+again and skips the rows you have (only for a statement that is safe to repeat; one that names a
+view is checked on the server first). `SHOW` and `DESCRIBE` are read whole. With
+`paging = "hold"`, and inside your own transaction, a result is read whole into datarig's local
+spill (up to its limit) and the server is free at once. Outside a transaction a locking read
+(`FOR UPDATE`, `FOR SHARE`) stops at the page limit too; its locks end with the statement
+anyway. The explorer and completion read in autocommit with `lock_wait_timeout = 2` and a
+10-second `max_execution_time`: behind a waiting `ALTER TABLE` they give up after two seconds
+instead of queueing behind it.
+
+**Read-only profiles.** Two layers, as on PostgreSQL: datarig refuses everything that is not a
+read before it is sent, including `CALL`, executable comments (`/*! … */`), functions that are
+not built in, and what MySQL's own read-only still allows (`FOR SHARE`, `LOCK TABLES`,
+`GET_LOCK()`, `SET GLOBAL`, …); and the session runs with `transaction_read_only = ON`, checked
+after every statement (a session that loses it is closed). Unlike PostgreSQL, MySQL lets a
+statement turn its read-only off, so the server's layer depends on datarig's: for a guarantee
+that does not, use an account with `SELECT` privileges only. Views, triggers, generated columns
+and `DEFAULT` expressions are not inspected; the server still refuses their writes.
+
+**Passwords on a direct connection.** There is no TLS yet. A `caching_sha2_password` login that
+the server has not cached (the first one, or after a restart) asks the server for its RSA public
+key over the same plain connection and encrypts the password with it: someone who can intercept
+the connection can send their own key and read the password. A `mysql_native_password` login
+over plain TCP can be cracked offline from a capture. Use an SSH tunnel for any server that is
+not on your own machine.
 
 ## SSH tunnels
 
