@@ -181,6 +181,11 @@ pub enum DriverError {
     #[error("Invalid parsec ext-salt packet received from server")]
     InvalidParsecSalt,
 
+    /// datarig: a `caching_sha2_password` login needed the server's public key, none was
+    /// given, and asking the server for it is off.
+    #[error("the server's public key is needed and asking the server for it is disabled")]
+    PublicKeyRetrievalDisabled,
+
     #[error("Bulk execute error: {}", _0)]
     BulkExecute(BulkExecuteRequestError),
 }

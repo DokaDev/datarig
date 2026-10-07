@@ -700,6 +700,18 @@ pub(crate) struct MysqlOpts {
     /// When set, the client will advertise `CLIENT_CONNECT_ATTRS` and send the provided
     /// key-value attributes to the server.
     connect_attributes: Option<std::collections::HashMap<String, String>>,
+
+    /// datarig: the server's RSA public key (PEM), for a `caching_sha2_password` login that
+    /// sends the password over a connection that is neither secure nor a socket (defaults to
+    /// `None`). When set, the server is never asked for its key.
+    server_public_key: Option<Vec<u8>>,
+
+    /// datarig: whether such a login may ask the server for its public key when none is set
+    /// (defaults to `true`, as upstream does). When `false`, it fails with
+    /// [`DriverError::PublicKeyRetrievalDisabled`] instead.
+    ///
+    /// [`DriverError::PublicKeyRetrievalDisabled`]: crate::DriverError::PublicKeyRetrievalDisabled
+    public_key_retrieval: bool,
 }
 
 /// Mysql connection options.
@@ -1150,6 +1162,17 @@ impl Opts {
         self.inner.mysql_opts.connect_attributes.as_ref()
     }
 
+    /// datarig: the server's public key (PEM) a `caching_sha2_password` login uses instead of
+    /// asking the server for it, if any.
+    pub fn server_public_key(&self) -> Option<&[u8]> {
+        self.inner.mysql_opts.server_public_key.as_deref()
+    }
+
+    /// datarig: whether a `caching_sha2_password` login may ask the server for its public key.
+    pub fn public_key_retrieval(&self) -> bool {
+        self.inner.mysql_opts.public_key_retrieval
+    }
+
     pub(crate) fn get_capabilities(&self) -> CapabilityFlags {
         // datarig: never `CLIENT_LOCAL_FILES` (a server could ask for any file of the client
         // with `LOAD DATA LOCAL`) nor `CLIENT_MULTI_STATEMENTS` (one request runs one statement:
@@ -1219,6 +1242,8 @@ impl fmt::Debug for MysqlOpts {
             .field("client_found_rows", &self.client_found_rows)
             .field("enable_cleartext_plugin", &self.enable_cleartext_plugin)
             .field("connect_attributes", &self.connect_attributes)
+            .field("server_public_key", &self.server_public_key.as_ref().map(|_| "<pem>"))
+            .field("public_key_retrieval", &self.public_key_retrieval)
             .finish()
     }
 }
@@ -1248,6 +1273,8 @@ impl Default for MysqlOpts {
             client_found_rows: false,
             enable_cleartext_plugin: false,
             connect_attributes: None,
+            server_public_key: None,
+            public_key_retrieval: true,
         }
     }
 }
@@ -1600,6 +1627,19 @@ impl OptsBuilder {
     /// Replaces connection attributes with the given map. See [`Opts::connect_attributes`].
     pub fn connect_attributes(mut self, attrs: std::collections::HashMap<String, String>) -> Self {
         self.opts.connect_attributes = Some(attrs);
+        self
+    }
+
+    /// datarig: the server's RSA public key (PEM), see [`Opts::server_public_key`].
+    pub fn server_public_key(mut self, pem: Option<Vec<u8>>) -> Self {
+        self.opts.server_public_key = pem;
+        self
+    }
+
+    /// datarig: whether the server may be asked for its public key, see
+    /// [`Opts::public_key_retrieval`].
+    pub fn public_key_retrieval(mut self, allowed: bool) -> Self {
+        self.opts.public_key_retrieval = allowed;
         self
     }
 

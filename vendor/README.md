@@ -195,17 +195,26 @@ Every change in the source is marked with a `datarig:` comment.
 
 - `src/io/mod.rs`: the trait `CustomStream` (any `AsyncRead + AsyncWrite + Send + Unpin`), the
   endpoint `Endpoint::Custom` over one (neither a socket nor secure, so a full
-  `caching_sha2_password` login asks for the server's public key and sends the password
-  encrypted with it; its liveness check is left to the stream's owner), and
-  `Stream::custom`. `src/io/tls/rustls_io.rs` and `native_tls_io.rs` refuse TLS over such a
+  `caching_sha2_password` login sends the password encrypted with the server's public key;
+  its liveness check is left to the stream's owner), and `Stream::custom`. `src/io/tls/rustls_io.rs` and `native_tls_io.rs` refuse TLS over such a
   stream (not built here: no TLS feature is on).
 - `src/conn/mod.rs`: `Conn::connect_with_stream(opts, stream)`, a connection over the
   caller's stream (handshake, authentication, settings, init and setup commands as `Conn::new`
   does them, which now share them in `Conn::open`; it never moves to the server's socket file),
-  and `Conn::is_mariadb`.
+  and `Conn::is_mariadb`. `continue_caching_sha2_password_auth`: a full login over a
+  connection that is neither secure nor a socket encrypts the password with the key of the
+  options (`server_public_key`) when there is one and then never asks the server for its key;
+  without one it asks (`0x02`) only when `public_key_retrieval` is on, and otherwise fails
+  with `DriverError::PublicKeyRetrievalDisabled` before it sends anything (the key the server
+  sends comes over the same unencrypted connection, so anyone in between could send theirs).
 - `src/opts/mod.rs`: the client capabilities never include `CLIENT_MULTI_STATEMENTS` nor
   `CLIENT_LOCAL_FILES`, and include `CLIENT_SESSION_TRACK`, so the server reports changes of the
-  session (the variables it tracks, the current database) in its OK packets.
+  session (the variables it tracks, the current database) in its OK packets. `MysqlOpts`'s
+  `Debug` is written out instead of derived, so it never prints the password. Two options:
+  `server_public_key` (the server's RSA public key in PEM, `None` by default) and
+  `public_key_retrieval` (whether the server may be asked for its key, `true` by default as
+  upstream does), with their `OptsBuilder` setters and `Opts` getters.
+- `src/error/mod.rs`: `DriverError::PublicKeyRetrievalDisabled`.
 - `src/lib.rs`: `pub use self::io::CustomStream`.
 
 Packaging: `Cargo.toml`'s generated header comment is replaced by a note about this copy; its

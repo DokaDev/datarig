@@ -812,6 +812,15 @@ impl Conn {
                     if self.is_secure() || self.is_socket() {
                         self.write_packet(pass).await?;
                     } else {
+                        // datarig: the caller's key when it gave one (the server is not asked);
+                        // without one, the server is asked only when the caller allows it.
+                        if self.inner.server_key.is_none() {
+                            if let Some(key) = self.inner.opts.server_public_key() {
+                                self.inner.server_key = Some(key.to_vec());
+                            } else if !self.inner.opts.public_key_retrieval() {
+                                return Err(DriverError::PublicKeyRetrievalDisabled.into());
+                            }
+                        }
                         if self.inner.server_key.is_none() {
                             self.write_bytes(&[0x02][..]).await?;
                             let packet = self.read_packet().await?;
@@ -1067,8 +1076,9 @@ impl Conn {
     /// the authentication, the settings, the init and setup commands, as [`Conn::new`] does
     /// them. The host, port and socket of `opts` are not used, and the connection never moves
     /// to the server's socket (`prefer_socket`). The stream is neither secure nor a socket, so a
-    /// `caching_sha2_password` login that needs the password asks for the server's public key
-    /// and sends the password encrypted with it.
+    /// `caching_sha2_password` login that needs the password sends it encrypted with the
+    /// server's public key: the options' `server_public_key`, else the key the server sends
+    /// when asked, which it is only when `public_key_retrieval` is on.
     pub fn connect_with_stream<T: Into<Opts>>(
         opts: T,
         stream: Box<dyn crate::io::CustomStream>,
