@@ -369,7 +369,12 @@ async fn sessions_are_set_up_on_the_server_by_role_and_policy() {
         (SessionRole::Query, true, "ON", (PAGE + 1).to_string()),
         (SessionRole::Meta, false, "ON", "18446744073709551615".to_string()),
     ] {
-        let c = Conn::open(&url, role, read_only, "sessions_are_set_up_on_the_server_by_role_and_policy").await;
+        let mut c = Conn::open(&url, role, read_only, "sessions_are_set_up_on_the_server_by_role_and_policy").await;
+        // The metadata session reads at once: its variables are looked at once it is idle (MySQL
+        // 8.0 shows a busy thread's as they were before its `SET`).
+        if role == SessionRole::Meta {
+            c.wait(|e| matches!(e, DbEvent::Catalog(_)), 30).await;
+        }
         let id = only_session(&mut admin, role, "sessions_are_set_up_on_the_server_by_role_and_policy").await;
         let mut vars = std::collections::HashMap::new();
         for name in [
