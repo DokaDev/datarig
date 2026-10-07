@@ -58,6 +58,13 @@ fn the_limit_is_set_only_before_queries() {
     assert!(!lists("SELECT 1", MODE) && !lists("SHOW WARNINGS", MODE) && !lists("DESC SELECT 1", MODE));
     assert!(reads_outcome("SELECT ROW_COUNT()", MODE) && reads_outcome("select found_rows()", MODE));
     assert!(!reads_outcome("SELECT 'ROW_COUNT'", MODE));
+    assert!(reads_outcome("SELECT ROW_COUNT ()", MODE));
+    assert!(!reads_outcome("SELECT id AS row_count FROM t", MODE) && !reads_outcome("SELECT found_rows FROM t", MODE));
+    for sql in ["SELECT * FROM t FOR UPDATE", "select * from t for share nowait", "SELECT * FROM t LOCK IN SHARE MODE"]
+    {
+        assert!(locking(sql, MODE), "{sql}");
+    }
+    assert!(!locking("SELECT * FROM t", MODE) && !locking("SELECT 'FOR UPDATE'", MODE));
 }
 
 #[test]

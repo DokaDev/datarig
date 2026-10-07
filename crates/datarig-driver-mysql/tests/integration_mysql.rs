@@ -1334,3 +1334,43 @@ async fn a_late_cancel_does_not_stop_the_next_run() {
         other => panic!("{other:?}"),
     }
 }
+
+/// Every row of run `id` in mode `paging` (its pages asked for to the end).
+async fn all_rows(c: &mut Conn, id: u64, sql: &str, paging: PagingMode) -> usize {
+    let evs = c.run_as(id, &[sql], paging).await;
+    let (_, rows, mut more) = page_of(&evs);
+    let mut got = rows.len();
+    while more {
+        c.session.send(DbCommand::FetchMore { id });
+        match c.wait(|e| matches!(e, DbEvent::Page { .. } | DbEvent::Failed { .. }), 30).await {
+            DbEvent::Page { rows, more: m, .. } => (got, more) = (got + rows.len(), m),
+            other => panic!("{other:?}"),
+        }
+    }
+    got
+}
+
+/// A locking read is read whole: the page limit would lock fewer rows than it asks for, and
+/// leave the rest unread.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_locking_read_is_read_whole() {
+    let Some((url, admin)) = urls("a_locking_read_is_read_whole") else { return };
+    let t = numbers(&admin, "locking", 1234).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, "locking").await;
+    for (id, clause) in [(1, "FOR UPDATE"), (2, "FOR SHARE"), (3, "LOCK IN SHARE MODE")] {
+        let sql = format!("SELECT id FROM {} {clause}", t.q());
+        assert_eq!(all_rows(&mut c, id, &sql, PagingMode::NoHold).await, 1234, "{clause}");
+    }
+}
+
+/// A column named as a function that reads the statement before is only a name: a held result
+/// is never cut at the page limit the session has.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_column_named_row_count_is_read_whole() {
+    let Some((url, admin)) = urls("a_column_named_row_count_is_read_whole") else { return };
+    let t = numbers(&admin, "rcname", 1234).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, "rcname").await;
+    c.ok(1, &format!("SELECT id FROM {}", t.q())).await;
+    let sql = format!("SELECT id AS row_count FROM {}", t.q());
+    assert_eq!(all_rows(&mut c, 2, &sql, PagingMode::Hold).await, 1234);
+}

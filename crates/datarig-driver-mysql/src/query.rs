@@ -63,7 +63,7 @@ use crate::session::{Killer, Server, Tracked, my_error};
 use crate::values::{column_meta, display};
 use datarig_core::driver::{Cell, ColumnMeta, DbCommand, DbError, DbEvent, Outcome, PagingMode, StatementInfo};
 use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
-use datarig_core::sql::lexer::{Token, lex_in};
+use datarig_core::sql::lexer::{Tok, Token, lex_in};
 use datarig_core::sql::risk::mysql as risk;
 use datarig_core::sql::risk::repeat::NotRepeatable;
 use mysql_async::consts::StatusFlags;
@@ -297,12 +297,15 @@ pub(crate) async fn query_loop(
                 execute(&mut conn, &mut link, &env, &mut s, id, vec![sql], Some(skip), paging).await
             }
             // Answered once; a session the UI closed meanwhile answers nothing.
+            // A count or a check the app asks for: a cancel asked before it was another run's.
             Next::Command(DbCommand::Count { id, sql }) => {
+                env.asked.store(false, Ordering::SeqCst);
                 count(&mut conn, &mut link, &env, &mut s, &sql).await.map(|(result, snapshot)| {
                     let _ = events.send(DbEvent::Counted { id, result, snapshot });
                 })
             }
             Next::Command(DbCommand::CheckRepeat { id, sql }) => {
+                env.asked.store(false, Ordering::SeqCst);
                 check_repeat(&mut conn, &mut link, &env, &mut s, &sql).await.map(|result| {
                     let _ = events.send(DbEvent::RepeatChecked { id, result });
                 })
@@ -487,9 +490,11 @@ async fn statement<'a>(
         return Ok(None);
     }
     let undo = (explains(sql, s.mode) && risk.rolls_back()).then(|| Undo::of(s.tx.open));
-    // The result is held: the user's transaction, a held last statement, or a listing the app
-    // cannot read on by running it again (`SHOW`, `DESCRIBE`): read to its end.
-    let held = step.last && (step.hold || s.tx.open || lists(sql, s.mode));
+    // The result is held: the user's transaction, a held last statement, a listing the app
+    // cannot read on by running it again (`SHOW`, `DESCRIBE`), or a locking read (the limit
+    // would lock fewer rows than asked, and its next page would lock them again): read to its
+    // end.
+    let held = step.last && (step.hold || s.tx.open || lists(sql, s.mode) || locking(sql, s.mode));
     // The limit: a page and one row more (and the rows a `Resume` skips) for a last statement not
     // held, else the user's own; set only before a statement it applies to.
     let wanted = if step.last && !held {
@@ -499,8 +504,15 @@ async fn statement<'a>(
         s.limit.user
     };
     // Not before a statement that reads the outcome of the one before (`ROW_COUNT()`,
-    // `FOUND_ROWS()`): the `SET` would be that statement.
-    if limit_applies(sql, s.mode) && wanted != s.limit.current && !reads_outcome(sql, s.mode) {
+    // `FOUND_ROWS()`): the `SET` would be that statement. It then runs under the limit it finds
+    // only when that one cuts no row it wants (none, or at least as many).
+    let keeps = match (s.limit.current, wanted) {
+        (None, _) => true,
+        (Some(now), Some(want)) => now >= want,
+        (Some(_), None) => false,
+    };
+    let skip = keeps && reads_outcome(sql, s.mode);
+    if limit_applies(sql, s.mode) && wanted != s.limit.current && !skip {
         let set = format!("SET SESSION sql_select_limit = {}", wanted.map_or("DEFAULT".to_string(), |n| n.to_string()));
         if let Err(e) = halt!(link.guard(None, conn.query_drop(set)).await, Some(reply)) {
             return failed(conn, link, env, s, reply, &e, false).await;
@@ -1036,8 +1048,21 @@ fn lists(sql: &str, mode: MySqlMode) -> bool {
 }
 
 /// Whether `sql` reads what the statement before it did (`ROW_COUNT()`, `FOUND_ROWS()`).
+/// A call of the function, not a name spelled so (a column `row_count`).
 fn reads_outcome(sql: &str, mode: MySqlMode) -> bool {
-    words(sql, mode).iter().any(|w| matches!(w.as_str(), "ROW_COUNT" | "FOUND_ROWS"))
+    let toks: Vec<Token> = lex_in(sql, Dialect::MySql(mode)).into_iter().filter(|t| !t.is_trivia()).collect();
+    toks.windows(2).any(|w| {
+        w[0].is_word()
+            && matches!(w[0].text(sql).to_ascii_uppercase().as_str(), "ROW_COUNT" | "FOUND_ROWS")
+            && w[1].kind == Tok::LParen
+    })
+}
+
+/// Whether `sql` reads with a locking clause (`FOR UPDATE`, `FOR SHARE`, `LOCK IN SHARE MODE`).
+fn locking(sql: &str, mode: MySqlMode) -> bool {
+    let w = words(sql, mode);
+    w.windows(2).any(|p| p[0] == "FOR" && (p[1] == "UPDATE" || p[1] == "SHARE"))
+        || w.windows(4).any(|p| p == ["LOCK", "IN", "SHARE", "MODE"])
 }
 
 /// Whether `sql` ends the transaction and opens another at once: `COMMIT`/`ROLLBACK … AND CHAIN`
