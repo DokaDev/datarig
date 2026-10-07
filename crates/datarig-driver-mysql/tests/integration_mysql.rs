@@ -622,6 +622,28 @@ impl Drop for Table {
     }
 }
 
+/// A statement run from the side when the guard goes, whatever the test did (a panic too): the
+/// drop of what the test made.
+struct Cleanup {
+    url: String,
+    sql: String,
+}
+
+impl Drop for Cleanup {
+    fn drop(&mut self) {
+        let (url, sql) = (self.url.clone(), self.sql.clone());
+        let _ = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            rt.block_on(async {
+                let mut c = side(&url).await;
+                let _ = c.query_drop(sql).await;
+                let _ = c.disconnect().await;
+            });
+        })
+        .join();
+    }
+}
+
 /// A table of `n` rows (`id` 1..=n, `v` text), `n` under 1,000,000 (made from a cross join, so
 /// no recursion goes past the server's `cte_max_recursion_depth`).
 async fn numbers(url: &str, name: &str, n: u32) -> Table {
@@ -1168,6 +1190,7 @@ async fn a_read_only_session_refuses_and_never_stays_writable() {
     let proc_name = format!("zz_it_ro_off_{}", std::process::id());
     let mut a = side(&admin).await;
     a.query_drop(format!("DROP PROCEDURE IF EXISTS shop.{proc_name}")).await.unwrap();
+    let _gone = Cleanup { url: admin.clone(), sql: format!("DROP PROCEDURE IF EXISTS shop.{proc_name}") };
     a.query_drop(format!(
         "CREATE PROCEDURE shop.{proc_name}() BEGIN SET SESSION transaction_read_only = OFF; \
          INSERT INTO {} VALUES (1); SET SESSION transaction_read_only = ON; END",
