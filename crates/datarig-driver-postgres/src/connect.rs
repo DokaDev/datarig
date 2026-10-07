@@ -60,7 +60,7 @@ impl Driver for PgDriver {
             ddl: true,
             language: Language::Sql(Dialect::Postgres),
             hierarchy: Hierarchy::DatabaseSchema,
-            explain: Some(ExplainFormat::Json),
+            explain: Some(ExplainFormat::PostgresJson),
         }
     }
 

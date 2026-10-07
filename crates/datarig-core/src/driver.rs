@@ -73,9 +73,11 @@ pub enum Hierarchy {
 /// The format of the plan a driver produces for a statement (`Capabilities::explain`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExplainFormat {
-    /// PostgreSQL's `EXPLAIN (FORMAT JSON)` (`sql::plan::pg`), asked with
-    /// [`Dialect::explain_sql`](crate::sql::dialect::Dialect::explain_sql).
-    Json,
+    /// PostgreSQL's `EXPLAIN (FORMAT JSON)`: a list holding one object whose `Plan` is the tree
+    /// of nodes, read by `sql::plan::pg`, asked with
+    /// [`Dialect::explain_sql`](crate::sql::dialect::Dialect::explain_sql). Another database's
+    /// JSON plan (MySQL's `FORMAT=JSON`) is shaped otherwise and would be a format of its own.
+    PostgresJson,
 }
 
 /// Where a session works: a database and a schema of the profile's server,

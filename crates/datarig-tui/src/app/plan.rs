@@ -382,6 +382,8 @@ impl App {
         if self.tab_busy(self.tab().id) {
             return self.flash_busy();
         }
+        // A dialect without a plan statement has a driver without a plan format, and the action
+        // is not offered there (`App::tab_explains`): the dispatcher does nothing, as here.
         let Some(sql) = self.tab_dialect(self.tab().id).explain_sql(&stmt, analyze) else { return };
         self.tab_mut().editor.stage_run(std::slice::from_ref(&sql), spans);
         self.run(vec![sql]);
@@ -416,10 +418,10 @@ impl App {
             return false;
         }
         let t = self.tab();
-        self.tab_explains(t.id)
-            && t.exec.view == super::tabs::ResultView::Rows
+        t.exec.view == super::tabs::ResultView::Rows
             && matches!(t.results, Results::Rows(_))
             && self.text_plan().explain
+            && self.tab_explains(t.id)
     }
 
     /// The key context where the focus is (the results pane's own there).

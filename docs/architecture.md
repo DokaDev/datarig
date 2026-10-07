@@ -574,16 +574,17 @@ through it.
   (`Language::dialect`). Both are `Copy` enums: every tool will `match` on them, so a new
   variant makes each one decide what to do with it.
 - **Who says which**: a driver, through `Capabilities::language` (`PgDriver`:
-  `Sql(Postgres)`). Two more capabilities describe the server rather than its text:
+  `Sql(Postgres)`). `App::tab_language` reads it from the tab's profile's driver without
+  connecting; a tab without a profile, or whose profile or driver is unknown, gets
+  `Language::default()`. Two more capabilities describe the server rather than its text:
   `Capabilities::hierarchy` (`Hierarchy::DatabaseSchema`, databases holding schemas, as
   PostgreSQL's; `SchemaOnly`, a database that is the schema, as MySQL's) and
-  `Capabilities::explain` (`Some(ExplainFormat::Json)`: the plan the driver's sessions produce;
-  `None`: no plan view). `query.explain`, `query.explain_analyze` and `results.view_as_plan`
-  are offered only on a tab whose driver has one (`App::tab_explains`; a tab without a known
-  driver is PostgreSQL's). Nothing reads `hierarchy` yet: the explorer and the context picker
-  show databases holding schemas. `App::tab_language` reads it from the tab's profile's driver without
-  connecting; a tab without a profile, or whose profile or driver is unknown, gets
-  `Language::default()`.
+  `Capabilities::explain` (`Some(ExplainFormat::PostgresJson)`: the plan the driver's sessions
+  produce, in PostgreSQL's JSON shape; `None`: no plan view). `query.explain`,
+  `query.explain_analyze` and `results.view_as_plan` are offered only on a tab whose driver
+  has one (`App::tab_explains`; a tab without a known driver is in the default language,
+  PostgreSQL, and counts as one). Nothing reads `hierarchy` yet: the explorer and the context
+  picker show databases holding schemas.
 - **Where it goes**: `App::sync_tab_language` pushes the tab's language into its editor
   (`Editor::set_language`, which drops the cached lexer line states when the language changes)
   and gives the tab a new `risk::Classifier` when its language changes. It runs wherever a tab
@@ -641,6 +642,9 @@ through it.
     (`lexer::KEYWORDS`/`is_keyword` are PostgreSQL's), `changes_schema_in` (`changes_schema`).
     `lex_backslash_strings` is the PostgreSQL classifier's own. The lexer is a `match` on the
     `Copy` dialect: no allocation or dynamic dispatch on the editor's per-keystroke path.
+    Every lexed region starts in the default state (between tokens, `;` ending a statement);
+    a client delimiter (MySQL's `DELIMITER`) will need a start state carried in the editor's
+    line states and given to the lexer.
   - Splitter: `split::split_in`, `segment_at_in` (`split`, `segment_at`); `statement_at` reads
     statements already split.
   - Completion: `complete::complete_in_dialect(src, cursor, catalog, force, path, d)`

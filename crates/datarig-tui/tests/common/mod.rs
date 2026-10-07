@@ -79,6 +79,8 @@ pub struct FakeDriver {
     pub no_structure: Arc<AtomicBool>,
     /// Without `Capabilities::ddl` (as a driver that cannot show an object's DDL).
     pub no_ddl: Arc<AtomicBool>,
+    /// Without `Capabilities::explain` (as a driver that cannot produce a statement's plan).
+    pub no_explain: Arc<AtomicBool>,
 }
 
 impl Driver for FakeDriver {
@@ -93,7 +95,7 @@ impl Driver for FakeDriver {
             ddl: !self.no_ddl.load(Ordering::SeqCst),
             language: Language::Sql(Dialect::Postgres),
             hierarchy: Hierarchy::DatabaseSchema,
-            explain: Some(ExplainFormat::Json),
+            explain: (!self.no_explain.load(Ordering::SeqCst)).then_some(ExplainFormat::PostgresJson),
         }
     }
 
