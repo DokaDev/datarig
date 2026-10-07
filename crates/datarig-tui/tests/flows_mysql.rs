@@ -288,3 +288,30 @@ fn what_the_server_said_of_a_statement_goes_to_messages() {
     h.tab_db(0, DbEvent::Info { id: id - 1, index: 0, info: StatementInfo { warnings: 1, ..Default::default() } });
     assert_eq!(h.app.tab().exec.run.notes.len(), 3);
 }
+
+/// MySQL's databases are its schemas: the explorer lists them right under the profile (no
+/// database level, the server's databases are not asked for), `:use <name>` moves the tab to
+/// one, and the tab's line names it once.
+#[test]
+fn databases_are_the_schemas_under_the_profile() {
+    use datarig_core::driver::{DbCommand, SessionContext};
+    let mut h = mysql();
+    h.db(DbEvent::Connected);
+    h.db(DbEvent::Schemas(Ok(vec!["datarig".into(), "sales".into(), "shop".into()])));
+    h.db(DbEvent::Catalog(Ok(catalog())));
+    let rows = h.rows();
+    let at = rows.iter().position(|r| r == "local-my").expect("the profile");
+    assert_eq!(&rows[at + 1..at + 4], ["  datarig", "  sales", "  shop"], "{rows:?}");
+    assert!(!rows.iter().any(|r| r.trim_start().starts_with("db:")), "no database level: {rows:?}");
+    assert!(!h.sent().iter().any(|c| matches!(c, DbCommand::LoadDatabases)));
+    // `:use` names the schema (a database), and the tab works there.
+    h.command("use sales");
+    assert_eq!(h.app.tab().context, SessionContext { database: None, schema: Some("sales".into()) });
+    let screen = h.screen(120, 30);
+    assert!(screen.contains("local-my / sales "), "{screen}");
+    assert!(!screen.contains("sales / sales"), "{screen}");
+    assert_eq!(h.app.tab_path(h.app.tab()), ["sales"]);
+    // Two levels are not a MySQL name.
+    h.command("use a.b");
+    assert!(h.screen(120, 30).contains(":use"), "a usage error");
+}

@@ -249,13 +249,113 @@ async fn a_query_session_says_how_its_text_is_read() {
     probe.disconnect().await.unwrap();
 }
 
+/// The metadata session lists the databases and reads the catalog as soon as it connects, and
+/// says no language (the tabs' sessions do).
 #[tokio::test(flavor = "multi_thread")]
-async fn the_metadata_session_sends_no_language() {
-    let Some(url) = my_url("the_metadata_session_sends_no_language") else { return };
-    let mut c = Conn::start(&url, SessionRole::Meta, false, "the_metadata_session_sends_no_language");
+async fn the_metadata_session_reads_the_databases_and_the_catalog() {
+    let Some(url) = my_url("the_metadata_session_reads_the_databases_and_the_catalog") else { return };
+    let mut c = Conn::start(&url, SessionRole::Meta, false, "metaread");
     assert!(matches!(c.next(15).await, DbEvent::Connected));
+    match c.next(15).await {
+        DbEvent::Schemas(Ok(s)) => {
+            assert!(s.contains(&"shop".to_string()), "{s:?}");
+            assert!(
+                !s.iter().any(|n| ["mysql", "sys", "information_schema", "performance_schema"].contains(&n.as_str()))
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    match c.next(30).await {
+        DbEvent::Catalog(Ok(cat)) => {
+            let users = cat.relations.iter().find(|r| r.schema == "shop" && r.name == "users").expect("shop.users");
+            assert!(!users.is_view);
+            assert_eq!(users.columns[0].name, "id");
+            assert_eq!(users.columns[0].type_name, "bigint unsigned");
+            assert!(cat.relations.iter().any(|r| r.name == "order_summary" && r.is_view));
+        }
+        other => panic!("{other:?}"),
+    }
+    c.session.send(DbCommand::LoadObjects { schema: "shop".into() });
+    match c.next(15).await {
+        DbEvent::Objects { schema, result: Ok(o) } => {
+            assert_eq!(schema, "shop");
+            assert!(o.tables.contains(&"events".to_string()) && o.views == ["order_summary"], "{o:?}");
+            let events = o.stats["events"];
+            assert!(events.rows.is_some_and(|r| r > 500_000), "an estimate: {events:?}");
+            assert!(events.bytes.is_some_and(|b| b > 1 << 20), "{events:?}");
+            assert!(!o.stats.contains_key("order_summary"), "a view has no estimates");
+        }
+        other => panic!("{other:?}"),
+    }
     let next = tokio::time::timeout(Duration::from_millis(300), c.rx.recv()).await;
-    assert!(next.is_err(), "nothing more: {next:?}");
+    assert!(next.is_err(), "nothing more, no language: {next:?}");
+}
+
+/// The owner's worry, for lookups: a read of the metadata session never queues behind another
+/// session's metadata lock (held, or asked for by an `ALTER TABLE` that waits), and never holds
+/// up that session.
+#[tokio::test(flavor = "multi_thread")]
+async fn lookups_never_queue_behind_a_metadata_lock_nor_hold_one_up() {
+    let Some((url, admin)) = urls("lookups_never_queue_behind_a_metadata_lock") else { return };
+    let t = numbers(&admin, "lookup", 200_000).await;
+    let mut wide = side(&admin).await;
+    wide.query_drop(format!("ALTER TABLE {} MODIFY v VARCHAR(200)", t.q())).await.unwrap();
+    wide.query_drop(format!("UPDATE {} SET v = REPEAT('x', 200)", t.q())).await.unwrap();
+    wide.disconnect().await.unwrap();
+    let mut m = Conn::start(&url, SessionRole::Meta, false, "lookup");
+    m.wait(|e| matches!(e, DbEvent::Catalog(_)), 30).await;
+    let lookups = |m: &mut Conn| {
+        m.session.send(DbCommand::LoadObjects { schema: "shop".into() });
+        m.session.send(DbCommand::LoadCatalog);
+    };
+    // 1. Another session holds `LOCK TABLES … WRITE`.
+    let mut lock = side(&admin).await;
+    lock.query_drop(format!("LOCK TABLES {} WRITE", t.q())).await.unwrap();
+    let t0 = Instant::now();
+    lookups(&mut m);
+    m.wait(|e| matches!(e, DbEvent::Objects { .. }), 10).await;
+    m.wait(|e| matches!(e, DbEvent::Catalog(_)), 10).await;
+    assert!(t0.elapsed() < Duration::from_millis(2_500), "{:?}", t0.elapsed());
+    let t0 = Instant::now();
+    lock.query_drop(format!("INSERT INTO {} VALUES (999999, 'w')", t.q())).await.unwrap();
+    lock.query_drop("UNLOCK TABLES").await.unwrap();
+    assert!(t0.elapsed() < Duration::from_millis(500), "the locking session was not held up: {:?}", t0.elapsed());
+    // 2. A statement holds a shared lock (a held result), and an `ALTER TABLE` waits for it: a
+    //    lookup does not queue behind the waiting ALTER.
+    let mut q = Conn::open(&url, SessionRole::Query, false, "lookup").await;
+    let evs = q.run_as(1, &[&format!("SELECT * FROM {}", t.q())], PagingMode::Hold).await;
+    assert!(page_of(&evs).2);
+    let alter_url = admin.clone();
+    let table = t.q();
+    let alter = tokio::spawn(async move {
+        let mut a = side(&alter_url).await;
+        a.query_drop("SET SESSION lock_wait_timeout = 60").await.unwrap();
+        let t0 = Instant::now();
+        let r = a.query_drop(format!("ALTER TABLE {table} ADD COLUMN c9 INT")).await;
+        a.disconnect().await.unwrap();
+        (r.map_err(|e| e.to_string()), t0.elapsed())
+    });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let t0 = Instant::now();
+    lookups(&mut m);
+    let objects = m.wait(|e| matches!(e, DbEvent::Objects { .. }), 10).await;
+    let catalog = m.wait(|e| matches!(e, DbEvent::Catalog(_)), 10).await;
+    assert!(t0.elapsed() < Duration::from_millis(5_000), "two lookups, each at most 2 s: {:?}", t0.elapsed());
+    for ev in [&objects, &catalog] {
+        match ev {
+            DbEvent::Objects { result: Err(e), .. } | DbEvent::Catalog(Err(e)) => {
+                assert_eq!(*e, DbError::Locked, "{ev:?}")
+            }
+            _ => {}
+        }
+    }
+    // The ALTER goes through once the held result is stopped: the lookups held nothing up.
+    let t1 = Instant::now();
+    q.session.send(DbCommand::ClosePortal { id: 1 });
+    q.ok(2, "SELECT 1").await;
+    let (r, _) = alter.await.unwrap();
+    assert!(r.is_ok(), "{r:?}");
+    assert!(t1.elapsed() < Duration::from_secs(10), "{:?}", t1.elapsed());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -331,10 +431,13 @@ async fn a_session_is_set_up_in_one_statement() {
         let _c = Conn::open(&url, role, true, "a_session_is_set_up_in_one_statement").await;
         let id = only_session(&mut admin, role, "a_session_is_set_up_in_one_statement").await;
         // The server's answer to the `SET` said the sql mode and read-only: nothing is asked
-        // after it.
+        // after it (the metadata session goes on to its own reads: the databases, the catalog).
         let ran = statements_of(&mut admin, id).await;
-        assert_eq!(ran.len(), 1, "{role:?}: {ran:?}");
         assert!(ran[0].starts_with("SET NAMES utf8mb4, SESSION session_track_system_variables"), "{ran:?}");
+        assert!(ran[1..].iter().all(|s| !s.contains("@@")), "{role:?}: {ran:?}");
+        if role == SessionRole::Query {
+            assert_eq!(ran.len(), 1, "{ran:?}");
+        }
     }
     admin.disconnect().await.unwrap();
 }
@@ -438,8 +541,8 @@ async fn a_connection_the_server_ends_is_lost_at_once() {
     let mut c = Conn::open(&url, SessionRole::Meta, false, "a_connection_the_server_ends_is_lost_at_once").await;
     let id = only_session(&mut admin, SessionRole::Meta, "a_connection_the_server_ends_is_lost_at_once").await;
     admin.query_drop(format!("KILL {id}")).await.unwrap();
-    // Idle, nothing asked: the session sees the end itself.
-    assert!(matches!(c.next(10).await, DbEvent::Lost { .. }));
+    // Idle, nothing asked: the session sees the end itself (after what it read at connect).
+    c.wait(|e| matches!(e, DbEvent::Lost { .. }), 10).await;
     admin.disconnect().await.unwrap();
 }
 

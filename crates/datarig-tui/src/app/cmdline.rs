@@ -128,6 +128,11 @@ impl App {
     fn context_names(&self) -> Vec<String> {
         let t = self.tab();
         let Some(p) = t.profile else { return Vec::new() };
+        // One level (MySQL): the schemas, which are the databases.
+        if self.schema_only(Some(p)) {
+            let schemas = self.conns.get(p).map(|c| c.tree.schemas.iter().map(|s| s.name.clone()).collect::<Vec<_>>());
+            return schemas.unwrap_or_default().iter().map(|s| command::context_name(s)).collect();
+        }
         let mut out: Vec<String> = match self.conns.get(p).and_then(|c| c.databases.as_ref()) {
             Some(Ok(dbs)) => dbs.iter().map(|d| command::context_name(d)).collect(),
             _ => Vec::new(),
@@ -674,6 +679,12 @@ impl App {
                 let Some(p) = self.tab().profile else {
                     self.overlays.close(OverlayKind::Commands);
                     return Ok(());
+                };
+                // One level (MySQL): `:use name` and `:use .name` name the schema.
+                let (db, schema) = match (self.schema_only(Some(p)), db, schema) {
+                    (true, Some(_), Some(_)) => return err(Msg::Label(Label::CommandsErrorUseUsage)),
+                    (true, db, schema) => (None, schema.or(db)),
+                    (false, db, schema) => (db, schema),
                 };
                 let db = db.or_else(|| self.tab().context.database.clone());
                 // A name the app does not know yet goes to the server, which says;

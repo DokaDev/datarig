@@ -2,7 +2,7 @@
 //! session's settings, through the session's route (directly or a tunnel's dialer), and the
 //! canceller (`KILL QUERY` on a connection of its own).
 
-use crate::link::{Link, Next};
+use crate::link::Link;
 use crate::route::Route;
 use crate::session::{self, CONNECT_GUARD, Killer, Opened, Settings, Target, connect_error, my_error};
 use datarig_core::driver::{
@@ -60,7 +60,7 @@ impl Driver for MyDriver {
         Capabilities {
             server_paging: true,
             cancel: true,
-            introspection: false,
+            introspection: true,
             key_metadata: false,
             contexts: false,
             structure: false,
@@ -205,9 +205,14 @@ async fn run_session(
     if role == SessionRole::Query {
         let _ = events.send(DbEvent::Language(Language::Sql(Dialect::MySql(tracked.mode(&server)))));
     }
+    // A session in a database of its own says where it works (it opened there: the server
+    // refuses a database that does not exist or the user may not use).
+    if let Some(db) = database.filter(|_| !opts.context.is_default()) {
+        let _ = events.send(DbEvent::Context { database: db.clone(), schemas: vec![db] });
+    }
     let link = Link::new(rx, wire);
     match role {
-        SessionRole::Meta => serve(conn, link, events).await,
+        SessionRole::Meta => crate::meta::meta_loop(conn, link, events, tracked).await,
         SessionRole::Query => {
             let killer = canceller.killer.lock().ok().and_then(|g| g.clone());
             let Some(killer) = killer else { return };
@@ -215,50 +220,6 @@ async fn run_session(
             let (asked, busy) = (canceller.asked.clone(), canceller.busy.clone());
             crate::query::query_loop(conn, link, killer, asked, busy, events, settings, server, tracked, select_limit)
                 .await
-        }
-    }
-}
-
-/// Answer every command as not supported, until the session closes or its connection ends.
-async fn serve(conn: mysql_async::Conn, mut link: Link, events: UnboundedSender<DbEvent>) {
-    loop {
-        let ev = match link.next().await {
-            Next::Command(DbCommand::LoadSchemas) => DbEvent::Schemas(Err(DbError::NotSupported)),
-            Next::Command(DbCommand::LoadObjects { schema }) => {
-                DbEvent::Objects { schema, result: Err(DbError::NotSupported) }
-            }
-            Next::Command(DbCommand::LoadCatalog) => DbEvent::Catalog(Err(DbError::NotSupported)),
-            Next::Command(DbCommand::LoadKeys) => DbEvent::Keys(Err(DbError::NotSupported)),
-            Next::Command(DbCommand::LoadDatabases) => DbEvent::Databases(Err(DbError::NotSupported)),
-            Next::Command(DbCommand::LoadStructure { schema, table }) => {
-                DbEvent::Structure { schema, table, result: Err(DbError::NotSupported) }
-            }
-            Next::Command(DbCommand::LoadDdl { id, .. }) => DbEvent::Ddl { id, result: Err(DbError::NotSupported) },
-            Next::Command(DbCommand::Execute { id, .. } | DbCommand::Resume { id, .. }) => {
-                DbEvent::Failed { id, error: DbError::NotSupported, cancelled: false }
-            }
-            // Nothing is ever held open.
-            Next::Command(DbCommand::ClosePortal { .. }) => continue,
-            Next::Command(DbCommand::FetchMore { id }) => {
-                DbEvent::Page { id, columns: None, rows: Vec::new(), more: false, elapsed: Duration::ZERO }
-            }
-            Next::Command(DbCommand::Count { id, .. }) => {
-                DbEvent::Counted { id, result: Err(DbError::NotSupported), snapshot: false }
-            }
-            Next::Command(DbCommand::CheckRepeat { id, .. }) => {
-                DbEvent::RepeatChecked { id, result: Err(DbError::NotSupported) }
-            }
-            Next::Closed => {
-                session::quit(conn).await;
-                return;
-            }
-            Next::Lost(error) => {
-                let _ = events.send(DbEvent::Lost { error });
-                return;
-            }
-        };
-        if events.send(ev).is_err() {
-            return;
         }
     }
 }

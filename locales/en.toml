@@ -23,6 +23,7 @@
 "tree.group.tables" = "Tables"
 "tree.group.views" = "Views"
 "tree.loading" = "Loading…"
+"tree.columns_only" = "Columns only: this database's keys, indexes and constraints are not shown yet"
 "tree.empty" = "(empty)"
 "tree.group.columns" = "Columns"
 "tree.group.primary_key" = "Primary Key"

@@ -304,8 +304,15 @@ impl App {
     /// own first (its schema tree from the profile's metadata session), then the others the
     /// server lists, each opening to its schema tree through that database's aux session.
     fn push_databases(&self, id: ProfileId, c: &ProfileConn, depth: usize, rows: &mut Vec<Row>) {
-        rows.push(Row { kind: RowKind::Database(id, None), depth });
         let structured = self.structure_on(id);
+        // One level (MySQL: a database is the schema): the schemas right under the profile.
+        if self.schema_only(Some(id)) {
+            for r in c.tree.rows_with(|s, n| column_count(&c.catalog, s, n), structured) {
+                rows.push(Row { kind: RowKind::Node(id, r.node), depth: depth + r.depth });
+            }
+            return;
+        }
+        rows.push(Row { kind: RowKind::Database(id, None), depth });
         if c.own_open {
             // An open table shows its structure, or its columns from the completion catalog.
             for r in c.tree.rows_with(|s, n| column_count(&c.catalog, s, n), structured) {
@@ -350,6 +357,10 @@ impl App {
     /// Ask for the databases of profile `id`'s server for the explorer, once (again after a
     /// failure: `again`).
     pub(super) fn ask_databases(&mut self, id: ProfileId, again: bool) {
+        // One level: the schemas are the databases.
+        if self.schema_only(Some(id)) {
+            return;
+        }
         let c = self.conns.entry(id);
         if !c.connected || c.databases_asked || (matches!(c.databases, Some(Ok(_))) && !again) {
             return;
@@ -507,6 +518,13 @@ impl App {
             }
             RowKind::Node(id, n) => {
                 let id = *id;
+                // A real driver without a table's structure yet (MySQL) shows its columns only:
+                // said once the table opens, so the missing keys and indexes do not read as none.
+                let opens =
+                    matches!(n, Node::Object(..)) && self.row_expanded(row) == Some(false) && want != Some(false);
+                if opens && self.schema_only(Some(id)) && !self.structure_on(id) {
+                    self.flash(Notice::new(Label::TreeColumnsOnly, Level::Info));
+                }
                 let Some(c) = self.conns.get_mut(id) else { return };
                 let a = c.tree.set_expanded(*n, want);
                 self.tree_action(id, a);
