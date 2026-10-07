@@ -721,33 +721,31 @@ text" and "The MySQL classifier" below).
   are the ones the client sends (also for the quirks above), each runs alone, and literals and
   names the app writes read back as written, also under `NO_BACKSLASH_ESCAPES`.
 - **The MySQL classifier** (`risk::mysql`; module docs for the rules): the same `Risk` as
-  PostgreSQL's, read from the MySQL lexer's tokens, not a parse tree (see the decision below).
-  Reads are an allowlist of forms (queries without `INTO`, a locking clause or a write's
-  keyword inside; `SHOW`, `DESCRIBE`, `HELP`, `EXPLAIN` of a query); anything else is a write,
-  DDL, maintenance, procedural, a session or transaction statement it knows, or
-  `Danger::Unrecognized`. An executable comment (`/*!…*/`, MariaDB's `/*M!…*/`) is
-  `Danger::ExecutableComment`; a text the server would read otherwise than the lexer (an
-  unterminated token, a client command, a control character, an escape in a quoted name) is
-  unrecognized. A text with a backslash or a `"` is also read in the sql modes that read it
-  differently (`NO_BACKSLASH_ESCAPES`, `ANSI_QUOTES`), and the worse reading counts unless the
-  server would refuse it as a syntax error; it runs on `risk::THREAD`, where a panic reads as
-  unrecognized. MySQL-only dangers: `Locks` (`LOCK TABLES`, `HANDLER`, `FLUSH … WITH READ
-  LOCK`), `Privileges`, `Rename`, `Setting` (`risk::mysql::RISKY_SETTINGS`, a client character
-  set that is not UTF-8), `DynamicSql` (`PREPARE`), `ServerCommand` (`KILL`, `SET GLOBAL`,
-  `FLUSH`, `RESET`, `PURGE`, replication, `INSTALL`, `XA`, …) and `FileAccess` (`LOAD DATA`,
-  `INTO OUTFILE`). `Risk::implicit_commit` marks what commits the open transaction first;
-  `Risk::unchecked_call` a call of an unqualified name that is not a built-in
-  (`risk::mysql::BUILTINS`, from the servers' help tables), which may be a loadable function
-  and which a read-only policy refuses (`ReadOnlyBlock::UnknownFunction`). The paging allowlist
-  (`repeatable`, `count_query`: `SELECT COUNT(*) FROM (…) AS datarig_count`) takes one query
-  with built-in functions not in `risk::mysql::VOLATILE` and no variable; whether a name it
-  reads is a view is the driver's to ask (`risk::mysql::names`). Tests: the corpus
-  `risk/mysql/corpus.rs` (every statement with its expected verdict) and
-  `crates/datarig-core/tests/mysql_classify.rs`, which runs the corpus on a session whose
-  `transaction_read_only` is on (run against 8.0.45, 8.4.11 and 9.7.2): every read runs
-  without error 1792, every write and DDL fails with it unless marked as one the server lets
-  through (`FOR SHARE`, `LOCK TABLES … READ`, `HANDLER`, `INTO OUTFILE`, which only the
-  classifier stops), and every built-in is a function of the server.
+  PostgreSQL's, read from the MySQL lexer's tokens, not a parse tree (see the decision below). Reads
+  are an allowlist of forms (queries without `INTO`, a locking clause or a write's keyword inside;
+  `SHOW`, `DESCRIBE`, `HELP`, `EXPLAIN` of a query); anything else is a write, DDL, maintenance,
+  procedural, a session or transaction statement it knows, or `Danger::Unrecognized`. An executable
+  comment (`/*!…*/`, MariaDB's `/*M!…*/`) is `Danger::ExecutableComment`; a text the server would
+  read otherwise than the lexer (an unterminated token, a client command, a control character, an
+  escape in a quoted name) is unrecognized. A text with a backslash or a `"` is also read in the sql
+  modes that read it differently (`NO_BACKSLASH_ESCAPES`, `ANSI_QUOTES`), and the worse reading
+  counts unless the server would refuse it as a syntax error; it runs on `risk::THREAD`, where a
+  panic reads as unrecognized. MySQL-only dangers: `Locks` (`LOCK TABLES`, `HANDLER`, `FLUSH … WITH
+  READ LOCK`), `Privileges`, `Rename`, `Setting` (`risk::mysql::RISKY_SETTINGS`, a client character
+  set that is not UTF-8), `DynamicSql` (`PREPARE`), `ServerCommand` (`KILL`, `SET GLOBAL`, `FLUSH`,
+  `RESET`, `PURGE`, replication, `INSTALL`, `XA`, …) and `FileAccess` (`LOAD DATA`, `INTO OUTFILE`).
+  `Risk::implicit_commit` marks what commits the open transaction first; `Risk::unchecked_call` a
+  call of a function that is not a built-in (`risk::mysql::BUILTINS`, from the servers' help
+  tables), loadable or stored, whose effects cannot be checked and which a read-only policy refuses
+  (`ReadOnlyBlock::UnknownFunction`). The paging allowlist (`repeatable`, `count_query`: `SELECT
+  COUNT(*) FROM (…) AS datarig_count`) takes one query with built-in functions not in
+  `risk::mysql::VOLATILE` and no variable; whether a name it reads is a view is the driver's to ask
+  (`risk::mysql::names`). Tests: the corpus `risk/mysql/corpus.rs` (every statement with its
+  expected verdict) and `crates/datarig-core/tests/mysql_classify.rs`, which runs the corpus on a
+  session whose `transaction_read_only` is on (run against 8.0.45, 8.4.11 and 9.7.2): every read
+  runs without error 1792, every write and DDL fails with it unless marked as one the server lets
+  through (`FOR SHARE`, `LOCK TABLES … READ`, `HANDLER`, `INTO OUTFILE`, which only the classifier
+  stops), and every built-in is a function of the server.
 - **A new dialect** adds a `Dialect` variant and, at each `match` the compiler then points to:
   its lexer branch (`lex_in`) and keywords, quoting, folding and identifier quotes, its
   default path, comment markers, `sqlformat` dialect and formatter rules, its `explain_sql`, a

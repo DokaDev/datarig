@@ -502,3 +502,157 @@ fn count_query_wraps_a_repeatable_query() {
     // A trailing comment that would swallow the closing parenthesis on one line.
     assert!(count_query("SELECT 1 -- x", MODE).unwrap().contains("-- x\n)"));
 }
+
+/// Statements a read-only policy must refuse, whatever is written around their words.
+const NOT_READS: &[&str] = &[
+    "DELETE FROM t WHERE id = 1",
+    "DELETE FROM t",
+    "UPDATE t SET a = 1 WHERE id = 1",
+    "INSERT INTO t (a) VALUES (1)",
+    "REPLACE INTO t VALUES (1)",
+    "WITH c AS (SELECT 1) DELETE FROM t",
+    "DROP TABLE t",
+    "TRUNCATE TABLE t",
+    "ALTER TABLE t DROP COLUMN a",
+    "CREATE TABLE t2 AS SELECT * FROM t",
+    "CREATE TEMPORARY TABLE t3 (a INT)",
+    "RENAME TABLE t TO t2",
+    "GRANT SELECT ON db.* TO u",
+    "SELECT * FROM t FOR UPDATE",
+    "SELECT * FROM t LOCK IN SHARE MODE",
+    "SELECT * FROM t INTO OUTFILE '/tmp/x'",
+    "SELECT LOAD_FILE('/etc/passwd')",
+    "SELECT GET_LOCK('x', 1)",
+    "SELECT sys_exec('id')",
+    "SELECT db.f()",
+    "SET @x = (SELECT a FROM t WHERE id = 1 FOR SHARE)",
+    "SET GLOBAL max_connections = 1",
+    "SET SESSION TRANSACTION READ WRITE",
+    "SET transaction_read_only = OFF",
+    "SET NAMES utf8mb4, transaction_read_only = 0",
+    "SET sql_log_bin = 0",
+    "START TRANSACTION READ WRITE",
+    "KILL 1",
+    "FLUSH TABLES WITH READ LOCK",
+    "LOCK TABLES t READ",
+    "HANDLER t OPEN",
+    "LOAD DATA INFILE '/tmp/x' INTO TABLE t",
+    "CALL p()",
+    "DO db.f()",
+    "PREPARE s FROM 'DELETE FROM t'",
+    "EXECUTE s",
+    "EXPLAIN ANALYZE DELETE FROM t",
+    "XA COMMIT 'x'",
+    "SELECT 1; DELETE FROM t",
+    "SHOW TABLES; DROP TABLE t",
+    // Strings with backslashes and double quotes, read differently in the other sql modes.
+    "SELECT 'a\\' , GET_LOCK('k', 0) #'",
+    "SELECT \"a\\\" , LOAD_FILE('/x') #\"",
+    "SELECT 'it\\'s', \"q\" FROM t; DELETE FROM t",
+    "UPDATE t SET b = 'x\\'y', c = \"z\" WHERE 1 = 1",
+];
+
+/// A small deterministic random source (xorshift).
+struct Rng(u64);
+
+impl Rng {
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        self.0
+    }
+
+    fn below(&mut self, n: usize) -> usize {
+        (self.next() % n as u64) as usize
+    }
+
+    fn pick<'a>(&mut self, items: &[&'a str]) -> &'a str {
+        items[self.below(items.len())]
+    }
+}
+
+/// `sql` with random changes that keep what the server runs: blanks and comments between tokens,
+/// the case of words, backticks around names, a statement or comment before it; or that make it
+/// code the classifier must not read (an executable comment around a token).
+fn mutate(sql: &str, rng: &mut Rng) -> String {
+    let tokens = crate::sql::lexer::lex_in(sql, Dialect::MySql(MODE));
+    let mut parts: Vec<String> = tokens.iter().map(|t| t.text(sql).to_string()).collect();
+    // What goes before each token, kept apart so a later change to the token leaves it outside.
+    let mut before = vec![String::new(); parts.len()];
+    for _ in 0..1 + rng.below(4) {
+        let i = rng.below(parts.len());
+        let kind = tokens[i].kind;
+        // A token not yet wrapped in an executable comment (its words are still its own).
+        let plain = !parts[i].starts_with("/*");
+        match rng.below(6) {
+            0 | 1 => {
+                // Between two tokens, unless both are operators (`<` `=` would become `< =`).
+                let glued = i > 0 && tokens[i - 1].kind == Tok::Op && kind == Tok::Op;
+                if !glued {
+                    let filler = rng.pick(&[
+                        " ",
+                        "\t",
+                        "\n",
+                        "\r\n",
+                        "\u{b}",
+                        "\u{c}",
+                        "/* x */",
+                        "/**/",
+                        "/*+ NO_ICP(t) */",
+                        "-- x\n",
+                        "#x\n",
+                        " -- DELETE\n",
+                        "/* ; DROP */",
+                    ]);
+                    before[i].push_str(filler);
+                }
+            }
+            2 if plain && matches!(kind, Tok::Keyword | Tok::Ident) => {
+                parts[i] = parts[i]
+                    .chars()
+                    .map(|c| if rng.below(2) == 0 { c.to_ascii_lowercase() } else { c.to_ascii_uppercase() })
+                    .collect();
+            }
+            // A keyword in backticks is a name: the server refuses the text, the classifier must too.
+            3 if plain && matches!(kind, Tok::Ident | Tok::Keyword) && !parts[i].contains('`') => {
+                parts[i] = format!("`{}`", parts[i])
+            }
+            4 => {
+                let open = rng.pick(&["/*!", "/*!50000 ", "/*!80000", "/*!99999 ", "/*M!", "/*M!100000 "]);
+                parts[i] = format!("{open}{} */", parts[i]);
+            }
+            _ => {
+                let prefix = rng.pick(&["SELECT 1;\n", "/* lead */ ", "\n\n", "# lead\n", "-- lead\n"]);
+                before[0].insert_str(0, prefix);
+            }
+        }
+    }
+    before.iter().zip(&parts).map(|(b, p)| format!("{b}{p}")).collect()
+}
+
+/// Thousands of rewritings of statements a read-only policy must refuse, in every sql mode:
+/// none is let through as a read, and none of the dangerous ones stops asking.
+#[test]
+fn rewritten_writes_are_never_reads() {
+    let modes = [MODE, MySqlMode { ansi_quotes: true, ..MODE }, MySqlMode { no_backslash_escapes: true, ..MODE }];
+    let mut rng = Rng(0x5eed_da7a_c1a5_51f1);
+    let mut checked = 0;
+    for sql in NOT_READS {
+        let base = risk(sql);
+        assert!(base.read_only().is_err(), "{sql}: {}", render(&base));
+        let asks = base.confirm(false).is_some();
+        for _ in 0..150 {
+            let text = mutate(sql, &mut rng);
+            for mode in modes {
+                let r = classify(&text, mode);
+                assert!(r.read_only().is_err(), "let through: {text:?} in {mode:?}: {}", render(&r));
+                if asks {
+                    assert!(r.confirm(false).is_some(), "stopped asking: {text:?} in {mode:?}: {}", render(&r));
+                }
+                checked += 1;
+            }
+        }
+    }
+    assert!(checked > 15_000);
+}

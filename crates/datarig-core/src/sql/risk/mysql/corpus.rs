@@ -4,7 +4,7 @@
 // The expectation is the class, then the danger (with how a WHERE lets every row through:
 // `:missing`, `:always`, `:nocol`), then the flags that are set, in this order: `writes`,
 // `plan`/`analyze`, `rw` (asks for read-write), `commit` (commits the open transaction), `code`
-// (runs code the text does not show), `udf` (calls what may be a loadable function), `ro` (a
+// (runs code the text does not show), `udf` (calls a function that is not a built-in), `ro` (a
 // read-only policy lets it run). The objects are those the server test creates (`zz_cls_*`).
 //
 // The server test runs every statement whose class is `read`, `write` or `ddl` with the
@@ -214,6 +214,11 @@ const CORPUS: &[(&str, &str)] = &[
     ("SELECT * FROM zz_cls_t t FOR UPDATE OF t", "write"),
     ("SELECT * FROM zz_cls_t FOR SHARE", "write srvok"),
     ("SELECT * FROM zz_cls_t LOCK IN SHARE MODE", "write srvok"),
+    ("SELECT * FROM zz_cls_t LOCK IN `SHARE` MODE", "write norun"),
+    ("SELECT * FROM zz_cls_t FOR `UPDATE`", "write norun"),
+    ("SELECT * FROM zz_cls_t `INTO` OUTFILE '/tmp/x'", "unknown unrecognized"),
+    ("SELECT 1 FROM zz_cls_t `x` `DELETE`", "unknown unrecognized"),
+    ("ALTER TABLE zz_cls_t `DROP` COLUMN a", "ddl drop-column commit norun"),
     ("SELECT * FROM zz_cls_t WHERE id IN (SELECT t_id FROM zz_cls_u FOR UPDATE)", "write"),
     ("(SELECT * FROM zz_cls_t FOR UPDATE)", "write"),
     ("TABLE zz_cls_t FOR UPDATE", "write norun"),
@@ -244,8 +249,8 @@ const CORPUS: &[(&str, &str)] = &[
     ("INSERT INTO zz_cls_t (id, b) VALUES (9, LOAD_FILE('/etc/hostname'))", "write server-file writes"),
     // Functions that are not built-ins.
     ("SELECT zz_cls_f()", "read code udf"),
-    ("SELECT zz_classify.zz_cls_f()", "read code ro"),
-    ("SELECT `zz_classify`.`zz_cls_f`()", "read code ro"),
+    ("SELECT zz_classify.zz_cls_f()", "read code udf"),
+    ("SELECT `zz_classify`.`zz_cls_f`()", "read code udf"),
     ("SELECT sys_exec('id')", "read code udf"),
     ("SELECT `sys_exec`('id')", "read code udf"),
     ("SELECT * FROM zz_cls_t WHERE zz_cls_f() = a", "read code udf"),
@@ -253,7 +258,7 @@ const CORPUS: &[(&str, &str)] = &[
     ("DO 1 + 1", "read ro"),
     ("DO SLEEP(0)", "read ro"),
     ("DO zz_cls_f()", "proc procedural code udf"),
-    ("DO zz_classify.zz_cls_f()", "proc procedural code"),
+    ("DO zz_classify.zz_cls_f()", "proc procedural code udf"),
     ("SELECT VECTOR_DIM(STRING_TO_VECTOR('[1, 2]'))", "read ro norun"),
     ("SELECT 3 MEMBER OF ('[1, 3]')", "read ro"),
     ("SELECT * FROM (SELECT 1) d (a)", "read ro"),
@@ -345,6 +350,9 @@ const CORPUS: &[(&str, &str)] = &[
     ("INSERT INTO zz_cls_t VALUES (9, 9, 'x', NULL, NULL)", "write writes"),
     ("INSERT INTO zz_cls_t (id, a) VALUES (9, 9), (10, 10)", "write writes"),
     ("INSERT zz_cls_t (id) VALUES (9)", "write writes"),
+    ("INSERT INTO zz_classify.zz_cls_t (id) VALUES (9)", "write writes"),
+    ("REPLACE INTO `zz_classify`.`zz_cls_t` (id) VALUES (1)", "write writes"),
+    ("SELECT `for` `update` FROM (SELECT 1 AS `for`) AS d", "write norun"),
     ("INSERT INTO zz_cls_t SET id = 9, a = 9", "write writes"),
     ("INSERT IGNORE INTO zz_cls_t (id) VALUES (1)", "write writes"),
     ("INSERT LOW_PRIORITY INTO zz_cls_t (id) VALUES (9)", "write writes"),
@@ -581,6 +589,8 @@ const CORPUS: &[(&str, &str)] = &[
     ("SET SESSION TRANSACTION ISOLATION LEVEL SERIALIZABLE, READ ONLY", "tx ro"),
     ("SET TRANSACTION READ WRITE", "tx rw"),
     ("SET SESSION TRANSACTION READ WRITE", "tx rw"),
+    ("SET SESSION TRANSACTION `READ` WRITE", "unknown unrecognized"),
+    ("START TRANSACTION `READ` WRITE", "unknown unrecognized"),
     ("SET LOCAL TRANSACTION READ WRITE", "tx rw"),
     ("SET GLOBAL TRANSACTION READ WRITE", "maint server-command commit"),
     ("SET autocommit = 0", "tx ro"),

@@ -1,22 +1,22 @@
-//! What a MySQL statement may do to a database, read from **its tokens** as datarig's MySQL
-//! lexer reads them ([`crate::sql::lexer`], held to MySQL 8.0, 8.4 and 9.x's own client and
-//! server by its tests), not from a parse tree: no SQL parser written in Rust reads MySQL as
-//! the server does, and a second reading of the text that disagrees with the server's is how
-//! a write could pass for a read. Whether each verdict matches the server is held to MySQL
-//! 8.0, 8.4 and 9.x by a test that runs the statements on them (`tests/mysql_classify.rs`).
+//! What a MySQL statement may do to a database, read from **its tokens** as datarig's MySQL lexer
+//! reads them ([`crate::sql::lexer`], held to MySQL 8.0, 8.4 and 9.x's own client and server by its
+//! tests), not from a parse tree: no SQL parser written in Rust reads MySQL as the server does, and
+//! a second reading of the text that disagrees with the server's is how a write could pass for a
+//! read. Whether each verdict matches the server is held to MySQL 8.0, 8.4 and 9.x by a test that
+//! runs the statements on them (`tests/mysql_classify.rs`).
 //!
-//! **Allowlist, not denylist.** A statement is a read only when it has a form this module
-//! knows to be one, and nothing in it is known to act otherwise:
+//! **Allowlist, not denylist.** A statement is a read only when it has a form this module knows to
+//! be one, and nothing in it is known to act otherwise:
 //!
-//! * a query (`SELECT`, `TABLE`, `VALUES`, `WITH … SELECT`, one in parentheses) without
-//!   `INTO` and without a locking clause (`FOR UPDATE`, `FOR SHARE`, `LOCK IN SHARE MODE`:
-//!   those are [`Class::Write`]s that change no rows, as on PostgreSQL); `SELECT … INTO @x`
-//!   only sets the session's variables ([`Class::Session`], allowed on a read-only profile);
-//!   `INTO OUTFILE`/`DUMPFILE` writes a file on the server ([`Danger::FileAccess`]);
-//! * `SHOW`, `DESCRIBE`/`DESC`, `HELP`, `XA RECOVER`, `GET DIAGNOSTICS`, `DO` of built-ins,
-//!   and `EXPLAIN` of a query. `EXPLAIN` of `INSERT`/`UPDATE`/`DELETE`/`REPLACE` runs nothing
-//!   either, but MySQL refuses it in a read-only transaction, so it is a [`Class::Write`] that
-//!   changes no rows. `EXPLAIN ANALYZE` runs the statement: its risk is the statement's, with
+//! * a query (`SELECT`, `TABLE`, `VALUES`, `WITH … SELECT`, one in parentheses) without `INTO` and
+//!   without a locking clause (`FOR UPDATE`, `FOR SHARE`, `LOCK IN SHARE MODE`: those are
+//!   [`Class::Write`]s that change no rows, as on PostgreSQL); `SELECT … INTO @x` only sets the
+//!   session's variables ([`Class::Session`], allowed on a read-only profile); `INTO
+//!   OUTFILE`/`DUMPFILE` writes a file on the server ([`Danger::FileAccess`]);
+//! * `SHOW`, `DESCRIBE`/`DESC`, `HELP`, `XA RECOVER`, `GET DIAGNOSTICS`, `DO` of built-ins, and
+//!   `EXPLAIN` of a query. `EXPLAIN` of `INSERT`/`UPDATE`/`DELETE`/`REPLACE` runs nothing either,
+//!   but MySQL refuses it in a read-only transaction, so it is a [`Class::Write`] that changes no
+//!   rows. `EXPLAIN ANALYZE` runs the statement: its risk is the statement's, with
 //!   [`Explain::Analyze`].
 //!
 //! A locking clause anywhere (in a subquery of a `SET`, a `SHOW … WHERE`, a `DO`) makes the
@@ -24,73 +24,78 @@
 //!
 //! **The sql mode.** A backslash in a string and a `"` read differently under
 //! `NO_BACKSLASH_ESCAPES` and `ANSI_QUOTES`. The session's mode is the driver's to tell, but a
-//! server's may differ from what the app was told, so a text with either is read in every
-//! mode that reads it differently and the worse reading counts, unless that reading is one the
-//! server would refuse as a syntax error (an unterminated string: no way the text runs). The
-//! driver must keep the session's client character set UTF-8: another one (`gbk`, `sjis`) can
-//! read a byte of a character as a quote or a backslash, which is why `SET NAMES` of one asks.
+//! server's may differ from what the app was told, so a text with either is read in every mode that
+//! reads it differently and the worse reading counts, unless that reading is one the server would
+//! refuse as a syntax error (an unterminated string: no way the text runs). The driver must keep
+//! the session's client character set UTF-8: another one (`gbk`, `sjis`) can read a byte of a
+//! character as a quote or a backslash, which is why `SET NAMES` of one asks.
 //!
-//! A text with an executable comment (`/*! … */`, `/*!80023 … */`, and MariaDB's `/*M! … */`)
-//! is never read: the server runs what is inside depending on its version, which the text does
-//! not tell ([`Danger::ExecutableComment`]: it asks, and a read-only policy refuses it).
-//! Optimizer hints (`/*+ … */`) are comments, except that a `SET_VAR` of a setting of
-//! [`RISKY_SETTINGS`] or of read-only in one asks ([`Danger::Setting`]). A text whose form is not one of those this
-//! module knows, or that the server would read otherwise than the lexer (an unterminated
-//! string or comment, a client command such as `DELIMITER` or `\g`, a `?`, a parenthesis that
-//! does not close, a write's keyword inside a query, …) is [`Danger::Unrecognized`]: it asks, and
-//! a read-only policy refuses it. A text over [`MAX_BYTES`] or nested deeper than [`MAX_DEPTH`]
-//! parentheses is [`Danger::TooComplex`]. Nothing here recurses with the text's nesting, and
-//! the work runs on a thread of its own ([`super::THREAD`], as PostgreSQL's does), where a panic
-//! reads as [`Danger::Unrecognized`].
+//! A text with an executable comment (`/*! … */`, `/*!80023 … */`, and MariaDB's `/*M! … */`) is
+//! never read: the server runs what is inside depending on its version, which the text does not
+//! tell ([`Danger::ExecutableComment`]: it asks, and a read-only policy refuses it). Optimizer
+//! hints (`/*+ … */`) are comments, except that a `SET_VAR` of a setting of [`RISKY_SETTINGS`] or
+//! of read-only in one asks ([`Danger::Setting`]). A text whose form is not one of those this
+//! module knows, or that the server would read otherwise than the lexer (an unterminated string or
+//! comment, a client command such as `DELIMITER` or `\g`, a `?`, a parenthesis that does not close,
+//! a write's keyword inside a query, …) is [`Danger::Unrecognized`]: it asks, and a read-only
+//! policy refuses it. A text over [`MAX_BYTES`] or nested deeper than [`MAX_DEPTH`] parentheses is
+//! [`Danger::TooComplex`]. Nothing here recurses with the text's nesting, and the work runs on a
+//! thread of its own ([`super::THREAD`], as PostgreSQL's does), where a panic reads as
+//! [`Danger::Unrecognized`].
 //!
-//! **Several statements.** Every statement of the text is read and the worst counts (the danger
-//! a read-only policy refuses by itself is kept over another). `CREATE PROCEDURE`, `FUNCTION`,
+//! **Several statements.** Every statement of the text is read and the worst counts (the danger a
+//! read-only policy refuses by itself is kept over another). `CREATE PROCEDURE`, `FUNCTION`,
 //! `TRIGGER` and `EVENT` hold `;` in their body: the statement ends where the body does (one
 //! statement, or a `BEGIN … END` block followed through `IF`, `CASE`, `LOOP`, `REPEAT` and
-//! `WHILE`), and when that cannot be followed the whole text is the one statement (the driver
-//! sends each statement alone, with the server's multi-statement mode off, so a text the server
-//! reads as more than one fails as a whole). An event's body runs later on its own: a
-//! statement's danger is the event's, and a block asks ([`Danger::Procedural`]).
+//! `WHILE`), and when that cannot be followed the whole text is the one statement (the driver sends
+//! each statement alone, with the server's multi-statement mode off, so a text the server reads as
+//! more than one fails as a whole). An event's body runs later on its own: a statement's danger is
+//! the event's, and a block asks ([`Danger::Procedural`]).
 //!
-//! **What the server's read-only mode does not stop**, refused before a statement is sent: a
-//! call of a built-in that reads a file of the server ([`SERVER_FILES`]) or takes a lock that
-//! outlives the statement ([`SERVER_ACTIONS`]), statements that act on the whole server (`KILL`,
-//! `SET GLOBAL`, `FLUSH`, `RESET`, `PURGE`, replication, `INSTALL`, `SHUTDOWN`, `XA`, …:
+//! **What the server's read-only mode does not stop**, refused before a statement is sent: a call
+//! of a built-in that reads a file of the server ([`SERVER_FILES`]) or takes a lock that outlives
+//! the statement ([`SERVER_ACTIONS`]), statements that act on the whole server (`KILL`, `SET
+//! GLOBAL`, `FLUSH`, `RESET`, `PURGE`, replication, `INSTALL`, `SHUTDOWN`, `XA`, …:
 //! [`Danger::ServerCommand`]), locks that block other sessions (`LOCK TABLES`, `HANDLER`, `LOCK
 //! INSTANCE`, `FLUSH … WITH READ LOCK`: [`Danger::Locks`]), `SET SESSION TRANSACTION READ WRITE`
 //! and `transaction_read_only` turned off (`read_write`), `PREPARE` (its text is not read:
-//! [`Danger::DynamicSql`]) and `EXECUTE` ([`Danger::UnknownPrepared`]; prepared statements are
-//! not remembered on MySQL), and a call of an unqualified name that is not a built-in
-//! ([`Risk::unchecked_call`]): it may be a loadable function, code of the server's that a
-//! read-only transaction does not stop. A stored function is called with its database
-//! (`db.f()`) to be allowed; its writes are refused by the server's read-only mode.
+//! [`Danger::DynamicSql`]) and `EXECUTE` ([`Danger::UnknownPrepared`]; prepared statements are not
+//! remembered on MySQL), and a call of any function that is not a built-in
+//! ([`Risk::unchecked_call`]): an unqualified name may be a loadable function, code of the server's
+//! that a read-only transaction does not stop, and a stored function (`db.f()` too) may take user
+//! locks, sleep or read what the text does not show. Only the built-ins of [`BUILTINS`] are
+//! allowed, less [`SERVER_FILES`] and [`SERVER_ACTIONS`].
 //!
-//! **Settings.** `SET` of a session variable on [`SAFE_SETTINGS`], of a user variable (`@x`),
-//! `SET NAMES`/`CHARACTER SET` of a UTF-8 character set and `SET ROLE` are safe; `SET` of one on
-//! [`RISKY_SETTINGS`] (turns a check of the server off, changes how the server reads the text
-//! or writes the binary log) asks ([`Danger::Setting`]); `SET GLOBAL`/`PERSIST` asks
-//! ([`Danger::ServerCommand`]); any other session variable is refused by a read-only policy.
-//! `SET autocommit` is transaction control.
+//! **Settings.** `SET` of a session variable on [`SAFE_SETTINGS`], of a user variable (`@x`), `SET
+//! NAMES`/`CHARACTER SET` of a UTF-8 character set and `SET ROLE` are safe; `SET` of one on
+//! [`RISKY_SETTINGS`] (turns a check of the server off, changes how the server reads the text or
+//! writes the binary log) asks ([`Danger::Setting`]); `SET GLOBAL`/`PERSIST` asks
+//! ([`Danger::ServerCommand`]); any other session variable is refused by a read-only policy. `SET
+//! autocommit` is transaction control.
 //!
-//! **What a statement commits.** MySQL commits the open transaction before most statements
-//! that change the schema or the server ([`Risk::implicit_commit`]: DDL other than of a
-//! temporary table, accounts and privileges, `LOCK TABLES`, `START TRANSACTION`/`BEGIN`, `SET
-//! autocommit = 1`, table maintenance, `FLUSH`, `RESET`, replication, plugins).
+//! **What a statement commits.** MySQL commits the open transaction before most statements that
+//! change the schema or the server ([`Risk::implicit_commit`]: DDL other than of a temporary table,
+//! accounts and privileges, `LOCK TABLES`, `START TRANSACTION`/`BEGIN`, `SET autocommit = 1`, table
+//! maintenance, `FLUSH`, `RESET`, replication, plugins).
 //!
-//! **What the confirm is not.** As on PostgreSQL, a function called from a query cannot be seen
-//! from the text (`SELECT db.delete_everything()` is a read here); nor are a view's query, a
-//! trigger or a generated column. `SLEEP()` and `BENCHMARK()` only take time, as a long query
-//! does: they are reads. The hard guarantee is a read-only profile: the driver keeps the
-//! session's `transaction_read_only` on, so the server rejects any write, whatever runs it;
-//! the server still lets a `LOCK TABLES … READ`, a `HANDLER`, a `SELECT … FOR SHARE`, `SET
+//! **Known limits.** What a function that is not a built-in does cannot be proven from the text, so
+//! the confirm does not ask about one (`SELECT db.delete_everything()` is a read to it, as on
+//! PostgreSQL) and a read-only policy refuses it. Code the text does not name is not seen at all: a
+//! view's query, a trigger, a generated column's expression, a column's `DEFAULT` function, or a
+//! stored function a view calls; on a read-only profile the server's `transaction_read_only` still
+//! refuses their writes, but not their user locks or sleeps. A built-in that a later server version
+//! removes (`MD5`, `SHA1` on 9.x) is still read as one. `SLEEP()` and `BENCHMARK()` only take time,
+//! as a long query does: they are reads. The hard guarantee is a read-only profile: the driver
+//! keeps the session's `transaction_read_only` on, so the server rejects any write, whatever runs
+//! it; the server still lets a `LOCK TABLES … READ`, a `HANDLER`, a `SELECT … FOR SHARE`, `SET
 //! GLOBAL`, `KILL` and `FLUSH` through, which is why they are refused here.
 //!
 //! "Effectively every row" ([`NoWhere`]) for `UPDATE` and `DELETE` (multi-table forms too): no
-//! `WHERE` (a `LIMIT` alone does not count), a `WHERE` that is always true (`TRUE`, a number
-//! other than 0, `NOT FALSE`, both sides of `=` or `<=>` the same, an `OR` with such an
-//! operand, an `AND` of them; names compared whatever their quoting and case), a `WHERE` that
-//! names no column, or, for a multi-table one, a `WHERE` and joins that name only other tables'
-//! columns ([`NoWhere::OtherTables`]). `ALTER TABLE … ENGINE = BLACKHOLE` empties the table.
+//! `WHERE` (a `LIMIT` alone does not count), a `WHERE` that is always true (`TRUE`, a number other
+//! than 0, `NOT FALSE`, both sides of `=` or `<=>` the same, an `OR` with such an operand, an `AND`
+//! of them; names compared whatever their quoting and case), a `WHERE` that names no column, or,
+//! for a multi-table one, a `WHERE` and joins that name only other tables' columns
+//! ([`NoWhere::OtherTables`]). `ALTER TABLE … ENGINE = BLACKHOLE` empties the table.
 
 use super::repeat::NotRepeatable;
 use super::{Class, Danger, Explain, MAX_BYTES, MAX_DEPTH, NoWhere, Risk, THREAD};
@@ -821,10 +826,12 @@ fn find_top(ws: &[W], from: usize, words: &[&str]) -> Option<usize> {
 /// The function calls of `ws`.
 fn calls(ws: &[W]) -> Vec<Call> {
     let mut out = Vec::new();
+    // The procedure of a `CALL` (with its database or not).
+    let procedure = ws.first().filter(|w| w.is("CALL")).and_then(|_| name_at(ws, 1)).map(|(_, next)| next - 1);
     for i in 0..ws.len().saturating_sub(1) {
         let w = &ws[i];
         // The statement's own first word, and the procedure of a `CALL`, are no function.
-        if i == 0 || ws[i + 1].kind != Tok::LParen || !w.is_name() || (i == 1 && ws[0].is("CALL")) {
+        if i == 0 || ws[i + 1].kind != Tok::LParen || !w.is_name() || procedure == Some(i) {
             continue;
         }
         let name = if w.kind == Tok::QuotedIdent { unquote(w.text).to_ascii_uppercase() } else { w.up.clone() };
@@ -836,7 +843,13 @@ fn calls(ws: &[W]) -> Vec<Call> {
         {
             continue;
         }
-        if !qualified && prev.is_some_and(|p| BEFORE_COLUMN_LIST.iter().any(|b| p.is(b))) {
+        // The word before the whole name (`INTO db.t (a)`: before `db`).
+        let mut first = i;
+        while first >= 2 && ws[first - 1].kind == Tok::Dot && ws[first - 2].is_name() {
+            first -= 2;
+        }
+        let before_name = first.checked_sub(1).map(|p| &ws[p]);
+        if before_name.is_some_and(|p| BEFORE_COLUMN_LIST.iter().any(|b| p.is(b))) {
             continue;
         }
         // A common table expression's column list: `name (a, b) AS (…)`.
@@ -907,7 +920,7 @@ fn with_calls(mut risk: Risk, ws: &[W]) -> Risk {
             risk.danger = risk.danger.or(danger);
         } else if !schema {
             risk.runs_code = true;
-            risk.unchecked_call |= !c.qualified;
+            risk.unchecked_call = true;
         }
     }
     risk
@@ -934,18 +947,27 @@ fn routine_body(ws: &[W]) -> bool {
 
 /// Whether a word of [`WRITE_WORDS`] appears in `ws` past its first word, other than where a
 /// read uses it (`FOR UPDATE`, `LOCK IN SHARE MODE`, the functions `INSERT()` and `REPLACE()`,
-/// `SHOW CREATE …`) or as a name after a `.`.
+/// `SHOW CREATE …`) or as a name after a `.`. Such a word, or `INTO`, `OUTFILE` or `DUMPFILE`,
+/// in backticks counts too unless it is plainly a name (after a `.` or `AS`): a keyword
+/// quoted where the statement's syntax wants it is a syntax error to the server, and the
+/// classifier does not read it as harmless either.
 fn has_write_word(ws: &[W]) -> bool {
     (1..ws.len()).any(|i| {
         let w = &ws[i];
-        if !WRITE_WORDS.contains(&w.up.as_str()) || ws[i - 1].kind == Tok::Dot {
+        let prev = &ws[i - 1];
+        if w.kind == Tok::QuotedIdent {
+            let k = key(w);
+            let suspect = WRITE_WORDS.contains(&k.as_str()) || ["INTO", "OUTFILE", "DUMPFILE"].contains(&k.as_str());
+            return suspect && prev.kind != Tok::Dot && !prev.is("AS");
+        }
+        if !WRITE_WORDS.contains(&w.up.as_str()) || prev.kind == Tok::Dot {
             return false;
         }
         let next = ws.get(i + 1);
-        let allowed = (w.is("UPDATE") && ws[i - 1].is("FOR"))
+        let allowed = (w.is("UPDATE") && prev.is("FOR"))
             || ((w.is("INSERT") || w.is("REPLACE")) && next.is_some_and(|n| n.kind == Tok::LParen))
             || (w.is("LOCK") && next.is_some_and(|n| n.is("IN")))
-            || (w.is("CREATE") && ws[i - 1].is("SHOW"));
+            || (w.is("CREATE") && prev.is("SHOW"));
         !allowed
     })
 }
@@ -991,6 +1013,8 @@ fn kind(ws: &[W]) -> Risk {
             r
         }
         "GRANT" | "REVOKE" => ddl(Some(Danger::Privileges)),
+        // Its characteristics are words: a quoted one is no statement this module knows.
+        "START" if word(1) == "TRANSACTION" && ws.iter().any(|w| w.kind == Tok::QuotedIdent) => unrecognized(),
         "START" if word(1) == "TRANSACTION" => {
             let read_write = (2..ws.len().saturating_sub(1)).any(|i| ws[i].is("READ") && ws[i + 1].is("WRITE"));
             Risk { read_write, implicit_commit: true, ..Risk::of(Class::Tx) }
@@ -1044,9 +1068,13 @@ fn maintenance(danger: Option<Danger>) -> Risk {
 }
 
 /// Whether `ws` has a locking clause: `FOR UPDATE`, `FOR SHARE`, `LOCK IN SHARE MODE`.
+/// Its words are compared quoted or not: `` FOR `UPDATE` `` is a syntax error to the server and
+/// no read either, and names that spell a locking clause (`` SELECT `for` `update` ``) are
+/// refused too, the safe side.
 fn locks(ws: &[W]) -> bool {
-    ws.windows(2).any(|w| w[0].is("FOR") && (w[1].is("UPDATE") || w[1].is("SHARE")))
-        || ws.windows(4).any(|w| w[0].is("LOCK") && w[1].is("IN") && w[2].is("SHARE") && w[3].is("MODE"))
+    let is = |w: &W, word: &str| w.is_name() && key(w) == word;
+    ws.windows(2).any(|w| is(&w[0], "FOR") && (is(&w[1], "UPDATE") || is(&w[1], "SHARE")))
+        || ws.windows(4).any(|w| is(&w[0], "LOCK") && is(&w[1], "IN") && is(&w[2], "SHARE") && is(&w[3], "MODE"))
 }
 
 /// A query (`SELECT`, `TABLE`, `VALUES`, in parentheses or not, with `WITH` before it).
@@ -1499,15 +1527,18 @@ fn alter(ws: &[W]) -> Risk {
     }
 }
 
-/// The worst change of an `ALTER TABLE`'s clauses (from `from` on), if it is dangerous.
+/// The worst change of an `ALTER TABLE`'s clauses (from `from` on), if it is dangerous. Its
+/// words are read quoted or not (a quoted one is a syntax error to the server; a column named
+/// `drop` asks too).
 fn table_change(ws: &[W], from: usize) -> Option<Danger> {
-    let word = |i: usize| ws.get(i).filter(|w| w.depth == 0).map_or("", |w| w.up.as_str());
+    let keys: Vec<String> = ws.iter().map(|w| if w.is_name() { key(w) } else { String::new() }).collect();
+    let word = |i: usize| ws.get(i).filter(|w| w.depth == 0).map_or("", |_| keys[i].as_str());
     let mut found: Option<Danger> = None;
     for (i, w) in ws.iter().enumerate().skip(from) {
         if w.depth != 0 {
             continue;
         }
-        let danger = match w.up.as_str() {
+        let danger = match keys[i].as_str() {
             "DROP" => match word(i + 1) {
                 // `ALTER [COLUMN] c DROP DEFAULT`.
                 "DEFAULT" => None,
@@ -1561,6 +1592,10 @@ fn set(ws: &[W]) -> Risk {
     if word(after_scope) == "TRANSACTION" {
         if matches!(word(1), "GLOBAL" | "PERSIST" | "PERSIST_ONLY") {
             return maintenance(Some(Danger::ServerCommand));
+        }
+        // Its characteristics are words: a quoted one is no statement this module knows.
+        if ws.iter().any(|w| w.kind == Tok::QuotedIdent) {
+            return unrecognized();
         }
         let read_write = ws.windows(2).any(|w| w[0].is("READ") && w[1].is("WRITE"));
         return Risk { read_write, ..Risk::of(Class::Tx) };
