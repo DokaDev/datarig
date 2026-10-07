@@ -906,6 +906,7 @@ dependencies = [
 name = "datarig-driver-mysql"
 version = "0.11.0"
 dependencies = [
+ "data-encoding",
  "datarig-core",
  "futures",
  "mysql_async",

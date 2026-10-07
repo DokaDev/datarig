@@ -867,6 +867,53 @@ fn statement_cache_is_read_and_written_only_when_off() {
     assert_eq!(std::fs::read_to_string(&path).unwrap().matches("statement_cache").count(), 1);
 }
 
+/// MySQL's public key options: read, written only when set, and kept for a profile whose
+/// `dsn` stays a URL (and for one whose URL becomes fields).
+#[test]
+fn mysql_key_options_are_read_and_written_only_when_set() {
+    let path = temp_file("mysqlkey");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &path,
+        "[[connections]]\nname = \"a\"\ndriver = \"mysql\"\nhost = \"h\"\n\n\
+         [[connections]]\nname = \"b\"\ndriver = \"mysql\"\nserver_public_key_file = \"keys/db.pem\"\n\
+         allow_public_key_retrieval = true # trusted network\n\n\
+         [[connections]]\nname = \"c\"\ndriver = \"mysql\"\ndsn = \"mysql://u@h:3307/shop\"\n\
+         server_public_key_file = \"c.pem\"\n\n\
+         [[connections]]\nname = \"d\"\ndriver = \"mysql\"\ndsn = \"mysql://u@h/shop?x=1\"\n\
+         allow_public_key_retrieval = true\n",
+    )
+    .unwrap();
+    let (mut cfg, err) = load(Some(path.clone()));
+    assert!(err.is_none(), "{err:?}");
+    let c = &cfg.connections;
+    assert_eq!(
+        (c[0].server_public_key_file.as_deref(), c[0].allow_public_key_retrieval),
+        (None, false),
+        "off by default"
+    );
+    assert_eq!((c[1].server_public_key_file.as_deref(), c[1].allow_public_key_retrieval), (Some("keys/db.pem"), true));
+    assert_eq!((c[2].dsn.as_deref(), c[2].port), (None, 3307), "the URL became fields");
+    assert_eq!(c[2].server_public_key_file.as_deref(), Some("c.pem"));
+    assert!(c[3].dsn.is_some() && c[3].allow_public_key_retrieval, "{:?}", c[3]);
+    save(&path, settings("auto"), Some(profiles(&cfg.connections, &cfg.folders, None))).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(text.matches("server_public_key_file").count(), 2, "{text}");
+    assert_eq!(text.matches("allow_public_key_retrieval").count(), 2, "{text}");
+    assert!(text.contains("allow_public_key_retrieval = true # trusted network"), "{text}");
+    cfg.connections[0].server_public_key_file = Some("a.pem".into());
+    cfg.connections[1].server_public_key_file = None;
+    cfg.connections[1].allow_public_key_retrieval = false;
+    cfg.connections[3].allow_public_key_retrieval = false;
+    save(&path, settings("auto"), Some(profiles(&cfg.connections, &cfg.folders, None))).unwrap();
+    let (back, err) = load(Some(path.clone()));
+    assert!(err.is_none(), "{err:?}");
+    let keys: Vec<_> =
+        back.connections.iter().map(|c| (c.server_public_key_file.clone(), c.allow_public_key_retrieval)).collect();
+    assert_eq!(keys, [(Some("a.pem".into()), false), (None, false), (Some("c.pem".into()), false), (None, false)]);
+    assert!(!std::fs::read_to_string(&path).unwrap().contains("allow_public_key_retrieval"));
+}
+
 /// The SSH tunnel's table: read, checked when on, written back with its
 /// comments, left out when never set up, kept when turned off.
 #[test]

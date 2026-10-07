@@ -1135,6 +1135,12 @@ pub fn save(path: &Path, settings: Settings, profiles: Option<Profiles>) -> Resu
             } else {
                 set(&mut t, "statement_cache", false);
             }
+            set_opt(&mut t, "server_public_key_file", c.server_public_key_file.as_deref());
+            if c.allow_public_key_retrieval {
+                set(&mut t, "allow_public_key_retrieval", true);
+            } else {
+                t.remove("allow_public_key_retrieval");
+            }
             set_opt(&mut t, "tunnel", c.tunnel.as_deref());
             match &c.ssh {
                 Some(ssh) => write_ssh(&mut t, ssh),

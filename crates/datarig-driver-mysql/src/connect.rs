@@ -4,7 +4,7 @@
 
 use crate::link::{Link, Next};
 use crate::route::Route;
-use crate::session::{self, CONNECT_GUARD, Killer, Opened, Settings, Target, my_error};
+use crate::session::{self, CONNECT_GUARD, Killer, Opened, Settings, Target, connect_error, my_error};
 use datarig_core::driver::{
     Canceller, Capabilities, ConnectOptions, DbCommand, DbError, DbEvent, Driver, Hierarchy, PingError, PingInfo,
     Session, SessionRole,
@@ -72,10 +72,11 @@ impl Driver for MyDriver {
     ) -> Session {
         let (tx, rx) = unbounded_channel();
         let canceller = Arc::new(MyCanceller::default());
-        let target = Target::of(cfg);
+        // Read on the session's task: the profile's key file is a file.
+        let cfg = cfg.clone();
         let c2 = canceller.clone();
         tokio::spawn(async move {
-            match target {
+            match Target::of(&cfg) {
                 Err(error) => {
                     let _ = events.send(DbEvent::ConnectFailed { error, auth: false });
                 }
@@ -91,17 +92,18 @@ impl Driver for MyDriver {
         timeout: Duration,
         dialer: Option<DialerRef>,
     ) -> BoxFuture<'static, Result<PingInfo, PingError>> {
-        let target = Target::of(cfg);
+        let cfg = cfg.clone();
         Box::pin(async move {
-            let target = target.map_err(PingError::Failed)?;
+            let target = Target::of(&cfg).map_err(PingError::Failed)?;
             let route = Route::new(&target.host, target.port, dialer);
-            let opts = target.opts(target.database.as_deref(), "datarig-test");
+            let opts = target.opts(target.database.as_deref(), "datarig-test", &route);
             let start = Instant::now();
             let attempt = async {
                 let stream = route.dial(timeout).await?;
                 let (_wire, stream) = crate::wire::Wire::new(stream);
-                let mut conn =
-                    mysql_async::Conn::connect_with_stream(opts, Box::new(stream)).await.map_err(|e| my_error(&e))?;
+                let mut conn = mysql_async::Conn::connect_with_stream(opts, Box::new(stream))
+                    .await
+                    .map_err(|e| connect_error(&e).0)?;
                 let server = session::Server { version: conn.server_version(), mariadb: conn.is_mariadb() };
                 let version: Result<Option<String>, _> = match server.check() {
                     Ok(()) => conn.query_first("SELECT VERSION()").await.map_err(|e| my_error(&e)),
@@ -134,7 +136,7 @@ async fn run_session(
 ) {
     let route = Route::new(&target.host, target.port, opts.dialer.clone());
     let database = start_database(&target, &opts);
-    let my_opts = target.opts(database.as_deref(), &opts.application_name);
+    let my_opts = target.opts(database.as_deref(), &opts.application_name, &route);
     let select_limit = (role == SessionRole::Query).then(|| opts.page_size as u64 + 1);
     let settings = Settings { role, read_only: opts.read_only, select_limit };
     // A server that accepts TCP but never answers would otherwise keep this task alive forever
@@ -152,7 +154,8 @@ async fn run_session(
     };
     let Opened { conn, wire, server, tracked, id } = opened;
     // The cancel logs in as the session does, without a database (one could be dropped since).
-    let killer = Killer::new(route, target.opts(None, &opts.application_name), id);
+    let kill_opts = target.opts(None, &opts.application_name, &route);
+    let killer = Killer::new(route, kill_opts, id);
     if let Ok(mut g) = canceller.killer.lock() {
         *g = Some(killer);
     }

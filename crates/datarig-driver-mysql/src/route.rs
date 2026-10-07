@@ -22,6 +22,12 @@ impl Route {
         Self { host: host.to_string(), port, dialer }
     }
 
+    /// The route goes through the network unencrypted: directly (no tunnel) to a server that is
+    /// not on this machine.
+    pub(crate) fn exposed(&self) -> bool {
+        self.dialer.is_none() && !datarig_core::profile::is_loopback(&self.host)
+    }
+
     /// A new stream to the server, within `timeout`.
     pub(crate) async fn dial(&self, timeout: Duration) -> Result<BoxedStream, DbError> {
         match &self.dialer {

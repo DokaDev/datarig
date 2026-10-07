@@ -10,6 +10,11 @@
 //!   fails as a whole) nor for `LOAD DATA LOCAL` (a server could read any file of the client),
 //!   and keeps the session's character set UTF-8 (`utf8mb4`): the MySQL risk classifier reads
 //!   the text as a UTF-8 session does.
+//! * A full `caching_sha2_password` login (the account is not in the server's cache) sends the
+//!   password encrypted with the server's RSA public key: the profile's key file, else the key
+//!   the server sends when asked. A direct connection to another machine never asks (the key
+//!   would come over the same unencrypted connection) unless the profile allows it, and fails
+//!   before anything about the password is sent.
 //! * The server says what changes in the session in its OK packets (session state tracking,
 //!   asked for at connect: `session`): the sql mode the text is read in, read-only, the current
 //!   database.
@@ -19,6 +24,7 @@
 mod connect;
 mod link;
 mod route;
+mod server_key;
 mod session;
 mod wire;
 

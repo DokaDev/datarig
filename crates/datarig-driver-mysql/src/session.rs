@@ -33,12 +33,18 @@ pub(crate) struct Target {
     password: String,
     /// The profile's database; `None`: none (the session starts without a current database).
     pub(crate) database: Option<String>,
+    /// The server's public key (PEM) from the profile's key file.
+    server_key: Option<Vec<u8>>,
+    /// The profile lets a direct login to another machine ask the server for its key.
+    allow_key_retrieval: bool,
 }
 
 impl Target {
+    /// The target of `cfg`, with its server public key file read.
     pub(crate) fn of(cfg: &ConnectionConfig) -> Result<Self, DbError> {
         let settings = |why: String| DbError::Settings(Fault::other(why));
         let some = |s: &str| (!s.is_empty()).then(|| s.to_string());
+        let server_key = cfg.server_public_key_file.as_deref().map(crate::server_key::read).transpose()?;
         match &cfg.dsn {
             Some(text) => {
                 // The parser's error may quote a piece of the URL, a password among them.
@@ -59,6 +65,8 @@ impl Target {
                     user: d.user,
                     password,
                     database: some(&d.database),
+                    server_key,
+                    allow_key_retrieval: cfg.allow_public_key_retrieval,
                 })
             }
             None => Ok(Self {
@@ -67,20 +75,24 @@ impl Target {
                 user: cfg.user.clone(),
                 password: cfg.password.clone(),
                 database: some(&cfg.database),
+                server_key,
+                allow_key_retrieval: cfg.allow_public_key_retrieval,
             }),
         }
     }
 
-    /// The client's options for a connection to `database` (or none) that the server lists
-    /// as `program_name` (`performance_schema.session_connect_attrs`). mysql_async asks the
-    /// server nothing more after the login (`max_allowed_packet` and `wait_timeout` are given),
-    /// never moves to the server's socket file, and never sends the password as it is: the
-    /// cleartext method is off, and a full `caching_sha2_password` login over a stream that is
-    /// not encrypted (no TLS yet) sends it encrypted with the public key the server sends when
-    /// asked, as MySQL's client does with `--get-server-public-key`. On a direct connection
-    /// through a network someone else controls, that key could be theirs: an SSH tunnel's
-    /// channel is encrypted end to end to its bastion.
-    pub(crate) fn opts(&self, database: Option<&str>, program: &str) -> Opts {
+    /// The client's options for a connection over `route` to `database` (or none) that the
+    /// server lists as `program_name` (`performance_schema.session_connect_attrs`). mysql_async
+    /// asks the server nothing more after the login (`max_allowed_packet` and `wait_timeout` are
+    /// given), never moves to the server's socket file, and never sends the password as it is:
+    /// the cleartext method is off, and a full `caching_sha2_password` login over a stream that
+    /// is not encrypted (no TLS yet) sends it encrypted with the server's public key. That is
+    /// the profile's key file (`--server-public-key-path`), else the key the server sends when
+    /// asked (`--get-server-public-key`), over the same connection: on a direct connection to
+    /// another machine whoever sits in between could send theirs, so it is asked only when the
+    /// profile allows it (an SSH tunnel's channel is encrypted end to end to its bastion, and a
+    /// loopback connection never leaves the machine).
+    pub(crate) fn opts(&self, database: Option<&str>, program: &str, route: &Route) -> Opts {
         let attrs = std::collections::HashMap::from([("program_name".to_string(), program.to_string())]);
         OptsBuilder::default()
             .ip_or_hostname(self.host.clone())
@@ -92,6 +104,8 @@ impl Target {
             .max_allowed_packet(Some(MAX_PACKET))
             .wait_timeout(Some(28_800))
             .enable_cleartext_plugin(false)
+            .server_public_key(self.server_key.clone())
+            .public_key_retrieval(self.allow_key_retrieval || !route.exposed())
             .connect_attributes(attrs)
             .into()
     }
@@ -319,10 +333,16 @@ pub(crate) async fn quit(conn: Conn) {
 }
 
 /// A failure while the connection opens, and whether it is about the password.
-fn connect_error(e: &mysql_async::Error) -> (DbError, bool) {
+pub(crate) fn connect_error(e: &mysql_async::Error) -> (DbError, bool) {
     match e {
-        // ER_ACCESS_DENIED_ERROR: a wrong or missing password (or user).
-        mysql_async::Error::Server(s) if s.code == 1045 => (my_error(e), true),
+        // ER_ACCESS_DENIED_ERROR: a wrong or missing password (or user), or an account that
+        // requires TLS.
+        mysql_async::Error::Server(s) if s.code == 1045 => {
+            (DbError::AccessDenied(format!("ERROR {} ({}): {}", s.code, s.state, s.message)), true)
+        }
+        mysql_async::Error::Driver(mysql_async::DriverError::PublicKeyRetrievalDisabled) => {
+            (DbError::KeyRetrievalRefused, false)
+        }
         mysql_async::Error::Driver(mysql_async::DriverError::UnknownAuthPlugin { name }) => {
             (DbError::AuthUnsupported(name.clone()), false)
         }

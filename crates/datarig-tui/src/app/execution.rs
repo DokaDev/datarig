@@ -1352,6 +1352,18 @@ impl App {
             DbError::AuthUnsupported(name) => {
                 return self.i18n.msg(&Msg::DbAuthUnsupported { name: name.clone() }).to_string();
             }
+            DbError::AccessDenied(message) => {
+                return self.i18n.msg(&Msg::DbAccessDenied { message: message.clone() }).to_string();
+            }
+            DbError::KeyRetrievalRefused => Label::DbKeyRetrievalRefused,
+            DbError::ServerKeyFile { path, fault: None } => {
+                return self.i18n.msg(&Msg::DbServerKeyInvalid { path: path.clone() }).to_string();
+            }
+            DbError::ServerKeyFile { path, fault: Some(f) } => {
+                ErrorLog::new(self.paths.errors_log()).record("db.server_key", f);
+                let error = self.i18n.msg(&persist::fault_reason(f)).to_string();
+                return self.i18n.msg(&Msg::DbServerKeyUnreadable { path: path.clone(), error }).to_string();
+            }
             DbError::NotRepeatable(r) => return self.i18n.msg(&super::pages::why(r)).to_string(),
             DbError::Settings(f) => {
                 ErrorLog::new(self.paths.errors_log()).record("db.settings", f);

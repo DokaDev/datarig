@@ -321,7 +321,7 @@ async fn a_wrong_password_asks_for_one() {
         "a_wrong_password_asks_for_one",
     );
     match c.next(15).await {
-        DbEvent::ConnectFailed { error: DbError::Server(m), auth: true } => {
+        DbEvent::ConnectFailed { error: DbError::AccessDenied(m), auth: true } => {
             assert!(m.starts_with("ERROR 1045 (28000): "), "{m}");
         }
         other => panic!("{other:?}"),
@@ -363,7 +363,7 @@ async fn a_test_connection_says_the_server_version() {
     probe.disconnect().await.unwrap();
     assert_eq!(info.server_version, version);
     let bad = MyDriver.ping(&profile(&as_user(&url, "datarig", "nope")), Duration::from_secs(10), dialer()).await;
-    assert!(matches!(bad, Err(PingError::Failed(DbError::Server(m))) if m.starts_with("ERROR 1045")));
+    assert!(matches!(bad, Err(PingError::Failed(DbError::AccessDenied(m))) if m.starts_with("ERROR 1045")));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -480,4 +480,54 @@ async fn mysql_native_password_logs_in_where_the_server_has_it() {
     )
     .await;
     drop(c);
+}
+
+/// A file with `text` in a directory of this test's own; returns its path.
+fn temp_file(name: &str, text: &str) -> String {
+    let dir = std::env::temp_dir().join(format!("datarig-it-mysql-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(name);
+    std::fs::write(&path, text).unwrap();
+    path.to_string_lossy().into_owned()
+}
+
+/// A 2048-bit RSA public key that is not the server's.
+const OTHER_KEY: &str = "-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAs7uesYv+jCjfQLX/mnir
+NMpG8TBaLvuQ1Fgv3j/4ipvicNTp+Ft9h7uAdntx//JbZOFe1iu/0IhP/r77pbYQ
+LwJSvozvsJ3AJW/J7ZMTLJ5c4RfciGUUz2ec7W6FKVNDqhASZmXSNhgAiEx7nEFM
+MEhuntdG/HpqvDebbleNmJlGJwpfDiGmeteYQTAv/3I965LS4njdMkV2asMPN5JV
++v6visukUX0tlXxm/kaKMQBgyt369mAVCfQG9nRCgsQu1pmS4jZS573aCCFkv5Ql
+V9BJoVLx22kBsyDRsu9XjrotHMQNZ16kiw4Pz8IERxgau+7hzMOY40CLaaq0Gac0
+twIDAQAB
+-----END PUBLIC KEY-----
+";
+
+/// The first login of a new account (not in the server's cache) with the server's public key
+/// in the profile: the password goes encrypted with that key. With another key the server
+/// cannot read it and refuses the login.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_pinned_server_key_encrypts_the_first_login() {
+    let test = "a_pinned_server_key_encrypts_the_first_login";
+    let Some((url, admin)) = urls(test) else { return };
+    let mut probe = side(&admin).await;
+    let key: Option<(String, String)> =
+        probe.query_first("SHOW STATUS LIKE 'Caching_sha2_password_rsa_public_key'").await.unwrap();
+    probe.disconnect().await.unwrap();
+    let server_key = temp_file("server.pem", &key.expect("the server's public key").1);
+    let other_key = temp_file("other.pem", OTHER_KEY);
+    let start = |user: &str, key: &str| {
+        let cfg =
+            ConnectionConfig { server_public_key_file: Some(key.to_string()), ..profile(&as_user(&url, user, "pw")) };
+        let (tx, rx) = unbounded_channel();
+        let session = MyDriver.connect(&cfg, SessionRole::Meta, opts(SessionRole::Meta, test), tx);
+        Conn { session, rx }
+    };
+    let pinned = Account::make(&admin, "pin", "WITH caching_sha2_password BY 'pw'").await.unwrap();
+    start(&pinned.name, &server_key).wait(|e| matches!(e, DbEvent::Connected), 15).await;
+    let other = Account::make(&admin, "pinx", "WITH caching_sha2_password BY 'pw'").await.unwrap();
+    match start(&other.name, &other_key).next(15).await {
+        DbEvent::ConnectFailed { error: DbError::AccessDenied(m), auth: true } => assert!(m.contains("1045"), "{m}"),
+        other => panic!("{other:?}"),
+    }
 }

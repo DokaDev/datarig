@@ -96,6 +96,18 @@ pub enum DbError {
     TlsRequired,
     /// The server asked for an authentication method the driver does not have (its name).
     AuthUnsupported(String),
+    /// MySQL's server refused the login (`ER_ACCESS_DENIED_ERROR`): a wrong user or password,
+    /// or an account that requires TLS (`REQUIRE SSL`), which the driver does not do yet. The
+    /// server's message.
+    AccessDenied(String),
+    /// A MySQL login needed the server's public key to send the password, the profile names no
+    /// key file, and the driver did not ask the server for it: the connection goes directly to
+    /// another machine, unencrypted, so the key could come from anyone in between (see
+    /// `ConnectionConfig::allow_public_key_retrieval`). Nothing about the password was sent.
+    KeyRetrievalRefused,
+    /// The profile's server public key file (its path, as the profile names it) cannot be
+    /// used: unreadable (`Some`, why), or not an RSA public key in PEM of 2048 bits or more.
+    ServerKeyFile { path: String, fault: Option<Fault> },
 }
 
 impl DbError {
@@ -106,7 +118,10 @@ impl DbError {
             DbError::Server(s) | DbError::NeedsNoTransaction(s) => Cow::Borrowed(s),
             DbError::Settings(f) | DbError::Connection(f) => Cow::Borrowed(&f.detail),
             DbError::Transport(e) => Cow::Borrowed(e.raw()),
-            DbError::AuthUnsupported(name) => Cow::Borrowed(name),
+            DbError::AuthUnsupported(s) | DbError::AccessDenied(s) => Cow::Borrowed(s),
+            DbError::ServerKeyFile { fault, .. } => {
+                fault.as_ref().map_or(Cow::Borrowed(""), |f| Cow::Borrowed(&f.detail))
+            }
             DbError::Closed
             | DbError::NoAnswer(_)
             | DbError::NotSupported
@@ -120,7 +135,8 @@ impl DbError {
             | DbError::Locked
             | DbError::NotFound
             | DbError::VersionUnsupported { .. }
-            | DbError::TlsRequired => Cow::Borrowed(""),
+            | DbError::TlsRequired
+            | DbError::KeyRetrievalRefused => Cow::Borrowed(""),
         }
     }
 }
