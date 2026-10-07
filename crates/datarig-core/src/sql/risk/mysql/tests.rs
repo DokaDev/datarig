@@ -545,6 +545,11 @@ const NOT_READS: &[&str] = &[
     "XA COMMIT 'x'",
     "SELECT 1; DELETE FROM t",
     "SHOW TABLES; DROP TABLE t",
+    // Strings with backslashes and double quotes, read differently in the other sql modes.
+    "SELECT 'a\\' , GET_LOCK('k', 0) #'",
+    "SELECT \"a\\\" , LOAD_FILE('/x') #\"",
+    "SELECT 'it\\'s', \"q\" FROM t; DELETE FROM t",
+    "UPDATE t SET b = 'x\\'y', c = \"z\" WHERE 1 = 1",
 ];
 
 /// A small deterministic random source (xorshift).
@@ -579,7 +584,7 @@ fn mutate(sql: &str, rng: &mut Rng) -> String {
         let i = rng.below(parts.len());
         let kind = tokens[i].kind;
         // A token not yet wrapped in an executable comment (its words are still its own).
-        let plain = parts[i] == tokens[i].text(sql) || !parts[i].starts_with("/*");
+        let plain = !parts[i].starts_with("/*");
         match rng.below(6) {
             0 | 1 => {
                 // Between two tokens, unless both are operators (`<` `=` would become `< =`).
@@ -609,7 +614,10 @@ fn mutate(sql: &str, rng: &mut Rng) -> String {
                     .map(|c| if rng.below(2) == 0 { c.to_ascii_lowercase() } else { c.to_ascii_uppercase() })
                     .collect();
             }
-            3 if plain && kind == Tok::Ident && !parts[i].contains('`') => parts[i] = format!("`{}`", parts[i]),
+            // A keyword in backticks is a name: the server refuses the text, the classifier must too.
+            3 if plain && matches!(kind, Tok::Ident | Tok::Keyword) && !parts[i].contains('`') => {
+                parts[i] = format!("`{}`", parts[i])
+            }
             4 => {
                 let open = rng.pick(&["/*!", "/*!50000 ", "/*!80000", "/*!99999 ", "/*M!", "/*M!100000 "]);
                 parts[i] = format!("{open}{} */", parts[i]);
