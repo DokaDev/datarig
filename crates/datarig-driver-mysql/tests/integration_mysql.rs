@@ -262,6 +262,55 @@ async fn sessions_are_set_up_on_the_server_by_role_and_policy() {
     admin.disconnect().await.unwrap();
 }
 
+/// The statements test `test`'s session `id` ran, as the server recorded them
+/// (`events_statements_history`, its last ten), oldest first.
+async fn statements_of(admin: &mut mysql_async::Conn, id: u64) -> Vec<String> {
+    admin
+        .exec(
+            "SELECT h.SQL_TEXT FROM performance_schema.events_statements_history h \
+             JOIN performance_schema.threads t ON t.THREAD_ID = h.THREAD_ID \
+             WHERE t.PROCESSLIST_ID = ? ORDER BY h.EVENT_ID",
+            (id,),
+        )
+        .await
+        .expect("events_statements_history reads")
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_is_set_up_in_one_statement() {
+    let Some((url, admin)) = urls("a_session_is_set_up_in_one_statement") else { return };
+    let mut admin = side(&admin).await;
+    for role in [SessionRole::Query, SessionRole::Meta] {
+        let _c = Conn::open(&url, role, true, "a_session_is_set_up_in_one_statement").await;
+        let id = only_session(&mut admin, role, "a_session_is_set_up_in_one_statement").await;
+        // The server's answer to the `SET` said the sql mode and read-only: nothing is asked
+        // after it.
+        let ran = statements_of(&mut admin, id).await;
+        assert_eq!(ran.len(), 1, "{role:?}: {ran:?}");
+        assert!(ran[0].starts_with("SET NAMES utf8mb4, SESSION session_track_system_variables"), "{ran:?}");
+    }
+    admin.disconnect().await.unwrap();
+}
+
+/// What the client asks for at login, held against the server: one request runs one statement.
+#[tokio::test(flavor = "multi_thread")]
+async fn one_request_never_runs_two_statements() {
+    let Some(url) = my_url("one_request_never_runs_two_statements") else { return };
+    let d = datarig_core::profile::dsn::parse(&url).unwrap();
+    let opts = mysql_async::OptsBuilder::default()
+        .user(Some(d.user.clone()))
+        .pass(d.password.clone())
+        .db_name(Some(d.database.clone()))
+        .prefer_socket(false);
+    let stream = tokio::net::TcpStream::connect((d.host.as_str(), d.port.unwrap_or(3306))).await.unwrap();
+    let mut c = mysql_async::Conn::connect_with_stream(opts, Box::new(stream)).await.unwrap();
+    match c.query_drop("SELECT 1; SELECT 2").await {
+        Err(mysql_async::Error::Server(e)) => assert_eq!(e.code, 1064, "{e}"),
+        other => panic!("{other:?}"),
+    }
+    c.disconnect().await.unwrap();
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_wrong_password_asks_for_one() {
     let Some(url) = my_url("a_wrong_password_asks_for_one") else { return };
@@ -361,9 +410,11 @@ impl Account {
         let mut c = side(admin).await;
         c.query_drop(format!("DROP USER IF EXISTS '{name}'@'%'")).await?;
         c.query_drop(format!("CREATE USER '{name}'@'%' IDENTIFIED {identified}")).await?;
-        c.query_drop(format!("GRANT SELECT ON shop.* TO '{name}'@'%'")).await?;
+        // Dropped with the guard from here on, also when the grant fails.
+        let account = Account { admin: admin.to_string(), name };
+        c.query_drop(format!("GRANT SELECT ON shop.* TO '{}'@'%'", account.name)).await?;
         c.disconnect().await?;
-        Ok(Account { admin: admin.to_string(), name })
+        Ok(account)
     }
 }
 

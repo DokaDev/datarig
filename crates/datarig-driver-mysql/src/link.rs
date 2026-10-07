@@ -4,7 +4,6 @@
 
 use crate::wire::Wire;
 use datarig_core::driver::{DbCommand, DbError};
-use std::collections::VecDeque;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 /// What the session task does next.
@@ -18,24 +17,20 @@ pub(crate) enum Next {
 
 pub(crate) struct Link {
     rx: UnboundedReceiver<DbCommand>,
-    /// Commands that arrived while a request was in flight.
-    queued: VecDeque<DbCommand>,
     wire: Wire,
 }
 
 impl Link {
     pub(crate) fn new(rx: UnboundedReceiver<DbCommand>, wire: Wire) -> Self {
-        Self { rx, queued: VecDeque::new(), wire }
+        Self { rx, wire }
     }
 
-    /// The next command, or why there is none.
+    /// The next command, or why there is none: the server's last words when it closed the
+    /// connection with an error (`wait_timeout`), else that it closed.
     pub(crate) async fn next(&mut self) -> Next {
-        if let Some(c) = self.queued.pop_front() {
-            return Next::Command(c);
-        }
         tokio::select! {
             biased;
-            () = self.wire.closed() => Next::Lost(DbError::Closed),
+            () = self.wire.closed() => Next::Lost(self.wire.last_words().unwrap_or(DbError::Closed)),
             cmd = self.rx.recv() => cmd.map_or(Next::Closed, Next::Command),
         }
     }

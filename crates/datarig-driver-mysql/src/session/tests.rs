@@ -105,3 +105,56 @@ fn server_errors_read_as_the_mysql_client_shows_them() {
     assert!(connect_error(&server(1045, "28000", "Access denied for user 'u'@'h' (using password: YES)")).1);
     assert!(!connect_error(&server(1049, "42000", "Unknown database 'x'")).1);
 }
+
+/// The first packet a MySQL 8.4 server sends (protocol 10), offering every capability.
+fn server_greeting() -> Vec<u8> {
+    let mut p = vec![10];
+    p.extend_from_slice(b"8.4.0\0");
+    p.extend_from_slice(&7u32.to_le_bytes());
+    p.extend_from_slice(b"abcdefgh");
+    p.push(0);
+    p.extend_from_slice(&[0xff, 0xff]);
+    p.push(255);
+    p.extend_from_slice(&2u16.to_le_bytes());
+    p.extend_from_slice(&[0xff, 0xff]);
+    p.push(21);
+    p.extend_from_slice(&[0; 10]);
+    p.extend_from_slice(b"ijklmnopqrst\0");
+    p.extend_from_slice(b"caching_sha2_password\0");
+    let mut packet = vec![p.len() as u8, (p.len() >> 8) as u8, 0, 0];
+    packet.extend_from_slice(&p);
+    packet
+}
+
+#[tokio::test]
+async fn the_client_never_asks_for_multi_statements_nor_local_files() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let cfg = ConnectionConfig {
+        driver: "mysql".into(),
+        user: "u".into(),
+        password: "s3cret-Pass-zz".into(),
+        ..Default::default()
+    };
+    let opts = Target::of(&cfg).unwrap().opts(None, "datarig-q-test");
+    let (client, mut server) = tokio::io::duplex(1 << 16);
+    let login = tokio::spawn(Conn::connect_with_stream(opts, Box::new(client)));
+    server.write_all(&server_greeting()).await.unwrap();
+    let mut header = [0u8; 4];
+    server.read_exact(&mut header).await.unwrap();
+    let len = usize::from(header[0]) | usize::from(header[1]) << 8 | usize::from(header[2]) << 16;
+    let mut response = vec![0; len];
+    server.read_exact(&mut response).await.unwrap();
+    let caps = u32::from_le_bytes(response[..4].try_into().unwrap());
+    const MULTI_STATEMENTS: u32 = 1 << 16;
+    const LOCAL_FILES: u32 = 1 << 7;
+    const SESSION_TRACK: u32 = 1 << 23;
+    const CONNECT_ATTRS: u32 = 1 << 20;
+    assert_eq!(caps & MULTI_STATEMENTS, 0, "{caps:#x}");
+    assert_eq!(caps & LOCAL_FILES, 0, "{caps:#x}");
+    assert_ne!(caps & SESSION_TRACK, 0, "{caps:#x}");
+    assert_ne!(caps & CONNECT_ATTRS, 0, "the program name goes with the login: {caps:#x}");
+    // The password itself is not in the response (a scramble of it is).
+    assert!(!response.windows(14).any(|w| w == b"s3cret-Pass-zz"));
+    drop(server);
+    assert!(login.await.unwrap().is_err());
+}

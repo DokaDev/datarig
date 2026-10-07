@@ -668,6 +668,9 @@ fn a_mysql_profile_takes_its_port_and_url_and_has_no_postgresql_settings() {
     h.app.handle_event(ratatui::crossterm::event::Event::Paste("mariadb://h/db?ssl-mode=REQUIRED".into()));
     let problem = h.form().dsn_problem.clone().map(|p| h.app.i18n.msg(&p.message()).to_string());
     assert_eq!(problem.as_deref(), Some("unsupported parameter “ssl-mode” (a mysql:// URL takes none)"));
+    // Refused as a whole: the driver did not switch to MySQL either (the form started on
+    // PostgreSQL).
+    assert_eq!(h.form().driver, 0);
 }
 
 // ── the context menu (right click) ───────────────────────────────────────

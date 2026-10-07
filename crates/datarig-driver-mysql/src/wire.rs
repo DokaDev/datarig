@@ -5,6 +5,7 @@
 //! except right before it closes a connection, as on `wait_timeout`), so the session watches the
 //! stream itself, as the PostgreSQL driver's connection task does.
 
+use datarig_core::driver::DbError;
 use datarig_core::transport::BoxedStream;
 use std::io;
 use std::pin::Pin;
@@ -41,6 +42,14 @@ impl Wire {
     /// meanwhile (a server's last words before it closes) is kept for the connection.
     pub(crate) async fn closed(&self) {
         std::future::poll_fn(|cx| self.poll_closed(cx)).await
+    }
+
+    /// The error the server sent before it closed the connection while nothing was asked (an
+    /// `ERR` packet among the bytes [`Wire::closed`] read: MySQL says why it disconnects an idle
+    /// client), as the MySQL client shows it; `None` when there is none.
+    pub(crate) fn last_words(&self) -> Option<DbError> {
+        let s = self.lock().ok()?;
+        err_packet(&s.pushback)
     }
 
     fn poll_closed(&self, cx: &mut Context<'_>) -> Poll<()> {
@@ -91,6 +100,19 @@ impl AsyncWrite for WireStream {
     }
 }
 
+/// The first packet of `bytes` when it is a complete `ERR` packet with an SQL state (the
+/// protocol after the handshake): `ERROR <code> (<state>): <message>`.
+fn err_packet(bytes: &[u8]) -> Option<DbError> {
+    let len = usize::from(*bytes.first()?) | usize::from(*bytes.get(1)?) << 8 | usize::from(*bytes.get(2)?) << 16;
+    let payload = bytes.get(4..4 + len)?;
+    let [0xff, lo, hi, b'#'] = *payload.get(..4)? else { return None };
+    let rest = payload.get(4..)?;
+    let code = u16::from_le_bytes([lo, hi]);
+    let state = String::from_utf8_lossy(rest.get(..5)?);
+    let message = String::from_utf8_lossy(rest.get(5..)?);
+    Some(DbError::Server(format!("ERROR {code} ({state}): {message}")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -106,6 +128,26 @@ mod tests {
         let mut got = Vec::new();
         stream.read_to_end(&mut got).await.unwrap();
         assert_eq!(got, b"bye");
+    }
+
+    #[test]
+    fn a_servers_last_error_reads_as_the_mysql_client_shows_it() {
+        let message = b"The client was disconnected by the server because of inactivity.";
+        let mut payload = vec![0xff, 0xbf, 0x0f, b'#'];
+        payload.extend_from_slice(b"HY000");
+        payload.extend_from_slice(message);
+        let mut packet = vec![payload.len() as u8, 0, 0, 2];
+        packet.extend_from_slice(&payload);
+        assert_eq!(
+            err_packet(&packet),
+            Some(DbError::Server(
+                "ERROR 4031 (HY000): The client was disconnected by the server because of inactivity.".into()
+            ))
+        );
+        // Cut short, or not an error: none.
+        assert_eq!(err_packet(&packet[..10]), None);
+        assert_eq!(err_packet(&[1, 0, 0, 1, 0]), None);
+        assert_eq!(err_packet(&[]), None);
     }
 
     #[tokio::test]

@@ -718,20 +718,8 @@ impl ProfileForm {
                 return;
             }
         };
-        // A URL of the other database picks its driver, when the app has one.
-        if d.scheme != self.scheme() {
-            let name = match d.scheme {
-                Scheme::Postgres => "postgres",
-                Scheme::MySql => "mysql",
-            };
-            match DRIVERS.iter().position(|x| x.0 == name).filter(|i| self.drivers_enabled[*i]) {
-                Some(i) => self.driver = i,
-                None => {
-                    self.dsn_problem = Some(DsnProblem::Parse(DsnError::Scheme));
-                    return;
-                }
-            }
-        }
+        // The URL's parameters first: one the fields cannot hold leaves everything as it is
+        // (the driver too).
         if d.scheme == Scheme::MySql
             && let Some((k, _)) = d.params.first()
         {
@@ -748,6 +736,20 @@ impl ProfileForm {
                 Some(i) => sslmode = Some(i),
                 None => {
                     self.dsn_problem = Some(DsnProblem::SslMode(v.clone()));
+                    return;
+                }
+            }
+        }
+        // A URL of the other database picks its driver, when the app has one.
+        if d.scheme != self.scheme() {
+            let name = match d.scheme {
+                Scheme::Postgres => "postgres",
+                Scheme::MySql => "mysql",
+            };
+            match DRIVERS.iter().position(|x| x.0 == name).filter(|i| self.drivers_enabled[*i]) {
+                Some(i) => self.driver = i,
+                None => {
+                    self.dsn_problem = Some(DsnProblem::Parse(DsnError::Scheme));
                     return;
                 }
             }

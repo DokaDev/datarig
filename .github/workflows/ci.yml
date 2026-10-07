@@ -178,7 +178,8 @@ jobs:
             echo "tables left in public: $left"
             exit 1
           fi
-      # Nor anything named zz_ on the MySQL server: tables, views, routines, databases, accounts.
+      # Nor anything named zz_ on the MySQL server: tables, views, routines, databases, accounts
+      # and grants (a grant on a table outlives the table).
       - name: The tests left the MySQL server clean
         if: ${{ !cancelled() }}
         env:
@@ -189,7 +190,10 @@ jobs:
             UNION ALL SELECT CONCAT(ROUTINE_SCHEMA, '.', ROUTINE_NAME) FROM information_schema.ROUTINES
               WHERE ROUTINE_NAME LIKE 'zz%'
             UNION ALL SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME LIKE 'zz%'
-            UNION ALL SELECT CONCAT(User, '@', Host) FROM mysql.user WHERE User LIKE 'zz%'" 2>/dev/null)
+            UNION ALL SELECT CONCAT(User, '@', Host) FROM mysql.user WHERE User LIKE 'zz%'
+            UNION ALL SELECT CONCAT('grant on ', Db) FROM mysql.db WHERE User LIKE 'zz%' OR Db LIKE 'zz%'
+            UNION ALL SELECT CONCAT('grant on ', Db, '.', Table_name) FROM mysql.tables_priv
+              WHERE User LIKE 'zz%' OR Table_name LIKE 'zz%'")
           if [ -n "$left" ]; then
             echo "left on the MySQL server: $left"
             exit 1

@@ -586,7 +586,8 @@ impl fmt::Debug for AfterConnectCallbackWrapper {
 /// Mysql connection options.
 ///
 /// Build one with [`OptsBuilder`].
-#[derive(Clone, Eq, PartialEq, Debug)]
+// datarig: `Debug` is written out below, so it never prints the password.
+#[derive(Clone, Eq, PartialEq)]
 pub(crate) struct MysqlOpts {
     /// User (defaults to `None`).
     user: Option<String>,
@@ -1189,6 +1190,36 @@ impl Opts {
 
     pub(crate) fn ssl_opts_and_connector(&self) -> Option<&SslOptsAndCachedConnector> {
         self.inner.mysql_opts.ssl_opts.as_ref()
+    }
+}
+
+// datarig: as the derived `Debug` was, with the password left out.
+impl fmt::Debug for MysqlOpts {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MysqlOpts")
+            .field("user", &self.user)
+            .field("pass", &self.pass.as_ref().map(|_| "<redacted>"))
+            .field("db_name", &self.db_name)
+            .field("tcp_keepalive", &self.tcp_keepalive)
+            .field("tcp_nodelay", &self.tcp_nodelay)
+            .field("local_infile_handler", &self.local_infile_handler)
+            .field("pool_opts", &self.pool_opts)
+            .field("conn_ttl", &self.conn_ttl)
+            .field("after_connect", &self.after_connect)
+            .field("init", &self.init)
+            .field("setup", &self.setup)
+            .field("stmt_cache_size", &self.stmt_cache_size)
+            .field("ssl_opts", &self.ssl_opts)
+            .field("prefer_socket", &self.prefer_socket)
+            .field("socket", &self.socket)
+            .field("compression", &self.compression)
+            .field("max_allowed_packet", &self.max_allowed_packet)
+            .field("wait_timeout", &self.wait_timeout)
+            .field("secure_auth", &self.secure_auth)
+            .field("client_found_rows", &self.client_found_rows)
+            .field("enable_cleartext_plugin", &self.enable_cleartext_plugin)
+            .field("connect_attributes", &self.connect_attributes)
+            .finish()
     }
 }
 

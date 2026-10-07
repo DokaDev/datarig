@@ -41,7 +41,8 @@ impl Target {
         let some = |s: &str| (!s.is_empty()).then(|| s.to_string());
         match &cfg.dsn {
             Some(text) => {
-                let d = dsn::parse(text).map_err(|e| settings(format!("not a mysql:// URL: {e:?}")))?;
+                // The parser's error may quote a piece of the URL, a password among them.
+                let d = dsn::parse(text).map_err(|_| settings("not a mysql:// URL".to_string()))?;
                 if d.scheme != Scheme::MySql {
                     return Err(settings("not a mysql:// URL".to_string()));
                 }
@@ -73,9 +74,12 @@ impl Target {
     /// The client's options for a connection to `database` (or none) that the server lists
     /// as `program_name` (`performance_schema.session_connect_attrs`). mysql_async asks the
     /// server nothing more after the login (`max_allowed_packet` and `wait_timeout` are given),
-    /// never moves to the server's socket file, and never sends the password in clear: the
-    /// cleartext method is off, and `caching_sha2_password` over a stream that is not
-    /// encrypted sends it encrypted with the server's public key.
+    /// never moves to the server's socket file, and never sends the password as it is: the
+    /// cleartext method is off, and a full `caching_sha2_password` login over a stream that is
+    /// not encrypted (no TLS yet) sends it encrypted with the public key the server sends when
+    /// asked, as MySQL's client does with `--get-server-public-key`. On a direct connection
+    /// through a network someone else controls, that key could be theirs: an SSH tunnel's
+    /// channel is encrypted end to end to its bastion.
     pub(crate) fn opts(&self, database: Option<&str>, program: &str) -> Opts {
         let attrs = std::collections::HashMap::from([("program_name".to_string(), program.to_string())]);
         OptsBuilder::default()
@@ -258,6 +262,8 @@ pub(crate) struct Opened {
     pub(crate) wire: Wire,
     pub(crate) server: Server,
     pub(crate) tracked: Tracked,
+    /// The connection's id on the server (what `KILL QUERY` names).
+    pub(crate) id: u64,
 }
 
 /// Open a connection to `target` over a stream of `route` with `opts`, check the server's
@@ -269,7 +275,7 @@ pub(crate) async fn open(route: &Route, opts: Opts, settings: Settings) -> Resul
     let mut conn = Conn::connect_with_stream(opts, Box::new(stream)).await.map_err(|e| connect_error(&e))?;
     let server = Server { version: conn.server_version(), mariadb: conn.is_mariadb() };
     if let Err(e) = server.check() {
-        let _ = conn.disconnect().await;
+        quit(conn).await;
         return Err((e, false));
     }
     let mut tracked = Tracked::default();
@@ -288,10 +294,28 @@ pub(crate) async fn open(route: &Route, opts: Opts, settings: Settings) -> Resul
         }
     }
     if read_only && tracked.read_only != Some(true) {
-        let _ = conn.disconnect().await;
+        quit(conn).await;
         return Err((DbError::Connection(Fault::other("the server did not make the session read-only")), false));
     }
-    Ok(Opened { conn, wire, server, tracked })
+    // The handshake has the id's lower 32 bits: MySQL's ids have no more, MariaDB's may.
+    let id = match server.mariadb {
+        false => u64::from(conn.id()),
+        true => {
+            let id: Option<u64> =
+                conn.query_first("SELECT CONNECTION_ID()").await.map_err(|e| (my_error(&e), false))?;
+            id.unwrap_or(u64::from(conn.id()))
+        }
+    };
+    Ok(Opened { conn, wire, server, tracked, id })
+}
+
+/// How long closing a connection waits for the server to take its `COM_QUIT`.
+const QUIT_WAIT: Duration = Duration::from_secs(2);
+
+/// Close `conn` (`COM_QUIT`), waiting at most [`QUIT_WAIT`]: a stalled stream does not keep the
+/// task.
+pub(crate) async fn quit(conn: Conn) {
+    let _ = tokio::time::timeout(QUIT_WAIT, conn.disconnect()).await;
 }
 
 /// A failure while the connection opens, and whether it is about the password.
@@ -338,11 +362,11 @@ pub(crate) fn my_error(e: &mysql_async::Error) -> DbError {
 pub(crate) struct Killer {
     route: Route,
     opts: Opts,
-    id: u32,
+    id: u64,
 }
 
 impl Killer {
-    pub(crate) fn new(route: Route, opts: Opts, id: u32) -> Self {
+    pub(crate) fn new(route: Route, opts: Opts, id: u64) -> Self {
         Self { route, opts, id }
     }
 
@@ -354,7 +378,7 @@ impl Killer {
             let (_wire, stream) = Wire::new(stream);
             let mut conn = Conn::connect_with_stream(self.opts.clone(), Box::new(stream)).await.ok()?;
             let _ = conn.query_drop(format!("KILL QUERY {}", self.id)).await;
-            let _ = conn.disconnect().await;
+            quit(conn).await;
             Some(())
         };
         let _ = tokio::time::timeout(KILL_TIMEOUT, kill).await;

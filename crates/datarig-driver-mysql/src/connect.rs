@@ -107,7 +107,7 @@ impl Driver for MyDriver {
                     Ok(()) => conn.query_first("SELECT VERSION()").await.map_err(|e| my_error(&e)),
                     Err(e) => Err(e),
                 };
-                let _ = conn.disconnect().await;
+                session::quit(conn).await;
                 Ok::<_, DbError>(version?.unwrap_or_else(|| server.label()))
             };
             match tokio::time::timeout(timeout, attempt).await {
@@ -150,9 +150,9 @@ async fn run_session(
             return;
         }
     };
-    let Opened { conn, wire, server, tracked } = opened;
+    let Opened { conn, wire, server, tracked, id } = opened;
     // The cancel logs in as the session does, without a database (one could be dropped since).
-    let killer = Killer::new(route, target.opts(None, &opts.application_name), conn.id());
+    let killer = Killer::new(route, target.opts(None, &opts.application_name), id);
     if let Ok(mut g) = canceller.killer.lock() {
         *g = Some(killer);
     }
@@ -194,7 +194,7 @@ async fn serve(conn: mysql_async::Conn, mut link: Link, events: UnboundedSender<
                 DbEvent::RepeatChecked { id, result: Err(DbError::NotSupported) }
             }
             Next::Closed => {
-                let _ = conn.disconnect().await;
+                session::quit(conn).await;
                 return;
             }
             Next::Lost(error) => {
