@@ -218,6 +218,32 @@ fn a_typed_password_mysql_refuses_shows_the_error_instead_of_asking_again() {
     assert!(h.prompt().is_some());
 }
 
+#[test]
+fn a_profile_starts_its_tabs_in_the_servers_mode_not_in_one_tabs_set() {
+    let mut h = mysql();
+    h.db(DbEvent::Connected);
+    let tab = h.app.tab().id;
+    // The metadata session says the mode a new session starts in: the tab's first run is
+    // checked in it, before a query session of its own exists.
+    let server = MySqlMode { no_backslash_escapes: true, ..MySqlMode::default() };
+    h.meta_db("local-my", DbEvent::Language(my(server)));
+    assert_eq!(h.app.tab_language(tab), my(server));
+    assert_eq!(h.app.tab().exec.prepared.language(), my(server));
+    // The tab's session starts in it, then its `SET sql_mode` changes that session only.
+    h.ctrl('e');
+    h.tab_db(0, DbEvent::Language(my(server)));
+    let set = MySqlMode { ansi_quotes: true, ..server };
+    h.tab_db(0, DbEvent::Language(my(set)));
+    assert_eq!(h.app.tab_language(tab), my(set));
+    // Another tab of the profile starts as a new session does.
+    h.ctrl('t');
+    let fresh = h.app.tab().id;
+    assert_ne!(fresh, tab);
+    assert_eq!(h.app.tab_language(fresh), my(server));
+    assert_eq!(h.app.tab().exec.prepared.language(), my(server));
+    assert_eq!(h.app.tab_language(tab), my(set));
+}
+
 /// The Execute the app just sent: its id.
 fn sent_run(h: &mut Harness) -> u64 {
     let sent = h.sent();

@@ -249,13 +249,15 @@ async fn a_query_session_says_how_its_text_is_read() {
     probe.disconnect().await.unwrap();
 }
 
-/// The metadata session lists the databases and reads the catalog as soon as it connects, and
-/// says no language (the tabs' sessions do).
+/// The metadata session says the mode a new session starts in, then lists the databases and
+/// reads the catalog as soon as it connects.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_metadata_session_reads_the_databases_and_the_catalog() {
     let Some(url) = my_url("the_metadata_session_reads_the_databases_and_the_catalog") else { return };
     let mut c = Conn::start(&url, SessionRole::Meta, false, "metaread");
     assert!(matches!(c.next(15).await, DbEvent::Connected));
+    let lang = c.next(15).await;
+    assert!(matches!(lang, DbEvent::Language(Language::Sql(Dialect::MySql(_)))), "{lang:?}");
     match c.next(15).await {
         DbEvent::Schemas(Ok(s)) => {
             assert!(s.contains(&"shop".to_string()), "{s:?}");
@@ -288,10 +290,10 @@ async fn the_metadata_session_reads_the_databases_and_the_catalog() {
         other => panic!("{other:?}"),
     }
     let next = tokio::time::timeout(Duration::from_millis(300), c.rx.recv()).await;
-    assert!(next.is_err(), "nothing more, no language: {next:?}");
+    assert!(next.is_err(), "nothing more: {next:?}");
 }
 
-/// The owner's worry, for lookups: a read of the metadata session never queues behind another
+/// A read of the metadata session never queues behind another
 /// session's metadata lock (held, or asked for by an `ALTER TABLE` that waits), and never holds
 /// up that session.
 #[tokio::test(flavor = "multi_thread")]
@@ -800,7 +802,7 @@ async fn table_locks(a: &mut mysql_async::Conn, id: u64, name: &str) -> u64 {
     a.query_first::<u64, _>(sql).await.unwrap().unwrap()
 }
 
-/// The owner's worry: a result on screen holds no metadata lock, so an `ALTER TABLE` of another
+/// A result on screen holds no metadata lock, so an `ALTER TABLE` of another
 /// session goes through; a held result does hold one while its statement runs (one larger than
 /// what the network buffers take), until it is read to its end or stopped.
 #[tokio::test(flavor = "multi_thread")]
