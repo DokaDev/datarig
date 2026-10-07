@@ -507,7 +507,7 @@ fn bars(cx: &Look, c: &mut ChartTab, m: &Model, area: Rect, buf: &mut Buffer) {
     let widest = (c.offset..(c.offset + fits).min(n)).map(|i| width(&point_label(cx, m, i))).max().unwrap_or(1);
     let want = widest.min(10);
     let every = if gw > want { 1 } else { (want + 1).div_ceil(gw).max(1) };
-    let room = (every * gw).saturating_sub(1).max(1);
+    let room = (every * gw).saturating_sub(1).min(plot.width as usize).max(1);
     let muted = Style::new().fg(th.fg_muted).bg(th.bg);
     let mut drawn = Vec::new();
     for i in (c.offset..(c.offset + fits).min(n)).step_by(every) {
@@ -524,7 +524,7 @@ fn bars(cx: &Look, c: &mut ChartTab, m: &Model, area: Rect, buf: &mut Buffer) {
         let label = clip(&point_label(cx, m, i), room);
         let lw = width(&label) as u16;
         let x = if every == 1 { gx + ((gwi.saturating_sub(usize::from(lw))) / 2) as u16 } else { gx };
-        let x = x.min((plot.x + plot.width).saturating_sub(lw));
+        let x = x.min((plot.x + plot.width).saturating_sub(lw)).max(plot.x);
         if taken.iter().any(|&(a, b)| x < b + 2 && a < x + lw + 2) {
             continue;
         }
@@ -702,7 +702,7 @@ fn rasterize(m: &Model, t: &scale::Ticks, w: u16, h: u16) -> Raster {
             let Some(f) = v.and_then(|v| t.at(v)) else {
                 // Split by a column, a series has no row at the other series' points: its line
                 // goes on past them.
-                broken |= !m.split || series.rows[i] > 0;
+                broken |= !m.split || series.seen[i];
                 continue;
             };
             let y = ((1.0 - f.clamp(0.0, 1.0)) * (dh - 1) as f64).round() as usize;

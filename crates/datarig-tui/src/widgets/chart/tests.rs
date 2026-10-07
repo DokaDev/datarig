@@ -184,3 +184,49 @@ fn bar_labels_never_run_into_each_other() {
         }
     }
 }
+
+#[test]
+fn a_split_line_breaks_at_its_own_missing_value() {
+    let cols = [meta("day", "date", false), meta("shop", "text", false), meta("n", "int4", true)];
+    let rows: Vec<Vec<Option<String>>> = [("01", "a", Some("0")), ("02", "a", None), ("03", "a", Some("8"))]
+        .iter()
+        .chain([("01", "b", Some("4")), ("02", "b", Some("4")), ("03", "b", Some("4"))].iter())
+        .map(|(d, s, v)| vec![Some(format!("2026-10-{d}")), Some(s.to_string()), v.map(String::from)])
+        .collect();
+    let spec = Spec { kind: Kind::Line, x: Some(0), ys: vec![2], by: Some(1), log: false };
+    let roles = roles(&cols, &rows);
+    let mut b = Builder::new(&spec, &cols, &roles);
+    for (i, r) in rows.iter().enumerate() {
+        b.push(i, r);
+    }
+    let m = b.finish().unwrap();
+    let t = scale::linear(0.0, 8.0, 3, false);
+    let r = rasterize(&m, &t, 40, 8);
+    // Series a: only its two dots (the NULL between them breaks its line).
+    let dots: u32 = r.cells.iter().filter(|c| c.1 == 1).map(|c| c.0.count_ones()).sum();
+    assert!(dots <= 2, "{dots} dots of series a: drawn through its NULL");
+}
+
+#[test]
+fn a_long_label_stays_inside_the_plot() {
+    let cols = vec![meta("region", "text", false), meta("a", "int4", true), meta("b", "int4", true)];
+    let rows =
+        vec![vec![Some("Northern Europe and the Baltic states".to_string()), Some("100".into()), Some("200".into())]];
+    let rs = crate::widgets::grid::ResultSet::in_memory(cols, rows, false, "NULL");
+    let mut c = crate::app::chart::ChartTab::for_tests(&rs);
+    c.spec = Spec { kind: Kind::Bar, x: Some(0), ys: vec![1, 2], by: None, log: false };
+    c.rebuild_for_tests(&rs);
+    let th = crate::theme::DARK;
+    let i18n = I18n::new(datarig_core::i18n::Lang::En);
+    let cx = Look { i18n: &i18n, th: &th, focused: true, hover: None, keys: Default::default() };
+    for w in 12..=30 {
+        let area = Rect::new(30, 0, w, 14);
+        let mut buf = Buffer::empty(Rect::new(0, 0, 30 + w, 14));
+        draw_into(&cx, &mut c, Info { rows: 1, more: false }, area, &mut buf);
+        for y in 0..14 {
+            for x in 0..30 {
+                assert_eq!(buf[(x, y)].symbol(), " ", "{w} wide: drawn left of the chart at ({x}, {y})");
+            }
+        }
+    }
+}

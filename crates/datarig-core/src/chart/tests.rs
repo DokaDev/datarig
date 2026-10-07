@@ -356,3 +356,28 @@ fn locale_money_and_other_minus_signs_are_not_misread() {
     assert_eq!(number("\u{2212}5"), Some(-5.0));
     assert_eq!(number("\u{2212}$5.00"), Some(-5.0));
 }
+
+#[test]
+fn others_leave_out_an_overflowing_sum_and_count_it() {
+    let cols = [meta("k", "text", false), meta("v", "float8", true)];
+    // The largest bars are kept; the two left out sum past the largest number.
+    let mut data: Vec<Vec<Cell>> =
+        (0..MAX_BARS - 1).map(|i| vec![Some(format!("k{i}")), Some("1.5e308".into())]).collect();
+    data.push(vec![Some("x".into()), Some("1e308".into())]);
+    data.push(vec![Some("y".into()), Some("1e308".into())]);
+    let spec = Spec { kind: Kind::Bar, x: Some(0), ys: vec![1], by: None, log: false };
+    let m = build(&spec, &cols, &data).unwrap();
+    let others = m.points.len() - 1;
+    assert!(m.series[0].values[others].is_some_and(f64::is_finite));
+    // The value that could not be added is not counted among the others' rows, but as left out.
+    assert_eq!(m.series[0].rows[others] as usize, m.points[others].rows - 1);
+    assert_eq!(m.skipped.bad_y, 1);
+}
+
+#[test]
+fn one_point_compares_only_series_that_have_a_value() {
+    let cols = [meta("a", "int8", true), meta("b", "int8", true)];
+    let data = rows(&[&[Some("5"), None]]);
+    let spec = Spec { kind: Kind::Bar, x: None, ys: vec![0, 1], by: None, log: false };
+    assert_eq!(build(&spec, &cols, &data), Err(Unsuitable::OnePoint));
+}

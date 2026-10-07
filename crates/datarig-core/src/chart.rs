@@ -188,11 +188,20 @@ pub struct Series {
     /// How many values each point's value sums, and the row of the first one.
     pub rows: Vec<u32>,
     pub first: Vec<Option<usize>>,
+    /// The series has a row at each point (its value may still be NULL or not a number).
+    pub seen: Vec<bool>,
 }
 
 impl Series {
     fn new(name: String, others: bool, points: usize) -> Series {
-        Series { name, others, values: vec![None; points], rows: vec![0; points], first: vec![None; points] }
+        Series {
+            name,
+            others,
+            values: vec![None; points],
+            rows: vec![0; points],
+            first: vec![None; points],
+            seen: vec![false; points],
+        }
     }
 
     /// Only the points at `order`, in that order.
@@ -200,22 +209,29 @@ impl Series {
         self.values = order.iter().map(|&i| self.values[i]).collect();
         self.rows = order.iter().map(|&i| self.rows[i]).collect();
         self.first = order.iter().map(|&i| self.first[i]).collect();
+        self.seen = order.iter().map(|&i| self.seen[i]).collect();
     }
 
-    /// Add point `j`'s value to point `i`'s (the first row of the sum is no longer one row's).
-    fn absorb(&mut self, i: usize, v: Option<f64>, rows: u32) {
-        let sum = v.map(|v| self.values[i].unwrap_or(0.0) + v).filter(|s| s.is_finite());
-        if sum.is_some() {
-            self.values[i] = sum;
-        }
-        self.rows[i] += rows;
+    /// Add a value of `rows` rows to point `i`'s (the first row of the sum is no longer one
+    /// row's). Whether it was left out: the sum would pass the largest number.
+    fn absorb(&mut self, i: usize, v: Option<f64>, rows: u32, seen: bool) -> bool {
         self.first[i] = None;
+        self.seen[i] |= seen;
+        let Some(v) = v else { return false };
+        let sum = self.values[i].unwrap_or(0.0) + v;
+        if !sum.is_finite() {
+            return true;
+        }
+        self.values[i] = Some(sum);
+        self.rows[i] += rows;
+        false
     }
 }
 
 /// The numbers of a chart.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Model {
+    /// Bars (any direction: the model is the same) or a line.
     pub kind: Kind,
     pub axis: Axis,
     pub points: Vec<Point>,
@@ -550,11 +566,13 @@ impl<'a> Builder<'a> {
             s.values.push(None);
             s.rows.push(0);
             s.first.push(None);
+            s.seen.push(false);
         }
         self.points.len() - 1
     }
 
     fn add(&mut self, s: usize, p: usize, row: usize, cell: Option<&str>) {
+        self.series[s].seen[p] = true;
         let Some(text) = cell else {
             self.skipped.null_y += 1;
             return;
@@ -576,7 +594,7 @@ impl<'a> Builder<'a> {
     }
 
     pub fn finish(self) -> Result<Model, Unsuitable> {
-        let Builder { spec, axis, mut points, mut series, skipped, rows, .. } = self;
+        let Builder { spec, axis, mut points, mut series, mut skipped, rows, .. } = self;
         if rows == 0 {
             return Err(Unsuitable::NoRows);
         }
@@ -603,7 +621,9 @@ impl<'a> Builder<'a> {
                 } else {
                     other_series += 1;
                     for p in 0..points.len() {
-                        others.absorb(p, s.values[p], s.rows[p]);
+                        if others.absorb(p, s.values[p], s.rows[p], s.seen[p]) {
+                            skipped.bad_y += 1;
+                        }
                     }
                 }
             }
@@ -628,12 +648,14 @@ impl<'a> Builder<'a> {
                 // The others bar at the end: the first left-out point, with the rest summed in.
                 let rest: Vec<usize> = (0..points.len()).filter(|i| !keep.contains(i)).collect();
                 let order: Vec<usize> = kept.iter().copied().chain(rest.first().copied()).collect();
-                let (values, rows) = (s.values.clone(), s.rows.clone());
+                let (values, rows, seen) = (s.values.clone(), s.rows.clone(), s.seen.clone());
                 s.pick(&order);
                 let last = order.len() - 1;
                 s.first[last] = None;
                 for &i in &rest[1..] {
-                    s.absorb(last, values[i], rows[i]);
+                    if s.absorb(last, values[i], rows[i], seen[i]) {
+                        skipped.bad_y += 1;
+                    }
                 }
             }
             points = kept.into_iter().map(|i| points[i].clone()).chain(std::iter::once(sum)).collect();
@@ -649,9 +671,11 @@ impl<'a> Builder<'a> {
         if values.clone().next().is_none() {
             return Err(Unsuitable::NoValues);
         }
-        let with_values = (0..points.len()).filter(|&i| series.iter().any(|s| s.values[i].is_some())).count();
-        // One point is a comparison only between several series, as bars.
-        if with_values < 2 && !(with_values == 1 && spec.kind.bars() && series.len() >= 2) {
+        let valued = |i: usize| series.iter().filter(|s| s.values[i].is_some()).count();
+        let with_values = (0..points.len()).filter(|&i| valued(i) > 0).count();
+        // One point is a comparison only between several values of it, as bars.
+        let compared = with_values == 1 && spec.kind.bars() && (0..points.len()).any(|i| valued(i) >= 2);
+        if with_values < 2 && !compared {
             return Err(Unsuitable::OnePoint);
         }
         let nonpositive = values.clone().filter(|v| **v <= 0.0).count();
