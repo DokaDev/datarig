@@ -389,7 +389,7 @@
 "db.tls_required" = "the server only accepts encrypted (TLS) connections, which datarig does not support yet"
 "db.version_unsupported" = "{server} is not supported: datarig needs {needed} or newer"
 "db.auth_unsupported" = "the server asks for the authentication method “{name}”, which datarig does not support"
-"db.access_denied" = "{message} (a wrong user or password, or the account requires TLS, REQUIRE SSL, which datarig does not support yet)"
+"db.access_denied" = "{message} (a wrong user or password, or the account requires TLS, REQUIRE SSL, which datarig does not support yet; after a mistyped password, connecting again asks for it again)"
 "db.key_retrieval_refused" = "not logged in: the password would be encrypted with a public key the server sends over this unencrypted connection, which anyone in between could replace. Connect through an SSH tunnel, set the server's public key file, or allow key retrieval (the profile's Advanced section)"
 "db.server_key_unreadable" = "the server public key file {path} cannot be read: {error}"
 "db.server_key_invalid" = "the server public key file {path} is not an RSA public key in PEM (2048 bits or more)"

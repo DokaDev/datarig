@@ -181,8 +181,9 @@ fn the_server_key_options_are_set_in_the_form() {
 }
 
 /// MySQL refuses a password typed in the prompt with ERROR 1045: the error shows (it may be
-/// the account requiring TLS, which no password fixes) and the prompt does not open again. A
-/// stored password the server refuses still opens the prompt once.
+/// the account requiring TLS, which no password fixes, and says that connecting again asks
+/// again) and the prompt does not open again. A stored password the server refuses still
+/// opens the prompt once.
 #[test]
 fn a_typed_password_mysql_refuses_shows_the_error_instead_of_asking_again() {
     let denied = || DbEvent::ConnectFailed {
@@ -203,6 +204,7 @@ fn a_typed_password_mysql_refuses_shows_the_error_instead_of_asking_again() {
     assert!(h.prompt().is_none(), "not asked again");
     let error = h.node_error("db-remote").unwrap_or_default();
     assert!(error.contains("Access denied") && error.contains("REQUIRE SSL"), "{error}");
+    assert!(error.contains("after a mistyped password, connecting again asks for it again"), "{error}");
     assert!(h.status(200, 40).contains("REQUIRE SSL"), "{}", h.status(200, 40));
     // A `prompt` profile: its first password is a typed one.
     let mut h = launched(PasswordSource::Prompt);
