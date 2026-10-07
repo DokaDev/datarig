@@ -6,7 +6,7 @@
 //!                               [--delay-ms MS] [--max-pages N] [--idle-secs S]
 //! ```
 //!
-//! Scenarios: `rtt`, `rtt_ssh`, `paging`, `editor`, `editor_block`, `grid`, `plan`, `chart`, `idle`,
+//! Scenarios: `rtt`, `rtt_ssh`, `paging`, `editor`, `editor_block`, `editor_mysql`, `grid`, `plan`, `chart`, `idle`,
 //! `startup`, or `all`. The PostgreSQL ones (`rtt`, `rtt_ssh`, `paging`, `idle`) need `DATARIG_TEST_PG_URL` and the test
 //! database of `dev/init`; `rtt_ssh` also the SSH bastion of the tests (see `ssh.rs`).
 //! `idle` and `startup` run the release binary in `tmux -L perf`.
@@ -74,14 +74,25 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         }
     }
     if o.scenarios.iter().any(|s| s == "all") {
-        o.scenarios =
-            ["rtt", "rtt_ssh", "editor", "grid", "plan", "chart", "startup", "idle", "paging", "editor_block"]
-                .map(String::from)
-                .to_vec();
+        o.scenarios = [
+            "rtt",
+            "rtt_ssh",
+            "editor",
+            "grid",
+            "plan",
+            "chart",
+            "startup",
+            "idle",
+            "paging",
+            "editor_block",
+            "editor_mysql",
+        ]
+        .map(String::from)
+        .to_vec();
     }
     if o.scenarios.is_empty() {
         return Err(
-            "name a scenario: rtt, rtt_ssh, paging, editor, editor_block, grid, plan, chart, idle, startup, all or budget"
+            "name a scenario: rtt, rtt_ssh, paging, editor, editor_block, editor_mysql, grid, plan, chart, idle, startup, all or budget"
                 .into(),
         );
     }
@@ -102,6 +113,7 @@ async fn scenario(name: &str, o: &Opts) -> Result<Value, String> {
         "paging" => paging::run(&pg_url()?, &o.scratch, "SELECT * FROM analytics.events", o.max_pages, 250).await,
         "editor" => editor::run(&o.scratch, 5 * 1024 * 1024, o.runs.unwrap_or(300)),
         "editor_block" => editor::block_in_own_process(&o.scratch, 5 * 1024 * 1024),
+        "editor_mysql" => editor::run_mysql_in_own_process(&o.scratch, 5 * 1024 * 1024, o.runs.unwrap_or(300)),
         "grid" => grid::run(2_000, 24, o.runs.unwrap_or(400)),
         "plan" => plan::run(PLAN_JOINS, PLAN_PARTITIONS, o.runs.unwrap_or(300)),
         "chart" => chart::run_in_own_process(&o.scratch, CHART_ROWS, o.runs.unwrap_or(300)),
@@ -160,6 +172,8 @@ async fn budget(o: &Opts) -> Result<Vec<String>, String> {
     budget::editor(&mut c, &b, &run("editor", r))?;
     let r = editor::block_in_own_process(&o.scratch, 5 * 1024 * 1024)?;
     budget::editor_block(&mut c, &b, &run("editor_block", r))?;
+    let r = editor::run_mysql_in_own_process(&o.scratch, 5 * 1024 * 1024, 100)?;
+    budget::editor_mysql(&mut c, &b, &run("editor_mysql", r))?;
     let r = plan::run(PLAN_JOINS, PLAN_PARTITIONS, 200)?;
     budget::plan(&mut c, &b, &run("plan", r))?;
     let r = chart::run_in_own_process(&o.scratch, CHART_ROWS, 200)?;

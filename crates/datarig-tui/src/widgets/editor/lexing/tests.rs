@@ -1,6 +1,7 @@
 use super::*;
-use datarig_core::sql::lexer::{Tok, lex};
-use datarig_core::sql::split::{split, statement_at};
+use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
+use datarig_core::sql::lexer::{Tok, lex, lex_in};
+use datarig_core::sql::split::{segment_at_in, split, split_in, statement_at};
 
 /// A small deterministic random source (xorshift).
 struct Rng(u64);
@@ -60,9 +61,9 @@ fn states_of(text: &str) -> Vec<LineState> {
         .map(|&p| match toks.iter().find(|t| t.start < p && p < t.end) {
             Some(t) if matches!(t.kind, Tok::BlockComment | Tok::Str | Tok::Dollar | Tok::QuotedIdent) => {
                 let (line, byte) = pos(t.start);
-                LineState::Inside { line, byte }
+                LineState::Inside { line, byte, state: LexState::default() }
             }
-            _ => LineState::Normal,
+            _ => LineState::Normal(LexState::default()),
         })
         .collect()
 }
@@ -114,7 +115,8 @@ fn line_states_and_screen_tokens_match_a_whole_lex_after_edits() {
             // text's tokens there.
             let first = rng.below(e.lines.len());
             let last = first + 1 + rng.below(4);
-            let (base, region) = e.region_text(first, last);
+            let (base, region, state) = e.region_text(first, last);
+            assert_eq!(state, LexState::default());
             let (whole, part) = (kinds(&t), kinds(&region));
             let from = e.line_start(first) - base;
             assert_eq!(
@@ -144,7 +146,7 @@ fn the_statement_under_the_cursor_is_the_one_in_the_whole_text() {
                 let want =
                     statement_at(&stmts, off).map(|i| (stmts[i].start, stmts[i].end, stmts[i].body(&text).to_string()));
                 assert_eq!(e.current_statement(), want, "round {round}: {text:?} at {off}");
-                let (base, region, c) = e.completion_context();
+                let (base, region, _, c) = e.completion_context();
                 let (a, b) = datarig_core::sql::split::segment_at(&region, c);
                 assert_eq!(
                     (base + a, base + b),
@@ -198,4 +200,286 @@ fn right_after_a_semicolon_that_starts_its_line_is_the_statement_it_ends() {
         let want = statement_at(&stmts, off).map(|i| (stmts[i].start, stmts[i].end, stmts[i].body(text).to_string()));
         assert_eq!(e.current_statement(), want, "{text:?}");
     }
+}
+
+const MYSQL: Dialect =
+    Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false });
+
+/// MySQL-ish text: `DELIMITER` lines (also ones that are not commands: in a statement, or not at
+/// a line's start), terminators that are not `;`, executable comments, `#` and `-- ` comments,
+/// backslash escapes, backticks and variables, with `;` inside them and tokens that span lines.
+fn mysqlish(rng: &mut Rng, pieces: usize) -> String {
+    const P: &[&str] = &[
+        "SELECT 1",
+        ";",
+        ";",
+        " ",
+        "\n",
+        "\n\n",
+        "DELIMITER //\n",
+        "delimiter $$\n",
+        "DELIMITER ;\n",
+        "  Delimiter\t;;\n",
+        "delimiter",
+        "//",
+        "$$",
+        ";;",
+        "end$$",
+        "BEGIN SELECT 1; END",
+        "/*!80000 ",
+        "/*! x; */",
+        "*/",
+        "/* c; \n */",
+        "/*+ h; */",
+        "# c; ' \n",
+        "-- d;\n",
+        "--x",
+        "'a\\';\nb'",
+        "\"s;\n\"",
+        "`q;\n``r`",
+        "@'v;'",
+        "@@x.y",
+        "x.y",
+        "t.1e5",
+        "0x1F",
+        "'unterminated",
+        "/* open",
+        "\n;",
+        ";SELECT 2",
+        "\r\n",
+        "\\\n",
+        "\\G",
+        "$t$ x;\n $t$",
+        "x'4\\'; '",
+    ];
+    (0..pieces).map(|_| P[rng.below(P.len())]).collect()
+}
+
+/// The MySQL modes the fuzz tests read text in: the default, and dollar quotes with
+/// `ANSI_QUOTES` and `NO_BACKSLASH_ESCAPES`.
+const MODES: [Dialect; 2] =
+    [MYSQL, Dialect::MySql(MySqlMode { ansi_quotes: true, no_backslash_escapes: true, dollar_quotes: true })];
+
+/// The lexer state at every line start of text in dialect `d`, from a lex of the whole text.
+fn states_in(text: &str, d: Dialect) -> Vec<LineState> {
+    let toks = lex_in(text, d);
+    let mut starts = vec![0];
+    starts.extend(text.match_indices('\n').map(|(i, _)| i + 1));
+    let pos = |off: usize| {
+        let line = starts.partition_point(|s| *s <= off) - 1;
+        (line, off - starts[line])
+    };
+    let (mut ti, mut state) = (0, LexState::default());
+    starts
+        .iter()
+        .map(|&p| {
+            while ti < toks.len() && toks[ti].end <= p {
+                state = state.after(&toks[ti], text, d);
+                ti += 1;
+            }
+            match toks.get(ti) {
+                Some(t) if t.start < p && t.kind != Tok::Whitespace => {
+                    let (line, byte) = pos(t.start);
+                    LineState::Inside { line, byte, state }
+                }
+                _ => LineState::Normal(LexState { line_start: true, ..state }),
+            }
+        })
+        .collect()
+}
+
+/// The token kind of every byte of `text`, lexed in `d` from `state`.
+fn kinds_in(text: &str, d: Dialect, state: LexState) -> Vec<Tok> {
+    let mut out = vec![Tok::Whitespace; text.len()];
+    for t in datarig_core::sql::lexer::lex_from(text, d, state) {
+        for k in &mut out[t.start..t.end] {
+            *k = t.kind;
+        }
+    }
+    out
+}
+
+fn mysql_editor(text: &str, d: Dialect) -> Editor {
+    let mut e = Editor::new(text);
+    e.set_language(Language::Sql(d));
+    e
+}
+
+/// MySQL: the cached line states carry the terminator a `DELIMITER` line above set, whether a
+/// statement has begun and an open executable comment; after edits they, and the tokens of any
+/// run of lines lexed from its restart point, are the whole text's.
+#[test]
+fn mysql_line_states_and_screen_tokens_match_a_whole_lex_after_edits() {
+    let mut rng = Rng(0x1234_5678_9ABC_DEF1);
+    for round in 0..400 {
+        let n = 5 + rng.below(40);
+        let text = mysqlish(&mut rng, n);
+        let d = MODES[round % MODES.len()];
+        let mut e = mysql_editor(&text, d);
+        for upto in (0..e.lines.len()).step_by(1 + rng.below(3)) {
+            e.ensure_states(upto);
+        }
+        assert_eq!(e.states[..e.valid], states_in(&text, d)[..e.valid], "round {round}: {text:?}");
+        for _ in 0..3 {
+            let len = e.len_bytes();
+            let mut a = rng.below(len + 1);
+            let mut b = (a + rng.below(8)).min(len);
+            let t = e.text();
+            while !t.is_char_boundary(a) {
+                a -= 1;
+            }
+            while !t.is_char_boundary(b) {
+                b += 1;
+            }
+            let n = rng.below(3);
+            let ins = mysqlish(&mut rng, n);
+            e.replace_range(a, b, &ins);
+            let t = e.text();
+            let want = states_in(&t, d);
+            // Up to some line first (states after the edit known only that far), then all.
+            e.ensure_states(rng.below(e.lines.len()));
+            assert_eq!(e.states[..e.valid], want[..e.valid], "round {round}: {t:?}");
+            e.ensure_states(usize::MAX);
+            assert_eq!(e.states[..e.valid], want[..], "round {round}: {t:?}");
+            let first = rng.below(e.lines.len());
+            let last = first + 1 + rng.below(4);
+            let (base, region, state) = e.region_text(first, last);
+            let (whole, part) = (kinds_in(&t, d, LexState::default()), kinds_in(&region, d, state));
+            let from = e.line_start(first) - base;
+            assert_eq!(
+                part[from..],
+                whole[base + from..base + part.len()],
+                "round {round}: {t:?} lines {first}..{last}"
+            );
+            // Token by token too (`;;` as one terminator or two), those the region holds whole
+            // (blanks aside: a run of them is cut where the region starts).
+            let toks = |text: &str, st: LexState, off: usize, lo: usize, hi: usize| {
+                datarig_core::sql::lexer::lex_from(text, d, st)
+                    .into_iter()
+                    .map(|k| (k.start + off, k.end + off, k.kind))
+                    .filter(|k| k.0 >= lo && k.1 < hi && k.2 != Tok::Whitespace)
+                    .collect::<Vec<_>>()
+            };
+            let (lo, hi) = (base + from, base + region.len());
+            assert_eq!(
+                toks(&region, state, base, lo, hi),
+                toks(&t, LexState::default(), 0, lo, hi),
+                "round {round}: {t:?} lines {first}..{last}"
+            );
+        }
+    }
+}
+
+/// MySQL: the statement under the cursor and the completion segment, found in lines around the
+/// cursor, are the whole text's (a `DELIMITER` far above the cursor included).
+#[test]
+fn mysql_statement_under_the_cursor_is_the_one_in_the_whole_text() {
+    let mut rng = Rng(0x0DDB_A11C_0FFE_E123);
+    for round in 0..200 {
+        let n = 10 + rng.below(60);
+        let text = mysqlish(&mut rng, n);
+        let d = MODES[round % MODES.len()];
+        let mut e = mysql_editor(&text, d);
+        e.region = 1 + rng.below(3);
+        let stmts = split_in(&text, d);
+        for row in 0..e.lines.len() {
+            for col in 0..=e.gcount(row) {
+                e.row = row;
+                e.col = col;
+                let off = e.offset();
+                let want =
+                    statement_at(&stmts, off).map(|i| (stmts[i].start, stmts[i].end, stmts[i].body(&text).to_string()));
+                assert_eq!(e.current_statement(), want, "round {round}: {text:?} at {off}");
+                let (base, region, state, c) = e.completion_context();
+                let (a, b) = datarig_core::sql::split::segment_at_from(&region, c, d, state);
+                assert_eq!((base + a, base + b), segment_at_in(&text, off, d), "round {round}: {text:?} at {off}");
+            }
+        }
+    }
+}
+
+/// A `DELIMITER` 5,000 lines above decides what ends the statement under the cursor, and a
+/// Visual selection inside the block is split as the whole text is.
+#[test]
+fn mysql_delimiter_far_above_the_cursor_ends_the_statement() {
+    let mut text = String::from("DELIMITER $$\n");
+    for i in 0..5000 {
+        text.push_str(&format!("-- filler {i}\n"));
+    }
+    text.push_str("CREATE PROCEDURE p() BEGIN\n  SELECT 1;\n  SELECT 2;\nEND$$\nDELIMITER ;\nSELECT 3;\n");
+    let mut e = mysql_editor(&text, MYSQL);
+    e.row = 5002;
+    e.col = 4;
+    let (_, _, body) = e.current_statement().expect("a statement");
+    assert_eq!(body, "CREATE PROCEDURE p() BEGIN\n  SELECT 1;\n  SELECT 2;\nEND");
+    e.row = 5006;
+    let (_, _, body) = e.current_statement().expect("a statement");
+    assert_eq!(body, "SELECT 3");
+    // A selection of the procedure's lines is one statement.
+    e.row = 5001;
+    e.col = 0;
+    crate::widgets::editor::tests::typ(&mut e, "Vjjj");
+    let (stmts, _) = e.run_statements();
+    assert_eq!(stmts, ["CREATE PROCEDURE p() BEGIN\n  SELECT 1;\n  SELECT 2;\nEND"]);
+}
+
+/// MySQL text on screen: the `DELIMITER` line as a keyword, an executable comment's opening and
+/// closing in their own style with the code inside highlighted as code, `"…"` as a string,
+/// backtick names as quoted names, `#` comments as comments (also on lines lexed from a state
+/// below the `DELIMITER`).
+#[test]
+fn mysql_text_is_highlighted_as_mysql() {
+    use ratatui::buffer::Buffer;
+    use ratatui::layout::Rect;
+    let text = "DELIMITER //\nSELECT 1 /*!80000 + 1 */, \"s\", `q` # c\n//";
+    let mut e = mysql_editor(text, MYSQL);
+    let area = Rect::new(0, 0, 60, 4);
+    let mut buf = Buffer::empty(area);
+    e.render(area, &mut buf, None);
+    let th = crate::theme::cur();
+    let x0 = e.gutter as u16;
+    let fg_at = |line: usize, col: usize| buf[(x0 + col as u16, line as u16)].fg;
+    let line1 = e.lines[1].clone();
+    let col = |needle: &str| line1.find(needle).expect(needle);
+    assert_eq!(fg_at(0, 0), th.syn_keyword.fg.unwrap(), "DELIMITER");
+    assert_eq!(fg_at(1, col("/*!")), th.syn_exec_comment.fg.unwrap());
+    assert_eq!(fg_at(1, col("*/")), th.syn_exec_comment.fg.unwrap());
+    assert_eq!(fg_at(1, col("+ 1")), th.syn_operator.fg.unwrap(), "code inside");
+    assert_eq!(fg_at(1, col("1 */")), th.syn_number.fg.unwrap(), "code inside");
+    assert_eq!(fg_at(1, col("\"s\"")), th.syn_string.fg.unwrap());
+    assert_eq!(fg_at(1, col("`q`")), th.syn_quoted_ident.fg.unwrap());
+    assert_eq!(fg_at(1, col("# c")), th.syn_comment.fg.unwrap());
+    assert_ne!(th.syn_exec_comment.fg, th.syn_comment.fg);
+}
+
+/// A selection is split as the whole text reads it where the selection starts: after a
+/// statement on its line, `DELIMITER` is no command; at a line's start below a `DELIMITER $$`,
+/// `$$` ends the statements.
+#[test]
+fn mysql_selections_split_as_the_whole_text() {
+    let mut e = mysql_editor("SELECT 1; DELIMITER //\nSELECT 2//", MYSQL);
+    e.row = 0;
+    e.col = 10;
+    crate::widgets::editor::tests::typ(&mut e, "vG$");
+    assert_eq!(e.run_statements().0, ["DELIMITER //\nSELECT 2//"]);
+    let mut e = mysql_editor("DELIMITER $$\nSELECT 1; SELECT 2$$ SELECT 3$$", MYSQL);
+    e.row = 1;
+    e.col = 0;
+    crate::widgets::editor::tests::typ(&mut e, "v$");
+    assert_eq!(e.run_statements().0, ["SELECT 1; SELECT 2", "SELECT 3"]);
+}
+
+/// A byte between the characters of a terminator a `DELIMITER` far above set lies inside a
+/// token (formatting a selection that ends there is refused).
+#[test]
+fn mysql_terminators_far_below_their_delimiter_are_one_token() {
+    let mut text = String::from("DELIMITER //\n");
+    for i in 0..3000 {
+        text.push_str(&format!("SELECT {i}//\n"));
+    }
+    let mut e = mysql_editor(&text, MYSQL);
+    let off = text.rfind("//").expect("//") + 1;
+    assert!(e.splits_token(off));
+    let mut pg = Editor::new(&text);
+    assert!(!pg.splits_token(off), "PostgreSQL: two operators");
 }

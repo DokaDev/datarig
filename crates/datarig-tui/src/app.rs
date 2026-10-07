@@ -90,7 +90,7 @@ use datarig_core::policy::Policies;
 use datarig_core::profile::folder::{FolderPath, Folders};
 use datarig_core::profile::{ConnectionConfig, ProfileId};
 use datarig_core::secret::{DefaultSource, MemoryStore, SecretStore, Secrets, SourceError, SourceKind, Stores};
-use datarig_core::sql::complete::{Candidate, complete_in_dialect};
+use datarig_core::sql::complete::{Candidate, complete_from};
 use datarig_core::sql::dialect::{Dialect, Language};
 use datarig_core::sql::risk::Classifier;
 use explorer::Explorer;

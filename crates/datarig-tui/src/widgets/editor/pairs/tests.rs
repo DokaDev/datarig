@@ -132,3 +132,27 @@ fn a_count_repeats_the_whole_pair() {
         ("", (0, 0), "2o(<Esc>", "\n()\n()", (2, 0)),
     ]);
 }
+
+/// MySQL: nothing pairs inside a string a backslash keeps open, a `"…"` string, a backtick name
+/// or a `#` comment; after a string it closed, pairs do (where PostgreSQL's reading differs).
+#[test]
+fn mysql_strings_and_comments_keep_pairs_out() {
+    use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
+    let my = Language::Sql(Dialect::MySql(MySqlMode::default()));
+    for (text, cursor, keys, want) in [
+        ("select 'it\\' ", (0, 13), "a(", "select 'it\\' ("),
+        ("select \"ab ", (0, 11), "a(", "select \"ab ("),
+        ("select `ab ", (0, 11), "a(", "select `ab ("),
+        ("select 1 # ab ", (0, 14), "a(", "select 1 # ab ("),
+        ("select 'a\\'' ", (0, 13), "a(", "select 'a\\'' ()"),
+    ] {
+        let mut e = on(text, cursor);
+        e.set_language(my);
+        typ(&mut e, keys);
+        assert_eq!(e.text(), want, "{text:?}");
+    }
+    // PostgreSQL: `'it\'` is a closed string and `#` an operator.
+    let mut e = on("select 'it\\' ", (0, 13));
+    typ(&mut e, "a(");
+    assert_eq!(e.text(), "select 'it\\' ()");
+}

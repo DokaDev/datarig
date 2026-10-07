@@ -360,8 +360,8 @@ impl App {
         let t = self.tabs.active_mut();
         // The text around the cursor holds its whole `;`-delimited segment, which is all the
         // completer reads.
-        let (base, text, off) = t.editor.completion_context();
-        t.popup = complete_in_dialect(&text, off, catalog, force, &path, dialect).map(|c| Popup {
+        let (base, text, state, off) = t.editor.completion_context();
+        t.popup = complete_from(&text, off, catalog, force, &path, dialect, state).map(|c| Popup {
             items: c.items,
             selected: 0,
             replace_start: base + c.replace_start,

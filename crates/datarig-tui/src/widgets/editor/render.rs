@@ -8,7 +8,7 @@ use super::buffer::gw;
 use super::runs::{HintKind, RunHint};
 use super::{Editor, Mode};
 use crate::theme;
-use datarig_core::sql::lexer::{Tok, lex_in};
+use datarig_core::sql::lexer::Tok;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::Style;
@@ -52,8 +52,8 @@ impl Editor {
 
         // Tokens of the lines on screen, lexed from where the lexer's state is known.
         let last = (self.top + h).min(self.lines.len());
-        let (base, region) = self.region_text(self.top, last);
-        let toks = lex_in(&region, self.lang.dialect());
+        let (base, region, state) = self.region_text(self.top, last);
+        let toks = self.lex(&region, state);
         let is_fn: Vec<bool> = toks
             .iter()
             .enumerate()

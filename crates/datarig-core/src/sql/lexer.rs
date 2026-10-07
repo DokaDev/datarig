@@ -126,14 +126,25 @@ impl std::fmt::Debug for Delimiter {
 ///
 /// MySQL's: the statement terminator in effect (a client `DELIMITER` line changes it), whether
 /// a statement has begun since the last one ended (a `DELIMITER` line counts only between
-/// statements) and whether the place is inside an executable comment (`/*! … */`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+/// statements), whether the place is inside an executable comment (`/*! … */`), and whether
+/// only blanks and comments come before it on its line (a `DELIMITER` line starts so).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct LexState {
     pub delimiter: Delimiter,
     /// A statement has begun and not ended yet.
     pub pending: bool,
     /// Inside an executable comment: the next `*/` closes it.
     pub exec: bool,
+    /// Only blanks and comments before it on its line, and the line does not start inside a
+    /// token (a line's start is one).
+    pub line_start: bool,
+}
+
+impl Default for LexState {
+    /// The start of a text: `;` ends a statement, none has begun, at a line's start.
+    fn default() -> Self {
+        Self { delimiter: Delimiter::default(), pending: false, exec: false, line_start: true }
+    }
 }
 
 impl LexState {
