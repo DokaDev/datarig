@@ -225,8 +225,8 @@ fn delimiter_lines_as_the_client_reads_them() {
     assert_eq!(delim("delimiter \\\\x"), ";", "a backslash left is refused");
     assert_eq!(delim("delimiter '\\x'"), ";", "in quotes too");
     assert_eq!(delim("delimiter $$\t-- x"), "$$\t--", "only a space ends the word");
-    assert_eq!(delim("delimiter //\r"), "//\r", "a carriage return too is part of it");
-    assert_eq!(delim("delimiter\r"), ";", "the word then a carriage return: no command");
+    assert_eq!(delim("delimiter //\r"), "//", "the client reads lines without their carriage return");
+    assert_eq!(delim("delimiter\r\n"), ";", "a command without its word");
     assert_eq!(delim("/* a\nb */ delimiter //"), ";", "a line that starts in a comment");
     assert_eq!(delim("'a\nb' delimiter //"), ";", "a line that starts in a string");
     assert_eq!(delim("/*! x */\ndelimiter //"), ";", "after an executable comment");
@@ -358,4 +358,25 @@ fn dollar_quotes_where_the_server_reads_them() {
 fn executable_comment_versions() {
     assert_eq!(kinds("/*!8000001 x */")[..2], [(Tok::ExecComment, "/*!80000"), (Tok::Number, "01")]);
     assert_eq!(kinds("/*!080400 x */")[0], (Tok::ExecComment, "/*!080400"));
+}
+
+/// A script with `\r\n` line ends splits as one with `\n` ends: the client reads its lines
+/// without the carriage returns.
+#[test]
+fn crlf_scripts_split_as_the_client_does() {
+    let src = "delimiter $$\r\nselect 1 $$ -- one\r\nselect 2$$\r\ndelimiter ;\r\nselect 3; -- three\r\nselect 4;\r\n";
+    let bodies: Vec<&str> = crate::sql::split::split_in(src, MY).iter().map(|s| s.body(src)).collect();
+    assert_eq!(bodies, ["select 1", "select 2", "select 3", "select 4"]);
+}
+
+/// A backslash at the end of a line is dropped by the client: a `DELIMITER` on the next line is
+/// still a command.
+#[test]
+fn a_backslash_at_a_line_end_is_dropped() {
+    let src = "\\\ndelimiter $$\nselect 6$$";
+    assert_eq!(
+        kinds(src),
+        [(Tok::Directive, "delimiter $$"), (Tok::Keyword, "select"), (Tok::Number, "6"), (Tok::Semi, "$$")]
+    );
+    assert_eq!(kinds("select 1 \\"), [(Tok::Keyword, "select"), (Tok::Number, "1")]);
 }

@@ -13,8 +13,9 @@
 //! * operator characters written together stay together and those written apart stay apart
 //!   (the lexer reads each operator character alone, the server reads `<=` or `->>` as one
 //!   operator), as do, in PostgreSQL, `U&` before a string or a name, `:` before what follows
-//!   it (a psql variable) and `\` (a psql command), and in MySQL a word and the `(` after it
-//!   (a built-in function's name followed by a blank is read otherwise);
+//!   it (a psql variable) and `\` (a psql command), and in MySQL the name of a built-in function
+//!   the server parses itself (`count`, `group_concat`, …) and the `(` after it (followed by a
+//!   blank it is read otherwise);
 //! * two strings in a row keep a line break between them, or keep none (strings separated by a
 //!   line break are one string to the server);
 //! * the rebuilt text lexes to the input's tokens again, exactly but for the case of keywords;
@@ -27,6 +28,47 @@ use super::dialect::Dialect;
 use super::ident;
 use super::lexer::{Tok, Token, lex_in};
 use std::ops::Range;
+
+/// MySQL's built-in functions whose name must be followed by `(` right away, unless the
+/// session has `IGNORE_SPACE` (the manual's "Function Name Parsing and Resolution", 8.0 to
+/// 9.x).
+const MYSQL_SPECIAL_FUNCTIONS: &[&str] = &[
+    "ADDDATE",
+    "BIT_AND",
+    "BIT_OR",
+    "BIT_XOR",
+    "CAST",
+    "COUNT",
+    "CURDATE",
+    "CURTIME",
+    "DATE_ADD",
+    "DATE_SUB",
+    "EXTRACT",
+    "GROUP_CONCAT",
+    "JSON_ARRAYAGG",
+    "JSON_OBJECTAGG",
+    "MAX",
+    "MID",
+    "MIN",
+    "NOW",
+    "POSITION",
+    "SESSION_USER",
+    "ST_COLLECT",
+    "STD",
+    "STDDEV",
+    "STDDEV_POP",
+    "STDDEV_SAMP",
+    "SUBDATE",
+    "SUBSTR",
+    "SUBSTRING",
+    "SUM",
+    "SYSDATE",
+    "SYSTEM_USER",
+    "TRIM",
+    "VARIANCE",
+    "VAR_POP",
+    "VAR_SAMP",
+];
 
 /// What a dollar-quoted body is to `sqlformat`.
 const DOLLAR_MASK: &str = "''";
@@ -179,9 +221,13 @@ fn layout_only(d: Dialect, toks: &[Token], i: usize, src: &str, after: &str) -> 
     };
     let keep = (a.kind == Tok::Op && b.kind == Tok::Op)
         || match d {
-            // A function's name and its `(` (MySQL reads `count (*)` otherwise, unless
-            // `IGNORE_SPACE`).
-            Dialect::MySql(_) => a.is_word() && b.kind == Tok::LParen,
+            // A built-in function MySQL parses itself and its `(`: with a blank between (and
+            // `IGNORE_SPACE` off, the default) the server reads `count (*)` otherwise.
+            Dialect::MySql(_) => {
+                b.kind == Tok::LParen
+                    && a.is_word()
+                    && MYSQL_SPECIAL_FUNCTIONS.contains(&ta.to_ascii_uppercase().as_str())
+            }
             Dialect::Postgres => {
                 unicode_escape(a, b)
                     || (i >= 2 && unicode_escape(&toks[i - 2], a))

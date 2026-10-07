@@ -72,6 +72,9 @@ const QUIRKS: &[&str] = &[
     "delimiter \u{e9}\nSELECT 1\u{e9} SELECT 2\u{e9}\n",
     // The word after DELIMITER: a tab does not end it, a backslash escapes, `\\` is refused.
     "delimiter $$\t-- x\nSELECT 1$$\t--\nSELECT 2$$\t--\nDELIMITER a\\b\nSELECT 3ab\ndelimiter \\\\x\nSELECT 4ab\ndelimiter ;\nSELECT 5;",
+    // `\r\n` line ends; a backslash at a line's end.
+    "delimiter $$\r\nselect 1 $$ -- one\r\nselect 2$$\r\ndelimiter ;\r\nselect 3; -- three\r\nselect 4;\r\n",
+    "\\\ndelimiter $$\nselect 6$$\ndelimiter ;\nselect 7;",
     // Dollar quotes, when the server reads them (else `$$a` is a name).
     "SELECT $$a;b$$ AS d; SELECT $t$ $$ ; $t$; SELECT 1;",
 ];

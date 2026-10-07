@@ -10,7 +10,8 @@
 //! * `#` starts a comment, and so does `--` followed by a blank or the end of the line (`a--1`
 //!   is `a - -1`); both end at `\n` only;
 //! * `/* … */` does not nest; `/*!…*/` and `/*!80023 …*/` are executable comments: the server
-//!   runs what is inside (when its version is at least the number: five digits, or six), so
+//!   runs what is inside (when its version is at least the number: five digits, or six from
+//!   MySQL 8.4 on), so
 //!   their opening and closing are tokens of their own ([`Tok::ExecComment`]) and what lies
 //!   between is code. A `/* … */` inside one is a comment; `/*+ … */` (optimizer hints) is a
 //!   comment;
@@ -31,15 +32,20 @@
 //!   name or a comment, at an ASCII character (the client passes other characters over), also
 //!   in a name or a number (`end$$`), its case as set; inside an executable comment too, as the
 //!   client does not read those as comments;
-//! * `\g` and `\G` outside strings end a statement too; a backslash outside strings takes the
-//!   next character with it (`\'` opens no string).
+//! * `\g` and `\G` outside strings end a statement too (as the interactive client, and MySQL 8's
+//!   in a script; 9.x's needs `--commands` there); a backslash outside strings takes the next
+//!   character with it (`\'` opens no string), and at the end of a line it is dropped.
 //!
 //! Where the client's own reading is broken, the server's is followed: an optimizer hint over
-//! several lines stays a comment (the client reads its next lines as code), and a `DELIMITER`
-//! line is no command after a statement on the same line or after an executable comment (the
-//! client then drops text: those go to the server and fail there). The client's other commands
-//! (`\c`, `\d`, `go`, `source`, `use` without a terminator, …) are not read: such text goes to
-//! the server as it is and fails there.
+//! several lines stays a comment (the client reads its next lines as code); a `DELIMITER` line is
+//! no command after a statement on the same line or after an executable comment (the client then
+//! drops text: those go to the server and fail there); `@$$` is a variable (the client opens a
+//! dollar quote after the `@`); the terminator is looked for where a token starts and inside names,
+//! numbers, variables and blanks, not inside a comment's two-character marks (`*/` then `/`, with
+//! `//` as the terminator) or a string's prefix (`x'`); a terminator of more than 15 bytes is cut
+//! at a character's end, not at the 15th byte. The client's other commands (`\c`, `\d`, `go`,
+//! `source`, `use` without a terminator, …) are not read: such text goes to the server as it is and
+//! fails there.
 
 use super::{Cursor, Delimiter, LexState, Tok, Token, is_space};
 use crate::sql::dialect::{Dialect, MySqlMode};
@@ -403,11 +409,18 @@ pub(super) fn lex(src: &str, mode: MySqlMode, mut state: LexState) -> Vec<Token>
             Tok::Semi
         } else if c == '\\' {
             // A client command: `\g` and `\G` send the statement; another takes its character
-            // with it.
+            // with it. At the end of a line the client drops it.
             lx.cur.bump();
-            match lx.cur.bump() {
-                Some('g' | 'G') => Tok::Semi,
-                _ => Tok::Op,
+            match lx.cur.peek() {
+                None | Some('\n') => Tok::Whitespace,
+                Some('g' | 'G') => {
+                    lx.cur.bump();
+                    Tok::Semi
+                }
+                Some(_) => {
+                    lx.cur.bump();
+                    Tok::Op
+                }
             }
         } else if is_space(c) {
             lx.cur.bump();
@@ -503,10 +516,12 @@ fn glued_after_ident(src: &str, at: usize) -> bool {
     src[..at].chars().next_back().is_some_and(is_ident_char)
 }
 
-/// A `DELIMITER` command starts `rest`: the word, then a space, a tab or the end of the line.
+/// A `DELIMITER` command starts `rest`: the word, then a space, a tab or the end of the line
+/// (a `\r\n` one too: the client reads lines without their carriage return).
 fn directive_at(rest: &str) -> bool {
+    let after = rest.get(DIRECTIVE.len()..).unwrap_or("");
     rest.get(..DIRECTIVE.len()).is_some_and(|w| w.eq_ignore_ascii_case(DIRECTIVE))
-        && rest[DIRECTIVE.len()..].chars().next().is_none_or(|c| matches!(c, ' ' | '\t' | '\n'))
+        && (after.is_empty() || after.starts_with([' ', '\t', '\n']) || after.starts_with("\r\n") || after == "\r")
 }
 
 /// The last token is a `.` written right after a name (or a keyword read as one): what follows
@@ -533,6 +548,8 @@ fn glued_name(out: &[Token], at: usize) -> bool {
 /// it kept); `None` when there is none or it holds a backslash (the client refuses it and keeps
 /// the one it had).
 pub(super) fn directive_delimiter(line: &str) -> Option<Delimiter> {
+    // The client reads a line without its carriage return.
+    let line = line.strip_suffix('\r').unwrap_or(line);
     let rest = line.get(DIRECTIVE.len()..)?.trim_start_matches(is_space);
     let arg: String = match rest.chars().next()? {
         q @ ('\'' | '"' | '`') => {

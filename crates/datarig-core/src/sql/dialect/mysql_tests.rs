@@ -317,6 +317,10 @@ fn danger_12_the_formatter_keeps_mysql_tokens() {
         ("select x'41', _utf8mb4'u', 0x1F, t.1e5 from t", false),
         // `sqlformat` writes `group_concat (a)`: refused.
         ("select group_concat(a), count(*), substring(b, 1) from t group by c", false),
+        // A blank after other words before `(` is fine (`IN (`, `IF (`, `VALUES (`).
+        ("select a from t where a in(1,2) and if(a,1,2) = 1", true),
+        ("insert into t(a) values(1)", true),
+        ("select count(*), max(a) from t", true),
     ] {
         let formatted = format_in(src, opts, "", MY);
         assert_eq!(formatted.is_ok(), laid_out, "{src:?} => {formatted:?}");
