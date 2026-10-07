@@ -570,8 +570,9 @@ is tested only lightly.
   so.
 - A `USE` typed in a console is not followed by the header and completion; use `:use`.
 - The estimates are the server's (`TABLE_ROWS`), which can be far off for InnoDB. A view whose
-  table was dropped is listed without columns. On a server with tens of thousands of tables the
-  explorer's catalog read may hit its 10-second limit.
+  table was dropped is listed without columns, and a database that does not exist or that you
+  may not read shows as empty. On a server with tens of thousands of tables the explorer's
+  catalog read may hit its 10-second limit.
 
 **Paging and locks.** As on PostgreSQL, nothing is held open while you read a result by default.
 The query session keeps `sql_select_limit` at a page and one row, so the first page is read to
@@ -605,9 +606,12 @@ file in the profile (`server_public_key_file`, the PEM of `SHOW STATUS LIKE
 'Caching_sha2_password_rsa_public_key'`), or allow asking for it
 (`allow_public_key_retrieval = true`). A server on your own machine is asked as before. A
 `mysql_native_password` login over plain TCP can be cracked offline from a capture whatever the
-key; use an SSH tunnel for any server that is not on your own machine. `ERROR 1045` may also
-mean the account requires TLS (`REQUIRE SSL`), which no password fixes: after a typed password
-is refused, datarig shows the error instead of asking again.
+key, and so can a weak password from any captured login exchange (someone in between can also
+choose what the server's side of it says). Use an SSH tunnel for any server that is not on your
+own machine: through a tunnel the connection is encrypted as far as the bastion, and the hop from
+the bastion to the server is only as private as the network there. `ERROR 1045` may also mean
+the account requires TLS (`REQUIRE SSL`), which no password fixes: after a typed password is
+refused, datarig shows the error instead of asking again, and connecting again asks again.
 
 ## SSH tunnels
 
