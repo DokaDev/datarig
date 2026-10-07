@@ -30,22 +30,34 @@ fn the_limit_is_set_only_before_queries() {
         "VALUES ROW(1)",
         "(SELECT 1)",
         "/*!80000 SELECT 1 */",
+        // Listings the server cuts at the limit: set before them too (to none, they are read whole).
+        "SHOW TABLES",
+        "show session variables",
+        "DESCRIBE t",
+        "desc `t`",
     ] {
         assert!(limit_applies(sql, MODE), "{sql}");
     }
     for sql in [
         "SHOW WARNINGS",
-        "SHOW TABLES",
+        "SHOW ERRORS",
+        "SHOW COUNT(*) WARNINGS",
         "EXPLAIN SELECT 1",
+        "DESCRIBE SELECT 1",
+        "DESC ANALYZE DELETE FROM t",
+        "DESCRIBE FORMAT=TREE SELECT 1",
         "CALL p()",
         "INSERT INTO t VALUES (1)",
         "SET sql_mode = ''",
         "GET DIAGNOSTICS @n = NUMBER",
         "HELP 'select'",
-        "DESCRIBE t",
     ] {
         assert!(!limit_applies(sql, MODE), "{sql}");
     }
+    assert!(lists("SHOW FULL PROCESSLIST", MODE) && lists("DESCRIBE shop.users", MODE));
+    assert!(!lists("SELECT 1", MODE) && !lists("SHOW WARNINGS", MODE) && !lists("DESC SELECT 1", MODE));
+    assert!(reads_outcome("SELECT ROW_COUNT()", MODE) && reads_outcome("select found_rows()", MODE));
+    assert!(!reads_outcome("SELECT 'ROW_COUNT'", MODE));
 }
 
 #[test]

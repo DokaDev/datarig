@@ -40,17 +40,19 @@
 //! `SAVEPOINT datarig_explain`, rolled back to and released afterwards (before the run answers).
 //!
 //! **Read-only sessions** (a read-only policy): the server's session is read-only
-//! (`transaction_read_only`), which refuses every write, whatever runs it. MySQL lets a statement
-//! ask for a read-write transaction anyway (`START TRANSACTION READ WRITE`, `SET SESSION
-//! transaction_read_only = OFF`): the app refuses those before they are sent, the session
-//! refuses them again ([`DbError::ReadWriteRefused`]), and after every statement it checks what
-//! the server says: a session that is not read-only any more (the tracked variable), or a
-//! transaction that is not read-only (the status flags), is rolled back and closed at once
-//! ([`DbError::ReadOnlyLost`]).
+//! (`transaction_read_only`), which refuses writes while it is on. MySQL lets a statement turn it
+//! off (`START TRANSACTION READ WRITE`, `SET SESSION transaction_read_only = OFF`, a procedure or
+//! an executable comment that does, then turns it on again): the app refuses everything its
+//! read-only policy does not let through before it is sent, and the session refuses it again
+//! ([`DbError::ReadWriteRefused`]). After every statement it checks what the server says: a
+//! session that is not read-only any more (the tracked variable), or a transaction that is not
+//! read-only (the status flags), is rolled back and closed at once ([`DbError::ReadOnlyLost`]).
+//! Only an account without write privileges is read-only whatever runs.
 //!
 //! **Cancel**: `KILL QUERY` of the session's connection from a connection of its own
 //! (`session::Killer`), only while a statement of the session is on its way or running (`busy`);
-//! a run of several statements also stops before its next one.
+//! a run of several statements also stops before its next one. A kill whose login comes after a
+//! new run began is not sent.
 //!
 //! The session reports the sql mode its text is read in when it changes (`DbEvent::Language`),
 //! and what the server said of a statement beyond its outcome (`DbEvent::Info`: the id an
@@ -441,7 +443,8 @@ struct Undo {
 
 impl Undo {
     /// Outside the user's transaction a transaction of its own, rolled back; inside it a
-    /// savepoint, rolled back to and released.
+    /// savepoint, rolled back to and released. The row locks the statement took stay with the
+    /// user's transaction until it ends (InnoDB keeps them past a rollback to a savepoint).
     fn of(open: bool) -> Self {
         if open {
             Undo {
@@ -476,14 +479,17 @@ async fn statement<'a>(
     step: Step,
 ) -> Result<Option<(Reply<'a>, Outcome)>, Halted<'a>> {
     let risk = risk::classify(sql, s.mode);
-    // A read-only session never asks for read-write (the app refuses it first).
-    if env.read_only && risk.read_write {
+    // A read-only session runs only what the app's read-only policy lets through (the app
+    // refuses the rest first): the server's read-only stops writes, not a procedure or an
+    // executable comment that turns it off, writes, and turns it on again.
+    if env.read_only && (risk.read_write || risk.read_only().is_err()) {
         reply.fail(DbError::ReadWriteRefused, false);
         return Ok(None);
     }
     let undo = (explains(sql, s.mode) && risk.rolls_back()).then(|| Undo::of(s.tx.open));
-    // The result is held: the user's transaction, or a held last statement.
-    let held = step.last && (step.hold || s.tx.open);
+    // The result is held: the user's transaction, a held last statement, or a listing the app
+    // cannot read on by running it again (`SHOW`, `DESCRIBE`): read to its end.
+    let held = step.last && (step.hold || s.tx.open || lists(sql, s.mode));
     // The limit: a page and one row more (and the rows a `Resume` skips) for a last statement not
     // held, else the user's own; set only before a statement it applies to.
     let wanted = if step.last && !held {
@@ -492,7 +498,9 @@ async fn statement<'a>(
     } else {
         s.limit.user
     };
-    if limit_applies(sql, s.mode) && wanted != s.limit.current {
+    // Not before a statement that reads the outcome of the one before (`ROW_COUNT()`,
+    // `FOUND_ROWS()`): the `SET` would be that statement.
+    if limit_applies(sql, s.mode) && wanted != s.limit.current && !reads_outcome(sql, s.mode) {
         let set = format!("SET SESSION sql_select_limit = {}", wanted.map_or("DEFAULT".to_string(), |n| n.to_string()));
         if let Err(e) = halt!(link.guard(None, conn.query_drop(set)).await, Some(reply)) {
             return failed(conn, link, env, s, reply, &e, false).await;
@@ -988,15 +996,48 @@ fn explains(sql: &str, mode: MySqlMode) -> bool {
 }
 
 /// Whether the session's `sql_select_limit` applies to `sql`, from its first word: a query
-/// (`SELECT`, `WITH`, `TABLE`, `VALUES`), or text that does not start with a word (a
-/// parenthesis, an executable comment). Only before such a statement is the limit set: any other
-/// statement keeps the diagnostics of the one before (`SHOW WARNINGS` lists the warnings of the
-/// last statement that is not a diagnostic one, and a `SET` of the session's would be).
+/// (`SELECT`, `WITH`, `TABLE`, `VALUES`), a listing ([`lists`]), or text that does not start
+/// with a word (a parenthesis, an executable comment). Only before such a statement is the limit
+/// set: any other statement keeps the diagnostics of the one before (`SHOW WARNINGS` lists the
+/// warnings of the last statement that is not a diagnostic one, and a `SET` of the session's
+/// would be).
 fn limit_applies(sql: &str, mode: MySqlMode) -> bool {
     match first_word(sql, mode) {
         None => true,
-        Some(w) => matches!(w.as_str(), "SELECT" | "WITH" | "TABLE" | "VALUES"),
+        Some(w) => matches!(w.as_str(), "SELECT" | "WITH" | "TABLE" | "VALUES") || lists(sql, mode),
     }
+}
+
+/// Whether `sql` is a listing the server cuts at `sql_select_limit` (`SHOW` but its diagnostics,
+/// `DESCRIBE`/`DESC` of a table, not of a statement: that is an `EXPLAIN`): it is read without
+/// the page limit, to its end.
+fn lists(sql: &str, mode: MySqlMode) -> bool {
+    let w = words(sql, mode);
+    match w.first().map(String::as_str) {
+        Some("DESCRIBE" | "DESC") => !matches!(
+            w.get(1).map(String::as_str),
+            Some(
+                "ANALYZE"
+                    | "FORMAT"
+                    | "FOR"
+                    | "SELECT"
+                    | "WITH"
+                    | "TABLE"
+                    | "VALUES"
+                    | "INSERT"
+                    | "UPDATE"
+                    | "DELETE"
+                    | "REPLACE"
+            )
+        ),
+        Some("SHOW") => !matches!(w.get(1).map(String::as_str), Some("WARNINGS" | "ERRORS" | "COUNT")),
+        _ => false,
+    }
+}
+
+/// Whether `sql` reads what the statement before it did (`ROW_COUNT()`, `FOUND_ROWS()`).
+fn reads_outcome(sql: &str, mode: MySqlMode) -> bool {
+    words(sql, mode).iter().any(|w| matches!(w.as_str(), "ROW_COUNT" | "FOUND_ROWS"))
 }
 
 /// Whether `sql` ends the transaction and opens another at once: `COMMIT`/`ROLLBACK … AND CHAIN`

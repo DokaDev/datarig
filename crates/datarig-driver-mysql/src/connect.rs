@@ -46,8 +46,11 @@ impl Canceller for MyCanceller {
         }
         let killer = self.killer.lock().ok().and_then(|g| g.clone());
         if let Some(killer) = killer {
+            // Still this run's statement: a run that begins since clears `asked`.
+            let (asked, busy) = (self.asked.clone(), self.busy.clone());
+            let still = move || asked.load(Ordering::SeqCst) && busy.load(Ordering::SeqCst);
             // Unreported either way: a panic in it is only kept off the screen.
-            tokio::spawn(AssertUnwindSafe(caught(async move { killer.kill_query().await })).catch_unwind());
+            tokio::spawn(AssertUnwindSafe(caught(async move { killer.kill_query_if(still).await })).catch_unwind());
         }
     }
 }

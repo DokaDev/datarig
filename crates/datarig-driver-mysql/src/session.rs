@@ -399,11 +399,20 @@ impl Killer {
     /// Ask the server to stop what the session runs. A failure is not reported: the statement
     /// then simply runs on.
     pub(crate) async fn kill_query(&self) {
+        self.kill_query_if(|| true).await;
+    }
+
+    /// [`Killer::kill_query`], if `still` holds once the connection to send it on is open (the
+    /// login can take a while, through a tunnel most: by then the statement may have ended and
+    /// another run begun, which the kill must not stop).
+    pub(crate) async fn kill_query_if(&self, still: impl Fn() -> bool) {
         let kill = async {
             let stream = self.route.dial(DIAL_TIMEOUT).await.ok()?;
             let (_wire, stream) = Wire::new(stream);
             let mut conn = Conn::connect_with_stream(self.opts.clone(), Box::new(stream)).await.ok()?;
-            let _ = conn.query_drop(format!("KILL QUERY {}", self.id)).await;
+            if still() {
+                let _ = conn.query_drop(format!("KILL QUERY {}", self.id)).await;
+            }
             quit(conn).await;
             Some(())
         };
