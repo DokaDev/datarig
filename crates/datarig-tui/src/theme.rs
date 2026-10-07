@@ -85,6 +85,9 @@ pub struct Theme {
     pub syn_operator: Style,
     pub syn_identifier: Style,
     pub syn_quoted_ident: Style,
+    /// The opening and closing of an executable comment (MySQL's `/*!` … `*/`), whose inside
+    /// is code: set apart from comments, as the server runs it.
+    pub syn_exec_comment: Style,
     /// Key column marks: primary key, foreign key, unique key. Each reads on the background
     /// and the grid's header surface and stays apart from the other two, also in 256 colors.
     pub key_pk: Color,
@@ -155,6 +158,7 @@ pub const DARK: Theme = Theme {
     syn_operator: Style::new().fg(rgb(0x8A93A6)),
     syn_identifier: Style::new().fg(rgb(0xD8DEE9)),
     syn_quoted_ident: Style::new().fg(rgb(0x4FB3A9)),
+    syn_exec_comment: Style::new().fg(rgb(0xE6C35C)).add_modifier(Modifier::BOLD),
     key_pk: rgb(0xE5C07B),
     key_fk: rgb(0x61AFEF),
     key_uq: rgb(0xC678DD),
@@ -374,7 +378,7 @@ tokens! {
         warning, error, null_fg, key_pk, key_fk, key_uq, mode_normal, mode_insert, mode_visual, mode_command,
         mode_fg, chart_1, chart_2, chart_3, chart_4, chart_5, chart_6;
     styles: selection, range, cursor_line, current_stmt, running_stmt, run_hint, syn_keyword, syn_function, syn_string, syn_number,
-        syn_comment, syn_operator, syn_identifier, syn_quoted_ident, search_match, match_paren, read_only_mark,
+        syn_comment, syn_operator, syn_identifier, syn_quoted_ident, syn_exec_comment, search_match, match_paren, read_only_mark,
         danger_mark, plan_hot, plan_misestimate,
 }
 
@@ -438,7 +442,9 @@ impl Theme {
             Tok::Number => self.syn_number,
             Tok::LineComment | Tok::BlockComment => self.syn_comment,
             Tok::QuotedIdent => self.syn_quoted_ident,
-            Tok::Ident | Tok::Param => self.syn_identifier,
+            Tok::ExecComment => self.syn_exec_comment,
+            Tok::Directive => self.syn_keyword,
+            Tok::Ident | Tok::Param | Tok::Variable => self.syn_identifier,
             Tok::Op | Tok::Semi | Tok::Dot | Tok::Comma | Tok::LParen | Tok::RParen => self.syn_operator,
             Tok::Whitespace => Style::new().fg(self.fg),
         }

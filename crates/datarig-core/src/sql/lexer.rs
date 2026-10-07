@@ -1,6 +1,8 @@
 //! Tolerant SQL lexer. Never fails: unterminated strings/comments/dollar bodies run to the end
 //! of input. Shared by the highlighter, the statement splitter, the completer and the
 //! formatter, which lex in the dialect of their text ([`lex_in`]); [`lex`] reads PostgreSQL.
+//! A text lexed from somewhere other than its start starts from the lexer's state there
+//! ([`lex_from`], [`LexState`]); only MySQL text has a state that matters (see [`mysql`]).
 //!
 //! PostgreSQL: where a token ends follows PostgreSQL's own scanner (`src/backend/parser/scan.l`), so the
 //! statements the splitter finds are the ones the server runs:
@@ -36,6 +38,14 @@ pub enum Tok {
     Comma,
     LParen,
     RParen,
+    /// A user or system variable (MySQL: `@name`, `@'name'`, `@@name`, `@@session.name`).
+    Variable,
+    /// The opening (`/*!`, `/*!80023`) or the closing `*/` of an executable comment (MySQL):
+    /// what lies between is code, lexed as such, not a comment.
+    ExecComment,
+    /// A client command line that is not sent to the server (MySQL: `DELIMITER //`), from its
+    /// word to the end of its line.
+    Directive,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -54,6 +64,85 @@ impl Token {
     }
     pub fn is_word(&self) -> bool {
         matches!(self.kind, Tok::Keyword | Tok::Ident)
+    }
+    /// What a statement ends at: its terminator, or a client command (which comes only between
+    /// statements).
+    pub fn ends_statement(&self) -> bool {
+        matches!(self.kind, Tok::Semi | Tok::Directive)
+    }
+}
+
+/// The longest statement terminator a client `DELIMITER` sets, in bytes (MySQL's client keeps
+/// that many and drops the rest).
+pub const MAX_DELIMITER: usize = 15;
+
+/// A statement terminator: `;`, or what a client `DELIMITER` line set (MySQL). Kept inline, so
+/// a [`LexState`] is `Copy` and cheap to keep for every line.
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Delimiter {
+    len: u8,
+    bytes: [u8; MAX_DELIMITER],
+}
+
+impl Default for Delimiter {
+    fn default() -> Self {
+        let mut bytes = [0; MAX_DELIMITER];
+        bytes[0] = b';';
+        Self { len: 1, bytes }
+    }
+}
+
+impl Delimiter {
+    /// `s` as a terminator: its first [`MAX_DELIMITER`] bytes (whole characters), `None` when
+    /// empty.
+    pub fn new(s: &str) -> Option<Self> {
+        let mut len = s.len().min(MAX_DELIMITER);
+        while !s.is_char_boundary(len) {
+            len -= 1;
+        }
+        if len == 0 {
+            return None;
+        }
+        let mut bytes = [0; MAX_DELIMITER];
+        bytes[..len].copy_from_slice(&s.as_bytes()[..len]);
+        Some(Self { len: len as u8, bytes })
+    }
+
+    pub fn as_str(&self) -> &str {
+        std::str::from_utf8(&self.bytes[..self.len as usize]).unwrap_or(";")
+    }
+}
+
+impl std::fmt::Debug for Delimiter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{:?}", self.as_str())
+    }
+}
+
+/// What the lexer knows at a place in a text that changes how it reads what follows. Lexing
+/// from a place other than the text's start ([`lex_from`]) starts from the state there, which
+/// [`LexState::after`] carries over each token. PostgreSQL's is always the default: its tokens
+/// never depend on the text before them beyond the token they are in.
+///
+/// MySQL's: the statement terminator in effect (a client `DELIMITER` line changes it), whether
+/// a statement has begun since the last one ended (a `DELIMITER` line counts only between
+/// statements) and whether the place is inside an executable comment (`/*! … */`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct LexState {
+    pub delimiter: Delimiter,
+    /// A statement has begun and not ended yet.
+    pub pending: bool,
+    /// Inside an executable comment: the next `*/` closes it.
+    pub exec: bool,
+}
+
+impl LexState {
+    /// The state after token `t` of `src`, lexed in dialect `d` from this state.
+    pub fn after(self, t: &Token, src: &str, d: Dialect) -> Self {
+        match d {
+            Dialect::Postgres => self,
+            Dialect::MySql(_) => mysql::after(self, t, src),
+        }
     }
 }
 
@@ -267,8 +356,15 @@ pub fn lex(src: &str) -> Vec<Token> {
 
 /// The tokens of `src` as dialect `d` reads it.
 pub fn lex_in(src: &str, d: Dialect) -> Vec<Token> {
+    lex_from(src, d, LexState::default())
+}
+
+/// The tokens of `src`, a text in dialect `d` that starts where the lexer's state is `state`
+/// (a line of a longer text: [`LexState::after`] the tokens before it).
+pub fn lex_from(src: &str, d: Dialect, state: LexState) -> Vec<Token> {
     match d {
         Dialect::Postgres => lex_with(src, d, false),
+        Dialect::MySql(mode) => mysql::lex(src, mode, state),
     }
 }
 
@@ -387,14 +483,22 @@ pub fn changes_schema(sql: &str) -> bool {
     changes_schema_in(sql, Dialect::Postgres)
 }
 
-/// [`changes_schema`] for statement `sql` in dialect `d`.
+/// [`changes_schema`] for statement `sql` in dialect `d`. MySQL: DDL (`CREATE`, `ALTER`,
+/// `DROP`, `RENAME`, `TRUNCATE`) and `CALL` (its `DO` evaluates expressions), the opening of an
+/// executable comment before it skipped too (`/*!40101 ALTER … */`).
 pub fn changes_schema_in(sql: &str, d: Dialect) -> bool {
-    const WORDS: [&str; 5] = ["CREATE", "ALTER", "DROP", "DO", "CALL"];
+    let words: &[&str] = match d {
+        Dialect::Postgres => &["CREATE", "ALTER", "DROP", "DO", "CALL"],
+        Dialect::MySql(_) => &["CREATE", "ALTER", "DROP", "RENAME", "TRUNCATE", "CALL"],
+    };
     lex_in(sql, d)
         .iter()
-        .find(|t| !t.is_trivia())
-        .is_some_and(|t| t.is_word() && WORDS.iter().any(|w| t.text(sql).eq_ignore_ascii_case(w)))
+        .filter(|t| !t.is_trivia())
+        .find(|t| !(t.kind == Tok::ExecComment && t.text(sql).starts_with("/*")))
+        .is_some_and(|t| t.is_word() && words.iter().any(|w| t.text(sql).eq_ignore_ascii_case(w)))
 }
+
+pub mod mysql;
 
 #[cfg(test)]
 mod tests;

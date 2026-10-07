@@ -375,7 +375,7 @@ impl App {
                 return self.flash(Notice::new(Msg::PlanOneStatement { count }, Level::Warning));
             }
         };
-        if plan::is_explain(&stmt) {
+        if plan::is_explain_in(&stmt, self.tab_dialect(self.tab().id)) {
             let key = self.key_for(Action::RunStatement, Ctx::VimNormal);
             return self.flash(Notice::new(Msg::PlanAlreadyExplain { key }, Level::Warning));
         }
@@ -399,13 +399,14 @@ impl App {
             return c;
         }
         let sql = t.shown_sql();
+        let dialect = self.tab_dialect(t.id);
         let explain = t.exec.shown.is_some()
             && t.exec.plan.as_ref().is_none_or(|p| Some(p.index) != t.exec.shown)
-            && plan::is_explain(sql);
+            && plan::is_explain_in(sql, dialect);
         // Rows of an earlier run (statements ran since) or of a run of several are not asked
         // again: no offer.
         let alone = t.exec.kept_log.is_none() && !t.rows_log().several();
-        let rewritable = explain && alone && plan::explain::json_text(sql).is_ok();
+        let rewritable = explain && alone && plan::explain::json_text_in(sql, dialect).is_ok();
         let c = TextPlan { key, explain, rewritable };
         self.text_plan_cache.set(Some(c));
         c
@@ -466,10 +467,11 @@ impl App {
         let t = self.tab();
         let log = t.rows_log();
         let is_plan = |i: usize| t.exec.plan.as_ref().is_some_and(|p| p.index == i);
+        let dialect = self.tab_dialect(t.id);
         let text_plan = t
             .result_tabs()
             .into_iter()
-            .any(|i| !is_plan(i) && log.statements.get(i).is_some_and(|s| plan::is_explain(&s.sql)));
+            .any(|i| !is_plan(i) && log.statements.get(i).is_some_and(|s| plan::is_explain_in(&s.sql, dialect)));
         let notice = if text_plan && !self.results_shown() {
             let key = self.key_or_commands(Action::Panel(super::action::PanelAction::Toggle));
             Notice::new(Msg::PlanAsPlanShowFirst { key }, Level::Info)
@@ -501,7 +503,7 @@ impl App {
         if self.tab_busy(id) {
             return self.flash_busy();
         }
-        let json = match plan::explain::json(&sql) {
+        let json = match plan::explain::json_in(&sql, self.tab_dialect(id)) {
             Ok(j) => j,
             Err(e) => return self.flash(not_json(e)),
         };

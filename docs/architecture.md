@@ -565,12 +565,14 @@ Held by CI budgets (`docs/perf.md`).
 
 ## The dialect seam
 
-The SQL tools are PostgreSQL's today. The seam that lets another dialect join them is in place:
-every SQL tool takes the dialect of the text it works on, and quoting and value kinds go
-through it.
+Every SQL tool takes the dialect of the text it works on, and quoting and value kinds go
+through it. PostgreSQL is the dialect of every driver today; MySQL's text is read (lexed,
+split, completed, formatted, quoted) for the MySQL driver to come, and its classifier is a
+placeholder that asks about everything (see "MySQL text" below).
 
-- **Types** (`datarig_core::sql::dialect`): `Dialect` (`Postgres`, the default) is the SQL
-  dialect of a text, and `Language` (`Sql(Dialect)`) the language of an editor's text
+- **Types** (`datarig_core::sql::dialect`): `Dialect` (`Postgres`, the default, and
+  `MySql(MySqlMode)`) is the SQL dialect of a text, and `Language` (`Sql(Dialect)`) the
+  language of an editor's text
   (`Language::dialect`). Both are `Copy` enums: every tool will `match` on them, so a new
   variant makes each one decide what to do with it.
 - **Who says which**: a driver, through `Capabilities::language` (`PgDriver`:
@@ -591,8 +593,10 @@ through it.
   appears or its binding changes: a new console, table, DDL or saved-query tab, a tab brought
   back from the closed list or the trash, a restored workspace, `bind_tab_in` and the other
   rebinds, a deleted profile's tabs, and a saved profile (whose driver may have changed).
-- **The classifier**: `risk::Classifier` (`Pg(Prepared)`) is what the app asks about a
-  statement. It is built from a language (`Classifier::new`) and forwards to the PostgreSQL
+- **The classifier**: `risk::Classifier` (`Pg(Prepared)`, and `Unchecked(Dialect)` for a
+  dialect whose classifier is not written yet: every statement is text it cannot read,
+  `Danger::Unparsed`, which always asks and a read-only policy refuses, and nothing may run
+  again or be counted) is what the app asks about a statement. It is built from a language (`Classifier::new`) and forwards to the PostgreSQL
   classifier unchanged: `classify`, `forget` and `knows` with the session's prepared
   statements, `repeatable`, `ordered` and `count_query` of `risk::repeat`, and
   `Classifier::classify_once` for a one-off look in a given language. Each tab keeps one for its
@@ -642,31 +646,75 @@ through it.
     (`lexer::KEYWORDS`/`is_keyword` are PostgreSQL's), `changes_schema_in` (`changes_schema`).
     `lex_backslash_strings` is the PostgreSQL classifier's own. The lexer is a `match` on the
     `Copy` dialect: no allocation or dynamic dispatch on the editor's per-keystroke path.
-    Every lexed region starts in the default state (between tokens, `;` ending a statement);
-    a client delimiter (MySQL's `DELIMITER`) will need a start state carried in the editor's
-    line states and given to the lexer.
-  - Splitter: `split::split_in`, `segment_at_in` (`split`, `segment_at`); `statement_at` reads
-    statements already split.
+    A text lexed from somewhere other than its start starts from the lexer's state there:
+    `lexer::LexState` (`Copy`: the statement terminator in effect, whether a statement has
+    begun, an executable comment open), `LexState::after(token)` carries it over each token,
+    and `lex_from(src, d, state)` starts from it. PostgreSQL's is always the default (its
+    tokens never depend on text before them); MySQL's client `DELIMITER` makes it matter.
+    The editor does not carry it yet: its lexed regions start in the default state.
+    `Token::ends_statement` is a terminator or a client command line (`Tok::Directive`).
+  - Splitter: `split::split_in`, `segment_at_in` (`split`, `segment_at`), and
+    `split_from`/`segment_at_from` from a `LexState`; `statement_at` reads statements already
+    split.
   - Completion: `complete::complete_in_dialect(src, cursor, catalog, force, path, d)`
-    (`complete_in`, `complete`): it lexes, offers keywords and reads and writes names in `d`.
+    (`complete_in`, `complete`; `complete_from` from a `LexState`): it lexes, offers keywords
+    and reads and writes names in `d`.
     The path is `Dialect::default_path(schema)` (PostgreSQL: the schema then `public`, or
-    `public`; `complete::default_path`/`schema_path` are its wrappers), `App::tab_path` asks it
-    in the tab's dialect.
+    `public`; `complete::default_path`/`schema_path` are its wrappers; MySQL: the session's
+    database), `App::tab_path` asks it in the tab's dialect. A relation is found whatever the
+    ASCII case of its name; in MySQL one written in the catalog's case comes first.
   - Formatter: `format::format_in(src, opts, indent, d)` (`format`): `sqlformat` lays the text
     out as `Dialect::sqlformat_dialect` (PostgreSQL: `PostgreSql`), and the checks lex in `d`.
-    Only PostgreSQL masks dollar bodies and keeps `U&`, psql's `:var` and `\` together.
+    Only PostgreSQL masks dollar bodies and keeps `U&`, psql's `:var` and `\` together. MySQL
+    text is laid out as `Generic`, a text with a `DELIMITER` line is refused, and a keyword's
+    case changes only for a reserved word (a non-reserved one may be a table's name).
   - Generated SQL: `Dialect::explain_sql(statement, analyze)` (PostgreSQL: `plan::explain_sql`;
-    `None` for a dialect without a plan statement) is what `query.explain` runs. The count of a
+    `None` for a dialect without a plan statement, MySQL's for now) is what `query.explain`
+    runs. `plan::is_explain_in` and `plan::explain::json_in`/`json_text_in` take the tab's
+    dialect (a MySQL `EXPLAIN` is not rewritten as JSON: `NotJson::Unreadable`). The count of a
     query's rows is the classifier's (`Classifier::count_query`), as paging's allowlist is.
   - The editor: every lexer and splitter use (`lexing.rs`: the line states,
     `current_statement`, `completion_context`; the highlighter; `pairs`, `brackets`, `target`,
     `runs`) lexes in the editor's language (`Editor::set_language`), and `gc` writes
-    `Dialect::comment_marker` and strips `Dialect::uncomment_markers`. The app lexes, splits,
+    `Dialect::comment_marker` and strips the marker `Dialect::line_comment_at` finds. The app lexes, splits,
     completes and formats in the tab's dialect (`App::tab_dialect`), as do `driver::keys`'s
     name readers and the schema-change and rollback checks of a run.
   - Still PostgreSQL's own, calling the wrappers: the PostgreSQL driver, the PostgreSQL
-    classifier (`risk`, `risk::repeat`), the plan readers (`sql::plan`: `is_explain`,
-    `plan::explain`, `plan::pg`) and the DDL renderer (`sql::ddl`).
+    classifier (`risk`, `risk::repeat`), the plan readers (`plan::explain`'s rewrite,
+    `plan::pg`) and the DDL renderer (`sql::ddl`).
+- **MySQL text** (`Dialect::MySql`; `lexer::mysql`, `ident::mysql`): where a token ends follows
+  MySQL's server lexer, and where a statement ends its command-line client (`mysql`), which
+  sends one statement at a time; where the client's reading is broken (an optimizer hint over
+  several lines, a `DELIMITER` after a statement on its line or after an executable comment,
+  where it drops text) the server's is followed. `"…"` is a string unless
+  `MySqlMode::ansi_quotes`; a backslash escapes in every string the client tracks (`'…'`,
+  `"…"` also under `ANSI_QUOTES`, `x'…'`, `b'…'`, `N'…'`) unless `no_backslash_escapes`;
+  `` `…` `` is a quoted name; `#` and `--` followed by a blank or the line's end are line
+  comments ending at `\n`; block comments do not nest; `/*!…*/` and `/*!80023 …*/` are
+  executable comments, whose opening and closing are `Tok::ExecComment` and whose inside is
+  code (the server runs it), `/*+ … */` a comment; `@x`, `@'x'`, `@@x` are `Tok::Variable`,
+  `?` a parameter; names may start with a digit (`1col`) unless they are numbers (`1e5`,
+  `0x1F`, `0b01`), and after `name.` comes a name (`t.1e5`, `t.select`); dollar quotes only
+  when `MySqlMode::dollar_quotes` (a server where `select $$` is a syntax error, as the
+  client asks: 8.4 and 9.x). The client's `DELIMITER` line (at a line's start, only blanks and
+  same-line comments before it, where no statement has begun; any case; the word after it up
+  to a space, a backslash escaping, or between quotes; up to 15 bytes; refused with a
+  backslash) is a `Tok::Directive`, never sent, and sets the terminator, which ends a
+  statement wherever it starts at an ASCII character outside strings, names in quotes and
+  comments (also inside a name, `END$$`, a number or an executable comment, as the client
+  does); `\g` and `\G` end one too. The client's other commands (`\c`, `source`, `use`
+  without a terminator, …) are not read: such text reaches the server and fails there.
+  Keywords for highlighting and completion are MySQL's common ones (without non-reserved
+  words that are often names, as `status`); a name is written bare when it is plain ASCII
+  (`[A-Za-z_][A-Za-z0-9_$]*`), not reserved in MySQL 8.0, 8.4 or 9.x
+  (`ident::mysql::RESERVED`) and no charset introducer (`_binary`), else in backticks; names
+  are not folded. `quote_literal` doubles `'` and, unless `NO_BACKSLASH_ESCAPES`, `\` (and
+  writes NUL as `\0`): it is right for the session's mode only, so a MySQL driver must give
+  the dialect its session's mode and keep it current (`MySqlMode` documents this).
+  `crates/datarig-core/tests/mysql_split.rs` holds the splitter to MySQL's client and server
+  (`DATARIG_TEST_MYSQL_CLIENT`; run against 8.0.45, 8.4.11 and 9.7.2): a script's statements
+  are the ones the client sends (also for the quirks above), each runs alone, and literals and
+  names the app writes read back as written, also under `NO_BACKSLASH_ESCAPES`.
 - **A new dialect** adds a `Dialect` variant and, at each `match` the compiler then points to:
   its lexer branch (`lex_in`) and keywords, quoting, folding and identifier quotes, its
   default path, comment markers, `sqlformat` dialect and formatter rules, its `explain_sql`, a

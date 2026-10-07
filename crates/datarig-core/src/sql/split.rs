@@ -1,9 +1,10 @@
 //! Statement splitter. Splits on `;` outside strings, quoted identifiers,
-//! dollar bodies and comments (as the text's dialect lexes them). Comment/whitespace-only pieces
-//! are not statements.
+//! dollar bodies and comments (as the text's dialect lexes them; in MySQL, on the terminator a
+//! client `DELIMITER` line set, and the line itself is no statement). Comment/whitespace-only
+//! pieces are not statements.
 
 use super::dialect::Dialect;
-use super::lexer::{Tok, lex_in};
+use super::lexer::{LexState, Tok, lex_from};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Statement {
@@ -28,14 +29,22 @@ pub fn split(src: &str) -> Vec<Statement> {
 
 /// The statements of `src`, text in dialect `d`.
 pub fn split_in(src: &str, d: Dialect) -> Vec<Statement> {
+    split_from(src, d, LexState::default())
+}
+
+/// [`split_in`] for text that starts where the lexer's state is `state` (see
+/// [`lex_from`]): what ends a statement is the terminator in effect there.
+pub fn split_from(src: &str, d: Dialect, state: LexState) -> Vec<Statement> {
     let mut out = Vec::new();
     let mut start: Option<usize> = None;
     let mut body_end = 0;
-    for t in lex_in(src, d) {
+    for t in lex_from(src, d, state) {
         if t.kind == Tok::Semi {
             if let Some(s) = start.take() {
                 out.push(Statement { start: s, body_end, end: t.end });
             }
+        } else if t.kind == Tok::Directive {
+            // A client command comes only where no statement has begun.
         } else if !t.is_trivia() {
             start.get_or_insert(t.start);
             body_end = t.end;
@@ -65,10 +74,17 @@ pub fn segment_at(src: &str, cursor: usize) -> (usize, usize) {
 
 /// [`segment_at`] in text of dialect `d`.
 pub fn segment_at_in(src: &str, cursor: usize, d: Dialect) -> (usize, usize) {
+    segment_at_from(src, cursor, d, LexState::default())
+}
+
+/// [`segment_at_in`] for text that starts where the lexer's state is `state`. A client command
+/// line ends a segment too; the cursor inside one, or inside a terminator of more than one
+/// character, is in the segment before it.
+pub fn segment_at_from(src: &str, cursor: usize, d: Dialect, state: LexState) -> (usize, usize) {
     let mut seg_start = 0;
-    for t in lex_in(src, d) {
-        if t.kind == Tok::Semi {
-            if cursor <= t.start {
+    for t in lex_from(src, d, state) {
+        if t.ends_statement() {
+            if cursor < t.end {
                 return (seg_start, t.start);
             }
             seg_start = t.end;

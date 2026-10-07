@@ -14,6 +14,9 @@
 //! statement's execution time (by cost: of the plan's total cost). Its row estimate is off when
 //! the estimated and actual rows per loop differ by a factor of [`MISESTIMATE`] or more.
 
+use crate::sql::dialect::Dialect;
+use crate::sql::lexer::Tok;
+
 pub mod explain;
 pub mod json;
 pub mod pg;
@@ -340,12 +343,25 @@ pub fn explain_sql(statement: &str, analyze: bool) -> String {
     format!("EXPLAIN ({options}) {statement}")
 }
 
-/// `sql` starts with `EXPLAIN` (comments and blanks before it skipped).
+/// PostgreSQL `sql` starts with `EXPLAIN` (comments and blanks before it skipped:
+/// [`is_explain_in`]).
 pub fn is_explain(sql: &str) -> bool {
-    crate::sql::lexer::lex(sql)
+    is_explain_in(sql, Dialect::Postgres)
+}
+
+/// `sql`, text in dialect `d`, starts with `EXPLAIN` (comments and blanks before it skipped).
+/// MySQL: also its synonyms `DESCRIBE` and `DESC` (which describe a table too), and the opening
+/// of an executable comment before it is skipped.
+pub fn is_explain_in(sql: &str, d: Dialect) -> bool {
+    let words: &[&str] = match d {
+        Dialect::Postgres => &["EXPLAIN"],
+        Dialect::MySql(_) => &["EXPLAIN", "DESCRIBE", "DESC"],
+    };
+    crate::sql::lexer::lex_in(sql, d)
         .into_iter()
-        .find(|t| !t.is_trivia())
-        .is_some_and(|t| t.text(sql).eq_ignore_ascii_case("EXPLAIN"))
+        .filter(|t| !t.is_trivia())
+        .find(|t| !(t.kind == Tok::ExecComment && t.text(sql).starts_with("/*")))
+        .is_some_and(|t| words.iter().any(|w| t.text(sql).eq_ignore_ascii_case(w)))
 }
 
 #[cfg(test)]

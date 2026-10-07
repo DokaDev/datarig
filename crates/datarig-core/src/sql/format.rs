@@ -13,14 +13,62 @@
 //! * operator characters written together stay together and those written apart stay apart
 //!   (the lexer reads each operator character alone, the server reads `<=` or `->>` as one
 //!   operator), as do, in PostgreSQL, `U&` before a string or a name, `:` before what follows
-//!   it (a psql variable) and `\` (a psql command);
+//!   it (a psql variable) and `\` (a psql command), and in MySQL the name of a built-in function
+//!   the server parses itself (`count`, `group_concat`, …) and the `(` after it (followed by a
+//!   blank it is read otherwise);
 //! * two strings in a row keep a line break between them, or keep none (strings separated by a
 //!   line break are one string to the server);
-//! * the rebuilt text lexes to the input's tokens again, exactly but for the case of keywords.
+//! * the rebuilt text lexes to the input's tokens again, exactly but for the case of keywords;
+//! * MySQL: the text has no client command (`DELIMITER`) line.
+//!
+//! A keyword's case changes only where that cannot change what it names: in MySQL, only a
+//! reserved word's (a non-reserved one may be a table's name, whose case the server may keep).
 
 use super::dialect::Dialect;
+use super::ident;
 use super::lexer::{Tok, Token, lex_in};
 use std::ops::Range;
+
+/// MySQL's built-in functions whose name must be followed by `(` right away, unless the
+/// session has `IGNORE_SPACE` (the manual's "Function Name Parsing and Resolution", 8.0 to
+/// 9.x).
+const MYSQL_SPECIAL_FUNCTIONS: &[&str] = &[
+    "ADDDATE",
+    "BIT_AND",
+    "BIT_OR",
+    "BIT_XOR",
+    "CAST",
+    "COUNT",
+    "CURDATE",
+    "CURTIME",
+    "DATE_ADD",
+    "DATE_SUB",
+    "EXTRACT",
+    "GROUP_CONCAT",
+    "JSON_ARRAYAGG",
+    "JSON_OBJECTAGG",
+    "MAX",
+    "MID",
+    "MIN",
+    "NOW",
+    "POSITION",
+    "SESSION_USER",
+    "ST_COLLECT",
+    "STD",
+    "STDDEV",
+    "STDDEV_POP",
+    "STDDEV_SAMP",
+    "SUBDATE",
+    "SUBSTR",
+    "SUBSTRING",
+    "SUM",
+    "SYSDATE",
+    "SYSTEM_USER",
+    "TRIM",
+    "VARIANCE",
+    "VAR_POP",
+    "VAR_SAMP",
+];
 
 /// What a dollar-quoted body is to `sqlformat`.
 const DOLLAR_MASK: &str = "''";
@@ -83,6 +131,13 @@ pub fn format_in(src: &str, opts: Options, indent: &str, d: Dialect) -> Result<(
                 from = t.end;
             }
         }
+        // A client command line changes what the text after it means to the client, and
+        // `sqlformat` lays it out as SQL.
+        Dialect::MySql(_) => {
+            if let Some(t) = input.iter().find(|t| t.kind == Tok::Directive) {
+                return Err(Refused::Changed { at: t.start });
+            }
+        }
     }
     masked.push_str(&src[from..]);
     let laid = sqlformat::format(&masked, &sqlformat::QueryParams::None, &fopts);
@@ -105,9 +160,15 @@ pub fn format_in(src: &str, opts: Options, indent: &str, d: Dialect) -> Result<(
             out.push_str(&gap);
         }
         let text = t.text(src);
-        match (t.kind, opts.case) {
-            (Tok::Keyword, KeywordCase::Upper) => out.push_str(&text.to_ascii_uppercase()),
-            (Tok::Keyword, KeywordCase::Lower) => out.push_str(&text.to_ascii_lowercase()),
+        let recase = t.kind == Tok::Keyword
+            && match d {
+                Dialect::Postgres => true,
+                // A keyword is a plain word: it needs quotes when it is reserved.
+                Dialect::MySql(_) => ident::mysql::needs_quotes(text),
+            };
+        match (recase, opts.case) {
+            (true, KeywordCase::Upper) => out.push_str(&text.to_ascii_uppercase()),
+            (true, KeywordCase::Lower) => out.push_str(&text.to_ascii_lowercase()),
             _ => out.push_str(text),
         }
     }
@@ -160,6 +221,13 @@ fn layout_only(d: Dialect, toks: &[Token], i: usize, src: &str, after: &str) -> 
     };
     let keep = (a.kind == Tok::Op && b.kind == Tok::Op)
         || match d {
+            // A built-in function MySQL parses itself and its `(`: with a blank between (and
+            // `IGNORE_SPACE` off, the default) the server reads `count (*)` otherwise.
+            Dialect::MySql(_) => {
+                b.kind == Tok::LParen
+                    && a.is_word()
+                    && MYSQL_SPECIAL_FUNCTIONS.contains(&ta.to_ascii_uppercase().as_str())
+            }
             Dialect::Postgres => {
                 unicode_escape(a, b)
                     || (i >= 2 && unicode_escape(&toks[i - 2], a))

@@ -347,6 +347,7 @@ fn every_token_of_a_theme_can_be_set_by_name() {
         syn_operator: _,
         syn_identifier: _,
         syn_quoted_ident: _,
+        syn_exec_comment: _,
         key_pk: _,
         key_fk: _,
         key_uq: _,
@@ -370,7 +371,7 @@ fn every_token_of_a_theme_can_be_set_by_name() {
         dim: _,
     } = DARK;
     // Every field above but `dim`.
-    assert_eq!(COLOR_TOKENS.len() + STYLE_TOKENS.len(), 49);
+    assert_eq!(COLOR_TOKENS.len() + STYLE_TOKENS.len(), 50);
     let mut th = DARK;
     for (i, name) in COLOR_TOKENS.iter().enumerate() {
         *color_token(&mut th, name).unwrap() = Color::Indexed(i as u8);
@@ -379,7 +380,7 @@ fn every_token_of_a_theme_can_be_set_by_name() {
         *style_token(&mut th, name).unwrap() = Style::new().bg(Color::Indexed(100 + i as u8));
     }
     assert_eq!((th.bg, th.mode_fg), (Color::Indexed(0), Color::Indexed(22)));
-    assert_eq!(th.plan_misestimate, Style::new().bg(Color::Indexed(119)));
+    assert_eq!(th.plan_misestimate, Style::new().bg(Color::Indexed(120)));
     assert_eq!(th.chart(), [23, 24, 25, 26, 27, 28].map(Color::Indexed));
     assert!(color_token(&mut th, "selection").is_none() && style_token(&mut th, "bg").is_none());
 }
@@ -625,5 +626,15 @@ fn run_hints_read_and_stay_apart_from_text() {
                 assert!(c >= 3.0, "{name}: {mark:?} on {bg:?}: {c:.2}");
             }
         }
+    }
+}
+
+#[test]
+fn executable_comments_stand_apart_from_comments_and_keywords_in_every_theme() {
+    for (name, th) in BUILTINS.iter().copied() {
+        let exec = th.syntax(datarig_core::sql::lexer::Tok::ExecComment, false);
+        assert_ne!(exec, th.syn_comment, "{name}");
+        assert_ne!(exec, th.syn_keyword, "{name}");
+        assert_ne!(exec.fg, th.syn_comment.fg, "{name}");
     }
 }
