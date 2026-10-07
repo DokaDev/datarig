@@ -111,12 +111,13 @@ impl App {
             Some(id) => self.console_in(id, context),
             None => {
                 self.leave_tab();
-                self.tabs.open(TabKind::Console, None, Editor::new(""));
+                let tab = self.tabs.open(TabKind::Console, None, Editor::new(""));
+                self.sync_tab_language(tab);
                 self.entered_tab();
                 self.focus = Focus::Editor;
             }
         }
-        self.tab_mut().editor = Editor::new(text);
+        self.tab_mut().replace_editor(Editor::new(text));
         self.edited();
     }
 

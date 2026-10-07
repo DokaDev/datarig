@@ -13,6 +13,7 @@ use datarig_core::driver::{
 };
 use datarig_core::fault::{Fault, FaultKind};
 use datarig_core::profile::ConnectionConfig;
+use datarig_core::sql::dialect::{Dialect, Language};
 use datarig_core::transport::DialerRef;
 use futures::future::BoxFuture;
 use std::str::FromStr;
@@ -57,6 +58,7 @@ impl Driver for PgDriver {
             contexts: true,
             structure: true,
             ddl: true,
+            language: Language::Sql(Dialect::Postgres),
         }
     }
 

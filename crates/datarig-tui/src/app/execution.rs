@@ -7,7 +7,6 @@ use super::*;
 use datarig_core::driver::DbError;
 use datarig_core::fault::{ErrorLog, FaultKind};
 use datarig_core::sql::lexer::changes_schema;
-use datarig_core::sql::risk;
 use datarig_core::transport::{DialError, Refusal};
 
 impl App {
@@ -62,7 +61,7 @@ impl App {
             return self.open_quick(QuickPurpose::Bind { tab: id, run: Some(statements) });
         };
         // Checked before anything is queued or sent.
-        if let Some(refused) = self.unsupported(&statements) {
+        if let Some(refused) = self.unsupported(id, &statements) {
             self.unstage_run(id);
             return self.tab_status(id, refused);
         }
@@ -111,7 +110,7 @@ impl App {
             // (until this run delivers rows of its own), past them paging is closed.
             if matches!(t.exec.paging, Paging::Open { .. }) {
                 t.exec.paging = Paging::Replaced;
-                t.exec.rerun_ok = datarig_core::sql::risk::repeat::repeatable(t.answer_sql()).is_ok();
+                t.exec.rerun_ok = t.exec.prepared.repeatable(t.answer_sql()).is_ok();
             }
             t.exec.want_page = None;
             t.exec.resuming = None;
@@ -134,7 +133,9 @@ impl App {
             t.exec.replace_pending = true;
             t.exec.messages_scroll = 0;
             t.exec.ddl = statements.iter().any(|s| changes_schema(s));
-            t.exec.explain_rolled_back = statements.iter().any(|s| risk::classify(s).rollback_matters());
+            let lang = t.exec.prepared.language();
+            t.exec.explain_rolled_back =
+                statements.iter().any(|s| Classifier::classify_once(lang, s).rollback_matters());
             // What the run prepares and deallocates counts once the server says each statement
             // succeeded (`TabSession::succeeded`), never when it is sent.
             t.exec.unconfirmed = statements.iter().cloned().enumerate().collect();
@@ -356,7 +357,7 @@ impl App {
         let Some((rs, _)) = t.answer_rows_mut() else { return };
         let count = rs.rows.len() as u64;
         t.exec.paging = Paging::ClosedIdle;
-        let rerun = datarig_core::sql::risk::repeat::repeatable(t.answer_sql()).is_ok();
+        let rerun = t.exec.prepared.repeatable(t.answer_sql()).is_ok();
         t.exec.rerun_ok = rerun;
         let qid = t.exec.query_id;
         self.send_tab(id, DbCommand::ClosePortal { id: qid });
@@ -1039,13 +1040,19 @@ impl App {
                 t.exec.run.answered(StatementOutcome::Rows { count: count as u64, more }, Some(elapsed));
                 // Not held: the next page runs the statement again when the allowlist lets it;
                 // otherwise the first page is all there is, and the user learns why and what to do.
-                let refusal = if released && more { risk::repeat::repeatable(t.answer_sql()).err() } else { None };
+                let refusal = if released && more { t.exec.prepared.repeatable(t.answer_sql()).err() } else { None };
                 if released && more {
                     t.exec.rerun_ok = refusal.is_none();
                 }
                 if let Some(r) = refusal {
                     let m = Notice::new(
-                        super::pages::first_page_only(&self.i18n, t.answer_sql(), &r, count as u64),
+                        super::pages::first_page_only(
+                            &self.i18n,
+                            t.exec.prepared.language(),
+                            t.answer_sql(),
+                            &r,
+                            count as u64,
+                        ),
                         Level::Warning,
                     );
                     t.exec.run.notes.push(m.clone());
@@ -1156,7 +1163,7 @@ impl App {
                     // portal (run again when the allowlist lets it, else refused), and the
                     // result never claims to be complete.
                     t.exec.paging = Paging::Interrupted;
-                    t.exec.rerun_ok = risk::repeat::repeatable(t.answer_sql()).is_ok();
+                    t.exec.rerun_ok = t.exec.prepared.repeatable(t.answer_sql()).is_ok();
                 } else if t.exec.kept_log.is_none() {
                     // Rows an earlier run left on screen keep their paging state (closed).
                     t.exec.paging = Paging::None;

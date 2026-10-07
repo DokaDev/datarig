@@ -7,6 +7,7 @@ use crate::widgets::grid::GridState;
 use datarig_core::driver::{Session, SessionContext};
 use datarig_core::profile::ProfileId;
 use datarig_core::scripts::Stamp;
+use datarig_core::sql::risk::Classifier;
 use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
 
@@ -234,10 +235,11 @@ pub struct TabSession {
     /// The running statements include an `EXPLAIN ANALYZE` of more than a read: the driver
     /// rolls back what it ran, and the tab says so when the run ends well.
     pub explain_rolled_back: bool,
-    /// The statements `session` prepared (`PREPARE`), as far as the server confirmed it, with
-    /// what each one does: an `EXECUTE` is checked as the statement it runs. A new session
-    /// starts with none.
-    pub prepared: datarig_core::sql::risk::Prepared,
+    /// The risk classifier of the tab's language, with the statements `session` prepared
+    /// (`PREPARE`), as far as the server confirmed it, and what each one does: an `EXECUTE` is
+    /// checked as the statement it runs. A new session starts with none; a new language gets a
+    /// new classifier.
+    pub prepared: Classifier,
     /// The statements of the running run the server has not answered yet, with their place in
     /// it. Sent is not succeeded: what one prepares, deallocates or discards changes `prepared`
     /// only once the server says it succeeded; when it failed, was cancelled or never ran
@@ -285,7 +287,7 @@ impl TabSession {
             rerun_ok: false,
             read_only: false,
             explain_rolled_back: false,
-            prepared: Default::default(),
+            prepared: Classifier::default(),
             unconfirmed: Vec::new(),
             context: None,
             path_per_transaction: false,
@@ -306,12 +308,7 @@ impl TabSession {
     /// plain read loses nothing. What the confirmations and notices of a rollback ask about.
     pub fn tx_at_risk(&self) -> bool {
         self.user_tx()
-            || (self.tx_open
-                && self
-                    .run
-                    .statements
-                    .last()
-                    .is_none_or(|s| datarig_core::sql::risk::repeat::repeatable(&s.sql).is_err()))
+            || (self.tx_open && self.run.statements.last().is_none_or(|s| self.prepared.repeatable(&s.sql).is_err()))
     }
 
     /// The server says the running run's statements up to `index` (all of them: `None`)
@@ -451,8 +448,8 @@ impl Tab {
             let l = sql.to_ascii_lowercase();
             WORDS.iter().any(|w| l.contains(w))
         };
-        let mut prepared = self.exec.prepared.clone();
-        let sets = self.exec.run.statements.iter().any(|s| may(&s.sql) && prepared.classify(&s.sql).session_path);
+        let mut classifier = self.exec.prepared.clone();
+        let sets = self.exec.run.statements.iter().any(|s| may(&s.sql) && classifier.classify(&s.sql).session_path);
         if sets {
             self.exec.run.notes.push(Notice::new(warning, Level::Warning));
         }
@@ -483,6 +480,12 @@ impl Tab {
             pane: PaneLayout::default(),
             ran: false,
         }
+    }
+
+    /// Put `editor` in place of the tab's editor, in the tab's language.
+    pub fn replace_editor(&mut self, mut editor: Editor) {
+        editor.set_language(self.editor.language());
+        self.editor = editor;
     }
 
     /// A table tab (no editor on screen, the results take the whole tab).
@@ -979,7 +982,7 @@ impl TabManager {
             t.context = c.context;
             // Not read again by itself: `r` reads it.
             if let Some(object) = c.ddl {
-                t.editor = Editor::read_only("");
+                t.replace_editor(Editor::read_only(""));
                 t.doc.ddl = Some(DdlTab::new(object));
             }
             if t.is_table() || t.is_ddl() {

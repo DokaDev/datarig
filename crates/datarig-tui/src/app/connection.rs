@@ -150,9 +150,11 @@ impl App {
         let ids: Vec<TabId> = self.tabs.iter().map(|t| t.id).collect();
         for t in ids {
             self.tabs.bind(t, Some(p.id));
+            self.sync_tab_language(t);
         }
         if self.tabs.is_empty() {
-            self.tabs.open(TabKind::Console, Some(p.id), Editor::new(text));
+            let t = self.tabs.open(TabKind::Console, Some(p.id), Editor::new(text));
+            self.sync_tab_language(t);
         }
         let generation = self.conns.next_generation(p.id);
         let meta = self.open_session(&p, SessionRole::Meta, EventTarget::Meta(p.id), generation, Default::default());
@@ -175,7 +177,7 @@ impl App {
             s.close();
         }
         t.exec.generation = generation;
-        t.exec.prepared = Default::default();
+        t.exec.prepared = Classifier::new(t.exec.prepared.language());
         t.exec.unconfirmed.clear();
         t.exec.context = None;
         t.exec.path_per_transaction = false;
@@ -558,6 +560,7 @@ impl App {
         for t in &tabs {
             // Unbound first, so a last tab is replaced by a console without a connection.
             self.tabs.bind(*t, None);
+            self.sync_tab_language(*t);
             self.close_tab(*t);
         }
         self.close_tunnel(id);
@@ -663,6 +666,7 @@ impl App {
         let query = table.query();
         self.leave_tab();
         let tab = self.tabs.open(TabKind::Table, Some(id), Editor::new(&query));
+        self.sync_tab_language(tab);
         if let Some(t) = self.tabs.get_mut(tab) {
             t.doc.saved = query.clone();
             t.doc.written = true;

@@ -63,6 +63,7 @@ mod visual;
 
 use buffer::{Step, class, graphemes, next_version};
 use datarig_core::i18n::Label;
+use datarig_core::sql::dialect::Language;
 pub use ex::{ExDone, ExError, is_ex};
 use lexing::{LineState, REGION_LINES};
 pub use marks::MarkNotice;
@@ -192,6 +193,8 @@ pub struct Editor {
     bytes: usize,
     /// Bumped by every change of the text.
     version: u64,
+    /// The language of the text (the tab's: [`Editor::set_language`]).
+    lang: Language,
     /// The lexer state at the start of each line; `states[..valid]` are current.
     states: Vec<LineState>,
     valid: usize,
@@ -276,6 +279,7 @@ impl Editor {
             gutter: 0,
             bytes: text.len(),
             version: next_version(),
+            lang: Language::default(),
             states: Vec::new(),
             valid: 0,
             region: REGION_LINES,
@@ -322,6 +326,22 @@ impl Editor {
 
     pub fn text(&self) -> String {
         self.lines.join("\n")
+    }
+
+    /// The language of the text.
+    pub fn language(&self) -> Language {
+        self.lang
+    }
+
+    /// The text is in `lang` from now on (its tab's binding changed): the lexer states cached
+    /// for another language are read again, and the text has a new version, so nothing worked
+    /// out for the old language (a completion) is taken for the new one.
+    pub fn set_language(&mut self, lang: Language) {
+        if self.lang != lang {
+            self.lang = lang;
+            self.valid = 0;
+            self.version = next_version();
+        }
     }
 
     /// Catalog label of the mode as the status bar shows it (Visual by line is `V-LINE`, by

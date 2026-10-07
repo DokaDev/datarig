@@ -1,5 +1,6 @@
 pub mod complete;
 pub mod ddl;
+pub mod dialect;
 pub mod format;
 pub mod ident;
 pub mod lexer;

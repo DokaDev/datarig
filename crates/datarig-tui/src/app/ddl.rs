@@ -110,6 +110,7 @@ impl App {
         }
         self.leave_tab();
         let tab = self.tabs.open(TabKind::Ddl, Some(id), Editor::read_only(""));
+        self.sync_tab_language(tab);
         if let Some(t) = self.tabs.get_mut(tab) {
             t.doc.ddl = Some(DdlTab::new(object));
             t.doc.written = true;
@@ -181,14 +182,14 @@ impl App {
             d.name = Some(name);
             // The cursor stays where it was when the same object is read again.
             let (row, col, top) = (t.editor.row, t.editor.col, t.editor.top);
-            t.editor = Editor::read_only(&text);
+            t.replace_editor(Editor::read_only(&text));
             t.editor.row = row.min(t.editor.lines.len() - 1);
             t.editor.col = col;
             t.editor.top = top.min(t.editor.row);
             t.doc.saved = text;
             t.doc.written = true;
         } else if clear {
-            t.editor = Editor::read_only("");
+            t.replace_editor(Editor::read_only(""));
             t.doc.saved.clear();
         }
     }

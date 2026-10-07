@@ -153,3 +153,22 @@ fn the_statement_under_the_cursor_is_the_one_in_the_whole_text() {
         }
     }
 }
+
+/// Setting the language the editor already has keeps the cached line states; read again from
+/// the start, as a new language reads them, they are the whole text's states.
+#[test]
+fn set_language_keeps_the_states_of_the_same_language() {
+    use datarig_core::sql::dialect::{Dialect, Language};
+    let text = "SELECT 'a;\nb';\n/* c\nd */ SELECT $$x\ny$$;\nSELECT \"q\nr\";";
+    let mut e = Editor::new(text);
+    assert_eq!(e.language(), Language::Sql(Dialect::Postgres));
+    e.ensure_states(usize::MAX);
+    let (valid, version) = (e.valid, e.version());
+    e.set_language(Language::Sql(Dialect::Postgres));
+    assert_eq!(e.language(), Language::Sql(Dialect::Postgres));
+    assert_eq!(e.valid, valid, "the same language: the cache stays");
+    assert_eq!(e.version(), version, "and so does the text's version");
+    e.valid = 0;
+    e.ensure_states(usize::MAX);
+    assert_eq!(e.states[..e.valid], states_of(text)[..]);
+}

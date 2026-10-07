@@ -43,6 +43,7 @@ impl App {
     pub(super) fn open_console(&mut self, id: ProfileId, focus: bool) -> TabId {
         self.leave_tab();
         let tab = self.tabs.open(TabKind::Console, Some(id), Editor::new(""));
+        self.sync_tab_language(tab);
         self.entered_tab();
         if focus {
             self.focus = Focus::Editor;
@@ -102,6 +103,7 @@ impl App {
             t.status = Some(Notice::new(Msg::ResultsPagingClosed { count }, level));
         }
         self.tabs.bind_in(tab, Some(id), context);
+        self.sync_tab_language(tab);
         // A run it stopped says so on its statements now.
         self.settle_run_hints(tab);
         if self.tab().id == tab {
@@ -372,6 +374,7 @@ impl App {
                     c.text = text.clone();
                     self.leave_tab();
                     let id = self.tabs.reopen_closed(c);
+                    self.sync_tab_language(id);
                     if let Some(t) = self.tabs.get_mut(id) {
                         t.kind = TabKind::Script;
                         t.doc.saved = text;
@@ -392,6 +395,7 @@ impl App {
         }
         self.leave_tab();
         let id = self.tabs.reopen_closed(c);
+        self.sync_tab_language(id);
         if let Some(t) = self.tabs.get_mut(id).filter(|_| written) {
             t.doc.saved = t.editor.text();
             t.doc.written = true;
@@ -441,6 +445,7 @@ impl App {
         self.tabs.forget_trashed(name);
         self.leave_tab();
         let tab = self.tabs.open(TabKind::Console, None, Editor::new(&text));
+        self.sync_tab_language(tab);
         let taken = |n: u32| self.tabs.iter().any(|t| t.id != tab && t.doc.console_no == n);
         if let Some(n) = no.filter(|n| *n != 0 && !taken(*n))
             && let Some(t) = self.tabs.get_mut(tab)
