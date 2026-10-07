@@ -959,9 +959,14 @@ impl App {
     }
 
     /// Use `drivers` instead of the built-in driver registry. Sessions of such drivers open
-    /// headless too (tests read their command channels and feed their events).
+    /// headless too (tests read their command channels and feed their events). Open tabs take
+    /// the language of their profile's driver in the new registry.
     pub fn set_drivers(&mut self, drivers: DriverLookup) {
         self.drivers = Some(drivers);
+        let tabs: Vec<TabId> = self.tabs.iter().map(|t| t.id).collect();
+        for t in tabs {
+            self.sync_tab_language(t);
+        }
     }
 
     /// The driver of `name` (a profile's `driver`).

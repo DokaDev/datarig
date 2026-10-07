@@ -108,7 +108,8 @@ impl App {
         }));
         match self.tabs.get(tab) {
             Some(t) if t.exec.session.is_some() => t.exec.prepared.clone(),
-            _ => Classifier::new(self.tab_language(tab)),
+            Some(t) => Classifier::new(t.exec.prepared.language()),
+            None => Classifier::new(self.tab_language(tab)),
         }
     }
 
