@@ -144,6 +144,21 @@ fn read_only_says_why_it_refuses() {
     assert_eq!(why("CREATE TEMPORARY TABLE t (a INT)"), Some(ReadOnlyBlock::Class(Class::Ddl)));
     assert_eq!(why("INSERT INTO t VALUES (1)"), Some(ReadOnlyBlock::Class(Class::Write)));
     assert_eq!(why("SELECT * FROM t FOR SHARE"), Some(ReadOnlyBlock::Class(Class::Write)));
+    assert_eq!(why("LOCK TABLES t READ"), Some(ReadOnlyBlock::Locks));
+    assert_eq!(why("HANDLER t OPEN"), Some(ReadOnlyBlock::Locks));
+    assert_eq!(why("SELECT * FROM t INTO OUTFILE '/x'"), Some(ReadOnlyBlock::FileAccess));
+    assert_eq!(why("SET sql_log_bin = 0"), Some(ReadOnlyBlock::Setting));
+    // Whatever the class, these dangers are refused by themselves.
+    for d in [Danger::Locks, Danger::FileAccess, Danger::Setting, Danger::ServerCommand, Danger::DynamicSql] {
+        for class in [Class::Read, Class::Session, Class::Tx] {
+            let r = Risk { safe_setting: true, ..Risk::danger(class, d) };
+            assert!(r.read_only().is_err(), "{d:?} {class:?}");
+        }
+    }
+    // Several statements: the danger a read-only policy refuses by itself is kept.
+    assert_eq!(risk("DELETE FROM t; SET GLOBAL x = 1").danger, Some(Danger::ServerCommand));
+    assert_eq!(risk("DROP TABLE t; SELECT GET_LOCK('x', 1)").danger, Some(Danger::ServerAction));
+    assert_eq!(risk("SET sql_log_bin = 0; SET GLOBAL x = 1").danger, Some(Danger::Setting));
     assert_eq!(why("CALL p()"), Some(ReadOnlyBlock::Class(Class::Procedural)));
     assert_eq!(why("EXECUTE s"), Some(ReadOnlyBlock::Class(Class::Unknown)));
 }
@@ -230,6 +245,58 @@ fn classifying_is_fast() {
         assert_eq!(render(&r), "read ro");
         // Generous for a debug build; the release budget is checked by the bench.
         assert!(ms < budget_ms, "{bytes} bytes took {ms:.1} ms");
+    }
+}
+
+#[test]
+fn words_before_a_parenthesis_that_are_no_call_are_reserved() {
+    for w in NOT_CALLS {
+        assert!(crate::sql::ident::mysql::RESERVED.contains(&w.to_ascii_lowercase().as_str()), "{w}");
+    }
+    // A non-reserved word may name a loadable function: before `(` it is a call, unless its place
+    // makes it syntax.
+    for sql in ["SELECT text('x')", "SELECT hash(1)", "SELECT list(1)", "SELECT a FROM t WHERE signed(a) = 1"] {
+        assert!(risk(sql).unchecked_call, "{sql}");
+    }
+    for sql in [
+        "SELECT * FROM t WHERE a = ANY (SELECT 1)",
+        "SELECT * FROM t WHERE a > SOME (SELECT 1)",
+        "SELECT MATCH (a) AGAINST ('x') FROM t",
+        "SELECT * FROM JSON_TABLE('[1]', '$[*]' COLUMNS (x INT PATH '$')) AS j",
+        "SELECT CAST(a AS SIGNED), CAST(a AS NCHAR(2)) FROM t",
+    ] {
+        assert!(!risk(sql).unchecked_call, "{sql}");
+    }
+}
+
+#[test]
+fn a_routine_ends_where_its_body_does() {
+    let text = "CREATE PROCEDURE p() BEGIN\n  DECLARE x INT DEFAULT REPEAT('a', 2);\n  IF x THEN SET x = CASE WHEN 1 THEN 2 END; END IF;\n  l: LOOP LEAVE l; END LOOP l;\n  WHILE x DO SET x = 0; END WHILE;\n  REPEAT SET x = 1; UNTIL x END REPEAT;\n  CASE x WHEN 1 THEN SELECT 1; ELSE BEGIN END; END CASE;\nEND";
+    assert_eq!(render(&risk(text)), "ddl commit");
+    assert_eq!(render(&risk(&format!("{text}; DELETE FROM t"))), "ddl delete-all:missing writes commit");
+    assert_eq!(render(&risk("CREATE PROCEDURE p() SELECT 1; DROP TABLE t")), "ddl drop commit");
+    assert_eq!(
+        render(&risk("CREATE TRIGGER tr BEFORE INSERT ON t FOR EACH ROW SET NEW.a = 1; SET GLOBAL x = 1")),
+        "maint server-command commit"
+    );
+    assert_eq!(render(&risk("CREATE EVENT e ON SCHEDULE EVERY 1 DAY DO DELETE FROM t; SELECT 1")), "ddl commit");
+    // Blocks that cannot be followed: the whole text is the one statement.
+    assert_eq!(render(&risk("CREATE PROCEDURE p() BEGIN END END; DROP TABLE t")), "ddl commit");
+}
+
+#[test]
+fn deep_nesting_is_read_in_linear_time() {
+    let calls = format!("SELECT {}1{}", "abs(".repeat(MAX_DEPTH - 1), ")".repeat(MAX_DEPTH - 1));
+    let cond = format!("DELETE FROM t WHERE {}a = 1{}", "(".repeat(MAX_DEPTH - 1), ")".repeat(MAX_DEPTH - 1));
+    let ctes = format!(
+        "WITH {} SELECT 1",
+        (0..5000).map(|i| format!("c{i} (x) AS (SELECT 1)")).collect::<Vec<_>>().join(", ")
+    );
+    for text in [&calls, &cond, &ctes] {
+        let start = std::time::Instant::now();
+        let r = risk(text);
+        assert!(r.danger.is_none() || r.danger == Some(Danger::DeleteAll), "{:?}", r.danger);
+        assert!(start.elapsed() < std::time::Duration::from_secs(2), "{:?}", start.elapsed());
     }
 }
 

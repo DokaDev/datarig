@@ -228,26 +228,22 @@ const WRITE_WORDS: &[&str] = &[
     "RENAME", "REPLACE", "REVOKE", "UNLOCK", "UPDATE",
 ];
 
-/// Words written before `(` that do not call a function: syntax, and the types of `CAST`,
-/// `CONVERT` and column definitions.
+/// Reserved words written before `(` that do not call a function: syntax, and the types of
+/// `CAST`, `CONVERT` and column definitions. A reserved word written bare is never a function's
+/// name; a non-reserved one before `(` is read as a call unless its place says otherwise
+/// ([`syntax_before_paren`]).
 const NOT_CALLS: &[&str] = &[
-    "AGAINST",
     "ALL",
     "ANALYZE",
     "AND",
-    "ANY",
     "AS",
     "BETWEEN",
     "BIGINT",
     "BINARY",
-    "BIT",
     "BLOB",
-    "BOOL",
-    "BOOLEAN",
     "BY",
     "CASE",
     "CHECK",
-    "COLUMNS",
     "CONSTRAINT",
     "DEC",
     "DECIMAL",
@@ -255,16 +251,12 @@ const NOT_CALLS: &[&str] = &[
     "DIV",
     "DOUBLE",
     "ELSE",
-    "ENUM",
-    "ESCAPE",
     "EXCEPT",
     "EXISTS",
-    "FIXED",
     "FLOAT",
     "FOREIGN",
     "FROM",
     "FULLTEXT",
-    "HASH",
     "HAVING",
     "IN",
     "INDEX",
@@ -279,17 +271,14 @@ const NOT_CALLS: &[&str] = &[
     "LATERAL",
     "LIKE",
     "LIMIT",
-    "LIST",
     "LONGBLOB",
     "LONGTEXT",
     "MATCH",
     "MEDIUMBLOB",
     "MEDIUMINT",
     "MEDIUMTEXT",
-    "NCHAR",
     "NOT",
     "NUMERIC",
-    "NVARCHAR",
     "ON",
     "OR",
     "OVER",
@@ -300,20 +289,13 @@ const NOT_CALLS: &[&str] = &[
     "REFERENCES",
     "REGEXP",
     "RETURN",
-    "RETURNS",
     "RLIKE",
     "ROW",
     "SELECT",
-    "SERIAL",
     "SET",
-    "SIGNED",
     "SMALLINT",
-    "SOME",
     "SPATIAL",
-    "SUBPARTITION",
     "TABLE",
-    "TEXT",
-    "THAN",
     "THEN",
     "TINYBLOB",
     "TINYINT",
@@ -325,7 +307,6 @@ const NOT_CALLS: &[&str] = &[
     "VALUES",
     "VARBINARY",
     "VARCHAR",
-    "VECTOR",
     "WHEN",
     "WHERE",
     "WINDOW",
@@ -422,6 +403,9 @@ struct W<'a> {
     up: String,
     /// The parentheses open around it (a parenthesis is at the depth outside it).
     depth: usize,
+    /// A parenthesis: how far its mate is (`+` for an opening one, `-` for a closing one); 0
+    /// for any other token.
+    mate: isize,
 }
 
 impl W<'_> {
@@ -462,20 +446,23 @@ impl Call {
 /// by `;` (their worst).
 pub fn classify(sql: &str, mode: MySqlMode) -> Risk {
     match statements(sql, mode) {
-        Ok(stmts) => {
-            stmts.iter().map(|ws| statement(ws)).reduce(Risk::merge).unwrap_or_else(|| Risk::of(Class::Unknown))
-        }
+        Ok(stmts) => stmts.iter().map(|ws| statement(ws)).reduce(worse).unwrap_or_else(|| Risk::of(Class::Unknown)),
         Err(risk) => risk,
     }
 }
 
 /// The statements of `sql` (their tokens), or the risk of a text that is not read.
 fn statements(sql: &str, mode: MySqlMode) -> Result<Vec<Vec<W<'_>>>, Risk> {
-    let ws = words(sql, mode)?;
-    if starts_compound(&ws) {
-        return Ok(vec![ws.into_iter().filter(|w| w.kind != Tok::Semi).collect()]);
-    }
+    let mut ws = words(sql, mode)?;
     let mut out = Vec::new();
+    if starts_compound(&ws) {
+        let Some(end) = routine_end(&ws) else {
+            return Ok(vec![ws.into_iter().filter(|w| w.kind != Tok::Semi).collect()]);
+        };
+        let rest = ws.split_off(end);
+        out.push(ws);
+        ws = rest;
+    }
     let mut cur = Vec::new();
     for w in ws {
         if w.kind == Tok::Semi {
@@ -492,6 +479,17 @@ fn statements(sql: &str, mode: MySqlMode) -> Result<Vec<Vec<W<'_>>>, Risk> {
     Ok(out)
 }
 
+/// The worse of two risks ([`Risk::merge`]), keeping the danger a read-only policy refuses by
+/// itself when only one of them has such a danger (the merge keeps the first one).
+fn worse(a: Risk, b: Risk) -> Risk {
+    let blocks = |d: Danger| Risk::danger(Class::Read, d).read_only().is_err();
+    let danger = match (a.danger, b.danger) {
+        (Some(x), Some(y)) if !blocks(x) && blocks(y) => Some(y),
+        (x, y) => x.or(y),
+    };
+    Risk { danger, ..a.merge(b) }
+}
+
 fn unrecognized() -> Risk {
     Risk::danger(Class::Unknown, Danger::Unrecognized)
 }
@@ -503,8 +501,9 @@ fn words(sql: &str, mode: MySqlMode) -> Result<Vec<W<'_>>, Risk> {
         return Err(Risk::danger(Class::Unknown, Danger::TooComplex));
     }
     let backslash = !mode.no_backslash_escapes;
-    let mut out = Vec::new();
+    let mut out: Vec<W> = Vec::new();
     let mut depth = 0usize;
+    let mut open: Vec<usize> = Vec::new();
     for t in lex_in(sql, Dialect::MySql(mode)) {
         let text = t.text(sql);
         match t.kind {
@@ -553,7 +552,16 @@ fn words(sql: &str, mode: MySqlMode) -> Result<Vec<W<'_>>, Risk> {
             _ => depth,
         };
         let up = if matches!(t.kind, Tok::Ident | Tok::Keyword) { text.to_ascii_uppercase() } else { String::new() };
-        out.push(W { kind: t.kind, text, up, depth: at });
+        let here = out.len();
+        let mut mate = 0;
+        if t.kind == Tok::LParen {
+            open.push(here);
+        } else if t.kind == Tok::RParen {
+            let o = open.pop().ok_or_else(unrecognized)?;
+            mate = o as isize - here as isize;
+            out[o].mate = -mate;
+        }
+        out.push(W { kind: t.kind, text, up, depth: at, mate });
     }
     if depth != 0 {
         return Err(unrecognized());
@@ -633,10 +641,56 @@ fn starts_compound(ws: &[W]) -> bool {
         && object(first).is_some_and(|i| matches!(first[i].up.as_str(), "PROCEDURE" | "FUNCTION" | "TRIGGER" | "EVENT"))
 }
 
-/// The index of the parenthesis that closes the one at `i`.
+/// Where the `CREATE` of a routine, a trigger or an event at the start of `ws` ends: the `;` after
+/// its body, which is one statement or a block (`BEGIN … END`, also nested, with `IF`, `CASE`,
+/// `LOOP`, `REPEAT` and `WHILE` inside). `None` when it runs to the end of the text, or when its
+/// blocks cannot be followed (the whole text is then that one statement).
+fn routine_end(ws: &[W]) -> Option<usize> {
+    let mut blocks = 0usize;
+    let mut start = false;
+    let mut i = 0;
+    while i < ws.len() {
+        let w = &ws[i];
+        if w.kind == Tok::Semi {
+            if blocks == 0 {
+                return Some(i);
+            }
+            start = true;
+            i += 1;
+            continue;
+        }
+        let next = ws.get(i + 1);
+        if w.is("END") {
+            blocks = blocks.checked_sub(1)?;
+            if next.is_some_and(|n| ["IF", "CASE", "LOOP", "REPEAT", "WHILE"].iter().any(|k| n.is(k))) {
+                i += 1;
+            }
+            start = false;
+            i += 1;
+            continue;
+        }
+        let opens = match w.up.as_str() {
+            "BEGIN" | "CASE" => true,
+            "IF" | "WHILE" | "LOOP" => start,
+            "REPEAT" => !next.is_some_and(|n| n.kind == Tok::LParen),
+            _ => false,
+        };
+        if opens {
+            blocks += 1;
+        }
+        let label = w.is_op(":") && i > 0 && ws[i - 1].is_name();
+        start = label || ["BEGIN", "THEN", "ELSE", "DO", "LOOP", "REPEAT"].iter().any(|k| w.is(k));
+        i += 1;
+    }
+    None
+}
+
+/// The index of the parenthesis that closes the one at `i` (or opens the one at `i`), when both
+/// are in `ws`.
 fn mate(ws: &[W], i: usize) -> Option<usize> {
-    let depth = ws[i].depth;
-    ws.iter().enumerate().skip(i + 1).find(|(_, w)| w.kind == Tok::RParen && w.depth == depth).map(|(j, _)| j)
+    let w = ws.get(i).filter(|w| w.mate != 0)?;
+    let j = usize::try_from(i as isize + w.mate).ok()?;
+    (j < ws.len()).then_some(j)
 }
 
 /// A name (possibly qualified) starting at `i`, as written, and the index after it.
@@ -669,7 +723,10 @@ fn calls(ws: &[W]) -> Vec<Call> {
         let name = if w.kind == Tok::QuotedIdent { unquote(w.text).to_ascii_uppercase() } else { w.up.clone() };
         let prev = i.checked_sub(1).map(|p| &ws[p]);
         let qualified = prev.is_some_and(|p| p.kind == Tok::Dot);
-        if !qualified && w.kind != Tok::QuotedIdent && NOT_CALLS.contains(&name.as_str()) {
+        if !qualified
+            && w.kind != Tok::QuotedIdent
+            && (NOT_CALLS.contains(&name.as_str()) || syntax_before_paren(ws, i))
+        {
             continue;
         }
         if !qualified && prev.is_some_and(|p| BEFORE_COLUMN_LIST.iter().any(|b| p.is(b))) {
@@ -685,6 +742,19 @@ fn calls(ws: &[W]) -> Vec<Call> {
         out.push(Call { name, qualified });
     }
     out
+}
+
+/// Whether the non-reserved word at `i`, before `(`, is syntax in its place: `= ANY (…)`,
+/// `> SOME (…)`, `MATCH (…) AGAINST (…)`, `'$' COLUMNS (…)` of `JSON_TABLE`, `LIKE 'x' ESCAPE
+/// (…)`.
+fn syntax_before_paren(ws: &[W], i: usize) -> bool {
+    let prev = i.checked_sub(1).map(|p| &ws[p]);
+    match ws[i].up.as_str() {
+        "ANY" | "SOME" => prev.is_some_and(|p| p.kind == Tok::Op),
+        "AGAINST" => prev.is_some_and(|p| p.kind == Tok::RParen),
+        "COLUMNS" | "ESCAPE" => prev.is_some_and(|p| p.kind == Tok::Str),
+        _ => false,
+    }
 }
 
 /// A quoted name's text without its quotes.
@@ -968,7 +1038,7 @@ fn explain(ws: &[W]) -> Risk {
         // The plan goes into a user variable.
         risk = Risk { class: Class::Session, safe_setting: true, ..risk };
     } else if into {
-        risk = risk.merge(Risk::session(false));
+        risk = worse(risk, Risk::session(false));
     }
     risk
 }
@@ -1027,15 +1097,17 @@ fn filter(ws: &[W], from: usize) -> Option<NoWhere> {
 
 /// Whether condition `c` names a column (or anything else that may be one).
 fn names_a_column(c: &[W]) -> bool {
+    let mut interval = false;
     (0..c.len()).any(|i| {
         let w = &c[i];
+        interval |= w.is("INTERVAL");
         let call = c.get(i + 1).is_some_and(|n| n.kind == Tok::LParen);
         let after = |word: &str| i > 0 && c[i - 1].is(word);
         match w.kind {
             Tok::QuotedIdent => !call,
             Tok::Ident | Tok::Keyword => {
                 let introducer = w.text.starts_with('_') && c.get(i + 1).is_some_and(|n| n.kind == Tok::Str);
-                let unit = UNITS.contains(&w.up.as_str()) && c[..i].iter().any(|p| p.is("INTERVAL"));
+                let unit = interval && UNITS.contains(&w.up.as_str());
                 !call && !introducer && !unit && !after("COLLATE") && !NOT_COLUMNS.contains(&w.up.as_str())
             }
             _ => false,
@@ -1264,7 +1336,7 @@ fn set(ws: &[W]) -> Risk {
             assignment(item)
         };
         out = Some(match out {
-            Some(o) => o.merge(risk),
+            Some(o) => worse(o, risk),
             None => risk,
         });
     }

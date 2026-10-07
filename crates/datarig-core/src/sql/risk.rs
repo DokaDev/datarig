@@ -317,6 +317,10 @@ pub enum ReadOnlyBlock {
     DynamicSql,
     /// It acts on the whole server ([`Danger::ServerCommand`]).
     ServerCommand,
+    /// It takes locks that block other sessions ([`Danger::Locks`]).
+    Locks,
+    /// It reads or writes a file ([`Danger::FileAccess`]).
+    FileAccess,
 }
 
 /// Why a statement needs a confirmation before it runs.
@@ -467,6 +471,9 @@ impl Risk {
             Some(Danger::Unrecognized) => return Err(ReadOnlyBlock::Unrecognized),
             Some(Danger::DynamicSql) => return Err(ReadOnlyBlock::DynamicSql),
             Some(Danger::ServerCommand) => return Err(ReadOnlyBlock::ServerCommand),
+            Some(Danger::Locks) => return Err(ReadOnlyBlock::Locks),
+            Some(Danger::FileAccess) => return Err(ReadOnlyBlock::FileAccess),
+            Some(Danger::Setting) => return Err(ReadOnlyBlock::Setting),
             _ => {}
         }
         if self.unchecked_call {

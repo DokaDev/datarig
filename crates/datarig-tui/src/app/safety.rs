@@ -258,6 +258,8 @@ fn blocked_label(why: ReadOnlyBlock) -> Label {
         ReadOnlyBlock::UnknownFunction => Label::SafetyBlockedUnknownFunction,
         ReadOnlyBlock::DynamicSql => Label::SafetyBlockedDynamicSql,
         ReadOnlyBlock::ServerCommand => Label::SafetyBlockedServerCommand,
+        ReadOnlyBlock::Locks => Label::SafetyBlockedLocks,
+        ReadOnlyBlock::FileAccess => Label::SafetyBlockedFileAccess,
         ReadOnlyBlock::Class(Class::Write) => Label::SafetyBlockedWrite,
         ReadOnlyBlock::Class(Class::Ddl) => Label::SafetyBlockedDdl,
         ReadOnlyBlock::Class(Class::Maintenance) => Label::SafetyBlockedMaintenance,

@@ -258,6 +258,8 @@
 "safety.blocked.unknown_function" = "this statement calls a function that is not a built-in and may be a loadable one (call a stored function with its database: db.f())"
 "safety.blocked.dynamic_sql" = "this statement prepares SQL given as text"
 "safety.blocked.server_command" = "this statement acts on the whole database server"
+"safety.blocked.locks" = "this statement takes locks that block other sessions"
+"safety.blocked.file_access" = "this statement reads or writes a file"
 "action.tab.new_console" = "New console tab"
 "action.tab.close" = "Close tab"
 "action.tab.reopen_closed" = "Reopen closed tab"

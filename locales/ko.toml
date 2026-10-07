@@ -255,6 +255,8 @@
 "safety.blocked.unknown_function" = "이 문은 내장 함수가 아닌, 로드 가능한 함수일 수 있는 함수를 호출합니다(저장 함수는 데이터베이스를 붙여 호출하세요: db.f())"
 "safety.blocked.dynamic_sql" = "이 문은 텍스트로 받은 SQL을 준비합니다"
 "safety.blocked.server_command" = "이 문은 데이터베이스 서버 전체에 작용합니다"
+"safety.blocked.locks" = "이 문은 다른 세션을 막는 잠금을 잡습니다"
+"safety.blocked.file_access" = "이 문은 파일을 읽거나 씁니다"
 "status.policy" = "정책: {name}"
 "action.tab.new_console" = "새 콘솔 탭"
 "action.tab.close" = "탭 닫기"
