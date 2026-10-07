@@ -117,7 +117,7 @@ impl App {
                 self.focus = Focus::Editor;
             }
         }
-        self.tab_mut().editor = Editor::new(text);
+        self.tab_mut().replace_editor(Editor::new(text));
         self.edited();
     }
 

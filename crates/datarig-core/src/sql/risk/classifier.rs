@@ -25,8 +25,8 @@ impl Default for Classifier {
 impl Classifier {
     /// The classifier of `lang` for a session that prepared nothing.
     pub fn new(lang: Language) -> Self {
-        match lang.dialect() {
-            Dialect::Postgres => Self::Pg(Prepared::default()),
+        match lang {
+            Language::Sql(Dialect::Postgres) => Self::Pg(Prepared::default()),
         }
     }
 

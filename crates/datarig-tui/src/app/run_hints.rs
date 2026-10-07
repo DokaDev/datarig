@@ -30,7 +30,7 @@ impl App {
         }
         let time = self.time_of_day();
         let plan = t.exec.plan.as_ref().filter(|p| p.query == query).map(|p| p.index);
-        let lang = t.editor.language();
+        let lang = t.exec.prepared.language();
         let hints: Vec<Option<RunHint>> = (t.exec.run.statements.iter().enumerate())
             .map(|(i, s)| self.run_hint(lang, s, plan == Some(i), &time))
             .collect();
@@ -54,7 +54,7 @@ impl App {
             return;
         }
         let time = &self.time_of_day();
-        let lang = t.editor.language();
+        let lang = t.exec.prepared.language();
         let amend: Vec<(usize, RunHint)> = (t.exec.run.statements.iter().enumerate())
             .filter(|(i, s)| s.rolled_back && due(*i))
             .filter_map(|(i, s)| Some((i, self.run_hint(lang, s, false, time)?)))

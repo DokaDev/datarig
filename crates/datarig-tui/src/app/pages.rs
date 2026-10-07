@@ -161,7 +161,7 @@ impl App {
         let refused = |why| {
             if released { Msg::ResultsPageRefusedNoHold { why } } else { Msg::ResultsPageRefused { why } }
         };
-        let lang = t.editor.language();
+        let lang = t.exec.prepared.language();
         if let Err(r) = t.exec.prepared.repeatable(&sql) {
             if released && commits_a_write(lang, &sql) {
                 let count = match &t.results {

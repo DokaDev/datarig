@@ -163,10 +163,11 @@ fn set_language_keeps_the_states_of_the_same_language() {
     let mut e = Editor::new(text);
     assert_eq!(e.language(), Language::Sql(Dialect::Postgres));
     e.ensure_states(usize::MAX);
-    let valid = e.valid;
+    let (valid, version) = (e.valid, e.version());
     e.set_language(Language::Sql(Dialect::Postgres));
     assert_eq!(e.language(), Language::Sql(Dialect::Postgres));
     assert_eq!(e.valid, valid, "the same language: the cache stays");
+    assert_eq!(e.version(), version, "and so does the text's version");
     e.valid = 0;
     e.ensure_states(usize::MAX);
     assert_eq!(e.states[..e.valid], states_of(text)[..]);

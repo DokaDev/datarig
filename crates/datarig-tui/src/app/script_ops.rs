@@ -267,7 +267,7 @@ impl App {
         };
         if let Some(t) = self.tabs.get_mut(id) {
             let (row, col) = (t.editor.row, t.editor.col);
-            t.editor = Editor::new(&text);
+            t.replace_editor(Editor::new(&text));
             t.editor.row = row.min(t.editor.lines.len() - 1);
             t.editor.col = col;
             t.doc.saved = text;

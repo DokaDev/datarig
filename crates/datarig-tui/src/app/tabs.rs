@@ -482,6 +482,12 @@ impl Tab {
         }
     }
 
+    /// Put `editor` in place of the tab's editor, in the tab's language.
+    pub fn replace_editor(&mut self, mut editor: Editor) {
+        editor.set_language(self.editor.language());
+        self.editor = editor;
+    }
+
     /// A table tab (no editor on screen, the results take the whole tab).
     pub fn is_table(&self) -> bool {
         self.kind == TabKind::Table
@@ -976,7 +982,7 @@ impl TabManager {
             t.context = c.context;
             // Not read again by itself: `r` reads it.
             if let Some(object) = c.ddl {
-                t.editor = Editor::read_only("");
+                t.replace_editor(Editor::read_only(""));
                 t.doc.ddl = Some(DdlTab::new(object));
             }
             if t.is_table() || t.is_ddl() {

@@ -90,7 +90,7 @@ impl App {
     /// STDIN` and `COPY … TO STDOUT` need the COPY protocol, which the app does not carry yet
     /// (sent, the first broke the tab's connection).
     pub(super) fn unsupported(&self, tab: TabId, statements: &[String]) -> Option<Notice> {
-        let lang = self.tab_language(tab);
+        let lang = self.tabs.get(tab).map_or_else(|| self.tab_language(tab), |t| t.exec.prepared.language());
         let sql = statements.iter().find(|sql| Classifier::classify_once(lang, sql).stdio)?;
         let sql = super::runlog::excerpt(sql, 60);
         Some(Notice::new(Msg::SafetyCopyStdio { sql }, Level::Error))
@@ -100,6 +100,12 @@ impl App {
     /// a session): each run's statements are checked in order against a copy, so an `EXPLAIN`
     /// or `EXECUTE` sees what the run prepared before it.
     fn classifier(&self, tab: TabId) -> Classifier {
+        // A tab whose language was not pushed when its binding changed would be checked by the
+        // rules of another language.
+        debug_assert!(self.tabs.get(tab).is_none_or(|t| {
+            let lang = self.tab_language(tab);
+            t.exec.prepared.language() == lang && t.editor.language() == lang
+        }));
         match self.tabs.get(tab) {
             Some(t) if t.exec.session.is_some() => t.exec.prepared.clone(),
             _ => Classifier::new(self.tab_language(tab)),

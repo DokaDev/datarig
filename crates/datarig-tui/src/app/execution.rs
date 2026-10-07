@@ -133,7 +133,7 @@ impl App {
             t.exec.replace_pending = true;
             t.exec.messages_scroll = 0;
             t.exec.ddl = statements.iter().any(|s| changes_schema(s));
-            let lang = t.editor.language();
+            let lang = t.exec.prepared.language();
             t.exec.explain_rolled_back =
                 statements.iter().any(|s| Classifier::classify_once(lang, s).rollback_matters());
             // What the run prepares and deallocates counts once the server says each statement
@@ -1048,7 +1048,7 @@ impl App {
                     let m = Notice::new(
                         super::pages::first_page_only(
                             &self.i18n,
-                            t.editor.language(),
+                            t.exec.prepared.language(),
                             t.answer_sql(),
                             &r,
                             count as u64,

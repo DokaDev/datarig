@@ -334,11 +334,13 @@ impl Editor {
     }
 
     /// The text is in `lang` from now on (its tab's binding changed): the lexer states cached
-    /// for another language are read again.
+    /// for another language are read again, and the text has a new version, so nothing worked
+    /// out for the old language (a completion) is taken for the new one.
     pub fn set_language(&mut self, lang: Language) {
         if self.lang != lang {
             self.lang = lang;
             self.valid = 0;
+            self.version = next_version();
         }
     }
 
