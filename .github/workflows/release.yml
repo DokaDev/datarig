@@ -7,8 +7,10 @@ name: Release
 # exists yet (.github/scripts/release-tap-eligible.sh): until the first one ships, the tap
 # tracks the latest release candidate, so it stays installable during this pre-1.0 phase; once
 # a stable release exists, the tap only tracks stable and later rc tags leave it alone. The tag
-# must be the workspace version (.github/scripts/release-version.sh). A pull request that
-# changes the release files, or a manual run, does everything except publishing.
+# must be the workspace version (.github/scripts/release-version.sh). Before anything else, a
+# tag waits for the CI run on main for its commit and stops unless the commit is on main and
+# every CI job passed (.github/scripts/release-ci-gate.sh). A pull request that changes the
+# release files, or a manual run, does everything except publishing (and skips that wait).
 on:
   push:
     tags: ["v*"]
@@ -38,8 +40,29 @@ defaults:
     shell: bash
 
 jobs:
+  # Every other job depends on this one, so nothing is built or published for a tag whose CI
+  # failed. It passes straight away for a pull request or a manual run.
+  gate:
+    name: CI passed on main
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: Wait for CI on main
+        if: github.event_name == 'push' && github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          TIMEOUT: "2400"
+        run: bash .github/scripts/release-ci-gate.sh
+
   plan:
     name: version
+    needs: gate
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -62,6 +85,7 @@ jobs:
   # every target).
   notices:
     name: third-party notices
+    needs: gate
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
