@@ -292,7 +292,8 @@ pub fn complete_in(src: &str, cursor: usize, cat: &Catalog, force: bool, path: &
     let (prefix_start, typed, trail) = match open_quote {
         Some(t) => {
             let quote = d.opening_quote(t.text(seg)).unwrap_or(d.ident_quote());
-            let trail = usize::from(seg[cur..].starts_with(quote) && closed(d, t, seg) && cur + 1 == t.end);
+            let ends_here = seg[cur..].starts_with(quote) && closed(d, t, seg) && cur + quote.len_utf8() == t.end;
+            let trail = if ends_here { quote.len_utf8() } else { 0 };
             let text = d.unescape_ident(quote, &seg[t.start + quote.len_utf8()..cur]);
             (t.start, Typed { text, quoted: true, dialect: d }, trail)
         }
