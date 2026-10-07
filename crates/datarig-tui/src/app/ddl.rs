@@ -110,6 +110,7 @@ impl App {
         }
         self.leave_tab();
         let tab = self.tabs.open(TabKind::Ddl, Some(id), Editor::read_only(""));
+        self.sync_tab_language(tab);
         if let Some(t) = self.tabs.get_mut(tab) {
             t.doc.ddl = Some(DdlTab::new(object));
             t.doc.written = true;

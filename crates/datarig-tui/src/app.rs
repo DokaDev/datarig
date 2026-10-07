@@ -91,6 +91,8 @@ use datarig_core::profile::folder::{FolderPath, Folders};
 use datarig_core::profile::{ConnectionConfig, ProfileId};
 use datarig_core::secret::{DefaultSource, MemoryStore, SecretStore, Secrets, SourceError, SourceKind, Stores};
 use datarig_core::sql::complete::{Candidate, complete_in};
+use datarig_core::sql::dialect::Language;
+use datarig_core::sql::risk::Classifier;
 use explorer::Explorer;
 use overlay::{Busy, Confirm, ConfirmAction, Overlay, OverlayKind, Overlays};
 pub use presets::PROBE_MAX;
@@ -967,6 +969,26 @@ impl App {
         match &self.drivers {
             Some(d) => d(name),
             None => driver_for(name),
+        }
+    }
+
+    /// The language tab `tab`'s text is in: its profile's driver's
+    /// (`Capabilities::language`); the default for a tab without a profile, or whose profile
+    /// or driver is unknown.
+    pub fn tab_language(&self, tab: TabId) -> Language {
+        let profile = self.tabs.get(tab).and_then(|t| t.profile).and_then(|id| self.profile(id));
+        profile.and_then(|p| self.driver(&p.driver)).map_or_else(Language::default, |d| d.capabilities().language)
+    }
+
+    /// Tab `tab`'s editor and risk classifier follow its language ([`App::tab_language`]), once
+    /// the tab appears or its binding (or its profile's driver) changes. Another language gets
+    /// a new classifier, with nothing prepared.
+    pub(crate) fn sync_tab_language(&mut self, tab: TabId) {
+        let lang = self.tab_language(tab);
+        let Some(t) = self.tabs.get_mut(tab) else { return };
+        t.editor.set_language(lang);
+        if t.exec.prepared.language() != lang {
+            t.exec.prepared = Classifier::new(lang);
         }
     }
 

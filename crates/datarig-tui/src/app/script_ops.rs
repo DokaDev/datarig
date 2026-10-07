@@ -151,6 +151,7 @@ impl App {
         let profile = binding.filter(|p| self.profile(*p).is_some());
         self.leave_tab();
         let id = self.tabs.open(TabKind::Script, profile, Editor::new(&text));
+        self.sync_tab_language(id);
         if let Some(t) = self.tabs.get_mut(id) {
             t.doc.script = Some(path.to_string());
             t.doc.saved = text;

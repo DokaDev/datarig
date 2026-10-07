@@ -552,7 +552,11 @@ impl App {
                 Err(fault) => {
                     self.presets.retain(|q| q.id != t.id);
                     match before {
-                        Some(b) => self.profiles[idx] = b,
+                        Some(b) => {
+                            let id = b.id;
+                            self.profiles[idx] = b;
+                            self.sync_profile_tabs(id);
+                        }
                         None => {
                             self.profiles.remove(idx);
                         }
@@ -661,7 +665,16 @@ impl App {
         if let Some(f) = p.folder_path() {
             self.folders.insert(&f);
         }
+        self.sync_profile_tabs(p.id);
         idx
+    }
+
+    /// The tabs on profile `id` follow its driver's language (its driver may have changed).
+    pub(super) fn sync_profile_tabs(&mut self, id: ProfileId) {
+        let tabs: Vec<TabId> = self.tabs.iter().filter(|t| t.profile == Some(id)).map(|t| t.id).collect();
+        for t in tabs {
+            self.sync_tab_language(t);
+        }
     }
 
     /// Close the form; the explorer's cursor goes to the saved profile.

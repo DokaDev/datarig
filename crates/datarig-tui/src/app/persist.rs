@@ -151,7 +151,8 @@ impl App {
         if !restored.is_empty() {
             let n = restored.len();
             for t in restored {
-                self.tabs.insert_tab(usize::MAX, t);
+                let id = self.tabs.insert_tab(usize::MAX, t);
+                self.sync_tab_language(id);
             }
             self.tabs.activate(active.min(n - 1));
             self.entered_tab();

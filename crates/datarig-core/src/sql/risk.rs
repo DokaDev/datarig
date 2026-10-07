@@ -105,7 +105,10 @@
 //! (`1 <> 0`, `true AND true`, `random() < 2`), which matches every row or none. Other
 //! conditions that happen to be always true (`id > 0`) are not recognised.
 
+mod classifier;
 pub mod repeat;
+
+pub use classifier::Classifier;
 
 use super::lexer::{Tok, lex, lex_backslash_strings};
 use pg_query::protobuf;

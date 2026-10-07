@@ -11,6 +11,7 @@ pub use keys::{KeyCatalog, KeyMarks};
 pub use protocol::{Cell, ColumnMeta, ColumnOrigin, DbCommand, DbError, DbEvent, Outcome, PagingMode, SchemaObjects};
 
 use crate::profile::ConnectionConfig;
+use crate::sql::dialect::Language;
 use crate::transport::DialerRef;
 use futures::future::BoxFuture;
 use std::sync::Arc;
@@ -45,6 +46,9 @@ pub struct Capabilities {
     /// waiting for a lock; the UI shows it as SQL in a read-only tab. PostgreSQL answers with
     /// the catalog's parts (`ddl::DdlSource`), which `sql::ddl` writes out.
     pub ddl: bool,
+    /// The editor language of the driver's sessions: the SQL tools (lexing, quoting, the risk
+    /// classifier) pick their rules from it.
+    pub language: Language,
 }
 
 /// Where a session works: a database and a schema of the profile's server,

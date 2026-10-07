@@ -563,3 +563,34 @@ fn the_close_button_closes_as_ctrl_w_does() {
     assert_eq!(h.app.tabs.len(), 1);
     assert!(h.session_cancelled(1), "its statement was cancelled");
 }
+
+/// A tab's editor and risk classifier are in the language of its profile's driver; a tab
+/// without a profile, or on one whose driver is unknown, gets the default language.
+#[test]
+fn a_tab_is_in_its_profiles_language() {
+    use datarig_core::sql::dialect::{Dialect, Language};
+    let pg = Language::Sql(Dialect::Postgres);
+    let mut h = Harness::connected(Lang::En);
+    let id = h.app.tab().id;
+    assert_eq!(h.app.tab_language(id), pg);
+    assert_eq!(h.app.tab().editor.language(), pg);
+    assert_eq!(h.app.tab().exec.prepared.language(), pg);
+    // A new console on the profile.
+    h.ctrl('t');
+    let console = h.app.tab().id;
+    assert_ne!(console, id);
+    assert_eq!(h.app.tab().editor.language(), pg);
+    // Unbound.
+    h.app.tabs.bind(console, None);
+    assert_eq!(h.app.tab_language(console), Language::default());
+
+    let mut unknown = datarig_core::profile::ConnectionConfig::test_db();
+    unknown.driver = "unknown".into();
+    let cfg = datarig_core::config::Config { connections: vec![unknown], ..Default::default() };
+    let h = Harness::with_config(&cfg, Lang::En);
+    let id = h.app.tab().id;
+    assert!(h.app.tab().profile.is_some());
+    assert_eq!(h.app.tab_language(id), Language::default());
+    assert_eq!(h.app.tab().editor.language(), Language::default());
+    assert_eq!(h.app.tab().exec.prepared.language(), Language::default());
+}

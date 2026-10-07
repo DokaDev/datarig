@@ -16,6 +16,7 @@ use datarig_core::i18n::Lang;
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::secret::{MemoryStore, SecretStore};
 use datarig_core::sql::complete::{Catalog, ColumnInfo, Relation};
+use datarig_core::sql::dialect::{Dialect, Language};
 use datarig_tui::app::explorer::RowKind;
 use datarig_tui::app::overlay::{Overlay, OverlayKind};
 use datarig_tui::app::profiles::ProfileForm;
@@ -90,6 +91,7 @@ impl Driver for FakeDriver {
             contexts: true,
             structure: !self.no_structure.load(Ordering::SeqCst),
             ddl: !self.no_ddl.load(Ordering::SeqCst),
+            language: Language::Sql(Dialect::Postgres),
         }
     }
 

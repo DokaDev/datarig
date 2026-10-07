@@ -115,7 +115,7 @@ Held by CI budgets (`docs/perf.md`).
 
 ## Safety
 
-- **Classification is core's** (`datarig-core::sql::risk`, pure), **from PostgreSQL's own parse tree** (libpg_query through the `pg_query` crate; see the decision below): a statement's `Class` (read, session, tx, write, DDL, maintenance, procedural, unknown), whether it writes rows, a missing, always-true or column-less `WHERE` (`NoWhere`), why it asks (`Danger`: destructive, a `MERGE` that updates or deletes, `ALTER … TYPE` with or without `USING`, `DO`/`CALL`, an unknown prepared statement, a text the parser rejects, a text too long or too deeply nested to parse), its target, and `Explain` (plan only, or `ANALYZE` in any quoting, classified as the statement it wraps). Data-modifying statements, row locks and `SELECT … INTO` are found at any depth; `set_config()` of the read-only settings marks a statement as asking for read-write. `Risk::read_only`, `Risk::confirm` and `Risk::rolls_back` are the three questions the rest asks. A text whose plain strings hold a backslash is parsed a second time with those strings spelled as `E''` strings (what a server with `standard_conforming_strings = off` runs); the worse reading counts. It is an allowlist: unknown text is treated like a write, and text the parser rejects always asks. `risk::Prepared` keeps a session's prepared statements by name, so `EXECUTE` is classified as the statement it runs; each tab keeps one for its query session (`TabSession::prepared`, empty for a new session), changed only by what the server confirmed (see "sent ≠ succeeded" below).
+- **Classification is core's** (`datarig-core::sql::risk`, pure), **from PostgreSQL's own parse tree** (libpg_query through the `pg_query` crate; see the decision below): a statement's `Class` (read, session, tx, write, DDL, maintenance, procedural, unknown), whether it writes rows, a missing, always-true or column-less `WHERE` (`NoWhere`), why it asks (`Danger`: destructive, a `MERGE` that updates or deletes, `ALTER … TYPE` with or without `USING`, `DO`/`CALL`, an unknown prepared statement, a text the parser rejects, a text too long or too deeply nested to parse), its target, and `Explain` (plan only, or `ANALYZE` in any quoting, classified as the statement it wraps). Data-modifying statements, row locks and `SELECT … INTO` are found at any depth; `set_config()` of the read-only settings marks a statement as asking for read-write. `Risk::read_only`, `Risk::confirm` and `Risk::rolls_back` are the three questions the rest asks. A text whose plain strings hold a backslash is parsed a second time with those strings spelled as `E''` strings (what a server with `standard_conforming_strings = off` runs); the worse reading counts. It is an allowlist: unknown text is treated like a write, and text the parser rejects always asks. `risk::Prepared` keeps a session's prepared statements by name, so `EXECUTE` is classified as the statement it runs; each tab keeps one, inside its language's `risk::Classifier` (see "The dialect seam"), for its query session (`TabSession::prepared`, empty for a new session), changed only by what the server confirmed (see "sent ≠ succeeded" below).
 - **The lexer stays for the UI** (highlighting, the statement splitter, completion) and follows PostgreSQL's scanner where tokens end (ASCII-only whitespace, `\r` ends a `--` comment, `$` and non-ASCII characters inside identifiers, dollar-tag characters). Differential tests hold the splitter to libpg_query's split on a corpus of tricky texts; a piece the splitter got wrong would fail to parse and ask.
 - **The TUI checks before it sends or queues** (`app/safety.rs`): `App::run_in` refuses what a read-only policy does not allow (a notice naming the policy), then asks about the dangerous statements (`Overlay::RunConfirm`, key context `overlay.run_confirm`, Cancel focused) and only then calls `run_approved`, which queues the run for a connecting profile or sends it; `run_approved` checks read-only again, and a queued run is not asked about twice. An answer runs only on the tab, profile and binding it was asked for (like `Queued`).
 - **The server enforces read-only, per transaction** (the hard guarantee): with `ConnectOptions::read_only` (set for every session of a profile whose policy is read-only then or now) the query session opens every transaction `READ ONLY` itself: a portal's own transaction starts with `BEGIN READ ONLY`, a statement without rows outside the user's block runs between `BEGIN READ ONLY` and `COMMIT` (transaction control and session settings are not wrapped), and the user's block gets `SET TRANSACTION READ ONLY` with its first statement (before an `EXPLAIN ANALYZE` savepoint too). All of it goes out in the write the statement goes in (no extra round trip; the budget has read-only scenarios), and the user's SQL is not rewritten. A statement that asks for read-write is never sent (`DbError::ReadWriteRefused`), because a block may go back to read-write before its first query. The startup option `-c default_transaction_read_only=on` stays as a second layer; a server that drops it (a pooler) no longer fails the connect: `DbEvent::ReadOnlyPerTransaction` follows `Connected` and the status bar says so. `TabSession::read_only` records it; a policy that became read-only after the session opened blocks runs there until a reconnect.
@@ -561,6 +561,35 @@ Held by CI budgets (`docs/perf.md`).
   connection of a counting proxy); the app's flows with a recorded tunnel (`flows_tunnel.rs`,
   `flows_presets.rs`); round trips through the tunnel (`[rtt_ssh]` budgets); `cargo audit`.
 
+## The dialect seam
+
+The SQL tools are PostgreSQL's today. The seam that lets another dialect join them is in place;
+the tools themselves are not threaded through it yet.
+
+- **Types** (`datarig_core::sql::dialect`): `Dialect` (`Postgres`, the default) is the SQL
+  dialect of a text, and `Language` (`Sql(Dialect)`) the language of an editor's text
+  (`Language::dialect`). Both are `Copy` enums: every tool will `match` on them, so a new
+  variant makes each one decide what to do with it.
+- **Who says which**: a driver, through `Capabilities::language` (`PgDriver`:
+  `Sql(Postgres)`). `App::tab_language` reads it from the tab's profile's driver without
+  connecting; a tab without a profile, or whose profile or driver is unknown, gets
+  `Language::default()`.
+- **Where it goes**: `App::sync_tab_language` pushes the tab's language into its editor
+  (`Editor::set_language`, which drops the cached lexer line states when the language changes)
+  and gives the tab a new `risk::Classifier` when its language changes. It runs wherever a tab
+  appears or its binding changes: a new console, table, DDL or saved-query tab, a tab brought
+  back from the closed list or the trash, a restored workspace, `bind_tab_in` and the other
+  rebinds, a deleted profile's tabs, and a saved profile (whose driver may have changed).
+- **The classifier**: `risk::Classifier` (`Pg(Prepared)`) is what the app asks about a
+  statement. It is built from a language (`Classifier::new`) and forwards to the PostgreSQL
+  classifier unchanged: `classify`, `forget` and `knows` with the session's prepared
+  statements, `repeatable`, `ordered` and `count_query` of `risk::repeat`, and
+  `Classifier::classify_once` for a one-off look in a given language. Each tab keeps one for its
+  query session (`TabSession::prepared`); a new session gets a new one of the same language.
+  The app calls no PostgreSQL classifier function directly; the PostgreSQL driver does.
+- **Not yet**: the lexer, the splitter, completion, the formatter, quoting and the editor's
+  tools still assume PostgreSQL; `Editor` keeps its language but does not lex by it yet.
+
 ## Decision: PostgreSQL's parser for safety classification
 
 - **Context**: the lexer-based classifier was fooled wherever the lexer and the server disagreed: `EXPLAIN ("analyze") DELETE` (a quoted option name), a `--` comment ended by a lone `\r`, `x<NBSP>$$` (an identifier to PostgreSQL, a dollar quote to the lexer). Each was a DELETE or UPDATE of every row without a question. Chasing the scanner and the grammar by hand does not end.
@@ -617,7 +646,7 @@ The build fails, naming the file, the key and the problem, when a locale misses 
 1. Create `crates/datarig-driver-mysql/` with `datarig-core.workspace = true` and the database client crate in its `Cargo.toml` (versions go to the root `[workspace.dependencies]`), and `[lints] workspace = true`.
 2. Add it to `members` and to `[workspace.dependencies]` (`datarig-driver-mysql = { path = "crates/datarig-driver-mysql" }`) in the root `Cargo.toml`.
 3. Implement `datarig_core::driver::Driver`:
-   - `capabilities()`: turn on only what the driver really supports (`server_paging`, `cancel`, `introspection`, `contexts`, `key_metadata`, ...).
+   - `capabilities()`: turn on only what the driver really supports (`server_paging`, `cancel`, `introspection`, `contexts`, `key_metadata`, ...), and name the `language` of its sessions.
    - `connect(cfg, role, opts, events)`: for each role (`SessionRole::Meta` for the tree and completion, `SessionRole::Query` for a tab's statements) start a background task with **one connection** and return `Session::new(caps, role, tx, canceller)`. Report `opts.application_name` to the server. Progress and results go out as `DbEvent`s (`Connected` / `ConnectFailed`, `Schemas`, `Objects`, `Catalog`, `Page`, `Done`, `Failed`, `TxOpen`). A metadata session answers `Execute` with `Failed`. With `Capabilities::structure` the metadata session also answers `LoadStructure` with a `driver::structure::TableStructure` (`DbEvent::Structure`), which the explorer shows under an open table.
    - `ping()`: the test connection. It honours the time limit and cancellation (the future being dropped).
    - Export the driver type only (`pub use connect::MySqlDriver;`).

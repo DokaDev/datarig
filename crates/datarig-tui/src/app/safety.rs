@@ -22,7 +22,7 @@
 use super::overlay::RunConfirm;
 use super::*;
 use datarig_core::policy::Policy;
-use datarig_core::sql::risk::{self, Class, Danger, NoWhere, ReadOnlyBlock, Why};
+use datarig_core::sql::risk::{Class, Danger, NoWhere, ReadOnlyBlock, Why};
 
 /// A statement of a run that asks before it runs.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -75,9 +75,9 @@ impl App {
                 Level::Error,
             ));
         }
-        let mut prepared = self.prepared(tab);
+        let mut classifier = self.classifier(tab);
         statements.iter().find_map(|sql| {
-            let why = prepared.classify(sql).read_only().err()?;
+            let why = classifier.classify(sql).read_only().err()?;
             let what = self.i18n.label(blocked_label(why)).to_string();
             let sql = super::runlog::excerpt(sql, 60);
             Some(Notice::new(Msg::SafetyReadOnlyBlocked { policy: policy.clone(), what, sql }, Level::Error))
@@ -86,32 +86,36 @@ impl App {
 }
 
 impl App {
-    /// Why `statements` cannot run at all, whatever the policy: `COPY … FROM STDIN` and `COPY …
-    /// TO STDOUT` need the COPY protocol, which the app does not carry yet (sent, the first
-    /// broke the tab's connection).
-    pub(super) fn unsupported(&self, statements: &[String]) -> Option<Notice> {
-        let sql = statements.iter().find(|sql| risk::classify(sql).stdio)?;
+    /// Why `statements` cannot run at all in tab `tab`, whatever the policy: `COPY … FROM
+    /// STDIN` and `COPY … TO STDOUT` need the COPY protocol, which the app does not carry yet
+    /// (sent, the first broke the tab's connection).
+    pub(super) fn unsupported(&self, tab: TabId, statements: &[String]) -> Option<Notice> {
+        let lang = self.tab_language(tab);
+        let sql = statements.iter().find(|sql| Classifier::classify_once(lang, sql).stdio)?;
         let sql = super::runlog::excerpt(sql, 60);
         Some(Notice::new(Msg::SafetyCopyStdio { sql }, Level::Error))
     }
 
-    /// The statements tab `tab`'s session has prepared (none without a session): each run's
-    /// statements are checked in order against a copy, so an `EXPLAIN` or `EXECUTE` sees what
-    /// the run prepared before it.
-    fn prepared(&self, tab: TabId) -> risk::Prepared {
-        self.tabs.get(tab).filter(|t| t.exec.session.is_some()).map(|t| t.exec.prepared.clone()).unwrap_or_default()
+    /// The classifier of tab `tab`, with the statements its session has prepared (none without
+    /// a session): each run's statements are checked in order against a copy, so an `EXPLAIN`
+    /// or `EXECUTE` sees what the run prepared before it.
+    fn classifier(&self, tab: TabId) -> Classifier {
+        match self.tabs.get(tab) {
+            Some(t) if t.exec.session.is_some() => t.exec.prepared.clone(),
+            _ => Classifier::new(self.tab_language(tab)),
+        }
     }
 
     /// The statements of `statements` that ask before they run in tab `tab` under profile
     /// `pid`'s policy.
     pub(super) fn dangerous(&self, tab: TabId, pid: ProfileId, statements: &[String]) -> Vec<Dangerous> {
         let writes = self.policy_of(pid).1.confirm.writes();
-        let mut prepared = self.prepared(tab);
+        let mut classifier = self.classifier(tab);
         statements
             .iter()
             .enumerate()
             .filter_map(|(index, sql)| {
-                let r = prepared.classify(sql);
+                let r = classifier.classify(sql);
                 let why = r.confirm(writes)?;
                 Some(Dangerous {
                     index,

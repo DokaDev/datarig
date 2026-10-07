@@ -10,7 +10,6 @@
 use super::runlog::{StatementOutcome, StatementRun};
 use super::*;
 use crate::widgets::editor::{HintKind, RunHint};
-use datarig_core::sql::risk;
 
 impl App {
     /// What tab `id`'s editor staged for a run is not run.
@@ -31,8 +30,10 @@ impl App {
         }
         let time = self.time_of_day();
         let plan = t.exec.plan.as_ref().filter(|p| p.query == query).map(|p| p.index);
-        let hints: Vec<Option<RunHint>> =
-            t.exec.run.statements.iter().enumerate().map(|(i, s)| self.run_hint(s, plan == Some(i), &time)).collect();
+        let lang = t.editor.language();
+        let hints: Vec<Option<RunHint>> = (t.exec.run.statements.iter().enumerate())
+            .map(|(i, s)| self.run_hint(lang, s, plan == Some(i), &time))
+            .collect();
         if let Some(t) = self.tabs.get_mut(id) {
             t.editor.finish_run(query, hints);
         }
@@ -53,9 +54,10 @@ impl App {
             return;
         }
         let time = &self.time_of_day();
+        let lang = t.editor.language();
         let amend: Vec<(usize, RunHint)> = (t.exec.run.statements.iter().enumerate())
             .filter(|(i, s)| s.rolled_back && due(*i))
-            .filter_map(|(i, s)| Some((i, self.run_hint(s, false, time)?)))
+            .filter_map(|(i, s)| Some((i, self.run_hint(lang, s, false, time)?)))
             .collect();
         if let Some(t) = self.tabs.get_mut(id) {
             for (i, hint) in amend {
@@ -64,13 +66,13 @@ impl App {
         }
     }
 
-    /// What statement `s` of a run that ended did, as its hint says it; `None` when it did not
-    /// run. `plan`: its rows are the plan the results show.
-    fn run_hint(&self, s: &StatementRun, plan: bool, time: &str) -> Option<RunHint> {
+    /// What statement `s` (in `lang`) of a run that ended did, as its hint says it; `None` when
+    /// it did not run. `plan`: its rows are the plan the results show.
+    fn run_hint(&self, lang: Language, s: &StatementRun, plan: bool, time: &str) -> Option<RunHint> {
         let elapsed = s.elapsed.unwrap_or_default();
         let time = time.to_string();
         // `EXPLAIN ANALYZE` of a change ran it in a transaction the driver rolled back.
-        let rolled_back = s.rolled_back || risk::classify(&s.sql).rollback_matters();
+        let rolled_back = s.rolled_back || Classifier::classify_once(lang, &s.sql).rollback_matters();
         let (kind, msg) = match &s.outcome {
             StatementOutcome::Waiting | StatementOutcome::Running | StatementOutcome::NotRun => return None,
             StatementOutcome::Failed(e) => {

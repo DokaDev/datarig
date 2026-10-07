@@ -9,7 +9,7 @@
 
 use super::tabs::ResultView;
 use super::*;
-use datarig_core::sql::risk::repeat::{self, NotRepeatable};
+use datarig_core::sql::risk::repeat::NotRepeatable;
 
 /// Where a result came from: its tab's profile, the tab's binding and its session's generation
 /// when its first page arrived. Paging past a closed portal and counting happen only there.
@@ -48,18 +48,18 @@ pub(super) fn why(r: &NotRepeatable) -> Msg {
     }
 }
 
-/// A statement that changes rows and keeps the change (not an `EXPLAIN ANALYZE`, whose changes
-/// are rolled back).
-fn commits_a_write(sql: &str) -> bool {
-    let risk = datarig_core::sql::risk::classify(sql);
+/// A statement (in `lang`) that changes rows and keeps the change (not an `EXPLAIN ANALYZE`,
+/// whose changes are rolled back).
+fn commits_a_write(lang: Language, sql: &str) -> bool {
+    let risk = Classifier::classify_once(lang, sql);
     risk.writes && !risk.rolls_back()
 }
 
-/// Why a result not held shows `count` rows only (its statement `sql` is not run again for the
-/// user, for `r`): a statement that changes rows ran to its end and is committed (running it
-/// again would change rows again), anything else stopped after its first page.
-pub(super) fn first_page_only(i18n: &I18n, sql: &str, r: &NotRepeatable, count: u64) -> Msg {
-    if commits_a_write(sql) {
+/// Why a result not held shows `count` rows only (its statement `sql`, in `lang`, is not run
+/// again for the user, for `r`): a statement that changes rows ran to its end and is committed
+/// (running it again would change rows again), anything else stopped after its first page.
+pub(super) fn first_page_only(i18n: &I18n, lang: Language, sql: &str, r: &NotRepeatable, count: u64) -> Msg {
+    if commits_a_write(lang, sql) {
         Msg::ResultsFirstPageOnlyWrite { count }
     } else {
         Msg::ResultsFirstPageOnly { count, why: i18n.msg(&why(r)).to_string() }
@@ -161,20 +161,23 @@ impl App {
         let refused = |why| {
             if released { Msg::ResultsPageRefusedNoHold { why } } else { Msg::ResultsPageRefused { why } }
         };
-        if let Err(r) = repeat::repeatable(&sql) {
-            if released && commits_a_write(&sql) {
+        let lang = t.editor.language();
+        if let Err(r) = t.exec.prepared.repeatable(&sql) {
+            if released && commits_a_write(lang, &sql) {
                 let count = match &t.results {
                     Results::Rows(rs) => rs.rows.len() as u64,
                     _ => 0,
                 };
-                let m = first_page_only(&self.i18n, &sql, &r, count);
+                let m = first_page_only(&self.i18n, lang, &sql, &r, count);
                 return self.tab_status(id, Notice::new(m, Level::Warning));
             }
             let why = self.i18n.msg(&why(&r)).to_string();
             return self.tab_status(id, Notice::new(refused(why), Level::Warning));
         }
         let statements = vec![sql.clone()];
-        if let Some(refused) = self.unsupported(&statements).or_else(|| self.read_only_refusal(id, pid, &statements)) {
+        if let Some(refused) =
+            self.unsupported(id, &statements).or_else(|| self.read_only_refusal(id, pid, &statements))
+        {
             return self.tab_status(id, refused);
         }
         if !self.dangerous(id, pid, &statements).is_empty() {
@@ -188,7 +191,7 @@ impl App {
         let columns = rs.columns.iter().map(|c| (c.meta.name.clone(), c.meta.type_name.clone())).collect();
         let size = self.page_size as u64;
         let (from, to) = (datarig_core::i18n::fmt_count(skip + 1), datarig_core::i18n::fmt_count(skip + size));
-        let note = match (repeat::ordered(&sql), released) {
+        let note = match (t.exec.prepared.ordered(&sql), released) {
             (true, false) => Notice::new(Msg::ResultsPageResumed { from, to }, Level::Info),
             (false, false) => Notice::new(Msg::ResultsPageResumedUnordered { from, to }, Level::Warning),
             (true, true) => Notice::new(Msg::ResultsPageRerun { from, to }, Level::Info),
@@ -228,7 +231,7 @@ impl App {
         if !(self.answer_here() || self.kept_answer_here()) {
             return self.flash(Notice::new(Label::ResultsPageStale, Level::Warning));
         }
-        let sql = match repeat::count_query(t.shown_sql()) {
+        let sql = match t.exec.prepared.count_query(t.shown_sql()) {
             Ok(sql) => sql,
             Err(r) => {
                 let why = self.i18n.msg(&why(&r)).to_string();
@@ -236,7 +239,9 @@ impl App {
             }
         };
         let statements = vec![sql.clone()];
-        if let Some(refused) = self.unsupported(&statements).or_else(|| self.read_only_refusal(id, pid, &statements)) {
+        if let Some(refused) =
+            self.unsupported(id, &statements).or_else(|| self.read_only_refusal(id, pid, &statements))
+        {
             return self.tab_status(id, refused);
         }
         if !self.dangerous(id, pid, &statements).is_empty() {

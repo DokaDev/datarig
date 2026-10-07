@@ -442,6 +442,7 @@ impl App {
     pub(super) fn console_in(&mut self, id: ProfileId, context: SessionContext) {
         let tab = self.open_console(id, true);
         self.tabs.bind_in(tab, Some(id), context);
+        self.sync_tab_language(tab);
         self.save_workspace();
         if self.conns.state(id) == NodeState::Disconnected {
             self.connect(id);
