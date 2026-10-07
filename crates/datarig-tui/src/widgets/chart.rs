@@ -516,13 +516,20 @@ fn bars(cx: &Look, c: &mut ChartTab, m: &Model, area: Rect, buf: &mut Buffer) {
     if !drawn.contains(&c.cursor) && (c.offset..c.offset + fits).contains(&c.cursor) {
         drawn.push(c.cursor);
     }
+    // The cursor's label first, then the others two columns or more from a label placed.
+    drawn.sort_by_key(|&i| i != c.cursor);
+    let mut taken: Vec<(u16, u16)> = Vec::new();
     for i in drawn {
         let (gx, gwi) = (start(i - c.offset), usize::from(start(i - c.offset + 1) - start(i - c.offset)));
         let label = clip(&point_label(cx, m, i), room);
-        let lw = width(&label);
-        let x = if every == 1 { gx + ((gwi.saturating_sub(lw)) / 2) as u16 } else { gx };
+        let lw = width(&label) as u16;
+        let x = if every == 1 { gx + ((gwi.saturating_sub(usize::from(lw))) / 2) as u16 } else { gx };
+        let x = x.min((plot.x + plot.width).saturating_sub(lw));
+        if taken.iter().any(|&(a, b)| x < b + 2 && a < x + lw + 2) {
+            continue;
+        }
+        taken.push((x, x + lw));
         let style = if i == c.cursor { label_style(cx) } else { muted };
-        let x = x.min((plot.x + plot.width).saturating_sub(lw as u16));
         put(buf, x, label_y, &label, (plot.x + plot.width - x) as usize, style);
     }
     scroll_marks(cx, c, fits, n, Rect::new(plot.x, label_y, plot.width, 1), buf);

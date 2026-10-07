@@ -93,13 +93,14 @@ fn points_place_by_their_value_or_their_index() {
 }
 
 /// Draw `c` into a buffer exactly `w`×`h` (what a copy of the drawing does).
-fn draw_exact(c: &mut ChartTab, w: u16, h: u16) {
+fn draw_exact(c: &mut ChartTab, w: u16, h: u16) -> Buffer {
     let th = crate::theme::DARK;
     let i18n = I18n::new(datarig_core::i18n::Lang::En);
     let cx = Look { i18n: &i18n, th: &th, focused: true, hover: None, keys: Default::default() };
     let area = Rect::new(0, 0, w, h);
     let mut buf = Buffer::empty(area);
     draw_into(&cx, c, Info { rows: 2, more: false }, area, &mut buf);
+    buf
 }
 
 #[test]
@@ -115,7 +116,7 @@ fn many_series_in_a_narrow_pane_stay_inside_it() {
         c.rebuild_for_tests(&rs);
         for w in 1..=40 {
             for h in 1..=16 {
-                draw_exact(&mut c, w, h);
+                let _ = draw_exact(&mut c, w, h);
             }
         }
     }
@@ -145,4 +146,41 @@ fn lines_split_by_a_column_join_their_own_points() {
     let dots: u32 = r.cells.iter().map(|c| c.0.count_ones()).sum();
     // Eight points, joined by four segments a series: far more dots than points.
     assert!(dots > 40, "{dots} dots: the lines were broken at the other series' days");
+}
+
+#[test]
+fn bar_labels_never_run_into_each_other() {
+    let cols = vec![meta("name", "text", false), meta("n", "int4", true)];
+    let names: Vec<String> =
+        (0..15).map(|i| format!("{}{} {}", "\u{6A59}".repeat(1 + i % 3), "x".repeat(i % 4), i)).collect();
+    let rows: Vec<Vec<Option<String>>> =
+        names.iter().enumerate().map(|(i, n)| vec![Some(n.clone()), Some((100 - i).to_string())]).collect();
+    let rs = crate::widgets::grid::ResultSet::in_memory(cols, rows, false, "NULL");
+    let mut c = crate::app::chart::ChartTab::for_tests(&rs);
+    c.spec = Spec { kind: Kind::Bar, x: Some(0), ys: vec![1], by: None, log: false };
+    c.rebuild_for_tests(&rs);
+    for w in [60, 90, 120, 148, 150] {
+        for cursor in [0, 3, 7, 14] {
+            c.cursor = cursor;
+            let buf = draw_exact(&mut c, w, 20);
+            // The labels' line: under the axis line.
+            let y = (0..20).find(|&y| buf[(c.plot.x, y)].symbol() == "─").unwrap() + 1;
+            let mut line = String::new();
+            let mut x = 0;
+            while x < w {
+                let sym = buf[(x, y)].symbol();
+                line.push_str(sym);
+                x += width(sym).max(1) as u16;
+            }
+            for word in line.split("  ").map(str::trim).filter(|t| !t.is_empty()) {
+                let whole = names.iter().any(|n| n == word);
+                let cut =
+                    word.strip_suffix('\u{2026}').is_some_and(|p| names.iter().any(|n| n.starts_with(p.trim_end())));
+                assert!(
+                    whole || cut || word.chars().all(|c| c == ' '),
+                    "{w} wide, cursor {cursor}: {word:?} in {line:?}"
+                );
+            }
+        }
+    }
 }
