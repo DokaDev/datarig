@@ -234,7 +234,7 @@ impl App {
         if let (workspace::TabKind::Table, Some((schema, name))) = (t.kind, &t.table) {
             // Its query, not run: nothing is sent until the user asks.
             let table = super::tabs::TableRef { schema: schema.clone(), name: name.clone() };
-            let query = table.query();
+            let query = table.query(self.profile_language(profile).dialect());
             let mut tab = Tab::new(TabId(0), TabKind::Table, profile, Editor::new(&query));
             tab.doc.saved = query;
             tab.doc.written = true;

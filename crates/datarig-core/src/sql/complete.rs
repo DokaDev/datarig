@@ -2,10 +2,10 @@
 //! because it only looks at the token stream of the `;`-segment around the cursor.
 //!
 //! Names are offered as SQL: quoted when PostgreSQL would not read them back bare
-//! ([`sql_ident`]), and always quoted after an opening `"`. A name matches when the typed
-//! prefix starts it; names the typed letters only appear in, in order, follow those.
+//! ([`Dialect::quote_ident`]), and always quoted after an opening `"`. A name matches when the
+//! typed prefix starts it; names the typed letters only appear in, in order, follow those.
 
-use super::ident::sql_ident;
+use super::dialect::Dialect;
 use super::lexer::{KEYWORDS, Tok, Token, is_space, lex};
 use super::split::segment_at;
 use crate::i18n::Label;
@@ -79,11 +79,11 @@ struct TableRef {
     alias: Option<String>,
 }
 
-/// The name a token stands for: a quoted one as written, a bare one folded to lower case as
-/// the server folds it (ASCII letters only).
-fn unquote(tok: &Token, src: &str) -> String {
+/// The name a token stands for in dialect `d`: a quoted one as written (closed or not), a bare
+/// one folded as the server folds it.
+fn unquote(d: Dialect, tok: &Token, src: &str) -> String {
     let t = tok.text(src);
-    if tok.kind == Tok::QuotedIdent { t.trim_matches('"').replace("\"\"", "\"") } else { t.to_ascii_lowercase() }
+    if tok.kind == Tok::QuotedIdent { d.unquote_lenient(t) } else { d.fold(t) }
 }
 
 fn is_name(t: &Token) -> bool {
@@ -100,7 +100,7 @@ const FROM_LIST_OK: &[&str] =
     &["AS", "JOIN", "LEFT", "RIGHT", "INNER", "OUTER", "FULL", "CROSS", "NATURAL", "LATERAL", "ONLY"];
 
 /// FROM/JOIN/UPDATE/INTO references with aliases (`x AS a`, `x a`) in the whole segment.
-fn table_refs(toks: &[Token], src: &str) -> Vec<TableRef> {
+fn table_refs(d: Dialect, toks: &[Token], src: &str) -> Vec<TableRef> {
     let sig: Vec<&Token> = toks.iter().filter(|t| !t.is_trivia()).collect();
     let mut refs = Vec::new();
     let mut in_from = false;
@@ -128,10 +128,10 @@ fn table_refs(toks: &[Token], src: &str) -> Vec<TableRef> {
         if i >= sig.len() || !is_name(sig[i]) {
             continue;
         }
-        let first = unquote(sig[i], src);
+        let first = unquote(d, sig[i], src);
         i += 1;
         let (schema, name) = if i + 1 < sig.len() && sig[i].kind == Tok::Dot && is_name(sig[i + 1]) {
-            let n = unquote(sig[i + 1], src);
+            let n = unquote(d, sig[i + 1], src);
             i += 2;
             (Some(first), n)
         } else {
@@ -141,7 +141,7 @@ fn table_refs(toks: &[Token], src: &str) -> Vec<TableRef> {
             i += 1;
         }
         let alias = if i < sig.len() && is_name(sig[i]) {
-            let a = unquote(sig[i], src);
+            let a = unquote(d, sig[i], src);
             i += 1;
             Some(a)
         } else {
@@ -214,13 +214,15 @@ type Ranked = (u8, Candidate);
 /// The prefix being typed and how names are written for it.
 struct Typed {
     text: String,
-    /// After an opening `"`: every name is written quoted.
+    /// After an opening quote: every name is written quoted.
     quoted: bool,
+    /// The dialect names are written in.
+    dialect: Dialect,
 }
 
 impl Typed {
     fn ident(&self, name: &str) -> String {
-        if self.quoted { format!("\"{}\"", name.replace('"', "\"\"")) } else { sql_ident(name) }
+        if self.quoted { self.dialect.force_quote_ident(name) } else { self.dialect.quote_ident(name) }
     }
 }
 
@@ -255,6 +257,9 @@ pub fn complete_in(src: &str, cursor: usize, cat: &Catalog, force: bool, path: &
     let seg = &src[seg_start..seg_end];
     let cur = cursor - seg_start;
     let toks = lex(seg);
+    // The lexer reads PostgreSQL; names are written and read back as PostgreSQL does.
+    let d = Dialect::Postgres;
+    let quote = d.ident_quote();
 
     // A quoted name being typed: its opening `"` is before the cursor, with no other `"`
     // between, and after the cursor comes the end, a space or the closing `"`. (A `"` typed
@@ -263,18 +268,18 @@ pub fn complete_in(src: &str, cursor: usize, cat: &Catalog, force: bool, path: &
         t.kind == Tok::QuotedIdent
             && t.start < cur
             && cur <= t.end
-            && !(closed(t, seg) && cur == t.end)
-            && !seg[t.start + 1..cur].contains('"')
-            && seg[cur..t.end].chars().next().is_none_or(|c| c == '"' || is_space(c))
+            && !(closed(d, t, seg) && cur == t.end)
+            && !seg[t.start + 1..cur].contains(quote)
+            && seg[cur..t.end].chars().next().is_none_or(|c| c == quote || is_space(c))
     });
 
     // No completion inside strings, comments, other quoted identifiers or dollar bodies.
     for t in &toks {
         let inside = match t.kind {
             Tok::LineComment => t.start < cur && cur <= t.end,
-            Tok::BlockComment | Tok::Dollar => t.start < cur && (cur < t.end || !closed(t, seg)),
-            Tok::Str => t.start < cur && (cur < t.end || !closed(t, seg)),
-            Tok::QuotedIdent => open_quote != Some(t) && t.start < cur && (cur < t.end || !closed(t, seg)),
+            Tok::BlockComment | Tok::Dollar => t.start < cur && (cur < t.end || !closed(d, t, seg)),
+            Tok::Str => t.start < cur && (cur < t.end || !closed(d, t, seg)),
+            Tok::QuotedIdent => open_quote != Some(t) && t.start < cur && (cur < t.end || !closed(d, t, seg)),
             _ => false,
         };
         if inside {
@@ -285,12 +290,13 @@ pub fn complete_in(src: &str, cursor: usize, cat: &Catalog, force: bool, path: &
     // Prefix being typed.
     let (prefix_start, typed, trail) = match open_quote {
         Some(t) => {
-            let trail = usize::from(seg[cur..].starts_with('"') && closed(t, seg) && cur + 1 == t.end);
-            (t.start, Typed { text: seg[t.start + 1..cur].replace("\"\"", "\""), quoted: true }, trail)
+            let trail = usize::from(seg[cur..].starts_with(quote) && closed(d, t, seg) && cur + 1 == t.end);
+            let text = d.unescape_ident(&seg[t.start + quote.len_utf8()..cur]);
+            (t.start, Typed { text, quoted: true, dialect: d }, trail)
         }
         None => match toks.iter().find(|t| t.is_word() && t.start < cur && cur <= t.end) {
-            Some(t) => (t.start, Typed { text: seg[t.start..cur].to_string(), quoted: false }, 0),
-            None => (cur, Typed { text: String::new(), quoted: false }, 0),
+            Some(t) => (t.start, Typed { text: seg[t.start..cur].to_string(), quoted: false, dialect: d }, 0),
+            None => (cur, Typed { text: String::new(), quoted: false, dialect: d }, 0),
         },
     };
     let prefix = typed.text.as_str();
@@ -301,10 +307,10 @@ pub fn complete_in(src: &str, cursor: usize, cat: &Catalog, force: bool, path: &
         [.., s, d1, q, d2]
             if d2.kind == Tok::Dot && d2.end == prefix_start && is_name(q) && d1.kind == Tok::Dot && is_name(s) =>
         {
-            Some((Some(unquote(s, seg)), unquote(q, seg)))
+            Some((Some(unquote(d, s, seg)), unquote(d, q, seg)))
         }
-        [.., q, d] if d.kind == Tok::Dot && d.end == prefix_start && (is_name(q) || q.kind == Tok::Keyword) => {
-            Some((None, unquote(q, seg)))
+        [.., q, dot] if dot.kind == Tok::Dot && dot.end == prefix_start && (is_name(q) || q.kind == Tok::Keyword) => {
+            Some((None, unquote(d, q, seg)))
         }
         _ => None,
     };
@@ -323,8 +329,8 @@ pub fn complete_in(src: &str, cursor: usize, cat: &Catalog, force: bool, path: &
         }
         None => (seg, toks.clone()),
     };
-    let refs = table_refs(&ctx_toks, ctx_src);
-    let ctes = with_queries(&ctx_toks, ctx_src);
+    let refs = table_refs(d, &ctx_toks, ctx_src);
+    let ctes = with_queries(d, &ctx_toks, ctx_src);
     let resolve = |schema: Option<&str>, name: &str| -> Option<&Relation> {
         match schema {
             None => ctes.iter().find(|c| c.name.eq_ignore_ascii_case(name)).or_else(|| find_rel(cat, None, name, path)),
@@ -427,7 +433,7 @@ pub fn complete_in(src: &str, cursor: usize, cat: &Catalog, force: bool, path: &
 /// relations without a schema. Their columns are the written column list, else the names of
 /// the query's select list that can be read without running it (`x`, `t.x`, `… AS x`, `… x`);
 /// other items (`*`, an expression without a name) are left out.
-fn with_queries(toks: &[Token], src: &str) -> Vec<Relation> {
+fn with_queries(d: Dialect, toks: &[Token], src: &str) -> Vec<Relation> {
     let sig: Vec<&Token> = toks.iter().filter(|t| !t.is_trivia()).collect();
     let mut out = Vec::new();
     for (i, t) in sig.iter().enumerate() {
@@ -441,12 +447,12 @@ fn with_queries(toks: &[Token], src: &str) -> Vec<Relation> {
             j += 1;
         }
         while let Some(name) = sig.get(j).filter(|t| is_name(t)) {
-            let name = unquote(name, src);
+            let name = unquote(d, name, src);
             j += 1;
             let mut listed = None;
             if sig.get(j).is_some_and(|t| t.kind == Tok::LParen) {
                 let close = matching_paren(&sig, j);
-                listed = Some(sig[j + 1..close].iter().filter(|t| is_name(t)).map(|t| unquote(t, src)).collect());
+                listed = Some(sig[j + 1..close].iter().filter(|t| is_name(t)).map(|t| unquote(d, t, src)).collect());
                 j = close + 1;
             }
             if !sig.get(j).is_some_and(|t| kw(t, src, &["AS"])) {
@@ -463,7 +469,7 @@ fn with_queries(toks: &[Token], src: &str) -> Vec<Relation> {
                 break;
             }
             let close = matching_paren(&sig, j);
-            let names: Vec<String> = listed.unwrap_or_else(|| select_list_names(&sig[j + 1..close], src));
+            let names: Vec<String> = listed.unwrap_or_else(|| select_list_names(d, &sig[j + 1..close], src));
             let columns = names.into_iter().map(|name| ColumnInfo { name, type_name: String::new() }).collect();
             out.push(Relation { schema: String::new(), name, is_view: false, columns });
             j = close + 1;
@@ -495,7 +501,7 @@ fn matching_paren(sig: &[&Token], open: usize) -> usize {
 }
 
 /// The column names of a query's select list that are written in it (see [`with_queries`]).
-fn select_list_names(body: &[&Token], src: &str) -> Vec<String> {
+fn select_list_names(d: Dialect, body: &[&Token], src: &str) -> Vec<String> {
     const END: &[&str] = &[
         "FROM",
         "WHERE",
@@ -554,16 +560,16 @@ fn select_list_names(body: &[&Token], src: &str) -> Vec<String> {
                         || matches!(p.kind, Tok::RParen | Tok::Number | Tok::Str)
                 }
             };
-            named.then(|| unquote(last, src))
+            named.then(|| unquote(d, last, src))
         })
         .collect()
 }
 
-fn closed(t: &Token, src: &str) -> bool {
+fn closed(d: Dialect, t: &Token, src: &str) -> bool {
     let s = t.text(src);
     match t.kind {
         Tok::Str => s.len() >= 2 && s.ends_with('\''),
-        Tok::QuotedIdent => s.len() >= 2 && s.ends_with('"'),
+        Tok::QuotedIdent => s.len() >= 2 && s.ends_with(d.ident_quote()),
         Tok::BlockComment => s.len() >= 4 && s.ends_with("*/"),
         Tok::Dollar => {
             let tag_len = s[1..].find('$').map(|i| i + 2).unwrap_or(s.len());

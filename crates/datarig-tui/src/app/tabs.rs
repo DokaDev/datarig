@@ -7,6 +7,7 @@ use crate::widgets::grid::GridState;
 use datarig_core::driver::{Session, SessionContext};
 use datarig_core::profile::ProfileId;
 use datarig_core::scripts::Stamp;
+use datarig_core::sql::dialect::Dialect;
 use datarig_core::sql::risk::Classifier;
 use std::collections::{HashMap, VecDeque};
 use std::time::Instant;
@@ -88,10 +89,9 @@ impl TableRef {
         format!("{}.{}", self.schema, self.name)
     }
 
-    /// The query that reads it: every column and row, identifiers quoted.
-    pub fn query(&self) -> String {
-        let quote = |s: &str| format!("\"{}\"", s.replace('"', "\"\""));
-        format!("SELECT * FROM {}.{}", quote(&self.schema), quote(&self.name))
+    /// The query that reads it in dialect `d`: every column and row, identifiers quoted.
+    pub fn query(&self, d: Dialect) -> String {
+        format!("SELECT * FROM {}.{}", d.force_quote_ident(&self.schema), d.force_quote_ident(&self.name))
     }
 }
 

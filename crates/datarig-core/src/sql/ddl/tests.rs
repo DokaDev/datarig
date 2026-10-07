@@ -653,3 +653,11 @@ fn typed_tables_foreign_column_options_named_not_null_and_unlogged_sequences() {
     assert!(got.contains("    CONSTRAINT x_required NOT NULL x NO INHERIT\n"), "{got}");
     assert!(got.contains("    id bigint DEFAULT nextval('s.t_id_seq'::regclass) NOT NULL,\n"), "{got}");
 }
+
+#[test]
+fn the_servers_own_text_is_shown_as_it_is() {
+    let text = "CREATE TABLE `orders` (\n  `id` int NOT NULL,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB";
+    let ddl = DdlSource::Verbatim { name: "shop.orders".into(), text: text.into() };
+    assert_eq!(ddl_text(&ddl), text, "no header, nothing added");
+    assert_eq!(ddl.label(), "shop.orders");
+}

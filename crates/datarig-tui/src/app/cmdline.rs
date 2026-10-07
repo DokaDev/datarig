@@ -126,16 +126,10 @@ impl App {
     /// What `:use` completes: the active tab's server's databases, then `.schema` for the
     /// schemas of the tab's database, as far as they are known.
     fn context_names(&self) -> Vec<String> {
-        let quote = |s: &str| {
-            let plain = !s.is_empty()
-                && s.chars().all(|c| c == '_' || c.is_ascii_lowercase() || c.is_ascii_digit())
-                && !s.starts_with(|c: char| c.is_ascii_digit());
-            if plain { s.to_string() } else { format!("\"{}\"", s.replace('"', "\"\"")) }
-        };
         let t = self.tab();
         let Some(p) = t.profile else { return Vec::new() };
         let mut out: Vec<String> = match self.conns.get(p).and_then(|c| c.databases.as_ref()) {
-            Some(Ok(dbs)) => dbs.iter().map(|d| quote(d)).collect(),
+            Some(Ok(dbs)) => dbs.iter().map(|d| command::context_name(d)).collect(),
             _ => Vec::new(),
         };
         let schemas: Vec<String> = match self.other_database(t) {
@@ -144,7 +138,7 @@ impl App {
             }
             Some(db) => self.conns.aux(p, db).and_then(|a| a.schemas.clone()).and_then(Result::ok).unwrap_or_default(),
         };
-        out.extend(schemas.iter().map(|s| format!(".{}", quote(s))));
+        out.extend(schemas.iter().map(|s| format!(".{}", command::context_name(s))));
         out
     }
 

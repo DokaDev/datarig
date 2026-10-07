@@ -1,9 +1,17 @@
 use super::*;
 use datarig_core::chart::{Builder, Kind, Spec, roles};
-use datarig_core::driver::ColumnMeta;
+use datarig_core::driver::{ColumnMeta, ValueKind};
 
 fn meta(name: &str, ty: &str, numeric: bool) -> ColumnMeta {
-    ColumnMeta { name: name.into(), type_name: ty.into(), numeric, json: false, origin: None }
+    // The kind the PostgreSQL driver gives a column of that type.
+    let kind = match ty {
+        "int4" => ValueKind::Integer,
+        "float8" => ValueKind::Float,
+        "date" => ValueKind::Date,
+        "text" => ValueKind::Text,
+        _ => ValueKind::Other,
+    };
+    ColumnMeta { name: name.into(), type_name: ty.into(), numeric, json: false, kind, origin: None }
 }
 
 /// A line chart's model of `values` over the row number.

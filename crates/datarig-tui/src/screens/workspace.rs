@@ -917,7 +917,7 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
     let keys = Some(app.tab_keys(app.tab()));
     let marks: Vec<datarig_core::driver::KeyMarks> = match &app.tab().results {
         Results::Rows(rs) => {
-            rs.columns.iter().map(|c| keys.map(|k| k.marks(c.meta.origin)).unwrap_or_default()).collect()
+            rs.columns.iter().map(|c| keys.map(|k| k.marks(c.meta.origin.as_ref())).unwrap_or_default()).collect()
         }
         _ => Vec::new(),
     };

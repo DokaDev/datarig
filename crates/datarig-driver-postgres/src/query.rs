@@ -73,7 +73,7 @@
 use crate::connect::{db_error, is_cancel};
 use crate::link::{Closed, Link, Next};
 use crate::route::Cancel;
-use crate::values::{Raw, format_code, format_value, is_json, is_numeric, type_display};
+use crate::values::{Raw, format_code, format_value, is_json, is_numeric, type_display, value_kind};
 use datarig_core::driver::{Cell, ColumnMeta, ColumnOrigin, DbCommand, DbError, DbEvent, Outcome, PagingMode};
 use datarig_core::sql::lexer::{Tok, Token, lex};
 use datarig_core::sql::risk::{self, Class};
@@ -634,8 +634,9 @@ fn columns_of(columns: &[Column]) -> Vec<ColumnMeta> {
             type_name: type_display(c.type_()),
             numeric: is_numeric(c.type_()),
             json: is_json(c.type_()),
+            kind: value_kind(c.type_()),
             origin: match (c.table_oid(), c.column_id()) {
-                (Some(table), Some(column)) if table != 0 && column > 0 => Some(ColumnOrigin { table, column }),
+                (Some(table), Some(column)) if table != 0 && column > 0 => Some(ColumnOrigin::Pg { table, column }),
                 _ => None,
             },
         })

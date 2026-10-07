@@ -1,5 +1,7 @@
 use super::*;
 
+const PG: Dialect = Dialect::Postgres;
+
 fn col(name: &str, kind: Kind) -> Column<'_> {
     Column { name, kind }
 }
@@ -110,25 +112,26 @@ fn sql_insert_names_the_table_or_a_placeholder() {
         overriding: false,
     };
     assert_eq!(
-        sql_insert(&target, &cols(), &rows()),
+        sql_insert(PG, &target, &cols(), &rows()),
         "INSERT INTO \"shop\".\"order items\" (\"id\", \"name\", \"note\", \"ok\", \"doc\") VALUES (1, '陳大文 🐘', NULL, true, '{\"a\": [1, 2]}');\n\
          INSERT INTO \"shop\".\"order items\" (\"id\", \"name\", \"note\", \"ok\", \"doc\") VALUES (-2.5, '', 'tab\there\nnew \"line\"', false, NULL);\n\
          INSERT INTO \"shop\".\"order items\" (\"id\", \"name\", \"note\", \"ok\", \"doc\") VALUES ('NaN', 'O''Reilly, Inc.', 'a|b\\c', NULL, 'not json');"
     );
     let aliased = Target::Table { schema: "s", name: "t", columns: vec!["real_name"], overriding: false };
     assert_eq!(
-        sql_insert(&aliased, &[col("alias", Kind::Text)], &[vec![Some("x")]]),
+        sql_insert(PG, &aliased, &[col("alias", Kind::Text)], &[vec![Some("x")]]),
         "INSERT INTO \"s\".\"t\" (\"real_name\") VALUES ('x');",
         "the table's column names, not the aliases"
     );
     assert_eq!(
-        sql_insert(&Target::Unknown, &[col("n", Kind::Text)], &[vec![Some("\\x0102")]]),
+        sql_insert(PG, &Target::Unknown, &[col("n", Kind::Text)], &[vec![Some("\\x0102")]]),
         "INSERT INTO <table> (\"n\") VALUES ('\\x0102');",
         "bytea as its hex input form"
     );
-    assert_eq!(sql_insert(&Target::Unknown, &[col("n", Kind::Text)], &[]), "");
+    assert_eq!(sql_insert(PG, &Target::Unknown, &[col("n", Kind::Text)], &[]), "");
     assert_eq!(
         sql_insert(
+            PG,
             &Target::Unknown,
             &[col("f", Kind::Number)],
             &[vec![Some("-0")], vec![Some("-0.0e0")], vec![Some("0")]]
@@ -139,7 +142,7 @@ fn sql_insert_names_the_table_or_a_placeholder() {
     // An identity column that is GENERATED ALWAYS takes a value only with OVERRIDING SYSTEM VALUE.
     let identity = Target::Table { schema: "s", name: "t", columns: vec!["id"], overriding: true };
     assert_eq!(
-        sql_insert(&identity, &[col("id", Kind::Number)], &[vec![Some("7")]]),
+        sql_insert(PG, &identity, &[col("id", Kind::Number)], &[vec![Some("7")]]),
         "INSERT INTO \"s\".\"t\" (\"id\") OVERRIDING SYSTEM VALUE VALUES (7);"
     );
 }
@@ -207,7 +210,7 @@ fn arrays_nest_in_json_and_stay_literals_elsewhere() {
     let r = [vec![Some("{{1,2},{3,4}}")]];
     assert_eq!(csv(&c, &r, false), "\"{{1,2},{3,4}}\"");
     assert_eq!(tsv(&c, &r, false), "{{1,2},{3,4}}");
-    assert_eq!(sql_insert(&Target::Unknown, &c, &r), "INSERT INTO <table> (\"a\") VALUES ('{{1,2},{3,4}}');");
+    assert_eq!(sql_insert(PG, &Target::Unknown, &c, &r), "INSERT INTO <table> (\"a\") VALUES ('{{1,2},{3,4}}');");
 }
 
 #[test]
@@ -224,12 +227,12 @@ fn a_writer_fed_in_chunks_writes_the_same_text() {
         (Format::Csv { header: false }, csv(&c, &all, false), csv(&c, &[], false)),
         (Format::Json, json(&c, &all), json(&c, &[])),
         (Format::Markdown, markdown(&c, &all), markdown(&c, &[])),
-        (Format::Sql(target.clone()), sql_insert(&target, &c, &all), sql_insert(&target, &c, &[])),
+        (Format::Sql(PG, target.clone()), sql_insert(PG, &target, &c, &all), sql_insert(PG, &target, &c, &[])),
         (Format::JsonPretty, json_pretty(&c, &all), json_pretty(&c, &[])),
         (Format::List, comma_list(&all), comma_list(&[])),
         (Format::Html, html(&c, &all), html(&c, &[])),
         (Format::Xml, xml(&c, &all), xml(&c, &[])),
-        (Format::Update(update.clone()), sql_update(&update, &c, &all), sql_update(&update, &c, &[])),
+        (Format::Update(PG, update.clone()), sql_update(PG, &update, &c, &all), sql_update(PG, &update, &c, &[])),
     ];
     for (format, whole, empty) in formats {
         for chunk in 1..=all.len() + 1 {
@@ -308,12 +311,15 @@ fn xml_escapes_everything_and_tells_null_from_empty() {
 fn an_in_list_quotes_literals_skips_null_and_repeats_and_takes_one_column() {
     let text = [col("t", Kind::Text)];
     let rows = [vec![Some("O'Reilly")], vec![None], vec![Some("中文 🐘")], vec![Some("O'Reilly")], vec![Some("")]];
-    assert_eq!(sql_in(&text, &rows), Ok("('O''Reilly', '中文 🐘', '')".to_string()));
+    assert_eq!(sql_in(PG, &text, &rows), Ok("('O''Reilly', '中文 🐘', '')".to_string()));
     let num = [col("n", Kind::Number)];
-    assert_eq!(sql_in(&num, &[vec![Some("1")], vec![Some("-2.5")], vec![Some("NaN")]]), Ok("(1, -2.5, 'NaN')".into()));
-    assert_eq!(sql_in(&[col("a", Kind::Text), col("b", Kind::Text)], &[]), Err(NotInList::SeveralColumns));
-    assert_eq!(sql_in(&text, &[vec![None]]), Err(NotInList::NoValues));
-    assert_eq!(sql_in(&text, &[]), Err(NotInList::NoValues));
+    assert_eq!(
+        sql_in(PG, &num, &[vec![Some("1")], vec![Some("-2.5")], vec![Some("NaN")]]),
+        Ok("(1, -2.5, 'NaN')".into())
+    );
+    assert_eq!(sql_in(PG, &[col("a", Kind::Text), col("b", Kind::Text)], &[]), Err(NotInList::SeveralColumns));
+    assert_eq!(sql_in(PG, &text, &[vec![None]]), Err(NotInList::NoValues));
+    assert_eq!(sql_in(PG, &text, &[]), Err(NotInList::NoValues));
 }
 
 #[test]
@@ -327,9 +333,11 @@ fn updates_set_the_other_columns_where_the_key_matches() {
     };
     let rows = [vec![Some("5"), Some("陳 'q'"), None, Some("a\nb")], vec![Some("6"), Some(""), Some("x"), Some("z")]];
     assert_eq!(
-        sql_update(&target, &c, &rows),
+        sql_update(PG, &target, &c, &rows),
         "UPDATE \"my s\".\"t\"\"x\" SET \"name\" = '陳 ''q''', \"note\" = NULL WHERE \"id\" = 5 AND \"k\" = 'a\nb';\n\
          UPDATE \"my s\".\"t\"\"x\" SET \"name\" = '', \"note\" = 'x' WHERE \"id\" = 6 AND \"k\" = 'z';"
     );
-    assert!(!sql_update(&target, &c, &rows).contains("IS NULL"));
+    assert!(!sql_update(PG, &target, &c, &rows).contains("IS NULL"));
 }
+
+mod golden;

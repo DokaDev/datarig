@@ -1,5 +1,7 @@
 //! How a name is written in PostgreSQL SQL so that the server reads it back as that same name.
 
+use super::dialect::Dialect;
+
 /// PostgreSQL's keywords that are not "unreserved" (reserved, column-name and type/function-name
 /// keywords): a name equal to one of them must be quoted to be read as a name everywhere.
 /// Sorted, lower-case, as in PostgreSQL 17's keyword list.
@@ -180,10 +182,11 @@ pub fn needs_quotes(name: &str) -> bool {
     !plain || QUOTED_KEYWORDS.binary_search(&name).is_ok()
 }
 
-/// `name` as SQL: bare when that reads back as the same name, else in double quotes with `"`
-/// doubled (`Mixed Col` → `"Mixed Col"`).
+/// `name` as PostgreSQL SQL: bare when that reads back as the same name, else in double quotes
+/// with `"` doubled (`Mixed Col` → `"Mixed Col"`). [`Dialect::quote_ident`] of
+/// [`Dialect::Postgres`], for the PostgreSQL-only renderers (DDL, plans).
 pub fn sql_ident(name: &str) -> String {
-    if needs_quotes(name) { format!("\"{}\"", name.replace('"', "\"\"")) } else { name.to_string() }
+    Dialect::Postgres.quote_ident(name)
 }
 
 #[cfg(test)]

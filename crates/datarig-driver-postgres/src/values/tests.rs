@@ -186,3 +186,81 @@ fn arrays_keep_their_dimensions_and_bounds() {
     assert_eq!(arr(&[(1, -2), (2, 1)], &[Some(7), Some(8)]), "[-2:-2][1:2]={{7,8}}");
     assert_eq!(arr(&[], &[]), "{}");
 }
+
+/// Every type a column can have here: each built-in type, and a domain over each and an array
+/// of that domain (a database's own type is named by itself, never like a built-in one).
+fn every_type() -> Vec<Type> {
+    let builtin: Vec<Type> = (0..=u32::from(u16::MAX)).filter_map(Type::from_oid).collect();
+    let mut out = builtin.clone();
+    for (i, ty) in builtin.into_iter().enumerate() {
+        let n = 1_000_000 + 2 * i as u32;
+        let domain = Type::new(format!("d{n}"), n, Kind::Domain(ty), "public".into());
+        out.push(Type::new(format!("_d{n}"), n + 1, Kind::Array(domain.clone()), "public".into()));
+        out.push(domain);
+    }
+    out
+}
+
+fn meta_of(ty: &Type) -> datarig_core::driver::ColumnMeta {
+    datarig_core::driver::ColumnMeta {
+        name: "c".into(),
+        type_name: type_display(ty),
+        numeric: is_numeric(ty),
+        json: is_json(ty),
+        kind: value_kind(ty),
+        origin: None,
+    }
+}
+
+/// The copy writes every column as it did when it read the type's name: the kind the driver
+/// gives a column says the same as [`export::Kind::of`] over its name and flags.
+#[test]
+fn the_copy_kind_of_every_type_is_what_its_name_said() {
+    use datarig_core::export::Kind as CopyKind;
+    for ty in every_type() {
+        let m = meta_of(&ty);
+        assert_eq!(CopyKind::from(m.kind), CopyKind::of(&m.type_name, m.numeric, m.json), "{}", m.type_name);
+        assert_eq!(m.numeric, m.kind.is_number(), "{}", m.type_name);
+        assert_eq!(m.json, m.kind == ValueKind::Json, "{}", m.type_name);
+    }
+}
+
+/// The chart gives every column the role it gave when it read the type's name: the role from
+/// the name (or, when the name says nothing, from the values) equals the role from the kind.
+#[test]
+fn the_chart_role_of_every_type_is_what_its_name_said() {
+    use datarig_core::chart::{Role, TimeKind, roles};
+    // The role as the chart told it from the type's name, `None` when it looked at the values.
+    let by_name = |m: &datarig_core::driver::ColumnMeta| {
+        let t = m.type_name.to_ascii_lowercase();
+        if m.json || t.ends_with("[]") {
+            Some(Role::Unusable)
+        } else if m.numeric {
+            Some(Role::Number)
+        } else if t.contains("timestamp") || t.contains("datetime") {
+            Some(Role::Time(TimeKind::DateTime))
+        } else if t == "date" {
+            Some(Role::Time(TimeKind::Date))
+        } else if t == "time" || t == "timetz" || t.starts_with("time ") {
+            Some(Role::Time(TimeKind::Time))
+        } else {
+            None
+        }
+    };
+    let samples: [Vec<Vec<Option<String>>>; 3] = [
+        vec![vec![Some("2024-02-29".into())]],
+        vec![vec![Some("2024-02-29 12:00:00".into())]],
+        vec![vec![Some("x".into())]],
+    ];
+    let mut kinds = std::collections::HashSet::new();
+    for ty in every_type() {
+        let m = meta_of(&ty);
+        kinds.insert(m.kind);
+        for sample in &samples {
+            let from_values = datarig_core::driver::ColumnMeta { kind: ValueKind::Text, ..m.clone() };
+            let want = by_name(&m).unwrap_or_else(|| roles(&[from_values], sample)[0]);
+            assert_eq!(roles(std::slice::from_ref(&m), sample)[0], want, "{} {sample:?}", m.type_name);
+        }
+    }
+    assert!(kinds.len() >= 15, "the types reach every kind: {kinds:?}");
+}

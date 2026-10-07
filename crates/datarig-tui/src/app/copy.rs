@@ -23,6 +23,7 @@ use datarig_core::config::{ClipboardSetting, CopyHeader, EditorClipboard};
 use datarig_core::driver::keys::{InsertPlan, NotInsertable, NotUpdatable, insert_into, insert_source, update_source};
 use datarig_core::export::{self, Kind, Target};
 use datarig_core::fault::{ErrorLog, Fault};
+use datarig_core::sql::dialect::Dialect;
 use std::ops::Range;
 
 /// The reasons a register write did not reach the clipboard that were said already: each is
@@ -357,12 +358,14 @@ impl App {
         let text = {
             let t = self.tab();
             let Results::Rows(rs) = &t.results else { return };
+            // The SQL formats are written in the tab's dialect.
+            let d = t.exec.prepared.language().dialect();
             let columns: Vec<export::Column> = b
                 .cols
                 .iter()
                 .map(|&c| {
                     let m = &rs.columns[c].meta;
-                    export::Column { name: &m.name, kind: Kind::of(&m.type_name, m.numeric, m.json) }
+                    export::Column { name: &m.name, kind: Kind::of_column(m) }
                 })
                 .collect();
             let header = self.prefs.copy_header.applies(count);
@@ -412,7 +415,7 @@ impl App {
                     let mut values: Vec<Option<String>> = Vec::new();
                     let read = stream(&mut |rows| values.extend(rows.iter().map(|r| r[0].map(str::to_string))));
                     let rows: Vec<export::Row> = values.iter().map(|v| vec![v.as_deref()]).collect();
-                    match (read, export::sql_in(&columns, &rows)) {
+                    match (read, export::sql_in(d, &columns, &rows)) {
                         (Err(fault), _) => Err(fault),
                         (Ok(()), Ok(text)) => Ok(text),
                         (Ok(()), Err(export::NotInList::SeveralColumns)) => {
@@ -424,10 +427,10 @@ impl App {
                     }
                 }
                 (None, CopyFormat::SqlUpdate) => {
-                    let origins: Vec<_> = b.cols.iter().map(|&c| rs.columns[c].meta.origin).collect();
+                    let origins: Vec<_> = b.cols.iter().map(|&c| rs.columns[c].meta.origin.clone()).collect();
                     let names: Vec<&str> = columns.iter().map(|c| c.name).collect();
                     let keys = self.tab_keys(t).catalog();
-                    let plan = match update_source(keys, &origins, &names, t.shown_sql()) {
+                    let plan = match update_source(d, keys, &origins, &names, t.shown_sql()) {
                         Ok(p) => p,
                         Err(why) => {
                             let reason = self.why_not_update(&why);
@@ -440,22 +443,22 @@ impl App {
                         set: plan.set.clone(),
                         keys: plan.keys.clone(),
                     };
-                    let mut w = export::Writer::new(export::Format::Update(target), &columns);
+                    let mut w = export::Writer::new(export::Format::Update(d, target), &columns);
                     stream(&mut |rows| w.rows(rows)).map(|()| w.finish())
                 }
                 (None, _) => {
-                    let origins: Vec<_> = b.cols.iter().map(|&c| rs.columns[c].meta.origin).collect();
+                    let origins: Vec<_> = b.cols.iter().map(|&c| rs.columns[c].meta.origin.clone()).collect();
                     let names: Vec<&str> = columns.iter().map(|c| c.name).collect();
                     let keys = self.tab_keys(t).catalog();
-                    let source = insert_source(keys, &origins, &names, t.shown_sql());
+                    let source = insert_source(d, keys, &origins, &names, t.shown_sql());
                     let plan = match &req.into {
                         None => source.map_err(|why| {
                             Notice::new(Msg::CopyInsertRefused { reason: self.why(&why) }, Level::Warning)
                         }),
-                        Some(into) => insert_into(keys, into, &names)
+                        Some(into) => insert_into(d, keys, into, &names)
                             .inspect(|p| {
                                 if !source.as_ref().is_ok_and(|s| std::ptr::eq(s.table, p.table)) {
-                                    as_is = Some(qualified(p.table));
+                                    as_is = Some(qualified(d, p.table));
                                 }
                             })
                             .map_err(|why| Notice::new(self.copy_into_failed(into, &why), Level::Warning)),
@@ -472,7 +475,7 @@ impl App {
                         overriding,
                     };
                     let columns: Vec<_> = written.iter().map(|w| columns[w.0]).collect();
-                    let mut w = export::Writer::new(export::Format::Sql(target), &columns);
+                    let mut w = export::Writer::new(export::Format::Sql(d, target), &columns);
                     stream(&mut |rows| {
                         let rows: Vec<export::Row> =
                             rows.iter().map(|r| written.iter().map(|w| r[w.0]).collect()).collect();
@@ -754,9 +757,9 @@ fn kilobytes(n: usize) -> String {
     format!("{} KB", n.div_ceil(1000))
 }
 
-/// `schema.table`, quoted where it needs to be, for messages.
-fn qualified(t: &datarig_core::driver::keys::TableKeys) -> String {
-    format!("{}.{}", export::quote_ident(&t.schema), export::quote_ident(&t.name))
+/// `schema.table` as dialect `d` writes it, each name quoted, for messages.
+fn qualified(d: Dialect, t: &datarig_core::driver::keys::TableKeys) -> String {
+    format!("{}.{}", d.force_quote_ident(&t.schema), d.force_quote_ident(&t.name))
 }
 
 impl App {

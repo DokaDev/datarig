@@ -5,7 +5,7 @@
 
 use crate::apps;
 use crate::stats::{Summary, ms};
-use datarig_core::driver::{ColumnMeta, DbEvent};
+use datarig_core::driver::{ColumnMeta, DbEvent, ValueKind};
 use datarig_tui::app::Focus;
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 use serde_json::{Value, json};
@@ -112,6 +112,7 @@ pub fn run(joins: usize, partitions: usize, n: usize) -> Result<Value, String> {
         type_name: "json".into(),
         numeric: false,
         json: true,
+        kind: ValueKind::Json,
         origin: None,
     }];
     app.on_db_event(DbEvent::Page {

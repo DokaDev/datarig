@@ -25,8 +25,10 @@ fn shop() -> KeyCatalog {
 }
 
 fn o(table: u32, column: i16) -> Option<ColumnOrigin> {
-    Some(ColumnOrigin { table, column })
+    Some(ColumnOrigin::Pg { table, column })
 }
+
+const PG: Dialect = Dialect::Postgres;
 
 const PK: KeyMarks = KeyMarks { pk: true, fk: false, unique: false };
 const FK: KeyMarks = KeyMarks { pk: false, fk: true, unique: false };
@@ -36,18 +38,21 @@ const NONE: KeyMarks = KeyMarks { pk: false, fk: false, unique: false };
 #[test]
 fn single_column_keys() {
     let k = shop();
-    assert_eq!(k.marks(o(10, 1)), PK);
-    assert_eq!(k.marks(o(10, 2)), UQ);
-    assert_eq!(k.marks(o(10, 3)), NONE);
-    assert_eq!(k.marks(o(11, 2)), FK);
+    assert_eq!(k.marks(o(10, 1).as_ref()), PK);
+    assert_eq!(k.marks(o(10, 2).as_ref()), UQ);
+    assert_eq!(k.marks(o(10, 3).as_ref()), NONE);
+    assert_eq!(k.marks(o(11, 2).as_ref()), FK);
 }
 
 #[test]
 fn every_member_of_a_composite_key_is_marked() {
     let k = shop();
     let both = KeyMarks { pk: true, fk: true, unique: false };
-    assert_eq!((k.marks(o(12, 1)), k.marks(o(12, 2)), k.marks(o(12, 3))), (both, both, NONE));
-    assert_eq!((k.marks(o(13, 1)), k.marks(o(13, 2)), k.marks(o(13, 3))), (UQ, UQ, NONE));
+    assert_eq!(
+        (k.marks(o(12, 1).as_ref()), k.marks(o(12, 2).as_ref()), k.marks(o(12, 3).as_ref())),
+        (both, both, NONE)
+    );
+    assert_eq!((k.marks(o(13, 1).as_ref()), k.marks(o(13, 2).as_ref()), k.marks(o(13, 3).as_ref())), (UQ, UQ, NONE));
     assert!(both.any() && !NONE.any());
 }
 
@@ -55,9 +60,9 @@ fn every_member_of_a_composite_key_is_marked() {
 fn computed_and_unknown_columns_have_no_marks() {
     let k = shop();
     assert_eq!(k.marks(None), NONE, "an expression has no origin");
-    assert_eq!(k.marks(o(99, 1)), NONE, "a table the catalog does not know");
-    assert_eq!(k.marks(o(10, 42)), NONE, "a column that is not there");
-    assert!(k.column(ColumnOrigin { table: 10, column: 42 }).is_none());
+    assert_eq!(k.marks(o(99, 1).as_ref()), NONE, "a table the catalog does not know");
+    assert_eq!(k.marks(o(10, 42).as_ref()), NONE, "a column that is not there");
+    assert!(k.column(&ColumnOrigin::Pg { table: 10, column: 42 }).is_none());
 }
 
 #[test]
@@ -90,7 +95,7 @@ fn table_of<'a>(r: Result<InsertPlan<'a>, NotInsertable>) -> (String, Vec<(usize
 fn a_plain_single_table_select_is_insertable() {
     let k = more();
     let src =
-        |origins: &[Option<ColumnOrigin>], names: &[&str], sql: &str| insert_source(Some(&k), origins, names, sql);
+        |origins: &[Option<ColumnOrigin>], names: &[&str], sql: &str| insert_source(PG, Some(&k), origins, names, sql);
     let Ok(InsertPlan { table, columns, skipped, overriding }) =
         src(&[o(11, 3), o(11, 1)], &["s", "i"], "SELECT status AS s, id AS i FROM shop.orders")
     else {
@@ -128,7 +133,7 @@ fn a_cte_self_join_is_refused() {
     // The repro: both instances of the CTE read one table, so the driver names that table for
     // every column; the rows it returns never existed.
     let sql = "WITH x AS (SELECT * FROM shop.orders) SELECT a.id, b.status FROM x a JOIN x b ON a.user_id = b.id";
-    assert_eq!(insert_source(Some(&k), &[o(11, 1), o(11, 3)], &["id", "status"], sql), Err(NotInsertable::With));
+    assert_eq!(insert_source(PG, Some(&k), &[o(11, 1), o(11, 3)], &["id", "status"], sql), Err(NotInsertable::With));
 }
 
 #[test]
@@ -167,7 +172,7 @@ fn anything_but_one_plain_table_is_refused() {
         ("", NotSelect),
         ("WITH x AS (SELECT 1) SELECT id, status FROM orders", With),
     ] {
-        assert_eq!(insert_source(Some(&k), &cols, &names, sql), Err(why), "{sql}");
+        assert_eq!(insert_source(PG, Some(&k), &cols, &names, sql), Err(why), "{sql}");
     }
 }
 
@@ -176,7 +181,7 @@ fn the_result_columns_must_be_that_tables_columns() {
     use NotInsertable::*;
     let k = more();
     let src =
-        |origins: &[Option<ColumnOrigin>], names: &[&str], sql: &str| insert_source(Some(&k), origins, names, sql);
+        |origins: &[Option<ColumnOrigin>], names: &[&str], sql: &str| insert_source(PG, Some(&k), origins, names, sql);
     let sql = "SELECT id, status FROM shop.orders";
     assert_eq!(src(&[o(11, 1), None], &["id", "n"], "SELECT id, 1 AS n FROM shop.orders"), Err(Computed));
     assert_eq!(src(&[None], &["count"], "SELECT count(*) FROM orders"), Err(Computed));
@@ -188,7 +193,7 @@ fn the_result_columns_must_be_that_tables_columns() {
     assert_eq!(src(&[o(10, 1)], &["id"], "SELECT id FROM shop.orders"), Err(OtherTable), "FROM names another table");
     assert_eq!(src(&[o(22, 1)], &["id"], "SELECT id FROM shop.orders"), Err(OtherTable), "another schema");
     assert_eq!(src(&[o(99, 1)], &["x"], "SELECT x FROM gone"), Err(UnknownTable));
-    assert_eq!(insert_source(None, &[o(11, 1)], &["id"], "SELECT id FROM orders"), Err(NoCatalog));
+    assert_eq!(insert_source(PG, None, &[o(11, 1)], &["id"], "SELECT id FROM orders"), Err(NoCatalog));
     assert_eq!(src(&[o(11, 1), o(11, 3)], &["a", "a"], "SELECT id AS a, status AS a FROM orders"), Err(DuplicateNames));
     // A view: its rows are not a table's rows.
     assert_eq!(src(&[o(20, 1), o(20, 2)], &["id", "status"], "SELECT * FROM shop.recent"), Err(View));
@@ -202,22 +207,22 @@ fn copy_insert_into_a_named_table() {
     k.set_generated(13, 3, Generated::Expression);
     // Result columns go into the columns of the same name, in result order.
     assert_eq!(
-        table_of(insert_into(Some(&k), "shop.orders", &["status", "id"])),
+        table_of(insert_into(PG, Some(&k), "shop.orders", &["status", "id"])),
         ("shop.orders".into(), vec![(0, "status"), (1, "id")])
     );
-    assert_eq!(table_of(insert_into(Some(&k), " \"shop\" . \"users\" ", &["email"])).0, "shop.users");
-    assert_eq!(table_of(insert_into(Some(&k), "USERS", &["name"])).0, "shop.users", "folded, one schema");
+    assert_eq!(table_of(insert_into(PG, Some(&k), " \"shop\" . \"users\" ", &["email"])).0, "shop.users");
+    assert_eq!(table_of(insert_into(PG, Some(&k), "USERS", &["name"])).0, "shop.users", "folded, one schema");
     // Into a view, when the user says so.
-    assert_eq!(table_of(insert_into(Some(&k), "shop.recent", &["id"])).0, "shop.recent");
-    let p = insert_into(Some(&k), "shop.pairs", &["a", "b"]).unwrap();
+    assert_eq!(table_of(insert_into(PG, Some(&k), "shop.recent", &["id"])).0, "shop.recent");
+    let p = insert_into(PG, Some(&k), "shop.pairs", &["a", "b"]).unwrap();
     assert!(p.overriding, "an identity column keeps its value");
-    assert_eq!(insert_into(Some(&k), "shop.pairs", &["b", "c"]), Err(GeneratedColumn("c".into())));
-    assert_eq!(insert_into(Some(&k), "shop.orders", &["id", "nope"]), Err(NoSuchColumn("nope".into())));
-    assert_eq!(insert_into(Some(&k), "shop.nope", &["id"]), Err(NoSuchTable));
-    assert_eq!(insert_into(Some(&k), "a.b.c", &["id"]), Err(NoSuchTable));
-    assert_eq!(insert_into(Some(&k), "orders", &["id"]), Err(AmbiguousTable), "shop.orders and other.orders");
-    assert_eq!(insert_into(Some(&k), "shop.orders", &["id", "id"]), Err(DuplicateNames));
-    assert_eq!(insert_into(None, "shop.orders", &["id"]), Err(NoCatalog));
+    assert_eq!(insert_into(PG, Some(&k), "shop.pairs", &["b", "c"]), Err(GeneratedColumn("c".into())));
+    assert_eq!(insert_into(PG, Some(&k), "shop.orders", &["id", "nope"]), Err(NoSuchColumn("nope".into())));
+    assert_eq!(insert_into(PG, Some(&k), "shop.nope", &["id"]), Err(NoSuchTable));
+    assert_eq!(insert_into(PG, Some(&k), "a.b.c", &["id"]), Err(NoSuchTable));
+    assert_eq!(insert_into(PG, Some(&k), "orders", &["id"]), Err(AmbiguousTable), "shop.orders and other.orders");
+    assert_eq!(insert_into(PG, Some(&k), "shop.orders", &["id", "id"]), Err(DuplicateNames));
+    assert_eq!(insert_into(PG, None, "shop.orders", &["id"]), Err(NoCatalog));
 }
 
 #[test]
@@ -229,17 +234,18 @@ fn generated_columns_are_left_out_and_identity_always_overrides() {
     k.set_generated(13, 42, Generated::Expression);
     let sql = "SELECT a, b, c FROM shop.pairs";
     let Ok(InsertPlan { columns, skipped, overriding, .. }) =
-        insert_source(Some(&k), &[o(13, 1), o(13, 2), o(13, 3)], &["a", "b", "c"], sql)
+        insert_source(PG, Some(&k), &[o(13, 1), o(13, 2), o(13, 3)], &["a", "b", "c"], sql)
     else {
         panic!("one table")
     };
     assert_eq!((columns, skipped, overriding), (vec![(0, "a"), (1, "b")], vec!["c"], true));
-    let Ok(InsertPlan { columns, overriding, .. }) = insert_source(Some(&k), &[o(13, 2), o(13, 3)], &["b", "c"], sql)
+    let Ok(InsertPlan { columns, overriding, .. }) =
+        insert_source(PG, Some(&k), &[o(13, 2), o(13, 3)], &["b", "c"], sql)
     else {
         panic!("one table")
     };
     assert_eq!((columns, overriding), (vec![(0, "b")], false), "no identity column written");
-    assert_eq!(insert_source(Some(&k), &[o(13, 3)], &["c"], sql), Err(NotInsertable::OnlyGenerated));
+    assert_eq!(insert_source(PG, Some(&k), &[o(13, 3)], &["c"], sql), Err(NotInsertable::OnlyGenerated));
 }
 
 /// `UPDATE` statements need the `INSERT` allowlist and every primary key
@@ -248,7 +254,7 @@ fn generated_columns_are_left_out_and_identity_always_overrides() {
 fn updates_need_one_table_and_its_whole_primary_key() {
     let k = shop();
     let upd =
-        |origins: &[Option<ColumnOrigin>], names: &[&str], sql: &str| update_source(Some(&k), origins, names, sql);
+        |origins: &[Option<ColumnOrigin>], names: &[&str], sql: &str| update_source(PG, Some(&k), origins, names, sql);
     let Ok(UpdatePlan { table, set, keys }) =
         upd(&[o(11, 3), o(11, 1)], &["s", "i"], "SELECT status AS s, id AS i FROM shop.orders")
     else {
@@ -276,7 +282,13 @@ fn updates_need_one_table_and_its_whole_primary_key() {
         Err(NotUpdatable::NotInsertable(NotInsertable::SeveralTables))
     );
     assert_eq!(
-        update_source(None, &[o(11, 1), o(11, 3)], &["id", "status"], "SELECT id, status FROM shop.orders"),
+        update_source(
+            Dialect::Postgres,
+            None,
+            &[o(11, 1), o(11, 3)],
+            &["id", "status"],
+            "SELECT id, status FROM shop.orders"
+        ),
         Err(NotUpdatable::NotInsertable(NotInsertable::NoCatalog))
     );
     // Generated columns are not set.
@@ -285,7 +297,32 @@ fn updates_need_one_table_and_its_whole_primary_key() {
     k.set_generated(11, 2, Generated::IdentityAlways);
     let sql = "SELECT id, user_id, status FROM shop.orders";
     assert_eq!(
-        update_source(Some(&k), &[o(11, 1), o(11, 2), o(11, 3)], &["id", "user_id", "status"], sql),
+        update_source(PG, Some(&k), &[o(11, 1), o(11, 2), o(11, 3)], &["id", "user_id", "status"], sql),
         Err(NotUpdatable::NothingToSet)
     );
+}
+
+/// A driver that names the column a result column comes from: the catalog finds it by name,
+/// and the copies treat it as one of that table's columns.
+#[test]
+fn a_column_named_by_schema_table_and_column_is_found() {
+    let k = shop();
+    let named = |table: &str, column: &str| {
+        Some(ColumnOrigin::Named { schema: "shop".into(), table: table.into(), column: column.into() })
+    };
+    assert_eq!(k.marks(named("users", "id").as_ref()), PK);
+    assert_eq!(k.marks(named("users", "email").as_ref()), UQ);
+    assert_eq!(k.marks(named("users", "nope").as_ref()), NONE);
+    assert_eq!(k.marks(named("nope", "id").as_ref()), NONE);
+    let sql = "SELECT id, status FROM shop.orders";
+    let origins = [named("orders", "id"), named("orders", "status")];
+    let plan = insert_source(PG, Some(&k), &origins, &["id", "status"], sql).unwrap();
+    assert_eq!((plan.table.name.as_str(), plan.columns), ("orders", vec![(0, "id"), (1, "status")]));
+    let plan = update_source(PG, Some(&k), &origins, &["id", "status"], sql).unwrap();
+    assert_eq!((plan.set, plan.keys), (vec![(1, "status")], vec![(0, "id")]));
+    assert_eq!(insert_source(PG, None, &origins, &["id", "status"], sql), Err(NotInsertable::NoCatalog));
+    let unknown = [named("orders", "id"), named("orders", "nope")];
+    assert_eq!(insert_source(PG, Some(&k), &unknown, &["id", "x"], sql), Err(NotInsertable::UnknownTable));
+    let mixed = [named("orders", "id"), named("users", "name")];
+    assert_eq!(insert_source(PG, Some(&k), &mixed, &["id", "name"], sql), Err(NotInsertable::SeveralTables));
 }

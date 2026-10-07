@@ -1,7 +1,20 @@
 use super::*;
 
 fn meta(name: &str, ty: &str, numeric: bool) -> ColumnMeta {
-    ColumnMeta { name: name.into(), type_name: ty.into(), numeric, json: ty.starts_with("json"), origin: None }
+    // The kind a driver gives a column of that type.
+    let kind = match ty {
+        "int4" | "int8" => ValueKind::Integer,
+        "numeric" => ValueKind::Decimal,
+        "float8" => ValueKind::Float,
+        "int4[]" => ValueKind::Array(crate::driver::ArrayElement::Number),
+        "jsonb" => ValueKind::Json,
+        "date" => ValueKind::Date,
+        "time" | "time with time zone" => ValueKind::Time,
+        "timestamptz" => ValueKind::TimestampTz,
+        "text" | "varchar" => ValueKind::Text,
+        _ => ValueKind::Other,
+    };
+    ColumnMeta { name: name.into(), type_name: ty.into(), numeric, json: ty.starts_with("json"), kind, origin: None }
 }
 
 fn rows(v: &[&[Option<&str>]]) -> Vec<Vec<Cell>> {

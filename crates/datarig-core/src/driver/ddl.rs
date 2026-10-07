@@ -47,6 +47,13 @@ pub enum DdlSource {
     Index(IndexDdl),
     Trigger(TriggerDdl),
     Function(FunctionDdl),
+    /// DDL text the server writes itself (MySQL's `SHOW CREATE …`), shown as it is: `name` is
+    /// the object's name as the server gives it. PostgreSQL never sends one: its DDL is
+    /// rebuilt from the catalog.
+    Verbatim {
+        name: String,
+        text: String,
+    },
 }
 
 impl DdlSource {
@@ -58,6 +65,7 @@ impl DdlSource {
             DdlSource::Index(i) => format!("{}.{}", i.schema, i.name),
             DdlSource::Trigger(t) => format!("{}.{}.{}", t.schema, t.table, t.name),
             DdlSource::Function(f) => format!("{}.{}({})", f.schema, f.name, f.arguments),
+            DdlSource::Verbatim { name, .. } => name.clone(),
         }
     }
 }

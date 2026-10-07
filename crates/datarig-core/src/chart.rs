@@ -21,7 +21,7 @@
 pub mod scale;
 pub mod time;
 
-use crate::driver::{Cell, ColumnMeta};
+use crate::driver::{Cell, ColumnMeta, ValueKind};
 use std::collections::HashMap;
 
 /// At most this many series are drawn: past it, the largest ones and an "others" series.
@@ -299,21 +299,13 @@ pub fn roles(columns: &[ColumnMeta], sample: &[Vec<Cell>]) -> Vec<Role> {
 }
 
 fn role(c: &ColumnMeta, i: usize, sample: &[Vec<Cell>]) -> Role {
-    let t = c.type_name.to_ascii_lowercase();
-    if c.json || t.ends_with("[]") {
-        return Role::Unusable;
-    }
-    if c.numeric {
-        return Role::Number;
-    }
-    if t.contains("timestamp") || t.contains("datetime") {
-        return Role::Time(TimeKind::DateTime);
-    }
-    if t == "date" {
-        return Role::Time(TimeKind::Date);
-    }
-    if t == "time" || t == "timetz" || t.starts_with("time ") {
-        return Role::Time(TimeKind::Time);
+    match c.kind {
+        ValueKind::Json | ValueKind::Array(_) => return Role::Unusable,
+        k if k.is_number() => return Role::Number,
+        ValueKind::Timestamp | ValueKind::TimestampTz => return Role::Time(TimeKind::DateTime),
+        ValueKind::Date => return Role::Time(TimeKind::Date),
+        ValueKind::Time => return Role::Time(TimeKind::Time),
+        _ => {}
     }
     // Text that holds dates (a driver that types them as text, a `to_char`).
     let mut seen = false;

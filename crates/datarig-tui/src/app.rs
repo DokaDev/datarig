@@ -981,7 +981,12 @@ impl App {
     /// (`Capabilities::language`); the default for a tab without a profile, or whose profile
     /// or driver is unknown.
     pub fn tab_language(&self, tab: TabId) -> Language {
-        let profile = self.tabs.get(tab).and_then(|t| t.profile).and_then(|id| self.profile(id));
+        self.profile_language(self.tabs.get(tab).and_then(|t| t.profile))
+    }
+
+    /// The language of a tab bound to `profile` ([`App::tab_language`]), before the tab exists.
+    pub(crate) fn profile_language(&self, profile: Option<ProfileId>) -> Language {
+        let profile = profile.and_then(|id| self.profile(id));
         profile.and_then(|p| self.driver(&p.driver)).map_or_else(Language::default, |d| d.capabilities().language)
     }
 
