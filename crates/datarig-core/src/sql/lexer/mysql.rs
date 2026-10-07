@@ -1,33 +1,45 @@
 //! MySQL's lexer: where a token ends follows MySQL's own (`sql/sql_lex.cc`), and where a
-//! statement ends follows its command-line client (`mysql`), which splits a script and sends
-//! one statement at a time:
+//! statement ends follows its command-line client (`mysql`, its `add_line`), which splits a
+//! script and sends one statement at a time:
 //!
-//! * `'…'` and `"…"` are strings (`"…"` a quoted name under `ANSI_QUOTES`); a doubled quote and,
-//!   unless `NO_BACKSLASH_ESCAPES`, a backslash escape the next character;
+//! * `'…'` and `"…"` are strings (`"…"` a quoted name under `ANSI_QUOTES`), `x'…'`, `b'…'` and
+//!   `N'…'` too (`_utf8mb4'…'` is a name and a string); in each a doubled quote and, unless
+//!   `NO_BACKSLASH_ESCAPES`, a backslash escape the next character (as the client reads them,
+//!   in a quoted name under `ANSI_QUOTES` and in hex and bit strings as well).
 //!   `` `…` `` is a quoted name (a doubled backtick is one);
-//! * `#` starts a comment, and so does `--` followed by a blank or a control character (`a--1`
+//! * `#` starts a comment, and so does `--` followed by a blank or the end of the line (`a--1`
 //!   is `a - -1`); both end at `\n` only;
 //! * `/* … */` does not nest; `/*!…*/` and `/*!80023 …*/` are executable comments: the server
-//!   runs what is inside (when its version is at least the number), so their opening and closing
-//!   are tokens of their own ([`Tok::ExecComment`]) and what lies between is code. A `/* … */`
-//!   inside one is a comment; `/*+ … */` (optimizer hints) is a comment to the lexer;
+//!   runs what is inside (when its version is at least the number: five digits, or six), so
+//!   their opening and closing are tokens of their own ([`Tok::ExecComment`]) and what lies
+//!   between is code. A `/* … */` inside one is a comment; `/*+ … */` (optimizer hints) is a
+//!   comment;
 //! * names go on through letters, digits, `_`, `$` and any character outside ASCII, and may
 //!   start with a digit (`1col`), unless the text is a number (`12`, `1e5`, `0x1F`, `0b01`);
 //!   after a name and a `.` written together comes a name, whatever it looks like (`t.1e5`,
-//!   `t.select`); there are no dollar quotes;
-//! * `x'…'`, `b'…'` and `N'…'` are strings (`_utf8mb4'…'` is a name and a string), `@x`, `@'x'`
-//!   and `@@x` variables ([`Tok::Variable`]), `?` a parameter;
-//! * the client's `DELIMITER` line: at the start of a line where no statement has begun (only
-//!   blanks and comments since the last one), `DELIMITER` (any case) followed by a blank sets the
-//!   statement terminator to the word after it (a quoted one may hold blanks; at most
-//!   [`MAX_DELIMITER`](super::MAX_DELIMITER) bytes; one with a backslash is refused). The line is a client command
-//!   ([`Tok::Directive`]), never sent. The terminator ends a statement wherever it is written
-//!   outside a string, a quoted name or a comment, also in the middle of a name (`end$$`), its
-//!   case as set; inside an executable comment too, as the client does not read those as
-//!   comments.
+//!   `t.select`);
+//! * `@x`, `@'x'` and `@@x` are variables ([`Tok::Variable`]), `?` a parameter;
+//! * dollar quotes (`$$…$$`, `$tag$…$tag$`) only on a server whose client reads them
+//!   (`MySqlMode::dollar_quotes`);
+//! * the client's `DELIMITER` line: at the start of a line (only blanks and comments on that
+//!   line before it, the line not starting inside a comment or a string) where no statement
+//!   has begun, `DELIMITER` (any case) followed by a blank or the line's end sets the statement
+//!   terminator to the word after it: up to a space (a backslash escapes the next character),
+//!   or the text between quotes; at most [`MAX_DELIMITER`](super::MAX_DELIMITER) bytes; one
+//!   that holds a backslash is refused. The line is a client command ([`Tok::Directive`]),
+//!   never sent. The terminator ends a statement wherever it starts outside a string, a quoted
+//!   name or a comment, at an ASCII character (the client passes other characters over), also
+//!   in a name or a number (`end$$`), its case as set; inside an executable comment too, as the
+//!   client does not read those as comments;
+//! * `\g` and `\G` outside strings end a statement too; a backslash outside strings takes the
+//!   next character with it (`\'` opens no string).
 //!
-//! The client's other commands (`\g`, `\G`, `\d`, `go`, `source`, …) are not read: such text
-//! goes to the server as it is and fails there.
+//! Where the client's own reading is broken, the server's is followed: an optimizer hint over
+//! several lines stays a comment (the client reads its next lines as code), and a `DELIMITER`
+//! line is no command after a statement on the same line or after an executable comment (the
+//! client then drops text: those go to the server and fail there). The client's other commands
+//! (`\c`, `\d`, `go`, `source`, `use` without a terminator, …) are not read: such text goes to
+//! the server as it is and fails there.
 
 use super::{Cursor, Delimiter, LexState, Tok, Token, is_space};
 use crate::sql::dialect::{Dialect, MySqlMode};
@@ -215,9 +227,9 @@ fn is_ident_char(c: char) -> bool {
     c.is_ascii_alphanumeric() || c == '_' || c == '$' || !c.is_ascii()
 }
 
-/// What follows `--` makes it a comment: a blank, a control character, or the end.
+/// What follows `--` makes it a comment, to the client: a blank, or the end of the line.
 fn dash_comment(next: Option<char>) -> bool {
-    next.is_none_or(|c| c <= ' ' || c == '\x7f')
+    next.is_none_or(is_space)
 }
 
 /// The client command word.
@@ -232,9 +244,11 @@ struct Lexer<'a> {
 }
 
 impl Lexer<'_> {
-    /// The terminator starts at the cursor, where a name or a number would go on.
+    /// The terminator starts at the cursor (at an ASCII character), where a name, a number or
+    /// blanks would go on.
     fn at_delimiter(&self) -> bool {
-        self.custom && self.cur.src[self.cur.pos..].starts_with(self.delim.as_str())
+        let rest = &self.cur.src[self.cur.pos..];
+        self.custom && rest.as_bytes().first().is_some_and(u8::is_ascii) && rest.starts_with(self.delim.as_str())
     }
 
     /// A name character comes next, and the terminator does not start there.
@@ -248,22 +262,39 @@ impl Lexer<'_> {
         }
     }
 
-    fn eat_digits(&mut self) {
-        while self.cur.peek().is_some_and(|c| c.is_ascii_digit()) && !self.at_delimiter() {
+    /// Eat characters while `f` holds and the terminator does not start.
+    fn eat_while(&mut self, f: impl Fn(char) -> bool) {
+        while self.cur.peek().is_some_and(&f) && !self.at_delimiter() {
             self.cur.bump();
         }
     }
 
+    fn eat_digits(&mut self) {
+        self.eat_while(|c| c.is_ascii_digit());
+    }
+
     /// An exponent (`e5`, `E+5`, `e-5`) comes next: eat it.
     fn exponent(&mut self) -> bool {
-        if !matches!(self.cur.peek(), Some('e' | 'E')) {
+        if !matches!(self.cur.peek(), Some('e' | 'E')) || self.at_delimiter() {
             return false;
         }
         let digit_at = if matches!(self.cur.peek_at(1), Some('+' | '-')) { 2 } else { 1 };
         if !self.cur.peek_at(digit_at).is_some_and(|c| c.is_ascii_digit()) {
             return false;
         }
-        self.cur.pos += digit_at;
+        let save = self.cur.pos;
+        self.cur.bump();
+        if digit_at == 2 {
+            if self.at_delimiter() {
+                self.cur.pos = save;
+                return false;
+            }
+            self.cur.bump();
+        }
+        if self.at_delimiter() {
+            self.cur.pos = save;
+            return false;
+        }
         self.eat_digits();
         true
     }
@@ -280,11 +311,14 @@ impl Lexer<'_> {
         if c == Some('0') && matches!(self.cur.peek_at(1), Some('x' | 'b')) {
             let save = self.cur.pos;
             let hex = self.cur.peek_at(1) == Some('x');
-            self.cur.pos += 2;
-            let from = self.cur.pos;
-            self.cur.eat_while(|c| if hex { c.is_ascii_hexdigit() } else { c == '0' || c == '1' });
-            if self.cur.pos > from && !self.ident_next() {
-                return Tok::Number;
+            self.cur.bump();
+            if !self.at_delimiter() {
+                self.cur.bump();
+                let from = self.cur.pos;
+                self.eat_while(|c| if hex { c.is_ascii_hexdigit() } else { c == '0' || c == '1' });
+                if self.cur.pos > from && !self.ident_next() {
+                    return Tok::Number;
+                }
             }
             self.cur.pos = save;
         }
@@ -309,22 +343,47 @@ impl Lexer<'_> {
     fn variable(&mut self, mode: MySqlMode) -> Tok {
         let start = self.cur.pos;
         self.cur.bump();
-        if self.cur.peek() == Some('@') {
+        if self.cur.peek() == Some('@') && !self.at_delimiter() {
             self.cur.bump();
-        } else if let Some(q @ ('\'' | '"' | '`')) = self.cur.peek() {
+        } else if let Some(q @ ('\'' | '"' | '`')) = self.cur.peek()
+            && !self.at_delimiter()
+        {
             self.cur.bump();
             self.cur.quoted(q, q != '`' && !mode.no_backslash_escapes);
             return Tok::Variable;
         }
         let from = self.cur.pos;
-        while (self.ident_next() || self.cur.peek() == Some('.')) && !self.at_delimiter() {
-            self.cur.bump();
-        }
+        self.eat_while(|c| is_ident_char(c) || c == '.');
         if self.cur.pos == from {
             self.cur.pos = start + 1;
             return Tok::Op;
         }
         Tok::Variable
+    }
+
+    /// A dollar quote (`$$` or `$tag$`, the tag of name characters on the same line) starts at
+    /// the cursor: eat it to its closing tag (as the client reads it, a backslash escaping the
+    /// next character unless `NO_BACKSLASH_ESCAPES`) or the end.
+    fn dollar_quote(&mut self, backslash: bool) -> bool {
+        let rest = &self.cur.src[self.cur.pos..];
+        let Some(close) = rest[1..].find(|c: char| c == '$' || !is_ident_char(c) || c == '\n') else { return false };
+        if !rest[1 + close..].starts_with('$') {
+            return false;
+        }
+        let tag = &rest[..close + 2];
+        self.cur.pos += tag.len();
+        while self.cur.pos < self.cur.src.len() {
+            let here = &self.cur.src[self.cur.pos..];
+            if here.starts_with(tag) {
+                self.cur.pos += tag.len();
+                return true;
+            }
+            let c = self.cur.bump();
+            if backslash && c == Some('\\') {
+                self.cur.bump();
+            }
+        }
+        true
     }
 }
 
@@ -333,18 +392,26 @@ pub(super) fn lex(src: &str, mode: MySqlMode, mut state: LexState) -> Vec<Token>
     let mut out: Vec<Token> = Vec::new();
     let mut lx = Lexer { cur: Cursor { src, pos: 0 }, delim: state.delimiter, custom: false };
     let backslash = !mode.no_backslash_escapes;
-    // Only blanks and comments since the start of the line.
+    // Only blanks and comments on this line so far, and it did not start inside a token.
     let mut line_clean = true;
     while let Some(c) = lx.cur.peek() {
         lx.delim = state.delimiter;
         lx.custom = lx.delim != Delimiter::default();
         let start = lx.cur.pos;
-        let delim_len = lx.delim.as_str().len();
-        let kind = if src[start..].starts_with(lx.delim.as_str()) {
-            lx.cur.pos += delim_len;
+        let kind = if c.is_ascii() && src[start..].starts_with(lx.delim.as_str()) {
+            lx.cur.pos += lx.delim.as_str().len();
             Tok::Semi
+        } else if c == '\\' {
+            // A client command: `\g` and `\G` send the statement; another takes its character
+            // with it.
+            lx.cur.bump();
+            match lx.cur.bump() {
+                Some('g' | 'G') => Tok::Semi,
+                _ => Tok::Op,
+            }
         } else if is_space(c) {
-            lx.cur.eat_while(is_space);
+            lx.cur.bump();
+            lx.eat_while(is_space);
             Tok::Whitespace
         } else if c == '#' || (c == '-' && lx.cur.peek_at(1) == Some('-') && dash_comment(lx.cur.peek_at(2))) {
             lx.cur.eat_while(|c| c != '\n');
@@ -352,10 +419,13 @@ pub(super) fn lex(src: &str, mode: MySqlMode, mut state: LexState) -> Vec<Token>
         } else if c == '/' && lx.cur.peek_at(1) == Some('*') {
             if lx.cur.peek_at(2) == Some('!') {
                 lx.cur.pos += 3;
+                // The version: six digits, or else five.
                 let digits = src[lx.cur.pos..].bytes().take_while(u8::is_ascii_digit).count();
-                if digits >= 5 {
-                    lx.cur.pos += digits.min(6);
-                }
+                lx.cur.pos += match digits {
+                    6 => 6,
+                    5.. => 5,
+                    _ => 0,
+                };
                 Tok::ExecComment
             } else {
                 lx.cur.pos += 2;
@@ -368,14 +438,16 @@ pub(super) fn lex(src: &str, mode: MySqlMode, mut state: LexState) -> Vec<Token>
         } else if state.exec && c == '*' && lx.cur.peek_at(1) == Some('/') {
             lx.cur.pos += 2;
             Tok::ExecComment
-        } else if c == '\'' || (c == '"' && !mode.ansi_quotes) {
+        } else if c == '\'' || c == '"' {
             lx.cur.bump();
             lx.cur.quoted(c, backslash);
-            Tok::Str
-        } else if c == '"' || c == '`' {
+            if c == '"' && mode.ansi_quotes { Tok::QuotedIdent } else { Tok::Str }
+        } else if c == '`' {
             lx.cur.bump();
             lx.cur.quoted(c, false);
             Tok::QuotedIdent
+        } else if c == '$' && mode.dollar_quotes && !glued_after_ident(src, start) && lx.dollar_quote(backslash) {
+            Tok::Str
         } else if c == '@' {
             lx.variable(mode)
         } else if c == '?' {
@@ -389,15 +461,11 @@ pub(super) fn lex(src: &str, mode: MySqlMode, mut state: LexState) -> Vec<Token>
         {
             lx.number_or_ident()
         } else if is_ident_char(c) {
-            if matches!(c, 'x' | 'X' | 'b' | 'B') && lx.cur.peek_at(1) == Some('\'') {
-                lx.cur.pos += 2;
-                lx.cur.quoted('\'', false);
-                Tok::Str
-            } else if matches!(c, 'n' | 'N') && lx.cur.peek_at(1) == Some('\'') {
+            if matches!(c, 'x' | 'X' | 'b' | 'B' | 'n' | 'N') && lx.cur.peek_at(1) == Some('\'') {
                 lx.cur.pos += 2;
                 lx.cur.quoted('\'', backslash);
                 Tok::Str
-            } else if line_clean && !state.pending && directive_at(&src[start..]) {
+            } else if line_clean && !state.pending && !state.exec && directive_at(&src[start..]) {
                 lx.cur.eat_while(|c| c != '\n');
                 Tok::Directive
             } else {
@@ -415,8 +483,11 @@ pub(super) fn lex(src: &str, mode: MySqlMode, mut state: LexState) -> Vec<Token>
             }
         };
         let t = Token { kind, start, end: lx.cur.pos };
+        let breaks = t.text(src).contains('\n');
         line_clean = match t.kind {
-            Tok::Whitespace | Tok::BlockComment => line_clean || t.text(src).contains('\n'),
+            Tok::Whitespace => line_clean || breaks,
+            // A line that starts inside a comment holds no command.
+            Tok::BlockComment => line_clean && !breaks,
             Tok::LineComment => line_clean,
             _ => false,
         };
@@ -426,10 +497,16 @@ pub(super) fn lex(src: &str, mode: MySqlMode, mut state: LexState) -> Vec<Token>
     out
 }
 
-/// A `DELIMITER` command starts `rest`: the word, then a blank or the end of the line.
+/// A name character is right before byte `at` of `src` (a `$` there goes on a name, as the
+/// client sees it, and opens no dollar quote).
+fn glued_after_ident(src: &str, at: usize) -> bool {
+    src[..at].chars().next_back().is_some_and(is_ident_char)
+}
+
+/// A `DELIMITER` command starts `rest`: the word, then a space, a tab or the end of the line.
 fn directive_at(rest: &str) -> bool {
     rest.get(..DIRECTIVE.len()).is_some_and(|w| w.eq_ignore_ascii_case(DIRECTIVE))
-        && rest[DIRECTIVE.len()..].chars().next().is_none_or(|c| matches!(c, ' ' | '\t' | '\r' | '\n'))
+        && rest[DIRECTIVE.len()..].chars().next().is_none_or(|c| matches!(c, ' ' | '\t' | '\n'))
 }
 
 /// The last token is a `.` written right after a name (or a keyword read as one): what follows
@@ -451,22 +528,37 @@ fn glued_name(out: &[Token], at: usize) -> bool {
     out.last().is_some_and(|t| t.end == at && matches!(t.kind, Tok::Ident | Tok::QuotedIdent | Tok::Keyword))
 }
 
-/// The terminator a `DELIMITER` line sets: the word after the command (up to a blank, or the
-/// text between quotes), `None` when there is none or it holds a backslash (the client
-/// refuses it and keeps the one it had).
+/// The terminator a `DELIMITER` line sets, as the client reads it: after the command and
+/// blanks, the text between quotes, or up to a space (a backslash dropped, the character after
+/// it kept); `None` when there is none or it holds a backslash (the client refuses it and keeps
+/// the one it had).
 pub(super) fn directive_delimiter(line: &str) -> Option<Delimiter> {
-    let rest = line.get(DIRECTIVE.len()..)?.trim_start_matches([' ', '\t']);
-    let arg = match rest.chars().next()? {
+    let rest = line.get(DIRECTIVE.len()..)?.trim_start_matches(is_space);
+    let arg: String = match rest.chars().next()? {
         q @ ('\'' | '"' | '`') => {
             let inner = &rest[1..];
-            &inner[..inner.find(q).unwrap_or(inner.len())]
+            inner[..inner.find(q).unwrap_or(inner.len())].to_string()
         }
-        _ => &rest[..rest.find([' ', '\t', '\r', '\n']).unwrap_or(rest.len())],
+        _ => {
+            let mut arg = String::new();
+            let mut chars = rest.chars();
+            while let Some(c) = chars.next() {
+                match c {
+                    '\\' => match chars.next() {
+                        Some(next) => arg.push(next),
+                        None => arg.push(c),
+                    },
+                    ' ' => break,
+                    c => arg.push(c),
+                }
+            }
+            arg
+        }
     };
     if arg.contains('\\') {
         return None;
     }
-    Delimiter::new(arg)
+    Delimiter::new(&arg)
 }
 
 /// The state after token `t` of `src` ([`LexState::after`]).

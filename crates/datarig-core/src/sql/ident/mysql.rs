@@ -272,17 +272,29 @@ pub const RESERVED: &[&str] = &[
     "zerofill",
 ];
 
+/// MySQL's character sets (8.0, 8.4 and 9.x, and the alias `utf8`): `_` and one of them is a
+/// string's introducer (`_utf8mb4'…'`), never a name. Sorted, lower case.
+pub const CHARSETS: &[&str] = &[
+    "armscii8", "ascii", "big5", "binary", "cp1250", "cp1251", "cp1256", "cp1257", "cp850", "cp852", "cp866", "cp932",
+    "dec8", "eucjpms", "euckr", "gb18030", "gb2312", "gbk", "geostd8", "greek", "hebrew", "hp8", "keybcs2", "koi8r",
+    "koi8u", "latin1", "latin2", "latin5", "latin7", "macce", "macroman", "sjis", "swe7", "tis620", "ucs2", "ujis",
+    "utf16", "utf16le", "utf32", "utf8", "utf8mb3", "utf8mb4",
+];
+
 /// Whether `name` must be written in backticks to be read back as that same name. MySQL keeps a
 /// name's case as written (whether `Users` and `users` are the same table is the server's
 /// `lower_case_table_names`, not the quoting's), so a bare name is one that starts with an ASCII
-/// letter or `_` and goes on with ASCII letters, digits, `_` and `$`, and is not a reserved word.
-/// Conservative: MySQL also takes a bare name that starts with a digit or `$` or holds letters
-/// outside ASCII, which are quoted here (`1e5` is a number, `0x1F` a hex literal).
+/// letter or `_` and goes on with ASCII letters, digits, `_` and `$`, and is neither a reserved
+/// word nor an introducer (`_binary`). Conservative: MySQL also takes a bare name that starts
+/// with a digit or `$` or holds letters outside ASCII, which are quoted here (`1e5` is a number,
+/// `0x1F` a hex literal).
 pub fn needs_quotes(name: &str) -> bool {
     let mut chars = name.chars();
     let plain = chars.next().is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '$');
-    !plain || RESERVED.binary_search(&name.to_ascii_lowercase().as_str()).is_ok()
+    let lower = name.to_ascii_lowercase();
+    let introducer = lower.strip_prefix('_').is_some_and(|cs| CHARSETS.binary_search(&cs).is_ok());
+    !plain || introducer || RESERVED.binary_search(&lower.as_str()).is_ok()
 }
 
 #[cfg(test)]

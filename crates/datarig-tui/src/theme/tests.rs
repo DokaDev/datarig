@@ -380,7 +380,7 @@ fn every_token_of_a_theme_can_be_set_by_name() {
         *style_token(&mut th, name).unwrap() = Style::new().bg(Color::Indexed(100 + i as u8));
     }
     assert_eq!((th.bg, th.mode_fg), (Color::Indexed(0), Color::Indexed(22)));
-    assert_eq!(th.plan_misestimate, Style::new().bg(Color::Indexed(119)));
+    assert_eq!(th.plan_misestimate, Style::new().bg(Color::Indexed(120)));
     assert_eq!(th.chart(), [23, 24, 25, 26, 27, 28].map(Color::Indexed));
     assert!(color_token(&mut th, "selection").is_none() && style_token(&mut th, "bg").is_none());
 }

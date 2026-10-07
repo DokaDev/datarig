@@ -24,21 +24,28 @@ pub enum Dialect {
     MySql(MySqlMode),
 }
 
-/// The parts of a MySQL session's `sql_mode` that change how its text is read and how strings
-/// are written. The default is a default MySQL 8 server's: `"x"` is a string and a backslash
-/// escapes the next character in a string.
+/// What of a MySQL session changes how its text is read and how strings are written: parts of
+/// its `sql_mode`, and whether its server reads dollar quotes. The default is a default MySQL
+/// 8.0 server's: `"x"` is a string, a backslash escapes the next character in a string, and
+/// `$$` is no quote.
 ///
-/// Until a session says otherwise (its driver reads the mode when it connects), text is read in
-/// the default mode. On a server whose mode differs, a string the app writes
-/// ([`Dialect::quote_literal`]) is read otherwise: under `NO_BACKSLASH_ESCAPES` a backslash
-/// written doubled stays doubled. So a MySQL driver must set or read the mode before the app
-/// writes SQL for its sessions.
+/// Until a session says otherwise, text is read in the default mode. On a session whose mode
+/// differs, a string the app writes ([`Dialect::quote_literal`]) is read otherwise (under
+/// `NO_BACKSLASH_ESCAPES` a backslash written doubled stays doubled), and statements may be cut
+/// elsewhere. So a MySQL driver must give the dialect the mode its session has before the app
+/// writes or splits SQL for it, and again whenever it changes: MySQL's client reads
+/// `NO_BACKSLASH_ESCAPES` from the server's status flags after every statement, as a `SET
+/// sql_mode` the user runs changes it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default)]
 pub struct MySqlMode {
     /// `ANSI_QUOTES`: `"x"` is a quoted name, not a string.
     pub ansi_quotes: bool,
     /// `NO_BACKSLASH_ESCAPES`: a backslash in a string is an ordinary character.
     pub no_backslash_escapes: bool,
+    /// The server reads dollar quotes (`$$…$$`, `$tag$…$tag$`): MySQL's client asks it with
+    /// `select $$` (a syntax error there means yes: MySQL 8.4 and 9.x; 8.0 reads `$$` as a name)
+    /// and then does not end a statement inside one.
+    pub dollar_quotes: bool,
 }
 
 impl Dialect {

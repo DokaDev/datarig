@@ -11,9 +11,10 @@ use crate::sql::lexer::{Tok, changes_schema_in, lex_in};
 use crate::sql::risk::{Class, Classifier, Danger};
 use crate::sql::split::{split, split_in};
 
-const MY: Dialect = Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: false });
-const ANSI: Dialect = Dialect::MySql(MySqlMode { ansi_quotes: true, no_backslash_escapes: false });
-const NBE: Dialect = Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: true });
+const MY: Dialect = Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false });
+const ANSI: Dialect =
+    Dialect::MySql(MySqlMode { ansi_quotes: true, no_backslash_escapes: false, dollar_quotes: false });
+const NBE: Dialect = Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: true, dollar_quotes: false });
 const PG: Dialect = Dialect::Postgres;
 
 fn kinds(src: &str, d: Dialect) -> Vec<(Tok, &str)> {
@@ -77,6 +78,11 @@ fn mysql_quotes_names_and_strings() {
         ("1col", "`1col`"),
         ("", "``"),
         ("caf\u{e9}", "`caf\u{e9}`"),
+        ("_binary", "`_binary`"),
+        ("_UTF8MB4", "`_UTF8MB4`"),
+        ("_utf8", "`_utf8`"),
+        ("_utf8mb4x", "_utf8mb4x"),
+        ("_id", "_id"),
     ] {
         assert_eq!(d.quote_ident(name), sql, "{name:?}");
         assert_eq!(d.unquote(&d.force_quote_ident(name)).as_deref(), Some(name), "{name:?}");
@@ -186,9 +192,11 @@ fn danger_03_copied_strings_keep_their_backslashes() {
     assert_eq!(PG.quote_literal("C:\\new"), "'C:\\new'");
 }
 
-/// 4. `#` comments and backslash-escaped quotes split statements where MySQL does.
+/// 4. `#` comments and backslash-escaped quotes split statements where MySQL does (its client,
+///    which reads a backslash as an escape in `"…"` under `ANSI_QUOTES` too).
 #[test]
 fn danger_04_hash_comments_and_backslash_quotes_split_as_mysql_does() {
+    assert_eq!(bodies("SELECT \"a\\\"; b\"; SELECT 2", ANSI), ["SELECT \"a\\\"; b\"", "SELECT 2"]);
     assert_eq!(bodies("SELECT 1; # don't run this; DELETE FROM t\nSELECT 2;", MY), ["SELECT 1", "SELECT 2"]);
     assert_eq!(bodies("SELECT 'it\\'s; fine'; SELECT 2", MY), ["SELECT 'it\\'s; fine'", "SELECT 2"]);
     assert_eq!(bodies("SELECT \"a\\\"; b\"; SELECT 2", MY), ["SELECT \"a\\\"; b\"", "SELECT 2"]);
@@ -294,19 +302,25 @@ fn danger_11_mysql_schema_changes() {
 
 /// 12. The formatter's guard holds on MySQL text: a `#` comment holding a quote, backticks,
 ///     executable comments and backslash strings come back as they were (only the layout
-///     changes) or the text is refused; a `DELIMITER` line is always refused.
+///     changes) or the text is refused; a function's name stays next to its `(` (`count (*)`
+///     is read otherwise); a `DELIMITER` line is always refused.
 #[test]
 fn danger_12_the_formatter_keeps_mysql_tokens() {
     let opts = Options { case: KeywordCase::Upper, indent: 4 };
-    for src in [
-        "select a # it's a comment\n, b from t",
-        "select `a b`, 'it\\'s', \"dq\" from `t` where x = 1",
-        "select 1 /*!80000 + 1 */, @x, @@session.sql_mode, ? from dual",
-        "select x'41', _utf8mb4'u', 0x1F, t.1e5 from t",
-        "select * from t where a--1 > 0",
-        "select first, status from t",
+    // Each text, and whether it is laid out (else refused).
+    for (src, laid_out) in [
+        ("select a # it's a comment\n, b from t", true),
+        ("select `a b`, 'it\\'s', \"dq\" from `t` where x = 1", true),
+        ("select * from t where a--1 > 0", true),
+        ("select first, status from t", true),
+        ("select 1 /*!80000 + 1 */, @x, @@session.sql_mode, ? from dual", false),
+        ("select x'41', _utf8mb4'u', 0x1F, t.1e5 from t", false),
+        // `sqlformat` writes `group_concat (a)`: refused.
+        ("select group_concat(a), count(*), substring(b, 1) from t group by c", false),
     ] {
-        match format_in(src, opts, "", MY) {
+        let formatted = format_in(src, opts, "", MY);
+        assert_eq!(formatted.is_ok(), laid_out, "{src:?} => {formatted:?}");
+        match formatted {
             Ok((span, out)) => {
                 let a: Vec<(Tok, String)> = lex_in(&src[span], MY)
                     .into_iter()
@@ -370,4 +384,39 @@ fn mysql_explain_statements() {
     assert_eq!(explain::json_text_in("EXPLAIN SELECT 1", MY), Err(explain::NotJson::Unreadable));
     assert_eq!(explain::json_in("EXPLAIN SELECT 1", MY), Err(explain::NotJson::Unreadable));
     assert_eq!(explain::json_text_in("EXPLAIN SELECT 1", PG), explain::json_text("EXPLAIN SELECT 1"));
+}
+
+/// A name in MySQL is looked for first in the session's database, in its own case, then in any
+/// case; only then in other databases.
+#[test]
+fn mysql_names_resolve_in_the_database_first() {
+    let col = |n: &str| ColumnInfo { name: n.into(), type_name: String::new() };
+    let rel = |schema: &str, name: &str, c: &str| Relation {
+        schema: schema.into(),
+        name: name.into(),
+        is_view: false,
+        columns: vec![col(c)],
+    };
+    let cat = Catalog {
+        schemas: vec!["other".into(), "shop".into()],
+        relations: vec![rel("other", "Users", "other_col"), rel("shop", "users", "shop_col")],
+    };
+    let shop = MY.default_path(Some("shop"));
+    let got = complete_in_dialect("SELECT  FROM Users", 7, &cat, true, &shop, MY).expect("items");
+    assert_eq!(got.items[0].label, "shop_col");
+    let got = complete_in_dialect("SELECT  FROM Users", 7, &cat, true, &[], MY).expect("items");
+    assert_eq!(got.items[0].label, "other_col", "no database: the name as written");
+}
+
+/// The segment around a cursor inside a terminator of more than one character, or a
+/// `DELIMITER` line, is the one before it.
+#[test]
+fn a_cursor_inside_a_terminator_is_in_the_segment_before_it() {
+    use crate::sql::split::segment_at_in;
+    let src = "DELIMITER $$\nselect 1$$ select 2$$";
+    let at = src.find("$$ ").expect("$$") + 1;
+    let (a, b) = segment_at_in(src, at, MY);
+    assert!(a <= at && &src[a..b] == "\nselect 1", "{:?}", &src[a..b]);
+    let (a, b) = segment_at_in(src, 3, MY);
+    assert_eq!((a, b), (0, 0));
 }

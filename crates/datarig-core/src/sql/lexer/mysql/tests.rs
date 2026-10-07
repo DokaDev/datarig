@@ -1,9 +1,10 @@
 use super::super::{LexState, Tok, lex_from, lex_in};
 use crate::sql::dialect::{Dialect, MySqlMode};
 
-const MY: Dialect = Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: false });
-const ANSI: Dialect = Dialect::MySql(MySqlMode { ansi_quotes: true, no_backslash_escapes: false });
-const NBE: Dialect = Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: true });
+const MY: Dialect = Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false });
+const ANSI: Dialect =
+    Dialect::MySql(MySqlMode { ansi_quotes: true, no_backslash_escapes: false, dollar_quotes: false });
+const NBE: Dialect = Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: true, dollar_quotes: false });
 
 fn kinds_in(src: &str, d: Dialect) -> Vec<(Tok, &str)> {
     lex_in(src, d).into_iter().filter(|t| !t.is_trivia()).map(|t| (t.kind, t.text(src))).collect()
@@ -88,10 +89,14 @@ fn comments_as_mysql_reads_them() {
     // `--` needs a blank or a control character after it.
     assert_eq!(kinds("a--1"), vec![(Tok::Ident, "a"), (Tok::Op, "-"), (Tok::Op, "-"), (Tok::Number, "1")]);
     assert_eq!(kinds("a --;"), vec![(Tok::Ident, "a"), (Tok::Op, "-"), (Tok::Op, "-"), (Tok::Semi, ";")]);
-    for c in ["-- x;", "--\tx;", "--", "--\u{1}x;", "# x;", "#x;"] {
+    for c in ["-- x;", "--\tx;", "--", "--\u{b}x;", "# x;", "#x;"] {
         let src = format!("a {c}\nb");
         assert_eq!(tokens(&src), vec![(Tok::Ident, "a"), (Tok::LineComment, c), (Tok::Ident, "b")], "{src:?}");
     }
+    // `--` and a control character that is no blank: code to the client, which ends the
+    // statement at the `;` after it.
+    assert_eq!(kinds("a --\u{1}x;")[..3], [(Tok::Ident, "a"), (Tok::Op, "-"), (Tok::Op, "-")]);
+    assert_eq!(kinds("a --\u{1}x;").last(), Some(&(Tok::Semi, ";")));
     // A line comment ends at `\n` only.
     assert_eq!(tokens("a # x\r+1\nb"), vec![(Tok::Ident, "a"), (Tok::LineComment, "# x\r+1"), (Tok::Ident, "b")]);
     // Block comments do not nest; optimizer hints are comments.
@@ -215,7 +220,16 @@ fn delimiter_lines_as_the_client_reads_them() {
     assert_eq!(delim("  dElImItEr\t$$  and the rest"), "$$");
     assert_eq!(delim("delimiter 'a b'"), "a b");
     assert_eq!(delim("delimiter 1234567890123456789"), "123456789012345", "15 bytes kept");
-    assert_eq!(delim("delimiter \\x"), ";", "a backslash is refused");
+    assert_eq!(delim("delimiter \\x"), "x", "a backslash escapes the next character");
+    assert_eq!(delim("delimiter a\\ b c"), "a b", "a space too");
+    assert_eq!(delim("delimiter \\\\x"), ";", "a backslash left is refused");
+    assert_eq!(delim("delimiter '\\x'"), ";", "in quotes too");
+    assert_eq!(delim("delimiter $$\t-- x"), "$$\t--", "only a space ends the word");
+    assert_eq!(delim("delimiter //\r"), "//\r", "a carriage return too is part of it");
+    assert_eq!(delim("delimiter\r"), ";", "the word then a carriage return: no command");
+    assert_eq!(delim("/* a\nb */ delimiter //"), ";", "a line that starts in a comment");
+    assert_eq!(delim("'a\nb' delimiter //"), ";", "a line that starts in a string");
+    assert_eq!(delim("/*! x */\ndelimiter //"), ";", "after an executable comment");
     assert_eq!(delim("delimiter"), ";", "no word");
     assert_eq!(delim("/* c */ delimiter //"), "//", "after a comment");
     assert_eq!(delim("# c\ndelimiter //"), "//", "after a comment line");
@@ -282,4 +296,66 @@ fn a_long_terminator_keeps_whole_characters() {
     let t = lex_in(src, MY)[0];
     let s = LexState::default().after(&t, src, MY);
     assert_eq!(s.delimiter.as_str(), "\u{e9}".repeat(7));
+}
+
+/// The terminator is found at any ASCII character outside strings and comments, as the client
+/// looks for it: in hex and bit numbers, exponents and blanks too; never at a character outside
+/// ASCII, so one that starts with such a character never ends a statement.
+#[test]
+fn the_terminator_is_found_where_the_client_looks() {
+    let semis = |src: &str| {
+        lex_in(src, MY).iter().filter(|t| t.kind == Tok::Semi).map(|t| t.text(src).to_string()).collect::<Vec<_>>()
+    };
+    assert_eq!(semis("delimiter ab\nselect 0xab"), ["ab"]);
+    assert_eq!(semis("delimiter e5\nselect 1e5"), ["e5"]);
+    assert_eq!(semis("delimiter 'x '\nselect 1x  y"), ["x "]);
+    assert_eq!(semis("delimiter \u{e9}\nselect 1\u{e9} select 2\u{e9}"), Vec::<String>::new());
+    assert_eq!(semis("delimiter a\u{e9}\nselect 1 a\u{e9}"), ["a\u{e9}"]);
+}
+
+/// `\g` and `\G` end a statement; a backslash outside strings takes the next character with
+/// it, so `\'` opens no string.
+#[test]
+fn client_backslash_commands() {
+    let src = "select 1\\G select 2\\g select 3 \\'; select 4;";
+    let k = kinds(src);
+    assert_eq!(k.iter().filter(|t| t.0 == Tok::Semi).map(|t| t.1).collect::<Vec<_>>(), ["\\G", "\\g", ";", ";"]);
+    assert!(k.contains(&(Tok::Op, "\\'")), "{k:?}");
+    // In a string a backslash is an escape, as before.
+    assert_eq!(kinds("'\\g'"), [(Tok::Str, "'\\g'")]);
+}
+
+/// The client reads a backslash as an escape in every string it tracks: `"…"` under
+/// `ANSI_QUOTES` and hex and bit strings too.
+#[test]
+fn the_client_reads_backslashes_in_every_string() {
+    assert_eq!(kinds_in("select \"a\\\"b\"; select 1", ANSI)[1], (Tok::QuotedIdent, "\"a\\\"b\""));
+    assert_eq!(kinds("select x'4\\'; x'")[1], (Tok::Str, "x'4\\'; x'"));
+    assert_eq!(kinds_in("select x'4\\'; x'", NBE)[1], (Tok::Str, "x'4\\'"));
+}
+
+/// Dollar quotes, on a server whose client reads them: `$$…$$` and `$tag$…$tag$` are strings
+/// (a backslash escaping the next character, as the client reads them); a `$` after a name
+/// character goes on the name. Without them, `$` is a name character.
+#[test]
+fn dollar_quotes_where_the_server_reads_them() {
+    let dq = Dialect::MySql(MySqlMode { dollar_quotes: true, ..MySqlMode::default() });
+    assert_eq!(
+        kinds_in("select $$a;b$$, $t$ $$ ; $t$", dq)[..4],
+        [(Tok::Keyword, "select"), (Tok::Str, "$$a;b$$"), (Tok::Comma, ","), (Tok::Str, "$t$ $$ ; $t$")]
+    );
+    assert_eq!(kinds_in("select $$a\\$$ b$$", dq)[1], (Tok::Str, "$$a\\$$ b$$"));
+    assert_eq!(kinds_in("select a$$ from t", dq)[1], (Tok::Ident, "a$$"));
+    assert_eq!(kinds_in("select $x y$ from t", dq)[1], (Tok::Ident, "$x"), "a tag of name characters");
+    assert_eq!(kinds_in("select $$open", dq)[1], (Tok::Str, "$$open"));
+    // `DELIMITER $$` comes first.
+    assert_eq!(kinds_in("delimiter $$\nselect 1$$", dq).last(), Some(&(Tok::Semi, "$$")));
+    assert_eq!(kinds("select $$a;b$$")[1], (Tok::Ident, "$$a"));
+}
+
+/// Executable comment versions: six digits, or five (the server reads five of seven).
+#[test]
+fn executable_comment_versions() {
+    assert_eq!(kinds("/*!8000001 x */")[..2], [(Tok::ExecComment, "/*!80000"), (Tok::Number, "01")]);
+    assert_eq!(kinds("/*!080400 x */")[0], (Tok::ExecComment, "/*!080400"));
 }

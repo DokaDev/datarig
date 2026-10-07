@@ -78,12 +78,13 @@ pub fn segment_at_in(src: &str, cursor: usize, d: Dialect) -> (usize, usize) {
 }
 
 /// [`segment_at_in`] for text that starts where the lexer's state is `state`. A client command
-/// line ends a segment too.
+/// line ends a segment too; the cursor inside one, or inside a terminator of more than one
+/// character, is in the segment before it.
 pub fn segment_at_from(src: &str, cursor: usize, d: Dialect, state: LexState) -> (usize, usize) {
     let mut seg_start = 0;
     for t in lex_from(src, d, state) {
         if t.ends_statement() {
-            if cursor <= t.start {
+            if cursor < t.end {
                 return (seg_start, t.start);
             }
             seg_start = t.end;

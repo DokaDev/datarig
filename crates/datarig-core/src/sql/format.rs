@@ -13,7 +13,8 @@
 //! * operator characters written together stay together and those written apart stay apart
 //!   (the lexer reads each operator character alone, the server reads `<=` or `->>` as one
 //!   operator), as do, in PostgreSQL, `U&` before a string or a name, `:` before what follows
-//!   it (a psql variable) and `\` (a psql command);
+//!   it (a psql variable) and `\` (a psql command), and in MySQL a word and the `(` after it
+//!   (a built-in function's name followed by a blank is read otherwise);
 //! * two strings in a row keep a line break between them, or keep none (strings separated by a
 //!   line break are one string to the server);
 //! * the rebuilt text lexes to the input's tokens again, exactly but for the case of keywords;
@@ -178,7 +179,9 @@ fn layout_only(d: Dialect, toks: &[Token], i: usize, src: &str, after: &str) -> 
     };
     let keep = (a.kind == Tok::Op && b.kind == Tok::Op)
         || match d {
-            Dialect::MySql(_) => false,
+            // A function's name and its `(` (MySQL reads `count (*)` otherwise, unless
+            // `IGNORE_SPACE`).
+            Dialect::MySql(_) => a.is_word() && b.kind == Tok::LParen,
             Dialect::Postgres => {
                 unicode_escape(a, b)
                     || (i >= 2 && unicode_escape(&toks[i - 2], a))

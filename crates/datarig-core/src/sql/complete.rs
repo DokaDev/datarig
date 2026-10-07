@@ -158,7 +158,7 @@ fn table_refs(d: Dialect, toks: &[Token], src: &str) -> Vec<TableRef> {
 /// first schema of `path` that has it, else (a name the path does not reach) any schema's.
 /// Names match whatever their ASCII case; in MySQL, which keeps a name's case (whether `Users`
 /// and `users` are one table is the server's `lower_case_table_names`), one written as it is
-/// in the catalog comes first.
+/// in the catalog comes first among those the path reaches, and then among the rest.
 fn find_rel<'a>(
     d: Dialect,
     cat: &'a Catalog,
@@ -166,7 +166,8 @@ fn find_rel<'a>(
     name: &str,
     path: &[String],
 ) -> Option<&'a Relation> {
-    let found = |exact: bool| {
+    // `exact`: names in the same case; `on_path`: only the path's schemas.
+    let found = |exact: bool, on_path: bool| {
         let same = |a: &str, b: &str| if exact { a == b } else { a.eq_ignore_ascii_case(b) };
         let matches = |r: &&Relation| same(&r.name, name);
         match schema {
@@ -175,12 +176,16 @@ fn find_rel<'a>(
                 .relations
                 .iter()
                 .filter(matches)
+                .filter(|r| !on_path || path.iter().any(|p| same(p, &r.schema)))
                 .min_by_key(|r| path.iter().position(|p| same(p, &r.schema)).unwrap_or(path.len())),
         }
     };
     match d {
-        Dialect::Postgres => found(false),
-        Dialect::MySql(_) => found(true).or_else(|| found(false)),
+        Dialect::Postgres => found(false, false),
+        Dialect::MySql(_) => found(true, true)
+            .or_else(|| found(false, true))
+            .or_else(|| found(true, false))
+            .or_else(|| found(false, false)),
     }
 }
 
