@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
 pub struct WiredSession {
-    session: Session,
+    pub(crate) session: Session,
     rx: UnboundedReceiver<DbEvent>,
     id: u64,
     pub counts: std::sync::Arc<proxy::Counts>,
@@ -49,10 +49,31 @@ impl WiredSession {
         read_only: bool,
         role: SessionRole,
     ) -> Result<WiredSession, String> {
+        WiredSession::open_with(&PgDriver, url, one_way, read_only, role).await
+    }
+
+    /// A session of `role` of `driver` (the server of `url`) behind the proxy.
+    pub async fn open_with(
+        driver: &dyn Driver,
+        url: &str,
+        one_way: Duration,
+        read_only: bool,
+        role: SessionRole,
+    ) -> Result<WiredSession, String> {
+        use datarig_core::profile::dsn::Scheme;
         let d = datarig_core::profile::dsn::parse(url).map_err(|e| format!("{e:?}"))?;
-        let p = proxy::start(d.host.clone(), d.port.unwrap_or(5432), one_way).await.map_err(|e| e.to_string())?;
+        let port = d.port.unwrap_or(d.scheme.default_port());
+        let p = match d.scheme {
+            Scheme::Postgres => proxy::start(d.host.clone(), port, one_way).await,
+            Scheme::MySql => proxy::start_raw(d.host.clone(), port, one_way).await,
+        }
+        .map_err(|e| e.to_string())?;
         let cfg = ConnectionConfig {
             name: "bench".into(),
+            driver: match d.scheme {
+                Scheme::Postgres => "postgres".into(),
+                Scheme::MySql => "mysql".into(),
+            },
             host: "127.0.0.1".into(),
             port: p.port,
             user: d.user.clone(),
@@ -63,12 +84,17 @@ impl WiredSession {
         };
         let (tx, rx) = unbounded_channel();
         let opts = ConnectOptions::new(500, role, &format!("bench{}", std::process::id())).read_only(read_only);
-        let session = PgDriver.connect(&cfg, role, opts, tx);
+        let session = driver.connect(&cfg, role, opts, tx);
         let mut s = WiredSession { session, rx, id: 0, counts: p.counts, one_way, paging: PagingMode::NoHold };
         match s.next(Duration::from_secs(10)).await? {
             DbEvent::Connected => Ok(s),
             ev => Err(format!("connect: {ev:?}")),
         }
+    }
+
+    /// Round trips so far (opening the session's connection, before any statement).
+    pub fn flights(&self) -> u64 {
+        self.counts.flights()
     }
 
     /// A query session already opened whose connection crosses the proxy `counts` counts
@@ -200,13 +226,13 @@ impl WiredSession {
     }
 
     /// A new result id.
-    fn next_id(&mut self) -> u64 {
+    pub fn next_id(&mut self) -> u64 {
         self.id += 1;
         self.id
     }
 
     /// Wait for a page of result `id`; whether more follow.
-    async fn page(&mut self, id: u64) -> Result<bool, String> {
+    pub async fn page(&mut self, id: u64) -> Result<bool, String> {
         loop {
             match self.next(Duration::from_secs(60)).await? {
                 DbEvent::Page { id: i, more, .. } if i == id => return Ok(more),

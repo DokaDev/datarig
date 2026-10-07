@@ -221,8 +221,25 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
+      # The MySQL driver's round trips (`rtt_mysql`) need a server only: their rows are a
+      # temporary table of the session's own.
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_USER: datarig
+          MYSQL_PASSWORD: datarig
+          MYSQL_DATABASE: datarig
+          MYSQL_ROOT_PASSWORD: datarig-root
+        ports:
+          - 53306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -pdatarig-root --silent"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
     env:
       DATARIG_TEST_PG_URL: postgres://datarig:datarig@127.0.0.1:55432/datarig
+      DATARIG_TEST_MYSQL_URL: mysql://datarig:datarig@127.0.0.1:53306/datarig
       DATARIG_SECRET_STORE: memory
       DATARIG_TEST_SSH_BASTION: 127.0.0.1:52222
     steps:

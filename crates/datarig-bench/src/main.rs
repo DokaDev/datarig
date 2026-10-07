@@ -6,9 +6,11 @@
 //!                               [--delay-ms MS] [--max-pages N] [--idle-secs S]
 //! ```
 //!
-//! Scenarios: `rtt`, `rtt_ssh`, `paging`, `editor`, `editor_block`, `editor_mysql`, `grid`, `plan`, `chart`, `idle`,
-//! `startup`, or `all`. The PostgreSQL ones (`rtt`, `rtt_ssh`, `paging`, `idle`) need `DATARIG_TEST_PG_URL` and the test
-//! database of `dev/init`; `rtt_ssh` also the SSH bastion of the tests (see `ssh.rs`).
+//! Scenarios: `rtt`, `rtt_ssh`, `rtt_mysql`, `paging`, `editor`, `editor_block`, `editor_mysql`, `grid`, `plan`,
+//! `chart`, `idle`, `startup`, or `all`. The PostgreSQL ones (`rtt`, `rtt_ssh`, `paging`, `idle`) need
+//! `DATARIG_TEST_PG_URL` and the test database of `dev/init`; `rtt_ssh` also the SSH bastion of the tests (see
+//! `ssh.rs`); `rtt_mysql` needs `DATARIG_TEST_MYSQL_URL` (a MySQL server and a database the user may make a temporary
+//! table in).
 //! `idle` and `startup` run the release binary in `tmux -L perf`.
 //!
 //! `budget [--budgets FILE]` runs them with the settings of `budgets.toml` and fails when a
@@ -24,6 +26,7 @@ mod paging;
 mod plan;
 mod proxy;
 mod rtt;
+mod rtt_mysql;
 mod ssh;
 mod stats;
 
@@ -77,6 +80,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
         o.scenarios = [
             "rtt",
             "rtt_ssh",
+            "rtt_mysql",
             "editor",
             "grid",
             "plan",
@@ -92,11 +96,18 @@ fn parse(args: &[String]) -> Result<Opts, String> {
     }
     if o.scenarios.is_empty() {
         return Err(
-            "name a scenario: rtt, rtt_ssh, paging, editor, editor_block, editor_mysql, grid, plan, chart, idle, startup, all or budget"
+            "name a scenario: rtt, rtt_ssh, rtt_mysql, paging, editor, editor_block, editor_mysql, grid, plan, chart, idle, startup, all or budget"
                 .into(),
         );
     }
     Ok(o)
+}
+
+fn mysql_url() -> Result<String, String> {
+    std::env::var("DATARIG_TEST_MYSQL_URL")
+        .ok()
+        .filter(|u| !u.is_empty())
+        .ok_or_else(|| "set DATARIG_TEST_MYSQL_URL=mysql://datarig:datarig@127.0.0.1:53306/datarig".into())
 }
 
 fn pg_url() -> Result<String, String> {
@@ -110,6 +121,7 @@ async fn scenario(name: &str, o: &Opts) -> Result<Value, String> {
     match name {
         "rtt" => rtt::run(&pg_url()?, o.delay, o.runs.unwrap_or(20)).await,
         "rtt_ssh" => ssh::run(&pg_url()?, &o.scratch, o.delay, o.runs.unwrap_or(20)).await,
+        "rtt_mysql" => rtt_mysql::run(&mysql_url()?, o.delay, o.runs.unwrap_or(20)).await,
         "paging" => paging::run(&pg_url()?, &o.scratch, "SELECT * FROM analytics.events", o.max_pages, 250).await,
         "editor" => editor::run(&o.scratch, 5 * 1024 * 1024, o.runs.unwrap_or(300)),
         "editor_block" => editor::block_in_own_process(&o.scratch, 5 * 1024 * 1024),
@@ -168,6 +180,13 @@ async fn budget(o: &Opts) -> Result<Vec<String>, String> {
     )
     .await?;
     budget::rtt_section(&mut c, &b, "rtt_ssh", &run("rtt_ssh", r))?;
+    let r = rtt_mysql::run(
+        &mysql_url()?,
+        std::time::Duration::from_millis(int("rtt_mysql", "one_way_ms")? as u64),
+        int("rtt_mysql", "runs")?,
+    )
+    .await?;
+    budget::rtt_section(&mut c, &b, "rtt_mysql", &run("rtt_mysql", r))?;
     let r = editor::run(&o.scratch, 5 * 1024 * 1024, 100)?;
     budget::editor(&mut c, &b, &run("editor", r))?;
     let r = editor::block_in_own_process(&o.scratch, 5 * 1024 * 1024)?;

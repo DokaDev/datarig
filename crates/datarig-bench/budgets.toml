@@ -71,6 +71,30 @@ select_page_of_4m_warm = { to_result = 1, total = 1 }
 next_page = { to_result = 1, total = 1 }
 insert = { to_result = 1, total = 1 }
 
+[rtt_mysql]
+# The MySQL driver's query session through the latency proxy (crates/datarig-bench/src/rtt_mysql.rs).
+# Opening a session: the login (answered at once from the server's cache) and the session's
+# settings in one statement. A result is one round trip, a page of a large one too: the
+# session's sql_select_limit (a page and one row more) ends the statement with its first page.
+# The next page asks the server whether a name it reads is a view, sets the larger limit (only
+# when it changes) and runs the statement again; the statement after it sets the page's limit
+# back. A held result's next page is read from what the server sent already. A count asks the
+# same question first.
+one_way_ms = 20
+runs = 5
+session_open = { to_result = 2, total = 2 }
+select_small = { to_result = 1, total = 1 }
+select_page_of_many = { to_result = 1, total = 1 }
+resume = { to_result = 3, total = 3 }
+select_page_after_resume = { to_result = 2, total = 2 }
+hold_select_page_of_many = { to_result = 1, total = 1 }
+next_page = { to_result = 1, total = 1 }
+count = { to_result = 2, total = 2 }
+insert = { to_result = 1, total = 1 }
+select_small_in_block = { to_result = 1, total = 1 }
+insert_in_block = { to_result = 1, total = 1 }
+ro_select_small = { to_result = 1, total = 1 }
+
 [paging]
 # SELECT * FROM analytics.events to the end (8,000 pages of 500 rows).
 max_pages = 8000

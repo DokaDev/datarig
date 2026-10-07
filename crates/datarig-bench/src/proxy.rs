@@ -1,5 +1,5 @@
-//! A TCP proxy in front of PostgreSQL that adds a fixed one-way latency to each direction and
-//! counts round trips.
+//! A TCP proxy in front of a database server (PostgreSQL, MySQL) that adds a fixed one-way
+//! latency to each direction and counts round trips.
 //!
 //! A *flight* is what the client sends before it hears from the server again: every read from
 //! the client that comes after something from the server starts a new one. A request that waits
@@ -49,9 +49,18 @@ pub struct Proxy {
     pub counts: Arc<Counts>,
 }
 
-/// Listen on a free local port and relay every connection to `host:port`, each direction
-/// `one_way` late.
+/// Listen on a free local port and relay every connection to `host:port` (a PostgreSQL server:
+/// its requests are counted), each direction `one_way` late.
 pub async fn start(host: String, port: u16, one_way: Duration) -> std::io::Result<Proxy> {
+    start_for(host, port, one_way, true).await
+}
+
+/// [`start`] for a server of another protocol (MySQL): flights only, no requests counted.
+pub async fn start_raw(host: String, port: u16, one_way: Duration) -> std::io::Result<Proxy> {
+    start_for(host, port, one_way, false).await
+}
+
+async fn start_for(host: String, port: u16, one_way: Duration, pg: bool) -> std::io::Result<Proxy> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let local = listener.local_addr()?.port();
     let counts = Arc::new(Counts { server_spoke: AtomicBool::new(true), ..Counts::default() });
@@ -63,17 +72,25 @@ pub async fn start(host: String, port: u16, one_way: Duration) -> std::io::Resul
             let _ = up.set_nodelay(true);
             let (dr, dw) = down.into_split();
             let (ur, uw) = up.into_split();
-            tokio::spawn(relay(dr, uw, c.clone(), true, one_way));
-            tokio::spawn(relay(ur, dw, c.clone(), false, one_way));
+            tokio::spawn(relay(dr, uw, c.clone(), true, pg, one_way));
+            tokio::spawn(relay(ur, dw, c.clone(), false, pg, one_way));
         }
     });
     Ok(Proxy { port: local, counts })
 }
 
 /// Relay one direction: each read is passed on `delay` after it arrived, without holding up
-/// the reads behind it. The client's side is split into protocol messages to count requests
-/// (its first message, the startup message, has no type byte).
-async fn relay(mut from: OwnedReadHalf, mut to: OwnedWriteHalf, counts: Arc<Counts>, client: bool, delay: Duration) {
+/// the reads behind it. The client's side of a PostgreSQL connection (`pg`) is split into
+/// protocol messages to count requests (its first message, the startup message, has no type
+/// byte).
+async fn relay(
+    mut from: OwnedReadHalf,
+    mut to: OwnedWriteHalf,
+    counts: Arc<Counts>,
+    client: bool,
+    pg: bool,
+    delay: Duration,
+) {
     let (late_tx, mut late_rx) = unbounded_channel::<(tokio::time::Instant, Vec<u8>)>();
     let c = counts.clone();
     tokio::spawn(async move {
@@ -99,21 +116,23 @@ async fn relay(mut from: OwnedReadHalf, mut to: OwnedWriteHalf, counts: Arc<Coun
             if counts.server_spoke.swap(false, SeqCst) {
                 counts.flights.fetch_add(1, SeqCst);
             }
-            buf.extend_from_slice(&chunk[..n]);
-            loop {
-                let head = usize::from(!untyped);
-                if buf.len() < head + 4 {
-                    break;
+            if pg {
+                buf.extend_from_slice(&chunk[..n]);
+                loop {
+                    let head = usize::from(!untyped);
+                    if buf.len() < head + 4 {
+                        break;
+                    }
+                    let len = u32::from_be_bytes([buf[head], buf[head + 1], buf[head + 2], buf[head + 3]]) as usize;
+                    if buf.len() < head + len {
+                        break;
+                    }
+                    if !untyped && matches!(buf[0], b'S' | b'Q') {
+                        counts.requests.fetch_add(1, SeqCst);
+                    }
+                    untyped = false;
+                    buf.drain(..head + len);
                 }
-                let len = u32::from_be_bytes([buf[head], buf[head + 1], buf[head + 2], buf[head + 3]]) as usize;
-                if buf.len() < head + len {
-                    break;
-                }
-                if !untyped && matches!(buf[0], b'S' | b'Q') {
-                    counts.requests.fetch_add(1, SeqCst);
-                }
-                untyped = false;
-                buf.drain(..head + len);
             }
         } else {
             counts.server_spoke.store(true, SeqCst);
