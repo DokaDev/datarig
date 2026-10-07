@@ -501,3 +501,28 @@ fn mysql_hints_never_stay_on_text_that_is_not_their_statement() {
         }
     }
 }
+
+/// With dollar quotes, `$$` after a name's character (here the `G` of `\G`) is part of the name:
+/// a change before a hinted statement that starts with `$` may make it a dollar quote and the
+/// statement another one, and the hint goes.
+#[test]
+fn a_hint_on_a_statement_starting_with_a_dollar_is_checked_in_full() {
+    use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
+    let d = Dialect::MySql(MySqlMode { ansi_quotes: true, no_backslash_escapes: true, dollar_quotes: true });
+    let text = " \\G$$ $$\n;\n\nSELECT 2;\nSELECT 3;";
+    let mut e = Editor::new(text);
+    e.set_language(Language::Sql(d));
+    keys(&mut e, "ggVG");
+    let stmts = run(&mut e, 1);
+    e.finish_run(1, (0..stmts.len()).map(|_| hint("h")).collect());
+    e.check_spans(false, |_| true);
+    assert!(!e.runs.hints.is_empty());
+    e.splice_raw(0, 2, ";");
+    e.splice_raw(0, 2, "");
+    e.check_spans(false, |_| true);
+    let t = e.text();
+    let split = datarig_core::sql::split::split_in(&t, d);
+    for h in &e.runs.hints {
+        assert!(split.iter().any(|s| s.start == h.span.start && s.end == h.span.end), "{:?} in {t:?}", h.span);
+    }
+}

@@ -424,3 +424,12 @@ fn a_cursor_inside_a_terminator_is_in_the_segment_before_it() {
     let (a, b) = segment_at_in(src, 3, MY);
     assert_eq!((a, b), (0, 0));
 }
+
+/// A backslash at a line's end (dropped by the client) is never dropped by the formatter
+/// without a word: the text is refused.
+#[test]
+fn the_formatter_refuses_a_backslash_at_a_line_end() {
+    let opts = Options { case: KeywordCase::Upper, indent: 2 };
+    assert!(format_in("select 1 \\\nfrom t", opts, "", MY).is_err());
+    assert!(format_in("select 1\nfrom t", opts, "", MY).is_ok());
+}
