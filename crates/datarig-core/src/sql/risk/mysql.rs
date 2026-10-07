@@ -60,10 +60,11 @@
 //! INSTANCE`, `FLUSH … WITH READ LOCK`: [`Danger::Locks`]), `SET SESSION TRANSACTION READ WRITE`
 //! and `transaction_read_only` turned off (`read_write`), `PREPARE` (its text is not read:
 //! [`Danger::DynamicSql`]) and `EXECUTE` ([`Danger::UnknownPrepared`]; prepared statements are
-//! not remembered on MySQL), and a call of an unqualified name that is not a built-in
-//! ([`Risk::unchecked_call`]): it may be a loadable function, code of the server's that a
-//! read-only transaction does not stop. A stored function is called with its database
-//! (`db.f()`) to be allowed; its writes are refused by the server's read-only mode.
+//! not remembered on MySQL), and a call of any function that is not a built-in
+//! ([`Risk::unchecked_call`]): an unqualified name may be a loadable function, code of the
+//! server's that a read-only transaction does not stop, and a stored function (`db.f()` too)
+//! may take user locks, sleep or read what the text does not show. Only the built-ins of
+//! [`BUILTINS`] are allowed, less [`SERVER_FILES`] and [`SERVER_ACTIONS`].
 //!
 //! **Settings.** `SET` of a session variable on [`SAFE_SETTINGS`], of a user variable (`@x`),
 //! `SET NAMES`/`CHARACTER SET` of a UTF-8 character set and `SET ROLE` are safe; `SET` of one on
@@ -77,9 +78,13 @@
 //! temporary table, accounts and privileges, `LOCK TABLES`, `START TRANSACTION`/`BEGIN`, `SET
 //! autocommit = 1`, table maintenance, `FLUSH`, `RESET`, replication, plugins).
 //!
-//! **What the confirm is not.** As on PostgreSQL, a function called from a query cannot be seen
-//! from the text (`SELECT db.delete_everything()` is a read here); nor are a view's query, a
-//! trigger or a generated column. `SLEEP()` and `BENCHMARK()` only take time, as a long query
+//! **Known limits.** What a function that is not a built-in does cannot be proven from the text,
+//! so the confirm does not ask about one (`SELECT db.delete_everything()` is a read to it, as
+//! on PostgreSQL) and a read-only policy refuses it. Code the text does not name is not seen
+//! at all: a view's query, a trigger, a generated column's expression, a column's `DEFAULT`
+//! function, or a stored function a view calls; on a read-only profile the server's
+//! `transaction_read_only` still refuses their writes, but not their user locks or sleeps. A
+//! built-in that a later server version removes (`MD5`, `SHA1` on 9.x) is still read as one. `SLEEP()` and `BENCHMARK()` only take time, as a long query
 //! does: they are reads. The hard guarantee is a read-only profile: the driver keeps the
 //! session's `transaction_read_only` on, so the server rejects any write, whatever runs it;
 //! the server still lets a `LOCK TABLES … READ`, a `HANDLER`, a `SELECT … FOR SHARE`, `SET
@@ -821,10 +826,12 @@ fn find_top(ws: &[W], from: usize, words: &[&str]) -> Option<usize> {
 /// The function calls of `ws`.
 fn calls(ws: &[W]) -> Vec<Call> {
     let mut out = Vec::new();
+    // The procedure of a `CALL` (with its database or not).
+    let procedure = ws.first().filter(|w| w.is("CALL")).and_then(|_| name_at(ws, 1)).map(|(_, next)| next - 1);
     for i in 0..ws.len().saturating_sub(1) {
         let w = &ws[i];
         // The statement's own first word, and the procedure of a `CALL`, are no function.
-        if i == 0 || ws[i + 1].kind != Tok::LParen || !w.is_name() || (i == 1 && ws[0].is("CALL")) {
+        if i == 0 || ws[i + 1].kind != Tok::LParen || !w.is_name() || procedure == Some(i) {
             continue;
         }
         let name = if w.kind == Tok::QuotedIdent { unquote(w.text).to_ascii_uppercase() } else { w.up.clone() };
@@ -907,7 +914,7 @@ fn with_calls(mut risk: Risk, ws: &[W]) -> Risk {
             risk.danger = risk.danger.or(danger);
         } else if !schema {
             risk.runs_code = true;
-            risk.unchecked_call |= !c.qualified;
+            risk.unchecked_call = true;
         }
     }
     risk
@@ -991,6 +998,8 @@ fn kind(ws: &[W]) -> Risk {
             r
         }
         "GRANT" | "REVOKE" => ddl(Some(Danger::Privileges)),
+        // Its characteristics are words: a quoted one is no statement this module knows.
+        "START" if word(1) == "TRANSACTION" && ws.iter().any(|w| w.kind == Tok::QuotedIdent) => unrecognized(),
         "START" if word(1) == "TRANSACTION" => {
             let read_write = (2..ws.len().saturating_sub(1)).any(|i| ws[i].is("READ") && ws[i + 1].is("WRITE"));
             Risk { read_write, implicit_commit: true, ..Risk::of(Class::Tx) }
@@ -1044,9 +1053,12 @@ fn maintenance(danger: Option<Danger>) -> Risk {
 }
 
 /// Whether `ws` has a locking clause: `FOR UPDATE`, `FOR SHARE`, `LOCK IN SHARE MODE`.
+/// Its words are compared quoted or not (`` FOR `UPDATE` `` is a syntax error to the server, and
+/// no read either).
 fn locks(ws: &[W]) -> bool {
-    ws.windows(2).any(|w| w[0].is("FOR") && (w[1].is("UPDATE") || w[1].is("SHARE")))
-        || ws.windows(4).any(|w| w[0].is("LOCK") && w[1].is("IN") && w[2].is("SHARE") && w[3].is("MODE"))
+    let is = |w: &W, word: &str| w.is_name() && key(w) == word;
+    ws.windows(2).any(|w| is(&w[0], "FOR") && (is(&w[1], "UPDATE") || is(&w[1], "SHARE")))
+        || ws.windows(4).any(|w| is(&w[0], "LOCK") && is(&w[1], "IN") && is(&w[2], "SHARE") && is(&w[3], "MODE"))
 }
 
 /// A query (`SELECT`, `TABLE`, `VALUES`, in parentheses or not, with `WITH` before it).
@@ -1561,6 +1573,10 @@ fn set(ws: &[W]) -> Risk {
     if word(after_scope) == "TRANSACTION" {
         if matches!(word(1), "GLOBAL" | "PERSIST" | "PERSIST_ONLY") {
             return maintenance(Some(Danger::ServerCommand));
+        }
+        // Its characteristics are words: a quoted one is no statement this module knows.
+        if ws.iter().any(|w| w.kind == Tok::QuotedIdent) {
+            return unrecognized();
         }
         let read_write = ws.windows(2).any(|w| w[0].is("READ") && w[1].is("WRITE"));
         return Risk { read_write, ..Risk::of(Class::Tx) };

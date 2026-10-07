@@ -285,9 +285,9 @@ pub struct Risk {
     /// MySQL: the server commits the open transaction before it runs (DDL, `LOCK TABLES`,
     /// `START TRANSACTION`, `SET autocommit = 1`, …: see [`mysql`]).
     pub implicit_commit: bool,
-    /// MySQL: it calls an unqualified name that is not a built-in, which may be a loadable
-    /// function: code of the server's that a read-only transaction does not stop, so a
-    /// read-only policy refuses it.
+    /// MySQL: it calls a function that is not a built-in (a loadable function, or a stored one),
+    /// whose effects cannot be checked and which a read-only transaction does not fully stop,
+    /// so a read-only policy refuses it.
     pub unchecked_call: bool,
 }
 
@@ -314,7 +314,7 @@ pub enum ReadOnlyBlock {
     ExecutableComment,
     /// Its form is not one the classifier knows ([`Danger::Unrecognized`]).
     Unrecognized,
-    /// It calls a function that may be a loadable one ([`Risk::unchecked_call`]).
+    /// It calls a function that is not a built-in ([`Risk::unchecked_call`]).
     UnknownFunction,
     /// It prepares SQL given as text ([`Danger::DynamicSql`]).
     DynamicSql,

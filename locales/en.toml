@@ -256,7 +256,7 @@
 "safety.blocked.runs_query_text" = "this statement runs a query given as text that cannot be checked"
 "safety.blocked.exec_comment" = "this statement has an executable comment (/*! … */)"
 "safety.blocked.unrecognized" = "this statement is not a form the safety check knows"
-"safety.blocked.unknown_function" = "this statement calls a function that is not a built-in and may be a loadable one (call a stored function with its database: db.f())"
+"safety.blocked.unknown_function" = "this statement calls a function that is not a built-in, whose effects cannot be checked"
 "safety.blocked.dynamic_sql" = "this statement prepares SQL given as text"
 "safety.blocked.server_command" = "this statement acts on the whole database server"
 "safety.blocked.locks" = "this statement takes locks that block other sessions"

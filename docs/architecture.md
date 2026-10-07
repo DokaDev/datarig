@@ -736,9 +736,9 @@ text" and "The MySQL classifier" below).
   set that is not UTF-8), `DynamicSql` (`PREPARE`), `ServerCommand` (`KILL`, `SET GLOBAL`,
   `FLUSH`, `RESET`, `PURGE`, replication, `INSTALL`, `XA`, …) and `FileAccess` (`LOAD DATA`,
   `INTO OUTFILE`). `Risk::implicit_commit` marks what commits the open transaction first;
-  `Risk::unchecked_call` a call of an unqualified name that is not a built-in
-  (`risk::mysql::BUILTINS`, from the servers' help tables), which may be a loadable function
-  and which a read-only policy refuses (`ReadOnlyBlock::UnknownFunction`). The paging allowlist
+  `Risk::unchecked_call` a call of a function that is not a built-in
+  (`risk::mysql::BUILTINS`, from the servers' help tables), loadable or stored, whose effects
+  cannot be checked and which a read-only policy refuses (`ReadOnlyBlock::UnknownFunction`). The paging allowlist
   (`repeatable`, `count_query`: `SELECT COUNT(*) FROM (…) AS datarig_count`) takes one query
   with built-in functions not in `risk::mysql::VOLATILE` and no variable; whether a name it
   reads is a view is the driver's to ask (`risk::mysql::names`). Tests: the corpus
