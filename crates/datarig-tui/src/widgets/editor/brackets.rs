@@ -4,7 +4,7 @@
 
 use super::Editor;
 use super::motion::Pos;
-use datarig_core::sql::lexer::{Tok, lex};
+use datarig_core::sql::lexer::{Tok, lex_in};
 use unicode_segmentation::UnicodeSegmentation;
 
 /// The brackets `%` knows, open and close.
@@ -24,7 +24,7 @@ impl Editor {
     /// code: strings, quoted identifiers, dollar bodies and comments.
     fn quoted_spans(&mut self, first: usize, last: usize) -> Vec<(usize, usize)> {
         let (base, region) = self.region_text(first, last);
-        lex(&region)
+        lex_in(&region, self.lang.dialect())
             .into_iter()
             .filter(|t| {
                 matches!(t.kind, Tok::Str | Tok::Dollar | Tok::QuotedIdent | Tok::LineComment | Tok::BlockComment)

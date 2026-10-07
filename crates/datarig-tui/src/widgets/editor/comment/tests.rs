@@ -1,6 +1,11 @@
 use super::super::tests::{Case, check};
 use super::*;
 
+/// [`super::toggle`] in PostgreSQL.
+fn toggle(lines: &[String]) -> Vec<String> {
+    super::toggle(lines, Dialect::Postgres)
+}
+
 /// `gcc`, `gc{motion}`, `gc` in Visual mode (any kind), counts, `.` and undo, as Neovim's
 /// built-in commenting does with `commentstring` `-- %s` (`dev/vim-cases.py`): blank lines,
 /// mixed indents (the smallest one, tabs or spaces as written), lines that are comments

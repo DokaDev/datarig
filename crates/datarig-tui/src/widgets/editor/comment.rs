@@ -1,14 +1,15 @@
-//! `gc`: comment lines out with SQL's `-- `, or back in, as Neovim's built-in commenting does
-//! with `commentstring` `-- %s`. When every line of the range that is not blank starts with
-//! `--` (after its indent), they lose it; otherwise every line gets `-- ` after the smallest
-//! indent of the lines that are not blank (a blank line becomes that indent and `--`).
+//! `gc`: comment lines out with the text's dialect's line comment (SQL's `-- `), or back in, as
+//! Neovim's built-in commenting does with `commentstring` `-- %s`. When every line of the range
+//! that is not blank starts with a marker the dialect strips (after its indent), they lose it;
+//! otherwise every line gets the marker and a space after the smallest indent of the lines that
+//! are not blank (a blank line becomes that indent and the marker).
 
 use super::motion::Pos;
 use super::{EdEvent, Editor};
+use datarig_core::sql::dialect::Dialect;
 use unicode_segmentation::UnicodeSegmentation;
 
-/// The comment marker, and what goes after it on a line that has text.
-const MARK: &str = "--";
+/// What goes after the comment marker on a line that has text.
 const SPACE: &str = " ";
 
 /// A blank as Lua's `%s` takes it (Neovim matches the lines with Lua patterns).
@@ -25,8 +26,11 @@ fn blank(line: &str) -> bool {
     indent_len(line) == line.len()
 }
 
-/// The lines toggled: commented in, or out when every line that is not blank is a comment.
-pub(super) fn toggle(lines: &[String]) -> Vec<String> {
+/// The lines toggled in dialect `d`: commented in ([`Dialect::comment_marker`]), or out when
+/// every line that is not blank is a comment ([`Dialect::uncomment_markers`]).
+pub(super) fn toggle(lines: &[String], d: Dialect) -> Vec<String> {
+    let mark = d.comment_marker();
+    let marks = d.uncomment_markers();
     let mut indent: Option<&str> = None;
     let mut commented = true;
     for l in lines.iter().filter(|l| !blank(l)) {
@@ -34,26 +38,26 @@ pub(super) fn toggle(lines: &[String]) -> Vec<String> {
         if indent.is_none_or(|i| w < i.len()) {
             indent = Some(&l[..w]);
         }
-        commented = commented && l[w..].starts_with(MARK);
+        commented = commented && marks.iter().any(|m| l[w..].starts_with(m));
     }
     let indent = indent.unwrap_or("");
     lines
         .iter()
         .map(|l| match commented {
-            true => uncomment(l),
-            false if blank(l) => format!("{indent}{MARK}"),
+            true => uncomment(l, marks),
+            false if blank(l) => format!("{indent}{mark}"),
             // Every line that is not blank has at least `indent`'s bytes of blanks.
-            false => format!("{indent}{MARK}{SPACE}{}", &l[indent.len()..]),
+            false => format!("{indent}{mark}{SPACE}{}", &l[indent.len()..]),
         })
         .collect()
 }
 
-/// `line` without its comment marker (and the space after it); the indent goes too when only
-/// blanks are left.
-fn uncomment(line: &str) -> String {
+/// `line` without its comment marker (the first of `marks` it starts with, and the space after
+/// it); the indent goes too when only blanks are left.
+fn uncomment(line: &str, marks: &[&str]) -> String {
     let w = indent_len(line);
     let rest = &line[w..];
-    let Some(text) = rest.strip_prefix(MARK) else { return line.to_string() };
+    let Some(text) = marks.iter().find_map(|m| rest.strip_prefix(m)) else { return line.to_string() };
     let text = text.strip_prefix(SPACE).unwrap_or(text);
     if blank(text) { text.to_string() } else { format!("{}{text}", &line[..w]) }
 }
@@ -62,7 +66,7 @@ impl Editor {
     /// `gc` over lines `first..=last` as one undo step; the cursor goes to `to` first (an undo
     /// puts it back there) and keeps its byte in the line, as Neovim's does.
     pub(super) fn comment_lines(&mut self, first: usize, last: usize, to: Pos) -> EdEvent {
-        let new = toggle(&self.lines[first..=last]);
+        let new = toggle(&self.lines[first..=last], self.lang.dialect());
         let changed = new.iter().zip(&self.lines[first..=last]).any(|(n, o)| n != o);
         self.set_pos(to.0, to.1);
         // Neovim counts it as a change even when the lines stay as they are.

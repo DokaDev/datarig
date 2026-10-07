@@ -6,7 +6,7 @@ use super::runlog::StatementOutcome;
 use super::*;
 use datarig_core::driver::DbError;
 use datarig_core::fault::{ErrorLog, FaultKind};
-use datarig_core::sql::lexer::changes_schema;
+use datarig_core::sql::lexer::changes_schema_in;
 use datarig_core::transport::{DialError, Refusal};
 
 impl App {
@@ -132,8 +132,8 @@ impl App {
             }
             t.exec.replace_pending = true;
             t.exec.messages_scroll = 0;
-            t.exec.ddl = statements.iter().any(|s| changes_schema(s));
             let lang = t.exec.prepared.language();
+            t.exec.ddl = statements.iter().any(|s| changes_schema_in(s, lang.dialect()));
             t.exec.explain_rolled_back =
                 statements.iter().any(|s| Classifier::classify_once(lang, s).rollback_matters());
             // What the run prepares and deallocates counts once the server says each statement

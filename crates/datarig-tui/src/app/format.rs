@@ -48,7 +48,7 @@ impl App {
         let text = editor.text_between(a, b);
         let lead = text.len() - text.trim_start_matches([' ', '\t', '\n', '\r', '\x0b', '\x0c']).len();
         let indent = editor.indent_before(a + lead);
-        let (msg, level) = match format::format(&text, opts, &indent) {
+        let (msg, level) = match format::format_in(&text, opts, &indent, self.tab_dialect(self.tab().id)) {
             Ok((span, _)) if span.is_empty() => (Msg::Label(Label::EditorFormatNothing), Level::Info),
             Ok((span, out)) if text[span.clone()] == out => (Msg::Label(Label::EditorFormatUnchanged), Level::Info),
             Ok((span, out)) => {

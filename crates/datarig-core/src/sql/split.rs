@@ -1,7 +1,9 @@
 //! Statement splitter. Splits on `;` outside strings, quoted identifiers,
-//! dollar bodies and comments. Comment/whitespace-only pieces are not statements.
+//! dollar bodies and comments (as the text's dialect lexes them). Comment/whitespace-only pieces
+//! are not statements.
 
-use super::lexer::{Tok, lex};
+use super::dialect::Dialect;
+use super::lexer::{Tok, lex_in};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Statement {
@@ -19,11 +21,17 @@ impl Statement {
     }
 }
 
+/// The statements of PostgreSQL text `src` ([`split_in`]).
 pub fn split(src: &str) -> Vec<Statement> {
+    split_in(src, Dialect::Postgres)
+}
+
+/// The statements of `src`, text in dialect `d`.
+pub fn split_in(src: &str, d: Dialect) -> Vec<Statement> {
     let mut out = Vec::new();
     let mut start: Option<usize> = None;
     let mut body_end = 0;
-    for t in lex(src) {
+    for t in lex_in(src, d) {
         if t.kind == Tok::Semi {
             if let Some(s) = start.take() {
                 out.push(Statement { start: s, body_end, end: t.end });
@@ -50,10 +58,15 @@ pub fn statement_at(stmts: &[Statement], cursor: usize) -> Option<usize> {
 }
 
 /// Byte range of the `;`-delimited segment containing `cursor` (used by completion so that
-/// incomplete trailing text still forms its own context).
+/// incomplete trailing text still forms its own context). PostgreSQL ([`segment_at_in`]).
 pub fn segment_at(src: &str, cursor: usize) -> (usize, usize) {
+    segment_at_in(src, cursor, Dialect::Postgres)
+}
+
+/// [`segment_at`] in text of dialect `d`.
+pub fn segment_at_in(src: &str, cursor: usize, d: Dialect) -> (usize, usize) {
     let mut seg_start = 0;
-    for t in lex(src) {
+    for t in lex_in(src, d) {
         if t.kind == Tok::Semi {
             if cursor <= t.start {
                 return (seg_start, t.start);

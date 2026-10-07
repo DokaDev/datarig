@@ -8,8 +8,8 @@ use crate::meta::meta_loop;
 use crate::query::query_loop;
 use crate::route::{Cancel, Route, route};
 use datarig_core::driver::{
-    Canceller, Capabilities, ConnectOptions, DbCommand, DbError, DbEvent, Driver, PingError, PingInfo, Session,
-    SessionRole,
+    Canceller, Capabilities, ConnectOptions, DbCommand, DbError, DbEvent, Driver, ExplainFormat, Hierarchy, PingError,
+    PingInfo, Session, SessionRole,
 };
 use datarig_core::fault::{Fault, FaultKind};
 use datarig_core::profile::ConnectionConfig;
@@ -59,6 +59,8 @@ impl Driver for PgDriver {
             structure: true,
             ddl: true,
             language: Language::Sql(Dialect::Postgres),
+            hierarchy: Hierarchy::DatabaseSchema,
+            explain: Some(ExplainFormat::PostgresJson),
         }
     }
 

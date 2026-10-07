@@ -3,8 +3,8 @@
 //! cursor found in a region of lines around it.
 
 use super::Editor;
-use datarig_core::sql::lexer::{Tok, Token, lex};
-use datarig_core::sql::split::{Statement, split, statement_at};
+use datarig_core::sql::lexer::{Tok, Token, lex_in};
+use datarig_core::sql::split::{Statement, split_in, statement_at};
 
 /// The lexer's state at the start of a line: between tokens, or inside a token that spans
 /// lines (a block comment, a string, a dollar body, a quoted identifier) that starts at `line`,
@@ -52,7 +52,7 @@ impl Editor {
             starts.push((r, region.len()));
             region.push_str(&self.lines[r]);
         }
-        let toks = lex(&region);
+        let toks = lex_in(&region, self.lang.dialect());
         // The region's line starts back to (line, byte).
         let line_of = |off: usize| -> (usize, usize) {
             match starts.binary_search_by(|(_, s)| s.cmp(&off)) {
@@ -109,7 +109,7 @@ impl Editor {
         let first = self.row.saturating_sub(k);
         let last = (self.row + k + 1).min(n);
         let (base, region) = self.region_text(first, last);
-        let toks = lex(&region);
+        let toks = lex_in(&region, self.lang.dialect());
         (base, region, toks, cursor - base, last == n)
     }
 
@@ -122,7 +122,7 @@ impl Editor {
             let (base, region, toks, c, to_end) = self.region_around(k);
             // The statement the cursor is in must end in the region.
             if to_end || toks.iter().any(|t| t.kind == Tok::Semi && t.start >= c) {
-                let stmts: Vec<Statement> = split(&region);
+                let stmts: Vec<Statement> = split_in(&region, self.lang.dialect());
                 // A statement before the region's first `;` may have started before the region.
                 let whole_from =
                     if base == 0 { 0 } else { toks.iter().find(|t| t.kind == Tok::Semi).map_or(usize::MAX, |t| t.end) };

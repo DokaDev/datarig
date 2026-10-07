@@ -1,13 +1,14 @@
 //! Context-aware completion on top of the tolerant lexer. Works on incomplete SQL
 //! because it only looks at the token stream of the `;`-segment around the cursor.
 //!
-//! Names are offered as SQL: quoted when PostgreSQL would not read them back bare
-//! ([`Dialect::quote_ident`]), and always quoted after an opening `"`. A name matches when the
+//! The text is lexed, and names are read and written, in the dialect of the text
+//! ([`complete_in_dialect`]). Names are offered as SQL: quoted when the server would not read
+//! them back bare ([`Dialect::quote_ident`]), and always quoted after an opening quote. A name matches when the
 //! typed prefix starts it; names the typed letters only appear in, in order, follow those.
 
 use super::dialect::Dialect;
-use super::lexer::{KEYWORDS, Tok, Token, is_space, lex};
-use super::split::segment_at;
+use super::lexer::{Tok, Token, is_space, lex_in};
+use super::split::segment_at_in;
 use crate::i18n::Label;
 
 #[derive(Clone, Debug, Default)]
@@ -166,21 +167,15 @@ fn find_rel<'a>(cat: &'a Catalog, schema: Option<&str>, name: &str, path: &[Stri
     }
 }
 
-/// The search path a session has without a schema of its own (PostgreSQL's default without
-/// the `$user` schema).
+/// The search path a PostgreSQL session has without a schema of its own
+/// ([`Dialect::default_path`]).
 pub fn default_path() -> Vec<String> {
-    vec!["public".to_string()]
+    Dialect::Postgres.default_path(None)
 }
 
-/// The search path of a session in `schema`: that schema,
-/// then `public` (an extension's objects there resolve unqualified), or `public` alone when that
-/// is the schema. `pg_catalog` is implicitly first on the server and is not listed.
+/// The search path of a PostgreSQL session in `schema` ([`Dialect::default_path`]).
 pub fn schema_path(schema: &str) -> Vec<String> {
-    let mut path = vec![schema.to_string()];
-    if schema != "public" {
-        path.push("public".to_string());
-    }
-    path
+    Dialect::Postgres.default_path(Some(schema))
 }
 
 fn starts_ci(s: &str, prefix: &str) -> bool {
@@ -252,13 +247,25 @@ pub fn complete(src: &str, cursor: usize, cat: &Catalog, force: bool) -> Option<
 /// unqualified name resolves in the first schema of `path` that has it, and in a table position
 /// the relations of `path`'s schemas are offered by their bare name, before every relation
 /// qualified. The `WITH` queries of the statement come before the catalog's relations.
+/// PostgreSQL text ([`complete_in_dialect`]).
 pub fn complete_in(src: &str, cursor: usize, cat: &Catalog, force: bool, path: &[String]) -> Option<Completion> {
-    let (seg_start, seg_end) = segment_at(src, cursor);
+    complete_in_dialect(src, cursor, cat, force, path, Dialect::Postgres)
+}
+
+/// [`complete_in`] for text in dialect `d`: it is lexed as `d` reads it, names are read and
+/// written as `d` does, and its keywords are offered.
+pub fn complete_in_dialect(
+    src: &str,
+    cursor: usize,
+    cat: &Catalog,
+    force: bool,
+    path: &[String],
+    d: Dialect,
+) -> Option<Completion> {
+    let (seg_start, seg_end) = segment_at_in(src, cursor, d);
     let seg = &src[seg_start..seg_end];
     let cur = cursor - seg_start;
-    let toks = lex(seg);
-    // The lexer reads PostgreSQL; names are written and read back as PostgreSQL does.
-    let d = Dialect::Postgres;
+    let toks = lex_in(seg, d);
 
     // A quoted name being typed: its opening `"` is before the cursor, with no other `"`
     // between, and after the cursor comes the end, a space or the closing `"`. (A `"` typed
@@ -328,7 +335,7 @@ pub fn complete_in(src: &str, cursor: usize, cat: &Catalog, force: bool, path: &
     let (ctx_src, ctx_toks) = match open_quote {
         Some(t) => {
             rest = format!("{}{}", &seg[..t.start], &seg[cur + trail..]);
-            (rest.as_str(), lex(&rest))
+            (rest.as_str(), lex_in(&rest, d))
         }
         None => (seg, toks.clone()),
     };
@@ -415,7 +422,7 @@ pub fn complete_in(src: &str, cursor: usize, cat: &Catalog, force: bool, path: &
         // Keywords match by their prefix only, and are never quoted.
         if (!prefix.is_empty() || force) && !typed.quoted {
             let lower = !prefix.is_empty() && prefix.chars().all(|c| !c.is_uppercase());
-            items.extend(KEYWORDS.iter().filter(|k| starts_ci(k, prefix)).map(|k| {
+            items.extend(d.keywords().iter().filter(|k| starts_ci(k, prefix)).map(|k| {
                 let label = if lower { k.to_lowercase() } else { k.to_string() };
                 (PREFIX, Candidate { label, kind: Kind::Keyword, detail: None })
             }));

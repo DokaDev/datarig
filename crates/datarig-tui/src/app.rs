@@ -90,7 +90,7 @@ use datarig_core::policy::Policies;
 use datarig_core::profile::folder::{FolderPath, Folders};
 use datarig_core::profile::{ConnectionConfig, ProfileId};
 use datarig_core::secret::{DefaultSource, MemoryStore, SecretStore, Secrets, SourceError, SourceKind, Stores};
-use datarig_core::sql::complete::{Candidate, complete_in};
+use datarig_core::sql::complete::{Candidate, complete_in_dialect};
 use datarig_core::sql::dialect::{Dialect, Language};
 use datarig_core::sql::risk::Classifier;
 use explorer::Explorer;
@@ -990,10 +990,25 @@ impl App {
         self.tabs.get(tab).map_or_else(|| self.tab_language(tab), |t| t.exec.prepared.language()).dialect()
     }
 
+    /// Whether tab `tab`'s driver produces a statement's plan (`Capabilities::explain`), which
+    /// the plan actions need. A tab without a profile, or whose profile or driver is unknown,
+    /// counts as one that does: its text is in the default language, PostgreSQL
+    /// ([`App::tab_language`]), whose driver produces plans, so the plan actions stay offered
+    /// as they always were (running one asks for a connection first).
+    pub(crate) fn tab_explains(&self, tab: TabId) -> bool {
+        self.profile_capabilities(self.tabs.get(tab).and_then(|t| t.profile)).is_none_or(|c| c.explain.is_some())
+    }
+
     /// The language of a tab bound to `profile` ([`App::tab_language`]), before the tab exists.
     pub(crate) fn profile_language(&self, profile: Option<ProfileId>) -> Language {
-        let profile = profile.and_then(|id| self.profile(id));
-        profile.and_then(|p| self.driver(&p.driver)).map_or_else(Language::default, |d| d.capabilities().language)
+        self.profile_capabilities(profile).map_or_else(Language::default, |c| c.language)
+    }
+
+    /// The capabilities of `profile`'s driver; `None` without a profile, or when the profile
+    /// or its driver is unknown.
+    fn profile_capabilities(&self, profile: Option<ProfileId>) -> Option<datarig_core::driver::Capabilities> {
+        let profile = profile.and_then(|id| self.profile(id))?;
+        self.driver(&profile.driver).map(|d| d.capabilities())
     }
 
     /// Tab `tab`'s editor and risk classifier follow its language ([`App::tab_language`]), once
@@ -1317,12 +1332,10 @@ impl App {
         self.conns.keys_in(t.profile, self.other_database(t))
     }
 
-    /// The search path completion resolves names in for tab `t`: its schema then `public`, else the server's default (`public`).
+    /// The search path completion resolves names in for tab `t`: its dialect's for the tab's
+    /// schema (PostgreSQL: that schema then `public`), else the server's default (`public`).
     pub fn tab_path(&self, t: &Tab) -> Vec<String> {
-        match &t.context.schema {
-            Some(s) => datarig_core::sql::complete::schema_path(s),
-            None => datarig_core::sql::complete::default_path(),
-        }
+        self.tab_dialect(t.id).default_path(t.context.schema.as_deref())
     }
 
     /// Tab `t`'s chosen schema is not on its session's path as the server says (it does not

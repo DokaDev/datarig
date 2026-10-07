@@ -1,13 +1,18 @@
-//! Which language a tab's text is written in. The SQL tools (lexing, quoting, the risk
-//! classifier) pick their rules from it; a driver says which one its sessions speak
-//! (`driver::Capabilities::language`).
+//! Which language a tab's text is written in. The SQL tools (lexing, splitting, completion,
+//! formatting, quoting, the risk classifier) pick their rules from it; a driver says which one
+//! its sessions speak (`driver::Capabilities::language`).
+//!
+//! A dialect holds what each tool needs to know about it: its keywords, the search path a
+//! session starts with ([`Dialect::default_path`]), the comment markers the editor writes and
+//! strips, the `sqlformat` dialect it is laid out as, and the SQL the app writes to ask for a
+//! statement's plan ([`Dialect::explain_sql`]).
 //!
 //! A dialect also says how names and strings are written in its SQL ([`Dialect::quote_ident`],
 //! [`Dialect::quote_literal`]) and how the server reads a name back ([`Dialect::fold`],
 //! [`Dialect::unquote`]): every piece of SQL the app writes, and every name it reads out of
 //! SQL text, goes through these.
 
-use super::ident;
+use super::{ident, lexer, plan};
 
 /// The SQL dialect a tab's text is in. PostgreSQL is the only one for now; a MySQL variant
 /// will join it, and an exhaustive `match` makes every tool decide what to do with it.
@@ -102,6 +107,66 @@ impl Dialect {
     /// character is one.
     pub fn unescape_ident(self, quote: char, inner: &str) -> String {
         inner.replace(&format!("{quote}{quote}"), &quote.to_string())
+    }
+
+    /// The words the lexer reads as keywords (the highlighter shows them, completion offers
+    /// them): sorted, upper case. PostgreSQL: [`lexer::KEYWORDS`].
+    pub fn keywords(self) -> &'static [&'static str] {
+        match self {
+            Self::Postgres => lexer::KEYWORDS,
+        }
+    }
+
+    /// Whether `word` is one of [`Dialect::keywords`], whatever its case.
+    pub fn is_keyword(self, word: &str) -> bool {
+        let upper = word.to_ascii_uppercase();
+        self.keywords().binary_search(&upper.as_str()).is_ok()
+    }
+
+    /// The schemas an unqualified name is looked up in, in order, for a session in `schema`
+    /// (`None`: the server's default). PostgreSQL: the search path, `public` (its default
+    /// without the `$user` schema) after the session's schema, as an extension's objects there
+    /// resolve unqualified; `pg_catalog` is implicitly first on the server and is not listed.
+    pub fn default_path(self, schema: Option<&str>) -> Vec<String> {
+        match self {
+            Self::Postgres => {
+                let mut path: Vec<String> = schema.into_iter().map(str::to_string).collect();
+                if schema != Some("public") {
+                    path.push("public".to_string());
+                }
+                path
+            }
+        }
+    }
+
+    /// What starts a line comment the editor writes (PostgreSQL: `--`).
+    pub fn comment_marker(self) -> &'static str {
+        match self {
+            Self::Postgres => "--",
+        }
+    }
+
+    /// The line comment markers the editor strips to uncomment a line (PostgreSQL: `--`).
+    pub fn uncomment_markers(self) -> &'static [&'static str] {
+        match self {
+            Self::Postgres => &["--"],
+        }
+    }
+
+    /// The dialect `sqlformat` lays text of this dialect out as.
+    pub fn sqlformat_dialect(self) -> sqlformat::Dialect {
+        match self {
+            Self::Postgres => sqlformat::Dialect::PostgreSql,
+        }
+    }
+
+    /// The SQL that asks the server for `statement`'s plan in the format the plan view reads
+    /// (`analyze`: run it and measure), `None` when the dialect has no such statement.
+    /// PostgreSQL: [`plan::explain_sql`].
+    pub fn explain_sql(self, statement: &str, analyze: bool) -> Option<String> {
+        match self {
+            Self::Postgres => Some(plan::explain_sql(statement, analyze)),
+        }
     }
 }
 

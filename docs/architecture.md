@@ -565,8 +565,9 @@ Held by CI budgets (`docs/perf.md`).
 
 ## The dialect seam
 
-The SQL tools are PostgreSQL's today. The seam that lets another dialect join them is in place;
-quoting and value kinds go through it, the lexing tools are not threaded through it yet.
+The SQL tools are PostgreSQL's today. The seam that lets another dialect join them is in place:
+every SQL tool takes the dialect of the text it works on, and quoting and value kinds go
+through it.
 
 - **Types** (`datarig_core::sql::dialect`): `Dialect` (`Postgres`, the default) is the SQL
   dialect of a text, and `Language` (`Sql(Dialect)`) the language of an editor's text
@@ -575,7 +576,15 @@ quoting and value kinds go through it, the lexing tools are not threaded through
 - **Who says which**: a driver, through `Capabilities::language` (`PgDriver`:
   `Sql(Postgres)`). `App::tab_language` reads it from the tab's profile's driver without
   connecting; a tab without a profile, or whose profile or driver is unknown, gets
-  `Language::default()`.
+  `Language::default()`. Two more capabilities describe the server rather than its text:
+  `Capabilities::hierarchy` (`Hierarchy::DatabaseSchema`, databases holding schemas, as
+  PostgreSQL's; `SchemaOnly`, a database that is the schema, as MySQL's) and
+  `Capabilities::explain` (`Some(ExplainFormat::PostgresJson)`: the plan the driver's sessions
+  produce, in PostgreSQL's JSON shape; `None`: no plan view). `query.explain`,
+  `query.explain_analyze` and `results.view_as_plan` are offered only on a tab whose driver
+  has one (`App::tab_explains`; a tab without a known driver is in the default language,
+  PostgreSQL, and counts as one). Nothing reads `hierarchy` yet: the explorer and the context
+  picker show databases holding schemas.
 - **Where it goes**: `App::sync_tab_language` pushes the tab's language into its editor
   (`Editor::set_language`, which drops the cached lexer line states when the language changes)
   and gives the tab a new `risk::Classifier` when its language changes. It runs wherever a tab
@@ -599,8 +608,7 @@ quoting and value kinds go through it, the lexing tools are not threaded through
   `sql_update`, `sql_in`, `sql_value` and the writer's `Format::Sql`/`Format::Update` take a
   `Dialect`; `OVERRIDING SYSTEM VALUE` is PostgreSQL's), a table tab's `TableRef::query` and the
   copies' messages, and they read the names in SQL text for the copies (`driver::keys`: the
-  copied table, `:copy insert`'s target). Still PostgreSQL only: completion (it lexes as
-  PostgreSQL and uses `Dialect::Postgres` until the lexer takes a dialect), the DDL and plan
+  copied table, `:copy insert`'s target) and completion's names. Still PostgreSQL only: the DDL and plan
   renderers (`sql::ddl`, `sql::plan::pg`, through the `Dialect::Postgres` wrappers
   `sql::ident::sql_ident` and `export::quote_ident`/`quote_literal`), `sql::plan::explain`, the
   PostgreSQL classifier's own deparse (`risk`) and the PostgreSQL driver's quoting
@@ -628,9 +636,42 @@ quoting and value kinds go through it, the lexing tools are not threaded through
 - **DDL**: `DdlSource::Verbatim { name, text }` is DDL the server writes itself (MySQL's
   `SHOW CREATE`). `sql::ddl::ddl_text` shows it as it is, without the "reconstructed" header;
   PostgreSQL never sends one.
-- **Not yet**: the lexer, the splitter, completion's lexing and search path, the formatter and
-  the editor's tools still assume PostgreSQL; `Editor` keeps its language but does not lex by it
-  yet, and completion writes names as `Dialect::Postgres` does.
+- **The SQL tools**: each takes the dialect; the function without it is the PostgreSQL wrapper
+  the PostgreSQL-only code and the tests call.
+  - Lexer: `lexer::lex_in(src, d)` (`lex`), its keywords `Dialect::keywords`/`is_keyword`
+    (`lexer::KEYWORDS`/`is_keyword` are PostgreSQL's), `changes_schema_in` (`changes_schema`).
+    `lex_backslash_strings` is the PostgreSQL classifier's own. The lexer is a `match` on the
+    `Copy` dialect: no allocation or dynamic dispatch on the editor's per-keystroke path.
+    Every lexed region starts in the default state (between tokens, `;` ending a statement);
+    a client delimiter (MySQL's `DELIMITER`) will need a start state carried in the editor's
+    line states and given to the lexer.
+  - Splitter: `split::split_in`, `segment_at_in` (`split`, `segment_at`); `statement_at` reads
+    statements already split.
+  - Completion: `complete::complete_in_dialect(src, cursor, catalog, force, path, d)`
+    (`complete_in`, `complete`): it lexes, offers keywords and reads and writes names in `d`.
+    The path is `Dialect::default_path(schema)` (PostgreSQL: the schema then `public`, or
+    `public`; `complete::default_path`/`schema_path` are its wrappers), `App::tab_path` asks it
+    in the tab's dialect.
+  - Formatter: `format::format_in(src, opts, indent, d)` (`format`): `sqlformat` lays the text
+    out as `Dialect::sqlformat_dialect` (PostgreSQL: `PostgreSql`), and the checks lex in `d`.
+    Only PostgreSQL masks dollar bodies and keeps `U&`, psql's `:var` and `\` together.
+  - Generated SQL: `Dialect::explain_sql(statement, analyze)` (PostgreSQL: `plan::explain_sql`;
+    `None` for a dialect without a plan statement) is what `query.explain` runs. The count of a
+    query's rows is the classifier's (`Classifier::count_query`), as paging's allowlist is.
+  - The editor: every lexer and splitter use (`lexing.rs`: the line states,
+    `current_statement`, `completion_context`; the highlighter; `pairs`, `brackets`, `target`,
+    `runs`) lexes in the editor's language (`Editor::set_language`), and `gc` writes
+    `Dialect::comment_marker` and strips `Dialect::uncomment_markers`. The app lexes, splits,
+    completes and formats in the tab's dialect (`App::tab_dialect`), as do `driver::keys`'s
+    name readers and the schema-change and rollback checks of a run.
+  - Still PostgreSQL's own, calling the wrappers: the PostgreSQL driver, the PostgreSQL
+    classifier (`risk`, `risk::repeat`), the plan readers (`sql::plan`: `is_explain`,
+    `plan::explain`, `plan::pg`) and the DDL renderer (`sql::ddl`).
+- **A new dialect** adds a `Dialect` variant and, at each `match` the compiler then points to:
+  its lexer branch (`lex_in`) and keywords, quoting, folding and identifier quotes, its
+  default path, comment markers, `sqlformat` dialect and formatter rules, its `explain_sql`, a
+  `Classifier` variant (risk, repeatability, the count query), and a driver whose
+  `Capabilities` name its language, hierarchy and plan format.
 
 ## Decision: PostgreSQL's parser for safety classification
 

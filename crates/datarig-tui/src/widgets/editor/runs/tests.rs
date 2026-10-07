@@ -1,5 +1,6 @@
 use super::*;
 use crate::widgets::editor::Editor;
+use datarig_core::sql::split::split;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 fn keys(e: &mut Editor, s: &str) {

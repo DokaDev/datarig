@@ -703,3 +703,68 @@ fn a_session_closed_under_the_wait_ends_it_once() {
     assert!(ended(&h), "said once, nothing after");
     assert_eq!(h.app.tab().exec.run.notes.len(), notes, "no note of a cancelled run");
 }
+
+/// What the open context menu (Shift+F10 where the focus is) offers, closed again after.
+fn menu_offers(h: &mut Harness) -> Vec<String> {
+    h.key_mod(KeyCode::F(10), ratatui::crossterm::event::KeyModifiers::SHIFT);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ContextMenu), "a menu opened");
+    let labels = h.menu_labels();
+    h.key(KeyCode::Esc);
+    labels
+}
+
+/// What the command line lists for `typed` (names and labels), closed again after.
+fn commands_for(h: &mut Harness, typed: &str) -> Vec<String> {
+    h.ctrl('k');
+    h.type_text(typed);
+    let rows = h.app.command_rows().iter().flat_map(|r| [r.name.to_string(), r.label.to_string()]).collect();
+    h.key(KeyCode::Esc);
+    rows
+}
+
+/// A driver without a plan format: the plan actions are not offered (editor and results
+/// menus, the command line), their keys do nothing and say nothing, and a text plan has no
+/// hint under it. The same tab offers them all again once its driver has one.
+#[test]
+fn a_driver_without_plans_offers_no_plan_actions() {
+    let explain = Label::ActionQueryExplain.text(Lang::En).to_string();
+    let analyze = Label::ActionQueryExplainAnalyze.text(Lang::En).to_string();
+    let as_plan = Label::ActionResultsViewAsPlan.text(Lang::En).to_string();
+    let mut h = text_plan("EXPLAIN SELECT * FROM t WHERE a > 1;");
+    h.driver.no_explain.store(true, std::sync::atomic::Ordering::SeqCst);
+    let before = status(&h);
+
+    // The text plan: no hint, and neither `P` nor the leader key nor the menu does anything.
+    assert!(find(&mut h, HINT).is_none(), "no hint:\n{}", h.screen(W, H));
+    assert!(!menu_offers(&mut h).contains(&as_plan));
+    h.keys("P");
+    h.keys(" ep");
+    assert!(h.sent().is_empty());
+    assert_eq!(h.app.tab().exec.view, ResultView::Rows);
+    assert_eq!(status(&h), before, "nothing said");
+
+    // The editor: no explain in its menu or on the command line, and its keys do nothing.
+    h.app.focus = Focus::Editor;
+    h.app.tab_mut().editor = Editor::new("SELECT * FROM t;");
+    let menu = menu_offers(&mut h);
+    assert!(!menu.contains(&explain) && !menu.contains(&analyze), "{menu:?}");
+    let rows = commands_for(&mut h, "explain");
+    assert!(!rows.iter().any(|r| r.starts_with(":explain") || *r == explain || *r == analyze), "{rows:?}");
+    h.keys(" ex");
+    h.keys(" ea");
+    assert!(h.sent().is_empty());
+    assert_eq!(status(&h), before, "nothing said");
+
+    // The same driver with plans: all of it is back.
+    h.driver.no_explain.store(false, std::sync::atomic::Ordering::SeqCst);
+    let menu = menu_offers(&mut h);
+    assert!(menu.contains(&explain) && menu.contains(&analyze), "{menu:?}");
+    let rows = commands_for(&mut h, "explain");
+    assert!(rows.iter().any(|r| r.starts_with(":explain")) && rows.contains(&analyze), "{rows:?}");
+    h.app.focus = Focus::Results;
+    assert!(find(&mut h, HINT).is_some(), "the hint is back:\n{}", h.screen(W, H));
+    assert!(menu_offers(&mut h).contains(&as_plan));
+    h.app.focus = Focus::Editor;
+    h.keys(" ex");
+    assert_eq!(sent_one(&mut h).1, "EXPLAIN (FORMAT JSON) SELECT * FROM t");
+}

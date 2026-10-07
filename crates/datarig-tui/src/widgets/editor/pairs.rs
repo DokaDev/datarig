@@ -11,7 +11,7 @@
 //! again, so a repeat does the same in another place or with the setting changed.
 
 use super::{Editor, Mode};
-use datarig_core::sql::lexer::{Tok, lex};
+use datarig_core::sql::lexer::{Tok, lex_in};
 
 /// What auto-pairs did for one key in Insert mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -132,7 +132,7 @@ impl Editor {
         let cur = self.offset() - base;
         let literal =
             |k: Tok| matches!(k, Tok::Str | Tok::QuotedIdent | Tok::BlockComment | Tok::Dollar | Tok::LineComment);
-        let toks = lex(&region);
+        let toks = lex_in(&region, self.lang.dialect());
         let Some(t) = toks.iter().find(|t| literal(t.kind) && t.start < cur && cur <= t.end) else { return false };
         if cur < t.end || t.kind == Tok::LineComment {
             return true;
@@ -140,7 +140,7 @@ impl Editor {
         // Right after its end: inside only when it is not closed, which a line break after it
         // shows (an open one takes it in).
         let more = format!("{region}\n");
-        lex(&more).iter().any(|u| u.start == t.start && u.end > t.end)
+        lex_in(&more, self.lang.dialect()).iter().any(|u| u.start == t.start && u.end > t.end)
     }
 
     /// The Insert session ended or the cursor moved: no pair is pending any more.

@@ -6,18 +6,20 @@
 //! change when asked) with the whitespace `sqlformat` put between them. It is refused, and the
 //! text stays as it was, unless:
 //!
-//! * the formatted text has the same tokens as the input, in the same order (datarig's lexer;
-//!   words compared ignoring their ASCII case, as `sqlformat` may change it, every other token
-//!   exactly, comments included; a dollar-quoted body is not given to `sqlformat` at all);
+//! * the formatted text has the same tokens as the input, in the same order (datarig's lexer, in
+//!   the text's dialect; words compared ignoring their ASCII case, as `sqlformat` may change it,
+//!   every other token exactly, comments included; a PostgreSQL dollar-quoted body is not given
+//!   to `sqlformat` at all);
 //! * operator characters written together stay together and those written apart stay apart
 //!   (the lexer reads each operator character alone, the server reads `<=` or `->>` as one
-//!   operator), as do `U&` before a string or a name, `:` before what follows it (a psql
-//!   variable) and `\` (a psql command);
+//!   operator), as do, in PostgreSQL, `U&` before a string or a name, `:` before what follows
+//!   it (a psql variable) and `\` (a psql command);
 //! * two strings in a row keep a line break between them, or keep none (strings separated by a
 //!   line break are one string to the server);
 //! * the rebuilt text lexes to the input's tokens again, exactly but for the case of keywords.
 
-use super::lexer::{Tok, Token, lex};
+use super::dialect::Dialect;
+use super::lexer::{Tok, Token, lex_in};
 use std::ops::Range;
 
 /// What a dollar-quoted body is to `sqlformat`.
@@ -50,7 +52,15 @@ pub enum Refused {
 /// `src` formatted: the text that replaces `src[span]`, from its first token to the end of its
 /// last (the blanks around them stay). Lines after the first start with `indent` (the column
 /// the text starts at). The same text as `src[span]` when there is nothing to change.
+/// PostgreSQL ([`format_in`]).
 pub fn format(src: &str, opts: Options, indent: &str) -> Result<(Range<usize>, String), Refused> {
+    format_in(src, opts, indent, Dialect::Postgres)
+}
+
+/// [`format`] for text in dialect `d`: laid out by `sqlformat` as its nearest dialect
+/// ([`Dialect::sqlformat_dialect`]) and checked with `d`'s lexer.
+pub fn format_in(src: &str, opts: Options, indent: &str, d: Dialect) -> Result<(Range<usize>, String), Refused> {
+    let lex = |text: &str| lex_in(text, d);
     let input: Vec<Token> = lex(src).into_iter().filter(|t| t.kind != Tok::Whitespace).collect();
     let (Some(first), Some(last)) = (input.first(), input.last()) else { return Ok((0..0, String::new())) };
     let span = first.start..last.end;
@@ -58,17 +68,21 @@ pub fn format(src: &str, opts: Options, indent: &str) -> Result<(Range<usize>, S
         indent: sqlformat::Indent::Spaces(opts.indent),
         uppercase: None,
         lines_between_queries: 1,
-        dialect: sqlformat::Dialect::PostgreSql,
+        dialect: d.sqlformat_dialect(),
         ..sqlformat::FormatOptions::default()
     };
-    // A dollar-quoted body goes to `sqlformat` as an empty string: it lays out the code around
-    // it, never what is inside (the body comes back from the input as it is).
+    // PostgreSQL: a dollar-quoted body goes to `sqlformat` as an empty string: it lays out the
+    // code around it, never what is inside (the body comes back from the input as it is).
     let mut masked = String::with_capacity(src.len());
     let mut from = 0;
-    for t in input.iter().filter(|t| t.kind == Tok::Dollar) {
-        masked.push_str(&src[from..t.start]);
-        masked.push_str(DOLLAR_MASK);
-        from = t.end;
+    match d {
+        Dialect::Postgres => {
+            for t in input.iter().filter(|t| t.kind == Tok::Dollar) {
+                masked.push_str(&src[from..t.start]);
+                masked.push_str(DOLLAR_MASK);
+                from = t.end;
+            }
+        }
     }
     masked.push_str(&src[from..]);
     let laid = sqlformat::format(&masked, &sqlformat::QueryParams::None, &fopts);
@@ -85,7 +99,7 @@ pub fn format(src: &str, opts: Options, indent: &str) -> Result<(Range<usize>, S
     for (i, t) in input.iter().enumerate() {
         if i > 0 {
             let gap = relaid(&laid[layout[i - 1].end..layout[i].start], indent);
-            if !layout_only(&input, i, src, &gap) {
+            if !layout_only(d, &input, i, src, &gap) {
                 return Err(at(i));
             }
             out.push_str(&gap);
@@ -135,8 +149,9 @@ fn same_token(a: &Token, src: &str, b: &Token, laid: &str) -> bool {
     }
 }
 
-/// Whether the input's whitespace before token `i` may become `after` (the module's rules).
-fn layout_only(toks: &[Token], i: usize, src: &str, after: &str) -> bool {
+/// Whether the input's whitespace before token `i` may become `after` (the module's rules, in
+/// dialect `d`).
+fn layout_only(d: Dialect, toks: &[Token], i: usize, src: &str, after: &str) -> bool {
     let (a, b) = (&toks[i - 1], &toks[i]);
     let before = &src[a.end..b.start];
     let (ta, tb) = (a.text(src), b.text(src));
@@ -144,10 +159,14 @@ fn layout_only(toks: &[Token], i: usize, src: &str, after: &str) -> bool {
         u.kind == Tok::Ident && u.text(src).eq_ignore_ascii_case("u") && amp.text(src) == "&" && u.end == amp.start
     };
     let keep = (a.kind == Tok::Op && b.kind == Tok::Op)
-        || unicode_escape(a, b)
-        || (i >= 2 && unicode_escape(&toks[i - 2], a))
-        || (a.kind == Tok::Op && (ta == ":" || ta == "\\"))
-        || tb == "\\";
+        || match d {
+            Dialect::Postgres => {
+                unicode_escape(a, b)
+                    || (i >= 2 && unicode_escape(&toks[i - 2], a))
+                    || (a.kind == Tok::Op && (ta == ":" || ta == "\\"))
+                    || tb == "\\"
+            }
+        };
     if keep && before.is_empty() != after.is_empty() {
         return false;
     }

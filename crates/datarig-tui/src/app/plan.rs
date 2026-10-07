@@ -382,7 +382,9 @@ impl App {
         if self.tab_busy(self.tab().id) {
             return self.flash_busy();
         }
-        let sql = plan::explain_sql(&stmt, analyze);
+        // A dialect without a plan statement has a driver without a plan format, and the action
+        // is not offered there (`App::tab_explains`): the dispatcher does nothing, as here.
+        let Some(sql) = self.tab_dialect(self.tab().id).explain_sql(&stmt, analyze) else { return };
         self.tab_mut().editor.stage_run(std::slice::from_ref(&sql), spans);
         self.run(vec![sql]);
     }
@@ -409,8 +411,8 @@ impl App {
         c
     }
 
-    /// The active tab shows the rows of an `EXPLAIN` that are not a plan (a text plan):
-    /// `results.view_as_plan` acts on them.
+    /// The active tab shows the rows of an `EXPLAIN` that are not a plan (a text plan), and
+    /// its driver produces plans: `results.view_as_plan` acts on them.
     pub fn text_plan_shown(&self) -> bool {
         if self.tabs.is_empty() {
             return false;
@@ -419,6 +421,7 @@ impl App {
         t.exec.view == super::tabs::ResultView::Rows
             && matches!(t.results, Results::Rows(_))
             && self.text_plan().explain
+            && self.tab_explains(t.id)
     }
 
     /// The key context where the focus is (the results pane's own there).

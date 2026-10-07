@@ -325,3 +325,31 @@ fn with_query_columns_are_only_names_written_as_such() {
     let r = run("with r as (select a and b, not c, x collate \"C\", count(*) n, 1 one, y z from t) select r.|");
     assert_eq!(labels(&r), ["n", "one", "z"]);
 }
+
+/// Completion in PostgreSQL is the one [`complete_in`] does, with the same search path.
+#[test]
+fn complete_in_postgres_is_complete_in() {
+    let texts = [
+        "SELECT * FROM |",
+        "SELECT * FROM shop.|",
+        "SELECT o.| FROM shop.orders o",
+        "SELECT \"Mi| FROM t",
+        "WITH w AS (SELECT 1 AS n) SELECT | FROM w",
+        "sel|",
+        "SELECT 'x|'",
+    ];
+    for c in [cat(), mixed()] {
+        for path in [default_path(), schema_path("shop")] {
+            for src in texts {
+                let cursor = src.find('|').unwrap();
+                let text = src.replacen('|', "", 1);
+                for force in [false, true] {
+                    let a = complete_in_dialect(&text, cursor, &c, force, &path, Dialect::Postgres);
+                    let b = complete_in(&text, cursor, &c, force, &path);
+                    let key = |c: Option<Completion>| c.map(|c| (c.items, c.replace_start, c.trail));
+                    assert_eq!(key(a), key(b), "{src:?} {path:?}");
+                }
+            }
+        }
+    }
+}

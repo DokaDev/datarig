@@ -160,3 +160,15 @@ fn statement_boundaries_agree_with_postgresqls_scanner() {
         }
     }
 }
+
+/// The splitter in PostgreSQL is the one [`split`] and [`segment_at`] use: the same statements
+/// and segments, at every cursor, on every text here.
+#[test]
+fn split_in_postgres_is_split() {
+    for src in CORPUS.iter().chain([&EXAMPLE]) {
+        assert_eq!(split_in(src, Dialect::Postgres), split(src), "{src:?}");
+        for cursor in (0..=src.len()).filter(|&i| src.is_char_boundary(i)) {
+            assert_eq!(segment_at_in(src, cursor, Dialect::Postgres), segment_at(src, cursor), "{src:?} {cursor}");
+        }
+    }
+}

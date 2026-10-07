@@ -1,7 +1,8 @@
-//! Tolerant PostgreSQL lexer. Never fails: unterminated strings/comments/dollar bodies run to
-//! the end of input. Shared by the highlighter, the statement splitter and the completer.
+//! Tolerant SQL lexer. Never fails: unterminated strings/comments/dollar bodies run to the end
+//! of input. Shared by the highlighter, the statement splitter, the completer and the
+//! formatter, which lex in the dialect of their text ([`lex_in`]); [`lex`] reads PostgreSQL.
 //!
-//! Where a token ends follows PostgreSQL's own scanner (`src/backend/parser/scan.l`), so the
+//! PostgreSQL: where a token ends follows PostgreSQL's own scanner (`src/backend/parser/scan.l`), so the
 //! statements the splitter finds are the ones the server runs:
 //!
 //! * whitespace is ASCII only (space, tab, `\n`, `\r`, form feed, vertical tab); every other
@@ -14,6 +15,8 @@
 //!
 //! The differential tests in `split/tests.rs` hold the splitter to the boundaries of
 //! PostgreSQL's parser (libpg_query) on a corpus of tricky texts.
+
+use super::dialect::Dialect;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tok {
@@ -54,7 +57,8 @@ impl Token {
     }
 }
 
-/// Sorted, upper-case. Used for highlighting and keyword completion.
+/// PostgreSQL's keywords ([`Dialect::keywords`]): sorted, upper-case. Used for highlighting
+/// and keyword completion.
 pub const KEYWORDS: &[&str] = &[
     "ALL",
     "ALTER",
@@ -176,9 +180,9 @@ pub const KEYWORDS: &[&str] = &[
     "WITH",
 ];
 
+/// Whether `word` is one of PostgreSQL's [`KEYWORDS`] ([`Dialect::is_keyword`]).
 pub fn is_keyword(word: &str) -> bool {
-    let upper = word.to_ascii_uppercase();
-    KEYWORDS.binary_search(&upper.as_str()).is_ok()
+    Dialect::Postgres.is_keyword(word)
 }
 
 /// `ident_start` of scan.l: a letter, `_`, or any character outside ASCII.
@@ -256,18 +260,27 @@ impl Cursor<'_> {
     }
 }
 
+/// `src` as PostgreSQL reads it ([`lex_in`]).
 pub fn lex(src: &str) -> Vec<Token> {
-    lex_with(src, false)
+    lex_in(src, Dialect::Postgres)
+}
+
+/// The tokens of `src` as dialect `d` reads it.
+pub fn lex_in(src: &str, d: Dialect) -> Vec<Token> {
+    match d {
+        Dialect::Postgres => lex_with(src, d, false),
+    }
 }
 
 /// [`lex`] as a server with `standard_conforming_strings = off` reads the text: a backslash
 /// escapes the next character in a plain `'…'` string too. Only the safety checks use it
 /// (`risk`), to see what such a server would run.
 pub fn lex_backslash_strings(src: &str) -> Vec<Token> {
-    lex_with(src, true)
+    lex_with(src, Dialect::Postgres, true)
 }
 
-fn lex_with(src: &str, backslash_strings: bool) -> Vec<Token> {
+/// PostgreSQL's scanner, its words told apart by `d`'s keywords.
+fn lex_with(src: &str, d: Dialect, backslash_strings: bool) -> Vec<Token> {
     let mut out = Vec::new();
     let mut cur = Cursor { src, pos: 0 };
     while let Some(c) = cur.peek() {
@@ -348,7 +361,7 @@ fn lex_with(src: &str, backslash_strings: bool) -> Vec<Token> {
                 Tok::Str
             } else {
                 cur.eat_while(is_ident_continue);
-                if is_keyword(&src[start..cur.pos]) { Tok::Keyword } else { Tok::Ident }
+                if d.is_keyword(&src[start..cur.pos]) { Tok::Keyword } else { Tok::Ident }
             }
         } else {
             cur.bump();
@@ -369,10 +382,15 @@ fn lex_with(src: &str, backslash_strings: bool) -> Vec<Token> {
 /// Whether statement `sql` may change the schema, so cached metadata such as the key columns
 /// may be out of date after it runs: DDL (its first word is `CREATE`, `ALTER` or `DROP`), and
 /// `DO` and `CALL`, whose bodies can run any DDL the lexer cannot see. Comments before it are
-/// skipped.
+/// skipped. PostgreSQL ([`changes_schema_in`]).
 pub fn changes_schema(sql: &str) -> bool {
+    changes_schema_in(sql, Dialect::Postgres)
+}
+
+/// [`changes_schema`] for statement `sql` in dialect `d`.
+pub fn changes_schema_in(sql: &str, d: Dialect) -> bool {
     const WORDS: [&str; 5] = ["CREATE", "ALTER", "DROP", "DO", "CALL"];
-    lex(sql)
+    lex_in(sql, d)
         .iter()
         .find(|t| !t.is_trivia())
         .is_some_and(|t| t.is_word() && WORDS.iter().any(|w| t.text(sql).eq_ignore_ascii_case(w)))

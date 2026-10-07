@@ -4,7 +4,7 @@
 use super::Sel;
 use super::vim::Target;
 use super::{EdEvent, Editor, Mode};
-use datarig_core::sql::lexer::{Tok, lex};
+use datarig_core::sql::lexer::{Tok, lex_in};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 impl Editor {
@@ -45,7 +45,7 @@ impl Editor {
         // One line more: a token that goes on past `off`'s line ends after it.
         let (base, region) = self.region_text(row, row + 2);
         let at = off - base;
-        lex(&region).iter().any(|t| t.kind != Tok::Whitespace && t.start < at && at < t.end)
+        lex_in(&region, self.lang.dialect()).iter().any(|t| t.kind != Tok::Whitespace && t.start < at && at < t.end)
     }
 
     /// The line (from 0) of byte `off`.

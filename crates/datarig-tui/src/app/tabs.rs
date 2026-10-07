@@ -672,7 +672,7 @@ impl Tab {
         use super::runlog::StatementOutcome as O;
         let log = &self.exec.run;
         let Some(s) = self.ending_statement().and_then(|i| log.statements.get(i)) else { return false };
-        let words: Vec<String> = datarig_core::sql::lexer::lex(&s.sql)
+        let words: Vec<String> = datarig_core::sql::lexer::lex_in(&s.sql, self.exec.prepared.language().dialect())
             .into_iter()
             .filter(|t| t.is_word())
             .take(2)

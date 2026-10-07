@@ -134,3 +134,24 @@ fn identifiers_take_non_ascii_characters_and_dollars() {
     assert_eq!(kinds("a\u{3000}b"), [(Tok::Ident, "a\u{3000}b")]);
     assert_eq!(kinds("a\x0bb").len(), 2, "vertical tab is whitespace");
 }
+
+/// The lexer in PostgreSQL is the one [`lex`] and [`changes_schema`] use, and its keywords are
+/// [`KEYWORDS`].
+#[test]
+fn lex_in_postgres_is_lex() {
+    let texts = [
+        "SELECT u.id, 'it''s' FROM \"Sh\".t WHERE x >= 1.5e3 -- c",
+        "SELECT $$a;b$$, $t$x$t$, E'\\'', /* a /* b */ c */ 1; DO $$ x $$",
+        "create table t (a int); CALL p(); drop view v; select 'unterminated",
+        "  -- c\n ALTER TABLE x; SELECT x$$ FROM \u{d14c}\u{c774}\u{be14}\r--y\rSELECT $1",
+    ];
+    for src in texts {
+        assert_eq!(lex_in(src, Dialect::Postgres), lex(src), "{src:?}");
+        assert_eq!(changes_schema_in(src, Dialect::Postgres), changes_schema(src), "{src:?}");
+    }
+    assert_eq!(Dialect::Postgres.keywords(), KEYWORDS);
+    assert!(KEYWORDS.windows(2).all(|w| w[0] < w[1]), "sorted, for the binary search");
+    for w in ["select", "SELECT", "Select", "users", "x$"] {
+        assert_eq!(Dialect::Postgres.is_keyword(w), is_keyword(w), "{w}");
+    }
+}
