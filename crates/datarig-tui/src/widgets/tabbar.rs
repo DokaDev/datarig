@@ -302,10 +302,9 @@ pub(crate) fn draw_tab_bar(app: &App, area: Rect, buf: &mut Buffer) -> Vec<(u16,
             }
             let s = clip(&p.text, (stop - x) as usize);
             let from = x;
-            // Under the pointer: the `×` stands out; the rest of the tab is underlined.
+            // Under the pointer: only the `×` changes, to the theme's error color.
             let style = match (p.kind == PartKind::Close, hover) {
-                (true, Some(TabHit::Close(i))) if i == index => p.style.patch(crate::widgets::pointer_style()),
-                (false, Some(TabHit::Tab(i))) if i == index => p.style.add_modifier(Modifier::UNDERLINED),
+                (true, Some(TabHit::Close(i))) if i == index => p.style.fg(th.error),
                 _ => p.style,
             };
             buf.set_stringn(x, area.y, &s, (stop - x) as usize, style);

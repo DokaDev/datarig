@@ -194,27 +194,31 @@ fn hit_x(h: &Harness, want: TabHit) -> u16 {
     h.app.tab_hits().iter().find(|t| t.2 == want).unwrap_or_else(|| panic!("{want:?}")).0
 }
 
-/// The `×` of a tab lights up under the pointer (the text on the selection), the rest of the
-/// tab is underlined; leaving clears it; moves along the same target draw nothing.
+/// The `×` of a tab changes its text color alone under the pointer (no fill, bold or
+/// reverse); the tab's text is not underlined; leaving clears it; moves along the same target
+/// draw nothing.
 #[test]
 fn the_pointer_lights_up_a_tabs_close_button() {
     let mut h = two_tabs();
     let y = h.app.layout.tab_bar.y;
     let x = hit_x(&h, TabHit::Close(0));
+    let body = hit_x(&h, TabHit::Tab(0));
     let plain = h.draw(100, 30).backend().buffer()[(x, y)].clone();
+    let plain_text = h.draw(100, 30).backend().buffer()[(body + 1, y)].clone();
     assert!(hover(&mut h, x, y), "onto the ×: a frame");
     assert_eq!(h.app.pointer_on, Some(PointerOn::Tab(TabHit::Close(0))));
     let t = h.draw(100, 30);
     let cell = &t.backend().buffer()[(x, y)];
     assert_eq!(cell.symbol(), "×");
-    assert_eq!(cell.bg, datarig_tui::theme::DARK.selection.bg.unwrap());
-    assert!(cell.modifier.contains(Modifier::BOLD) && cell != &plain);
-    // The tab's body: underlined, the × back as it was.
-    let body = hit_x(&h, TabHit::Tab(0));
+    assert_eq!(cell.fg, datarig_tui::theme::DARK.error);
+    assert_ne!(cell.fg, plain.fg);
+    assert_eq!((cell.bg, cell.modifier), (plain.bg, plain.modifier), "only the text color changes");
+    // The tab's body: nothing changes, the text is not underlined, the × back as it was.
     assert!(hover(&mut h, body, y));
     assert!(!hover(&mut h, body + 1, y), "along the same tab: no frame");
     let t = h.draw(100, 30);
-    assert!(t.backend().buffer()[(body + 1, y)].modifier.contains(Modifier::UNDERLINED));
+    assert!(!t.backend().buffer()[(body + 1, y)].modifier.contains(Modifier::UNDERLINED));
+    assert_eq!(t.backend().buffer()[(body + 1, y)], plain_text);
     assert_eq!(t.backend().buffer()[(x, y)], plain);
     // Off the bar: cleared, as before.
     assert!(hover(&mut h, body, y + 5));
@@ -224,8 +228,8 @@ fn the_pointer_lights_up_a_tabs_close_button() {
     assert!(!t.backend().buffer()[(body + 1, y)].modifier.contains(Modifier::UNDERLINED));
 }
 
-/// On every built-in theme the lit `×` differs from the plain one and its text reads (not the
-/// background's color; the terminal theme reverses it).
+/// On every built-in theme the hovered `×` has another text color than the plain one and the
+/// tab's own background, no other modifier (the terminal theme uses an ANSI color, not reverse).
 #[test]
 fn a_lit_close_button_reads_on_every_built_in_theme() {
     for (name, theme) in datarig_tui::theme::BUILTINS {
@@ -236,13 +240,11 @@ fn a_lit_close_button_reads_on_every_built_in_theme() {
         let plain = h.draw(100, 30).backend().buffer()[(x, y)].clone();
         hover(&mut h, x, y);
         let lit = h.draw(100, 30).backend().buffer()[(x, y)].clone();
-        assert_ne!(lit, plain, "{name}: the × lights up");
-        if *name == "terminal" {
-            assert!(lit.modifier.contains(Modifier::REVERSED), "{name}: reversed");
-        } else {
-            assert_ne!(lit.fg, lit.bg, "{name}: its text reads");
-            assert_eq!(lit.bg, theme.selection.bg.unwrap(), "{name}: on the selection");
-        }
+        assert_ne!(lit.fg, plain.fg, "{name}: the × changes its text color");
+        assert_eq!(lit.fg, theme.error, "{name}: to the error color");
+        assert_ne!(lit.fg, lit.bg, "{name}: its text reads");
+        assert_eq!(lit.bg, plain.bg, "{name}: the tab's own background");
+        assert_eq!(lit.modifier, plain.modifier, "{name}: no bold, reverse or underline added");
     }
 }
 
