@@ -1,11 +1,12 @@
 //! The risk classifier of a language: what the app asks about a statement, whatever the
 //! dialect. PostgreSQL's is the parse-tree classifier of this module ([`Prepared`],
-//! [`repeat`]); each call forwards to it unchanged. A dialect without a classifier of its own
-//! yet (MySQL) has [`Classifier::Unchecked`]: nothing it is given counts as known.
+//! [`repeat`]); MySQL's reads the text's tokens ([`mysql`]). Each call forwards to one of them
+//! unchanged.
 
+use super::mysql;
 use super::repeat::{self, NotRepeatable};
-use super::{Class, Danger, Prepared, Risk};
-use crate::sql::dialect::{Dialect, Language};
+use super::{Prepared, Risk};
+use crate::sql::dialect::{Dialect, Language, MySqlMode};
 
 /// The classifier of one session's statements, with what the session prepared so far (see
 /// [`Prepared`]). Built for a language ([`Classifier::new`]); a tab whose language changes
@@ -14,10 +15,9 @@ use crate::sql::dialect::{Dialect, Language};
 pub enum Classifier {
     /// PostgreSQL, with the session's prepared statements.
     Pg(Prepared),
-    /// A dialect whose statements are not read yet: every text is one the classifier cannot
-    /// read ([`Danger::Unparsed`]: it always asks, and a read-only policy refuses it), and none
-    /// may be run again or counted.
-    Unchecked(Dialect),
+    /// MySQL, read in the session's sql mode. Prepared statements are not remembered: every
+    /// `EXECUTE` is one of an unknown statement.
+    MySql(MySqlMode),
 }
 
 impl Default for Classifier {
@@ -32,7 +32,7 @@ impl Classifier {
     pub fn new(lang: Language) -> Self {
         match lang {
             Language::Sql(Dialect::Postgres) => Self::Pg(Prepared::default()),
-            Language::Sql(d @ Dialect::MySql(_)) => Self::Unchecked(d),
+            Language::Sql(Dialect::MySql(mode)) => Self::MySql(mode),
         }
     }
 
@@ -40,7 +40,7 @@ impl Classifier {
     pub fn language(&self) -> Language {
         match self {
             Self::Pg(_) => Language::Sql(Dialect::Postgres),
-            Self::Unchecked(d) => Language::Sql(*d),
+            Self::MySql(mode) => Language::Sql(Dialect::MySql(*mode)),
         }
     }
 
@@ -49,7 +49,7 @@ impl Classifier {
     pub fn classify(&mut self, sql: &str) -> Risk {
         match self {
             Self::Pg(p) => p.classify(sql),
-            Self::Unchecked(_) => Risk::danger(Class::Unknown, Danger::Unparsed),
+            Self::MySql(mode) => mysql::classify(sql, *mode),
         }
     }
 
@@ -63,7 +63,7 @@ impl Classifier {
     pub fn forget(&mut self, sql: &str) {
         match self {
             Self::Pg(p) => p.forget(sql),
-            Self::Unchecked(_) => {}
+            Self::MySql(_) => {}
         }
     }
 
@@ -71,7 +71,7 @@ impl Classifier {
     pub fn knows(&self, name: &str) -> bool {
         match self {
             Self::Pg(p) => p.knows(name),
-            Self::Unchecked(_) => false,
+            Self::MySql(_) => false,
         }
     }
 
@@ -80,7 +80,7 @@ impl Classifier {
     pub fn repeatable(&self, sql: &str) -> Result<(), NotRepeatable> {
         match self {
             Self::Pg(_) => repeat::repeatable(sql),
-            Self::Unchecked(_) => Err(NotRepeatable::Unreadable),
+            Self::MySql(mode) => mysql::repeatable(sql, *mode),
         }
     }
 
@@ -88,7 +88,7 @@ impl Classifier {
     pub fn ordered(&self, sql: &str) -> bool {
         match self {
             Self::Pg(_) => repeat::ordered(sql),
-            Self::Unchecked(_) => false,
+            Self::MySql(mode) => mysql::ordered(sql, *mode),
         }
     }
 
@@ -96,7 +96,7 @@ impl Classifier {
     pub fn count_query(&self, sql: &str) -> Result<String, NotRepeatable> {
         match self {
             Self::Pg(_) => repeat::count_query(sql),
-            Self::Unchecked(_) => Err(NotRepeatable::Unreadable),
+            Self::MySql(mode) => mysql::count_query(sql, *mode),
         }
     }
 }

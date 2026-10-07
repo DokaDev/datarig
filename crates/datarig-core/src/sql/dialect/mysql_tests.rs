@@ -157,11 +157,12 @@ fn danger_02_executable_comments_are_code() {
         ["/*! DROP TABLE t */", "/*!50001 DROP VIEW v */"]
     );
     assert!(changes_schema_in("/*!50001 DROP VIEW v */", MY));
-    // The classifier of MySQL text (until it reads MySQL) asks about everything, and a
-    // read-only policy refuses it.
-    let risk = Classifier::new(Language::Sql(MY)).classify(src);
-    assert_eq!((risk.class, risk.danger), (Class::Unknown, Some(Danger::Unparsed)));
-    assert!(risk.read_only().is_err());
+    // The classifier of MySQL text never reads one: it asks, and a read-only policy refuses it.
+    for text in [src, "SELECT 1 /*!99999 , 2 */", "SELECT /*M! 1 */ 2"] {
+        let risk = Classifier::new(Language::Sql(MY)).classify(text);
+        assert_eq!((risk.class, risk.danger), (Class::Unknown, Some(Danger::ExecutableComment)), "{text}");
+        assert!(risk.read_only().is_err(), "{text}");
+    }
     // PostgreSQL: a comment, as before.
     assert_eq!(bodies("/*! DROP TABLE t */;", PG), Vec::<&str>::new());
 }
@@ -220,29 +221,34 @@ fn danger_05_delimiter_blocks_split_as_the_client_does() {
     assert!(split(src)[0].body(src).starts_with("DELIMITER $$\nCREATE"));
 }
 
-/// 6. MySQL text is never classified by PostgreSQL's parser: until MySQL's classifier exists,
-///    every statement of it asks, a read-only policy refuses it, and nothing is run again.
+/// 6. MySQL text is never classified by PostgreSQL's parser, which would reject MySQL's
+///    forms (and so ask about every one) or read them as PostgreSQL's: MySQL's classifier
+///    reads them.
 #[test]
 fn danger_06_mysql_text_is_never_read_by_the_postgres_classifier() {
     let mut c = Classifier::new(Language::Sql(MY));
     assert_eq!(c.language(), Language::Sql(MY));
     for sql in ["SELECT `a` FROM t LIMIT 1, 2", "SHOW FULL PROCESSLIST", "SET @x = 1", "SELECT 1"] {
         let r = c.classify(sql);
-        assert_eq!((r.class, r.danger), (Class::Unknown, Some(Danger::Unparsed)), "{sql}");
-        assert!(r.confirm(false).is_some() && r.read_only().is_err(), "{sql}");
-        assert!(c.repeatable(sql).is_err() && c.count_query(sql).is_err(), "{sql}");
+        assert!(r.danger.is_none() && r.read_only().is_ok(), "{sql}");
     }
+    // `#` starts a comment in MySQL only: the DELETE is no statement there.
+    let r = c.classify("SELECT 1 # ; DELETE FROM t");
+    assert!(r.danger.is_none() && r.class == Class::Read);
     // PostgreSQL's classifier, as before.
     assert_eq!(Classifier::new(Language::Sql(PG)).classify("SELECT 1").class, Class::Read);
 }
 
-/// 7. MySQL settings are not judged by PostgreSQL's names: `SET sql_log_bin = 0` asks.
+/// 7. MySQL settings are not judged by PostgreSQL's names: `SET sql_log_bin = 0` asks, and a
+///    dotted name is no custom setting a read-only policy allows.
 #[test]
 fn danger_07_mysql_settings_are_not_judged_by_postgres_names() {
-    for sql in ["SET sql_log_bin = 0", "SET foreign_key_checks = 0", "SET autocommit = 0", "SET a.b = 1"] {
+    for sql in ["SET sql_log_bin = 0", "SET foreign_key_checks = 0", "SET a.b = 1", "SET search_path = x"] {
         let r = Classifier::classify_once(Language::Sql(MY), sql);
-        assert!(!r.safe_setting && r.danger == Some(Danger::Unparsed), "{sql}");
+        assert!(!r.safe_setting && r.read_only().is_err(), "{sql}");
     }
+    let r = Classifier::classify_once(Language::Sql(MY), "SET sql_log_bin = 0");
+    assert_eq!(r.danger, Some(Danger::Setting));
     // PostgreSQL reads a dotted name as a custom setting, as before.
     assert!(Classifier::classify_once(Language::Sql(PG), "SET a.b = 1").safe_setting);
 }

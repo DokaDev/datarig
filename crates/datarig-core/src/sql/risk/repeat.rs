@@ -89,6 +89,8 @@ pub enum NotRepeatable {
     UserColumnType(String),
     /// The parser rejects it, or it is too long or too deep to read.
     Unreadable,
+    /// MySQL: it reads or sets a variable (`@x`, `@@x`): its value may differ on the next run.
+    Variable(String),
 }
 
 impl NotRepeatable {

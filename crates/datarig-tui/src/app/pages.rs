@@ -45,6 +45,7 @@ pub(super) fn why(r: &NotRepeatable) -> Msg {
         NotRepeatable::Shadowed(name) => Msg::RepeatShadowed { name: name.clone() },
         NotRepeatable::UserColumnType(name) => Msg::RepeatUserColumnType { name: name.clone() },
         NotRepeatable::Unreadable => Label::RepeatUnreadable.into(),
+        NotRepeatable::Variable(name) => Msg::RepeatVariable { name: name.clone() },
     }
 }
 
