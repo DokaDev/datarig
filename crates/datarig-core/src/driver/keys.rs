@@ -10,7 +10,7 @@
 
 use super::ColumnOrigin;
 use crate::sql::dialect::Dialect;
-use crate::sql::lexer::{Tok, Token, lex};
+use crate::sql::lexer::{Tok, Token, lex_in};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 /// The keys a column is part of.
@@ -454,7 +454,7 @@ fn ident(d: Dialect, t: &Token, sql: &str) -> Option<String> {
 
 /// `schema.table` or `table`, as `:copy insert` takes it.
 fn table_name(d: Dialect, s: &str) -> Option<(Option<String>, String)> {
-    let toks: Vec<Token> = lex(s).into_iter().filter(|t| !t.is_trivia()).collect();
+    let toks: Vec<Token> = lex_in(s, d).into_iter().filter(|t| !t.is_trivia()).collect();
     match toks.as_slice() {
         [n] => Some((None, ident(d, n, s)?)),
         [sc, dot, n] if dot.kind == Tok::Dot => Some((Some(ident(d, sc, s)?), ident(d, n, s)?)),
@@ -468,7 +468,7 @@ fn table_name(d: Dialect, s: &str) -> Option<(Option<String>, String)> {
 /// are read as dialect `d` reads them.
 pub fn single_table(d: Dialect, sql: &str) -> Result<FromTable, NotInsertable> {
     use NotInsertable::*;
-    let mut toks: Vec<Token> = lex(sql).into_iter().filter(|t| !t.is_trivia()).collect();
+    let mut toks: Vec<Token> = lex_in(sql, d).into_iter().filter(|t| !t.is_trivia()).collect();
     while toks.last().is_some_and(|t| t.kind == Tok::Semi) {
         toks.pop();
     }

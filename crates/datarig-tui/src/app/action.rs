@@ -277,6 +277,11 @@ fn query_tab(a: &App) -> bool {
     has_tab(a) && a.tab().is_query()
 }
 
+/// The active tab is a query tab whose driver produces a statement's plan.
+fn query_tab_explains(a: &App) -> bool {
+    query_tab(a) && a.tab_explains(a.tab().id)
+}
+
 /// The active tab is a DDL tab.
 fn ddl_tab(a: &App) -> bool {
     has_tab(a) && a.tab().is_ddl()
@@ -493,8 +498,8 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::ShowCompletions, "editor.complete", Label::ActionEditorComplete, has_tab),
     act(Action::ExternalEdit, "editor.open_external", Label::ActionEditorOpenExternal, has_tab),
     act(Action::FormatSql, "editor.format", Label::ActionEditorFormat, query_tab),
-    act(Action::Explain(false), "query.explain", Label::ActionQueryExplain, query_tab),
-    act(Action::Explain(true), "query.explain_analyze", Label::ActionQueryExplainAnalyze, query_tab),
+    act(Action::Explain(false), "query.explain", Label::ActionQueryExplain, query_tab_explains),
+    act(Action::Explain(true), "query.explain_analyze", Label::ActionQueryExplainAnalyze, query_tab_explains),
     act(Action::ToggleComment, "editor.comment_toggle", Label::ActionEditorCommentToggle, query_tab),
     act(Action::QuickConnect, "conn.quick_connect", Label::ActionConnQuickConnect, in_workspace),
     act(Action::NewProfile, "conn.new", Label::ActionConnNew, anywhere),

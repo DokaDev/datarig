@@ -48,3 +48,18 @@ fn unquoting_reads_a_quoted_name_back() {
     assert_eq!(d.ident_quotes(), &['"']);
     assert_eq!((d.opening_quote("\"x\""), d.opening_quote("x"), d.opening_quote("")), (Some('"'), None, None));
 }
+
+#[test]
+fn postgres_tools() {
+    let d = Dialect::Postgres;
+    assert_eq!(d.default_path(None), ["public"]);
+    assert_eq!(d.default_path(Some("public")), ["public"]);
+    assert_eq!(d.default_path(Some("shop")), ["shop", "public"]);
+    assert_eq!(d.comment_marker(), "--");
+    assert_eq!(d.uncomment_markers(), ["--"]);
+    assert!(matches!(d.sqlformat_dialect(), sqlformat::Dialect::PostgreSql));
+    for analyze in [false, true] {
+        assert_eq!(d.explain_sql("SELECT 1", analyze), Some(crate::sql::plan::explain_sql("SELECT 1", analyze)));
+    }
+    assert_eq!(d.explain_sql("SELECT 1", false).as_deref(), Some("EXPLAIN (FORMAT JSON) SELECT 1"));
+}

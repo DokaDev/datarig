@@ -9,8 +9,8 @@ use datarig_core::config::Config;
 use datarig_core::driver::PagingMode;
 use datarig_core::driver::structure::TableStructure;
 use datarig_core::driver::{
-    Canceller, Capabilities, ColumnMeta, ColumnOrigin, ConnectOptions, DbCommand, DbEvent, Driver, KeyCatalog,
-    PingError, PingInfo, Session, SessionRole, ValueKind,
+    Canceller, Capabilities, ColumnMeta, ColumnOrigin, ConnectOptions, DbCommand, DbEvent, Driver, ExplainFormat,
+    Hierarchy, KeyCatalog, PingError, PingInfo, Session, SessionRole, ValueKind,
 };
 use datarig_core::i18n::Lang;
 use datarig_core::profile::ConnectionConfig;
@@ -92,6 +92,8 @@ impl Driver for FakeDriver {
             structure: !self.no_structure.load(Ordering::SeqCst),
             ddl: !self.no_ddl.load(Ordering::SeqCst),
             language: Language::Sql(Dialect::Postgres),
+            hierarchy: Hierarchy::DatabaseSchema,
+            explain: Some(ExplainFormat::Json),
         }
     }
 

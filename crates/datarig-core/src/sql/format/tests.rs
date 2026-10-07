@@ -1,4 +1,5 @@
 use super::*;
+use crate::sql::lexer::lex;
 
 const OPTS: Options = Options { case: KeywordCase::Preserve, indent: 4 };
 
@@ -204,6 +205,26 @@ fn random_texts_only_change_their_layout() {
             .collect();
         if let Ok((span, out)) = format(&src, OPTS, "") {
             assert_layout_only(&src[span], &out);
+        }
+    }
+}
+
+/// The formatter in PostgreSQL is the one [`format`] uses.
+#[test]
+fn format_in_postgres_is_format() {
+    let texts = [
+        "select a,b from t where x=1 and y in (select 1)",
+        "CREATE FUNCTION f() RETURNS int AS $$ SELECT  1 ;  $$ LANGUAGE sql",
+        "SELECT U&\"d\\0061t\" UESCAPE '!' FROM t",
+        "SELECT :foo, :'bar' FROM t",
+        "SELECT 1 \\gset",
+        "SELECT a - -1, a--1\n, 2",
+        "select 'unterminated",
+    ];
+    for src in texts {
+        for case in [KeywordCase::Preserve, KeywordCase::Upper] {
+            let opts = Options { case, indent: 2 };
+            assert_eq!(format_in(src, opts, "  ", Dialect::Postgres), format(src, opts, "  "), "{src:?}");
         }
     }
 }

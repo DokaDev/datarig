@@ -31,7 +31,9 @@ impl App {
                     self.flash(Notice::new(Label::DdlNoRebind, Level::Info))
                 }
                 // Another result: said, as a key that does nothing would leave the user guessing.
-                Action::ExplainAsPlan if !self.tabs.is_empty() && self.tab().is_query() => {
+                Action::ExplainAsPlan
+                    if !self.tabs.is_empty() && self.tab().is_query() && self.tab_explains(self.tab().id) =>
+                {
                     self.explain_as_plan_unavailable()
                 }
                 _ => {}

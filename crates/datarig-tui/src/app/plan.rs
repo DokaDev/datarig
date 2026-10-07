@@ -382,7 +382,7 @@ impl App {
         if self.tab_busy(self.tab().id) {
             return self.flash_busy();
         }
-        let sql = plan::explain_sql(&stmt, analyze);
+        let Some(sql) = self.tab_dialect(self.tab().id).explain_sql(&stmt, analyze) else { return };
         self.tab_mut().editor.stage_run(std::slice::from_ref(&sql), spans);
         self.run(vec![sql]);
     }
@@ -409,14 +409,15 @@ impl App {
         c
     }
 
-    /// The active tab shows the rows of an `EXPLAIN` that are not a plan (a text plan):
-    /// `results.view_as_plan` acts on them.
+    /// The active tab shows the rows of an `EXPLAIN` that are not a plan (a text plan), and
+    /// its driver produces plans: `results.view_as_plan` acts on them.
     pub fn text_plan_shown(&self) -> bool {
         if self.tabs.is_empty() {
             return false;
         }
         let t = self.tab();
-        t.exec.view == super::tabs::ResultView::Rows
+        self.tab_explains(t.id)
+            && t.exec.view == super::tabs::ResultView::Rows
             && matches!(t.results, Results::Rows(_))
             && self.text_plan().explain
     }

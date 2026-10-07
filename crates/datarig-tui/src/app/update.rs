@@ -356,11 +356,12 @@ impl App {
             self.ensure_aux(p, db);
         }
         let catalog = self.conns.catalog_in(self.tab().profile, other.as_deref());
+        let dialect = self.tab_dialect(self.tab().id);
         let t = self.tabs.active_mut();
         // The text around the cursor holds its whole `;`-delimited segment, which is all the
         // completer reads.
         let (base, text, off) = t.editor.completion_context();
-        t.popup = complete_in(&text, off, catalog, force, &path).map(|c| Popup {
+        t.popup = complete_in_dialect(&text, off, catalog, force, &path, dialect).map(|c| Popup {
             items: c.items,
             selected: 0,
             replace_start: base + c.replace_start,

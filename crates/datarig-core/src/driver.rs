@@ -52,6 +52,30 @@ pub struct Capabilities {
     /// The editor language of the driver's sessions: the SQL tools (lexing, quoting, the risk
     /// classifier) pick their rules from it.
     pub language: Language,
+    /// How the server's namespaces nest. Nothing reads it yet: the explorer and the context
+    /// picker show databases holding schemas, as PostgreSQL has them.
+    pub hierarchy: Hierarchy,
+    /// The plan the driver's sessions can produce for a statement, `None` for none: the plan
+    /// view (`query.explain`, `results.view_as_plan`) is offered only with one.
+    pub explain: Option<ExplainFormat>,
+}
+
+/// How a server's namespaces nest (`Capabilities::hierarchy`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Hierarchy {
+    /// Databases that hold schemas, a session in one database at a time (PostgreSQL).
+    DatabaseSchema,
+    /// One level: a database is the schema, and a session moves between them (MySQL's
+    /// `USE`).
+    SchemaOnly,
+}
+
+/// The format of the plan a driver produces for a statement (`Capabilities::explain`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExplainFormat {
+    /// PostgreSQL's `EXPLAIN (FORMAT JSON)` (`sql::plan::pg`), asked with
+    /// [`Dialect::explain_sql`](crate::sql::dialect::Dialect::explain_sql).
+    Json,
 }
 
 /// Where a session works: a database and a schema of the profile's server,

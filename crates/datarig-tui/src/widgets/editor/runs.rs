@@ -23,8 +23,8 @@
 
 use super::lexing::REGION_LINES;
 use super::{Editor, Sel};
-use datarig_core::sql::lexer::{Tok, lex};
-use datarig_core::sql::split::split;
+use datarig_core::sql::lexer::{Tok, lex_in};
+use datarig_core::sql::split::split_in;
 use std::collections::{HashMap, HashSet};
 
 /// Hints kept at most; past it the oldest go.
@@ -197,7 +197,7 @@ impl Editor {
         };
         let base = (self.sel != Sel::Block).then(|| self.visual_bounds().0);
         self.exit_visual();
-        let stmts = split(&sel);
+        let stmts = split_in(&sel, self.lang.dialect());
         let spans = match base {
             Some(base) => stmts.iter().map(|s| Span::new(base + s.start, base + s.end, s.end > s.body_end)).collect(),
             None => Vec::new(),
@@ -336,7 +336,7 @@ impl Editor {
         while !rest.is_char_boundary(cut) {
             cut -= 1;
         }
-        let head = lex(&rest[..cut]).first().copied()?;
+        let head = lex_in(&rest[..cut], self.lang.dialect()).first().copied()?;
         if head.is_trivia() || (head.end == cut && cut < rest.len()) {
             return None;
         }
@@ -345,7 +345,7 @@ impl Editor {
         let at = text.len();
         text.push_str(head_text);
         self.check_work += text.len();
-        let toks = lex(&text);
+        let toks = lex_in(&text, self.lang.dialect());
         if !toks.iter().any(|t| t.start == at && t.end == text.len() && t.kind == head.kind) {
             return None;
         }
@@ -414,7 +414,7 @@ impl Editor {
             let (first, last) = (lo_line.saturating_sub(k), (hi_line + k + 1).min(n));
             let (base, region) = self.region_text(first, last);
             self.check_work += region.len();
-            let toks = lex(&region);
+            let toks = lex_in(&region, self.lang.dialect());
             let mut semis = toks.iter().filter(|t| t.kind == Tok::Semi);
             let from = if base == 0 { 0 } else { semis.next().map_or(usize::MAX, |t| base + t.end) };
             let to = if last == n {
@@ -423,7 +423,7 @@ impl Editor {
                 toks.iter().rfind(|t| t.kind == Tok::Semi).map_or(0, |t| base + t.end)
             };
             // Each statement by its start: its body's end and its end; and their ends in order.
-            let split = split(&region);
+            let split = split_in(&region, self.lang.dialect());
             let stmts: HashMap<usize, (usize, usize)> =
                 split.iter().map(|st| (base + st.start, (base + st.body_end, base + st.end))).collect();
             let ends: Vec<usize> = split.iter().map(|st| base + st.end).collect();
