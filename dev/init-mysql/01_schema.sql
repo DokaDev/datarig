@@ -2,6 +2,9 @@
 -- Compatible with MySQL 8.0+ (docker image uses 8.4 LTS)
 -- utf8mb4 / utf8mb4_0900_ai_ci everywhere so CJK text and emoji round-trip correctly.
 
+-- The image loads these files with a client in the POSIX locale (latin1): say what they are.
+SET NAMES utf8mb4;
+
 CREATE DATABASE IF NOT EXISTS shop
     CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 GRANT ALL PRIVILEGES ON shop.* TO 'datarig'@'%';

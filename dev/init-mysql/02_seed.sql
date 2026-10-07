@@ -1,6 +1,9 @@
 -- Seed data: CJK + mixed-width text, emoji, NULLs, long text, JSON, numeric
 -- Comparable to dev/init/02_seed.sql (PostgreSQL) but scaled down for MySQL.
 
+-- The image loads these files with a client in the POSIX locale (latin1): say what they are.
+SET NAMES utf8mb4;
+
 USE shop;
 
 -- Recursive CTEs below go past the default depth of 1000.
