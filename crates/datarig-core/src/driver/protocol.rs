@@ -266,6 +266,14 @@ pub struct ColumnMeta {
     pub origin: Option<ColumnOrigin>,
 }
 
+impl ColumnMeta {
+    /// A result column whose `numeric` and `json` follow from `kind`, so they cannot disagree
+    /// with it (what a driver builds; a literal must keep them in step itself).
+    pub fn new(name: String, type_name: String, kind: ValueKind, origin: Option<ColumnOrigin>) -> Self {
+        Self { name, type_name, numeric: kind.is_number(), json: kind == ValueKind::Json, kind, origin }
+    }
+}
+
 /// What kind of value a result column holds, the same for every database. A driver maps its
 /// own types to it; a type that fits none of these is [`ValueKind::Other`] (its values are
 /// still shown and copied as the text the server gives).
@@ -289,13 +297,14 @@ pub enum ValueKind {
     Bit,
     /// A calendar date.
     Date,
-    /// A time of day, with or without a time zone.
+    /// A time of day (within a day), with or without a time zone. A type that can be negative
+    /// or longer than a day (MySQL's `TIME`) is not one: it is an [`ValueKind::Interval`].
     Time,
     /// A date and time without a time zone.
     Timestamp,
     /// A date and time with a time zone (a point in time).
     TimestampTz,
-    /// A span of time (`interval`).
+    /// A span of time (`interval`; MySQL's `TIME`, which can be negative or over 24 hours).
     Interval,
     /// An array of any number of dimensions; its elements are of the [`ArrayElement`] kind.
     Array(ArrayElement),

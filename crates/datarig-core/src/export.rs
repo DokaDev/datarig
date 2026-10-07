@@ -26,6 +26,12 @@ pub enum Kind {
     /// An array (`int4[]`, any number of dimensions): nested JSON arrays of its elements (of
     /// this kind), a string literal (`'{{1,2},{3,4}}'`) in SQL.
     Array(Element),
+    /// Binary data, as the text the driver gives (PostgreSQL's `bytea`: `\x0102`). Written as
+    /// [`Kind::Text`] is in every format; kept apart so a dialect can write its own literal.
+    Bytes,
+    /// A bit string, as the text the driver gives (`0101`). Written as [`Kind::Text`] is in every
+    /// format; kept apart so a dialect can write its own literal.
+    Bit,
 }
 
 /// The kind of an array's elements.
@@ -45,6 +51,8 @@ impl Kind {
         match c.kind {
             ValueKind::Array(_) => Kind::from(c.kind),
             ValueKind::Other => Kind::of(&c.type_name, c.numeric, c.json),
+            // Whatever its kind: a type of the database's own (a domain over a number, say) may
+            // be named like an array, and such a name always made it one.
             _ if c.type_name.ends_with("[]") => Kind::of(&c.type_name, c.numeric, c.json),
             k => Kind::from(k),
         }
@@ -79,7 +87,7 @@ impl Kind {
 
 impl From<ValueKind> for Kind {
     /// Numbers and booleans are written bare where they can be, JSON embedded, arrays element
-    /// by element (an array whose text is not a comma list is text); every other kind is text.
+    /// by element; bytes and bits as such (text so far), every other kind as text.
     fn from(k: ValueKind) -> Kind {
         match k {
             ValueKind::Integer | ValueKind::Decimal | ValueKind::Float => Kind::Number,
@@ -89,9 +97,9 @@ impl From<ValueKind> for Kind {
             ValueKind::Array(ArrayElement::Bool) => Kind::Array(Element::Bool),
             ValueKind::Array(ArrayElement::Json) => Kind::Array(Element::Json),
             ValueKind::Array(ArrayElement::Text) => Kind::Array(Element::Text),
+            ValueKind::Bytes => Kind::Bytes,
+            ValueKind::Bit => Kind::Bit,
             ValueKind::Text
-            | ValueKind::Bytes
-            | ValueKind::Bit
             | ValueKind::Date
             | ValueKind::Time
             | ValueKind::Timestamp
@@ -639,6 +647,7 @@ pub fn sql_value(d: Dialect, kind: Kind, v: Option<&str>) -> String {
         // A negative zero (`-0` of a float) is quoted: bare, it is the integer 0 and loses its sign.
         Some(v) if kind == Kind::Number && sql_number(v) && !negative_zero(v) => v.to_string(),
         Some(v) if kind == Kind::Bool && (v == "true" || v == "false") => v.to_string(),
+        // Bytes (`\x…`) and bits too: PostgreSQL reads them from a string literal.
         Some(v) => d.quote_literal(v),
     }
 }

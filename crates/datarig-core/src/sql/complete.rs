@@ -259,18 +259,19 @@ pub fn complete_in(src: &str, cursor: usize, cat: &Catalog, force: bool, path: &
     let toks = lex(seg);
     // The lexer reads PostgreSQL; names are written and read back as PostgreSQL does.
     let d = Dialect::Postgres;
-    let quote = d.ident_quote();
 
     // A quoted name being typed: its opening `"` is before the cursor, with no other `"`
     // between, and after the cursor comes the end, a space or the closing `"`. (A `"` typed
     // before other quoted names pairs with the next `"`: `SELECT "Mi| FROM "t"`.)
     let open_quote = toks.iter().find(|t| {
         t.kind == Tok::QuotedIdent
-            && t.start < cur
-            && cur <= t.end
-            && !(closed(d, t, seg) && cur == t.end)
-            && !seg[t.start + 1..cur].contains(quote)
-            && seg[cur..t.end].chars().next().is_none_or(|c| c == quote || is_space(c))
+            && d.opening_quote(t.text(seg)).is_some_and(|quote| {
+                t.start < cur
+                    && cur <= t.end
+                    && !(closed(d, t, seg) && cur == t.end)
+                    && !seg[t.start + quote.len_utf8()..cur].contains(quote)
+                    && seg[cur..t.end].chars().next().is_none_or(|c| c == quote || is_space(c))
+            })
     });
 
     // No completion inside strings, comments, other quoted identifiers or dollar bodies.
@@ -290,8 +291,9 @@ pub fn complete_in(src: &str, cursor: usize, cat: &Catalog, force: bool, path: &
     // Prefix being typed.
     let (prefix_start, typed, trail) = match open_quote {
         Some(t) => {
+            let quote = d.opening_quote(t.text(seg)).unwrap_or(d.ident_quote());
             let trail = usize::from(seg[cur..].starts_with(quote) && closed(d, t, seg) && cur + 1 == t.end);
-            let text = d.unescape_ident(&seg[t.start + quote.len_utf8()..cur]);
+            let text = d.unescape_ident(quote, &seg[t.start + quote.len_utf8()..cur]);
             (t.start, Typed { text, quoted: true, dialect: d }, trail)
         }
         None => match toks.iter().find(|t| t.is_word() && t.start < cur && cur <= t.end) {
@@ -569,7 +571,7 @@ fn closed(d: Dialect, t: &Token, src: &str) -> bool {
     let s = t.text(src);
     match t.kind {
         Tok::Str => s.len() >= 2 && s.ends_with('\''),
-        Tok::QuotedIdent => s.len() >= 2 && s.ends_with(d.ident_quote()),
+        Tok::QuotedIdent => s.len() >= 2 && d.opening_quote(s).is_some_and(|q| s.ends_with(q)),
         Tok::BlockComment => s.len() >= 4 && s.ends_with("*/"),
         Tok::Dollar => {
             let tag_len = s[1..].find('$').map(|i| i + 2).unwrap_or(s.len());

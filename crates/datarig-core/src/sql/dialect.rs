@@ -18,12 +18,26 @@ pub enum Dialect {
 }
 
 impl Dialect {
-    /// The character that quotes an identifier (PostgreSQL: `"`). Inside a quoted name it is
-    /// written twice.
+    /// The character the app quotes an identifier with (PostgreSQL: `"`). Inside a quoted name
+    /// it is written twice.
     pub fn ident_quote(self) -> char {
         match self {
             Self::Postgres => '"',
         }
+    }
+
+    /// Every character an identifier may be quoted with when it is read (PostgreSQL: `"` only;
+    /// a dialect may accept more than the one it writes with, [`Dialect::ident_quote`]).
+    pub fn ident_quotes(self) -> &'static [char] {
+        match self {
+            Self::Postgres => &['"'],
+        }
+    }
+
+    /// The quote character `token` opens with, if it opens a quoted identifier
+    /// ([`Dialect::ident_quotes`]).
+    pub fn opening_quote(self, token: &str) -> Option<char> {
+        token.chars().next().filter(|c| self.ident_quotes().contains(c))
     }
 
     /// Whether `name` must be quoted to be read back as that same name: it is not what the
@@ -66,26 +80,28 @@ impl Dialect {
         }
     }
 
-    /// The name a quoted identifier `token` stands for (`"Mixed ""Q"""` → `Mixed "Q"`), or
-    /// `None` when it is not one closed quoted identifier (no closing quote, as while it is
-    /// still being typed).
+    /// The name a quoted identifier `token` stands for (`"Mixed ""Q"""` → `Mixed "Q"`): the text
+    /// between its first and last character, each doubled quote one. `None` unless `token` is at
+    /// least two characters long and starts and ends with the same quote character (no closing
+    /// one, as while it is being typed). What lies between is not checked: `"a""` (whose last
+    /// quote is escaped, so it is not closed) is read as `a"`.
     pub fn unquote(self, token: &str) -> Option<String> {
-        let q = self.ident_quote();
-        let closed = token.len() >= 2 && token.starts_with(q) && token.ends_with(q);
-        closed.then(|| self.unescape_ident(&token[q.len_utf8()..token.len() - q.len_utf8()]))
+        let q = self.opening_quote(token)?;
+        let closed = token.len() >= 2 && token.ends_with(q);
+        closed.then(|| self.unescape_ident(q, &token[q.len_utf8()..token.len() - q.len_utf8()]))
     }
 
     /// [`Dialect::unquote`] that takes what it gets: the quote characters at either end are
     /// dropped, however many there are (a name being typed has no closing one yet).
     pub fn unquote_lenient(self, token: &str) -> String {
-        self.unescape_ident(token.trim_matches(self.ident_quote()))
+        let q = self.opening_quote(token).unwrap_or(self.ident_quote());
+        self.unescape_ident(q, token.trim_matches(self.ident_quotes()))
     }
 
-    /// The text inside a quoted identifier as the name it stands for: each doubled quote
+    /// The text inside identifier quotes `quote` as the name it stands for: each doubled quote
     /// character is one.
-    pub fn unescape_ident(self, inner: &str) -> String {
-        let q = self.ident_quote();
-        inner.replace(&format!("{q}{q}"), &q.to_string())
+    pub fn unescape_ident(self, quote: char, inner: &str) -> String {
+        inner.replace(&format!("{quote}{quote}"), &quote.to_string())
     }
 }
 

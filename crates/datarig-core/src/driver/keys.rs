@@ -72,8 +72,9 @@ pub struct TableKeys {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct KeyCatalog {
     tables: BTreeMap<u32, TableKeys>,
-    /// `(schema, table)` → table id, for lookups by name (the explorer's column nodes).
-    by_name: HashMap<(String, String), u32>,
+    /// schema → table → table id, for lookups by name (the explorer's column nodes, a
+    /// [`ColumnOrigin::Named`]), without a key to allocate.
+    by_name: HashMap<String, HashMap<String, u32>>,
 }
 
 impl KeyCatalog {
@@ -83,7 +84,7 @@ impl KeyCatalog {
             .into_iter()
             .map(|(n, name)| (n, ColumnKeys { name, marks: KeyMarks::default(), generated: Generated::No }))
             .collect();
-        self.by_name.insert((schema.to_string(), name.to_string()), id);
+        self.by_name.entry(schema.to_string()).or_default().insert(name.to_string(), id);
         self.tables.insert(id, TableKeys { schema: schema.to_string(), name: name.to_string(), columns, view: false });
     }
 
@@ -128,13 +129,20 @@ impl KeyCatalog {
         self.tables.get(&table)?.columns.get(&column)
     }
 
+    /// The id of table `table` of `schema`, the names exactly as the catalog has them.
+    fn id_by_name(&self, schema: &str, table: &str) -> Option<u32> {
+        self.by_name.get(schema)?.get(table).copied()
+    }
+
     /// The table id and column number of `o`: as they are for a [`ColumnOrigin::Pg`] (known
-    /// to the catalog or not), looked up by name for a [`ColumnOrigin::Named`].
+    /// to the catalog or not), looked up by name for a [`ColumnOrigin::Named`]. Names are
+    /// compared exactly: a driver that names origins gives them as its catalog stores them (it
+    /// knows its server's case rules), and the catalog does not fold them.
     fn locate(&self, o: &ColumnOrigin) -> Option<(u32, i16)> {
         match o {
             ColumnOrigin::Pg { table, column } => Some((*table, *column)),
             ColumnOrigin::Named { schema, table, column } => {
-                let id = *self.by_name.get(&(schema.clone(), table.clone()))?;
+                let id = self.id_by_name(schema, table)?;
                 let (n, _) = self.tables.get(&id)?.columns.iter().find(|(_, c)| c.name == *column)?;
                 Some((id, *n))
             }
@@ -148,9 +156,8 @@ impl KeyCatalog {
 
     /// The keys of column `column` of `schema.table` (none when it is not known).
     pub fn marks_by_name(&self, schema: &str, table: &str, column: &str) -> KeyMarks {
-        self.by_name
-            .get(&(schema.to_string(), table.to_string()))
-            .and_then(|id| self.tables.get(id))
+        self.id_by_name(schema, table)
+            .and_then(|id| self.tables.get(&id))
             .and_then(|t| t.columns.values().find(|c| c.name == column))
             .map(|c| c.marks)
             .unwrap_or_default()
@@ -159,8 +166,8 @@ impl KeyCatalog {
     /// Table `name` of `schema`, or without a schema the one table of that name in any schema.
     pub fn find(&self, schema: Option<&str>, name: &str) -> Result<&TableKeys, NotInsertable> {
         if let Some(schema) = schema {
-            let id = self.by_name.get(&(schema.to_string(), name.to_string()));
-            return id.and_then(|id| self.tables.get(id)).ok_or(NotInsertable::NoSuchTable);
+            let id = self.id_by_name(schema, name);
+            return id.and_then(|id| self.tables.get(&id)).ok_or(NotInsertable::NoSuchTable);
         }
         let mut hits = self.tables.values().filter(|t| t.name == name);
         match (hits.next(), hits.next()) {
@@ -297,7 +304,10 @@ struct Located {
 }
 
 /// Where origin `o` is in `catalog`. A [`ColumnOrigin::Pg`] names it by number (whether the
-/// catalog knows it is checked later); a [`ColumnOrigin::Named`] needs the catalog to find it.
+/// catalog knows it is checked later); a [`ColumnOrigin::Named`] needs the catalog to find it,
+/// so a result of named origins is refused for a missing catalog or an unknown column before
+/// the checks of [`insert_source`] that come first for numbered ones (several tables, a
+/// column twice).
 fn locate(catalog: Option<&KeyCatalog>, o: &ColumnOrigin) -> Result<Located, NotInsertable> {
     let (table, column) = match o {
         ColumnOrigin::Pg { table, column } => (*table, *column),

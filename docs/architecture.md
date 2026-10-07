@@ -590,25 +590,28 @@ quoting and value kinds go through it, the lexing tools are not threaded through
   query session (`TabSession::prepared`); a new session gets a new one of the same language.
   The app calls no PostgreSQL classifier function directly; the PostgreSQL driver does.
 - **Quoting**: a `Dialect` writes names and strings and reads names back:
-  `ident_quote` (the quote character), `needs_quotes`, `quote_ident` (bare when that reads
-  back as the same name), `force_quote_ident` (always quoted), `quote_literal`, `fold` (what
-  the server makes of an unquoted name) and `unquote` (a closed quoted name; `unquote_lenient`
-  also takes one still being typed, `unescape_ident` the text inside the quotes). Every piece of
-  SQL the app writes goes through them in the tab's dialect (the classifier's language): the
-  SQL copies (`export::sql_insert`, `sql_update`, `sql_in`, `sql_value` and the writer's
-  `Format::Sql`/`Format::Update` take a `Dialect`; `OVERRIDING SYSTEM VALUE` is PostgreSQL's),
-  a table tab's `TableRef::query`, the copies' messages, and every name read out of SQL text
-  (`driver::keys`: the copy's table and `:copy insert`'s target; completion). The
-  PostgreSQL-only writers keep their wrappers over `Dialect::Postgres`: `sql::ident::sql_ident`
-  for the DDL and plan renderers, `export::quote_ident`/`quote_literal`. The PostgreSQL
-  classifier's own deparse (`risk`) and the PostgreSQL driver's quoting (`search_path`, array
-  values) stay theirs. `:use` names are the command's own syntax, not SQL (no keyword is
-  quoted): `app::command::context_name` writes them, `command::ident` reads them.
+  `ident_quote` (the quote character it writes), `ident_quotes` (those it reads; a dialect may
+  accept more), `needs_quotes`, `quote_ident` (bare when that reads back as the same name),
+  `force_quote_ident` (always quoted), `quote_literal`, `fold` (what the server makes of an
+  unquoted name) and `unquote` (a closed quoted name; `unquote_lenient` also takes one still
+  being typed, `unescape_ident` the text inside the quotes). In the tab's dialect (the
+  classifier's language, `App::tab_dialect`) they write the SQL copies (`export::sql_insert`,
+  `sql_update`, `sql_in`, `sql_value` and the writer's `Format::Sql`/`Format::Update` take a
+  `Dialect`; `OVERRIDING SYSTEM VALUE` is PostgreSQL's), a table tab's `TableRef::query` and the
+  copies' messages, and they read the names in SQL text for the copies (`driver::keys`: the
+  copied table, `:copy insert`'s target). Still PostgreSQL only: completion (it lexes as
+  PostgreSQL and uses `Dialect::Postgres` until the lexer takes a dialect), the DDL and plan
+  renderers (`sql::ddl`, `sql::plan::pg`, through the `Dialect::Postgres` wrappers
+  `sql::ident::sql_ident` and `export::quote_ident`/`quote_literal`), `sql::plan::explain`, the
+  PostgreSQL classifier's own deparse (`risk`) and the PostgreSQL driver's quoting
+  (`search_path`, array values). `:use` names are the command's own syntax, not SQL (no keyword
+  is quoted): `app::command::context_name` writes them, `command::ident` reads them.
 - **Values**: `ColumnMeta::kind` (`driver::ValueKind`: text, integer, decimal, float, bool,
   JSON, bytes, bit, date, time, timestamp, timestamp with time zone, interval, an array of
   `ArrayElement`s, other) says what a column holds whatever the server calls its type; the copy
-  (`export::Kind::of_column`) and the chart's roles read it, never `type_name`, which stays for
-  display, except where a database's own type may be named like a built-in one: an `Other`
+  (`export::Kind::of_column`, which keeps bytes and bits apart for a dialect's own literals;
+  PostgreSQL writes them as text) and the chart's roles read it, never `type_name`, which stays
+  for display, except where a database's own type may be named like a built-in one: an `Other`
   column, or one whose type is named like an array, is still read by its type name. The
   PostgreSQL driver maps its types (`values::value_kind`): numbers as `is_numeric` says (a
   domain over a number too), JSON as `is_json`, an array by its built-in element type, and any
@@ -616,7 +619,7 @@ quoting and value kinds go through it, the lexing tools are not threaded through
   database's own, and every type it does not name as `Other`. Tests over every built-in type,
   a domain and an array of each, and enums, composites and domains named like built-in types
   check that the copy and the chart treat each as they did when they read the type's name.
-  `numeric` and `json` stay, derived the same way.
+  `numeric` and `json` stay, derived from the kind (`ColumnMeta::new`).
 - **Origins**: `ColumnOrigin` is `Pg { table, column }` (a table's oid and a column's attnum,
   from the RowDescription) or `Named { schema, table, column }` (a driver that names the
   column, as MySQL's column definitions do). `KeyCatalog` finds a `Named` one by name; the

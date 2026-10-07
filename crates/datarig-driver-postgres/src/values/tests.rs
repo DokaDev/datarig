@@ -254,7 +254,12 @@ fn the_copy_kind_of_every_type_is_what_its_name_said() {
     use datarig_core::export::Kind as CopyKind;
     for ty in every_type() {
         let m = meta_of(&ty);
-        assert_eq!(CopyKind::of_column(&m), CopyKind::of(&m.type_name, m.numeric, m.json), "{}", m.type_name);
+        // Bytes and bits are kinds of their own, written as text is (see the export tests).
+        let kind = match CopyKind::of_column(&m) {
+            CopyKind::Bytes | CopyKind::Bit => CopyKind::Text,
+            k => k,
+        };
+        assert_eq!(kind, CopyKind::of(&m.type_name, m.numeric, m.json), "{}", m.type_name);
         assert_eq!(m.numeric, m.kind.is_number(), "{}", m.type_name);
         assert_eq!(m.json, m.kind == ValueKind::Json, "{}", m.type_name);
     }

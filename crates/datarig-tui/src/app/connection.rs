@@ -659,7 +659,7 @@ impl App {
             if not_loaded {
                 // Its query, not what `Ctrl+E` took in it before.
                 self.unstage_run(t);
-                self.run_in(t, vec![table.query(self.tab_language(t).dialect())]);
+                self.run_in(t, vec![table.query(self.tab_dialect(t))]);
             }
             return;
         }

@@ -301,7 +301,8 @@ pub fn roles(columns: &[ColumnMeta], sample: &[Vec<Cell>]) -> Vec<Role> {
 fn role(c: &ColumnMeta, i: usize, sample: &[Vec<Cell>]) -> Role {
     let known = match c.kind {
         ValueKind::Json | ValueKind::Array(_) => Some(Role::Unusable),
-        // A type of the database's own named like an array.
+        // Whatever its kind: a type of the database's own (a domain over a number, say) may be
+        // named like an array, and such a name always made it unusable.
         _ if c.type_name.ends_with("[]") => Some(Role::Unusable),
         k if k.is_number() => Some(Role::Number),
         ValueKind::Timestamp | ValueKind::TimestampTz => Some(Role::Time(TimeKind::DateTime)),

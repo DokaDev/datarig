@@ -40,6 +40,11 @@ fn unquoting_reads_a_quoted_name_back() {
     // The lenient form takes a name being typed, and drops every quote at either end.
     assert_eq!(d.unquote_lenient("\"open"), "open");
     assert_eq!(d.unquote_lenient("\"a\"\"b\""), "a\"b");
+    // A kept quirk: every trailing quote is dropped, the escaped one too (`a"` would be right).
     assert_eq!(d.unquote_lenient("\"a\"\"\""), "a");
-    assert_eq!(d.unescape_ident("a\"\"b\"\""), "a\"b\"");
+    // Not checked: the last quote of `"a""` is escaped, yet it reads as closed.
+    assert_eq!(d.unquote("\"a\"\"").as_deref(), Some("a\""));
+    assert_eq!(d.unescape_ident('"', "a\"\"b\"\""), "a\"b\"");
+    assert_eq!(d.ident_quotes(), &['"']);
+    assert_eq!((d.opening_quote("\"x\""), d.opening_quote("x"), d.opening_quote("")), (Some('"'), None, None));
 }

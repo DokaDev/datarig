@@ -341,3 +341,41 @@ fn updates_set_the_other_columns_where_the_key_matches() {
 }
 
 mod golden;
+
+/// Bytes and bits are written as text is, in every format.
+#[test]
+fn bytes_and_bits_are_written_as_text() {
+    let rows = [vec![Some("\\x0102ff")], vec![Some("0101")], vec![None], vec![Some("it's")]];
+    let whole = |k: Kind| {
+        let c = [col("b", k)];
+        let target = Target::Table { schema: "s", name: "t", columns: vec!["b"], overriding: false };
+        let update = UpdateTarget { schema: "s", name: "t", set: vec![(0, "b")], keys: vec![(0, "b")] };
+        let formats = [
+            Format::Tsv { header: true },
+            Format::Csv { header: true },
+            Format::Json,
+            Format::JsonPretty,
+            Format::Markdown,
+            Format::Sql(PG, target),
+            Format::List,
+            Format::Html,
+            Format::Xml,
+            Format::Update(PG, update),
+        ];
+        let mut out: Vec<String> = formats
+            .into_iter()
+            .map(|f| {
+                let mut w = Writer::new(f, &c);
+                w.rows(&rows);
+                w.finish()
+            })
+            .collect();
+        out.push(format!("{:?}", sql_in(PG, &c, &rows)));
+        out.extend(rows.iter().map(|r| sql_value(PG, k, r[0])));
+        out
+    };
+    assert_eq!(whole(Kind::Bytes), whole(Kind::Text));
+    assert_eq!(whole(Kind::Bit), whole(Kind::Text));
+    assert_eq!(Kind::from(ValueKind::Bytes), Kind::Bytes);
+    assert_eq!(Kind::from(ValueKind::Bit), Kind::Bit);
+}

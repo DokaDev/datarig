@@ -359,7 +359,7 @@ impl App {
             let t = self.tab();
             let Results::Rows(rs) = &t.results else { return };
             // The SQL formats are written in the tab's dialect.
-            let d = t.exec.prepared.language().dialect();
+            let d = self.tab_dialect(t.id);
             let columns: Vec<export::Column> = b
                 .cols
                 .iter()

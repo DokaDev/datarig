@@ -91,7 +91,7 @@ use datarig_core::profile::folder::{FolderPath, Folders};
 use datarig_core::profile::{ConnectionConfig, ProfileId};
 use datarig_core::secret::{DefaultSource, MemoryStore, SecretStore, Secrets, SourceError, SourceKind, Stores};
 use datarig_core::sql::complete::{Candidate, complete_in};
-use datarig_core::sql::dialect::Language;
+use datarig_core::sql::dialect::{Dialect, Language};
 use datarig_core::sql::risk::Classifier;
 use explorer::Explorer;
 use overlay::{Busy, Confirm, ConfirmAction, Overlay, OverlayKind, Overlays};
@@ -982,6 +982,12 @@ impl App {
     /// or driver is unknown.
     pub fn tab_language(&self, tab: TabId) -> Language {
         self.profile_language(self.tabs.get(tab).and_then(|t| t.profile))
+    }
+
+    /// The SQL dialect the app writes in for tab `tab`: its classifier's language (what its
+    /// statements are checked in), [`App::tab_language`] for a tab that is not there.
+    pub(crate) fn tab_dialect(&self, tab: TabId) -> Dialect {
+        self.tabs.get(tab).map_or_else(|| self.tab_language(tab), |t| t.exec.prepared.language()).dialect()
     }
 
     /// The language of a tab bound to `profile` ([`App::tab_language`]), before the tab exists.
