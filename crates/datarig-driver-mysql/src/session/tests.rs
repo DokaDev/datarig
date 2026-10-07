@@ -347,6 +347,17 @@ async fn an_empty_key_packet_from_the_server_is_an_error() {
     }
 }
 
+/// A relative key file is refused when the session opens (it would be read from wherever
+/// datarig was started); `~/` is the home directory.
+#[test]
+fn a_relative_server_key_file_is_refused() {
+    let target = |path: &str| Target::of(&ConnectionConfig { server_public_key_file: Some(path.into()), ..mysql("h") });
+    for path in ["keys/x.pem", "key.pem", "./key.pem", "~key.pem"] {
+        assert_eq!(target(path).err(), Some(DbError::ServerKeyPathRelative(path.into())), "{path}");
+    }
+    assert!(matches!(target("~/datarig-no-such-key.pem"), Err(DbError::ServerKeyFile { fault: Some(_), .. })));
+}
+
 /// A cached account logs in without any key, everywhere.
 #[tokio::test]
 async fn a_cached_login_needs_no_key() {

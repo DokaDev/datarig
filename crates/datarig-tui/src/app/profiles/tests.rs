@@ -241,6 +241,28 @@ fn mysql_key_options_are_edited_and_saved() {
     assert_eq!((new.server_public_key_file, new.allow_public_key_retrieval), (None, false));
 }
 
+/// The server key file must be absolute or under `~/` (a relative one would depend on the
+/// directory datarig was started in): another path is an error at once, next to the field.
+#[test]
+fn the_server_key_file_must_be_absolute_or_under_home() {
+    let my = ConnectionConfig { driver: "mysql".into(), port: 3306, ..ConnectionConfig::test_db() };
+    let mut f = ProfileForm::from_profile(&my, String::new(), Some(0));
+    focus(&mut f, Field::ServerKey);
+    let key_errors = |f: &ProfileForm| -> Vec<FieldError> {
+        f.errors(|_| false).into_iter().filter(|(field, _)| *field == Field::ServerKey).map(|(_, e)| e).collect()
+    };
+    for (path, ok) in
+        [("keys/x.pem", false), ("./k.pem", false), ("~k.pem", false), ("/k.pem", true), ("~/k.pem", true)]
+    {
+        clear(&mut f);
+        typ(&mut f, path);
+        let expected = if ok { vec![] } else { vec![FieldError::AbsolutePath] };
+        assert_eq!(key_errors(&f), expected, "{path}");
+    }
+    clear(&mut f);
+    assert!(key_errors(&f).is_empty(), "none is fine");
+}
+
 /// The SSH section: off shows the switch only; on, the fields follow the way
 /// to log in and the secret's source; a profile gets tunnel settings only once turned on, and
 /// keeps them when turned off again.

@@ -11,8 +11,13 @@ use datarig_core::fault::Fault;
 /// The shortest key taken, in bits (MySQL makes 2048-bit keys).
 const MIN_BITS: usize = 2048;
 
-/// The key file `path` names (`~/` is the home directory), checked.
+/// The key file `path` names (`~/` is the home directory), checked. A path that neither
+/// starts with `~/` nor has a root is refused: it would be read from whatever directory
+/// datarig was started in.
 pub(crate) fn read(path: &str) -> Result<Vec<u8>, DbError> {
+    if !path.starts_with("~/") && !std::path::Path::new(path).has_root() {
+        return Err(DbError::ServerKeyPathRelative(path.to_string()));
+    }
     let file = match (path.strip_prefix("~/"), std::env::home_dir()) {
         (Some(rest), Some(home)) => home.join(rest),
         _ => std::path::PathBuf::from(path),

@@ -108,6 +108,9 @@ pub enum DbError {
     /// The profile's server public key file (its path, as the profile names it) cannot be
     /// used: unreadable (`Some`, why), or not an RSA public key in PEM of 2048 bits or more.
     ServerKeyFile { path: String, fault: Option<Fault> },
+    /// The profile's server public key file is a relative path (its path): it must be absolute
+    /// or start with `~/`, so it does not depend on the directory datarig was started in.
+    ServerKeyPathRelative(String),
     /// A MySQL login would encrypt the password with the server's RSA public key, and the
     /// password is too long for that key: `max` bytes at most (UTF-8; 213 with a 2048-bit key,
     /// RSA-OAEP's limit less the zero byte the client ends it with). Nothing about the password
@@ -142,6 +145,7 @@ impl DbError {
             | DbError::VersionUnsupported { .. }
             | DbError::TlsRequired
             | DbError::KeyRetrievalRefused
+            | DbError::ServerKeyPathRelative(_)
             | DbError::PasswordTooLong { .. } => Cow::Borrowed(""),
         }
     }

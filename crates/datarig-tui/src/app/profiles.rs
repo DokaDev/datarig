@@ -293,6 +293,8 @@ pub enum FieldError {
     CommandSyntax,
     /// Seconds: a whole number is needed.
     Seconds,
+    /// A file path that has no root and does not start with `~/`.
+    AbsolutePath,
 }
 
 impl FieldError {
@@ -305,6 +307,7 @@ impl FieldError {
             FieldError::EnvName => Label::ValidateEnvName,
             FieldError::CommandSyntax => Label::ValidateCommandSyntax,
             FieldError::Seconds => Label::ValidateSeconds,
+            FieldError::AbsolutePath => Label::ValidateServerKeyPath,
         }
     }
 }
@@ -1234,6 +1237,12 @@ impl ProfileForm {
                 }
             }
             _ => {}
+        }
+        // The server key file is read wherever datarig runs: absolute or under `~/` (the
+        // driver refuses any other path too).
+        let key = self.server_key.text().trim();
+        if self.is_mysql() && !key.is_empty() && !key.starts_with("~/") && !std::path::Path::new(key).has_root() {
+            out.push((Field::ServerKey, FieldError::AbsolutePath));
         }
         out.extend(self.ssh_errors());
         out

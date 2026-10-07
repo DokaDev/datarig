@@ -1362,6 +1362,9 @@ impl App {
             DbError::ServerKeyFile { path, fault: None } => {
                 return self.i18n.msg(&Msg::DbServerKeyInvalid { path: path.clone() }).to_string();
             }
+            DbError::ServerKeyPathRelative(path) => {
+                return self.i18n.msg(&Msg::DbServerKeyRelative { path: path.clone() }).to_string();
+            }
             DbError::PasswordTooLong { max } => {
                 return self.i18n.msg(&Msg::DbPasswordTooLong { max: max.to_string() }).to_string();
             }
