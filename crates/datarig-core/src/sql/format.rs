@@ -16,9 +16,14 @@
 //!   it (a psql variable) and `\` (a psql command);
 //! * two strings in a row keep a line break between them, or keep none (strings separated by a
 //!   line break are one string to the server);
-//! * the rebuilt text lexes to the input's tokens again, exactly but for the case of keywords.
+//! * the rebuilt text lexes to the input's tokens again, exactly but for the case of keywords;
+//! * MySQL: the text has no client command (`DELIMITER`) line.
+//!
+//! A keyword's case changes only where that cannot change what it names: in MySQL, only a
+//! reserved word's (a non-reserved one may be a table's name, whose case the server may keep).
 
 use super::dialect::Dialect;
+use super::ident;
 use super::lexer::{Tok, Token, lex_in};
 use std::ops::Range;
 
@@ -83,6 +88,13 @@ pub fn format_in(src: &str, opts: Options, indent: &str, d: Dialect) -> Result<(
                 from = t.end;
             }
         }
+        // A client command line changes what the text after it means to the client, and
+        // `sqlformat` lays it out as SQL.
+        Dialect::MySql(_) => {
+            if let Some(t) = input.iter().find(|t| t.kind == Tok::Directive) {
+                return Err(Refused::Changed { at: t.start });
+            }
+        }
     }
     masked.push_str(&src[from..]);
     let laid = sqlformat::format(&masked, &sqlformat::QueryParams::None, &fopts);
@@ -105,9 +117,15 @@ pub fn format_in(src: &str, opts: Options, indent: &str, d: Dialect) -> Result<(
             out.push_str(&gap);
         }
         let text = t.text(src);
-        match (t.kind, opts.case) {
-            (Tok::Keyword, KeywordCase::Upper) => out.push_str(&text.to_ascii_uppercase()),
-            (Tok::Keyword, KeywordCase::Lower) => out.push_str(&text.to_ascii_lowercase()),
+        let recase = t.kind == Tok::Keyword
+            && match d {
+                Dialect::Postgres => true,
+                // A keyword is a plain word: it needs quotes when it is reserved.
+                Dialect::MySql(_) => ident::mysql::needs_quotes(text),
+            };
+        match (recase, opts.case) {
+            (true, KeywordCase::Upper) => out.push_str(&text.to_ascii_uppercase()),
+            (true, KeywordCase::Lower) => out.push_str(&text.to_ascii_lowercase()),
             _ => out.push_str(text),
         }
     }
@@ -160,6 +178,7 @@ fn layout_only(d: Dialect, toks: &[Token], i: usize, src: &str, after: &str) -> 
     };
     let keep = (a.kind == Tok::Op && b.kind == Tok::Op)
         || match d {
+            Dialect::MySql(_) => false,
             Dialect::Postgres => {
                 unicode_escape(a, b)
                     || (i >= 2 && unicode_escape(&toks[i - 2], a))

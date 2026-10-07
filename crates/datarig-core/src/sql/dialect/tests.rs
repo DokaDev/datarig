@@ -56,7 +56,9 @@ fn postgres_tools() {
     assert_eq!(d.default_path(Some("public")), ["public"]);
     assert_eq!(d.default_path(Some("shop")), ["shop", "public"]);
     assert_eq!(d.comment_marker(), "--");
-    assert_eq!(d.uncomment_markers(), ["--"]);
+    assert_eq!(d.line_comment_at("-- x"), Some("--"));
+    assert_eq!(d.line_comment_at("--x"), Some("--"));
+    assert_eq!(d.line_comment_at("# x"), None);
     assert!(matches!(d.sqlformat_dialect(), sqlformat::Dialect::PostgreSql));
     for analyze in [false, true] {
         assert_eq!(d.explain_sql("SELECT 1", analyze), Some(crate::sql::plan::explain_sql("SELECT 1", analyze)));

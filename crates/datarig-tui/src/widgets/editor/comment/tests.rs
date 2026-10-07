@@ -231,3 +231,21 @@ fn toggle_comments_lines_in_and_out() {
     // `-- ` followed by blanks only: the blanks after it are left, without the indent.
     assert_eq!(toggle(&lines("  --  ")), lines(" "));
 }
+
+/// MySQL: lines commented with `-- ` (a blank one with `--` alone, which ends the line) come
+/// back; `#` lines are comments too; `--x` (minus minus x) is code and gets commented.
+#[test]
+fn mysql_toggles_its_own_comments() {
+    use datarig_core::sql::dialect::MySqlMode;
+    let my = Dialect::MySql(MySqlMode::default());
+    let lines = |s: &[&str]| s.iter().map(|l| l.to_string()).collect::<Vec<_>>();
+    let code = lines(&["select 1;", "", "  select 2;"]);
+    let commented = super::toggle(&code, my);
+    assert_eq!(commented, lines(&["-- select 1;", "--", "--   select 2;"]));
+    assert_eq!(super::toggle(&commented, my), code);
+    assert_eq!(super::toggle(&lines(&["# a", "  -- b", "#c"]), my), lines(&["a", "  b", "c"]));
+    assert_eq!(super::toggle(&lines(&["--x", "-- y"]), my), lines(&["-- --x", "-- -- y"]));
+    // PostgreSQL strips `--x` and keeps `#`, as before.
+    assert_eq!(toggle(&lines(&["--x", "-- y"])), lines(&["x", "y"]));
+    assert_eq!(toggle(&lines(&["# a"])), lines(&["-- # a"]));
+}

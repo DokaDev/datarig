@@ -189,5 +189,7 @@ pub fn sql_ident(name: &str) -> String {
     Dialect::Postgres.quote_ident(name)
 }
 
+pub mod mysql;
+
 #[cfg(test)]
 mod tests;

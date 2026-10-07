@@ -7,8 +7,7 @@
 //! typed prefix starts it; names the typed letters only appear in, in order, follow those.
 
 use super::dialect::Dialect;
-use super::lexer::{Tok, Token, is_space, lex_in};
-use super::split::segment_at_in;
+use super::lexer::{LexState, Tok, Token, is_space, lex_from};
 use crate::i18n::Label;
 
 #[derive(Clone, Debug, Default)]
@@ -95,10 +94,12 @@ fn kw(t: &Token, src: &str, words: &[&str]) -> bool {
     t.kind == Tok::Keyword && words.iter().any(|w| t.text(src).eq_ignore_ascii_case(w))
 }
 
-const TABLE_INTRO: &[&str] = &["FROM", "JOIN", "UPDATE", "INTO", "TABLE"];
+/// Keywords a table name follows (`STRAIGHT_JOIN` is MySQL's; PostgreSQL does not read it as a
+/// keyword).
+const TABLE_INTRO: &[&str] = &["FROM", "JOIN", "UPDATE", "INTO", "TABLE", "STRAIGHT_JOIN"];
 /// Keywords that may appear inside a FROM list without ending it.
 const FROM_LIST_OK: &[&str] =
-    &["AS", "JOIN", "LEFT", "RIGHT", "INNER", "OUTER", "FULL", "CROSS", "NATURAL", "LATERAL", "ONLY"];
+    &["AS", "JOIN", "LEFT", "RIGHT", "INNER", "OUTER", "FULL", "CROSS", "NATURAL", "LATERAL", "ONLY", "STRAIGHT_JOIN"];
 
 /// FROM/JOIN/UPDATE/INTO references with aliases (`x AS a`, `x a`) in the whole segment.
 fn table_refs(d: Dialect, toks: &[Token], src: &str) -> Vec<TableRef> {
@@ -108,8 +109,8 @@ fn table_refs(d: Dialect, toks: &[Token], src: &str) -> Vec<TableRef> {
     let mut i = 0;
     while i < sig.len() {
         let t = sig[i];
-        let starts_ref = if kw(t, src, &["FROM", "JOIN", "UPDATE", "INTO"]) {
-            in_from = kw(t, src, &["FROM", "JOIN"]);
+        let starts_ref = if kw(t, src, &["FROM", "JOIN", "STRAIGHT_JOIN", "UPDATE", "INTO"]) {
+            in_from = kw(t, src, &["FROM", "JOIN", "STRAIGHT_JOIN"]);
             true
         } else if t.kind == Tok::Comma && in_from {
             true
@@ -155,15 +156,31 @@ fn table_refs(d: Dialect, toks: &[Token], src: &str) -> Vec<TableRef> {
 
 /// The relation `schema.name`, or an unqualified `name` as the search path finds it: the
 /// first schema of `path` that has it, else (a name the path does not reach) any schema's.
-fn find_rel<'a>(cat: &'a Catalog, schema: Option<&str>, name: &str, path: &[String]) -> Option<&'a Relation> {
-    let matches = |r: &&Relation| r.name.eq_ignore_ascii_case(name);
-    match schema {
-        Some(s) => cat.relations.iter().filter(matches).find(|r| r.schema.eq_ignore_ascii_case(s)),
-        None => cat
-            .relations
-            .iter()
-            .filter(matches)
-            .min_by_key(|r| path.iter().position(|p| p.eq_ignore_ascii_case(&r.schema)).unwrap_or(path.len())),
+/// Names match whatever their ASCII case; in MySQL, which keeps a name's case (whether `Users`
+/// and `users` are one table is the server's `lower_case_table_names`), one written as it is
+/// in the catalog comes first.
+fn find_rel<'a>(
+    d: Dialect,
+    cat: &'a Catalog,
+    schema: Option<&str>,
+    name: &str,
+    path: &[String],
+) -> Option<&'a Relation> {
+    let found = |exact: bool| {
+        let same = |a: &str, b: &str| if exact { a == b } else { a.eq_ignore_ascii_case(b) };
+        let matches = |r: &&Relation| same(&r.name, name);
+        match schema {
+            Some(s) => cat.relations.iter().filter(matches).find(|r| same(&r.schema, s)),
+            None => cat
+                .relations
+                .iter()
+                .filter(matches)
+                .min_by_key(|r| path.iter().position(|p| same(p, &r.schema)).unwrap_or(path.len())),
+        }
+    };
+    match d {
+        Dialect::Postgres => found(false),
+        Dialect::MySql(_) => found(true).or_else(|| found(false)),
     }
 }
 
@@ -262,10 +279,41 @@ pub fn complete_in_dialect(
     path: &[String],
     d: Dialect,
 ) -> Option<Completion> {
-    let (seg_start, seg_end) = segment_at_in(src, cursor, d);
+    complete_from(src, cursor, cat, force, path, d, LexState::default())
+}
+
+/// [`complete_in_dialect`] for text that starts where the lexer's state is `state` (lines of a
+/// longer text: see [`lex_from`]).
+pub fn complete_from(
+    src: &str,
+    cursor: usize,
+    cat: &Catalog,
+    force: bool,
+    path: &[String],
+    d: Dialect,
+    state: LexState,
+) -> Option<Completion> {
+    // The segment around the cursor (between the statement ends around it), and the lexer's
+    // state where it starts.
+    let (mut seg_start, mut seg_end, mut seg_state) = (0, src.len(), state);
+    let mut lexed = state;
+    for t in lex_from(src, d, state) {
+        lexed = lexed.after(&t, src, d);
+        if t.ends_statement() {
+            if cursor <= t.start {
+                seg_end = t.start;
+                break;
+            }
+            // Inside a terminator of more than one character, or a client command line.
+            if cursor < t.end {
+                return None;
+            }
+            (seg_start, seg_state) = (t.end, lexed);
+        }
+    }
     let seg = &src[seg_start..seg_end];
     let cur = cursor - seg_start;
-    let toks = lex_in(seg, d);
+    let toks = lex_from(seg, d, seg_state);
 
     // A quoted name being typed: its opening `"` is before the cursor, with no other `"`
     // between, and after the cursor comes the end, a space or the closing `"`. (A `"` typed
@@ -284,7 +332,7 @@ pub fn complete_in_dialect(
     // No completion inside strings, comments, other quoted identifiers or dollar bodies.
     for t in &toks {
         let inside = match t.kind {
-            Tok::LineComment => t.start < cur && cur <= t.end,
+            Tok::LineComment | Tok::Variable => t.start < cur && cur <= t.end,
             Tok::BlockComment | Tok::Dollar => t.start < cur && (cur < t.end || !closed(d, t, seg)),
             Tok::Str => t.start < cur && (cur < t.end || !closed(d, t, seg)),
             Tok::QuotedIdent => open_quote != Some(t) && t.start < cur && (cur < t.end || !closed(d, t, seg)),
@@ -335,7 +383,7 @@ pub fn complete_in_dialect(
     let (ctx_src, ctx_toks) = match open_quote {
         Some(t) => {
             rest = format!("{}{}", &seg[..t.start], &seg[cur + trail..]);
-            (rest.as_str(), lex_in(&rest, d))
+            (rest.as_str(), lex_from(&rest, d, seg_state))
         }
         None => (seg, toks.clone()),
     };
@@ -343,15 +391,17 @@ pub fn complete_in_dialect(
     let ctes = with_queries(d, &ctx_toks, ctx_src);
     let resolve = |schema: Option<&str>, name: &str| -> Option<&Relation> {
         match schema {
-            None => ctes.iter().find(|c| c.name.eq_ignore_ascii_case(name)).or_else(|| find_rel(cat, None, name, path)),
-            Some(_) => find_rel(cat, schema, name, path),
+            None => {
+                ctes.iter().find(|c| c.name.eq_ignore_ascii_case(name)).or_else(|| find_rel(d, cat, None, name, path))
+            }
+            Some(_) => find_rel(d, cat, schema, name, path),
         }
     };
     let mut items: Vec<Ranked> = Vec::new();
 
     if let Some((qs, q)) = qualifier {
         if let Some(s) = qs {
-            if let Some(rel) = find_rel(cat, Some(&s), &q, path) {
+            if let Some(rel) = find_rel(d, cat, Some(&s), &q, path) {
                 items.extend(columns_of(rel, &typed));
             }
         } else if let Some(rel) = refs
@@ -390,7 +440,7 @@ pub fn complete_in_dialect(
             .iter()
             .filter(|r| on_path(r) && !ctes.iter().any(|c| c.name.eq_ignore_ascii_case(&r.name)))
             .filter_map(|r| rank(&r.name, prefix).map(|m| (m, r)))
-            .filter(|(_, r)| find_rel(cat, None, &r.name, path).is_some_and(|f| std::ptr::eq(f, *r)))
+            .filter(|(_, r)| find_rel(d, cat, None, &r.name, path).is_some_and(|f| std::ptr::eq(f, *r)))
             .collect();
         bare.sort_by(|a, b| a.1.name.cmp(&b.1.name));
         items.extend(bare.into_iter().map(|(m, r)| (m, relation_candidate(r, typed.ident(&r.name)))));
@@ -451,7 +501,7 @@ fn with_queries(d: Dialect, toks: &[Token], src: &str) -> Vec<Relation> {
             continue;
         }
         let mut j = i + 1;
-        if sig.get(j).is_some_and(|t| t.kind == Tok::Ident && t.text(src).eq_ignore_ascii_case("recursive"))
+        if sig.get(j).is_some_and(|t| t.is_word() && t.text(src).eq_ignore_ascii_case("recursive"))
             && sig.get(j + 1).is_some_and(|t| is_name(t))
         {
             j += 1;
@@ -577,6 +627,13 @@ fn select_list_names(d: Dialect, body: &[&Token], src: &str) -> Vec<String> {
 
 fn closed(d: Dialect, t: &Token, src: &str) -> bool {
     let s = t.text(src);
+    // MySQL: a backslash may escape the last quote, and a string's quote may be `"`: closed
+    // when a blank after it is not taken in.
+    if let Dialect::MySql(_) = d
+        && matches!(t.kind, Tok::Str | Tok::QuotedIdent | Tok::BlockComment)
+    {
+        return lex_from(&format!("{s} "), d, LexState::default()).first().is_some_and(|u| u.end == s.len());
+    }
     match t.kind {
         Tok::Str => s.len() >= 2 && s.ends_with('\''),
         Tok::QuotedIdent => s.len() >= 2 && d.opening_quote(s).is_some_and(|q| s.ends_with(q)),

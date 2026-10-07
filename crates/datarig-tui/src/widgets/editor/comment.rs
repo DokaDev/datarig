@@ -27,10 +27,9 @@ fn blank(line: &str) -> bool {
 }
 
 /// The lines toggled in dialect `d`: commented in ([`Dialect::comment_marker`]), or out when
-/// every line that is not blank is a comment ([`Dialect::uncomment_markers`]).
+/// every line that is not blank is a comment ([`Dialect::line_comment_at`]).
 pub(super) fn toggle(lines: &[String], d: Dialect) -> Vec<String> {
     let mark = d.comment_marker();
-    let marks = d.uncomment_markers();
     let mut indent: Option<&str> = None;
     let mut commented = true;
     for l in lines.iter().filter(|l| !blank(l)) {
@@ -38,13 +37,13 @@ pub(super) fn toggle(lines: &[String], d: Dialect) -> Vec<String> {
         if indent.is_none_or(|i| w < i.len()) {
             indent = Some(&l[..w]);
         }
-        commented = commented && marks.iter().any(|m| l[w..].starts_with(m));
+        commented = commented && d.line_comment_at(&l[w..]).is_some();
     }
     let indent = indent.unwrap_or("");
     lines
         .iter()
         .map(|l| match commented {
-            true => uncomment(l, marks),
+            true => uncomment(l, d),
             false if blank(l) => format!("{indent}{mark}"),
             // Every line that is not blank has at least `indent`'s bytes of blanks.
             false => format!("{indent}{mark}{SPACE}{}", &l[indent.len()..]),
@@ -52,12 +51,12 @@ pub(super) fn toggle(lines: &[String], d: Dialect) -> Vec<String> {
         .collect()
 }
 
-/// `line` without its comment marker (the first of `marks` it starts with, and the space after
+/// `line` without its comment marker (the one of dialect `d` it starts with, and the space after
 /// it); the indent goes too when only blanks are left.
-fn uncomment(line: &str, marks: &[&str]) -> String {
+fn uncomment(line: &str, d: Dialect) -> String {
     let w = indent_len(line);
     let rest = &line[w..];
-    let Some(text) = marks.iter().find_map(|m| rest.strip_prefix(m)) else { return line.to_string() };
+    let Some(text) = d.line_comment_at(rest).and_then(|m| rest.strip_prefix(m)) else { return line.to_string() };
     let text = text.strip_prefix(SPACE).unwrap_or(text);
     if blank(text) { text.to_string() } else { format!("{}{text}", &line[..w]) }
 }

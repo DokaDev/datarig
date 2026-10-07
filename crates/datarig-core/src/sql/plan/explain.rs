@@ -20,6 +20,7 @@
 //!
 //! [`risk`]: crate::sql::risk
 
+use crate::sql::dialect::Dialect;
 use crate::sql::lexer::{Tok, Token, lex};
 use crate::sql::risk::{self, Explain};
 
@@ -66,6 +67,23 @@ pub fn json(sql: &str) -> Result<JsonExplain, NotJson> {
     let plain = risk.class == risk::Class::Read && risk.danger.is_none() && !risk.runs_code && !risk.writes;
     let allowed = risk::repeat::repeatable(&out.statement).is_ok();
     Ok(JsonExplain { analyze, evaluates: out.evaluates || analyze || !plain || !allowed, ..out })
+}
+
+/// [`json`] for text in dialect `d`. Only PostgreSQL's plan options are read: another dialect's
+/// `EXPLAIN` is [`NotJson::Unreadable`].
+pub fn json_in(sql: &str, d: Dialect) -> Result<JsonExplain, NotJson> {
+    match d {
+        Dialect::Postgres => json(sql),
+        Dialect::MySql(_) => Err(NotJson::Unreadable),
+    }
+}
+
+/// [`json_text`] for text in dialect `d` (see [`json_in`]).
+pub fn json_text_in(sql: &str, d: Dialect) -> Result<JsonExplain, NotJson> {
+    match d {
+        Dialect::Postgres => json_text(sql),
+        Dialect::MySql(_) => Err(NotJson::Unreadable),
+    }
 }
 
 /// [`json`] as the lexer reads `sql`, without the parser's check.

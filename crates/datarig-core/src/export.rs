@@ -439,7 +439,7 @@ pub fn sql_insert(d: Dialect, target: &Target, columns: &[Column], rows: &[Row])
     };
     let overriding = match d {
         Dialect::Postgres if overriding => " OVERRIDING SYSTEM VALUE",
-        Dialect::Postgres => "",
+        Dialect::Postgres | Dialect::MySql(_) => "",
     };
     let list = names.iter().map(|n| d.force_quote_ident(n)).collect::<Vec<_>>().join(", ");
     let value = |c: &Column, v: Option<&str>| sql_value(d, c.kind, v);
