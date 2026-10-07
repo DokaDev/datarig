@@ -175,8 +175,8 @@ async fn the_bastion_forwards_only_where_it_allows() {
     let Some(b) = bastion("the_bastion_forwards_only_where_it_allows") else { return };
     let d = scratch("bastion-permit");
     let tunnel = open(&b, "tunnel", b.key("id_ed25519"), &d).await;
-    // `PermitOpen` lists postgres and pgbouncer only.
-    match tunnel.dial("mysql", 3306).await {
+    // `PermitOpen` lists postgres, pgbouncer and mysql:3306 only (not MySQL's X protocol port).
+    match tunnel.dial("mysql", 33060).await {
         Err(DialError::Refused { reason: Refusal::Prohibited, .. }) => {}
         other => panic!("{:?}", other.err()),
     }
