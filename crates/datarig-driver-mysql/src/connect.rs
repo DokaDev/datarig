@@ -10,6 +10,7 @@ use datarig_core::driver::{
     Session, SessionRole,
 };
 use datarig_core::fault::Fault;
+use datarig_core::panics::caught;
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
 use datarig_core::transport::DialerRef;
@@ -45,7 +46,8 @@ impl Canceller for MyCanceller {
         }
         let killer = self.killer.lock().ok().and_then(|g| g.clone());
         if let Some(killer) = killer {
-            tokio::spawn(async move { killer.kill_query().await });
+            // Unreported either way: a panic in it is only kept off the screen.
+            tokio::spawn(AssertUnwindSafe(caught(async move { killer.kill_query().await })).catch_unwind());
         }
     }
 }
@@ -120,7 +122,7 @@ impl Driver for MyDriver {
                 Ok::<_, DbError>(version?.unwrap_or_else(|| server.label()))
             };
             // A panic in the attempt fails the test like any other error.
-            match AssertUnwindSafe(tokio::time::timeout(timeout, attempt)).catch_unwind().await {
+            match AssertUnwindSafe(caught(tokio::time::timeout(timeout, attempt))).catch_unwind().await {
                 Ok(Ok(Ok(server_version))) => Ok(PingInfo { server_version, latency: start.elapsed() }),
                 Ok(Ok(Err(e))) => Err(PingError::Failed(e)),
                 Ok(Err(_)) => Err(PingError::Timeout(timeout)),
@@ -132,13 +134,14 @@ impl Driver for MyDriver {
 
 /// Run a session's task, `session` (`connected` is set before it sends `Connected`). A panic
 /// in it (a bug, here or in a crate under the driver) still ends the session with one reported
-/// failure, [`internal_error`]: `ConnectFailed` before it connected, `Lost` after.
+/// failure, [`internal_error`]: `ConnectFailed` before it connected, `Lost` after. It runs
+/// [`caught`], so the binary's panic hook leaves the terminal alone and prints nothing.
 pub(crate) async fn guarded(
     events: &UnboundedSender<DbEvent>,
     connected: &AtomicBool,
     session: impl Future<Output = ()>,
 ) {
-    if AssertUnwindSafe(session).catch_unwind().await.is_ok() {
+    if AssertUnwindSafe(caught(session)).catch_unwind().await.is_ok() {
         return;
     }
     let error = internal_error();

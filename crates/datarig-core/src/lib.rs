@@ -29,6 +29,7 @@ pub mod fault;
 pub mod fsutil;
 pub mod i18n;
 pub mod migrate;
+pub mod panics;
 pub mod paths;
 pub mod policy;
 pub mod profile;

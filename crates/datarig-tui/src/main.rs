@@ -58,12 +58,15 @@ fn main() -> ExitCode {
         }
     };
     // Every thread's panic comes here (the hook is process-wide): the terminal is restored
-    // before the message is printed. The one exception is the classifier's parse thread, whose
-    // panic is caught and only makes the statement unreadable (it asks, or a read-only policy
-    // refuses it); the app goes on, so the screen stays as it is and nothing is printed over it.
+    // before the message is printed. The exceptions are panics that are caught: the classifier's
+    // parse thread, whose panic only makes the statement unreadable (it asks, or a read-only
+    // policy refuses it), and a driver's session task (`panics::caught`), whose panic is reported
+    // as a failed or lost connection; the app goes on, so the screen stays as it is and nothing
+    // is printed over it (a driver's message could quote a password).
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        if std::thread::current().name() == Some(datarig_core::sql::risk::THREAD) {
+        if std::thread::current().name() == Some(datarig_core::sql::risk::THREAD) || datarig_core::panics::caught_here()
+        {
             return;
         }
         term::restore_terminal();
