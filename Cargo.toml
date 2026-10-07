@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/datarig-core",
     "crates/datarig-driver-postgres",
+    "crates/datarig-driver-mysql",
     "crates/datarig-ssh",
     "crates/datarig-tui",
     "crates/datarig-bench",
@@ -15,19 +16,21 @@ version = "0.11.0"
 edition = "2024"
 rust-version = "1.93"
 license = "MIT OR Apache-2.0"
-description = "A terminal database client: a DataGrip-style workspace for PostgreSQL in the terminal"
+description = "A terminal database client: a DataGrip-style workspace for PostgreSQL and MySQL in the terminal"
 repository = "https://github.com/DokaDev/datarig"
 homepage = "https://github.com/DokaDev/datarig"
 readme = "README.md"
-keywords = ["database", "postgresql", "tui", "sql", "terminal"]
+keywords = ["database", "postgresql", "mysql", "tui", "sql"]
 categories = ["command-line-utilities", "database"]
-# Not on crates.io yet: the PostgreSQL driver needs the patched tokio-postgres of `vendor/`
+# Not on crates.io yet: the drivers need the patched tokio-postgres and mysql_async of `vendor/`
 # ([patch.crates-io] below), which a published crate cannot carry.
 publish = false
 
 [workspace.dependencies]
-# Internal crates (dependency direction: tui → core ← driver-postgres, tui → ssh → core; bench → all).
+# Internal crates (dependency direction: tui → core ← driver-postgres/driver-mysql, tui → ssh → core;
+# bench → all).
 datarig-core = { path = "crates/datarig-core" }
+datarig-driver-mysql = { path = "crates/datarig-driver-mysql" }
 datarig-driver-postgres = { path = "crates/datarig-driver-postgres" }
 datarig-ssh = { path = "crates/datarig-ssh" }
 datarig-tui = { path = "crates/datarig-tui" }
@@ -44,6 +47,10 @@ hmac = "0.13"
 insta = "1.48.0"
 keyring = "4.2.0"
 log = "0.4"
+# The MySQL driver's client (the vendored copy of `vendor/`, see [patch.crates-io]): no TLS yet,
+# no compression C library (pure Rust `flate2`, never negotiated), none of the value conversion
+# features (the driver reads every value as the text the server sends).
+mysql_async = { version = "0.37.1", default-features = false, features = ["minimal-rust"] }
 # PostgreSQL's own parser (libpg_query), for the safety classifier (sql::risk).
 pg_query = "6.2"
 # pg_query decodes its parse tree with prost, whose default limit of 100 nested messages
@@ -87,8 +94,11 @@ dbg_macro = "warn"
 todo = "warn"
 
 # The query session binds portals with per-column result formats (text for types the driver
-# does not decode from binary); tokio-postgres always asks for binary. See vendor/README.md.
+# does not decode from binary); tokio-postgres always asks for binary. mysql_async connects only
+# over a socket of its own, and the MySQL driver connects over a stream it opened (an SSH
+# tunnel's channel). See vendor/README.md.
 [patch.crates-io]
+mysql_async = { path = "vendor/mysql_async" }
 tokio-postgres = { path = "vendor/tokio-postgres" }
 
 # libpg_query's parse tree is decoded (prost) and serialized (serde) by code generated in the
@@ -97,7 +107,7 @@ tokio-postgres = { path = "vendor/tokio-postgres" }
 [profile.dev.package.pg_query]
 opt-level = 2
 
-# The release binary is held to 17 MiB (crates/datarig-bench/budgets.toml): a single codegen
+# The release binary is held to 19 MiB (crates/datarig-bench/budgets.toml): a single codegen
 # unit with LTO drops the code no caller reaches, and stripping drops the symbol table (panic
 # messages keep their file and line). Without them the Linux x86_64 binary was 20.7 MiB.
 [profile.release]

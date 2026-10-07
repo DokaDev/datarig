@@ -181,6 +181,8 @@ impl App {
         t.exec.unconfirmed.clear();
         t.exec.context = None;
         t.exec.path_per_transaction = false;
+        // The new session says its own language once it connects.
+        t.exec.language = None;
         let context = t.context.clone();
         let session = self.open_session(cfg, SessionRole::Query, EventTarget::Tab(id), generation, context);
         let read_only = self.session_read_only(cfg);
@@ -189,6 +191,7 @@ impl App {
             t.exec.session = session;
             t.exec.read_only = read_only;
         }
+        self.sync_tab_language(id);
     }
 
     /// Ask the driver for a session whose events come back tagged with `target` and

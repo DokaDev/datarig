@@ -2,6 +2,7 @@ use super::*;
 
 fn dsn(user: &str, pw: Option<&str>, host: &str, port: Option<u16>, db: &str, params: &[(&str, &str)]) -> Dsn {
     Dsn {
+        scheme: Scheme::Postgres,
         user: user.into(),
         password: pw.map(Into::into),
         host: host.into(),
@@ -63,7 +64,7 @@ fn percent_encoding() {
 
 #[test]
 fn errors() {
-    assert_eq!(parse("mysql://h/db"), Err(DsnError::Scheme));
+    assert_eq!(parse("redis://h/db"), Err(DsnError::Scheme));
     assert_eq!(parse("host=localhost port=5432"), Err(DsnError::Scheme));
     assert_eq!(parse("postgres://h:abc/db"), Err(DsnError::Port("abc".into())));
     assert_eq!(parse("postgres://h:0/db"), Err(DsnError::Port("0".into())));
@@ -112,4 +113,32 @@ fn secret_span_masks_only_password() {
     let s = " postgres://u:a@b@h/d";
     let (a, b) = secret_span(s).unwrap();
     assert_eq!(&s[a..b], "a@b");
+}
+
+#[test]
+fn mysql_urls_have_their_scheme() {
+    let d = parse("mysql://datarig:pw@127.0.0.1:53306/shop").unwrap();
+    assert_eq!(d.scheme, Scheme::MySql);
+    assert_eq!((d.user.as_str(), d.password.as_deref(), d.port), ("datarig", Some("pw"), Some(53306)));
+    assert_eq!(d.database, "shop");
+    assert_eq!(parse("MariaDB://h").unwrap().scheme, Scheme::MySql);
+    assert_eq!(parse("postgresql://h").unwrap().scheme, Scheme::Postgres);
+    // Written back with the scheme it was read with (`mariadb://` as `mysql://`).
+    assert_eq!(format(&parse("mariadb://u@h:3307/db").unwrap()), "mysql://u@h:3307/db");
+    assert_eq!(format(&parse("postgres://u@h/db").unwrap()), "postgres://u@h/db");
+    assert_eq!(parse("redis://h"), Err(DsnError::Scheme));
+}
+
+#[test]
+fn schemes_of_drivers() {
+    for (driver, scheme) in [
+        ("postgres", Scheme::Postgres),
+        ("pg", Scheme::Postgres),
+        ("PostgreSQL", Scheme::Postgres),
+        ("mysql", Scheme::MySql),
+        ("MariaDB", Scheme::MySql),
+    ] {
+        assert_eq!(Scheme::of_driver(driver), scheme, "{driver}");
+    }
+    assert_eq!((Scheme::Postgres.default_port(), Scheme::MySql.default_port()), (5432, 3306));
 }

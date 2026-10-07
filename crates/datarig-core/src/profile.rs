@@ -303,13 +303,19 @@ impl ConnectionConfig {
                 Err(_) => d.clone(),
             };
         }
+        let scheme = dsn::Scheme::of_driver(&self.driver);
         dsn::format(&dsn::Dsn {
+            scheme,
             user: self.user.clone(),
             password: None,
             host: self.host.clone(),
             port: Some(self.port),
             database: self.database.clone(),
-            params: vec![("sslmode".into(), self.sslmode.clone())],
+            // MySQL connections have no TLS settings yet.
+            params: match scheme {
+                dsn::Scheme::Postgres => vec![("sslmode".into(), self.sslmode.clone())],
+                dsn::Scheme::MySql => Vec::new(),
+            },
         })
     }
 
@@ -329,15 +335,20 @@ impl ConnectionConfig {
         }
     }
 
-    /// Convert a URL `dsn` into fields when nothing would be lost.
+    /// Convert a URL `dsn` into fields when nothing would be lost: a URL of the profile's
+    /// driver with no parameters but PostgreSQL's `sslmode`.
     pub(crate) fn normalize(&mut self) {
         let Some(text) = &self.dsn else { return };
         let Ok(d) = dsn::parse(text) else { return };
-        if d.params.iter().any(|(k, v)| k != "sslmode" || !SSL_MODES.contains(&v.as_str())) {
+        if d.scheme != dsn::Scheme::of_driver(&self.driver) {
+            return;
+        }
+        let sslmode = |k: &str, v: &str| d.scheme == dsn::Scheme::Postgres && k == "sslmode" && SSL_MODES.contains(&v);
+        if d.params.iter().any(|(k, v)| !sslmode(k, v)) {
             return;
         }
         self.host = if d.host.is_empty() { default_host() } else { d.host.clone() };
-        self.port = d.port.unwrap_or(5432);
+        self.port = d.port.unwrap_or(d.scheme.default_port());
         self.user = d.user.clone();
         self.database = d.database.clone();
         if let Some(m) = d.param("sslmode") {

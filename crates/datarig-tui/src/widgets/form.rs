@@ -194,16 +194,8 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
             Some(Field::Database),
         ],
         Section::Ssh => form.ssh_fields().into_iter().map(Some).collect(),
-        Section::Advanced => {
-            vec![
-                Some(Field::SslMode),
-                Some(Field::StatementCache),
-                Some(Field::Policy),
-                Some(Field::Color),
-                Some(Field::Icon),
-                Some(Field::Folder),
-            ]
-        }
+        // The SSL mode and the statement cache are PostgreSQL's only (`ProfileForm::fields`).
+        Section::Advanced => form.fields().into_iter().filter(|f| !f.is_button()).map(Some).collect(),
     };
     for (row, f) in rows.iter().enumerate() {
         let y = inner.y + 2 + row as u16;

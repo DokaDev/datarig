@@ -71,7 +71,7 @@ jobs:
       - run: cargo test --workspace --locked --no-fail-fast
 
   integration:
-    name: integration (PostgreSQL 17, PgBouncer, SSH)
+    name: integration (PostgreSQL 17, PgBouncer, MySQL 8.4, SSH)
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -102,12 +102,33 @@ jobs:
           IGNORE_STARTUP_PARAMETERS: extra_float_digits,options
         ports:
           - 56432:5432
+      # MySQL 8.4 as in dev/docker-compose.yml (service `mysql`; utf8mb4 and utf8mb4_0900_ai_ci are
+      # 8.4's defaults), loaded with dev/init-mysql/*.sql below.
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_USER: datarig
+          MYSQL_PASSWORD: datarig
+          MYSQL_DATABASE: datarig
+          MYSQL_ROOT_PASSWORD: datarig-root
+        ports:
+          - 53306:3306
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -pdatarig-root --silent"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
     env:
       DATARIG_TEST_PG_URL: postgres://datarig:datarig@127.0.0.1:55432/datarig
       # A missing service fails its tests here instead of skipping them.
       DATARIG_REQUIRE_PG: "1"
       DATARIG_TEST_POOLER_URL: postgres://datarig:datarig@127.0.0.1:56432/datarig
       DATARIG_REQUIRE_POOLER: "1"
+      # The MySQL driver's suite (datarig-driver-mysql/tests/integration_mysql.rs); the admin URL
+      # looks at its sessions from the side (performance_schema) and makes test accounts.
+      DATARIG_TEST_MYSQL_URL: mysql://datarig:datarig@127.0.0.1:53306/shop
+      DATARIG_TEST_MYSQL_ADMIN_URL: mysql://root:datarig-root@127.0.0.1:53306/
+      DATARIG_REQUIRE_MYSQL: "1"
       # The SSH bastion started below (datarig-ssh/tests/bastion.rs, datarig-tui/tests/integration_ssh.rs).
       DATARIG_TEST_SSH_BASTION: 127.0.0.1:52222
       DATARIG_REQUIRE_SSH: "1"
@@ -118,19 +139,32 @@ jobs:
         run: bash .github/scripts/pg-query-build-deps.sh
       - name: Load dev/init/*.sql
         run: bash .github/scripts/load-test-db.sh
-      # The SSH bastion of dev/ssh on the services' network, so it reaches `postgres` and
-      # `pgbouncer` by name; its keys are made here, never committed.
+      - name: Load dev/init-mysql/*.sql
+        env:
+          MYSQL_CONTAINER: ${{ job.services.mysql.id }}
+        run: bash .github/scripts/load-mysql-test-db.sh "$MYSQL_CONTAINER"
+      # The SSH bastion of dev/ssh on the services' network, so it reaches `postgres`,
+      # `pgbouncer` and `mysql` by name; its keys are made here, never committed.
       - name: SSH bastion
         env:
           NETWORK: ${{ job.services.postgres.network }}
         run: bash .github/scripts/start-ssh-bastion.sh "$NETWORK"
+      # The MySQL client the gated MySQL tests of datarig-core read their scripts with
+      # (tests/mysql_split.rs, tests/mysql_classify.rs): the service container's own.
       - run: cargo test --workspace --locked
+        env:
+          DATARIG_TEST_MYSQL_CLIENT: docker exec -i ${{ job.services.mysql.id }} mysql -udatarig -pdatarig shop
       # The driver's PostgreSQL suite once more with every session, test connection and cancel
       # request going through a dialer (a plain TCP one), as they do through an SSH tunnel.
       - name: The PostgreSQL suite through a dialer
         env:
           DATARIG_TEST_DIAL: tcp
         run: cargo test -p datarig-driver-postgres --test integration_pg --locked
+      # The MySQL suite through a dialer likewise.
+      - name: The MySQL suite through a dialer
+        env:
+          DATARIG_TEST_DIAL: tcp
+        run: cargo test -p datarig-driver-mysql --test integration_mysql --locked
       # The tests drop the tables they create, even when they fail (tests/pg_clean in the
       # driver crate): nothing may be left in `public`, which the init scripts leave empty.
       - name: The tests left the database clean
@@ -142,6 +176,22 @@ jobs:
             "SELECT string_agg(tablename, ', ') FROM pg_tables WHERE schemaname = 'public'")
           if [ -n "$left" ]; then
             echo "tables left in public: $left"
+            exit 1
+          fi
+      # Nor anything named zz_ on the MySQL server: tables, views, routines, databases, accounts.
+      - name: The tests left the MySQL server clean
+        if: ${{ !cancelled() }}
+        env:
+          MYSQL_CONTAINER: ${{ job.services.mysql.id }}
+        run: |
+          left=$(docker exec -i "$MYSQL_CONTAINER" mysql -uroot -pdatarig-root -N -B -e "
+            SELECT CONCAT(TABLE_SCHEMA, '.', TABLE_NAME) FROM information_schema.TABLES WHERE TABLE_NAME LIKE 'zz%'
+            UNION ALL SELECT CONCAT(ROUTINE_SCHEMA, '.', ROUTINE_NAME) FROM information_schema.ROUTINES
+              WHERE ROUTINE_NAME LIKE 'zz%'
+            UNION ALL SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME LIKE 'zz%'
+            UNION ALL SELECT CONCAT(User, '@', Host) FROM mysql.user WHERE User LIKE 'zz%'" 2>/dev/null)
+          if [ -n "$left" ]; then
+            echo "left on the MySQL server: $left"
             exit 1
           fi
 

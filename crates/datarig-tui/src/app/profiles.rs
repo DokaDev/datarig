@@ -12,7 +12,7 @@
 use crate::widgets::text_input::{InputResult, TextInput};
 use datarig_core::i18n::{Label, Msg};
 use datarig_core::profile::color::{self, ProfileColor};
-use datarig_core::profile::dsn::{self, Dsn, DsnError};
+use datarig_core::profile::dsn::{self, Dsn, DsnError, Scheme};
 use datarig_core::profile::ssh::{SshAuth, SshSettings};
 use datarig_core::profile::tunnel::{self, TunnelId, TunnelPreset};
 use datarig_core::profile::{ConnectionConfig, SSL_MODES};
@@ -297,6 +297,8 @@ impl FieldError {
 pub enum DsnProblem {
     Parse(DsnError),
     Param(String),
+    /// A parameter in a `mysql://` URL, which takes none.
+    MySqlParam(String),
     SslMode(String),
 }
 
@@ -305,6 +307,7 @@ impl DsnProblem {
         match self {
             DsnProblem::Parse(e) => e.message(),
             DsnProblem::Param(p) => Msg::DsnErrParam { name: p.clone() },
+            DsnProblem::MySqlParam(p) => Msg::DsnErrParamMysql { name: p.clone() },
             DsnProblem::SslMode(v) => Msg::DsnErrSslmode { value: v.clone() },
         }
     }
@@ -663,15 +666,44 @@ impl ProfileForm {
         self.port.text().trim().parse::<u16>().ok().filter(|p| *p > 0)
     }
 
+    /// The URL scheme of the driver picked: what the DSN field is written in.
+    pub fn scheme(&self) -> Scheme {
+        Scheme::of_driver(DRIVERS[self.driver].0)
+    }
+
+    /// The driver picked is a MySQL one: the PostgreSQL-only settings (SSL mode, the
+    /// statement cache) are not shown.
+    pub fn is_mysql(&self) -> bool {
+        self.scheme() == Scheme::MySql
+    }
+
+    /// Pick driver `i`: a port still at the old driver's default moves to the new one's, and
+    /// the DSN is written in the new driver's scheme.
+    fn set_driver(&mut self, i: usize) {
+        let before = self.scheme();
+        self.driver = i;
+        let after = self.scheme();
+        if before != after && self.port_value() == Some(before.default_port()) {
+            self.port.set(&after.default_port().to_string());
+        }
+        self.sync_dsn();
+    }
+
     /// Fields -> DSN (never includes the password).
     fn sync_dsn(&mut self) {
+        let scheme = self.scheme();
         let d = Dsn {
+            scheme,
             user: self.user.text().to_string(),
             password: None,
             host: self.host.text().trim().to_string(),
             port: self.port_value(),
             database: self.database.text().to_string(),
-            params: vec![("sslmode".into(), SSL_MODES[self.sslmode].to_string())],
+            // MySQL connections have no TLS settings yet.
+            params: match scheme {
+                Scheme::Postgres => vec![("sslmode".into(), SSL_MODES[self.sslmode].to_string())],
+                Scheme::MySql => Vec::new(),
+            },
         };
         self.dsn.set(&dsn::format(&d));
         self.dsn_problem = None;
@@ -686,6 +718,26 @@ impl ProfileForm {
                 return;
             }
         };
+        // A URL of the other database picks its driver, when the app has one.
+        if d.scheme != self.scheme() {
+            let name = match d.scheme {
+                Scheme::Postgres => "postgres",
+                Scheme::MySql => "mysql",
+            };
+            match DRIVERS.iter().position(|x| x.0 == name).filter(|i| self.drivers_enabled[*i]) {
+                Some(i) => self.driver = i,
+                None => {
+                    self.dsn_problem = Some(DsnProblem::Parse(DsnError::Scheme));
+                    return;
+                }
+            }
+        }
+        if d.scheme == Scheme::MySql
+            && let Some((k, _)) = d.params.first()
+        {
+            self.dsn_problem = Some(DsnProblem::MySqlParam(k.clone()));
+            return;
+        }
         let mut sslmode = None;
         for (k, v) in &d.params {
             if k != "sslmode" {
@@ -702,7 +754,7 @@ impl ProfileForm {
         }
         self.dsn_problem = None;
         self.host.set(&d.host);
-        self.port.set(&d.port.unwrap_or(5432).to_string());
+        self.port.set(&d.port.unwrap_or(d.scheme.default_port()).to_string());
         self.user.set(&d.user);
         self.database.set(&d.database);
         if let Some(i) = sslmode {
@@ -759,10 +811,12 @@ impl ProfileForm {
             Section::Basic => &BASIC,
             Section::Advanced | Section::Ssh => &ADVANCED,
         };
+        let mysql = self.is_mysql();
         let mut out: Vec<Field> = section
             .iter()
             .copied()
             .filter(|f| !matches!(f, Field::Password | Field::Command | Field::Env) || Some(*f) == shown)
+            .filter(|f| !(mysql && matches!(f, Field::SslMode | Field::StatementCache)))
             .collect();
         if self.section == Section::Basic {
             out.push(Field::Dsn);
@@ -894,7 +948,7 @@ impl ProfileForm {
     pub fn pick(&mut self, f: Field, i: usize) {
         let keychain = |k: SourceKind| k != SourceKind::Keychain || self.keychain_ok;
         match f {
-            Field::Driver if self.drivers_enabled.get(i) == Some(&true) => self.driver = i,
+            Field::Driver if self.drivers_enabled.get(i) == Some(&true) => self.set_driver(i),
             Field::Source => {
                 if let Some(&k) = SourceKind::ALL.get(i).filter(|k| keychain(**k)) {
                     self.source = k;
@@ -970,7 +1024,7 @@ impl ProfileForm {
                 break;
             }
         }
-        self.driver = i as usize;
+        self.set_driver(i as usize);
     }
 
     /// The color the profile gets with the current choice and name.
@@ -1213,7 +1267,7 @@ impl ProfileForm {
             policy: (!policy.is_empty()).then(|| policy.to_string()),
             name: self.name.text().trim().to_string(),
             host: self.host.text().trim().to_string(),
-            port: self.port_value().unwrap_or(5432),
+            port: self.port_value().unwrap_or(self.scheme().default_port()),
             user: self.user.text().to_string(),
             password: String::new(),
             database: self.database.text().to_string(),

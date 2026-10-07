@@ -88,6 +88,14 @@ pub enum DbError {
     /// The object a lookup names does not exist (any more): renamed or dropped since it was
     /// listed, or a name that names nothing.
     NotFound,
+    /// The server's version is older than the driver supports: `server` is what it is
+    /// (`MySQL 5.7.44`), `needed` the oldest version the driver works with (`MySQL 8.0`).
+    VersionUnsupported { server: String, needed: String },
+    /// The server accepts only encrypted connections (MySQL's `require_secure_transport`), and
+    /// the driver does not encrypt yet.
+    TlsRequired,
+    /// The server asked for an authentication method the driver does not have (its name).
+    AuthUnsupported(String),
 }
 
 impl DbError {
@@ -98,6 +106,7 @@ impl DbError {
             DbError::Server(s) | DbError::NeedsNoTransaction(s) => Cow::Borrowed(s),
             DbError::Settings(f) | DbError::Connection(f) => Cow::Borrowed(&f.detail),
             DbError::Transport(e) => Cow::Borrowed(e.raw()),
+            DbError::AuthUnsupported(name) => Cow::Borrowed(name),
             DbError::Closed
             | DbError::NoAnswer(_)
             | DbError::NotSupported
@@ -109,7 +118,9 @@ impl DbError {
             | DbError::ReadWriteRefused
             | DbError::NotRepeatable(_)
             | DbError::Locked
-            | DbError::NotFound => Cow::Borrowed(""),
+            | DbError::NotFound
+            | DbError::VersionUnsupported { .. }
+            | DbError::TlsRequired => Cow::Borrowed(""),
         }
     }
 }
@@ -361,6 +372,12 @@ pub enum Outcome {
 #[derive(Debug)]
 pub enum DbEvent {
     Connected,
+    /// The language the query session's text is read in from now on, where it is the
+    /// session's own and not the driver's ([`Capabilities::language`](super::Capabilities)):
+    /// MySQL's sql mode (`ANSI_QUOTES`, `NO_BACKSLASH_ESCAPES`) and whether its server reads
+    /// dollar quotes. Sent right after `Connected`, and again when it changes (a `SET sql_mode`
+    /// the user ran), as the server confirmed it.
+    Language(crate::sql::dialect::Language),
     /// Sent right after `Connected` of a read-only session (a read-only policy) when the
     /// server did not apply the read-only default (a pooler that drops startup options): the
     /// session runs anyway, because the driver makes each transaction it opens read-only.

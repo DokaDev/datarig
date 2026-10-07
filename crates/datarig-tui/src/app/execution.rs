@@ -385,6 +385,7 @@ impl App {
     fn on_db_event_here(&mut self, ev: DbEvent) {
         let target = match &ev {
             DbEvent::Page { .. }
+            | DbEvent::Language(_)
             | DbEvent::Released { .. }
             | DbEvent::Done { .. }
             | DbEvent::Failed { .. }
@@ -661,8 +662,9 @@ impl App {
                 c.error = Some(m.clone());
                 self.status = Some(m);
             }
-            // Statement events never come from the metadata session.
-            DbEvent::Released { .. }
+            // Statement events never come from the metadata session, nor does its language.
+            DbEvent::Language(_)
+            | DbEvent::Released { .. }
             | DbEvent::Page { .. }
             | DbEvent::Done { .. }
             | DbEvent::Failed { .. }
@@ -708,6 +710,13 @@ impl App {
         let profile = self.tabs.get(id).and_then(|t| t.profile);
         if matches!(ev, DbEvent::StatementCacheOff) {
             return self.statement_cache_off(id, profile);
+        }
+        // The editor and the risk classifier read the text as the session does from now on.
+        if let DbEvent::Language(lang) = ev {
+            if let Some(t) = self.tabs.get_mut(id) {
+                t.exec.language = Some(lang);
+            }
+            return self.sync_tab_language(id);
         }
         // The run ends (its result, its outcome or its failure), or a transaction ends.
         let current = self.tabs.get(id).map_or(0, |t| t.exec.query_id);
@@ -775,8 +784,8 @@ impl App {
             }
             // Said by the profile's metadata session.
             DbEvent::ReadOnlyPerTransaction => None,
-            // Handled first (`statement_cache_off`).
-            DbEvent::StatementCacheOff => None,
+            // Handled first (`statement_cache_off`, `sync_tab_language`).
+            DbEvent::StatementCacheOff | DbEvent::Language(_) => None,
             // The server dropped the schema's startup option (a pooler): the driver sets the
             // path in each transaction instead. Said in the run's Messages.
             DbEvent::ContextPerTransaction => {
@@ -1325,6 +1334,16 @@ impl App {
             DbError::ReadWriteRefused => Label::DbReadWriteRefused,
             DbError::Locked => Label::DbLocked,
             DbError::NotFound => Label::DbNotFound,
+            DbError::TlsRequired => Label::DbTlsRequired,
+            DbError::VersionUnsupported { server, needed } => {
+                return self
+                    .i18n
+                    .msg(&Msg::DbVersionUnsupported { server: server.clone(), needed: needed.clone() })
+                    .to_string();
+            }
+            DbError::AuthUnsupported(name) => {
+                return self.i18n.msg(&Msg::DbAuthUnsupported { name: name.clone() }).to_string();
+            }
             DbError::NotRepeatable(r) => return self.i18n.msg(&super::pages::why(r)).to_string(),
             DbError::Settings(f) => {
                 ErrorLog::new(self.paths.errors_log()).record("db.settings", f);

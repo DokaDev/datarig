@@ -84,6 +84,26 @@ fn url_dsn_becomes_fields_other_dsn_kept() {
 }
 
 #[test]
+fn mysql_url_dsn_becomes_fields_of_a_mysql_profile_only() {
+    let cfg = parse(
+        "[[connections]]\nname = \"a\"\ndriver = \"mysql\"\ndsn = \"mysql://u:pw@db.example/shop\"\n\
+             [[connections]]\nname = \"b\"\ndriver = \"mysql\"\ndsn = \"mysql://h/db?sslmode=require\"\n\
+             [[connections]]\nname = \"c\"\ndsn = \"mysql://h/db\"\n\
+             [[connections]]\nname = \"d\"\ndriver = \"mysql\"\ndsn = \"postgres://h/db\"\n",
+    )
+    .unwrap();
+    let a = &cfg.connections[0];
+    assert_eq!((a.host.as_str(), a.port, a.user.as_str(), a.password.as_str()), ("db.example", 3306, "u", "pw"));
+    assert_eq!((a.database.as_str(), a.dsn.as_deref()), ("shop", None));
+    assert_eq!(a.display_dsn(), "mysql://u@db.example:3306/shop");
+    // MySQL has no `sslmode`; a URL of another database stays as it was written (the driver
+    // says what is wrong with it).
+    for c in &cfg.connections[1..] {
+        assert!(c.dsn.is_some(), "{}", c.name);
+    }
+}
+
+#[test]
 fn xdg_path_precedence() {
     let p = default_path(|k| match k {
         "XDG_CONFIG_HOME" => Some("/x".into()),

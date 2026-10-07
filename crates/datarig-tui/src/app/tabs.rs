@@ -252,6 +252,9 @@ pub struct TabSession {
     /// `session` sets the tab's search path in each transaction (the server ignored it at
     /// connect, a pooler: `DbEvent::ContextPerTransaction`).
     pub path_per_transaction: bool,
+    /// The language `session` said its text is read in (`DbEvent::Language`: a MySQL session's
+    /// sql mode); `None` until it says, and for a driver whose sessions do not.
+    pub language: Option<datarig_core::sql::dialect::Language>,
 }
 
 impl TabSession {
@@ -291,6 +294,7 @@ impl TabSession {
             unconfirmed: Vec::new(),
             context: None,
             path_per_transaction: false,
+            language: None,
         }
     }
 

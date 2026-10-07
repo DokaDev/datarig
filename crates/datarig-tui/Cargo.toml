@@ -23,6 +23,7 @@ path = "src/main.rs"
 arboard.workspace = true
 chrono.workspace = true
 datarig-core.workspace = true
+datarig-driver-mysql.workspace = true
 datarig-driver-postgres.workspace = true
 datarig-ssh.workspace = true
 crossterm.workspace = true

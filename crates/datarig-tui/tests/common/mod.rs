@@ -81,6 +81,9 @@ pub struct FakeDriver {
     pub no_ddl: Arc<AtomicBool>,
     /// Without `Capabilities::explain` (as a driver that cannot produce a statement's plan).
     pub no_explain: Arc<AtomicBool>,
+    /// A MySQL driver's language and namespaces (the default sql mode until a session says
+    /// otherwise, `DbEvent::Language`), without plans. Set before the app reads the driver.
+    pub mysql: Arc<AtomicBool>,
 }
 
 impl Driver for FakeDriver {
@@ -93,9 +96,16 @@ impl Driver for FakeDriver {
             contexts: true,
             structure: !self.no_structure.load(Ordering::SeqCst),
             ddl: !self.no_ddl.load(Ordering::SeqCst),
-            language: Language::Sql(Dialect::Postgres),
-            hierarchy: Hierarchy::DatabaseSchema,
-            explain: (!self.no_explain.load(Ordering::SeqCst)).then_some(ExplainFormat::PostgresJson),
+            language: match self.mysql.load(Ordering::SeqCst) {
+                true => Language::Sql(Dialect::MySql(Default::default())),
+                false => Language::Sql(Dialect::Postgres),
+            },
+            hierarchy: match self.mysql.load(Ordering::SeqCst) {
+                true => Hierarchy::SchemaOnly,
+                false => Hierarchy::DatabaseSchema,
+            },
+            explain: (!self.no_explain.load(Ordering::SeqCst) && !self.mysql.load(Ordering::SeqCst))
+                .then_some(ExplainFormat::PostgresJson),
         }
     }
 
@@ -499,13 +509,18 @@ impl Harness {
     }
 
     pub fn with_config(cfg: &Config, lang: Lang) -> Self {
+        Self::with_driver(cfg, lang, FakeDriver::default())
+    }
+
+    /// [`Harness::with_config`] with `driver` as the fake driver (one set up as MySQL's, say).
+    pub fn with_driver(cfg: &Config, lang: Lang, driver: FakeDriver) -> Self {
         let (mut app, clock) = new_app_with_clock(cfg, lang);
         let store = Arc::new(MemoryStore::new());
         app.set_secret_store(store.clone() as Arc<dyn SecretStore>);
-        let driver = FakeDriver::default();
         let fake = driver.clone();
         app.set_drivers(Arc::new(move |name: &str| {
-            matches!(name, "postgres" | "postgresql" | "pg").then(|| Arc::new(fake.clone()) as Arc<dyn Driver>)
+            matches!(name, "postgres" | "postgresql" | "pg" | "mysql" | "mariadb")
+                .then(|| Arc::new(fake.clone()) as Arc<dyn Driver>)
         }));
         app.attach_workspace(SAMPLE_SQL);
         // The first statement.
@@ -532,7 +547,8 @@ impl Harness {
     pub fn with_fake_driver(mut self) -> Self {
         let fake = self.driver.clone();
         self.app.set_drivers(Arc::new(move |name: &str| {
-            matches!(name, "postgres" | "postgresql" | "pg").then(|| Arc::new(fake.clone()) as Arc<dyn Driver>)
+            matches!(name, "postgres" | "postgresql" | "pg" | "mysql" | "mariadb")
+                .then(|| Arc::new(fake.clone()) as Arc<dyn Driver>)
         }));
         self
     }
