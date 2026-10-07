@@ -716,6 +716,14 @@ impl App {
             if let Some(t) = self.tabs.get_mut(id) {
                 t.exec.language = Some(lang);
             }
+            // The profile's other tabs read theirs in it until their own sessions say.
+            if let Some(p) = profile {
+                self.conns.entry(p).language = Some(lang);
+                let tabs: Vec<TabId> = self.tabs.iter().filter(|t| t.profile == Some(p)).map(|t| t.id).collect();
+                for t in tabs {
+                    self.sync_tab_language(t);
+                }
+            }
             return self.sync_tab_language(id);
         }
         // The run ends (its result, its outcome or its failure), or a transaction ends.
