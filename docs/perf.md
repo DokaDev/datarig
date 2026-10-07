@@ -51,7 +51,7 @@ DATARIG_TEST_MYSQL_URL=mysql://datarig:datarig@127.0.0.1:53306/datarig \
 |---|---|
 | Round trips of each kind of statement | Exact counts through the proxy, not times |
 | Round trips through an SSH tunnel (`[rtt_ssh]`) | The same exact counts, with the proxy in front of the bastion: the tunnel adds latency, never a round trip |
-| MySQL round trips (`[rtt_mysql]`) | Exact counts as for PostgreSQL: one per statement, the first page included; the next page asks the server about views and sets a larger limit before it runs again |
+| MySQL round trips (`[rtt_mysql]`) | Exact counts as for PostgreSQL: one per statement, the first page included; the next page asks the server about views and sets a larger limit before it runs again. Opening a session is measured with the login the server has cached: the first `caching_sha2_password` login after the server starts also asks for its public key and sends the encrypted password (two round trips more), so one login goes first, unmeasured |
 | Resident memory while paging 4,000,000 rows, and its growth from 125,000 rows on | Memory, not time; the growth must stay near zero because rows past `result_window_rows` live on disk |
 | Keystroke-to-frame p95 in a 5 MB file | About 0.5 ms on a developer machine against a 25 ms budget |
 | Visual block operators over the whole 5 MB file | The bytes one key walks are counted (in passes over the text, so a block operator that went line by line through the whole text would fail at once); the slowest key, about 130 ms on a developer machine, has a 500 ms budget |
