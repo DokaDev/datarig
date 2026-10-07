@@ -145,3 +145,15 @@ binary_mib_max = 17.0
 # screen.
 p95_ms_max = 25.0
 work_per_node_max = 4.0
+
+[chart]
+# 100,000 fetched rows (a timestamp and two numbers, spilled past the rows kept in memory) as a
+# line chart, bars and horizontal bars at 160x45 while the cursor moves. A frame draws from the
+# numbers read before: the key with its frame (a developer machine: under 0.5 ms), and the work
+# of one frame (the line chart paints its plot's cells, about 2,000; bars walk the bars on
+# screen). Reading the rows into a chart (a new result or another choice) walks each row once
+# and a line chart's points and dot columns a bounded number of times: about 4 per row for
+# lines, 1 for bars (a developer machine: 16-25 ms).
+p95_ms_max = 25.0
+work_per_frame_max = 8000.0
+build_work_per_row_max = 6.0

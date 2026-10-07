@@ -2,10 +2,12 @@
 //! `:` command line both resolve to an [`Action`] and go through `App::dispatch`, so a key and
 //! its command-line entry can never drift apart.
 
+pub use super::chart::ChartAction;
 use super::copy::{CopyFormat, CopyScope};
 use super::overlay::OverlayKind;
 pub use super::plan::{PlanAction, PlanView};
 use super::{App, Focus};
+use datarig_core::chart::Kind;
 use datarig_core::config::IconsSetting;
 use datarig_core::i18n::{I18n, Label, Lang};
 use datarig_core::secret::{DefaultSource, SourceKind};
@@ -161,6 +163,8 @@ pub enum Action {
     ExplainAsPlan,
     /// The Plan tab of the results pane.
     Plan(PlanAction),
+    /// The Chart tab of the results pane.
+    Chart(ChartAction),
 }
 
 /// What the results pane of a query tab does.
@@ -434,6 +438,25 @@ fn plan_focused(a: &App) -> bool {
     plan_shown(a) && matches!(a.focus, Focus::Results | Focus::Inspector)
 }
 
+/// The active tab shows a row result, as rows or as a chart: `results.chart` switches.
+fn chartable(a: &App) -> bool {
+    use super::tabs::ResultView;
+    has_tab(a)
+        && a.results_shown()
+        && matches!(a.tab().exec.view, ResultView::Rows | ResultView::Chart)
+        && matches!(&a.tab().results, super::Results::Rows(_))
+}
+
+/// The active tab has a chart of a row result (a kind or columns can be chosen).
+fn has_chart(a: &App) -> bool {
+    has_tab(a) && a.tab().exec.chart.is_some() && matches!(&a.tab().results, super::Results::Rows(_))
+}
+
+/// The Chart tab has the focus.
+fn chart_focused(a: &App) -> bool {
+    has_tab(a) && a.chart_shown() && matches!(a.focus, Focus::Results | Focus::Inspector)
+}
+
 /// The pane is shown and nothing is zoomed: its height can change.
 fn pane_sized(a: &App) -> bool {
     pane_shown(a) && a.zoomed().is_none()
@@ -458,6 +481,7 @@ const fn mv(action: Action, id: &'static str, label: Label, when: fn(&App) -> bo
     ActionSpec { action, id, label, when, repeatable: true }
 }
 
+use ChartAction as C;
 use ExplorerAction as E;
 use GridAction as G;
 use PlanAction as P;
@@ -807,6 +831,25 @@ pub const REGISTRY: &[ActionSpec] = &[
     mv(Action::Plan(P::PanRight), "plan.pan_right", Label::ActionPlanPanRight, plan_focused),
     act(Action::Plan(P::CopyText), "plan.copy_text", Label::ActionPlanCopyText, has_plan),
     act(Action::Plan(P::CopyJson), "plan.copy_json", Label::ActionPlanCopyJson, has_plan),
+    act(Action::Chart(C::Toggle), "results.chart", Label::ActionResultsChart, chartable),
+    mv(Action::Chart(C::Left), "chart.left", Label::ActionChartLeft, chart_focused),
+    mv(Action::Chart(C::Right), "chart.right", Label::ActionChartRight, chart_focused),
+    mv(Action::Chart(C::Up), "chart.up", Label::ActionChartUp, chart_focused),
+    mv(Action::Chart(C::Down), "chart.down", Label::ActionChartDown, chart_focused),
+    act(Action::Chart(C::First), "chart.first", Label::ActionChartFirst, chart_focused),
+    act(Action::Chart(C::Last), "chart.last", Label::ActionChartLast, chart_focused),
+    act(Action::Chart(C::NextKind(true)), "chart.kind.next", Label::ActionChartKindNext, has_chart),
+    act(Action::Chart(C::NextKind(false)), "chart.kind.prev", Label::ActionChartKindPrev, has_chart),
+    act(Action::Chart(C::Kind(Kind::Bar)), "chart.kind.bar", Label::ActionChartKindBar, has_chart),
+    act(Action::Chart(C::Kind(Kind::HBar)), "chart.kind.hbar", Label::ActionChartKindHbar, has_chart),
+    act(Action::Chart(C::Kind(Kind::Line)), "chart.kind.line", Label::ActionChartKindLine, has_chart),
+    act(Action::Chart(C::PickX), "chart.pick_x", Label::ActionChartPickX, has_chart),
+    act(Action::Chart(C::PickY), "chart.pick_y", Label::ActionChartPickY, has_chart),
+    act(Action::Chart(C::PickBy), "chart.pick_by", Label::ActionChartPickBy, has_chart),
+    act(Action::Chart(C::Log), "chart.log", Label::ActionChartLog, has_chart),
+    act(Action::Chart(C::CopyData), "chart.copy_data", Label::ActionChartCopyData, has_chart),
+    act(Action::Chart(C::CopyText), "chart.copy_text", Label::ActionChartCopyText, has_chart),
+    act(Action::Chart(C::GotoRow), "chart.goto_row", Label::ActionChartGotoRow, chart_focused),
 ];
 
 pub fn spec(a: Action) -> &'static ActionSpec {

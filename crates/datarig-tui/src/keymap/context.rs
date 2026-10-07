@@ -37,6 +37,7 @@ pub enum Ctx {
     Grid,
     Inspector,
     Plan,
+    Chart,
     Welcome,
     VimNormal,
     VimVisual,
@@ -67,7 +68,7 @@ pub enum Ctx {
 }
 
 impl Ctx {
-    pub const ALL: [Ctx; 35] = [
+    pub const ALL: [Ctx; 36] = [
         Ctx::Root,
         Ctx::Workspace,
         Ctx::Nav,
@@ -76,6 +77,7 @@ impl Ctx {
         Ctx::Grid,
         Ctx::Inspector,
         Ctx::Plan,
+        Ctx::Chart,
         Ctx::Welcome,
         Ctx::VimNormal,
         Ctx::VimVisual,
@@ -116,6 +118,7 @@ impl Ctx {
             Ctx::Grid => "grid",
             Ctx::Inspector => "inspector",
             Ctx::Plan => "plan",
+            Ctx::Chart => "chart",
             Ctx::Welcome => "welcome",
             Ctx::VimNormal => "editor.vim.normal",
             Ctx::VimVisual => "editor.vim.visual",
@@ -155,9 +158,14 @@ impl Ctx {
             Ctx::Root => None,
             Ctx::Workspace => Some(Ctx::Root),
             Ctx::Nav | Ctx::VimInsert | Ctx::VimSearch | Ctx::ExplorerFilter | Ctx::CellViewer => Some(Ctx::Workspace),
-            Ctx::Explorer | Ctx::Grid | Ctx::Inspector | Ctx::Plan | Ctx::Welcome | Ctx::VimNormal | Ctx::VimVisual => {
-                Some(Ctx::Nav)
-            }
+            Ctx::Explorer
+            | Ctx::Grid
+            | Ctx::Inspector
+            | Ctx::Plan
+            | Ctx::Chart
+            | Ctx::Welcome
+            | Ctx::VimNormal
+            | Ctx::VimVisual => Some(Ctx::Nav),
             Ctx::Ddl => Some(Ctx::VimNormal),
             _ => Some(Ctx::Root),
         }
@@ -208,6 +216,9 @@ impl Ctx {
             Ctx::Plan => {
                 "The Plan tab of the results pane (an `EXPLAIN (FORMAT JSON)` result): `j`/`k` select a node, `h`/`l` close and open its children, `Enter` shows its detail, `v`/`V` and the digits pick a view, `y`/`Y` copy the plan as text or JSON."
             }
+            Ctx::Chart => {
+                "The Chart tab of the results pane (`c` in the grid): the fetched rows of the shown result as bars or lines, nothing run again. The arrows and `h`/`j`/`k`/`l` move the cursor along the bars or points (the other direction picks a series), `Enter` shows the point's row in the grid, `v`/`V` and the digits pick the kind, `x`/`s`/`b` choose the X column, the values and a column that splits them into series, `S` a logarithmic scale, `y`/`Y` copy the numbers as TSV or the drawing as text; a click picks a point, a kind or a column choice."
+            }
             Ctx::Welcome => "The welcome panel shown while there is no connection profile.",
             Ctx::VimNormal => "Query editor, vim Normal mode (`i` starts typing).",
             Ctx::VimVisual => "Query editor, vim Visual mode (`v` by character, `V` by line, `Ctrl+V` by block).",
@@ -228,7 +239,7 @@ impl Ctx {
                 "The tab list (`Space t t`, `:tabs`, `:ls`, `:buffers`): the open tabs, the most recently active first, then the tabs closed in this run. Typing filters by name, connection, database, schema, kind or number; the arrows, `Ctrl+N`/`Ctrl+P` and `Tab` move, `Enter` goes to the tab (brings a closed one back), `Ctrl+D` closes the selected tab (asking as `Ctrl+W` does), `Esc` closes the list (`Backspace` on an empty filter does not). A click picks an entry, the wheel selects, the pointer only highlights."
             }
             Ctx::Chooser => {
-                "A list to pick from: a profile's color, icon or folder; a click picks a row, the wheel selects, the pointer only highlights."
+                "A list to pick from: a profile's color, icon or folder, a chart's columns (the values' list stays open: `Enter` adds or removes one); a click picks a row, the wheel selects, the pointer only highlights."
             }
             Ctx::ChooserFilter => "The `/` filter of a list to pick from.",
             Ctx::NameInput => "A name to type: a new or renamed folder; OK and Cancel take a click.",
@@ -277,6 +288,7 @@ impl Ctx {
             Ctx::Grid => Label::KeyctxGrid,
             Ctx::Inspector => Label::KeyctxInspector,
             Ctx::Plan => Label::KeyctxPlan,
+            Ctx::Chart => Label::KeyctxChart,
             Ctx::Welcome => Label::KeyctxWelcome,
             Ctx::VimNormal => Label::KeyctxEditorVimNormal,
             Ctx::VimVisual => Label::KeyctxEditorVimVisual,

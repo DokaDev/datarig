@@ -142,6 +142,26 @@ pub fn plan(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
     Ok(())
 }
 
+/// A chart of a large fetched result: the slowest key with its frame after the rows were read,
+/// the work of one such frame, and the work of reading the rows into the chart per row.
+pub fn chart(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
+    match f(result, &["frame_ms", "p95"]) {
+        Some(m) => c.check("chart key+frame p95", m, num(b, "chart", "p95_ms_max")?, " ms"),
+        None => c.missing("chart key+frame p95"),
+    }
+    match f(result, &["work_max"]) {
+        Some(w) if w > 0.0 => c.check("chart work per frame", w, num(b, "chart", "work_per_frame_max")?, ""),
+        _ => c.missing("chart work per frame"),
+    }
+    match f(result, &["build_work_per_row_max"]) {
+        Some(w) if w > 0.0 => {
+            c.check("chart work reading the rows", w, num(b, "chart", "build_work_per_row_max")?, "x rows")
+        }
+        _ => c.missing("chart work reading the rows"),
+    }
+    Ok(())
+}
+
 /// Visual block operators over the whole text: the slowest key with its frame, and the bytes
 /// one key walked, in passes over the text; `:%s` over the whole text likewise.
 pub fn editor_block(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {

@@ -255,6 +255,10 @@ fn ddl_state_text(app: &App) -> Option<String> {
 /// The results pane: the title with the paging state on its right, the grid, and the
 /// inspector on the right of the grid when it is shown as a panel.
 fn draw_results_pane(app: &mut App, area: Rect, buf: &mut Buffer) {
+    // The chart follows the result before its title names it.
+    if app.chart_shown() {
+        app.chart_sync();
+    }
     let (title, status) = results_title(app);
     let status = status.as_ref().map(|(texts, style)| (texts.as_slice(), *style));
     let panel_w = app.inspector_shown().then(|| crate::widgets::inspector::width_for(area.width)).flatten();
@@ -301,6 +305,8 @@ fn draw_results_pane(app: &mut App, area: Rect, buf: &mut Buffer) {
         draw_messages(app, content, buf);
     } else if app.plan_shown() {
         crate::widgets::plan::draw_plan(app, content, buf);
+    } else if app.chart_shown() {
+        crate::widgets::chart::draw_chart(app, content, buf);
     } else {
         draw_results(app, content, buf);
     }
@@ -342,6 +348,7 @@ fn draw_strip(app: &mut App, area: Rect, buf: &mut Buffer) {
     });
     let tabs = t.result_tabs();
     let plan = t.exec.plan.is_some();
+    let chart = t.exec.chart.is_some() && matches!(t.results, Results::Rows(_));
     type Item = ((Option<usize>, ResultView), String);
     let labels = |short: bool| -> Vec<Item> {
         let mut v: Vec<Item> = tabs
@@ -354,6 +361,9 @@ fn draw_strip(app: &mut App, area: Rect, buf: &mut Buffer) {
                 )
             })
             .collect();
+        if chart {
+            v.push(((None, ResultView::Chart), app.i18n.label(Label::ResultsTabChart).to_string()));
+        }
         if plan {
             v.push(((None, ResultView::Plan), app.i18n.label(Label::ResultsTabPlan).to_string()));
         }
@@ -436,7 +446,13 @@ fn strip_keys(app: &App) -> Option<String> {
     if t.result_tabs().is_empty() || app.focus != Focus::Results {
         return None;
     }
-    let ctx = if app.plan_shown() { Ctx::Plan } else { Ctx::Grid };
+    let ctx = if app.plan_shown() {
+        Ctx::Plan
+    } else if app.chart_shown() {
+        Ctx::Chart
+    } else {
+        Ctx::Grid
+    };
     let key = |next| {
         app.keymap.hint_keys(Action::ResultTab(next), ctx, app.enhanced_keys).map(|k| crate::keymap::keys::label(&k))
     };
@@ -653,6 +669,10 @@ fn results_title(app: &App) -> (datarig_core::i18n::Localized, Option<(Vec<Strin
     if let (ResultView::Plan, Some(p)) = (t.exec.view, &t.exec.plan) {
         let view = app.i18n.label(p.view.label()).to_string();
         return (app.i18n.msg(&Msg::PanePlanTitle { view }), None);
+    }
+    if let (ResultView::Chart, Some(c), Results::Rows(_)) = (t.exec.view, &t.exec.chart, &t.results) {
+        let kind = app.i18n.label(crate::widgets::chart::kind_label(c.spec.kind)).to_string();
+        return (app.i18n.msg(&Msg::PaneChartTitle { kind }), None);
     }
     let Results::Rows(rs) = &t.results else { return (app.i18n.label(Label::PaneResultsTitle), None) };
     if t.exec.view == ResultView::Messages && !t.is_table() {

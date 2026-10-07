@@ -361,10 +361,16 @@ fn every_token_of_a_theme_can_be_set_by_name() {
         danger_mark: _,
         plan_hot: _,
         plan_misestimate: _,
+        chart_1: _,
+        chart_2: _,
+        chart_3: _,
+        chart_4: _,
+        chart_5: _,
+        chart_6: _,
         dim: _,
     } = DARK;
     // Every field above but `dim`.
-    assert_eq!(COLOR_TOKENS.len() + STYLE_TOKENS.len(), 43);
+    assert_eq!(COLOR_TOKENS.len() + STYLE_TOKENS.len(), 49);
     let mut th = DARK;
     for (i, name) in COLOR_TOKENS.iter().enumerate() {
         *color_token(&mut th, name).unwrap() = Color::Indexed(i as u8);
@@ -374,6 +380,7 @@ fn every_token_of_a_theme_can_be_set_by_name() {
     }
     assert_eq!((th.bg, th.mode_fg), (Color::Indexed(0), Color::Indexed(22)));
     assert_eq!(th.plan_misestimate, Style::new().bg(Color::Indexed(119)));
+    assert_eq!(th.chart(), [23, 24, 25, 26, 27, 28].map(Color::Indexed));
     assert!(color_token(&mut th, "selection").is_none() && style_token(&mut th, "bg").is_none());
 }
 
@@ -539,6 +546,38 @@ fn plan_marks_show_and_read_in_every_theme() {
             for (token, s) in [("plan_hot", th.plan_hot), ("plan_misestimate", th.plan_misestimate)] {
                 let c = contrast(fg(s), bg);
                 assert!(c >= 3.0, "{name}: {token} on {bg:?}: {c:.2}");
+            }
+        }
+    }
+}
+
+/// A chart's series colors read on the background and on the cursor's column (3:1, marks),
+/// stay apart from each other (also in 256 colors) and from the muted "others" series, in
+/// every theme; the terminal theme uses six different ANSI colors.
+#[test]
+fn chart_series_read_and_stay_apart_in_every_theme() {
+    for (name, th) in BUILTINS.iter().copied() {
+        let colors = th.chart();
+        for (i, a) in colors.iter().enumerate() {
+            assert!(*a != th.fg_muted && *a != th.fg && *a != th.bg, "{name}: chart_{} is a text color", i + 1);
+            for b in &colors[i + 1..] {
+                assert_ne!(a, b, "{name}: two series share a color");
+            }
+        }
+    }
+    for (name, th) in rgb_themes() {
+        let colors = th.chart();
+        for (i, &c) in colors.iter().enumerate() {
+            for bg in [th.bg, bg(th.cursor_line)] {
+                let k = contrast(c, bg);
+                assert!(k >= 3.0, "{name}: chart_{} on {bg:?}: {k:.2}", i + 1);
+            }
+            assert_ne!(xterm256(c), xterm256(th.bg), "{name}: chart_{} vanishes in 256 colors", i + 1);
+            for (j, &d) in colors.iter().enumerate().skip(i + 1) {
+                assert_ne!(xterm256(c), xterm256(d), "{name}: chart_{} and chart_{} in 256 colors", i + 1, j + 1);
+                let (a, b) = (rgb_of(c), rgb_of(d));
+                let dist = ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2) + (a.2 - b.2).powi(2)).sqrt();
+                assert!(dist >= 40.0, "{name}: chart_{} and chart_{} are too close ({dist:.0})", i + 1, j + 1);
             }
         }
     }

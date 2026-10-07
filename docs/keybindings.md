@@ -138,6 +138,7 @@ Every pane that is not text input (explorer, results, vim Normal/Visual). Inside
 | `Space r z` | `results.panel.maximize` | Results pane → zoom (maximise) / restore |  |
 | `Space r +` | `results.panel.grow` | Results pane → taller | ✓ |
 | `Space r -` | `results.panel.shrink` | Results pane → shorter | ✓ |
+| `Space r c` | `results.chart` | Results → show as a chart / as rows |  |
 | `Space r n` | `results.page.next` | Results → next page | ✓ |
 | `Space r p` | `results.page.prev` | Results → previous page | ✓ |
 | `Space r #` | `results.count` | Results → count every row (runs a count query) |  |
@@ -243,6 +244,7 @@ The result grid. Inside `nav`.
 | `p` | `results.page.prev` | Results → previous page | ✓ |
 | `#` | `results.count` | Results → count every row (runs a count query) |  |
 | `P` | `results.view_as_plan` | View as plan: the text EXPLAIN again as JSON |  |
+| `c` | `results.chart` | Results → show as a chart / as rows |  |
 | `L` | `results.tab.next` | Result tabs → next |  |
 | `H` | `results.tab.prev` | Result tabs → previous |  |
 | `Esc` | `pane.back` | Back to the editor |  |
@@ -300,6 +302,45 @@ The Plan tab of the results pane (an `EXPLAIN (FORMAT JSON)` result): `j`/`k` se
 | `>` | `plan.pan_right` | Plan: move the view right | ✓ |
 | `y` | `plan.copy_text` | Plan: copy as text (as psql shows it) |  |
 | `Y` | `plan.copy_json` | Plan: copy its JSON |  |
+| `z` | `results.panel.maximize` | Results pane → zoom (maximise) / restore |  |
+| `+` | `results.panel.grow` | Results pane → taller | ✓ |
+| `-` | `results.panel.shrink` | Results pane → shorter | ✓ |
+| `L` | `results.tab.next` | Result tabs → next |  |
+| `H` | `results.tab.prev` | Result tabs → previous |  |
+| `Esc` | `pane.back` | Back to the editor |  |
+| `q` | `pane.back` | Back to the editor |  |
+
+## `chart`
+
+The Chart tab of the results pane (`c` in the grid): the fetched rows of the shown result as bars or lines, nothing run again. The arrows and `h`/`j`/`k`/`l` move the cursor along the bars or points (the other direction picks a series), `Enter` shows the point's row in the grid, `v`/`V` and the digits pick the kind, `x`/`s`/`b` choose the X column, the values and a column that splits them into series, `S` a logarithmic scale, `y`/`Y` copy the numbers as TSV or the drawing as text; a click picks a point, a kind or a column choice. Inside `nav`.
+
+| Keys | Action | Description | R |
+|---|---|---|---|
+| `h` | `chart.left` | Chart: cursor left | ✓ |
+| `Left` | `chart.left` | Chart: cursor left | ✓ |
+| `l` | `chart.right` | Chart: cursor right | ✓ |
+| `Right` | `chart.right` | Chart: cursor right | ✓ |
+| `k` | `chart.up` | Chart: cursor up | ✓ |
+| `Up` | `chart.up` | Chart: cursor up | ✓ |
+| `j` | `chart.down` | Chart: cursor down | ✓ |
+| `Down` | `chart.down` | Chart: cursor down | ✓ |
+| `g g` | `chart.first` | Chart: first point |  |
+| `Home` | `chart.first` | Chart: first point |  |
+| `G` | `chart.last` | Chart: last point |  |
+| `End` | `chart.last` | Chart: last point |  |
+| `Enter` | `chart.goto_row` | Chart: show the point's row in the grid |  |
+| `v` | `chart.kind.next` | Chart: next kind |  |
+| `V` | `chart.kind.prev` | Chart: previous kind |  |
+| `1` | `chart.kind.bar` | Chart kind: bars |  |
+| `2` | `chart.kind.hbar` | Chart kind: horizontal bars |  |
+| `3` | `chart.kind.line` | Chart kind: line |  |
+| `x` | `chart.pick_x` | Chart: choose the X column |  |
+| `s` | `chart.pick_y` | Chart: choose the value columns (Y) |  |
+| `b` | `chart.pick_by` | Chart: split the values into series by a column |  |
+| `S` | `chart.log` | Chart: logarithmic scale on or off |  |
+| `y` | `chart.copy_data` | Chart: copy its numbers as TSV |  |
+| `Y` | `chart.copy_text` | Chart: copy the drawing as text |  |
+| `c` | `results.chart` | Results → show as a chart / as rows |  |
 | `z` | `results.panel.maximize` | Results pane → zoom (maximise) / restore |  |
 | `+` | `results.panel.grow` | Results pane → taller | ✓ |
 | `-` | `results.panel.shrink` | Results pane → shorter | ✓ |
@@ -405,7 +446,7 @@ Reserved — settings screen: `j` `k` `Down` `Up` `h` `l` `Left` `Right` `Enter`
 
 ## `overlay.chooser`
 
-A list to pick from: a profile's color, icon or folder; a click picks a row, the wheel selects, the pointer only highlights. Inside `root`.
+A list to pick from: a profile's color, icon or folder, a chart's columns (the values' list stays open: `Enter` adds or removes one); a click picks a row, the wheel selects, the pointer only highlights. Inside `root`.
 
 Reserved — chooser: `j` `k` `Down` `Up` `Enter` `/` `Esc` `q`
 

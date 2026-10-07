@@ -112,6 +112,14 @@ pub struct Theme {
     pub plan_hot: Style,
     /// A plan node whose estimated rows are far from the actual rows (not drawn yet).
     pub plan_misestimate: Style,
+    /// The colors of a chart's series, in turn. Each reads on the background and stays apart
+    /// from the others, also in 256 colors (theme tests).
+    pub chart_1: Color,
+    pub chart_2: Color,
+    pub chart_3: Color,
+    pub chart_4: Color,
+    pub chart_5: Color,
+    pub chart_6: Color,
     /// How the screen behind a dialog is dimmed.
     pub dim: Dim,
 }
@@ -164,6 +172,12 @@ pub const DARK: Theme = Theme {
     danger_mark: Style::new().fg(rgb(0xE06C75)).add_modifier(Modifier::BOLD),
     plan_hot: Style::new().fg(rgb(0xE0A96D)).add_modifier(Modifier::BOLD),
     plan_misestimate: Style::new().fg(rgb(0xE6C35C)).add_modifier(Modifier::UNDERLINED),
+    chart_1: rgb(0x61AFEF),
+    chart_2: rgb(0xE0A96D),
+    chart_3: rgb(0x8FC77A),
+    chart_4: rgb(0xC678DD),
+    chart_5: rgb(0x4FB3A9),
+    chart_6: rgb(0xE06C75),
     // 55% of a color stays. Dimmed body text keeps a contrast of about 4.5:1, and every
     // dimmed token still maps to a different xterm-256 color than the dimmed background.
     dim: Dim::Blend { toward: rgb(0x0B0C10), keep: 55 },
@@ -358,7 +372,7 @@ tokens! {
     colors: bg, surface, surface_alt, border, accent, accent_warm, fg, fg_muted, fg_dim, current_stmt_bar, running_stmt_bar,
         success,
         warning, error, null_fg, key_pk, key_fk, key_uq, mode_normal, mode_insert, mode_visual, mode_command,
-        mode_fg;
+        mode_fg, chart_1, chart_2, chart_3, chart_4, chart_5, chart_6;
     styles: selection, range, cursor_line, current_stmt, running_stmt, run_hint, syn_keyword, syn_function, syn_string, syn_number,
         syn_comment, syn_operator, syn_identifier, syn_quoted_ident, search_match, match_paren, read_only_mark,
         danger_mark, plan_hot, plan_misestimate,
@@ -395,6 +409,11 @@ impl Drop for Scope {
 }
 
 impl Theme {
+    /// The colors of a chart's series, in turn.
+    pub fn chart(&self) -> [Color; 6] {
+        [self.chart_1, self.chart_2, self.chart_3, self.chart_4, self.chart_5, self.chart_6]
+    }
+
     pub fn base(&self) -> Style {
         Style::new().fg(self.fg).bg(self.bg)
     }

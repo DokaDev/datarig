@@ -459,7 +459,7 @@ fn leader_groups_list_only_what_leads_to_an_action() {
     assert!(root.contains(&("/".into(), Child::Action(action::by_id("commands.open").unwrap().action))));
     assert_eq!(km.group_label(Ctx::Explorer, &k("space r")), Some(Label::GroupResult));
     let results: Vec<String> = shown(Ctx::VimNormal, "space r").into_iter().map(|(k, _)| k).collect();
-    assert_eq!(results, ["#", "+", "-", "I", "[", "]", "a", "h", "i", "n", "p", "y", "z"]);
+    assert_eq!(results, ["#", "+", "-", "I", "[", "]", "a", "c", "h", "i", "n", "p", "y", "z"]);
     assert_eq!(km.group_label(Ctx::Explorer, &k("space r y")), Some(Label::GroupCopySelection));
     let formats: String = shown(Ctx::Grid, "space r a").into_iter().map(|(k, _)| k).collect();
     assert_eq!(formats, "JTchijlmntux", "every format, sorted by key");

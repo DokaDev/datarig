@@ -25,6 +25,9 @@ pub struct Column {
 /// A result: its columns and its rows ([`RowStore`]: a window in memory, the rest spilled).
 #[derive(Debug)]
 pub struct ResultSet {
+    /// Tells this result apart from every other one of the process (a chart follows the result
+    /// it was made for).
+    pub id: u64,
     pub columns: Vec<Column>,
     pub rows: RowStore,
     pub more: bool,
@@ -121,7 +124,9 @@ impl ResultSet {
                 Column { meta, width: header.max(vals).clamp(1, MAX_COL_WIDTH) }
             })
             .collect();
-        Self { columns, rows, more, counted: None, counted_now: false, pages_in: PagesIn::Nothing, tx: None }
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        Self { id, columns, rows, more, counted: None, counted_now: false, pages_in: PagesIn::Nothing, tx: None }
     }
 
     /// How many rows the result has, when that is known: all of them are fetched, or the

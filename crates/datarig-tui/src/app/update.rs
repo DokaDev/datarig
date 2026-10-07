@@ -533,6 +533,8 @@ impl App {
                 let d = if m.kind == MouseEventKind::ScrollRight { 1 } else { -1 };
                 if self.plan_shown() {
                     self.plan_scroll(d, true);
+                } else if self.chart_shown() {
+                    self.chart_scroll(d);
                 } else {
                     self.scroll_grid(0, d);
                 }
@@ -552,6 +554,8 @@ impl App {
                     *s = (*s as isize + d).max(0) as usize;
                 } else if inside(l.results) && self.plan_shown() {
                     self.plan_scroll(d, m.modifiers.contains(KeyModifiers::SHIFT));
+                } else if inside(l.results) && self.chart_shown() {
+                    self.chart_scroll(d);
                 } else if inside(l.results) && m.modifiers.contains(KeyModifiers::SHIFT) {
                     // Shift+wheel: the columns, one a notch.
                     self.scroll_grid(0, d.signum());
@@ -709,6 +713,13 @@ impl App {
                 self.last_click = None;
             }
             self.plan_click(x, y, double);
+        } else if inside(l.results) && self.chart_shown() {
+            self.focus = Focus::Results;
+            // A second click on the same point shows its row.
+            if self.chart_click(x, y, true) && double {
+                self.last_click = None;
+                self.chart_action(super::chart::ChartAction::GotoRow);
+            }
         } else if inside(l.results) {
             self.focus = Focus::Results;
             let t = self.tabs.active_mut();

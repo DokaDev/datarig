@@ -3,6 +3,7 @@
 //! (explorer, status bar, popups, dialogs, command line, key guide, quick connect, profile
 //! form).
 
+pub mod chart;
 pub mod editor;
 pub mod grid;
 pub mod plan;

@@ -1514,3 +1514,72 @@
 "plan.funnel.legend" = "Rows each node passed up, every loop (log scale), and what its filters removed"
 "plan.funnel.legend_estimated" = "Estimated rows per loop (log scale): not measured (no ANALYZE)"
 "plan.funnel.removed" = "−{rows} filtered"
+"results.tab.chart" = "Chart"
+"pane.chart.title" = "Chart · {kind}"
+"keyctx.chart" = "Chart"
+"hint.chart_kind" = "kind"
+"hint.chart_x" = "X"
+"hint.chart_y" = "values"
+"hint.chart_rows" = "rows"
+"action.results.chart" = "Results → show as a chart / as rows"
+"action.chart.left" = "Chart: cursor left"
+"action.chart.right" = "Chart: cursor right"
+"action.chart.up" = "Chart: cursor up"
+"action.chart.down" = "Chart: cursor down"
+"action.chart.first" = "Chart: first point"
+"action.chart.last" = "Chart: last point"
+"action.chart.kind.next" = "Chart: next kind"
+"action.chart.kind.prev" = "Chart: previous kind"
+"action.chart.kind.bar" = "Chart kind: bars"
+"action.chart.kind.hbar" = "Chart kind: horizontal bars"
+"action.chart.kind.line" = "Chart kind: line"
+"action.chart.pick_x" = "Chart: choose the X column"
+"action.chart.pick_y" = "Chart: choose the value columns (Y)"
+"action.chart.pick_by" = "Chart: split the values into series by a column"
+"action.chart.log" = "Chart: logarithmic scale on or off"
+"action.chart.copy_data" = "Chart: copy its numbers as TSV"
+"action.chart.copy_text" = "Chart: copy the drawing as text"
+"action.chart.goto_row" = "Chart: show the point's row in the grid"
+"chart.kind.bar" = "Bars"
+"chart.kind.hbar" = "Horizontal bars"
+"chart.kind.line" = "Line"
+"chart.field.x" = "X"
+"chart.field.y" = "Y"
+"chart.field.by" = "by"
+"chart.scale.linear" = "linear scale"
+"chart.scale.log" = "log scale"
+"chart.none" = "none"
+"chart.row_number" = "row number"
+"chart.others" = "others"
+"chart.others_series" = { one = "others ({count} series)", other = "others ({count} series)" }
+"chart.rows" = { one = "{count} fetched row", other = "{count} fetched rows" }
+"chart.rows_more" = { one = "first {count} fetched row · more on the server", other = "first {count} fetched rows · more on the server" }
+"chart.unsuitable.no_rows" = "Nothing to chart: the result has no rows."
+"chart.unsuitable.no_number" = "Nothing to chart: no column holds numbers. A chart needs a numeric column for its values."
+"chart.unsuitable.no_series" = "No values chosen: pick at least one numeric column."
+"chart.unsuitable.no_values" = "Nothing to chart: every value to draw is NULL or not a number."
+"chart.unsuitable.one_point" = "Only one point to draw: nothing to compare it with."
+"chart.keys_hint" = "{x} X column · {y} values · {by} series by a column · {kind} kind"
+"chart.unreadable" = "The rows could not be read from the result's spill file; the error log has the details."
+"chart.too_small" = "Too small to draw a chart."
+"chart.note.nulls" = { one = "{count} NULL skipped", other = "{count} NULLs skipped" }
+"chart.note.not_numbers" = { one = "{count} value not a number skipped", other = "{count} values not numbers skipped" }
+"chart.note.summed" = "rows with the same X summed"
+"chart.note.others" = { one = "others = {count} smaller category", other = "others = {count} smaller categories" }
+"chart.note.others_series" = { one = "others = {count} smaller series", other = "others = {count} smaller series" }
+"chart.note.log" = { one = "{count} value of zero or less not on the log scale", other = "{count} values of zero or less not on the log scale" }
+"chart.readout.row" = "row {row}"
+"chart.readout.rows" = { one = "{count} row (row {row})", other = "{count} rows summed (first: row {row})" }
+"chart.readout.others" = { one = "{count} category summed", other = "{count} categories summed" }
+"chart.copied" = { one = "Copied the chart's numbers as TSV ({count} line, {method})", other = "Copied the chart's numbers as TSV ({count} lines, {method})" }
+"chart.copied_text" = { one = "Copied the chart as text ({count} line, {method})", other = "Copied the chart as text ({count} lines, {method})" }
+"chart.nothing_to_copy" = "Nothing to copy: the chart has no numbers."
+"chart.others_no_row" = "The others bar sums several categories: it has no row of its own."
+"chart.pick.x" = "Chart: X axis"
+"chart.pick.y" = "Chart: values (Enter adds or removes, Esc done)"
+"chart.pick.y_one" = "Chart: the value split into series"
+"chart.pick.by" = "Chart: split the values into series by"
+"chart.pick.stale" = "Not applied: the result changed since the list opened."
+"chart.too_many_series" = { one = "At most {count} value column", other = "At most {count} value columns" }
+"chart.rows_short" = { one = "{count} row", other = "{count} rows" }
+"chart.rows_more_short" = { one = "{count}+ row", other = "{count}+ rows" }
