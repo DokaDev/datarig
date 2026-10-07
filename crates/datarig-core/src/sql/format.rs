@@ -19,7 +19,8 @@
 //! * two strings in a row keep a line break between them, or keep none (strings separated by a
 //!   line break are one string to the server);
 //! * the rebuilt text lexes to the input's tokens again, exactly but for the case of keywords;
-//! * MySQL: the text has no client command (`DELIMITER`) line.
+//! * MySQL: the text has no client command (`DELIMITER`) line, and no backslash at a line's
+//!   end (the client drops it, and the layout would too).
 //!
 //! A keyword's case changes only where that cannot change what it names: in MySQL, only a
 //! reserved word's (a non-reserved one may be a table's name, whose case the server may keep).
@@ -135,6 +136,11 @@ pub fn format_in(src: &str, opts: Options, indent: &str, d: Dialect) -> Result<(
         // `sqlformat` lays it out as SQL.
         Dialect::MySql(_) => {
             if let Some(t) = input.iter().find(|t| t.kind == Tok::Directive) {
+                return Err(Refused::Changed { at: t.start });
+            }
+            // A backslash at a line's end, which the client drops: the layout would drop it
+            // too, without a word.
+            if let Some(t) = lex(src).into_iter().find(|t| t.kind == Tok::Whitespace && t.text(src).starts_with('\\')) {
                 return Err(Refused::Changed { at: t.start });
             }
         }
