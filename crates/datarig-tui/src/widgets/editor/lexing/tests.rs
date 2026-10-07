@@ -40,6 +40,8 @@ fn sqlish(rng: &mut Rng, pieces: usize) -> String {
         "BEGIN",
         "'unterminated",
         "/* open",
+        "\n;",
+        ";SELECT 2",
     ];
     (0..pieces).map(|_| P[rng.below(P.len())]).collect()
 }
@@ -131,8 +133,8 @@ fn the_statement_under_the_cursor_is_the_one_in_the_whole_text() {
         let n = 10 + rng.below(60);
         let text = sqlish(&mut rng, n);
         let mut e = Editor::new(&text);
-        // Search a single line around the cursor first, so the region has to grow.
-        e.region = 1;
+        // Search one to three lines around the cursor first, so the region has to grow.
+        e.region = 1 + rng.below(3);
         let stmts = split(&text);
         for row in 0..e.lines.len() {
             for col in 0..=e.gcount(row) {
@@ -171,4 +173,29 @@ fn set_language_keeps_the_states_of_the_same_language() {
     e.valid = 0;
     e.ensure_states(usize::MAX);
     assert_eq!(e.states[..e.valid], states_of(text)[..]);
+}
+
+/// Right after a `;` that starts its line, below lines that do not reach the statement it ends,
+/// the cursor is in that statement, as in the whole text (not in the one after it). The first
+/// texts are that case; the last ones (nothing before the `;`, or the next statement on another
+/// line) were right before and must stay so.
+#[test]
+fn right_after_a_semicolon_that_starts_its_line_is_the_statement_it_ends() {
+    for text in [
+        "select 1\n\n;select 2",
+        "select 1\n-- c\n;select 2",
+        "select 1;\n\n;select 2",
+        "select 1\n\n\n\n\n\n;\nselect 2",
+        "\n\n;select 2",
+    ] {
+        let mut e = Editor::new(text);
+        e.region = 1;
+        let off = text.find("\n;").expect("a ; starting a line") + 2;
+        e.row = text[..off].matches('\n').count();
+        e.col = 1;
+        assert_eq!(e.offset(), off);
+        let stmts = split(text);
+        let want = statement_at(&stmts, off).map(|i| (stmts[i].start, stmts[i].end, stmts[i].body(text).to_string()));
+        assert_eq!(e.current_statement(), want, "{text:?}");
+    }
 }
