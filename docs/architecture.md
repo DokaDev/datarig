@@ -247,8 +247,10 @@ Held by CI budgets (`docs/perf.md`).
   (`tab_hits`, `strip_hits`, `Layout::page_prev`/`page_next`, `PlanTab::view_hits`) and keeps it
   in `App::pointer_on`; a frame that lays those hits out otherwise (a tab closed or added, the bar
   scrolled, a resize) drops it before it is drawn, so no light is left on something else, and
-  none is drawn under a dialog. The light is `widgets::pointer_style` (the text on the
-  selection, readable on every theme; the rest of a tab is underlined).
+  none is drawn under a dialog. The light of the scroll marks, the strip, the arrows and the view
+  names is `widgets::pointer_style` (the text on the selection, readable on every theme); a tab's
+  `×` changes its text color alone, to the theme's error color (an ANSI red on `terminal`), and
+  the tab's own text is not marked.
 - **Run keys the terminal can send.** `keymap::works` leaves `Ctrl+Enter` out of the keyboard
   help, the command line's list and the hints (`Keymap::hint_keys`) when the kitty keyboard
   protocol was not granted; `Ctrl+E` is bound wherever `Ctrl+Enter` is.
