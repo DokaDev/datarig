@@ -126,8 +126,10 @@ impl Editor {
                 // A statement before the region's first `;` may have started before the region.
                 let whole_from =
                     if base == 0 { 0 } else { toks.iter().find(|t| t.kind == Tok::Semi).map_or(usize::MAX, |t| t.end) };
+                // Right after that `;`, the cursor is in the statement it ends, when there is one.
+                let ends_before = base != 0 && c == whole_from;
                 match statement_at(&stmts, c) {
-                    Some(i) if stmts[i].start >= whole_from => {
+                    Some(i) if stmts[i].start >= whole_from && !ends_before => {
                         let st = stmts[i];
                         return Some((base + st.start, base + st.end, st.body(&region).to_string()));
                     }

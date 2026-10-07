@@ -172,3 +172,20 @@ fn set_language_keeps_the_states_of_the_same_language() {
     e.ensure_states(usize::MAX);
     assert_eq!(e.states[..e.valid], states_of(text)[..]);
 }
+
+/// Right after a `;` that starts its line, below lines that do not reach the statement it ends,
+/// the cursor is in that statement, as in the whole text (not in the one after it).
+#[test]
+fn right_after_a_semicolon_that_starts_its_line_is_the_statement_it_ends() {
+    for text in ["select 1\n\n;select 2", "select 1\n\n\n\n\n\n;\nselect 2", "\n\n;select 2"] {
+        let mut e = Editor::new(text);
+        e.region = 1;
+        let off = text.find(';').expect("a ;") + 1;
+        e.row = text[..off].matches('\n').count();
+        e.col = 1;
+        assert_eq!(e.offset(), off);
+        let stmts = split(text);
+        let want = statement_at(&stmts, off).map(|i| (stmts[i].start, stmts[i].end, stmts[i].body(text).to_string()));
+        assert_eq!(e.current_statement(), want, "{text:?}");
+    }
+}
