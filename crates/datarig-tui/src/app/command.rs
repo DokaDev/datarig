@@ -661,6 +661,16 @@ pub enum ArgCompletion {
     Scope(usize, usize),
 }
 
+/// `name` as `:use` takes it (what [`ident`] reads back as `name`): as it is when it is lower-case
+/// ASCII letters, digits and `_` (not starting with a digit), else quoted with `"` doubled. This
+/// is the command's own syntax, not SQL: keywords need no quotes.
+pub(super) fn context_name(name: &str) -> String {
+    let plain = !name.is_empty()
+        && name.chars().all(|c| c == '_' || c.is_ascii_lowercase() || c.is_ascii_digit())
+        && !name.starts_with(|c: char| c.is_ascii_digit());
+    if plain { name.to_string() } else { format!("\"{}\"", name.replace('"', "\"\"")) }
+}
+
 /// An identifier of `:use` as typed: `"quoted"` keeps its dots and case (`""` is a quote),
 /// anything else is taken as written. `Err`: an unterminated quote.
 fn ident(s: &str) -> Result<(String, &str), ()> {

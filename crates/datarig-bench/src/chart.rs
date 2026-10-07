@@ -7,20 +7,23 @@
 
 use crate::apps;
 use crate::stats::{Summary, ms};
-use datarig_core::driver::{ColumnMeta, DbEvent};
+use datarig_core::driver::{ColumnMeta, DbEvent, ValueKind};
 use datarig_tui::app::Focus;
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 
-fn column(name: &str, type_name: &str, numeric: bool) -> ColumnMeta {
-    ColumnMeta { name: name.into(), type_name: type_name.into(), numeric, json: false, origin: None }
+fn column(name: &str, type_name: &str, numeric: bool, kind: ValueKind) -> ColumnMeta {
+    ColumnMeta { name: name.into(), type_name: type_name.into(), numeric, json: false, kind, origin: None }
 }
 
 /// `n` rows: a minute each from 2026-01-01, orders and revenue.
 pub fn rows(n: usize) -> (Vec<ColumnMeta>, Vec<Vec<Option<String>>>) {
-    let columns =
-        vec![column("at", "timestamptz", false), column("orders", "int8", true), column("revenue", "numeric", true)];
+    let columns = vec![
+        column("at", "timestamptz", false, ValueKind::TimestampTz),
+        column("orders", "int8", true, ValueKind::Integer),
+        column("revenue", "numeric", true, ValueKind::Decimal),
+    ];
     let rows = (0..n)
         .map(|i| {
             let (day, minute) = (i / 1440, i % 1440);

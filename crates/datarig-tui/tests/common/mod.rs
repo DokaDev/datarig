@@ -10,7 +10,7 @@ use datarig_core::driver::PagingMode;
 use datarig_core::driver::structure::TableStructure;
 use datarig_core::driver::{
     Canceller, Capabilities, ColumnMeta, ColumnOrigin, ConnectOptions, DbCommand, DbEvent, Driver, KeyCatalog,
-    PingError, PingInfo, Session, SessionRole,
+    PingError, PingInfo, Session, SessionRole, ValueKind,
 };
 use datarig_core::i18n::Lang;
 use datarig_core::profile::ConnectionConfig;
@@ -960,12 +960,21 @@ pub fn catalog() -> Catalog {
 }
 
 pub fn meta(name: &str, ty: &str, numeric: bool, json: bool) -> ColumnMeta {
-    ColumnMeta { name: name.into(), type_name: ty.into(), numeric, json, origin: None }
+    // The kind the PostgreSQL driver gives a column of that type.
+    let kind = match ty {
+        "int4" | "int8" => ValueKind::Integer,
+        "numeric" => ValueKind::Decimal,
+        "json" | "jsonb" => ValueKind::Json,
+        "date" => ValueKind::Date,
+        "text" => ValueKind::Text,
+        _ => ValueKind::Other,
+    };
+    ColumnMeta { name: name.into(), type_name: ty.into(), numeric, json, kind, origin: None }
 }
 
 /// A result column that comes from column `column` of table `table` (see [`shop_keys`]).
 pub fn meta_from(name: &str, ty: &str, numeric: bool, table: u32, column: i16) -> ColumnMeta {
-    ColumnMeta { origin: Some(ColumnOrigin { table, column }), ..meta(name, ty, numeric, false) }
+    ColumnMeta { origin: Some(ColumnOrigin::Pg { table, column }), ..meta(name, ty, numeric, false) }
 }
 
 /// Ids of the tables of [`shop_keys`].

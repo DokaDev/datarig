@@ -217,7 +217,7 @@ async fn materialized_views_are_views_marked_materialized() {
 /// the columns of a JOIN name the table column they come from; an expression names none.
 #[tokio::test(flavor = "multi_thread")]
 async fn keys_and_column_origins_mark_a_join() {
-    use datarig_core::driver::KeyMarks;
+    use datarig_core::driver::{ColumnOrigin, KeyMarks};
     let Some(url) = pg_url("keys_and_column_origins_mark_a_join") else { return };
     // Tables of its own, so other tests' DDL (in parallel runs) cannot change what it compares.
     let schema = format!("zz_keys_{}", std::process::id());
@@ -272,7 +272,7 @@ async fn keys_and_column_origins_mark_a_join() {
                FROM shop.orders o JOIN shop.users u ON u.id = o.user_id \
                JOIN shop.order_items i ON i.order_id = o.id LIMIT 3";
     let DbEvent::Page { columns: Some(cols), .. } = q.run(1, sql).await else { panic!("no rows") };
-    let marks: Vec<KeyMarks> = cols.iter().map(|c| keys.marks(c.origin)).collect();
+    let marks: Vec<KeyMarks> = cols.iter().map(|c| keys.marks(c.origin.as_ref())).collect();
     assert_eq!(
         marks,
         [
@@ -288,7 +288,8 @@ async fn keys_and_column_origins_mark_a_join() {
         ]
     );
     assert!(cols[7].origin.is_none() && cols[8].origin.is_none(), "expressions have no origin");
-    let users = keys.table(cols[2].origin.unwrap().table).unwrap();
+    let Some(ColumnOrigin::Pg { table, .. }) = cols[2].origin else { panic!("a table's oid") };
+    let users = keys.table(table).unwrap();
     assert_eq!((users.schema.as_str(), users.name.as_str()), ("shop", "users"));
 }
 
@@ -2363,9 +2364,10 @@ async fn prepared_statements_follow_the_schema() {
     s.done("INSERT INTO zz_s VALUES (1)").await;
     let star = "SELECT * FROM zz_s";
     let columns = |ev: &DbEvent| match ev {
-        DbEvent::Page { columns: Some(c), rows, .. } => {
-            (c.iter().map(|c| (c.name.clone(), c.type_name.clone(), c.origin)).collect::<Vec<_>>(), rows.clone())
-        }
+        DbEvent::Page { columns: Some(c), rows, .. } => (
+            c.iter().map(|c| (c.name.clone(), c.type_name.clone(), c.origin.clone())).collect::<Vec<_>>(),
+            rows.clone(),
+        ),
         ev => panic!("{ev:?}"),
     };
     let (c, _) = columns(&s.run(star).await);

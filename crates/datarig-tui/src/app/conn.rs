@@ -60,7 +60,7 @@ impl Keys {
     }
 
     /// The marks of the column `origin` names (none while the keys are not known).
-    pub fn marks(&self, origin: Option<datarig_core::driver::ColumnOrigin>) -> KeyMarks {
+    pub fn marks(&self, origin: Option<&datarig_core::driver::ColumnOrigin>) -> KeyMarks {
         self.catalog().map(|k| k.marks(origin)).unwrap_or_default()
     }
 }

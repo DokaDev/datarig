@@ -1,12 +1,16 @@
 //! Result rows as text to copy: TSV (what a
 //! spreadsheet pastes into cells), CSV (RFC 4180), JSON (an array of objects), a Markdown table
-//! and SQL `INSERT` statements for PostgreSQL; also a comma list, indented
+//! and SQL `INSERT` statements; also a comma list, indented
 //! JSON, an HTML table, XML, an SQL `IN` list and SQL `UPDATE` statements. Pure functions over the values as the driver
-//! delivered them (`None` is SQL NULL); the UI picks the rows and columns.
+//! delivered them (`None` is SQL NULL); the UI picks the rows and columns. The SQL is written
+//! in a [`Dialect`]: its identifier and literal quoting, and its own clauses.
 //!
 //! NULL and the empty string stay apart wherever the format can tell them apart: CSV writes
 //! NULL as an empty field and the empty string as `""`, JSON as `null` and `""`, SQL as `NULL`
 //! and `''`; TSV and Markdown show both as an empty cell / `NULL` as a word respectively.
+
+use crate::driver::{ArrayElement, ColumnMeta, ValueKind};
+use crate::sql::dialect::Dialect;
 
 /// How a column's values are written where the format has types (JSON, SQL).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -22,6 +26,12 @@ pub enum Kind {
     /// An array (`int4[]`, any number of dimensions): nested JSON arrays of its elements (of
     /// this kind), a string literal (`'{{1,2},{3,4}}'`) in SQL.
     Array(Element),
+    /// Binary data, as the text the driver gives (PostgreSQL's `bytea`: `\x0102`). Written as
+    /// [`Kind::Text`] is in every format; kept apart so a dialect can write its own literal.
+    Bytes,
+    /// A bit string, as the text the driver gives (`0101`). Written as [`Kind::Text`] is in every
+    /// format; kept apart so a dialect can write its own literal.
+    Bit,
 }
 
 /// The kind of an array's elements.
@@ -34,7 +44,22 @@ pub enum Element {
 }
 
 impl Kind {
-    /// The kind of a result column (its type name, and the driver's numeric/json flags). An
+    /// The kind of a result column, from the kind of value the driver says it holds. A kind the
+    /// driver does not name ([`ValueKind::Other`]), or a type of the database's own named like
+    /// an array, is read from the type's name ([`Kind::of`]), as it always was.
+    pub fn of_column(c: &ColumnMeta) -> Kind {
+        match c.kind {
+            ValueKind::Array(_) => Kind::from(c.kind),
+            ValueKind::Other => Kind::of(&c.type_name, c.numeric, c.json),
+            // Whatever its kind: a type of the database's own (a domain over a number, say) may
+            // be named like an array, and such a name always made it one.
+            _ if c.type_name.ends_with("[]") => Kind::of(&c.type_name, c.numeric, c.json),
+            k => Kind::from(k),
+        }
+    }
+
+    /// The kind of a PostgreSQL result column from its type name (as the PostgreSQL driver
+    /// names it) and the driver's numeric/json flags. An
     /// array type (`name[]`) gets its elements' kind from the element type's name. `box[]` is
     /// text: its elements are separated by `;`, and each box has commas of its own.
     pub fn of(type_name: &str, numeric: bool, json: bool) -> Kind {
@@ -60,6 +85,31 @@ impl Kind {
     }
 }
 
+impl From<ValueKind> for Kind {
+    /// Numbers and booleans are written bare where they can be, JSON embedded, arrays element
+    /// by element; bytes and bits as such (text so far), every other kind as text.
+    fn from(k: ValueKind) -> Kind {
+        match k {
+            ValueKind::Integer | ValueKind::Decimal | ValueKind::Float => Kind::Number,
+            ValueKind::Bool => Kind::Bool,
+            ValueKind::Json => Kind::Json,
+            ValueKind::Array(ArrayElement::Number) => Kind::Array(Element::Number),
+            ValueKind::Array(ArrayElement::Bool) => Kind::Array(Element::Bool),
+            ValueKind::Array(ArrayElement::Json) => Kind::Array(Element::Json),
+            ValueKind::Array(ArrayElement::Text) => Kind::Array(Element::Text),
+            ValueKind::Bytes => Kind::Bytes,
+            ValueKind::Bit => Kind::Bit,
+            ValueKind::Text
+            | ValueKind::Date
+            | ValueKind::Time
+            | ValueKind::Timestamp
+            | ValueKind::TimestampTz
+            | ValueKind::Interval
+            | ValueKind::Other => Kind::Text,
+        }
+    }
+}
+
 /// A column to write: its name and kind.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Column<'a> {
@@ -75,7 +125,7 @@ pub type Row<'a> = Vec<Option<&'a str>>;
 pub enum Target<'a> {
     /// A known table, with the table's own name of each column (not the result's alias).
     /// `overriding`: a `GENERATED ALWAYS AS IDENTITY` column is written, so each statement says
-    /// `OVERRIDING SYSTEM VALUE`.
+    /// `OVERRIDING SYSTEM VALUE` (PostgreSQL's clause; other dialects have no such column).
     Table { schema: &'a str, name: &'a str, columns: Vec<&'a str>, overriding: bool },
     /// Not known (a join, an expression): a placeholder the user replaces.
     Unknown,
@@ -342,14 +392,16 @@ fn markdown_rows(rows: &[Row]) -> String {
 }
 
 /// A PostgreSQL identifier, always quoted (`"` doubled): any name, any case, keywords.
+/// [`Dialect::force_quote_ident`] of [`Dialect::Postgres`], for the PostgreSQL-only renderers.
 pub fn quote_ident(s: &str) -> String {
-    format!("\"{}\"", s.replace('"', "\"\""))
+    Dialect::Postgres.force_quote_ident(s)
 }
 
 /// A PostgreSQL string literal (`'` doubled). Written for `standard_conforming_strings = on`
 /// (the default since 9.1), where a backslash is an ordinary character.
+/// [`Dialect::quote_literal`] of [`Dialect::Postgres`], for the PostgreSQL-only renderers.
 pub fn quote_literal(s: &str) -> String {
-    format!("'{}'", s.replace('\'', "''"))
+    Dialect::Postgres.quote_literal(s)
 }
 
 /// Whether `s` is a plain SQL number literal (`12`, `-3.5`, `1e-3`).
@@ -373,20 +425,24 @@ fn negative_zero(s: &str) -> bool {
         .is_some_and(|m| m.split(['e', 'E']).next().is_some_and(|m| m.bytes().all(|b| matches!(b, b'0' | b'.'))))
 }
 
-/// One `INSERT` statement per row, `;`-terminated, one per line. Numbers and booleans are
-/// written bare; every other value (text, json, arrays `{…}`, bytea `\x…`, dates) as a string
-/// literal the server converts to the column's type; NULL as `NULL`. An unknown table is
-/// written as [`TABLE_PLACEHOLDER`] with the result's column names.
-pub fn sql_insert(target: &Target, columns: &[Column], rows: &[Row]) -> String {
+/// One `INSERT` statement per row in dialect `d`, `;`-terminated, one per line. Numbers and
+/// booleans are written bare; every other value (text, json, arrays `{…}`, bytea `\x…`, dates)
+/// as a string literal the server converts to the column's type; NULL as `NULL`. Identifiers
+/// are always quoted. An unknown table is written as [`TABLE_PLACEHOLDER`] with the result's
+/// column names.
+pub fn sql_insert(d: Dialect, target: &Target, columns: &[Column], rows: &[Row]) -> String {
     let (table, names, overriding): (String, Vec<&str>, bool) = match target {
         Target::Table { schema, name, columns: cols, overriding } => {
-            (format!("{}.{}", quote_ident(schema), quote_ident(name)), cols.clone(), *overriding)
+            (format!("{}.{}", d.force_quote_ident(schema), d.force_quote_ident(name)), cols.clone(), *overriding)
         }
         Target::Unknown => (TABLE_PLACEHOLDER.to_string(), columns.iter().map(|c| c.name).collect(), false),
     };
-    let overriding = if overriding { " OVERRIDING SYSTEM VALUE" } else { "" };
-    let list = names.iter().map(|n| quote_ident(n)).collect::<Vec<_>>().join(", ");
-    let value = |c: &Column, v: Option<&str>| sql_value(c.kind, v);
+    let overriding = match d {
+        Dialect::Postgres if overriding => " OVERRIDING SYSTEM VALUE",
+        Dialect::Postgres => "",
+    };
+    let list = names.iter().map(|n| d.force_quote_ident(n)).collect::<Vec<_>>().join(", ");
+    let value = |c: &Column, v: Option<&str>| sql_value(d, c.kind, v);
     rows.iter()
         .map(|r| {
             let values = columns.iter().zip(r).map(|(c, v)| value(c, *v)).collect::<Vec<_>>().join(", ");
@@ -583,15 +639,16 @@ fn xml_rows(columns: &[Column], rows: &[Row]) -> String {
         .collect()
 }
 
-/// A value as an SQL literal: NULL, a number or a boolean bare, anything else a string literal
-/// the server converts to the column's type (as in [`sql_insert`]).
-pub fn sql_value(kind: Kind, v: Option<&str>) -> String {
+/// A value as an SQL literal of dialect `d`: NULL, a number or a boolean bare, anything else a
+/// string literal the server converts to the column's type (as in [`sql_insert`]).
+pub fn sql_value(d: Dialect, kind: Kind, v: Option<&str>) -> String {
     match v {
         None => "NULL".to_string(),
         // A negative zero (`-0` of a float) is quoted: bare, it is the integer 0 and loses its sign.
         Some(v) if kind == Kind::Number && sql_number(v) && !negative_zero(v) => v.to_string(),
         Some(v) if kind == Kind::Bool && (v == "true" || v == "false") => v.to_string(),
-        Some(v) => quote_literal(v),
+        // Bytes (`\x…`) and bits too: PostgreSQL reads them from a string literal.
+        Some(v) => d.quote_literal(v),
     }
 }
 
@@ -607,14 +664,14 @@ pub enum NotInList {
 /// One column's values as an SQL `IN` list, `('a', 'b', 3)`, literals as [`sql_value`] writes
 /// them, in order, each value once. NULL is left out (`x IN (…, NULL)` never matches a NULL and
 /// makes `NOT IN` match nothing).
-pub fn sql_in(columns: &[Column], rows: &[Row]) -> Result<String, NotInList> {
+pub fn sql_in(d: Dialect, columns: &[Column], rows: &[Row]) -> Result<String, NotInList> {
     let [column] = columns else { return Err(NotInList::SeveralColumns) };
     let mut seen = std::collections::HashSet::new();
     let values: Vec<String> = rows
         .iter()
         .filter_map(|r| r.first().copied().flatten())
         .filter(|v| seen.insert(*v))
-        .map(|v| sql_value(column.kind, Some(v)))
+        .map(|v| sql_value(d, column.kind, Some(v)))
         .collect();
     if values.is_empty() {
         return Err(NotInList::NoValues);
@@ -632,14 +689,15 @@ pub struct UpdateTarget<'a> {
     pub keys: Vec<(usize, &'a str)>,
 }
 
-/// One `UPDATE` statement per row, `;`-terminated, one per line:
+/// One `UPDATE` statement per row in dialect `d`, `;`-terminated, one per line:
 /// `UPDATE "s"."t" SET "a" = 1, "b" = 'x' WHERE "id" = 5 AND "k" = 'z';`. Values are literals as
 /// in [`sql_value`]; a NULL is set as `NULL`. The key columns are a primary key, so they are
 /// never NULL in a table's rows (a NULL there would be written `= NULL`, which matches no row).
-pub fn sql_update(target: &UpdateTarget, columns: &[Column], rows: &[Row]) -> String {
-    let table = format!("{}.{}", quote_ident(target.schema), quote_ident(target.name));
-    let part =
-        |r: &Row, (i, name): &(usize, &str)| format!("{} = {}", quote_ident(name), sql_value(columns[*i].kind, r[*i]));
+pub fn sql_update(d: Dialect, target: &UpdateTarget, columns: &[Column], rows: &[Row]) -> String {
+    let table = format!("{}.{}", d.force_quote_ident(target.schema), d.force_quote_ident(target.name));
+    let part = |r: &Row, (i, name): &(usize, &str)| {
+        format!("{} = {}", d.force_quote_ident(name), sql_value(d, columns[*i].kind, r[*i]))
+    };
     rows.iter()
         .map(|r| {
             let set = target.set.iter().map(|c| part(r, c)).collect::<Vec<_>>().join(", ");
@@ -663,12 +721,14 @@ pub enum Format<'a> {
     /// [`json`], indented.
     JsonPretty,
     Markdown,
-    Sql(Target<'a>),
+    /// [`sql_insert`] in a dialect.
+    Sql(Dialect, Target<'a>),
     /// [`comma_list`].
     List,
     Html,
     Xml,
-    Update(UpdateTarget<'a>),
+    /// [`sql_update`] in a dialect.
+    Update(Dialect, UpdateTarget<'a>),
 }
 
 /// The same text as the functions above, written a chunk of rows at a time, so a large copy
@@ -703,12 +763,12 @@ impl<'a> Writer<'a> {
             Format::Csv { header } => csv(self.columns, rows, *header && first),
             Format::Json | Format::JsonPretty => json_objects(self.columns, rows),
             Format::Markdown => markdown_rows(rows),
-            Format::Sql(target) => sql_insert(target, self.columns, rows),
+            Format::Sql(d, target) => sql_insert(*d, target, self.columns, rows),
             Format::List => comma_list(rows),
             // Every row ends its own line; the head and the end come with `finish`.
             Format::Html => html_rows(rows),
             Format::Xml => xml_rows(self.columns, rows),
-            Format::Update(target) => sql_update(target, self.columns, rows),
+            Format::Update(d, target) => sql_update(*d, target, self.columns, rows),
         };
         if !first {
             match self.format {

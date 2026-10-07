@@ -6,6 +6,7 @@
 //! types and any type this code does not know). So a value is always shown, copied and
 //! written back as the text PostgreSQL reads, never as raw binary.
 
+use datarig_core::driver::{ArrayElement, ValueKind};
 use fallible_iterator::FallibleIterator;
 use tokio_postgres::types::{FromSql, Kind, Type};
 
@@ -35,6 +36,49 @@ pub fn is_numeric(ty: &Type) -> bool {
 
 pub fn is_json(ty: &Type) -> bool {
     matches!(*ty, Type::JSON | Type::JSONB)
+}
+
+/// The kind of value a column of type `ty` holds. Numbers are [`is_numeric`] (a domain over a
+/// number type too: its base type's kind), JSON is [`is_json`]; any other domain, an array of
+/// anything but a built-in type, and every type not named here, is [`ValueKind::Other`].
+pub fn value_kind(ty: &Type) -> ValueKind {
+    match ty.kind() {
+        Kind::Array(elem) => return array_element(elem).map_or(ValueKind::Other, ValueKind::Array),
+        Kind::Domain(inner) if is_numeric(inner) => return value_kind(inner),
+        _ => {}
+    }
+    match *ty {
+        Type::INT2 | Type::INT4 | Type::INT8 | Type::OID => ValueKind::Integer,
+        Type::NUMERIC | Type::MONEY => ValueKind::Decimal,
+        Type::FLOAT4 | Type::FLOAT8 => ValueKind::Float,
+        Type::BOOL => ValueKind::Bool,
+        Type::JSON | Type::JSONB => ValueKind::Json,
+        Type::TEXT | Type::VARCHAR | Type::BPCHAR | Type::NAME => ValueKind::Text,
+        Type::BYTEA => ValueKind::Bytes,
+        Type::BIT | Type::VARBIT => ValueKind::Bit,
+        Type::DATE => ValueKind::Date,
+        Type::TIME | Type::TIMETZ => ValueKind::Time,
+        Type::TIMESTAMP => ValueKind::Timestamp,
+        Type::TIMESTAMPTZ => ValueKind::TimestampTz,
+        Type::INTERVAL => ValueKind::Interval,
+        _ => ValueKind::Other,
+    }
+}
+
+/// The kind of the elements of an array of built-in type `elem`, as `array_out` writes them:
+/// numbers, booleans, JSON, or any other type as text. `None` for `box` (its elements are
+/// separated by `;`) and for a type of the database's own (a domain, an enum, …).
+fn array_element(elem: &Type) -> Option<ArrayElement> {
+    Some(match *elem {
+        Type::INT2 | Type::INT4 | Type::INT8 | Type::FLOAT4 | Type::FLOAT8 | Type::NUMERIC | Type::OID => {
+            ArrayElement::Number
+        }
+        Type::BOOL => ArrayElement::Bool,
+        Type::JSON | Type::JSONB => ArrayElement::Json,
+        Type::BOX => return None,
+        _ if Type::from_oid(elem.oid()).as_ref() == Some(elem) => ArrayElement::Text,
+        _ => return None,
+    })
 }
 
 /// The result format to ask for a column of type `ty`: `1` (binary) when [`format_value`]

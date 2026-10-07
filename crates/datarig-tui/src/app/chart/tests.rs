@@ -1,5 +1,5 @@
 use super::*;
-use datarig_core::driver::ColumnMeta;
+use datarig_core::driver::{ColumnMeta, ValueKind};
 
 fn result(cols: &[(&str, &str, bool)], rows: &[&[&str]]) -> ResultSet {
     let cols = cols
@@ -9,6 +9,13 @@ fn result(cols: &[(&str, &str, bool)], rows: &[&[&str]]) -> ResultSet {
             type_name: (*t).into(),
             numeric: *num,
             json: false,
+            // The kind the PostgreSQL driver gives a column of that type.
+            kind: match *t {
+                "int4" => ValueKind::Integer,
+                "date" => ValueKind::Date,
+                "text" => ValueKind::Text,
+                _ => ValueKind::Other,
+            },
             origin: None,
         })
         .collect();

@@ -9,6 +9,7 @@
 //! marks. Every column of a composite key is marked.
 
 use super::ColumnOrigin;
+use crate::sql::dialect::Dialect;
 use crate::sql::lexer::{Tok, Token, lex};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -71,8 +72,9 @@ pub struct TableKeys {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct KeyCatalog {
     tables: BTreeMap<u32, TableKeys>,
-    /// `(schema, table)` → table id, for lookups by name (the explorer's column nodes).
-    by_name: HashMap<(String, String), u32>,
+    /// schema → table → table id, for lookups by name (the explorer's column nodes, a
+    /// [`ColumnOrigin::Named`]), without a key to allocate.
+    by_name: HashMap<String, HashMap<String, u32>>,
 }
 
 impl KeyCatalog {
@@ -82,7 +84,7 @@ impl KeyCatalog {
             .into_iter()
             .map(|(n, name)| (n, ColumnKeys { name, marks: KeyMarks::default(), generated: Generated::No }))
             .collect();
-        self.by_name.insert((schema.to_string(), name.to_string()), id);
+        self.by_name.entry(schema.to_string()).or_default().insert(name.to_string(), id);
         self.tables.insert(id, TableKeys { schema: schema.to_string(), name: name.to_string(), columns, view: false });
     }
 
@@ -117,13 +119,34 @@ impl KeyCatalog {
     }
 
     /// The keys of the column a result column comes from (none without an origin).
-    pub fn marks(&self, origin: Option<ColumnOrigin>) -> KeyMarks {
+    pub fn marks(&self, origin: Option<&ColumnOrigin>) -> KeyMarks {
         origin.and_then(|o| self.column(o)).map(|c| c.marks).unwrap_or_default()
     }
 
     /// The table column `o` names, if the catalog knows it.
-    pub fn column(&self, o: ColumnOrigin) -> Option<&ColumnKeys> {
-        self.tables.get(&o.table)?.columns.get(&o.column)
+    pub fn column(&self, o: &ColumnOrigin) -> Option<&ColumnKeys> {
+        let (table, column) = self.locate(o)?;
+        self.tables.get(&table)?.columns.get(&column)
+    }
+
+    /// The id of table `table` of `schema`, the names exactly as the catalog has them.
+    fn id_by_name(&self, schema: &str, table: &str) -> Option<u32> {
+        self.by_name.get(schema)?.get(table).copied()
+    }
+
+    /// The table id and column number of `o`: as they are for a [`ColumnOrigin::Pg`] (known
+    /// to the catalog or not), looked up by name for a [`ColumnOrigin::Named`]. Names are
+    /// compared exactly: a driver that names origins gives them as its catalog stores them (it
+    /// knows its server's case rules), and the catalog does not fold them.
+    fn locate(&self, o: &ColumnOrigin) -> Option<(u32, i16)> {
+        match o {
+            ColumnOrigin::Pg { table, column } => Some((*table, *column)),
+            ColumnOrigin::Named { schema, table, column } => {
+                let id = self.id_by_name(schema, table)?;
+                let (n, _) = self.tables.get(&id)?.columns.iter().find(|(_, c)| c.name == *column)?;
+                Some((id, *n))
+            }
+        }
     }
 
     /// Table `id`.
@@ -133,9 +156,8 @@ impl KeyCatalog {
 
     /// The keys of column `column` of `schema.table` (none when it is not known).
     pub fn marks_by_name(&self, schema: &str, table: &str, column: &str) -> KeyMarks {
-        self.by_name
-            .get(&(schema.to_string(), table.to_string()))
-            .and_then(|id| self.tables.get(id))
+        self.id_by_name(schema, table)
+            .and_then(|id| self.tables.get(&id))
             .and_then(|t| t.columns.values().find(|c| c.name == column))
             .map(|c| c.marks)
             .unwrap_or_default()
@@ -144,8 +166,8 @@ impl KeyCatalog {
     /// Table `name` of `schema`, or without a schema the one table of that name in any schema.
     pub fn find(&self, schema: Option<&str>, name: &str) -> Result<&TableKeys, NotInsertable> {
         if let Some(schema) = schema {
-            let id = self.by_name.get(&(schema.to_string(), name.to_string()));
-            return id.and_then(|id| self.tables.get(id)).ok_or(NotInsertable::NoSuchTable);
+            let id = self.id_by_name(schema, name);
+            return id.and_then(|id| self.tables.get(&id)).ok_or(NotInsertable::NoSuchTable);
         }
         let mut hits = self.tables.values().filter(|t| t.name == name);
         match (hits.next(), hits.next()) {
@@ -244,14 +266,16 @@ pub struct InsertPlan<'a> {
 /// with `OVERRIDING SYSTEM VALUE` (as `pg_dump --inserts` does), so the copied rows keep their
 /// ids. A result of generated columns only is refused.
 pub fn insert_source<'a>(
+    d: Dialect,
     catalog: Option<&'a KeyCatalog>,
     origins: &[Option<ColumnOrigin>],
     names: &[&str],
     sql: &str,
 ) -> Result<InsertPlan<'a>, NotInsertable> {
     use NotInsertable::*;
-    let from = single_table(sql)?;
-    let origins: Vec<ColumnOrigin> = origins.iter().copied().collect::<Option<_>>().ok_or(Computed)?;
+    let from = single_table(d, sql)?;
+    let origins: Vec<&ColumnOrigin> = origins.iter().map(Option::as_ref).collect::<Option<_>>().ok_or(Computed)?;
+    let origins: Vec<Located> = origins.into_iter().map(|o| locate(catalog, o)).collect::<Result<_, _>>()?;
     let first = origins.first().ok_or(Computed)?;
     if origins.iter().any(|o| o.table != first.table) {
         return Err(SeveralTables);
@@ -271,6 +295,27 @@ pub fn insert_source<'a>(
         origins.iter().map(|o| table.columns.get(&o.column)).collect::<Option<Vec<_>>>().ok_or(UnknownTable)?;
     distinct(names)?;
     plan(table, columns)
+}
+
+/// A result column's table id and column number in the catalog.
+struct Located {
+    table: u32,
+    column: i16,
+}
+
+/// Where origin `o` is in `catalog`. A [`ColumnOrigin::Pg`] names it by number (whether the
+/// catalog knows it is checked later); a [`ColumnOrigin::Named`] needs the catalog to find it,
+/// so a result of named origins is refused for a missing catalog or an unknown column before
+/// the checks of [`insert_source`] that come first for numbered ones (several tables, a
+/// column twice).
+fn locate(catalog: Option<&KeyCatalog>, o: &ColumnOrigin) -> Result<Located, NotInsertable> {
+    let (table, column) = match o {
+        ColumnOrigin::Pg { table, column } => (*table, *column),
+        ColumnOrigin::Named { .. } => {
+            catalog.ok_or(NotInsertable::NoCatalog)?.locate(o).ok_or(NotInsertable::UnknownTable)?
+        }
+    };
+    Ok(Located { table, column })
 }
 
 /// Why rows are not copied as `UPDATE` statements.
@@ -301,19 +346,20 @@ pub struct UpdatePlan<'a> {
 /// set, except generated ones (`GENERATED ALWAYS AS (…)` and `GENERATED ALWAYS AS IDENTITY`
 /// take no value in an `UPDATE`).
 pub fn update_source<'a>(
+    d: Dialect,
     catalog: Option<&'a KeyCatalog>,
     origins: &[Option<ColumnOrigin>],
     names: &[&str],
     sql: &str,
 ) -> Result<UpdatePlan<'a>, NotUpdatable> {
-    let plan = insert_source(catalog, origins, names, sql).map_err(NotUpdatable::NotInsertable)?;
+    let plan = insert_source(d, catalog, origins, names, sql).map_err(NotUpdatable::NotInsertable)?;
     let table = plan.table;
     let pk: Vec<(&i16, &ColumnKeys)> = table.columns.iter().filter(|(_, c)| c.marks.pk).collect();
     if pk.is_empty() {
         return Err(NotUpdatable::NoPrimaryKey);
     }
     // Every result column is a column of `table` (the allowlist checked it).
-    let number = |i: usize| origins[i].map(|o| o.column);
+    let number = |i: usize| origins[i].as_ref().and_then(|o| locate(catalog, o).ok()).map(|o| o.column);
     let missing: Vec<String> = pk
         .iter()
         .filter(|(n, _)| !(0..origins.len()).any(|i| number(i) == Some(**n)))
@@ -337,16 +383,17 @@ pub fn update_source<'a>(
 /// `:copy insert <target>`: the rows go into the table the user names, result columns to the
 /// table's columns of the same name. Refused when the table is not known, a result column has
 /// no column of its name there, a name comes twice, or a column is `GENERATED ALWAYS AS (…)`.
-/// `target` is `schema.table` or a table name found in one schema only; unquoted names fold to
-/// lower case, `"quoted"` ones are taken as they are.
+/// `target` is `schema.table` or a table name found in one schema only; unquoted names fold
+/// as dialect `d` folds them (PostgreSQL: to lower case), quoted ones are taken as they are.
 pub fn insert_into<'a>(
+    d: Dialect,
     catalog: Option<&'a KeyCatalog>,
     target: &str,
     names: &[&str],
 ) -> Result<InsertPlan<'a>, NotInsertable> {
     use NotInsertable::*;
     let catalog = catalog.ok_or(NoCatalog)?;
-    let (schema, name) = table_name(target).ok_or(NoSuchTable)?;
+    let (schema, name) = table_name(d, target).ok_or(NoSuchTable)?;
     let table = catalog.find(schema.as_deref(), &name)?;
     distinct(names)?;
     let columns = names
@@ -394,33 +441,32 @@ impl FromTable {
     }
 }
 
-/// The identifier token `t` names: an unquoted word folded to lower case (ASCII, as the server
-/// does), a quoted one unquoted.
-fn ident(t: &Token, sql: &str) -> Option<String> {
+/// The identifier token `t` names in dialect `d`: an unquoted word folded as the server folds
+/// it ([`Dialect::fold`]), a quoted one unquoted (it must be closed).
+fn ident(d: Dialect, t: &Token, sql: &str) -> Option<String> {
     let text = t.text(sql);
     match t.kind {
-        Tok::QuotedIdent if text.len() >= 2 && text.ends_with('"') => {
-            Some(text[1..text.len() - 1].replace("\"\"", "\""))
-        }
-        Tok::Ident | Tok::Keyword => Some(text.to_ascii_lowercase()),
+        Tok::QuotedIdent => d.unquote(text),
+        Tok::Ident | Tok::Keyword => Some(d.fold(text)),
         _ => None,
     }
 }
 
 /// `schema.table` or `table`, as `:copy insert` takes it.
-fn table_name(s: &str) -> Option<(Option<String>, String)> {
+fn table_name(d: Dialect, s: &str) -> Option<(Option<String>, String)> {
     let toks: Vec<Token> = lex(s).into_iter().filter(|t| !t.is_trivia()).collect();
     match toks.as_slice() {
-        [n] => Some((None, ident(n, s)?)),
-        [sc, d, n] if d.kind == Tok::Dot => Some((Some(ident(sc, s)?), ident(n, s)?)),
+        [n] => Some((None, ident(d, n, s)?)),
+        [sc, dot, n] if dot.kind == Tok::Dot => Some((Some(ident(d, sc, s)?), ident(d, n, s)?)),
         _ => None,
     }
 }
 
 /// The one table statement `sql` reads, if it is lexically a projection of one table's rows:
 /// `SELECT … FROM [ONLY] [schema.]table [*] [[AS] alias] [WHERE …] [ORDER BY …] [LIMIT …] …`.
-/// A subquery may filter (in `WHERE`), but not add rows or columns. Why not, otherwise.
-pub fn single_table(sql: &str) -> Result<FromTable, NotInsertable> {
+/// A subquery may filter (in `WHERE`), but not add rows or columns. Why not, otherwise. Names
+/// are read as dialect `d` reads them.
+pub fn single_table(d: Dialect, sql: &str) -> Result<FromTable, NotInsertable> {
     use NotInsertable::*;
     let mut toks: Vec<Token> = lex(sql).into_iter().filter(|t| !t.is_trivia()).collect();
     while toks.last().is_some_and(|t| t.kind == Tok::Semi) {
@@ -506,8 +552,10 @@ pub fn single_table(sql: &str) -> Result<FromTable, NotInsertable> {
         rest = &rest[1..];
     }
     let (schema, name, rest) = match rest {
-        [s, d, n, rest @ ..] if d.kind == Tok::Dot => (Some(ident(s, sql).ok_or(NotATable)?), ident(n, sql), rest),
-        [n, rest @ ..] => (None, ident(n, sql), rest),
+        [s, dot, n, rest @ ..] if dot.kind == Tok::Dot => {
+            (Some(ident(d, s, sql).ok_or(NotATable)?), ident(d, n, sql), rest)
+        }
+        [n, rest @ ..] => (None, ident(d, n, sql), rest),
         [] => return Err(NotATable),
     };
     let name = name.ok_or(NotATable)?;
@@ -518,7 +566,7 @@ pub fn single_table(sql: &str) -> Result<FromTable, NotInsertable> {
     let alias_ok = match rest {
         [] => true,
         [a] => matches!(a.kind, Tok::Ident | Tok::QuotedIdent),
-        [kw, a] => word(kw, "AS") && ident(a, sql).is_some(),
+        [kw, a] => word(kw, "AS") && ident(d, a, sql).is_some(),
         _ => false,
     };
     if alias_ok { Ok(FromTable { schema, name }) } else { Err(NotATable) }

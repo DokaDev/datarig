@@ -41,7 +41,7 @@ pub(crate) fn tab_labels(i18n: &I18n, active: DetailTab) -> [(String, u16, u16);
 /// The key marks of every result column, from the profile's key cache.
 pub(crate) fn column_marks(app: &App, rs: &ResultSet) -> Vec<KeyMarks> {
     let keys = Some(app.tab_keys(app.tab()));
-    rs.columns.iter().map(|c| keys.map(|k| k.marks(c.meta.origin)).unwrap_or_default()).collect()
+    rs.columns.iter().map(|c| keys.map(|k| k.marks(c.meta.origin.as_ref())).unwrap_or_default()).collect()
 }
 
 /// `text · 12 characters · 14 bytes` (or `text · NULL`).

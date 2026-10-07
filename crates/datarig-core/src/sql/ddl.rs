@@ -21,9 +21,12 @@ pub const HEADER: &str = "-- Reconstructed by datarig from the catalog (not pg_d
 /// What a relation's DDL leaves out, said under the header.
 const NOT_INCLUDED: &str = "-- Not included: rows, sequence values, rules, extended statistics, security labels";
 
-/// `ddl` as SQL text: the header, then each statement followed by a blank line.
+/// `ddl` as SQL text: the header, then each statement followed by a blank line. The server's own
+/// text ([`DdlSource::Verbatim`]) is the text as it is, without the header: it is not
+/// reconstructed, so nothing is to be said about it.
 pub fn ddl_text(ddl: &DdlSource) -> String {
     let (notes, statements) = match ddl {
+        DdlSource::Verbatim { text, .. } => return text.clone(),
         DdlSource::Relation(r) => (Some(NOT_INCLUDED), relation(r)),
         DdlSource::Index(i) => (None, index(i)),
         DdlSource::Trigger(t) => (None, trigger(t)),

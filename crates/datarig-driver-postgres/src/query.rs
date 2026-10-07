@@ -73,7 +73,7 @@
 use crate::connect::{db_error, is_cancel};
 use crate::link::{Closed, Link, Next};
 use crate::route::Cancel;
-use crate::values::{Raw, format_code, format_value, is_json, is_numeric, type_display};
+use crate::values::{Raw, format_code, format_value, is_json, is_numeric, type_display, value_kind};
 use datarig_core::driver::{Cell, ColumnMeta, ColumnOrigin, DbCommand, DbError, DbEvent, Outcome, PagingMode};
 use datarig_core::sql::lexer::{Tok, Token, lex};
 use datarig_core::sql::risk::{self, Class};
@@ -629,15 +629,19 @@ struct State<'a> {
 fn columns_of(columns: &[Column]) -> Vec<ColumnMeta> {
     columns
         .iter()
-        .map(|c| ColumnMeta {
-            name: c.name().to_string(),
-            type_name: type_display(c.type_()),
-            numeric: is_numeric(c.type_()),
-            json: is_json(c.type_()),
-            origin: match (c.table_oid(), c.column_id()) {
-                (Some(table), Some(column)) if table != 0 && column > 0 => Some(ColumnOrigin { table, column }),
+        .map(|c| {
+            let origin = match (c.table_oid(), c.column_id()) {
+                (Some(table), Some(column)) if table != 0 && column > 0 => Some(ColumnOrigin::Pg { table, column }),
                 _ => None,
-            },
+            };
+            let meta = ColumnMeta::new(c.name().to_string(), type_display(c.type_()), value_kind(c.type_()), origin);
+            debug_assert_eq!(
+                (meta.numeric, meta.json),
+                (is_numeric(c.type_()), is_json(c.type_())),
+                "{}",
+                meta.type_name
+            );
+            meta
         })
         .collect()
 }

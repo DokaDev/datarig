@@ -250,22 +250,104 @@ impl DbCommand {
 
 #[derive(Clone, Debug)]
 pub struct ColumnMeta {
+    /// The column's name in the result (an alias when the query gives one).
     pub name: String,
+    /// The type as the server names it, shown as it is (PostgreSQL: `int4`, `text[]`).
     pub type_name: String,
+    /// A number type: the same as [`ValueKind::is_number`] of `kind`.
     pub numeric: bool,
+    /// A JSON type: the same as `kind` being [`ValueKind::Json`].
     pub json: bool,
+    /// What kind of value the column holds, whatever the server calls its type: the tools that
+    /// treat values by kind (copy as SQL or JSON, the chart) read this, never `type_name`.
+    pub kind: ValueKind,
     /// The table column this result column comes from, when the driver knows it (a plain
     /// column of a table; `None` for an expression, a function result, a literal).
     pub origin: Option<ColumnOrigin>,
 }
 
-/// A column of a table, as the driver names it: the table's id and the column's number in it
-/// (PostgreSQL: the table's `oid` and the column's `attnum`, from the RowDescription of a
-/// result). [`KeyCatalog`] maps it to the table's name and the column's keys.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct ColumnOrigin {
-    pub table: u32,
-    pub column: i16,
+impl ColumnMeta {
+    /// A result column whose `numeric` and `json` follow from `kind`, so they cannot disagree
+    /// with it (what a driver builds; a literal must keep them in step itself).
+    pub fn new(name: String, type_name: String, kind: ValueKind, origin: Option<ColumnOrigin>) -> Self {
+        Self { name, type_name, numeric: kind.is_number(), json: kind == ValueKind::Json, kind, origin }
+    }
+}
+
+/// What kind of value a result column holds, the same for every database. A driver maps its
+/// own types to it; a type that fits none of these is [`ValueKind::Other`] (its values are
+/// still shown and copied as the text the server gives).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ValueKind {
+    /// Character data (`text`, `varchar`, `char`).
+    Text,
+    /// A whole number (`int2`/`int4`/`int8`, `oid`).
+    Integer,
+    /// An exact decimal number (`numeric`, `money`).
+    Decimal,
+    /// A floating-point number (`float4`, `float8`).
+    Float,
+    /// A boolean.
+    Bool,
+    /// JSON (`json`, `jsonb`).
+    Json,
+    /// Binary data (`bytea`).
+    Bytes,
+    /// A bit string (`bit`, `varbit`).
+    Bit,
+    /// A calendar date.
+    Date,
+    /// A time of day (within a day), with or without a time zone. A type that can be negative
+    /// or longer than a day (MySQL's `TIME`) is not one: it is an [`ValueKind::Interval`].
+    Time,
+    /// A date and time without a time zone.
+    Timestamp,
+    /// A date and time with a time zone (a point in time).
+    TimestampTz,
+    /// A span of time (`interval`; MySQL's `TIME`, which can be negative or over 24 hours).
+    Interval,
+    /// An array of any number of dimensions; its elements are of the [`ArrayElement`] kind.
+    Array(ArrayElement),
+    /// Anything else (`uuid`, network addresses, ranges, geometry, enums, composites, a domain
+    /// over a type other than a number, extension types, an array whose elements are none of
+    /// the built-in types). The tools that read kinds treat such a column by its `type_name`, as
+    /// they did before kinds: a type of the database's own may be named like a built-in one.
+    Other,
+}
+
+/// The kind of an array's elements, as far as the tools read array values (the array's text,
+/// `{1,2}`, split into its elements at commas; an array whose text is not split so is
+/// [`ValueKind::Other`]). Kept apart from [`ValueKind`]: an array only needs to say
+/// how its elements are written, and an array of arrays is just more dimensions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ArrayElement {
+    /// Numbers (integers, decimals and floats).
+    Number,
+    /// Booleans (`t`/`f`).
+    Bool,
+    /// JSON values.
+    Json,
+    /// Any other element, read as text.
+    Text,
+}
+
+impl ValueKind {
+    /// A number: [`ValueKind::Integer`], [`ValueKind::Decimal`] or [`ValueKind::Float`].
+    pub fn is_number(self) -> bool {
+        matches!(self, Self::Integer | Self::Decimal | Self::Float)
+    }
+}
+
+/// A column of a table, as the driver names it. [`KeyCatalog`](super::KeyCatalog) maps it to
+/// the table's name and the column's keys.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ColumnOrigin {
+    /// By number: the table's id and the column's number in it (PostgreSQL: the table's `oid`
+    /// and the column's `attnum`, from the RowDescription of a result).
+    Pg { table: u32, column: i16 },
+    /// By name: a driver that names the column a result column comes from (MySQL's column
+    /// definition: `schema`, `org_table`, `org_name`).
+    Named { schema: String, table: String, column: String },
 }
 
 pub type Cell = Option<String>;

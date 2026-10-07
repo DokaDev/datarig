@@ -3,7 +3,7 @@
 
 use crate::apps;
 use crate::stats::{Summary, ms};
-use datarig_core::driver::{ColumnMeta, DbEvent};
+use datarig_core::driver::{ColumnMeta, DbEvent, ValueKind};
 use datarig_tui::app::Focus;
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 use serde_json::{Value, json};
@@ -27,6 +27,11 @@ pub fn rows(n: usize, cols: usize) -> (Vec<ColumnMeta>, Vec<Vec<Option<String>>>
             type_name: if c % 4 == 3 { "bigint".into() } else { "text".into() },
             numeric: c % 4 == 3,
             json: c % 4 == 2,
+            kind: match c % 4 {
+                3 => ValueKind::Integer,
+                2 => ValueKind::Json,
+                _ => ValueKind::Text,
+            },
             origin: None,
         })
         .collect();

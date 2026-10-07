@@ -659,11 +659,11 @@ impl App {
             if not_loaded {
                 // Its query, not what `Ctrl+E` took in it before.
                 self.unstage_run(t);
-                self.run_in(t, vec![table.query()]);
+                self.run_in(t, vec![table.query(self.tab_dialect(t))]);
             }
             return;
         }
-        let query = table.query();
+        let query = table.query(self.profile_language(Some(id)).dialect());
         self.leave_tab();
         let tab = self.tabs.open(TabKind::Table, Some(id), Editor::new(&query));
         self.sync_tab_language(tab);

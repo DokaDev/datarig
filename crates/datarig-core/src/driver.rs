@@ -8,7 +8,10 @@ mod protocol;
 pub mod structure;
 
 pub use keys::{KeyCatalog, KeyMarks};
-pub use protocol::{Cell, ColumnMeta, ColumnOrigin, DbCommand, DbError, DbEvent, Outcome, PagingMode, SchemaObjects};
+pub use protocol::{
+    ArrayElement, Cell, ColumnMeta, ColumnOrigin, DbCommand, DbError, DbEvent, Outcome, PagingMode, SchemaObjects,
+    ValueKind,
+};
 
 use crate::profile::ConnectionConfig;
 use crate::sql::dialect::Language;
