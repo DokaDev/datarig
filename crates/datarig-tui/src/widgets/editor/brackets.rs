@@ -4,7 +4,7 @@
 
 use super::Editor;
 use super::motion::Pos;
-use datarig_core::sql::lexer::{Tok, lex_in};
+use datarig_core::sql::lexer::Tok;
 use unicode_segmentation::UnicodeSegmentation;
 
 /// The brackets `%` knows, open and close.
@@ -23,8 +23,8 @@ impl Editor {
     /// Byte ranges in the text of the tokens of lines `first..last` whose brackets are not
     /// code: strings, quoted identifiers, dollar bodies and comments.
     fn quoted_spans(&mut self, first: usize, last: usize) -> Vec<(usize, usize)> {
-        let (base, region) = self.region_text(first, last);
-        lex_in(&region, self.lang.dialect())
+        let (base, region, state) = self.region_text(first, last);
+        self.lex(&region, state)
             .into_iter()
             .filter(|t| {
                 matches!(t.kind, Tok::Str | Tok::Dollar | Tok::QuotedIdent | Tok::LineComment | Tok::BlockComment)

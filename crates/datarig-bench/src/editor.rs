@@ -9,6 +9,7 @@
 //! whole text with the bytes it searched, and typing next to a hinted statement of about 4.7 MB
 //! (after a 100,000-line INSERT, above the same INSERT on one line, above a statement under a
 //! 100,000-line comment header) with the bytes the hint checks lexed per key counted.
+//! `editor_mysql`: the same keys in a 5 MB MySQL script with `DELIMITER` blocks.
 
 use crate::apps;
 use crate::grid::wide;
@@ -255,6 +256,105 @@ pub fn run(scratch: &Path, bytes: usize, n: usize) -> Result<Value, String> {
         n.min(100)
     );
     Ok(out)
+}
+
+/// A MySQL script of about `bytes` bytes: statements with backtick names, `#` and `-- `
+/// comments, backslash escapes, executable comments and variables, and every few statements a
+/// stored procedure between `DELIMITER $$` lines, about 70 characters per line.
+pub fn generate_mysql(bytes: usize) -> String {
+    let mut s = String::with_capacity(bytes + 256);
+    let mut i = 0u64;
+    while s.len() < bytes {
+        i += 1;
+        match i % 6 {
+            0 => s.push_str(&format!(
+                "DELIMITER $$\nCREATE PROCEDURE `p_{i}`(IN n INT)\nBEGIN\n  DECLARE v INT DEFAULT 0; -- {i}; a body\n  SET v = n + 1; # still; the body\n  SELECT v, 'a$$b; {i}' AS s;\nEND$$\nDELIMITER ;\n\n"
+            )),
+            1 => s.push_str(&format!(
+                "INSERT INTO `shop`.`audit_log` (actor, action, note) VALUES ('bench', 'update', 'it\\'s {} {i}; with a semicolon');\n",
+                wide(i as usize, 2, false)
+            )),
+            2 => s.push_str(&format!(
+                "UPDATE shop.products SET price = price * 1.05, name = \"{} {i}\" WHERE id = {i}; # why\n",
+                wide(i as usize, 2, false)
+            )),
+            3 => s.push_str(&format!(
+                "SELECT /*!80000 SQL_NO_CACHE */ o.status, count(*) AS n FROM shop.orders o WHERE o.id > {i}\n GROUP BY o.status;\n"
+            )),
+            4 => s.push_str(&format!("SET @last_{i} := (SELECT max(id) FROM `shop`.`orders`), @@session.sql_select_limit = {i};\n")),
+            _ => s.push_str(&format!(
+                "/* block comment {i} */ SELECT e.id, e.event_type, e.payload->>'$.session' FROM shop.events e WHERE e.user_id = {i};\n"
+            )),
+        }
+    }
+    s
+}
+
+/// The editor with a 5 MB MySQL script (its text read as MySQL, `DELIMITER` blocks and all):
+/// keystroke-to-frame time for typing, cursor movement, scrolling and vim's other motions, the
+/// keys of the `editor` scenario; and jumps to the end and back after an edit (`x`, `G`, `gg`,
+/// `u`), each jump lexing the line states of the whole text again.
+pub fn run_mysql(bytes: usize, n: usize) -> Result<Value, String> {
+    use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
+    let text = generate_mysql(bytes);
+    let lines = text.lines().count();
+    let mut app = apps::offline(&text, None);
+    drop(text);
+    app.tab_mut().editor.set_language(Language::Sql(Dialect::MySql(MySqlMode::default())));
+    let mut term = apps::terminal();
+    let t = Instant::now();
+    apps::draw(&mut term, &mut app);
+    let open_ms = ms(t.elapsed());
+    println!("editor_mysql: {bytes} bytes, {lines} lines; drawn in {open_ms:.1} ms");
+    app.tab_mut().editor.row = lines / 2;
+    apps::draw(&mut term, &mut app);
+    let typed = "select count(*) from shop.orders where id = @n ";
+    let typing = keystrokes(&mut app, &mut term, n, |a, i| {
+        if i == 0 {
+            apps::char(a, 'i');
+        } else {
+            apps::char(a, typed.as_bytes()[i % typed.len()] as char);
+        }
+    });
+    apps::key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+    let moves = ['j', 'j', 'l', 'w', 'k', 'b', 'e', 'j'];
+    let movement = keystrokes(&mut app, &mut term, n, |a, i| apps::char(a, moves[i % moves.len()]));
+    let editor_area = app.layout.editor;
+    let (x, y) = (editor_area.x + 5, editor_area.y + 3);
+    let scrolling = keystrokes(&mut app, &mut term, n, |a, i| apps::scroll(a, i % 10 != 9, x, y));
+    let vim_keys = [
+        "}", "}", "{", "%", "%", "f", "(", ";", ",", "W", "B", "E", "g", "e", "H", "M", "L", "C-d", "C-u", "z", "z",
+        "d", "i", "w", "u", ".", "u", "j", "j",
+    ];
+    let vim = keystrokes(&mut app, &mut term, n, |a, i| match vim_keys[i % vim_keys.len()] {
+        k if k.starts_with("C-") => apps::key(a, KeyCode::Char(k.as_bytes()[2] as char), KeyModifiers::CONTROL),
+        k => {
+            let c = k.chars().next().unwrap_or(' ');
+            let m = if c.is_ascii_uppercase() { KeyModifiers::SHIFT } else { KeyModifiers::NONE };
+            apps::key(a, KeyCode::Char(c), m);
+        }
+    });
+    apps::key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+    let jump_keys = ["x", "G", "g", "g", "u"];
+    let jumps = keystrokes(&mut app, &mut term, n.min(50), |a, i| match jump_keys[i % jump_keys.len()] {
+        "G" => apps::key(a, KeyCode::Char('G'), KeyModifiers::SHIFT),
+        k => apps::char(a, k.chars().next().unwrap_or(' ')),
+    });
+    let report = |name: &str, xs: &[f64]| {
+        let s = Summary::of(xs);
+        println!("  {name:<10} {}", s.line(" ms"));
+        s.json()
+    };
+    Ok(json!({
+        "bytes": bytes,
+        "lines": lines,
+        "open_ms": open_ms,
+        "typing_ms": report("typing", &typing),
+        "movement_ms": report("movement", &movement),
+        "scrolling_ms": report("scrolling", &scrolling),
+        "vim_ms": report("vim", &vim),
+        "jump_ms": report("jumps", &jumps),
+    }))
 }
 
 /// Typing next to a hinted statement, `n` keys each with its frame: the key times and the most

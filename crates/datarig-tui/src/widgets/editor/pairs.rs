@@ -11,7 +11,7 @@
 //! again, so a repeat does the same in another place or with the setting changed.
 
 use super::{Editor, Mode};
-use datarig_core::sql::lexer::{Tok, lex_in};
+use datarig_core::sql::lexer::Tok;
 
 /// What auto-pairs did for one key in Insert mode.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -128,11 +128,11 @@ impl Editor {
 
     /// The cursor is inside a string, a quoted name, a comment or a dollar-quoted body.
     fn in_literal(&mut self) -> bool {
-        let (base, region) = self.region_text(self.row, self.row + 1);
+        let (base, region, state) = self.region_text(self.row, self.row + 1);
         let cur = self.offset() - base;
         let literal =
             |k: Tok| matches!(k, Tok::Str | Tok::QuotedIdent | Tok::BlockComment | Tok::Dollar | Tok::LineComment);
-        let toks = lex_in(&region, self.lang.dialect());
+        let toks = self.lex(&region, state);
         let Some(t) = toks.iter().find(|t| literal(t.kind) && t.start < cur && cur <= t.end) else { return false };
         if cur < t.end || t.kind == Tok::LineComment {
             return true;
@@ -140,7 +140,7 @@ impl Editor {
         // Right after its end: inside only when it is not closed, which a line break after it
         // shows (an open one takes it in).
         let more = format!("{region}\n");
-        lex_in(&more, self.lang.dialect()).iter().any(|u| u.start == t.start && u.end > t.end)
+        self.lex(&more, state).iter().any(|u| u.start == t.start && u.end > t.end)
     }
 
     /// The Insert session ended or the cursor moved: no pair is pending any more.

@@ -23,8 +23,7 @@
 
 use super::lexing::REGION_LINES;
 use super::{Editor, Sel};
-use datarig_core::sql::lexer::{Tok, lex_in};
-use datarig_core::sql::split::split_in;
+use datarig_core::sql::split::split_from;
 use std::collections::{HashMap, HashSet};
 
 /// Hints kept at most; past it the oldest go.
@@ -195,9 +194,12 @@ impl Editor {
                 None => (Vec::new(), Vec::new()),
             };
         };
-        let base = (self.sel != Sel::Block).then(|| self.visual_bounds().0);
+        let start = self.visual_bounds().0;
+        let base = (self.sel != Sel::Block).then_some(start);
+        // Split as the whole text is where the selection starts (a MySQL `DELIMITER` above it).
+        let state = self.state_at(start);
         self.exit_visual();
-        let stmts = split_in(&sel, self.lang.dialect());
+        let stmts = split_from(&sel, self.lang.dialect(), state);
         let spans = match base {
             Some(base) => stmts.iter().map(|s| Span::new(base + s.start, base + s.end, s.end > s.body_end)).collect(),
             None => Vec::new(),
@@ -323,7 +325,7 @@ impl Editor {
         // only (never the lines after it, which may be the long statement itself).
         let r = self.pos_bytes(from).0.saturating_sub(1);
         self.ensure_states(r);
-        let (line, byte) = self.restart_of(r);
+        let (line, byte, state) = self.restart_of(r);
         let r0 = self.line_start(line) + byte;
         let (sl, sb) = self.pos_bytes(s.start);
         if r0 > s.start || sb > self.lines[sl].len() {
@@ -336,7 +338,7 @@ impl Editor {
         while !rest.is_char_boundary(cut) {
             cut -= 1;
         }
-        let head = lex_in(&rest[..cut], self.lang.dialect()).first().copied()?;
+        let head = self.lex(&rest[..cut], state).first().copied()?;
         if head.is_trivia() || (head.end == cut && cut < rest.len()) {
             return None;
         }
@@ -345,12 +347,12 @@ impl Editor {
         let at = text.len();
         text.push_str(head_text);
         self.check_work += text.len();
-        let toks = lex_in(&text, self.lang.dialect());
+        let toks = self.lex(&text, state);
         if !toks.iter().any(|t| t.start == at && t.end == text.len() && t.kind == head.kind) {
             return None;
         }
         let before: Vec<_> = toks.iter().take_while(|t| t.end <= at).collect();
-        let semi = before.iter().rposition(|t| t.kind == Tok::Semi);
+        let semi = before.iter().rposition(|t| t.ends_statement());
         let lead = &before[semi.map_or(0, |i| i + 1)..];
         if !lead.iter().all(|t| t.is_trivia()) {
             return None;
@@ -412,18 +414,18 @@ impl Editor {
         let mut holds: HashMap<(usize, usize), (usize, bool, usize)> = HashMap::new();
         loop {
             let (first, last) = (lo_line.saturating_sub(k), (hi_line + k + 1).min(n));
-            let (base, region) = self.region_text(first, last);
+            let (base, region, state) = self.region_text(first, last);
             self.check_work += region.len();
-            let toks = lex_in(&region, self.lang.dialect());
-            let mut semis = toks.iter().filter(|t| t.kind == Tok::Semi);
+            let toks = self.lex(&region, state);
+            let mut semis = toks.iter().filter(|t| t.ends_statement());
             let from = if base == 0 { 0 } else { semis.next().map_or(usize::MAX, |t| base + t.end) };
             let to = if last == n {
                 usize::MAX
             } else {
-                toks.iter().rfind(|t| t.kind == Tok::Semi).map_or(0, |t| base + t.end)
+                toks.iter().rfind(|t| t.ends_statement()).map_or(0, |t| base + t.end)
             };
             // Each statement by its start: its body's end and its end; and their ends in order.
-            let split = split_in(&region, self.lang.dialect());
+            let split = split_from(&region, self.lang.dialect(), state);
             let stmts: HashMap<usize, (usize, usize)> =
                 split.iter().map(|st| (base + st.start, (base + st.body_end, base + st.end))).collect();
             let ends: Vec<usize> = split.iter().map(|st| base + st.end).collect();

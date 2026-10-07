@@ -651,7 +651,7 @@ placeholder that asks about everything (see "MySQL text" below).
     begun, an executable comment open), `LexState::after(token)` carries it over each token,
     and `lex_from(src, d, state)` starts from it. PostgreSQL's is always the default (its
     tokens never depend on text before them); MySQL's client `DELIMITER` makes it matter.
-    The editor does not carry it yet: its lexed regions start in the default state.
+    The editor carries it in its line states (see "The editor" below).
     `Token::ends_statement` is a terminator or a client command line (`Tok::Directive`).
   - Splitter: `split::split_in`, `segment_at_in` (`split`, `segment_at`), and
     `split_from`/`segment_at_from` from a `LexState`; `statement_at` reads statements already
@@ -675,7 +675,13 @@ placeholder that asks about everything (see "MySQL text" below).
     query's rows is the classifier's (`Classifier::count_query`), as paging's allowlist is.
   - The editor: every lexer and splitter use (`lexing.rs`: the line states,
     `current_statement`, `completion_context`; the highlighter; `pairs`, `brackets`, `target`,
-    `runs`) lexes in the editor's language (`Editor::set_language`), and `gc` writes
+    `runs`) lexes in the editor's language (`Editor::set_language`). Each cached line state
+    (`LineState::Normal(LexState)` or `Inside { line, byte, state }`, where a token that spans
+    the line break starts) holds the lexer's state there, folded over the tokens above with
+    `LexState::after`, so a region lexed from a line starts with the terminator a `DELIMITER`
+    far above set (`Editor::region_text` returns it, `Editor::lex` lexes from it); a Visual
+    selection is split from the state where it starts (`Editor::state_at`), and completion
+    gets the state of its text (`completion_context`, `complete_from`). `gc` writes
     `Dialect::comment_marker` and strips the marker `Dialect::line_comment_at` finds. The app lexes, splits,
     completes and formats in the tab's dialect (`App::tab_dialect`), as do `driver::keys`'s
     name readers and the schema-change and rollback checks of a run.

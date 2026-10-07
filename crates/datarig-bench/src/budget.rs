@@ -126,6 +126,18 @@ pub fn editor(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
     Ok(())
 }
 
+/// The editor with a MySQL script: its keystrokes are held to the editor's budget.
+pub fn editor_mysql(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
+    let max = num(b, "editor", "p95_ms_max")?;
+    for what in ["typing_ms", "movement_ms", "scrolling_ms", "vim_ms"] {
+        match f(result, &[what, "p95"]) {
+            Some(m) => c.check(&format!("editor_mysql {what} p95"), m, max, " ms"),
+            None => c.missing(&format!("editor_mysql {what} p95")),
+        }
+    }
+    Ok(())
+}
+
 /// A large plan in every view of the Plan tab: the slowest key with its frame, and the nodes
 /// one frame walked, as a multiple of the plan's nodes.
 pub fn plan(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
