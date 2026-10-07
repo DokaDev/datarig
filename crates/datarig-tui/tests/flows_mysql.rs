@@ -341,3 +341,52 @@ fn databases_are_the_schemas_under_the_profile() {
     h.command("use a.b");
     assert!(h.screen(120, 30).contains(":use"), "a usage error");
 }
+
+#[test]
+fn the_picker_lists_the_databases_with_nothing_below_them() {
+    use datarig_tui::app::quick::QuickRow;
+    let mut h = mysql();
+    h.db(DbEvent::Connected);
+    h.db(DbEvent::Schemas(Ok(vec!["datarig".into(), "sales".into(), "shop".into()])));
+    let p = h.app.profiles[0].id;
+    let rows = |h: &Harness| h.app.overlays.quick().map(|q| q.items.clone()).unwrap_or_default();
+    let selected = |h: &Harness| h.app.overlays.quick().and_then(|q| q.items.get(q.selected).cloned());
+    let want = |h: &Harness| {
+        [QuickRow::Profile(p)]
+            .into_iter()
+            .chain(["datarig", "sales", "shop"].map(|d| QuickRow::Database(p, d.into())))
+            .collect::<Vec<_>>()
+            == rows(h)
+    };
+    let sessions = |h: &Harness| h.driver.sessions.lock().unwrap().len();
+    h.keys(" cd");
+    h.meta_db("local-my", DbEvent::Databases(Ok(vec!["datarig".into(), "sales".into(), "shop".into()])));
+    assert!(want(&h), "{:?}", rows(&h));
+    assert_eq!(selected(&h), Some(QuickRow::Database(p, "datarig".into())));
+    h.key(ratatui::crossterm::event::KeyCode::Esc);
+    // In another database: still one level, and no session of its own is opened for it.
+    h.command("use sales");
+    let before = sessions(&h);
+    h.keys(" cd");
+    assert!(want(&h), "{:?}", rows(&h));
+    assert_eq!(selected(&h), Some(QuickRow::Database(p, "sales".into())));
+    assert_eq!(sessions(&h), before);
+}
+
+#[test]
+fn a_lost_sessions_mode_goes_with_it() {
+    let mut h = mysql();
+    h.db(DbEvent::Connected);
+    let server = MySqlMode { no_backslash_escapes: true, ..MySqlMode::default() };
+    h.meta_db("local-my", DbEvent::Language(my(server)));
+    h.ctrl('e');
+    h.tab_db(0, DbEvent::Language(my(server)));
+    // The tab's session leaves the server's mode, then ends: the next run is checked as a new
+    // session starts.
+    h.tab_db(0, DbEvent::Language(my(MySqlMode::default())));
+    assert_eq!(h.app.tab().exec.prepared.language(), my(MySqlMode::default()));
+    h.tab_db(0, DbEvent::Lost { error: datarig_core::driver::DbError::Closed });
+    let tab = h.app.tab().id;
+    assert_eq!(h.app.tab_language(tab), my(server));
+    assert_eq!(h.app.tab().exec.prepared.language(), my(server));
+}

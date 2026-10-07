@@ -16,10 +16,11 @@ use crate::link::{Link, Next};
 use crate::session::{Tracked, quit};
 use datarig_core::driver::structure::RelationStats;
 use datarig_core::driver::{DbCommand, DbError, DbEvent, SchemaObjects};
+use datarig_core::fault::Fault;
 use datarig_core::sql::complete::{Catalog, ColumnInfo, Relation};
 use datarig_core::sql::dialect::{Dialect, MySqlMode};
-use mysql_async::Conn;
-use mysql_async::prelude::Queryable;
+use mysql_async::prelude::{FromRow, Queryable};
+use mysql_async::{Conn, Row};
 use tokio::sync::mpsc::UnboundedSender;
 
 /// The databases of the server's own, never listed.
@@ -34,6 +35,15 @@ fn read_error(e: &mysql_async::Error) -> DbError {
         mysql_async::Error::Server(s) if s.code == LOCK_WAIT_TIMEOUT => DbError::Locked,
         e => crate::session::my_error(e),
     }
+}
+
+/// The rows of `sql` as `T`. A value of another type than the read expects (a server or a proxy
+/// that answers otherwise) fails the read instead of the session.
+async fn rows_of<T: FromRow>(conn: &mut Conn, sql: String) -> Result<Vec<T>, DbError> {
+    let rows: Vec<Row> = conn.query(sql).await.map_err(|e| read_error(&e))?;
+    rows.into_iter()
+        .map(|r| mysql_async::from_row_opt(r).map_err(|e| DbError::Connection(Fault::other(e.to_string()))))
+        .collect()
 }
 
 pub(crate) async fn meta_loop(mut conn: Conn, mut link: Link, events: UnboundedSender<DbEvent>, tracked: Tracked) {
@@ -101,7 +111,7 @@ async fn load_schemas(conn: &mut Conn) -> Result<Vec<String>, DbError> {
     let sql = format!(
         "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME NOT IN {HIDDEN} ORDER BY SCHEMA_NAME"
     );
-    conn.query::<String, _>(sql).await.map_err(|e| read_error(&e))
+    rows_of(conn, sql).await
 }
 
 /// The tables and views of database `schema`, with the estimates of each table: one statement.
@@ -110,7 +120,7 @@ const SCHEMA_OBJECTS: &str = "SELECT TABLE_NAME, TABLE_TYPE, TABLE_ROWS, DATA_LE
 
 async fn load_objects(conn: &mut Conn, schema: &str, mode: MySqlMode) -> Result<SchemaObjects, DbError> {
     let sql = SCHEMA_OBJECTS.replace("{schema}", &Dialect::MySql(mode).quote_literal(schema));
-    let rows: Vec<(String, String, Option<u64>, Option<u64>)> = conn.query(sql).await.map_err(|e| read_error(&e))?;
+    let rows: Vec<(String, String, Option<u64>, Option<u64>)> = rows_of(conn, sql).await?;
     let mut out = SchemaObjects::default();
     for (name, kind, rows, bytes) in rows {
         if kind == "BASE TABLE" {
@@ -133,7 +143,7 @@ async fn load_catalog(conn: &mut Conn) -> Result<Catalog, DbError> {
          ON t.TABLE_SCHEMA = c.TABLE_SCHEMA AND t.TABLE_NAME = c.TABLE_NAME \
          WHERE c.TABLE_SCHEMA NOT IN {HIDDEN} ORDER BY c.TABLE_SCHEMA, c.TABLE_NAME, c.ORDINAL_POSITION"
     );
-    let rows: Vec<(String, String, String, String, String)> = conn.query(sql).await.map_err(|e| read_error(&e))?;
+    let rows: Vec<(String, String, String, String, String)> = rows_of(conn, sql).await?;
     let mut relations: Vec<Relation> = Vec::new();
     for (schema, name, kind, column, ty) in rows {
         if relations.last().is_none_or(|l| l.schema != schema || l.name != name) {

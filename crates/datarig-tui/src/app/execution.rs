@@ -747,6 +747,14 @@ impl App {
             }
             return self.sync_tab_language(id);
         }
+        // The mode the lost session read its text in goes with it: the next run, in a new
+        // session, is checked in the mode that one starts in.
+        if matches!(ev, DbEvent::Lost { .. }) {
+            if let Some(t) = self.tabs.get_mut(id) {
+                t.exec.language = None;
+            }
+            self.sync_tab_language(id);
+        }
         // The run ends (its result, its outcome or its failure), or a transaction ends.
         let current = self.tabs.get(id).map_or(0, |t| t.exec.query_id);
         let run_ended = matches!(&ev, DbEvent::Page { id: q, columns: Some(_), .. } | DbEvent::Done { id: q, .. }

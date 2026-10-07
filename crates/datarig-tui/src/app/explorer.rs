@@ -519,7 +519,7 @@ impl App {
             RowKind::Node(id, n) => {
                 let id = *id;
                 // A real driver without a table's structure yet (MySQL) shows its columns only:
-                // said once the table opens, so the missing keys and indexes do not read as none.
+                // said each time a table opens, so the missing keys and indexes do not read as none.
                 let opens =
                     matches!(n, Node::Object(..)) && self.row_expanded(row) == Some(false) && want != Some(false);
                 if opens && self.schema_only(Some(id)) && !self.structure_on(id) {

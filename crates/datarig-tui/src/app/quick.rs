@@ -126,12 +126,15 @@ impl App {
         let Some(p) = t.profile else { return self.open_quick(QuickPurpose::Bind { tab, run: None }) };
         let db = t.context.database.clone().unwrap_or_else(|| self.own_database(p));
         let schema = t.context.schema.clone();
-        // One level: the tab's schema is listed as a database.
-        let (db, schema) = if self.schema_only(Some(p)) { (schema.unwrap_or(db), None) } else { (db, schema) };
+        // One level: the tab's schema is listed as a database, with nothing below it.
+        let one = self.schema_only(Some(p));
+        let (db, schema) = if one { (schema.unwrap_or(db), None) } else { (db, schema) };
         self.open_quick(QuickPurpose::Bind { tab, run: None });
         if let Some(q) = self.overlays.quick_mut() {
             q.open.insert(p);
-            q.open_db.insert((p, db.clone()));
+            if !one {
+                q.open_db.insert((p, db.clone()));
+            }
             q.context_of = Some(p);
         }
         if let Some(q) = self.overlays.quick_mut() {
@@ -221,7 +224,7 @@ impl App {
         let before = q.items.get(q.selected).cloned();
         let only = q.context_of;
         for &(p, ref db) in &open_db {
-            if open.contains(&p) && *db != self.own_database(p) {
+            if open.contains(&p) && *db != self.own_database(p) && !self.schema_only(Some(p)) {
                 self.ensure_aux(p, db);
             }
         }
@@ -235,13 +238,15 @@ impl App {
         for p in profiles {
             let name = self.profile(p).map(|c| c.name.clone()).unwrap_or_default();
             let mut children = Vec::new();
+            // One level (MySQL): a database has no schemas below it.
+            let one = self.schema_only(Some(p));
             if open.contains(&p) {
                 match self.quick_databases(p) {
                     Err(note) => children.push(QuickRow::Note(p, None, note)),
                     Ok(dbs) => {
                         for db in dbs {
                             let mut below = Vec::new();
-                            if open_db.contains(&(p, db.clone())) {
+                            if !one && open_db.contains(&(p, db.clone())) {
                                 match self.quick_schemas(p, &db) {
                                     Err(note) => below.push(QuickRow::Note(p, Some(db.clone()), note)),
                                     Ok(schemas) => below.extend(
