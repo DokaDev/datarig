@@ -233,6 +233,7 @@ pub(crate) fn why_text(i18n: &I18n, d: &Dangerous) -> String {
         let how = match d.no_where {
             Some(NoWhere::AlwaysTrue) => Label::SafetyWhyAlwaysTrue,
             Some(NoWhere::NoColumn) => Label::SafetyWhyNoColumn,
+            Some(NoWhere::OtherTables) => Label::SafetyWhyOtherTables,
             _ => Label::SafetyWhyNoWhere,
         };
         parts.push(i18n.label(how).to_string());

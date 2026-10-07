@@ -54,6 +54,7 @@ fn render(r: &Risk) -> String {
             Some(NoWhere::Missing) => ":missing",
             Some(NoWhere::AlwaysTrue) => ":always",
             Some(NoWhere::NoColumn) => ":nocol",
+            Some(NoWhere::OtherTables) => ":others",
             None => "",
         };
         out.push(format!("{name}{how}"));
@@ -191,13 +192,17 @@ fn the_sql_mode_changes_what_is_a_string() {
     assert_eq!(render(&classify("SELECT \"a\" FROM t", MODE)), "read ro");
     // The server reads no escape in a quoted name: `"a\"` ends there.
     assert_eq!(render(&classify("SELECT \"a\\\" FROM t; DELETE FROM t\"", ansi)), "unknown unrecognized");
-    // Without backslash escapes, `'\'` is a whole string and what follows is code.
+    // Without backslash escapes, `'\'` is a whole string and what follows is code. Whatever
+    // mode the app was told, the text is also read in the other: the worse reading counts.
     let text = "SELECT '\\'; DELETE FROM t; -- '";
-    assert_eq!(render(&classify(text, MODE)), "read ro");
     assert_eq!(render(&classify(text, raw)), "write delete-all:missing writes");
+    assert_eq!(render(&classify(text, MODE)), "write delete-all:missing writes");
     let text = "SELECT * FROM t WHERE b = 'x\\' OR 1 = 1; DELETE FROM t -- '";
-    assert_eq!(render(&classify(text, MODE)), "read ro");
     assert_eq!(classify(text, raw).danger, Some(Danger::DeleteAll));
+    assert_eq!(classify(text, MODE).danger, Some(Danger::DeleteAll));
+    // A reading the server would refuse (an unterminated string) does not count.
+    assert_eq!(render(&classify("SELECT 'it\\'s'", MODE)), "read ro");
+    assert_eq!(render(&classify("SELECT \"it\"\"s\" FROM t", ansi)), "read ro");
     // Dollar quotes only where the server reads them.
     let dollar = MySqlMode { dollar_quotes: true, ..MODE };
     assert_eq!(render(&classify("SELECT $$a; DROP TABLE t$$", dollar)), "read ro");
@@ -207,7 +212,13 @@ fn the_sql_mode_changes_what_is_a_string() {
 #[test]
 fn a_hint_with_a_semicolon_or_a_write_stays_a_comment() {
     assert_eq!(render(&risk("SELECT /*+ ; DELETE FROM t */ 1")), "read ro");
-    assert_eq!(render(&risk("SELECT /*+ SET_VAR(transaction_read_only = OFF) */ 1")), "read ro");
+    // A hint that turns a check off or read-only off for its statement asks.
+    assert_eq!(render(&risk("SELECT /*+ SET_VAR(transaction_read_only = OFF) */ 1")), "read setting");
+    assert_eq!(
+        render(&risk("DELETE /*+ SET_VAR(foreign_key_checks=0) */ FROM t WHERE id = 1")),
+        "write setting writes"
+    );
+    assert_eq!(render(&risk("SELECT /*+ SET_VAR(sort_buffer_size = 1M) */ 1")), "read ro");
 }
 
 #[test]
@@ -279,7 +290,10 @@ fn a_routine_ends_where_its_body_does() {
         render(&risk("CREATE TRIGGER tr BEFORE INSERT ON t FOR EACH ROW SET NEW.a = 1; SET GLOBAL x = 1")),
         "maint server-command commit"
     );
-    assert_eq!(render(&risk("CREATE EVENT e ON SCHEDULE EVERY 1 DAY DO DELETE FROM t; SELECT 1")), "ddl commit");
+    assert_eq!(
+        render(&risk("CREATE EVENT e ON SCHEDULE EVERY 1 DAY DO DELETE FROM t; SELECT 1")),
+        "ddl delete-all:missing commit"
+    );
     // Blocks that cannot be followed: the whole text is the one statement.
     assert_eq!(render(&risk("CREATE PROCEDURE p() BEGIN END END; DROP TABLE t")), "ddl commit");
 }
@@ -297,6 +311,35 @@ fn deep_nesting_is_read_in_linear_time() {
         let r = risk(text);
         assert!(r.danger.is_none() || r.danger == Some(Danger::DeleteAll), "{:?}", r.danger);
         assert!(start.elapsed() < std::time::Duration::from_secs(2), "{:?}", start.elapsed());
+    }
+}
+
+/// Every prefix and suffix of every corpus text, in every sql mode, read without the thread
+/// guard (which would turn a panic into a verdict): no panic.
+#[test]
+fn no_text_makes_the_classifier_panic() {
+    let modes = [MODE, MySqlMode { ansi_quotes: true, no_backslash_escapes: true, dollar_quotes: true }];
+    let mut texts: Vec<&str> = CORPUS.iter().map(|(sql, _)| *sql).collect();
+    texts.extend([
+        "SET CHARACTER",
+        "SET x = 1, CHARACTER",
+        "SET @\u{e9} x = 1",
+        "SET @@",
+        "SET @ = 1",
+        "SET =",
+        "SET NAMES",
+    ]);
+    for text in texts {
+        let cuts: Vec<usize> = (0..=text.len()).filter(|&i| text.is_char_boundary(i)).collect();
+        for &i in &cuts {
+            for part in [&text[..i], &text[i..]] {
+                for mode in modes {
+                    let _ = classify_as(part, mode);
+                    let _ = names_as(part, mode);
+                    let _ = without_semicolons(part, mode);
+                }
+            }
+        }
     }
 }
 
@@ -358,7 +401,16 @@ fn repeatable_is_the_plain_query_allowlist() {
         ("SELECT * FROM t WHERE id = @x", NotRepeatable::Variable("@x".into())),
         ("SELECT @@sql_mode", NotRepeatable::Variable("@@sql_mode".into())),
         ("SELECT @x := 1", NotRepeatable::Variable("@x".into())),
-        ("SELECT /*! 1 */", NotRepeatable::Unreadable),
+        ("SELECT /*! 1 */", NotRepeatable::Writes),
+        ("SELECT * FROM performance_schema.threads", NotRepeatable::NotATable("performance_schema.threads".into())),
+        (
+            "SELECT * FROM `information_schema`.`TABLES`",
+            NotRepeatable::NotATable("`information_schema`.`TABLES`".into()),
+        ),
+        ("SELECT ANY_VALUE(a) FROM t GROUP BY b", NotRepeatable::Volatile("any_value".into())),
+        ("SELECT /*+ SET_VAR(sql_mode = '') */ 1", NotRepeatable::Writes),
+        // Read in another sql mode, the text calls RAND().
+        ("SELECT 'a\\' , RAND() #'", NotRepeatable::Volatile("rand".into())),
         ("SELEC 1", NotRepeatable::NotSelect),
         ("SELECT (1", NotRepeatable::Unreadable),
     ];

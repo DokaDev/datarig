@@ -728,6 +728,9 @@ text" and "The MySQL classifier" below).
   `Danger::Unrecognized`. An executable comment (`/*!…*/`, MariaDB's `/*M!…*/`) is
   `Danger::ExecutableComment`; a text the server would read otherwise than the lexer (an
   unterminated token, a client command, a control character, an escape in a quoted name) is
+  unrecognized. A text with a backslash or a `"` is also read in the sql modes that read it
+  differently (`NO_BACKSLASH_ESCAPES`, `ANSI_QUOTES`), and the worse reading counts unless the
+  server would refuse it as a syntax error; it runs on `risk::THREAD`, where a panic reads as
   unrecognized. MySQL-only dangers: `Locks` (`LOCK TABLES`, `HANDLER`, `FLUSH … WITH READ
   LOCK`), `Privileges`, `Rename`, `Setting` (`risk::mysql::RISKY_SETTINGS`, a client character
   set that is not UTF-8), `DynamicSql` (`PREPARE`), `ServerCommand` (`KILL`, `SET GLOBAL`,

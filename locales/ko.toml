@@ -213,6 +213,7 @@
 "safety.why.always_true" = "WHERE가 항상 참"
 "safety.why.explain" = "EXPLAIN ANALYZE가 실행한 뒤 롤백"
 "safety.why.no_column" = "WHERE가 어떤 열도 읽지 않음"
+"safety.why.other_tables" = "WHERE와 조인이 바꾸는 테이블의 열을 읽지 않음"
 "safety.why.alter_type" = "열을 다른 타입으로 변환해 데이터가 손실될 수 있음(ALTER … TYPE)"
 "safety.why.merge" = "행을 수정하거나 삭제하는 MERGE"
 "safety.why.unknown_prepared" = "이 탭이 알지 못하는 prepared 문을 실행"

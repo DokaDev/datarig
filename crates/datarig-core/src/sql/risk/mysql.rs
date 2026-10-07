@@ -19,20 +19,38 @@
 //!   changes no rows. `EXPLAIN ANALYZE` runs the statement: its risk is the statement's, with
 //!   [`Explain::Analyze`].
 //!
+//! A locking clause anywhere (in a subquery of a `SET`, a `SHOW … WHERE`, a `DO`) makes the
+//! statement a [`Class::Write`]: MySQL's read-only mode lets `FOR SHARE` take row locks.
+//!
+//! **The sql mode.** A backslash in a string and a `"` read differently under
+//! `NO_BACKSLASH_ESCAPES` and `ANSI_QUOTES`. The session's mode is the driver's to tell, but a
+//! server's may differ from what the app was told, so a text with either is read in every
+//! mode that reads it differently and the worse reading counts, unless that reading is one the
+//! server would refuse as a syntax error (an unterminated string: no way the text runs). The
+//! driver must keep the session's client character set UTF-8: another one (`gbk`, `sjis`) can
+//! read a byte of a character as a quote or a backslash, which is why `SET NAMES` of one asks.
+//!
 //! A text with an executable comment (`/*! … */`, `/*!80023 … */`, and MariaDB's `/*M! … */`)
 //! is never read: the server runs what is inside depending on its version, which the text does
 //! not tell ([`Danger::ExecutableComment`]: it asks, and a read-only policy refuses it).
-//! Optimizer hints (`/*+ … */`) are comments. A text whose form is not one of those this
+//! Optimizer hints (`/*+ … */`) are comments, except that a `SET_VAR` of a setting of
+//! [`RISKY_SETTINGS`] or of read-only in one asks ([`Danger::Setting`]). A text whose form is not one of those this
 //! module knows, or that the server would read otherwise than the lexer (an unterminated
 //! string or comment, a client command such as `DELIMITER` or `\g`, a `?`, a parenthesis that
 //! does not close, a write's keyword inside a query, …) is [`Danger::Unrecognized`]: it asks, and
 //! a read-only policy refuses it. A text over [`MAX_BYTES`] or nested deeper than [`MAX_DEPTH`]
-//! parentheses is [`Danger::TooComplex`]. Nothing here recurses with the text's nesting.
+//! parentheses is [`Danger::TooComplex`]. Nothing here recurses with the text's nesting, and
+//! the work runs on a thread of its own ([`super::THREAD`], as PostgreSQL's does), where a panic
+//! reads as [`Danger::Unrecognized`].
 //!
-//! **Several statements.** Every statement of the text is read and the worst counts, except
-//! for `CREATE PROCEDURE`, `FUNCTION`, `TRIGGER` and `EVENT`, whose body holds `;`: such a text
-//! is one statement (the driver sends each statement alone, with the server's multi-statement
-//! mode off, so a text the server reads as more than one fails as a whole).
+//! **Several statements.** Every statement of the text is read and the worst counts (the danger
+//! a read-only policy refuses by itself is kept over another). `CREATE PROCEDURE`, `FUNCTION`,
+//! `TRIGGER` and `EVENT` hold `;` in their body: the statement ends where the body does (one
+//! statement, or a `BEGIN … END` block followed through `IF`, `CASE`, `LOOP`, `REPEAT` and
+//! `WHILE`), and when that cannot be followed the whole text is the one statement (the driver
+//! sends each statement alone, with the server's multi-statement mode off, so a text the server
+//! reads as more than one fails as a whole). An event's body runs later on its own: a
+//! statement's danger is the event's, and a block asks ([`Danger::Procedural`]).
 //!
 //! **What the server's read-only mode does not stop**, refused before a statement is sent: a
 //! call of a built-in that reads a file of the server ([`SERVER_FILES`]) or takes a lock that
@@ -70,10 +88,12 @@
 //! "Effectively every row" ([`NoWhere`]) for `UPDATE` and `DELETE` (multi-table forms too): no
 //! `WHERE` (a `LIMIT` alone does not count), a `WHERE` that is always true (`TRUE`, a number
 //! other than 0, `NOT FALSE`, both sides of `=` or `<=>` the same, an `OR` with such an
-//! operand, an `AND` of them), or a `WHERE` that names no column.
+//! operand, an `AND` of them; names compared whatever their quoting and case), a `WHERE` that
+//! names no column, or, for a multi-table one, a `WHERE` and joins that name only other tables'
+//! columns ([`NoWhere::OtherTables`]). `ALTER TABLE … ENGINE = BLACKHOLE` empties the table.
 
 use super::repeat::NotRepeatable;
-use super::{Class, Danger, Explain, MAX_BYTES, MAX_DEPTH, NoWhere, Risk};
+use super::{Class, Danger, Explain, MAX_BYTES, MAX_DEPTH, NoWhere, Risk, THREAD};
 use crate::sql::dialect::{Dialect, MySqlMode};
 use crate::sql::lexer::{Tok, is_space, lex_in};
 
@@ -100,6 +120,7 @@ pub const SERVER_ACTIONS: &[&str] = &["GET_LOCK", "RELEASE_ALL_LOCKS", "RELEASE_
 /// that calls one is not run again for the next page. `NOW()` and the like are the same
 /// throughout a statement and are allowed, as PostgreSQL's stable functions are.
 pub const VOLATILE: &[&str] = &[
+    "ANY_VALUE",
     "BENCHMARK",
     "FOUND_ROWS",
     "GET_LOCK",
@@ -123,35 +144,28 @@ pub const VOLATILE: &[&str] = &[
 ];
 
 /// Session variables a read-only policy lets a session change: none of them can turn read-only
-/// off, write anything, or change how the server reads the text the app sends. Lower case.
+/// off, write anything, change how the server reads the text the app sends, or let a statement
+/// take more of the server's memory or time than its defaults (buffer sizes, recursion depth,
+/// join size are not here). Lower case.
 pub const SAFE_SETTINGS: &[&str] = &[
     "big_tables",
     "character_set_connection",
     "character_set_results",
     "collation_connection",
-    "cte_max_recursion_depth",
     "default_week_format",
     "div_precision_increment",
     "end_markers_in_json",
-    "eq_range_index_dive_limit",
     "explain_format",
     "explain_json_format_version",
     "group_concat_max_len",
     "information_schema_stats_expiry",
     "innodb_lock_wait_timeout",
     "interactive_timeout",
-    "join_buffer_size",
     "lc_messages",
     "lc_time_names",
     "lock_wait_timeout",
     "max_error_count",
     "max_execution_time",
-    "max_heap_table_size",
-    "max_join_size",
-    "max_length_for_sort_data",
-    "max_points_in_geometry",
-    "max_seeks_for_key",
-    "max_sort_length",
     "net_read_timeout",
     "net_write_timeout",
     "optimizer_prune_level",
@@ -160,22 +174,15 @@ pub const SAFE_SETTINGS: &[&str] = &[
     "optimizer_trace",
     "optimizer_trace_features",
     "optimizer_trace_limit",
-    "optimizer_trace_max_mem_size",
     "optimizer_trace_offset",
     "profiling",
     "profiling_history_size",
-    "range_optimizer_max_mem_size",
-    "read_buffer_size",
-    "read_rnd_buffer_size",
-    "sort_buffer_size",
-    "sql_big_selects",
     "sql_buffer_result",
     "sql_notes",
     "sql_quote_show_create",
     "sql_select_limit",
     "sql_warnings",
     "time_zone",
-    "tmp_table_size",
     "transaction_isolation",
     "tx_isolation",
     "wait_timeout",
@@ -279,6 +286,7 @@ const NOT_CALLS: &[&str] = &[
     "MEDIUMTEXT",
     "NOT",
     "NUMERIC",
+    "OF",
     "ON",
     "OR",
     "OVER",
@@ -443,21 +451,77 @@ impl Call {
 }
 
 /// The risk of MySQL text `sql`, read in sql mode `mode`: one statement, or several separated
-/// by `;` (their worst).
+/// by `;` (their worst). A text with a backslash or a `"` is also read as a session in the other
+/// modes would read it ([`readings`]), and the worse reading counts, unless that reading is
+/// one the server would refuse as a syntax error. It runs on a thread of its own ([`THREAD`]),
+/// as PostgreSQL's does: a panic there reads as [`Danger::Unrecognized`].
 pub fn classify(sql: &str, mode: MySqlMode) -> Risk {
+    guarded(unrecognized, || {
+        let mut modes = readings(sql, mode).into_iter();
+        let first = modes.next().map_or_else(unrecognized, |m| classify_as(sql, m));
+        modes.map(|m| classify_as(sql, m)).filter(|r| !refused(r)).fold(first, worse)
+    })
+}
+
+/// The sql modes to read `sql` in: `mode` first, then the others that read it differently (a
+/// backslash in it reads otherwise under `NO_BACKSLASH_ESCAPES`, a `"` under `ANSI_QUOTES`).
+/// The session's mode is the driver's to keep current, and a server's default may differ from
+/// what the app was told.
+fn readings(sql: &str, mode: MySqlMode) -> Vec<MySqlMode> {
+    let backslash = sql.contains('\\');
+    let quote = sql.contains('"');
+    let mut out = vec![mode];
+    if backslash {
+        out.push(MySqlMode { no_backslash_escapes: !mode.no_backslash_escapes, ..mode });
+    }
+    if quote {
+        out.push(MySqlMode { ansi_quotes: !mode.ansi_quotes, ..mode });
+    }
+    if backslash && quote {
+        out.push(MySqlMode {
+            ansi_quotes: !mode.ansi_quotes,
+            no_backslash_escapes: !mode.no_backslash_escapes,
+            ..mode
+        });
+    }
+    out
+}
+
+/// Whether a reading of a text is one the server would refuse before running anything (an
+/// unterminated token, a parenthesis that does not close, …): it is no way the text runs.
+fn refused(r: &Risk) -> bool {
+    matches!(r.danger, Some(Danger::Unrecognized | Danger::TooComplex))
+}
+
+/// `f` on a thread of its own named [`THREAD`]; `fallback` when it panics or the thread cannot
+/// start.
+fn guarded<T: Send>(fallback: impl FnOnce() -> T, f: impl FnOnce() -> T + Send) -> T {
+    let run = std::thread::scope(|scope| {
+        let worker = std::thread::Builder::new().name(THREAD.to_string()).stack_size(8 << 20);
+        worker.spawn_scoped(scope, f).ok().and_then(|h| h.join().ok())
+    });
+    run.unwrap_or_else(fallback)
+}
+
+/// [`classify`] in one sql mode.
+fn classify_as(sql: &str, mode: MySqlMode) -> Risk {
     match statements(sql, mode) {
-        Ok(stmts) => stmts.iter().map(|ws| statement(ws)).reduce(worse).unwrap_or_else(|| Risk::of(Class::Unknown)),
+        Ok((stmts, hint)) => {
+            let risk = stmts.iter().map(|ws| statement(ws)).reduce(worse).unwrap_or_else(|| Risk::of(Class::Unknown));
+            if hint { worse(risk, Risk::danger(Class::Read, Danger::Setting)) } else { risk }
+        }
         Err(risk) => risk,
     }
 }
 
-/// The statements of `sql` (their tokens), or the risk of a text that is not read.
-fn statements(sql: &str, mode: MySqlMode) -> Result<Vec<Vec<W<'_>>>, Risk> {
-    let mut ws = words(sql, mode)?;
+/// The statements of `sql` (their tokens), and whether an optimizer hint of it sets a risky
+/// setting ([`words`]); or the risk of a text that is not read.
+fn statements(sql: &str, mode: MySqlMode) -> Result<(Vec<Vec<W<'_>>>, bool), Risk> {
+    let (mut ws, hint) = words(sql, mode)?;
     let mut out = Vec::new();
     if starts_compound(&ws) {
         let Some(end) = routine_end(&ws) else {
-            return Ok(vec![ws.into_iter().filter(|w| w.kind != Tok::Semi).collect()]);
+            return Ok((vec![ws.into_iter().filter(|w| w.kind != Tok::Semi).collect()], hint));
         };
         let rest = ws.split_off(end);
         out.push(ws);
@@ -476,7 +540,7 @@ fn statements(sql: &str, mode: MySqlMode) -> Result<Vec<Vec<W<'_>>>, Risk> {
     if !cur.is_empty() {
         out.push(cur);
     }
-    Ok(out)
+    Ok((out, hint))
 }
 
 /// The worse of two risks ([`Risk::merge`]), keeping the danger a read-only policy refuses by
@@ -494,9 +558,11 @@ fn unrecognized() -> Risk {
     Risk::danger(Class::Unknown, Danger::Unrecognized)
 }
 
-/// The tokens of `sql` that are not blanks or comments, or the risk of a text that is not read
-/// (see the module docs).
-fn words(sql: &str, mode: MySqlMode) -> Result<Vec<W<'_>>, Risk> {
+/// The tokens of `sql` that are not blanks or comments, and whether an optimizer hint sets a
+/// setting of [`RISKY_SETTINGS`] or turns read-only off for its statement (`/*+
+/// SET_VAR(foreign_key_checks = 0) */`); or the risk of a text that is not read (see the module
+/// docs).
+fn words(sql: &str, mode: MySqlMode) -> Result<(Vec<W<'_>>, bool), Risk> {
     if sql.len() > MAX_BYTES {
         return Err(Risk::danger(Class::Unknown, Danger::TooComplex));
     }
@@ -504,6 +570,7 @@ fn words(sql: &str, mode: MySqlMode) -> Result<Vec<W<'_>>, Risk> {
     let mut out: Vec<W> = Vec::new();
     let mut depth = 0usize;
     let mut open: Vec<usize> = Vec::new();
+    let mut hint = false;
     for t in lex_in(sql, Dialect::MySql(mode)) {
         let text = t.text(sql);
         match t.kind {
@@ -516,7 +583,11 @@ fn words(sql: &str, mode: MySqlMode) -> Result<Vec<W<'_>>, Risk> {
             Tok::Str | Tok::QuotedIdent | Tok::Variable if !closed(text, t.kind, backslash) => {
                 return Err(unrecognized());
             }
-            Tok::LineComment | Tok::BlockComment => continue,
+            Tok::BlockComment => {
+                hint |= text.starts_with("/*+") && sets_risky(text);
+                continue;
+            }
+            Tok::LineComment => continue,
             _ if text.starts_with('\\') || text.chars().any(|c| c.is_control() && !is_space(c)) => {
                 // A client command (`\g`, `\G`, a backslash at a line's end) or a control character:
                 // the server reads it otherwise.
@@ -566,7 +637,19 @@ fn words(sql: &str, mode: MySqlMode) -> Result<Vec<W<'_>>, Risk> {
     if depth != 0 {
         return Err(unrecognized());
     }
-    Ok(out)
+    Ok((out, hint))
+}
+
+/// Whether optimizer hint `text` has a `SET_VAR` of a setting of [`RISKY_SETTINGS`] or
+/// [`READ_ONLY_SETTINGS`].
+fn sets_risky(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    lower.match_indices("set_var").any(|(at, _)| {
+        let rest = lower[at + "set_var".len()..].trim_start();
+        let Some(rest) = rest.strip_prefix('(') else { return false };
+        let name: String = rest.trim_start().chars().take_while(|c| c.is_ascii_alphanumeric() || *c == '_').collect();
+        RISKY_SETTINGS.contains(&name.as_str()) || READ_ONLY_SETTINGS.contains(&name.as_str())
+    })
 }
 
 /// Whether quoted token `text` (a string, a quoted name, a quoted variable name) ends with its
@@ -749,12 +832,31 @@ fn calls(ws: &[W]) -> Vec<Call> {
 /// (…)`.
 fn syntax_before_paren(ws: &[W], i: usize) -> bool {
     let prev = i.checked_sub(1).map(|p| &ws[p]);
+    // A derived table's column list: `(SELECT …) AS d (a, b)` without the `AS`.
+    if prev.is_some_and(|p| p.kind == Tok::RParen) {
+        return true;
+    }
     match ws[i].up.as_str() {
         "ANY" | "SOME" => prev.is_some_and(|p| p.kind == Tok::Op),
         "AGAINST" => prev.is_some_and(|p| p.kind == Tok::RParen),
         "COLUMNS" | "ESCAPE" => prev.is_some_and(|p| p.kind == Tok::Str),
+        // The type of `CONVERT(x, type)` and of `… RETURNING type` (`JSON_VALUE`).
+        t if CAST_TYPES.contains(&t) => {
+            prev.is_some_and(|p| p.is("RETURNING"))
+                || (prev.is_some_and(|p| p.kind == Tok::Comma) && opener(ws, i).is_some_and(|o| o.is("CONVERT")))
+        }
         _ => false,
     }
+}
+
+/// The types `CAST`, `CONVERT` and `RETURNING` take, with a precision in parentheses.
+const CAST_TYPES: &[&str] = &["BINARY", "CHAR", "DATETIME", "DECIMAL", "DOUBLE", "FLOAT", "NCHAR", "TIME"];
+
+/// The word before the parenthesis that encloses the token at `i`.
+fn opener<'c, 'a>(ws: &'c [W<'a>], i: usize) -> Option<&'c W<'a>> {
+    let depth = ws[i].depth.checked_sub(1)?;
+    let open = (0..i).rev().find(|&j| ws[j].kind == Tok::LParen && ws[j].depth == depth)?;
+    open.checked_sub(1).map(|j| &ws[j])
 }
 
 /// A quoted name's text without its quotes.
@@ -789,7 +891,12 @@ fn with_calls(mut risk: Risk, ws: &[W]) -> Risk {
 
 /// The risk of one statement (its tokens).
 fn statement(ws: &[W]) -> Risk {
-    let risk = kind(ws);
+    let mut risk = kind(ws);
+    // A locking read anywhere (a subquery of a `SET`, a `SHOW … WHERE`, …) takes row locks; what
+    // `EXPLAIN` only plans takes none.
+    if risk.class < Class::Write && risk.explain != Explain::Plan && locks(ws) && !routine_body(ws) {
+        risk.class = Class::Write;
+    }
     let risk = if routine_body(ws) { risk } else { with_calls(risk, ws) };
     let harmless = matches!(risk.class, Class::Read | Class::Session | Class::Tx);
     if harmless && has_write_word(ws) { unrecognized() } else { risk }
@@ -912,10 +1019,15 @@ fn maintenance(danger: Option<Danger>) -> Risk {
     Risk { danger, implicit_commit: true, ..Risk::of(Class::Maintenance) }
 }
 
+/// Whether `ws` has a locking clause: `FOR UPDATE`, `FOR SHARE`, `LOCK IN SHARE MODE`.
+fn locks(ws: &[W]) -> bool {
+    ws.windows(2).any(|w| w[0].is("FOR") && (w[1].is("UPDATE") || w[1].is("SHARE")))
+        || ws.windows(4).any(|w| w[0].is("LOCK") && w[1].is("IN") && w[2].is("SHARE") && w[3].is("MODE"))
+}
+
 /// A query (`SELECT`, `TABLE`, `VALUES`, in parentheses or not, with `WITH` before it).
 fn query(ws: &[W]) -> Risk {
-    let locks = ws.windows(2).any(|w| w[0].is("FOR") && (w[1].is("UPDATE") || w[1].is("SHARE")))
-        || ws.windows(4).any(|w| w[0].is("LOCK") && w[1].is("IN") && w[2].is("SHARE") && w[3].is("MODE"));
+    let locks = locks(ws);
     let class = if locks { Class::Write } else { Class::Read };
     let intos: Vec<usize> = (0..ws.len()).filter(|&i| ws[i].is("INTO")).collect();
     if intos.iter().any(|&i| ws.get(i + 1).is_some_and(|w| w.is("OUTFILE") || w.is("DUMPFILE"))) {
@@ -976,8 +1088,8 @@ fn starts_query(ws: &[W], i: usize) -> bool {
 fn with(ws: &[W]) -> Risk {
     match with_main(ws) {
         Some(i) if starts_query(ws, i) => query(ws),
-        Some(i) if ws[i].is("UPDATE") => update(ws, i),
-        Some(i) if ws[i].is("DELETE") => delete(ws, i),
+        Some(i) if ws.get(i).is_some_and(|w| w.is("UPDATE")) => update(ws, i),
+        Some(i) if ws.get(i).is_some_and(|w| w.is("DELETE")) => delete(ws, i),
         _ => unrecognized(),
     }
 }
@@ -1063,7 +1175,10 @@ fn update(ws: &[W], at: usize) -> Risk {
     }
     let target = name_at(ws, i).map(|(n, _)| n);
     let Some(set) = find_top(ws, i, &["SET"]) else { return unrecognized() };
-    let no_where = filter(ws, set);
+    let tables = &ws[i..set];
+    let multi = tables.iter().any(|w| w.depth == 0 && (w.kind == Tok::Comma || w.is("JOIN")));
+    let targets = if multi { set_targets(ws, set) } else { None };
+    let no_where = filter(ws, set).or_else(|| targets.and_then(|t| other_tables(&t, tables, ws, set)));
     let danger = no_where.map(|_| Danger::UpdateAll);
     Risk { no_where, danger, ..Risk::writing(Class::Write, target) }
 }
@@ -1074,13 +1189,95 @@ fn delete(ws: &[W], at: usize) -> Risk {
     while ws.get(i).is_some_and(|w| ["LOW_PRIORITY", "QUICK", "IGNORE"].iter().any(|k| w.is(k))) {
         i += 1;
     }
-    if ws.get(i).is_some_and(|w| w.is("FROM")) {
+    let from = ws.get(i).is_some_and(|w| w.is("FROM"));
+    if from {
         i += 1;
     }
     let target = name_at(ws, i).map(|(n, _)| n);
-    let no_where = filter(ws, i);
+    // `DELETE t1, t2 FROM …` or `DELETE FROM t1, t2 USING …`: the tables it deletes from, and
+    // where the tables it reads are named.
+    let using = find_top(ws, i, &["USING"]).filter(|&u| ws.get(u + 1).is_some_and(|w| w.kind != Tok::LParen));
+    let multi = match (from, using) {
+        (true, Some(u)) => Some((name_list(&ws[i..u]), u + 1)),
+        (false, _) => find_top(ws, i, &["FROM"]).map(|f| (name_list(&ws[i..f]), f + 1)),
+        (true, None) => None,
+    };
+    let no_where = filter(ws, i).or_else(|| {
+        let (targets, tables) = multi?;
+        let end = find_top(ws, tables, &["WHERE"]).unwrap_or(ws.len());
+        other_tables(&targets?, &ws[tables..end], ws, tables)
+    });
     let danger = no_where.map(|_| Danger::DeleteAll);
     Risk { no_where, danger, ..Risk::writing(Class::Write, target) }
+}
+
+/// The names of a list (`t1, db.t2, t3.*`), each the last part of the name in upper case and
+/// without quotes; `None` when an item is not a name.
+fn name_list(ws: &[W]) -> Option<Vec<String>> {
+    split_commas(ws)
+        .iter()
+        .map(|item| {
+            let item = match item {
+                [rest @ .., dot, star] if dot.kind == Tok::Dot && star.is_op("*") => rest,
+                _ => item,
+            };
+            let (_, next) = name_at(item, 0)?;
+            (next == item.len()).then(|| key(&item[next - 1]))
+        })
+        .collect()
+}
+
+/// A name in upper case and without quotes.
+fn key(w: &W) -> String {
+    if w.kind == Tok::QuotedIdent { unquote(w.text).to_ascii_uppercase() } else { w.up.clone() }
+}
+
+/// The tables a multi-table `UPDATE` changes: the qualifiers of the columns its `SET` (at
+/// `set`) assigns; `None` when one is not qualified (it could be any table's).
+fn set_targets(ws: &[W], set: usize) -> Option<Vec<String>> {
+    let end = find_top(ws, set + 1, &["WHERE", "ORDER", "LIMIT"]).unwrap_or(ws.len());
+    split_commas(&ws[set + 1..end])
+        .iter()
+        .map(|item| {
+            let eq = item.iter().position(|w| w.is_op("="))?;
+            match &item[..eq] {
+                [.., q, dot, c] if dot.kind == Tok::Dot && q.is_name() && c.is_name() => Some(key(q)),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// Whether a multi-table statement whose `WHERE` names a column reads no column of the tables
+/// it changes (`targets`) in its `WHERE` (looked for from `from` on) or in the joins of its
+/// table list (`tables`): every column it names there is qualified with another table's name.
+/// `None` when it reads one of them, or may (an unqualified column, a join `USING (…)`).
+fn other_tables(targets: &[String], tables: &[W], ws: &[W], from: usize) -> Option<NoWhere> {
+    let at = find_top(ws, from, &["WHERE"])?;
+    let end = find_top(ws, at + 1, &["ORDER", "LIMIT"]).unwrap_or(ws.len());
+    let cond = &ws[at + 1..end];
+    if tables.windows(2).any(|w| w[0].is("USING") && w[1].kind == Tok::LParen) {
+        return None;
+    }
+    let joins = tables.iter().position(|w| w.is("ON")).map_or(&tables[..0], |on| &tables[on..]);
+    let mut qualifiers = Vec::new();
+    for (in_where, part) in [(true, cond), (false, joins)] {
+        for i in 0..part.len() {
+            let w = &part[i];
+            let dotted = |j: usize| part.get(j).is_some_and(|d| d.kind == Tok::Dot);
+            if !w.is_name() || part.get(i + 1).is_some_and(|n| n.kind == Tok::LParen) {
+                continue;
+            }
+            if dotted(i + 1) && part.get(i + 2).is_some_and(|n| n.is_name()) && !dotted(i + 3) {
+                // `q.c`: the qualifier.
+                qualifiers.push(key(w));
+            } else if in_where && !dotted(i + 1) && (i == 0 || !dotted(i - 1)) && names_a_column(&part[i..=i]) {
+                // An unqualified column: it may be a target's.
+                return None;
+            }
+        }
+    }
+    (!qualifiers.iter().any(|q| targets.contains(q))).then_some(NoWhere::OtherTables)
 }
 
 /// Whether the `WHERE` of an `UPDATE` or `DELETE` (looked for from `from` on) may let every row
@@ -1185,12 +1382,13 @@ fn same_sides(c: &[W]) -> bool {
     } else if before.is_some_and(|w| w.kind == Tok::Op) || right.first().is_some_and(|w| w.kind == Tok::Op) {
         return false;
     }
-    !left.is_empty()
-        && left.len() == right.len()
-        && left
-            .iter()
-            .zip(right)
-            .all(|(a, b)| a.kind == b.kind && (if a.is_word() { a.up == b.up } else { a.text == b.text }))
+    // A name, quoted or not, in upper case; any other token as written.
+    let same = |a: &W, b: &W| match (a.is_name(), b.is_name()) {
+        (true, true) => key(a) == key(b),
+        (false, false) => a.kind == b.kind && a.text == b.text,
+        _ => false,
+    };
+    !left.is_empty() && left.len() == right.len() && left.iter().zip(right).all(|(a, b)| same(a, b))
 }
 
 /// `CREATE …`.
@@ -1205,6 +1403,7 @@ fn create(ws: &[W]) -> Risk {
     match object {
         "USER" | "ROLE" => ddl(Some(Danger::Privileges)),
         "INSTANCE" => unrecognized(),
+        "EVENT" => with_event_body(ddl(None), ws, i),
         "TABLE" => {
             let named = name_at(ws, i + 1 + if_not_exists(ws, i + 1));
             let after = named.as_ref().map_or(ws.len(), |(_, next)| *next);
@@ -1222,6 +1421,21 @@ fn create(ws: &[W]) -> Risk {
     }
 }
 
+/// An event's body (after its `DO`, from `from` on) runs later on its own, at once for one
+/// scheduled `AT CURRENT_TIMESTAMP`: a statement's danger is the event's, and a block
+/// (`BEGIN … END`) is code that is not read ([`Danger::Procedural`]).
+fn with_event_body(mut risk: Risk, ws: &[W], from: usize) -> Risk {
+    let Some(at) = find_top(ws, from, &["DO"]) else { return risk };
+    let body = &ws[at + 1..];
+    let block = body.first().is_some_and(|w| w.is("BEGIN")) || body.get(1).is_some_and(|w| w.is_op(":"));
+    let inner = if block { Risk::danger(Class::Procedural, Danger::Procedural) } else { statement(body) };
+    if risk.danger.is_none() && inner.danger.is_some() {
+        risk.danger = inner.danger;
+        risk.no_where = inner.no_where;
+    }
+    risk
+}
+
 /// How many words of `IF NOT EXISTS` start at `i` (0 or 3).
 fn if_not_exists(ws: &[W], i: usize) -> usize {
     let seq = ["IF", "NOT", "EXISTS"];
@@ -1233,6 +1447,10 @@ fn alter(ws: &[W]) -> Risk {
     let Some(object) = object(ws) else { return unrecognized() };
     match ws[object].up.as_str() {
         "USER" => ddl(Some(Danger::Privileges)),
+        "EVENT" => {
+            let renames = ws.iter().any(|w| w.is("RENAME"));
+            with_event_body(ddl(renames.then_some(Danger::Rename)), ws, object)
+        }
         "INSTANCE" => maintenance(Some(Danger::ServerCommand)),
         "TABLE" => {
             let mut r = ddl(table_change(ws, object + 1));
@@ -1264,6 +1482,8 @@ fn table_change(ws: &[W], from: usize) -> Option<Danger> {
             "MODIFY" | "CHANGE" => Some(Danger::AlterColumnType),
             "CONVERT" if word(i + 1) == "TO" => Some(Danger::AlterColumnType),
             "RENAME" => Some(Danger::Rename),
+            // An engine that keeps no rows.
+            "ENGINE" if ws[i + 1..].iter().take(2).any(|w| w.is("BLACKHOLE")) => Some(Danger::Truncate),
             "TRUNCATE" if word(i + 1) == "PARTITION" => Some(Danger::Truncate),
             "DISCARD" | "EXCHANGE" | "REMOVE" if matches!(word(i + 1), "TABLESPACE" | "PARTITION" | "PARTITIONING") => {
                 Some(Danger::Drop)
@@ -1347,9 +1567,9 @@ fn set(ws: &[W]) -> Risk {
 /// set ([`CLIENT_CHARSETS`]).
 fn client_charset(item: &[W]) -> Risk {
     let at = if item[0].is("CHARACTER") { 2 } else { 1 };
-    let shaped = match &item[at..] {
-        [_] => at == 1 || item[1].is("SET"),
-        [_, c, _] => item[0].is("NAMES") && c.is("COLLATE"),
+    let shaped = match item.get(at..) {
+        Some([_]) => at == 1 || item[1].is("SET"),
+        Some([_, c, _]) => item[0].is("NAMES") && c.is("COLLATE"),
         _ => false,
     };
     if !shaped {
@@ -1396,16 +1616,27 @@ fn assignment(item: &[W]) -> Risk {
     if value.is_empty() || target.is_empty() {
         return unrecognized();
     }
-    let mut global = false;
-    let name = match target {
-        [v] if v.kind == Tok::Variable && !v.text.starts_with("@@") => return Risk::session(true),
-        [v, rest @ ..] if v.kind == Tok::Variable => {
-            // `@@name`, `@@scope.name` (the lexer keeps the dots in the variable).
-            let mut full = v.text[2..].to_string();
-            for w in rest {
-                full.push_str(w.text);
-            }
-            let lower = full.to_ascii_lowercase();
+    const SCOPES: [&str; 5] = ["GLOBAL", "PERSIST", "PERSIST_ONLY", "SESSION", "LOCAL"];
+    // A variable alone, or a name or names joined by dots after an optional scope: anything else
+    // (`SET STATEMENT … FOR …` of MariaDB, …) is no assignment this module knows.
+    let (variable, names) = match target.split_first() {
+        Some((v, [])) if v.kind == Tok::Variable => (Some(v.text), &target[..0]),
+        Some((first, rest)) if SCOPES.iter().any(|k| first.is(k)) => (None, rest),
+        _ => (None, target),
+    };
+    let shaped = variable.is_some()
+        || (names.len() % 2 == 1
+            && names.iter().enumerate().all(|(k, w)| if k % 2 == 0 { w.is_name() } else { w.kind == Tok::Dot }));
+    if !shaped {
+        return unrecognized();
+    }
+    let mut global = target.first().is_some_and(|w| ["GLOBAL", "PERSIST", "PERSIST_ONLY"].iter().any(|k| w.is(k)));
+    let name = match variable {
+        // A user variable: the session's own state.
+        Some(v) if !v.starts_with("@@") => return Risk::session(true),
+        // `@@name`, `@@scope.name` (the lexer keeps the dots in the variable).
+        Some(v) => {
+            let lower = v.trim_start_matches('@').to_ascii_lowercase();
             match lower.split_once('.') {
                 Some((scope @ ("global" | "persist" | "persist_only" | "session" | "local"), name)) => {
                     global = matches!(scope, "global" | "persist" | "persist_only");
@@ -1414,29 +1645,8 @@ fn assignment(item: &[W]) -> Risk {
                 _ => lower,
             }
         }
-        [scope, rest @ ..]
-            if matches!(scope.up.as_str(), "GLOBAL" | "PERSIST" | "PERSIST_ONLY" | "SESSION" | "LOCAL") =>
-        {
-            global = matches!(scope.up.as_str(), "GLOBAL" | "PERSIST" | "PERSIST_ONLY");
-            rest.iter().map(|w| w.text).collect::<String>().to_ascii_lowercase()
-        }
-        _ => target.iter().map(|w| w.text).collect::<String>().to_ascii_lowercase(),
+        None => names.iter().map(|w| w.text).collect::<String>().to_ascii_lowercase(),
     };
-    // A variable alone, or a name or names joined by dots after an optional scope: anything else
-    // (`SET STATEMENT … FOR …` of MariaDB, …) is no assignment this module knows.
-    let shaped = match target.split_first() {
-        Some((v, rest)) if v.kind == Tok::Variable => rest.is_empty(),
-        Some((first, rest)) => {
-            let scope = ["GLOBAL", "PERSIST", "PERSIST_ONLY", "SESSION", "LOCAL"].iter().any(|k| first.is(k));
-            let names = if scope { rest } else { target };
-            names.len() % 2 == 1
-                && names.iter().enumerate().all(|(k, w)| if k % 2 == 0 { w.is_name() } else { w.kind == Tok::Dot })
-        }
-        None => false,
-    };
-    if !shaped {
-        return unrecognized();
-    }
     if name.is_empty() || name.starts_with('`') {
         return unrecognized();
     }
@@ -1464,17 +1674,47 @@ fn assignment(item: &[W]) -> Risk {
 
 /// Whether the app may run `sql` again (to fetch a later page) or count its rows, as far as its
 /// text tells: one query on the allowlist of reads, with no `INTO`, no locking clause, no
-/// variable, no call of a function that is not a built-in or that is [`VOLATILE`]. What only the
-/// server can tell (whether a name it reads is a view, whose query may call anything) is for the
-/// driver to ask before it runs it again, with the names of [`names`].
+/// variable, no call of a function that is not a built-in or that is [`VOLATILE`], and no name
+/// in a schema of the server's own (`performance_schema`, `information_schema`, `sys`, `mysql`,
+/// whose rows change on their own), in every sql mode that reads it differently ([`readings`]).
+/// What only the server can tell (whether a name it reads is a view, whose query may call
+/// anything) is for the driver to ask before it runs it again, with the names of [`names`].
 pub fn repeatable(sql: &str, mode: MySqlMode) -> Result<(), NotRepeatable> {
     names(sql, mode).map(|_| ())
 }
 
+/// The schemas of the server's own.
+const SYSTEM_SCHEMAS: &[&str] = &["information_schema", "mysql", "performance_schema", "sys"];
+
 /// [`repeatable`], with every name the statement writes (each table, column, alias or schema,
 /// as written, qualified ones joined with `.`): a superset of the tables and views it reads.
 pub fn names(sql: &str, mode: MySqlMode) -> Result<Vec<String>, NotRepeatable> {
-    let stmts = statements(sql, mode).map_err(|_| NotRepeatable::Unreadable)?;
+    guarded(
+        || Err(NotRepeatable::Unreadable),
+        || {
+            let mut first = None;
+            for (k, m) in readings(sql, mode).into_iter().enumerate() {
+                match names_as(sql, m) {
+                    // Another mode that reads the text as one the server refuses: no way it runs.
+                    Err(NotRepeatable::Unreadable) if k > 0 => {}
+                    Err(why) => return Err(why),
+                    Ok(names) => {
+                        first.get_or_insert(names);
+                    }
+                }
+            }
+            first.ok_or(NotRepeatable::Unreadable)
+        },
+    )
+}
+
+/// [`names`] in one sql mode.
+fn names_as(sql: &str, mode: MySqlMode) -> Result<Vec<String>, NotRepeatable> {
+    let (stmts, hint) = match statements(sql, mode) {
+        Ok(read) => read,
+        Err(r) if refused(&r) => return Err(NotRepeatable::Unreadable),
+        Err(_) => return Err(NotRepeatable::Writes),
+    };
     let [ws] = stmts.as_slice() else { return Err(NotRepeatable::NotOne) };
     let top = ws.first().map(|w| (w.kind, w.up.as_str()));
     let query = starts_query(ws, 0)
@@ -1484,10 +1724,9 @@ pub fn names(sql: &str, mode: MySqlMode) -> Result<Vec<String>, NotRepeatable> {
     }
     let risk = statement(ws);
     match risk.danger {
-        Some(Danger::Unrecognized | Danger::TooComplex | Danger::ExecutableComment) => {
-            return Err(NotRepeatable::Unreadable);
-        }
+        Some(Danger::Unrecognized | Danger::TooComplex) => return Err(NotRepeatable::Unreadable),
         Some(_) => return Err(NotRepeatable::Writes),
+        None if hint => return Err(NotRepeatable::Writes),
         None => {}
     }
     if risk.class != Class::Read || risk.writes || risk.read_write || risk.explain != Explain::No {
@@ -1507,6 +1746,10 @@ pub fn names(sql: &str, mode: MySqlMode) -> Result<Vec<String>, NotRepeatable> {
     while i < ws.len() {
         match name_at(ws, i) {
             Some((name, next)) if ws[i].kind == Tok::QuotedIdent || ws[i].kind == Tok::Ident => {
+                let schema = if ws[i].kind == Tok::QuotedIdent { unquote(ws[i].text) } else { ws[i].text.to_string() };
+                if next > i + 1 && SYSTEM_SCHEMAS.contains(&schema.to_ascii_lowercase().as_str()) {
+                    return Err(NotRepeatable::NotATable(name));
+                }
                 if ws.get(next).is_none_or(|w| w.kind != Tok::LParen) {
                     out.push(name);
                 }
@@ -1521,24 +1764,29 @@ pub fn names(sql: &str, mode: MySqlMode) -> Result<Vec<String>, NotRepeatable> {
 /// Whether the query `sql` sorts its rows at the top (`ORDER BY` outside every parenthesis,
 /// once the parentheses around all of it are left out).
 pub fn ordered(sql: &str, mode: MySqlMode) -> bool {
-    let Ok(stmts) = statements(sql, mode) else { return false };
-    let [ws] = stmts.as_slice() else { return false };
-    let ws = unwrap(ws);
-    let depth = ws.first().map_or(0, |w| w.depth);
-    ws.windows(2).any(|w| w[0].depth == depth && w[0].is("ORDER") && w[1].is("BY"))
+    guarded(
+        || false,
+        || {
+            let Ok((stmts, _)) = statements(sql, mode) else { return false };
+            let [ws] = stmts.as_slice() else { return false };
+            let ws = unwrap(ws);
+            let depth = ws.first().map_or(0, |w| w.depth);
+            ws.windows(2).any(|w| w[0].depth == depth && w[0].is("ORDER") && w[1].is("BY"))
+        },
+    )
 }
 
 /// `sql` without the `;` (and the blanks and comments around it) that end it.
 fn without_semicolons(sql: &str, mode: MySqlMode) -> &str {
     let mut end = sql.len();
-    loop {
-        let body = &sql[..end];
-        let last = lex_in(body, Dialect::MySql(mode)).into_iter().rfind(|t| !t.is_trivia());
-        match last {
-            Some(t) if t.kind == Tok::Semi && t.text(body) == ";" => end = t.start,
-            _ => return body.trim_end(),
+    for t in lex_in(sql, Dialect::MySql(mode)).into_iter().rev() {
+        if t.kind == Tok::Semi && t.text(sql) == ";" {
+            end = t.start;
+        } else if !t.is_trivia() {
+            break;
         }
     }
+    sql[..end].trim_end()
 }
 
 /// The query that counts the rows of `sql` when the user asks: `SELECT COUNT(*) FROM (<sql>)

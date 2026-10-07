@@ -216,6 +216,7 @@
 "safety.why.always_true" = "its WHERE is always true"
 "safety.why.explain" = "EXPLAIN ANALYZE runs it, then rolls it back"
 "safety.why.no_column" = "its WHERE reads no column"
+"safety.why.other_tables" = "its WHERE and joins read no column of the table it changes"
 "safety.why.alter_type" = "converts a column to another type, which may lose data (ALTER … TYPE)"
 "safety.why.merge" = "MERGE that updates or deletes rows"
 "safety.why.unknown_prepared" = "runs a prepared statement not known to this tab"

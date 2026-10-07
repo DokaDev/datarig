@@ -167,6 +167,9 @@ pub enum NoWhere {
     AlwaysTrue,
     /// A `WHERE` that reads no column: every row or none, whatever the table holds.
     NoColumn,
+    /// MySQL: a multi-table `UPDATE` or `DELETE` whose `WHERE` and joins read columns of the
+    /// other tables only: every row of the tables it changes, or none.
+    OtherTables,
 }
 
 /// Why a statement asks before it runs under the default policy (`confirm = "destructive"`):
