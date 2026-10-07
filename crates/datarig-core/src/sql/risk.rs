@@ -1,5 +1,6 @@
 //! What a statement may do to a database (the
-//! policy items `read_only` and `confirm`), read from **PostgreSQL's own parse tree**.
+//! policy items `read_only` and `confirm`), read from **PostgreSQL's own parse tree**. (MySQL
+//! text is read by [`mysql`], into the same [`Risk`].)
 //!
 //! The text is parsed by libpg_query (the `pg_query` crate), which is the server's parser
 //! (`gram.y` and `scan.l` of PostgreSQL 17) built as a library. So comments, strings, quoted
@@ -106,6 +107,7 @@
 //! conditions that happen to be always true (`id > 0`) are not recognised.
 
 mod classifier;
+pub mod mysql;
 pub mod repeat;
 
 pub use classifier::Classifier;
@@ -214,6 +216,33 @@ pub enum Danger {
     /// The text is longer than [`MAX_BYTES`] or nested deeper than [`MAX_DEPTH`]: it is not
     /// parsed, so what it does is unknown.
     TooComplex,
+    /// MySQL: an executable comment (`/*! … */`, MariaDB's `/*M! … */`), whose code the server
+    /// runs or skips depending on its version.
+    ExecutableComment,
+    /// MySQL: a form of statement the classifier does not know, or a text the server would read
+    /// otherwise than its lexer (see [`mysql`]): what it does is unknown.
+    Unrecognized,
+    /// MySQL: takes locks that block other sessions until it releases them (`LOCK TABLES`,
+    /// `HANDLER`, `FLUSH TABLES … WITH READ LOCK`, `LOCK INSTANCE FOR BACKUP`).
+    Locks,
+    /// MySQL: changes accounts or privileges (`GRANT`, `REVOKE`, `CREATE USER`, `SET
+    /// PASSWORD`, …).
+    Privileges,
+    /// MySQL: renames a table, a column, an index or another object (`RENAME TABLE`, `ALTER …
+    /// RENAME`): what uses the old name breaks.
+    Rename,
+    /// MySQL: changes a session setting that turns a check of the server off, changes how the
+    /// server reads the text or what reaches the binary log ([`mysql::RISKY_SETTINGS`], a client
+    /// character set that is not UTF-8).
+    Setting,
+    /// MySQL: `PREPARE` of SQL given as text, which the classifier does not read.
+    DynamicSql,
+    /// MySQL: a statement that acts on the whole server beyond this session (`KILL`, `SET
+    /// GLOBAL`, `FLUSH`, `RESET`, `PURGE`, replication, `INSTALL`, `SHUTDOWN`, `XA`, …).
+    ServerCommand,
+    /// MySQL: reads or writes a file of the server or of the client (`LOAD DATA`, `SELECT …
+    /// INTO OUTFILE`/`DUMPFILE`).
+    FileAccess,
 }
 
 /// What a statement may do.
@@ -250,6 +279,13 @@ pub struct Risk {
     /// whose third argument is not the constant `true`. Behind a pooler whose tab sets its path
     /// per transaction, the tab ignores it and it stays on the pooled connection.
     pub session_path: bool,
+    /// MySQL: the server commits the open transaction before it runs (DDL, `LOCK TABLES`,
+    /// `START TRANSACTION`, `SET autocommit = 1`, …: see [`mysql`]).
+    pub implicit_commit: bool,
+    /// MySQL: it calls an unqualified name that is not a built-in, which may be a loadable
+    /// function: code of the server's that a read-only transaction does not stop, so a
+    /// read-only policy refuses it.
+    pub unchecked_call: bool,
 }
 
 /// Why a read-only policy refuses a statement.
@@ -271,6 +307,16 @@ pub enum ReadOnlyBlock {
     ServerAction,
     /// It runs a query given as text that cannot be checked ([`Danger::RunsQueryText`]).
     RunsQueryText,
+    /// It has an executable comment ([`Danger::ExecutableComment`]).
+    ExecutableComment,
+    /// Its form is not one the classifier knows ([`Danger::Unrecognized`]).
+    Unrecognized,
+    /// It calls a function that may be a loadable one ([`Risk::unchecked_call`]).
+    UnknownFunction,
+    /// It prepares SQL given as text ([`Danger::DynamicSql`]).
+    DynamicSql,
+    /// It acts on the whole server ([`Danger::ServerCommand`]).
+    ServerCommand,
 }
 
 /// Why a statement needs a confirmation before it runs.
@@ -368,6 +414,8 @@ impl Risk {
             stdio: false,
             runs_code: false,
             session_path: false,
+            implicit_commit: false,
+            unchecked_call: false,
         }
     }
 
@@ -397,6 +445,8 @@ impl Risk {
             stdio: self.stdio || o.stdio,
             runs_code: self.runs_code || o.runs_code,
             session_path: self.session_path || o.session_path,
+            implicit_commit: self.implicit_commit || o.implicit_commit,
+            unchecked_call: self.unchecked_call || o.unchecked_call,
         }
     }
 
@@ -413,7 +463,14 @@ impl Risk {
             Some(Danger::ServerFile) => return Err(ReadOnlyBlock::ServerFile),
             Some(Danger::ServerAction) => return Err(ReadOnlyBlock::ServerAction),
             Some(Danger::RunsQueryText) => return Err(ReadOnlyBlock::RunsQueryText),
+            Some(Danger::ExecutableComment) => return Err(ReadOnlyBlock::ExecutableComment),
+            Some(Danger::Unrecognized) => return Err(ReadOnlyBlock::Unrecognized),
+            Some(Danger::DynamicSql) => return Err(ReadOnlyBlock::DynamicSql),
+            Some(Danger::ServerCommand) => return Err(ReadOnlyBlock::ServerCommand),
             _ => {}
+        }
+        if self.unchecked_call {
+            return Err(ReadOnlyBlock::UnknownFunction);
         }
         if self.read_write {
             return Err(ReadOnlyBlock::ReadWrite);

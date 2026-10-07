@@ -567,8 +567,8 @@ Held by CI budgets (`docs/perf.md`).
 
 Every SQL tool takes the dialect of the text it works on, and quoting and value kinds go
 through it. PostgreSQL is the dialect of every driver today; MySQL's text is read (lexed,
-split, completed, formatted, quoted) for the MySQL driver to come, and its classifier is a
-placeholder that asks about everything (see "MySQL text" below).
+split, completed, formatted, quoted, classified) for the MySQL driver to come (see "MySQL
+text" and "The MySQL classifier" below).
 
 - **Types** (`datarig_core::sql::dialect`): `Dialect` (`Postgres`, the default, and
   `MySql(MySqlMode)`) is the SQL dialect of a text, and `Language` (`Sql(Dialect)`) the
@@ -593,12 +593,11 @@ placeholder that asks about everything (see "MySQL text" below).
   appears or its binding changes: a new console, table, DDL or saved-query tab, a tab brought
   back from the closed list or the trash, a restored workspace, `bind_tab_in` and the other
   rebinds, a deleted profile's tabs, and a saved profile (whose driver may have changed).
-- **The classifier**: `risk::Classifier` (`Pg(Prepared)`, and `Unchecked(Dialect)` for a
-  dialect whose classifier is not written yet: every statement is text it cannot read,
-  `Danger::Unparsed`, which always asks and a read-only policy refuses, and nothing may run
-  again or be counted) is what the app asks about a statement. It is built from a language (`Classifier::new`) and forwards to the PostgreSQL
-  classifier unchanged: `classify`, `forget` and `knows` with the session's prepared
-  statements, `repeatable`, `ordered` and `count_query` of `risk::repeat`, and
+- **The classifier**: `risk::Classifier` (`Pg(Prepared)`, `MySql(MySqlMode)`) is what the app
+  asks about a statement. It is built from a language (`Classifier::new`) and forwards to the
+  classifier of that dialect unchanged: PostgreSQL's `classify`, `forget` and `knows` with the
+  session's prepared statements and `repeatable`, `ordered` and `count_query` of
+  `risk::repeat`; MySQL's of `risk::mysql` (which remembers no prepared statement); and
   `Classifier::classify_once` for a one-off look in a given language. Each tab keeps one for its
   query session (`TabSession::prepared`); a new session gets a new one of the same language.
   The app calls no PostgreSQL classifier function directly; the PostgreSQL driver does.
@@ -721,6 +720,31 @@ placeholder that asks about everything (see "MySQL text" below).
   (`DATARIG_TEST_MYSQL_CLIENT`; run against 8.0.45, 8.4.11 and 9.7.2): a script's statements
   are the ones the client sends (also for the quirks above), each runs alone, and literals and
   names the app writes read back as written, also under `NO_BACKSLASH_ESCAPES`.
+- **The MySQL classifier** (`risk::mysql`; module docs for the rules): the same `Risk` as
+  PostgreSQL's, read from the MySQL lexer's tokens, not a parse tree (see the decision below).
+  Reads are an allowlist of forms (queries without `INTO`, a locking clause or a write's
+  keyword inside; `SHOW`, `DESCRIBE`, `HELP`, `EXPLAIN` of a query); anything else is a write,
+  DDL, maintenance, procedural, a session or transaction statement it knows, or
+  `Danger::Unrecognized`. An executable comment (`/*!…*/`, MariaDB's `/*M!…*/`) is
+  `Danger::ExecutableComment`; a text the server would read otherwise than the lexer (an
+  unterminated token, a client command, a control character, an escape in a quoted name) is
+  unrecognized. MySQL-only dangers: `Locks` (`LOCK TABLES`, `HANDLER`, `FLUSH … WITH READ
+  LOCK`), `Privileges`, `Rename`, `Setting` (`risk::mysql::RISKY_SETTINGS`, a client character
+  set that is not UTF-8), `DynamicSql` (`PREPARE`), `ServerCommand` (`KILL`, `SET GLOBAL`,
+  `FLUSH`, `RESET`, `PURGE`, replication, `INSTALL`, `XA`, …) and `FileAccess` (`LOAD DATA`,
+  `INTO OUTFILE`). `Risk::implicit_commit` marks what commits the open transaction first;
+  `Risk::unchecked_call` a call of an unqualified name that is not a built-in
+  (`risk::mysql::BUILTINS`, from the servers' help tables), which may be a loadable function
+  and which a read-only policy refuses (`ReadOnlyBlock::UnknownFunction`). The paging allowlist
+  (`repeatable`, `count_query`: `SELECT COUNT(*) FROM (…) AS datarig_count`) takes one query
+  with built-in functions not in `risk::mysql::VOLATILE` and no variable; whether a name it
+  reads is a view is the driver's to ask (`risk::mysql::names`). Tests: the corpus
+  `risk/mysql/corpus.rs` (every statement with its expected verdict) and
+  `crates/datarig-core/tests/mysql_classify.rs`, which runs the corpus on a session whose
+  `transaction_read_only` is on (run against 8.0.45, 8.4.11 and 9.7.2): every read runs
+  without error 1792, every write and DDL fails with it unless marked as one the server lets
+  through (`FOR SHARE`, `LOCK TABLES … READ`, `HANDLER`, `INTO OUTFILE`, which only the
+  classifier stops), and every built-in is a function of the server.
 - **A new dialect** adds a `Dialect` variant and, at each `match` the compiler then points to:
   its lexer branch (`lex_in`) and keywords, quoting, folding and identifier quotes, its
   default path, comment markers, `sqlformat` dialect and formatter rules, its `explain_sql`, a
@@ -734,6 +758,22 @@ placeholder that asks about everything (see "MySQL text" below).
 - **Costs**: about 3.6 MB more in the release binary (6.0 MB to 9.6 MB when this was decided; the budget is 16 MB, and the binary had since grown to 13.7 MiB on macOS arm64 and 20.7 MiB on Linux x86_64; the release profile's LTO and stripping brought it to 9.5 MiB on macOS arm64), a longer first build (the C library, about 80 s), and libclang at build time. A parse per classified statement (only when a run is checked, never per keystroke).
 - **Alternatives rejected**: fixing the lexer only (the next disagreement is the next bypass); a lexer-based fallback on Windows (not needed); asking the server (`PREPARE` of the text needs a connection and is itself a statement).
 - **Parse failure**: `Danger::Unparsed`: it always asks, and a read-only policy refuses it ("PostgreSQL's parser cannot read this statement"). A text over the caps is `Danger::TooComplex`, which does the same ("too long or too deeply nested to check"); see "Never a crash in the classifier" above.
+
+## Decision: MySQL's classifier reads tokens, not a parse tree
+
+- **Context**: there is no MySQL equivalent of libpg_query. `sqlparser` 0.63 (Apache-2.0)
+  reads MySQL with a tokenizer of its own and rejects ordinary reads (`TABLE t`, `a MOD 2`,
+  `FOR SHARE`, `LOCK IN SHARE MODE`, `HELP`), which a read-only policy would then refuse,
+  and it added about 2.2 MiB to a release binary.
+- **Decision**: read MySQL statements from the tokens of datarig's own MySQL lexer, which its
+  tests hold to MySQL's client and server, with an allowlist of the forms that are reads and
+  a check that a read holds no write's keyword. In MySQL a query cannot hold a write (no
+  data-modifying `WITH`, no DML in a subquery), so a query's effects are its `INTO`, its
+  locking clause and its function calls, all visible as tokens. Every verdict is held to the
+  server by running the corpus on MySQL 8.0, 8.4 and 9.x with `transaction_read_only` on.
+- **Unknown**: a form the classifier does not know, and a text the server would read
+  otherwise than the lexer, is `Danger::Unrecognized`: it asks, and a read-only policy refuses
+  it ("not a form the safety check knows").
 
 ## Decision: a vendored tokio-postgres
 
