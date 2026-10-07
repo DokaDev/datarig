@@ -23,9 +23,11 @@
 
 mod connect;
 mod link;
+mod query;
 mod route;
 mod server_key;
 mod session;
+mod values;
 mod wire;
 
 pub use connect::MyDriver;

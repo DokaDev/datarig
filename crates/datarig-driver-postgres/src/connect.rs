@@ -61,6 +61,7 @@ impl Driver for PgDriver {
             language: Language::Sql(Dialect::Postgres),
             hierarchy: Hierarchy::DatabaseSchema,
             explain: Some(ExplainFormat::PostgresJson),
+            reads_held_to_end: false,
         }
     }
 

@@ -55,7 +55,7 @@ impl Canceller for MyCanceller {
 impl Driver for MyDriver {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
-            server_paging: false,
+            server_paging: true,
             cancel: true,
             introspection: false,
             key_metadata: false,
@@ -65,6 +65,7 @@ impl Driver for MyDriver {
             language: Language::Sql(Dialect::MySql(MySqlMode::default())),
             hierarchy: Hierarchy::SchemaOnly,
             explain: None,
+            reads_held_to_end: true,
         }
     }
 
@@ -202,7 +203,17 @@ async fn run_session(
         let _ = events.send(DbEvent::Language(Language::Sql(Dialect::MySql(tracked.mode(&server)))));
     }
     let link = Link::new(rx, wire);
-    serve(conn, link, events).await;
+    match role {
+        SessionRole::Meta => serve(conn, link, events).await,
+        SessionRole::Query => {
+            let killer = canceller.killer.lock().ok().and_then(|g| g.clone());
+            let Some(killer) = killer else { return };
+            let settings = crate::query::Settings { page_size: opts.page_size, read_only: opts.read_only };
+            let (asked, busy) = (canceller.asked.clone(), canceller.busy.clone());
+            crate::query::query_loop(conn, link, killer, asked, busy, events, settings, server, tracked, select_limit)
+                .await
+        }
+    }
 }
 
 /// Answer every command as not supported, until the session closes or its connection ends.

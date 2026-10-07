@@ -106,6 +106,7 @@ impl Driver for FakeDriver {
             },
             explain: (!self.no_explain.load(Ordering::SeqCst) && !self.mysql.load(Ordering::SeqCst))
                 .then_some(ExplainFormat::PostgresJson),
+            reads_held_to_end: self.mysql.load(Ordering::SeqCst),
         }
     }
 

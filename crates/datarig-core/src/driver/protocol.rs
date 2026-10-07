@@ -120,6 +120,10 @@ pub enum DbError {
     /// server sent when asked) is not an RSA public key in PEM of 2048 bits or more. Nothing
     /// about the password was sent.
     ServerKeyInvalid,
+    /// A read-only session stopped being read-only on the server (a statement turned it off
+    /// or opened a read-write transaction, which the app refuses to send): the session rolled
+    /// back and closed.
+    ReadOnlyLost,
 }
 
 impl DbError {
@@ -151,7 +155,8 @@ impl DbError {
             | DbError::KeyRetrievalRefused
             | DbError::ServerKeyPathRelative(_)
             | DbError::PasswordTooLong { .. }
-            | DbError::ServerKeyInvalid => Cow::Borrowed(""),
+            | DbError::ServerKeyInvalid
+            | DbError::ReadOnlyLost => Cow::Borrowed(""),
         }
     }
 }
@@ -400,6 +405,21 @@ pub enum Outcome {
     Command(String),
 }
 
+/// What the server said of a statement beyond its outcome (MySQL's OK packet), for the run's
+/// Messages. The default says nothing.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StatementInfo {
+    /// The value an `AUTO_INCREMENT` column got from the statement (`LAST_INSERT_ID()`).
+    pub insert_id: Option<u64>,
+    /// How many warnings it raised (`SHOW WARNINGS` lists them, until the next statement).
+    pub warnings: u16,
+    /// The server's own words about it (`Rows matched: 1  Changed: 1  Warnings: 0`), shown as
+    /// they are.
+    pub message: Option<String>,
+    /// Result sets after its first one (a procedure's) that were read and dropped, with rows.
+    pub more_results: u32,
+}
+
 #[derive(Debug)]
 pub enum DbEvent {
     Connected,
@@ -488,6 +508,14 @@ pub enum DbEvent {
         id: u64,
         error: DbError,
         cancelled: bool,
+    },
+    /// What the server said of statement `index` (from 0) of run `id` beyond its outcome; sent
+    /// before the statement's `Finished` or the run's answer (for a result read to its end
+    /// later, once it ended).
+    Info {
+        id: u64,
+        index: usize,
+        info: StatementInfo,
     },
     /// A run of several statements (`Execute`) starts its statement `index` (from 0).
     Started {

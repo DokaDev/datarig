@@ -397,9 +397,16 @@
 "db.server_key_sent_invalid" = "not logged in: the server's public key is not an RSA public key in PEM (2048 bits or more), so the password was not sent. Set the server's public key file (the profile's Advanced section)"
 "db.password_too_long" = "not logged in: the password is too long to send encrypted with the server's public key ({max} bytes at most with this key)"
 "db.read_write_refused" = "not sent: the session is read-only and this statement asks for read-write"
+"db.read_only_lost" = "the session stopped being read-only on the server: datarig rolled back its transaction and closed it"
 "query.lost" = "This tab's connection was lost: {error}"
 "query.reconnected" = "Reconnected"
 "query.reconnected_tx" = "Reconnected; the transaction that was open is gone"
+"query.info.insert_id" = "last insert id: {id}"
+"query.info.warnings" = { one = "{count} warning: SHOW WARNINGS shows it", other = "{count} warnings: SHOW WARNINGS shows them" }
+"query.info.server" = "the server says: {text}"
+"query.info.more_results" = { one = "{count} more result set was read and not shown", other = "{count} more result sets were read and not shown" }
+"query.info.step" = "statement {step}: {info}"
+"query.implicit_commit" = "statement {step} commits the open transaction before it runs (MySQL commits before DDL, LOCK TABLES, another BEGIN, …)"
 "editor.hint.rows" = { one = "{count} row · {elapsed} · {time}", other = "{count} rows · {elapsed} · {time}" }
 "editor.hint.more_rows" = { one = "{count}+ rows · {elapsed} · {time}", other = "{count}+ rows · {elapsed} · {time}" }
 "editor.hint.affected" = { one = "{count} row affected · {elapsed} · {time}", other = "{count} rows affected · {elapsed} · {time}" }
