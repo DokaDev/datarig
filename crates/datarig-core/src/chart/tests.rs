@@ -394,3 +394,19 @@ fn one_point_compares_only_series_that_have_a_value() {
     let spec = Spec { kind: Kind::Bar, x: None, ys: vec![0, 1], by: None, log: false };
     assert_eq!(build(&spec, &cols, &data), Err(Unsuitable::OnePoint));
 }
+
+/// A type of the database's own that the driver does not name keeps the role its name gives it.
+#[test]
+fn a_type_the_driver_does_not_name_is_read_by_its_name() {
+    let other = |ty: &str, numeric: bool| ColumnMeta { kind: ValueKind::Other, ..meta("c", ty, numeric) };
+    let none: Vec<Vec<Cell>> = Vec::new();
+    let role = |c: ColumnMeta| roles(&[c], &none)[0];
+    assert_eq!(role(other("timestamp_kind", false)), Role::Time(TimeKind::DateTime));
+    assert_eq!(role(other("My_DateTime", false)), Role::Time(TimeKind::DateTime));
+    assert_eq!(role(other("date", false)), Role::Time(TimeKind::Date));
+    assert_eq!(role(other("time of day", false)), Role::Time(TimeKind::Time));
+    assert_eq!(role(other("mood[]", false)), Role::Unusable);
+    assert_eq!(role(other("mood", false)), Role::Category);
+    let numeric_named_like_an_array = ColumnMeta { kind: ValueKind::Integer, ..meta("c", "x[]", true) };
+    assert_eq!(role(numeric_named_like_an_array), Role::Unusable);
+}

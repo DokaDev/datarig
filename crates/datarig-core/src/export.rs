@@ -38,9 +38,16 @@ pub enum Element {
 }
 
 impl Kind {
-    /// The kind of a result column, from the kind of value the driver says it holds.
+    /// The kind of a result column, from the kind of value the driver says it holds. A kind the
+    /// driver does not name ([`ValueKind::Other`]), or a type of the database's own named like
+    /// an array, is read from the type's name ([`Kind::of`]), as it always was.
     pub fn of_column(c: &ColumnMeta) -> Kind {
-        Kind::from(c.kind)
+        match c.kind {
+            ValueKind::Array(_) => Kind::from(c.kind),
+            ValueKind::Other => Kind::of(&c.type_name, c.numeric, c.json),
+            _ if c.type_name.ends_with("[]") => Kind::of(&c.type_name, c.numeric, c.json),
+            k => Kind::from(k),
+        }
     }
 
     /// The kind of a PostgreSQL result column from its type name (as the PostgreSQL driver
@@ -82,8 +89,7 @@ impl From<ValueKind> for Kind {
             ValueKind::Array(ArrayElement::Bool) => Kind::Array(Element::Bool),
             ValueKind::Array(ArrayElement::Json) => Kind::Array(Element::Json),
             ValueKind::Array(ArrayElement::Text) => Kind::Array(Element::Text),
-            ValueKind::Array(ArrayElement::Other)
-            | ValueKind::Text
+            ValueKind::Text
             | ValueKind::Bytes
             | ValueKind::Bit
             | ValueKind::Date

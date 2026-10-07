@@ -299,13 +299,19 @@ pub fn roles(columns: &[ColumnMeta], sample: &[Vec<Cell>]) -> Vec<Role> {
 }
 
 fn role(c: &ColumnMeta, i: usize, sample: &[Vec<Cell>]) -> Role {
-    match c.kind {
-        ValueKind::Json | ValueKind::Array(_) => return Role::Unusable,
-        k if k.is_number() => return Role::Number,
-        ValueKind::Timestamp | ValueKind::TimestampTz => return Role::Time(TimeKind::DateTime),
-        ValueKind::Date => return Role::Time(TimeKind::Date),
-        ValueKind::Time => return Role::Time(TimeKind::Time),
-        _ => {}
+    let known = match c.kind {
+        ValueKind::Json | ValueKind::Array(_) => Some(Role::Unusable),
+        // A type of the database's own named like an array.
+        _ if c.type_name.ends_with("[]") => Some(Role::Unusable),
+        k if k.is_number() => Some(Role::Number),
+        ValueKind::Timestamp | ValueKind::TimestampTz => Some(Role::Time(TimeKind::DateTime)),
+        ValueKind::Date => Some(Role::Time(TimeKind::Date)),
+        ValueKind::Time => Some(Role::Time(TimeKind::Time)),
+        ValueKind::Other => role_by_name(&c.type_name),
+        _ => None,
+    };
+    if let Some(r) = known {
+        return r;
     }
     // Text that holds dates (a driver that types them as text, a `to_char`).
     let mut seen = false;
@@ -323,6 +329,21 @@ fn role(c: &ColumnMeta, i: usize, sample: &[Vec<Cell>]) -> Role {
         (false, _) => Role::Category,
         (true, false) => Role::Time(TimeKind::Date),
         (true, true) => Role::Time(TimeKind::DateTime),
+    }
+}
+
+/// The role a type of a kind the driver does not name (a database's own type, a domain) has
+/// by its name: one named like a timestamp, a date or a time is taken as one.
+fn role_by_name(type_name: &str) -> Option<Role> {
+    let t = type_name.to_ascii_lowercase();
+    if t.contains("timestamp") || t.contains("datetime") {
+        Some(Role::Time(TimeKind::DateTime))
+    } else if t == "date" {
+        Some(Role::Time(TimeKind::Date))
+    } else if t == "time" || t == "timetz" || t.starts_with("time ") {
+        Some(Role::Time(TimeKind::Time))
+    } else {
+        None
     }
 }
 

@@ -39,11 +39,11 @@ pub fn is_json(ty: &Type) -> bool {
 }
 
 /// The kind of value a column of type `ty` holds. Numbers are [`is_numeric`] (a domain over a
-/// number type too: its base type's kind), JSON is [`is_json`]; any other domain, and every type
-/// not named here, is [`ValueKind::Other`].
+/// number type too: its base type's kind), JSON is [`is_json`]; any other domain, an array of
+/// anything but a built-in type, and every type not named here, is [`ValueKind::Other`].
 pub fn value_kind(ty: &Type) -> ValueKind {
     match ty.kind() {
-        Kind::Array(elem) => return ValueKind::Array(array_element(elem)),
+        Kind::Array(elem) => return array_element(elem).map_or(ValueKind::Other, ValueKind::Array),
         Kind::Domain(inner) if is_numeric(inner) => return value_kind(inner),
         _ => {}
     }
@@ -65,19 +65,20 @@ pub fn value_kind(ty: &Type) -> ValueKind {
     }
 }
 
-/// The kind of the elements of an array of `elem`, as `array_out` writes them: numbers, booleans
-/// and JSON by their built-in types (not a domain over one), `box` apart (its elements are
-/// separated by `;`), any other type as text.
-fn array_element(elem: &Type) -> ArrayElement {
-    match *elem {
+/// The kind of the elements of an array of built-in type `elem`, as `array_out` writes them:
+/// numbers, booleans, JSON, or any other type as text. `None` for `box` (its elements are
+/// separated by `;`) and for a type of the database's own (a domain, an enum, …).
+fn array_element(elem: &Type) -> Option<ArrayElement> {
+    Some(match *elem {
         Type::INT2 | Type::INT4 | Type::INT8 | Type::FLOAT4 | Type::FLOAT8 | Type::NUMERIC | Type::OID => {
             ArrayElement::Number
         }
         Type::BOOL => ArrayElement::Bool,
         Type::JSON | Type::JSONB => ArrayElement::Json,
-        Type::BOX => ArrayElement::Other,
-        _ => ArrayElement::Text,
-    }
+        Type::BOX => return None,
+        _ if Type::from_oid(elem.oid()).as_ref() == Some(elem) => ArrayElement::Text,
+        _ => return None,
+    })
 }
 
 /// The result format to ask for a column of type `ty`: `1` (binary) when [`format_value`]

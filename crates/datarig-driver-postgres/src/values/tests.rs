@@ -187,8 +187,8 @@ fn arrays_keep_their_dimensions_and_bounds() {
     assert_eq!(arr(&[], &[]), "{}");
 }
 
-/// Every type a column can have here: each built-in type, and a domain over each and an array
-/// of that domain (a database's own type is named by itself, never like a built-in one).
+/// Every type a column can have here: each built-in type, a domain over each and an array of
+/// that domain, and types of a database's own named like built-in ones.
 fn every_type() -> Vec<Type> {
     let builtin: Vec<Type> = (0..=u32::from(u16::MAX)).filter_map(Type::from_oid).collect();
     let mut out = builtin.clone();
@@ -197,6 +197,41 @@ fn every_type() -> Vec<Type> {
         let domain = Type::new(format!("d{n}"), n, Kind::Domain(ty), "public".into());
         out.push(Type::new(format!("_d{n}"), n + 1, Kind::Array(domain.clone()), "public".into()));
         out.push(domain);
+    }
+    // A database's own types named like built-in ones, or with their names in theirs: an enum,
+    // a composite and a domain (over text, over a number, over a timestamp) of each name, and an
+    // array of each.
+    let names = [
+        "timestamp_kind",
+        "My_Timestamp",
+        "my_datetime",
+        "date",
+        "time",
+        "timetz",
+        "time of day",
+        "bool",
+        "boolean",
+        "json",
+        "jsonb",
+        "int4",
+        "numeric",
+        "x[]",
+        "mood",
+    ];
+    let mut n = 2_000_000;
+    for name in names {
+        for kind in [
+            Kind::Enum(vec!["a".into()]),
+            Kind::Composite(Vec::new()),
+            Kind::Domain(Type::TEXT),
+            Kind::Domain(Type::INT4),
+            Kind::Domain(Type::TIMESTAMPTZ),
+        ] {
+            let ty = Type::new(name.into(), n, kind, "public".into());
+            out.push(Type::new(format!("_{name}"), n + 1, Kind::Array(ty.clone()), "public".into()));
+            out.push(ty);
+            n += 2;
+        }
     }
     out
 }
@@ -212,14 +247,14 @@ fn meta_of(ty: &Type) -> datarig_core::driver::ColumnMeta {
     }
 }
 
-/// The copy writes every column as it did when it read the type's name: the kind the driver
-/// gives a column says the same as [`export::Kind::of`] over its name and flags.
+/// The copy writes every column as it did when it read the type's name: its kind of a column
+/// (`Kind::of_column`) is [`export::Kind::of`] over the column's type name and flags.
 #[test]
 fn the_copy_kind_of_every_type_is_what_its_name_said() {
     use datarig_core::export::Kind as CopyKind;
     for ty in every_type() {
         let m = meta_of(&ty);
-        assert_eq!(CopyKind::from(m.kind), CopyKind::of(&m.type_name, m.numeric, m.json), "{}", m.type_name);
+        assert_eq!(CopyKind::of_column(&m), CopyKind::of(&m.type_name, m.numeric, m.json), "{}", m.type_name);
         assert_eq!(m.numeric, m.kind.is_number(), "{}", m.type_name);
         assert_eq!(m.json, m.kind == ValueKind::Json, "{}", m.type_name);
     }

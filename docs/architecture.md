@@ -608,12 +608,15 @@ quoting and value kinds go through it, the lexing tools are not threaded through
   JSON, bytes, bit, date, time, timestamp, timestamp with time zone, interval, an array of
   `ArrayElement`s, other) says what a column holds whatever the server calls its type; the copy
   (`export::Kind::of_column`) and the chart's roles read it, never `type_name`, which stays for
-  display. The PostgreSQL driver maps its types (`values::value_kind`): numbers as
-  `is_numeric` says (a domain over a number too), JSON as `is_json`, any other domain and every
-  type it does not name as `Other`; an array's elements by the built-in type (`box` apart: its
-  elements are separated by `;`). Tests over every built-in type (and a domain and an array of
-  each) check that the copy and the chart treat each as they did when they read the type's
-  name. `numeric` and `json` stay, derived the same way.
+  display, except where a database's own type may be named like a built-in one: an `Other`
+  column, or one whose type is named like an array, is still read by its type name. The
+  PostgreSQL driver maps its types (`values::value_kind`): numbers as `is_numeric` says (a
+  domain over a number too), JSON as `is_json`, an array by its built-in element type, and any
+  other domain, an array of `box` (its elements are separated by `;`) or of a type of the
+  database's own, and every type it does not name as `Other`. Tests over every built-in type,
+  a domain and an array of each, and enums, composites and domains named like built-in types
+  check that the copy and the chart treat each as they did when they read the type's name.
+  `numeric` and `json` stay, derived the same way.
 - **Origins**: `ColumnOrigin` is `Pg { table, column }` (a table's oid and a column's attnum,
   from the RowDescription) or `Named { schema, table, column }` (a driver that names the
   column, as MySQL's column definitions do). `KeyCatalog` finds a `Named` one by name; the

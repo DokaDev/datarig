@@ -300,12 +300,15 @@ pub enum ValueKind {
     /// An array of any number of dimensions; its elements are of the [`ArrayElement`] kind.
     Array(ArrayElement),
     /// Anything else (`uuid`, network addresses, ranges, geometry, enums, composites, a domain
-    /// over a type other than a number, extension types).
+    /// over a type other than a number, extension types, an array whose elements are none of
+    /// the built-in types). The tools that read kinds treat such a column by its `type_name`, as
+    /// they did before kinds: a type of the database's own may be named like a built-in one.
     Other,
 }
 
 /// The kind of an array's elements, as far as the tools read array values (the array's text,
-/// `{1,2}`, split into its elements). Kept apart from [`ValueKind`]: an array only needs to say
+/// `{1,2}`, split into its elements at commas; an array whose text is not split so is
+/// [`ValueKind::Other`]). Kept apart from [`ValueKind`]: an array only needs to say
 /// how its elements are written, and an array of arrays is just more dimensions.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ArrayElement {
@@ -317,9 +320,6 @@ pub enum ArrayElement {
     Json,
     /// Any other element, read as text.
     Text,
-    /// Elements the array's text does not separate with commas (PostgreSQL's `box`, whose
-    /// elements are separated by `;`): the value is not split into elements.
-    Other,
 }
 
 impl ValueKind {
