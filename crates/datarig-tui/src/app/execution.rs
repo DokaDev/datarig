@@ -566,8 +566,12 @@ impl App {
                 let had_password =
                     self.conns.get(id).and_then(|c| c.connecting.as_ref()).is_none_or(|a| a.had_password);
                 self.save_on_connect = None;
+                // A password typed in the prompt that MySQL refused is not asked for again: the
+                // account may require TLS, which no password fixes.
+                let typed_refused =
+                    matches!(error, DbError::AccessDenied(_)) && self.conns.get(id).is_some_and(|c| c.prompted);
                 // The server asked for a password and none was sent: say so plainly.
-                let missing = auth && !had_password && error.raw().contains("password");
+                let missing = auth && !typed_refused && !had_password && error.raw().contains("password");
                 let failed = Notice::new(Msg::ConnFailed { error: text }, Level::Error);
                 let reason = if !missing {
                     failed.clone()
@@ -576,12 +580,11 @@ impl App {
                 } else {
                     Notice::new(Label::PromptPasswordMissing, Level::Warning)
                 };
-                // Ask again, except for a command or an environment variable: those are fixed
-                // where they come from.
-                let ask = self
-                    .profile(id)
-                    .cloned()
-                    .filter(|c| auth && !matches!(c.source().kind(), SourceKind::Command | SourceKind::Env));
+                // Ask again, except for a command or an environment variable (those are fixed
+                // where they come from) and a refused typed password.
+                let ask = self.profile(id).cloned().filter(|c| {
+                    auth && !typed_refused && !matches!(c.source().kind(), SourceKind::Command | SourceKind::Env)
+                });
                 // What waited for this attempt waits for the next one when the prompt asks;
                 // otherwise it is dropped and its tabs say so.
                 let (console, expand) = self.conns.get(id).map_or((None, false), |c| (c.console, c.expand_on_connect));

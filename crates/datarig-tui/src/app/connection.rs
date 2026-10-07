@@ -23,6 +23,7 @@ impl App {
         c.connected = false;
         c.connecting = None;
         c.cache_off_said = false;
+        c.prompted = false;
         if self.driver(&conn.driver).is_none() {
             let m = Notice::new(Msg::ConnUnknownDriver { driver: conn.driver.clone() }, Level::Error);
             return self.attempt_failed(id, m);
@@ -325,7 +326,13 @@ impl App {
         if self.conns.get(id).is_some_and(|c| c.expanded) {
             self.ask_databases(id, false);
         }
-        self.show_status(Notice::new(Msg::ConnConnected { name: name.clone() }, Level::Success));
+        // A MySQL connection to another machine without a tunnel is not encrypted: said once,
+        // in place of "connected".
+        let unencrypted = self.profile(id).is_some_and(ConnectionConfig::mysql_unencrypted);
+        self.show_status(match unencrypted {
+            true => Notice::new(Msg::ConnConnectedUnencrypted { name: name.clone() }, Level::Warning),
+            false => Notice::new(Msg::ConnConnected { name: name.clone() }, Level::Success),
+        });
         if let Some(m) = flash {
             self.flash(m);
         }

@@ -43,6 +43,7 @@
 
 "conn.connecting" = "{name}에 연결 중…"
 "conn.connected" = "{name}에 연결됨"
+"conn.connected_unencrypted" = "{name}에 암호화 없이 연결됨: 비밀번호와 데이터가 네트워크에서 읽힐 수 있습니다 (SSH 터널을 쓰세요)"
 "conn.failed" = "연결 실패: {error}"
 
 "query.running" = "실행 중… {elapsed}"
@@ -691,6 +692,14 @@
 "form.cache.on" = "켜짐"
 "form.cache.off" = "꺼짐"
 "form.cache.hint" = "트랜잭션 모드 PgBouncer 뒤에서는 끄세요"
+"form.field.server_key" = "서버 공개 키"
+"form.server_key.hint" = "서버의 RSA 공개 키 (PEM)"
+"form.field.key_retrieval" = "공개 키 요청"
+"form.key_retrieval.on" = "허용"
+"form.key_retrieval.off" = "허용 안 함"
+"form.key_retrieval.hint" = "직접 연결 로그인이 서버에 키를 요청합니다"
+"form.unencrypted.short" = "암호화 안 됨: SSH 권장"
+"form.unencrypted" = "이 MySQL 연결은 암호화되지 않습니다: 비밀번호 교환과 모든 데이터가 네트워크에서 읽힐 수 있습니다. SSH 터널로 연결하세요."
 "form.field.color" = "색상"
 "form.field.icon" = "아이콘"
 "form.field.folder" = "폴더"

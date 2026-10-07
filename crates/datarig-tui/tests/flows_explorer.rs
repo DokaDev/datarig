@@ -648,11 +648,11 @@ fn a_mysql_profile_takes_its_port_and_url_and_has_no_postgresql_settings() {
     h.key(KeyCode::Tab);
     h.type_text("datarig");
     assert_eq!(h.form().dsn.text(), "mysql://datarig@localhost:53306");
-    // No SSL mode nor statement cache: those are PostgreSQL's.
+    // No SSL mode nor statement cache: those are PostgreSQL's. MySQL's own come first.
     h.ctrl('n');
     h.ctrl('n');
     assert_eq!(h.form().section, Section::Advanced);
-    assert_eq!(h.form().focus, Field::Policy);
+    assert_eq!(h.form().focus, Field::ServerKey);
     assert!(h.form().fields().iter().all(|f| !matches!(f, Field::SslMode | Field::StatementCache)));
     let screen = h.screen(160, 45);
     assert!(!screen.contains("SSL mode"), "{screen}");

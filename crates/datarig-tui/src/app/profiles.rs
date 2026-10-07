@@ -3,8 +3,9 @@
 //! first, the password storage selector whose field follows the chosen source, and a DSN
 //! kept in two-way sync with the fields. **SSH**: the tunnel: none (the default), a tunnel
 //! preset, or one of this profile only (its bastion's fields), which "save as tunnel preset"
-//! turns into a new preset when the form is saved. **Advanced**: SSL mode, the server-side
-//! statement cache, policy name, color, icon and folder. No I/O here; `App` persists and tests.
+//! turns into a new preset when the form is saved. **Advanced**: SSL mode and the server-side
+//! statement cache (PostgreSQL), the server's public key file and key retrieval (MySQL),
+//! policy name, color, icon and folder. No I/O here; `App` persists and tests.
 //!
 //! The same form edits a tunnel preset ([`FormKind::Tunnel`]): its name and the SSH section's
 //! bastion fields, nothing else.
@@ -67,6 +68,10 @@ pub enum Field {
     SslMode,
     /// The server-side statement cache, on or off (Advanced).
     StatementCache,
+    /// MySQL: the server's public key file (Advanced).
+    ServerKey,
+    /// MySQL: a direct login may ask the server for its public key, or not (Advanced).
+    KeyRetrieval,
     /// The policy name (Advanced).
     Policy,
     /// Color, icon and folder: pickers (Advanced).
@@ -108,8 +113,16 @@ pub const BASIC: [Field; 10] = [
     Field::Env,
     Field::Database,
 ];
-pub const ADVANCED: [Field; 6] =
-    [Field::SslMode, Field::StatementCache, Field::Policy, Field::Color, Field::Icon, Field::Folder];
+pub const ADVANCED: [Field; 8] = [
+    Field::SslMode,
+    Field::StatementCache,
+    Field::ServerKey,
+    Field::KeyRetrieval,
+    Field::Policy,
+    Field::Color,
+    Field::Icon,
+    Field::Folder,
+];
 pub const BUTTONS: [Field; 3] = [Field::Test, Field::Save, Field::Cancel];
 pub const SSH: [Field; 12] = [
     Field::SshEnabled,
@@ -127,7 +140,7 @@ pub const SSH: [Field; 12] = [
 ];
 
 /// Every field with a label, for the width of the label column.
-pub const FIELDS: [Field; 17] = [
+pub const FIELDS: [Field; 19] = [
     Field::Driver,
     Field::Name,
     Field::Host,
@@ -141,6 +154,8 @@ pub const FIELDS: [Field; 17] = [
     Field::Dsn,
     Field::SslMode,
     Field::StatementCache,
+    Field::ServerKey,
+    Field::KeyRetrieval,
     Field::Policy,
     Field::Color,
     Field::Icon,
@@ -195,6 +210,8 @@ impl Field {
             Field::SslMode => Label::FormFieldSslmode,
             Field::Dsn => Label::FormFieldDsn,
             Field::StatementCache => Label::FormFieldStatementCache,
+            Field::ServerKey => Label::FormFieldServerKey,
+            Field::KeyRetrieval => Label::FormFieldKeyRetrieval,
             Field::Policy => Label::FormFieldPolicy,
             Field::Color => Label::FormFieldColor,
             Field::Icon => Label::FormFieldIcon,
@@ -375,6 +392,10 @@ pub struct ProfileForm {
     /// Keep prepared statements on the server between transactions (off behind a pooler in
     /// transaction mode without prepared statement support).
     pub statement_cache: bool,
+    /// MySQL: the server's public key file (empty: none).
+    pub server_key: TextInput,
+    /// MySQL: a direct login to another machine may ask the server for its public key.
+    pub key_retrieval: bool,
     /// Index into [`DRIVERS`].
     pub driver: usize,
     /// Which [`DRIVERS`] can be picked (the app has a driver for them).
@@ -491,6 +512,8 @@ impl ProfileForm {
             dsn: TextInput::new(""),
             sslmode: SSL_MODES.iter().position(|m| *m == c.sslmode).unwrap_or(0),
             statement_cache: c.statement_cache,
+            server_key: TextInput::new(c.server_public_key_file.as_deref().unwrap_or("")),
+            key_retrieval: c.allow_public_key_retrieval,
             driver: driver_index(&c.driver),
             drivers_enabled: [true, false, false, false],
             section: Section::Basic,
@@ -672,9 +695,15 @@ impl ProfileForm {
     }
 
     /// The driver picked is a MySQL one: the PostgreSQL-only settings (SSL mode, the
-    /// statement cache) are not shown.
+    /// statement cache) are not shown, MySQL's (the server key file, key retrieval) are.
     pub fn is_mysql(&self) -> bool {
         self.scheme() == Scheme::MySql
+    }
+
+    /// The profile would connect to a MySQL server on another machine directly, unencrypted
+    /// (see `ConnectionConfig::mysql_unencrypted`).
+    pub fn unencrypted(&self) -> bool {
+        !self.is_tunnel() && self.to_profile().mysql_unencrypted()
     }
 
     /// Pick driver `i`: a port still at the old driver's default moves to the new one's, and
@@ -781,6 +810,7 @@ impl ProfileForm {
             Field::Env => &mut self.env,
             Field::Database => &mut self.database,
             Field::Dsn => &mut self.dsn,
+            Field::ServerKey => &mut self.server_key,
             Field::SshHost => &mut self.ssh_host,
             Field::SshPort => &mut self.ssh_port,
             Field::SshUser => &mut self.ssh_user,
@@ -819,6 +849,7 @@ impl ProfileForm {
             .copied()
             .filter(|f| !matches!(f, Field::Password | Field::Command | Field::Env) || Some(*f) == shown)
             .filter(|f| !(mysql && matches!(f, Field::SslMode | Field::StatementCache)))
+            .filter(|f| mysql || !matches!(f, Field::ServerKey | Field::KeyRetrieval))
             .collect();
         if self.section == Section::Basic {
             out.push(Field::Dsn);
@@ -1120,6 +1151,9 @@ impl ProfileForm {
             KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.focus == Field::StatementCache => {
                 self.statement_cache = !self.statement_cache
             }
+            KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.focus == Field::KeyRetrieval => {
+                self.key_retrieval = !self.key_retrieval
+            }
             KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.focus == Field::SshEnabled => {
                 self.cycle_ssh_choice(if k.code == KeyCode::Left { -1 } else { 1 })
             }
@@ -1275,6 +1309,8 @@ impl ProfileForm {
             database: self.database.text().to_string(),
             sslmode: SSL_MODES[self.sslmode].to_string(),
             statement_cache: self.statement_cache,
+            server_public_key_file: Some(self.server_key.text().trim().to_string()).filter(|k| !k.is_empty()),
+            allow_public_key_retrieval: self.key_retrieval,
             // Kept when it existed (also off or with a preset picked); new only once turned on;
             // moved into the preset this form makes, when that one is picked.
             ssh: (!self.new_preset_picked() && (self.ssh_had || self.ssh_enabled)).then(|| self.ssh_settings()),

@@ -45,6 +45,7 @@
 
 "conn.connecting" = "Connecting to {name}…"
 "conn.connected" = "Connected to {name}"
+"conn.connected_unencrypted" = "Connected to {name} without encryption: the password and data can be read on the network (use an SSH tunnel)"
 "conn.failed" = "Connection failed: {error}"
 
 "query.running" = "Running… {elapsed}"
@@ -694,6 +695,14 @@
 "form.cache.on" = "on"
 "form.cache.off" = "off"
 "form.cache.hint" = "off behind PgBouncer in transaction mode"
+"form.field.server_key" = "Server key file"
+"form.server_key.hint" = "the server's RSA public key (PEM)"
+"form.field.key_retrieval" = "Key retrieval"
+"form.key_retrieval.on" = "allowed"
+"form.key_retrieval.off" = "not allowed"
+"form.key_retrieval.hint" = "lets a direct login ask the server for its key"
+"form.unencrypted.short" = "not encrypted: use SSH"
+"form.unencrypted" = "This MySQL connection is not encrypted: the password exchange and all data can be read on the network. Connect through an SSH tunnel."
 "form.field.color" = "Color"
 "form.field.icon" = "Icon"
 "form.field.folder" = "Folder"

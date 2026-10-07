@@ -147,6 +147,7 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
         }
     };
     let dim = Style::new().fg(th.fg_dim).bg(th.surface);
+    let unencrypted = form.unencrypted();
     let mut cursor = None;
     // Inputs leave room for their hints (28 columns) and are at most 34 wide.
     let input_w = (iw.saturating_sub(label_w + 4 + 28) as u16).clamp(16, 34);
@@ -194,7 +195,8 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
             Some(Field::Database),
         ],
         Section::Ssh => form.ssh_fields().into_iter().map(Some).collect(),
-        // The SSL mode and the statement cache are PostgreSQL's only (`ProfileForm::fields`).
+        // The SSL mode and the statement cache are PostgreSQL's only, the server key file and key
+        // retrieval MySQL's (`ProfileForm::fields`).
         Section::Advanced => form.fields().into_iter().filter(|f| !f.is_button()).map(Some).collect(),
     };
     for (row, f) in rows.iter().enumerate() {
@@ -353,6 +355,16 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
                 }
                 continue;
             }
+            Field::KeyRetrieval => {
+                let state = if form.key_retrieval { Label::FormKeyRetrievalOn } else { Label::FormKeyRetrievalOff };
+                let drawn = selector(buf, x, y, room_from(x), &[text(&i18n.label(state))], focused);
+                selector_hits(&mut hits, f, x, y, drawn);
+                let used = drawn.0;
+                let hint =
+                    format!("{} · {}", i18n.label(Label::FormSslmodeHint), i18n.label(Label::FormKeyRetrievalHint));
+                put(buf, x + used + 2, y, &hint, room_from(x + used + 2), dim);
+                continue;
+            }
             Field::StatementCache => {
                 let state = if form.statement_cache { Label::FormCacheOn } else { Label::FormCacheOff };
                 let drawn = selector(buf, x, y, room_from(x), &[text(&i18n.label(state))], focused);
@@ -453,6 +465,9 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
         let room = room_from(after);
         if let Some((_, e)) = errors.iter().find(|(ef, _)| *ef == f) {
             put(buf, after, y, &i18n.label(e.label()), room, Style::new().fg(th.error).bg(th.surface));
+        } else if f == Field::Host && unencrypted {
+            let warning = Style::new().fg(th.warning).bg(th.surface);
+            put(buf, after, y, &i18n.label(Label::FormUnencryptedShort), room, warning);
         } else {
             let hint = match (f, form.source) {
                 (Field::SshKeyFile, _) => Some(Msg::FormSshKeyHint { key: pick_key.clone() }),
@@ -462,6 +477,7 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
                 (Field::Command, _) => Some(Label::FormCommandHint.into()),
                 (Field::Env, _) => Some(Label::FormEnvHint.into()),
                 (Field::Policy, _) => Some(Label::FormPolicyHint.into()),
+                (Field::ServerKey, _) => Some(Label::FormServerKeyHint.into()),
                 (Field::Color | Field::Icon | Field::Folder, _) => Some(Label::FormPickerHint.into()),
                 (Field::SshSecret, _) => Some(Label::FormSshSecretHint.into()),
                 (Field::SshCommand, _) => Some(Label::FormCommandHint.into()),
@@ -472,6 +488,14 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
             if let Some(hint) = hint {
                 put(buf, after, y, &i18n.msg(&hint), room, dim);
             }
+        }
+    }
+    // A MySQL connection without a tunnel to another machine: not encrypted.
+    if form.section == Section::Ssh && unencrypted {
+        let text = i18n.label(Label::FormUnencrypted);
+        let style = Style::new().fg(th.warning).bg(th.surface);
+        for (i, l) in crate::text::wrap_words(&text, iw.saturating_sub(2)).iter().take(3).enumerate() {
+            put(buf, inner.x + 1, inner.y + 4 + i as u16, l, iw.saturating_sub(2), style);
         }
     }
     // The profile named a preset and had its own tunnel on: which one the form keeps.

@@ -87,6 +87,8 @@ pub struct ProfileConn {
     pub connecting: Option<Connecting>,
     /// Why the last attempt failed or the connection was lost (the explorer's error line).
     pub error: Option<Notice>,
+    /// The current attempt's password was typed in the password prompt.
+    pub prompted: bool,
     pub tree: Tree,
     pub catalog: Catalog,
     /// Why the catalog could not be read (the last one read, if any, stays).
@@ -141,6 +143,7 @@ impl ProfileConn {
             connected: false,
             connecting: None,
             error: None,
+            prompted: false,
             tree: Tree::new(),
             catalog: Catalog::default(),
             catalog_error: None,
