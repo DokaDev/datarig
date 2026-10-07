@@ -186,6 +186,12 @@ pub enum DriverError {
     #[error("the server's public key is needed and asking the server for it is disabled")]
     PublicKeyRetrievalDisabled,
 
+    /// datarig: a `caching_sha2_password` login would encrypt the password with the server's
+    /// RSA public key, and the password is longer than the `max` bytes that key's RSA-OAEP
+    /// takes (mysql_common would panic).
+    #[error("the password is too long to encrypt with the server's public key ({max} bytes at most)")]
+    PasswordTooLongForKey { max: usize },
+
     #[error("Bulk execute error: {}", _0)]
     BulkExecute(BulkExecuteRequestError),
 }

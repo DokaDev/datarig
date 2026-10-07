@@ -391,6 +391,7 @@
 "db.key_retrieval_refused" = "로그인하지 않았습니다: 비밀번호를 서버가 이 암호화되지 않은 연결로 보내는 공개 키로 암호화해야 하는데, 그 키는 중간의 누구든 바꿔치기할 수 있습니다. SSH 터널로 연결하거나, 서버 공개 키 파일을 지정하거나, 키 요청을 허용하세요 (프로필의 고급 섹션)"
 "db.server_key_unreadable" = "서버 공개 키 파일 {path}을(를) 읽을 수 없습니다: {error}"
 "db.server_key_invalid" = "서버 공개 키 파일 {path}은(는) PEM 형식의 RSA 공개 키(2048비트 이상)가 아닙니다"
+"db.password_too_long" = "로그인하지 않았습니다: 비밀번호가 너무 길어 서버 공개 키로 암호화해 보낼 수 없습니다 (이 키로는 최대 {max}바이트)"
 "db.read_write_refused" = "보내지 않음: 세션이 읽기 전용인데 이 문은 읽기-쓰기를 요구합니다"
 "query.lost" = "이 탭의 연결이 끊어졌습니다: {error}"
 "query.reconnected" = "다시 연결했습니다"

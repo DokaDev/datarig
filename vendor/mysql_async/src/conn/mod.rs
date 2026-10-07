@@ -824,14 +824,34 @@ impl Conn {
                         if self.inner.server_key.is_none() {
                             self.write_bytes(&[0x02][..]).await?;
                             let packet = self.read_packet().await?;
+                            // datarig: a packet without a key is an error (upstream panics).
+                            if packet.len() < 2 {
+                                return Err(DriverError::UnexpectedPacket {
+                                    payload: packet.to_vec(),
+                                }
+                                .into());
+                            }
                             self.inner.server_key = Some(packet[1..].to_vec());
+                        }
+                        // datarig: RSA-OAEP (SHA-1) takes at most `k - 2 * 20 - 2` bytes with a
+                        // key of `k` bytes (mysql_common panics on more); `pass` ends with its
+                        // zero byte.
+                        let key = crypto::rsa::PublicKey::from_pem(
+                            self.inner.server_key.as_deref().expect("unreachable"),
+                        );
+                        let room = key.num_octets().saturating_sub(2 * 20 + 2);
+                        if pass.len() > room {
+                            return Err(DriverError::PasswordTooLongForKey {
+                                max: room.saturating_sub(1),
+                            }
+                            .into());
                         }
                         for (i, byte) in pass.as_mut().iter_mut().enumerate() {
                             *byte ^= self.inner.nonce[i % self.inner.nonce.len()];
                         }
-                        let encrypted_pass = crypto::encrypt(
-                            &pass,
-                            self.inner.server_key.as_deref().expect("unreachable"),
+                        let encrypted_pass = key.encrypt_block(
+                            &*pass,
+                            crypto::rsa::Pkcs1OaepPadding::new(crypto::rsa::GetRandom),
                         );
                         self.write_bytes(&encrypted_pass).await?;
                     };

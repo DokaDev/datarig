@@ -343,6 +343,9 @@ pub(crate) fn connect_error(e: &mysql_async::Error) -> (DbError, bool) {
         mysql_async::Error::Driver(mysql_async::DriverError::PublicKeyRetrievalDisabled) => {
             (DbError::KeyRetrievalRefused, false)
         }
+        mysql_async::Error::Driver(mysql_async::DriverError::PasswordTooLongForKey { max }) => {
+            (DbError::PasswordTooLong { max: *max }, false)
+        }
         mysql_async::Error::Driver(mysql_async::DriverError::UnknownAuthPlugin { name }) => {
             (DbError::AuthUnsupported(name.clone()), false)
         }

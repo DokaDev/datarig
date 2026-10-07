@@ -9,11 +9,14 @@ use datarig_core::driver::{
     Canceller, Capabilities, ConnectOptions, DbCommand, DbError, DbEvent, Driver, Hierarchy, PingError, PingInfo,
     Session, SessionRole,
 };
+use datarig_core::fault::Fault;
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
 use datarig_core::transport::DialerRef;
+use futures::FutureExt;
 use futures::future::BoxFuture;
 use mysql_async::prelude::Queryable;
+use std::panic::AssertUnwindSafe;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -76,12 +79,16 @@ impl Driver for MyDriver {
         let cfg = cfg.clone();
         let c2 = canceller.clone();
         tokio::spawn(async move {
-            match Target::of(&cfg) {
-                Err(error) => {
-                    let _ = events.send(DbEvent::ConnectFailed { error, auth: false });
+            let connected = AtomicBool::new(false);
+            let session = async {
+                match Target::of(&cfg) {
+                    Err(error) => {
+                        let _ = events.send(DbEvent::ConnectFailed { error, auth: false });
+                    }
+                    Ok(target) => run_session(target, role, opts, events.clone(), rx, c2, &connected).await,
                 }
-                Ok(target) => run_session(target, role, opts, events, rx, c2).await,
-            }
+            };
+            guarded(&events, &connected, session).await;
         });
         Session::new(self.capabilities(), role, tx, canceller)
     }
@@ -112,13 +119,39 @@ impl Driver for MyDriver {
                 session::quit(conn).await;
                 Ok::<_, DbError>(version?.unwrap_or_else(|| server.label()))
             };
-            match tokio::time::timeout(timeout, attempt).await {
-                Ok(Ok(server_version)) => Ok(PingInfo { server_version, latency: start.elapsed() }),
-                Ok(Err(e)) => Err(PingError::Failed(e)),
-                Err(_) => Err(PingError::Timeout(timeout)),
+            // A panic in the attempt fails the test like any other error.
+            match AssertUnwindSafe(tokio::time::timeout(timeout, attempt)).catch_unwind().await {
+                Ok(Ok(Ok(server_version))) => Ok(PingInfo { server_version, latency: start.elapsed() }),
+                Ok(Ok(Err(e))) => Err(PingError::Failed(e)),
+                Ok(Err(_)) => Err(PingError::Timeout(timeout)),
+                Err(_) => Err(PingError::Failed(internal_error())),
             }
         })
     }
+}
+
+/// Run a session's task, `session` (`connected` is set before it sends `Connected`). A panic
+/// in it (a bug, here or in a crate under the driver) still ends the session with one reported
+/// failure, [`internal_error`]: `ConnectFailed` before it connected, `Lost` after.
+pub(crate) async fn guarded(
+    events: &UnboundedSender<DbEvent>,
+    connected: &AtomicBool,
+    session: impl Future<Output = ()>,
+) {
+    if AssertUnwindSafe(session).catch_unwind().await.is_ok() {
+        return;
+    }
+    let error = internal_error();
+    let _ = events.send(match connected.load(Ordering::SeqCst) {
+        true => DbEvent::Lost { error },
+        false => DbEvent::ConnectFailed { error, auth: false },
+    });
+}
+
+/// What a panic in the driver reads as. Its message is left out: it could quote anything the
+/// task held, a password among it.
+fn internal_error() -> DbError {
+    DbError::Connection(Fault::other("internal error in the MySQL driver (it panicked)"))
 }
 
 /// The database a session starts in: the one its context names, else the profile's.
@@ -133,6 +166,7 @@ async fn run_session(
     events: UnboundedSender<DbEvent>,
     rx: UnboundedReceiver<DbCommand>,
     canceller: Arc<MyCanceller>,
+    connected: &AtomicBool,
 ) {
     let route = Route::new(&target.host, target.port, opts.dialer.clone());
     let database = start_database(&target, &opts);
@@ -159,6 +193,7 @@ async fn run_session(
     if let Ok(mut g) = canceller.killer.lock() {
         *g = Some(killer);
     }
+    connected.store(true, Ordering::SeqCst);
     let _ = events.send(DbEvent::Connected);
     if role == SessionRole::Query {
         let _ = events.send(DbEvent::Language(Language::Sql(Dialect::MySql(tracked.mode(&server)))));
@@ -210,3 +245,6 @@ async fn serve(conn: mysql_async::Conn, mut link: Link, events: UnboundedSender<
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

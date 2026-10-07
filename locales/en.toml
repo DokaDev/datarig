@@ -393,6 +393,7 @@
 "db.key_retrieval_refused" = "not logged in: the password would be encrypted with a public key the server sends over this unencrypted connection, which anyone in between could replace. Connect through an SSH tunnel, set the server's public key file, or allow key retrieval (the profile's Advanced section)"
 "db.server_key_unreadable" = "the server public key file {path} cannot be read: {error}"
 "db.server_key_invalid" = "the server public key file {path} is not an RSA public key in PEM (2048 bits or more)"
+"db.password_too_long" = "not logged in: the password is too long to send encrypted with the server's public key ({max} bytes at most with this key)"
 "db.read_write_refused" = "not sent: the session is read-only and this statement asks for read-write"
 "query.lost" = "This tab's connection was lost: {error}"
 "query.reconnected" = "Reconnected"

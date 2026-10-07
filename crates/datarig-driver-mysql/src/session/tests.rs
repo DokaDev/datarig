@@ -209,6 +209,17 @@ async fn read_packet(server: &mut tokio::io::DuplexStream) -> Option<Vec<u8>> {
 /// account is not in the server's cache; `[1, 3]`: a cached account). What the client sent
 /// next (`None`: nothing, it closed), and how its login ended once the server stopped.
 async fn login(cfg: &ConnectionConfig, route: &Route, answer: &[u8]) -> (Option<Vec<u8>>, Result<(), DbError>) {
+    login_keyed(cfg, route, answer, None).await
+}
+
+/// [`login`], with the server answering the client's request for its key (`[2]`) with the
+/// packet `key`; what the client sent after that.
+async fn login_keyed(
+    cfg: &ConnectionConfig,
+    route: &Route,
+    answer: &[u8],
+    key: Option<&[u8]>,
+) -> (Option<Vec<u8>>, Result<(), DbError>) {
     let opts = Target::of(cfg).unwrap().opts(None, "datarig-key-test", route);
     let (client, mut server) = tokio::io::duplex(1 << 16);
     let login = tokio::spawn(Conn::connect_with_stream(opts, Box::new(client)));
@@ -219,10 +230,14 @@ async fn login(cfg: &ConnectionConfig, route: &Route, answer: &[u8]) -> (Option<
         // A cached account: OK, and the login is done.
         server.write_all(&packet(3, &[0, 0, 0, 2, 0, 0, 0])).await.unwrap();
     }
-    let sent = match answer {
+    let mut sent = match answer {
         [1, 4] => read_packet(&mut server).await,
         _ => None,
     };
+    if let (Some(key), Some([2])) = (key, sent.as_deref()) {
+        server.write_all(&packet(4, key)).await.unwrap();
+        sent = read_packet(&mut server).await;
+    }
     // A cached login ends here; any other ends with the stream.
     if answer != [1, 3] {
         drop(server);
@@ -284,6 +299,51 @@ async fn a_pinned_server_key_is_used_and_the_server_is_never_asked_for_one() {
         // RSA with a 2048-bit key: 256 bytes, and never the password itself.
         assert_eq!(sent.len(), 256, "{host}: {sent:?}");
         assert!(!sent.windows(14).any(|w| w == b"s3cret-Pass-zz"));
+    }
+}
+
+/// RSA-OAEP with a 2048-bit key takes 214 bytes: the password and the zero byte the client
+/// ends it with. A longer password is refused before anything about it is sent (mysql_common
+/// would panic, and take the session's task with it), with the profile's key and with one the
+/// server sends.
+#[tokio::test]
+async fn a_password_too_long_for_the_server_key_is_refused() {
+    let path = key_file("long", KEY_2048);
+    let pinned = |password: String| ConnectionConfig {
+        server_public_key_file: Some(path.clone()),
+        password,
+        ..mysql("db.example.com")
+    };
+    let route = Route::new("db.example.com", 3306, None);
+    let (sent, _) = login(&pinned("p".repeat(213)), &route, &[1, 4]).await;
+    assert_eq!(sent.map(|s| s.len()), Some(256), "213 bytes fit");
+    let (sent, ended) = login(&pinned("p".repeat(214)), &route, &[1, 4]).await;
+    assert_eq!(sent, None);
+    assert_eq!(ended, Err(DbError::PasswordTooLong { max: 213 }));
+    // Bytes, not characters: 72 Hangul syllables are 216 bytes.
+    let (sent, ended) = login(&pinned("\u{D55C}".repeat(72)), &route, &[1, 4]).await;
+    assert_eq!((sent, ended), (None, Err(DbError::PasswordTooLong { max: 213 })));
+    let mut key = vec![1];
+    key.extend_from_slice(KEY_2048.as_bytes());
+    let loopback = Route::new("127.0.0.1", 3306, None);
+    let asked = |password: String| ConnectionConfig { password, ..mysql("127.0.0.1") };
+    let (sent, _) = login_keyed(&asked("p".repeat(213)), &loopback, &[1, 4], Some(&key)).await;
+    assert_eq!(sent.map(|s| s.len()), Some(256));
+    let (sent, ended) = login_keyed(&asked("p".repeat(214)), &loopback, &[1, 4], Some(&key)).await;
+    assert_eq!((sent, ended), (None, Err(DbError::PasswordTooLong { max: 213 })));
+    let refused = mysql_async::Error::Driver(mysql_async::DriverError::PasswordTooLongForKey { max: 213 });
+    assert_eq!(connect_error(&refused), (DbError::PasswordTooLong { max: 213 }, false));
+}
+
+/// A server that answers the request for its key without one ends the login with an error.
+#[tokio::test]
+async fn an_empty_key_packet_from_the_server_is_an_error() {
+    let cfg = mysql("127.0.0.1");
+    let route = Route::new("127.0.0.1", 3306, None);
+    for key in [&[][..], &[1][..]] {
+        let (sent, ended) = login_keyed(&cfg, &route, &[1, 4], Some(key)).await;
+        assert_eq!(sent, None, "{key:?}");
+        assert!(matches!(ended, Err(DbError::Connection(_))), "{key:?}: {ended:?}");
     }
 }
 

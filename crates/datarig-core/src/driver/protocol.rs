@@ -108,6 +108,11 @@ pub enum DbError {
     /// The profile's server public key file (its path, as the profile names it) cannot be
     /// used: unreadable (`Some`, why), or not an RSA public key in PEM of 2048 bits or more.
     ServerKeyFile { path: String, fault: Option<Fault> },
+    /// A MySQL login would encrypt the password with the server's RSA public key, and the
+    /// password is too long for that key: `max` bytes at most (UTF-8; 213 with a 2048-bit key,
+    /// RSA-OAEP's limit less the zero byte the client ends it with). Nothing about the password
+    /// was sent.
+    PasswordTooLong { max: usize },
 }
 
 impl DbError {
@@ -136,7 +141,8 @@ impl DbError {
             | DbError::NotFound
             | DbError::VersionUnsupported { .. }
             | DbError::TlsRequired
-            | DbError::KeyRetrievalRefused => Cow::Borrowed(""),
+            | DbError::KeyRetrievalRefused
+            | DbError::PasswordTooLong { .. } => Cow::Borrowed(""),
         }
     }
 }

@@ -1362,6 +1362,9 @@ impl App {
             DbError::ServerKeyFile { path, fault: None } => {
                 return self.i18n.msg(&Msg::DbServerKeyInvalid { path: path.clone() }).to_string();
             }
+            DbError::PasswordTooLong { max } => {
+                return self.i18n.msg(&Msg::DbPasswordTooLong { max: max.to_string() }).to_string();
+            }
             DbError::ServerKeyFile { path, fault: Some(f) } => {
                 ErrorLog::new(self.paths.errors_log()).record("db.server_key", f);
                 let error = self.i18n.msg(&persist::fault_reason(f)).to_string();
