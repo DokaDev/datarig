@@ -23,6 +23,7 @@
 
 use super::lexing::REGION_LINES;
 use super::{Editor, Sel};
+use datarig_core::sql::lexer::{Delimiter, Tok};
 use datarig_core::sql::split::split_from;
 use std::collections::{HashMap, HashSet};
 
@@ -47,11 +48,23 @@ pub struct Span {
     /// Where its statement's lead starts: the end of the `;` before it, 0 at the text's start,
     /// `usize::MAX` when not known (as of its last check, moved with the text).
     bound: usize,
+    /// The terminator in effect where it starts, as of its last check (MySQL's `DELIMITER`
+    /// above it decides where it ends).
+    delim: Delimiter,
 }
 
 impl Span {
     pub fn new(start: usize, end: usize, closed: bool) -> Self {
-        Self { start, end, closed, edited: false, checked: false, moved_from: None, bound: usize::MAX }
+        Self {
+            start,
+            end,
+            closed,
+            edited: false,
+            checked: false,
+            moved_from: None,
+            bound: usize::MAX,
+            delim: Delimiter::default(),
+        }
     }
 
     /// Bytes `a..b` were replaced with `ins` (`blank`: only blanks, put in without removing
@@ -317,8 +330,9 @@ impl Editor {
     /// Whether span `s`, a statement when last checked, still starts that statement after
     /// changes only before it (from `moved_from` on): lexed from where the lexer's state is
     /// known on the line of the first change, up to and with the span's first token. Its own
-    /// text is unchanged, so starting it is being it. When it does, where its lead starts now:
-    /// after the `;` found there, else where it started.
+    /// text is unchanged, so starting it is being it, as long as the terminator in effect there
+    /// is the one it was checked with (a `DELIMITER` above changes where it ends). When it does,
+    /// where its lead starts now: after the `;` found there, else where it started.
     fn still_starts_its_statement(&mut self, s: &Span) -> Option<usize> {
         let from = s.moved_from?;
         // The line before the first change: its state is known lexing up to that change's line
@@ -339,7 +353,8 @@ impl Editor {
             cut -= 1;
         }
         let head = self.lex(&rest[..cut], state).first().copied()?;
-        if head.is_trivia() || (head.end == cut && cut < rest.len()) {
+        // A client command line (MySQL's `DELIMITER`) starts no statement.
+        if head.is_trivia() || head.kind == Tok::Directive || (head.end == cut && cut < rest.len()) {
             return None;
         }
         let head_text = &rest[..head.end];
@@ -352,6 +367,11 @@ impl Editor {
             return None;
         }
         let before: Vec<_> = toks.iter().take_while(|t| t.end <= at).collect();
+        let dialect = self.lang.dialect();
+        let there = before.iter().fold(state, |st, t| st.after(t, &text, dialect));
+        if there.delimiter != s.delim {
+            return None;
+        }
         let semi = before.iter().rposition(|t| t.ends_statement());
         let lead = &before[semi.map_or(0, |i| i + 1)..];
         if !lead.iter().all(|t| t.is_trivia()) {
@@ -410,13 +430,32 @@ impl Editor {
         let n = self.lines.len();
         let (lo_line, hi_line) = (self.pos_bytes(lo).0, self.pos_bytes(hi).0);
         let mut k = REGION_LINES;
-        // The spans that hold, with the end and `;` of their statement.
-        let mut holds: HashMap<(usize, usize), (usize, bool, usize)> = HashMap::new();
+        // The spans that hold, with the end and `;` of their statement, where its lead starts and
+        // the terminator in effect there.
+        let mut holds: HashMap<(usize, usize), (usize, bool, usize, Delimiter)> = HashMap::new();
         loop {
             let (first, last) = (lo_line.saturating_sub(k), (hi_line + k + 1).min(n));
             let (base, region, state) = self.region_text(first, last);
             self.check_work += region.len();
             let toks = self.lex(&region, state);
+            // The terminator in effect where each token starts: the region's, unless a client
+            // command line (MySQL's `DELIMITER`) in it changes it.
+            let dialect = self.lang.dialect();
+            let delims: Vec<(usize, Delimiter)> = if toks.iter().any(|t| t.kind == Tok::Directive) {
+                toks.iter()
+                    .scan(state, |st, t| {
+                        let at = (base + t.start, st.delimiter);
+                        *st = st.after(t, &region, dialect);
+                        Some(at)
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let delim_at = |a: usize| match delims.binary_search_by_key(&a, |d| d.0) {
+                Ok(i) => delims[i].1,
+                Err(_) => state.delimiter,
+            };
             let mut semis = toks.iter().filter(|t| t.ends_statement());
             let from = if base == 0 { 0 } else { semis.next().map_or(usize::MAX, |t| base + t.end) };
             let to = if last == n {
@@ -442,7 +481,8 @@ impl Editor {
                                 0 => usize::MAX,
                                 i => ends[i - 1],
                             };
-                            holds.insert((a, b), (end, end > body, bound));
+                            let delim = delim_at(a);
+                            holds.insert((a, b), (end, end > body, bound, delim));
                         }
                         _ => {}
                     }
@@ -462,10 +502,16 @@ impl Editor {
                 continue;
             }
             match holds.get(&(s.start, s.end)) {
-                Some(&(end, closed, bound)) => {
-                    (s.end, s.closed, s.checked, s.bound, s.moved_from) = (end, closed, true, bound, None);
+                // A span with its terminator holds while it still ends with one, a span without
+                // while its text is still all of its statement's text (in MySQL a `DELIMITER`
+                // above can make a terminator text, or text a terminator).
+                Some(&(end, closed, bound, delim))
+                    if if s.closed { closed && s.end == end } else { !closed || s.end != end } =>
+                {
+                    (s.end, s.closed, s.checked, s.bound, s.moved_from, s.delim) =
+                        (end, closed, true, bound, None, delim);
                 }
-                None => s.edited = true,
+                _ => s.edited = true,
             }
         }
         self.runs.hints.retain(|h| !h.span.edited);

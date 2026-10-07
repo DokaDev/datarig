@@ -94,7 +94,8 @@ impl Editor {
                     let (line, byte) = line_of(t.start);
                     LineState::Inside { line, byte, state: lexed }
                 }
-                _ => LineState::Normal(lexed),
+                // Between tokens at the line's start (a blank may run on past it).
+                _ => LineState::Normal(LexState { line_start: true, ..lexed }),
             };
             self.states.push(state);
         }

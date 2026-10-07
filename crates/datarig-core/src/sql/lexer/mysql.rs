@@ -398,8 +398,6 @@ pub(super) fn lex(src: &str, mode: MySqlMode, mut state: LexState) -> Vec<Token>
     let mut out: Vec<Token> = Vec::new();
     let mut lx = Lexer { cur: Cursor { src, pos: 0 }, delim: state.delimiter, custom: false };
     let backslash = !mode.no_backslash_escapes;
-    // Only blanks and comments on this line so far, and it did not start inside a token.
-    let mut line_clean = true;
     while let Some(c) = lx.cur.peek() {
         lx.delim = state.delimiter;
         lx.custom = lx.delim != Delimiter::default();
@@ -478,7 +476,7 @@ pub(super) fn lex(src: &str, mode: MySqlMode, mut state: LexState) -> Vec<Token>
                 lx.cur.pos += 2;
                 lx.cur.quoted('\'', backslash);
                 Tok::Str
-            } else if line_clean && !state.pending && !state.exec && directive_at(&src[start..]) {
+            } else if state.line_start && !state.pending && !state.exec && directive_at(&src[start..]) {
                 lx.cur.eat_while(|c| c != '\n');
                 Tok::Directive
             } else {
@@ -496,14 +494,6 @@ pub(super) fn lex(src: &str, mode: MySqlMode, mut state: LexState) -> Vec<Token>
             }
         };
         let t = Token { kind, start, end: lx.cur.pos };
-        let breaks = t.text(src).contains('\n');
-        line_clean = match t.kind {
-            Tok::Whitespace => line_clean || breaks,
-            // A line that starts inside a comment holds no command.
-            Tok::BlockComment => line_clean && !breaks,
-            Tok::LineComment => line_clean,
-            _ => false,
-        };
         state = after(state, &t, src);
         out.push(t);
     }
@@ -580,6 +570,14 @@ pub(super) fn directive_delimiter(line: &str) -> Option<Delimiter> {
 
 /// The state after token `t` of `src` ([`LexState::after`]).
 pub(super) fn after(mut s: LexState, t: &Token, src: &str) -> LexState {
+    let breaks = t.text(src).contains('\n');
+    s.line_start = match t.kind {
+        Tok::Whitespace => s.line_start || breaks,
+        // A line that starts inside a comment holds no command.
+        Tok::BlockComment => s.line_start && !breaks,
+        Tok::LineComment => s.line_start,
+        _ => false,
+    };
     match t.kind {
         Tok::Whitespace | Tok::LineComment | Tok::BlockComment => {}
         // A statement's text ends here: the client sends it, and the server reads what comes

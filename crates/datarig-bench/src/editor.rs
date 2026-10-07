@@ -290,14 +290,48 @@ pub fn generate_mysql(bytes: usize) -> String {
     s
 }
 
+/// Set in the process [`run_mysql_in_own_process`] starts: it runs [`run_mysql`] itself.
+const MYSQL_IN_PROCESS: &str = "DATARIG_BENCH_MYSQL_IN_PROCESS";
+
+/// [`run_mysql`] in a process of its own (the bench binary again), so its memory never counts
+/// in another scenario's.
+pub fn run_mysql_in_own_process(scratch: &Path, bytes: usize, n: usize) -> Result<Value, String> {
+    if std::env::var(MYSQL_IN_PROCESS).is_ok_and(|v| v == "1") {
+        return run_mysql(bytes, n);
+    }
+    let out = scratch.join("editor-mysql.jsonl");
+    let _ = std::fs::remove_file(&out);
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let status = std::process::Command::new(exe)
+        .arg("editor_mysql")
+        .arg("--scratch")
+        .arg(scratch)
+        .arg("--runs")
+        .arg(n.to_string())
+        .arg("--out")
+        .arg(&out)
+        .env(MYSQL_IN_PROCESS, "1")
+        .status()
+        .map_err(|e| e.to_string())?;
+    let text = std::fs::read_to_string(&out).map_err(|e| format!("{}: {e}", out.display()))?;
+    let record: Value =
+        serde_json::from_str(text.lines().last().unwrap_or("")).map_err(|e| format!("{}: {e}", out.display()))?;
+    match record.get("result") {
+        Some(r) if status.success() => Ok(r.clone()),
+        _ => Err(format!("editor_mysql: {}", record.get("error").unwrap_or(&Value::Null))),
+    }
+}
+
 /// The editor with a 5 MB MySQL script (its text read as MySQL, `DELIMITER` blocks and all):
-/// keystroke-to-frame time for typing, cursor movement, scrolling and vim's other motions, the
-/// keys of the `editor` scenario; and jumps to the end and back after an edit (`x`, `G`, `gg`,
+/// keystroke-to-frame time for the keys of the `editor` scenario (typing, cursor movement,
+/// scrolling, Normal-mode edits, vim's other motions, moving among the hints of finished runs)
+/// and the process's memory; and jumps to the end and back after an edit (`x`, `G`, `gg`,
 /// `u`), each jump lexing the line states of the whole text again.
 pub fn run_mysql(bytes: usize, n: usize) -> Result<Value, String> {
     use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
     let text = generate_mysql(bytes);
     let lines = text.lines().count();
+    let pid = std::process::id();
     let mut app = apps::offline(&text, None);
     drop(text);
     app.tab_mut().editor.set_language(Language::Sql(Dialect::MySql(MySqlMode::default())));
@@ -322,6 +356,7 @@ pub fn run_mysql(bytes: usize, n: usize) -> Result<Value, String> {
     let editor_area = app.layout.editor;
     let (x, y) = (editor_area.x + 5, editor_area.y + 3);
     let scrolling = keystrokes(&mut app, &mut term, n, |a, i| apps::scroll(a, i % 10 != 9, x, y));
+    let edits = keystrokes(&mut app, &mut term, n.min(100), |a, i| apps::char(a, if i % 2 == 0 { 'x' } else { 'u' }));
     let vim_keys = [
         "}", "}", "{", "%", "%", "f", "(", ";", ",", "W", "B", "E", "g", "e", "H", "M", "L", "C-d", "C-u", "z", "z",
         "d", "i", "w", "u", ".", "u", "j", "j",
@@ -333,6 +368,27 @@ pub fn run_mysql(bytes: usize, n: usize) -> Result<Value, String> {
             let m = if c.is_ascii_uppercase() { KeyModifiers::SHIFT } else { KeyModifiers::NONE };
             apps::key(a, KeyCode::Char(c), m);
         }
+    });
+    let rss_edits = rss_kb(pid).unwrap_or(0);
+    // Run hints: every statement around the cursor ran, then moving and scrolling among them.
+    apps::key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+    let ed = &mut app.tab_mut().editor;
+    let middle = ed.row;
+    for (q, row) in (middle.saturating_sub(400)..middle + 400).step_by(2).enumerate() {
+        ed.row = row.min(lines.saturating_sub(1));
+        let (stmts, spans) = ed.run_statements();
+        ed.stage_run(&stmts, spans);
+        ed.start_run(q as u64, &stmts);
+        let hint = RunHint { kind: HintKind::Ok, text: "128 rows \u{b7} 42ms \u{b7} 14:03".into() };
+        ed.finish_run(q as u64, vec![Some(hint); stmts.len()]);
+    }
+    ed.row = middle;
+    let hinted = ed.run_hints().count();
+    let hint_keys = ['j', 'j', 'k', 'w', 'j', 'b', 'j', 'j'];
+    let hints = keystrokes(&mut app, &mut term, n, |a, i| match i % 10 {
+        8 => apps::key(a, KeyCode::Char('d'), KeyModifiers::CONTROL),
+        9 => apps::key(a, KeyCode::Char('u'), KeyModifiers::CONTROL),
+        k => apps::char(a, hint_keys[k % hint_keys.len()]),
     });
     apps::key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
     let jump_keys = ["x", "G", "g", "g", "u"];
@@ -352,8 +408,12 @@ pub fn run_mysql(bytes: usize, n: usize) -> Result<Value, String> {
         "typing_ms": report("typing", &typing),
         "movement_ms": report("movement", &movement),
         "scrolling_ms": report("scrolling", &scrolling),
+        "normal_edit_ms": report("x/u edits", &edits),
         "vim_ms": report("vim", &vim),
+        "run_hints_ms": report("run hints", &hints),
+        "run_hints": hinted,
         "jump_ms": report("jumps", &jumps),
+        "rss_kb": { "after_edits": rss_edits },
     }))
 }
 

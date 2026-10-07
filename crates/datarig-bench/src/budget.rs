@@ -126,14 +126,18 @@ pub fn editor(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
     Ok(())
 }
 
-/// The editor with a MySQL script: its keystrokes are held to the editor's budget.
+/// The editor with a MySQL script: its keystrokes and memory are held to the editor's budgets.
 pub fn editor_mysql(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
     let max = num(b, "editor", "p95_ms_max")?;
-    for what in ["typing_ms", "movement_ms", "scrolling_ms", "vim_ms"] {
+    for what in ["typing_ms", "movement_ms", "scrolling_ms", "normal_edit_ms", "vim_ms", "run_hints_ms"] {
         match f(result, &[what, "p95"]) {
             Some(m) => c.check(&format!("editor_mysql {what} p95"), m, max, " ms"),
             None => c.missing(&format!("editor_mysql {what} p95")),
         }
+    }
+    match f(result, &["rss_kb", "after_edits"]) {
+        Some(k) => c.check("editor_mysql RSS", k / MIB, num(b, "editor", "rss_mib_max")?, " MiB"),
+        None => c.missing("editor_mysql RSS"),
     }
     Ok(())
 }

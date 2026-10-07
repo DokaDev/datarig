@@ -86,7 +86,8 @@ rss_growth_mib_max = 16
 # statement around the cursor has one), are held to the same budget, as are the keys of the
 # `editor_mysql` scenario (a 5 MB MySQL script with `DELIMITER` blocks, read as MySQL).
 p95_ms_max = 25.0
-# Resident memory after typing in it (the file itself is about 20 MiB of lines).
+# Resident memory after typing in it (the file itself is about 20 MiB of lines); the
+# `editor_mysql` process too.
 rss_mib_max = 160
 # Search (`/` with a pattern found nowhere, key by key, and `n`): the most bytes one key
 # searched, in passes over the text (a miss searches it once, `n` up to the next match; a

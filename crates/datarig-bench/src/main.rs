@@ -113,7 +113,7 @@ async fn scenario(name: &str, o: &Opts) -> Result<Value, String> {
         "paging" => paging::run(&pg_url()?, &o.scratch, "SELECT * FROM analytics.events", o.max_pages, 250).await,
         "editor" => editor::run(&o.scratch, 5 * 1024 * 1024, o.runs.unwrap_or(300)),
         "editor_block" => editor::block_in_own_process(&o.scratch, 5 * 1024 * 1024),
-        "editor_mysql" => editor::run_mysql(5 * 1024 * 1024, o.runs.unwrap_or(300)),
+        "editor_mysql" => editor::run_mysql_in_own_process(&o.scratch, 5 * 1024 * 1024, o.runs.unwrap_or(300)),
         "grid" => grid::run(2_000, 24, o.runs.unwrap_or(400)),
         "plan" => plan::run(PLAN_JOINS, PLAN_PARTITIONS, o.runs.unwrap_or(300)),
         "chart" => chart::run_in_own_process(&o.scratch, CHART_ROWS, o.runs.unwrap_or(300)),
@@ -172,7 +172,7 @@ async fn budget(o: &Opts) -> Result<Vec<String>, String> {
     budget::editor(&mut c, &b, &run("editor", r))?;
     let r = editor::block_in_own_process(&o.scratch, 5 * 1024 * 1024)?;
     budget::editor_block(&mut c, &b, &run("editor_block", r))?;
-    let r = editor::run_mysql(5 * 1024 * 1024, 100)?;
+    let r = editor::run_mysql_in_own_process(&o.scratch, 5 * 1024 * 1024, 100)?;
     budget::editor_mysql(&mut c, &b, &run("editor_mysql", r))?;
     let r = plan::run(PLAN_JOINS, PLAN_PARTITIONS, 200)?;
     budget::plan(&mut c, &b, &run("plan", r))?;

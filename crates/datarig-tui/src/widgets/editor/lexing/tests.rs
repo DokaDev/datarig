@@ -282,7 +282,7 @@ fn states_in(text: &str, d: Dialect) -> Vec<LineState> {
                     let (line, byte) = pos(t.start);
                     LineState::Inside { line, byte, state }
                 }
-                _ => LineState::Normal(state),
+                _ => LineState::Normal(LexState { line_start: true, ..state }),
             }
         })
         .collect()
@@ -336,6 +336,9 @@ fn mysql_line_states_and_screen_tokens_match_a_whole_lex_after_edits() {
             e.replace_range(a, b, &ins);
             let t = e.text();
             let want = states_in(&t, d);
+            // Up to some line first (states after the edit known only that far), then all.
+            e.ensure_states(rng.below(e.lines.len()));
+            assert_eq!(e.states[..e.valid], want[..e.valid], "round {round}: {t:?}");
             e.ensure_states(usize::MAX);
             assert_eq!(e.states[..e.valid], want[..], "round {round}: {t:?}");
             let first = rng.below(e.lines.len());
@@ -346,6 +349,21 @@ fn mysql_line_states_and_screen_tokens_match_a_whole_lex_after_edits() {
             assert_eq!(
                 part[from..],
                 whole[base + from..base + part.len()],
+                "round {round}: {t:?} lines {first}..{last}"
+            );
+            // Token by token too (`;;` as one terminator or two), those the region holds whole
+            // (blanks aside: a run of them is cut where the region starts).
+            let toks = |text: &str, st: LexState, off: usize, lo: usize, hi: usize| {
+                datarig_core::sql::lexer::lex_from(text, d, st)
+                    .into_iter()
+                    .map(|k| (k.start + off, k.end + off, k.kind))
+                    .filter(|k| k.0 >= lo && k.1 < hi && k.2 != Tok::Whitespace)
+                    .collect::<Vec<_>>()
+            };
+            let (lo, hi) = (base + from, base + region.len());
+            assert_eq!(
+                toks(&region, state, base, lo, hi),
+                toks(&t, LexState::default(), 0, lo, hi),
                 "round {round}: {t:?} lines {first}..{last}"
             );
         }
@@ -432,4 +450,36 @@ fn mysql_text_is_highlighted_as_mysql() {
     assert_eq!(fg_at(1, col("`q`")), th.syn_quoted_ident.fg.unwrap());
     assert_eq!(fg_at(1, col("# c")), th.syn_comment.fg.unwrap());
     assert_ne!(th.syn_exec_comment.fg, th.syn_comment.fg);
+}
+
+/// A selection is split as the whole text reads it where the selection starts: after a
+/// statement on its line, `DELIMITER` is no command; at a line's start below a `DELIMITER $$`,
+/// `$$` ends the statements.
+#[test]
+fn mysql_selections_split_as_the_whole_text() {
+    let mut e = mysql_editor("SELECT 1; DELIMITER //\nSELECT 2//", MYSQL);
+    e.row = 0;
+    e.col = 10;
+    crate::widgets::editor::tests::typ(&mut e, "vG$");
+    assert_eq!(e.run_statements().0, ["DELIMITER //\nSELECT 2//"]);
+    let mut e = mysql_editor("DELIMITER $$\nSELECT 1; SELECT 2$$ SELECT 3$$", MYSQL);
+    e.row = 1;
+    e.col = 0;
+    crate::widgets::editor::tests::typ(&mut e, "v$");
+    assert_eq!(e.run_statements().0, ["SELECT 1; SELECT 2", "SELECT 3"]);
+}
+
+/// A byte between the characters of a terminator a `DELIMITER` far above set lies inside a
+/// token (formatting a selection that ends there is refused).
+#[test]
+fn mysql_terminators_far_below_their_delimiter_are_one_token() {
+    let mut text = String::from("DELIMITER //\n");
+    for i in 0..3000 {
+        text.push_str(&format!("SELECT {i}//\n"));
+    }
+    let mut e = mysql_editor(&text, MYSQL);
+    let off = text.rfind("//").expect("//") + 1;
+    assert!(e.splits_token(off));
+    let mut pg = Editor::new(&text);
+    assert!(!pg.splits_token(off), "PostgreSQL: two operators");
 }

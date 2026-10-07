@@ -371,3 +371,133 @@ fn hints_never_stay_on_text_that_is_not_their_statement() {
         }
     }
 }
+
+const MYSQL: datarig_core::sql::dialect::Dialect =
+    datarig_core::sql::dialect::Dialect::MySql(datarig_core::sql::dialect::MySqlMode {
+        ansi_quotes: false,
+        no_backslash_escapes: false,
+        dollar_quotes: false,
+    });
+
+fn mysql_editor(text: &str) -> Editor {
+    let mut e = Editor::new(text);
+    e.set_language(datarig_core::sql::dialect::Language::Sql(MYSQL));
+    e
+}
+
+/// [`hints_are_statements`] in MySQL text, `ran` holding each statement's body: a hint may
+/// also stay on its statement when a `DELIMITER` change above gives it a terminator it did not
+/// have (its text is the same).
+fn mysql_hints_are_statements(e: &mut Editor, ran: &HashMap<usize, String>, ctx: &str) {
+    e.check_spans(false, |_| true);
+    let text = e.text();
+    let stmts = datarig_core::sql::split::split_in(&text, MYSQL);
+    for h in &e.runs.hints {
+        let (a, b) = (h.span.start, h.span.end);
+        let statement = stmts.iter().find(|s| s.start == a && s.end == b);
+        assert!(statement.is_some_and(|s| s.body(&text) == ran[&h.index]), "{ctx}: ({a}, {b}) in {text:?}");
+    }
+}
+
+/// The body of each statement of the run in progress in MySQL `text`, by its index.
+fn mysql_ran(e: &Editor, text: &str) -> HashMap<usize, String> {
+    let stmts = datarig_core::sql::split::split_in(text, MYSQL);
+    spans(e)
+        .iter()
+        .map(|&(a, _)| stmts.iter().find(|s| s.start == a).map_or(String::new(), |s| s.body(text).to_string()))
+        .enumerate()
+        .collect()
+}
+
+/// A `DELIMITER` line put above, taken away or changed changes where the statements below it
+/// end without touching them: their hints go when they are no longer statements.
+#[test]
+fn a_delimiter_change_above_a_hint_is_seen() {
+    for (text, row, keys_after, ctx) in [
+        ("SELECT 0;\nSELECT 1;\nSELECT 2;", 1, "ggoDELIMITER //\x1b", "put above"),
+        ("DELIMITER //\nSELECT 1; SELECT 2//\nSELECT 3//", 1, "ggdd", "taken away"),
+        ("DELIMITER //\nSELECT 1; SELECT 2//\nSELECT 3//", 1, "ggfDlcw;;\x1b", "changed"),
+    ] {
+        let mut e = mysql_editor(text);
+        e.row = row;
+        e.col = 0;
+        let stmts = run(&mut e, 1);
+        let ran = mysql_ran(&e, text);
+        e.finish_run(1, (0..stmts.len()).map(|_| hint("h")).collect());
+        mysql_hints_are_statements(&mut e, &ran, ctx);
+        assert_eq!(e.runs.hints.len(), 1, "{ctx}");
+        keys(&mut e, keys_after);
+        mysql_hints_are_statements(&mut e, &ran, ctx);
+        assert!(e.runs.hints.is_empty(), "{ctx}: {:?}", e.text());
+    }
+}
+
+const MYSQL_PIECES: &[&str] = &[
+    "SELECT 1",
+    ";",
+    " ",
+    "\n",
+    "\n",
+    "\n",
+    "/*",
+    "*/",
+    "'",
+    "\"",
+    "`",
+    "$$",
+    "//",
+    "--",
+    "-- c\n",
+    "# c\n",
+    "x",
+    ";\n",
+    "\n;",
+    "\n;\n",
+    "\r\n",
+    "\\",
+    "\\G",
+    "/*!80000 ",
+    "\nDELIMITER //\n",
+    "\nDELIMITER ;\n",
+    "\ndelimiter $$\n",
+    "DELIMITER ",
+    "\n\n",
+];
+
+/// [`hints_never_stay_on_text_that_is_not_their_statement`] in MySQL text, `DELIMITER` lines
+/// and long terminators among the pieces.
+#[test]
+fn mysql_hints_never_stay_on_text_that_is_not_their_statement() {
+    for seed in 1..=20_000u64 {
+        let mut r = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+        let mut pre = String::new();
+        for _ in 0..3 + r.below(15) {
+            pre.push_str(MYSQL_PIECES[r.below(MYSQL_PIECES.len())]);
+        }
+        let text = format!("{pre};\n\nSELECT 2;\nSELECT 3;");
+        let mut e = mysql_editor(&text);
+        keys(&mut e, "ggVG");
+        let stmts = run(&mut e, 1);
+        let ran = mysql_ran(&e, &text);
+        e.finish_run(1, (0..stmts.len()).map(|_| hint("h")).collect());
+        mysql_hints_are_statements(&mut e, &ran, &format!("seed {seed}"));
+        for step in 0..40 {
+            let Some(last) = e.runs.hints.last().map(|h| h.span.start) else { break };
+            let t = e.text();
+            let a = boundary(&t, r.below(last + 1));
+            let (b, ins) = match r.below(3) {
+                0 => (a, MYSQL_PIECES[r.below(MYSQL_PIECES.len())]),
+                1 => (boundary(&t, (a + 1 + r.below(3)).min(t.len())).max(a), ""),
+                _ => (boundary(&t, (a + r.below(3)).min(t.len())).max(a), MYSQL_PIECES[r.below(MYSQL_PIECES.len())]),
+            };
+            e.splice_raw(a, b, ins);
+            if r.below(4) != 0 {
+                mysql_hints_are_statements(
+                    &mut e,
+                    &ran,
+                    &format!("seed {seed}, step {step}, ({a}, {b}, {ins:?}) after {t:?}"),
+                );
+            }
+        }
+    }
+}
