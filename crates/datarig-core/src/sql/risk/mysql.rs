@@ -145,8 +145,9 @@ pub const VOLATILE: &[&str] = &[
 
 /// Session variables a read-only policy lets a session change: none of them can turn read-only
 /// off, write anything, change how the server reads the text the app sends, or let a statement
-/// take more of the server's memory or time than its defaults (buffer sizes, recursion depth,
-/// join size are not here). Lower case.
+/// take more of the server's memory, time or locks than its defaults (buffer and result sizes,
+/// recursion and planning depth, join size, lock waits and idle timeouts are not here). Lower
+/// case.
 pub const SAFE_SETTINGS: &[&str] = &[
     "big_tables",
     "character_set_connection",
@@ -157,19 +158,13 @@ pub const SAFE_SETTINGS: &[&str] = &[
     "end_markers_in_json",
     "explain_format",
     "explain_json_format_version",
-    "group_concat_max_len",
     "information_schema_stats_expiry",
-    "innodb_lock_wait_timeout",
-    "interactive_timeout",
     "lc_messages",
     "lc_time_names",
-    "lock_wait_timeout",
     "max_error_count",
     "max_execution_time",
     "net_read_timeout",
     "net_write_timeout",
-    "optimizer_prune_level",
-    "optimizer_search_depth",
     "optimizer_switch",
     "optimizer_trace",
     "optimizer_trace_features",
@@ -185,7 +180,6 @@ pub const SAFE_SETTINGS: &[&str] = &[
     "time_zone",
     "transaction_isolation",
     "tx_isolation",
-    "wait_timeout",
     "windowing_use_high_precision",
 ];
 
@@ -450,6 +444,16 @@ impl Call {
     }
 }
 
+/// Why a text is not read into statements.
+enum Unread {
+    /// The server would refuse it as a syntax error before running anything: an unterminated
+    /// string, quoted name or comment, a parenthesis that does not close, a `;` inside one.
+    Syntax,
+    /// Its risk is known without reading its statements (an executable comment, a client
+    /// command, a text over the caps, …).
+    Risk(Risk),
+}
+
 /// The risk of MySQL text `sql`, read in sql mode `mode`: one statement, or several separated
 /// by `;` (their worst). A text with a backslash or a `"` is also read as a session in the other
 /// modes would read it ([`readings`]), and the worse reading counts, unless that reading is
@@ -458,8 +462,8 @@ impl Call {
 pub fn classify(sql: &str, mode: MySqlMode) -> Risk {
     guarded(unrecognized, || {
         let mut modes = readings(sql, mode).into_iter();
-        let first = modes.next().map_or_else(unrecognized, |m| classify_as(sql, m));
-        modes.map(|m| classify_as(sql, m)).filter(|r| !refused(r)).fold(first, worse)
+        let first = modes.next().and_then(|m| classify_as(sql, m)).unwrap_or_else(unrecognized);
+        modes.filter_map(|m| classify_as(sql, m)).fold(first, worse)
     })
 }
 
@@ -487,12 +491,6 @@ fn readings(sql: &str, mode: MySqlMode) -> Vec<MySqlMode> {
     out
 }
 
-/// Whether a reading of a text is one the server would refuse before running anything (an
-/// unterminated token, a parenthesis that does not close, …): it is no way the text runs.
-fn refused(r: &Risk) -> bool {
-    matches!(r.danger, Some(Danger::Unrecognized | Danger::TooComplex))
-}
-
 /// `f` on a thread of its own named [`THREAD`]; `fallback` when it panics or the thread cannot
 /// start.
 fn guarded<T: Send>(fallback: impl FnOnce() -> T, f: impl FnOnce() -> T + Send) -> T {
@@ -503,29 +501,35 @@ fn guarded<T: Send>(fallback: impl FnOnce() -> T, f: impl FnOnce() -> T + Send) 
     run.unwrap_or_else(fallback)
 }
 
-/// [`classify`] in one sql mode.
-fn classify_as(sql: &str, mode: MySqlMode) -> Risk {
+/// [`classify`] in one sql mode; `None` when the server in that mode would refuse the text as a
+/// syntax error ([`Unread::Syntax`]: no way it runs so).
+fn classify_as(sql: &str, mode: MySqlMode) -> Option<Risk> {
     match statements(sql, mode) {
         Ok((stmts, hint)) => {
             let risk = stmts.iter().map(|ws| statement(ws)).reduce(worse).unwrap_or_else(|| Risk::of(Class::Unknown));
-            if hint { worse(risk, Risk::danger(Class::Read, Danger::Setting)) } else { risk }
+            Some(if hint { worse(risk, Risk::danger(Class::Read, Danger::Setting)) } else { risk })
         }
-        Err(risk) => risk,
+        Err(Unread::Syntax) => None,
+        Err(Unread::Risk(risk)) => Some(risk),
     }
 }
 
 /// The statements of `sql` (their tokens), and whether an optimizer hint of it sets a risky
-/// setting ([`words`]); or the risk of a text that is not read.
-fn statements(sql: &str, mode: MySqlMode) -> Result<(Vec<Vec<W<'_>>>, bool), Risk> {
+/// setting ([`words`]); or why the text is not read.
+fn statements(sql: &str, mode: MySqlMode) -> Result<(Vec<Vec<W<'_>>>, bool), Unread> {
     let (mut ws, hint) = words(sql, mode)?;
     let mut out = Vec::new();
     if starts_compound(&ws) {
-        let Some(end) = routine_end(&ws) else {
-            return Ok((vec![ws.into_iter().filter(|w| w.kind != Tok::Semi).collect()], hint));
-        };
-        let rest = ws.split_off(end);
-        out.push(ws);
-        ws = rest;
+        match routine_end(&ws) {
+            RoutineEnd::At(end) => {
+                let rest = ws.split_off(end);
+                out.push(ws);
+                ws = rest;
+            }
+            RoutineEnd::Whole => return Ok((vec![ws], hint)),
+            // What follows its body may be other statements, which are not read.
+            RoutineEnd::Lost => return Err(Unread::Risk(ddl(Some(Danger::Unrecognized)))),
+        }
     }
     let mut cur = Vec::new();
     for w in ws {
@@ -562,9 +566,10 @@ fn unrecognized() -> Risk {
 /// setting of [`RISKY_SETTINGS`] or turns read-only off for its statement (`/*+
 /// SET_VAR(foreign_key_checks = 0) */`); or the risk of a text that is not read (see the module
 /// docs).
-fn words(sql: &str, mode: MySqlMode) -> Result<(Vec<W<'_>>, bool), Risk> {
+fn words(sql: &str, mode: MySqlMode) -> Result<(Vec<W<'_>>, bool), Unread> {
+    let not_read = |risk: Risk| Err(Unread::Risk(risk));
     if sql.len() > MAX_BYTES {
-        return Err(Risk::danger(Class::Unknown, Danger::TooComplex));
+        return not_read(Risk::danger(Class::Unknown, Danger::TooComplex));
     }
     let backslash = !mode.no_backslash_escapes;
     let mut out: Vec<W> = Vec::new();
@@ -574,25 +579,27 @@ fn words(sql: &str, mode: MySqlMode) -> Result<(Vec<W<'_>>, bool), Risk> {
     for t in lex_in(sql, Dialect::MySql(mode)) {
         let text = t.text(sql);
         match t.kind {
-            Tok::ExecComment => return Err(Risk::danger(Class::Unknown, Danger::ExecutableComment)),
+            Tok::ExecComment => return not_read(Risk::danger(Class::Unknown, Danger::ExecutableComment)),
             Tok::BlockComment if text.starts_with("/*M!") => {
-                return Err(Risk::danger(Class::Unknown, Danger::ExecutableComment));
+                return not_read(Risk::danger(Class::Unknown, Danger::ExecutableComment));
             }
-            Tok::BlockComment if text.len() < 4 || !text.ends_with("*/") => return Err(unrecognized()),
-            Tok::Directive | Tok::Param => return Err(unrecognized()),
+            Tok::BlockComment if text.len() < 4 || !text.ends_with("*/") => return Err(Unread::Syntax),
+            Tok::Directive | Tok::Param => return not_read(unrecognized()),
             Tok::Str | Tok::QuotedIdent | Tok::Variable if !closed(text, t.kind, backslash) => {
-                return Err(unrecognized());
+                return Err(Unread::Syntax);
             }
             Tok::BlockComment => {
                 hint |= text.starts_with("/*+") && sets_risky(text);
                 continue;
             }
             Tok::LineComment => continue,
-            _ if text.starts_with('\\') || text.chars().any(|c| c.is_control() && !is_space(c)) => {
-                // A client command (`\g`, `\G`, a backslash at a line's end) or a control character:
-                // the server reads it otherwise.
+            // A backslash outside strings: the server reads only `\N` (NULL); a client command
+            // (`\g`, `\G`) or a backslash at a line's end is a syntax error there.
+            _ if text.starts_with('\\') && text != "\\N" => return Err(Unread::Syntax),
+            _ if text == "\\N" || text.chars().any(|c| c.is_control() && !is_space(c)) => {
+                // `\N`, or a control character: not read.
                 if t.kind != Tok::Str && t.kind != Tok::QuotedIdent {
-                    return Err(unrecognized());
+                    return not_read(unrecognized());
                 }
             }
             _ => {}
@@ -600,26 +607,28 @@ fn words(sql: &str, mode: MySqlMode) -> Result<(Vec<W<'_>>, bool), Risk> {
         if t.kind == Tok::Whitespace {
             continue;
         }
-        // The server reads no escape in a quoted name, nor in a hex or bit string.
-        let escapes_ignored = ((t.kind == Tok::QuotedIdent && text.starts_with('"'))
-            || (t.kind == Tok::Str && text.starts_with(['x', 'X', 'b', 'B'])))
+        // The server reads no escape in a quoted name, nor in a hex or bit string, where the lexer
+        // (as the client) reads one.
+        let escapes_ignored = backslash
+            && ((t.kind == Tok::QuotedIdent && text.starts_with('"'))
+                || (t.kind == Tok::Str && text.starts_with(['x', 'X', 'b', 'B'])))
             && text.contains('\\');
         if escapes_ignored || (t.kind == Tok::Variable && text.contains('\\')) {
-            return Err(unrecognized());
+            return not_read(unrecognized());
         }
         let at = match t.kind {
             Tok::LParen => {
                 depth += 1;
                 if depth > MAX_DEPTH {
-                    return Err(Risk::danger(Class::Unknown, Danger::TooComplex));
+                    return not_read(Risk::danger(Class::Unknown, Danger::TooComplex));
                 }
                 depth - 1
             }
             Tok::RParen => {
-                depth = depth.checked_sub(1).ok_or_else(unrecognized)?;
+                depth = depth.checked_sub(1).ok_or(Unread::Syntax)?;
                 depth
             }
-            Tok::Semi if depth > 0 => return Err(unrecognized()),
+            Tok::Semi if depth > 0 => return Err(Unread::Syntax),
             _ => depth,
         };
         let up = if matches!(t.kind, Tok::Ident | Tok::Keyword) { text.to_ascii_uppercase() } else { String::new() };
@@ -628,14 +637,14 @@ fn words(sql: &str, mode: MySqlMode) -> Result<(Vec<W<'_>>, bool), Risk> {
         if t.kind == Tok::LParen {
             open.push(here);
         } else if t.kind == Tok::RParen {
-            let o = open.pop().ok_or_else(unrecognized)?;
+            let o = open.pop().ok_or(Unread::Syntax)?;
             mate = o as isize - here as isize;
             out[o].mate = -mate;
         }
         out.push(W { kind: t.kind, text, up, depth: at, mate });
     }
     if depth != 0 {
-        return Err(unrecognized());
+        return Err(Unread::Syntax);
     }
     Ok((out, hint))
 }
@@ -726,9 +735,9 @@ fn starts_compound(ws: &[W]) -> bool {
 
 /// Where the `CREATE` of a routine, a trigger or an event at the start of `ws` ends: the `;` after
 /// its body, which is one statement or a block (`BEGIN … END`, also nested, with `IF`, `CASE`,
-/// `LOOP`, `REPEAT` and `WHILE` inside). `None` when it runs to the end of the text, or when its
-/// blocks cannot be followed (the whole text is then that one statement).
-fn routine_end(ws: &[W]) -> Option<usize> {
+/// `LOOP`, `REPEAT` and `WHILE` inside); the end of the text; or nowhere it can tell (an `END`
+/// that closes no block, a block not closed).
+fn routine_end(ws: &[W]) -> RoutineEnd {
     let mut blocks = 0usize;
     let mut start = false;
     let mut i = 0;
@@ -736,7 +745,7 @@ fn routine_end(ws: &[W]) -> Option<usize> {
         let w = &ws[i];
         if w.kind == Tok::Semi {
             if blocks == 0 {
-                return Some(i);
+                return RoutineEnd::At(i);
             }
             start = true;
             i += 1;
@@ -744,7 +753,8 @@ fn routine_end(ws: &[W]) -> Option<usize> {
         }
         let next = ws.get(i + 1);
         if w.is("END") {
-            blocks = blocks.checked_sub(1)?;
+            let Some(left) = blocks.checked_sub(1) else { return RoutineEnd::Lost };
+            blocks = left;
             if next.is_some_and(|n| ["IF", "CASE", "LOOP", "REPEAT", "WHILE"].iter().any(|k| n.is(k))) {
                 i += 1;
             }
@@ -765,7 +775,17 @@ fn routine_end(ws: &[W]) -> Option<usize> {
         start = label || ["BEGIN", "THEN", "ELSE", "DO", "LOOP", "REPEAT"].iter().any(|k| w.is(k));
         i += 1;
     }
-    None
+    if blocks == 0 { RoutineEnd::Whole } else { RoutineEnd::Lost }
+}
+
+/// Where a routine's `CREATE` ends ([`routine_end`]).
+enum RoutineEnd {
+    /// At the `;` at this index; statements follow.
+    At(usize),
+    /// At the end of the text.
+    Whole,
+    /// Its blocks cannot be followed.
+    Lost,
 }
 
 /// The index of the parenthesis that closes the one at `i` (or opens the one at `i`), when both
@@ -1427,9 +1447,19 @@ fn create(ws: &[W]) -> Risk {
 fn with_event_body(mut risk: Risk, ws: &[W], from: usize) -> Risk {
     let Some(at) = find_top(ws, from, &["DO"]) else { return risk };
     let body = &ws[at + 1..];
-    let block = body.first().is_some_and(|w| w.is("BEGIN")) || body.get(1).is_some_and(|w| w.is_op(":"));
-    let inner = if block { Risk::danger(Class::Procedural, Danger::Procedural) } else { statement(body) };
-    if risk.danger.is_none() && inner.danger.is_some() {
+    let first = body.first();
+    let block = first.is_some_and(|w| w.is("BEGIN")) || body.get(1).is_some_and(|w| w.is_op(":"));
+    // An event cannot create or change one (MySQL refuses it): not read further.
+    let nested = first.is_some_and(|w| w.is("CREATE") || w.is("ALTER"));
+    let inner = if nested {
+        unrecognized()
+    } else if block {
+        Risk::danger(Class::Procedural, Danger::Procedural)
+    } else {
+        statement(body)
+    };
+    // What the body does beats a name changed.
+    if matches!(risk.danger, None | Some(Danger::Rename)) && inner.danger.is_some() {
         risk.danger = inner.danger;
         risk.no_where = inner.no_where;
     }
@@ -1448,7 +1478,8 @@ fn alter(ws: &[W]) -> Risk {
     match ws[object].up.as_str() {
         "USER" => ddl(Some(Danger::Privileges)),
         "EVENT" => {
-            let renames = ws.iter().any(|w| w.is("RENAME"));
+            let head = find_top(ws, object, &["DO"]).map_or(ws, |at| &ws[..at]);
+            let renames = head.iter().any(|w| w.is("RENAME"));
             with_event_body(ddl(renames.then_some(Danger::Rename)), ws, object)
         }
         "INSTANCE" => maintenance(Some(Danger::ServerCommand)),
@@ -1483,7 +1514,9 @@ fn table_change(ws: &[W], from: usize) -> Option<Danger> {
             "CONVERT" if word(i + 1) == "TO" => Some(Danger::AlterColumnType),
             "RENAME" => Some(Danger::Rename),
             // An engine that keeps no rows.
-            "ENGINE" if ws[i + 1..].iter().take(2).any(|w| w.is("BLACKHOLE")) => Some(Danger::Truncate),
+            "ENGINE" if ws[i + 1..].iter().take(2).any(|w| value_text(w).eq_ignore_ascii_case("BLACKHOLE")) => {
+                Some(Danger::Truncate)
+            }
             "TRUNCATE" if word(i + 1) == "PARTITION" => Some(Danger::Truncate),
             "DISCARD" | "EXCHANGE" | "REMOVE" if matches!(word(i + 1), "TABLESPACE" | "PARTITION" | "PARTITIONING") => {
                 Some(Danger::Drop)
@@ -1692,30 +1725,43 @@ pub fn names(sql: &str, mode: MySqlMode) -> Result<Vec<String>, NotRepeatable> {
     guarded(
         || Err(NotRepeatable::Unreadable),
         || {
-            let mut first = None;
+            let mut all: Vec<String> = Vec::new();
             for (k, m) in readings(sql, mode).into_iter().enumerate() {
                 match names_as(sql, m) {
-                    // Another mode that reads the text as one the server refuses: no way it runs.
-                    Err(NotRepeatable::Unreadable) if k > 0 => {}
-                    Err(why) => return Err(why),
-                    Ok(names) => {
-                        first.get_or_insert(names);
+                    None if k == 0 => return Err(NotRepeatable::Unreadable),
+                    // Another mode that reads the text as a syntax error: no way it runs so.
+                    None => {}
+                    Some(Err(why)) => return Err(why),
+                    Some(Ok(names)) => {
+                        for name in names {
+                            if !all.contains(&name) {
+                                all.push(name);
+                            }
+                        }
                     }
                 }
             }
-            first.ok_or(NotRepeatable::Unreadable)
+            Ok(all)
         },
     )
 }
 
-/// [`names`] in one sql mode.
-fn names_as(sql: &str, mode: MySqlMode) -> Result<Vec<String>, NotRepeatable> {
-    let (stmts, hint) = match statements(sql, mode) {
-        Ok(read) => read,
-        Err(r) if refused(&r) => return Err(NotRepeatable::Unreadable),
-        Err(_) => return Err(NotRepeatable::Writes),
-    };
-    let [ws] = stmts.as_slice() else { return Err(NotRepeatable::NotOne) };
+/// [`names`] in one sql mode; `None` when the server in that mode would refuse the text as a
+/// syntax error.
+fn names_as(sql: &str, mode: MySqlMode) -> Option<Result<Vec<String>, NotRepeatable>> {
+    Some(match statements(sql, mode) {
+        Ok((stmts, hint)) => names_of(&stmts, hint),
+        Err(Unread::Syntax) => return None,
+        Err(Unread::Risk(r)) if matches!(r.danger, Some(Danger::Unrecognized | Danger::TooComplex)) => {
+            Err(NotRepeatable::Unreadable)
+        }
+        Err(Unread::Risk(_)) => Err(NotRepeatable::Writes),
+    })
+}
+
+/// [`names_as`] of a text read into statements.
+fn names_of(stmts: &[Vec<W>], hint: bool) -> Result<Vec<String>, NotRepeatable> {
+    let [ws] = stmts else { return Err(NotRepeatable::NotOne) };
     let top = ws.first().map(|w| (w.kind, w.up.as_str()));
     let query = starts_query(ws, 0)
         || (top.is_some_and(|(_, w)| w == "WITH") && with_main(ws).is_some_and(|i| starts_query(ws, i)));

@@ -200,6 +200,10 @@ fn the_sql_mode_changes_what_is_a_string() {
     let text = "SELECT * FROM t WHERE b = 'x\\' OR 1 = 1; DELETE FROM t -- '";
     assert_eq!(classify(text, raw).danger, Some(Danger::DeleteAll));
     assert_eq!(classify(text, MODE).danger, Some(Danger::DeleteAll));
+    // Another reading the classifier does not know counts: only a syntax error does not.
+    assert_eq!(render(&classify("SELECT 'a\\' , (DELETE FROM t) #'", MODE)), "unknown unrecognized");
+    assert_eq!(render(&classify("SELECT 'a\\' , ? #'", MODE)), "unknown unrecognized");
+    assert_eq!(repeatable("SELECT 'a\\' , (DELETE FROM t) #'", MODE), Err(NotRepeatable::Unreadable));
     // A reading the server would refuse (an unterminated string) does not count.
     assert_eq!(render(&classify("SELECT 'it\\'s'", MODE)), "read ro");
     assert_eq!(render(&classify("SELECT \"it\"\"s\" FROM t", ansi)), "read ro");
@@ -294,8 +298,28 @@ fn a_routine_ends_where_its_body_does() {
         render(&risk("CREATE EVENT e ON SCHEDULE EVERY 1 DAY DO DELETE FROM t; SELECT 1")),
         "ddl delete-all:missing commit"
     );
-    // Blocks that cannot be followed: the whole text is the one statement.
-    assert_eq!(render(&risk("CREATE PROCEDURE p() BEGIN END END; DROP TABLE t")), "ddl commit");
+    // Blocks that cannot be followed: what follows is not read, and it asks.
+    assert_eq!(render(&risk("CREATE PROCEDURE p() BEGIN END END; DROP TABLE t")), "ddl unrecognized commit");
+}
+
+#[test]
+fn nested_events_are_not_read_into() {
+    let text = format!("{}SELECT 1", "CREATE EVENT e ON SCHEDULE AT CURRENT_TIMESTAMP DO ".repeat(5000));
+    assert!(text.len() < MAX_BYTES);
+    let start = std::time::Instant::now();
+    assert_eq!(render(&risk(&text)), "ddl unrecognized commit");
+    assert!(start.elapsed() < std::time::Duration::from_secs(2), "{:?}", start.elapsed());
+}
+
+#[test]
+fn a_routine_whose_blocks_cannot_be_followed_asks() {
+    // `end` as a name closes the block early: what follows reads as other statements.
+    assert_eq!(
+        render(&risk("CREATE PROCEDURE p() BEGIN SELECT end FROM t; END; DROP TABLE t")),
+        "unknown unrecognized commit"
+    );
+    assert_eq!(render(&risk("CREATE PROCEDURE p() BEGIN SELECT 1;")), "ddl unrecognized commit");
+    assert_eq!(render(&risk("CREATE PROCEDURE p() BEGIN SELECT 1; END")), "ddl commit");
 }
 
 #[test]
