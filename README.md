@@ -579,9 +579,9 @@ the end of the statement and its metadata lock is released; the next page runs t
 again and skips the rows you have (only for a statement that is safe to repeat; one that names a
 view is checked on the server first). `SHOW` and `DESCRIBE` are read whole. With
 `paging = "hold"`, and inside your own transaction, a result is read whole into datarig's local
-spill (up to its limit) and the server is free at once. Outside a transaction a locking read
-(`FOR UPDATE`, `FOR SHARE`) stops at the page limit too; its locks end with the statement
-anyway. The explorer and completion read in autocommit with `lock_wait_timeout = 2` and a
+spill (up to its limit) and the server is free at once. So is a locking read (`FOR UPDATE`,
+`FOR SHARE`, `LOCK IN SHARE MODE`): under the page limit it would lock fewer rows than it asks
+for. The explorer and completion read in autocommit with `lock_wait_timeout = 2` and a
 10-second `max_execution_time`: behind a waiting `ALTER TABLE` they give up after two seconds
 instead of queueing behind it.
 
@@ -594,12 +594,20 @@ statement turn its read-only off, so the server's layer depends on datarig's: fo
 that does not, use an account with `SELECT` privileges only. Views, triggers, generated columns
 and `DEFAULT` expressions are not inspected; the server still refuses their writes.
 
-**Passwords on a direct connection.** There is no TLS yet. A `caching_sha2_password` login that
-the server has not cached (the first one, or after a restart) asks the server for its RSA public
-key over the same plain connection and encrypts the password with it: someone who can intercept
-the connection can send their own key and read the password. A `mysql_native_password` login
-over plain TCP can be cracked offline from a capture. Use an SSH tunnel for any server that is
-not on your own machine.
+**Passwords on a direct connection.** There is no TLS yet, so a direct connection to another
+machine is unencrypted: datarig says so in the profile form and when it connects. A
+`caching_sha2_password` login the server has not cached (the first one, or after a restart)
+encrypts the password with the server's RSA public key. Asked for over the same plain
+connection, that key could come from anyone in between, who could then read the password, so
+on a direct connection to another machine datarig does not ask for it and the login fails with
+an explanation. Use an SSH tunnel (the key is then asked for through it), name the server's key
+file in the profile (`server_public_key_file`, the PEM of `SHOW STATUS LIKE
+'Caching_sha2_password_rsa_public_key'`), or allow asking for it
+(`allow_public_key_retrieval = true`). A server on your own machine is asked as before. A
+`mysql_native_password` login over plain TCP can be cracked offline from a capture whatever the
+key; use an SSH tunnel for any server that is not on your own machine. `ERROR 1045` may also
+mean the account requires TLS (`REQUIRE SSL`), which no password fixes: after a typed password
+is refused, datarig shows the error instead of asking again.
 
 ## SSH tunnels
 
