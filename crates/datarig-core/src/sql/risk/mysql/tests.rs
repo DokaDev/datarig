@@ -204,6 +204,12 @@ fn the_sql_mode_changes_what_is_a_string() {
     assert_eq!(render(&classify("SELECT 'a\\' , (DELETE FROM t) #'", MODE)), "unknown unrecognized");
     assert_eq!(render(&classify("SELECT 'a\\' , ? #'", MODE)), "unknown unrecognized");
     assert_eq!(repeatable("SELECT 'a\\' , (DELETE FROM t) #'", MODE), Err(NotRepeatable::Unreadable));
+    // A quoted name with a backslash under ANSI_QUOTES: the lexer would end it elsewhere than
+    // the server, so the reading is not known (and is not taken for a syntax error).
+    assert_eq!(render(&classify("SELECT \"a\\\"", ansi)), "unknown unrecognized");
+    assert_eq!(classify_as("SELECT \"a\\\"", ansi).map(|r| r.danger), Some(Some(Danger::Unrecognized)));
+    let r = classify("SELECT 1 FROM t WHERE \"x\\\" = 1; DELETE FROM t", ansi);
+    assert!(r.danger == Some(Danger::Unrecognized) && r.writes && r.read_only().is_err());
     // A reading the server would refuse (an unterminated string) does not count.
     assert_eq!(render(&classify("SELECT 'it\\'s'", MODE)), "read ro");
     assert_eq!(render(&classify("SELECT \"it\"\"s\" FROM t", ansi)), "read ro");
@@ -309,6 +315,21 @@ fn nested_events_are_not_read_into() {
     let start = std::time::Instant::now();
     assert_eq!(render(&risk(&text)), "ddl unrecognized commit");
     assert!(start.elapsed() < std::time::Duration::from_secs(2), "{:?}", start.elapsed());
+}
+
+#[test]
+fn an_event_body_of_table_ddl_is_read() {
+    assert_eq!(
+        render(&risk("CREATE EVENT e ON SCHEDULE EVERY 1 DAY DO ALTER TABLE t ENGINE = BLACKHOLE")),
+        "ddl truncate commit"
+    );
+    assert_eq!(render(&risk("CREATE EVENT e ON SCHEDULE EVERY 1 DAY DO CREATE TABLE t2 (a INT)")), "ddl commit");
+    assert_eq!(
+        render(&risk(
+            "CREATE EVENT e ON SCHEDULE EVERY 1 DAY DO CREATE DEFINER = CURRENT_USER EVENT f ON SCHEDULE EVERY 1 DAY DO DELETE FROM t"
+        )),
+        "ddl unrecognized commit"
+    );
 }
 
 #[test]

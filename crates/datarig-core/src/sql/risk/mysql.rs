@@ -585,6 +585,16 @@ fn words(sql: &str, mode: MySqlMode) -> Result<(Vec<W<'_>>, bool), Unread> {
             }
             Tok::BlockComment if text.len() < 4 || !text.ends_with("*/") => return Err(Unread::Syntax),
             Tok::Directive | Tok::Param => return not_read(unrecognized()),
+            // The server reads no escape in a quoted name, nor in a hex or bit string, where the
+            // lexer (as the client) reads one: where such a token ends is not known.
+            Tok::QuotedIdent | Tok::Str
+                if backslash
+                    && text.contains('\\')
+                    && ((t.kind == Tok::QuotedIdent && text.starts_with('"'))
+                        || (t.kind == Tok::Str && text.starts_with(['x', 'X', 'b', 'B']))) =>
+            {
+                return not_read(unrecognized());
+            }
             Tok::Str | Tok::QuotedIdent | Tok::Variable if !closed(text, t.kind, backslash) => {
                 return Err(Unread::Syntax);
             }
@@ -607,13 +617,7 @@ fn words(sql: &str, mode: MySqlMode) -> Result<(Vec<W<'_>>, bool), Unread> {
         if t.kind == Tok::Whitespace {
             continue;
         }
-        // The server reads no escape in a quoted name, nor in a hex or bit string, where the lexer
-        // (as the client) reads one.
-        let escapes_ignored = backslash
-            && ((t.kind == Tok::QuotedIdent && text.starts_with('"'))
-                || (t.kind == Tok::Str && text.starts_with(['x', 'X', 'b', 'B'])))
-            && text.contains('\\');
-        if escapes_ignored || (t.kind == Tok::Variable && text.contains('\\')) {
+        if t.kind == Tok::Variable && text.contains('\\') {
             return not_read(unrecognized());
         }
         let at = match t.kind {
@@ -1449,8 +1453,8 @@ fn with_event_body(mut risk: Risk, ws: &[W], from: usize) -> Risk {
     let body = &ws[at + 1..];
     let first = body.first();
     let block = first.is_some_and(|w| w.is("BEGIN")) || body.get(1).is_some_and(|w| w.is_op(":"));
-    // An event cannot create or change one (MySQL refuses it): not read further.
-    let nested = first.is_some_and(|w| w.is("CREATE") || w.is("ALTER"));
+    // An event cannot create or change an event (MySQL refuses it): not read further.
+    let nested = object(body).is_some_and(|i| body[i].is("EVENT"));
     let inner = if nested {
         unrecognized()
     } else if block {
