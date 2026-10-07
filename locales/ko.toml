@@ -392,6 +392,7 @@
 "db.server_key_unreadable" = "서버 공개 키 파일 {path}을(를) 읽을 수 없습니다: {error}"
 "db.server_key_invalid" = "서버 공개 키 파일 {path}은(는) PEM 형식의 RSA 공개 키(2048비트 이상)가 아닙니다"
 "db.server_key_relative" = "서버 공개 키 파일 {path}은(는) 절대 경로이거나 ~/로 시작해야 합니다 (프로필의 고급 섹션)"
+"db.server_key_sent_invalid" = "로그인하지 않았습니다: 서버의 공개 키가 PEM 형식의 RSA 공개 키(2048비트 이상)가 아니어서 비밀번호를 보내지 않았습니다. 서버 공개 키 파일을 지정하세요 (프로필의 고급 섹션)"
 "db.password_too_long" = "로그인하지 않았습니다: 비밀번호가 너무 길어 서버 공개 키로 암호화해 보낼 수 없습니다 (이 키로는 최대 {max}바이트)"
 "db.read_write_refused" = "보내지 않음: 세션이 읽기 전용인데 이 문은 읽기-쓰기를 요구합니다"
 "query.lost" = "이 탭의 연결이 끊어졌습니다: {error}"

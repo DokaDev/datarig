@@ -1359,6 +1359,7 @@ impl App {
                 return self.i18n.msg(&Msg::DbAccessDenied { message: message.clone() }).to_string();
             }
             DbError::KeyRetrievalRefused => Label::DbKeyRetrievalRefused,
+            DbError::ServerKeyInvalid => Label::DbServerKeySentInvalid,
             DbError::ServerKeyFile { path, fault: None } => {
                 return self.i18n.msg(&Msg::DbServerKeyInvalid { path: path.clone() }).to_string();
             }

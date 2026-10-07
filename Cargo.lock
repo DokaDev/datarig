@@ -906,7 +906,6 @@ dependencies = [
 name = "datarig-driver-mysql"
 version = "0.11.0"
 dependencies = [
- "data-encoding",
  "datarig-core",
  "futures",
  "mysql_async",
@@ -2147,6 +2146,7 @@ dependencies = [
  "bytes",
  "crossbeam-queue",
  "crossbeam-utils",
+ "data-encoding",
  "flate2",
  "futures-core",
  "futures-sink",

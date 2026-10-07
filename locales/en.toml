@@ -394,6 +394,7 @@
 "db.server_key_unreadable" = "the server public key file {path} cannot be read: {error}"
 "db.server_key_invalid" = "the server public key file {path} is not an RSA public key in PEM (2048 bits or more)"
 "db.server_key_relative" = "the server public key file {path} must be an absolute path or start with ~/ (the profile's Advanced section)"
+"db.server_key_sent_invalid" = "not logged in: the server's public key is not an RSA public key in PEM (2048 bits or more), so the password was not sent. Set the server's public key file (the profile's Advanced section)"
 "db.password_too_long" = "not logged in: the password is too long to send encrypted with the server's public key ({max} bytes at most with this key)"
 "db.read_write_refused" = "not sent: the session is read-only and this statement asks for read-write"
 "query.lost" = "This tab's connection was lost: {error}"

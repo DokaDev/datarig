@@ -347,6 +347,32 @@ async fn an_empty_key_packet_from_the_server_is_an_error() {
     }
 }
 
+/// A key the server sends is checked as the profile's key file is (an RSA public key in PEM
+/// of 2048 bits or more) before the password is encrypted with it: anything else ends the
+/// login with an error (mysql_common would panic on a malformed one), and nothing about the
+/// password is sent.
+#[tokio::test]
+async fn a_malformed_key_from_the_server_is_an_error() {
+    let cfg = mysql("127.0.0.1");
+    let route = Route::new("127.0.0.1", 3306, None);
+    let bad = [
+        "garbage".to_string(),
+        KEY_1024.into(),
+        KEY_2048.replace("MIIBIjAN", "MIIBIjAn"),
+        KEY_2048.replace("twIDAQAB", "twIDAQA"),
+        KEY_2048.replace("-----END PUBLIC KEY-----", ""),
+        "-----BEGIN PUBLIC KEY-----\nMAA=\n-----END PUBLIC KEY-----".into(),
+    ];
+    for (i, text) in bad.iter().enumerate() {
+        let mut key = vec![1];
+        key.extend_from_slice(text.as_bytes());
+        let (sent, ended) = login_keyed(&cfg, &route, &[1, 4], Some(&key)).await;
+        assert_eq!((sent, ended), (None, Err(DbError::ServerKeyInvalid)), "{i}");
+    }
+    let invalid = mysql_async::Error::Driver(mysql_async::DriverError::InvalidServerPublicKey);
+    assert_eq!(connect_error(&invalid), (DbError::ServerKeyInvalid, false));
+}
+
 /// A relative key file is refused when the session opens (it would be read from wherever
 /// datarig was started); `~/` is the home directory.
 #[test]

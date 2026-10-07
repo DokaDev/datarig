@@ -189,8 +189,15 @@ pub enum DriverError {
     /// datarig: a `caching_sha2_password` login would encrypt the password with the server's
     /// RSA public key, and the password is longer than the `max` bytes that key's RSA-OAEP
     /// takes (mysql_common would panic).
-    #[error("the password is too long to encrypt with the server's public key ({max} bytes at most)")]
+    #[error(
+        "the password is too long to encrypt with the server's public key ({max} bytes at most)"
+    )]
     PasswordTooLongForKey { max: usize },
+
+    /// datarig: the server's public key (the one the options give, or the one the server sent)
+    /// is not an RSA public key in PEM of 2048 bits or more (`crate::server_public_key_ok`).
+    #[error("the server's public key is not an RSA public key in PEM of 2048 bits or more")]
+    InvalidServerPublicKey,
 
     #[error("Bulk execute error: {}", _0)]
     BulkExecute(BulkExecuteRequestError),

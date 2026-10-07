@@ -451,6 +451,8 @@ mod local_infile_handler;
 mod opts;
 mod query;
 mod queryable;
+// datarig
+mod server_key;
 
 type BoxFuture<'a, T> = futures_core::future::BoxFuture<'a, Result<T>>;
 
@@ -469,6 +471,9 @@ pub use self::conn::Conn;
 
 /// datarig: what [`Conn::connect_with_stream`] takes.
 pub use self::io::CustomStream;
+
+/// datarig: the check of a server public key a `caching_sha2_password` login makes.
+pub use self::server_key::server_public_key_ok;
 
 #[doc(inline)]
 pub use self::conn::pool::Pool;

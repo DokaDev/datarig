@@ -14,8 +14,6 @@ publish.workspace = true
 
 [dependencies]
 datarig-core.workspace = true
-# The server public key file's base64 (PEM).
-data-encoding.workspace = true
 futures.workspace = true
 mysql_async.workspace = true
 tokio = { workspace = true, features = ["rt", "macros", "sync", "time", "net", "io-util"] }

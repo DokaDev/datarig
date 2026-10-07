@@ -105,6 +105,10 @@ version = "1.4"
 [dependencies.crossbeam-queue]
 version = "0.3"
 
+# datarig: the server key check's base64 (src/server_key.rs).
+[dependencies.data-encoding]
+version = "2.11"
+
 [dependencies.crossbeam-utils]
 version = "0.8.21"
 

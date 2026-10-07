@@ -116,6 +116,10 @@ pub enum DbError {
     /// RSA-OAEP's limit less the zero byte the client ends it with). Nothing about the password
     /// was sent.
     PasswordTooLong { max: usize },
+    /// The server's public key a MySQL login would encrypt the password with (the one the
+    /// server sent when asked) is not an RSA public key in PEM of 2048 bits or more. Nothing
+    /// about the password was sent.
+    ServerKeyInvalid,
 }
 
 impl DbError {
@@ -146,7 +150,8 @@ impl DbError {
             | DbError::TlsRequired
             | DbError::KeyRetrievalRefused
             | DbError::ServerKeyPathRelative(_)
-            | DbError::PasswordTooLong { .. } => Cow::Borrowed(""),
+            | DbError::PasswordTooLong { .. }
+            | DbError::ServerKeyInvalid => Cow::Borrowed(""),
         }
     }
 }

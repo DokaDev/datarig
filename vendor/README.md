@@ -207,11 +207,18 @@ Every change in the source is marked with a `datarig:` comment.
   without one it asks (`0x02`) only when `public_key_retrieval` is on, and otherwise fails
   with `DriverError::PublicKeyRetrievalDisabled` before it sends anything (the key the server
   sends comes over the same unencrypted connection, so anyone in between could send theirs).
-  A key packet without a key is `DriverError::UnexpectedPacket`, and a password too long for
+  A key packet without a key is `DriverError::UnexpectedPacket`; the key (the options' or the
+  server's) must pass `server_public_key_ok` before it is used, else the login fails with
+  `DriverError::InvalidServerPublicKey`; and a password too long for
   the key's RSA-OAEP (more than `k - 2 * 20 - 2` bytes with its terminating zero, `k` the key's
   size in bytes: 213 bytes of password with a 2048-bit key) fails with
-  `DriverError::PasswordTooLongForKey` before it sends anything (upstream panics on both:
-  `packet[1..]`, and mysql_common's `encrypt`).
+  `DriverError::PasswordTooLongForKey` before it sends anything (upstream panics on all
+  three: `packet[1..]`, and mysql_common's PEM parser and `encrypt`).
+- `src/server_key.rs` (new, all of it datarig's): `server_public_key_ok`, whether a key is
+  an RSA public key in PEM (PKCS#1 or SubjectPublicKeyInfo) of 2048 bits or more, checked the
+  way mysql_common's parser reads it (the first block, its base64, the DER lengths, a modulus
+  that is not zero), so a key that passes is one it reads without panicking. datarig's driver
+  checks the profile's key file with it too. `Cargo.toml` depends on `data-encoding` for it.
 - `src/opts/mod.rs`: the client capabilities never include `CLIENT_MULTI_STATEMENTS` nor
   `CLIENT_LOCAL_FILES`, and include `CLIENT_SESSION_TRACK`, so the server reports changes of the
   session (the variables it tracks, the current database) in its OK packets. `MysqlOpts`'s
@@ -219,9 +226,10 @@ Every change in the source is marked with a `datarig:` comment.
   `server_public_key` (the server's RSA public key in PEM, `None` by default) and
   `public_key_retrieval` (whether the server may be asked for its key, `true` by default as
   upstream does), with their `OptsBuilder` setters and `Opts` getters.
-- `src/error/mod.rs`: `DriverError::PublicKeyRetrievalDisabled` and
-  `DriverError::PasswordTooLongForKey`.
-- `src/lib.rs`: `pub use self::io::CustomStream`.
+- `src/error/mod.rs`: `DriverError::PublicKeyRetrievalDisabled`,
+  `DriverError::PasswordTooLongForKey` and `DriverError::InvalidServerPublicKey`.
+- `src/lib.rs`: `pub use self::io::CustomStream`, `mod server_key` and
+  `pub use self::server_key::server_public_key_ok`.
 
 Packaging: `Cargo.toml`'s generated header comment is replaced by a note about this copy; its
 `[[test]]` targets, `[dev-dependencies]` and `[profile.bench]` are removed (not built here).

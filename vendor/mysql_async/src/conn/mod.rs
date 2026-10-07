@@ -833,6 +833,13 @@ impl Conn {
                             }
                             self.inner.server_key = Some(packet[1..].to_vec());
                         }
+                        // datarig: the key, the options' or the server's, is checked first
+                        // (mysql_common panics on a malformed one).
+                        if !crate::server_public_key_ok(
+                            self.inner.server_key.as_deref().expect("unreachable"),
+                        ) {
+                            return Err(DriverError::InvalidServerPublicKey.into());
+                        }
                         // datarig: RSA-OAEP (SHA-1) takes at most `k - 2 * 20 - 2` bytes with a
                         // key of `k` bytes (mysql_common panics on more); `pass` ends with its
                         // zero byte.
