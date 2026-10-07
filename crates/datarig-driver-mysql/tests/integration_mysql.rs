@@ -263,17 +263,25 @@ async fn sessions_are_set_up_on_the_server_by_role_and_policy() {
 }
 
 /// The statements test `test`'s session `id` ran, as the server recorded them
-/// (`events_statements_history`, its last ten), oldest first.
+/// (`events_statements_history`, its last ten), oldest first. The server records a statement
+/// after it answered it: an empty history is asked again for a while.
 async fn statements_of(admin: &mut mysql_async::Conn, id: u64) -> Vec<String> {
-    admin
-        .exec(
-            "SELECT h.SQL_TEXT FROM performance_schema.events_statements_history h \
-             JOIN performance_schema.threads t ON t.THREAD_ID = h.THREAD_ID \
-             WHERE t.PROCESSLIST_ID = ? ORDER BY h.EVENT_ID",
-            (id,),
-        )
-        .await
-        .expect("events_statements_history reads")
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let ran: Vec<String> = admin
+            .exec(
+                "SELECT h.SQL_TEXT FROM performance_schema.events_statements_history h \
+                 JOIN performance_schema.threads t ON t.THREAD_ID = h.THREAD_ID \
+                 WHERE t.PROCESSLIST_ID = ? ORDER BY h.EVENT_ID",
+                (id,),
+            )
+            .await
+            .expect("events_statements_history reads");
+        if !ran.is_empty() || Instant::now() > deadline {
+            return ran;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
