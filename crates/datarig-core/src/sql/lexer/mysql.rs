@@ -409,13 +409,16 @@ pub(super) fn lex(src: &str, mode: MySqlMode, mut state: LexState) -> Vec<Token>
             // A client command: `\g` and `\G` send the statement; another takes its character
             // with it. At the end of a line the client drops it.
             lx.cur.bump();
+            let rest = &src[lx.cur.pos..];
             match lx.cur.peek() {
-                None | Some('\n') => Tok::Whitespace,
+                _ if rest.is_empty() || rest.starts_with('\n') || rest.starts_with("\r\n") || rest == "\r" => {
+                    Tok::Whitespace
+                }
                 Some('g' | 'G') => {
                     lx.cur.bump();
                     Tok::Semi
                 }
-                Some(_) => {
+                _ => {
                     lx.cur.bump();
                     Tok::Op
                 }

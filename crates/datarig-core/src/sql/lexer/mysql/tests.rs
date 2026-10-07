@@ -379,4 +379,6 @@ fn a_backslash_at_a_line_end_is_dropped() {
         [(Tok::Directive, "delimiter $$"), (Tok::Keyword, "select"), (Tok::Number, "6"), (Tok::Semi, "$$")]
     );
     assert_eq!(kinds("select 1 \\"), [(Tok::Keyword, "select"), (Tok::Number, "1")]);
+    let crlf = "\\\r\ndelimiter $$\r\nselect 6$$";
+    assert_eq!(kinds(crlf)[0], (Tok::Directive, "delimiter $$\r"));
 }
