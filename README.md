@@ -13,7 +13,7 @@ server.
 ## Status
 
 **Early, pre-1.0.** Releases have binaries for macOS, Linux and Windows and a Homebrew
-formula ([Install](#install)); the latest is 0.11.0. **PostgreSQL** is implemented, and
+formula ([Install](#install)); the latest is 0.12.0. **PostgreSQL** is implemented, and
 **MySQL** in part (see [MySQL](#mysql) for what it does and does not do yet). The configuration
 format, key bindings and behavior may still change between releases (see [Versioning](#versioning)).
 
