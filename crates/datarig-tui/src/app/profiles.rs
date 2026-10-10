@@ -3,8 +3,9 @@
 //! first, the password storage selector whose field follows the chosen source, and a DSN
 //! kept in two-way sync with the fields. **SSH**: the tunnel: none (the default), a tunnel
 //! preset, or one of this profile only (its bastion's fields), which "save as tunnel preset"
-//! turns into a new preset when the form is saved. **Advanced**: SSL mode, the server-side
-//! statement cache, policy name, color, icon and folder. No I/O here; `App` persists and tests.
+//! turns into a new preset when the form is saved. **Advanced**: SSL mode and the server-side
+//! statement cache (PostgreSQL), the server's public key file and key retrieval (MySQL),
+//! policy name, color, icon and folder. No I/O here; `App` persists and tests.
 //!
 //! The same form edits a tunnel preset ([`FormKind::Tunnel`]): its name and the SSH section's
 //! bastion fields, nothing else.
@@ -12,7 +13,7 @@
 use crate::widgets::text_input::{InputResult, TextInput};
 use datarig_core::i18n::{Label, Msg};
 use datarig_core::profile::color::{self, ProfileColor};
-use datarig_core::profile::dsn::{self, Dsn, DsnError};
+use datarig_core::profile::dsn::{self, Dsn, DsnError, Scheme};
 use datarig_core::profile::ssh::{SshAuth, SshSettings};
 use datarig_core::profile::tunnel::{self, TunnelId, TunnelPreset};
 use datarig_core::profile::{ConnectionConfig, SSL_MODES};
@@ -67,6 +68,10 @@ pub enum Field {
     SslMode,
     /// The server-side statement cache, on or off (Advanced).
     StatementCache,
+    /// MySQL: the server's public key file (Advanced).
+    ServerKey,
+    /// MySQL: a direct login may ask the server for its public key, or not (Advanced).
+    KeyRetrieval,
     /// The policy name (Advanced).
     Policy,
     /// Color, icon and folder: pickers (Advanced).
@@ -108,8 +113,16 @@ pub const BASIC: [Field; 10] = [
     Field::Env,
     Field::Database,
 ];
-pub const ADVANCED: [Field; 6] =
-    [Field::SslMode, Field::StatementCache, Field::Policy, Field::Color, Field::Icon, Field::Folder];
+pub const ADVANCED: [Field; 8] = [
+    Field::SslMode,
+    Field::StatementCache,
+    Field::ServerKey,
+    Field::KeyRetrieval,
+    Field::Policy,
+    Field::Color,
+    Field::Icon,
+    Field::Folder,
+];
 pub const BUTTONS: [Field; 3] = [Field::Test, Field::Save, Field::Cancel];
 pub const SSH: [Field; 12] = [
     Field::SshEnabled,
@@ -127,7 +140,7 @@ pub const SSH: [Field; 12] = [
 ];
 
 /// Every field with a label, for the width of the label column.
-pub const FIELDS: [Field; 17] = [
+pub const FIELDS: [Field; 19] = [
     Field::Driver,
     Field::Name,
     Field::Host,
@@ -141,6 +154,8 @@ pub const FIELDS: [Field; 17] = [
     Field::Dsn,
     Field::SslMode,
     Field::StatementCache,
+    Field::ServerKey,
+    Field::KeyRetrieval,
     Field::Policy,
     Field::Color,
     Field::Icon,
@@ -195,6 +210,8 @@ impl Field {
             Field::SslMode => Label::FormFieldSslmode,
             Field::Dsn => Label::FormFieldDsn,
             Field::StatementCache => Label::FormFieldStatementCache,
+            Field::ServerKey => Label::FormFieldServerKey,
+            Field::KeyRetrieval => Label::FormFieldKeyRetrieval,
             Field::Policy => Label::FormFieldPolicy,
             Field::Color => Label::FormFieldColor,
             Field::Icon => Label::FormFieldIcon,
@@ -276,6 +293,8 @@ pub enum FieldError {
     CommandSyntax,
     /// Seconds: a whole number is needed.
     Seconds,
+    /// A file path that has no root and does not start with `~/`.
+    AbsolutePath,
 }
 
 impl FieldError {
@@ -288,6 +307,7 @@ impl FieldError {
             FieldError::EnvName => Label::ValidateEnvName,
             FieldError::CommandSyntax => Label::ValidateCommandSyntax,
             FieldError::Seconds => Label::ValidateSeconds,
+            FieldError::AbsolutePath => Label::ValidateServerKeyPath,
         }
     }
 }
@@ -297,6 +317,8 @@ impl FieldError {
 pub enum DsnProblem {
     Parse(DsnError),
     Param(String),
+    /// A parameter in a `mysql://` URL, which takes none.
+    MySqlParam(String),
     SslMode(String),
 }
 
@@ -305,6 +327,7 @@ impl DsnProblem {
         match self {
             DsnProblem::Parse(e) => e.message(),
             DsnProblem::Param(p) => Msg::DsnErrParam { name: p.clone() },
+            DsnProblem::MySqlParam(p) => Msg::DsnErrParamMysql { name: p.clone() },
             DsnProblem::SslMode(v) => Msg::DsnErrSslmode { value: v.clone() },
         }
     }
@@ -372,6 +395,10 @@ pub struct ProfileForm {
     /// Keep prepared statements on the server between transactions (off behind a pooler in
     /// transaction mode without prepared statement support).
     pub statement_cache: bool,
+    /// MySQL: the server's public key file (empty: none).
+    pub server_key: TextInput,
+    /// MySQL: a direct login to another machine may ask the server for its public key.
+    pub key_retrieval: bool,
     /// Index into [`DRIVERS`].
     pub driver: usize,
     /// Which [`DRIVERS`] can be picked (the app has a driver for them).
@@ -488,6 +515,8 @@ impl ProfileForm {
             dsn: TextInput::new(""),
             sslmode: SSL_MODES.iter().position(|m| *m == c.sslmode).unwrap_or(0),
             statement_cache: c.statement_cache,
+            server_key: TextInput::new(c.server_public_key_file.as_deref().unwrap_or("")),
+            key_retrieval: c.allow_public_key_retrieval,
             driver: driver_index(&c.driver),
             drivers_enabled: [true, false, false, false],
             section: Section::Basic,
@@ -663,15 +692,50 @@ impl ProfileForm {
         self.port.text().trim().parse::<u16>().ok().filter(|p| *p > 0)
     }
 
+    /// The URL scheme of the driver picked: what the DSN field is written in.
+    pub fn scheme(&self) -> Scheme {
+        Scheme::of_driver(DRIVERS[self.driver].0)
+    }
+
+    /// The driver picked is a MySQL one: the PostgreSQL-only settings (SSL mode, the
+    /// statement cache) are not shown, MySQL's (the server key file, key retrieval) are.
+    pub fn is_mysql(&self) -> bool {
+        self.scheme() == Scheme::MySql
+    }
+
+    /// The profile would connect to a MySQL server on another machine directly, unencrypted
+    /// (see `ConnectionConfig::mysql_unencrypted`).
+    pub fn unencrypted(&self) -> bool {
+        !self.is_tunnel() && self.to_profile().mysql_unencrypted()
+    }
+
+    /// Pick driver `i`: a port still at the old driver's default moves to the new one's, and
+    /// the DSN is written in the new driver's scheme.
+    fn set_driver(&mut self, i: usize) {
+        let before = self.scheme();
+        self.driver = i;
+        let after = self.scheme();
+        if before != after && self.port_value() == Some(before.default_port()) {
+            self.port.set(&after.default_port().to_string());
+        }
+        self.sync_dsn();
+    }
+
     /// Fields -> DSN (never includes the password).
     fn sync_dsn(&mut self) {
+        let scheme = self.scheme();
         let d = Dsn {
+            scheme,
             user: self.user.text().to_string(),
             password: None,
             host: self.host.text().trim().to_string(),
             port: self.port_value(),
             database: self.database.text().to_string(),
-            params: vec![("sslmode".into(), SSL_MODES[self.sslmode].to_string())],
+            // MySQL connections have no TLS settings yet.
+            params: match scheme {
+                Scheme::Postgres => vec![("sslmode".into(), SSL_MODES[self.sslmode].to_string())],
+                Scheme::MySql => Vec::new(),
+            },
         };
         self.dsn.set(&dsn::format(&d));
         self.dsn_problem = None;
@@ -686,6 +750,14 @@ impl ProfileForm {
                 return;
             }
         };
+        // The URL's parameters first: one the fields cannot hold leaves everything as it is
+        // (the driver too).
+        if d.scheme == Scheme::MySql
+            && let Some((k, _)) = d.params.first()
+        {
+            self.dsn_problem = Some(DsnProblem::MySqlParam(k.clone()));
+            return;
+        }
         let mut sslmode = None;
         for (k, v) in &d.params {
             if k != "sslmode" {
@@ -700,9 +772,23 @@ impl ProfileForm {
                 }
             }
         }
+        // A URL of the other database picks its driver, when the app has one.
+        if d.scheme != self.scheme() {
+            let name = match d.scheme {
+                Scheme::Postgres => "postgres",
+                Scheme::MySql => "mysql",
+            };
+            match DRIVERS.iter().position(|x| x.0 == name).filter(|i| self.drivers_enabled[*i]) {
+                Some(i) => self.driver = i,
+                None => {
+                    self.dsn_problem = Some(DsnProblem::Parse(DsnError::Scheme));
+                    return;
+                }
+            }
+        }
         self.dsn_problem = None;
         self.host.set(&d.host);
-        self.port.set(&d.port.unwrap_or(5432).to_string());
+        self.port.set(&d.port.unwrap_or(d.scheme.default_port()).to_string());
         self.user.set(&d.user);
         self.database.set(&d.database);
         if let Some(i) = sslmode {
@@ -727,6 +813,7 @@ impl ProfileForm {
             Field::Env => &mut self.env,
             Field::Database => &mut self.database,
             Field::Dsn => &mut self.dsn,
+            Field::ServerKey => &mut self.server_key,
             Field::SshHost => &mut self.ssh_host,
             Field::SshPort => &mut self.ssh_port,
             Field::SshUser => &mut self.ssh_user,
@@ -759,10 +846,13 @@ impl ProfileForm {
             Section::Basic => &BASIC,
             Section::Advanced | Section::Ssh => &ADVANCED,
         };
+        let mysql = self.is_mysql();
         let mut out: Vec<Field> = section
             .iter()
             .copied()
             .filter(|f| !matches!(f, Field::Password | Field::Command | Field::Env) || Some(*f) == shown)
+            .filter(|f| !(mysql && matches!(f, Field::SslMode | Field::StatementCache)))
+            .filter(|f| mysql || !matches!(f, Field::ServerKey | Field::KeyRetrieval))
             .collect();
         if self.section == Section::Basic {
             out.push(Field::Dsn);
@@ -894,7 +984,7 @@ impl ProfileForm {
     pub fn pick(&mut self, f: Field, i: usize) {
         let keychain = |k: SourceKind| k != SourceKind::Keychain || self.keychain_ok;
         match f {
-            Field::Driver if self.drivers_enabled.get(i) == Some(&true) => self.driver = i,
+            Field::Driver if self.drivers_enabled.get(i) == Some(&true) => self.set_driver(i),
             Field::Source => {
                 if let Some(&k) = SourceKind::ALL.get(i).filter(|k| keychain(**k)) {
                     self.source = k;
@@ -970,7 +1060,7 @@ impl ProfileForm {
                 break;
             }
         }
-        self.driver = i as usize;
+        self.set_driver(i as usize);
     }
 
     /// The color the profile gets with the current choice and name.
@@ -1064,6 +1154,9 @@ impl ProfileForm {
             KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.focus == Field::StatementCache => {
                 self.statement_cache = !self.statement_cache
             }
+            KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.focus == Field::KeyRetrieval => {
+                self.key_retrieval = !self.key_retrieval
+            }
             KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.focus == Field::SshEnabled => {
                 self.cycle_ssh_choice(if k.code == KeyCode::Left { -1 } else { 1 })
             }
@@ -1145,6 +1238,12 @@ impl ProfileForm {
             }
             _ => {}
         }
+        // The server key file is read wherever datarig runs: absolute or under `~/` (the
+        // driver refuses any other path too).
+        let key = self.server_key.text().trim();
+        if self.is_mysql() && !key.is_empty() && !key.starts_with("~/") && !std::path::Path::new(key).has_root() {
+            out.push((Field::ServerKey, FieldError::AbsolutePath));
+        }
         out.extend(self.ssh_errors());
         out
     }
@@ -1213,12 +1312,14 @@ impl ProfileForm {
             policy: (!policy.is_empty()).then(|| policy.to_string()),
             name: self.name.text().trim().to_string(),
             host: self.host.text().trim().to_string(),
-            port: self.port_value().unwrap_or(5432),
+            port: self.port_value().unwrap_or(self.scheme().default_port()),
             user: self.user.text().to_string(),
             password: String::new(),
             database: self.database.text().to_string(),
             sslmode: SSL_MODES[self.sslmode].to_string(),
             statement_cache: self.statement_cache,
+            server_public_key_file: Some(self.server_key.text().trim().to_string()).filter(|k| !k.is_empty()),
+            allow_public_key_retrieval: self.key_retrieval,
             // Kept when it existed (also off or with a preset picked); new only once turned on;
             // moved into the preset this form makes, when that one is picked.
             ssh: (!self.new_preset_picked() && (self.ssh_had || self.ssh_enabled)).then(|| self.ssh_settings()),

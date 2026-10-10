@@ -166,6 +166,97 @@ after a pipelined `BEGIN` (or an equivalent pipeline API), and switch
 three more round trips again. Until then,
 follow each upstream release that fixes a bug or a security issue by re-syncing as above.
 
+## mysql_async 0.37.1
+
+| | |
+|---|---|
+| Upstream | [`mysql_async`](https://crates.io/crates/mysql_async) 0.37.1 from crates.io ([blackbeam/mysql_async](https://github.com/blackbeam/mysql_async)) |
+| License | MIT OR Apache-2.0 (`mysql_async/LICENSE-MIT`, `mysql_async/LICENSE-APACHE`) |
+| Package checksum | sha256 `40d11da0e2d9fad4640c9f9198ee431c6d68444568f83ef1f10f3367270071e4` (the crates.io index `cksum` of the `.crate` file) |
+| Upstream commit | `ce4b27698c50fb945d8c9ff8c40a2a646be50b12` (`mysql_async/.cargo_vcs_info.json`, as published) |
+| Used through | `[patch.crates-io]` in `Cargo.toml`, with `default-features = false` and `minimal-rust` (no TLS, no C compression library, no value conversion features); the workspace `exclude`s `vendor` |
+
+### Why it is vendored
+
+mysql_async connects only over a socket of its own: a TCP connection it opens, or a Unix
+socket. Its `Endpoint` is crate-private, so a caller cannot hand it a stream it opened itself.
+datarig's MySQL driver reaches a server through an SSH tunnel as the PostgreSQL driver does:
+over a channel of the tunnel (`transport::Dialer`), never through a listener on a local port
+(another local user could connect to that port first, and mysql_async takes a Unix socket for
+a secure line and would send a `caching_sha2_password` password over it in clear).
+
+It also always asks the server for multi-statements and `LOAD DATA LOCAL`, which datarig must
+not have: with multi-statements one request could run a text the server reads as several
+statements, and with `LOAD DATA LOCAL` a server could ask for any file of the client.
+
+### What is changed
+
+Every change in the source is marked with a `datarig:` comment.
+
+- `src/io/mod.rs`: the trait `CustomStream` (any `AsyncRead + AsyncWrite + Send + Unpin`), the
+  endpoint `Endpoint::Custom` over one (neither a socket nor secure, so a full
+  `caching_sha2_password` login sends the password encrypted with the server's public key;
+  its liveness check is left to the stream's owner), and `Stream::custom`. `src/io/tls/rustls_io.rs` and `native_tls_io.rs` refuse TLS over such a
+  stream (not built here: no TLS feature is on).
+- `src/conn/mod.rs`: `Conn::connect_with_stream(opts, stream)`, a connection over the
+  caller's stream (handshake, authentication, settings, init and setup commands as `Conn::new`
+  does them, which now share them in `Conn::open`; it never moves to the server's socket file),
+  and `Conn::is_mariadb`. `continue_caching_sha2_password_auth`: a full login over a
+  connection that is neither secure nor a socket encrypts the password with the key of the
+  options (`server_public_key`) when there is one and then never asks the server for its key;
+  without one it asks (`0x02`) only when `public_key_retrieval` is on, and otherwise fails
+  with `DriverError::PublicKeyRetrievalDisabled` before it sends anything (the key the server
+  sends comes over the same unencrypted connection, so anyone in between could send theirs).
+  A key packet without a key is `DriverError::UnexpectedPacket`; the key (the options' or the
+  server's) must pass `server_public_key_ok` before it is used, else the login fails with
+  `DriverError::InvalidServerPublicKey`; and a password too long for
+  the key's RSA-OAEP (more than `k - 2 * 20 - 2` bytes with its terminating zero, `k` the key's
+  size in bytes: 213 bytes of password with a 2048-bit key) fails with
+  `DriverError::PasswordTooLongForKey` before it sends anything (upstream panics on all
+  three: `packet[1..]`, and mysql_common's PEM parser and `encrypt`).
+- `src/server_key.rs` (new, all of it datarig's): `server_public_key_ok`, whether a key is
+  an RSA public key in PEM (PKCS#1 or SubjectPublicKeyInfo) of 2048 bits or more, checked the
+  way mysql_common's parser reads it (the first block, its base64, the DER lengths, a modulus
+  that is not zero), so a key that passes is one it reads without panicking. datarig's driver
+  checks the profile's key file with it too. `Cargo.toml` depends on `data-encoding` for it.
+- `src/opts/mod.rs`: the client capabilities never include `CLIENT_MULTI_STATEMENTS` nor
+  `CLIENT_LOCAL_FILES`, and include `CLIENT_SESSION_TRACK`, so the server reports changes of the
+  session (the variables it tracks, the current database) in its OK packets. `MysqlOpts`'s
+  `Debug` is written out instead of derived, so it never prints the password. Two options:
+  `server_public_key` (the server's RSA public key in PEM, `None` by default) and
+  `public_key_retrieval` (whether the server may be asked for its key, `true` by default as
+  upstream does), with their `OptsBuilder` setters and `Opts` getters.
+- `src/error/mod.rs`: `DriverError::PublicKeyRetrievalDisabled`,
+  `DriverError::PasswordTooLongForKey` and `DriverError::InvalidServerPublicKey`.
+- `src/lib.rs`: `pub use self::io::CustomStream`, `mod server_key` and
+  `pub use self::server_key::server_public_key_ok`.
+
+Packaging: `Cargo.toml`'s generated header comment is replaced by a note about this copy; its
+`[[test]]` targets, `[dev-dependencies]` and `[profile.bench]` are removed (not built here).
+`Cargo.toml.orig` is upstream's, unchanged. `tests/` and the `Cargo.lock` of the published
+package are left out; `rustfmt.toml` (empty) is added, so the workspace's formatting settings do
+not rewrite upstream's code. Everything else is as published.
+
+### Re-syncing with upstream
+
+1. Fetch the new release (`cargo fetch` after bumping the version, or
+   `https://static.crates.io/crates/mysql_async/mysql_async-<version>.crate`) and check its
+   sha256 against the `cksum` in the crates.io index.
+2. Unpack it over `mysql_async/`, keeping `rustfmt.toml`; remove `tests/` and `Cargo.lock`;
+   in `Cargo.toml` remove the `[[test]]` targets, the `[dev-dependencies]` and
+   `[profile.bench]`, and put the note back in place of the generated header.
+3. Reapply the `datarig:` changes listed above (`git diff` of this directory against the
+   previous release shows them).
+4. Update the version, checksum and commit in the table above, then run the workspace checks
+   with `DATARIG_TEST_MYSQL_URL` set (and once more with `DATARIG_TEST_DIAL=tcp`).
+
+### When to drop it
+
+Drop this copy and its `[patch.crates-io]` entry once a mysql_async release can connect over a
+stream the caller opened **and** lets the caller leave multi-statements and `LOAD DATA LOCAL`
+off, and switch `datarig-driver-mysql` to those APIs. Until then, follow each upstream release
+that fixes a bug or a security issue by re-syncing as above.
+
 ## Third-party code built into the binary: pg_query 6.2.0
 
 Not vendored (a normal crates.io dependency of `datarig-core`), but it compiles C code into

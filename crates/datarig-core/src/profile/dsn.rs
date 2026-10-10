@@ -1,4 +1,6 @@
-//! PostgreSQL connection URLs (`postgres://user:pass@host:port/db?k=v`).
+//! Connection URLs: PostgreSQL's (`postgres://user:pass@host:port/db?k=v`) and MySQL's
+//! (`mysql://user:pass@host:port/db`, also written `mariadb://`), told apart by their
+//! [`Scheme`].
 //!
 //! Only the URL form is handled here (the profile form keeps it in sync with the individual
 //! fields). Userinfo, database and query values are percent-decoded on parse and encoded on
@@ -7,8 +9,48 @@
 use crate::i18n::{Label, Msg};
 use std::fmt;
 
+/// Which database a URL is for, by its scheme.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Scheme {
+    /// `postgres://`, `postgresql://`.
+    #[default]
+    Postgres,
+    /// `mysql://`, `mariadb://`.
+    MySql,
+}
+
+impl Scheme {
+    /// The scheme of a profile's `driver` name: MySQL for `mysql` and `mariadb`, PostgreSQL
+    /// for every other name.
+    pub fn of_driver(driver: &str) -> Self {
+        if driver.eq_ignore_ascii_case("mysql") || driver.eq_ignore_ascii_case("mariadb") {
+            Self::MySql
+        } else {
+            Self::Postgres
+        }
+    }
+
+    /// The scheme and `://` a URL is written with.
+    pub fn prefix(self) -> &'static str {
+        match self {
+            Self::Postgres => "postgres://",
+            Self::MySql => "mysql://",
+        }
+    }
+
+    /// The server's port when a URL gives none.
+    pub fn default_port(self) -> u16 {
+        match self {
+            Self::Postgres => 5432,
+            Self::MySql => 3306,
+        }
+    }
+}
+
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct Dsn {
+    /// Which database it is for.
+    pub scheme: Scheme,
     pub user: String,
     pub password: Option<String>,
     pub host: String,
@@ -23,6 +65,7 @@ impl fmt::Debug for Dsn {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let redacted = self.password.as_deref().map(|p| if p.is_empty() { "<unset>" } else { "<redacted>" });
         f.debug_struct("Dsn")
+            .field("scheme", &self.scheme)
             .field("user", &self.user)
             .field("password", &redacted)
             .field("host", &self.host)
@@ -35,7 +78,7 @@ impl fmt::Debug for Dsn {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DsnError {
-    /// Does not start with `postgres://` or `postgresql://`.
+    /// Does not start with `postgres://`, `postgresql://`, `mysql://` or `mariadb://`.
     Scheme,
     /// Port is not a number in 1..=65535.
     Port(String),
@@ -109,8 +152,14 @@ fn parse_port(p: &str) -> Result<Option<u16>, DsnError> {
 
 pub fn parse(input: &str) -> Result<Dsn, DsnError> {
     let s = input.trim();
-    let rest =
-        strip_prefix_ci(s, "postgres://").or_else(|| strip_prefix_ci(s, "postgresql://")).ok_or(DsnError::Scheme)?;
+    let schemes = [
+        ("postgres://", Scheme::Postgres),
+        ("postgresql://", Scheme::Postgres),
+        ("mysql://", Scheme::MySql),
+        ("mariadb://", Scheme::MySql),
+    ];
+    let (rest, scheme) =
+        schemes.iter().find_map(|(p, k)| Some((strip_prefix_ci(s, p)?, *k))).ok_or(DsnError::Scheme)?;
     let (main, query) = match rest.split_once('?') {
         Some((m, q)) => (m, Some(q)),
         None => (rest, None),
@@ -123,7 +172,7 @@ pub fn parse(input: &str) -> Result<Dsn, DsnError> {
         Some((u, h)) => (Some(u), h),
         None => (None, authority),
     };
-    let mut d = Dsn::default();
+    let mut d = Dsn { scheme, ..Dsn::default() };
     if let Some(u) = userinfo {
         match u.split_once(':') {
             Some((user, pw)) => {
@@ -168,7 +217,7 @@ pub fn parse(input: &str) -> Result<Dsn, DsnError> {
 }
 
 pub fn format(d: &Dsn) -> String {
-    let mut s = String::from("postgres://");
+    let mut s = String::from(d.scheme.prefix());
     if !d.user.is_empty() || d.password.is_some() {
         s.push_str(&encode(&d.user));
         if let Some(pw) = &d.password {

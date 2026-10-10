@@ -552,7 +552,7 @@ fn pasting_a_connection_url_opens_a_filled_form() {
     // Something else is not a URL: say what a paste does here.
     h.app.handle_event(ratatui::crossterm::event::Event::Paste("hello".into()));
     assert!(!h.form_open());
-    assert!(h.status(160, 45).contains("Paste a postgres:// URL here to add a connection"));
+    assert!(h.status(160, 45).contains("Paste a postgres:// or mysql:// URL here to add a connection"));
     // The welcome panel takes a URL too; a taken name gets a suffix.
     let mut h = launched(&Config::default());
     h.key(KeyCode::Esc);
@@ -568,11 +568,15 @@ fn the_form_has_basic_and_advanced_sections() {
     let mut h = launched(&sample_config(None));
     h.keys("e"); // local-pg
     assert_eq!((h.form().section, h.form().focus), (Section::Basic, Field::Name));
-    // The driver comes first; only PostgreSQL can be picked.
+    // The driver comes first; PostgreSQL and MySQL can be picked.
     h.key(KeyCode::BackTab);
     assert_eq!(h.form().focus, Field::Driver);
     h.key(KeyCode::Right);
-    assert_eq!(h.form().driver, 0, "the others are not supported yet");
+    assert_eq!(h.form().driver, 1, "MySQL");
+    assert!(h.form().dsn.text().starts_with("mysql://"), "{}", h.form().dsn.text());
+    h.key(KeyCode::Right);
+    assert_eq!(h.form().driver, 0, "the others are not supported yet: back to PostgreSQL");
+    assert!(h.form().dsn.text().starts_with("postgres://"), "{}", h.form().dsn.text());
     assert!(h.screen(160, 45).contains("not yet supported"));
     // At 80 columns the full label does not fit: the short one does, uncut.
     let screen = h.screen(80, 24);
@@ -620,6 +624,53 @@ fn the_form_has_basic_and_advanced_sections() {
     h.ctrl('u');
     h.ctrl('s');
     assert_eq!(h.app.profiles.iter().find(|p| p.name == "local-pg").unwrap().policy, None);
+}
+
+#[test]
+fn a_mysql_profile_takes_its_port_and_url_and_has_no_postgresql_settings() {
+    use datarig_tui::app::profiles::{Field, Section};
+    let mut h = launched(&sample_config(None));
+    h.keys("n");
+    h.key(KeyCode::BackTab);
+    assert_eq!(h.form().focus, Field::Driver);
+    // A port still at PostgreSQL's default moves to MySQL's, and the URL follows the driver.
+    assert_eq!(h.form().port.text(), "5432");
+    h.key(KeyCode::Right);
+    assert_eq!((h.form().driver, h.form().port.text()), (1, "3306"));
+    assert_eq!(h.form().dsn.text(), "mysql://localhost:3306");
+    // Its own port stays when the driver changes.
+    h.key(KeyCode::Tab);
+    h.type_text("shop-db");
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Tab);
+    h.ctrl('u');
+    h.type_text("53306");
+    h.key(KeyCode::Tab);
+    h.type_text("datarig");
+    assert_eq!(h.form().dsn.text(), "mysql://datarig@localhost:53306");
+    // No SSL mode nor statement cache: those are PostgreSQL's. MySQL's own come first.
+    h.ctrl('n');
+    h.ctrl('n');
+    assert_eq!(h.form().section, Section::Advanced);
+    assert_eq!(h.form().focus, Field::ServerKey);
+    assert!(h.form().fields().iter().all(|f| !matches!(f, Field::SslMode | Field::StatementCache)));
+    let screen = h.screen(160, 45);
+    assert!(!screen.contains("SSL mode"), "{screen}");
+    h.ctrl('s');
+    let p = h.app.profiles.iter().find(|p| p.name == "shop-db").unwrap();
+    assert_eq!((p.driver.as_str(), p.port, p.user.as_str()), ("mysql", 53306, "datarig"));
+    assert_eq!(p.display_dsn(), "mysql://datarig@localhost:53306");
+    // A pasted mysql:// URL picks MySQL; a parameter is refused (a mysql:// URL takes none).
+    h.app.handle_event(ratatui::crossterm::event::Event::Paste("mysql://me:pw@db.example/sales".into()));
+    let f = h.form();
+    assert_eq!((f.driver, f.port.text(), f.database.text(), f.password.text()), (1, "3306", "sales", "pw"));
+    h.key(KeyCode::Esc);
+    h.app.handle_event(ratatui::crossterm::event::Event::Paste("mariadb://h/db?ssl-mode=REQUIRED".into()));
+    let problem = h.form().dsn_problem.clone().map(|p| h.app.i18n.msg(&p.message()).to_string());
+    assert_eq!(problem.as_deref(), Some("unsupported parameter “ssl-mode” (a mysql:// URL takes none)"));
+    // Refused as a whole: the driver did not switch to MySQL either (the form started on
+    // PostgreSQL).
+    assert_eq!(h.form().driver, 0);
 }
 
 // ── the context menu (right click) ───────────────────────────────────────

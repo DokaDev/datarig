@@ -1,6 +1,6 @@
-# The SSH bastion of the tests: OpenSSH on Alpine, reached from the host on
-# 127.0.0.1:52222, which can reach `postgres` and `pgbouncer` on the compose network. Keys come
-# from a fixture made at test time (make-fixture.sh), mounted at /fixture; none is baked in.
+# The SSH bastion of the tests: OpenSSH on Alpine, reached from the host on 127.0.0.1:52222,
+# which can reach `postgres`, `pgbouncer` and `mysql` on the compose network. Keys come from a
+# fixture made at test time (make-fixture.sh), mounted at /fixture; none is baked in.
 FROM alpine:3.22
 RUN apk add --no-cache openssh-server \
     && adduser -D -s /sbin/nologin tunnel \

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Starts the SSH bastion of dev/ssh on the Docker network of a CI job's service containers
-# (the first argument), so it reaches `postgres` and `pgbouncer` by name, published on
+# (the first argument), so it reaches `postgres`, `pgbouncer` and `mysql` by name, published on
 # 127.0.0.1:52222. Its keys are made here (dev/ssh/make-fixture.sh), never committed;
 # DATARIG_SSH_FIXTURE tells the tests where they are.
 set -euo pipefail

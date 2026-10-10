@@ -1,7 +1,7 @@
 # dev: test databases and services
 
 Docker Compose services for developing and testing datarig: PostgreSQL 17 (with the test data
-the integration tests expect), MySQL 8.4 (for the MySQL driver that is not written yet),
+the integration tests expect), MySQL 8.4 (with the data the MySQL driver's tests expect),
 PgBouncer and an OpenSSH bastion. Every credential here is a throwaway for local testing.
 
 ## Start
@@ -28,11 +28,12 @@ docker compose --profile ssh up -d --build ssh-bastion
 | PostgreSQL 17 (`datarig-pg`) | 55432 | `datarig` / `datarig` | `datarig` | scram-sha-256 authentication |
 | MySQL 8.4 (`datarig-mysql`) | 53306 | `datarig` / `datarig` | `datarig` (tables in `shop`) | root password `datarig-root` |
 | PgBouncer 1.25 (`datarig-pgbouncer`, profile `pooler`) | 56432 | `datarig` / `datarig` | `datarig` | transaction mode, no prepared statements, round robin over three server connections, `options` dropped |
-| OpenSSH bastion (`datarig-ssh-bastion`, profile `ssh`) | 127.0.0.1:52222 | `tunnel` (key) / `pw` (password `datarig-pw`) | | forwards only to `postgres:5432` and `pgbouncer:5432` |
+| OpenSSH bastion (`datarig-ssh-bastion`, profile `ssh`) | 127.0.0.1:52222 | `tunnel` (key) / `pw` (password `datarig-pw`) | | forwards only to `postgres:5432`, `pgbouncer:5432` and `mysql:3306` |
 
 - PostgreSQL: `postgres://datarig:datarig@127.0.0.1:55432/datarig`
 - PgBouncer: `postgres://datarig:datarig@127.0.0.1:56432/datarig`
-- MySQL: `mysql://datarig:datarig@127.0.0.1:53306/datarig`
+- MySQL: `mysql://datarig:datarig@127.0.0.1:53306/shop` (the user may use `shop` and its own
+  `datarig`)
 
 ## Data
 
@@ -48,7 +49,8 @@ docker compose --profile ssh up -d --build ssh-bastion
 - MySQL (`init-mysql/*.sql`): a comparable `shop` schema, the same Korean rows (as
   `_utf8mb4 X''` hex literals) and about 1,000,000 `events` rows.
 
-The integration tests create and drop their own tables; they leave `public` empty.
+The integration tests create and drop their own tables; they leave `public` empty. On MySQL they
+make only `zz_`-named tables, databases and accounts, and drop them.
 
 ## Environment variables for the tests
 
@@ -58,7 +60,10 @@ The integration tests create and drop their own tables; they leave `public` empt
 | `DATARIG_TEST_POOLER_URL` | `postgres://datarig:datarig@127.0.0.1:56432/datarig` |
 | `DATARIG_TEST_SSH_BASTION` | `127.0.0.1:52222` |
 | `DATARIG_SSH_FIXTURE` | the directory `ssh/make-fixture.sh` printed |
-| `DATARIG_REQUIRE_PG`, `DATARIG_REQUIRE_POOLER`, `DATARIG_REQUIRE_SSH` | `1` makes a missing service a failure instead of a skip |
+| `DATARIG_TEST_MYSQL_URL` | `mysql://datarig:datarig@127.0.0.1:53306/shop` |
+| `DATARIG_TEST_MYSQL_ADMIN_URL` | `mysql://root:datarig-root@127.0.0.1:53306/` (looks at the driver's sessions from the side, makes test accounts) |
+| `DATARIG_TEST_MYSQL_CLIENT` | `docker exec -i datarig-mysql mysql -udatarig -pdatarig shop` (the MySQL client of the lexer and classifier tests) |
+| `DATARIG_REQUIRE_PG`, `DATARIG_REQUIRE_POOLER`, `DATARIG_REQUIRE_SSH`, `DATARIG_REQUIRE_MYSQL` | `1` makes a missing service a failure instead of a skip |
 
 ## Stop and reset
 

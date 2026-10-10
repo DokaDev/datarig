@@ -385,6 +385,7 @@ impl App {
     fn on_db_event_here(&mut self, ev: DbEvent) {
         let target = match &ev {
             DbEvent::Page { .. }
+            | DbEvent::Language(_)
             | DbEvent::Released { .. }
             | DbEvent::Done { .. }
             | DbEvent::Failed { .. }
@@ -565,8 +566,12 @@ impl App {
                 let had_password =
                     self.conns.get(id).and_then(|c| c.connecting.as_ref()).is_none_or(|a| a.had_password);
                 self.save_on_connect = None;
+                // A password typed in the prompt that MySQL refused is not asked for again: the
+                // account may require TLS, which no password fixes.
+                let typed_refused =
+                    matches!(error, DbError::AccessDenied(_)) && self.conns.get(id).is_some_and(|c| c.prompted);
                 // The server asked for a password and none was sent: say so plainly.
-                let missing = auth && !had_password && error.raw().contains("password");
+                let missing = auth && !typed_refused && !had_password && error.raw().contains("password");
                 let failed = Notice::new(Msg::ConnFailed { error: text }, Level::Error);
                 let reason = if !missing {
                     failed.clone()
@@ -575,12 +580,11 @@ impl App {
                 } else {
                     Notice::new(Label::PromptPasswordMissing, Level::Warning)
                 };
-                // Ask again, except for a command or an environment variable: those are fixed
-                // where they come from.
-                let ask = self
-                    .profile(id)
-                    .cloned()
-                    .filter(|c| auth && !matches!(c.source().kind(), SourceKind::Command | SourceKind::Env));
+                // Ask again, except for a command or an environment variable (those are fixed
+                // where they come from) and a refused typed password.
+                let ask = self.profile(id).cloned().filter(|c| {
+                    auth && !typed_refused && !matches!(c.source().kind(), SourceKind::Command | SourceKind::Env)
+                });
                 // What waited for this attempt waits for the next one when the prompt asks;
                 // otherwise it is dropped and its tabs say so.
                 let (console, expand) = self.conns.get(id).map_or((None, false), |c| (c.console, c.expand_on_connect));
@@ -661,8 +665,9 @@ impl App {
                 c.error = Some(m.clone());
                 self.status = Some(m);
             }
-            // Statement events never come from the metadata session.
-            DbEvent::Released { .. }
+            // Statement events never come from the metadata session, nor does its language.
+            DbEvent::Language(_)
+            | DbEvent::Released { .. }
             | DbEvent::Page { .. }
             | DbEvent::Done { .. }
             | DbEvent::Failed { .. }
@@ -708,6 +713,21 @@ impl App {
         let profile = self.tabs.get(id).and_then(|t| t.profile);
         if matches!(ev, DbEvent::StatementCacheOff) {
             return self.statement_cache_off(id, profile);
+        }
+        // The editor and the risk classifier read the text as the session does from now on.
+        if let DbEvent::Language(lang) = ev {
+            if let Some(t) = self.tabs.get_mut(id) {
+                t.exec.language = Some(lang);
+            }
+            // The profile's other tabs read theirs in it until their own sessions say.
+            if let Some(p) = profile {
+                self.conns.entry(p).language = Some(lang);
+                let tabs: Vec<TabId> = self.tabs.iter().filter(|t| t.profile == Some(p)).map(|t| t.id).collect();
+                for t in tabs {
+                    self.sync_tab_language(t);
+                }
+            }
+            return self.sync_tab_language(id);
         }
         // The run ends (its result, its outcome or its failure), or a transaction ends.
         let current = self.tabs.get(id).map_or(0, |t| t.exec.query_id);
@@ -775,8 +795,8 @@ impl App {
             }
             // Said by the profile's metadata session.
             DbEvent::ReadOnlyPerTransaction => None,
-            // Handled first (`statement_cache_off`).
-            DbEvent::StatementCacheOff => None,
+            // Handled first (`statement_cache_off`, `sync_tab_language`).
+            DbEvent::StatementCacheOff | DbEvent::Language(_) => None,
             // The server dropped the schema's startup option (a pooler): the driver sets the
             // path in each transaction instead. Said in the run's Messages.
             DbEvent::ContextPerTransaction => {
@@ -1325,6 +1345,35 @@ impl App {
             DbError::ReadWriteRefused => Label::DbReadWriteRefused,
             DbError::Locked => Label::DbLocked,
             DbError::NotFound => Label::DbNotFound,
+            DbError::TlsRequired => Label::DbTlsRequired,
+            DbError::VersionUnsupported { server, needed } => {
+                return self
+                    .i18n
+                    .msg(&Msg::DbVersionUnsupported { server: server.clone(), needed: needed.clone() })
+                    .to_string();
+            }
+            DbError::AuthUnsupported(name) => {
+                return self.i18n.msg(&Msg::DbAuthUnsupported { name: name.clone() }).to_string();
+            }
+            DbError::AccessDenied(message) => {
+                return self.i18n.msg(&Msg::DbAccessDenied { message: message.clone() }).to_string();
+            }
+            DbError::KeyRetrievalRefused => Label::DbKeyRetrievalRefused,
+            DbError::ServerKeyInvalid => Label::DbServerKeySentInvalid,
+            DbError::ServerKeyFile { path, fault: None } => {
+                return self.i18n.msg(&Msg::DbServerKeyInvalid { path: path.clone() }).to_string();
+            }
+            DbError::ServerKeyPathRelative(path) => {
+                return self.i18n.msg(&Msg::DbServerKeyRelative { path: path.clone() }).to_string();
+            }
+            DbError::PasswordTooLong { max } => {
+                return self.i18n.msg(&Msg::DbPasswordTooLong { max: max.to_string() }).to_string();
+            }
+            DbError::ServerKeyFile { path, fault: Some(f) } => {
+                ErrorLog::new(self.paths.errors_log()).record("db.server_key", f);
+                let error = self.i18n.msg(&persist::fault_reason(f)).to_string();
+                return self.i18n.msg(&Msg::DbServerKeyUnreadable { path: path.clone(), error }).to_string();
+            }
             DbError::NotRepeatable(r) => return self.i18n.msg(&super::pages::why(r)).to_string(),
             DbError::Settings(f) => {
                 ErrorLog::new(self.paths.errors_log()).record("db.settings", f);

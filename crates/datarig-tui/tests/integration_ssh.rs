@@ -2,7 +2,7 @@
 //! like the binary does: the explorer connects, the host key is asked about and trusted in
 //! datarig's own file, the database behind the bastion answers, a lost tunnel shows on the
 //! node and the next use connects again. Two profiles naming one tunnel preset share one SSH
-//! connection.
+//! connection. A MySQL profile connects through it too.
 //!
 //! Needs the bastion of `dev/docker-compose.yml` (profile `ssh`) and its fixture:
 //! `DATARIG_SSH_FIXTURE` and `DATARIG_TEST_SSH_BASTION` (see `datarig-ssh/tests/bastion.rs`).
@@ -138,6 +138,71 @@ async fn a_profile_connects_through_the_bastion() {
     key(&mut app, KeyCode::Enter);
     pump(&mut app, &mut rx, 20, |a| a.conns.is_connected(id) || a.overlays.confirm().is_some()).await;
     assert!(app.overlays.confirm().is_none(), "not asked again");
+}
+
+/// The MySQL server of the tests behind the bastion, when there is one
+/// (`DATARIG_TEST_MYSQL_URL`, see `datarig-driver-mysql/tests/integration_mysql.rs`): its user
+/// and password; the bastion reaches it as `mysql:3306`.
+fn mysql_behind(test: &str) -> Option<(String, String)> {
+    match std::env::var("DATARIG_TEST_MYSQL_URL").ok().filter(|v| !v.is_empty()) {
+        Some(url) => {
+            let d = datarig_core::profile::dsn::parse(&url).expect("a mysql:// URL");
+            Some((d.user, d.password.unwrap_or_default()))
+        }
+        None => {
+            if std::env::var("DATARIG_REQUIRE_MYSQL").is_ok_and(|v| v == "1") {
+                panic!("DATARIG_TEST_MYSQL_URL must be set when DATARIG_REQUIRE_MYSQL=1");
+            }
+            let _ = writeln!(std::io::stderr(), "SKIPPED {test}: no MySQL (set DATARIG_TEST_MYSQL_URL)");
+            None
+        }
+    }
+}
+
+/// A MySQL profile connects through the bastion: the driver speaks MySQL over the tunnel's
+/// channel, as the PostgreSQL driver does.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_mysql_profile_connects_through_the_bastion() {
+    let Some(b) = bastion("a_mysql_profile_connects_through_the_bastion") else { return };
+    let Some((user, password)) = mysql_behind("a_mysql_profile_connects_through_the_bastion") else { return };
+    let home = scratch("my-home");
+    let data = scratch("my-data");
+    let profile = ConnectionConfig {
+        name: "mysql-behind-bastion".into(),
+        driver: "mysql".into(),
+        host: "mysql".into(),
+        port: 3306,
+        user,
+        database: "shop".into(),
+        ssh: Some(SshSettings {
+            enabled: true,
+            host: b.host.clone(),
+            port: b.port,
+            user: "tunnel".into(),
+            auth: SshAuth::Key,
+            key_file: Some(b.fixture.join("id_ed25519").display().to_string()),
+            ..SshSettings::default()
+        }),
+        ..ConnectionConfig::default()
+    };
+    let store = Arc::new(MemoryStore::new());
+    store.set(&profile.id.account(), &password).unwrap();
+    let id = profile.id;
+    let cfg = Config { connections: vec![profile], ..Config::default() };
+    let mut app = App::new(&cfg, None, Lang::En);
+    app.set_secret_store(store as Arc<dyn SecretStore>);
+    let state = scratch("my-state");
+    app.set_paths(Paths { data: Some(data.to_path_buf()), state: Some(state.to_path_buf()) });
+    let h = home.to_path_buf();
+    app.set_env_lookup(Arc::new(move |k: &str| (k == "HOME").then(|| h.display().to_string())));
+    app.set_tunnels(Arc::new(SshTunnels));
+    let (tx, mut rx) = unbounded_channel();
+    app.start(tx, Startup::Normal);
+    key(&mut app, KeyCode::Enter);
+    pump(&mut app, &mut rx, 20, |a| a.overlays.confirm().is_some_and(|c| c.action == ConfirmAction::TrustHostKey))
+        .await;
+    key(&mut app, KeyCode::Char('y'));
+    pump(&mut app, &mut rx, 20, |a| a.conns.is_connected(id)).await;
 }
 
 /// A TCP proxy to the bastion that can cut every connection through it (the test's own

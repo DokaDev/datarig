@@ -123,9 +123,12 @@ fn a_click_on_a_choice_picks_it_as_the_arrows_would() {
     assert_eq!((h.form().source, focus(&h)), (SourceKind::Command, Field::Source));
     click_on(&mut h, "File ", 0);
     assert_eq!(h.form().source, SourceKind::File);
-    // A driver the app has no driver for is not picked.
+    // A driver the app has is picked (with its default port); one it has no driver for is not.
     click_on(&mut h, "MySQL", 1);
-    assert_eq!((h.form().driver, focus(&h)), (0, Field::Driver));
+    assert_eq!((h.form().driver, focus(&h)), (1, Field::Driver));
+    assert_eq!(h.form().port.text(), "3306");
+    click_on(&mut h, "Redis", 1);
+    assert_eq!((h.form().driver, focus(&h)), (1, Field::Driver));
 }
 
 #[test]

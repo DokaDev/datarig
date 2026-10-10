@@ -978,10 +978,17 @@ impl App {
     }
 
     /// The language tab `tab`'s text is in: its profile's driver's
-    /// (`Capabilities::language`); the default for a tab without a profile, or whose profile
-    /// or driver is unknown.
+    /// (`Capabilities::language`), as its session said it reads it (`DbEvent::Language`: a
+    /// MySQL session's sql mode), else as the profile's last session said; the default for a
+    /// tab without a profile, or whose profile or driver is unknown.
     pub fn tab_language(&self, tab: TabId) -> Language {
-        self.profile_language(self.tabs.get(tab).and_then(|t| t.profile))
+        let t = self.tabs.get(tab);
+        let profile = t.and_then(|t| t.profile);
+        let driver = self.profile_language(profile);
+        // Only a language of the driver's dialect: the profile may have changed its driver.
+        let same = |l: &Language| std::mem::discriminant(&l.dialect()) == std::mem::discriminant(&driver.dialect());
+        let last = profile.and_then(|p| self.conns.get(p)).and_then(|c| c.language);
+        t.and_then(|t| t.exec.language).filter(same).or(last.filter(same)).unwrap_or(driver)
     }
 
     /// The SQL dialect the app writes in for tab `tab`: its classifier's language (what its

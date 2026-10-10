@@ -146,6 +146,18 @@ pub struct ConnectionConfig {
     /// when the server keeps losing them.
     #[serde(default = "yes")]
     pub statement_cache: bool,
+    /// MySQL: the server's RSA public key, a PEM file (`server_public_key_file`; `None`: none).
+    /// A `caching_sha2_password` login that sends the password over an unencrypted connection
+    /// encrypts it with this key and never asks the server for one.
+    #[serde(default)]
+    pub server_public_key_file: Option<String>,
+    /// MySQL: a direct connection to a server that is not on this machine may ask the server
+    /// for its public key (`allow_public_key_retrieval`, off by default; written only when on).
+    /// The key comes over the same unencrypted connection, so whoever sits in between could
+    /// send theirs and read the password; off, such a login is refused. A loopback server
+    /// and a server reached through an SSH tunnel are asked either way.
+    #[serde(default)]
+    pub allow_public_key_retrieval: bool,
     /// The SSH tunnel of this profile only (`[connections.ssh]`); `None`: never set up. Kept
     /// when turned off (see [`Self::inline_ssh`]).
     #[serde(default)]
@@ -180,6 +192,8 @@ impl fmt::Debug for ConnectionConfig {
             .field("policy", &self.policy)
             .field("password_source", &self.source())
             .field("statement_cache", &self.statement_cache)
+            .field("server_public_key_file", &self.server_public_key_file)
+            .field("allow_public_key_retrieval", &self.allow_public_key_retrieval)
             .field("ssh", &self.ssh)
             .field("tunnel", &self.tunnel)
             .field("origin", &self.origin)
@@ -228,6 +242,8 @@ impl Default for ConnectionConfig {
             password_command: None,
             password_env: None,
             statement_cache: true,
+            server_public_key_file: None,
+            allow_public_key_retrieval: false,
             ssh: None,
             tunnel: None,
             origin: None,
@@ -303,13 +319,19 @@ impl ConnectionConfig {
                 Err(_) => d.clone(),
             };
         }
+        let scheme = dsn::Scheme::of_driver(&self.driver);
         dsn::format(&dsn::Dsn {
+            scheme,
             user: self.user.clone(),
             password: None,
             host: self.host.clone(),
             port: Some(self.port),
             database: self.database.clone(),
-            params: vec![("sslmode".into(), self.sslmode.clone())],
+            // MySQL connections have no TLS settings yet.
+            params: match scheme {
+                dsn::Scheme::Postgres => vec![("sslmode".into(), self.sslmode.clone())],
+                dsn::Scheme::MySql => Vec::new(),
+            },
         })
     }
 
@@ -329,15 +351,20 @@ impl ConnectionConfig {
         }
     }
 
-    /// Convert a URL `dsn` into fields when nothing would be lost.
+    /// Convert a URL `dsn` into fields when nothing would be lost: a URL of the profile's
+    /// driver with no parameters but PostgreSQL's `sslmode`.
     pub(crate) fn normalize(&mut self) {
         let Some(text) = &self.dsn else { return };
         let Ok(d) = dsn::parse(text) else { return };
-        if d.params.iter().any(|(k, v)| k != "sslmode" || !SSL_MODES.contains(&v.as_str())) {
+        if d.scheme != dsn::Scheme::of_driver(&self.driver) {
+            return;
+        }
+        let sslmode = |k: &str, v: &str| d.scheme == dsn::Scheme::Postgres && k == "sslmode" && SSL_MODES.contains(&v);
+        if d.params.iter().any(|(k, v)| !sslmode(k, v)) {
             return;
         }
         self.host = if d.host.is_empty() { default_host() } else { d.host.clone() };
-        self.port = d.port.unwrap_or(5432);
+        self.port = d.port.unwrap_or(d.scheme.default_port());
         self.user = d.user.clone();
         self.database = d.database.clone();
         if let Some(m) = d.param("sslmode") {
@@ -348,4 +375,35 @@ impl ConnectionConfig {
         }
         self.dsn = None;
     }
+
+    /// A MySQL profile whose connection goes through the network unencrypted: directly (no SSH
+    /// tunnel) to a server that is not on this machine. The driver has no TLS yet, so the
+    /// password exchange and every result can be read (or changed) on the way.
+    pub fn mysql_unencrypted(&self) -> bool {
+        if dsn::Scheme::of_driver(&self.driver) != dsn::Scheme::MySql
+            || self.tunnel.is_some()
+            || self.inline_ssh().is_some()
+        {
+            return false;
+        }
+        // The driver's host: the URL's (none: `localhost`) when the profile keeps one.
+        let host = match self.dsn.as_deref().map(dsn::parse) {
+            Some(Ok(d)) if d.host.is_empty() => "localhost".to_string(),
+            Some(Ok(d)) => d.host,
+            Some(Err(_)) => return true,
+            None => self.host.clone(),
+        };
+        !is_loopback(&host)
+    }
 }
+
+/// Whether `host` names this machine: `localhost` or a loopback address (`127.0.0.0/8`,
+/// `::1`, also in brackets or IPv4-mapped).
+pub fn is_loopback(host: &str) -> bool {
+    let host = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')).unwrap_or(host);
+    host.eq_ignore_ascii_case("localhost")
+        || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.to_canonical().is_loopback())
+}
+
+#[cfg(test)]
+mod tests;

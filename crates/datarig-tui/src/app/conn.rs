@@ -87,6 +87,8 @@ pub struct ProfileConn {
     pub connecting: Option<Connecting>,
     /// Why the last attempt failed or the connection was lost (the explorer's error line).
     pub error: Option<Notice>,
+    /// The current attempt's password was typed in the password prompt.
+    pub prompted: bool,
     pub tree: Tree,
     pub catalog: Catalog,
     /// Why the catalog could not be read (the last one read, if any, stays).
@@ -127,6 +129,10 @@ pub struct ProfileConn {
     pub tunnel_wait: Option<ConnectionConfig>,
     /// Why its tunnel ended, while the profile is not connected again.
     pub tunnel_lost: Option<Notice>,
+    /// The language the profile's last query session said its text is read in
+    /// (`DbEvent::Language`: a MySQL server's sql mode): what a tab of the profile reads its text
+    /// in until its own session says. Kept while the profile is not connected.
+    pub language: Option<datarig_core::sql::dialect::Language>,
 }
 
 impl ProfileConn {
@@ -137,6 +143,7 @@ impl ProfileConn {
             connected: false,
             connecting: None,
             error: None,
+            prompted: false,
             tree: Tree::new(),
             catalog: Catalog::default(),
             catalog_error: None,
@@ -155,15 +162,16 @@ impl ProfileConn {
             tunnel: None,
             tunnel_wait: None,
             tunnel_lost: None,
+            language: None,
         }
     }
 
     /// Back to "not connected": the session state, the tree and what waited for the attempt
     /// are dropped (the sessions must be closed already).
     pub fn reset(&mut self) {
-        let generation = self.generation;
+        let (generation, language) = (self.generation, self.language);
         *self = Self::new();
-        self.generation = generation;
+        (self.generation, self.language) = (generation, language);
     }
 
     pub fn state(&self) -> NodeState {

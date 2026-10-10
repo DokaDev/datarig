@@ -72,8 +72,8 @@ services:
       - "56432:5432"
 
   # The SSH bastion of the tests: OpenSSH with a key user (`tunnel`) and a password user
-  # (`pw`, password `datarig-pw`), forwarding only to `postgres` and `pgbouncer`, which the
-  # host reaches through it by those names. Keys are made at test time: `ssh/make-fixture.sh`
+  # (`pw`, password `datarig-pw`), forwarding only to `postgres`, `pgbouncer` and `mysql`,
+  # which the host reaches through it by those names. Keys are made at test time: `ssh/make-fixture.sh`
   # writes them to `ssh/.fixture` (or DATARIG_SSH_FIXTURE), then
   # `docker compose --profile ssh up -d --build ssh-bastion`.
   ssh-bastion:

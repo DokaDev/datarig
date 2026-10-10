@@ -10,7 +10,7 @@ KbdInteractiveAuthentication no
 AuthorizedKeysFile .ssh/authorized_keys
 AllowUsers tunnel pw
 AllowTcpForwarding local
-PermitOpen postgres:5432 pgbouncer:5432
+PermitOpen postgres:5432 pgbouncer:5432 mysql:3306
 AllowAgentForwarding no
 X11Forwarding no
 PermitTTY no

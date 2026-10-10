@@ -342,6 +342,7 @@ impl App {
                     None => self.secrets.remember(&id.account(), &pw),
                 }
                 self.connect(id);
+                self.conns.entry(id).prompted = true;
             }
         }
         self.next_prompt();

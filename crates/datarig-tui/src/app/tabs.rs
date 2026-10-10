@@ -252,6 +252,9 @@ pub struct TabSession {
     /// `session` sets the tab's search path in each transaction (the server ignored it at
     /// connect, a pooler: `DbEvent::ContextPerTransaction`).
     pub path_per_transaction: bool,
+    /// The language `session` said its text is read in (`DbEvent::Language`: a MySQL session's
+    /// sql mode); `None` until it says, and for a driver whose sessions do not.
+    pub language: Option<datarig_core::sql::dialect::Language>,
 }
 
 impl TabSession {
@@ -291,6 +294,7 @@ impl TabSession {
             unconfirmed: Vec::new(),
             context: None,
             path_per_transaction: false,
+            language: None,
         }
     }
 
@@ -1095,6 +1099,8 @@ impl TabManager {
         t.context = context;
         t.doc.kept_profile = None;
         t.binding = binding;
+        // What the old binding's session said of its language is not this one's.
+        t.exec.language = None;
         self.last_used.retain(|_, t| *t != id);
         if let (Some(p), true) = (profile, active) {
             self.last_used.insert(p, id);

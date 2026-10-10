@@ -149,7 +149,10 @@ fn sections_split_the_fields_and_pickers_cycle() {
     assert_eq!((f.section, f.focus), (Section::Ssh, Field::SshEnabled));
     f.key(&KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL));
     assert_eq!((f.section, f.focus), (Section::Advanced, Field::SslMode));
-    assert_eq!(&f.fields()[..ADVANCED.len()], &ADVANCED);
+    // MySQL's own are not shown for PostgreSQL.
+    let pg: Vec<Field> =
+        ADVANCED.into_iter().filter(|f| !matches!(f, Field::ServerKey | Field::KeyRetrieval)).collect();
+    assert_eq!(&f.fields()[..pg.len()], &pg[..]);
     // Color: auto, then the named colors in order; Left wraps back to auto.
     focus(&mut f, Field::Color);
     f.key(&key(KeyCode::Right));
@@ -198,6 +201,66 @@ fn statement_cache_toggles_and_is_saved() {
     assert!(saved.statement_cache);
     assert_eq!((saved.host.as_str(), saved.port, saved.sslmode.as_str()), ("127.0.0.1", 55432, "disable"));
     assert!(ProfileForm::new_profile().statement_cache, "on for a new profile");
+}
+
+/// MySQL's server key file and key retrieval (Advanced, MySQL only): the profile's values,
+/// edited and saved; an empty key file is none. A PostgreSQL profile does not show them.
+#[test]
+fn mysql_key_options_are_edited_and_saved() {
+    let my = ConnectionConfig {
+        driver: "mysql".into(),
+        port: 3306,
+        server_public_key_file: Some("~/db.pem".into()),
+        ..ConnectionConfig::test_db()
+    };
+    let mut f = ProfileForm::from_profile(&my, String::new(), Some(0));
+    f.open_section(Section::Advanced);
+    assert_eq!(f.fields()[..2], [Field::ServerKey, Field::KeyRetrieval]);
+    assert_eq!(f.server_key.text(), "~/db.pem");
+    focus(&mut f, Field::ServerKey);
+    clear(&mut f);
+    typ(&mut f, " /keys/prod.pem ");
+    focus(&mut f, Field::KeyRetrieval);
+    f.key(&key(KeyCode::Right));
+    assert!(f.to_profile().allow_public_key_retrieval);
+    f.key(&key(KeyCode::Char(' ')));
+    assert!(!f.to_profile().allow_public_key_retrieval);
+    f.key(&key(KeyCode::Left));
+    let saved = f.to_profile();
+    assert_eq!(
+        (saved.server_public_key_file.as_deref(), saved.allow_public_key_retrieval),
+        (Some("/keys/prod.pem"), true)
+    );
+    focus(&mut f, Field::ServerKey);
+    clear(&mut f);
+    assert_eq!(f.to_profile().server_public_key_file, None);
+    let mut pg = ProfileForm::from_profile(&ConnectionConfig::test_db(), String::new(), Some(0));
+    pg.open_section(Section::Advanced);
+    assert!(pg.fields().iter().all(|f| !matches!(f, Field::ServerKey | Field::KeyRetrieval)));
+    let new = ProfileForm::new_profile().to_profile();
+    assert_eq!((new.server_public_key_file, new.allow_public_key_retrieval), (None, false));
+}
+
+/// The server key file must be absolute or under `~/` (a relative one would depend on the
+/// directory datarig was started in): another path is an error at once, next to the field.
+#[test]
+fn the_server_key_file_must_be_absolute_or_under_home() {
+    let my = ConnectionConfig { driver: "mysql".into(), port: 3306, ..ConnectionConfig::test_db() };
+    let mut f = ProfileForm::from_profile(&my, String::new(), Some(0));
+    focus(&mut f, Field::ServerKey);
+    let key_errors = |f: &ProfileForm| -> Vec<FieldError> {
+        f.errors(|_| false).into_iter().filter(|(field, _)| *field == Field::ServerKey).map(|(_, e)| e).collect()
+    };
+    for (path, ok) in
+        [("keys/x.pem", false), ("./k.pem", false), ("~k.pem", false), ("/k.pem", true), ("~/k.pem", true)]
+    {
+        clear(&mut f);
+        typ(&mut f, path);
+        let expected = if ok { vec![] } else { vec![FieldError::AbsolutePath] };
+        assert_eq!(key_errors(&f), expected, "{path}");
+    }
+    clear(&mut f);
+    assert!(key_errors(&f).is_empty(), "none is fine");
 }
 
 /// The SSH section: off shows the switch only; on, the fields follow the way
