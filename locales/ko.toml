@@ -21,6 +21,7 @@
 "tree.group.tables" = "테이블"
 "tree.group.views" = "뷰"
 "tree.loading" = "불러오는 중…"
+"tree.columns_only" = "컬럼만 표시합니다: 이 데이터베이스의 키, 인덱스, 제약 조건은 아직 표시하지 않습니다"
 "tree.empty" = "(비어 있음)"
 "tree.group.columns" = "컬럼"
 "tree.group.primary_key" = "기본 키"

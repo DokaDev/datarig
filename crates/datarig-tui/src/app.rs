@@ -1011,6 +1011,13 @@ impl App {
         self.profile_capabilities(profile).map_or_else(Language::default, |c| c.language)
     }
 
+    /// Whether `profile`'s server has one level of namespaces (`Hierarchy::SchemaOnly`, MySQL: a
+    /// database is the schema, and a session moves between them): the explorer lists them under
+    /// the profile, and a tab works in one of them (its context's schema).
+    pub fn schema_only(&self, profile: Option<ProfileId>) -> bool {
+        self.profile_capabilities(profile).is_some_and(|c| c.hierarchy == datarig_core::driver::Hierarchy::SchemaOnly)
+    }
+
     /// The capabilities of `profile`'s driver; `None` without a profile, or when the profile
     /// or its driver is unknown.
     fn profile_capabilities(&self, profile: Option<ProfileId>) -> Option<datarig_core::driver::Capabilities> {
@@ -1342,7 +1349,11 @@ impl App {
     /// The search path completion resolves names in for tab `t`: its dialect's for the tab's
     /// schema (PostgreSQL: that schema then `public`), else the server's default (`public`).
     pub fn tab_path(&self, t: &Tab) -> Vec<String> {
-        self.tab_dialect(t.id).default_path(t.context.schema.as_deref())
+        // One level of namespaces: the tab works in its schema, else the profile's database.
+        let own = (t.context.schema.is_none() && self.schema_only(t.profile))
+            .then(|| t.profile.map(|p| self.own_database(p)).filter(|d| !d.is_empty()))
+            .flatten();
+        self.tab_dialect(t.id).default_path(t.context.schema.as_deref().or(own.as_deref()))
     }
 
     /// Tab `t`'s chosen schema is not on its session's path as the server says (it does not

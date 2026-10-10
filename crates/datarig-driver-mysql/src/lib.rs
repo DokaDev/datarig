@@ -23,6 +23,7 @@
 
 mod connect;
 mod link;
+mod meta;
 mod query;
 mod route;
 mod server_key;

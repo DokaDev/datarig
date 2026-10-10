@@ -587,7 +587,10 @@ fn draw_connection_bar(app: &App, area: Rect, buf: &mut Buffer) {
     // Where the tab works: the server's answer once its session connected, else
     // the chosen database, else the profile's; then the chosen schema.
     let t = app.tab();
+    let one_level = app.schema_only(Some(p.id));
     let database = match (&t.exec.context, &t.context.database) {
+        // One level (MySQL): the tab's schema is its database.
+        _ if one_level => t.context.schema.clone().unwrap_or(database),
         (Some((db, _)), _) => db.clone(),
         (None, Some(db)) => db.clone(),
         (None, None) => database,
@@ -600,7 +603,7 @@ fn draw_connection_bar(app: &App, area: Rect, buf: &mut Buffer) {
     // A chosen schema the server does not have on the path is marked, in the
     // warning color, for as long as that is so.
     let missing = app.schema_missing(t);
-    let schema = t.context.schema.clone().filter(|s| !s.is_empty()).map(|s| {
+    let schema = t.context.schema.clone().filter(|s| !s.is_empty() && !one_level).map(|s| {
         let style =
             if missing { Style::new().fg(th.warning).bg(bg).add_modifier(Modifier::BOLD) } else { name_style(p, bg) };
         (format!(" / {s}{}", if missing { "?" } else { "" }), style)

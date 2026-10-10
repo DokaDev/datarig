@@ -3,6 +3,9 @@
 -- Built from a 100x100x100 cross join (recursion depth 100, well under the default
 -- cte_max_recursion_depth of 1000) instead of row-by-row inserts, so this stays fast.
 
+-- The image loads these files with a client in the POSIX locale (latin1): say what they are.
+SET NAMES utf8mb4;
+
 USE shop;
 
 INSERT INTO events (id, user_id, event_type, page, payload, created_at)

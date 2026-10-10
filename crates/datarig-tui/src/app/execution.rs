@@ -674,9 +674,11 @@ impl App {
                 c.error = Some(m.clone());
                 self.status = Some(m);
             }
-            // Statement events never come from the metadata session, nor does its language.
-            DbEvent::Language(_)
-            | DbEvent::Info { .. }
+            // The mode a new session of the profile starts in (MySQL): a tab's first run is
+            // checked in it before the tab's own session says.
+            DbEvent::Language(lang) => self.set_profile_language(id, lang),
+            // Statement events never come from the metadata session.
+            DbEvent::Info { .. }
             | DbEvent::Released { .. }
             | DbEvent::Page { .. }
             | DbEvent::Done { .. }
@@ -718,6 +720,16 @@ impl App {
         }
     }
 
+    /// The language a new session of profile `p` starts in: its tabs without a session's word
+    /// of their own read their text in it.
+    fn set_profile_language(&mut self, p: ProfileId, lang: Language) {
+        self.conns.entry(p).language = Some(lang);
+        let tabs: Vec<TabId> = self.tabs.iter().filter(|t| t.profile == Some(p)).map(|t| t.id).collect();
+        for t in tabs {
+            self.sync_tab_language(t);
+        }
+    }
+
     /// An event of tab `id`'s query session.
     fn tab_event(&mut self, id: TabId, ev: DbEvent) {
         let profile = self.tabs.get(id).and_then(|t| t.profile);
@@ -726,18 +738,22 @@ impl App {
         }
         // The editor and the risk classifier read the text as the session does from now on.
         if let DbEvent::Language(lang) = ev {
-            if let Some(t) = self.tabs.get_mut(id) {
-                t.exec.language = Some(lang);
-            }
-            // The profile's other tabs read theirs in it until their own sessions say.
-            if let Some(p) = profile {
-                self.conns.entry(p).language = Some(lang);
-                let tabs: Vec<TabId> = self.tabs.iter().filter(|t| t.profile == Some(p)).map(|t| t.id).collect();
-                for t in tabs {
-                    self.sync_tab_language(t);
-                }
+            let first = self.tabs.get_mut(id).is_some_and(|t| t.exec.language.replace(lang).is_none());
+            // The session's first word is the mode a new session starts in: the profile's other
+            // tabs read theirs in it until their own sessions say. A later change (its `SET
+            // sql_mode`) is that session's own.
+            if let Some(p) = profile.filter(|_| first) {
+                self.set_profile_language(p, lang);
             }
             return self.sync_tab_language(id);
+        }
+        // The mode the lost session read its text in goes with it: the next run, in a new
+        // session, is checked in the mode that one starts in.
+        if matches!(ev, DbEvent::Lost { .. }) {
+            if let Some(t) = self.tabs.get_mut(id) {
+                t.exec.language = None;
+            }
+            self.sync_tab_language(id);
         }
         // The run ends (its result, its outcome or its failure), or a transaction ends.
         let current = self.tabs.get(id).map_or(0, |t| t.exec.query_id);
