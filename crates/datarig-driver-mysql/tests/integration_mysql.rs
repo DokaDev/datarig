@@ -13,7 +13,10 @@
 //! through a dialer (`transport::TcpDialer`), as they do through an SSH tunnel; CI runs the
 //! suite both ways.
 
-use datarig_core::driver::{ConnectOptions, DbError, DbEvent, Driver, PingError, Session, SessionRole};
+use datarig_core::driver::{
+    Cell, ConnectOptions, DbCommand, DbError, DbEvent, Driver, PagingMode, PingError, Session, SessionRole,
+    StatementInfo, ValueKind,
+};
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
 use datarig_core::transport::{Dialer, DialerRef, TcpDialer};
@@ -101,7 +104,6 @@ fn in_database(url: &str, database: &str) -> String {
 }
 
 struct Conn {
-    #[allow(dead_code)]
     session: Session,
     rx: UnboundedReceiver<DbEvent>,
 }
@@ -133,6 +135,43 @@ impl Conn {
                 Err(_) => panic!("timed out after {secs}s waiting for event"),
             }
         }
+    }
+
+    /// Every event up to and with the terminal one of run `id` (its first page, `Done` or
+    /// `Failed`).
+    async fn answer(&mut self, id: u64) -> Vec<DbEvent> {
+        let mut out = Vec::new();
+        loop {
+            let ev = self.next(60).await;
+            let end = matches!(&ev, DbEvent::Page { id: i, columns: Some(_), .. }
+                | DbEvent::Done { id: i, .. } | DbEvent::Failed { id: i, .. } if *i == id);
+            if let DbEvent::ConnectFailed { error, .. } = &ev {
+                panic!("connect failed: {error:?}");
+            }
+            out.push(ev);
+            if end {
+                return out;
+            }
+        }
+    }
+
+    /// Run `sql` (one statement or several) as run `id`, not held: its events up to its answer.
+    async fn run(&mut self, id: u64, sql: &[&str]) -> Vec<DbEvent> {
+        self.run_as(id, sql, PagingMode::NoHold).await
+    }
+
+    async fn run_as(&mut self, id: u64, sql: &[&str], paging: PagingMode) -> Vec<DbEvent> {
+        let statements = sql.iter().map(|s| s.to_string()).collect();
+        self.session.send(DbCommand::Execute { id, statements, paging });
+        self.answer(id).await
+    }
+
+    /// Run `sql` and expect it to succeed (its answer).
+    async fn ok(&mut self, id: u64, sql: &str) -> DbEvent {
+        let evs = self.run(id, &[sql]).await;
+        let last = evs.into_iter().last().unwrap();
+        assert!(!matches!(last, DbEvent::Failed { .. }), "{sql}: {last:?}");
+        last
     }
 
     /// The first event, whatever it is.
@@ -538,4 +577,800 @@ async fn a_pinned_server_key_encrypts_the_first_login() {
         DbEvent::ConnectFailed { error: DbError::AccessDenied(m), auth: true } => assert!(m.contains("1045"), "{m}"),
         other => panic!("{other:?}"),
     }
+}
+
+// ── statements ─────────────────────────────────────────────────────────────
+
+/// A table `shop.zz_it_<name>_<pid>` made on a side connection (`ddl`, with `{t}` for its
+/// name), dropped with the guard, also when the test fails.
+struct Table {
+    url: String,
+    name: String,
+}
+
+impl Table {
+    async fn make(url: &str, name: &str, ddl: &[&str]) -> Table {
+        let name = format!("zz_it_{name}_{}", std::process::id());
+        let mut c = side(url).await;
+        c.query_drop(format!("DROP TABLE IF EXISTS shop.{name}")).await.unwrap();
+        let t = Table { url: url.to_string(), name };
+        for sql in ddl {
+            c.query_drop(sql.replace("{t}", &format!("shop.{}", t.name))).await.unwrap();
+        }
+        c.disconnect().await.unwrap();
+        t
+    }
+
+    /// `shop.<name>`.
+    fn q(&self) -> String {
+        format!("shop.{}", self.name)
+    }
+}
+
+impl Drop for Table {
+    fn drop(&mut self) {
+        let (url, name) = (self.url.clone(), self.name.clone());
+        let _ = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            rt.block_on(async {
+                let mut c = side(&url).await;
+                let _ = c.query_drop(format!("DROP TABLE IF EXISTS shop.{name}")).await;
+                let _ = c.disconnect().await;
+            });
+        })
+        .join();
+    }
+}
+
+/// A statement run from the side when the guard goes, whatever the test did (a panic too): the
+/// drop of what the test made.
+struct Cleanup {
+    url: String,
+    sql: String,
+}
+
+impl Drop for Cleanup {
+    fn drop(&mut self) {
+        let (url, sql) = (self.url.clone(), self.sql.clone());
+        let _ = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            rt.block_on(async {
+                let mut c = side(&url).await;
+                let _ = c.query_drop(sql).await;
+                let _ = c.disconnect().await;
+            });
+        })
+        .join();
+    }
+}
+
+/// A table of `n` rows (`id` 1..=n, `v` text), `n` under 1,000,000 (made from a cross join, so
+/// no recursion goes past the server's `cte_max_recursion_depth`).
+async fn numbers(url: &str, name: &str, n: u32) -> Table {
+    let fill = format!(
+        "INSERT INTO {{t}} (id, v) WITH RECURSIVE d (i) AS (SELECT 0 UNION ALL SELECT i + 1 FROM d WHERE i < 99) \
+         SELECT g.n, CONCAT('row ', g.n) FROM (SELECT a.i + b.i * 100 + c.i * 10000 + 1 AS n FROM d a, d b, d c) g \
+         WHERE g.n <= {n}"
+    );
+    Table::make(url, name, &["CREATE TABLE {t} (id INT PRIMARY KEY, v VARCHAR(40))", &fill]).await
+}
+
+fn page_of(evs: &[DbEvent]) -> (&Vec<datarig_core::driver::ColumnMeta>, &Vec<Vec<Cell>>, bool) {
+    match evs.last() {
+        Some(DbEvent::Page { columns: Some(c), rows, more, .. }) => (c, rows, *more),
+        other => panic!("not a page: {other:?}"),
+    }
+}
+
+fn released(evs: &[DbEvent]) -> bool {
+    evs.iter().any(|e| matches!(e, DbEvent::Released { .. }))
+}
+
+/// The run's `Info`, if any.
+fn info(evs: &[DbEvent]) -> Option<StatementInfo> {
+    evs.iter().find_map(|e| match e {
+        DbEvent::Info { info, .. } => Some(info.clone()),
+        _ => None,
+    })
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_small_result_is_one_page_and_nothing_stays_open() {
+    let Some(url) = my_url("a_small_result_is_one_page_and_nothing_stays_open") else { return };
+    let mut c = Conn::open(&url, SessionRole::Query, false, "small").await;
+    let evs = c.run(1, &["SELECT 1 AS a, 'x' AS b, NULL AS c"]).await;
+    let (cols, rows, more) = page_of(&evs);
+    assert_eq!(cols.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["a", "b", "c"]);
+    assert_eq!((cols[0].kind, cols[1].kind), (ValueKind::Integer, ValueKind::Text));
+    assert_eq!(rows, &vec![vec![Some("1".to_string()), Some("x".to_string()), None]]);
+    assert!(!more && !released(&evs));
+    assert!(!evs.iter().any(|e| matches!(e, DbEvent::TxOpen(true))));
+}
+
+/// The metadata locks connection `id` holds on table `shop.<name>`.
+async fn table_locks(a: &mut mysql_async::Conn, id: u64, name: &str) -> u64 {
+    let sql = format!(
+        "SELECT COUNT(*) FROM performance_schema.metadata_locks m JOIN performance_schema.threads th \
+         ON th.THREAD_ID = m.OWNER_THREAD_ID WHERE th.PROCESSLIST_ID = {id} AND m.OBJECT_TYPE = 'TABLE' \
+         AND m.OBJECT_NAME = '{name}'"
+    );
+    a.query_first::<u64, _>(sql).await.unwrap().unwrap()
+}
+
+/// The owner's worry: a result on screen holds no metadata lock, so an `ALTER TABLE` of another
+/// session goes through; a held result does hold one while its statement runs (one larger than
+/// what the network buffers take), until it is read to its end or stopped.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_first_page_holds_no_metadata_lock_and_a_held_result_does_until_read() {
+    let Some((url, admin)) = urls("a_first_page_holds_no_metadata_lock") else { return };
+    let test = "mdl";
+    // About 60 MB of rows: far more than the server's and the client's socket buffers take.
+    let t = numbers(&admin, "mdl", 300_000).await;
+    let mut wide = side(&admin).await;
+    wide.query_drop(format!("ALTER TABLE {} MODIFY v VARCHAR(200)", t.q())).await.unwrap();
+    wide.query_drop(format!("UPDATE {} SET v = REPEAT('x', 200)", t.q())).await.unwrap();
+    wide.disconnect().await.unwrap();
+    let mut a = side(&admin).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let id = only_session(&mut a, SessionRole::Query, test).await;
+    let sql = format!("SELECT * FROM {} ORDER BY id", t.q());
+    // Not held (the default): the first page, then nothing open on the server.
+    let evs = c.run(1, &[&sql]).await;
+    let (_, rows, more) = page_of(&evs);
+    assert_eq!((rows.len(), more, released(&evs)), (PAGE, true, true));
+    assert_eq!(table_locks(&mut a, id, &t.name).await, 0, "no metadata lock while the page is on screen");
+    let trx: u64 = a
+        .query_first(format!("SELECT COUNT(*) FROM information_schema.innodb_trx WHERE trx_mysql_thread_id = {id}"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(trx, 0, "no transaction");
+    let mut alter = side(&admin).await;
+    alter.query_drop("SET SESSION lock_wait_timeout = 5").await.unwrap();
+    let t0 = Instant::now();
+    alter.query_drop(format!("ALTER TABLE {} ADD COLUMN c1 INT", t.q())).await.expect("the ALTER goes through");
+    assert!(t0.elapsed() < Duration::from_secs(5));
+    // Held: the statement runs on (and keeps its lock) while the result is not read to its end.
+    let evs = c.run_as(2, &[&sql], PagingMode::Hold).await;
+    let (_, rows, more) = page_of(&evs);
+    assert_eq!((rows.len(), more, released(&evs)), (PAGE, true, false));
+    assert!(table_locks(&mut a, id, &t.name).await > 0, "the held statement keeps its metadata lock");
+    alter.query_drop("SET SESSION lock_wait_timeout = 1").await.unwrap();
+    match alter.query_drop(format!("ALTER TABLE {} ADD COLUMN c2 INT", t.q())).await {
+        Err(mysql_async::Error::Server(e)) => assert_eq!(e.code, 1205, "{e}"),
+        other => panic!("the ALTER waited for the held statement: {other:?}"),
+    }
+    // Stopped (the app closes it at its spill limit): stopped on the server, the lock goes.
+    c.session.send(DbCommand::ClosePortal { id: 2 });
+    c.ok(3, "SELECT 1").await;
+    assert_eq!(table_locks(&mut a, id, &t.name).await, 0, "stopped: the lock is gone");
+    alter.query_drop(format!("ALTER TABLE {} ADD COLUMN c2 INT", t.q())).await.expect("the ALTER goes through now");
+    alter.disconnect().await.unwrap();
+    a.disconnect().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_next_page_runs_the_statement_again_past_the_rows_it_has() {
+    let Some((url, admin)) = urls("the_next_page_runs_the_statement_again") else { return };
+    let t = numbers(&admin, "resume", 1200).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, "resume").await;
+    let sql = format!("SELECT id FROM {} ORDER BY id", t.q());
+    let evs = c.run(1, &[&sql]).await;
+    assert_eq!(page_of(&evs).1.len(), PAGE);
+    c.session.send(DbCommand::Resume { id: 2, sql: sql.clone(), skip: PAGE as u64, paging: PagingMode::NoHold });
+    let evs = c.answer(2).await;
+
+    let (_, rows, more) = page_of(&evs);
+    assert_eq!((rows.first().cloned(), rows.len(), more), (Some(vec![Some("501".into())]), PAGE, true));
+    assert!(released(&evs));
+    c.session.send(DbCommand::Resume { id: 3, sql: sql.clone(), skip: 1000, paging: PagingMode::NoHold });
+    let evs = c.answer(3).await;
+    let (_, rows, more) = page_of(&evs);
+    assert_eq!((rows.len(), more, released(&evs)), (200, false, false));
+    // Past its end: an empty last page.
+    c.session.send(DbCommand::Resume { id: 4, sql, skip: 5000, paging: PagingMode::NoHold });
+    let evs = c.answer(4).await;
+    let (_, rows, more) = page_of(&evs);
+    assert_eq!((rows.len(), more), (0, false));
+    // A view, or a text off the allowlist, is not run again.
+    c.session.send(DbCommand::Resume {
+        id: 5,
+        sql: "SELECT * FROM shop.order_summary".into(),
+        skip: 1,
+        paging: PagingMode::NoHold,
+    });
+    match c.answer(5).await.pop() {
+        Some(DbEvent::Failed { error: DbError::NotRepeatable(r), .. }) => {
+            assert_eq!(r, datarig_core::sql::risk::repeat::NotRepeatable::NotATable("shop.order_summary".into()))
+        }
+        other => panic!("{other:?}"),
+    }
+    c.session.send(DbCommand::Resume { id: 6, sql: "SELECT RAND()".into(), skip: 1, paging: PagingMode::NoHold });
+    assert!(matches!(c.answer(6).await.pop(), Some(DbEvent::Failed { error: DbError::NotRepeatable(_), .. })));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_limit_the_user_sets_is_kept_and_the_session_pages_again_after_it() {
+    let Some((url, admin)) = urls("a_limit_the_user_sets_is_kept") else { return };
+    let t = numbers(&admin, "limit", 1200).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, "limit").await;
+    let sql = format!("SELECT id FROM {} ORDER BY id", t.q());
+    c.ok(1, "SET sql_select_limit = 3").await;
+    let evs = c.run(2, &[&sql]).await;
+    let (_, rows, more) = page_of(&evs);
+    assert_eq!((rows.len(), more), (3, false), "the user's limit wins");
+    // Its warnings stay readable: no setting of the session's runs before a SHOW.
+    let evs = c.run(3, &["SELECT 1 / 0"]).await;
+    assert_eq!(info(&evs).map(|i| i.warnings), Some(1));
+    let evs = c.run(4, &["SHOW WARNINGS"]).await;
+    assert_eq!(page_of(&evs).1.len(), 1, "the division's warning");
+    c.ok(5, "SET sql_select_limit = DEFAULT").await;
+    let evs = c.run(6, &[&sql]).await;
+    let (_, rows, more) = page_of(&evs);
+    assert_eq!((rows.len(), more), (PAGE, true));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_result_the_limit_does_not_stop_is_read_and_only_its_page_kept() {
+    let Some((url, admin)) = urls("a_result_the_limit_does_not_stop") else { return };
+    let t = numbers(&admin, "explicit", 1200).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, "explicit").await;
+    let evs = c.run(1, &[&format!("SELECT id FROM {} ORDER BY id LIMIT 1100", t.q())]).await;
+    let (_, rows, more) = page_of(&evs);
+    assert_eq!((rows.len(), more, released(&evs)), (PAGE, true, true));
+    // The session is free at once (the rest was read).
+    let evs = c.run(2, &["SELECT 2"]).await;
+    assert_eq!(page_of(&evs).1, &vec![vec![Some("2".to_string())]]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn statements_of_a_run_go_one_by_one_and_say_what_they_did() {
+    let Some((url, admin)) = urls("statements_of_a_run_go_one_by_one") else { return };
+    let t = Table::make(&admin, "run", &["CREATE TABLE {t} (id INT AUTO_INCREMENT PRIMARY KEY, v VARCHAR(10))"]).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, "run").await;
+    let ins = format!("INSERT INTO {} (v) VALUES ('a'), ('b')", t.q());
+    let upd = format!("UPDATE {} SET v = 'c' WHERE id = 1", t.q());
+    let sel = format!("SELECT v FROM {} ORDER BY id", t.q());
+    let evs = c.run(1, &[&ins, &upd, &sel]).await;
+    let finished: Vec<(usize, String)> = evs
+        .iter()
+        .filter_map(|e| match e {
+            DbEvent::Finished { index, outcome, .. } => Some((*index, format!("{outcome:?}"))),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(finished, [(0, "Affected(2)".to_string()), (1, "Affected(1)".to_string())]);
+    let infos: Vec<(usize, StatementInfo)> = evs
+        .iter()
+        .filter_map(|e| match e {
+            DbEvent::Info { index, info, .. } => Some((*index, info.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(infos[0].0, 0);
+    assert_eq!(infos[0].1.insert_id, Some(1), "the first id an INSERT of several rows generated");
+    assert!(infos[0].1.message.as_deref().is_some_and(|m| m.starts_with("Records: 2")), "{infos:?}");
+    assert_eq!(infos[1].1.message.as_deref(), Some("Rows matched: 1  Changed: 1  Warnings: 0"));
+    assert_eq!(page_of(&evs).1, &vec![vec![Some("c".to_string())], vec![Some("b".to_string())]]);
+    // A failure stops the run there.
+    let evs = c.run(2, &["SELECT * FROM shop.zz_it_no_such_table", "SELECT 1"]).await;
+    match evs.last() {
+        Some(DbEvent::Failed { error: DbError::Server(m), cancelled: false, .. }) => {
+            assert!(m.starts_with("ERROR 1146 (42S02): "), "{m}")
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(!evs.iter().any(|e| matches!(e, DbEvent::Started { index: 1, .. })));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_users_transaction_follows_the_servers_flags() {
+    let Some((url, admin)) = urls("the_users_transaction_follows_the_servers_flags") else { return };
+    let t = Table::make(&admin, "tx", &["CREATE TABLE {t} (id INT PRIMARY KEY)"]).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, "tx").await;
+    let tx_events = |evs: &[DbEvent]| -> Vec<String> {
+        evs.iter()
+            .filter_map(|e| match e {
+                DbEvent::Block(b) => Some(format!("block {b}")),
+                DbEvent::TxOpen(b) => Some(format!("tx {b}")),
+                _ => None,
+            })
+            .collect()
+    };
+    assert_eq!(tx_events(&c.run(1, &["BEGIN"]).await), ["block true", "tx true"]);
+    c.ok(2, &format!("INSERT INTO {} VALUES (1)", t.q())).await;
+    // A failure does not end it (MySQL keeps the transaction).
+    let evs = c.run(3, &[&format!("INSERT INTO {} VALUES (1)", t.q())]).await;
+    assert!(matches!(evs.last(), Some(DbEvent::Failed { .. })));
+    assert!(tx_events(&evs).is_empty(), "still open: {evs:?}");
+    // Another BEGIN commits it and opens a new one: both said.
+    assert_eq!(
+        tx_events(&c.run(4, &["START TRANSACTION"]).await),
+        ["block false", "tx false", "block true", "tx true"]
+    );
+    // DDL commits it implicitly.
+    let evs = c.run(5, &[&format!("CREATE TABLE {}_x (a INT)", t.q())]).await;
+    assert_eq!(tx_events(&evs), ["block false", "tx false"]);
+    c.ok(6, &format!("DROP TABLE {}_x", t.q())).await;
+    // The row of the first transaction was committed by the second BEGIN.
+    let evs = c.run(7, &[&format!("SELECT id FROM {}", t.q())]).await;
+    assert_eq!(page_of(&evs).1.len(), 1);
+    assert_eq!(tx_events(&c.run(8, &["BEGIN"]).await), ["block true", "tx true"]);
+    assert_eq!(tx_events(&c.run(9, &["COMMIT AND CHAIN"]).await), ["block false", "tx false", "block true", "tx true"]);
+    assert_eq!(tx_events(&c.run(10, &["ROLLBACK"]).await), ["block false", "tx false"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn results_inside_the_users_transaction_are_held_and_read_on() {
+    let Some((url, admin)) = urls("results_inside_the_users_transaction_are_held") else { return };
+    let t = numbers(&admin, "inblock", 700).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, "inblock").await;
+    c.ok(1, "BEGIN").await;
+    let evs = c.run(2, &[&format!("SELECT id FROM {} ORDER BY id", t.q())]).await;
+    let (_, rows, more) = page_of(&evs);
+    assert_eq!((rows.len(), more, released(&evs)), (PAGE, true, false));
+    c.session.send(DbCommand::FetchMore { id: 2 });
+    match c.next(30).await {
+        DbEvent::Page { id: 2, columns: None, rows, more: false, .. } => assert_eq!(rows.len(), 200),
+        other => panic!("{other:?}"),
+    }
+    c.ok(3, "ROLLBACK").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_held_result_another_statement_ends_is_stopped_on_the_server() {
+    let Some((url, admin)) = urls("a_held_result_another_statement_ends") else { return };
+    let test = "heldstop";
+    let mut a = side(&admin).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let id = only_session(&mut a, SessionRole::Query, test).await;
+    // A result far longer than a page, held, then another statement: the first one stops.
+    let evs = c.run_as(1, &["SELECT * FROM shop.events"], PagingMode::Hold).await;
+    assert!(page_of(&evs).2);
+    let t0 = Instant::now();
+    let evs = c.run(2, &["SELECT 7"]).await;
+    assert_eq!(page_of(&evs).1, &vec![vec![Some("7".to_string())]]);
+    assert!(t0.elapsed() < Duration::from_secs(10), "{:?}", t0.elapsed());
+    let running: u64 = a
+        .query_first(format!(
+            "SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE ID = {id} AND COMMAND = 'Query'"
+        ))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(running, 0);
+    // Closed by the app (its spill limit): the same.
+    let evs = c.run_as(3, &["SELECT * FROM shop.events"], PagingMode::Hold).await;
+    assert!(page_of(&evs).2);
+    c.session.send(DbCommand::ClosePortal { id: 3 });
+    let evs = c.run(4, &["SELECT 8"]).await;
+    assert_eq!(page_of(&evs).1, &vec![vec![Some("8".to_string())]]);
+    a.disconnect().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_stops_the_statement_on_the_server() {
+    let Some(url) = my_url("a_cancel_stops_the_statement_on_the_server") else { return };
+    let mut c = Conn::open(&url, SessionRole::Query, false, "cancel").await;
+    let t0 = Instant::now();
+    c.session.send(DbCommand::Execute {
+        id: 1,
+        statements: vec!["SELECT SLEEP(30)".into()],
+        paging: PagingMode::NoHold,
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    c.session.cancel();
+    match c.answer(1).await.pop() {
+        Some(DbEvent::Failed { error: DbError::Cancelled, cancelled: true, .. }) => {}
+        // `SLEEP` interrupted answers its row (1) instead of an error on some servers.
+        Some(DbEvent::Page { rows, .. }) => assert_eq!(rows, vec![vec![Some("1".to_string())]]),
+        other => panic!("{other:?}"),
+    }
+    assert!(t0.elapsed() < Duration::from_secs(3), "{:?}", t0.elapsed());
+    // The session goes on.
+    c.ok(2, "SELECT 1").await;
+    // Between two statements of a run: the rest does not run.
+    c.session.send(DbCommand::Execute {
+        id: 3,
+        statements: vec!["SELECT SLEEP(30)".into(), "SELECT 2".into()],
+        paging: PagingMode::NoHold,
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    c.session.cancel();
+    let evs = c.answer(3).await;
+    assert!(matches!(evs.last(), Some(DbEvent::Failed { cancelled: true, .. })), "{evs:?}");
+    assert!(!evs.iter().any(|e| matches!(e, DbEvent::Started { index: 1, .. })));
+    c.ok(4, "SELECT 1").await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn closing_a_session_stops_what_it_runs() {
+    let Some((url, admin)) = urls("closing_a_session_stops_what_it_runs") else { return };
+    let test = "closing";
+    let mut a = side(&admin).await;
+    let c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let id = only_session(&mut a, SessionRole::Query, test).await;
+    c.session.send(DbCommand::Execute {
+        id: 1,
+        statements: vec!["SELECT SLEEP(30)".into()],
+        paging: PagingMode::NoHold,
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    drop(c);
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let n: u64 = a
+            .query_first(format!("SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE ID = {id}"))
+            .await
+            .unwrap()
+            .unwrap();
+        if n == 0 {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the connection stays");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    a.disconnect().await.unwrap();
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_connection_lost_while_a_statement_runs_fails_it_then_is_lost() {
+    let Some((url, admin)) = urls("a_connection_lost_while_a_statement_runs") else { return };
+    let test = "lostrun";
+    let mut a = side(&admin).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let id = only_session(&mut a, SessionRole::Query, test).await;
+    c.session.send(DbCommand::Execute {
+        id: 1,
+        statements: vec!["SELECT SLEEP(30)".into()],
+        paging: PagingMode::NoHold,
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    a.query_drop(format!("KILL {id}")).await.unwrap();
+    let evs = c.answer(1).await;
+    assert!(matches!(evs.last(), Some(DbEvent::Failed { cancelled: false, .. })), "{evs:?}");
+    assert!(matches!(c.next(10).await, DbEvent::Lost { .. }));
+    a.disconnect().await.unwrap();
+}
+
+/// How many rows table `q` has, counted by session `c` (run `id`).
+async fn rows_in(c: &mut Conn, id: u64, q: &str) -> String {
+    let evs = c.run(id, &[&format!("SELECT COUNT(*) FROM {q}")]).await;
+    page_of(&evs).1[0][0].clone().unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn explain_analyze_keeps_nothing_it_ran() {
+    let Some((url, admin)) = urls("explain_analyze_keeps_nothing_it_ran") else { return };
+    let t = numbers(&admin, "explain", 10).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, "explain").await;
+    // The multi-table form: MySQL measures it (a single-table one it does not run at all).
+    let delete = format!("EXPLAIN ANALYZE DELETE x FROM {q} x JOIN {q} y ON y.id = x.id WHERE x.id > 5", q = t.q());
+    let evs = c.run(1, &[&delete]).await;
+    assert!(page_of(&evs).1[0][0].as_deref().is_some_and(|p| p.contains("Delete")), "{evs:?}");
+    assert_eq!(rows_in(&mut c, 2, &t.q()).await, "10");
+    assert!(!evs.iter().any(|e| matches!(e, DbEvent::TxOpen(true))), "its transaction is not the user's");
+    // Inside the user's transaction: what the user did stays, the statement's changes go.
+    c.ok(3, "BEGIN").await;
+    c.ok(4, &format!("DELETE FROM {} WHERE id = 1", t.q())).await;
+    c.ok(5, &delete).await;
+    assert_eq!(rows_in(&mut c, 6, &t.q()).await, "9");
+    let evs = c.run(7, &["RELEASE SAVEPOINT datarig_explain"]).await;
+    assert!(matches!(evs.last(), Some(DbEvent::Failed { .. })), "the savepoint is gone");
+    c.ok(8, "ROLLBACK").await;
+    assert_eq!(rows_in(&mut c, 9, &t.q()).await, "10");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_changed_sql_mode_changes_the_language() {
+    let Some(url) = my_url("a_changed_sql_mode_changes_the_language") else { return };
+    let mut c = Conn::open(&url, SessionRole::Query, false, "mode").await;
+    let evs = c.run(1, &["SET SESSION sql_mode = 'ANSI_QUOTES,NO_BACKSLASH_ESCAPES'"]).await;
+    let mode = evs.iter().rev().find_map(|e| match e {
+        DbEvent::Language(Language::Sql(Dialect::MySql(m))) => Some(*m),
+        _ => None,
+    });
+    assert!(mode.is_some_and(|m| m.ansi_quotes && m.no_backslash_escapes), "{evs:?}");
+    // Said before the run's answer, so the next statement is read in it.
+    let at = |pred: fn(&DbEvent) -> bool| evs.iter().rposition(pred).unwrap();
+    assert!(at(|e| matches!(e, DbEvent::Language(_))) < at(|e| matches!(e, DbEvent::Done { .. })));
+    let evs = c.run(2, &["SET SESSION sql_mode = DEFAULT"]).await;
+    assert!(evs.iter().any(|e| matches!(e, DbEvent::Language(Language::Sql(Dialect::MySql(m))) if !m.ansi_quotes)));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn values_of_every_type_read_as_the_server_writes_them() {
+    let Some((url, admin)) = urls("values_of_every_type") else { return };
+    let t = Table::make(
+        &admin,
+        "types",
+        &[
+            "CREATE TABLE {t} (
+               i BIGINT UNSIGNED, d DECIMAL(65, 30), f DOUBLE, b BIT(4), t1 TINYINT(1), y YEAR,
+               dt DATETIME(6), ts TIMESTAMP(3) NULL, da DATE, tm TIME(2), j JSON, e ENUM('a', 'b'), s SET('x', 'y'),
+               bl BLOB, vb VARBINARY(8), g GEOMETRY, c CHAR(3), tx TEXT)",
+            "SET SESSION sql_mode = ''",
+        ],
+    )
+    .await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, "types").await;
+    c.ok(1, "SET SESSION sql_mode = '', time_zone = '+09:00'").await;
+    c.ok(
+        2,
+        &format!(
+            "INSERT INTO {} VALUES (18446744073709551615, 12345678901234567890.123456789012345678901234567890, 1.5e300, b'0101', 2, 2024,
+             '2024-02-29 23:59:59.123456', '2024-01-01 00:00:00.5', '0000-00-00', '-838:59:59.5', '{{\"a\": [1, 2]}}', 'b', 'x,y',
+             X'00FF', X'41', ST_GeomFromText('POINT(1 2)'), 'ab', '\\u{{d55c}}')",
+            t.q()
+        ),
+    )
+    .await;
+    let evs = c.run(3, &[&format!("SELECT * FROM {}", t.q())]).await;
+    let (cols, rows, _) = page_of(&evs);
+    let got: Vec<(String, String, ValueKind, Option<String>)> =
+        cols.iter().zip(&rows[0]).map(|(c, v)| (c.name.clone(), c.type_name.clone(), c.kind, v.clone())).collect();
+    let want = [
+        ("i", "bigint unsigned", ValueKind::Integer, "18446744073709551615"),
+        ("d", "decimal", ValueKind::Decimal, "12345678901234567890.123456789012345678901234567890"),
+        ("f", "double", ValueKind::Float, "1.5e300"),
+        ("b", "bit", ValueKind::Bit, "b'0101'"),
+        ("t1", "tinyint(1)", ValueKind::Integer, "2"),
+        ("y", "year", ValueKind::Integer, "2024"),
+        ("dt", "datetime", ValueKind::Timestamp, "2024-02-29 23:59:59.123456"),
+        ("ts", "timestamp", ValueKind::TimestampTz, "2024-01-01 00:00:00.500"),
+        ("da", "date", ValueKind::Date, "0000-00-00"),
+        ("tm", "time", ValueKind::Interval, "-838:59:59.00"),
+        ("j", "json", ValueKind::Json, "{\"a\": [1, 2]}"),
+        ("e", "enum", ValueKind::Text, "b"),
+        ("s", "set", ValueKind::Text, "x,y"),
+        ("bl", "blob", ValueKind::Bytes, "0x00FF"),
+        ("vb", "varbinary", ValueKind::Bytes, "0x41"),
+        ("c", "char", ValueKind::Text, "ab"),
+    ];
+    for (name, ty, kind, value) in want {
+        let g = got.iter().find(|g| g.0 == name).unwrap();
+        assert_eq!((g.1.as_str(), g.2, g.3.as_deref()), (ty, kind, Some(value)), "{name}");
+    }
+    let g = got.iter().find(|g| g.0 == "g").unwrap();
+    assert_eq!((g.1.as_str(), g.2), ("geometry", ValueKind::Bytes));
+    assert!(g.3.as_deref().is_some_and(|v| v.starts_with("0x00000000")), "SRID 0, then WKB: {:?}", g.3);
+    // Every column names the table column it comes from.
+    assert!(cols.iter().all(|c| matches!(&c.origin,
+        Some(datarig_core::driver::ColumnOrigin::Named { schema, table, column }) if schema == "shop" && *table == t.name && *column == c.name)));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_procedures_further_result_sets_are_read_and_said() {
+    let Some((url, admin)) = urls("a_procedures_further_result_sets") else { return };
+    let name = format!("zz_it_proc_{}", std::process::id());
+    let mut a = side(&admin).await;
+    a.query_drop(format!("DROP PROCEDURE IF EXISTS shop.{name}")).await.unwrap();
+    a.query_drop(format!("CREATE PROCEDURE shop.{name}() BEGIN SELECT 1 AS a; SELECT 2 AS b; END")).await.unwrap();
+    let mut c = Conn::open(&url, SessionRole::Query, false, "proc").await;
+    let evs = c.run(1, &[&format!("CALL shop.{name}()")]).await;
+    a.query_drop(format!("DROP PROCEDURE shop.{name}")).await.unwrap();
+    a.disconnect().await.unwrap();
+    assert_eq!(page_of(&evs).1, &vec![vec![Some("1".to_string())]]);
+    assert_eq!(info(&evs).map(|i| i.more_results), Some(1));
+    c.ok(2, "SELECT 1").await;
+}
+
+/// Count with `sql` (run `id`): the count and whether it saw the transaction's snapshot.
+async fn count(c: &mut Conn, id: u64, sql: String) -> (Result<u64, DbError>, bool) {
+    c.session.send(DbCommand::Count { id, sql });
+    match c.wait(|e| matches!(e, DbEvent::Counted { .. }), 30).await {
+        DbEvent::Counted { result, snapshot, .. } => (result, snapshot),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn counts_and_the_servers_question() {
+    let Some((url, admin)) = urls("counts_and_the_servers_question") else { return };
+    let t = numbers(&admin, "count", 1234).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, "count").await;
+    let sql = format!("SELECT COUNT(*) FROM (\nSELECT id FROM {}\n) AS datarig_count", t.q());
+    assert_eq!(count(&mut c, 1, sql.clone()).await, (Ok(1234), false));
+    c.ok(2, "BEGIN").await;
+    assert_eq!(count(&mut c, 3, sql).await, (Ok(1234), true), "REPEATABLE READ: the transaction's snapshot");
+    c.ok(4, "ROLLBACK").await;
+    let view = "SELECT COUNT(*) FROM (\nSELECT * FROM shop.order_summary\n) AS datarig_count".to_string();
+    assert!(matches!(count(&mut c, 5, view).await.0, Err(DbError::NotRepeatable(_))));
+    c.session.send(DbCommand::CheckRepeat { id: 6, sql: format!("SELECT id FROM {}", t.q()) });
+    assert!(matches!(
+        c.wait(|e| matches!(e, DbEvent::RepeatChecked { .. }), 30).await,
+        DbEvent::RepeatChecked { result: Ok(()), .. }
+    ));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_read_only_session_refuses_and_never_stays_writable() {
+    let Some((url, admin)) = urls("a_read_only_session_refuses") else { return };
+    let t = Table::make(&admin, "ro", &["CREATE TABLE {t} (id INT PRIMARY KEY)"]).await;
+    let proc_name = format!("zz_it_ro_off_{}", std::process::id());
+    let mut a = side(&admin).await;
+    a.query_drop(format!("DROP PROCEDURE IF EXISTS shop.{proc_name}")).await.unwrap();
+    let _gone = Cleanup { url: admin.clone(), sql: format!("DROP PROCEDURE IF EXISTS shop.{proc_name}") };
+    a.query_drop(format!(
+        "CREATE PROCEDURE shop.{proc_name}() BEGIN SET SESSION transaction_read_only = OFF; \
+         INSERT INTO {} VALUES (1); SET SESSION transaction_read_only = ON; END",
+        t.q()
+    ))
+    .await
+    .unwrap();
+    let mut c = Conn::open(&url, SessionRole::Query, true, "ro").await;
+    // A write is refused before the server sees it (the server's read-only, set up at connect,
+    // is the layer behind).
+    let evs = c.run(1, &[&format!("INSERT INTO {} VALUES (1)", t.q())]).await;
+    assert!(matches!(evs.last(), Some(DbEvent::Failed { error: DbError::ReadWriteRefused, .. })), "{evs:?}");
+    // The session refuses to ask for read-write.
+    for (id, sql) in [(2, "START TRANSACTION READ WRITE"), (3, "SET SESSION transaction_read_only = OFF")] {
+        assert!(
+            matches!(c.run(id, &[sql]).await.last(), Some(DbEvent::Failed { error: DbError::ReadWriteRefused, .. })),
+            "{sql}"
+        );
+    }
+    // What the server's read-only does not stop is refused as the app refuses it: an executable
+    // comment, a procedure (this one turns read-only off, writes, and turns it on again, which
+    // the server's report after it would not show), turning the session's reports off.
+    for (id, sql) in [
+        (4, "/*!80000 START TRANSACTION READ WRITE */".to_string()),
+        (5, format!("CALL shop.{proc_name}()")),
+        (6, "SET SESSION session_track_system_variables = ''".to_string()),
+    ] {
+        let evs = c.run(id, &[&sql]).await;
+        assert!(matches!(evs.last(), Some(DbEvent::Failed { error: DbError::ReadWriteRefused, .. })), "{sql}: {evs:?}");
+    }
+    c.ok(7, "SELECT 1").await;
+    a.query_drop(format!("DROP PROCEDURE shop.{proc_name}")).await.unwrap();
+    let n: u64 = a.query_first(format!("SELECT COUNT(*) FROM {}", t.q())).await.unwrap().unwrap();
+    assert_eq!(n, 0, "nothing was written");
+    a.disconnect().await.unwrap();
+}
+
+/// A listing the server cuts at `sql_select_limit` (`SHOW`, `DESCRIBE`) comes whole, last or not,
+/// held or not; `SHOW WARNINGS` still lists the statement before.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_listing_is_never_cut_at_a_page() {
+    let Some(url) = my_url("a_listing_is_never_cut_at_a_page") else { return };
+    let mut c = Conn::open(&url, SessionRole::Query, false, "listing").await;
+    let mut probe = side(&url).await;
+    let all: Vec<(String, String)> = probe.query("SHOW SESSION VARIABLES").await.unwrap();
+    probe.disconnect().await.unwrap();
+    assert!(all.len() > PAGE + 1, "{}", all.len());
+    let rows = |evs: &[DbEvent], index: Option<usize>| -> usize {
+        evs.iter()
+            .map(|e| match e {
+                DbEvent::Page { rows, .. } if index.is_none() => rows.len(),
+                DbEvent::StepRows { index: i, rows, .. } if Some(*i) == index => rows.len(),
+                _ => 0,
+            })
+            .sum()
+    };
+    // After a query set the page limit: last (read on to its end), and before the last.
+    c.ok(1, "SELECT 1").await;
+    let evs = c.run(2, &["SHOW SESSION VARIABLES"]).await;
+    let mut got = rows(&evs, None);
+    let mut more = page_of(&evs).2;
+    while more {
+        c.session.send(DbCommand::FetchMore { id: 2 });
+        match c.wait(|e| matches!(e, DbEvent::Page { .. }), 30).await {
+            DbEvent::Page { rows, more: m, .. } => (got, more) = (got + rows.len(), m),
+            _ => unreachable!(),
+        }
+    }
+    assert_eq!(got, all.len());
+    c.ok(3, "SELECT 1").await;
+    let evs = c.run(4, &["SHOW SESSION VARIABLES", "SELECT 1"]).await;
+    assert_eq!(rows(&evs, Some(0)), all.len(), "{evs:?}");
+    let evs = c.run_as(5, &["SELECT 1", "DESCRIBE shop.users", "SELECT 1"], PagingMode::Hold).await;
+    assert!(rows(&evs, Some(1)) > 1, "{evs:?}");
+    // The warnings of the statement before, not those of a `SET` of the session's.
+    let evs = c.run(6, &["SELECT CAST('1a' AS SIGNED)", "SHOW WARNINGS"]).await;
+    assert_eq!(rows(&evs, None), 1, "{evs:?}");
+}
+
+/// A statement that reads what the one before did reads that, not a `SET` of the session's.
+#[tokio::test(flavor = "multi_thread")]
+async fn row_count_reads_the_statement_before() {
+    let Some((url, admin)) = urls("row_count_reads_the_statement_before") else { return };
+    let t = Table::make(&admin, "rowcount", &["CREATE TABLE {t} (id INT PRIMARY KEY)"]).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, "rowcount").await;
+    let evs =
+        c.run(1, &["SELECT 1", &format!("INSERT INTO {} VALUES (1), (2), (3)", t.q()), "SELECT ROW_COUNT()"]).await;
+    match evs.last() {
+        Some(DbEvent::Page { rows, .. }) => assert_eq!(rows, &vec![vec![Some("3".to_string())]]),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// A dialer whose dials after the first `slow` one take `delay`: a cancel's login that comes late.
+struct SlowDialer {
+    inner: TcpDialer,
+    delay: Duration,
+}
+
+impl Dialer for SlowDialer {
+    fn dial(
+        &self,
+        host: &str,
+        port: u16,
+    ) -> futures::future::BoxFuture<
+        'static,
+        Result<datarig_core::transport::BoxedStream, datarig_core::transport::DialError>,
+    > {
+        let first = self.inner.dials.load(std::sync::atomic::Ordering::SeqCst) == 0;
+        let (dial, delay) = (self.inner.dial(host, port), if first { Duration::ZERO } else { self.delay });
+        Box::pin(async move {
+            tokio::time::sleep(delay).await;
+            dial.await
+        })
+    }
+}
+
+/// A cancel whose kill comes after its statement ended and another run began stops nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_late_cancel_does_not_stop_the_next_run() {
+    let Some(url) = my_url("a_late_cancel_does_not_stop_the_next_run") else { return };
+    let d = Arc::new(SlowDialer { inner: TcpDialer::default(), delay: Duration::from_millis(1500) });
+    let (tx, rx) = unbounded_channel();
+    let o =
+        ConnectOptions::new(PAGE, SessionRole::Query, &tag("latecancel")).dialer(Some(DialerRef(d as Arc<dyn Dialer>)));
+    let session = MyDriver.connect(&profile(&url), SessionRole::Query, o, tx);
+    let mut c = Conn { session, rx };
+    c.wait(|e| matches!(e, DbEvent::Connected), 15).await;
+    c.session.send(DbCommand::Execute {
+        id: 1,
+        statements: vec!["SELECT SLEEP(0.5)".into()],
+        paging: PagingMode::NoHold,
+    });
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    c.session.cancel();
+    c.answer(1).await;
+    // The kill's login is still on its way when the next run begins.
+    let evs = c.run(2, &["SELECT SLEEP(2.5)"]).await;
+    match evs.last() {
+        Some(DbEvent::Page { rows, .. }) => assert_eq!(rows, &vec![vec![Some("0".to_string())]], "not stopped"),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Every row of run `id` in mode `paging` (its pages asked for to the end).
+async fn all_rows(c: &mut Conn, id: u64, sql: &str, paging: PagingMode) -> usize {
+    let evs = c.run_as(id, &[sql], paging).await;
+    let (_, rows, mut more) = page_of(&evs);
+    let mut got = rows.len();
+    while more {
+        c.session.send(DbCommand::FetchMore { id });
+        match c.wait(|e| matches!(e, DbEvent::Page { .. } | DbEvent::Failed { .. }), 30).await {
+            DbEvent::Page { rows, more: m, .. } => (got, more) = (got + rows.len(), m),
+            other => panic!("{other:?}"),
+        }
+    }
+    got
+}
+
+/// A locking read is read whole: the page limit would lock fewer rows than it asks for, and
+/// leave the rest unread.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_locking_read_is_read_whole() {
+    let Some((url, admin)) = urls("a_locking_read_is_read_whole") else { return };
+    let t = numbers(&admin, "locking", 1234).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, "locking").await;
+    for (id, clause) in [(1, "FOR UPDATE"), (2, "FOR SHARE"), (3, "LOCK IN SHARE MODE")] {
+        let sql = format!("SELECT id FROM {} {clause}", t.q());
+        assert_eq!(all_rows(&mut c, id, &sql, PagingMode::NoHold).await, 1234, "{clause}");
+    }
+}
+
+/// A column named as a function that reads the statement before is only a name: a held result
+/// is never cut at the page limit the session has.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_column_named_row_count_is_read_whole() {
+    let Some((url, admin)) = urls("a_column_named_row_count_is_read_whole") else { return };
+    let t = numbers(&admin, "rcname", 1234).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, "rcname").await;
+    c.ok(1, &format!("SELECT id FROM {}", t.q())).await;
+    let sql = format!("SELECT id AS row_count FROM {}", t.q());
+    assert_eq!(all_rows(&mut c, 2, &sql, PagingMode::Hold).await, 1234);
 }

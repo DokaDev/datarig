@@ -217,3 +217,74 @@ fn a_typed_password_mysql_refuses_shows_the_error_instead_of_asking_again() {
     h.command("conn db-remote");
     assert!(h.prompt().is_some());
 }
+
+/// The Execute the app just sent: its id.
+fn sent_run(h: &mut Harness) -> u64 {
+    let sent = h.sent();
+    sent.iter()
+        .rev()
+        .find_map(|c| match c {
+            datarig_core::driver::DbCommand::Execute { id, .. } => Some(*id),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no run sent: {sent:?}"))
+}
+
+#[test]
+fn a_held_result_is_read_on_at_once_on_mysql() {
+    use datarig_core::driver::{ColumnMeta, DbCommand, ValueKind};
+    let mut h = mysql();
+    h.db(DbEvent::Connected);
+    h.ctrl('e');
+    let id = sent_run(&mut h);
+    let cols = vec![ColumnMeta::new("id".into(), "int".into(), ValueKind::Integer, None)];
+    let rows = |n: usize| (0..n).map(|i| vec![Some(i.to_string())]).collect::<Vec<_>>();
+    // Held (no `Released` before it): the next page is asked for at once, without a key.
+    h.tab_db(0, DbEvent::Page { id, columns: Some(cols), rows: rows(500), more: true, elapsed: Default::default() });
+    assert!(h.sent().iter().any(|c| matches!(c, DbCommand::FetchMore { id: f } if *f == id)), "read on");
+    h.tab_db(0, DbEvent::Page { id, columns: None, rows: rows(500), more: true, elapsed: Default::default() });
+    assert!(h.sent().iter().any(|c| matches!(c, DbCommand::FetchMore { .. })), "and on");
+    h.tab_db(0, DbEvent::Page { id, columns: None, rows: rows(20), more: false, elapsed: Default::default() });
+    assert!(h.sent().is_empty(), "read to its end: nothing more is asked");
+    assert!(h.app.tab().exec.running.is_none());
+    assert!(matches!(&h.app.tab().results, datarig_tui::app::Results::Rows(rs) if rs.rows.len() == 1020 && !rs.more));
+}
+
+#[test]
+fn what_the_server_said_of_a_statement_goes_to_messages() {
+    use datarig_core::driver::{Outcome, StatementInfo};
+    let mut h = mysql();
+    h.db(DbEvent::Connected);
+    let tab = h.app.tab().id;
+    let mut editor =
+        datarig_tui::widgets::editor::Editor::new("INSERT INTO t VALUES (1);\nUPDATE t SET a = 2 WHERE id = 1;");
+    editor.set_language(h.app.tab_language(tab));
+    h.app.tab_mut().editor = editor;
+    h.keys("ggvG$");
+    h.sent();
+    h.ctrl('e');
+    if h.app.overlays.run_confirm().is_some() {
+        h.keys("y");
+    }
+    let id = sent_run(&mut h);
+    let info = StatementInfo { insert_id: Some(5), warnings: 2, message: None, more_results: 0 };
+    h.tab_db(0, DbEvent::Started { id, index: 0 });
+    h.tab_db(0, DbEvent::Info { id, index: 0, info });
+    h.tab_db(0, DbEvent::Finished { id, index: 0, outcome: Outcome::Affected(1), elapsed: Default::default() });
+    h.tab_db(0, DbEvent::Started { id, index: 1 });
+    let info = StatementInfo { message: Some("Rows matched: 1  Changed: 1  Warnings: 0".into()), ..Default::default() };
+    h.tab_db(0, DbEvent::Info { id, index: 1, info });
+    h.tab_db(0, DbEvent::Done { id, outcome: Outcome::Affected(1), elapsed: Default::default() });
+    let notes: Vec<String> = h.app.tab().exec.run.notes.iter().map(|n| n.render(&h.app.i18n).to_string()).collect();
+    assert_eq!(
+        notes,
+        [
+            "statement 1: last insert id: 5",
+            "statement 1: 2 warnings: SHOW WARNINGS shows them",
+            "statement 2: the server says: Rows matched: 1  Changed: 1  Warnings: 0",
+        ]
+    );
+    // An answer of an earlier run says nothing here.
+    h.tab_db(0, DbEvent::Info { id: id - 1, index: 0, info: StatementInfo { warnings: 1, ..Default::default() } });
+    assert_eq!(h.app.tab().exec.run.notes.len(), 3);
+}

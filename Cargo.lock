@@ -873,6 +873,7 @@ name = "datarig-bench"
 version = "0.11.0"
 dependencies = [
  "datarig-core",
+ "datarig-driver-mysql",
  "datarig-driver-postgres",
  "datarig-ssh",
  "datarig-tui",
@@ -958,6 +959,7 @@ dependencies = [
  "futures",
  "insta",
  "log",
+ "mysql_async",
  "ratatui",
  "regex",
  "rustix 1.1.5",

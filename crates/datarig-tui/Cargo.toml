@@ -44,6 +44,8 @@ rustix.workspace = true
 [dev-dependencies]
 datarig-core = { workspace = true, features = ["test-util"] }
 insta.workspace = true
+# The MySQL integration tests look at the server from a connection of their own.
+mysql_async.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "sync", "net"] }
 
 [lints]

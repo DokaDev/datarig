@@ -10,7 +10,7 @@ pub mod structure;
 pub use keys::{KeyCatalog, KeyMarks};
 pub use protocol::{
     ArrayElement, Cell, ColumnMeta, ColumnOrigin, DbCommand, DbError, DbEvent, Outcome, PagingMode, SchemaObjects,
-    ValueKind,
+    StatementInfo, ValueKind,
 };
 
 use crate::profile::ConnectionConfig;
@@ -58,6 +58,12 @@ pub struct Capabilities {
     /// The plan the driver's sessions can produce for a statement, `None` for none: the plan
     /// view (`query.explain`, `results.view_as_plan`) is offered only with one.
     pub explain: Option<ExplainFormat>,
+    /// A result held open (`PagingMode::Hold`, or read inside the user's transaction block) keeps
+    /// its statement running on the server, and with it the locks the statement took, until it
+    /// is read to its end (MySQL has no server-side cursor of its own): the app reads such a
+    /// result to its end at once, a page as soon as the one before came (into its own store, up
+    /// to its spill limit), instead of a page whenever the user moves to the next one.
+    pub reads_held_to_end: bool,
 }
 
 /// How a server's namespaces nest (`Capabilities::hierarchy`).

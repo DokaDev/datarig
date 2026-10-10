@@ -133,6 +133,14 @@ impl App {
             t.exec.replace_pending = true;
             t.exec.messages_scroll = 0;
             let lang = t.exec.prepared.language();
+            // A statement that commits the user's open transaction before it runs (MySQL's
+            // implicit commit): said in the run's Messages.
+            if t.exec.user_tx()
+                && let Some(i) = statements.iter().position(|s| Classifier::classify_once(lang, s).implicit_commit)
+            {
+                let m = Notice::new(Msg::QueryImplicitCommit { step: (i + 1).to_string() }, Level::Warning);
+                t.exec.run.notes.push(m);
+            }
             t.exec.ddl = statements.iter().any(|s| changes_schema_in(s, lang.dialect()));
             t.exec.explain_rolled_back =
                 statements.iter().any(|s| Classifier::classify_once(lang, s).rollback_matters());
@@ -386,6 +394,7 @@ impl App {
         let target = match &ev {
             DbEvent::Page { .. }
             | DbEvent::Language(_)
+            | DbEvent::Info { .. }
             | DbEvent::Released { .. }
             | DbEvent::Done { .. }
             | DbEvent::Failed { .. }
@@ -667,6 +676,7 @@ impl App {
             }
             // Statement events never come from the metadata session, nor does its language.
             DbEvent::Language(_)
+            | DbEvent::Info { .. }
             | DbEvent::Released { .. }
             | DbEvent::Page { .. }
             | DbEvent::Done { .. }
@@ -904,8 +914,23 @@ impl App {
             | DbEvent::Started { id: qid, .. }
             | DbEvent::StepRows { id: qid, .. }
             | DbEvent::Finished { id: qid, .. }
+            | DbEvent::Info { id: qid, .. }
                 if qid != t.exec.query_id =>
             {
+                None
+            }
+            // What the server said of a statement beyond its outcome: in the run's Messages.
+            DbEvent::Info { index, info, .. } => {
+                let several = t.exec.run.several();
+                for m in info_notices(&info) {
+                    let m = if several {
+                        let text = self.i18n.msg(&m.msg).to_string();
+                        Notice::new(Msg::QueryInfoStep { step: (index + 1).to_string(), info: text }, m.level)
+                    } else {
+                        m
+                    };
+                    t.exec.run.notes.push(m);
+                }
                 None
             }
             // A run of several statements: which one runs, and what each before the last did.
@@ -1262,7 +1287,26 @@ impl App {
         if fetch_failed {
             self.fetch_copy_failed(id);
         }
+        if rows_for == Some(None) {
+            self.read_held_on(id);
+        }
         self.keys_after_ddl(id, profile, run_ended, tx_ended);
+    }
+
+    /// Tab `id`'s result is held open on a session whose statement runs on until the result is
+    /// read to its end (`Capabilities::reads_held_to_end`, MySQL): its next page is asked for at
+    /// once, so the statement ends (and its locks go) as soon as the rows are in the result's
+    /// store, not when the user pages on.
+    fn read_held_on(&mut self, id: TabId) {
+        let Some(t) = self.tabs.get(id) else { return };
+        let reads = t.exec.session.as_ref().is_some_and(|s| s.caps.reads_held_to_end);
+        if reads
+            && t.exec.running.is_none()
+            && t.exec.resuming.is_none()
+            && matches!(t.exec.paging, Paging::Open { .. })
+        {
+            self.fetch_page(id);
+        }
     }
 
     /// After DDL run in tab `id` the key cache of its profile may be out of date: read it again
@@ -1297,6 +1341,25 @@ pub(crate) fn fmt_bytes(n: u64) -> String {
         n if n >= 1 << 10 && n.is_multiple_of(1 << 10) => format!("{} KB", n >> 10),
         n => format!("{n} B"),
     }
+}
+
+/// What the server said of a statement beyond its outcome ([`StatementInfo`]), as notices of the
+/// run's Messages: warnings as such, the rest as information.
+fn info_notices(info: &datarig_core::driver::StatementInfo) -> Vec<Notice> {
+    let mut out = Vec::new();
+    if let Some(id) = info.insert_id {
+        out.push(Notice::new(Msg::QueryInfoInsertId { id: id.to_string() }, Level::Info));
+    }
+    if info.warnings > 0 {
+        out.push(Notice::new(Msg::QueryInfoWarnings { count: u64::from(info.warnings) }, Level::Warning));
+    }
+    if let Some(text) = &info.message {
+        out.push(Notice::new(Msg::QueryInfoServer { text: text.clone() }, Level::Info));
+    }
+    if info.more_results > 0 {
+        out.push(Notice::new(Msg::QueryInfoMoreResults { count: u64::from(info.more_results) }, Level::Warning));
+    }
+    out
 }
 
 fn rows_msg(count: usize, more: bool, elapsed: Duration) -> Notice {
@@ -1343,6 +1406,7 @@ impl App {
             DbError::NoResult => Label::DbNoResult,
             DbError::Cancelled => Label::QueryCancelled,
             DbError::ReadWriteRefused => Label::DbReadWriteRefused,
+            DbError::ReadOnlyLost => Label::DbReadOnlyLost,
             DbError::Locked => Label::DbLocked,
             DbError::NotFound => Label::DbNotFound,
             DbError::TlsRequired => Label::DbTlsRequired,
