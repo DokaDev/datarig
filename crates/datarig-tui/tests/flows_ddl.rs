@@ -13,6 +13,7 @@ use datarig_core::driver::ddl::{DdlObject, DdlSource, FunctionDdl, RelationDdl};
 use datarig_core::driver::{DbCommand, DbError, DbEvent, SchemaObjects};
 use datarig_core::i18n::Lang;
 use datarig_core::sql::ddl::ddl_text;
+use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
 use datarig_tui::app::tabs::DdlState;
 use datarig_tui::app::{Focus, TabKind};
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
@@ -564,6 +565,23 @@ fn a_typed_name_and_the_explorer_find_the_same_tab() {
     assert!(asked(&h.sent()).is_empty());
 }
 
+/// MySQL text written with backslash escapes (a default server's mode).
+const ESCAPES: Dialect =
+    Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: false, dollar_quotes: false });
+/// And without them (`NO_BACKSLASH_ESCAPES`).
+const NO_ESCAPES: Dialect =
+    Dialect::MySql(MySqlMode { ansi_quotes: false, no_backslash_escapes: true, dollar_quotes: false });
+
+/// The server's own text of `name` in `database`, written with backslash escapes.
+fn verbatim(name: &str, text: &str, database: &str) -> DdlSource {
+    DdlSource::Verbatim {
+        name: name.into(),
+        text: text.into(),
+        database: Some(database.into()),
+        written_in: Some(ESCAPES),
+    }
+}
+
 /// A MySQL profile (its databases are the schemas), the explorer focused, `shop` open with
 /// `items`.
 fn mysql_shop_open() -> Harness {
@@ -638,7 +656,7 @@ fn mysql_shows_the_servers_own_ddl() {
     assert_eq!(first.iter().map(|a| a.1.clone()).collect::<Vec<_>>(), [relation("shop", "items")], "the index's table");
     let table =
         "CREATE TABLE `items` (\n  `id` int NOT NULL,\n  PRIMARY KEY (`id`),\n  KEY `ix_id` (`id`)\n) ENGINE=InnoDB;\n";
-    h.db(answer(first[0].0, Ok(DdlSource::Verbatim { name: "shop.items".into(), text: table.into() })));
+    h.db(answer(first[0].0, Ok(verbatim("shop.items", table, "shop"))));
     assert_eq!(state(&h), DdlState::Loaded);
     assert_eq!(h.app.tab().editor.text(), table);
     let screen = h.screen(120, 30);
@@ -653,19 +671,20 @@ fn mysql_shows_the_servers_own_ddl() {
     h.keys("D");
     assert!(asked(&h.sent()).is_empty(), "the same tab, read already");
     assert_eq!(h.app.tabs.iter().filter(|t| t.is_ddl()).count(), 1);
-    // `:ddl name`: in the tab's database (the profile's own here).
+    // `:ddl name`: in the tab's database, by name (the profile's own here), never what the
+    // shared metadata session has current.
     h.app.focus = Focus::Editor;
     h.command("ddl shop.zz_touch");
     let named = asked(&h.sent());
     assert_eq!(
         named.iter().map(|a| a.1.clone()).collect::<Vec<_>>(),
-        [DdlObject::Named { name: "shop.zz_touch".into(), schema: None }]
+        [DdlObject::Named { name: "shop.zz_touch".into(), schema: Some("datarig".into()) }]
     );
     let routine =
         "DELIMITER ;;\nCREATE DEFINER=`datarig`@`%` PROCEDURE `zz_touch`()\nBEGIN\n  SELECT 1;\nEND\n;;\nDELIMITER ;\n";
-    h.db(answer(named[0].0, Ok(DdlSource::Verbatim { name: "shop.zz_touch".into(), text: routine.into() })));
+    h.db(answer(named[0].0, Ok(verbatim("shop.zz_touch()", routine, "shop"))));
     assert_eq!(h.app.tab().editor.text(), routine);
-    assert!(h.screen(120, 30).contains("DDL · shop.zz_touch"));
+    assert!(h.screen(120, 30).contains("DDL · shop.zz_touch()"));
     h.command("ddl audit");
     let id = asked(&h.sent())[0].0;
     use datarig_core::driver::ddl::ObjectKind;
@@ -682,7 +701,7 @@ fn mysql_shows_the_servers_own_ddl() {
     h.command("ddl procedure audit");
     assert_eq!(
         asked(&h.sent()).into_iter().map(|a| a.1).collect::<Vec<_>>(),
-        [DdlObject::Named { name: "procedure audit".into(), schema: None }]
+        [DdlObject::Named { name: "procedure audit".into(), schema: Some("datarig".into()) }]
     );
     h.command("ddl zz_hidden");
     let id = asked(&h.sent())[0].0;
@@ -706,4 +725,70 @@ fn a_locked_mysql_object_says_so_in_its_words() {
     assert!(screen.contains("an ALTER TABLE or another schema change"), "{screen}");
     assert!(!screen.contains("VACUUM"), "{screen}");
     assert!(!screen.contains("CREATE"), "{screen}");
+}
+
+/// An object of another kind with a table's name has a tab of its own: `D` on the table after
+/// `:ddl procedure items` (or a trigger named `items`) asks for the table, and does not go to the
+/// routine's (or the trigger's) tab.
+#[test]
+fn objects_of_other_kinds_with_a_tables_name_have_tabs_of_their_own() {
+    for (typed, label) in [("procedure items", "shop.items()"), ("trigger items", "shop.orders.items")] {
+        let mut h = mysql_shop_open();
+        h.app.focus = Focus::Editor;
+        h.command(&format!("ddl {typed}"));
+        let id = asked(&h.sent())[0].0;
+        h.db(answer(id, Ok(verbatim(label, "DELIMITER ;;\nCREATE x\n;;\nDELIMITER ;\n", "shop"))));
+        assert!(h.screen(120, 30).contains(&format!("DDL · {label}")));
+        h.explore("local-my");
+        h.goto("items");
+        h.keys("D");
+        assert_eq!(
+            asked(&h.sent()).into_iter().map(|a| a.1).collect::<Vec<_>>(),
+            [relation("shop", "items")],
+            "{typed}: the table is asked for"
+        );
+        assert_eq!(h.app.tabs.iter().filter(|t| t.is_ddl()).count(), 2, "{typed}: a tab each");
+    }
+}
+
+/// `o` on MySQL: a console in the object's database (whatever the DDL tab's), its strings written
+/// as the new console's sql_mode reads them (the DDL tab keeps the server's text). When the
+/// console's mode or the text's is not known, nothing opens and that is said.
+#[test]
+fn o_writes_the_strings_for_the_consoles_mode_in_the_objects_database() {
+    let table = "CREATE TABLE `t` (\n  `v` varchar(9) DEFAULT 'a\\\\b''c\\'d'\n);\n";
+    let open = |console: Option<Dialect>, written_in: Option<Dialect>| {
+        let mut h = mysql_shop_open();
+        if let Some(d) = console {
+            h.db(DbEvent::Language(Language::Sql(d)));
+        }
+        h.goto("items");
+        h.keys("D");
+        let id = asked(&h.sent())[0].0;
+        let mut source = verbatim("shop.items", table, "shop");
+        if let DdlSource::Verbatim { written_in: w, .. } = &mut source {
+            *w = written_in;
+        }
+        h.db(answer(id, Ok(source)));
+        h.app.focus = Focus::Editor;
+        let tabs = h.app.tabs.len();
+        h.keys("o");
+        (h, tabs)
+    };
+    let (h, tabs) = open(Some(NO_ESCAPES), Some(ESCAPES));
+    assert_eq!(h.app.tabs.len(), tabs + 1);
+    assert_eq!(h.app.tab().editor.text(), "CREATE TABLE `t` (\n  `v` varchar(9) DEFAULT 'a\\b''c''d'\n);\n");
+    assert_eq!(h.app.tab().context.schema.as_deref(), Some("shop"), "the object's database");
+    let ddl = h.app.tabs.iter().find(|t| t.is_ddl()).unwrap();
+    assert_eq!(ddl.editor.text(), table, "the DDL tab keeps the server's text");
+    let (h, _) = open(Some(ESCAPES), Some(ESCAPES));
+    assert_eq!(h.app.tab().editor.text(), table, "the same mode: as written");
+    for (console, written_in, says) in [
+        (None, Some(ESCAPES), "the sql_mode a new console of this connection reads its text in is not known yet"),
+        (Some(ESCAPES), None, "how this DDL's strings are written is not known"),
+    ] {
+        let (mut h, tabs) = open(console, written_in);
+        assert_eq!(h.app.tabs.len(), tabs, "nothing opens");
+        assert!(h.status(200, 30).contains(says), "{}", h.status(200, 30));
+    }
 }

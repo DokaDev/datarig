@@ -58,6 +58,9 @@ async fn rows_of<T: FromRow>(conn: &mut Conn, sql: String) -> Result<Vec<T>, DbE
 pub(crate) async fn meta_loop(mut conn: Conn, mut link: Link, events: UnboundedSender<DbEvent>, tracked: Tracked) {
     let server = Server { version: conn.server_version(), mariadb: conn.is_mariadb() };
     let mode = tracked.mode(&server);
+    // The database the session opened in; its current one moves for the DDL reads ([`ddl`]).
+    let home: Option<String> = conn.opts().db_name().filter(|d| !d.is_empty()).map(str::to_string);
+    let mut current = home.clone();
     let Ok(schemas) = link.guard(None, load_schemas(&mut conn)).await else { return };
     let _ = events.send(DbEvent::Schemas(schemas));
     let Ok(catalog) = link.guard(None, load_catalog(&mut conn)).await else { return };
@@ -92,7 +95,13 @@ pub(crate) async fn meta_loop(mut conn: Conn, mut link: Link, events: UnboundedS
                     DbEvent::Structure { schema, table, result: result.map(Box::new) }
                 }
                 DbCommand::LoadDdl { id, object } => {
-                    let result = ddl::load_ddl(&mut conn, mode, tracked.sql_mode.as_deref(), &object).await;
+                    let s = ddl::Session {
+                        mode,
+                        sql_mode: tracked.sql_mode.as_deref(),
+                        home: home.as_deref(),
+                        current: &mut current,
+                    };
+                    let result = ddl::load_ddl(&mut conn, s, &object).await;
                     DbEvent::Ddl { id, result }
                 }
                 // Statements run on a tab's query session, never on the shared metadata one.

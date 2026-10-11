@@ -20,9 +20,22 @@
 //!
 //! A name the user typed (`:ddl [kind] name`, the name bare or quoted, `name` or
 //! `database.name`) is looked up first, in one `information_schema` statement over the tables
-//! and views, routines, triggers and events of the database it names (the session's without
-//! one): a name of more than one of them is [`DbError::Ambiguous`] unless a kind word picks one,
-//! of none [`DbError::NotFound`].
+//! and views, routines, triggers and events of the database it names (without one, the one the
+//! request names, else the one the session opened in; never the session's current one): a name
+//! of more than one of them is [`DbError::Ambiguous`] unless a kind word picks one (a table and a
+//! view are one kind to it), of none [`DbError::NotFound`].
+//!
+//! The server writes a `SHOW CREATE` text's names as the session's current database reads them (a
+//! table's own name never qualified, a view's names qualified when they are of another database).
+//! So the statement runs with the object's database current: when it is not, the session moves
+//! there first (`USE`, one round trip more; the metadata session's other reads name their
+//! database, so they do not depend on it). The text then runs as written in a session in that
+//! database, which the answer names ([`DdlSource::Verbatim`]'s `database`), with the dialect its
+//! strings are written in (`written_in`).
+//!
+//! Each object is named as its kind is (`db.table`, a trigger's `db.table.trigger`, a routine's
+//! `db.name()`, an event's `db.name (event)`), so objects of different kinds with one name are
+//! told apart.
 //!
 //! Like every read of the metadata session each statement runs in autocommit, gives up after the
 //! session's `lock_wait_timeout` behind another session's metadata lock ([`DbError::Locked`]) and
@@ -39,41 +52,66 @@ use mysql_async::{Conn, Row};
 /// (`ER_SP_DOES_NOT_EXIST`), trigger or event.
 const NOT_THERE: [u16; 5] = [1049, 1146, 1305, 1360, 1539];
 
-/// What `name` names in database `{schema}` (the session's, `DATABASE()`, without one): its kind,
-/// database and name as the server has them, one row each; `{none}` the row that says the session
-/// has no database to look in.
-const FIND_NAMED: &str = "{none}SELECT TABLE_TYPE, TABLE_SCHEMA, TABLE_NAME FROM information_schema.TABLES \
-     WHERE TABLE_SCHEMA = {schema} AND TABLE_NAME = {name} \
-     UNION ALL SELECT ROUTINE_TYPE, ROUTINE_SCHEMA, ROUTINE_NAME FROM information_schema.ROUTINES \
+/// What `name` names in database `{schema}`: its kind, database and name as the server has them
+/// (and a trigger's table), one row each.
+const FIND_NAMED: &str = "SELECT TABLE_TYPE, TABLE_SCHEMA, TABLE_NAME, CAST(NULL AS CHAR) \
+     FROM information_schema.TABLES WHERE TABLE_SCHEMA = {schema} AND TABLE_NAME = {name} \
+     UNION ALL SELECT ROUTINE_TYPE, ROUTINE_SCHEMA, ROUTINE_NAME, NULL FROM information_schema.ROUTINES \
      WHERE ROUTINE_SCHEMA = {schema} AND ROUTINE_NAME = {name} \
-     UNION ALL SELECT 'TRIGGER', TRIGGER_SCHEMA, TRIGGER_NAME FROM information_schema.TRIGGERS \
-     WHERE TRIGGER_SCHEMA = {schema} AND TRIGGER_NAME = {name} \
-     UNION ALL SELECT 'EVENT', EVENT_SCHEMA, EVENT_NAME FROM information_schema.EVENTS \
+     UNION ALL SELECT 'TRIGGER', TRIGGER_SCHEMA, TRIGGER_NAME, EVENT_OBJECT_TABLE \
+     FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA = {schema} AND TRIGGER_NAME = {name} \
+     UNION ALL SELECT 'EVENT', EVENT_SCHEMA, EVENT_NAME, NULL FROM information_schema.EVENTS \
      WHERE EVENT_SCHEMA = {schema} AND EVENT_NAME = {name}";
+
+/// A found object: its kind, database, name, and a trigger's table.
+type Found = (ObjectKind, String, String, Option<String>);
+
+/// What the DDL reads need of the metadata session.
+pub(crate) struct Session<'a> {
+    /// The mode its text is read in.
+    pub(crate) mode: MySqlMode,
+    /// Its `sql_mode` (`None`: not known): the connection's default.
+    pub(crate) sql_mode: Option<&'a str>,
+    /// The database it was opened in: a name the user typed without one is looked up there when
+    /// the request names none either.
+    pub(crate) home: Option<&'a str>,
+    /// Its current database, as far as it is known (`None`: not known).
+    pub(crate) current: &'a mut Option<String>,
+}
 
 /// Said first in a table's or a view's text with a backslash: the server's printing escapes
 /// strings with backslashes, which `NO_BACKSLASH_ESCAPES` reads otherwise.
-const BACKSLASH_NOTE: &str =
-    "-- Strings are written with backslash escapes: run this where sql_mode has no NO_BACKSLASH_ESCAPES\n";
+const BACKSLASH_NOTE: &str = "-- Strings are written with backslash escapes, as the server prints them \
+     (a console opened from here gets them as its sql_mode reads them)\n";
 
-/// The kind [`FIND_NAMED`] gives when the session has no database and the name names none.
-const NO_DATABASE: &str = "NO DATABASE";
-
-/// The DDL of `object`, its names written as `mode` reads them; `sql_mode` is the metadata
-/// session's (`None`: not known).
-pub(crate) async fn load_ddl(
-    conn: &mut Conn,
-    mode: MySqlMode,
-    sql_mode: Option<&str>,
-    object: &DdlObject,
-) -> Result<DdlSource, DbError> {
-    let (kind, schema, name) = match object {
-        DdlObject::Relation { schema, name } => (ObjectKind::Table, schema.clone(), name.clone()),
-        DdlObject::Trigger { schema, name, .. } => (ObjectKind::Trigger, schema.clone(), name.clone()),
-        DdlObject::Named { name, schema } => find(conn, mode, name, schema.as_deref()).await?,
+/// The DDL of `object`, read on the metadata session `s`.
+pub(crate) async fn load_ddl(conn: &mut Conn, s: Session<'_>, object: &DdlObject) -> Result<DdlSource, DbError> {
+    let (kind, schema, name, table) = match object {
+        DdlObject::Relation { schema, name } => (ObjectKind::Table, schema.clone(), name.clone(), None),
+        DdlObject::Trigger { schema, table, name } => {
+            (ObjectKind::Trigger, schema.clone(), name.clone(), Some(table.clone()))
+        }
+        DdlObject::Named { name, schema } => find(conn, s.mode, name, schema.as_deref().or(s.home)).await?,
         DdlObject::Index { .. } | DdlObject::TriggerFunction { .. } => return Err(DbError::NotSupported),
     };
-    show(conn, kind, &schema, &name, sql_mode).await
+    if s.current.as_deref() != Some(schema.as_str()) {
+        enter(conn, s.current, &schema).await?;
+    }
+    show(conn, &s, kind, &schema, &name, table.as_deref()).await
+}
+
+/// Make `schema` the session's current database (`USE`), as `current` then says; `current` is
+/// not known while it changes. A database that is not there (or not to the user, which the
+/// server says alike) is [`DbError::NotFound`].
+async fn enter(conn: &mut Conn, current: &mut Option<String>, schema: &str) -> Result<(), DbError> {
+    *current = None;
+    let d = Dialect::MySql(MySqlMode::default());
+    conn.query_drop(format!("USE {}", d.force_quote_ident(schema))).await.map_err(|e| match &e {
+        mysql_async::Error::Server(s) if NOT_THERE.contains(&s.code) => DbError::NotFound,
+        e => super::read_error(e),
+    })?;
+    *current = Some(schema.to_string());
+    Ok(())
 }
 
 /// What a typed name asks for: the kind its first word names (`procedure p`), if any, then its
@@ -114,47 +152,41 @@ fn kind_word(word: &str) -> Option<ObjectKind> {
     }
 }
 
-/// The one object `typed` ([`typed_name`]) names in its database, `schema` without one (the
-/// session's database when `None`): its kind, database and name.
-async fn find(
-    conn: &mut Conn,
-    mode: MySqlMode,
-    typed: &str,
-    schema: Option<&str>,
-) -> Result<(ObjectKind, String, String), DbError> {
+/// The one object `typed` ([`typed_name`]) names in its database, `schema` without one (none:
+/// [`DbError::NoDatabase`]).
+async fn find(conn: &mut Conn, mode: MySqlMode, typed: &str, schema: Option<&str>) -> Result<Found, DbError> {
     let d = Dialect::MySql(mode);
     let (wanted, database, name) = typed_name(typed, d)?;
-    let database = database.as_deref().or(schema).map(|s| d.quote_literal(s));
-    let none = match database {
-        Some(_) => String::new(),
-        None => format!("SELECT '{NO_DATABASE}', '', '' FROM DUAL WHERE DATABASE() IS NULL UNION ALL "),
-    };
-    let sql = FIND_NAMED
-        .replace("{none}", &none)
-        .replace("{schema}", database.as_deref().unwrap_or("DATABASE()"))
-        .replace("{name}", &d.quote_literal(&name));
-    let rows: Vec<(String, String, String)> = super::rows_of(conn, sql).await?;
-    if rows.iter().any(|(k, ..)| k == NO_DATABASE) {
-        return Err(DbError::NoDatabase);
-    }
+    let database = database.as_deref().or(schema).ok_or(DbError::NoDatabase)?;
+    let sql = FIND_NAMED.replace("{schema}", &d.quote_literal(database)).replace("{name}", &d.quote_literal(&name));
+    let rows: Vec<(String, String, String, Option<String>)> = super::rows_of(conn, sql).await?;
+    pick(rows, wanted)
+}
+
+/// The object of `rows` ([`FIND_NAMED`]'s) of kind `wanted` (a table or a view for either: one
+/// statement reads both), or of any kind the DDL is read of. More than one is
+/// [`DbError::Ambiguous`]; none, [`DbError::NotFound`], or [`DbError::KindUnsupported`] when the
+/// name names only objects of a kind not read (and no kind was asked for).
+fn pick(rows: Vec<(String, String, String, Option<String>)>, wanted: Option<ObjectKind>) -> Result<Found, DbError> {
+    let relation = |k: ObjectKind| matches!(k, ObjectKind::Table | ObjectKind::View);
     let mut found = Vec::new();
-    for (kind, schema, name) in rows {
-        let kind = match (kind_of(&kind), wanted) {
-            (Ok(k), _) => k,
-            // Not of the kind asked for.
-            (Err(_), Some(_)) => continue,
-            (Err(e), None) => return Err(e),
-        };
-        if wanted.is_none_or(|w| w == kind) {
-            found.push((kind, schema, name));
+    let mut unsupported = None;
+    for (kind, schema, name, table) in rows {
+        match kind_of(&kind) {
+            Ok(k) if wanted.is_none_or(|w| w == k || (relation(w) && relation(k))) => {
+                found.push((k, schema, name, table))
+            }
+            Ok(_) => {}
+            Err(e) => unsupported = unsupported.or(Some(e)),
         }
     }
     let mut kinds: Vec<ObjectKind> = found.iter().map(|(k, ..)| *k).collect();
     kinds.sort();
     kinds.dedup();
-    match found.len() {
-        1 => Ok(found.remove(0)),
-        0 => Err(DbError::NotFound),
+    match (found.len(), unsupported) {
+        (1, _) => Ok(found.remove(0)),
+        (0, Some(e)) if wanted.is_none() => Err(e),
+        (0, _) => Err(DbError::NotFound),
         _ => Err(DbError::Ambiguous(kinds)),
     }
 }
@@ -214,14 +246,17 @@ fn name_parts(name: &str, d: Dialect) -> Option<Vec<String>> {
     }
 }
 
-/// `SHOW CREATE …` of object `schema.name` of `kind`: its text, ready to run again, with the
-/// `sql_mode` it was made under when that is not `session_mode` ([`runnable`]).
+/// `SHOW CREATE …` of object `schema.name` of `kind` (a trigger's on `table`), with `schema` the
+/// session's current database: its text, ready to run again there, with the `sql_mode` it was
+/// made under when that is not the session's ([`runnable`]), and the dialect its strings are
+/// written in.
 async fn show(
     conn: &mut Conn,
+    s: &Session<'_>,
     kind: ObjectKind,
     schema: &str,
     name: &str,
-    session_mode: Option<&str>,
+    table: Option<&str>,
 ) -> Result<DdlSource, DbError> {
     let what = match kind {
         // A view's too: the server answers with the view's statement.
@@ -259,8 +294,37 @@ async fn show(
         Some(i) => text_of(i).flatten(),
         None => None,
     };
-    let mode = own_mode.filter(|m| session_mode.is_none_or(|s| !same_mode(m, s)));
-    Ok(DdlSource::Verbatim { name: format!("{schema}.{own}"), text: runnable(kind, &text, mode.as_deref()) })
+    let written_in = match kind {
+        // The server's own printing: backslash escapes, names quoted as the session quotes them.
+        ObjectKind::Table | ObjectKind::View => Some(MySqlMode { no_backslash_escapes: false, ..s.mode }),
+        _ => own_mode.as_deref().map(|m| {
+            let has = |flag: &str| m.split(',').any(|f| f.trim().eq_ignore_ascii_case(flag));
+            MySqlMode {
+                ansi_quotes: has("ANSI_QUOTES") || has("ANSI"),
+                no_backslash_escapes: has("NO_BACKSLASH_ESCAPES"),
+                ..s.mode
+            }
+        }),
+    };
+    let note = own_mode.filter(|m| s.sql_mode.is_none_or(|own| !same_mode(m, own)));
+    Ok(DdlSource::Verbatim {
+        name: label(kind, schema, &own, table),
+        text: runnable(kind, &text, note.as_deref()),
+        database: Some(schema.to_string()),
+        written_in: written_in.map(Dialect::MySql),
+    })
+}
+
+/// How object `schema.name` of `kind` is named (a trigger's on `table`): as its kind is, so that
+/// objects of different kinds with one name are told apart.
+fn label(kind: ObjectKind, schema: &str, name: &str, table: Option<&str>) -> String {
+    match (kind, table) {
+        (ObjectKind::Table | ObjectKind::View, _) => format!("{schema}.{name}"),
+        (ObjectKind::Trigger, Some(t)) => format!("{schema}.{t}.{name}"),
+        (ObjectKind::Trigger, None) => format!("{schema}.{name}"),
+        (ObjectKind::Procedure | ObjectKind::Function, _) => format!("{schema}.{name}()"),
+        (ObjectKind::Event, _) => format!("{schema}.{name} (event)"),
+    }
 }
 
 /// Whether two `sql_mode` values set the same flags, in any order.
@@ -281,8 +345,10 @@ fn same_mode(a: &str, b: &str) -> bool {
 /// table's or a view's text with a backslash says first that its strings use backslash escapes.
 fn runnable(kind: ObjectKind, text: &str, sql_mode: Option<&str>) -> String {
     let mode = match sql_mode {
-        Some("") => "-- sql_mode: ''\n".to_string(),
-        Some(m) => format!("-- sql_mode: {m}\n"),
+        Some(m) => {
+            let m = if m.is_empty() { "''" } else { m };
+            format!("-- sql_mode: {m} (the object's own; the connection's default mode is another)\n")
+        }
         None => String::new(),
     };
     match kind {

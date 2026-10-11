@@ -62,12 +62,18 @@ pub struct DdlTab {
     pub request: Option<u64>,
     /// The object as the catalog named it, once read (a name the user typed may differ).
     pub name: Option<String>,
+    /// The database the text was read for, once read: the server's own text (MySQL's) runs as
+    /// written there. `None`: the tab's own.
+    pub database: Option<String>,
+    /// The dialect the server's own text is written in, once read (`None`: not known, or a text
+    /// rebuilt from the catalog, written for the tab's own dialect).
+    pub written_in: Option<datarig_core::sql::dialect::Dialect>,
 }
 
 impl DdlTab {
     /// `object`, not read yet.
     pub fn new(object: datarig_core::driver::ddl::DdlObject) -> Self {
-        Self { object, state: DdlState::NotLoaded, request: None, name: None }
+        Self { object, state: DdlState::NotLoaded, request: None, name: None, database: None, written_in: None }
     }
 
     /// Its name: as the catalog named it once read, else its object's.

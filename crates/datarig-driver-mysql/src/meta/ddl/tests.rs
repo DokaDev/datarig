@@ -87,9 +87,10 @@ fn a_typed_name_may_start_with_its_kind() {
 fn an_objects_own_sql_mode_is_said_first() {
     let body = "CREATE PROCEDURE `p`()\nSELECT 1";
     let text = runnable(ObjectKind::Procedure, body, Some("NO_BACKSLASH_ESCAPES"));
-    assert_eq!(text, format!("-- sql_mode: NO_BACKSLASH_ESCAPES\nDELIMITER ;;\n{body}\n;;\nDELIMITER ;\n"));
+    let note = "-- sql_mode: NO_BACKSLASH_ESCAPES (the object's own; the connection's default mode is another)\n";
+    assert_eq!(text, format!("{note}DELIMITER ;;\n{body}\n;;\nDELIMITER ;\n"));
     assert_eq!(split_in(&text, MY).iter().map(|x| x.body(&text)).collect::<Vec<_>>(), [body]);
-    assert!(runnable(ObjectKind::Event, body, Some("")).starts_with("-- sql_mode: ''\nDELIMITER ;;\n"));
+    assert!(runnable(ObjectKind::Event, body, Some("")).starts_with("-- sql_mode: '' (the object's own;"));
     assert!(same_mode("STRICT_TRANS_TABLES,ONLY_FULL_GROUP_BY", "ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES"));
     assert!(same_mode("", ""));
     assert!(!same_mode("STRICT_TRANS_TABLES", "STRICT_TRANS_TABLES,NO_BACKSLASH_ESCAPES"));
@@ -154,4 +155,46 @@ fn a_tables_text_with_a_backslash_says_how_it_reads() {
     }
     let plain = "CREATE TABLE `t` (\n  `v` varchar(20) DEFAULT 'it''s'\n) ENGINE=InnoDB";
     assert_eq!(runnable(ObjectKind::Table, plain, None), format!("{plain};\n"));
+}
+
+/// Each kind is named as it is, so one name of several kinds names different tabs: a table and a
+/// view `db.name`, a trigger `db.table.trigger`, a routine `db.name()`, an event `db.name (event)`.
+#[test]
+fn each_kind_has_a_name_of_its_own() {
+    assert_eq!(label(ObjectKind::Table, "shop", "items", None), "shop.items");
+    assert_eq!(label(ObjectKind::View, "shop", "items", None), "shop.items");
+    assert_eq!(label(ObjectKind::Trigger, "shop", "items", Some("orders")), "shop.orders.items");
+    assert_eq!(label(ObjectKind::Procedure, "shop", "items", None), "shop.items()");
+    assert_eq!(label(ObjectKind::Function, "shop", "items", None), "shop.items()");
+    assert_eq!(label(ObjectKind::Event, "shop", "items", None), "shop.items (event)");
+}
+
+fn row(kind: &str, name: &str) -> (String, String, String, Option<String>) {
+    (kind.into(), "shop".into(), name.into(), (kind == "TRIGGER").then(|| "orders".to_string()))
+}
+
+/// The lookup's rows: a kind word picks one (a table and a view are one kind to it, as one
+/// statement reads both); a name of several is ambiguous; objects of a kind not read count only
+/// when nothing else is found.
+#[test]
+fn a_found_object_is_picked_by_its_kind() {
+    let (t, v, p, g, pkg) =
+        (row("BASE TABLE", "x"), row("VIEW", "x"), row("PROCEDURE", "x"), row("TRIGGER", "x"), row("PACKAGE", "x"));
+    let found =
+        |k: ObjectKind, table: Option<&str>| Ok((k, "shop".to_string(), "x".to_string(), table.map(str::to_string)));
+    assert_eq!(pick(vec![t.clone()], None), found(ObjectKind::Table, None));
+    assert_eq!(pick(vec![v.clone()], Some(ObjectKind::Table)), found(ObjectKind::View, None), "view x as `table x`");
+    assert_eq!(pick(vec![t.clone()], Some(ObjectKind::View)), found(ObjectKind::Table, None), "table x as `view x`");
+    assert_eq!(pick(vec![t.clone(), p.clone()], Some(ObjectKind::Procedure)), found(ObjectKind::Procedure, None));
+    assert_eq!(pick(vec![g.clone()], None), found(ObjectKind::Trigger, Some("orders")));
+    assert_eq!(
+        pick(vec![t.clone(), p.clone(), g.clone()], None),
+        Err(DbError::Ambiguous(vec![ObjectKind::Table, ObjectKind::Procedure, ObjectKind::Trigger]))
+    );
+    assert_eq!(pick(vec![t.clone()], Some(ObjectKind::Event)), Err(DbError::NotFound));
+    assert_eq!(pick(vec![], None), Err(DbError::NotFound));
+    // A kind that is not read counts only when nothing else is found.
+    assert_eq!(pick(vec![pkg.clone(), p.clone()], None), found(ObjectKind::Procedure, None));
+    assert_eq!(pick(vec![pkg.clone()], None), Err(DbError::KindUnsupported("PACKAGE".into())));
+    assert_eq!(pick(vec![pkg], Some(ObjectKind::Procedure)), Err(DbError::NotFound));
 }
