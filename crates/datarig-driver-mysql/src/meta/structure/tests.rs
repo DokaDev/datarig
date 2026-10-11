@@ -40,7 +40,7 @@ const ITEMS: &str = r#"{"kind":"BASE TABLE","rows":42,"bytes":131072,"trigger_pr
 #[test]
 fn a_table_reads_as_the_model_in_the_servers_order() {
     let s = parse_my(ITEMS).unwrap();
-    assert_eq!((s.kind, s.estimated_rows, s.total_bytes), (RelationKind::Table, Some(42), Some(131072)));
+    assert_eq!((s.kind, s.stats()), (RelationKind::Table, None), "the listing has the estimates");
     let names: Vec<&str> = s.columns.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(names, ["id", "pa", "name", "qty", "price", "created", "twice", "low", "body"]);
     let indexes: Vec<&str> = s.indexes.iter().map(|x| x.name.as_str()).collect();
@@ -48,7 +48,7 @@ fn a_table_reads_as_the_model_in_the_servers_order() {
     let checks: Vec<&str> = s.checks.iter().map(|c| c.name.as_str()).collect();
     assert_eq!(checks, ["ck_loose", "ck_qty"]);
     let triggers: Vec<&str> = s.triggers.iter().map(|t| t.name.as_str()).collect();
-    assert_eq!(triggers, ["items_au", "items_bi"]);
+    assert_eq!(triggers, ["items_bi", "items_au"], "in firing order");
     assert!(s.hidden.is_empty());
 }
 
@@ -168,7 +168,7 @@ fn a_foreign_key_names_the_database_it_references() {
         }]
     );
     assert_eq!(
-        ["NO ACTION", "RESTRICT", "CASCADE", "SET NULL", "SET DEFAULT"].map(fk_action),
+        ["NO ACTION", "RESTRICT", "CASCADE", "SET NULL", "SET DEFAULT"].map(|r| fk_action("fk", r).unwrap()),
         [FkAction::NoAction, FkAction::Restrict, FkAction::Cascade, FkAction::SetNull, FkAction::SetDefault]
     );
 }
@@ -194,7 +194,7 @@ fn checks_read_their_columns_and_say_when_not_enforced() {
 #[test]
 fn triggers_have_no_function_and_keep_their_statement() {
     let s = parse_my(ITEMS).unwrap();
-    let t = &s.triggers[1];
+    let t = &s.triggers[0];
     assert_eq!(
         (t.timing, t.events.as_slice(), t.for_each_row, t.function.as_str(), t.enabled),
         (TriggerTiming::Before, [TriggerEvent::Insert].as_slice(), true, "", true)
@@ -204,7 +204,7 @@ fn triggers_have_no_function_and_keep_their_statement() {
         "CREATE TRIGGER items_bi BEFORE INSERT ON shop.items FOR EACH ROW SET NEW.qty = NEW.qty + 0"
     );
     assert_eq!(
-        s.triggers[0].definition,
+        s.triggers[1].definition,
         "CREATE TRIGGER items_au AFTER UPDATE ON shop.items FOR EACH ROW BEGIN SET @x = 1; END"
     );
     // A timing or event the model has no words for fails the read, it is not left out.
@@ -235,7 +235,7 @@ fn triggers_the_user_may_not_see_are_unknown_not_none() {
 #[test]
 fn kinds_of_tables_are_an_allowlist() {
     let doc = |kind: &str| format!(r#"{{"kind":"{kind}","rows":5,"bytes":0,"trigger_privilege":true}}"#);
-    assert_eq!(parse_my(&doc("BASE TABLE")).unwrap().estimated_rows, Some(5));
+    assert_eq!(parse_my(&doc("BASE TABLE")).unwrap().kind, RelationKind::Table);
     assert_eq!(parse_my(&doc("SYSTEM VERSIONED")).unwrap().kind, RelationKind::Table);
     assert_eq!(parse_my(&doc("SYSTEM VIEW")), Err(DbError::NotSupported));
     assert_eq!(parse_my(&doc("SEQUENCE")), Err(DbError::NotSupported));
@@ -281,7 +281,194 @@ fn a_read_the_server_stopped_or_gave_up_says_so() {
         mysql_async::Error::Server(mysql_async::ServerError { code, message: "m".into(), state: "HY000".into() })
     };
     assert_eq!(super::super::read_error(&server(1205)), DbError::Locked);
-    assert_eq!(super::super::read_error(&server(3024)), DbError::NoAnswer(std::time::Duration::from_secs(10)));
-    assert_eq!(super::super::read_error(&server(1969)), DbError::NoAnswer(std::time::Duration::from_secs(10)));
+    assert_eq!(super::super::read_error(&server(1969)), DbError::Server("ERROR 1969 (HY000): m".into()));
     assert!(matches!(super::super::read_error(&server(1142)), DbError::Server(m) if m.starts_with("ERROR 1142")));
+}
+
+/// A document of one table with `parts` (`"columns": …` and so on) besides its kind.
+fn doc(parts: serde_json::Value) -> String {
+    let mut d = serde_json::json!({"kind": "BASE TABLE", "rows": 7, "bytes": 16384, "trigger_privilege": true});
+    if let (Some(d), Some(p)) = (d.as_object_mut(), parts.as_object()) {
+        d.extend(p.clone());
+    }
+    d.to_string()
+}
+
+fn col(
+    position: u32,
+    name: &str,
+    data_type: &str,
+    default: Option<&str>,
+    extra: &str,
+    generation: &str,
+) -> serde_json::Value {
+    serde_json::json!({"position": position, "name": name, "type": data_type, "data_type": data_type,
+        "nullable": "YES", "default": default, "extra": extra, "generation": generation})
+}
+
+fn key(
+    name: &str,
+    seq: u32,
+    column: Option<&str>,
+    expression: Option<&str>,
+    sub_part: Option<u32>,
+    unique: bool,
+    method: &str,
+) -> serde_json::Value {
+    serde_json::json!({"name": name, "seq": seq, "column": column, "expression": expression, "sub_part": sub_part,
+        "collation": "A", "non_unique": if unique { 0 } else { 1 }, "type": method})
+}
+
+/// MySQL writes the expressions it keeps (a check's condition, a generated column's, a
+/// functional key's, an expression default) with one level of string escaping, MariaDB as they
+/// are: on MySQL the text is unescaped once, so that it is SQL again.
+#[test]
+fn expressions_are_unescaped_once_on_mysql() {
+    let json = doc(serde_json::json!({
+        "columns": [
+            col(1, "s", "varchar", Some(r"concat(_utf8mb4\'a\',_utf8mb4\'\\\'b\')"), "DEFAULT_GENERATED", ""),
+            col(2, "g", "varchar", None, "VIRTUAL GENERATED", r"concat(`s`,_utf8mb4\'x\\\'y\')"),
+            col(3, "QtY", "int", None, "", ""),
+        ],
+        "indexes": [key("fx", 1, None, Some(r"concat(`s`,_utf8mb4\'q\\\'r\')"), None, false, "BTREE")],
+        "checks": [{"name": "ck", "clause": r"((`s` <> _utf8mb4\'a\\\'b\\\\c\') and (`qty` > 0))", "enforced": "YES"}],
+    }));
+    let s = parse_my(&json).unwrap();
+    assert_eq!(s.columns[0].default.as_deref(), Some(r"(concat(_utf8mb4'a',_utf8mb4'\'b'))"));
+    assert_eq!(s.columns[1].fill, ColumnFill::Virtual(r"concat(`s`,_utf8mb4'x\'y')".into()));
+    assert_eq!(s.indexes[0].columns, [r"(concat(`s`,_utf8mb4'q\'r'))"]);
+    assert_eq!(s.checks[0].expression, r"(`s` <> _utf8mb4'a\'b\\c') and (`qty` > 0)");
+    // Every column the condition reads, past the literal, by the table's name for it.
+    assert_eq!(s.checks[0].columns, ["s", "QtY"]);
+    // MariaDB's text is SQL already.
+    let plain = doc(serde_json::json!({"checks": [{"name": "ck", "clause": r"(`s` <> 'a\\b')", "enforced": "YES"}]}));
+    assert_eq!(parse(&plain, true, MY, "shop", "items").unwrap().checks[0].expression, r"`s` <> 'a\\b'");
+    assert_eq!(parse_my(&plain).unwrap().checks[0].expression, r"`s` <> 'a\b'");
+}
+
+/// Reading a table's estimates opens the table when the server has none cached: the structure
+/// does not ask for them, and has none of its own (the schema's listing has them).
+#[test]
+fn the_estimates_are_not_read_with_the_structure() {
+    let sql = statement(Server { version: (8, 4, 6), mariadb: false }, MY, "s", "t");
+    assert!(!sql.contains("TABLE_ROWS") && !sql.contains("DATA_LENGTH") && !sql.contains("INDEX_LENGTH"), "{sql}");
+    let s = parse_my(&doc(serde_json::json!({}))).unwrap();
+    assert_eq!((s.estimated_rows, s.total_bytes, s.stats()), (None, None, None));
+}
+
+/// A spatial key has no prefix of its own (the server says 32): it is not written as one.
+#[test]
+fn a_spatial_key_has_no_prefix() {
+    let s = parse_my(&doc(serde_json::json!({"indexes": [key("sp", 1, Some("g"), None, Some(32), false, "SPATIAL")]})))
+        .unwrap();
+    assert_eq!(s.indexes[0].columns, ["g"]);
+    assert_eq!(s.indexes[0].definition, "CREATE SPATIAL INDEX sp ON shop.items (g)");
+}
+
+/// A unique key on a column's prefix makes only the prefix unique: no unique constraint on the
+/// column, which is not marked unique.
+#[test]
+fn a_unique_prefix_key_is_an_index_only() {
+    let json = doc(serde_json::json!({
+        "columns": [col(1, "b", "text", None, "", "")],
+        "indexes": [key("uq_pre", 1, Some("b"), None, Some(10), true, "BTREE")],
+    }));
+    let s = parse_my(&json).unwrap();
+    assert!(s.unique_constraints.is_empty(), "{:?}", s.unique_constraints);
+    let x = &s.indexes[0];
+    assert!(x.unique && !x.constraint);
+    assert_eq!(x.definition, "CREATE UNIQUE INDEX uq_pre ON shop.items (b(10))");
+    assert!(!s.marks("b").unique);
+}
+
+/// `EXTRA` lists more than the `ON UPDATE` timestamp (`INVISIBLE`, `DEFAULT_GENERATED`): only
+/// the timestamp is the column's. An invisible index says so in its definition.
+#[test]
+fn extra_gives_only_what_belongs_to_each_part() {
+    let json = doc(serde_json::json!({
+        "columns": [
+            col(1, "ts", "timestamp", Some("CURRENT_TIMESTAMP"), "DEFAULT_GENERATED on update CURRENT_TIMESTAMP INVISIBLE", ""),
+            col(2, "t3", "timestamp", None, "on update CURRENT_TIMESTAMP(3) INVISIBLE", ""),
+            col(3, "n", "int", Some("1"), "INVISIBLE", ""),
+        ],
+        "indexes": [{"name": "inv", "seq": 1, "column": "n", "expression": null, "sub_part": null, "collation": "A",
+            "non_unique": 1, "type": "BTREE", "visible": "NO"}],
+    }));
+    let s = parse_my(&json).unwrap();
+    let defaults: Vec<Option<&str>> = s.columns.iter().map(|c| c.default.as_deref()).collect();
+    assert_eq!(
+        defaults,
+        [Some("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"), Some("NULL ON UPDATE CURRENT_TIMESTAMP(3)"), Some("1")]
+    );
+    assert_eq!(s.indexes[0].definition, "CREATE INDEX inv ON shop.items (n) INVISIBLE");
+}
+
+/// A check's condition names a column in its own case (MySQL's column names are not case
+/// sensitive): it is still that column.
+#[test]
+fn check_columns_match_names_in_any_case() {
+    let json = doc(serde_json::json!({
+        "columns": [col(1, "QtY", "int", None, "", ""), col(2, "Price", "int", None, "", "")],
+        "checks": [{"name": "ck", "clause": "((`qty` > 0) and (`PRICE` > 0))", "enforced": "YES"}],
+    }));
+    assert_eq!(parse_my(&json).unwrap().checks[0].columns, ["QtY", "Price"]);
+}
+
+/// Triggers are in the order they fire: by timing and event, then their order among those.
+#[test]
+fn triggers_are_in_firing_order() {
+    let t = |name: &str, timing: &str, event: &str, order: u32| {
+        serde_json::json!({"name": name, "timing": timing, "event": event, "orientation": "ROW",
+            "statement": "SET @x = 1", "order": order})
+    };
+    let json = doc(serde_json::json!({"triggers": [
+        t("a_after_delete", "AFTER", "DELETE", 1),
+        t("b_before_update_2", "BEFORE", "UPDATE", 2),
+        t("c_before_insert", "BEFORE", "INSERT", 1),
+        t("d_before_update_1", "BEFORE", "UPDATE", 1),
+        t("e_after_insert", "AFTER", "INSERT", 1),
+    ]}));
+    let names: Vec<String> = parse_my(&json).unwrap().triggers.into_iter().map(|t| t.name).collect();
+    assert_eq!(
+        names,
+        ["c_before_insert", "d_before_update_1", "b_before_update_2", "e_after_insert", "a_after_delete"]
+    );
+}
+
+/// A foreign key rule the model has no words for fails the read: it is not taken for
+/// `NO ACTION`.
+#[test]
+fn an_unknown_foreign_key_rule_fails_the_read() {
+    let fk = |rule: &str| {
+        doc(serde_json::json!({"foreign_keys": [{"name": "fk", "position": 1, "column": "a", "ref_schema": "s",
+            "ref_table": "p", "ref_column": "a", "on_delete": rule, "on_update": "NO ACTION"}]}))
+    };
+    assert!(parse_my(&fk("CASCADE")).is_ok());
+    assert!(matches!(parse_my(&fk("SET SOMETHING")), Err(DbError::Server(m)) if m.contains("SET SOMETHING")));
+}
+
+/// The privilege tables name a grantee `'user'@'host'`, and a user name may hold an `@`: the
+/// host is after the last one.
+#[test]
+fn the_grantee_is_split_at_the_last_at_sign() {
+    let sql = statement(Server { version: (8, 4, 6), mariadb: false }, MY, "s", "t");
+    assert!(!sql.contains("SUBSTRING_INDEX(CURRENT_USER(), '@', 1)"), "{sql}");
+    assert!(sql.contains("SUBSTRING_INDEX(CURRENT_USER(), '@', -1)"), "{sql}");
+}
+
+/// A read the server stops at the session's time limit keeps the server's own words, which say
+/// what happened.
+#[test]
+fn a_read_past_the_time_limit_keeps_the_servers_message() {
+    let e = mysql_async::Error::Server(mysql_async::ServerError {
+        code: 3024,
+        message: "Query execution was interrupted, maximum statement execution time exceeded".into(),
+        state: "HY000".into(),
+    });
+    assert_eq!(
+        super::super::read_error(&e),
+        DbError::Server(
+            "ERROR 3024 (HY000): Query execution was interrupted, maximum statement execution time exceeded".into()
+        )
+    );
 }

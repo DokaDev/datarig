@@ -14,7 +14,7 @@
 //! ([`structure`]).
 
 use crate::link::{Link, Next};
-use crate::session::{META_TIMEOUT_MS, Server, Tracked, quit};
+use crate::session::{Server, Tracked, quit};
 use datarig_core::driver::structure::RelationStats;
 use datarig_core::driver::{DbCommand, DbError, DbEvent, SchemaObjects};
 use datarig_core::fault::Fault;
@@ -22,7 +22,6 @@ use datarig_core::sql::complete::{Catalog, ColumnInfo, Relation};
 use datarig_core::sql::dialect::{Dialect, MySqlMode};
 use mysql_async::prelude::{FromRow, Queryable};
 use mysql_async::{Conn, Row};
-use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
 
 mod structure;
@@ -33,18 +32,12 @@ const HIDDEN: &str = "('information_schema', 'mysql', 'performance_schema', 'sys
 /// ER_LOCK_WAIT_TIMEOUT: a read gave up behind another session's lock.
 const LOCK_WAIT_TIMEOUT: u16 = 1205;
 
-/// ER_QUERY_TIMEOUT (MySQL) and ER_STATEMENT_TIMEOUT (MariaDB): a read ran past the session's
-/// `max_execution_time` (`max_statement_time`) and the server stopped it.
-const READ_TIMEOUTS: [u16; 2] = [3024, 1969];
-
-/// A failed read as the UI hears it: a lock it gave up on is [`DbError::Locked`], one the server
-/// stopped after the session's time limit [`DbError::NoAnswer`].
+/// A failed read as the UI hears it: a lock it gave up on is [`DbError::Locked`]. One the server
+/// stopped after the session's `max_execution_time` keeps the server's message (MySQL's 3024
+/// says that the time limit was exceeded).
 fn read_error(e: &mysql_async::Error) -> DbError {
     match e {
         mysql_async::Error::Server(s) if s.code == LOCK_WAIT_TIMEOUT => DbError::Locked,
-        mysql_async::Error::Server(s) if READ_TIMEOUTS.contains(&s.code) => {
-            DbError::NoAnswer(Duration::from_millis(META_TIMEOUT_MS))
-        }
         e => crate::session::my_error(e),
     }
 }

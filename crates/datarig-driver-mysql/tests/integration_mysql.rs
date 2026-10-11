@@ -1557,7 +1557,7 @@ async fn the_metadata_session_reads_a_tables_structure() {
     m.wait(|e| matches!(e, DbEvent::Catalog(_)), 30).await;
     let s = structure_of(&mut m, &child).await.unwrap();
     assert_eq!(s.kind, RelationKind::Table);
-    assert!(s.total_bytes.is_some_and(|b| b > 0) && s.estimated_rows.is_some(), "{:?}", s.stats());
+    assert_eq!(s.stats(), None, "the estimates are the listing's");
     let cols: Vec<(&str, &str, bool, Option<&str>, &ColumnFill)> = s
         .columns
         .iter()
@@ -1641,14 +1641,15 @@ async fn the_metadata_session_reads_a_tables_structure() {
     assert_eq!(
         triggers,
         [
-            (format!("zz_it_au_{pid}"), TriggerTiming::After, vec![TriggerEvent::Update], true, ""),
             (format!("zz_it_bi_{pid}"), TriggerTiming::Before, vec![TriggerEvent::Insert], true, ""),
-        ]
+            (format!("zz_it_au_{pid}"), TriggerTiming::After, vec![TriggerEvent::Update], true, ""),
+        ],
+        "in the order they fire"
     );
     assert!(
-        s.triggers[0].definition.ends_with("FOR EACH ROW BEGIN DECLARE x INT; SET x = 1; END"),
+        s.triggers[1].definition.ends_with("FOR EACH ROW BEGIN DECLARE x INT; SET x = 1; END"),
         "{}",
-        s.triggers[0].definition
+        s.triggers[1].definition
     );
     assert!(s.hidden.is_empty());
     // Every definition is MySQL that runs: the indexes and checks on a copy of the table.
@@ -1690,10 +1691,21 @@ async fn the_metadata_session_reads_a_tables_structure() {
     assert_eq!(hidden.columns.len(), 10);
 }
 
-/// Reading a table's structure never queues behind another session's metadata lock (held by
-/// `LOCK TABLES … WRITE`, or asked for by an `ALTER TABLE` that waits behind a held result),
-/// never holds that session up, answers within the session's lock wait (with the structure or
-/// `Locked`), and keeps no metadata lock once it has answered.
+/// How many tables connection `id` has opened (`Opened_tables` of its thread).
+async fn opened_tables(a: &mut mysql_async::Conn, id: u64) -> u64 {
+    let sql = format!(
+        "SELECT CAST(s.VARIABLE_VALUE AS UNSIGNED) FROM performance_schema.status_by_thread s \
+         JOIN performance_schema.threads th ON th.THREAD_ID = s.THREAD_ID \
+         WHERE th.PROCESSLIST_ID = {id} AND s.VARIABLE_NAME = 'Opened_tables'"
+    );
+    a.query_first::<u64, _>(sql).await.unwrap().unwrap()
+}
+
+/// Reading a table's structure never opens the table (a table without cached statistics would
+/// be: its estimates are not read with it), never queues behind another session's metadata lock
+/// (held by `LOCK TABLES … WRITE`, or asked for by an `ALTER TABLE` that waits behind a held
+/// result) and always answers with the structure at once, never holds that session up while it
+/// runs, and keeps no metadata lock once it has answered.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_structure_read_never_queues_behind_a_metadata_lock_nor_keeps_one() {
     let test = "a_structure_read_never_queues_behind_a_metadata_lock_nor_keeps_one";
@@ -1708,23 +1720,34 @@ async fn a_structure_read_never_queues_behind_a_metadata_lock_nor_keeps_one() {
     m.wait(|e| matches!(e, DbEvent::Catalog(_)), 30).await;
     let mut side_admin = side(&admin).await;
     let meta = only_session(&mut side_admin, SessionRole::Meta, test).await;
-    let ok_or_locked = |r: &Result<Box<datarig_core::driver::structure::TableStructure>, DbError>| match r {
-        Ok(s) => assert_eq!(s.columns.len(), 2),
-        Err(e) => assert_eq!(*e, DbError::Locked),
+    let read = |r: Result<Box<datarig_core::driver::structure::TableStructure>, DbError>, columns: usize| {
+        let s = r.expect("the structure, never Locked");
+        assert_eq!(s.columns.len(), columns);
     };
-    // 1. Another session holds `LOCK TABLES … WRITE`.
+    // 1. A new table out of the server's cache, no statistics of it cached (estimating it would
+    //    open it): the read opens nothing.
+    let fresh = numbers(&admin, "structopen", 10).await;
+    side_admin.query_drop(format!("FLUSH TABLES {}", fresh.q())).await.unwrap();
+    let opened = opened_tables(&mut side_admin, meta).await;
+    read(structure_of(&mut m, &fresh.name).await, 2);
+    assert_eq!(opened_tables(&mut side_admin, meta).await, opened, "the table was not opened");
+    // 2. Another session holds `LOCK TABLES … WRITE`.
     let mut lock = side(&admin).await;
     lock.query_drop(format!("LOCK TABLES {} WRITE", t.q())).await.unwrap();
     let t0 = Instant::now();
-    let r = structure_of(&mut m, &t.name).await;
-    assert!(t0.elapsed() < Duration::from_millis(2_500), "{:?}", t0.elapsed());
-    ok_or_locked(&r);
-    assert_eq!(table_locks(&mut side_admin, meta, &t.name).await, 0, "no lock kept");
-    let t0 = Instant::now();
+    m.session.send(DbCommand::LoadStructure { schema: "shop".into(), table: t.name.clone() });
+    // The locking session goes on while the read runs.
+    let t1 = Instant::now();
     lock.query_drop(format!("INSERT INTO {} VALUES (999999, 'w')", t.q())).await.unwrap();
+    assert!(t1.elapsed() < Duration::from_millis(500), "the locking session was not held up: {:?}", t1.elapsed());
+    match m.wait(|e| matches!(e, DbEvent::Structure { .. }), 15).await {
+        DbEvent::Structure { result, .. } => read(result, 2),
+        _ => unreachable!(),
+    }
+    assert!(t0.elapsed() < Duration::from_millis(1_000), "{:?}", t0.elapsed());
+    assert_eq!(table_locks(&mut side_admin, meta, &t.name).await, 0, "no lock kept");
     lock.query_drop("UNLOCK TABLES").await.unwrap();
-    assert!(t0.elapsed() < Duration::from_millis(500), "the locking session was not held up: {:?}", t0.elapsed());
-    // 2. A held result keeps a shared lock and an `ALTER TABLE` waits for it.
+    // 3. A held result keeps a shared lock and an `ALTER TABLE` waits for it.
     let mut q = Conn::open(&url, SessionRole::Query, false, test).await;
     let evs = q.run_as(1, &[&format!("SELECT * FROM {}", t.q())], PagingMode::Hold).await;
     assert!(page_of(&evs).2);
@@ -1747,9 +1770,8 @@ async fn a_structure_read_never_queues_behind_a_metadata_lock_nor_keeps_one() {
         .unwrap();
     assert_eq!(waiting, Some(1), "the ALTER waits");
     let t0 = Instant::now();
-    let r = structure_of(&mut m, &t.name).await;
-    assert!(t0.elapsed() < Duration::from_millis(2_500), "{:?}", t0.elapsed());
-    ok_or_locked(&r);
+    read(structure_of(&mut m, &t.name).await, 2);
+    assert!(t0.elapsed() < Duration::from_millis(1_000), "{:?}", t0.elapsed());
     assert_eq!(table_locks(&mut side_admin, meta, &t.name).await, 0, "no lock kept");
     // The ALTER goes through once the held result is stopped: the read held nothing up.
     let t1 = Instant::now();
@@ -1761,4 +1783,97 @@ async fn a_structure_read_never_queues_behind_a_metadata_lock_nor_keeps_one() {
     let s = structure_of(&mut m, &t.name).await.unwrap();
     assert_eq!(s.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["id", "v", "c9"]);
     side_admin.disconnect().await.unwrap();
+}
+
+/// What MySQL keeps of expressions with string literals (a check, a generated column, a
+/// functional key, an expression default), keys of other kinds (spatial, invisible, a unique
+/// prefix) and an `ON UPDATE` column that is invisible read back as SQL: each definition runs on
+/// a copy of the table, which then behaves as the table does.
+#[tokio::test(flavor = "multi_thread")]
+async fn definitions_with_literals_and_other_keys_run_back() {
+    use datarig_core::driver::structure::*;
+    let test = "definitions_with_literals_and_other_keys_run_back";
+    let Some((url, admin)) = urls(test) else { return };
+    let pid = std::process::id();
+    let t = Table::make(
+        &admin,
+        "literals",
+        &[&format!(
+            r"CREATE TABLE {{t}} (id INT PRIMARY KEY, s VARCHAR(20) DEFAULT (concat('a', '''b')),
+               g VARCHAR(40) GENERATED ALWAYS AS (concat(s, 'x''y')) VIRTUAL, QtY INT, b TEXT,
+               pt POINT NOT NULL SRID 4326,
+               ts TIMESTAMP NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP INVISIBLE,
+               KEY fx ((concat(s, 'q''r'))), UNIQUE KEY uq_pre (b(10)), SPATIAL KEY sp (pt), KEY inv (QtY) INVISIBLE,
+               CONSTRAINT zz_it_lit_ck_{pid} CHECK (s <> 'a''b\\c' AND qty > 0))"
+        )],
+    )
+    .await;
+    let mut m = Conn::start(&url, SessionRole::Meta, false, test);
+    m.wait(|e| matches!(e, DbEvent::Catalog(_)), 30).await;
+    let s = structure_of(&mut m, &t.name).await.unwrap();
+    let column = |name: &str| s.columns.iter().find(|c| c.name == name).unwrap();
+    assert_eq!(column("s").default.as_deref(), Some(r"(concat(_utf8mb4'a',_utf8mb4'\'b'))"));
+    assert_eq!(column("g").fill, ColumnFill::Virtual(r"concat(`s`,_utf8mb4'x\'y')".into()));
+    assert_eq!(column("ts").default.as_deref(), Some("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP"));
+    let index = |name: &str| s.indexes.iter().find(|x| x.name == name).unwrap();
+    assert_eq!(index("fx").columns, [r"(concat(`s`,_utf8mb4'q\'r'))"]);
+    assert!(index("uq_pre").unique && !index("uq_pre").constraint);
+    assert!(s.unique_constraints.is_empty(), "a unique prefix is no unique column");
+    assert_eq!(index("sp").columns, ["pt"]);
+    assert!(index("inv").definition.ends_with(" INVISIBLE"), "{}", index("inv").definition);
+    let ck = &s.checks[0];
+    assert_eq!(ck.expression, r"(`s` <> _utf8mb4'a\'b\\c') and (`qty` > 0)");
+    assert_eq!(ck.columns, ["s", "QtY"]);
+    // The copy: its columns as the structure has them, then every index and check.
+    let copy = Table::make(&admin, "literals_copy", &[]).await;
+    let mut a = side(&admin).await;
+    let generated = match &column("g").fill {
+        ColumnFill::Virtual(e) => e.clone(),
+        other => panic!("{other:?}"),
+    };
+    let create = format!(
+        "CREATE TABLE {} (id INT PRIMARY KEY, s VARCHAR(20) DEFAULT {}, \
+         g VARCHAR(40) GENERATED ALWAYS AS ({generated}) VIRTUAL, \
+         QtY INT, b TEXT, pt POINT NOT NULL SRID 4326, ts TIMESTAMP NULL DEFAULT {})",
+        copy.q(),
+        column("s").default.as_deref().unwrap(),
+        column("ts").default.as_deref().unwrap()
+    );
+    a.query_drop(&create).await.unwrap_or_else(|e| panic!("{create}: {e}"));
+    for x in s.indexes.iter().filter(|x| !x.primary) {
+        let sql = x.definition.replace(&t.q(), &copy.q());
+        a.query_drop(&sql).await.unwrap_or_else(|e| panic!("{sql}: {e}"));
+    }
+    for c in &s.checks {
+        let sql = format!("ALTER TABLE {} ADD {}", copy.q(), c.definition.replace("zz_it_lit_", "zz_it_litc_"));
+        a.query_drop(&sql).await.unwrap_or_else(|e| panic!("{sql}: {e}"));
+    }
+    // It behaves as the table: the default, the generated value, the check on the literal.
+    let pt = "ST_GeomFromText('POINT(1 1)', 4326)";
+    a.query_drop(format!("INSERT INTO {} (id, QtY, pt) VALUES (1, 1, {pt})", copy.q())).await.unwrap();
+    let row: Option<(String, String)> = a.query_first(format!("SELECT s, g FROM {}", copy.q())).await.unwrap();
+    assert_eq!(row, Some(("a'b".to_string(), "a'bx'y".to_string())));
+    let refused =
+        a.query_drop(format!(r"INSERT INTO {} (id, s, QtY, pt) VALUES (2, 'a''b\\c', 1, {pt})", copy.q())).await;
+    assert!(matches!(refused, Err(mysql_async::Error::Server(ref e)) if e.code == 3819), "{refused:?}");
+    a.disconnect().await.unwrap();
+}
+
+/// A user whose name holds an `@`, with the `TRIGGER` privilege on a table without triggers:
+/// the privilege is found (the grantee's host is after the last `@`), so the empty list is
+/// none, not unknown.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_user_name_with_an_at_sign_finds_its_trigger_privilege() {
+    let test = "a_user_name_with_an_at_sign_finds_its_trigger_privilege";
+    let Some((url, admin)) = urls(test) else { return };
+    let t = numbers(&admin, "atsign", 10).await;
+    let account = Account::make(&admin, "a@b", "BY 'pw'").await.unwrap();
+    let mut a = side(&admin).await;
+    a.query_drop(format!("GRANT TRIGGER ON {} TO '{}'@'%'", t.q(), account.name)).await.unwrap();
+    a.disconnect().await.unwrap();
+    let mut m = Conn::start(&as_user(&url, &account.name, "pw"), SessionRole::Meta, false, test);
+    m.wait(|e| matches!(e, DbEvent::Catalog(_)), 30).await;
+    let s = structure_of(&mut m, &t.name).await.unwrap();
+    assert!(s.triggers.is_empty());
+    assert!(s.hidden.is_empty(), "the privilege is the user's: {:?}", s.hidden);
 }
