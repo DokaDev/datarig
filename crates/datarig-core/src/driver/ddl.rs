@@ -40,6 +40,21 @@ impl DdlObject {
     }
 }
 
+/// What kind of object a name names, where objects of different kinds may share a name (MySQL:
+/// a table, a procedure and a trigger of one database may all be `audit`), for saying which
+/// ones a name names when it names more than one ([`DbError::Ambiguous`]).
+///
+/// [`DbError::Ambiguous`]: super::DbError::Ambiguous
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ObjectKind {
+    Table,
+    View,
+    Procedure,
+    Function,
+    Trigger,
+    Event,
+}
+
 /// An object's DDL as the catalog has it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DdlSource {

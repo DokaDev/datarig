@@ -563,3 +563,118 @@ fn a_typed_name_and_the_explorer_find_the_same_tab() {
     assert_eq!(h.app.tab().id, tab, "the same tab");
     assert!(asked(&h.sent()).is_empty());
 }
+
+/// A MySQL profile (its databases are the schemas), the explorer focused, `shop` open with
+/// `items`.
+fn mysql_shop_open() -> Harness {
+    let driver = FakeDriver::default();
+    driver.mysql.store(true, std::sync::atomic::Ordering::SeqCst);
+    let mut p = datarig_core::profile::ConnectionConfig::test_db();
+    p.name = "local-my".into();
+    p.driver = "mysql".into();
+    let cfg = datarig_core::config::Config { connections: vec![p], ..Default::default() };
+    let mut h = Harness::with_driver(&cfg, Lang::En, driver);
+    h.app.icons = IconsSetting::Off;
+    h.db(DbEvent::Connected);
+    h.db(DbEvent::Schemas(Ok(vec!["datarig".into(), "shop".into()])));
+    h.explore("local-my");
+    h.goto("shop");
+    h.key(KeyCode::Char('l'));
+    h.db(DbEvent::Objects { schema: "shop".into(), result: Ok((vec!["items".into()], vec![]).into()) });
+    h.sent();
+    h
+}
+
+/// `shop.items` as MySQL describes it: a key and an index.
+fn mysql_items_structure() -> datarig_core::driver::structure::TableStructure {
+    use datarig_core::driver::structure::*;
+    let index = |name: &str| Index {
+        name: name.into(),
+        columns: vec!["id".into()],
+        options: vec![String::new()],
+        include: Vec::new(),
+        key_columns: vec![Some("id".into())],
+        include_columns: Vec::new(),
+        unique: name == "PRIMARY",
+        method: "BTREE".into(),
+        predicate: None,
+        primary: name == "PRIMARY",
+        constraint: name == "PRIMARY",
+        definition: String::new(),
+    };
+    let mut t = TableStructure::new(RelationKind::Table);
+    t.columns = vec![StructureColumn {
+        name: "id".into(),
+        type_name: "int".into(),
+        not_null: true,
+        default: None,
+        fill: ColumnFill::Default,
+    }];
+    t.indexes = vec![index("PRIMARY"), index("ix_id")];
+    t
+}
+
+/// On MySQL the DDL is the server's own text (`SHOW CREATE …`), shown as it is under its
+/// `database.object` name, without the header of a reconstructed one. An index has no DDL of its
+/// own there: `D` on an index row shows its table's (the same tab as `D` on the table). `:ddl
+/// name` asks for what the name names in the tab's database; a routine's text comes between
+/// `DELIMITER` lines, and a name of more than one object says which kinds it names.
+#[test]
+fn mysql_shows_the_servers_own_ddl() {
+    let mut h = mysql_shop_open();
+    h.goto("items");
+    h.key(KeyCode::Char('l'));
+    h.sent();
+    h.db(DbEvent::Structure {
+        schema: "shop".into(),
+        table: "items".into(),
+        result: Ok(Box::new(mysql_items_structure())),
+    });
+    h.goto("Indexes");
+    h.key(KeyCode::Char('l'));
+    h.goto("ix_id");
+    h.keys("D");
+    let first = asked(&h.sent());
+    assert_eq!(first.iter().map(|a| a.1.clone()).collect::<Vec<_>>(), [relation("shop", "items")], "the index's table");
+    let table =
+        "CREATE TABLE `items` (\n  `id` int NOT NULL,\n  PRIMARY KEY (`id`),\n  KEY `ix_id` (`id`)\n) ENGINE=InnoDB;\n";
+    h.db(answer(first[0].0, Ok(DdlSource::Verbatim { name: "shop.items".into(), text: table.into() })));
+    assert_eq!(state(&h), DdlState::Loaded);
+    assert_eq!(h.app.tab().editor.text(), table);
+    let screen = h.screen(120, 30);
+    assert!(screen.contains("DDL · shop.items"), "{screen}");
+    assert!(screen.contains("CREATE TABLE `items` ("), "{screen}");
+    assert!(!screen.contains("Reconstructed by datarig"), "{screen}");
+    // `D` on the table: the same tab, read already.
+    h.app.focus = Focus::Tree;
+    while !h.explorer_line().trim_end().ends_with("items") {
+        h.keys("k");
+    }
+    h.keys("D");
+    assert!(asked(&h.sent()).is_empty(), "the same tab, read already");
+    assert_eq!(h.app.tabs.iter().filter(|t| t.is_ddl()).count(), 1);
+    // `:ddl name`: in the tab's database (the profile's own here).
+    h.app.focus = Focus::Editor;
+    h.command("ddl shop.zz_touch");
+    let named = asked(&h.sent());
+    assert_eq!(
+        named.iter().map(|a| a.1.clone()).collect::<Vec<_>>(),
+        [DdlObject::Named { name: "shop.zz_touch".into(), schema: None }]
+    );
+    let routine =
+        "DELIMITER ;;\nCREATE DEFINER=`datarig`@`%` PROCEDURE `zz_touch`()\nBEGIN\n  SELECT 1;\nEND ;;\nDELIMITER ;\n";
+    h.db(answer(named[0].0, Ok(DdlSource::Verbatim { name: "shop.zz_touch".into(), text: routine.into() })));
+    assert_eq!(h.app.tab().editor.text(), routine);
+    assert!(h.screen(120, 30).contains("DDL · shop.zz_touch"));
+    h.command("ddl audit");
+    let id = asked(&h.sent())[0].0;
+    use datarig_core::driver::ddl::ObjectKind;
+    h.db(answer(id, Err(DbError::Ambiguous(vec![ObjectKind::Table, ObjectKind::Procedure]))));
+    let screen = h.screen(160, 30);
+    assert!(screen.contains("the name names more than one object here (a table, a procedure)"), "{screen}");
+    h.command("ddl zz_hidden");
+    let id = asked(&h.sent())[0].0;
+    h.db(answer(id, Err(DbError::DefinitionHidden)));
+    let screen = h.screen(200, 30);
+    assert!(screen.contains("the server does not show its definition to this user"), "{screen}");
+}

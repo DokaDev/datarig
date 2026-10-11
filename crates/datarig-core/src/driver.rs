@@ -47,7 +47,8 @@ pub struct Capabilities {
     /// DDL: the metadata session reads what an object's `CREATE` statement needs from the
     /// catalog when asked (`DbCommand::LoadDdl`, answered with [`DbEvent::Ddl`]), never
     /// waiting for a lock; the UI shows it as SQL in a read-only tab. PostgreSQL answers with
-    /// the catalog's parts (`ddl::DdlSource`), which `sql::ddl` writes out.
+    /// the catalog's parts (`ddl::DdlSource`), which `sql::ddl` writes out; MySQL with the
+    /// server's own text (`DdlSource::Verbatim`).
     pub ddl: bool,
     /// The editor language of the driver's sessions: the SQL tools (lexing, quoting, the risk
     /// classifier) pick their rules from it.

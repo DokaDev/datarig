@@ -12,6 +12,9 @@
 //! (`TABLE_ROWS`, `DATA_LENGTH + INDEX_LENGTH`, kept for `information_schema_stats_expiry`): the
 //! explorer labels them approximate. A table's structure is one statement too
 //! ([`structure`]).
+//!
+//! An object's DDL is the server's own `SHOW CREATE …` (after a lookup, for a name the user
+//! typed): a read like the others, one statement each ([`ddl`]).
 
 use crate::link::{Link, Next};
 use crate::session::{Server, Tracked, quit};
@@ -24,6 +27,7 @@ use mysql_async::prelude::{FromRow, Queryable};
 use mysql_async::{Conn, Row};
 use tokio::sync::mpsc::UnboundedSender;
 
+mod ddl;
 mod structure;
 
 /// The databases of the server's own, never listed.
@@ -87,7 +91,9 @@ pub(crate) async fn meta_loop(mut conn: Conn, mut link: Link, events: UnboundedS
                     let result = structure::load_structure(&mut conn, server, mode, &schema, &table).await;
                     DbEvent::Structure { schema, table, result: result.map(Box::new) }
                 }
-                DbCommand::LoadDdl { id, .. } => DbEvent::Ddl { id, result: Err(DbError::NotSupported) },
+                DbCommand::LoadDdl { id, object } => {
+                    DbEvent::Ddl { id, result: ddl::load_ddl(&mut conn, mode, &object).await }
+                }
                 // Statements run on a tab's query session, never on the shared metadata one.
                 DbCommand::Execute { id, .. }
                 | DbCommand::Resume { id, .. }

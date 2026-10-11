@@ -1879,4 +1879,313 @@ async fn a_user_name_with_an_at_sign_finds_its_trigger_privilege() {
     let s = structure_of(&mut m, &t.name).await.unwrap();
     assert!(s.triggers.is_empty());
     assert!(s.hidden.is_empty(), "the privilege is the user's: {:?}", s.hidden);
+
+// ── DDL ────────────────────────────────────────────────────────────────────
+
+/// The user of the tests' URL (`DATARIG_TEST_MYSQL_URL`) as a definer.
+const DEFINER: &str = "`datarig`@`%`";
+
+/// The DDL the metadata session `m` reads of `object`.
+async fn ddl_of(
+    m: &mut Conn,
+    object: datarig_core::driver::ddl::DdlObject,
+) -> Result<datarig_core::driver::ddl::DdlSource, DbError> {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    m.session.send(DbCommand::LoadDdl { id, object });
+    match m.wait(|e| matches!(e, DbEvent::Ddl { id: i, .. } if *i == id), 15).await {
+        DbEvent::Ddl { result, .. } => result,
+        _ => unreachable!(),
+    }
+}
+
+/// The name and text of a DDL the server wrote.
+fn verbatim(r: Result<datarig_core::driver::ddl::DdlSource, DbError>) -> (String, String) {
+    match r {
+        Ok(datarig_core::driver::ddl::DdlSource::Verbatim { name, text }) => (name, text),
+        other => panic!("not the server's text: {other:?}"),
+    }
+}
+
+/// Run DDL text `text` as the editor runs it (the statements its splitter finds, `DELIMITER`
+/// lines read by it and not sent) on query session `q`: each must succeed.
+async fn replay(q: &mut Conn, id: &mut u64, text: &str) {
+    let mysql = Dialect::MySql(MySqlMode::default());
+    let statements = datarig_core::sql::split::split_in(text, mysql);
+    assert!(!statements.is_empty(), "{text}");
+    for s in statements {
+        *id += 1;
+        q.ok(*id, s.body(text)).await;
+    }
+}
+
+/// The DDL of each kind of object, the server's own text: a table's and a view's (`SHOW CREATE
+/// TABLE`, ended with `;`), a trigger's, a procedure's, a function's and an event's (between
+/// `DELIMITER` lines), named `database.object`; a name typed bare, qualified or quoted is looked
+/// up in the session's database or the one it names. The text of the table, view, trigger and
+/// procedure runs again as the editor runs it (on copies with other names) and makes the same
+/// objects. A name of a table and a procedure is ambiguous; one of nothing, an object that is
+/// not there, is not found; an index and a trigger's function have no DDL of their own here.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_metadata_session_shows_the_servers_ddl() {
+    use datarig_core::driver::ddl::{DdlObject, ObjectKind};
+    let test = "the_metadata_session_shows_the_servers_ddl";
+    let Some((url, admin)) = urls(test) else { return };
+    let b = format!("zz_it_ddl_{}", std::process::id());
+    // Dropped also when the test fails (a table's triggers with it).
+    let mut guards = Vec::new();
+    for (what, name) in [
+        ("TABLE", b.clone()),
+        ("TABLE", format!("{b}c")),
+        ("VIEW", format!("{b}_v")),
+        ("VIEW", format!("{b}_vc")),
+        ("PROCEDURE", b.clone()),
+        ("PROCEDURE", format!("{b}_p")),
+        ("PROCEDURE", format!("{b}_pc")),
+        ("PROCEDURE", format!("{b}_h")),
+        ("FUNCTION", format!("{b}_f")),
+        ("EVENT", format!("{b}_e")),
+    ] {
+        guards.push(Cleanup { url: admin.clone(), sql: format!("DROP {what} IF EXISTS shop.{name}") });
+    }
+    let mut a = side(&admin).await;
+    for sql in [
+        format!(
+            "CREATE TABLE shop.{b} (id INT NOT NULL AUTO_INCREMENT PRIMARY KEY, \
+             name VARCHAR(40) NOT NULL DEFAULT 'a;b' COMMENT 'it''s; \"quoted\"', \
+             twice INT GENERATED ALWAYS AS (CHAR_LENGTH(name) * 2) STORED, KEY ix_name (name(8), id DESC)) COMMENT 'x;y'"
+        ),
+        format!("CREATE VIEW shop.{b}_v AS SELECT id, CONCAT(name, ';') AS n FROM shop.{b} WHERE name <> ';'"),
+        format!(
+            "CREATE TRIGGER shop.{b}_bi BEFORE INSERT ON shop.{b} FOR EACH ROW BEGIN \
+             SET NEW.name = CONCAT(NEW.name, ';;'); -- a comment; with a ;\n SET NEW.name = UPPER(NEW.name); END"
+        ),
+        // The session's user is their definer: it may see their text.
+        format!("CREATE DEFINER = {DEFINER} PROCEDURE shop.{b}_p(IN a INT) BEGIN SELECT a; SELECT ';', a + 1; END"),
+        format!(
+            "CREATE DEFINER = {DEFINER} FUNCTION shop.{b}_f(a INT) RETURNS INT DETERMINISTIC BEGIN RETURN a + 1; END"
+        ),
+        format!("CREATE EVENT shop.{b}_e ON SCHEDULE EVERY 1 DAY DISABLE DO BEGIN SELECT 1; END"),
+        format!("CREATE PROCEDURE shop.{b}() SELECT 1"),
+        // Another's: the session's user may run it, not see it.
+        format!("CREATE PROCEDURE shop.{b}_h() SELECT 1"),
+    ] {
+        a.query_drop(sql).await.unwrap();
+    }
+    a.disconnect().await.unwrap();
+    let mut m = Conn::start(&url, SessionRole::Meta, false, test);
+    m.wait(|e| matches!(e, DbEvent::Catalog(_)), 30).await;
+    let shop = || "shop".to_string();
+    let named =
+        |name: &str, schema: Option<&str>| DdlObject::Named { name: name.into(), schema: schema.map(Into::into) };
+
+    let (name, table) = verbatim(ddl_of(&mut m, DdlObject::Relation { schema: shop(), name: b.clone() }).await);
+    assert_eq!(name, format!("shop.{b}"));
+    assert!(table.starts_with(&format!("CREATE TABLE `{b}` (\n")), "{table}");
+    assert!(table.ends_with(" COMMENT='x;y';\n"), "{table}");
+    assert!(table.contains("KEY `ix_name` (`name`(8),`id` DESC)"), "{table}");
+    let (name, view) = verbatim(ddl_of(&mut m, DdlObject::Relation { schema: shop(), name: format!("{b}_v") }).await);
+    assert_eq!(name, format!("shop.{b}_v"));
+    assert!(view.starts_with("CREATE ALGORITHM=UNDEFINED DEFINER="), "{view}");
+    assert!(view.contains(&format!(" VIEW `{b}_v` AS select ")) && view.ends_with(";\n"), "{view}");
+    let trigger = DdlObject::Trigger { schema: shop(), table: b.clone(), name: format!("{b}_bi") };
+    let (name, trig) = verbatim(ddl_of(&mut m, trigger).await);
+    assert_eq!(name, format!("shop.{b}_bi"));
+    assert!(trig.starts_with("DELIMITER ;;\nCREATE DEFINER="), "{trig}");
+    assert!(trig.contains(&format!(" TRIGGER `{b}_bi` BEFORE INSERT ON `{b}` FOR EACH ROW BEGIN")), "{trig}");
+    assert!(trig.ends_with(" END ;;\nDELIMITER ;\n"), "{trig}");
+    let (name, proc) = verbatim(ddl_of(&mut m, named(&format!("{b}_p"), Some("shop"))).await);
+    assert_eq!(name, format!("shop.{b}_p"));
+    assert!(proc.starts_with("DELIMITER ;;\nCREATE DEFINER=") && proc.ends_with(" END ;;\nDELIMITER ;\n"), "{proc}");
+    assert!(proc.contains(&format!(" PROCEDURE `{b}_p`(IN a INT)")), "{proc}");
+    let (name, func) =
+        verbatim(ddl_of(&mut m, named(&format!("shop.{}", format!("{b}_f").to_uppercase()), None)).await);
+    assert_eq!(name, format!("shop.{b}_f"), "a routine's name is the same in any case");
+    assert!(func.contains(&format!(" FUNCTION `{b}_f`(a INT) RETURNS int")), "{func}");
+    let (name, event) = verbatim(ddl_of(&mut m, named(&format!("`{b}_e`"), None)).await);
+    assert_eq!(name, format!("shop.{b}_e"), "in the session's database");
+    assert!(
+        event.contains(&format!(" EVENT `{b}_e` ON SCHEDULE EVERY 1 DAY")) && event.ends_with(";;\nDELIMITER ;\n"),
+        "{event}"
+    );
+    // The same objects through `:ddl name`.
+    assert_eq!(verbatim(ddl_of(&mut m, named(&format!("{b}_v"), Some("shop"))).await).1, view);
+    assert_eq!(verbatim(ddl_of(&mut m, named(&format!("`shop`.`{b}_bi`"), None)).await).1, trig);
+    let elsewhere = ddl_of(&mut m, named(&format!("{b}_p"), Some("datarig"))).await;
+    assert_eq!(elsewhere, Err(DbError::NotFound), "looked up in the database it is given");
+    // Ambiguous, not there, none of its own.
+    assert_eq!(
+        ddl_of(&mut m, named(&b, Some("shop"))).await,
+        Err(DbError::Ambiguous(vec![ObjectKind::Table, ObjectKind::Procedure]))
+    );
+    assert_eq!(ddl_of(&mut m, named(&format!("{b}_h"), Some("shop"))).await, Err(DbError::DefinitionHidden));
+    for object in [
+        named("zz_it_nothing_here", Some("shop")),
+        named("zz_it_no_db.x", None),
+        named("a.b.c", None),
+        DdlObject::Relation { schema: shop(), name: "zz_it_nothing_here".into() },
+        DdlObject::Trigger { schema: shop(), table: b.clone(), name: "zz_it_nothing_here".into() },
+    ] {
+        assert_eq!(ddl_of(&mut m, object.clone()).await, Err(DbError::NotFound), "{object:?}");
+    }
+    // A database the user may not see: the server says so, as it would of one that is not there.
+    let denied = ddl_of(&mut m, DdlObject::Relation { schema: "zz_it_no_db".into(), name: "x".into() }).await;
+    assert!(matches!(&denied, Err(DbError::Server(e)) if e.starts_with("ERROR 1142 ")), "{denied:?}");
+    for object in [
+        DdlObject::Index { schema: shop(), name: "ix_name".into() },
+        DdlObject::TriggerFunction { schema: shop(), table: b.clone(), trigger: format!("{b}_bi") },
+    ] {
+        assert_eq!(ddl_of(&mut m, object).await, Err(DbError::NotSupported));
+    }
+
+    // Run again under other names, as the editor runs it: the same objects.
+    let mut q = Conn::open(&in_database(&admin, "shop"), SessionRole::Query, false, test).await;
+    let mut id = 0;
+    let rename = |text: &str, from: &[(String, String)]| {
+        from.iter().fold(text.to_string(), |t, (a, b)| t.replace(&format!("`{a}`"), &format!("`{b}`")))
+    };
+    let copies = [
+        (b.clone(), format!("{b}c")),
+        (format!("{b}_v"), format!("{b}_vc")),
+        (format!("{b}_bi"), format!("{b}_bic")),
+        (format!("{b}_p"), format!("{b}_pc")),
+    ];
+    for text in [&table, &view, &trig, &proc] {
+        replay(&mut q, &mut id, &rename(text, &copies)).await;
+    }
+    let again = |name: String| DdlObject::Relation { schema: shop(), name };
+    assert_eq!(verbatim(ddl_of(&mut m, again(format!("{b}c"))).await).1, rename(&table, &copies));
+    assert_eq!(verbatim(ddl_of(&mut m, again(format!("{b}_vc"))).await).1, rename(&view, &copies));
+    let trigger = DdlObject::Trigger { schema: shop(), table: format!("{b}c"), name: format!("{b}_bic") };
+    assert_eq!(verbatim(ddl_of(&mut m, trigger).await).1, rename(&trig, &copies));
+    assert_eq!(verbatim(ddl_of(&mut m, named(&format!("{b}_pc"), Some("shop"))).await).1, rename(&proc, &copies));
+    // The copied trigger and procedure work.
+    q.ok(100, &format!("INSERT INTO {b}c (name) VALUES ('x')")).await;
+    let evs = q.run(101, &[&format!("SELECT name FROM {b}c")]).await;
+    assert_eq!(page_of(&evs).1[0][0].as_deref(), Some("X;;"));
+}
+
+/// The metadata locks connection `id` holds, of any object.
+async fn locks_of(a: &mut mysql_async::Conn, id: u64) -> u64 {
+    let sql = format!(
+        "SELECT COUNT(*) FROM performance_schema.metadata_locks m JOIN performance_schema.threads th \
+         ON th.THREAD_ID = m.OWNER_THREAD_ID WHERE th.PROCESSLIST_ID = {id}"
+    );
+    a.query_first::<u64, _>(sql).await.unwrap().unwrap()
+}
+
+/// A DDL read (a table's, a view's over it, a trigger's of it, and one by name) behind another
+/// session's metadata lock (`LOCK TABLES … WRITE` held, or an `ALTER TABLE` waiting behind a
+/// held result's shared lock) never holds that session up, answers within the session's lock
+/// wait (with the DDL or `Locked`), and keeps no metadata lock once it has answered.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_ddl_read_never_queues_behind_a_metadata_lock_nor_keeps_one() {
+    use datarig_core::driver::ddl::DdlObject;
+    let test = "a_ddl_read_never_queues_behind_a_metadata_lock_nor_keeps_one";
+    let Some((url, admin)) = urls(test) else { return };
+    let t = numbers(&admin, "ddllock", 200_000).await;
+    let (view, trigger) = (format!("{}_v", t.name), format!("{}_bi", t.name));
+    let _view = Cleanup { url: admin.clone(), sql: format!("DROP VIEW IF EXISTS shop.{view}") };
+    let mut wide = side(&admin).await;
+    wide.query_drop(format!("ALTER TABLE {} MODIFY v VARCHAR(200)", t.q())).await.unwrap();
+    wide.query_drop(format!("UPDATE {} SET v = REPEAT('x', 200)", t.q())).await.unwrap();
+    wide.query_drop(format!("CREATE VIEW shop.{view} AS SELECT id FROM {}", t.q())).await.unwrap();
+    let body = "BEGIN SET NEW.v = CONCAT(NEW.v, ';'); END";
+    wide.query_drop(format!("CREATE TRIGGER shop.{trigger} BEFORE INSERT ON {} FOR EACH ROW {body}", t.q()))
+        .await
+        .unwrap();
+    wide.disconnect().await.unwrap();
+    let mut m = Conn::start(&url, SessionRole::Meta, false, test);
+    m.wait(|e| matches!(e, DbEvent::Catalog(_)), 30).await;
+    let mut side_admin = side(&admin).await;
+    let meta = only_session(&mut side_admin, SessionRole::Meta, test).await;
+    let objects = [
+        DdlObject::Relation { schema: "shop".into(), name: t.name.clone() },
+        DdlObject::Relation { schema: "shop".into(), name: view.clone() },
+        DdlObject::Trigger { schema: "shop".into(), table: t.name.clone(), name: trigger.clone() },
+        DdlObject::Named { name: view.clone(), schema: Some("shop".into()) },
+    ];
+    async fn reads(m: &mut Conn, admin: &mut mysql_async::Conn, meta: u64, objects: &[DdlObject]) {
+        for object in objects {
+            let t0 = Instant::now();
+            let r = ddl_of(m, object.clone()).await;
+            assert!(t0.elapsed() < Duration::from_millis(2_500), "{object:?}: {:?}", t0.elapsed());
+            match r {
+                Ok(datarig_core::driver::ddl::DdlSource::Verbatim { text, .. }) => assert!(text.contains("CREATE")),
+                other => assert_eq!(other, Err(DbError::Locked), "{object:?}"),
+            }
+            assert_eq!(locks_of(admin, meta).await, 0, "{object:?}: no lock kept");
+        }
+    }
+    // 1. Another session holds `LOCK TABLES … WRITE`.
+    let mut lock = side(&admin).await;
+    lock.query_drop(format!("LOCK TABLES {} WRITE", t.q())).await.unwrap();
+    reads(&mut m, &mut side_admin, meta, &objects).await;
+    let t0 = Instant::now();
+    lock.query_drop(format!("INSERT INTO {} VALUES (999999, 'w')", t.q())).await.unwrap();
+    lock.query_drop("UNLOCK TABLES").await.unwrap();
+    assert!(t0.elapsed() < Duration::from_millis(500), "the locking session was not held up: {:?}", t0.elapsed());
+    // 2. A held result keeps a shared lock and an `ALTER TABLE` waits for it.
+    let mut q = Conn::open(&url, SessionRole::Query, false, test).await;
+    let evs = q.run_as(1, &[&format!("SELECT * FROM {}", t.q())], PagingMode::Hold).await;
+    assert!(page_of(&evs).2);
+    let (alter_url, table) = (admin.clone(), t.q());
+    let alter = tokio::spawn(async move {
+        let mut a = side(&alter_url).await;
+        a.query_drop("SET SESSION lock_wait_timeout = 60").await.unwrap();
+        let r = a.query_drop(format!("ALTER TABLE {table} ADD COLUMN c9 INT")).await;
+        a.disconnect().await.unwrap();
+        r.map_err(|e| e.to_string())
+    });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let waiting: Option<u64> = side_admin
+        .query_first(format!(
+            "SELECT COUNT(*) FROM information_schema.PROCESSLIST \
+             WHERE STATE = 'Waiting for table metadata lock' AND INFO LIKE '%{}%c9%'",
+            t.name
+        ))
+        .await
+        .unwrap();
+    assert_eq!(waiting, Some(1), "the ALTER waits");
+    reads(&mut m, &mut side_admin, meta, &objects).await;
+    // The ALTER goes through once the held result is stopped: the reads held nothing up.
+    let t1 = Instant::now();
+    q.session.send(DbCommand::ClosePortal { id: 1 });
+    q.ok(2, "SELECT 1").await;
+    assert!(alter.await.unwrap().is_ok());
+    assert!(t1.elapsed() < Duration::from_secs(10), "{:?}", t1.elapsed());
+    // Read again once nothing is in the way: the new column is there.
+    let ddl = ddl_of(&mut m, objects[0].clone()).await;
+    assert!(verbatim(ddl).1.contains("`c9` int DEFAULT NULL"));
+    side_admin.disconnect().await.unwrap();
+}
+
+/// A user without the privileges to see an object's definition hears the server's own message
+/// (a trigger's needs `TRIGGER`), or that the definition is hidden from it (a routine it may run
+/// but not see).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_ddl_the_user_may_not_see_says_why() {
+    use datarig_core::driver::ddl::DdlObject;
+    let test = "a_ddl_the_user_may_not_see_says_why";
+    let Some((url, admin)) = urls(test) else { return };
+    let t = Table::make(&admin, "ddlpriv", &["CREATE TABLE {t} (id INT PRIMARY KEY)"]).await;
+    let (trigger, proc) = (format!("{}_bi", t.name), format!("{}_p", t.name));
+    let _proc = Cleanup { url: admin.clone(), sql: format!("DROP PROCEDURE IF EXISTS shop.{proc}") };
+    let mut a = side(&admin).await;
+    a.query_drop(format!("CREATE TRIGGER shop.{trigger} BEFORE INSERT ON {} FOR EACH ROW SET NEW.id = NEW.id", t.q()))
+        .await
+        .unwrap();
+    a.query_drop(format!("CREATE PROCEDURE shop.{proc}() SELECT 1")).await.unwrap();
+    let account = Account::make(&admin, "ddlpriv", "BY 'pw'").await.unwrap();
+    a.query_drop(format!("GRANT EXECUTE ON PROCEDURE shop.{proc} TO '{}'@'%'", account.name)).await.unwrap();
+    a.disconnect().await.unwrap();
+    let mut m = Conn::start(&as_user(&url, &account.name, "pw"), SessionRole::Meta, false, test);
+    m.wait(|e| matches!(e, DbEvent::Catalog(_)), 30).await;
+    let r = ddl_of(&mut m, DdlObject::Trigger { schema: "shop".into(), table: t.name.clone(), name: trigger }).await;
+    assert!(matches!(&r, Err(DbError::Server(e)) if e.contains("the TRIGGER privilege")), "{r:?}");
+    let r = ddl_of(&mut m, DdlObject::Named { name: proc.clone(), schema: None }).await;
+    assert_eq!(r, Err(DbError::DefinitionHidden));
+    // Its table it may read: shown.
+    let r = ddl_of(&mut m, DdlObject::Relation { schema: "shop".into(), name: t.name.clone() }).await;
+    assert!(verbatim(r).1.starts_with("CREATE TABLE "));
 }

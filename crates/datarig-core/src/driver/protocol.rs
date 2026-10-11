@@ -1,7 +1,7 @@
 //! Messages between the UI and a driver [`Session`](super::Session): commands go in on the
 //! session's channels, progress and results come back as [`DbEvent`]s.
 
-use super::ddl::{DdlObject, DdlSource};
+use super::ddl::{DdlObject, DdlSource, ObjectKind};
 use super::keys::KeyCatalog;
 use super::structure::{RelationStats, TableStructure};
 use crate::fault::Fault;
@@ -88,6 +88,13 @@ pub enum DbError {
     /// The object a lookup names does not exist (any more): renamed or dropped since it was
     /// listed, or a name that names nothing.
     NotFound,
+    /// The name a lookup was given names more than one object where it was looked up (these
+    /// kinds, each once, in order): which one is meant is not known, so none was read.
+    Ambiguous(Vec<ObjectKind>),
+    /// The object exists, and the server does not show its definition to this user (MySQL
+    /// shows a routine's only to its definer, or to a user with `SHOW_ROUTINE` or `SELECT` on
+    /// every database).
+    DefinitionHidden,
     /// The server's version is older than the driver supports: `server` is what it is
     /// (`MySQL 5.7.44`), `needed` the oldest version the driver works with (`MySQL 8.0`).
     VersionUnsupported { server: String, needed: String },
@@ -150,6 +157,8 @@ impl DbError {
             | DbError::NotRepeatable(_)
             | DbError::Locked
             | DbError::NotFound
+            | DbError::Ambiguous(_)
+            | DbError::DefinitionHidden
             | DbError::VersionUnsupported { .. }
             | DbError::TlsRequired
             | DbError::KeyRetrievalRefused

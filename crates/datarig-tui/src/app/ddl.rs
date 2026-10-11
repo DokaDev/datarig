@@ -18,6 +18,7 @@ use datarig_core::driver::ddl::{DdlObject, DdlSource};
 use datarig_core::driver::structure::StructureGroup;
 use datarig_core::driver::{DbError, SessionContext};
 use datarig_core::sql::ddl::ddl_text;
+use datarig_core::sql::dialect::{Dialect, Language};
 
 impl App {
     /// Profile `id`'s driver reads an object's DDL (`Capabilities::ddl`).
@@ -25,10 +26,16 @@ impl App {
         self.profile(id).and_then(|p| self.driver(&p.driver)).is_some_and(|d| d.capabilities().ddl)
     }
 
+    /// Profile `id`'s sessions speak MySQL.
+    fn mysql_profile(&self, id: ProfileId) -> bool {
+        matches!(self.profile_language(Some(id)), Language::Sql(Dialect::MySql(_)))
+    }
+
     /// The object explorer row `row` stands for, and where: its profile and database (`None`: the
     /// profile's own). A table, view or materialized view, or anything under one, is that
-    /// relation; an index or a trigger (or a line under it) is that index or trigger, and with
-    /// `function` a trigger is the function it calls. `None` for anything else.
+    /// relation; an index or a trigger (or a line under it) is that index or trigger (on MySQL an
+    /// index is its table), and with `function` a trigger is the function it calls. `None` for
+    /// anything else.
     pub(super) fn ddl_object_of_row(
         &self,
         row: &RowKind,
@@ -71,6 +78,8 @@ impl App {
                 }
             }
             _ if function => return None,
+            // MySQL has no DDL of an index of its own: its table's `CREATE TABLE` defines it.
+            Some((StructureGroup::Indexes, _)) if self.mysql_profile(id) => DdlObject::Relation { schema, name },
             Some((StructureGroup::Indexes, k)) => {
                 DdlObject::Index { schema, name: structure()?.indexes.get(k)?.name.clone() }
             }
