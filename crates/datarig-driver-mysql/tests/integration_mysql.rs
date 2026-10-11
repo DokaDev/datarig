@@ -14,8 +14,8 @@
 //! suite both ways.
 
 use datarig_core::driver::{
-    Cell, ConnectOptions, DbCommand, DbError, DbEvent, Driver, PagingMode, PingError, Session, SessionRole,
-    StatementInfo, ValueKind,
+    CancelFailure, Cell, ConnectOptions, DbCommand, DbError, DbEvent, Driver, PagingMode, PingError, Session,
+    SessionRole, StatementInfo, ValueKind,
 };
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
@@ -1404,11 +1404,147 @@ async fn a_cancel_the_server_refuses_ends_the_session_instead_of_reading_on() {
         matches!(failures(&evs, 1)[..], [DbEvent::Failed { error: DbError::Cancelled, cancelled: true, .. }]),
         "{evs:?}"
     );
-    assert!(matches!(evs.last(), Some(DbEvent::Lost { error: DbError::CancelNotTaken })), "{evs:?}");
+    assert!(
+        matches!(evs.last(), Some(DbEvent::Lost { error: DbError::CancelNotTaken(CancelFailure::Refused) })),
+        "{evs:?}"
+    );
     thread_ends(&mut a, id, 30).await;
     let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
     c.ok(2, "SELECT 1").await;
     a.disconnect().await.unwrap();
+}
+
+/// A cancel the server takes whose statement then rolls back for a long time (a large `UPDATE`
+/// undone row by row, saying nothing meanwhile) is waited for: the run ends cancelled once, the
+/// session stays, and so does the user's transaction with what it did before the statement.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_taken_by_a_long_rollback_keeps_the_session_and_its_transaction() {
+    let test = "a_cancel_taken_by_a_long_rollback";
+    let Some((url, admin)) = urls(test) else { return };
+    let t = format!("shop.zz_it_rollback_{}", std::process::id());
+    let _t = Cleanup { url: admin.clone(), sql: format!("DROP TABLE IF EXISTS {t}") };
+    let mut a = side(&admin).await;
+    a.query_drop(format!("CREATE TABLE {t} (id INT PRIMARY KEY AUTO_INCREMENT, v INT, pad CHAR(100), KEY (v))"))
+        .await
+        .unwrap();
+    for _ in 0..3 {
+        a.query_drop(format!("INSERT INTO {t} (v, pad) SELECT 0, 'x' FROM shop.events")).await.unwrap();
+    }
+    a.query_drop(format!("INSERT INTO {t} (v, pad) SELECT v, pad FROM {t}")).await.unwrap();
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    c.ok(1, "BEGIN").await;
+    c.ok(2, &format!("INSERT INTO {t} (v, pad) VALUES (-1, 'marker')")).await;
+    c.session.send(DbCommand::Execute {
+        id: 3,
+        statements: vec![format!("UPDATE {t} SET v = v + 1, pad = 'y'")],
+        paging: PagingMode::NoHold,
+    });
+    // Long enough for its rollback to take longer than any bound a cancel could be given.
+    tokio::time::sleep(Duration::from_secs(15)).await;
+    c.session.cancel();
+    let mut evs = Vec::new();
+    let deadline = Instant::now() + Duration::from_secs(240);
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        let ev = match tokio::time::timeout(left, c.rx.recv()).await {
+            Ok(Some(ev)) => ev,
+            other => panic!("no answer: {other:?} after {evs:?}"),
+        };
+        let end = matches!(ev, DbEvent::Failed { id: 3, .. } | DbEvent::Done { id: 3, .. } | DbEvent::Lost { .. });
+        evs.push(ev);
+        if end {
+            break;
+        }
+    }
+    assert!(!evs.iter().any(|e| matches!(e, DbEvent::Done { id: 3, .. })), "the update ended before the cancel");
+    assert!(
+        matches!(failures(&evs, 3)[..], [DbEvent::Failed { error: DbError::Cancelled, cancelled: true, .. }]),
+        "{evs:?}"
+    );
+    // The session and its transaction go on: the marker is still there, and nothing is lost.
+    let more = c.run(4, &[&format!("SELECT v FROM {t} WHERE pad = 'marker'")]).await;
+    assert!(!more.iter().any(|e| matches!(e, DbEvent::Lost { .. })), "{more:?}");
+    assert_eq!(page_of(&more).1, &vec![vec![Some("-1".to_string())]], "{more:?}");
+    c.ok(5, "ROLLBACK").await;
+    a.disconnect().await.unwrap();
+}
+
+/// A statement that runs as another account only for a moment at a time (a `SQL SECURITY
+/// DEFINER` function called for every row): a kill that lands inside the function is refused,
+/// one between two calls is not. The refusal is tried again, and the run ends cancelled with
+/// the session kept.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_refused_for_a_moment_is_tried_again() {
+    let test = "a_cancel_refused_for_a_moment";
+    let Some((url, admin)) = urls(test) else { return };
+    let f = format!("zz_it_rowfn_{}", std::process::id());
+    let _f = Cleanup { url: admin.clone(), sql: format!("DROP FUNCTION IF EXISTS shop.{f}") };
+    let mut a = side(&admin).await;
+    a.query_drop(format!(
+        "CREATE FUNCTION shop.{f}(x INT) RETURNS INT DETERMINISTIC SQL SECURITY DEFINER RETURN x + 1"
+    ))
+    .await
+    .unwrap();
+    a.disconnect().await.unwrap();
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    c.session.send(DbCommand::Execute {
+        id: 1,
+        statements: vec![format!(
+            "SELECT COUNT(*) FROM shop.events a CROSS JOIN shop.events b WHERE shop.{f}(a.id) = 0"
+        )],
+        paging: PagingMode::NoHold,
+    });
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    c.session.cancel();
+    let evs = c.answer(1).await;
+    assert!(matches!(evs.last(), Some(DbEvent::Failed { error: DbError::Cancelled, cancelled: true, .. })), "{evs:?}");
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let lost = c.rx.try_recv();
+    assert!(!matches!(lost, Ok(DbEvent::Lost { .. })), "{lost:?}");
+    let more = c.run(2, &["SELECT 1"]).await;
+    assert!(!more.iter().any(|e| matches!(e, DbEvent::Lost { .. })), "{more:?}");
+    assert_eq!(page_of(&more).1, &vec![vec![Some("1".to_string())]]);
+}
+
+/// A count and the server's question run only what can be run again, which is never code of
+/// the server's (a function, a view): nothing in them runs as another account, so no kill of
+/// theirs is refused. What a definer function in them gets is a refusal before anything runs;
+/// a count stopped by a cancel says so, and the session goes on.
+#[tokio::test(flavor = "multi_thread")]
+async fn counts_and_questions_never_run_another_accounts_code() {
+    let test = "counts_and_questions_never_run";
+    let Some((url, admin)) = urls(test) else { return };
+    let f = format!("zz_it_cntfn_{}", std::process::id());
+    let _f = Cleanup { url: admin.clone(), sql: format!("DROP FUNCTION IF EXISTS shop.{f}") };
+    let mut a = side(&admin).await;
+    a.query_drop(format!(
+        "CREATE FUNCTION shop.{f}(x INT) RETURNS INT DETERMINISTIC SQL SECURITY DEFINER RETURN SLEEP(1) + x"
+    ))
+    .await
+    .unwrap();
+    a.disconnect().await.unwrap();
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let with_fn = format!("SELECT COUNT(*) FROM (\nSELECT shop.{f}(id) FROM shop.events\n) AS datarig_count");
+    let t0 = Instant::now();
+    assert!(matches!(count(&mut c, 1, with_fn).await.0, Err(DbError::NotRepeatable(_))));
+    assert!(t0.elapsed() < Duration::from_secs(5), "nothing ran: {:?}", t0.elapsed());
+    c.session.send(DbCommand::CheckRepeat { id: 2, sql: format!("SELECT shop.{f}(id) FROM shop.events") });
+    assert!(matches!(
+        c.wait(|e| matches!(e, DbEvent::RepeatChecked { .. }), 30).await,
+        DbEvent::RepeatChecked { result: Err(DbError::NotRepeatable(_)), .. }
+    ));
+    // A long count of tables (every pair is looked at: no shortcut from the tables' sizes),
+    // cancelled.
+    let long =
+        "SELECT COUNT(*) FROM (\nSELECT a.id FROM shop.events a JOIN shop.events b ON a.id < b.id\n) AS datarig_count";
+    c.session.send(DbCommand::Count { id: 3, sql: long.to_string() });
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    c.session.cancel();
+    match c.wait(|e| matches!(e, DbEvent::Counted { .. } | DbEvent::Lost { .. }), 30).await {
+        DbEvent::Counted { id: 3, result: Err(DbError::Cancelled), .. } => {}
+        other => panic!("{other:?}"),
+    }
+    c.ok(4, "SELECT 1").await;
 }
 
 /// The same for a held result the app reads on after the cancel: its first page was the
@@ -1433,7 +1569,10 @@ async fn a_refused_cancel_of_a_held_result_ends_the_session() {
         matches!(failures(&evs, 1)[..], [DbEvent::Failed { error: DbError::Cancelled, cancelled: true, .. }]),
         "{evs:?}"
     );
-    assert!(matches!(evs.last(), Some(DbEvent::Lost { error: DbError::CancelNotTaken })), "{evs:?}");
+    assert!(
+        matches!(evs.last(), Some(DbEvent::Lost { error: DbError::CancelNotTaken(CancelFailure::Refused) })),
+        "{evs:?}"
+    );
     thread_ends(&mut a, id, 30).await;
     a.disconnect().await.unwrap();
 }
@@ -1457,7 +1596,27 @@ async fn a_held_result_the_server_will_not_stop_is_not_read_to_its_end() {
     let evs = until_lost(&mut c, 20).await;
     assert!(t0.elapsed() < Duration::from_secs(6), "{:?}", t0.elapsed());
     assert!(failures(&evs, 1).is_empty(), "{evs:?}");
-    assert!(matches!(evs.last(), Some(DbEvent::Lost { error: DbError::CancelNotTaken })), "{evs:?}");
+    assert!(
+        matches!(evs.last(), Some(DbEvent::Lost { error: DbError::CancelNotTaken(CancelFailure::Refused) })),
+        "{evs:?}"
+    );
+    thread_ends(&mut a, id, 30).await;
+    // Another statement stops it: that run, which never got to run, is answered before the
+    // session says it is lost.
+    let test = "a_held_result_the_server_will_not_stop_next";
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let id = only_session(&mut a, SessionRole::Query, test).await;
+    let first = c.run_as(1, &[&format!("CALL shop.{p}()")], PagingMode::Hold).await;
+    assert!(matches!(first.last(), Some(DbEvent::Page { id: 1, columns: Some(_), more: true, .. })), "{first:?}");
+    c.session.send(DbCommand::Execute { id: 2, statements: vec!["SELECT 1".into()], paging: PagingMode::NoHold });
+    let evs = until_lost(&mut c, 20).await;
+    assert!(failures(&evs, 1).is_empty(), "{evs:?}");
+    let refused = DbError::CancelNotTaken(CancelFailure::Refused);
+    assert!(
+        matches!(&failures(&evs, 2)[..], [DbEvent::Failed { error, cancelled: false, .. }] if *error == refused),
+        "{evs:?}"
+    );
+    assert!(matches!(evs.last(), Some(DbEvent::Lost { error }) if *error == refused), "{evs:?}");
     thread_ends(&mut a, id, 30).await;
     // Closing the session.
     let test = "a_held_result_the_server_will_not_stop_closing";

@@ -52,12 +52,14 @@
 //! **Cancel**: `KILL QUERY` of the session's connection from a connection of its own
 //! (`session::Killer`), only while a statement of the session is on its way or running (`busy`);
 //! a run of several statements also stops before its next one. A kill whose login comes after a
-//! new run began is not sent. A kill that does not take (MySQL refuses one of a statement that
-//! runs as another account, inside a `SQL SECURITY DEFINER` routine; or one that cannot be sent,
-//! or whose statement does not end soon after) is never followed by reading the rest of the
-//! result, which may have no end: the session cuts its connection, the run ends cancelled, and
-//! the session is lost ([`DbError::CancelNotTaken`]); the server ends the statement once it
-//! finds the connection gone. A result the session stops itself (a held one) is stopped so too.
+//! new run began is not sent. A kill the server takes is waited for, however long the statement
+//! then takes to roll back. One that does not take (MySQL refuses one of a statement that runs
+//! as another account, inside a `SQL SECURITY DEFINER` routine, even after a few tries; one that
+//! cannot be sent; one taken whose statement still sends rows long after) is never followed by
+//! reading the rest of the result, which may have no end: the session cuts its connection, the
+//! run ends cancelled, what waited is answered, and the session is lost
+//! ([`DbError::CancelNotTaken`], with why); the server ends the statement once it finds the
+//! connection gone. A result the session stops itself (a held one) is stopped so too.
 //!
 //! The session reports the sql mode its text is read in when it changes (`DbEvent::Language`),
 //! and what the server said of a statement beyond its outcome (`DbEvent::Info`: the id an
@@ -253,7 +255,7 @@ impl From<Closed> for Stop {
     fn from(c: Closed) -> Self {
         match c {
             Closed::Ui => Stop::Closed,
-            Closed::CancelNotTaken => Stop::Lost(DbError::CancelNotTaken),
+            Closed::CancelNotTaken(why) => Stop::Lost(DbError::CancelNotTaken(why)),
         }
     }
 }
@@ -363,10 +365,29 @@ pub(crate) async fn query_loop(
     };
     match stop {
         Stop::Lost(error) => {
+            // What waited for the session is answered first: no request is left without one.
+            for c in link.take_queued() {
+                unanswered(&events, c, &error);
+            }
             let _ = events.send(DbEvent::Lost { error });
         }
         Stop::Closed => crate::session::quit(conn).await,
     }
+}
+
+/// Answer a request the session took and did not get to before it was lost (`error`, why): a
+/// run fails with it, as a running statement does; a count or a check gets it as its result.
+fn unanswered(events: &UnboundedSender<DbEvent>, c: DbCommand, error: &DbError) {
+    let ev = match c {
+        DbCommand::Execute { id, .. } | DbCommand::Resume { id, .. } => {
+            DbEvent::Failed { id, error: error.clone(), cancelled: false }
+        }
+        DbCommand::Count { id, .. } => DbEvent::Counted { id, result: Err(error.clone()), snapshot: false },
+        DbCommand::CheckRepeat { id, .. } => DbEvent::RepeatChecked { id, result: Err(error.clone()) },
+        // Nothing to answer: a page of a result that is gone, a close of one.
+        _ => return,
+    };
+    let _ = events.send(ev);
 }
 
 /// Run `statements` (or the one statement of a `Resume` past `skip` rows); the run ends with
@@ -391,9 +412,11 @@ async fn execute(
             match (&stop, reply) {
                 (Stop::Closed, Some(reply)) => reply.closed(),
                 // Only a kill gets the connection cut so: the run was cancelled.
-                (Stop::Lost(DbError::CancelNotTaken), Some(reply)) => reply.fail(DbError::Cancelled, true),
+                (Stop::Lost(DbError::CancelNotTaken(_)), Some(reply)) => reply.fail(DbError::Cancelled, true),
                 // The running statement fails first, then the session reports `Lost`.
                 (Stop::Lost(error), Some(reply)) => reply.fail(error.clone(), false),
+                // The run was answered already (its first page, or its failure): `halt!` hands
+                // the reply back whenever it was not, so nothing more is owed.
                 (_, None) => {}
             }
             Err(stop)
@@ -680,7 +703,7 @@ async fn statement<'a>(
                     Ok(held) => held,
                     Err(stop) => {
                         // A cancel the server did not take: the run's one failure that follows.
-                        if matches!(stop, Stop::Lost(DbError::CancelNotTaken)) && env.asked.load(Ordering::SeqCst) {
+                        if matches!(stop, Stop::Lost(DbError::CancelNotTaken(_))) && env.asked.load(Ordering::SeqCst) {
                             paged.cancelled();
                         }
                         return Err(Halted { stop, reply: None });
@@ -881,8 +904,30 @@ struct Held {
 /// A held result: its first page was the answer; the next pages go to the app as it asks
 /// (`FetchMore`) until the result ends, `ClosePortal` closes it, or another command comes (it is
 /// processed next); a result stopped before its end is stopped on the server (`KILL QUERY`) and
-/// read to its end. Counts and checks that come meanwhile wait for it.
+/// read to its end. Counts and checks that come meanwhile wait for it; when the session stops
+/// meanwhile, they are put back in line, to be answered.
 async fn hold(
+    qr: &mut QueryResult<'_, 'static, TextProtocol>,
+    link: &mut Link,
+    env: &Env<'_>,
+    id: u64,
+    columns: &[Column],
+    carry: Option<Vec<Cell>>,
+    ended: bool,
+) -> Result<Held, Stop> {
+    let mut held = Held { stopped: false, failed: None, info: StatementInfo::default(), waiting: Vec::new() };
+    match hold_on(qr, link, env, id, columns, carry, ended, &mut held).await {
+        Ok(()) => Ok(held),
+        Err(stop) => {
+            link.requeue_all(std::mem::take(&mut held.waiting));
+            Err(stop)
+        }
+    }
+}
+
+/// [`hold`], into `held`.
+#[allow(clippy::too_many_arguments)]
+async fn hold_on(
     qr: &mut QueryResult<'_, 'static, TextProtocol>,
     link: &mut Link,
     env: &Env<'_>,
@@ -890,18 +935,18 @@ async fn hold(
     columns: &[Column],
     mut carry: Option<Vec<Cell>>,
     mut ended: bool,
-) -> Result<Held, Stop> {
+    held: &mut Held,
+) -> Result<(), Stop> {
     let page_size = env.page_size;
-    let mut held = Held { stopped: false, failed: None, info: StatementInfo::default(), waiting: Vec::new() };
     let mut more = true;
     while more {
         // A cancel the server refused while the app had not asked for the next page yet.
         let next = tokio::select! {
             biased;
             next = link.next_command() => next,
-            () = env.killer.refused() => {
+            why = env.killer.refused() => {
                 link.cut();
-                return Err(Stop::Lost(DbError::CancelNotTaken));
+                return Err(Stop::Lost(DbError::CancelNotTaken(why.into())));
             }
         };
         match next {
@@ -915,7 +960,7 @@ async fn hold(
                         Ok(read) => read,
                         Err(e) => {
                             held.failed = Some(e);
-                            return Ok(held);
+                            return Ok(());
                         }
                     }
                 };
@@ -947,14 +992,14 @@ async fn hold(
     held.stopped = !ended;
     if held.stopped {
         stop_result(qr, link, env).await?;
-        return Ok(held);
+        return Ok(());
     }
     held.info = info_of(qr);
     match link.guard(Some(env.killer), rest(qr)).await? {
         Ok(sets) => held.info.more_results += sets,
         Err(e) => held.failed = Some(e),
     }
-    Ok(held)
+    Ok(())
 }
 
 /// What a held result ([`Held`]) leaves: its failure or what the server said of it, the

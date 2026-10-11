@@ -466,3 +466,47 @@ fn asked_values_replace_the_old_and_a_failed_question_forgets_them() {
     t.forget_values();
     assert_eq!(t.values().map(|v| (v.time_zone, v.charset)), Some(("unknown".into(), "unknown".into())));
 }
+
+/// A killer of connection 7 over `route` (nothing is sent before it is asked to).
+fn killer_over(route: Route) -> Killer {
+    let opts = mysql_async::Opts::from_url("mysql://datarig@127.0.0.1:1/").unwrap();
+    Killer::new(route, opts, 7)
+}
+
+#[tokio::test]
+async fn a_kill_that_cannot_reach_the_server_is_not_sent() {
+    // Nothing listens on port 1: the connection to send the kill on does not open.
+    let k = killer_over(Route::new("127.0.0.1", 1, None));
+    k.kill_query().await;
+    assert_eq!(*k.watch().borrow(), Kill::Failed(KillFailure::NotSent));
+    // One that was for a statement that ended meanwhile says nothing.
+    k.clear();
+    k.kill_query_if(|| false).await;
+    assert_eq!(*k.watch().borrow(), Kill::None);
+}
+
+#[test]
+fn a_kill_of_a_run_before_never_reaches_the_next_one() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let k = killer_over(Route::new("127.0.0.1", 1, None));
+    let asked = Arc::new(AtomicBool::new(true));
+    let still = {
+        let asked = asked.clone();
+        move || asked.load(Ordering::SeqCst)
+    };
+    let refused = Kill::Failed(KillFailure::Refused(1095));
+    // The kill of the run that is still on is kept.
+    k.record(refused, &still);
+    assert_eq!(*k.watch().borrow(), refused);
+    // A new run begins (the request is forgotten, then the kills): what the old one's kill
+    // answers after that is not kept, whenever it lands.
+    asked.store(false, Ordering::SeqCst);
+    k.record(refused, &still);
+    k.clear();
+    k.record(Kill::Taken(Instant::now()), &still);
+    assert_eq!(*k.watch().borrow(), Kill::None);
+    // The new run's own cancel is.
+    asked.store(true, Ordering::SeqCst);
+    k.record(refused, &still);
+    assert_eq!(*k.watch().borrow(), refused);
+}

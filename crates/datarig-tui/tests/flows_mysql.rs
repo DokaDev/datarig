@@ -664,32 +664,42 @@ fn a_result_of_server_code_is_not_copied_with_the_old_values() {
     refused(&mut h, "values changed before the result ended");
 }
 
-/// A cancel the server refuses (the statement runs as another account, inside a `SQL SECURITY
-/// DEFINER` procedure): the driver cuts the connection rather than read on. The run ends
-/// cancelled, the tab says why its connection was lost, and the next run connects again.
+/// A statement the server would not stop (the driver cuts the connection rather than read on):
+/// the run ends cancelled, the tab says why its connection was lost, in words of its own for
+/// each cause, and that an open transaction went with it; the next run connects again.
 #[test]
-fn a_cancel_the_server_refuses_ends_the_tab_session_and_says_why() {
+fn a_statement_the_server_would_not_stop_ends_the_tab_session_and_says_why() {
+    use datarig_core::driver::CancelFailure;
     use datarig_core::driver::SessionRole::{Meta, Query};
     use datarig_tui::app::{Results, SessionState};
-    let mut h = mysql();
-    h.db(DbEvent::Connected);
-    h.ctrl('e');
-    let id = sent_run(&mut h);
-    h.ctrl('c');
-    assert!(h.session_cancelled(1), "the tab's session was asked to cancel");
-    h.tab_db(0, DbEvent::Failed { id, error: DbError::Cancelled, cancelled: true });
-    h.tab_db(0, DbEvent::Lost { error: DbError::CancelNotTaken });
-    assert!(matches!(h.app.tab().results, Results::Cancelled));
-    assert!(h.app.tab().exec.running.is_none());
-    assert_eq!(h.app.tab().exec.state, SessionState::Lost);
-    let status = h.status(400, 45);
-    assert!(
-        status.contains(
-            "This tab's connection was lost: the server did not stop the statement (it runs as another account, \
-             e.g. in a SQL SECURITY DEFINER routine): datarig closed the connection instead of reading the rest"
+    for (cause, why) in [
+        (
+            CancelFailure::Refused,
+            "the server would not stop the statement (it runs as another account, e.g. in a SQL SECURITY \
+             DEFINER routine)",
         ),
-        "{status}"
-    );
-    h.ctrl('e');
-    assert_eq!(h.roles(), [Meta, Query, Query], "the next run opens a new session");
+        (CancelFailure::NotSent, "the request to stop the statement could not reach the server (network or login)"),
+        (CancelFailure::KeptSending, "the server agreed to stop the statement and went on sending its rows"),
+    ] {
+        let mut h = mysql();
+        h.db(DbEvent::Connected);
+        h.ctrl('e');
+        let id = sent_run(&mut h);
+        h.ctrl('c');
+        assert!(h.session_cancelled(1), "the tab's session was asked to cancel");
+        h.tab_db(0, DbEvent::Failed { id, error: DbError::Cancelled, cancelled: true });
+        h.tab_db(0, DbEvent::Lost { error: DbError::CancelNotTaken(cause) });
+        assert!(matches!(h.app.tab().results, Results::Cancelled));
+        assert!(h.app.tab().exec.running.is_none());
+        assert_eq!(h.app.tab().exec.state, SessionState::Lost);
+        let status = h.status(400, 45);
+        assert!(status.contains(&format!("This tab's connection was lost: {why}")), "{cause:?}: {status}");
+        assert!(
+            status.contains("datarig closed the connection instead of reading the rest; an open transaction is gone"),
+            "{cause:?}: {status}"
+        );
+        assert!(!status.contains("cancel"), "{cause:?}: the words fit a stop the user did not ask for: {status}");
+        h.ctrl('e');
+        assert_eq!(h.roles(), [Meta, Query, Query], "the next run opens a new session");
+    }
 }

@@ -147,10 +147,24 @@ pub enum DbError {
     /// or opened a read-write transaction, which the app refuses to send): the session rolled
     /// back and closed.
     ReadOnlyLost,
-    /// The server did not stop the statement the session runs when asked (MySQL refuses a
-    /// `KILL QUERY` of a statement that runs as another account, inside a `SQL SECURITY DEFINER`
-    /// routine): the session closed its connection instead of reading the rest of the result.
-    CancelNotTaken,
+    /// The server did not stop the statement the session runs when asked to (by the user's
+    /// cancel, or by the session itself stopping a result it holds), for this reason: the
+    /// session closed its connection instead of reading the rest of the result, and the user's
+    /// open transaction went with it (the server rolls it back).
+    CancelNotTaken(CancelFailure),
+}
+
+/// Why a request to stop the running statement did not stop it ([`DbError::CancelNotTaken`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CancelFailure {
+    /// The server refused it: the statement runs as another account (MySQL: inside a
+    /// `SQL SECURITY DEFINER` routine, where `KILL QUERY` needs `CONNECTION_ADMIN`).
+    Refused,
+    /// It could not reach the server (the connection to send it on did not open: the network,
+    /// the login).
+    NotSent,
+    /// The server agreed to stop the statement, and went on sending its rows.
+    KeptSending,
 }
 
 impl DbError {
@@ -191,7 +205,7 @@ impl DbError {
             | DbError::PasswordTooLong { .. }
             | DbError::ServerKeyInvalid
             | DbError::ReadOnlyLost
-            | DbError::CancelNotTaken => Cow::Borrowed(""),
+            | DbError::CancelNotTaken(_) => Cow::Borrowed(""),
         }
     }
 }

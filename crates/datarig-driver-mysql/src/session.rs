@@ -5,7 +5,7 @@
 
 use crate::route::{Route, io_fault};
 use crate::wire::Wire;
-use datarig_core::driver::{DbError, SessionRole, SessionValues};
+use datarig_core::driver::{CancelFailure, DbError, SessionRole, SessionValues};
 use datarig_core::fault::{Fault, FaultKind};
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::profile::dsn::{self, Scheme};
@@ -444,19 +444,47 @@ pub(crate) fn my_error(e: &mysql_async::Error) -> DbError {
     }
 }
 
+/// ER_KILL_DENIED_ERROR: the statement is not the user's to kill.
+const KILL_DENIED: u16 = 1095;
+
+/// How often a refused kill is sent, and how long after the one before: the statement may run
+/// as another account only for a moment (a `SQL SECURITY DEFINER` function called for every
+/// row), and be the user's own again at the next try. Such a statement was seen refusing up to
+/// 5 tries in a row, 100 ms apart; one inside a definer procedure refuses every one, and is cut
+/// some 0.7 s later than at the first.
+const KILL_TRIES: u32 = 8;
+const KILL_RETRY: Duration = Duration::from_millis(100);
+
 /// What became of the last `KILL QUERY` sent for the session's statement since the session
 /// last cleared it ([`Killer::clear`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Kill {
     /// None was answered.
     None,
-    /// The server took it (then): the statement stops at its next check, and what is still on
-    /// its way is soon read.
+    /// The server took it (then): the statement stops at its next check. Its rollback may
+    /// take long, and say nothing meanwhile.
     Taken(Instant),
-    /// The server refused it (MySQL does when the statement runs as another account: inside a
-    /// `SQL SECURITY DEFINER` routine, it is its definer's), or it could not be sent in time:
-    /// the statement runs on.
-    Failed,
+    /// It did not take: the statement runs on.
+    Failed(KillFailure),
+}
+
+/// Why a kill did not take.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum KillFailure {
+    /// The server refused it (its error code): MySQL does when the statement runs as another
+    /// account (inside a `SQL SECURITY DEFINER` routine, it is its definer's).
+    Refused(u16),
+    /// It could not be sent: the connection to send it on did not open in time.
+    NotSent,
+}
+
+impl From<KillFailure> for CancelFailure {
+    fn from(f: KillFailure) -> Self {
+        match f {
+            KillFailure::Refused(_) => CancelFailure::Refused,
+            KillFailure::NotSent => CancelFailure::NotSent,
+        }
+    }
 }
 
 /// What a cancel needs: a connection of its own over the session's route, as the session's
@@ -484,18 +512,30 @@ impl Killer {
     /// [`Killer::kill_query`], if `still` holds once the connection to send it on is open (the
     /// login can take a while, through a tunnel most: by then the statement may have ended and
     /// another run begun, which the kill must not stop). What became of it is kept only while
-    /// `still` holds: it says nothing about the statement of another run.
+    /// `still` holds: it says nothing about the statement of another run. A refusal is tried
+    /// again a few times first ([`KILL_TRIES`]).
     pub(crate) async fn kill_query_if(&self, still: impl Fn() -> bool) {
         let kill = async {
             let stream = self.route.dial(DIAL_TIMEOUT).await.ok()?;
             let (_wire, stream) = Wire::new(stream);
             let mut conn = Conn::connect_with_stream(self.opts.clone(), Box::new(stream)).await.ok()?;
-            let sent = if still() {
-                let taken = conn.query_drop(format!("KILL QUERY {}", self.id)).await.is_ok();
-                Some(if taken { Kill::Taken(Instant::now()) } else { Kill::Failed })
-            } else {
-                None
-            };
+            let mut sent = None;
+            for n in 0..KILL_TRIES {
+                if n > 0 {
+                    tokio::time::sleep(KILL_RETRY).await;
+                }
+                if !still() {
+                    break;
+                }
+                sent = Some(match conn.query_drop(format!("KILL QUERY {}", self.id)).await {
+                    Ok(()) => Kill::Taken(Instant::now()),
+                    Err(mysql_async::Error::Server(e)) => Kill::Failed(KillFailure::Refused(e.code)),
+                    Err(_) => Kill::Failed(KillFailure::NotSent),
+                });
+                if sent != Some(Kill::Failed(KillFailure::Refused(KILL_DENIED))) {
+                    break;
+                }
+            }
             quit(conn).await;
             Some(sent)
         };
@@ -503,11 +543,21 @@ impl Killer {
             // Not sent: the statement it was for ended.
             Ok(Some(None)) => return,
             Ok(Some(Some(kill))) => kill,
-            Ok(None) | Err(_) => Kill::Failed,
+            Ok(None) | Err(_) => Kill::Failed(KillFailure::NotSent),
         };
-        if still() {
-            self.kill.send_replace(kill);
-        }
+        self.record(kill, still);
+    }
+
+    /// Keep `kill` if `still` holds, asked under the lock [`Killer::clear`] takes too: a run
+    /// that begins (and clears) between the two never gets the kill of the one before.
+    pub(crate) fn record(&self, kill: Kill, still: impl Fn() -> bool) {
+        self.kill.send_if_modified(|k| {
+            let keep = still();
+            if keep {
+                *k = kill;
+            }
+            keep
+        });
     }
 
     /// Forget what became of the kills sent so far: a new run, or a kill of the session's own,
@@ -521,11 +571,12 @@ impl Killer {
         self.kill.subscribe()
     }
 
-    /// Resolves once a kill did not take ([`Kill::Failed`]).
-    pub(crate) async fn refused(&self) {
+    /// Resolves once a kill did not take, with why.
+    pub(crate) async fn refused(&self) -> KillFailure {
         let mut kills = self.watch();
-        if kills.wait_for(|k| *k == Kill::Failed).await.is_err() {
-            std::future::pending::<()>().await;
+        match kills.wait_for(|k| matches!(k, Kill::Failed(_))).await.map(|k| *k) {
+            Ok(Kill::Failed(f)) => f,
+            _ => std::future::pending().await,
         }
     }
 }

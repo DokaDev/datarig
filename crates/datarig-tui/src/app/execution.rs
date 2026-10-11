@@ -4,7 +4,7 @@
 use super::persist;
 use super::runlog::StatementOutcome;
 use super::*;
-use datarig_core::driver::{DbError, ReadIn};
+use datarig_core::driver::{CancelFailure, DbError, ReadIn};
 use datarig_core::fault::{ErrorLog, FaultKind};
 use datarig_core::sql::lexer::changes_schema_in;
 use datarig_core::transport::{DialError, Refusal};
@@ -1486,7 +1486,9 @@ impl App {
             DbError::CopyStdio => Label::DbCopyStdio,
             DbError::CopyStarted => Label::DbCopyStarted,
             DbError::ReadOnlyLost => Label::DbReadOnlyLost,
-            DbError::CancelNotTaken => Label::DbCancelNotTaken,
+            DbError::CancelNotTaken(CancelFailure::Refused) => Label::DbCancelRefused,
+            DbError::CancelNotTaken(CancelFailure::NotSent) => Label::DbCancelNotSent,
+            DbError::CancelNotTaken(CancelFailure::KeptSending) => Label::DbCancelKeptSending,
             DbError::Locked => Label::DbLocked,
             DbError::NotFound => Label::DbNotFound,
             DbError::Ambiguous(kinds) => {
