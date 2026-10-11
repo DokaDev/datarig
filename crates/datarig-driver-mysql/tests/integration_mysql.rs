@@ -2034,7 +2034,7 @@ async fn the_keys_read_never_queues_behind_a_metadata_lock_nor_keeps_one() {
 /// Every column of `table` as one hash per row, by `id`: its values' bytes (a NULL apart).
 async fn row_hashes(c: &mut mysql_async::Conn, table: &str, columns: &[&str]) -> Vec<(i64, String)> {
     let parts: Vec<String> = columns.iter().map(|c| format!("IFNULL(HEX(`{c}`), 'NULL')")).collect();
-    let sql = format!("SELECT id, MD5(CONCAT_WS('|', {})) FROM {table} ORDER BY id", parts.join(", "));
+    let sql = format!("SELECT id, SHA2(CONCAT_WS('|', {}), 256) FROM {table} ORDER BY id", parts.join(", "));
     c.query(sql).await.unwrap()
 }
 
