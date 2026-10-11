@@ -518,6 +518,15 @@ impl Killer {
     /// `still` holds: it says nothing about the statement of another run. A refusal is tried
     /// again a few times first ([`KILL_TRIES`]).
     pub(crate) async fn kill_query_if(&self, still: impl Fn() -> bool) {
+        self.send_kill(still, false).await;
+    }
+
+    /// [`Killer::kill_query_if`]; `only_taken`: what became of it is kept only if the server
+    /// took it.
+    async fn send_kill(&self, still: impl Fn() -> bool, only_taken: bool) {
+        // The server's last answer, kept past the time limit: a slow route that got a refusal
+        // (or the kill taken) before it ran out says so, never that nothing was sent.
+        let answered = std::sync::Mutex::new(None);
         let kill = async {
             let stream = self.route.dial(DIAL_TIMEOUT).await.ok()?;
             let (_wire, stream) = Wire::new(stream);
@@ -530,12 +539,16 @@ impl Killer {
                 if !still() {
                     break;
                 }
-                sent = Some(match conn.query_drop(format!("KILL QUERY {}", self.id)).await {
+                let kill = match conn.query_drop(format!("KILL QUERY {}", self.id)).await {
                     Ok(()) => Kill::Taken(Instant::now()),
                     Err(mysql_async::Error::Server(e)) => Kill::Failed(KillFailure::Refused(e.code)),
                     Err(_) => Kill::Failed(KillFailure::NotSent),
-                });
-                if sent != Some(Kill::Failed(KillFailure::Refused(KILL_DENIED))) {
+                };
+                if let Ok(mut a) = answered.lock() {
+                    *a = Some(kill);
+                }
+                sent = Some(kill);
+                if kill != Kill::Failed(KillFailure::Refused(KILL_DENIED)) {
                     break;
                 }
             }
@@ -546,9 +559,17 @@ impl Killer {
             // Not sent: the statement it was for ended.
             Ok(Some(None)) => return,
             Ok(Some(Some(kill))) => kill,
-            Ok(None) | Err(_) => Kill::Failed(KillFailure::NotSent),
+            Ok(None) | Err(_) => answered.lock().ok().and_then(|a| *a).unwrap_or(Kill::Failed(KillFailure::NotSent)),
         };
-        self.record(kill, still);
+        if !only_taken || matches!(kill, Kill::Taken(_)) {
+            self.record(kill, still);
+        }
+    }
+
+    /// Send the kill again after the server refused it: kept only if the server takes it now
+    /// (a statement that ran as another account only for a moment), never a worse answer.
+    pub(crate) async fn try_again(&self) {
+        self.send_kill(|| true, true).await;
     }
 
     /// Keep `kill` if `still` holds, asked under the lock [`Killer::clear`] takes too: a run

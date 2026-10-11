@@ -205,8 +205,15 @@ impl App {
         t.exec.query_id = qid;
         t.exec.resuming = Some(Resuming { columns, skip, page });
         t.exec.released = false;
-        t.exec.running =
-            Some(Running { id: qid, started: now, fetch: true, count: false, cancelling: None, stopping: false });
+        t.exec.running = Some(Running {
+            id: qid,
+            started: now,
+            fetch: true,
+            count: false,
+            cancelling: None,
+            stopping: false,
+            refused: false,
+        });
         t.exec.run.notes.push(note.clone());
         self.tab_status(id, note);
         self.send_tab(id, DbCommand::Resume { id: qid, sql, skip, paging });
@@ -253,8 +260,15 @@ impl App {
         let now = self.now();
         let Some(t) = self.tabs.get_mut(id) else { return };
         let qid = t.exec.query_id;
-        t.exec.running =
-            Some(Running { id: qid, started: now, fetch: false, count: true, cancelling: None, stopping: false });
+        t.exec.running = Some(Running {
+            id: qid,
+            started: now,
+            fetch: false,
+            count: true,
+            cancelling: None,
+            stopping: false,
+            refused: false,
+        });
         let note = Notice::new(Msg::ResultsCountSent { sql: super::runlog::excerpt(&sql, 120) }, Level::Info);
         t.exec.run.notes.push(note.clone());
         self.tab_status(id, note);

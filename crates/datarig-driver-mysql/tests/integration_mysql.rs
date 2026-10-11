@@ -1429,7 +1429,8 @@ async fn a_cancel_the_server_refuses_ends_the_session_instead_of_reading_on() {
     let t0 = Instant::now();
     c.session.cancel();
     let evs = until_lost(&mut c, 20).await;
-    assert!(t0.elapsed() < Duration::from_secs(6), "{:?}", t0.elapsed());
+    // Bounded by the kill's own time limit and the ticks rows must keep coming in.
+    assert!(t0.elapsed() < Duration::from_secs(15), "{:?}", t0.elapsed());
     let answers: Vec<_> = evs
         .iter()
         .filter(|e| matches!(e, DbEvent::Page { id: 1, columns: Some(_), .. } | DbEvent::Done { id: 1, .. }))
@@ -1513,8 +1514,8 @@ async fn a_cancel_taken_by_a_long_rollback_keeps_the_session_and_its_transaction
 
 /// A statement that runs as another account only for a moment at a time (a `SQL SECURITY
 /// DEFINER` function called for every row): a kill that lands inside the function is refused,
-/// one between two calls is not. The refusal is tried again, and the run ends cancelled with
-/// the session kept.
+/// one between two calls is not. The refusal is tried again (at once, then while the session
+/// waits: the statement sends nothing), and the run ends cancelled with the session kept.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_cancel_refused_for_a_moment_is_tried_again() {
     let test = "a_cancel_refused_for_a_moment";
@@ -1534,7 +1535,7 @@ async fn a_cancel_refused_for_a_moment_is_tried_again() {
     c.session.send(DbCommand::Execute {
         id: 1,
         statements: vec![format!(
-            "SELECT COUNT(*) FROM shop.events a CROSS JOIN shop.events b WHERE shop.{f}(a.id) = 0"
+            "SELECT COUNT(*) FROM shop.events a CROSS JOIN shop.events b WHERE shop.{f}(a.id) > 0"
         )],
         paging: PagingMode::NoHold,
     });
@@ -1593,6 +1594,63 @@ async fn counts_and_questions_never_run_another_accounts_code() {
     c.ok(4, "SELECT 1").await;
 }
 
+/// A cancel the server refuses of a statement that sends nothing (a `SQL SECURITY DEFINER`
+/// procedure that counts): cutting the connection would not stop it (the server does not look
+/// at the connection meanwhile), so the session keeps waiting, says why every few seconds, and
+/// stays; the statement is still on the server. Once an administrator kills it, the run ends
+/// and the session goes on.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refused_cancel_of_a_silent_statement_keeps_the_session_and_says_why() {
+    let test = "a_refused_cancel_of_a_silent_statement";
+    let Some((url, admin)) = urls(test) else { return };
+    let p = format!("zz_it_silent_{}", std::process::id());
+    let _p = Cleanup { url: admin.clone(), sql: format!("DROP PROCEDURE IF EXISTS shop.{p}") };
+    let mut a = side(&admin).await;
+    a.query_drop(format!(
+        "CREATE PROCEDURE shop.{p}() SQL SECURITY DEFINER \
+         SELECT COUNT(*) FROM shop.events a JOIN shop.events b ON a.id < b.id"
+    ))
+    .await
+    .unwrap();
+    // Dropped first: the statement the test leaves running goes, and the drop does not wait
+    // behind it.
+    let _end = EndSessions { admin: admin.clone(), test };
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let id = only_session(&mut a, SessionRole::Query, test).await;
+    c.session.send(DbCommand::Execute {
+        id: 1,
+        statements: vec![format!("CALL shop.{p}()")],
+        paging: PagingMode::NoHold,
+    });
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    c.session.cancel();
+    // Two of its words, and nothing else: no answer, no loss.
+    let mut said = 0;
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while said < 2 {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match tokio::time::timeout(left, c.rx.recv()).await {
+            Ok(Some(DbEvent::CancelRefused { id: 1 })) => said += 1,
+            Ok(Some(
+                ev @ (DbEvent::Failed { .. } | DbEvent::Done { .. } | DbEvent::Page { .. } | DbEvent::Lost { .. }),
+            )) => {
+                panic!("{ev:?}")
+            }
+            Ok(Some(_)) => {}
+            other => panic!("{other:?} after {said} words"),
+        }
+    }
+    let running: Option<String> =
+        a.query_first(format!("SELECT COMMAND FROM information_schema.PROCESSLIST WHERE ID = {id}")).await.unwrap();
+    assert_eq!(running.as_deref(), Some("Query"), "the statement is still on the server");
+    // An administrator stops it: the run ends, the session goes on.
+    a.query_drop(format!("KILL QUERY {id}")).await.unwrap();
+    let evs = c.answer(1).await;
+    assert!(matches!(evs.last(), Some(DbEvent::Failed { error: DbError::Cancelled, cancelled: true, .. })), "{evs:?}");
+    c.ok(2, "SELECT 1").await;
+    a.disconnect().await.unwrap();
+}
+
 /// The same for a held result the app reads on after the cancel: its first page was the
 /// answer, then one cancelled failure, then the session is lost.
 #[tokio::test(flavor = "multi_thread")]
@@ -1612,7 +1670,8 @@ async fn a_refused_cancel_of_a_held_result_ends_the_session() {
     let t0 = Instant::now();
     c.session.cancel();
     let evs = until_lost(&mut c, 20).await;
-    assert!(t0.elapsed() < Duration::from_secs(6), "{:?}", t0.elapsed());
+    // Bounded by the kill's own time limit and the ticks rows must keep coming in.
+    assert!(t0.elapsed() < Duration::from_secs(15), "{:?}", t0.elapsed());
     assert!(
         matches!(failures(&evs, 1)[..], [DbEvent::Failed { error: DbError::Cancelled, cancelled: true, .. }]),
         "{evs:?}"
@@ -1644,7 +1703,8 @@ async fn a_held_result_the_server_will_not_stop_is_not_read_to_its_end() {
     let t0 = Instant::now();
     c.session.send(DbCommand::ClosePortal { id: 1 });
     let evs = until_lost(&mut c, 20).await;
-    assert!(t0.elapsed() < Duration::from_secs(6), "{:?}", t0.elapsed());
+    // Bounded by the kill's own time limit and the ticks rows must keep coming in.
+    assert!(t0.elapsed() < Duration::from_secs(15), "{:?}", t0.elapsed());
     assert!(failures(&evs, 1).is_empty(), "{evs:?}");
     assert!(
         matches!(evs.last(), Some(DbEvent::Lost { error: DbError::CancelNotTaken(CancelFailure::Refused) })),
@@ -3672,6 +3732,8 @@ async fn a_stopped_procedure_leaves_the_values_not_known() {
     let t = numbers(&admin, "slowproc", 200_000).await;
     let p = format!("zz_it_pslow_{pid}");
     let _p = Cleanup { url: admin.clone(), sql: format!("DROP PROCEDURE IF EXISTS shop.{p}") };
+    // Dropped first: nothing of the test's keeps running past it.
+    let _end = EndSessions { admin: admin.clone(), test };
     let mut a = side(&admin).await;
     a.query_drop(format!(
         "CREATE PROCEDURE shop.{p}() SQL SECURITY INVOKER BEGIN SET time_zone = '+09:00'; \

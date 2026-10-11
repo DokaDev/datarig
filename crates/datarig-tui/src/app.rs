@@ -125,10 +125,11 @@ pub const QUIT_GRACE: Duration = Duration::from_secs(3);
 /// A cancelled statement whose session has said nothing at all for this long (a wedged driver)
 /// is marked cancelled anyway, and the tab's connection is closed (the server cancels and rolls
 /// back on its own; the next run connects again). The driver decides when to give a statement
-/// up (MySQL: a kill refused, not sent, or taken while rows keep coming, at most some 20 s;
+/// up (MySQL: a kill not sent, or refused or taken while rows keep coming, at most some 20 s;
 /// PostgreSQL: a cancel that cannot be sent, 10 s), and while it waits for a statement the
-/// server stops (a long rollback, saying nothing) it says so every few seconds
-/// ([`DbEvent::Stopping`]), each of which counts as a word: this bound is well past all of
+/// server stops (a long rollback, saying nothing) or will not stop (a refused cancel of a
+/// statement that sends nothing) it says so every few seconds ([`DbEvent::Stopping`],
+/// [`DbEvent::CancelRefused`]), each of which counts as a word: this bound is well past all of
 /// them, a last resort only.
 pub const CANCEL_GRACE: Duration = Duration::from_secs(60);
 /// Autosave: a tab's text is written at most this long after an edit, and the
@@ -201,8 +202,11 @@ pub struct Running {
     /// app's clock): [`CANCEL_GRACE`] counts from it.
     pub cancelling: Option<Instant>,
     /// Its session said the server took the cancel and is still ending the statement
-    /// ([`DbEvent::Stopping`]).
+    /// ([`DbEvent::Stopping`]). Of this run only: each run starts with a `Running` of its own.
     pub stopping: bool,
+    /// Its session said the server refused the cancel and the statement runs on to its end
+    /// ([`DbEvent::CancelRefused`]). Of this run only, as `stopping`.
+    pub refused: bool,
 }
 
 pub struct Popup {
@@ -1641,7 +1645,9 @@ impl App {
         if let Some(r) = &self.tab().exec.running {
             let log = &self.tab().exec.run;
             let step = log.running().filter(|_| log.several() && !r.fetch);
-            let text = if r.stopping {
+            let text = if r.refused {
+                self.i18n.label(Label::QueryCancelRefusedRunsOn)
+            } else if r.stopping {
                 self.i18n.label(Label::QueryCancellingServer)
             } else if r.cancelling.is_some() {
                 self.i18n.label(Label::QueryCancelling)

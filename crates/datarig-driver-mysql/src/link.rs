@@ -2,9 +2,10 @@
 //! "the UI closed the session" and "the connection ended" (the server closed it while the
 //! session waited, [`Wire::closed`]).
 
-use crate::session::{Kill, Killer};
+use crate::session::{Kill, KillFailure, Killer};
 use crate::wire::Wire;
 use datarig_core::driver::{CancelFailure, DbCommand, DbError, DbEvent};
+use futures::future::BoxFuture;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::time::{Duration, Instant};
@@ -20,11 +21,16 @@ const CANCEL_WAIT: Duration = Duration::from_secs(2);
 /// for however long that takes, as the user's open transaction depends on it.
 const TAKE_WAIT: Duration = Duration::from_secs(10);
 
-/// How often the session looks whether rows still come after [`TAKE_WAIT`].
+/// How often the session looks whether rows still come (after a refused kill, or past
+/// [`TAKE_WAIT`] after a taken one).
 const SENDING_TICK: Duration = Duration::from_millis(500);
 
-/// How often the session says it still waits for a statement whose cancel the server took
-/// ([`DbEvent::Stopping`]), once the server confirmed the statement is still there.
+/// In how many ticks in a row rows must come before they count as coming on.
+const SENDING_TICKS: u32 = 3;
+
+/// How often the session says it still waits for a statement after a cancel: one the server
+/// took ([`DbEvent::Stopping`], once the server confirmed the statement is still there), or
+/// one it refused that sends nothing ([`DbEvent::CancelRefused`]).
 const STOPPING_TICK: Duration = Duration::from_secs(5);
 
 /// What the session task does next.
@@ -101,15 +107,9 @@ impl Link {
     /// at most [`CANCEL_WAIT`]), the connection cut, and `Closed::Ui` comes back at once. A lost
     /// connection makes `request` itself fail.
     ///
-    /// A request of the statement `cancel` stops also watches what became of its kills. One the
-    /// server refused, or that could not be sent, has the connection cut and
-    /// `Closed::CancelNotTaken` come back at once: the rest of the result is never read (it may
-    /// have no end). One the server took is waited for, however long the statement takes to
-    /// stop, unless its rows still come more than [`TAKE_WAIT`] after it (or after the request
-    /// began, when that was later): then it is cut too. The server ends a statement whose
-    /// connection is cut once it finds it gone. While a taken kill is waited for, the session
-    /// says so every [`STOPPING_TICK`] (asking the server first whether the statement is still
-    /// there), so the UI knows it waits on the server and keeps it.
+    /// A request of the statement `cancel` stops also watches what became of its kills
+    /// ([`watching`]): the connection is cut (`Closed::CancelNotTaken` comes back) only where
+    /// that stops what reading on would not, and the session says why it waits otherwise.
     pub(crate) async fn guard<T>(
         &mut self,
         cancel: Option<&Killer>,
@@ -118,45 +118,15 @@ impl Link {
         tokio::pin!(request);
         let mut kills = cancel.map(Killer::watch);
         let began = Instant::now();
-        let wire = self.wire.clone();
+        let mut kill = kills.as_mut().map_or(Kill::None, |k| *k.borrow_and_update());
+        let mut watch = watching(kill, began, &self.wire, cancel, &self.stopping);
         loop {
-            let kill = kills.as_mut().map_or(Kill::None, |k| *k.borrow_and_update());
-            let wire = &wire;
-            // Its timers are not held back by the task's budget, which the request's reads use up
-            // while rows stream in.
-            let give_up = tokio::task::unconstrained(async move {
-                match kill {
-                    Kill::None => std::future::pending().await,
-                    Kill::Failed(f) => f.into(),
-                    Kill::Taken(at) => {
-                        tokio::time::sleep_until((at.max(began) + TAKE_WAIT).into()).await;
-                        let seen = wire.received();
-                        loop {
-                            tokio::time::sleep(SENDING_TICK).await;
-                            if wire.received() > seen {
-                                return CancelFailure::KeptSending;
-                            }
-                        }
-                    }
-                }
-            });
-            // While a taken kill is waited for: the server says the statement is still there.
-            let stopping = self.stopping.clone();
-            let beat = tokio::task::unconstrained(async move {
-                let (Kill::Taken(_), Some(k), Some((events, id))) = (kill, cancel, stopping) else {
-                    return std::future::pending().await;
-                };
-                loop {
-                    tokio::time::sleep(STOPPING_TICK).await;
-                    if k.still_there().await {
-                        let _ = events.send(DbEvent::Stopping { id });
-                    }
-                }
-            });
             // What is watched beside the request is polled before it: its reads use up the
             // task's budget of the runtime's resources poll after poll while a result streams
             // in, and a kill's news and a closed channel would never be seen after them. The
-            // request comes before giving up: what it can read now still ends it.
+            // request comes before giving up: what it can read now still ends it. What is
+            // watched about the kill is made once per kill, not per pass: commands that keep
+            // coming never put a cut off.
             tokio::select! {
                 biased;
                 changed = async {
@@ -164,11 +134,16 @@ impl Link {
                         Some(k) => k.changed().await,
                         None => std::future::pending().await,
                     }
-                } => {
-                    if changed.is_err() {
-                        kills = None;
+                } => match (changed, kills.as_mut()) {
+                    (Ok(()), Some(k)) => {
+                        let now = *k.borrow_and_update();
+                        if now != kill {
+                            kill = now;
+                            watch = watching(kill, began, &self.wire, cancel, &self.stopping);
+                        }
                     }
-                }
+                    _ => kills = None,
+                },
                 cmd = self.rx.recv() => match cmd {
                     Some(c) => self.queued.push_back(c),
                     None => {
@@ -180,11 +155,10 @@ impl Link {
                     }
                 },
                 out = &mut request => return Ok(out),
-                why = give_up => {
+                why = &mut watch => {
                     self.wire.cut();
                     return Err(Closed::CancelNotTaken(why));
                 }
-                () = beat => {}
             }
         }
     }
@@ -205,6 +179,102 @@ impl Link {
     }
 }
 
+/// What the session does about kill `kill` of the statement a request waits for (the request
+/// began at `began`); resolves with why when the connection is to be cut.
+///
+/// * None: nothing.
+/// * Not sent: cut at once (the server cannot be reached to stop it; reading on would wait on
+///   a result that may have no end).
+/// * Refused (the statement runs as another account): cut only while its rows keep coming
+///   ([`SENDING_TICKS`] ticks in a row): a statement that sends ends when it finds the
+///   connection gone. One that sends nothing would run on to its end all the same, cut or not
+///   (the server does not look at its connection meanwhile): it is waited for, the session
+///   says so every [`STOPPING_TICK`] ([`DbEvent::CancelRefused`]) and asks the server again
+///   each time (kept only if taken).
+/// * Taken: waited for however long the statement takes to stop (a rollback says nothing
+///   meanwhile), the session saying so while the server says the statement is still there
+///   ([`DbEvent::Stopping`]); cut only when its rows still keep coming more than [`TAKE_WAIT`]
+///   after the kill (or after the request began, when that was later).
+///
+/// Its timers are not held back by the task's budget, which the request's reads use up while
+/// rows stream in.
+fn watching(
+    kill: Kill,
+    began: Instant,
+    wire: &Wire,
+    killer: Option<&Killer>,
+    stopping: &Option<(UnboundedSender<DbEvent>, u64)>,
+) -> BoxFuture<'static, CancelFailure> {
+    let (wire, killer, stopping) = (wire.clone(), killer.cloned(), stopping.clone());
+    Box::pin(tokio::task::unconstrained(async move {
+        let say = |ev: fn(u64) -> DbEvent| {
+            if let Some((events, id)) = &stopping {
+                let _ = events.send(ev(*id));
+            }
+        };
+        match kill {
+            Kill::None => std::future::pending().await,
+            Kill::Failed(KillFailure::NotSent) => CancelFailure::NotSent,
+            Kill::Failed(KillFailure::Refused(_)) => {
+                let runs_on = async {
+                    // Past the time rows that keep coming take to cut it: said only of one
+                    // that sends nothing.
+                    tokio::time::sleep(SENDING_TICK * (SENDING_TICKS + 1)).await;
+                    loop {
+                        say(|id| DbEvent::CancelRefused { id });
+                        tokio::time::sleep(STOPPING_TICK).await;
+                        // The statement may run as another account only for moments (a
+                        // definer function called for every row): asked again, the server
+                        // may take it now, and the session then waits for it to stop.
+                        if let Some(k) = &killer {
+                            k.try_again().await;
+                        }
+                    }
+                };
+                tokio::select! {
+                    () = runs_on => unreachable!("says so until the statement ends"),
+                    () = keeps_sending(&wire) => CancelFailure::Refused,
+                }
+            }
+            Kill::Taken(at) => {
+                let stops = async {
+                    loop {
+                        tokio::time::sleep(STOPPING_TICK).await;
+                        if let Some(k) = &killer
+                            && k.still_there().await
+                        {
+                            say(|id| DbEvent::Stopping { id });
+                        }
+                    }
+                };
+                let sends_on = async {
+                    tokio::time::sleep_until((at.max(began) + TAKE_WAIT).into()).await;
+                    keeps_sending(&wire).await;
+                };
+                tokio::select! {
+                    () = stops => unreachable!("says so until the statement ends"),
+                    () = sends_on => CancelFailure::KeptSending,
+                }
+            }
+        }
+    }))
+}
+
+/// Resolves once the server's bytes came in [`SENDING_TICKS`] ticks in a row: rows that keep
+/// coming, not a backlog a slow link (a tunnel) still delivers in a burst.
+async fn keeps_sending(wire: &Wire) {
+    let (mut seen, mut ticks) = (wire.received(), 0);
+    loop {
+        tokio::time::sleep(SENDING_TICK).await;
+        let now = wire.received();
+        ticks = if now > seen { ticks + 1 } else { 0 };
+        if ticks >= SENDING_TICKS {
+            return;
+        }
+        seen = now;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -212,22 +282,40 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::sync::mpsc::unbounded_channel;
 
-    /// A link over an in-memory stream (the server's end, and the client's to read the result
-    /// from), and a killer whose last kill was taken `ago`.
-    fn taken(ago: Duration) -> (Link, crate::wire::WireStream, tokio::io::DuplexStream, Killer) {
+    /// A link of run 3 over an in-memory stream, as the session sees it after kill `kill`:
+    /// the link, the client's end to read the result from, the server's end, the killer, what
+    /// the session says, and the UI's end of the command channel.
+    struct Setup {
+        link: Link,
+        stream: crate::wire::WireStream,
+        server: tokio::io::DuplexStream,
+        killer: Killer,
+        events: tokio::sync::mpsc::UnboundedReceiver<DbEvent>,
+        commands: tokio::sync::mpsc::UnboundedSender<DbCommand>,
+    }
+
+    fn after(kill: Kill) -> Setup {
         let (client, server) = tokio::io::duplex(1024);
         let (wire, stream) = Wire::new(Box::new(client));
-        let (_tx, rx) = unbounded_channel();
-        // The sender goes: the channel closes. Kept open by leaking it for the test's life.
-        std::mem::forget(_tx);
+        let (commands, rx) = unbounded_channel();
         let killer = Killer::new(
             Route::new("127.0.0.1", 1, None),
             mysql_async::Opts::from_url("mysql://datarig@127.0.0.1:1/").unwrap(),
             7,
         );
-        killer.record(Kill::Taken(Instant::now().checked_sub(ago).unwrap()), || true);
-        (Link::new(rx, wire), stream, server, killer)
+        killer.record(kill, || true);
+        let (tx, events) = unbounded_channel();
+        let mut link = Link::new(rx, wire);
+        link.serving(&tx, 3);
+        std::mem::forget(tx);
+        Setup { link, stream, server, killer, events, commands }
     }
+
+    fn taken(ago: Duration) -> Kill {
+        Kill::Taken(Instant::now().checked_sub(ago).unwrap())
+    }
+
+    const REFUSED: Kill = Kill::Failed(KillFailure::Refused(1095));
 
     /// Read the result without end.
     async fn read_on(mut stream: crate::wire::WireStream) {
@@ -235,26 +323,62 @@ mod tests {
         while stream.read(&mut buf).await.is_ok_and(|n| n > 0) {}
     }
 
-    #[tokio::test]
-    async fn rows_that_keep_coming_after_a_taken_kill_cut_the_connection() {
-        // Taken long ago: the bound counts from when the request began.
-        let (mut link, stream, mut server, killer) = taken(TAKE_WAIT * 2);
-        let send = tokio::spawn(async move {
+    /// Rows without end, every 20 ms.
+    fn send_on(mut server: tokio::io::DuplexStream) -> tokio::task::JoinHandle<()> {
+        tokio::spawn(async move {
             while server.write_all(b"row").await.is_ok() {
                 tokio::time::sleep(Duration::from_millis(20)).await;
             }
-        });
+        })
+    }
+
+    #[tokio::test]
+    async fn rows_that_keep_coming_after_a_taken_kill_cut_the_connection() {
+        // Taken long ago: the bound counts from when the request began.
+        let Setup { mut link, stream, server, killer, commands: _commands, .. } = after(taken(TAKE_WAIT * 2));
+        let send = send_on(server);
         let t0 = Instant::now();
         let out = tokio::time::timeout(TAKE_WAIT * 2, link.guard(Some(&killer), read_on(stream))).await;
         assert!(matches!(out, Ok(Err(Closed::CancelNotTaken(CancelFailure::KeptSending)))));
-        assert!(t0.elapsed() >= TAKE_WAIT, "{:?}", t0.elapsed());
+        assert!(t0.elapsed() >= TAKE_WAIT + SENDING_TICK * SENDING_TICKS, "{:?}", t0.elapsed());
         send.abort();
+    }
+
+    #[tokio::test]
+    async fn commands_that_keep_coming_never_put_a_cut_off() {
+        let Setup { mut link, stream, server, killer, commands, .. } = after(taken(Duration::ZERO));
+        let send = send_on(server);
+        let spam = tokio::spawn(async move {
+            while commands.send(DbCommand::FetchMore { id: 3 }).is_ok() {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        });
+        let out = tokio::time::timeout(TAKE_WAIT * 2, link.guard(Some(&killer), read_on(stream))).await;
+        assert!(matches!(out, Ok(Err(Closed::CancelNotTaken(CancelFailure::KeptSending)))));
+        send.abort();
+        spam.abort();
+    }
+
+    #[tokio::test]
+    async fn a_backlog_after_a_taken_kill_is_read_not_cut() {
+        // A burst once past the bound (what a slow link still held), then nothing: not rows
+        // that keep coming.
+        let Setup { mut link, stream, mut server, killer, commands: _commands, .. } = after(taken(Duration::ZERO));
+        let burst = tokio::spawn(async move {
+            tokio::time::sleep(TAKE_WAIT + SENDING_TICK).await;
+            let _ = server.write_all(&[0u8; 512]).await;
+            tokio::time::sleep(Duration::from_secs(60)).await;
+        });
+        let wait = TAKE_WAIT + SENDING_TICK * (SENDING_TICKS + 4);
+        let out = tokio::time::timeout(wait, link.guard(Some(&killer), read_on(stream))).await;
+        assert!(out.is_err(), "still waited for");
+        burst.abort();
     }
 
     #[tokio::test]
     async fn a_statement_silent_after_a_taken_kill_is_waited_for() {
         // Silent (a rollback) past the bound: never cut.
-        let (mut link, stream, server, killer) = taken(Duration::ZERO);
+        let Setup { mut link, stream, server, killer, commands: _commands, .. } = after(taken(Duration::ZERO));
         let wait = TAKE_WAIT + SENDING_TICK * 4;
         let out = tokio::time::timeout(wait, link.guard(Some(&killer), read_on(stream))).await;
         assert!(out.is_err(), "still waited for");
@@ -262,10 +386,57 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_refused_kill_cuts_the_connection_at_once() {
-        let (mut link, stream, _server, killer) = taken(Duration::ZERO);
-        killer.record(Kill::Failed(crate::session::KillFailure::Refused(1095)), || true);
-        let out = tokio::time::timeout(Duration::from_secs(1), link.guard(Some(&killer), read_on(stream))).await;
+    async fn a_refused_kill_of_a_statement_that_sends_cuts_the_connection() {
+        let Setup { mut link, stream, server, killer, commands: _commands, .. } = after(REFUSED);
+        let send = send_on(server);
+        let t0 = Instant::now();
+        let out = tokio::time::timeout(Duration::from_secs(5), link.guard(Some(&killer), read_on(stream))).await;
         assert!(matches!(out, Ok(Err(Closed::CancelNotTaken(CancelFailure::Refused)))));
+        assert!(t0.elapsed() >= SENDING_TICK * SENDING_TICKS, "{:?}", t0.elapsed());
+        send.abort();
+    }
+
+    #[tokio::test]
+    async fn a_refused_kill_of_a_silent_statement_is_waited_for_and_said() {
+        // Cutting would not stop it: the session waits, and says why every few seconds.
+        let Setup { mut link, stream, server, killer, mut events, commands: _commands } = after(REFUSED);
+        let wait = STOPPING_TICK + SENDING_TICK * (SENDING_TICKS + 2);
+        let out = tokio::time::timeout(wait, link.guard(Some(&killer), read_on(stream))).await;
+        assert!(out.is_err(), "still waited for");
+        let mut said = 0;
+        while let Ok(ev) = events.try_recv() {
+            assert!(matches!(ev, DbEvent::CancelRefused { id: 3 }), "{ev:?}");
+            said += 1;
+        }
+        assert_eq!(said, 2, "once past the time a cut takes, then every tick");
+        drop(server);
+    }
+
+    #[tokio::test]
+    async fn commands_that_keep_coming_never_silence_what_the_session_says() {
+        let Setup { mut link, stream, server, killer, mut events, commands } = after(REFUSED);
+        let spam = tokio::spawn(async move {
+            while commands.send(DbCommand::FetchMore { id: 3 }).is_ok() {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        });
+        let wait = STOPPING_TICK + SENDING_TICK * (SENDING_TICKS + 2);
+        let out = tokio::time::timeout(wait, link.guard(Some(&killer), read_on(stream))).await;
+        assert!(out.is_err(), "still waited for");
+        let said = std::iter::from_fn(|| events.try_recv().ok())
+            .filter(|e| matches!(e, DbEvent::CancelRefused { .. }))
+            .count();
+        assert_eq!(said, 2);
+        spam.abort();
+        drop(server);
+    }
+
+    #[tokio::test]
+    async fn a_kill_that_was_not_sent_cuts_the_connection_at_once() {
+        let Setup { mut link, stream, server, killer, commands: _commands, .. } =
+            after(Kill::Failed(KillFailure::NotSent));
+        let out = tokio::time::timeout(Duration::from_secs(1), link.guard(Some(&killer), read_on(stream))).await;
+        assert!(matches!(out, Ok(Err(Closed::CancelNotTaken(CancelFailure::NotSent)))));
+        drop(server);
     }
 }

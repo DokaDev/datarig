@@ -149,16 +149,19 @@ pub enum DbError {
     ReadOnlyLost,
     /// The server did not stop the statement the session runs when asked to (by the user's
     /// cancel, or by the session itself stopping a result it holds), for this reason: the
-    /// session closed its connection instead of reading the rest of the result, and the user's
-    /// open transaction went with it (the server rolls it back).
+    /// session closed its connection instead of reading the rest of the result. Whether the
+    /// statement stopped is not known: it may run on (and, outside a transaction block, commit
+    /// what it does); the user's open transaction is rolled back once the server ends the
+    /// session.
     CancelNotTaken(CancelFailure),
 }
 
 /// Why a request to stop the running statement did not stop it ([`DbError::CancelNotTaken`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CancelFailure {
-    /// The server refused it: the statement runs as another account (MySQL: inside a
-    /// `SQL SECURITY DEFINER` routine, where `KILL QUERY` needs `CONNECTION_ADMIN`).
+    /// The server refused it (the statement runs as another account; MySQL: inside a
+    /// `SQL SECURITY DEFINER` routine, where `KILL QUERY` needs `CONNECTION_ADMIN`), and the
+    /// statement kept sending rows.
     Refused,
     /// It could not reach the server (the connection to send it on did not open: the network,
     /// the login).
@@ -683,6 +686,14 @@ pub enum DbEvent {
     /// few seconds while that lasts: the session is waiting on the server, not stuck, and the UI
     /// keeps it (only the driver decides to give a statement up).
     Stopping {
+        id: u64,
+    },
+    /// Run (or count) `id` was cancelled and the server refused the cancel: the statement runs
+    /// as another account (MySQL: inside a `SQL SECURITY DEFINER` routine), sends nothing, and
+    /// runs on to its end; closing the session would not stop it (the server does not look at
+    /// its connection meanwhile), so the session keeps waiting for its answer. Sent every few
+    /// seconds while that lasts: the session is waiting on the server, not stuck.
+    CancelRefused {
         id: u64,
     },
 }

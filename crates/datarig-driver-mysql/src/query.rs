@@ -53,13 +53,16 @@
 //! (`session::Killer`), only while a statement of the session is on its way or running (`busy`);
 //! a run of several statements also stops before its next one. A kill whose login comes after a
 //! new run began is not sent. A kill the server takes is waited for, however long the statement
-//! then takes to roll back. One that does not take (MySQL refuses one of a statement that runs
-//! as another account, inside a `SQL SECURITY DEFINER` routine, even after a few tries; one that
-//! cannot be sent; one taken whose statement still sends rows long after) is never followed by
-//! reading the rest of the result, which may have no end: the session cuts its connection, the
-//! run ends cancelled, what waited is answered, and the session is lost
-//! ([`DbError::CancelNotTaken`], with why); the server ends the statement once it finds the
-//! connection gone. A result the session stops itself (a held one) is stopped so too.
+//! then takes to roll back. MySQL refuses one of a statement that runs as another account
+//! (inside a `SQL SECURITY DEFINER` routine), even after a few tries: such a statement that
+//! sends nothing runs on to its end whatever the session does (the server does not look at its
+//! connection meanwhile), so the session waits for it and says why ([`DbEvent::CancelRefused`]).
+//! Where reading on could last forever, the connection is cut instead: a refused statement whose
+//! rows keep coming, a kill that cannot be sent, a taken one whose rows still keep coming long
+//! after. The run ends cancelled, what waited is answered, and the session is lost
+//! ([`DbError::CancelNotTaken`], with why). Whether the
+//! statement then stops is the server's: one that sends finds the connection gone. A result
+//! the session stops itself (a held one) is stopped so too.
 //!
 //! The session reports the sql mode its text is read in when it changes (`DbEvent::Language`),
 //! and what the server said of a statement beyond its outcome (`DbEvent::Info`: the id an

@@ -154,6 +154,7 @@ impl App {
                 count: false,
                 cancelling: None,
                 stopping: false,
+                refused: false,
             });
             if t.exec.path_per_transaction {
                 t.warn_session_path();
@@ -336,6 +337,7 @@ impl App {
             count: false,
             cancelling: None,
             stopping: false,
+            refused: false,
         });
         self.send_tab(id, DbCommand::FetchMore { id: qid });
     }
@@ -411,6 +413,7 @@ impl App {
             | DbEvent::Info { .. }
             | DbEvent::Released { .. }
             | DbEvent::Stopping { .. }
+            | DbEvent::CancelRefused { .. }
             | DbEvent::Done { .. }
             | DbEvent::Failed { .. }
             | DbEvent::TxOpen(_)
@@ -708,7 +711,8 @@ impl App {
             | DbEvent::Started { .. }
             | DbEvent::StepRows { .. }
             | DbEvent::Finished { .. }
-            | DbEvent::Stopping { .. } => {}
+            | DbEvent::Stopping { .. }
+            | DbEvent::CancelRefused { .. } => {}
             DbEvent::Ddl { id: request, result } => self.ddl_answered(id, None, request, result),
         }
     }
@@ -757,11 +761,13 @@ impl App {
             && r.cancelling.is_some()
         {
             r.cancelling = Some(now);
-            if matches!(ev, DbEvent::Stopping { id } if id == r.id) {
-                r.stopping = true;
+            match ev {
+                DbEvent::Stopping { id } if id == r.id => r.stopping = true,
+                DbEvent::CancelRefused { id } if id == r.id => r.refused = true,
+                _ => {}
             }
         }
-        if matches!(ev, DbEvent::Stopping { .. }) {
+        if matches!(ev, DbEvent::Stopping { .. } | DbEvent::CancelRefused { .. }) {
             return;
         }
         if matches!(ev, DbEvent::StatementCacheOff) {
@@ -894,6 +900,7 @@ impl App {
             | DbEvent::Language(_)
             | DbEvent::SessionValues(_)
             | DbEvent::Stopping { .. }
+            | DbEvent::CancelRefused { .. }
             | DbEvent::ValuesNotKnown { .. } => None,
             // The server dropped the schema's startup option (a pooler): the driver sets the
             // path in each transaction instead. Said in the run's Messages.
