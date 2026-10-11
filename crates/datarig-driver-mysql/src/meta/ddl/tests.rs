@@ -141,3 +141,17 @@ fn a_body_ending_in_a_comment_still_ends() {
         assert_eq!(whole, Some(server.as_str()), "{text}");
     }
 }
+
+/// The server prints a table's or a view's strings with backslash escapes whatever the session's
+/// mode, so text with a backslash says so first; text without one says nothing.
+#[test]
+fn a_tables_text_with_a_backslash_says_how_it_reads() {
+    let table = "CREATE TABLE `t` (\n  `v` varchar(20) DEFAULT 'a\\\\b''c'\n) ENGINE=InnoDB";
+    for kind in [ObjectKind::Table, ObjectKind::View] {
+        let text = runnable(kind, table, None);
+        assert_eq!(text, format!("{BACKSLASH_NOTE}{table};\n"));
+        assert_eq!(split_in(&text, MY).iter().map(|x| x.body(&text)).collect::<Vec<_>>(), [table]);
+    }
+    let plain = "CREATE TABLE `t` (\n  `v` varchar(20) DEFAULT 'it''s'\n) ENGINE=InnoDB";
+    assert_eq!(runnable(ObjectKind::Table, plain, None), format!("{plain};\n"));
+}

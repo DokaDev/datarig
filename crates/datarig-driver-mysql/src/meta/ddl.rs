@@ -8,7 +8,11 @@
 //! `mysqldump` writes it, between `DELIMITER ;;` and `DELIMITER ;`, ended with `;;` on a line of
 //! its own (the server keeps a comment at the end of a body, which would swallow an end on its
 //! line). Such an object keeps the `sql_mode` it was made under, which changes how its body
-//! reads: one that is not the metadata session's is said in a comment line first.
+//! reads: one that is not the metadata session's is said in a comment line first. A table's or a
+//! view's statement is the server's own printing, whose strings always use backslash escapes
+//! (`'a\\b\'c'`, whatever the session's mode): text with a backslash says so first, as it
+//! reads otherwise under `NO_BACKSLASH_ESCAPES`. A trigger's text is always `SHOW CREATE
+//! TRIGGER`'s, never `information_schema`'s statement, which the server keeps unescaped.
 //!
 //! MySQL has no DDL of an index of its own (an index is part of its table's `CREATE TABLE`), and
 //! a trigger calls no function: the explorer asks for the table's DDL on an index, and never for
@@ -46,6 +50,11 @@ const FIND_NAMED: &str = "{none}SELECT TABLE_TYPE, TABLE_SCHEMA, TABLE_NAME FROM
      WHERE TRIGGER_SCHEMA = {schema} AND TRIGGER_NAME = {name} \
      UNION ALL SELECT 'EVENT', EVENT_SCHEMA, EVENT_NAME FROM information_schema.EVENTS \
      WHERE EVENT_SCHEMA = {schema} AND EVENT_NAME = {name}";
+
+/// Said first in a table's or a view's text with a backslash: the server's printing escapes
+/// strings with backslashes, which `NO_BACKSLASH_ESCAPES` reads otherwise.
+const BACKSLASH_NOTE: &str =
+    "-- Strings are written with backslash escapes: run this where sql_mode has no NO_BACKSLASH_ESCAPES\n";
 
 /// The kind [`FIND_NAMED`] gives when the session has no database and the name names none.
 const NO_DATABASE: &str = "NO DATABASE";
@@ -268,7 +277,8 @@ fn same_mode(a: &str, b: &str) -> bool {
 /// `text`, the server's statement for an object of `kind`, as text to run again: a table's or a
 /// view's ended with `;`, any other's (a body may hold statements of its own, and end in a
 /// comment) between `DELIMITER` lines as `mysqldump` writes it, its end on a line of its own.
-/// `sql_mode`: the mode the object was made under, said first, when it is not the session's.
+/// `sql_mode`: the mode the object was made under, said first, when it is not the session's. A
+/// table's or a view's text with a backslash says first that its strings use backslash escapes.
 fn runnable(kind: ObjectKind, text: &str, sql_mode: Option<&str>) -> String {
     let mode = match sql_mode {
         Some("") => "-- sql_mode: ''\n".to_string(),
@@ -276,6 +286,7 @@ fn runnable(kind: ObjectKind, text: &str, sql_mode: Option<&str>) -> String {
         None => String::new(),
     };
     match kind {
+        ObjectKind::Table | ObjectKind::View if text.contains('\\') => format!("{mode}{BACKSLASH_NOTE}{text};\n"),
         ObjectKind::Table | ObjectKind::View => format!("{mode}{text};\n"),
         _ => format!("{mode}DELIMITER ;;\n{text}\n;;\nDELIMITER ;\n"),
     }

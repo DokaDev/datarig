@@ -1884,6 +1884,7 @@ async fn a_user_name_with_an_at_sign_finds_its_trigger_privilege() {
     let s = structure_of(&mut m, &t.name).await.unwrap();
     assert!(s.triggers.is_empty());
     assert!(s.hidden.is_empty(), "the privilege is the user's: {:?}", s.hidden);
+}
 
 // ── DDL ────────────────────────────────────────────────────────────────────
 
@@ -2323,4 +2324,82 @@ async fn a_name_that_cannot_be_looked_up_says_why() {
     assert_eq!(ddl_of(&mut m, named("orders")).await, Err(DbError::NoDatabase));
     assert!(verbatim(ddl_of(&mut m, named("shop.orders")).await).1.starts_with("CREATE TABLE `orders`"));
     assert_eq!(ddl_of(&mut m, named("a.b.c")).await, Err(DbError::NotAName));
+}
+
+/// A trigger's DDL is `SHOW CREATE TRIGGER`'s text, as it was written (`information_schema`
+/// keeps the statement with its strings unescaped): a body with `''` and `\\` in its strings runs
+/// again on a copy, reads back the same, and the copy writes the same value.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_triggers_strings_run_again_as_written() {
+    use datarig_core::driver::ddl::DdlObject;
+    let test = "a_triggers_strings_run_again_as_written";
+    let Some((url, admin)) = urls(test) else { return };
+    let ddl = ["CREATE TABLE {t} (id INT PRIMARY KEY, v VARCHAR(40))"];
+    let (t, c) = (Table::make(&admin, "ddlesc", &ddl).await, Table::make(&admin, "ddlescc", &ddl).await);
+    let (trigger, copy) = (format!("{}_bi", t.name), format!("{}_bi", c.name));
+    let mut q = Conn::open(&in_database(&admin, "shop"), SessionRole::Query, false, test).await;
+    let body = r"SET NEW.v = CONCAT('it''s', '\\', 'a\'b', NEW.v)";
+    q.ok(1, &format!("CREATE TRIGGER {trigger} BEFORE INSERT ON {} FOR EACH ROW {body}", t.name)).await;
+    let mut m = Conn::start(&url, SessionRole::Meta, false, test);
+    m.wait(|e| matches!(e, DbEvent::Catalog(_)), 30).await;
+    let of =
+        |table: &str, name: &str| DdlObject::Trigger { schema: "shop".into(), table: table.into(), name: name.into() };
+    let (_, text) = verbatim(ddl_of(&mut m, of(&t.name, &trigger)).await);
+    assert!(text.contains(body), "as written: {text}");
+    let renamed = text
+        .replace(&format!("`{trigger}`"), &format!("`{copy}`"))
+        .replace(&format!("`{}`", t.name), &format!("`{}`", c.name));
+    let mut id = 10;
+    replay(&mut q, &mut id, &renamed).await;
+    assert_eq!(verbatim(ddl_of(&mut m, of(&c.name, &copy)).await).1, renamed);
+    for table in [&t.name, &c.name] {
+        q.ok(20, &format!("INSERT INTO {table} (id, v) VALUES (1, '!')")).await;
+    }
+    let value = |evs: Vec<DbEvent>| page_of(&evs).1[0][0].clone();
+    let a = value(q.run(21, &[&format!("SELECT v FROM {}", t.name)]).await);
+    let b = value(q.run(22, &[&format!("SELECT v FROM {}", c.name)]).await);
+    assert_eq!(a.as_deref(), Some(r"it's\a'b!"));
+    assert_eq!(a, b);
+}
+
+/// The server prints a table's strings with backslash escapes whatever the session's sql_mode:
+/// the text says so first. Run as it says (no `NO_BACKSLASH_ESCAPES`) it makes the same table;
+/// run under `NO_BACKSLASH_ESCAPES` it would not, which is why it says so.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_tables_strings_say_how_they_read() {
+    use datarig_core::driver::ddl::DdlObject;
+    let test = "a_tables_strings_say_how_they_read";
+    let Some((url, admin)) = urls(test) else { return };
+    let ddl = [r"CREATE TABLE {t} (id INT PRIMARY KEY, v VARCHAR(20) DEFAULT 'a\\b''c',
+        w VARCHAR(20) DEFAULT ('x\\y''z'), CHECK (v <> 'q\\r''s'))"];
+    let t = Table::make(&admin, "ddlbs", &ddl).await;
+    let copies = [format!("{}c", t.name), format!("{}n", t.name)];
+    let _copies = copies.clone().map(|c| Cleanup { url: admin.clone(), sql: format!("DROP TABLE IF EXISTS shop.{c}") });
+    let mut m = Conn::start(&url, SessionRole::Meta, false, test);
+    m.wait(|e| matches!(e, DbEvent::Catalog(_)), 30).await;
+    let of = |name: &str| DdlObject::Relation { schema: "shop".into(), name: name.into() };
+    let (_, text) = verbatim(ddl_of(&mut m, of(&t.name)).await);
+    let (note, rest) = text.split_once('\n').unwrap();
+    assert!(note.starts_with("-- ") && note.contains("backslash") && note.contains("NO_BACKSLASH_ESCAPES"), "{text}");
+    assert!(rest.contains(r"DEFAULT 'a\\b''c'"), "{text}");
+    // A check's name is the database's: the copy's own.
+    let copy = |to: &str| {
+        text.replace(&format!("`{}`", t.name), &format!("`{to}`"))
+            .replace(&format!("`{}_chk_1`", t.name), &format!("`{to}_chk_1`"))
+    };
+    let mut q = Conn::open(&in_database(&admin, "shop"), SessionRole::Query, false, test).await;
+    let mut id = 0;
+    replay(&mut q, &mut id, &copy(&copies[0])).await;
+    assert_eq!(verbatim(ddl_of(&mut m, of(&copies[0])).await).1, copy(&copies[0]));
+    q.ok(50, "SET SESSION sql_mode = CONCAT(@@SESSION.sql_mode, ',NO_BACKSLASH_ESCAPES')").await;
+    let mut differs = false;
+    for s in datarig_core::sql::split::split_in(&copy(&copies[1]), Dialect::MySql(MySqlMode::default())) {
+        let evs = q.run(51, &[s.body(&copy(&copies[1]))]).await;
+        differs |= matches!(evs.last(), Some(DbEvent::Failed { .. }));
+    }
+    if !differs {
+        let again = verbatim(ddl_of(&mut m, of(&copies[1])).await).1;
+        differs = again != copy(&copies[1]);
+    }
+    assert!(differs, "under NO_BACKSLASH_ESCAPES the text reads otherwise");
 }
