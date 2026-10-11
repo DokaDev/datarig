@@ -20,6 +20,9 @@ use tokio_util::codec::Framed;
 pub enum RequestMessages {
     Single(FrontendMessage),
     CopyIn(CopyInReceiver),
+    // datarig: a request whose response is a COPY to the client (`copy_out`), written as
+    // `Single` is.
+    CopyOut(FrontendMessage),
 }
 
 pub struct Request {
@@ -29,6 +32,8 @@ pub struct Request {
 
 pub struct Response {
     sender: mpsc::Sender<BackendMessages>,
+    // datarig: the request expects the COPY sub-protocol (`copy_in`, `copy_out`).
+    copy: bool,
 }
 
 #[derive(PartialEq, Debug)]
@@ -143,6 +148,14 @@ where
                 },
             };
 
+            // datarig: a COPY that no request asked for (`COPY ... TO STDOUT` sent as a query)
+            // has no reader: draining it would keep the server running it, and a `COPY ... FROM
+            // STDIN` would wait for data forever. The connection ends instead, so the server
+            // stops the COPY when its socket closes.
+            if !response.copy && messages.starts_copy() {
+                return Err(Error::unexpected_copy());
+            }
+
             match response.sender.poll_ready(cx) {
                 Poll::Ready(Ok(())) => {
                     let _ = response.sender.start_send(messages);
@@ -184,6 +197,7 @@ where
                 trace!("polled new request");
                 self.responses.push_back(Response {
                     sender: request.sender,
+                    copy: !matches!(request.messages, RequestMessages::Single(_)),
                 });
                 Poll::Ready(Some(request.messages))
             }
@@ -231,7 +245,7 @@ where
             };
 
             match request {
-                RequestMessages::Single(request) => {
+                RequestMessages::Single(request) | RequestMessages::CopyOut(request) => {
                     Pin::new(&mut self.stream)
                         .start_send(request)
                         .map_err(Error::io)?;

@@ -1,4 +1,6 @@
-use super::{TxAfter, command_tag, forgets_prepared, plain_read, returns_no_rows, split_page, tx_after};
+use super::{
+    TxAfter, command_tag, copies_with_client, forgets_prepared, plain_read, returns_no_rows, split_page, tx_after,
+};
 
 #[test]
 fn tags() {
@@ -795,4 +797,53 @@ mod terminal {
         assert!(matches!(rx.try_recv(), Ok(DbEvent::Page { id: 11, .. })));
         assert!(rx.try_recv().is_err());
     }
+}
+
+/// The client's side of a COPY is told from the statement's words: `STDIN` or `STDOUT` right
+/// after `FROM` or `TO`, outside parentheses; a table, a column or a file named so is not.
+#[test]
+fn copies_with_the_client_are_told_from_the_words() {
+    for sql in [
+        "COPY t TO STDOUT",
+        "copy t from stdin",
+        "COPY shop.users (id, name) TO STDOUT WITH (FORMAT csv, HEADER)",
+        "COPY (SELECT g FROM generate_series(1, 10) g) TO STDOUT",
+        "COPY BINARY t TO STDOUT",
+        "COPY t FROM STDIN WITH (FORMAT csv) WHERE a > 1",
+        "/* a comment */ COPY t -- and another\n FROM\nSTDIN;",
+        "COPY \"stdout\" FROM STDIN",
+        // With `standard_conforming_strings` off the server reads `\'` as a quote: the rest is
+        // code, and the `--` a comment.
+        r"COPY (SELECT 'a\'') TO STDOUT -- '",
+        r"COPY t (a) FROM STDIN WHERE a <> 'b\'' -- '",
+        // After a dot a reserved word is a name: the table `to` or `from` of a schema.
+        "COPY pg_temp.to TO STDOUT",
+        "COPY pg_temp.from FROM STDIN",
+        "COPY pg_temp.to (a) TO STDOUT",
+    ] {
+        assert!(copies_with_client(sql), "{sql:?}");
+    }
+    for sql in [
+        "COPY t TO '/tmp/out.csv'",
+        "COPY t FROM 'stdin'",
+        "COPY t TO PROGRAM 'cat'",
+        "COPY stdout FROM '/tmp/in.csv'",
+        "COPY t (stdin) TO '/tmp/out.csv'",
+        "COPY (SELECT a FROM stdout) TO '/tmp/out.csv'",
+        "SELECT 'COPY t TO STDOUT'",
+        "SELECT stdout FROM t",
+        "COPY t TO '/tmp/out.csv' WITH (FORMAT csv) -- TO STDOUT",
+        "DO $$ BEGIN COPY t TO STDOUT; END $$",
+        "",
+    ] {
+        assert!(!copies_with_client(sql), "{sql:?}");
+    }
+}
+
+/// Only the `FROM` or `TO` right after the COPY's table (or query) says where the data goes: one
+/// in its `WHERE` clause compares a column named `stdin`.
+#[test]
+fn a_from_in_the_where_clause_is_not_where_the_copy_goes() {
+    assert!(!copies_with_client("COPY t FROM '/tmp/in.csv' WHERE a IS DISTINCT FROM stdin"));
+    assert!(!copies_with_client("COPY t (a) FROM '/tmp/in.csv' WHERE a IS NOT DISTINCT FROM stdout"));
 }

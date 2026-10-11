@@ -1483,6 +1483,8 @@ impl App {
             DbError::NoResult => Label::DbNoResult,
             DbError::Cancelled => Label::QueryCancelled,
             DbError::ReadWriteRefused => Label::DbReadWriteRefused,
+            DbError::CopyStdio => Label::DbCopyStdio,
+            DbError::CopyStarted => Label::DbCopyStarted,
             DbError::ReadOnlyLost => Label::DbReadOnlyLost,
             DbError::Locked => Label::DbLocked,
             DbError::NotFound => Label::DbNotFound,

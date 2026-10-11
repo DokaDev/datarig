@@ -4414,3 +4414,189 @@ async fn a_write_not_held_is_shown_only_once_committed() {
     // Ended: a statement that cannot run in a transaction block runs.
     assert!(matches!(c.run(7, "VACUUM zz_nohold_w").await, DbEvent::Done { .. }), "no transaction open");
 }
+
+// ── COPY to or from the client ──────────────────────────────────────────────
+
+/// Ends every backend of the session tagged `tag` when it goes out of scope (also when an
+/// assertion fails), so a COPY a test started never keeps running on the server.
+struct TerminateGuard {
+    url: String,
+    tag: String,
+}
+
+impl Drop for TerminateGuard {
+    fn drop(&mut self) {
+        let sql = format!(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = 'datarig-q-{}'",
+            self.tag
+        );
+        if let Err(e) = pg_clean::run_fresh(&self.url, &sql) {
+            let _ = writeln!(std::io::stderr(), "warning: {sql}: {e}");
+        }
+    }
+}
+
+/// The answers to run `id` and the `Lost` events: read until the first of them (at most 10s),
+/// then for 300ms more, so a second one would be seen.
+async fn answers_to(q: &mut Conn, id: u64) -> Vec<DbEvent> {
+    let mut seen = Vec::new();
+    let mut deadline = Instant::now() + Duration::from_secs(10);
+    while let Ok(Some(ev)) = tokio::time::timeout_at(deadline.into(), q.rx.recv()).await {
+        let answer = matches!(&ev, DbEvent::Page { id: i, .. } | DbEvent::Done { id: i, .. } | DbEvent::Failed { id: i, .. } if *i == id);
+        if answer || matches!(ev, DbEvent::Lost { .. }) {
+            if seen.is_empty() {
+                deadline = Instant::now() + Duration::from_millis(300);
+            }
+            seen.push(ev);
+        }
+    }
+    seen
+}
+
+/// Wait (at most 5s) until the server runs nothing of the session tagged `tag`.
+async fn nothing_running(obs: &mut Conn, tag: &str, what: &str) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut n = 100;
+    loop {
+        let active = active_queries(obs, n, tag).await;
+        if active.is_empty() {
+            break;
+        }
+        assert!(Instant::now() < deadline, "{what}: the server still runs {active:?}");
+        n += 1;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// `COPY … TO STDOUT` and `COPY … FROM STDIN` (the client's side of a COPY, which the session
+/// does not carry), held or not, small or large: the run gets exactly one answer, the server
+/// runs nothing of it afterwards, and the session goes on.
+#[tokio::test(flavor = "multi_thread")]
+async fn copy_to_or_from_the_client_ends_the_run_and_leaves_nothing_running() {
+    let Some(url) = pg_url("copy_to_or_from_the_client_ends_the_run_and_leaves_nothing_running") else { return };
+    let copies = [
+        "COPY (SELECT g FROM generate_series(1, 10) g) TO STDOUT",
+        "COPY zz_copy TO STDOUT WITH (FORMAT csv)",
+        "COPY zz_copy FROM STDIN",
+        // Large enough to run for minutes if the server is left to it.
+        "COPY (SELECT g, repeat('x', 200) FROM generate_series(1, 200000000) g) TO STDOUT",
+    ];
+    for (paging, mode) in [(PagingMode::Hold, "h"), (PagingMode::NoHold, "n")] {
+        for (i, copy) in copies.iter().enumerate() {
+            let tag = format!("copy{mode}{i}x{}", std::process::id());
+            let _guard = TerminateGuard { url: url.clone(), tag: tag.clone() };
+            let (mut q, mut obs) = tagged(&url, &tag).await;
+            let create = "CREATE TEMP TABLE zz_copy AS SELECT g FROM generate_series(1, 10) g";
+            assert!(matches!(q.run(1, create).await, DbEvent::Done { .. }));
+            q.session.send(DbCommand::Execute { id: 2, statements: vec![copy.to_string()], paging });
+            let answers = answers_to(&mut q, 2).await;
+            assert_eq!(answers.len(), 1, "{copy} ({paging:?}): one answer: {answers:?}");
+            assert!(
+                matches!(answers[0], DbEvent::Failed { id: 2, error: DbError::CopyStdio, cancelled: false }),
+                "{copy} ({paging:?}): {answers:?}"
+            );
+            let what = format!("{copy} ({paging:?})");
+            nothing_running(&mut obs, &tag, &what).await;
+            let after = q.run(3, "SELECT count(*) FROM zz_copy").await;
+            let DbEvent::Page { rows, .. } = after else {
+                panic!("{copy} ({paging:?}): the session goes on: {after:?}")
+            };
+            assert_eq!(rows[0][0].as_deref(), Some("10"), "{copy} ({paging:?}): nothing was copied in");
+            // The count's own statement may still show as active for a moment after its answer.
+            nothing_running(&mut obs, &tag, &what).await;
+        }
+    }
+}
+
+/// Below the session's own check: a COPY with the client that reaches the connection anyway
+/// (sent through the client library directly) ends the connection, so the server stops it,
+/// instead of the connection reading it in the background while the server goes on (or, for
+/// `FROM STDIN`, both waiting for each other).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_copy_no_request_reads_ends_the_connection() {
+    let Some(url) = pg_url("a_copy_no_request_reads_ends_the_connection") else { return };
+    let mut obs = Conn::open(&url, SessionRole::Query).await;
+    let copies =
+        ["COPY (SELECT g, repeat('x', 200) FROM generate_series(1, 200000000) g) TO STDOUT", "COPY zz_copy FROM STDIN"];
+    for (i, copy) in copies.iter().enumerate() {
+        let tag = format!("copyconn{i}x{}", std::process::id());
+        let _guard = TerminateGuard { url: url.clone(), tag: tag.clone() };
+        let mut cfg: tokio_postgres::Config = url.parse().expect("the test URL");
+        cfg.application_name(format!("datarig-q-{tag}"));
+        let (client, conn) = cfg.connect(tokio_postgres::NoTls).await.expect("connect");
+        let conn = tokio::spawn(conn);
+        client.batch_execute("CREATE TEMP TABLE zz_copy (g int)").await.expect("temp table");
+        let err = client.execute(*copy, &[]).await.expect_err("nothing reads the COPY");
+        let ended = tokio::time::timeout(Duration::from_secs(5), conn).await;
+        let Ok(Ok(Err(why))) = ended else { panic!("{copy}: the connection ends ({err}): {ended:?}") };
+        assert!(why.is_unexpected_copy(), "{copy}: the reason is the COPY: {why}");
+        nothing_running(&mut obs, &tag, copy).await;
+        drop(client);
+    }
+}
+
+/// A COPY with the client hidden from a lexer that keeps `standard_conforming_strings` on (the
+/// server, with it off, reads `\'` as a quote, so the rest is code and the `--` a comment): set
+/// off for the session or only for the user's block, small or large, it is refused before it is
+/// sent. Before the session read the text both ways it reached the server, and only the client
+/// library's check ended it (the session was `Lost`).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_copy_hidden_by_backslash_strings_is_refused_too() {
+    let Some(url) = pg_url("a_copy_hidden_by_backslash_strings_is_refused_too") else { return };
+    let hidden = |rows: u64| format!(r"COPY (SELECT g, 'a\'' FROM generate_series(1, {rows}) g) TO STDOUT -- '");
+    let off = "SET standard_conforming_strings = off";
+    let cases: [(&str, Vec<&str>, u64); 3] = [
+        ("session", vec![off], 10),
+        ("block", vec!["BEGIN", "SET LOCAL standard_conforming_strings = off"], 10),
+        // Large enough to run for minutes if the server is left to it.
+        ("large", vec![off], 200_000_000),
+    ];
+    for (i, (case, setup, rows)) in cases.iter().enumerate() {
+        let tag = format!("copymiss{i}x{}", std::process::id());
+        let _guard = TerminateGuard { url: url.clone(), tag: tag.clone() };
+        let (mut q, mut obs) = tagged(&url, &tag).await;
+        for (k, sql) in setup.iter().enumerate() {
+            let ev = q.run(k as u64 + 1, sql).await;
+            assert!(matches!(ev, DbEvent::Done { .. }), "{case}: {sql}: {ev:?}");
+        }
+        q.session.send(DbCommand::Execute { id: 10, statements: vec![hidden(*rows)], paging: PagingMode::Hold });
+        let seen = answers_to(&mut q, 10).await;
+        assert!(
+            matches!(&seen[..], [DbEvent::Failed { id: 10, error: DbError::CopyStdio, cancelled: false }]),
+            "{case}: refused, and the session goes on: {seen:?}"
+        );
+        nothing_running(&mut obs, &tag, case).await;
+        let DbEvent::Page { rows, .. } = q.run(11, r"SELECT 'b\''").await else {
+            panic!("{case}: the session goes on")
+        };
+        assert_eq!(rows[0][0].as_deref(), Some("b'"), "{case}: still off");
+    }
+}
+
+/// A table named by a reserved word after its schema (`pg_temp.to`): the word is the table's
+/// name, not where the data goes. Read as the direction, the COPY reached the server and only
+/// the client library's check ended it (the session was `Lost`); it is refused before it is
+/// sent, and the session goes on.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_copy_of_a_table_named_to_is_refused() {
+    let Some(url) = pg_url("a_copy_of_a_table_named_to_is_refused") else { return };
+    let tag = format!("copyto{}", std::process::id());
+    let _guard = TerminateGuard { url: url.clone(), tag: tag.clone() };
+    let (mut q, mut obs) = tagged(&url, &tag).await;
+    assert!(matches!(q.run(1, r#"CREATE TEMP TABLE "to" (a int)"#).await, DbEvent::Done { .. }));
+    q.session.send(DbCommand::Execute {
+        id: 2,
+        statements: vec!["COPY pg_temp.to TO STDOUT".into()],
+        paging: PagingMode::Hold,
+    });
+    let seen = answers_to(&mut q, 2).await;
+    assert!(
+        matches!(&seen[..], [DbEvent::Failed { id: 2, error: DbError::CopyStdio, cancelled: false }]),
+        "refused, and the session goes on: {seen:?}"
+    );
+    nothing_running(&mut obs, &tag, "COPY pg_temp.to").await;
+    let DbEvent::Page { rows, .. } = q.run(3, "SELECT count(*) FROM pg_temp.to").await else {
+        panic!("the session goes on")
+    };
+    assert_eq!(rows[0][0].as_deref(), Some("0"));
+}

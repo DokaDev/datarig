@@ -66,6 +66,11 @@
 //! ([`DbEvent::StatementCacheOff`]), as behind a pooler in transaction mode without prepared
 //! statement support. Off, no statement outlives the transaction it runs in.
 //!
+//! **COPY with the client**: `COPY … FROM STDIN` and `COPY … TO STDOUT` are never sent
+//! ([`DbError::CopyStdio`], [`copies_with_client`]); their data would go through the COPY
+//! sub-protocol, which the session does not carry. A COPY that starts anyway ends the
+//! connection (the client library's check), so the server never goes on with one nobody reads.
+//!
 //! Closing: when the UI closes the session while a statement runs, the statement is cancelled
 //! and the connection closed (the server rolls back). When the connection ends by itself, the
 //! running statement fails first, then `Lost` is reported once.
@@ -75,7 +80,7 @@ use crate::link::{Closed, Link, Next};
 use crate::route::Cancel;
 use crate::values::{Raw, format_code, format_value, is_json, is_numeric, type_display, value_kind};
 use datarig_core::driver::{Cell, ColumnMeta, ColumnOrigin, DbCommand, DbError, DbEvent, Outcome, PagingMode};
-use datarig_core::sql::lexer::{Tok, Token, lex};
+use datarig_core::sql::lexer::{Tok, Token, lex, lex_backslash_strings};
 use datarig_core::sql::risk::{self, Class};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
@@ -808,6 +813,46 @@ pub(crate) fn returns_no_rows(sql: &str) -> bool {
     }
 }
 
+/// Whether `sql` is `COPY … FROM STDIN` or `COPY … TO STDOUT` (the client's side of a COPY):
+/// `STDIN` or `STDOUT` right after the first `FROM` or `TO` outside parentheses, the one that
+/// follows the table or the query (both reserved words, so no bare name, though one after a dot
+/// names a table: `pg_temp.to`; a later one, in a `WHERE` clause, compares a column). A table
+/// or a column may be named `stdout`; a file name is a string. Only the `COPY` statement itself
+/// starts a COPY with the client (not one in a function or a `DO` block), so its first word
+/// tells. Read both ways the server may lex the text: with `standard_conforming_strings` off (a
+/// session may set it) `\'` ends no string.
+pub(crate) fn copies_with_client(sql: &str) -> bool {
+    copies_with_client_in(sql, &lex(sql))
+        || sql.contains('\\') && copies_with_client_in(sql, &lex_backslash_strings(sql))
+}
+
+/// [`copies_with_client`] of `sql` lexed as `toks`.
+fn copies_with_client_in(sql: &str, toks: &[Token]) -> bool {
+    let word = |t: &Token| t.is_word().then(|| t.text(sql).to_ascii_uppercase());
+    let mut toks = toks.iter().filter(|t| !t.is_trivia());
+    if toks.next().and_then(word).as_deref() != Some("COPY") {
+        return false;
+    }
+    let mut depth = 0usize;
+    // After a dot a reserved word is a name (`pg_temp.to`), not the direction.
+    let mut after_dot = false;
+    let mut outside = toks.filter_map(|t| {
+        let named = std::mem::replace(&mut after_dot, t.kind == Tok::Dot);
+        match t.kind {
+            Tok::LParen => depth += 1,
+            Tok::RParen => depth = depth.saturating_sub(1),
+            _ if depth == 0 && named => return Some(None),
+            _ if depth == 0 => return Some(word(t)),
+            _ => {}
+        }
+        None
+    });
+    if !outside.any(|w| matches!(w.as_deref(), Some("FROM" | "TO"))) {
+        return false;
+    }
+    matches!(outside.next().flatten().as_deref(), Some("STDIN" | "STDOUT"))
+}
+
 /// Whether the rows of `sql` can be shown before its transaction commits: a plain read
 /// (`SELECT`, `VALUES`, `TABLE`, `SHOW`). The rows of anything that may write
 /// (`INSERT ... RETURNING`, `WITH`, ...) are shown only once the `COMMIT` succeeded.
@@ -1006,6 +1051,12 @@ async fn statement<'a>(
     step: Step,
 ) -> Result<Option<(Reply<'a>, Outcome)>, Halted<'a>> {
     let token = Some(env.token);
+    // Its data would go through the COPY sub-protocol, which the session does not carry: sent,
+    // the server would wait for data or keep sending it (see [`copies_with_client`]).
+    if copies_with_client(sql) {
+        reply.fail(DbError::CopyStdio, false);
+        return Ok(None);
+    }
     // A read-only session never asks for read-write: the user's block could go back to
     // read-write before its first query, whatever `SET TRANSACTION READ ONLY` said.
     if env.read_only && risk::classify(sql).read_write {

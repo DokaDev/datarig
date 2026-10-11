@@ -19,7 +19,8 @@ pub async fn copy_out(client: &InnerClient, statement: Statement) -> Result<Copy
 }
 
 async fn start(client: &InnerClient, buf: Bytes) -> Result<Responses, Error> {
-    let mut responses = client.send(RequestMessages::Single(FrontendMessage::Raw(buf)))?;
+    // datarig: `CopyOut`, so the connection lets its CopyOutResponse through.
+    let mut responses = client.send(RequestMessages::CopyOut(FrontendMessage::Raw(buf)))?;
 
     match responses.next().await? {
         Message::BindComplete => {}
