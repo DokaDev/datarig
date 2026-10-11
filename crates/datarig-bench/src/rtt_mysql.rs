@@ -4,7 +4,9 @@
 //! statement run again past the rows it has, after the allowlist's question to the server), a
 //! held result's next page, a count, a write, and the same inside the user's transaction and on a
 //! read-only profile. The rows are a temporary table of the session's own (the server needs no
-//! test data, only a database the user may make a temporary table in).
+//! test data, only a database the user may make a temporary table in). The explorer opening a
+//! table costs its structure, read on the metadata session: of a table `zz_bench_structure` the
+//! bench makes in the URL's database for that and drops again.
 
 use crate::rtt::{WiredSession, report, scenario};
 use datarig_core::driver::{DbCommand, DbEvent, PagingMode, SessionRole};
@@ -97,6 +99,23 @@ pub async fn run(url: &str, one_way: Duration, runs: usize) -> Result<Value, Str
         .await?,
     );
     s.cost("ROLLBACK").await?;
+    // The explorer opening a table: its structure, read on the metadata session (after the
+    // reads it makes when it connects).
+    let database = datarig_core::profile::dsn::parse(url).map_err(|e| format!("{e:?}"))?.database;
+    s.cost("DROP TABLE IF EXISTS zz_bench_structure").await?;
+    s.cost("CREATE TABLE zz_bench_structure (id INT PRIMARY KEY, v VARCHAR(40), KEY ix_v (v))").await?;
+    let mut m = WiredSession::open_with(&MyDriver, url, one_way, false, SessionRole::Meta).await?;
+    let mut costs = Vec::new();
+    for _ in 0..runs {
+        let load = DbCommand::LoadStructure { schema: database.clone(), table: "zz_bench_structure".into() };
+        let (c, ev) = m.measure(load, |e| matches!(e, DbEvent::Structure { .. })).await?;
+        if !matches!(ev, DbEvent::Structure { result: Ok(_), .. }) {
+            return Err(format!("table_structure: {ev:?}"));
+        }
+        costs.push(c);
+    }
+    out.push(report("table_structure", &costs));
+    s.cost("DROP TABLE zz_bench_structure").await?;
     // A read-only profile (the session is read-only on the server: no table of its own).
     let mut r = WiredSession::open_with(&MyDriver, url, one_way, true, SessionRole::Query).await?;
     let ro_small = "SELECT * FROM (SELECT 1 AS id UNION ALL SELECT 2) AS t";

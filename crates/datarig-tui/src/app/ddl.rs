@@ -59,7 +59,12 @@ impl App {
         let structure = || tree.object_view(i, g, j).and_then(|v| v.loaded());
         let object = match item {
             Some((StructureGroup::Triggers, k)) => {
-                let trigger = structure()?.triggers.get(k)?.name.clone();
+                let trigger = structure()?.triggers.get(k)?;
+                // A trigger that calls no function (MySQL's) has no function's DDL.
+                if function && trigger.function.is_empty() {
+                    return None;
+                }
+                let trigger = trigger.name.clone();
                 match function {
                     true => DdlObject::TriggerFunction { schema, table: name, trigger },
                     false => DdlObject::Trigger { schema, table: name, name: trigger },
@@ -81,7 +86,13 @@ impl App {
         match self.ddl_object_of_row(&row.kind, function) {
             Some((id, database, object)) => self.open_ddl(id, database, object),
             None => {
-                let l = if function { Label::DdlNoFunction } else { Label::DdlNoObject };
+                let on_trigger =
+                    matches!(self.ddl_object_of_row(&row.kind, false), Some((.., DdlObject::Trigger { .. })));
+                let l = match (function, on_trigger) {
+                    (true, true) => Label::DdlTriggerNoFunction,
+                    (true, false) => Label::DdlNoFunction,
+                    (false, _) => Label::DdlNoObject,
+                };
                 self.flash(Notice::new(l, Level::Info));
             }
         }

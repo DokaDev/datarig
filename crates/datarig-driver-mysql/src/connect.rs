@@ -63,7 +63,7 @@ impl Driver for MyDriver {
             introspection: true,
             key_metadata: false,
             contexts: false,
-            structure: false,
+            structure: true,
             ddl: false,
             language: Language::Sql(Dialect::MySql(MySqlMode::default())),
             hierarchy: Hierarchy::SchemaOnly,

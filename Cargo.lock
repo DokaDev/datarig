@@ -910,6 +910,8 @@ dependencies = [
  "datarig-core",
  "futures",
  "mysql_async",
+ "serde",
+ "serde_json",
  "tokio",
 ]
 

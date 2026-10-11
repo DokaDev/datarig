@@ -153,6 +153,8 @@ fn column_line(r: &RelationDdl, i: usize) -> String {
         ColumnFill::Virtual(e) => s.push_str(&format!(" GENERATED ALWAYS AS ({e}) VIRTUAL")),
         ColumnFill::IdentityAlways => s.push_str(&identity(true)),
         ColumnFill::IdentityByDefault => s.push_str(&identity(false)),
+        // A MySQL column: not in a PostgreSQL catalog.
+        ColumnFill::AutoIncrement => s.push_str(" AUTO_INCREMENT"),
     }
     // A named `NOT NULL` constraint is a line of its own.
     if c.not_null && !r.not_null_constraints.iter().any(|(_, col, _)| *col == c.name) {

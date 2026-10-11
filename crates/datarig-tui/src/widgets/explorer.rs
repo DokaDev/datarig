@@ -330,7 +330,11 @@ fn structure_parts(app: &App, tree: &Tree, n: Node) -> Vec<(String, Style)> {
                 parts.push((format!("{} ", icons::structure(sg)), style));
             }
             let label = app.i18n.label(group_label(sg)).to_string();
-            if count == 0 {
+            if st.hidden.contains(&sg) {
+                parts.push((label, dim));
+                let unknown = app.i18n.label(Label::TreeGroupHidden);
+                parts.push((format!(" · {unknown}"), Style::new().fg(th.warning)));
+            } else if count == 0 {
                 parts.push((label, dim));
             } else {
                 parts.push((label, Style::new().fg(th.fg_muted)));
@@ -433,7 +437,12 @@ fn item_parts(app: &App, st: &TableStructure, sg: StructureGroup, k: usize) -> V
         }
         StructureGroup::CheckConstraints => {
             let Some(c) = st.checks.get(k) else { return Vec::new() };
-            vec![name(&c.name), (format!("  {}", c.expression), dim)]
+            let mut parts = vec![name(&c.name), (format!("  {}", c.expression), dim)];
+            if !c.enforced() {
+                let off = app.i18n.label(Label::TreeCheckNotEnforced);
+                parts.push((format!(" · {off}"), Style::new().fg(th.warning)));
+            }
+            parts
         }
         StructureGroup::Triggers => {
             let Some(t) = st.triggers.get(k) else { return Vec::new() };
@@ -448,8 +457,12 @@ fn item_parts(app: &App, st: &TableStructure, sg: StructureGroup, k: usize) -> V
                 })
                 .collect();
             let each = if t.for_each_row { "FOR EACH ROW" } else { "FOR EACH STATEMENT" };
-            // Its `WHEN` condition has a line of its own, under it.
-            let detail = format!("  {} {} · {each} · {}()", t.timing.sql(), events.join(" OR "), t.function);
+            // Its `WHEN` condition has a line of its own, under it. A trigger that calls no
+            // function (MySQL's run statements of their own) names none.
+            let mut detail = format!("  {} {} · {each}", t.timing.sql(), events.join(" OR "));
+            if !t.function.is_empty() {
+                detail.push_str(&format!(" · {}()", t.function));
+            }
             let mut parts = vec![name(&t.name), (detail, dim)];
             if !t.enabled {
                 let off = app.i18n.label(Label::TreeTriggerDisabled);
@@ -478,6 +491,7 @@ fn column_detail(c: &StructureColumn) -> String {
         ColumnFill::Virtual(e) => detail.push(format!("generated ({e}) virtual")),
         ColumnFill::IdentityAlways => detail.push("identity always".into()),
         ColumnFill::IdentityByDefault => detail.push("identity".into()),
+        ColumnFill::AutoIncrement => detail.push("auto_increment".into()),
     }
     detail.join(", ")
 }
