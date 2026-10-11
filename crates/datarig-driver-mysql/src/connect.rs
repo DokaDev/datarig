@@ -61,7 +61,7 @@ impl Driver for MyDriver {
             server_paging: true,
             cancel: true,
             introspection: true,
-            key_metadata: false,
+            key_metadata: true,
             contexts: false,
             structure: true,
             ddl: true,
@@ -205,6 +205,10 @@ async fn run_session(
     // The mode the session starts in; the metadata session's is what a new session of this
     // account starts in, which the app checks a tab's first run in.
     let _ = events.send(DbEvent::Language(Language::Sql(Dialect::MySql(tracked.mode(&server)))));
+    // What a query session's values are read in (copying them as SQL needs it).
+    if let Some(values) = tracked.values().filter(|_| role == SessionRole::Query) {
+        let _ = events.send(DbEvent::SessionValues(values));
+    }
     // A session in a database of its own says where it works (it opened there: the server
     // refuses a database that does not exist or the user may not use).
     if let Some(db) = database.filter(|_| !opts.context.is_default()) {

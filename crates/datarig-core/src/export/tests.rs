@@ -379,3 +379,161 @@ fn bytes_and_bits_are_written_as_text() {
     assert_eq!(Kind::from(ValueKind::Bytes), Kind::Bytes);
     assert_eq!(Kind::from(ValueKind::Bit), Kind::Bit);
 }
+
+const MY: Dialect = Dialect::MySql(crate::sql::dialect::MySqlMode {
+    ansi_quotes: false,
+    no_backslash_escapes: false,
+    dollar_quotes: false,
+});
+
+/// MySQL's bytes (`0x…`) and bits (`b'…'`) are written as hexadecimal and bit literals;
+/// strings read the same in every sql mode: as they are, or as their UTF-8 bytes when they hold
+/// a backslash or a NUL. PostgreSQL's stay string literals.
+#[test]
+fn mysql_values_are_mysql_literals() {
+    let plain = Dialect::MySql(crate::sql::dialect::MySqlMode { no_backslash_escapes: true, ..Default::default() });
+    for d in [MY, plain] {
+        assert_eq!(sql_value(d, Kind::Bytes, Some("0x00FF27")), "X'00FF27'");
+        assert_eq!(sql_value(d, Kind::Bytes, Some("0x")), "X''");
+        assert_eq!(sql_value(d, Kind::Bit, Some("b'0101'")), "b'0101'");
+        assert_eq!(sql_value(d, Kind::Text, Some("it's")), "'it''s'");
+        assert_eq!(sql_value(d, Kind::Text, Some("a\\b")), "_utf8mb4 X'615C62'");
+        assert_eq!(sql_value(d, Kind::Text, Some("n\0")), "_utf8mb4 X'6E00'");
+        assert_eq!(sql_value(d, Kind::Json, Some(r#"{"a": "b\\c"}"#)), "_utf8mb4 X'7B2261223A2022625C5C63227D'");
+        assert_eq!(sql_value(d, Kind::Text, Some("é😀")), "'é😀'");
+    }
+    assert_eq!(sql_value(MY, Kind::Number, Some("18446744073709551615")), "18446744073709551615");
+    assert_eq!(sql_value(PG, Kind::Bytes, Some("\\x00ff")), r"'\x00ff'");
+    assert_eq!(sql_value(PG, Kind::Text, Some("a\\b")), r"'a\b'");
+    let insert = sql_insert(
+        MY,
+        &Target::Table { schema: "shop", name: "t", columns: vec!["b", "n"], overriding: true },
+        &[col("b", Kind::Bytes), col("n", Kind::Number)],
+        &[vec![Some("0x41"), None]],
+    );
+    assert_eq!(insert, "INSERT INTO `shop`.`t` (`b`, `n`) VALUES (X'41', NULL);", "no OVERRIDING on MySQL");
+}
+
+fn sqlc<'a>(name: &'a str, type_name: &'a str, kind: crate::driver::ValueKind) -> SqlColumn<'a> {
+    SqlColumn { name, type_name, kind, auto_increment: false }
+}
+
+fn session(zone: &str, charset: &str) -> crate::driver::ReadIn {
+    crate::driver::ReadIn::Values(crate::driver::SessionValues { time_zone: zone.into(), charset: charset.into() })
+}
+
+/// MySQL's `FLOAT` is sent rounded (`16777215` shows as `16777200`): its column is refused, by
+/// name; `DOUBLE` is sent whole.
+#[test]
+fn a_mysql_float_is_not_copied_as_sql() {
+    use crate::driver::ValueKind as V;
+    let utf8 = session("+00:00", "utf8mb4");
+    let cols = [sqlc("id", "int", V::Integer), sqlc("ratio", "float", V::Float)];
+    assert_eq!(sql_cells(MY, &cols, &utf8, None), Err(Refused { column: "ratio".into(), why: NotWhole::Float }));
+    let unsigned = [sqlc("r", "float unsigned", V::Float)];
+    assert!(sql_cells(MY, &unsigned, &utf8, None).is_err());
+    let double = [sqlc("d", "double", V::Float)];
+    assert_eq!(sql_cells(MY, &double, &utf8, None).unwrap().cell(0, "1.2345678").unwrap(), "1.2345678");
+    assert!(
+        sql_cells(PG, &cols, &crate::driver::ReadIn::Unknown, None).is_ok(),
+        "PostgreSQL's float4 is text the driver writes whole"
+    );
+}
+
+/// A `TIMESTAMP` is copied with the offset of the session's zone when that is fixed, and is
+/// refused, naming the zone, when it is not (a time in the hour a clock goes back is two
+/// instants).
+#[test]
+fn a_mysql_timestamp_is_copied_with_its_offset_or_refused() {
+    use crate::driver::ValueKind as V;
+    let ts = [sqlc("at", "timestamp", V::TimestampTz)];
+    let cells = |zone: &str, server: Option<&str>| sql_cells(MY, &ts, &session(zone, "utf8mb4"), server);
+    let utc = cells("+00:00", None).unwrap();
+    assert_eq!(utc.cell(0, "2024-10-27 00:30:00").unwrap(), "2024-10-27 00:30:00+00:00");
+    assert_eq!(utc.cell(0, "2024-10-27 00:30:00.500").unwrap(), "2024-10-27 00:30:00.500+00:00");
+    assert_eq!(utc.cell(0, "0000-00-00 00:00:00").unwrap(), "0000-00-00 00:00:00", "no instant, no offset");
+    assert_eq!(cells("-03:30", None).unwrap().cell(0, "2024-01-01 00:00:00").unwrap(), "2024-01-01 00:00:00-03:30");
+    assert_eq!(cells("+5:30", None).unwrap().cell(0, "2024-01-01 00:00:00").unwrap(), "2024-01-01 00:00:00+05:30");
+    assert!(cells("SYSTEM", Some("UTC")).is_ok());
+    for (zone, server) in [("Europe/Berlin", None), ("SYSTEM", Some("CET")), ("SYSTEM", None)] {
+        assert_eq!(
+            cells(zone, server),
+            Err(Refused { column: "at".into(), why: NotWhole::TimeZone(zone.into()) }),
+            "{zone} {server:?}"
+        );
+    }
+    let unknown = sql_cells(MY, &ts, &crate::driver::ReadIn::Unknown, None);
+    assert_eq!(unknown, Err(Refused { column: "at".into(), why: NotWhole::SessionUnknown }));
+    // A DATETIME has no zone.
+    let dt = [sqlc("dt", "datetime", V::Timestamp)];
+    assert_eq!(
+        sql_cells(MY, &dt, &crate::driver::ReadIn::Unknown, None).unwrap().cell(0, "2024-10-27 02:30:00").unwrap(),
+        "2024-10-27 02:30:00"
+    );
+}
+
+/// Text read in a character set that is not UTF-8 is not the text: refused. With UTF-8, a text
+/// that looks like bytes (`0xE9`) is text. Bytes and bits must be in the driver's form; an
+/// `AUTO_INCREMENT` 0 is refused.
+#[test]
+fn only_whole_values_are_written_as_sql() {
+    use crate::driver::ValueKind as V;
+    let cols = [sqlc("t", "varchar", V::Text), sqlc("b", "varbinary", V::Bytes), sqlc("n", "int", V::Integer)];
+    let latin1 = sql_cells(MY, &cols, &session("+00:00", "latin1"), None).unwrap();
+    assert_eq!(latin1.cell(0, "abc"), Err(Refused { column: "t".into(), why: NotWhole::Charset("latin1".into()) }));
+    assert_eq!(latin1.cell(2, "7").unwrap(), "7", "numbers are numbers in any character set");
+    let utf8 = sql_cells(MY, &cols, &session("+00:00", "utf8mb4"), None).unwrap();
+    assert_eq!(utf8.cell(0, "0xE9").unwrap(), "0xE9");
+    assert_eq!(utf8.cell(1, "0x00FF").unwrap(), "0x00FF");
+    assert_eq!(utf8.cell(1, "0x0"), Err(Refused { column: "b".into(), why: NotWhole::NotShownWhole }));
+    let auto = [SqlColumn { auto_increment: true, ..sqlc("id", "int", V::Integer) }];
+    let auto = sql_cells(MY, &auto, &session("+00:00", "utf8mb4"), None).unwrap();
+    assert_eq!(auto.cell(0, "0"), Err(Refused { column: "id".into(), why: NotWhole::AutoIncrementZero }));
+    assert_eq!(auto.cell(0, "7").unwrap(), "7");
+    let pg = sql_cells(PG, &cols, &crate::driver::ReadIn::Unknown, None).unwrap();
+    assert_eq!(pg.cell(1, "anything").unwrap(), "anything");
+}
+
+#[test]
+fn fixed_offsets_are_read_from_zone_names() {
+    assert_eq!(fixed_offset("UTC", None).as_deref(), Some("+00:00"));
+    assert_eq!(fixed_offset("SYSTEM", Some("GMT")).as_deref(), Some("+00:00"));
+    assert_eq!(fixed_offset("+09:00", None).as_deref(), Some("+09:00"));
+    // `Z` is no zone MySQL reports.
+    for zone in ["Europe/Berlin", "+9", "+09:0", "KST", "+09:00:00", "", "Z"] {
+        assert_eq!(fixed_offset(zone, None), None, "{zone}");
+    }
+}
+
+/// A result is judged by what its pages were read in: a `TIMESTAMP` or a text read before the
+/// session said, or across a change of its time zone or character set, is refused; numbers are
+/// not.
+#[test]
+fn values_read_in_an_unknown_or_changed_session_are_refused() {
+    use crate::driver::{ReadIn, SessionValues, ValueKind as V};
+    let cols = [sqlc("at", "timestamp", V::TimestampTz)];
+    let text = [sqlc("n", "int", V::Integer), sqlc("t", "varchar", V::Text)];
+    for (read_in, why) in [(ReadIn::Unknown, NotWhole::SessionUnknown), (ReadIn::Changed, NotWhole::SessionChanged)] {
+        assert_eq!(sql_cells(MY, &cols, &read_in, None), Err(Refused { column: "at".into(), why: why.clone() }));
+        let cells = sql_cells(MY, &text, &read_in, None).unwrap();
+        assert_eq!(cells.cell(0, "7").unwrap(), "7");
+        assert_eq!(cells.cell(1, "x"), Err(Refused { column: "t".into(), why }));
+    }
+    let utc = SessionValues { time_zone: "+00:00".into(), charset: "utf8mb4".into() };
+    let mut read = ReadIn::first(Some(&utc));
+    read.page(Some(&utc));
+    assert_eq!(read, ReadIn::Values(utc.clone()));
+    read.page(Some(&SessionValues { time_zone: "Europe/Berlin".into(), ..utc.clone() }));
+    assert_eq!(read, ReadIn::Changed);
+    assert_eq!(ReadIn::first(None), ReadIn::Unknown);
+}
+
+/// Only `utf8mb4` holds every character: text read in `utf8mb3` (an emoji arrives as `?`) is
+/// refused like any other character set.
+#[test]
+fn text_read_in_utf8mb3_is_refused() {
+    use crate::driver::ValueKind as V;
+    let cols = [sqlc("t", "varchar", V::Text)];
+    let cells = sql_cells(MY, &cols, &session("+00:00", "utf8mb3"), None).unwrap();
+    assert_eq!(cells.cell(0, "a?"), Err(Refused { column: "t".into(), why: NotWhole::Charset("utf8mb3".into()) }));
+}

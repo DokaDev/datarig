@@ -20,7 +20,9 @@ use crate::clipboard::{self, Method, Plan};
 use crate::widgets::editor::Yank;
 use crate::widgets::grid::Shape;
 use datarig_core::config::{ClipboardSetting, CopyHeader, EditorClipboard};
-use datarig_core::driver::keys::{InsertPlan, NotInsertable, NotUpdatable, insert_into, insert_source, update_source};
+use datarig_core::driver::keys::{
+    Generated, InsertPlan, NotInsertable, NotUpdatable, insert_into, insert_source, update_source,
+};
 use datarig_core::export::{self, Kind, Target};
 use datarig_core::fault::{ErrorLog, Fault};
 use datarig_core::sql::dialect::Dialect;
@@ -355,6 +357,9 @@ impl App {
         let mut skipped = String::new();
         // `:copy insert` of rows that are not a projection of that table: said after the copy.
         let mut as_is = None;
+        // A value of an SQL copy that would not be written whole ([`export::sql_cells`]): the
+        // copy is refused once the rows were read.
+        let mut refused: Option<export::Refused> = None;
         let text = {
             let t = self.tab();
             let Results::Rows(rs) = &t.results else { return };
@@ -369,6 +374,27 @@ impl App {
                 })
                 .collect();
             let header = self.prefs.copy_header.applies(count);
+            // How the SQL formats write each value ([`export::sql_cells`]), or the column they refuse;
+            // `insert`: an `AUTO_INCREMENT` value of 0 is refused (an `INSERT` takes it as the next
+            // number).
+            let keys = self.tab_keys(t).catalog();
+            let sql_cells = |insert: bool| {
+                let cols: Vec<export::SqlColumn> = b
+                    .cols
+                    .iter()
+                    .map(|&c| {
+                        let m = &rs.columns[c].meta;
+                        let auto = keys.and_then(|k| m.origin.as_ref().and_then(|o| k.column(o)));
+                        export::SqlColumn {
+                            name: &m.name,
+                            type_name: &m.type_name,
+                            kind: m.kind,
+                            auto_increment: insert && auto.is_some_and(|c| c.generated == Generated::AutoIncrement),
+                        }
+                    })
+                    .collect();
+                export::sql_cells(d, &cols, &rs.read_in, keys.and_then(|k| k.server_zone()))
+            };
             // The chosen columns of the rows of `b`, `COPY_CHUNK` at a time, into `write`.
             let stream = |write: &mut dyn FnMut(&[export::Row])| {
                 rs.rows.for_each_chunk(b.rows.clone(), COPY_CHUNK, |chunk| {
@@ -412,8 +438,15 @@ impl App {
                     if columns.len() != 1 {
                         return self.flash(Notice::new(Label::CopyInSeveralColumns, Level::Warning));
                     }
+                    let cells = match sql_cells(false) {
+                        Ok(c) => c,
+                        Err(r) => return self.flash(self.not_whole(&r)),
+                    };
                     let mut values: Vec<Option<String>> = Vec::new();
-                    let read = stream(&mut |rows| values.extend(rows.iter().map(|r| r[0].map(str::to_string))));
+                    let read = stream(&mut |rows| {
+                        let rows = written_as(&cells, rows, &mut refused);
+                        values.extend(rows.iter().map(|r| r[0].as_deref().map(str::to_string)));
+                    });
                     let rows: Vec<export::Row> = values.iter().map(|v| vec![v.as_deref()]).collect();
                     match (read, export::sql_in(d, &columns, &rows)) {
                         (Err(fault), _) => Err(fault),
@@ -443,8 +476,18 @@ impl App {
                         set: plan.set.clone(),
                         keys: plan.keys.clone(),
                     };
+                    let cells = match sql_cells(false) {
+                        Ok(c) => c,
+                        Err(r) => return self.flash(self.not_whole(&r)),
+                    };
                     let mut w = export::Writer::new(export::Format::Update(d, target), &columns);
-                    stream(&mut |rows| w.rows(rows)).map(|()| w.finish())
+                    stream(&mut |rows| {
+                        let rows = written_as(&cells, rows, &mut refused);
+                        let rows: Vec<export::Row> =
+                            rows.iter().map(|r| r.iter().map(|v| v.as_deref()).collect()).collect();
+                        w.rows(&rows);
+                    })
+                    .map(|()| w.finish())
                 }
                 (None, _) => {
                     let origins: Vec<_> = b.cols.iter().map(|&c| rs.columns[c].meta.origin.clone()).collect();
@@ -474,17 +517,26 @@ impl App {
                         columns: written.iter().map(|w| w.1).collect(),
                         overriding,
                     };
+                    let cells = match sql_cells(true) {
+                        Ok(c) => c,
+                        Err(r) => return self.flash(self.not_whole(&r)),
+                    };
                     let columns: Vec<_> = written.iter().map(|w| columns[w.0]).collect();
                     let mut w = export::Writer::new(export::Format::Sql(d, target), &columns);
                     stream(&mut |rows| {
+                        let rows = written_as(&cells, rows, &mut refused);
                         let rows: Vec<export::Row> =
-                            rows.iter().map(|r| written.iter().map(|w| r[w.0]).collect()).collect();
+                            rows.iter().map(|r| written.iter().map(|w| r[w.0].as_deref()).collect()).collect();
                         w.rows(&rows);
                     })
                     .map(|()| w.finish())
                 }
             };
             match written {
+                Ok(_) if refused.is_some() => {
+                    let notice = refused.as_ref().map(|r| self.not_whole(r));
+                    return self.flash(notice.unwrap_or_else(|| Notice::new(Label::CopyNothing, Level::Warning)));
+                }
                 Ok(text) => text,
                 Err(fault) => {
                     let error = self.fault_text("copy.read_failed", &fault);
@@ -774,6 +826,15 @@ impl App {
         if let (NoCatalog, Some(error)) = (why, failed) {
             return self.i18n.msg(&Msg::CopyInsertWhyKeysFailed { error }).to_string();
         }
+        // MySQL's reasons in its own words: the keys are read at connect, so a missing table is
+        // one created later or one the user may not see.
+        if matches!(self.tab_dialect(self.tab().id), Dialect::MySql(_)) {
+            match why {
+                NoCatalog => return self.i18n.label(Label::CopyInsertWhyKeysLoading).to_string(),
+                UnknownTable => return self.i18n.label(Label::CopyInsertWhyNotInKeys).to_string(),
+                _ => {}
+            }
+        }
         let label = match why {
             NotSelect => Label::CopyInsertWhyNotSelect,
             With => Label::CopyInsertWhyWith,
@@ -797,6 +858,24 @@ impl App {
             GeneratedColumn(_) => Label::CopyInsertWhyOnlyGenerated,
         };
         self.i18n.label(label).to_string()
+    }
+
+    /// Why a copy as SQL was refused for a value of a column ([`export::sql_cells`]), in words.
+    fn not_whole(&self, r: &export::Refused) -> Notice {
+        let reason = match &r.why {
+            export::NotWhole::Float => self.i18n.label(Label::CopySqlWhyFloat).to_string(),
+            export::NotWhole::Charset(charset) => {
+                self.i18n.msg(&Msg::CopySqlWhyCharset { charset: charset.clone() }).to_string()
+            }
+            export::NotWhole::TimeZone(zone) => {
+                self.i18n.msg(&Msg::CopySqlWhyTimeZone { zone: zone.clone() }).to_string()
+            }
+            export::NotWhole::AutoIncrementZero => self.i18n.label(Label::CopySqlWhyAutoIncrementZero).to_string(),
+            export::NotWhole::NotShownWhole => self.i18n.label(Label::CopySqlWhyNotShownWhole).to_string(),
+            export::NotWhole::SessionUnknown => self.i18n.label(Label::CopySqlWhySessionUnknown).to_string(),
+            export::NotWhole::SessionChanged => self.i18n.label(Label::CopySqlWhySessionChanged).to_string(),
+        };
+        Notice::new(Msg::CopySqlNotWhole { column: r.column.clone(), reason }, Level::Warning)
     }
 
     /// Why a copy as SQL UPDATE was refused, in words.
@@ -826,3 +905,28 @@ impl App {
 
 #[cfg(test)]
 mod tests;
+
+/// The values of `rows` as the SQL formats write them ([`export::SqlCells::cell`]); the first
+/// one that is not written whole is kept in `refused` (the copy is then refused).
+fn written_as<'a>(
+    cells: &export::SqlCells,
+    rows: &'a [export::Row],
+    refused: &mut Option<export::Refused>,
+) -> Vec<Vec<Option<std::borrow::Cow<'a, str>>>> {
+    rows.iter()
+        .map(|r| {
+            r.iter()
+                .enumerate()
+                .map(|(i, v)| {
+                    v.and_then(|v| match cells.cell(i, v) {
+                        Ok(c) => Some(c),
+                        Err(r) => {
+                            refused.get_or_insert(r);
+                            None
+                        }
+                    })
+                })
+                .collect()
+        })
+        .collect()
+}

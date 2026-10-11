@@ -32,8 +32,12 @@ fn one_set_sets_the_session_up_by_role() {
     let q = Settings { role: SessionRole::Query, read_only: false, select_limit: Some(501) };
     assert_eq!(
         init_sql(&MYSQL_84, &q),
-        "SET NAMES utf8mb4, SESSION session_track_system_variables = 'sql_mode,transaction_read_only,sql_select_limit', \
-         SESSION session_track_schema = ON, SESSION sql_mode = @@SESSION.sql_mode, SESSION sql_select_limit = 501"
+        "SET NAMES utf8mb4, SESSION session_track_system_variables = \
+         'sql_mode,transaction_read_only,sql_select_limit,time_zone,character_set_results,character_set_connection', \
+         SESSION session_track_schema = ON, SESSION sql_mode = @@SESSION.sql_mode, \
+         SESSION time_zone = @@SESSION.time_zone, \
+         SESSION character_set_results = @@SESSION.character_set_results, \
+         SESSION character_set_connection = @@SESSION.character_set_connection, SESSION sql_select_limit = 501"
     );
     let ro = Settings { read_only: true, ..q };
     assert!(init_sql(&MYSQL_84, &ro).ends_with(", SESSION sql_select_limit = 501, SESSION transaction_read_only = ON"));
@@ -48,7 +52,7 @@ fn one_set_sets_the_session_up_by_role() {
     );
     let maria = Server { version: (10, 11, 6), mariadb: true };
     let sql = init_sql(&maria, &meta);
-    assert!(sql.contains("'sql_mode,tx_read_only,sql_select_limit'"), "{sql}");
+    assert!(sql.contains("'sql_mode,tx_read_only,sql_select_limit,time_zone,"), "{sql}");
     assert!(
         sql.ends_with(
             ", SESSION max_statement_time = 10, SESSION sql_quote_show_create = 1, SESSION tx_read_only = ON"
@@ -429,4 +433,36 @@ fn the_server_key_file_must_be_an_rsa_public_key() {
             target(&path).err()
         );
     }
+}
+
+/// The session's values are known once the server reported its time zone and both character
+/// sets; the one that is not `utf8mb4` is the one that matters.
+#[test]
+fn session_values_are_known_only_as_reported() {
+    let mut t = Tracked::default();
+    assert_eq!(t.values(), None, "nothing reported: not known");
+    t.time_zone = Some("SYSTEM".into());
+    t.results_charset = Some("utf8mb4".into());
+    assert_eq!(t.values(), None, "the connection's character set not reported");
+    t.connection_charset = Some("utf8mb4".into());
+    let v = |t: &Tracked| t.values().map(|v| (v.time_zone, v.charset));
+    assert_eq!(v(&t), Some(("SYSTEM".into(), "utf8mb4".into())));
+    t.connection_charset = Some("latin1".into());
+    assert_eq!(v(&t), Some(("SYSTEM".into(), "latin1".into())));
+    t.results_charset = Some("utf8mb3".into());
+    assert_eq!(v(&t), Some(("SYSTEM".into(), "utf8mb3".into())));
+    t.results_charset = Some("NULL".into());
+    assert_eq!(v(&t), Some(("SYSTEM".into(), "binary".into())));
+}
+
+/// What the session asks after server code ran replaces what it had; a failed question leaves
+/// the values unknown (no fixed zone, no UTF-8), never the old ones.
+#[test]
+fn asked_values_replace_the_old_and_a_failed_question_forgets_them() {
+    let mut t = Tracked::default();
+    t.set_asked(("NO_BACKSLASH_ESCAPES".into(), "+09:00".into(), "latin1".into(), "utf8mb4".into()));
+    assert_eq!(t.sql_mode.as_deref(), Some("NO_BACKSLASH_ESCAPES"));
+    assert_eq!(t.values().map(|v| (v.time_zone, v.charset)), Some(("+09:00".into(), "latin1".into())));
+    t.forget_values();
+    assert_eq!(t.values().map(|v| (v.time_zone, v.charset)), Some(("unknown".into(), "unknown".into())));
 }

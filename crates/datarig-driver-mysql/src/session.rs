@@ -5,7 +5,7 @@
 
 use crate::route::{Route, io_fault};
 use crate::wire::Wire;
-use datarig_core::driver::{DbError, SessionRole};
+use datarig_core::driver::{DbError, SessionRole, SessionValues};
 use datarig_core::fault::{Fault, FaultKind};
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::profile::dsn::{self, Scheme};
@@ -201,9 +201,17 @@ pub(crate) fn init_sql(server: &Server, s: &Settings) -> String {
     let ro = server.read_only_var();
     let mut parts = vec![
         "NAMES utf8mb4".to_string(),
-        format!("SESSION session_track_system_variables = 'sql_mode,{ro},sql_select_limit'"),
+        format!(
+            "SESSION session_track_system_variables = \
+             'sql_mode,{ro},sql_select_limit,time_zone,character_set_results,character_set_connection'"
+        ),
         "SESSION session_track_schema = ON".to_string(),
         "SESSION sql_mode = @@SESSION.sql_mode".to_string(),
+        // Reported back as they are: the zone the session shows a `TIMESTAMP` in, and the
+        // character sets of its text (set by `NAMES` before the reports were asked for).
+        "SESSION time_zone = @@SESSION.time_zone".to_string(),
+        "SESSION character_set_results = @@SESSION.character_set_results".to_string(),
+        "SESSION character_set_connection = @@SESSION.character_set_connection".to_string(),
     ];
     if let Some(n) = s.select_limit {
         parts.push(format!("SESSION sql_select_limit = {n}"));
@@ -220,6 +228,11 @@ pub(crate) fn init_sql(server: &Server, s: &Settings) -> String {
     format!("SET {}", parts.join(", "))
 }
 
+/// What a statement that ran code of the server's may have changed in the session without
+/// reporting it, asked in one statement: the sql mode, the time zone and the character sets.
+pub(crate) const ASK_VALUES: &str = "SELECT @@SESSION.sql_mode, @@SESSION.time_zone, \
+     IFNULL(@@SESSION.character_set_results, ''), @@SESSION.character_set_connection";
+
 /// What the server reported of the session (its session state tracking), as far as the driver
 /// follows it; `None`: not reported yet.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -229,6 +242,12 @@ pub(crate) struct Tracked {
     pub(crate) select_limit: Option<String>,
     /// The current database (`USE`, `COM_INIT_DB`); `Some("")` for none.
     pub(crate) schema: Option<String>,
+    /// `time_zone`.
+    pub(crate) time_zone: Option<String>,
+    /// `character_set_results` and `character_set_connection` (`utf8mb4`, which `SET NAMES`
+    /// at connect sets, until the server reports another).
+    pub(crate) results_charset: Option<String>,
+    pub(crate) connection_charset: Option<String>,
 }
 
 impl Tracked {
@@ -246,6 +265,9 @@ impl Tracked {
                             "sql_mode" => self.sql_mode = Some(value),
                             "transaction_read_only" | "tx_read_only" => self.read_only = Some(on(&value)),
                             "sql_select_limit" => self.select_limit = Some(value),
+                            "time_zone" => self.time_zone = Some(value),
+                            "character_set_results" => self.results_charset = Some(value),
+                            "character_set_connection" => self.connection_charset = Some(value),
                             _ => {}
                         }
                     }
@@ -254,6 +276,36 @@ impl Tracked {
                 _ => {}
             }
         }
+    }
+
+    /// What the session's values are read in: its time zone and the character set of its
+    /// results' text (that of the connection when that one is not `utf8mb4`; `binary` for no
+    /// conversion, `character_set_results = NULL`). `None` until the server reported all three:
+    /// values it never said are not known.
+    pub(crate) fn values(&self) -> Option<SessionValues> {
+        let named = |cs: &str| match cs {
+            "" | "NULL" => "binary".to_string(),
+            cs => cs.to_string(),
+        };
+        let results = named(self.results_charset.as_deref()?);
+        let connection = named(self.connection_charset.as_deref()?);
+        let charset = if results == "utf8mb4" && connection != "utf8mb4" { connection } else { results };
+        Some(SessionValues { time_zone: self.time_zone.clone()?, charset })
+    }
+
+    /// What [`ASK_VALUES`] answered.
+    pub(crate) fn set_asked(&mut self, (mode, zone, results, connection): (String, String, String, String)) {
+        self.sql_mode = Some(mode);
+        self.time_zone = Some(zone);
+        self.results_charset = Some(results);
+        self.connection_charset = Some(connection);
+    }
+
+    /// The session's values are not known any more: reported as `unknown`, which no copy takes
+    /// for a fixed time zone or for UTF-8.
+    pub(crate) fn forget_values(&mut self) {
+        let unknown = || Some("unknown".to_string());
+        (self.time_zone, self.results_charset, self.connection_charset) = (unknown(), unknown(), unknown());
     }
 
     /// The mode the session's text is read in.
@@ -300,13 +352,20 @@ pub(crate) async fn open(route: &Route, opts: Opts, settings: Settings) -> Resul
     tracked.update(&conn);
     let read_only = settings.read_only || settings.role == SessionRole::Meta;
     // A server (or a proxy in front of it) that did not report them is asked.
-    if tracked.sql_mode.is_none() || (read_only && tracked.read_only.is_none()) {
+    if tracked.sql_mode.is_none() || tracked.values().is_none() || (read_only && tracked.read_only.is_none()) {
         let ro = server.read_only_var();
-        let ask = format!("SELECT @@SESSION.sql_mode, CAST(@@SESSION.{ro} AS CHAR)");
-        let row: Option<(String, String)> = conn.query_first(ask).await.map_err(|e| (my_error(&e), false))?;
-        if let Some((mode, ro)) = row {
+        let ask = format!(
+            "SELECT @@SESSION.sql_mode, CAST(@@SESSION.{ro} AS CHAR), @@SESSION.time_zone, \
+             IFNULL(@@SESSION.character_set_results, ''), @@SESSION.character_set_connection"
+        );
+        let row: Option<(String, String, String, String, String)> =
+            conn.query_first(ask).await.map_err(|e| (my_error(&e), false))?;
+        if let Some((mode, ro, zone, results, connection)) = row {
             tracked.sql_mode = Some(mode);
             tracked.read_only = Some(on(&ro));
+            tracked.time_zone = Some(zone);
+            tracked.results_charset = Some(results);
+            tracked.connection_charset = Some(connection);
         }
     }
     if read_only && tracked.read_only != Some(true) {

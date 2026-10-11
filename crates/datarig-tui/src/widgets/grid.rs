@@ -42,6 +42,9 @@ pub struct ResultSet {
     /// Rows of it were read inside the user's transaction, and what became
     /// of that transaction.
     pub tx: Option<TxMark>,
+    /// What its values were read in (the session's time zone and character set when its first
+    /// page came, and whether a later page came under others): what a copy as SQL judges it by.
+    pub read_in: datarig_core::driver::ReadIn,
 }
 
 /// Where the pages of a result were read.
@@ -126,7 +129,17 @@ impl ResultSet {
             .collect();
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Self { id, columns, rows, more, counted: None, counted_now: false, pages_in: PagesIn::Nothing, tx: None }
+        Self {
+            id,
+            columns,
+            rows,
+            more,
+            counted: None,
+            counted_now: false,
+            pages_in: PagesIn::Nothing,
+            tx: None,
+            read_in: Default::default(),
+        }
     }
 
     /// How many rows the result has, when that is known: all of them are fetched, or the

@@ -61,7 +61,9 @@
 use crate::link::{Closed, Link, Next};
 use crate::session::{Killer, Server, Tracked, my_error};
 use crate::values::{column_meta, display};
-use datarig_core::driver::{Cell, ColumnMeta, DbCommand, DbError, DbEvent, Outcome, PagingMode, StatementInfo};
+use datarig_core::driver::{
+    Cell, ColumnMeta, DbCommand, DbError, DbEvent, Outcome, PagingMode, SessionValues, StatementInfo,
+};
 use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
 use datarig_core::sql::lexer::{Tok, Token, lex_in};
 use datarig_core::sql::risk::mysql as risk;
@@ -112,6 +114,12 @@ struct State {
     tracked: Tracked,
     /// The mode last reported to the app (`DbEvent::Language`).
     mode: MySqlMode,
+    /// What the values are read in, as last reported to the app (`DbEvent::SessionValues`).
+    values: Option<SessionValues>,
+    /// The statement running now may run code of the server's (a procedure, a stored function):
+    /// what that code changes in the session (`SET time_zone`, `SET NAMES`, `SET sql_mode`) the
+    /// server does not report, so the session asks once it ended ([`after`]).
+    routine: bool,
     limit: Limit,
     tx: Tx,
 }
@@ -285,9 +293,17 @@ pub(crate) async fn query_loop(
         server,
     };
     let mode = tracked.mode(&server);
+    let values = tracked.values();
     // The limit the session set up with is its own, not the user's.
     let tracked = Tracked { select_limit: None, ..tracked };
-    let mut s = State { tracked, mode, limit: Limit { current: select_limit, user: None }, tx: Tx::default() };
+    let mut s = State {
+        tracked,
+        mode,
+        values,
+        routine: false,
+        limit: Limit { current: select_limit, user: None },
+        tx: Tx::default(),
+    };
     let stop = loop {
         let done = match link.next().await {
             Next::Command(DbCommand::Execute { id, statements, paging }) => {
@@ -482,6 +498,7 @@ async fn statement<'a>(
     step: Step,
 ) -> Result<Option<(Reply<'a>, Outcome)>, Halted<'a>> {
     let risk = risk::classify(sql, s.mode);
+    s.routine = runs_server_code(sql, s.mode, risk.runs_code);
     // A read-only session runs only what the app's read-only policy lets through (the app
     // refuses the rest first): the server's read-only stops writes, not a procedure or an
     // executable comment that turns it off, writes, and turns it on again.
@@ -557,10 +574,14 @@ async fn statement<'a>(
             // A statement before the last: every row, page by page, as its own result.
             let metas: Vec<ColumnMeta> = columns.iter().map(column_meta).collect();
             let mut first = true;
+            if s.routine {
+                let _ = env.events.send(DbEvent::ValuesNotKnown { id: reply.id });
+            }
             loop {
                 if env.asked.load(Ordering::SeqCst) {
                     halt!(stop_result(&mut qr, link, env).await, Some(reply));
                     drop(qr);
+                    forget_after_code(env, s);
                     reply.fail(DbError::Cancelled, true);
                     return Ok(None);
                 }
@@ -632,6 +653,9 @@ async fn statement<'a>(
                 // Held: the statement runs on while the app reads it (or its last row is still
                 // to come).
                 let metas: Vec<ColumnMeta> = columns.iter().map(column_meta).collect();
+                if s.routine {
+                    let _ = env.events.send(DbEvent::ValuesNotKnown { id: reply.id });
+                }
                 let paged = reply.page(metas, page, true, step.start.elapsed());
                 let id = paged.id;
                 let held = match hold(&mut qr, link, env, id, &columns, carry, ended).await {
@@ -667,6 +691,12 @@ async fn statement<'a>(
     if let Some(u) = &undo {
         halt!(undone(conn, link, u).await, Some(reply));
     }
+    // More than one result set: a procedure ran, whatever the text looks like.
+    let sets = match &got {
+        Got::Done { info, .. } | Got::Rows { info, .. } => info.more_results,
+    };
+    s.routine |= sets > 0;
+    let code_ran = s.routine;
     // What the statement did to the session, before the run answers.
     if let Some(error) = halt!(after(conn, link, env, s, sql, risk.implicit_commit, was_open, true).await, Some(reply))
     {
@@ -689,6 +719,9 @@ async fn statement<'a>(
             // Not held: nothing is open past the page.
             if more {
                 let _ = env.events.send(DbEvent::Released { id: reply.id });
+            }
+            if code_ran {
+                let _ = env.events.send(DbEvent::ValuesNotKnown { id: reply.id });
             }
             reply.page(columns.iter().map(column_meta).collect(), page, more, elapsed);
             Ok(None)
@@ -744,6 +777,21 @@ async fn after(
     if ok {
         s.tracked.update(conn);
     }
+    // Code of the server's that the statement ran (a procedure, a stored function) may have
+    // changed the session without the server reporting it: asked, whether it succeeded or not.
+    if std::mem::take(&mut s.routine) {
+        let asked: Option<(String, String, String, String)> =
+            match link.guard(None, conn.query_first(crate::session::ASK_VALUES)).await? {
+                Ok(row) => row,
+                Err(e) if e.is_fatal() => return Ok(Some(my_error(&e))),
+                Err(_) => None,
+            };
+        match asked {
+            Some(row) => s.tracked.set_asked(row),
+            // Not known: the app refuses what depends on them until the session says.
+            None => s.tracked.forget_values(),
+        }
+    }
     if status.is_none() && (ask || !ok) && (s.tx.open || ask) {
         status = match link.guard(None, conn.ping()).await? {
             Ok(()) => conn.last_ok_packet().map(|p| p.status_flags()),
@@ -759,6 +807,13 @@ async fn after(
     if mode != s.mode {
         s.mode = mode;
         let _ = env.events.send(DbEvent::Language(Language::Sql(Dialect::MySql(mode))));
+    }
+    let values = s.tracked.values();
+    if values.is_some() && values != s.values {
+        s.values = values.clone();
+        if let Some(v) = values {
+            let _ = env.events.send(DbEvent::SessionValues(v));
+        }
     }
     if let Some(st) = status {
         let open = st.contains(StatusFlags::SERVER_STATUS_IN_TRANS);
@@ -891,6 +946,7 @@ async fn held_ended<'a>(
     } else if !held.stopped {
         send_info(env, id, 0, &held.info);
     }
+    s.routine |= held.info.more_results > 0;
     if let Some(error) = halt!(after(conn, link, env, s, sql, false, !ok || was_open, ok).await, None) {
         return Err(Halted { stop: Stop::Lost(error), reply: None });
     }
@@ -1288,3 +1344,25 @@ async fn check_repeat(
 
 #[cfg(test)]
 mod tests;
+
+/// Whether `sql` may run code of the server's that changes the session without the server saying
+/// so (see [`State::routine`]): `runs_code` (a `CALL`, a stored function), an `EXECUTE` (the
+/// prepared text is not read), or an executable comment (`/*! CALL p() */`, whose text the
+/// classifier reads as a comment).
+fn runs_server_code(sql: &str, mode: MySqlMode, runs_code: bool) -> bool {
+    runs_code
+        || words(sql, mode).first().is_some_and(|w| w == "EXECUTE")
+        || lex_in(sql, Dialect::MySql(mode)).iter().any(|t| t.kind == Tok::ExecComment)
+}
+
+/// A statement that may have run code of the server's was stopped before the session could ask
+/// what the code changed: its values are not known from now on (said to the app).
+fn forget_after_code(env: &Env<'_>, s: &mut State) {
+    if std::mem::take(&mut s.routine) {
+        s.tracked.forget_values();
+        s.values = s.tracked.values();
+        if let Some(v) = s.values.clone() {
+            let _ = env.events.send(DbEvent::SessionValues(v));
+        }
+    }
+}

@@ -440,9 +440,60 @@ pub struct StatementInfo {
     pub more_results: u32,
 }
 
+/// What a MySQL query session's values were read in, as copying them as SQL needs it: the
+/// session's time zone (a `TIMESTAMP` is shown in it) and the character set of its results'
+/// text, as the server reports them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionValues {
+    /// `@@time_zone` (`SYSTEM`, `+00:00`, `Europe/Berlin`).
+    pub time_zone: String,
+    /// `character_set_results`, or `character_set_connection` when that one is not UTF-8.
+    pub charset: String,
+}
+
+/// What a result's values were read in: the session's values when its first page came, kept
+/// for its later pages.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum ReadIn {
+    /// Not known (the session had not said, its driver does not, or the statement ran code of
+    /// the server's that may change them while its result is read).
+    #[default]
+    Unknown,
+    Values(SessionValues),
+    /// The session's values changed between two pages of the result: its rows are not all read
+    /// in the same.
+    Changed,
+}
+
+impl ReadIn {
+    /// What the first page of a result was read in: the session's `values` then.
+    pub fn first(values: Option<&SessionValues>) -> Self {
+        values.map_or(ReadIn::Unknown, |v| ReadIn::Values(v.clone()))
+    }
+
+    /// Another page of the result was read in `values`.
+    pub fn page(&mut self, values: Option<&SessionValues>) {
+        if let ReadIn::Values(v) = self
+            && values != Some(&*v)
+        {
+            *self = ReadIn::Changed;
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum DbEvent {
     Connected,
+    /// The next result of run `id` (its first `Page` or `StepRows`) is read while code of the
+    /// server's runs (a procedure, a prepared statement, an executable comment), which may change
+    /// the session's values without saying: what they were is not known ([`ReadIn::Unknown`]).
+    ValuesNotKnown {
+        id: u64,
+    },
+    /// What a query session's values are read in from now on ([`SessionValues`]): sent right
+    /// after `Connected` by a driver whose results depend on it (MySQL), and again when it
+    /// changes (a `SET time_zone`, `SET NAMES` the user ran).
+    SessionValues(SessionValues),
     /// The language the query session's text is read in from now on, where it is the
     /// session's own and not the driver's ([`Capabilities::language`](super::Capabilities)):
     /// MySQL's sql mode (`ANSI_QUOTES`, `NO_BACKSLASH_ESCAPES`) and whether its server reads

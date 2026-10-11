@@ -309,8 +309,7 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
 
 Planned, in no particular order and with no dates:
 
-- MySQL: copy as SQL, row counts and the plan view; MariaDB
-  as a driver of its own
+- MySQL: the plan view; MariaDB as a driver of its own
 - Drivers for Valkey/Redis and Elasticsearch
 - TLS connections (today every connection is plain TCP; use an SSH tunnel across untrusted
   networks, and servers that require TLS cannot be reached yet)
@@ -582,18 +581,34 @@ is tested only lightly.
   `SET_ANY_DEFINER` (8.2 and later), as with `mysqldump`. A routine you may run but not see
   says its definition is hidden. Reading waits at most 2 s on another session: an object whose
   table is locked shows "locked", and `r` reads it again.
-- Marks, hints, charts, and copying rows as TSV, CSV or JSON.
+- Copy as SQL `INSERT` and `UPDATE`: backtick names, MySQL's literals (bytes `X'…'`, bits
+  `b'…'`), generated columns left out. A string with a backslash or a NUL is written as its
+  UTF-8 bytes (`_utf8mb4 X'…'`), so the statements read the same in any sql mode
+  (`NO_BACKSLASH_ESCAPES`, `ANSI_QUOTES`); a `TIMESTAMP` is written with the offset of the
+  session's time zone (`'2024-10-27 00:30:00+00:00'`). `UPDATE` needs the table's primary key in
+  the result. A copy is refused, naming the column, where a value would not be written whole: a
+  `FLOAT` (the server sends it rounded to about six digits), a `TIMESTAMP` while the session's
+  time zone is not a fixed offset (`SET time_zone = '+00:00'` first), text while the session's
+  results are not UTF-8 (after a `SET NAMES latin1`), and an `AUTO_INCREMENT` value of 0 (an
+  `INSERT` takes it as the next number).
+- The keys copy as SQL needs are read for every database when the connection opens (and again
+  after DDL run in datarig), so a table created elsewhere later needs `r` on the connection in
+  the explorer before its rows can be copied. Column names compare without case, and database and
+  table names too when `lower_case_table_names` is 1 or 2, as the server compares them; 2 (macOS,
+  Windows) is not tested. A temporary table that shadows a table of the same name is not told
+  apart from it.
+- The row count (`#`), key marks, hints, charts, and copying rows in every other format.
 
 **What does not work yet**
-- Copy as SQL `INSERT`, the row count (`#`) and the plan view (`EXPLAIN` runs and shows its
-  text).
+- The plan view (`EXPLAIN` runs and shows its text).
 - TLS: a server that requires it (`require_secure_transport`) cannot be reached yet, and is said
   so.
 - A `USE` typed in a console is not followed by the header and completion; use `:use`.
 - The estimates are the server's (`TABLE_ROWS`), which can be far off for InnoDB. A view whose
   table was dropped is listed without columns, and a database that does not exist or that you
   may not read shows as empty. On a server with tens of thousands of tables the explorer's
-  catalog read may hit its 10-second limit.
+  catalog and key reads may hit their 10-second limit; copy as SQL then says the keys could not
+  be read.
 
 **Paging and locks.** As on PostgreSQL, nothing is held open while you read a result by default.
 The query session keeps `sql_select_limit` at a page and one row, so the first page is read to
