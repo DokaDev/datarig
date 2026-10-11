@@ -1445,6 +1445,11 @@ impl App {
                 return self.i18n.msg(&Msg::DbAmbiguous { kinds: kinds.join(", ") }).to_string();
             }
             DbError::DefinitionHidden => Label::DbDefinitionHidden,
+            DbError::NotAName => Label::DbNotAName,
+            DbError::NoDatabase => Label::DbNoDatabase,
+            DbError::KindUnsupported(kind) => {
+                return self.i18n.msg(&Msg::DbKindUnsupported { kind: kind.clone() }).to_string();
+            }
             DbError::TlsRequired => Label::DbTlsRequired,
             DbError::VersionUnsupported { server, needed } => {
                 return self

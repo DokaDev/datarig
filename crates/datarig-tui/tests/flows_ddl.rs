@@ -662,7 +662,7 @@ fn mysql_shows_the_servers_own_ddl() {
         [DdlObject::Named { name: "shop.zz_touch".into(), schema: None }]
     );
     let routine =
-        "DELIMITER ;;\nCREATE DEFINER=`datarig`@`%` PROCEDURE `zz_touch`()\nBEGIN\n  SELECT 1;\nEND ;;\nDELIMITER ;\n";
+        "DELIMITER ;;\nCREATE DEFINER=`datarig`@`%` PROCEDURE `zz_touch`()\nBEGIN\n  SELECT 1;\nEND\n;;\nDELIMITER ;\n";
     h.db(answer(named[0].0, Ok(DdlSource::Verbatim { name: "shop.zz_touch".into(), text: routine.into() })));
     assert_eq!(h.app.tab().editor.text(), routine);
     assert!(h.screen(120, 30).contains("DDL · shop.zz_touch"));
@@ -670,11 +670,35 @@ fn mysql_shows_the_servers_own_ddl() {
     let id = asked(&h.sent())[0].0;
     use datarig_core::driver::ddl::ObjectKind;
     h.db(answer(id, Err(DbError::Ambiguous(vec![ObjectKind::Table, ObjectKind::Procedure]))));
-    let screen = h.screen(160, 30);
+    let screen = h.screen(200, 30);
     assert!(screen.contains("the name names more than one object here (a table, a procedure)"), "{screen}");
+    assert!(screen.contains(":ddl procedure name"), "the way out: {screen}");
+    // A kind word goes with the name.
+    h.command("ddl procedure audit");
+    assert_eq!(
+        asked(&h.sent()).into_iter().map(|a| a.1).collect::<Vec<_>>(),
+        [DdlObject::Named { name: "procedure audit".into(), schema: None }]
+    );
     h.command("ddl zz_hidden");
     let id = asked(&h.sent())[0].0;
     h.db(answer(id, Err(DbError::DefinitionHidden)));
     let screen = h.screen(200, 30);
     assert!(screen.contains("the server does not show its definition to this user"), "{screen}");
+}
+
+/// On MySQL a locked object says so too, in words of any engine (no PostgreSQL command), and
+/// shows nothing of its DDL.
+#[test]
+fn a_locked_mysql_object_says_so_in_its_words() {
+    let mut h = mysql_shop_open();
+    h.goto("items");
+    h.keys("D");
+    let id = asked(&h.sent())[0].0;
+    h.db(answer(id, Err(DbError::Locked)));
+    assert_eq!(state(&h), DdlState::Locked);
+    let screen = h.screen(240, 30);
+    assert!(screen.contains("nothing was read, so that no session waits"), "{screen}");
+    assert!(screen.contains("an ALTER TABLE or another schema change"), "{screen}");
+    assert!(!screen.contains("VACUUM"), "{screen}");
+    assert!(!screen.contains("CREATE"), "{screen}");
 }

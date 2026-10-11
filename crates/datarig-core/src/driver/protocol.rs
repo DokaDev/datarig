@@ -95,6 +95,14 @@ pub enum DbError {
     /// shows a routine's only to its definer, or to a user with `SHOW_ROUTINE` or `SELECT` on
     /// every database).
     DefinitionHidden,
+    /// A name the user typed to look up is not one (MySQL: `name` or `database.name`, each part
+    /// bare or quoted).
+    NotAName,
+    /// A name the user typed has no database to be looked up in: the session has none.
+    NoDatabase,
+    /// The name names an object of a kind the driver does not read the DDL of (the server's word
+    /// for it, MariaDB's `PACKAGE`).
+    KindUnsupported(String),
     /// The server's version is older than the driver supports: `server` is what it is
     /// (`MySQL 5.7.44`), `needed` the oldest version the driver works with (`MySQL 8.0`).
     VersionUnsupported { server: String, needed: String },
@@ -159,6 +167,9 @@ impl DbError {
             | DbError::NotFound
             | DbError::Ambiguous(_)
             | DbError::DefinitionHidden
+            | DbError::NotAName
+            | DbError::NoDatabase
+            | DbError::KindUnsupported(_)
             | DbError::VersionUnsupported { .. }
             | DbError::TlsRequired
             | DbError::KeyRetrievalRefused

@@ -40,7 +40,8 @@ fn one_set_sets_the_session_up_by_role() {
     let meta = Settings { role: SessionRole::Meta, read_only: false, select_limit: None };
     assert!(
         init_sql(&MYSQL_84, &meta).ends_with(
-            ", SESSION lock_wait_timeout = 2, SESSION max_execution_time = 10000, SESSION transaction_read_only = ON"
+            ", SESSION lock_wait_timeout = 2, SESSION max_execution_time = 10000, SESSION sql_quote_show_create = 1, \
+             SESSION transaction_read_only = ON"
         ),
         "{}",
         init_sql(&MYSQL_84, &meta)
@@ -48,7 +49,12 @@ fn one_set_sets_the_session_up_by_role() {
     let maria = Server { version: (10, 11, 6), mariadb: true };
     let sql = init_sql(&maria, &meta);
     assert!(sql.contains("'sql_mode,tx_read_only,sql_select_limit'"), "{sql}");
-    assert!(sql.ends_with(", SESSION max_statement_time = 10, SESSION tx_read_only = ON"), "{sql}");
+    assert!(
+        sql.ends_with(
+            ", SESSION max_statement_time = 10, SESSION sql_quote_show_create = 1, SESSION tx_read_only = ON"
+        ),
+        "{sql}"
+    );
     let maria = Server { version: (11, 4, 2), mariadb: true };
     assert!(init_sql(&maria, &ro).ends_with(", SESSION transaction_read_only = ON"));
 }

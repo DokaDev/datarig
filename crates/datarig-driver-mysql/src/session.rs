@@ -211,6 +211,8 @@ pub(crate) fn init_sql(server: &Server, s: &Settings) -> String {
     if s.role == SessionRole::Meta {
         parts.push(format!("SESSION lock_wait_timeout = {META_LOCK_WAIT}"));
         parts.push(server.timeout(META_TIMEOUT_MS));
+        // `SHOW CREATE …` quotes every name, whatever the server's default.
+        parts.push("SESSION sql_quote_show_create = 1".to_string());
     }
     if s.read_only || s.role == SessionRole::Meta {
         parts.push(format!("SESSION {ro} = ON"));

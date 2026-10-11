@@ -92,7 +92,8 @@ pub(crate) async fn meta_loop(mut conn: Conn, mut link: Link, events: UnboundedS
                     DbEvent::Structure { schema, table, result: result.map(Box::new) }
                 }
                 DbCommand::LoadDdl { id, object } => {
-                    DbEvent::Ddl { id, result: ddl::load_ddl(&mut conn, mode, &object).await }
+                    let result = ddl::load_ddl(&mut conn, mode, tracked.sql_mode.as_deref(), &object).await;
+                    DbEvent::Ddl { id, result }
                 }
                 // Statements run on a tab's query session, never on the shared metadata one.
                 DbCommand::Execute { id, .. }
