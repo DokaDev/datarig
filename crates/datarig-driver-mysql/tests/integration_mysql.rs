@@ -462,13 +462,18 @@ async fn a_session_is_set_up_in_one_statement() {
     let Some((url, admin)) = urls("a_session_is_set_up_in_one_statement") else { return };
     let mut admin = side(&admin).await;
     for role in [SessionRole::Query, SessionRole::Meta] {
-        let _c = Conn::open(&url, role, true, "a_session_is_set_up_in_one_statement").await;
+        let mut c = Conn::open(&url, role, true, "a_session_is_set_up_in_one_statement").await;
+        if role == SessionRole::Meta {
+            // Its reads at connect, the last being the keys, are in the history before it is read.
+            c.wait(|e| matches!(e, DbEvent::Keys(_)), 15).await;
+        }
         let id = only_session(&mut admin, role, "a_session_is_set_up_in_one_statement").await;
-        // The server's answer to the `SET` said the sql mode and read-only: nothing is asked
-        // after it (the metadata session goes on to its own reads: the databases, the catalog).
+        // The server's answer to the `SET` said the session's values: none is asked after it
+        // (the metadata session goes on to its own reads: the databases, the catalog, the keys,
+        // which read the server's own `@@lower_case_table_names` and `@@system_time_zone`).
         let ran = statements_of(&mut admin, id).await;
         assert!(ran[0].starts_with("SET NAMES utf8mb4, SESSION session_track_system_variables"), "{ran:?}");
-        assert!(ran[1..].iter().all(|s| !s.contains("@@")), "{role:?}: {ran:?}");
+        assert!(ran[1..].iter().all(|s| !s.contains("@@SESSION")), "{role:?}: {ran:?}");
         if role == SessionRole::Query {
             assert_eq!(ran.len(), 1, "{ran:?}");
         }
