@@ -643,3 +643,72 @@ async fn a_kill_never_answered_leaves_the_gate_unclean() {
     assert!(t0.elapsed() < KILL_TIMEOUT + std::time::Duration::from_secs(1), "{:?}", t0.elapsed());
     drop(server);
 }
+
+/// A dialer that hands out the client's end of an in-memory stream once, and says when.
+struct OneStreamSaid(std::sync::Mutex<Option<tokio::io::DuplexStream>>, Arc<tokio::sync::Notify>);
+
+impl datarig_core::transport::Dialer for OneStreamSaid {
+    fn dial(
+        &self,
+        _host: &str,
+        _port: u16,
+    ) -> futures::future::BoxFuture<
+        'static,
+        Result<datarig_core::transport::BoxedStream, datarig_core::transport::DialError>,
+    > {
+        let s = self.0.lock().unwrap().take();
+        self.1.notify_one();
+        Box::pin(async move {
+            s.map(|s| Box::new(s) as datarig_core::transport::BoxedStream)
+                .ok_or(datarig_core::transport::DialError::NotOpen)
+        })
+    }
+}
+
+/// A statement that answers while a kill sent again for it never gets its answer: what the
+/// statement answered is the run's (an autocommitted write did commit) and comes back as it
+/// is; the connection then runs nothing more, and the session is lost at its next command,
+/// saying why.
+#[tokio::test]
+async fn a_statement_answered_while_its_kill_hangs_is_answered_then_lost() {
+    use crate::link::{Link, Next};
+    let (client, mut server) = tokio::io::duplex(1 << 16);
+    let dialed = Arc::new(tokio::sync::Notify::new());
+    let cfg = mysql("127.0.0.1");
+    let dialer = OneStreamSaid(std::sync::Mutex::new(Some(client)), dialed.clone());
+    let route = Route::new(&cfg.host, 3306, Some(DialerRef(Arc::new(dialer))));
+    let opts = Target::of(&cfg).unwrap().opts(None, "datarig-k-test", &route);
+    let killer = Killer::new(route, opts, 7);
+    killer.record(Kill::Failed(KillFailure::Refused(1095)), || true);
+    // The kill's server: the kill sent again (once the session asks again) is read, and never
+    // answered.
+    let written = Arc::new(tokio::sync::Notify::new());
+    let kill_server = tokio::spawn({
+        let written = written.clone();
+        async move {
+            dialed.notified().await;
+            greet(&mut server).await;
+            logged_in(&mut server).await;
+            let kill = read_packet(&mut server).await;
+            written.notify_one();
+            tokio::time::sleep(KILL_TIMEOUT * 2).await;
+            kill
+        }
+    });
+    let (client, _session_server) = tokio::io::duplex(1 << 16);
+    let (wire, _stream) = crate::wire::Wire::new(Box::new(client));
+    let (_commands, rx) = tokio::sync::mpsc::unbounded_channel();
+    let (events, _events) = tokio::sync::mpsc::unbounded_channel();
+    let mut link = Link::new(rx, wire);
+    link.serving(&events, 1);
+    // The statement answers once the kill is on its way.
+    let answered = link.guard(Some(&killer), async {
+        written.notified().await;
+        42
+    });
+    let answered = tokio::time::timeout(KILL_TIMEOUT * 3, answered).await.expect("the wait ends");
+    assert!(matches!(answered, Ok(42)), "the statement's own answer");
+    let next = tokio::time::timeout(std::time::Duration::from_secs(1), link.next()).await.expect("at once");
+    assert!(matches!(next, Next::Lost(DbError::CancelNotTaken(CancelFailure::NotSent))));
+    kill_server.abort();
+}

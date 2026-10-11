@@ -72,11 +72,14 @@ pub(crate) struct Link {
     /// Where the query session says it still waits for a statement a cancel stopped
     /// ([`DbEvent::Stopping`]), and the run (or count) that statement is of.
     stopping: Option<(UnboundedSender<DbEvent>, u64)>,
+    /// The connection runs nothing more (it was cut after the request it served answered),
+    /// for this reason: the session is lost once that run was answered ([`Link::taint`]).
+    tainted: Option<DbError>,
 }
 
 impl Link {
     pub(crate) fn new(rx: UnboundedReceiver<DbCommand>, wire: Wire) -> Self {
-        Self { rx, queued: VecDeque::new(), wire, stopping: None }
+        Self { rx, queued: VecDeque::new(), wire, stopping: None, tainted: None }
     }
 
     /// The query session's requests from now on are of run (or count) `id`; while one waits
@@ -96,6 +99,9 @@ impl Link {
     /// server's last words when it closed the connection with an error (`wait_timeout`), else
     /// that it closed.
     pub(crate) async fn next(&mut self) -> Next {
+        if let Some(why) = self.tainted.take() {
+            return Next::Lost(why);
+        }
         if let Some(c) = self.queued.pop_front() {
             return Next::Command(c);
         }
@@ -109,6 +115,9 @@ impl Link {
     /// The next command while a result is still coming: the stream is not watched (its bytes
     /// are the result's; a connection that ends shows when the result is read on).
     pub(crate) async fn next_command(&mut self) -> Next {
+        if let Some(why) = self.tainted.take() {
+            return Next::Lost(why);
+        }
         if let Some(c) = self.queued.pop_front() {
             return Next::Command(c);
         }
@@ -133,11 +142,30 @@ impl Link {
         // Nothing sent again for this statement reaches the next one: a kill that never got its
         // answer may still be carried out on whatever the connection runs next, so it runs
         // nothing more (whether the cancel took is not known).
+        // The request answered all the same, and what it answered is the run's: it goes to the
+        // UI (an autocommitted write did commit), and the session is lost after it.
         if !gate.close().await && out.is_ok() {
-            self.wire.cut();
-            return Err(Closed::CancelNotTaken(CancelFailure::NotSent));
+            self.taint(DbError::CancelNotTaken(CancelFailure::NotSent));
         }
         out
+    }
+
+    /// The connection is to run nothing more, for `why`: cut now (what still needs it fails),
+    /// the session lost at its next command ([`Link::next`], [`Link::next_command`]) with that
+    /// reason, whatever else failed meanwhile ([`Link::lost_as`]).
+    pub(crate) fn taint(&mut self, why: DbError) {
+        self.wire.cut();
+        self.tainted.get_or_insert(why);
+    }
+
+    /// Whether the connection runs nothing more ([`Link::taint`]).
+    pub(crate) fn tainted(&self) -> bool {
+        self.tainted.is_some()
+    }
+
+    /// Why the session is lost: the reason it was tainted for, if it was, else `error`.
+    pub(crate) fn lost_as(&mut self, error: DbError) -> DbError {
+        self.tainted.take().unwrap_or(error)
     }
 
     /// [`Link::guard`], kills sent again under `gate`.
