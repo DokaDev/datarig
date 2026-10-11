@@ -463,3 +463,42 @@ async fn a_copy_hidden_by_backslash_strings_is_refused_behind_a_pooler() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
+
+/// Behind the pooler, inside the user's block: a table named by a reserved word after its schema
+/// (`pg_temp.to`) is the COPY's table, not where its data goes. The COPY is refused before it is
+/// sent and the block goes on.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_copy_of_a_table_named_to_is_refused_behind_a_pooler() {
+    let Some(url) = pooler_url("a_copy_of_a_table_named_to_is_refused_behind_a_pooler") else { return };
+    let mut c = Conn::open(&url, SessionRole::Query, false).await;
+    for (id, sql) in [(1, "BEGIN"), (2, r#"CREATE TEMP TABLE "to" (a int) ON COMMIT DROP"#)] {
+        let ev = c.run(id, sql).await;
+        assert!(matches!(ev, DbEvent::Done { .. }), "{sql}: {ev:?}");
+    }
+    c.session.send(DbCommand::Execute {
+        id: 3,
+        statements: vec!["COPY pg_temp.to TO STDOUT".into()],
+        paging: PagingMode::Hold,
+    });
+    let mut seen = Vec::new();
+    let mut deadline = Instant::now() + Duration::from_secs(10);
+    while let Ok(Some(ev)) = tokio::time::timeout_at(deadline.into(), c.rx.recv()).await {
+        let answer =
+            matches!(&ev, DbEvent::Page { id: 3, .. } | DbEvent::Done { id: 3, .. } | DbEvent::Failed { id: 3, .. });
+        if answer || matches!(ev, DbEvent::Lost { .. }) {
+            if seen.is_empty() {
+                deadline = Instant::now() + Duration::from_millis(300);
+            }
+            seen.push(ev);
+        }
+    }
+    assert!(
+        matches!(&seen[..], [DbEvent::Failed { id: 3, error: DbError::CopyStdio, cancelled: false }]),
+        "refused, and the block goes on: {seen:?}"
+    );
+    let DbEvent::Page { rows, .. } = c.run(4, "SELECT count(*) FROM pg_temp.to").await else {
+        panic!("the block goes on")
+    };
+    assert_eq!(rows[0][0].as_deref(), Some("0"));
+    assert!(matches!(c.run(5, "ROLLBACK").await, DbEvent::Done { .. }));
+}

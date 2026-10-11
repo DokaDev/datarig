@@ -815,8 +815,8 @@ pub(crate) fn returns_no_rows(sql: &str) -> bool {
 
 /// Whether `sql` is `COPY … FROM STDIN` or `COPY … TO STDOUT` (the client's side of a COPY):
 /// `STDIN` or `STDOUT` right after the first `FROM` or `TO` outside parentheses, the one that
-/// follows the table or the query (both reserved words, so no bare name; a later one, in a
-/// `WHERE` clause, compares a column). A table or a column may be named `stdout`; a file name
+/// follows the table or the query (both reserved words, so no bare name, though one after a dot
+/// names a table: `pg_temp.to`; a later one, in a `WHERE` clause, compares a column). A table or a column may be named `stdout`; a file name
 /// is a string. Only the `COPY` statement itself starts a COPY with the client (not one in a
 /// function or a `DO` block), so its first word tells. Read both ways the server may lex the
 /// text: with `standard_conforming_strings` off (a session may set it) `\'` ends no string.
@@ -833,10 +833,14 @@ fn copies_with_client_in(sql: &str, toks: &[Token]) -> bool {
         return false;
     }
     let mut depth = 0usize;
+    // After a dot a reserved word is a name (`pg_temp.to`), not the direction.
+    let mut after_dot = false;
     let mut outside = toks.filter_map(|t| {
+        let named = std::mem::replace(&mut after_dot, t.kind == Tok::Dot);
         match t.kind {
             Tok::LParen => depth += 1,
             Tok::RParen => depth = depth.saturating_sub(1),
+            _ if depth == 0 && named => return Some(None),
             _ if depth == 0 => return Some(word(t)),
             _ => {}
         }

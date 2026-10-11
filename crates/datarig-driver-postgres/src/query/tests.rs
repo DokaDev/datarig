@@ -816,6 +816,10 @@ fn copies_with_the_client_are_told_from_the_words() {
         // code, and the `--` a comment.
         r"COPY (SELECT 'a\'') TO STDOUT -- '",
         r"COPY t (a) FROM STDIN WHERE a <> 'b\'' -- '",
+        // After a dot a reserved word is a name: the table `to` or `from` of a schema.
+        "COPY pg_temp.to TO STDOUT",
+        "COPY pg_temp.from FROM STDIN",
+        "COPY pg_temp.to (a) TO STDOUT",
     ] {
         assert!(copies_with_client(sql), "{sql:?}");
     }

@@ -4572,3 +4572,31 @@ async fn a_copy_hidden_by_backslash_strings_is_refused_too() {
         assert_eq!(rows[0][0].as_deref(), Some("b'"), "{case}: still off");
     }
 }
+
+/// A table named by a reserved word after its schema (`pg_temp.to`): the word is the table's
+/// name, not where the data goes. Read as the direction, the COPY reached the server and only
+/// the client library's check ended it (the session was `Lost`); it is refused before it is
+/// sent, and the session goes on.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_copy_of_a_table_named_to_is_refused() {
+    let Some(url) = pg_url("a_copy_of_a_table_named_to_is_refused") else { return };
+    let tag = format!("copyto{}", std::process::id());
+    let _guard = TerminateGuard { url: url.clone(), tag: tag.clone() };
+    let (mut q, mut obs) = tagged(&url, &tag).await;
+    assert!(matches!(q.run(1, r#"CREATE TEMP TABLE "to" (a int)"#).await, DbEvent::Done { .. }));
+    q.session.send(DbCommand::Execute {
+        id: 2,
+        statements: vec!["COPY pg_temp.to TO STDOUT".into()],
+        paging: PagingMode::Hold,
+    });
+    let seen = answers_to(&mut q, 2).await;
+    assert!(
+        matches!(&seen[..], [DbEvent::Failed { id: 2, error: DbError::CopyStdio, cancelled: false }]),
+        "refused, and the session goes on: {seen:?}"
+    );
+    nothing_running(&mut obs, &tag, "COPY pg_temp.to").await;
+    let DbEvent::Page { rows, .. } = q.run(3, "SELECT count(*) FROM pg_temp.to").await else {
+        panic!("the session goes on")
+    };
+    assert_eq!(rows[0][0].as_deref(), Some("0"));
+}
