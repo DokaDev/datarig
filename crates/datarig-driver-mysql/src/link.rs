@@ -2,12 +2,13 @@
 //! "the UI closed the session" and "the connection ended" (the server closed it while the
 //! session waited, [`Wire::closed`]).
 
-use crate::session::{Kill, KillFailure, Killer};
+use crate::session::{Gate, Kill, KillFailure, Killer};
 use crate::wire::Wire;
 use datarig_core::driver::{CancelFailure, DbCommand, DbError, DbEvent};
 use futures::future::BoxFuture;
 use std::collections::VecDeque;
 use std::future::Future;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
@@ -27,6 +28,15 @@ const SENDING_TICK: Duration = Duration::from_millis(500);
 
 /// In how many ticks in a row rows must come before they count as coming on.
 const SENDING_TICKS: u32 = 3;
+
+/// How much of a held result the session keeps, taken off the stream while it looks whether
+/// rows keep coming after a refused kill, before it counts them as coming on.
+const SOAK_LIMIT: usize = 4 << 20;
+
+/// For how long after a refused kill the session sends it again at every beat, and how often
+/// after that.
+const RETRY_SOON: Duration = Duration::from_secs(60);
+const RETRY_LATER: Duration = Duration::from_secs(30);
 
 /// How often the session says it still waits for a statement after a cancel: one the server
 /// took ([`DbEvent::Stopping`], once the server confirmed the statement is still there), or
@@ -115,11 +125,25 @@ impl Link {
         cancel: Option<&Killer>,
         request: impl Future<Output = T>,
     ) -> Result<T, Closed> {
+        let gate = Gate::new();
+        let out = self.guarded(cancel, request, &gate).await;
+        // Nothing sent again for this statement reaches the next one.
+        gate.close().await;
+        out
+    }
+
+    /// [`Link::guard`], kills sent again under `gate`.
+    async fn guarded<T>(
+        &mut self,
+        cancel: Option<&Killer>,
+        request: impl Future<Output = T>,
+        gate: &Arc<Gate>,
+    ) -> Result<T, Closed> {
         tokio::pin!(request);
         let mut kills = cancel.map(Killer::watch);
         let began = Instant::now();
         let mut kill = kills.as_mut().map_or(Kill::None, |k| *k.borrow_and_update());
-        let mut watch = watching(kill, began, &self.wire, cancel, &self.stopping);
+        let mut watch = watching(kill, began, &self.wire, cancel, &self.stopping, gate, false);
         loop {
             // What is watched beside the request is polled before it: its reads use up the
             // task's budget of the runtime's resources poll after poll while a result streams
@@ -139,7 +163,7 @@ impl Link {
                         let now = *k.borrow_and_update();
                         if now != kill {
                             kill = now;
-                            watch = watching(kill, began, &self.wire, cancel, &self.stopping);
+                            watch = watching(kill, began, &self.wire, cancel, &self.stopping, gate, false);
                         }
                     }
                     _ => kills = None,
@@ -161,6 +185,18 @@ impl Link {
                 }
             }
         }
+    }
+
+    /// What a held result between two pages does about a refused kill (or one not sent):
+    /// resolves with why the connection is to be cut, as [`Link::guard`] does (rows that keep
+    /// coming are looked for on the stream itself), the session saying meanwhile that a silent
+    /// statement runs on. Kills sent again go under `gate`.
+    pub(crate) fn refusal(&self, killer: &Killer, gate: &Arc<Gate>) -> BoxFuture<'static, CancelFailure> {
+        let (wire, killer, stopping, gate) = (self.wire.clone(), killer.clone(), self.stopping.clone(), gate.clone());
+        Box::pin(async move {
+            let failed = Kill::Failed(killer.refused().await);
+            watching(failed, Instant::now(), &wire, Some(&killer), &stopping, &gate, true).await
+        })
     }
 
     /// Commands that arrived and were not taken yet, in their order (those still on the
@@ -204,8 +240,10 @@ fn watching(
     wire: &Wire,
     killer: Option<&Killer>,
     stopping: &Option<(UnboundedSender<DbEvent>, u64)>,
+    gate: &Arc<Gate>,
+    soak: bool,
 ) -> BoxFuture<'static, CancelFailure> {
-    let (wire, killer, stopping) = (wire.clone(), killer.cloned(), stopping.clone());
+    let (wire, killer, stopping, gate) = (wire.clone(), killer.cloned(), stopping.clone(), gate.clone());
     Box::pin(tokio::task::unconstrained(async move {
         let say = |ev: fn(u64) -> DbEvent| {
             if let Some((events, id)) = &stopping {
@@ -216,24 +254,31 @@ fn watching(
             Kill::None => std::future::pending().await,
             Kill::Failed(KillFailure::NotSent) => CancelFailure::NotSent,
             Kill::Failed(KillFailure::Refused(_)) => {
+                let refused = Instant::now();
                 let runs_on = async {
                     // Past the time rows that keep coming take to cut it: said only of one
                     // that sends nothing.
                     tokio::time::sleep(SENDING_TICK * (SENDING_TICKS + 1)).await;
+                    let mut asked = Instant::now();
                     loop {
                         say(|id| DbEvent::CancelRefused { id });
                         tokio::time::sleep(STOPPING_TICK).await;
                         // The statement may run as another account only for moments (a
                         // definer function called for every row): asked again, the server
-                        // may take it now, and the session then waits for it to stop.
-                        if let Some(k) = &killer {
-                            k.try_again().await;
+                        // may take it now, and the session then waits for it to stop. Every
+                        // beat for the first minute, then every [`RETRY_LATER`] (a login
+                        // each time).
+                        if let Some(k) = &killer
+                            && (refused.elapsed() < RETRY_SOON || asked.elapsed() >= RETRY_LATER)
+                        {
+                            asked = Instant::now();
+                            k.try_again(&gate);
                         }
                     }
                 };
                 tokio::select! {
                     () = runs_on => unreachable!("says so until the statement ends"),
-                    () = keeps_sending(&wire) => CancelFailure::Refused,
+                    () = keeps_sending(&wire, soak) => CancelFailure::Refused,
                 }
             }
             Kill::Taken(at) => {
@@ -249,7 +294,7 @@ fn watching(
                 };
                 let sends_on = async {
                     tokio::time::sleep_until((at.max(began) + TAKE_WAIT).into()).await;
-                    keeps_sending(&wire).await;
+                    keeps_sending(&wire, false).await;
                 };
                 tokio::select! {
                     () = stops => unreachable!("says so until the statement ends"),
@@ -261,11 +306,17 @@ fn watching(
 }
 
 /// Resolves once the server's bytes came in [`SENDING_TICKS`] ticks in a row: rows that keep
-/// coming, not a backlog a slow link (a tunnel) still delivers in a burst.
-async fn keeps_sending(wire: &Wire) {
+/// coming, not a backlog a slow link (a tunnel) still delivers in a burst. `soak`: nothing reads
+/// the result meanwhile (a held result between two pages): what came is taken off the stream
+/// and kept for the result each tick ([`Wire::soak`]), and more than [`SOAK_LIMIT`] kept counts
+/// as rows that keep coming.
+async fn keeps_sending(wire: &Wire, soak: bool) {
     let (mut seen, mut ticks) = (wire.received(), 0);
     loop {
         tokio::time::sleep(SENDING_TICK).await;
+        if soak && wire.soak() > SOAK_LIMIT {
+            return;
+        }
         let now = wire.received();
         ticks = if now > seen { ticks + 1 } else { 0 };
         if ticks >= SENDING_TICKS {

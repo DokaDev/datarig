@@ -796,7 +796,10 @@ struct EndSessions {
 
 impl Drop for EndSessions {
     fn drop(&mut self) {
-        let (admin, pattern) = (self.admin.clone(), format!("datarig-%-{}%", tag(self.test)));
+        // The test's own tag, or one of its parts' (`<test>_<part>`).
+        let tag = tag(self.test).replace('_', "\\_");
+        let (admin, pattern) = (self.admin.clone(), format!("datarig-%-{tag}"));
+        let parts = format!("{pattern}\\_%");
         let _ = std::thread::spawn(move || {
             let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
             rt.block_on(async {
@@ -804,8 +807,8 @@ impl Drop for EndSessions {
                 let ids: Vec<u64> = c
                     .exec(
                         "SELECT PROCESSLIST_ID FROM performance_schema.session_connect_attrs \
-                         WHERE ATTR_NAME = 'program_name' AND ATTR_VALUE LIKE ?",
-                        (pattern,),
+                         WHERE ATTR_NAME = 'program_name' AND (ATTR_VALUE LIKE ? OR ATTR_VALUE LIKE ?)",
+                        (pattern, parts),
                     )
                     .await
                     .unwrap_or_default();
@@ -1647,6 +1650,71 @@ async fn a_refused_cancel_of_a_silent_statement_keeps_the_session_and_says_why()
     a.query_drop(format!("KILL QUERY {id}")).await.unwrap();
     let evs = c.answer(1).await;
     assert!(matches!(evs.last(), Some(DbEvent::Failed { error: DbError::Cancelled, cancelled: true, .. })), "{evs:?}");
+    c.ok(2, "SELECT 1").await;
+    a.disconnect().await.unwrap();
+}
+
+/// A held result of a procedure that runs as another account and goes silent after it (its
+/// rows all sent, a long count next): a refused cancel while the app has not asked for the next
+/// page keeps the session, as for a statement that sends nothing, and says why; once an
+/// administrator stops the procedure, the result reads to its end and the session goes on.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refused_cancel_of_a_held_result_that_went_silent_keeps_the_session() {
+    // A tag no other test's begins with (their sessions' guards match by it).
+    let test = "held_went_silent_refused";
+    let Some((url, admin)) = urls(test) else { return };
+    let p = format!("zz_it_heldsilent_{}", std::process::id());
+    let _p = Cleanup { url: admin.clone(), sql: format!("DROP PROCEDURE IF EXISTS shop.{p}") };
+    let mut a = side(&admin).await;
+    a.query_drop(format!(
+        "CREATE PROCEDURE shop.{p}() SQL SECURITY DEFINER BEGIN \
+         SELECT id FROM shop.events ORDER BY id LIMIT 600; \
+         SELECT COUNT(*) FROM shop.events a JOIN shop.events b ON a.id < b.id; END"
+    ))
+    .await
+    .unwrap();
+    // Dropped first: the statement the test leaves running goes, and the drop does not wait
+    // behind it.
+    let _end = EndSessions { admin: admin.clone(), test };
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let id = only_session(&mut a, SessionRole::Query, test).await;
+    let first = c.run_as(1, &[&format!("CALL shop.{p}()")], PagingMode::Hold).await;
+    assert!(matches!(first.last(), Some(DbEvent::Page { id: 1, columns: Some(_), more: true, .. })), "{first:?}");
+    // Its rows are all on their way: the count runs, saying nothing.
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    c.session.cancel();
+    let mut said = 0;
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while said < 2 {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match tokio::time::timeout(left, c.rx.recv()).await {
+            Ok(Some(DbEvent::CancelRefused { id: 1 })) => said += 1,
+            Ok(Some(ev @ (DbEvent::Failed { .. } | DbEvent::Lost { .. }))) => panic!("{ev:?}"),
+            Ok(Some(_)) => {}
+            other => panic!("{other:?} after {said} words"),
+        }
+    }
+    let running: Option<String> =
+        a.query_first(format!("SELECT COMMAND FROM information_schema.PROCESSLIST WHERE ID = {id}")).await.unwrap();
+    assert_eq!(running.as_deref(), Some("Query"), "the procedure is still on the server");
+    // An administrator stops it: the app reads the result on, and the session goes on.
+    a.query_drop(format!("KILL QUERY {id}")).await.unwrap();
+    let mut evs = Vec::new();
+    loop {
+        c.session.send(DbCommand::FetchMore { id: 1 });
+        let ev = c
+            .wait(
+                |e| matches!(e, DbEvent::Page { id: 1, .. } | DbEvent::Failed { id: 1, .. } | DbEvent::Lost { .. }),
+                30,
+            )
+            .await;
+        let end = matches!(ev, DbEvent::Page { more: false, .. } | DbEvent::Failed { .. } | DbEvent::Lost { .. });
+        evs.push(ev);
+        if end {
+            break;
+        }
+    }
+    assert!(!evs.iter().any(|e| matches!(e, DbEvent::Lost { .. })), "{evs:?}");
     c.ok(2, "SELECT 1").await;
     a.disconnect().await.unwrap();
 }

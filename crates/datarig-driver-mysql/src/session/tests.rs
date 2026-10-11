@@ -510,3 +510,86 @@ fn a_kill_of_a_run_before_never_reaches_the_next_one() {
     k.record(refused, &still);
     assert_eq!(*k.watch().borrow(), refused);
 }
+
+/// A dialer that hands out the client's end of an in-memory stream, once.
+struct OneStream(std::sync::Mutex<Option<tokio::io::DuplexStream>>);
+
+impl datarig_core::transport::Dialer for OneStream {
+    fn dial(
+        &self,
+        _host: &str,
+        _port: u16,
+    ) -> futures::future::BoxFuture<
+        'static,
+        Result<datarig_core::transport::BoxedStream, datarig_core::transport::DialError>,
+    > {
+        let s = self.0.lock().unwrap().take();
+        Box::pin(async move {
+            s.map(|s| Box::new(s) as datarig_core::transport::BoxedStream)
+                .ok_or(datarig_core::transport::DialError::NotOpen)
+        })
+    }
+}
+
+/// A killer of connection 7 whose connection is the far end (the server's) of the result.
+fn killer_on_a_fake_server() -> (Killer, tokio::io::DuplexStream) {
+    let (client, server) = tokio::io::duplex(1 << 16);
+    let cfg = mysql("127.0.0.1");
+    let route = Route::new(&cfg.host, 3306, Some(DialerRef(Arc::new(OneStream(std::sync::Mutex::new(Some(client)))))));
+    let opts = Target::of(&cfg).unwrap().opts(None, "datarig-k-test", &route);
+    (Killer::new(route, opts, 7), server)
+}
+
+/// Up to the client's login answer (the handshake response read, fast authentication next).
+async fn greet(server: &mut tokio::io::DuplexStream) {
+    server.write_all(&server_greeting()).await.unwrap();
+    read_packet(server).await.expect("the handshake response");
+}
+
+/// Fast authentication done, the login OK.
+async fn logged_in(server: &mut tokio::io::DuplexStream) {
+    server.write_all(&packet(2, &[1, 3])).await.unwrap();
+    server.write_all(&packet(3, &[0, 0, 0, 2, 0, 0, 0])).await.unwrap();
+}
+
+/// A kill sent again whose statement answered while its connection opened is never sent: the
+/// next packet the server gets is the client's goodbye, never `KILL QUERY`.
+#[tokio::test]
+async fn a_kill_sent_again_after_its_statement_answered_is_never_sent() {
+    let (killer, mut server) = killer_on_a_fake_server();
+    let gate = Gate::new();
+    killer.try_again(&gate);
+    greet(&mut server).await;
+    // The statement answers while the kill's login goes on.
+    gate.close().await;
+    logged_in(&mut server).await;
+    let next = read_packet(&mut server).await;
+    assert!(
+        next.as_deref().is_none_or(|p| p.first() != Some(&3)),
+        "{:?}",
+        next.map(|p| String::from_utf8_lossy(&p).into_owned())
+    );
+    assert_eq!(*killer.watch().borrow(), Kill::None);
+}
+
+/// Closing the gate waits for a kill being sent to be answered: none sent while the statement
+/// ran can land on the session's next statement.
+#[tokio::test]
+async fn closing_the_gate_waits_for_a_kill_being_sent() {
+    let (killer, mut server) = killer_on_a_fake_server();
+    let gate = Gate::new();
+    killer.try_again(&gate);
+    greet(&mut server).await;
+    logged_in(&mut server).await;
+    let sent = read_packet(&mut server).await.expect("the kill");
+    assert_eq!(&sent[..], b"\x03KILL QUERY 7");
+    let closing = tokio::spawn({
+        let gate = gate.clone();
+        async move { gate.close().await }
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(!closing.is_finished(), "waits for the kill's answer");
+    server.write_all(&packet(1, &[0, 0, 0, 2, 0, 0, 0])).await.unwrap();
+    tokio::time::timeout(std::time::Duration::from_secs(2), closing).await.unwrap().unwrap();
+    assert!(matches!(*killer.watch().borrow(), Kill::Taken(_)), "taken while the gate was open");
+}

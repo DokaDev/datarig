@@ -59,6 +59,7 @@
 "query.done_command" = "{tag} · {elapsed}"
 "query.cancelling" = "Cancelling…"
 "query.cancelling_server" = "Cancelling… the server is still stopping the statement (a large change takes a while to roll back)"
+"query.ran_after_refused_cancel" = "The statement ran to its end after the server refused the cancel"
 "query.cancel_refused_runs_on" = "The server refused the cancel: the statement runs as another account and will run to its end. Closing the tab won't stop it. Ask a DBA or the routine's owner to KILL it."
 "query.cancelled" = "Query cancelled"
 "query.cancelled_rebound" = "Query cancelled by the connection change"

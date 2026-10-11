@@ -69,15 +69,16 @@
 //! `INSERT` generated, warnings, the server's own words, result sets it did not keep).
 
 use crate::link::{Closed, Link, Next};
-use crate::session::{Killer, Server, Tracked, my_error};
+use crate::session::{Gate, Killer, Server, Tracked, my_error};
 use crate::values::{column_meta, display};
 use datarig_core::driver::{
-    Cell, ColumnMeta, DbCommand, DbError, DbEvent, Outcome, PagingMode, SessionValues, StatementInfo,
+    CancelFailure, Cell, ColumnMeta, DbCommand, DbError, DbEvent, Outcome, PagingMode, SessionValues, StatementInfo,
 };
 use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
 use datarig_core::sql::lexer::{Tok, Token, lex_in};
 use datarig_core::sql::risk::mysql as risk;
 use datarig_core::sql::risk::repeat::NotRepeatable;
+use futures::future::BoxFuture;
 use mysql_async::consts::StatusFlags;
 use mysql_async::prelude::Queryable;
 use mysql_async::{Column, Conn, QueryResult, Row, TextProtocol};
@@ -922,7 +923,13 @@ async fn hold(
     ended: bool,
 ) -> Result<Held, Stop> {
     let mut held = Held { stopped: false, failed: None, info: StatementInfo::default(), waiting: Vec::new() };
-    match hold_on(qr, link, env, id, columns, carry, ended, &mut held).await {
+    let gate = Gate::new();
+    let mut refusal = link.refusal(env.killer, &gate);
+    let out = hold_on(qr, link, env, id, columns, carry, ended, &mut held, &mut refusal).await;
+    drop(refusal);
+    // Nothing sent again for this statement reaches the next one.
+    gate.close().await;
+    match out {
         Ok(()) => Ok(held),
         Err(stop) => {
             link.requeue_all(std::mem::take(&mut held.waiting));
@@ -942,17 +949,19 @@ async fn hold_on(
     mut carry: Option<Vec<Cell>>,
     mut ended: bool,
     held: &mut Held,
+    refusal: &mut BoxFuture<'static, CancelFailure>,
 ) -> Result<(), Stop> {
     let page_size = env.page_size;
     let mut more = true;
     while more {
-        // A cancel the server refused while the app had not asked for the next page yet.
+        // A cancel the server refused, or that was not sent, while the app had not asked for
+        // the next page yet: cut as a request would be ([`Link::refusal`]).
         let next = tokio::select! {
             biased;
             next = link.next_command() => next,
-            why = env.killer.refused() => {
+            why = &mut *refusal => {
                 link.cut();
-                return Err(Stop::Lost(DbError::CancelNotTaken(why.into())));
+                return Err(Stop::Lost(DbError::CancelNotTaken(why)));
             }
         };
         match next {

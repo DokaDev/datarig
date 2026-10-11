@@ -239,4 +239,22 @@ fn a_refused_cancel_of_a_silent_statement_is_said_and_waited_for() {
     assert!(h.app.tab().exec.running.is_none());
     assert!(matches!(h.app.tab().results, Results::Cancelled));
     assert!(h.app.tab().exec.session.is_some(), "the session stays");
+    let notes =
+        |h: &Harness| h.app.tab().exec.run.notes.iter().map(|n| n.render(&h.app.i18n).to_string()).collect::<Vec<_>>();
+    assert!(notes(&h).is_empty(), "stopped after all (an administrator's KILL): nothing to note");
+
+    // One that ends by itself: said in Messages.
+    h.ctrl('e');
+    let qid = h.app.tab().exec.query_id;
+    h.ctrl('c');
+    h.tab_db(0, DbEvent::CancelRefused { id: qid });
+    let done = DbEvent::Done {
+        id: qid,
+        outcome: datarig_core::driver::Outcome::Affected(3),
+        elapsed: Duration::from_secs(90),
+    };
+    h.tab_db(0, done);
+    assert!(h.app.tab().exec.running.is_none());
+    let notes = notes(&h);
+    assert!(notes.iter().any(|n| n == "The statement ran to its end after the server refused the cancel"), "{notes:?}");
 }

@@ -13,6 +13,7 @@ use datarig_core::sql::dialect::MySqlMode;
 use mysql_async::prelude::Queryable;
 use mysql_async::{Conn, Opts, OptsBuilder, SessionStateChange};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
@@ -490,6 +491,38 @@ impl From<KillFailure> for CancelFailure {
     }
 }
 
+/// What a kill sent again while a request waits ([`Killer::try_again`]) is sent under: open while
+/// the request waits, closed by its owner once the statement answered. Each kill is sent under
+/// its lock, only while it is open; closing takes the lock first, so it waits for a kill being
+/// sent to be answered. No kill is sent for a statement that answered, and none sent while it
+/// ran reaches the session's next statement: MySQL drops a `KILL QUERY` that finds the
+/// connection idle, and the next statement is sent only once the gate is closed.
+pub(crate) struct Gate {
+    open: AtomicBool,
+    sending: tokio::sync::Mutex<()>,
+}
+
+/// How long closing a [`Gate`] waits for a kill being sent to be answered.
+const GATE_WAIT: Duration = Duration::from_secs(2);
+
+impl Gate {
+    pub(crate) fn new() -> Arc<Self> {
+        Arc::new(Gate { open: AtomicBool::new(true), sending: tokio::sync::Mutex::new(()) })
+    }
+
+    fn is_open(&self) -> bool {
+        self.open.load(Ordering::SeqCst)
+    }
+
+    /// The statement answered: no kill is sent for it any more, once one being sent was
+    /// answered (at most [`GATE_WAIT`]).
+    pub(crate) async fn close(&self) {
+        let sending = tokio::time::timeout(GATE_WAIT, self.sending.lock()).await;
+        self.open.store(false, Ordering::SeqCst);
+        drop(sending);
+    }
+}
+
 /// What a cancel needs: a connection of its own over the session's route, as the session's
 /// user, that runs `KILL QUERY` of the session's connection id. It stops the statement the
 /// session runs, never the session itself, and never another session. What became of the kill
@@ -566,10 +599,27 @@ impl Killer {
         }
     }
 
-    /// Send the kill again after the server refused it: kept only if the server takes it now
-    /// (a statement that ran as another account only for a moment), never a worse answer.
-    pub(crate) async fn try_again(&self) {
-        self.send_kill(|| true, true).await;
+    /// Send the kill again, on a task of its own, after the server refused it: kept only if the
+    /// server takes it now (a statement that ran as another account only for a moment), never a
+    /// worse answer. It is sent only while `gate` is open, under its lock ([`Gate`]).
+    pub(crate) fn try_again(&self, gate: &Arc<Gate>) {
+        let (killer, gate) = (self.clone(), gate.clone());
+        tokio::spawn(async move {
+            let again = async {
+                let stream = killer.route.dial(DIAL_TIMEOUT).await.ok()?;
+                let (_wire, stream) = Wire::new(stream);
+                let mut conn = Conn::connect_with_stream(killer.opts.clone(), Box::new(stream)).await.ok()?;
+                {
+                    let _sending = gate.sending.lock().await;
+                    if gate.is_open() && conn.query_drop(format!("KILL QUERY {}", killer.id)).await.is_ok() {
+                        killer.record(Kill::Taken(Instant::now()), || gate.is_open());
+                    }
+                }
+                quit(conn).await;
+                Some(())
+            };
+            let _ = tokio::time::timeout(KILL_TIMEOUT, again).await;
+        });
     }
 
     /// Keep `kill` if `still` holds, asked under the lock [`Killer::clear`] takes too: a run

@@ -755,6 +755,16 @@ impl App {
     /// An event of tab `id`'s query session.
     fn tab_event(&mut self, id: TabId, ev: DbEvent) {
         let profile = self.tabs.get(id).and_then(|t| t.profile);
+        // A run whose cancel the server refused, that ended by itself after all: said in its
+        // Messages (it ran to its end, whatever the user asked).
+        if let Some(t) = self.tabs.get_mut(id)
+            && let Some(r) = t.exec.running
+            && r.refused
+            && matches!(&ev, DbEvent::Done { id: i, .. } | DbEvent::Page { id: i, columns: Some(_), .. }
+                | DbEvent::Failed { id: i, cancelled: false, .. } if *i == r.id)
+        {
+            t.exec.run.notes.push(Notice::new(Label::QueryRanAfterRefusedCancel, Level::Warning));
+        }
         // A cancelled run whose session speaks is not stuck: the last-resort bound starts over.
         let now = self.now();
         if let Some(r) = self.tabs.get_mut(id).and_then(|t| t.exec.running.as_mut())

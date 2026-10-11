@@ -58,6 +58,14 @@ impl Wire {
         self.lock().map_or(0, |s| s.received)
     }
 
+    /// Take what the server sent so far off the stream (it stays for the connection, in
+    /// order), without waiting: how much is kept so.
+    pub(crate) fn soak(&self) -> usize {
+        let mut cx = Context::from_waker(std::task::Waker::noop());
+        let _ = self.poll_closed(&mut cx);
+        self.lock().map_or(0, |s| s.pushback.len())
+    }
+
     /// Every read and write fails from now on.
     pub(crate) fn cut(&self) {
         if let Ok(mut s) = self.lock() {
