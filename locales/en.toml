@@ -58,6 +58,7 @@
 "query.done_affected" = { one = "{count} row affected · {elapsed}", other = "{count} rows affected · {elapsed}" }
 "query.done_command" = "{tag} · {elapsed}"
 "query.cancelling" = "Cancelling…"
+"query.cancelling_server" = "Cancelling… the server is still stopping the statement (a large change takes a while to roll back)"
 "query.cancelled" = "Query cancelled"
 "query.cancelled_rebound" = "Query cancelled by the connection change"
 "query.cancelled_session_closed" = "Cancelled: the tab's connection was closed while it ran"

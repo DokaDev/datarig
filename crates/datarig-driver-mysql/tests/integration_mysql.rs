@@ -786,6 +786,39 @@ impl Drop for Cleanup {
     }
 }
 
+/// Ends test `test`'s own sessions (`KILL` of the connections whose program name carries its
+/// tag) when it ends, also when an assertion panics: a statement it left running goes with them
+/// (and the cleanup after it does not wait behind its locks).
+struct EndSessions {
+    admin: String,
+    test: &'static str,
+}
+
+impl Drop for EndSessions {
+    fn drop(&mut self) {
+        let (admin, pattern) = (self.admin.clone(), format!("datarig-%-{}%", tag(self.test)));
+        let _ = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            rt.block_on(async {
+                let mut c = side(&admin).await;
+                let ids: Vec<u64> = c
+                    .exec(
+                        "SELECT PROCESSLIST_ID FROM performance_schema.session_connect_attrs \
+                         WHERE ATTR_NAME = 'program_name' AND ATTR_VALUE LIKE ?",
+                        (pattern,),
+                    )
+                    .await
+                    .unwrap_or_default();
+                for id in ids {
+                    let _ = c.query_drop(format!("KILL {id}")).await;
+                }
+                let _ = c.disconnect().await;
+            });
+        })
+        .join();
+    }
+}
+
 /// A table of `n` rows (`id` 1..=n, `v` text), `n` under 1,000,000 (made from a cross join, so
 /// no recursion goes past the server's `cte_max_recursion_depth`).
 async fn numbers(url: &str, name: &str, n: u32) -> Table {
@@ -1382,6 +1415,8 @@ async fn a_cancel_the_server_refuses_ends_the_session_instead_of_reading_on() {
     let test = "a_cancel_the_server_refuses_ends_the_session";
     let Some((url, admin)) = urls(test) else { return };
     let (p, _p) = endless_definer_procedure(&admin, "refused").await;
+    // Dropped first: nothing of the test's keeps running past it.
+    let _end = EndSessions { admin: admin.clone(), test };
     let mut a = side(&admin).await;
     let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
     let id = only_session(&mut a, SessionRole::Query, test).await;
@@ -1423,6 +1458,8 @@ async fn a_cancel_taken_by_a_long_rollback_keeps_the_session_and_its_transaction
     let Some((url, admin)) = urls(test) else { return };
     let t = format!("shop.zz_it_rollback_{}", std::process::id());
     let _t = Cleanup { url: admin.clone(), sql: format!("DROP TABLE IF EXISTS {t}") };
+    // Dropped first: nothing of the test's keeps running past it.
+    let _end = EndSessions { admin: admin.clone(), test };
     let mut a = side(&admin).await;
     a.query_drop(format!("CREATE TABLE {t} (id INT PRIMARY KEY AUTO_INCREMENT, v INT, pad CHAR(100), KEY (v))"))
         .await
@@ -1442,6 +1479,7 @@ async fn a_cancel_taken_by_a_long_rollback_keeps_the_session_and_its_transaction
     // Long enough for its rollback to take longer than any bound a cancel could be given.
     tokio::time::sleep(Duration::from_secs(15)).await;
     c.session.cancel();
+    let cancelled = Instant::now();
     let mut evs = Vec::new();
     let deadline = Instant::now() + Duration::from_secs(240);
     loop {
@@ -1461,6 +1499,10 @@ async fn a_cancel_taken_by_a_long_rollback_keeps_the_session_and_its_transaction
         matches!(failures(&evs, 3)[..], [DbEvent::Failed { error: DbError::Cancelled, cancelled: true, .. }]),
         "{evs:?}"
     );
+    // A long wait says, every few seconds, that the server still stops the statement.
+    if cancelled.elapsed() > Duration::from_secs(8) {
+        assert!(evs.iter().any(|e| matches!(e, DbEvent::Stopping { id: 3 })), "{evs:?}");
+    }
     // The session and its transaction go on: the marker is still there, and nothing is lost.
     let more = c.run(4, &[&format!("SELECT v FROM {t} WHERE pad = 'marker'")]).await;
     assert!(!more.iter().any(|e| matches!(e, DbEvent::Lost { .. })), "{more:?}");
@@ -1479,6 +1521,8 @@ async fn a_cancel_refused_for_a_moment_is_tried_again() {
     let Some((url, admin)) = urls(test) else { return };
     let f = format!("zz_it_rowfn_{}", std::process::id());
     let _f = Cleanup { url: admin.clone(), sql: format!("DROP FUNCTION IF EXISTS shop.{f}") };
+    // Dropped first: nothing of the test's keeps running past it.
+    let _end = EndSessions { admin: admin.clone(), test };
     let mut a = side(&admin).await;
     a.query_drop(format!(
         "CREATE FUNCTION shop.{f}(x INT) RETURNS INT DETERMINISTIC SQL SECURITY DEFINER RETURN x + 1"
@@ -1516,6 +1560,8 @@ async fn counts_and_questions_never_run_another_accounts_code() {
     let Some((url, admin)) = urls(test) else { return };
     let f = format!("zz_it_cntfn_{}", std::process::id());
     let _f = Cleanup { url: admin.clone(), sql: format!("DROP FUNCTION IF EXISTS shop.{f}") };
+    // Dropped first: nothing of the test's keeps running past it.
+    let _end = EndSessions { admin: admin.clone(), test };
     let mut a = side(&admin).await;
     a.query_drop(format!(
         "CREATE FUNCTION shop.{f}(x INT) RETURNS INT DETERMINISTIC SQL SECURITY DEFINER RETURN SLEEP(1) + x"
@@ -1554,6 +1600,8 @@ async fn a_refused_cancel_of_a_held_result_ends_the_session() {
     let test = "a_refused_cancel_of_a_held_result";
     let Some((url, admin)) = urls(test) else { return };
     let (p, _p) = endless_definer_procedure(&admin, "heldrefused").await;
+    // Dropped first: nothing of the test's keeps running past it.
+    let _end = EndSessions { admin: admin.clone(), test };
     let mut a = side(&admin).await;
     let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
     let id = only_session(&mut a, SessionRole::Query, test).await;
@@ -1586,6 +1634,8 @@ async fn a_held_result_the_server_will_not_stop_is_not_read_to_its_end() {
     let test = "a_held_result_the_server_will_not_stop";
     let Some((url, admin)) = urls(test) else { return };
     let (p, _p) = endless_definer_procedure(&admin, "heldstop").await;
+    // Dropped first: nothing of the test's keeps running past it.
+    let _end = EndSessions { admin: admin.clone(), test };
     let mut a = side(&admin).await;
     let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
     let id = only_session(&mut a, SessionRole::Query, test).await;

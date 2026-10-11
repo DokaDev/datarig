@@ -122,10 +122,15 @@ pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// After "quit anyway" the app waits this long for the running query to be cancelled before it
 /// closes the connection regardless (the server then cancels and rolls back on its own).
 pub const QUIT_GRACE: Duration = Duration::from_secs(3);
-/// A cancelled statement whose session has not answered after this long (a wedged driver or
-/// connection) is marked cancelled anyway, and the tab's connection is closed (the server
-/// cancels and rolls back on its own; the next run connects again).
-pub const CANCEL_GRACE: Duration = Duration::from_secs(5);
+/// A cancelled statement whose session has said nothing at all for this long (a wedged driver)
+/// is marked cancelled anyway, and the tab's connection is closed (the server cancels and rolls
+/// back on its own; the next run connects again). The driver decides when to give a statement
+/// up (MySQL: a kill refused, not sent, or taken while rows keep coming, at most some 20 s;
+/// PostgreSQL: a cancel that cannot be sent, 10 s), and while it waits for a statement the
+/// server stops (a long rollback, saying nothing) it says so every few seconds
+/// ([`DbEvent::Stopping`]), each of which counts as a word: this bound is well past all of
+/// them, a last resort only.
+pub const CANCEL_GRACE: Duration = Duration::from_secs(60);
 /// Autosave: a tab's text is written at most this long after an edit, and the
 /// workspace state after a cursor or tab change.
 pub const AUTOSAVE: Duration = Duration::from_secs(1);
@@ -192,8 +197,12 @@ pub struct Running {
     pub fetch: bool,
     /// A count of the rows the user asked for.
     pub count: bool,
-    /// When the user asked to cancel it (by the app's clock).
+    /// When the user asked to cancel it, or when its session last said anything since (by the
+    /// app's clock): [`CANCEL_GRACE`] counts from it.
     pub cancelling: Option<Instant>,
+    /// Its session said the server took the cancel and is still ending the statement
+    /// ([`DbEvent::Stopping`]).
+    pub stopping: bool,
 }
 
 pub struct Popup {
@@ -1632,7 +1641,9 @@ impl App {
         if let Some(r) = &self.tab().exec.running {
             let log = &self.tab().exec.run;
             let step = log.running().filter(|_| log.several() && !r.fetch);
-            let text = if r.cancelling.is_some() {
+            let text = if r.stopping {
+                self.i18n.label(Label::QueryCancellingServer)
+            } else if r.cancelling.is_some() {
                 self.i18n.label(Label::QueryCancelling)
             } else if r.count {
                 self.i18n.label(Label::ResultsTitleCounting)

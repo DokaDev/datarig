@@ -1912,3 +1912,95 @@ async fn a_console_works_in_the_database_and_schema_picked() {
     assert!(app.conns.get(id).is_some_and(|c| c.tree.schemas.iter().any(|s| s.name == schema)));
     app.dispatch(datarig_tui::app::action::Action::Quit);
 }
+
+/// Ends the test's own sessions (`pg_terminate_backend` of the connections tagged `tag`) when
+/// the test ends, also when an assertion panics: a statement it left running goes with them.
+struct EndSessions {
+    url: String,
+    tag: String,
+}
+
+impl Drop for EndSessions {
+    fn drop(&mut self) {
+        let sql = format!(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name LIKE 'datarig-%-{}'",
+            self.tag
+        );
+        if let Err(e) = pg_clean::run_fresh(&self.url, &sql) {
+            let _ = writeln!(std::io::stderr(), "warning: {sql}: {e}");
+        }
+    }
+}
+
+/// Like [`pump`], with the app's clock ticking (its timers run) as the binary's loop does.
+async fn pump_ticking(app: &mut App, rx: &mut UnboundedReceiver<AppEvent>, secs: u64, done: impl Fn(&App) -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(secs);
+    while !done(app) {
+        assert!(Instant::now() < deadline, "timed out after {secs}s (status {:?})", app.status);
+        if let Ok(Some(ev)) = tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
+            app.on_app_event(ev);
+        }
+        app.on_tick(Instant::now());
+    }
+}
+
+/// A cancel of a long `UPDATE` in the user's transaction: PostgreSQL stops it at once and
+/// leaves the transaction aborted, not lost. Neither the driver nor the tab closes the session:
+/// the block stays (aborted) until the user ends it, on the same connection.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancelled_update_in_a_transaction_aborts_the_block_and_keeps_the_session() {
+    let Some(url) = pg_url("a_cancelled_update_in_a_transaction_aborts_the_block") else { return };
+    let pw = datarig_core::profile::dsn::parse(&url).unwrap().password.unwrap_or_default();
+    let tag = format!("cnlroll{}", std::process::id());
+    let table = format!("public.it_cnlroll_{tag}");
+    let _guard = pg_clean::TableGuard::new(&url, &[&table]);
+    pg_clean::run_fresh(
+        &url,
+        &format!("CREATE TABLE {table} AS SELECT g AS id, 0 AS v FROM generate_series(1, 6000000) g"),
+    )
+    .unwrap();
+    pg_clean::run_fresh(&url, &format!("CREATE INDEX ON {table} (v)")).unwrap();
+    // Dropped first: nothing of the test's keeps running past it.
+    let _end = EndSessions { url: url.clone(), tag: tag.clone() };
+    let (mut app, mut rx) = app_with(&url, &pw);
+    app.set_instance_tag(&tag);
+    let mut obs = Observer::open(&url).await;
+    let id = first(&app);
+    enter(&mut app);
+    pump(&mut app, &mut rx, 10, |a| a.conns.is_connected(id)).await;
+    app.run(vec!["BEGIN".into()]);
+    pump(&mut app, &mut rx, 10, |a| a.tab().exec.tx_open).await;
+    app.run(vec![format!("INSERT INTO {table} VALUES (-1, -1)")]);
+    pump(&mut app, &mut rx, 10, |a| idle(a, 0)).await;
+    let pid_before =
+        obs.column(&format!("SELECT pid::text FROM pg_stat_activity WHERE application_name = 'datarig-q-{tag}'")).await;
+    app.run(vec![format!("UPDATE {table} SET v = v + 1")]);
+    // Every row: the app asks first.
+    if app.overlays.run_confirm().is_some() {
+        app.handle_event(Event::Key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE)));
+    }
+    pump_ticking(&mut app, &mut rx, 10, |a| a.tab().exec.running.is_some() && a.tab().exec.session.is_some()).await;
+    let until = Instant::now() + Duration::from_secs(1);
+    pump_ticking(&mut app, &mut rx, 10, |_| Instant::now() >= until).await;
+    assert!(app.tab().exec.running.is_some(), "the update still runs");
+    assert_eq!(obs.active(&tag).await.len(), 1, "on the server too");
+    app.cancel();
+    pump_ticking(&mut app, &mut rx, 60, |a| idle(a, 0)).await;
+    let t = app.tab();
+    assert!(matches!(t.results, datarig_tui::app::Results::Cancelled), "{:?}", app.status);
+    assert!(t.exec.session.is_some(), "the session stays");
+    // The session asks the server how the block stands after the failure, then says.
+    pump_ticking(&mut app, &mut rx, 10, |a| a.tab().exec.tx_aborted).await;
+    let t = app.tab();
+    assert!(t.exec.tx_open && t.exec.in_block, "the block stays, aborted");
+    let state = format!("SELECT state FROM pg_stat_activity WHERE application_name = 'datarig-q-{tag}'");
+    assert_eq!(obs.column(&state).await, ["idle in transaction (aborted)"]);
+    let pid_after =
+        obs.column(&format!("SELECT pid::text FROM pg_stat_activity WHERE application_name = 'datarig-q-{tag}'")).await;
+    assert_eq!(pid_before, pid_after, "the same connection");
+    app.run(vec!["ROLLBACK".into()]);
+    if app.overlays.run_confirm().is_some() {
+        app.handle_event(Event::Key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE)));
+    }
+    pump(&mut app, &mut rx, 10, |a| !a.tab().exec.tx_open).await;
+}

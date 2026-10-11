@@ -147,8 +147,14 @@ impl App {
             // What the run prepares and deallocates counts once the server says each statement
             // succeeded (`TabSession::succeeded`), never when it is sent.
             t.exec.unconfirmed = statements.iter().cloned().enumerate().collect();
-            t.exec.running =
-                Some(Running { id: qid, started: Instant::now(), fetch: false, count: false, cancelling: None });
+            t.exec.running = Some(Running {
+                id: qid,
+                started: Instant::now(),
+                fetch: false,
+                count: false,
+                cancelling: None,
+                stopping: false,
+            });
             if t.exec.path_per_transaction {
                 t.warn_session_path();
             }
@@ -323,8 +329,14 @@ impl App {
     pub(super) fn fetch_page(&mut self, id: TabId) {
         let Some(t) = self.tabs.get_mut(id) else { return };
         let qid = t.exec.query_id;
-        t.exec.running =
-            Some(Running { id: qid, started: Instant::now(), fetch: true, count: false, cancelling: None });
+        t.exec.running = Some(Running {
+            id: qid,
+            started: Instant::now(),
+            fetch: true,
+            count: false,
+            cancelling: None,
+            stopping: false,
+        });
         self.send_tab(id, DbCommand::FetchMore { id: qid });
     }
 
@@ -398,6 +410,7 @@ impl App {
             | DbEvent::ValuesNotKnown { .. }
             | DbEvent::Info { .. }
             | DbEvent::Released { .. }
+            | DbEvent::Stopping { .. }
             | DbEvent::Done { .. }
             | DbEvent::Failed { .. }
             | DbEvent::TxOpen(_)
@@ -694,7 +707,8 @@ impl App {
             | DbEvent::RepeatChecked { .. }
             | DbEvent::Started { .. }
             | DbEvent::StepRows { .. }
-            | DbEvent::Finished { .. } => {}
+            | DbEvent::Finished { .. }
+            | DbEvent::Stopping { .. } => {}
             DbEvent::Ddl { id: request, result } => self.ddl_answered(id, None, request, result),
         }
     }
@@ -737,6 +751,19 @@ impl App {
     /// An event of tab `id`'s query session.
     fn tab_event(&mut self, id: TabId, ev: DbEvent) {
         let profile = self.tabs.get(id).and_then(|t| t.profile);
+        // A cancelled run whose session speaks is not stuck: the last-resort bound starts over.
+        let now = self.now();
+        if let Some(r) = self.tabs.get_mut(id).and_then(|t| t.exec.running.as_mut())
+            && r.cancelling.is_some()
+        {
+            r.cancelling = Some(now);
+            if matches!(ev, DbEvent::Stopping { id } if id == r.id) {
+                r.stopping = true;
+            }
+        }
+        if matches!(ev, DbEvent::Stopping { .. }) {
+            return;
+        }
         if matches!(ev, DbEvent::StatementCacheOff) {
             return self.statement_cache_off(id, profile);
         }
@@ -862,10 +889,11 @@ impl App {
             }
             // Said by the profile's metadata session.
             DbEvent::ReadOnlyPerTransaction => None,
-            // Handled first (`statement_cache_off`, `sync_tab_language`).
+            // Handled first (`statement_cache_off`, `sync_tab_language`, the cancel's clock).
             DbEvent::StatementCacheOff
             | DbEvent::Language(_)
             | DbEvent::SessionValues(_)
+            | DbEvent::Stopping { .. }
             | DbEvent::ValuesNotKnown { .. } => None,
             // The server dropped the schema's startup option (a pooler): the driver sets the
             // path in each transaction instead. Said in the run's Messages.

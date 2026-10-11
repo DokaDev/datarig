@@ -444,6 +444,9 @@ pub(crate) fn my_error(e: &mysql_async::Error) -> DbError {
     }
 }
 
+/// How long asking the server whether a stopped statement is still there may take.
+const STILL_THERE_WAIT: Duration = Duration::from_secs(5);
+
 /// ER_KILL_DENIED_ERROR: the statement is not the user's to kill.
 const KILL_DENIED: u16 = 1095;
 
@@ -558,6 +561,25 @@ impl Killer {
             }
             keep
         });
+    }
+
+    /// Whether the server still has the session's connection running a statement, asked on a
+    /// connection of its own (a user sees their own threads): `false` when it does not, or does
+    /// not answer within [`STILL_THERE_WAIT`].
+    pub(crate) async fn still_there(&self) -> bool {
+        let ask = async {
+            let stream = self.route.dial(DIAL_TIMEOUT).await.ok()?;
+            let (_wire, stream) = Wire::new(stream);
+            let mut conn = Conn::connect_with_stream(self.opts.clone(), Box::new(stream)).await.ok()?;
+            let sql = format!(
+                "SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE ID = {} AND COMMAND = 'Query'",
+                self.id
+            );
+            let n: Option<u64> = conn.query_first(sql).await.ok()?;
+            quit(conn).await;
+            Some(n == Some(1))
+        };
+        matches!(tokio::time::timeout(STILL_THERE_WAIT, ask).await, Ok(Some(true)))
     }
 
     /// Forget what became of the kills sent so far: a new run, or a kill of the session's own,

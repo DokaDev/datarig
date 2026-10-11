@@ -4,11 +4,11 @@
 
 use crate::session::{Kill, Killer};
 use crate::wire::Wire;
-use datarig_core::driver::{CancelFailure, DbCommand, DbError};
+use datarig_core::driver::{CancelFailure, DbCommand, DbError, DbEvent};
 use std::collections::VecDeque;
 use std::future::Future;
 use std::time::{Duration, Instant};
-use tokio::sync::mpsc::UnboundedReceiver;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 
 /// How long closing a session waits for the server to take the cancel (`KILL QUERY`).
 const CANCEL_WAIT: Duration = Duration::from_secs(2);
@@ -22,6 +22,10 @@ const TAKE_WAIT: Duration = Duration::from_secs(10);
 
 /// How often the session looks whether rows still come after [`TAKE_WAIT`].
 const SENDING_TICK: Duration = Duration::from_millis(500);
+
+/// How often the session says it still waits for a statement whose cancel the server took
+/// ([`DbEvent::Stopping`]), once the server confirmed the statement is still there.
+const STOPPING_TICK: Duration = Duration::from_secs(5);
 
 /// What the session task does next.
 pub(crate) enum Next {
@@ -46,11 +50,20 @@ pub(crate) struct Link {
     /// Commands that arrived while a request was in flight, or that wait for a result to end.
     queued: VecDeque<DbCommand>,
     wire: Wire,
+    /// Where the query session says it still waits for a statement a cancel stopped
+    /// ([`DbEvent::Stopping`]), and the run (or count) that statement is of.
+    stopping: Option<(UnboundedSender<DbEvent>, u64)>,
 }
 
 impl Link {
     pub(crate) fn new(rx: UnboundedReceiver<DbCommand>, wire: Wire) -> Self {
-        Self { rx, queued: VecDeque::new(), wire }
+        Self { rx, queued: VecDeque::new(), wire, stopping: None }
+    }
+
+    /// The query session's requests from now on are of run (or count) `id`; while one waits
+    /// for a statement whose cancel the server took, the session says so on `events`.
+    pub(crate) fn serving(&mut self, events: &UnboundedSender<DbEvent>, id: u64) {
+        self.stopping = Some((events.clone(), id));
     }
 
     /// Put `cmds` first in line, in their order (they wait no longer).
@@ -94,7 +107,9 @@ impl Link {
     /// have no end). One the server took is waited for, however long the statement takes to
     /// stop, unless its rows still come more than [`TAKE_WAIT`] after it (or after the request
     /// began, when that was later): then it is cut too. The server ends a statement whose
-    /// connection is cut once it finds it gone.
+    /// connection is cut once it finds it gone. While a taken kill is waited for, the session
+    /// says so every [`STOPPING_TICK`] (asking the server first whether the statement is still
+    /// there), so the UI knows it waits on the server and keeps it.
     pub(crate) async fn guard<T>(
         &mut self,
         cancel: Option<&Killer>,
@@ -122,6 +137,19 @@ impl Link {
                                 return CancelFailure::KeptSending;
                             }
                         }
+                    }
+                }
+            });
+            // While a taken kill is waited for: the server says the statement is still there.
+            let stopping = self.stopping.clone();
+            let beat = tokio::task::unconstrained(async move {
+                let (Kill::Taken(_), Some(k), Some((events, id))) = (kill, cancel, stopping) else {
+                    return std::future::pending().await;
+                };
+                loop {
+                    tokio::time::sleep(STOPPING_TICK).await;
+                    if k.still_there().await {
+                        let _ = events.send(DbEvent::Stopping { id });
                     }
                 }
             });
@@ -156,6 +184,7 @@ impl Link {
                     self.wire.cut();
                     return Err(Closed::CancelNotTaken(why));
                 }
+                () = beat => {}
             }
         }
     }

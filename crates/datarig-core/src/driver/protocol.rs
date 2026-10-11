@@ -677,4 +677,12 @@ pub enum DbEvent {
     Lost {
         error: DbError,
     },
+    /// Run (or count) `id` was cancelled, the server took the cancel, and the session is still
+    /// waiting for it to end its statement (a large write rolls back for a long time, saying
+    /// nothing meanwhile), the server having just said the statement is still there. Sent every
+    /// few seconds while that lasts: the session is waiting on the server, not stuck, and the UI
+    /// keeps it (only the driver decides to give a statement up).
+    Stopping {
+        id: u64,
+    },
 }

@@ -330,6 +330,7 @@ pub(crate) async fn query_loop(
             // Answered once; a session the UI closed meanwhile answers nothing.
             // A count or a check the app asks for: a cancel asked before it was another run's.
             Next::Command(DbCommand::Count { id, sql }) => {
+                link.serving(&events, id);
                 env.asked.store(false, Ordering::SeqCst);
                 killer.clear();
                 count(&mut conn, &mut link, &env, &mut s, &sql).await.map(|(result, snapshot)| {
@@ -337,6 +338,7 @@ pub(crate) async fn query_loop(
                 })
             }
             Next::Command(DbCommand::CheckRepeat { id, sql }) => {
+                link.serving(&events, id);
                 env.asked.store(false, Ordering::SeqCst);
                 killer.clear();
                 check_repeat(&mut conn, &mut link, &env, &mut s, &sql).await.map(|result| {
@@ -403,6 +405,7 @@ async fn execute(
     resume: Option<u64>,
     paging: PagingMode,
 ) -> Result<(), Stop> {
+    link.serving(env.events, id);
     let reply = Reply::new(env.events, id);
     let ran = run(conn, link, env, s, reply, statements, resume, paging).await;
     env.busy.store(false, Ordering::SeqCst);
