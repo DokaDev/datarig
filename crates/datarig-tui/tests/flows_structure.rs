@@ -1028,8 +1028,8 @@ fn mysql_items_structure() -> TableStructure {
         definition: String::new(),
     };
     let mut t = TableStructure::new(RelationKind::Table);
-    t.estimated_rows = Some(1_200);
-    t.total_bytes = Some(81_920);
+    // The MySQL driver does not read the estimates with the structure: the listing has them.
+    t.estimates = false;
     t.columns = vec![
         StructureColumn { fill: ColumnFill::AutoIncrement, ..col("id", "bigint unsigned", true, None) },
         col("order_id", "int", false, None),
@@ -1082,7 +1082,7 @@ fn mysql_items_structure() -> TableStructure {
 }
 
 /// A MySQL profile (its databases are the schemas), the explorer focused, `shop` open with
-/// `items`.
+/// `items` and its estimates.
 fn mysql_shop_open(icons: bool) -> Harness {
     let driver = FakeDriver::default();
     driver.mysql.store(true, Ordering::SeqCst);
@@ -1097,12 +1097,16 @@ fn mysql_shop_open(icons: bool) -> Harness {
     h.explore("local-my");
     h.goto("shop");
     h.key(KeyCode::Char('l'));
-    h.db(DbEvent::Objects { schema: "shop".into(), result: Ok((vec!["items".into()], vec![]).into()) });
+    let mut objects: SchemaObjects = (vec!["items".into()], vec![]).into();
+    let stats = datarig_core::driver::structure::RelationStats { rows: Some(1_200), bytes: Some(81_920) };
+    objects.stats.insert("items".into(), stats);
+    h.db(DbEvent::Objects { schema: "shop".into(), result: Ok(objects) });
     h.sent();
     h
 }
 
-/// On MySQL an open table shows its structure as on PostgreSQL (no "columns only" notice):
+/// On MySQL an open table shows its structure as on PostgreSQL (no "columns only" notice), its
+/// line keeps the estimates of the listing (the structure has none of its own):
 /// an `AUTO_INCREMENT` column says so, a trigger names no function (it calls none, so `F` says
 /// there is no function's DDL and the menu does not offer one), a check the server keeps
 /// without enforcing it says so, and Enter on a foreign key goes to its table in another
@@ -1147,7 +1151,11 @@ fn a_mysql_table_shows_its_structure() {
         assert!(!items.contains(&Action::Explorer(ExplorerAction::ShowFunctionDdl)), "{items:?}");
     }
     h.key(KeyCode::Char('F'));
-    assert!(h.status(160, 45).contains("This trigger calls no function"), "{}", h.status(160, 45));
+    assert!(
+        h.status(160, 45).contains("MySQL triggers have no function: their body is in the trigger itself"),
+        "{}",
+        h.status(160, 45)
+    );
     // Enter on the foreign key: the table of another database, read once it is listed.
     h.explore("local-my");
     h.goto("Foreign Keys");

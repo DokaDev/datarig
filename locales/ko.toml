@@ -1416,7 +1416,7 @@
 "pane.editor.ddl" = "DDL 보기 · {name}"
 "ddl.no_object" = "DDL 보기는 테이블, 뷰, 구체화된 뷰, 인덱스, 트리거에서 됩니다"
 "ddl.no_function" = "함수의 DDL: 커서를 트리거에 두세요"
-"ddl.trigger_no_function" = "이 트리거는 함수를 호출하지 않습니다: 문장을 직접 담고 있습니다 (트리거의 DDL을 보세요)"
+"ddl.trigger_no_function" = "MySQL 트리거에는 함수가 없습니다: 본문이 트리거 안에 있습니다"
 "ddl.unsupported" = "이 연결의 드라이버는 DDL을 보여 줄 수 없습니다"
 "ddl.no_connection" = "이 탭에는 DDL을 읽을 연결이 없습니다"
 "ddl.no_session" = "이 데이터베이스의 메타데이터 세션이 열려 있지 않습니다 (다시 시도하세요)"

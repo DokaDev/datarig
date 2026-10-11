@@ -316,12 +316,17 @@ pub struct TableStructure {
     /// (MySQL lists a table's triggers only to a user with the `TRIGGER` privilege on it).
     /// Such a group is empty here, which is not its count.
     pub hidden: Vec<StructureGroup>,
+    /// The estimates were read with the structure. A driver that does not read them with it
+    /// (MySQL: the server opens a table to estimate it when it has no cached statistics) leaves
+    /// them `None` and this false, and the explorer keeps those of the schema's listing.
+    pub estimates: bool,
 }
 
 impl TableStructure {
-    /// Its estimates, for a relation with storage.
+    /// Its estimates, for a relation with storage, when they were read with it.
     pub fn stats(&self) -> Option<RelationStats> {
-        self.kind.has_storage().then_some(RelationStats { rows: self.estimated_rows, bytes: self.total_bytes })
+        (self.estimates && self.kind.has_storage())
+            .then_some(RelationStats { rows: self.estimated_rows, bytes: self.total_bytes })
     }
 
     /// An empty structure of a relation of kind `kind`.
@@ -338,6 +343,7 @@ impl TableStructure {
             checks: Vec::new(),
             triggers: Vec::new(),
             hidden: Vec::new(),
+            estimates: true,
         }
     }
 
