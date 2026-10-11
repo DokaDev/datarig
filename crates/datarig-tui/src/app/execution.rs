@@ -4,7 +4,7 @@
 use super::persist;
 use super::runlog::StatementOutcome;
 use super::*;
-use datarig_core::driver::DbError;
+use datarig_core::driver::{DbError, ReadIn};
 use datarig_core::fault::{ErrorLog, FaultKind};
 use datarig_core::sql::lexer::changes_schema_in;
 use datarig_core::transport::{DialError, Refusal};
@@ -394,6 +394,8 @@ impl App {
         let target = match &ev {
             DbEvent::Page { .. }
             | DbEvent::Language(_)
+            | DbEvent::SessionValues(_)
+            | DbEvent::ValuesNotKnown { .. }
             | DbEvent::Info { .. }
             | DbEvent::Released { .. }
             | DbEvent::Done { .. }
@@ -677,6 +679,8 @@ impl App {
             // The mode a new session of the profile starts in (MySQL): a tab's first run is
             // checked in it before the tab's own session says.
             DbEvent::Language(lang) => self.set_profile_language(id, lang),
+            // A query session's own (copying its values as SQL needs it).
+            DbEvent::SessionValues(_) | DbEvent::ValuesNotKnown { .. } => {}
             // Statement events never come from the metadata session.
             DbEvent::Info { .. }
             | DbEvent::Released { .. }
@@ -747,11 +751,48 @@ impl App {
             }
             return self.sync_tab_language(id);
         }
+        // What the session's values are read in, from now on.
+        if let DbEvent::SessionValues(v) = ev {
+            if let Some(t) = self.tabs.get_mut(id) {
+                t.exec.values = Some(v);
+                // While a statement runs, or its result is still read (held): its result is not
+                // read in one set of values.
+                if t.exec.running.is_some() || matches!(t.exec.paging, Paging::Open { .. }) {
+                    let query = t.exec.query_id;
+                    if t.exec.reading.query != query {
+                        t.exec.reading = super::tabs::Reading { query, ..Default::default() };
+                    }
+                    t.exec.reading.moved = true;
+                    let (step, answer) = (t.exec.reading.step, t.exec.reading.answer);
+                    let read = match step {
+                        Some(i) => t.exec.steps.get_mut(&i).map(|p| &mut p.rs),
+                        None if answer => t.answer_rows_mut().map(|(rs, _)| rs),
+                        None => None,
+                    };
+                    if let Some(rs) = read {
+                        rs.read_in = ReadIn::Changed;
+                    }
+                }
+            }
+            return;
+        }
+        // Server code runs in the statement now running: its next result is read in values not
+        // known.
+        if let DbEvent::ValuesNotKnown { id: q } = ev {
+            if let Some(t) = self.tabs.get_mut(id).filter(|t| t.exec.query_id == q) {
+                if t.exec.reading.query != q {
+                    t.exec.reading = super::tabs::Reading { query: q, ..Default::default() };
+                }
+                t.exec.reading.not_known = true;
+            }
+            return;
+        }
         // The mode the lost session read its text in goes with it: the next run, in a new
         // session, is checked in the mode that one starts in.
         if matches!(ev, DbEvent::Lost { .. }) {
             if let Some(t) = self.tabs.get_mut(id) {
                 t.exec.language = None;
+                t.exec.values = None;
             }
             self.sync_tab_language(id);
         }
@@ -822,7 +863,10 @@ impl App {
             // Said by the profile's metadata session.
             DbEvent::ReadOnlyPerTransaction => None,
             // Handled first (`statement_cache_off`, `sync_tab_language`).
-            DbEvent::StatementCacheOff | DbEvent::Language(_) => None,
+            DbEvent::StatementCacheOff
+            | DbEvent::Language(_)
+            | DbEvent::SessionValues(_)
+            | DbEvent::ValuesNotKnown { .. } => None,
             // The server dropped the schema's startup option (a pooler): the driver sets the
             // path in each transaction instead. Said in the run's Messages.
             DbEvent::ContextPerTransaction => {
@@ -952,6 +996,8 @@ impl App {
             // A run of several statements: which one runs, and what each before the last did.
             DbEvent::Started { index, .. } => {
                 t.exec.run.started(index);
+                let query = t.exec.query_id;
+                t.exec.reading = super::tabs::Reading { query, step: Some(index), ..Default::default() };
                 None
             }
             // The rows of a statement before the last: kept as its own result, up to its limit
@@ -966,7 +1012,8 @@ impl App {
                             t.exec.plan = Some(super::plan::PlanTab::new(plan, t.exec.query_id, index, &json));
                         }
                         let store = datarig_core::results::RowStore::new(rows, spill, limits);
-                        let rs = ResultSet::new(cols, store, more, &null);
+                        let mut rs = ResultSet::new(cols, store, more, &null);
+                        rs.read_in = read_in(&mut t.exec);
                         let n = rs.rows.len();
                         let grid = GridState::paged(page_size, t.grid.page_rows);
                         t.exec.steps.insert(index, super::tabs::Parked { rs, grid });
@@ -974,6 +1021,7 @@ impl App {
                     }
                     (None, Some(p)) => {
                         let rs = &mut p.rs;
+                        rs.read_in.page(t.exec.values.as_ref());
                         if rs.more {
                             rs.more = match rs.rows.append(rows) {
                                 Ok(a) => more && !a.capped,
@@ -988,6 +1036,7 @@ impl App {
                 None
             }
             DbEvent::Finished { index, outcome, elapsed, .. } => {
+                t.exec.reading = super::tabs::Reading { query: t.exec.query_id, ..Default::default() };
                 t.exec.succeeded(Some(index));
                 t.exec.run.finished(index, &outcome, elapsed);
                 None
@@ -1013,9 +1062,11 @@ impl App {
                 });
                 // What was announced when it was sent stays in the status bar with its rows.
                 let announced = t.exec.run.notes.last().cloned();
+                let values = t.exec.values.clone();
                 let answer = t.answer_rows_mut();
                 match (answer, r) {
                     (Some((rs, grid)), Some(r)) if same => {
+                        rs.read_in.page(values.as_ref());
                         match rs.rows.append(rows) {
                             Ok(a) if a.capped => {
                                 let count = rs.rows.len() as u64;
@@ -1086,7 +1137,15 @@ impl App {
                 t.exec.paging = paging(more);
                 t.park_shown();
                 let page_rows = t.grid.page_rows;
-                t.results = Results::Rows(ResultSet::new(cols, store, more, &null));
+                let mut rs = ResultSet::new(cols, store, more, &null);
+                // Bound to the session's values now: a later `SET time_zone` is not this result's.
+                rs.read_in = read_in(&mut t.exec);
+                let query = t.exec.query_id;
+                if t.exec.reading.query != query {
+                    t.exec.reading = super::tabs::Reading { query, ..Default::default() };
+                }
+                t.exec.reading.answer = true;
+                t.results = Results::Rows(rs);
                 t.grid = GridState::paged(page_size, page_rows);
                 t.exec.origin = origin;
                 t.exec.shown = t.exec.run.len().checked_sub(1);
@@ -1132,9 +1191,11 @@ impl App {
                 t.exec.running = None;
                 t.exec.paging = paging(more);
                 let want = t.exec.want_page.take();
+                let values = t.exec.values.clone();
                 let answer = t.answer_rows_mut();
                 let m = match answer {
                     Some((rs, grid)) => {
+                        rs.read_in.page(values.as_ref());
                         match rs.rows.append(rows) {
                             Ok(a) if a.capped => {
                                 let count = rs.rows.len() as u64;
@@ -1549,4 +1610,22 @@ pub(super) fn network_reason(kind: &FaultKind) -> Label {
         }
         _ => Label::DbConnection,
     }
+}
+
+/// What a result that starts now in session `exec` is read in: not known when its session said
+/// server code runs (`DbEvent::ValuesNotKnown`), changed when the values changed while its
+/// statement ran (`DbEvent::SessionValues` before its first page), else the session's values
+/// now. What the session said is for this result only.
+fn read_in(exec: &mut super::tabs::TabSession) -> ReadIn {
+    let reading = &mut exec.reading;
+    let this = reading.query == exec.query_id;
+    let read_in = if this && reading.not_known {
+        ReadIn::Unknown
+    } else if this && reading.moved {
+        ReadIn::Changed
+    } else {
+        ReadIn::first(exec.values.as_ref())
+    };
+    reading.not_known = false;
+    read_in
 }

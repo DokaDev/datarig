@@ -326,3 +326,124 @@ fn a_column_named_by_schema_table_and_column_is_found() {
     let mixed = [named("orders", "id"), named("users", "name")];
     assert_eq!(insert_source(PG, Some(&k), &mixed, &["id", "name"], sql), Err(NotInsertable::SeveralTables));
 }
+
+/// `shop.Orders` (id PK, Note) as a MySQL catalog with `rule`; result origins are named.
+fn mysql(rule: NameRule) -> KeyCatalog {
+    let mut k = KeyCatalog::default();
+    k.set_names(rule);
+    k.add_table(1, "shop", "Orders", [(1, "id".to_string()), (2, "Note".to_string())]);
+    k.mark(1, &[1], KeyKind::Primary);
+    k
+}
+
+fn named(schema: &str, table: &str, column: &str) -> Option<ColumnOrigin> {
+    Some(ColumnOrigin::Named { schema: schema.into(), table: table.into(), column: column.into() })
+}
+
+const MY: Dialect = Dialect::MySql(crate::sql::dialect::MySqlMode {
+    ansi_quotes: false,
+    no_backslash_escapes: false,
+    dollar_quotes: false,
+});
+
+/// The default rule compares names exactly (PostgreSQL); MySQL's never minds a column's case,
+/// and a table's or a database's only with `lower_case_table_names` 1 or 2.
+#[test]
+fn names_compare_by_the_catalogs_rule() {
+    let exact = shop();
+    assert_eq!(exact.names(), NameRule::Exact);
+    assert!(exact.find(Some("shop"), "Users").is_err());
+    assert_eq!(exact.marks_by_name("shop", "users", "ID"), NONE);
+
+    let cased = mysql(NameRule::MySql { tables_ignore_case: false });
+    assert_eq!(cased.marks_by_name("shop", "Orders", "ID"), PK);
+    assert_eq!(cased.marks_by_name("shop", "orders", "id"), NONE, "the table's case matters");
+    assert_eq!(cased.marks(named("shop", "Orders", "ID").as_ref()), PK);
+    assert!(cased.find(Some("SHOP"), "Orders").is_err());
+
+    let folded = mysql(NameRule::MySql { tables_ignore_case: true });
+    assert_eq!(folded.marks_by_name("SHOP", "orders", "ID"), PK);
+    assert_eq!(folded.marks(named("Shop", "ORDERS", "id").as_ref()), PK);
+    assert_eq!(folded.find(None, "orders").map(|t| t.name.as_str()), Ok("Orders"));
+    // The rule applies to tables added before it was set too.
+    let mut late = KeyCatalog::default();
+    late.add_table(1, "shop", "Orders", [(1, "id".to_string())]);
+    late.set_names(NameRule::MySql { tables_ignore_case: true });
+    assert!(late.find(Some("shop"), "orders").is_ok());
+}
+
+/// A MySQL result: the explorer's own statement (backticks) is one table; the table in `FROM`
+/// and the origins compare by the catalog's rule, as do `:copy insert`'s names, and two result
+/// columns whose names differ in case only are one column.
+#[test]
+fn mysql_results_are_copied_by_the_servers_name_rules() {
+    let cased = mysql(NameRule::MySql { tables_ignore_case: false });
+    let folded = mysql(NameRule::MySql { tables_ignore_case: true });
+    let origins = [named("shop", "Orders", "id"), named("shop", "Orders", "Note")];
+    let src = |k: &KeyCatalog, sql: &str| {
+        let plan = insert_source(MY, Some(k), &origins, &["id", "Note"], sql);
+        plan.map(|p| p.columns.iter().map(|(i, n)| (*i, n.to_string())).collect::<Vec<_>>())
+    };
+    assert_eq!(src(&cased, "SELECT * FROM `shop`.`Orders`"), Ok(vec![(0, "id".to_string()), (1, "Note".to_string())]));
+    assert_eq!(
+        src(&cased, "SELECT * FROM `shop`.`Orders` LIMIT 500"),
+        Ok(vec![(0, "id".to_string()), (1, "Note".to_string())])
+    );
+    assert_eq!(src(&cased, "SELECT * FROM shop.orders"), Err(NotInsertable::OtherTable), "another table there");
+    assert_eq!(src(&folded, "SELECT * FROM SHOP.orders"), Ok(vec![(0, "id".to_string()), (1, "Note".to_string())]));
+    // MySQL forms that are not plainly one table's rows are refused.
+    for sql in ["SELECT * FROM `shop`.`Orders` USE INDEX (PRIMARY)", "SELECT * FROM `shop`.`Orders` PARTITION (p0)"] {
+        assert_eq!(src(&cased, sql), Err(NotInsertable::NotATable), "{sql}");
+    }
+    let up = update_source(MY, Some(&cased), &origins, &["id", "Note"], "SELECT * FROM `shop`.`Orders`").unwrap();
+    assert_eq!((up.keys, up.set), (vec![(0, "id")], vec![(1, "Note")]));
+    // `:copy insert`: the result's names find the table's columns in any case.
+    let into = insert_into(MY, Some(&cased), "shop.Orders", &["ID", "note"]).unwrap();
+    assert_eq!(into.columns, [(0, "id"), (1, "Note")]);
+    assert_eq!(insert_into(MY, Some(&cased), "shop.Orders", &["id", "ID"]), Err(NotInsertable::DuplicateNames));
+    assert_eq!(insert_into(MY, Some(&folded), "SHOP.ORDERS", &["id"]).map(|p| p.table.name.as_str()), Ok("Orders"));
+    // PostgreSQL's names stay exact.
+    assert!(insert_into(PG, Some(&shop()), "shop.users", &["ID"]).is_err());
+}
+
+/// Folding a name's case may make distinct names one (`ẞ` folds to `ß`): the name of exactly
+/// that spelling wins, and a folded name that fits several is no match. Tables whose names the
+/// rule takes for one are all kept, and asking for such a name is ambiguous.
+#[test]
+fn folding_never_takes_one_name_for_another() {
+    let mut k = KeyCatalog::default();
+    k.set_names(NameRule::MySql { tables_ignore_case: true });
+    k.add_table(1, "shop", "t", [(1, "ẞ".to_string()), (2, "ß".to_string()), (3, "Ab".to_string())]);
+    k.mark(1, &[1], KeyKind::Primary);
+    assert_eq!(k.marks_by_name("shop", "t", "ẞ"), PK);
+    assert_eq!(k.marks_by_name("shop", "t", "ß"), NONE, "another column");
+    assert_eq!(k.column_number(1, "ab"), Some(3), "one column folds to it");
+    assert_eq!(k.column_number(1, "SS"), None);
+    // Two tables whose names fold to one: neither is overwritten; a name of either spelling
+    // finds its own, any other is ambiguous.
+    k.add_table(2, "shop", "Straße", [(1, "id".to_string())]);
+    k.add_table(3, "shop", "STRAẞE", [(1, "id".to_string())]);
+    assert_eq!(k.table_id("shop", "Straße"), Some(2));
+    assert_eq!(k.table_id("shop", "STRAẞE"), Some(3));
+    assert_eq!(k.table_id("shop", "straße"), None);
+    assert_eq!(k.find(Some("shop"), "straße"), Err(NotInsertable::AmbiguousTable));
+    assert_eq!(k.find(None, "straße"), Err(NotInsertable::AmbiguousTable));
+    assert_eq!(k.find(None, "Straße").map(|t| t.name.as_str()), Ok("Straße"));
+    let into = insert_into(MY, Some(&k), "shop.t", &["ß"]).unwrap();
+    assert_eq!(into.columns, [(0, "ß")]);
+}
+
+/// An `AUTO_INCREMENT` column takes a value: an `INSERT` writes it, an `UPDATE` sets it.
+#[test]
+fn an_auto_increment_column_is_written() {
+    let mut k = mysql(NameRule::MySql { tables_ignore_case: false });
+    k.add_table(2, "shop", "seq", [(1, "k".to_string()), (2, "n".to_string())]);
+    k.mark(2, &[1], KeyKind::Primary);
+    k.set_generated(2, 2, Generated::AutoIncrement);
+    let origins = [named("shop", "seq", "k"), named("shop", "seq", "n")];
+    let sql = "SELECT * FROM `shop`.`seq`";
+    let insert = insert_source(MY, Some(&k), &origins, &["k", "n"], sql).unwrap();
+    assert_eq!(insert.columns, [(0, "k"), (1, "n")]);
+    let update = update_source(MY, Some(&k), &origins, &["k", "n"], sql).unwrap();
+    assert_eq!(update.set, [(1, "n")]);
+}

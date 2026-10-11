@@ -390,3 +390,276 @@ fn a_lost_sessions_mode_goes_with_it() {
     assert_eq!(h.app.tab_language(tab), my(server));
     assert_eq!(h.app.tab().exec.prepared.language(), my(server));
 }
+
+/// `shop.Items` as the MySQL driver reports its keys: `id` the primary key (`AUTO_INCREMENT`),
+/// a blob, a bit, a text, a JSON, a `TIMESTAMP` and a `FLOAT` column; names compared as MySQL
+/// compares them.
+fn items_keys() -> datarig_core::driver::keys::KeyCatalog {
+    use datarig_core::driver::keys::{Generated, KeyCatalog, KeyKind, NameRule};
+    let mut k = KeyCatalog::default();
+    k.set_names(NameRule::MySql { tables_ignore_case: false });
+    k.set_server_zone("UTC");
+    let names = ["id", "bin", "bt", "txt", "js", "at", "ratio"];
+    k.add_table(1, "shop", "Items", names.iter().enumerate().map(|(i, n)| (i as i16 + 1, n.to_string())));
+    k.mark(1, &[1], KeyKind::Primary);
+    k.set_generated(1, 1, Generated::AutoIncrement);
+    k
+}
+
+/// The explorer's statement of `shop.<table>` run, and its one row back (`id`, `txt` as given),
+/// the grid focused; `columns` of the table's columns (the first `n`). The origins name the
+/// table as the server writes it in the result (`txt` in another case).
+fn items_result(h: &mut Harness, table: &str, id: &str, txt: &str, n: usize) {
+    use datarig_core::driver::{ColumnMeta, ColumnOrigin, ValueKind};
+    h.app.run(vec![format!("SELECT * FROM `shop`.`{table}`")]);
+    let run = sent_run(h);
+    let col = |name: &str, ty: &str, kind: ValueKind| {
+        let origin = ColumnOrigin::Named { schema: "shop".into(), table: table.into(), column: name.into() };
+        ColumnMeta::new(name.into(), ty.into(), kind, Some(origin))
+    };
+    let columns = [
+        col("id", "int", ValueKind::Integer),
+        col("bin", "varbinary", ValueKind::Bytes),
+        col("bt", "bit", ValueKind::Bit),
+        col("TXT", "varchar", ValueKind::Text),
+        col("js", "json", ValueKind::Json),
+        col("at", "timestamp", ValueKind::TimestampTz),
+        col("ratio", "float", ValueKind::Float),
+    ];
+    let row = [
+        Some(id.to_string()),
+        Some("0x00FF5C".to_string()),
+        Some("b'101'".to_string()),
+        Some(txt.to_string()),
+        Some(r#"{"a": "b"}"#.to_string()),
+        Some("2024-10-27 00:30:00".to_string()),
+        Some("1.23457".to_string()),
+    ];
+    let columns = columns[..n].to_vec();
+    let rows = vec![row[..n].to_vec()];
+    h.tab_db(0, DbEvent::Page { id: run, columns: Some(columns), rows, more: false, elapsed: Default::default() });
+    h.app.focus = datarig_tui::app::Focus::Results;
+}
+
+fn session(zone: &str, charset: &str) -> DbEvent {
+    DbEvent::SessionValues(datarig_core::driver::SessionValues { time_zone: zone.into(), charset: charset.into() })
+}
+
+/// A MySQL result copied as SQL: backtick names, MySQL's literals (bytes `X'…'`, bits `b'…'`,
+/// a string with a backslash as its UTF-8 bytes, so that it reads the same in every sql mode, a
+/// `TIMESTAMP` with the offset of the session's fixed zone), the table's own column names; an
+/// UPDATE keyed by the primary key. Refused, it says why in MySQL's terms: the keys still being
+/// read, a table the key cache does not have, keys that could not be read, and for a column
+/// whose values would not be written whole: a `FLOAT`, text read in another character set than
+/// UTF-8, a `TIMESTAMP` in a zone that is not a fixed offset, an `AUTO_INCREMENT` 0.
+#[test]
+fn mysql_rows_copy_as_mysql_sql_or_say_why_not() {
+    let mut h = mysql();
+    let clip = FakeClipboard::attach(&mut h, false, &[]);
+    h.db(DbEvent::Connected);
+    h.tab_db(0, session("SYSTEM", "utf8mb4"));
+    // The keys are not read yet.
+    items_result(&mut h, "Items", "7", "it's \\ here", 6);
+    h.command("copy insert");
+    let status = h.status(200, 45);
+    assert!(status.contains("Not copied as INSERT: the tables' keys are still being read"), "{status}");
+    assert!(!status.contains("not known yet, or could not be read"), "{status}");
+    h.db(DbEvent::Keys(Ok(items_keys())));
+    h.command("copy insert");
+    assert_eq!(
+        clip.last().as_deref(),
+        Some(
+            "INSERT INTO `shop`.`Items` (`id`, `bin`, `bt`, `txt`, `js`, `at`) \
+             VALUES (7, X'00FF5C', b'101', _utf8mb4 X'69742773205C2068657265', '{\"a\": \"b\"}', \
+             '2024-10-27 00:30:00+00:00');"
+        ),
+        "SYSTEM is the server's UTC: a fixed offset"
+    );
+    h.command("copy update");
+    assert_eq!(
+        clip.last().as_deref(),
+        Some(
+            "UPDATE `shop`.`Items` SET `bin` = X'00FF5C', `bt` = b'101', `txt` = _utf8mb4 X'69742773205C2068657265', \
+             `js` = '{\"a\": \"b\"}', `at` = '2024-10-27 00:30:00+00:00' WHERE `id` = 7;"
+        )
+    );
+    // A text that only looks like bytes is text.
+    items_result(&mut h, "Items", "8", "0xE9", 4);
+    h.command("copy insert");
+    assert!(clip.last().is_some_and(|c| c.ends_with("VALUES (8, X'00FF5C', b'101', '0xE9');")), "{:?}", clip.last());
+    let copies = || clip.texts.lock().unwrap().len();
+    let refused = |h: &mut Harness, want: &str| {
+        let before = copies();
+        h.command("copy insert");
+        let status = h.status(240, 45);
+        assert!(status.contains(want), "{want:?}: {status}");
+        assert_eq!(copies(), before, "nothing copied: {want}");
+    };
+    // An AUTO_INCREMENT 0 would be numbered anew.
+    items_result(&mut h, "Items", "0", "x", 4);
+    refused(&mut h, "Not copied as SQL: column “id” is AUTO_INCREMENT and a row has 0");
+    // A FLOAT is sent rounded.
+    items_result(&mut h, "Items", "9", "x", 7);
+    refused(&mut h, "Not copied as SQL: column “ratio” is a FLOAT, which MySQL sends rounded");
+    // A TIMESTAMP in a zone with daylight saving.
+    h.tab_db(0, session("Europe/Berlin", "utf8mb4"));
+    items_result(&mut h, "Items", "9", "x", 6);
+    refused(&mut h, "column “at” is a TIMESTAMP shown in the time zone Europe/Berlin, which is not a fixed offset");
+    // Text read in latin1 (SET NAMES latin1) is not the text.
+    h.tab_db(0, session("+00:00", "latin1"));
+    items_result(&mut h, "Items", "9", "x", 4);
+    refused(&mut h, "column “TXT” is text the session reads in latin1, not utf8mb4 (SET NAMES utf8mb4 to copy it)");
+    h.tab_db(0, session("+00:00", "utf8mb4"));
+    // A table created after the keys were read.
+    items_result(&mut h, "Later", "1", "x", 4);
+    refused(&mut h, "Not copied as INSERT: its table or one of its columns is not in the key cache");
+    // The keys could not be read: the server's reason.
+    h.db(DbEvent::Keys(Err(DbError::Server("ERROR 1142 (42000): denied".into()))));
+    items_result(&mut h, "Items", "1", "x", 4);
+    refused(&mut h, "the tables' columns could not be read (ERROR 1142 (42000): denied)");
+}
+
+/// A result is copied by what its values were read in, not by what the session reads in now:
+/// a `TIMESTAMP` read under Europe/Berlin stays refused after `SET time_zone = '+00:00'` (never
+/// written with `+00:00` after Berlin's text), and a text read under latin1 stays refused after
+/// `SET NAMES utf8mb4` or after the session is lost; a text read before the session said its
+/// values is refused; a result whose pages came under different values is refused too.
+#[test]
+fn a_result_is_copied_by_the_values_it_was_read_in() {
+    use datarig_core::driver::{ColumnMeta, ColumnOrigin, ValueKind};
+    let mut h = mysql();
+    let clip = FakeClipboard::attach(&mut h, false, &[]);
+    h.db(DbEvent::Connected);
+    h.db(DbEvent::Keys(Ok(items_keys())));
+    let col = |name: &str, ty: &str, kind: ValueKind| {
+        let origin = ColumnOrigin::Named { schema: "shop".into(), table: "Items".into(), column: name.into() };
+        ColumnMeta::new(name.into(), ty.into(), kind, Some(origin))
+    };
+    let cols = || vec![col("id", "int", ValueKind::Integer), col("at", "timestamp", ValueKind::TimestampTz)];
+    let page = |h: &mut Harness, rows: usize, more: bool, first: bool| {
+        let run = if first { sent_run(h) } else { h.app.tab().exec.query_id };
+        let rows = (0..rows).map(|i| vec![Some((i + 1).to_string()), Some("2024-10-27 02:30:00".into())]).collect();
+        let columns = first.then(cols);
+        h.tab_db(0, DbEvent::Page { id: run, columns, rows, more, elapsed: Default::default() });
+        h.app.focus = datarig_tui::app::Focus::Results;
+    };
+    // Read under Europe/Berlin, then the session's zone set to a fixed offset.
+    h.tab_db(0, session("Europe/Berlin", "utf8mb4"));
+    h.app.run(vec!["SELECT id, at FROM `shop`.`Items`".into()]);
+    page(&mut h, 1, false, true);
+    h.tab_db(0, session("+00:00", "utf8mb4"));
+    h.command("copy insert");
+    let status = h.status(240, 45);
+    assert!(status.contains("column “at” is a TIMESTAMP shown in the time zone Europe/Berlin"), "{status}");
+    assert!(clip.last().is_none(), "never written with +00:00: {:?}", clip.last());
+    // Read under latin1, then SET NAMES utf8mb4.
+    h.tab_db(0, session("+00:00", "latin1"));
+    items_result(&mut h, "Items", "7", "x", 4);
+    h.tab_db(0, session("+00:00", "utf8mb4"));
+    h.command("copy insert");
+    let status = h.status(240, 45);
+    assert!(status.contains("column “TXT” is text the session reads in latin1"), "{status}");
+    assert!(clip.last().is_none(), "{:?}", clip.last());
+    // Read under latin1, then the session is lost: still refused.
+    h.tab_db(0, session("+00:00", "latin1"));
+    items_result(&mut h, "Items", "7", "x", 4);
+    h.tab_db(0, DbEvent::Lost { error: DbError::Closed });
+    h.command("copy insert");
+    let status = h.status(240, 45);
+    assert!(status.contains("column “TXT” is text the session reads in latin1"), "{status}");
+    assert!(clip.last().is_none(), "{:?}", clip.last());
+    // Read before the session said its values: not known, refused.
+    h.tab_db(0, DbEvent::Connected);
+    items_result(&mut h, "Items", "7", "x", 4);
+    h.command("copy insert");
+    let status = h.status(240, 45);
+    assert!(
+        status.contains("column “TXT” was read while the session's time zone and character set were not known"),
+        "{status}"
+    );
+    assert!(clip.last().is_none(), "{:?}", clip.last());
+    h.tab_db(0, session("+00:00", "utf8mb4"));
+    // Read under +00:00, copied as such.
+    h.app.run(vec!["SELECT id, at FROM `shop`.`Items`".into()]);
+    page(&mut h, 2, true, true);
+    h.command("copy insert");
+    assert!(clip.last().is_some_and(|c| c.contains("'2024-10-27 02:30:00+00:00'")), "{:?}", clip.last());
+    // Its next page comes after the zone changed: its rows are not all in one zone.
+    h.tab_db(0, session("Europe/Berlin", "utf8mb4"));
+    page(&mut h, 1, false, false);
+    let copies = clip.texts.lock().unwrap().len();
+    h.command("copy insert");
+    let status = h.status(240, 45);
+    assert!(status.contains("column “at” was read across a change of the session's time zone"), "{status}");
+    assert_eq!(clip.texts.lock().unwrap().len(), copies);
+}
+
+/// A procedure, a prepared statement or a stored function may change the session's time zone or
+/// character set while its result is read, and the server does not say: the session says the
+/// result is read in values not known (`ValuesNotKnown`, before its first page), and it is not
+/// copied with the zone the session had before; what the session says after it binds the next
+/// result. A result whose session reports other values before it was read to its end is not
+/// copied either.
+#[test]
+fn a_result_of_server_code_is_not_copied_with_the_old_values() {
+    use datarig_core::driver::{ColumnMeta, ColumnOrigin, ValueKind};
+    let mut h = mysql();
+    let clip = FakeClipboard::attach(&mut h, false, &[]);
+    h.db(DbEvent::Connected);
+    h.db(DbEvent::Keys(Ok(items_keys())));
+    h.tab_db(0, session("+00:00", "utf8mb4"));
+    let col = |name: &str, ty: &str, kind: ValueKind| {
+        let origin = ColumnOrigin::Named { schema: "shop".into(), table: "Items".into(), column: name.into() };
+        ColumnMeta::new(name.into(), ty.into(), kind, Some(origin))
+    };
+    let columns = || vec![col("id", "int", ValueKind::Integer), col("at", "timestamp", ValueKind::TimestampTz)];
+    let rows = |n: usize| (1..=n).map(|i| vec![Some(i.to_string()), Some("2024-10-27 09:30:00".into())]).collect();
+    // Run `sql`; `before` its first page (more after it with `more`).
+    let result = |h: &mut Harness, sql: &str, before: Option<DbEvent>, more: bool| -> u64 {
+        h.app.run(vec![sql.to_string()]);
+        // A procedure asks first.
+        if h.app.overlays.run_confirm().is_some() {
+            h.keys("y");
+        }
+        let run = sent_run(h);
+        if let Some(ev) = before {
+            h.tab_db(0, ev);
+        }
+        h.tab_db(
+            0,
+            DbEvent::Page { id: run, columns: Some(columns()), rows: rows(1), more, elapsed: Default::default() },
+        );
+        // Code may have changed the tables too: the keys are read again.
+        h.db(DbEvent::Keys(Ok(items_keys())));
+        h.app.focus = datarig_tui::app::Focus::Results;
+        run
+    };
+    let refused = |h: &mut Harness, what: &str| {
+        let before = clip.texts.lock().unwrap().len();
+        h.command("copy insert shop.Items");
+        let status = h.status(240, 45);
+        assert!(status.contains("column “at” was read"), "{what}: {status}");
+        assert_eq!(clip.texts.lock().unwrap().len(), before, "{what}: nothing copied");
+    };
+    for sql in ["CALL shop.moves_the_zone()", "EXECUTE s", "/*! CALL shop.moves_the_zone() */"] {
+        let run = h.app.tab().exec.query_id + 1;
+        result(&mut h, sql, Some(DbEvent::ValuesNotKnown { id: run }), false);
+        refused(&mut h, sql);
+    }
+    // The session says what the code left: the next result is bound to it.
+    h.tab_db(0, session("+09:00", "utf8mb4"));
+    result(&mut h, "SELECT id, at FROM `shop`.`Items`", None, false);
+    h.command("copy insert");
+    assert!(
+        clip.last().is_some_and(|c| c.contains("'2024-10-27 09:30:00+09:00'")),
+        "{:?} {}",
+        clip.last(),
+        h.status(240, 45)
+    );
+    // A held result: its first page, then the session's values change (a stored function a view
+    // calls), then its last page: read in two sets of values.
+    let run = result(&mut h, "SELECT id, at FROM `shop`.`Items`", None, true);
+    h.tab_db(0, session("+05:00", "utf8mb4"));
+    h.tab_db(0, DbEvent::Page { id: run, columns: None, rows: rows(1), more: false, elapsed: Default::default() });
+    refused(&mut h, "values changed before the result ended");
+}

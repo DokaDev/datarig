@@ -261,6 +261,28 @@ pub struct TabSession {
     /// The language `session` said its text is read in (`DbEvent::Language`: a MySQL session's
     /// sql mode); `None` until it says, and for a driver whose sessions do not.
     pub language: Option<datarig_core::sql::dialect::Language>,
+    /// What `session`'s values are read in (`DbEvent::SessionValues`: a MySQL session's time
+    /// zone and results character set); `None` until it says, and for a driver whose sessions
+    /// do not.
+    pub values: Option<datarig_core::driver::SessionValues>,
+    /// What the statement running now does to the values its result is read in, as its session
+    /// said (run `query_id`): server code runs (`DbEvent::ValuesNotKnown`, its next result is
+    /// read in values not known), the values changed while it ran (`DbEvent::SessionValues`
+    /// before it answered), and which statement of the run it is (`DbEvent::Started`).
+    pub reading: Reading,
+}
+
+/// See [`TabSession::reading`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Reading {
+    /// The run whose statement it is.
+    pub query: u64,
+    /// The statement of a run of several (`Started`); `None` for the run's one statement.
+    pub step: Option<usize>,
+    pub not_known: bool,
+    pub moved: bool,
+    /// The run's answer (its last statement's result) came in this run.
+    pub answer: bool,
 }
 
 impl TabSession {
@@ -301,6 +323,8 @@ impl TabSession {
             context: None,
             path_per_transaction: false,
             language: None,
+            values: None,
+            reading: Reading::default(),
         }
     }
 

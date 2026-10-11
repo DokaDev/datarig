@@ -249,8 +249,8 @@ async fn a_query_session_says_how_its_text_is_read() {
     probe.disconnect().await.unwrap();
 }
 
-/// The metadata session says the mode a new session starts in, then lists the databases and
-/// reads the catalog as soon as it connects.
+/// The metadata session says the mode a new session starts in, then lists the databases, reads
+/// the catalog and the key metadata as soon as it connects.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_metadata_session_reads_the_databases_and_the_catalog() {
     let Some(url) = my_url("the_metadata_session_reads_the_databases_and_the_catalog") else { return };
@@ -277,6 +277,11 @@ async fn the_metadata_session_reads_the_databases_and_the_catalog() {
         }
         other => panic!("{other:?}"),
     }
+    // Then the key metadata.
+    match c.next(30).await {
+        DbEvent::Keys(Ok(k)) => assert!(k.marks_by_name("shop", "users", "id").pk),
+        other => panic!("{other:?}"),
+    }
     c.session.send(DbCommand::LoadObjects { schema: "shop".into() });
     match c.next(15).await {
         DbEvent::Objects { schema, result: Ok(o) } => {
@@ -293,9 +298,12 @@ async fn the_metadata_session_reads_the_databases_and_the_catalog() {
     assert!(next.is_err(), "nothing more: {next:?}");
 }
 
-/// A read of the metadata session never queues behind another
-/// session's metadata lock (held, or asked for by an `ALTER TABLE` that waits), and never holds
-/// up that session.
+/// A read of the metadata session never queues behind another session's metadata lock (held,
+/// or asked for by an `ALTER TABLE` that waits) beyond its lock wait, and never holds up that
+/// session: while the reads run, and right after, the server shows no other session waiting
+/// for a lock of the metadata session's, and the metadata session keeps none ([`watched`]: a
+/// sampled guard; with `LOCK TABLES` the other session can wait for nothing, so there the fact
+/// is that the lookups did not wait).
 #[tokio::test(flavor = "multi_thread")]
 async fn lookups_never_queue_behind_a_metadata_lock_nor_hold_one_up() {
     let Some((url, admin)) = urls("lookups_never_queue_behind_a_metadata_lock") else { return };
@@ -306,43 +314,55 @@ async fn lookups_never_queue_behind_a_metadata_lock_nor_hold_one_up() {
     wide.disconnect().await.unwrap();
     let mut m = Conn::start(&url, SessionRole::Meta, false, "lookup");
     m.wait(|e| matches!(e, DbEvent::Catalog(_)), 30).await;
+    let mut side_admin = side(&admin).await;
+    let meta = only_session(&mut side_admin, SessionRole::Meta, "lookup").await;
     let lookups = |m: &mut Conn| {
         m.session.send(DbCommand::LoadObjects { schema: "shop".into() });
         m.session.send(DbCommand::LoadCatalog);
     };
-    // 1. Another session holds `LOCK TABLES … WRITE`.
+    // 1. Another session holds `LOCK TABLES … WRITE`, and writes while the lookups run.
     let mut lock = side(&admin).await;
     lock.query_drop(format!("LOCK TABLES {} WRITE", t.q())).await.unwrap();
-    let t0 = Instant::now();
-    lookups(&mut m);
-    m.wait(|e| matches!(e, DbEvent::Objects { .. }), 10).await;
-    m.wait(|e| matches!(e, DbEvent::Catalog(_)), 10).await;
-    assert!(t0.elapsed() < Duration::from_millis(2_500), "{:?}", t0.elapsed());
-    let t0 = Instant::now();
-    lock.query_drop(format!("INSERT INTO {} VALUES (999999, 'w')", t.q())).await.unwrap();
+    let locker = u64::from(lock.id());
+    let ((), seen) = watched(&admin, meta, &[locker], &t.name, async {
+        lookups(&mut m);
+        lock.query_drop(format!("INSERT INTO {} VALUES (999999, 'w')", t.q())).await.unwrap();
+        m.wait(|e| matches!(e, DbEvent::Objects { .. }), 10).await;
+        m.wait(|e| matches!(e, DbEvent::Catalog(_)), 10).await;
+    })
+    .await;
+    // The locking session holds the strongest lock already: it waits for nothing of ours by
+    // construction, and the fact here is that the lookups did not wait for it.
+    assert!(seen.queued.is_empty(), "the lookups waited for the locking session: {:?}", seen.queued);
+    assert!(seen.held_up.is_empty(), "the locking session waited for the lookups: {:?}", seen.held_up);
+    assert_eq!(metadata_locks_of(&mut side_admin, meta).await, 0, "no lock kept");
     lock.query_drop("UNLOCK TABLES").await.unwrap();
-    assert!(t0.elapsed() < Duration::from_millis(500), "the locking session was not held up: {:?}", t0.elapsed());
     // 2. A statement holds a shared lock (a held result), and an `ALTER TABLE` waits for it: a
-    //    lookup does not queue behind the waiting ALTER.
+    //    lookup does not queue behind the waiting ALTER beyond its lock wait.
     let mut q = Conn::open(&url, SessionRole::Query, false, "lookup").await;
     let evs = q.run_as(1, &[&format!("SELECT * FROM {}", t.q())], PagingMode::Hold).await;
     assert!(page_of(&evs).2);
-    let alter_url = admin.clone();
-    let table = t.q();
-    let alter = tokio::spawn(async move {
-        let mut a = side(&alter_url).await;
-        a.query_drop("SET SESSION lock_wait_timeout = 60").await.unwrap();
-        let t0 = Instant::now();
-        let r = a.query_drop(format!("ALTER TABLE {table} ADD COLUMN c9 INT")).await;
-        a.disconnect().await.unwrap();
-        (r.map_err(|e| e.to_string()), t0.elapsed())
-    });
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    let t0 = Instant::now();
-    lookups(&mut m);
-    let objects = m.wait(|e| matches!(e, DbEvent::Objects { .. }), 10).await;
-    let catalog = m.wait(|e| matches!(e, DbEvent::Catalog(_)), 10).await;
-    assert!(t0.elapsed() < Duration::from_millis(5_000), "two lookups, each at most 2 s: {:?}", t0.elapsed());
+    let (alter_id, alter) = waiting_alter(&admin, &t.q()).await;
+    let ((objects, catalog), seen) = watched(&admin, meta, &[alter_id], &t.name, async {
+        lookups(&mut m);
+        let objects = m.wait(|e| matches!(e, DbEvent::Objects { .. }), 10).await;
+        let catalog = m.wait(|e| matches!(e, DbEvent::Catalog(_)), 10).await;
+        (objects, catalog)
+    })
+    .await;
+    assert!(seen.held_up.is_empty(), "the ALTER waited for the lookups: {:?}", seen.held_up);
+    assert_eq!(metadata_locks_of(&mut side_admin, meta).await, 0, "no lock kept");
+    assert!(alter_waits(&mut side_admin, alter_id).await, "the ALTER still waits for the held result");
+    // A lookup may wait behind the waiting ALTER, for the session's lock wait only, and then
+    // gives up: every wait seen ended `Locked`.
+    let wait = variable_of(&mut side_admin, meta, "lock_wait_timeout").await;
+    assert_eq!(wait.as_deref(), Some("2"), "the metadata session's lock wait");
+    let locked = [&objects, &catalog]
+        .iter()
+        .filter(|ev| {
+            matches!(ev, DbEvent::Objects { result: Err(DbError::Locked), .. } | DbEvent::Catalog(Err(DbError::Locked)))
+        })
+        .count();
     for ev in [&objects, &catalog] {
         match ev {
             DbEvent::Objects { result: Err(e), .. } | DbEvent::Catalog(Err(e)) => {
@@ -351,11 +371,13 @@ async fn lookups_never_queue_behind_a_metadata_lock_nor_hold_one_up() {
             _ => {}
         }
     }
-    // The ALTER goes through once the held result is stopped: the lookups held nothing up.
+    assert!(seen.queued.is_empty() || locked > 0, "a lookup waited and was answered: {:?}", seen.queued);
+    // The ALTER goes through once the held result is stopped: the lookups held nothing up (the
+    // limit only guards against a hang).
     let t1 = Instant::now();
     q.session.send(DbCommand::ClosePortal { id: 1 });
     q.ok(2, "SELECT 1").await;
-    let (r, _) = alter.await.unwrap();
+    let r = alter.await.unwrap();
     assert!(r.is_ok(), "{r:?}");
     assert!(t1.elapsed() < Duration::from_secs(10), "{:?}", t1.elapsed());
 }
@@ -810,6 +832,140 @@ async fn table_locks(a: &mut mysql_async::Conn, id: u64, name: &str) -> u64 {
          AND m.OBJECT_NAME = '{name}'"
     );
     a.query_first::<u64, _>(sql).await.unwrap().unwrap()
+}
+
+/// Every metadata lock connection `id` holds or asked for, of any object.
+async fn metadata_locks_of(a: &mut mysql_async::Conn, id: u64) -> u64 {
+    let sql = format!(
+        "SELECT COUNT(*) FROM performance_schema.metadata_locks m JOIN performance_schema.threads th \
+         ON th.THREAD_ID = m.OWNER_THREAD_ID WHERE th.PROCESSLIST_ID = {id}"
+    );
+    a.query_first::<u64, _>(sql).await.unwrap().unwrap()
+}
+
+/// What connection `other` waits for that connection `ours` holds: a metadata lock pending on
+/// an object `ours` has a granted lock on, or an InnoDB row lock `ours` blocks it with; each as a
+/// line that says what.
+async fn waits_on(a: &mut mysql_async::Conn, other: u64, ours: u64) -> Vec<String> {
+    let sql = format!(
+        "SELECT CONCAT('metadata ', w.OBJECT_TYPE, ' ', IFNULL(w.OBJECT_SCHEMA, ''), '.', IFNULL(w.OBJECT_NAME, ''), \
+           ': ours ', m.LOCK_TYPE, ' ', m.LOCK_STATUS) \
+         FROM performance_schema.metadata_locks w \
+         JOIN performance_schema.threads tw ON tw.THREAD_ID = w.OWNER_THREAD_ID \
+         JOIN performance_schema.metadata_locks m ON m.OBJECT_TYPE = w.OBJECT_TYPE \
+           AND m.OBJECT_SCHEMA <=> w.OBJECT_SCHEMA AND m.OBJECT_NAME <=> w.OBJECT_NAME \
+         JOIN performance_schema.threads tm ON tm.THREAD_ID = m.OWNER_THREAD_ID \
+         WHERE tw.PROCESSLIST_ID = {other} AND w.LOCK_STATUS = 'PENDING' AND tm.PROCESSLIST_ID = {ours} \
+           AND m.LOCK_STATUS = 'GRANTED' \
+         UNION ALL SELECT CONCAT('row lock of ', w.OBJECT_SCHEMA, '.', w.OBJECT_NAME) \
+         FROM performance_schema.data_lock_waits l \
+         JOIN performance_schema.data_locks w ON w.ENGINE_LOCK_ID = l.REQUESTING_ENGINE_LOCK_ID \
+         JOIN performance_schema.threads tw ON tw.THREAD_ID = l.REQUESTING_THREAD_ID \
+         JOIN performance_schema.threads tb ON tb.THREAD_ID = l.BLOCKING_THREAD_ID \
+         WHERE tw.PROCESSLIST_ID = {other} AND tb.PROCESSLIST_ID = {ours}"
+    );
+    a.query(sql).await.unwrap()
+}
+
+/// The metadata locks connection `id` waits for (pending) on table `shop.<table>`, each as a
+/// line that says what. Only the test's own table: DDL of other tests (or of anyone on the
+/// server) elsewhere, and server-wide locks (the privilege cache), are not the lookup's doing.
+async fn queued(a: &mut mysql_async::Conn, id: u64, table: &str) -> Vec<String> {
+    let sql = format!(
+        "SELECT CONCAT(m.OBJECT_TYPE, ' ', IFNULL(m.OBJECT_SCHEMA, ''), '.', IFNULL(m.OBJECT_NAME, ''), ' ', m.LOCK_TYPE) \
+         FROM performance_schema.metadata_locks m JOIN performance_schema.threads th \
+         ON th.THREAD_ID = m.OWNER_THREAD_ID WHERE th.PROCESSLIST_ID = {id} AND m.LOCK_STATUS = 'PENDING' \
+         AND m.OBJECT_TYPE = 'TABLE' AND m.OBJECT_SCHEMA = 'shop' AND m.OBJECT_NAME = '{table}'"
+    );
+    a.query(sql).await.unwrap()
+}
+
+/// What the side saw while lookups of the metadata session ran ([`watched`]).
+struct Seen {
+    /// Another session waiting for a lock the metadata session holds ([`waits_on`]).
+    held_up: Vec<String>,
+    /// The metadata session waiting for a table's lock ([`queued`]).
+    queued: Vec<String>,
+}
+
+/// `run` (lookups of metadata session `ours` in flight, and whatever else it does), watched from
+/// the side through `admin` while it runs and once right after: whether any of connections
+/// `others` waits for a lock `ours` holds, and whether `ours` waits for a lock of table
+/// `shop.<table>`. Returns what `run` gives and what was seen. It is what the server shows, never
+/// how long anything took, and it is sampled: a guard (a lock held between two looks would not
+/// be seen), with `queued` the stronger fact (a wait lasts the session's lock wait, 2 s).
+async fn watched<T>(
+    admin: &str,
+    ours: u64,
+    others: &[u64],
+    table: &str,
+    run: impl std::future::Future<Output = T>,
+) -> (T, Seen) {
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (url, others_owned, stop2, table) = (admin.to_string(), others.to_vec(), stop.clone(), table.to_string());
+    let watch = tokio::spawn(async move {
+        let mut a = side(&url).await;
+        let mut seen = Seen { held_up: Vec::new(), queued: Vec::new() };
+        loop {
+            // One more look after `run` ended.
+            let last = stop2.load(std::sync::atomic::Ordering::SeqCst);
+            for other in &others_owned {
+                for w in waits_on(&mut a, *other, ours).await {
+                    let w = format!("{other}: {w}");
+                    if !seen.held_up.contains(&w) {
+                        seen.held_up.push(w);
+                    }
+                }
+            }
+            for q in queued(&mut a, ours, &table).await {
+                if !seen.queued.contains(&q) {
+                    seen.queued.push(q);
+                }
+            }
+            if last {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
+        a.disconnect().await.unwrap();
+        seen
+    });
+    let out = run.await;
+    stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    (out, watch.await.unwrap())
+}
+
+/// An `ALTER TABLE` of `table` (adding column `c9`) from a connection of its own, which waits for
+/// the metadata lock another session holds: its connection id once the server shows it waiting
+/// (`Waiting for table metadata lock`), and the task that ends with its outcome.
+async fn waiting_alter(admin: &str, table: &str) -> (u64, tokio::task::JoinHandle<Result<(), String>>) {
+    let (url, table) = (admin.to_string(), table.to_string());
+    let (id_tx, id_rx) = tokio::sync::oneshot::channel();
+    let task = tokio::spawn(async move {
+        let mut a = side(&url).await;
+        a.query_drop("SET SESSION lock_wait_timeout = 60").await.unwrap();
+        let _ = id_tx.send(u64::from(a.id()));
+        let r = a.query_drop(format!("ALTER TABLE {table} ADD COLUMN c9 INT")).await;
+        a.disconnect().await.unwrap();
+        r.map_err(|e| e.to_string())
+    });
+    let id = id_rx.await.unwrap();
+    let mut a = side(admin).await;
+    // A hang guard, not a measure: the ALTER is seen waiting well within it.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !alter_waits(&mut a, id).await {
+        assert!(Instant::now() < deadline, "the ALTER never waited");
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    a.disconnect().await.unwrap();
+    (id, task)
+}
+
+/// Whether connection `id` waits for a table's metadata lock, as the server shows it.
+async fn alter_waits(a: &mut mysql_async::Conn, id: u64) -> bool {
+    let state: Option<String> =
+        a.query_first(format!("SELECT STATE FROM information_schema.PROCESSLIST WHERE ID = {id}")).await.unwrap();
+    state.as_deref() == Some("Waiting for table metadata lock")
 }
 
 /// A result on screen holds no metadata lock, so an `ALTER TABLE` of another
@@ -1721,11 +1877,13 @@ async fn opened_tables(a: &mut mysql_async::Conn, id: u64) -> u64 {
     a.query_first::<u64, _>(sql).await.unwrap().unwrap()
 }
 
-/// Reading a table's structure never opens the table (a table without cached statistics would
-/// be: its estimates are not read with it), never queues behind another session's metadata lock
+/// Reading a table's structure does not open the table (step 1 is a guard against that, not a
+/// proof: on the metadata session, which is read-only, a read of the estimates did not open a
+/// table without cached statistics either), never queues behind another session's metadata lock
 /// (held by `LOCK TABLES … WRITE`, or asked for by an `ALTER TABLE` that waits behind a held
-/// result) and always answers with the structure at once, never holds that session up while it
-/// runs, and keeps no metadata lock once it has answered.
+/// result) nor waits for any lock, and answers with the structure; no other session waits for a
+/// lock of its while it runs, and it keeps none once it has answered (as the server shows them,
+/// [`watched`]).
 #[tokio::test(flavor = "multi_thread")]
 async fn a_structure_read_never_queues_behind_a_metadata_lock_nor_keeps_one() {
     let test = "a_structure_read_never_queues_behind_a_metadata_lock_nor_keeps_one";
@@ -1744,8 +1902,9 @@ async fn a_structure_read_never_queues_behind_a_metadata_lock_nor_keeps_one() {
         let s = r.expect("the structure, never Locked");
         assert_eq!(s.columns.len(), columns);
     };
-    // 1. A new table out of the server's cache, no statistics of it cached (estimating it would
-    //    open it): the read opens nothing.
+    // 1. A guard: a new table out of the server's cache, no statistics of it cached, and the
+    //    read opens nothing (a read-only session did not open it for its estimates either, so
+    //    this does not tell whether they are read).
     let fresh = numbers(&admin, "structopen", 10).await;
     side_admin.query_drop(format!("FLUSH TABLES {}", fresh.q())).await.unwrap();
     // A read of another table first: the server's own dictionary tables it opens the first time
@@ -1754,49 +1913,37 @@ async fn a_structure_read_never_queues_behind_a_metadata_lock_nor_keeps_one() {
     let opened = opened_tables(&mut side_admin, meta).await;
     read(structure_of(&mut m, &fresh.name).await, 2);
     assert_eq!(opened_tables(&mut side_admin, meta).await, opened, "the table was not opened");
-    // 2. Another session holds `LOCK TABLES … WRITE`.
+    // 2. Another session holds `LOCK TABLES … WRITE`, and writes while the read runs.
     let mut lock = side(&admin).await;
     lock.query_drop(format!("LOCK TABLES {} WRITE", t.q())).await.unwrap();
-    let t0 = Instant::now();
-    m.session.send(DbCommand::LoadStructure { schema: "shop".into(), table: t.name.clone() });
-    // The locking session goes on while the read runs.
-    let t1 = Instant::now();
-    lock.query_drop(format!("INSERT INTO {} VALUES (999999, 'w')", t.q())).await.unwrap();
-    assert!(t1.elapsed() < Duration::from_millis(500), "the locking session was not held up: {:?}", t1.elapsed());
-    match m.wait(|e| matches!(e, DbEvent::Structure { .. }), 15).await {
-        DbEvent::Structure { result, .. } => read(result, 2),
-        _ => unreachable!(),
-    }
-    assert!(t0.elapsed() < Duration::from_millis(1_000), "{:?}", t0.elapsed());
-    assert_eq!(table_locks(&mut side_admin, meta, &t.name).await, 0, "no lock kept");
+    let locker = u64::from(lock.id());
+    let (r, seen) = watched(&admin, meta, &[locker], &t.name, async {
+        m.session.send(DbCommand::LoadStructure { schema: "shop".into(), table: t.name.clone() });
+        lock.query_drop(format!("INSERT INTO {} VALUES (999999, 'w')", t.q())).await.unwrap();
+        match m.wait(|e| matches!(e, DbEvent::Structure { .. }), 10).await {
+            DbEvent::Structure { result, .. } => result,
+            _ => unreachable!(),
+        }
+    })
+    .await;
+    assert!(seen.held_up.is_empty(), "the locking session waited for the read: {:?}", seen.held_up);
+    assert!(seen.queued.is_empty(), "the read waited for a lock: {:?}", seen.queued);
+    read(r, 2);
+    assert_eq!(metadata_locks_of(&mut side_admin, meta).await, 0, "no lock kept");
     lock.query_drop("UNLOCK TABLES").await.unwrap();
     // 3. A held result keeps a shared lock and an `ALTER TABLE` waits for it.
     let mut q = Conn::open(&url, SessionRole::Query, false, test).await;
     let evs = q.run_as(1, &[&format!("SELECT * FROM {}", t.q())], PagingMode::Hold).await;
     assert!(page_of(&evs).2);
-    let (alter_url, table) = (admin.clone(), t.q());
-    let alter = tokio::spawn(async move {
-        let mut a = side(&alter_url).await;
-        a.query_drop("SET SESSION lock_wait_timeout = 60").await.unwrap();
-        let r = a.query_drop(format!("ALTER TABLE {table} ADD COLUMN c9 INT")).await;
-        a.disconnect().await.unwrap();
-        r.map_err(|e| e.to_string())
-    });
-    tokio::time::sleep(Duration::from_millis(500)).await;
-    let waiting: Option<u64> = side_admin
-        .query_first(format!(
-            "SELECT COUNT(*) FROM information_schema.PROCESSLIST \
-             WHERE STATE = 'Waiting for table metadata lock' AND INFO LIKE '%{}%c9%'",
-            t.name
-        ))
-        .await
-        .unwrap();
-    assert_eq!(waiting, Some(1), "the ALTER waits");
-    let t0 = Instant::now();
-    read(structure_of(&mut m, &t.name).await, 2);
-    assert!(t0.elapsed() < Duration::from_millis(1_000), "{:?}", t0.elapsed());
-    assert_eq!(table_locks(&mut side_admin, meta, &t.name).await, 0, "no lock kept");
-    // The ALTER goes through once the held result is stopped: the read held nothing up.
+    let (alter_id, alter) = waiting_alter(&admin, &t.q()).await;
+    let (r, seen) = watched(&admin, meta, &[alter_id], &t.name, structure_of(&mut m, &t.name)).await;
+    assert!(seen.held_up.is_empty(), "the ALTER waited for the read: {:?}", seen.held_up);
+    assert!(seen.queued.is_empty(), "the read queued behind the ALTER: {:?}", seen.queued);
+    read(r, 2);
+    assert_eq!(metadata_locks_of(&mut side_admin, meta).await, 0, "no lock kept");
+    assert!(alter_waits(&mut side_admin, alter_id).await, "the ALTER still waits for the held result");
+    // The ALTER goes through once the held result is stopped: the read held nothing up (the
+    // limit only guards against a hang).
     let t1 = Instant::now();
     q.session.send(DbCommand::ClosePortal { id: 1 });
     q.ok(2, "SELECT 1").await;
@@ -2099,21 +2246,13 @@ async fn the_metadata_session_shows_the_servers_ddl() {
     assert_eq!(page_of(&evs).1[0][0].as_deref(), Some("X;;"));
 }
 
-/// The metadata locks connection `id` holds, of any object.
-async fn locks_of(a: &mut mysql_async::Conn, id: u64) -> u64 {
-    let sql = format!(
-        "SELECT COUNT(*) FROM performance_schema.metadata_locks m JOIN performance_schema.threads th \
-         ON th.THREAD_ID = m.OWNER_THREAD_ID WHERE th.PROCESSLIST_ID = {id}"
-    );
-    a.query_first::<u64, _>(sql).await.unwrap().unwrap()
-}
-
 /// A DDL read behind another session's metadata lock never holds that session up and keeps no
 /// metadata lock once it has answered. `SHOW CREATE TABLE` of a table, of a view over it and of a
-/// view over that view (and a view by name) answers at once with the DDL, whether the table is
-/// held with `LOCK TABLES … WRITE` or an `ALTER TABLE` waits behind a held result's shared lock.
-/// `SHOW CREATE TRIGGER` opens the trigger's table: at once under `LOCK TABLES`, and `Locked`
-/// after the session's lock wait (2 s) behind the waiting `ALTER`, which still waits after it.
+/// view over that view (and a view by name) answers with the DDL without waiting for any lock,
+/// whether the table is held with `LOCK TABLES … WRITE` or an `ALTER TABLE` waits behind a held
+/// result's shared lock. `SHOW CREATE TRIGGER` opens the trigger's table: it answers under
+/// `LOCK TABLES`, and is `Locked` after the session's lock wait behind the waiting `ALTER`, which
+/// still waits after it (as the server shows them, [`watched`]).
 #[tokio::test(flavor = "multi_thread")]
 async fn a_ddl_read_never_queues_behind_a_metadata_lock_nor_keeps_one() {
     use datarig_core::driver::ddl::DdlObject;
@@ -2146,67 +2285,60 @@ async fn a_ddl_read_never_queues_behind_a_metadata_lock_nor_keeps_one() {
         relation("datarig", &view2),
         DdlObject::Named { name: view.clone(), schema: Some("datarig".into()) },
     ];
-    /// Read each of `objects`: each answers with its DDL within half a second, or (`locked`)
-    /// `Locked` after the session's lock wait; no metadata lock stays.
+    /// Read each of `objects`: each answers with its DDL, or (`locked`) `Locked`; no metadata
+    /// lock stays.
     async fn reads(m: &mut Conn, admin: &mut mysql_async::Conn, meta: u64, objects: &[DdlObject], locked: bool) {
         for object in objects {
-            let t0 = Instant::now();
             let r = ddl_of(m, object.clone()).await;
-            let took = t0.elapsed();
             if locked {
                 assert_eq!(r, Err(DbError::Locked), "{object:?}");
-                assert!(
-                    took > Duration::from_millis(1_500) && took < Duration::from_millis(2_500),
-                    "{object:?}: {took:?}"
-                );
             } else {
                 assert!(verbatim(r).1.contains("CREATE "), "{object:?}");
-                assert!(took < Duration::from_millis(500), "{object:?}: {took:?}");
             }
-            assert_eq!(locks_of(admin, meta).await, 0, "{object:?}: no lock kept");
+            assert_eq!(metadata_locks_of(admin, meta).await, 0, "{object:?}: no lock kept");
         }
     }
-    // 1. Another session holds `LOCK TABLES … WRITE`.
+    // 1. Another session holds `LOCK TABLES … WRITE`, and writes after the reads.
     let mut lock = side(&admin).await;
     lock.query_drop(format!("LOCK TABLES {} WRITE", t.q())).await.unwrap();
-    reads(&mut m, &mut side_admin, meta, &relations, false).await;
-    reads(&mut m, &mut side_admin, meta, std::slice::from_ref(&trigger), false).await;
-    let t0 = Instant::now();
-    lock.query_drop(format!("INSERT INTO {} VALUES (999999, 'w')", t.q())).await.unwrap();
+    let locker = u64::from(lock.id());
+    let ((), seen) = watched(&admin, meta, &[locker], &t.name, async {
+        reads(&mut m, &mut side_admin, meta, &relations, false).await;
+        reads(&mut m, &mut side_admin, meta, std::slice::from_ref(&trigger), false).await;
+        lock.query_drop(format!("INSERT INTO {} VALUES (999999, 'w')", t.q())).await.unwrap();
+    })
+    .await;
+    assert!(seen.held_up.is_empty(), "the locking session waited for a read: {:?}", seen.held_up);
+    assert!(seen.queued.is_empty(), "a read waited for a lock: {:?}", seen.queued);
     lock.query_drop("UNLOCK TABLES").await.unwrap();
-    assert!(t0.elapsed() < Duration::from_millis(500), "the locking session was not held up: {:?}", t0.elapsed());
     // 2. A held result keeps a shared lock and an `ALTER TABLE` waits for it.
     let mut q = Conn::open(&url, SessionRole::Query, false, test).await;
     let evs = q.run_as(1, &[&format!("SELECT * FROM {}", t.q())], PagingMode::Hold).await;
     assert!(page_of(&evs).2);
-    let (alter_url, table) = (admin.clone(), t.q());
-    let alter = tokio::spawn(async move {
-        let mut a = side(&alter_url).await;
-        a.query_drop("SET SESSION lock_wait_timeout = 60").await.unwrap();
-        let r = a.query_drop(format!("ALTER TABLE {table} ADD COLUMN c9 INT")).await;
-        a.disconnect().await.unwrap();
-        r.map_err(|e| e.to_string())
-    });
-    let waiting_sql = format!(
-        "SELECT COUNT(*) FROM information_schema.PROCESSLIST \
-         WHERE STATE = 'Waiting for table metadata lock' AND INFO LIKE '%{}%c9%'",
-        t.name
+    let (alter_id, alter) = waiting_alter(&admin, &t.q()).await;
+    // `SHOW CREATE TABLE` takes a high-priority shared lock for the moment it reads, granted past
+    // the waiting ALTER (which waits for the held result whatever the read does) and gone once it
+    // has answered: the read never queues, keeps nothing, and the only lock of its the ALTER can
+    // be seen behind is that one, never a shared read or write lock or a stronger one.
+    let ((), seen) = watched(&admin, meta, &[alter_id], &t.name, async {
+        reads(&mut m, &mut side_admin, meta, &relations, false).await;
+    })
+    .await;
+    assert!(
+        seen.held_up.iter().all(|w| w.ends_with(": ours SHARED_HIGH_PRIO GRANTED")),
+        "the ALTER waited for a lock of a read: {:?}",
+        seen.held_up
     );
-    // The ALTER waits (once it has reached the server: a loaded machine may take a while).
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let waiting: Option<u64> = side_admin.query_first(&waiting_sql).await.unwrap();
-        if waiting == Some(1) {
-            break;
-        }
-        assert!(Instant::now() < deadline, "the ALTER waits: {waiting:?}");
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    reads(&mut m, &mut side_admin, meta, &relations, false).await;
-    reads(&mut m, &mut side_admin, meta, std::slice::from_ref(&trigger), true).await;
-    let waiting: Option<u64> = side_admin.query_first(&waiting_sql).await.unwrap();
-    assert_eq!(waiting, Some(1), "the ALTER still waits, for the held result only");
-    // The ALTER goes through once the held result is stopped: the reads held nothing up.
+    assert!(seen.queued.is_empty(), "a read queued behind the ALTER: {:?}", seen.queued);
+    let ((), seen) = watched(&admin, meta, &[alter_id], &t.name, async {
+        reads(&mut m, &mut side_admin, meta, std::slice::from_ref(&trigger), true).await;
+    })
+    .await;
+    // The trigger's read waits its lock wait (2 s) and gives up; the ALTER never waits for it.
+    assert!(seen.held_up.is_empty(), "the ALTER waited for the trigger's read: {:?}", seen.held_up);
+    assert!(alter_waits(&mut side_admin, alter_id).await, "the ALTER still waits, for the held result only");
+    // The ALTER goes through once the held result is stopped: the reads held nothing up (the
+    // limit only guards against a hang).
     let t1 = Instant::now();
     q.session.send(DbCommand::ClosePortal { id: 1 });
     q.ok(2, "SELECT 1").await;
@@ -2600,4 +2732,596 @@ async fn another_databases_ddl_runs_in_that_database() {
     assert_eq!(ddl_written(&mut m, named(&n, Some("datarig"))).await.0, table);
     assert_eq!(ddl_of(&mut m, named(&n, None)).await, Err(DbError::NotFound), "not the current database's");
     assert!(ddl_written(&mut m, named("users", None)).await.0.starts_with("CREATE TABLE `users`"));
+}
+
+/// The key metadata `m` reads on `LoadKeys`.
+async fn keys_of(m: &mut Conn) -> Result<datarig_core::driver::keys::KeyCatalog, DbError> {
+    m.session.send(DbCommand::LoadKeys);
+    match m.wait(|e| matches!(e, DbEvent::Keys(_)), 15).await {
+        DbEvent::Keys(r) => r,
+        _ => unreachable!(),
+    }
+}
+
+/// The key metadata of every database: a primary key, a composite foreign key to another
+/// database, unique keys (whole columns only: not a prefix, not an expression), generated
+/// columns, `AUTO_INCREMENT`, views, and names compared as the server compares them.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_metadata_session_reads_the_key_metadata() {
+    use datarig_core::driver::keys::{Generated, KeyMarks, NameRule};
+    let test = "the_metadata_session_reads_the_key_metadata";
+    let Some((url, admin)) = urls(test) else { return };
+    let pid = std::process::id();
+    let parent = format!("zz_it_kparent_{pid}");
+    let _parent = Cleanup { url: admin.clone(), sql: format!("DROP TABLE IF EXISTS datarig.{parent}") };
+    let mut a = side(&admin).await;
+    a.query_drop(format!("CREATE TABLE datarig.{parent} (a INT NOT NULL, b VARCHAR(10) NOT NULL, PRIMARY KEY (a, b))"))
+        .await
+        .unwrap();
+    a.disconnect().await.unwrap();
+    let t = Table::make(
+        &admin,
+        "keys",
+        &[&format!(
+            "CREATE TABLE {{t}} (id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, pa INT, pb VARCHAR(10),
+               Code VARCHAR(20), note TEXT, qty INT, twice INT GENERATED ALWAYS AS (qty * 2) STORED,
+               low VARCHAR(20) GENERATED ALWAYS AS (lower(Code)) VIRTUAL,
+               UNIQUE KEY uq_code (Code), UNIQUE KEY uq_note (note(10)), UNIQUE KEY uq_fn ((qty + 1)),
+               CONSTRAINT zz_it_kfk_{pid} FOREIGN KEY (pa, pb) REFERENCES datarig.{parent} (a, b))"
+        )],
+    )
+    .await;
+    let view = Table::make(&admin, "kview", &[]).await;
+    let _view = Cleanup { url: admin.clone(), sql: format!("DROP VIEW IF EXISTS {}", view.q()) };
+    let mut a = side(&admin).await;
+    a.query_drop(format!("CREATE VIEW {} AS SELECT id, Code FROM {}", view.q(), t.q())).await.unwrap();
+    a.disconnect().await.unwrap();
+    let mut m = Conn::start(&url, SessionRole::Meta, false, test);
+    m.wait(|e| matches!(e, DbEvent::Keys(_)), 30).await;
+    let k = keys_of(&mut m).await.unwrap();
+    let marks = |c: &str| k.marks_by_name("shop", &t.name, c);
+    let (pk, fk, uq, none) = (
+        KeyMarks { pk: true, ..KeyMarks::default() },
+        KeyMarks { fk: true, ..KeyMarks::default() },
+        KeyMarks { unique: true, ..KeyMarks::default() },
+        KeyMarks::default(),
+    );
+    assert_eq!([marks("id"), marks("pa"), marks("pb"), marks("Code")], [pk, fk, fk, uq]);
+    assert_eq!([marks("note"), marks("qty")], [none, none], "a prefix or an expression proves no column unique");
+    let table = k.find(Some("shop"), &t.name).unwrap();
+    let generated: Vec<(&str, Generated)> = table.columns.values().map(|c| (c.name.as_str(), c.generated)).collect();
+    assert_eq!(generated[0], ("id", Generated::AutoIncrement), "AUTO_INCREMENT takes a value, 0 the next number");
+    assert!(
+        generated.contains(&("twice", Generated::Expression)) && generated.contains(&("low", Generated::Expression))
+    );
+    assert!(!table.view);
+    assert!(k.find(Some("shop"), &view.name).unwrap().view);
+    assert!(k.marks_by_name("datarig", &parent, "a").pk);
+    // As the server compares names: a column's in any case.
+    assert!(k.marks_by_name("shop", &t.name, "CODE").unique);
+    let mut probe = side(&admin).await;
+    let lctn: u8 = probe.query_first("SELECT @@lower_case_table_names").await.unwrap().unwrap();
+    probe.disconnect().await.unwrap();
+    assert_eq!(k.names(), NameRule::MySql { tables_ignore_case: lctn != 0 });
+    if lctn == 0 {
+        assert!(k.find(Some("shop"), &t.name.to_uppercase()).is_err(), "a table's case matters");
+    } else {
+        assert!(k.find(Some("SHOP"), &t.name.to_uppercase()).is_ok(), "lower_case_table_names = {lctn}");
+    }
+}
+
+/// Reading the key metadata never queues behind another session's metadata lock (held by
+/// `LOCK TABLES … WRITE`, or asked for by an `ALTER TABLE` that waits behind a held result) nor
+/// waits for any lock, and answers with the keys; no other session waits for a lock of its, and it
+/// keeps none (as the server shows them, [`watched`]).
+#[tokio::test(flavor = "multi_thread")]
+async fn the_keys_read_never_queues_behind_a_metadata_lock_nor_keeps_one() {
+    let test = "the_keys_read_never_queues_behind_a_metadata_lock_nor_keeps_one";
+    let Some((url, admin)) = urls(test) else { return };
+    let t = numbers(&admin, "keyslock", 200_000).await;
+    let mut wide = side(&admin).await;
+    wide.query_drop(format!("ALTER TABLE {} MODIFY v VARCHAR(200)", t.q())).await.unwrap();
+    wide.query_drop(format!("UPDATE {} SET v = REPEAT('x', 200)", t.q())).await.unwrap();
+    wide.disconnect().await.unwrap();
+    let mut m = Conn::start(&url, SessionRole::Meta, false, test);
+    m.wait(|e| matches!(e, DbEvent::Keys(_)), 30).await;
+    let mut side_admin = side(&admin).await;
+    let meta = only_session(&mut side_admin, SessionRole::Meta, test).await;
+    let read = |k: Result<datarig_core::driver::keys::KeyCatalog, DbError>, name: &str| {
+        let k = k.expect("the keys, never Locked");
+        assert!(k.marks_by_name("shop", name, "id").pk);
+    };
+    // A guard, as for the structure: a new table out of the server's cache, and the read opens
+    // nothing.
+    let fresh = numbers(&admin, "keysopen", 10).await;
+    side_admin.query_drop(format!("FLUSH TABLES {}", fresh.q())).await.unwrap();
+    read(keys_of(&mut m).await, &t.name);
+    let opened = opened_tables(&mut side_admin, meta).await;
+    read(keys_of(&mut m).await, &fresh.name);
+    assert_eq!(opened_tables(&mut side_admin, meta).await, opened, "no table was opened");
+    // 1. Another session holds `LOCK TABLES … WRITE`, and writes while the read runs.
+    let mut lock = side(&admin).await;
+    lock.query_drop(format!("LOCK TABLES {} WRITE", t.q())).await.unwrap();
+    let locker = u64::from(lock.id());
+    let (k, seen) = watched(&admin, meta, &[locker], &t.name, async {
+        m.session.send(DbCommand::LoadKeys);
+        lock.query_drop(format!("INSERT INTO {} VALUES (999999, 'w')", t.q())).await.unwrap();
+        match m.wait(|e| matches!(e, DbEvent::Keys(_)), 10).await {
+            DbEvent::Keys(k) => k,
+            _ => unreachable!(),
+        }
+    })
+    .await;
+    assert!(seen.held_up.is_empty(), "the locking session waited for the read: {:?}", seen.held_up);
+    assert!(seen.queued.is_empty(), "the read waited for a lock: {:?}", seen.queued);
+    read(k, &t.name);
+    assert_eq!(metadata_locks_of(&mut side_admin, meta).await, 0, "no lock kept");
+    lock.query_drop("UNLOCK TABLES").await.unwrap();
+    // 2. A held result keeps a shared lock and an `ALTER TABLE` waits for it.
+    let mut q = Conn::open(&url, SessionRole::Query, false, test).await;
+    let evs = q.run_as(1, &[&format!("SELECT * FROM {}", t.q())], PagingMode::Hold).await;
+    assert!(page_of(&evs).2);
+    let (alter_id, alter) = waiting_alter(&admin, &t.q()).await;
+    let (k, seen) = watched(&admin, meta, &[alter_id], &t.name, keys_of(&mut m)).await;
+    assert!(seen.held_up.is_empty(), "the ALTER waited for the read: {:?}", seen.held_up);
+    assert!(seen.queued.is_empty(), "the read queued behind the ALTER: {:?}", seen.queued);
+    read(k, &t.name);
+    assert_eq!(metadata_locks_of(&mut side_admin, meta).await, 0, "no lock kept");
+    assert!(alter_waits(&mut side_admin, alter_id).await, "the ALTER still waits for the held result");
+    q.session.send(DbCommand::ClosePortal { id: 1 });
+    q.ok(2, "SELECT 1").await;
+    assert!(alter.await.unwrap().is_ok());
+    side_admin.disconnect().await.unwrap();
+}
+
+/// Every column of `table` as one hash per row, by `id`: its values' bytes (a NULL apart).
+async fn row_hashes(c: &mut mysql_async::Conn, table: &str, columns: &[&str]) -> Vec<(i64, String)> {
+    let parts: Vec<String> = columns.iter().map(|c| format!("IFNULL(HEX(`{c}`), 'NULL')")).collect();
+    let sql = format!("SELECT id, SHA2(CONCAT_WS('|', {}), 256) FROM {table} ORDER BY id", parts.join(", "));
+    c.query(sql).await.unwrap()
+}
+
+/// The last [`SessionValues`](datarig_core::driver::SessionValues) and sql mode `evs` report.
+fn reported(evs: &[DbEvent]) -> (Option<datarig_core::driver::SessionValues>, Option<MySqlMode>) {
+    let values = evs.iter().rev().find_map(|e| match e {
+        DbEvent::SessionValues(v) => Some(v.clone()),
+        _ => None,
+    });
+    let mode = evs.iter().rev().find_map(|e| match e {
+        DbEvent::Language(Language::Sql(Dialect::MySql(m))) => Some(*m),
+        _ => None,
+    });
+    (values, mode)
+}
+
+/// The rows of `SELECT * FROM table` on query session `q`, copied as SQL by the app's own path
+/// ([`export::sql_cells`], then [`insert_source`] and the writer for an INSERT, `update` true
+/// [`update_source`] for an UPDATE), in the session's mode `mode` and values `values`; or the
+/// column the copy refuses.
+async fn copied_as_sql(
+    q: &mut Conn,
+    id: u64,
+    keys: &datarig_core::driver::keys::KeyCatalog,
+    table: &Table,
+    mode: MySqlMode,
+    values: &datarig_core::driver::SessionValues,
+    update: bool,
+) -> Result<String, datarig_core::export::Refused> {
+    use datarig_core::driver::keys::{Generated, insert_source, update_source};
+    use datarig_core::export::{self, Format, Kind, SqlColumn, Target, UpdateTarget, Writer};
+    let sql = format!("SELECT * FROM `shop`.`{}`", table.name);
+    let evs = q.run(id, &[&sql]).await;
+    let (cols, rows, more) = page_of(&evs);
+    assert!(!more);
+    let d = Dialect::MySql(mode);
+    let origins: Vec<_> = cols.iter().map(|c| c.origin.clone()).collect();
+    let names: Vec<&str> = cols.iter().map(|c| c.name.as_str()).collect();
+    let columns: Vec<export::Column> =
+        cols.iter().map(|c| export::Column { name: &c.name, kind: Kind::of_column(c) }).collect();
+    let sql_columns: Vec<SqlColumn> = cols
+        .iter()
+        .map(|c| SqlColumn {
+            name: &c.name,
+            type_name: &c.type_name,
+            kind: c.kind,
+            auto_increment: !update
+                && c.origin
+                    .as_ref()
+                    .and_then(|o| keys.column(o))
+                    .is_some_and(|k| k.generated == Generated::AutoIncrement),
+        })
+        .collect();
+    let read_in = datarig_core::driver::ReadIn::Values(values.clone());
+    let cells = export::sql_cells(d, &sql_columns, &read_in, keys.server_zone())?;
+    let owned: Vec<Vec<Option<String>>> = rows
+        .iter()
+        .map(|r| {
+            r.iter()
+                .enumerate()
+                .map(|(i, v)| v.as_deref().map(|v| cells.cell(i, v).map(|c| c.into_owned())).transpose())
+                .collect::<Result<_, _>>()
+        })
+        .collect::<Result<_, _>>()?;
+    let rows: Vec<export::Row> = owned.iter().map(|r| r.iter().map(|v| v.as_deref()).collect()).collect();
+    if update {
+        let plan = update_source(d, Some(keys), &origins, &names, &sql).expect("rows of one table with its key");
+        let target =
+            UpdateTarget { schema: &plan.table.schema, name: &plan.table.name, set: plan.set.clone(), keys: plan.keys };
+        let mut w = Writer::new(Format::Update(d, target), &columns);
+        w.rows(&rows);
+        return Ok(w.finish());
+    }
+    let plan = insert_source(d, Some(keys), &origins, &names, &sql).expect("rows of one table");
+    let target = Target::Table {
+        schema: &plan.table.schema,
+        name: &plan.table.name,
+        columns: plan.columns.iter().map(|c| c.1).collect(),
+        overriding: plan.overriding,
+    };
+    let written: Vec<export::Column> = plan.columns.iter().map(|c| columns[c.0]).collect();
+    let rows: Vec<export::Row> = rows.iter().map(|r| plan.columns.iter().map(|c| r[c.0]).collect()).collect();
+    let mut w = Writer::new(Format::Sql(d, target), &written);
+    w.rows(&rows);
+    Ok(w.finish())
+}
+
+/// Run every statement of `text` (split as the editor splits what it runs, in dialect `d`) on
+/// `q`, each succeeding.
+async fn run_all(q: &mut Conn, first_id: u64, text: &str, d: Dialect) {
+    let statements: Vec<String> =
+        datarig_core::sql::split::split_in(text, d).iter().map(|st| st.body(text).to_string()).collect();
+    assert!(!statements.is_empty(), "{text}");
+    for (i, statement) in statements.iter().enumerate() {
+        let evs = q.run(first_id + i as u64, &[statement.as_str()]).await;
+        assert!(!matches!(evs.last(), Some(DbEvent::Failed { .. })), "{statement}: {evs:?}");
+    }
+}
+
+/// Rows of every kind of value copied as SQL `INSERT` and `UPDATE` statements by the app's own
+/// path, run back into a copy of the table, are the rows byte for byte: in the server's default
+/// escaping, `NO_BACKSLASH_ESCAPES` and `ANSI_QUOTES`, and run in a session in another mode and
+/// another time zone than the one they were copied in (a string with a backslash is written as
+/// its bytes, a `TIMESTAMP` with its offset). What would not be written whole is refused: a
+/// `FLOAT`, text read in latin1, a `TIMESTAMP` in a zone with daylight saving (where one shown
+/// time is two instants).
+#[tokio::test(flavor = "multi_thread")]
+async fn rows_copied_as_sql_run_back_byte_for_byte() {
+    use datarig_core::export::NotWhole;
+    let test = "rows_copied_as_sql_run_back_byte_for_byte";
+    let Some((url, admin)) = urls(test) else { return };
+    let columns = [
+        "id", "txt", "js", "bin", "blb", "bt", "d", "dt", "ts", "tm", "yr", "big", "amount", "nul", "dbl", "en", "st",
+        "geo", "bn", "lat", "twice",
+    ];
+    let create = "CREATE TABLE {t} (id INT PRIMARY KEY, txt VARCHAR(100), js JSON, bin VARBINARY(20), blb BLOB, \
+                  bt BIT(10), d DATE, dt DATETIME(6), ts TIMESTAMP(3) NULL, tm TIME(2), yr YEAR, \
+                  big BIGINT UNSIGNED, amount DECIMAL(30,10), nul VARCHAR(5), dbl DOUBLE, \
+                  en ENUM('a', 'b c', 'it''s'), st SET('x', 'y', 'z'), geo GEOMETRY NULL, bn BINARY(4), \
+                  lat VARCHAR(20) CHARACTER SET latin1, twice INT GENERATED ALWAYS AS (id * 2) STORED)";
+    // Zero dates are kept: the modes leave out NO_ZERO_DATE and NO_ZERO_IN_DATE. The rows are
+    // written in UTC: rows 1 and 4 are the two instants Europe/Berlin shows as 02:30 on the
+    // night its clocks go back.
+    let base = "STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION";
+    let setup = [format!("SET SESSION sql_mode = '{base}'"), "SET SESSION time_zone = '+00:00'".to_string()];
+    let fill = "INSERT INTO {t} (id, txt, js, bin, blb, bt, d, dt, ts, tm, yr, big, amount, nul, dbl, en, st, geo, bn, lat) \
+        VALUES \
+        (1, 'back\\\\slash \\'q\\' \"dq\" tab\\tnl\\n', '{\"a\": \"b\\\\\\\\c\", \"q\": \"\\\\\"x\\\\\"\"}', \
+         0x00FF275C22, 0x00, b'1010101010', '2024-02-29', '2024-02-29 23:59:59.123456', \
+         '2024-10-27 00:30:00.500', '-838:59:59.00', 2024, 18446744073709551615, \
+         -12345678901234567890.0123456789, NULL, 1.2345678901234567, 'it''s', 'x,z', \
+         ST_GeomFromText('POINT(1 2)'), 0x0102, CONCAT('caf', _latin1 X'E9')), \
+        (2, CONCAT('nul', CHAR(0), 'byte ', _utf8mb4 X'F09F9880', ' emoji'), '[1, \"\\\\u00e9\", null]', \
+         '', NULL, b'0', '0000-00-00', '0000-00-00 00:00:00', '0000-00-00 00:00:00', '00:00:00', 0000, 0, 0, '', \
+         -0.0, 'b c', '', NULL, 0x00000000, _latin1 X'E9'), \
+        (3, '', 'null', NULL, 0x0A0D1A, b'1111111111', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'x', \
+         1e308, NULL, NULL, NULL, NULL, NULL), \
+        (4, 'second', '{}', NULL, NULL, NULL, NULL, NULL, '2024-10-27 01:30:00', NULL, NULL, NULL, NULL, NULL, \
+         NULL, NULL, NULL, NULL, NULL, NULL)";
+    for (n, flag) in ["", ",NO_BACKSLASH_ESCAPES", ",ANSI_QUOTES"].iter().enumerate() {
+        let mode = format!("{base}{flag}");
+        let ddl = |sql: &str| vec![setup[0].clone(), setup[1].clone(), sql.to_string()];
+        let src = Table::make(
+            &admin,
+            &format!("golden{n}"),
+            &ddl(create).iter().chain([&fill.to_string()]).map(String::as_str).collect::<Vec<_>>(),
+        )
+        .await;
+        let copy = Table::make(
+            &admin,
+            &format!("golden{n}_copy"),
+            &ddl(create).iter().map(String::as_str).collect::<Vec<_>>(),
+        )
+        .await;
+        // The table is read from the session's catalog: the keys read after it was made.
+        let mut m = Conn::start(&url, SessionRole::Meta, false, test);
+        m.wait(|e| matches!(e, DbEvent::Keys(_)), 30).await;
+        let keys = keys_of(&mut m).await.unwrap();
+        let mut q = Conn::open(&url, SessionRole::Query, false, test).await;
+        let evs = q.run(1, &[&format!("SET SESSION sql_mode = '{mode}'")]).await;
+        let evs2 = q.run(2, &["SET SESSION time_zone = '+00:00'"]).await;
+        let (_, session_mode) = reported(&evs);
+        let (values, _) = reported(&evs2);
+        let (session_mode, values) = (session_mode.expect("the new mode"), values.expect("the new zone"));
+        assert_eq!(values.time_zone, "+00:00");
+        assert_eq!(
+            (session_mode.no_backslash_escapes, session_mode.ansi_quotes),
+            (flag.contains("BACKSLASH"), flag.contains("ANSI")),
+            "{mode}"
+        );
+        let insert = copied_as_sql(&mut q, 3, &keys, &src, session_mode, &values, false).await.unwrap();
+        let insert = insert.replace(&format!("`{}`", src.name), &format!("`{}`", copy.name));
+        assert!(!insert.contains("OVERRIDING") && !insert.contains("`twice`"), "{insert}");
+        assert!(insert.contains("'2024-10-27 00:30:00.500+00:00'"), "{insert}");
+        // Run in another mode and another zone than the copy was made in.
+        let other = if flag.is_empty() { format!("{base},NO_BACKSLASH_ESCAPES") } else { base.to_string() };
+        q.ok(10, &format!("SET SESSION sql_mode = '{other}'")).await;
+        q.ok(11, "SET SESSION time_zone = '+05:00'").await;
+        let other_mode = MySqlMode { no_backslash_escapes: other.contains("BACKSLASH"), ..session_mode };
+        run_all(&mut q, 20, &insert, Dialect::MySql(MySqlMode { ansi_quotes: false, ..other_mode })).await;
+        let mut a = side(&admin).await;
+        let want = row_hashes(&mut a, &src.q(), &columns).await;
+        assert_eq!(row_hashes(&mut a, &copy.q(), &columns).await, want, "INSERT, {mode}:\n{insert}");
+        // UPDATE: the copy's rows changed, then set back by the statements.
+        a.query_drop(format!(
+            "UPDATE {} SET txt = 'changed', js = '{{}}', bin = NULL, blb = 0x01, bt = b'0', d = NULL, \
+             dt = '2000-01-01', ts = '2000-01-01 00:00:00', tm = '01:00:00', yr = 1999, big = 1, amount = 2, \
+             nul = 'y', dbl = 3, en = 'a', st = 'y', geo = ST_GeomFromText('POINT(9 9)'), bn = 0x09, lat = 'z'",
+            copy.q()
+        ))
+        .await
+        .unwrap();
+        assert_ne!(row_hashes(&mut a, &copy.q(), &columns).await, want);
+        q.ok(30, &format!("SET SESSION sql_mode = '{mode}'")).await;
+        q.ok(31, "SET SESSION time_zone = '+00:00'").await;
+        let update = copied_as_sql(&mut q, 32, &keys, &src, session_mode, &values, true).await.unwrap();
+        let update = update.replace(&format!("`{}`", src.name), &format!("`{}`", copy.name));
+        q.ok(33, &format!("SET SESSION sql_mode = '{other}'")).await;
+        q.ok(34, "SET SESSION time_zone = '-03:00'").await;
+        run_all(&mut q, 40, &update, Dialect::MySql(MySqlMode { ansi_quotes: false, ..other_mode })).await;
+        assert_eq!(row_hashes(&mut a, &copy.q(), &columns).await, want, "UPDATE, {mode}:\n{update}");
+        a.disconnect().await.unwrap();
+        if n > 0 {
+            continue;
+        }
+        // Refused: text read in latin1.
+        let evs = q.run(50, &["SET NAMES latin1"]).await;
+        let (latin1, _) = reported(&evs);
+        let latin1 = latin1.expect("the session says its character set");
+        assert_eq!(latin1.charset, "latin1");
+        let refused = copied_as_sql(&mut q, 51, &keys, &src, session_mode, &latin1, false).await.unwrap_err();
+        assert_eq!((refused.column.as_str(), refused.why), ("txt", NotWhole::Charset("latin1".into())));
+        // Refused: text read in utf8mb3, where the emoji of row 2 arrives as `?`.
+        let evs = q.run(52, &["SET NAMES utf8mb3"]).await;
+        let (mb3, _) = reported(&evs);
+        let mb3 = mb3.expect("the session says its character set");
+        assert_eq!(mb3.charset, "utf8mb3");
+        let refused = copied_as_sql(&mut q, 58, &keys, &src, session_mode, &mb3, false).await.unwrap_err();
+        assert_eq!((refused.column.as_str(), refused.why), ("txt", NotWhole::Charset("utf8mb3".into())));
+        let evs = q.run(59, &["SET NAMES utf8mb4"]).await;
+        assert_eq!(reported(&evs).0.map(|v| v.charset).as_deref(), Some("utf8mb4"));
+        // Refused: a zone with daylight saving, where rows 1 and 4 show the same time.
+        match q.run(53, &["SET SESSION time_zone = 'Europe/Berlin'"]).await.last() {
+            Some(DbEvent::Failed { error, .. }) => {
+                let _ = writeln!(std::io::stderr(), "SKIPPED the Europe/Berlin part: no time zone tables ({error:?})");
+            }
+            _ => {
+                let evs = q.run(54, &[&format!("SELECT ts FROM {} WHERE id IN (1, 4) ORDER BY id", src.q())]).await;
+                let shown: Vec<_> = page_of(&evs).1.iter().map(|r| r[0].clone()).collect();
+                assert_eq!(
+                    shown,
+                    [Some("2024-10-27 02:30:00.500".to_string()), Some("2024-10-27 02:30:00.000".to_string())]
+                );
+                let berlin =
+                    datarig_core::driver::SessionValues { time_zone: "Europe/Berlin".into(), ..values.clone() };
+                let refused = copied_as_sql(&mut q, 55, &keys, &src, session_mode, &berlin, false).await.unwrap_err();
+                assert_eq!((refused.column.as_str(), refused.why), ("ts", NotWhole::TimeZone("Europe/Berlin".into())));
+            }
+        }
+        // Refused: a FLOAT (sent rounded: 16777215 shows as 16777200).
+        let floats = Table::make(
+            &admin,
+            "golden_float",
+            &["CREATE TABLE {t} (id INT PRIMARY KEY, f FLOAT)", "INSERT INTO {t} VALUES (1, 16777215), (2, 1.2345678)"],
+        )
+        .await;
+        let keys = keys_of(&mut m).await.unwrap();
+        let evs = q.run(56, &[&format!("SELECT f FROM {} ORDER BY id", floats.q())]).await;
+        let shown: Vec<_> = page_of(&evs).1.iter().map(|r| r[0].clone()).collect();
+        assert_eq!(shown, [Some("16777200".to_string()), Some("1.23457".to_string())], "rounded");
+        let refused = copied_as_sql(&mut q, 57, &keys, &floats, session_mode, &values, false).await.unwrap_err();
+        assert_eq!((refused.column.as_str(), refused.why), ("f", NotWhole::Float));
+    }
+}
+
+/// A trigger's definition in the structure is for display: `ACTION_STATEMENT` gives its body
+/// with the escapes of its string literals undone, so a literal with a doubled quote or a
+/// backslash no longer reads as SQL (the DDL comes from `SHOW CREATE TRIGGER`).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_mysql_trigger_definition_is_for_display_only() {
+    let test = "a_mysql_trigger_definition_is_for_display_only";
+    let Some((url, admin)) = urls(test) else { return };
+    let pid = std::process::id();
+    let t = Table::make(
+        &admin,
+        "trigtext",
+        &[
+            "CREATE TABLE {t} (id INT PRIMARY KEY, s VARCHAR(40))",
+            &format!(
+                r"CREATE TRIGGER shop.zz_it_tt_{pid} BEFORE INSERT ON {{t}} FOR EACH ROW SET NEW.s = 'it''s \\ x'"
+            ),
+        ],
+    )
+    .await;
+    let mut m = Conn::start(&url, SessionRole::Meta, false, test);
+    m.wait(|e| matches!(e, DbEvent::Keys(_)), 30).await;
+    let s = structure_of(&mut m, &t.name).await.unwrap();
+    assert_eq!(s.triggers.len(), 1);
+    assert!(s.triggers[0].definition.ends_with(r"FOR EACH ROW SET NEW.s = 'it's \ x'"), "{}", s.triggers[0].definition);
+}
+
+/// A foreign key may be named `PRIMARY` (on a column with an index of its own): it is a
+/// foreign key, not the primary key, so a table without one is copied as UPDATE by none. The
+/// structure read says the same.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_foreign_key_named_primary_is_no_primary_key() {
+    use datarig_core::driver::keys::{KeyMarks, NotUpdatable, update_source};
+    let test = "a_foreign_key_named_primary_is_no_primary_key";
+    let Some((url, admin)) = urls(test) else { return };
+    let parent = Table::make(&admin, "fkp_parent", &["CREATE TABLE {t} (a INT PRIMARY KEY)"]).await;
+    let child = Table::make(
+        &admin,
+        "fkp_child",
+        &[&format!(
+            "CREATE TABLE {{t}} (x INT, v INT, KEY ix (x), CONSTRAINT `PRIMARY` FOREIGN KEY (x) REFERENCES {} (a))",
+            parent.q()
+        )],
+    )
+    .await;
+    let mut m = Conn::start(&url, SessionRole::Meta, false, test);
+    m.wait(|e| matches!(e, DbEvent::Keys(_)), 30).await;
+    let k = keys_of(&mut m).await.unwrap();
+    assert_eq!(k.marks_by_name("shop", &child.name, "x"), KeyMarks { fk: true, ..KeyMarks::default() });
+    let origin = |c: &str| {
+        Some(datarig_core::driver::ColumnOrigin::Named {
+            schema: "shop".into(),
+            table: child.name.clone(),
+            column: c.into(),
+        })
+    };
+    let sql = format!("SELECT * FROM `shop`.`{}`", child.name);
+    let mode = Dialect::MySql(MySqlMode::default());
+    assert_eq!(
+        update_source(mode, Some(&k), &[origin("x"), origin("v")], &["x", "v"], &sql).map(|p| p.keys),
+        Err(NotUpdatable::NoPrimaryKey)
+    );
+    let s = structure_of(&mut m, &child.name).await.unwrap();
+    assert!(s.primary_key.is_none(), "{:?}", s.primary_key);
+    assert_eq!(s.foreign_keys.iter().map(|f| f.name.as_str()).collect::<Vec<_>>(), ["PRIMARY"]);
+}
+
+/// Code of the server's that changes the session: a procedure's `SET time_zone` and `SET NAMES`
+/// are not reported by the server when it returns rows (no OK packet has them), so the session
+/// asks after a `CALL` and says what it found; its `SET sql_mode` does not outlive it (a routine
+/// runs in the mode it was made in); a stored function's and a trigger's are reported with the
+/// statement that ran them, and said as well.
+#[tokio::test(flavor = "multi_thread")]
+async fn what_server_code_changes_in_the_session_is_followed() {
+    let test = "what_server_code_changes_in_the_session_is_followed";
+    let Some((url, admin)) = urls(test) else { return };
+    let pid = std::process::id();
+    let t = Table::make(&admin, "routine", &["CREATE TABLE {t} (id INT, ts TIMESTAMP NULL)"]).await;
+    let (tz, names, mode, f) = (
+        format!("zz_it_ptz_{pid}"),
+        format!("zz_it_pnames_{pid}"),
+        format!("zz_it_pmode_{pid}"),
+        format!("zz_it_f_{pid}"),
+    );
+    let _tz = Cleanup { url: admin.clone(), sql: format!("DROP PROCEDURE IF EXISTS shop.{tz}") };
+    let _names = Cleanup { url: admin.clone(), sql: format!("DROP PROCEDURE IF EXISTS shop.{names}") };
+    let _mode = Cleanup { url: admin.clone(), sql: format!("DROP PROCEDURE IF EXISTS shop.{mode}") };
+    let _f = Cleanup { url: admin.clone(), sql: format!("DROP FUNCTION IF EXISTS shop.{f}") };
+    let mut a = side(&admin).await;
+    for sql in [
+        format!(
+            "CREATE PROCEDURE shop.{tz}() BEGIN SET time_zone = '+09:00'; SELECT NOW() AS now, @@time_zone AS zone; END"
+        ),
+        format!("CREATE PROCEDURE shop.{names}() BEGIN SET NAMES latin1; SELECT 'x' AS x; END"),
+        format!("CREATE PROCEDURE shop.{mode}() BEGIN SET sql_mode = 'NO_BACKSLASH_ESCAPES'; END"),
+        format!("CREATE FUNCTION shop.{f}() RETURNS INT DETERMINISTIC BEGIN SET time_zone = '+05:00'; RETURN 1; END"),
+        format!("CREATE TRIGGER shop.zz_it_tr_{pid} BEFORE INSERT ON {} FOR EACH ROW SET time_zone = '+03:00'", t.q()),
+    ] {
+        a.query_drop(sql).await.unwrap();
+    }
+    a.disconnect().await.unwrap();
+    let mut q = Conn::open(&url, SessionRole::Query, false, test).await;
+    q.ok(1, "SET time_zone = '+00:00'").await;
+    let zone = |evs: &[DbEvent]| reported(evs).0.map(|v| v.time_zone);
+    let mut evs = q.run(2, &[&format!("CALL shop.{tz}()")]).await;
+    // The run's events up to its first page; the session's report comes once the CALL ended.
+    evs.extend(q.run(3, &["SELECT @@time_zone"]).await);
+    assert_eq!(zone(&evs).as_deref(), Some("+09:00"), "{evs:?}");
+    let mut evs = q.run(4, &[&format!("CALL shop.{names}()")]).await;
+    evs.extend(q.run(5, &["SELECT 1"]).await);
+    assert_eq!(reported(&evs).0.map(|v| v.charset).as_deref(), Some("latin1"), "{evs:?}");
+    q.ok(6, "SET NAMES utf8mb4").await;
+    // A routine runs in the sql mode it was made in, and the session's is back after it: no
+    // change to say (the session asked, and the mode it found is the same).
+    let mut evs = q.run(7, &[&format!("CALL shop.{mode}()")]).await;
+    evs.extend(q.run(11, &["SELECT @@SESSION.sql_mode"]).await);
+    assert!(reported(&evs).1.is_none(), "{evs:?}");
+    let mode_now = page_of(&evs).1[0][0].clone().unwrap_or_default();
+    assert!(!mode_now.contains("NO_BACKSLASH_ESCAPES"), "{mode_now}");
+    let mut evs = q.run(8, &[&format!("SELECT shop.{f}()")]).await;
+    evs.extend(q.run(9, &["SELECT 1"]).await);
+    assert_eq!(zone(&evs).as_deref(), Some("+05:00"), "a stored function: {evs:?}");
+    let mut evs = q.run(10, &[&format!("INSERT INTO {} (id) VALUES (1)", t.q())]).await;
+    evs.extend(q.run(12, &["SELECT 1"]).await);
+    assert_eq!(zone(&evs).as_deref(), Some("+03:00"), "a trigger: {evs:?}");
+    // A procedure the text hides: an executable comment, a prepared statement. Its result is
+    // said to be read in values not known, before its page.
+    let not_known = |evs: &[DbEvent], id: u64| {
+        let at = |pred: &dyn Fn(&DbEvent) -> bool| evs.iter().position(pred);
+        let signal = at(&|e| matches!(e, DbEvent::ValuesNotKnown { id: i } if *i == id));
+        let page = at(&|e| matches!(e, DbEvent::Page { id: i, .. } if *i == id));
+        signal.is_some() && signal < page
+    };
+    let evs = q.run(13, &[&format!("CALL shop.{tz}()")]).await;
+    assert!(not_known(&evs, 13), "{evs:?}");
+    for (id, sql) in [(20, format!("/*! CALL shop.{tz}() */")), (30, "EXECUTE zz_it_s".to_string())] {
+        q.ok(id, "SET time_zone = '+00:00'").await;
+        q.ok(id + 1, &format!("PREPARE zz_it_s FROM 'CALL shop.{tz}()'")).await;
+        let mut evs = q.run(id + 2, &[&sql]).await;
+        assert!(not_known(&evs, id + 2), "{sql}: {evs:?}");
+        evs.extend(q.run(id + 3, &["SELECT 1"]).await);
+        assert_eq!(zone(&evs).as_deref(), Some("+09:00"), "{sql}: {evs:?}");
+    }
+}
+
+/// A procedure whose result is stopped (a cancel while its rows are read) leaves the session's
+/// values not known: what it changed is never taken for what the session had.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_stopped_procedure_leaves_the_values_not_known() {
+    let test = "a_stopped_procedure_leaves_the_values_not_known";
+    let Some((url, admin)) = urls(test) else { return };
+    let pid = std::process::id();
+    let t = numbers(&admin, "slowproc", 200_000).await;
+    let p = format!("zz_it_pslow_{pid}");
+    let _p = Cleanup { url: admin.clone(), sql: format!("DROP PROCEDURE IF EXISTS shop.{p}") };
+    let mut a = side(&admin).await;
+    a.query_drop(format!(
+        "CREATE PROCEDURE shop.{p}() BEGIN SET time_zone = '+09:00'; \
+         SELECT a.id, a.v FROM {} a CROSS JOIN {} b LIMIT 2000000; END",
+        t.q(),
+        t.q()
+    ))
+    .await
+    .unwrap();
+    a.disconnect().await.unwrap();
+    let mut q = Conn::open(&url, SessionRole::Query, false, test).await;
+    q.ok(1, "SET time_zone = '+00:00'").await;
+    // The procedure's rows as a statement before the last: read chunk by chunk, stopped after
+    // the first. The procedure runs as its definer (another account), whose statement the
+    // cancel's `KILL QUERY`, as the session's user, may not stop: its rows are read to their end
+    // (a bounded number here) and the run ends cancelled.
+    let statements = vec![format!("CALL shop.{p}()"), "SELECT 1".to_string()];
+    q.session.send(DbCommand::Execute { id: 2, statements, paging: PagingMode::NoHold });
+    let mut evs = Vec::new();
+    loop {
+        let ev = q.next(60).await;
+        let first_rows = matches!(ev, DbEvent::StepRows { .. });
+        let end =
+            matches!(ev, DbEvent::Failed { id: 2, .. } | DbEvent::Done { id: 2, .. } | DbEvent::Page { id: 2, .. });
+        evs.push(ev);
+        if first_rows && evs.iter().filter(|e| matches!(e, DbEvent::StepRows { .. })).count() == 1 {
+            q.session.cancel();
+        }
+        if end {
+            break;
+        }
+    }
+    assert!(matches!(evs.last(), Some(DbEvent::Failed { error: DbError::Cancelled, .. })), "{evs:?}");
+    evs.extend(q.run(3, &["SELECT 1"]).await);
+    let zone = reported(&evs).0.map(|v| v.time_zone);
+    assert_ne!(zone.as_deref(), Some("+00:00"), "{evs:?}");
+    assert!(zone.is_some(), "the session said its values are not known, or asked: {evs:?}");
 }

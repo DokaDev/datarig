@@ -309,8 +309,7 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
 
 Planned, in no particular order and with no dates:
 
-- MySQL: copy as SQL, row counts and the plan view; MariaDB
-  as a driver of its own
+- MySQL: the plan view; MariaDB as a driver of its own
 - Drivers for Valkey/Redis and Elasticsearch
 - TLS connections (today every connection is plain TCP; use an SSH tunnel across untrusted
   networks, and servers that require TLS cannot be reached yet)
@@ -562,7 +561,10 @@ is tested only lightly.
 - The explorer: the server's databases right under the profile (a MySQL database is the
   schema), their tables and views with the server's estimates (`~rows · size`), and a table's
   structure (columns, keys, indexes, constraints, triggers); completion; `:use db` and the
-  database picker (`Space c d`).
+  database picker (`Space c d`). Check constraints need MySQL 8.0.16 or later, a user with
+  grants on some columns only sees those columns, triggers are listed only with the `TRIGGER`
+  privilege (without it the group says it is not known), `lower_case_table_names = 2` is not
+  tested, and MariaDB needs 10.5 or later (`JSON_ARRAYAGG`).
 - Show DDL: `D` on a table, view or trigger (or its menu), or `:ddl [kind] name` (`name` or
   `db.name`, in the tab's database; `kind` is `table`, `view`, `procedure`, `function`,
   `trigger` or `event`, needed only when one name names several), opens the server's own
@@ -582,18 +584,37 @@ is tested only lightly.
   `SET_ANY_DEFINER` (8.2 and later), as with `mysqldump`. A routine you may run but not see
   says its definition is hidden. Reading waits at most 2 s on another session: an object whose
   table is locked shows "locked", and `r` reads it again.
-- Marks, hints, charts, and copying rows as TSV, CSV or JSON.
+- Copy as SQL `INSERT` and `UPDATE`: backtick names, MySQL's literals (bytes `X'…'`, bits
+  `b'…'`), generated columns left out. A string with a backslash or a NUL is written as its
+  UTF-8 bytes (`_utf8mb4 X'…'`), so the statements read the same in any sql mode
+  (`NO_BACKSLASH_ESCAPES`, `ANSI_QUOTES`); a `TIMESTAMP` is written with the offset of the
+  session's time zone (`'2024-10-27 00:30:00+00:00'`). `UPDATE` needs the table's primary key in
+  the result. A copy is refused, naming the column, where a value would not be written whole: a
+  `FLOAT` (the server sends it rounded to about six digits), a `TIMESTAMP` while the session's
+  time zone is not a fixed offset (`SET time_zone = '+00:00'` first), text while the session's
+  results are not `utf8mb4` (after a `SET NAMES latin1`, or `utf8mb3`), and an `AUTO_INCREMENT`
+  value of 0 (an `INSERT` takes it as the next number). A whole result is refused when it was
+  read while a procedure, an `EXECUTE` or an executable comment ran, or before the session said
+  its values, and when a `SET time_zone` or `SET NAMES` ran while it was read: run the statement
+  again.
+- The keys copy as SQL needs are read for every database when the connection opens (and again
+  after DDL run in datarig), so a table created elsewhere later needs `r` on the connection in
+  the explorer before its rows can be copied. Column names compare without case, and database and
+  table names too when `lower_case_table_names` is 1 or 2, as the server compares them; 2 (macOS,
+  Windows) is not tested. A temporary table that shadows a table of the same name is not told
+  apart from it.
+- The row count (`#`), key marks, hints, charts, and copying rows in every other format.
 
 **What does not work yet**
-- Copy as SQL `INSERT`, the row count (`#`) and the plan view (`EXPLAIN` runs and shows its
-  text).
+- The plan view (`EXPLAIN` runs and shows its text).
 - TLS: a server that requires it (`require_secure_transport`) cannot be reached yet, and is said
   so.
 - A `USE` typed in a console is not followed by the header and completion; use `:use`.
 - The estimates are the server's (`TABLE_ROWS`), which can be far off for InnoDB. A view whose
   table was dropped is listed without columns, and a database that does not exist or that you
   may not read shows as empty. On a server with tens of thousands of tables the explorer's
-  catalog read may hit its 10-second limit.
+  catalog and key reads may hit their 10-second limit; copy as SQL then says the keys could not
+  be read.
 
 **Paging and locks.** As on PostgreSQL, nothing is held open while you read a result by default.
 The query session keeps `sql_select_limit` at a page and one row, so the first page is read to
@@ -605,7 +626,9 @@ spill (up to its limit) and the server is free at once. So is a locking read (`F
 `FOR SHARE`, `LOCK IN SHARE MODE`): under the page limit it would lock fewer rows than it asks
 for. The explorer and completion read in autocommit with `lock_wait_timeout = 2` and a
 10-second `max_execution_time`: behind a waiting `ALTER TABLE` they give up after two seconds
-instead of queueing behind it.
+instead of queueing behind it. A read that opens a table's definition (`SHOW CREATE TABLE`)
+takes a high-priority shared metadata lock (`SHARED_HIGH_PRIO`) for the moment it reads: MySQL
+grants it past a waiting `ALTER TABLE`, and it is gone once the read has answered.
 
 **Read-only profiles.** Two layers, as on PostgreSQL: datarig refuses everything that is not a
 read before it is sent, including `CALL`, executable comments (`/*! … */`), functions that are

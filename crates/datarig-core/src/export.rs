@@ -647,8 +647,193 @@ pub fn sql_value(d: Dialect, kind: Kind, v: Option<&str>) -> String {
         // A negative zero (`-0` of a float) is quoted: bare, it is the integer 0 and loses its sign.
         Some(v) if kind == Kind::Number && sql_number(v) && !negative_zero(v) => v.to_string(),
         Some(v) if kind == Kind::Bool && (v == "true" || v == "false") => v.to_string(),
+        // MySQL shows bytes as `0x…` and bits as `b'…'` (every byte, every bit): written as its
+        // hexadecimal and bit literals, which are the value itself (a string literal of that
+        // text would be the text).
+        Some(v) if matches!(d, Dialect::MySql(_)) && kind == Kind::Bytes && mysql_hex(v) => {
+            format!("X'{}'", &v[2..])
+        }
+        Some(v) if matches!(d, Dialect::MySql(_)) && kind == Kind::Bit && mysql_bits(v) => v.to_string(),
+        // The same string whatever the session's `NO_BACKSLASH_ESCAPES`.
+        Some(v) if matches!(d, Dialect::MySql(_)) => mysql_string(v),
         // Bytes (`\x…`) and bits too: PostgreSQL reads them from a string literal.
         Some(v) => d.quote_literal(v),
+    }
+}
+
+/// `0x` and an even number of upper-case hexadecimal digits: binary data as the MySQL driver
+/// shows it.
+fn mysql_hex(v: &str) -> bool {
+    v.strip_prefix("0x").is_some_and(|h| h.len() % 2 == 0 && h.bytes().all(|b| matches!(b, b'0'..=b'9' | b'A'..=b'F')))
+}
+
+/// `b'…'` of at least one binary digit: a bit value as the MySQL driver shows it.
+fn mysql_bits(v: &str) -> bool {
+    v.strip_prefix("b'")
+        .and_then(|r| r.strip_suffix('\''))
+        .is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b == b'0' || b == b'1'))
+}
+
+/// `s` as a MySQL string literal that reads the same whatever the session's sql mode: as it is
+/// (quotes doubled) unless it holds a backslash or a NUL, which `NO_BACKSLASH_ESCAPES` reads
+/// otherwise; such a string is written as its UTF-8 bytes, `_utf8mb4 X'…'`.
+fn mysql_string(s: &str) -> String {
+    if s.contains(['\\', '\0']) {
+        let hex: String = s.bytes().map(|b| format!("{b:02X}")).collect();
+        format!("_utf8mb4 X'{hex}'")
+    } else {
+        format!("'{}'", s.replace('\'', "''"))
+    }
+}
+
+/// Why rows are not copied as SQL: a value of a column would not be written whole.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NotWhole {
+    /// MySQL's `FLOAT`: the server sends it rounded to about six digits.
+    Float,
+    /// Text read in a character set that is not UTF-8 (`character_set_results`, here its
+    /// name): what the session shows is not the text.
+    Charset(String),
+    /// A `TIMESTAMP` shown in a time zone that is not a fixed offset (here its name): a time in
+    /// the hour a clock goes back is two instants.
+    TimeZone(String),
+    /// An `AUTO_INCREMENT` column holds 0, which an `INSERT` takes as "the next number".
+    AutoIncrementZero,
+    /// A value not in the form the driver shows its kind in (bytes, bits).
+    NotShownWhole,
+    /// A `TIMESTAMP` or a text read before the session said its time zone and character set.
+    SessionUnknown,
+    /// A `TIMESTAMP` or a text whose pages were read in different time zones or character sets.
+    SessionChanged,
+}
+
+/// A column a copy as SQL refuses, and why.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Refused {
+    pub column: String,
+    pub why: NotWhole,
+}
+
+/// A result column to copy as SQL: its name, its type and kind as the driver gives them, and
+/// whether it is an `AUTO_INCREMENT` column of the table the rows go into.
+#[derive(Clone, Copy, Debug)]
+pub struct SqlColumn<'a> {
+    pub name: &'a str,
+    pub type_name: &'a str,
+    pub kind: crate::driver::ValueKind,
+    pub auto_increment: bool,
+}
+
+/// How each column's values are written as SQL ([`sql_cells`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Rule {
+    /// As [`sql_value`] writes it (every PostgreSQL value).
+    Plain,
+    /// MySQL bytes or bits: in the driver's form.
+    Shown,
+    /// A MySQL `TIMESTAMP`, with the offset of the session's zone (`+00:00`) after it.
+    Timestamp(String),
+    /// MySQL text that is not copied, why: refused for any value.
+    Refuse(NotWhole),
+    /// An `AUTO_INCREMENT` column: 0 is refused.
+    AutoIncrement,
+}
+
+/// The rules a copy as SQL writes each column of a result by ([`sql_cells`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SqlCells {
+    names: Vec<String>,
+    rules: Vec<Rule>,
+}
+
+/// The fixed offset from UTC of time zone `zone` (`+05:30`, `UTC`), written `+HH:MM`; `None`
+/// for a zone with daylight saving or that is not known. `SYSTEM` is the server's own zone
+/// `server_zone`.
+pub fn fixed_offset(zone: &str, server_zone: Option<&str>) -> Option<String> {
+    let zone = if zone.eq_ignore_ascii_case("SYSTEM") { server_zone? } else { zone };
+    if ["UTC", "GMT", "Etc/UTC", "Etc/GMT", "Universal", "Zulu"].iter().any(|z| zone.eq_ignore_ascii_case(z)) {
+        return Some("+00:00".to_string());
+    }
+    let (sign, rest) = match zone.as_bytes().first() {
+        Some(b'+') => ('+', &zone[1..]),
+        Some(b'-') => ('-', &zone[1..]),
+        _ => return None,
+    };
+    let (h, m) = rest.split_once(':')?;
+    let digits = |s: &str| (1..=2).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_digit());
+    if !digits(h) || m.len() != 2 || !digits(m) {
+        return None;
+    }
+    Some(format!("{sign}{:0>2}:{m}", h))
+}
+
+/// How the columns `columns` of a result are copied as SQL in dialect `d`, or the first one that
+/// cannot be. On MySQL: a `FLOAT` is refused (the server sends it rounded); text read in a
+/// character set that is not UTF-8 is refused; a `TIMESTAMP` is written with the offset of the
+/// time zone it was read in when that is fixed ([`fixed_offset`]: `read_in` the session's values
+/// when the result was read, `server_zone` the server's own zone), and refused otherwise; a
+/// `TIMESTAMP` or a text whose values are not known, or changed between the result's pages, is
+/// refused; bytes and bits must be in the driver's form; an `AUTO_INCREMENT` value of 0 is
+/// refused (checked per value, [`SqlCells::cell`]). PostgreSQL's values are written as they are.
+pub fn sql_cells(
+    d: Dialect,
+    columns: &[SqlColumn],
+    read_in: &crate::driver::ReadIn,
+    server_zone: Option<&str>,
+) -> Result<SqlCells, Refused> {
+    use crate::driver::ReadIn;
+    use crate::driver::ValueKind as V;
+    let names = columns.iter().map(|c| c.name.to_string()).collect();
+    if d == Dialect::Postgres {
+        return Ok(SqlCells { names, rules: vec![Rule::Plain; columns.len()] });
+    }
+    let refused = |c: &SqlColumn, why| Refused { column: c.name.to_string(), why };
+    // Only `utf8mb4` is every character (`utf8mb3` turns an emoji into `?`).
+    let utf8 = |cs: &str| cs.eq_ignore_ascii_case("utf8mb4");
+    let mut rules = Vec::with_capacity(columns.len());
+    for c in columns {
+        let rule = match c.kind {
+            V::Float if c.type_name.starts_with("float") => return Err(refused(c, NotWhole::Float)),
+            V::Bytes | V::Bit => Rule::Shown,
+            V::TimestampTz => match read_in {
+                ReadIn::Values(s) => match fixed_offset(&s.time_zone, server_zone) {
+                    Some(offset) => Rule::Timestamp(offset),
+                    None => return Err(refused(c, NotWhole::TimeZone(s.time_zone.clone()))),
+                },
+                ReadIn::Unknown => return Err(refused(c, NotWhole::SessionUnknown)),
+                ReadIn::Changed => return Err(refused(c, NotWhole::SessionChanged)),
+            },
+            V::Text | V::Json | V::Other => match read_in {
+                ReadIn::Values(s) if !utf8(&s.charset) => Rule::Refuse(NotWhole::Charset(s.charset.clone())),
+                ReadIn::Unknown => Rule::Refuse(NotWhole::SessionUnknown),
+                ReadIn::Changed => Rule::Refuse(NotWhole::SessionChanged),
+                _ if c.auto_increment => Rule::AutoIncrement,
+                _ => Rule::Plain,
+            },
+            _ if c.auto_increment => Rule::AutoIncrement,
+            _ => Rule::Plain,
+        };
+        rules.push(rule);
+    }
+    Ok(SqlCells { names, rules })
+}
+
+impl SqlCells {
+    /// Value `v` of column `i` as the writer takes it (a `TIMESTAMP` with its offset), or why it
+    /// is not copied ([`sql_cells`]).
+    pub fn cell<'a>(&self, i: usize, v: &'a str) -> Result<std::borrow::Cow<'a, str>, Refused> {
+        let refused = |why| Refused { column: self.names.get(i).cloned().unwrap_or_default(), why };
+        match self.rules.get(i).unwrap_or(&Rule::Plain) {
+            Rule::Plain => Ok(v.into()),
+            Rule::Shown if mysql_hex(v) || mysql_bits(v) => Ok(v.into()),
+            Rule::Shown => Err(refused(NotWhole::NotShownWhole)),
+            // A zero timestamp is no instant: it has no offset.
+            Rule::Timestamp(_) if v.starts_with("0000-00-00") => Ok(v.into()),
+            Rule::Timestamp(offset) => Ok(format!("{v}{offset}").into()),
+            Rule::Refuse(why) => Err(refused(why.clone())),
+            Rule::AutoIncrement if v == "0" => Err(refused(NotWhole::AutoIncrementZero)),
+            Rule::AutoIncrement => Ok(v.into()),
+        }
     }
 }
 

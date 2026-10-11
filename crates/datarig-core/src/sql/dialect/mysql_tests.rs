@@ -167,7 +167,9 @@ fn danger_02_executable_comments_are_code() {
     assert_eq!(bodies("/*! DROP TABLE t */;", PG), Vec::<&str>::new());
 }
 
-/// 3. Copying rows as SQL escapes backslashes (and NULs) for MySQL: `C:\new` stays `C:\new`.
+/// 3. A MySQL string literal escapes backslashes (and NULs) for the session's mode; copying rows
+///    as SQL writes a string with a backslash or a NUL as its bytes (`_utf8mb4 X'…'`), which
+///    every mode reads the same: `C:\new` stays `C:\new`.
 #[test]
 fn danger_03_copied_strings_keep_their_backslashes() {
     assert_eq!(MY.quote_literal("C:\\new"), "'C:\\\\new'");
@@ -177,12 +179,13 @@ fn danger_03_copied_strings_keep_their_backslashes() {
     let target = Target::Table { schema: "shop", name: "files", columns: vec!["path", "Order"], overriding: true };
     assert_eq!(
         sql_insert(MY, &target, &cols, &[vec![Some("C:\\new"), Some("1")]]),
-        "INSERT INTO `shop`.`files` (`path`, `Order`) VALUES ('C:\\\\new', 1);"
+        "INSERT INTO `shop`.`files` (`path`, `Order`) VALUES (_utf8mb4 X'433A5C6E6577', 1);",
+        "a string with a backslash is written as its bytes: the same in every sql mode"
     );
     let update = UpdateTarget { schema: "shop", name: "files", set: vec![(0, "path")], keys: vec![(1, "Order")] };
     assert_eq!(
         sql_update(MY, &update, &cols, &[vec![Some("a\\b"), Some("2")]]),
-        "UPDATE `shop`.`files` SET `path` = 'a\\\\b' WHERE `Order` = 2;"
+        "UPDATE `shop`.`files` SET `path` = _utf8mb4 X'615C62' WHERE `Order` = 2;"
     );
     // The lexer reads the written literal back as one string: the text it was made from.
     for s in ["C:\\new", "\\", "'\\'", "a\0b", "\\\\'"] {

@@ -27,6 +27,10 @@
 //! MySQL lists a table's triggers only to a user with the `TRIGGER` privilege on it: with none
 //! listed and no such grant of the user's own (`information_schema`'s privilege tables, which do
 //! not show a role's), the group is unknown ([`TableStructure::hidden`]), not empty.
+//!
+//! A MySQL trigger's definition here is for display only: `ACTION_STATEMENT` has its body with
+//! the string literals' escapes undone (`'it''s'` reads `'it's'`), so the text is not SQL when a
+//! literal holds a quote or a backslash. The trigger's DDL comes from `SHOW CREATE TRIGGER`.
 
 use crate::session::Server;
 use datarig_core::driver::DbError;
@@ -419,6 +423,8 @@ pub(crate) fn model(
             other => return Err(DbError::Server(format!("table structure: trigger {} fires on {other}", t.name))),
         };
         let for_each_row = t.orientation == "ROW";
+        // For display only: the body's literals have lost their escapes (see the module's
+        // documentation).
         let definition = format!(
             "CREATE TRIGGER {} {} {} ON {qualified} FOR EACH {} {}",
             d.quote_ident(&t.name),
