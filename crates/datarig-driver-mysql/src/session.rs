@@ -12,7 +12,9 @@ use datarig_core::profile::dsn::{self, Scheme};
 use datarig_core::sql::dialect::MySqlMode;
 use mysql_async::prelude::Queryable;
 use mysql_async::{Conn, Opts, OptsBuilder, SessionStateChange};
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+use tokio::sync::watch;
 
 /// Upper bound for opening a session's connection (the stream, the login, the settings).
 pub(crate) const CONNECT_GUARD: Duration = Duration::from_secs(30);
@@ -442,42 +444,89 @@ pub(crate) fn my_error(e: &mysql_async::Error) -> DbError {
     }
 }
 
+/// What became of the last `KILL QUERY` sent for the session's statement since the session
+/// last cleared it ([`Killer::clear`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Kill {
+    /// None was answered.
+    None,
+    /// The server took it (then): the statement stops at its next check, and what is still on
+    /// its way is soon read.
+    Taken(Instant),
+    /// The server refused it (MySQL does when the statement runs as another account: inside a
+    /// `SQL SECURITY DEFINER` routine, it is its definer's), or it could not be sent in time:
+    /// the statement runs on.
+    Failed,
+}
+
 /// What a cancel needs: a connection of its own over the session's route, as the session's
 /// user, that runs `KILL QUERY` of the session's connection id. It stops the statement the
-/// session runs, never the session itself, and never another session.
+/// session runs, never the session itself, and never another session. What became of the kill
+/// is kept for the session ([`Kill`]), which does not read on after one that did not take.
 #[derive(Clone)]
 pub(crate) struct Killer {
     route: Route,
     opts: Opts,
     id: u64,
+    kill: Arc<watch::Sender<Kill>>,
 }
 
 impl Killer {
     pub(crate) fn new(route: Route, opts: Opts, id: u64) -> Self {
-        Self { route, opts, id }
+        Self { route, opts, id, kill: Arc::new(watch::Sender::new(Kill::None)) }
     }
 
-    /// Ask the server to stop what the session runs. A failure is not reported: the statement
-    /// then simply runs on.
+    /// Ask the server to stop what the session runs. What became of it is kept ([`Kill`]).
     pub(crate) async fn kill_query(&self) {
         self.kill_query_if(|| true).await;
     }
 
     /// [`Killer::kill_query`], if `still` holds once the connection to send it on is open (the
     /// login can take a while, through a tunnel most: by then the statement may have ended and
-    /// another run begun, which the kill must not stop).
+    /// another run begun, which the kill must not stop). What became of it is kept only while
+    /// `still` holds: it says nothing about the statement of another run.
     pub(crate) async fn kill_query_if(&self, still: impl Fn() -> bool) {
         let kill = async {
             let stream = self.route.dial(DIAL_TIMEOUT).await.ok()?;
             let (_wire, stream) = Wire::new(stream);
             let mut conn = Conn::connect_with_stream(self.opts.clone(), Box::new(stream)).await.ok()?;
-            if still() {
-                let _ = conn.query_drop(format!("KILL QUERY {}", self.id)).await;
-            }
+            let sent = if still() {
+                let taken = conn.query_drop(format!("KILL QUERY {}", self.id)).await.is_ok();
+                Some(if taken { Kill::Taken(Instant::now()) } else { Kill::Failed })
+            } else {
+                None
+            };
             quit(conn).await;
-            Some(())
+            Some(sent)
         };
-        let _ = tokio::time::timeout(KILL_TIMEOUT, kill).await;
+        let kill = match tokio::time::timeout(KILL_TIMEOUT, kill).await {
+            // Not sent: the statement it was for ended.
+            Ok(Some(None)) => return,
+            Ok(Some(Some(kill))) => kill,
+            Ok(None) | Err(_) => Kill::Failed,
+        };
+        if still() {
+            self.kill.send_replace(kill);
+        }
+    }
+
+    /// Forget what became of the kills sent so far: a new run, or a kill of the session's own,
+    /// begins.
+    pub(crate) fn clear(&self) {
+        self.kill.send_replace(Kill::None);
+    }
+
+    /// What became of the last kill, and of the ones that follow.
+    pub(crate) fn watch(&self) -> watch::Receiver<Kill> {
+        self.kill.subscribe()
+    }
+
+    /// Resolves once a kill did not take ([`Kill::Failed`]).
+    pub(crate) async fn refused(&self) {
+        let mut kills = self.watch();
+        if kills.wait_for(|k| *k == Kill::Failed).await.is_err() {
+            std::future::pending::<()>().await;
+        }
     }
 }
 

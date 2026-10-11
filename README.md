@@ -555,7 +555,10 @@ is tested only lightly.
 - Rows affected, the last insert id, warnings and the server's info line in Messages; errors as
   the `mysql` client shows them (`ERROR 1146 (42S02): …`).
 - Cancel (`Ctrl+C`): `KILL QUERY` from a connection of its own, never `KILL`. A `SLEEP()` that
-  is stopped returns 1, as in the `mysql` client.
+  is stopped returns 1, as in the `mysql` client. A statement that runs as another account (in
+  a `SQL SECURITY DEFINER` procedure) cannot be stopped so without `CONNECTION_ADMIN`: datarig
+  then closes the tab's connection instead of reading the rest of its result, the server ends
+  the statement when it notices, and the next run connects again.
 - Transactions as the server reports them after each statement; a statement that commits your
   open transaction by itself (DDL and others) is noted in Messages.
 - The explorer: the server's databases right under the profile (a MySQL database is the

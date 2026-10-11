@@ -52,7 +52,12 @@
 //! **Cancel**: `KILL QUERY` of the session's connection from a connection of its own
 //! (`session::Killer`), only while a statement of the session is on its way or running (`busy`);
 //! a run of several statements also stops before its next one. A kill whose login comes after a
-//! new run began is not sent.
+//! new run began is not sent. A kill that does not take (MySQL refuses one of a statement that
+//! runs as another account, inside a `SQL SECURITY DEFINER` routine; or one that cannot be sent,
+//! or whose statement does not end soon after) is never followed by reading the rest of the
+//! result, which may have no end: the session cuts its connection, the run ends cancelled, and
+//! the session is lost ([`DbError::CancelNotTaken`]); the server ends the statement once it
+//! finds the connection gone. A result the session stops itself (a held one) is stopped so too.
 //!
 //! The session reports the sql mode its text is read in when it changes (`DbEvent::Language`),
 //! and what the server said of a statement beyond its outcome (`DbEvent::Info`: the id an
@@ -231,6 +236,11 @@ impl Paged<'_> {
         let (error, cancelled) = failure(e);
         let _ = self.events.send(DbEvent::Failed { id: self.id, error, cancelled });
     }
+
+    /// The cancel stopped it after its first page.
+    fn cancelled(self) {
+        let _ = self.events.send(DbEvent::Failed { id: self.id, error: DbError::Cancelled, cancelled: true });
+    }
 }
 
 /// Why a statement run stopped the session.
@@ -240,8 +250,11 @@ enum Stop {
 }
 
 impl From<Closed> for Stop {
-    fn from(_: Closed) -> Self {
-        Stop::Closed
+    fn from(c: Closed) -> Self {
+        match c {
+            Closed::Ui => Stop::Closed,
+            Closed::CancelNotTaken => Stop::Lost(DbError::CancelNotTaken),
+        }
     }
 }
 
@@ -316,12 +329,14 @@ pub(crate) async fn query_loop(
             // A count or a check the app asks for: a cancel asked before it was another run's.
             Next::Command(DbCommand::Count { id, sql }) => {
                 env.asked.store(false, Ordering::SeqCst);
+                killer.clear();
                 count(&mut conn, &mut link, &env, &mut s, &sql).await.map(|(result, snapshot)| {
                     let _ = events.send(DbEvent::Counted { id, result, snapshot });
                 })
             }
             Next::Command(DbCommand::CheckRepeat { id, sql }) => {
                 env.asked.store(false, Ordering::SeqCst);
+                killer.clear();
                 check_repeat(&mut conn, &mut link, &env, &mut s, &sql).await.map(|result| {
                     let _ = events.send(DbEvent::RepeatChecked { id, result });
                 })
@@ -375,6 +390,8 @@ async fn execute(
         Err(Halted { stop, reply }) => {
             match (&stop, reply) {
                 (Stop::Closed, Some(reply)) => reply.closed(),
+                // Only a kill gets the connection cut so: the run was cancelled.
+                (Stop::Lost(DbError::CancelNotTaken), Some(reply)) => reply.fail(DbError::Cancelled, true),
                 // The running statement fails first, then the session reports `Lost`.
                 (Stop::Lost(error), Some(reply)) => reply.fail(error.clone(), false),
                 (_, None) => {}
@@ -414,6 +431,7 @@ async fn run<'a>(
     }
     // A cancel asked for before this run belonged to the one before.
     env.asked.store(false, Ordering::SeqCst);
+    env.killer.clear();
     // A statement run again for the user: what only the server can tell for the allowlist is
     // asked first.
     if resume.is_some()
@@ -660,7 +678,13 @@ async fn statement<'a>(
                 let id = paged.id;
                 let held = match hold(&mut qr, link, env, id, &columns, carry, ended).await {
                     Ok(held) => held,
-                    Err(stop) => return Err(Halted { stop, reply: None }),
+                    Err(stop) => {
+                        // A cancel the server did not take: the run's one failure that follows.
+                        if matches!(stop, Stop::Lost(DbError::CancelNotTaken)) && env.asked.load(Ordering::SeqCst) {
+                            paged.cancelled();
+                        }
+                        return Err(Halted { stop, reply: None });
+                    }
                 };
                 drop(qr);
                 return held_ended(conn, link, env, s, paged, held, sql, was_open).await.map(|()| None);
@@ -871,7 +895,16 @@ async fn hold(
     let mut held = Held { stopped: false, failed: None, info: StatementInfo::default(), waiting: Vec::new() };
     let mut more = true;
     while more {
-        match link.next_command().await {
+        // A cancel the server refused while the app had not asked for the next page yet.
+        let next = tokio::select! {
+            biased;
+            next = link.next_command() => next,
+            () = env.killer.refused() => {
+                link.cut();
+                return Err(Stop::Lost(DbError::CancelNotTaken));
+            }
+        };
+        match next {
             Next::Command(DbCommand::FetchMore { id: fid }) if fid == id => {
                 let t0 = Instant::now();
                 let want = page_size + 1 - usize::from(carry.is_some());
@@ -904,6 +937,8 @@ async fn hold(
             }
             Next::Closed => {
                 let _ = tokio::time::timeout(Duration::from_secs(2), env.kill()).await;
+                // Not read to its end in the background, whatever became of the kill.
+                link.cut();
                 return Err(Stop::Closed);
             }
             Next::Lost(reason) => return Err(Stop::Lost(reason)),
@@ -955,12 +990,14 @@ async fn held_ended<'a>(
 }
 
 /// Stop a result before its end: `KILL QUERY`, then read and drop what the server still sends
-/// (its rows up to where it stopped, and the error that says so).
+/// (its rows up to where it stopped, and the error that says so). A kill that does not take
+/// cuts the connection instead ([`Link::guard`]).
 async fn stop_result(
     qr: &mut QueryResult<'_, 'static, TextProtocol>,
     link: &mut Link,
     env: &Env<'_>,
 ) -> Result<(), Closed> {
+    env.killer.clear();
     env.kill().await;
     link.guard(Some(env.killer), async {
         loop {

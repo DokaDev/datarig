@@ -1486,6 +1486,7 @@ impl App {
             DbError::CopyStdio => Label::DbCopyStdio,
             DbError::CopyStarted => Label::DbCopyStarted,
             DbError::ReadOnlyLost => Label::DbReadOnlyLost,
+            DbError::CancelNotTaken => Label::DbCancelNotTaken,
             DbError::Locked => Label::DbLocked,
             DbError::NotFound => Label::DbNotFound,
             DbError::Ambiguous(kinds) => {

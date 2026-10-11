@@ -1309,6 +1309,180 @@ async fn a_connection_lost_while_a_statement_runs_fails_it_then_is_lost() {
     a.disconnect().await.unwrap();
 }
 
+/// A procedure of the administrator's that runs as its definer (`SQL SECURITY DEFINER`) and
+/// whose result has no end in practice (a table of a million rows joined with itself): the
+/// session's user may run it, and may not `KILL QUERY` it (while it runs, the statement is the
+/// definer's). Dropped again at the end.
+async fn endless_definer_procedure(admin: &str, name: &str) -> (String, Cleanup) {
+    let p = format!("zz_it_{name}_{}", std::process::id());
+    let cleanup = Cleanup { url: admin.to_string(), sql: format!("DROP PROCEDURE IF EXISTS shop.{p}") };
+    let mut a = side(admin).await;
+    a.query_drop(format!(
+        "CREATE PROCEDURE shop.{p}() SQL SECURITY DEFINER SELECT a.id FROM shop.events a CROSS JOIN shop.events b"
+    ))
+    .await
+    .unwrap();
+    a.disconnect().await.unwrap();
+    (p, cleanup)
+}
+
+/// Every event of `c` until its session is lost (at most `secs`); each page of a held result
+/// asks for the next one, as the app reads a held result to its end.
+async fn until_lost(c: &mut Conn, secs: u64) -> Vec<DbEvent> {
+    let deadline = Instant::now() + Duration::from_secs(secs);
+    let mut evs = Vec::new();
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        let ev = match tokio::time::timeout(left, c.rx.recv()).await {
+            Ok(Some(ev)) => ev,
+            Ok(None) => panic!("event channel closed: {evs:?}"),
+            Err(_) => panic!("the session is not lost within {secs}s: {} events, last {:?}", evs.len(), evs.last()),
+        };
+        if let DbEvent::Page { id, more: true, .. } = ev {
+            c.session.send(DbCommand::FetchMore { id });
+        }
+        let lost = matches!(ev, DbEvent::Lost { .. });
+        evs.push(ev);
+        if lost {
+            return evs;
+        }
+    }
+}
+
+/// Wait (at most `secs`) for the server to end connection `id`. A connection the client closed
+/// ends when its statement next sends or checks: within a second mostly, some seconds while a
+/// join builds its hash table on a loaded server.
+async fn thread_ends(a: &mut mysql_async::Conn, id: u64, secs: u64) {
+    let deadline = Instant::now() + Duration::from_secs(secs);
+    loop {
+        let n: u64 = a
+            .query_first(format!("SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE ID = {id}"))
+            .await
+            .unwrap()
+            .unwrap();
+        if n == 0 {
+            return;
+        }
+        assert!(Instant::now() < deadline, "connection {id} is still on the server after {secs}s");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+}
+
+/// The failures of run `id` among `evs`.
+fn failures(evs: &[DbEvent], id: u64) -> Vec<&DbEvent> {
+    evs.iter().filter(|e| matches!(e, DbEvent::Failed { id: i, .. } if *i == id)).collect()
+}
+
+/// A cancel the server refuses (the statement runs as another account) does not leave the
+/// session reading a result without end: it cuts the connection at once, the run ends cancelled
+/// (once), the session is lost and says why, the server ends the statement, and a new session
+/// works.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_the_server_refuses_ends_the_session_instead_of_reading_on() {
+    let test = "a_cancel_the_server_refuses_ends_the_session";
+    let Some((url, admin)) = urls(test) else { return };
+    let (p, _p) = endless_definer_procedure(&admin, "refused").await;
+    let mut a = side(&admin).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let id = only_session(&mut a, SessionRole::Query, test).await;
+    c.session.send(DbCommand::Execute {
+        id: 1,
+        statements: vec![format!("CALL shop.{p}()")],
+        paging: PagingMode::NoHold,
+    });
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    let t0 = Instant::now();
+    c.session.cancel();
+    let evs = until_lost(&mut c, 20).await;
+    assert!(t0.elapsed() < Duration::from_secs(6), "{:?}", t0.elapsed());
+    let answers: Vec<_> = evs
+        .iter()
+        .filter(|e| matches!(e, DbEvent::Page { id: 1, columns: Some(_), .. } | DbEvent::Done { id: 1, .. }))
+        .collect();
+    assert!(answers.is_empty(), "{answers:?}");
+    assert!(
+        matches!(failures(&evs, 1)[..], [DbEvent::Failed { error: DbError::Cancelled, cancelled: true, .. }]),
+        "{evs:?}"
+    );
+    assert!(matches!(evs.last(), Some(DbEvent::Lost { error: DbError::CancelNotTaken })), "{evs:?}");
+    thread_ends(&mut a, id, 30).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    c.ok(2, "SELECT 1").await;
+    a.disconnect().await.unwrap();
+}
+
+/// The same for a held result the app reads on after the cancel: its first page was the
+/// answer, then one cancelled failure, then the session is lost.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refused_cancel_of_a_held_result_ends_the_session() {
+    let test = "a_refused_cancel_of_a_held_result";
+    let Some((url, admin)) = urls(test) else { return };
+    let (p, _p) = endless_definer_procedure(&admin, "heldrefused").await;
+    let mut a = side(&admin).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let id = only_session(&mut a, SessionRole::Query, test).await;
+    let first = c.run_as(1, &[&format!("CALL shop.{p}()")], PagingMode::Hold).await;
+    assert!(matches!(first.last(), Some(DbEvent::Page { id: 1, columns: Some(_), more: true, .. })), "{first:?}");
+    c.session.send(DbCommand::FetchMore { id: 1 });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let t0 = Instant::now();
+    c.session.cancel();
+    let evs = until_lost(&mut c, 20).await;
+    assert!(t0.elapsed() < Duration::from_secs(6), "{:?}", t0.elapsed());
+    assert!(
+        matches!(failures(&evs, 1)[..], [DbEvent::Failed { error: DbError::Cancelled, cancelled: true, .. }]),
+        "{evs:?}"
+    );
+    assert!(matches!(evs.last(), Some(DbEvent::Lost { error: DbError::CancelNotTaken })), "{evs:?}");
+    thread_ends(&mut a, id, 30).await;
+    a.disconnect().await.unwrap();
+}
+
+/// A held result the app stops itself (it closes it, or the user runs another statement) whose
+/// statement the server will not stop is not read to its end either: the session is lost at
+/// once (the run was answered with its first page: nothing more for it). Closing a session
+/// while such a result is held ends its statement on the server too.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_held_result_the_server_will_not_stop_is_not_read_to_its_end() {
+    let test = "a_held_result_the_server_will_not_stop";
+    let Some((url, admin)) = urls(test) else { return };
+    let (p, _p) = endless_definer_procedure(&admin, "heldstop").await;
+    let mut a = side(&admin).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let id = only_session(&mut a, SessionRole::Query, test).await;
+    let first = c.run_as(1, &[&format!("CALL shop.{p}()")], PagingMode::Hold).await;
+    assert!(matches!(first.last(), Some(DbEvent::Page { id: 1, columns: Some(_), more: true, .. })), "{first:?}");
+    let t0 = Instant::now();
+    c.session.send(DbCommand::ClosePortal { id: 1 });
+    let evs = until_lost(&mut c, 20).await;
+    assert!(t0.elapsed() < Duration::from_secs(6), "{:?}", t0.elapsed());
+    assert!(failures(&evs, 1).is_empty(), "{evs:?}");
+    assert!(matches!(evs.last(), Some(DbEvent::Lost { error: DbError::CancelNotTaken })), "{evs:?}");
+    thread_ends(&mut a, id, 30).await;
+    // Closing the session.
+    let test = "a_held_result_the_server_will_not_stop_closing";
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let id = only_session(&mut a, SessionRole::Query, test).await;
+    let first = c.run_as(1, &[&format!("CALL shop.{p}()")], PagingMode::Hold).await;
+    assert!(matches!(first.last(), Some(DbEvent::Page { id: 1, columns: Some(_), more: true, .. })), "{first:?}");
+    drop(c);
+    thread_ends(&mut a, id, 30).await;
+    // Closing it while the result is read past its first page, not held (the app gives up on
+    // a cancel that is not answered by closing the session): never read on in the background.
+    let test = "a_held_result_the_server_will_not_stop_closing_not_held";
+    let c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let id = only_session(&mut a, SessionRole::Query, test).await;
+    c.session.send(DbCommand::Execute {
+        id: 1,
+        statements: vec![format!("CALL shop.{p}()")],
+        paging: PagingMode::NoHold,
+    });
+    tokio::time::sleep(Duration::from_millis(1000)).await;
+    drop(c);
+    thread_ends(&mut a, id, 30).await;
+    a.disconnect().await.unwrap();
+}
+
 /// How many rows table `q` has, counted by session `c` (run `id`).
 async fn rows_in(c: &mut Conn, id: u64, q: &str) -> String {
     let evs = c.run(id, &[&format!("SELECT COUNT(*) FROM {q}")]).await;
@@ -3291,7 +3465,7 @@ async fn a_stopped_procedure_leaves_the_values_not_known() {
     let _p = Cleanup { url: admin.clone(), sql: format!("DROP PROCEDURE IF EXISTS shop.{p}") };
     let mut a = side(&admin).await;
     a.query_drop(format!(
-        "CREATE PROCEDURE shop.{p}() BEGIN SET time_zone = '+09:00'; \
+        "CREATE PROCEDURE shop.{p}() SQL SECURITY INVOKER BEGIN SET time_zone = '+09:00'; \
          SELECT a.id, a.v FROM {} a CROSS JOIN {} b LIMIT 2000000; END",
         t.q(),
         t.q()
@@ -3302,9 +3476,10 @@ async fn a_stopped_procedure_leaves_the_values_not_known() {
     let mut q = Conn::open(&url, SessionRole::Query, false, test).await;
     q.ok(1, "SET time_zone = '+00:00'").await;
     // The procedure's rows as a statement before the last: read chunk by chunk, stopped after
-    // the first. The procedure runs as its definer (another account), whose statement the
-    // cancel's `KILL QUERY`, as the session's user, may not stop: its rows are read to their end
-    // (a bounded number here) and the run ends cancelled.
+    // the first. The procedure runs as the session's user (`SQL SECURITY INVOKER`), so the
+    // cancel's `KILL QUERY` stops it and the session goes on (one that runs as another account
+    // cannot be stopped so, see
+    // `a_cancel_the_server_refuses_ends_the_session_instead_of_reading_on`).
     let statements = vec![format!("CALL shop.{p}()"), "SELECT 1".to_string()];
     q.session.send(DbCommand::Execute { id: 2, statements, paging: PagingMode::NoHold });
     let mut evs = Vec::new();

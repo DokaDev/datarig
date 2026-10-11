@@ -147,6 +147,10 @@ pub enum DbError {
     /// or opened a read-write transaction, which the app refuses to send): the session rolled
     /// back and closed.
     ReadOnlyLost,
+    /// The server did not stop the statement the session runs when asked (MySQL refuses a
+    /// `KILL QUERY` of a statement that runs as another account, inside a `SQL SECURITY DEFINER`
+    /// routine): the session closed its connection instead of reading the rest of the result.
+    CancelNotTaken,
 }
 
 impl DbError {
@@ -186,7 +190,8 @@ impl DbError {
             | DbError::ServerKeyPathRelative(_)
             | DbError::PasswordTooLong { .. }
             | DbError::ServerKeyInvalid
-            | DbError::ReadOnlyLost => Cow::Borrowed(""),
+            | DbError::ReadOnlyLost
+            | DbError::CancelNotTaken => Cow::Borrowed(""),
         }
     }
 }
