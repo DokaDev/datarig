@@ -1532,7 +1532,10 @@ impl App {
             DbError::CopyStarted => Label::DbCopyStarted,
             DbError::ReadOnlyLost => Label::DbReadOnlyLost,
             DbError::CancelNotTaken(CancelFailure::Refused) => Label::DbCancelRefused,
-            DbError::CancelNotTaken(CancelFailure::NotSent) => Label::DbCancelNotSent,
+            // Why it could not be sent, in its own words (logged as they log it).
+            DbError::CancelNotTaken(CancelFailure::NotSent(why)) => {
+                return self.i18n.msg(&Msg::DbCancelNotSent { reason: self.db_error_text(why) }).to_string();
+            }
             DbError::CancelNotTaken(CancelFailure::KeptSending) => Label::DbCancelKeptSending,
             DbError::Locked => Label::DbLocked,
             DbError::NotFound => Label::DbNotFound,

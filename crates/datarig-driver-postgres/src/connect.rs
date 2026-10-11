@@ -22,6 +22,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
+use tokio::task::AbortHandle;
 use tokio_postgres::config::SslMode;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::{Client, Config, NoTls, SimpleQueryMessage};
@@ -40,10 +41,10 @@ impl Canceller for PgCanceller {
         self.1.store(true, Ordering::SeqCst);
         let cancel = self.0.lock().ok().and_then(|g| g.clone());
         if let Some(cancel) = cancel {
-            tokio::spawn(async move {
-                // Failure to deliver the cancel request surfaces as the query simply finishing.
-                cancel.send().await;
-            });
+            // Bound now to the request it is asked during; one that cannot be sent closes the
+            // session, which says so (`Link::guard`).
+            let request = cancel.unsent.request();
+            tokio::spawn(async move { cancel.ask(request).await });
         }
     }
 }
@@ -119,7 +120,7 @@ impl Driver for PgDriver {
             let route = dialer.map(|d| route(&pgcfg, d)).transpose().map_err(PingError::Failed)?;
             let start = Instant::now();
             let attempt = async {
-                let (client, _) = open(&pgcfg, route.as_ref()).await.map_err(|(e, _)| e)?;
+                let (client, _, _) = open(&pgcfg, route.as_ref()).await.map_err(|(e, _)| e)?;
                 let row = client.query_typed_one("SHOW server_version", &[]).await.map_err(|e| db_error(&e))?;
                 Ok::<_, DbError>(row.get::<_, String>(0))
             };
@@ -280,27 +281,28 @@ fn is_auth_error(e: &tokio_postgres::Error) -> bool {
     false
 }
 
-/// Open a connection, directly or through `route`. The receiver resolves when the connection
-/// ends, with the reason.
-async fn open(cfg: &Config, route: Option<&Route>) -> Result<(Client, oneshot::Receiver<DbError>), (DbError, bool)> {
+/// A connection's client, the receiver that resolves when it ends (with the reason) and the
+/// handle that closes it (aborts the task that drives it).
+type Opened = (Client, oneshot::Receiver<DbError>, AbortHandle);
+
+/// Open a connection, directly or through `route`.
+async fn open(cfg: &Config, route: Option<&Route>) -> Result<Opened, (DbError, bool)> {
     let (done_tx, done_rx) = oneshot::channel();
     let fail = |e: tokio_postgres::Error| (db_error(&e), is_auth_error(&e));
-    let client = match route {
+    let (client, conn) = match route {
         None => {
             let (client, conn) = cfg.connect(NoTls).await.map_err(fail)?;
-            tokio::spawn(watch(conn, done_tx));
-            client
+            (client, tokio::spawn(watch(conn, done_tx)))
         }
         Some(route) => {
             // `connect_timeout` covers the socket of a direct connect; here, the dial.
             let timeout = cfg.get_connect_timeout().copied().unwrap_or(CONNECT_GUARD);
             let stream = route.dial(timeout).await.map_err(|e| (e, false))?;
             let (client, conn) = cfg.connect_raw(stream, NoTls).await.map_err(fail)?;
-            tokio::spawn(watch(conn, done_tx));
-            client
+            (client, tokio::spawn(watch(conn, done_tx)))
         }
     };
-    Ok((client, done_rx))
+    Ok((client, done_rx, conn.abort_handle()))
 }
 
 /// Drive a connection until it ends and send why.
@@ -333,7 +335,7 @@ async fn run_session(
         let _ = events.send(DbEvent::ConnectFailed { error: DbError::NoAnswer(CONNECT_GUARD), auth: false });
         return;
     };
-    let (client, ended) = match opened {
+    let (client, ended, conn) = match opened {
         Ok(c) => c,
         Err((error, auth)) => {
             let _ = events.send(DbEvent::ConnectFailed { error, auth });
@@ -371,11 +373,11 @@ async fn run_session(
         }
         let _ = events.send(DbEvent::Context { database, schemas });
     }
-    let link = Link::new(rx, ended);
     match role {
-        SessionRole::Meta => meta_loop(client, link, events).await,
+        SessionRole::Meta => meta_loop(client, Link::new(rx, ended, conn, None), events).await,
         SessionRole::Query => {
-            let cancel = Cancel { token: client.cancel_token(), route: route.clone() };
+            let cancel = Cancel::new(client.cancel_token(), route.clone());
+            let link = Link::new(rx, ended, conn, Some(cancel.unsent.clone()));
             if let Ok(mut g) = canceller.0.lock() {
                 *g = Some(cancel.clone());
             }

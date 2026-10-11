@@ -29,7 +29,7 @@ format result support", open since 2023-11), has not been merged; see also
 
 ### What is changed
 
-Every change in the source is marked with a `datarig:` comment. Two groups:
+Every change in the source is marked with a `datarig:` comment. Three groups:
 
 **Result formats**:
 
@@ -44,6 +44,14 @@ Every change in the source is marked with a `datarig:` comment. Two groups:
     of the hard-coded `Some(1)`;
   - its three existing callers (`query_typed`, `execute_typed`, `encode_bind`) pass `&[1]`,
     so every existing API still asks for binary exactly as upstream does.
+
+**Cancel requests**:
+
+- `src/cancel_query_raw.rs`: a cancel request counts as sent once it is written and flushed;
+  the stream is then dropped instead of shut down, since a shutdown may fail or never end (an
+  SSH channel the far end already closed, or whose end of file cannot be queued) and would
+  otherwise fail or stall a cancel that was sent (the caller reports a cancel that was not
+  sent).
 
 **Pipelined requests**: upstream
 sends each step of the extended protocol (Parse, Bind, Execute) as a request of its own, ended

@@ -19,7 +19,7 @@ mod pg_proxy;
 
 use datarig_core::driver::PagingMode;
 use datarig_core::driver::{
-    ConnectOptions, DbCommand, DbError, DbEvent, Driver, Outcome, PingError, Session, SessionRole,
+    CancelFailure, ConnectOptions, DbCommand, DbError, DbEvent, Driver, Outcome, PingError, Session, SessionRole,
 };
 use datarig_core::fault::FaultKind;
 use datarig_core::profile::ConnectionConfig;
@@ -1450,6 +1450,44 @@ async fn closing_the_session_cancels_the_running_statement() {
     // No event after `close` (the UI closed it on purpose).
     let late = tokio::time::timeout(Duration::from_millis(300), rx.recv()).await;
     assert!(matches!(late, Ok(None) | Err(_)), "{late:?}");
+}
+
+/// Closing the session while a long result streams in (a statement before the last is read to
+/// its end) ends the session at once: rows that keep arriving never hide the close.
+#[tokio::test(flavor = "multi_thread")]
+async fn closing_the_session_while_rows_stream_in_ends_it_at_once() {
+    let Some(url) = pg_url("closing_the_session_while_rows_stream_in_ends_it_at_once") else { return };
+    let tag = format!("stream{}", std::process::id());
+    let _backends = Backends::new(&url, &tag);
+    let (q, mut obs) = tagged(&url, &tag).await;
+    // A set-returning function in the select list streams its rows (one in `FROM` would be
+    // materialized first).
+    let endless = "SELECT generate_series(1, 1000000000000) AS g, repeat('x', 200) AS pad";
+    q.session.send(DbCommand::Execute {
+        id: 1,
+        statements: vec![endless.into(), "SELECT 1".into()],
+        paging: PagingMode::Hold,
+    });
+    let Conn { session, mut rx } = q;
+    let mut pages = 0;
+    while pages < 3 {
+        match tokio::time::timeout(Duration::from_secs(10), rx.recv()).await {
+            Ok(Some(DbEvent::StepRows { .. })) => pages += 1,
+            Ok(Some(_)) => {}
+            other => panic!("{other:?}"),
+        }
+    }
+    let t0 = Instant::now();
+    session.close();
+    // The session task ends (its events end) soon after the close, whatever streams in.
+    let drained = tokio::time::timeout(Duration::from_secs(5), async { while rx.recv().await.is_some() {} }).await;
+    assert!(drained.is_ok(), "the session still read rows {:?} after close", t0.elapsed());
+    let mut n = 30_000;
+    while !active_queries(&mut obs, n, &tag).await.is_empty() {
+        n += 1;
+        assert!(t0.elapsed() < Duration::from_secs(10), "still running {:?} after close", t0.elapsed());
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -4196,6 +4234,389 @@ async fn sessions_cancels_and_tests_go_through_the_dialer() {
     assert_eq!(dials(), 4);
     PgDriver.ping(&cfg, Duration::from_secs(5), through()).await.expect("test connection");
     assert_eq!(dials(), 5);
+}
+
+/// Terminates the backends of the query session tagged `tag` on a fresh connection when it
+/// goes out of scope (also when an assertion fails): a statement a test left running ends.
+struct Backends {
+    url: String,
+    tag: String,
+}
+
+impl Backends {
+    fn new(url: &str, tag: &str) -> Self {
+        Self { url: url.to_string(), tag: tag.to_string() }
+    }
+}
+
+impl Drop for Backends {
+    fn drop(&mut self) {
+        let sql = format!(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = 'datarig-q-{}'",
+            self.tag
+        );
+        if let Err(e) = pg_clean::run_fresh(&self.url, &sql) {
+            let _ = writeln!(std::io::stderr(), "warning: {sql}: {e}");
+        }
+    }
+}
+
+/// What a [`CancelDial`] does with the dials after the session's own: its cancel requests.
+#[derive(Clone, Copy)]
+enum LaterDials {
+    /// Refused at once.
+    Refuse,
+    /// Never answered.
+    Hang,
+    /// Connected, but closing the stream's write side fails once the request is written (an
+    /// SSH channel the far end already closed).
+    ShutdownFails,
+    /// Connected, but closing the stream's write side never ends (an SSH channel whose end of
+    /// file cannot be queued).
+    ShutdownHangs,
+}
+
+/// A dialer that gives the session its connection and treats every later dial (a cancel
+/// request) as `later` says. The session's stream can be stalled: nothing it receives is read
+/// any more, so a request in flight never ends by itself.
+struct CancelDial {
+    tcp: TcpDialer,
+    dials: std::sync::atomic::AtomicUsize,
+    later: LaterDials,
+    stalled: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl Dialer for CancelDial {
+    fn dial(
+        &self,
+        host: &str,
+        port: u16,
+    ) -> futures::future::BoxFuture<'static, Result<datarig_core::transport::BoxedStream, DialError>> {
+        use datarig_core::transport::BoxedStream;
+        let first = self.dials.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0;
+        match (first, self.later) {
+            (true, _) => {
+                let (dial, stalled) = (self.tcp.dial(host, port), self.stalled.clone());
+                Box::pin(async move { dial.await.map(|inner| Box::new(Stalling { inner, stalled }) as BoxedStream) })
+            }
+            (false, LaterDials::Refuse) => Box::pin(async { Err(DialError::NotOpen) }),
+            (false, LaterDials::Hang) => Box::pin(std::future::pending()),
+            (false, later @ (LaterDials::ShutdownFails | LaterDials::ShutdownHangs)) => {
+                let (dial, hangs) = (self.tcp.dial(host, port), matches!(later, LaterDials::ShutdownHangs));
+                Box::pin(async move { dial.await.map(|inner| Box::new(FailingShutdown(inner, hangs)) as BoxedStream) })
+            }
+        }
+    }
+}
+
+/// A stream whose reads stop while `stalled` is set (they never resume: the test ends there).
+struct Stalling {
+    inner: datarig_core::transport::BoxedStream,
+    stalled: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl tokio::io::AsyncRead for Stalling {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        if self.stalled.load(std::sync::atomic::Ordering::SeqCst) {
+            return std::task::Poll::Pending;
+        }
+        std::pin::Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl tokio::io::AsyncWrite for Stalling {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.inner).poll_write(cx, buf)
+    }
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_flush(cx)
+    }
+    fn poll_shutdown(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
+    }
+}
+
+/// A stream whose write side cannot be closed: closing it fails, or never ends (`.1`).
+struct FailingShutdown(datarig_core::transport::BoxedStream, bool);
+
+impl tokio::io::AsyncRead for FailingShutdown {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.0).poll_read(cx, buf)
+    }
+}
+
+impl tokio::io::AsyncWrite for FailingShutdown {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.0).poll_write(cx, buf)
+    }
+    fn poll_flush(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.0).poll_flush(cx)
+    }
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        match self.1 {
+            true => std::task::Poll::Pending,
+            false => std::task::Poll::Ready(Err(std::io::Error::other("the channel is closed"))),
+        }
+    }
+}
+
+/// A query session tagged `tag` through a [`CancelDial`] (`later`), its stall switch, and an
+/// observer session.
+async fn open_cancel_dial(url: &str, tag: &str, later: LaterDials) -> (Conn, Arc<std::sync::atomic::AtomicBool>, Conn) {
+    let stalled = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let dialer = CancelDial { tcp: TcpDialer::default(), dials: Default::default(), later, stalled: stalled.clone() };
+    let (tx, rx) = unbounded_channel();
+    let o = ConnectOptions::new(PAGE, SessionRole::Query, tag).dialer(Some(DialerRef(Arc::new(dialer))));
+    let mut q = Conn { session: PgDriver.connect(&url_profile(url), SessionRole::Query, o, tx), rx };
+    q.wait(|e| matches!(e, DbEvent::Connected), 10).await;
+    (q, stalled, Conn::open(url, SessionRole::Query).await)
+}
+
+/// A statement that never ends by itself and writes to the client now and then (so the server
+/// finds a closed connection soon).
+const ENDLESS_NOTICES: &str = "DO $$ BEGIN LOOP RAISE NOTICE 'tick'; PERFORM pg_sleep(0.05); END LOOP; END $$";
+
+/// Start `sql` on `q` (tagged `tag`) and wait until the server runs it.
+async fn start(q: &Conn, obs: &mut Conn, tag: &str, sql: &str) {
+    q.session.send(DbCommand::Execute { id: 1, statements: vec![sql.into()], paging: PagingMode::Hold });
+    started(obs, tag).await;
+}
+
+/// Every event until the session ends (its channel closes), within `secs`.
+async fn until_ended(q: &mut Conn, secs: u64) -> Vec<DbEvent> {
+    let mut seen = Vec::new();
+    loop {
+        match tokio::time::timeout(Duration::from_secs(secs), q.rx.recv()).await {
+            Ok(Some(ev)) => seen.push(ev),
+            Ok(None) => return seen,
+            Err(_) => panic!("the session neither ended nor said why: {seen:?}"),
+        }
+    }
+}
+
+/// The session ended with exactly one answer `answered` to request `id` and then `Lost` with a
+/// cancel that was not sent, for `why`.
+fn ended_unsent(seen: &[DbEvent], answered: impl Fn(&DbEvent) -> bool, why: impl Fn(&DbError) -> bool) {
+    let answers = seen.iter().filter(|e| answered(e)).count();
+    assert_eq!(answers, 1, "{seen:?}");
+    match seen.last() {
+        Some(DbEvent::Lost { error: DbError::CancelNotTaken(CancelFailure::NotSent(w)) }) => assert!(why(w), "{w:?}"),
+        other => panic!("{other:?} in {seen:?}"),
+    }
+}
+
+/// Wait (at most 10s after `t0`) until the session tagged `tag` runs nothing on the server.
+async fn ended_on_server(obs: &mut Conn, tag: &str, t0: Instant) {
+    let mut n = 50_000;
+    while !active_queries(obs, n, tag).await.is_empty() {
+        n += 1;
+        assert!(t0.elapsed() < Duration::from_secs(10), "still running {:?} after", t0.elapsed());
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+fn run_failed_cancelled(e: &DbEvent) -> bool {
+    matches!(e, DbEvent::Page { id: 1, .. } | DbEvent::Done { id: 1, .. } | DbEvent::Failed { id: 1, .. })
+}
+
+/// A cancel request that cannot reach the server is said, never swallowed: the run ends
+/// cancelled (one terminal event, a cancel), the session closes its connection and reports
+/// itself lost with that reason. This statement writes to the client, so the server notices
+/// the closed connection and ends it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_that_cannot_reach_the_server_closes_the_session_and_says_so() {
+    let Some(url) = pg_url("a_cancel_that_cannot_reach_the_server_closes_the_session_and_says_so") else { return };
+    let tag = format!("unsent{}", std::process::id());
+    let _backends = Backends::new(&url, &tag);
+    let (mut q, _, mut obs) = open_cancel_dial(&url, &tag, LaterDials::Refuse).await;
+    start(&q, &mut obs, &tag, ENDLESS_NOTICES).await;
+    let t0 = Instant::now();
+    q.session.cancel();
+    let seen = until_ended(&mut q, 10).await;
+    assert!(seen.iter().any(|e| matches!(e, DbEvent::Failed { id: 1, cancelled: true, .. })), "{seen:?}");
+    ended_unsent(&seen, run_failed_cancelled, |w| *w == DbError::Transport(DialError::NotOpen));
+    ended_on_server(&mut obs, &tag, t0).await;
+}
+
+/// A cancel whose dial never answers is given up within the cancel's own bound (10 s): the
+/// session then closes and says the cancel was not sent, with that reason.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_whose_dial_never_answers_is_given_up_within_its_bound() {
+    let Some(url) = pg_url("a_cancel_whose_dial_never_answers_is_given_up_within_its_bound") else { return };
+    let tag = format!("unsenthang{}", std::process::id());
+    let _backends = Backends::new(&url, &tag);
+    let (mut q, _, mut obs) = open_cancel_dial(&url, &tag, LaterDials::Hang).await;
+    start(&q, &mut obs, &tag, ENDLESS_NOTICES).await;
+    let t0 = Instant::now();
+    q.session.cancel();
+    let seen = until_ended(&mut q, 15).await;
+    assert!(t0.elapsed() < Duration::from_secs(12), "{:?}", t0.elapsed());
+    ended_unsent(&seen, run_failed_cancelled, |w| {
+        matches!(w, DbError::NoAnswer(_) | DbError::Transport(DialError::Timeout(_)))
+    });
+}
+
+/// A cancel is sent once it is written and flushed: a stream whose write side then cannot be
+/// closed (an SSH channel already closed, or one whose end of file never goes out) is never
+/// taken for a cancel that was not sent, and the session works on. The statement here catches
+/// the cancel and runs on past the cancel's own bound (10 s), so a cancel wrongly taken for one
+/// not sent would close the session while it runs.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_written_is_sent_even_when_its_stream_cannot_be_shut_down() {
+    let Some(url) = pg_url("a_cancel_written_is_sent_even_when_its_stream_cannot_be_shut_down") else { return };
+    let caught = "DO $$ BEGIN PERFORM pg_sleep(30); \
+                  EXCEPTION WHEN query_canceled THEN PERFORM pg_sleep(12); END $$";
+    for (name, later) in [("fails", LaterDials::ShutdownFails), ("hangs", LaterDials::ShutdownHangs)] {
+        let tag = format!("sentshut{name}{}", std::process::id());
+        let _backends = Backends::new(&url, &tag);
+        let (mut q, _, mut obs) = open_cancel_dial(&url, &tag, later).await;
+        start(&q, &mut obs, &tag, caught).await;
+        q.session.cancel();
+        let ev = q
+            .wait(
+                |e| matches!(e, DbEvent::Done { id: 1, .. } | DbEvent::Failed { id: 1, .. } | DbEvent::Lost { .. }),
+                20,
+            )
+            .await;
+        assert!(matches!(ev, DbEvent::Done { .. }), "{name}: the cancel was taken, caught, and the run ended: {ev:?}");
+        let late = q.rx.try_recv();
+        assert!(!matches!(late, Ok(DbEvent::Lost { .. })), "{name}: {late:?}");
+        let DbEvent::Page { rows, .. } = q.run(2, "SELECT 42").await else { panic!("{name}: the session works on") };
+        assert_eq!(rows[0][0].as_deref(), Some("42"));
+    }
+}
+
+/// What a cancel that was not sent leaves on the server is unknown: a statement outside a
+/// transaction block may run to its end and commit after the session closed. This pins that
+/// the app never claims otherwise: the row a silent `INSERT` writes is there afterwards.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_write_whose_cancel_was_not_sent_may_still_commit() {
+    let Some(url) = pg_url("a_write_whose_cancel_was_not_sent_may_still_commit") else { return };
+    let pid = std::process::id();
+    let (tag, table) = (format!("unsentwrite{pid}"), format!("public.it_unsent_{pid}"));
+    let _table = pg_clean::TableGuard::new(&url, &[&table]);
+    pg_clean::run_fresh(&url, &format!("CREATE TABLE {table} (x int)")).expect("create");
+    let _backends = Backends::new(&url, &tag);
+    let (mut q, _, mut obs) = open_cancel_dial(&url, &tag, LaterDials::Refuse).await;
+    start(&q, &mut obs, &tag, &format!("INSERT INTO {table} SELECT 1 FROM pg_sleep(2)")).await;
+    let t0 = Instant::now();
+    q.session.cancel();
+    let seen = until_ended(&mut q, 10).await;
+    ended_unsent(&seen, run_failed_cancelled, |_| true);
+    let mut n = 60_000;
+    loop {
+        let DbEvent::Page { rows, .. } = obs.run(n, &format!("SELECT count(*) FROM {table}")).await else {
+            panic!("count")
+        };
+        if rows[0][0].as_deref() == Some("1") {
+            break;
+        }
+        assert!(t0.elapsed() < Duration::from_secs(10), "the write never committed: {rows:?}");
+        n += 1;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+/// A run of several statements ends so too when the cancel of a later statement is not sent.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_not_sent_ends_a_run_of_several_statements_once() {
+    let Some(url) = pg_url("a_cancel_not_sent_ends_a_run_of_several_statements_once") else { return };
+    let tag = format!("unsentsteps{}", std::process::id());
+    let _backends = Backends::new(&url, &tag);
+    let (mut q, _, mut obs) = open_cancel_dial(&url, &tag, LaterDials::Refuse).await;
+    let statements = vec!["SELECT 1".into(), "SELECT pg_sleep(30)".into()];
+    q.session.send(DbCommand::Execute { id: 1, statements, paging: PagingMode::Hold });
+    let mut n = 70_000;
+    while !active_queries(&mut obs, n, &tag).await.iter().any(|t| t.contains("pg_sleep(30)")) {
+        n += 1;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    q.session.cancel();
+    let seen = until_ended(&mut q, 10).await;
+    assert!(seen.iter().any(|e| matches!(e, DbEvent::Failed { id: 1, cancelled: true, .. })), "{seen:?}");
+    ended_unsent(&seen, run_failed_cancelled, |w| *w == DbError::Transport(DialError::NotOpen));
+}
+
+/// Every other request a cancel stops gets its one answer before the session reports the
+/// cancel that was not sent: a page fetch fails cancelled, a count and the allowlist's
+/// question answer `Cancelled`, alone and in an open portal's transaction. (The session's
+/// stream is stalled, so the request never ends by itself.)
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_not_sent_answers_a_fetch_a_count_and_a_check_once() {
+    let Some(url) = pg_url("a_cancel_not_sent_answers_a_fetch_a_count_and_a_check_once") else { return };
+    let rows = "SELECT g FROM generate_series(1, 1200) g";
+    let cases: [(&str, bool, DbCommand); 5] = [
+        ("fetch", true, DbCommand::FetchMore { id: 1 }),
+        ("count", false, DbCommand::Count { id: 2, sql: rows.into() }),
+        ("countin", true, DbCommand::Count { id: 2, sql: rows.into() }),
+        ("check", false, DbCommand::CheckRepeat { id: 2, sql: rows.into() }),
+        ("checkin", true, DbCommand::CheckRepeat { id: 2, sql: rows.into() }),
+    ];
+    for (name, portal, cmd) in cases {
+        let tag = format!("unsent{name}{}", std::process::id());
+        let _backends = Backends::new(&url, &tag);
+        let (mut q, stalled, _obs) = open_cancel_dial(&url, &tag, LaterDials::Refuse).await;
+        if portal {
+            let DbEvent::Page { more: true, .. } = q.run(1, rows).await else { panic!("{name}: a first page") };
+        }
+        stalled.store(true, std::sync::atomic::Ordering::SeqCst);
+        q.session.send(cmd);
+        // The request is in flight (and stays so) when the cancel is asked.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        q.session.cancel();
+        let seen = until_ended(&mut q, 10).await;
+        let answer = |e: &DbEvent| match name {
+            "fetch" => matches!(e, DbEvent::Failed { id: 1, error: DbError::Cancelled, cancelled: true }),
+            "count" | "countin" => matches!(e, DbEvent::Counted { id: 2, result: Err(DbError::Cancelled), .. }),
+            _ => matches!(e, DbEvent::RepeatChecked { id: 2, result: Err(DbError::Cancelled) }),
+        };
+        ended_unsent(&seen, answer, |w| *w == DbError::Transport(DialError::NotOpen));
+    }
+}
+
+/// Closing a session whose cancel request cannot reach the server closes its connection,
+/// never leaving it read on in the background: this statement writes to the client, so the
+/// server notices and ends it.
+#[tokio::test(flavor = "multi_thread")]
+async fn closing_a_session_whose_cancel_cannot_reach_the_server_stops_the_statement() {
+    let Some(url) = pg_url("closing_a_session_whose_cancel_cannot_reach_the_server_stops_the_statement") else {
+        return;
+    };
+    let tag = format!("unsentclose{}", std::process::id());
+    let _backends = Backends::new(&url, &tag);
+    let (q, _, mut obs) = open_cancel_dial(&url, &tag, LaterDials::Refuse).await;
+    start(&q, &mut obs, &tag, ENDLESS_NOTICES).await;
+    let t0 = Instant::now();
+    q.session.close();
+    ended_on_server(&mut obs, &tag, t0).await;
 }
 
 /// A dialer that cannot give a stream fails the connect with its reason, and a session whose

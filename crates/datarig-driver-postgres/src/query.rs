@@ -73,13 +73,20 @@
 //!
 //! Closing: when the UI closes the session while a statement runs, the statement is cancelled
 //! and the connection closed (the server rolls back). When the connection ends by itself, the
-//! running statement fails first, then `Lost` is reported once.
+//! running statement fails first, then `Lost` is reported once. A cancel the user asked for
+//! that cannot reach the server ends so too: the session closes its connection instead of
+//! waiting for a statement it cannot stop, the run ends cancelled, then `Lost` says why
+//! ([`DbError::CancelNotTaken`], [`CancelFailure::NotSent`]). The statement may still run to its end on the server (and
+//! commit outside a transaction block); an open block is rolled back once the server notices
+//! the closed connection.
 
 use crate::connect::{db_error, is_cancel};
 use crate::link::{Closed, Link, Next};
 use crate::route::Cancel;
 use crate::values::{Raw, format_code, format_value, is_json, is_numeric, type_display, value_kind};
-use datarig_core::driver::{Cell, ColumnMeta, ColumnOrigin, DbCommand, DbError, DbEvent, Outcome, PagingMode};
+use datarig_core::driver::{
+    CancelFailure, Cell, ColumnMeta, ColumnOrigin, DbCommand, DbError, DbEvent, Outcome, PagingMode,
+};
 use datarig_core::sql::lexer::{Tok, Token, lex, lex_backslash_strings};
 use datarig_core::sql::risk::{self, Class};
 use std::collections::{HashMap, VecDeque};
@@ -364,9 +371,32 @@ enum Stop {
 }
 
 impl From<Closed> for Stop {
-    fn from(_: Closed) -> Self {
-        Stop::Closed
+    fn from(closed: Closed) -> Self {
+        match closed {
+            Closed::Ui => Stop::Closed,
+            Closed::CancelNotSent(why) => Stop::Lost(DbError::CancelNotTaken(CancelFailure::NotSent(Box::new(why)))),
+        }
     }
+}
+
+/// A request other than a run (a count, the allowlist's question) stopped by `closed`: after a
+/// cancel that could not be sent it still gets its one answer (`cancelled`) before the session
+/// is lost; a session the UI closed answers nothing.
+fn unanswered(events: &UnboundedSender<DbEvent>, closed: Closed, cancelled: DbEvent) -> Stop {
+    if matches!(closed, Closed::CancelNotSent(_)) {
+        let _ = events.send(cancelled);
+    }
+    Stop::from(closed)
+}
+
+/// Count `id`'s answer when it was cancelled.
+fn cancelled_count(id: u64) -> DbEvent {
+    DbEvent::Counted { id, result: Err(DbError::Cancelled), snapshot: false }
+}
+
+/// The allowlist's question `id`'s answer when it was cancelled.
+fn cancelled_check(id: u64) -> DbEvent {
+    DbEvent::RepeatChecked { id, result: Err(DbError::Cancelled) }
 }
 
 /// A run stopped by the session ([`Stop`]), with its reply when it was not answered yet: the
@@ -432,7 +462,7 @@ pub(crate) async fn query_loop(
                     let _ = events.send(DbEvent::Counted { id, result, snapshot });
                     continue;
                 }
-                Err(Closed) => Stop::Closed,
+                Err(closed) => unanswered(&events, closed, cancelled_count(id)),
             },
             Next::Command(DbCommand::CheckRepeat { id, sql }) => {
                 match check_repeat(&client, &mut link, &env, &mut tx, &sql).await {
@@ -440,7 +470,7 @@ pub(crate) async fn query_loop(
                         let _ = events.send(DbEvent::RepeatChecked { id, result });
                         continue;
                     }
-                    Err(Closed) => Stop::Closed,
+                    Err(closed) => unanswered(&events, closed, cancelled_check(id)),
                 }
             }
             // A fetch for a result whose portal is gone (complete, failed or closed): answered
@@ -921,6 +951,8 @@ async fn execute(
         Err(Halted { stop, reply }) => {
             match (&stop, reply) {
                 (Stop::Closed, Some(reply)) => reply.closed(),
+                // The user's cancel could not be sent: the run ends cancelled all the same.
+                (Stop::Lost(DbError::CancelNotTaken(_)), Some(reply)) => reply.fail(DbError::Cancelled, true),
                 // The running statement fails first, then the session reports `Lost`.
                 (Stop::Lost(error), Some(reply)) => reply.fail(error.clone(), false),
                 (_, None) => {}
@@ -1640,7 +1672,17 @@ async fn portal<'a>(
         match link.next().await {
             Next::Command(DbCommand::FetchMore { id: fid }) if fid == id => {
                 let t0 = Instant::now();
-                match halt!(link.guard(token, txn.query_portal(&portal, ask(page_size, &carry))).await, None) {
+                let fetched = match link.guard(token, txn.query_portal(&portal, ask(page_size, &carry))).await {
+                    Ok(fetched) => fetched,
+                    Err(closed) => {
+                        // The user's cancel could not be sent: the fetch ends cancelled.
+                        if matches!(closed, Closed::CancelNotSent(_)) {
+                            paged.fail(DbError::Cancelled, true);
+                        }
+                        return Err(Halted { stop: Stop::from(closed), reply: None });
+                    }
+                };
+                match fetched {
                     Ok(rows) => {
                         let (rows, m) = split_page(&mut carry, rows, page_size);
                         more = m;
@@ -1669,12 +1711,22 @@ async fn portal<'a>(
             // A count of this result's rows runs in the portal's transaction, under a
             // savepoint: the portal goes on paging after it, whatever it answered.
             Next::Command(DbCommand::Count { id: cid, sql }) => {
-                let (result, snapshot) = halt!(counted_in(&txn, link, env, &sql).await, None);
+                let (result, snapshot) = match counted_in(&txn, link, env, &sql).await {
+                    Ok(counted) => counted,
+                    Err(closed) => {
+                        return Err(Halted { stop: unanswered(env.events, closed, cancelled_count(cid)), reply: None });
+                    }
+                };
                 let _ = env.events.send(DbEvent::Counted { id: cid, result, snapshot });
             }
             // So is the allowlist's question, which leaves the portal paging too.
             Next::Command(DbCommand::CheckRepeat { id: cid, sql }) => {
-                let result = halt!(checked_repeat_in(&txn, link, env, &sql).await, None);
+                let result = match checked_repeat_in(&txn, link, env, &sql).await {
+                    Ok(result) => result,
+                    Err(closed) => {
+                        return Err(Halted { stop: unanswered(env.events, closed, cancelled_check(cid)), reply: None });
+                    }
+                };
                 let _ = env.events.send(DbEvent::RepeatChecked { id: cid, result });
             }
             Next::Command(DbCommand::FetchMore { .. } | DbCommand::ClosePortal { .. }) => {}

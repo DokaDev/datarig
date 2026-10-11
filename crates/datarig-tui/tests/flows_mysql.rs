@@ -682,9 +682,9 @@ fn a_statement_the_server_would_not_stop_ends_the_tab_session_and_says_why() {
              DEFINER routine) and it kept sending rows: datarig closed the connection instead of reading them.",
         ),
         (
-            CancelFailure::NotSent,
-            "the request to stop the statement could not reach the server (network or login): datarig closed the \
-             connection.",
+            CancelFailure::NotSent(Box::new(DbError::NoAnswer(std::time::Duration::from_secs(10)))),
+            "the request to stop the statement could not reach the server (no answer within 10.0s): datarig \
+             closed the connection.",
         ),
         (
             CancelFailure::KeptSending,
@@ -699,7 +699,7 @@ fn a_statement_the_server_would_not_stop_ends_the_tab_session_and_says_why() {
         h.ctrl('c');
         assert!(h.session_cancelled(1), "the tab's session was asked to cancel");
         h.tab_db(0, DbEvent::Failed { id, error: DbError::Cancelled, cancelled: true });
-        h.tab_db(0, DbEvent::Lost { error: DbError::CancelNotTaken(cause) });
+        h.tab_db(0, DbEvent::Lost { error: DbError::CancelNotTaken(cause.clone()) });
         assert!(matches!(h.app.tab().results, Results::Cancelled));
         assert!(h.app.tab().exec.running.is_none());
         assert_eq!(h.app.tab().exec.state, SessionState::Lost);

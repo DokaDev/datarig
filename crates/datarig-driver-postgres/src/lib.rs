@@ -9,7 +9,9 @@
 //!   (`Transaction::bind_first_page` of the vendored tokio-postgres), each next page is one
 //!   (`query_portal`). The user's SQL is never rewritten.
 //! * Cancellation uses the protocol-level CancelRequest (`CancelToken::cancel_query`, or
-//!   `cancel_query_raw` through the session's dialer: `route`).
+//!   `cancel_query_raw` through the session's dialer: `route`). One that cannot reach the
+//!   server closes the session's connection, and the session says so (`link`); the statement
+//!   may still run to its end there.
 //! * A session with a dialer (`ConnectOptions::dialer`, an SSH tunnel) reaches the server over
 //!   a stream the dialer opens (`route`).
 
@@ -21,6 +23,11 @@ mod route;
 mod values;
 
 pub use connect::PgDriver;
+
+/// How long a cancel request may take to reach the server before it counts as not sent, for
+/// the app's test that its own last resort waits longer. Not an API.
+#[doc(hidden)]
+pub use route::CANCEL_DIAL;
 
 /// The name of the savepoint counts and the allowlist's question run under, for the
 /// integration tests that check none is left. Not an API.

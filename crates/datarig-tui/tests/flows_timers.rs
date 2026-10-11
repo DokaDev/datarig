@@ -258,3 +258,46 @@ fn a_refused_cancel_of_a_silent_statement_is_said_and_waited_for() {
     let notes = notes(&h);
     assert!(notes.iter().any(|n| n == "The statement ran to its end after the server refused the cancel"), "{notes:?}");
 }
+
+/// A cancel the driver could not send ends the run cancelled and loses the session, and the
+/// status says so with the reason: the reason's own words, its detail in `errors.log` (where
+/// the words point). Said so however long the driver took to give up on it (its own bound, 10 s
+/// for PostgreSQL, is well within the tab's last resort).
+#[test]
+fn a_cancel_that_was_not_sent_says_why() {
+    use datarig_core::driver::{CancelFailure, DbError};
+    use datarig_core::fault::{Fault, FaultKind};
+    for (n, after) in [Duration::ZERO, Duration::from_secs(12)].into_iter().enumerate() {
+        let state = std::env::temp_dir().join(format!("datarig-cancel-unsent-{}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&state);
+        std::fs::create_dir_all(&state).unwrap();
+        let mut h = Harness::connected(Lang::En);
+        h.app.set_paths(Paths { data: None, state: Some(state.clone()) });
+        h.ctrl('e');
+        let qid = h.app.tab().exec.query_id;
+        h.ctrl('c');
+        h.advance(after);
+        assert!(h.app.tab().exec.running.is_some(), "{after:?}: still waiting for the session");
+        h.tab_db(0, DbEvent::Failed { id: qid, error: DbError::Cancelled, cancelled: true });
+        let fault = Fault::new(FaultKind::Other, "ssh channel open refused by the bastion");
+        let why = CancelFailure::NotSent(Box::new(DbError::Connection(fault)));
+        h.tab_db(0, DbEvent::Lost { error: DbError::CancelNotTaken(why) });
+        assert!(h.app.tab().exec.running.is_none());
+        let status = h.status(400, 30);
+        assert!(status.contains("the request to stop the statement could not reach the server"), "{status}");
+        assert!(status.contains("(could not talk to the server"), "the reason: {status}");
+        assert!(status.contains("may still run on the server"), "{status}");
+        assert!(!status.contains("did not answer"), "{status}");
+        let log = std::fs::read_to_string(state.join("errors.log")).expect("logged");
+        assert!(log.contains("ssh channel open refused by the bastion"), "{log}");
+        let _ = std::fs::remove_dir_all(&state);
+    }
+}
+
+/// The tab's last resort on a cancel nobody answers outlasts the PostgreSQL driver's own bound
+/// on a cancel that cannot be sent: the driver says why first, never the tab's "did not
+/// answer".
+#[test]
+fn the_last_resort_outlasts_the_bound_on_a_cancel_not_sent() {
+    assert!(datarig_driver_postgres::CANCEL_DIAL * 2 <= CANCEL_GRACE, "{:?}", datarig_driver_postgres::CANCEL_DIAL);
+}
