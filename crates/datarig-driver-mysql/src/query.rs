@@ -927,8 +927,18 @@ async fn hold(
     let mut refusal = link.refusal(env.killer, &gate);
     let out = hold_on(qr, link, env, id, columns, carry, ended, &mut held, &mut refusal).await;
     drop(refusal);
-    // Nothing sent again for this statement reaches the next one.
-    gate.close().await;
+    // Nothing sent again for this statement reaches the next one (see [`Link::guard`]).
+    let out = match out {
+        Ok(()) if !gate.close().await => {
+            link.cut();
+            Err(Stop::Lost(DbError::CancelNotTaken(CancelFailure::NotSent)))
+        }
+        Ok(()) => Ok(()),
+        Err(stop) => {
+            gate.close().await;
+            Err(stop)
+        }
+    };
     match out {
         Ok(()) => Ok(held),
         Err(stop) => {

@@ -127,8 +127,13 @@ impl Link {
     ) -> Result<T, Closed> {
         let gate = Gate::new();
         let out = self.guarded(cancel, request, &gate).await;
-        // Nothing sent again for this statement reaches the next one.
-        gate.close().await;
+        // Nothing sent again for this statement reaches the next one: a kill that never got its
+        // answer may still be carried out on whatever the connection runs next, so it runs
+        // nothing more (whether the cancel took is not known).
+        if !gate.close().await && out.is_ok() {
+            self.wire.cut();
+            return Err(Closed::CancelNotTaken(CancelFailure::NotSent));
+        }
         out
     }
 
@@ -314,7 +319,7 @@ async fn keeps_sending(wire: &Wire, soak: bool) {
     let (mut seen, mut ticks) = (wire.received(), 0);
     loop {
         tokio::time::sleep(SENDING_TICK).await;
-        if soak && wire.soak() > SOAK_LIMIT {
+        if soak && wire.soak(SOAK_LIMIT) > SOAK_LIMIT {
             return;
         }
         let now = wire.received();

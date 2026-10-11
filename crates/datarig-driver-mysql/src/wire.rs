@@ -59,10 +59,10 @@ impl Wire {
     }
 
     /// Take what the server sent so far off the stream (it stays for the connection, in
-    /// order), without waiting: how much is kept so.
-    pub(crate) fn soak(&self) -> usize {
+    /// order), without waiting, until more than `limit` is kept: how much is kept so.
+    pub(crate) fn soak(&self, limit: usize) -> usize {
         let mut cx = Context::from_waker(std::task::Waker::noop());
-        let _ = self.poll_closed(&mut cx);
+        let _ = self.poll_read_ahead(&mut cx, limit);
         self.lock().map_or(0, |s| s.pushback.len())
     }
 
@@ -82,24 +82,31 @@ impl Wire {
     }
 
     fn poll_closed(&self, cx: &mut Context<'_>) -> Poll<()> {
+        self.poll_read_ahead(cx, usize::MAX)
+    }
+
+    /// Read what the stream has into the pushback until it would wait (`Pending`), ends or
+    /// fails (`Ready`), or more than `limit` is kept (`Ready`).
+    fn poll_read_ahead(&self, cx: &mut Context<'_>, limit: usize) -> Poll<()> {
         let Ok(mut s) = self.lock() else { return Poll::Ready(()) };
         if s.cut {
             return Poll::Ready(());
         }
         let mut chunk = [0u8; 512];
-        loop {
+        while s.pushback.len() <= limit {
             let mut buf = ReadBuf::new(&mut chunk);
             match Pin::new(&mut s.stream).poll_read(cx, &mut buf) {
                 Poll::Ready(Ok(())) if buf.filled().is_empty() => return Poll::Ready(()),
                 Poll::Ready(Ok(())) => {
-                    let read = buf.filled().to_vec();
-                    s.received += read.len() as u64;
-                    s.pushback.extend_from_slice(&read);
+                    let s = &mut *s;
+                    s.received += buf.filled().len() as u64;
+                    s.pushback.extend_from_slice(buf.filled());
                 }
                 Poll::Ready(Err(_)) => return Poll::Ready(()),
                 Poll::Pending => return Poll::Pending,
             }
         }
+        Poll::Ready(())
     }
 }
 

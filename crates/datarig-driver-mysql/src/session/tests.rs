@@ -590,6 +590,56 @@ async fn closing_the_gate_waits_for_a_kill_being_sent() {
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     assert!(!closing.is_finished(), "waits for the kill's answer");
     server.write_all(&packet(1, &[0, 0, 0, 2, 0, 0, 0])).await.unwrap();
-    tokio::time::timeout(std::time::Duration::from_secs(2), closing).await.unwrap().unwrap();
+    let clean = tokio::time::timeout(std::time::Duration::from_secs(2), closing).await.unwrap().unwrap();
+    assert!(clean, "the kill was answered");
     assert!(matches!(*killer.watch().borrow(), Kill::Taken(_)), "taken while the gate was open");
+}
+
+/// With no kill being sent, closing the gate waits for nothing.
+#[tokio::test]
+async fn closing_a_gate_with_no_kill_on_its_way_is_free() {
+    let gate = Gate::new();
+    let t0 = Instant::now();
+    assert!(gate.close().await);
+    assert!(t0.elapsed() < std::time::Duration::from_millis(100), "{:?}", t0.elapsed());
+}
+
+/// A kill whose answer the server holds back past a couple of seconds is still waited for:
+/// the session's next statement goes only once it is answered.
+#[tokio::test]
+async fn closing_the_gate_waits_for_a_kill_answered_late() {
+    let (killer, mut server) = killer_on_a_fake_server();
+    let gate = Gate::new();
+    killer.try_again(&gate);
+    greet(&mut server).await;
+    logged_in(&mut server).await;
+    read_packet(&mut server).await.expect("the kill");
+    let t0 = Instant::now();
+    let closing = tokio::spawn({
+        let gate = gate.clone();
+        async move { gate.close().await }
+    });
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    assert!(!closing.is_finished(), "still waits after 3 s");
+    server.write_all(&packet(1, &[0, 0, 0, 2, 0, 0, 0])).await.unwrap();
+    assert!(closing.await.unwrap(), "answered");
+    assert!(t0.elapsed() >= std::time::Duration::from_secs(3));
+}
+
+/// A kill the server never answers: closing gives up once a kill may have taken its time
+/// ([`KILL_TIMEOUT`]) and says so: the kill may still be carried out later, on whatever the
+/// connection runs then.
+#[tokio::test]
+async fn a_kill_never_answered_leaves_the_gate_unclean() {
+    let (killer, mut server) = killer_on_a_fake_server();
+    let gate = Gate::new();
+    killer.try_again(&gate);
+    greet(&mut server).await;
+    logged_in(&mut server).await;
+    read_packet(&mut server).await.expect("the kill");
+    let t0 = Instant::now();
+    let clean = tokio::time::timeout(KILL_TIMEOUT + std::time::Duration::from_secs(2), gate.close()).await;
+    assert_eq!(clean, Ok(false), "{:?}", t0.elapsed());
+    assert!(t0.elapsed() < KILL_TIMEOUT + std::time::Duration::from_secs(1), "{:?}", t0.elapsed());
+    drop(server);
 }

@@ -499,27 +499,33 @@ impl From<KillFailure> for CancelFailure {
 /// connection idle, and the next statement is sent only once the gate is closed.
 pub(crate) struct Gate {
     open: AtomicBool,
+    /// A kill was written and its answer has not come (yet, or ever: given up on).
+    unanswered: AtomicBool,
     sending: tokio::sync::Mutex<()>,
 }
 
-/// How long closing a [`Gate`] waits for a kill being sent to be answered.
-const GATE_WAIT: Duration = Duration::from_secs(2);
-
 impl Gate {
     pub(crate) fn new() -> Arc<Self> {
-        Arc::new(Gate { open: AtomicBool::new(true), sending: tokio::sync::Mutex::new(()) })
+        Arc::new(Gate {
+            open: AtomicBool::new(true),
+            unanswered: AtomicBool::new(false),
+            sending: tokio::sync::Mutex::new(()),
+        })
     }
 
     fn is_open(&self) -> bool {
         self.open.load(Ordering::SeqCst)
     }
 
-    /// The statement answered: no kill is sent for it any more, once one being sent was
-    /// answered (at most [`GATE_WAIT`]).
-    pub(crate) async fn close(&self) {
-        let sending = tokio::time::timeout(GATE_WAIT, self.sending.lock()).await;
+    /// The statement answered: no kill is sent for it any more. A kill being sent is waited for
+    /// first, as long as one may take ([`KILL_TIMEOUT`]); with none, closing waits for nothing.
+    /// `false`: one was sent and never answered (the server stalls, or the kill was given up
+    /// on). It may still be carried out at any time, on whatever the session runs then: the
+    /// session's connection is not to run anything any more.
+    pub(crate) async fn close(&self) -> bool {
+        let sending = tokio::time::timeout(KILL_TIMEOUT, self.sending.lock()).await;
         self.open.store(false, Ordering::SeqCst);
-        drop(sending);
+        sending.is_ok() && !self.unanswered.load(Ordering::SeqCst)
     }
 }
 
@@ -611,8 +617,14 @@ impl Killer {
                 let mut conn = Conn::connect_with_stream(killer.opts.clone(), Box::new(stream)).await.ok()?;
                 {
                     let _sending = gate.sending.lock().await;
-                    if gate.is_open() && conn.query_drop(format!("KILL QUERY {}", killer.id)).await.is_ok() {
-                        killer.record(Kill::Taken(Instant::now()), || gate.is_open());
+                    if gate.is_open() {
+                        // Set until the answer comes: a kill given up on halfway stays so.
+                        gate.unanswered.store(true, Ordering::SeqCst);
+                        let taken = conn.query_drop(format!("KILL QUERY {}", killer.id)).await.is_ok();
+                        gate.unanswered.store(false, Ordering::SeqCst);
+                        if taken {
+                            killer.record(Kill::Taken(Instant::now()), || gate.is_open());
+                        }
                     }
                 }
                 quit(conn).await;
