@@ -123,11 +123,14 @@ The connection then keeps reading the COPY's data in the background while the se
 sending it, or, for `FROM STDIN`, waits with the server for data neither side sends.
 
 - `src/connection.rs`: each response knows whether its request expects the COPY sub-protocol
-  (`copy`); a COPY that starts in the response to any other request ends the connection with
-  "unexpected message from server" (the request fails as closed), so the socket closes and the
-  server stops the COPY. `RequestMessages::CopyOut`, a new variant written as `Single` is,
+  (`copy`); a COPY that starts in the response to any other request ends the connection (the
+  request fails as closed), so the socket closes and the server stops the COPY.
+- `src/error/mod.rs`: the connection ends with a kind of its own, `UnexpectedCopy` ("the server
+  started a COPY that no request asked for"), told by the new `Error::is_unexpected_copy`, so a
+  caller can say why the connection ended. `RequestMessages::CopyOut`, a new variant written as `Single` is,
   marks the request of `copy_out` (`src/copy_out.rs`); that of `copy_in` is `CopyIn` already.
-- `src/codec.rs`: `BackendMessages::starts_copy`, read from the message headers only.
+- `src/codec.rs`: `BackendMessages::starts_copy`, read from the message headers only, and
+  `COPY_BOTH_RESPONSE_TAG` (postgres-protocol names no tag for CopyBothResponse).
 
 **Warnings on Windows**: `src/client.rs` imports `PathBuf` only on Unix, where
 `Addr::Unix` uses it (upstream imports it on every platform, an unused import on Windows).

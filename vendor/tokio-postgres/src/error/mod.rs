@@ -341,6 +341,8 @@ pub enum ErrorPosition {
 enum Kind {
     Io,
     UnexpectedMessage,
+    // datarig: the server started a COPY that no request asked for.
+    UnexpectedCopy,
     Tls,
     ToSql(usize),
     FromSql(usize),
@@ -382,6 +384,9 @@ impl fmt::Display for Error {
         match &self.0.kind {
             Kind::Io => fmt.write_str("error communicating with the server"),
             Kind::UnexpectedMessage => fmt.write_str("unexpected message from server"),
+            Kind::UnexpectedCopy => {
+                fmt.write_str("the server started a COPY that no request asked for")
+            }
             Kind::Tls => fmt.write_str("error performing TLS handshake"),
             Kind::ToSql(idx) => write!(fmt, "error serializing parameter {idx}"),
             Kind::FromSql(idx) => write!(fmt, "error deserializing column {idx}"),
@@ -429,6 +434,13 @@ impl Error {
         self.0.kind == Kind::Closed
     }
 
+    // datarig: the connection ended because the server started a COPY that no request asked
+    // for (see `Connection`).
+    /// Determines if the server started a COPY that no request asked for.
+    pub fn is_unexpected_copy(&self) -> bool {
+        self.0.kind == Kind::UnexpectedCopy
+    }
+
     /// Returns the SQLSTATE error code associated with the error.
     ///
     /// This is a convenience method that downcasts the cause to a `DbError` and returns its code.
@@ -446,6 +458,11 @@ impl Error {
 
     pub(crate) fn unexpected_message() -> Error {
         Error::new(Kind::UnexpectedMessage, None)
+    }
+
+    // datarig
+    pub(crate) fn unexpected_copy() -> Error {
+        Error::new(Kind::UnexpectedCopy, None)
     }
 
     #[allow(clippy::needless_pass_by_value)]

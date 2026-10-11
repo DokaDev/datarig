@@ -20,6 +20,9 @@ pub enum BackendMessage {
 
 pub struct BackendMessages(BytesMut);
 
+// datarig: postgres-protocol names no tag for CopyBothResponse.
+const COPY_BOTH_RESPONSE_TAG: u8 = b'W';
+
 impl BackendMessages {
     pub fn empty() -> BackendMessages {
         BackendMessages(BytesMut::new())
@@ -32,7 +35,9 @@ impl BackendMessages {
         while let Ok(Some(header)) = backend::Header::parse(buf) {
             if matches!(
                 header.tag(),
-                backend::COPY_IN_RESPONSE_TAG | backend::COPY_OUT_RESPONSE_TAG | b'W'
+                backend::COPY_IN_RESPONSE_TAG
+                    | backend::COPY_OUT_RESPONSE_TAG
+                    | COPY_BOTH_RESPONSE_TAG
             ) {
                 return true;
             }

@@ -370,3 +370,96 @@ async fn copy_to_the_client_is_refused_behind_a_pooler() {
         }
     }
 }
+
+/// The first column of the first row `sql` returns, run on the server directly (not through
+/// the pooler) on a thread and runtime of its own: callable from `Drop` while a test unwinds.
+fn direct(url: &str, sql: &str) -> Result<String, String> {
+    let (url, sql) = (url.to_string(), sql.to_string());
+    let worker = std::thread::spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().map_err(|e| e.to_string())?;
+        rt.block_on(async move {
+            let (client, conn) =
+                tokio_postgres::connect(&url, tokio_postgres::NoTls).await.map_err(|e| e.to_string())?;
+            tokio::spawn(conn);
+            let rows = client.simple_query(&sql).await.map_err(|e| e.to_string())?;
+            Ok(rows
+                .iter()
+                .find_map(|m| match m {
+                    tokio_postgres::SimpleQueryMessage::Row(r) => Some(r.get(0).unwrap_or_default().to_string()),
+                    _ => None,
+                })
+                .unwrap_or_default())
+        })
+    });
+    worker.join().map_err(|_| "the thread panicked".to_string())?
+}
+
+/// Ends every backend that runs a statement with `tag` in its text when it goes out of scope
+/// (also when an assertion fails), so a COPY a test started never keeps running on the server.
+struct TerminateGuard {
+    url: String,
+    tag: String,
+}
+
+impl Drop for TerminateGuard {
+    fn drop(&mut self) {
+        let sql = format!(
+            "SELECT count(pg_terminate_backend(pid)) FROM pg_stat_activity \
+             WHERE query LIKE '%{}%' AND pid <> pg_backend_pid()",
+            self.tag
+        );
+        if let Err(e) = direct(&self.url, &sql) {
+            let _ = writeln!(std::io::stderr(), "warning: {sql}: {e}");
+        }
+    }
+}
+
+/// Behind the pooler, a COPY with the client hidden from a lexer that keeps
+/// `standard_conforming_strings` on (set off for the user's block only) is refused before it is
+/// sent, and the block goes on; the server runs nothing of it. Before the session read the
+/// text both ways it reached the server, and only the client library's check ended it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_copy_hidden_by_backslash_strings_is_refused_behind_a_pooler() {
+    let Some(url) = pooler_url("a_copy_hidden_by_backslash_strings_is_refused_behind_a_pooler") else { return };
+    let Ok(pg) = std::env::var("DATARIG_TEST_PG_URL") else {
+        let _ = writeln!(std::io::stderr(), "SKIPPED: DATARIG_TEST_PG_URL watches the server behind the pooler");
+        return;
+    };
+    let tag = format!("zzpoolcopy{}", std::process::id());
+    let _guard = TerminateGuard { url: pg.clone(), tag: tag.clone() };
+    let mut c = Conn::open(&url, SessionRole::Query, false).await;
+    for (id, sql) in [(1, "BEGIN"), (2, "SET LOCAL standard_conforming_strings = off")] {
+        let ev = c.run(id, sql).await;
+        assert!(matches!(ev, DbEvent::Done { .. }), "{sql}: {ev:?}");
+    }
+    let copy = format!(r"COPY (SELECT g, 'a\'' FROM generate_series(1, 200000000) g) TO STDOUT -- ' {tag}");
+    c.session.send(DbCommand::Execute { id: 3, statements: vec![copy], paging: PagingMode::Hold });
+    let mut seen = Vec::new();
+    let mut deadline = Instant::now() + Duration::from_secs(10);
+    while let Ok(Some(ev)) = tokio::time::timeout_at(deadline.into(), c.rx.recv()).await {
+        let answer =
+            matches!(&ev, DbEvent::Page { id: 3, .. } | DbEvent::Done { id: 3, .. } | DbEvent::Failed { id: 3, .. });
+        if answer || matches!(ev, DbEvent::Lost { .. }) {
+            if seen.is_empty() {
+                deadline = Instant::now() + Duration::from_millis(300);
+            }
+            seen.push(ev);
+        }
+    }
+    assert!(
+        matches!(&seen[..], [DbEvent::Failed { id: 3, error: DbError::CopyStdio, cancelled: false }]),
+        "refused, and the session goes on: {seen:?}"
+    );
+    let DbEvent::Page { rows, .. } = c.run(4, r"SELECT 'b\''").await else { panic!("the block goes on") };
+    assert_eq!(rows[0][0].as_deref(), Some("b'"), "still off in the block");
+    assert!(matches!(c.run(5, "ROLLBACK").await, DbEvent::Done { .. }));
+    let active = format!(
+        "SELECT count(*) FROM pg_stat_activity WHERE query LIKE '%{tag}%' AND state = 'active' \
+         AND pid <> pg_backend_pid()"
+    );
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while direct(&pg, &active).as_deref() != Ok("0") {
+        assert!(Instant::now() < deadline, "the server still runs it");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}

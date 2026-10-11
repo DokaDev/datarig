@@ -153,7 +153,7 @@ where
             // STDIN` would wait for data forever. The connection ends instead, so the server
             // stops the COPY when its socket closes.
             if !response.copy && messages.starts_copy() {
-                return Err(Error::unexpected_message());
+                return Err(Error::unexpected_copy());
             }
 
             match response.sender.poll_ready(cx) {

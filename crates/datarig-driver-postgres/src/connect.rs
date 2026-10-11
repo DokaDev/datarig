@@ -404,6 +404,10 @@ pub(crate) fn db_error(e: &tokio_postgres::Error) -> DbError {
     if e.is_closed() {
         return DbError::Closed;
     }
+    // The connection ended because the server started a COPY no request reads.
+    if e.is_unexpected_copy() {
+        return DbError::CopyStarted;
+    }
     let mut kind = FaultKind::Other;
     let mut src = std::error::Error::source(e);
     while let Some(inner) = src {

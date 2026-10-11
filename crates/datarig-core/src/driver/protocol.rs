@@ -73,6 +73,10 @@ pub enum DbError {
     /// connection's COPY sub-protocol, which the session does not carry. The app refuses them
     /// first; this is the driver's own check.
     CopyStdio,
+    /// The server started a COPY to or from the client that no request asked for (a `COPY …
+    /// TO STDOUT` or `FROM STDIN` the driver's own check missed): the connection was closed, so
+    /// the server stopped it.
+    CopyStarted,
     /// The server refused a statement because it ran inside a transaction: one that cannot run
     /// in a transaction block (SQLSTATE `25001`: `VACUUM`, `CREATE INDEX CONCURRENTLY`, `CREATE
     /// DATABASE`, …) or a procedure's transaction control (`2D000`, a `COMMIT` in a `CALL`), in a
@@ -167,6 +171,7 @@ impl DbError {
             | DbError::Cancelled
             | DbError::ReadWriteRefused
             | DbError::CopyStdio
+            | DbError::CopyStarted
             | DbError::NotRepeatable(_)
             | DbError::Locked
             | DbError::NotFound

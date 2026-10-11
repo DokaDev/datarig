@@ -80,7 +80,7 @@ use crate::link::{Closed, Link, Next};
 use crate::route::Cancel;
 use crate::values::{Raw, format_code, format_value, is_json, is_numeric, type_display, value_kind};
 use datarig_core::driver::{Cell, ColumnMeta, ColumnOrigin, DbCommand, DbError, DbEvent, Outcome, PagingMode};
-use datarig_core::sql::lexer::{Tok, Token, lex};
+use datarig_core::sql::lexer::{Tok, Token, lex, lex_backslash_strings};
 use datarig_core::sql::risk::{self, Class};
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
@@ -814,29 +814,38 @@ pub(crate) fn returns_no_rows(sql: &str) -> bool {
 }
 
 /// Whether `sql` is `COPY … FROM STDIN` or `COPY … TO STDOUT` (the client's side of a COPY):
-/// `STDIN` or `STDOUT` right after `FROM` or `TO`, outside parentheses, as the grammar puts
-/// them. A table or a column may be named `stdout`; a file name is a string. Only the `COPY`
-/// statement itself starts a COPY with the client (not one in a function or a `DO` block), so
-/// its first word tells.
+/// `STDIN` or `STDOUT` right after the first `FROM` or `TO` outside parentheses, the one that
+/// follows the table or the query (both reserved words, so no bare name; a later one, in a
+/// `WHERE` clause, compares a column). A table or a column may be named `stdout`; a file name
+/// is a string. Only the `COPY` statement itself starts a COPY with the client (not one in a
+/// function or a `DO` block), so its first word tells. Read both ways the server may lex the
+/// text: with `standard_conforming_strings` off (a session may set it) `\'` ends no string.
 pub(crate) fn copies_with_client(sql: &str) -> bool {
-    let toks: Vec<Token> = lex(sql).into_iter().filter(|t| !t.is_trivia()).collect();
+    copies_with_client_in(sql, &lex(sql))
+        || sql.contains('\\') && copies_with_client_in(sql, &lex_backslash_strings(sql))
+}
+
+/// [`copies_with_client`] of `sql` lexed as `toks`.
+fn copies_with_client_in(sql: &str, toks: &[Token]) -> bool {
     let word = |t: &Token| t.is_word().then(|| t.text(sql).to_ascii_uppercase());
-    if toks.first().and_then(word).as_deref() != Some("COPY") {
+    let mut toks = toks.iter().filter(|t| !t.is_trivia());
+    if toks.next().and_then(word).as_deref() != Some("COPY") {
         return false;
     }
     let mut depth = 0usize;
-    let mut outside = Vec::new();
-    for t in &toks {
+    let mut outside = toks.filter_map(|t| {
         match t.kind {
             Tok::LParen => depth += 1,
             Tok::RParen => depth = depth.saturating_sub(1),
-            _ if depth == 0 => outside.push(word(t)),
+            _ if depth == 0 => return Some(word(t)),
             _ => {}
         }
+        None
+    });
+    if !outside.any(|w| matches!(w.as_deref(), Some("FROM" | "TO"))) {
+        return false;
     }
-    outside
-        .windows(2)
-        .any(|w| matches!(w[0].as_deref(), Some("FROM" | "TO")) && matches!(w[1].as_deref(), Some("STDIN" | "STDOUT")))
+    matches!(outside.next().flatten().as_deref(), Some("STDIN" | "STDOUT"))
 }
 
 /// Whether the rows of `sql` can be shown before its transaction commits: a plain read
