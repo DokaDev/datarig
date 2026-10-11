@@ -5,10 +5,11 @@
 //! held result's next page, a count, a write, and the same inside the user's transaction and on a
 //! read-only profile. The rows are a temporary table of the session's own (the server needs no
 //! test data, only a database the user may make a temporary table in). The explorer opening a
-//! table costs its structure, read on the metadata session: of a table `zz_bench_structure` the
-//! bench makes in the URL's database for that and drops again.
+//! table costs its structure, read on the metadata session, and so does showing its DDL: of a
+//! table `zz_bench_structure` the bench makes in the URL's database for that and drops again.
 
 use crate::rtt::{WiredSession, report, scenario};
+use datarig_core::driver::ddl::DdlObject;
 use datarig_core::driver::{DbCommand, DbEvent, PagingMode, SessionRole};
 use datarig_core::sql::dialect::MySqlMode;
 use datarig_driver_mysql::MyDriver;
@@ -115,6 +116,18 @@ pub async fn run(url: &str, one_way: Duration, runs: usize) -> Result<Value, Str
         costs.push(c);
     }
     out.push(report("table_structure", &costs));
+    // Show DDL of that table: the server's `SHOW CREATE TABLE`.
+    let mut costs = Vec::new();
+    for _ in 0..runs {
+        let id = m.next_id();
+        let object = DdlObject::Relation { schema: database.clone(), name: "zz_bench_structure".into() };
+        let (c, ev) = m.measure(DbCommand::LoadDdl { id, object }, |e| matches!(e, DbEvent::Ddl { .. })).await?;
+        if !matches!(ev, DbEvent::Ddl { result: Ok(_), .. }) {
+            return Err(format!("table_ddl: {ev:?}"));
+        }
+        costs.push(c);
+    }
+    out.push(report("table_ddl", &costs));
     s.cost("DROP TABLE zz_bench_structure").await?;
     // A read-only profile (the session is read-only on the server: no table of its own).
     let mut r = WiredSession::open_with(&MyDriver, url, one_way, true, SessionRole::Query).await?;

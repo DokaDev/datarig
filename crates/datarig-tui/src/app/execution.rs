@@ -1425,6 +1425,42 @@ impl App {
             DbError::ReadOnlyLost => Label::DbReadOnlyLost,
             DbError::Locked => Label::DbLocked,
             DbError::NotFound => Label::DbNotFound,
+            DbError::Ambiguous(kinds) => {
+                use datarig_core::driver::ddl::ObjectKind as K;
+                // The example names a kind the name has: the last, a routine or such rather than
+                // the table the explorer shows already.
+                let kind = match kinds.last() {
+                    Some(K::Table) | None => "table",
+                    Some(K::View) => "view",
+                    Some(K::Procedure) => "procedure",
+                    Some(K::Function) => "function",
+                    Some(K::Trigger) => "trigger",
+                    Some(K::Event) => "event",
+                }
+                .to_string();
+                let kinds: Vec<String> = kinds
+                    .iter()
+                    .map(|k| {
+                        self.i18n
+                            .label(match k {
+                                K::Table => Label::DbKindTable,
+                                K::View => Label::DbKindView,
+                                K::Procedure => Label::DbKindProcedure,
+                                K::Function => Label::DbKindFunction,
+                                K::Trigger => Label::DbKindTrigger,
+                                K::Event => Label::DbKindEvent,
+                            })
+                            .to_string()
+                    })
+                    .collect();
+                return self.i18n.msg(&Msg::DbAmbiguous { kinds: kinds.join(", "), kind }).to_string();
+            }
+            DbError::DefinitionHidden => Label::DbDefinitionHidden,
+            DbError::NotAName => Label::DbNotAName,
+            DbError::NoDatabase => Label::DbNoDatabase,
+            DbError::KindUnsupported(kind) => {
+                return self.i18n.msg(&Msg::DbKindUnsupported { kind: kind.clone() }).to_string();
+            }
             DbError::TlsRequired => Label::DbTlsRequired,
             DbError::VersionUnsupported { server, needed } => {
                 return self

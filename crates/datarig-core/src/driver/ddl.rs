@@ -9,6 +9,7 @@
 //! the server prints them (quoted and qualified where SQL needs it).
 
 use super::structure::TableStructure;
+use crate::sql::dialect::Dialect;
 
 /// The object whose DDL is asked for.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -40,6 +41,21 @@ impl DdlObject {
     }
 }
 
+/// What kind of object a name names, where objects of different kinds may share a name (MySQL:
+/// a table, a procedure and a trigger of one database may all be `audit`), for saying which
+/// ones a name names when it names more than one ([`DbError::Ambiguous`]).
+///
+/// [`DbError::Ambiguous`]: super::DbError::Ambiguous
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum ObjectKind {
+    Table,
+    View,
+    Procedure,
+    Function,
+    Trigger,
+    Event,
+}
+
 /// An object's DDL as the catalog has it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum DdlSource {
@@ -48,11 +64,19 @@ pub enum DdlSource {
     Trigger(TriggerDdl),
     Function(FunctionDdl),
     /// DDL text the server writes itself (MySQL's `SHOW CREATE …`), shown as it is: `name` is
-    /// the object's name as the server gives it. PostgreSQL never sends one: its DDL is
-    /// rebuilt from the catalog.
+    /// the object's name as the server gives it, of its kind (a trigger's `db.table.trigger`, a
+    /// routine's `db.name()`), so that objects of different kinds are told apart. PostgreSQL
+    /// never sends one: its DDL is rebuilt from the catalog.
     Verbatim {
         name: String,
         text: String,
+        /// The database (MySQL: the schema) the object is in, which the text's unqualified
+        /// names are written as: the text runs there.
+        database: Option<String>,
+        /// The dialect the text is written in: how its strings read (MySQL: a table's and a
+        /// view's always with backslash escapes, a routine's or a trigger's in the `sql_mode`
+        /// it was made under). `None`: not known.
+        written_in: Option<Dialect>,
     },
 }
 

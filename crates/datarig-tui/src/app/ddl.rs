@@ -9,7 +9,9 @@
 //! another profile or database, or for a tab that went is dropped. A locked object shows only
 //! that it is locked, never a part of its DDL. The text can be moved in, selected, searched
 //! and yanked; a command that would change it says it is read-only. `o` opens the text in a
-//! new console on the same profile and database.
+//! new console on the same profile and database; the server's own text (MySQL's) in a console
+//! in the object's database, with its strings written as that console's `sql_mode` reads them
+//! (`sql::requote`): the text shows them as the server wrote them.
 
 use super::explorer::RowKind;
 use super::tabs::{DdlState, DdlTab};
@@ -18,6 +20,16 @@ use datarig_core::driver::ddl::{DdlObject, DdlSource};
 use datarig_core::driver::structure::StructureGroup;
 use datarig_core::driver::{DbError, SessionContext};
 use datarig_core::sql::ddl::ddl_text;
+use datarig_core::sql::dialect::{Dialect, Language};
+
+/// What a DDL read gave a tab: its name, its text, and for the server's own text the database it
+/// runs in and the dialect it is written in.
+struct Read {
+    name: String,
+    text: String,
+    database: Option<String>,
+    written_in: Option<datarig_core::sql::dialect::Dialect>,
+}
 
 impl App {
     /// Profile `id`'s driver reads an object's DDL (`Capabilities::ddl`).
@@ -25,10 +37,16 @@ impl App {
         self.profile(id).and_then(|p| self.driver(&p.driver)).is_some_and(|d| d.capabilities().ddl)
     }
 
+    /// Profile `id`'s sessions speak MySQL.
+    fn mysql_profile(&self, id: ProfileId) -> bool {
+        matches!(self.profile_language(Some(id)), Language::Sql(Dialect::MySql(_)))
+    }
+
     /// The object explorer row `row` stands for, and where: its profile and database (`None`: the
     /// profile's own). A table, view or materialized view, or anything under one, is that
-    /// relation; an index or a trigger (or a line under it) is that index or trigger, and with
-    /// `function` a trigger is the function it calls. `None` for anything else.
+    /// relation; an index or a trigger (or a line under it) is that index or trigger (on MySQL an
+    /// index is its table), and with `function` a trigger is the function it calls. `None` for
+    /// anything else.
     pub(super) fn ddl_object_of_row(
         &self,
         row: &RowKind,
@@ -71,6 +89,8 @@ impl App {
                 }
             }
             _ if function => return None,
+            // MySQL has no DDL of an index of its own: its table's `CREATE TABLE` defines it.
+            Some((StructureGroup::Indexes, _)) if self.mysql_profile(id) => DdlObject::Relation { schema, name },
             Some((StructureGroup::Indexes, k)) => {
                 DdlObject::Index { schema, name: structure()?.indexes.get(k)?.name.clone() }
             }
@@ -181,7 +201,7 @@ impl App {
 
     /// DDL tab `tab` is in `state` now (no request waits any more), with `text` in its editor
     /// when it was read.
-    fn set_ddl(&mut self, tab: TabId, state: DdlState, read: Option<(String, String)>) {
+    fn set_ddl(&mut self, tab: TabId, state: DdlState, read: Option<Read>) {
         let Some(t) = self.tabs.get_mut(tab) else { return };
         let Some(d) = t.doc.ddl.as_mut() else { return };
         // Waiting for the connection keeps what was read until the new answer replaces it;
@@ -189,8 +209,10 @@ impl App {
         let clear = !matches!(state, DdlState::Connecting);
         d.request = None;
         d.state = state;
-        if let Some((name, text)) = read {
+        if let Some(Read { name, text, database, written_in }) = read {
             d.name = Some(name);
+            d.database = database;
+            d.written_in = written_in;
             // The cursor stays where it was when the same object is read again.
             let (row, col, top) = (t.editor.row, t.editor.col, t.editor.top);
             t.replace_editor(Editor::read_only(&text));
@@ -223,8 +245,12 @@ impl App {
         let Some(tab) = waiting.map(|t| t.id) else { return };
         match result {
             Ok(source) => {
-                let name = source.label();
-                self.set_ddl(tab, DdlState::Loaded, Some((name, ddl_text(&source))));
+                let (name, text) = (source.label(), ddl_text(&source));
+                let (database, written_in) = match source {
+                    DdlSource::Verbatim { database, written_in, .. } => (database, written_in),
+                    _ => (None, None),
+                };
+                self.set_ddl(tab, DdlState::Loaded, Some(Read { name, text, database, written_in }));
             }
             Err(DbError::Locked) => self.set_ddl(tab, DdlState::Locked, None),
             Err(e) => {
@@ -282,14 +308,36 @@ impl App {
     }
 
     /// `o` / "Open in a console" in a DDL tab: its text in a new console on the same profile,
-    /// database and schema, with the focus in its editor. Nothing read yet: said.
+    /// database and schema, with the focus in its editor. Nothing read yet: said. The server's
+    /// own text (MySQL's) goes to a console in the object's database, its strings written as the
+    /// new console's `sql_mode` reads them; when that mode or the one the text is written in is
+    /// not known, or the strings cannot be written for it, nothing opens and that is said.
     pub(super) fn ddl_to_console(&mut self) {
         let t = self.tab();
-        let loaded = t.doc.ddl.as_ref().is_some_and(|d| d.state == DdlState::Loaded);
-        if !loaded {
+        let Some(d) = t.doc.ddl.as_ref().filter(|d| d.state == DdlState::Loaded) else {
             return self.flash(Notice::new(Label::DdlNothingRead, Level::Info));
+        };
+        let (mut text, profile, mut context) = (t.editor.text(), t.profile, t.context.clone());
+        if let Some(id) = profile.filter(|id| self.mysql_profile(*id)) {
+            let (database, written_in) = (d.database.clone(), d.written_in);
+            let Some(from) = written_in else {
+                return self.flash(Notice::new(Label::DdlTextModeUnknown, Level::Warning));
+            };
+            // A new console reads its text in the mode its session starts in, the connection's.
+            let Some(Language::Sql(to)) = self.conns.get(id).and_then(|c| c.language) else {
+                return self.flash(Notice::new(Label::DdlConsoleModeUnknown, Level::Warning));
+            };
+            match datarig_core::sql::requote::requote_strings(&text, from, to) {
+                Ok(t) => text = t,
+                Err(datarig_core::sql::requote::RequoteError::ControlChar) => {
+                    return self.flash(Notice::new(Label::DdlRequoteControl, Level::Warning));
+                }
+                Err(_) => return self.flash(Notice::new(Label::DdlRequoteFailed, Level::Warning)),
+            }
+            if database.is_some() {
+                context = self.session_context(id, None, database);
+            }
         }
-        let (text, profile, context) = (t.editor.text(), t.profile, t.context.clone());
         self.console_with(&text, profile, context);
     }
 
@@ -343,6 +391,12 @@ impl App {
             return Err(Notice::new(Label::DdlNoConnection, Level::Error));
         };
         let SessionContext { database, schema } = t.context.clone();
+        // MySQL: the tab's database by name (its own when it names none), never what the shared
+        // metadata session has current.
+        let schema = match self.mysql_profile(id) {
+            true => schema.or_else(|| Some(self.own_database(id)).filter(|d| !d.is_empty())),
+            false => schema,
+        };
         let object = DdlObject::Named { name: name.to_string(), schema };
         self.open_ddl(id, database, object);
         Ok(())
