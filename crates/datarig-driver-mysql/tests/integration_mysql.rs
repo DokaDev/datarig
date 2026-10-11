@@ -2158,14 +2158,21 @@ async fn a_ddl_read_never_queues_behind_a_metadata_lock_nor_keeps_one() {
         a.disconnect().await.unwrap();
         r.map_err(|e| e.to_string())
     });
-    tokio::time::sleep(Duration::from_millis(500)).await;
     let waiting_sql = format!(
         "SELECT COUNT(*) FROM information_schema.PROCESSLIST \
          WHERE STATE = 'Waiting for table metadata lock' AND INFO LIKE '%{}%c9%'",
         t.name
     );
-    let waiting: Option<u64> = side_admin.query_first(&waiting_sql).await.unwrap();
-    assert_eq!(waiting, Some(1), "the ALTER waits");
+    // The ALTER waits (once it has reached the server: a loaded machine may take a while).
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let waiting: Option<u64> = side_admin.query_first(&waiting_sql).await.unwrap();
+        if waiting == Some(1) {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the ALTER waits: {waiting:?}");
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
     reads(&mut m, &mut side_admin, meta, &relations, false).await;
     reads(&mut m, &mut side_admin, meta, std::slice::from_ref(&trigger), true).await;
     let waiting: Option<u64> = side_admin.query_first(&waiting_sql).await.unwrap();
