@@ -508,7 +508,7 @@ fn mysql_rows_copy_as_mysql_sql_or_say_why_not() {
     // Text read in latin1 (SET NAMES latin1) is not the text.
     h.tab_db(0, session("+00:00", "latin1"));
     items_result(&mut h, "Items", "9", "x", 4);
-    refused(&mut h, "column “TXT” is text the session reads in latin1, not UTF-8 (SET NAMES utf8mb4 to copy it)");
+    refused(&mut h, "column “TXT” is text the session reads in latin1, not utf8mb4 (SET NAMES utf8mb4 to copy it)");
     h.tab_db(0, session("+00:00", "utf8mb4"));
     // A table created after the keys were read.
     items_result(&mut h, "Later", "1", "x", 4);

@@ -561,7 +561,10 @@ is tested only lightly.
 - The explorer: the server's databases right under the profile (a MySQL database is the
   schema), their tables and views with the server's estimates (`~rows · size`), and a table's
   structure (columns, keys, indexes, constraints, triggers); completion; `:use db` and the
-  database picker (`Space c d`).
+  database picker (`Space c d`). Check constraints need MySQL 8.0.16 or later, a user with
+  grants on some columns only sees those columns, triggers are listed only with the `TRIGGER`
+  privilege (without it the group says it is not known), `lower_case_table_names = 2` is not
+  tested, and MariaDB needs 10.5 or later (`JSON_ARRAYAGG`).
 - Show DDL: `D` on a table, view or trigger (or its menu), or `:ddl [kind] name` (`name` or
   `db.name`, in the tab's database; `kind` is `table`, `view`, `procedure`, `function`,
   `trigger` or `event`, needed only when one name names several), opens the server's own
@@ -589,8 +592,11 @@ is tested only lightly.
   the result. A copy is refused, naming the column, where a value would not be written whole: a
   `FLOAT` (the server sends it rounded to about six digits), a `TIMESTAMP` while the session's
   time zone is not a fixed offset (`SET time_zone = '+00:00'` first), text while the session's
-  results are not UTF-8 (after a `SET NAMES latin1`), and an `AUTO_INCREMENT` value of 0 (an
-  `INSERT` takes it as the next number).
+  results are not `utf8mb4` (after a `SET NAMES latin1`, or `utf8mb3`), and an `AUTO_INCREMENT`
+  value of 0 (an `INSERT` takes it as the next number). A whole result is refused when it was
+  read while a procedure, an `EXECUTE` or an executable comment ran, or before the session said
+  its values, and when a `SET time_zone` or `SET NAMES` ran while it was read: run the statement
+  again.
 - The keys copy as SQL needs are read for every database when the connection opens (and again
   after DDL run in datarig), so a table created elsewhere later needs `r` on the connection in
   the explorer before its rows can be copied. Column names compare without case, and database and
@@ -620,7 +626,9 @@ spill (up to its limit) and the server is free at once. So is a locking read (`F
 `FOR SHARE`, `LOCK IN SHARE MODE`): under the page limit it would lock fewer rows than it asks
 for. The explorer and completion read in autocommit with `lock_wait_timeout = 2` and a
 10-second `max_execution_time`: behind a waiting `ALTER TABLE` they give up after two seconds
-instead of queueing behind it.
+instead of queueing behind it. A read that opens a table's definition (`SHOW CREATE TABLE`)
+takes a high-priority shared metadata lock (`SHARED_HIGH_PRIO`) for the moment it reads: MySQL
+grants it past a waiting `ALTER TABLE`, and it is gone once the read has answered.
 
 **Read-only profiles.** Two layers, as on PostgreSQL: datarig refuses everything that is not a
 read before it is sent, including `CALL`, executable comments (`/*! … */`), functions that are

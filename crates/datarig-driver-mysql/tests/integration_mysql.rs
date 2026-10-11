@@ -2318,11 +2318,17 @@ async fn a_ddl_read_never_queues_behind_a_metadata_lock_nor_keeps_one() {
     let (alter_id, alter) = waiting_alter(&admin, &t.q()).await;
     // `SHOW CREATE TABLE` takes a high-priority shared lock for the moment it reads, granted past
     // the waiting ALTER (which waits for the held result whatever the read does) and gone once it
-    // has answered: the read never queues, and keeps nothing.
+    // has answered: the read never queues, keeps nothing, and the only lock of its the ALTER can
+    // be seen behind is that one, never a shared read or write lock or a stronger one.
     let ((), seen) = watched(&admin, meta, &[alter_id], &t.name, async {
         reads(&mut m, &mut side_admin, meta, &relations, false).await;
     })
     .await;
+    assert!(
+        seen.held_up.iter().all(|w| w.ends_with(": ours SHARED_HIGH_PRIO GRANTED")),
+        "the ALTER waited for a lock of a read: {:?}",
+        seen.held_up
+    );
     assert!(seen.queued.is_empty(), "a read queued behind the ALTER: {:?}", seen.queued);
     let ((), seen) = watched(&admin, meta, &[alter_id], &t.name, async {
         reads(&mut m, &mut side_admin, meta, std::slice::from_ref(&trigger), true).await;

@@ -1011,7 +1011,7 @@
 "copy.insert.why.not_in_keys" = "테이블이나 그 열 중 하나가 키 캐시에 없습니다: 키를 읽은 뒤에 만들어졌거나 이 사용자에게 보이지 않습니다 (탐색기에서 연결을 다시 불러오면 다시 읽습니다)"
 "copy.sql_not_whole" = "SQL로 복사하지 않았습니다: 열 “{column}”은(는) {reason}"
 "copy.sql_why.float" = "FLOAT이며, MySQL은 이를 약 6자리로 반올림해 보냅니다"
-"copy.sql_why.charset" = "세션이 UTF-8이 아닌 {charset}(으)로 읽는 텍스트입니다 (복사하려면 SET NAMES utf8mb4)"
+"copy.sql_why.charset" = "세션이 utf8mb4가 아닌 {charset}(으)로 읽는 텍스트입니다 (복사하려면 SET NAMES utf8mb4)"
 "copy.sql_why.time_zone" = "고정 오프셋이 아닌 시간대 {zone}(으)로 표시된 TIMESTAMP입니다 (복사하려면 SET time_zone = '+00:00')"
 "copy.sql_why.auto_increment_zero" = "AUTO_INCREMENT이고 값이 0인 행이 있어, INSERT가 다음 번호로 바꿉니다"
 "copy.sql_why.not_shown_whole" = "전체가 표시되지 않은 값이 있습니다"
