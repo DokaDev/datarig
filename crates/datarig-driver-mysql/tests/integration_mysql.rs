@@ -1872,14 +1872,13 @@ async fn the_metadata_session_reads_a_tables_structure() {
     assert_eq!(hidden.columns.len(), 10);
 }
 
-/// How many tables connection `id` has opened (`Opened_tables` of its thread).
-async fn opened_tables(a: &mut mysql_async::Conn, id: u64) -> u64 {
-    let sql = format!(
-        "SELECT CAST(s.VARIABLE_VALUE AS UNSIGNED) FROM performance_schema.status_by_thread s \
-         JOIN performance_schema.threads th ON th.THREAD_ID = s.THREAD_ID \
-         WHERE th.PROCESSLIST_ID = {id} AND s.VARIABLE_NAME = 'Opened_tables'"
-    );
-    a.query_first::<u64, _>(sql).await.unwrap().unwrap()
+/// Whether table `name` of `shop` is in the server's table cache: a table some session opened
+/// since it was flushed (`SHOW OPEN TABLES`). Unlike a count of the tables a session opened, the
+/// server's own dictionary tables and other tests' tables do not count.
+async fn is_open(a: &mut mysql_async::Conn, name: &str) -> bool {
+    let open: Vec<(String, String, u64, u64)> =
+        a.query(format!("SHOW OPEN TABLES FROM shop LIKE '{name}'")).await.unwrap();
+    open.iter().any(|(_, table, _, _)| table == name)
 }
 
 /// Reading a table's structure does not open the table (step 1 is a guard against that, not a
@@ -1912,12 +1911,10 @@ async fn a_structure_read_never_queues_behind_a_metadata_lock_nor_keeps_one() {
     //    this does not tell whether they are read).
     let fresh = numbers(&admin, "structopen", 10).await;
     side_admin.query_drop(format!("FLUSH TABLES {}", fresh.q())).await.unwrap();
-    // A read of another table first: the server's own dictionary tables it opens the first time
-    // count too.
     read(structure_of(&mut m, &t.name).await, 2);
-    let opened = opened_tables(&mut side_admin, meta).await;
+    assert!(!is_open(&mut side_admin, &fresh.name).await, "flushed");
     read(structure_of(&mut m, &fresh.name).await, 2);
-    assert_eq!(opened_tables(&mut side_admin, meta).await, opened, "the table was not opened");
+    assert!(!is_open(&mut side_admin, &fresh.name).await, "the table was not opened");
     // 2. Another session holds `LOCK TABLES … WRITE`, and writes while the read runs.
     let mut lock = side(&admin).await;
     lock.query_drop(format!("LOCK TABLES {} WRITE", t.q())).await.unwrap();
@@ -2841,9 +2838,9 @@ async fn the_keys_read_never_queues_behind_a_metadata_lock_nor_keeps_one() {
     let fresh = numbers(&admin, "keysopen", 10).await;
     side_admin.query_drop(format!("FLUSH TABLES {}", fresh.q())).await.unwrap();
     read(keys_of(&mut m).await, &t.name);
-    let opened = opened_tables(&mut side_admin, meta).await;
+    assert!(!is_open(&mut side_admin, &fresh.name).await, "flushed");
     read(keys_of(&mut m).await, &fresh.name);
-    assert_eq!(opened_tables(&mut side_admin, meta).await, opened, "no table was opened");
+    assert!(!is_open(&mut side_admin, &fresh.name).await, "no table was opened");
     // 1. Another session holds `LOCK TABLES … WRITE`, and writes while the read runs.
     let mut lock = side(&admin).await;
     lock.query_drop(format!("LOCK TABLES {} WRITE", t.q())).await.unwrap();
