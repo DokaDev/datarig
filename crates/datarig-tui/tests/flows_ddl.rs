@@ -760,7 +760,7 @@ fn o_writes_the_strings_for_the_consoles_mode_in_the_objects_database() {
     let open = |console: Option<Dialect>, written_in: Option<Dialect>| {
         let mut h = mysql_shop_open();
         if let Some(d) = console {
-            h.db(DbEvent::Language(Language::Sql(d)));
+            h.meta_db("local-my", DbEvent::Language(Language::Sql(d)));
         }
         h.goto("items");
         h.keys("D");
@@ -791,4 +791,41 @@ fn o_writes_the_strings_for_the_consoles_mode_in_the_objects_database() {
         assert_eq!(h.app.tabs.len(), tabs, "nothing opens");
         assert!(h.status(200, 30).contains(says), "{}", h.status(200, 30));
     }
+}
+
+/// `o` before any query session of the profile has opened: the new console reads its text in
+/// the mode the metadata session started in (the connection's default), so the text is written
+/// for it, not refused.
+#[test]
+fn o_before_any_query_session_uses_the_connections_default_mode() {
+    let mut h = mysql_shop_open();
+    // The metadata session's first word: the mode a new session starts in.
+    h.meta_db("local-my", DbEvent::Language(Language::Sql(NO_ESCAPES)));
+    h.goto("items");
+    h.keys("D");
+    let id = asked(&h.sent())[0].0;
+    h.db(answer(id, Ok(verbatim("shop.items", "CREATE TABLE `t` (`v` text DEFAULT 'a\\\\b');\n", "shop"))));
+    assert!(!h.roles().contains(&datarig_core::driver::SessionRole::Query), "no query session yet: {:?}", h.roles());
+    h.app.focus = Focus::Editor;
+    let tabs = h.app.tabs.len();
+    h.keys("o");
+    assert_eq!(h.app.tabs.len(), tabs + 1, "{}", h.status(200, 30));
+    assert_eq!(h.app.tab().editor.text(), "CREATE TABLE `t` (`v` text DEFAULT 'a\\b');\n");
+}
+
+/// A string with a control character (here a carriage return) cannot go into a console that
+/// reads without backslash escapes except raw: nothing opens, and that is said.
+#[test]
+fn o_refuses_a_control_character_a_console_would_get_raw() {
+    let mut h = mysql_shop_open();
+    h.meta_db("local-my", DbEvent::Language(Language::Sql(NO_ESCAPES)));
+    h.goto("items");
+    h.keys("D");
+    let id = asked(&h.sent())[0].0;
+    h.db(answer(id, Ok(verbatim("shop.items", "CREATE TABLE `t` (`v` text DEFAULT 'r\\r\\nx');\n", "shop"))));
+    h.app.focus = Focus::Editor;
+    let tabs = h.app.tabs.len();
+    h.keys("o");
+    assert_eq!(h.app.tabs.len(), tabs, "nothing opens");
+    assert!(h.status(220, 30).contains("holds a control character"), "{}", h.status(220, 30));
 }

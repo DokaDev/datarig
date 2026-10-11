@@ -329,6 +329,9 @@ impl App {
             };
             match datarig_core::sql::requote::requote_strings(&text, from, to) {
                 Ok(t) => text = t,
+                Err(datarig_core::sql::requote::RequoteError::ControlChar) => {
+                    return self.flash(Notice::new(Label::DdlRequoteControl, Level::Warning));
+                }
                 Err(_) => return self.flash(Notice::new(Label::DdlRequoteFailed, Level::Warning)),
             }
             if database.is_some() {

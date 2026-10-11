@@ -22,6 +22,9 @@ pub enum RequoteError {
     Unclosed,
     /// Not MySQL text: nothing else is requoted.
     NotMySql,
+    /// A value holds a control character (a carriage return, NUL, backspace, Ctrl+Z) that only a
+    /// backslash escape writes visibly: without escapes it would go into the text raw.
+    ControlChar,
 }
 
 /// `text`, written in `from`, with every string written as `to` reads the same value. The text as
@@ -47,17 +50,50 @@ pub fn requote_strings(text: &str, from: Dialect, to: Dialect) -> Result<String,
             _ => continue,
         };
         let q = body.chars().next().unwrap_or('\'');
-        if body.len() < 2 || !body.ends_with(q) {
+        // Closed only where the reader's rules close it: the token ends with its closing quote.
+        if closing_quote(body, q, !f.no_backslash_escapes) != Some(body.len() - q.len_utf8()) {
             return Err(RequoteError::Unclosed);
         }
         let value = unescape(&body[1..body.len() - 1], q, !f.no_backslash_escapes);
         out.push_str(&text[at..k.start]);
         out.push_str(prefix);
-        out.push_str(&to.quote_literal(&value));
+        out.push_str(&written(&value, to, t.no_backslash_escapes)?);
         at = k.end;
     }
     out.push_str(&text[at..]);
     Ok(out)
+}
+
+/// Where string `body` (from its opening quote `q`) closes, as a reader with or without
+/// `backslash` escapes reads it: the byte index of its closing quote, `None` when it does not.
+fn closing_quote(body: &str, q: char, backslash: bool) -> Option<usize> {
+    let mut chars = body.char_indices().skip(1).peekable();
+    while let Some((i, c)) = chars.next() {
+        if c == '\\' && backslash {
+            chars.next();
+        } else if c == q {
+            if chars.peek().is_some_and(|(_, n)| *n == q) {
+                chars.next();
+            } else {
+                return Some(i);
+            }
+        }
+    }
+    None
+}
+
+/// `value` as a string `to` reads it. Without backslash escapes a control character other than
+/// a tab or a line feed would go into the text raw: [`RequoteError::ControlChar`]. With them, a
+/// carriage return, a backspace and Ctrl+Z are written escaped (NUL is, by `quote_literal`).
+fn written(value: &str, to: Dialect, no_backslash_escapes: bool) -> Result<String, RequoteError> {
+    let raw = |c: char| c.is_control() && !matches!(c, '\t' | '\n');
+    if no_backslash_escapes {
+        if value.chars().any(raw) {
+            return Err(RequoteError::ControlChar);
+        }
+        return Ok(to.quote_literal(value));
+    }
+    Ok(to.quote_literal(value).replace('\r', "\\r").replace('\u{8}', "\\b").replace('\u{1A}', "\\Z"))
 }
 
 /// The value of a string's inside `inner` between quotes `q`: a doubled quote is one; with

@@ -1438,6 +1438,7 @@
 "ddl.text_mode_unknown" = "Not opened: how this DDL's strings are written is not known, so they cannot be written for a console"
 "ddl.console_mode_unknown" = "Not opened: the sql_mode a new console of this connection reads its text in is not known yet (connect first)"
 "ddl.requote_failed" = "Not opened: this DDL's strings cannot be written as the console's sql_mode reads them (it reads double quotes otherwise, or a string is not closed)"
+"ddl.requote_control" = "Not opened: a string of this DDL holds a control character (a carriage return, NUL, …) that the console's sql_mode, without backslash escapes, could only take raw"
 "ddl.command_usage" = ":ddl needs a name here (:ddl schema.name), or the explorer's cursor on an object"
 "ddl.read_only" = "The DDL tab is read-only: {key} opens it in a new console"
 "ddl.copied" = { one = "Copied the DDL ({count} line, {method})", other = "Copied the DDL ({count} lines, {method})" }
