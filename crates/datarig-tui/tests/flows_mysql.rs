@@ -390,3 +390,102 @@ fn a_lost_sessions_mode_goes_with_it() {
     assert_eq!(h.app.tab_language(tab), my(server));
     assert_eq!(h.app.tab().exec.prepared.language(), my(server));
 }
+
+/// `shop.Items` as the MySQL driver reports its keys: `id` the primary key, a blob, a bit, a
+/// text and a JSON column; names compared as MySQL compares them.
+fn items_keys() -> datarig_core::driver::keys::KeyCatalog {
+    use datarig_core::driver::keys::{KeyCatalog, KeyKind, NameRule};
+    let mut k = KeyCatalog::default();
+    k.set_names(NameRule::MySql { tables_ignore_case: false });
+    let names = ["id", "bin", "bt", "txt", "js"];
+    k.add_table(1, "shop", "Items", names.iter().enumerate().map(|(i, n)| (i as i16 + 1, n.to_string())));
+    k.mark(1, &[1], KeyKind::Primary);
+    k
+}
+
+/// The explorer's statement of `shop.Items` run, and its one row back, the grid focused. The
+/// origins name the table as the server writes it in the result (`txt` in another case).
+fn items_result(h: &mut Harness, table: &str, txt: &str) {
+    use datarig_core::driver::{ColumnMeta, ColumnOrigin, ValueKind};
+    h.app.run(vec![format!("SELECT * FROM `shop`.`{table}`")]);
+    let id = sent_run(h);
+    let col = |name: &str, ty: &str, kind: ValueKind| {
+        let origin = ColumnOrigin::Named { schema: "shop".into(), table: table.into(), column: name.into() };
+        ColumnMeta::new(name.into(), ty.into(), kind, Some(origin))
+    };
+    let columns = vec![
+        col("id", "int", ValueKind::Integer),
+        col("bin", "varbinary", ValueKind::Bytes),
+        col("bt", "bit", ValueKind::Bit),
+        col("TXT", "varchar", ValueKind::Text),
+        col("js", "json", ValueKind::Json),
+    ];
+    let row = vec![
+        Some("7".to_string()),
+        Some("0x00FF5C".to_string()),
+        Some("b'101'".to_string()),
+        Some(txt.to_string()),
+        Some(r#"{"a": "b\\c"}"#.to_string()),
+    ];
+    h.tab_db(
+        0,
+        DbEvent::Page { id, columns: Some(columns), rows: vec![row], more: false, elapsed: Default::default() },
+    );
+    h.app.focus = datarig_tui::app::Focus::Results;
+}
+
+/// A MySQL result copied as SQL: backtick names, MySQL's literals (bytes `X'…'`, bits `b'…'`,
+/// strings escaped as the session's mode reads them), the table's own column names; an UPDATE
+/// keyed by the primary key. Refused, it says why in MySQL's terms: the keys still being read,
+/// a table the key cache does not have, keys that could not be read, a value not in hand whole.
+#[test]
+fn mysql_rows_copy_as_mysql_sql_or_say_why_not() {
+    let mut h = mysql();
+    let clip = FakeClipboard::attach(&mut h, false, &[]);
+    h.db(DbEvent::Connected);
+    // The keys are not read yet.
+    items_result(&mut h, "Items", "it's \\ here");
+    h.command("copy insert");
+    let status = h.status(200, 45);
+    assert!(status.contains("Not copied as INSERT: the tables' keys are still being read"), "{status}");
+    assert!(!status.contains("not known yet, or could not be read"), "{status}");
+    h.db(DbEvent::Keys(Ok(items_keys())));
+    h.command("copy insert");
+    assert_eq!(
+        clip.last().as_deref(),
+        Some(
+            "INSERT INTO `shop`.`Items` (`id`, `bin`, `bt`, `txt`, `js`) \
+             VALUES (7, X'00FF5C', b'101', 'it''s \\\\ here', '{\"a\": \"b\\\\\\\\c\"}');"
+        )
+    );
+    h.command("copy update");
+    assert_eq!(
+        clip.last().as_deref(),
+        Some(
+            "UPDATE `shop`.`Items` SET `bin` = X'00FF5C', `bt` = b'101', `txt` = 'it''s \\\\ here', \
+             `js` = '{\"a\": \"b\\\\\\\\c\"}' WHERE `id` = 7;"
+        )
+    );
+    // Under NO_BACKSLASH_ESCAPES a backslash is written once.
+    let plain = MySqlMode { no_backslash_escapes: true, ..MySqlMode::default() };
+    h.tab_db(0, DbEvent::Language(my(plain)));
+    h.command("copy insert");
+    assert!(clip.last().is_some_and(|c| c.contains("'it''s \\ here'")), "{:?}", clip.last());
+    // A table created after the keys were read.
+    items_result(&mut h, "Later", "x");
+    h.command("copy insert");
+    let status = h.status(220, 45);
+    assert!(status.contains("Not copied as INSERT: its table is not in the key cache"), "{status}");
+    // Text the session could only show as its bytes.
+    items_result(&mut h, "Items", "0xE9");
+    let copies = clip.texts.lock().unwrap().len();
+    h.command("copy insert");
+    assert!(h.status(200, 45).contains("Not copied as SQL: a value is not in hand whole"), "{}", h.status(200, 45));
+    assert_eq!(clip.texts.lock().unwrap().len(), copies, "nothing copied");
+    // The keys could not be read: the server's reason.
+    h.db(DbEvent::Keys(Err(DbError::Server("ERROR 1142 (42000): denied".into()))));
+    items_result(&mut h, "Items", "x");
+    h.command("copy insert");
+    let status = h.status(220, 45);
+    assert!(status.contains("the tables' columns could not be read (ERROR 1142 (42000): denied)"), "{status}");
+}

@@ -355,6 +355,9 @@ impl App {
         let mut skipped = String::new();
         // `:copy insert` of rows that are not a projection of that table: said after the copy.
         let mut as_is = None;
+        // A value of an SQL copy that is not the whole value ([`export::sql_whole`]): the copy is
+        // refused once the rows were read.
+        let mut not_whole = false;
         let text = {
             let t = self.tab();
             let Results::Rows(rs) = &t.results else { return };
@@ -369,6 +372,11 @@ impl App {
                 })
                 .collect();
             let header = self.prefs.copy_header.applies(count);
+            // Whether every value of `rows` is whole, so that it can be written as SQL.
+            let whole = |rows: &[export::Row]| {
+                rows.iter()
+                    .all(|r| r.iter().zip(&columns).all(|(v, c)| v.is_none_or(|v| export::sql_whole(d, c.kind, v))))
+            };
             // The chosen columns of the rows of `b`, `COPY_CHUNK` at a time, into `write`.
             let stream = |write: &mut dyn FnMut(&[export::Row])| {
                 rs.rows.for_each_chunk(b.rows.clone(), COPY_CHUNK, |chunk| {
@@ -413,7 +421,10 @@ impl App {
                         return self.flash(Notice::new(Label::CopyInSeveralColumns, Level::Warning));
                     }
                     let mut values: Vec<Option<String>> = Vec::new();
-                    let read = stream(&mut |rows| values.extend(rows.iter().map(|r| r[0].map(str::to_string))));
+                    let read = stream(&mut |rows| {
+                        not_whole |= !whole(rows);
+                        values.extend(rows.iter().map(|r| r[0].map(str::to_string)));
+                    });
                     let rows: Vec<export::Row> = values.iter().map(|v| vec![v.as_deref()]).collect();
                     match (read, export::sql_in(d, &columns, &rows)) {
                         (Err(fault), _) => Err(fault),
@@ -444,7 +455,11 @@ impl App {
                         keys: plan.keys.clone(),
                     };
                     let mut w = export::Writer::new(export::Format::Update(d, target), &columns);
-                    stream(&mut |rows| w.rows(rows)).map(|()| w.finish())
+                    stream(&mut |rows| {
+                        not_whole |= !whole(rows);
+                        w.rows(rows);
+                    })
+                    .map(|()| w.finish())
                 }
                 (None, _) => {
                     let origins: Vec<_> = b.cols.iter().map(|&c| rs.columns[c].meta.origin.clone()).collect();
@@ -477,6 +492,7 @@ impl App {
                     let columns: Vec<_> = written.iter().map(|w| columns[w.0]).collect();
                     let mut w = export::Writer::new(export::Format::Sql(d, target), &columns);
                     stream(&mut |rows| {
+                        not_whole |= !whole(rows);
                         let rows: Vec<export::Row> =
                             rows.iter().map(|r| written.iter().map(|w| r[w.0]).collect()).collect();
                         w.rows(&rows);
@@ -485,6 +501,7 @@ impl App {
                 }
             };
             match written {
+                Ok(_) if not_whole => return self.flash(Notice::new(Label::CopySqlNotWhole, Level::Warning)),
                 Ok(text) => text,
                 Err(fault) => {
                     let error = self.fault_text("copy.read_failed", &fault);
@@ -773,6 +790,15 @@ impl App {
         });
         if let (NoCatalog, Some(error)) = (why, failed) {
             return self.i18n.msg(&Msg::CopyInsertWhyKeysFailed { error }).to_string();
+        }
+        // MySQL's reasons in its own words: the keys are read at connect, so a missing table is
+        // one created later or one the user may not see.
+        if matches!(self.tab_dialect(self.tab().id), Dialect::MySql(_)) {
+            match why {
+                NoCatalog => return self.i18n.label(Label::CopyInsertWhyKeysLoading).to_string(),
+                UnknownTable => return self.i18n.label(Label::CopyInsertWhyNotInKeys).to_string(),
+                _ => {}
+            }
         }
         let label = match why {
             NotSelect => Label::CopyInsertWhyNotSelect,

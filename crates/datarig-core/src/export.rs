@@ -647,9 +647,52 @@ pub fn sql_value(d: Dialect, kind: Kind, v: Option<&str>) -> String {
         // A negative zero (`-0` of a float) is quoted: bare, it is the integer 0 and loses its sign.
         Some(v) if kind == Kind::Number && sql_number(v) && !negative_zero(v) => v.to_string(),
         Some(v) if kind == Kind::Bool && (v == "true" || v == "false") => v.to_string(),
+        // MySQL shows bytes as `0x…` and bits as `b'…'` (every byte, every bit): written as its
+        // hexadecimal and bit literals, which are the value itself (a string literal of that
+        // text would be the text).
+        Some(v) if matches!(d, Dialect::MySql(_)) && kind == Kind::Bytes && mysql_hex(v) => {
+            format!("X'{}'", &v[2..])
+        }
+        Some(v) if matches!(d, Dialect::MySql(_)) && kind == Kind::Bit && mysql_bits(v) => v.to_string(),
         // Bytes (`\x…`) and bits too: PostgreSQL reads them from a string literal.
         Some(v) => d.quote_literal(v),
     }
+}
+
+/// `0x` and an even number of upper-case hexadecimal digits: binary data as the MySQL driver
+/// shows it.
+fn mysql_hex(v: &str) -> bool {
+    v.strip_prefix("0x").is_some_and(|h| h.len() % 2 == 0 && h.bytes().all(|b| matches!(b, b'0'..=b'9' | b'A'..=b'F')))
+}
+
+/// `b'…'` of at least one binary digit: a bit value as the MySQL driver shows it.
+fn mysql_bits(v: &str) -> bool {
+    v.strip_prefix("b'")
+        .and_then(|r| r.strip_suffix('\''))
+        .is_some_and(|d| !d.is_empty() && d.bytes().all(|b| b == b'0' || b == b'1'))
+}
+
+/// Whether `v`, a value of kind `kind` as the driver showed it, is the whole value, so that
+/// [`sql_value`] writes the value itself. On MySQL, bytes and bits must be in the driver's
+/// forms (`0x…`, `b'…'`), and a text value the driver could only show as its bytes (text that
+/// is not UTF-8, after the session's result character set was changed: `0x…` whose bytes are
+/// not UTF-8) is not the text. Every PostgreSQL value is whole.
+pub fn sql_whole(d: Dialect, kind: Kind, v: &str) -> bool {
+    match (d, kind) {
+        (Dialect::Postgres, _) => true,
+        (Dialect::MySql(_), Kind::Bytes) => mysql_hex(v),
+        (Dialect::MySql(_), Kind::Bit) => mysql_bits(v),
+        (Dialect::MySql(_), Kind::Number | Kind::Bool | Kind::Json | Kind::Array(_)) => true,
+        (Dialect::MySql(_), Kind::Text) => !(mysql_hex(v) && std::str::from_utf8(&unhex(&v[2..])).is_err()),
+    }
+}
+
+/// The bytes of upper-case hexadecimal digits `h` (an even number of them).
+fn unhex(h: &str) -> Vec<u8> {
+    h.as_bytes()
+        .chunks(2)
+        .filter_map(|p| std::str::from_utf8(p).ok().and_then(|p| u8::from_str_radix(p, 16).ok()))
+        .collect()
 }
 
 /// Why values are not copied as an SQL `IN` list.

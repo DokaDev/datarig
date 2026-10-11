@@ -61,7 +61,7 @@ impl Driver for MyDriver {
             server_paging: true,
             cancel: true,
             introspection: true,
-            key_metadata: false,
+            key_metadata: true,
             contexts: false,
             structure: true,
             ddl: false,

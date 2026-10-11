@@ -68,13 +68,57 @@ pub struct TableKeys {
     pub view: bool,
 }
 
+/// How the names of a catalog compare: as the server compares them.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NameRule {
+    /// Exactly (PostgreSQL: a name is as the catalog stores it, quoted or folded).
+    #[default]
+    Exact,
+    /// MySQL: a column's name never minds the case; a database's or a table's does with
+    /// `lower_case_table_names = 0`, and does not with 1 or 2 (`tables_ignore_case`).
+    MySql { tables_ignore_case: bool },
+}
+
+impl NameRule {
+    /// Whether two table (or schema) names are the same.
+    pub fn same_table(self, a: &str, b: &str) -> bool {
+        match self {
+            NameRule::MySql { tables_ignore_case: true } => same_ignoring_case(a, b),
+            NameRule::Exact | NameRule::MySql { .. } => a == b,
+        }
+    }
+
+    /// Whether two column names are the same.
+    pub fn same_column(self, a: &str, b: &str) -> bool {
+        match self {
+            NameRule::Exact => a == b,
+            NameRule::MySql { .. } => same_ignoring_case(a, b),
+        }
+    }
+
+    /// The key a table (or schema) name is looked up by: the same for names that are the same.
+    fn table_key(self, name: &str) -> String {
+        match self {
+            NameRule::MySql { tables_ignore_case: true } => name.to_lowercase(),
+            NameRule::Exact | NameRule::MySql { .. } => name.to_string(),
+        }
+    }
+}
+
+fn same_ignoring_case(a: &str, b: &str) -> bool {
+    a == b || a.to_lowercase() == b.to_lowercase()
+}
+
 /// The tables of a database with their columns and keys.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct KeyCatalog {
     tables: BTreeMap<u32, TableKeys>,
     /// schema → table → table id, for lookups by name (the explorer's column nodes, a
-    /// [`ColumnOrigin::Named`]), without a key to allocate.
+    /// [`ColumnOrigin::Named`]), without a key to allocate; the names as [`NameRule::table_key`]
+    /// keys them.
     by_name: HashMap<String, HashMap<String, u32>>,
+    /// How names compare (exactly unless the driver says otherwise).
+    names: NameRule,
 }
 
 impl KeyCatalog {
@@ -84,8 +128,24 @@ impl KeyCatalog {
             .into_iter()
             .map(|(n, name)| (n, ColumnKeys { name, marks: KeyMarks::default(), generated: Generated::No }))
             .collect();
-        self.by_name.entry(schema.to_string()).or_default().insert(name.to_string(), id);
+        let (s, n) = (self.names.table_key(schema), self.names.table_key(name));
+        self.by_name.entry(s).or_default().insert(n, id);
         self.tables.insert(id, TableKeys { schema: schema.to_string(), name: name.to_string(), columns, view: false });
+    }
+
+    /// Compare names by `rule` from now on (the tables known so far too).
+    pub fn set_names(&mut self, rule: NameRule) {
+        self.names = rule;
+        self.by_name.clear();
+        for (id, t) in &self.tables {
+            let (s, n) = (rule.table_key(&t.schema), rule.table_key(&t.name));
+            self.by_name.entry(s).or_default().insert(n, *id);
+        }
+    }
+
+    /// How its names compare.
+    pub fn names(&self) -> NameRule {
+        self.names
     }
 
     /// Table `id` is a view (or a materialized view).
@@ -129,21 +189,22 @@ impl KeyCatalog {
         self.tables.get(&table)?.columns.get(&column)
     }
 
-    /// The id of table `table` of `schema`, the names exactly as the catalog has them.
+    /// The id of table `table` of `schema`, the names compared by the catalog's rule.
     fn id_by_name(&self, schema: &str, table: &str) -> Option<u32> {
-        self.by_name.get(schema)?.get(table).copied()
+        self.by_name.get(&self.names.table_key(schema))?.get(&self.names.table_key(table)).copied()
     }
 
     /// The table id and column number of `o`: as they are for a [`ColumnOrigin::Pg`] (known
-    /// to the catalog or not), looked up by name for a [`ColumnOrigin::Named`]. Names are
-    /// compared exactly: a driver that names origins gives them as its catalog stores them (it
-    /// knows its server's case rules), and the catalog does not fold them.
+    /// to the catalog or not), looked up by name for a [`ColumnOrigin::Named`]. Names compare by
+    /// the catalog's [`NameRule`] (exactly unless the driver set another): a driver that names
+    /// origins gives them as its server does, which may differ in case from its catalog.
     fn locate(&self, o: &ColumnOrigin) -> Option<(u32, i16)> {
         match o {
             ColumnOrigin::Pg { table, column } => Some((*table, *column)),
             ColumnOrigin::Named { schema, table, column } => {
                 let id = self.id_by_name(schema, table)?;
-                let (n, _) = self.tables.get(&id)?.columns.iter().find(|(_, c)| c.name == *column)?;
+                let (n, _) =
+                    self.tables.get(&id)?.columns.iter().find(|(_, c)| self.names.same_column(&c.name, column))?;
                 Some((id, *n))
             }
         }
@@ -158,7 +219,7 @@ impl KeyCatalog {
     pub fn marks_by_name(&self, schema: &str, table: &str, column: &str) -> KeyMarks {
         self.id_by_name(schema, table)
             .and_then(|id| self.tables.get(&id))
-            .and_then(|t| t.columns.values().find(|c| c.name == column))
+            .and_then(|t| t.columns.values().find(|c| self.names.same_column(&c.name, column)))
             .map(|c| c.marks)
             .unwrap_or_default()
     }
@@ -169,7 +230,7 @@ impl KeyCatalog {
             let id = self.id_by_name(schema, name);
             return id.and_then(|id| self.tables.get(&id)).ok_or(NotInsertable::NoSuchTable);
         }
-        let mut hits = self.tables.values().filter(|t| t.name == name);
+        let mut hits = self.tables.values().filter(|t| self.names.same_table(&t.name, name));
         match (hits.next(), hits.next()) {
             (Some(t), None) => Ok(t),
             (None, _) => Err(NotInsertable::NoSuchTable),
@@ -285,7 +346,7 @@ pub fn insert_source<'a>(
         return Err(RepeatedColumn);
     }
     let table = catalog.ok_or(NoCatalog)?.table(first.table).ok_or(UnknownTable)?;
-    if !from.names(table) {
+    if !from.names(table, catalog.map(KeyCatalog::names).unwrap_or_default()) {
         return Err(OtherTable);
     }
     if table.view {
@@ -293,7 +354,7 @@ pub fn insert_source<'a>(
     }
     let columns =
         origins.iter().map(|o| table.columns.get(&o.column)).collect::<Option<Vec<_>>>().ok_or(UnknownTable)?;
-    distinct(names)?;
+    distinct(names, catalog.map(KeyCatalog::names).unwrap_or_default())?;
     plan(table, columns)
 }
 
@@ -395,10 +456,13 @@ pub fn insert_into<'a>(
     let catalog = catalog.ok_or(NoCatalog)?;
     let (schema, name) = table_name(d, target).ok_or(NoSuchTable)?;
     let table = catalog.find(schema.as_deref(), &name)?;
-    distinct(names)?;
+    let rule = catalog.names();
+    distinct(names, rule)?;
     let columns = names
         .iter()
-        .map(|n| table.columns.values().find(|c| c.name == *n).ok_or_else(|| NoSuchColumn(n.to_string())))
+        .map(|n| {
+            table.columns.values().find(|c| rule.same_column(&c.name, n)).ok_or_else(|| NoSuchColumn(n.to_string()))
+        })
         .collect::<Result<Vec<_>, _>>()?;
     if let Some(c) = columns.iter().find(|c| c.generated == Generated::Expression) {
         return Err(GeneratedColumn(c.name.clone()));
@@ -406,9 +470,10 @@ pub fn insert_into<'a>(
     plan(table, columns)
 }
 
-fn distinct(names: &[&str]) -> Result<(), NotInsertable> {
-    let mut seen = HashSet::new();
-    if names.iter().all(|n| seen.insert(*n)) { Ok(()) } else { Err(NotInsertable::DuplicateNames) }
+/// Every name of `names` is another column's, as `rule` compares column names.
+fn distinct(names: &[&str], rule: NameRule) -> Result<(), NotInsertable> {
+    let twice = names.iter().enumerate().any(|(i, a)| names[..i].iter().any(|b| rule.same_column(a, b)));
+    if twice { Err(NotInsertable::DuplicateNames) } else { Ok(()) }
 }
 
 /// Write `cols` (the table column of each result column, in result order) into `table`.
@@ -435,9 +500,10 @@ pub struct FromTable {
 }
 
 impl FromTable {
-    /// Whether it names table `t` (without a schema, any schema: the search path is not known).
-    fn names(&self, t: &TableKeys) -> bool {
-        self.name == t.name && self.schema.as_ref().is_none_or(|s| *s == t.schema)
+    /// Whether it names table `t` (without a schema, any schema: the search path is not known),
+    /// the names compared by `rule`.
+    fn names(&self, t: &TableKeys, rule: NameRule) -> bool {
+        rule.same_table(&self.name, &t.name) && self.schema.as_ref().is_none_or(|s| rule.same_table(s, &t.schema))
     }
 }
 

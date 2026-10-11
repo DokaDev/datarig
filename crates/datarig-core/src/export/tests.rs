@@ -379,3 +379,49 @@ fn bytes_and_bits_are_written_as_text() {
     assert_eq!(Kind::from(ValueKind::Bytes), Kind::Bytes);
     assert_eq!(Kind::from(ValueKind::Bit), Kind::Bit);
 }
+
+const MY: Dialect = Dialect::MySql(crate::sql::dialect::MySqlMode {
+    ansi_quotes: false,
+    no_backslash_escapes: false,
+    dollar_quotes: false,
+});
+
+/// MySQL's bytes (`0x…`) and bits (`b'…'`) are written as hexadecimal and bit literals,
+/// strings by the session's mode; PostgreSQL's stay string literals.
+#[test]
+fn mysql_values_are_mysql_literals() {
+    assert_eq!(sql_value(MY, Kind::Bytes, Some("0x00FF27")), "X'00FF27'");
+    assert_eq!(sql_value(MY, Kind::Bytes, Some("0x")), "X''");
+    assert_eq!(sql_value(MY, Kind::Bit, Some("b'0101'")), "b'0101'");
+    assert_eq!(sql_value(MY, Kind::Json, Some(r#"{"a": "b\\c"}"#)), r#"'{"a": "b\\\\c"}'"#);
+    assert_eq!(sql_value(MY, Kind::Text, Some("it's \\ \0")), r"'it''s \\ \0'");
+    let plain = Dialect::MySql(crate::sql::dialect::MySqlMode { no_backslash_escapes: true, ..Default::default() });
+    assert_eq!(sql_value(plain, Kind::Text, Some("a\\b")), r"'a\b'");
+    assert_eq!(sql_value(MY, Kind::Number, Some("18446744073709551615")), "18446744073709551615");
+    assert_eq!(sql_value(PG, Kind::Bytes, Some("\\x00ff")), r"'\x00ff'");
+    let insert = sql_insert(
+        MY,
+        &Target::Table { schema: "shop", name: "t", columns: vec!["b", "n"], overriding: true },
+        &[col("b", Kind::Bytes), col("n", Kind::Number)],
+        &[vec![Some("0x41"), None]],
+    );
+    assert_eq!(insert, "INSERT INTO `shop`.`t` (`b`, `n`) VALUES (X'41', NULL);", "no OVERRIDING on MySQL");
+}
+
+/// A value the driver could not show whole is not written as SQL: on MySQL, bytes or bits not
+/// in the driver's forms, and text shown as its bytes because it is not UTF-8. A text that only
+/// looks like bytes (they are UTF-8) is text.
+#[test]
+fn only_whole_values_are_written_as_sql() {
+    assert!(sql_whole(MY, Kind::Bytes, "0x00FF"));
+    assert!(!sql_whole(MY, Kind::Bytes, "0x0"));
+    assert!(!sql_whole(MY, Kind::Bytes, "\\x00"));
+    assert!(sql_whole(MY, Kind::Bit, "b'1'"));
+    assert!(!sql_whole(MY, Kind::Bit, "b''"));
+    assert!(!sql_whole(MY, Kind::Bit, "5"));
+    assert!(!sql_whole(MY, Kind::Text, "0xE9"), "latin1 'é', not UTF-8");
+    assert!(sql_whole(MY, Kind::Text, "0x41"), "the text 0x41");
+    assert!(sql_whole(MY, Kind::Text, "0xC3A9"), "UTF-8 bytes: the driver would have shown the text");
+    assert!(sql_whole(MY, Kind::Text, "hello"));
+    assert!(sql_whole(PG, Kind::Bytes, "anything"));
+}

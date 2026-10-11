@@ -308,8 +308,7 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
 
 Planned, in no particular order and with no dates:
 
-- MySQL: table structure beyond columns, DDL, copy as SQL, row counts and the plan view; MariaDB
-  as a driver of its own
+- MySQL: the plan view (`EXPLAIN` as a tree); MariaDB as a driver of its own
 - Drivers for Valkey/Redis and Elasticsearch
 - TLS connections (today every connection is plain TCP; use an SSH tunnel across untrusted
   networks, and servers that require TLS cannot be reached yet)
@@ -559,20 +558,41 @@ is tested only lightly.
 - Transactions as the server reports them after each statement; a statement that commits your
   open transaction by itself (DDL and others) is noted in Messages.
 - The explorer: the server's databases right under the profile (a MySQL database is the
-  schema), their tables and views with the server's estimates (`~rows · size`), and the columns
-  of a table; completion; `:use db` and the database picker (`Space c d`).
-- Marks, hints, charts, and copying rows as TSV, CSV or JSON.
+  schema), their tables and views with the server's estimates (`~rows · size`); completion;
+  `:use db` and the database picker (`Space c d`).
+- A table's structure, as on PostgreSQL: its columns (`AUTO_INCREMENT`, generated columns,
+  defaults as SQL), primary key, foreign keys (Enter goes to the referenced table, in another
+  database too), indexes (prefix, descending, functional, full-text, spatial, invisible), unique
+  and check constraints (a check the server keeps `NOT ENFORCED` says so) and triggers (which
+  call no function: their body is in the trigger). It is one `information_schema` read that
+  opens no table. Its limits: `information_schema` lists only the columns you have a privilege
+  on, so a column-level grant shows part of a table; triggers are listed only to a user with the
+  `TRIGGER` privilege on the table, otherwise the group says it is unknown; checks need MySQL
+  8.0.16 (older servers drop them); MariaDB needs 10.5 (`JSON_ARRAYAGG`);
+  `lower_case_table_names = 2` (macOS, Windows) is not tested.
+- Show DDL (`D`, the menu, `:ddl [kind] name` with the kinds `table`, `view`, `procedure`,
+  `function`, `trigger` and `event`): the server's own `SHOW CREATE` text. An index row shows its
+  table's DDL (MySQL has no index DDL of its own). Triggers, routines and events are wrapped in
+  `DELIMITER ;;` so the text runs back in the editor, with a `-- sql_mode` note when the object
+  was created under another sql mode than the session's. The `DEFINER` is kept, so running the
+  text as another user needs `SET_USER_ID`, as with `mysqldump`.
+- Copy as SQL `INSERT` and `UPDATE`: backtick names, MySQL's literals (bytes `X'…'`, bits
+  `b'…'`, strings escaped for the session's sql mode, `NO_BACKSLASH_ESCAPES` and `ANSI_QUOTES`
+  included), generated columns left out. `UPDATE` needs the table's primary key in the result.
+  The keys are read when the connection opens (and again after DDL run in datarig), so a table
+  created elsewhere later needs `r` on the connection in the explorer before its rows can be
+  copied; names compare as the server compares them (`lower_case_table_names`).
+- The row count (`#`), key marks, hints, charts, and copying rows in every other format.
 
 **What does not work yet**
-- Table structure beyond the columns (keys, indexes, constraints, triggers), DDL, copy as SQL
-  `INSERT`, the row count (`#`) and the plan view (`EXPLAIN` runs and shows its text).
+- The plan view (`EXPLAIN` runs and shows its text).
 - TLS: a server that requires it (`require_secure_transport`) cannot be reached yet, and is said
   so.
 - A `USE` typed in a console is not followed by the header and completion; use `:use`.
 - The estimates are the server's (`TABLE_ROWS`), which can be far off for InnoDB. A view whose
   table was dropped is listed without columns, and a database that does not exist or that you
   may not read shows as empty. On a server with tens of thousands of tables the explorer's
-  catalog read may hit its 10-second limit.
+  catalog and key reads may hit their 10-second limit.
 
 **Paging and locks.** As on PostgreSQL, nothing is held open while you read a result by default.
 The query session keeps `sql_select_limit` at a page and one row, so the first page is read to

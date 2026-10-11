@@ -24,6 +24,7 @@ use mysql_async::prelude::{FromRow, Queryable};
 use mysql_async::{Conn, Row};
 use tokio::sync::mpsc::UnboundedSender;
 
+mod keys;
 mod structure;
 
 /// The databases of the server's own, never listed.
@@ -58,6 +59,8 @@ pub(crate) async fn meta_loop(mut conn: Conn, mut link: Link, events: UnboundedS
     let _ = events.send(DbEvent::Schemas(schemas));
     let Ok(catalog) = link.guard(None, load_catalog(&mut conn)).await else { return };
     let _ = events.send(DbEvent::Catalog(catalog));
+    let Ok(keys) = link.guard(None, keys::load_keys(&mut conn)).await else { return };
+    let _ = events.send(DbEvent::Keys(keys));
     loop {
         let cmd = match link.next().await {
             // No result is ever held here.
@@ -82,7 +85,7 @@ pub(crate) async fn meta_loop(mut conn: Conn, mut link: Link, events: UnboundedS
                 DbCommand::LoadCatalog => DbEvent::Catalog(load_catalog(&mut conn).await),
                 // A database is the schema: the server's databases are its schemas.
                 DbCommand::LoadDatabases => DbEvent::Databases(load_schemas(&mut conn).await),
-                DbCommand::LoadKeys => DbEvent::Keys(Err(DbError::NotSupported)),
+                DbCommand::LoadKeys => DbEvent::Keys(keys::load_keys(&mut conn).await),
                 DbCommand::LoadStructure { schema, table } => {
                     let result = structure::load_structure(&mut conn, server, mode, &schema, &table).await;
                     DbEvent::Structure { schema, table, result: result.map(Box::new) }

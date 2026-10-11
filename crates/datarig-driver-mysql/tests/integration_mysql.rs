@@ -249,8 +249,8 @@ async fn a_query_session_says_how_its_text_is_read() {
     probe.disconnect().await.unwrap();
 }
 
-/// The metadata session says the mode a new session starts in, then lists the databases and
-/// reads the catalog as soon as it connects.
+/// The metadata session says the mode a new session starts in, then lists the databases, reads
+/// the catalog and the key metadata as soon as it connects.
 #[tokio::test(flavor = "multi_thread")]
 async fn the_metadata_session_reads_the_databases_and_the_catalog() {
     let Some(url) = my_url("the_metadata_session_reads_the_databases_and_the_catalog") else { return };
@@ -275,6 +275,11 @@ async fn the_metadata_session_reads_the_databases_and_the_catalog() {
             assert_eq!(users.columns[0].type_name, "bigint unsigned");
             assert!(cat.relations.iter().any(|r| r.name == "order_summary" && r.is_view));
         }
+        other => panic!("{other:?}"),
+    }
+    // Then the key metadata.
+    match c.next(30).await {
+        DbEvent::Keys(Ok(k)) => assert!(k.marks_by_name("shop", "users", "id").pk),
         other => panic!("{other:?}"),
     }
     c.session.send(DbCommand::LoadObjects { schema: "shop".into() });
@@ -1879,4 +1884,288 @@ async fn a_user_name_with_an_at_sign_finds_its_trigger_privilege() {
     let s = structure_of(&mut m, &t.name).await.unwrap();
     assert!(s.triggers.is_empty());
     assert!(s.hidden.is_empty(), "the privilege is the user's: {:?}", s.hidden);
+}
+
+/// The key metadata `m` reads on `LoadKeys`.
+async fn keys_of(m: &mut Conn) -> Result<datarig_core::driver::keys::KeyCatalog, DbError> {
+    m.session.send(DbCommand::LoadKeys);
+    match m.wait(|e| matches!(e, DbEvent::Keys(_)), 15).await {
+        DbEvent::Keys(r) => r,
+        _ => unreachable!(),
+    }
+}
+
+/// The key metadata of every database: a primary key, a composite foreign key to another
+/// database, unique keys (whole columns only: not a prefix, not an expression), generated
+/// columns, `AUTO_INCREMENT`, views, and names compared as the server compares them.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_metadata_session_reads_the_key_metadata() {
+    use datarig_core::driver::keys::{Generated, KeyMarks, NameRule};
+    let test = "the_metadata_session_reads_the_key_metadata";
+    let Some((url, admin)) = urls(test) else { return };
+    let pid = std::process::id();
+    let parent = format!("zz_it_kparent_{pid}");
+    let _parent = Cleanup { url: admin.clone(), sql: format!("DROP TABLE IF EXISTS datarig.{parent}") };
+    let mut a = side(&admin).await;
+    a.query_drop(format!("CREATE TABLE datarig.{parent} (a INT NOT NULL, b VARCHAR(10) NOT NULL, PRIMARY KEY (a, b))"))
+        .await
+        .unwrap();
+    a.disconnect().await.unwrap();
+    let t = Table::make(
+        &admin,
+        "keys",
+        &[&format!(
+            "CREATE TABLE {{t}} (id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY, pa INT, pb VARCHAR(10),
+               Code VARCHAR(20), note TEXT, qty INT, twice INT GENERATED ALWAYS AS (qty * 2) STORED,
+               low VARCHAR(20) GENERATED ALWAYS AS (lower(Code)) VIRTUAL,
+               UNIQUE KEY uq_code (Code), UNIQUE KEY uq_note (note(10)), UNIQUE KEY uq_fn ((qty + 1)),
+               CONSTRAINT zz_it_kfk_{pid} FOREIGN KEY (pa, pb) REFERENCES datarig.{parent} (a, b))"
+        )],
+    )
+    .await;
+    let view = Table::make(&admin, "kview", &[]).await;
+    let _view = Cleanup { url: admin.clone(), sql: format!("DROP VIEW IF EXISTS {}", view.q()) };
+    let mut a = side(&admin).await;
+    a.query_drop(format!("CREATE VIEW {} AS SELECT id, Code FROM {}", view.q(), t.q())).await.unwrap();
+    a.disconnect().await.unwrap();
+    let mut m = Conn::start(&url, SessionRole::Meta, false, test);
+    m.wait(|e| matches!(e, DbEvent::Keys(_)), 30).await;
+    let k = keys_of(&mut m).await.unwrap();
+    let marks = |c: &str| k.marks_by_name("shop", &t.name, c);
+    let (pk, fk, uq, none) = (
+        KeyMarks { pk: true, ..KeyMarks::default() },
+        KeyMarks { fk: true, ..KeyMarks::default() },
+        KeyMarks { unique: true, ..KeyMarks::default() },
+        KeyMarks::default(),
+    );
+    assert_eq!([marks("id"), marks("pa"), marks("pb"), marks("Code")], [pk, fk, fk, uq]);
+    assert_eq!([marks("note"), marks("qty")], [none, none], "a prefix or an expression proves no column unique");
+    let table = k.find(Some("shop"), &t.name).unwrap();
+    let generated: Vec<(&str, Generated)> = table.columns.values().map(|c| (c.name.as_str(), c.generated)).collect();
+    assert_eq!(generated[0], ("id", Generated::No), "AUTO_INCREMENT takes a value");
+    assert!(
+        generated.contains(&("twice", Generated::Expression)) && generated.contains(&("low", Generated::Expression))
+    );
+    assert!(!table.view);
+    assert!(k.find(Some("shop"), &view.name).unwrap().view);
+    assert!(k.marks_by_name("datarig", &parent, "a").pk);
+    // As the server compares names: a column's in any case.
+    assert!(k.marks_by_name("shop", &t.name, "CODE").unique);
+    let mut probe = side(&admin).await;
+    let lctn: u8 = probe.query_first("SELECT @@lower_case_table_names").await.unwrap().unwrap();
+    probe.disconnect().await.unwrap();
+    assert_eq!(k.names(), NameRule::MySql { tables_ignore_case: lctn != 0 });
+    if lctn == 0 {
+        assert!(k.find(Some("shop"), &t.name.to_uppercase()).is_err(), "a table's case matters");
+    } else {
+        assert!(k.find(Some("SHOP"), &t.name.to_uppercase()).is_ok(), "lower_case_table_names = {lctn}");
+    }
+}
+
+/// Reading the key metadata never queues behind another session's metadata lock (held by
+/// `LOCK TABLES … WRITE`, or asked for by an `ALTER TABLE` that waits behind a held result):
+/// it answers with the keys at once, holds that session up in nothing, and keeps no lock.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_keys_read_never_queues_behind_a_metadata_lock_nor_keeps_one() {
+    let test = "the_keys_read_never_queues_behind_a_metadata_lock_nor_keeps_one";
+    let Some((url, admin)) = urls(test) else { return };
+    let t = numbers(&admin, "keyslock", 200_000).await;
+    let mut wide = side(&admin).await;
+    wide.query_drop(format!("ALTER TABLE {} MODIFY v VARCHAR(200)", t.q())).await.unwrap();
+    wide.query_drop(format!("UPDATE {} SET v = REPEAT('x', 200)", t.q())).await.unwrap();
+    wide.disconnect().await.unwrap();
+    let mut m = Conn::start(&url, SessionRole::Meta, false, test);
+    m.wait(|e| matches!(e, DbEvent::Keys(_)), 30).await;
+    let mut side_admin = side(&admin).await;
+    let meta = only_session(&mut side_admin, SessionRole::Meta, test).await;
+    let read = |k: Result<datarig_core::driver::keys::KeyCatalog, DbError>, name: &str| {
+        let k = k.expect("the keys, never Locked");
+        assert!(k.marks_by_name("shop", name, "id").pk);
+    };
+    // 1. Another session holds `LOCK TABLES … WRITE`; it goes on while the read runs.
+    let mut lock = side(&admin).await;
+    lock.query_drop(format!("LOCK TABLES {} WRITE", t.q())).await.unwrap();
+    let t0 = Instant::now();
+    m.session.send(DbCommand::LoadKeys);
+    let t1 = Instant::now();
+    lock.query_drop(format!("INSERT INTO {} VALUES (999999, 'w')", t.q())).await.unwrap();
+    assert!(t1.elapsed() < Duration::from_millis(500), "the locking session was not held up: {:?}", t1.elapsed());
+    match m.wait(|e| matches!(e, DbEvent::Keys(_)), 15).await {
+        DbEvent::Keys(k) => read(k, &t.name),
+        _ => unreachable!(),
+    }
+    assert!(t0.elapsed() < Duration::from_millis(2_000), "{:?}", t0.elapsed());
+    assert_eq!(table_locks(&mut side_admin, meta, &t.name).await, 0, "no lock kept");
+    lock.query_drop("UNLOCK TABLES").await.unwrap();
+    // 2. A held result keeps a shared lock and an `ALTER TABLE` waits for it.
+    let mut q = Conn::open(&url, SessionRole::Query, false, test).await;
+    let evs = q.run_as(1, &[&format!("SELECT * FROM {}", t.q())], PagingMode::Hold).await;
+    assert!(page_of(&evs).2);
+    let (alter_url, table) = (admin.clone(), t.q());
+    let alter = tokio::spawn(async move {
+        let mut a = side(&alter_url).await;
+        a.query_drop("SET SESSION lock_wait_timeout = 60").await.unwrap();
+        let r = a.query_drop(format!("ALTER TABLE {table} ADD COLUMN c9 INT")).await;
+        a.disconnect().await.unwrap();
+        r.map_err(|e| e.to_string())
+    });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let waiting: Option<u64> = side_admin
+        .query_first(format!(
+            "SELECT COUNT(*) FROM information_schema.PROCESSLIST \
+             WHERE STATE = 'Waiting for table metadata lock' AND INFO LIKE '%{}%c9%'",
+            t.name
+        ))
+        .await
+        .unwrap();
+    assert_eq!(waiting, Some(1), "the ALTER waits");
+    let t0 = Instant::now();
+    read(keys_of(&mut m).await, &t.name);
+    assert!(t0.elapsed() < Duration::from_millis(2_000), "{:?}", t0.elapsed());
+    assert_eq!(table_locks(&mut side_admin, meta, &t.name).await, 0, "no lock kept");
+    q.session.send(DbCommand::ClosePortal { id: 1 });
+    q.ok(2, "SELECT 1").await;
+    assert!(alter.await.unwrap().is_ok());
+    side_admin.disconnect().await.unwrap();
+}
+
+/// Every column of `table` as one hash per row, by `id`: its values' bytes (a NULL apart).
+async fn row_hashes(c: &mut mysql_async::Conn, table: &str, columns: &[&str]) -> Vec<(i64, String)> {
+    let parts: Vec<String> = columns.iter().map(|c| format!("IFNULL(HEX(`{c}`), 'NULL')")).collect();
+    let sql = format!("SELECT id, MD5(CONCAT_WS('|', {})) FROM {table} ORDER BY id", parts.join(", "));
+    c.query(sql).await.unwrap()
+}
+
+/// The rows of `SELECT * FROM table` on query session `q`, copied as SQL by the app's own path:
+/// `update` false as INSERT ([`insert_source`] then the writer), true as UPDATE
+/// ([`update_source`]), in the session's mode `mode`.
+async fn copied_as_sql(
+    q: &mut Conn,
+    id: u64,
+    keys: &datarig_core::driver::keys::KeyCatalog,
+    table: &Table,
+    mode: MySqlMode,
+    update: bool,
+) -> String {
+    use datarig_core::driver::keys::{insert_source, update_source};
+    use datarig_core::export::{self, Format, Kind, Target, UpdateTarget, Writer};
+    let sql = format!("SELECT * FROM `shop`.`{}`", table.name);
+    let evs = q.run(id, &[&sql]).await;
+    let (cols, rows, more) = page_of(&evs);
+    assert!(!more);
+    let d = Dialect::MySql(mode);
+    let origins: Vec<_> = cols.iter().map(|c| c.origin.clone()).collect();
+    let names: Vec<&str> = cols.iter().map(|c| c.name.as_str()).collect();
+    let columns: Vec<export::Column> =
+        cols.iter().map(|c| export::Column { name: &c.name, kind: Kind::of_column(c) }).collect();
+    let rows: Vec<export::Row> = rows.iter().map(|r| r.iter().map(|v| v.as_deref()).collect()).collect();
+    for r in &rows {
+        for (v, c) in r.iter().zip(&columns) {
+            assert!(v.is_none_or(|v| export::sql_whole(d, c.kind, v)), "{}: {v:?}", c.name);
+        }
+    }
+    if update {
+        let plan = update_source(d, Some(keys), &origins, &names, &sql).expect("rows of one table with its key");
+        let target =
+            UpdateTarget { schema: &plan.table.schema, name: &plan.table.name, set: plan.set.clone(), keys: plan.keys };
+        let mut w = Writer::new(Format::Update(d, target), &columns);
+        w.rows(&rows);
+        return w.finish();
+    }
+    let plan = insert_source(d, Some(keys), &origins, &names, &sql).expect("rows of one table");
+    let target = Target::Table {
+        schema: &plan.table.schema,
+        name: &plan.table.name,
+        columns: plan.columns.iter().map(|c| c.1).collect(),
+        overriding: plan.overriding,
+    };
+    let written: Vec<export::Column> = plan.columns.iter().map(|c| columns[c.0]).collect();
+    let rows: Vec<export::Row> = rows.iter().map(|r| plan.columns.iter().map(|c| r[c.0]).collect()).collect();
+    let mut w = Writer::new(Format::Sql(d, target), &written);
+    w.rows(&rows);
+    w.finish()
+}
+
+/// Rows of every kind of value copied as SQL `INSERT` and `UPDATE` statements by the app's own
+/// path, run back into a copy of the table on a session in the same mode, are the rows byte for
+/// byte: the server's default escaping, `NO_BACKSLASH_ESCAPES` and `ANSI_QUOTES`.
+#[tokio::test(flavor = "multi_thread")]
+async fn rows_copied_as_sql_run_back_byte_for_byte() {
+    let test = "rows_copied_as_sql_run_back_byte_for_byte";
+    let Some((url, admin)) = urls(test) else { return };
+    let columns = ["id", "txt", "js", "bin", "blb", "bt", "d", "dt", "ts", "tm", "yr", "big", "amount", "nul", "twice"];
+    let create = "CREATE TABLE {t} (id INT PRIMARY KEY, txt VARCHAR(100), js JSON, bin VARBINARY(20), blb BLOB, \
+                  bt BIT(10), d DATE, dt DATETIME(6), ts TIMESTAMP(3) NULL, tm TIME(2), yr YEAR, \
+                  big BIGINT UNSIGNED, amount DECIMAL(30,10), nul VARCHAR(5), twice INT GENERATED ALWAYS AS (id * 2) STORED)";
+    // Zero dates are kept: the modes leave out NO_ZERO_DATE and NO_ZERO_IN_DATE.
+    let base = "STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION";
+    let fill = "INSERT INTO {t} (id, txt, js, bin, blb, bt, d, dt, ts, tm, yr, big, amount, nul) VALUES \
+        (1, 'back\\\\slash \\'q\\' \"dq\" tab\\tnl\\n', '{\"a\": \"b\\\\\\\\c\", \"q\": \"\\\\\"x\\\\\"\"}', \
+         0x00FF275C22, 0x00, b'1010101010', '2024-02-29', '2024-02-29 23:59:59.123456', \
+         '2024-02-29 12:00:00.500', '-838:59:59.00', 2024, 18446744073709551615, \
+         -12345678901234567890.0123456789, NULL), \
+        (2, CONCAT('nul', CHAR(0), 'byte ', _utf8mb4 X'F09F9880', ' emoji'), '[1, \"\\\\u00e9\", null]', \
+         '', NULL, b'0', '0000-00-00', '0000-00-00 00:00:00', NULL, '00:00:00', 0000, 0, 0, ''), \
+        (3, '', 'null', NULL, 0x0A0D1A, b'1111111111', NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'x')";
+    for (n, flag) in ["", ",NO_BACKSLASH_ESCAPES", ",ANSI_QUOTES"].iter().enumerate() {
+        let mode = format!("{base}{flag}");
+        let src =
+            Table::make(&admin, &format!("golden{n}"), &[&format!("SET SESSION sql_mode = '{base}'"), create, fill])
+                .await;
+        let copy =
+            Table::make(&admin, &format!("golden{n}_copy"), &[&format!("SET SESSION sql_mode = '{base}'"), create])
+                .await;
+        // The table is read from the session's catalog: the keys read after it was made.
+        let mut m = Conn::start(&url, SessionRole::Meta, false, test);
+        m.wait(|e| matches!(e, DbEvent::Keys(_)), 30).await;
+        let keys = keys_of(&mut m).await.unwrap();
+        let mut q = Conn::open(&url, SessionRole::Query, false, test).await;
+        let evs = q.run(1, &[&format!("SET SESSION sql_mode = '{mode}'")]).await;
+        // The last one: the mode the session started in may come first.
+        let session_mode = evs
+            .iter()
+            .rev()
+            .find_map(|e| match e {
+                DbEvent::Language(Language::Sql(Dialect::MySql(m))) => Some(*m),
+                _ => None,
+            })
+            .expect("the session says its new mode");
+        assert_eq!(
+            (session_mode.no_backslash_escapes, session_mode.ansi_quotes),
+            (flag.contains("BACKSLASH"), flag.contains("ANSI")),
+            "{mode}"
+        );
+        let insert = copied_as_sql(&mut q, 2, &keys, &src, session_mode, false).await;
+        let insert = insert.replace(&format!("`{}`", src.name), &format!("`{}`", copy.name));
+        // Split as the editor splits what it runs, in the session's dialect.
+        let d = Dialect::MySql(session_mode);
+        let statements = |text: &str| -> Vec<String> {
+            datarig_core::sql::split::split_in(text, d).iter().map(|st| st.body(text).to_string()).collect()
+        };
+        assert_eq!(statements(&insert).len(), 3, "{insert}");
+        assert!(!insert.contains("OVERRIDING") && !insert.contains("`twice`"), "{insert}");
+        for (i, statement) in statements(&insert).iter().enumerate() {
+            let evs = q.run(10 + i as u64, &[statement.as_str()]).await;
+            assert!(!matches!(evs.last(), Some(DbEvent::Failed { .. })), "{mode}: {statement}: {evs:?}");
+        }
+        let mut a = side(&admin).await;
+        let want = row_hashes(&mut a, &src.q(), &columns).await;
+        assert_eq!(row_hashes(&mut a, &copy.q(), &columns).await, want, "INSERT, {mode}:\n{insert}");
+        // UPDATE: the copy's rows changed, then set back by the statements.
+        a.query_drop(format!(
+            "UPDATE {} SET txt = 'changed', js = '{{}}', bin = NULL, bt = b'0', d = NULL, big = 1, amount = 2, nul = 'y'",
+            copy.q()
+        ))
+        .await
+        .unwrap();
+        assert_ne!(row_hashes(&mut a, &copy.q(), &columns).await, want);
+        let update = copied_as_sql(&mut q, 20, &keys, &src, session_mode, true).await;
+        let update = update.replace(&format!("`{}`", src.name), &format!("`{}`", copy.name));
+        for (i, statement) in statements(&update).iter().enumerate() {
+            let evs = q.run(30 + i as u64, &[statement.as_str()]).await;
+            assert!(!matches!(evs.last(), Some(DbEvent::Failed { .. })), "{mode}: {statement}: {evs:?}");
+        }
+        assert_eq!(row_hashes(&mut a, &copy.q(), &columns).await, want, "UPDATE, {mode}:\n{update}");
+        a.disconnect().await.unwrap();
+    }
 }
