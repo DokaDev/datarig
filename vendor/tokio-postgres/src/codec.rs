@@ -24,6 +24,26 @@ impl BackendMessages {
     pub fn empty() -> BackendMessages {
         BackendMessages(BytesMut::new())
     }
+
+    // datarig: whether one of the messages starts the COPY sub-protocol (CopyInResponse,
+    // CopyOutResponse or CopyBothResponse), read from the message headers only.
+    pub fn starts_copy(&self) -> bool {
+        let mut buf = &self.0[..];
+        while let Ok(Some(header)) = backend::Header::parse(buf) {
+            if matches!(
+                header.tag(),
+                backend::COPY_IN_RESPONSE_TAG | backend::COPY_OUT_RESPONSE_TAG | b'W'
+            ) {
+                return true;
+            }
+            let len = header.len() as usize + 1;
+            if buf.len() < len {
+                break;
+            }
+            buf = &buf[len..];
+        }
+        false
+    }
 }
 
 impl FallibleIterator for BackendMessages {

@@ -66,6 +66,11 @@
 //! ([`DbEvent::StatementCacheOff`]), as behind a pooler in transaction mode without prepared
 //! statement support. Off, no statement outlives the transaction it runs in.
 //!
+//! **COPY with the client**: `COPY … FROM STDIN` and `COPY … TO STDOUT` are never sent
+//! ([`DbError::CopyStdio`], [`copies_with_client`]); their data would go through the COPY
+//! sub-protocol, which the session does not carry. A COPY that starts anyway ends the
+//! connection (the client library's check), so the server never goes on with one nobody reads.
+//!
 //! Closing: when the UI closes the session while a statement runs, the statement is cancelled
 //! and the connection closed (the server rolls back). When the connection ends by itself, the
 //! running statement fails first, then `Lost` is reported once.
@@ -808,6 +813,32 @@ pub(crate) fn returns_no_rows(sql: &str) -> bool {
     }
 }
 
+/// Whether `sql` is `COPY … FROM STDIN` or `COPY … TO STDOUT` (the client's side of a COPY):
+/// `STDIN` or `STDOUT` right after `FROM` or `TO`, outside parentheses, as the grammar puts
+/// them. A table or a column may be named `stdout`; a file name is a string. Only the `COPY`
+/// statement itself starts a COPY with the client (not one in a function or a `DO` block), so
+/// its first word tells.
+pub(crate) fn copies_with_client(sql: &str) -> bool {
+    let toks: Vec<Token> = lex(sql).into_iter().filter(|t| !t.is_trivia()).collect();
+    let word = |t: &Token| t.is_word().then(|| t.text(sql).to_ascii_uppercase());
+    if toks.first().and_then(word).as_deref() != Some("COPY") {
+        return false;
+    }
+    let mut depth = 0usize;
+    let mut outside = Vec::new();
+    for t in &toks {
+        match t.kind {
+            Tok::LParen => depth += 1,
+            Tok::RParen => depth = depth.saturating_sub(1),
+            _ if depth == 0 => outside.push(word(t)),
+            _ => {}
+        }
+    }
+    outside
+        .windows(2)
+        .any(|w| matches!(w[0].as_deref(), Some("FROM" | "TO")) && matches!(w[1].as_deref(), Some("STDIN" | "STDOUT")))
+}
+
 /// Whether the rows of `sql` can be shown before its transaction commits: a plain read
 /// (`SELECT`, `VALUES`, `TABLE`, `SHOW`). The rows of anything that may write
 /// (`INSERT ... RETURNING`, `WITH`, ...) are shown only once the `COMMIT` succeeded.
@@ -1006,6 +1037,12 @@ async fn statement<'a>(
     step: Step,
 ) -> Result<Option<(Reply<'a>, Outcome)>, Halted<'a>> {
     let token = Some(env.token);
+    // Its data would go through the COPY sub-protocol, which the session does not carry: sent,
+    // the server would wait for data or keep sending it (see [`copies_with_client`]).
+    if copies_with_client(sql) {
+        reply.fail(DbError::CopyStdio, false);
+        return Ok(None);
+    }
     // A read-only session never asks for read-write: the user's block could go back to
     // read-write before its first query, whatever `SET TRANSACTION READ ONLY` said.
     if env.read_only && risk::classify(sql).read_write {

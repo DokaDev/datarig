@@ -69,6 +69,10 @@ pub enum DbError {
     /// turns read-only off (`SET transaction_read_only = off`, `BEGIN READ WRITE`, …): the app
     /// refuses them first; this is the driver's own check.
     ReadWriteRefused,
+    /// `COPY … FROM STDIN` or `COPY … TO STDOUT` was not sent: its data would go through the
+    /// connection's COPY sub-protocol, which the session does not carry. The app refuses them
+    /// first; this is the driver's own check.
+    CopyStdio,
     /// The server refused a statement because it ran inside a transaction: one that cannot run
     /// in a transaction block (SQLSTATE `25001`: `VACUUM`, `CREATE INDEX CONCURRENTLY`, `CREATE
     /// DATABASE`, …) or a procedure's transaction control (`2D000`, a `COMMIT` in a `CALL`), in a
@@ -162,6 +166,7 @@ impl DbError {
             | DbError::NoResult
             | DbError::Cancelled
             | DbError::ReadWriteRefused
+            | DbError::CopyStdio
             | DbError::NotRepeatable(_)
             | DbError::Locked
             | DbError::NotFound

@@ -116,10 +116,24 @@ connection):
   collide with this process's (`42P05`, prepared statement already exists).
 - `src/lib.rs`: `mod pipeline` and `pub use pipeline::{Executed, FirstPage}`.
 
+**A COPY no request reads**: upstream hands a CopyInResponse, CopyOutResponse or
+CopyBothResponse that answers an ordinary request (`COPY … TO STDOUT` or `FROM STDIN` sent as a
+query) to that request, which fails with "unexpected message from server" and drops its stream.
+The connection then keeps reading the COPY's data in the background while the server keeps
+sending it, or, for `FROM STDIN`, waits with the server for data neither side sends.
+
+- `src/connection.rs`: each response knows whether its request expects the COPY sub-protocol
+  (`copy`); a COPY that starts in the response to any other request ends the connection with
+  "unexpected message from server" (the request fails as closed), so the socket closes and the
+  server stops the COPY. `RequestMessages::CopyOut`, a new variant written as `Single` is,
+  marks the request of `copy_out` (`src/copy_out.rs`); that of `copy_in` is `CopyIn` already.
+- `src/codec.rs`: `BackendMessages::starts_copy`, read from the message headers only.
+
 **Warnings on Windows**: `src/client.rs` imports `PathBuf` only on Unix, where
 `Addr::Unix` uses it (upstream imports it on every platform, an unused import on Windows).
 
-Every upstream API behaves as before; only callers of the new functions pipeline.
+Every upstream API behaves as before (but for a COPY no request reads, above); only callers of
+the new functions pipeline.
 
 **Upstream shape.** The additions are shaped so they could be offered upstream as they are:
 `bind_first_page` is `bind` + `query_portal` in one round trip on an existing `Transaction`,

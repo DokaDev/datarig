@@ -13,7 +13,7 @@
 
 use datarig_core::driver::PagingMode;
 use datarig_core::driver::ddl::DdlObject;
-use datarig_core::driver::{ConnectOptions, DbCommand, DbEvent, Driver, Session, SessionContext, SessionRole};
+use datarig_core::driver::{ConnectOptions, DbCommand, DbError, DbEvent, Driver, Session, SessionContext, SessionRole};
 use datarig_core::profile::ConnectionConfig;
 use datarig_driver_postgres::PgDriver;
 use std::io::Write;
@@ -345,5 +345,28 @@ async fn results_not_held_page_behind_a_pooler() {
         };
         assert_eq!(rows[0][0].as_deref(), Some("off"), "{rows:?}");
         assert!(!rows[0][1].as_deref().unwrap_or_default().contains("shop"), "{rows:?}");
+    }
+}
+
+/// `COPY … TO STDOUT` behind the pooler, with the statement cache on or off, held or not, in a
+/// read-only session or not: refused before anything is sent, and the session goes on.
+#[tokio::test(flavor = "multi_thread")]
+async fn copy_to_the_client_is_refused_behind_a_pooler() {
+    let Some(url) = pooler_url("copy_to_the_client_is_refused_behind_a_pooler") else { return };
+    let copy = "COPY (SELECT g FROM generate_series(1, 10) g) TO STDOUT";
+    for (cache, read_only) in [(false, false), (true, false), (false, true)] {
+        let opts = ConnectOptions::new(PAGE, SessionRole::Query, "pool").read_only(read_only).statement_cache(cache);
+        let mut c = Conn::open_with(&url, SessionRole::Query, opts).await;
+        for (id, paging) in [(1, PagingMode::Hold), (2, PagingMode::NoHold)] {
+            c.session.send(DbCommand::Execute { id, statements: vec![copy.into()], paging });
+            let ev = c
+                .wait(|e| matches!(e, DbEvent::Page { id: i, .. } | DbEvent::Done { id: i, .. } | DbEvent::Failed { id: i, .. } if *i == id), 30)
+                .await;
+            assert!(
+                matches!(ev, DbEvent::Failed { error: DbError::CopyStdio, cancelled: false, .. }),
+                "cache {cache}, read-only {read_only}, {paging:?}: {ev:?}"
+            );
+            assert_eq!(c.rows(id + 10, "SELECT g FROM generate_series(1, 130) g").await, Ok(130));
+        }
     }
 }

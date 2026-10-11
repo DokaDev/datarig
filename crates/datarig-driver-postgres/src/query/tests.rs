@@ -1,4 +1,6 @@
-use super::{TxAfter, command_tag, forgets_prepared, plain_read, returns_no_rows, split_page, tx_after};
+use super::{
+    TxAfter, command_tag, copies_with_client, forgets_prepared, plain_read, returns_no_rows, split_page, tx_after,
+};
 
 #[test]
 fn tags() {
@@ -794,5 +796,37 @@ mod terminal {
         assert!(matches!(rx.try_recv(), Ok(DbEvent::Failed { id: 10, error: DbError::Closed, .. })));
         assert!(matches!(rx.try_recv(), Ok(DbEvent::Page { id: 11, .. })));
         assert!(rx.try_recv().is_err());
+    }
+}
+
+/// The client's side of a COPY is told from the statement's words: `STDIN` or `STDOUT` right
+/// after `FROM` or `TO`, outside parentheses; a table, a column or a file named so is not.
+#[test]
+fn copies_with_the_client_are_told_from_the_words() {
+    for sql in [
+        "COPY t TO STDOUT",
+        "copy t from stdin",
+        "COPY shop.users (id, name) TO STDOUT WITH (FORMAT csv, HEADER)",
+        "COPY (SELECT g FROM generate_series(1, 10) g) TO STDOUT",
+        "COPY BINARY t TO STDOUT",
+        "COPY t FROM STDIN WITH (FORMAT csv) WHERE a > 1",
+        "/* a comment */ COPY t -- and another\n FROM\nSTDIN;",
+        "COPY \"stdout\" FROM STDIN",
+    ] {
+        assert!(copies_with_client(sql), "{sql:?}");
+    }
+    for sql in [
+        "COPY t TO '/tmp/out.csv'",
+        "COPY t FROM 'stdin'",
+        "COPY t TO PROGRAM 'cat'",
+        "COPY stdout FROM '/tmp/in.csv'",
+        "COPY t (stdin) TO '/tmp/out.csv'",
+        "COPY (SELECT a FROM stdout) TO '/tmp/out.csv'",
+        "SELECT 'COPY t TO STDOUT'",
+        "SELECT stdout FROM t",
+        "DO $$ BEGIN COPY t TO STDOUT; END $$",
+        "",
+    ] {
+        assert!(!copies_with_client(sql), "{sql:?}");
     }
 }
