@@ -418,7 +418,7 @@
 "db.copy_started" = "the server started a COPY to or from the client, which datarig does not carry (to see the rows, run the query as a SELECT; to move data to or from a file, use psql's \\copy)"
 "db.read_only_lost" = "the session stopped being read-only on the server: datarig rolled back its transaction and closed it"
 "db.cancel_refused" = "the server refused to stop the statement (it runs as another account, e.g. in a SQL SECURITY DEFINER routine) and it kept sending rows: datarig closed the connection instead of reading them. The statement may still run on the server, and outside a transaction block commit what it changes; an open transaction is rolled back once the server ends the session"
-"db.cancel_not_sent" = "the request to stop the statement could not reach the server (network or login): datarig closed the connection. The statement may still run on the server, and outside a transaction block commit what it changes; an open transaction is rolled back once the server ends the session"
+"db.cancel_not_sent" = "the request to stop the statement could not reach the server ({reason}): datarig closed the connection. The statement may still run on the server, and outside a transaction block commit what it changes; an open transaction is rolled back once the server ends the session"
 "db.cancel_kept_sending" = "the server agreed to stop the statement and still kept sending rows: datarig closed the connection instead of reading them. The statement may still run on the server, and outside a transaction block commit what it changes; an open transaction is rolled back once the server ends the session"
 "query.lost" = "This tab's connection was lost: {error}"
 "query.reconnected" = "Reconnected"

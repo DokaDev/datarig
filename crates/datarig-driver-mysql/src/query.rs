@@ -943,7 +943,7 @@ async fn hold(
     // An unclean gate after the result ended: the result is the run's all the same, and the
     // session is lost after it.
     if !gate.close().await && out.is_ok() {
-        link.taint(DbError::CancelNotTaken(CancelFailure::NotSent));
+        link.taint(DbError::CancelNotTaken(crate::session::kill_unanswered()));
     }
     match out {
         Ok(()) => Ok(held),

@@ -25,7 +25,11 @@ where
 
     stream.write_all(&buf).await.map_err(Error::io)?;
     stream.flush().await.map_err(Error::io)?;
-    stream.shutdown().await.map_err(Error::io)?;
+    // datarig: the request is sent once it is written and flushed; the server answers nothing.
+    // The stream is dropped, not shut down: closing the write side may fail or never end (a
+    // tunnel's channel the far end already closed, or whose end of file cannot be queued), and
+    // neither unsends the request.
+    drop(stream);
 
     Ok(())
 }

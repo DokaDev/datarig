@@ -709,6 +709,25 @@ async fn a_statement_answered_while_its_kill_hangs_is_answered_then_lost() {
     let answered = tokio::time::timeout(KILL_TIMEOUT * 3, answered).await.expect("the wait ends");
     assert!(matches!(answered, Ok(42)), "the statement's own answer");
     let next = tokio::time::timeout(std::time::Duration::from_secs(1), link.next()).await.expect("at once");
-    assert!(matches!(next, Next::Lost(DbError::CancelNotTaken(CancelFailure::NotSent))));
+    assert!(matches!(next, Next::Lost(DbError::CancelNotTaken(CancelFailure::NotSent(_)))));
     kill_server.abort();
+}
+
+/// A kill that could not be sent keeps why (here the server's port refuses the connection), so
+/// the session that gives up on it says why, not just that it could not reach the server.
+#[tokio::test]
+async fn a_kill_not_sent_keeps_why() {
+    let killer = Killer::new(
+        Route::new("127.0.0.1", 1, None),
+        mysql_async::Opts::from_url("mysql://datarig@127.0.0.1:1/").unwrap(),
+        7,
+    );
+    killer.kill_query().await;
+    assert_eq!(*killer.watch().borrow(), Kill::Failed(KillFailure::NotSent));
+    match killer.not_sent() {
+        datarig_core::driver::CancelFailure::NotSent(why) => {
+            assert!(matches!(*why, DbError::Connection(_) | DbError::Transport(_)), "{why:?}");
+        }
+        other => panic!("{other:?}"),
+    }
 }

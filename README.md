@@ -186,7 +186,12 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
   each statement's outcome is listed in a Messages tab, and every row result gets a result tab
   of its own (in the results pane `H`/`L` move between them, as the right end of the tab strip
   says when there is room; `Space r [` / `Space r ]` from anywhere). Queries can be cancelled
-  (`Ctrl+C`). While a run goes on, the statement it is
+  (`Ctrl+C`). When a PostgreSQL cancel cannot reach the server (a tunnel that refuses it, a
+  network failure), datarig closes the tab's connection and says why; it cannot tell what
+  became of the statement: it may still run to its end and commit if it was not in a
+  transaction block, an open block is rolled back when the server notices the closed
+  connection, and the session's temporary tables, settings and advisory locks are gone. While
+  a run goes on, the statement it is
   executing has a tint of its own and a spinner in the gutter, wherever the cursor goes and
   whatever you edit around it. When it ends, a dim hint after each statement's last line says
   what it did (`✓ 128 rows · 42ms · 14:03`, rows affected, the error, rolled back, cancelled);

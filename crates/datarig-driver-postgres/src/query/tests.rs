@@ -282,14 +282,14 @@ mod terminal {
         }
     }
 
-    async fn connect(url: &str) -> (Client, oneshot::Receiver<DbError>) {
+    async fn connect(url: &str) -> (Client, oneshot::Receiver<DbError>, tokio::task::AbortHandle) {
         let (client, conn) = tokio_postgres::connect(url, NoTls).await.expect("connect");
         let (done, ended) = oneshot::channel();
-        tokio::spawn(async move {
+        let conn = tokio::spawn(async move {
             let _ = conn.await;
             let _ = done.send(DbError::Closed);
         });
-        (client, ended)
+        (client, ended, conn.abort_handle())
     }
 
     /// Drops the test's table on a fresh connection, also when an assertion fails.
@@ -301,7 +301,7 @@ mod terminal {
             let _ = std::thread::spawn(move || {
                 let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
                 rt.block_on(async {
-                    let (c, _) = connect(&url).await;
+                    let (c, ..) = connect(&url).await;
                     let _ = c.batch_execute(&format!("DROP TABLE IF EXISTS {table}")).await;
                 });
             })
@@ -328,11 +328,11 @@ mod terminal {
 
     impl Session {
         async fn open(url: &str) -> Self {
-            let (client, ended) = connect(url).await;
+            let (client, ended, conn) = connect(url).await;
             let (cmds, cmd_rx) = unbounded_channel();
             let (events, rx) = unbounded_channel();
-            let token = crate::route::Cancel { token: client.cancel_token(), route: None };
-            let link = Link::new(cmd_rx, ended);
+            let token = crate::route::Cancel::new(client.cancel_token(), None);
+            let link = Link::new(cmd_rx, ended, conn, Some(token.unsent.clone()));
             Self {
                 client,
                 link,
@@ -439,7 +439,7 @@ mod terminal {
         let Some(url) = pg_url("a_statement_stale_twice_in_a_row_fails_once") else { return };
         let table = format!("public.it_stale_{}", std::process::id());
         let _drop = TableGuard(url.clone(), table.clone());
-        let (other, _) = connect(&url).await;
+        let (other, ..) = connect(&url).await;
         let other = Arc::new(other);
         other.batch_execute(&format!("CREATE TABLE {table} (a int4); INSERT INTO {table} VALUES (1)")).await.unwrap();
         let mut s = Session::open(&url).await;
@@ -476,7 +476,7 @@ mod terminal {
         let Some(url) = pg_url("a_statement_stale_without_hold_fails_once_and_leaves_nothing_open") else { return };
         let table = format!("public.zz_stale_nohold_{}", std::process::id());
         let _drop = TableGuard(url.clone(), table.clone());
-        let (other, _) = connect(&url).await;
+        let (other, ..) = connect(&url).await;
         let other = Arc::new(other);
         other
             .batch_execute(&format!("CREATE TABLE {table} (a int4); INSERT INTO {table} SELECT generate_series(1, 25)"))
@@ -554,7 +554,7 @@ mod terminal {
         let Some(url) = pg_url("several_statements_report_each_one_and_stop_at_the_first_failure") else { return };
         let table = format!("public.zz_steps_{}", std::process::id());
         let _drop = TableGuard(url.clone(), table.clone());
-        let (other, _) = connect(&url).await;
+        let (other, ..) = connect(&url).await;
         other.batch_execute(&format!("CREATE TABLE {table} (a int4)")).await.unwrap();
         let mut s = Session::open(&url).await;
         let insert = |v: i32| format!("INSERT INTO {table} VALUES ({v})");
@@ -588,7 +588,7 @@ mod terminal {
         let Some(url) = pg_url("a_cancel_between_statements_stops_the_rest") else { return };
         let table = format!("public.zz_cancel_steps_{}", std::process::id());
         let _drop = TableGuard(url.clone(), table.clone());
-        let (other, _) = connect(&url).await;
+        let (other, ..) = connect(&url).await;
         other.batch_execute(&format!("CREATE TABLE {table} (a int4)")).await.unwrap();
         let mut s = Session::open(&url).await;
         // Flagged while the first statement is bound, as if the user cancelled just as it ended.
@@ -659,7 +659,7 @@ mod terminal {
         let Some(url) = pg_url("a_locking_read_before_the_last_statement_locks_every_row") else { return };
         let table = format!("public.zz_locks_{}", std::process::id());
         let _drop = TableGuard(url.clone(), table.clone());
-        let (other, _) = connect(&url).await;
+        let (other, ..) = connect(&url).await;
         other.batch_execute(&format!("CREATE TABLE {table} AS SELECT generate_series(1, 23) AS a")).await.unwrap();
         let mut s = Session::open(&url).await;
         s.run_all(&["BEGIN"], None).await;
@@ -687,7 +687,7 @@ mod terminal {
         let Some(url) = pg_url("explain_analyze_keeps_no_change") else { return };
         let table = format!("public.zz_explain_{}", std::process::id());
         let _drop = TableGuard(url.clone(), table.clone());
-        let (other, _) = connect(&url).await;
+        let (other, ..) = connect(&url).await;
         other.batch_execute(&format!("CREATE TABLE {table} AS SELECT generate_series(1, 3) AS a")).await.unwrap();
         let count = |events: &[DbEvent]| {
             events.iter().rev().find_map(|e| match e {

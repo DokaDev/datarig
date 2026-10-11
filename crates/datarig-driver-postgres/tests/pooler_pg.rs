@@ -502,3 +502,38 @@ async fn a_copy_of_a_table_named_to_is_refused_behind_a_pooler() {
     assert_eq!(rows[0][0].as_deref(), Some("0"));
     assert!(matches!(c.run(5, "ROLLBACK").await, DbEvent::Done { .. }));
 }
+
+/// A cancel goes through the pooler (PgBouncer forwards it to the server connection the
+/// statement runs on): the statement ends cancelled and the session works on. A cancel that
+/// reached the pooler is never taken for one that could not be sent.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_goes_through_the_pooler_and_the_session_works_on() {
+    let Some(url) = pooler_url("a_cancel_goes_through_the_pooler_and_the_session_works_on") else { return };
+    let mut c = Conn::open(&url, SessionRole::Query, false).await;
+    c.session.send(DbCommand::Execute {
+        id: 1,
+        statements: vec!["SELECT pg_sleep(30)".into()],
+        paging: PagingMode::Hold,
+    });
+    // A cancel that arrives before the statement runs is lost; this one is well after.
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    let t0 = Instant::now();
+    c.session.cancel();
+    let mut seen = Vec::new();
+    loop {
+        match tokio::time::timeout(Duration::from_secs(10), c.rx.recv()).await {
+            Ok(Some(ev @ DbEvent::Failed { id: 1, .. })) => {
+                assert!(matches!(ev, DbEvent::Failed { cancelled: true, .. }), "{ev:?}");
+                break;
+            }
+            Ok(Some(ev)) => seen.push(ev),
+            other => panic!("{other:?} after {seen:?}"),
+        }
+    }
+    assert!(t0.elapsed() < Duration::from_secs(10), "cancel took {:?}", t0.elapsed());
+    assert!(!seen.iter().any(|e| matches!(e, DbEvent::Lost { .. })), "{seen:?}");
+    let DbEvent::Page { rows, .. } = c.run(2, "SELECT 42").await else { panic!("the session works on") };
+    assert_eq!(rows[0][0].as_deref(), Some("42"));
+    // Nothing else came: no `Lost` after the answer either.
+    assert!(c.rx.try_recv().is_err());
+}

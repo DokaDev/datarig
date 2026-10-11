@@ -482,13 +482,9 @@ pub(crate) enum KillFailure {
     NotSent,
 }
 
-impl From<KillFailure> for CancelFailure {
-    fn from(f: KillFailure) -> Self {
-        match f {
-            KillFailure::Refused(_) => CancelFailure::Refused,
-            KillFailure::NotSent => CancelFailure::NotSent,
-        }
-    }
+/// A kill sent that never got its answer within [`KILL_TIMEOUT`]: whether it took is not known.
+pub(crate) fn kill_unanswered() -> CancelFailure {
+    CancelFailure::NotSent(Box::new(DbError::NoAnswer(KILL_TIMEOUT)))
 }
 
 /// What a kill sent again while a request waits ([`Killer::try_again`]) is sent under: open while
@@ -539,11 +535,20 @@ pub(crate) struct Killer {
     opts: Opts,
     id: u64,
     kill: Arc<watch::Sender<Kill>>,
+    /// Why the last kill that could not be sent was not (the dial, the login, the server's
+    /// connection failing, or no answer in time).
+    unsent: Arc<std::sync::Mutex<Option<DbError>>>,
 }
 
 impl Killer {
     pub(crate) fn new(route: Route, opts: Opts, id: u64) -> Self {
-        Self { route, opts, id, kill: Arc::new(watch::Sender::new(Kill::None)) }
+        Self { route, opts, id, kill: Arc::new(watch::Sender::new(Kill::None)), unsent: Arc::default() }
+    }
+
+    /// A kill that could not be sent, with why ([`KillFailure::NotSent`]).
+    pub(crate) fn not_sent(&self) -> CancelFailure {
+        let why = self.unsent.lock().ok().and_then(|w| w.clone());
+        CancelFailure::NotSent(Box::new(why.unwrap_or(DbError::NoAnswer(KILL_TIMEOUT))))
     }
 
     /// Ask the server to stop what the session runs. What became of it is kept ([`Kill`]).
@@ -566,10 +571,18 @@ impl Killer {
         // The server's last answer, kept past the time limit: a slow route that got a refusal
         // (or the kill taken) before it ran out says so, never that nothing was sent.
         let answered = std::sync::Mutex::new(None);
+        // Why it could not be sent, when it could not.
+        let unsent = std::sync::Mutex::new(None);
+        let why = |e: DbError| {
+            if let Ok(mut w) = unsent.lock() {
+                *w = Some(e);
+            }
+        };
         let kill = async {
-            let stream = self.route.dial(DIAL_TIMEOUT).await.ok()?;
+            let stream = self.route.dial(DIAL_TIMEOUT).await.map_err(&why).ok()?;
             let (_wire, stream) = Wire::new(stream);
-            let mut conn = Conn::connect_with_stream(self.opts.clone(), Box::new(stream)).await.ok()?;
+            let conn = Conn::connect_with_stream(self.opts.clone(), Box::new(stream)).await;
+            let mut conn = conn.map_err(|e| why(connect_error(&e).0)).ok()?;
             let mut sent = None;
             for n in 0..KILL_TRIES {
                 if n > 0 {
@@ -581,7 +594,10 @@ impl Killer {
                 let kill = match conn.query_drop(format!("KILL QUERY {}", self.id)).await {
                     Ok(()) => Kill::Taken(Instant::now()),
                     Err(mysql_async::Error::Server(e)) => Kill::Failed(KillFailure::Refused(e.code)),
-                    Err(_) => Kill::Failed(KillFailure::NotSent),
+                    Err(e) => {
+                        why(my_error(&e));
+                        Kill::Failed(KillFailure::NotSent)
+                    }
                 };
                 if let Ok(mut a) = answered.lock() {
                     *a = Some(kill);
@@ -601,6 +617,11 @@ impl Killer {
             Ok(None) | Err(_) => answered.lock().ok().and_then(|a| *a).unwrap_or(Kill::Failed(KillFailure::NotSent)),
         };
         if !only_taken || matches!(kill, Kill::Taken(_)) {
+            if kill == Kill::Failed(KillFailure::NotSent)
+                && let Ok(mut w) = self.unsent.lock()
+            {
+                *w = Some(unsent.lock().ok().and_then(|w| w.clone()).unwrap_or(DbError::NoAnswer(KILL_TIMEOUT)));
+            }
             self.record(kill, still);
         }
     }

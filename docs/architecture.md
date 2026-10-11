@@ -469,6 +469,19 @@ Held by CI budgets (`docs/perf.md`).
   `Config::connect_raw` over the stream. Every cancel request (`Cancel`: the canceller's and
   the one closing a running session sends) dials a stream of its own and uses
   `CancelToken::cancel_query_raw`. Without a dialer nothing changes.
+- **A cancel that cannot be sent** (PostgreSQL, `route::Cancel::send`, within `CANCEL_DIAL`;
+  sent means written and flushed; the stream is then dropped, never shut down, so a shutdown
+  that fails or hangs cannot turn a sent cancel into one not sent): the user's
+  cancel is bound to the session's current request when it is asked (`route::Unsent`, counted
+  by `Link::next`), so a late failure never touches a later request. While that request runs,
+  `Link::guard` closes the connection (aborts the task that drives it), the run ends cancelled
+  (a count or the allowlist's question answers `Cancelled`, a page fetch fails cancelled), and
+  the session reports `Lost { CancelNotTaken(CancelFailure::NotSent(why)) }`; the TUI says it with the reason (`why`
+  worded and logged as usual). Closing a session whose own cancel does not go out closes the
+  connection too, never leaving it read on in the background. Nothing is known about the
+  statement then: it may run to its end and commit outside a transaction block; an open block
+  is rolled back when the server notices the closed connection; the session's savepoints,
+  temporary tables, settings and advisory locks are gone with it.
 - **Tests**: `transport::TcpDialer` (feature `test-util`, a plain TCP connect that counts its
   dials). The driver's integration suite runs a second time in CI with
   `DATARIG_TEST_DIAL=tcp`, every session, test connection and cancel through it; one test

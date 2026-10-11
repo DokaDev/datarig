@@ -2,7 +2,7 @@
 //! "the UI closed the session" and "the connection ended" (the server closed it while the
 //! session waited, [`Wire::closed`]).
 
-use crate::session::{Gate, Kill, KillFailure, Killer};
+use crate::session::{Gate, Kill, KillFailure, Killer, kill_unanswered};
 use crate::wire::Wire;
 use datarig_core::driver::{CancelFailure, DbCommand, DbError, DbEvent};
 use futures::future::BoxFuture;
@@ -145,7 +145,7 @@ impl Link {
         // The request answered all the same, and what it answered is the run's: it goes to the
         // UI (an autocommitted write did commit), and the session is lost after it.
         if !gate.close().await && out.is_ok() {
-            self.taint(DbError::CancelNotTaken(CancelFailure::NotSent));
+            self.taint(DbError::CancelNotTaken(kill_unanswered()));
         }
         out
     }
@@ -288,7 +288,7 @@ fn watching(
         };
         match kill {
             Kill::None => std::future::pending().await,
-            Kill::Failed(KillFailure::NotSent) => CancelFailure::NotSent,
+            Kill::Failed(KillFailure::NotSent) => killer.as_ref().map_or_else(kill_unanswered, Killer::not_sent),
             Kill::Failed(KillFailure::Refused(_)) => {
                 let refused = Instant::now();
                 let runs_on = async {
@@ -526,7 +526,7 @@ mod tests {
         let Setup { mut link, stream, server, killer, commands: _commands, .. } =
             after(Kill::Failed(KillFailure::NotSent));
         let out = tokio::time::timeout(Duration::from_secs(1), link.guard(Some(&killer), read_on(stream))).await;
-        assert!(matches!(out, Ok(Err(Closed::CancelNotTaken(CancelFailure::NotSent)))));
+        assert!(matches!(out, Ok(Err(Closed::CancelNotTaken(CancelFailure::NotSent(_))))));
         drop(server);
     }
 }

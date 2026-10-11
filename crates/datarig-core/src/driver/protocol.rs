@@ -157,15 +157,16 @@ pub enum DbError {
 }
 
 /// Why a request to stop the running statement did not stop it ([`DbError::CancelNotTaken`]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CancelFailure {
     /// The server refused it (the statement runs as another account; MySQL: inside a
     /// `SQL SECURITY DEFINER` routine, where `KILL QUERY` needs `CONNECTION_ADMIN`), and the
     /// statement kept sending rows.
     Refused,
-    /// It could not reach the server (the connection to send it on did not open: the network,
-    /// the login).
-    NotSent,
+    /// It could not reach the server, for this reason (the connection to send it on did not
+    /// open: the network, a tunnel, the login; or no answer in time). What lived in the session
+    /// (temporary tables, settings, advisory locks, savepoints) is gone with it too.
+    NotSent(Box<DbError>),
     /// The server agreed to stop the statement, and went on sending its rows.
     KeptSending,
 }
@@ -178,6 +179,7 @@ impl DbError {
             DbError::Server(s) | DbError::NeedsNoTransaction(s) => Cow::Borrowed(s),
             DbError::Settings(f) | DbError::Connection(f) => Cow::Borrowed(&f.detail),
             DbError::Transport(e) => Cow::Borrowed(e.raw()),
+            DbError::CancelNotTaken(CancelFailure::NotSent(why)) => why.raw(),
             DbError::AuthUnsupported(s) | DbError::AccessDenied(s) => Cow::Borrowed(s),
             DbError::ServerKeyFile { fault, .. } => {
                 fault.as_ref().map_or(Cow::Borrowed(""), |f| Cow::Borrowed(&f.detail))
@@ -208,7 +210,7 @@ impl DbError {
             | DbError::PasswordTooLong { .. }
             | DbError::ServerKeyInvalid
             | DbError::ReadOnlyLost
-            | DbError::CancelNotTaken(_) => Cow::Borrowed(""),
+            | DbError::CancelNotTaken(CancelFailure::Refused | CancelFailure::KeptSending) => Cow::Borrowed(""),
         }
     }
 }
