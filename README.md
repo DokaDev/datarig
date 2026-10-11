@@ -70,7 +70,7 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
   at once when the lock is already there, after at most 2 s when it is taken while the
   structure is being read.
   Nerd Font icons are optional (asked once, `:set icons=on|off`).
-- Show DDL (PostgreSQL): `D` on a table, view, materialized view, index or trigger in the
+- Show DDL (PostgreSQL; MySQL shows the server's own text, see [MySQL](#mysql)): `D` on a table, view, materialized view, index or trigger in the
   explorer (or its menu, or `:ddl [schema.name]`), `F` on a trigger for its function, opens its
   `CREATE` statements in a read-only tab, rebuilt from the catalog in one round trip and marked
   as such (`-- Reconstructed by datarig from the catalog (not pg_dump)`): owned sequences,
@@ -308,7 +308,7 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
 
 Planned, in no particular order and with no dates:
 
-- MySQL: table structure beyond columns, DDL, copy as SQL, row counts and the plan view; MariaDB
+- MySQL: table structure beyond columns, copy as SQL, row counts and the plan view; MariaDB
   as a driver of its own
 - Drivers for Valkey/Redis and Elasticsearch
 - TLS connections (today every connection is plain TCP; use an SSH tunnel across untrusted
@@ -561,10 +561,24 @@ is tested only lightly.
 - The explorer: the server's databases right under the profile (a MySQL database is the
   schema), their tables and views with the server's estimates (`~rows · size`), and the columns
   of a table; completion; `:use db` and the database picker (`Space c d`).
+- Show DDL: `D` on a table, view or trigger (or its menu), or `:ddl [kind] name` (`name` or
+  `db.name`; `kind` is `table`, `view`, `procedure`, `function`, `trigger` or `event`, needed
+  only when one name names several), opens the server's own `SHOW CREATE` text for tables, views,
+  triggers, procedures, functions and events, named `db.object`. MySQL has no DDL of an index
+  of its own: `D` on an index row shows its table's. A trigger's, routine's or event's text is
+  wrapped as `mysqldump` writes it (`DELIMITER ;;` … `;;` / `DELIMITER ;`), so it runs again
+  from a console (`o` opens it in one). An object made under another `sql_mode` than the session's
+  starts with a `-- sql_mode: …` line: its body is read in that mode. The server writes the
+  strings of a table's or a view's text with backslash escapes whatever the session's mode, so
+  a text with a backslash says so first; run it in a session without `NO_BACKSLASH_ESCAPES`.
+  The `DEFINER` is kept, so running it again as another user needs `SET_USER_ID` (MySQL 8.0)
+  or `SET_ANY_DEFINER` (8.2 and later), as with `mysqldump`. A routine you may run but not see
+  says its definition is hidden. Reading never waits on another session: an object whose table
+  is locked shows "locked" after at most 2 s, and `r` reads it again.
 - Marks, hints, charts, and copying rows as TSV, CSV or JSON.
 
 **What does not work yet**
-- Table structure beyond the columns (keys, indexes, constraints, triggers), DDL, copy as SQL
+- Table structure beyond the columns (keys, indexes, constraints, triggers), copy as SQL
   `INSERT`, the row count (`#`) and the plan view (`EXPLAIN` runs and shows its text).
 - TLS: a server that requires it (`require_secure_transport`) cannot be reached yet, and is said
   so.
