@@ -9,8 +9,9 @@ use futures::future::BoxFuture;
 use std::collections::VecDeque;
 use std::future::Future;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::time::Instant;
 
 /// How long closing a session waits for the server to take the cancel (`KILL QUERY`).
 const CANCEL_WAIT: Duration = Duration::from_secs(2);
@@ -26,8 +27,10 @@ const TAKE_WAIT: Duration = Duration::from_secs(10);
 /// [`TAKE_WAIT`] after a taken one).
 const SENDING_TICK: Duration = Duration::from_millis(500);
 
-/// In how many ticks in a row rows must come before they count as coming on.
+/// In how many of the last [`SENDING_WINDOW`] ticks rows must come before they count as coming
+/// on.
 const SENDING_TICKS: u32 = 3;
+const SENDING_WINDOW: u32 = 5;
 
 /// How much of a held result the session keeps, taken off the stream while it looks whether
 /// rows keep coming after a refused kill, before it counts them as coming on.
@@ -227,7 +230,7 @@ impl Link {
 /// * Not sent: cut at once (the server cannot be reached to stop it; reading on would wait on
 ///   a result that may have no end).
 /// * Refused (the statement runs as another account): cut only while its rows keep coming
-///   ([`SENDING_TICKS`] ticks in a row): a statement that sends ends when it finds the
+///   ([`SENDING_TICKS`] of the last [`SENDING_WINDOW`] ticks): a statement that sends ends when it finds the
 ///   connection gone. One that sends nothing would run on to its end all the same, cut or not
 ///   (the server does not look at its connection meanwhile): it is waited for, the session
 ///   says so every [`STOPPING_TICK`] ([`DbEvent::CancelRefused`]) and asks the server again
@@ -298,7 +301,7 @@ fn watching(
                     }
                 };
                 let sends_on = async {
-                    tokio::time::sleep_until((at.max(began) + TAKE_WAIT).into()).await;
+                    tokio::time::sleep_until(Instant::from_std(at).max(began) + TAKE_WAIT).await;
                     keeps_sending(&wire, false).await;
                 };
                 tokio::select! {
@@ -310,21 +313,24 @@ fn watching(
     }))
 }
 
-/// Resolves once the server's bytes came in [`SENDING_TICKS`] ticks in a row: rows that keep
-/// coming, not a backlog a slow link (a tunnel) still delivers in a burst. `soak`: nothing reads
+/// Resolves once the server's bytes came in [`SENDING_TICKS`] of the last [`SENDING_WINDOW`]
+/// ticks: rows that keep coming (also when a busy client reads them in bursts, a tick between
+/// with nothing new), not a backlog a slow link (a tunnel) still delivers in a burst. `soak`: nothing reads
 /// the result meanwhile (a held result between two pages): what came is taken off the stream
 /// and kept for the result each tick ([`Wire::soak`]), and more than [`SOAK_LIMIT`] kept counts
 /// as rows that keep coming.
 async fn keeps_sending(wire: &Wire, soak: bool) {
-    let (mut seen, mut ticks) = (wire.received(), 0);
+    // Whether rows came, in each of the last ticks (the latest first).
+    let (mut seen, mut came) = (wire.received(), 0u32);
+    let window = (1u32 << SENDING_WINDOW) - 1;
     loop {
         tokio::time::sleep(SENDING_TICK).await;
         if soak && wire.soak(SOAK_LIMIT) > SOAK_LIMIT {
             return;
         }
         let now = wire.received();
-        ticks = if now > seen { ticks + 1 } else { 0 };
-        if ticks >= SENDING_TICKS {
+        came = ((came << 1) | u32::from(now > seen)) & window;
+        if came.count_ones() >= SENDING_TICKS {
             return;
         }
         seen = now;
@@ -368,7 +374,7 @@ mod tests {
     }
 
     fn taken(ago: Duration) -> Kill {
-        Kill::Taken(Instant::now().checked_sub(ago).unwrap())
+        Kill::Taken(std::time::Instant::now().checked_sub(ago).unwrap())
     }
 
     const REFUSED: Kill = Kill::Failed(KillFailure::Refused(1095));
@@ -388,7 +394,7 @@ mod tests {
         })
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn rows_that_keep_coming_after_a_taken_kill_cut_the_connection() {
         // Taken long ago: the bound counts from when the request began.
         let Setup { mut link, stream, server, killer, commands: _commands, .. } = after(taken(TAKE_WAIT * 2));
@@ -400,7 +406,7 @@ mod tests {
         send.abort();
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn commands_that_keep_coming_never_put_a_cut_off() {
         let Setup { mut link, stream, server, killer, commands, .. } = after(taken(Duration::ZERO));
         let send = send_on(server);
@@ -415,7 +421,7 @@ mod tests {
         spam.abort();
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_backlog_after_a_taken_kill_is_read_not_cut() {
         // A burst once past the bound (what a slow link still held), then nothing: not rows
         // that keep coming.
@@ -431,7 +437,7 @@ mod tests {
         burst.abort();
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_statement_silent_after_a_taken_kill_is_waited_for() {
         // Silent (a rollback) past the bound: never cut.
         let Setup { mut link, stream, server, killer, commands: _commands, .. } = after(taken(Duration::ZERO));
@@ -441,7 +447,7 @@ mod tests {
         drop(server);
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_refused_kill_of_a_statement_that_sends_cuts_the_connection() {
         let Setup { mut link, stream, server, killer, commands: _commands, .. } = after(REFUSED);
         let send = send_on(server);
@@ -452,7 +458,7 @@ mod tests {
         send.abort();
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_refused_kill_of_a_silent_statement_is_waited_for_and_said() {
         // Cutting would not stop it: the session waits, and says why every few seconds.
         let Setup { mut link, stream, server, killer, mut events, commands: _commands } = after(REFUSED);
@@ -468,7 +474,7 @@ mod tests {
         drop(server);
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn commands_that_keep_coming_never_silence_what_the_session_says() {
         let Setup { mut link, stream, server, killer, mut events, commands } = after(REFUSED);
         let spam = tokio::spawn(async move {
@@ -487,7 +493,7 @@ mod tests {
         drop(server);
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_kill_that_was_not_sent_cuts_the_connection_at_once() {
         let Setup { mut link, stream, server, killer, commands: _commands, .. } =
             after(Kill::Failed(KillFailure::NotSent));

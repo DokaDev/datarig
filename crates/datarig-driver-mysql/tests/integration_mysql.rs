@@ -1348,13 +1348,15 @@ async fn a_connection_lost_while_a_statement_runs_fails_it_then_is_lost() {
 /// A procedure of the administrator's that runs as its definer (`SQL SECURITY DEFINER`) and
 /// whose result has no end in practice (a table of a million rows joined with itself): the
 /// session's user may run it, and may not `KILL QUERY` it (while it runs, the statement is the
-/// definer's). Dropped again at the end.
+/// definer's). Joined by a range on the key, so the server streams rows from the first one on
+/// (a cross join builds a hash table first, saying nothing for as long as 25 s on a loaded
+/// server). Dropped again at the end.
 async fn endless_definer_procedure(admin: &str, name: &str) -> (String, Cleanup) {
     let p = format!("zz_it_{name}_{}", std::process::id());
     let cleanup = Cleanup { url: admin.to_string(), sql: format!("DROP PROCEDURE IF EXISTS shop.{p}") };
     let mut a = side(admin).await;
     a.query_drop(format!(
-        "CREATE PROCEDURE shop.{p}() SQL SECURITY DEFINER SELECT a.id FROM shop.events a CROSS JOIN shop.events b"
+        "CREATE PROCEDURE shop.{p}() SQL SECURITY DEFINER SELECT a.id FROM shop.events a JOIN shop.events b ON b.id >= a.id"
     ))
     .await
     .unwrap();

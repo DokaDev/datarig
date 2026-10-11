@@ -226,7 +226,13 @@ impl Drop for Reply<'_> {
     fn drop(&mut self) {
         if !self.answered {
             let _ = self.events.send(DbEvent::Failed { id: self.id, error: DbError::NoResult, cancelled: false });
-            debug_assert!(std::thread::panicking(), "run {} ended without a terminal event", self.id);
+            // Nothing is owed to nobody: the session's task is dropped once its UI is gone (the
+            // runtime shutting down mid-run).
+            debug_assert!(
+                std::thread::panicking() || self.events.is_closed(),
+                "run {} ended without a terminal event",
+                self.id
+            );
         }
     }
 }
