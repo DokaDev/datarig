@@ -816,10 +816,11 @@ pub(crate) fn returns_no_rows(sql: &str) -> bool {
 /// Whether `sql` is `COPY … FROM STDIN` or `COPY … TO STDOUT` (the client's side of a COPY):
 /// `STDIN` or `STDOUT` right after the first `FROM` or `TO` outside parentheses, the one that
 /// follows the table or the query (both reserved words, so no bare name, though one after a dot
-/// names a table: `pg_temp.to`; a later one, in a `WHERE` clause, compares a column). A table or a column may be named `stdout`; a file name
-/// is a string. Only the `COPY` statement itself starts a COPY with the client (not one in a
-/// function or a `DO` block), so its first word tells. Read both ways the server may lex the
-/// text: with `standard_conforming_strings` off (a session may set it) `\'` ends no string.
+/// names a table: `pg_temp.to`; a later one, in a `WHERE` clause, compares a column). A table
+/// or a column may be named `stdout`; a file name is a string. Only the `COPY` statement itself
+/// starts a COPY with the client (not one in a function or a `DO` block), so its first word
+/// tells. Read both ways the server may lex the text: with `standard_conforming_strings` off (a
+/// session may set it) `\'` ends no string.
 pub(crate) fn copies_with_client(sql: &str) -> bool {
     copies_with_client_in(sql, &lex(sql))
         || sql.contains('\\') && copies_with_client_in(sql, &lex_backslash_strings(sql))
