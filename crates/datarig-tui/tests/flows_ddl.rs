@@ -672,7 +672,12 @@ fn mysql_shows_the_servers_own_ddl() {
     h.db(answer(id, Err(DbError::Ambiguous(vec![ObjectKind::Table, ObjectKind::Procedure]))));
     let screen = h.screen(200, 30);
     assert!(screen.contains("the name names more than one object here (a table, a procedure)"), "{screen}");
-    assert!(screen.contains(":ddl procedure name"), "the way out: {screen}");
+    assert!(screen.contains(":ddl procedure <name>"), "the way out, with a kind the name has: {screen}");
+    h.command("ddl audit");
+    let id = asked(&h.sent())[0].0;
+    h.db(answer(id, Err(DbError::Ambiguous(vec![ObjectKind::View, ObjectKind::Trigger]))));
+    let screen = h.screen(200, 30);
+    assert!(screen.contains("(a view, a trigger): put its kind first, as in :ddl trigger <name>"), "{screen}");
     // A kind word goes with the name.
     h.command("ddl procedure audit");
     assert_eq!(

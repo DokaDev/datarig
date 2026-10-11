@@ -1427,6 +1427,17 @@ impl App {
             DbError::NotFound => Label::DbNotFound,
             DbError::Ambiguous(kinds) => {
                 use datarig_core::driver::ddl::ObjectKind as K;
+                // The example names a kind the name has: the last, a routine or such rather than
+                // the table the explorer shows already.
+                let kind = match kinds.last() {
+                    Some(K::Table) | None => "table",
+                    Some(K::View) => "view",
+                    Some(K::Procedure) => "procedure",
+                    Some(K::Function) => "function",
+                    Some(K::Trigger) => "trigger",
+                    Some(K::Event) => "event",
+                }
+                .to_string();
                 let kinds: Vec<String> = kinds
                     .iter()
                     .map(|k| {
@@ -1442,7 +1453,7 @@ impl App {
                             .to_string()
                     })
                     .collect();
-                return self.i18n.msg(&Msg::DbAmbiguous { kinds: kinds.join(", ") }).to_string();
+                return self.i18n.msg(&Msg::DbAmbiguous { kinds: kinds.join(", "), kind }).to_string();
             }
             DbError::DefinitionHidden => Label::DbDefinitionHidden,
             DbError::NotAName => Label::DbNotAName,

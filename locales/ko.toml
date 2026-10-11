@@ -387,7 +387,7 @@
 "db.statement_cache_off" = "{name}: 이 연결에서는 서버 측 문장 캐시를 껐습니다. 준비된 문장이 계속 사라졌습니다(트랜잭션 모드의 PgBouncer 같은 연결 풀러?). 프로필의 고급 섹션에서 끄면 이 과정을 건너뜁니다"
 "db.locked" = "다른 세션의 잠금이 있어 기다리지 않고 조회를 멈췄습니다 (다시 시도하세요)"
 "db.not_found" = "없습니다 (이름이 바뀌었거나 삭제되었을 수 있습니다)"
-"db.ambiguous" = "이 이름은 여기에서 둘 이상의 객체를 가리킵니다 ({kinds}): :ddl procedure name처럼 종류를 앞에 붙이세요"
+"db.ambiguous" = "이 이름은 여기에서 둘 이상의 객체를 가리킵니다 ({kinds}): :ddl {kind} <name>처럼 종류를 앞에 붙이세요"
 "db.definition_hidden" = "서버가 이 사용자에게 정의를 보여 주지 않습니다 (정의자, 또는 SHOW_ROUTINE 권한이나 모든 데이터베이스의 SELECT 권한이 있는 사용자에게만 보여 줍니다)"
 "db.not_a_name" = "이름이 아닙니다: name 또는 database.name 형태로, 각 부분은 그대로 쓰거나 백틱으로 감싸세요"
 "db.no_database" = "선택된 데이터베이스가 없습니다: database.name 형태로 지정하세요"

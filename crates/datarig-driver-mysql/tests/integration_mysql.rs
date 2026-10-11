@@ -1938,21 +1938,22 @@ async fn the_metadata_session_shows_the_servers_ddl() {
     let test = "the_metadata_session_shows_the_servers_ddl";
     let Some((url, admin)) = urls(test) else { return };
     let b = format!("zz_it_ddl_{}", std::process::id());
-    // Dropped also when the test fails (a table's triggers with it).
+    // Dropped also when the test fails (a table's triggers with it). The views are in `datarig`:
+    // other tests list the views of `shop`.
     let mut guards = Vec::new();
     for (what, name) in [
-        ("TABLE", b.clone()),
-        ("TABLE", format!("{b}c")),
-        ("VIEW", format!("{b}_v")),
-        ("VIEW", format!("{b}_vc")),
-        ("PROCEDURE", b.clone()),
-        ("PROCEDURE", format!("{b}_p")),
-        ("PROCEDURE", format!("{b}_pc")),
-        ("PROCEDURE", format!("{b}_h")),
-        ("FUNCTION", format!("{b}_f")),
-        ("EVENT", format!("{b}_e")),
+        ("TABLE", format!("shop.{b}")),
+        ("TABLE", format!("shop.{b}c")),
+        ("VIEW", format!("datarig.{b}_v")),
+        ("VIEW", format!("datarig.{b}_vc")),
+        ("PROCEDURE", format!("shop.{b}")),
+        ("PROCEDURE", format!("shop.{b}_p")),
+        ("PROCEDURE", format!("shop.{b}_pc")),
+        ("PROCEDURE", format!("shop.{b}_h")),
+        ("FUNCTION", format!("shop.{b}_f")),
+        ("EVENT", format!("shop.{b}_e")),
     ] {
-        guards.push(Cleanup { url: admin.clone(), sql: format!("DROP {what} IF EXISTS shop.{name}") });
+        guards.push(Cleanup { url: admin.clone(), sql: format!("DROP {what} IF EXISTS {name}") });
     }
     let mut a = side(&admin).await;
     for sql in [
@@ -1961,7 +1962,7 @@ async fn the_metadata_session_shows_the_servers_ddl() {
              name VARCHAR(40) NOT NULL DEFAULT 'a;b' COMMENT 'it''s; \"quoted\"', \
              twice INT GENERATED ALWAYS AS (CHAR_LENGTH(name) * 2) STORED, KEY ix_name (name(8), id DESC)) COMMENT 'x;y'"
         ),
-        format!("CREATE VIEW shop.{b}_v AS SELECT id, CONCAT(name, ';') AS n FROM shop.{b} WHERE name <> ';'"),
+        format!("CREATE VIEW datarig.{b}_v AS SELECT id, CONCAT(name, ';') AS n FROM shop.{b} WHERE name <> ';'"),
         format!(
             "CREATE TRIGGER shop.{b}_bi BEFORE INSERT ON shop.{b} FOR EACH ROW BEGIN \
              SET NEW.name = CONCAT(NEW.name, ';;'); -- a comment; with a ;\n SET NEW.name = UPPER(NEW.name); END"
@@ -1990,10 +1991,15 @@ async fn the_metadata_session_shows_the_servers_ddl() {
     assert!(table.starts_with(&format!("CREATE TABLE `{b}` (\n")), "{table}");
     assert!(table.ends_with(" COMMENT='x;y';\n"), "{table}");
     assert!(table.contains("KEY `ix_name` (`name`(8),`id` DESC)"), "{table}");
-    let (name, view) = verbatim(ddl_of(&mut m, DdlObject::Relation { schema: shop(), name: format!("{b}_v") }).await);
-    assert_eq!(name, format!("shop.{b}_v"));
+    let datarig = || "datarig".to_string();
+    let (name, view) =
+        verbatim(ddl_of(&mut m, DdlObject::Relation { schema: datarig(), name: format!("{b}_v") }).await);
+    assert_eq!(name, format!("datarig.{b}_v"));
     assert!(view.starts_with("CREATE ALGORITHM=UNDEFINED DEFINER="), "{view}");
-    assert!(view.contains(&format!(" VIEW `{b}_v` AS select ")) && view.ends_with(";\n"), "{view}");
+    // The server writes names as the metadata session's database (`shop`) reads them: the view
+    // of another database qualified, the table of its own not.
+    assert!(view.contains(&format!(" VIEW `datarig`.`{b}_v` AS select ")) && view.ends_with(";\n"), "{view}");
+    assert!(view.contains(&format!(" from `{b}` ")), "{view}");
     let trigger = DdlObject::Trigger { schema: shop(), table: b.clone(), name: format!("{b}_bi") };
     let (name, trig) = verbatim(ddl_of(&mut m, trigger).await);
     assert_eq!(name, format!("shop.{b}_bi"));
@@ -2015,7 +2021,7 @@ async fn the_metadata_session_shows_the_servers_ddl() {
         "{event}"
     );
     // The same objects through `:ddl name`.
-    assert_eq!(verbatim(ddl_of(&mut m, named(&format!("{b}_v"), Some("shop"))).await).1, view);
+    assert_eq!(verbatim(ddl_of(&mut m, named(&format!("{b}_v"), Some("datarig"))).await).1, view);
     assert_eq!(verbatim(ddl_of(&mut m, named(&format!("`shop`.`{b}_bi`"), None)).await).1, trig);
     let elsewhere = ddl_of(&mut m, named(&format!("{b}_p"), Some("datarig"))).await;
     assert_eq!(elsewhere, Err(DbError::NotFound), "looked up in the database it is given");
@@ -2056,12 +2062,14 @@ async fn the_metadata_session_shows_the_servers_ddl() {
         (format!("{b}_bi"), format!("{b}_bic")),
         (format!("{b}_p"), format!("{b}_pc")),
     ];
+    // In the metadata session's database, as `o` opens a console.
     for text in [&table, &view, &trig, &proc] {
         replay(&mut q, &mut id, &rename(text, &copies)).await;
     }
     let again = |name: String| DdlObject::Relation { schema: shop(), name };
     assert_eq!(verbatim(ddl_of(&mut m, again(format!("{b}c"))).await).1, rename(&table, &copies));
-    assert_eq!(verbatim(ddl_of(&mut m, again(format!("{b}_vc"))).await).1, rename(&view, &copies));
+    let view_copy = DdlObject::Relation { schema: datarig(), name: format!("{b}_vc") };
+    assert_eq!(verbatim(ddl_of(&mut m, view_copy).await).1, rename(&view, &copies));
     let trigger = DdlObject::Trigger { schema: shop(), table: format!("{b}c"), name: format!("{b}_bic") };
     assert_eq!(verbatim(ddl_of(&mut m, trigger).await).1, rename(&trig, &copies));
     assert_eq!(verbatim(ddl_of(&mut m, named(&format!("{b}_pc"), Some("shop"))).await).1, rename(&proc, &copies));
@@ -2093,13 +2101,14 @@ async fn a_ddl_read_never_queues_behind_a_metadata_lock_nor_keeps_one() {
     let Some((url, admin)) = urls(test) else { return };
     let t = numbers(&admin, "ddllock", 200_000).await;
     let (view, view2, trigger) = (format!("{}_v", t.name), format!("{}_vv", t.name), format!("{}_bi", t.name));
-    let _view2 = Cleanup { url: admin.clone(), sql: format!("DROP VIEW IF EXISTS shop.{view2}") };
-    let _view = Cleanup { url: admin.clone(), sql: format!("DROP VIEW IF EXISTS shop.{view}") };
+    // The views are in `datarig`: other tests list the views of `shop`.
+    let _view2 = Cleanup { url: admin.clone(), sql: format!("DROP VIEW IF EXISTS datarig.{view2}") };
+    let _view = Cleanup { url: admin.clone(), sql: format!("DROP VIEW IF EXISTS datarig.{view}") };
     let mut wide = side(&admin).await;
     wide.query_drop(format!("ALTER TABLE {} MODIFY v VARCHAR(200)", t.q())).await.unwrap();
     wide.query_drop(format!("UPDATE {} SET v = REPEAT('x', 200)", t.q())).await.unwrap();
-    wide.query_drop(format!("CREATE VIEW shop.{view} AS SELECT id FROM {}", t.q())).await.unwrap();
-    wide.query_drop(format!("CREATE VIEW shop.{view2} AS SELECT id FROM shop.{view}")).await.unwrap();
+    wide.query_drop(format!("CREATE VIEW datarig.{view} AS SELECT id FROM {}", t.q())).await.unwrap();
+    wide.query_drop(format!("CREATE VIEW datarig.{view2} AS SELECT id FROM datarig.{view}")).await.unwrap();
     let body = "BEGIN SET NEW.v = CONCAT(NEW.v, ';'); END";
     wide.query_drop(format!("CREATE TRIGGER shop.{trigger} BEFORE INSERT ON {} FOR EACH ROW {body}", t.q()))
         .await
@@ -2109,13 +2118,13 @@ async fn a_ddl_read_never_queues_behind_a_metadata_lock_nor_keeps_one() {
     m.wait(|e| matches!(e, DbEvent::Catalog(_)), 30).await;
     let mut side_admin = side(&admin).await;
     let meta = only_session(&mut side_admin, SessionRole::Meta, test).await;
-    let relation = |name: &str| DdlObject::Relation { schema: "shop".into(), name: name.into() };
+    let relation = |schema: &str, name: &str| DdlObject::Relation { schema: schema.into(), name: name.into() };
     let trigger = DdlObject::Trigger { schema: "shop".into(), table: t.name.clone(), name: trigger.clone() };
     let relations = [
-        relation(&t.name),
-        relation(&view),
-        relation(&view2),
-        DdlObject::Named { name: view.clone(), schema: Some("shop".into()) },
+        relation("shop", &t.name),
+        relation("datarig", &view),
+        relation("datarig", &view2),
+        DdlObject::Named { name: view.clone(), schema: Some("datarig".into()) },
     ];
     /// Read each of `objects`: each answers with its DDL within half a second, or (`locked`)
     /// `Locked` after the session's lock wait; no metadata lock stays.
