@@ -1728,6 +1728,9 @@ async fn a_structure_read_never_queues_behind_a_metadata_lock_nor_keeps_one() {
     //    open it): the read opens nothing.
     let fresh = numbers(&admin, "structopen", 10).await;
     side_admin.query_drop(format!("FLUSH TABLES {}", fresh.q())).await.unwrap();
+    // A read of another table first: the server's own dictionary tables it opens the first time
+    // count too.
+    read(structure_of(&mut m, &t.name).await, 2);
     let opened = opened_tables(&mut side_admin, meta).await;
     read(structure_of(&mut m, &fresh.name).await, 2);
     assert_eq!(opened_tables(&mut side_admin, meta).await, opened, "the table was not opened");
