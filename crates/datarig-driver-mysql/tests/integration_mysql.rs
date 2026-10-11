@@ -1706,8 +1706,9 @@ async fn opened_tables(a: &mut mysql_async::Conn, id: u64) -> u64 {
     a.query_first::<u64, _>(sql).await.unwrap().unwrap()
 }
 
-/// Reading a table's structure never opens the table (a table without cached statistics would
-/// be: its estimates are not read with it), never queues behind another session's metadata lock
+/// Reading a table's structure does not open the table (step 1 is a guard against that, not a
+/// proof: on the metadata session, which is read-only, a read of the estimates did not open a
+/// table without cached statistics either), never queues behind another session's metadata lock
 /// (held by `LOCK TABLES … WRITE`, or asked for by an `ALTER TABLE` that waits behind a held
 /// result) and always answers with the structure at once, never holds that session up while it
 /// runs, and keeps no metadata lock once it has answered.
@@ -1729,8 +1730,9 @@ async fn a_structure_read_never_queues_behind_a_metadata_lock_nor_keeps_one() {
         let s = r.expect("the structure, never Locked");
         assert_eq!(s.columns.len(), columns);
     };
-    // 1. A new table out of the server's cache, no statistics of it cached (estimating it would
-    //    open it): the read opens nothing.
+    // 1. A guard: a new table out of the server's cache, no statistics of it cached, and the
+    //    read opens nothing (a read-only session did not open it for its estimates either, so
+    //    this does not tell whether they are read).
     let fresh = numbers(&admin, "structopen", 10).await;
     side_admin.query_drop(format!("FLUSH TABLES {}", fresh.q())).await.unwrap();
     // A read of another table first: the server's own dictionary tables it opens the first time
@@ -2168,4 +2170,30 @@ async fn rows_copied_as_sql_run_back_byte_for_byte() {
         assert_eq!(row_hashes(&mut a, &copy.q(), &columns).await, want, "UPDATE, {mode}:\n{update}");
         a.disconnect().await.unwrap();
     }
+}
+
+/// A trigger's definition in the structure is for display: `ACTION_STATEMENT` gives its body
+/// with the escapes of its string literals undone, so a literal with a doubled quote or a
+/// backslash no longer reads as SQL (the DDL comes from `SHOW CREATE TRIGGER`).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_mysql_trigger_definition_is_for_display_only() {
+    let test = "a_mysql_trigger_definition_is_for_display_only";
+    let Some((url, admin)) = urls(test) else { return };
+    let pid = std::process::id();
+    let t = Table::make(
+        &admin,
+        "trigtext",
+        &[
+            "CREATE TABLE {t} (id INT PRIMARY KEY, s VARCHAR(40))",
+            &format!(
+                r"CREATE TRIGGER shop.zz_it_tt_{pid} BEFORE INSERT ON {{t}} FOR EACH ROW SET NEW.s = 'it''s \\ x'"
+            ),
+        ],
+    )
+    .await;
+    let mut m = Conn::start(&url, SessionRole::Meta, false, test);
+    m.wait(|e| matches!(e, DbEvent::Keys(_)), 30).await;
+    let s = structure_of(&mut m, &t.name).await.unwrap();
+    assert_eq!(s.triggers.len(), 1);
+    assert!(s.triggers[0].definition.ends_with(r"FOR EACH ROW SET NEW.s = 'it's \ x'"), "{}", s.triggers[0].definition);
 }
