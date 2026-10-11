@@ -988,3 +988,204 @@ fn key_columns_icons_on_and_off() {
         insta::assert_snapshot!(name, h.draw(120, 40).backend());
     }
 }
+
+/// `shop.items` as the MySQL driver reports it: an `AUTO_INCREMENT` key, a foreign key to a
+/// table of another database (`datarig.orders`), a prefix, a descending and a functional index,
+/// a unique key, a check the server does not enforce, and two triggers, which call no function.
+fn mysql_items_structure() -> TableStructure {
+    use datarig_core::driver::structure::*;
+    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    let col = |name: &str, ty: &str, not_null: bool, default: Option<&str>| StructureColumn {
+        name: name.into(),
+        type_name: ty.into(),
+        not_null,
+        default: default.map(str::to_string),
+        fill: ColumnFill::Default,
+    };
+    let index = |name: &str, cols: &[&str], keys: &[Option<&str>], unique: bool| Index {
+        name: name.into(),
+        columns: s(cols),
+        options: vec![String::new(); cols.len()],
+        include: Vec::new(),
+        key_columns: keys.iter().map(|k| k.map(str::to_string)).collect(),
+        include_columns: Vec::new(),
+        unique,
+        method: "BTREE".into(),
+        predicate: None,
+        primary: name == "PRIMARY",
+        constraint: unique && keys.iter().all(Option::is_some),
+        definition: String::new(),
+    };
+    let trigger = |name: &str, timing, event| Trigger {
+        name: name.into(),
+        timing,
+        events: vec![event],
+        for_each_row: true,
+        function: String::new(),
+        enabled: true,
+        update_columns: Vec::new(),
+        condition: None,
+        definition: String::new(),
+    };
+    let mut t = TableStructure::new(RelationKind::Table);
+    t.estimated_rows = Some(1_200);
+    t.total_bytes = Some(81_920);
+    t.columns = vec![
+        StructureColumn { fill: ColumnFill::AutoIncrement, ..col("id", "bigint unsigned", true, None) },
+        col("order_id", "int", false, None),
+        col("sku", "varchar(40)", true, Some("'none'")),
+        col("qty", "int", true, Some("0")),
+        col("created", "timestamp", true, Some("CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP")),
+        StructureColumn { fill: ColumnFill::Stored("`qty` * 2".into()), ..col("twice", "int", false, None) },
+    ];
+    t.primary_key = Some(KeyConstraint { name: "PRIMARY".into(), columns: s(&["id"]), definition: String::new() });
+    t.foreign_keys = vec![ForeignKey {
+        name: "items_order_fk".into(),
+        columns: s(&["order_id"]),
+        ref_schema: "datarig".into(),
+        ref_table: "orders".into(),
+        ref_columns: s(&["id"]),
+        on_delete: FkAction::Cascade,
+        on_update: FkAction::NoAction,
+        definition: String::new(),
+    }];
+    t.indexes = vec![
+        index("PRIMARY", &["id"], &[Some("id")], true),
+        index("items_order_fk", &["order_id"], &[Some("order_id")], false),
+        index("ix_qty", &["qty"], &[Some("qty")], false),
+        index("ix_sku_prefix", &["sku(8)"], &[Some("sku")], false),
+        index("ix_upper", &["(upper(`sku`))"], &[None], false),
+        index("uq_sku", &["sku"], &[Some("sku")], true),
+    ];
+    t.indexes[2].options = s(&["DESC"]);
+    t.unique_constraints =
+        vec![KeyConstraint { name: "uq_sku".into(), columns: s(&["sku"]), definition: String::new() }];
+    t.checks = vec![
+        CheckConstraint {
+            name: "items_chk_1".into(),
+            expression: "`qty` >= 0".into(),
+            columns: s(&["qty"]),
+            definition: "CONSTRAINT items_chk_1 CHECK (`qty` >= 0)".into(),
+        },
+        CheckConstraint {
+            name: "items_chk_2".into(),
+            expression: "`qty` < 1000".into(),
+            columns: s(&["qty"]),
+            definition: format!("CONSTRAINT items_chk_2 CHECK (`qty` < 1000) {}", CheckConstraint::MYSQL_NOT_ENFORCED),
+        },
+    ];
+    t.triggers = vec![
+        trigger("items_au", TriggerTiming::After, TriggerEvent::Update),
+        trigger("items_bi", TriggerTiming::Before, TriggerEvent::Insert),
+    ];
+    t
+}
+
+/// A MySQL profile (its databases are the schemas), the explorer focused, `shop` open with
+/// `items`.
+fn mysql_shop_open(icons: bool) -> Harness {
+    let driver = FakeDriver::default();
+    driver.mysql.store(true, Ordering::SeqCst);
+    let mut p = datarig_core::profile::ConnectionConfig::test_db();
+    p.name = "local-my".into();
+    p.driver = "mysql".into();
+    let cfg = datarig_core::config::Config { connections: vec![p], ..Default::default() };
+    let mut h = Harness::with_driver(&cfg, Lang::En, driver);
+    h.app.icons = if icons { IconsSetting::On } else { IconsSetting::Off };
+    h.db(DbEvent::Connected);
+    h.db(DbEvent::Schemas(Ok(vec!["datarig".into(), "shop".into()])));
+    h.explore("local-my");
+    h.goto("shop");
+    h.key(KeyCode::Char('l'));
+    h.db(DbEvent::Objects { schema: "shop".into(), result: Ok((vec!["items".into()], vec![]).into()) });
+    h.sent();
+    h
+}
+
+/// On MySQL an open table shows its structure as on PostgreSQL (no "columns only" notice):
+/// an `AUTO_INCREMENT` column says so, a trigger names no function (it calls none, so `F` says
+/// there is no function's DDL and the menu does not offer one), a check the server keeps
+/// without enforcing it says so, and Enter on a foreign key goes to its table in another
+/// database. Triggers the server would not list to the user are unknown, not none.
+#[test]
+fn a_mysql_table_shows_its_structure() {
+    let mut h = mysql_shop_open(false);
+    h.goto("items");
+    h.key(KeyCode::Char('l'));
+    assert_eq!(asked(&h.sent()), ["shop.items"]);
+    assert!(!h.status(160, 45).contains("Columns only"), "{}", h.status(160, 45));
+    h.db(structure("shop", "items", mysql_items_structure()));
+    assert!(line_of(&mut h, "items").ends_with("▾ items  ~1.2k rows · 80 KB"), "{}", line_of(&mut h, "items"));
+    for g in ["Columns", "Indexes", "Check Constraints", "Triggers"] {
+        h.goto(g);
+        h.key(KeyCode::Char('l'));
+    }
+    for want in [
+        "PK id  bigint unsigned, not null, auto_increment",
+        "FK order_id  int",
+        "created  timestamp, not null, default CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP",
+        "twice  int, generated (`qty` * 2)",
+        "ix_qty  (qty DESC) BTREE",
+        "ix_sku_prefix  (sku(8)) BTREE",
+        "ix_upper  ((upper(`sku`))) BTREE",
+        "uq_sku  (sku) UNIQUE BTREE · constraint",
+        "items_chk_1  `qty` >= 0",
+        "items_chk_2  `qty` < 1000 · not enforced",
+    ] {
+        assert!(lines(&mut h).iter().any(|l| l.ends_with(want)), "{want:?}:\n{}", lines(&mut h).join("\n"));
+    }
+    assert!(line_of(&mut h, "items_chk_1").ends_with("`qty` >= 0"), "an enforced check says nothing more");
+    let bi = line_of(&mut h, "items_bi");
+    assert!(bi.ends_with("items_bi  BEFORE INSERT · FOR EACH ROW"), "{bi}");
+    assert!(line_of(&mut h, "items_au").ends_with("items_au  AFTER UPDATE · FOR EACH ROW"));
+    // No function to show.
+    h.goto("items_au");
+    {
+        use datarig_tui::app::action::{Action, ExplorerAction};
+        let items = h.app.menu_items();
+        assert!(items.contains(&Action::Explorer(ExplorerAction::ShowDdl)), "{items:?}");
+        assert!(!items.contains(&Action::Explorer(ExplorerAction::ShowFunctionDdl)), "{items:?}");
+    }
+    h.key(KeyCode::Char('F'));
+    assert!(h.status(160, 45).contains("This trigger calls no function"), "{}", h.status(160, 45));
+    // Enter on the foreign key: the table of another database, read once it is listed.
+    h.explore("local-my");
+    h.goto("Foreign Keys");
+    h.key(KeyCode::Char('l'));
+    h.goto("items_order_fk");
+    h.sent();
+    h.key(KeyCode::Enter);
+    let sent = h.sent();
+    assert!(sent.iter().any(|c| matches!(c, DbCommand::LoadObjects { schema } if schema == "datarig")), "{sent:?}");
+    h.db(DbEvent::Objects { schema: "datarig".into(), result: Ok((vec!["orders".into()], vec![]).into()) });
+    assert_eq!(h.rows()[h.selected()].trim(), "orders");
+    // Without the privilege to list triggers: unknown, and not opened as empty.
+    let mut hidden = mysql_items_structure();
+    hidden.triggers.clear();
+    hidden.hidden = vec![datarig_core::driver::structure::StructureGroup::Triggers];
+    h.db(structure("shop", "items", hidden));
+    let l = line_of(&mut h, "Triggers");
+    assert!(l.ends_with("Triggers · unknown: listed only to a user with a privilege this one lacks"), "{l}");
+}
+
+/// The MySQL table drawn with its columns, indexes, checks and triggers open, English, icons on
+/// and off, at 80x24 and 120x40.
+#[test]
+fn mysql_structure_icons_on_and_off() {
+    for icons in [false, true] {
+        for (w, hh) in [(80, 24), (120, 40)] {
+            let mut h = mysql_shop_open(icons);
+            h.goto("items");
+            h.key(KeyCode::Char('l'));
+            h.db(structure("shop", "items", mysql_items_structure()));
+            for g in ["Columns", "Indexes", "Check Constraints", "Triggers"] {
+                h.goto(g);
+                h.key(KeyCode::Char('l'));
+            }
+            h.explore("local-my");
+            h.goto("items");
+            let name = format!("mysql_structure_{}_en_{w}x{hh}", if icons { "icons" } else { "text" });
+            insta::assert_snapshot!(name, h.draw(w, hh).backend());
+        }
+    }
+}

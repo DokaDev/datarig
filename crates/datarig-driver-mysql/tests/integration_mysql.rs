@@ -1484,3 +1484,281 @@ async fn a_column_named_row_count_is_read_whole() {
     let sql = format!("SELECT id AS row_count FROM {}", t.q());
     assert_eq!(all_rows(&mut c, 2, &sql, PagingMode::Hold).await, 1234);
 }
+
+/// The structure test `test`'s metadata session reads of `shop.<table>`.
+async fn structure_of(
+    m: &mut Conn,
+    table: &str,
+) -> Result<Box<datarig_core::driver::structure::TableStructure>, DbError> {
+    m.session.send(DbCommand::LoadStructure { schema: "shop".into(), table: table.into() });
+    match m.wait(|e| matches!(e, DbEvent::Structure { .. }), 15).await {
+        DbEvent::Structure { schema, table: t, result } => {
+            assert_eq!((schema.as_str(), t.as_str()), ("shop", table));
+            result
+        }
+        _ => unreachable!(),
+    }
+}
+
+/// A table's structure in one statement: its columns (`AUTO_INCREMENT`, defaults as SQL,
+/// generated columns), its primary key, a composite foreign key to a table of another database,
+/// its indexes (prefix, descending, functional, full-text, unique), its checks (one the server
+/// does not enforce) and its triggers (which call no function); a view; a table that is not
+/// there; and a user who may not see the triggers, to whom they are unknown, not none.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_metadata_session_reads_a_tables_structure() {
+    use datarig_core::driver::structure::*;
+    let Some((url, admin)) = urls("the_metadata_session_reads_a_tables_structure") else { return };
+    let pid = std::process::id();
+    let (child, parent, view) =
+        (format!("zz_it_child_{pid}"), format!("zz_it_parent_{pid}"), format!("zz_it_view_{pid}"));
+    // One statement each, dropped in the reverse order: the view, the table, the one it
+    // references.
+    let _parent = Cleanup { url: admin.clone(), sql: format!("DROP TABLE IF EXISTS datarig.{parent}") };
+    let _child = Cleanup { url: admin.clone(), sql: format!("DROP TABLE IF EXISTS shop.{child}") };
+    let _view = Cleanup { url: admin.clone(), sql: format!("DROP VIEW IF EXISTS shop.{view}") };
+    let mut a = side(&admin).await;
+    for sql in [
+        format!("CREATE TABLE datarig.{parent} (a INT NOT NULL, b VARCHAR(10) NOT NULL, PRIMARY KEY (a, b))"),
+        format!(
+            "CREATE TABLE shop.{child} (
+               id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+               pa INT, pb VARCHAR(10),
+               name VARCHAR(100) NOT NULL DEFAULT 'it''s',
+               qty INT NOT NULL DEFAULT 0,
+               price DECIMAL(10,2) DEFAULT (1.5),
+               created TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+               body TEXT,
+               twice INT GENERATED ALWAYS AS (qty * 2) STORED,
+               low VARCHAR(100) GENERATED ALWAYS AS (lower(name)) VIRTUAL,
+               UNIQUE KEY uq_name (name),
+               KEY ix_prefix (body(10)),
+               KEY ix_desc (qty DESC, name),
+               KEY ix_fn ((upper(name))),
+               FULLTEXT KEY ft_body (body),
+               CONSTRAINT zz_it_fk_{pid} FOREIGN KEY (pa, pb) REFERENCES datarig.{parent} (a, b) ON DELETE CASCADE,
+               CONSTRAINT zz_it_ck_{pid} CHECK (qty >= 0),
+               CONSTRAINT zz_it_loose_{pid} CHECK (price < 1000) NOT ENFORCED)"
+        ),
+        format!(
+            "CREATE TRIGGER shop.zz_it_bi_{pid} BEFORE INSERT ON shop.{child} FOR EACH ROW SET NEW.qty = NEW.qty + 0"
+        ),
+        format!(
+            "CREATE TRIGGER shop.zz_it_au_{pid} AFTER UPDATE ON shop.{child} FOR EACH ROW \
+             BEGIN DECLARE x INT; SET x = 1; END"
+        ),
+        format!("CREATE VIEW shop.{view} AS SELECT id, name FROM shop.{child}"),
+    ] {
+        a.query_drop(sql).await.unwrap();
+    }
+    a.disconnect().await.unwrap();
+
+    let mut m = Conn::start(&url, SessionRole::Meta, false, "structure");
+    m.wait(|e| matches!(e, DbEvent::Catalog(_)), 30).await;
+    let s = structure_of(&mut m, &child).await.unwrap();
+    assert_eq!(s.kind, RelationKind::Table);
+    assert!(s.total_bytes.is_some_and(|b| b > 0) && s.estimated_rows.is_some(), "{:?}", s.stats());
+    let cols: Vec<(&str, &str, bool, Option<&str>, &ColumnFill)> = s
+        .columns
+        .iter()
+        .map(|c| (c.name.as_str(), c.type_name.as_str(), c.not_null, c.default.as_deref(), &c.fill))
+        .collect();
+    assert_eq!(
+        cols,
+        [
+            ("id", "bigint unsigned", true, None, &ColumnFill::AutoIncrement),
+            ("pa", "int", false, None, &ColumnFill::Default),
+            ("pb", "varchar(10)", false, None, &ColumnFill::Default),
+            ("name", "varchar(100)", true, Some("'it''s'"), &ColumnFill::Default),
+            ("qty", "int", true, Some("0"), &ColumnFill::Default),
+            ("price", "decimal(10,2)", false, Some("(1.5)"), &ColumnFill::Default),
+            (
+                "created",
+                "timestamp(3)",
+                true,
+                Some("CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)"),
+                &ColumnFill::Default
+            ),
+            ("body", "text", false, None, &ColumnFill::Default),
+            ("twice", "int", false, None, &ColumnFill::Stored("`qty` * 2".into())),
+            ("low", "varchar(100)", false, None, &ColumnFill::Virtual("lower(`name`)".into())),
+        ]
+    );
+    assert_eq!(
+        s.primary_key.as_ref().map(|p| (p.name.as_str(), p.columns.clone())),
+        Some(("PRIMARY", vec!["id".into()]))
+    );
+    assert_eq!(
+        s.foreign_keys,
+        [ForeignKey {
+            name: format!("zz_it_fk_{pid}"),
+            columns: vec!["pa".into(), "pb".into()],
+            ref_schema: "datarig".into(),
+            ref_table: parent.clone(),
+            ref_columns: vec!["a".into(), "b".into()],
+            on_delete: FkAction::Cascade,
+            on_update: FkAction::NoAction,
+            definition: format!(
+                "CONSTRAINT zz_it_fk_{pid} FOREIGN KEY (pa, pb) REFERENCES datarig.{parent} (a, b) ON DELETE CASCADE"
+            ),
+        }]
+    );
+    let keys = |name: &str| {
+        let x = s.indexes.iter().find(|x| x.name == name).unwrap_or_else(|| panic!("{name}: {:?}", s.indexes));
+        (x.keys(), x.key_columns.clone(), x.unique, x.method.clone())
+    };
+    let some = |v: &[&str]| v.iter().map(|c| Some(c.to_string())).collect::<Vec<_>>();
+    assert_eq!(keys("PRIMARY"), (vec!["id".into()], some(&["id"]), true, "BTREE".into()));
+    assert_eq!(keys("ix_prefix"), (vec!["body(10)".into()], some(&["body"]), false, "BTREE".into()));
+    assert_eq!(
+        keys("ix_desc"),
+        (vec!["qty DESC".into(), "name".into()], some(&["qty", "name"]), false, "BTREE".into())
+    );
+    assert_eq!(keys("ix_fn"), (vec!["(upper(`name`))".into()], vec![None], false, "BTREE".into()));
+    assert_eq!(keys("ft_body"), (vec!["body".into()], some(&["body"]), false, "FULLTEXT".into()));
+    assert_eq!(keys("uq_name"), (vec!["name".into()], some(&["name"]), true, "BTREE".into()));
+    // The foreign key's own index.
+    assert_eq!(keys(&format!("zz_it_fk_{pid}")).0, ["pa", "pb"]);
+    let names: Vec<&str> = s.indexes.iter().map(|x| x.name.as_str()).collect();
+    let mut sorted = names.clone();
+    sorted.sort();
+    assert_eq!(names, sorted, "by name");
+    assert_eq!(s.unique_constraints.iter().map(|u| u.name.as_str()).collect::<Vec<_>>(), ["uq_name"]);
+    let checks: Vec<(&str, &str, Vec<String>, bool)> =
+        s.checks.iter().map(|c| (c.name.as_str(), c.expression.as_str(), c.columns.clone(), c.enforced())).collect();
+    assert_eq!(
+        checks,
+        [
+            (format!("zz_it_ck_{pid}").as_str(), "`qty` >= 0", vec!["qty".to_string()], true),
+            (format!("zz_it_loose_{pid}").as_str(), "`price` < 1000", vec!["price".to_string()], false),
+        ]
+    );
+    let triggers: Vec<(String, TriggerTiming, Vec<TriggerEvent>, bool, &str)> = s
+        .triggers
+        .iter()
+        .map(|t| (t.name.clone(), t.timing, t.events.clone(), t.for_each_row, t.function.as_str()))
+        .collect();
+    assert_eq!(
+        triggers,
+        [
+            (format!("zz_it_au_{pid}"), TriggerTiming::After, vec![TriggerEvent::Update], true, ""),
+            (format!("zz_it_bi_{pid}"), TriggerTiming::Before, vec![TriggerEvent::Insert], true, ""),
+        ]
+    );
+    assert!(
+        s.triggers[0].definition.ends_with("FOR EACH ROW BEGIN DECLARE x INT; SET x = 1; END"),
+        "{}",
+        s.triggers[0].definition
+    );
+    assert!(s.hidden.is_empty());
+    // Every definition is MySQL that runs: the indexes and checks on a copy of the table.
+    let mut a = side(&admin).await;
+    let copy = format!("zz_it_copy_{pid}");
+    let _copy = Cleanup { url: admin.clone(), sql: format!("DROP TABLE IF EXISTS shop.{copy}") };
+    a.query_drop(format!(
+        "CREATE TABLE shop.{copy} (id BIGINT UNSIGNED NOT NULL, name VARCHAR(100) NOT NULL, qty INT, price DECIMAL(10,2), body TEXT)"
+    ))
+    .await
+    .unwrap();
+    for x in s
+        .indexes
+        .iter()
+        .filter(|x| ["PRIMARY", "ix_prefix", "ix_desc", "ix_fn", "ft_body", "uq_name"].contains(&x.name.as_str()))
+    {
+        let sql = x.definition.replace(&format!("shop.{child}"), &format!("shop.{copy}"));
+        a.query_drop(&sql).await.unwrap_or_else(|e| panic!("{sql}: {e}"));
+    }
+    for c in &s.checks {
+        let sql = format!("ALTER TABLE shop.{copy} ADD {}", c.definition.replace("zz_it_", "zz_it_copy_"));
+        a.query_drop(&sql).await.unwrap_or_else(|e| panic!("{sql}: {e}"));
+    }
+    a.disconnect().await.unwrap();
+
+    let v = structure_of(&mut m, &view).await.unwrap();
+    assert_eq!((v.kind, v.stats()), (RelationKind::View, None));
+    assert_eq!(v.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["id", "name"]);
+    assert!(v.triggers.is_empty() && v.hidden.is_empty());
+    assert_eq!(structure_of(&mut m, &format!("zz_it_none_{pid}")).await, Err(DbError::NotFound));
+
+    // A user who may read the table but not see its triggers.
+    let account = Account::make(&admin, "notrig", "BY 'pw'").await.unwrap();
+    let mut n = Conn::start(&as_user(&url, &account.name, "pw"), SessionRole::Meta, false, "structure_notrig");
+    n.wait(|e| matches!(e, DbEvent::Catalog(_)), 30).await;
+    let hidden = structure_of(&mut n, &child).await.unwrap();
+    assert!(hidden.triggers.is_empty());
+    assert_eq!(hidden.hidden, [StructureGroup::Triggers], "unknown, not none");
+    assert_eq!(hidden.columns.len(), 10);
+}
+
+/// Reading a table's structure never queues behind another session's metadata lock (held by
+/// `LOCK TABLES … WRITE`, or asked for by an `ALTER TABLE` that waits behind a held result),
+/// never holds that session up, answers within the session's lock wait (with the structure or
+/// `Locked`), and keeps no metadata lock once it has answered.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_structure_read_never_queues_behind_a_metadata_lock_nor_keeps_one() {
+    let test = "a_structure_read_never_queues_behind_a_metadata_lock_nor_keeps_one";
+    let Some((url, admin)) = urls(test) else { return };
+    let t = numbers(&admin, "structlock", 200_000).await;
+    // Rows wide enough that a held result is more than the network buffers take.
+    let mut wide = side(&admin).await;
+    wide.query_drop(format!("ALTER TABLE {} MODIFY v VARCHAR(200)", t.q())).await.unwrap();
+    wide.query_drop(format!("UPDATE {} SET v = REPEAT('x', 200)", t.q())).await.unwrap();
+    wide.disconnect().await.unwrap();
+    let mut m = Conn::start(&url, SessionRole::Meta, false, test);
+    m.wait(|e| matches!(e, DbEvent::Catalog(_)), 30).await;
+    let mut side_admin = side(&admin).await;
+    let meta = only_session(&mut side_admin, SessionRole::Meta, test).await;
+    let ok_or_locked = |r: &Result<Box<datarig_core::driver::structure::TableStructure>, DbError>| match r {
+        Ok(s) => assert_eq!(s.columns.len(), 2),
+        Err(e) => assert_eq!(*e, DbError::Locked),
+    };
+    // 1. Another session holds `LOCK TABLES … WRITE`.
+    let mut lock = side(&admin).await;
+    lock.query_drop(format!("LOCK TABLES {} WRITE", t.q())).await.unwrap();
+    let t0 = Instant::now();
+    let r = structure_of(&mut m, &t.name).await;
+    assert!(t0.elapsed() < Duration::from_millis(2_500), "{:?}", t0.elapsed());
+    ok_or_locked(&r);
+    assert_eq!(table_locks(&mut side_admin, meta, &t.name).await, 0, "no lock kept");
+    let t0 = Instant::now();
+    lock.query_drop(format!("INSERT INTO {} VALUES (999999, 'w')", t.q())).await.unwrap();
+    lock.query_drop("UNLOCK TABLES").await.unwrap();
+    assert!(t0.elapsed() < Duration::from_millis(500), "the locking session was not held up: {:?}", t0.elapsed());
+    // 2. A held result keeps a shared lock and an `ALTER TABLE` waits for it.
+    let mut q = Conn::open(&url, SessionRole::Query, false, test).await;
+    let evs = q.run_as(1, &[&format!("SELECT * FROM {}", t.q())], PagingMode::Hold).await;
+    assert!(page_of(&evs).2);
+    let (alter_url, table) = (admin.clone(), t.q());
+    let alter = tokio::spawn(async move {
+        let mut a = side(&alter_url).await;
+        a.query_drop("SET SESSION lock_wait_timeout = 60").await.unwrap();
+        let r = a.query_drop(format!("ALTER TABLE {table} ADD COLUMN c9 INT")).await;
+        a.disconnect().await.unwrap();
+        r.map_err(|e| e.to_string())
+    });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let waiting: Option<u64> = side_admin
+        .query_first(format!(
+            "SELECT COUNT(*) FROM information_schema.PROCESSLIST \
+             WHERE STATE = 'Waiting for table metadata lock' AND INFO LIKE '%{}%c9%'",
+            t.name
+        ))
+        .await
+        .unwrap();
+    assert_eq!(waiting, Some(1), "the ALTER waits");
+    let t0 = Instant::now();
+    let r = structure_of(&mut m, &t.name).await;
+    assert!(t0.elapsed() < Duration::from_millis(2_500), "{:?}", t0.elapsed());
+    ok_or_locked(&r);
+    assert_eq!(table_locks(&mut side_admin, meta, &t.name).await, 0, "no lock kept");
+    // The ALTER goes through once the held result is stopped: the read held nothing up.
+    let t1 = Instant::now();
+    q.session.send(DbCommand::ClosePortal { id: 1 });
+    q.ok(2, "SELECT 1").await;
+    assert!(alter.await.unwrap().is_ok());
+    assert!(t1.elapsed() < Duration::from_secs(10), "{:?}", t1.elapsed());
+    // Read again once nothing is in the way: the new column is there.
+    let s = structure_of(&mut m, &t.name).await.unwrap();
+    assert_eq!(s.columns.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["id", "v", "c9"]);
+    side_admin.disconnect().await.unwrap();
+}

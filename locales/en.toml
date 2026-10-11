@@ -42,6 +42,8 @@
 "tree.index.primary" = "primary key"
 "tree.index.constraint" = "constraint"
 "tree.trigger.disabled" = "disabled"
+"tree.check.not_enforced" = "not enforced"
+"tree.group.hidden" = "unknown: listed only to a user with a privilege this one lacks"
 "tree.reveal_missing" = "{name} is not in the explorer"
 
 "conn.connecting" = "Connecting to {name}…"
@@ -1417,6 +1419,7 @@
 "pane.editor.ddl" = "DDL · {name}"
 "ddl.no_object" = "Show DDL works on a table, view, materialized view, index or trigger"
 "ddl.no_function" = "The function's DDL: put the cursor on a trigger"
+"ddl.trigger_no_function" = "This trigger calls no function: its statements are its own (show its DDL instead)"
 "ddl.unsupported" = "This connection's driver cannot show DDL"
 "ddl.no_connection" = "This tab has no connection to read the DDL on"
 "ddl.no_session" = "the metadata session of this database is not open (try again)"

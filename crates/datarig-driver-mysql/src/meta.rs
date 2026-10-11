@@ -10,10 +10,11 @@
 //! queueing behind it ([`DbError::Locked`]), a `SELECT` stops after `max_execution_time`, and
 //! the session is read-only (`session::init_sql`). The estimates are the server's own
 //! (`TABLE_ROWS`, `DATA_LENGTH + INDEX_LENGTH`, kept for `information_schema_stats_expiry`): the
-//! explorer labels them approximate.
+//! explorer labels them approximate. A table's structure is one statement too
+//! ([`structure`]).
 
 use crate::link::{Link, Next};
-use crate::session::{Tracked, quit};
+use crate::session::{META_TIMEOUT_MS, Server, Tracked, quit};
 use datarig_core::driver::structure::RelationStats;
 use datarig_core::driver::{DbCommand, DbError, DbEvent, SchemaObjects};
 use datarig_core::fault::Fault;
@@ -21,7 +22,10 @@ use datarig_core::sql::complete::{Catalog, ColumnInfo, Relation};
 use datarig_core::sql::dialect::{Dialect, MySqlMode};
 use mysql_async::prelude::{FromRow, Queryable};
 use mysql_async::{Conn, Row};
+use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
+
+mod structure;
 
 /// The databases of the server's own, never listed.
 const HIDDEN: &str = "('information_schema', 'mysql', 'performance_schema', 'sys')";
@@ -29,10 +33,18 @@ const HIDDEN: &str = "('information_schema', 'mysql', 'performance_schema', 'sys
 /// ER_LOCK_WAIT_TIMEOUT: a read gave up behind another session's lock.
 const LOCK_WAIT_TIMEOUT: u16 = 1205;
 
-/// A failed read as the UI hears it: a lock it gave up on is [`DbError::Locked`].
+/// ER_QUERY_TIMEOUT (MySQL) and ER_STATEMENT_TIMEOUT (MariaDB): a read ran past the session's
+/// `max_execution_time` (`max_statement_time`) and the server stopped it.
+const READ_TIMEOUTS: [u16; 2] = [3024, 1969];
+
+/// A failed read as the UI hears it: a lock it gave up on is [`DbError::Locked`], one the server
+/// stopped after the session's time limit [`DbError::NoAnswer`].
 fn read_error(e: &mysql_async::Error) -> DbError {
     match e {
         mysql_async::Error::Server(s) if s.code == LOCK_WAIT_TIMEOUT => DbError::Locked,
+        mysql_async::Error::Server(s) if READ_TIMEOUTS.contains(&s.code) => {
+            DbError::NoAnswer(Duration::from_millis(META_TIMEOUT_MS))
+        }
         e => crate::session::my_error(e),
     }
 }
@@ -47,7 +59,8 @@ async fn rows_of<T: FromRow>(conn: &mut Conn, sql: String) -> Result<Vec<T>, DbE
 }
 
 pub(crate) async fn meta_loop(mut conn: Conn, mut link: Link, events: UnboundedSender<DbEvent>, tracked: Tracked) {
-    let mode = tracked.mode(&crate::session::Server { version: conn.server_version(), mariadb: conn.is_mariadb() });
+    let server = Server { version: conn.server_version(), mariadb: conn.is_mariadb() };
+    let mode = tracked.mode(&server);
     let Ok(schemas) = link.guard(None, load_schemas(&mut conn)).await else { return };
     let _ = events.send(DbEvent::Schemas(schemas));
     let Ok(catalog) = link.guard(None, load_catalog(&mut conn)).await else { return };
@@ -78,7 +91,8 @@ pub(crate) async fn meta_loop(mut conn: Conn, mut link: Link, events: UnboundedS
                 DbCommand::LoadDatabases => DbEvent::Databases(load_schemas(&mut conn).await),
                 DbCommand::LoadKeys => DbEvent::Keys(Err(DbError::NotSupported)),
                 DbCommand::LoadStructure { schema, table } => {
-                    DbEvent::Structure { schema, table, result: Err(DbError::NotSupported) }
+                    let result = structure::load_structure(&mut conn, server, mode, &schema, &table).await;
+                    DbEvent::Structure { schema, table, result: result.map(Box::new) }
                 }
                 DbCommand::LoadDdl { id, .. } => DbEvent::Ddl { id, result: Err(DbError::NotSupported) },
                 // Statements run on a tab's query session, never on the shared metadata one.
