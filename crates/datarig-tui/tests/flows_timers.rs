@@ -156,3 +156,105 @@ fn a_cancel_nobody_answers_still_ends_the_run() {
     assert!(!h.session_closed(query));
     assert!(h.app.tab().exec.session.is_some());
 }
+
+/// A cancel the server took whose statement then rolls back for long, saying nothing (a large
+/// `UPDATE` undone row by row): the tab keeps waiting, says it is cancelling, and keeps its
+/// session and the transaction; the cancelled answer ends the run.
+#[test]
+fn a_cancel_answered_late_keeps_the_session_and_its_transaction() {
+    let mut h = Harness::connected(Lang::En);
+    h.ctrl('e');
+    let query = h.roles().iter().position(|r| *r == SessionRole::Query).expect("the tab's session");
+    h.tab_db(0, DbEvent::Block(true));
+    h.tab_db(0, DbEvent::TxOpen(true));
+    let qid = h.app.tab().exec.query_id;
+    h.ctrl('c');
+    assert!(h.session_cancelled(query));
+    for wait in [Duration::from_secs(6), Duration::from_secs(20)] {
+        h.advance(wait);
+        assert!(h.app.tab().exec.running.is_some(), "still waiting for the session");
+        assert!(!h.session_closed(query));
+        assert!(h.status(120, 30).contains("Cancelling…"), "{}", h.status(120, 30));
+    }
+    let failed = DbEvent::Failed { id: qid, error: datarig_core::driver::DbError::Cancelled, cancelled: true };
+    h.tab_db(0, failed);
+    assert!(h.app.tab().exec.running.is_none());
+    assert!(matches!(h.app.tab().results, Results::Cancelled));
+    assert!(!h.session_closed(query));
+    assert!(h.app.tab().exec.session.is_some(), "the session stays");
+    assert!(h.app.tab().exec.tx_open, "and so does the transaction");
+}
+
+/// While the server is still stopping the statement, the session says so every few seconds
+/// (`Stopping`): the tab says it too, and waits as long as that lasts, past the last-resort
+/// bound counted from the cancel; once the session says nothing at all for that long, the tab
+/// gives up.
+#[test]
+fn a_session_that_says_the_server_still_stops_the_statement_is_waited_for() {
+    let mut h = Harness::connected(Lang::En);
+    h.ctrl('e');
+    let query = h.roles().iter().position(|r| *r == SessionRole::Query).expect("the tab's session");
+    let qid = h.app.tab().exec.query_id;
+    h.ctrl('c');
+    for _ in 0..3 {
+        h.advance(CANCEL_GRACE - Duration::from_secs(1));
+        h.tab_db(0, DbEvent::Stopping { id: qid });
+        assert!(h.app.tab().exec.running.is_some());
+        assert!(!h.session_closed(query));
+    }
+    let status = h.status(160, 30);
+    assert!(status.contains("Cancelling… the server is still stopping the statement"), "{status}");
+    h.advance(CANCEL_GRACE);
+    assert!(h.app.tab().exec.running.is_none(), "nothing for the whole bound: given up");
+    assert!(h.session_closed(query));
+}
+
+/// A cancel the server refuses of a statement that sends nothing: the session waits (cutting
+/// would not stop it) and says so every few seconds. The tab says plainly that the statement
+/// runs on, keeps the session past the last-resort bound as long as the session speaks, and
+/// takes the run's answer when it comes.
+#[test]
+fn a_refused_cancel_of_a_silent_statement_is_said_and_waited_for() {
+    let mut h = Harness::connected(Lang::En);
+    h.ctrl('e');
+    let query = h.roles().iter().position(|r| *r == SessionRole::Query).expect("the tab's session");
+    let qid = h.app.tab().exec.query_id;
+    h.ctrl('c');
+    for _ in 0..3 {
+        h.advance(CANCEL_GRACE - Duration::from_secs(1));
+        h.tab_db(0, DbEvent::CancelRefused { id: qid });
+        assert!(h.app.tab().exec.running.is_some());
+        assert!(!h.session_closed(query));
+    }
+    let status = h.status(260, 30);
+    assert!(
+        status.contains(
+            "The server refused the cancel: the statement runs as another account and will run to its end. \
+             Closing the tab won't stop it. Ask a DBA or the routine's owner to KILL it."
+        ),
+        "{status}"
+    );
+    let failed = DbEvent::Failed { id: qid, error: datarig_core::driver::DbError::Cancelled, cancelled: true };
+    h.tab_db(0, failed);
+    assert!(h.app.tab().exec.running.is_none());
+    assert!(matches!(h.app.tab().results, Results::Cancelled));
+    assert!(h.app.tab().exec.session.is_some(), "the session stays");
+    let notes =
+        |h: &Harness| h.app.tab().exec.run.notes.iter().map(|n| n.render(&h.app.i18n).to_string()).collect::<Vec<_>>();
+    assert!(notes(&h).is_empty(), "stopped after all (an administrator's KILL): nothing to note");
+
+    // One that ends by itself: said in Messages.
+    h.ctrl('e');
+    let qid = h.app.tab().exec.query_id;
+    h.ctrl('c');
+    h.tab_db(0, DbEvent::CancelRefused { id: qid });
+    let done = DbEvent::Done {
+        id: qid,
+        outcome: datarig_core::driver::Outcome::Affected(3),
+        elapsed: Duration::from_secs(90),
+    };
+    h.tab_db(0, done);
+    assert!(h.app.tab().exec.running.is_none());
+    let notes = notes(&h);
+    assert!(notes.iter().any(|n| n == "The statement ran to its end after the server refused the cancel"), "{notes:?}");
+}

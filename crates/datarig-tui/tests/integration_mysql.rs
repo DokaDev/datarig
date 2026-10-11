@@ -312,3 +312,94 @@ async fn messages_say_what_mysql_did() {
     assert!(matches!(app.tab_language(tab), Language::Sql(Dialect::MySql(m)) if m.ansi_quotes));
     assert_eq!(app.tab().editor.language(), app.tab_language(tab));
 }
+
+/// Ends the test's own sessions (`KILL` of the connections whose program name carries `tag`)
+/// when the test ends, also when an assertion panics: a statement it left running goes with
+/// them.
+struct EndSessions {
+    admin: String,
+    tag: String,
+}
+
+impl Drop for EndSessions {
+    fn drop(&mut self) {
+        let (admin, tag) = (self.admin.clone(), self.tag.clone());
+        let _ = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            rt.block_on(async {
+                let mut c = side(&admin).await;
+                let ids: Vec<u64> = c
+                    .exec(
+                        "SELECT PROCESSLIST_ID FROM performance_schema.session_connect_attrs \
+                         WHERE ATTR_NAME = 'program_name' AND ATTR_VALUE LIKE ?",
+                        (format!("datarig-%-{tag}"),),
+                    )
+                    .await
+                    .unwrap_or_default();
+                for id in ids {
+                    let _ = c.query_drop(format!("KILL {id}")).await;
+                }
+                let _ = c.disconnect().await;
+            });
+        })
+        .join();
+    }
+}
+
+/// Like [`pump`], with the app's clock ticking (its timers run) as the binary's loop does.
+async fn pump_ticking(app: &mut App, rx: &mut UnboundedReceiver<AppEvent>, secs: u64, done: impl Fn(&App) -> bool) {
+    let deadline = Instant::now() + Duration::from_secs(secs);
+    while !done(app) {
+        assert!(Instant::now() < deadline, "timed out after {secs}s (status {:?})", app.status);
+        if let Ok(Some(ev)) = tokio::time::timeout(Duration::from_millis(200), rx.recv()).await {
+            app.on_app_event(ev);
+        }
+        app.on_tick(Instant::now());
+    }
+}
+
+/// A cancel the server takes whose statement then rolls back for long, saying nothing (a large
+/// `UPDATE` in the user's transaction): the tab waits, says the server is still stopping the
+/// statement, and keeps the session and the transaction, with what it did before.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_taken_by_a_long_rollback_keeps_the_tab_and_its_transaction() {
+    let Some((url, admin)) = urls("a_cancel_taken_by_a_long_rollback_keeps_the_tab") else { return };
+    let tag = format!("mroll{}", std::process::id());
+    let t = format!("shop.zz_it_tuiroll_{}", std::process::id());
+    let mut make = vec![format!("CREATE TABLE {t} (id INT PRIMARY KEY AUTO_INCREMENT, v INT, pad CHAR(100), KEY (v))")];
+    for _ in 0..3 {
+        make.push(format!("INSERT INTO {t} (v, pad) SELECT 0, 'x' FROM shop.events"));
+    }
+    make.push(format!("INSERT INTO {t} (v, pad) SELECT v, pad FROM {t}"));
+    let _t = Made::make(&admin, &make, &[format!("DROP TABLE IF EXISTS {t}")]).await;
+    // Dropped first: nothing of the test's keeps running past it.
+    let _end = EndSessions { admin: admin.clone(), tag: tag.clone() };
+    let (mut app, mut rx) = app_on(&url, &tag, None).await;
+    run(&mut app, &mut rx, "BEGIN").await;
+    run(&mut app, &mut rx, &format!("INSERT INTO {t} (v, pad) VALUES (-1, 'marker')")).await;
+    assert!(app.tab().exec.tx_open);
+    app.run(vec![format!("UPDATE {t} SET v = v + 1, pad = 'y'")]);
+    if app.overlays.run_confirm().is_some() {
+        press(&mut app, 'y');
+    }
+    // Long enough for its rollback to outlast the tab's old 5 s and the driver's 10 s.
+    let until = Instant::now() + Duration::from_secs(15);
+    pump_ticking(&mut app, &mut rx, 30, |_| Instant::now() >= until).await;
+    assert!(app.tab().exec.running.is_some(), "the update still runs");
+    let cancelled = Instant::now();
+    app.cancel();
+    let stopping = |a: &App| a.tab().exec.running.is_some_and(|r| r.stopping);
+    pump_ticking(&mut app, &mut rx, 240, |a| a.tab().exec.running.is_none() || stopping(a)).await;
+    let said = stopping(&app);
+    pump_ticking(&mut app, &mut rx, 240, |a| a.tab().exec.running.is_none()).await;
+    let waited = cancelled.elapsed();
+    assert!(matches!(app.tab().results, Results::Cancelled), "{:?}", app.status);
+    assert!(app.tab().exec.session.is_some(), "the session stays: {:?}", app.status);
+    assert!(app.tab().exec.tx_open, "and so does the transaction");
+    if waited > Duration::from_secs(7) {
+        assert!(said, "a long wait says the server is still stopping the statement ({waited:?})");
+    }
+    run(&mut app, &mut rx, &format!("SELECT v FROM {t} WHERE pad = 'marker'")).await;
+    assert_eq!(shown_page(&app).0.as_deref(), Some("-1"), "{:?}", app.status);
+    run(&mut app, &mut rx, "ROLLBACK").await;
+}

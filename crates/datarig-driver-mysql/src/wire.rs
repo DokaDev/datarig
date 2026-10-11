@@ -24,6 +24,8 @@ struct Shared {
     pushback: Vec<u8>,
     /// Cut by the session: every read and write fails.
     cut: bool,
+    /// Bytes the server sent, all told.
+    received: u64,
 }
 
 /// The session's handle on its connection's stream.
@@ -36,7 +38,7 @@ pub(crate) struct WireStream(Wire);
 impl Wire {
     /// A wire over `stream`, and the stream to give the connection.
     pub(crate) fn new(stream: BoxedStream) -> (Wire, WireStream) {
-        let wire = Wire(Arc::new(Mutex::new(Shared { stream, pushback: Vec::new(), cut: false })));
+        let wire = Wire(Arc::new(Mutex::new(Shared { stream, pushback: Vec::new(), cut: false, received: 0 })));
         (wire.clone(), WireStream(wire))
     }
 
@@ -49,6 +51,19 @@ impl Wire {
     /// meanwhile (a server's last words before it closes) is kept for the connection.
     pub(crate) async fn closed(&self) {
         std::future::poll_fn(|cx| self.poll_closed(cx)).await
+    }
+
+    /// How many bytes the server sent so far: whether it is still sending.
+    pub(crate) fn received(&self) -> u64 {
+        self.lock().map_or(0, |s| s.received)
+    }
+
+    /// Take what the server sent so far off the stream (it stays for the connection, in
+    /// order), without waiting, until more than `limit` is kept: how much is kept so.
+    pub(crate) fn soak(&self, limit: usize) -> usize {
+        let mut cx = Context::from_waker(std::task::Waker::noop());
+        let _ = self.poll_read_ahead(&mut cx, limit);
+        self.lock().map_or(0, |s| s.pushback.len())
     }
 
     /// Every read and write fails from now on.
@@ -67,23 +82,31 @@ impl Wire {
     }
 
     fn poll_closed(&self, cx: &mut Context<'_>) -> Poll<()> {
+        self.poll_read_ahead(cx, usize::MAX)
+    }
+
+    /// Read what the stream has into the pushback until it would wait (`Pending`), ends or
+    /// fails (`Ready`), or more than `limit` is kept (`Ready`).
+    fn poll_read_ahead(&self, cx: &mut Context<'_>, limit: usize) -> Poll<()> {
         let Ok(mut s) = self.lock() else { return Poll::Ready(()) };
         if s.cut {
             return Poll::Ready(());
         }
         let mut chunk = [0u8; 512];
-        loop {
+        while s.pushback.len() <= limit {
             let mut buf = ReadBuf::new(&mut chunk);
             match Pin::new(&mut s.stream).poll_read(cx, &mut buf) {
                 Poll::Ready(Ok(())) if buf.filled().is_empty() => return Poll::Ready(()),
                 Poll::Ready(Ok(())) => {
-                    let read = buf.filled().to_vec();
-                    s.pushback.extend_from_slice(&read);
+                    let s = &mut *s;
+                    s.received += buf.filled().len() as u64;
+                    s.pushback.extend_from_slice(buf.filled());
                 }
                 Poll::Ready(Err(_)) => return Poll::Ready(()),
                 Poll::Pending => return Poll::Pending,
             }
         }
+        Poll::Ready(())
     }
 }
 
@@ -103,7 +126,10 @@ impl AsyncRead for WireStream {
             s.pushback.drain(..n);
             return Poll::Ready(Ok(()));
         }
-        Pin::new(&mut s.stream).poll_read(cx, buf)
+        let before = buf.filled().len();
+        let read = Pin::new(&mut s.stream).poll_read(cx, buf);
+        s.received += (buf.filled().len() - before) as u64;
+        read
     }
 }
 

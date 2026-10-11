@@ -663,3 +663,51 @@ fn a_result_of_server_code_is_not_copied_with_the_old_values() {
     h.tab_db(0, DbEvent::Page { id: run, columns: None, rows: rows(1), more: false, elapsed: Default::default() });
     refused(&mut h, "values changed before the result ended");
 }
+
+/// A statement the server would not stop where reading on could last forever (the driver cuts
+/// the connection): the run ends cancelled, the tab says why its connection was lost, in words
+/// of its own for each cause, never that the statement stopped (it may run on and commit), and
+/// what happens to an open transaction; the next run connects again.
+#[test]
+fn a_statement_the_server_would_not_stop_ends_the_tab_session_and_says_why() {
+    use datarig_core::driver::CancelFailure;
+    use datarig_core::driver::SessionRole::{Meta, Query};
+    use datarig_tui::app::{Results, SessionState};
+    let tail = "The statement may still run on the server, and outside a transaction block commit what it \
+                changes; an open transaction is rolled back once the server ends the session";
+    for (cause, why) in [
+        (
+            CancelFailure::Refused,
+            "the server refused to stop the statement (it runs as another account, e.g. in a SQL SECURITY \
+             DEFINER routine) and it kept sending rows: datarig closed the connection instead of reading them.",
+        ),
+        (
+            CancelFailure::NotSent,
+            "the request to stop the statement could not reach the server (network or login): datarig closed the \
+             connection.",
+        ),
+        (
+            CancelFailure::KeptSending,
+            "the server agreed to stop the statement and still kept sending rows: datarig closed the connection \
+             instead of reading them.",
+        ),
+    ] {
+        let mut h = mysql();
+        h.db(DbEvent::Connected);
+        h.ctrl('e');
+        let id = sent_run(&mut h);
+        h.ctrl('c');
+        assert!(h.session_cancelled(1), "the tab's session was asked to cancel");
+        h.tab_db(0, DbEvent::Failed { id, error: DbError::Cancelled, cancelled: true });
+        h.tab_db(0, DbEvent::Lost { error: DbError::CancelNotTaken(cause) });
+        assert!(matches!(h.app.tab().results, Results::Cancelled));
+        assert!(h.app.tab().exec.running.is_none());
+        assert_eq!(h.app.tab().exec.state, SessionState::Lost);
+        let status = h.status(600, 45);
+        assert!(status.contains(&format!("This tab's connection was lost: {why}")), "{cause:?}: {status}");
+        assert!(status.contains(tail), "{cause:?}: never says it stopped: {status}");
+        assert!(!status.contains("cancel"), "{cause:?}: the words fit a stop the user did not ask for: {status}");
+        h.ctrl('e');
+        assert_eq!(h.roles(), [Meta, Query, Query], "the next run opens a new session");
+    }
+}

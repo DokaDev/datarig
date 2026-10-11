@@ -5,14 +5,17 @@
 
 use crate::route::{Route, io_fault};
 use crate::wire::Wire;
-use datarig_core::driver::{DbError, SessionRole, SessionValues};
+use datarig_core::driver::{CancelFailure, DbError, SessionRole, SessionValues};
 use datarig_core::fault::{Fault, FaultKind};
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::profile::dsn::{self, Scheme};
 use datarig_core::sql::dialect::MySqlMode;
 use mysql_async::prelude::Queryable;
 use mysql_async::{Conn, Opts, OptsBuilder, SessionStateChange};
-use std::time::Duration;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
+use tokio::sync::watch;
 
 /// Upper bound for opening a session's connection (the stream, the login, the settings).
 pub(crate) const CONNECT_GUARD: Duration = Duration::from_secs(30);
@@ -442,42 +445,244 @@ pub(crate) fn my_error(e: &mysql_async::Error) -> DbError {
     }
 }
 
+/// How long asking the server whether a stopped statement is still there may take.
+const STILL_THERE_WAIT: Duration = Duration::from_secs(5);
+
+/// ER_KILL_DENIED_ERROR: the statement is not the user's to kill.
+const KILL_DENIED: u16 = 1095;
+
+/// How often a refused kill is sent, and how long after the one before: the statement may run
+/// as another account only for a moment (a `SQL SECURITY DEFINER` function called for every
+/// row), and be the user's own again at the next try. Such a statement was seen refusing up to
+/// 5 tries in a row, 100 ms apart; one inside a definer procedure refuses every one, and is cut
+/// some 0.7 s later than at the first.
+const KILL_TRIES: u32 = 8;
+const KILL_RETRY: Duration = Duration::from_millis(100);
+
+/// What became of the last `KILL QUERY` sent for the session's statement since the session
+/// last cleared it ([`Killer::clear`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Kill {
+    /// None was answered.
+    None,
+    /// The server took it (then): the statement stops at its next check. Its rollback may
+    /// take long, and say nothing meanwhile.
+    Taken(Instant),
+    /// It did not take: the statement runs on.
+    Failed(KillFailure),
+}
+
+/// Why a kill did not take.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum KillFailure {
+    /// The server refused it (its error code): MySQL does when the statement runs as another
+    /// account (inside a `SQL SECURITY DEFINER` routine, it is its definer's).
+    Refused(u16),
+    /// It could not be sent: the connection to send it on did not open in time.
+    NotSent,
+}
+
+impl From<KillFailure> for CancelFailure {
+    fn from(f: KillFailure) -> Self {
+        match f {
+            KillFailure::Refused(_) => CancelFailure::Refused,
+            KillFailure::NotSent => CancelFailure::NotSent,
+        }
+    }
+}
+
+/// What a kill sent again while a request waits ([`Killer::try_again`]) is sent under: open while
+/// the request waits, closed by its owner once the statement answered. Each kill is sent under
+/// its lock, only while it is open; closing takes the lock first, so it waits for a kill being
+/// sent to be answered. No kill is sent for a statement that answered, and none sent while it
+/// ran reaches the session's next statement: MySQL drops a `KILL QUERY` that finds the
+/// connection idle, and the next statement is sent only once the gate is closed.
+pub(crate) struct Gate {
+    open: AtomicBool,
+    /// A kill was written and its answer has not come (yet, or ever: given up on).
+    unanswered: AtomicBool,
+    sending: tokio::sync::Mutex<()>,
+}
+
+impl Gate {
+    pub(crate) fn new() -> Arc<Self> {
+        Arc::new(Gate {
+            open: AtomicBool::new(true),
+            unanswered: AtomicBool::new(false),
+            sending: tokio::sync::Mutex::new(()),
+        })
+    }
+
+    fn is_open(&self) -> bool {
+        self.open.load(Ordering::SeqCst)
+    }
+
+    /// The statement answered: no kill is sent for it any more. A kill being sent is waited for
+    /// first, as long as one may take ([`KILL_TIMEOUT`]); with none, closing waits for nothing.
+    /// `false`: one was sent and never answered (the server stalls, or the kill was given up
+    /// on). It may still be carried out at any time, on whatever the session runs then: the
+    /// session's connection is not to run anything any more.
+    pub(crate) async fn close(&self) -> bool {
+        let sending = tokio::time::timeout(KILL_TIMEOUT, self.sending.lock()).await;
+        self.open.store(false, Ordering::SeqCst);
+        sending.is_ok() && !self.unanswered.load(Ordering::SeqCst)
+    }
+}
+
 /// What a cancel needs: a connection of its own over the session's route, as the session's
 /// user, that runs `KILL QUERY` of the session's connection id. It stops the statement the
-/// session runs, never the session itself, and never another session.
+/// session runs, never the session itself, and never another session. What became of the kill
+/// is kept for the session ([`Kill`]), which does not read on after one that did not take.
 #[derive(Clone)]
 pub(crate) struct Killer {
     route: Route,
     opts: Opts,
     id: u64,
+    kill: Arc<watch::Sender<Kill>>,
 }
 
 impl Killer {
     pub(crate) fn new(route: Route, opts: Opts, id: u64) -> Self {
-        Self { route, opts, id }
+        Self { route, opts, id, kill: Arc::new(watch::Sender::new(Kill::None)) }
     }
 
-    /// Ask the server to stop what the session runs. A failure is not reported: the statement
-    /// then simply runs on.
+    /// Ask the server to stop what the session runs. What became of it is kept ([`Kill`]).
     pub(crate) async fn kill_query(&self) {
         self.kill_query_if(|| true).await;
     }
 
     /// [`Killer::kill_query`], if `still` holds once the connection to send it on is open (the
     /// login can take a while, through a tunnel most: by then the statement may have ended and
-    /// another run begun, which the kill must not stop).
+    /// another run begun, which the kill must not stop). What became of it is kept only while
+    /// `still` holds: it says nothing about the statement of another run. A refusal is tried
+    /// again a few times first ([`KILL_TRIES`]).
     pub(crate) async fn kill_query_if(&self, still: impl Fn() -> bool) {
+        self.send_kill(still, false).await;
+    }
+
+    /// [`Killer::kill_query_if`]; `only_taken`: what became of it is kept only if the server
+    /// took it.
+    async fn send_kill(&self, still: impl Fn() -> bool, only_taken: bool) {
+        // The server's last answer, kept past the time limit: a slow route that got a refusal
+        // (or the kill taken) before it ran out says so, never that nothing was sent.
+        let answered = std::sync::Mutex::new(None);
         let kill = async {
             let stream = self.route.dial(DIAL_TIMEOUT).await.ok()?;
             let (_wire, stream) = Wire::new(stream);
             let mut conn = Conn::connect_with_stream(self.opts.clone(), Box::new(stream)).await.ok()?;
-            if still() {
-                let _ = conn.query_drop(format!("KILL QUERY {}", self.id)).await;
+            let mut sent = None;
+            for n in 0..KILL_TRIES {
+                if n > 0 {
+                    tokio::time::sleep(KILL_RETRY).await;
+                }
+                if !still() {
+                    break;
+                }
+                let kill = match conn.query_drop(format!("KILL QUERY {}", self.id)).await {
+                    Ok(()) => Kill::Taken(Instant::now()),
+                    Err(mysql_async::Error::Server(e)) => Kill::Failed(KillFailure::Refused(e.code)),
+                    Err(_) => Kill::Failed(KillFailure::NotSent),
+                };
+                if let Ok(mut a) = answered.lock() {
+                    *a = Some(kill);
+                }
+                sent = Some(kill);
+                if kill != Kill::Failed(KillFailure::Refused(KILL_DENIED)) {
+                    break;
+                }
             }
             quit(conn).await;
-            Some(())
+            Some(sent)
         };
-        let _ = tokio::time::timeout(KILL_TIMEOUT, kill).await;
+        let kill = match tokio::time::timeout(KILL_TIMEOUT, kill).await {
+            // Not sent: the statement it was for ended.
+            Ok(Some(None)) => return,
+            Ok(Some(Some(kill))) => kill,
+            Ok(None) | Err(_) => answered.lock().ok().and_then(|a| *a).unwrap_or(Kill::Failed(KillFailure::NotSent)),
+        };
+        if !only_taken || matches!(kill, Kill::Taken(_)) {
+            self.record(kill, still);
+        }
+    }
+
+    /// Send the kill again, on a task of its own, after the server refused it: kept only if the
+    /// server takes it now (a statement that ran as another account only for a moment), never a
+    /// worse answer. It is sent only while `gate` is open, under its lock ([`Gate`]).
+    pub(crate) fn try_again(&self, gate: &Arc<Gate>) {
+        let (killer, gate) = (self.clone(), gate.clone());
+        tokio::spawn(async move {
+            let again = async {
+                let stream = killer.route.dial(DIAL_TIMEOUT).await.ok()?;
+                let (_wire, stream) = Wire::new(stream);
+                let mut conn = Conn::connect_with_stream(killer.opts.clone(), Box::new(stream)).await.ok()?;
+                {
+                    let _sending = gate.sending.lock().await;
+                    if gate.is_open() {
+                        // Set until the answer comes: a kill given up on halfway stays so.
+                        gate.unanswered.store(true, Ordering::SeqCst);
+                        let taken = conn.query_drop(format!("KILL QUERY {}", killer.id)).await.is_ok();
+                        gate.unanswered.store(false, Ordering::SeqCst);
+                        if taken {
+                            killer.record(Kill::Taken(Instant::now()), || gate.is_open());
+                        }
+                    }
+                }
+                quit(conn).await;
+                Some(())
+            };
+            let _ = tokio::time::timeout(KILL_TIMEOUT, again).await;
+        });
+    }
+
+    /// Keep `kill` if `still` holds, asked under the lock [`Killer::clear`] takes too: a run
+    /// that begins (and clears) between the two never gets the kill of the one before.
+    pub(crate) fn record(&self, kill: Kill, still: impl Fn() -> bool) {
+        self.kill.send_if_modified(|k| {
+            let keep = still();
+            if keep {
+                *k = kill;
+            }
+            keep
+        });
+    }
+
+    /// Whether the server still has the session's connection running a statement, asked on a
+    /// connection of its own (a user sees their own threads): `false` when it does not, or does
+    /// not answer within [`STILL_THERE_WAIT`].
+    pub(crate) async fn still_there(&self) -> bool {
+        let ask = async {
+            let stream = self.route.dial(DIAL_TIMEOUT).await.ok()?;
+            let (_wire, stream) = Wire::new(stream);
+            let mut conn = Conn::connect_with_stream(self.opts.clone(), Box::new(stream)).await.ok()?;
+            let sql = format!(
+                "SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE ID = {} AND COMMAND = 'Query'",
+                self.id
+            );
+            let n: Option<u64> = conn.query_first(sql).await.ok()?;
+            quit(conn).await;
+            Some(n == Some(1))
+        };
+        matches!(tokio::time::timeout(STILL_THERE_WAIT, ask).await, Ok(Some(true)))
+    }
+
+    /// Forget what became of the kills sent so far: a new run, or a kill of the session's own,
+    /// begins.
+    pub(crate) fn clear(&self) {
+        self.kill.send_replace(Kill::None);
+    }
+
+    /// What became of the last kill, and of the ones that follow.
+    pub(crate) fn watch(&self) -> watch::Receiver<Kill> {
+        self.kill.subscribe()
+    }
+
+    /// Resolves once a kill did not take, with why.
+    pub(crate) async fn refused(&self) -> KillFailure {
+        let mut kills = self.watch();
+        match kills.wait_for(|k| matches!(k, Kill::Failed(_))).await.map(|k| *k) {
+            Ok(Kill::Failed(f)) => f,
+            _ => std::future::pending().await,
+        }
     }
 }
 

@@ -555,7 +555,21 @@ is tested only lightly.
 - Rows affected, the last insert id, warnings and the server's info line in Messages; errors as
   the `mysql` client shows them (`ERROR 1146 (42S02): …`).
 - Cancel (`Ctrl+C`): `KILL QUERY` from a connection of its own, never `KILL`. A `SLEEP()` that
-  is stopped returns 1, as in the `mysql` client.
+  is stopped returns 1, as in the `mysql` client. A cancel the server takes is waited for, however
+  long the statement then takes to roll back. A statement that runs as another account (in a
+  `SQL SECURITY DEFINER` routine; stopping it needs `CONNECTION_ADMIN`) refuses the cancel, even
+  after a few tries: if it sends no rows, it runs on to its end whatever datarig does, and the
+  tab says so and keeps waiting (closing the tab would not stop it: ask a DBA or the routine's
+  owner to `KILL` it). datarig closes the tab's connection instead of reading on, and the next
+  run connects again, in three cases:
+  - the server refuses the cancel and the statement keeps sending rows;
+  - the cancel cannot reach the server (its connection does not open: the network, the login);
+  - the server takes the cancel and the statement still keeps sending rows more than 10 seconds
+    later.
+
+  Whether the statement then stops is the server's: it may run on, and outside a transaction
+  block commit what it changes. An open transaction is rolled back once the server ends the
+  session.
 - Transactions as the server reports them after each statement; a statement that commits your
   open transaction by itself (DDL and others) is noted in Messages.
 - The explorer: the server's databases right under the profile (a MySQL database is the

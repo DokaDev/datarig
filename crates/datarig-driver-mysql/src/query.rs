@@ -52,22 +52,33 @@
 //! **Cancel**: `KILL QUERY` of the session's connection from a connection of its own
 //! (`session::Killer`), only while a statement of the session is on its way or running (`busy`);
 //! a run of several statements also stops before its next one. A kill whose login comes after a
-//! new run began is not sent.
+//! new run began is not sent. A kill the server takes is waited for, however long the statement
+//! then takes to roll back. MySQL refuses one of a statement that runs as another account
+//! (inside a `SQL SECURITY DEFINER` routine), even after a few tries: such a statement that
+//! sends nothing runs on to its end whatever the session does (the server does not look at its
+//! connection meanwhile), so the session waits for it and says why ([`DbEvent::CancelRefused`]).
+//! Where reading on could last forever, the connection is cut instead: a refused statement whose
+//! rows keep coming, a kill that cannot be sent, a taken one whose rows still keep coming long
+//! after. The run ends cancelled, what waited is answered, and the session is lost
+//! ([`DbError::CancelNotTaken`], with why). Whether the
+//! statement then stops is the server's: one that sends finds the connection gone. A result
+//! the session stops itself (a held one) is stopped so too.
 //!
 //! The session reports the sql mode its text is read in when it changes (`DbEvent::Language`),
 //! and what the server said of a statement beyond its outcome (`DbEvent::Info`: the id an
 //! `INSERT` generated, warnings, the server's own words, result sets it did not keep).
 
 use crate::link::{Closed, Link, Next};
-use crate::session::{Killer, Server, Tracked, my_error};
+use crate::session::{Gate, Killer, Server, Tracked, my_error};
 use crate::values::{column_meta, display};
 use datarig_core::driver::{
-    Cell, ColumnMeta, DbCommand, DbError, DbEvent, Outcome, PagingMode, SessionValues, StatementInfo,
+    CancelFailure, Cell, ColumnMeta, DbCommand, DbError, DbEvent, Outcome, PagingMode, SessionValues, StatementInfo,
 };
 use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
 use datarig_core::sql::lexer::{Tok, Token, lex_in};
 use datarig_core::sql::risk::mysql as risk;
 use datarig_core::sql::risk::repeat::NotRepeatable;
+use futures::future::BoxFuture;
 use mysql_async::consts::StatusFlags;
 use mysql_async::prelude::Queryable;
 use mysql_async::{Column, Conn, QueryResult, Row, TextProtocol};
@@ -215,7 +226,13 @@ impl Drop for Reply<'_> {
     fn drop(&mut self) {
         if !self.answered {
             let _ = self.events.send(DbEvent::Failed { id: self.id, error: DbError::NoResult, cancelled: false });
-            debug_assert!(std::thread::panicking(), "run {} ended without a terminal event", self.id);
+            // Nothing is owed to nobody: the session's task is dropped once its UI is gone (the
+            // runtime shutting down mid-run).
+            debug_assert!(
+                std::thread::panicking() || self.events.is_closed(),
+                "run {} ended without a terminal event",
+                self.id
+            );
         }
     }
 }
@@ -231,6 +248,11 @@ impl Paged<'_> {
         let (error, cancelled) = failure(e);
         let _ = self.events.send(DbEvent::Failed { id: self.id, error, cancelled });
     }
+
+    /// The cancel stopped it after its first page.
+    fn cancelled(self) {
+        let _ = self.events.send(DbEvent::Failed { id: self.id, error: DbError::Cancelled, cancelled: true });
+    }
 }
 
 /// Why a statement run stopped the session.
@@ -240,8 +262,11 @@ enum Stop {
 }
 
 impl From<Closed> for Stop {
-    fn from(_: Closed) -> Self {
-        Stop::Closed
+    fn from(c: Closed) -> Self {
+        match c {
+            Closed::Ui => Stop::Closed,
+            Closed::CancelNotTaken(why) => Stop::Lost(DbError::CancelNotTaken(why)),
+        }
     }
 }
 
@@ -315,13 +340,17 @@ pub(crate) async fn query_loop(
             // Answered once; a session the UI closed meanwhile answers nothing.
             // A count or a check the app asks for: a cancel asked before it was another run's.
             Next::Command(DbCommand::Count { id, sql }) => {
+                link.serving(&events, id);
                 env.asked.store(false, Ordering::SeqCst);
+                killer.clear();
                 count(&mut conn, &mut link, &env, &mut s, &sql).await.map(|(result, snapshot)| {
                     let _ = events.send(DbEvent::Counted { id, result, snapshot });
                 })
             }
             Next::Command(DbCommand::CheckRepeat { id, sql }) => {
+                link.serving(&events, id);
                 env.asked.store(false, Ordering::SeqCst);
+                killer.clear();
                 check_repeat(&mut conn, &mut link, &env, &mut s, &sql).await.map(|result| {
                     let _ = events.send(DbEvent::RepeatChecked { id, result });
                 })
@@ -348,10 +377,29 @@ pub(crate) async fn query_loop(
     };
     match stop {
         Stop::Lost(error) => {
+            // What waited for the session is answered first: no request is left without one.
+            for c in link.take_queued() {
+                unanswered(&events, c, &error);
+            }
             let _ = events.send(DbEvent::Lost { error });
         }
         Stop::Closed => crate::session::quit(conn).await,
     }
+}
+
+/// Answer a request the session took and did not get to before it was lost (`error`, why): a
+/// run fails with it, as a running statement does; a count or a check gets it as its result.
+fn unanswered(events: &UnboundedSender<DbEvent>, c: DbCommand, error: &DbError) {
+    let ev = match c {
+        DbCommand::Execute { id, .. } | DbCommand::Resume { id, .. } => {
+            DbEvent::Failed { id, error: error.clone(), cancelled: false }
+        }
+        DbCommand::Count { id, .. } => DbEvent::Counted { id, result: Err(error.clone()), snapshot: false },
+        DbCommand::CheckRepeat { id, .. } => DbEvent::RepeatChecked { id, result: Err(error.clone()) },
+        // Nothing to answer: a page of a result that is gone, a close of one.
+        _ => return,
+    };
+    let _ = events.send(ev);
 }
 
 /// Run `statements` (or the one statement of a `Resume` past `skip` rows); the run ends with
@@ -367,6 +415,7 @@ async fn execute(
     resume: Option<u64>,
     paging: PagingMode,
 ) -> Result<(), Stop> {
+    link.serving(env.events, id);
     let reply = Reply::new(env.events, id);
     let ran = run(conn, link, env, s, reply, statements, resume, paging).await;
     env.busy.store(false, Ordering::SeqCst);
@@ -375,8 +424,12 @@ async fn execute(
         Err(Halted { stop, reply }) => {
             match (&stop, reply) {
                 (Stop::Closed, Some(reply)) => reply.closed(),
+                // Only a kill gets the connection cut so: the run was cancelled.
+                (Stop::Lost(DbError::CancelNotTaken(_)), Some(reply)) => reply.fail(DbError::Cancelled, true),
                 // The running statement fails first, then the session reports `Lost`.
                 (Stop::Lost(error), Some(reply)) => reply.fail(error.clone(), false),
+                // The run was answered already (its first page, or its failure): `halt!` hands
+                // the reply back whenever it was not, so nothing more is owed.
                 (_, None) => {}
             }
             Err(stop)
@@ -414,6 +467,7 @@ async fn run<'a>(
     }
     // A cancel asked for before this run belonged to the one before.
     env.asked.store(false, Ordering::SeqCst);
+    env.killer.clear();
     // A statement run again for the user: what only the server can tell for the allowlist is
     // asked first.
     if resume.is_some()
@@ -660,7 +714,13 @@ async fn statement<'a>(
                 let id = paged.id;
                 let held = match hold(&mut qr, link, env, id, &columns, carry, ended).await {
                     Ok(held) => held,
-                    Err(stop) => return Err(Halted { stop, reply: None }),
+                    Err(stop) => {
+                        // A cancel the server did not take: the run's one failure that follows.
+                        if matches!(stop, Stop::Lost(DbError::CancelNotTaken(_))) && env.asked.load(Ordering::SeqCst) {
+                            paged.cancelled();
+                        }
+                        return Err(Halted { stop, reply: None });
+                    }
                 };
                 drop(qr);
                 return held_ended(conn, link, env, s, paged, held, sql, was_open).await.map(|()| None);
@@ -857,8 +917,46 @@ struct Held {
 /// A held result: its first page was the answer; the next pages go to the app as it asks
 /// (`FetchMore`) until the result ends, `ClosePortal` closes it, or another command comes (it is
 /// processed next); a result stopped before its end is stopped on the server (`KILL QUERY`) and
-/// read to its end. Counts and checks that come meanwhile wait for it.
+/// read to its end. Counts and checks that come meanwhile wait for it; when the session stops
+/// meanwhile, they are put back in line, to be answered.
 async fn hold(
+    qr: &mut QueryResult<'_, 'static, TextProtocol>,
+    link: &mut Link,
+    env: &Env<'_>,
+    id: u64,
+    columns: &[Column],
+    carry: Option<Vec<Cell>>,
+    ended: bool,
+) -> Result<Held, Stop> {
+    let mut held = Held { stopped: false, failed: None, info: StatementInfo::default(), waiting: Vec::new() };
+    let gate = Gate::new();
+    let mut refusal = link.refusal(env.killer, &gate);
+    let out = hold_on(qr, link, env, id, columns, carry, ended, &mut held, &mut refusal).await;
+    drop(refusal);
+    // Nothing sent again for this statement reaches the next one (see [`Link::guard`]).
+    let out = match out {
+        Ok(()) if !gate.close().await => {
+            link.cut();
+            Err(Stop::Lost(DbError::CancelNotTaken(CancelFailure::NotSent)))
+        }
+        Ok(()) => Ok(()),
+        Err(stop) => {
+            gate.close().await;
+            Err(stop)
+        }
+    };
+    match out {
+        Ok(()) => Ok(held),
+        Err(stop) => {
+            link.requeue_all(std::mem::take(&mut held.waiting));
+            Err(stop)
+        }
+    }
+}
+
+/// [`hold`], into `held`.
+#[allow(clippy::too_many_arguments)]
+async fn hold_on(
     qr: &mut QueryResult<'_, 'static, TextProtocol>,
     link: &mut Link,
     env: &Env<'_>,
@@ -866,12 +964,23 @@ async fn hold(
     columns: &[Column],
     mut carry: Option<Vec<Cell>>,
     mut ended: bool,
-) -> Result<Held, Stop> {
+    held: &mut Held,
+    refusal: &mut BoxFuture<'static, CancelFailure>,
+) -> Result<(), Stop> {
     let page_size = env.page_size;
-    let mut held = Held { stopped: false, failed: None, info: StatementInfo::default(), waiting: Vec::new() };
     let mut more = true;
     while more {
-        match link.next_command().await {
+        // A cancel the server refused, or that was not sent, while the app had not asked for
+        // the next page yet: cut as a request would be ([`Link::refusal`]).
+        let next = tokio::select! {
+            biased;
+            next = link.next_command() => next,
+            why = &mut *refusal => {
+                link.cut();
+                return Err(Stop::Lost(DbError::CancelNotTaken(why)));
+            }
+        };
+        match next {
             Next::Command(DbCommand::FetchMore { id: fid }) if fid == id => {
                 let t0 = Instant::now();
                 let want = page_size + 1 - usize::from(carry.is_some());
@@ -882,7 +991,7 @@ async fn hold(
                         Ok(read) => read,
                         Err(e) => {
                             held.failed = Some(e);
-                            return Ok(held);
+                            return Ok(());
                         }
                     }
                 };
@@ -904,6 +1013,8 @@ async fn hold(
             }
             Next::Closed => {
                 let _ = tokio::time::timeout(Duration::from_secs(2), env.kill()).await;
+                // Not read to its end in the background, whatever became of the kill.
+                link.cut();
                 return Err(Stop::Closed);
             }
             Next::Lost(reason) => return Err(Stop::Lost(reason)),
@@ -912,14 +1023,14 @@ async fn hold(
     held.stopped = !ended;
     if held.stopped {
         stop_result(qr, link, env).await?;
-        return Ok(held);
+        return Ok(());
     }
     held.info = info_of(qr);
     match link.guard(Some(env.killer), rest(qr)).await? {
         Ok(sets) => held.info.more_results += sets,
         Err(e) => held.failed = Some(e),
     }
-    Ok(held)
+    Ok(())
 }
 
 /// What a held result ([`Held`]) leaves: its failure or what the server said of it, the
@@ -955,12 +1066,14 @@ async fn held_ended<'a>(
 }
 
 /// Stop a result before its end: `KILL QUERY`, then read and drop what the server still sends
-/// (its rows up to where it stopped, and the error that says so).
+/// (its rows up to where it stopped, and the error that says so). A kill that does not take
+/// cuts the connection instead ([`Link::guard`]).
 async fn stop_result(
     qr: &mut QueryResult<'_, 'static, TextProtocol>,
     link: &mut Link,
     env: &Env<'_>,
 ) -> Result<(), Closed> {
+    env.killer.clear();
     env.kill().await;
     link.guard(Some(env.killer), async {
         loop {
