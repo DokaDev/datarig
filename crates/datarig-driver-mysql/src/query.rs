@@ -377,6 +377,7 @@ pub(crate) async fn query_loop(
     };
     match stop {
         Stop::Lost(error) => {
+            let error = link.lost_as(error);
             // What waited for the session is answered first: no request is left without one.
             for c in link.take_queued() {
                 unanswered(&events, c, &error);
@@ -839,7 +840,12 @@ async fn after(
     }
     // Code of the server's that the statement ran (a procedure, a stored function) may have
     // changed the session without the server reporting it: asked, whether it succeeded or not.
-    if std::mem::take(&mut s.routine) {
+    // A connection that runs nothing more is not asked: what the statement did is answered all
+    // the same, and the session ends after it.
+    let routine = std::mem::take(&mut s.routine);
+    if routine && link.tainted() {
+        s.tracked.forget_values();
+    } else if routine {
         let asked: Option<(String, String, String, String)> =
             match link.guard(None, conn.query_first(crate::session::ASK_VALUES)).await? {
                 Ok(row) => row,
@@ -852,7 +858,7 @@ async fn after(
             None => s.tracked.forget_values(),
         }
     }
-    if status.is_none() && (ask || !ok) && (s.tx.open || ask) {
+    if status.is_none() && (ask || !ok) && (s.tx.open || ask) && !link.tainted() {
         status = match link.guard(None, conn.ping()).await? {
             Ok(()) => conn.last_ok_packet().map(|p| p.status_flags()),
             Err(_) => None,
@@ -934,17 +940,11 @@ async fn hold(
     let out = hold_on(qr, link, env, id, columns, carry, ended, &mut held, &mut refusal).await;
     drop(refusal);
     // Nothing sent again for this statement reaches the next one (see [`Link::guard`]).
-    let out = match out {
-        Ok(()) if !gate.close().await => {
-            link.cut();
-            Err(Stop::Lost(DbError::CancelNotTaken(CancelFailure::NotSent)))
-        }
-        Ok(()) => Ok(()),
-        Err(stop) => {
-            gate.close().await;
-            Err(stop)
-        }
-    };
+    // An unclean gate after the result ended: the result is the run's all the same, and the
+    // session is lost after it.
+    if !gate.close().await && out.is_ok() {
+        link.taint(DbError::CancelNotTaken(CancelFailure::NotSent));
+    }
     match out {
         Ok(()) => Ok(held),
         Err(stop) => {
