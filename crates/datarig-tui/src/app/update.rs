@@ -303,8 +303,9 @@ impl App {
             FormOutcome::Choose(profiles::Field::SshEnabled) => self.open_tunnel_picker(),
             FormOutcome::Choose(f) => self.open_form_chooser(f),
             FormOutcome::Cancel => {
-                self.close_form(None);
-                self.clear_test();
+                if !self.close_form(None) {
+                    self.clear_test();
+                }
             }
         }
     }
