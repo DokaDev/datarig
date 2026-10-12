@@ -183,7 +183,7 @@ async fn a_keychain_that_does_not_answer_falls_back_to_the_prompt() {
     assert!(sent_passwords(&h).is_empty(), "no empty password was sent: unknown is not absent");
     let screen = h.screen(100, 30);
     if cfg!(target_os = "macos") {
-        assert!(screen.contains("remote session?") && screen.contains("security unlock-keychain"), "{screen}");
+        assert!(screen.contains("SSH session: run `security unlock-keychain` first"), "{screen}");
     } else {
         assert!(screen.contains("The keychain did not answer"), "{screen}");
     }
@@ -266,6 +266,46 @@ fn a_locked_keychain_falls_back_to_the_prompt() {
     assert!(status.contains("OS keychain: the keychain is locked"), "{status}");
     let account = h.account("local-pg");
     assert_eq!(h.app.secrets.session(&account), Some("typed-pw"));
+}
+
+/// Over SSH (macOS, where `security unlock-keychain` is the fix) a locked keychain's prompt
+/// says plainly what to do, in both languages; elsewhere, or without SSH, it does not.
+#[test]
+fn a_locked_keychain_over_ssh_says_how_to_unlock_it() {
+    use datarig_core::i18n::{Label, Msg};
+    let locked = Fault::new(FaultKind::Keychain(KeychainFault::Locked), "User interaction is not allowed.");
+    for lang in [Lang::En, Lang::Ko] {
+        for ssh in [true, false] {
+            let store = Arc::new(MemoryStore::failing(locked.clone()));
+            let mut h = Harness::launched(&sample_config(None), lang, store, Startup::Normal).with_fake_driver();
+            let env: &'static [(&'static str, &'static str)] = if ssh { SSH } else { &[] };
+            h.app
+                .set_env_lookup(Arc::new(move |k: &str| env.iter().find(|(n, _)| *n == k).map(|(_, v)| v.to_string())));
+            h.key(KeyCode::Enter);
+            let said = h.prompt().expect("the password is asked for").error.render(&h.app.i18n).to_string();
+            let i18n = datarig_core::i18n::I18n::new(lang);
+            let error = i18n.msg(&datarig_tui::app::fault_reason(&locked)).to_string();
+            let remote = ssh && cfg!(target_os = "macos");
+            let want = if remote {
+                i18n.msg(&Msg::PromptPasswordKeychainFailedRemote { error })
+            } else {
+                i18n.msg(&Msg::PromptPasswordKeychainFailed { error })
+            };
+            assert_eq!(said, want.as_str(), "{lang:?} ssh={ssh}");
+            assert_eq!(said.contains("security unlock-keychain"), remote, "{said}");
+            assert!(h.screen(100, 30).contains("unlock-keychain") == remote, "and it is on the screen");
+        }
+    }
+    // The wording itself: English as asked; the Korean entry says the same (its own words).
+    let en = |l: Label| l.text(Lang::En);
+    let fix = "SSH session: run `security unlock-keychain` first, or type the password";
+    assert!(en(Label::PromptPasswordKeychainNoAnswerRemote).ends_with(fix));
+    let failed = Msg::PromptPasswordKeychainFailedRemote { error: "x".into() };
+    assert!(datarig_core::i18n::I18n::new(Lang::En).msg(&failed).ends_with(fix));
+    for text in [ko(Label::PromptPasswordKeychainNoAnswerRemote).to_string(), ko_msg(&failed)] {
+        assert!(text.contains("SSH") && text.contains("`security unlock-keychain`"), "{text}");
+        assert!(!text.contains(fix) && !text.contains('?'), "{text}");
+    }
 }
 
 /// The profile form opens at once on a keychain profile; its password field is filled when
