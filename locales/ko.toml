@@ -741,7 +741,7 @@
 "form.driver.unsupported" = "아직 지원하지 않음"
 "form.driver.unsupported_short" = "미지원"
 "form.policy.hint" = "비우면 default"
-"form.picker.hint" = "←/→ 바꾸기 · Enter 목록"
+"form.picker.hint" = "←/→ 변경 · Enter 목록"
 "chooser.color_auto" = "자동 (이름으로 정함)"
 "chooser.icon_driver" = "드라이버 아이콘"
 "chooser.folder_top" = "(최상위)"
@@ -1665,3 +1665,10 @@
 "chart.too_many_series" = "값 열은 최대 {count}개입니다"
 "chart.rows_short" = "{count}행"
 "chart.rows_more_short" = "{count}+행"
+
+# List picker
+"picker.keys" = "Enter 고르기 · ↑↓ 선택 · Esc 취소"
+"keyctx.overlay.picker" = "목록에서 고르기"
+"form.ssh.picker_new" = "새 SSH 터널…"
+"form.ssh.list_hint" = "Enter 목록"
+"form.already_open" = "열려 있는 폼을 먼저 저장하거나 취소하세요"

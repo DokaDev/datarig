@@ -137,10 +137,15 @@ fn the_form_warns_of_an_unencrypted_mysql_connection() {
     assert_eq!(h.form().section, Section::Ssh);
     assert!(h.screen(120, 40).contains(long), "{}", h.screen(120, 40));
     // Its own tunnel: encrypted to the bastion.
-    h.key(KeyCode::Right);
+    h.key(KeyCode::Enter);
+    h.type_text("only");
+    h.key(KeyCode::Enter);
     assert_eq!(h.form().ssh_choice(), SshChoice::Inline);
     assert!(!h.screen(120, 40).contains(long));
-    h.key(KeyCode::Left);
+    h.key(KeyCode::Enter);
+    h.type_text("off");
+    h.key(KeyCode::Enter);
+    assert_eq!(h.form().ssh_choice(), SshChoice::Off);
     assert!(h.screen(120, 40).contains(long));
     // A server on this machine.
     h.ctrl('p');

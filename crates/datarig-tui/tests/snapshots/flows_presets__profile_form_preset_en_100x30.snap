@@ -10,7 +10,7 @@ expression: backend
 "│ ╭ Edit connection — v6 ────────────────────────────────────────────────────────────────────────╮ │"
 "│▾│  Basic   SSH   Advanced                                                Ctrl+N/Ctrl+P section │ │"
 "│ │                                                                                              │ │"
-"│ │ SSH tunnel        ‹ office ›  ←/→ change · shared: one SSH connection for every profile on … │ │"
+"│ │ SSH tunnel        office ▾   Enter list · shared: one SSH connection for every profile on i… │ │"
 "│ │ Bastion           ec2-user@bastion.example.com                                               │ │"
 "│ │ Log in with       password                                                                   │ │"
 "│ │ Used by           local-pg                                                                   │ │"

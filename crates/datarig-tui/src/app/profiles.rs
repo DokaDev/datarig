@@ -255,6 +255,12 @@ impl Field {
     pub fn is_picker(self) -> bool {
         matches!(self, Field::Color | Field::Icon | Field::Folder)
     }
+
+    /// `Enter` (or a click on its value) opens a list to pick from: the pickers and the SSH
+    /// tunnel.
+    pub fn has_list(self) -> bool {
+        self.is_picker() || self == Field::SshEnabled
+    }
 }
 
 /// What the SSH section's picker of a profile form has picked.
@@ -370,7 +376,7 @@ pub enum FormOutcome {
     Save,
     Test,
     Cancel,
-    /// Open the list of a picker field (color, icon, folder).
+    /// Open the list of a field (color, icon, folder, the SSH tunnel).
     Choose(Field),
 }
 
@@ -471,6 +477,9 @@ pub struct ProfileForm {
     pub dsn_problem: Option<DsnProblem>,
     /// Save was attempted: "required" errors are shown from now on.
     pub attempted: bool,
+    /// A tunnel form opened from a profile form's SSH tunnel list: that profile form, as it
+    /// was, to come back when this one closes.
+    pub back_to: Option<Box<ProfileForm>>,
 }
 
 impl ProfileForm {
@@ -560,6 +569,7 @@ impl ProfileForm {
             focus: Field::Name,
             dsn_problem: None,
             attempted: false,
+            back_to: None,
         };
         if c.tunnel.is_some() && f.ssh_enabled {
             f.ssh_enabled = false;
@@ -594,6 +604,12 @@ impl ProfileForm {
         f.section = Section::Ssh;
         f.focus = Field::Name;
         f
+    }
+
+    /// The preset the profile form waiting under this tunnel form makes when it is saved
+    /// ("save as tunnel preset").
+    pub fn parked_preset(&self) -> Option<&str> {
+        self.back_to.as_ref().and_then(|f| f.new_preset.as_deref())
     }
 
     /// The form edits a tunnel preset.
@@ -634,7 +650,7 @@ impl ProfileForm {
         }
     }
 
-    fn set_ssh_choice(&mut self, c: SshChoice) {
+    pub fn set_ssh_choice(&mut self, c: SshChoice) {
         // Picked here: no longer both.
         self.ssh_both = false;
         match c {
@@ -642,13 +658,6 @@ impl ProfileForm {
             SshChoice::Preset(p) => (self.ssh_preset, self.ssh_enabled) = (Some(p), false),
             SshChoice::Inline => (self.ssh_preset, self.ssh_enabled) = (None, true),
         }
-    }
-
-    fn cycle_ssh_choice(&mut self, d: isize) {
-        let all = self.ssh_choices();
-        let i = all.iter().position(|c| *c == self.ssh_choice()).unwrap_or(0) as isize;
-        let next = all[(i + d).rem_euclid(all.len() as isize) as usize].clone();
-        self.set_ssh_choice(next);
     }
 
     /// The preset picked, when it is a saved one.
@@ -1138,7 +1147,7 @@ impl ProfileForm {
                 Field::Test => return FormOutcome::Test,
                 Field::Save => return FormOutcome::Save,
                 Field::Cancel => return FormOutcome::Cancel,
-                f if f.is_picker() => return FormOutcome::Choose(f),
+                f if f.has_list() => return FormOutcome::Choose(f),
                 _ => self.move_focus(1),
             },
             KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.focus.is_picker() => {
@@ -1156,9 +1165,6 @@ impl ProfileForm {
             }
             KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.focus == Field::KeyRetrieval => {
                 self.key_retrieval = !self.key_retrieval
-            }
-            KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.focus == Field::SshEnabled => {
-                self.cycle_ssh_choice(if k.code == KeyCode::Left { -1 } else { 1 })
             }
             KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.focus == Field::SshAuth => {
                 self.cycle_ssh_auth(if k.code == KeyCode::Left { -1 } else { 1 })

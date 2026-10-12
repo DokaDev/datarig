@@ -686,7 +686,10 @@ database passwords. Keepalives detect a dead tunnel, and the explorer marks the 
 the next use reconnects.
 
 The profile form's SSH section picks the tunnel: **off**, a **tunnel preset**, or **this profile
-only** (its own bastion fields, `[connections.ssh]`).
+only** (its own bastion fields, `[connections.ssh]`). `Enter` (or a click on the value) lists
+them with each preset's bastion, filtered as you type. Its last entry, **New SSH tunnel…** (when
+the config file can be written), opens the tunnel form: once that is saved, the profile form
+comes back with the new preset picked.
 
 - **Tunnel presets** (`[tunnels.<name>]`, the profile names one with `tunnel = "<name>"`) live in
   the explorer's **Tunnels** section, below the connections: `n` makes one, `e` edits it (its name

@@ -298,7 +298,7 @@ impl ContextMenu {
 /// label, its id): 0 when the label starts with it, 1 when a word of the label does, 2 when the
 /// label has its letters in order (case ignored); 3 to 5 the same for another text, which ranks
 /// below anything the label matches; `None` when nothing matches.
-pub(super) fn rank(query: &str, texts: &[&str]) -> Option<u8> {
+pub(crate) fn rank(query: &str, texts: &[&str]) -> Option<u8> {
     let q = query.trim().to_lowercase();
     if q.is_empty() {
         return Some(0);

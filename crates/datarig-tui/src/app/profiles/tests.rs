@@ -273,7 +273,13 @@ fn the_ssh_section_follows_the_tunnel_settings() {
     assert_eq!(f.section, Section::Ssh);
     assert_eq!(f.fields(), [&[Field::SshEnabled][..], &BUTTONS].concat());
     assert_eq!(f.to_profile().ssh, None, "never set up");
-    f.key(&key(KeyCode::Char(' ')));
+    // A list to pick from: `Enter` asks for it; the arrows and Space do not step the value.
+    assert_eq!(f.key(&key(KeyCode::Enter)), FormOutcome::Choose(Field::SshEnabled));
+    for code in [KeyCode::Right, KeyCode::Left, KeyCode::Char(' ')] {
+        f.key(&key(code));
+        assert_eq!(f.ssh_choice(), SshChoice::Off, "{code:?}");
+    }
+    f.set_ssh_choice(SshChoice::Inline);
     assert!(f.ssh_enabled);
     let with = |f: &ProfileForm| f.ssh_fields();
     assert_eq!(
@@ -327,12 +333,10 @@ fn the_ssh_section_follows_the_tunnel_settings() {
     assert_eq!(ssh.source(), PasswordSource::Command("pass show bastion".into()));
     // Saved, then turned off in the form: kept, off. (Turned on and off before a save: none.)
     let saved = f.to_profile();
-    focus(&mut f, Field::SshEnabled);
-    f.key(&key(KeyCode::Char(' ')));
+    f.set_ssh_choice(SshChoice::Off);
     assert_eq!(f.to_profile().ssh, None);
     let mut again = ProfileForm::from_profile(&saved, String::new(), Some(0));
-    focus(&mut again, Field::SshEnabled);
-    again.key(&key(KeyCode::Char(' ')));
+    again.set_ssh_choice(SshChoice::Off);
     let off = again.to_profile().ssh.expect("kept");
     assert!(!off.enabled && off.host == "bastion.example.com");
 }

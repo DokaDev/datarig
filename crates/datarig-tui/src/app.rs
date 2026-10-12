@@ -47,6 +47,7 @@ pub mod paging;
 pub mod pane;
 mod password;
 mod persist;
+pub mod picker;
 pub mod plan;
 pub mod presets;
 pub mod profiles;
@@ -1440,6 +1441,7 @@ impl App {
             Some(Overlay::ContextMenu(_)) => Ctx::ContextMenu,
             Some(Overlay::Chooser(c)) if c.filtering => Ctx::ChooserFilter,
             Some(Overlay::Chooser(_)) => Ctx::Chooser,
+            Some(Overlay::Picker(_)) => Ctx::Picker,
             // Too small to draw the panes: only the workspace keys (run, new tab, …).
             None if self.layout.too_small => Ctx::Workspace,
             None => match self.focus {

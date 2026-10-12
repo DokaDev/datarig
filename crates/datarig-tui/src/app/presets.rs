@@ -42,6 +42,12 @@ pub fn name_taken(presets: &[TunnelPreset], id: TunnelId, original: Option<&str>
     presets.iter().any(|p| p.id != id && (p.name == n || (preset::same_name(&p.name, n) && original != Some(n))))
 }
 
+/// Whether a new preset cannot be named `n` because the profile form waiting under its form
+/// makes a preset named `parked` when it is saved ("save as tunnel preset").
+pub fn parked_taken(parked: Option<&str>, n: &str) -> bool {
+    parked.is_some_and(|p| preset::same_name(p, n))
+}
+
 impl App {
     /// The explorer shows the "Tunnels" section: there are presets, or profiles and a config
     /// file the app can write (a preset can be made).
@@ -93,6 +99,9 @@ impl App {
 
     /// Open the tunnel form: a new preset, preset `id` to edit, or a copy of it.
     pub(super) fn open_tunnel_form(&mut self, id: Option<TunnelId>, duplicate: bool) {
+        if self.form_open_already() {
+            return;
+        }
         let p = id.and_then(|id| self.preset(id)).cloned();
         let taken = |n: &str| self.presets.iter().any(|q| preset::same_name(&q.name, n));
         let copy = p.as_ref().filter(|_| duplicate).map(|p| profiles::copy_name(&p.name, taken));
@@ -116,7 +125,8 @@ impl App {
         form.attempted = true;
         let FormKind::Tunnel { id, editing } = form.kind else { return };
         let (presets, original) = (&self.presets, form.original_name.clone());
-        let taken = |n: &str| name_taken(presets, id, original.as_deref(), n);
+        let parked = form.parked_preset().map(str::to_string);
+        let taken = |n: &str| name_taken(presets, id, original.as_deref(), n) || parked_taken(parked.as_deref(), n);
         if !form.errors(taken).is_empty() {
             return;
         }
@@ -152,8 +162,10 @@ impl App {
         }
         self.preset_secret_saved(before.as_ref(), &p, typed);
         self.clear_test();
-        self.overlays.close(OverlayKind::ProfileForm);
-        self.reveal_tunnel(p.id);
+        // Back in the profile form that asked for it, the explorer stays where it was.
+        if !self.close_form(Some(p.name.clone())) {
+            self.reveal_tunnel(p.id);
+        }
         // Profiles on its connection keep it as it was until they connect again.
         let in_use = self
             .shared
@@ -169,6 +181,29 @@ impl App {
             Notice::new(Msg::TunnelSaved { name: p.name.clone() }, Level::Success)
         };
         self.flash(msg);
+    }
+
+    /// A form is open already: another would take its place (and that of a profile form
+    /// waiting under it), so it is not opened, and the user is told.
+    pub(super) fn form_open_already(&mut self) -> bool {
+        let open = self.overlays.form().is_some();
+        if open {
+            self.flash(Notice::new(Label::FormAlreadyOpen, Level::Warning));
+        }
+        open
+    }
+
+    /// Close the form. A tunnel form opened from a profile form's SSH tunnel list gives that
+    /// form back as it was (`true`); `saved`: the preset the tunnel form saved, picked there.
+    pub(super) fn close_form(&mut self, saved: Option<String>) -> bool {
+        let Some(mut form) = self.overlays.take_form() else { return false };
+        let Some(mut back) = form.back_to.take() else { return false };
+        back.presets = self.presets.clone();
+        if let Some(name) = saved {
+            back.set_ssh_choice(profiles::SshChoice::Preset(name));
+        }
+        self.overlays.push(Overlay::ProfileForm(back));
+        true
     }
 
     /// The secret of preset `p` after its form was saved (`before`: as it was).

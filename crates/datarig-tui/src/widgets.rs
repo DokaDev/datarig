@@ -1,11 +1,12 @@
-//! Rendering building blocks. Stateful widgets ([`editor`], [`grid`], [`tree`], [`text_input`])
-//! own their state and key handling; the other modules draw parts of the [`App`] state
-//! (explorer, status bar, popups, dialogs, command line, key guide, quick connect, profile
-//! form).
+//! Rendering building blocks. Stateful widgets ([`editor`], [`grid`], [`tree`], [`text_input`],
+//! [`list_picker`]) own their state and key handling; the other modules draw parts of the
+//! [`App`] state (explorer, status bar, popups, dialogs, command line, key guide, quick connect,
+//! profile form).
 
 pub mod chart;
 pub mod editor;
 pub mod grid;
+pub mod list_picker;
 pub mod plan;
 pub mod tabbar;
 pub mod text_input;

@@ -1,4 +1,5 @@
-//! The chooser (a list to pick from, with a `/` filter) and the name input dialog.
+//! The chooser (a list to pick from, with a `/` filter), the lists to pick from with a typed
+//! filter ([`crate::widgets::list_picker`]) and the name input dialog.
 
 use crate::app::App;
 use crate::app::chooser::ChooserPurpose;
@@ -81,6 +82,18 @@ pub(crate) fn draw_chooser(app: &mut App, area: Rect, buf: &mut Buffer) -> Optio
     let input = Rect::new(inner.x + 3, inner.y, inner.width.saturating_sub(4), 1);
     let cx = c.filter.render(input, buf, filter_style, filtering, false, None);
     filtering.then_some((cx, inner.y))
+}
+
+/// Draw the list to pick from on top; returns the hardware cursor (its filter).
+pub(crate) fn draw_picker(app: &mut App, area: Rect, buf: &mut Buffer) -> Option<(u16, u16)> {
+    let top = app.overlays.top().map(|o| o.kind()) == Some(OverlayKind::Picker);
+    let now = app.now();
+    let i18n = &app.i18n;
+    let title = i18n.label(app.overlays.picker()?.title());
+    let footer = i18n.label(Label::PickerKeys);
+    let (placeholder, none) = (i18n.label(Label::MenuFilterHint), i18n.label(Label::ChooserNone));
+    let p = app.overlays.picker_mut()?;
+    Some(p.draw(area, buf, (&title, &footer), (&placeholder, &none), top, now))
 }
 
 /// Draw the name input; returns the hardware cursor (its input).

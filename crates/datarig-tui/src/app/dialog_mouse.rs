@@ -59,6 +59,7 @@ impl App {
             OverlayKind::Password => self.prompt_mouse(m),
             OverlayKind::NameInput => self.name_mouse(m),
             OverlayKind::Chooser => self.chooser_mouse(m),
+            OverlayKind::Picker => self.picker_mouse(m),
             OverlayKind::QuickConnect => self.quick_mouse(m),
             OverlayKind::TabList => self.tab_list_mouse(m),
             OverlayKind::Settings => self.settings_mouse(m),
@@ -105,6 +106,7 @@ impl App {
                 let h = row_at(c.list, c.scroll, c.visible().len(), x, y).filter(|i| *i != c.selected);
                 std::mem::replace(&mut c.hover, h) != h
             }
+            Some(OverlayKind::Picker) => self.picker_hover(m),
             Some(OverlayKind::QuickConnect) => {
                 let Some(q) = self.overlays.quick_mut() else { return false };
                 let h = row_at(q.list, q.scroll, q.items.len(), x, y).filter(|i| *i != q.selected);
@@ -164,7 +166,7 @@ impl App {
                 let code = match hit {
                     FormHit::Prev(_) => KeyCode::Left,
                     FormHit::Next(_) => KeyCode::Right,
-                    _ if field.is_picker() => KeyCode::Enter,
+                    _ if field.has_list() => KeyCode::Enter,
                     _ => KeyCode::Char(' '),
                 };
                 self.form_key(press(code), false);

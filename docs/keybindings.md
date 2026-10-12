@@ -458,6 +458,14 @@ Reserved — chooser filter: `Esc` `Enter` `Down` `Up`
 
 Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
 
+## `overlay.picker` [text]
+
+A list to pick from with a typed filter: the profile form's SSH tunnel (`Enter` on it), with "New SSH tunnel…" last. Typing filters it as the action menu is filtered; the arrows, `Ctrl+N`/`Ctrl+P` and `Tab` move, `Enter` picks, `Esc` closes it and changes nothing. A click picks a row, the wheel selects, the pointer only highlights. Inside `root`.
+
+Reserved — list picker: `Down` `Up` `Ctrl+N` `Ctrl+P` `Tab` `Shift+Tab` `Enter` `Esc`
+
+Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
+
 ## `overlay.name_input` [text]
 
 A name to type: a new or renamed folder; OK and Cancel take a click. Inside `root`.

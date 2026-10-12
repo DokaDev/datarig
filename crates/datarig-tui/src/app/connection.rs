@@ -892,6 +892,9 @@ impl App {
     /// Open the profile form: a new profile (in the explorer's folder), or profile `idx` to
     /// edit or duplicate.
     pub(super) fn open_form(&mut self, idx: Option<usize>, duplicate: bool) {
+        if self.form_open_already() {
+            return;
+        }
         let keychain_ok = self.keychain_ok();
         let form = match idx.and_then(|i| self.profiles.get(i).cloned().map(|p| (i, p))) {
             Some((i, p)) => {

@@ -1,7 +1,7 @@
 //! Dialogs shown on top of the workspace, kept in one stack. The last entry has the keyboard
 //! and is drawn last. Entries are kept in a fixed rank order (cell viewer < profile form < settings <
 //! keyboard help < which-key < quick connect < tab list < context menu < saved-queries tree < name input <
-//! chooser <
+//! chooser < picker <
 //! confirmation < run confirmation < busy notice < password prompt < command line), so a dialog that opens later but ranks lower —
 //! e.g. a password prompt raised by a connection event while the command line is open — goes
 //! below.
@@ -264,6 +264,8 @@ pub enum Overlay {
     NameInput(NameInput),
     /// A list to pick from (a profile's color, icon or folder).
     Chooser(Chooser),
+    /// A list to pick from with a typed filter (the profile form's SSH tunnel).
+    Picker(super::picker::Picker),
     /// A yes/no question.
     Confirm(Confirm),
     /// Run statements that may do harm?
@@ -291,6 +293,7 @@ pub enum OverlayKind {
     ScriptTree,
     NameInput,
     Chooser,
+    Picker,
     Confirm,
     RunConfirm,
     IconsAsk,
@@ -313,6 +316,7 @@ impl Overlay {
             Overlay::ScriptTree(_) => OverlayKind::ScriptTree,
             Overlay::NameInput(_) => OverlayKind::NameInput,
             Overlay::Chooser(_) => OverlayKind::Chooser,
+            Overlay::Picker(_) => OverlayKind::Picker,
             Overlay::Confirm(_) => OverlayKind::Confirm,
             Overlay::RunConfirm(_) => OverlayKind::RunConfirm,
             Overlay::IconsAsk(_) => OverlayKind::IconsAsk,
@@ -367,6 +371,7 @@ impl Overlays {
             Some(Overlay::NameInput(n)) => n.buttons.press = Press::default(),
             Some(Overlay::ProfileForm(f)) => f.press = Press::default(),
             Some(Overlay::Chooser(c)) => c.press = Press::default(),
+            Some(Overlay::Picker(p)) => p.rearm(),
             Some(Overlay::QuickConnect(q)) => q.press = Press::default(),
             Some(Overlay::TabList(l)) => l.press = Press::default(),
             Some(Overlay::Commands(c)) => c.press = Press::default(),
@@ -395,6 +400,22 @@ impl Overlays {
         self.0.iter_mut().find_map(|o| if let Overlay::ProfileForm(f) = o { Some(&mut **f) } else { None })
     }
 
+    /// The profile form: the open form, or the one waiting under it (a tunnel form opened from
+    /// its SSH tunnel list).
+    pub fn profile_form_mut(&mut self) -> Option<&mut ProfileForm> {
+        let f = self.form_mut()?;
+        if f.back_to.is_some() { f.back_to.as_deref_mut() } else { Some(f) }
+    }
+
+    /// Close the profile form and hand it over.
+    pub fn take_form(&mut self) -> Option<Box<ProfileForm>> {
+        let i = self.0.iter().position(|o| o.kind() == OverlayKind::ProfileForm)?;
+        match self.0.remove(i) {
+            Overlay::ProfileForm(f) => Some(f),
+            _ => None,
+        }
+    }
+
     pub fn settings(&self) -> Option<&super::settings::SettingsScreen> {
         self.0.iter().find_map(|o| if let Overlay::Settings(s) = o { Some(s) } else { None })
     }
@@ -417,6 +438,14 @@ impl Overlays {
 
     pub fn chooser_mut(&mut self) -> Option<&mut Chooser> {
         self.0.iter_mut().find_map(|o| if let Overlay::Chooser(c) = o { Some(c) } else { None })
+    }
+
+    pub fn picker(&self) -> Option<&super::picker::Picker> {
+        self.0.iter().find_map(|o| if let Overlay::Picker(p) = o { Some(p) } else { None })
+    }
+
+    pub fn picker_mut(&mut self) -> Option<&mut super::picker::Picker> {
+        self.0.iter_mut().find_map(|o| if let Overlay::Picker(p) = o { Some(p) } else { None })
     }
 
     pub fn script_tree(&self) -> Option<&super::script_tree::ScriptTree> {

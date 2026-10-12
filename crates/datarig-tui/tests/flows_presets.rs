@@ -17,10 +17,12 @@ use datarig_core::secret::{MemoryStore, SecretStore, SourceKind};
 use datarig_core::transport::{BoxedStream, DialError, Dialer};
 use datarig_ssh::tunnel::{Loss, Stage};
 use datarig_tui::app::overlay::{ConfirmAction, OverlayKind};
+use datarig_tui::app::profiles::SshChoice;
 use datarig_tui::app::tunnel::{
     OpenTunnel, PresetState, Probe, SecretAsk, TunnelAsk, TunnelEvent, TunnelFailure, TunnelRequest, Tunnels,
 };
 use datarig_tui::app::{AppEvent, NodeState, Startup};
+use datarig_tui::widgets::list_picker::{ListPicker, Row};
 use futures::future::BoxFuture;
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 use std::path::PathBuf;
@@ -843,9 +845,13 @@ fn the_form_of_a_profile_with_both_tunnels_keeps_the_preset_when_saved() {
     let screen = h.screen(110, 30);
     assert!(screen.contains("had its own SSH tunnel on"), "{screen}");
     // Another pick: the line goes; back to the preset and saved.
-    h.key(KeyCode::Right);
+    h.key(KeyCode::Enter);
+    h.type_text("only");
+    h.key(KeyCode::Enter);
     assert!(!h.form().ssh_both && !h.screen(110, 30).contains("had its own SSH tunnel on"));
-    h.key(KeyCode::Left);
+    h.key(KeyCode::Enter);
+    h.type_text("office");
+    h.key(KeyCode::Enter);
     h.ctrl('s');
     let c = h.app.profile(id).unwrap();
     assert_eq!(c.tunnel.as_deref(), Some("office"));
@@ -927,4 +933,356 @@ fn the_tunnel_form_is_filled_and_saved_by_mouse() {
     assert!(!h.form_open(), "saved");
     let p = h.app.presets.first().expect("made");
     assert_eq!((p.name.as_str(), p.settings.auth, p.settings.user.as_str()), ("hq", SshAuth::Agent, "ec2-user"));
+}
+
+// ── the SSH tunnel's list in the profile form ─────────────────────────────
+
+/// The sample profiles with the presets `office` (named by `local-pg` and `v6`) and `lab`, the
+/// config written to `dir`.
+fn two_presets(dir: &Scratch) -> Config {
+    let mut cfg = config(Some(dir));
+    let lab = SshSettings { host: "lab-bastion.internal".into(), port: 2222, auth: SshAuth::Agent, ..bastion() };
+    cfg.tunnels.push(TunnelPreset::new("lab", lab));
+    cfg
+}
+
+/// The profile form of `name` on its SSH section.
+fn ssh_section(h: &mut Harness, name: &str) {
+    h.explore(name);
+    h.keys("e");
+    h.ctrl('n');
+    assert_eq!(h.form().focus, datarig_tui::app::profiles::Field::SshEnabled);
+}
+
+fn tunnel_list(h: &Harness) -> &ListPicker<SshChoice> {
+    h.app.overlays.picker().and_then(|p| p.tunnel()).expect("the tunnel list is open")
+}
+
+/// The rows of the tunnel list, as labelled.
+fn tunnel_rows(h: &Harness) -> Vec<String> {
+    let l = tunnel_list(h);
+    l.rows().iter().map(|r| l.label(*r).to_string()).collect()
+}
+
+fn tunnel_selected(h: &Harness) -> Option<Row> {
+    tunnel_list(h).selected()
+}
+
+/// A press and a release at (x, y), past the arming delay.
+fn click_at(h: &mut Harness, (x, y): (u16, u16)) {
+    use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+    h.advance(Duration::from_millis(500));
+    h.mouse(MouseEventKind::Down(MouseButton::Left), x, y);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), x, y);
+}
+
+/// Where `text` is on the screen drawn at 100x30.
+fn find_text(h: &mut Harness, text: &str) -> (u16, u16) {
+    let t = h.draw(100, 30);
+    let buf = t.backend().buffer();
+    (0..30)
+        .find_map(|y| {
+            let row = row_text(buf, y);
+            row.find(text).map(|i| (datarig_tui::text::width(&row[..i]) as u16, y))
+        })
+        .unwrap_or_else(|| panic!("no {text:?} on screen:\n{}", h.screen(100, 30)))
+}
+
+/// `Enter` on the SSH tunnel lists none, the presets, the profile's own and a new one, the
+/// current one selected; typing filters it (`j` and `k` are typed); `Enter` picks, `Esc`
+/// changes nothing.
+#[test]
+fn the_tunnel_list_picks_a_preset_none_or_the_profiles_own() {
+    let dir = scratch("list");
+    let mut h = harness_with(&two_presets(&dir));
+    ssh_section(&mut h, "local-pg");
+    h.key(KeyCode::Enter);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Picker));
+    assert_eq!(tunnel_rows(&h), ["off", "office", "lab", "this profile only", "New SSH tunnel…"]);
+    assert_eq!(tunnel_selected(&h), Some(Row::Entry(1)), "the current one");
+    let l = tunnel_list(&h);
+    assert_eq!(l.entries()[1].hint, "ec2-user@bastion.example.com");
+    assert_eq!(l.entries()[2].hint, "ec2-user@lab-bastion.internal:2222");
+    // `Esc`: nothing changes.
+    h.key(KeyCode::Down);
+    h.key(KeyCode::Esc);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ProfileForm));
+    assert_eq!(h.form().ssh_choice(), SshChoice::Preset("office".into()));
+    // The next one, picked.
+    h.key(KeyCode::Enter);
+    h.key(KeyCode::Down);
+    h.key(KeyCode::Enter);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ProfileForm));
+    assert_eq!(h.form().ssh_choice(), SshChoice::Preset("lab".into()));
+    // Typed: `k` is a letter of the filter, not a move.
+    h.key(KeyCode::Enter);
+    h.type_text("k");
+    assert_eq!(tunnel_list(&h).filter.text(), "k");
+    h.key(KeyCode::Backspace);
+    h.type_text("only");
+    assert_eq!(tunnel_rows(&h), ["this profile only", "New SSH tunnel…"]);
+    h.key(KeyCode::Enter);
+    assert_eq!(h.form().ssh_choice(), SshChoice::Inline);
+    assert!(h.form().ssh_fields().len() > 1, "its own fields are shown");
+    // None: back to the field alone.
+    h.key(KeyCode::Enter);
+    assert_eq!(tunnel_selected(&h), Some(Row::Entry(3)));
+    h.type_text("of");
+    assert_eq!(tunnel_rows(&h), ["off", "office", "this profile only", "New SSH tunnel…"]);
+    h.key(KeyCode::Enter);
+    assert_eq!(h.form().ssh_choice(), SshChoice::Off);
+    h.ctrl('s');
+    assert!(!h.form_open());
+    let c = h.app.profiles.iter().find(|p| p.name == "local-pg").unwrap();
+    assert_eq!((c.tunnel.as_deref(), c.ssh.as_ref().is_some_and(|s| s.enabled)), (None, false));
+}
+
+/// A click on the tunnel's value opens the list; the pointer only highlights a row; a press
+/// right after it opened and a click outside it do nothing; a click on a row picks it.
+#[test]
+fn the_tunnel_list_takes_the_mouse_as_the_other_lists() {
+    use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+    let dir = scratch("list-mouse");
+    let mut h = harness_with(&two_presets(&dir));
+    ssh_section(&mut h, "local-pg");
+    let (x, y) = find_text(&mut h, "office ▾");
+    click_at(&mut h, (x + 3, y));
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Picker));
+    h.draw(100, 30);
+    let list = tunnel_list(&h).list_area();
+    let lab = (list.x + 3, list.y + 2);
+    // The pointer: highlighted, not selected.
+    h.mouse(MouseEventKind::Moved, lab.0, lab.1);
+    assert_eq!((tunnel_list(&h).hover(), tunnel_selected(&h)), (Some(2), Some(Row::Entry(1))));
+    // Right after it came on top: a press is not taken.
+    h.mouse(MouseEventKind::Down(MouseButton::Left), lab.0, lab.1);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), lab.0, lab.1);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Picker));
+    // Outside it: nothing.
+    click_at(&mut h, (0, 0));
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Picker));
+    assert_eq!(tunnel_selected(&h), Some(Row::Entry(1)));
+    // The wheel moves the selection.
+    h.mouse(MouseEventKind::ScrollDown, lab.0, lab.1);
+    assert_eq!(tunnel_selected(&h), Some(Row::Entry(2)));
+    h.mouse(MouseEventKind::ScrollUp, lab.0, lab.1);
+    // A row, by a click.
+    click_at(&mut h, lab);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ProfileForm));
+    assert_eq!(h.form().ssh_choice(), SshChoice::Preset("lab".into()));
+}
+
+/// "New SSH tunnel…" opens the tunnel form over the profile form; saved, the profile form
+/// comes back as it was, the new preset picked; nothing of the profile is saved until its form
+/// is.
+#[test]
+fn a_new_tunnel_from_the_list_comes_back_picked_in_the_profile_form() {
+    let dir = scratch("list-new");
+    let mut h = harness_with(&two_presets(&dir));
+    h.explore("local-pg");
+    h.keys("e");
+    // An edit of the profile that waits in the form.
+    h.key(KeyCode::Tab);
+    h.type_text("-edited");
+    let host = h.form().host.text().to_string();
+    assert!(host.ends_with("-edited"), "{host}");
+    h.ctrl('n');
+    h.key(KeyCode::Enter);
+    h.type_text("new");
+    assert_eq!(tunnel_rows(&h), ["New SSH tunnel…"], "always listed");
+    h.key(KeyCode::Enter);
+    assert!(h.form().is_tunnel(), "the tunnel form");
+    assert!(h.screen(100, 30).contains("New SSH tunnel"));
+    h.type_text("hq");
+    h.key(KeyCode::Tab);
+    h.type_text("hq.example.com");
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Tab);
+    h.type_text("ec2-user");
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Right);
+    h.key(KeyCode::Right);
+    h.ctrl('s');
+    // Saved: the profile form is back, the new preset picked, the edit kept.
+    assert!(h.app.presets.iter().any(|p| p.name == "hq"));
+    let f = h.form();
+    assert!(!f.is_tunnel());
+    assert_eq!(f.ssh_choice(), SshChoice::Preset("hq".into()));
+    assert_eq!(f.picked_preset().map(|p| p.settings.host.as_str()), Some("hq.example.com"));
+    assert_eq!(f.host.text(), host);
+    assert_eq!(f.section, datarig_tui::app::profiles::Section::Ssh);
+    let written = std::fs::read_to_string(dir.0.join("config.toml")).unwrap();
+    assert!(written.contains("[tunnels.hq]"), "{written}");
+    assert!(!written.contains("-edited"), "the profile is not saved yet: {written}");
+    let screen = h.screen(100, 30);
+    assert!(screen.contains("hq ▾ ") && screen.contains("ec2-user@hq.example.com"), "{screen}");
+    h.ctrl('s');
+    assert!(!h.form_open());
+    let c = h.app.profiles.iter().find(|p| p.name == "local-pg").unwrap();
+    assert_eq!((c.tunnel.as_deref(), c.host.as_str()), (Some("hq"), host.as_str()));
+}
+
+/// The tunnel form of "New SSH tunnel…" cancelled: the profile form comes back unchanged,
+/// nothing made; the list offers no new one when the config file cannot be written.
+#[test]
+fn a_new_tunnel_cancelled_gives_the_profile_form_back_unchanged() {
+    let dir = scratch("list-cancel");
+    let mut h = harness_with(&two_presets(&dir));
+    h.explore("local-pg");
+    h.keys("e");
+    h.type_text("2");
+    let name = h.form().name.text().to_string();
+    h.ctrl('n');
+    h.key(KeyCode::Enter);
+    h.key(KeyCode::Up);
+    h.key(KeyCode::Up);
+    assert_eq!(tunnel_selected(&h), Some(Row::New), "the new entry, around the top");
+    h.key(KeyCode::Enter);
+    assert!(h.form().is_tunnel());
+    h.type_text("hq");
+    h.key(KeyCode::Esc);
+    let f = h.form();
+    assert!(!f.is_tunnel());
+    assert_eq!(
+        (f.ssh_choice(), f.name.text(), f.focus),
+        (SshChoice::Preset("office".into()), name.as_str(), datarig_tui::app::profiles::Field::SshEnabled)
+    );
+    assert_eq!(h.app.presets.len(), 2, "nothing made");
+    // No config file to write: no new entry.
+    let mut h = harness();
+    ssh_section(&mut h, "local-pg");
+    h.key(KeyCode::Enter);
+    assert_eq!(tunnel_rows(&h), ["off", "office", "this profile only"]);
+}
+
+/// The tunnel list over the profile form, as opened and filtered, in English (pinned) and
+/// Korean (checked against the catalog).
+#[test]
+fn tunnel_list_screens() {
+    for lang in [Lang::En, Lang::Ko] {
+        let tag = lang_tag(lang);
+        let dir = scratch(&format!("list-screens-{tag}"));
+        let mut h = Harness::launched(&two_presets(&dir), lang, Arc::new(MemoryStore::new()), Startup::Normal)
+            .with_fake_driver();
+        h.app.set_tunnels(Arc::new(Recorded));
+        ssh_section(&mut h, "local-pg");
+        h.key(KeyCode::Enter);
+        assert_screen!(format!("tunnel_list_{tag}_80x24"), lang, h.draw(80, 24));
+        assert_screen!(format!("tunnel_list_{tag}_120x40"), lang, h.draw(120, 40));
+        h.type_text("la");
+        assert_screen!(format!("tunnel_list_filtered_{tag}_80x24"), lang, h.draw(80, 24));
+    }
+}
+
+/// Another form asked for while a profile form waits under the tunnel form of "New SSH
+/// tunnel…" (a new profile or tunnel from the command line): refused, so the waiting form and
+/// its edits stay.
+#[test]
+fn another_form_never_takes_the_place_of_a_form_waiting_under_the_tunnel_form() {
+    let dir = scratch("list-guard");
+    let mut h = harness_with(&two_presets(&dir));
+    h.explore("local-pg");
+    h.keys("e");
+    h.key(KeyCode::Tab);
+    h.type_text("-edited");
+    let host = h.form().host.text().to_string();
+    h.ctrl('n');
+    h.key(KeyCode::Enter);
+    h.key(KeyCode::Up);
+    h.key(KeyCode::Up);
+    h.key(KeyCode::Enter);
+    assert!(h.form().is_tunnel());
+    h.command("conn.new");
+    assert!(h.form().is_tunnel(), "no new profile form");
+    assert!(h.status(120, 24).contains("Save or cancel the open form first"));
+    h.command("tunnel.new");
+    h.key(KeyCode::Esc);
+    let f = h.form();
+    assert!(!f.is_tunnel(), "the profile form came back");
+    assert_eq!((f.host.text(), f.ssh_choice()), (host.as_str(), SshChoice::Preset("office".into())));
+    // The list open over the form: refused too.
+    h.key(KeyCode::Enter);
+    h.command("conn.new");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Picker));
+    h.key(KeyCode::Esc);
+    assert_eq!(h.form().host.text(), host);
+}
+
+/// A new tunnel cannot take the name of the preset the waiting profile form makes when it is
+/// saved ("save as tunnel preset"): the name is taken.
+#[test]
+fn a_new_tunnel_cannot_take_the_name_the_waiting_form_saves_its_own_tunnel_as() {
+    let dir = scratch("list-taken");
+    let mut cfg = config(Some(&dir));
+    cfg.tunnels.clear();
+    cfg.connections[0].tunnel = None;
+    cfg.connections[2].tunnel = None;
+    cfg.connections[0].ssh = Some(bastion());
+    let mut h = harness_with(&cfg);
+    ssh_section(&mut h, "local-pg");
+    h.key_mod(KeyCode::Char('b'), KeyModifiers::CONTROL);
+    h.key(KeyCode::Enter);
+    assert!(h.form().new_preset_picked());
+    h.key(KeyCode::Enter);
+    // Not "bastion (new)": the entry that makes one.
+    h.type_text("new ssh");
+    h.key(KeyCode::Enter);
+    assert!(h.form().is_tunnel());
+    h.type_text("BASTION");
+    h.key(KeyCode::Tab);
+    h.type_text("other.example.com");
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Tab);
+    h.type_text("ec2-user");
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Right);
+    h.key(KeyCode::Right);
+    h.ctrl('s');
+    assert!(h.form().is_tunnel(), "refused");
+    assert!(h.app.presets.is_empty());
+    assert!(h.screen(100, 30).contains("name already used"));
+}
+
+/// The keychain found unusable while a profile form waits under the tunnel form: the waiting
+/// form cannot pick it any more either.
+#[test]
+fn a_late_keychain_failure_reaches_the_form_waiting_under_the_tunnel_form() {
+    use datarig_core::fault::{Fault, FaultKind, KeychainFault};
+    let dir = scratch("list-probe");
+    let mut h = harness_with(&two_presets(&dir));
+    ssh_section(&mut h, "local-pg");
+    h.key(KeyCode::Enter);
+    h.type_text("new");
+    h.key(KeyCode::Enter);
+    assert!(h.form().is_tunnel() && h.form().keychain_ok);
+    let fault = Fault::new(FaultKind::Keychain(KeychainFault::Locked), "User interaction is not allowed.");
+    h.app.on_app_event(AppEvent::KeychainProbed(Some(fault)));
+    assert!(!h.form().keychain_ok, "the tunnel form");
+    h.key(KeyCode::Esc);
+    assert!(!h.form().is_tunnel() && !h.form().keychain_ok, "the profile form");
+}
+
+/// A tunnel form that gave a profile form back leaves the explorer's cursor where it was.
+#[test]
+fn a_new_tunnel_from_the_list_leaves_the_explorer_cursor() {
+    let dir = scratch("list-cursor");
+    let mut h = harness_with(&two_presets(&dir));
+    ssh_section(&mut h, "local-pg");
+    let at = h.selected();
+    h.key(KeyCode::Enter);
+    h.type_text("new");
+    h.key(KeyCode::Enter);
+    h.type_text("hq");
+    h.key(KeyCode::Tab);
+    h.type_text("hq.example.com");
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Tab);
+    h.type_text("ec2-user");
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Right);
+    h.key(KeyCode::Right);
+    h.ctrl('s');
+    assert!(!h.form().is_tunnel());
+    h.key(KeyCode::Esc);
+    assert_eq!(h.selected(), at, "still on the profile");
 }

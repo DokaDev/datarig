@@ -1,0 +1,28 @@
+---
+source: crates/datarig-tui/tests/flows_presets.rs
+expression: backend
+---
+"╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
+"│  ＋ New connection   ││                                                      │" Hidden by multi-width symbols: [(4, " ")]
+"│▸╭ Edit connection — local-pg ──────────────────────────────────────────────╮ │"
+"│▸│  Basic   SSH   Advanced                            Ctrl+N/Ctrl+P section │ │"
+"│▸│                                                                          │ │"
+"│▾│ SSH tunnel        office ▾   Enter list · shared: one SSH connection fo… │ │"
+"│ │ Bastion           ec2-user@bastion.example.com                           │ │"
+"│ │ Log in w╭ SSH tunnel ──────────────────────────────────────────╮         │ │"
+"│ │ Used by │ › type to filter                                     │         │ │"
+"│ │         │                                                      │         │ │"
+"│ │         │ off                connects to the database directly │         │ │"
+"│ │         │ office             ec2-user@bastion.example.com      │         │ │"
+"│ │         │ lab                ec2-user@lab-bastion.internal:22… │         │ │"
+"│ │         │ this profile only                                    │         │ │"
+"│ │         │ New SSH tunnel…                                      │         │ │"
+"│ │         ╰───────────────── Enter pick · ↑↓ select · Esc cancel ╯         │ │"
+"│ │                                                                          │ │"
+"│ │                    Test    Save    Cancel                                │ │"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ ╰─ Tab/↑↓ move · Ctrl+N/P section · Ctrl+T test · Ctrl+S save · Esc cancel ╯ │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+"                                                                             EN "

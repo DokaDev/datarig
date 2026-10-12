@@ -521,6 +521,9 @@ const RESERVED: &[(Ctx, &[&str], &str)] = &[
     (Chooser, &["j", "k", "down", "up", "enter", "/", "esc", "q"], "chooser"),
     (ChooserFilter, &["esc", "enter", "down", "up"], "chooser filter"),
     (ChooserFilter, TEXT, "text input"),
+    // Typing filters the list: the arrows, `Ctrl+N`/`Ctrl+P` and `Tab` move.
+    (Picker, &["down", "up", "ctrl+n", "ctrl+p", "tab", "shift+tab", "enter", "esc"], "list picker"),
+    (Picker, TEXT, "text input"),
     (NameInput, &["enter", "esc"], "name input"),
     (
         ScriptTree,
