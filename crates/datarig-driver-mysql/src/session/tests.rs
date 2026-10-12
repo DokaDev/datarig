@@ -1058,3 +1058,92 @@ async fn an_explain_analyze_whose_kill_hangs_never_shows_its_transaction_open() 
     }
     kills.abort();
 }
+
+/// A dialer that hands out the client's ends of in-memory streams, one per dial, in order.
+struct Streams(std::sync::Mutex<std::collections::VecDeque<tokio::io::DuplexStream>>);
+
+impl datarig_core::transport::Dialer for Streams {
+    fn dial(
+        &self,
+        _host: &str,
+        _port: u16,
+    ) -> futures::future::BoxFuture<
+        'static,
+        Result<datarig_core::transport::BoxedStream, datarig_core::transport::DialError>,
+    > {
+        let s = self.0.lock().unwrap().pop_front();
+        Box::pin(async move {
+            s.map(|s| Box::new(s) as datarig_core::transport::BoxedStream)
+                .ok_or(datarig_core::transport::DialError::NotOpen)
+        })
+    }
+}
+
+/// A killer of connection 7 whose connections are the far ends (the servers') of `n` streams,
+/// in the order they are dialled.
+fn killer_on_fake_servers(n: usize) -> (Killer, Vec<tokio::io::DuplexStream>) {
+    let (clients, servers): (Vec<_>, Vec<_>) = (0..n).map(|_| tokio::io::duplex(1 << 16)).unzip();
+    let cfg = mysql("127.0.0.1");
+    let dialer = Streams(std::sync::Mutex::new(clients.into()));
+    let route = Route::new(&cfg.host, 3306, Some(DialerRef(Arc::new(dialer))));
+    let opts = Target::of(&cfg).unwrap().opts(None, "datarig-k-test", &route);
+    (Killer::new(route, opts, 7), servers)
+}
+
+/// A server for a kill: logs it in, reads the kill and answers it (`answer`) or never does.
+fn kill_server(mut server: tokio::io::DuplexStream, answer: bool) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        greet(&mut server).await;
+        logged_in(&mut server).await;
+        // Read once it comes (a kill may wait for another's turn).
+        let kill = sent_next(&mut server).await.expect("the kill");
+        assert!(kill.ends_with("KILL QUERY 7"), "{kill:?}");
+        if answer {
+            server.write_all(&packet(1, &[0, 0, 0, 2, 0, 0, 0])).await.unwrap();
+        }
+        tokio::time::sleep(KILL_TIMEOUT * 3).await;
+    })
+}
+
+/// A kill of the user's given up on unanswered, then another one the server answers: the first
+/// may still be carried out, and the second's answer does not say otherwise. The session's
+/// statement ends unclean: its connection runs nothing more.
+#[tokio::test(start_paused = true)]
+async fn a_kill_answered_after_one_given_up_on_leaves_the_session_unclean() {
+    let (killer, mut servers) = killer_on_fake_servers(2);
+    let second = kill_server(servers.pop().unwrap(), true);
+    let first = kill_server(servers.pop().unwrap(), false);
+    let busy = AtomicBool::new(true);
+    let hangs = tokio::spawn({
+        let killer = killer.clone();
+        async move { killer.kill_query().await }
+    });
+    // The second cancel comes while the first waits for its answer, and is sent once that one
+    // was given up on.
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    killer.kill_query_if(|| true).await;
+    assert!(matches!(*killer.watch().borrow(), Kill::Taken(_)), "the second was taken");
+    hangs.await.unwrap();
+    assert!(!killer.idle(&busy).await, "the first may still be carried out");
+    assert!(!busy.load(Ordering::SeqCst));
+    first.abort();
+    second.abort();
+}
+
+/// The same for kills sent again under a request's gate.
+#[tokio::test(start_paused = true)]
+async fn a_kill_sent_again_and_answered_after_one_given_up_on_leaves_the_gate_unclean() {
+    let (killer, mut servers) = killer_on_fake_servers(2);
+    let second = kill_server(servers.pop().unwrap(), true);
+    let first = kill_server(servers.pop().unwrap(), false);
+    let gate = Gate::new();
+    killer.try_again(&gate);
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    killer.try_again(&gate);
+    // Both ran their course: the first given up on, the second answered.
+    tokio::time::sleep(KILL_TIMEOUT * 2).await;
+    assert!(matches!(*killer.watch().borrow(), Kill::Taken(_)), "the second was taken");
+    assert!(!gate.close().await, "the first may still be carried out");
+    first.abort();
+    second.abort();
+}

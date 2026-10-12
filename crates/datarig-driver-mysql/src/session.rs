@@ -505,7 +505,8 @@ pub(crate) fn kill_pending() -> CancelFailure {
 /// connection idle, and the next statement is sent only once the gate is closed.
 pub(crate) struct Gate {
     open: AtomicBool,
-    /// A kill was written and its answer has not come (yet, or ever: given up on).
+    /// A kill was written and its answer has not come (yet, or ever: given up on). One given up
+    /// on stays so: a kill sent after it and answered does not say the first was.
     unanswered: AtomicBool,
     sending: tokio::sync::Mutex<()>,
 }
@@ -573,11 +574,11 @@ impl Killer {
     }
 
     /// The session's statement is no longer on its way nor running: `busy` (what the user's kills
-    /// ask before they are sent) is cleared once no kill is being sent, so none is sent for it
-    /// any more, and none sent for it reaches what the session runs next. `false`: one was sent
-    /// and never answered (the statement ended meanwhile, or the kill was given up on): it may
-    /// still be carried out at any time, on whatever the session runs then, and the session's
-    /// connection is not to run anything any more.
+    /// ask before they are sent) is cleared once no kill is being sent (or one took as long as a
+    /// kill may), so none is sent for it any more, and none sent for it reaches what the session
+    /// runs next. `false`: one was sent and never answered (the statement ended meanwhile, or the
+    /// kill was given up on): it may still be carried out at any time, on whatever the session
+    /// runs then, and the session's connection is not to run anything any more.
     pub(crate) async fn idle(&self, busy: &AtomicBool) -> bool {
         self.sent.quiet(|| busy.store(false, Ordering::SeqCst)).await
     }
@@ -634,11 +635,11 @@ impl Killer {
                     break;
                 }
                 // Set until the answer comes: a kill given up on halfway stays so.
-                self.sent.unanswered.store(true, Ordering::SeqCst);
+                let before = self.sent.unanswered.swap(true, Ordering::SeqCst);
                 written.store(true, Ordering::SeqCst);
                 let answer = conn.query_drop(format!("KILL QUERY {}", self.id)).await;
                 written.store(false, Ordering::SeqCst);
-                self.sent.unanswered.store(false, Ordering::SeqCst);
+                self.sent.unanswered.store(before, Ordering::SeqCst);
                 let kill = match answer {
                     Ok(()) => Kill::Taken(Instant::now()),
                     Err(mysql_async::Error::Server(e)) => Kill::Failed(KillFailure::Refused(e.code)),
@@ -691,9 +692,9 @@ impl Killer {
                     let _sending = gate.sending.lock().await;
                     if gate.is_open() {
                         // Set until the answer comes: a kill given up on halfway stays so.
-                        gate.unanswered.store(true, Ordering::SeqCst);
+                        let before = gate.unanswered.swap(true, Ordering::SeqCst);
                         let taken = conn.query_drop(format!("KILL QUERY {}", killer.id)).await.is_ok();
-                        gate.unanswered.store(false, Ordering::SeqCst);
+                        gate.unanswered.store(before, Ordering::SeqCst);
                         if taken {
                             killer.record(Kill::Taken(Instant::now()), || gate.is_open());
                         }

@@ -767,9 +767,11 @@ async fn statement<'a>(
     };
     s.routine |= sets > 0;
     let code_ran = s.routine;
-    // What the statement did to the session, before the run answers.
-    if let Some(error) = halt!(after(conn, link, env, s, sql, risk.implicit_commit, was_open, kept).await, Some(reply))
-    {
+    // What the statement did to the session, before the run answers. An undo that failed on a
+    // connection still in use may have left the statement's transaction open: the server is
+    // asked (one that runs nothing more is not).
+    let ask = was_open || !kept;
+    if let Some(error) = halt!(after(conn, link, env, s, sql, risk.implicit_commit, ask, kept).await, Some(reply)) {
         reply.fail(error.clone(), false);
         return Err(Halted { stop: Stop::Lost(error), reply: None });
     }
