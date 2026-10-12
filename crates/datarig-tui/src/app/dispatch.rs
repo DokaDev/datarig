@@ -388,6 +388,7 @@ impl App {
                     ConfirmAction::DeleteTunnel(id) => self.delete_tunnel(id),
                     ConfirmAction::DeleteEnvironment(id) => self.delete_environment(id),
                     ConfirmAction::ExplainAgain => self.explain_as_plan_confirmed(),
+                    ConfirmAction::KeychainSecurityTool => self.keychain_access_changed(KeychainAccess::SecurityTool),
                 }
             }
             KeyCode::Char('n') | KeyCode::Esc if keeps => self.confirm_kept(),

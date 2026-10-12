@@ -148,6 +148,10 @@ pub enum ConfirmAction {
     /// Run an `EXPLAIN ANALYZE` again to view its text plan as a plan (the statement waits in
     /// `App::pending_as_plan`). Cancel is the default.
     ExplainAgain,
+    /// Reach the macOS keychain through `/usr/bin/security`
+    /// (`[secrets] macos_keychain_access = "security_tool"`): any program running as the user can
+    /// then read the passwords through it. Cancel is the default.
+    KeychainSecurityTool,
 }
 
 /// A yes/no question: `y` yes, `n`/`Esc` no; `Enter` no when the answer would lose something
@@ -203,6 +207,7 @@ impl Confirm {
             ConfirmAction::FetchThenCopy => (Label::DialogButtonCancel, Label::DialogButtonFetchCopy),
             ConfirmAction::TrustHostKey => (Label::DialogButtonCancel, Label::DialogButtonTrust),
             ConfirmAction::ExplainAgain => (Label::DialogButtonCancel, Label::SafetyConfirmRun),
+            ConfirmAction::KeychainSecurityTool => (Label::DialogButtonCancel, Label::DialogButtonTurnOn),
         };
         // `Enter` says yes only to a copy (see `App::confirm_key`).
         let enter = if matches!(self.action, ConfirmAction::Copy | ConfirmAction::FetchThenCopy) { 1 } else { 0 };

@@ -622,6 +622,7 @@ Settings of `:set` (saved to `config.toml` like the matching actions):
 | `editor.format_indent` | `4` `2` | Formatter: indent |
 | `editor.auto_pairs` | `off` `on` | Auto-pairs |
 | `editor.run_hints` | `on` `off` | Run hints |
+| `secrets.macos_keychain_access` | `direct` `security_tool` | macOS keychain access |
 
 ## Command line only
 

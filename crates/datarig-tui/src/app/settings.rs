@@ -82,6 +82,7 @@ impl App {
             Setting::FormatIndent(i) => *i == self.prefs.format_indent,
             Setting::AutoPairs(a) => *a == self.prefs.auto_pairs,
             Setting::RunHints(h) => *h == self.prefs.run_hints,
+            Setting::KeychainAccess(a) => *a == self.prefs.keychain_access,
         };
         SETTINGS.get(k)?.values.fixed().iter().position(|v| now(&v.1))
     }

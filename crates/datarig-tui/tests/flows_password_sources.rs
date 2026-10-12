@@ -5,7 +5,7 @@
 mod common;
 
 use common::*;
-use datarig_core::config::{self, Config};
+use datarig_core::config::{self, Config, KeychainAccess};
 use datarig_core::driver::DbEvent;
 use datarig_core::i18n::Lang;
 use datarig_core::secret::{DefaultSource, MemoryStore, PasswordSource, SecretStore, SourceKind, Stores};
@@ -177,6 +177,56 @@ fn set_default_source_is_saved_and_used() {
     assert!(!text.contains("default_source") && !text.contains("[secrets]"), "back to the default: {text}");
     h.command("set secrets.default_source=vault");
     assert!(h.cmdline().is_some_and(|c| c.error.is_some()), "a bad value is an error");
+    cleanup(&path);
+}
+
+/// `[secrets] macos_keychain_access`: turning the `security` tool on asks first (`Enter`
+/// cancels, `y` turns it on), takes effect on the keychain store at once (no restart) and is
+/// saved; turning it off again says what that means. From `:set` and the settings screen alike.
+#[test]
+fn keychain_access_through_security_asks_first_and_applies_at_once() {
+    // Up to date: no launch-time migration writes next to it after the test.
+    let path = temp_config("keychain-access", "version = 2\n");
+    let (cfg, _) = config::load(Some(path.clone()));
+    let mut h = Harness::launched(&cfg, Lang::En, Arc::new(MemoryStore::new()), Startup::Normal);
+    let switch = h.app.secrets.stores().access.clone();
+    assert_eq!(switch.get(), KeychainAccess::Direct);
+    h.command("set secrets.macos_keychain_access=security_tool");
+    let screen = h.screen(120, 30);
+    assert!(screen.contains("Keychain access through security"), "{screen}");
+    assert!(screen.contains("Passwords will go through /usr/bin/security: any program"), "{screen}");
+    assert!(screen.contains("y turn on"), "{screen}");
+    // `Enter` cancels: nothing changes, nothing is saved.
+    h.key(KeyCode::Enter);
+    assert!(h.app.overlays.confirm().is_none());
+    assert_eq!((h.app.prefs.keychain_access, switch.get()), (KeychainAccess::Direct, KeychainAccess::Direct));
+    assert!(!std::fs::read_to_string(&path).unwrap().contains("macos_keychain_access"));
+    h.command("set secrets.macos_keychain_access=security_tool");
+    h.keys("y");
+    assert_eq!(h.app.prefs.keychain_access, KeychainAccess::SecurityTool);
+    assert_eq!(switch.get(), KeychainAccess::SecurityTool, "the store uses it from the next call on");
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("[secrets]\nmacos_keychain_access = \"security_tool\""), "{text}");
+    assert!(h.status(160, 24).contains("Passwords now go through /usr/bin/security"), "{}", h.status(160, 24));
+    // Set again: already on, nothing to ask.
+    h.command("set secrets.macos_keychain_access=security_tool");
+    assert!(h.app.overlays.confirm().is_none());
+    // Back to direct: no question; items saved meanwhile may ask once.
+    h.command("set secrets.macos_keychain_access=direct");
+    assert!(h.app.overlays.confirm().is_none());
+    assert_eq!((h.app.prefs.keychain_access, switch.get()), (KeychainAccess::Direct, KeychainAccess::Direct));
+    assert!(!std::fs::read_to_string(&path).unwrap().contains("macos_keychain_access"));
+    assert!(h.status(200, 24).contains("saved meanwhile trust only /usr/bin/security"), "{}", h.status(200, 24));
+    // The settings screen: its last row, `l` asks the same question.
+    h.command("settings");
+    h.keys("k");
+    h.keys("l");
+    assert!(h.app.overlays.confirm().is_some(), "asked first");
+    h.keys("y");
+    assert_eq!(switch.get(), KeychainAccess::SecurityTool);
+    // The tests' keychain is in memory whatever the setting: passwords still save there.
+    h.app.secrets.save("profile:x", "pw").unwrap();
+    assert_eq!(h.app.secrets.stores().keychain.get("profile:x").unwrap().as_deref(), Some("pw"));
     cleanup(&path);
 }
 
@@ -370,6 +420,7 @@ fn an_insecure_secrets_file_is_refused_with_the_fix() {
         keychain: Arc::new(MemoryStore::new()),
         file: Arc::new(store),
         file_path: Some(file.clone()),
+        access: Default::default(),
     });
     h.key(KeyCode::Enter);
     assert!(h.app.conns.attempt().is_none());
@@ -462,6 +513,7 @@ fn a_failed_source_change_keeps_everything() {
             "No space left on device (os error 28)",
         ))),
         file_path: None,
+        access: Default::default(),
     });
     h.keys("e");
     select(&mut h, SourceKind::File);

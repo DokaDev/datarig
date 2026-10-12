@@ -103,7 +103,9 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
   limit, so a locked or remote keychain cannot freeze the app), a `0600` secrets file, a command
   (`password_command`, for example a password manager's CLI), an environment variable, or a
   prompt on every connect. Plaintext passwords found in the config file are moved to the
-  keychain at launch.
+  keychain at launch. On macOS the keychain can be reached through Apple's `security` tool
+  instead, so upgrades of the unsigned binary stop asking again (opt in, with a trade-off:
+  [macOS: keychain access through `security`](#macos-keychain-access-through-security)).
 - Connection URLs (`postgres://user@host:port/db?...`) can be pasted into the profile form.
 - **SSH tunnels** through one bastion per profile: key files (OpenSSH, PEM including AWS `.pem`,
   PKCS#8, encrypted or not, with certificates), password, ssh-agent, or keyboard-interactive
@@ -539,6 +541,41 @@ on Linux, `~/Library/Application Support/datarig` on macOS; on Windows, untested
 `DATARIG_SECRET_STORE=memory` keeps passwords in memory only and never touches the OS keychain.
 An `[editor] mode` key from an older version is ignored (the editor has vim keys only) and
 dropped the next time the app saves the file.
+
+### macOS: keychain access through `security`
+
+datarig's release binaries are not signed. macOS ties the "Always Allow" you give a keychain item
+to the program that asked, so after every upgrade it sees a new program and asks for your login
+password again for each saved password.
+
+To avoid that, datarig can read and write its keychain items through Apple's own
+`/usr/bin/security` tool, which is signed by Apple and does not change when datarig is upgraded:
+
+```toml
+[secrets]
+macos_keychain_access = "security_tool"   # direct (the default) | security_tool
+```
+
+or the settings screen (`Space ,`, Secrets group, "macOS keychain access"), or
+`:set secrets.macos_keychain_access=security_tool`. The change applies at once, without a
+restart; turning it on asks first.
+
+- **What to expect.** The first time each existing password is read this way, macOS asks once
+  whether `security` may use it: enter your login password and choose **Always Allow**. After
+  that, upgrades of datarig no longer ask.
+- **The trade-off.** Any program running as your user can then read these passwords with
+  `security` (for example `security find-generic-password -s datarig -g`) without being asked.
+  With the default (`direct`), macOS asks before another program reads them.
+- **The items are the same** in both modes (generic passwords, service `datarig`, account
+  `profile:<id>`, in your default keychain), so switching moves nothing. Passwords never appear
+  on the tool's command line: datarig hands them over on its standard input.
+- **Switching back** to `direct` keeps every password working; items saved while
+  `security_tool` was on trust only `security`, so macOS may ask once per item.
+- The setting is accepted on every platform and has no effect outside macOS.
+
+A signed release (Developer ID) is the proper fix: macOS would then recognize datarig itself
+across upgrades. Once releases are signed, datarig is meant to remove `security` from the items'
+access lists again; until then this setting is the workaround.
 
 ## Themes
 

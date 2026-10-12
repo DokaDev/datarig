@@ -56,15 +56,38 @@ pub(crate) fn draw_settings(app: &mut App, area: Rect, buf: &mut Buffer) {
     let mut row = 0;
     let mut selected_spec = None;
     let mut rows = Vec::new();
-    for (group, items) in groups() {
+    // Lines scrolled off the top so the selected row shows on a short screen: the list's lines
+    // are the category titles and the rows.
+    let groups = groups();
+    let selected_line = groups
+        .iter()
+        .scan(0, |before, (_, items)| {
+            let start = *before;
+            *before += items.len();
+            Some((start, items.len()))
+        })
+        .enumerate()
+        .find_map(|(g, (start, n))| (screen.selected < start + n).then_some(g + 1 + screen.selected))
+        .unwrap_or(0);
+    let mut skip = (selected_line + 1).saturating_sub(usize::from(bottom.saturating_sub(y)));
+    for (group, items) in groups {
         if y >= bottom {
             break;
         }
-        put(buf, x, y, &i18n.label(group.label()), tw, surface(th.accent).add_modifier(Modifier::BOLD));
-        y += 1;
+        if skip > 0 {
+            skip -= 1;
+        } else {
+            put(buf, x, y, &i18n.label(group.label()), tw, surface(th.accent).add_modifier(Modifier::BOLD));
+            y += 1;
+        }
         for k in items {
             if y >= bottom {
                 break;
+            }
+            if skip > 0 {
+                skip -= 1;
+                row += 1;
+                continue;
             }
             let spec = &SETTINGS[k];
             let on = row == screen.selected;

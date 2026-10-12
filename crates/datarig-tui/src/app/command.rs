@@ -15,7 +15,7 @@
 use super::action::{Action, LangSetting};
 use datarig_core::config::{
     AutoPairs, ClipboardSetting, CommandsPosition, CopyHeader, CursorShape, DetailView, EditorClipboard, FormatIndent,
-    IconsSetting, KeywordCase, RunHints,
+    IconsSetting, KeychainAccess, KeywordCase, RunHints,
 };
 use datarig_core::i18n::Label;
 use datarig_core::secret::{DefaultSource, SourceKind};
@@ -362,6 +362,7 @@ pub enum Setting {
     FormatIndent(FormatIndent),
     AutoPairs(AutoPairs),
     RunHints(RunHints),
+    KeychainAccess(KeychainAccess),
 }
 
 /// The categories of the settings screen, in its order.
@@ -575,6 +576,20 @@ pub const SETTINGS: &[SettingSpec] = &[
         values: Values::Fixed(&[
             ("on", Setting::RunHints(RunHints::On), Label::SettingRunHintsOn),
             ("off", Setting::RunHints(RunHints::Off), Label::SettingRunHintsOff),
+        ]),
+    },
+    SettingSpec {
+        key: "secrets.macos_keychain_access",
+        label: Label::SettingKeychainAccess,
+        about: Label::SettingKeychainAccessAbout,
+        group: SettingGroup::Secrets,
+        values: Values::Fixed(&[
+            ("direct", Setting::KeychainAccess(KeychainAccess::Direct), Label::SettingKeychainAccessDirect),
+            (
+                "security_tool",
+                Setting::KeychainAccess(KeychainAccess::SecurityTool),
+                Label::SettingKeychainAccessSecurityTool,
+            ),
         ]),
     },
 ];

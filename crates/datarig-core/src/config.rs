@@ -37,6 +37,9 @@
 //! `[secrets] default_source` is the password source a new profile starts with (`auto`, the
 //! default: the keychain when it works, else `prompt`). A profile's own source is
 //! `password_source` (+ `password_command` / `password_env`), see [`crate::secret::source`].
+//! `[secrets] macos_keychain_access` says how the macOS keychain is reached ([`KeychainAccess`]:
+//! `direct`, the default, or `security_tool`); it is accepted everywhere and only has an effect
+//! on macOS.
 //! `[keymap.<context>]` tables remap keys; core reads them as plain strings and never
 //! rewrites them — the TUI validates the entries at startup.
 //! `[policy.<name>]` tables are the environments profiles name, and `[policy.default]` the
@@ -215,6 +218,8 @@ struct EditorSection {
 struct SecretsSection {
     #[serde(default)]
     default_source: Option<String>,
+    #[serde(default)]
+    macos_keychain_access: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -452,6 +457,31 @@ impl Choice for RunHints {
     }
 }
 
+/// `[secrets] macos_keychain_access`: how datarig reaches the macOS keychain. Accepted on every
+/// platform; only the macOS keychain store reads it (see [`crate::secret::SwitchedKeychain`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum KeychainAccess {
+    /// datarig calls the keychain itself (the Security framework). macOS ties an item's
+    /// "Always Allow" to the binary that asked, so an unsigned new version is asked again.
+    #[default]
+    Direct,
+    /// Through Apple's `/usr/bin/security` tool (`SecurityCliStore`): the
+    /// items trust that tool, which stays the same across upgrades of datarig. Any program
+    /// running as the same user can then read these passwords through the tool without being
+    /// asked.
+    SecurityTool,
+}
+
+impl Choice for KeychainAccess {
+    const ALL: &'static [Self] = &[KeychainAccess::Direct, KeychainAccess::SecurityTool];
+    fn as_str(self) -> &'static str {
+        match self {
+            KeychainAccess::Direct => "direct",
+            KeychainAccess::SecurityTool => "security_tool",
+        }
+    }
+}
+
 /// The default of `osc52_max_bytes`: about 100 KB of base64 (75 KB of text). Terminals and
 /// tmux drop longer OSC 52 sequences silently (tmux 3.x, many terminals cap them near here).
 pub const OSC52_MAX_BYTES: usize = 100_000;
@@ -479,6 +509,8 @@ pub struct Prefs {
     pub auto_pairs: AutoPairs,
     /// `[editor] run_hints`.
     pub run_hints: RunHints,
+    /// `[secrets] macos_keychain_access`.
+    pub keychain_access: KeychainAccess,
 }
 
 impl Default for Prefs {
@@ -495,6 +527,7 @@ impl Default for Prefs {
             format_indent: FormatIndent::default(),
             auto_pairs: AutoPairs::default(),
             run_hints: RunHints::default(),
+            keychain_access: KeychainAccess::default(),
         }
     }
 }
@@ -739,7 +772,9 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
         .editor
         .map(|e| (e.cursor_shape, e.clipboard, e.format_keyword_case, e.format_indent, e.auto_pairs, e.run_hints))
         .unwrap_or_default();
-    let default_source = match f.secrets.and_then(|s| s.default_source) {
+    let (default_source, keychain_access) =
+        f.secrets.map(|s| (s.default_source, s.macos_keychain_access)).unwrap_or_default();
+    let default_source = match default_source {
         None => DefaultSource::default(),
         Some(v) => DefaultSource::parse(&v).ok_or_else(|| {
             bad("secrets.default_source", &v).allowed(Some("auto, keychain, file, command, env, prompt"))
@@ -765,6 +800,7 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
         },
         auto_pairs: choice("editor.auto_pairs", auto_pairs, "off, on")?,
         run_hints: choice("editor.run_hints", run_hints, "on, off")?,
+        keychain_access: choice("secrets.macos_keychain_access", keychain_access, "direct, security_tool")?,
     };
     // The environments in the file's order (the deserializer sorts its map by name).
     let order: Vec<String> = text
@@ -1146,6 +1182,8 @@ pub fn save(path: &Path, settings: Settings, profiles: Option<Profiles>) -> Resu
     orphans += &nested_setting(&mut doc, "editor", "run_hints", hints)?;
     let source = (default_source.as_str().into(), default_source == DefaultSource::Auto);
     orphans += &nested_setting(&mut doc, "secrets", "default_source", source)?;
+    let access = (prefs.keychain_access.as_str().into(), prefs.keychain_access == KeychainAccess::default());
+    orphans += &nested_setting(&mut doc, "secrets", "macos_keychain_access", access)?;
     let position = (prefs.commands_position.as_str().into(), prefs.commands_position == CommandsPosition::default());
     orphans += &nested_setting(&mut doc, "commands", "position", position)?;
     if !orphans.is_empty() {

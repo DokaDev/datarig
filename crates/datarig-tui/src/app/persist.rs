@@ -620,6 +620,7 @@ pub fn fault_reason(f: &Fault) -> Msg {
             KeychainFault::Mismatch => Label::FaultKeychainMismatch,
             KeychainFault::Failure => Label::FaultKeychainFailure,
             KeychainFault::NoAnswer => Label::FaultKeychainNoAnswer,
+            KeychainFault::NoTool => Label::FaultKeychainNoTool,
         }
         .into(),
         FaultKind::NotPrivate => Label::FaultNotPrivate.into(),

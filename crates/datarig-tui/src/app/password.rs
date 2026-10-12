@@ -726,4 +726,51 @@ impl App {
         };
         self.flash(saved.unwrap_or(Notice::new(Msg::SecretsDefaultSet { source }, Level::Info)));
     }
+
+    /// `[secrets] macos_keychain_access`. Turning on the `security` tool asks first (any program
+    /// running as the user can then read the passwords through it); `Enter` cancels.
+    pub(super) fn set_keychain_access(&mut self, a: KeychainAccess) {
+        if a == KeychainAccess::SecurityTool && self.prefs.keychain_access != a {
+            self.confirm(
+                Label::KeychainAccessTitle,
+                Label::KeychainAccessWarning,
+                Label::KeychainAccessKeys,
+                ConfirmAction::KeychainSecurityTool,
+            );
+            return;
+        }
+        self.keychain_access_changed(a);
+    }
+
+    /// Use `a` from the next keychain call on (no restart), save it and say what it means.
+    pub(super) fn keychain_access_changed(&mut self, a: KeychainAccess) {
+        let before = self.prefs.keychain_access;
+        self.prefs.keychain_access = a;
+        self.secrets.stores().access.set(a);
+        let saved = self.persist();
+        let said = match (before, a) {
+            (KeychainAccess::Direct, KeychainAccess::SecurityTool) => {
+                Notice::new(Label::KeychainAccessOn, Level::Warning)
+            }
+            (KeychainAccess::SecurityTool, KeychainAccess::Direct) => {
+                Notice::new(Label::KeychainAccessOff, Level::Info)
+            }
+            _ => Notice::new(
+                Msg::SettingChanged {
+                    name: self.i18n.label(Label::SettingKeychainAccess).to_string(),
+                    value: self.i18n.label(keychain_access_label(a)).to_string(),
+                },
+                Level::Info,
+            ),
+        };
+        self.flash(saved.unwrap_or(said));
+    }
+}
+
+/// The settings label of a keychain access mode.
+fn keychain_access_label(a: KeychainAccess) -> Label {
+    match a {
+        KeychainAccess::Direct => Label::SettingKeychainAccessDirect,
+        KeychainAccess::SecurityTool => Label::SettingKeychainAccessSecurityTool,
+    }
 }

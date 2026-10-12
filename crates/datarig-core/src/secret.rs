@@ -3,7 +3,9 @@
 //! Passwords never go into the config file. Each profile picks a [`source`]: the OS keychain
 //! (the default), the secrets file, a command, an environment variable, or a prompt on every
 //! connect. [`KeyringStore`] uses the OS credential store (macOS Keychain, Linux Secret
-//! Service, Windows Credential Manager) through the `keyring` crate; [`FileStore`] is
+//! Service, Windows Credential Manager) through the `keyring` crate; on macOS,
+//! `[secrets] macos_keychain_access = "security_tool"` sends the keychain calls through Apple's
+//! `security` tool instead (`SecurityCliStore`, chosen per call by [`SwitchedKeychain`]); [`FileStore`] is
 //! `secrets.toml` next to the config file; [`MemoryStore`] is the in-process implementation used
 //! by tests and by development runs with `DATARIG_SECRET_STORE=memory` ([`StoreKind`]), which
 //! replaces **both** the keychain and the secrets file. [`Secrets`] adds a per-session cache on
@@ -16,15 +18,22 @@ mod guard;
 mod keychain;
 mod log;
 mod memory;
+#[cfg(unix)]
+mod security_cli;
 pub mod source;
+mod switch;
 
 pub use file::FileStore;
 pub use guard::{Call, Guarded, KEYCHAIN_TIMEOUT, Late, LateHook};
 pub use keychain::KeyringStore;
 pub use log::{DeletionLog, Logged};
 pub use memory::MemoryStore;
+#[cfg(unix)]
+pub use security_cli::{LINE_LIMIT, PROGRAM, SecurityCliStore};
 pub use source::{DefaultSource, Lookup, PasswordSource, SourceError, SourceKind};
+pub use switch::{KeychainSwitch, SwitchedKeychain};
 
+use crate::config::KeychainAccess;
 use crate::fault::Fault;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -84,7 +93,11 @@ impl StoreKind {
     /// The keychain and secrets-file stores of this kind, their deletions written to `log`
     /// ([`Logged`]). `secrets_file` is `secrets.toml` next to the config file (`None`: no
     /// config directory, so the file source is unavailable). `memory` replaces both stores.
-    pub fn open_stores(self, secrets_file: Option<PathBuf>, log: Arc<DeletionLog>) -> Stores {
+    /// `access` is `[secrets] macos_keychain_access` as loaded ([`Stores::access`] changes it
+    /// later); only the OS keychain on macOS reads it: `memory` and `stall` never reach the
+    /// keychain, whatever it says.
+    pub fn open_stores(self, secrets_file: Option<PathBuf>, log: Arc<DeletionLog>, access: KeychainAccess) -> Stores {
+        let switch = KeychainSwitch::new(access);
         let logged = |store: Arc<dyn SecretStore>, source: &str| -> Arc<dyn SecretStore> {
             Arc::new(Logged::new(store, source, log.clone()))
         };
@@ -98,23 +111,49 @@ impl StoreKind {
                     ))),
                 };
                 Stores {
-                    keychain: logged(Arc::new(KeyringStore::new()), "keychain"),
+                    keychain: logged(os_keychain(&switch), "keychain"),
                     file: logged(file, "file"),
                     file_path: secrets_file,
+                    access: switch,
                 }
             }
             StoreKind::Memory => Stores {
                 keychain: logged(Arc::new(MemoryStore::new()), "keychain (memory)"),
                 file: logged(Arc::new(MemoryStore::new()), "file (memory)"),
                 file_path: None,
+                access: switch,
             },
             StoreKind::Stalled => Stores {
                 keychain: Arc::new(Stalled),
                 file: logged(Arc::new(MemoryStore::new()), "file (memory)"),
                 file_path: None,
+                access: switch,
             },
         }
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many OS keychain stores this thread built ([`os_keychain`]).
+    static OS_STORES_BUILT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The OS keychain store: on macOS the direct store and the `security` tool, chosen per call by
+/// `switch` ([`SwitchedKeychain`]).
+#[cfg(target_os = "macos")]
+fn os_keychain(switch: &KeychainSwitch) -> Arc<dyn SecretStore> {
+    #[cfg(test)]
+    OS_STORES_BUILT.with(|n| n.set(n.get() + 1));
+    Arc::new(SwitchedKeychain::new(Arc::new(KeyringStore::new()), Arc::new(SecurityCliStore::new()), switch.clone()))
+}
+
+/// The OS keychain store (the setting only applies to macOS).
+#[cfg(not(target_os = "macos"))]
+fn os_keychain(_switch: &KeychainSwitch) -> Arc<dyn SecretStore> {
+    #[cfg(test)]
+    OS_STORES_BUILT.with(|n| n.set(n.get() + 1));
+    Arc::new(KeyringStore::new())
 }
 
 /// A keychain that never answers ([`StoreKind::Stalled`]).
@@ -147,12 +186,15 @@ pub struct Stores {
     pub file: Arc<dyn SecretStore>,
     /// The real secrets file, for its permission check (`None` for an in-memory file store).
     pub file_path: Option<PathBuf>,
+    /// How the macOS keychain is reached (`[secrets] macos_keychain_access`): the app sets it
+    /// when the setting changes. Read only by the OS keychain store on macOS.
+    pub access: KeychainSwitch,
 }
 
 impl Stores {
     /// `keychain` plus an in-memory secrets file (tests).
     pub fn with_keychain(keychain: Arc<dyn SecretStore>) -> Self {
-        Self { keychain, file: Arc::new(MemoryStore::new()), file_path: None }
+        Self { keychain, file: Arc::new(MemoryStore::new()), file_path: None, access: KeychainSwitch::default() }
     }
 
     /// The secrets file may be used (its permissions, on Unix).

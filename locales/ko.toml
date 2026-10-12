@@ -1737,3 +1737,16 @@
 "environment.deleted" = "환경 “{name}”을(를) 삭제했습니다"
 "environment.deleted_used" = "환경 “{name}”을(를) 삭제했습니다. 이 환경을 쓰던 프로필 {count}개는 다른 환경이 필요합니다"
 "environment.not_found" = "{name}의 환경 “{environment}”을(를) 찾을 수 없습니다: 프로필 폼에서 다른 환경을 고르세요(대신 기본 규칙으로 실행하지 않습니다)"
+
+# How the macOS keychain is reached ([secrets] macos_keychain_access)
+"fault.keychain.no_tool" = "macOS의 security 도구(/usr/bin/security)가 없거나 실행할 수 없음"
+"setting.keychain_access" = "macOS 키체인 접근 방식"
+"setting.keychain_access.direct" = "직접: datarig가 키체인에 직접 요청"
+"setting.keychain_access.security_tool" = "/usr/bin/security 경유: 업그레이드 뒤에도 다시 묻지 않음"
+"setting.keychain_access.about" = "macOS 전용입니다(다른 OS에서는 효과가 없습니다). 직접: macOS는 '항상 허용'을 datarig 실행 파일에 묶는데 릴리스가 서명되지 않았으므로, 업그레이드할 때마다 로그인 암호를 다시 묻습니다. /usr/bin/security 경유: Apple 도구에 준 '항상 허용'이 업그레이드 뒤에도 유지되지만, 같은 사용자로 실행되는 모든 프로그램이 이 도구로 묻지 않고 비밀번호를 읽을 수 있습니다."
+"keychain_access.title" = "security를 거친 키체인 접근"
+"keychain_access.warning" = "켜면 비밀번호를 /usr/bin/security로 읽고 씁니다: 같은 사용자로 실행되는 모든 프로그램이 묻지 않고 이 비밀번호를 읽을 수 있습니다. 저장된 비밀번호마다 처음 접근할 때 로그인 암호를 한 번 더 물을 수 있으니 '항상 허용'을 선택하세요. 켤까요?"
+"keychain_access.keys" = "y 켜기 · n/Esc/Enter 취소"
+"dialog.button.turn_on" = "켜기"
+"keychain_access.on" = "이제 비밀번호를 /usr/bin/security로 읽고 씁니다: 같은 사용자로 실행되는 모든 프로그램이 묻지 않고 읽을 수 있습니다"
+"keychain_access.off" = "다시 datarig가 키체인을 직접 읽습니다. 그동안 저장한 비밀번호는 /usr/bin/security만 신뢰하므로 macOS가 비밀번호마다 한 번씩 물을 수 있습니다"

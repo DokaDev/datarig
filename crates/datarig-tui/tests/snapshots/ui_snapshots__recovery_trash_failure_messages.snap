@@ -46,6 +46,7 @@ en fault Keychain(Refused): the keychain refused the entry
 en fault Keychain(Ambiguous): the keychain has more than one entry for this profile
 en fault Keychain(Mismatch): the keychain gave back a different password
 en fault Keychain(Failure): the keychain reported an error (details in errors.log)
+en fault Keychain(NoTool): the macOS security tool (/usr/bin/security) is missing or could not run
 en fault Other: an unexpected error (details in errors.log)
 en error.config: Config error: language = fr is not valid (use auto, en, ko)
 en error.config: Config error: color = reddish in profile “a” is not valid (use red, green, blue, … #rrggbb)

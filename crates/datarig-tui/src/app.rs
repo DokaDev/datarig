@@ -83,7 +83,7 @@ use crate::widgets::grid::{GridState, ResultSet, viewer_text};
 use crate::widgets::text_input::TextInput;
 use crate::widgets::tree::TreeAction;
 use action::{Action, ExplorerAction, GridAction, LangSetting, REGISTRY};
-use datarig_core::config::{self, Config, ConfigError, IconsSetting, Profiles, Settings};
+use datarig_core::config::{self, Config, ConfigError, IconsSetting, KeychainAccess, Profiles, Settings};
 use datarig_core::driver::{ConnectOptions, DbCommand, DbEvent, Outcome, PingError, PingInfo, Session, SessionRole};
 use datarig_core::i18n::{I18n, Label, Lang, Localized, Msg, detect_lang};
 use datarig_core::migrate::{self, Keychain};
@@ -973,6 +973,8 @@ impl App {
     /// `DATARIG_SECRET_STORE` picks). Every keychain call ends within the keychain's time
     /// limit ([`App::set_keychain_timeout`]).
     pub fn set_secret_stores(&mut self, mut stores: Stores) {
+        // The keychain is reached the way the loaded config says (macOS only).
+        stores.access.set(self.prefs.keychain_access);
         let guard = keychain::guarded(stores.keychain, self.keychain_timeout);
         stores.keychain = guard.clone();
         self.keychain_guard = Some(guard);
