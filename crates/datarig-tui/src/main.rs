@@ -77,7 +77,7 @@ fn main() -> ExitCode {
         let paths = datarig_core::paths::Paths::from_env();
         let log = Arc::new(DeletionLog::new(paths.secrets_log()));
         let secrets_file = cfg.path.as_deref().map(FileStore::next_to);
-        app.set_secret_stores(store.open_stores(secrets_file, log));
+        app.set_secret_stores(store.open_stores(secrets_file, log, cfg.prefs.keychain_access));
         app.set_paths(paths);
         // Whether the icons show is asked once, in a terminal only.
         app.set_ask_icons(std::io::stdout().is_terminal());

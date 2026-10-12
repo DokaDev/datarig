@@ -447,12 +447,16 @@ fn has_words(screen: &str, text: &str) -> bool {
     })
 }
 
-/// `text` is on `screen`: whole, cut to fit (two characters or more, then `…`), or wrapped
-/// (each of its words is there).
+/// `text` is on `screen`: whole, cut to fit (two characters or more, then `…`; a cut right after
+/// a space keeps the space), or wrapped (each of its words is there).
 fn shown(screen: &str, text: &str) -> bool {
     let chars: Vec<char> = text.chars().collect();
+    let cut = |n: usize| {
+        let head: String = chars[..n].iter().collect();
+        screen.contains(&format!("{}…", head.trim_end())) || screen.contains(&format!("{head}…"))
+    };
     screen.contains(text)
-        || (2..chars.len()).any(|n| screen.contains(&format!("{}…", chars[..n].iter().collect::<String>().trim_end())))
+        || (2..chars.len()).any(cut)
         || (text.contains(' ') && text.split_whitespace().all(|w| screen.contains(w)))
 }
 

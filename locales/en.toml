@@ -581,9 +581,9 @@
 "prompt.password.not_saved" = "Asked on every connect — never saved"
 "conn.reading_keychain" = "Reading the password of {name} from the keychain… ({key} cancels)"
 "prompt.password.keychain_no_answer" = "The keychain did not answer. Enter the password (kept for this session)"
-"prompt.password.keychain_no_answer_remote" = "The keychain did not answer (remote session?). Enter the password, or run `security unlock-keychain` first"
+"prompt.password.keychain_no_answer_remote" = "The keychain did not answer. SSH session: run `security unlock-keychain` first, or type the password"
 "prompt.password.keychain_failed" = "The keychain could not be read: {error}. Enter the password (kept for this session)"
-"prompt.password.keychain_failed_remote" = "The keychain could not be read: {error} (remote session?). Enter the password, or run `security unlock-keychain` first"
+"prompt.password.keychain_failed_remote" = "The keychain could not be read: {error}. SSH session: run `security unlock-keychain` first, or type the password"
 "prompt.password.save_unsure" = "Save to OS keychain (Space; it failed just now)"
 "form.saving_keychain" = "Saving… waiting for the keychain"
 "source.change.title" = "Password storage"
@@ -1740,3 +1740,16 @@
 "environment.deleted" = "Deleted the environment “{name}”"
 "environment.deleted_used" = { one = "Deleted the environment “{name}”; the profile that used it needs another environment", other = "Deleted the environment “{name}”; the {count} profiles that used it need another environment" }
 "environment.not_found" = "Environment “{environment}” not found for {name}: pick another in the profile's form (it never runs under the default rules instead)"
+
+# How the macOS keychain is reached ([secrets] macos_keychain_access)
+"fault.keychain.no_tool" = "the macOS security tool (/usr/bin/security) is missing or could not run"
+"setting.keychain_access" = "macOS keychain access"
+"setting.keychain_access.direct" = "Direct: datarig asks the keychain itself"
+"setting.keychain_access.security_tool" = "Through /usr/bin/security: no new prompts after upgrades"
+"setting.keychain_access.about" = "macOS only (no effect elsewhere). Direct: macOS ties Always Allow to the datarig binary, and releases are unsigned, so it asks for your login password again after each upgrade. Through /usr/bin/security: Always Allow given to Apple's tool lasts across upgrades, but any program running as you can then read these passwords with it, without being asked."
+"keychain_access.title" = "Keychain access through security"
+"keychain_access.warning" = "Passwords will go through /usr/bin/security: any program running as you can read them with it, without asking. The first access to each saved password may ask once more for your login password; choose Always Allow. Turn it on?"
+"keychain_access.keys" = "y turn on · n/Esc/Enter cancel"
+"dialog.button.turn_on" = "Turn on"
+"keychain_access.on" = "Passwords now go through /usr/bin/security: any program running as you can read them with it, without asking"
+"keychain_access.off" = "datarig reads the keychain directly again; passwords saved meanwhile trust only /usr/bin/security, so macOS may ask once per password"

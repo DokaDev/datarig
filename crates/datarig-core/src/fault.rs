@@ -52,6 +52,9 @@ pub enum KeychainFault {
     /// permission or an unlock asked on a screen the user does not see (a remote session).
     /// Unknown, not "no entry".
     NoAnswer,
+    /// The macOS `security` tool (`[secrets] macos_keychain_access = "security_tool"`) is
+    /// missing or could not be started (`SecurityCliStore`, macOS).
+    NoTool,
 }
 
 /// A failure: its kind, and the raw text for the log.

@@ -56,7 +56,7 @@ fn memory_replaces_both_the_keychain_and_the_secrets_file() {
     let _ = std::fs::remove_dir_all(&dir);
     let file = dir.join("secrets.toml");
     let log = Arc::new(DeletionLog::new(None));
-    let stores = StoreKind::Memory.open_stores(Some(file.clone()), log.clone());
+    let stores = StoreKind::Memory.open_stores(Some(file.clone()), log.clone(), KeychainAccess::Direct);
     assert_eq!(stores.file_path, None, "no permission check on a file that is not used");
     stores.file.set("profile:a", "f").unwrap();
     stores.keychain.set("profile:a", "k").unwrap();
@@ -64,11 +64,51 @@ fn memory_replaces_both_the_keychain_and_the_secrets_file() {
     assert_eq!(stores.file.get("profile:a").unwrap().as_deref(), Some("f"), "two separate stores");
     assert_eq!(stores.keychain.get("profile:a").unwrap().as_deref(), Some("k"));
     // `keychain` uses the file at the given path (never touched here: only its check).
-    let real = StoreKind::Keychain.open_stores(Some(file.clone()), log.clone());
+    let real = StoreKind::Keychain.open_stores(Some(file.clone()), log.clone(), KeychainAccess::Direct);
     assert_eq!(real.file_path.as_deref(), Some(file.as_path()));
     assert_eq!(real.check_file(), Ok(()), "a missing file is fine");
-    let none = StoreKind::Keychain.open_stores(None, log);
+    let none = StoreKind::Keychain.open_stores(None, log, KeychainAccess::Direct);
     assert!(none.file.get("profile:a").is_err(), "no config directory: no secrets file");
+}
+
+#[test]
+fn memory_and_stall_never_build_a_keychain_store_whatever_the_access_setting() {
+    let log = Arc::new(DeletionLog::new(None));
+    let built = || OS_STORES_BUILT.with(std::cell::Cell::get);
+    let start = built();
+    let stores = StoreKind::Memory.open_stores(None, log.clone(), KeychainAccess::SecurityTool);
+    assert_eq!(stores.access.get(), KeychainAccess::SecurityTool, "the setting is kept");
+    stores.access.set(KeychainAccess::SecurityTool);
+    stores.keychain.set("profile:a", "pw").unwrap();
+    assert_eq!(stores.keychain.get("profile:a").unwrap().as_deref(), Some("pw"), "kept in memory");
+    assert_eq!(stores.keychain.delete("profile:a"), Ok(true));
+    let _ = StoreKind::Stalled.open_stores(None, log.clone(), KeychainAccess::SecurityTool);
+    assert_eq!(built(), start, "no OS keychain store (nor the security tool) was built");
+    // The real kind builds one (and calls nothing: nothing is asked of it here).
+    let real = StoreKind::Keychain.open_stores(None, log, KeychainAccess::SecurityTool);
+    assert_eq!(built(), start + 1);
+    assert_eq!(real.access.get(), KeychainAccess::SecurityTool);
+}
+
+#[test]
+fn the_switch_picks_the_store_of_each_call() {
+    let (direct, tool) = (Arc::new(MemoryStore::new()), Arc::new(MemoryStore::new()));
+    let switch = KeychainSwitch::default();
+    assert_eq!(switch.get(), KeychainAccess::Direct, "direct by default");
+    let s = SwitchedKeychain::new(direct.clone(), tool.clone(), switch.clone());
+    s.set("a", "direct").unwrap();
+    // A clone of the switch (the app's) changes the mode of the next call.
+    let app_side = switch.clone();
+    app_side.set(KeychainAccess::SecurityTool);
+    assert_eq!(s.get("a"), Ok(None), "now the tool's store");
+    s.set("a", "tool").unwrap();
+    assert_eq!(tool.get("a").unwrap().as_deref(), Some("tool"));
+    assert_eq!(direct.get("a").unwrap().as_deref(), Some("direct"));
+    app_side.set(KeychainAccess::Direct);
+    assert_eq!(s.get("a").unwrap().as_deref(), Some("direct"));
+    assert_eq!(s.delete("a"), Ok(true));
+    assert_eq!(tool.get("a").unwrap().as_deref(), Some("tool"), "only the direct store's entry went");
+    assert_eq!(KeychainSwitch::new(KeychainAccess::SecurityTool).get(), KeychainAccess::SecurityTool);
 }
 
 #[test]

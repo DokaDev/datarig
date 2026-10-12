@@ -531,6 +531,46 @@ fn save_writes_the_source_keys_and_default_source() {
 }
 
 #[test]
+fn macos_keychain_access_is_read_written_and_checked() {
+    assert_eq!(parse("").unwrap().prefs.keychain_access, KeychainAccess::Direct, "the default");
+    let cfg = parse("[secrets]\nmacos_keychain_access = \"security_tool\"\n").unwrap();
+    assert_eq!(cfg.prefs.keychain_access, KeychainAccess::SecurityTool);
+    assert_eq!(cfg.default_source, DefaultSource::Auto, "the other key keeps its default");
+    let direct = parse("[secrets]\ndefault_source = \"file\"\nmacos_keychain_access = \"direct\"\n").unwrap();
+    assert_eq!(direct.prefs.keychain_access, KeychainAccess::Direct);
+    let e = parse("[secrets]\nmacos_keychain_access = \"cli\"\n").unwrap_err();
+    assert_eq!(
+        e,
+        ConfigError::Value {
+            key: "secrets.macos_keychain_access".into(),
+            value: "cli".into(),
+            profile: None,
+            allowed: Some("direct, security_tool"),
+        }
+    );
+    // Written only when it is not the default; comments and the other key stay.
+    let path = temp_file("keychain-access");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "# mine\n[secrets] # passwords\ndefault_source = \"prompt\"\n").unwrap();
+    let tool = Prefs { keychain_access: KeychainAccess::SecurityTool, ..Prefs::default() };
+    let with = |prefs| Settings { default_source: DefaultSource::Kind(SourceKind::Prompt), prefs, ..settings("en") };
+    save(&path, with(tool), None).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        text.contains(
+            "# mine\n[secrets] # passwords\ndefault_source = \"prompt\"\nmacos_keychain_access = \"security_tool\"\n"
+        ),
+        "{text}"
+    );
+    let (back, err) = load(Some(path.clone()));
+    assert!(err.is_none(), "{err:?}");
+    assert_eq!(back.prefs.keychain_access, KeychainAccess::SecurityTool);
+    save(&path, with(Prefs::default()), None).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(!text.contains("macos_keychain_access") && text.contains("default_source = \"prompt\""), "{text}");
+}
+
+#[test]
 fn policy_tables_are_read() {
     let cfg = parse(
         r#"
@@ -601,6 +641,7 @@ fn step_2_settings_are_read_checked_and_saved_only_when_set() {
             format_indent: FormatIndent::Four,
             auto_pairs: AutoPairs::Off,
             run_hints: RunHints::On,
+            keychain_access: KeychainAccess::Direct,
         }
     );
     assert_eq!(parse("osc52_max_bytes = 5000\n").unwrap().prefs.osc52_max_bytes, 5000);

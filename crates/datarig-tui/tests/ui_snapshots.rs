@@ -1384,6 +1384,7 @@ fn recovery_trash_and_failure_messages_en_ko() {
         Fault::new(FaultKind::Keychain(KeychainFault::Ambiguous), "x"),
         Fault::new(FaultKind::Keychain(KeychainFault::Mismatch), "x"),
         Fault::new(FaultKind::Keychain(KeychainFault::Failure), "x"),
+        Fault::new(FaultKind::Keychain(KeychainFault::NoTool), "x"),
         Fault::new(FaultKind::Other, "x"),
     ];
     let mut out = String::new();
@@ -1672,7 +1673,8 @@ fn grid_copy_menu_and_range_en_ko_sizes() {
 
 /// The settings screen: categories, current values and what they mean, the selected
 /// setting's description; `icons` shows a preview of the glyphs and the hint (icons on and
-/// off), the theme the terminal's background and a preview, the clipboard its tmux note.
+/// off), the theme the terminal's background and a preview, the clipboard its tmux note, the macOS
+/// keychain access what each way costs, and the question before the security tool is used.
 #[test]
 fn settings_screen_en_ko_sizes() {
     for lang in [Lang::En, Lang::Ko] {
@@ -1694,6 +1696,18 @@ fn settings_screen_en_ko_sizes() {
             // auto-pairs, the cell detail, then the clipboard.
             h.keys("jjjjjjjjj");
             assert_screen!(format!("settings_clipboard_{}_{w}x{hh}", lang_tag(lang)), lang, h.draw(w, hh));
+            h.key(KeyCode::Esc);
+            h.command("settings");
+            // The last row: how the macOS keychain is reached, and what each way costs.
+            h.keys("k");
+            assert_screen!(format!("settings_keychain_access_{}_{w}x{hh}", lang_tag(lang)), lang, h.draw(w, hh));
+            // Through the security tool asks first.
+            h.keys("l");
+            assert_screen!(
+                format!("settings_keychain_access_confirm_{}_{w}x{hh}", lang_tag(lang)),
+                lang,
+                h.draw(w, hh)
+            );
         }
     }
 }
