@@ -31,4 +31,4 @@ expression: backend
 "│                            ││                                                    ││                                  │"
 "│                            ││                                                    ││                                  │"
 "╰────────────────────────────╯╰────────────────────────────────────────────────────╯╰──────────────────────────────────╯"
-" local-pg · policy: default │ 8 rows · 3ms            │ Enter view cell · n next page · y copy · v select · i detail EN "
+" local-pg │ 8 rows · 3ms      │ Enter view cell · n next page · y copy · v select · i detail · I cell/row · Esc back EN "
