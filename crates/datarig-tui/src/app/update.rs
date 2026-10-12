@@ -132,6 +132,8 @@ impl App {
             c.selected = 0;
         } else if self.overlays.is_open(OverlayKind::Chooser) {
             // A list, not text: nothing to paste into.
+        } else if self.overlays.is_open(OverlayKind::Picker) {
+            self.picker_paste(text);
         } else if let Some(f) = self.overlays.form_mut() {
             f.paste(text);
         } else if self.focus == Focus::Tree && self.explorer.filtering && self.overlays.is_empty() {
@@ -243,6 +245,7 @@ impl App {
             Ctx::QuickConnect => keys.iter().for_each(|k| self.quick_key(k.to_event(), repeat)),
             Ctx::TabList => keys.iter().for_each(|k| self.tab_list_key(k.to_event(), repeat)),
             Ctx::Chooser | Ctx::ChooserFilter => keys.iter().for_each(|k| self.chooser_key(k.to_event(), repeat)),
+            Ctx::Picker => keys.iter().for_each(|k| self.picker_key(k.to_event(), repeat)),
             Ctx::NameInput => keys.iter().for_each(|k| self.name_key(k.to_event(), repeat)),
             Ctx::ScriptTree | Ctx::ScriptTreeName => {
                 keys.iter().for_each(|k| self.script_tree_key(k.to_event(), repeat))
@@ -297,9 +300,10 @@ impl App {
             FormOutcome::None => {}
             FormOutcome::Save => self.save_form(),
             FormOutcome::Test => self.test_in_context(None),
+            FormOutcome::Choose(profiles::Field::SshEnabled) => self.open_tunnel_picker(),
             FormOutcome::Choose(f) => self.open_form_chooser(f),
             FormOutcome::Cancel => {
-                self.overlays.close(OverlayKind::ProfileForm);
+                self.close_form(None);
                 self.clear_test();
             }
         }

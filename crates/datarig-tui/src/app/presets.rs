@@ -152,7 +152,7 @@ impl App {
         }
         self.preset_secret_saved(before.as_ref(), &p, typed);
         self.clear_test();
-        self.overlays.close(OverlayKind::ProfileForm);
+        self.close_form(Some(p.name.clone()));
         self.reveal_tunnel(p.id);
         // Profiles on its connection keep it as it was until they connect again.
         let in_use = self
@@ -169,6 +169,18 @@ impl App {
             Notice::new(Msg::TunnelSaved { name: p.name.clone() }, Level::Success)
         };
         self.flash(msg);
+    }
+
+    /// Close the form. A tunnel form opened from a profile form's SSH tunnel list gives that
+    /// form back as it was; `saved`: the preset the tunnel form saved, picked there.
+    pub(super) fn close_form(&mut self, saved: Option<String>) {
+        let Some(mut form) = self.overlays.take_form() else { return };
+        let Some(mut back) = form.back_to.take() else { return };
+        back.presets = self.presets.clone();
+        if let Some(name) = saved {
+            back.set_ssh_choice(profiles::SshChoice::Preset(name));
+        }
+        self.overlays.push(Overlay::ProfileForm(back));
     }
 
     /// The secret of preset `p` after its form was saved (`before`: as it was).

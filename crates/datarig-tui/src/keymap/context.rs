@@ -51,6 +51,7 @@ pub enum Ctx {
     Settings,
     Chooser,
     ChooserFilter,
+    Picker,
     NameInput,
     ScriptTree,
     ScriptTreeName,
@@ -68,7 +69,7 @@ pub enum Ctx {
 }
 
 impl Ctx {
-    pub const ALL: [Ctx; 36] = [
+    pub const ALL: [Ctx; 37] = [
         Ctx::Root,
         Ctx::Workspace,
         Ctx::Nav,
@@ -91,6 +92,7 @@ impl Ctx {
         Ctx::Settings,
         Ctx::Chooser,
         Ctx::ChooserFilter,
+        Ctx::Picker,
         Ctx::NameInput,
         Ctx::ScriptTree,
         Ctx::ScriptTreeName,
@@ -130,6 +132,7 @@ impl Ctx {
             Ctx::TabList => "overlay.tab_list",
             Ctx::Chooser => "overlay.chooser",
             Ctx::ChooserFilter => "overlay.chooser.filter",
+            Ctx::Picker => "overlay.picker",
             Ctx::NameInput => "overlay.name_input",
             Ctx::ScriptTree => "overlay.script_tree",
             Ctx::ScriptTreeName => "overlay.script_tree.name",
@@ -189,6 +192,7 @@ impl Ctx {
                 | Ctx::TabList
                 | Ctx::ProfileForm
                 | Ctx::ChooserFilter
+                | Ctx::Picker
                 | Ctx::NameInput
                 | Ctx::ScriptTreeName
                 | Ctx::Password
@@ -242,6 +246,9 @@ impl Ctx {
                 "A list to pick from: a profile's color, icon or folder, a chart's columns (the values' list stays open: `Enter` adds or removes one); a click picks a row, the wheel selects, the pointer only highlights."
             }
             Ctx::ChooserFilter => "The `/` filter of a list to pick from.",
+            Ctx::Picker => {
+                "A list to pick from with a typed filter: the profile form's SSH tunnel (`Enter` on it), with \"New SSH tunnel…\" last. Typing filters it as the action menu is filtered; the arrows, `Ctrl+N`/`Ctrl+P` and `Tab` move, `Enter` picks, `Esc` closes it and changes nothing. A click picks a row, the wheel selects, the pointer only highlights."
+            }
             Ctx::NameInput => "A name to type: a new or renamed folder; OK and Cancel take a click.",
             Ctx::ScriptTree => "The folder tree of the saved queries (save as, open): the tree has the keyboard.",
             Ctx::ScriptTreeName => "The folder tree of the saved queries: its name field (save as) or filter (open).",
@@ -300,6 +307,7 @@ impl Ctx {
             Ctx::TabList => Label::KeyctxOverlayTabList,
             Ctx::Chooser => Label::KeyctxOverlayChooser,
             Ctx::ChooserFilter => Label::KeyctxOverlayChooserFilter,
+            Ctx::Picker => Label::KeyctxOverlayPicker,
             Ctx::NameInput => Label::KeyctxOverlayNameInput,
             Ctx::ScriptTree => Label::KeyctxOverlayScriptTree,
             Ctx::ScriptTreeName => Label::KeyctxOverlayScriptTreeName,

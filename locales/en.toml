@@ -1666,3 +1666,8 @@
 "chart.too_many_series" = { one = "At most {count} value column", other = "At most {count} value columns" }
 "chart.rows_short" = { one = "{count} row", other = "{count} rows" }
 "chart.rows_more_short" = { one = "{count}+ row", other = "{count}+ rows" }
+
+# List picker
+"picker.keys" = "Enter pick · ↑↓ select · Esc cancel"
+"keyctx.overlay.picker" = "List picker"
+"form.ssh.picker_new" = "New SSH tunnel…"

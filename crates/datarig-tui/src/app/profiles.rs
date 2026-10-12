@@ -255,6 +255,12 @@ impl Field {
     pub fn is_picker(self) -> bool {
         matches!(self, Field::Color | Field::Icon | Field::Folder)
     }
+
+    /// `Enter` (or a click on its value) opens a list to pick from: the pickers and the SSH
+    /// tunnel.
+    pub fn has_list(self) -> bool {
+        self.is_picker() || self == Field::SshEnabled
+    }
 }
 
 /// What the SSH section's picker of a profile form has picked.
@@ -370,7 +376,7 @@ pub enum FormOutcome {
     Save,
     Test,
     Cancel,
-    /// Open the list of a picker field (color, icon, folder).
+    /// Open the list of a field (color, icon, folder, the SSH tunnel).
     Choose(Field),
 }
 
@@ -471,6 +477,9 @@ pub struct ProfileForm {
     pub dsn_problem: Option<DsnProblem>,
     /// Save was attempted: "required" errors are shown from now on.
     pub attempted: bool,
+    /// A tunnel form opened from a profile form's SSH tunnel list: that profile form, as it
+    /// was, to come back when this one closes.
+    pub back_to: Option<Box<ProfileForm>>,
 }
 
 impl ProfileForm {
@@ -560,6 +569,7 @@ impl ProfileForm {
             focus: Field::Name,
             dsn_problem: None,
             attempted: false,
+            back_to: None,
         };
         if c.tunnel.is_some() && f.ssh_enabled {
             f.ssh_enabled = false;
@@ -634,7 +644,7 @@ impl ProfileForm {
         }
     }
 
-    fn set_ssh_choice(&mut self, c: SshChoice) {
+    pub fn set_ssh_choice(&mut self, c: SshChoice) {
         // Picked here: no longer both.
         self.ssh_both = false;
         match c {
@@ -1138,7 +1148,7 @@ impl ProfileForm {
                 Field::Test => return FormOutcome::Test,
                 Field::Save => return FormOutcome::Save,
                 Field::Cancel => return FormOutcome::Cancel,
-                f if f.is_picker() => return FormOutcome::Choose(f),
+                f if f.has_list() => return FormOutcome::Choose(f),
                 _ => self.move_focus(1),
             },
             KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.focus.is_picker() => {

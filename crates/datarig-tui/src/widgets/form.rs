@@ -1,8 +1,8 @@
 //! The connection profile form: a large centered dialog with section tabs (Basic /
 //! Advanced), the password storage selector, the pickers of color, icon and folder, and the
-//! inline test-connection result line. The SSH section's first row picks the tunnel: none, a
-//! tunnel preset (shown, not edited, here), or one of this profile only (its fields, and a
-//! button that makes a preset of them). The tunnel form is the same dialog with the SSH
+//! inline test-connection result line. The SSH section's first row picks the tunnel (`Enter`
+//! lists them): none, a tunnel preset (shown, not edited, here), or one of this profile only
+//! (its fields, and a button that makes a preset of them). The tunnel form is the same dialog with the SSH
 //! section alone, the preset's name first.
 
 use crate::app::action::Action;
@@ -285,7 +285,7 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
                     hits.push((Rect::new(hx, y, b, 1), FormHit::SaveAsPreset));
                     hx += b + 2;
                 }
-                let hint = format!("{} · {hint}", i18n.label(Label::FormSslmodeHint));
+                let hint = format!("{} · {hint}", i18n.label(Label::FormPickerHint));
                 put(buf, hx, y, &hint, room_from(hx), dim);
                 // A preset is shown here, not edited: its bastion, its login and who else uses it.
                 if let SshChoice::Preset(name) = &choice {

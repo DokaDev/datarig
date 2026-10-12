@@ -144,9 +144,11 @@ fn section_tabs_selectors_and_the_ssh_choices_take_clicks() {
     assert_eq!((h.form().ssh_auth, focus(&h)), (datarig_core::profile::ssh::SshAuth::Password, Field::SshAuth));
     click_on(&mut h, "‹ this profile only ›", 0);
     assert_eq!(h.form().ssh_choice(), SshChoice::Off);
-    // The value itself: the next one.
+    // The value itself: the list of tunnels (as `Enter`).
     click_on(&mut h, "‹ off ›", 3);
-    assert_eq!(h.form().ssh_choice(), SshChoice::Inline);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Picker));
+    h.key(KeyCode::Esc);
+    assert_eq!(h.form().ssh_choice(), SshChoice::Off);
     click_on(&mut h, " Advanced ", 2);
     assert_eq!(h.form().section, Section::Advanced);
     let sslmode = h.form().sslmode;

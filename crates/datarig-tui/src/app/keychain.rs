@@ -554,7 +554,14 @@ impl App {
             Ok(_) => self.keychain_answered(),
             Err(f) => self.keychain_failed(f),
         }
-        let Some(f) = self.overlays.form_mut().filter(|f| f.reading == Some(profile)) else { return };
+        let Some(mut f) = self.overlays.form_mut() else { return };
+        // The form may wait under a tunnel form opened from its SSH tunnel list.
+        if let Some(back) = f.back_to.as_deref_mut() {
+            f = back;
+        }
+        if f.reading != Some(profile) {
+            return;
+        }
         f.reading = None;
         // Read: the field shows it, unless something was typed there meanwhile. Not read: the
         // field stays marked unread (left empty, the stored password is kept).

@@ -285,6 +285,30 @@ async fn the_form_opens_at_once_and_is_filled_when_the_keychain_answers() {
     assert_eq!((h.form().password.text(), h.form().password_unread), ("stored-pw", false));
 }
 
+/// The keychain answers while the profile form waits under the tunnel form of its tunnel
+/// list's "New SSH tunnel…": the password is in the profile form when it comes back.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_keychain_answer_reaches_the_form_waiting_under_a_tunnel_form() {
+    let mut cfg = sample_config(None);
+    let dir = std::env::temp_dir().join(format!("datarig-keychain-under-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    cfg.path = Some(dir.join("config.toml"));
+    let store = Held::slow(Duration::from_millis(200));
+    store.inner.set(&first_account(&cfg), "stored-pw").unwrap();
+    let (mut h, mut rx) = started(&cfg, store, Duration::from_secs(5), &[]);
+    h.command("conn.edit");
+    h.ctrl('n');
+    h.key(KeyCode::Enter);
+    h.key(KeyCode::Up);
+    h.key(KeyCode::Enter);
+    assert!(h.form().is_tunnel(), "the tunnel form, the profile form under it");
+    settle(&mut h, &mut rx, Duration::from_millis(600)).await;
+    h.key(KeyCode::Esc);
+    assert!(!h.form().is_tunnel());
+    assert_eq!((h.form().password.text(), h.form().password_unread, h.form().reading), ("stored-pw", false, None));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A keychain that never answers while the form is open: saved at once without touching the
 /// stored password (unread is not empty); a typed password is saved to the profile at once,
 /// its keychain write says later that it did not answer, and it is kept for the session.

@@ -10,7 +10,7 @@ use crate::app::overlay::{Overlay, OverlayKind};
 use crate::app::{App, Layout};
 use crate::text::{clip, width};
 use crate::theme;
-use crate::widgets::chooser::{draw_chooser, draw_name_input};
+use crate::widgets::chooser::{draw_chooser, draw_name_input, draw_picker};
 use crate::widgets::cmdline::draw_command_line;
 use crate::widgets::dialog::{draw_busy, draw_confirm, draw_prompt};
 use crate::widgets::form::draw_profile_form;
@@ -83,6 +83,7 @@ pub fn draw_overlays(f: &mut Frame, app: &mut App, screen_cursor: Option<(u16, u
             OverlayKind::ScriptTree => crate::widgets::script_tree::draw_script_tree(app, content, f.buffer_mut()),
             OverlayKind::ContextMenu => draw_context_menu(app, content, f.buffer_mut()),
             OverlayKind::Chooser => draw_chooser(app, content, f.buffer_mut()),
+            OverlayKind::Picker => draw_picker(app, content, f.buffer_mut()),
             OverlayKind::Help => draw_help(app, content, f.buffer_mut()),
             OverlayKind::WhichKey => {
                 draw_which_key(app, content, f.buffer_mut());
