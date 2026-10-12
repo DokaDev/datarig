@@ -271,22 +271,22 @@ fn sample(rs: &ResultSet) -> (Vec<Role>, Vec<Vec<datarig_core::driver::Cell>>) {
 }
 
 impl App {
-    /// The active tab shows a chart.
+    /// The active tab shows its Chart tab: a chart, or why there is none (no row result, no
+    /// rows, no numbers).
     pub fn chart_shown(&self) -> bool {
-        !self.tabs.is_empty()
-            && self.tab().exec.view == super::tabs::ResultView::Chart
-            && self.tab().exec.chart.is_some()
-            && matches!(self.tab().results, Results::Rows(_))
-            && self.results_shown()
+        !self.tabs.is_empty() && self.tab().exec.view == super::tabs::ResultView::Chart && self.results_shown()
     }
 
-    /// The active tab's chart follows its shown result and has its numbers.
+    /// The active tab's chart follows its shown result and has its numbers. The chart is made
+    /// here, the first time it is wanted (its tab viewed, an action on it): the strip names the
+    /// Chart tab without reading a row.
     pub(crate) fn chart_sync(&mut self) {
         if self.tabs.is_empty() {
             return;
         }
         let t = self.tab_mut();
-        let (Results::Rows(rs), Some(c)) = (&t.results, t.exec.chart.as_mut()) else { return };
+        let Results::Rows(rs) = &t.results else { return };
+        let c = t.exec.chart.get_or_insert_with(|| ChartTab::of(rs));
         c.follow(rs);
         c.build(rs);
         let fault = match &c.built {
@@ -333,19 +333,15 @@ impl App {
         c.act(a);
     }
 
-    /// `results.chart`: the shown result as a chart, or (on the chart) its rows again.
+    /// `results.chart`: the shown result as a chart (or why there is none), or (on the chart)
+    /// its rows again.
     fn toggle_chart(&mut self) {
         use super::tabs::ResultView;
         if self.chart_shown() {
             self.tab_mut().exec.view = ResultView::Rows;
             return;
         }
-        let t = self.tab_mut();
-        let Results::Rows(rs) = &t.results else { return };
-        if t.exec.chart.is_none() {
-            t.exec.chart = Some(ChartTab::of(rs));
-        }
-        t.exec.view = ResultView::Chart;
+        self.tab_mut().exec.view = ResultView::Chart;
         self.focus = Focus::Results;
         self.chart_sync();
     }

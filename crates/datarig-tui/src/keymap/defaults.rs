@@ -142,6 +142,7 @@ pub const HINTS: &[(Ctx, &[(&str, Label)])] = &[
     (
         Inspector,
         &[
+            ("grid.view_cell", Label::HintView),
             ("results.detail_tab", Label::HintDetailTab),
             ("pane.back", Label::HintBack),
             ("results.detail", Label::HintDetail),
@@ -367,7 +368,13 @@ const ACTIONS: &[(Ctx, &str, &str)] = &[
     (Grid, "H", "results.tab.prev"),
     (Nav, "space r ]", "results.tab.next"),
     (Nav, "space r [", "results.tab.prev"),
-    // the inspector, once clicked: Tab switches its tabs too
+    // the inspector, once clicked: Tab switches its tabs too; j/k move between its columns
+    // (the grid's cell follows), Enter shows the value whole as in the grid
+    (Inspector, "j", "results.detail_next"),
+    (Inspector, "down", "results.detail_next"),
+    (Inspector, "k", "results.detail_prev"),
+    (Inspector, "up", "results.detail_prev"),
+    (Inspector, "enter", "grid.view_cell"),
     (Inspector, "tab", "results.detail_tab"),
     (Inspector, "shift+tab", "results.detail_tab"),
     (Inspector, "I", "results.detail_tab"),

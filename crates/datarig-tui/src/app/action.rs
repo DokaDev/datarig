@@ -138,12 +138,14 @@ pub enum Action {
     Copy(super::copy::CopyScope, super::copy::CopyFormat),
     /// The inspector's other tab (Cell <-> Row).
     DetailTab,
+    /// The focused inspector's next (`true`) or previous column: the grid's cell moves to it.
+    DetailStep(bool),
     Explorer(ExplorerAction),
     Grid(GridAction),
     /// The results pane of a query tab.
     Panel(PanelAction),
-    /// The next (`true`) or previous result tab of a query tab: the row results of the last
-    /// run, then its Messages.
+    /// The next (`true`) or previous result tab of the results pane: the row results of the
+    /// last run, the Plan when there is one, the Chart, then its Messages.
     ResultTab(bool),
     /// The next page of the shown result: fetched, or run again past a closed portal.
     PageNext,
@@ -417,6 +419,11 @@ fn detail_panel(a: &App) -> bool {
     in_workspace(a) && a.inspector_shown()
 }
 
+/// The inspector panel is shown and has the focus.
+fn detail_focused(a: &App) -> bool {
+    detail_panel(a) && a.focus == Focus::Inspector
+}
+
 /// The active tab is a query tab (console or saved query) that ran something: its results
 /// pane can be hidden or shown.
 fn pane_known(a: &App) -> bool {
@@ -428,10 +435,10 @@ fn pane_shown(a: &App) -> bool {
     has_tab(a) && a.tab().is_query() && a.results_shown()
 }
 
-/// The results pane of a query tab has more than one result tab (the Messages of its last run
-/// count) to switch between.
+/// The results pane (of a query tab or a table tab) shows its result tab strip: the result
+/// (and a Plan), the Chart and the Messages to switch between.
 fn result_tabs(a: &App) -> bool {
-    pane_shown(a) && a.tab().ran && !a.tab().result_tabs().is_empty()
+    has_tab(a) && a.strip_shown()
 }
 
 /// The active query tab shows the rows of an `EXPLAIN` that are not a plan yet (a text plan).
@@ -454,13 +461,11 @@ fn plan_focused(a: &App) -> bool {
     plan_shown(a) && matches!(a.focus, Focus::Results | Focus::Inspector)
 }
 
-/// The active tab shows a row result, as rows or as a chart: `results.chart` switches.
+/// The active tab shows its result or its Chart tab: `results.chart` switches (the Chart tab
+/// says why when there is nothing to draw).
 fn chartable(a: &App) -> bool {
     use super::tabs::ResultView;
-    has_tab(a)
-        && a.results_shown()
-        && matches!(a.tab().exec.view, ResultView::Rows | ResultView::Chart)
-        && matches!(&a.tab().results, super::Results::Rows(_))
+    has_tab(a) && a.results_shown() && matches!(a.tab().exec.view, ResultView::Rows | ResultView::Chart)
 }
 
 /// The active tab has a chart of a row result (a kind or columns can be chosen).
@@ -663,7 +668,7 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::Grid(G::Bottom), "grid.bottom", Label::ActionGridBottom, grid_focused),
     act(Action::Grid(G::FirstCol), "grid.first_col", Label::ActionGridFirstCol, grid_focused),
     act(Action::Grid(G::LastCol), "grid.last_col", Label::ActionGridLastCol, grid_focused),
-    act(Action::Grid(G::ViewCell), "grid.view_cell", Label::ActionGridViewCell, grid_focused),
+    act(Action::Grid(G::ViewCell), "grid.view_cell", Label::ActionGridViewCell, results_focused),
     act(Action::Grid(G::CopyCell), "grid.copy_cell", Label::ActionGridCopyCell, grid_focused),
     act(Action::Grid(G::CopyRow), "grid.copy_row", Label::ActionGridCopyRow, grid_focused),
     act(Action::Grid(G::Select), "grid.select", Label::ActionGridSelect, grid_focused),
@@ -814,6 +819,8 @@ pub const REGISTRY: &[ActionSpec] = &[
     ),
     act(Action::ToggleDetail, "results.detail", Label::ActionResultsDetail, has_tab),
     act(Action::DetailTab, "results.detail_tab", Label::ActionResultsDetailTab, detail_panel),
+    mv(Action::DetailStep(true), "results.detail_next", Label::ActionResultsDetailNext, detail_focused),
+    mv(Action::DetailStep(false), "results.detail_prev", Label::ActionResultsDetailPrev, detail_focused),
     act(Action::Panel(PanelAction::Toggle), "results.panel.toggle", Label::ActionResultsPanelToggle, pane_known),
     act(Action::Panel(PanelAction::Maximize), "results.panel.maximize", Label::ActionResultsPanelMaximize, pane_shown),
     mv(Action::Panel(PanelAction::Grow), "results.panel.grow", Label::ActionResultsPanelGrow, pane_sized),

@@ -69,7 +69,7 @@ fn rows_read_in_the_users_transaction_say_so_until_it_commits() {
     let mut h = Harness::connected(Lang::En);
     answer(&mut h, "SELECT 1", Some(2));
     assert_eq!(mark(&h), None, "read outside a transaction");
-    assert!(!h.app.strip_shown(), "no label, no strip");
+    assert!(!strip(&mut h).contains("tx"), "no label: {}", strip(&mut h));
     begin(&mut h);
     answer(&mut h, "SELECT x FROM t", Some(3));
     assert_eq!(mark(&h), Some(TxMark::InTx(1)));

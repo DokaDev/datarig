@@ -121,7 +121,7 @@ fn rows_past_the_window_spill_and_read_back_everywhere() {
     assert_eq!(h.app.focus, Focus::Results);
     h.keys("gg");
     let screen = h.screen(160, 45);
-    assert!(screen.contains("r00000") && screen.contains("r00021"), "{screen}");
+    assert!(screen.contains("r00000") && screen.contains("r00020"), "{screen}");
     assert!(!screen.contains("(not read)"), "{screen}");
     h.keys("jjj");
     let screen = h.screen(160, 45);

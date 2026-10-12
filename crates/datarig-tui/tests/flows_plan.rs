@@ -455,7 +455,9 @@ fn the_plan_goes_with_the_rows_of_its_run() {
 fn the_strip_and_its_keys_reach_the_plan() {
     let mut h = shown(17, "join.analyze.json");
     let screen = h.screen(160, 45);
-    assert!(screen.contains("Result 1  [Plan]  Messages"), "{screen}");
+    assert!(screen.contains("Result 1  [Plan]  Chart   Messages"), "{screen}");
+    h.keys("L");
+    assert_eq!(h.app.tab().exec.view, ResultView::Chart, "the Plan stays next to its rows");
     h.keys("L");
     assert_eq!(h.app.tab().exec.view, ResultView::Messages);
     h.keys("L");

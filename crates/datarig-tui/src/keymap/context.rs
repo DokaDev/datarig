@@ -216,12 +216,14 @@ impl Ctx {
             Ctx::Explorer => "The explorer: folders, connection profiles, their databases and schema trees.",
             Ctx::ExplorerFilter => "The `/` filter of the explorer (profile names).",
             Ctx::Grid => "The result grid.",
-            Ctx::Inspector => "The result inspector next to the grid, after a click on it.",
+            Ctx::Inspector => {
+                "The result inspector next to the grid, after a click on it: `j`/`k` move between the columns and the grid's cell follows (on the Row tab, a click on a column moves it there too), `Enter` shows the value whole."
+            }
             Ctx::Plan => {
                 "The Plan tab of the results pane (an `EXPLAIN (FORMAT JSON)` result): `j`/`k` select a node, `h`/`l` close and open its children, `Enter` shows its detail, `v`/`V` and the digits pick a view, `y`/`Y` copy the plan as text or JSON."
             }
             Ctx::Chart => {
-                "The Chart tab of the results pane (`c` in the grid): the fetched rows of the shown result as bars or lines, nothing run again. The arrows and `h`/`j`/`k`/`l` move the cursor along the bars or points (the other direction picks a series), `Enter` shows the point's row in the grid, `v`/`V` and the digits pick the kind, `x`/`s`/`b` choose the X column, the values and a column that splits them into series, `S` a logarithmic scale, `y`/`Y` copy the numbers as TSV or the drawing as text; a click picks a point, a kind or a column choice."
+                "The Chart tab of the results pane (`c` in the grid, or its tab in the strip; it is drawn only once viewed): the fetched rows of the shown result as bars or lines, nothing run again. The arrows and `h`/`j`/`k`/`l` move the cursor along the bars or points (the other direction picks a series), `Enter` shows the point's row in the grid, `v`/`V` and the digits pick the kind, `x`/`s`/`b` choose the X column, the values and a column that splits them into series, `S` a logarithmic scale, `y`/`Y` copy the numbers as TSV or the drawing as text; a click picks a point, a kind or a column choice."
             }
             Ctx::Welcome => "The welcome panel shown while there is no connection profile.",
             Ctx::VimNormal => "Query editor, vim Normal mode (`i` starts typing).",

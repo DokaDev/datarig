@@ -74,9 +74,13 @@ pub(crate) fn draw_chart(app: &mut App, area: Rect, buf: &mut Buffer) {
         Results::Rows(rs) => Info { rows: rs.rows.len(), more: rs.more },
         _ => Info { rows: 0, more: false },
     };
-    // Taken out while it is drawn (it keeps what the frame drew: hits, the raster).
-    let Some(mut c) = t.exec.chart.take() else { return };
     let cx = Look { i18n: &app.i18n, th: &th, focused, hover, keys };
+    // Taken out while it is drawn (it keeps what the frame drew: hits, the raster). None: the
+    // tab shows no row result (none yet, a command's, an error), and says so.
+    let Some(mut c) = t.exec.chart.take() else {
+        let text = cx.i18n.label(Label::ChartUnsuitableNoResult).to_string();
+        return message(&cx, &[text], area, buf);
+    };
     draw_into(&cx, &mut c, info, area, buf);
     // Laid out otherwise: the part under the pointer is not there any more.
     if let Some(h) = hover

@@ -258,7 +258,10 @@ fn every_row_result_of_a_run_has_a_tab_and_messages_list_the_run() {
     h.keys("L");
     assert_eq!(shown_first_cell(&h).as_deref(), Some("100"));
     assert_eq!(h.app.tab().grid.row, 1, "the cursor it had");
-    // Then Messages: every statement, what it did; no inspector, nothing to copy there.
+    // Then (past the Chart) Messages: every statement, what it did; no inspector, nothing to
+    // copy there.
+    h.keys("L");
+    assert_eq!(h.app.tab().exec.view, ResultView::Chart);
     h.keys("L");
     assert_eq!(h.app.tab().exec.view, ResultView::Messages);
     let screen = h.screen(160, 45);

@@ -985,6 +985,8 @@
 "detail.preview" = "{column}: {value}"
 "action.results.detail" = "결과 상세 → 보이기 / 숨기기"
 "action.results.detail_tab" = "결과 상세 → 셀 / 행"
+"action.results.detail_next" = "결과 상세 → 다음 열"
+"action.results.detail_prev" = "결과 상세 → 이전 열"
 "hint.detail" = "상세"
 
 # Copying results
@@ -1192,6 +1194,7 @@
 "action.results.tab.next" = "결과 탭 → 다음"
 "action.results.tab.prev" = "결과 탭 → 이전"
 "results.tab.result" = "결과 {n}"
+"results.tab.rows" = "결과"
 "results.tab.messages" = "메시지"
 "results.tab.earlier" = "이전 실행"
 "messages.waiting" = "대기"
@@ -1634,6 +1637,7 @@
 "chart.rows" = "가져온 행 {count}개"
 "chart.rows_more" = "가져온 처음 {count}개 행 · 서버에 더 있음"
 "chart.unsuitable.no_rows" = "차트로 그릴 것이 없습니다: 결과에 행이 없습니다."
+"chart.unsuitable.no_result" = "차트로 그릴 것이 없습니다: 그릴 행 결과가 없습니다."
 "chart.unsuitable.no_number" = "차트로 그릴 것이 없습니다: 숫자 열이 없습니다. 차트의 값에는 숫자 열이 필요합니다."
 "chart.unsuitable.no_series" = "고른 값이 없습니다: 숫자 열을 하나 이상 고르세요."
 "chart.unsuitable.no_values" = "차트로 그릴 것이 없습니다: 그릴 값이 모두 NULL이거나 숫자가 아닙니다."

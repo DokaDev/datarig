@@ -140,6 +140,10 @@ pub(crate) fn draw_workspace(f: &mut Frame, app: &mut App) -> Option<(u16, u16)>
         Some(PointerOn::PageNext) => f.buffer_mut().set_style(app.layout.page_next, crate::widgets::pointer_style()),
         _ => {}
     }
+    // The inspector's entries take a click as a dialog's rows do: once on screen, uncovered.
+    let entries = app.layout.detail_list.height > 0 && !app.modal_open();
+    let now = app.now();
+    app.detail_press.drawn(entries, now);
 
     draw_status(app, rows[1], f.buffer_mut());
 
@@ -285,7 +289,7 @@ fn draw_results_pane(app: &mut App, area: Rect, buf: &mut Buffer) {
     let rb = panel_with_status(&title, status, app.focus == Focus::Results, grid_area.width);
     let rinner = rb.inner(grid_area);
     rb.render(grid_area, buf);
-    // A query tab that ran: the result tabs of its last run and its Messages on the first line.
+    // The result tabs of the last run, the Chart, a Plan and the Messages on the first line.
     let strip = app.strip_shown() && rinner.height > 2;
     let old_strip = std::mem::take(&mut app.strip_hits);
     let content = if strip {
@@ -301,7 +305,7 @@ fn draw_results_pane(app: &mut App, area: Rect, buf: &mut Buffer) {
         app.layout.strip = Rect::default();
         rinner
     };
-    if app.tab().exec.view == ResultView::Messages && !app.tab().is_table() {
+    if app.tab().exec.view == ResultView::Messages {
         draw_messages(app, content, buf);
     } else if app.plan_shown() {
         crate::widgets::plan::draw_plan(app, content, buf);
@@ -315,8 +319,8 @@ fn draw_results_pane(app: &mut App, area: Rect, buf: &mut Buffer) {
     }
 }
 
-/// The result tab strip: `[Result 1]  Result 3  Messages`, the shown one in
-/// brackets, `earlier run` when a later run returned no rows, and on the right what the shown
+/// The result tab strip: `[Result 1]  Result 3  Plan  Chart  Messages`, the shown one in
+/// brackets (one `Result` tab when the run returned no rows, none yet: what it said), `earlier run` when a later run returned no rows, and on the right what the shown
 /// rows' transaction is (uncommitted, ended, rolled back). The transaction comes first. When the
 /// tabs do not all fit, the shown one and Messages always stay, with as many of the others
 /// around the shown one as fit, `…` where some are left out (`H`/`L` reach them); only when
@@ -348,7 +352,6 @@ fn draw_strip(app: &mut App, area: Rect, buf: &mut Buffer) {
     });
     let tabs = t.result_tabs();
     let plan = t.exec.plan.is_some();
-    let chart = t.exec.chart.is_some() && matches!(t.results, Results::Rows(_));
     type Item = ((Option<usize>, ResultView), String);
     let labels = |short: bool| -> Vec<Item> {
         let mut v: Vec<Item> = tabs
@@ -361,12 +364,14 @@ fn draw_strip(app: &mut App, area: Rect, buf: &mut Buffer) {
                 )
             })
             .collect();
-        if chart {
-            v.push(((None, ResultView::Chart), app.i18n.label(Label::ResultsTabChart).to_string()));
+        if v.is_empty() {
+            v.push(((None, ResultView::Rows), app.i18n.label(Label::ResultsTabRows).to_string()));
         }
         if plan {
             v.push(((None, ResultView::Plan), app.i18n.label(Label::ResultsTabPlan).to_string()));
         }
+        // Named only: the chart is made when its tab is viewed.
+        v.push(((None, ResultView::Chart), app.i18n.label(Label::ResultsTabChart).to_string()));
         let m = if short { Label::ResultsTabMessagesShort } else { Label::ResultsTabMessages };
         v.push(((None, ResultView::Messages), app.i18n.label(m).to_string()));
         v
@@ -438,12 +443,11 @@ fn draw_strip(app: &mut App, area: Rect, buf: &mut Buffer) {
     app.strip_hits = hits;
 }
 
-/// The keys of the previous and next result tab in the results pane (`H/L`), when there are
-/// tabs to move between, the pane has the focus and both are bound there.
+/// The keys of the previous and next result tab in the results pane (`H/L`), when the pane has
+/// the focus and both are bound there.
 fn strip_keys(app: &App) -> Option<String> {
-    let t = app.tab();
     // Elsewhere (the editor) these keys are the focused pane's own.
-    if t.result_tabs().is_empty() || app.focus != Focus::Results {
+    if app.focus != Focus::Results {
         return None;
     }
     let ctx = if app.plan_shown() {
@@ -678,7 +682,7 @@ fn results_title(app: &App) -> (datarig_core::i18n::Localized, Option<(Vec<Strin
         return (app.i18n.msg(&Msg::PaneChartTitle { kind }), None);
     }
     let Results::Rows(rs) = &t.results else { return (app.i18n.label(Label::PaneResultsTitle), None) };
-    if t.exec.view == ResultView::Messages && !t.is_table() {
+    if t.exec.view == ResultView::Messages {
         return (app.i18n.label(Label::PaneResultsTitle), None);
     }
     let size = app.page_size.max(1);

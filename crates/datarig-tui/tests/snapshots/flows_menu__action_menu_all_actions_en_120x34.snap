@@ -17,17 +17,17 @@ expression: "h.draw(120, 34).backend()"
 "│                            ││ 10                                                                                     │"
 "│                            │╰────────────────────────────────────────────────────────────────────────────────────────╯"
 "│                            │╭ Results · 8 rows ──────────────────────────────────╮╭ [Cell] Row · I ──────────────────╮"
-"│                            ││   │ id   │ name                 │ nickname    │ ad…││ id                               │"
-"│                            ││   │ int8 │ text                 │ text        │ te…││ int8 · 1 character               │"
-"│                            ││ 1 │    1 │ 陳大文               │ 大文🐘      │ 臺…││                                  │" Hidden by multi-width symbols: [(44, " "), (46, " "), (48, " "), (67, " "), (69, " "), (71, " "), (81, " ")]
-"│                            ││ 2 │    2 │ 林美玲               │ NULL        │ 高…││ 2                                │" Hidden by multi-width symbols: [(44, " "), (46, " "), (48, " "), (81, " ")]
+"│                            ││ [Result 1]  Chart   Messages                       ││ id                               │"
+"│                            ││   │ id   │ name                 │ nickname    │ ad…││ int8 · 1 character               │"
+"│                            ││   │ int8 │ text                 │ text        │ te…││                                  │"
+"│                            ││ 1 │    1 │ 陳大文               │ 大文🐘      │ 臺…││ 2                                │" Hidden by multi-width symbols: [(44, " "), (46, " "), (48, " "), (67, " "), (69, " "), (71, " "), (81, " ")]
+"│                            ││ 2 │    2 │ 林美玲               │ NULL        │ 高…││                                  │" Hidden by multi-width symbols: [(44, " "), (46, " "), (48, " "), (81, " ")]
 "│                            ││ 3 │    3 │ 張志明               │ 👨‍👩‍👧‍👦 family   │ NU…││                                  │" Hidden by multi-width symbols: [(44, " "), (46, " "), (48, " "), (67, " ")]
 "│                            ││ 4 │    4 │ Emoji テスト         │ 🔥🚀✨🎉    │ 沖…││                                  │" Hidden by multi-width symbols: [(50, " "), (52, " "), (54, " "), (67, " "), (69, " "), (71, " "), (73, " "), (81, " ")]
 "│                            ││ 5 │    5 │ 山田太郎             │ やまだ      │ 東…││                                  │" Hidden by multi-width symbols: [(44, " "), (46, " "), (48, " "), (50, " "), (67, " "), (69, " "), (71, " "), (81, " ")]
 "│                            ││ 6 │    6 │ 王小明               │ NULL        │ 北…││                                  │" Hidden by multi-width symbols: [(44, " "), (46, " "), (48, " "), (81, " ")]
 "│                            ││ 7 │    7 │ Plain ASCII User     │ ascii_only  │ 16…││                                  │"
 "│                            ││ 8 │    8 │ 全角 ＡＢＣ 半角 ｱｲｳ │ é combining │ タ…││                                  │" Hidden by multi-width symbols: [(44, " "), (46, " "), (49, " "), (51, " "), (53, " "), (56, " "), (58, " "), (81, " ")]
-"│                            ││                                                    ││                                  │"
 "│                            ││                                                    ││                                  │"
 "│                            ││                                                    ││                                  │"
 "│                            ││                                                    ││                                  │"
