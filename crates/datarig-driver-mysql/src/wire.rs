@@ -8,7 +8,9 @@
 //! * cut it ([`Wire::cut`]): every read and write fails at once afterwards, so a connection
 //!   dropped while a statement runs is not read to its end in the background (mysql_async
 //!   cleans a dropped connection up on a task of its own, reading what the server still
-//!   sends).
+//!   sends);
+//! * seal it ([`Wire::seal`]): what the server still sends is read, and the next write (a new
+//!   request) cuts it instead of reaching the server.
 
 use datarig_core::driver::DbError;
 use datarig_core::transport::BoxedStream;
@@ -24,6 +26,8 @@ struct Shared {
     pushback: Vec<u8>,
     /// Cut by the session: every read and write fails.
     cut: bool,
+    /// Sealed by the session: the next write cuts ([`Wire::seal`]).
+    sealed: bool,
     /// Bytes the server sent, all told.
     received: u64,
 }
@@ -38,7 +42,8 @@ pub(crate) struct WireStream(Wire);
 impl Wire {
     /// A wire over `stream`, and the stream to give the connection.
     pub(crate) fn new(stream: BoxedStream) -> (Wire, WireStream) {
-        let wire = Wire(Arc::new(Mutex::new(Shared { stream, pushback: Vec::new(), cut: false, received: 0 })));
+        let wire =
+            Wire(Arc::new(Mutex::new(Shared { stream, pushback: Vec::new(), cut: false, sealed: false, received: 0 })));
         (wire.clone(), WireStream(wire))
     }
 
@@ -70,6 +75,14 @@ impl Wire {
     pub(crate) fn cut(&self) {
         if let Ok(mut s) = self.lock() {
             s.cut = true;
+        }
+    }
+
+    /// Nothing more is sent: the answer the server still owes is read as before, and the next
+    /// write, which can only be a new request, cuts the wire instead of reaching the server.
+    pub(crate) fn seal(&self) {
+        if let Ok(mut s) = self.lock() {
+            s.sealed = true;
         }
     }
 
@@ -136,6 +149,7 @@ impl AsyncRead for WireStream {
 impl AsyncWrite for WireStream {
     fn poll_write(self: Pin<&mut Self>, cx: &mut Context<'_>, buf: &[u8]) -> Poll<io::Result<usize>> {
         let mut s = self.0.lock()?;
+        s.cut |= s.sealed;
         if s.cut {
             return Poll::Ready(Err(cut_error()));
         }
@@ -215,6 +229,24 @@ mod tests {
         let (wire, _stream) = Wire::new(Box::new(client));
         let waited = tokio::time::timeout(std::time::Duration::from_millis(50), wire.closed()).await;
         assert!(waited.is_err(), "nothing was closed");
+    }
+
+    #[tokio::test]
+    async fn a_sealed_wire_reads_what_comes_and_its_next_write_cuts_it() {
+        let (client, mut server) = tokio::io::duplex(64);
+        let (wire, mut stream) = Wire::new(Box::new(client));
+        wire.seal();
+        server.write_all(b"rest").await.unwrap();
+        let mut got = [0u8; 4];
+        stream.read_exact(&mut got).await.unwrap();
+        assert_eq!(&got, b"rest");
+        assert_eq!(stream.write_all(b"next").await.unwrap_err().kind(), io::ErrorKind::BrokenPipe);
+        assert_eq!(stream.read_u8().await.unwrap_err().kind(), io::ErrorKind::BrokenPipe);
+        let mut sent = Vec::new();
+        drop(stream);
+        drop(wire);
+        server.read_to_end(&mut sent).await.unwrap();
+        assert!(sent.is_empty(), "nothing reached the server: {sent:?}");
     }
 
     #[tokio::test]

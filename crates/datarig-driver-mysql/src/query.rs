@@ -58,11 +58,14 @@
 //! sends nothing runs on to its end whatever the session does (the server does not look at its
 //! connection meanwhile), so the session waits for it and says why ([`DbEvent::CancelRefused`]).
 //! Where reading on could last forever, the connection is cut instead: a refused statement whose
-//! rows keep coming, a kill that cannot be sent, a taken one whose rows still keep coming long
-//! after. The run ends cancelled, what waited is answered, and the session is lost
-//! ([`DbError::CancelNotTaken`], with why). Whether the
+//! rows keep coming, a kill that cannot be sent or is sent and never answered, a taken one whose
+//! rows still keep coming long after. The run ends cancelled, what waited is answered, and the
+//! session is lost ([`DbError::CancelNotTaken`], with why). Whether the
 //! statement then stops is the server's: one that sends finds the connection gone. A result
-//! the session stops itself (a held one) is stopped so too.
+//! the session stops itself (a held one) is stopped so too. A kill sent again that never gets
+//! its answer while the statement answers may still land on whatever the connection runs next:
+//! the statement's answer is read to its end and is the run's, nothing more is sent on the
+//! connection, and the session is lost after it ([`CancelFailure::StopPending`]).
 //!
 //! The session reports the sql mode its text is read in when it changes (`DbEvent::Language`),
 //! and what the server said of a statement beyond its outcome (`DbEvent::Info`: the id an
@@ -488,8 +491,10 @@ async fn run<'a>(
             hold: paging == PagingMode::Hold,
         };
         if n > 1 {
-            // Cancelled between two statements: the rest does not run.
-            if i > 0 && env.asked.load(Ordering::SeqCst) {
+            // Cancelled between two statements: the rest does not run. Nor on a connection that
+            // runs nothing more (a kill sent again for the statement before never answered,
+            // which only a cancel sends).
+            if i > 0 && (env.asked.load(Ordering::SeqCst) || link.tainted()) {
                 reply.fail(DbError::Cancelled, true);
                 return Ok(());
             }
@@ -943,7 +948,7 @@ async fn hold(
     // An unclean gate after the result ended: the result is the run's all the same, and the
     // session is lost after it.
     if !gate.close().await && out.is_ok() {
-        link.taint(DbError::CancelNotTaken(crate::session::kill_unanswered()));
+        link.taint(DbError::CancelNotTaken(crate::session::kill_pending()));
     }
     match out {
         Ok(()) => Ok(held),

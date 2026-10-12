@@ -169,6 +169,14 @@ pub enum CancelFailure {
     NotSent(Box<DbError>),
     /// The server agreed to stop the statement, and went on sending its rows.
     KeptSending,
+    /// It was sent and got no answer within this time: whether the server took it is not known
+    /// (it may still be carried out), and the statement runs on meanwhile.
+    NotAnswered(Duration),
+    /// The statement answered (its outcome was reported) while a request to stop it got no
+    /// answer within this time: that request may still be carried out on whatever the
+    /// connection would run next, so the session closed its connection once the statement's
+    /// answer was read.
+    StopPending(Duration),
 }
 
 impl DbError {
@@ -210,7 +218,12 @@ impl DbError {
             | DbError::PasswordTooLong { .. }
             | DbError::ServerKeyInvalid
             | DbError::ReadOnlyLost
-            | DbError::CancelNotTaken(CancelFailure::Refused | CancelFailure::KeptSending) => Cow::Borrowed(""),
+            | DbError::CancelNotTaken(
+                CancelFailure::Refused
+                | CancelFailure::KeptSending
+                | CancelFailure::NotAnswered(_)
+                | CancelFailure::StopPending(_),
+            ) => Cow::Borrowed(""),
         }
     }
 }

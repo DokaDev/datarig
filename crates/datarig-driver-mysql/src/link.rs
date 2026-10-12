@@ -2,7 +2,7 @@
 //! "the UI closed the session" and "the connection ended" (the server closed it while the
 //! session waited, [`Wire::closed`]).
 
-use crate::session::{Gate, Kill, KillFailure, Killer, kill_unanswered};
+use crate::session::{Gate, Kill, KillFailure, Killer, kill_not_answered, kill_pending};
 use crate::wire::Wire;
 use datarig_core::driver::{CancelFailure, DbCommand, DbError, DbEvent};
 use futures::future::BoxFuture;
@@ -41,6 +41,12 @@ const SOAK_LIMIT: usize = 4 << 20;
 const RETRY_SOON: Duration = Duration::from_secs(60);
 const RETRY_LATER: Duration = Duration::from_secs(30);
 
+/// How long the rest of a statement's answer may keep the server silent once the connection
+/// runs nothing more ([`Link::taint`]: a kill sent for it got no answer) before the session gives
+/// it up: the route to the server may be gone with that answer, and a refused statement's beats
+/// would keep the wait going without end.
+const TAINTED_SILENCE: Duration = Duration::from_secs(30);
+
 /// How often the session says it still waits for a statement after a cancel: one the server
 /// took ([`DbEvent::Stopping`], once the server confirmed the statement is still there), or
 /// one it refused that sends nothing ([`DbEvent::CancelRefused`]).
@@ -72,8 +78,8 @@ pub(crate) struct Link {
     /// Where the query session says it still waits for a statement a cancel stopped
     /// ([`DbEvent::Stopping`]), and the run (or count) that statement is of.
     stopping: Option<(UnboundedSender<DbEvent>, u64)>,
-    /// The connection runs nothing more (it was cut after the request it served answered),
-    /// for this reason: the session is lost once that run was answered ([`Link::taint`]).
+    /// The connection runs nothing more (it is cut at the next request), for this reason: the
+    /// session is lost once the answer it reads now was read ([`Link::taint`]).
     tainted: Option<DbError>,
 }
 
@@ -100,6 +106,7 @@ impl Link {
     /// that it closed.
     pub(crate) async fn next(&mut self) -> Next {
         if let Some(why) = self.tainted.take() {
+            self.wire.cut();
             return Next::Lost(why);
         }
         if let Some(c) = self.queued.pop_front() {
@@ -116,6 +123,7 @@ impl Link {
     /// are the result's; a connection that ends shows when the result is read on).
     pub(crate) async fn next_command(&mut self) -> Next {
         if let Some(why) = self.tainted.take() {
+            self.wire.cut();
             return Next::Lost(why);
         }
         if let Some(c) = self.queued.pop_front() {
@@ -142,19 +150,22 @@ impl Link {
         // Nothing sent again for this statement reaches the next one: a kill that never got its
         // answer may still be carried out on whatever the connection runs next, so it runs
         // nothing more (whether the cancel took is not known).
-        // The request answered all the same, and what it answered is the run's: it goes to the
-        // UI (an autocommitted write did commit), and the session is lost after it.
+        // The request answered all the same, and what it answered is the run's: the rest of the
+        // statement's answer is read (rows still to come, a procedure's further results) and
+        // goes to the UI (an autocommitted write did commit), and the session is lost after it.
         if !gate.close().await && out.is_ok() {
-            self.taint(DbError::CancelNotTaken(kill_unanswered()));
+            self.taint(DbError::CancelNotTaken(kill_pending()));
         }
         out
     }
 
-    /// The connection is to run nothing more, for `why`: cut now (what still needs it fails),
-    /// the session lost at its next command ([`Link::next`], [`Link::next_command`]) with that
-    /// reason, whatever else failed meanwhile ([`Link::lost_as`]).
+    /// The connection is to run nothing more, for `why`: what the server still sends of the
+    /// statement's answer is read, and the connection is cut at the next request (any request
+    /// written cuts it instead of reaching the server, [`Wire::seal`]); the session is lost at
+    /// its next command ([`Link::next`], [`Link::next_command`]) with that reason, whatever else
+    /// failed meanwhile ([`Link::lost_as`]).
     pub(crate) fn taint(&mut self, why: DbError) {
-        self.wire.cut();
+        self.wire.seal();
         self.tainted.get_or_insert(why);
     }
 
@@ -163,9 +174,16 @@ impl Link {
         self.tainted.is_some()
     }
 
-    /// Why the session is lost: the reason it was tainted for, if it was, else `error`.
+    /// Why the session is lost: the reason it was tainted for, if it was (the connection is
+    /// cut), else `error`.
     pub(crate) fn lost_as(&mut self, error: DbError) -> DbError {
-        self.tainted.take().unwrap_or(error)
+        match self.tainted.take() {
+            Some(why) => {
+                self.wire.cut();
+                why
+            }
+            None => error,
+        }
     }
 
     /// [`Link::guard`], kills sent again under `gate`.
@@ -180,6 +198,10 @@ impl Link {
         let began = Instant::now();
         let mut kill = kills.as_mut().map_or(Kill::None, |k| *k.borrow_and_update());
         let mut watch = watching(kill, began, &self.wire, cancel, &self.stopping, gate, false);
+        let mut silence: BoxFuture<'static, ()> = match self.tainted {
+            Some(_) => Box::pin(tokio::task::unconstrained(silent_for(self.wire.clone(), TAINTED_SILENCE))),
+            None => Box::pin(std::future::pending()),
+        };
         loop {
             // What is watched beside the request is polled before it: its reads use up the
             // task's budget of the runtime's resources poll after poll while a result streams
@@ -219,6 +241,13 @@ impl Link {
                     self.wire.cut();
                     return Err(Closed::CancelNotTaken(why));
                 }
+                () = &mut silence => {
+                    // The statement had not answered after all: its kill got no answer, and it
+                    // may run on.
+                    self.wire.cut();
+                    self.tainted = Some(DbError::CancelNotTaken(kill_not_answered()));
+                    return Err(Closed::CancelNotTaken(kill_not_answered()));
+                }
             }
         }
     }
@@ -255,8 +284,8 @@ impl Link {
 /// began at `began`); resolves with why when the connection is to be cut.
 ///
 /// * None: nothing.
-/// * Not sent: cut at once (the server cannot be reached to stop it; reading on would wait on
-///   a result that may have no end).
+/// * Not sent, or sent and never answered: cut at once (the server cannot be reached to stop
+///   it, or does not answer; reading on would wait on a result that may have no end).
 /// * Refused (the statement runs as another account): cut only while its rows keep coming
 ///   ([`SENDING_TICKS`] of the last [`SENDING_WINDOW`] ticks): a statement that sends ends when it finds the
 ///   connection gone. One that sends nothing would run on to its end all the same, cut or not
@@ -288,7 +317,11 @@ fn watching(
         };
         match kill {
             Kill::None => std::future::pending().await,
-            Kill::Failed(KillFailure::NotSent) => killer.as_ref().map_or_else(kill_unanswered, Killer::not_sent),
+            Kill::Failed(KillFailure::NotSent) => killer.as_ref().map_or_else(
+                || CancelFailure::NotSent(Box::new(DbError::NoAnswer(crate::session::KILL_TIMEOUT))),
+                Killer::not_sent,
+            ),
+            Kill::Failed(KillFailure::NotAnswered) => kill_not_answered(),
             Kill::Failed(KillFailure::Refused(_)) => {
                 let refused = Instant::now();
                 let runs_on = async {
@@ -339,6 +372,20 @@ fn watching(
             }
         }
     }))
+}
+
+/// Resolves once the server sent nothing for `bound` (looked at every [`SENDING_TICK`]).
+async fn silent_for(wire: Wire, bound: Duration) {
+    let (mut seen, mut since) = (wire.received(), Instant::now());
+    loop {
+        tokio::time::sleep(SENDING_TICK).await;
+        let now = wire.received();
+        if now != seen {
+            (seen, since) = (now, Instant::now());
+        } else if since.elapsed() >= bound {
+            return;
+        }
+    }
 }
 
 /// Resolves once the server's bytes came in [`SENDING_TICKS`] of the last [`SENDING_WINDOW`]
@@ -518,6 +565,31 @@ mod tests {
             .count();
         assert_eq!(said, 2);
         spam.abort();
+        drop(server);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_silent_answer_after_a_kill_left_unanswered_is_not_waited_for_without_end() {
+        // A kill sent again got no answer while the statement's head came (the connection was
+        // tainted); then the server says nothing more (the route to it died): the session gives
+        // up after a while and says the kill got no answer, though the refused statement's beats
+        // keep coming.
+        let Setup { mut link, stream, server, killer, mut events, commands: _commands } = after(REFUSED);
+        link.taint(DbError::CancelNotTaken(crate::session::kill_pending()));
+        let out = tokio::time::timeout(Duration::from_secs(120), link.guard(Some(&killer), read_on(stream))).await;
+        assert!(matches!(out, Ok(Err(Closed::CancelNotTaken(CancelFailure::NotAnswered(_))))), "ends");
+        assert!(events.try_recv().is_ok(), "the beats came meanwhile");
+        let lost = link.lost_as(DbError::Closed);
+        assert!(matches!(lost, DbError::CancelNotTaken(CancelFailure::NotAnswered(_))), "{lost:?}");
+        drop(server);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_kill_never_answered_cuts_the_connection_at_once_and_says_so() {
+        let Setup { mut link, stream, server, killer, commands: _commands, .. } =
+            after(Kill::Failed(KillFailure::NotAnswered));
+        let out = tokio::time::timeout(Duration::from_secs(1), link.guard(Some(&killer), read_on(stream))).await;
+        assert!(matches!(out, Ok(Err(Closed::CancelNotTaken(CancelFailure::NotAnswered(_))))));
         drop(server);
     }
 
