@@ -163,8 +163,12 @@ impl Link {
     /// statement's answer is read, and the connection is cut at the next request (any request
     /// written cuts it instead of reaching the server, [`Wire::seal`]); the session is lost at
     /// its next command ([`Link::next`], [`Link::next_command`]) with that reason, whatever else
-    /// failed meanwhile ([`Link::lost_as`]).
+    /// failed meanwhile ([`Link::lost_as`]). A connection cut already runs nothing either: it is
+    /// lost for why it was cut.
     pub(crate) fn taint(&mut self, why: DbError) {
+        if self.wire.is_cut() {
+            return;
+        }
         self.wire.seal();
         self.tainted.get_or_insert(why);
     }
@@ -582,6 +586,40 @@ mod tests {
         let lost = link.lost_as(DbError::Closed);
         assert!(matches!(lost, DbError::CancelNotTaken(CancelFailure::NotAnswered(_))), "{lost:?}");
         drop(server);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_slow_answer_after_a_kill_left_unanswered_is_read_however_long_it_takes() {
+        // The connection runs nothing more, and the rest of the answer comes a byte at a time,
+        // far apart (a slow procedure's rows), for much longer than the silence bound: as long
+        // as the server says something within the bound, it is read to its end, never cut.
+        let Setup { mut link, mut stream, mut server, killer, commands: _commands, .. } = after(REFUSED);
+        link.taint(DbError::CancelNotTaken(crate::session::kill_pending()));
+        let gap = TAINTED_SILENCE - SENDING_TICK * 4;
+        let bytes = 6;
+        let trickle = tokio::spawn(async move {
+            for _ in 0..bytes {
+                tokio::time::sleep(gap).await;
+                server.write_all(b"r").await.unwrap();
+            }
+            server
+        });
+        let t0 = Instant::now();
+        let read = async {
+            let mut got = 0;
+            let mut buf = [0u8; 8];
+            while got < bytes {
+                match stream.read(&mut buf).await {
+                    Ok(n) if n > 0 => got += n,
+                    _ => return false,
+                }
+            }
+            true
+        };
+        let out = tokio::time::timeout(gap * (bytes as u32 + 2), link.guard(Some(&killer), read)).await;
+        assert!(matches!(out, Ok(Ok(true))), "read to its end, never cut");
+        assert!(t0.elapsed() >= TAINTED_SILENCE * 2, "{:?}", t0.elapsed());
+        drop(trickle.await.unwrap());
     }
 
     #[tokio::test(start_paused = true)]

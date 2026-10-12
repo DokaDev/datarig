@@ -505,7 +505,8 @@ pub(crate) fn kill_pending() -> CancelFailure {
 /// connection idle, and the next statement is sent only once the gate is closed.
 pub(crate) struct Gate {
     open: AtomicBool,
-    /// A kill was written and its answer has not come (yet, or ever: given up on).
+    /// A kill was written and its answer has not come (yet, or ever: given up on). One given up
+    /// on stays so: a kill sent after it and answered does not say the first was.
     unanswered: AtomicBool,
     sending: tokio::sync::Mutex<()>,
 }
@@ -529,8 +530,14 @@ impl Gate {
     /// on). It may still be carried out at any time, on whatever the session runs then: the
     /// session's connection is not to run anything any more.
     pub(crate) async fn close(&self) -> bool {
+        self.quiet(|| self.open.store(false, Ordering::SeqCst)).await
+    }
+
+    /// Do `then` once no kill is being sent under the gate (one being sent is waited for as
+    /// [`Gate::close`] does); `false`: one was sent and never answered.
+    async fn quiet(&self, then: impl FnOnce()) -> bool {
         let sending = tokio::time::timeout(KILL_TIMEOUT, self.sending.lock()).await;
-        self.open.store(false, Ordering::SeqCst);
+        then();
         sending.is_ok() && !self.unanswered.load(Ordering::SeqCst)
     }
 }
@@ -545,6 +552,10 @@ pub(crate) struct Killer {
     opts: Opts,
     id: u64,
     kill: Arc<watch::Sender<Kill>>,
+    /// What the user's kills are sent under ([`Killer::kill_query_if`]), for the session's whole
+    /// life: it is never closed, the session waits on it whenever its statement ends
+    /// ([`Killer::idle`]).
+    sent: Arc<Gate>,
     /// Why the last kill that could not be sent was not (the dial, the login, the server's
     /// connection failing, or no answer in time).
     unsent: Arc<std::sync::Mutex<Option<DbError>>>,
@@ -552,7 +563,24 @@ pub(crate) struct Killer {
 
 impl Killer {
     pub(crate) fn new(route: Route, opts: Opts, id: u64) -> Self {
-        Self { route, opts, id, kill: Arc::new(watch::Sender::new(Kill::None)), unsent: Arc::default() }
+        Self {
+            route,
+            opts,
+            id,
+            kill: Arc::new(watch::Sender::new(Kill::None)),
+            sent: Gate::new(),
+            unsent: Arc::default(),
+        }
+    }
+
+    /// The session's statement is no longer on its way nor running: `busy` (what the user's kills
+    /// ask before they are sent) is cleared once no kill is being sent (or one took as long as a
+    /// kill may), so none is sent for it any more, and none sent for it reaches what the session
+    /// runs next. `false`: one was sent and never answered (the statement ended meanwhile, or the
+    /// kill was given up on): it may still be carried out at any time, on whatever the session
+    /// runs then, and the session's connection is not to run anything any more.
+    pub(crate) async fn idle(&self, busy: &AtomicBool) -> bool {
+        self.sent.quiet(|| busy.store(false, Ordering::SeqCst)).await
     }
 
     /// A kill that could not be sent, with why ([`KillFailure::NotSent`]).
@@ -570,7 +598,9 @@ impl Killer {
     /// login can take a while, through a tunnel most: by then the statement may have ended and
     /// another run begun, which the kill must not stop). What became of it is kept only while
     /// `still` holds: it says nothing about the statement of another run. A refusal is tried
-    /// again a few times first ([`KILL_TRIES`]).
+    /// again a few times first ([`KILL_TRIES`]). Each try is asked and sent under the session's
+    /// gate ([`Killer::idle`]): `still` is asked again while the session cannot end its statement,
+    /// and an answer that never comes is known to the session.
     pub(crate) async fn kill_query_if(&self, still: impl Fn() -> bool) {
         self.send_kill(still, false).await;
     }
@@ -600,12 +630,16 @@ impl Killer {
                 if n > 0 {
                     tokio::time::sleep(KILL_RETRY).await;
                 }
+                let _sending = self.sent.sending.lock().await;
                 if !still() {
                     break;
                 }
+                // Set until the answer comes: a kill given up on halfway stays so.
+                let before = self.sent.unanswered.swap(true, Ordering::SeqCst);
                 written.store(true, Ordering::SeqCst);
                 let answer = conn.query_drop(format!("KILL QUERY {}", self.id)).await;
                 written.store(false, Ordering::SeqCst);
+                self.sent.unanswered.store(before, Ordering::SeqCst);
                 let kill = match answer {
                     Ok(()) => Kill::Taken(Instant::now()),
                     Err(mysql_async::Error::Server(e)) => Kill::Failed(KillFailure::Refused(e.code)),
@@ -658,9 +692,9 @@ impl Killer {
                     let _sending = gate.sending.lock().await;
                     if gate.is_open() {
                         // Set until the answer comes: a kill given up on halfway stays so.
-                        gate.unanswered.store(true, Ordering::SeqCst);
+                        let before = gate.unanswered.swap(true, Ordering::SeqCst);
                         let taken = conn.query_drop(format!("KILL QUERY {}", killer.id)).await.is_ok();
-                        gate.unanswered.store(false, Ordering::SeqCst);
+                        gate.unanswered.store(before, Ordering::SeqCst);
                         if taken {
                             killer.record(Kill::Taken(Instant::now()), || gate.is_open());
                         }

@@ -894,3 +894,256 @@ async fn a_kill_refused_then_never_answered_is_one_not_answered() {
     assert_eq!(*killer.watch().borrow(), Kill::Failed(KillFailure::NotAnswered));
     assert!(kill_server.await.unwrap().is_some_and(|p| p == b"\x03KILL QUERY 7"), "sent again");
 }
+
+/// A query session of connection 7 on a fake server, and a fake server for its kills that reads
+/// the first kill and never answers it.
+struct Faked {
+    /// The session's server: reads its requests, answers them.
+    server: tokio::io::DuplexStream,
+    killer: Killer,
+    asked: Arc<AtomicBool>,
+    busy: Arc<AtomicBool>,
+    commands: tokio::sync::mpsc::UnboundedSender<datarig_core::driver::DbCommand>,
+    events: tokio::sync::mpsc::UnboundedReceiver<datarig_core::driver::DbEvent>,
+    session: tokio::task::JoinHandle<()>,
+    /// Says once the kill was written.
+    written: Arc<tokio::sync::Notify>,
+    kills: tokio::task::JoinHandle<Option<Vec<u8>>>,
+}
+
+async fn faked() -> Faked {
+    let (kill_client, mut kill_server) = tokio::io::duplex(1 << 16);
+    let dialed = Arc::new(tokio::sync::Notify::new());
+    let cfg = mysql("127.0.0.1");
+    let dialer = OneStreamSaid(std::sync::Mutex::new(Some(kill_client)), dialed.clone());
+    let route = Route::new(&cfg.host, 3306, Some(DialerRef(Arc::new(dialer))));
+    let opts = Target::of(&cfg).unwrap().opts(None, "datarig-q-test", &route);
+    let killer = Killer::new(route, opts.clone(), 7);
+    let written = Arc::new(tokio::sync::Notify::new());
+    let kills = tokio::spawn({
+        let written = written.clone();
+        async move {
+            dialed.notified().await;
+            greet(&mut kill_server).await;
+            logged_in(&mut kill_server).await;
+            let kill = read_packet(&mut kill_server).await;
+            written.notify_one();
+            tokio::time::sleep(KILL_TIMEOUT * 6).await;
+            kill
+        }
+    });
+    let (client, mut server) = tokio::io::duplex(1 << 16);
+    let (wire, stream) = Wire::new(Box::new(client));
+    let login = tokio::spawn(Conn::connect_with_stream(opts, Box::new(stream)));
+    greet(&mut server).await;
+    logged_in(&mut server).await;
+    let conn = login.await.unwrap().unwrap();
+    let (commands, rx) = tokio::sync::mpsc::unbounded_channel();
+    let (events_tx, events) = tokio::sync::mpsc::unbounded_channel();
+    let (asked, busy) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicBool::new(false)));
+    let session = tokio::spawn(crate::query::query_loop(
+        conn,
+        crate::link::Link::new(rx, wire),
+        killer.clone(),
+        asked.clone(),
+        busy.clone(),
+        events_tx,
+        crate::query::Settings { page_size: 100, read_only: false },
+        MYSQL_84,
+        Tracked::default(),
+        None,
+    ));
+    Faked { server, killer, asked, busy, commands, events, session, written, kills }
+}
+
+/// An `OK` packet (sequence 1) with the server status `status`.
+fn ok_packet(status: u16) -> Vec<u8> {
+    let [lo, hi] = status.to_le_bytes();
+    packet(1, &[0, 0, 0, lo, hi, 0, 0])
+}
+
+/// What the client sends next, as text (`None`: it closed the connection instead), waited for
+/// past the time a kill may take.
+async fn sent_next(server: &mut tokio::io::DuplexStream) -> Option<String> {
+    let mut buf = [0u8; 256];
+    let read = tokio::time::timeout(KILL_TIMEOUT * 3, server.read(&mut buf)).await;
+    match read.expect("the client neither sends nor closes") {
+        Ok(n) if n > 0 => Some(String::from_utf8_lossy(&buf[..n]).into_owned()),
+        _ => None,
+    }
+}
+
+/// The user's cancel (as the session's canceller sends it: only while this run's statement is
+/// on its way or running) gets its kill written to the server, which never answers it; the
+/// statement ends meanwhile. The kill may still be carried out at any time, on whatever the
+/// connection runs then: the session's next statement never goes after it; the session is lost
+/// instead, saying the kill may still be carried out.
+#[tokio::test(start_paused = true)]
+async fn a_kill_left_unanswered_by_a_statement_that_ended_never_reaches_the_next_statement() {
+    use datarig_core::driver::{DbCommand, DbEvent, PagingMode};
+    let Faked { mut server, killer, asked, busy, commands, mut events, session, written, kills } = faked().await;
+    let first = "DELETE FROM shop.t";
+    commands.send(DbCommand::Execute { id: 1, statements: vec![first.into()], paging: PagingMode::NoHold }).unwrap();
+    let sent = read_packet(&mut server).await.expect("the statement");
+    assert_eq!(&sent[1..], first.as_bytes());
+    // The user cancels; the kill is written, and the statement answers before the kill does.
+    asked.store(true, Ordering::SeqCst);
+    let cancel = tokio::spawn({
+        let (asked, busy) = (asked.clone(), busy.clone());
+        async move {
+            killer.kill_query_if(move || asked.load(Ordering::SeqCst) && busy.load(Ordering::SeqCst)).await;
+        }
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(30), written.notified()).await.expect("the kill written");
+    server.write_all(&ok_packet(0x0002)).await.unwrap();
+    // The user runs the next statement.
+    let next = "DELETE FROM shop.u";
+    commands.send(DbCommand::Execute { id: 2, statements: vec![next.into()], paging: PagingMode::NoHold }).unwrap();
+    let after = sent_next(&mut server).await;
+    assert!(after.is_none(), "nothing sent after the first statement: {after:?}");
+    tokio::time::timeout(std::time::Duration::from_secs(5), session).await.expect("the session ends").unwrap();
+    let evs: Vec<DbEvent> = std::iter::from_fn(|| events.try_recv().ok()).collect();
+    assert!(evs.iter().any(|e| matches!(e, DbEvent::Done { id: 1, .. })), "the first statement's answer: {evs:?}");
+    assert!(evs.iter().any(|e| matches!(e, DbEvent::Failed { id: 2, .. })), "the second run is answered: {evs:?}");
+    match evs.last() {
+        Some(DbEvent::Lost { error: DbError::CancelNotTaken(CancelFailure::StopPending(KILL_TIMEOUT)) }) => {}
+        other => panic!("{other:?}"),
+    }
+    cancel.abort();
+    kills.abort();
+}
+
+/// An `EXPLAIN ANALYZE` (outside the user's transaction: in one of its own, rolled back) whose
+/// kill, sent again, never got its answer while the plan came: the rollback is never sent (the
+/// connection runs nothing more), and the server rolls the transaction back as the connection
+/// ends. The session never says a transaction is open meanwhile: none is left.
+#[tokio::test(start_paused = true)]
+async fn an_explain_analyze_whose_kill_hangs_never_shows_its_transaction_open() {
+    use datarig_core::driver::{DbCommand, DbEvent, PagingMode};
+    let Faked { mut server, killer, commands, mut events, session, written, kills, .. } = faked().await;
+    let explain = "EXPLAIN ANALYZE DELETE FROM shop.t";
+    commands.send(DbCommand::Execute { id: 1, statements: vec![explain.into()], paging: PagingMode::NoHold }).unwrap();
+    // What goes before the plan is answered as the server would (a transaction is open after
+    // `START TRANSACTION`).
+    let mut in_trans = false;
+    loop {
+        let sent = read_packet(&mut server).await.expect("a request");
+        let text = String::from_utf8_lossy(&sent[1..]).into_owned();
+        if text == explain {
+            break;
+        }
+        in_trans |= text == "START TRANSACTION";
+        server.write_all(&ok_packet(if in_trans { 0x0003 } else { 0x0002 })).await.unwrap();
+    }
+    assert!(in_trans, "the plan runs in a transaction of its own");
+    // The server refused the user's cancel; the session sends it again, and the plan comes
+    // once that kill is on its way, the transaction still open.
+    killer.record(Kill::Failed(KillFailure::Refused(KILL_DENIED)), || true);
+    tokio::time::timeout(std::time::Duration::from_secs(30), written.notified()).await.expect("the kill sent again");
+    let packets = [vec![1], column("EXPLAIN"), b"\x09-> Delete".to_vec(), vec![0xfe, 0, 0, 0x03, 0, 0, 0]];
+    let answer: Vec<u8> = packets.iter().zip(1u8..).flat_map(|(p, seq)| packet(seq, p)).collect();
+    server.write_all(&answer).await.unwrap();
+    let after = sent_next(&mut server).await;
+    assert!(after.is_none(), "nothing sent after the plan: {after:?}");
+    tokio::time::timeout(std::time::Duration::from_secs(5), session).await.expect("the session ends").unwrap();
+    let evs: Vec<DbEvent> = std::iter::from_fn(|| events.try_recv().ok()).collect();
+    assert!(evs.iter().any(|e| matches!(e, DbEvent::Page { id: 1, columns: Some(_), .. })), "the plan: {evs:?}");
+    assert!(
+        !evs.iter().any(|e| matches!(e, DbEvent::TxOpen(true) | DbEvent::Block(true))),
+        "no transaction is left open: {evs:?}"
+    );
+    match evs.last() {
+        Some(DbEvent::Lost { error: DbError::CancelNotTaken(CancelFailure::StopPending(KILL_TIMEOUT)) }) => {}
+        other => panic!("{other:?}"),
+    }
+    kills.abort();
+}
+
+/// A dialer that hands out the client's ends of in-memory streams, one per dial, in order.
+struct Streams(std::sync::Mutex<std::collections::VecDeque<tokio::io::DuplexStream>>);
+
+impl datarig_core::transport::Dialer for Streams {
+    fn dial(
+        &self,
+        _host: &str,
+        _port: u16,
+    ) -> futures::future::BoxFuture<
+        'static,
+        Result<datarig_core::transport::BoxedStream, datarig_core::transport::DialError>,
+    > {
+        let s = self.0.lock().unwrap().pop_front();
+        Box::pin(async move {
+            s.map(|s| Box::new(s) as datarig_core::transport::BoxedStream)
+                .ok_or(datarig_core::transport::DialError::NotOpen)
+        })
+    }
+}
+
+/// A killer of connection 7 whose connections are the far ends (the servers') of `n` streams,
+/// in the order they are dialled.
+fn killer_on_fake_servers(n: usize) -> (Killer, Vec<tokio::io::DuplexStream>) {
+    let (clients, servers): (Vec<_>, Vec<_>) = (0..n).map(|_| tokio::io::duplex(1 << 16)).unzip();
+    let cfg = mysql("127.0.0.1");
+    let dialer = Streams(std::sync::Mutex::new(clients.into()));
+    let route = Route::new(&cfg.host, 3306, Some(DialerRef(Arc::new(dialer))));
+    let opts = Target::of(&cfg).unwrap().opts(None, "datarig-k-test", &route);
+    (Killer::new(route, opts, 7), servers)
+}
+
+/// A server for a kill: logs it in, reads the kill and answers it (`answer`) or never does.
+fn kill_server(mut server: tokio::io::DuplexStream, answer: bool) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        greet(&mut server).await;
+        logged_in(&mut server).await;
+        // Read once it comes (a kill may wait for another's turn).
+        let kill = sent_next(&mut server).await.expect("the kill");
+        assert!(kill.ends_with("KILL QUERY 7"), "{kill:?}");
+        if answer {
+            server.write_all(&packet(1, &[0, 0, 0, 2, 0, 0, 0])).await.unwrap();
+        }
+        tokio::time::sleep(KILL_TIMEOUT * 3).await;
+    })
+}
+
+/// A kill of the user's given up on unanswered, then another one the server answers: the first
+/// may still be carried out, and the second's answer does not say otherwise. The session's
+/// statement ends unclean: its connection runs nothing more.
+#[tokio::test(start_paused = true)]
+async fn a_kill_answered_after_one_given_up_on_leaves_the_session_unclean() {
+    let (killer, mut servers) = killer_on_fake_servers(2);
+    let second = kill_server(servers.pop().unwrap(), true);
+    let first = kill_server(servers.pop().unwrap(), false);
+    let busy = AtomicBool::new(true);
+    let hangs = tokio::spawn({
+        let killer = killer.clone();
+        async move { killer.kill_query().await }
+    });
+    // The second cancel comes while the first waits for its answer, and is sent once that one
+    // was given up on.
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    killer.kill_query_if(|| true).await;
+    assert!(matches!(*killer.watch().borrow(), Kill::Taken(_)), "the second was taken");
+    hangs.await.unwrap();
+    assert!(!killer.idle(&busy).await, "the first may still be carried out");
+    assert!(!busy.load(Ordering::SeqCst));
+    first.abort();
+    second.abort();
+}
+
+/// The same for kills sent again under a request's gate.
+#[tokio::test(start_paused = true)]
+async fn a_kill_sent_again_and_answered_after_one_given_up_on_leaves_the_gate_unclean() {
+    let (killer, mut servers) = killer_on_fake_servers(2);
+    let second = kill_server(servers.pop().unwrap(), true);
+    let first = kill_server(servers.pop().unwrap(), false);
+    let gate = Gate::new();
+    killer.try_again(&gate);
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    killer.try_again(&gate);
+    // Both ran their course: the first given up on, the second answered.
+    tokio::time::sleep(KILL_TIMEOUT * 2).await;
+    assert!(matches!(*killer.watch().borrow(), Kill::Taken(_)), "the second was taken");
+    assert!(!gate.close().await, "the first may still be carried out");
+    first.abort();
+    second.abort();
+}

@@ -65,7 +65,10 @@
 //! the session stops itself (a held one) is stopped so too. A kill sent again that never gets
 //! its answer while the statement answers may still land on whatever the connection runs next:
 //! the statement's answer is read to its end and is the run's, nothing more is sent on the
-//! connection, and the session is lost after it ([`CancelFailure::StopPending`]).
+//! connection, and the session is lost after it ([`CancelFailure::StopPending`]). So too after
+//! the user's own kill, written and never answered while the statement ended: nothing is sent
+//! after the statement until the kill is answered (an `EXPLAIN ANALYZE`'s rollback neither: the
+//! server rolls it back as the connection ends, and no transaction is said open meanwhile).
 //!
 //! The session reports the sql mode its text is read in when it changes (`DbEvent::Language`),
 //! and what the server said of a statement beyond its outcome (`DbEvent::Info`: the id an
@@ -422,7 +425,7 @@ async fn execute(
     link.serving(env.events, id);
     let reply = Reply::new(env.events, id);
     let ran = run(conn, link, env, s, reply, statements, resume, paging).await;
-    env.busy.store(false, Ordering::SeqCst);
+    idle(env, link).await;
     match ran {
         Ok(()) => Ok(()),
         Err(Halted { stop, reply }) => {
@@ -609,7 +612,7 @@ async fn statement<'a>(
     let mut qr = match sent {
         Ok(qr) => qr,
         Err(e) => {
-            env.busy.store(false, Ordering::SeqCst);
+            idle(env, link).await;
             if let Some(u) = &undo {
                 halt!(undone(conn, link, u).await, Some(reply));
             }
@@ -753,19 +756,22 @@ async fn statement<'a>(
         }
     };
     drop(qr);
-    env.busy.store(false, Ordering::SeqCst);
-    if let Some(u) = &undo {
-        halt!(undone(conn, link, u).await, Some(reply));
-    }
+    idle(env, link).await;
+    let kept = match &undo {
+        Some(u) => halt!(undone(conn, link, u).await, Some(reply)),
+        None => true,
+    };
     // More than one result set: a procedure ran, whatever the text looks like.
     let sets = match &got {
         Got::Done { info, .. } | Got::Rows { info, .. } => info.more_results,
     };
     s.routine |= sets > 0;
     let code_ran = s.routine;
-    // What the statement did to the session, before the run answers.
-    if let Some(error) = halt!(after(conn, link, env, s, sql, risk.implicit_commit, was_open, true).await, Some(reply))
-    {
+    // What the statement did to the session, before the run answers. An undo that failed on a
+    // connection still in use may have left the statement's transaction open: the server is
+    // asked (one that runs nothing more is not).
+    let ask = was_open || !kept;
+    if let Some(error) = halt!(after(conn, link, env, s, sql, risk.implicit_commit, ask, kept).await, Some(reply)) {
         reply.fail(error.clone(), false);
         return Err(Halted { stop: Stop::Lost(error), reply: None });
     }
@@ -808,7 +814,7 @@ async fn failed<'a>(
     e: &mysql_async::Error,
     was_open: bool,
 ) -> Result<Option<(Reply<'a>, Outcome)>, Halted<'a>> {
-    env.busy.store(false, Ordering::SeqCst);
+    idle(env, link).await;
     if e.is_fatal() {
         let error = my_error(e);
         reply.fail_with(e);
@@ -822,7 +828,8 @@ async fn failed<'a>(
     Ok(None)
 }
 
-/// What a statement (`sql`; `ok`: it succeeded) left in the session, as the server says: the
+/// What a statement (`sql`; `ok`: it succeeded, and its answer says what it left: not an
+/// `EXPLAIN ANALYZE` whose undo was cut off) left in the session, as the server says: the
 /// session state it reports (the sql mode, read-only, a `sql_select_limit` the user set), and
 /// whether the user's transaction is open (the status flags of the statement's answer, or, after
 /// a failure when one may be open (`ask`), of a `COM_PING`). The UI is told what changed. On a
@@ -902,15 +909,25 @@ async fn after(
     Ok(None)
 }
 
-/// Undo an `EXPLAIN ANALYZE` ([`Undo`]). A failure is not reported: only a broken connection
-/// gets here, and the server rolls back the transaction of a connection that ends.
-async fn undone(conn: &mut Conn, link: &mut Link, undo: &Undo) -> Result<(), Closed> {
+/// Undo an `EXPLAIN ANALYZE` ([`Undo`]): whether it was. A failure is not reported: only a
+/// broken connection (or one that runs nothing more, [`Link::taint`]) gets here, and the server
+/// rolls back the transaction of a connection that ends.
+async fn undone(conn: &mut Conn, link: &mut Link, undo: &Undo) -> Result<bool, Closed> {
     for sql in &undo.after {
         if link.guard(None, conn.query_drop(sql.clone())).await?.is_err() {
-            break;
+            return Ok(false);
         }
     }
-    Ok(())
+    Ok(true)
+}
+
+/// The session's statement ended ([`Killer::idle`]): a kill of the user's sent for it that never
+/// got its answer may still be carried out, on whatever the connection runs next, so it runs
+/// nothing more ([`Link::taint`]).
+async fn idle(env: &Env<'_>, link: &mut Link) {
+    if !env.killer.idle(env.busy).await {
+        link.taint(DbError::CancelNotTaken(crate::session::kill_pending()));
+    }
 }
 
 /// How a held result ended ([`hold`]).
@@ -1051,7 +1068,7 @@ async fn held_ended<'a>(
     sql: &str,
     was_open: bool,
 ) -> Result<(), Halted<'a>> {
-    env.busy.store(false, Ordering::SeqCst);
+    idle(env, link).await;
     let id = paged.id;
     let ok = held.failed.is_none() && !held.stopped;
     if let Some(e) = &held.failed {
@@ -1319,7 +1336,7 @@ async fn asked_server(
     let ask = check_sql(&names, Dialect::MySql(s.mode));
     env.busy.store(true, Ordering::SeqCst);
     let answer = link.guard(Some(env.killer), conn.query_first::<(Option<String>, Option<String>), _>(ask)).await?;
-    env.busy.store(false, Ordering::SeqCst);
+    idle(env, link).await;
     Ok(match answer {
         Ok(Some((_, Some(view)))) => Err(DbError::NotRepeatable(NotRepeatable::NotATable(view))),
         Ok(Some((isolation, None))) => Ok(isolation.unwrap_or_default()),
@@ -1432,7 +1449,7 @@ async fn count(
     }
     env.busy.store(true, Ordering::SeqCst);
     let counted = link.guard(Some(env.killer), conn.query_first::<String, _>(sql)).await?;
-    env.busy.store(false, Ordering::SeqCst);
+    idle(env, link).await;
     let snapshot = s.tx.open && matches!(isolation.as_str(), "REPEATABLE-READ" | "SERIALIZABLE");
     let result = match counted {
         Ok(Some(n)) => n.trim().parse::<u64>().map_err(|_| DbError::NoResult),
