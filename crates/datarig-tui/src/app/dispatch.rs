@@ -193,6 +193,7 @@ impl App {
             Action::OpenSettings => self.open_settings(),
             Action::ToggleDetail => self.detail.visible = !self.detail.visible,
             Action::DetailTab => self.detail.tab = self.detail.tab.other(),
+            Action::DetailStep(next) => self.grid_action(if next { GridAction::Right } else { GridAction::Left }),
             Action::Explorer(e) => self.explorer_action(e),
             Action::Grid(g) => self.grid_action(g),
             Action::Panel(p) => self.panel_action(p),

@@ -1194,8 +1194,8 @@ impl App {
                 t.grid = GridState::paged(page_size, page_rows);
                 t.exec.origin = origin;
                 t.exec.shown = t.exec.run.len().checked_sub(1);
-                // A chart shown before stays: it draws these rows.
-                let charted = t.exec.view == super::tabs::ResultView::Chart && t.exec.chart.is_some();
+                // The Chart tab shown before stays: it draws these rows.
+                let charted = t.exec.view == super::tabs::ResultView::Chart;
                 t.exec.view = if charted { super::tabs::ResultView::Chart } else { super::tabs::ResultView::Rows };
                 if let Some((plan, json)) = plan {
                     let (query, index) = (t.exec.query_id, t.exec.shown.unwrap_or(0));

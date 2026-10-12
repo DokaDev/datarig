@@ -419,7 +419,7 @@ fn counting_is_asked_for_announced_and_shown() {
     assert!(title.contains("(page 1 / 3 · 30s · 1,234 rows now)"), "{title}");
     assert!(h.status(160, 45).contains("Counted now: 1,234 rows (may differ from the pages)"));
     // Messages keep what was sent for the user.
-    h.keys("L");
+    h.keys("H");
     let screen = h.screen(200, 45);
     assert!(screen.contains("Counting rows, sent for you") && screen.contains("Counted now: 1,234 rows"), "{screen}");
     h.keys("L");

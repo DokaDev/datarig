@@ -157,9 +157,8 @@ fn the_status_bar_preview_replaces_the_panel() {
 fn a_double_click_on_a_cell_opens_the_viewer() {
     let mut h = grid(Lang::En);
     h.draw(160, 45);
-    let r = h.app.layout.results;
     // The second data row, in the name column.
-    let (x, y) = (h.app.tabs.active().grid.hit_cols[1].0 + 2, r.y + 1 + 2 + 1);
+    let (x, y) = (h.app.tabs.active().grid.hit_cols[1].0 + 2, h.app.tabs.active().grid.data_y + 1);
     click(&mut h, x, y, MouseButton::Left);
     assert!(h.viewer().is_none(), "one click selects");
     assert_eq!((h.app.tab().grid.row, h.app.tab().grid.col), (1, 1));
@@ -310,7 +309,7 @@ fn copy_as_every_format_through_keys_commands_and_the_menu() {
     // The grid's context menu: right click on a cell selects it; the copies are two levels,
     // scope then format, with their keys.
     h.draw(160, 45);
-    let (x, y) = (h.app.tabs.active().grid.hit_cols[1].0 + 2, h.app.layout.results.y + 3 + 2);
+    let (x, y) = (h.app.tabs.active().grid.hit_cols[1].0 + 2, h.app.tabs.active().grid.data_y + 2);
     click(&mut h, x, y, MouseButton::Right);
     assert_eq!(h.overlay_kind(), Some(OverlayKind::ContextMenu));
     assert_eq!((h.app.tab().grid.row, h.app.tab().grid.col), (2, 1));

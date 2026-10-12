@@ -455,7 +455,9 @@ fn the_plan_goes_with_the_rows_of_its_run() {
 fn the_strip_and_its_keys_reach_the_plan() {
     let mut h = shown(17, "join.analyze.json");
     let screen = h.screen(160, 45);
-    assert!(screen.contains("Result 1  [Plan]  Messages"), "{screen}");
+    assert!(screen.contains("Result 1  [Plan]  Chart  Messages"), "{screen}");
+    h.keys("L");
+    assert_eq!(h.app.tab().exec.view, ResultView::Chart, "the Plan stays next to its rows");
     h.keys("L");
     assert_eq!(h.app.tab().exec.view, ResultView::Messages);
     h.keys("L");
@@ -775,4 +777,39 @@ fn the_box_diagram_follows_the_selection_and_moves_sideways() {
     let (rect, i) = plan(&h).hits.iter().copied().find(|(_, i)| *i == 0).unwrap_or(plan(&h).hits[0]);
     h.mouse(MouseEventKind::Down(MouseButton::Left), rect.x + 2, rect.y + 1);
     assert_eq!(plan(&h).selected, i);
+}
+
+/// At 80×24 with the inspector next to the plan's rows, the strip shortens its labels before it
+/// leaves any tab out: every tab stays (the shown one in brackets), the keys' hint goes first.
+#[test]
+fn a_narrow_strip_shortens_its_labels_before_leaving_tabs_out() {
+    for lang in [Lang::En, Lang::Ko] {
+        let i18n = datarig_core::i18n::I18n::new(lang);
+        let mut h = shown_in(lang, 17, "join.analyze.json");
+        h.keys("H");
+        assert_eq!(h.app.tab().exec.view, ResultView::Rows);
+        let screen = h.screen(80, 24);
+        assert!(h.app.layout.detail.width > 0, "the inspector is shown:\n{screen}");
+        let strip = screen.lines().nth(h.app.layout.strip.y as usize).unwrap().to_string();
+        let plan = i18n.label(Label::ResultsTabPlan).to_string();
+        let chart = i18n.label(Label::ResultsTabChart).to_string();
+        let messages = i18n.label(Label::ResultsTabMessagesShort).to_string();
+        let result = i18n.msg(&Msg::ResultsTabResult { n: "1".into() }).to_string();
+        let long = i18n.label(Label::ResultsTabMessages).to_string();
+        // English needs its short labels there; Korean's whole ones fit.
+        let want = match lang {
+            Lang::En => format!("[1]  {plan}  {chart}  {messages}"),
+            _ => format!("[{result}]  {plan}  {chart}  {long}"),
+        };
+        assert!(strip.contains(&want), "{lang:?}: {want} in {strip}");
+        assert!(!strip.contains('…') && !strip.contains("H/L"), "{lang:?}: {strip}");
+        assert_eq!(h.app.strip_hits().len(), 4, "every tab takes a click");
+        let name = format!("strip_short_labels_{}_80x24", if lang == Lang::En { "en" } else { "ko" });
+        assert_screen!(name, lang, h.draw(80, 24));
+        // Wide enough: the whole labels and the keys.
+        let screen = h.screen(160, 45);
+        let strip = screen.lines().nth(h.app.layout.strip.y as usize).unwrap().to_string();
+        let want = format!("[{result}]  {plan}  {chart}  {long}");
+        assert!(strip.contains(&want) && strip.contains("H/L"), "{lang:?}: {want} in {strip}");
+    }
 }

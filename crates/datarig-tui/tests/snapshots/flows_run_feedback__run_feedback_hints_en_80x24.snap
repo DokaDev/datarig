@@ -13,7 +13,7 @@ expression: backend
 "│                      ││                                                      │"
 "│                      │╰──────────────────────────────────────────────────────╯"
 "│                      │╭ Results ─────────────────────────────────────────────╮"
-"│                      ││ [Messages]                                           │"
+"│                      ││ Result  Chart  [Messages]                            │"
 "│                      ││ 1  SELECT 1                     1,200 rows affected …│"
 "│                      ││ 2  SELECT 2 FROM t…             Error: ERROR: relati…│"
 "│                      ││ 3  SELECT 3                     not run              │"

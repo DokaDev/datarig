@@ -12,8 +12,9 @@ use super::*;
 
 /// The fewest lines the editor pane keeps next to the results (borders included).
 pub const MIN_EDITOR_ROWS: u16 = 4;
-/// The fewest lines the results pane keeps next to the editor (borders included).
-pub const MIN_RESULTS_ROWS: u16 = 6;
+/// The fewest lines the results pane keeps next to the editor (borders and its result tab strip
+/// included).
+pub const MIN_RESULTS_ROWS: u16 = 7;
 
 /// The narrowest the explorer gets by its keys or a drag (its borders included).
 pub const EXPLORER_MIN: u16 = 16;
@@ -240,47 +241,29 @@ impl App {
         self.mark_workspace();
     }
 
-    /// The results pane of the active query tab has its result tab strip: when there is more
-    /// than the one result of one statement to switch to (a run of several statements, rows of
-    /// an earlier run, the Messages chosen next to rows) or something to say about the rows
-    /// (they were read inside the user's transaction). A single statement's result otherwise
-    /// looks as before.
+    /// The results pane of the active tab (a query tab's or a table tab's) has its result tab
+    /// strip whenever it is drawn: the result (one tab per row result of the run, or one for
+    /// what the run said), the Plan of an `EXPLAIN`, the Chart and the Messages, from the first
+    /// frame on.
     pub fn strip_shown(&self) -> bool {
-        if self.tabs.is_empty() {
-            return false;
-        }
-        let t = self.tab();
-        if t.is_table() || !t.ran {
-            return false;
-        }
-        let rows = !t.result_tabs().is_empty();
-        let tx =
-            matches!(&t.results, Results::Rows(rs) if rs.tx.is_some() && t.exec.view == super::tabs::ResultView::Rows);
-        tx || t.exec.run.several()
-            || t.rows_log().several()
-            || t.exec.kept_log.is_some()
-            || (rows && t.exec.view == super::tabs::ResultView::Messages)
-            || t.result_tabs().len() > 1
-            // A plan: its rows, the plan and the Messages to switch between.
-            || t.exec.plan.is_some()
-            // A chart: the rows and the chart.
-            || (t.exec.chart.is_some() && rows)
+        self.results_shown()
     }
 
-    /// Show the result tab `delta` places away (the row results of the run in their order,
-    /// the chart of the shown one, its plan when it has one, then its Messages), wrapping
-    /// around.
+    /// Show the result tab `delta` places away (the row results of the run in their order, or
+    /// the one result tab without them, the plan when there is one, next to them, then the
+    /// chart of the shown one and the Messages), wrapping around.
     pub(super) fn cycle_result_tab(&mut self, delta: isize) {
         use super::tabs::ResultView;
         let t = self.tab_mut();
         let mut views: Vec<(ResultView, Option<usize>)> =
             t.result_tabs().into_iter().map(|i| (ResultView::Rows, Some(i))).collect();
-        if t.exec.chart.is_some() && matches!(t.results, Results::Rows(_)) {
-            views.push((ResultView::Chart, None));
+        if views.is_empty() {
+            views.push((ResultView::Rows, None));
         }
         if t.exec.plan.is_some() {
             views.push((ResultView::Plan, None));
         }
+        views.push((ResultView::Chart, None));
         views.push((ResultView::Messages, None));
         let n = views.len() as isize;
         let now = match (t.exec.view, t.exec.shown) {

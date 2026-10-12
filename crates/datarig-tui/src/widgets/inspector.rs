@@ -1,10 +1,13 @@
 //! The result inspector: a panel on the right of the results that
 //! follows the grid's selection. The **Cell** tab shows the selected cell's whole value
 //! (wrapped, JSON pretty-printed) with its type and length; the **Row** tab shows every column
-//! of the selected row as `name: value`, with the column key marks. `Enter` keeps
-//! opening the cell viewer for very long values.
+//! of the selected row as `name: value`, with the column key marks, the grid's column
+//! highlighted and kept in view; a click on another column (on the release over the one
+//! pressed) moves the grid's cell to it. `Enter` keeps opening the cell viewer for very long
+//! values.
 
 use crate::app::action::{Action, GridAction};
+use crate::app::hover::PointerOn;
 use crate::app::{App, DetailTab, Keys, Results};
 use crate::icons;
 use crate::keymap::Ctx;
@@ -91,7 +94,20 @@ pub(crate) fn draw_inspector(app: &mut App, area: Rect, buf: &mut Buffer) {
     let marks = column_marks(app, rs);
     match active {
         DetailTab::Cell => draw_cell(app, rs, &marks, body, buf),
-        DetailTab::Row => draw_row(app, rs, &marks, body, buf),
+        DetailTab::Row => {
+            let (first, list) = draw_row(app, rs, &marks, body, buf);
+            // Scrolled since (or the pointer's column gone): what was under the pointer is not
+            // there any more.
+            let hovered = match app.pointer_on {
+                Some(PointerOn::Detail(c)) => Some(c),
+                _ => None,
+            };
+            if hovered.is_some_and(|c| first != app.detail.first || c < first || c >= first + list.height as usize) {
+                app.pointer_on = None;
+            }
+            app.detail.first = first;
+            app.layout.detail_list = list;
+        }
     }
 }
 
@@ -174,8 +190,9 @@ fn draw_cell(app: &App, rs: &ResultSet, marks: &[KeyMarks], body: Rect, buf: &mu
 }
 
 /// The Row tab: every column of the selected row, `name: value` on one line each (key marks
-/// first), the selected column highlighted and kept in view.
-fn draw_row(app: &App, rs: &ResultSet, marks: &[KeyMarks], body: Rect, buf: &mut Buffer) {
+/// first), the selected column highlighted and kept in view, the one under the pointer lit.
+/// Returns the first column drawn and where the entries are.
+fn draw_row(app: &App, rs: &ResultSet, marks: &[KeyMarks], body: Rect, buf: &mut Buffer) -> (usize, Rect) {
     let th = theme::cur();
     let t = app.tab();
     let row = t.grid.row.min(rs.rows.len() - 1);
@@ -189,12 +206,34 @@ fn draw_row(app: &App, rs: &ResultSet, marks: &[KeyMarks], body: Rect, buf: &mut
         y += 1;
     }
     let room = (bottom.saturating_sub(y)) as usize;
-    let first = t.grid.col.saturating_sub(room.saturating_sub(1));
+    let col = t.grid.col.min(rs.columns.len().saturating_sub(1));
+    // As far as before, unless the grid's column went out of view; never past the last column.
+    let mut first = app.detail.first;
+    if col < first {
+        first = col;
+    } else if col >= first + room {
+        first = col + 1 - room.max(1);
+    }
+    let first = first.min(rs.columns.len().saturating_sub(room));
+    let list = Rect::new(body.x, y, body.width, room.min(rs.columns.len() - first) as u16);
+    let hovered = match app.pointer_hover() {
+        Some(PointerOn::Detail(c)) => Some(c),
+        _ => None,
+    };
     let null = app.i18n.label(Label::ResultsNull);
     let on = app.icons_on();
+    // The grid's column as strong as the grid's own cell: the selection where the focus is.
+    let focused = app.focus == crate::app::Focus::Inspector;
     for (ci, column) in rs.columns.iter().enumerate().skip(first).take(room) {
-        let selected = ci == t.grid.col;
-        let bg = if selected { th.selection } else { Style::new().bg(th.bg) };
+        let bg = if ci == col && focused {
+            th.selection
+        } else if ci == col {
+            th.cursor_line
+        } else if hovered == Some(ci) {
+            Style::new().bg(th.bg).patch(crate::widgets::hover_style())
+        } else {
+            Style::new().bg(th.bg)
+        };
         buf.set_style(Rect::new(body.x, y, body.width, 1), bg);
         let mut cx = x + put_marks(marks.get(ci).copied().unwrap_or_default(), on, x, y, w, bg, buf);
         let name = format!("{}: ", column.meta.name);
@@ -212,6 +251,7 @@ fn draw_row(app: &App, rs: &ResultSet, marks: &[KeyMarks], body: Rect, buf: &mut
         };
         y += 1;
     }
+    (first, list)
 }
 
 /// The one-line preview of the selected cell for `detail_view = statusbar`.

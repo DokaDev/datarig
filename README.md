@@ -184,11 +184,12 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
   leaves the text alone.
 - Run the statement under the cursor (`Ctrl+E`), a selection, or several statements in a row:
   each statement's outcome is listed in a Messages tab, and every row result gets a result tab
-  of its own (in the results pane `H`/`L` move between them, as the right end of the tab strip
-  says when there is room; `Space r [` / `Space r ]` from anywhere). Queries can be cancelled
-  (`Ctrl+C`). When a PostgreSQL cancel cannot reach the server (a tunnel that refuses it, a
-  network failure), datarig closes the tab's connection and says why; it cannot tell what
-  became of the statement: it may still run to its end and commit if it was not in a
+  of its own, with a Chart tab after them (the tab strip is there from the first result on, in
+  a console and in a table tab; in the results pane `H`/`L` move between the tabs, as the right
+  end of the strip says when there is room; `Space r [` / `Space r ]` from anywhere). Queries
+  can be cancelled (`Ctrl+C`). When a PostgreSQL cancel cannot reach the server (a tunnel that
+  refuses it, a network failure), datarig closes the tab's connection and says why; it cannot
+  tell what became of the statement: it may still run to its end and commit if it was not in a
   transaction block, an open block is rolled back when the server notices the closed
   connection, and the session's temporary tables, settings and advisory locks are gone. While
   a run goes on, the statement it is
@@ -213,7 +214,10 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
   [Paging and locks](#paging-and-locks)).
 - A row count on demand, with a label that says whether it matches the pages you saw.
 - An inspector for the selected cell or row (JSON pretty-printed), a cell viewer, and cell,
-  row, column and range selection with the keyboard or the mouse.
+  row, column and range selection with the keyboard or the mouse. The inspector's Row tab stays
+  on the grid's column: it highlights that column and scrolls to it, and `j`/`k` (once the
+  inspector is clicked) or a click on another column moves the grid's cell there, the grid
+  scrolling sideways to it; `Enter` or a double-click shows the value whole, as in the grid.
 - Copy as TSV (with or without headers), CSV, JSON, indented JSON, Markdown, HTML, XML, an SQL
   `IN` list, or SQL `INSERT`/`UPDATE` statements (only when the target table is certain), to the
   system clipboard or through OSC 52 over SSH.
@@ -251,22 +255,23 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
   wheel); `9` the plan as `psql` prints it (written from the JSON; nothing is run again).
   `y`/`Y` copy it as text or JSON. Large plans stay readable and fast: names are cut, layouts
   are bounded, and only what is on screen is drawn.
-- Charts of a result: `c` in the results (or `Space r c`, or the action menu) draws the rows the
-  result has fetched as vertical bars, horizontal bars or lines (braille dots); nothing is asked
-  of the server and nothing runs again, and the chart says how many fetched rows it draws and
-  whether the server has more (fetch more pages first to chart them). It picks its columns at
-  first sight: a date or time and numbers give lines over time, a text column and numbers give
-  bars (horizontal when the labels are long or many), numbers alone give lines over the first
-  one; several numbers are several series, and one number with a text column of a few values
-  gives a series per value. `v`/`V` or `1`–`3` change the kind, `x` the X column, `s` the value
-  columns, `b` a column that splits the values into series, `S` a logarithmic scale (also from
-  the action menu, and with the mouse on the chart's first lines). Rows with the same X are
-  summed; NULLs and values that are not numbers are skipped and counted under the chart; more
-  than 50 bars or 6 series keep the largest and sum the rest into "others". The arrows (or
-  `h`/`j`/`k`/`l`) move a cursor over the bars or points and show the exact values and the row
-  they come from; `Enter` (or a second click) shows that row in the grid; `y` copies the
-  chart's numbers as TSV, `Y` the drawing as text. A result without numbers, or with a single
-  point, says why instead of drawing. The series' colors are theme tokens (`chart_1` …
+- Charts of a result: the Chart tab of the results pane (or `c` in the results, `Space r c`, or
+  the action menu) draws the rows the result has fetched as vertical bars, horizontal bars or
+  lines (braille dots); nothing is asked of the server and nothing runs again, and the chart
+  says how many fetched rows it draws and whether the server has more (fetch more pages first to
+  chart them). It picks its columns at first sight: a date or time and numbers give lines over
+  time, a text column and numbers give bars (horizontal when the labels are long or many),
+  numbers alone give lines over the first one; several numbers are several series, and one
+  number with a text column of a few values gives a series per value. `v`/`V` or `1`–`3` change
+  the kind, `x` the X column, `s` the value columns, `b` a column that splits the values into
+  series, `S` a logarithmic scale (also from the action menu, and with the mouse on the chart's
+  first lines). Rows with the same X are summed; NULLs and values that are not numbers are
+  skipped and counted under the chart; more than 50 bars or 6 series keep the largest and sum
+  the rest into "others". The arrows (or `h`/`j`/`k`/`l`) move a cursor over the bars or points
+  and show the exact values and the row they come from; `Enter` (or a second click) shows that
+  row in the grid; `y` copies the chart's numbers as TSV, `Y` the drawing as text. A result
+  without rows or numbers, or with a single point, says why instead of drawing. Nothing is read
+  for a chart until its tab is viewed. The series' colors are theme tokens (`chart_1` …
   `chart_6`). Not yet: a chart builder that writes the SQL for you.
 
 **Safety**

@@ -21,12 +21,12 @@ expression: backend
 "│                                      ││ 14                                                                                                                   │"
 "│                                      │╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯"
 "│                                      │╭ Results · 3 rows ────────────────────────────────────────────────────────────────────────────────────────────────────╮"
+"│                                      ││ [Result 1]  Chart  Messages                                                                                      H/L │"
 "│                                      ││   │  id │  user_id │  email            │ name       │   order_id │  line_no │  product_id │ doubled           │"
 "│                                      ││   │ int8 │ int8      │ text               │ text       │ int8         │ int4      │ int8         │ numeric           │"
 "│                                      ││ 1 │    1 │         1 │ user01@example.com │ ユーザー 1 │            1 │         1 │            7 │       2           │" Hidden by multi-width symbols: [(87, " "), (89, " "), (91, " "), (93, " ")]
 "│                                      ││ 2 │    2 │         1 │ user02@example.com │ ユーザー 2 │            2 │         1 │            7 │       2           │" Hidden by multi-width symbols: [(87, " "), (89, " "), (91, " "), (93, " ")]
 "│                                      ││ 3 │    3 │         1 │ user03@example.com │ ユーザー 3 │            3 │         1 │            7 │       2           │" Hidden by multi-width symbols: [(87, " "), (89, " "), (91, " "), (93, " ")]
-"│                                      ││                                                                                                                      │"
 "│                                      ││                                                                                                                      │"
 "│                                      ││                                                                                                                      │"
 "│                                      ││                                                                                                                      │"

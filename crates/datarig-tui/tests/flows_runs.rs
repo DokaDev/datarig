@@ -258,7 +258,10 @@ fn every_row_result_of_a_run_has_a_tab_and_messages_list_the_run() {
     h.keys("L");
     assert_eq!(shown_first_cell(&h).as_deref(), Some("100"));
     assert_eq!(h.app.tab().grid.row, 1, "the cursor it had");
-    // Then Messages: every statement, what it did; no inspector, nothing to copy there.
+    // Then (past the Chart) Messages: every statement, what it did; no inspector, nothing to
+    // copy there.
+    h.keys("L");
+    assert_eq!(h.app.tab().exec.view, ResultView::Chart);
     h.keys("L");
     assert_eq!(h.app.tab().exec.view, ResultView::Messages);
     let screen = h.screen(160, 45);
@@ -288,21 +291,16 @@ fn every_row_result_of_a_run_has_a_tab_and_messages_list_the_run() {
     // Wrapping around: from the first result back to Messages.
     h.keys("H");
     assert_eq!(h.app.tab().exec.view, ResultView::Messages);
-    // Korean at 80 columns, from the catalog: every line whole, both result tabs and Messages
-    // with the same labels as in English, the shown one in brackets.
+    // Korean at 80 columns, from the catalog: every line whole, both result tabs, the Chart and
+    // Messages with the same short labels as in English, the shown one in brackets.
     let mut ko = run_two_results(Lang::Ko).0;
     let i18n = datarig_core::i18n::I18n::new(Lang::Ko);
-    let result = |n: &str| i18n.msg(&datarig_core::i18n::Msg::ResultsTabResult { n: n.into() }).to_string();
-    let messages = i18n.label(datarig_core::i18n::Label::ResultsTabMessages).to_string();
+    let chart = i18n.label(datarig_core::i18n::Label::ResultsTabChart).to_string();
+    let messages = i18n.label(datarig_core::i18n::Label::ResultsTabMessagesShort).to_string();
     let screen = ko.screen(80, 24);
     assert!(screen.lines().all(|l| datarig_tui::text::width(l) == 80), "{screen}");
     let strip = screen.lines().nth(ko.app.layout.strip.y as usize).unwrap().to_string();
-    assert!(
-        strip.contains(&format!(" {} ", result("1")))
-            && strip.contains(&format!("[{}]", result("3")))
-            && strip.contains(&format!(" {messages} ")),
-        "{strip}"
-    );
+    assert!(strip.contains(&format!("1  [3]  {chart}  {messages}")), "{strip}");
     let title = i18n.msg(&datarig_core::i18n::Msg::PaneResultsRows { count: 7 }).to_string();
     assert!(screen.lines().nth(ko.app.layout.results.y as usize).unwrap().contains(&title), "{screen}");
     assert!(screen.contains("1 │  100") && screen.contains("7 │  106"), "{screen}");
@@ -413,32 +411,35 @@ fn run_selects(lang: Lang, n: usize) -> Harness {
     h
 }
 
-/// At 80 columns the strip keeps the shown result tab and Messages whole, in both languages
-/// with the same labels ("Result n"), leaving out others with `…` (`H`/`L` reach them); a
-/// click on a shown tab still shows it.
+/// At 80 columns the strip shortens its labels before it leaves a tab out, in both languages
+/// with the same short labels (the statement's number, "Msgs"); what is left out is away from
+/// the shown one; a click on a tab still shows it.
 #[test]
-fn a_narrow_strip_keeps_the_shown_tab_and_messages() {
-    use datarig_core::i18n::{I18n, Label, Msg};
+fn a_narrow_strip_shortens_the_labels_and_keeps_the_shown_tab() {
+    use datarig_core::i18n::{I18n, Label};
     for lang in [Lang::En, Lang::Ko] {
         let i18n = I18n::new(lang);
-        let result = |n: usize| i18n.msg(&Msg::ResultsTabResult { n: n.to_string() }).to_string();
-        let messages = i18n.label(Label::ResultsTabMessages).to_string();
+        let chart = i18n.label(Label::ResultsTabChart).to_string();
+        let messages = i18n.label(Label::ResultsTabMessagesShort).to_string();
         let tx = i18n.label(Label::ResultsTxOpen).to_string();
         let mut h = run_selects(lang, 6);
         h.app.detail.visible = false;
         let screen = h.screen(80, 24);
         let strip = screen.lines().nth(h.app.layout.strip.y as usize).unwrap().to_string();
-        assert!(strip.contains(&format!("[{}]", result(6))), "{lang:?}: {strip}");
-        assert!(strip.contains(&format!(" {messages} ")), "{lang:?}: {strip}");
+        // English fits every tab; the Korean transaction label is wider: the shown one keeps
+        // its neighbours, `…` where the first ones are left out.
+        let want = match lang {
+            Lang::En => format!("1  2  3  4  5  [6]  {chart}  {messages}"),
+            _ => format!("…  3  4  5  [6]  {chart}  {messages}"),
+        };
+        assert!(strip.contains(&want), "{lang:?}: {want} in {strip}");
         assert!(strip.contains(&tx), "{lang:?}: {strip}");
-        assert!(strip.contains('…'), "{lang:?}: some are left out: {strip}");
-        assert!(!strip.contains(&format!(" {} ", result(1))), "{lang:?}: {strip}");
         // H goes to the one before; the strip follows it.
         h.key(KeyCode::Tab); // results
         h.keys("HHH");
         let screen = h.screen(80, 24);
         let strip = screen.lines().nth(h.app.layout.strip.y as usize).unwrap().to_string();
-        assert!(strip.contains(&format!("[{}]", result(3))) && strip.contains(&format!(" {messages} ")), "{strip}");
+        assert!(strip.contains("2  [3]  4") && strip.contains(&messages), "{strip}");
         // Every shown tab is where the strip says (for the mouse).
         h.draw(80, 24);
         let hits = h.app.strip_hits();

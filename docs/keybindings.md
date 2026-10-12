@@ -252,10 +252,15 @@ The result grid. Inside `nav`.
 
 ## `inspector`
 
-The result inspector next to the grid, after a click on it. Inside `nav`.
+The result inspector next to the grid, after a click on it: `j`/`k` move between the columns and the grid's cell follows (on the Row tab, a click on a column moves it there too), `Enter` shows the value whole. Inside `nav`.
 
 | Keys | Action | Description | R |
 |---|---|---|---|
+| `j` | `results.detail_next` | Result detail → next column | ✓ |
+| `Down` | `results.detail_next` | Result detail → next column | ✓ |
+| `k` | `results.detail_prev` | Result detail → previous column | ✓ |
+| `Up` | `results.detail_prev` | Result detail → previous column | ✓ |
+| `Enter` | `grid.view_cell` | Results: view cell value |  |
 | `Tab` | `results.detail_tab` | Result detail → Cell / Row |  |
 | `Shift+Tab` | `results.detail_tab` | Result detail → Cell / Row |  |
 | `I` | `results.detail_tab` | Result detail → Cell / Row |  |
@@ -312,7 +317,7 @@ The Plan tab of the results pane (an `EXPLAIN (FORMAT JSON)` result): `j`/`k` se
 
 ## `chart`
 
-The Chart tab of the results pane (`c` in the grid): the fetched rows of the shown result as bars or lines, nothing run again. The arrows and `h`/`j`/`k`/`l` move the cursor along the bars or points (the other direction picks a series), `Enter` shows the point's row in the grid, `v`/`V` and the digits pick the kind, `x`/`s`/`b` choose the X column, the values and a column that splits them into series, `S` a logarithmic scale, `y`/`Y` copy the numbers as TSV or the drawing as text; a click picks a point, a kind or a column choice. Inside `nav`.
+The Chart tab of the results pane (`c` in the grid, or its tab in the strip; it is drawn only once viewed): the fetched rows of the shown result as bars or lines, nothing run again. The arrows and `h`/`j`/`k`/`l` move the cursor along the bars or points (the other direction picks a series), `Enter` shows the point's row in the grid, `v`/`V` and the digits pick the kind, `x`/`s`/`b` choose the X column, the values and a column that splits them into series, `S` a logarithmic scale, `y`/`Y` copy the numbers as TSV or the drawing as text; a click picks a point, a kind or a column choice. Inside `nav`.
 
 | Keys | Action | Description | R |
 |---|---|---|---|

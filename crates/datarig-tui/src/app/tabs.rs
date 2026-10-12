@@ -603,7 +603,10 @@ impl Tab {
     pub fn run_ended(&mut self, failed: bool) {
         self.exec.replace_pending = false;
         if self.is_table() {
-            self.exec.view = ResultView::Rows;
+            // Its rows or its error; the Chart tab shown before the run draws the new rows.
+            if failed || self.exec.view != ResultView::Chart {
+                self.exec.view = ResultView::Rows;
+            }
             return;
         }
         let answered = self.exec.kept_log.is_none()
@@ -612,8 +615,8 @@ impl Tab {
         let last = self.result_tabs().last().copied().filter(|_| self.exec.kept_log.is_none());
         match last {
             _ if failed => self.exec.view = ResultView::Messages,
-            // A chart shown before the run shows the run's rows.
-            _ if answered && self.exec.view == ResultView::Chart && self.exec.chart.is_some() => {}
+            // The Chart tab shown before the run shows the run's rows.
+            _ if answered && self.exec.view == ResultView::Chart => {}
             _ if answered => self.exec.view = ResultView::Rows,
             Some(i) => self.show_result(i),
             None => self.exec.view = ResultView::Messages,

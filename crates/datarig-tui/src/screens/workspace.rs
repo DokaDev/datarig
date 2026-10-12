@@ -140,6 +140,15 @@ pub(crate) fn draw_workspace(f: &mut Frame, app: &mut App) -> Option<(u16, u16)>
         Some(PointerOn::PageNext) => f.buffer_mut().set_style(app.layout.page_next, crate::widgets::pointer_style()),
         _ => {}
     }
+    // The inspector's entries take a click as a dialog's rows do: once on screen, uncovered.
+    // Not drawn (the Cell tab, the inspector hidden or not next to rows) or under a dialog: none
+    // stays lit.
+    let entries = app.layout.detail_list.height > 0 && !app.modal_open();
+    let now = app.now();
+    app.detail_press.drawn(entries, now);
+    if !entries && matches!(app.pointer_on, Some(PointerOn::Detail(_))) {
+        app.pointer_on = None;
+    }
 
     draw_status(app, rows[1], f.buffer_mut());
 
@@ -285,7 +294,7 @@ fn draw_results_pane(app: &mut App, area: Rect, buf: &mut Buffer) {
     let rb = panel_with_status(&title, status, app.focus == Focus::Results, grid_area.width);
     let rinner = rb.inner(grid_area);
     rb.render(grid_area, buf);
-    // A query tab that ran: the result tabs of its last run and its Messages on the first line.
+    // The result tabs of the last run, the Chart, a Plan and the Messages on the first line.
     let strip = app.strip_shown() && rinner.height > 2;
     let old_strip = std::mem::take(&mut app.strip_hits);
     let content = if strip {
@@ -301,7 +310,7 @@ fn draw_results_pane(app: &mut App, area: Rect, buf: &mut Buffer) {
         app.layout.strip = Rect::default();
         rinner
     };
-    if app.tab().exec.view == ResultView::Messages && !app.tab().is_table() {
+    if app.tab().exec.view == ResultView::Messages {
         draw_messages(app, content, buf);
     } else if app.plan_shown() {
         crate::widgets::plan::draw_plan(app, content, buf);
@@ -315,14 +324,17 @@ fn draw_results_pane(app: &mut App, area: Rect, buf: &mut Buffer) {
     }
 }
 
-/// The result tab strip: `[Result 1]  Result 3  Messages`, the shown one in
-/// brackets, `earlier run` when a later run returned no rows, and on the right what the shown
-/// rows' transaction is (uncommitted, ended, rolled back). The transaction comes first. When the
-/// tabs do not all fit, the shown one and Messages always stay, with as many of the others
-/// around the shown one as fit, `…` where some are left out (`H`/`L` reach them); only when
-/// even those two do not fit do the labels shorten (`[1]  Msgs`), and then the shown one stays
-/// alone; `earlier run` goes first.
-/// Records where each tab is.
+/// The result tab strip: `[Result 1]  Result 3  Plan  Chart  Messages`, the shown one in
+/// brackets, two blanks between any two. Without a row result there is one `Result` tab (for
+/// what the run said, or what is coming). Then `earlier run` when a later run returned no rows,
+/// the keys that move between the tabs, and on the right what the shown rows' transaction is
+/// (uncommitted, ended, rolled back).
+///
+/// Room goes first to the transaction, then to the tabs: the keys show only when every whole
+/// label fits with them. When the whole labels do not fit, every tab shows with a short label
+/// (`[1]  3  Plan  Chart  Msgs`); when even those do not fit, the shown one, Messages and as many
+/// of the shown one's neighbours as fit, `…` where some are left out (`H`/`L` reach them); at
+/// last the shown one alone. `earlier run` goes first. Records where each tab is.
 fn draw_strip(app: &mut App, area: Rect, buf: &mut Buffer) {
     let th = theme::cur();
     use crate::widgets::grid::TxMark;
@@ -348,7 +360,6 @@ fn draw_strip(app: &mut App, area: Rect, buf: &mut Buffer) {
     });
     let tabs = t.result_tabs();
     let plan = t.exec.plan.is_some();
-    let chart = t.exec.chart.is_some() && matches!(t.results, Results::Rows(_));
     type Item = ((Option<usize>, ResultView), String);
     let labels = |short: bool| -> Vec<Item> {
         let mut v: Vec<Item> = tabs
@@ -361,12 +372,14 @@ fn draw_strip(app: &mut App, area: Rect, buf: &mut Buffer) {
                 )
             })
             .collect();
-        if chart {
-            v.push(((None, ResultView::Chart), app.i18n.label(Label::ResultsTabChart).to_string()));
+        if v.is_empty() {
+            v.push(((None, ResultView::Rows), app.i18n.label(Label::ResultsTabRows).to_string()));
         }
         if plan {
             v.push(((None, ResultView::Plan), app.i18n.label(Label::ResultsTabPlan).to_string()));
         }
+        // Named only: the chart is made when its tab is viewed.
+        v.push(((None, ResultView::Chart), app.i18n.label(Label::ResultsTabChart).to_string()));
         let m = if short { Label::ResultsTabMessagesShort } else { Label::ResultsTabMessages };
         v.push(((None, ResultView::Messages), app.i18n.label(m).to_string()));
         v
@@ -376,20 +389,26 @@ fn draw_strip(app: &mut App, area: Rect, buf: &mut Buffer) {
     let room = room.saturating_sub(tx_w);
     let full = labels(false);
     let at = full.iter().position(|(i, _)| active(*i));
-    let shown = strip_window(&full, at, room)
-        .map(|shown| (full.clone(), shown))
-        .or_else(|| {
-            let short = labels(true);
-            strip_window(&short, at, room).map(|shown| (short, shown))
-        })
-        // Not even that: the shown one alone, short, when it fits (the transaction comes first).
-        .unwrap_or_else(|| {
-            let short = labels(true);
+    // Each label's columns: the shown one has its brackets.
+    let widths = |items: &[Item]| -> Vec<usize> {
+        items.iter().enumerate().map(|(k, (_, l))| crate::text::width(l) + if Some(k) == at { 2 } else { 0 }).collect()
+    };
+    let every = |items: &[Item]| strip_cost(&widths(items), &(0..items.len()).collect::<Vec<_>>()) <= room;
+    let short = labels(true);
+    let (items, shown, whole) = if every(&full) {
+        let all = (0..full.len()).collect();
+        (full, all, true)
+    } else if every(&short) {
+        let all = (0..short.len()).collect();
+        (short, all, false)
+    } else {
+        let shown = strip_window(&widths(&short), at, room).unwrap_or_else(|| {
+            // Not even that: the shown one alone, when it fits (the transaction comes first).
             let k = at.unwrap_or(short.len() - 1);
-            let alone = if crate::text::width(&short[k].1) + 2 <= room { vec![k] } else { Vec::new() };
-            (short, alone)
+            if widths(&short)[k] <= room { vec![k] } else { Vec::new() }
         });
-    let (items, shown) = shown;
+        (short, shown, false)
+    };
     let earlier = t.exec.kept_log.is_some().then(|| format!("· {}", app.i18n.label(Label::ResultsTabEarlier)));
     let mut hits = Vec::new();
     let mut x = area.x + 1;
@@ -399,12 +418,12 @@ fn draw_strip(app: &mut App, area: Rect, buf: &mut Buffer) {
     for k in shown {
         if k > next && x < end {
             put(buf, x, area.y, "…", (end - x) as usize, dim);
-            x += 2;
+            x += 3;
         }
         next = k + 1;
         let (key, label) = &items[k];
         let on = active(*key);
-        let text = if on { format!("[{label}]") } else { format!(" {label} ") };
+        let text = if on { format!("[{label}]") } else { label.clone() };
         let style = if on {
             Style::new().fg(th.accent).bg(bg).add_modifier(Modifier::BOLD)
         } else {
@@ -418,14 +437,14 @@ fn draw_strip(app: &mut App, area: Rect, buf: &mut Buffer) {
         }
         let w = put(buf, x, area.y, &text, (end - x) as usize, style);
         hits.push((x, x + w, key.0, key.1));
-        x += w + 1;
+        x += w + 2;
     }
     if let Some(e) = earlier.filter(|e| x as usize + crate::text::width(e) <= end as usize) {
         x += put(buf, x, area.y, &e, (end - x) as usize, dim) + 1;
     }
     // The keys that move between the result tabs, at the right end when they fit after the
-    // tabs (the keys bound in the results pane, remapping included).
-    if let Some(keys) = strip_keys(app).filter(|k| x as usize + crate::text::width(k) + 1 < end as usize) {
+    // whole labels (the keys bound in the results pane, remapping included).
+    if let Some(keys) = strip_keys(app).filter(|k| whole && x as usize + crate::text::width(k) + 1 < end as usize) {
         let w = crate::text::width(&keys) as u16;
         put(buf, end - w - 1, area.y, &keys, w as usize, dim);
     }
@@ -438,12 +457,11 @@ fn draw_strip(app: &mut App, area: Rect, buf: &mut Buffer) {
     app.strip_hits = hits;
 }
 
-/// The keys of the previous and next result tab in the results pane (`H/L`), when there are
-/// tabs to move between, the pane has the focus and both are bound there.
+/// The keys of the previous and next result tab in the results pane (`H/L`), when the pane has
+/// the focus and both are bound there.
 fn strip_keys(app: &App) -> Option<String> {
-    let t = app.tab();
     // Elsewhere (the editor) these keys are the focused pane's own.
-    if t.result_tabs().is_empty() || app.focus != Focus::Results {
+    if app.focus != Focus::Results {
         return None;
     }
     let ctx = if app.plan_shown() {
@@ -459,27 +477,22 @@ fn strip_keys(app: &App) -> Option<String> {
     Some(format!("{}/{}", key(false)?, key(true)?))
 }
 
-/// Which of the strip's `items` (Messages last) to draw in `room` columns: every one when they
-/// fit; else the shown one (`at`) and Messages, and the others nearest the shown one while they
-/// fit, with room for a `…` where some are left out. `None` when the shown one and Messages do
-/// not fit.
-fn strip_window<K>(items: &[(K, String)], at: Option<usize>, room: usize) -> Option<Vec<usize>> {
-    let w = |k: usize| crate::text::width(&items[k].1) + 3;
-    let last = items.len().checked_sub(1)?;
-    let cost = |shown: &[usize]| {
-        let gaps = shown.iter().enumerate().filter(|(n, k)| **k > if *n == 0 { 0 } else { shown[n - 1] + 1 }).count();
-        shown.iter().map(|&k| w(k)).sum::<usize>() + 2 * gaps
-    };
-    let all: Vec<usize> = (0..items.len()).collect();
-    if cost(&all) <= room {
-        return Some(all);
-    }
-    // The last one drawn needs no blank after it.
-    let room = room + 1;
+/// The columns the strip's labels `shown` (of the label widths `widths`, in order) take:
+/// two blanks between two of them, `…` and two blanks where some are left out before one.
+fn strip_cost(widths: &[usize], shown: &[usize]) -> usize {
+    let gaps = shown.iter().enumerate().filter(|(n, k)| **k > if *n == 0 { 0 } else { shown[n - 1] + 1 }).count();
+    shown.iter().map(|&k| widths[k]).sum::<usize>() + 2 * shown.len().saturating_sub(1) + 3 * gaps
+}
+
+/// Which of the strip's labels (their widths `widths`, Messages last) to draw in `room` columns
+/// when they do not all fit: the shown one (`at`) and Messages, and the others nearest the shown
+/// one while they fit. `None` when the shown one and Messages do not fit.
+fn strip_window(widths: &[usize], at: Option<usize>, room: usize) -> Option<Vec<usize>> {
+    let last = widths.len().checked_sub(1)?;
     let at = at.unwrap_or(0);
     let mut shown = vec![at, last];
     shown.dedup();
-    if cost(&shown) > room {
+    if strip_cost(widths, &shown) > room {
         return None;
     }
     // Nearest the shown one first, alternating left and right; a side stops at the first tab
@@ -491,7 +504,7 @@ fn strip_window<K>(items: &[(K, String)], at: Option<usize>, room: usize) -> Opt
             let mut more = shown.clone();
             more.push(k);
             more.sort_unstable();
-            if cost(&more) > room {
+            if strip_cost(widths, &more) > room {
                 *side = None;
                 continue;
             }
@@ -678,7 +691,7 @@ fn results_title(app: &App) -> (datarig_core::i18n::Localized, Option<(Vec<Strin
         return (app.i18n.msg(&Msg::PaneChartTitle { kind }), None);
     }
     let Results::Rows(rs) = &t.results else { return (app.i18n.label(Label::PaneResultsTitle), None) };
-    if t.exec.view == ResultView::Messages && !t.is_table() {
+    if t.exec.view == ResultView::Messages {
         return (app.i18n.label(Label::PaneResultsTitle), None);
     }
     let size = app.page_size.max(1);
@@ -937,8 +950,11 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
     let t = app.tabs.active_mut();
     match &mut t.results {
         Results::Empty => {
-            // A table tab not run yet (restored): nothing was sent; the run key loads it.
-            let t = if t.is_table() {
+            // A run on its way says so; a table tab not run yet (restored): nothing was sent;
+            // the run key loads it.
+            let t = if t.exec.running.is_some() {
+                app.i18n.label(Label::ResultsRunning)
+            } else if t.is_table() {
                 app.i18n.msg(&Msg::TableNotLoaded { run: app.run_key().into() })
             } else {
                 app.i18n.msg(&Msg::ResultsEmpty { run: app.run_key().into() })

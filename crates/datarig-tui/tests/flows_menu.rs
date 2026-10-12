@@ -445,7 +445,7 @@ fn the_messages_view_has_no_cell_items() {
     let mut h = with_edge_results(Lang::En);
     h.key(KeyCode::Tab);
     h.keys("jl");
-    h.keys("L");
+    h.keys("H");
     assert_eq!(h.app.tab().exec.view, datarig_tui::app::tabs::ResultView::Messages);
     h.draw(120, 34);
     h.keys("  ");

@@ -68,8 +68,10 @@ fn the_strip_shows_the_keys_that_move_between_its_tabs() {
     insta::assert_snapshot!("strip_keys_en_120x30", h.draw(120, 30).backend());
     // They work as they say, and the Plan tab's are the same keys.
     h.keys("L");
+    assert_eq!(h.app.tab().exec.view, ResultView::Chart);
+    h.keys("L");
     assert_eq!(h.app.tab().exec.view, ResultView::Messages);
-    h.keys("H");
+    h.keys("HH");
     assert_eq!(h.app.tab().exec.shown, Some(1));
 }
 
@@ -92,14 +94,14 @@ fn the_keys_go_first_when_the_strip_is_narrow() {
             }
             None => seen.1 = true,
         }
-        assert!(line.contains("[Result 2]"), "the shown tab stays at {w}: {line}");
+        assert!(line.contains("[Result 2]") || line.contains("[2]"), "the shown tab stays at {w}: {line}");
     }
     assert_eq!(seen, (true, true), "shown when wide, left out when narrow");
 }
 
 #[test]
-fn a_single_result_has_no_tabs_to_move_between() {
-    // A run without rows next to nothing: the strip, if any, has no keys to show.
+fn a_run_without_rows_still_has_tabs_to_move_between() {
+    // A run without rows: its one result tab, the Chart and the Messages shown, and the keys.
     let mut h = Harness::connected(Lang::En);
     h.app.tab_mut().editor = Editor::new("SET a = 1;\nSET b = 2;");
     h.sent();
@@ -117,8 +119,8 @@ fn a_single_result_has_no_tabs_to_move_between() {
     // The results pane has the focus, where the keys would show.
     h.app.focus = Focus::Results;
     let screen = h.screen(120, 30);
-    assert!(h.app.layout.strip.height == 1, "the strip is shown (a run of several):\n{screen}");
-    assert!(!screen.contains("H/L"), "{screen}");
+    let line = screen.lines().nth(h.app.layout.strip.y as usize).unwrap_or_default();
+    assert!(line.contains("Result  Chart  [Messages]") && line.contains("H/L"), "{screen}");
 }
 
 #[test]

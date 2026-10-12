@@ -187,7 +187,7 @@ fn the_hint_and_the_action_are_only_for_a_text_plan() {
     said(&mut h, Label::PlanAsPlanUnreadable);
     // The Messages of a text plan: no hint, no action.
     let mut h = text_plan("EXPLAIN SELECT 1;");
-    h.key(KeyCode::Char('L'));
+    h.key(KeyCode::Char('H'));
     assert_eq!(h.app.tab().exec.view, ResultView::Messages);
     assert!(!h.screen(W, H).contains("view as plan"));
 }
@@ -432,7 +432,7 @@ fn a_result_with_statements_run_since_or_beside_it_is_refused() {
 fn an_unavailable_view_as_plan_says_why() {
     // The text plan is not the shown view: the keys that show it are named.
     let mut h = text_plan("EXPLAIN SELECT * FROM t;");
-    h.key(KeyCode::Char('L'));
+    h.key(KeyCode::Char('H'));
     assert_eq!(h.app.tab().exec.view, ResultView::Messages);
     h.keys(" ep");
     assert!(runs(&mut h).is_empty());

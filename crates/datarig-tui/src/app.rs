@@ -409,6 +409,9 @@ pub struct Layout {
     pub results: Rect,
     /// The inspector panel next to the results (empty when it is not shown).
     pub detail: Rect,
+    /// The entries of the inspector's Row tab, one line each from its first one on screen
+    /// (empty when they are not drawn).
+    pub detail_list: Rect,
     /// The editor's text (inside its border, below a banner), as drawn last.
     pub editor_text: Rect,
     /// Where the editor's cursor was drawn last (the action menu opens there).
@@ -467,11 +470,13 @@ impl DetailTab {
 pub struct Detail {
     pub visible: bool,
     pub tab: DetailTab,
+    /// The Row tab's first column on screen: it scrolls only to keep the grid's column in view.
+    pub first: usize,
 }
 
 impl Default for Detail {
     fn default() -> Self {
-        Self { visible: true, tab: DetailTab::Cell }
+        Self { visible: true, tab: DetailTab::Cell, first: 0 }
     }
 }
 
@@ -706,6 +711,12 @@ pub struct App {
     pub(crate) tab_hits: Vec<(u16, u16, crate::widgets::tabbar::TabHit)>,
     /// The small clickable target under the pointer (drawn highlighted).
     pub pointer_on: Option<hover::PointerOn>,
+    /// The column of the inspector's Row tab a press armed, with the result it is of (it is
+    /// picked on the release, over the same column of the same result).
+    pub(crate) detail_press: overlay::Press<(u64, usize)>,
+    /// The column the last release over the inspector's Row tab picked (a second click on it
+    /// shows its value whole); none once a press there armed nothing.
+    detail_picked: Option<(u64, usize)>,
     /// The kind of the top dialog the last frame saw (`App::note_top`).
     last_top: Option<OverlayKind>,
 }
@@ -940,6 +951,8 @@ impl App {
             strip_hits: Vec::new(),
             tab_hits: Vec::new(),
             pointer_on: None,
+            detail_press: overlay::Press::default(),
+            detail_picked: None,
             last_top: None,
             pending_context: None,
             pending_use: None,

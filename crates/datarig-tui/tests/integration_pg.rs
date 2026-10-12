@@ -698,7 +698,7 @@ async fn key_marks_of_a_join_and_sql_insert_copies_that_run_again() {
     app.detail.visible = false;
     let mut t = Terminal::new(TestBackend::new(200, 40)).unwrap();
     t.draw(|f| datarig_tui::screens::draw(f, &mut app)).unwrap();
-    let y = app.layout.results.y + 1;
+    let y = app.tab().grid.header_y;
     let header: String = (0..200).map(|x| t.backend().buffer()[(x, y)].symbol().to_string()).collect();
     for want in
         ["PK id", "FK user_id", "UQ email", "│ name", "PK FK order_id", "PK line_no", "FK product_id", "│ doubled"]

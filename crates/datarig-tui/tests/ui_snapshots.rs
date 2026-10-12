@@ -216,7 +216,7 @@ fn grid_edge_rows_align_and_truncate() {
     insta::assert_snapshot!(t.backend());
     let buf = t.backend().buffer();
     let res = h.app.layout.results;
-    let (header_y, first_row) = (res.y + 1, res.y + 3);
+    let (header_y, first_row) = (h.app.tab().grid.header_y, h.app.tab().grid.data_y);
     let sep_cols = |y: u16| -> Vec<u16> {
         (res.x + 1..res.x + res.width - 1).filter(|&x| buf[(x, y)].symbol() == "│").collect()
     };
@@ -1607,7 +1607,7 @@ fn grid_key_marks_en_ko_icons_on_off() {
     let mut h = join_result(Lang::En, false);
     h.app.detail.visible = false;
     let t = h.draw(160, 45);
-    let header = row_text(t.backend().buffer(), h.app.layout.results.y + 1);
+    let header = row_text(t.backend().buffer(), h.app.tab().grid.header_y);
     for want in
         ["PK id", "FK user_id", "UQ email", "│ name", "PK FK order_id", "PK line_no", "FK product_id", "│ doubled"]
     {
@@ -1615,7 +1615,7 @@ fn grid_key_marks_en_ko_icons_on_off() {
     }
     // The marks are drawn in their own colors.
     let buf = t.backend().buffer();
-    let y = h.app.layout.results.y + 1;
+    let y = h.app.tab().grid.header_y;
     let x = (0..160).find(|&x| buf[(x, y)].symbol() == "P").unwrap();
     assert_eq!(buf[(x, y)].fg, theme::DARK.key_pk);
     let x = (0..160).find(|&x| buf[(x, y)].symbol() == "U").unwrap();
@@ -1649,7 +1649,7 @@ fn grid_copy_menu_and_range_en_ko_sizes() {
             let mut h = with_edge_results(lang);
             h.key(KeyCode::Tab);
             h.draw(w, hh);
-            let (x, y) = (h.app.tabs.active().grid.hit_cols[1].0 + 2, h.app.layout.results.y + 4);
+            let (x, y) = (h.app.tabs.active().grid.hit_cols[1].0 + 2, h.app.tabs.active().grid.data_y + 1);
             h.app.handle_event(Event::Mouse(MouseEvent {
                 kind: MouseEventKind::Down(MouseButton::Right),
                 column: x,
@@ -1666,7 +1666,7 @@ fn grid_copy_menu_and_range_en_ko_sizes() {
     insta::assert_snapshot!("grid_range_en_160x45", t.backend());
     let buf = t.backend().buffer();
     let x = h.app.tabs.active().grid.hit_cols[1].0 + 2;
-    let y = h.app.layout.results.y + 1 + 2 + 1;
+    let y = h.app.tabs.active().grid.data_y + 1;
     assert_eq!(buf[(x, y)].bg, theme::DARK.range.bg.unwrap(), "the range's first cell");
 }
 

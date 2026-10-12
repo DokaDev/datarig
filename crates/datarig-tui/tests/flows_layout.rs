@@ -172,7 +172,7 @@ fn a_small_terminal_keeps_both_panes_usable() {
     h.draw(80, 24);
     assert!(h.app.layout.results.height >= datarig_tui::app::pane::MIN_RESULTS_ROWS);
     // What the smallest pane shows, in the catalog's Korean: every line whole, the results
-    // title, the column and the first rows.
+    // title, the result tabs, the column and the first rows.
     let i18n = datarig_core::i18n::I18n::new(Lang::Ko);
     let screen = h.screen(80, 24);
     let lines: Vec<&str> = screen.lines().collect();
@@ -183,7 +183,9 @@ fn a_small_terminal_keeps_both_panes_usable() {
     let grid =
         &lines[h.app.layout.results.y as usize + 1..(h.app.layout.results.y + h.app.layout.results.height) as usize];
     assert!(grid.iter().any(|l| l.contains("│ id ")), "{screen}");
-    for row in ["1 │    0", "2 │    1", "3 │    2"] {
+    let tabs = i18n.label(datarig_core::i18n::Label::ResultsTabChart).to_string();
+    assert!(grid.iter().any(|l| l.contains(&tabs)), "{screen}");
+    for row in ["1 │    0", "2 │    1"] {
         assert!(grid.iter().any(|l| l.contains(row)), "{row}: {screen}");
     }
     let console = i18n.msg(&datarig_core::i18n::Msg::TabConsole { n: "1".into() }).to_string();

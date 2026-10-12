@@ -1,6 +1,6 @@
 //! The pointer over the workspace's small clickable targets (no dialog open): the document tab
-//! bar's tabs, their `×` and scroll marks, the result tab strip, the paging arrows and the Plan
-//! tab's view names. The one
+//! bar's tabs, their `×` and scroll marks, the result tab strip, the paging arrows, the Plan
+//! tab's view names and the entries of the inspector's Row tab. The one
 //! under the pointer is drawn highlighted; it is found in what the last frame drew (the same
 //! hits a click uses), and a frame that lays those targets out differently drops it, so no
 //! highlight is left on something else.
@@ -23,6 +23,8 @@ pub enum PointerOn {
     PlanView(super::plan::PlanView),
     /// A kind or a column choice on the Chart tab's first lines.
     Chart(super::chart::ChartHit),
+    /// A column of the inspector's Row tab (not the selected one).
+    Detail(usize),
 }
 
 impl App {
@@ -46,8 +48,12 @@ impl App {
     pub(super) fn workspace_hover(&mut self, m: MouseEvent) -> bool {
         let (x, l) = (m.column, self.layout);
         let at = Position::new(m.column, m.row);
+        // A move has no button held: a press it armed lost its release.
+        self.detail_press.disarm();
         let on = if l.too_small {
             None
+        } else if !self.tabs.is_empty() && l.detail_list.contains(at) {
+            self.detail_entry_at(m.column, m.row).filter(|c| *c != self.tab().grid.col).map(PointerOn::Detail)
         } else if l.tab_bar.contains(at) {
             self.tab_hits.iter().find(|(a, b, _)| x >= *a && x < *b).map(|h| PointerOn::Tab(h.2))
         } else if l.strip.contains(at) {
@@ -66,5 +72,20 @@ impl App {
             None
         };
         std::mem::replace(&mut self.pointer_on, on) != on
+    }
+
+    /// The column of the inspector's Row tab drawn at (x, y), if one is there.
+    pub(super) fn detail_entry_at(&self, x: u16, y: u16) -> Option<usize> {
+        let l = self.layout.detail_list;
+        let Results::Rows(rs) = &self.tab().results else { return None };
+        let at = l.contains(Position::new(x, y)).then(|| self.detail.first + usize::from(y - l.y));
+        at.filter(|c| *c < rs.columns.len())
+    }
+
+    /// The column of the inspector's Row tab drawn at (x, y) with the result it is of: what a
+    /// press there arms.
+    pub(super) fn detail_hit(&self, x: u16, y: u16) -> Option<(u64, usize)> {
+        let Results::Rows(rs) = &self.tab().results else { return None };
+        self.detail_entry_at(x, y).map(|c| (rs.id, c))
     }
 }

@@ -34,12 +34,14 @@ impl App {
             return;
         }
         // A press starts afresh, whatever takes it (a dialog, the menu, the pane): a drag whose
-        // release never came (let go outside the window) is over.
+        // release never came (let go outside the window) is over, and so is an inspector entry
+        // armed by a press whose release never came.
         if let Event::Mouse(m) = ev
             && m.kind == MouseEventKind::Down(MouseButton::Left)
         {
             self.drag = None;
             self.drag_at = None;
+            self.detail_press.disarm();
         }
         match ev {
             Event::Key(k) => {
@@ -622,8 +624,33 @@ impl App {
             MouseEventKind::Up(MouseButton::Left) => {
                 self.drag = None;
                 self.drag_at = None;
+                self.detail_release(x, y);
             }
             _ => {}
+        }
+    }
+
+    /// The left button was released at (x, y): over the column of the inspector's Row tab it was
+    /// pressed on (of the result shown then and now), the grid's cell moves to that column (the
+    /// grid scrolls to it); a second click there, after a first one that picked it, shows its
+    /// value whole, as a second click on a cell of the grid does.
+    fn detail_release(&mut self, x: u16, y: u16) {
+        let hit = if self.tabs.is_empty() { None } else { self.detail_hit(x, y) };
+        let now = self.now();
+        let Some(picked) = self.detail_press.press(MouseEventKind::Up(MouseButton::Left), hit, now) else {
+            // Nothing picked (released elsewhere): the next click there is a first one.
+            self.detail_picked = None;
+            return;
+        };
+        let g = &mut self.tabs.active_mut().grid;
+        g.col = picked.1;
+        g.anchor = None;
+        g.detached = false;
+        let again = self.clicks == 2 && self.detail_picked == Some(picked);
+        self.detail_picked = Some(picked);
+        if again {
+            self.last_click = None;
+            self.grid_action(GridAction::ViewCell);
         }
     }
 
@@ -760,8 +787,14 @@ impl App {
                 self.drag = Some(Drag::Grid { anchor: (t.grid.row, t.grid.col), shape: Shape::Cells });
             }
         } else if inside(l.detail) {
-            // The inspector takes the focus; its title's tab names switch tabs.
+            // The inspector takes the focus; its title's tab names switch tabs; a column of its
+            // Row tab is armed (picked on the release over it).
             self.focus = Focus::Inspector;
+            let (hit, now) = (self.detail_hit(x, y), self.now());
+            self.detail_press.press(m.kind, hit, now);
+            if self.detail_press.armed.is_none() {
+                self.detail_picked = None;
+            }
             if y == l.detail.y {
                 let rel = x.saturating_sub(l.detail.x);
                 let tabs = crate::widgets::inspector::tab_labels(&self.i18n, self.detail.tab);

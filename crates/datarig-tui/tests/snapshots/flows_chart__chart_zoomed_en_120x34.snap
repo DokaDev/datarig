@@ -4,7 +4,7 @@ expression: "h.draw(120, 34).backend()"
 ---
 " 1 console 1 ×                                                                                                          "
 "╭ Chart · Bars ────────────────────────────────────────────────────────────────────────────────────────────────────────╮"
-"│  Result 1  [Chart]  Messages                                                                                     H/L │"
+"│ Result 1  [Chart]  Messages                                                                                      H/L │"
 "│ [Bars]  Horizontal bars   Line                                            first 30 fetched rows · more on the server │"
 "│ X day · Y orders, refunds · by none · linear scale                                                                   │"
 "│ 100┤                                                                   ▂                                         █   │"
