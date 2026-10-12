@@ -629,13 +629,10 @@ impl Killer {
             // Not sent: the statement it was for ended.
             Ok(Some(None)) => return,
             Ok(Some(Some(kill))) => kill,
-            Ok(None) | Err(_) => {
-                answered.lock().ok().and_then(|a| *a).unwrap_or(Kill::Failed(if written.load(Ordering::SeqCst) {
-                    KillFailure::NotAnswered
-                } else {
-                    KillFailure::NotSent
-                }))
-            }
+            // A kill written and not answered may still be carried out, whatever an earlier try
+            // got: said so, not the earlier answer.
+            Err(_) if written.load(Ordering::SeqCst) => Kill::Failed(KillFailure::NotAnswered),
+            Ok(None) | Err(_) => answered.lock().ok().and_then(|a| *a).unwrap_or(Kill::Failed(KillFailure::NotSent)),
         };
         if !only_taken || matches!(kill, Kill::Taken(_)) {
             if kill == Kill::Failed(KillFailure::NotSent)

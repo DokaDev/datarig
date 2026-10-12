@@ -738,8 +738,8 @@ fn a_statement_that_answered_while_its_stop_went_unanswered_keeps_its_outcome() 
     assert!(
         status.contains(
             "This tab's connection was lost: a request to stop the statement got no answer from the server within \
-             10.0s and could still stop whatever ran next: datarig closed the connection once the statement had \
-             answered. An open transaction is rolled back once the server ends the session"
+             10.0s and could still stop whatever would run next: datarig closed the connection once the statement \
+             had answered. An open transaction is rolled back once the server ends the session"
         ),
         "{status}"
     );

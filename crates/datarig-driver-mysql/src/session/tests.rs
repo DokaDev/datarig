@@ -696,7 +696,7 @@ async fn a_statement_answered_while_its_kill_hangs_is_answered_then_lost() {
         }
     });
     let (client, _session_server) = tokio::io::duplex(1 << 16);
-    let (wire, mut _stream) = crate::wire::Wire::new(Box::new(client));
+    let (wire, mut stream) = crate::wire::Wire::new(Box::new(client));
     let (_commands, rx) = tokio::sync::mpsc::unbounded_channel();
     let (events, _events) = tokio::sync::mpsc::unbounded_channel();
     let mut link = Link::new(rx, wire);
@@ -710,7 +710,7 @@ async fn a_statement_answered_while_its_kill_hangs_is_answered_then_lost() {
     assert!(matches!(answered, Ok(42)), "the statement's own answer");
     let next = tokio::time::timeout(std::time::Duration::from_secs(1), link.next()).await.expect("at once");
     assert!(matches!(next, Next::Lost(DbError::CancelNotTaken(CancelFailure::StopPending(KILL_TIMEOUT)))));
-    assert!(_stream.write_all(b"next").await.is_err(), "the connection is cut");
+    assert!(stream.write_all(b"next").await.is_err(), "the connection is cut");
     kill_server.abort();
 }
 
@@ -770,7 +770,7 @@ fn call_answer(rows: &[&str]) -> (Vec<u8>, Vec<u8>) {
 /// its end are read and are the run's, never cut short; no
 /// request follows it on the connection, and the session is lost at its next command, saying
 /// that the kill was sent and not answered.
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_result_answered_while_its_kill_hangs_is_read_to_its_end_then_the_session_is_lost() {
     use datarig_core::driver::{DbCommand, DbEvent, PagingMode};
     // The kill's server: the kill sent again is read, and never answered.
@@ -871,4 +871,26 @@ async fn a_kill_sent_and_never_answered_is_not_taken_for_one_not_sent() {
     killer.kill_query().await;
     assert_eq!(*killer.watch().borrow(), Kill::Failed(KillFailure::NotAnswered));
     assert!(kill_server.await.unwrap().is_some_and(|p| p == b"\x03KILL QUERY 7"), "it was sent");
+}
+
+/// A kill refused at first and sent again, whose second try is never answered, is one not
+/// answered (it may still be carried out), not the refusal before it.
+#[tokio::test]
+async fn a_kill_refused_then_never_answered_is_one_not_answered() {
+    let (killer, mut server) = killer_on_a_fake_server();
+    let kill_server = tokio::spawn(async move {
+        greet(&mut server).await;
+        logged_in(&mut server).await;
+        read_packet(&mut server).await.expect("the kill");
+        let mut refused = vec![0xff];
+        refused.extend_from_slice(&KILL_DENIED.to_le_bytes());
+        refused.extend_from_slice(b"#HY000You are not owner of thread 7");
+        server.write_all(&packet(1, &refused)).await.unwrap();
+        let again = read_packet(&mut server).await;
+        tokio::time::sleep(KILL_TIMEOUT + std::time::Duration::from_secs(1)).await;
+        again
+    });
+    killer.kill_query().await;
+    assert_eq!(*killer.watch().borrow(), Kill::Failed(KillFailure::NotAnswered));
+    assert!(kill_server.await.unwrap().is_some_and(|p| p == b"\x03KILL QUERY 7"), "sent again");
 }
