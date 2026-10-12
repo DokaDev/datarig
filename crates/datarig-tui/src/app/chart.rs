@@ -331,6 +331,9 @@ impl App {
             _ => {}
         }
         self.chart_sync();
+        if !self.chart_live() {
+            return;
+        }
         let t = self.tab_mut();
         let Some(c) = t.exec.chart.as_mut() else { return };
         // Choosing a kind or the scale shows the chart.
@@ -421,6 +424,9 @@ impl App {
         type Item = (Option<String>, String);
         use super::chooser::{Chooser, ChooserPurpose};
         self.chart_sync();
+        if !self.chart_live() {
+            return;
+        }
         let row_number = self.i18n.label(Label::ChartRowNumber).to_string();
         let none = self.i18n.label(Label::ChartNone).to_string();
         let t = self.tab();
@@ -591,6 +597,9 @@ impl App {
 
     /// The wheel over the Chart tab: the cursor moves along the X axis.
     pub(super) fn chart_scroll(&mut self, d: isize) {
+        if !self.chart_live() {
+            return;
+        }
         if let Some(c) = self.tab_mut().exec.chart.as_mut() {
             c.step(d.signum());
         }

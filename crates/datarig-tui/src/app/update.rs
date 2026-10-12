@@ -638,6 +638,8 @@ impl App {
         let hit = if self.tabs.is_empty() { None } else { self.detail_hit(x, y) };
         let now = self.now();
         let Some(picked) = self.detail_press.press(MouseEventKind::Up(MouseButton::Left), hit, now) else {
+            // Nothing picked (released elsewhere): the next click there is a first one.
+            self.detail_picked = None;
             return;
         };
         let g = &mut self.tabs.active_mut().grid;

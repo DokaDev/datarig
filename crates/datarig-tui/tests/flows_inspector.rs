@@ -279,6 +279,45 @@ fn a_double_click_whose_first_press_was_ignored_only_picks() {
     assert!(h.viewer().is_none(), "picked, not opened");
 }
 
+/// A press on the picked entry released elsewhere picks nothing, and the click after it is a
+/// first click again: it picks, it does not open the viewer.
+#[test]
+fn a_press_released_elsewhere_ends_a_double_click() {
+    let mut h = wide(Lang::En, 40);
+    h.keys("I");
+    h.draw(W, H);
+    h.advance(ARM_DELAY);
+    h.draw(W, H);
+    let l = h.app.layout.detail_list;
+    click(&mut h, l.x + 3, l.y + 4);
+    assert_eq!(h.app.tab().grid.col, 4);
+    // Pressed on it (elsewhere on its line), dragged off and released outside the entries.
+    h.mouse(MouseEventKind::Down(MouseButton::Left), l.x + 6, l.y + 4);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), l.x + 6, l.y + l.height + 2);
+    // A click right after on the same place: a pick, no viewer.
+    click(&mut h, l.x + 6, l.y + 4);
+    assert_eq!(h.app.tab().grid.col, 4);
+    assert!(h.viewer().is_none(), "the first click of a pair");
+}
+
+/// A dialog over the inspector drops the lit entry: none is lit once it closes.
+#[test]
+fn a_dialog_over_the_inspector_drops_the_lit_entry() {
+    let mut h = wide(Lang::En, 40);
+    h.keys("I");
+    h.draw(W, H);
+    let l = h.app.layout.detail_list;
+    h.mouse(MouseEventKind::Moved, l.x + 3, l.y + 2);
+    assert_eq!(h.app.pointer_on, Some(PointerOn::Detail(2)));
+    h.keys(":");
+    assert!(h.app.modal_open());
+    h.draw(W, H);
+    h.key(KeyCode::Esc);
+    assert!(!h.app.modal_open());
+    assert_eq!(entry(&mut h, 2).1, theme::DARK.bg, "not lit after the dialog");
+    assert_eq!(h.app.pointer_on, None);
+}
+
 /// The lit entry goes with the Row tab: the Cell tab, a hidden inspector or the Chart tab draw
 /// no entries, and none is lit when they come back.
 #[test]

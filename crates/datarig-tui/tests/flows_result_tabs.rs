@@ -326,6 +326,14 @@ fn a_run_of_several_statements_leaves_no_stale_chart() {
     h.keys("  ");
     assert!(!h.menu_labels().iter().any(|l| l.contains("Chart kind")), "{:?}", h.menu_labels());
     h.key(KeyCode::Esc);
+    // Nor the keys on it (a column list, the cursor, the kind) or the wheel.
+    let spec = h.app.tab().exec.chart.as_ref().map(|c| c.spec.clone());
+    h.keys("x");
+    assert_eq!(h.overlay_kind(), None, "no list of the columns before");
+    h.keys("l1");
+    h.mouse(MouseEventKind::ScrollDown, plot.x + 2, plot.y + 1);
+    assert_eq!(h.app.tab().exec.chart.as_ref().map(|c| c.cursor), cursor);
+    assert_eq!(h.app.tab().exec.chart.as_ref().map(|c| c.spec.clone()), spec);
     // The answer: the Chart tab draws it, with the columns chosen afresh.
     let columns = Some(vec![meta("k", "text", false, false), meta("n", "int4", true, false)]);
     let rows = vec![vec![s("x"), s("1")], vec![s("y"), s("2")]];

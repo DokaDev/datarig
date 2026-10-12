@@ -141,11 +141,12 @@ pub(crate) fn draw_workspace(f: &mut Frame, app: &mut App) -> Option<(u16, u16)>
         _ => {}
     }
     // The inspector's entries take a click as a dialog's rows do: once on screen, uncovered.
-    // Not drawn (the Cell tab, the inspector hidden or not next to rows): none stays lit.
+    // Not drawn (the Cell tab, the inspector hidden or not next to rows) or under a dialog: none
+    // stays lit.
     let entries = app.layout.detail_list.height > 0 && !app.modal_open();
     let now = app.now();
     app.detail_press.drawn(entries, now);
-    if app.layout.detail_list.height == 0 && matches!(app.pointer_on, Some(PointerOn::Detail(_))) {
+    if !entries && matches!(app.pointer_on, Some(PointerOn::Detail(_))) {
         app.pointer_on = None;
     }
 
