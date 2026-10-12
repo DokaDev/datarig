@@ -3,8 +3,8 @@
 //! and the schema tree of a connected profile below it. It replaces the startup picker: the
 //! profile keys (connect, new console, edit, duplicate, delete, test, disconnect) work here.
 //! Below the profiles, the "Tunnels" section lists the tunnel presets, each with the state of
-//! its shared connection and, opened, the profiles that name it; the same keys make, edit,
-//! copy, delete and test them. The "Environments" section below it lists the environments, each
+//! its shared connection and, opened, the profiles connected through it now; the same keys
+//! make, edit, copy, delete and test them. The "Environments" section below it lists the environments, each
 //! with its color, badge and rules and, opened, the profiles that name it; the same keys make,
 //! edit, copy, rename and delete them, and while there is none a row adds the presets.
 //!
@@ -14,9 +14,10 @@
 //! profile, an error line).
 
 use super::*;
-use crate::widgets::tree::{Node, Reveal};
+use crate::widgets::tree::{Node, Reveal, Tree};
 use datarig_core::driver::SessionContext;
 use datarig_core::profile::folder::FolderPath;
+use datarig_core::sql::complete::Catalog;
 
 /// What a row of the explorer shows.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -53,7 +54,7 @@ pub enum RowKind {
     Tunnel(datarig_core::profile::tunnel::TunnelId),
     /// Why the preset's last connection ended, under it.
     TunnelError(datarig_core::profile::tunnel::TunnelId),
-    /// A profile that names the preset, under it (opened).
+    /// A profile connected through the preset now, under it (opened).
     TunnelUser(datarig_core::profile::tunnel::TunnelId, ProfileId),
     /// The section is open and has no preset: how to make one.
     TunnelsEmpty,
@@ -75,9 +76,29 @@ pub enum RowKind {
 pub struct Row {
     pub kind: RowKind,
     pub depth: usize,
+    /// The `/` filter shows it open for a match below it, whatever its own expansion (which
+    /// stays as it is): its arrow is open.
+    pub opened: bool,
+    /// Its own name (or a profile's host or database) matches the `/` filter.
+    pub hit: bool,
 }
 
 impl Row {
+    /// A row of `kind` at `depth`, as its own expansion shows it.
+    pub fn new(kind: RowKind, depth: usize) -> Self {
+        Self { kind, depth, opened: false, hit: false }
+    }
+
+    /// A row the filter shows open for a match below it.
+    fn opened(kind: RowKind, depth: usize) -> Self {
+        Self { opened: true, ..Self::new(kind, depth) }
+    }
+
+    /// A row whose name matches the filter.
+    fn hit(kind: RowKind, depth: usize) -> Self {
+        Self { hit: true, ..Self::new(kind, depth) }
+    }
+
     /// The profile the row belongs to.
     pub fn profile(&self) -> Option<ProfileId> {
         match self.kind {
@@ -158,26 +179,76 @@ impl Explorer {
     }
 }
 
+/// The `/` filter's text, folded once: it matches a name that has it as a part, ignoring case
+/// (as `name.to_lowercase().contains(..)` would), without allocating for each name.
+pub struct Needle {
+    /// The trimmed text, lowercased.
+    chars: Vec<char>,
+    /// The same as bytes when it is all ASCII.
+    ascii: Option<Vec<u8>>,
+}
+
+impl Needle {
+    pub fn new(query: &str) -> Self {
+        let folded = query.trim().to_lowercase();
+        let ascii = folded.is_ascii().then(|| folded.as_bytes().to_vec());
+        Self { chars: folded.chars().collect(), ascii }
+    }
+
+    /// No text: everything passes.
+    pub fn is_empty(&self) -> bool {
+        self.chars.is_empty()
+    }
+
+    /// Whether `text` has the filter's text as a part, ignoring case.
+    pub fn matches(&self, text: &str) -> bool {
+        if self.chars.is_empty() {
+            return true;
+        }
+        if text.is_ascii() {
+            // ASCII text lowercases to ASCII: only an ASCII filter can be in it.
+            let Some(n) = &self.ascii else { return false };
+            return text
+                .as_bytes()
+                .windows(n.len())
+                .any(|w| w.iter().zip(n).all(|(a, b)| a.to_ascii_lowercase() == *b));
+        }
+        text.char_indices().any(|(at, _)| {
+            let mut folded = text[at..].chars().flat_map(char::to_lowercase);
+            self.chars.iter().all(|c| folded.next() == Some(*c))
+        })
+    }
+
+    /// Whether profile `p` passes: a part of its name, its host (`host:port`) or its database.
+    fn profile(&self, p: &ConnectionConfig) -> bool {
+        if self.matches(&p.name) {
+            return true;
+        }
+        let (addr, db, _) = p.endpoint();
+        self.matches(&addr) || self.matches(&db)
+    }
+}
+
 /// Whether profile `p` passes the filter `query`: a part of its name, its host (`host:port`)
 /// or its database, ignoring case.
 pub fn filter_matches(query: &str, p: &ConnectionConfig) -> bool {
-    let q = query.trim().to_lowercase();
-    let (addr, db, _) = p.endpoint();
-    q.is_empty() || [p.name.as_str(), &addr, &db].iter().any(|t| t.to_lowercase().contains(&q))
+    let n = Needle::new(query);
+    n.is_empty() || n.profile(p)
 }
 
 /// How many columns `catalog` has for `schema.name` (`None`: it does not have the object).
-fn column_count(catalog: &datarig_core::sql::complete::Catalog, schema: &str, name: &str) -> Option<usize> {
+fn column_count(catalog: &Catalog, schema: &str, name: &str) -> Option<usize> {
     catalog.relations.iter().find(|r| r.schema == schema && r.name == name).map(|r| r.columns.len())
 }
 
 impl App {
     /// The explorer's rows: "＋ New connection", then folders before profiles at each level,
-    /// each by name ignoring case. With a filter only matching profiles and their folders
-    /// (opened) are listed.
+    /// each by name ignoring case. With a filter, what matches it and the way to it (see
+    /// [`App::push_level`]); the sections below list their matching rows.
     pub fn explorer_rows(&self) -> Vec<Row> {
-        let mut rows = vec![Row { kind: RowKind::NewConnection, depth: 0 }];
-        self.push_level(None, 0, &mut rows);
+        let mut rows = vec![Row::new(RowKind::NewConnection, 0)];
+        let needle = Needle::new(self.explorer.filter.text());
+        self.push_level(None, 0, (!needle.is_empty()).then_some(&needle), &mut rows);
         self.push_tunnels(&mut rows);
         self.push_environments(&mut rows);
         self.push_scripts(&mut rows);
@@ -200,35 +271,35 @@ impl App {
         if filtering && !envs.iter().any(matches) {
             return;
         }
-        rows.push(Row { kind: RowKind::EnvironmentsHeader, depth: 0 });
+        rows.push(Row::new(RowKind::EnvironmentsHeader, 0));
         if !self.environments_expanded && !filtering {
             return;
         }
         if !filtering {
-            rows.push(Row { kind: RowKind::DefaultRules, depth: 1 });
+            rows.push(Row::new(RowKind::DefaultRules, 1));
             if self.default_rules_open {
                 for c in self.default_rules_users() {
-                    rows.push(Row { kind: RowKind::DefaultRulesUser(c.id), depth: 2 });
+                    rows.push(Row::new(RowKind::DefaultRulesUser(c.id), 2));
                 }
             }
         }
         if envs.is_empty() {
-            rows.push(Row { kind: RowKind::EnvironmentPresets, depth: 1 });
+            rows.push(Row::new(RowKind::EnvironmentPresets, 1));
             return;
         }
         for e in envs.iter().filter(|e| !filtering || matches(e)) {
-            rows.push(Row { kind: RowKind::Environment(e.id), depth: 1 });
+            rows.push(Row { hit: filtering, ..Row::new(RowKind::Environment(e.id), 1) });
             if self.environments_open.contains(&e.id) {
                 for c in self.environment_users(&e.name) {
-                    rows.push(Row { kind: RowKind::EnvironmentUser(e.id, c.id), depth: 2 });
+                    rows.push(Row::new(RowKind::EnvironmentUser(e.id, c.id), 2));
                 }
             }
         }
     }
 
     /// The "Tunnels" section: the head, then the presets by name (with a filter, the ones whose
-    /// name or bastion matches), each with why its connection was lost and, opened, its
-    /// profiles.
+    /// name or bastion matches), each with why its connection was lost and, opened, the
+    /// profiles connected through it now.
     fn push_tunnels(&self, rows: &mut Vec<Row>) {
         if !self.tunnels_shown() {
             return;
@@ -241,22 +312,22 @@ impl App {
         if filtering && !self.presets.iter().any(matches) {
             return;
         }
-        rows.push(Row { kind: RowKind::TunnelsHeader, depth: 0 });
+        rows.push(Row::new(RowKind::TunnelsHeader, 0));
         if !self.tunnels_expanded && !filtering {
             return;
         }
         if self.presets.is_empty() {
-            rows.push(Row { kind: RowKind::TunnelsEmpty, depth: 1 });
+            rows.push(Row::new(RowKind::TunnelsEmpty, 1));
             return;
         }
         for p in self.presets.iter().filter(|p| !filtering || matches(p)) {
-            rows.push(Row { kind: RowKind::Tunnel(p.id), depth: 1 });
+            rows.push(Row { hit: filtering, ..Row::new(RowKind::Tunnel(p.id), 1) });
             if self.preset_state(p.id) == super::tunnel::PresetState::Dead {
-                rows.push(Row { kind: RowKind::TunnelError(p.id), depth: 2 });
+                rows.push(Row::new(RowKind::TunnelError(p.id), 2));
             }
             if self.tunnels_open.contains(&p.id) {
-                for c in self.preset_users(&p.name) {
-                    rows.push(Row { kind: RowKind::TunnelUser(p.id, c.id), depth: 2 });
+                for c in self.preset_connected_users(p.id) {
+                    rows.push(Row::new(RowKind::TunnelUser(p.id, c.id), 2));
                 }
             }
         }
@@ -269,14 +340,14 @@ impl App {
         if !self.scripts_available() {
             return;
         }
-        rows.push(Row { kind: RowKind::ScriptsHeader, depth: 0 });
+        rows.push(Row::new(RowKind::ScriptsHeader, 0));
         let q = fold(self.explorer.filter.text().trim());
         let filtering = !q.is_empty();
         if !self.scripts_expanded && !filtering {
             return;
         }
         if self.script_list.is_empty() && !filtering {
-            rows.push(Row { kind: RowKind::ScriptsEmpty, depth: 1 });
+            rows.push(Row::new(RowKind::ScriptsEmpty, 1));
             return;
         }
         let matches = |path: &str| fold(datarig_core::scripts::stem_path(path)).contains(&q);
@@ -303,7 +374,7 @@ impl App {
             if shown {
                 let kind =
                     if e.folder { RowKind::ScriptFolder(e.path.clone()) } else { RowKind::Script(e.path.clone()) };
-                rows.push(Row { kind, depth: e.depth() + 1 });
+                rows.push(Row { hit: filtering && !e.folder, ..Row::new(kind, e.depth() + 1) });
             }
         }
     }
@@ -317,39 +388,66 @@ impl App {
         !self.explorer.filter.text().trim().is_empty()
     }
 
-    /// A profile in folder `f` (or below) passes the filter.
-    fn folder_matches(&self, f: &FolderPath) -> bool {
-        let q = self.explorer.filter.text();
-        self.profiles.iter().any(|p| p.folder_path().is_some_and(|pf| pf.is_within(f)) && filter_matches(q, p))
-    }
-
-    fn push_level(&self, parent: Option<&FolderPath>, depth: usize, rows: &mut Vec<Row>) {
-        let filtering = self.filtering_on();
+    /// The folders and profiles under `parent` at `depth`, with what is open below them. With a
+    /// filter (`q`): a folder whose name matches shows open with everything in it as without
+    /// the filter; a profile whose name, host or database matches shows as without it; a
+    /// connected profile also shows, opened, for a database, a schema, an object or an item of
+    /// an object's structure that matches among what was read (see [`Tree::rows_matching`]);
+    /// a folder shows, opened, for a match inside it. Nothing else is listed, and no expansion
+    /// changes.
+    fn push_level(&self, parent: Option<&FolderPath>, depth: usize, q: Option<&Needle>, rows: &mut Vec<Row>) {
         for f in self.folders.children(parent) {
-            if filtering && !self.folder_matches(f) {
-                continue;
-            }
-            rows.push(Row { kind: RowKind::Folder(f.clone()), depth });
-            if filtering || self.folders.is_expanded(f) {
-                self.push_level(Some(f), depth + 1, rows);
+            match q {
+                None => {
+                    rows.push(Row::new(RowKind::Folder(f.clone()), depth));
+                    if self.folders.is_expanded(f) {
+                        self.push_level(Some(f), depth + 1, None, rows);
+                    }
+                }
+                Some(n) if n.matches(f.name()) => {
+                    rows.push(Row { opened: true, ..Row::hit(RowKind::Folder(f.clone()), depth) });
+                    self.push_level(Some(f), depth + 1, None, rows);
+                }
+                Some(n) => {
+                    let at = rows.len();
+                    rows.push(Row::opened(RowKind::Folder(f.clone()), depth));
+                    self.push_level(Some(f), depth + 1, Some(n), rows);
+                    if rows.len() == at + 1 {
+                        rows.truncate(at);
+                    }
+                }
             }
         }
-        let q = self.explorer.filter.text();
         let mut here: Vec<&ConnectionConfig> = self
             .profiles
             .iter()
             .filter(|p| {
                 // A folder the folder list does not know shows its profiles at the top.
                 let folder = p.folder_path().filter(|f| self.folders.contains(f));
-                folder.as_ref() == parent && filter_matches(q, p)
+                folder.as_ref() == parent
             })
             .collect();
         here.sort_by_key(|p| p.name.to_lowercase());
         for p in here {
-            rows.push(Row { kind: RowKind::Profile(p.id), depth });
-            let Some(c) = self.conns.get(p.id) else { continue };
+            let c = self.conns.get(p.id);
+            match q {
+                Some(n) if !n.profile(p) => {
+                    if let Some(c) = c.filter(|c| c.connected) {
+                        let at = rows.len();
+                        rows.push(Row::opened(RowKind::Profile(p.id), depth));
+                        self.push_databases_matching(p.id, c, depth + 1, n, rows);
+                        if rows.len() == at + 1 {
+                            rows.truncate(at);
+                        }
+                    }
+                    continue;
+                }
+                Some(_) => rows.push(Row::hit(RowKind::Profile(p.id), depth)),
+                None => rows.push(Row::new(RowKind::Profile(p.id), depth)),
+            }
+            let Some(c) = c else { continue };
             if c.state() == NodeState::Failed {
-                rows.push(Row { kind: RowKind::ProfileError(p.id), depth: depth + 1 });
+                rows.push(Row::new(RowKind::ProfileError(p.id), depth + 1));
             }
             if c.connected && c.expanded {
                 self.push_databases(p.id, c, depth + 1, rows);
@@ -365,42 +463,97 @@ impl App {
         // One level (MySQL: a database is the schema): the schemas right under the profile.
         if self.schema_only(Some(id)) {
             for r in c.tree.rows_with(|s, n| column_count(&c.catalog, s, n), structured) {
-                rows.push(Row { kind: RowKind::Node(id, r.node), depth: depth + r.depth });
+                rows.push(Row::new(RowKind::Node(id, r.node), depth + r.depth));
             }
             return;
         }
-        rows.push(Row { kind: RowKind::Database(id, None), depth });
+        rows.push(Row::new(RowKind::Database(id, None), depth));
         if c.own_open {
             // An open table shows its structure, or its columns from the completion catalog.
             for r in c.tree.rows_with(|s, n| column_count(&c.catalog, s, n), structured) {
-                rows.push(Row { kind: RowKind::Node(id, r.node), depth: depth + 1 + r.depth });
+                rows.push(Row::new(RowKind::Node(id, r.node), depth + 1 + r.depth));
             }
         }
         let own = self.own_database(id);
         let others = match &c.databases {
             Some(Ok(list)) => list.iter().filter(|d| **d != own).collect::<Vec<_>>(),
-            Some(Err(_)) => return rows.push(Row { kind: RowKind::DatabasesNote(id), depth }),
-            None if c.databases_asked => return rows.push(Row { kind: RowKind::DatabasesNote(id), depth }),
+            Some(Err(_)) => return rows.push(Row::new(RowKind::DatabasesNote(id), depth)),
+            None if c.databases_asked => return rows.push(Row::new(RowKind::DatabasesNote(id), depth)),
             None => Vec::new(),
         };
         for db in others {
-            rows.push(Row { kind: RowKind::Database(id, Some(db.clone())), depth });
-            if !c.open_dbs.contains(db) {
+            rows.push(Row::new(RowKind::Database(id, Some(db.clone())), depth));
+            if c.open_dbs.contains(db) {
+                self.push_other_database(id, db, depth + 1, rows);
+            }
+        }
+    }
+
+    /// What open database `db` of profile `id` (not its own) shows at `depth`: its schema tree,
+    /// or that it is opening, or why it cannot be read.
+    fn push_other_database(&self, id: ProfileId, db: &str, depth: usize, rows: &mut Vec<Row>) {
+        match self.conns.aux(id, db) {
+            // Opening (the profile connected: it opens on the next use).
+            None => rows.push(Row::new(RowKind::AuxNode(id, db.to_string(), Node::Loading(None)), depth)),
+            Some(a) if a.tree.schemas.is_empty() && matches!(a.schemas, Some(Err(_))) => {
+                rows.push(Row::new(RowKind::DatabaseNote(id, db.to_string()), depth));
+            }
+            Some(a) => {
+                let structured = self.structure_on(id);
+                for r in a.tree.rows_with(|s, n| column_count(&a.catalog, s, n), structured) {
+                    rows.push(Row::new(RowKind::AuxNode(id, db.to_string(), r.node), depth + r.depth));
+                }
+            }
+        }
+    }
+
+    /// What the filter `q` shows of connected profile `id`, whose own name, host and database do
+    /// not match, at `depth`: a database whose name matches as without the filter, else,
+    /// opened, the database (or, with one level, the profile) with the matches of its schema
+    /// tree. Only trees already read are searched.
+    fn push_databases_matching(&self, id: ProfileId, c: &ProfileConn, depth: usize, q: &Needle, rows: &mut Vec<Row>) {
+        let structured = self.structure_on(id);
+        // The matches of a schema tree, each node a row of `kind` at `depth` and below.
+        let matches =
+            |tree: &Tree, catalog: &Catalog, depth: usize, kind: &dyn Fn(Node) -> RowKind, rows: &mut Vec<Row>| {
+                for r in tree.rows_matching(|s, n| column_count(catalog, s, n), structured, |t| q.matches(t)) {
+                    rows.push(Row { opened: r.opened, hit: r.hit, ..Row::new(kind(r.node), depth + r.depth) });
+                }
+            };
+        if self.schema_only(Some(id)) {
+            return matches(&c.tree, &c.catalog, depth, &|n| RowKind::Node(id, n), rows);
+        }
+        let own = self.own_database(id);
+        if q.matches(&own) {
+            rows.push(Row::hit(RowKind::Database(id, None), depth));
+            if c.own_open {
+                for r in c.tree.rows_with(|s, n| column_count(&c.catalog, s, n), structured) {
+                    rows.push(Row::new(RowKind::Node(id, r.node), depth + 1 + r.depth));
+                }
+            }
+        } else {
+            let at = rows.len();
+            rows.push(Row::opened(RowKind::Database(id, None), depth));
+            matches(&c.tree, &c.catalog, depth + 1, &|n| RowKind::Node(id, n), rows);
+            if rows.len() == at + 1 {
+                rows.truncate(at);
+            }
+        }
+        let Some(Ok(list)) = &c.databases else { return };
+        for db in list.iter().filter(|d| **d != own) {
+            if q.matches(db) {
+                rows.push(Row::hit(RowKind::Database(id, Some(db.clone())), depth));
+                if c.open_dbs.contains(db) {
+                    self.push_other_database(id, db, depth + 1, rows);
+                }
                 continue;
             }
-            match self.conns.aux(id, db) {
-                // Opening (the profile connected: it opens on the next use).
-                None => {
-                    rows.push(Row { kind: RowKind::AuxNode(id, db.clone(), Node::Loading(None)), depth: depth + 1 })
-                }
-                Some(a) if a.tree.schemas.is_empty() && matches!(a.schemas, Some(Err(_))) => {
-                    rows.push(Row { kind: RowKind::DatabaseNote(id, db.clone()), depth: depth + 1 });
-                }
-                Some(a) => {
-                    for r in a.tree.rows_with(|s, n| column_count(&a.catalog, s, n), structured) {
-                        rows.push(Row { kind: RowKind::AuxNode(id, db.clone(), r.node), depth: depth + 1 + r.depth });
-                    }
-                }
+            let Some(a) = self.conns.aux(id, db) else { continue };
+            let at = rows.len();
+            rows.push(Row::opened(RowKind::Database(id, Some(db.clone())), depth));
+            matches(&a.tree, &a.catalog, depth + 1, &|n| RowKind::AuxNode(id, db.clone(), n), rows);
+            if rows.len() == at + 1 {
+                rows.truncate(at);
             }
         }
     }
@@ -455,7 +608,7 @@ impl App {
         match self.explorer_row()?.kind {
             RowKind::Folder(f) => Some(f),
             kind => {
-                let id = Row { kind, depth: 0 }.profile()?;
+                let id = Row::new(kind, 0).profile()?;
                 self.profile(id)?.folder_path().filter(|f| self.folders.contains(f))
             }
         }
@@ -506,11 +659,10 @@ impl App {
             RowKind::ScriptFolder(p) if self.script_unreadable(p) => None,
             RowKind::ScriptFolder(p) => Some(self.script_folders.contains(p) || self.filtering_on()),
             RowKind::TunnelsHeader => Some(self.tunnels_expanded || self.filtering_on()),
-            // Only one some profile names has something to open.
-            RowKind::Tunnel(id) => self
-                .preset(*id)
-                .filter(|p| !self.preset_users(&p.name).is_empty())
-                .map(|_| self.tunnels_open.contains(id)),
+            // Only one some profile is connected through has something to open.
+            RowKind::Tunnel(id) => {
+                (!self.preset_connected_users(*id).is_empty()).then(|| self.tunnels_open.contains(id))
+            }
             RowKind::EnvironmentsHeader => Some(self.environments_expanded || self.filtering_on()),
             RowKind::DefaultRules => (!self.default_rules_users().is_empty()).then_some(self.default_rules_open),
             RowKind::Environment(id) => self
@@ -521,9 +673,10 @@ impl App {
         }
     }
 
-    /// Whether the renderer draws an arrow on `row` and which one.
+    /// Whether the renderer draws an arrow on `row` and which one: open on a row the filter
+    /// opened.
     pub fn explorer_arrow(&self, row: &Row) -> Option<bool> {
-        self.row_expanded(row)
+        if row.opened { Some(true) } else { self.row_expanded(row) }
     }
 
     /// Expand (`Some(true)`), collapse (`Some(false)`) or toggle (`None`) the row. A profile that
@@ -929,11 +1082,12 @@ impl App {
         }
     }
 
-    /// Typing in the explorer's `/` filter: the cursor moves to the first match.
+    /// Typing in the explorer's `/` filter: the cursor moves to the first row that matches (of
+    /// any kind).
     pub(super) fn explorer_filter_key(&mut self, key: KeyEvent) {
         if self.explorer.filter.handle_key(&key) == crate::widgets::text_input::InputResult::Changed {
             let rows = self.explorer_rows();
-            let first = rows.iter().position(|r| matches!(r.kind, RowKind::Profile(_))).unwrap_or(0);
+            let first = rows.iter().position(|r| r.hit).unwrap_or(0);
             let keep = rows.iter().any(|r| &r.kind == self.explorer.cursor());
             if !keep || self.filtering_on() {
                 self.explorer.select(&rows, first);

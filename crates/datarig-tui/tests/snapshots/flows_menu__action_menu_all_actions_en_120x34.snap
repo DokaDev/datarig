@@ -1,5 +1,6 @@
 ---
 source: crates/datarig-tui/tests/flows_menu.rs
+assertion_line: 410
 expression: "h.draw(120, 34).backend()"
 ---
 "╭ Explorer ──────────────────╮ 1 console 1 ×                                                                            "
@@ -16,12 +17,12 @@ expression: "h.draw(120, 34).backend()"
 "│                            ││ ╰──────────────────────────────────────────────────────────────────────────────────────╯"
 "│                            ││ 10                                                                                     │"
 "│                            │╰────────────────────────────────────────────────────────────────────────────────────────╯"
-"│                            │╭ Results · 8 rows ──────────────────────────────────╮╭ [Cell] Row · I ──────────────────╮"
-"│                            ││ [Result 1]  Chart  Messages                        ││ id                               │"
-"│                            ││   │ id   │ name                 │ nickname    │ ad…││ int8 · 1 character               │"
-"│                            ││   │ int8 │ text                 │ text        │ te…││                                  │"
-"│                            ││ 1 │    1 │ 陳大文               │ 大文🐘      │ 臺…││ 2                                │" Hidden by multi-width symbols: [(44, " "), (46, " "), (48, " "), (67, " "), (69, " "), (71, " "), (81, " ")]
-"│                            ││ 2 │    2 │ 林美玲               │ NULL        │ 高…││                                  │" Hidden by multi-width symbols: [(44, " "), (46, " "), (48, " "), (81, " ")]
+"│                            │╭ Results · 8 rows ──────────────────────────────────╮╭ Cell [Row] · I ──────────────────╮"
+"│                            ││ [Result 1]  Chart  Messages                        ││ id: 2                            │"
+"│                            ││   │ id   │ name                 │ nickname    │ ad…││ name: 林美玲                     │" Hidden by multi-width symbols: [(93, " "), (95, " "), (97, " ")]
+"│                            ││   │ int8 │ text                 │ text        │ te…││ nickname: NULL                   │"
+"│                            ││ 1 │    1 │ 陳大文               │ 大文🐘      │ 臺…││ address: 高雄市前鎮區成功二路 55…│" Hidden by multi-width symbols: [(44, " "), (46, " "), (48, " "), (67, " "), (69, " "), (71, " "), (81, " "), (96, " "), (98, " "), (100, " "), (102, " "), (104, " "), (106, " "), (108, " "), (110, " "), (112, " "), (114, " ")]
+"│                            ││ 2 │    2 │ 林美玲               │ NULL        │ 高…││ profile: {}                      │" Hidden by multi-width symbols: [(44, " "), (46, " "), (48, " "), (81, " ")]
 "│                            ││ 3 │    3 │ 張志明               │ 👨‍👩‍👧‍👦 family   │ NU…││                                  │" Hidden by multi-width symbols: [(44, " "), (46, " "), (48, " "), (67, " ")]
 "│                            ││ 4 │    4 │ Emoji テスト         │ 🔥🚀✨🎉    │ 沖…││                                  │" Hidden by multi-width symbols: [(50, " "), (52, " "), (54, " "), (67, " "), (69, " "), (71, " "), (73, " "), (81, " ")]
 "│                            ││ 5 │    5 │ 山田太郎             │ やまだ      │ 東…││                                  │" Hidden by multi-width symbols: [(44, " "), (46, " "), (48, " "), (50, " "), (67, " "), (69, " "), (71, " "), (81, " ")]

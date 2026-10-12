@@ -83,6 +83,7 @@ impl App {
             Setting::AutoPairs(a) => *a == self.prefs.auto_pairs,
             Setting::RunHints(h) => *h == self.prefs.run_hints,
             Setting::KeychainAccess(a) => *a == self.prefs.keychain_access,
+            Setting::SizeHeat(h) => *h == self.prefs.size_heat,
         };
         SETTINGS.get(k)?.values.fixed().iter().position(|v| now(&v.1))
     }

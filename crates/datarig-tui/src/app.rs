@@ -448,9 +448,9 @@ enum Drag {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum DetailTab {
     /// The selected cell's whole value, its type and length.
-    #[default]
     Cell,
-    /// Every column of the selected row, `name: value`.
+    /// Every column of the selected row, `name: value`: the tab the inspector starts on.
+    #[default]
     Row,
 }
 
@@ -476,7 +476,7 @@ pub struct Detail {
 
 impl Default for Detail {
     fn default() -> Self {
-        Self { visible: true, tab: DetailTab::Cell, first: 0 }
+        Self { visible: true, tab: DetailTab::Row, first: 0 }
     }
 }
 

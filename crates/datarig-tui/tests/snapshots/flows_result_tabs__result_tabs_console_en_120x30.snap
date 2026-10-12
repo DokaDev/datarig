@@ -1,5 +1,6 @@
 ---
 source: crates/datarig-tui/tests/flows_result_tabs.rs
+assertion_line: 107
 expression: backend
 ---
 "╭ Explorer ──────────────────╮ 1 console 1 ×                                                                            "
@@ -14,11 +15,11 @@ expression: backend
 "│                            ││  7 WHERE o.status = 'paid';                                                            │"
 "│                            ││  8                                                                                     │"
 "│                            │╰────────────────────────────────────────────────────────────────────────────────────────╯"
-"│                            │╭ Results · 5 rows ──────────────────────────────────╮╭ [Cell] Row · I ──────────────────╮"
-"│                            ││ [Result 1]  Chart  Messages                    H/L ││ day                              │"
-"│                            ││   │ day        │ orders                            ││ date · 10 characters             │"
+"│                            │╭ Results · 5 rows ──────────────────────────────────╮╭ Cell [Row] · I ──────────────────╮"
+"│                            ││ [Result 1]  Chart  Messages                    H/L ││ day: 2026-09-01                  │"
+"│                            ││   │ day        │ orders                            ││ orders: 7                        │"
 "│                            ││   │ date       │ int8                              ││                                  │"
-"│                            ││ 1 │ 2026-09-01 │      7                            ││ 2026-09-01                       │"
+"│                            ││ 1 │ 2026-09-01 │      7                            ││                                  │"
 "│                            ││ 2 │ 2026-09-02 │     14                            ││                                  │"
 "│                            ││ 3 │ 2026-09-03 │     21                            ││                                  │"
 "│                            ││ 4 │ 2026-09-04 │     28                            ││                                  │"

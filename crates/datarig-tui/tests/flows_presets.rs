@@ -364,12 +364,14 @@ fn the_tunnels_section_lists_presets_with_their_state_and_profiles() {
     h.explore("local-pg");
     connect(&mut h, "local-pg");
     shared(&mut h, 1, TunnelEvent::Opened(Arc::new(FakeTunnel::default())));
-    // Opened: the preset's profiles under it.
+    h.meta_db("local-pg", DbEvent::Connected);
+    // Opened: the profiles connected through it under it (`v6` names it but is not connected).
     h.app.explorer.select_kind(datarig_tui::app::explorer::RowKind::Tunnel(office(&h)));
     h.key(KeyCode::Char('l'));
     let rows = h.rows();
     let at = rows.iter().position(|r| r == "  ~office").unwrap();
-    assert_eq!(&rows[at + 1..at + 3], ["    @local-pg", "    @v6"]);
+    assert_eq!(rows[at + 1], "    @local-pg");
+    assert!(!rows.contains(&"    @v6".to_string()), "{rows:?}");
     let line = h.explorer_line();
     assert!(line.contains("office  ec2-user@bastion.example.com · open · 1 connection on it"), "{line}");
     // Enter on a profile under it goes to that profile.
@@ -378,6 +380,43 @@ fn the_tunnels_section_lists_presets_with_their_state_and_profiles() {
     assert_eq!(h.app.selected_profile(), Some(id_of(&h, "local-pg")));
     let screen = h.screen(80, 24);
     assert!(screen.contains("Tunnels 1"), "{screen}");
+}
+
+/// Under a preset are only the profiles connected through it now: not one that names it and is
+/// not connected, nor one still connecting through it, nor one connected without a tunnel. With
+/// none, the preset has nothing to open (no arrow); its line still says how many name it.
+#[test]
+fn only_profiles_connected_through_a_preset_are_under_it() {
+    use datarig_tui::app::explorer::RowKind;
+    let mut cfg = config(None);
+    cfg.connections[1].tunnel = None;
+    let mut h = harness_with(&cfg);
+    let office = office(&h);
+    let tunnel_row =
+        |h: &Harness| h.app.explorer_rows().into_iter().find(|r| r.kind == RowKind::Tunnel(office)).unwrap();
+    h.app.tunnels_open.insert(office);
+    assert_eq!(h.app.explorer_arrow(&tunnel_row(&h)), None, "nobody connected through it");
+    assert!(h.app.explorer_line_text(&tunnel_row(&h)).contains("· 2 profiles"));
+    let users = |h: &Harness| h.rows().into_iter().filter(|r| r.starts_with("    @")).collect::<Vec<_>>();
+    // Connected without a tunnel: not under it.
+    connect(&mut h, "分析-replica");
+    h.meta_db("分析-replica", DbEvent::Connected);
+    assert!(users(&h).is_empty());
+    // Through it but still connecting: not yet.
+    connect(&mut h, "local-pg");
+    shared(&mut h, 1, TunnelEvent::Opened(Arc::new(FakeTunnel::default())));
+    assert_eq!(h.app.conns.state(id_of(&h, "local-pg")), NodeState::Connecting);
+    assert!(users(&h).is_empty());
+    assert!(h.app.preset_connected_users(office).is_empty());
+    // Connected through it: listed; `v6`, which names it, is not.
+    h.meta_db("local-pg", DbEvent::Connected);
+    assert_eq!(users(&h), ["    @local-pg"]);
+    assert_eq!(h.app.explorer_arrow(&tunnel_row(&h)), Some(true));
+    assert_eq!(h.app.preset_users("office").len(), 2, "every profile that names it is still its user");
+    // Disconnected: gone again.
+    h.explore("local-pg");
+    h.keys("x");
+    assert!(users(&h).is_empty());
 }
 
 #[test]
@@ -606,6 +645,7 @@ fn tunnel_preset_screens() {
         h.app.set_tunnels(Arc::new(Recorded));
         connect(&mut h, "local-pg");
         shared(&mut h, 1, TunnelEvent::Opened(Arc::new(FakeTunnel::default())));
+        h.meta_db("local-pg", DbEvent::Connected);
         connect(&mut h, "分析-replica");
         shared(&mut h, 2, TunnelEvent::Opened(Arc::new(FakeTunnel::default())));
         shared(&mut h, 2, TunnelEvent::Lost(Loss::Keepalive));
@@ -816,6 +856,9 @@ fn deleting_a_preset_while_it_opens_ends_its_attempts() {
 fn a_profile_under_a_preset_only_leads_to_it() {
     let mut h = harness();
     let office = office(&h);
+    connect(&mut h, "local-pg");
+    shared(&mut h, 1, TunnelEvent::Opened(Arc::new(FakeTunnel::default())));
+    h.meta_db("local-pg", DbEvent::Connected);
     h.app.tunnels_open.insert(office);
     let local = id_of(&h, "local-pg");
     h.app.focus = datarig_tui::app::Focus::Tree;

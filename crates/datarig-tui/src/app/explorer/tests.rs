@@ -125,3 +125,38 @@ fn a_profile_in_an_unknown_folder_shows_at_the_top() {
     let a = app(vec![profile("bad", Some("a//b"))]);
     assert_eq!(rows(&a), ["+", "bad"]);
 }
+
+#[test]
+fn the_needle_matches_a_part_ignoring_case_without_folding_each_name() {
+    let n = Needle::new("  Order ");
+    assert!(n.matches("ORDER_ITEMS") && n.matches("big_orders") && !n.matches("ord"));
+    assert!(Needle::new("").matches("anything"));
+    // Non-ASCII on either side.
+    assert!(Needle::new("分析").matches("分析-replica"));
+    assert!(Needle::new("ÉTÉ").matches("table_été") && !Needle::new("été").matches("table_ete"));
+    assert!(Needle::new("straße").matches("STRASSE_straße"));
+    assert!(!Needle::new("é").matches("plain ascii"));
+}
+
+#[test]
+fn a_folder_whose_name_matches_shows_all_it_has() {
+    let mut a = app(vec![
+        profile("alpha", Some("reports")),
+        profile("beta", Some("reports/2024")),
+        profile("gamma", None),
+        profile("reports-db", Some("other")),
+    ]);
+    open(&mut a, "other");
+    a.explorer.filter.set("report");
+    // `reports` matches: every profile and subfolder in it, the subfolder as it is (closed);
+    // `other` opens for the profile that matches in it.
+    assert_eq!(rows(&a), ["+", "other/", "  reports-db", "reports/", "  2024/", "  alpha"]);
+    let shown = a.explorer_rows();
+    assert!(shown[3].hit && shown[3].opened, "the folder matched and shows open");
+    assert!(!shown[4].opened && a.explorer_arrow(&shown[4]) == Some(false), "its subfolder as it is");
+    assert!(shown[1].opened && !shown[1].hit, "opened for a match inside");
+    // The filter changed no folder.
+    assert!(!a.folders.is_expanded(&FolderPath::parse("reports").unwrap()));
+    a.explorer.filter.set("");
+    assert_eq!(rows(&a), ["+", "other/", "  reports-db", "reports/", "gamma"]);
+}

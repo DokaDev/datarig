@@ -2,16 +2,16 @@
 source: crates/datarig-tui/tests/flows_presets.rs
 expression: backend
 ---
-"╭ Explorer ─────────────╮╭ Workspace ──────────────────────────────────────────────────────────────╮"
-"│  ＋ New connection    ││                                                                         │" Hidden by multi-width symbols: [(4, " ")]
-"│▸ ⠋   local-pg SSH     ││  No open tabs                                                           │"
-"│▸ ○   v6 SSH           ││  Pick a connection in the explorer, or press Ctrl+O.                    │"
-"│▸ ✕   分析-replica SSH ││                                                                         │" Hidden by multi-width symbols: [(8, " "), (10, " ")]
+"╭ Explorer ─────────────╮ 1 console 1 ×                                                             "
+"│  ＋ New connection    │╭ Query · console 1 ──────────────────────────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ ●   local-pg SSH     ││ local-pg / datarig  127.0.0.1:55432         Space c s switch connection │"
+"│  ▾ datarig default    ││  1                                                                      │"
+"│      Loading…         ││                                                                         │"
 "│ ╭ Edit connection — v6 ────────────────────────────────────────────────────────────────────────╮ │"
-"│▾│  Basic   SSH   Advanced                                                Ctrl+N/Ctrl+P section │ │"
-"│ │                                                                                              │ │"
+"│▸│  Basic   SSH   Advanced                                                Ctrl+N/Ctrl+P section │ │"
+"│▸│                                                                                              │ │"
 "│ │ SSH tunnel        office ▾   Enter list · shared: one SSH connection for every profile on i… │ │"
-"│ │ Bastion           ec2-user@bastion.example.com                                               │ │"
+"│▾│ Bastion           ec2-user@bastion.example.com                                               │ │"
 "│ │ Log in with       password                                                                   │ │"
 "│ │ Used by           local-pg                                                                   │ │"
 "│ │                                                                                              │ │"
@@ -31,4 +31,4 @@ expression: backend
 "│                       ││                                                                         │"
 "│                       ││                                                                         │"
 "╰───────────────────────╯╰─────────────────────────────────────────────────────────────────────────╯"
-" SSH: the connection to lab-bastion.internal was lost (no reply to keepalives)                   EN "
+" NORMAL  local-pg │ SSH: the connection to lab-bastion.internal was lo… (no reply to keepalives) EN "

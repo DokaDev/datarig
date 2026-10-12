@@ -2,16 +2,16 @@
 source: crates/datarig-tui/tests/flows_presets.rs
 expression: backend
 ---
-"╭ Explorer ─────────────╮╭ Workspace ──────────────────────────────────────────────────────────────╮"
-"│  ＋ New connection    ││                                                                         │" Hidden by multi-width symbols: [(4, " ")]
-"│▸ ⠋   local-pg SSH     ││  No open tabs                                                           │"
-"│▸ ○   v6 SSH           ││  Pick a connection in the explorer, or press Ctrl+O.                    │"
-"│▸ ✕   分析-replica SSH ││                                                                         │" Hidden by multi-width symbols: [(8, " "), (10, " ")]
+"╭ Explorer ─────────────╮ 1 console 1 ×                                                             "
+"│  ＋ New connection    │╭ Query · console 1 ──────────────────────────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ ●   local-pg SSH     ││ local-pg / datarig  127.0.0.1:55432         Space c s switch connection │"
+"│  ▾ datarig default    ││  1                                                                      │"
+"│      Loading…         ││                                                                         │"
 "│ ╭ SSH tunnel — office ─────────────────────────────────────────────────────────────────────────╮ │"
-"│▾│  SSH tunnel                                   profiles that pick it share one SSH connection │ │"
-"│ │                                                                                              │ │"
+"│▸│  SSH tunnel                                   profiles that pick it share one SSH connection │ │"
+"│▸│                                                                                              │ │"
 "│ │ Name              office                                                                     │ │"
-"│ │ Bastion           bastion.example.com                                                        │ │"
+"│▾│ Bastion           bastion.example.com                                                        │ │"
 "│ │ Port              22                                                                         │ │"
 "│ │ User              ec2-user                                                                   │ │"
 "│ │ Log in with        key file ‹password› ssh-agent  server questions                           │ │"
@@ -31,4 +31,4 @@ expression: backend
 "│                       ││                                                                         │"
 "│                       ││                                                                         │"
 "╰───────────────────────╯╰─────────────────────────────────────────────────────────────────────────╯"
-" ● office  ec2-user@bastion.example.com · open · 1 connection on it                              EN "
+" NORMAL  local-pg │ ● office  ec2-user@bastion.example.com · open · 1 connection on it           EN "

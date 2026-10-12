@@ -1631,10 +1631,11 @@ fn inspector_cell_and_row_en_ko_sizes() {
         for (w, hh) in SIZES {
             let mut h = with_edge_results(lang);
             h.key(KeyCode::Tab);
-            h.keys("$");
+            // The Cell tab (the inspector starts on the Row tab).
+            h.keys("$I");
             assert_screen!(format!("inspector_cell_{}_{w}x{hh}", lang_tag(lang)), lang, h.draw(w, hh));
             let mut h = join_result(lang, false);
-            h.keys("lI");
+            h.keys("l");
             assert_screen!(format!("inspector_row_{}_{w}x{hh}", lang_tag(lang)), lang, h.draw(w, hh));
         }
     }

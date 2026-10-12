@@ -158,6 +158,16 @@ pub fn plan(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
     Ok(())
 }
 
+/// The explorer's `/` filter over a tree of 10,000 listed relations: the slowest key with its
+/// frame.
+pub fn explorer(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
+    match f(result, &["frame_ms", "p95"]) {
+        Some(m) => c.check("explorer filter key+frame p95", m, num(b, "explorer", "p95_ms_max")?, " ms"),
+        None => c.missing("explorer filter key+frame p95"),
+    }
+    Ok(())
+}
+
 /// A chart of a large fetched result: the slowest key with its frame after the rows were read,
 /// the work of one such frame, and the work of reading the rows into the chart per row.
 pub fn chart(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {

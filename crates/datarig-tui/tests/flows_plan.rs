@@ -788,6 +788,8 @@ fn a_narrow_strip_shortens_its_labels_before_leaving_tabs_out() {
         let mut h = shown_in(lang, 17, "join.analyze.json");
         h.keys("H");
         assert_eq!(h.app.tab().exec.view, ResultView::Rows);
+        // The inspector on its Cell tab: the line of the strip shows no cut value next to it.
+        h.app.detail.tab = datarig_tui::app::DetailTab::Cell;
         let screen = h.screen(80, 24);
         assert!(h.app.layout.detail.width > 0, "the inspector is shown:\n{screen}");
         let strip = screen.lines().nth(h.app.layout.strip.y as usize).unwrap().to_string();

@@ -1,5 +1,6 @@
 ---
 source: crates/datarig-tui/tests/flows_presets.rs
+assertion_line: 1213
 expression: backend
 ---
 "╭ Explorer ──────────────────╮╭ Workspace ─────────────────────────────────────────────────────────────────────────────╮"
@@ -8,7 +9,7 @@ expression: backend
 "│▸ ○   v6 SSH                ││  Pick a connection in the explorer, or press Ctrl+O.                                   │"
 "│▸ ○   分析-replica          ││                                                                                        │" Hidden by multi-width symbols: [(8, " "), (10, " ")]
 "│▾ Tunnels 2                 ││  Enter      Connect and open a console                                                 │"
-"│  ▸ ○ office  ec2-user@bast…││  Ctrl+O     Quick connect                                                              │"
+"│    ○ office  ec2-user@bast…││  Ctrl+O     Quick connect                                                              │"
 "│    ○ lab  ec2-user@lab-bas…││  Ctrl+T     New console tab                                                            │"
 "│▾ Environments 0            ││  Space t u  Reopen a closed tab                                                        │"
 "│  ▸ ○ Default rules (no env…││  n          New connection                                                             │"

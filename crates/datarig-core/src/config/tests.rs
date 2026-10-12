@@ -642,6 +642,7 @@ fn step_2_settings_are_read_checked_and_saved_only_when_set() {
             auto_pairs: AutoPairs::Off,
             run_hints: RunHints::On,
             keychain_access: KeychainAccess::Direct,
+            size_heat: SizeHeat::On,
         }
     );
     assert_eq!(parse("osc52_max_bytes = 5000\n").unwrap().prefs.osc52_max_bytes, 5000);
@@ -751,6 +752,33 @@ fn formatter_settings() {
     assert_eq!(load(Some(path.clone())).0.prefs, prefs);
     save(&path, settings("en"), None).unwrap();
     assert!(!std::fs::read_to_string(&path).unwrap().contains("run_hints"), "on is the default: the key goes");
+}
+
+#[test]
+fn the_size_heat_of_the_explorer_is_on_by_default_and_can_be_turned_off() {
+    assert_eq!(parse("").unwrap().prefs.size_heat, SizeHeat::On);
+    assert_eq!(parse("[explorer]\nsize_heat = \"off\"\n").unwrap().prefs.size_heat, SizeHeat::Off);
+    assert_eq!(parse("[explorer]\nsize_heat = \"on\"\n").unwrap().prefs.size_heat, SizeHeat::On);
+    assert_eq!(
+        parse("[explorer]\nsize_heat = \"warm\"\n").unwrap_err(),
+        ConfigError::Value {
+            key: "explorer.size_heat".into(),
+            value: "warm".into(),
+            profile: None,
+            allowed: Some("on, off")
+        }
+    );
+    assert!(matches!(parse("[explorer]\nhidden = true\n"), Err(ConfigError::Syntax(_))), "only its own keys");
+    let path = temp_file("size_heat");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "").unwrap();
+    let prefs = Prefs { size_heat: SizeHeat::Off, ..Prefs::default() };
+    save(&path, Settings { prefs, ..settings("en") }, None).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("[explorer]\nsize_heat = \"off\"\n"), "{text}");
+    assert_eq!(load(Some(path.clone())).0.prefs, prefs);
+    save(&path, settings("en"), None).unwrap();
+    assert!(!std::fs::read_to_string(&path).unwrap().contains("size_heat"), "on is the default: the key goes");
 }
 
 #[test]

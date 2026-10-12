@@ -1,5 +1,6 @@
 ---
 source: crates/datarig-tui/tests/ui_snapshots.rs
+assertion_line: 1240
 expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×                                          "
@@ -12,11 +13,11 @@ expression: backend
 "│                      ││  5 FROM shop.orders o                                │"
 "│                      ││  6 JOIN shop.users u ON u.id = o.user_id             │"
 "│                      │╰──────────────────────────────────────────────────────╯"
-"│                      │╭ Results ·… ─ ‹ (1/? · 23s) › ╮╭ [Cell] Row · I ──────╮"
-"│                      ││ [Result 1]  Chart  Messages  ││ id                   │"
-"│                      ││    │ id                      ││ int8 · 1 character   │"
+"│                      │╭ Results ·… ─ ‹ (1/? · 23s) › ╮╭ Cell [Row] · I ──────╮"
+"│                      ││ [Result 1]  Chart  Messages  ││ id: 0                │"
+"│                      ││    │ id                      ││                      │"
 "│                      ││    │ int8                    ││                      │"
-"│                      ││  1 │    0                    ││ 0                    │"
+"│                      ││  1 │    0                    ││                      │"
 "│                      ││  2 │    1                    ││                      │"
 "│                      ││  3 │    2                    ││                      │"
 "│                      ││  4 │    3                    ││                      │"

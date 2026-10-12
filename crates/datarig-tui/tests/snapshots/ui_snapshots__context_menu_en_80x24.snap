@@ -1,5 +1,6 @@
 ---
 source: crates/datarig-tui/tests/ui_snapshots.rs
+assertion_line: 1263
 expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×                                          "
@@ -21,7 +22,7 @@ expression: backend
 "│      │  New console on this connection           o │                         │"
 "│      │  Move connection profile to a folder      m │emicolon$$ AS dollar, 'it│"
 "│      │ Explorer                                    │                         │"
-"│      │  Explorer: filter profiles                / │                         │"
+"│      │  Explorer: filter by name                 / │                         │"
 "│      │  New connection profile                   n │                         │"
 "│      │  New folder                               N │                         │"
 "╰──────╰─────────────────────────────────────────────╯─────────────────────────╯"

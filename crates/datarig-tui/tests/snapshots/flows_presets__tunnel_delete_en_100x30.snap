@@ -2,20 +2,20 @@
 source: crates/datarig-tui/tests/flows_presets.rs
 expression: backend
 ---
-"╭ Explorer ─────────────╮╭ Workspace ──────────────────────────────────────────────────────────────╮"
-"│  ＋ New connection    ││                                                                         │" Hidden by multi-width symbols: [(4, " ")]
-"│▸ ⠋   local-pg SSH     ││  No open tabs                                                           │"
-"│▸ ○   v6 SSH           ││  Pick a connection in the explorer, or press Ctrl+O.                    │"
+"╭ Explorer ─────────────╮ 1 console 1 ×                                                             "
+"│  ＋ New connection    │╭ Query · console 1 ──────────────────────────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ ●   local-pg SSH     ││ local-pg / datarig  127.0.0.1:55432         Space c s switch connection │"
+"│  ▾ datarig default    ││  1                                                                      │"
+"│      Loading…         ││                                                                         │"
+"│    Loading…           ││                                                                         │"
+"│▸ ○   v6 SSH           ││                                                                         │"
 "│▸ ✕   分析-replica SSH ││                                                                         │" Hidden by multi-width symbols: [(8, " "), (10, " ")]
-"│    SSH: the connectio…││  Enter      Connect and open a console                                  │"
-"│▾ Tunnels 2            ││  Ctrl+O     Quick connect                                               │"
-"│  ▾ ● office  ec2-user…││  Ctrl+T     New console tab                                             │"
-"│      ⠋   local-pg ╭ Delete ──────────────────────────────────────────────────╮                   │"
-"│      ○   v6       │                                                          │                   │"
-"│  ▸ ✕ lab  ec2-user│ Delete the SSH tunnel “office”?                          │                   │"
-"│      SSH: the conn│ 2 profiles use it (local-pg, v6): they will not connect  │                   │"
-"│                   │ until you pick another tunnel in their forms (never      │                   │"
-"│                   │ directly).                                               │                   │"
+"│    SSH: the connec╭ Delete ──────────────────────────────────────────────────╮                   │"
+"│▾ Tunnels 2        │                                                          │                   │"
+"│  ▾ ● office  ec2-u│ Delete the SSH tunnel “office”?                          │                   │"
+"│      ●   local-pg │ 2 profiles use it (local-pg, v6): they will not connect  │                   │"
+"│    ✕ lab  ec2-user│ until you pick another tunnel in their forms (never      │                   │"
+"│      SSH: the conn│ directly).                                               │                   │"
 "│                   │ Its open connection stays until the profiles on it       │                   │"
 "│                   │ disconnect.                                              │                   │"
 "│                   │ Its SSH secret saved in the OS keychain is removed too.  │                   │"
@@ -31,4 +31,4 @@ expression: backend
 "│                       ││                                                                         │"
 "│                       ││                                                                         │"
 "╰───────────────────────╯╰─────────────────────────────────────────────────────────────────────────╯"
-" ● office  ec2-user@bastion.example.com · open · 1 connection on it                              EN "
+" NORMAL  local-pg │ ● office  ec2-user@bastion.example.com · open · 1 connection on it           EN "

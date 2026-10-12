@@ -1,5 +1,6 @@
 ---
 source: crates/datarig-tui/tests/flows_strip_keys.rs
+assertion_line: 68
 expression: "h.draw(120, 30).backend()"
 ---
 "╭ Explorer ──────────────────╮ 1 console 1 ×                                                                            "
@@ -14,11 +15,11 @@ expression: "h.draw(120, 30).backend()"
 "│                            ││                                                                                        │"
 "│                            ││                                                                                        │"
 "│                            │╰────────────────────────────────────────────────────────────────────────────────────────╯"
-"│                            │╭ Results · 1 row ───────────────────────────────────╮╭ [Cell] Row · I ──────────────────╮"
-"│                            ││ Result 1  [Result 2]  Chart  Messages          H/L ││ a                                │"
-"│                            ││   │ a                                              ││ int4 · 1 character               │"
+"│                            │╭ Results · 1 row ───────────────────────────────────╮╭ Cell [Row] · I ──────────────────╮"
+"│                            ││ Result 1  [Result 2]  Chart  Messages          H/L ││ a: 2                             │"
+"│                            ││   │ a                                              ││                                  │"
 "│                            ││   │ int4                                           ││                                  │"
-"│                            ││ 1 │    2                                           ││ 2                                │"
+"│                            ││ 1 │    2                                           ││                                  │"
 "│                            ││                                                    ││                                  │"
 "│                            ││                                                    ││                                  │"
 "│                            ││                                                    ││                                  │"

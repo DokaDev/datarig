@@ -88,7 +88,8 @@ fn setting_action(s: Setting) -> Option<Action> {
         | Setting::FormatIndent(_)
         | Setting::AutoPairs(_)
         | Setting::RunHints(_)
-        | Setting::KeychainAccess(_) => None,
+        | Setting::KeychainAccess(_)
+        | Setting::SizeHeat(_) => None,
     }
 }
 
@@ -795,6 +796,7 @@ impl App {
             Setting::AutoPairs(a) => self.set_prefs(s, |x| x.auto_pairs = a),
             Setting::RunHints(h) => self.set_prefs(s, |x| x.run_hints = h),
             Setting::KeychainAccess(a) => self.set_keychain_access(a),
+            Setting::SizeHeat(h) => self.set_prefs(s, |x| x.size_heat = h),
         }
     }
 
