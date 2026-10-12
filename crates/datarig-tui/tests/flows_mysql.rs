@@ -691,6 +691,11 @@ fn a_statement_the_server_would_not_stop_ends_the_tab_session_and_says_why() {
             "the server agreed to stop the statement and still kept sending rows: datarig closed the connection \
              instead of reading them.",
         ),
+        (
+            CancelFailure::NotAnswered(std::time::Duration::from_secs(10)),
+            "the request to stop the statement got no answer from the server within 10.0s: datarig closed the \
+             connection.",
+        ),
     ] {
         let mut h = mysql();
         h.db(DbEvent::Connected);
@@ -710,4 +715,34 @@ fn a_statement_the_server_would_not_stop_ends_the_tab_session_and_says_why() {
         h.ctrl('e');
         assert_eq!(h.roles(), [Meta, Query, Query], "the next run opens a new session");
     }
+}
+
+/// A statement that answered while a request to stop it got no answer: its outcome stays the
+/// run's, and the tab says why its connection was lost without saying the statement may run on
+/// (it ended) nor that it was cancelled.
+#[test]
+fn a_statement_that_answered_while_its_stop_went_unanswered_keeps_its_outcome() {
+    use datarig_core::driver::{CancelFailure, Outcome};
+    use datarig_tui::app::{Results, SessionState};
+    let mut h = mysql();
+    h.db(DbEvent::Connected);
+    h.ctrl('e');
+    let id = sent_run(&mut h);
+    h.ctrl('c');
+    h.tab_db(0, DbEvent::Done { id, outcome: Outcome::Affected(3), elapsed: Default::default() });
+    let why = CancelFailure::StopPending(std::time::Duration::from_secs(10));
+    h.tab_db(0, DbEvent::Lost { error: DbError::CancelNotTaken(why) });
+    assert!(!matches!(h.app.tab().results, Results::Cancelled));
+    assert_eq!(h.app.tab().exec.state, SessionState::Lost);
+    let status = h.status(600, 45);
+    assert!(
+        status.contains(
+            "This tab's connection was lost: a request to stop the statement got no answer from the server within \
+             10.0s and could still stop whatever ran next: datarig closed the connection once the statement had \
+             answered. An open transaction is rolled back once the server ends the session"
+        ),
+        "{status}"
+    );
+    assert!(!status.contains("may still run"), "{status}");
+    assert!(!status.contains("cancel"), "{status}");
 }

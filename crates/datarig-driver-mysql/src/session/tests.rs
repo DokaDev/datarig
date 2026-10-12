@@ -696,7 +696,7 @@ async fn a_statement_answered_while_its_kill_hangs_is_answered_then_lost() {
         }
     });
     let (client, _session_server) = tokio::io::duplex(1 << 16);
-    let (wire, _stream) = crate::wire::Wire::new(Box::new(client));
+    let (wire, mut _stream) = crate::wire::Wire::new(Box::new(client));
     let (_commands, rx) = tokio::sync::mpsc::unbounded_channel();
     let (events, _events) = tokio::sync::mpsc::unbounded_channel();
     let mut link = Link::new(rx, wire);
@@ -709,7 +709,8 @@ async fn a_statement_answered_while_its_kill_hangs_is_answered_then_lost() {
     let answered = tokio::time::timeout(KILL_TIMEOUT * 3, answered).await.expect("the wait ends");
     assert!(matches!(answered, Ok(42)), "the statement's own answer");
     let next = tokio::time::timeout(std::time::Duration::from_secs(1), link.next()).await.expect("at once");
-    assert!(matches!(next, Next::Lost(DbError::CancelNotTaken(CancelFailure::NotSent(_)))));
+    assert!(matches!(next, Next::Lost(DbError::CancelNotTaken(CancelFailure::StopPending(KILL_TIMEOUT)))));
+    assert!(_stream.write_all(b"next").await.is_err(), "the connection is cut");
     kill_server.abort();
 }
 
@@ -848,16 +849,14 @@ async fn a_result_answered_while_its_kill_hangs_is_read_to_its_end_then_the_sess
     assert!(!rows.1, "the result ended");
     assert!(!evs.iter().any(|e| matches!(e, DbEvent::Failed { .. })), "{evs:?}");
     match evs.last() {
-        Some(DbEvent::Lost { error: DbError::CancelNotTaken(why) }) => {
-            assert!(!matches!(why, CancelFailure::NotSent(_)), "the kill was sent: {why:?}");
-        }
+        Some(DbEvent::Lost { error: DbError::CancelNotTaken(CancelFailure::StopPending(KILL_TIMEOUT)) }) => {}
         other => panic!("{other:?}"),
     }
     kills.abort();
 }
 
 /// A kill written to the server that never gets its answer was sent: it is not one that could
-/// not reach the server (it may still be carried out).
+/// not reach the server (it may still be carried out), and is said so.
 #[tokio::test]
 async fn a_kill_sent_and_never_answered_is_not_taken_for_one_not_sent() {
     let (killer, mut server) = killer_on_a_fake_server();
@@ -865,10 +864,11 @@ async fn a_kill_sent_and_never_answered_is_not_taken_for_one_not_sent() {
         greet(&mut server).await;
         logged_in(&mut server).await;
         let kill = read_packet(&mut server).await;
-        tokio::time::sleep(KILL_TIMEOUT * 2).await;
+        // Held open past the time the killer waits for the answer.
+        tokio::time::sleep(KILL_TIMEOUT + std::time::Duration::from_secs(1)).await;
         kill
     });
     killer.kill_query().await;
-    assert_ne!(*killer.watch().borrow(), Kill::Failed(KillFailure::NotSent));
-    kill_server.abort();
+    assert_eq!(*killer.watch().borrow(), Kill::Failed(KillFailure::NotAnswered));
+    assert!(kill_server.await.unwrap().is_some_and(|p| p == b"\x03KILL QUERY 7"), "it was sent");
 }

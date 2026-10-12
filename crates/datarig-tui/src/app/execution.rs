@@ -1537,6 +1537,12 @@ impl App {
                 return self.i18n.msg(&Msg::DbCancelNotSent { reason: self.db_error_text(why) }).to_string();
             }
             DbError::CancelNotTaken(CancelFailure::KeptSending) => Label::DbCancelKeptSending,
+            DbError::CancelNotTaken(CancelFailure::NotAnswered(d)) => {
+                return self.i18n.msg(&Msg::DbCancelNotAnswered { elapsed: *d }).to_string();
+            }
+            DbError::CancelNotTaken(CancelFailure::StopPending(d)) => {
+                return self.i18n.msg(&Msg::DbCancelStopPending { elapsed: *d }).to_string();
+            }
             DbError::Locked => Label::DbLocked,
             DbError::NotFound => Label::DbNotFound,
             DbError::Ambiguous(kinds) => {

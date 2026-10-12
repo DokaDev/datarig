@@ -25,7 +25,7 @@ pub(crate) const CONNECT_GUARD: Duration = Duration::from_secs(30);
 pub(crate) const DIAL_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// How long a cancel's connection may take to open and send its `KILL QUERY`.
-const KILL_TIMEOUT: Duration = Duration::from_secs(10);
+pub(crate) const KILL_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// The server and credentials of a profile, from its fields or its `mysql://` URL.
 #[derive(Clone)]
@@ -480,11 +480,21 @@ pub(crate) enum KillFailure {
     Refused(u16),
     /// It could not be sent: the connection to send it on did not open in time.
     NotSent,
+    /// It was sent and got no answer within [`KILL_TIMEOUT`]: whether it took is not known, and
+    /// it may still be carried out.
+    NotAnswered,
 }
 
-/// A kill sent that never got its answer within [`KILL_TIMEOUT`]: whether it took is not known.
-pub(crate) fn kill_unanswered() -> CancelFailure {
-    CancelFailure::NotSent(Box::new(DbError::NoAnswer(KILL_TIMEOUT)))
+/// A kill of the running statement sent that never got its answer within [`KILL_TIMEOUT`]
+/// ([`KillFailure::NotAnswered`]).
+pub(crate) fn kill_not_answered() -> CancelFailure {
+    CancelFailure::NotAnswered(KILL_TIMEOUT)
+}
+
+/// A kill sent again that never got its answer within [`KILL_TIMEOUT`] while its statement
+/// answered ([`Gate::close`]): it may still be carried out on whatever the connection runs next.
+pub(crate) fn kill_pending() -> CancelFailure {
+    CancelFailure::StopPending(KILL_TIMEOUT)
 }
 
 /// What a kill sent again while a request waits ([`Killer::try_again`]) is sent under: open while
@@ -573,6 +583,8 @@ impl Killer {
         let answered = std::sync::Mutex::new(None);
         // Why it could not be sent, when it could not.
         let unsent = std::sync::Mutex::new(None);
+        // A kill was written and its answer has not come: one given up on was sent.
+        let written = AtomicBool::new(false);
         let why = |e: DbError| {
             if let Ok(mut w) = unsent.lock() {
                 *w = Some(e);
@@ -591,7 +603,10 @@ impl Killer {
                 if !still() {
                     break;
                 }
-                let kill = match conn.query_drop(format!("KILL QUERY {}", self.id)).await {
+                written.store(true, Ordering::SeqCst);
+                let answer = conn.query_drop(format!("KILL QUERY {}", self.id)).await;
+                written.store(false, Ordering::SeqCst);
+                let kill = match answer {
                     Ok(()) => Kill::Taken(Instant::now()),
                     Err(mysql_async::Error::Server(e)) => Kill::Failed(KillFailure::Refused(e.code)),
                     Err(e) => {
@@ -614,7 +629,13 @@ impl Killer {
             // Not sent: the statement it was for ended.
             Ok(Some(None)) => return,
             Ok(Some(Some(kill))) => kill,
-            Ok(None) | Err(_) => answered.lock().ok().and_then(|a| *a).unwrap_or(Kill::Failed(KillFailure::NotSent)),
+            Ok(None) | Err(_) => {
+                answered.lock().ok().and_then(|a| *a).unwrap_or(Kill::Failed(if written.load(Ordering::SeqCst) {
+                    KillFailure::NotAnswered
+                } else {
+                    KillFailure::NotSent
+                }))
+            }
         };
         if !only_taken || matches!(kill, Kill::Taken(_)) {
             if kill == Kill::Failed(KillFailure::NotSent)
