@@ -516,5 +516,19 @@ pub fn profile_color(c: datarig_core::profile::color::ProfileColor) -> Color {
     }
 }
 
+/// A chip of color `c` (an environment's badge): bold text in black or white, whichever reads
+/// better on `c`.
+pub fn chip(c: Color) -> Style {
+    let fg = match c {
+        // Relative luminance (sRGB weights, without the gamma curve): light colors take dark
+        // text. The profile palette is light enough for all of its colors.
+        Color::Rgb(r, g, b) if 2126 * u32::from(r) + 7152 * u32::from(g) + 722 * u32::from(b) < 1_100_000 => {
+            Color::Rgb(0xFF, 0xFF, 0xFF)
+        }
+        _ => Color::Rgb(0x16, 0x16, 0x1E),
+    };
+    Style::new().fg(fg).bg(c).add_modifier(Modifier::BOLD)
+}
+
 #[cfg(test)]
 mod tests;

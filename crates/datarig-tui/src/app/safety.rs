@@ -1,5 +1,7 @@
-//! Checks before a statement runs: the profile's policy decides whether it
-//! may run at all (`read_only`) and whether it asks first (`confirm`). Statements are
+//! Checks before a statement runs: the profile's environment (its rules, or the default rules
+//! without one) decides whether it may run at all (`read_only`) and whether it asks first
+//! (`confirm`). A profile naming an environment that is not defined runs nothing: every
+//! statement is refused, never run under the default rules instead. Statements are
 //! classified by `datarig_core::sql::risk`; nothing is sent (or queued for a connection)
 //! before the checks pass.
 //!
@@ -10,18 +12,19 @@
 //! PostgreSQL's parser rejects; also inside
 //! `EXPLAIN ANALYZE` or a data-modifying `WITH`), or with `confirm = "writes"` any statement
 //! that may change something, opens one question listing every such statement of the run,
-//! with the connection and its policy. Nothing runs before the answer; Cancel has the focus. A run that waits for
+//! with the connection and its environment. Nothing runs before the answer; Cancel has the focus. A run that waits for
 //! its connection is asked about before it is queued, and runs without asking again once the
 //! connection is up.
 //!
-//! A read-only policy is enforced twice: here, where every statement that is not a read,
-//! transaction control or a safe session setting is refused with a notice naming the policy,
+//! A read-only environment is enforced twice: here, where every statement that is not a read,
+//! transaction control or a safe session setting is refused with a notice naming the
+//! environment,
 //! and on the server, where every session of the profile (queries and metadata) is opened
 //! read-only (`ConnectOptions::read_only`), which also stops writes the text does not show.
 
 use super::overlay::RunConfirm;
 use super::*;
-use datarig_core::policy::Policy;
+use datarig_core::policy::{Confirm, Policy, UnknownEnvironment};
 use datarig_core::sql::risk::{Class, Danger, NoWhere, ReadOnlyBlock, Why};
 
 /// A statement of a run that asks before it runs.
@@ -40,38 +43,63 @@ pub struct Dangerous {
 }
 
 impl App {
-    /// The policy of profile `id`: its name as the status bar says it, and its values.
-    pub fn policy_of(&self, id: ProfileId) -> (String, Policy) {
-        let name = self.profile(id).and_then(|p| p.policy.clone());
-        let policy = self.policies.get(name.as_deref());
-        (name.unwrap_or_else(|| datarig_core::policy::DEFAULT.to_string()), policy)
+    /// The rules of profile `id`: its environment's, the default rules without one, or the
+    /// name of the environment it names that is not defined.
+    pub fn policy_of(&self, id: ProfileId) -> Result<Policy, UnknownEnvironment> {
+        self.policies.get(self.profile(id).and_then(|p| p.policy.as_deref()))
     }
 
-    /// Profile `id`'s policy is read-only.
+    /// The rules profile `id` is held to: [`App::policy_of`], and for an environment that is not
+    /// defined the strictest (read-only, every write asks), so that nothing runs under looser
+    /// ones by mistake ([`App::read_only_refusal`] refuses everything then anyway).
+    pub fn rules_of(&self, id: ProfileId) -> Policy {
+        self.policy_of(id).unwrap_or(Policy { read_only: true, confirm: Confirm::Writes, ..Policy::default() })
+    }
+
+    /// The name of profile `id`'s environment, as the status bar and the dialogs say it
+    /// (`None`: the default rules).
+    pub fn environment_name(&self, id: ProfileId) -> Option<String> {
+        self.profile(id)?.policy.clone().filter(|n| n != datarig_core::policy::DEFAULT)
+    }
+
+    /// Profile `id`'s environment is read-only.
     pub fn read_only(&self, id: ProfileId) -> bool {
-        self.policy_of(id).1.read_only
+        self.rules_of(id).read_only
+    }
+
+    /// What profile `name` says when its environment `environment` is not defined.
+    pub(super) fn unknown_environment_notice(&self, name: &str, e: &UnknownEnvironment) -> Notice {
+        Notice::new(Msg::EnvironmentNotFound { name: name.to_string(), environment: e.0.clone() }, Level::Error)
     }
 
     /// Whether a session opened for `cfg` (the profile as it connected) is read-only: when its
-    /// policy was read-only then, or is now.
+    /// environment was read-only then, or is now (one that is not defined counts as read-only).
     pub(super) fn session_read_only(&self, cfg: &ConnectionConfig) -> bool {
-        self.policies.get(cfg.policy.as_deref()).read_only || self.read_only(cfg.id)
+        !self.policies.get(cfg.policy.as_deref()).is_ok_and(|p| !p.read_only) || self.read_only(cfg.id)
     }
 
-    /// Why profile `pid`'s policy refuses to run `statements` in tab `tab` (the first it
+    /// Why profile `pid`'s environment refuses to run `statements` in tab `tab` (the first it
     /// refuses), or `None` when it may run. The tab's open session must have been opened
     /// read-only too.
     pub(super) fn read_only_refusal(&self, tab: TabId, pid: ProfileId, statements: &[String]) -> Option<Notice> {
-        let (policy, values) = self.policy_of(pid);
+        let values = match self.policy_of(pid) {
+            Ok(v) => v,
+            // Its environment was deleted or renamed away since it connected: nothing runs.
+            Err(e) => {
+                let name = self.profile(pid).map(|p| p.name.clone()).unwrap_or_default();
+                return Some(self.unknown_environment_notice(&name, &e));
+            }
+        };
         if !values.read_only {
             return None;
         }
-        // The policy became read-only after this tab's session opened: that session is not
+        let environment = self.environment_name(pid).unwrap_or_else(|| datarig_core::policy::DEFAULT.to_string());
+        // The environment became read-only after this tab's session opened: that session is not
         // read-only on the server, so nothing runs on it until it connects again.
         let t = self.tabs.get(tab)?;
         if t.exec.session.is_some() && !t.exec.read_only {
             return Some(Notice::new(
-                Msg::SafetyReadOnlyReconnect { policy, key: self.key_for(Action::ReconnectCurrent, Ctx::Nav) },
+                Msg::SafetyReadOnlyReconnect { environment, key: self.key_for(Action::ReconnectCurrent, Ctx::Nav) },
                 Level::Error,
             ));
         }
@@ -80,13 +108,13 @@ impl App {
             let why = classifier.classify(sql).read_only().err()?;
             let what = self.i18n.label(blocked_label(why)).to_string();
             let sql = super::runlog::excerpt(sql, 60);
-            Some(Notice::new(Msg::SafetyReadOnlyBlocked { policy: policy.clone(), what, sql }, Level::Error))
+            Some(Notice::new(Msg::SafetyReadOnlyBlocked { environment: environment.clone(), what, sql }, Level::Error))
         })
     }
 }
 
 impl App {
-    /// Why `statements` cannot run at all in tab `tab`, whatever the policy: `COPY … FROM
+    /// Why `statements` cannot run at all in tab `tab`, whatever the environment: `COPY … FROM
     /// STDIN` and `COPY … TO STDOUT` need the COPY protocol, which the app does not carry yet
     /// (sent, the first broke the tab's connection).
     pub(super) fn unsupported(&self, tab: TabId, statements: &[String]) -> Option<Notice> {
@@ -114,9 +142,9 @@ impl App {
     }
 
     /// The statements of `statements` that ask before they run in tab `tab` under profile
-    /// `pid`'s policy.
+    /// `pid`'s environment.
     pub(super) fn dangerous(&self, tab: TabId, pid: ProfileId, statements: &[String]) -> Vec<Dangerous> {
-        let writes = self.policy_of(pid).1.confirm.writes();
+        let writes = self.rules_of(pid).confirm.writes();
         let mut classifier = self.classifier(tab);
         statements
             .iter()
@@ -244,7 +272,7 @@ pub(crate) fn why_text(i18n: &I18n, d: &Dangerous) -> String {
     parts.join(" · ")
 }
 
-/// What a read-only policy says about a statement it refuses.
+/// What a read-only environment says about a statement it refuses.
 fn blocked_label(why: ReadOnlyBlock) -> Label {
     match why {
         ReadOnlyBlock::ReadWrite => Label::SafetyBlockedReadWrite,

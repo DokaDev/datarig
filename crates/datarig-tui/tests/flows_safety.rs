@@ -67,7 +67,7 @@ fn a_read_only_policy_refuses_what_may_write_and_sends_nothing() {
     ] {
         assert!(run(&mut h, sql).is_empty(), "nothing is sent: {sql}");
         let expected = Msg::SafetyReadOnlyBlocked {
-            policy: "prod".into(),
+            environment: "prod".into(),
             what: what.into(),
             sql: datarig_tui::app::runlog::excerpt(sql, 60),
         };
@@ -76,7 +76,7 @@ fn a_read_only_policy_refuses_what_may_write_and_sends_nothing() {
     }
     let screen = h.screen(160, 45);
     assert!(
-        screen.contains("Not run: policy \"prod\" is read-only and this setting is not on the read-only"),
+        screen.contains("Not run: the environment \"prod\" is read-only and this setting is not on the"),
         "{screen}"
     );
     for sql in [
@@ -178,11 +178,11 @@ fn a_policy_that_became_read_only_asks_for_a_reconnect() {
     );
     h.app.profiles[0].policy = Some("prod".into());
     assert!(run(&mut h, "SELECT 1").is_empty(), "not even a read on the old session");
-    assert_eq!(status(&h), Some(Msg::SafetyReadOnlyReconnect { policy: "prod".into(), key: "Space c r".into() }));
+    assert_eq!(status(&h), Some(Msg::SafetyReadOnlyReconnect { environment: "prod".into(), key: "Space c r".into() }));
 }
 
 /// The markers: `RO` on the tab and in the explorer, a `READ-ONLY` badge in the status bar,
-/// in words (policies have no color).
+/// in words, next to the environment's name (it has neither a color nor a badge here).
 #[test]
 fn read_only_markers_on_the_tab_the_explorer_and_the_status_bar() {
     let mut h = connected(Some("prod"), Lang::En);
@@ -190,7 +190,7 @@ fn read_only_markers_on_the_tab_the_explorer_and_the_status_bar() {
     let lines: Vec<&str> = screen.lines().collect();
     assert!(lines[0].contains("console 1 RO ×"), "tab bar: {}", lines[0]);
     assert!(screen.contains("local-pg RO"), "explorer");
-    assert!(lines[44].contains("policy: prod  READ-ONLY "), "status bar: {}", lines[44]);
+    assert!(lines[44].contains("local-pg · prod  READ-ONLY "), "status bar: {}", lines[44]);
     let mut h = connected(None, Lang::En);
     let screen = h.screen(160, 45);
     assert!(!screen.contains(" RO") && !screen.contains("READ-ONLY"), "{screen}");
@@ -244,7 +244,7 @@ fn a_destructive_statement_asks_first_and_cancel_has_the_focus() {
     assert!(screen.contains("Run a statement that may do harm?"), "{screen}");
     assert!(screen.contains("1/1  drops it  target: shop.orders"), "{screen}");
     assert!(screen.contains("DROP TABLE shop.orders"), "{screen}");
-    assert!(screen.contains("● local-pg · policy: default"), "the connection: {screen}");
+    assert!(screen.contains("● local-pg") && !screen.contains("● local-pg ·"), "the connection: {screen}");
     // Enter on the focused button (Cancel) does not run it.
     h.key(KeyCode::Enter);
     assert_eq!(h.overlay_kind(), None);
@@ -606,7 +606,7 @@ fn set_config_of_the_read_only_settings_is_refused_when_read_only() {
     ] {
         assert!(run(&mut h, sql).is_empty(), "{sql}");
         let expected = Msg::SafetyReadOnlyBlocked {
-            policy: "prod".into(),
+            environment: "prod".into(),
             what: "this statement asks for a read-write transaction".into(),
             sql: datarig_tui::app::runlog::excerpt(sql, 60),
         };
@@ -677,7 +677,7 @@ fn a_statement_too_deep_or_too_long_to_check_asks_or_is_refused() {
     ] {
         assert!(run(&mut h, sql).is_empty());
         let expected = Msg::SafetyReadOnlyBlocked {
-            policy: "prod".into(),
+            environment: "prod".into(),
             what: what.into(),
             sql: datarig_tui::app::runlog::excerpt(sql, 60),
         };
@@ -817,7 +817,7 @@ fn copy_with_a_program_or_a_server_file_asks_or_is_refused() {
     for sql in ["COPY shop.users FROM PROGRAM 'id'", "COPY shop.users TO '/tmp/zz_x'"] {
         assert!(run(&mut h, sql).is_empty(), "{sql}");
         let expected = Msg::SafetyReadOnlyBlocked {
-            policy: "prod".into(),
+            environment: "prod".into(),
             what: "this statement writes".into(),
             sql: datarig_tui::app::runlog::excerpt(sql, 60),
         };
@@ -884,7 +884,7 @@ fn builtins_that_act_on_the_server_ask_or_are_refused() {
     ] {
         assert!(run(&mut h, sql).is_empty(), "{sql}");
         let expected = Msg::SafetyReadOnlyBlocked {
-            policy: "prod".into(),
+            environment: "prod".into(),
             what: what.into(),
             sql: datarig_tui::app::runlog::excerpt(sql, 60),
         };
@@ -925,7 +925,7 @@ fn builtins_that_act_on_the_server_in_any_call_form_ask_or_are_refused() {
             "this statement acts on the database server beyond its transaction"
         };
         let expected = Msg::SafetyReadOnlyBlocked {
-            policy: "prod".into(),
+            environment: "prod".into(),
             what: what.into(),
             sql: datarig_tui::app::runlog::excerpt(sql, 60),
         };
@@ -966,7 +966,7 @@ fn asks_or_is_refused(setup: &str, calls: &[(&str, &str, &str)], harmless: &str)
             _ => "this statement runs a query given as text that cannot be checked",
         };
         let expected = Msg::SafetyReadOnlyBlocked {
-            policy: "prod".into(),
+            environment: "prod".into(),
             what: what.into(),
             sql: datarig_tui::app::runlog::excerpt(sql, 60),
         };

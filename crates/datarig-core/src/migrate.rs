@@ -113,6 +113,8 @@ pub fn run(store: &dyn SecretStore, file: &dyn SecretStore, input: Input) -> Rep
             Some(Profiles {
                 connections: &config.connections,
                 tunnels: &config.tunnels,
+                environments: None,
+                default_rules: None,
                 folders: &config.folders,
                 last_used: config.last_used,
             }),

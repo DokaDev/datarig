@@ -1,7 +1,9 @@
-//! Safety policies: named sets of behavior settings; a profile names one
-//! (`policy = "…"`), and a profile without one uses `default`.
+//! Environments: named sets of safety and behavior settings (`dev`, `staging`, `prod`, …) that
+//! profiles name (`policy = "…"`), each with an optional color and tab badge. A profile without
+//! one uses the default rules.
 //!
-//! In the config file a policy is a `[policy.<name>]` table with these items:
+//! In the config file an environment is a `[policy.<name>]` table (the key predates the name
+//! "environment" and stays, so existing files keep working) with these items:
 //!
 //! * `paging` — what a result with more rows than a page keeps on the server, outside the
 //!   user's own transaction block: `"no_hold"` (default) keeps nothing: the first page comes
@@ -37,19 +39,33 @@
 //!   text the parser rejects: `sql::risk::Danger`) or `"writes"` (also every statement that is
 //!   not a read, transaction control or a session setting; unknown and procedural ones
 //!   included). Dangerous statements always ask.
+//! * `color` — the environment's color: one of the profile colors' 12 names or `#rrggbb`
+//!   ([`crate::profile::color`]). No default (no color).
+//! * `badge` — a short text the tabs and the status bar show for its profiles (`"PROD"`): no
+//!   blanks around it, no control character, at most [`BADGE_MAX`] columns. No default.
 //!
-//! An item a table leaves out has its built-in default; `[policy.default]` changes the values of
-//! the built-in `default` policy. A profile naming a policy that is not defined gets `default`.
+//! An item a table leaves out has its built-in default. `[policy.default]` is not an
+//! environment: it changes the default rules (the app edits them too), which profiles without
+//! an environment use (its `color` and `badge`, if any, are not shown anywhere). A profile naming an environment that
+//! is not defined is an error of that profile ([`Policies::get`]): it is never run under the
+//! default rules instead.
+//!
+//! [`presets`] are the four environments the app offers while there is none.
 
 pub use crate::driver::PagingMode;
-use std::collections::BTreeMap;
+use crate::profile::color::ProfileColor;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 /// Default of `paging_idle_timeout`.
 pub const PAGING_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// The name of the policy a profile without `policy` uses.
+/// The name of the table of the default rules (`[policy.default]`), which a profile without an
+/// environment uses; never an environment's name.
 pub const DEFAULT: &str = "default";
+
+/// The most columns a badge may take.
+pub const BADGE_MAX: usize = 8;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Policy {
@@ -99,6 +115,14 @@ impl Confirm {
     pub fn writes(self) -> bool {
         self == Confirm::Writes
     }
+
+    /// The value as written: `"destructive"` or `"writes"`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Confirm::Destructive => "destructive",
+            Confirm::Writes => "writes",
+        }
+    }
 }
 
 /// A `spill_limit`: the most bytes a result's spill file may take, or no limit (`None`).
@@ -137,19 +161,137 @@ pub fn parse_size(v: &toml::Value) -> Result<SpillLimit, String> {
     Ok(SpillLimit((bytes > 0).then_some(bytes)))
 }
 
-/// The policies of the config file by name; `default` is always there.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Policies(BTreeMap<String, Policy>);
+/// An environment's identity while the app runs (never written: the file knows it by its
+/// name). It stays the same across a rename.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct EnvironmentId(u64);
 
-impl Policies {
-    pub fn insert(&mut self, name: &str, p: Policy) {
-        self.0.insert(name.to_string(), p);
+impl EnvironmentId {
+    /// A new id, unique in this process.
+    pub fn new() -> Self {
+        static NEXT: AtomicU64 = AtomicU64::new(1);
+        EnvironmentId(NEXT.fetch_add(1, Ordering::Relaxed))
+    }
+}
+
+impl Default for EnvironmentId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// An environment: a `[policy.<name>]` table other than `default`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Environment {
+    pub id: EnvironmentId,
+    /// The table's key, and what profiles name (`policy = "<name>"`).
+    pub name: String,
+    pub policy: Policy,
+    /// `red` … `gray` or `#rrggbb` (validated when read); `None`: no color.
+    pub color: Option<String>,
+    /// The tab badge ([`badge_ok`]); `None`: none.
+    pub badge: Option<String>,
+    /// The name its table has in the file (a rename moves that table, comments and all).
+    pub origin: Option<String>,
+}
+
+impl Environment {
+    /// A new environment `name` with `policy`, no color nor badge, and a new id.
+    pub fn new(name: &str, policy: Policy) -> Self {
+        Environment { id: EnvironmentId::new(), name: name.to_string(), policy, color: None, badge: None, origin: None }
     }
 
-    /// The policy a profile with `policy = name` uses.
-    pub fn get(&self, name: Option<&str>) -> Policy {
-        let name = name.unwrap_or(DEFAULT);
-        self.0.get(name).or_else(|| self.0.get(DEFAULT)).cloned().unwrap_or_default()
+    /// Its color, when it has one.
+    pub fn display_color(&self) -> Option<ProfileColor> {
+        self.color.as_deref().and_then(ProfileColor::parse)
+    }
+
+    /// The same settings: the rules, the color and the badge (not the name nor the id).
+    pub fn same_settings(&self, other: &Environment) -> bool {
+        self.policy == other.policy && self.color == other.color && self.badge == other.badge
+    }
+}
+
+/// Whether `s` can be a badge: not empty, no blanks around it, no control character, at most
+/// [`BADGE_MAX`] columns.
+pub fn badge_ok(s: &str) -> bool {
+    !s.is_empty()
+        && s.trim() == s
+        && !s.chars().any(char::is_control)
+        && unicode_width::UnicodeWidthStr::width(s) <= BADGE_MAX
+}
+
+/// The environments the app offers while there is none, in order: `dev` and `test` with the
+/// default rules (green, blue), `staging` asking before every write (orange, `STG`) and `prod`
+/// read-only and asking before every write (red, `PROD`).
+pub fn presets() -> Vec<Environment> {
+    let env = |name: &str, policy: Policy, color: &str, badge: Option<&str>| Environment {
+        color: Some(color.to_string()),
+        badge: badge.map(str::to_string),
+        ..Environment::new(name, policy)
+    };
+    let writes = Policy { confirm: Confirm::Writes, ..Policy::default() };
+    vec![
+        env("dev", Policy::default(), "green", None),
+        env("test", Policy::default(), "blue", None),
+        env("staging", writes.clone(), "orange", Some("STG")),
+        env("prod", Policy { read_only: true, ..writes }, "red", Some("PROD")),
+    ]
+}
+
+/// A profile names an environment that is not defined (its name).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UnknownEnvironment(pub String);
+
+/// The default rules and the environments of the config file, in the file's order.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Policies {
+    /// `[policy.default]` (else the built-in defaults).
+    default: Policy,
+    environments: Vec<Environment>,
+}
+
+impl Policies {
+    /// `default` changes the default rules ([`DEFAULT`]); another name adds environment `name`
+    /// with `p` or changes its rules.
+    pub fn insert(&mut self, name: &str, p: Policy) {
+        if name == DEFAULT {
+            self.default = p;
+        } else if let Some(e) = self.environments.iter_mut().find(|e| e.name == name) {
+            e.policy = p;
+        } else {
+            let mut e = Environment::new(name, p);
+            e.origin = Some(name.to_string());
+            self.environments.push(e);
+        }
+    }
+
+    /// The default rules.
+    pub fn default_rules(&self) -> &Policy {
+        &self.default
+    }
+
+    pub fn environments(&self) -> &[Environment] {
+        &self.environments
+    }
+
+    pub fn environments_mut(&mut self) -> &mut Vec<Environment> {
+        &mut self.environments
+    }
+
+    /// Environment `name` (exactly that name).
+    pub fn environment(&self, name: &str) -> Option<&Environment> {
+        self.environments.iter().find(|e| e.name == name)
+    }
+
+    /// The rules of a profile with `policy = name`: the default rules without a name (or with
+    /// `default`), else that environment's. A name no environment has is an error, never the
+    /// default rules.
+    pub fn get(&self, name: Option<&str>) -> Result<Policy, UnknownEnvironment> {
+        match name {
+            None | Some(DEFAULT) => Ok(self.default.clone()),
+            Some(n) => self.environment(n).map(|e| e.policy.clone()).ok_or_else(|| UnknownEnvironment(n.to_string())),
+        }
     }
 }
 
@@ -185,6 +327,47 @@ pub fn parse_timeout(v: &toml::Value) -> Result<Option<Duration>, String> {
         other => return Err(other.to_string()),
     };
     Ok((secs > 0).then(|| Duration::from_secs(secs)))
+}
+
+/// A duration typed as text (a form's field): as [`parse_timeout`] reads a string.
+pub fn parse_timeout_text(s: &str) -> Result<Option<Duration>, String> {
+    parse_timeout(&toml::Value::String(s.to_string()))
+}
+
+/// A size typed as text (a form's field): as [`parse_size`] reads a string.
+pub fn parse_size_text(s: &str) -> Result<SpillLimit, String> {
+    parse_size(&toml::Value::String(s.to_string()))
+}
+
+/// A `paging` value as written: `"no_hold"` or `"hold"`.
+pub fn paging_str(p: PagingMode) -> &'static str {
+    match p {
+        PagingMode::NoHold => "no_hold",
+        PagingMode::Hold => "hold",
+    }
+}
+
+/// A `paging_idle_timeout` as written, in the largest unit that keeps it exact (`"30s"`, `"5m"`,
+/// `"1h"`), or `"off"` for never; [`parse_timeout`] reads it back.
+pub fn format_timeout(t: Option<Duration>) -> String {
+    match t.map(|d| d.as_secs()) {
+        None | Some(0) => "off".into(),
+        Some(s) if s % 3600 == 0 => format!("{}h", s / 3600),
+        Some(s) if s % 60 == 0 => format!("{}m", s / 60),
+        Some(s) => format!("{s}s"),
+    }
+}
+
+/// A `spill_limit` as written, in the largest unit that keeps it exact (`"512MB"`, `"2GB"`; bytes
+/// as a plain number otherwise), or `"off"` for no limit; [`parse_size`] reads it back.
+pub fn format_size(l: SpillLimit) -> String {
+    match l.0 {
+        None | Some(0) => "off".into(),
+        Some(b) if b % (1 << 30) == 0 => format!("{}GB", b >> 30),
+        Some(b) if b % (1 << 20) == 0 => format!("{}MB", b >> 20),
+        Some(b) if b % (1 << 10) == 0 => format!("{}KB", b >> 10),
+        Some(b) => b.to_string(),
+    }
 }
 
 #[cfg(test)]

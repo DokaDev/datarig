@@ -4,7 +4,7 @@ expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×                                          "
 "│ ╭ Keys — Editor (vim Normal) ──────────────────────────────────────────────╮─╮"
-"│▾│ / search all keys · Esc close                                            │t│"
+"│▾│ / search all keys · Esc close                                            │ │"
 "│ │──────────────────────────────────────────────────────────────────────────│e│"
 "│ │   New connection profile                  Space c n                      │ │"
 "│ │   Edit this tab's connection profile      Space c e                      │ │"
@@ -25,4 +25,4 @@ expression: backend
 "│ │   View as plan: the text EXPLAIN again a… Space e p                      │ │"
 "│ ╰─────────────────── ↑↓ move · Enter run/open · l/h open/close · Esc close ╯ │"
 "╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
-" NORMAL  local-pg · policy: default │ Connected to local-pg                  EN "
+" NORMAL  local-pg │ Connected to local-pg                                    EN "

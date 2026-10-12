@@ -1,8 +1,9 @@
 //! Drawing the explorer: "＋ New connection" pinned on
 //! top, folders, each profile with its state (`○` not connected, a spinner while connecting,
 //! `●` connected, `✕` failed) in the profile's color, its icon and name (`RO` after it when its
-//! policy is read-only), the error line under a
-//! failed profile, and under a connected one its server's databases (its own first, marked
+//! environment is read-only), the error line under a
+//! failed profile (an environment mark in the error color when the environment it names is not
+//! defined), and under a connected one its server's databases (its own first, marked
 //! `default`), each with its schema tree. With icons on every node of the tree has
 //! an icon of its kind, and a column that is no key the icon of its type. A table or a
 //! materialized view has the estimates of its rows and size after its name, dim and on the
@@ -10,7 +11,9 @@
 //! its structure (see `widgets::tree`): each group with its icon, each item with its group's.
 //! The "Tunnels" section lists the tunnel presets: each with the state of its shared connection
 //! (`○` closed, a spinner while it opens, `●` open, `✕` lost), its bastion and how many
-//! profiles name it, and under it, opened, those profiles.
+//! profiles name it, and under it, opened, those profiles. The "Environments" section lists the
+//! environments the same way: each with its color's dot, its badge, its rules in a few words
+//! and how many profiles name it; without one, a row that adds the presets.
 
 use crate::app::action::Action;
 use crate::app::explorer::{Row, RowKind};
@@ -75,8 +78,11 @@ fn row_parts(app: &App, row: &Row) -> Vec<(String, Style)> {
                 Ok(_) => parts.push((format!(" {}", icons::tunnel(app.icons_on())), fg(th.fg_muted))),
                 Err(_) => parts.push((format!(" {}", icons::tunnel(app.icons_on())), fg(th.error))),
             }
-            // A read-only policy, in words (policies have no color).
-            if app.read_only(*id) {
+            // An environment that is not defined: its mark in the error color (it does not
+            // connect); else a read-only environment, in words.
+            if app.policy_of(*id).is_err() {
+                parts.push((format!(" {}", icons::environment(app.icons_on())), fg(th.error)));
+            } else if app.read_only(*id) {
                 let ro = app.i18n.label(Label::ExplorerReadOnly);
                 parts.push((format!(" {ro}"), fg(th.fg_muted).add_modifier(Modifier::BOLD)));
             }
@@ -170,30 +176,86 @@ fn row_parts(app: &App, row: &Row) -> Vec<(String, Style)> {
             vec![(app.i18n.msg(&Msg::ExplorerTunnelsEmpty { key }).to_string(), fg(th.fg_dim))]
         }
         RowKind::Tunnel(id) => tunnel_parts(app, *id),
+        RowKind::EnvironmentsHeader => {
+            let mut parts = Vec::new();
+            if app.icons_on() {
+                parts.push((format!("{} ", icons::ENVIRONMENT), fg(th.accent)));
+            }
+            parts.push((
+                app.i18n.label(Label::ExplorerEnvironments).to_string(),
+                fg(th.accent).add_modifier(Modifier::BOLD),
+            ));
+            parts.push((format!(" {}", app.environments().len()), fg(th.fg_dim)));
+            parts
+        }
+        RowKind::EnvironmentPresets => {
+            vec![(format!("＋ {}", app.i18n.label(Label::ExplorerEnvironmentPresets)), fg(th.fg_dim))]
+        }
+        RowKind::Environment(id) => environment_parts(app, *id),
+        // The default rules: no color, no badge; their rules and how many profiles use them.
+        RowKind::DefaultRules => {
+            let mut parts = vec![
+                (DISCONNECTED.to_string(), fg(th.fg_muted)),
+                (" ".into(), fg(th.fg)),
+                (app.i18n.label(Label::ExplorerDefaultRules).to_string(), fg(th.fg)),
+                (format!("  {}", app.rules_hint(app.policies.default_rules())), fg(th.fg_dim)),
+            ];
+            let users = app.default_rules_users().len() as u64;
+            if users > 0 {
+                parts.push((format!(" · {}", app.i18n.msg(&Msg::ExplorerTunnelUsers { count: users })), fg(th.fg_dim)));
+            }
+            parts
+        }
+        RowKind::DefaultRulesUser(pid) => user_parts(app, *pid),
+        RowKind::EnvironmentUser(_, pid) => user_parts(app, *pid),
         RowKind::TunnelError(id) => {
             let text = app.shared.lost.get(id).map(|e| e.render(&app.i18n).to_string());
             vec![(text.unwrap_or_default(), fg(th.error))]
         }
-        RowKind::TunnelUser(_, pid) => {
-            let Some(p) = app.profile(*pid) else { return Vec::new() };
-            let color = theme::profile_color(p.display_color());
-            let mark = match app.conns.state(*pid) {
-                NodeState::Connected => (CONNECTED.to_string(), fg(color)),
-                NodeState::Failed => (FAILED.to_string(), fg(th.error)),
-                NodeState::Connecting => {
-                    let started = app.conns.get(*pid).and_then(|c| c.connecting.as_ref()).map(|c| c.started);
-                    (started.map_or("⠋", |t| spinner_at(t, app.now())).to_string(), fg(th.accent))
-                }
-                NodeState::Disconnected => (DISCONNECTED.to_string(), fg(color)),
-            };
-            vec![
-                mark,
-                (" ".into(), fg(th.fg)),
-                (icons::cell(p, app.icons_on()), fg(color)),
-                (p.name.clone(), fg(th.fg_muted)),
-            ]
-        }
+        RowKind::TunnelUser(_, pid) => user_parts(app, *pid),
     }
+}
+
+/// A profile listed under a tunnel preset or an environment: its state and icon in its color,
+/// its name.
+fn user_parts(app: &App, pid: datarig_core::profile::ProfileId) -> Vec<(String, Style)> {
+    let th = theme::cur();
+    let fg = |c: Color| Style::new().fg(c);
+    let Some(p) = app.profile(pid) else { return Vec::new() };
+    let color = theme::profile_color(p.display_color());
+    let mark = match app.conns.state(pid) {
+        NodeState::Connected => (CONNECTED.to_string(), fg(color)),
+        NodeState::Failed => (FAILED.to_string(), fg(th.error)),
+        NodeState::Connecting => {
+            let started = app.conns.get(pid).and_then(|c| c.connecting.as_ref()).map(|c| c.started);
+            (started.map_or("⠋", |t| spinner_at(t, app.now())).to_string(), fg(th.accent))
+        }
+        NodeState::Disconnected => (DISCONNECTED.to_string(), fg(color)),
+    };
+    vec![mark, (" ".into(), fg(th.fg)), (icons::cell(p, app.icons_on()), fg(color)), (p.name.clone(), fg(th.fg_muted))]
+}
+
+/// An environment: its color's dot (`○` without one), its name, its badge, its rules in a few
+/// words and how many profiles name it.
+fn environment_parts(app: &App, id: datarig_core::policy::EnvironmentId) -> Vec<(String, Style)> {
+    let th = theme::cur();
+    let fg = |c: Color| Style::new().fg(c);
+    let Some(e) = app.environment(id) else { return Vec::new() };
+    let mark = match e.display_color() {
+        Some(pc) => (CONNECTED.to_string(), fg(theme::profile_color(pc))),
+        None => (DISCONNECTED.to_string(), fg(th.fg_muted)),
+    };
+    let mut parts = vec![mark, (" ".into(), fg(th.fg)), (e.name.clone(), fg(th.fg))];
+    if let Some(b) = &e.badge {
+        parts.push((" ".into(), fg(th.fg)));
+        parts.push((format!(" {b} "), theme::chip(App::badge_color(e))));
+    }
+    parts.push((format!("  {}", app.rules_hint(&e.policy)), fg(th.fg_dim)));
+    let users = app.environment_users(&e.name).len() as u64;
+    if users > 0 {
+        parts.push((format!(" · {}", app.i18n.msg(&Msg::ExplorerTunnelUsers { count: users })), fg(th.fg_dim)));
+    }
+    parts
 }
 
 /// A tunnel preset: the state of its shared connection, its icon and name, its bastion, and how
@@ -668,9 +730,12 @@ pub(crate) fn row_name(app: &App, row: &Row) -> String {
 /// unavailable".
 pub(crate) fn line_preview(app: &App) -> Option<String> {
     let row = app.explorer_row()?;
-    // A tunnel preset: its whole line (the explorer is narrow; its bastion and state follow the
-    // name), or why its connection was lost.
-    if matches!(row.kind, RowKind::Tunnel(_) | RowKind::TunnelError(_)) {
+    // A tunnel preset or an environment: its whole line (the explorer is narrow; its bastion and
+    // state, or its badge and rules, follow the name), or why its connection was lost.
+    if matches!(
+        row.kind,
+        RowKind::Tunnel(_) | RowKind::TunnelError(_) | RowKind::Environment(_) | RowKind::DefaultRules
+    ) {
         let text: String = row_parts(app, &row).into_iter().map(|(t, _)| t).collect();
         return Some(text.trim().to_string()).filter(|t| !t.is_empty());
     }

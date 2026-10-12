@@ -4,7 +4,7 @@ expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×                                          "
 "│ ╭ Keys — Editor (vim Normal) ──────────────────────────────────────────────╮─╮"
-"│▾│ / search all keys · Esc close                                            │t│"
+"│▾│ / search all keys · Esc close                                            │ │"
 "│ │──────────────────────────────────────────────────────────────────────────│e│"
 "│ │ ▾ Editor (vim Normal)                                                    │ │"
 "│ │   Start typing (Insert mode)              i                              │ │"
@@ -25,4 +25,4 @@ expression: backend
 "│ │   Go to tab 5                             Space 5                        │ │"
 "│ ╰─────────────────── ↑↓ move · Enter run/open · l/h open/close · Esc close ╯ │"
 "╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
-" NORMAL  local-pg · policy: default │ Connected to local-pg                  EN "
+" NORMAL  local-pg │ Connected to local-pg                                    EN "

@@ -4,7 +4,7 @@ expression: backend
 ---
 "╭ Explorer ────────────────────────────╮ 1 console 1 ×                                                                                                          "
 "│  ＋ New connection                   │╭ Query · console 1 ───────────────────────────────────────────────────────────────────────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▸ work                                ││ local-pg / datarig  127.0.0.1:55432 · policy: default                                    Space c s switch connection │"
+"│▸ work                                ││ local-pg / datarig  127.0.0.1:55432                                                      Space c s switch connection │"
 "│▾ ●   local-pg                        ││  1 -- datarig 🐘  Ctrl+E: run the statement under the cursor                                                         │" Hidden by multi-width symbols: [(57, " ")]
 "│  ▾ datarig default                   ││  2▎SELECT * FROM shop.users WHERE id <= 8;                                                                           │"
 "│    ▸ analytics                       ││  3                                                                                                                   │"
@@ -19,7 +19,7 @@ expression: backend
 "│                             │                                                                                                  │                             │"
 "│                             │ SSL mode          ‹ require ›  ←/→ change                                                        │                             │"
 "│                             │ Statement cache   ‹ off ›  ←/→ change · off behind PgBouncer in transaction mode                 │                             │"
-"│                             │ Policy            prod-rules                          empty: default                             │                             │"
+"│                             │ Environment       None (default rules) ▾   Enter list · standard rules                           │                             │"
 "│                             │ Color             ‹ ● red ›  ←/→ change · Enter list                                             │                             │"
 "│                             │ Icon              ‹ the driver's icon ›  ←/→ change · Enter list                                 │                             │"
 "│                             │ Folder            ‹ work/prod/ ›  ←/→ change · Enter list                                        │                             │"
@@ -46,4 +46,4 @@ expression: backend
 "│                                      ││                                                                                                                      │"
 "│                                      ││                                                                                                                      │"
 "╰──────────────────────────────────────╯╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯"
-" NORMAL  local-pg · policy: default │ Connected to local-pg                                                                                                  EN "
+" NORMAL  local-pg │ Connected to local-pg                                                                                                                    EN "

@@ -5,13 +5,16 @@
 //! preset, or one of this profile only (its bastion's fields), which "save as tunnel preset"
 //! turns into a new preset when the form is saved. **Advanced**: SSL mode and the server-side
 //! statement cache (PostgreSQL), the server's public key file and key retrieval (MySQL),
-//! policy name, color, icon and folder. No I/O here; `App` persists and tests.
+//! the environment (picked from a list, like the SSH tunnel), color, icon and folder. No I/O
+//! here; `App` persists and tests.
 //!
 //! The same form edits a tunnel preset ([`FormKind::Tunnel`]): its name and the SSH section's
-//! bastion fields, nothing else.
+//! bastion fields, nothing else; and an environment ([`FormKind::Environment`]): its name,
+//! color, badge and rules.
 
 use crate::widgets::text_input::{InputResult, TextInput};
 use datarig_core::i18n::{Label, Msg};
+use datarig_core::policy::{self, Confirm, Environment, EnvironmentId, PagingMode, Policy};
 use datarig_core::profile::color::{self, ProfileColor};
 use datarig_core::profile::dsn::{self, Dsn, DsnError, Scheme};
 use datarig_core::profile::ssh::{SshAuth, SshSettings};
@@ -72,8 +75,8 @@ pub enum Field {
     ServerKey,
     /// MySQL: a direct login may ask the server for its public key, or not (Advanced).
     KeyRetrieval,
-    /// The policy name (Advanced).
-    Policy,
+    /// The environment, picked from a list (Advanced).
+    Environment,
     /// Color, icon and folder: pickers (Advanced).
     Color,
     Icon,
@@ -94,6 +97,14 @@ pub enum Field {
     SshEnv,
     SshKeepalive,
     SshTimeout,
+    /// An environment's badge, read-only switch, which statements ask, paging, idle timeout
+    /// and spill limit (the environment form).
+    EnvBadge,
+    EnvReadOnly,
+    EnvConfirm,
+    EnvPaging,
+    EnvIdle,
+    EnvSpill,
     Test,
     Save,
     Cancel,
@@ -118,10 +129,21 @@ pub const ADVANCED: [Field; 8] = [
     Field::StatementCache,
     Field::ServerKey,
     Field::KeyRetrieval,
-    Field::Policy,
+    Field::Environment,
     Field::Color,
     Field::Icon,
     Field::Folder,
+];
+/// The environment form's fields, in order.
+pub const ENVIRONMENT: [Field; 8] = [
+    Field::Name,
+    Field::Color,
+    Field::EnvBadge,
+    Field::EnvReadOnly,
+    Field::EnvConfirm,
+    Field::EnvPaging,
+    Field::EnvIdle,
+    Field::EnvSpill,
 ];
 pub const BUTTONS: [Field; 3] = [Field::Test, Field::Save, Field::Cancel];
 pub const SSH: [Field; 12] = [
@@ -156,7 +178,7 @@ pub const FIELDS: [Field; 19] = [
     Field::StatementCache,
     Field::ServerKey,
     Field::KeyRetrieval,
-    Field::Policy,
+    Field::Environment,
     Field::Color,
     Field::Icon,
     Field::Folder,
@@ -212,7 +234,7 @@ impl Field {
             Field::StatementCache => Label::FormFieldStatementCache,
             Field::ServerKey => Label::FormFieldServerKey,
             Field::KeyRetrieval => Label::FormFieldKeyRetrieval,
-            Field::Policy => Label::FormFieldPolicy,
+            Field::Environment => Label::FormFieldEnvironment,
             Field::Color => Label::FormFieldColor,
             Field::Icon => Label::FormFieldIcon,
             Field::Folder => Label::FormFieldFolder,
@@ -228,6 +250,12 @@ impl Field {
             Field::SshEnv => Label::FormFieldEnv,
             Field::SshKeepalive => Label::FormFieldSshKeepalive,
             Field::SshTimeout => Label::FormFieldSshTimeout,
+            Field::EnvBadge => Label::FormFieldBadge,
+            Field::EnvReadOnly => Label::FormFieldReadOnly,
+            Field::EnvConfirm => Label::FormFieldConfirm,
+            Field::EnvPaging => Label::FormFieldPaging,
+            Field::EnvIdle => Label::FormFieldIdleTimeout,
+            Field::EnvSpill => Label::FormFieldSpillLimit,
             Field::Test => Label::FormButtonTest,
             Field::Save => Label::FormButtonSave,
             Field::Cancel => Label::FormButtonCancel,
@@ -256,10 +284,10 @@ impl Field {
         matches!(self, Field::Color | Field::Icon | Field::Folder)
     }
 
-    /// `Enter` (or a click on its value) opens a list to pick from: the pickers and the SSH
-    /// tunnel.
+    /// `Enter` (or a click on its value) opens a list to pick from: the pickers, the SSH
+    /// tunnel and the environment.
     pub fn has_list(self) -> bool {
-        self.is_picker() || self == Field::SshEnabled
+        self.is_picker() || matches!(self, Field::SshEnabled | Field::Environment)
     }
 }
 
@@ -274,6 +302,17 @@ pub enum SshChoice {
     Inline,
 }
 
+/// What the environment picker of a profile form has picked.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EnvChoice {
+    /// None: the default rules.
+    Default,
+    /// The environment of this name (also one no environment has: the profile's own name).
+    Named(String),
+    /// The preset of this name ([`policy::presets`]), written with the profile when it is saved.
+    Preset(String),
+}
+
 /// What the form edits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FormKind {
@@ -284,6 +323,15 @@ pub enum FormKind {
         id: TunnelId,
         editing: bool,
     },
+    /// An environment with this id (a new one for a new environment or a copy); `editing`: one
+    /// that exists.
+    Environment {
+        id: EnvironmentId,
+        editing: bool,
+    },
+    /// The default rules (`[policy.default]`): an environment's rules, without a name, a color
+    /// or a badge.
+    DefaultRules,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -301,6 +349,14 @@ pub enum FieldError {
     Seconds,
     /// A file path that has no root and does not start with `~/`.
     AbsolutePath,
+    /// `default`: the name of the default rules, never an environment's.
+    Reserved,
+    /// Not a badge ([`policy::badge_ok`]).
+    Badge,
+    /// Not a duration (`30s`, `5m`, `1h`, `off`).
+    Duration,
+    /// Not a size (`512MB`, `2GB`, `off`).
+    Size,
 }
 
 impl FieldError {
@@ -314,6 +370,10 @@ impl FieldError {
             FieldError::CommandSyntax => Label::ValidateCommandSyntax,
             FieldError::Seconds => Label::ValidateSeconds,
             FieldError::AbsolutePath => Label::ValidateServerKeyPath,
+            FieldError::Reserved => Label::ValidateEnvironmentReserved,
+            FieldError::Badge => Label::ValidateBadge,
+            FieldError::Duration => Label::ValidateDuration,
+            FieldError::Size => Label::ValidateSize,
         }
     }
 }
@@ -376,7 +436,7 @@ pub enum FormOutcome {
     Save,
     Test,
     Cancel,
-    /// Open the list of a field (color, icon, folder, the SSH tunnel).
+    /// Open the list of a field (color, icon, folder, the SSH tunnel, the environment).
     Choose(Field),
 }
 
@@ -388,7 +448,7 @@ pub struct ProfileForm {
     /// Name before editing (the form's title).
     pub original_name: Option<String>,
     /// The profile the form started from: its id, driver, display attributes (folder, color,
-    /// icon, policy) and file origin, which the form keeps as they are.
+    /// icon) and file origin, which the form keeps as they are.
     base: ConnectionConfig,
     pub name: TextInput,
     pub host: TextInput,
@@ -410,8 +470,21 @@ pub struct ProfileForm {
     /// Which [`DRIVERS`] can be picked (the app has a driver for them).
     pub drivers_enabled: [bool; 4],
     pub section: Section,
-    /// The policy name (empty: `default`).
-    pub policy: TextInput,
+    /// The environment picked (its name); `None`: the default rules.
+    pub environment: Option<String>,
+    /// The environments the picker offers.
+    pub environments: Vec<Environment>,
+    /// A preset picked while there was no environment: written with the profile when it is
+    /// saved (when it is still the one picked).
+    pub env_preset: Option<Environment>,
+    /// The environment form: the badge, read-only, which statements ask, paging, the idle
+    /// timeout (empty: the default) and the spill limit (empty: the config's).
+    pub env_badge: TextInput,
+    pub env_read_only: bool,
+    pub env_confirm: Confirm,
+    pub env_paging: PagingMode,
+    pub env_idle: TextInput,
+    pub env_spill: TextInput,
     /// The color set (`None`: automatic from the name).
     pub color: Option<String>,
     /// The icon set (`None`: the driver's).
@@ -532,7 +605,15 @@ impl ProfileForm {
             driver: driver_index(&c.driver),
             drivers_enabled: [true, false, false, false],
             section: Section::Basic,
-            policy: TextInput::new(c.policy.as_deref().unwrap_or("")),
+            environment: c.policy.clone(),
+            environments: Vec::new(),
+            env_preset: None,
+            env_badge: TextInput::default(),
+            env_read_only: false,
+            env_confirm: Confirm::Destructive,
+            env_paging: PagingMode::NoHold,
+            env_idle: TextInput::new(&policy::format_timeout(policy::PAGING_IDLE_TIMEOUT.into())),
+            env_spill: TextInput::default(),
             color: c.color.clone(),
             icon: c.icon.clone(),
             folder: c.folder.clone(),
@@ -608,6 +689,143 @@ impl ProfileForm {
         f.section = Section::Ssh;
         f.focus = Field::Name;
         f
+    }
+
+    /// A form for environment `e` (`None`: a new one; `copy`: a new one with `e`'s settings and
+    /// `name`).
+    pub fn for_environment(e: Option<&Environment>, copy: Option<String>) -> Self {
+        let name = copy.clone().or_else(|| e.map(|e| e.name.clone())).unwrap_or_default();
+        let c = ConnectionConfig { name, ..ConnectionConfig::default() };
+        let editing = e.is_some() && copy.is_none();
+        let mut f = Self::from_profile(&c, String::new(), None);
+        f.kind = FormKind::Environment { id: e.filter(|_| editing).map_or_else(EnvironmentId::new, |e| e.id), editing };
+        f.original_name = e.filter(|_| editing).map(|e| e.name.clone());
+        let rules = e.map(|e| e.policy.clone()).unwrap_or_default();
+        f.color = e.and_then(|e| e.color.clone());
+        f.env_badge = TextInput::new(e.and_then(|e| e.badge.as_deref()).unwrap_or(""));
+        f.env_read_only = rules.read_only;
+        f.env_confirm = rules.confirm;
+        f.env_paging = rules.paging;
+        f.env_idle = TextInput::new(&policy::format_timeout(rules.paging_idle_timeout));
+        f.env_spill = TextInput::new(&rules.spill_limit.map(policy::format_size).unwrap_or_default());
+        f.section = Section::Advanced;
+        f.focus = Field::Name;
+        f
+    }
+
+    /// A form for the default rules `p`.
+    pub fn for_default_rules(p: &Policy) -> Self {
+        let mut f = Self::for_environment(None, None);
+        f.kind = FormKind::DefaultRules;
+        f.env_read_only = p.read_only;
+        f.env_confirm = p.confirm;
+        f.env_paging = p.paging;
+        f.env_idle = TextInput::new(&policy::format_timeout(p.paging_idle_timeout));
+        f.env_spill = TextInput::new(&p.spill_limit.map(policy::format_size).unwrap_or_default());
+        f.focus = Field::EnvReadOnly;
+        f
+    }
+
+    /// The form edits an environment's rules (an environment, or the default rules).
+    pub fn is_environment(&self) -> bool {
+        matches!(self.kind, FormKind::Environment { .. } | FormKind::DefaultRules)
+    }
+
+    /// The form edits the default rules.
+    pub fn is_default_rules(&self) -> bool {
+        self.kind == FormKind::DefaultRules
+    }
+
+    /// The rules the form describes (`None`: a value that is not valid).
+    pub fn to_rules(&self) -> Option<Policy> {
+        let (Some(idle), Some(spill)) = self.env_values() else { return None };
+        Some(Policy {
+            paging: self.env_paging,
+            paging_idle_timeout: idle,
+            spill_limit: spill,
+            read_only: self.env_read_only,
+            confirm: self.env_confirm,
+        })
+    }
+
+    /// The idle timeout and the spill limit typed in the environment form (`None`: not valid).
+    fn env_values(&self) -> (Option<Option<std::time::Duration>>, Option<Option<policy::SpillLimit>>) {
+        let idle = match self.env_idle.text().trim() {
+            "" => Some(Some(policy::PAGING_IDLE_TIMEOUT)),
+            t => policy::parse_timeout_text(t).ok(),
+        };
+        let spill = match self.env_spill.text().trim() {
+            "" => Some(None),
+            t => policy::parse_size_text(t).ok().map(Some),
+        };
+        (idle, spill)
+    }
+
+    /// The environment the environment form describes (`None`: another form, or a value that
+    /// is not valid).
+    pub fn to_environment(&self) -> Option<Environment> {
+        let FormKind::Environment { id, .. } = self.kind else { return None };
+        let policy = self.to_rules()?;
+        let badge = self.env_badge.text().trim();
+        Some(Environment {
+            id,
+            name: self.name.text().to_string(),
+            policy,
+            color: self.color.clone(),
+            badge: (!badge.is_empty()).then(|| badge.to_string()),
+            origin: self.original_name.clone(),
+        })
+    }
+
+    /// What the environment picker offers before the presets and "New environment…": the
+    /// default rules, each environment, and the name the profile has when no environment has
+    /// it (kept: the profile shows it as missing).
+    pub fn env_choices(&self) -> Vec<EnvChoice> {
+        let mut out = vec![EnvChoice::Default];
+        out.extend(self.environments.iter().map(|e| EnvChoice::Named(e.name.clone())));
+        if let Some(n) = self.base.policy.clone().filter(|n| n != policy::DEFAULT)
+            && !self.environments.iter().any(|e| e.name == n)
+        {
+            out.push(EnvChoice::Named(n));
+        }
+        out
+    }
+
+    /// The environment picker's choice.
+    pub fn env_choice(&self) -> EnvChoice {
+        match self.environment.as_deref() {
+            None | Some(policy::DEFAULT) => EnvChoice::Default,
+            Some(n) if self.made_environment().is_some() => EnvChoice::Preset(n.to_string()),
+            Some(n) => EnvChoice::Named(n.to_string()),
+        }
+    }
+
+    /// Pick `c` in the environment picker; a preset is written with the profile.
+    pub fn set_env_choice(&mut self, c: EnvChoice) {
+        match c {
+            // The default rules: a profile that said `default` keeps saying it.
+            EnvChoice::Default if self.environment.as_deref() == Some(policy::DEFAULT) => {}
+            EnvChoice::Default => self.environment = None,
+            EnvChoice::Named(n) => self.environment = Some(n),
+            EnvChoice::Preset(n) => {
+                self.env_preset = policy::presets().into_iter().find(|p| p.name == n);
+                self.environment = Some(n);
+            }
+        }
+    }
+
+    /// The environment picked, when it is one there is.
+    pub fn picked_environment(&self) -> Option<&Environment> {
+        let name = self.environment.as_deref()?;
+        self.environments.iter().find(|e| e.name == name).or(self.made_environment())
+    }
+
+    /// The preset this form writes when it is saved: the one picked, while no environment of
+    /// its name is there.
+    pub fn made_environment(&self) -> Option<&Environment> {
+        let p = self.env_preset.as_ref()?;
+        (self.environment.as_deref() == Some(p.name.as_str()) && !self.environments.iter().any(|e| e.name == p.name))
+            .then_some(p)
     }
 
     /// The preset the profile form waiting under this tunnel form makes when it is saved
@@ -816,7 +1034,9 @@ impl ProfileForm {
 
     pub fn input_mut(&mut self, f: Field) -> Option<&mut TextInput> {
         Some(match f {
-            Field::Policy => &mut self.policy,
+            Field::EnvBadge => &mut self.env_badge,
+            Field::EnvIdle => &mut self.env_idle,
+            Field::EnvSpill => &mut self.env_spill,
             Field::Name => &mut self.name,
             Field::Host => &mut self.host,
             Field::Port => &mut self.port,
@@ -843,6 +1063,15 @@ impl ProfileForm {
     /// The fields `Tab` visits in the current section, then the buttons: the storage
     /// selector shows only the field of its source.
     pub fn fields(&self) -> Vec<Field> {
+        if self.is_environment() {
+            let mut out = ENVIRONMENT.to_vec();
+            // The default rules have no name, color or badge.
+            if self.is_default_rules() {
+                out.retain(|f| !matches!(f, Field::Name | Field::Color | Field::EnvBadge));
+            }
+            out.extend([Field::Save, Field::Cancel]);
+            return out;
+        }
         if self.is_tunnel() {
             let mut out = vec![Field::Name];
             out.extend(self.ssh_fields());
@@ -969,7 +1198,7 @@ impl ProfileForm {
     /// Next / previous section (`Ctrl+N` / `Ctrl+P`); the focus goes to its first field. A
     /// tunnel form has one section.
     fn cycle_section(&mut self, d: isize) {
-        if self.is_tunnel() {
+        if self.is_tunnel() || self.is_environment() {
             return;
         }
         let n = Section::ALL.len() as isize;
@@ -979,7 +1208,7 @@ impl ProfileForm {
 
     /// Show section `s` (a click on its tab); the focus goes to its first field.
     pub fn open_section(&mut self, s: Section) {
-        if self.is_tunnel() || s == self.section {
+        if self.is_tunnel() || self.is_environment() || s == self.section {
             return;
         }
         self.section = s;
@@ -1011,6 +1240,16 @@ impl ProfileForm {
             Field::SshSource => {
                 if let Some(&k) = SourceKind::ALL.get(i).filter(|k| keychain(**k)) {
                     self.ssh_source = k;
+                }
+            }
+            Field::EnvConfirm => {
+                if let Some(&c) = CONFIRMS.get(i) {
+                    self.env_confirm = c;
+                }
+            }
+            Field::EnvPaging => {
+                if let Some(&p) = PAGINGS.get(i) {
+                    self.env_paging = p;
                 }
             }
             _ => {}
@@ -1141,7 +1380,7 @@ impl ProfileForm {
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
         match k.code {
             KeyCode::Char('s') if ctrl => return FormOutcome::Save,
-            KeyCode::Char('t') if ctrl => return FormOutcome::Test,
+            KeyCode::Char('t') if ctrl && !self.is_environment() => return FormOutcome::Test,
             KeyCode::Char('n') if ctrl => self.cycle_section(1),
             KeyCode::Char('p') if ctrl => self.cycle_section(-1),
             KeyCode::Esc => return FormOutcome::Cancel,
@@ -1170,6 +1409,18 @@ impl ProfileForm {
             KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.focus == Field::KeyRetrieval => {
                 self.key_retrieval = !self.key_retrieval
             }
+            KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.focus == Field::EnvReadOnly => {
+                self.env_read_only = !self.env_read_only
+            }
+            KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.focus == Field::EnvConfirm => {
+                self.env_confirm = if self.env_confirm.writes() { Confirm::Destructive } else { Confirm::Writes }
+            }
+            KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.focus == Field::EnvPaging => {
+                self.env_paging = match self.env_paging {
+                    PagingMode::Hold => PagingMode::NoHold,
+                    PagingMode::NoHold => PagingMode::Hold,
+                }
+            }
             KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.focus == Field::SshAuth => {
                 self.cycle_ssh_auth(if k.code == KeyCode::Left { -1 } else { 1 })
             }
@@ -1197,6 +1448,31 @@ impl ProfileForm {
     /// "Required" errors appear only after a save attempt; format errors appear at once.
     pub fn errors(&self, taken: impl Fn(&str) -> bool) -> Vec<(Field, FieldError)> {
         let mut out = Vec::new();
+        if self.is_environment() {
+            // Written as typed, as a tunnel preset's name; `default` is the default rules'.
+            let name = self.name.text();
+            match tunnel::name_problem(name) {
+                _ if self.is_default_rules() => {}
+                Some(tunnel::NameProblem::Empty) if self.attempted => out.push((Field::Name, FieldError::Required)),
+                Some(tunnel::NameProblem::Empty) => {}
+                Some(_) => out.push((Field::Name, FieldError::TunnelName)),
+                None if tunnel::same_name(name, policy::DEFAULT) => out.push((Field::Name, FieldError::Reserved)),
+                None if taken(name) => out.push((Field::Name, FieldError::NameTaken)),
+                None => {}
+            }
+            let badge = self.env_badge.text().trim();
+            if !badge.is_empty() && !policy::badge_ok(badge) {
+                out.push((Field::EnvBadge, FieldError::Badge));
+            }
+            let (idle, spill) = self.env_values();
+            if idle.is_none() {
+                out.push((Field::EnvIdle, FieldError::Duration));
+            }
+            if spill.is_none() {
+                out.push((Field::EnvSpill, FieldError::Size));
+            }
+            return out;
+        }
         if self.is_tunnel() {
             // A preset's name is written as typed (blanks around it are an error, not trimmed).
             let name = self.name.text();
@@ -1308,7 +1584,6 @@ impl ProfileForm {
 
     /// The profile described by the fields (password excluded; it goes to its store).
     pub fn to_profile(&self) -> ConnectionConfig {
-        let policy = self.policy.text().trim();
         let mut c = ConnectionConfig {
             // The profile's own spelling (`pg`) stays when the driver did not change.
             driver: if driver_index(&self.base.driver) == self.driver {
@@ -1319,7 +1594,7 @@ impl ProfileForm {
             folder: self.folder.clone(),
             color: self.color.clone(),
             icon: self.icon.clone(),
-            policy: (!policy.is_empty()).then(|| policy.to_string()),
+            policy: self.environment.clone(),
             name: self.name.text().trim().to_string(),
             host: self.host.text().trim().to_string(),
             port: self.port_value().unwrap_or(self.scheme().default_port()),
@@ -1368,6 +1643,10 @@ impl ProfileForm {
         self.editing.map(|_| self.base.source().kind())
     }
 }
+
+/// The values of the environment form's "Confirm" and "Paging", in the order they are shown.
+pub const CONFIRMS: [Confirm; 2] = [Confirm::Destructive, Confirm::Writes];
+pub const PAGINGS: [PagingMode; 2] = [PagingMode::NoHold, PagingMode::Hold];
 
 /// Index of a profile's driver in [`DRIVERS`] (`postgresql`/`pg` are `postgres`).
 fn driver_index(driver: &str) -> usize {

@@ -46,4 +46,4 @@ expression: backend
 "│                             │   Go to tab 4                                                     Space 4                        │                             │"
 "│                             ╰─────────────────────────────────────────── ↑↓ move · Enter run/open · l/h open/close · Esc close ╯                             │"
 "╰──────────────────────────────────────╯╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯"
-" NORMAL  local-pg · policy: default │ Connected to local-pg                                                                                                  EN "
+" NORMAL  local-pg │ Connected to local-pg                                                                                                                    EN "

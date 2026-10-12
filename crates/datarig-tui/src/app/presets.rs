@@ -193,17 +193,20 @@ impl App {
         open
     }
 
-    /// Close the form. A tunnel form opened from a profile form's SSH tunnel list gives that
-    /// form back as it was, with its test (`true`); `saved`: the preset the tunnel form saved,
-    /// picked there.
+    /// Close the form. A tunnel or environment form opened from a profile form's list gives
+    /// that form back as it was, with its test (`true`); `saved`: the preset or environment the
+    /// form saved, picked there.
     pub(super) fn close_form(&mut self, saved: Option<String>) -> bool {
         let Some(mut form) = self.overlays.take_form() else { return false };
         let Some(mut back) = form.back_to.take() else { return false };
         back.presets = self.presets.clone();
+        back.environments = self.environments().to_vec();
         self.clear_test();
         self.conn_test = back.parked_test.take();
-        if let Some(name) = saved {
-            back.set_ssh_choice(profiles::SshChoice::Preset(name));
+        match saved {
+            Some(name) if form.is_environment() => back.set_env_choice(profiles::EnvChoice::Named(name)),
+            Some(name) => back.set_ssh_choice(profiles::SshChoice::Preset(name)),
+            None => {}
         }
         self.overlays.push(Overlay::ProfileForm(back));
         true

@@ -700,7 +700,8 @@ impl Harness {
         self.app.explorer_selected()
     }
 
-    /// The explorer's rows as text: folders `name/`, profiles by name, error lines `!`,
+    /// The explorer's rows as text: folders `name/`, profiles by name, error lines `!`, tunnel
+    /// presets `~name`, environments `%name` (the profiles under either `@name`),
     /// databases `db:name` (the profile's own `db:name*`), notes `(note)`, schema nodes by their
     /// label, each indented by its depth.
     pub fn rows(&self) -> Vec<String> {
@@ -740,6 +741,19 @@ impl Harness {
                         format!("@{}", self.app.profile(*id).map(|p| p.name.clone()).unwrap_or_default())
                     }
                     RowKind::TunnelsEmpty => "(no tunnels)".to_string(),
+                    // Environments: `%name`, its profiles `@name`, the presets' row.
+                    RowKind::EnvironmentsHeader => "[environments]".to_string(),
+                    RowKind::Environment(id) => {
+                        format!("%{}", self.app.environment(*id).map(|e| e.name.clone()).unwrap_or_default())
+                    }
+                    RowKind::EnvironmentUser(_, id) => {
+                        format!("@{}", self.app.profile(*id).map(|p| p.name.clone()).unwrap_or_default())
+                    }
+                    RowKind::EnvironmentPresets => "(add presets)".to_string(),
+                    RowKind::DefaultRules => "(default rules)".to_string(),
+                    RowKind::DefaultRulesUser(id) => {
+                        format!("@{}", self.app.profile(*id).map(|p| p.name.clone()).unwrap_or_default())
+                    }
                 };
                 format!("{}{text}", "  ".repeat(r.depth))
             })

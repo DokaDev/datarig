@@ -209,7 +209,7 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
   memory window and spill to a private temporary file past it. By default nothing stays open on
   the server between pages: the first page ends its transaction, and the next page runs the
   statement again when it is safe to repeat (said each time); otherwise you see the first page
-  and why. A policy can keep the server-side cursor open instead (`paging = "hold"`, see
+  and why. An environment can keep the server-side cursor open instead (`paging = "hold"`, see
   [Paging and locks](#paging-and-locks)).
 - A row count on demand, with a label that says whether it matches the pages you saw.
 - An inspector for the selected cell or row (JSON pretty-printed), a cell viewer, and cell,
@@ -274,10 +274,12 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
   expression: `DROP`, `TRUNCATE`, `UPDATE`/`DELETE` without a real `WHERE`, `ALTER ... TYPE`,
   `DO`/`CALL`, `COPY` to or from server files or programs, server-side built-ins that act on
   files or backends, and text the parser rejects all ask before they run.
-- Safety policies per profile (`[policy.<name>]`): `read_only`, which statements need a
-  confirmation (`confirm = "destructive"` or `"writes"`), whether results hold a server-side
-  cursor (`paging`) and for how long when idle, and the spill limit. **Read-only is enforced by the server**: every transaction of a read-only profile is
-  opened `READ ONLY`, so even a function called from a `SELECT` cannot write.
+- Environments (`dev`, `staging`, `prod`, …) that profiles pick: each sets `read_only`, which
+  statements need a confirmation (`confirm = "destructive"` or `"writes"`), whether results hold
+  a server-side cursor (`paging`) and for how long when idle, and the spill limit, and has an
+  optional color and a short badge (`PROD`) shown on its tabs and in the status bar. See
+  [Environments](#environments). **Read-only is enforced by the server**: every transaction of a
+  read-only profile is opened `READ ONLY`, so even a function called from a `SELECT` cannot write.
 - `EXPLAIN ANALYZE` of a write is rolled back.
 
 **Keys**
@@ -427,7 +429,7 @@ user = "readonly"
 database = "app"
 color = "red"
 folder = "work/prod"
-policy = "prod"
+policy = "prod"                # its environment (see Environments below)
 password_source = "command"
 password_command = "op read op://work/prod-db/password"
 tunnel = "office"              # the tunnel preset below
@@ -451,15 +453,79 @@ user = "ec2-user"
 auth = "key"
 key_file = "~/.ssh/prod.pem"
 
-[policy.prod]
+[policy.prod]                  # an environment
 read_only = true
 confirm = "writes"
+color = "red"                  # one of the profile colors, or #rrggbb
+badge = "PROD"                 # shown on its tabs and in the status bar (8 columns at most)
 # paging = "no_hold" is the default: nothing stays open between pages
 
 [policy.local]
 paging = "hold"                # keep the cursor (and its transaction) open while you page
 paging_idle_timeout = "10s"    # with "hold": close it after 10 s without a page (default 30 s)
 ```
+
+### Environments
+
+An environment is a named set of rules that profiles share: whether the profile is read-only,
+which statements ask first, how results page, the spill limit, and an optional color and badge.
+Pick one in a profile's form (Advanced section, `Enter` on Environment): the list has
+"None (default rules)", every environment with its color, badge and rules, and "New
+environment…", which opens the environment form and comes back with the new one picked.
+
+The explorer's **Environments** section starts with **Default rules (no environment)**: the
+rules of every profile without an environment (`e` edits them; `Enter` lists those profiles;
+they cannot be renamed, copied or deleted, and have no color or badge). Then it lists the
+environments (the same keys as the Tunnels section:
+`n` new, `e` edit, `c` copy, `R` rename, `d` delete, `Enter` or `l` to see the profiles that
+use one). A rename takes those profiles along; deleting one that profiles use asks first and
+names them. While there is no environment the section offers one row, **Add presets: dev,
+test, staging, prod**, and the profile form's list offers the same four (a preset picked there is
+written together with the profile, and only when the profile is saved):
+
+| Preset | Rules | Color | Badge |
+|---|---|---|---|
+| `dev` | the defaults | green | |
+| `test` | the defaults | blue | |
+| `staging` | every write asks | orange | `STG` |
+| `prod` | read-only, every write asks | red | `PROD` |
+
+Nothing is written on its own: presets are added only when you ask, and once written they are
+ordinary environments you can edit, rename or delete.
+
+In the file an environment is a `[policy.<name>]` table (the key from before environments had
+that name, so existing files keep working) with these keys, each optional:
+
+| Key | Values | Default |
+|---|---|---|
+| `read_only` | `true`, `false` | `false` |
+| `confirm` | `"destructive"` (dangerous statements), `"writes"` (every write too) | `"destructive"` |
+| `paging` | `"no_hold"`, `"hold"` | `"no_hold"` |
+| `paging_idle_timeout` | seconds, or `"90s"`, `"5m"`, `"1h"`, `"off"` | `"30s"` |
+| `spill_limit` | bytes, or `"512MB"`, `"2GB"`, `"off"` | the top-level `spill_limit` |
+| `color` | `red`, `orange`, `yellow`, `green`, `teal`, `cyan`, `blue`, `indigo`, `purple`, `pink`, `brown`, `gray`, or `#rrggbb` | none |
+| `badge` | up to 8 columns, no blanks around it | none |
+
+A wrong `color` or `badge` is reported when the file is read, like any other value. The
+explorer keeps the tables in the file's order. Saving from the app changes only what you
+changed: an untouched table, and an untouched value in an edited one, keep their text and
+comments (`paging_idle_timeout = "5m"` stays as written), a value set back to its default is
+removed (its comment kept), and a renamed table keeps its comments and its place. Environments
+written as dotted keys (`policy.prod.read_only = true`) or as an inline table
+(`policy = { prod = { read_only = true } }`) stay that way, where they are.
+
+`[policy.default]` holds the default rules, which every profile without an environment uses
+(the built-in defaults without it: writable, dangerous statements ask, no held pages). It is not
+an environment: it is the section's first row, does not count as an environment (the presets
+are offered while it is the only table), and the app writes it only when you save a change in
+its form (only what changed, the table made then and removed once it is empty again); a `color`
+or `badge` in it stays in the file but is not shown anywhere.
+
+**A profile naming an environment that does not exist is an error of that profile**, not a
+fallback to the default rules: its explorer line shows the environment mark in the error color,
+connecting is refused with a notice that names the missing environment, and a connected profile
+whose environment was deleted or renamed away runs nothing until another one is picked. Its form
+shows the name marked "(not defined)".
 
 Data (saved queries, datarig's own `known_hosts`) and state (tabs, console buffers) live in the
 platform's data and state directories (`~/.local/share/datarig` and `~/.local/state/datarig`
@@ -507,20 +573,20 @@ reported with the file and line, and the app draws with `terminal` until it is f
 ## Safety model
 
 - **What asks**: every statement is parsed with PostgreSQL's parser before it is sent. A
-  destructive or unknown statement opens a confirmation with Cancel focused; a policy with
+  destructive or unknown statement opens a confirmation with Cancel focused; an environment with
   `confirm = "writes"` asks for every write.
 - **What is refused**: a read-only profile refuses anything that is not a read, transaction
   control or a safe session setting before sending it, and the server rejects the rest, because
   every transaction is opened `READ ONLY`.
 - **What it is not**: the confirmation is a guardrail against mistakes in what the text shows.
   Functions called from a query, triggers, views and rules are not inspected; a read-only
-  policy is the guarantee.
+  environment is the guarantee.
 - **Paging leaves nothing open by default** (see below): datarig never keeps a transaction,
-  a lock or a snapshot open while you read a result, unless your policy asks for it.
+  a lock or a snapshot open while you read a result, unless your environment asks for it.
 
 ### Paging and locks
 
-A result with more rows than a page can be paged two ways, chosen per policy with `paging`.
+A result with more rows than a page can be paged two ways, chosen per environment with `paging`.
 Inside your own `BEGIN` … `COMMIT` block both behave the same: the result's cursor lives in
 your transaction and pages from it, and ends with it.
 

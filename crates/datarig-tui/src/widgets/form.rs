@@ -3,11 +3,14 @@
 //! inline test-connection result line. The SSH section's first row picks the tunnel from a
 //! list (`Enter`, or a click on it): none, a tunnel preset (shown, not edited, here), or one of this profile only
 //! (its fields, and a button that makes a preset of them). The tunnel form is the same dialog with the SSH
-//! section alone, the preset's name first.
+//! section alone, the preset's name first. The Advanced section's environment is picked from a
+//! list too (its color's dot, its name and badge shown). The environment form is the same dialog
+//! with an environment's fields: its name, color, badge and rules.
 
 use crate::app::action::Action;
 use crate::app::profiles::{
-    BUTTONS, DRIVERS, FIELDS, Field, FormHit, FormKind, Section, SshChoice, secret_field, source_choice,
+    BUTTONS, CONFIRMS, DRIVERS, ENVIRONMENT, EnvChoice, FIELDS, Field, FormHit, FormKind, PAGINGS, Section, SshChoice,
+    secret_field, source_choice,
 };
 use crate::app::{App, Level};
 use crate::keymap::Ctx;
@@ -103,6 +106,8 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
     let i18n = &app.i18n;
     let profiles = &app.profiles;
     let presets = &app.presets;
+    let environments = app.policies.environments();
+    let app_default_rules = app.policies.default_rules();
     let icons_on = app.icons_on();
     let keychain_error = app
         .secrets
@@ -117,18 +122,28 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
     let mut hits: Vec<(Rect, FormHit)> = Vec::new();
     let hover = form.hover;
     let tunnel_form = form.is_tunnel();
-    let title = match (&form.original_name, tunnel_form) {
-        (Some(n), false) => i18n.msg(&Msg::FormTitleEdit { name: n.clone() }),
-        (None, false) => i18n.label(Label::FormTitleNew),
-        (Some(n), true) => i18n.msg(&Msg::TunnelFormTitleEdit { name: n.clone() }),
-        (None, true) => i18n.label(Label::TunnelFormTitleNew),
+    let env_form = form.is_environment();
+    let title = match (&form.original_name, tunnel_form, env_form) {
+        _ if form.is_default_rules() => i18n.label(Label::EnvFormTitleDefault),
+        (Some(n), _, true) => i18n.msg(&Msg::EnvFormTitleEdit { name: n.clone() }),
+        (None, _, true) => i18n.label(Label::EnvFormTitleNew),
+        (Some(n), false, _) => i18n.msg(&Msg::FormTitleEdit { name: n.clone() }),
+        (None, false, _) => i18n.label(Label::FormTitleNew),
+        (Some(n), true, _) => i18n.msg(&Msg::TunnelFormTitleEdit { name: n.clone() }),
+        (None, true, _) => i18n.label(Label::TunnelFormTitleNew),
     };
-    let footer = i18n.label(if tunnel_form { Label::TunnelFormKeys } else { Label::FormKeys });
+    let footer = i18n.label(match (tunnel_form, env_form) {
+        (_, true) => Label::EnvFormKeys,
+        (true, _) => Label::TunnelFormKeys,
+        _ => Label::FormKeys,
+    });
     let w = area.width.saturating_sub(4).min(100);
     let rect = centered(area, w, 19);
     let inner = modal(rect, &title, &footer, buf);
     let iw = inner.width as usize;
-    let label_w = FIELDS
+    // The environment form has its own fields (its labels set its column).
+    let labelled: &[Field] = if env_form { &ENVIRONMENT } else { &FIELDS };
+    let label_w = labelled
         .iter()
         .map(|f| f.label())
         .chain([Label::FormFieldTunnelUsedBy])
@@ -145,6 +160,11 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
                 crate::app::presets::name_taken(presets, id, original.as_deref(), n)
                     || crate::app::presets::parked_taken(parked.as_deref(), n)
             })
+        }
+        FormKind::DefaultRules => form.errors(|_| false),
+        FormKind::Environment { id, .. } => {
+            let original = form.original_name.clone();
+            form.errors(|n| crate::app::environments::name_taken(environments, id, original.as_deref(), n))
         }
         FormKind::Profile => {
             form.errors(|n| profiles.iter().enumerate().any(|(i, p)| p.name == n && Some(i) != editing))
@@ -165,13 +185,18 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
     let right = inner.x + inner.width;
     let room_from = |x: u16| right.saturating_sub(x + 1) as usize;
 
-    // Section tabs (a tunnel form has one).
+    // Section tabs (a tunnel form and an environment form have one).
     let mut x = inner.x + 1;
     let tab = |sec: Section| match (sec, tunnel_form) {
+        _ if env_form => Label::EnvFormSection,
         (Section::Ssh, true) => Label::TunnelFormSection,
         (s, _) => s.label(),
     };
-    let sections: &[Section] = if tunnel_form { &[Section::Ssh] } else { &Section::ALL };
+    let sections: &[Section] = match (tunnel_form, env_form) {
+        (_, true) => &[Section::Advanced],
+        (true, _) => &[Section::Ssh],
+        _ => &Section::ALL,
+    };
     for &sec in sections {
         let style = if sec == form.section {
             Style::new().fg(th.bg).bg(th.accent).add_modifier(Modifier::BOLD)
@@ -182,12 +207,17 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
         hits.push((Rect::new(x, inner.y, used, 1), FormHit::Section(sec)));
         x += used + 1;
     }
-    let hint = i18n.label(if tunnel_form { Label::TunnelFormHint } else { Label::FormSectionsHint });
+    let hint = i18n.label(match (tunnel_form, env_form) {
+        _ if form.is_default_rules() => Label::EnvFormDefaultHint,
+        (_, true) => Label::EnvFormHint,
+        (true, _) => Label::TunnelFormHint,
+        _ => Label::FormSectionsHint,
+    });
     let hx = right.saturating_sub(width(&hint) as u16 + 1).max(x + 1);
     put(buf, hx, inner.y, &hint, room_from(hx), dim);
 
     let rows: Vec<Option<Field>> = match form.section {
-        _ if tunnel_form => form.fields().into_iter().filter(|f| !f.is_button()).map(Some).collect(),
+        _ if tunnel_form || env_form => form.fields().into_iter().filter(|f| !f.is_button()).map(Some).collect(),
         Section::Basic => vec![
             Some(Field::Driver),
             Some(Field::Name),
@@ -383,15 +413,119 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
             }
             Field::Color => {
                 let color = theme::profile_color(form.display_color());
-                let name = match &form.color {
-                    Some(c) => c.clone(),
-                    None => i18n.label(Label::ChooserColorAuto).to_string(),
+                let (dot, name) = match &form.color {
+                    Some(c) => (("● ".to_string(), Style::new().fg(color)), c.clone()),
+                    // An environment without a color has none.
+                    None if env_form => (
+                        ("○ ".to_string(), Style::new().fg(th.fg_muted)),
+                        i18n.label(Label::ChooserColorNone).to_string(),
+                    ),
+                    None => {
+                        (("● ".to_string(), Style::new().fg(color)), i18n.label(Label::ChooserColorAuto).to_string())
+                    }
                 };
-                let parts = [("● ".to_string(), Style::new().fg(color)), text(&name)];
+                let parts = [dot, text(&name)];
                 let drawn = selector(buf, x, y, room_from(x), &parts, focused);
                 selector_hits(&mut hits, f, x, y, drawn);
                 let used = drawn.0;
                 x + used
+            }
+            Field::Environment => {
+                // A list to open (`Enter`), as the SSH tunnel: the value and a mark that it drops
+                // down, then what its rules are.
+                let choice = form.env_choice();
+                let picked = form.picked_environment().cloned();
+                let mut parts: Vec<(String, Style)> = Vec::new();
+                let rules = match (&choice, &picked) {
+                    (EnvChoice::Default, _) => {
+                        parts.push((i18n.label(Label::EnvPickerDefault).to_string(), Style::new().fg(th.fg)));
+                        crate::app::environments::rules_hint(i18n, app_default_rules)
+                    }
+                    (EnvChoice::Named(name) | EnvChoice::Preset(name), Some(e)) => {
+                        let dot =
+                            e.display_color().map_or(("○ ", th.fg_muted), |pc| ("● ", theme::profile_color(pc)));
+                        parts.push((dot.0.to_string(), Style::new().fg(dot.1)));
+                        let shown = match choice {
+                            EnvChoice::Preset(_) => i18n.msg(&Msg::FormEnvPresetNew { name: name.clone() }).to_string(),
+                            _ => name.clone(),
+                        };
+                        parts.push((shown, Style::new().fg(th.fg)));
+                        if let Some(b) = &e.badge {
+                            parts.push((" ".to_string(), Style::new()));
+                            parts.push((format!(" {b} "), theme::chip(crate::app::App::badge_color(e))));
+                        }
+                        crate::app::environments::rules_hint(i18n, &e.policy)
+                    }
+                    (EnvChoice::Named(name) | EnvChoice::Preset(name), None) => {
+                        let missing = i18n.msg(&Msg::FormEnvMissing { name: name.clone() }).to_string();
+                        parts.push((missing, Style::new().fg(th.error)));
+                        i18n.label(Label::FormEnvMissingHint).to_string()
+                    }
+                };
+                let mut used = 0;
+                for (t, st) in &parts {
+                    let st = if st.bg.is_some() { *st } else { st.patch(field_bg) };
+                    used += put(buf, x + used, y, t, room_from(x + used), st);
+                }
+                used += put(buf, x + used, y, " ▾ ", room_from(x + used), Style::new().fg(th.fg_muted).patch(field_bg));
+                hits.push((Rect::new(x, y, used, 1), FormHit::Value(f)));
+                let hx = x + used + 2;
+                let hint = match &choice {
+                    EnvChoice::Preset(_) => format!("{} · {}", i18n.label(Label::FormEnvPresetNewHint), rules),
+                    _ => format!("{} · {rules}", i18n.label(Label::FormSshListHint)),
+                };
+                put(buf, hx, y, &hint, room_from(hx), dim);
+                continue;
+            }
+            Field::EnvReadOnly => {
+                let state = if form.env_read_only { Label::FormCacheOn } else { Label::FormCacheOff };
+                let drawn = selector(buf, x, y, room_from(x), &[text(&i18n.label(state))], focused);
+                selector_hits(&mut hits, f, x, y, drawn);
+                let used = drawn.0;
+                let hint =
+                    format!("{} · {}", i18n.label(Label::FormSslmodeHint), i18n.label(Label::FormEnvReadOnlyHint));
+                put(buf, x + used + 2, y, &hint, room_from(x + used + 2), dim);
+                continue;
+            }
+            Field::EnvConfirm | Field::EnvPaging => {
+                let names: Vec<(String, bool)> = match f {
+                    Field::EnvConfirm => CONFIRMS
+                        .iter()
+                        .map(|c| {
+                            let l =
+                                if c.writes() { Label::FormEnvConfirmWrites } else { Label::FormEnvConfirmDestructive };
+                            (i18n.label(l).to_string(), *c == form.env_confirm)
+                        })
+                        .collect(),
+                    _ => PAGINGS
+                        .iter()
+                        .map(|p| {
+                            let l = match p {
+                                datarig_core::driver::PagingMode::Hold => Label::FormEnvPagingHold,
+                                datarig_core::driver::PagingMode::NoHold => Label::FormEnvPagingNoHold,
+                            };
+                            (i18n.label(l).to_string(), *p == form.env_paging)
+                        })
+                        .collect(),
+                };
+                let mut cx = x;
+                for (i, (name, chosen)) in names.into_iter().enumerate() {
+                    let text = if chosen { format!("‹{name}›") } else { format!(" {name} ") };
+                    let style = if chosen && focused {
+                        Style::new().fg(th.bg).bg(th.accent).add_modifier(Modifier::BOLD)
+                    } else if chosen {
+                        Style::new().fg(th.fg).bg(th.surface_alt).add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::new().fg(th.fg_muted).bg(th.surface)
+                    };
+                    let used = put(buf, cx, y, &text, room_from(cx), style);
+                    hits.push((Rect::new(cx, y, used, 1), FormHit::Choice(f, i)));
+                    cx += used;
+                }
+                let hint =
+                    i18n.label(if f == Field::EnvPaging { Label::FormEnvPagingHint } else { Label::FormSslmodeHint });
+                put(buf, cx + 2, y, &hint, room_from(cx + 2), dim);
+                continue;
             }
             Field::Icon => {
                 let name = match &form.icon {
@@ -483,7 +617,9 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
                 (Field::Password, _) => Some(Label::FormPasswordPrompt.into()),
                 (Field::Command, _) => Some(Label::FormCommandHint.into()),
                 (Field::Env, _) => Some(Label::FormEnvHint.into()),
-                (Field::Policy, _) => Some(Label::FormPolicyHint.into()),
+                (Field::EnvBadge, _) => Some(Label::FormEnvBadgeHint.into()),
+                (Field::EnvIdle, _) => Some(Label::FormEnvIdleHint.into()),
+                (Field::EnvSpill, _) => Some(Label::FormEnvSpillHint.into()),
                 (Field::ServerKey, _) => Some(Label::FormServerKeyHint.into()),
                 (Field::Color | Field::Icon | Field::Folder, _) => Some(Label::FormPickerHint.into()),
                 (Field::SshSecret, _) => Some(Label::FormSshSecretHint.into()),
@@ -522,6 +658,29 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
             profiles.iter().filter(|p| p.tunnel.as_deref() == Some(name.as_str())).map(|p| p.name.clone()).collect();
         if !users.is_empty() {
             let y = inner.y + 13;
+            put(buf, inner.x + 1, y, &i18n.label(Label::FormFieldTunnelUsedBy), label_w, label_style(false));
+            put(buf, inner.x + 1 + label_w as u16, y, &users.join(", "), iw.saturating_sub(label_w + 2), dim);
+        }
+    }
+    // An environment form's profiles, below its fields (the default rules': the profiles
+    // without an environment).
+    let named = match form.kind {
+        FormKind::Environment { editing: true, .. } => form.original_name.clone(),
+        FormKind::DefaultRules => Some(datarig_core::policy::DEFAULT.to_string()),
+        _ => None,
+    };
+    if let Some(name) = named.as_ref() {
+        let default = form.is_default_rules();
+        let users: Vec<String> = profiles
+            .iter()
+            .filter(|p| match p.policy.as_deref() {
+                None => default,
+                Some(n) => n == name.as_str(),
+            })
+            .map(|p| p.name.clone())
+            .collect();
+        if !users.is_empty() {
+            let y = inner.y + 11;
             put(buf, inner.x + 1, y, &i18n.label(Label::FormFieldTunnelUsedBy), label_w, label_style(false));
             put(buf, inner.x + 1 + label_w as u16, y, &users.join(", "), iw.saturating_sub(label_w + 2), dim);
         }
@@ -578,7 +737,8 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
     // Buttons
     let y = inner.y + 14;
     let mut x = inner.x + 1 + label_w as u16;
-    for b in BUTTONS {
+    // An environment form has nothing to test.
+    for b in BUTTONS.into_iter().filter(|b| !(env_form && *b == Field::Test)) {
         let on = hover == Some(FormHit::Button(b));
         let style = if form.focus == b {
             Style::new().fg(th.bg).bg(th.accent).add_modifier(Modifier::BOLD)
@@ -598,7 +758,9 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
         !r.is_empty()
     });
     form.hits = hits;
-    test_line(app, inner.x + 1, inner.y + 15, iw.saturating_sub(2), 2, buf);
+    if !env_form {
+        test_line(app, inner.x + 1, inner.y + 15, iw.saturating_sub(2), 2, buf);
+    }
     cursor
 }
 

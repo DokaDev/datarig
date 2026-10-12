@@ -2,7 +2,7 @@ use super::*;
 use std::time::Duration;
 
 fn entry(value: u8, label: &str, hint: &str) -> Entry<u8> {
-    Entry { value, label: label.into(), hint: hint.into() }
+    Entry::new(value, label.into(), hint.into())
 }
 
 /// Four entries and a new one, the second selected.

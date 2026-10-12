@@ -143,6 +143,8 @@ pub enum ConfirmAction {
     TrustHostKey,
     /// Delete this tunnel preset (and its saved secret).
     DeleteTunnel(datarig_core::profile::tunnel::TunnelId),
+    /// Delete this environment.
+    DeleteEnvironment(datarig_core::policy::EnvironmentId),
     /// Run an `EXPLAIN ANALYZE` again to view its text plan as a plan (the statement waits in
     /// `App::pending_as_plan`). Cancel is the default.
     ExplainAgain,
@@ -191,7 +193,8 @@ impl Confirm {
             | ConfirmAction::DeleteFolder
             | ConfirmAction::DeleteScript
             | ConfirmAction::DeleteScriptFolder
-            | ConfirmAction::DeleteTunnel(_) => (Label::DialogButtonCancel, Label::DialogButtonDelete),
+            | ConfirmAction::DeleteTunnel(_)
+            | ConfirmAction::DeleteEnvironment(_) => (Label::DialogButtonCancel, Label::DialogButtonDelete),
             ConfirmAction::SetConnection(_) | ConfirmAction::SetContext(_) => {
                 (Label::DialogButtonKeep, Label::DialogButtonSwitch)
             }

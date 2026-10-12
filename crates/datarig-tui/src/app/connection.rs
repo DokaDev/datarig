@@ -28,6 +28,14 @@ impl App {
             let m = Notice::new(Msg::ConnUnknownDriver { driver: conn.driver.clone() }, Level::Error);
             return self.attempt_failed(id, m);
         }
+        // An environment that is not defined: nothing is asked or sent (never under the default
+        // rules instead).
+        if let Err(e) = self.policy_of(id) {
+            let m = self.unknown_environment_notice(&conn.name, &e);
+            self.attempt_failed(id, m.clone());
+            self.status = Some(m);
+            return;
+        }
         // A tunnel setting that names no preset, or two tunnels at once: nothing is asked or
         // sent (never a direct connection instead).
         if let Err(e) = self.route_of(&conn) {
@@ -78,6 +86,11 @@ impl App {
     pub(super) fn start_connect(&mut self, conn: ConnectionConfig, password: String) {
         if self.driver(&conn.driver).is_none() {
             return;
+        }
+        // Its environment went away while its password was asked for.
+        if let Err(e) = self.policy_of(conn.id) {
+            let m = self.unknown_environment_notice(&conn.name, &e);
+            return self.attempt_failed(conn.id, m);
         }
         let mut cfg = conn.clone();
         cfg.password = password;
@@ -792,6 +805,16 @@ impl App {
             }
             None => profile.and_then(|id| self.profile(id)).cloned().map(Target::Profile),
         };
+        // An environment that is not defined: nothing is tried (a preset the form writes with
+        // the profile is one).
+        let made = self.overlays.form().and_then(|f| f.made_environment()).map(|e| e.name.clone());
+        if let Some(Target::Form(c, _) | Target::Profile(c)) = &target
+            && let Err(e) = self.policies.get(c.policy.as_deref())
+            && made.as_deref() != Some(e.0.as_str())
+        {
+            let text = self.unknown_environment_notice(&c.name, &e).render(&self.i18n).to_string();
+            return self.test_refused(text);
+        }
         match target {
             Some(Target::Form(mut c, Some(pw))) => {
                 c.password = pw;
@@ -856,9 +879,14 @@ impl App {
     /// A test of `cfg`, whose tunnel setting is wrong: it fails at once, saying why (nothing is
     /// tried, never directly).
     fn route_test_failed(&mut self, cfg: &ConnectionConfig, e: &datarig_core::profile::tunnel::RouteError) {
+        let text = self.route_error_notice(&cfg.name, e).render(&self.i18n).to_string();
+        self.test_refused(text);
+    }
+
+    /// A test that tries nothing: it failed at once, for `text`.
+    fn test_refused(&mut self, text: String) {
         self.clear_test();
         self.test_seq += 1;
-        let text = self.route_error_notice(&cfg.name, e).render(&self.i18n).to_string();
         let seq = self.test_seq;
         self.conn_test = Some(ConnTest {
             seq,
@@ -932,6 +960,7 @@ impl App {
         let mut form = form;
         form.folders = self.folders.iter().map(ToString::to_string).collect();
         form.presets = self.presets.clone();
+        form.environments = self.environments().to_vec();
         for (i, (name, _)) in crate::app::profiles::DRIVERS.iter().enumerate() {
             form.drivers_enabled[i] = self.driver(name).is_some();
         }

@@ -247,7 +247,7 @@ impl Ctx {
             }
             Ctx::ChooserFilter => "The `/` filter of a list to pick from.",
             Ctx::Picker => {
-                "A list to pick from with a typed filter: the profile form's SSH tunnel (`Enter` on it), with \"New SSH tunnel…\" last. Typing filters it as the action menu is filtered; the arrows, `Ctrl+N`/`Ctrl+P` and `Tab` move, `Enter` picks, `Esc` closes it and changes nothing. A click picks a row, the wheel selects, the pointer only highlights."
+                "A list to pick from with a typed filter: a field of the profile form (`Enter` on it), its SSH tunnel or its environment, with the entry that makes a new one (\"New SSH tunnel…\", \"New environment…\") last. Typing filters it as the action menu is filtered; the arrows, `Ctrl+N`/`Ctrl+P` and `Tab` move, `Enter` picks, `Esc` closes it and changes nothing. A click picks a row, the wheel selects, the pointer only highlights."
             }
             Ctx::NameInput => "A name to type: a new or renamed folder; OK and Cancel take a click.",
             Ctx::ScriptTree => "The folder tree of the saved queries (save as, open): the tree has the keyboard.",

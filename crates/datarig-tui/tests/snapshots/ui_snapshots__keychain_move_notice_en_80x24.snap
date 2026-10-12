@@ -7,9 +7,9 @@ expression: backend
 "│▸ ○   local-pg        ││  No open tabs                                        │"
 "│▾ Tunnels 0           ││  Pick a connection in the explorer, or press         │"
 "│    n here makes an S…││  Ctrl+O.                                             │"
-"│                      ││                                                      │"
-"│                      ││  Enter      Connect and open a console               │"
-"│                      ││  Ctrl+O     Quick connect                            │"
+"│▾ Environments 0      ││                                                      │"
+"│  ▸ ○ Default rules (…││  Enter      Connect and open a console               │"
+"│    ＋ Add presets: d…││  Ctrl+O     Quick connect                            │" Hidden by multi-width symbols: [(6, " ")]
 "│         ╭ Keychain ────────────────────────────────────────────────╮         │"
 "│         │                                                          │         │"
 "│         │ Moving saved passwords to the system keychain… (your OS  │         │"

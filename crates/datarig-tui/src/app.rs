@@ -33,6 +33,7 @@ mod ddl;
 mod dialog_mouse;
 mod dispatch;
 pub mod effects;
+pub mod environments;
 mod execution;
 pub mod explorer;
 mod format;
@@ -555,7 +556,8 @@ pub struct App {
     fetch_copy: Option<(copy::Intent, copy::CopyRequest)>,
     /// Why the config file could not be used (the settings screen says so; nothing is saved).
     config_problem: Option<Notice>,
-    /// `[policy.<name>]` tables; the connected profile's policy applies to its tabs.
+    /// The default rules and the environments (`[policy.<name>]`); a profile's environment
+    /// applies to its tabs.
     pub policies: Policies,
     clock: Clock,
     time_of_day: TimeOfDay,
@@ -638,6 +640,12 @@ pub struct App {
     pub tunnels_expanded: bool,
     /// The presets whose profiles the explorer lists under them.
     pub tunnels_open: std::collections::BTreeSet<datarig_core::profile::tunnel::TunnelId>,
+    /// The explorer's "Environments" section is open.
+    pub environments_expanded: bool,
+    /// The explorer lists the profiles without an environment under the default rules.
+    pub default_rules_open: bool,
+    /// The environments whose profiles the explorer lists under them.
+    pub environments_open: std::collections::BTreeSet<datarig_core::policy::EnvironmentId>,
     /// The profile form's tunnel secret, applied once its save went through.
     pending_tunnel_secret: Option<tunnel::FormSecret>,
     /// Host key questions of tunnels, the first one shown.
@@ -904,6 +912,9 @@ impl App {
             shared_saves: std::collections::HashMap::new(),
             tunnels_expanded: true,
             tunnels_open: std::collections::BTreeSet::new(),
+            environments_expanded: true,
+            default_rules_open: false,
+            environments_open: std::collections::BTreeSet::new(),
             pending_tunnel_secret: None,
             host_keys: VecDeque::new(),
             secret_waits: VecDeque::new(),
@@ -1079,24 +1090,29 @@ impl App {
         (self.clock)()
     }
 
-    /// `paging` of the policy of tab `t`'s profile: whether a result with more rows keeps its
-    /// portal (and the transaction that holds it) open.
-    pub fn paging_mode(&self, t: &Tab) -> datarig_core::driver::PagingMode {
-        let policy = t.profile.and_then(|id| self.profile(id)).and_then(|c| c.policy.as_deref());
-        self.policies.get(policy).paging
+    /// The rules of tab `t`'s profile ([`App::rules_of`]; the default rules without one).
+    fn tab_rules(&self, t: &Tab) -> datarig_core::policy::Policy {
+        match t.profile {
+            Some(id) => self.rules_of(id),
+            None => self.policies.default_rules().clone(),
+        }
     }
 
-    /// `paging_idle_timeout` of the policy of tab `t`'s profile (`None`: never close).
+    /// `paging` of the environment of tab `t`'s profile: whether a result with more rows keeps
+    /// its portal (and the transaction that holds it) open.
+    pub fn paging_mode(&self, t: &Tab) -> datarig_core::driver::PagingMode {
+        self.tab_rules(t).paging
+    }
+
+    /// `paging_idle_timeout` of the environment of tab `t`'s profile (`None`: never close).
     pub fn paging_timeout(&self, t: &Tab) -> Option<Duration> {
-        let policy = t.profile.and_then(|id| self.profile(id)).and_then(|c| c.policy.as_deref());
-        self.policies.get(policy).paging_idle_timeout
+        self.tab_rules(t).paging_idle_timeout
     }
 
     /// How many rows of tab `t`'s results stay in memory and how large their spill file may
-    /// grow (its profile's policy, else the config).
+    /// grow (its profile's environment, else the config).
     pub fn result_limits(&self, t: &Tab) -> datarig_core::results::Limits {
-        let policy = t.profile.and_then(|id| self.profile(id)).and_then(|c| c.policy.as_deref());
-        let cap = self.policies.get(policy).spill_limit.unwrap_or(self.spill_limit);
+        let cap = self.tab_rules(t).spill_limit.unwrap_or(self.spill_limit);
         datarig_core::results::Limits { window: self.result_window_rows, cap: cap.0 }
     }
 

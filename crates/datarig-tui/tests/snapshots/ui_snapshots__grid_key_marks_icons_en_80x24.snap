@@ -25,4 +25,4 @@ expression: backend
 "│                      ││                                                      │"
 "│                      ││                                                      │"
 "╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
-" NORMAL  local-pg · policy: default │ 3 rows · 3ms         │ Enter view cell EN "
+" NORMAL  local-pg │ 3 rows · 3ms    │ Enter view cell · n next page · y copy EN "

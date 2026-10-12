@@ -418,6 +418,9 @@ impl App {
         if self.overlays.form().is_some_and(ProfileForm::is_tunnel) {
             return self.save_tunnel_form();
         }
+        if self.overlays.form().is_some_and(ProfileForm::is_environment) {
+            return self.save_environment_form();
+        }
         let Some(form) = self.overlays.form_mut().filter(|f| !f.saving) else { return };
         form.attempted = true;
         let editing = form.editing;
@@ -430,6 +433,10 @@ impl App {
         // save) the tunnel secret's into a preset made of the profile's own tunnel.
         if form.made_preset().is_some() && form.original_source().is_some_and(|from| from != form.source) {
             return self.flash(Notice::new(Label::TunnelSaveAsWithSourceChange, Level::Warning));
+        }
+        // The same for an environment preset picked here, which is written with the profile.
+        if form.made_environment().is_some() && form.original_source().is_some_and(|from| from != form.source) {
+            return self.flash(Notice::new(Label::EnvPresetWithSourceChange, Level::Warning));
         }
         // A preset of the same name made since the form opened ("save as tunnel preset").
         if let Some(name) = form.made_preset().map(|p| p.name)
@@ -490,6 +497,8 @@ impl App {
         // profile's tunnel secret moves to it, from the store it is in as saved (the form may
         // have changed it) to the one the preset keeps it in.
         let made = form.made_preset();
+        // An environment preset picked in the form is written with the profile, the same way.
+        let made_env = form.made_environment().cloned();
         let store = |s: &datarig_core::profile::ssh::SshSettings| {
             Some(s.source().kind()).filter(|k| s.auth.has_secret() && k.stores_secret())
         };
@@ -508,7 +517,7 @@ impl App {
         let account = p.id.account();
         if editing.is_some() && from != to {
             // Refused with a preset to make (`save_form`): never both in one save.
-            if made.is_some() {
+            if made.is_some() || made_env.is_some() {
                 return;
             }
             return self.apply_source_change(editing, p, from, to, &pw);
@@ -550,15 +559,24 @@ impl App {
             self.presets.push(t);
             self.presets.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
         }
+        if let Some(e) = made_env.clone() {
+            self.policies.environments_mut().push(e);
+        }
         let idx = self.put_profile(editing, p.clone());
-        let saved = match &made {
-            None => self.persist(),
-            // The preset and the profile naming it go together, or not at all: the file keeps
-            // the profile's own tunnel (and its secret stays where it is); the form stays open.
-            Some(t) => match self.try_persist() {
+        let saved = match (&made, &made_env) {
+            (None, None) => self.persist(),
+            // The preset (or environment) and the profile naming it go together, or not at all:
+            // the file keeps the profile's own tunnel (and its secret stays where it is) and its
+            // environment; the form stays open.
+            _ => match self.try_persist() {
                 Ok(n) => n,
                 Err(fault) => {
-                    self.presets.retain(|q| q.id != t.id);
+                    if let Some(t) = &made {
+                        self.presets.retain(|q| q.id != t.id);
+                    }
+                    if let Some(e) = &made_env {
+                        self.policies.environments_mut().retain(|q| q.id != e.id);
+                    }
                     match before {
                         Some(b) => {
                             let id = b.id;

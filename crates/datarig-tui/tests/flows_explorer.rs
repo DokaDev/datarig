@@ -582,7 +582,7 @@ fn the_form_has_basic_and_advanced_sections() {
     let screen = h.screen(80, 24);
     let row = screen.lines().find(|l| l.contains("Driver")).unwrap();
     assert!(row.contains("Elasticsearch   unsupported") && !row.contains('…'), "{row}");
-    // Ctrl+N: the SSH section, then the advanced one (SSL mode, policy, color, icon, folder).
+    // Ctrl+N: the SSH section, then the advanced one (SSL mode, environment, color, icon, folder).
     h.ctrl('n');
     assert_eq!((h.form().section, h.form().focus), (Section::Ssh, Field::SshEnabled));
     h.ctrl('n');
@@ -592,7 +592,9 @@ fn the_form_has_basic_and_advanced_sections() {
     h.key(KeyCode::Tab);
     h.key(KeyCode::Right); // statement cache: on -> off
     h.key(KeyCode::Tab);
-    h.type_text("prod-rules");
+    h.key(KeyCode::Enter); // environment: the list (the default rules only: no file to write one in)
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Picker));
+    h.key(KeyCode::Esc);
     h.key(KeyCode::Tab);
     h.key(KeyCode::Right); // color: auto -> red
     h.key(KeyCode::Tab);
@@ -613,7 +615,7 @@ fn the_form_has_basic_and_advanced_sections() {
     let p = h.app.profiles.iter().find(|p| p.name == "local-pg").unwrap();
     assert_eq!(
         (p.sslmode.as_str(), p.policy.as_deref(), p.color.as_deref(), p.icon.as_deref()),
-        ("prefer", Some("prod-rules"), Some("red"), Some("rocket"))
+        ("prefer", None, Some("red"), Some("rocket"))
     );
     assert!(!p.statement_cache, "the statement cache was turned off");
     // An empty policy is the default one.
