@@ -15,7 +15,10 @@
 //!   every quoted word escapes exactly those two.
 //! * A line longer than about 4000 bytes makes the tool hang; a request longer than
 //!   [`LINE_LIMIT`] is refused before anything runs, as is a password with a line break or a
-//!   NUL (it cannot be written on one line).
+//!   NUL (it cannot be written on one line). A write is read back once and must give the same
+//!   password; a write that prints anything on standard error has failed, and a delete that does
+//!   (it reports what it removed) counts only when a read then finds nothing.
+//! * The tool runs in a process group of its own, never the terminal's foreground group.
 //! * A read (`find-generic-password … -g`) gets the password on standard error, in one of three
 //!   shapes: `password: ` (empty), `password: "<printable ASCII>"`, or
 //!   `password: 0x<hex>  "<escaped>"` (any other byte, or a backslash). Anything else is an
@@ -81,15 +84,16 @@ impl SecurityCliStore {
         account: &str,
         tail: &[(&str, Option<&str>)],
     ) -> Result<String, Unavailable> {
-        let mut words: Vec<&str> = vec![&self.service, account];
-        words.extend(tail.iter().filter_map(|(_, v)| *v));
+        let unwritable = |w: &str| w.contains(['\n', '\r', '\0']);
+        if tail.iter().filter_map(|(_, v)| *v).any(unwritable) {
+            return Err(refused("a password with a line break or NUL cannot be passed to the security tool"));
+        }
         let keychain = match &self.keychain {
             Some(k) => Some(k.to_str().ok_or_else(|| refused("the keychain path is not UTF-8"))?),
             None => None,
         };
-        words.extend(keychain);
-        if words.iter().any(|w| w.contains(['\n', '\r', '\0'])) {
-            return Err(refused("a line break or NUL cannot be passed to the security tool"));
+        if [self.service.as_str(), account].into_iter().chain(keychain).any(unwritable) {
+            return Err(refused("a name with a line break or NUL cannot be passed to the security tool"));
         }
         let mut line = command.to_string();
         for h in head {
@@ -111,7 +115,7 @@ impl SecurityCliStore {
         }
         line.push('\n');
         if line.len() > LINE_LIMIT {
-            return Err(refused("password too long for the security tool"));
+            return Err(refused("request too long for the security tool"));
         }
         Ok(line)
     }
@@ -119,8 +123,12 @@ impl SecurityCliStore {
     /// Run the tool in interactive mode with `line` as its only input. Its standard input is a
     /// pipe closed after the line (never the terminal's).
     fn run(&self, line: &str) -> Result<Output, Unavailable> {
+        use std::os::unix::process::CommandExt;
         let mut cmd = Command::new(&self.program);
         cmd.arg("-i").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        // A process group of its own: it is never the terminal's foreground group, so it cannot
+        // read the TUI's keys (nor get its Ctrl+C).
+        cmd.process_group(0);
         if let Some(home) = &self.home {
             cmd.env("HOME", home);
         }
@@ -156,14 +164,21 @@ impl SecretStore for SecurityCliStore {
         }
     }
 
+    /// Written, then read back once: only the same password back is a success (the tool's
+    /// interactive mode might take a request it did not carry out without saying so).
     fn set(&self, account: &str, secret: &str) -> Result<(), Unavailable> {
         const COMMAND: &str = "add-generic-password";
         // `-U`: update the item when there is one.
         let line = self.line(COMMAND, &["-U"], account, &[("-w", Some(secret))])?;
         let out = self.run(&line)?;
-        match verdict(&out, COMMAND) {
-            Verdict::Done => Ok(()),
-            v => Err(v.fault(COMMAND, &out, Some(secret))),
+        match quiet(verdict(&out, COMMAND), &out) {
+            Verdict::Done => {}
+            v => return Err(v.fault(COMMAND, &out, Some(secret))),
+        }
+        match self.get(account)? {
+            Some(back) if back == secret => Ok(()),
+            Some(_) => Err(mismatch("the security tool gave back a different password")),
+            None => Err(mismatch("the password was not there when read back")),
         }
     }
 
@@ -171,8 +186,14 @@ impl SecretStore for SecurityCliStore {
         const COMMAND: &str = "delete-generic-password";
         let line = self.line(COMMAND, &[], account, &[])?;
         let out = self.run(&line)?;
-        match verdict(&out, COMMAND) {
+        match quiet(verdict(&out, COMMAND), &out) {
             Verdict::Done => Ok(true),
+            // The tool reports a delete on standard error when it works: only a read that finds
+            // nothing any more makes that a success.
+            Verdict::Noise => match self.get(account)? {
+                None => Ok(true),
+                Some(_) => Err(Verdict::Noise.fault(COMMAND, &out, None)),
+            },
             Verdict::Status(NOT_FOUND) => Ok(false),
             v => Err(v.fault(COMMAND, &out, None)),
         }
@@ -195,6 +216,27 @@ enum Verdict {
     Exit(i32),
     /// The tool was ended by a signal.
     Signal,
+    /// The tool said it succeeded but wrote something on standard error (a write says nothing
+    /// when it works).
+    Noise,
+}
+
+/// `v`, except that a success with something on standard error is [`Verdict::Noise`].
+fn quiet(v: Verdict, out: &Output) -> Verdict {
+    match v {
+        Verdict::Done if !String::from_utf8_lossy(&out.stderr).trim().is_empty() => Verdict::Noise,
+        v => v,
+    }
+}
+
+/// `line` holds `secret`: as given, as the tool's quoted word, or as the escaped text inside it.
+fn holds(line: &str, secret: &str) -> bool {
+    if secret.is_empty() {
+        return false;
+    }
+    let quoted = quote(secret);
+    let inner = &quoted[1..quoted.len() - 1];
+    line.contains(secret) || line.contains(&quoted) || line.contains(inner)
 }
 
 /// The verdict of a run of `command`. The status line is looked for only at the start of a line
@@ -225,13 +267,14 @@ impl Verdict {
             .lines()
             .map(str::trim_end)
             .filter(|l| l.starts_with("security: "))
-            .filter(|l| secret.is_none_or(|s| s.is_empty() || !l.contains(s)))
+            .filter(|l| secret.is_none_or(|s| !holds(l, s)))
             .collect();
         let said = said.join(" | ");
         let (kind, why) = match self {
             Verdict::Status(s) => (status_fault(s), format!("OSStatus {s}")),
             Verdict::Exit(c) => (KeychainFault::Failure, format!("exit code {c}")),
             Verdict::Signal => (KeychainFault::Failure, "ended by a signal".to_string()),
+            Verdict::Noise => (KeychainFault::Failure, "unexpected output from the security tool".to_string()),
             Verdict::Done => (KeychainFault::Failure, "no failure".to_string()),
         };
         let detail = match said.as_str() {
@@ -298,6 +341,10 @@ fn decode_hex(hex: &[u8]) -> Option<Vec<u8>> {
 
 fn refused(detail: &str) -> Unavailable {
     Unavailable(Fault::new(FaultKind::Keychain(KeychainFault::Refused), detail))
+}
+
+fn mismatch(detail: &str) -> Unavailable {
+    Unavailable(Fault::new(FaultKind::Keychain(KeychainFault::Mismatch), detail))
 }
 
 fn failure(detail: impl Into<String>) -> Unavailable {

@@ -560,12 +560,14 @@ or the settings screen (`Space ,`, Secrets group, "macOS keychain access"), or
 `:set secrets.macos_keychain_access=security_tool`. The change applies at once, without a
 restart; turning it on asks first.
 
-- **What to expect.** The first time each existing password is read this way, macOS asks once
-  whether `security` may use it: enter your login password and choose **Always Allow**. After
-  that, upgrades of datarig no longer ask.
+- **What to expect.** The first time each existing password is read or changed through
+  `security`, macOS may ask once whether `security` may use it: enter your login password and
+  choose **Always Allow**. After that, upgrades of datarig no longer ask.
 - **The trade-off.** Any program running as your user can then read these passwords with
   `security` (for example `security find-generic-password -s datarig -g`) without being asked.
   With the default (`direct`), macOS asks before another program reads them.
+- **Limits.** In this mode a password containing a line break, or longer than about 3 KB,
+  cannot be saved (datarig says so and saves nothing); reading passwords saved earlier works.
 - **The items are the same** in both modes (generic passwords, service `datarig`, account
   `profile:<id>`, in your default keychain), so switching moves nothing. Passwords never appear
   on the tool's command line: datarig hands them over on its standard input.

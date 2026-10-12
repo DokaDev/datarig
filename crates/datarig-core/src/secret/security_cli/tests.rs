@@ -3,8 +3,10 @@ use std::path::Path;
 use std::time::Duration;
 
 /// A fake `security`: a shell script in a directory of its own that appends its arguments to
-/// `argv` (one per line) and its standard input to `stdin`, prints the file `stderr` on standard
-/// error and exits with the code in `code` (0 without it); with a file `kill` it ends by SIGKILL.
+/// `argv` (one per line) and its standard input (one request line) to `stdin`. For a
+/// `find-generic-password` request it prints the file `find_stderr` on standard error and exits
+/// with the code in `find_code`; for any other request `stderr` and `code` (0 without the file);
+/// with a file `kill` it ends by SIGKILL.
 struct Fake {
     dir: PathBuf,
     program: PathBuf,
@@ -14,11 +16,16 @@ const FAKE: &str = r#"#!/bin/sh
 d=$(dirname "$0")
 [ "$1" = "--probe" ] && exit 0
 for a in "$@"; do printf '%s\n' "$a" >> "$d/argv"; done
-cat >> "$d/stdin"
+line=$(cat)
+printf '%s\n' "$line" >> "$d/stdin"
+case "$line" in
+find-generic-password*) e=find_stderr; c=find_code ;;
+*) e=stderr; c=code ;;
+esac
 [ -f "$d/stdout" ] && cat "$d/stdout"
-[ -f "$d/stderr" ] && cat "$d/stderr" >&2
+[ -f "$d/$e" ] && cat "$d/$e" >&2
 [ -f "$d/kill" ] && kill -KILL $$
-exit "$(cat "$d/code" 2>/dev/null || echo 0)"
+exit "$(cat "$d/$c" 2>/dev/null || echo 0)"
 "#;
 
 impl Fake {
@@ -31,13 +38,28 @@ impl Fake {
         Self { dir, program }
     }
 
-    /// The next runs print `stderr` and exit with `code`; the record of earlier runs is dropped.
+    /// The next runs print `stderr` and exit with `code` (every request: a read as well); the
+    /// record of earlier runs is dropped.
     fn answer(&self, stderr: &str, code: i32) {
-        std::fs::write(self.dir.join("stderr"), stderr).unwrap();
-        std::fs::write(self.dir.join("code"), code.to_string()).unwrap();
+        for (e, c) in [("stderr", "code"), ("find_stderr", "find_code")] {
+            std::fs::write(self.dir.join(e), stderr).unwrap();
+            std::fs::write(self.dir.join(c), code.to_string()).unwrap();
+        }
         for f in ["argv", "stdin"] {
             let _ = std::fs::remove_file(self.dir.join(f));
         }
+    }
+
+    /// A read answers `stderr` and `code` (after [`Fake::answer`]).
+    fn answer_find(&self, stderr: &str, code: i32) {
+        std::fs::write(self.dir.join("find_stderr"), stderr).unwrap();
+        std::fs::write(self.dir.join("find_code"), code.to_string()).unwrap();
+    }
+
+    /// A write succeeds, and the read that checks it gives `secret` back.
+    fn answer_set(&self, secret: &str) {
+        self.answer("", 0);
+        self.answer_find(&password_line(secret), 0);
     }
 
     fn store(&self) -> SecurityCliStore {
@@ -71,6 +93,22 @@ fn write_script(path: &Path, text: &str) {
     panic!("{} stayed busy", path.display());
 }
 
+/// The `password: ` line the tool prints for `secret`: quoted when it is printable ASCII without a
+/// backslash, else in hex.
+fn password_line(secret: &str) -> String {
+    if secret.is_empty() {
+        "password: \n".to_string()
+    } else if secret.bytes().all(|b| (0x20..0x7f).contains(&b) && b != b'\\') {
+        format!("password: \"{secret}\"\n")
+    } else {
+        let hex: String = secret.bytes().map(|b| format!("{b:02X}")).collect();
+        format!("password: 0x{hex}  \"(escaped)\"\n")
+    }
+}
+
+/// The read a write checks itself with, on `profile:1`.
+const FIND: &str = "find-generic-password -s \"datarig\" -a \"profile:1\" -g\n";
+
 fn kind(r: Unavailable) -> KeychainFault {
     match r.0.kind {
         FaultKind::Keychain(k) => k,
@@ -100,17 +138,57 @@ fn set_passes_the_secret_on_standard_input_only() {
         "",
     ];
     for s in secrets {
-        fake.answer("", 0);
+        fake.answer_set(s);
         fake.store().set("profile:1", s).unwrap();
-        assert_eq!(fake.read("argv").as_deref(), Some("-i\n"), "only -i on the command line ({s:?})");
-        let want = format!("add-generic-password -U -s \"datarig\" -a \"profile:1\" -w {}\n", quote(s));
-        assert_eq!(fake.read("stdin").as_deref(), Some(want.as_str()));
+        assert_eq!(fake.read("argv").as_deref(), Some("-i\n-i\n"), "only -i on the command line ({s:?})");
+        let want = format!("add-generic-password -U -s \"datarig\" -a \"profile:1\" -w {}\n{FIND}", quote(s));
+        assert_eq!(fake.read("stdin").as_deref(), Some(want.as_str()), "written, then read back");
     }
     // The escaping, spelled out.
-    fake.answer("", 0);
+    fake.answer_set(r#"a"b\c"#);
     fake.store().set("profile:1", r#"a"b\c"#).unwrap();
     let stdin = fake.read("stdin").unwrap();
-    assert!(stdin.ends_with(" -w \"a\\\"b\\\\c\"\n"), "{stdin}");
+    assert!(stdin.ends_with(&format!(" -w \"a\\\"b\\\\c\"\n{FIND}")), "{stdin}");
+}
+
+#[test]
+fn a_write_is_checked_by_reading_it_back() {
+    let fake = Fake::new("readback");
+    // Another password back, or none at all: the write did not happen as asked.
+    fake.answer_set("other");
+    let e = fake.store().set("profile:1", "hunter2").unwrap_err();
+    assert!(!e.0.detail.contains("hunter2") && !e.0.detail.contains("other"), "{e:?}");
+    assert_eq!(kind(e), KeychainFault::Mismatch);
+    fake.answer("", 0);
+    fake.answer_find("find-generic-password: returned -25300\n", 44);
+    assert_eq!(kind(fake.store().set("profile:1", "hunter2").unwrap_err()), KeychainFault::Mismatch);
+    // A read back that fails is that failure.
+    fake.answer("", 0);
+    fake.answer_find("find-generic-password: returned -25293\n", 51);
+    assert_eq!(kind(fake.store().set("profile:1", "hunter2").unwrap_err()), KeychainFault::Locked);
+}
+
+#[test]
+fn a_write_that_says_anything_has_failed_and_a_delete_is_checked() {
+    let fake = Fake::new("noise");
+    let usage = "Usage: add-generic-password [-a account] [-s service] [-w password] [keychain]\n";
+    fake.answer(usage, 0);
+    fake.answer_find(&password_line("pw"), 0);
+    let e = fake.store().set("profile:1", "pw").unwrap_err();
+    assert_eq!(e.0.detail, "add-generic-password failed (unexpected output from the security tool)");
+    assert_eq!(kind(e), KeychainFault::Failure);
+    assert_eq!(fake.read("stdin").as_deref().map(|s| s.lines().count()), Some(1), "no read back after it");
+    // A delete that says something counts only when the entry is gone after it.
+    fake.answer("security: something odd\n", 0);
+    fake.answer_find(&password_line("pw"), 0);
+    let e = fake.store().delete("profile:1").unwrap_err();
+    assert_eq!(e.0.detail, "security: something odd (unexpected output from the security tool)");
+    assert_eq!(kind(e), KeychainFault::Failure);
+    fake.answer(usage, 0);
+    assert_eq!(kind(fake.store().delete("profile:1").unwrap_err()), KeychainFault::Failure, "the read is odd too");
+    fake.answer("password has been deleted.\n", 0);
+    fake.answer_find("find-generic-password: returned -25300\n", 44);
+    assert_eq!(fake.store().delete("profile:1"), Ok(true));
 }
 
 #[test]
@@ -118,11 +196,12 @@ fn a_keychain_file_is_named_last() {
     let fake = Fake::new("keychain");
     let path = fake.dir.join("my \"test\".keychain-db");
     let store = SecurityCliStore::with_tool(fake.program.clone(), "datarig-test", Some(path.clone()), None);
-    fake.answer("", 0);
+    fake.answer_set("pw");
     store.set("profile:1", "pw").unwrap();
+    let kc = quote(path.to_str().unwrap());
     let want = format!(
-        "add-generic-password -U -s \"datarig-test\" -a \"profile:1\" -w \"pw\" {}\n",
-        quote(path.to_str().unwrap())
+        "add-generic-password -U -s \"datarig-test\" -a \"profile:1\" -w \"pw\" {kc}\n\
+         find-generic-password -s \"datarig-test\" -a \"profile:1\" -g {kc}\n"
     );
     assert_eq!(fake.read("stdin").as_deref(), Some(want.as_str()));
     fake.answer("", 0);
@@ -245,6 +324,16 @@ fn failure_details_never_hold_the_secret() {
     fake.answer("password: \"hunter2\"\nsecurity: odd\nfind-generic-password: returned -25293\n", 51);
     let e = fake.store().get("profile:1").unwrap_err();
     assert_eq!(e.0.detail, "security: odd (OSStatus -25293)");
+    // Echoed back escaped, as the tool's quoted word or as the text inside it: dropped too.
+    let secret = r#"a"b\c"#;
+    let echoed = format!(
+        "security: bad word {}\nsecurity: near a\\\"b\\\\c here\nsecurity: raw {secret}\nsecurity: kept\n\
+         add-generic-password: returned -25293\n",
+        quote(secret)
+    );
+    fake.answer(&echoed, 51);
+    let e = fake.store().set("profile:1", secret).unwrap_err();
+    assert_eq!(e.0.detail, "security: kept (OSStatus -25293)");
 }
 
 #[test]
@@ -276,20 +365,25 @@ fn unwritable_requests_are_refused_before_anything_runs() {
     fake.answer("", 0);
     for s in ["two\nlines", "carriage\rreturn", "nul\0byte"] {
         let e = fake.store().set("profile:1", s).unwrap_err();
-        assert!(!e.0.detail.contains(s), "{e:?}");
+        assert_eq!(e.0.detail, "a password with a line break or NUL cannot be passed to the security tool");
         assert_eq!(kind(e), KeychainFault::Refused);
     }
     let long = "x".repeat(LINE_LIMIT);
     let e = fake.store().set("profile:1", &long).unwrap_err();
-    assert_eq!(e.0.detail, "password too long for the security tool");
+    assert_eq!(e.0.detail, "request too long for the security tool");
     assert_eq!(kind(e), KeychainFault::Refused);
     // Escapes count: 2,000 quotes take 4,000 bytes.
     assert_eq!(kind(fake.store().set("profile:1", &"\"".repeat(2000)).unwrap_err()), KeychainFault::Refused);
     assert!(fake.read("argv").is_none() && fake.read("stdin").is_none(), "the tool never ran");
+    // An account with a line break is refused as well (another detail).
+    let e = fake.store().get("profile:1\nx").unwrap_err();
+    assert_eq!(e.0.detail, "a name with a line break or NUL cannot be passed to the security tool");
+    assert!(fake.read("argv").is_none(), "the tool never ran");
     // 3,000 characters fit.
-    fake.answer("", 0);
-    fake.store().set("profile:1", &"y".repeat(3000)).unwrap();
-    assert_eq!(fake.read("argv").as_deref(), Some("-i\n"));
+    let fits = "y".repeat(3000);
+    fake.answer_set(&fits);
+    fake.store().set("profile:1", &fits).unwrap();
+    assert_eq!(fake.read("argv").as_deref(), Some("-i\n-i\n"));
 }
 
 /// The real `/usr/bin/security`, on a scratch keychain file only. Opt in with
@@ -373,7 +467,7 @@ fn real_security_tool_on_a_scratch_keychain() {
     }
     let logged = std::fs::read_to_string(&log).unwrap();
     assert!(logged.lines().all(|l| l == "-i"), "only -i was passed: {logged:?}");
-    assert_eq!(logged.lines().count(), battery.len() * 3);
+    assert_eq!(logged.lines().count(), battery.len() * 5, "a write, its read back, a read, a delete and its check");
 
     drop(scratch);
     assert_eq!(user_keychains(), before, "the user's keychains are as they were");
@@ -391,9 +485,10 @@ struct Scratch {
 impl Scratch {
     fn create(dir: &Path, home: &Path) -> Self {
         let keychain = dir.join("scratch.keychain-db");
+        let kc = keychain.to_str().expect("a UTF-8 temporary directory").to_string();
+        let kc = kc.as_str();
         let password = random_hex();
         let s = Self { keychain: keychain.clone(), home: home.to_path_buf(), dir: dir.to_path_buf() };
-        let kc = keychain.to_str().unwrap();
         s.security(&["create-keychain", "-p", &password, kc]);
         // No lock timeout, no lock on sleep; then unlocked.
         s.security(&["set-keychain-settings", kc]);
@@ -410,11 +505,14 @@ impl Scratch {
 #[cfg(target_os = "macos")]
 impl Drop for Scratch {
     fn drop(&mut self) {
-        let _ = Command::new(PROGRAM)
-            .args(["delete-keychain", self.keychain.to_str().unwrap_or_default()])
-            .env("HOME", &self.home)
-            .stdin(Stdio::null())
-            .output();
+        // Never without the keychain's name (that would be the default keychain).
+        if let Some(kc) = self.keychain.to_str() {
+            let _ = Command::new(PROGRAM)
+                .args(["delete-keychain", kc])
+                .env("HOME", &self.home)
+                .stdin(Stdio::null())
+                .output();
+        }
         let _ = std::fs::remove_dir_all(&self.dir);
     }
 }
