@@ -5,7 +5,7 @@
 //!
 //! The keys are those of the tab list and the action menu: typing filters the entries, ranked
 //! as they rank theirs (a label that starts with the text, then a word of it, then its letters
-//! in order; a match in the hint ranks below one in the label); `↓`/`↑`, `Ctrl+N`/`Ctrl+P` and
+//! in order), then the entries whose hint has the text; `↓`/`↑`, `Ctrl+N`/`Ctrl+P` and
 //! `Tab`/`Shift+Tab` move around the ends; `Enter` picks the selected entry; `Esc` cancels. The
 //! new entry is listed whatever the filter, so it is always there to pick. With the mouse, as
 //! the other lists: a press arms a row and the release over it picks it (not right after the
@@ -30,7 +30,7 @@ use std::time::Instant;
 pub struct Entry<T> {
     pub value: T,
     pub label: String,
-    /// Shown dimmed after the label (empty: nothing); the filter looks at it too.
+    /// Shown dimmed after the label (empty: nothing); the filter finds the text in it too.
     pub hint: String,
 }
 
@@ -129,12 +129,16 @@ impl<T: Clone + PartialEq> ListPicker<T> {
 
     /// Work the rows out again from the filter; the best match is selected.
     fn refilter(&mut self) {
-        let query = self.filter.text().trim().to_string();
+        let query = self.filter.text().trim().to_lowercase();
+        // A hint is found by a part of it: its letters spread out would match too much.
+        let in_hint = |hint: &str| (!query.is_empty() && hint.to_lowercase().contains(&query)).then_some(3);
         let mut hits: Vec<(u8, usize)> = self
             .entries
             .iter()
             .enumerate()
-            .filter_map(|(i, e)| crate::app::menu::rank(&query, &[&e.label, &e.hint]).map(|r| (r, i)))
+            .filter_map(|(i, e)| {
+                crate::app::menu::rank(&query, &[&e.label]).or_else(|| in_hint(&e.hint)).map(|r| (r, i))
+            })
             .collect();
         hits.sort();
         self.rows = hits.into_iter().map(|(_, i)| Row::Entry(i)).collect();

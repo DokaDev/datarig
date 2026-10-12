@@ -59,7 +59,11 @@ fn typing_filters_as_the_action_menu_ranks_and_the_best_match_is_selected() {
     p.filter.set("");
     typ(&mut p, "ofc");
     assert_eq!(labels(&p), ["office", "New SSH tunnel…"]);
-    // The bastion in the hint finds its preset; case is ignored.
+    // A part of a hint finds its entry, case ignored; its letters spread out do not.
+    p.filter.set("");
+    typ(&mut p, "dbd");
+    assert_eq!(labels(&p), ["New SSH tunnel…"], "d…b…d of \"database directly\"");
+    // The bastion in the hint finds its preset.
     p.filter.set("");
     typ(&mut p, "LAB-B");
     assert_eq!(labels(&p), ["lab", "New SSH tunnel…"]);

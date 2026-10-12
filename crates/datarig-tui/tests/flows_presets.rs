@@ -1016,8 +1016,7 @@ fn the_tunnel_list_picks_a_preset_none_or_the_profiles_own() {
     assert_eq!(tunnel_list(&h).filter.text(), "k");
     h.key(KeyCode::Backspace);
     h.type_text("only");
-    // A word of a label first; letters in order in a hint below it.
-    assert_eq!(tunnel_rows(&h), ["this profile only", "off", "New SSH tunnel…"]);
+    assert_eq!(tunnel_rows(&h), ["this profile only", "New SSH tunnel…"]);
     h.key(KeyCode::Enter);
     assert_eq!(h.form().ssh_choice(), SshChoice::Inline);
     assert!(h.form().ssh_fields().len() > 1, "its own fields are shown");
