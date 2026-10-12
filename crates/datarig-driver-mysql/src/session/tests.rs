@@ -731,3 +731,144 @@ async fn a_kill_not_sent_keeps_why() {
         other => panic!("{other:?}"),
     }
 }
+
+/// A column definition of a text column `name` (protocol 41).
+fn column(name: &str) -> Vec<u8> {
+    let mut p = Vec::new();
+    for s in ["def", "shop", "t", "t", name, name] {
+        p.push(s.len() as u8);
+        p.extend_from_slice(s.as_bytes());
+    }
+    p.push(0x0c);
+    p.extend_from_slice(&255u16.to_le_bytes());
+    p.extend_from_slice(&1020u32.to_le_bytes());
+    p.push(0xfd);
+    p.extend_from_slice(&[0, 0, 0, 0, 0]);
+    p
+}
+
+/// A procedure's answer that comes in several packets: a result set's head (one column), then
+/// its `rows` and the `OK` that ends the call.
+fn call_answer(rows: &[&str]) -> (Vec<u8>, Vec<u8>) {
+    let mut packets = vec![vec![1], column("v")];
+    for r in rows {
+        let mut row = vec![r.len() as u8];
+        row.extend_from_slice(r.as_bytes());
+        packets.push(row);
+    }
+    // The result set's end (`OK` in place of `EOF`), more results to come; then the call's.
+    packets.push(vec![0xfe, 0, 0, 0x0a, 0, 0, 0]);
+    packets.push(vec![0, 0, 0, 0x02, 0, 0, 0]);
+    let mut wire = packets.iter().zip(1u8..).map(|(p, seq)| packet(seq, p));
+    let head = wire.by_ref().take(2).flatten().collect();
+    (head, wire.flatten().collect())
+}
+
+/// A procedure whose result set comes in several packets answers while a kill sent again for it
+/// never gets its answer, its rows only after the session gave up on that answer: its rows and
+/// its end are read and are the run's, never cut short; no
+/// request follows it on the connection, and the session is lost at its next command, saying
+/// that the kill was sent and not answered.
+#[tokio::test]
+async fn a_result_answered_while_its_kill_hangs_is_read_to_its_end_then_the_session_is_lost() {
+    use datarig_core::driver::{DbCommand, DbEvent, PagingMode};
+    // The kill's server: the kill sent again is read, and never answered.
+    let (kill_client, mut kill_server) = tokio::io::duplex(1 << 16);
+    let dialed = Arc::new(tokio::sync::Notify::new());
+    let cfg = mysql("127.0.0.1");
+    let dialer = OneStreamSaid(std::sync::Mutex::new(Some(kill_client)), dialed.clone());
+    let route = Route::new(&cfg.host, 3306, Some(DialerRef(Arc::new(dialer))));
+    let opts = Target::of(&cfg).unwrap().opts(None, "datarig-q-test", &route);
+    let killer = Killer::new(route, opts.clone(), 7);
+    let written = Arc::new(tokio::sync::Notify::new());
+    let kills = tokio::spawn({
+        let written = written.clone();
+        async move {
+            dialed.notified().await;
+            greet(&mut kill_server).await;
+            logged_in(&mut kill_server).await;
+            let kill = read_packet(&mut kill_server).await;
+            written.notify_one();
+            tokio::time::sleep(KILL_TIMEOUT * 3).await;
+            kill
+        }
+    });
+    // The session's own connection.
+    let (client, mut server) = tokio::io::duplex(1 << 16);
+    let (wire, stream) = Wire::new(Box::new(client));
+    let login = tokio::spawn(Conn::connect_with_stream(opts, Box::new(stream)));
+    greet(&mut server).await;
+    logged_in(&mut server).await;
+    let conn = login.await.unwrap().unwrap();
+    let (commands, rx) = tokio::sync::mpsc::unbounded_channel();
+    let (events, mut got) = tokio::sync::mpsc::unbounded_channel();
+    let session = tokio::spawn(crate::query::query_loop(
+        conn,
+        crate::link::Link::new(rx, wire),
+        killer.clone(),
+        Arc::new(AtomicBool::new(true)),
+        Arc::new(AtomicBool::new(false)),
+        events,
+        crate::query::Settings { page_size: 100, read_only: false },
+        MYSQL_84,
+        Tracked::default(),
+        None,
+    ));
+    let call = "CALL shop.zz_rows()";
+    commands.send(DbCommand::Execute { id: 1, statements: vec![call.into()], paging: PagingMode::NoHold }).unwrap();
+    let sent = read_packet(&mut server).await.expect("the call");
+    assert_eq!(&sent[1..], call.as_bytes());
+    // The server refused the user's cancel (the call runs as its definer); the session sends it
+    // again, and the call answers once that kill is on its way.
+    killer.record(Kill::Failed(KillFailure::Refused(KILL_DENIED)), || true);
+    tokio::time::timeout(std::time::Duration::from_secs(30), written.notified()).await.expect("the kill sent again");
+    // Its head comes first; the rest only once the session gave up on the kill's answer.
+    let (head, tail) = call_answer(&["a", "b", "c"]);
+    server.write_all(&head).await.unwrap();
+    tokio::time::sleep(KILL_TIMEOUT + std::time::Duration::from_secs(2)).await;
+    // (A session that cut its connection reads none of it.)
+    let _ = server.write_all(&tail).await;
+    // No request follows the call: the connection is closed instead.
+    let after = tokio::time::timeout(KILL_TIMEOUT * 2, async {
+        let mut buf = [0u8; 64];
+        server.read(&mut buf).await.map(|n| buf[..n].to_vec())
+    })
+    .await
+    .expect("the connection ends");
+    assert!(after.as_ref().is_ok_and(Vec::is_empty) || after.is_err(), "nothing sent after the call: {after:?}");
+    tokio::time::timeout(std::time::Duration::from_secs(5), session).await.expect("the session ends").unwrap();
+    let evs: Vec<DbEvent> = std::iter::from_fn(|| got.try_recv().ok()).collect();
+    let page = evs.iter().find_map(|e| match e {
+        DbEvent::Page { id: 1, columns: Some(_), rows, more, .. } => Some((rows.clone(), *more)),
+        _ => None,
+    });
+    let rows = page.unwrap_or_else(|| panic!("the call's rows: {evs:?}"));
+    let want: Vec<Vec<Option<String>>> = ["a", "b", "c"].iter().map(|v| vec![Some(v.to_string())]).collect();
+    assert_eq!(rows.0, want, "{evs:?}");
+    assert!(!rows.1, "the result ended");
+    assert!(!evs.iter().any(|e| matches!(e, DbEvent::Failed { .. })), "{evs:?}");
+    match evs.last() {
+        Some(DbEvent::Lost { error: DbError::CancelNotTaken(why) }) => {
+            assert!(!matches!(why, CancelFailure::NotSent(_)), "the kill was sent: {why:?}");
+        }
+        other => panic!("{other:?}"),
+    }
+    kills.abort();
+}
+
+/// A kill written to the server that never gets its answer was sent: it is not one that could
+/// not reach the server (it may still be carried out).
+#[tokio::test]
+async fn a_kill_sent_and_never_answered_is_not_taken_for_one_not_sent() {
+    let (killer, mut server) = killer_on_a_fake_server();
+    let kill_server = tokio::spawn(async move {
+        greet(&mut server).await;
+        logged_in(&mut server).await;
+        let kill = read_packet(&mut server).await;
+        tokio::time::sleep(KILL_TIMEOUT * 2).await;
+        kill
+    });
+    killer.kill_query().await;
+    assert_ne!(*killer.watch().borrow(), Kill::Failed(KillFailure::NotSent));
+    kill_server.abort();
+}
