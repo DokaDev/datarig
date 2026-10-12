@@ -4,7 +4,7 @@ expression: "h.draw(80, 24).backend()"
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×  2 shop.users ×                          "
 "│  ＋ New connection   │╭ Results · 8 rows ────────────╮╭ [Cell] Row · I ──────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾ ●   local-pg        ││ [Result 1]  Chart   Messages ││ id                   │"
+"│▾ ●   local-pg        ││ [Result 1]  Chart  Messages  ││ id                   │"
 "│  ▾ datarig default   ││   │ id   │ name              ││ int8 · 1 character   │"
 "│    ▸ analytics       ││   │ int8 │ text              ││                      │"
 "│    ▸ public          ││ 1 │    1 │ 陳大文            ││ 1                    │" Hidden by multi-width symbols: [(38, " "), (40, " "), (42, " ")]

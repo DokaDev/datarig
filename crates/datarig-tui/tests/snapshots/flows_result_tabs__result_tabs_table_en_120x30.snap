@@ -4,7 +4,7 @@ expression: backend
 ---
 "╭ Explorer ──────────────────╮ 1 console 1 ×  2 shop.users ×                                                            "
 "│  ＋ New connection         │╭ Results · 8 rows ──────────────────────────────────╮╭ [Cell] Row · I ──────────────────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾ ●   local-pg              ││ [Result 1]  Chart   Messages                   H/L ││ id                               │"
+"│▾ ●   local-pg              ││ [Result 1]  Chart  Messages                    H/L ││ id                               │"
 "│  ▾ datarig default         ││   │ id   │ name                 │ nickname    │ ad…││ int8 · 1 character               │"
 "│    ▸ analytics             ││   │ int8 │ text                 │ text        │ te…││                                  │"
 "│    ▸ public                ││ 1 │    1 │ 陳大文               │ 大文🐘      │ 臺…││ 1                                │" Hidden by multi-width symbols: [(44, " "), (46, " "), (48, " "), (67, " "), (69, " "), (71, " "), (81, " ")]

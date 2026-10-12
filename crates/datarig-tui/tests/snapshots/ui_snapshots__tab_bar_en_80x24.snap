@@ -13,7 +13,7 @@ expression: backend
 "│                      ││                                                      │"
 "│                      │╰──────────────────────────────────────────────────────╯"
 "│                      │╭ Results ─────────────────────────────────────────────╮"
-"│                      ││ [Result]  Chart   Messages                           │"
+"│                      ││ [Result]  Chart  Messages                            │"
 "│                      ││ Run a query with Ctrl+E                              │"
 "│                      ││                                                      │"
 "│                      ││                                                      │"

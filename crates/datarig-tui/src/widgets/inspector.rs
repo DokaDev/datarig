@@ -222,9 +222,13 @@ fn draw_row(app: &App, rs: &ResultSet, marks: &[KeyMarks], body: Rect, buf: &mut
     };
     let null = app.i18n.label(Label::ResultsNull);
     let on = app.icons_on();
+    // The grid's column as strong as the grid's own cell: the selection where the focus is.
+    let focused = app.focus == crate::app::Focus::Inspector;
     for (ci, column) in rs.columns.iter().enumerate().skip(first).take(room) {
-        let bg = if ci == col {
+        let bg = if ci == col && focused {
             th.selection
+        } else if ci == col {
+            th.cursor_line
         } else if hovered == Some(ci) {
             Style::new().bg(th.bg).patch(crate::widgets::hover_style())
         } else {

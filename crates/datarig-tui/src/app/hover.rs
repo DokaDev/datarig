@@ -81,4 +81,11 @@ impl App {
         let at = l.contains(Position::new(x, y)).then(|| self.detail.first + usize::from(y - l.y));
         at.filter(|c| *c < rs.columns.len())
     }
+
+    /// The column of the inspector's Row tab drawn at (x, y) with the result it is of: what a
+    /// press there arms.
+    pub(super) fn detail_hit(&self, x: u16, y: u16) -> Option<(u64, usize)> {
+        let Results::Rows(rs) = &self.tab().results else { return None };
+        self.detail_entry_at(x, y).map(|c| (rs.id, c))
+    }
 }

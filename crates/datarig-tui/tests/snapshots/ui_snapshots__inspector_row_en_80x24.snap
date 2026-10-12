@@ -13,7 +13,7 @@ expression: backend
 "│                      ││  6 JOIN shop.users u ON u.id = o.user_id             │"
 "│                      │╰──────────────────────────────────────────────────────╯"
 "│                      │╭ Results · 3 rows ────────────╮╭ Cell [Row] · I ──────╮"
-"│                      ││ [Result 1]  Chart   Messages ││ PK id: 1             │"
+"│                      ││ [Result 1]  Chart  Messages  ││ PK id: 1             │"
 "│                      ││   │ PK id │ FK user_id │ UQ …││ FK user_id: 1        │"
 "│                      ││   │ int8  │ int8       │ text││ UQ email: user01@exa…│"
 "│                      ││ 1 │     1 │          1 │ use…││ name: ユーザー 1     │" Hidden by multi-width symbols: [(65, " "), (67, " "), (69, " "), (71, " ")]

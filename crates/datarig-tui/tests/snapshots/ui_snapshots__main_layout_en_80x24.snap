@@ -13,7 +13,7 @@ expression: backend
 "│                      ││  6 JOIN shop.users u ON u.id = o.user_id             │"
 "│                      │╰──────────────────────────────────────────────────────╯"
 "│                      │╭ Results · 8 rows ────────────╮╭ [Cell] Row · I ──────╮"
-"│                      ││ [Result 1]  Chart   Messages ││ id                   │"
+"│                      ││ [Result 1]  Chart  Messages  ││ id                   │"
 "│                      ││   │ id   │ name              ││ int8 · 1 character   │"
 "│                      ││   │ int8 │ text              ││                      │"
 "│                      ││ 1 │    1 │ 陳大文            ││ 1                    │" Hidden by multi-width symbols: [(38, " "), (40, " "), (42, " ")]

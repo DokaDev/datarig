@@ -80,6 +80,7 @@
 "status.lang" = "KO"
 
 "results.empty" = "{run}로 쿼리를 실행하세요"
+"results.running" = "실행 중… 결과가 오면 여기에 표시됩니다."
 "results.null" = "NULL"
 "results.not_read" = "(읽지 못함)"
 "results.paging_stopped" = "{count}행 표시 · 가져오기를 멈춤 — 더 보려면 조건을 좁혀 다시 실행하세요"

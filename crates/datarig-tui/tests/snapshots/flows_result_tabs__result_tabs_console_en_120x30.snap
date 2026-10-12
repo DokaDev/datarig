@@ -15,7 +15,7 @@ expression: backend
 "│                            ││  8                                                                                     │"
 "│                            │╰────────────────────────────────────────────────────────────────────────────────────────╯"
 "│                            │╭ Results · 5 rows ──────────────────────────────────╮╭ [Cell] Row · I ──────────────────╮"
-"│                            ││ [Result 1]  Chart   Messages                   H/L ││ day                              │"
+"│                            ││ [Result 1]  Chart  Messages                    H/L ││ day                              │"
 "│                            ││   │ day        │ orders                            ││ date · 10 characters             │"
 "│                            ││   │ date       │ int8                              ││                                  │"
 "│                            ││ 1 │ 2026-09-01 │      7                            ││ 2026-09-01                       │"

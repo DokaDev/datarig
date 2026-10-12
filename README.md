@@ -217,7 +217,7 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
   row, column and range selection with the keyboard or the mouse. The inspector's Row tab stays
   on the grid's column: it highlights that column and scrolls to it, and `j`/`k` (once the
   inspector is clicked) or a click on another column moves the grid's cell there, the grid
-  scrolling sideways to it; `Enter` or a second click shows the value whole.
+  scrolling sideways to it; `Enter` or a double-click shows the value whole, as in the grid.
 - Copy as TSV (with or without headers), CSV, JSON, indented JSON, Markdown, HTML, XML, an SQL
   `IN` list, or SQL `INSERT`/`UPDATE` statements (only when the target table is certain), to the
   system clipboard or through OSC 52 over SSH.

@@ -13,7 +13,7 @@ expression: backend
 "│                      ││  6 JOIN shop.users u ON u.id = o.user_id             │"
 "│                      │╰──────────────────────────────────────────────────────╯"
 "│                      │╭ Results · 8 rows ────────────╮╭ [Cell] Row · I ──────╮"
-"│                      ││ [Result 1]  Chart   Messages ││ profile              │"
+"│                      ││ [Result 1]  Chart  Messages  ││ profile              │"
 "│                      ││   │ profile                  ││ jsonb · 37 characters│"
 "│                      ││   │ jsonb                    ││                      │"
 "│                      ││ 1 │ {"lang": "ko", "tags": […││ {                    │"

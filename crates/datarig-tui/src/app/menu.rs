@@ -581,7 +581,7 @@ impl App {
     }
 
     fn chart_target(&self) -> Option<MenuTarget> {
-        if !self.chart_shown() || !matches!(self.focus, Focus::Results | Focus::Inspector) {
+        if !self.chart_shown() || !self.chart_live() || !matches!(self.focus, Focus::Results | Focus::Inspector) {
             return None;
         }
         let t = self.tab();

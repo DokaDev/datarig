@@ -94,7 +94,7 @@ fn the_keys_go_first_when_the_strip_is_narrow() {
             }
             None => seen.1 = true,
         }
-        assert!(line.contains("[Result 2]"), "the shown tab stays at {w}: {line}");
+        assert!(line.contains("[Result 2]") || line.contains("[2]"), "the shown tab stays at {w}: {line}");
     }
     assert_eq!(seen, (true, true), "shown when wide, left out when narrow");
 }
@@ -120,7 +120,7 @@ fn a_run_without_rows_still_has_tabs_to_move_between() {
     h.app.focus = Focus::Results;
     let screen = h.screen(120, 30);
     let line = screen.lines().nth(h.app.layout.strip.y as usize).unwrap_or_default();
-    assert!(line.contains(" Result   Chart  [Messages]") && line.contains("H/L"), "{screen}");
+    assert!(line.contains("Result  Chart  [Messages]") && line.contains("H/L"), "{screen}");
 }
 
 #[test]

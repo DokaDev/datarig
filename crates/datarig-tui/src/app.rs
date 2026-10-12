@@ -711,8 +711,12 @@ pub struct App {
     pub(crate) tab_hits: Vec<(u16, u16, crate::widgets::tabbar::TabHit)>,
     /// The small clickable target under the pointer (drawn highlighted).
     pub pointer_on: Option<hover::PointerOn>,
-    /// The column of the inspector's Row tab a press armed (it is picked on the release).
-    pub(crate) detail_press: overlay::Press<usize>,
+    /// The column of the inspector's Row tab a press armed, with the result it is of (it is
+    /// picked on the release, over the same column of the same result).
+    pub(crate) detail_press: overlay::Press<(u64, usize)>,
+    /// The column the last release over the inspector's Row tab picked (a second click on it
+    /// shows its value whole); none once a press there armed nothing.
+    detail_picked: Option<(u64, usize)>,
     /// The kind of the top dialog the last frame saw (`App::note_top`).
     last_top: Option<OverlayKind>,
 }
@@ -948,6 +952,7 @@ impl App {
             tab_hits: Vec::new(),
             pointer_on: None,
             detail_press: overlay::Press::default(),
+            detail_picked: None,
             last_top: None,
             pending_context: None,
             pending_use: None,

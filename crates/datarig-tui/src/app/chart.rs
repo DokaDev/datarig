@@ -277,6 +277,13 @@ impl App {
         !self.tabs.is_empty() && self.tab().exec.view == super::tabs::ResultView::Chart && self.results_shown()
     }
 
+    /// The active tab has a chart and shows a row result for it to follow. A run that dropped
+    /// the rows (its first rows replace them; its answer is still to come) keeps the chart for
+    /// its choices, but nothing draws it or acts on it until rows are shown again.
+    pub(crate) fn chart_live(&self) -> bool {
+        !self.tabs.is_empty() && self.tab().exec.chart.is_some() && matches!(self.tab().results, Results::Rows(_))
+    }
+
     /// The active tab's chart follows its shown result and has its numbers. The chart is made
     /// here, the first time it is wanted (its tab viewed, an action on it): the strip names the
     /// Chart tab without reading a row.
@@ -349,6 +356,9 @@ impl App {
     /// The chart's numbers as TSV, or the drawing as text, to the clipboard.
     fn copy_chart(&mut self, drawing: bool) {
         self.chart_sync();
+        if !self.chart_live() {
+            return self.flash(Notice::new(Label::ChartNothingToCopy, Level::Warning));
+        }
         let others = self.i18n.label(Label::ChartOthers).to_string();
         let row = self.i18n.label(Label::ChartRowNumber).to_string();
         let t = self.tab();
@@ -380,6 +390,9 @@ impl App {
     /// when it sums several).
     fn chart_goto_row(&mut self) {
         self.chart_sync();
+        if !self.chart_live() {
+            return;
+        }
         let t = self.tab_mut();
         let Some(c) = t.exec.chart.as_ref() else { return };
         let Some(m) = c.model() else { return };
@@ -540,6 +553,9 @@ impl App {
     /// click), else the point there. Whether it was on a point.
     pub(super) fn chart_click(&mut self, x: u16, y: u16, fields: bool) -> bool {
         let at = |r: &Rect| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height;
+        if !self.chart_live() {
+            return false;
+        }
         let t = self.tab_mut();
         let Some(c) = t.exec.chart.as_mut() else { return false };
         let hit = c.field_hits.iter().find(|(r, _)| at(r)).map(|h| h.1).filter(|_| fields);

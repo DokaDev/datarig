@@ -82,6 +82,7 @@
 "status.lang" = "EN"
 
 "results.empty" = "Run a query with {run}"
+"results.running" = "Running… the result shows here when it comes."
 "results.null" = "NULL"
 "results.not_read" = "(not read)"
 "results.paging_stopped" = { one = "Showing {count} row · fetching stopped — narrow the query to see more", other = "Showing {count} rows · fetching stopped — narrow the query to see more" }

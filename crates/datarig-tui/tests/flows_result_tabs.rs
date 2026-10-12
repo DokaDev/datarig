@@ -62,14 +62,15 @@ fn view(h: &Harness) -> ResultView {
     h.app.tab().exec.view
 }
 
-/// `[Result 1]   Chart   Messages` in `lang`, the shown one in brackets.
+/// `[Result 1]  Chart  Messages` in `lang`: the shown one in brackets, two blanks between any
+/// two of them.
 fn tabs(lang: Lang, result: &str, on: ResultView) -> String {
     let i18n = I18n::new(lang);
-    let label = |l: &str, v: ResultView| if v == on { format!("[{l}]") } else { format!(" {l} ") };
+    let label = |l: &str, v: ResultView| if v == on { format!("[{l}]") } else { l.to_string() };
     let chart = i18n.label(Label::ResultsTabChart).to_string();
     let messages = i18n.label(Label::ResultsTabMessages).to_string();
     format!(
-        "{} {} {}",
+        "{}  {}  {}",
         label(result, ResultView::Rows),
         label(&chart, ResultView::Chart),
         label(&messages, ResultView::Messages)
@@ -118,6 +119,11 @@ fn a_running_first_query_shows_the_three_tabs() {
         h.app.run(vec!["SELECT pg_sleep(10)".into()]);
         assert!(h.app.tab().exec.running.is_some(), "still running");
         h.app.focus = Focus::Results;
+        // The result tab says the run goes on, not how to start one.
+        let screen = h.screen(W, H);
+        assert!(screen.contains(&i18n.label(Label::ResultsRunning).to_string()), "{screen}");
+        let empty = i18n.msg(&Msg::ResultsEmpty { run: h.app.run_key().into() }).to_string();
+        assert!(!screen.contains(&empty), "{screen}");
         let pending = i18n.label(Label::ResultsTabRows).to_string();
         assert!(strip(&mut h).contains(&tabs(lang, &pending, ResultView::Rows)), "{}", strip(&mut h));
         // (No snapshot: the status bar counts the run's real time.)
@@ -139,7 +145,10 @@ fn a_table_tab_shows_result_chart_and_messages() {
         let i18n = I18n::new(lang);
         let mut h = Harness::connected(lang);
         open_users(&mut h);
-        // Loading: one result tab for what is coming, the Chart says there is nothing yet.
+        // Loading: one result tab for what is coming and saying so, the Chart says there is
+        // nothing yet.
+        let screen = h.screen(W, H);
+        assert!(screen.contains(&i18n.label(Label::ResultsRunning).to_string()), "{screen}");
         let pending = i18n.label(Label::ResultsTabRows).to_string();
         assert!(strip(&mut h).contains(&tabs(lang, &pending, ResultView::Rows)), "{}", strip(&mut h));
         h.key(KeyCode::Tab);
@@ -280,4 +289,47 @@ fn h_and_l_go_round_the_tabs_and_c_switches_to_the_chart() {
     assert!(line.contains(&tabs(Lang::En, "Result 1", ResultView::Chart)), "{line}");
     h.keys("c");
     assert_eq!(view(&h), ResultView::Rows);
+}
+
+/// A run of several statements while the Chart tab is shown: its first rows replace the shown
+/// result's, so until the run's answer comes the Chart tab has no row result, says so, and the
+/// chart of the rows before is neither drawn nor acted on (copy, the point's row, a click).
+#[test]
+fn a_run_of_several_statements_leaves_no_stale_chart() {
+    let mut h = Harness::connected(Lang::En);
+    per_day(&mut h, 5);
+    h.app.focus = Focus::Results;
+    h.keys("c");
+    h.draw(W, H);
+    assert_eq!(h.app.tab().exec.chart.as_ref().and_then(|c| c.model()).map(|m| m.rows), Some(5));
+    let plot = h.app.tab().exec.chart.as_ref().unwrap().plot;
+    // Two statements: the first one's rows come, the second one still runs.
+    h.sent();
+    h.app.run(vec!["SELECT 1 AS a".into(), "SELECT 2 AS b".into()]);
+    let id = h.app.tab().exec.query_id;
+    let columns = Some(vec![meta("a", "int4", true, false)]);
+    h.db(DbEvent::StepRows { id, index: 0, columns, rows: vec![vec![s("1")]], more: false });
+    assert_eq!(view(&h), ResultView::Chart);
+    let screen = h.screen(W, H);
+    assert!(screen.contains("Nothing to chart: there is no row result to draw."), "{screen}");
+    assert!(!screen.contains("2026-09") && !screen.contains("fetched rows"), "the chart before: {screen}");
+    // Nothing acts on the chart before.
+    let clip = FakeClipboard::attach(&mut h, false, &[]);
+    h.keys("y");
+    assert_eq!(clip.last(), None, "nothing copied");
+    h.key(KeyCode::Enter);
+    assert_eq!(view(&h), ResultView::Chart, "no row of the rows before");
+    let cursor = h.app.tab().exec.chart.as_ref().map(|c| c.cursor);
+    h.mouse(MouseEventKind::Down(MouseButton::Left), plot.x + plot.width - 2, plot.y + plot.height / 2);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), plot.x + plot.width - 2, plot.y + plot.height / 2);
+    assert_eq!(h.app.tab().exec.chart.as_ref().map(|c| c.cursor), cursor);
+    h.keys("  ");
+    assert!(!h.menu_labels().iter().any(|l| l.contains("Chart kind")), "{:?}", h.menu_labels());
+    h.key(KeyCode::Esc);
+    // The answer: the Chart tab draws it, with the columns chosen afresh.
+    let columns = Some(vec![meta("k", "text", false, false), meta("n", "int4", true, false)]);
+    let rows = vec![vec![s("x"), s("1")], vec![s("y"), s("2")]];
+    h.db(DbEvent::Page { id, columns, rows, more: false, elapsed: Duration::from_millis(1) });
+    h.draw(W, H);
+    assert_eq!(h.app.tab().exec.chart.as_ref().and_then(|c| c.model()).map(|m| m.rows), Some(2));
 }

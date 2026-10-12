@@ -15,7 +15,7 @@ expression: backend
 "│                            ││  8                                                                                     │"
 "│                            │╰────────────────────────────────────────────────────────────────────────────────────────╯"
 "│                            │╭ Results ───────────────────────────────────────────────────────────────────────────────╮"
-"│                            ││  Result  [Chart]  Messages                                                         H/L │"
+"│                            ││ Result  [Chart]  Messages                                                          H/L │"
 "│                            ││                                                                                        │"
 "│                            ││ Nothing to chart: there is no row result to draw.                                      │"
 "│                            ││                                                                                        │"

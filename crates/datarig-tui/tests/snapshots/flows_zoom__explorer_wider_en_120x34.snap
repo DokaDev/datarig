@@ -17,7 +17,7 @@ expression: "h.draw(120, 34).backend()"
 "│                                            ││ 10                                                                     │"
 "│                                            │╰────────────────────────────────────────────────────────────────────────╯"
 "│                                            │╭ Results · 8 rows ─────────────────────────╮╭ [Cell] Row · I ───────────╮"
-"│                                            ││ [Result 1]  Chart   Messages              ││ id                        │"
+"│                                            ││ [Result 1]  Chart  Messages               ││ id                        │"
 "│                                            ││   │ id   │ name                 │ nickname││ int8 · 1 character        │"
 "│                                            ││   │ int8 │ text                 │ text    ││                           │"
 "│                                            ││ 1 │    1 │ 陳大文               │ 大文🐘  ││ 1                         │" Hidden by multi-width symbols: [(60, " "), (62, " "), (64, " "), (83, " "), (85, " "), (87, " ")]

@@ -4,7 +4,7 @@ expression: "h.draw(160, 45).backend()"
 ---
 "╭ Explorer ────────────────────────────╮ 1 console 1 ×  2 shop.users ×                                                                                          "
 "│  ＋ New connection                   │╭ Results · 8 rows ────────────────────────────────────────────────────╮╭ [Cell] Row · I ──────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾ ●   local-pg                        ││ [Result 1]  Chart   Messages                                         ││ id                                           │"
+"│▾ ●   local-pg                        ││ [Result 1]  Chart  Messages                                          ││ id                                           │"
 "│  ▾ datarig default                   ││   │ id   │ name                 │ nickname    │ address              ││ int8 · 1 character                           │"
 "│    ▸ analytics                       ││   │ int8 │ text                 │ text        │ text                 ││                                              │"
 "│    ▸ public                          ││ 1 │    1 │ 陳大文               │ 大文🐘      │ 臺北市信義區信義路五…││ 1                                            │" Hidden by multi-width symbols: [(54, " "), (56, " "), (58, " "), (77, " "), (79, " "), (81, " "), (91, " "), (93, " "), (95, " "), (97, " "), (99, " "), (101, " "), (103, " "), (105, " "), (107, " "), (109, " ")]

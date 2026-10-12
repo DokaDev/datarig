@@ -101,28 +101,28 @@ fn the_row_tab_follows_the_grids_column_and_keeps_it_in_view() {
         assert_eq!(h.app.detail.first, 0);
         let (text, bg) = entry(&mut h, 0);
         assert!(text.contains("c00: row 1 value"), "{text}");
-        assert_eq!(bg, selected());
+        assert_eq!(bg, unfocused());
         // The last column: the entries scroll to show it at the bottom.
         h.keys("$");
         assert_eq!(h.app.tab().grid.col, 39);
         let (text, bg) = entry(&mut h, 39);
         assert_eq!(h.app.detail.first, 40 - room);
         assert!(text.contains("c39: row 1 value"), "{text}");
-        assert_eq!(bg, selected());
+        assert_eq!(bg, unfocused());
         assert_screen!(format!("inspector_row_last_column_{}_{W}x{H}", lang_tag(lang)), lang, h.draw(W, H));
         // A column still in view: highlighted where it is, nothing scrolls.
         h.keys("hh");
         let (text, bg) = entry(&mut h, 37);
         assert_eq!(h.app.detail.first, 40 - room, "no scroll");
         assert!(text.contains("c37:"), "{text}");
-        assert_eq!(bg, selected());
-        assert_ne!(entry(&mut h, 39).1, selected(), "only the grid's column");
+        assert_eq!(bg, unfocused());
+        assert_ne!(entry(&mut h, 39).1, unfocused(), "only the grid's column");
         // The first column again: back at the top; another row: its values.
         h.keys("0j");
         let (text, bg) = entry(&mut h, 0);
         assert_eq!(h.app.detail.first, 0);
         assert!(text.contains("c00: row 2 value"), "{text}");
-        assert_eq!(bg, selected());
+        assert_eq!(bg, unfocused());
     }
 }
 
@@ -199,7 +199,7 @@ fn the_pointer_lights_an_entry_and_only_a_release_on_the_pressed_one_picks_it() 
     h.mouse(MouseEventKind::Moved, l.x + 3, l.y + 2);
     assert_eq!(h.app.pointer_on, Some(PointerOn::Detail(2)));
     assert_eq!(entry(&mut h, 2).1, theme::DARK.surface_alt, "lit");
-    assert_eq!(entry(&mut h, 0).1, selected());
+    assert_eq!(entry(&mut h, 0).1, unfocused());
     assert_eq!(entry(&mut h, 3).1, theme::DARK.bg);
     h.mouse(MouseEventKind::Moved, l.x + 3, l.y);
     assert_eq!(h.app.pointer_on, None, "the selected one is not lit");
@@ -234,4 +234,86 @@ fn the_pointer_lights_an_entry_and_only_a_release_on_the_pressed_one_picks_it() 
     h.draw(W, H);
     click(&mut h, l.x + 3, l.y + 3);
     assert_eq!(h.app.tab().grid.col, 3);
+}
+
+/// The grid's cursor background where its pane is not focused.
+fn unfocused() -> Color {
+    theme::DARK.cursor_line.bg.expect("a background")
+}
+
+/// A press on an entry armed for one result is not picked by a release over the same place once
+/// another result is shown (a run's rows came between).
+#[test]
+fn a_release_after_the_result_changed_picks_nothing() {
+    let mut h = wide(Lang::En, 40);
+    h.keys("I");
+    h.draw(W, H);
+    h.advance(ARM_DELAY);
+    let l = h.app.layout.detail_list;
+    h.mouse(MouseEventKind::Down(MouseButton::Left), l.x + 3, l.y + 3);
+    // Another run's rows, the same columns: another result.
+    h.app.run(vec!["SELECT * FROM wide".into()]);
+    let id = h.app.tab().exec.query_id;
+    let cols = (0..40).map(|c| meta(&format!("c{c:02}"), "text", false, false)).collect();
+    let rows = vec![(0..40).map(|c| Some(format!("v{c:02}"))).collect()];
+    h.db(DbEvent::Page { id, columns: Some(cols), rows, more: false, elapsed: Duration::from_millis(1) });
+    h.draw(W, H);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), l.x + 3, l.y + 3);
+    assert_eq!(h.app.tab().grid.col, 0, "not the column pressed in the result before");
+}
+
+/// A second click opens the cell viewer only when the first one picked the same entry: a first
+/// press too soon after the entries appeared (ignored) makes the second one a single click.
+#[test]
+fn a_double_click_whose_first_press_was_ignored_only_picks() {
+    let mut h = wide(Lang::En, 40);
+    h.keys("I");
+    h.draw(W, H);
+    let l = h.app.layout.detail_list;
+    click(&mut h, l.x + 3, l.y + 4);
+    assert_eq!(h.app.tab().grid.col, 0, "too soon");
+    h.advance(ARM_DELAY);
+    h.draw(W, H);
+    click(&mut h, l.x + 3, l.y + 4);
+    assert_eq!(h.app.tab().grid.col, 4);
+    assert!(h.viewer().is_none(), "picked, not opened");
+}
+
+/// The lit entry goes with the Row tab: the Cell tab, a hidden inspector or the Chart tab draw
+/// no entries, and none is lit when they come back.
+#[test]
+fn the_lit_entry_goes_with_the_row_tab() {
+    let mut h = wide(Lang::En, 40);
+    h.keys("I");
+    h.draw(W, H);
+    let l = h.app.layout.detail_list;
+    for keys in ["I", "i", "c"] {
+        h.mouse(MouseEventKind::Moved, l.x + 3, l.y + 2);
+        assert_eq!(h.app.pointer_on, Some(PointerOn::Detail(2)), "{keys}");
+        h.keys(keys);
+        h.draw(W, H);
+        assert_eq!(h.app.pointer_on, None, "{keys}: no entries drawn");
+        h.keys(keys);
+        assert_eq!(entry(&mut h, 2).1, theme::DARK.bg, "{keys}: not lit again");
+    }
+}
+
+/// The selected entry is as strong as the grid's selected cell: the selection while the
+/// inspector has the focus, the grid's unfocused cursor while the grid has it.
+#[test]
+fn the_selected_entry_is_weak_while_the_grid_has_the_focus() {
+    let mut h = wide(Lang::En, 40);
+    h.keys("I");
+    assert_eq!(h.app.focus, Focus::Results);
+    assert_eq!(entry(&mut h, 0).1, unfocused());
+    assert_screen!(format!("inspector_row_unfocused_en_{W}x{H}"), Lang::En, h.draw(W, H));
+    let d = h.app.layout.detail;
+    click(&mut h, d.x + 3, d.y + d.height - 1);
+    assert_eq!(h.app.focus, Focus::Inspector);
+    assert_eq!(entry(&mut h, 0).1, selected());
+    // The grid's own cell the other way round.
+    let t = h.draw(W, H);
+    let g = &h.app.tab().grid;
+    let (x, y) = (g.hit_cols[0].0 + 2, g.data_y);
+    assert_eq!(Some(t.backend().buffer()[(x, y)].bg), theme::DARK.cursor_line.bg);
 }
