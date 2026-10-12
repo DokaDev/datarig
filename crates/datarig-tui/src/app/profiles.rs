@@ -480,6 +480,9 @@ pub struct ProfileForm {
     /// A tunnel form opened from a profile form's SSH tunnel list: that profile form, as it
     /// was, to come back when this one closes.
     pub back_to: Option<Box<ProfileForm>>,
+    /// Put aside under a tunnel form: the test it showed (stopped if it still ran), shown again
+    /// when it comes back.
+    pub parked_test: Option<super::ConnTest>,
 }
 
 impl ProfileForm {
@@ -570,6 +573,7 @@ impl ProfileForm {
             dsn_problem: None,
             attempted: false,
             back_to: None,
+            parked_test: None,
         };
         if c.tunnel.is_some() && f.ssh_enabled {
             f.ssh_enabled = false;

@@ -146,7 +146,10 @@ impl App {
                 }
             }
             Outcome::New if on_top => {
-                let Some(back) = self.overlays.take_form() else { return };
+                let Some(mut back) = self.overlays.take_form() else { return };
+                // A running test would ask its questions over the tunnel form: it stops.
+                self.cancel_test();
+                back.parked_test = self.conn_test.take();
                 self.open_tunnel_form(None, false);
                 if let Some(f) = self.overlays.form_mut() {
                     f.back_to = Some(back);

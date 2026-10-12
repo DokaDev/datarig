@@ -1286,3 +1286,76 @@ fn a_new_tunnel_from_the_list_leaves_the_explorer_cursor() {
     h.key(KeyCode::Esc);
     assert_eq!(h.selected(), at, "still on the profile");
 }
+
+/// The form's test lines (one per stage of a test through a tunnel).
+fn test_lines(h: &Harness) -> Vec<String> {
+    h.app.test_lines().unwrap_or_default().into_iter().map(|(t, _)| t.to_string()).collect()
+}
+
+/// "New SSH tunnel…" while the profile form shows a test: a test still running stops (its
+/// questions dropped, a late answer ignored) and the form says so when it comes back; a
+/// finished result comes back with the form, the tunnel form cancelled or saved. The tunnel
+/// form shows none of it.
+#[test]
+fn the_profile_forms_test_comes_back_after_a_new_tunnel() {
+    use datarig_core::driver::PingInfo;
+    use datarig_tui::app::TestState;
+    let dir = scratch("list-test");
+    let mut h = harness_with(&two_presets(&dir));
+    ssh_section(&mut h, "local-pg");
+    // A test still running when the tunnel form opens.
+    h.ctrl('t');
+    let seq = *h.app.test_tunnel_requests.last().expect("a tunnel for the test");
+    h.app.on_app_event(AppEvent::TestTunnel { seq, ev: TunnelEvent::Stage(Stage::Authenticating) });
+    assert!(h.app.conn_test.as_ref().is_some_and(|t| t.state == TestState::Running));
+    h.key(KeyCode::Enter);
+    h.type_text("new");
+    h.key(KeyCode::Enter);
+    assert!(h.form().is_tunnel());
+    assert!(h.app.test_status().is_none(), "the tunnel form shows no test");
+    let ping = |h: &mut Harness, seq| {
+        h.app.on_app_event(AppEvent::Ping {
+            seq,
+            result: Ok(PingInfo { server_version: "17.2".into(), latency: Duration::from_millis(12) }),
+        });
+    };
+    let (tx, _rx) = oneshot::channel();
+    let ask = TunnelAsk::Secret(SecretAsk::Password { wrong: false }, tx);
+    h.app.on_app_event(AppEvent::TestTunnel { seq, ev: TunnelEvent::Ask(ask) });
+    ping(&mut h, seq);
+    assert!(h.prompt().is_none(), "it asks nothing over the tunnel form");
+    h.key(KeyCode::Esc);
+    assert!(!h.form().is_tunnel());
+    let status = h.app.test_status().map(|(t, _)| t.to_string());
+    assert_eq!(status.as_deref(), Some("Test cancelled"), "stopped, and the form says so");
+    ping(&mut h, seq);
+    assert_eq!(h.app.conn_test.as_ref().map(|t| &t.state), Some(&TestState::Cancelled), "a late answer is ignored");
+    // A finished result: shown again after the tunnel form is cancelled, then saved.
+    h.ctrl('t');
+    let seq = *h.app.test_tunnel_requests.last().unwrap();
+    h.app.on_app_event(AppEvent::TestTunnel { seq, ev: TunnelEvent::Through(Duration::from_millis(84), None) });
+    ping(&mut h, seq);
+    let shown = test_lines(&h);
+    assert_eq!(shown, ["SSH bastion.example.com: OK 84ms", "Database: OK · server 17.2 · 12ms"]);
+    h.key(KeyCode::Enter);
+    h.type_text("new");
+    h.key(KeyCode::Enter);
+    assert!(h.form().is_tunnel() && h.app.test_status().is_none());
+    h.key(KeyCode::Esc);
+    assert_eq!(test_lines(&h), shown, "cancelled");
+    h.key(KeyCode::Enter);
+    h.type_text("new");
+    h.key(KeyCode::Enter);
+    h.type_text("hq");
+    h.key(KeyCode::Tab);
+    h.type_text("hq.example.com");
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Tab);
+    h.type_text("ec2-user");
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Right);
+    h.key(KeyCode::Right);
+    h.ctrl('s');
+    assert_eq!(h.form().ssh_choice(), SshChoice::Preset("hq".into()));
+    assert_eq!(test_lines(&h), shown, "saved");
+}
