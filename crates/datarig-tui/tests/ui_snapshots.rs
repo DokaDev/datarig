@@ -753,7 +753,11 @@ fn profile_form_ssh_section() {
             h.explore("local-pg");
             h.keys("e");
             h.ctrl('n');
-            h.key(KeyCode::Char(' '));
+            // Its own tunnel, the row after "off" in the list.
+            h.key(KeyCode::Enter);
+            h.key(KeyCode::Down);
+            h.key(KeyCode::Enter);
+            assert_eq!(h.form().ssh_choice(), datarig_tui::app::profiles::SshChoice::Inline);
             h.key(KeyCode::Tab);
             h.type_text("bastion.example.com");
             h.key(KeyCode::Tab);

@@ -606,6 +606,12 @@ impl ProfileForm {
         f
     }
 
+    /// The preset the profile form waiting under this tunnel form makes when it is saved
+    /// ("save as tunnel preset").
+    pub fn parked_preset(&self) -> Option<&str> {
+        self.back_to.as_ref().and_then(|f| f.new_preset.as_deref())
+    }
+
     /// The form edits a tunnel preset.
     pub fn is_tunnel(&self) -> bool {
         matches!(self.kind, FormKind::Tunnel { .. })
@@ -652,13 +658,6 @@ impl ProfileForm {
             SshChoice::Preset(p) => (self.ssh_preset, self.ssh_enabled) = (Some(p), false),
             SshChoice::Inline => (self.ssh_preset, self.ssh_enabled) = (None, true),
         }
-    }
-
-    fn cycle_ssh_choice(&mut self, d: isize) {
-        let all = self.ssh_choices();
-        let i = all.iter().position(|c| *c == self.ssh_choice()).unwrap_or(0) as isize;
-        let next = all[(i + d).rem_euclid(all.len() as isize) as usize].clone();
-        self.set_ssh_choice(next);
     }
 
     /// The preset picked, when it is a saved one.
@@ -1166,9 +1165,6 @@ impl ProfileForm {
             }
             KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.focus == Field::KeyRetrieval => {
                 self.key_retrieval = !self.key_retrieval
-            }
-            KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.focus == Field::SshEnabled => {
-                self.cycle_ssh_choice(if k.code == KeyCode::Left { -1 } else { 1 })
             }
             KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.focus == Field::SshAuth => {
                 self.cycle_ssh_auth(if k.code == KeyCode::Left { -1 } else { 1 })

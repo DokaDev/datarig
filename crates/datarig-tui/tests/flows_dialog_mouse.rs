@@ -137,18 +137,17 @@ fn section_tabs_selectors_and_the_ssh_choices_take_clicks() {
     click_on(&mut h, " SSH ", 1);
     assert_eq!(h.form().section, Section::Ssh);
     assert_eq!(focus(&h), Field::SshEnabled);
-    // `›` is the next value, `‹` the previous one.
-    click_on(&mut h, "‹ off ›", 6);
+    // The tunnel's value (or its mark): the list of tunnels (as `Enter`); a row picks.
+    click_on(&mut h, "off ▾", 1);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Picker));
+    click_on(&mut h, "this profile only", 1);
     assert_eq!(h.form().ssh_choice(), SshChoice::Inline);
     click_on(&mut h, "password ", 1);
     assert_eq!((h.form().ssh_auth, focus(&h)), (datarig_core::profile::ssh::SshAuth::Password, Field::SshAuth));
-    click_on(&mut h, "‹ this profile only ›", 0);
-    assert_eq!(h.form().ssh_choice(), SshChoice::Off);
-    // The value itself: the list of tunnels (as `Enter`).
-    click_on(&mut h, "‹ off ›", 3);
-    assert_eq!(h.overlay_kind(), Some(OverlayKind::Picker));
+    click_on(&mut h, "this profile only ▾", 18);
+    assert_eq!((h.overlay_kind(), focus(&h)), (Some(OverlayKind::Picker), Field::SshEnabled));
     h.key(KeyCode::Esc);
-    assert_eq!(h.form().ssh_choice(), SshChoice::Off);
+    assert_eq!(h.form().ssh_choice(), SshChoice::Inline);
     click_on(&mut h, " Advanced ", 2);
     assert_eq!(h.form().section, Section::Advanced);
     let sslmode = h.form().sslmode;

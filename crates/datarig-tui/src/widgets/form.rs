@@ -1,7 +1,7 @@
 //! The connection profile form: a large centered dialog with section tabs (Basic /
 //! Advanced), the password storage selector, the pickers of color, icon and folder, and the
-//! inline test-connection result line. The SSH section's first row picks the tunnel (`Enter`
-//! lists them): none, a tunnel preset (shown, not edited, here), or one of this profile only
+//! inline test-connection result line. The SSH section's first row picks the tunnel from a
+//! list (`Enter`, or a click on it): none, a tunnel preset (shown, not edited, here), or one of this profile only
 //! (its fields, and a button that makes a preset of them). The tunnel form is the same dialog with the SSH
 //! section alone, the preset's name first.
 
@@ -140,7 +140,11 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
     let errors = match form.kind {
         FormKind::Tunnel { id, .. } => {
             let original = form.original_name.clone();
-            form.errors(|n| crate::app::presets::name_taken(presets, id, original.as_deref(), n))
+            let parked = form.parked_preset().map(str::to_string);
+            form.errors(|n| {
+                crate::app::presets::name_taken(presets, id, original.as_deref(), n)
+                    || crate::app::presets::parked_taken(parked.as_deref(), n)
+            })
         }
         FormKind::Profile => {
             form.errors(|n| profiles.iter().enumerate().any(|(i, p)| p.name == n && Some(i) != editing))
@@ -267,9 +271,12 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
                     ),
                     SshChoice::Preset(name) => (name.clone(), i18n.label(Label::FormSshPresetHint)),
                 };
-                let drawn = selector(buf, x, y, room_from(x), &[text(&value)], focused);
-                selector_hits(&mut hits, f, x, y, drawn);
-                let used = drawn.0;
+                // A list to open (`Enter`), not values to step through: the value and a mark
+                // that it drops down.
+                let used = put(buf, x, y, &value, room_from(x), Style::new().fg(th.fg).patch(field_bg));
+                let used = used
+                    + put(buf, x + used, y, " ▾ ", room_from(x + used), Style::new().fg(th.fg_muted).patch(field_bg));
+                hits.push((Rect::new(x, y, used, 1), FormHit::Value(f)));
                 let mut hx = x + used + 2;
                 if choice == SshChoice::Inline {
                     // "Save as tunnel preset" (its key on the form too).
@@ -285,7 +292,7 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
                     hits.push((Rect::new(hx, y, b, 1), FormHit::SaveAsPreset));
                     hx += b + 2;
                 }
-                let hint = format!("{} · {hint}", i18n.label(Label::FormPickerHint));
+                let hint = format!("{} · {hint}", i18n.label(Label::FormSshListHint));
                 put(buf, hx, y, &hint, room_from(hx), dim);
                 // A preset is shown here, not edited: its bastion, its login and who else uses it.
                 if let SshChoice::Preset(name) = &choice {

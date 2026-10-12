@@ -1671,3 +1671,5 @@
 "picker.keys" = "Enter pick · ↑↓ select · Esc cancel"
 "keyctx.overlay.picker" = "List picker"
 "form.ssh.picker_new" = "New SSH tunnel…"
+"form.ssh.list_hint" = "Enter list"
+"form.already_open" = "Save or cancel the open form first"

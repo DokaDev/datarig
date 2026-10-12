@@ -13,7 +13,7 @@
 //! selection and a click outside the list does nothing.
 
 use crate::app::overlay::Press;
-use crate::text::{Align, fit};
+use crate::text::{Align, fit, width};
 use crate::theme;
 use crate::widgets::dialog::{centered, modal};
 use crate::widgets::put;
@@ -70,8 +70,11 @@ pub struct ListPicker<T> {
     list: Rect,
     /// The row under the pointer (highlighted; the selection does not move to it).
     hover: Option<usize>,
-    /// The row a press armed (it is picked on the release).
-    press: Press<usize>,
+    /// The row a press armed: it is picked on the release over it (still that entry, whatever
+    /// was typed in between).
+    press: Press<Row>,
+    /// The entry of the value the list was opened on: selected while nothing is typed.
+    current: Option<usize>,
 }
 
 impl<T: Clone + PartialEq> ListPicker<T> {
@@ -88,11 +91,10 @@ impl<T: Clone + PartialEq> ListPicker<T> {
             list: Rect::default(),
             hover: None,
             press: Press::default(),
+            current: None,
         };
+        p.current = current.and_then(|c| p.entries.iter().position(|e| e.value == *c));
         p.refilter();
-        if let Some(i) = current.and_then(|c| p.entries.iter().position(|e| e.value == *c)) {
-            p.selected = i;
-        }
         p
     }
 
@@ -127,7 +129,8 @@ impl<T: Clone + PartialEq> ListPicker<T> {
         }
     }
 
-    /// Work the rows out again from the filter; the best match is selected.
+    /// Work the rows out again from the filter; the best match is selected (with nothing typed,
+    /// the current value's entry).
     fn refilter(&mut self) {
         let query = self.filter.text().trim().to_lowercase();
         // A hint is found by a part of it: its letters spread out would match too much.
@@ -145,7 +148,8 @@ impl<T: Clone + PartialEq> ListPicker<T> {
         if self.new_label.is_some() {
             self.rows.push(Row::New);
         }
-        self.selected = 0;
+        let current = self.current.filter(|_| query.is_empty());
+        self.selected = current.and_then(|c| self.rows.iter().position(|r| *r == Row::Entry(c))).unwrap_or(0);
         self.hover = None;
     }
 
@@ -214,7 +218,9 @@ impl<T: Clone + PartialEq> ListPicker<T> {
             _ => {}
         }
         let row = self.row_at(m.column, m.row);
-        if let Some(i) = self.press.press(m.kind, row, now) {
+        if let Some(r) = self.press.press(m.kind, row.map(|i| self.rows[i]), now)
+            && let Some(i) = self.rows.iter().position(|x| *x == r)
+        {
             self.selected = i;
             return self.pick();
         }
@@ -260,6 +266,9 @@ impl<T: Clone + PartialEq> ListPicker<T> {
         let inner = modal(rect, title, footer, buf);
         let iw = inner.width as usize;
         let base = Style::new().bg(th.surface);
+        // The hints in a column after the widest label (at most half the box, so a narrow one
+        // still shows some of them).
+        let label_w = self.entries.iter().map(|e| width(&e.label)).max().unwrap_or(0).min(iw.saturating_sub(6) / 2);
         put(buf, inner.x + 1, inner.y, "›", 1, base.fg(th.accent).add_modifier(Modifier::BOLD));
         if note == 1 {
             put(buf, inner.x + 1, inner.y + 2, none, iw.saturating_sub(2), base.fg(th.fg_dim));
@@ -289,9 +298,9 @@ impl<T: Clone + PartialEq> ListPicker<T> {
             match *row {
                 Row::Entry(e) => {
                     let e = &self.entries[e];
-                    let used = put(buf, x, y, &e.label, room(x), Style::new().fg(th.fg).patch(bg));
+                    put(buf, x, y, &e.label, room(x).min(label_w), Style::new().fg(th.fg).patch(bg));
                     if !e.hint.is_empty() {
-                        let hx = x + used + 2;
+                        let hx = x + label_w as u16 + 2;
                         put(buf, hx, y, &e.hint, room(hx), Style::new().fg(th.fg_dim).patch(bg));
                     }
                 }

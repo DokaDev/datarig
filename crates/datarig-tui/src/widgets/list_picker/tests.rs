@@ -165,7 +165,10 @@ fn it_draws_the_filter_the_rows_and_says_when_nothing_matches() {
     let mut p = picker();
     let now = Instant::now();
     let screen = draw(&mut p, now);
-    for text in ["SSH tunnel", "› type to filter", "office  ec2-user@bastion.example.com", "New SSH tunnel…"] {
+    // The hints in a column after the widest label.
+    let office = format!("{:<17}  ec2-user@bastion.example.com", "office");
+    let off = format!("{:<17}  connects to the database directly", "off");
+    for text in ["SSH tunnel", "› type to filter", &office, &off, "New SSH tunnel…"] {
         assert!(screen.contains(text), "{text}:\n{screen}");
     }
     assert_eq!(p.list_area().height, 5);
@@ -250,4 +253,30 @@ fn a_long_list_scrolls_to_keep_the_selection_in_sight() {
     p.key(&k(KeyCode::Up), false);
     let screen = draw(&mut p, Instant::now());
     assert!(screen.contains("New SSH tunnel…") && !screen.contains("preset-00"), "{screen}");
+}
+
+#[test]
+fn an_emptied_filter_selects_the_current_value_again() {
+    let mut p = picker();
+    typ(&mut p, "o");
+    assert_eq!(p.selected(), Some(Row::Entry(0)), "the best match");
+    p.key(&k(KeyCode::Backspace), false);
+    assert_eq!(p.selected(), Some(Row::Entry(1)), "the current one, as when it opened");
+}
+
+#[test]
+fn a_release_picks_the_entry_pressed_not_the_one_typing_moved_under_it() {
+    let mut p = picker();
+    let shown = Instant::now();
+    draw(&mut p, shown);
+    let list = p.list_area();
+    let (x, y) = (list.x + 2, list.y + 2);
+    let later = shown + Duration::from_millis(500);
+    p.mouse(&mouse(MouseEventKind::Down(MouseButton::Left), x, y), later);
+    assert_eq!(p.rows()[2], Row::Entry(2), "lab pressed");
+    // Typed meanwhile: another entry is drawn there now.
+    typ(&mut p, "o");
+    assert_eq!(p.rows()[2], Row::Entry(3));
+    assert_eq!(p.mouse(&mouse(MouseEventKind::Up(MouseButton::Left), x, y), later), Outcome::Pending);
+    assert_eq!(p.selected(), Some(Row::Entry(0)), "the selection stays");
 }

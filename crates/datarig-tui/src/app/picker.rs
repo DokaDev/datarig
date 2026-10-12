@@ -10,36 +10,36 @@ use crate::widgets::list_picker::{Entry, ListPicker, Outcome};
 
 /// A list to pick from, by what it picks.
 pub enum Picker {
-    /// The profile form's SSH tunnel.
-    Tunnel(ListPicker<SshChoice>),
+    /// The SSH tunnel of the profile form of profile `form` (a pick goes to that form only).
+    Tunnel { form: ProfileId, list: ListPicker<SshChoice> },
 }
 
 impl Picker {
     /// The SSH tunnel's list.
     pub fn tunnel(&self) -> Option<&ListPicker<SshChoice>> {
         match self {
-            Picker::Tunnel(l) => Some(l),
+            Picker::Tunnel { list, .. } => Some(list),
         }
     }
 
     /// Its title.
     pub fn title(&self) -> Label {
         match self {
-            Picker::Tunnel(_) => Label::FormFieldSshEnabled,
+            Picker::Tunnel { .. } => Label::FormFieldSshEnabled,
         }
     }
 
     /// It came on top again ([`ListPicker::rearm`]).
     pub fn rearm(&mut self) {
         match self {
-            Picker::Tunnel(l) => l.rearm(),
+            Picker::Tunnel { list, .. } => list.rearm(),
         }
     }
 
     /// The pointer moved to (x, y) ([`ListPicker::pointer`]).
     fn pointer(&mut self, x: u16, y: u16) -> bool {
         match self {
-            Picker::Tunnel(l) => l.pointer(x, y),
+            Picker::Tunnel { list, .. } => list.pointer(x, y),
         }
     }
 
@@ -54,7 +54,7 @@ impl Picker {
         now: Instant,
     ) -> (u16, u16) {
         match self {
-            Picker::Tunnel(l) => l.draw(area, buf, texts, notes, top, now),
+            Picker::Tunnel { list, .. } => list.draw(area, buf, texts, notes, top, now),
         }
     }
 }
@@ -94,30 +94,31 @@ impl App {
             .collect();
         let new = self.config_writable().then(|| i18n.label(Label::FormSshPickerNew).to_string());
         let list = ListPicker::new(entries, new, Some(&f.ssh_choice()));
-        self.overlays.push(Overlay::Picker(Picker::Tunnel(list)));
+        let form = f.profile_id();
+        self.overlays.push(Overlay::Picker(Picker::Tunnel { form, list }));
     }
 
     /// Keys of a list to pick from (`overlay.picker`, text input).
     pub(super) fn picker_key(&mut self, key: KeyEvent, repeat: bool) {
-        if let Some(Picker::Tunnel(l)) = self.overlays.picker_mut() {
-            let out = l.key(&key, repeat);
-            self.tunnel_picked(out);
+        if let Some(&mut Picker::Tunnel { form, ref mut list }) = self.overlays.picker_mut() {
+            let out = list.key(&key, repeat);
+            self.tunnel_picked(form, out);
         }
     }
 
     /// Text pasted while a list to pick from has the keyboard: into its filter.
     pub(super) fn picker_paste(&mut self, text: &str) {
-        if let Some(Picker::Tunnel(l)) = self.overlays.picker_mut() {
-            l.paste(text);
+        if let Some(Picker::Tunnel { list, .. }) = self.overlays.picker_mut() {
+            list.paste(text);
         }
     }
 
     /// The mouse on a list to pick from: a row is picked on the release over the row pressed.
     pub(super) fn picker_mouse(&mut self, m: MouseEvent) {
         let now = self.now();
-        if let Some(Picker::Tunnel(l)) = self.overlays.picker_mut() {
-            let out = l.mouse(&m, now);
-            self.tunnel_picked(out);
+        if let Some(&mut Picker::Tunnel { form, ref mut list }) = self.overlays.picker_mut() {
+            let out = list.mouse(&m, now);
+            self.tunnel_picked(form, out);
         }
     }
 
@@ -126,26 +127,32 @@ impl App {
         self.overlays.picker_mut().is_some_and(|p| p.pointer(m.column, m.row))
     }
 
-    /// What the tunnel's list did: a pick sets the profile form's tunnel; "New SSH tunnel…"
-    /// puts the profile form aside under a new tunnel form.
-    fn tunnel_picked(&mut self, out: Outcome<SshChoice>) {
+    /// What the tunnel's list of profile `form`'s form did: a pick sets that form's tunnel;
+    /// "New SSH tunnel…" puts that form aside under a new tunnel form. Either only while that
+    /// form is the dialog on top once the list closed.
+    fn tunnel_picked(&mut self, form: ProfileId, out: Outcome<SshChoice>) {
+        if out == Outcome::Pending {
+            return;
+        }
+        self.overlays.close(OverlayKind::Picker);
+        let on_top = matches!(
+            self.overlays.top(),
+            Some(Overlay::ProfileForm(f)) if f.kind == FormKind::Profile && f.profile_id() == form
+        );
         match out {
-            Outcome::Pending => {}
-            Outcome::Cancelled => self.overlays.close(OverlayKind::Picker),
-            Outcome::Picked(c) => {
-                self.overlays.close(OverlayKind::Picker);
+            Outcome::Picked(c) if on_top => {
                 if let Some(f) = self.overlays.form_mut() {
                     f.set_ssh_choice(c);
                 }
             }
-            Outcome::New => {
-                self.overlays.close(OverlayKind::Picker);
+            Outcome::New if on_top => {
                 let Some(back) = self.overlays.take_form() else { return };
                 self.open_tunnel_form(None, false);
                 if let Some(f) = self.overlays.form_mut() {
                     f.back_to = Some(back);
                 }
             }
+            _ => {}
         }
     }
 }

@@ -845,9 +845,13 @@ fn the_form_of_a_profile_with_both_tunnels_keeps_the_preset_when_saved() {
     let screen = h.screen(110, 30);
     assert!(screen.contains("had its own SSH tunnel on"), "{screen}");
     // Another pick: the line goes; back to the preset and saved.
-    h.key(KeyCode::Right);
+    h.key(KeyCode::Enter);
+    h.type_text("only");
+    h.key(KeyCode::Enter);
     assert!(!h.form().ssh_both && !h.screen(110, 30).contains("had its own SSH tunnel on"));
-    h.key(KeyCode::Left);
+    h.key(KeyCode::Enter);
+    h.type_text("office");
+    h.key(KeyCode::Enter);
     h.ctrl('s');
     let c = h.app.profile(id).unwrap();
     assert_eq!(c.tunnel.as_deref(), Some("office"));
@@ -1041,7 +1045,7 @@ fn the_tunnel_list_takes_the_mouse_as_the_other_lists() {
     let dir = scratch("list-mouse");
     let mut h = harness_with(&two_presets(&dir));
     ssh_section(&mut h, "local-pg");
-    let (x, y) = find_text(&mut h, "‹ office ›");
+    let (x, y) = find_text(&mut h, "office ▾");
     click_at(&mut h, (x + 3, y));
     assert_eq!(h.overlay_kind(), Some(OverlayKind::Picker));
     h.draw(100, 30);
@@ -1111,7 +1115,7 @@ fn a_new_tunnel_from_the_list_comes_back_picked_in_the_profile_form() {
     assert!(written.contains("[tunnels.hq]"), "{written}");
     assert!(!written.contains("-edited"), "the profile is not saved yet: {written}");
     let screen = h.screen(100, 30);
-    assert!(screen.contains("‹ hq ›") && screen.contains("ec2-user@hq.example.com"), "{screen}");
+    assert!(screen.contains("hq ▾ ") && screen.contains("ec2-user@hq.example.com"), "{screen}");
     h.ctrl('s');
     assert!(!h.form_open());
     let c = h.app.profiles.iter().find(|p| p.name == "local-pg").unwrap();
@@ -1168,4 +1172,117 @@ fn tunnel_list_screens() {
         h.type_text("la");
         assert_screen!(format!("tunnel_list_filtered_{tag}_80x24"), lang, h.draw(80, 24));
     }
+}
+
+/// Another form asked for while a profile form waits under the tunnel form of "New SSH
+/// tunnel…" (a new profile or tunnel from the command line): refused, so the waiting form and
+/// its edits stay.
+#[test]
+fn another_form_never_takes_the_place_of_a_form_waiting_under_the_tunnel_form() {
+    let dir = scratch("list-guard");
+    let mut h = harness_with(&two_presets(&dir));
+    h.explore("local-pg");
+    h.keys("e");
+    h.key(KeyCode::Tab);
+    h.type_text("-edited");
+    let host = h.form().host.text().to_string();
+    h.ctrl('n');
+    h.key(KeyCode::Enter);
+    h.key(KeyCode::Up);
+    h.key(KeyCode::Up);
+    h.key(KeyCode::Enter);
+    assert!(h.form().is_tunnel());
+    h.command("conn.new");
+    assert!(h.form().is_tunnel(), "no new profile form");
+    assert!(h.status(120, 24).contains("Save or cancel the open form first"));
+    h.command("tunnel.new");
+    h.key(KeyCode::Esc);
+    let f = h.form();
+    assert!(!f.is_tunnel(), "the profile form came back");
+    assert_eq!((f.host.text(), f.ssh_choice()), (host.as_str(), SshChoice::Preset("office".into())));
+    // The list open over the form: refused too.
+    h.key(KeyCode::Enter);
+    h.command("conn.new");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Picker));
+    h.key(KeyCode::Esc);
+    assert_eq!(h.form().host.text(), host);
+}
+
+/// A new tunnel cannot take the name of the preset the waiting profile form makes when it is
+/// saved ("save as tunnel preset"): the name is taken.
+#[test]
+fn a_new_tunnel_cannot_take_the_name_the_waiting_form_saves_its_own_tunnel_as() {
+    let dir = scratch("list-taken");
+    let mut cfg = config(Some(&dir));
+    cfg.tunnels.clear();
+    cfg.connections[0].tunnel = None;
+    cfg.connections[2].tunnel = None;
+    cfg.connections[0].ssh = Some(bastion());
+    let mut h = harness_with(&cfg);
+    ssh_section(&mut h, "local-pg");
+    h.key_mod(KeyCode::Char('b'), KeyModifiers::CONTROL);
+    h.key(KeyCode::Enter);
+    assert!(h.form().new_preset_picked());
+    h.key(KeyCode::Enter);
+    // Not "bastion (new)": the entry that makes one.
+    h.type_text("new ssh");
+    h.key(KeyCode::Enter);
+    assert!(h.form().is_tunnel());
+    h.type_text("BASTION");
+    h.key(KeyCode::Tab);
+    h.type_text("other.example.com");
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Tab);
+    h.type_text("ec2-user");
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Right);
+    h.key(KeyCode::Right);
+    h.ctrl('s');
+    assert!(h.form().is_tunnel(), "refused");
+    assert!(h.app.presets.is_empty());
+    assert!(h.screen(100, 30).contains("name already used"));
+}
+
+/// The keychain found unusable while a profile form waits under the tunnel form: the waiting
+/// form cannot pick it any more either.
+#[test]
+fn a_late_keychain_failure_reaches_the_form_waiting_under_the_tunnel_form() {
+    use datarig_core::fault::{Fault, FaultKind, KeychainFault};
+    let dir = scratch("list-probe");
+    let mut h = harness_with(&two_presets(&dir));
+    ssh_section(&mut h, "local-pg");
+    h.key(KeyCode::Enter);
+    h.type_text("new");
+    h.key(KeyCode::Enter);
+    assert!(h.form().is_tunnel() && h.form().keychain_ok);
+    let fault = Fault::new(FaultKind::Keychain(KeychainFault::Locked), "User interaction is not allowed.");
+    h.app.on_app_event(AppEvent::KeychainProbed(Some(fault)));
+    assert!(!h.form().keychain_ok, "the tunnel form");
+    h.key(KeyCode::Esc);
+    assert!(!h.form().is_tunnel() && !h.form().keychain_ok, "the profile form");
+}
+
+/// A tunnel form that gave a profile form back leaves the explorer's cursor where it was.
+#[test]
+fn a_new_tunnel_from_the_list_leaves_the_explorer_cursor() {
+    let dir = scratch("list-cursor");
+    let mut h = harness_with(&two_presets(&dir));
+    ssh_section(&mut h, "local-pg");
+    let at = h.selected();
+    h.key(KeyCode::Enter);
+    h.type_text("new");
+    h.key(KeyCode::Enter);
+    h.type_text("hq");
+    h.key(KeyCode::Tab);
+    h.type_text("hq.example.com");
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Tab);
+    h.type_text("ec2-user");
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Right);
+    h.key(KeyCode::Right);
+    h.ctrl('s');
+    assert!(!h.form().is_tunnel());
+    h.key(KeyCode::Esc);
+    assert_eq!(h.selected(), at, "still on the profile");
 }

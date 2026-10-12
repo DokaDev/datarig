@@ -400,6 +400,13 @@ impl Overlays {
         self.0.iter_mut().find_map(|o| if let Overlay::ProfileForm(f) = o { Some(&mut **f) } else { None })
     }
 
+    /// The profile form: the open form, or the one waiting under it (a tunnel form opened from
+    /// its SSH tunnel list).
+    pub fn profile_form_mut(&mut self) -> Option<&mut ProfileForm> {
+        let f = self.form_mut()?;
+        if f.back_to.is_some() { f.back_to.as_deref_mut() } else { Some(f) }
+    }
+
     /// Close the profile form and hand it over.
     pub fn take_form(&mut self) -> Option<Box<ProfileForm>> {
         let i = self.0.iter().position(|o| o.kind() == OverlayKind::ProfileForm)?;
