@@ -1,6 +1,6 @@
 //! A list to pick one entry from, with a typed filter: its entries (each a label, a hint after
-//! it and the value it stands for) and, last, an entry that makes a new one ("New SSH
-//! tunnel…"). The dialog that shows it acts on what [`ListPicker::key`] and
+//! it and the value it stands for, optionally a colored mark before the label and a badge after
+//! it) and, last, an entry that makes a new one ("New SSH tunnel…"). The dialog that shows it acts on what [`ListPicker::key`] and
 //! [`ListPicker::mouse`] return.
 //!
 //! The keys are those of the tab list and the action menu: typing filters the entries, ranked
@@ -22,7 +22,7 @@ use datarig_core::i18n::Localized;
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use ratatui::layout::{Position, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use std::time::Instant;
 
 /// An entry of the list.
@@ -32,6 +32,18 @@ pub struct Entry<T> {
     pub label: String,
     /// Shown dimmed after the label (empty: nothing); the filter finds the text in it too.
     pub hint: String,
+    /// A mark before the label in its color (an environment's `●`); when an entry has one,
+    /// every label leaves room for it.
+    pub mark: Option<(String, Color)>,
+    /// A badge after the label, drawn as a chip of its color (an environment's `PROD`).
+    pub badge: Option<(String, Color)>,
+}
+
+impl<T> Entry<T> {
+    /// An entry of `value` with `label` and `hint`, no mark and no badge.
+    pub fn new(value: T, label: String, hint: String) -> Self {
+        Entry { value, label, hint, mark: None, badge: None }
+    }
 }
 
 /// A row of the list as shown.
@@ -266,9 +278,12 @@ impl<T: Clone + PartialEq> ListPicker<T> {
         let inner = modal(rect, title, footer, buf);
         let iw = inner.width as usize;
         let base = Style::new().bg(th.surface);
-        // The hints in a column after the widest label (at most half the box, so a narrow one
-        // still shows some of them).
-        let label_w = self.entries.iter().map(|e| width(&e.label)).max().unwrap_or(0).min(iw.saturating_sub(6) / 2);
+        // The hints in a column after the widest label with its badge (at most half the box, so
+        // a narrow one still shows some of them); the marks before the labels, when there are.
+        let marks = self.entries.iter().any(|e| e.mark.is_some());
+        let badge_w = |e: &Entry<T>| e.badge.as_ref().map_or(0, |(b, _)| width(b) + 3);
+        let label_w =
+            self.entries.iter().map(|e| width(&e.label) + badge_w(e)).max().unwrap_or(0).min(iw.saturating_sub(6) / 2);
         put(buf, inner.x + 1, inner.y, "›", 1, base.fg(th.accent).add_modifier(Modifier::BOLD));
         if note == 1 {
             put(buf, inner.x + 1, inner.y + 2, none, iw.saturating_sub(2), base.fg(th.fg_dim));
@@ -294,17 +309,32 @@ impl<T: Clone + PartialEq> ListPicker<T> {
             };
             buf.set_stringn(inner.x, y, fit("", iw, Align::Left), iw, bg);
             let room = |x: u16| (inner.x + inner.width).saturating_sub(x + 1) as usize;
-            let x = inner.x + 1;
+            let mut x = inner.x + 1;
             match *row {
                 Row::Entry(e) => {
                     let e = &self.entries[e];
-                    put(buf, x, y, &e.label, room(x).min(label_w), Style::new().fg(th.fg).patch(bg));
+                    if marks {
+                        if let Some((m, c)) = &e.mark {
+                            put(buf, x, y, m, 2, Style::new().fg(*c).patch(bg));
+                        }
+                        x += 2;
+                    }
+                    let used = put(buf, x, y, &e.label, room(x).min(label_w), Style::new().fg(th.fg).patch(bg));
+                    if let Some((b, c)) = &e.badge {
+                        let bx = x + used + 1;
+                        let left = (label_w + 1).saturating_sub(usize::from(used)).min(room(bx));
+                        put(buf, bx, y, &format!(" {b} "), left, crate::theme::chip(*c));
+                    }
                     if !e.hint.is_empty() {
                         let hx = x + label_w as u16 + 2;
                         put(buf, hx, y, &e.hint, room(hx), Style::new().fg(th.fg_dim).patch(bg));
                     }
                 }
                 Row::New => {
+                    // In the labels' column.
+                    if marks {
+                        x += 2;
+                    }
                     let label = self.new_label.as_deref().unwrap_or_default();
                     put(buf, x, y, label, room(x), Style::new().fg(th.accent).patch(bg));
                 }

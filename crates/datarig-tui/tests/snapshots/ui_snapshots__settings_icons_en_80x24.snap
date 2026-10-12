@@ -4,7 +4,7 @@ expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×                                          "
 "│ ╭ Settings ────────────────────────────────────────────────────────────────╮─╮"
-"│▾│ Display                                                                  │t│"
+"│▾│ Display                                                                  │ │"
 "│ │   Nerd Font icons           ‹ auto      ›  Nerd Font icons → ask again … │e│"
 "│ │   Command line position     ‹ popup     ›  A popup near the top of the … │ │"
 "│ │   Theme                     ‹ terminal  ›  Your terminal's own colors (… │ │"
@@ -25,4 +25,4 @@ expression: backend
 "│ │ Secrets                                                                  │ │"
 "│ ╰─────────────────────────────────────── j/k move · h/l change · Esc close ╯ │"
 "╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
-" NORMAL  local-pg · policy: default │ Connected to local-pg                  EN "
+" NORMAL  local-pg │ Connected to local-pg                                    EN "

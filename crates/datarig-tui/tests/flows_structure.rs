@@ -375,16 +375,20 @@ fn a_structure_that_cannot_be_read_says_why() {
     assert!(lines(&mut h).iter().any(|l| l.contains("Columns (5)")), "{:?}", lines(&mut h));
 }
 
-/// A line too long for the status bar keeps what matters: the connection's policy gives up its
+/// A line too long for the status bar keeps what matters: the connection's environment gives up its
 /// room, and a line that still does not fit is cut in its middle, so its end stays (what a
 /// trigger calls, what to do). A structure that could not be read shows why alone there, in
 /// English and Korean at 80 columns: the reason and "try again". A trigger's `WHEN` condition,
 /// on its own line, is whole there.
 #[test]
 fn a_long_line_keeps_its_end_in_the_status_bar() {
-    use datarig_core::i18n::{I18n, Label, Msg};
+    use datarig_core::i18n::Label;
     for lang in [Lang::En, Lang::Ko] {
         let mut h = Harness::connected(lang);
+        // An environment without a badge: its name follows the connection's.
+        h.app.policies.insert("staging", datarig_core::policy::Policy::default());
+        let pid = h.app.tab().profile.unwrap();
+        h.app.profiles.iter_mut().find(|p| p.id == pid).unwrap().policy = Some("staging".into());
         h.key(KeyCode::BackTab);
         h.keys("jjjj");
         h.key(KeyCode::Char('l'));
@@ -395,12 +399,12 @@ fn a_long_line_keeps_its_end_in_the_status_bar() {
         h.db(DbEvent::Structure { schema: "shop".into(), table: "users".into(), result: Err(DbError::Locked) });
         h.keys("j");
         let why = Label::TreeStructureLocked.text(lang);
-        let policy = I18n::new(lang).msg(&Msg::StatusPolicy { name: "default".into() }).to_string();
+        let env = " · staging";
         let status = h.status(80, 24);
-        assert!(status.contains(why) && !status.contains(&policy), "{lang:?}: {status}");
-        // With room, the policy stays.
+        assert!(status.contains(why) && !status.contains(env), "{lang:?}: {status}");
+        // With room, the environment stays.
         let status = h.status(160, 24);
-        assert!(status.contains(why) && status.contains(&policy), "{lang:?}: {status}");
+        assert!(status.contains(why) && status.contains(env), "{lang:?}: {status}");
     }
     let mut h = shop_open(false);
     let mut users = users_structure();

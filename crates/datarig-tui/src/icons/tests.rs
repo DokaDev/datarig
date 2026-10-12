@@ -9,6 +9,7 @@ fn every_glyph_is_one_private_use_char_one_column_wide() {
         TABLE,
         DDL,
         WARNING,
+        ENVIRONMENT,
         KEY_PK,
         KEY_FK,
         KEY_UQ,
@@ -66,6 +67,14 @@ fn the_tunnel_mark_is_pinned_and_has_a_text_form_without_icons() {
     // nf-md-ssh (Nerd Fonts 3.5.1 glyphnames.json): a profile's tunnel and the tunnel presets.
     assert_eq!((TUNNEL, tunnel(true), tunnel(false)), ("\u{f08c0}", "\u{f08c0}", "SSH"));
     assert_eq!(width(TUNNEL), 1);
+}
+
+#[test]
+fn the_environment_mark_is_pinned_and_has_a_text_form_without_icons() {
+    // nf-fa-tag (Nerd Fonts 3.5.1 glyphnames.json: "fa-tag", code f02b): an environment is a
+    // label its profiles carry.
+    assert_eq!((ENVIRONMENT, environment(true), environment(false)), ("\u{f02b}", "\u{f02b}", "ENV"));
+    assert_eq!(width(ENVIRONMENT), 1);
 }
 
 #[test]

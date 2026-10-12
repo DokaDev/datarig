@@ -129,7 +129,7 @@ fn settings(language: &str) -> Settings<'_> {
 }
 
 fn profiles<'a>(c: &'a [ConnectionConfig], folders: &'a Folders, last_used: Option<ProfileId>) -> Profiles<'a> {
-    Profiles { connections: c, tunnels: &[], folders, last_used }
+    Profiles { connections: c, tunnels: &[], environments: None, default_rules: None, folders, last_used }
 }
 
 /// `<tmp>/datarig-cfg-<pid>-<tag>/sub/config.toml`, not created; the directory is removed when
@@ -549,20 +549,20 @@ confirm = "writes"
 "#,
     )
     .unwrap();
-    let prod = cfg.policies.get(Some("prod"));
+    let prod = cfg.policies.get(Some("prod")).unwrap();
     assert_eq!((prod.read_only, prod.confirm), (true, crate::policy::Confirm::Writes));
-    let plain = cfg.policies.get(Some("plain"));
+    let plain = cfg.policies.get(Some("plain")).unwrap();
     assert_eq!((plain.read_only, plain.confirm), (false, crate::policy::Confirm::Destructive));
-    let get = |n: &str| cfg.policies.get(Some(n)).paging_idle_timeout;
+    let get = |n: &str| cfg.policies.get(Some(n)).unwrap().paging_idle_timeout;
     assert_eq!(get("careful"), Some(std::time::Duration::from_secs(10)));
     assert_eq!(get("local"), None);
     assert_eq!(get("plain"), Some(crate::policy::PAGING_IDLE_TIMEOUT), "a missing item has its default");
-    assert_eq!(cfg.policies.get(None).paging_idle_timeout, Some(crate::policy::PAGING_IDLE_TIMEOUT));
+    assert_eq!(cfg.policies.get(None).unwrap().paging_idle_timeout, Some(crate::policy::PAGING_IDLE_TIMEOUT));
 
-    let paging = |n: &str| cfg.policies.get(Some(n)).paging;
+    let paging = |n: &str| cfg.policies.get(Some(n)).unwrap().paging;
     assert_eq!(paging("local"), crate::policy::PagingMode::Hold);
     assert_eq!(paging("plain"), crate::policy::PagingMode::NoHold, "no-hold is the default");
-    assert_eq!(cfg.policies.get(None).paging, crate::policy::PagingMode::NoHold);
+    assert_eq!(cfg.policies.get(None).unwrap().paging, crate::policy::PagingMode::NoHold);
     let e = parse("[policy.x]\npaging = \"keep\"").unwrap_err();
     assert!(format!("{e:?}").contains("policy.x.paging"), "{e:?}");
     let e = parse("[policy.x]\npaging_idle_timeout = \"soon\"").unwrap_err();
@@ -761,9 +761,9 @@ fn result_window_and_spill_limit() {
     .unwrap();
     assert_eq!(cfg.result_window_rows, 5_000);
     assert_eq!(cfg.spill_limit, crate::policy::SpillLimit(Some(256 << 20)));
-    assert_eq!(cfg.policies.get(Some("big")).spill_limit, Some(crate::policy::SpillLimit(None)));
-    assert_eq!(cfg.policies.get(Some("small")).spill_limit, Some(crate::policy::SpillLimit(Some(1 << 20))));
-    assert_eq!(cfg.policies.get(None).spill_limit, None, "the default policy uses the config's");
+    assert_eq!(cfg.policies.get(Some("big")).unwrap().spill_limit, Some(crate::policy::SpillLimit(None)));
+    assert_eq!(cfg.policies.get(Some("small")).unwrap().spill_limit, Some(crate::policy::SpillLimit(Some(1 << 20))));
+    assert_eq!(cfg.policies.get(None).unwrap().spill_limit, None, "the default policy uses the config's");
     for (bad, key) in [
         ("result_window_rows = 10", "result_window_rows"),
         ("result_window_rows = 99999999", "result_window_rows"),
@@ -996,7 +996,14 @@ fn tunnel_presets_are_read_checked_and_written() {
     save(
         &path,
         settings("auto"),
-        Some(Profiles { connections: &cfg.connections, tunnels: &cfg.tunnels, folders: &cfg.folders, last_used: None }),
+        Some(Profiles {
+            connections: &cfg.connections,
+            tunnels: &cfg.tunnels,
+            environments: None,
+            default_rules: None,
+            folders: &cfg.folders,
+            last_used: None,
+        }),
     )
     .unwrap();
     let written = std::fs::read_to_string(&path).unwrap();
@@ -1022,7 +1029,14 @@ fn tunnel_presets_are_read_checked_and_written() {
     save(
         &path,
         settings("auto"),
-        Some(Profiles { connections: &cfg.connections, tunnels: &cfg.tunnels, folders: &cfg.folders, last_used: None }),
+        Some(Profiles {
+            connections: &cfg.connections,
+            tunnels: &cfg.tunnels,
+            environments: None,
+            default_rules: None,
+            folders: &cfg.folders,
+            last_used: None,
+        }),
     )
     .unwrap();
     let written = std::fs::read_to_string(&path).unwrap();
@@ -1041,7 +1055,14 @@ fn tunnel_presets_are_read_checked_and_written() {
     save(
         &path,
         settings("auto"),
-        Some(Profiles { connections: &conns, tunnels: &[], folders: &back.folders, last_used: None }),
+        Some(Profiles {
+            connections: &conns,
+            tunnels: &[],
+            environments: None,
+            default_rules: None,
+            folders: &back.folders,
+            last_used: None,
+        }),
     )
     .unwrap();
     let written = std::fs::read_to_string(&path).unwrap();
@@ -1054,6 +1075,8 @@ fn tunnel_presets_are_read_checked_and_written() {
         Some(Profiles {
             connections: &conns,
             tunnels: std::slice::from_ref(&new),
+            environments: None,
+            default_rules: None,
             folders: &back.folders,
             last_used: None,
         }),
@@ -1111,6 +1134,8 @@ fn bad_tunnel_presets_are_errors_of_the_file() {
             Some(Profiles {
                 connections: &[],
                 tunnels: std::slice::from_ref(&t),
+                environments: None,
+                default_rules: None,
                 folders: &Folders::default(),
                 last_used: None
             })
@@ -1153,7 +1178,14 @@ fn inline_tunnel_tables_are_rewritten_not_left_behind() {
             save(
                 &path,
                 settings("auto"),
-                Some(Profiles { connections: &[], tunnels: t, folders: &cfg.folders, last_used: None }),
+                Some(Profiles {
+                    connections: &[],
+                    tunnels: t,
+                    environments: None,
+                    default_rules: None,
+                    folders: &cfg.folders,
+                    last_used: None,
+                }),
             )
         };
         save_with(&tunnels).unwrap();
@@ -1168,4 +1200,297 @@ fn inline_tunnel_tables_are_rewritten_not_left_behind() {
         assert!(err.is_none(), "{err:?}");
         assert!(back.tunnels.is_empty(), "{}", std::fs::read_to_string(&path).unwrap());
     }
+}
+
+/// Environments: read in the file's order with their color and badge (checked), and a
+/// profile's environment that is not defined still loads (it is an error of that profile).
+#[test]
+fn environments_are_read_in_file_order_with_color_and_badge() {
+    let cfg = parse(
+        "[policy.zeta]\ncolor = \"Red\"\nbadge = \"PROD\"\nread_only = true\n\n[policy.default]\nconfirm = \"writes\"\n\n\
+         [policy.alpha]\n\n[[connections]]\nname = \"p\"\npolicy = \"gone\"\n",
+    )
+    .unwrap();
+    let names: Vec<&str> = cfg.policies.environments().iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, ["zeta", "alpha"], "the file's order; `default` is no environment");
+    let z = &cfg.policies.environments()[0];
+    assert_eq!((z.color.as_deref(), z.badge.as_deref(), z.policy.read_only), (Some("Red"), Some("PROD"), true));
+    assert_eq!(z.origin.as_deref(), Some("zeta"));
+    assert!(cfg.policies.default_rules().confirm.writes());
+    assert_eq!(cfg.connections[0].policy.as_deref(), Some("gone"));
+    assert_eq!(
+        cfg.policies.get(cfg.connections[0].policy.as_deref()),
+        Err(crate::policy::UnknownEnvironment("gone".into())),
+        "not the default rules"
+    );
+    for (text, key) in [
+        ("[policy.x]\ncolor = \"mauve\"", "policy.x.color"),
+        ("[policy.x]\ncolor = 3", "policy.x.color"),
+        ("[policy.x]\nbadge = \" PROD\"", "policy.x.badge"),
+        ("[policy.x]\nbadge = \"WAYTOOLONG\"", "policy.x.badge"),
+        ("[policy.x]\nbadge = \"\"", "policy.x.badge"),
+        ("[policy.x]\nbadge = true", "policy.x.badge"),
+    ] {
+        match parse(text) {
+            Err(ConfigError::Value { key: k, .. }) => assert_eq!(k, key, "{text}"),
+            other => panic!("{text}: {other:?}"),
+        }
+    }
+    // Names are not checked when read: an old file keeps loading.
+    assert!(parse("[policy.\" odd \"]\n").is_ok());
+}
+
+/// Saving environments writes only what the user changed: an unchanged table and an
+/// unchanged value keep their text (`"5m"` stays `"5m"`), a changed value is set in place with
+/// its comment, a value back at its default goes (its comment kept), a rename moves the table
+/// with its comments, a delete removes it, a new one is added after the others, and
+/// `[policy.default]` and everything else stay as they are.
+#[test]
+fn environments_are_written_only_where_they_changed() {
+    use crate::policy::{Confirm, Environment, presets};
+    let path = temp_file("environments");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let text = "version = 2\n# my settings\n\n# the old rules, by hand\n[policy.old]\npaging = \"hold\"\n\
+                paging_idle_timeout = \"5m\" # five minutes\n\n[policy.default]\nconfirm = \"writes\"\n\n\
+                # production\n[policy.prod] # careful\nread_only = true # never write\nconfirm = \"writes\"\n\
+                color = \"Red\"\n\n[policy.gone]\nread_only = true\n\n[tunnels.lab]\n\
+                id = \"6f7c1a52-0d3b-4c8e-9a51-0b5f3e7a2d10\"\nhost = \"lab\"\nuser = \"me\"\nauth = \"agent\"\n";
+    std::fs::write(&path, text).unwrap();
+    let (cfg, err) = load(Some(path.clone()));
+    assert!(err.is_none(), "{err:?}");
+    let save_envs = |envs: &[Environment]| {
+        save(
+            &path,
+            Settings { version: 2, ..settings("en") },
+            Some(Profiles {
+                connections: &cfg.connections,
+                tunnels: &cfg.tunnels,
+                environments: Some(envs),
+                default_rules: None,
+                folders: &cfg.folders,
+                last_used: None,
+            }),
+        )
+        .unwrap();
+        std::fs::read_to_string(&path).unwrap()
+    };
+    // Nothing changed: not a byte.
+    assert_eq!(save_envs(cfg.policies.environments()), text);
+
+    let mut envs = cfg.policies.environments().to_vec();
+    // prod: renamed, one value changed, one back at its default, a badge added.
+    let prod = envs.iter_mut().find(|e| e.name == "prod").unwrap();
+    prod.name = "production".into();
+    prod.policy.confirm = Confirm::Destructive;
+    prod.color = Some("red".into());
+    prod.badge = Some("PROD".into());
+    prod.policy.read_only = false;
+    envs.retain(|e| e.name != "gone");
+    envs.push(presets().pop().map(|p| Environment { name: "qa".into(), ..p }).unwrap());
+    let out = save_envs(&envs);
+    let old =
+        "# the old rules, by hand\n[policy.old]\npaging = \"hold\"\npaging_idle_timeout = \"5m\" # five minutes\n";
+    assert!(out.contains(old), "untouched, byte for byte: {out}");
+    assert!(out.contains("[policy.default]\nconfirm = \"writes\"\n"), "{out}");
+    assert!(out.contains("# production\n[policy.production] # careful\n"), "moved with its comments: {out}");
+    assert!(!out.contains("[policy.prod]") && !out.contains("[policy.gone]"), "{out}");
+    assert!(out.contains("# never write\n"), "the comment of a removed item stays: {out}");
+    assert!(!out.contains("read_only = true # never write"), "{out}");
+    assert!(out.contains("color = \"Red\""), "\"Red\" is red: left as written: {out}");
+    assert!(out.contains("badge = \"PROD\""), "{out}");
+    let production = out.split("[policy.production]").nth(1).unwrap().split("\n[").next().unwrap();
+    assert!(!production.contains("confirm"), "back at its default: gone: {production}");
+    assert!(out.contains("# my settings") && out.contains("[tunnels.lab]"), "{out}");
+    assert!(out.find("[policy.qa]").unwrap() > out.find("[policy.production]").unwrap(), "{out}");
+    assert!(
+        out.contains("[policy.qa]\ncolor = \"red\"\nbadge = \"PROD\"\nread_only = true\nconfirm = \"writes\"\n"),
+        "{out}"
+    );
+    // Read back: what was saved.
+    let (back, err) = load(Some(path.clone()));
+    assert!(err.is_none(), "{err:?}");
+    let names: Vec<&str> = back.policies.environments().iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, ["old", "production", "qa"]);
+    for (a, b) in back.policies.environments().iter().zip(&envs) {
+        assert!(a.same_settings(b) || a.color.as_deref() == Some("Red"), "{a:?} {b:?}");
+    }
+    assert_eq!(back.policies.default_rules().confirm, Confirm::Writes);
+    // Edited again with a new idle timeout: written in its largest exact unit.
+    let mut again = back.policies.environments().to_vec();
+    again[2].policy.paging_idle_timeout = Some(std::time::Duration::from_secs(90));
+    again[2].policy.spill_limit = Some(crate::policy::SpillLimit(Some(512 << 20)));
+    let out = save_envs(&again);
+    assert!(out.contains("paging_idle_timeout = \"90s\"\nspill_limit = \"512MB\"\n"), "{out}");
+    assert!(out.contains(old), "{out}");
+    // Every environment gone: `[policy.default]` stays.
+    let out = save_envs(&[]);
+    assert!(out.contains("[policy.default]\nconfirm = \"writes\"\n") && !out.contains("[policy.old]"), "{out}");
+}
+
+/// A file without environments gets the presets as new tables; an inline table stays inline.
+#[test]
+fn new_environments_and_inline_tables() {
+    use crate::policy::presets;
+    let path = temp_file("environments-new");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "version = 2\n").unwrap();
+    let (cfg, _) = load(Some(path.clone()));
+    let p = |envs: &[crate::policy::Environment]| {
+        save(
+            &path,
+            Settings { version: 2, ..settings("en") },
+            Some(Profiles {
+                connections: &[],
+                tunnels: &[],
+                environments: Some(envs),
+                default_rules: None,
+                folders: &cfg.folders,
+                last_used: None,
+            }),
+        )
+        .unwrap();
+        std::fs::read_to_string(&path).unwrap()
+    };
+    let out = p(&presets());
+    assert_eq!(
+        out,
+        "version = 2\n\n[policy.dev]\ncolor = \"green\"\n\n[policy.test]\ncolor = \"blue\"\n\n\
+         [policy.staging]\ncolor = \"orange\"\nbadge = \"STG\"\nconfirm = \"writes\"\n\n\
+         [policy.prod]\ncolor = \"red\"\nbadge = \"PROD\"\nread_only = true\nconfirm = \"writes\"\n"
+    );
+    let (back, _) = load(Some(path.clone()));
+    let names: Vec<&str> = back.policies.environments().iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, ["dev", "test", "staging", "prod"]);
+    std::fs::write(&path, "version = 2\npolicy = { dev = { color = \"green\" }, prod = { read_only = true } }\n")
+        .unwrap();
+    let (cfg2, err) = load(Some(path.clone()));
+    assert!(err.is_none(), "{err:?}");
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(p(cfg2.policies.environments()), text, "unchanged: as written");
+    let mut envs = cfg2.policies.environments().to_vec();
+    envs[1].badge = Some("PROD".into());
+    let out = p(&envs);
+    let (back, err) = load(Some(path.clone()));
+    assert!(err.is_none(), "{err:?}: {out}");
+    assert_eq!(back.policies.environments()[1].badge.as_deref(), Some("PROD"), "{out}");
+    assert_eq!(back.policies.environments()[0].color.as_deref(), Some("green"), "{out}");
+}
+
+/// The `policy` item keeps its place and its form: dotted `policy.<name>.<key>` keys at the top
+/// and an inline `policy = { … }` table are edited where they are; the lines around them, and
+/// the environments that did not change, keep their text and their place.
+#[test]
+fn dotted_and_inline_environments_stay_where_they_are() {
+    let path = temp_file("environments-placed");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let save_envs = |envs: &[crate::policy::Environment]| {
+        save(
+            &path,
+            Settings { version: 2, ..settings("en") },
+            Some(Profiles {
+                connections: &[],
+                tunnels: &[],
+                environments: Some(envs),
+                default_rules: None,
+                folders: &Folders::default(),
+                last_used: None,
+            }),
+        )
+        .unwrap();
+        std::fs::read_to_string(&path).unwrap()
+    };
+    // Dotted keys between two other settings.
+    let text = "version = 2\n# before\npolicy.prod.read_only = true # never write\npolicy.prod.badge = \"PROD\"\n\
+                policy.dev.color = \"green\"\npage_size = 300 # after\n";
+    std::fs::write(&path, text).unwrap();
+    let (cfg, err) = load(Some(path.clone()));
+    assert!(err.is_none(), "{err:?}");
+    assert_eq!(save_envs(cfg.policies.environments()), text, "unchanged: not a byte");
+    let mut envs = cfg.policies.environments().to_vec();
+    envs[1].color = Some("teal".into());
+    let out = save_envs(&envs);
+    assert_eq!(
+        out,
+        "version = 2\n# before\npolicy.prod.read_only = true # never write\npolicy.prod.badge = \"PROD\"\n\
+         policy.dev.color = \"teal\"\npage_size = 300 # after\n",
+        "only that value, in its place"
+    );
+    let (back, err) = load(Some(path.clone()));
+    assert!(err.is_none(), "{err:?}");
+    assert_eq!(back.policies.environments()[1].color.as_deref(), Some("teal"));
+    // An inline table between two other settings.
+    let text = "version = 2\n# before\npolicy = { prod = { read_only = true, badge = \"PROD\" }, dev = { color = \"green\" } }\n\
+                page_size = 300 # after\n";
+    std::fs::write(&path, text).unwrap();
+    let (cfg, err) = load(Some(path.clone()));
+    assert!(err.is_none(), "{err:?}");
+    assert_eq!(save_envs(cfg.policies.environments()), text, "unchanged: not a byte");
+    let mut envs = cfg.policies.environments().to_vec();
+    envs[1].color = Some("teal".into());
+    let out = save_envs(&envs);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 4, "{out}");
+    assert_eq!((lines[0], lines[1], lines[3]), ("version = 2", "# before", "page_size = 300 # after"), "{out}");
+    assert!(lines[2].starts_with("policy = { prod = { read_only = true, badge = \"PROD\" }, dev = {"), "{out}");
+    assert!(lines[2].contains("teal"), "{out}");
+    let (back, err) = load(Some(path.clone()));
+    assert!(err.is_none(), "{err:?}");
+    let names: Vec<&str> = back.policies.environments().iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, ["prod", "dev"]);
+    assert_eq!(back.policies.environments()[1].color.as_deref(), Some("teal"));
+    // Renamed and one more: the inline table stays in its place, the renamed one at its place.
+    let mut envs = back.policies.environments().to_vec();
+    envs[0].name = "production".into();
+    envs.push(crate::policy::Environment::new("qa", crate::policy::Policy::default()));
+    let out = save_envs(&envs);
+    assert_eq!(
+        out,
+        "version = 2\n# before\npolicy = { production = { read_only = true, badge = \"PROD\" }, \
+         dev = { color = \"teal\" }, qa = {} }\npage_size = 300 # after\n"
+    );
+    let (back, err) = load(Some(path.clone()));
+    assert!(err.is_none(), "{err:?}: {out}");
+    let names: Vec<&str> = back.policies.environments().iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, ["production", "dev", "qa"], "{out}");
+}
+
+/// The default rules go to `[policy.default]` only where they changed: the table is made once a
+/// rule differs from the built-in default, an untouched table is not touched, and the `color`
+/// and `badge` a hand-written one has stay.
+#[test]
+fn the_default_rules_are_written_only_where_they_changed() {
+    use crate::policy::{Confirm, Policy};
+    let path = temp_file("default-rules");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let save_rules = |rules: &Policy| {
+        save(
+            &path,
+            Settings { version: 2, ..settings("en") },
+            Some(Profiles {
+                connections: &[],
+                tunnels: &[],
+                environments: Some(&[]),
+                default_rules: Some(rules),
+                folders: &Folders::default(),
+                last_used: None,
+            }),
+        )
+        .unwrap();
+        std::fs::read_to_string(&path).unwrap()
+    };
+    std::fs::write(&path, "version = 2\n").unwrap();
+    assert_eq!(save_rules(&Policy::default()), "version = 2\n", "the built-in default: no table");
+    let writes = Policy { confirm: Confirm::Writes, ..Policy::default() };
+    assert_eq!(save_rules(&writes), "version = 2\n\n[policy.default]\nconfirm = \"writes\"\n");
+    let text = "version = 2\n\n# mine\n[policy.default]\nbadge = \"X\" # not shown\npaging_idle_timeout = \"90s\"\n";
+    std::fs::write(&path, text).unwrap();
+    let (cfg, err) = load(Some(path.clone()));
+    assert!(err.is_none(), "{err:?}");
+    assert_eq!(save_rules(cfg.policies.default_rules()), text, "unchanged: not a byte");
+    let mut rules = cfg.policies.default_rules().clone();
+    rules.read_only = true;
+    assert_eq!(
+        save_rules(&rules),
+        "version = 2\n\n# mine\n[policy.default]\nbadge = \"X\" # not shown\npaging_idle_timeout = \"90s\"\nread_only = true\n"
+    );
 }

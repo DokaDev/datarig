@@ -3,8 +3,9 @@
 //! dev stay apart without a chip; the profile's name is on the editor's first line), muted while
 //! it is not (the normal idle state: sessions open lazily), and replaced by the status bar's
 //! spinner while a statement runs or waits. The document is a console's `console <n>`, a saved
-//! query's name or a table tab's `schema.table`, `*` marks a text that could not be saved, `RO`
-//! a read-only policy. A mark after it warns, by shape first ([`State`]): `◆` in the warning
+//! query's name or a table tab's `schema.table`, `*` marks a text that could not be saved, the
+//! environment's badge (`PROD`) follows as a chip of its color, and `RO` marks a read-only
+//! environment. A mark after it warns, by shape first ([`State`]): `◆` in the warning
 //! color while the user's transaction is open, `!` for a lost connection, a failed profile or
 //! an aborted transaction; a tab with nothing to warn about has no mark. `×` closes the tab as
 //! `Ctrl+W` does. A tab without a connection says so in the mark's place. When the tabs do not
@@ -136,7 +137,8 @@ pub(crate) fn number(app: &App, index: usize, tab: &Tab) -> (String, Color) {
 }
 
 /// The marks after a tab's name, each with a blank before it, on background `bg`: `*` (its
-/// text could not be saved), then on a profile `RO` and the warning mark of its session.
+/// text could not be saved), then on a profile its environment's badge, `RO` and the warning
+/// mark of its session.
 pub(crate) fn marks(app: &App, tab: &Tab, bg: Color) -> Vec<(String, Style)> {
     let th = theme::cur();
     let mark = |c: Color| Style::new().fg(c).bg(bg);
@@ -145,7 +147,14 @@ pub(crate) fn marks(app: &App, tab: &Tab, bg: Color) -> Vec<(String, Style)> {
         out.push((format!(" {UNSAVED}"), mark(th.warning)));
     }
     if let Some(p) = tab.profile.and_then(|id| app.profiles.iter().find(|p| p.id == id)) {
-        // A read-only policy, in words (policies have no color).
+        // The environment's badge, a chip of its color.
+        if let Some(e) = app.profile_environment(p.id)
+            && let Some(b) = &e.badge
+        {
+            out.push((" ".to_string(), mark(th.fg)));
+            out.push((format!(" {b} "), theme::chip(App::badge_color(e))));
+        }
+        // A read-only environment, in words.
         if app.read_only(p.id) {
             let ro = Style::new().fg(th.fg).bg(bg).add_modifier(Modifier::BOLD);
             out.push((format!(" {}", app.i18n.label(Label::TabReadOnly)), ro));

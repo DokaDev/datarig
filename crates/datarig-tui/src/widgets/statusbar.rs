@@ -19,6 +19,33 @@ pub(crate) fn level_color(l: Level) -> ratatui::style::Color {
     }
 }
 
+/// Profile `id`'s environment after its name, on background `bg`: its badge as a chip of its
+/// color, else ` · <name>` in its color, or the name marked as not defined in the error color;
+/// nothing for the default rules.
+pub(crate) fn environment_parts(
+    app: &App,
+    id: datarig_core::profile::ProfileId,
+    bg: ratatui::style::Color,
+) -> Vec<(String, Style)> {
+    let th = theme::cur();
+    let Some(name) = app.environment_name(id) else { return Vec::new() };
+    match app.profile_environment(id) {
+        Some(e) => match &e.badge {
+            Some(b) => {
+                vec![(" ".to_string(), Style::new().bg(bg)), (format!(" {b} "), theme::chip(App::badge_color(e)))]
+            }
+            None => {
+                let color = e.display_color().map_or(th.fg_muted, theme::profile_color);
+                vec![(format!(" · {name}"), Style::new().fg(color).bg(bg).add_modifier(Modifier::BOLD))]
+            }
+        },
+        None => {
+            let missing = app.i18n.msg(&Msg::FormEnvMissing { name });
+            vec![(format!(" · {missing}"), Style::new().fg(th.error).bg(bg).add_modifier(Modifier::BOLD))]
+        }
+    }
+}
+
 pub(crate) fn draw_status(app: &mut App, area: Rect, buf: &mut Buffer) {
     let th = theme::cur();
     let bar = Style::new().bg(th.surface).fg(th.fg);
@@ -27,12 +54,11 @@ pub(crate) fn draw_status(app: &mut App, area: Rect, buf: &mut Buffer) {
     let sep = " │ ";
     let sep_style = Style::new().fg(th.border).bg(th.surface);
 
-    // The connection's name in its color and its policy, as plain text.
-    let conn = app.conn().map(|c| {
-        let policy = app.i18n.msg(&Msg::StatusPolicy { name: c.policy.clone().unwrap_or_else(|| "default".into()) });
-        (c.name.clone(), theme::profile_color(c.display_color()), policy.to_string())
-    });
-    // A read-only policy: a badge in words, in neutral colors.
+    // The connection's name in its color and its environment (its badge, else its name).
+    let conn = app
+        .conn()
+        .map(|c| (c.name.clone(), theme::profile_color(c.display_color()), environment_parts(app, c.id, th.surface)));
+    // A read-only environment: a badge in words, in neutral colors.
     let read_only = app.conn().is_some_and(|c| app.read_only(c.id)).then(|| app.i18n.label(Label::StatusReadOnly));
     let exec = &app.tab().exec;
     let tx = exec.user_tx().then(|| {
@@ -76,12 +102,12 @@ pub(crate) fn draw_status(app: &mut App, area: Rect, buf: &mut Buffer) {
         segs.push((format!(" {zoom} "), Style::new().fg(th.mode_fg).bg(th.accent).add_modifier(Modifier::BOLD)));
     }
     let push_sep = |segs: &mut Vec<(String, Style)>| segs.push((sep.to_string(), sep_style));
-    let (mut name_seg, mut policy_seg) = (None, None);
-    if let Some((name, color, policy)) = conn {
+    let (mut name_seg, mut env_segs) = (None, None);
+    if let Some((name, color, env)) = conn {
         name_seg = Some(segs.len());
         segs.push((format!(" {name}"), Style::new().fg(color).bg(th.surface).add_modifier(Modifier::BOLD)));
-        policy_seg = Some(segs.len());
-        segs.push((format!(" · {policy}"), Style::new().fg(th.fg_muted).bg(th.surface)));
+        env_segs = Some(segs.len()..segs.len() + env.len());
+        segs.extend(env);
     }
     if let Some(ro) = read_only {
         segs.push((" ".to_string(), Style::new().bg(th.surface)));
@@ -109,13 +135,14 @@ pub(crate) fn draw_status(app: &mut App, area: Rect, buf: &mut Buffer) {
     let lead = if segs.is_empty() { " " } else { sep };
     let fixed =
         |segs: &[(String, Style)]| segs.iter().map(|(s, _)| width(s)).sum::<usize>() + width(&lang) + width(lead);
-    // A message too long for its room takes the policy's (the badge still says read-only), then
+    // A message too long for its room takes the environment's (the badge still says
+    // read-only), then
     // what it needs of the connection's name, which keeps its first [`NAME_MIN`] columns: the
     // message is cut only when that is not enough.
-    if let Some(i) = policy_seg
+    if let Some(r) = env_segs
         && total.saturating_sub(fixed(&segs)) < msg_w
     {
-        segs.remove(i);
+        segs.drain(r);
     }
     let over = msg_w.saturating_sub(total.saturating_sub(fixed(&segs)));
     if let Some(i) = name_seg

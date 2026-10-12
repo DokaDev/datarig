@@ -4,7 +4,7 @@ expression: "h.draw(w, hh).backend()"
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×                                          "
 "│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
-"│      ▾ Tables        ││ local-pg / datarig  127.0.0.1:55432 · policy: default│"
+"│      ▾ Tables        ││ local-pg / datarig  127.0.0.1:55432                  │"
 "│        ▾ users       ││  1 -- datarig 🐘  Ctrl+E: run the statement under the│" Hidden by multi-width symbols: [(41, " ")]
 "│            PK id  bi…││  2▎SELECT * FROM shop.users WHERE id <= 8;           │"
 "│            UQ email …││  3                                                   │"
@@ -25,4 +25,4 @@ expression: "h.draw(w, hh).backend()"
 "│        ▸ order_summa…││                                                      │"
 "│        ▸ zz_mv       ││                                                      │"
 "╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
-" NORMAL  local-pg · policy: default │ zz_mv  ~950 rows · ~16 KB              EN "
+" NORMAL  local-pg │ zz_mv  ~950 rows · ~16 KB   │ Enter open · Tab next pane EN "

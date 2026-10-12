@@ -344,6 +344,36 @@ impl App {
         if matches!(row, R::TunnelUser(..)) {
             return a == Action::Explorer(ExplorerAction::Activate);
         }
+        // A profile listed under an environment or the default rules: the same.
+        if matches!(row, R::EnvironmentUser(..) | R::DefaultRulesUser(_)) {
+            return a == Action::Explorer(ExplorerAction::Activate);
+        }
+        // The "Environments" section: a new environment, and an environment's edit, copy,
+        // rename and delete; the presets' row adds them.
+        let env = matches!(row, R::Environment(_));
+        // The default rules: edited only.
+        if *row == R::DefaultRules {
+            return match a {
+                Action::NewProfile | Action::NewEnvironment | Action::EditProfile => true,
+                Action::Explorer(ExplorerAction::Activate) => {
+                    self.explorer_arrow(&explorer::Row { kind: row.clone(), depth: 1 }).is_some()
+                }
+                _ => false,
+            };
+        }
+        if env || matches!(row, R::EnvironmentsHeader | R::EnvironmentPresets) {
+            return match a {
+                Action::NewProfile | Action::NewEnvironment => true,
+                Action::Explorer(ExplorerAction::Activate) => {
+                    !env || self.explorer_arrow(&explorer::Row { kind: row.clone(), depth: 1 }).is_some()
+                }
+                Action::EditProfile
+                | Action::DuplicateProfile
+                | Action::Explorer(ExplorerAction::Rename)
+                | Action::Explorer(ExplorerAction::Delete) => env,
+                _ => false,
+            };
+        }
         let tunnels = preset || matches!(row, R::TunnelsHeader | R::TunnelsEmpty);
         // The "Tunnels" section: a new preset, and a preset's edit, copy, delete and test.
         if tunnels {
@@ -455,6 +485,16 @@ impl App {
             (Action::Explorer(ExplorerAction::Delete), R::Tunnel(_) | R::TunnelError(_) | R::TunnelUser(..)) => {
                 Label::MenuDeleteTunnel
             }
+            (Action::EditProfile, R::DefaultRules) => Label::MenuEditDefaultRules,
+            (
+                Action::NewProfile,
+                R::EnvironmentsHeader | R::EnvironmentPresets | R::Environment(_) | R::DefaultRules,
+            ) => Label::MenuNewEnvironment,
+            (Action::EditProfile, R::Environment(_)) => Label::MenuEditEnvironment,
+            (Action::DuplicateProfile, R::Environment(_)) => Label::MenuDuplicateEnvironment,
+            (Action::Explorer(ExplorerAction::Rename), R::Environment(_)) => Label::MenuRenameEnvironment,
+            (Action::Explorer(ExplorerAction::Delete), R::Environment(_)) => Label::MenuDeleteEnvironment,
+            (Action::Explorer(ExplorerAction::Activate), R::EnvironmentPresets) => Label::MenuAddEnvironmentPresets,
             _ => return None,
         };
         Some(self.i18n.label(label))

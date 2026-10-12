@@ -1,0 +1,28 @@
+---
+source: crates/datarig-tui/tests/flows_environments.rs
+expression: backend
+---
+"╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
+"│  ＋ New connection   ││                                                      │" Hidden by multi-width symbols: [(4, " ")]
+"│▸╭ Edit connection — local-pg ──────────────────────────────────────────────╮ │"
+"│▸│  Basic   SSH   Advanced                            Ctrl+N/Ctrl+P section │ │"
+"│▸│                                                                          │ │"
+"│▾│ SSL mode          ‹ disable ›  ←/→ change                                │ │"
+"│ │ Statement cache   ‹ on ›  ←/→ change · off behind PgBouncer in transact… │ │"
+"│▾│ Environment       ● prod  PROD  ▾   Enter list · read-only · confirm al… │ │"
+"│ │ Color             ‹ ● auto (from the name) ›  ←/→ change · Enter list    │ │"
+"│ │ Icon              ‹ the driver's icon ›  ←/→ change · Enter list         │ │"
+"│ │ Folder            ‹ (top level) ›  ←/→ change · Enter list               │ │"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ │                    Test    Save    Cancel                                │ │"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ ╰─ Tab/↑↓ move · Ctrl+N/P section · Ctrl+T test · Ctrl+S save · Esc cancel ╯ │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" Added the environments dev, test, staging, prod                             EN "

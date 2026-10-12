@@ -32,6 +32,12 @@ fn rows(a: &App) -> Vec<String> {
                 RowKind::TunnelError(_) => "!".to_string(),
                 RowKind::TunnelUser(_, id) => format!("@{}", a.profile(id).unwrap().name),
                 RowKind::TunnelsEmpty => "(no tunnels)".to_string(),
+                RowKind::EnvironmentsHeader => "[environments]".to_string(),
+                RowKind::Environment(id) => format!("%{}", a.environment(id).unwrap().name),
+                RowKind::EnvironmentUser(_, id) => format!("@{}", a.profile(id).unwrap().name),
+                RowKind::EnvironmentPresets => "(add presets)".to_string(),
+                RowKind::DefaultRules => "(default rules)".to_string(),
+                RowKind::DefaultRulesUser(id) => format!("@{}", a.profile(id).unwrap().name),
             };
             format!("{}{t}", "  ".repeat(r.depth))
         })

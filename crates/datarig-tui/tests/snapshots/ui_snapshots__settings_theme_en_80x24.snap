@@ -25,4 +25,4 @@ expression: backend
 "│ │ Secrets                                                                  │ │"
 "│ ╰─────────────────────────────────────── j/k move · h/l change · Esc close ╯ │"
 "╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
-" NORMAL  local-pg · policy: default │ Connected to local-pg                  EN "
+" NORMAL  local-pg │ Connected to local-pg                                    EN "

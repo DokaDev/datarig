@@ -7,6 +7,7 @@
 pub mod color;
 pub mod dsn;
 pub mod folder;
+pub mod name;
 pub mod ssh;
 pub mod tunnel;
 
@@ -127,7 +128,8 @@ pub struct ConnectionConfig {
     /// Name of a curated icon (the TUI's table); `None` or an unknown name: the driver's icon.
     #[serde(default)]
     pub icon: Option<String>,
-    /// Safety policy name. Read, kept and shown only (policies arrive later).
+    /// The environment's name (`[policy.<name>]`, see [`crate::policy`]); `None`: the default
+    /// rules. A name no environment has is an error of the profile: it does not connect.
     #[serde(default)]
     pub policy: Option<String>,
     /// Where the password comes from; `None` is the keychain. See [`Self::source`].

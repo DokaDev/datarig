@@ -4,7 +4,7 @@ expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×                                          "
 "│ ╭ Keys — Explorer ─────────────────────────────────────────────────────────╮─╮"
-"│▾│ / search all keys · Esc close                                            │t│"
+"│▾│ / search all keys · Esc close                                            │ │"
 "│ │──────────────────────────────────────────────────────────────────────────│e│"
 "│ │ ▾ Explorer                                                               │ │"
 "│ │   Explorer: next item                     j / Down                       │ │"
@@ -25,4 +25,4 @@ expression: backend
 "│ │   New console on this connection          o                              │ │"
 "│ ╰─────────────────── ↑↓ move · Enter run/open · l/h open/close · Esc close ╯ │"
 "╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
-" NORMAL  local-pg · policy: default │ Connected to local-pg                  EN "
+" NORMAL  local-pg │ Connected to local-pg                                    EN "

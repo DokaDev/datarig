@@ -126,6 +126,8 @@ pub enum Action {
     PickKeyFile,
     /// A new tunnel preset (the tunnel form).
     NewTunnel,
+    /// A new environment (the environment form).
+    NewEnvironment,
     /// The profile form: its own tunnel becomes a tunnel preset when the form is saved.
     SaveAsTunnel,
     /// The settings screen.
@@ -336,9 +338,13 @@ fn explorer_profile(a: &App) -> bool {
     explorer_focused(a) && a.selected_profile().is_some()
 }
 
-/// The explorer has the focus and its cursor is on a profile or a tunnel preset.
+/// The explorer has the focus and its cursor is on a profile, a tunnel preset or an environment.
 fn explorer_profile_or_tunnel(a: &App) -> bool {
-    explorer_focused(a) && (a.selected_profile().is_some() || a.selected_tunnel().is_some())
+    explorer_focused(a)
+        && (a.selected_profile().is_some()
+            || a.selected_tunnel().is_some()
+            || a.selected_environment().is_some()
+            || a.default_rules_selected())
 }
 
 /// There is a profile to act on (the explorer's selection, else the active tab's), or the
@@ -358,6 +364,11 @@ fn own_tunnel_field(a: &App) -> bool {
 /// Tunnel presets can be made: the config file can be written.
 fn presets_writable(a: &App) -> bool {
     a.tunnels_shown()
+}
+
+/// Environments can be made: the config file can be written.
+fn environments_writable(a: &App) -> bool {
+    a.environments_shown() && a.config_writable()
 }
 
 /// Saved queries can be kept (there is a data directory).
@@ -506,6 +517,7 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::EditProfile, "conn.edit", Label::ActionConnEdit, explorer_profile_or_tunnel),
     act(Action::DuplicateProfile, "conn.duplicate", Label::ActionConnDuplicate, explorer_profile_or_tunnel),
     act(Action::NewTunnel, "tunnel.new", Label::ActionTunnelNew, presets_writable),
+    act(Action::NewEnvironment, "env.new", Label::ActionEnvNew, environments_writable),
     act(Action::TestConnection, "conn.test", Label::ActionConnTest, action_profile),
     act(Action::Disconnect, "conn.disconnect", Label::ActionConnDisconnect, explorer_profile),
     act(Action::OpenConsole, "conn.open_console", Label::ActionConnOpenConsole, explorer_profile),

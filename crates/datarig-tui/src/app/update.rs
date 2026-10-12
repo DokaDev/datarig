@@ -301,6 +301,7 @@ impl App {
             FormOutcome::Save => self.save_form(),
             FormOutcome::Test => self.test_in_context(None),
             FormOutcome::Choose(profiles::Field::SshEnabled) => self.open_tunnel_picker(),
+            FormOutcome::Choose(profiles::Field::Environment) => self.open_environment_picker(),
             FormOutcome::Choose(f) => self.open_form_chooser(f),
             FormOutcome::Cancel => {
                 if !self.close_form(None) {

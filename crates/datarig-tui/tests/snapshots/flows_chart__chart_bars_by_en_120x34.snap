@@ -4,7 +4,7 @@ expression: "h.draw(120, 34).backend()"
 ---
 "╭ Explorer ──────────────────╮ 1 console 1 ×                                                                            "
 "│  ＋ New connection         │╭ Query · console 1 ─────────────────────────────────────────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾ ●   local-pg              ││ local-pg / datarig  127.0.0.1:55432 · policy: default      Space c s switch connection │"
+"│▾ ●   local-pg              ││ local-pg / datarig  127.0.0.1:55432                        Space c s switch connection │"
 "│  ▾ datarig default         ││  1 -- datarig 🐘  Ctrl+E: run the statement under the cursor                           │" Hidden by multi-width symbols: [(47, " ")]
 "│    ▸ analytics             ││  2▎SELECT * FROM shop.users WHERE id <= 8;                                             │"
 "│    ▸ public                ││  3                                                                                     │"
@@ -35,4 +35,4 @@ expression: "h.draw(120, 34).backend()"
 "│                            ││ ■ north  ■ south  ■ east                                                               │"
 "│                            ││ ▸ 2026-10-01 · north 1 · south 4 · east 7 · row 1                                      │"
 "╰────────────────────────────╯╰────────────────────────────────────────────────────────────────────────────────────────╯"
-" NORMAL  local-pg · policy: default │ 12 rows · 3ms         │ v kind · x X · s values · y copy · c rows · : commands EN "
+" NORMAL  local-pg │ 12 rows · 3ms    │ v kind · x X · s values · y copy · c rows · : commands · F1 help · Space more EN "

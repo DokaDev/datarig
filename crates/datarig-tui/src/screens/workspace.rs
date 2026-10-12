@@ -576,7 +576,8 @@ fn name_style(p: &datarig_core::profile::ConnectionConfig, bg: ratatui::style::C
 }
 
 /// The first line of the editor of a tab with a connection: the profile (its icon and name in
-/// its color), where it points, its policy (and read-only), and the key that switches the
+/// its color), where it points, its environment (its badge, else its name; and read-only), and
+/// the key that switches the
 /// tab to another connection.
 fn draw_connection_bar(app: &App, area: Rect, buf: &mut Buffer) {
     let th = theme::cur();
@@ -608,7 +609,6 @@ fn draw_connection_bar(app: &App, area: Rect, buf: &mut Buffer) {
             if missing { Style::new().fg(th.warning).bg(bg).add_modifier(Modifier::BOLD) } else { name_style(p, bg) };
         (format!(" / {s}{}", if missing { "?" } else { "" }), style)
     });
-    let policy = app.i18n.msg(&Msg::StatusPolicy { name: p.policy.clone().unwrap_or_else(|| "default".into()) });
     let name = name_style(p, bg);
     let muted = Style::new().fg(th.fg_muted).bg(bg);
     let mut parts: Vec<(String, Style)> = Vec::new();
@@ -618,7 +618,7 @@ fn draw_connection_bar(app: &App, area: Rect, buf: &mut Buffer) {
     parts.push((place, name));
     parts.extend(schema);
     parts.push((format!("  {endpoint}"), muted));
-    parts.push((format!(" · {policy}"), muted));
+    parts.extend(crate::widgets::statusbar::environment_parts(app, p.id, bg));
     if app.read_only(p.id) {
         let ro = Style::new().fg(th.fg).bg(th.surface_alt).add_modifier(Modifier::BOLD);
         parts.push((" ".to_string(), muted));
@@ -637,7 +637,7 @@ fn draw_connection_bar(app: &App, area: Rect, buf: &mut Buffer) {
     let width_of = |parts: &[(String, Style)]| parts.iter().map(|(t, _)| crate::text::width(t)).sum::<usize>();
     let left_w = width_of(&parts);
     let left_room = if left_w as u16 + right + 2 <= room { room - right - 1 } else { room };
-    // Too narrow for all of it: the policy's name goes first, then the endpoint, so where the
+    // Too narrow for all of it: the environment's name goes first, then the endpoint, so where the
     // tab works and the read-only badge stay (the place grew a database and schema).
     let optional = |t: &str| t.starts_with(" · ") || t.starts_with("  ");
     while width_of(&parts) > left_room as usize {
@@ -661,7 +661,7 @@ fn draw_connection_bar(app: &App, area: Rect, buf: &mut Buffer) {
 /// `Results · rows 501–1,000` ─── `‹ (page 2 / ? · 23s) ›`. The page and the pages
 /// (`?` until the result is complete or counted), then the state of the result's portal: the
 /// countdown to its idle close, `in tx` inside the user's transaction (never closed for being
-/// idle), `paging` when the policy never closes it, `paging closed`, `fetching stopped`,
+/// idle), `paging` when the environment never closes it, `paging closed`, `fetching stopped`,
 /// `counting…`, and the count once known. `‹` and `›` (Nerd Font carets with icons on) are the
 /// previous and next page for the mouse. A complete result of one page shows nothing there.
 /// Returns the title, and the texts of the right side from the longest to the shortest (the

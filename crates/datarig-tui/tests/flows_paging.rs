@@ -935,7 +935,7 @@ fn a_result_not_held_that_is_not_run_again_shows_its_first_page_only() {
         status.contains("First 500 rows only: the statement stopped after its first page")
             && status.contains("nothing is held open on the server")
             && status.contains("it calls random")
-            && status.contains("LIMIT/OFFSET, or set paging = \"hold\" in the profile's policy"),
+            && status.contains("LIMIT/OFFSET, or set paging = \"hold\" in the profile's environment"),
         "{status}"
     );
     assert!(

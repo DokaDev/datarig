@@ -65,10 +65,15 @@ impl App {
             Action::Suspend => self.request_suspend(),
             Action::FormatSql => self.format_sql(),
             Action::ToggleComment => self.toggle_comment(),
-            // In the "Tunnels" section: a new preset.
+            // In the "Tunnels" section: a new preset; in the "Environments" section: a new
+            // environment.
             Action::NewProfile if self.focus == Focus::Tree && self.in_tunnels_section() => {
                 self.open_tunnel_form(None, false)
             }
+            Action::NewProfile if self.focus == Focus::Tree && self.in_environments_section() => {
+                self.open_environment_form(None, false)
+            }
+            Action::NewEnvironment => self.open_environment_form(None, false),
             Action::NewProfile => self.open_form(None, false),
             Action::NewTunnel => self.open_tunnel_form(None, false),
             Action::SaveAsTunnel => self.open_save_as_tunnel(),
@@ -86,6 +91,11 @@ impl App {
             Action::QuickConnect => self.open_quick(QuickPurpose::Open),
             Action::EditProfile | Action::DuplicateProfile if self.selected_tunnel().is_some() => {
                 self.open_tunnel_form(self.selected_tunnel(), a == Action::DuplicateProfile)
+            }
+            Action::EditProfile if self.default_rules_selected() => self.open_default_rules_form(),
+            Action::DuplicateProfile if self.default_rules_selected() => self.default_rules_fixed(),
+            Action::EditProfile | Action::DuplicateProfile if self.selected_environment().is_some() => {
+                self.open_environment_form(self.selected_environment(), a == Action::DuplicateProfile)
             }
             Action::EditProfile | Action::DuplicateProfile => {
                 let i = self.selected_profile().and_then(|id| self.profiles.iter().position(|p| p.id == id));
@@ -375,6 +385,7 @@ impl App {
                     ConfirmAction::OverwriteScript => self.overwrite_confirmed(),
                     ConfirmAction::TrustHostKey => self.host_key_answered(true),
                     ConfirmAction::DeleteTunnel(id) => self.delete_tunnel(id),
+                    ConfirmAction::DeleteEnvironment(id) => self.delete_environment(id),
                     ConfirmAction::ExplainAgain => self.explain_as_plan_confirmed(),
                 }
             }
@@ -517,6 +528,8 @@ impl App {
         let profiles = Profiles {
             connections: &self.profiles,
             tunnels: &self.presets,
+            environments: Some(self.policies.environments()),
+            default_rules: Some(self.policies.default_rules()),
             folders: &self.folders,
             last_used: self.last_used,
         };
@@ -531,6 +544,9 @@ impl App {
         config::save(&path, settings, Some(profiles))?;
         for p in &mut self.profiles {
             p.origin = Some(p.name.clone());
+        }
+        for e in self.policies.environments_mut() {
+            e.origin = Some(e.name.clone());
         }
         Ok(None)
     }

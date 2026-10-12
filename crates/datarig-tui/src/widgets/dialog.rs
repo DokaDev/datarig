@@ -143,7 +143,7 @@ pub(crate) fn draw_confirm(app: &mut App, area: Rect, buf: &mut Buffer) {
 }
 
 /// The run confirmation: the connection (its name in its color) and its
-/// policy, each statement that asks with why, its target and its first line, then the buttons,
+/// environment, each statement that asks with why, its target and its first line, then the buttons,
 /// Cancel first. As many statements as fit are listed; the rest are counted.
 pub(crate) fn draw_run_confirm(app: &mut App, area: Rect, buf: &mut Buffer) {
     let th = theme::cur();
@@ -189,19 +189,16 @@ pub(crate) fn draw_run_confirm(app: &mut App, area: Rect, buf: &mut Buffer) {
             cx += put(buf, cx, y, text, (end - cx) as usize, *style) as u16;
         }
     };
-    // The connection: its name in its color and its policy, and whether it is
+    // The connection: its name in its color and its environment, and whether it is
     // read-only.
     if let Some(p) = app.profile(c.profile) {
         let color = theme::profile_color(p.display_color());
-        let (policy, values) = app.policy_of(c.profile);
-        let mut parts = vec![
-            (
-                format!("{} {}", crate::widgets::explorer::CONNECTED, p.name),
-                surface(color).add_modifier(Modifier::BOLD),
-            ),
-            (format!(" · {}", app.i18n.msg(&Msg::StatusPolicy { name: policy })), surface(th.fg_muted)),
-        ];
-        if values.read_only {
+        let mut parts = vec![(
+            format!("{} {}", crate::widgets::explorer::CONNECTED, p.name),
+            surface(color).add_modifier(Modifier::BOLD),
+        )];
+        parts.extend(crate::widgets::statusbar::environment_parts(app, c.profile, th.surface));
+        if app.read_only(c.profile) {
             let ro = app.i18n.label(Label::StatusReadOnly);
             parts.push((format!("  {ro}"), surface(th.fg).add_modifier(Modifier::BOLD)));
         }

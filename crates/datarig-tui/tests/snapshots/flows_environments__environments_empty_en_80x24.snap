@@ -1,0 +1,28 @@
+---
+source: crates/datarig-tui/tests/flows_environments.rs
+expression: backend
+---
+"╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
+"│  ＋ New connection   ││                                                      │" Hidden by multi-width symbols: [(4, " ")]
+"│▸ ○   local-pg ENV    ││  No open tabs                                        │"
+"│▸ ○   v6              ││  Pick a connection in the explorer, or press         │"
+"│▸ ○   分析-replica    ││  Ctrl+O.                                             │" Hidden by multi-width symbols: [(8, " "), (10, " ")]
+"│▾ Tunnels 0           ││                                                      │"
+"│    n here makes an S…││  Enter      Connect and open a console               │"
+"│▾ Environments 0      ││  Ctrl+O     Quick connect                            │"
+"│  ▸ ○ Default rules (…││  Ctrl+T     New console tab                          │"
+"│    ＋ Add presets: d…││  Space t u  Reopen a closed tab                      │" Hidden by multi-width symbols: [(6, " ")]
+"│                      ││  n          New connection                           │"
+"│                      ││  F1         Keyboard help                            │"
+"│                      ││  :          Commands                                 │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+"                   │ Enter open · : commands · F1 help · q quit · Space more EN "

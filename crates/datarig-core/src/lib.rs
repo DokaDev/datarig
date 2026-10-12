@@ -6,7 +6,7 @@
 //! * [`secret`] — password sources (OS keychain, secrets file, command, env, prompt), the
 //!   in-memory store, the session cache and the deletion log.
 //! * [`config`] — config file loading and format-preserving saving.
-//! * [`policy`] — safety policies (`[policy.<name>]`) that profiles name.
+//! * [`policy`] — environments (`[policy.<name>]`): the safety rules, color and badge profiles name.
 //! * [`migrate`] — the launch-time config v2 / keychain migration.
 //! * [`paths`] — the data and state directories; [`fsutil`] — atomic file writes.
 //! * [`scripts`] — saved queries and their index; [`workspace`] — tab restore and the instance

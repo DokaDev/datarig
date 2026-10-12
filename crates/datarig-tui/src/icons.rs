@@ -86,6 +86,15 @@ pub fn tunnel(on: bool) -> &'static str {
     if on { TUNNEL } else { "SSH" }
 }
 
+/// Environments (nf-fa-tag): the head of the explorer's section, and a profile whose
+/// environment is not defined.
+pub const ENVIRONMENT: &str = "\u{f02b}";
+
+/// The environment mark: the glyph, or `ENV` with icons off (never an emoji).
+pub fn environment(on: bool) -> &'static str {
+    if on { ENVIRONMENT } else { "ENV" }
+}
+
 /// A warning (nf-fa-warning): a lost connection, a read-only workspace, a tab without a
 /// connection. `!` with icons off (never an emoji).
 pub const WARNING: &str = "\u{f071}";

@@ -4,7 +4,9 @@
 //! profile keys (connect, new console, edit, duplicate, delete, test, disconnect) work here.
 //! Below the profiles, the "Tunnels" section lists the tunnel presets, each with the state of
 //! its shared connection and, opened, the profiles that name it; the same keys make, edit,
-//! copy, delete and test them.
+//! copy, delete and test them. The "Environments" section below it lists the environments, each
+//! with its color, badge and rules and, opened, the profiles that name it; the same keys make,
+//! edit, copy, rename and delete them, and while there is none a row adds the presets.
 //!
 //! The rows are built from the profiles, the folders and the connections whenever they are
 //! needed ([`App::explorer_rows`]). The cursor remembers its row, not its index, so it stays on
@@ -55,6 +57,18 @@ pub enum RowKind {
     TunnelUser(datarig_core::profile::tunnel::TunnelId, ProfileId),
     /// The section is open and has no preset: how to make one.
     TunnelsEmpty,
+    /// "Environments", the head of the environments' section.
+    EnvironmentsHeader,
+    /// The default rules (no environment), first in the section.
+    DefaultRules,
+    /// An environment.
+    Environment(datarig_core::policy::EnvironmentId),
+    /// A profile that names the environment, under it (opened).
+    EnvironmentUser(datarig_core::policy::EnvironmentId, ProfileId),
+    /// A profile without an environment, under the default rules (opened).
+    DefaultRulesUser(ProfileId),
+    /// The section is open and has no environment: `Enter` adds the presets.
+    EnvironmentPresets,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -165,8 +179,51 @@ impl App {
         let mut rows = vec![Row { kind: RowKind::NewConnection, depth: 0 }];
         self.push_level(None, 0, &mut rows);
         self.push_tunnels(&mut rows);
+        self.push_environments(&mut rows);
         self.push_scripts(&mut rows);
         rows
+    }
+
+    /// The "Environments" section: the head, then the environments in the file's order (with a
+    /// filter, the ones whose name or badge matches), each with, opened, its profiles; without
+    /// one, the row that adds the presets.
+    fn push_environments(&self, rows: &mut Vec<Row>) {
+        if !self.environments_shown() {
+            return;
+        }
+        let q = self.explorer.filter.text().trim().to_lowercase();
+        let filtering = !q.is_empty();
+        let matches = |e: &datarig_core::policy::Environment| {
+            [Some(&e.name), e.badge.as_ref()].into_iter().flatten().any(|t| t.to_lowercase().contains(&q))
+        };
+        let envs = self.environments();
+        if filtering && !envs.iter().any(matches) {
+            return;
+        }
+        rows.push(Row { kind: RowKind::EnvironmentsHeader, depth: 0 });
+        if !self.environments_expanded && !filtering {
+            return;
+        }
+        if !filtering {
+            rows.push(Row { kind: RowKind::DefaultRules, depth: 1 });
+            if self.default_rules_open {
+                for c in self.default_rules_users() {
+                    rows.push(Row { kind: RowKind::DefaultRulesUser(c.id), depth: 2 });
+                }
+            }
+        }
+        if envs.is_empty() {
+            rows.push(Row { kind: RowKind::EnvironmentPresets, depth: 1 });
+            return;
+        }
+        for e in envs.iter().filter(|e| !filtering || matches(e)) {
+            rows.push(Row { kind: RowKind::Environment(e.id), depth: 1 });
+            if self.environments_open.contains(&e.id) {
+                for c in self.environment_users(&e.name) {
+                    rows.push(Row { kind: RowKind::EnvironmentUser(e.id, c.id), depth: 2 });
+                }
+            }
+        }
     }
 
     /// The "Tunnels" section: the head, then the presets by name (with a filter, the ones whose
@@ -454,6 +511,12 @@ impl App {
                 .preset(*id)
                 .filter(|p| !self.preset_users(&p.name).is_empty())
                 .map(|_| self.tunnels_open.contains(id)),
+            RowKind::EnvironmentsHeader => Some(self.environments_expanded || self.filtering_on()),
+            RowKind::DefaultRules => (!self.default_rules_users().is_empty()).then_some(self.default_rules_open),
+            RowKind::Environment(id) => self
+                .environment(*id)
+                .filter(|e| !self.environment_users(&e.name).is_empty())
+                .map(|_| self.environments_open.contains(id)),
             _ => None,
         }
     }
@@ -562,12 +625,33 @@ impl App {
                     }
                 }
             }
+            RowKind::EnvironmentsHeader => {
+                self.environments_expanded = want.unwrap_or(!self.environments_expanded);
+            }
+            RowKind::DefaultRules => {
+                if self.row_expanded(row).is_some() {
+                    self.default_rules_open = want.unwrap_or(!self.default_rules_open);
+                }
+            }
+            RowKind::Environment(id) => {
+                let open = self.environments_open.contains(id);
+                if self.row_expanded(row).is_some() && want.unwrap_or(!open) != open {
+                    if open {
+                        self.environments_open.remove(id);
+                    } else {
+                        self.environments_open.insert(*id);
+                    }
+                }
+            }
             RowKind::NewConnection
             | RowKind::Script(_)
             | RowKind::ScriptsEmpty
             | RowKind::TunnelError(_)
             | RowKind::TunnelUser(..)
-            | RowKind::TunnelsEmpty => {}
+            | RowKind::TunnelsEmpty
+            | RowKind::EnvironmentUser(..)
+            | RowKind::DefaultRulesUser(_)
+            | RowKind::EnvironmentPresets => {}
         }
     }
 
@@ -666,6 +750,8 @@ impl App {
             ExplorerAction::Delete => match row.kind {
                 RowKind::Profile(id) => self.request_delete_profile(id),
                 RowKind::Tunnel(id) | RowKind::TunnelError(id) => self.request_delete_tunnel(id),
+                RowKind::Environment(id) => self.request_delete_environment(id),
+                RowKind::DefaultRules => self.default_rules_fixed(),
                 RowKind::Folder(f) => self.request_delete_folder(f),
                 RowKind::Script(p) => self.request_delete_script(p),
                 RowKind::ScriptFolder(p) => self.request_delete_script_folder(p),
@@ -774,10 +860,11 @@ impl App {
             }
             RowKind::ScriptsEmpty | RowKind::TunnelsEmpty | RowKind::TunnelError(_) => {}
             // The profile's own row, in the connections above.
-            RowKind::TunnelUser(_, id) => {
+            RowKind::TunnelUser(_, id) | RowKind::EnvironmentUser(_, id) | RowKind::DefaultRulesUser(id) => {
                 let id = *id;
                 self.reveal_profile(id);
             }
+            RowKind::EnvironmentPresets => self.add_environment_presets(),
             RowKind::Node(id, n) => {
                 let id = *id;
                 let Some(c) = self.conns.get_mut(id) else { return };

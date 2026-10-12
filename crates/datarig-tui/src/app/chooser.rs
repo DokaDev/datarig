@@ -98,6 +98,8 @@ impl App {
     pub(super) fn open_form_chooser(&mut self, f: Field) {
         let Some(form) = self.overlays.form() else { return };
         let (title, none) = match f {
+            // An environment without a color has none (not one from its name).
+            Field::Color if form.is_environment() => (Label::FormFieldColor, Label::ChooserColorNone),
             Field::Color => (Label::FormFieldColor, Label::ChooserColorAuto),
             Field::Icon => (Label::FormFieldIcon, Label::ChooserIconDriver),
             _ => (Label::FormFieldFolder, Label::ChooserFolderTop),
@@ -308,7 +310,8 @@ impl App {
         }));
     }
 
-    /// `R`: rename the selected folder; on a profile, its form (the name is there).
+    /// `R`: rename the selected folder; on a profile, a tunnel preset or an environment, its
+    /// form (the name is there).
     pub(super) fn open_rename(&mut self) {
         match self.explorer_row().map(|r| r.kind) {
             Some(explorer::RowKind::Folder(f)) => {
@@ -325,6 +328,8 @@ impl App {
                 self.open_form(i, false);
             }
             Some(explorer::RowKind::Tunnel(id)) => self.open_tunnel_form(Some(id), false),
+            Some(explorer::RowKind::Environment(id)) => self.open_environment_form(Some(id), false),
+            Some(explorer::RowKind::DefaultRules) => self.default_rules_fixed(),
             Some(explorer::RowKind::Script(p)) => self.open_rename_script(p, false),
             Some(explorer::RowKind::ScriptFolder(p)) => self.open_rename_script(p, true),
             _ => {}

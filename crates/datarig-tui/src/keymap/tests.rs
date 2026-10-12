@@ -121,6 +121,8 @@ fn default_table_is_conflict_free() {
         "secrets.default.prompt",
         // `n` in the explorer's "Tunnels" section makes one too.
         "tunnel.new",
+        // `n` in the explorer's "Environments" section makes one too.
+        "env.new",
         // The DDL tab's menu; `y` yanks a part of the text (to the clipboard by default).
         "ddl.copy",
     ];

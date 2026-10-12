@@ -247,10 +247,11 @@ fn tabs_are_named_by_their_document_with_the_connection_attached() {
     h.keys(" tu");
     let bar = h.screen(160, 45).lines().next().unwrap().to_string();
     assert!(bar.contains("console 2 ×"), "it comes back as it was: {bar}");
-    // The editor's first line: the connection, where it points, the policy, the switch key.
+    // The editor's first line: the connection, where it points (no environment: nothing
+    // after it), the switch key.
     let screen = h.screen(160, 45);
     let bar = screen.lines().nth(2).unwrap();
-    assert!(bar.contains("local-pg / datarig  127.0.0.1:55432 · policy: default"), "{bar}");
+    assert!(bar.contains("local-pg / datarig  127.0.0.1:55432 ") && !bar.contains(" · "), "{bar}");
     assert!(bar.contains("Space c s switch connection"), "{bar}");
     let mut ko = Harness::connected(Lang::Ko);
     let i18n = datarig_core::i18n::I18n::new(Lang::Ko);

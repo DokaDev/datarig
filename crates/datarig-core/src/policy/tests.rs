@@ -25,15 +25,82 @@ fn timeouts_parse_with_units_and_off() {
 }
 
 #[test]
-fn profiles_get_their_policy_or_default() {
+fn profiles_get_their_environment_or_the_default_rules() {
     let mut p = Policies::default();
-    assert_eq!(p.get(None).paging_idle_timeout, Some(PAGING_IDLE_TIMEOUT), "built-in default: 30s");
-    assert_eq!(p.get(Some("nope")).paging_idle_timeout, Some(PAGING_IDLE_TIMEOUT));
+    assert_eq!(p.get(None).unwrap().paging_idle_timeout, Some(PAGING_IDLE_TIMEOUT), "built-in default: 30s");
     p.insert("careful", Policy { paging_idle_timeout: Some(Duration::from_secs(10)), ..Policy::default() });
     p.insert("default", Policy { paging_idle_timeout: None, ..Policy::default() });
-    assert_eq!(p.get(Some("careful")).paging_idle_timeout, Some(Duration::from_secs(10)));
-    assert_eq!(p.get(None).paging_idle_timeout, None, "[policy.default] changes the default policy");
-    assert_eq!(p.get(Some("unknown")).paging_idle_timeout, None, "an unknown name gets default");
+    assert_eq!(p.get(Some("careful")).unwrap().paging_idle_timeout, Some(Duration::from_secs(10)));
+    assert_eq!(p.get(None).unwrap().paging_idle_timeout, None, "[policy.default] changes the default rules");
+    assert_eq!(p.get(Some("default")).unwrap().paging_idle_timeout, None, "named, the default rules too");
+    let names: Vec<&str> = p.environments().iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, ["careful"], "the default rules are no environment");
+}
+
+#[test]
+fn an_unknown_environment_is_an_error_never_the_default_rules() {
+    let mut p = Policies::default();
+    p.insert("default", Policy { read_only: true, ..Policy::default() });
+    assert_eq!(p.get(Some("prod")), Err(UnknownEnvironment("prod".into())));
+    assert_eq!(p.get(Some("Default")), Err(UnknownEnvironment("Default".into())), "names are exact");
+    p.insert("prod", Policy::default());
+    assert!(p.get(Some("prod")).is_ok());
+}
+
+#[test]
+fn badges() {
+    for ok in ["PROD", "STG", "dev", "12345678", "\u{c6b4}\u{c601}", "a b"] {
+        assert!(badge_ok(ok), "{ok:?}");
+    }
+    // Wide characters take two columns each: five of them are ten.
+    for bad in ["", " PROD", "PROD ", "123456789", "a\tb", "\u{c6b4}\u{c601}\u{c6b4}\u{c601}\u{c6b4}"] {
+        assert!(!badge_ok(bad), "{bad:?}");
+    }
+}
+
+#[test]
+fn the_presets() {
+    let p = presets();
+    let names: Vec<&str> = p.iter().map(|e| e.name.as_str()).collect();
+    assert_eq!(names, ["dev", "test", "staging", "prod"]);
+    let prod = &p[3];
+    assert!(prod.policy.read_only && prod.policy.confirm.writes());
+    assert_eq!((prod.color.as_deref(), prod.badge.as_deref()), (Some("red"), Some("PROD")));
+    assert_eq!(
+        (p[2].policy.read_only, p[2].policy.confirm, p[2].badge.as_deref()),
+        (false, Confirm::Writes, Some("STG"))
+    );
+    assert_eq!(
+        (p[0].policy.clone(), p[0].color.as_deref(), p[0].badge.clone()),
+        (Policy::default(), Some("green"), None)
+    );
+    assert_eq!(
+        (p[1].policy.clone(), p[1].color.as_deref(), p[1].badge.clone()),
+        (Policy::default(), Some("blue"), None)
+    );
+    assert!(p.iter().all(|e| e.display_color().is_some() && e.badge.as_deref().is_none_or(badge_ok)));
+    assert_ne!(p[0].id, presets()[0].id, "each its own id");
+}
+
+#[test]
+fn values_are_written_as_they_are_read() {
+    for (t, text) in [(Some(30), "30s"), (Some(300), "5m"), (Some(3600), "1h"), (Some(90), "90s"), (None, "off")] {
+        let d = t.map(Duration::from_secs);
+        assert_eq!(format_timeout(d), text);
+        assert_eq!(parse_timeout(&toml::Value::String(text.into())), Ok(d));
+    }
+    for (l, text) in [
+        (Some(1 << 30), "1GB"),
+        (Some(512 << 20), "512MB"),
+        (Some(64 << 10), "64KB"),
+        (Some(1000), "1000"),
+        (None, "off"),
+    ] {
+        assert_eq!(format_size(SpillLimit(l)), text);
+        assert_eq!(parse_size(&toml::Value::String(text.into())), Ok(SpillLimit(l)));
+    }
+    assert_eq!((paging_str(PagingMode::Hold), paging_str(PagingMode::NoHold)), ("hold", "no_hold"));
+    assert_eq!((Confirm::Writes.as_str(), Confirm::Destructive.as_str()), ("writes", "destructive"));
 }
 
 #[test]

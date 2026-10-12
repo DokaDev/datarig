@@ -39,8 +39,10 @@
 //! `password_source` (+ `password_command` / `password_env`), see [`crate::secret::source`].
 //! `[keymap.<context>]` tables remap keys; core reads them as plain strings and never
 //! rewrites them — the TUI validates the entries at startup.
-//! `[policy.<name>]` tables are the safety policies profiles name (see [`crate::policy`]);
-//! they are read only (saving keeps them as they are).
+//! `[policy.<name>]` tables are the environments profiles name, and `[policy.default]` the
+//! default rules (see [`crate::policy`]). Saving writes only what changed in an environment:
+//! an unchanged table, and an unchanged value, keep their text as they are; `[policy.default]`
+//! is written the same way, once the default rules were edited in the app.
 //! `[tunnels.<name>]` tables are the tunnel presets profiles name with `tunnel = "<name>"` (see
 //! [`crate::profile::tunnel`]); each has a stable `id`, assigned like a profile's.
 
@@ -110,7 +112,7 @@ struct FileConfig {
     tunnels: BTreeMap<String, TunnelSection>,
 }
 
-/// `[policy.<name>]`.
+/// `[policy.<name>]`: an environment (or the default rules).
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PolicySection {
@@ -124,6 +126,68 @@ struct PolicySection {
     read_only: Option<toml::Value>,
     #[serde(default)]
     confirm: Option<String>,
+    #[serde(default)]
+    color: Option<toml::Value>,
+    #[serde(default)]
+    badge: Option<toml::Value>,
+}
+
+impl PolicySection {
+    /// The items the table has, by key.
+    fn items(&self) -> Vec<(&'static str, toml::Value)> {
+        let s = |v: &Option<String>| v.clone().map(toml::Value::String);
+        [
+            ("paging", s(&self.paging)),
+            ("paging_idle_timeout", self.paging_idle_timeout.clone()),
+            ("spill_limit", self.spill_limit.clone()),
+            ("read_only", self.read_only.clone()),
+            ("confirm", s(&self.confirm)),
+            ("color", self.color.clone()),
+            ("badge", self.badge.clone()),
+        ]
+        .into_iter()
+        .filter_map(|(k, v)| v.map(|v| (k, v)))
+        .collect()
+    }
+}
+
+/// `spill_limit`'s literal values, for errors.
+const SIZES: &str = "1073741824, \"512MB\", \"2GB\", \"off\"";
+
+/// Item `key = v` of table `[policy.<name>]`, into `e`. A value the item does not take is a
+/// [`ConfigError::Value`] (the table's key in it).
+fn policy_item(name: &str, key: &str, v: &toml::Value, e: &mut policy::Environment) -> Result<(), ConfigError> {
+    let err = |shown: &dyn std::fmt::Display| bad(&format!("policy.{name}.{key}"), shown);
+    // A string is shown as written, another value as TOML has it.
+    let raw = v.as_str().map_or_else(|| v.to_string(), str::to_string);
+    match key {
+        "paging" => {
+            let p = v.as_str().and_then(policy::parse_paging);
+            e.policy.paging = p.ok_or_else(|| err(&raw).allowed(Some("no_hold, hold")))?;
+        }
+        "paging_idle_timeout" => {
+            e.policy.paging_idle_timeout =
+                policy::parse_timeout(v).map_err(|x| err(&x).allowed(Some("30, \"30s\", \"5m\", \"1h\", \"off\"")))?;
+        }
+        "spill_limit" => {
+            e.policy.spill_limit = Some(policy::parse_size(v).map_err(|x| err(&x).allowed(Some(SIZES)))?);
+        }
+        "read_only" => e.policy.read_only = v.as_bool().ok_or_else(|| err(v).allowed(Some("true, false")))?,
+        "confirm" => {
+            let c = v.as_str().and_then(policy::Confirm::parse);
+            e.policy.confirm = c.ok_or_else(|| err(&raw).allowed(Some("destructive, writes")))?;
+        }
+        "color" => match v.as_str() {
+            Some(c) if ProfileColor::parse(c).is_some() => e.color = Some(c.to_string()),
+            _ => return Err(err(&raw).allowed(Some("red, green, blue, … #rrggbb"))),
+        },
+        "badge" => match v.as_str() {
+            Some(b) if policy::badge_ok(b) => e.badge = Some(b.to_string()),
+            _ => return Err(err(&format!("{v}")).allowed(Some("\"PROD\", \"STG\", … (8 columns at most)"))),
+        },
+        _ => {}
+    }
+    Ok(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -667,7 +731,6 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
         Some(n) if (crate::results::MIN_WINDOW as i64..=10_000_000).contains(&n) => n as usize,
         Some(n) => return Err(bad("result_window_rows", n).allowed(Some("1000 to 10000000"))),
     };
-    const SIZES: &str = "1073741824, \"512MB\", \"2GB\", \"off\"";
     let spill_limit = match &f.spill_limit {
         None => policy::SpillLimit::default(),
         Some(v) => policy::parse_size(v).map_err(|e| bad("spill_limit", e).allowed(Some(SIZES)))?,
@@ -703,34 +766,29 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
         auto_pairs: choice("editor.auto_pairs", auto_pairs, "off, on")?,
         run_hints: choice("editor.run_hints", run_hints, "on, off")?,
     };
+    // The environments in the file's order (the deserializer sorts its map by name).
+    let order: Vec<String> = text
+        .parse::<DocumentMut>()
+        .ok()
+        .and_then(|d| {
+            d.get("policy").and_then(Item::as_table_like).map(|t| t.iter().map(|(k, _)| k.to_string()).collect())
+        })
+        .unwrap_or_default();
+    let mut sections: Vec<(&String, &PolicySection)> = f.policy.iter().collect();
+    sections.sort_by_key(|(name, _)| order.iter().position(|o| o == *name).unwrap_or(usize::MAX));
     let mut policies = Policies::default();
-    for (name, p) in &f.policy {
-        let mut pol = Policy::default();
-        if let Some(v) = &p.paging {
-            pol.paging = policy::parse_paging(v)
-                .ok_or_else(|| bad(&format!("policy.{name}.paging"), v).allowed(Some("no_hold, hold")))?;
+    for (name, p) in sections {
+        let mut e = policy::Environment::new(name, Policy::default());
+        for (key, v) in p.items() {
+            policy_item(name, key, &v, &mut e)?;
         }
-        if let Some(v) = &p.paging_idle_timeout {
-            pol.paging_idle_timeout = policy::parse_timeout(v).map_err(|e| {
-                bad(&format!("policy.{name}.paging_idle_timeout"), e)
-                    .allowed(Some("30, \"30s\", \"5m\", \"1h\", \"off\""))
-            })?;
+        e.origin = Some(name.clone());
+        policies.insert(name, e.policy.clone());
+        if name != policy::DEFAULT
+            && let Some(env) = policies.environments_mut().iter_mut().find(|x| x.name == *name)
+        {
+            (env.color, env.badge) = (e.color, e.badge);
         }
-        if let Some(v) = &p.spill_limit {
-            pol.spill_limit = Some(
-                policy::parse_size(v)
-                    .map_err(|e| bad(&format!("policy.{name}.spill_limit"), e).allowed(Some(SIZES)))?,
-            );
-        }
-        if let Some(v) = &p.read_only {
-            pol.read_only =
-                v.as_bool().ok_or_else(|| bad(&format!("policy.{name}.read_only"), v).allowed(Some("true, false")))?;
-        }
-        if let Some(v) = &p.confirm {
-            pol.confirm = policy::Confirm::parse(v)
-                .ok_or_else(|| bad(&format!("policy.{name}.confirm"), v).allowed(Some("destructive, writes")))?;
-        }
-        policies.insert(name, pol);
     }
     let mut folders = Folders::default();
     for s in &f.folders {
@@ -1019,11 +1077,16 @@ pub struct Settings<'a> {
     pub prefs: Prefs,
 }
 
-/// The profile part of the file: `[[connections]]`, `[tunnels.*]`, `folders` and `last_used`.
+/// The profile part of the file: `[[connections]]`, `[tunnels.*]`, the environments
+/// (`[policy.*]`), `folders` and `last_used`.
 #[derive(Clone, Copy)]
 pub struct Profiles<'a> {
     pub connections: &'a [ConnectionConfig],
     pub tunnels: &'a [TunnelPreset],
+    /// `None` leaves the environments' `[policy.*]` tables as they are.
+    pub environments: Option<&'a [policy::Environment]>,
+    /// The default rules (`[policy.default]`); `None` leaves that table as it is.
+    pub default_rules: Option<&'a Policy>,
     pub folders: &'a Folders,
     /// `None` removes the key.
     pub last_used: Option<ProfileId>,
@@ -1038,7 +1101,9 @@ pub struct Profiles<'a> {
 /// A profile's table is found by its `id`, else by its name when it was read
 /// ([`ConnectionConfig::origin`]; a table without `id` right after the migration), so its
 /// comments survive; the `id` is then added as its first key. A tunnel preset's table is found
-/// the same way ([`TunnelPreset::origin`]), and moves to its new name when it was renamed.
+/// the same way ([`TunnelPreset::origin`]), and moves to its new name when it was renamed. An
+/// environment's table is found by the name it was read with ([`policy::Environment::origin`]),
+/// moves the same way, and only its items whose value changed are written.
 pub fn save(path: &Path, settings: Settings, profiles: Option<Profiles>) -> Result<(), Fault> {
     let Settings { version, language, icons, theme, default_source, prefs } = settings;
     let target = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
@@ -1087,7 +1152,7 @@ pub fn save(path: &Path, settings: Settings, profiles: Option<Profiles>) -> Resu
         let trailing = doc.trailing().as_str().unwrap_or_default().to_string();
         doc.set_trailing(format!("{trailing}{orphans}"));
     }
-    if let Some(Profiles { connections: conns, tunnels, folders, last_used }) = profiles {
+    if let Some(Profiles { connections: conns, tunnels, environments, default_rules, folders, last_used }) = profiles {
         match last_used {
             Some(id) => set(doc.as_table_mut(), "last_used", id.to_string()),
             None => {
@@ -1168,6 +1233,19 @@ pub fn save(path: &Path, settings: Settings, profiles: Option<Profiles>) -> Resu
         }
         doc.insert("connections", Item::ArrayOfTables(arr));
         write_tunnels(&mut doc, tunnels)?;
+        if environments.is_some() || default_rules.is_some() {
+            let mut orphans = match environments {
+                Some(envs) => write_environments(&mut doc, envs)?,
+                None => String::new(),
+            };
+            if let Some(rules) = default_rules {
+                orphans += &write_default_rules(&mut doc, rules)?;
+            }
+            if !orphans.is_empty() {
+                let trailing = doc.trailing().as_str().unwrap_or_default().to_string();
+                doc.set_trailing(format!("{trailing}{orphans}"));
+            }
+        }
     }
     crate::fsutil::atomic_write(&target, doc.to_string().as_bytes()).map_err(|e| Fault::io_at(&e, &target))
 }
@@ -1246,6 +1324,309 @@ fn write_tunnels(doc: &mut DocumentMut, presets: &[TunnelPreset]) -> Result<(), 
         doc.insert("tunnels", Item::Table(parent));
     }
     Ok(())
+}
+
+/// A value of the file as the parser of [`parse`] reads it (`None`: a kind no item takes).
+fn to_toml(v: &Value) -> Option<toml::Value> {
+    match v {
+        Value::String(s) => Some(toml::Value::String(s.value().clone())),
+        Value::Integer(i) => Some(toml::Value::Integer(*i.value())),
+        Value::Boolean(b) => Some(toml::Value::Boolean(*b.value())),
+        _ => None,
+    }
+}
+
+/// The environment table `t` of the file describes, read as [`parse`] reads it (`None`: it
+/// cannot be read, so it is not the same as anything).
+fn env_of(name: &str, t: &dyn toml_edit::TableLike) -> Option<policy::Environment> {
+    let mut e = policy::Environment::new(name, Policy::default());
+    for (k, item) in t.iter() {
+        let v = item.as_value().and_then(to_toml)?;
+        policy_item(name, k, &v, &mut e).ok()?;
+    }
+    Some(e)
+}
+
+/// The items of an environment, in the file's key order: what each is in `e`, as written, and
+/// whether that is its default (an item at its default is left out).
+fn env_items(e: &policy::Environment) -> [(&'static str, Value, bool); 7] {
+    let d = Policy::default();
+    let p = &e.policy;
+    let size = |l: policy::SpillLimit| -> Value {
+        let text = policy::format_size(l);
+        match text.parse::<i64>() {
+            Ok(n) => n.into(),
+            Err(_) => text.into(),
+        }
+    };
+    [
+        ("color", e.color.clone().unwrap_or_default().into(), e.color.is_none()),
+        ("badge", e.badge.clone().unwrap_or_default().into(), e.badge.is_none()),
+        ("read_only", p.read_only.into(), p.read_only == d.read_only),
+        ("confirm", p.confirm.as_str().into(), p.confirm == d.confirm),
+        ("paging", policy::paging_str(p.paging).into(), p.paging == d.paging),
+        (
+            "paging_idle_timeout",
+            policy::format_timeout(p.paging_idle_timeout).into(),
+            p.paging_idle_timeout == d.paging_idle_timeout,
+        ),
+        ("spill_limit", p.spill_limit.map_or_else(|| 0.into(), size), p.spill_limit.is_none()),
+    ]
+}
+
+/// The items of environment `e` into its table `t`: an item whose value the file already has
+/// (read as the loader reads it: `"5m"` and `300` are the same) is left as written; another
+/// is set in place (its comments kept), or removed when it went back to its default (its
+/// comments moved, [`remove_keeping_comments`]); an item at its default the file does not have
+/// is not added. Returns the comments of removed items that had nowhere to go.
+fn write_env_keys(t: &mut Table, name: &str, e: &policy::Environment) -> String {
+    let mut orphans = String::new();
+    for (key, value, default) in env_items(e) {
+        let same = match t.get(key) {
+            None => default,
+            Some(item) => item.as_value().and_then(to_toml).is_some_and(|v| {
+                let mut read = policy::Environment::new(name, Policy::default());
+                policy_item(name, key, &v, &mut read).is_ok() && same_item(key, &read, e)
+            }),
+        };
+        if same {
+            continue;
+        }
+        if default {
+            orphans += &remove_keeping_comments(t, key);
+        } else {
+            set(t, key, value);
+        }
+    }
+    orphans
+}
+
+/// Whether item `key` is the same in `a` and `b` (colors by what they name: `"Red"` is `red`).
+fn same_item(key: &str, a: &policy::Environment, b: &policy::Environment) -> bool {
+    let (p, q) = (&a.policy, &b.policy);
+    match key {
+        "color" => a.color.is_some() == b.color.is_some() && a.display_color() == b.display_color(),
+        "badge" => a.badge == b.badge,
+        "read_only" => p.read_only == q.read_only,
+        "confirm" => p.confirm == q.confirm,
+        "paging" => p.paging == q.paging,
+        "paging_idle_timeout" => p.paging_idle_timeout == q.paging_idle_timeout,
+        "spill_limit" => p.spill_limit == q.spill_limit,
+        _ => true,
+    }
+}
+
+/// The environments' `[policy.<name>]` tables: each environment's table is found by the name it
+/// was read with and updated in place ([`write_env_keys`]), under its current name and at its
+/// place (a rename keeps the table's comments); a new one's table is added after the others; the
+/// tables of environments that are gone are removed. `[policy.default]` is left to
+/// [`write_default_rules`], and a
+/// file whose environments are already these is not touched at all. The `policy` item keeps its
+/// place and its form: `[policy.<name>]` tables, dotted `policy.<name>.<key>` keys and an inline
+/// `policy = { … }` table stay what they are (in an inline one, an environment that changed is
+/// written back inline). Returns the comments of removed items that had nowhere to go.
+fn write_environments(doc: &mut DocumentMut, envs: &[policy::Environment]) -> Result<String, Fault> {
+    let shape = || Fault::new(FaultKind::Shape { key: "policy".into() }, "policy must be a table of tables");
+    let old: Vec<(String, Option<policy::Environment>)> = match doc.get("policy") {
+        None => Vec::new(),
+        Some(item) => match item.as_table_like() {
+            Some(t) => t
+                .iter()
+                .filter(|(k, _)| *k != policy::DEFAULT)
+                .map(|(k, v)| (k.to_string(), v.as_table_like().and_then(|t| env_of(k, t))))
+                .collect(),
+            None => return Err(shape()),
+        },
+    };
+    let unchanged = old.len() == envs.len()
+        && old.iter().zip(envs).all(|((k, read), e)| {
+            e.origin.as_deref() == Some(k.as_str())
+                && read.as_ref().is_some_and(|r| r.name == e.name && r.same_settings(e))
+        });
+    if unchanged {
+        return Ok(String::new());
+    }
+    // The environment each table of the file now is (none: it is gone).
+    let env_of_key = |k: &str| envs.iter().find(|e| e.origin.as_deref() == Some(k));
+    let new: Vec<&policy::Environment> =
+        envs.iter().filter(|e| !e.origin.as_deref().is_some_and(|o| old.iter().any(|(k, _)| k == o))).collect();
+    let mut orphans = String::new();
+    // An environment's table as written: in place when it changed, as it was otherwise.
+    let mut table_of = |t: &mut Table, e: &policy::Environment| orphans += &write_env_keys(t, &e.name, e);
+    let item = match doc.get("policy").cloned() {
+        Some(Item::Value(Value::InlineTable(parent))) => {
+            let mut out = parent.clone();
+            out.clear();
+            for (k, v) in parent.iter() {
+                let key = parent.key(k).cloned().unwrap_or_else(|| toml_edit::Key::new(k));
+                let e = match env_of_key(k) {
+                    _ if k == policy::DEFAULT => None,
+                    Some(e) => Some(e),
+                    None if old.iter().any(|(o, _)| o == k) => continue,
+                    None => None,
+                };
+                let Some(e) = e else {
+                    out.insert_formatted(&key, v.clone());
+                    continue;
+                };
+                let v = match v {
+                    Value::InlineTable(t) if !env_of(&e.name, t).is_some_and(|r| r.same_settings(e)) => {
+                        let mut t = t.clone().into_table();
+                        table_of(&mut t, e);
+                        Value::InlineTable(t.into_inline_table())
+                    }
+                    other => other.clone(),
+                };
+                if key.get() == e.name {
+                    out.insert_formatted(&key, v);
+                } else {
+                    out.insert(&e.name, v);
+                }
+            }
+            // The blank that closed the last entry goes after the new ones.
+            if !new.is_empty()
+                && let Some((_, last)) = out.iter_mut().last()
+                && last.decor().suffix().and_then(|r| r.as_str()).is_some_and(|s| s.trim().is_empty())
+            {
+                last.decor_mut().set_suffix("");
+            }
+            for e in new {
+                let mut t = Table::new();
+                table_of(&mut t, e);
+                out.insert(&e.name, Value::InlineTable(t.into_inline_table()));
+            }
+            (!out.is_empty()).then(|| Item::Value(Value::InlineTable(out)))
+        }
+        found => {
+            let parent = match found {
+                Some(Item::Table(t)) => t,
+                _ => {
+                    let mut t = Table::new();
+                    t.set_implicit(true);
+                    t
+                }
+            };
+            let mut out = parent.clone();
+            out.clear();
+            for (k, item) in parent.iter() {
+                let key = parent.key(k).cloned().unwrap_or_else(|| toml_edit::Key::new(k));
+                let e = match env_of_key(k) {
+                    _ if k == policy::DEFAULT => None,
+                    Some(e) => Some(e),
+                    None if old.iter().any(|(o, _)| o == k) => continue,
+                    None => None,
+                };
+                let Some(e) = e else {
+                    out.insert_formatted(&key, item.clone());
+                    continue;
+                };
+                let item = match item {
+                    Item::Table(t) => {
+                        let mut t = t.clone();
+                        table_of(&mut t, e);
+                        Item::Table(t)
+                    }
+                    // An inline table under `[policy]` stays inline.
+                    Item::Value(Value::InlineTable(t)) if !env_of(&e.name, t).is_some_and(|r| r.same_settings(e)) => {
+                        let mut t = t.clone().into_table();
+                        table_of(&mut t, e);
+                        Item::Value(Value::InlineTable(t.into_inline_table()))
+                    }
+                    other => other.clone(),
+                };
+                if key.get() == e.name {
+                    out.insert_formatted(&key, item);
+                } else {
+                    out.insert(&e.name, item);
+                }
+            }
+            for e in new {
+                let mut t = Table::new();
+                table_of(&mut t, e);
+                out.insert(&e.name, Item::Table(t));
+            }
+            // No table left: `[policy]` goes too, unless comments hang on it.
+            let commented = [out.decor().prefix(), out.decor().suffix()]
+                .into_iter()
+                .flatten()
+                .any(|r| r.as_str().is_some_and(|s| s.contains('#')));
+            (!out.is_empty() || commented).then(|| Item::Table(out))
+        }
+    };
+    // Replaced where it is (its key, its comments and its place stay), added at the end
+    // otherwise.
+    match item {
+        Some(item) => match doc.get_mut("policy") {
+            Some(old) => *old = item,
+            None => {
+                doc.insert("policy", item);
+            }
+        },
+        None => {
+            doc.remove("policy");
+        }
+    }
+    Ok(orphans)
+}
+
+/// The default rules into `[policy.default]`, the way [`write_env_keys`] writes an environment:
+/// only the items whose value changed; the table is made only once a rule differs from the
+/// built-in default, and goes once it is empty again (unless comments hang on it). Its `color`
+/// and `badge`, which nothing shows, stay as they are.
+fn write_default_rules(doc: &mut DocumentMut, rules: &Policy) -> Result<String, Fault> {
+    let shape = || Fault::new(FaultKind::Shape { key: "policy".into() }, "policy must be a table of tables");
+    let name = policy::DEFAULT;
+    let mut e = policy::Environment::new(name, rules.clone());
+    let mut orphans = String::new();
+    match doc.get_mut("policy") {
+        None if *rules == Policy::default() => {}
+        None => {
+            let mut t = Table::new();
+            orphans += &write_env_keys(&mut t, name, &e);
+            let mut parent = Table::new();
+            parent.set_implicit(true);
+            parent.insert(name, Item::Table(t));
+            doc.insert("policy", Item::Table(parent));
+        }
+        Some(item) => {
+            let inline = item.is_inline_table();
+            let Some(parent) = item.as_table_like_mut() else { return Err(shape()) };
+            let read = parent.get(name).and_then(Item::as_table_like).and_then(|t| env_of(name, t));
+            if let Some(r) = &read {
+                (e.color, e.badge) = (r.color.clone(), r.badge.clone());
+            }
+            match parent.get_mut(name) {
+                _ if read.as_ref().map_or(*rules == Policy::default(), |r| r.policy == *rules) => {}
+                Some(Item::Table(t)) => {
+                    orphans += &write_env_keys(t, name, &e);
+                    // Back at the built-in default with nothing to keep: the table goes.
+                    let commented = [t.decor().prefix(), t.decor().suffix()]
+                        .into_iter()
+                        .flatten()
+                        .any(|r| r.as_str().is_some_and(|s| s.contains('#')));
+                    if t.is_empty() && !commented && orphans.is_empty() {
+                        parent.remove(name);
+                    }
+                }
+                Some(Item::Value(Value::InlineTable(t))) => {
+                    let mut table = t.clone().into_table();
+                    orphans += &write_env_keys(&mut table, name, &e);
+                    *t = table.into_inline_table();
+                }
+                Some(_) => return Err(shape()),
+                None => {
+                    let mut t = Table::new();
+                    orphans += &write_env_keys(&mut t, name, &e);
+                    if inline {
+                        parent.insert(name, Item::Value(Value::InlineTable(t.into_inline_table())));
+                    } else {
+                        parent.insert(name, Item::Table(t));
+                    }
+                }
+            }
+        }
+    }
+    Ok(orphans)
 }
 
 /// The keys of a tunnel's settings but `enabled`, updated in place; the defaults are left out.
