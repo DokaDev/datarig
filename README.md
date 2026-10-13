@@ -593,6 +593,33 @@ restart; turning it on asks first.
   `security_tool` was on trust only `security`, so macOS may ask once per item.
 - The setting is accepted on every platform and has no effect outside macOS.
 
+**The one-time offer.** In `direct` mode on macOS, when a keychain access most likely waited
+for you to approve it after an update, datarig asks once, after the operation that used the
+keychain has finished (a connect, a test, saving a profile, ...; it never holds that operation
+up, and waits for any connect in progress and any open dialog), whether to switch to
+`security_tool`. `y` switches exactly as the setting does; `n` keeps `direct`; `Esc` or
+`Enter` keep `direct` and decide later (the offer may come back at the next such prompt).
+After `y` or `n` it never asks again.
+
+- **How it guesses.** Each direct keychain call is timed, and datarig remembers the binary that
+  last read a saved password directly (its version, path, size and modification time; writing
+  a new item or removing one never asks, so it does not count). A
+  call is taken for an update prompt when it took at least one second (or did not answer
+  within the keychain's 10-second limit) **and** the binary is not the one remembered, or none
+  is remembered yet. A slow keychain with an unchanged binary (locked, slow disk) does not
+  count, and a fast call never does.
+- **Limits.** If you answer the macOS dialog in under a second, the prompt is missed (the offer
+  comes at the next one). A keychain that is slow for another reason right after an update can
+  bring the offer without a prompt; `Enter` keeps everything as it is.
+- **Never offered** outside macOS, over SSH (`SSH_CONNECTION`, `SSH_CLIENT` or `SSH_TTY` set),
+  in `security_tool` mode, with `DATARIG_SECRET_STORE=memory`, or once answered.
+- **Where the answer is kept.** `keychain.toml` in the state directory
+  (`~/Library/Application Support/datarig/state` on macOS, or under `$XDG_STATE_HOME/datarig`
+  when set), not in the config file. If that file exists but cannot be read, datarig does not
+  ask and does not write over it. Deleting the file makes datarig forget the answer.
+- **Changing the mode later** works as before: the settings screen or `:set
+  secrets.macos_keychain_access=direct|security_tool`, whatever was answered.
+
 A signed release (Developer ID) is the proper fix: macOS would then recognize datarig itself
 across upgrades. Once releases are signed, datarig is meant to remove `security` from the items'
 access lists again; until then this setting is the workaround.

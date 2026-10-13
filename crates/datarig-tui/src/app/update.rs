@@ -11,6 +11,7 @@ impl App {
     pub fn handle_event(&mut self, ev: Event) {
         self.handle_event_here(ev);
         self.sweep_as_plan();
+        self.keychain_offer_check();
     }
 
     fn handle_event_here(&mut self, ev: Event) {
@@ -67,6 +68,7 @@ impl App {
     pub fn on_app_event(&mut self, ev: AppEvent) {
         self.on_app_event_here(ev);
         self.sweep_as_plan();
+        self.keychain_offer_check();
     }
 
     fn on_app_event_here(&mut self, ev: AppEvent) {

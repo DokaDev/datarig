@@ -333,6 +333,12 @@ impl App {
             }
             return;
         }
+        if action == ConfirmAction::KeychainOffer {
+            if !repeat {
+                self.keychain_offer_key(key.code);
+            }
+            return;
+        }
         // `Enter` keeps whatever the answer would lose (Cancel is the default): only `y` quits,
         // deletes, disconnects, closes, switches or replaces.
         // `Enter` says yes only to a copy, which loses nothing.
@@ -380,7 +386,6 @@ impl App {
                             self.delete_script_folder(&p);
                         }
                     }
-                    ConfirmAction::ScriptConflict(_) => {}
                     ConfirmAction::Copy => self.copy_confirmed(),
                     ConfirmAction::FetchThenCopy => self.fetch_then_copy(),
                     ConfirmAction::OverwriteScript => self.overwrite_confirmed(),
@@ -389,6 +394,7 @@ impl App {
                     ConfirmAction::DeleteEnvironment(id) => self.delete_environment(id),
                     ConfirmAction::ExplainAgain => self.explain_as_plan_confirmed(),
                     ConfirmAction::KeychainSecurityTool => self.keychain_access_changed(KeychainAccess::SecurityTool),
+                    ConfirmAction::ScriptConflict(_) | ConfirmAction::KeychainOffer => {}
                 }
             }
             KeyCode::Char('n') | KeyCode::Esc if keeps => self.confirm_kept(),

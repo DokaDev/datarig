@@ -402,6 +402,7 @@ impl App {
     pub fn on_db_event(&mut self, ev: DbEvent) {
         self.on_db_event_here(ev);
         self.sweep_as_plan();
+        self.keychain_offer_check();
     }
 
     fn on_db_event_here(&mut self, ev: DbEvent) {
