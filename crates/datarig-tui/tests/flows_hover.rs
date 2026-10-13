@@ -444,6 +444,43 @@ fn a_hovered_cell_goes_when_the_grid_moves() {
     assert_eq!(h.app.pointer_on, None);
 }
 
+/// The wheel scrolls the grid under a still pointer: the hovered cell goes (as with a key), and
+/// neither the cell now under the pointer nor the inspector's entry of its column is lit.
+#[test]
+fn a_hovered_cell_goes_when_the_wheel_scrolls() {
+    // The edge-case users five times over: more rows than the grid shows.
+    let mut h = Harness::connected(Lang::En);
+    h.ctrl('e');
+    let (cols, rows) = edge_rows();
+    let rows = rows.iter().cycle().take(5 * rows.len()).cloned().collect();
+    let page = datarig_core::driver::DbEvent::Page {
+        id: 1,
+        columns: Some(cols),
+        rows,
+        more: false,
+        elapsed: std::time::Duration::from_millis(3),
+    };
+    h.db(page);
+    h.app.focus = datarig_tui::app::Focus::Results;
+    h.draw(GW, GH);
+    assert!(h.app.tab().grid.page_rows < 40, "the grid scrolls");
+    let (x, y) = cell_xy(&h, 0, 2);
+    hover(&mut h, x, y);
+    assert_eq!(h.app.pointer_on, Some(PointerOn::Cell(0, 2)));
+    h.mouse(MouseEventKind::ScrollDown, x, y);
+    let top = h.app.tab().grid.top;
+    assert!(top > 0, "the wheel scrolled the grid");
+    let t = h.draw(GW, GH);
+    assert_eq!(h.app.tab().grid.top, top, "the scroll is kept");
+    assert_eq!(h.app.pointer_on, None);
+    let l = h.app.layout.detail_list;
+    let buf = t.backend().buffer();
+    assert!(!lit(&buf[(x, y)]), "the cell now under the pointer: {:?}", buf[(x, y)]);
+    let entry = &buf[(l.x + 1, l.y + (2 - h.app.detail.first) as u16)];
+    assert!(!lit(entry), "{entry:?}");
+    assert_eq!((h.app.tab().grid.row, h.app.tab().grid.col), (0, 0));
+}
+
 /// The selected cell and entry of a pane without the focus keep a clear look: the selection a
 /// little dimmer, not the faint hover.
 #[test]

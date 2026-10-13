@@ -759,7 +759,13 @@ impl App {
         let t = self.tabs.active_mut();
         if let Results::Rows(rs) = &t.results {
             let (total, ncols) = (rs.rows.len(), rs.columns.len());
+            let was = (t.grid.top, t.grid.left);
             t.grid.scroll(rows, cols, total, ncols);
+            // The cells moved under the pointer: the one it lit is not under it any more (the
+            // frame keeps the scrolled view, so it cannot tell).
+            if (t.grid.top, t.grid.left) != was && matches!(self.pointer_on, Some(hover::PointerOn::Cell(..))) {
+                self.pointer_on = None;
+            }
         }
     }
 
