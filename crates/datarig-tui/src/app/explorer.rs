@@ -24,6 +24,8 @@ use datarig_core::sql::complete::Catalog;
 pub enum RowKind {
     /// "＋ New connection", always the first row.
     NewConnection,
+    /// "Connections", the head of the folders' and profiles' section.
+    ConnectionsHeader,
     Folder(FolderPath),
     Profile(ProfileId),
     /// The error of the profile's last attempt, under its node.
@@ -237,13 +239,26 @@ fn column_count(catalog: &Catalog, schema: &str, name: &str) -> Option<usize> {
 }
 
 impl App {
-    /// The explorer's rows: "＋ New connection", then folders before profiles at each level,
-    /// each by name ignoring case. With a filter, what matches it and the way to it (see
-    /// [`App::push_level`]); the sections below list their matching rows.
+    /// The explorer's rows: "＋ New connection", then the "Connections" section (its head, then,
+    /// open, folders before profiles at each level, each by name ignoring case). With a filter,
+    /// what matches it and the way to it (see [`App::push_level`]), the head only when something
+    /// under it matches; the sections below list their matching rows.
     pub fn explorer_rows(&self) -> Vec<Row> {
         let mut rows = vec![Row::new(RowKind::NewConnection, 0)];
         let needle = Needle::new(self.explorer.filter.text());
-        self.push_level(None, 0, (!needle.is_empty()).then_some(&needle), &mut rows);
+        let filtering = !needle.is_empty();
+        // Open for the filter's matches (its own state stays as it is), as the other heads.
+        rows.push(if filtering {
+            Row::opened(RowKind::ConnectionsHeader, 0)
+        } else {
+            Row::new(RowKind::ConnectionsHeader, 0)
+        });
+        if self.connections_expanded || filtering {
+            self.push_level(None, 1, filtering.then_some(&needle), &mut rows);
+            if filtering && rows.len() == 2 {
+                rows.truncate(1);
+            }
+        }
         self.push_tunnels(&mut rows);
         self.push_environments(&mut rows);
         self.push_scripts(&mut rows);
@@ -611,6 +626,10 @@ impl App {
 
     /// Put the explorer's cursor on profile `id`, opening the folders around it.
     pub(super) fn reveal_profile(&mut self, id: ProfileId) {
+        if !self.connections_expanded {
+            self.connections_expanded = true;
+            self.mark_workspace();
+        }
         if let Some(f) = self.profile(id).and_then(ConnectionConfig::folder_path) {
             for a in f.with_ancestors() {
                 if !self.folders.is_expanded(&a) {
@@ -649,6 +668,7 @@ impl App {
             RowKind::Database(id, Some(db)) => self.conns.get(*id).map(|c| c.open_dbs.contains(db)),
             RowKind::Node(id, n) => self.conns.get(*id).and_then(|c| c.tree.is_expanded(*n)),
             RowKind::AuxNode(id, db, n) => self.conns.aux(*id, db).and_then(|a| a.tree.is_expanded(*n)),
+            RowKind::ConnectionsHeader => Some(self.connections_expanded || self.filtering_on()),
             RowKind::ScriptsHeader => Some(self.scripts_expanded || self.filtering_on()),
             // A folder that cannot be read has nothing to open (never shown as an empty one).
             RowKind::ScriptFolder(p) if self.script_unreadable(p) => None,
@@ -749,6 +769,10 @@ impl App {
                 let Some(a) = self.conns.aux_mut(id, &db) else { return };
                 let action = a.tree.set_expanded(*n, want);
                 self.aux_tree_action(id, &db, action);
+            }
+            RowKind::ConnectionsHeader => {
+                self.connections_expanded = want.unwrap_or(!self.connections_expanded);
+                self.mark_workspace();
             }
             RowKind::ScriptsHeader => {
                 self.scripts_expanded = want.unwrap_or(!self.scripts_expanded);

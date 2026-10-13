@@ -13,6 +13,7 @@ fn sample() -> WorkspaceState {
         active: 1,
         explorer: ExplorerState {
             expanded_folders: vec!["work".into(), "work/prod".into()],
+            connections_collapsed: true,
             scripts_expanded: true,
             script_folders: vec!["売上".into()],
             hidden: true,
@@ -503,6 +504,7 @@ fn the_explorers_hidden_and_width_read_with_defaults() {
     fs::write(dir.join(FILE), "version = 3\nactive = 0\n\n[explorer]\nscripts_expanded = true\n").unwrap();
     let l = load(&dir);
     assert!(l.state.explorer.scripts_expanded);
+    assert!(!l.state.explorer.connections_collapsed, "the Connections section reads as open");
     assert_eq!((l.state.explorer.hidden, l.state.explorer.width), (false, None));
     for (text, want) in
         [("width = 0", None), ("width = -3", None), ("width = \"wide\"", None), ("width = 44", Some(44))]

@@ -57,8 +57,9 @@ fn tree_lazy_load_and_open_table() {
     h.key(KeyCode::Char('l'));
     assert!(matches!(&h.sent()[..], [DbCommand::LoadObjects { schema }] if schema == "shop"));
     let loading = h.draw(120, 30);
-    // Row 1 is "＋ New connection", row 2 the profile, row 3 its database, rows 4-6 the schemas.
-    assert!(row_text(loading.backend().buffer(), 7).contains("Loading…"));
+    // Row 1 is "＋ New connection", row 2 the Connections head, row 3 the profile, row 4 its
+    // database, rows 5-7 the schemas.
+    assert!(row_text(loading.backend().buffer(), 8).contains("Loading…"));
     h.db(DbEvent::Objects {
         schema: "shop".into(),
         result: Ok((
@@ -161,34 +162,34 @@ fn explorer_tree_icons_on_and_off() {
     };
     let mut h = tree_all_kinds(false);
     for want in [
-        "│        ▸ zz_mv",
-        "│        ▸ order_summary",
-        "│      ▾ Views",
-        "│            nickname  text",
-        "│            UQ email  text",
-        "│            tags  text[]",
+        "│          ▸ zz_mv",
+        "│          ▸ order_summary",
+        "│        ▾ Views",
+        "│              nickname  text",
+        "│              UQ email  text",
+        "│              tags  text[]",
     ] {
         assert!(line(&mut h, want).starts_with(want), "icons off: {want:?} in {:?}", line(&mut h, want));
     }
     let mut h = tree_all_kinds(true);
     for want in [
-        "│    ▾ \u{f12e3} shop",
-        "│      ▾ \u{f13c8} Tables",
-        "│        ▾ \u{f04eb} zz_types",
-        "│      ▾ \u{f06d0} Views",
-        "│        ▸ \u{f1094} order_summary",
-        "│        ▸ \u{f13a0} zz_mv",
-        "│            \u{f084} id  bigint",
-        "│            \u{ee40} email  text",
-        "│            \u{f0284} nickname  text",
-        "│            \u{f03a0} n  numeric(10,2)",
-        "│            \u{f00f0} at  timestamp",
-        "│            \u{f0a1a} ok  boolean",
-        "│            \u{f0626} doc  jsonb",
-        "│            \u{f0efe} uid  uuid",
-        "│            \u{f12a7} raw  bytea",
-        "│            \u{f016a} tags  text[]",
-        "│            \u{f0832} mood  order_status",
+        "│      ▾ \u{f12e3} shop",
+        "│        ▾ \u{f13c8} Tables",
+        "│          ▾ \u{f04eb} zz_types",
+        "│        ▾ \u{f06d0} Views",
+        "│          ▸ \u{f1094} order_summary",
+        "│          ▸ \u{f13a0} zz_mv",
+        "│              \u{f084} id  bigint",
+        "│              \u{ee40} email  text",
+        "│              \u{f0284} nickname  text",
+        "│              \u{f03a0} n  numeric(10,2)",
+        "│              \u{f00f0} at  timestamp",
+        "│              \u{f0a1a} ok  boolean",
+        "│              \u{f0626} doc  jsonb",
+        "│              \u{f0efe} uid  uuid",
+        "│              \u{f12a7} raw  bytea",
+        "│              \u{f016a} tags  text[]",
+        "│              \u{f0832} mood  order_status",
     ] {
         assert!(line(&mut h, want).starts_with(want), "icons on: {want:?} in {:?}", line(&mut h, want));
     }
@@ -715,6 +716,7 @@ fn explorer_folders_states_and_icons() {
         rows,
         [
             "+",
+            "[connections]",
             "local/",
             "  scratch",
             "work/",
@@ -903,11 +905,12 @@ fn explorer_at_launch_en_ko_sizes() {
             let mut h = launched(lang, &sample_config(Some("分析-replica")));
             let t = h.draw(w, hh);
             assert_screen!(format!("explorer_launch_{}_{w}x{hh}", lang_tag(lang)), lang, &t);
-            // The cursor is on the last used profile (row 3: "＋", local-pg, v6, 分析-replica).
+            // The cursor is on the last used profile (row 4: "＋", Connections, local-pg, v6,
+            // 分析-replica).
             let area = h.app.explorer.area;
             let buf = t.backend().buffer();
-            assert_eq!(buf[(area.x + 3, area.y + 3)].bg, theme::DARK.selection.bg.unwrap());
-            assert!(row_text(buf, area.y + 3).contains("分析-replica"));
+            assert_eq!(buf[(area.x + 3, area.y + 4)].bg, theme::DARK.selection.bg.unwrap());
+            assert!(row_text(buf, area.y + 4).contains("分析-replica"));
         }
     }
     // `/` filters by name and puts the hardware cursor in the filter input.
@@ -928,6 +931,15 @@ fn welcome_panel_en_ko() {
         assert_screen!(format!("welcome_form_{}_80x24", lang_tag(lang)), lang, h.draw(80, 24));
         h.key(KeyCode::Esc);
         for (w, hh) in SIZES {
+            // The explorer says so under its Connections head (the Welcome panel too).
+            let t = h.draw(w, hh);
+            let tree = h.app.layout.tree;
+            let explorer: String = (tree.y..tree.y + tree.height)
+                .map(|y| row_text(t.backend().buffer(), y).chars().take(usize::from(tree.width)).collect::<String>())
+                .collect();
+            if lang == Lang::En {
+                assert!(explorer.contains("No connection") && explorer.contains("Press n to create"), "{explorer}");
+            }
             assert_screen!(format!("welcome_{}_{w}x{hh}", lang_tag(lang)), lang, h.draw(w, hh));
         }
         // The name as text, never an emoji or a glyph, icons on or off.

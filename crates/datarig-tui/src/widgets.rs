@@ -116,6 +116,12 @@ pub(crate) fn hover_style() -> Style {
     }
 }
 
+/// A grid cell or an inspector entry under the pointer (or lit by the one under it): the list
+/// hover's background, underlined, as the grid's alternate rows have that background already.
+pub(crate) fn cell_hover_style() -> Style {
+    hover_style().add_modifier(Modifier::UNDERLINED)
+}
+
 /// A small clickable target under the pointer (a tab's `×`, a scroll mark, a result tab, a
 /// paging arrow): the text on the selection, as a selected row reads on every theme.
 pub(crate) fn pointer_style() -> Style {

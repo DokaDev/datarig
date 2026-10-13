@@ -199,8 +199,9 @@ pub(crate) fn draw_run_confirm(app: &mut App, area: Rect, buf: &mut Buffer) {
         )];
         parts.extend(crate::widgets::statusbar::environment_parts(app, c.profile, th.surface));
         if app.read_only(c.profile) {
-            let ro = app.i18n.label(Label::StatusReadOnly);
-            parts.push((format!("  {ro}"), surface(th.fg).add_modifier(Modifier::BOLD)));
+            let ro = crate::app::environments::read_only_badge(app);
+            let color = crate::app::environments::read_only_color(&th);
+            parts.push((format!("  {ro}"), surface(color).add_modifier(Modifier::BOLD)));
         }
         line(buf, y, &parts);
     }

@@ -4,7 +4,7 @@ expression: "h.draw(80, 24).backend()"
 ---
 "╭ Explorer ────────────╮╭ Welcome ─────────────────────────────────────────────╮"
 "│  ＋ New connection   ││                                                      │" Hidden by multi-width symbols: [(4, " ")]
-"│ ╭ New connection ──────────────────────────────────────────────────────────╮ │"
+"│▾╭ New connection ──────────────────────────────────────────────────────────╮ │"
 "│ │  Basic   SSH   Advanced                            Ctrl+N/Ctrl+P section │ │"
 "│ │                                                                          │ │"
 "│ │ Driver            ‹PostgreSQL› MySQL  Redis  Elasticsearch   unsupported │ │"

@@ -5,7 +5,7 @@ expression: backend
 "╭ Explorer ────────────╮ 1 console 1 ×                                          "
 "│ ╭ Settings ────────────────────────────────────────────────────────────────╮─╮"
 "│▾│   Theme                     ‹ terminal      ›  Your terminal's own colo… │ │"
-"│ │   Explorer: size colors     ‹ on            ›  On, the largest tables s… │e│"
+"│ │   Explorer: size colors     ‹ 3             ›  3 levels: amber from 1 M… │e│"
 "│ │ Editor                                                                   │ │"
 "│ │   Cursor shape              ‹ on            ›  By mode (block or bar)    │ │"
 "│ │   Yanks to the clipboard    ‹ on            ›  Yes, as Vim with clipboa… │ │"

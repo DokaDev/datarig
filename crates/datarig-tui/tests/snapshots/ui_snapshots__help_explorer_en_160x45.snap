@@ -4,12 +4,12 @@ expression: backend
 ---
 "╭ Explorer ────────────────────────────╮ 1 console 1 ×                                                                                                          "
 "│  ＋ New connection          ╭ Keys — Explorer ─────────────────────────────────────────────────────────────────────────────────╮─────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾ ●   local-pg               │ / search all keys · Esc close                                                                    │ Space c s switch connection │"
-"│  ▾ datarig default          │──────────────────────────────────────────────────────────────────────────────────────────────────│                             │"
-"│    ▸ analytics              │ ▾ Explorer                                                                                       │                             │"
-"│    ▸ public                 │   Explorer: next item                                             j / Down                       │                             │"
-"│    ▸ shop                   │   Explorer: previous item                                         k / Up                         │                             │"
-"│                             │   Explorer: expand                                                l / Right                      │                             │"
+"│▾ Connections 1              │ / search all keys · Esc close                                                                    │ Space c s switch connection │"
+"│  ▾ ●   local-pg             │──────────────────────────────────────────────────────────────────────────────────────────────────│                             │"
+"│    ▾ datarig default        │ ▾ Explorer                                                                                       │                             │"
+"│      ▸ analytics            │   Explorer: next item                                             j / Down                       │                             │"
+"│      ▸ public               │   Explorer: previous item                                         k / Up                         │                             │"
+"│      ▸ shop                 │   Explorer: expand                                                l / Right                      │                             │"
 "│                             │   Explorer: collapse or go to parent                              h / Left                       │                             │"
 "│                             │   Explorer: open or toggle                                        Enter                          │                             │"
 "│                             │   Explorer: first item                                            g g                            │                             │"

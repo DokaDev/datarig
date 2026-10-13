@@ -599,7 +599,8 @@ pub const SETTINGS: &[SettingSpec] = &[
         about: Label::SettingSizeHeatAbout,
         group: SettingGroup::Display,
         values: Values::Fixed(&[
-            ("on", Setting::SizeHeat(SizeHeat::On), Label::SettingSizeHeatOn),
+            ("3", Setting::SizeHeat(SizeHeat::Three), Label::SettingSizeHeatThree),
+            ("5", Setting::SizeHeat(SizeHeat::Five), Label::SettingSizeHeatFive),
             ("off", Setting::SizeHeat(SizeHeat::Off), Label::SettingSizeHeatOff),
         ]),
     },
@@ -652,11 +653,16 @@ pub fn parse_set(arg: &str) -> Result<SetValue<'_>, SetError> {
         return Ok(SetValue::Theme(value));
     }
     let values = spec.values.fixed();
-    values
-        .iter()
-        .find(|v| v.0 == value.to_ascii_lowercase())
-        .map(|v| SetValue::Setting(v.1))
-        .ok_or_else(|| SetError::BadValue { key: spec.key, value: value.to_string(), values: spec.value_list() })
+    // `on`, the size colors' value from before there were levels, is `3` (not listed).
+    let value_lc = match (spec.key, value.to_ascii_lowercase()) {
+        ("explorer.size_heat", v) if v == "on" => "3".to_string(),
+        (_, v) => v,
+    };
+    values.iter().find(|v| v.0 == value_lc).map(|v| SetValue::Setting(v.1)).ok_or_else(|| SetError::BadValue {
+        key: spec.key,
+        value: value.to_string(),
+        values: spec.value_list(),
+    })
 }
 
 /// `language|editor`, for messages.

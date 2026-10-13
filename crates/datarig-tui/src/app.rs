@@ -656,6 +656,9 @@ pub struct App {
     shared_saves: std::collections::HashMap<u64, (SourceKind, String)>,
     /// The explorer's "Tunnels" section is open.
     pub tunnels_expanded: bool,
+    /// The explorer's "Connections" section (its folders and profiles) is open; kept in the
+    /// workspace file.
+    pub connections_expanded: bool,
     /// The presets whose profiles the explorer lists under them.
     pub tunnels_open: std::collections::BTreeSet<datarig_core::profile::tunnel::TunnelId>,
     /// The explorer's "Environments" section is open.
@@ -724,6 +727,9 @@ pub struct App {
     pub(crate) tab_hits: Vec<(u16, u16, crate::widgets::tabbar::TabHit)>,
     /// The small clickable target under the pointer (drawn highlighted).
     pub pointer_on: Option<hover::PointerOn>,
+    /// The tab the pointer was over its grid or inspector in (a grid cell or an inspector entry
+    /// lit is of that tab's result only).
+    pub(crate) pointer_tab: Option<TabId>,
     /// The column of the inspector's Row tab a press armed, with the result it is of (it is
     /// picked on the release, over the same column of the same result).
     pub(crate) detail_press: overlay::Press<(u64, usize)>,
@@ -939,6 +945,7 @@ impl App {
             shared_tunnel_requests: Vec::new(),
             shared_saves: std::collections::HashMap::new(),
             tunnels_expanded: true,
+            connections_expanded: true,
             tunnels_open: std::collections::BTreeSet::new(),
             environments_expanded: true,
             default_rules_open: false,
@@ -968,6 +975,7 @@ impl App {
             strip_hits: Vec::new(),
             tab_hits: Vec::new(),
             pointer_on: None,
+            pointer_tab: None,
             detail_press: overlay::Press::default(),
             detail_picked: None,
             last_top: None,
@@ -1263,8 +1271,12 @@ impl App {
             self.last_focus = self.focus;
         }
         let last = self.last_used.filter(|id| self.profile(*id).is_some()).or(self.profiles_sorted_first());
-        if let Some(id) = last {
-            self.reveal_profile(id);
+        // The cursor on that profile; on the Connections head when the section was left closed
+        // (it stays closed).
+        match last {
+            Some(id) if self.connections_expanded => self.reveal_profile(id),
+            Some(_) => self.explorer.select_kind(explorer::RowKind::ConnectionsHeader),
+            None => {}
         }
         match startup {
             // Nothing to connect to: the new-profile form opens over the welcome panel.

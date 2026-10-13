@@ -1,8 +1,10 @@
 //! The tab list (`Space t t`): a filter line, then one row per tab with its number, name, kind,
-//! where it works (`profile · database.schema`) and the tab bar's marks, the closed tabs under a
+//! where it works (`profile · database.schema`, the profile's name in its environment's color,
+//! muted while not connected) and the tab bar's marks, the closed tabs under a
 //! heading of their own. The number and the marks are the tab bar's own (`tabbar::number`,
 //! `tabbar::marks`): the profile's color while the tab's session is connected, the spinner
-//! while a statement runs, `*`, `RO`, `◆` and `!`.
+//! while a statement runs, `*`, the environment's badge, the lock of read-only rules (`RO`
+//! with icons off), `◆` and `!`.
 
 use crate::app::App;
 use crate::app::overlay::OverlayKind;
@@ -33,6 +35,9 @@ struct Parts {
     icon: Option<(String, Color)>,
     /// Where it works, or what it says without a connection.
     place: Result<String, Label>,
+    /// The profile's name (the place starts with it) and its style: its environment's color,
+    /// muted while not connected.
+    profile_name: Option<(String, Style)>,
     marks: Vec<(String, Style)>,
 }
 
@@ -62,6 +67,7 @@ pub(crate) fn draw_tab_list(app: &mut App, area: Rect, buf: &mut Buffer) -> Opti
                         .tab_place(t.profile, &t.context)
                         .ok_or_else(|| tabbar::unbound(app, t).unwrap_or(Label::TabUnbound)),
                     marks: tabbar::marks(app, t, th.surface),
+                    profile_name: profile.map(|p| (p.name.clone(), app.profile_name_style(p.id))),
                 }
             }
             TabEntry::Closed(serial) => {
@@ -74,6 +80,7 @@ pub(crate) fn draw_tab_list(app: &mut App, area: Rect, buf: &mut Buffer) -> Opti
                     icon: profile.map(|p| (icons::cell(p, icons_on), theme::profile_color(p.display_color()))),
                     place: app.tab_place(c.profile, &c.context).ok_or(Label::TabUnbound),
                     marks: Vec::new(),
+                    profile_name: profile.map(|p| (p.name.clone(), app.profile_name_style(p.id))),
                 }
             }
         };
@@ -168,7 +175,15 @@ pub(crate) fn draw_tab_list(app: &mut App, area: Rect, buf: &mut Buffer) -> Opti
                     left -= used;
                 }
                 match &parts.place {
-                    Ok(place) => col(place, left, Style::new().fg(th.fg_muted), &mut x),
+                    // The profile's name in its own style, then where in it.
+                    Ok(place) => match parts.profile_name.as_ref().filter(|(n, _)| place.starts_with(n.as_str())) {
+                        Some((n, style)) => {
+                            let used = width(n).min(left);
+                            col(n, used, *style, &mut x);
+                            col(&place[n.len()..], left - used, Style::new().fg(th.fg_muted), &mut x);
+                        }
+                        None => col(place, left, Style::new().fg(th.fg_muted), &mut x),
+                    },
                     Err(l) => col(&app.i18n.label(*l), left, dim, &mut x),
                 }
             }

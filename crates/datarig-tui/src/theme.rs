@@ -31,6 +31,30 @@ const fn rgb(hex: u32) -> Color {
     Color::Rgb((hex >> 16) as u8, (hex >> 8) as u8, hex as u8)
 }
 
+const WHITE: Color = Color::Rgb(0xFF, 0xFF, 0xFF);
+const BLACK: Color = Color::Rgb(0, 0, 0);
+
+/// `a` with `keep` percent of it kept and the rest of `b`; `a` when either is not RGB.
+fn blend(a: Color, b: Color, keep: u16) -> Color {
+    let (Color::Rgb(r, g, bl), Color::Rgb(r2, g2, b2)) = (a, b) else { return a };
+    let mix = |x: u8, y: u8| ((u16::from(x) * keep + u16::from(y) * (100 - keep)) / 100) as u8;
+    Color::Rgb(mix(r, r2), mix(g, g2), mix(bl, b2))
+}
+
+/// The WCAG contrast ratio of two RGB colors (1 when either is not RGB).
+pub fn contrast_ratio(a: Color, b: Color) -> f64 {
+    let lum = |c: Color| {
+        let Color::Rgb(r, g, b) = c else { return None };
+        let ch = |v: u8| {
+            let v = f64::from(v) / 255.0;
+            if v <= 0.03928 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+        };
+        Some(0.2126 * ch(r) + 0.7152 * ch(g) + 0.0722 * ch(b))
+    };
+    let (Some(x), Some(y)) = (lum(a), lum(b)) else { return 1.0 };
+    (x.max(y) + 0.05) / (x.min(y) + 0.05)
+}
+
 /// How the screen behind a dialog is dimmed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Dim {
@@ -106,7 +130,9 @@ pub struct Theme {
     pub search_match: Style,
     /// The bracket matching the one at the editor's cursor (not drawn yet).
     pub match_paren: Style,
-    /// The mark of a read-only connection or session (not drawn yet).
+    /// The mark of read-only rules: the lock on a profile's explorer row and its tabs, and the
+    /// words "read-only" of an environment's rules. Blue in the built-ins (the theme's foreign
+    /// key color, which reads on the background and both surfaces): information, not a warning.
     pub read_only_mark: Style,
     /// The mark of something that changes or deletes data, or of a production profile (not
     /// drawn yet).
@@ -116,10 +142,15 @@ pub struct Theme {
     /// A plan node whose estimated rows are far from the actual rows (not drawn yet).
     pub plan_misestimate: Style,
     /// The estimates of an object among the largest of its schema in the explorer (1 MiB or
-    /// more): a subtle warning, amber.
+    /// more): a subtle warning, amber. With five levels (`[explorer] size_heat = "5"`) the
+    /// tier of 100 MiB or more.
     pub size_warm: Style,
-    /// The same for one of 1 GiB or more: red.
+    /// The same for one of 1 GiB or more: red. With five levels the tier of 10 GiB or more.
     pub size_hot: Style,
+    /// With five levels, the tier of 1 MiB or more: yellow.
+    pub size_mild: Style,
+    /// With five levels, the tier of 1 GiB or more: orange, between amber and red.
+    pub size_heated: Style,
     /// The colors of a chart's series, in turn. Each reads on the background and stays apart
     /// from the others, also in 256 colors (theme tests).
     pub chart_1: Color,
@@ -176,13 +207,15 @@ pub const DARK: Theme = Theme {
     search_match: Style::new().fg(rgb(0x14161B)).bg(rgb(0xE0A96D)),
     // The border tone as a background, lighter than the cursor line, in bold.
     match_paren: Style::new().bg(rgb(0x2E3440)).add_modifier(Modifier::BOLD),
-    // Accent, bold: a state to notice, not a warning.
-    read_only_mark: Style::new().fg(rgb(0x4FB3A9)).add_modifier(Modifier::BOLD),
+    // Blue (the foreign key's), bold: a state to notice, not a warning.
+    read_only_mark: Style::new().fg(rgb(0x61AFEF)).add_modifier(Modifier::BOLD),
     danger_mark: Style::new().fg(rgb(0xE06C75)).add_modifier(Modifier::BOLD),
     plan_hot: Style::new().fg(rgb(0xE0A96D)).add_modifier(Modifier::BOLD),
     plan_misestimate: Style::new().fg(rgb(0xE6C35C)).add_modifier(Modifier::UNDERLINED),
     size_warm: Style::new().fg(rgb(0xE0A96D)),
     size_hot: Style::new().fg(rgb(0xE06C75)),
+    size_mild: Style::new().fg(rgb(0xE8D65E)),
+    size_heated: Style::new().fg(rgb(0xD86546)),
     chart_1: rgb(0x61AFEF),
     chart_2: rgb(0xE0A96D),
     chart_3: rgb(0x8FC77A),
@@ -386,7 +419,7 @@ tokens! {
         mode_fg, chart_1, chart_2, chart_3, chart_4, chart_5, chart_6;
     styles: selection, range, cursor_line, current_stmt, running_stmt, run_hint, syn_keyword, syn_function, syn_string, syn_number,
         syn_comment, syn_operator, syn_identifier, syn_quoted_ident, syn_exec_comment, search_match, match_paren, read_only_mark,
-        danger_mark, plan_hot, plan_misestimate, size_warm, size_hot,
+        danger_mark, plan_hot, plan_misestimate, size_warm, size_hot, size_mild, size_heated,
 }
 
 /// The token names of a theme file.
@@ -457,6 +490,62 @@ impl Theme {
         }
     }
 
+    /// The selected row or cell of a pane without the focus: the selection's background with a
+    /// fifth of it blended toward the pane's background (as plain a selection, a little
+    /// dimmer than the focused one); the selection with [`Modifier::DIM`] where either is not
+    /// RGB (the terminal theme's reversed text).
+    pub fn selection_unfocused(&self) -> Style {
+        match (self.selection.bg, self.bg) {
+            (Some(sel @ Color::Rgb(..)), Color::Rgb(..)) => {
+                Style { bg: Some(blend(sel, self.bg, 80)), ..self.selection }
+            }
+            _ => self.selection.add_modifier(Modifier::DIM),
+        }
+    }
+
+    /// The text of a profile's name in its environment's color `env` (none: body text), made
+    /// readable as text: blended toward white on a dark theme, toward black on a light one, in
+    /// steps of 5%, until it reads at 4.5:1 on the background and both surfaces. Unchanged on a
+    /// theme without RGB backgrounds.
+    pub fn name_color(&self, env: Option<Color>) -> Color {
+        let Some(c) = env else { return self.fg };
+        let toward = match self.bg {
+            Color::Rgb(..) if contrast_ratio(self.bg, WHITE) > contrast_ratio(self.bg, BLACK) => WHITE,
+            Color::Rgb(..) => BLACK,
+            _ => return c,
+        };
+        // The RGB backgrounds only (a user theme may leave a surface to the terminal).
+        let backs: Vec<Color> =
+            [self.bg, self.surface, self.surface_alt].into_iter().filter(|c| matches!(c, Color::Rgb(..))).collect();
+        (0..=20)
+            .map(|step| blend(c, toward, 100 - step * 5))
+            .find(|m| backs.iter().all(|b| contrast_ratio(*m, *b) >= 4.5))
+            .unwrap_or(toward)
+    }
+
+    /// `c` (a name's color) muted, for a profile that is not connected: blended toward the
+    /// background, keeping 60% of it, more where that would read at less than 3:1 on the
+    /// background or a surface. [`Modifier::DIM`] does it on a theme without RGB backgrounds.
+    pub fn name_muted(&self, c: Color) -> Style {
+        if !matches!((c, self.bg), (Color::Rgb(..), Color::Rgb(..))) {
+            return Style::new().fg(c).add_modifier(Modifier::DIM);
+        }
+        let backs: Vec<Color> =
+            [self.bg, self.surface, self.surface_alt].into_iter().filter(|c| matches!(c, Color::Rgb(..))).collect();
+        let muted = (0..=8)
+            .map(|step| blend(c, self.bg, 60 + step * 5))
+            .find(|m| backs.iter().all(|b| contrast_ratio(*m, *b) >= 3.0))
+            .unwrap_or(c);
+        Style::new().fg(muted)
+    }
+
+    /// A profile's name: in its environment's color `env` (body text without one), bold while
+    /// it is connected, muted while it is not ([`Self::name_color`], [`Self::name_muted`]).
+    pub fn name_style(&self, env: Option<Color>, connected: bool) -> Style {
+        let c = self.name_color(env);
+        if connected { Style::new().fg(c).add_modifier(Modifier::BOLD) } else { self.name_muted(c) }
+    }
+
     /// `c` blended toward the dim tone; a terminal default color (not RGB) is treated as
     /// `default` first. Unchanged when the theme dims with a modifier.
     fn dimmed(&self, c: Color, default: Color) -> Color {
@@ -523,18 +612,23 @@ pub fn profile_color(c: datarig_core::profile::color::ProfileColor) -> Color {
     }
 }
 
-/// A chip of color `c` (an environment's badge): bold text in black or white, whichever reads
-/// better on `c`.
+/// A chip of color `c` (an environment's badge): bold text in near-black or white, whichever has
+/// the higher contrast on `c` (near-black on a terminal color, which the terminal's palette
+/// decides). A color of middle lightness that reads at less than 4.5:1 with either is moved
+/// away from the text (darker under white, lighter under near-black) in steps of 5% until it
+/// does. Every place that draws a badge draws it with this, as it is (never patched with the
+/// background of the row it is on).
 pub fn chip(c: Color) -> Style {
-    let fg = match c {
-        // Relative luminance (sRGB weights, without the gamma curve): light colors take dark
-        // text. The profile palette is light enough for all of its colors.
-        Color::Rgb(r, g, b) if 2126 * u32::from(r) + 7152 * u32::from(g) + 722 * u32::from(b) < 1_100_000 => {
-            Color::Rgb(0xFF, 0xFF, 0xFF)
+    const DARK_TEXT: Color = Color::Rgb(0x16, 0x16, 0x1E);
+    let (fg, away) =
+        if contrast_ratio(WHITE, c) > contrast_ratio(DARK_TEXT, c) { (WHITE, BLACK) } else { (DARK_TEXT, WHITE) };
+    let bg = match c {
+        Color::Rgb(..) => {
+            (0..=20).map(|step| blend(c, away, 100 - step * 5)).find(|b| contrast_ratio(fg, *b) >= 4.5).unwrap_or(away)
         }
-        _ => Color::Rgb(0x16, 0x16, 0x1E),
+        _ => c,
     };
-    Style::new().fg(fg).bg(c).add_modifier(Modifier::BOLD)
+    Style::new().fg(fg).bg(bg).add_modifier(Modifier::BOLD)
 }
 
 #[cfg(test)]

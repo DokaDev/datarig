@@ -346,11 +346,11 @@ fn the_explorer_filter_matches_name_host_and_database() {
         h.key(KeyCode::Esc);
         rows
     };
-    assert_eq!(filtered(&mut h, "replica"), ["+", "分析-replica"], "name");
-    assert_eq!(filtered(&mut h, "INTERNAL"), ["+", "分析-replica"], "host, ignoring case");
-    assert_eq!(filtered(&mut h, "warehouse"), ["+", "分析-replica"], "database");
-    assert_eq!(filtered(&mut h, "::1"), ["+", "v6"], "an IPv6 host");
-    assert_eq!(filtered(&mut h, "127.0.0.1:55432"), ["+", "local-pg"], "host and port");
+    assert_eq!(filtered(&mut h, "replica"), ["+", "[connections]", "分析-replica"], "name");
+    assert_eq!(filtered(&mut h, "INTERNAL"), ["+", "[connections]", "分析-replica"], "host, ignoring case");
+    assert_eq!(filtered(&mut h, "warehouse"), ["+", "[connections]", "分析-replica"], "database");
+    assert_eq!(filtered(&mut h, "::1"), ["+", "[connections]", "v6"], "an IPv6 host");
+    assert_eq!(filtered(&mut h, "127.0.0.1:55432"), ["+", "[connections]", "local-pg"], "host and port");
     assert_eq!(filtered(&mut h, "zzz"), ["+"]);
 }
 
@@ -428,13 +428,13 @@ fn explorer_keys_on_nodes_and_folders() {
     let mut cfg = sample_config(None);
     cfg.connections[1].folder = Some("work/prod".into());
     let mut h = launched(&cfg);
-    assert_eq!(h.rows(), ["+", "work/", "local-pg", "v6"], "folders start closed");
+    assert_eq!(h.rows(), ["+", "[connections]", "work/", "local-pg", "v6"], "folders start closed");
     h.keys("gg");
-    h.keys("j");
+    h.keys("jj");
     h.keys("l");
-    assert_eq!(h.rows(), ["+", "work/", "  prod/", "local-pg", "v6"]);
+    assert_eq!(h.rows(), ["+", "[connections]", "work/", "  prod/", "local-pg", "v6"]);
     h.keys("jl");
-    assert_eq!(h.rows(), ["+", "work/", "  prod/", "    分析-replica", "local-pg", "v6"]);
+    assert_eq!(h.rows(), ["+", "[connections]", "work/", "  prod/", "    分析-replica", "local-pg", "v6"]);
     // `n` in a folder: the new profile goes there.
     h.keys("n");
     h.type_text("inside");
@@ -450,7 +450,7 @@ fn explorer_keys_on_nodes_and_folders() {
     h.keys("h");
     assert_eq!(h.rows()[h.selected()], "  prod/");
     h.keys("h");
-    assert_eq!(h.rows(), ["+", "work/", "  prod/", "local-pg", "v6"]);
+    assert_eq!(h.rows(), ["+", "[connections]", "work/", "  prod/", "local-pg", "v6"]);
     // Enter on "＋ New connection".
     h.keys("gg");
     h.key(KeyCode::Enter);
@@ -463,13 +463,13 @@ fn explorer_keys_on_nodes_and_folders() {
     assert!(h.sent().is_empty() && h.overlay_kind().is_none());
     // A folder with profiles cannot be deleted; an empty one can (after asking).
     h.keys("gg");
-    h.keys("j");
+    h.keys("jj");
     h.keys("d");
     assert!(h.status(160, 45).contains("Folder “work” is not empty"));
     let empty = datarig_core::profile::folder::FolderPath::parse("scratch").unwrap();
     h.app.folders.insert(&empty);
     h.keys("gg");
-    h.keys("j");
+    h.keys("jj");
     assert_eq!(h.rows()[h.selected()], "scratch/", "{:?}", h.rows());
     h.keys("d");
     assert!(h.screen(160, 45).contains("Delete the empty folder “scratch”?"));
@@ -490,13 +490,17 @@ fn folders_are_created_renamed_and_profiles_moved() {
     h.type_text("work");
     h.key(KeyCode::Enter);
     assert!(h.overlay_kind().is_none());
-    assert_eq!(h.rows(), ["+", "work/", "local-pg", "v6", "分析-replica"]);
+    assert_eq!(h.rows(), ["+", "[connections]", "work/", "local-pg", "v6", "分析-replica"]);
     assert_eq!(h.rows()[h.selected()], "work/", "the cursor is on it");
     // Inside it (`N` on a folder), a name that exists is refused.
     h.keys("N");
     h.type_text("prod");
     h.key(KeyCode::Enter);
-    assert_eq!(h.rows(), ["+", "work/", "  prod/", "local-pg", "v6", "分析-replica"], "the parent opens");
+    assert_eq!(
+        h.rows(),
+        ["+", "[connections]", "work/", "  prod/", "local-pg", "v6", "分析-replica"],
+        "the parent opens"
+    );
     assert_eq!(h.rows()[h.selected()], "  prod/");
     h.keys("k");
     h.keys("N");
@@ -514,16 +518,16 @@ fn folders_are_created_renamed_and_profiles_moved() {
     h.key(KeyCode::Enter);
     h.key(KeyCode::Enter);
     assert_eq!(h.app.profiles.iter().find(|p| p.name == "v6").unwrap().folder.as_deref(), Some("work/prod"));
-    assert_eq!(h.rows(), ["+", "work/", "  prod/", "    v6", "local-pg", "分析-replica"]);
+    assert_eq!(h.rows(), ["+", "[connections]", "work/", "  prod/", "    v6", "local-pg", "分析-replica"]);
     assert!(h.status(160, 45).contains("Moved v6 to work/prod/"));
     // `R` renames a folder; its profiles follow.
     h.keys("gg");
-    h.keys("j");
+    h.keys("jj");
     h.keys("R");
     h.ctrl('u');
     h.type_text("team");
     h.key(KeyCode::Enter);
-    assert_eq!(h.rows(), ["+", "team/", "  prod/", "    v6", "local-pg", "分析-replica"]);
+    assert_eq!(h.rows(), ["+", "[connections]", "team/", "  prod/", "    v6", "local-pg", "分析-replica"]);
     assert_eq!(h.app.profiles.iter().find(|p| p.name == "v6").unwrap().folder.as_deref(), Some("team/prod"));
     // And back to the top level.
     h.explore("v6");
@@ -697,8 +701,9 @@ fn right_click_opens_the_nodes_actions_and_runs_them() {
     let mut h = three_profiles();
     h.meta_db("local-pg", DbEvent::Schemas(Ok(vec!["public".into()])));
     h.draw(120, 30);
-    // A connected profile (row 1): its actions, in the explorer's key order.
-    right_click(&mut h, 1);
+    // A connected profile (row 2, below the Connections head): its actions, in the explorer's
+    // key order.
+    right_click(&mut h, 2);
     assert_eq!(h.app.key_context(), Ctx::ContextMenu);
     assert_eq!(h.app.focus, Focus::Tree);
     assert_eq!(h.app.selected_profile(), Some(id(&h, "local-pg")), "the click selected the row");
@@ -730,7 +735,7 @@ fn right_click_opens_the_nodes_actions_and_runs_them() {
     assert!(h.form_open());
     h.key(KeyCode::Esc);
     // The arrows and Enter: the second item reloads the schemas.
-    right_click(&mut h, 1);
+    right_click(&mut h, 2);
     h.key(KeyCode::Down);
     h.key(KeyCode::Enter);
     assert!(h.overlay_kind().is_none());
@@ -936,22 +941,22 @@ fn the_explorer_lists_the_servers_databases() {
     h.key(KeyCode::Char('l'));
     assert!(h.sent().iter().any(|c| matches!(c, DbCommand::LoadDatabases)), "asked when the node opens");
     let rows = h.rows();
-    assert_eq!(rows[1..6], ["local-pg", "  db:datarig*", "    analytics", "    public", "    shop"], "{rows:?}");
-    assert_eq!(rows[6], "  (note)", "the others are loading: {rows:?}");
+    assert_eq!(rows[2..7], ["local-pg", "  db:datarig*", "    analytics", "    public", "    shop"], "{rows:?}");
+    assert_eq!(rows[7], "  (note)", "the others are loading: {rows:?}");
     assert!(h.screen(120, 40).contains("datarig default"));
     h.db(DbEvent::Databases(Ok(vec!["datarig".into(), "locked".into(), "sales".into()])));
     let rows = h.rows();
-    assert_eq!(rows[6..8], ["  db:locked", "  db:sales"], "{rows:?}");
+    assert_eq!(rows[7..9], ["  db:locked", "  db:sales"], "{rows:?}");
     // Another database opens through its aux session.
     cursor_on(&mut h, "  db:sales");
     h.key(KeyCode::Char('l'));
     let aux = last_session(&h, SessionRole::Meta);
     let s = h.driver.sessions.lock().unwrap()[aux].opts.context.clone();
     assert_eq!(s.database.as_deref(), Some("sales"));
-    assert_eq!(h.rows()[8], "    Loading…");
+    assert_eq!(h.rows()[9], "    Loading…");
     aux_event(&mut h, "sales", DbEvent::Connected);
     aux_event(&mut h, "sales", DbEvent::Schemas(Ok(vec!["public".into(), "q1".into()])));
-    assert_eq!(h.rows()[8..10], ["    public", "    q1"]);
+    assert_eq!(h.rows()[9..11], ["    public", "    q1"]);
     cursor_on(&mut h, "    q1");
     h.key(KeyCode::Char('l'));
     assert!(h.sent_to(aux).iter().any(|c| matches!(c, DbCommand::LoadObjects { schema } if schema == "q1")));
@@ -1016,6 +1021,8 @@ fn an_unreadable_database_shows_why() {
     let rows = h.rows();
     let at = rows.iter().position(|r| r == "  db:locked").unwrap();
     assert_eq!(rows[at + 1], "    (note)", "{rows:?}");
+    // A wide explorer: room for the line under the database (the Connections head indents it).
+    h.app.explorer.width = Some(60);
     let screen = h.screen(160, 45);
     assert!(screen.contains("This database can't be read: FA"), "{screen}");
     assert!(!screen.contains("(empty)"), "{screen}");
@@ -1188,7 +1195,7 @@ fn the_menu_of_a_folder_and_of_a_profile() {
     let mut cfg = sample_config(None);
     cfg.connections[1].folder = Some("work".into());
     let mut h = launched(&cfg);
-    assert_eq!(h.rows(), ["+", "work/", "local-pg", "v6"]);
+    assert_eq!(h.rows(), ["+", "[connections]", "work/", "local-pg", "v6"]);
     // The folder (the cursor on a profile).
     h.explore("v6");
     h.right_click_row("work/");

@@ -87,6 +87,7 @@ pub(crate) fn draw_workspace(f: &mut Frame, app: &mut App) -> Option<(u16, u16)>
     app.layout = Layout { tree, explorer_edge: edge(tree), body, ..base };
 
     app.layout.tab_bar = bar_and_panes[0];
+    app.drop_hover_of_other_tab();
     let mut hits = draw_tab_bar(app, bar_and_panes[0], f.buffer_mut());
     // The bar laid out otherwise (a tab closed, added, scrolled, the screen resized): what was
     // under the pointer is not there any more.
@@ -105,6 +106,10 @@ pub(crate) fn draw_workspace(f: &mut Frame, app: &mut App) -> Option<(u16, u16)>
             (None, None)
         }
         Some(Focus::Inspector) => {
+            // No grid drawn: a cell lit there is not under the pointer.
+            if matches!(app.pointer_on, Some(PointerOn::Cell(..))) {
+                app.pointer_on = None;
+            }
             app.layout.detail = body;
             crate::widgets::inspector::draw_inspector(app, body, f.buffer_mut());
             (None, None)
@@ -310,6 +315,12 @@ fn draw_results_pane(app: &mut App, area: Rect, buf: &mut Buffer) {
         app.layout.strip = Rect::default();
         rinner
     };
+    // Another view than the rows: no grid, so no cell of it is under the pointer (it would
+    // still be lit when the rows come back).
+    let rows = app.tab().exec.view != ResultView::Messages && !app.plan_shown() && !app.chart_shown();
+    if !rows && matches!(app.pointer_on, Some(PointerOn::Cell(..))) {
+        app.pointer_on = None;
+    }
     if app.tab().exec.view == ResultView::Messages {
         draw_messages(app, content, buf);
     } else if app.plan_shown() {
@@ -633,9 +644,12 @@ fn draw_connection_bar(app: &App, area: Rect, buf: &mut Buffer) {
     parts.push((format!("  {endpoint}"), muted));
     parts.extend(crate::widgets::statusbar::environment_parts(app, p.id, bg));
     if app.read_only(p.id) {
-        let ro = Style::new().fg(th.fg).bg(th.surface_alt).add_modifier(Modifier::BOLD);
+        let ro = Style::new()
+            .fg(crate::app::environments::read_only_color(&th))
+            .bg(th.surface_alt)
+            .add_modifier(Modifier::BOLD);
         parts.push((" ".to_string(), muted));
-        parts.push((format!(" {} ", app.i18n.label(Label::StatusReadOnly)), ro));
+        parts.push((format!(" {} ", crate::app::environments::read_only_badge(app)), ro));
     }
     let key = app
         .keymap
@@ -947,6 +961,13 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
         .unwrap_or_default();
     let run_again = app.can_run_again();
     let text_plan = app.text_plan_hint();
+    // Where the grid's cells were before this frame: laid out otherwise (scrolled, another
+    // result), the cell under the pointer is not there any more.
+    let grid_was = |t: &crate::app::Tab| {
+        let id = if let Results::Rows(rs) = &t.results { Some(rs.id) } else { None };
+        (id, t.grid.top, t.grid.data_y, t.grid.hit_cols.clone())
+    };
+    let before = grid_was(app.tab());
     let t = app.tabs.active_mut();
     match &mut t.results {
         Results::Empty => {
@@ -1018,6 +1039,32 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
             msg_line(buf, &app.i18n.msg(&msg), th.error)
         }
         Results::Cancelled => msg_line(buf, &app.i18n.label(Label::QueryCancelled), th.warning),
+    }
+    if grid_was(app.tab()) != before && matches!(app.pointer_on, Some(PointerOn::Cell(..))) {
+        app.pointer_on = None;
+    }
+    // The cell under the pointer, or the one of the inspector's entry under it (in the selected
+    // row): lit as a hover is, never selected.
+    let t = app.tab();
+    let hovered = match app.pointer_hover() {
+        Some(PointerOn::Cell(r, c)) => Some((r, c)),
+        Some(PointerOn::Detail(c)) => Some((t.grid.row, c)),
+        _ => None,
+    };
+    if let (Some((r, c)), Results::Rows(rs)) = (hovered.filter(|&h| h != (t.grid.row, t.grid.col)), &t.results)
+        && let Some(cell) = t.grid.cell_rect(r, c, rs.rows.len())
+    {
+        // In a selected range only the underline: the range's background stays.
+        let in_range = t
+            .grid
+            .selection(rs.rows.len(), rs.columns.len())
+            .is_some_and(|(rr, cr)| rr.contains(&r) && cr.contains(&c));
+        let style = if in_range {
+            ratatui::style::Style::new().add_modifier(Modifier::UNDERLINED)
+        } else {
+            crate::widgets::cell_hover_style()
+        };
+        buf.set_style(cell.intersection(area), style);
     }
     // Rows of the spill file that could not be read are shown as not read, and said so.
     if let Some(fault) = app.tabs.active_mut().grid.read_error.take() {

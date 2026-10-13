@@ -249,7 +249,7 @@ fn new_edit_rename_and_copy() {
     let text = dir.text();
     assert!(text.contains("[policy.qa]\ncolor = \"orange\"\nbadge = \"QA\"\nconfirm = \"writes\"\n"), "{text}");
     assert!(text.contains(old_table), "{text}");
-    assert_eq!(h.explorer_line().trim(), "● qa  QA   confirm all writes", "the cursor on it");
+    assert_eq!(h.explorer_line().trim(), "● qa  QA   asks before every write", "the cursor on it");
     // Edit: the badge goes, read-only on.
     h.keys("e");
     h.key(KeyCode::Tab);
@@ -386,8 +386,8 @@ fn the_environment_list_picks_one() {
     assert_eq!(env_rows(&h), ["None (default rules)", "prod", "dev", "New environment…"]);
     assert_eq!(env_list(&h).selected(), Some(Row::Entry(1)), "the current one");
     let e = &env_list(&h).entries()[1];
-    assert_eq!(e.hint, "read-only · confirm all writes");
-    assert_eq!(e.badge.as_ref().map(|b| b.0.as_str()), Some("PROD"));
+    assert_eq!(e.hint, "read-only · asks before every write");
+    assert_eq!(e.badge.as_ref().map(|b| b.0.as_str()), Some(" PROD "));
     h.type_text("dev");
     h.key(KeyCode::Enter);
     assert_eq!(h.form().env_choice(), EnvChoice::Named("dev".into()));
@@ -417,7 +417,7 @@ fn a_preset_picked_in_the_profile_form_is_written_with_the_profile() {
         ["None (default rules)", "dev", "test", "staging", "prod", "New environment…"],
         "the presets"
     );
-    assert_eq!(env_list(&h).entries()[4].hint, "preset · read-only · confirm all writes");
+    assert_eq!(env_list(&h).entries()[4].hint, "preset · read-only · asks before every write");
     h.type_text("prod");
     h.key(KeyCode::Enter);
     assert_eq!(h.form().env_choice(), EnvChoice::Preset("prod".into()));

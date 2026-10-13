@@ -294,6 +294,13 @@ impl GridState {
         self.hit_cols.iter().find(|(a, b, _)| x >= *a && x < *b).map(|&(_, _, c)| (r, c))
     }
 
+    /// Where cell (row, col) was drawn last (between its separators), if it was.
+    pub fn cell_rect(&self, row: usize, col: usize, total: usize) -> Option<Rect> {
+        let shown = self.top..(self.top + self.page_rows).min(self.window(total).end);
+        let &(a, b, _) = self.hit_cols.iter().find(|h| h.2 == col).filter(|_| shown.contains(&row))?;
+        Some(Rect::new(a + 1, self.data_y + (row - self.top) as u16, b.saturating_sub(a + 1), 1))
+    }
+
     /// Where a drag at (x, y) takes the cursor: the cell there, clamped to
     /// the result; past an edge of the grid one row or column beyond the last one shown, so
     /// the grid scrolls that way (over rows not in memory too: drawing reads them).
@@ -531,7 +538,7 @@ pub fn render(
             let selected = r == st.row && ci == st.col;
             let in_range = range.as_ref().is_some_and(|(rr, cr)| rr.contains(&r) && cr.contains(&ci));
             let bg = if selected {
-                if focused { th.selection } else { th.cursor_line }
+                if focused { th.selection } else { th.selection_unfocused() }
             } else if in_range {
                 th.range
             } else {

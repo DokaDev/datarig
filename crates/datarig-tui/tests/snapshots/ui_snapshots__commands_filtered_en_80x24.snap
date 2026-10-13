@@ -4,12 +4,12 @@ expression: "h.draw(80, 24).backend()"
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×                                          "
 "│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾ ●   local-pg        ││ local-pg / datarig  127.0.0.1:55432                  │"
-"│  ▾ datarig default   ││  1 -- datarig 🐘  Ctrl+E: run the statement under the│" Hidden by multi-width symbols: [(41, " ")]
-"│    ▸ ana╭ Commands ────────────────────────────────────────────────╮         │"
-"│    ▸ pub│ : tst con                                                │         │"
-"│    ▸ sho├──────────────────────────────────────────────────────────┤         │"
-"│         │  Test connection                                       t │         │"
+"│▾ Connections 1       ││ local-pg / datarig  127.0.0.1:55432                  │"
+"│  ▾ ●   local-pg      ││  1 -- datarig 🐘  Ctrl+E: run the statement under the│" Hidden by multi-width symbols: [(41, " ")]
+"│    ▾ dat╭ Commands ────────────────────────────────────────────────╮         │"
+"│      ▸ a│ : tst con                                                │         │"
+"│      ▸ p├──────────────────────────────────────────────────────────┤         │"
+"│      ▸ s│  Test connection                                       t │         │"
 "│         │  Change this tab's connection                  Space c s │         │"
 "│         │  Choose this tab's database and schema         Space c d │         │"
 "│         │  Test this tab's connection                    Space c t │         │"

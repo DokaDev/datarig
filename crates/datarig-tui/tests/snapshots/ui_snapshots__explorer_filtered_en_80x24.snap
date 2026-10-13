@@ -5,8 +5,8 @@ expression: t.backend()
 "╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
 "│/ v6                  ││                                                      │"
 "│  ＋ New connection   ││  No open tabs                                        │" Hidden by multi-width symbols: [(4, " ")]
-"│▸ ○   v6              ││  Pick a connection in the explorer, or press         │"
-"│                      ││  Ctrl+O.                                             │"
+"│▾ Connections 3       ││  Pick a connection in the explorer, or press         │"
+"│  ▸ ○   v6            ││  Ctrl+O.                                             │"
 "│                      ││                                                      │"
 "│                      ││  Enter      Connect and open a console               │"
 "│                      ││  Ctrl+O     Quick connect                            │"

@@ -364,6 +364,8 @@ fn every_token_of_a_theme_can_be_set_by_name() {
         plan_misestimate: _,
         size_warm: _,
         size_hot: _,
+        size_mild: _,
+        size_heated: _,
         chart_1: _,
         chart_2: _,
         chart_3: _,
@@ -373,7 +375,7 @@ fn every_token_of_a_theme_can_be_set_by_name() {
         dim: _,
     } = DARK;
     // Every field above but `dim`.
-    assert_eq!(COLOR_TOKENS.len() + STYLE_TOKENS.len(), 52);
+    assert_eq!(COLOR_TOKENS.len() + STYLE_TOKENS.len(), 54);
     let mut th = DARK;
     for (i, name) in COLOR_TOKENS.iter().enumerate() {
         *color_token(&mut th, name).unwrap() = Color::Indexed(i as u8);
@@ -386,6 +388,10 @@ fn every_token_of_a_theme_can_be_set_by_name() {
     assert_eq!(
         (th.size_warm, th.size_hot),
         (Style::new().bg(Color::Indexed(121)), Style::new().bg(Color::Indexed(122)))
+    );
+    assert_eq!(
+        (th.size_mild, th.size_heated),
+        (Style::new().bg(Color::Indexed(123)), Style::new().bg(Color::Indexed(124)))
     );
     assert_eq!(th.chart(), [23, 24, 25, 26, 27, 28].map(Color::Indexed));
     assert!(color_token(&mut th, "selection").is_none() && style_token(&mut th, "bg").is_none());
@@ -647,29 +653,171 @@ fn executable_comments_stand_apart_from_comments_and_keywords_in_every_theme() {
 
 /// The size tiers of the explorer's estimates read as a subtle warning: a foreground only
 /// (the row's background stays), apart from the dim estimates, from body text and from each
-/// other; in RGB themes they read (3:1, as marks) on the explorer's background and on the
-/// selected row's (focused or not), also in 256 colors. The terminal theme uses its ANSI
-/// yellow and red.
+/// other (the two of three levels, and the four of five: yellow, amber, orange, red); in RGB
+/// themes they read (3:1, as marks) on the explorer's background and on the selected row's
+/// (focused or not), stay apart in 256 colors and are at least 45 apart in RGB. The terminal
+/// theme uses its ANSI yellows and reds.
 #[test]
 fn size_heat_reads_on_the_explorer_rows_in_every_theme() {
+    let tiers = |th: &Theme| {
+        [
+            ("size_mild", th.size_mild),
+            ("size_warm", th.size_warm),
+            ("size_heated", th.size_heated),
+            ("size_hot", th.size_hot),
+        ]
+    };
     for (name, th) in BUILTINS.iter().copied() {
-        for (token, s) in [("size_warm", th.size_warm), ("size_hot", th.size_hot)] {
+        let all = tiers(th);
+        for (i, (token, s)) in all.iter().enumerate() {
             assert!(s.bg.is_none(), "{name}: {token} keeps the row's background");
-            let c = fg(s);
+            let c = fg(*s);
             assert!(c != th.fg_dim && c != th.fg && c != th.bg, "{name}: {token} looks like text");
-        }
-        assert_ne!(fg(th.size_warm), fg(th.size_hot), "{name}");
-    }
-    assert_eq!((fg(TERMINAL.size_warm), fg(TERMINAL.size_hot)), (Color::Yellow, Color::Red));
-    for (name, th) in rgb_themes() {
-        for bg in [th.bg, bg(th.selection), bg(th.cursor_line)] {
-            for (token, s) in [("size_warm", th.size_warm), ("size_hot", th.size_hot)] {
-                let c = contrast(fg(s), bg);
-                assert!(c >= 3.0, "{name}: {token} on {bg:?}: {c:.2}");
-                assert_ne!(xterm256(fg(s)), xterm256(bg), "{name}: {token} on {bg:?} in 256 colors");
+            for (other, t) in &all[i + 1..] {
+                assert_ne!(c, fg(*t), "{name}: {token} and {other}");
             }
         }
-        assert_ne!(xterm256(fg(th.size_warm)), xterm256(fg(th.size_hot)), "{name}: the tiers in 256 colors");
-        assert_ne!(xterm256(fg(th.size_warm)), xterm256(th.fg_dim), "{name}: warm and dim in 256 colors");
+    }
+    assert_eq!(tiers(&TERMINAL).map(|(_, s)| fg(s)), [Color::LightYellow, Color::Yellow, Color::LightRed, Color::Red]);
+    for (name, th) in rgb_themes() {
+        let all = tiers(th);
+        for (i, (token, s)) in all.iter().enumerate() {
+            let c = fg(*s);
+            for bg in [th.bg, bg(th.selection), bg(th.cursor_line), bg(th.selection_unfocused())] {
+                let k = contrast(c, bg);
+                assert!(k >= 3.0, "{name}: {token} on {bg:?}: {k:.2}");
+                assert_ne!(xterm256(c), xterm256(bg), "{name}: {token} on {bg:?} in 256 colors");
+            }
+            assert_ne!(xterm256(c), xterm256(th.fg_dim), "{name}: {token} and dim in 256 colors");
+            for (other, t) in &all[i + 1..] {
+                assert_ne!(xterm256(c), xterm256(fg(*t)), "{name}: {token} and {other} in 256 colors");
+                let (a, b) = (rgb_of(c), rgb_of(fg(*t)));
+                let d = ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2) + (a.2 - b.2).powi(2)).sqrt();
+                assert!(d >= 45.0, "{name}: {token} and {other} are too close ({d:.0})");
+            }
+        }
+    }
+}
+
+/// The selection of a pane without the focus (the grid's cell, the inspector's entry) stays
+/// clearly visible: its own background, close to the selection's and further from the pane's
+/// than the faint cursor line it used to be, apart from the background in 256 colors,
+/// with body text readable on it; never the focused selection. The terminal theme dims its
+/// reversed text.
+#[test]
+fn the_unfocused_selection_is_visible_and_apart_from_the_focused_one() {
+    for (name, th) in BUILTINS.iter().copied() {
+        let u = th.selection_unfocused();
+        assert_ne!(u, th.selection, "{name}");
+        assert_ne!(u, th.cursor_line, "{name}");
+    }
+    let t = TERMINAL.selection_unfocused();
+    assert!(t.add_modifier.contains(Modifier::REVERSED | Modifier::DIM), "{t:?}");
+    for (name, th) in rgb_themes() {
+        let u = bg(th.selection_unfocused());
+        let (sel, faint) = (bg(th.selection), bg(th.cursor_line));
+        assert_ne!(u, sel, "{name}");
+        let k = contrast(u, th.bg);
+        assert!(k > contrast(faint, th.bg), "{name}: {k:.2} not above the cursor line's");
+        assert!(k < contrast(sel, th.bg), "{name}: {k:.2} not below the selection's");
+        assert_ne!(xterm256(u), xterm256(th.bg), "{name}: vanishes in 256 colors");
+        assert!(contrast(th.fg, u) >= 4.5, "{name}: body text on it: {:.2}", contrast(th.fg, u));
+    }
+}
+
+/// A profile's name in its environment's color reads as text (4.5:1) on the background and
+/// both surfaces of every theme, for every profile color and without one (body text); dark
+/// themes keep the color as it is. Not connected, the same color muted: still 3:1 there, yet
+/// clearly fainter (its contrast at least 1.3 times lower). Without
+/// RGB backgrounds the color stays and muting is the dim modifier.
+#[test]
+fn environment_colored_names_read_and_muted_ones_stay_readable() {
+    let envs: Vec<Option<Color>> = std::iter::once(None).chain(PROFILE_COLORS.iter().copied().map(Some)).collect();
+    for (name, th) in rgb_themes() {
+        for &env in &envs {
+            let c = th.name_color(env);
+            let muted = fg(th.name_style(env, false));
+            assert_eq!(th.name_style(env, true), Style::new().fg(c).add_modifier(Modifier::BOLD), "{name}");
+            for back in [th.bg, th.surface, th.surface_alt] {
+                assert!(contrast(c, back) >= 4.5, "{name}: {env:?} on {back:?}: {:.2}", contrast(c, back));
+                assert!(
+                    contrast(muted, back) >= 3.0,
+                    "{name}: muted {env:?} on {back:?}: {:.2}",
+                    contrast(muted, back)
+                );
+            }
+            let (on, off) = (contrast(c, th.bg), contrast(muted, th.bg));
+            assert!(on >= off * 1.3, "{name}: {env:?}: {on:.2} vs muted {off:.2}");
+        }
+        assert_eq!(th.name_color(None), th.fg, "{name}");
+    }
+    for &c in &PROFILE_COLORS {
+        assert_eq!(DARK.name_color(Some(c)), c, "dark keeps the profile colors");
+    }
+    let th = &TERMINAL;
+    assert_eq!(
+        th.name_style(Some(PROFILE_COLORS[0]), true),
+        Style::new().fg(PROFILE_COLORS[0]).add_modifier(Modifier::BOLD)
+    );
+    assert_eq!(th.name_style(None, false), Style::new().fg(Color::Reset).add_modifier(Modifier::DIM));
+}
+
+/// An environment's badge chip reads (4.5:1) in every theme, for every profile color (kept as
+/// it is) and for a badge without a color (the theme's muted text color, as `App::badge_color`
+/// picks it, moved a little where it is of middle lightness).
+#[test]
+fn environment_badge_chips_read_in_every_theme() {
+    for &c in &PROFILE_COLORS {
+        assert_eq!(chip(c).bg, Some(c), "a profile color stays");
+    }
+    for (name, th) in rgb_themes() {
+        for c in PROFILE_COLORS.iter().copied().chain([th.fg_muted]) {
+            let s = chip(c);
+            assert!(s.add_modifier.contains(Modifier::BOLD));
+            let k = contrast(fg(s), bg(s));
+            assert!(k >= 4.5, "{name}: chip of {c:?}: {k:.2}");
+            let (a, b) = (rgb_of(c), rgb_of(bg(s)));
+            let d = ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2) + (a.2 - b.2).powi(2)).sqrt();
+            assert!(d < 60.0, "{name}: chip of {c:?} moved too far ({d:.0})");
+        }
+    }
+    assert_eq!(
+        chip(Color::Gray),
+        Style::new().fg(Color::Rgb(0x16, 0x16, 0x1E)).bg(Color::Gray).add_modifier(Modifier::BOLD)
+    );
+}
+
+/// An environment's rules in words take a color each (`app::environments::RuleTone`): the
+/// read-only mark's blue (also the lock of read-only rules), the warning color for asking
+/// before every write, the error color for holding locks while paging, dim for the standard
+/// rules (the dim text as everywhere). The four stand apart in every theme (also in 256
+/// colors), and the three colored ones read (3:1) on the background and both surfaces (the
+/// explorer, the lists and forms); the read-only mark reads as text (4.5:1) there.
+#[test]
+fn environment_rule_tones_read_and_stand_apart_in_every_theme() {
+    for (name, th) in BUILTINS.iter().copied() {
+        let tones = [fg(th.read_only_mark), th.warning, th.error, th.fg_dim];
+        for (i, a) in tones.iter().enumerate() {
+            for b in &tones[i + 1..] {
+                assert_ne!(a, b, "{name}");
+            }
+        }
+    }
+    for (name, th) in rgb_themes() {
+        let tones = [fg(th.read_only_mark), th.warning, th.error, th.fg_dim];
+        for back in [th.bg, th.surface, th.surface_alt] {
+            for c in &tones[..3] {
+                let c = *c;
+                assert!(contrast(c, back) >= 3.0, "{name}: {c:?} on {back:?}: {:.2}", contrast(c, back));
+            }
+            let k = contrast(fg(th.read_only_mark), back);
+            assert!(k >= 4.5, "{name}: the read-only mark on {back:?}: {k:.2}");
+        }
+        let mapped = tones.map(xterm256);
+        for i in 0..4 {
+            for j in i + 1..4 {
+                assert_ne!(mapped[i], mapped[j], "{name}: {:?} and {:?} in 256 colors", tones[i], tones[j]);
+            }
+        }
     }
 }

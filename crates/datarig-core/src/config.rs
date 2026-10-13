@@ -25,8 +25,9 @@
 //! quotes typed in Insert mode get their closing character, `[editor] run_hints` whether the
 //! editor shows what a statement's last run did after its last line. The retired
 //! `[editor] mode` key (the editor has vim keys only) is accepted with any value, ignored and
-//! dropped by the next save. `[explorer] size_heat` says whether the explorer colors the
-//! estimates of the largest tables of each schema.
+//! dropped by the next save. `[explorer] size_heat` says whether, and in how many levels, the
+//! explorer colors the estimates of the largest tables of each schema (`on`, its old value,
+//! reads as `3`).
 //! [`Prefs`] holds `[commands] position` (the `:` command line as a popup near
 //! the top, or the bottom line), `detail_view` (the result inspector as a panel or a status bar
 //! preview), `clipboard` (how copies reach the clipboard) and `copy_header`
@@ -219,8 +220,9 @@ struct EditorSection {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ExplorerSection {
+    /// A string, or the number of levels written without quotes (`size_heat = 5`).
     #[serde(default)]
-    size_heat: Option<String>,
+    size_heat: Option<toml::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -492,22 +494,33 @@ impl Choice for KeychainAccess {
     }
 }
 
-/// `[explorer] size_heat`: whether the explorer colors the estimates of the largest objects of
-/// each schema (amber from 1 MiB, red from 1 GiB; on by default).
+/// `[explorer] size_heat`: whether, and in how many levels, the explorer colors the estimates
+/// of the largest objects of each schema (the default, `3`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum SizeHeat {
+    /// Amber from 1 MiB, red from 1 GiB.
     #[default]
-    On,
+    Three,
+    /// Yellow from 1 MiB, amber from 100 MiB, orange from 1 GiB, red from 10 GiB.
+    Five,
     Off,
 }
 
 impl Choice for SizeHeat {
-    const ALL: &'static [Self] = &[SizeHeat::On, SizeHeat::Off];
+    const ALL: &'static [Self] = &[SizeHeat::Three, SizeHeat::Five, SizeHeat::Off];
     fn as_str(self) -> &'static str {
         match self {
-            SizeHeat::On => "on",
+            SizeHeat::Three => "3",
+            SizeHeat::Five => "5",
             SizeHeat::Off => "off",
         }
+    }
+    /// `on` (the value before there were levels) is `3`.
+    fn parse(s: &str) -> Option<Self> {
+        if s.eq_ignore_ascii_case("on") {
+            return Some(SizeHeat::Three);
+        }
+        Self::ALL.iter().copied().find(|v| v.as_str().eq_ignore_ascii_case(s))
     }
 }
 
@@ -833,7 +846,14 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
         auto_pairs: choice("editor.auto_pairs", auto_pairs, "off, on")?,
         run_hints: choice("editor.run_hints", run_hints, "on, off")?,
         keychain_access: choice("secrets.macos_keychain_access", keychain_access, "direct, security_tool")?,
-        size_heat: choice("explorer.size_heat", f.explorer.and_then(|e| e.size_heat), "on, off")?,
+        size_heat: choice(
+            "explorer.size_heat",
+            f.explorer.and_then(|e| e.size_heat).map(|v| match v {
+                toml::Value::String(s) => s,
+                other => other.to_string(),
+            }),
+            "3, 5, off",
+        )?,
     };
     // The environments in the file's order (the deserializer sorts its map by name).
     let order: Vec<String> = text

@@ -4,13 +4,13 @@ expression: backend
 ---
 "╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
 "│  ＋ New connection   ││                                                      │" Hidden by multi-width symbols: [(4, " ")]
-"│▸ ○   local-pg        ││  No open tabs                                        │"
-"│▾ Tunnels 0           ││  Pick a connection in the explorer, or press         │"
-"│    n here makes an S…││  Ctrl+O.                                             │"
-"│▾ Environments 0      ││                                                      │"
-"│  ▸ ○ Default rules (…││  Enter      Connect and open a console               │"
-"│    ＋ Add presets: d…││  Ctrl+O     Quick connect                            │" Hidden by multi-width symbols: [(6, " ")]
-"│         ╭ Keychain ────────────────────────────────────────────────╮         │"
+"│▾ Connections 1       ││  No open tabs                                        │"
+"│  ▸ ○   local-pg      ││  Pick a connection in the explorer, or press         │"
+"│▾ Tunnels 0           ││  Ctrl+O.                                             │"
+"│    n here makes an S…││                                                      │"
+"│▾ Environments 0      ││  Enter      Connect and open a console               │"
+"│  ▸ ○ Default rules (…││  Ctrl+O     Quick connect                            │"
+"│    ＋ Ad╭ Keychain ────────────────────────────────────────────────╮         │" Hidden by multi-width symbols: [(6, " ")]
 "│         │                                                          │         │"
 "│         │ Moving saved passwords to the system keychain… (your OS  │         │"
 "│         │ may ask for permission)                                  │         │"

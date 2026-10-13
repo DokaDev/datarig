@@ -213,14 +213,28 @@ impl App {
     /// selected.
     pub(super) fn open_environment_picker(&mut self) {
         let Some(f) = self.overlays.form().filter(|f| f.kind == FormKind::Profile) else { return };
+        // The marks and badges are made here, outside a frame: in the app's theme.
+        let _theme = theme::scope(self.theme.clone());
         let i18n = &self.i18n;
+        let icons = self.icons_on();
+        let tones = |prefix: Option<Label>, p: &datarig_core::policy::Policy| {
+            let mut out: Vec<(String, super::environments::RuleTone)> = prefix
+                .map(|l| (format!("{} · ", i18n.label(l)), super::environments::RuleTone::Dim))
+                .into_iter()
+                .collect();
+            out.extend(super::environments::rules_tones(i18n, p, icons));
+            out
+        };
         let entry = |c: EnvChoice, e: Option<&Environment>, label: String, hint: String| {
             let mut out = Entry::new(c, label, hint);
+            // The environment's chip in its color (circles with icons off).
+            let (on, off) =
+                if icons { (crate::icons::ENVIRONMENT_CHIP, crate::icons::ENVIRONMENT_CHIP) } else { ("●", "○") };
             out.mark = Some(match e.and_then(Environment::display_color) {
-                Some(pc) => ("● ".to_string(), theme::profile_color(pc)),
-                None => ("○ ".to_string(), theme::cur().fg_muted),
+                Some(pc) => (format!("{on} "), theme::profile_color(pc)),
+                None => (format!("{off} "), theme::cur().fg_muted),
             });
-            out.badge = e.and_then(|e| e.badge.clone().map(|b| (b, Self::badge_color(e))));
+            out.badge = e.and_then(Self::badge_chip);
             out
         };
         let mut entries: Vec<Entry<EnvChoice>> = f
@@ -231,10 +245,16 @@ impl App {
                     EnvChoice::Default => {
                         let label = i18n.label(Label::EnvPickerDefault).to_string();
                         let hint = self.rules_hint(self.policies.default_rules());
-                        entry(c, None, label, hint)
+                        let mut e = entry(c, None, label, hint);
+                        e.hint_tones = tones(None, self.policies.default_rules());
+                        e
                     }
                     EnvChoice::Named(name) => match f.environments.iter().find(|e| e.name == *name) {
-                        Some(e) => entry(c.clone(), Some(e), name.clone(), self.rules_hint(&e.policy)),
+                        Some(e) => {
+                            let mut out = entry(c.clone(), Some(e), name.clone(), self.rules_hint(&e.policy));
+                            out.hint_tones = tones(None, &e.policy);
+                            out
+                        }
                         None => {
                             let label = i18n.msg(&Msg::FormEnvMissing { name: name.clone() }).to_string();
                             let mut e = entry(c, None, label, i18n.label(Label::FormEnvMissingHint).to_string());
@@ -251,14 +271,18 @@ impl App {
         if f.environments.is_empty() && self.config_writable() {
             for p in policy::presets() {
                 let hint = format!("{} · {}", i18n.label(Label::EnvPickerPreset), self.rules_hint(&p.policy));
-                entries.push(entry(EnvChoice::Preset(p.name.clone()), Some(&p), p.name.clone(), hint));
+                let mut e = entry(EnvChoice::Preset(p.name.clone()), Some(&p), p.name.clone(), hint);
+                e.hint_tones = tones(Some(Label::EnvPickerPreset), &p.policy);
+                entries.push(e);
             }
         } else if let Some(p) = f.made_environment() {
             // A preset picked before an environment was made here: still the one picked, and
             // still written with the profile.
             let hint = format!("{} · {}", i18n.label(Label::EnvPickerPreset), self.rules_hint(&p.policy));
             let label = i18n.msg(&Msg::FormEnvPresetNew { name: p.name.clone() }).to_string();
-            entries.push(entry(EnvChoice::Preset(p.name.clone()), Some(p), label, hint));
+            let mut e = entry(EnvChoice::Preset(p.name.clone()), Some(p), label, hint);
+            e.hint_tones = tones(Some(Label::EnvPickerPreset), &p.policy);
+            entries.push(e);
         }
         let new = self.config_writable().then(|| i18n.label(Label::EnvPickerNew).to_string());
         let list = ListPicker::new(entries, new, Some(&f.env_choice()));

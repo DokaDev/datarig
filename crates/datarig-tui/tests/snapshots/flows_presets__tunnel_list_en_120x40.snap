@@ -4,16 +4,16 @@ expression: backend
 ---
 "╭ Explorer ──────────────────╮╭ Workspace ─────────────────────────────────────────────────────────────────────────────╮"
 "│  ＋ New connection         ││                                                                                        │" Hidden by multi-width symbols: [(4, " ")]
-"│▸ ○   local-pg SSH          ││  No open tabs                                                                          │"
-"│▸ ○   v6 SSH                ││  Pick a connection in the explorer, or press Ctrl+O.                                   │"
-"│▸ ○   分析-replica          ││                                                                                        │" Hidden by multi-width symbols: [(8, " "), (10, " ")]
-"│▾ Tunnels 2                 ││  Enter      Connect and open a console                                                 │"
-"│    ○ office  ec2-user@bast…││  Ctrl+O     Quick connect                                                              │"
-"│    ○ lab  ec2-user@lab-bas…││  Ctrl+T     New console tab                                                            │"
-"│▾ Environments 0            ││  Space t u  Reopen a closed tab                                                        │"
-"│  ▸ ○ Default rules (no env…││  n          New connection                                                             │"
-"│    ＋ Ad╭ Edit connection — local-pg ──────────────────────────────────────────────────────────────────────╮         │" Hidden by multi-width symbols: [(6, " ")]
-"│         │  Basic   SSH   Advanced                                                    Ctrl+N/Ctrl+P section │         │"
+"│▾ Connections 3             ││  No open tabs                                                                          │"
+"│  ▸ ○   local-pg SSH        ││  Pick a connection in the explorer, or press Ctrl+O.                                   │"
+"│  ▸ ○   v6 SSH              ││                                                                                        │"
+"│  ▸ ○   分析-replica        ││  Enter      Connect and open a console                                                 │" Hidden by multi-width symbols: [(10, " "), (12, " ")]
+"│▾ Tunnels 2                 ││  Ctrl+O     Quick connect                                                              │"
+"│    ○ office  ec2-user@bast…││  Ctrl+T     New console tab                                                            │"
+"│    ○ lab  ec2-user@lab-bas…││  Space t u  Reopen a closed tab                                                        │"
+"│▾ Environments 0            ││  n          New connection                                                             │"
+"│  ▸ ○ Def╭ Edit connection — local-pg ──────────────────────────────────────────────────────────────────────╮         │"
+"│    ＋ Ad│  Basic   SSH   Advanced                                                    Ctrl+N/Ctrl+P section │         │" Hidden by multi-width symbols: [(6, " ")]
 "│         │                                                                                                  │         │"
 "│         │ SSH tunnel        office ▾   Enter list · shared: one SSH connection for every profile on it; e… │         │"
 "│         │ Bastion           ec2-user@bastion.example.com                                                   │         │"

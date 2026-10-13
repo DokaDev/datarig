@@ -1,5 +1,5 @@
 //! The quick connect list (`Ctrl+O`): a filter line and the matching profiles with their state,
-//! icon, name and folder.
+//! icon, name (in its environment's color, muted while not connected) and folder.
 
 use crate::app::App;
 use crate::app::quick::{QuickNote, QuickPurpose, QuickRow};
@@ -59,7 +59,7 @@ pub(crate) fn draw_quick_connect(app: &mut App, area: Rect, buf: &mut Buffer) ->
                     (arrow(open.contains(id)).to_string(), dim),
                     (format!("{mark} "), Style::new().fg(mark_color)),
                     (icons::cell(p, icons_on), Style::new().fg(color)),
-                    (p.name.clone(), Style::new().fg(th.fg)),
+                    (p.name.clone(), app.profile_name_style(*id)),
                     (p.folder.as_deref().map(|f| format!("  {f}/")).unwrap_or_default(), dim),
                 ]
             }

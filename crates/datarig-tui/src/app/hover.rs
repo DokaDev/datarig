@@ -1,9 +1,10 @@
 //! The pointer over the workspace's small clickable targets (no dialog open): the document tab
 //! bar's tabs, their `×` and scroll marks, the result tab strip, the paging arrows, the Plan
-//! tab's view names and the entries of the inspector's Row tab. The one
-//! under the pointer is drawn highlighted; it is found in what the last frame drew (the same
-//! hits a click uses), and a frame that lays those targets out differently drops it, so no
-//! highlight is left on something else.
+//! tab's view names, the entries of the inspector's Row tab and the grid's cells. The one
+//! under the pointer is drawn highlighted (an inspector entry and the grid's cell of its column
+//! in the selected row light each other; a hover never moves the selection or the focus); it
+//! is found in what the last frame drew (the same hits a click uses), and a frame that lays
+//! those targets out differently drops it, so no highlight is left on something else.
 
 use super::*;
 use crate::widgets::tabbar::TabHit;
@@ -25,6 +26,8 @@ pub enum PointerOn {
     Chart(super::chart::ChartHit),
     /// A column of the inspector's Row tab (not the selected one).
     Detail(usize),
+    /// A cell of the grid (row, column), not the selected one.
+    Cell(usize, usize),
 }
 
 impl App {
@@ -68,10 +71,22 @@ impl App {
         } else if !self.tabs.is_empty() && self.chart_shown() && l.results.contains(at) {
             let chart = self.tab().exec.chart.as_ref();
             chart.and_then(|c| c.field_hits.iter().find(|(r, _)| r.contains(at))).map(|h| PointerOn::Chart(h.1))
+        } else if !self.tabs.is_empty() && l.results.contains(at) {
+            self.grid_cell_at(m.column, m.row).map(|(r, c)| PointerOn::Cell(r, c))
         } else {
             None
         };
+        self.pointer_tab = (!self.tabs.is_empty()).then(|| self.tab().id);
         std::mem::replace(&mut self.pointer_on, on) != on
+    }
+
+    /// A grid cell or an inspector entry lit for another tab than the active one (the tab
+    /// changed under the pointer): no longer under it.
+    pub(crate) fn drop_hover_of_other_tab(&mut self) {
+        let here = (!self.tabs.is_empty()).then(|| self.tab().id);
+        if matches!(self.pointer_on, Some(PointerOn::Cell(..) | PointerOn::Detail(_))) && self.pointer_tab != here {
+            self.pointer_on = None;
+        }
     }
 
     /// The column of the inspector's Row tab drawn at (x, y), if one is there.
@@ -80,6 +95,16 @@ impl App {
         let Results::Rows(rs) = &self.tab().results else { return None };
         let at = l.contains(Position::new(x, y)).then(|| self.detail.first + usize::from(y - l.y));
         at.filter(|c| *c < rs.columns.len())
+    }
+
+    /// The grid's cell drawn at (x, y) while the grid is shown, unless it is the selected one.
+    fn grid_cell_at(&self, x: u16, y: u16) -> Option<(usize, usize)> {
+        let t = self.tab();
+        let Results::Rows(rs) = &t.results else { return None };
+        if t.exec.view != tabs::ResultView::Rows || y >= t.grid.data_y + t.grid.page_rows as u16 {
+            return None;
+        }
+        t.grid.cell_at(x, y, rs.rows.len()).filter(|&cell| cell != (t.grid.row, t.grid.col))
     }
 
     /// The column of the inspector's Row tab drawn at (x, y) with the result it is of: what a

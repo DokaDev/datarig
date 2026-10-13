@@ -173,7 +173,7 @@ async fn a_keychain_that_does_not_answer_falls_back_to_the_prompt() {
     assert!(status.contains("Reading the password of local-pg from the keychain"), "{status}");
     // The UI answers meanwhile.
     h.keys("j");
-    assert_eq!(h.selected(), 2, "the explorer moved");
+    assert_eq!(h.selected(), 3, "the explorer moved");
     h.keys("k");
     h.ctrl('k');
     assert!(h.cmdline().is_some());

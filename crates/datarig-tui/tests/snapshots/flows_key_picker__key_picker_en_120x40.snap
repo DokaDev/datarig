@@ -4,10 +4,10 @@ expression: "h.draw(120, 40).backend()"
 ---
 "╭ Explorer ──────────────────╮╭ Workspace ─────────────────────────────────────────────────────────────────────────────╮"
 "│  ＋ New connection         ││                                                                                        │" Hidden by multi-width symbols: [(4, " ")]
-"│▸ ○   local-pg SSH          ││  No open tabs                                                                          │"
-"│▸ ○   v6                    ││  Pick a connection in the explorer, or press Ctrl+O.                                   │"
-"│▸ ○   分析-replica          ││                                                                                        │" Hidden by multi-width symbols: [(8, " "), (10, " ")]
-"│                            ││  Enter      Connect and open a console                                                 │"
+"│▾ Connections 3             ││  No open tabs                                                                          │"
+"│  ▸ ○   local-pg SSH        ││  Pick a connection in the explorer, or press Ctrl+O.                                   │"
+"│  ▸ ○   v6                  ││                                                                                        │"
+"│  ▸ ○   分析-replica        ││  Enter      Connect and open a console                                                 │" Hidden by multi-width symbols: [(10, " "), (12, " ")]
 "│                            ││  Ctrl+O     Quick connect                                                              │"
 "│                            ││  Ctrl+T     New console tab                                                            │"
 "│                            ││  Space t u  Reopen a closed tab                                                        │"

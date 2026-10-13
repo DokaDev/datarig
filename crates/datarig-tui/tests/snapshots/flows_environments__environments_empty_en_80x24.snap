@@ -4,15 +4,15 @@ expression: backend
 ---
 "╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
 "│  ＋ New connection   ││                                                      │" Hidden by multi-width symbols: [(4, " ")]
-"│▸ ○   local-pg ENV    ││  No open tabs                                        │"
-"│▸ ○   v6              ││  Pick a connection in the explorer, or press         │"
-"│▸ ○   分析-replica    ││  Ctrl+O.                                             │" Hidden by multi-width symbols: [(8, " "), (10, " ")]
-"│▾ Tunnels 0           ││                                                      │"
-"│    n here makes an S…││  Enter      Connect and open a console               │"
-"│▾ Environments 0      ││  Ctrl+O     Quick connect                            │"
-"│  ▸ ○ Default rules (…││  Ctrl+T     New console tab                          │"
-"│    ＋ Add presets: d…││  Space t u  Reopen a closed tab                      │" Hidden by multi-width symbols: [(6, " ")]
-"│                      ││  n          New connection                           │"
+"│▾ Connections 3       ││  No open tabs                                        │"
+"│  ▸ ○   local-pg ENV  ││  Pick a connection in the explorer, or press         │"
+"│  ▸ ○   v6            ││  Ctrl+O.                                             │"
+"│  ▸ ○   分析-replica  ││                                                      │" Hidden by multi-width symbols: [(10, " "), (12, " ")]
+"│▾ Tunnels 0           ││  Enter      Connect and open a console               │"
+"│    n here makes an S…││  Ctrl+O     Quick connect                            │"
+"│▾ Environments 0      ││  Ctrl+T     New console tab                          │"
+"│  ▸ ○ Default rules (…││  Space t u  Reopen a closed tab                      │"
+"│    ＋ Add presets: d…││  n          New connection                           │" Hidden by multi-width symbols: [(6, " ")]
 "│                      ││  F1         Keyboard help                            │"
 "│                      ││  :          Commands                                 │"
 "│                      ││                                                      │"

@@ -78,6 +78,10 @@ fn set_accepts_known_settings_and_values_only() {
     );
     assert_eq!(set("editor.run_hints=off"), Ok(Setting::RunHints(datarig_core::config::RunHints::Off)));
     assert_eq!(set("explorer.size_heat=off"), Ok(Setting::SizeHeat(datarig_core::config::SizeHeat::Off)));
+    assert_eq!(set("explorer.size_heat=5"), Ok(Setting::SizeHeat(datarig_core::config::SizeHeat::Five)));
+    // `on`, from before there were levels: three.
+    assert_eq!(set("explorer.size_heat=on"), Ok(Setting::SizeHeat(datarig_core::config::SizeHeat::Three)));
+    assert_eq!(set("explorer.size_heat=ON"), Ok(Setting::SizeHeat(datarig_core::config::SizeHeat::Three)));
     // A theme is a name the app looks up (built-in or a theme file).
     assert_eq!(parse_set("theme=gruvbox-light"), Ok(SetValue::Theme("gruvbox-light")));
     assert_eq!(parse_set("theme = my_Theme"), Ok(SetValue::Theme("my_Theme")), "kept as typed");

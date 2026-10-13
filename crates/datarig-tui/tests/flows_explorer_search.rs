@@ -90,11 +90,15 @@ fn the_filter_finds_a_loaded_table_and_opens_the_way_to_it() {
     let shop = before.iter().find(|l| l.contains("shop")).unwrap().clone();
     assert!(shop.contains("▸ shop"), "closed: {shop}");
     filter(&mut h, "ITEMS");
-    assert_eq!(h.rows(), ["+", "local-pg", "  db:datarig*", "    shop", "      Tables", "        order_items"]);
+    assert_eq!(
+        h.rows(),
+        ["+", "[connections]", "local-pg", "  db:datarig*", "    shop", "      Tables", "        order_items"]
+    );
     let shown = lines(&h);
-    assert!(shown[1].starts_with("▾ ●") && shown[1].ends_with("local-pg"), "{shown:?}");
-    assert!(shown[3].trim() == "▾ shop" && shown[4].trim() == "▾ Tables", "{shown:?}");
-    assert_eq!(shown[5].trim(), "▸ order_items", "the match itself as its own expansion says");
+    assert!(shown[1].starts_with("▾ Connections"), "{shown:?}");
+    assert!(shown[2].starts_with("  ▾ ●") && shown[2].ends_with("local-pg"), "{shown:?}");
+    assert!(shown[4].trim() == "▾ shop" && shown[5].trim() == "▾ Tables", "{shown:?}");
+    assert_eq!(shown[6].trim(), "▸ order_items", "the match itself as its own expansion says");
     assert_eq!(h.explorer_line().trim(), "▸ order_items", "the cursor on the first match");
     assert!(h.sent().is_empty(), "nothing asked of the server");
     h.key(KeyCode::Esc);
@@ -108,26 +112,29 @@ fn the_filter_finds_a_loaded_table_and_opens_the_way_to_it() {
 fn the_filter_finds_views_structure_items_schemas_and_databases() {
     let mut h = searchable();
     filter(&mut h, "summary");
-    assert_eq!(h.rows(), ["+", "local-pg", "  db:datarig*", "    shop", "      Views", "        order_summary"]);
+    assert_eq!(
+        h.rows(),
+        ["+", "[connections]", "local-pg", "  db:datarig*", "    shop", "      Views", "        order_summary"]
+    );
     h.key(KeyCode::Esc);
     filter(&mut h, "email");
     let shown: Vec<String> = lines(&h).iter().map(|l| l.trim().to_string()).collect();
     assert_eq!(
-        shown[2..],
+        shown[3..],
         ["▾ datarig default", "▾ shop", "▾ Tables", "▾ users", "▾ Columns (2)", "email  text, not null"],
         "only the matching item of the structure"
     );
     h.key(KeyCode::Esc);
     filter(&mut h, "pkey");
     let shown: Vec<String> = lines(&h).iter().map(|l| l.trim().to_string()).collect();
-    assert_eq!(shown[6..], ["▾ Primary Key", "▸ users_pkey"]);
+    assert_eq!(shown[7..], ["▾ Primary Key", "▸ users_pkey"]);
     h.key(KeyCode::Esc);
     filter(&mut h, "analyt");
-    assert_eq!(h.rows(), ["+", "local-pg", "  db:datarig*", "    analytics"]);
+    assert_eq!(h.rows(), ["+", "[connections]", "local-pg", "  db:datarig*", "    analytics"]);
     assert_eq!(h.explorer_line().trim(), "▸ analytics");
     h.key(KeyCode::Esc);
     filter(&mut h, "sales");
-    assert_eq!(h.rows(), ["+", "local-pg", "  db:sales_dw"]);
+    assert_eq!(h.rows(), ["+", "[connections]", "local-pg", "  db:sales_dw"]);
     assert_eq!(h.explorer_line().trim(), "▸ sales_dw");
     assert!(h.sent().is_empty());
 }
@@ -162,6 +169,7 @@ fn keys_work_on_the_filtered_rows() {
         h.rows(),
         [
             "+",
+            "[connections]",
             "local-pg",
             "  db:datarig*",
             "    shop",
@@ -169,7 +177,7 @@ fn keys_work_on_the_filtered_rows() {
             "        order_items",
             "        orders",
             "      Views",
-            "        order_summary"
+            "        order_summary",
         ]
     );
     assert_eq!(h.explorer_line().trim(), "▸ order_items");
@@ -213,7 +221,8 @@ fn keys_and_clicks_on_rows_the_filter_opened_change_nothing() {
     h.sent();
     filter(&mut h, "items");
     h.key(KeyCode::Enter);
-    let filtered = ["+", "local-pg", "  db:datarig*", "    shop", "      Tables", "        order_items"];
+    let filtered =
+        ["+", "[connections]", "local-pg", "  db:datarig*", "    shop", "      Tables", "        order_items"];
     assert_eq!(h.rows(), filtered);
     for (row, parent) in [("Tables", "▾ shop"), ("shop", "▾ datarig default"), ("db:datarig*", "local-pg")] {
         let name = if row.starts_with("db:") { "datarig default" } else { row };

@@ -30,10 +30,8 @@ pub(crate) fn environment_parts(
     let th = theme::cur();
     let Some(name) = app.environment_name(id) else { return Vec::new() };
     match app.profile_environment(id) {
-        Some(e) => match &e.badge {
-            Some(b) => {
-                vec![(" ".to_string(), Style::new().bg(bg)), (format!(" {b} "), theme::chip(App::badge_color(e)))]
-            }
+        Some(e) => match App::badge_chip(e) {
+            Some(chip) => vec![(" ".to_string(), Style::new().bg(bg)), chip],
             None => {
                 let color = e.display_color().map_or(th.fg_muted, theme::profile_color);
                 vec![(format!(" · {name}"), Style::new().fg(color).bg(bg).add_modifier(Modifier::BOLD))]
@@ -58,8 +56,10 @@ pub(crate) fn draw_status(app: &mut App, area: Rect, buf: &mut Buffer) {
     let conn = app
         .conn()
         .map(|c| (c.name.clone(), theme::profile_color(c.display_color()), environment_parts(app, c.id, th.surface)));
-    // A read-only environment: a badge in words, in neutral colors.
-    let read_only = app.conn().is_some_and(|c| app.read_only(c.id)).then(|| app.i18n.label(Label::StatusReadOnly));
+    // Read-only rules: a badge in words (after the lock with icons on), in the read-only
+    // mark's blue.
+    let read_only =
+        app.conn().is_some_and(|c| app.read_only(c.id)).then(|| crate::app::environments::read_only_badge(app));
     let exec = &app.tab().exec;
     let tx = exec.user_tx().then(|| {
         let (label, color) =
@@ -111,7 +111,8 @@ pub(crate) fn draw_status(app: &mut App, area: Rect, buf: &mut Buffer) {
     }
     if let Some(ro) = read_only {
         segs.push((" ".to_string(), Style::new().bg(th.surface)));
-        segs.push((format!(" {ro} "), Style::new().fg(th.fg).bg(th.surface_alt).add_modifier(Modifier::BOLD)));
+        let color = crate::app::environments::read_only_color(&th);
+        segs.push((format!(" {ro} "), Style::new().fg(color).bg(th.surface_alt).add_modifier(Modifier::BOLD)));
     }
     if let Some((tx, color)) = tx {
         push_sep(&mut segs);

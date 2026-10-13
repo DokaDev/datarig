@@ -1,23 +1,29 @@
-//! Drawing the explorer: "＋ New connection" pinned on
-//! top, folders, each profile with its state (`○` not connected, a spinner while connecting,
-//! `●` connected, `✕` failed) in the profile's color, its icon and name (`RO` after it when its
-//! environment is read-only), the error line under a
+//! Drawing the explorer: "＋ New connection" pinned on top, then sections whose heads look
+//! alike (an icon with icons on, the name, how many): "Connections" with the folders and each
+//! profile with its state (`○` not connected, a spinner while connecting,
+//! `●` connected, `✕` failed) in the profile's color, its icon and name (the name in its
+//! environment's color, bold while connected and muted while not; after it the lock, `RO` with
+//! icons off, in the read-only mark's blue, when its rules are read-only), the error line under a
 //! failed profile (an environment mark in the error color when the environment it names is not
 //! defined), and under a connected one its server's databases (its own first, marked
 //! `default`), each with its schema tree. With icons on every node of the tree has
 //! an icon of its kind, and a column that is no key the icon of its type. A table or a
 //! materialized view has the estimates of its rows and size after its name, dim and on the
 //! right, as many of them as there is room for (the name first); those of the largest objects
-//! of their schema are amber, or red from 1 GiB (`[explorer] size_heat`, see
+//! of their schema are amber, or red from 1 GiB (`[explorer] size_heat = "3"`; with `"5"`
+//! yellow, amber from 100 MiB, orange from 1 GiB and red from 10 GiB; see
 //! [`crate::widgets::tree::size_heat`]). An open table shows
 //! its structure (see `widgets::tree`): each group with its icon, each item with its group's.
-//! The "Tunnels" section lists the tunnel presets: each with the state of its shared connection
-//! (`○` closed, a spinner while it opens, `●` open, `✕` lost), its bastion and how many
-//! profiles name it, and under it, opened, the profiles connected through it now. The "Environments" section lists the
-//! environments the same way: each with its color's dot, its badge, its rules in a few words
-//! and how many profiles name it; without one, a row that adds the presets.
+//! The "Tunnels" section lists the tunnel presets: each with its icon in the color of its shared
+//! connection's state (muted closed, a spinner while it opens, the success color open, the error
+//! color lost; `○`, `●`, `✕` with icons off), its bastion and how many profiles name it, and
+//! under it, opened, the profiles connected through it now. The "Environments" section lists the
+//! environments the same way: each with its chip in its color (`●` with icons off), its badge,
+//! its rules in a few words and how many profiles name it; without one, a row that adds the
+//! presets. Circles stand for a profile's connection alone (and for the marks with icons off).
 
 use crate::app::action::Action;
+use crate::app::environments::rules_parts;
 use crate::app::explorer::{Row, RowKind};
 use crate::app::{App, Keys, NodeState};
 use crate::icons::{self, KeyMark, TreeIcon, TypeCategory};
@@ -49,6 +55,9 @@ fn row_parts(app: &App, row: &Row) -> Vec<(String, Style)> {
         RowKind::NewConnection => {
             vec![(format!("＋ {}", app.i18n.label(Label::ExplorerNewConnection)), fg(th.accent))]
         }
+        RowKind::ConnectionsHeader => {
+            header_parts(app, icons::CONNECTIONS, Label::ExplorerConnections, app.profiles.len())
+        }
         RowKind::Folder(f) => vec![(f.name().to_string(), fg(th.fg_muted).add_modifier(Modifier::BOLD))],
         RowKind::Profile(id) => {
             let Some(p) = app.profile(*id) else { return Vec::new() };
@@ -63,15 +72,11 @@ fn row_parts(app: &App, row: &Row) -> Vec<(String, Style)> {
                 NodeState::Connected => (CONNECTED.to_string(), fg(color)),
                 NodeState::Failed => (FAILED.to_string(), fg(th.error)),
             };
-            let mut name = fg(th.fg);
-            if state == NodeState::Connected {
-                name = name.add_modifier(Modifier::BOLD);
-            }
             let mut parts = vec![
                 mark,
                 (" ".into(), fg(th.fg)),
                 (icons::cell(p, app.icons_on()), fg(color)),
-                (p.name.clone(), name),
+                (p.name.clone(), app.profile_name_style(*id)),
             ];
             // Through an SSH tunnel: a small mark (in the error color when its tunnel setting is
             // wrong: a preset that is not there, or two tunnels).
@@ -81,12 +86,19 @@ fn row_parts(app: &App, row: &Row) -> Vec<(String, Style)> {
                 Err(_) => parts.push((format!(" {}", icons::tunnel(app.icons_on())), fg(th.error))),
             }
             // An environment that is not defined: its mark in the error color (it does not
-            // connect); else a read-only environment, in words.
+            // connect); else read-only (the effective rules): the lock, or `RO` with icons off,
+            // in the read-only mark's color.
             if app.policy_of(*id).is_err() {
                 parts.push((format!(" {}", icons::environment(app.icons_on())), fg(th.error)));
             } else if app.read_only(*id) {
-                let ro = app.i18n.label(Label::ExplorerReadOnly);
-                parts.push((format!(" {ro}"), fg(th.fg_muted).add_modifier(Modifier::BOLD)));
+                let ro = match app.icons_on() {
+                    true => icons::READ_ONLY.to_string(),
+                    false => app.i18n.label(Label::ExplorerReadOnly).to_string(),
+                };
+                parts.push((
+                    format!(" {ro}"),
+                    fg(crate::app::environments::read_only_color(&th)).add_modifier(Modifier::BOLD),
+                ));
             }
             parts
         }
@@ -141,11 +153,8 @@ fn row_parts(app: &App, row: &Row) -> Vec<(String, Style)> {
             (Some(a), _) => node_parts(app, &a.tree, *n),
         },
         RowKind::ScriptsHeader => {
-            let n = app.script_list.iter().filter(|e| !e.folder).count() as u64;
-            vec![
-                (app.i18n.label(Label::ExplorerScripts).to_string(), fg(th.accent).add_modifier(Modifier::BOLD)),
-                (format!(" {n}"), fg(th.fg_dim)),
-            ]
+            let n = app.script_list.iter().filter(|e| !e.folder).count();
+            header_parts(app, icons::SCRIPTS, Label::ExplorerScripts, n)
         }
         RowKind::ScriptFolder(p) => {
             let mut parts = vec![(
@@ -167,28 +176,14 @@ fn row_parts(app: &App, row: &Row) -> Vec<(String, Style)> {
             let key = app.key_for(Action::ScriptSave, Ctx::Nav);
             vec![(app.i18n.msg(&Msg::ExplorerScriptsEmpty { key }).to_string(), fg(th.fg_dim))]
         }
-        RowKind::TunnelsHeader => {
-            vec![
-                (app.i18n.label(Label::ExplorerTunnels).to_string(), fg(th.accent).add_modifier(Modifier::BOLD)),
-                (format!(" {}", app.presets.len()), fg(th.fg_dim)),
-            ]
-        }
+        RowKind::TunnelsHeader => header_parts(app, icons::TUNNELS, Label::ExplorerTunnels, app.presets.len()),
         RowKind::TunnelsEmpty => {
             let key = app.key_for(Action::NewProfile, Ctx::Explorer);
             vec![(app.i18n.msg(&Msg::ExplorerTunnelsEmpty { key }).to_string(), fg(th.fg_dim))]
         }
         RowKind::Tunnel(id) => tunnel_parts(app, *id),
         RowKind::EnvironmentsHeader => {
-            let mut parts = Vec::new();
-            if app.icons_on() {
-                parts.push((format!("{} ", icons::ENVIRONMENT), fg(th.accent)));
-            }
-            parts.push((
-                app.i18n.label(Label::ExplorerEnvironments).to_string(),
-                fg(th.accent).add_modifier(Modifier::BOLD),
-            ));
-            parts.push((format!(" {}", app.environments().len()), fg(th.fg_dim)));
-            parts
+            header_parts(app, icons::ENVIRONMENT, Label::ExplorerEnvironments, app.environments().len())
         }
         RowKind::EnvironmentPresets => {
             vec![(format!("＋ {}", app.i18n.label(Label::ExplorerEnvironmentPresets)), fg(th.fg_dim))]
@@ -196,12 +191,14 @@ fn row_parts(app: &App, row: &Row) -> Vec<(String, Style)> {
         RowKind::Environment(id) => environment_parts(app, *id),
         // The default rules: no color, no badge; their rules and how many profiles use them.
         RowKind::DefaultRules => {
+            let mark = if app.icons_on() { icons::ENVIRONMENT_CHIP } else { DISCONNECTED };
             let mut parts = vec![
-                (DISCONNECTED.to_string(), fg(th.fg_muted)),
+                (mark.to_string(), fg(th.fg_muted)),
                 (" ".into(), fg(th.fg)),
                 (app.i18n.label(Label::ExplorerDefaultRules).to_string(), fg(th.fg)),
-                (format!("  {}", app.rules_hint(app.policies.default_rules())), fg(th.fg_dim)),
+                ("  ".to_string(), fg(th.fg_dim)),
             ];
+            parts.extend(rules_parts(&app.i18n, app.policies.default_rules(), app.icons_on()));
             let users = app.default_rules_users().len() as u64;
             if users > 0 {
                 parts.push((format!(" · {}", app.i18n.msg(&Msg::ExplorerTunnelUsers { count: users })), fg(th.fg_dim)));
@@ -219,7 +216,7 @@ fn row_parts(app: &App, row: &Row) -> Vec<(String, Style)> {
 }
 
 /// A profile listed under a tunnel preset or an environment: its state and icon in its color,
-/// its name.
+/// its name as the profile's own row draws it.
 fn user_parts(app: &App, pid: datarig_core::profile::ProfileId) -> Vec<(String, Style)> {
     let th = theme::cur();
     let fg = |c: Color| Style::new().fg(c);
@@ -234,25 +231,47 @@ fn user_parts(app: &App, pid: datarig_core::profile::ProfileId) -> Vec<(String, 
         }
         NodeState::Disconnected => (DISCONNECTED.to_string(), fg(color)),
     };
-    vec![mark, (" ".into(), fg(th.fg)), (icons::cell(p, app.icons_on()), fg(color)), (p.name.clone(), fg(th.fg_muted))]
+    vec![
+        mark,
+        (" ".into(), fg(th.fg)),
+        (icons::cell(p, app.icons_on()), fg(color)),
+        (p.name.clone(), app.profile_name_style(pid)),
+    ]
 }
 
-/// An environment: its color's dot (`○` without one), its name, its badge, its rules in a few
-/// words and how many profiles name it.
+/// A section's head: its icon with icons on, its name in the accent, bold, and how many it has,
+/// dim.
+fn header_parts(app: &App, icon: &str, label: Label, count: usize) -> Vec<(String, Style)> {
+    let th = theme::cur();
+    let mut parts = Vec::new();
+    if app.icons_on() {
+        parts.push((format!("{icon} "), Style::new().fg(th.accent)));
+    }
+    parts.push((app.i18n.label(label).to_string(), Style::new().fg(th.accent).add_modifier(Modifier::BOLD)));
+    parts.push((format!(" {count}"), Style::new().fg(th.fg_dim)));
+    parts
+}
+
+/// An environment: its chip in its color with icons on (muted without a color; with icons off
+/// `●`, or `○` without a color), its name, its badge, its rules in a few words and how many
+/// profiles name it.
 fn environment_parts(app: &App, id: datarig_core::policy::EnvironmentId) -> Vec<(String, Style)> {
     let th = theme::cur();
     let fg = |c: Color| Style::new().fg(c);
     let Some(e) = app.environment(id) else { return Vec::new() };
-    let mark = match e.display_color() {
-        Some(pc) => (CONNECTED.to_string(), fg(theme::profile_color(pc))),
-        None => (DISCONNECTED.to_string(), fg(th.fg_muted)),
+    let mark = match (e.display_color(), app.icons_on()) {
+        (Some(pc), true) => (icons::ENVIRONMENT_CHIP.to_string(), fg(theme::profile_color(pc))),
+        (None, true) => (icons::ENVIRONMENT_CHIP.to_string(), fg(th.fg_muted)),
+        (Some(pc), false) => (CONNECTED.to_string(), fg(theme::profile_color(pc))),
+        (None, false) => (DISCONNECTED.to_string(), fg(th.fg_muted)),
     };
     let mut parts = vec![mark, (" ".into(), fg(th.fg)), (e.name.clone(), fg(th.fg))];
-    if let Some(b) = &e.badge {
+    if let Some(chip) = App::badge_chip(e) {
         parts.push((" ".into(), fg(th.fg)));
-        parts.push((format!(" {b} "), theme::chip(App::badge_color(e))));
+        parts.push(chip);
     }
-    parts.push((format!("  {}", app.rules_hint(&e.policy)), fg(th.fg_dim)));
+    parts.push(("  ".to_string(), fg(th.fg_dim)));
+    parts.extend(rules_parts(&app.i18n, &e.policy, app.icons_on()));
     let users = app.environment_users(&e.name).len() as u64;
     if users > 0 {
         parts.push((format!(" · {}", app.i18n.msg(&Msg::ExplorerTunnelUsers { count: users })), fg(th.fg_dim)));
@@ -260,29 +279,31 @@ fn environment_parts(app: &App, id: datarig_core::policy::EnvironmentId) -> Vec<
     parts
 }
 
-/// A tunnel preset: the state of its shared connection, its icon and name, its bastion, and how
-/// many profiles name it.
+/// A tunnel preset: its icon in the color of its shared connection's state (the success color
+/// open, muted closed, the error color lost; the spinner while it opens; with icons off `●`,
+/// `○` and `✕` in those colors), its name, its bastion, and how many profiles name it.
 fn tunnel_parts(app: &App, id: datarig_core::profile::tunnel::TunnelId) -> Vec<(String, Style)> {
     use crate::app::tunnel::PresetState;
     let th = theme::cur();
     let fg = |c: Color| Style::new().fg(c);
     let Some(p) = app.preset(id) else { return Vec::new() };
     let state = app.preset_state(id);
+    let on = app.icons_on();
+    let glyph = |off: &str| if on { icons::TUNNEL.to_string() } else { off.to_string() };
     let mark = match state {
-        PresetState::Closed => (DISCONNECTED.to_string(), fg(th.fg_muted)),
+        PresetState::Closed => (glyph(DISCONNECTED), fg(th.fg_muted)),
         PresetState::Opening => {
             let started = app.conns.attempt().map(|c| c.started);
             (started.map_or("⠋", |t| spinner_at(t, app.now())).to_string(), fg(th.accent))
         }
-        PresetState::Open(_) => (CONNECTED.to_string(), fg(th.success)),
-        PresetState::Dead => (FAILED.to_string(), fg(th.error)),
+        PresetState::Open(_) => (glyph(CONNECTED), fg(th.success)),
+        PresetState::Dead => (glyph(FAILED), fg(th.error)),
     };
-    let icon = if app.icons_on() { format!("{} ", icons::TUNNEL) } else { String::new() };
     let mut name = fg(th.fg);
     if matches!(state, PresetState::Open(_)) {
         name = name.add_modifier(Modifier::BOLD);
     }
-    let mut parts = vec![mark, (" ".into(), fg(th.fg)), (icon, fg(th.accent)), (p.name.clone(), name)];
+    let mut parts = vec![mark, (" ".into(), fg(th.fg)), (p.name.clone(), name)];
     parts.push((format!("  {}", App::bastion_text(&p.settings)), fg(th.fg_dim)));
     let users = app.preset_users(&p.name).len() as u64;
     let detail = match state {
@@ -656,15 +677,25 @@ fn row_stats(app: &App, row: &Row) -> Option<RelationStats> {
     }
 }
 
-/// The size tier of the object `row` is in its schema, when the setting draws it.
-fn row_heat(app: &App, row: &Row) -> Option<Heat> {
-    if app.prefs.size_heat == datarig_core::config::SizeHeat::Off {
-        return None;
-    }
-    match row_node(app, row)? {
-        (tree, Node::Object(i, g, j)) => tree.object_heat(i, g, j),
-        _ => None,
-    }
+/// The style of the size tier of the object `row` is in its schema, when the setting draws it:
+/// in three levels amber from 1 MiB and red from 1 GiB; in five yellow, amber from 100 MiB,
+/// orange from 1 GiB and red from 10 GiB.
+fn row_heat(app: &App, row: &Row) -> Option<Style> {
+    use datarig_core::config::SizeHeat;
+    let heat = match row_node(app, row)? {
+        (tree, Node::Object(i, g, j)) => tree.object_heat(i, g, j)?,
+        _ => return None,
+    };
+    let th = theme::cur();
+    Some(match (app.prefs.size_heat, heat) {
+        (SizeHeat::Off, _) => return None,
+        (SizeHeat::Three, Heat::Mib | Heat::Mib100) => th.size_warm,
+        (SizeHeat::Three, Heat::Gib | Heat::Gib10) => th.size_hot,
+        (SizeHeat::Five, Heat::Mib) => th.size_mild,
+        (SizeHeat::Five, Heat::Mib100) => th.size_warm,
+        (SizeHeat::Five, Heat::Gib) => th.size_heated,
+        (SizeHeat::Five, Heat::Gib10) => th.size_hot,
+    })
 }
 
 /// The estimates as an object's line shows them, the longest first: the rows and the size,
@@ -797,7 +828,10 @@ fn draw_row(app: &App, row: &Row, line: Rect, bg: Style, buf: &mut Buffer) {
         if cx >= w {
             break;
         }
-        let used = put(buf, x + cx as u16, y, &text, w - cx, style.patch(bg));
+        // A part with a background of its own (an environment's badge) keeps it: the row's would
+        // leave the chip's text on the row's background.
+        let style = if style.bg.is_some() { style } else { style.patch(bg) };
+        let used = put(buf, x + cx as u16, y, &text, w - cx, style);
         cx += used as usize;
     }
     // An object's estimates on the right, in the room its name leaves: never over the name;
@@ -807,11 +841,7 @@ fn draw_row(app: &App, row: &Row, line: Rect, bg: Style, buf: &mut Buffer) {
     let stats = row_stats(app, row).map(|s| inline_stats(app, s)).unwrap_or_default();
     if let Some((i, text)) = stats.into_iter().enumerate().find(|(_, t)| width(t) <= room) {
         let at = w - width(&text);
-        let style = match row_heat(app, row).filter(|_| i == 0) {
-            Some(Heat::Hot) => th.size_hot,
-            Some(Heat::Warm) => th.size_warm,
-            None => Style::new().fg(th.fg_dim),
-        };
+        let style = row_heat(app, row).filter(|_| i == 0).unwrap_or(Style::new().fg(th.fg_dim));
         put(buf, x + at as u16, y, &text, width(&text), style.patch(bg));
     }
 }
@@ -866,8 +896,10 @@ pub(crate) fn draw_explorer(app: &mut App, area: Rect, buf: &mut Buffer, focused
         let ry = y + (i - 1 - scroll) as u16;
         draw_row(app, r, Rect::new(area.x, ry, area.width, 1), row_bg(&th, i == sel, focused), buf);
     }
-    // Empty states: no profile at all, or none matching the filter.
-    if n == 0 && h > 1 {
+    // Empty states: no profile at all (under the Connections head), or none matching the
+    // filter.
+    let head = usize::from(rows.get(1).is_some_and(|r| r.kind == RowKind::ConnectionsHeader));
+    if n == head && h > 1 + head {
         let (title, hint) = if app.profiles.is_empty() {
             (
                 app.i18n.label(Label::ExplorerEmptyTitle).to_string(),
@@ -877,7 +909,7 @@ pub(crate) fn draw_explorer(app: &mut App, area: Rect, buf: &mut Buffer, focused
             let query = app.explorer.filter.text().to_string();
             (app.i18n.msg(&Msg::ExplorerFilterNone { query }).to_string(), String::new())
         };
-        let mut ly = y + 1;
+        let mut ly = y + 1 + head as u16;
         for (text, style) in [
             (title, Style::new().fg(th.fg).bg(th.bg).add_modifier(Modifier::BOLD)),
             (hint, Style::new().fg(th.fg_muted).bg(th.bg)),
