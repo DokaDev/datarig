@@ -2,7 +2,8 @@
 //! current value (`‹ value ›`) and what that value means; below the list, the selected
 //! setting's description, and for `icons` a preview of the glyphs with the hint to turn them
 //! off when they show as boxes; for `theme` the terminal's background, the theme being
-//! previewed and the key that copies it to a new theme file. A configured theme that is not used is said on top, as a config file with errors.
+//! previewed and the key that copies it to a new theme file. A configured theme that is not
+//! used is said on top, as a config file with errors.
 
 use crate::app::App;
 use crate::app::command::{SETTINGS, Values};

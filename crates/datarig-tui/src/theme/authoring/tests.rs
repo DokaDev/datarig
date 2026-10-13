@@ -1,5 +1,5 @@
 use super::*;
-use crate::theme::{COLOR_TOKENS, DARK, STYLE_TOKENS, TOKENS};
+use crate::theme::{BUILTINS, COLOR_TOKENS, DARK, STYLE_TOKENS, TOKENS, resolve};
 
 /// A scratch themes directory under the temp dir (never the real config dir); removed when
 /// dropped.
@@ -35,6 +35,13 @@ fn names_are_plain_file_names_and_never_a_builtin_one() {
     }
     for builtin in ["dark", "Dark", "TERMINAL", "catppuccin", "gruvbox-light", "High-Contrast"] {
         assert_eq!(check_name(builtin), Err(AuthorError::BuiltinName(builtin.to_string())), "{builtin}");
+    }
+    // Windows device names, whatever the case; longer names that start like one are fine.
+    for device in ["con", "PRN", "Aux", "nul", "com1", "COM9", "lpt1", "Lpt9"] {
+        assert_eq!(check_name(device), Err(AuthorError::BadName(device.to_string())), "{device}");
+    }
+    for ok in ["com0", "com10", "lpt", "console", "nul-theme", "auxiliary"] {
+        assert_eq!(check_name(ok), Ok(()), "{ok}");
     }
 }
 
@@ -141,6 +148,19 @@ fn a_new_file_sets_nothing_and_loads_as_the_theme_it_extends() {
     let text = text.replace(&format!("warning = {}", color_text(DARK.warning).unwrap()), "warning = \"red\"");
     let th = crate::theme::from_spec(&datarig_core::theme::parse(&text, TOKENS).unwrap(), DARK);
     assert_eq!(th, Theme { warning: Color::Red, ..DARK });
+}
+
+#[test]
+fn a_new_file_extending_a_family_says_which_variant_its_values_are() {
+    let d = Dir::new("family");
+    new_theme(&d.0, "fam-dark", "catppuccin", Background::Dark).unwrap();
+    new_theme(&d.0, "fam-light", "catppuccin", Background::Light).unwrap();
+    let dark = d.text("fam-dark");
+    assert!(dark.contains("\"catppuccin\" (its dark variant, catppuccin-mocha, drawn now)"), "{dark}");
+    assert!(dark.contains("\nextends = \"catppuccin\"\n"), "the family: it keeps following the background");
+    assert!(d.text("fam-light").contains("(its light variant, catppuccin-latte, drawn now)"));
+    let mocha = color_text(crate::theme::CATPPUCCIN_MOCHA.bg).unwrap();
+    assert!(dark.contains(&format!("\n# bg = {mocha}\n")), "{dark}");
 }
 
 #[test]

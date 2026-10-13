@@ -34,7 +34,7 @@ syn_comment = { fg = "bright-black", modifiers = ["italic"] }
 - `:theme new <name>` writes `themes/<name>.toml` extending the current theme when it is built in, else `dark`, with every token commented out and showing the value it takes from there: remove the `# ` in front of a key to set it.
 - On the settings screen, `c` on the theme row copies the theme shown there (the one being previewed, else the current one) and asks for the new name.
 
-Each writes a new file and never replaces one: a name that is taken, that is not a valid file name, or that is a built-in theme's (ignoring case) is refused. The themes folder is created when it is missing. Then datarig draws with the new theme, saves `theme = "<name>"` to the config file and shows the file's path.
+Each writes a new file and never replaces one: a name that is taken, that is not a valid file name, that is a built-in theme's or a Windows device name such as `nul` (ignoring case) is refused. The themes folder is created when it is missing. Then datarig draws with the new theme, saves `theme = "<name>"` to the config file and shows the file's path.
 
 ## Colors (`[colors]`)
 
@@ -75,8 +75,8 @@ Each writes a new file and never replaces one: a name that is taken, that is not
 | Token | What it styles |
 |---|---|
 | `selection` | The selected row or item, and the grid's cursor cell. |
-| `range` | Cells of a selected range in the grid (the cursor's cell keeps selection). |
-| `cursor_line` | The line or row under the cursor where the pane is not focused, and the editor's line. |
+| `range` | Cells and headers of a selected range in the result grid (the cursor's cell keeps selection). |
+| `cursor_line` | The row under the cursor of an unfocused list or plan, the editor's line, and (its background) the chart's cursor while focused. |
 | `hover` | What is under the mouse pointer: a list row, a grid cell, a tab, a button. |
 | `current_stmt` | A faint tint behind the statement a run would take. |
 | `running_stmt` | A tint behind the statement that runs now. |
@@ -92,10 +92,10 @@ Each writes a new file and never replaces one: a name that is taken, that is not
 | `syn_exec_comment` | The opening and closing of a MySQL executable comment (/*! ... */). |
 | `search_match` | A match of the editor's search on the lines on screen. |
 | `match_paren` | The bracket matching the one at the editor's cursor (not drawn yet). |
-| `read_only_mark` | The mark of read-only rules: the lock on a profile's row and its tabs. |
+| `read_only_mark` | The mark of read-only rules (its fg): the lock on a profile's row and tabs, and the rule's words. |
 | `danger_mark` | The mark of something that changes or deletes data, or of a production profile (not drawn yet). |
-| `plan_hot` | The node of a query plan that takes the most time (not drawn yet). |
-| `plan_misestimate` | A plan node whose estimated rows are far from the actual rows (not drawn yet). |
+| `plan_hot` | The plan nodes that take the most time, in every view of a query plan and its summary. |
+| `plan_misestimate` | How far a plan node's estimated rows are from the actual ones, in the plan, its summary, detail and funnel. |
 | `size_warm` | Explorer size estimates of 1 MiB or more (with five levels: 100 MiB or more). |
 | `size_hot` | Explorer size estimates of 1 GiB or more (with five levels: 10 GiB or more). |
 | `size_mild` | With five size levels, explorer size estimates of 1 MiB or more. |

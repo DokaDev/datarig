@@ -698,8 +698,8 @@ To start a theme file, let datarig write it:
   `dark`) with every token commented out, showing the value it inherits.
 - On the settings screen, `c` on the theme row copies the theme shown there and asks for a name.
 
-None of them replaces a file: a taken name, a built-in theme's name or one that is not letters,
-digits, `-` and `_` is refused. The new theme is then used and saved, and its path is shown.
+None of them replaces a file: a taken name, a built-in theme's name, a Windows device name
+(`con`, `nul`, `com1`, …) or one that is not letters, digits, `-` and `_` is refused. The new theme is then used and saved, and its path is shown.
 
 ## Safety model
 

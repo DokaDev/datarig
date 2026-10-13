@@ -1365,6 +1365,7 @@
 "theme.author.name_invalid" = "A theme name is ASCII letters, digits, - and _ (at most 64)"
 "theme.author.name_builtin" = "That is the name of a built-in theme: pick another"
 "theme.author.taken" = "A theme file of this name exists already: pick another name"
+"theme.author.written_but" = "Wrote {path}, but {error}"
 "theme.author.exists" = "{path} exists already: nothing was written"
 "theme.author.write_failed" = "Cannot write {path}: {reason}"
 "theme.author.unwritable" = "Nothing was written: the token {token} has a value a theme file cannot hold"

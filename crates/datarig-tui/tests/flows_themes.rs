@@ -392,3 +392,31 @@ fn c_on_the_settings_screen_copies_the_theme_shown_to_a_named_file() {
     let spec = std::fs::read_to_string(s.theme_file("light-copy-2")).unwrap();
     assert!(spec.contains("\nextends = \"light\"\n"), "{spec}");
 }
+
+#[test]
+fn a_theme_written_but_not_saved_still_says_where_the_file_is() {
+    let s = Scratch::new("save-fails", "theme = \"dark\"\n", &[]);
+    let mut h = Harness::with_config(&s.config(), Lang::En);
+    h.key(KeyCode::Esc);
+    // The config file cannot be replaced: a folder stands where it is.
+    std::fs::remove_file(s.path()).unwrap();
+    std::fs::create_dir(s.path()).unwrap();
+    h.command("theme copy nord mine");
+    assert!(h.overlay_kind().is_none());
+    let path = s.theme_file("mine");
+    assert!(path.is_file(), "the file is written");
+    assert_eq!(*h.app.theme, theme::NORD, "and used");
+    let (text, level) = flashed(&h);
+    assert_eq!(level, Level::Error);
+    assert!(text.starts_with(&format!("Wrote {}, but ", path.display())), "{text}");
+}
+
+#[test]
+fn the_suggested_name_skips_names_taken_in_any_case() {
+    let s = Scratch::new("suggest", "theme = \"dark\"\n", &[("Dark-copy", "extends = \"dark\"\n")]);
+    let mut h = Harness::with_config(&s.config(), Lang::En);
+    h.key(KeyCode::Esc);
+    h.command("settings");
+    h.keys("jjc");
+    assert_eq!(h.app.overlays.name_input().map(|n| n.input.text().to_string()).as_deref(), Some("dark-copy-2"));
+}

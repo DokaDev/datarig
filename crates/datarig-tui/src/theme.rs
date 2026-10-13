@@ -143,9 +143,9 @@ pub struct Theme {
     /// The mark of something that changes or deletes data, or of a production profile (not
     /// drawn yet).
     pub danger_mark: Style,
-    /// The node of a query plan that takes the most time (not drawn yet).
+    /// The nodes of a query plan that take the most time.
     pub plan_hot: Style,
-    /// A plan node whose estimated rows are far from the actual rows (not drawn yet).
+    /// How far a plan node's estimated rows are from the actual rows.
     pub plan_misestimate: Style,
     /// The estimates of an object among the largest of its schema in the explorer (1 MiB or
     /// more): a subtle warning, amber. With five levels (`[explorer] size_heat = "5"`) the
@@ -297,12 +297,17 @@ pub enum Background {
 
 /// The built-in theme `name` (a family's variant for `background`).
 pub fn builtin(name: &str, background: Background) -> Option<&'static Theme> {
+    builtin_variant(name, background).map(|(_, th)| th)
+}
+
+/// [`builtin`] with the name of the variant it is (never a family's name).
+fn builtin_variant(name: &str, background: Background) -> Option<(&'static str, &'static Theme)> {
     let name = match FAMILIES.iter().find(|f| f.name == name) {
         Some(f) if background == Background::Light => f.light,
         Some(f) => f.dark,
         None => name,
     };
-    BUILTINS.iter().find(|(n, _)| *n == name).map(|(_, th)| *th)
+    BUILTINS.iter().find(|(n, _)| *n == name).copied()
 }
 
 /// Every theme name `theme` takes: the built-in ones, then the theme files of `dir` (a file
@@ -318,23 +323,33 @@ pub fn names(dir: Option<&Path>) -> Vec<String> {
 /// The theme `name`: a built-in one, else the file `<dir>/<name>.toml`. A file with a built-in
 /// name is an error (it would silently never be used).
 pub fn resolve(name: &str, background: Background, dir: Option<&Path>) -> Result<Theme, ThemeError> {
-    if let Some(th) = builtin(name, background) {
+    resolve_with_base(name, background, dir).map(|(th, _)| th)
+}
+
+/// [`resolve`], with the built-in variant the theme starts from: itself when it is built in, else
+/// its file's `extends` (`terminal` without one), from the one read of the file.
+pub fn resolve_with_base(
+    name: &str,
+    background: Background,
+    dir: Option<&Path>,
+) -> Result<(Theme, &'static str), ThemeError> {
+    if let Some((base, th)) = builtin_variant(name, background) {
         if let Some(path) = dir.map(|d| datarig_core::theme::path(d, name)).filter(|p| p.is_file()) {
             return Err(ThemeError::Shadows { path });
         }
-        return Ok(th.clone());
+        return Ok((th.clone(), base));
     }
     let Some(dir) = dir else { return Err(ThemeError::Unknown { name: name.to_string(), dir: None }) };
     let spec = datarig_core::theme::load(dir, name, TOKENS)?;
-    let base = match &spec.extends {
-        None => &TERMINAL,
-        Some((base, line)) => builtin(base, background).ok_or_else(|| ThemeError::File {
+    let (base_name, base) = match &spec.extends {
+        None => ("terminal", &TERMINAL),
+        Some((base, line)) => builtin_variant(base, background).ok_or_else(|| ThemeError::File {
             path: datarig_core::theme::path(dir, name),
             line: Some(*line),
             problem: Problem::UnknownBase(base.clone()),
         })?,
     };
-    Ok(from_spec(&spec, base.clone()))
+    Ok((from_spec(&spec, base.clone()), base_name))
 }
 
 /// `base` with the tokens of a theme file.
@@ -482,8 +497,8 @@ tokens! {
         chart_6 => "The sixth series of a chart.";
     styles:
         selection => "The selected row or item, and the grid's cursor cell.",
-        range => "Cells of a selected range in the grid (the cursor's cell keeps selection).",
-        cursor_line => "The line or row under the cursor where the pane is not focused, and the editor's line.",
+        range => "Cells and headers of a selected range in the result grid (the cursor's cell keeps selection).",
+        cursor_line => "The row under the cursor of an unfocused list or plan, the editor's line, and (its background) the chart's cursor while focused.",
         hover => "What is under the mouse pointer: a list row, a grid cell, a tab, a button.",
         current_stmt => "A faint tint behind the statement a run would take.",
         running_stmt => "A tint behind the statement that runs now.",
@@ -499,10 +514,10 @@ tokens! {
         syn_exec_comment => "The opening and closing of a MySQL executable comment (/*! ... */).",
         search_match => "A match of the editor's search on the lines on screen.",
         match_paren => "The bracket matching the one at the editor's cursor (not drawn yet).",
-        read_only_mark => "The mark of read-only rules: the lock on a profile's row and its tabs.",
+        read_only_mark => "The mark of read-only rules (its fg): the lock on a profile's row and tabs, and the rule's words.",
         danger_mark => "The mark of something that changes or deletes data, or of a production profile (not drawn yet).",
-        plan_hot => "The node of a query plan that takes the most time (not drawn yet).",
-        plan_misestimate => "A plan node whose estimated rows are far from the actual rows (not drawn yet).",
+        plan_hot => "The plan nodes that take the most time, in every view of a query plan and its summary.",
+        plan_misestimate => "How far a plan node's estimated rows are from the actual ones, in the plan, its summary, detail and funnel.",
         size_warm => "Explorer size estimates of 1 MiB or more (with five levels: 100 MiB or more).",
         size_hot => "Explorer size estimates of 1 GiB or more (with five levels: 10 GiB or more).",
         size_mild => "With five size levels, explorer size estimates of 1 MiB or more.",

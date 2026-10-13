@@ -7,10 +7,9 @@
 //! taken is an error, whatever the file holds.
 
 use super::{
-    ANSI, BUILTINS, COLOR_ABOUT, FAMILIES, NAMES, STYLE_ABOUT, Theme, ThemeError, builtin, color_of, modifier, resolve,
-    style_of,
+    ANSI, Background, COLOR_ABOUT, FAMILIES, NAMES, STYLE_ABOUT, Theme, ThemeError, builtin, color_of, modifier,
+    resolve_with_base, style_of,
 };
-use super::{Background, Problem};
 use datarig_core::fault::Fault;
 use datarig_core::theme::{ANSI_NAMES, ModifierSpec};
 use ratatui::style::{Color, Modifier, Style};
@@ -37,7 +36,8 @@ pub enum AuthorError {
 }
 
 /// A name `:theme copy` and `:theme new` may write: a [`datarig_core::theme::valid_name`]
-/// (ASCII letters, digits, `-` and `_`, at most 64) that is no built-in theme's, ignoring case.
+/// (ASCII letters, digits, `-` and `_`, at most 64) that is no built-in theme's and no Windows
+/// device name (`con`, `prn`, `aux`, `nul`, `com1`-`com9`, `lpt1`-`lpt9`), ignoring case.
 pub fn check_name(name: &str) -> Result<(), AuthorError> {
     if !datarig_core::theme::valid_name(name) {
         return Err(AuthorError::BadName(name.to_string()));
@@ -45,32 +45,15 @@ pub fn check_name(name: &str) -> Result<(), AuthorError> {
     if NAMES.iter().any(|n| n.eq_ignore_ascii_case(name)) {
         return Err(AuthorError::BuiltinName(name.to_string()));
     }
-    Ok(())
-}
-
-/// The built-in theme (a variant, never a family) that theme `name` starts from: itself when it
-/// is built in, else its file's `extends` (`terminal` without one).
-fn base_of(name: &str, background: Background, dir: &Path) -> Result<&'static str, ThemeError> {
-    let variant = |n: &str| -> Option<&'static str> {
-        let n = match FAMILIES.iter().find(|f| f.name == n) {
-            Some(f) if background == Background::Light => f.light,
-            Some(f) => f.dark,
-            None => n,
-        };
-        BUILTINS.iter().find(|(b, _)| *b == n).map(|(b, _)| *b)
+    // A device name on Windows (`nul.toml` is the device there, whatever the extension).
+    let lower = name.to_ascii_lowercase();
+    let numbered = |prefix: &str| {
+        lower.strip_prefix(prefix).is_some_and(|n| n.len() == 1 && n.as_bytes()[0].is_ascii_digit() && n != "0")
     };
-    if let Some(b) = variant(name) {
-        return Ok(b);
+    if ["con", "prn", "aux", "nul"].contains(&lower.as_str()) || numbered("com") || numbered("lpt") {
+        return Err(AuthorError::BadName(name.to_string()));
     }
-    let spec = datarig_core::theme::load(dir, name, super::TOKENS)?;
-    match &spec.extends {
-        None => Ok("terminal"),
-        Some((base, line)) => variant(base).ok_or_else(|| ThemeError::File {
-            path: datarig_core::theme::path(dir, name),
-            line: Some(*line),
-            problem: Problem::UnknownBase(base.clone()),
-        }),
-    }
+    Ok(())
 }
 
 /// `:theme copy <from> <name>`: write `<dir>/<name>.toml` with every token of theme `from` as it
@@ -78,8 +61,7 @@ fn base_of(name: &str, background: Background, dir: &Path) -> Result<&'static st
 /// starts from (for the dimming behind dialogs, which is not a token). Returns the file's path.
 pub fn copy_theme(dir: &Path, from: &str, name: &str, background: Background) -> Result<PathBuf, AuthorError> {
     check_name(name)?;
-    let th = resolve(from, background, Some(dir)).map_err(AuthorError::Source)?;
-    let base = base_of(from, background, dir).map_err(AuthorError::Source)?;
+    let (th, base) = resolve_with_base(from, background, Some(dir)).map_err(AuthorError::Source)?;
     let header = format!(
         "# A datarig theme: a copy of \"{from}\" with every token set, so it stands on its own.\n\
          # `extends` only keeps the dimming behind dialogs of \"{base}\" (not a token).\n"
@@ -94,9 +76,15 @@ pub fn new_theme(dir: &Path, name: &str, base: &str, background: Background) -> 
     check_name(name)?;
     let th = builtin(base, background)
         .ok_or_else(|| AuthorError::Source(ThemeError::Unknown { name: base.to_string(), dir: None }))?;
+    // A family's variant follows the terminal's background: the values shown are the one drawn now.
+    let shown = match FAMILIES.iter().find(|f| f.name == base) {
+        Some(f) if background == Background::Light => format!("\"{base}\" (its light variant, {}, drawn now)", f.light),
+        Some(f) => format!("\"{base}\" (its dark variant, {}, drawn now)", f.dark),
+        None => format!("\"{base}\""),
+    };
     let header = format!(
         "# A datarig theme extending \"{base}\". Every token is listed with the value it takes from\n\
-         # \"{base}\", commented out: remove the \"# \" in front of a key to set it.\n"
+         # {shown}, commented out: remove the \"# \" in front of a key to set it.\n"
     );
     write(dir, name, &file_text(&header, base, th, true)?)
 }
@@ -243,7 +231,7 @@ pub fn doc() -> String {
          - On the settings screen, `c` on the theme row copies the theme shown there (the one being \
          previewed, else the current one) and asks for the new name.\n\n\
          Each writes a new file and never replaces one: a name that is taken, that is not a valid file name, \
-         or that is a built-in theme's (ignoring case) is refused. The themes folder is created when it is \
+         that is a built-in theme's or a Windows device name such as `nul` (ignoring case) is refused. The themes folder is created when it is \
          missing. Then datarig draws with the new theme, saves `theme = \"<name>\"` to the config file and \
          shows the file's path.\n\n",
     );

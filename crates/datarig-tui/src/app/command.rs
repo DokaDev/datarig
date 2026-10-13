@@ -724,9 +724,10 @@ pub enum ThemeCommand<'a> {
 /// Read the argument of `:theme`; `None`: it is not `copy <from> <name>` or `new <name>`.
 pub fn parse_theme(arg: &str) -> Option<ThemeCommand<'_>> {
     let words: Vec<&str> = arg.split_whitespace().collect();
-    match words[..] {
-        ["copy", from, name] => Some(ThemeCommand::Copy { from, name }),
-        ["new", name] => Some(ThemeCommand::New { name }),
+    // The word in any case, as the completion takes it.
+    match (words.first().map(|w| w.to_ascii_lowercase()).as_deref(), &words[..]) {
+        (Some("copy"), [_, from, name]) => Some(ThemeCommand::Copy { from, name }),
+        (Some("new"), [_, name]) => Some(ThemeCommand::New { name }),
         _ => None,
     }
 }
@@ -850,7 +851,9 @@ pub fn complete_arg(kind: ArgKind, arg: &str, names: &[&str]) -> Vec<ArgCompleti
         }
         ArgKind::Theme => match arg.split_once(char::is_whitespace) {
             // `copy ` and the start of a theme name: the names (the new name has nothing to pick).
-            Some(("copy", from)) if !from.trim_start().contains(char::is_whitespace) => {
+            Some((word, from))
+                if word.eq_ignore_ascii_case("copy") && !from.trim_start().contains(char::is_whitespace) =>
+            {
                 let from = from.trim_start();
                 rank(from, names.iter().copied().enumerate())
                     .into_iter()

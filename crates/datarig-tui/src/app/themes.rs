@@ -142,18 +142,18 @@ impl App {
     pub fn set_theme(&mut self, name: &str) -> Result<(), Notice> {
         let msg =
             Msg::SettingChanged { name: self.i18n.label(Label::SettingTheme).to_string(), value: name.to_string() };
-        self.switch_theme(name, Notice::new(msg, Level::Info))
+        let saved = self.switch_theme(name)?;
+        self.flash(saved.unwrap_or(Notice::new(msg, Level::Info)));
+        Ok(())
     }
 
-    /// Draw with theme `name`, save it and say `done` (or why it was not saved).
-    fn switch_theme(&mut self, name: &str, done: Notice) -> Result<(), Notice> {
+    /// Draw with theme `name` and save it; `Ok(Some)`: why it was not saved.
+    fn switch_theme(&mut self, name: &str) -> Result<Option<Notice>, Notice> {
         let th = self.resolve_theme(name)?;
         self.theme = Arc::new(th);
         self.theme_name = name.to_string();
         self.theme_problem = None;
-        let saved = self.persist();
-        self.flash(saved.unwrap_or(done));
-        Ok(())
+        Ok(self.persist())
     }
 
     /// `:theme copy <from> <name>` and the settings screen's copy: write `themes/<name>.toml`
@@ -163,7 +163,7 @@ impl App {
         let path = theme::copy_theme(&dir, from, name, self.background)?;
         let msg =
             Msg::ThemeAuthorCopied { from: from.to_string(), path: path.display().to_string(), name: name.into() };
-        self.wrote_theme(name, msg);
+        self.wrote_theme(name, &path, msg);
         Ok(())
     }
 
@@ -175,15 +175,25 @@ impl App {
         let base =
             if theme::NAMES.contains(&self.theme_name.as_str()) { self.theme_name.clone() } else { "dark".into() };
         let path = theme::new_theme(&dir, name, &base, self.background)?;
-        self.wrote_theme(name, Msg::ThemeAuthorCreated { path: path.display().to_string(), base, name: name.into() });
+        let msg = Msg::ThemeAuthorCreated { path: path.display().to_string(), base, name: name.into() };
+        self.wrote_theme(name, &path, msg);
         Ok(())
     }
 
-    /// A theme file was written: use it. It is said even when it cannot be used (the file stays).
-    fn wrote_theme(&mut self, name: &str, done: Msg) {
-        if let Err(e) = self.switch_theme(name, Notice::new(done, Level::Success)) {
-            self.flash(e);
-        }
+    /// A theme file was written at `path`: use it and say `done`. When it cannot be used or saved,
+    /// the message says why and still where the file is (it stays).
+    fn wrote_theme(&mut self, name: &str, path: &std::path::Path, done: Msg) {
+        let notice = match self.switch_theme(name) {
+            Ok(None) => Notice::new(done, Level::Success),
+            Ok(Some(problem)) | Err(problem) => {
+                let msg = Msg::ThemeAuthorWrittenBut {
+                    path: path.display().to_string(),
+                    error: problem.render(&self.i18n).to_string(),
+                };
+                Notice::new(msg, problem.level)
+            }
+        };
+        self.flash(notice);
         // The settings screen lists the new file, and a preview is over: the theme is chosen.
         let names = self.theme_names();
         if let Some(s) = self.overlays.settings_mut() {
@@ -222,10 +232,11 @@ impl App {
             Ok(from) => from,
             Err(e) => return self.flash(e),
         };
-        // `<from>-copy`, or the first `<from>-copy-<n>` no theme has.
+        // `<from>-copy`, or the first `<from>-copy-<n>` that is a name to write and no theme has
+        // (ignoring case, as a file system may).
         let free = (1..100)
             .map(|n| if n == 1 { format!("{from}-copy") } else { format!("{from}-copy-{n}") })
-            .find(|n| !names.contains(n))
+            .find(|n| theme::check_name(n).is_ok() && !names.iter().any(|t| t.eq_ignore_ascii_case(n)))
             .unwrap_or_default();
         self.overlays.push(Overlay::NameInput(NameInput {
             title: Msg::ThemeAuthorCopyTitle { from: from.clone() },

@@ -445,7 +445,7 @@ Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+
 
 The settings screen: one list by category, each setting with its description; a click selects a row and its `‹`/`›` change the value, the wheel selects, the pointer only highlights. Inside `root`.
 
-Reserved — settings screen (c: copy the theme to a new theme file): `j` `k` `Down` `Up` `h` `l` `Left` `Right` `Enter` `Space` `Esc` `q` `c`
+Reserved — settings screen; c on the theme row: copy the theme to a new theme file: `j` `k` `Down` `Up` `h` `l` `Left` `Right` `Enter` `Space` `Esc` `q` `c`
 
 ## `overlay.chooser`
 

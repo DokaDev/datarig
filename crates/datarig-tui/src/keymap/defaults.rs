@@ -540,7 +540,7 @@ const RESERVED: &[(Ctx, &[&str], &str)] = &[
     (
         Settings,
         &["j", "k", "down", "up", "h", "l", "left", "right", "enter", "space", "esc", "q", "c"],
-        "settings screen (c: copy the theme to a new theme file)",
+        "settings screen; c on the theme row: copy the theme to a new theme file",
     ),
     // Typing filters the menu: the arrows, `Ctrl+N`/`Ctrl+P` and `Tab` move.
     (ContextMenu, &["down", "up", "ctrl+n", "ctrl+p", "tab", "shift+tab", "enter", "esc"], "action menu"),
