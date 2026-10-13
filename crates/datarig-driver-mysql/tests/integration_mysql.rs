@@ -301,9 +301,10 @@ async fn the_metadata_session_reads_the_databases_and_the_catalog() {
 /// A read of the metadata session never queues behind another session's metadata lock (held,
 /// or asked for by an `ALTER TABLE` that waits) beyond its lock wait, and never holds up that
 /// session: while the reads run, and right after, the server shows no other session waiting
-/// for a lock of the metadata session's, and the metadata session keeps none ([`watched`]: a
-/// sampled guard; with `LOCK TABLES` the other session can wait for nothing, so there the fact
-/// is that the lookups did not wait).
+/// for a lock of the metadata session's but the momentary high-priority one of a table's
+/// estimates, and the metadata session keeps none ([`watched`]: a sampled guard; with `LOCK
+/// TABLES` the other session can wait for nothing, so there the fact is that the lookups did not
+/// wait).
 #[tokio::test(flavor = "multi_thread")]
 async fn lookups_never_queue_behind_a_metadata_lock_nor_hold_one_up() {
     let Some((url, admin)) = urls("lookups_never_queue_behind_a_metadata_lock") else { return };
@@ -350,7 +351,16 @@ async fn lookups_never_queue_behind_a_metadata_lock_nor_hold_one_up() {
         (objects, catalog)
     })
     .await;
-    assert!(seen.held_up.is_empty(), "the ALTER waited for the lookups: {:?}", seen.held_up);
+    // The estimates of the tables (`TABLE_ROWS`, `DATA_LENGTH + INDEX_LENGTH`) may open a table
+    // whose statistics the server has not kept, for the moment they are read, with a high-priority
+    // shared lock granted past the waiting ALTER (which waits for the held result whatever the
+    // lookup does) and gone once it has answered: the only lock of the lookups' the ALTER can be
+    // seen behind is that one, never a shared read or write lock or a stronger one.
+    assert!(
+        seen.held_up.iter().all(|w| w.ends_with(": ours SHARED_HIGH_PRIO GRANTED")),
+        "the ALTER waited for a lock of the lookups: {:?}",
+        seen.held_up
+    );
     assert_eq!(metadata_locks_of(&mut side_admin, meta).await, 0, "no lock kept");
     assert!(alter_waits(&mut side_admin, alter_id).await, "the ALTER still waits for the held result");
     // A lookup may wait behind the waiting ALTER, for the session's lock wait only, and then
