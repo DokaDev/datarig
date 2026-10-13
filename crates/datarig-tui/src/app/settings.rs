@@ -6,7 +6,8 @@
 //! always agree. A config file with errors is said so on top (nothing is saved then).
 //!
 //! The theme row lists the built-in themes and the theme files found when the screen opens;
-//! moving over its values previews a theme (see [`super::themes`]).
+//! moving over its values previews a theme, and `c` copies the theme shown to a new theme file
+//! (see [`super::themes`]).
 //!
 //! It is a large modal like the profile form rather than a workspace tab: settings are global
 //! and belong to no connection, so a tab would need exceptions in the tab binding, restore
@@ -142,6 +143,11 @@ impl App {
             KeyCode::Esc | KeyCode::Char('q') if !repeat => {
                 self.end_preview();
                 self.overlays.close(OverlayKind::Settings);
+                return;
+            }
+            // On the theme row: copy the theme shown to a new theme file.
+            KeyCode::Char('c') if !repeat && SETTINGS[rows[s.selected]].values == Values::Themes => {
+                self.open_copy_theme();
                 return;
             }
             KeyCode::Char('h') | KeyCode::Left => -1,

@@ -74,6 +74,8 @@ pub enum NamePurpose {
     RenameScriptFolder(String),
     /// The name of the tunnel preset the profile form's own tunnel becomes when it is saved.
     SaveAsTunnel,
+    /// A new theme file with every token of theme `from` (the settings screen's copy).
+    CopyTheme { from: String },
 }
 
 pub struct NameInput {
@@ -360,6 +362,7 @@ impl App {
         let raw = n.input.text().to_string();
         let script = match &purpose {
             NamePurpose::SaveAsTunnel => Some(self.save_as_tunnel_named(&raw)),
+            NamePurpose::CopyTheme { from } => Some(self.copy_theme_named(&from.clone(), &typed)),
             NamePurpose::NewScriptFolder { parent } => Some(self.new_script_folder(parent.clone(), &typed)),
             NamePurpose::RenameScript(from) => Some(self.rename_script(&from.clone(), &typed, false)),
             NamePurpose::RenameScriptFolder(from) => Some(self.rename_script(&from.clone(), &typed, true)),

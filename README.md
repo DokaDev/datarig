@@ -686,9 +686,20 @@ warning = "yellow"
 selection = { bg = "#45475a", modifiers = ["bold"] }
 ```
 
-The token names are the fields of `Theme` in `crates/datarig-tui/src/theme.rs`. A mistake in the
+Every token, with what it colors, is listed in [docs/themes.md](docs/themes.md). A mistake in the
 file (an unknown token, a bad color), an unknown name or a file named like a built-in theme is
 reported with the file and line, and the app draws with `terminal` until it is fixed.
+
+To start a theme file, let datarig write it:
+
+- `:theme copy <from> <name>` writes `themes/<name>.toml` with every token of `<from>` (a built-in
+  theme or a theme file) set to its value, each under a comment saying what it colors.
+- `:theme new <name>` writes one that extends the current theme (when it is built in, else
+  `dark`) with every token commented out, showing the value it inherits.
+- On the settings screen, `c` on the theme row copies the theme shown there and asks for a name.
+
+None of them replaces a file: a taken name, a built-in theme's name, a Windows device name
+(`con`, `nul`, `com1`, …) or one that is not letters, digits, `-` and `_` is refused. The new theme is then used and saved, and its path is shown.
 
 ## Safety model
 

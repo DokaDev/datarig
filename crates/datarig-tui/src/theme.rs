@@ -24,7 +24,9 @@ use std::cell::RefCell;
 use std::path::Path;
 use std::sync::Arc;
 
+mod authoring;
 mod builtins;
+pub use authoring::*;
 pub use builtins::*;
 
 const fn rgb(hex: u32) -> Color {
@@ -141,9 +143,9 @@ pub struct Theme {
     /// The mark of something that changes or deletes data, or of a production profile (not
     /// drawn yet).
     pub danger_mark: Style,
-    /// The node of a query plan that takes the most time (not drawn yet).
+    /// The nodes of a query plan that take the most time.
     pub plan_hot: Style,
-    /// A plan node whose estimated rows are far from the actual rows (not drawn yet).
+    /// How far a plan node's estimated rows are from the actual rows.
     pub plan_misestimate: Style,
     /// The estimates of an object among the largest of its schema in the explorer (1 MiB or
     /// more): a subtle warning, amber. With five levels (`[explorer] size_heat = "5"`) the
@@ -295,12 +297,17 @@ pub enum Background {
 
 /// The built-in theme `name` (a family's variant for `background`).
 pub fn builtin(name: &str, background: Background) -> Option<&'static Theme> {
+    builtin_variant(name, background).map(|(_, th)| th)
+}
+
+/// [`builtin`] with the name of the variant it is (never a family's name).
+fn builtin_variant(name: &str, background: Background) -> Option<(&'static str, &'static Theme)> {
     let name = match FAMILIES.iter().find(|f| f.name == name) {
         Some(f) if background == Background::Light => f.light,
         Some(f) => f.dark,
         None => name,
     };
-    BUILTINS.iter().find(|(n, _)| *n == name).map(|(_, th)| *th)
+    BUILTINS.iter().find(|(n, _)| *n == name).copied()
 }
 
 /// Every theme name `theme` takes: the built-in ones, then the theme files of `dir` (a file
@@ -316,23 +323,33 @@ pub fn names(dir: Option<&Path>) -> Vec<String> {
 /// The theme `name`: a built-in one, else the file `<dir>/<name>.toml`. A file with a built-in
 /// name is an error (it would silently never be used).
 pub fn resolve(name: &str, background: Background, dir: Option<&Path>) -> Result<Theme, ThemeError> {
-    if let Some(th) = builtin(name, background) {
+    resolve_with_base(name, background, dir).map(|(th, _)| th)
+}
+
+/// [`resolve`], with the built-in variant the theme starts from: itself when it is built in, else
+/// its file's `extends` (`terminal` without one), from the one read of the file.
+pub fn resolve_with_base(
+    name: &str,
+    background: Background,
+    dir: Option<&Path>,
+) -> Result<(Theme, &'static str), ThemeError> {
+    if let Some((base, th)) = builtin_variant(name, background) {
         if let Some(path) = dir.map(|d| datarig_core::theme::path(d, name)).filter(|p| p.is_file()) {
             return Err(ThemeError::Shadows { path });
         }
-        return Ok(th.clone());
+        return Ok((th.clone(), base));
     }
     let Some(dir) = dir else { return Err(ThemeError::Unknown { name: name.to_string(), dir: None }) };
     let spec = datarig_core::theme::load(dir, name, TOKENS)?;
-    let base = match &spec.extends {
-        None => &TERMINAL,
-        Some((base, line)) => builtin(base, background).ok_or_else(|| ThemeError::File {
+    let (base_name, base) = match &spec.extends {
+        None => ("terminal", &TERMINAL),
+        Some((base, line)) => builtin_variant(base, background).ok_or_else(|| ThemeError::File {
             path: datarig_core::theme::path(dir, name),
             line: Some(*line),
             problem: Problem::UnknownBase(base.clone()),
         })?,
     };
-    Ok(from_spec(&spec, base.clone()))
+    Ok((from_spec(&spec, base.clone()), base_name))
 }
 
 /// `base` with the tokens of a theme file.
@@ -350,26 +367,28 @@ pub fn from_spec(spec: &ThemeSpec, mut base: Theme) -> Theme {
     base
 }
 
+/// The colors of the 16 ANSI names of a theme file, in [`datarig_core::theme::ANSI_NAMES`] order.
+const ANSI: [Color; 16] = [
+    Color::Black,
+    Color::Red,
+    Color::Green,
+    Color::Yellow,
+    Color::Blue,
+    Color::Magenta,
+    Color::Cyan,
+    Color::Gray,
+    Color::DarkGray,
+    Color::LightRed,
+    Color::LightGreen,
+    Color::LightYellow,
+    Color::LightBlue,
+    Color::LightMagenta,
+    Color::LightCyan,
+    Color::White,
+];
+
 /// The color of a theme file's color.
 pub fn color(c: ColorSpec) -> Color {
-    const ANSI: [Color; 16] = [
-        Color::Black,
-        Color::Red,
-        Color::Green,
-        Color::Yellow,
-        Color::Blue,
-        Color::Magenta,
-        Color::Cyan,
-        Color::Gray,
-        Color::DarkGray,
-        Color::LightRed,
-        Color::LightGreen,
-        Color::LightYellow,
-        Color::LightBlue,
-        Color::LightMagenta,
-        Color::LightCyan,
-        Color::White,
-    ];
     match c {
         ColorSpec::Default => Color::Reset,
         ColorSpec::Ansi(i) => ANSI[usize::from(i) % ANSI.len()],
@@ -382,24 +401,36 @@ fn style(s: &StyleSpec) -> Style {
     out.fg = s.fg.map(color);
     out.bg = s.bg.map(color);
     for m in &s.modifiers {
-        out = out.add_modifier(match m {
-            ModifierSpec::Bold => Modifier::BOLD,
-            ModifierSpec::Dim => Modifier::DIM,
-            ModifierSpec::Italic => Modifier::ITALIC,
-            ModifierSpec::Underlined => Modifier::UNDERLINED,
-            ModifierSpec::Reversed => Modifier::REVERSED,
-            ModifierSpec::CrossedOut => Modifier::CROSSED_OUT,
-        });
+        out = out.add_modifier(modifier(*m));
     }
     out
 }
 
+/// The modifier of a theme file's modifier.
+fn modifier(m: ModifierSpec) -> Modifier {
+    match m {
+        ModifierSpec::Bold => Modifier::BOLD,
+        ModifierSpec::Dim => Modifier::DIM,
+        ModifierSpec::Italic => Modifier::ITALIC,
+        ModifierSpec::Underlined => Modifier::UNDERLINED,
+        ModifierSpec::Reversed => Modifier::REVERSED,
+        ModifierSpec::CrossedOut => Modifier::CROSSED_OUT,
+    }
+}
+
 /// The tokens a theme file sets by name: the color and the style fields of [`Theme`] (`dim` is
-/// not one; a theme file keeps the dimming of the theme it extends).
+/// not one; a theme file keeps the dimming of the theme it extends), each with what it colors
+/// and where. The descriptions are the comments of the files `:theme copy` and `:theme new`
+/// write and the tables of `docs/themes.md`, so a token cannot be added without one.
 macro_rules! tokens {
-    (colors: $($c:ident),* ; styles: $($s:ident),* $(,)?) => {
+    (colors: $($c:ident => $cd:literal),* ; styles: $($s:ident => $sd:literal),* $(,)?) => {
         pub const COLOR_TOKENS: &[&str] = &[$(stringify!($c)),*];
         pub const STYLE_TOKENS: &[&str] = &[$(stringify!($s)),*];
+
+        /// Every color token and what it colors, in [`COLOR_TOKENS`] order.
+        pub const COLOR_ABOUT: &[(&str, &str)] = &[$((stringify!($c), $cd)),*];
+        /// Every style token and what it styles, in [`STYLE_TOKENS`] order.
+        pub const STYLE_ABOUT: &[(&str, &str)] = &[$((stringify!($s), $sd)),*];
 
         fn color_token<'a>(th: &'a mut Theme, name: &str) -> Option<&'a mut Color> {
             match name {
@@ -414,17 +445,83 @@ macro_rules! tokens {
                 _ => None,
             }
         }
+
+        /// The color token `name` of `th`.
+        pub fn color_of(th: &Theme, name: &str) -> Option<Color> {
+            match name {
+                $(stringify!($c) => Some(th.$c),)*
+                _ => None,
+            }
+        }
+
+        /// The style token `name` of `th`.
+        pub fn style_of(th: &Theme, name: &str) -> Option<Style> {
+            match name {
+                $(stringify!($s) => Some(th.$s),)*
+                _ => None,
+            }
+        }
     };
 }
 
 tokens! {
-    colors: bg, surface, surface_alt, border, accent, accent_warm, fg, fg_muted, fg_dim, current_stmt_bar, running_stmt_bar,
-        success,
-        warning, error, null_fg, key_pk, key_fk, key_uq, mode_normal, mode_insert, mode_visual, mode_command,
-        mode_fg, chart_1, chart_2, chart_3, chart_4, chart_5, chart_6;
-    styles: selection, range, cursor_line, hover, current_stmt, running_stmt, run_hint, syn_keyword, syn_function, syn_string, syn_number,
-        syn_comment, syn_operator, syn_identifier, syn_quoted_ident, syn_exec_comment, search_match, match_paren, read_only_mark,
-        danger_mark, plan_hot, plan_misestimate, size_warm, size_hot, size_mild, size_heated,
+    colors:
+        bg => "The background of the panes: explorer, editor, results.",
+        surface => "The background of dialogs, popups, menus, the command line and the status bar.",
+        surface_alt => "A second surface: the active tab, every other row of the result grid, form fields and buttons.",
+        border => "Borders and rules between panes and around dialogs.",
+        accent => "The main accent: the focused pane's border, dialog borders, labels and names to notice.",
+        accent_warm => "The warm accent: values on the settings screen, an open transaction, keys in menus.",
+        fg => "Body text.",
+        fg_muted => "Secondary text: descriptions, labels and hints.",
+        fg_dim => "Faint text: placeholders, empty lists and notes such as a database's default.",
+        current_stmt_bar => "The bar in the editor's gutter next to the statement a run would take.",
+        running_stmt_bar => "The bar and the spinner in the editor's gutter next to the statement that runs now.",
+        success => "Success: rows a run returned, a connected tunnel, a success message.",
+        warning => "Warnings.",
+        error => "Errors.",
+        null_fg => "NULL in the result grid and the inspector.",
+        key_pk => "The mark of a primary key column.",
+        key_fk => "The mark of a foreign key column.",
+        key_uq => "The mark of a unique key column.",
+        mode_normal => "The background of the status bar's mode badge in Normal mode.",
+        mode_insert => "The background of the mode badge in Insert mode.",
+        mode_visual => "The background of the mode badge in Visual mode.",
+        mode_command => "The background of the mode badge while the command line is open.",
+        mode_fg => "The text of the mode badge (bold, on the mode's color).",
+        chart_1 => "The first series of a chart.",
+        chart_2 => "The second series of a chart.",
+        chart_3 => "The third series of a chart.",
+        chart_4 => "The fourth series of a chart.",
+        chart_5 => "The fifth series of a chart.",
+        chart_6 => "The sixth series of a chart.";
+    styles:
+        selection => "The selected row or item, and the grid's cursor cell.",
+        range => "Cells and headers of a selected range in the result grid (the cursor's cell keeps selection).",
+        cursor_line => "The row under the cursor of an unfocused list or plan, the editor's line, and (its background) the chart's cursor while focused.",
+        hover => "What is under the mouse pointer: a list row, a grid cell, a tab, a button.",
+        current_stmt => "A faint tint behind the statement a run would take.",
+        running_stmt => "A tint behind the statement that runs now.",
+        run_hint => "The hint after a statement's last line that says what its last run did.",
+        syn_keyword => "SQL keywords.",
+        syn_function => "SQL function names.",
+        syn_string => "SQL strings and dollar-quoted bodies.",
+        syn_number => "SQL numbers.",
+        syn_comment => "SQL comments.",
+        syn_operator => "SQL operators and punctuation.",
+        syn_identifier => "SQL names, parameters and variables.",
+        syn_quoted_ident => "SQL quoted names.",
+        syn_exec_comment => "The opening and closing of a MySQL executable comment (/*! ... */).",
+        search_match => "A match of the editor's search on the lines on screen.",
+        match_paren => "The bracket matching the one at the editor's cursor (not drawn yet).",
+        read_only_mark => "The mark of read-only rules (its fg): the lock on a profile's row and tabs, and the rule's words.",
+        danger_mark => "The mark of something that changes or deletes data, or of a production profile (not drawn yet).",
+        plan_hot => "The plan nodes that take the most time, in every view of a query plan and its summary.",
+        plan_misestimate => "How far a plan node's estimated rows are from the actual ones, in the plan, its summary, detail and funnel.",
+        size_warm => "Explorer size estimates of 1 MiB or more (with five levels: 100 MiB or more).",
+        size_hot => "Explorer size estimates of 1 GiB or more (with five levels: 10 GiB or more).",
+        size_mild => "With five size levels, explorer size estimates of 1 MiB or more.",
+        size_heated => "With five size levels, explorer size estimates of 1 GiB or more.",
 }
 
 /// The token names of a theme file.

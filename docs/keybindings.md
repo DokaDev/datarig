@@ -445,7 +445,7 @@ Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+
 
 The settings screen: one list by category, each setting with its description; a click selects a row and its `‹`/`›` change the value, the wheel selects, the pointer only highlights. Inside `root`.
 
-Reserved — settings screen: `j` `k` `Down` `Up` `h` `l` `Left` `Right` `Enter` `Space` `Esc` `q`
+Reserved — settings screen; c on the theme row: copy the theme to a new theme file: `j` `k` `Down` `Up` `h` `l` `Left` `Right` `Enter` `Space` `Esc` `q` `c`
 
 ## `overlay.chooser`
 
@@ -601,6 +601,7 @@ An editor command closes the line; what went wrong is said in the status bar.
 | `:format` |  | Format the statement under the cursor or the selection (only its layout) |
 | `:ddl [schema.name]` |  | Show the DDL of the explorer's object, the table tab's table, or a name (:ddl [schema.name]) |
 | `:explain [analyze]` |  | The plan of the statement under the cursor (:explain analyze runs and measures it; a write is rolled back) |
+| `:theme copy <from> <name> / new <name>` |  | Write a theme file: a full copy of a theme, or a new one to fill in |
 
 Settings of `:set` (saved to `config.toml` like the matching actions):
 
