@@ -1,7 +1,7 @@
 //! Where datarig keeps its files. The config file keeps its own rules
 //! ([`crate::config::default_path`]); this module computes the data directory (saved queries)
 //! and the state directory (tab restore, console buffers, the instance lock, one-time notices,
-//! the log of deleted passwords).
+//! the log of deleted passwords, the keychain offer's answer).
 //!
 //! Precedence, for each directory: the `DATARIG_DATA_DIR` / `DATARIG_STATE_DIR` override,
 //! then `$XDG_DATA_HOME/datarig` / `$XDG_STATE_HOME/datarig` when set (on every OS, so a
@@ -76,6 +76,13 @@ impl Paths {
     /// ([`crate::secret::DeletionLog`]).
     pub fn secrets_log(&self) -> Option<PathBuf> {
         self.state.as_ref().map(|s| s.join("secrets.log"))
+    }
+
+    /// `<state>/keychain.toml`: the answer to the offer to stop the macOS keychain prompts
+    /// after updates, and the binary of the last direct keychain access
+    /// ([`crate::secret::offer`]).
+    pub fn keychain_offer_file(&self) -> Option<PathBuf> {
+        self.state.as_ref().map(|s| s.join(crate::secret::offer::STATE_FILE))
     }
 
     /// `<state>/errors.log`: the raw detail of failures the UI reported in words

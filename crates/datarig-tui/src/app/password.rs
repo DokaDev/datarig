@@ -745,9 +745,7 @@ impl App {
     /// Use `a` from the next keychain call on (no restart), save it and say what it means.
     pub(super) fn keychain_access_changed(&mut self, a: KeychainAccess) {
         let before = self.prefs.keychain_access;
-        self.prefs.keychain_access = a;
-        self.secrets.stores().access.set(a);
-        let saved = self.persist();
+        let saved = self.apply_keychain_access(a);
         let said = match (before, a) {
             (KeychainAccess::Direct, KeychainAccess::SecurityTool) => {
                 Notice::new(Label::KeychainAccessOn, Level::Warning)
@@ -764,6 +762,14 @@ impl App {
             ),
         };
         self.flash(saved.unwrap_or(said));
+    }
+
+    /// Use `a` from the next keychain call on and save it: what went wrong saving it, if
+    /// anything.
+    pub(super) fn apply_keychain_access(&mut self, a: KeychainAccess) -> Option<Notice> {
+        self.prefs.keychain_access = a;
+        self.secrets.stores().access.set(a);
+        self.persist()
     }
 }
 

@@ -1757,3 +1757,8 @@
 "dialog.button.turn_on" = "Turn on"
 "keychain_access.on" = "Passwords now go through /usr/bin/security: any program running as you can read them with it, without asking"
 "keychain_access.off" = "datarig reads the keychain directly again; passwords saved meanwhile trust only /usr/bin/security, so macOS may ask once per password"
+"keychain_offer.text" = "macOS likely asked for your login password because datarig was updated. Stop asking after every update? Other programs running as you could then read these saved passwords through the `security` tool."
+"keychain_offer.keys" = "y switch · n keep asking · Esc/Enter decide later"
+"dialog.button.yes_switch" = "Yes, switch"
+"dialog.button.keep_asking" = "No, keep asking"
+"keychain_offer.switched" = "Switched to the security tool. macOS will ask once for each saved password: choose \"Always Allow\"."

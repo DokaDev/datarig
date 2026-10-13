@@ -41,6 +41,7 @@ pub mod guide;
 pub mod hover;
 pub mod key_picker;
 mod keychain;
+mod keychain_offer;
 pub mod menu;
 pub mod overlay;
 pub mod pages;
@@ -597,6 +598,15 @@ pub struct App {
     keychain_guard: Option<Arc<datarig_core::secret::Guarded>>,
     /// Keychain accounts whose removal was refused while a call hung: removed when it returns.
     keychain_unremoved: Vec<String>,
+    /// What the offer to stop the macOS keychain prompts needs to know of the system (`None`:
+    /// never offered; [`App::set_keychain_host`]).
+    keychain_host: Option<datarig_core::secret::offer::Host>,
+    /// The timed direct-mode keychain calls not looked at yet.
+    keychain_seen: datarig_core::secret::offer::Seen,
+    /// The offer waits for the connect to finish and the dialogs to close.
+    keychain_offer_due: bool,
+    /// Writing the keychain offer's state file failed once: not tried again this session.
+    keychain_state_unwritable: bool,
     /// Password typed at the prompt of a `prompt` profile, used by the next attempt only.
     prompted: Option<(ProfileId, Secret)>,
     /// Password prompts of other profiles waiting for the open one (one prompt at a time).
@@ -899,6 +909,10 @@ impl App {
             keychain_queue: keychain::KeychainQueue::default(),
             keychain_guard: None,
             keychain_unremoved: Vec::new(),
+            keychain_host: None,
+            keychain_seen: Default::default(),
+            keychain_offer_due: false,
+            keychain_state_unwritable: false,
             prompted: None,
             prompt_queue: VecDeque::new(),
             pending_save: false,
@@ -971,13 +985,14 @@ impl App {
 
     /// Use `stores` for the keychain and the secrets file (the binary passes the stores
     /// `DATARIG_SECRET_STORE` picks). Every keychain call ends within the keychain's time
-    /// limit ([`App::set_keychain_timeout`]).
+    /// limit ([`App::set_keychain_timeout`]); on macOS the OS keychain's direct calls are timed
+    /// ([`App::set_keychain_host`]).
     pub fn set_secret_stores(&mut self, mut stores: Stores) {
         // The keychain is reached the way the loaded config says (macOS only).
         stores.access.set(self.prefs.keychain_access);
-        let guard = keychain::guarded(stores.keychain, self.keychain_timeout);
-        stores.keychain = guard.clone();
-        self.keychain_guard = Some(guard);
+        let guard = keychain::guarded(stores.keychain.clone(), self.keychain_timeout);
+        self.keychain_guard = Some(guard.clone());
+        stores.keychain = self.timed_keychain(guard, &stores);
         self.hear_late_keychain();
         self.secrets = Secrets::with_stores(stores);
     }

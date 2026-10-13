@@ -152,6 +152,10 @@ pub enum ConfirmAction {
     /// (`[secrets] macos_keychain_access = "security_tool"`): any program running as the user can
     /// then read the passwords through it. Cancel is the default.
     KeychainSecurityTool,
+    /// The one-time offer to stop the macOS keychain prompts after updates by switching to
+    /// `/usr/bin/security` (`App::keychain_offer_key`): `y` switches, `n` declines for good,
+    /// `Esc`/`Enter` decide later.
+    KeychainOffer,
 }
 
 /// A yes/no question: `y` yes, `n`/`Esc` no; `Enter` no when the answer would lose something
@@ -180,6 +184,13 @@ impl Confirm {
                     vec![(Label::DialogButtonLater, KeyCode::Esc), (Label::DialogButtonSaveAgain, KeyCode::Char('o'))],
                     None,
                 );
+            }
+            ConfirmAction::KeychainOffer => {
+                let buttons = vec![
+                    (Label::DialogButtonKeepAsking, KeyCode::Char('n')),
+                    (Label::DialogButtonYesSwitch, KeyCode::Char('y')),
+                ];
+                return (buttons, None);
             }
             ConfirmAction::ScriptConflict(_) => {
                 let buttons = vec![

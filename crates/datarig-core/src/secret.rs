@@ -18,6 +18,7 @@ mod guard;
 mod keychain;
 mod log;
 mod memory;
+pub mod offer;
 #[cfg(unix)]
 mod security_cli;
 pub mod source;
@@ -115,6 +116,7 @@ impl StoreKind {
                     file: logged(file, "file"),
                     file_path: secrets_file,
                     access: switch,
+                    os_keychain: true,
                 }
             }
             StoreKind::Memory => Stores {
@@ -122,12 +124,14 @@ impl StoreKind {
                 file: logged(Arc::new(MemoryStore::new()), "file (memory)"),
                 file_path: None,
                 access: switch,
+                os_keychain: false,
             },
             StoreKind::Stalled => Stores {
                 keychain: Arc::new(Stalled),
                 file: logged(Arc::new(MemoryStore::new()), "file (memory)"),
                 file_path: None,
                 access: switch,
+                os_keychain: false,
             },
         }
     }
@@ -189,12 +193,21 @@ pub struct Stores {
     /// How the macOS keychain is reached (`[secrets] macos_keychain_access`): the app sets it
     /// when the setting changes. Read only by the OS keychain store on macOS.
     pub access: KeychainSwitch,
+    /// `keychain` is the OS's own store (not `memory` or `stall`): its calls may wait for the
+    /// user ([`offer`]).
+    pub os_keychain: bool,
 }
 
 impl Stores {
     /// `keychain` plus an in-memory secrets file (tests).
     pub fn with_keychain(keychain: Arc<dyn SecretStore>) -> Self {
-        Self { keychain, file: Arc::new(MemoryStore::new()), file_path: None, access: KeychainSwitch::default() }
+        Self {
+            keychain,
+            file: Arc::new(MemoryStore::new()),
+            file_path: None,
+            access: KeychainSwitch::default(),
+            os_keychain: false,
+        }
     }
 
     /// The secrets file may be used (its permissions, on Unix).

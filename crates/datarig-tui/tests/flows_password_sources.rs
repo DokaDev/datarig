@@ -421,6 +421,7 @@ fn an_insecure_secrets_file_is_refused_with_the_fix() {
         file: Arc::new(store),
         file_path: Some(file.clone()),
         access: Default::default(),
+        os_keychain: false,
     });
     h.key(KeyCode::Enter);
     assert!(h.app.conns.attempt().is_none());
@@ -514,6 +515,7 @@ fn a_failed_source_change_keeps_everything() {
         ))),
         file_path: None,
         access: Default::default(),
+        os_keychain: false,
     });
     h.keys("e");
     select(&mut h, SourceKind::File);

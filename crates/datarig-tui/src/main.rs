@@ -77,6 +77,8 @@ fn main() -> ExitCode {
         let paths = datarig_core::paths::Paths::from_env();
         let log = Arc::new(DeletionLog::new(paths.secrets_log()));
         let secrets_file = cfg.path.as_deref().map(FileStore::next_to);
+        // The offer to stop the keychain prompts after updates times the OS keychain's calls.
+        app.set_keychain_host(datarig_core::secret::offer::Host::current(env!("CARGO_PKG_VERSION")));
         app.set_secret_stores(store.open_stores(secrets_file, log, cfg.prefs.keychain_access));
         app.set_paths(paths);
         // Whether the icons show is asked once, in a terminal only.
