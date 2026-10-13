@@ -21,7 +21,7 @@
 //!
 //! [explorer]
 //! expanded_folders = ["work", "work/prod"]
-//! connections_collapsed = false   # the "Connections" section is closed
+//! connections_collapsed = false   # true: the "Connections" section is closed
 //! scripts_expanded = true
 //! script_folders = ["reports"]
 //! hidden = false          # the explorer is hidden (the panes take the whole width)

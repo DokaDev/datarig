@@ -727,6 +727,9 @@ pub struct App {
     pub(crate) tab_hits: Vec<(u16, u16, crate::widgets::tabbar::TabHit)>,
     /// The small clickable target under the pointer (drawn highlighted).
     pub pointer_on: Option<hover::PointerOn>,
+    /// The tab the pointer was over its grid or inspector in (a grid cell or an inspector entry
+    /// lit is of that tab's result only).
+    pub(crate) pointer_tab: Option<TabId>,
     /// The column of the inspector's Row tab a press armed, with the result it is of (it is
     /// picked on the release, over the same column of the same result).
     pub(crate) detail_press: overlay::Press<(u64, usize)>,
@@ -972,6 +975,7 @@ impl App {
             strip_hits: Vec::new(),
             tab_hits: Vec::new(),
             pointer_on: None,
+            pointer_tab: None,
             detail_press: overlay::Press::default(),
             detail_picked: None,
             last_top: None,
@@ -1267,8 +1271,12 @@ impl App {
             self.last_focus = self.focus;
         }
         let last = self.last_used.filter(|id| self.profile(*id).is_some()).or(self.profiles_sorted_first());
-        if let Some(id) = last {
-            self.reveal_profile(id);
+        // The cursor on that profile; on the Connections head when the section was left closed
+        // (it stays closed).
+        match last {
+            Some(id) if self.connections_expanded => self.reveal_profile(id),
+            Some(_) => self.explorer.select_kind(explorer::RowKind::ConnectionsHeader),
+            None => {}
         }
         match startup {
             // Nothing to connect to: the new-profile form opens over the welcome panel.

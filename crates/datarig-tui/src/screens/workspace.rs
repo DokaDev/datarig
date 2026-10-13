@@ -87,6 +87,7 @@ pub(crate) fn draw_workspace(f: &mut Frame, app: &mut App) -> Option<(u16, u16)>
     app.layout = Layout { tree, explorer_edge: edge(tree), body, ..base };
 
     app.layout.tab_bar = bar_and_panes[0];
+    app.drop_hover_of_other_tab();
     let mut hits = draw_tab_bar(app, bar_and_panes[0], f.buffer_mut());
     // The bar laid out otherwise (a tab closed, added, scrolled, the screen resized): what was
     // under the pointer is not there any more.
@@ -105,6 +106,10 @@ pub(crate) fn draw_workspace(f: &mut Frame, app: &mut App) -> Option<(u16, u16)>
             (None, None)
         }
         Some(Focus::Inspector) => {
+            // No grid drawn: a cell lit there is not under the pointer.
+            if matches!(app.pointer_on, Some(PointerOn::Cell(..))) {
+                app.pointer_on = None;
+            }
             app.layout.detail = body;
             crate::widgets::inspector::draw_inspector(app, body, f.buffer_mut());
             (None, None)
@@ -633,9 +638,12 @@ fn draw_connection_bar(app: &App, area: Rect, buf: &mut Buffer) {
     parts.push((format!("  {endpoint}"), muted));
     parts.extend(crate::widgets::statusbar::environment_parts(app, p.id, bg));
     if app.read_only(p.id) {
-        let ro = Style::new().fg(th.fg).bg(th.surface_alt).add_modifier(Modifier::BOLD);
+        let ro = Style::new()
+            .fg(crate::app::environments::read_only_color(&th))
+            .bg(th.surface_alt)
+            .add_modifier(Modifier::BOLD);
         parts.push((" ".to_string(), muted));
-        parts.push((format!(" {} ", app.i18n.label(Label::StatusReadOnly)), ro));
+        parts.push((format!(" {} ", crate::app::environments::read_only_badge(app)), ro));
     }
     let key = app
         .keymap

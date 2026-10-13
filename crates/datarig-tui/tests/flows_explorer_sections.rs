@@ -259,3 +259,31 @@ fn explorer_sections_snapshots() {
         }
     }
 }
+
+/// The Connections section left closed stays closed after a restart: the cursor waits on its
+/// head instead of opening it for the last used profile, and the file keeps it closed.
+#[test]
+fn a_closed_connections_section_stays_closed_after_a_restart() {
+    use datarig_core::paths::Paths;
+    use datarig_core::secret::SecretStore;
+    let dir = std::env::temp_dir().join(format!("datarig-sections-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("workspace.toml"), "version = 3\nactive = 0\n\n[explorer]\nconnections_collapsed = true\n")
+        .unwrap();
+    let mut cfg = config();
+    cfg.last_used = Some(cfg.connections[2].id);
+    let (mut app, clock) = new_app_with_clock(&cfg, Lang::En);
+    let store = Arc::new(MemoryStore::new());
+    app.set_secret_store(store.clone() as Arc<dyn SecretStore>);
+    app.set_paths(Paths { data: None, state: Some(dir.clone()) });
+    let mut h = Harness { app, cancelled: Default::default(), driver: Default::default(), store, clock };
+    h.app.launch(Startup::Normal);
+    assert!(!h.app.connections_expanded, "still closed");
+    assert_eq!(h.app.explorer.cursor(), &RowKind::ConnectionsHeader);
+    assert_eq!(h.rows()[..3], ["+", "[connections]", "[tunnels]"]);
+    h.app.dispatch(datarig_tui::app::action::Action::Quit);
+    let text = std::fs::read_to_string(dir.join("workspace.toml")).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(text.contains("connections_collapsed = true"), "{text}");
+}

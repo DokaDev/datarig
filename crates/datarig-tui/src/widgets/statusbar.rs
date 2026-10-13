@@ -56,8 +56,10 @@ pub(crate) fn draw_status(app: &mut App, area: Rect, buf: &mut Buffer) {
     let conn = app
         .conn()
         .map(|c| (c.name.clone(), theme::profile_color(c.display_color()), environment_parts(app, c.id, th.surface)));
-    // A read-only environment: a badge in words, in neutral colors.
-    let read_only = app.conn().is_some_and(|c| app.read_only(c.id)).then(|| app.i18n.label(Label::StatusReadOnly));
+    // Read-only rules: a badge in words (after the lock with icons on), in the read-only
+    // mark's blue.
+    let read_only =
+        app.conn().is_some_and(|c| app.read_only(c.id)).then(|| crate::app::environments::read_only_badge(app));
     let exec = &app.tab().exec;
     let tx = exec.user_tx().then(|| {
         let (label, color) =
@@ -109,7 +111,8 @@ pub(crate) fn draw_status(app: &mut App, area: Rect, buf: &mut Buffer) {
     }
     if let Some(ro) = read_only {
         segs.push((" ".to_string(), Style::new().bg(th.surface)));
-        segs.push((format!(" {ro} "), Style::new().fg(th.fg).bg(th.surface_alt).add_modifier(Modifier::BOLD)));
+        let color = crate::app::environments::read_only_color(&th);
+        segs.push((format!(" {ro} "), Style::new().fg(color).bg(th.surface_alt).add_modifier(Modifier::BOLD)));
     }
     if let Some((tx, color)) = tx {
         push_sep(&mut segs);

@@ -213,6 +213,8 @@ impl App {
     /// selected.
     pub(super) fn open_environment_picker(&mut self) {
         let Some(f) = self.overlays.form().filter(|f| f.kind == FormKind::Profile) else { return };
+        // The marks and badges are made here, outside a frame: in the app's theme.
+        let _theme = theme::scope(self.theme.clone());
         let i18n = &self.i18n;
         let icons = self.icons_on();
         let tones = |prefix: Option<Label>, p: &datarig_core::policy::Policy| {

@@ -457,3 +457,18 @@ fn unfocused_selection_is_the_dimmed_selection() {
     let (cell, entry) = cell_and_entry(&mut h, 0, 0);
     assert_eq!((cell.bg, entry.bg), (datarig_tui::theme::DARK.selection.bg.unwrap(), unfocused));
 }
+
+/// A cell lit in one tab's grid is not lit in another tab's after a switch with the keys (the
+/// pointer is over neither), nor its inspector entry.
+#[test]
+fn a_hovered_cell_goes_when_another_tab_comes() {
+    let mut h = grid_and_inspector();
+    let (x, y) = cell_xy(&h, 0, 2);
+    hover(&mut h, x, y);
+    assert_eq!(h.app.pointer_on, Some(PointerOn::Cell(0, 2)));
+    let first = h.app.tab().id;
+    h.ctrl('t');
+    assert_ne!(h.app.tab().id, first);
+    h.draw(GW, GH);
+    assert_eq!(h.app.pointer_on, None);
+}

@@ -247,7 +247,12 @@ impl App {
         let mut rows = vec![Row::new(RowKind::NewConnection, 0)];
         let needle = Needle::new(self.explorer.filter.text());
         let filtering = !needle.is_empty();
-        rows.push(Row::new(RowKind::ConnectionsHeader, 0));
+        // Open for the filter's matches (its own state stays as it is), as the other heads.
+        rows.push(if filtering {
+            Row::opened(RowKind::ConnectionsHeader, 0)
+        } else {
+            Row::new(RowKind::ConnectionsHeader, 0)
+        });
         if self.connections_expanded || filtering {
             self.push_level(None, 1, filtering.then_some(&needle), &mut rows);
             if filtering && rows.len() == 2 {

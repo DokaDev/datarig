@@ -220,8 +220,9 @@ struct EditorSection {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ExplorerSection {
+    /// A string, or the number of levels written without quotes (`size_heat = 5`).
     #[serde(default)]
-    size_heat: Option<String>,
+    size_heat: Option<toml::Value>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -845,7 +846,14 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
         auto_pairs: choice("editor.auto_pairs", auto_pairs, "off, on")?,
         run_hints: choice("editor.run_hints", run_hints, "on, off")?,
         keychain_access: choice("secrets.macos_keychain_access", keychain_access, "direct, security_tool")?,
-        size_heat: choice("explorer.size_heat", f.explorer.and_then(|e| e.size_heat), "3, 5, off")?,
+        size_heat: choice(
+            "explorer.size_heat",
+            f.explorer.and_then(|e| e.size_heat).map(|v| match v {
+                toml::Value::String(s) => s,
+                other => other.to_string(),
+            }),
+            "3, 5, off",
+        )?,
     };
     // The environments in the file's order (the deserializer sorts its map by name).
     let order: Vec<String> = text

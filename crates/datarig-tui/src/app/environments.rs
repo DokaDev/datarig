@@ -89,6 +89,13 @@ pub fn rules_parts(i18n: &datarig_core::i18n::I18n, p: &Policy, icons: bool) -> 
     rules_tones(i18n, p, icons).into_iter().map(|(t, tone)| (t, tone.style())).collect()
 }
 
+/// The read-only badge of the status bar, the editor's connection line and the run
+/// confirmation: `READ-ONLY`, after the lock with icons on.
+pub fn read_only_badge(app: &App) -> String {
+    let words = app.i18n.label(Label::StatusReadOnly);
+    if app.icons_on() { format!("{} {words}", crate::icons::READ_ONLY) } else { words.to_string() }
+}
+
 /// The color of the read-only mark (the lock, the rule's words): the theme's read-only mark.
 pub fn read_only_color(th: &crate::theme::Theme) -> ratatui::style::Color {
     th.read_only_mark.fg.unwrap_or(th.accent)

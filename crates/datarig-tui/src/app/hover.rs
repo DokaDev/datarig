@@ -76,7 +76,17 @@ impl App {
         } else {
             None
         };
+        self.pointer_tab = (!self.tabs.is_empty()).then(|| self.tab().id);
         std::mem::replace(&mut self.pointer_on, on) != on
+    }
+
+    /// A grid cell or an inspector entry lit for another tab than the active one (the tab
+    /// changed under the pointer): no longer under it.
+    pub(crate) fn drop_hover_of_other_tab(&mut self) {
+        let here = (!self.tabs.is_empty()).then(|| self.tab().id);
+        if matches!(self.pointer_on, Some(PointerOn::Cell(..) | PointerOn::Detail(_))) && self.pointer_tab != here {
+            self.pointer_on = None;
+        }
     }
 
     /// The column of the inspector's Row tab drawn at (x, y), if one is there.

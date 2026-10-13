@@ -760,6 +760,10 @@ fn the_size_heat_of_the_explorer_is_three_levels_by_default_five_or_off() {
     assert_eq!(parse("[explorer]\nsize_heat = \"off\"\n").unwrap().prefs.size_heat, SizeHeat::Off);
     assert_eq!(parse("[explorer]\nsize_heat = \"3\"\n").unwrap().prefs.size_heat, SizeHeat::Three);
     assert_eq!(parse("[explorer]\nsize_heat = \"5\"\n").unwrap().prefs.size_heat, SizeHeat::Five);
+    // The number of levels without quotes too.
+    assert_eq!(parse("[explorer]\nsize_heat = 5\n").unwrap().prefs.size_heat, SizeHeat::Five);
+    assert_eq!(parse("[explorer]\nsize_heat = 3\n").unwrap().prefs.size_heat, SizeHeat::Three);
+    assert!(parse("[explorer]\nsize_heat = 4\n").is_err());
     // `on`, from before there were levels, keeps working: three levels.
     assert_eq!(parse("[explorer]\nsize_heat = \"on\"\n").unwrap().prefs.size_heat, SizeHeat::Three);
     assert_eq!(

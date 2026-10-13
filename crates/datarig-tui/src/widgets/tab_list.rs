@@ -3,7 +3,8 @@
 //! muted while not connected) and the tab bar's marks, the closed tabs under a
 //! heading of their own. The number and the marks are the tab bar's own (`tabbar::number`,
 //! `tabbar::marks`): the profile's color while the tab's session is connected, the spinner
-//! while a statement runs, `*`, `RO`, `◆` and `!`.
+//! while a statement runs, `*`, the environment's badge, the lock of read-only rules (`RO`
+//! with icons off), `◆` and `!`.
 
 use crate::app::App;
 use crate::app::overlay::OverlayKind;
