@@ -183,9 +183,8 @@ pub(crate) fn unbound(app: &App, tab: &Tab) -> Option<Label> {
 }
 
 /// One tab label, `doc_max` columns at most for the document's name. Another tab than the
-/// active one under the pointer (its body or its `×`) is on the surface's background, between
-/// the bar's and the active tab's; in italics where the surface is the bar's background (the
-/// terminal theme).
+/// active one under the pointer (its body or its `×`) is on the theme's hover background (the
+/// environment's badge keeps its own).
 fn label(app: &App, index: usize, tab: &Tab, active: bool, doc_max: usize) -> Vec<Part> {
     let th = theme::cur();
     let hovered = !active
@@ -193,13 +192,7 @@ fn label(app: &App, index: usize, tab: &Tab, active: bool, doc_max: usize) -> Ve
             app.pointer_hover(),
             Some(crate::app::hover::PointerOn::Tab(TabHit::Tab(i) | TabHit::Close(i))) if i == index
         );
-    let bg = if active {
-        th.surface_alt
-    } else if hovered {
-        th.surface
-    } else {
-        th.bg
-    };
+    let bg = if active { th.surface_alt } else { th.bg };
     let part = |text: String, style: Style| Part { text, style, kind: PartKind::Plain };
     let (n, color) = number(app, index, tab);
     let mut num = Style::new().fg(color).bg(bg).add_modifier(Modifier::BOLD);
@@ -245,9 +238,9 @@ fn label(app: &App, index: usize, tab: &Tab, active: bool, doc_max: usize) -> Ve
         kind: PartKind::Close,
     });
     parts.push(part(" ".to_string(), mark(th.fg_dim)));
-    if hovered && th.surface == th.bg {
-        for p in &mut parts {
-            p.style = p.style.add_modifier(Modifier::ITALIC);
+    if hovered {
+        for p in parts.iter_mut().filter(|p| p.style.bg == Some(bg)) {
+            p.style = p.style.patch(crate::widgets::hover_style());
         }
     }
     parts

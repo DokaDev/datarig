@@ -509,8 +509,8 @@ fn the_best_match_is_selected_across_both_sections() {
     assert_eq!(selected(&h), "console 3", "a name beats a tab number");
 }
 
-/// On a theme whose alternate surface is its surface (the terminal theme), the row under the
-/// pointer is underlined instead, in the tab list and the other lists.
+/// On the terminal theme, whose hover is the bright black with the terminal's text color, the
+/// row under the pointer is on it, never underlined, in the tab list and the other lists.
 #[test]
 fn the_hover_shows_on_the_terminal_theme() {
     use datarig_tui::theme;
@@ -521,7 +521,9 @@ fn the_hover_shows_on_the_terminal_theme() {
     let (x, y) = row_of(&mut h, "console 1");
     h.mouse(MouseEventKind::Moved, x, y);
     let t = h.draw(W, H);
-    assert!(t.backend().buffer()[(x, y)].modifier.contains(Modifier::UNDERLINED), "the tab list's hovered row");
+    let cell = &t.backend().buffer()[(x, y)];
+    assert_eq!(cell.bg, ratatui::style::Color::DarkGray, "the tab list's hovered row");
+    assert!(!cell.modifier.contains(Modifier::UNDERLINED), "the tab list's hovered row");
     // Quick connect (three profiles: the second row is not the selected one).
     let mut h = Harness::with_config(&sample_config(None), Lang::En);
     h.app.theme = std::sync::Arc::new(theme::TERMINAL.clone());
@@ -530,12 +532,14 @@ fn the_hover_shows_on_the_terminal_theme() {
     let q = h.app.overlays.quick().unwrap().list;
     h.mouse(MouseEventKind::Moved, q.x + 3, q.y + 1);
     let t = h.draw(W, H);
-    assert!(t.backend().buffer()[(q.x + 3, q.y + 1)].modifier.contains(Modifier::UNDERLINED), "quick connect");
-    // A theme with an alternate surface keeps its background and no underline.
+    let cell = &t.backend().buffer()[(q.x + 3, q.y + 1)];
+    assert_eq!(cell.bg, ratatui::style::Color::DarkGray, "quick connect");
+    assert!(!cell.modifier.contains(Modifier::UNDERLINED), "quick connect");
+    // Another theme: its own hover background, no underline.
     h.app.theme = std::sync::Arc::new(theme::DARK.clone());
     let t = h.draw(W, H);
     let cell = &t.backend().buffer()[(q.x + 3, q.y + 1)];
-    assert_eq!(cell.bg, theme::DARK.surface_alt);
+    assert_eq!(Some(cell.bg), theme::DARK.hover.bg);
     assert!(!cell.modifier.contains(Modifier::UNDERLINED));
 }
 

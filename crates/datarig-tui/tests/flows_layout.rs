@@ -233,6 +233,116 @@ fn a_table_opens_in_a_tab_of_its_own() {
     }
 }
 
+/// A table tab's results pane shows its connection on its first line, as a query tab's editor
+/// does: the profile and `database.schema.table`, its environment's badge and read-only, no key
+/// to switch the connection (a table tab's cannot change). The strip and the grid are one line
+/// lower, and a click on a cell still selects that cell.
+#[test]
+fn a_table_tab_shows_its_connection_line() {
+    use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+    let mut prod = datarig_core::policy::Environment::new(
+        "prod",
+        datarig_core::policy::Policy { read_only: true, ..datarig_core::policy::Policy::default() },
+    );
+    prod.badge = Some("PROD".into());
+    let mut h = Harness::connected(Lang::En);
+    open_users(&mut h);
+    let (cols, rows) = edge_rows();
+    let id = h.app.tab().exec.query_id;
+    h.tab_db(1, DbEvent::Page { id, columns: Some(cols), rows, more: false, elapsed: Duration::from_millis(3) });
+    let screen = h.screen(160, 45);
+    let lines: Vec<&str> = screen.lines().collect();
+    let r = h.app.layout.results;
+    let line = lines[usize::from(r.y) + 1];
+    assert!(line.contains("local-pg / datarig.shop.users  127.0.0.1:55432"), "{line}");
+    assert!(!line.contains("switch connection") && !line.contains('?'), "{line}");
+    assert_eq!(h.app.layout.strip.y, r.y + 2, "the strip under it");
+    assert!(h.app.tab().grid.header_y > h.app.layout.strip.y, "the grid under the strip");
+    // A click on a cell selects that cell.
+    h.app.focus = Focus::Results;
+    h.draw(160, 45);
+    let g = &h.app.tab().grid;
+    let (x, y) = (g.hit_cols.iter().find(|c| c.2 == 2).unwrap().0 + 2, g.data_y + 3);
+    h.mouse(MouseEventKind::Down(MouseButton::Left), x, y);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), x, y);
+    assert_eq!((h.app.tab().grid.row, h.app.tab().grid.col), (3, 2));
+    // With an environment: its badge and read-only.
+    h.app.policies.environments_mut().push(prod);
+    h.app.profiles[0].policy = Some("prod".into());
+    let screen = h.screen(160, 45);
+    let line = screen.lines().nth(usize::from(h.app.layout.results.y) + 1).unwrap().to_string();
+    assert!(line.contains("local-pg / datarig.shop.users  127.0.0.1:55432  PROD   READ-ONLY "), "{line}");
+}
+
+/// A narrow table tab's connection line drops the endpoint and the environment's name first,
+/// keeping the place and the read-only badge.
+#[test]
+fn a_narrow_table_tabs_connection_line_keeps_the_place_and_read_only() {
+    let prod = datarig_core::policy::Environment::new(
+        "prod",
+        datarig_core::policy::Policy { read_only: true, ..datarig_core::policy::Policy::default() },
+    );
+    let mut h = Harness::connected(Lang::En);
+    h.app.policies.environments_mut().push(prod);
+    h.app.profiles[0].policy = Some("prod".into());
+    open_users(&mut h);
+    let line = |h: &mut Harness, w: u16| {
+        let screen = h.screen(w, 30);
+        screen.lines().nth(usize::from(h.app.layout.results.y) + 1).unwrap().to_string()
+    };
+    let wide = line(&mut h, 120);
+    assert!(wide.contains("local-pg / datarig.shop.users  127.0.0.1:55432 · prod  READ-ONLY "), "{wide}");
+    let narrower = line(&mut h, 90);
+    assert!(narrower.contains("local-pg / datarig.shop.users  127.0.0.1:55432  READ-ONLY "), "{narrower}");
+    let narrow = line(&mut h, 84);
+    assert!(narrow.contains("local-pg / datarig.shop.users  READ-ONLY "), "{narrow}");
+    assert!(!narrow.contains("127.0.0.1") && !narrow.contains("prod"), "{narrow}");
+}
+
+/// A table tab whose profile is gone draws no connection line: the strip is on the pane's first
+/// line.
+#[test]
+fn a_table_tab_without_its_profile_draws_no_connection_line() {
+    let mut h = Harness::connected(Lang::En);
+    open_users(&mut h);
+    let (cols, rows) = edge_rows();
+    let id = h.app.tab().exec.query_id;
+    h.tab_db(1, DbEvent::Page { id, columns: Some(cols), rows, more: false, elapsed: Duration::from_millis(3) });
+    // Another profile in its place: the tab's is gone.
+    h.app.profiles[0].id = datarig_core::profile::ProfileId::new();
+    assert!(h.app.tab().is_table() && h.app.conn().is_none());
+    let screen = h.screen(160, 45);
+    let r = h.app.layout.results;
+    assert_eq!(h.app.layout.strip.y, r.y + 1, "the strip on the first line");
+    let line = screen.lines().nth(usize::from(r.y) + 1).unwrap().to_string();
+    assert!(line.contains("[Result 1]") && !line.contains("local-pg"), "{line}");
+}
+
+/// On MySQL, whose databases are the schemas, a table tab's connection line says
+/// `database.table`.
+#[test]
+fn a_mysql_table_tabs_connection_line_names_database_and_table() {
+    let driver = FakeDriver::default();
+    driver.mysql.store(true, std::sync::atomic::Ordering::SeqCst);
+    let mut p = datarig_core::profile::ConnectionConfig::test_db();
+    (p.name, p.driver) = ("local-my".into(), "mysql".into());
+    let cfg = Config { connections: vec![p], ..Config::default() };
+    let mut h = Harness::with_driver(&cfg, Lang::En, driver);
+    h.db(DbEvent::Connected);
+    h.db(DbEvent::Schemas(Ok(vec!["datarig".into(), "shop".into()])));
+    h.explore("local-my");
+    h.goto("shop");
+    h.key(KeyCode::Char('l'));
+    h.db(DbEvent::Objects { schema: "shop".into(), result: Ok((vec!["items".to_string()], Vec::new()).into()) });
+    h.goto("items");
+    h.key(KeyCode::Enter);
+    assert!(h.app.tab().is_table());
+    let screen = h.screen(160, 45);
+    let line = screen.lines().nth(usize::from(h.app.layout.results.y) + 1).unwrap().to_string();
+    assert!(line.contains("local-my / shop.items  "), "{line}");
+    assert!(!line.contains("switch connection"), "{line}");
+}
+
 #[test]
 fn tabs_are_named_by_their_document_with_the_connection_attached() {
     let mut h = Harness::connected(Lang::En);

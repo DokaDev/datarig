@@ -330,6 +330,7 @@ fn every_token_of_a_theme_can_be_set_by_name() {
         selection: _,
         range: _,
         cursor_line: _,
+        hover: _,
         current_stmt: _,
         current_stmt_bar: _,
         running_stmt: _,
@@ -375,7 +376,7 @@ fn every_token_of_a_theme_can_be_set_by_name() {
         dim: _,
     } = DARK;
     // Every field above but `dim`.
-    assert_eq!(COLOR_TOKENS.len() + STYLE_TOKENS.len(), 54);
+    assert_eq!(COLOR_TOKENS.len() + STYLE_TOKENS.len(), 55);
     let mut th = DARK;
     for (i, name) in COLOR_TOKENS.iter().enumerate() {
         *color_token(&mut th, name).unwrap() = Color::Indexed(i as u8);
@@ -384,14 +385,14 @@ fn every_token_of_a_theme_can_be_set_by_name() {
         *style_token(&mut th, name).unwrap() = Style::new().bg(Color::Indexed(100 + i as u8));
     }
     assert_eq!((th.bg, th.mode_fg), (Color::Indexed(0), Color::Indexed(22)));
-    assert_eq!(th.plan_misestimate, Style::new().bg(Color::Indexed(120)));
+    assert_eq!(th.plan_misestimate, Style::new().bg(Color::Indexed(121)));
     assert_eq!(
         (th.size_warm, th.size_hot),
-        (Style::new().bg(Color::Indexed(121)), Style::new().bg(Color::Indexed(122)))
+        (Style::new().bg(Color::Indexed(122)), Style::new().bg(Color::Indexed(123)))
     );
     assert_eq!(
         (th.size_mild, th.size_heated),
-        (Style::new().bg(Color::Indexed(123)), Style::new().bg(Color::Indexed(124)))
+        (Style::new().bg(Color::Indexed(124)), Style::new().bg(Color::Indexed(125)))
     );
     assert_eq!(th.chart(), [23, 24, 25, 26, 27, 28].map(Color::Indexed));
     assert!(color_token(&mut th, "selection").is_none() && style_token(&mut th, "bg").is_none());
@@ -818,6 +819,72 @@ fn environment_rule_tones_read_and_stand_apart_in_every_theme() {
             for j in i + 1..4 {
                 assert_ne!(mapped[i], mapped[j], "{name}: {:?} and {:?} in 256 colors", tones[i], tones[j]);
             }
+        }
+    }
+}
+
+/// The CIE76 color difference of two RGB colors (sRGB to XYZ under D65 to CIELAB).
+fn delta_e(a: Color, b: Color) -> f64 {
+    let lab = |c: Color| {
+        let (r, g, b) = rgb_of(c);
+        let lin = |v: f64| {
+            let v = v / 255.0;
+            if v <= 0.04045 { v / 12.92 } else { ((v + 0.055) / 1.055).powf(2.4) }
+        };
+        let (r, g, b) = (lin(r), lin(g), lin(b));
+        let x = (0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.95047;
+        let y = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        let z = (0.0193 * r + 0.1192 * g + 0.9505 * b) / 1.08883;
+        let f = |t: f64| if t > 216.0 / 24389.0 { t.cbrt() } else { (24389.0 / 27.0 * t + 16.0) / 116.0 };
+        let (fx, fy, fz) = (f(x), f(y), f(z));
+        (116.0 * fy - 16.0, 500.0 * (fx - fy), 200.0 * (fy - fz))
+    };
+    let (p, q) = (lab(a), lab(b));
+    ((p.0 - q.0).powi(2) + (p.1 - q.1).powi(2) + (p.2 - q.2).powi(2)).sqrt()
+}
+
+/// What is under the pointer has a background of its own and is never underlined: on the
+/// terminal theme the bright black with the terminal's text color; on the others a background
+/// that stands apart (5 ΔE or more) from the background, both surfaces (the grid's alternate
+/// rows are on the alternate surface), the cursor line, the selection (focused or not) and a
+/// selected range, further from the background than nothing and nearer to it than the
+/// selection, that does not vanish in 256 colors, and on which body text, muted text and the
+/// accent read.
+#[test]
+fn hover_is_a_background_apart_from_the_surfaces_and_the_selections_in_every_theme() {
+    for (name, th) in BUILTINS.iter().copied() {
+        assert!(th.hover.bg.is_some(), "{name}");
+        assert!(!th.hover.add_modifier.contains(Modifier::UNDERLINED), "{name}");
+    }
+    let t = &TERMINAL;
+    assert_eq!((t.hover.bg, t.hover.fg), (Some(Color::DarkGray), Some(Color::Reset)));
+    for other in [t.selection, t.selection_unfocused(), t.range, t.cursor_line] {
+        assert_ne!(t.hover, other);
+    }
+    assert!(Some(t.bg) != t.hover.bg && Some(t.surface_alt) != t.hover.bg, "apart from the rows");
+    for (name, th) in rgb_themes() {
+        let h = bg(th.hover);
+        for other in [
+            th.bg,
+            th.surface,
+            th.surface_alt,
+            bg(th.cursor_line),
+            bg(th.selection),
+            bg(th.selection_unfocused()),
+            bg(th.range),
+        ] {
+            let d = delta_e(h, other);
+            assert!(d >= 5.0, "{name}: the hover and {other:?} are too close ({d:.2})");
+        }
+        assert_ne!(xterm256(h), xterm256(th.bg), "{name}: vanishes in 256 colors");
+        let (k, sel) = (contrast(h, th.bg), contrast(bg(th.selection), th.bg));
+        assert!(
+            k > 1.0 && k < sel,
+            "{name}: the hover ({k:.3}) is not between the background and the selection ({sel:.3})"
+        );
+        for (c, min) in [(th.fg, 4.5), (th.fg_muted, 3.0), (th.accent, 3.0)] {
+            let k = contrast(c, h);
+            assert!(k >= min, "{name}: {c:?} on the hover: {k:.2}");
         }
     }
 }

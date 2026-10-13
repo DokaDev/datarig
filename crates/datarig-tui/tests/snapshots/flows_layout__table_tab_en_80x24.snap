@@ -4,18 +4,18 @@ expression: "h.draw(80, 24).backend()"
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×  2 shop.users ×                          "
 "│  ＋ New connection   │╭ Results · 8 rows ────────────╮╭ Cell [Row] · I ──────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾ Connections 1       ││ [Result 1]  Chart  Messages  ││ id: 1                │"
-"│  ▾ ●   local-pg      ││   │ id   │ name              ││ name: 陳大文         │" Hidden by multi-width symbols: [(65, " "), (67, " "), (69, " ")]
-"│    ▾ datarig default ││   │ int8 │ text              ││ nickname: 大文🐘     │" Hidden by multi-width symbols: [(69, " "), (71, " "), (73, " ")]
-"│      ▸ analytics     ││ 1 │    1 │ 陳大文            ││ address: 臺北市信義… │" Hidden by multi-width symbols: [(38, " "), (40, " "), (42, " "), (68, " "), (70, " "), (72, " "), (74, " "), (76, " ")]
-"│      ▸ public        ││ 2 │    2 │ 林美玲            ││ profile: {"lang": "k…│" Hidden by multi-width symbols: [(38, " "), (40, " "), (42, " ")]
-"│      ▾ shop          ││ 3 │    3 │ 張志明            ││                      │" Hidden by multi-width symbols: [(38, " "), (40, " "), (42, " ")]
-"│        ▾ Tables      ││ 4 │    4 │ Emoji テスト      ││                      │" Hidden by multi-width symbols: [(44, " "), (46, " "), (48, " ")]
-"│          ▸ orders    ││ 5 │    5 │ 山田太郎          ││                      │" Hidden by multi-width symbols: [(38, " "), (40, " "), (42, " "), (44, " ")]
-"│          ▸ users     ││ 6 │    6 │ 王小明            ││                      │" Hidden by multi-width symbols: [(38, " "), (40, " "), (42, " ")]
+"│▾ Connections 1       ││ local-pg / datarig.shop.users││ id: 1                │"
+"│  ▾ ●   local-pg      ││ [Result 1]  Chart  Messages  ││ name: 陳大文         │" Hidden by multi-width symbols: [(65, " "), (67, " "), (69, " ")]
+"│    ▾ datarig default ││   │ id   │ name              ││ nickname: 大文🐘     │" Hidden by multi-width symbols: [(69, " "), (71, " "), (73, " ")]
+"│      ▸ analytics     ││   │ int8 │ text              ││ address: 臺北市信義… │" Hidden by multi-width symbols: [(68, " "), (70, " "), (72, " "), (74, " "), (76, " ")]
+"│      ▸ public        ││ 1 │    1 │ 陳大文            ││ profile: {"lang": "k…│" Hidden by multi-width symbols: [(38, " "), (40, " "), (42, " ")]
+"│      ▾ shop          ││ 2 │    2 │ 林美玲            ││                      │" Hidden by multi-width symbols: [(38, " "), (40, " "), (42, " ")]
+"│        ▾ Tables      ││ 3 │    3 │ 張志明            ││                      │" Hidden by multi-width symbols: [(38, " "), (40, " "), (42, " ")]
+"│          ▸ orders    ││ 4 │    4 │ Emoji テスト      ││                      │" Hidden by multi-width symbols: [(44, " "), (46, " "), (48, " ")]
+"│          ▸ users     ││ 5 │    5 │ 山田太郎          ││                      │" Hidden by multi-width symbols: [(38, " "), (40, " "), (42, " "), (44, " ")]
+"│                      ││ 6 │    6 │ 王小明            ││                      │" Hidden by multi-width symbols: [(38, " "), (40, " "), (42, " ")]
 "│                      ││ 7 │    7 │ Plain ASCII User  ││                      │"
 "│                      ││ 8 │    8 │ 全角 ＡＢＣ 半角 …││                      │" Hidden by multi-width symbols: [(38, " "), (40, " "), (43, " "), (45, " "), (47, " "), (50, " "), (52, " ")]
-"│                      ││                              ││                      │"
 "│                      ││                              ││                      │"
 "│                      ││                              ││                      │"
 "│                      ││                              ││                      │"

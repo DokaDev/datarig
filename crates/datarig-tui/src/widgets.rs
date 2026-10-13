@@ -104,22 +104,12 @@ pub(crate) fn put(buf: &mut Buffer, x: u16, y: u16, text: &str, w: usize, style:
     width(&t) as u16
 }
 
-/// A list row under the pointer (not the selected one): the theme's alternate surface, or
-/// underlined where that is the surface itself (the terminal theme), which would draw nothing.
-/// How far the alternate surface stands out is the theme's (faint on some light and dark ones).
+/// A list row under the pointer (not the selected one), a grid cell or an inspector entry under
+/// it (or lit by the one under it), a hovered button: the theme's hover, never an underline; on
+/// the alternate surface where a user theme's hover sets no background.
 pub(crate) fn hover_style() -> Style {
     let th = theme::cur();
-    if th.surface_alt == th.surface {
-        Style::new().bg(th.surface).add_modifier(Modifier::UNDERLINED)
-    } else {
-        Style::new().bg(th.surface_alt)
-    }
-}
-
-/// A grid cell or an inspector entry under the pointer (or lit by the one under it): the list
-/// hover's background, underlined, as the grid's alternate rows have that background already.
-pub(crate) fn cell_hover_style() -> Style {
-    hover_style().add_modifier(Modifier::UNDERLINED)
+    Style::new().bg(th.surface_alt).patch(th.hover)
 }
 
 /// A small clickable target under the pointer (a tab's `×`, a scroll mark, a result tab, a

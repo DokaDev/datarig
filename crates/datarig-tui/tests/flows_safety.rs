@@ -1081,7 +1081,8 @@ fn the_run_confirmation_takes_clicks_and_the_pointer_moves_no_focus() {
     assert!(!c.run_focused && c.buttons.hover == Some(1));
     let t = h.draw(160, 45);
     let cell = &t.backend().buffer()[(run_b.x + 2, run_b.y)];
-    assert!(cell.modifier.contains(ratatui::style::Modifier::UNDERLINED));
+    assert_eq!(Some(cell.bg), datarig_tui::theme::DARK.hover.bg, "Run is lit");
+    assert!(!cell.modifier.contains(ratatui::style::Modifier::UNDERLINED));
     h.key(KeyCode::Enter);
     assert_eq!(h.overlay_kind(), None);
     assert!(executes(&mut h).is_empty(), "Enter after the pointer was on Run still cancels");
