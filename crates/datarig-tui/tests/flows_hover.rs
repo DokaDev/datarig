@@ -472,3 +472,72 @@ fn a_hovered_cell_goes_when_another_tab_comes() {
     h.draw(GW, GH);
     assert_eq!(h.app.pointer_on, None);
 }
+
+/// A cell lit before the Chart was shown is not lit when the rows come back by the keys (the
+/// pointer is not over it any more), nor its inspector entry; the selection and the focus stay.
+#[test]
+fn a_hovered_cell_goes_with_a_view_switch() {
+    let mut h = grid_and_inspector();
+    let (x, y) = cell_xy(&h, 0, 2);
+    hover(&mut h, x, y);
+    assert_eq!(h.app.pointer_on, Some(PointerOn::Cell(0, 2)));
+    h.keys("L");
+    assert_eq!(h.app.tab().exec.view, datarig_tui::app::tabs::ResultView::Chart);
+    h.draw(GW, GH);
+    h.keys("H");
+    assert_eq!(h.app.tab().exec.view, datarig_tui::app::tabs::ResultView::Rows);
+    let (cell, entry) = cell_and_entry(&mut h, 0, 2);
+    assert!(!lit(&cell), "{cell:?}");
+    assert!(!lit(&entry), "{entry:?}");
+    assert_eq!(h.app.pointer_on, None);
+    assert_eq!((h.app.tab().grid.row, h.app.tab().grid.col), (0, 0));
+    assert_eq!(h.app.focus, datarig_tui::app::Focus::Results);
+}
+
+/// Two tabs with the same results: a cell lit in the first is not lit in the second after `gt`,
+/// nor in the first when `gt` comes back to it, nor its inspector entry; the selection and the
+/// focus stay.
+#[test]
+fn a_hovered_cell_goes_when_tabs_switch_back_and_forth() {
+    let mut h = grid_and_inspector();
+    h.ctrl('t');
+    h.keys("i");
+    h.type_text("SELECT * FROM shop.users WHERE id <= 8");
+    h.key(KeyCode::Esc);
+    h.ctrl('e');
+    let id = h.app.tab().exec.query_id;
+    let (cols, rows) = edge_rows();
+    h.tab_db(
+        1,
+        datarig_core::driver::DbEvent::Page {
+            id,
+            columns: Some(cols),
+            rows,
+            more: false,
+            elapsed: std::time::Duration::from_millis(3),
+        },
+    );
+    // Drawn once, so its grid is laid out as the first tab's when it comes again.
+    h.app.focus = datarig_tui::app::Focus::Results;
+    h.draw(GW, GH);
+    h.keys("gt");
+    assert_eq!(h.app.tabs.active_index(), 0);
+    h.app.focus = datarig_tui::app::Focus::Results;
+    h.draw(GW, GH);
+    let (x, y) = cell_xy(&h, 0, 2);
+    hover(&mut h, x, y);
+    assert_eq!(h.app.pointer_on, Some(PointerOn::Cell(0, 2)));
+    h.keys("gt");
+    assert_eq!(h.app.tabs.active_index(), 1);
+    h.app.focus = datarig_tui::app::Focus::Results;
+    let (cell, entry) = cell_and_entry(&mut h, 0, 2);
+    assert!(!lit(&cell) && !lit(&entry), "the other tab: {cell:?} {entry:?}");
+    h.keys("gt");
+    assert_eq!(h.app.tabs.active_index(), 0);
+    let (cell, entry) = cell_and_entry(&mut h, 0, 2);
+    assert!(!lit(&cell), "back: {cell:?}");
+    assert!(!lit(&entry), "back: {entry:?}");
+    assert_eq!(h.app.pointer_on, None);
+    assert_eq!((h.app.tab().grid.row, h.app.tab().grid.col), (0, 0));
+    assert_eq!(h.app.focus, datarig_tui::app::Focus::Results);
+}
