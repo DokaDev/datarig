@@ -300,7 +300,13 @@ fn autocomplete_schema_then_tables_in(lang: Lang) {
 /// came with the table's structure), in a small terminal and a large one.
 #[test]
 fn autocomplete_enum_values() {
-    let mut h = Harness::connected(Lang::En);
+    for lang in [Lang::En, Lang::Ko] {
+        autocomplete_enum_values_in(lang);
+    }
+}
+
+fn autocomplete_enum_values_in(lang: Lang) {
+    let mut h = Harness::connected(lang);
     h.db(DbEvent::Catalog(Ok(values_catalog())));
     h.keys("Go");
     h.keys("SELECT * FROM shop.orders o WHERE o.status = '");
@@ -310,8 +316,9 @@ fn autocomplete_enum_values() {
     h.db(DbEvent::Structure { schema: "shop".into(), table: "orders".into(), result: Ok(Box::new(st)) });
     let labels: Vec<_> = h.popup().expect("values").items.iter().map(|c| c.label.clone()).collect();
     assert_eq!(labels, ["pending", "paid", "shipped", "cancelled", "refunded"]);
-    assert_screen!("autocomplete_enum_values_120x40_en", Lang::En, h.draw(120, 40));
-    assert_screen!("autocomplete_enum_values_80x24_en", Lang::En, h.draw(80, 24));
+    let tag = lang_tag(lang);
+    assert_screen!(format!("autocomplete_enum_values_120x40_{tag}"), lang, h.draw(120, 40));
+    assert_screen!(format!("autocomplete_enum_values_80x24_{tag}"), lang, h.draw(80, 24));
     h.keys("s");
     h.key(KeyCode::Tab);
     assert!(h.popup().is_none());

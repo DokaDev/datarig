@@ -640,7 +640,86 @@ fn check_values_come_with_the_structure() {
     assert!(structure_asks(&mut h).is_empty(), "not asked again by itself");
     h.keys("e");
     assert_eq!(popup_labels(&h), ["pending", "shipped"]);
-    assert_eq!(structure_asks(&mut h).len(), 1, "asked again on the next use");
+    assert!(structure_asks(&mut h).is_empty(), "nor on every key right after");
+    let pg = h.app.tab().profile.unwrap();
+    let tree = &h.app.conns.get(pg).unwrap().tree;
+    let view = tree.structures.get(&("shop".to_string(), "orders".to_string()));
+    assert!(view.is_none_or(|v| v.loaded().is_some()), "the explorer, which did not ask, keeps no failure");
+    h.advance(Duration::from_secs(30));
+    h.key(KeyCode::Backspace);
+    assert_eq!(structure_asks(&mut h).len(), 1, "asked again a while later");
+}
+
+/// The metadata session lost while a structure is asked for: the table is not known, and is
+/// asked for again on the next use (not stuck waiting for an answer that never comes).
+#[test]
+fn a_lost_metadata_session_forgets_what_it_was_asked() {
+    use datarig_tui::app::TableChecks;
+    let mut h = Harness::connected(Lang::En);
+    h.db(DbEvent::Catalog(Ok(values_catalog())));
+    h.keys("ggdGi");
+    h.keys("SELECT * FROM shop.orders WHERE status = '");
+    h.settle();
+    assert_eq!(structure_asks(&mut h).len(), 1);
+    let pg = h.app.tab().profile.unwrap();
+    h.db(DbEvent::Lost { error: datarig_core::driver::DbError::Closed });
+    let checks = &h.app.conns.get(pg).unwrap().checks;
+    assert!(!checks.values().any(|c| *c == TableChecks::Asked), "{checks:?}");
+}
+
+/// DDL run in a tab forgets what completion knew of the profile's checks, in its own database
+/// and in the others the profile has sessions in.
+#[test]
+fn ddl_forgets_the_checks_of_every_database_of_the_profile() {
+    use datarig_core::driver::Outcome;
+    use datarig_tui::app::TableChecks;
+    let mut h = Harness::connected(Lang::En);
+    let pg = h.app.tab().profile.unwrap();
+    let key = ("shop".to_string(), "orders".to_string());
+    let now = h.app.now();
+    h.app.conns.add_aux(pg, "other", now);
+    h.app.conns.aux_mut(pg, "other").unwrap().checks.insert(key.clone(), TableChecks::Known(Vec::new()));
+    h.app.conns.get_mut(pg).unwrap().checks.insert(key.clone(), TableChecks::Known(Vec::new()));
+    h.app.run(vec!["ALTER TABLE shop.orders ADD CHECK (status <> 'x')".into()]);
+    h.db(DbEvent::Done { id: 1, outcome: Outcome::Command("ALTER TABLE".into()), elapsed: Duration::ZERO });
+    assert!(h.app.conns.get(pg).unwrap().checks.is_empty());
+    assert!(h.app.conns.aux(pg, "other").unwrap().checks.is_empty(), "another database's too");
+}
+
+/// A blank or a sign typed while the structure is on its way keeps the wait: its values show
+/// when it comes, as long as the cursor is in the same literal.
+#[test]
+fn typing_a_blank_keeps_waiting_for_the_checks() {
+    let mut h = Harness::connected(Lang::En);
+    h.db(DbEvent::Catalog(Ok(values_catalog())));
+    h.keys("ggdGi");
+    h.keys("SELECT * FROM shop.orders WHERE status = 'x");
+    h.settle();
+    assert_eq!(structure_asks(&mut h).len(), 1);
+    h.keys(" ");
+    let mut st = orders_structure();
+    st.checks[0].expression = "status = ANY (ARRAY['x y'::text, 'z'::text])".into();
+    h.db(DbEvent::Structure { schema: "shop".into(), table: "orders".into(), result: Ok(Box::new(st)) });
+    assert_eq!(popup_labels(&h), ["x y"]);
+}
+
+/// A value holding a line break or a tab is shown with the grid's marks for them, and goes in
+/// as it is.
+#[test]
+fn values_with_control_characters_are_shown_marked() {
+    let mut h = Harness::connected(Lang::En);
+    let mut cat = values_catalog();
+    let orders = cat.relations.iter_mut().find(|r| r.name == "orders").unwrap();
+    let status = orders.columns.iter_mut().find(|c| c.name == "status").unwrap();
+    status.values = Some(vec!["two\nlines".to_string(), "tab\there".to_string()].into());
+    h.db(DbEvent::Catalog(Ok(cat)));
+    h.keys("ggdGi");
+    h.keys("SELECT * FROM shop.orders WHERE status = '");
+    h.settle();
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("two\u{21b5}lines") && screen.contains("tab\u{2192}here"), "{screen}");
+    h.key(KeyCode::Tab);
+    assert!(h.app.tab().editor.text().ends_with("'two\nlines'"));
 }
 
 /// A driver that reads no structures: the type's values only, nothing asked.

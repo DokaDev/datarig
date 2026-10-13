@@ -568,7 +568,10 @@ impl App {
             DbEvent::Structure { schema, table, result } => {
                 let (profile, database) = (a.profile, a.database.clone());
                 let came = self.checks_came(profile, Some(&database), &schema, &table, result.as_deref());
-                if let Some(a) = self.conns.aux_by_id(id) {
+                // A failure the explorer does not wait for (completion's) is not its.
+                if let Some(a) = self.conns.aux_by_id(id)
+                    && (result.is_ok() || a.tree.structure_awaited(&schema, &table))
+                {
                     a.tree.set_structure(&schema, &table, result.map_err(|_| text));
                 }
                 if came {
@@ -667,7 +670,11 @@ impl App {
             }
             DbEvent::Structure { schema, table, result } => {
                 let came = self.checks_came(id, None, &schema, &table, result.as_deref());
-                self.conns.entry(id).tree.set_structure(&schema, &table, result.map_err(|_| text));
+                // A failure the explorer does not wait for (completion's) is not its.
+                let tree = &mut self.conns.entry(id).tree;
+                if result.is_ok() || tree.structure_awaited(&schema, &table) {
+                    tree.set_structure(&schema, &table, result.map_err(|_| text));
+                }
                 if came {
                     self.values_came(id, None, &schema, &table);
                 }
@@ -710,6 +717,8 @@ impl App {
                 c.meta = None;
                 c.connected = false;
                 c.error = Some(m.clone());
+                // What it was asked for never comes: asked again on the next use.
+                c.checks.retain(|_, c| *c != TableChecks::Asked);
                 self.status = Some(m);
             }
             // The mode a new session of the profile starts in (MySQL): a tab's first run is
@@ -1469,16 +1478,14 @@ impl App {
         }
         if reload && let Some(p) = profile {
             self.reload_keys(p);
-            if let Some(c) = self.conns.get_mut(p) {
-                c.checks.clear();
-            }
+            self.conns.forget_checks(p);
         }
     }
 
     /// The structure of `schema.table` in `profile`'s `database` (`None`: its own) came, or why
     /// it could not be read: what its checks allow goes to completion's cache. A server that
     /// reads no structure (too old) has no values to give; another failure leaves the table
-    /// not known, to be asked again on the next use. Whether values came.
+    /// not known, asked again after [`CHECKS_RETRY`]. Whether values came.
     fn checks_came(
         &mut self,
         profile: ProfileId,
@@ -1487,7 +1494,7 @@ impl App {
         table: &str,
         result: Result<&TableStructure, &DbError>,
     ) -> bool {
-        let dialect = self.profile_language(Some(profile)).dialect();
+        let (dialect, now) = (self.profile_language(Some(profile)).dialect(), self.now());
         let Some(cache) = self.conns.checks_in_mut(profile, database) else { return false };
         let key = (schema.to_string(), table.to_string());
         match result {
@@ -1500,7 +1507,7 @@ impl App {
                 false
             }
             Err(_) => {
-                cache.remove(&key);
+                cache.insert(key, TableChecks::Failed(now));
                 false
             }
         }

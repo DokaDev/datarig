@@ -111,7 +111,8 @@ rss_growth_mib_max = 16
 # Keystroke to frame in a 5 MB file at 160x45 (a developer machine: about 0.5 ms). A theme
 # switch (`:set theme=`, then its frame), moving among the hints of finished runs (every
 # statement around the cursor has one), and keys typed in a string literal compared with an
-# enumerated column (the completion popup of its values made at each key, its timer run) are
+# enumerated column (the completion popup of its values made at each key, its timer run; also
+# with the literal unclosed above the file's first line, paired with a quote further on) are
 # held to the same budget, as are the keys of the `editor_mysql` scenario (a 5 MB MySQL script
 # with `DELIMITER` blocks, read as MySQL).
 p95_ms_max = 25.0

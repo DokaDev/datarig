@@ -68,7 +68,8 @@ pub mod tunnel;
 mod update;
 
 pub use conn::{
-    AUX_IDLE, AuxMeta, ChecksCache, Connecting, ConnectionManager, Keys, NodeState, ProfileConn, Queued, TableChecks,
+    AUX_IDLE, AuxMeta, CHECKS_RETRY, ChecksCache, Connecting, ConnectionManager, Keys, NodeState, ProfileConn, Queued,
+    TableChecks,
 };
 pub use paging::Paging;
 pub use password::{EnvLookup, PromptPurpose, Secret};

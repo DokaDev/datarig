@@ -101,6 +101,7 @@ pub fn editor(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
         "run_hints_ms",
         "theme_switch_ms",
         "values_ms",
+        "values_top_ms",
     ];
     for what in keys.into_iter().chain(["search_miss_ms", "search_next_ms"]) {
         match f(result, &[what, "p95"]) {

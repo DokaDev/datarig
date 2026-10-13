@@ -88,11 +88,12 @@ fn search_keys(
 }
 
 /// Keys typed in a string literal compared with an enumerated column, on a new line of the
-/// text (with `ender` before it, which ends the statement it is in): each key, the completion
+/// text (with `ender` before it, which ends the statement it is in; `top`: above the first
+/// line, the literal left unclosed so that it pairs with a quote further on): each key, the completion
 /// timer run past its delay, and the frame. The popup offers the column's values, refined by
 /// each key typed in the literal and made again after it. The catalog of the app's profile has
 /// that column, and the editor is in Normal mode before and after.
-fn values_keys(app: &mut App, term: &mut Terminal<TestBackend>, n: usize, ender: &str) -> Vec<f64> {
+fn values_keys(app: &mut App, term: &mut Terminal<TestBackend>, n: usize, ender: &str, top: bool) -> Vec<f64> {
     use datarig_core::sql::complete::{Catalog, ColumnInfo, Relation};
     let mut status = ColumnInfo::new("status", "order_status");
     let values: Vec<String> = ["pending", "paid", "shipped", "cancelled"].map(String::from).into();
@@ -106,7 +107,13 @@ fn values_keys(app: &mut App, term: &mut Terminal<TestBackend>, n: usize, ender:
     let pid = app.profiles[0].id;
     app.conns.entry(pid).catalog = Catalog { schemas: vec!["shop".into()], relations: vec![orders] };
     apps::key(app, KeyCode::Esc, KeyModifiers::NONE);
-    apps::char(app, 'o');
+    if top {
+        apps::char(app, 'g');
+        apps::char(app, 'g');
+        apps::key(app, KeyCode::Char('O'), KeyModifiers::SHIFT);
+    } else {
+        apps::char(app, 'o');
+    }
     for c in format!("{ender} SELECT * FROM shop.orders o WHERE o.status = '").chars() {
         apps::char(app, c);
     }
@@ -244,7 +251,8 @@ pub fn run(scratch: &Path, bytes: usize, n: usize) -> Result<Value, String> {
     let text_bytes = app.tab().editor.len_bytes() + 1;
 
     // Completion of an enumerated column's values in a string literal.
-    let values = values_keys(&mut app, &mut term, n, ";");
+    let values = values_keys(&mut app, &mut term, n, ";", false);
+    let values_top = values_keys(&mut app, &mut term, n, "", true);
 
     // A theme switch: every built-in theme in turn, each drawn at once.
     let names = datarig_tui::theme::NAMES;
@@ -283,6 +291,7 @@ pub fn run(scratch: &Path, bytes: usize, n: usize) -> Result<Value, String> {
         "search_miss_ms": report("/ miss", &search_miss),
         "search_next_ms": report("n", &search_next),
         "values_ms": report("values", &values),
+        "values_top_ms": report("values top", &values_top),
         "search": {
             "miss_bytes_max": miss.bytes,
             "next_bytes_max": next.bytes,
@@ -434,7 +443,7 @@ pub fn run_mysql(bytes: usize, n: usize) -> Result<Value, String> {
         k => apps::char(a, hint_keys[k % hint_keys.len()]),
     });
     apps::key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
-    let values = values_keys(&mut app, &mut term, n, ";");
+    let values = values_keys(&mut app, &mut term, n, ";", false);
     let jump_keys = ["x", "G", "g", "g", "u"];
     let jumps = keystrokes(&mut app, &mut term, n.min(50), |a, i| match jump_keys[i % jump_keys.len()] {
         "G" => apps::key(a, KeyCode::Char('G'), KeyModifiers::SHIFT),

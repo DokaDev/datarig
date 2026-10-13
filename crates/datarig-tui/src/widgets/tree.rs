@@ -547,6 +547,13 @@ impl Tree {
         v.structure = Structure::Loading;
     }
 
+    /// The explorer asked for the structure of `schema.name` and waits for it.
+    pub fn structure_awaited(&self, schema: &str, name: &str) -> bool {
+        self.structures
+            .get(&(schema.to_string(), name.to_string()))
+            .is_some_and(|v| matches!(v.structure, Structure::Loading))
+    }
+
     /// The structure of `schema.name` came, or why it could not be read. Its estimates, read
     /// with it, are the object's from now on (its line shows them), and the schema's size tiers
     /// follow them.

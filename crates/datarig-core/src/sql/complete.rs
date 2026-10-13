@@ -123,7 +123,7 @@ pub struct WantsChecks {
 
 pub const MAX_ITEMS: usize = 10;
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct TableRef {
     schema: Option<String>,
     name: String,
@@ -408,8 +408,9 @@ pub fn complete_with<'c>(
     });
 
     // In a string: the values of the column it is compared with.
-    if let Some(lit) = toks.iter().find(|t| t.kind == Tok::Str && t.start < cur && (cur < t.end || !closed(d, t, seg)))
-    {
+    // Only a token that runs to the segment's end can be unclosed.
+    let open_at = |t: &Token| t.end == seg.len() && !closed(d, t, seg);
+    if let Some(lit) = toks.iter().find(|t| t.kind == Tok::Str && t.start < cur && (cur < t.end || open_at(t))) {
         let ctx = Context { d, cat, path, seg, state: seg_state };
         return literal_values(&ctx, &toks, lit, cur, checks)
             .map(|mut o| {
@@ -429,7 +430,7 @@ pub fn complete_with<'c>(
         let inside = match t.kind {
             Tok::LineComment | Tok::Variable => t.start < cur && cur <= t.end,
             Tok::BlockComment | Tok::Dollar => t.start < cur && (cur < t.end || !closed(d, t, seg)),
-            Tok::Str => t.start < cur && (cur < t.end || !closed(d, t, seg)),
+            Tok::Str => t.start < cur && (cur < t.end || open_at(t)),
             Tok::QuotedIdent => open_quote != Some(t) && t.start < cur && (cur < t.end || !closed(d, t, seg)),
             _ => false,
         };
@@ -633,12 +634,16 @@ fn literal_values<'c>(
     if cur < start {
         return None;
     }
-    // A quote typed before other text pairs with a quote further on: one on another line, or
-    // one a name or another quote follows right away. The literal is then open at the cursor.
-    let is_closed = closed(d, lit, seg);
+    // A quote typed before other SQL pairs with a quote further on: what lies between the
+    // cursor and that quote is SQL (a blank, then more text), and it is on another line, or a
+    // name or another quote follows the quote right away. The literal is then open at the
+    // cursor.
+    let is_closed = lit.end < seg.len() || closed(d, lit, seg);
     let end = if is_closed { lit.end - quote } else { lit.end };
+    let between = seg[cur..end].trim_end();
     let far = is_closed
-        && (seg[cur..end].contains('\n')
+        && between.contains(is_space)
+        && (between.contains('\n')
             || seg[lit.end..].chars().next().is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '\'' || c == '"'));
     let open_here = !is_closed || far;
     let mut before: Vec<&Token> = toks.iter().filter(|t| t.end <= lit.start && !t.is_trivia()).collect();
@@ -657,10 +662,17 @@ fn literal_values<'c>(
     let resolve = |schema: Option<&str>, name: &str| resolve_in(d, ctx.cat, &ctes, ctx.path, schema, name);
     let names: Vec<String> = target.iter().map(|t| unquote(d, t, seg)).collect();
     let (rel, column) = match names.as_slice() {
-        [c] => refs.iter().find_map(|r| {
-            let rel = resolve(r.schema.as_deref(), &r.name)?;
-            Some((rel, column_named(rel, c)?))
-        })?,
+        // The tables of the queries the literal is in, the innermost first, then all.
+        [c] => enclosing_queries(&rest_toks, &rest, lit.start)
+            .iter()
+            .map(|q| table_refs(d, q, &rest))
+            .chain(std::iter::once(refs.clone()))
+            .find_map(|refs| {
+                refs.iter().find_map(|r| {
+                    let rel = resolve(r.schema.as_deref(), &r.name)?;
+                    Some((rel, column_named(rel, c)?))
+                })
+            })?,
         [q, c] => {
             let rel = referenced(&refs, q, &resolve).or_else(|| resolve(None, q))?;
             (rel, column_named(rel, c)?)
@@ -671,10 +683,12 @@ fn literal_values<'c>(
         }
         _ => return None,
     };
-    // The column's type's values, then its checks' (a `WITH` query's columns have neither).
+    // The column's type's values, then its checks' (a `WITH` query's columns have neither). The
+    // type is named without its parameters (MySQL's `enum('a','b')` is `enum`).
+    let type_name = column.type_name.split('(').next().unwrap_or_default().trim_end();
     let mut values: Vec<(&str, Option<&str>)> = Vec::new();
     for v in column.values.iter().flat_map(|v| v.iter()) {
-        values.push((v.as_str(), Some(column.type_name.as_str())));
+        values.push((v.as_str(), Some(type_name)));
     }
     let mut wants_checks = None;
     if !rel.schema.is_empty() {
@@ -709,6 +723,41 @@ fn literal_values<'c>(
     let trail = if open_here { 0 } else { end - cur };
     let completion = (!items.is_empty()).then_some(Completion { items, replace_start: start, trail });
     Some(Outcome { completion, wants_checks })
+}
+
+/// The subqueries (`(SELECT …)`) around byte `at` of `src`, innermost first: the tokens of
+/// each, its parentheses left out.
+fn enclosing_queries<'t>(toks: &'t [Token], src: &str, at: usize) -> Vec<&'t [Token]> {
+    let sig = |i: usize| toks[i..].iter().position(|t| !t.is_trivia()).map(|k| i + k);
+    let mut open: Vec<usize> = Vec::new();
+    for (i, t) in toks.iter().enumerate().take_while(|(_, t)| t.end <= at) {
+        match t.kind {
+            Tok::LParen => open.push(i),
+            Tok::RParen => {
+                open.pop();
+            }
+            _ => {}
+        }
+    }
+    open.iter()
+        .rev()
+        .filter(|&&i| sig(i + 1).is_some_and(|k| kw(&toks[k], src, &["SELECT"])))
+        .map(|&i| {
+            let mut depth = 0;
+            let close = toks[i..]
+                .iter()
+                .position(|t| {
+                    match t.kind {
+                        Tok::LParen => depth += 1,
+                        Tok::RParen => depth -= 1,
+                        _ => {}
+                    }
+                    depth == 0
+                })
+                .map_or(toks.len(), |k| i + k);
+            &toks[i + 1..close]
+        })
+        .collect()
 }
 
 /// Column `name` of `rel`: as written, else whatever its ASCII case.
@@ -793,8 +842,21 @@ fn compared_column<'t>(before: &[&'t Token], src: &str) -> Option<Vec<&'t Token>
     if start == end || before[start].kind == Tok::Dot || end - start > 5 {
         return None;
     }
-    if paren && !(start > 0 && before[start - 1].kind == Tok::LParen) {
-        return None;
+    if paren {
+        let open = start.checked_sub(1).filter(|&k| before[k].kind == Tok::LParen)?;
+        // Not a call's argument (`lower(status)`): what comes before the `(` starts an
+        // expression.
+        const STARTS: &[&str] = &["WHERE", "AND", "OR", "NOT", "ON", "SET", "WHEN", "HAVING", "THEN", "ELSE", "SELECT"];
+        if let Some(p) = open.checked_sub(1).map(|k| before[k]) {
+            let call = match p.kind {
+                Tok::Ident | Tok::QuotedIdent | Tok::RParen => true,
+                Tok::Keyword => !STARTS.iter().any(|w| p.text(src).eq_ignore_ascii_case(w)),
+                _ => p.text(src) == "]",
+            };
+            if call {
+                return None;
+            }
+        }
     }
     Some(before[start..end].iter().copied().filter(|t| t.kind != Tok::Dot).collect())
 }

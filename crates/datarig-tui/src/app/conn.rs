@@ -15,15 +15,22 @@ use std::time::Instant;
 
 /// What completion knows of a table's checks (the values they allow its columns), by
 /// `(schema, table)`. Read from the table's structure, which the explorer or completion asks
-/// for; forgotten when the catalog is read again. A table not in the map is not known: a
-/// structure that could not be read leaves it so (asked again on the next use).
+/// for; forgotten when the catalog is read again or DDL ran. A table not in the map, or whose
+/// structure could not be read, is not known.
 pub type ChecksCache = HashMap<(String, String), TableChecks>;
+
+/// After a structure could not be read (another session holds a lock on the table, say),
+/// completion asks for it again only this much later.
+pub const CHECKS_RETRY: std::time::Duration = std::time::Duration::from_secs(10);
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TableChecks {
     /// Its structure was asked for and has not come.
     Asked,
     Known(Vec<CheckValues>),
+    /// Its structure could not be read at this time: not known, asked again after
+    /// [`CHECKS_RETRY`].
+    Failed(Instant),
 }
 
 /// A connection attempt in progress (a spinner; `Esc` cancels it).
@@ -394,6 +401,16 @@ impl ConnectionManager {
         match database {
             None => self.conns.get(&profile).map(|c| &c.checks),
             Some(d) => self.aux(profile, d).map(|a| &a.checks),
+        }
+    }
+
+    /// Forget the checks' values completion knows of `profile`, in every database (DDL ran).
+    pub fn forget_checks(&mut self, profile: ProfileId) {
+        if let Some(c) = self.conns.get_mut(&profile) {
+            c.checks.clear();
+        }
+        for a in self.aux.iter_mut().filter(|a| a.profile == profile) {
+            a.checks.clear();
         }
     }
 

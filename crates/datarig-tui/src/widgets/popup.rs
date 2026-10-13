@@ -1,7 +1,7 @@
 //! Overlays anchored in the workspace: the completion popup and the cell viewer.
 
 use crate::app::App;
-use crate::text::{Align, clip, fit, width, wrap};
+use crate::text::{Align, clip, fit, sanitize_cell, width, wrap};
 use crate::theme;
 use datarig_core::i18n::{Localized, Msg};
 use ratatui::buffer::Buffer;
@@ -28,9 +28,12 @@ pub(crate) fn draw_popup(app: &App, cursor: (u16, u16), screen: Rect, buf: &mut 
     let th = theme::cur();
     let Some(p) = &app.tab().popup else { return };
     let kinds: Vec<Localized> = p.items.iter().map(|c| app.i18n.label(c.kind.label())).collect();
-    let name_w = p.items.iter().map(|c| width(&c.label)).max().unwrap_or(1).min(40);
+    // A value may hold a line break or another control character: shown as the grid shows it.
+    let labels: Vec<String> = p.items.iter().map(|c| sanitize_cell(&c.label)).collect();
+    let details: Vec<Option<String>> = p.items.iter().map(|c| c.detail.as_deref().map(sanitize_cell)).collect();
+    let name_w = labels.iter().map(|l| width(l)).max().unwrap_or(1).min(40);
     let kind_w = kinds.iter().map(|k| width(k)).max().unwrap_or(0);
-    let type_w = p.items.iter().filter_map(|c| c.detail.as_deref()).map(width).max().unwrap_or(0).min(24);
+    let type_w = details.iter().flatten().map(|d| width(d)).max().unwrap_or(0).min(24);
     let mut inner_w = 1 + name_w + 2 + kind_w + if type_w > 0 { 2 + type_w } else { 0 } + 1;
     inner_w = inner_w.min(screen.width as usize - 2);
     let w = inner_w as u16 + 2;
@@ -38,7 +41,13 @@ pub(crate) fn draw_popup(app: &App, cursor: (u16, u16), screen: Rect, buf: &mut 
     let prefix_w =
         width(&app.tab().editor.text()[p.replace_start.min(app.tab().editor.offset())..app.tab().editor.offset()])
             as u16;
-    let x = cursor.0.saturating_sub(prefix_w + 2).min(screen.width.saturating_sub(w));
+    // Inside the editor's box when it fits there, else inside the screen.
+    let editor = app.layout.editor;
+    let right = match editor.width > w + 1 {
+        true => editor.x + editor.width - 1 - w,
+        false => screen.width.saturating_sub(w),
+    };
+    let x = cursor.0.saturating_sub(prefix_w + 2).min(right).min(screen.width.saturating_sub(w));
     let bottom = screen.height - 1; // keep the status bar visible
     let y = if cursor.1 + 1 + h <= bottom { cursor.1 + 1 } else { cursor.1.saturating_sub(h) };
     let rect = Rect::new(x, y, w, h.min(screen.height));
@@ -48,7 +57,7 @@ pub(crate) fn draw_popup(app: &App, cursor: (u16, u16), screen: Rect, buf: &mut 
         .border_style(Style::new().fg(th.border).bg(th.surface))
         .style(Style::new().bg(th.surface).fg(th.fg))
         .render(rect, buf);
-    for (i, c) in p.items.iter().enumerate() {
+    for i in 0..p.items.len() {
         let yy = rect.y + 1 + i as u16;
         if yy >= rect.y + rect.height - 1 {
             break;
@@ -56,13 +65,13 @@ pub(crate) fn draw_popup(app: &App, cursor: (u16, u16), screen: Rect, buf: &mut 
         let bg = if i == p.selected { th.selection } else { Style::new().bg(th.surface) };
         let mut line = vec![
             (" ".to_string(), Style::new()),
-            (fit(&c.label, name_w, Align::Left), Style::new().fg(th.fg)),
+            (fit(&labels[i], name_w, Align::Left), Style::new().fg(th.fg)),
             ("  ".to_string(), Style::new()),
             (fit(&kinds[i], kind_w, Align::Left), Style::new().fg(th.fg_dim)),
         ];
         if type_w > 0 {
             line.push(("  ".into(), Style::new()));
-            line.push((fit(c.detail.as_deref().unwrap_or(""), type_w, Align::Left), Style::new().fg(th.fg_muted)));
+            line.push((fit(details[i].as_deref().unwrap_or(""), type_w, Align::Left), Style::new().fg(th.fg_muted)));
         }
         line.push((" ".into(), Style::new()));
         let mut xx = rect.x + 1;

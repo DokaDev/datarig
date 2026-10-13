@@ -199,7 +199,9 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
   structure (PostgreSQL 12+, MySQL 8.0.16+), once per table until the explorer is refreshed, so
   their values show a moment after the first use. A value goes in escaped as the literal reads
   it (`''`, and a backslash doubled where a backslash escapes), and an unclosed literal gets its
-  closing quote. Like every popup it shows 10 items at most; `INSERT … VALUES` is not covered.
+  closing quote. A type's values are all offered even where a check allows fewer (they are not
+  narrowed by it). A value in a function call (`lower(status) = '`) gets none. Like every popup
+  it shows 10 items at most; `INSERT … VALUES` is not covered.
 - A formatter you run yourself (`Space e f`, `:format`, `:'<,'>format`; never automatic): it
   lays out the statement under the cursor or the selection, as one undo step. It changes only
   the layout (line breaks, indent of 4 or 2 spaces, and keyword case if you ask for it with
