@@ -7,9 +7,14 @@
 //! `:set theme=<name>` and the settings screen apply a theme through [`App::set_theme`], which
 //! saves it like every other setting. On the settings screen `h`/`l` only preview a theme (the
 //! frames are drawn with it); `Enter` keeps it, `Esc` goes back to the one before.
+//!
+//! `:theme copy <from> <name>`, `:theme new <name>` and `c` on the settings screen's theme row
+//! write a new theme file ([`crate::theme::copy_theme`], [`crate::theme::new_theme`]), then use
+//! it like `:set theme=<name>` and say where the file is.
 
+use super::chooser::{NameInput, NamePurpose};
 use super::*;
-use crate::theme::{self, Background, Theme};
+use crate::theme::{self, AuthorError, Background, Theme};
 use datarig_core::theme::{Problem, ThemeError};
 
 /// The theme row of the settings screen: the names found when the screen opened, and the theme
@@ -135,15 +140,116 @@ impl App {
     /// `:set theme=<name>` and `Enter` on the settings screen: draw with theme `name` and save
     /// it. A name that does not resolve changes nothing and is the error.
     pub fn set_theme(&mut self, name: &str) -> Result<(), Notice> {
+        let msg =
+            Msg::SettingChanged { name: self.i18n.label(Label::SettingTheme).to_string(), value: name.to_string() };
+        self.switch_theme(name, Notice::new(msg, Level::Info))
+    }
+
+    /// Draw with theme `name`, save it and say `done` (or why it was not saved).
+    fn switch_theme(&mut self, name: &str, done: Notice) -> Result<(), Notice> {
         let th = self.resolve_theme(name)?;
         self.theme = Arc::new(th);
         self.theme_name = name.to_string();
         self.theme_problem = None;
         let saved = self.persist();
-        let msg =
-            Msg::SettingChanged { name: self.i18n.label(Label::SettingTheme).to_string(), value: name.to_string() };
-        self.flash(saved.unwrap_or(Notice::new(msg, Level::Info)));
+        self.flash(saved.unwrap_or(done));
         Ok(())
+    }
+
+    /// `:theme copy <from> <name>` and the settings screen's copy: write `themes/<name>.toml`
+    /// with every token of `from`, then draw with it (saved) and say where it is.
+    pub fn copy_theme(&mut self, from: &str, name: &str) -> Result<(), AuthorError> {
+        let dir = self.themes_dir().ok_or(AuthorError::NoDir)?;
+        let path = theme::copy_theme(&dir, from, name, self.background)?;
+        let msg =
+            Msg::ThemeAuthorCopied { from: from.to_string(), path: path.display().to_string(), name: name.into() };
+        self.wrote_theme(name, msg);
+        Ok(())
+    }
+
+    /// `:theme new <name>`: write `themes/<name>.toml` extending the current theme when it is
+    /// built in (else `dark`) with every token commented out, then draw with it (saved) and say
+    /// where it is.
+    pub fn new_theme(&mut self, name: &str) -> Result<(), AuthorError> {
+        let dir = self.themes_dir().ok_or(AuthorError::NoDir)?;
+        let base =
+            if theme::NAMES.contains(&self.theme_name.as_str()) { self.theme_name.clone() } else { "dark".into() };
+        let path = theme::new_theme(&dir, name, &base, self.background)?;
+        self.wrote_theme(name, Msg::ThemeAuthorCreated { path: path.display().to_string(), base, name: name.into() });
+        Ok(())
+    }
+
+    /// A theme file was written: use it. It is said even when it cannot be used (the file stays).
+    fn wrote_theme(&mut self, name: &str, done: Msg) {
+        if let Err(e) = self.switch_theme(name, Notice::new(done, Level::Success)) {
+            self.flash(e);
+        }
+        // The settings screen lists the new file, and a preview is over: the theme is chosen.
+        let names = self.theme_names();
+        if let Some(s) = self.overlays.settings_mut() {
+            s.themes.names = names;
+            s.themes.preview = None;
+        }
+    }
+
+    /// Why a theme file was not written, in words.
+    pub fn author_error_msg(&self, e: &AuthorError) -> Msg {
+        let shown = |p: &std::path::Path| p.display().to_string();
+        match e {
+            AuthorError::BadName(_) => Msg::Label(Label::ThemeAuthorNameInvalid),
+            AuthorError::BuiltinName(_) => Msg::Label(Label::ThemeAuthorNameBuiltin),
+            AuthorError::NoDir => Msg::Label(Label::ThemeAuthorNoDir),
+            AuthorError::Source(e) => theme_error_msg(&self.i18n, e),
+            AuthorError::Unwritable { token } => Msg::ThemeAuthorUnwritable { token: token.to_string() },
+            AuthorError::Exists(path) => Msg::ThemeAuthorExists { path: shown(path) },
+            AuthorError::Write { path, fault } => Msg::ThemeAuthorWriteFailed {
+                path: shown(path),
+                reason: self.i18n.msg(&persist::fault_reason(fault)).to_string(),
+            },
+        }
+    }
+
+    /// `c` on the settings screen's theme row: ask the name of a copy of the theme shown there
+    /// (the one previewed, else the configured one). A theme that cannot be used says why.
+    pub(super) fn open_copy_theme(&mut self) {
+        let Some(row) = self.overlays.settings().map(|s| &s.themes) else { return };
+        let names = row.names.clone();
+        let shown = match &row.preview {
+            Some(p) => p.error.clone().map_or_else(|| Ok(names.get(p.index).cloned().unwrap_or_default()), Err),
+            None => self.theme_problem.clone().map_or_else(|| Ok(self.theme_name.clone()), Err),
+        };
+        let from = match shown {
+            Ok(from) => from,
+            Err(e) => return self.flash(e),
+        };
+        // `<from>-copy`, or the first `<from>-copy-<n>` no theme has.
+        let free = (1..100)
+            .map(|n| if n == 1 { format!("{from}-copy") } else { format!("{from}-copy-{n}") })
+            .find(|n| !names.contains(n))
+            .unwrap_or_default();
+        self.overlays.push(Overlay::NameInput(NameInput {
+            title: Msg::ThemeAuthorCopyTitle { from: from.clone() },
+            input: crate::widgets::text_input::TextInput::new(&free),
+            error: None,
+            purpose: NamePurpose::CopyTheme { from },
+            buttons: Default::default(),
+        }));
+    }
+
+    /// `Enter` in the name of the settings screen's copy. A name that cannot be used stays in the
+    /// input with why (`Err`); anything else closes it and is said.
+    pub(super) fn copy_theme_named(&mut self, from: &str, name: &str) -> Result<(), Label> {
+        match self.copy_theme(from, name) {
+            Ok(()) => Ok(()),
+            Err(AuthorError::BadName(_)) => Err(Label::ThemeAuthorNameInvalid),
+            Err(AuthorError::BuiltinName(_)) => Err(Label::ThemeAuthorNameBuiltin),
+            Err(AuthorError::Exists(_)) => Err(Label::ThemeAuthorTaken),
+            Err(e) => {
+                let msg = self.author_error_msg(&e);
+                self.flash(Notice::new(msg, Level::Error));
+                Ok(())
+            }
+        }
     }
 
     /// `h`/`l` on the settings screen's theme row: draw with the previous or next theme, without

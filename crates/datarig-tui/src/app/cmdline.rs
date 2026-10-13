@@ -2,7 +2,7 @@
 //! chosen or typed. The grammar of the commands is in [`super::command`].
 
 use super::command::{
-    self, ArgCompletion, ArgKind, COMMANDS, CommandSpec, Parsed, SETTINGS, SetError, SetValue, Setting,
+    self, ArgCompletion, ArgKind, COMMANDS, CommandSpec, Parsed, SETTINGS, SetError, SetValue, Setting, ThemeCommand,
 };
 use super::*;
 use crate::widgets::editor::{ExDone, ExError, MarkNotice, SearchNotice, is_ex};
@@ -293,14 +293,20 @@ impl App {
             let c = COMMANDS.iter().position(|s| s.command == spec.command).unwrap_or(0);
             let scripts = self.script_names();
             let contexts = if kind == ArgKind::Context { self.context_names() } else { Vec::new() };
-            let themes = if kind == ArgKind::Setting { self.theme_names() } else { Vec::new() };
+            let themes =
+                if matches!(kind, ArgKind::Setting | ArgKind::Theme) { self.theme_names() } else { Vec::new() };
             let names: Vec<&str> = match kind {
                 ArgKind::Script => scripts.iter().map(String::as_str).collect(),
                 ArgKind::Context => contexts.iter().map(String::as_str).collect(),
-                ArgKind::Setting => themes.iter().map(String::as_str).collect(),
+                ArgKind::Setting | ArgKind::Theme => themes.iter().map(String::as_str).collect(),
                 _ => self.profiles.iter().map(|p| p.name.as_str()).collect(),
             };
-            return command::complete_arg(kind, arg, &names)
+            // `:theme copy ` lists the themes: the blank after a word counts there.
+            let arg = match kind {
+                ArgKind::Theme if !arg.is_empty() && input.ends_with(char::is_whitespace) => format!("{arg} "),
+                _ => arg.to_string(),
+            };
+            return command::complete_arg(kind, &arg, &names)
                 .into_iter()
                 .map(|arg| CommandItem::Arg { command: c, arg })
                 .collect();
@@ -465,6 +471,15 @@ impl App {
             Some(CommandItem::Arg { arg: ArgCompletion::Theme(_, i), .. }) => {
                 let name = self.theme_names().get(i).cloned().unwrap_or_default();
                 self.set_theme(&name).map(|()| self.overlays.close(OverlayKind::Commands))
+            }
+            Some(CommandItem::Arg { command, arg: ArgCompletion::ThemeAction(i) }) => {
+                self.set_command_input(&format!("{} {} ", COMMANDS[command].name, command::THEME_ACTIONS[i].0));
+                Ok(())
+            }
+            Some(CommandItem::Arg { command, arg: ArgCompletion::ThemeFrom(i) }) => {
+                let from = self.theme_names().get(i).cloned().unwrap_or_default();
+                self.set_command_input(&format!("{} copy {from} ", COMMANDS[command].name));
+                Ok(())
             }
             Some(CommandItem::Arg { command, arg: ArgCompletion::Format(i) }) => {
                 self.run_command(&COMMANDS[command], super::copy::CopyFormat::MENU[i].name())
@@ -710,6 +725,15 @@ impl App {
                 let ctx = self.session_context(p, db, schema);
                 self.request_set_context(Some(ctx));
             }
+            (command::Command::Theme, _) => {
+                match command::parse_theme(arg) {
+                    Some(ThemeCommand::Copy { from, name }) => self.copy_theme(from, name),
+                    Some(ThemeCommand::New { name }) => self.new_theme(name),
+                    None => return err(Msg::Label(Label::CommandsErrorThemeUsage)),
+                }
+                .map_err(|e| Notice::new(self.author_error_msg(&e), Level::Error))?;
+                self.overlays.close(OverlayKind::Commands);
+            }
             (command::Command::Edit, _) => {
                 // Without a name: the tree of the saved queries.
                 if arg.is_empty() {
@@ -861,6 +885,7 @@ impl App {
                             ArgKind::Context => (Label::CommandsArgContext, true),
                             ArgKind::Object => (Label::CommandsArgObject, true),
                             ArgKind::Analyze => (Label::CommandsArgAnalyze, true),
+                            ArgKind::Theme => (Label::CommandsArgTheme, false),
                         };
                         let arg = arg.text(self.i18n.lang);
                         name.push_str(&if optional { format!(" [{arg}]") } else { format!(" {arg}") });
@@ -907,6 +932,14 @@ impl App {
                         label: self.i18n.label(action::spec(a).label),
                         keys: keys(a),
                     }
+                }
+                CommandItem::Arg { arg: ArgCompletion::ThemeAction(i), .. } => {
+                    let (word, label) = command::THEME_ACTIONS[i];
+                    CommandRow { name: Localized::verbatim(word), label: self.i18n.label(label), keys: String::new() }
+                }
+                CommandItem::Arg { arg: ArgCompletion::ThemeFrom(i), .. } => {
+                    let name = self.theme_names().get(i).cloned().unwrap_or_default();
+                    CommandRow { label: self.theme_label(&name), name: Localized::verbatim(name), keys: String::new() }
                 }
                 CommandItem::Arg { arg: ArgCompletion::SetKey(k), .. } => CommandRow {
                     name: Localized::verbatim(format!("{}=", SETTINGS[k].key)),

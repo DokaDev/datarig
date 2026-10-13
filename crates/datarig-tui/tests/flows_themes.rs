@@ -1,7 +1,8 @@
 //! Themes through the real `App` event path: `:set theme=` with its completion, the settings
 //! screen's preview and `Esc`, theme files (with `extends`, broken, with a built-in name), an
-//! unknown name, and a family following the terminal's background. Every config file is a
-//! scratch one; the background is injected, never asked of a real terminal.
+//! unknown name, a family following the terminal's background, and writing theme files
+//! (`:theme copy`, `:theme new`, `c` on the settings screen). Every config file is a scratch
+//! one; the background is injected, never asked of a real terminal.
 
 mod common;
 
@@ -48,6 +49,21 @@ impl Scratch {
     fn text(&self) -> String {
         std::fs::read_to_string(self.path()).unwrap()
     }
+
+    fn theme_file(&self, name: &str) -> PathBuf {
+        self.dir.join("themes").join(format!("{name}.toml"))
+    }
+}
+
+/// The status bar's message as text, and its level.
+fn flashed(h: &Harness) -> (String, Level) {
+    let (n, _) = h.app.transient.as_ref().expect("a message");
+    (n.render(&h.app.i18n).to_string(), n.level)
+}
+
+/// The command line's error as text.
+fn cmd_error(h: &Harness) -> String {
+    h.cmdline().and_then(|c| c.error.clone()).expect("the command line says why").render(&h.app.i18n).to_string()
 }
 
 impl Drop for Scratch {
@@ -250,4 +266,129 @@ fn a_family_follows_the_terminal_background_and_a_variant_pins_it() {
     h.command("set theme=tokyo-night-day");
     assert_eq!(*h.app.theme, theme::TOKYO_NIGHT_DAY);
     assert_eq!(s.text(), "version = 2\ntheme = \"tokyo-night-day\"\n", "the name is saved, not the variant it picked");
+}
+
+#[test]
+fn theme_copy_writes_every_token_uses_the_copy_and_never_overwrites() {
+    let s = Scratch::new("copy", "theme = \"dark\"\n", &[]);
+    std::fs::remove_dir_all(s.dir.join("themes")).unwrap();
+    let mut h = Harness::with_config(&s.config(), Lang::En);
+    h.key(KeyCode::Esc);
+    // The words, then the themes to copy from.
+    h.ctrl('k');
+    h.type_text("theme ");
+    let rows: Vec<String> = h.app.command_rows().iter().map(|r| r.name.to_string()).collect();
+    assert_eq!(rows, ["copy", "new"]);
+    h.key(KeyCode::Enter);
+    assert_eq!(h.cmdline().unwrap().input.text(), "theme copy ");
+    let rows: Vec<String> = h.app.command_rows().iter().map(|r| r.name.to_string()).collect();
+    assert_eq!(rows.first().map(String::as_str), Some("terminal"), "{rows:?}");
+    h.type_text("nor");
+    h.key(KeyCode::Enter);
+    assert_eq!(h.cmdline().unwrap().input.text(), "theme copy nord ");
+    h.type_text("mine");
+    h.key(KeyCode::Enter);
+    assert!(h.overlay_kind().is_none());
+    let path = s.theme_file("mine");
+    let written = std::fs::read_to_string(&path).expect("the themes folder and the file are made");
+    assert!(written.contains("\nextends = \"nord\"\n") && written.contains("\nbg = \"#"), "{written}");
+    assert_eq!(*h.app.theme, theme::NORD, "drawn with the copy, which is nord's every token");
+    assert_eq!(h.app.theme_name, "mine");
+    assert_eq!(s.text(), "theme = \"mine\"\n", "saved like :set theme=");
+    let (text, level) = flashed(&h);
+    assert_eq!(level, Level::Success);
+    assert!(text.contains(&path.display().to_string()) && text.starts_with("Copied nord to "), "{text}");
+    // The same name again: refused, the file kept.
+    h.command("theme copy dark mine");
+    assert!(cmd_error(&h).ends_with("mine.toml exists already: nothing was written"), "{}", cmd_error(&h));
+    h.key(KeyCode::Esc);
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), written);
+    assert_eq!(h.app.theme_name, "mine");
+    // A copy of a theme file.
+    h.command("theme copy mine mine-2");
+    assert_eq!(*h.app.theme, theme::NORD);
+    assert_eq!(h.app.theme_name, "mine-2");
+    // Bad names and an unknown theme: nothing written, nothing changed.
+    for (cmd, said) in [
+        ("theme copy dark Dark", "That is the name of a built-in theme"),
+        ("theme copy dark my.theme", "A theme name is ASCII letters, digits, - and _"),
+        ("theme copy solarized x", "No theme named “solarized”"),
+        ("theme edit x", "Usage: :theme copy <from> <name>, or :theme new <name>"),
+    ] {
+        h.command(cmd);
+        assert!(cmd_error(&h).starts_with(said), "{cmd}: {}", cmd_error(&h));
+        h.key(KeyCode::Esc);
+    }
+    let mut files: Vec<String> = std::fs::read_dir(s.dir.join("themes"))
+        .unwrap()
+        .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    files.sort();
+    assert_eq!(files, ["mine-2.toml", "mine.toml"]);
+    assert_eq!(h.app.theme_name, "mine-2");
+}
+
+#[test]
+fn theme_new_extends_the_current_builtin_theme_with_every_token_commented_out() {
+    let s = Scratch::new("new", "theme = \"gruvbox\"\n", &[]);
+    let mut h = Harness::with_config(&s.config(), Lang::En);
+    h.key(KeyCode::Esc);
+    h.command("theme new fresh");
+    assert!(h.overlay_kind().is_none());
+    let text = std::fs::read_to_string(s.theme_file("fresh")).unwrap();
+    assert!(text.contains("\nextends = \"gruvbox\"\n") && text.contains("\n# warning = \""), "{text}");
+    assert_eq!(*h.app.theme, theme::GRUVBOX_DARK, "nothing set: the theme it extends");
+    assert_eq!(h.app.theme_name, "fresh");
+    assert_eq!(s.text(), "theme = \"fresh\"\n");
+    let (said, level) = flashed(&h);
+    assert_eq!(level, Level::Success);
+    assert!(said.starts_with("Created ") && said.contains("fresh.toml, extending gruvbox"), "{said}");
+    // From a theme file: dark.
+    h.command("theme new other");
+    let text = std::fs::read_to_string(s.theme_file("other")).unwrap();
+    assert!(text.contains("\nextends = \"dark\"\n"), "{text}");
+    assert_eq!(*h.app.theme, theme::DARK);
+    h.command("theme new fresh");
+    assert!(cmd_error(&h).ends_with("fresh.toml exists already: nothing was written"));
+}
+
+#[test]
+fn c_on_the_settings_screen_copies_the_theme_shown_to_a_named_file() {
+    let s = Scratch::new("settings-copy", "theme = \"dark\"\n", &[]);
+    let mut h = Harness::with_config(&s.config(), Lang::En);
+    h.key(KeyCode::Esc);
+    h.command("settings");
+    h.keys("c");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Settings), "c only acts on the theme row");
+    h.keys("jj");
+    assert!(h.screen(160, 45).contains("c copies this theme to a new theme file"), "{}", h.screen(160, 45));
+    // The theme previewed is the one copied.
+    h.keys("lc");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::NameInput));
+    let input = h.app.overlays.name_input().unwrap();
+    assert_eq!(input.input.text(), "light-copy");
+    assert!(h.screen(160, 45).contains("Copy light to a new theme file"), "{}", h.screen(160, 45));
+    // A name another program took meanwhile: said in the input, the file kept.
+    std::fs::write(s.theme_file("light-copy"), "# by hand\n").unwrap();
+    h.key(KeyCode::Enter);
+    let input = h.app.overlays.name_input().expect("the input stays");
+    assert_eq!(
+        input.error.map(|l| h.app.i18n.label(l).to_string()).as_deref(),
+        Some("A theme file of this name exists already: pick another name")
+    );
+    assert_eq!(std::fs::read_to_string(s.theme_file("light-copy")).unwrap(), "# by hand\n");
+    h.type_text("-2");
+    h.key(KeyCode::Enter);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Settings), "back on the settings screen");
+    assert_eq!(*h.app.theme, theme::LIGHT);
+    assert_eq!(h.app.theme_name, "light-copy-2");
+    assert_eq!(s.text(), "theme = \"light-copy-2\"\n");
+    let screen = h.screen(160, 45);
+    assert!(screen.contains("‹ light-copy-2") && !screen.contains("Previewing"), "{screen}");
+    // Esc keeps it: the preview is over.
+    h.key(KeyCode::Esc);
+    assert_eq!(*h.app.theme, theme::LIGHT);
+    assert!(h.app.theme_names().contains(&"light-copy-2".to_string()));
+    let spec = std::fs::read_to_string(s.theme_file("light-copy-2")).unwrap();
+    assert!(spec.contains("\nextends = \"light\"\n"), "{spec}");
 }

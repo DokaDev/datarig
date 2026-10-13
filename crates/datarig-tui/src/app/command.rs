@@ -70,6 +70,8 @@ pub enum Command {
     /// `:explain [analyze]`: the plan of the statement under the cursor (with `analyze`, run
     /// and measured).
     Explain,
+    /// `:theme copy <from> <name>`, `:theme new <name>`: write a theme file and use it.
+    Theme,
 }
 
 /// The type of a command's argument (it decides the completions).
@@ -93,6 +95,8 @@ pub enum ArgKind {
     Object,
     /// `analyze`; may be left out.
     Analyze,
+    /// `copy <from> <name>` or `new <name>` ([`THEME_ACTIONS`]); `<from>` is a theme name.
+    Theme,
 }
 
 impl ArgKind {
@@ -293,6 +297,14 @@ pub const COMMANDS: &[CommandSpec] = &[
         arg: Some(ArgKind::Analyze),
         label: Label::CommandExplain,
         action: Some(Action::Explain(false)),
+    },
+    CommandSpec {
+        command: Command::Theme,
+        name: "theme",
+        aliases: &[],
+        arg: Some(ArgKind::Theme),
+        label: Label::CommandTheme,
+        action: None,
     },
 ];
 
@@ -691,6 +703,32 @@ pub enum ArgCompletion {
     /// A format of [`super::copy::CopyFormat::MENU`] and a scope of
     /// [`super::copy::CopyScope::ALL`].
     Scope(usize, usize),
+    /// A word of [`THEME_ACTIONS`] (`copy`, `new`).
+    ThemeAction(usize),
+    /// The theme `:theme copy` copies: an index into the theme names given to [`complete_arg`].
+    ThemeFrom(usize),
+}
+
+/// The words of `:theme`, each with its label.
+pub const THEME_ACTIONS: [(&str, Label); 2] = [("copy", Label::CommandThemeCopy), ("new", Label::CommandThemeNew)];
+
+/// What `:theme` asks for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ThemeCommand<'a> {
+    /// `copy <from> <name>`.
+    Copy { from: &'a str, name: &'a str },
+    /// `new <name>`.
+    New { name: &'a str },
+}
+
+/// Read the argument of `:theme`; `None`: it is not `copy <from> <name>` or `new <name>`.
+pub fn parse_theme(arg: &str) -> Option<ThemeCommand<'_>> {
+    let words: Vec<&str> = arg.split_whitespace().collect();
+    match words[..] {
+        ["copy", from, name] => Some(ThemeCommand::Copy { from, name }),
+        ["new", name] => Some(ThemeCommand::New { name }),
+        _ => None,
+    }
 }
 
 /// `name` as `:use` takes it (what [`ident`] reads back as `name`): as it is when it is lower-case
@@ -773,7 +811,7 @@ fn rank<'a>(typed: &str, candidates: impl Iterator<Item = (usize, &'a str)>) -> 
 
 /// The completions of the argument `arg` of a command taking `kind`, best first. `names`
 /// are the profile names ([`ArgKind::Profile`]), the saved queries ([`ArgKind::Script`]), the
-/// contexts ([`ArgKind::Context`]) or the theme names ([`ArgKind::Setting`]).
+/// contexts ([`ArgKind::Context`]) or the theme names ([`ArgKind::Setting`], [`ArgKind::Theme`]).
 pub fn complete_arg(kind: ArgKind, arg: &str, names: &[&str]) -> Vec<ArgCompletion> {
     match kind {
         ArgKind::Profile => {
@@ -810,6 +848,22 @@ pub fn complete_arg(kind: ArgKind, arg: &str, names: &[&str]) -> Vec<ArgCompleti
                     .collect(),
             }
         }
+        ArgKind::Theme => match arg.split_once(char::is_whitespace) {
+            // `copy ` and the start of a theme name: the names (the new name has nothing to pick).
+            Some(("copy", from)) if !from.trim_start().contains(char::is_whitespace) => {
+                let from = from.trim_start();
+                rank(from, names.iter().copied().enumerate())
+                    .into_iter()
+                    .filter(|&i| names[i].starts_with(from))
+                    .map(ArgCompletion::ThemeFrom)
+                    .collect()
+            }
+            Some(_) => Vec::new(),
+            None => (0..THEME_ACTIONS.len())
+                .filter(|&i| THEME_ACTIONS[i].0.starts_with(&arg.to_lowercase()))
+                .map(ArgCompletion::ThemeAction)
+                .collect(),
+        },
         ArgKind::Setting => match split_setting(arg) {
             Some((key, value)) => match SETTINGS.iter().position(|s| s.key == key) {
                 Some(k) if SETTINGS[k].values == Values::Themes => rank(value, names.iter().copied().enumerate())

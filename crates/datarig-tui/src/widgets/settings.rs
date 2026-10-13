@@ -1,8 +1,8 @@
 //! The settings screen: a large modal with every setting under its category, its
 //! current value (`‹ value ›`) and what that value means; below the list, the selected
 //! setting's description, and for `icons` a preview of the glyphs with the hint to turn them
-//! off when they show as boxes; for `theme` the terminal's background and the theme being
-//! previewed. A configured theme that is not used is said on top, as a config file with errors.
+//! off when they show as boxes; for `theme` the terminal's background, the theme being
+//! previewed and the key that copies it to a new theme file. A configured theme that is not used is said on top, as a config file with errors.
 
 use crate::app::App;
 use crate::app::command::{SETTINGS, Values};
@@ -168,6 +168,8 @@ pub(crate) fn draw_settings(app: &mut App, area: Rect, buf: &mut Buffer) {
             theme::Background::Unknown => Label::SettingThemeBackgroundUnknown,
         };
         lines.extend(wrap_words(&i18n.label(background), tw).into_iter().map(|l| (l, surface(th.fg_muted))));
+        let hint = wrap_words(&i18n.label(Label::ThemeAuthorCopyHint), tw);
+        lines.extend(hint.into_iter().map(|l| (l, surface(th.fg_muted))));
     }
     lines.extend(wrap_words(&i18n.label(spec.about), tw).into_iter().map(|l| (l, surface(th.fg))));
     if let Some(path) = app.config_file() {
