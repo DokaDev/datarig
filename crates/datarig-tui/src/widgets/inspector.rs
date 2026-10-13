@@ -234,7 +234,7 @@ fn draw_row(app: &App, rs: &ResultSet, marks: &[KeyMarks], body: Rect, buf: &mut
         } else if ci == col {
             th.selection_unfocused()
         } else if hovered == Some(ci) {
-            Style::new().bg(th.bg).patch(crate::widgets::cell_hover_style())
+            Style::new().bg(th.bg).patch(crate::widgets::hover_style())
         } else {
             Style::new().bg(th.bg)
         };

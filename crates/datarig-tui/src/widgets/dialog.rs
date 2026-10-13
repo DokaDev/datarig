@@ -90,16 +90,13 @@ fn button_rects(
     let right = inner.x + inner.width;
     let mut rects = Vec::new();
     for (i, text) in texts.iter().enumerate() {
-        let mut style = if focus == Some(i) {
+        let style = if focus == Some(i) {
             Style::new().fg(th.fg).patch(th.selection).add_modifier(Modifier::BOLD | Modifier::REVERSED)
         } else if hover == Some(i) {
-            Style::new().fg(th.accent).bg(th.surface_alt)
+            Style::new().fg(th.accent).bg(th.surface_alt).patch(crate::widgets::hover_style())
         } else {
             Style::new().fg(th.fg).bg(th.surface_alt)
         };
-        if hover == Some(i) {
-            style = style.add_modifier(Modifier::UNDERLINED);
-        }
         let used = put(buf, x, y, text, right.saturating_sub(x) as usize, style);
         rects.push(Rect::new(x, y, used, 1));
         x = (x + used + 3).min(right);

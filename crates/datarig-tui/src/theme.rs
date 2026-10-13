@@ -84,6 +84,10 @@ pub struct Theme {
     pub range: Style,
     /// The line or row under the cursor where the pane is not focused, and the editor's line.
     pub cursor_line: Style,
+    /// What is under the pointer (a list row, a grid cell, an inspector entry, a tab, a button):
+    /// a subtle background of its own, apart from the background, both surfaces, the cursor line,
+    /// the selection (focused or not) and a selected range; never an underline.
+    pub hover: Style,
     /// A faint tint behind the statement a run would take.
     pub current_stmt: Style,
     /// The bar in the editor's gutter next to the statement a run would take (or the
@@ -177,6 +181,7 @@ pub const DARK: Theme = Theme {
     selection: Style::new().bg(rgb(0x2A3B4D)),
     range: Style::new().bg(rgb(0x1E3438)),
     cursor_line: Style::new().bg(rgb(0x1F2530)),
+    hover: Style::new().bg(rgb(0x2D3035)),
     current_stmt: Style::new().bg(rgb(0x1A2129)),
     current_stmt_bar: rgb(0x3F8F87),
     running_stmt: Style::new().bg(rgb(0x2C2825)),
@@ -417,7 +422,7 @@ tokens! {
         success,
         warning, error, null_fg, key_pk, key_fk, key_uq, mode_normal, mode_insert, mode_visual, mode_command,
         mode_fg, chart_1, chart_2, chart_3, chart_4, chart_5, chart_6;
-    styles: selection, range, cursor_line, current_stmt, running_stmt, run_hint, syn_keyword, syn_function, syn_string, syn_number,
+    styles: selection, range, cursor_line, hover, current_stmt, running_stmt, run_hint, syn_keyword, syn_function, syn_string, syn_number,
         syn_comment, syn_operator, syn_identifier, syn_quoted_ident, syn_exec_comment, search_match, match_paren, read_only_mark,
         danger_mark, plan_hot, plan_misestimate, size_warm, size_hot, size_mild, size_heated,
 }

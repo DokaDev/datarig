@@ -267,7 +267,7 @@ impl Ctx {
             }
             Ctx::Password => "Password prompt; a click on the field, the checkbox, OK or Cancel.",
             Ctx::Confirm => {
-                "Yes/no confirmation: `y` does it; Enter keeps what the answer would lose (quit, delete, disconnect, close, switch, replace); for a copy it says yes. A button acts on its release (pressed and released on it, not right after the question appeared) and does what its key does; the pointer only underlines it (Enter stays on the safe one)."
+                "Yes/no confirmation: `y` does it; Enter keeps what the answer would lose (quit, delete, disconnect, close, switch, replace); for a copy it says yes. A button acts on its release (pressed and released on it, not right after the question appeared) and does what its key does; the pointer only lights its background (Enter stays on the safe one)."
             }
             Ctx::RunConfirm => {
                 "Before statements that may do harm run: each is listed; Cancel has the focus, `y` or Enter on Run runs them, as a click on Run does (the pointer does not move the focus)."

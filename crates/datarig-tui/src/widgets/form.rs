@@ -75,9 +75,9 @@ fn selector_hits(hits: &mut Vec<(Rect, FormHit)>, f: Field, x: u16, y: u16, (use
     }
 }
 
-/// The underline of the button under the pointer.
+/// The background of the button under the pointer.
 fn hovered(style: Style, on: bool) -> Style {
-    if on { style.add_modifier(Modifier::UNDERLINED) } else { style }
+    if on { style.patch(crate::widgets::hover_style()) } else { style }
 }
 
 /// One `‹ value ›` selector at (x, y); returns the columns used and whether all of it fit.
@@ -760,7 +760,7 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
             Style::new().fg(th.fg).bg(th.surface_alt)
         };
         let text = format!(" {} ", i18n.label(b.label()));
-        let used = put(buf, x, y, &text, room_from(x), hovered(style, on));
+        let used = put(buf, x, y, &text, room_from(x), hovered(style, on && form.focus != b));
         hits.push((Rect::new(x, y, used, 1), FormHit::Button(b)));
         x += used + 2;
     }

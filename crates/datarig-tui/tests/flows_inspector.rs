@@ -197,7 +197,7 @@ fn the_pointer_lights_an_entry_and_only_a_release_on_the_pressed_one_picks_it() 
     let l = h.app.layout.detail_list;
     h.mouse(MouseEventKind::Moved, l.x + 3, l.y + 2);
     assert_eq!(h.app.pointer_on, Some(PointerOn::Detail(2)));
-    assert_eq!(entry(&mut h, 2).1, theme::DARK.surface_alt, "lit");
+    assert_eq!(Some(entry(&mut h, 2).1), theme::DARK.hover.bg, "lit");
     assert_eq!(entry(&mut h, 0).1, unfocused());
     assert_eq!(entry(&mut h, 3).1, theme::DARK.bg);
     h.mouse(MouseEventKind::Moved, l.x + 3, l.y);

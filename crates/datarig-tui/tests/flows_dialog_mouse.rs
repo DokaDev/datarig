@@ -228,8 +228,8 @@ fn a_click_outside_the_form_or_on_nothing_changes_nothing() {
     assert_eq!(h.screen(W, H), before);
 }
 
-/// The pointer underlines the button under it; the focus stays; a move along it, or off the
-/// buttons, draws no frame unless the highlight goes.
+/// The pointer lights the button under it (the theme's hover background, no underline); the
+/// focus stays; a move along it, or off the buttons, draws no frame unless the highlight goes.
 #[test]
 fn the_pointer_highlights_the_forms_buttons_only() {
     let mut h = new_form();
@@ -238,14 +238,16 @@ fn the_pointer_highlights_the_forms_buttons_only() {
     assert_eq!(h.form().hover, Some(FormHit::Button(Field::Save)));
     assert_eq!(focus(&h), Field::Name, "the focus stays");
     let t = h.draw(W, H);
-    assert!(t.backend().buffer()[(x + 2, y)].modifier.contains(Modifier::UNDERLINED));
+    let cell = &t.backend().buffer()[(x + 2, y)];
+    assert_eq!(Some(cell.bg), datarig_tui::theme::DARK.hover.bg);
+    assert!(!cell.modifier.contains(Modifier::UNDERLINED));
     assert!(!hover(&mut h, x + 3, y), "along the same button: no frame");
     let (hx, hy) = find(&mut h, "Host ");
     assert!(hover(&mut h, hx, hy), "off the button: the highlight goes");
     assert_eq!(h.form().hover, None);
     assert!(!hover(&mut h, hx + 1, hy), "a field is no button: nothing");
     let t = h.draw(W, H);
-    assert!(!t.backend().buffer()[(x + 2, y)].modifier.contains(Modifier::UNDERLINED));
+    assert_ne!(Some(t.backend().buffer()[(x + 2, y)].bg), datarig_tui::theme::DARK.hover.bg);
 }
 
 /// The quit confirmation: Stay is focused, Quit is a button; the pointer on Quit does not move
@@ -268,7 +270,8 @@ fn a_confirmation_acts_only_on_a_click_on_its_button() {
     insta::assert_snapshot!("confirm_quit_hovered_en_100x30", h.draw(W, H).backend());
     let t = h.draw(W, H);
     let buf = t.backend().buffer();
-    assert!(buf[(x, y)].modifier.contains(Modifier::UNDERLINED), "Quit is underlined");
+    assert_eq!(Some(buf[(x, y)].bg), datarig_tui::theme::DARK.hover.bg, "Quit is lit");
+    assert!(!buf[(x, y)].modifier.contains(Modifier::UNDERLINED), "not underlined");
     assert!(!buf[(x, y)].modifier.contains(Modifier::REVERSED), "and not focused");
     let (sx, sy) = find(&mut h, "[ Stay ]");
     assert!(t.backend().buffer()[(sx, sy)].modifier.contains(Modifier::REVERSED), "Stay keeps the focus");
@@ -436,7 +439,7 @@ fn the_settings_take_clicks_the_wheel_and_the_pointer() {
     assert_eq!((sel(&h), h.app.overlays.settings().unwrap().hover), (i + 1, Some(i + 3)));
     assert!(!hover(&mut h, r4.line.x + 9, r4.line.y));
     let t = h.draw(W, H);
-    assert_eq!(t.backend().buffer()[(r4.line.x + 3, r4.line.y)].bg, datarig_tui::theme::DARK.surface_alt);
+    assert_eq!(Some(t.backend().buffer()[(r4.line.x + 3, r4.line.y)].bg), datarig_tui::theme::DARK.hover.bg);
     click(&mut h, (0, 0));
     assert_eq!(h.overlay_kind(), Some(OverlayKind::Settings), "a click outside closes nothing");
 }
@@ -724,10 +727,11 @@ fn an_arm_does_not_survive_a_move_without_a_button() {
     assert!(!h.app.quit, "a stray release acted on an old press");
 }
 
-/// On the terminal theme (its alternate surface is its surface) the row under the pointer is
-/// underlined in a picker's list and in the settings, as in the tab list and quick connect.
+/// On the terminal theme, whose hover is the bright black with the terminal's text color, the
+/// row under the pointer is on it, never underlined, in a picker's list and in the settings, as
+/// in the tab list and quick connect.
 #[test]
-fn the_pointers_row_is_underlined_on_the_terminal_theme() {
+fn the_pointers_row_is_lit_on_the_terminal_theme() {
     use datarig_tui::theme;
     let terminal = || std::sync::Arc::new(theme::TERMINAL.clone());
     let mut h = new_form();
@@ -739,7 +743,9 @@ fn the_pointers_row_is_underlined_on_the_terminal_theme() {
     let list = h.app.overlays.chooser().unwrap().list;
     assert!(hover(&mut h, list.x + 2, list.y + 3));
     let t = h.draw(W, H);
-    assert!(t.backend().buffer()[(list.x + 2, list.y + 3)].modifier.contains(Modifier::UNDERLINED), "the chooser");
+    let cell = &t.backend().buffer()[(list.x + 2, list.y + 3)];
+    assert_eq!(cell.bg, ratatui::style::Color::DarkGray, "the chooser");
+    assert!(!cell.modifier.contains(Modifier::UNDERLINED), "the chooser");
     let mut h = Harness::connected(Lang::En);
     h.app.theme = terminal();
     h.command("settings");
@@ -748,5 +754,7 @@ fn the_pointers_row_is_underlined_on_the_terminal_theme() {
     let r = *h.app.overlays.settings().unwrap().rows.iter().find(|r| r.row == selected + 2).unwrap();
     assert!(hover(&mut h, r.line.x + 3, r.line.y));
     let t = h.draw(W, H);
-    assert!(t.backend().buffer()[(r.line.x + 3, r.line.y)].modifier.contains(Modifier::UNDERLINED), "the settings");
+    let cell = &t.backend().buffer()[(r.line.x + 3, r.line.y)];
+    assert_eq!(cell.bg, ratatui::style::Color::DarkGray, "the settings");
+    assert!(!cell.modifier.contains(Modifier::UNDERLINED), "the settings");
 }

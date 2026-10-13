@@ -297,8 +297,14 @@ fn draw_results_pane(app: &mut App, area: Rect, buf: &mut Buffer) {
         }
     }
     let rb = panel_with_status(&title, status, app.focus == Focus::Results, grid_area.width);
-    let rinner = rb.inner(grid_area);
+    let mut rinner = rb.inner(grid_area);
     rb.render(grid_area, buf);
+    // A table tab's connection on the first line, as a query tab's editor has it (only where the
+    // result strip still has room under it).
+    if app.tab().is_table() && app.conn().is_some() && rinner.height > 3 {
+        draw_connection_bar(app, Rect { height: 1, ..rinner }, buf);
+        rinner = Rect { y: rinner.y + 1, height: rinner.height - 1, ..rinner };
+    }
     // The result tabs of the last run, the Chart, a Plan and the Messages on the first line.
     let strip = app.strip_shown() && rinner.height > 2;
     let old_strip = std::mem::take(&mut app.strip_hits);
@@ -601,8 +607,9 @@ fn name_style(p: &datarig_core::profile::ConnectionConfig, bg: ratatui::style::C
 
 /// The first line of the editor of a tab with a connection: the profile (its icon and name in
 /// its color), where it points, its environment (its badge, else its name; and read-only), and
-/// the key that switches the
-/// tab to another connection.
+/// the key that switches the tab to another connection. A table tab's results pane shows it
+/// too, with its table in the place (`database.schema.table`, `database.table` where the schema
+/// is the database) and no switch key: its connection does not change.
 fn draw_connection_bar(app: &App, area: Rect, buf: &mut Buffer) {
     let th = theme::cur();
     let Some(p) = app.conn() else { return };
@@ -620,15 +627,21 @@ fn draw_connection_bar(app: &App, area: Rect, buf: &mut Buffer) {
         (None, Some(db)) => db.clone(),
         (None, None) => database,
     };
+    let table = t.doc.table.as_ref().filter(|_| t.is_table());
+    let place_db = match table {
+        Some(tr) if one_level || database.is_empty() => tr.label(),
+        Some(tr) => format!("{database}.{}", tr.label()),
+        None => database,
+    };
     let mut place = p.name.clone();
-    if !database.is_empty() {
+    if !place_db.is_empty() {
         place.push_str(" / ");
-        place.push_str(&database);
+        place.push_str(&place_db);
     }
     // A chosen schema the server does not have on the path is marked, in the
     // warning color, for as long as that is so.
     let missing = app.schema_missing(t);
-    let schema = t.context.schema.clone().filter(|s| !s.is_empty() && !one_level).map(|s| {
+    let schema = t.context.schema.clone().filter(|s| !s.is_empty() && !one_level && table.is_none()).map(|s| {
         let style =
             if missing { Style::new().fg(th.warning).bg(bg).add_modifier(Modifier::BOLD) } else { name_style(p, bg) };
         (format!(" / {s}{}", if missing { "?" } else { "" }), style)
@@ -663,7 +676,7 @@ fn draw_connection_bar(app: &App, area: Rect, buf: &mut Buffer) {
     // panes show the connection; which-key and the help list the key).
     let width_of = |parts: &[(String, Style)]| parts.iter().map(|(t, _)| crate::text::width(t)).sum::<usize>();
     let left_w = width_of(&parts);
-    let left_room = if left_w as u16 + right + 2 <= room { room - right - 1 } else { room };
+    let left_room = if table.is_none() && left_w as u16 + right + 2 <= room { room - right - 1 } else { room };
     // Too narrow for all of it: the environment's name goes first, then the endpoint, so where the
     // tab works and the read-only badge stay (the place grew a database and schema).
     let optional = |t: &str| t.starts_with(" · ") || t.starts_with("  ");
@@ -1044,7 +1057,7 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
         app.pointer_on = None;
     }
     // The cell under the pointer, or the one of the inspector's entry under it (in the selected
-    // row): lit as a hover is, never selected.
+    // row): on the hover background, in a selected range too, never selected.
     let t = app.tab();
     let hovered = match app.pointer_hover() {
         Some(PointerOn::Cell(r, c)) => Some((r, c)),
@@ -1054,17 +1067,7 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
     if let (Some((r, c)), Results::Rows(rs)) = (hovered.filter(|&h| h != (t.grid.row, t.grid.col)), &t.results)
         && let Some(cell) = t.grid.cell_rect(r, c, rs.rows.len())
     {
-        // In a selected range only the underline: the range's background stays.
-        let in_range = t
-            .grid
-            .selection(rs.rows.len(), rs.columns.len())
-            .is_some_and(|(rr, cr)| rr.contains(&r) && cr.contains(&c));
-        let style = if in_range {
-            ratatui::style::Style::new().add_modifier(Modifier::UNDERLINED)
-        } else {
-            crate::widgets::cell_hover_style()
-        };
-        buf.set_style(cell.intersection(area), style);
+        buf.set_style(cell.intersection(area), crate::widgets::hover_style());
     }
     // Rows of the spill file that could not be read are shown as not read, and said so.
     if let Some(fault) = app.tabs.active_mut().grid.read_error.take() {

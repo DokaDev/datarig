@@ -195,8 +195,8 @@ fn hit_x(h: &Harness, want: TabHit) -> u16 {
 }
 
 /// The `×` of a tab changes its text color under the pointer (no bold, reverse or underline),
-/// on the background the whole tab takes under the pointer (the surface, between the bar's and
-/// the active tab's); the tab's text keeps its color and is not underlined; leaving clears it;
+/// on the background the whole tab takes under the pointer (the theme's hover); the tab's text
+/// keeps its color and is not underlined; leaving clears it;
 /// moves along the same target draw nothing.
 #[test]
 fn the_pointer_lights_up_a_tabs_close_button() {
@@ -214,7 +214,7 @@ fn the_pointer_lights_up_a_tabs_close_button() {
     assert_eq!(cell.fg, datarig_tui::theme::DARK.error);
     assert_ne!(cell.fg, plain.fg);
     assert_eq!(cell.modifier, plain.modifier, "no modifier added");
-    assert_eq!(cell.bg, datarig_tui::theme::DARK.surface, "the hovered tab's background");
+    assert_eq!(Some(cell.bg), datarig_tui::theme::DARK.hover.bg, "the hovered tab's background");
     assert_ne!(plain.bg, cell.bg);
     // The tab's body: its background, its text as it was (not underlined), the × back to its
     // color.
@@ -224,7 +224,7 @@ fn the_pointer_lights_up_a_tabs_close_button() {
     let text = &t.backend().buffer()[(body + 1, y)];
     assert!(!text.modifier.contains(Modifier::UNDERLINED));
     assert_eq!((text.symbol(), text.fg, text.modifier), (plain_text.symbol(), plain_text.fg, plain_text.modifier));
-    assert_eq!(text.bg, datarig_tui::theme::DARK.surface);
+    assert_eq!(Some(text.bg), datarig_tui::theme::DARK.hover.bg);
     assert_eq!(t.backend().buffer()[(x, y)].fg, plain.fg);
     // Off the bar: cleared, as before.
     assert!(hover(&mut h, body, y + 5));
@@ -236,8 +236,8 @@ fn the_pointer_lights_up_a_tabs_close_button() {
 }
 
 /// On every built-in theme the hovered `×` has another text color than the plain one, on the
-/// hovered tab's background, no bold, reverse or underline (the terminal theme uses an ANSI
-/// color, and italics for the hovered tab).
+/// hovered tab's background (the theme's hover), no modifier added (the terminal theme uses an
+/// ANSI color).
 #[test]
 fn a_lit_close_button_reads_on_every_built_in_theme() {
     for (name, theme) in datarig_tui::theme::BUILTINS {
@@ -251,8 +251,8 @@ fn a_lit_close_button_reads_on_every_built_in_theme() {
         assert_ne!(lit.fg, plain.fg, "{name}: the × changes its text color");
         assert_eq!(lit.fg, theme.error, "{name}: to the error color");
         assert_ne!(lit.fg, lit.bg, "{name}: its text reads");
-        assert_eq!(lit.bg, theme.surface, "{name}: the hovered tab's background");
-        assert!((lit.modifier - plain.modifier).difference(Modifier::ITALIC).is_empty(), "{name}: {:?}", lit.modifier);
+        assert_eq!(Some(lit.bg), theme.hover.bg, "{name}: the hovered tab's background");
+        assert_eq!(lit.modifier, plain.modifier, "{name}: no modifier added");
     }
 }
 
@@ -292,10 +292,11 @@ fn a_lit_close_button_goes_out_when_the_bar_changes() {
     assert_ne!(t.backend().buffer()[(x, y)].bg, sel, "not lit under the command line");
 }
 
-/// Another tab than the active one under the pointer takes the surface's background, whole
+/// Another tab than the active one under the pointer takes the theme's hover background, whole
 /// (its number, title, marks and `×`): apart from the bar's background and the active tab's on
-/// every built-in theme (italics where the terminal theme has one background for all), its text
-/// readable on it; the active tab under the pointer stays as it is; leaving clears it.
+/// every built-in theme, never underlined or in italics, its text keeping its color (the
+/// terminal's text color on the terminal theme's bright black); the active tab under the
+/// pointer stays as it is; leaving clears it.
 #[test]
 fn a_hovered_tab_takes_a_background_of_its_own() {
     for (name, th) in datarig_tui::theme::BUILTINS.iter().copied() {
@@ -325,15 +326,11 @@ fn a_hovered_tab_takes_a_background_of_its_own() {
             if cell.bg == datarig_tui::theme::PROFILE_COLORS[0] {
                 continue;
             }
-            if th.surface == th.bg {
-                assert!(cell.modifier.contains(Modifier::ITALIC), "{name}: column {x}");
-            } else {
-                assert_eq!(cell.bg, th.surface, "{name}: column {x}");
-                assert_ne!(cell.bg, th.bg, "{name}");
-                assert_ne!(cell.bg, th.surface_alt, "{name}: not the active tab's");
-                assert_eq!(cell.fg, plain[i].fg, "{name}: column {x}: its text keeps its color");
-            }
-            assert!(!cell.modifier.contains(Modifier::UNDERLINED), "{name}");
+            assert_eq!(Some(cell.bg), th.hover.bg, "{name}: column {x}");
+            assert_ne!(cell.bg, th.bg, "{name}");
+            assert_ne!(cell.bg, th.surface_alt, "{name}: not the active tab's");
+            assert_eq!(cell.fg, th.hover.fg.unwrap_or(plain[i].fg), "{name}: column {x}: its text color");
+            assert_eq!(cell.modifier, plain[i].modifier, "{name}: column {x}: no underline, no italics");
         }
         // The active tab under the pointer: as it was.
         assert!(hover(&mut h, c + 1, y), "{name}");
@@ -378,9 +375,14 @@ fn cell_and_entry(h: &mut Harness, row: usize, col: usize) -> (ratatui::buffer::
     (buf[(x, y)].clone(), buf[(l.x + 1, l.y + (col - h.app.detail.first) as u16)].clone())
 }
 
-/// The hover's look of a cell or an entry: the list hover's background, underlined.
+/// The hover's look of a cell or an entry: the theme's hover background, never underlined.
 fn lit(c: &ratatui::buffer::Cell) -> bool {
-    c.bg == datarig_tui::theme::DARK.surface_alt && c.modifier.contains(Modifier::UNDERLINED)
+    Some(c.bg) == datarig_tui::theme::DARK.hover.bg && !c.modifier.contains(Modifier::UNDERLINED)
+}
+
+/// A cell or an entry not lit: not on the hover's background.
+fn not_lit(c: &ratatui::buffer::Cell) -> bool {
+    Some(c.bg) != datarig_tui::theme::DARK.hover.bg
 }
 
 /// A grid cell under the pointer is lit (the hover's look, never the selection), and so is the
@@ -393,7 +395,7 @@ fn the_grid_and_the_inspector_light_each_others_hovered_cell() {
     let (row, col) = (h.app.tab().grid.row, h.app.tab().grid.col);
     assert_eq!((row, col), (0, 0));
     let (cell, entry) = cell_and_entry(&mut h, 0, 2);
-    assert!(!lit(&cell) && !lit(&entry), "nothing lit yet");
+    assert!(not_lit(&cell) && not_lit(&entry), "nothing lit yet");
     // A cell of the selected row.
     let (x, y) = cell_xy(&h, 0, 2);
     assert!(hover(&mut h, x, y), "a frame");
@@ -408,7 +410,7 @@ fn the_grid_and_the_inspector_light_each_others_hovered_cell() {
     let (cell, _) = cell_and_entry(&mut h, 2, 3);
     assert!(lit(&cell));
     let (_, entry) = cell_and_entry(&mut h, 0, 3);
-    assert!(!lit(&entry), "the inspector shows the selected row");
+    assert!(not_lit(&entry), "the inspector shows the selected row");
     // The selected cell: nothing lit.
     let (x, y) = cell_xy(&h, 0, 0);
     hover(&mut h, x, y);
@@ -420,7 +422,7 @@ fn the_grid_and_the_inspector_light_each_others_hovered_cell() {
     let (cell, entry) = cell_and_entry(&mut h, 0, 1);
     assert!(lit(&cell) && lit(&entry));
     let (cell, _) = cell_and_entry(&mut h, 1, 1);
-    assert!(!lit(&cell), "only the selected row's cell");
+    assert!(not_lit(&cell), "only the selected row's cell");
     // The selection and the focus stayed.
     assert_eq!((h.app.tab().grid.row, h.app.tab().grid.col), (0, 0));
     assert_eq!(h.app.focus, datarig_tui::app::Focus::Results);
@@ -429,7 +431,50 @@ fn the_grid_and_the_inspector_light_each_others_hovered_cell() {
     assert!(hover(&mut h, r.x + 1, r.y));
     assert_eq!(h.app.pointer_on, None);
     let (cell, entry) = cell_and_entry(&mut h, 0, 1);
-    assert!(!lit(&cell) && !lit(&entry));
+    assert!(not_lit(&cell) && not_lit(&entry));
+}
+
+/// A grid cell and an inspector entry under the pointer are on the theme's hover background and
+/// never underlined: on the dark theme, and on the terminal theme (its bright black, with the
+/// terminal's text color); a cell inside a selected range too, apart from the range's
+/// background.
+#[test]
+fn a_hovered_cell_and_entry_are_on_the_hover_background_never_underlined() {
+    use datarig_tui::theme::{DARK, TERMINAL};
+    for th in [&DARK, &TERMINAL] {
+        let mut h = grid_and_inspector();
+        h.app.theme = std::sync::Arc::new(th.clone());
+        h.draw(GW, GH);
+        let (x, y) = cell_xy(&h, 0, 2);
+        assert!(hover(&mut h, x, y));
+        let (cell, entry) = cell_and_entry(&mut h, 0, 2);
+        for c in [&cell, &entry] {
+            assert_eq!(Some(c.bg), th.hover.bg, "{c:?}");
+            assert!(!c.modifier.contains(Modifier::UNDERLINED), "{c:?}");
+        }
+        if *th == TERMINAL {
+            assert_eq!((cell.bg, cell.fg), (ratatui::style::Color::DarkGray, ratatui::style::Color::Reset));
+        }
+        // The entry under the pointer, and the grid's cell it lights.
+        let l = h.app.layout.detail_list;
+        assert!(hover(&mut h, l.x + 3, l.y + 1));
+        let (cell, entry) = cell_and_entry(&mut h, 0, 1);
+        for c in [&cell, &entry] {
+            assert_eq!(Some(c.bg), th.hover.bg, "{c:?}");
+            assert!(!c.modifier.contains(Modifier::UNDERLINED), "{c:?}");
+        }
+    }
+    // A cell inside a selected range (rows 0 to 2, columns 0 and 1; the cursor at row 2).
+    let mut h = grid_and_inspector();
+    h.keys("vjjl");
+    assert!(h.app.tab().grid.selection(8, 5).is_some_and(|(r, c)| r.contains(&1) && c.contains(&0)));
+    let (plain, _) = cell_and_entry(&mut h, 1, 0);
+    assert_eq!(Some(plain.bg), datarig_tui::theme::DARK.range.bg, "in the range");
+    let (x, y) = cell_xy(&h, 1, 0);
+    assert!(hover(&mut h, x, y));
+    let (cell, _) = cell_and_entry(&mut h, 1, 0);
+    assert_eq!(Some(cell.bg), datarig_tui::theme::DARK.hover.bg, "{cell:?}");
+    assert!(!cell.modifier.contains(Modifier::UNDERLINED), "{cell:?}");
 }
 
 /// A hovered cell goes when the grid moves under the pointer (a key scrolls it, another result).
@@ -475,9 +520,9 @@ fn a_hovered_cell_goes_when_the_wheel_scrolls() {
     assert_eq!(h.app.pointer_on, None);
     let l = h.app.layout.detail_list;
     let buf = t.backend().buffer();
-    assert!(!lit(&buf[(x, y)]), "the cell now under the pointer: {:?}", buf[(x, y)]);
+    assert!(not_lit(&buf[(x, y)]), "the cell now under the pointer: {:?}", buf[(x, y)]);
     let entry = &buf[(l.x + 1, l.y + (2 - h.app.detail.first) as u16)];
-    assert!(!lit(entry), "{entry:?}");
+    assert!(not_lit(entry), "{entry:?}");
     assert_eq!((h.app.tab().grid.row, h.app.tab().grid.col), (0, 0));
 }
 
@@ -524,8 +569,8 @@ fn a_hovered_cell_goes_with_a_view_switch() {
     h.keys("H");
     assert_eq!(h.app.tab().exec.view, datarig_tui::app::tabs::ResultView::Rows);
     let (cell, entry) = cell_and_entry(&mut h, 0, 2);
-    assert!(!lit(&cell), "{cell:?}");
-    assert!(!lit(&entry), "{entry:?}");
+    assert!(not_lit(&cell), "{cell:?}");
+    assert!(not_lit(&entry), "{entry:?}");
     assert_eq!(h.app.pointer_on, None);
     assert_eq!((h.app.tab().grid.row, h.app.tab().grid.col), (0, 0));
     assert_eq!(h.app.focus, datarig_tui::app::Focus::Results);
@@ -568,12 +613,12 @@ fn a_hovered_cell_goes_when_tabs_switch_back_and_forth() {
     assert_eq!(h.app.tabs.active_index(), 1);
     h.app.focus = datarig_tui::app::Focus::Results;
     let (cell, entry) = cell_and_entry(&mut h, 0, 2);
-    assert!(!lit(&cell) && !lit(&entry), "the other tab: {cell:?} {entry:?}");
+    assert!(not_lit(&cell) && not_lit(&entry), "the other tab: {cell:?} {entry:?}");
     h.keys("gt");
     assert_eq!(h.app.tabs.active_index(), 0);
     let (cell, entry) = cell_and_entry(&mut h, 0, 2);
-    assert!(!lit(&cell), "back: {cell:?}");
-    assert!(!lit(&entry), "back: {entry:?}");
+    assert!(not_lit(&cell), "back: {cell:?}");
+    assert!(not_lit(&entry), "back: {entry:?}");
     assert_eq!(h.app.pointer_on, None);
     assert_eq!((h.app.tab().grid.row, h.app.tab().grid.col), (0, 0));
     assert_eq!(h.app.focus, datarig_tui::app::Focus::Results);
