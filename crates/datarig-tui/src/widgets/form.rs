@@ -1,12 +1,13 @@
-//! The connection profile form: a large centered dialog with section tabs (Basic /
-//! Advanced), the fields with a few fixed values (the driver, the SSL mode, the password
-//! storage, the bastion login), each picked from a list (`Enter`, or a click on it), the
-//! pickers of color, icon and folder, and the inline test-connection result line. The SSH section's first row picks the tunnel from a
-//! list (`Enter`, or a click on it): none, a tunnel preset (shown, not edited, here), or one of this profile only
-//! (its fields, and a button that makes a preset of them). The tunnel form is the same dialog with the SSH
-//! section alone, the preset's name first. The Advanced section's environment is picked from a
-//! list too (its color's dot, its name and badge shown). The environment form is the same dialog
-//! with an environment's fields: its name, color, badge and rules.
+//! The connection profile form: a large centered dialog with section tabs (Basic / SSH /
+//! Advanced), the fields with a few fixed values (the driver, the SSL mode, the password's
+//! storage, the bastion login and its secret's storage), each picked from a list (`Enter`, or a
+//! click on it), the pickers of color, icon and folder, and the inline test-connection result
+//! line. The SSH section's first row picks the tunnel from a list too: none, a tunnel preset
+//! (shown, not edited, here), or one of this profile only (its fields, and a button that makes
+//! a preset of them). The tunnel form is the same dialog with the SSH section alone, the
+//! preset's name first. The Advanced section's environment is picked from a list too (its
+//! color's dot, its name and badge shown). The environment form is the same dialog with an
+//! environment's fields: its name, color, badge and rules.
 
 use crate::app::action::Action;
 use crate::app::environments::{RuleTone, rules_tones};

@@ -1789,6 +1789,6 @@
 "form.sslmode.verify_ca" = "암호화, CA가 서명한 인증서"
 "form.sslmode.verify_full" = "CA 서명에 호스트 이름까지 확인"
 "form.ssh.auth_key_hint" = "OpenSSH 개인 키"
-"form.ssh.auth_password_hint" = "Bastion 계정의 비밀번호"
+"form.ssh.auth_password_hint" = "bastion 계정의 비밀번호"
 "form.ssh.auth_agent_hint" = "ssh-agent가 가진 키"
 "form.ssh.auth_keyboard_interactive_hint" = "서버가 묻고 접속할 때 답함"

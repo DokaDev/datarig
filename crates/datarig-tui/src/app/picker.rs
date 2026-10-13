@@ -1,12 +1,11 @@
 //! The lists to pick from with a typed filter ([`ListPicker`]) as dialogs, each for a field of
 //! the profile form: the SSH tunnel, the environment and the fields with a few fixed values
-//! (the driver, the SSL mode, a password's storage, the bastion login), each value with what it
-//! means. `Enter` on the field (or a click on its
-//! value) lists what it can be and, for the tunnel and the environment, when the config file
-//! can be written, a last entry that
-//! makes a new one ("New SSH tunnel…", "New environment…"), which opens its form over the
-//! profile form; once that is saved, the profile form comes back with the new one picked
-//! (cancelled: as it was).
+//! (the driver, the SSL mode, the password's storage, the bastion login and its secret's
+//! storage), each value with what it means. `Enter` on the field (or a click on its value)
+//! lists what it can be. The tunnel's and the environment's lists end, when the config file can
+//! be written, with an entry that makes a new one ("New SSH tunnel…", "New environment…"),
+//! which opens its form over the profile form; once that is saved, the profile form comes back
+//! with the new one picked (cancelled: as it was).
 //!
 //! The SSH tunnel's list has no tunnel, the tunnel presets and the profile's own tunnel. The
 //! environment's has the default rules, each environment (its color, badge and rules), the

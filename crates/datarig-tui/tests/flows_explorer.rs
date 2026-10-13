@@ -566,6 +566,28 @@ fn pasting_a_connection_url_opens_a_filled_form() {
     assert_eq!(h.form().name.text(), "app");
 }
 
+/// A value picked from a field's list goes to the form it was opened from only: once another
+/// form took its place under the list, the pick changes nothing.
+#[test]
+fn a_value_picked_goes_to_the_form_the_list_was_opened_from_only() {
+    use datarig_tui::app::overlay::Overlay;
+    use datarig_tui::app::profiles::{Field, ProfileForm};
+    let mut h = launched(&sample_config(None));
+    h.keys("e"); // local-pg
+    h.ctrl('p');
+    assert_eq!(h.form().focus, Field::SslMode);
+    h.key(KeyCode::Enter);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Picker));
+    let theirs = h.app.overlays.take_form().expect("the form under the list");
+    h.app.overlays.push(Overlay::ProfileForm(Box::new(ProfileForm::new_profile())));
+    let before = h.form().sslmode;
+    h.type_text("verify-full");
+    h.key(KeyCode::Enter);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ProfileForm), "the list closed");
+    assert_eq!(h.form().sslmode, before, "not the form it was opened from: unchanged");
+    assert_ne!(theirs.sslmode, 4);
+}
+
 #[test]
 fn the_form_has_basic_and_advanced_sections() {
     use datarig_tui::app::profiles::{Field, Section};

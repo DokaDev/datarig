@@ -584,3 +584,48 @@ fn deleting_a_profile_removes_its_tunnels_secret_too() {
     assert_eq!(h.app.secrets.stores().file.get(&tunnel).unwrap(), None);
     assert_eq!(h.app.secrets.stores().keychain.get(&tunnel).unwrap().as_deref(), Some("not its store"));
 }
+
+/// While the keychain does not work, the storage lists (the password's and the bastion
+/// secret's) list it struck through with why, and picking it changes nothing: the list stays.
+#[test]
+fn the_storage_lists_refuse_the_keychain_while_it_does_not_work() {
+    use datarig_tui::app::profiles::SshChoice;
+    let mut h = Harness::connected(Lang::En);
+    h.app.secrets.unavailable = Some(datarig_core::fault::Fault::new(
+        datarig_core::fault::FaultKind::Keychain(datarig_core::fault::KeychainFault::NoStore),
+        "no secret service",
+    ));
+    h.command("conn.new");
+    to_selector(&mut h);
+    let source = h.form().source;
+    assert_ne!(source, SourceKind::Keychain);
+    h.key(KeyCode::Enter);
+    let screen = h.screen(100, 30);
+    let row = screen.lines().find(|l| l.contains("Keychain ")).expect("listed");
+    assert!(row.contains("the keychain does not work here"), "{screen}");
+    h.type_text("keychain");
+    h.key(KeyCode::Enter);
+    assert_eq!((h.overlay_kind(), h.form().source), (Some(OverlayKind::Picker), source), "the list stays");
+    h.key(KeyCode::Esc);
+    // The bastion secret's storage, in a tunnel of the profile's own.
+    h.ctrl('n');
+    h.key(KeyCode::Enter);
+    h.key(KeyCode::Down);
+    h.key(KeyCode::Enter);
+    assert_eq!(h.form().ssh_choice(), SshChoice::Inline);
+    while h.form().focus != Field::SshSource {
+        h.key(KeyCode::Tab);
+    }
+    let ssh_source = h.form().ssh_source;
+    h.key(KeyCode::Enter);
+    assert!(h.screen(100, 30).contains("the keychain does not work here"));
+    h.type_text("keychain");
+    h.key(KeyCode::Enter);
+    assert_eq!((h.overlay_kind(), h.form().ssh_source), (Some(OverlayKind::Picker), ssh_source));
+    // Another one is picked.
+    h.key(KeyCode::Esc);
+    h.key(KeyCode::Enter);
+    h.type_text("env");
+    h.key(KeyCode::Enter);
+    assert_eq!((h.overlay_kind(), h.form().ssh_source), (Some(OverlayKind::ProfileForm), SourceKind::Env));
+}

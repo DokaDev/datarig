@@ -294,8 +294,8 @@ impl Field {
         matches!(self, Field::Color | Field::Icon | Field::Folder)
     }
 
-    /// A field with a few fixed values (the driver, the SSL mode, a password's storage, the
-    /// bastion login): `Enter` lists them, `←`/`→` step through them.
+    /// A field with a few fixed values (the driver, the SSL mode, the password's storage, the
+    /// bastion login and its secret's storage): `Enter` lists them, `←`/`→` step through them.
     pub fn is_choice(self) -> bool {
         matches!(self, Field::Driver | Field::SslMode | Field::Source | Field::SshAuth | Field::SshSource)
     }
