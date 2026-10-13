@@ -353,3 +353,15 @@ fn complete_in_postgres_is_complete_in() {
         }
     }
 }
+
+/// A string whose last quote is one half of a doubled quote, or escaped (`E'…\'`), is not
+/// closed: the cursor at its end is inside it, where nothing is offered, not even on demand.
+#[test]
+fn an_unclosed_string_ending_in_a_quote_is_inside() {
+    for src in ["SELECT * FROM shop.orders WHERE 'it''", "SELECT * FROM shop.orders WHERE E'it\\'"] {
+        assert!(complete(src, src.len(), &cat(), true).is_none(), "{src}");
+    }
+    // A closed one is left: after it the statement goes on.
+    let src = "SELECT * FROM shop.orders WHERE 'it''s'";
+    assert!(complete(src, src.len(), &cat(), true).is_some(), "{src}");
+}

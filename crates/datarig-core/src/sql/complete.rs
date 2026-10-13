@@ -632,15 +632,14 @@ fn select_list_names(d: Dialect, body: &[&Token], src: &str) -> Vec<String> {
 
 fn closed(d: Dialect, t: &Token, src: &str) -> bool {
     let s = t.text(src);
-    // MySQL: a backslash may escape the last quote, and a string's quote may be `"`: closed
-    // when a blank after it is not taken in.
-    if let Dialect::MySql(_) = d
-        && matches!(t.kind, Tok::Str | Tok::QuotedIdent | Tok::BlockComment)
+    // A string's last quote may be one half of a doubled quote or escaped by a backslash
+    // (MySQL's, PostgreSQL's `E'…'`), and in MySQL a string's quote may be `"`: closed when a
+    // blank after it is not taken in.
+    if t.kind == Tok::Str || (matches!(d, Dialect::MySql(_)) && matches!(t.kind, Tok::QuotedIdent | Tok::BlockComment))
     {
         return lex_from(&format!("{s} "), d, LexState::default()).first().is_some_and(|u| u.end == s.len());
     }
     match t.kind {
-        Tok::Str => s.len() >= 2 && s.ends_with('\''),
         Tok::QuotedIdent => s.len() >= 2 && d.opening_quote(s).is_some_and(|q| s.ends_with(q)),
         Tok::BlockComment => s.len() >= 4 && s.ends_with("*/"),
         Tok::Dollar => {
