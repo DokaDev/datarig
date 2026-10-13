@@ -345,38 +345,118 @@ impl App {
             KeyCode::Down => p.selected = (p.selected + 1) % n,
             KeyCode::Char('n') if ctrl => p.selected = (p.selected + 1) % n,
             KeyCode::Tab | KeyCode::Enter => {
-                let label = p.items[p.selected].label.clone();
+                let text = p.items[p.selected].text().to_string();
                 let start = p.replace_start;
                 let end = t.editor.offset() + p.trail;
                 if start <= end {
-                    t.editor.replace_range(start, end, &label);
+                    t.editor.replace_range(start, end, &text);
                 }
                 t.popup = None;
+                t.values_wait = None;
                 self.edited();
             }
-            KeyCode::Esc => t.popup = None,
+            KeyCode::Esc => {
+                t.popup = None;
+                t.values_wait = None;
+            }
             _ => {}
         }
     }
 
     pub(super) fn update_completion(&mut self, force: bool) {
-        // The tab's database's catalog and its search path.
+        self.complete_here(force, None);
+    }
+
+    /// Make the completion popup at the cursor. In a string literal compared with a column whose
+    /// table's checks are not known, its structure is asked for ([`App::ask_checks`]).
+    /// `literal`: the structure came late, and the popup changes only if the cursor is still in
+    /// the literal whose value starts there.
+    pub(super) fn complete_here(&mut self, force: bool, literal: Option<usize>) {
+        // The tab's database's catalog, the checks' values known there, and its search path.
         let (path, other) = (self.tab_path(self.tab()), self.other_database(self.tab()).map(str::to_string));
-        if let (Some(p), Some(db)) = (self.tab().profile, other.as_deref()) {
+        let profile = self.tab().profile;
+        if let (Some(p), Some(db)) = (profile, other.as_deref()) {
             self.ensure_aux(p, db);
         }
-        let catalog = self.conns.catalog_in(self.tab().profile, other.as_deref());
+        let catalog = self.conns.catalog_in(profile, other.as_deref());
+        let checks = profile.and_then(|p| self.conns.checks_in(p, other.as_deref()));
+        let lookup = |schema: &str, table: &str| match checks?.get(&(schema.to_string(), table.to_string()))? {
+            TableChecks::Known(v) => Some(v.as_slice()),
+            TableChecks::Asked | TableChecks::Failed(_) => None,
+        };
         let dialect = self.tab_dialect(self.tab().id);
         let t = self.tabs.active_mut();
         // The text around the cursor holds its whole `;`-delimited segment, which is all the
         // completer reads.
         let (base, text, state, off) = t.editor.completion_context();
-        t.popup = complete_from(&text, off, catalog, force, &path, dialect, state).map(|c| Popup {
+        let out = complete_with(&text, off, catalog, force, &path, dialect, state, &lookup);
+        let popup = out.completion.map(|c| Popup {
             items: c.items,
             selected: 0,
             replace_start: base + c.replace_start,
             trail: c.trail,
         });
+        match literal {
+            None => t.popup = popup,
+            Some(at) => {
+                if let Some(p) = popup.filter(|p| p.replace_start == at && p.items[0].kind == Kind::Value) {
+                    t.popup = Some(p);
+                }
+            }
+        }
+        if let (Some(p), Some(w)) = (profile, out.wants_checks) {
+            self.ask_checks(p, other, w.schema, w.table, base + w.literal);
+        }
+    }
+
+    /// Completion wants the checks of `schema.table` in `profile`'s `database` (`None`: its own)
+    /// for the literal whose value starts at `literal` in the active tab: the table's structure
+    /// is asked for, once until it comes (when the driver reads structures; after a failed read,
+    /// not before [`CHECKS_RETRY`]), and the tab waits for it ([`ValuesWait`]). It is read again
+    /// after the catalog was: a structure the explorer holds may be older.
+    fn ask_checks(
+        &mut self,
+        profile: ProfileId,
+        database: Option<String>,
+        schema: String,
+        table: String,
+        literal: usize,
+    ) {
+        if !self.structure_on(profile) {
+            return;
+        }
+        let key = (schema.clone(), table.clone());
+        let now = self.now();
+        let Some(cache) = self.conns.checks_in_mut(profile, database.as_deref()) else { return };
+        let asked = match cache.get(&key) {
+            Some(TableChecks::Failed(at)) if now.saturating_duration_since(*at) < CHECKS_RETRY => return,
+            Some(TableChecks::Asked) => true,
+            _ => false,
+        };
+        cache.insert(key, TableChecks::Asked);
+        let generation = self.conns.get(profile).map_or(0, |c| c.generation);
+        let t = self.tabs.active_mut();
+        t.values_wait = Some(ValuesWait {
+            binding: t.binding,
+            profile,
+            generation,
+            database: database.clone(),
+            schema: schema.clone(),
+            table: table.clone(),
+            literal,
+        });
+        if asked {
+            return;
+        }
+        let cmd = DbCommand::LoadStructure { schema, table };
+        match database.as_deref() {
+            None => self.send_meta(profile, cmd),
+            Some(db) => {
+                if let Some(s) = self.conns.aux(profile, db).and_then(|a| a.session.as_ref()) {
+                    s.send(cmd);
+                }
+            }
+        }
     }
 
     pub(super) fn ident_prefix_len(&self) -> usize {
@@ -384,11 +464,15 @@ impl App {
     }
 
     /// A character was typed in Insert mode: refine an open popup at once, otherwise
-    /// schedule it (after `.` or once the identifier has `COMPLETION_MIN_PREFIX` chars).
+    /// schedule it (after `.`, a string's opening quote, or once the identifier has
+    /// `COMPLETION_MIN_PREFIX` chars; an identifier character typed while it is scheduled
+    /// keeps it so: `shop.u`, `'p`).
     pub(super) fn on_typed(&mut self, c: char) {
+        let quote = self.tab_dialect(self.tab().id).string_quotes().contains(&c);
+        let pending = is_ident_char(c) && self.tab().completion_due.is_some();
         if self.tab().popup.is_some() {
             self.update_completion(false);
-        } else if c == '.' || self.ident_prefix_len() >= COMPLETION_MIN_PREFIX {
+        } else if c == '.' || quote || pending || self.ident_prefix_len() >= COMPLETION_MIN_PREFIX {
             self.tab_mut().completion_due = Some(Instant::now() + COMPLETION_DEBOUNCE);
         } else {
             self.tab_mut().completion_due = None;
@@ -449,16 +533,28 @@ impl App {
         if matches!(ev, EdEvent::Changed { .. }) {
             self.edited();
         }
+        let quotes = self.tab_dialect(self.tab().id).string_quotes();
         let t = self.tabs.active_mut();
+        // A popup of values is refined by any character typed in its literal.
+        let values = t.popup.as_ref().is_some_and(|p| p.items.first().is_some_and(|c| c.kind == Kind::Value));
         match ev {
-            EdEvent::Changed { typed: Some(c) } if is_ident_char(c) || c == '.' => self.on_typed(c),
+            EdEvent::Changed { typed: Some(c) } if is_ident_char(c) || c == '.' || values || quotes.contains(&c) => {
+                self.on_typed(c)
+            }
             EdEvent::Changed { typed: None } if t.popup.is_some() && t.editor.mode == Mode::Insert => {
                 t.completion_due = None;
                 self.update_completion(false)
             }
-            EdEvent::Changed { .. } | EdEvent::Moved => {
+            // A wait for a table's checks stays while typing: the answer shows only if the cursor
+            // is still in the same literal then.
+            EdEvent::Changed { .. } => {
                 t.popup = None;
                 t.completion_due = None;
+            }
+            EdEvent::Moved => {
+                t.popup = None;
+                t.completion_due = None;
+                t.values_wait = None;
             }
             EdEvent::None => {}
         }

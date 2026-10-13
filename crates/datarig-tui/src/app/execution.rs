@@ -4,9 +4,11 @@
 use super::persist;
 use super::runlog::StatementOutcome;
 use super::*;
+use datarig_core::driver::structure::TableStructure;
 use datarig_core::driver::{CancelFailure, DbError, ReadIn};
 use datarig_core::fault::{ErrorLog, FaultKind};
 use datarig_core::sql::lexer::changes_schema_in;
+use datarig_core::sql::values::check_values;
 use datarig_core::transport::{DialError, Refusal};
 
 impl App {
@@ -526,6 +528,8 @@ impl App {
                 if let Some(s) = a.session.take() {
                     s.close();
                 }
+                // What it was asked for never comes: asked again on the next use.
+                a.checks.retain(|_, c| *c != TableChecks::Asked);
                 if !matches!(a.schemas, Some(Ok(_))) {
                     a.schemas = Some(Err(text.clone()));
                 }
@@ -562,9 +566,22 @@ impl App {
                 self.revealed(profile, Some(&database), &schema);
             }
             DbEvent::Structure { schema, table, result } => {
-                a.tree.set_structure(&schema, &table, result.map_err(|_| text))
+                let (profile, database) = (a.profile, a.database.clone());
+                let came = self.checks_came(profile, Some(&database), &schema, &table, result.as_deref());
+                // A failure the explorer does not wait for (completion's) is not its.
+                if let Some(a) = self.conns.aux_by_id(id)
+                    && (result.is_ok() || a.tree.structure_awaited(&schema, &table))
+                {
+                    a.tree.set_structure(&schema, &table, result.map_err(|_| text));
+                }
+                if came {
+                    self.values_came(profile, Some(&database), &schema, &table);
+                }
             }
-            DbEvent::Catalog(Ok(cat)) => a.catalog = cat,
+            DbEvent::Catalog(Ok(cat)) => {
+                a.catalog = cat;
+                a.checks.clear();
+            }
             DbEvent::Keys(Ok(keys)) => a.keys = Keys::Loaded(keys),
             DbEvent::Keys(Err(_)) => a.keys = Keys::Failed(text),
             _ => {}
@@ -652,12 +669,21 @@ impl App {
                 self.revealed(id, None, &schema);
             }
             DbEvent::Structure { schema, table, result } => {
-                self.conns.entry(id).tree.set_structure(&schema, &table, result.map_err(|_| text));
+                let came = self.checks_came(id, None, &schema, &table, result.as_deref());
+                // A failure the explorer does not wait for (completion's) is not its.
+                let tree = &mut self.conns.entry(id).tree;
+                if result.is_ok() || tree.structure_awaited(&schema, &table) {
+                    tree.set_structure(&schema, &table, result.map_err(|_| text));
+                }
+                if came {
+                    self.values_came(id, None, &schema, &table);
+                }
             }
             DbEvent::Catalog(Ok(cat)) => {
                 let c = self.conns.entry(id);
                 c.catalog = cat;
                 c.catalog_error = None;
+                c.checks.clear();
             }
             DbEvent::Catalog(Err(_)) => {
                 // Completion and the explorer's columns keep what was read before, if anything;
@@ -691,6 +717,8 @@ impl App {
                 c.meta = None;
                 c.connected = false;
                 c.error = Some(m.clone());
+                // What it was asked for never comes: asked again on the next use.
+                c.checks.retain(|_, c| *c != TableChecks::Asked);
                 self.status = Some(m);
             }
             // The mode a new session of the profile starts in (MySQL): a tab's first run is
@@ -1450,6 +1478,61 @@ impl App {
         }
         if reload && let Some(p) = profile {
             self.reload_keys(p);
+            self.conns.forget_checks(p);
+        }
+    }
+
+    /// The structure of `schema.table` in `profile`'s `database` (`None`: its own) came, or why
+    /// it could not be read: what its checks allow goes to completion's cache. A server that
+    /// reads no structure (too old) has no values to give; another failure leaves the table
+    /// not known, asked again after [`CHECKS_RETRY`]. Whether values came.
+    fn checks_came(
+        &mut self,
+        profile: ProfileId,
+        database: Option<&str>,
+        schema: &str,
+        table: &str,
+        result: Result<&TableStructure, &DbError>,
+    ) -> bool {
+        let (dialect, now) = (self.profile_language(Some(profile)).dialect(), self.now());
+        let Some(cache) = self.conns.checks_in_mut(profile, database) else { return false };
+        let key = (schema.to_string(), table.to_string());
+        match result {
+            Ok(st) => {
+                cache.insert(key, TableChecks::Known(check_values(dialect, &st.checks)));
+                true
+            }
+            Err(DbError::ServerTooOld | DbError::NotSupported) => {
+                cache.insert(key, TableChecks::Known(Vec::new()));
+                false
+            }
+            Err(_) => {
+                cache.insert(key, TableChecks::Failed(now));
+                false
+            }
+        }
+    }
+
+    /// The checks' values of `schema.table` in `profile`'s `database` came: completion in the
+    /// active tab that waits for them is made again, if the tab is still bound as it was, its
+    /// editor in Insert mode and its cursor in the same literal. Whatever else waited for them
+    /// is dropped.
+    fn values_came(&mut self, profile: ProfileId, database: Option<&str>, schema: &str, table: &str) {
+        let generation = self.conns.get(profile).map(|c| c.generation);
+        let other = self.other_database(self.tab()).map(str::to_string);
+        let editing = self.focus == Focus::Editor && self.tab().editor.mode == Mode::Insert && !self.modal_open();
+        let t = self.tab();
+        let Some(w) = t.values_wait.clone() else { return };
+        if w.profile != profile || w.database.as_deref() != database || w.schema != schema || w.table != table {
+            return;
+        }
+        let current = t.binding == w.binding
+            && t.profile == Some(profile)
+            && generation == Some(w.generation)
+            && other == w.database;
+        self.tab_mut().values_wait = None;
+        if current && editing {
+            self.complete_here(false, Some(w.literal));
         }
     }
 }

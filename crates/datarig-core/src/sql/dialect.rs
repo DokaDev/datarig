@@ -106,23 +106,140 @@ impl Dialect {
     /// [`MySqlMode`]) a backslash doubled and a NUL written `\0`, as the server reads a
     /// backslash as an escape.
     pub fn quote_literal(self, s: &str) -> String {
+        let open = LiteralOpen { prefix: 0, quote: '\'', backslash: self.backslash_strings() };
+        format!("'{}'", self.literal_body(s, open))
+    }
+
+    /// A backslash escapes the next character in a plain `'…'` string (MySQL unless
+    /// `NO_BACKSLASH_ESCAPES`; never in PostgreSQL, see [`Dialect::quote_literal`]).
+    fn backslash_strings(self) -> bool {
         match self {
-            Self::Postgres => format!("'{}'", s.replace('\'', "''")),
-            Self::MySql(m) if m.no_backslash_escapes => format!("'{}'", s.replace('\'', "''")),
-            Self::MySql(_) => {
-                let mut out = String::with_capacity(s.len() + 2);
-                out.push('\'');
-                for c in s.chars() {
-                    match c {
-                        '\'' => out.push_str("''"),
-                        '\\' => out.push_str("\\\\"),
-                        '\0' => out.push_str("\\0"),
-                        c => out.push(c),
-                    }
+            Self::Postgres => false,
+            Self::MySql(m) => !m.no_backslash_escapes,
+        }
+    }
+
+    /// The characters a string literal may be quoted with (PostgreSQL: `'`; MySQL: `'`, and
+    /// `"` unless `ANSI_QUOTES` makes it a name's quote).
+    pub fn string_quotes(self) -> &'static [char] {
+        match self {
+            Self::Postgres => &['\''],
+            Self::MySql(m) if m.ansi_quotes => &['\''],
+            Self::MySql(_) => &['\'', '"'],
+        }
+    }
+
+    /// How string literal `token` (a lexer's string token) opens, when it holds a plain value:
+    /// its prefix, its quote and whether a backslash escapes in it. `before` is the text right
+    /// before the token. `None` for the strings that hold no such value: bit and hex strings
+    /// (`B'…'`, `X'…'`), PostgreSQL's Unicode escapes (`U&'…'`), dollar quotes, and anything
+    /// that is not a string. PostgreSQL: `'…'` and `N'…'` (no backslash escapes), `E'…'`
+    /// (backslash escapes). MySQL: `'…'`, `"…"` (without `ANSI_QUOTES`) and `N'…'`, a backslash
+    /// escaping unless `NO_BACKSLASH_ESCAPES`.
+    pub fn literal_open(self, before: &str, token: &str) -> Option<LiteralOpen> {
+        let mut chars = token.chars();
+        let first = chars.next()?;
+        let (prefix, quote) = if self.string_quotes().contains(&first) {
+            (0, first)
+        } else {
+            (first.len_utf8(), chars.next().filter(|&q| q == '\'')?)
+        };
+        let backslash = match (self, prefix, first.to_ascii_uppercase()) {
+            (_, 0, _) | (_, _, 'N') => self.backslash_strings(),
+            (Self::Postgres, _, 'E') => true,
+            _ => return None,
+        };
+        // PostgreSQL's `U&'…'` is `U`, `&` and a string to the lexer.
+        if self == Self::Postgres
+            && prefix == 0
+            && let Some(rest) = before.strip_suffix('&')
+            && rest.ends_with(['U', 'u'])
+            && !rest[..rest.len() - 1].chars().next_back().is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '$')
+        {
+            return None;
+        }
+        Some(LiteralOpen { prefix, quote, backslash })
+    }
+
+    /// `s` written inside a string literal that opens as `open` (without its quotes): its
+    /// quote doubled, and with backslash escapes a backslash doubled and a NUL written `\0`.
+    /// [`Dialect::quote_literal`] is a plain literal's.
+    pub fn literal_body(self, s: &str, open: LiteralOpen) -> String {
+        let mut out = String::with_capacity(s.len());
+        for c in s.chars() {
+            match c {
+                c if c == open.quote => {
+                    out.push(c);
+                    out.push(c);
                 }
-                out.push('\'');
-                out
+                '\\' if open.backslash => out.push_str("\\\\"),
+                '\0' if open.backslash => out.push_str("\\0"),
+                c => out.push(c),
             }
+        }
+        out
+    }
+
+    /// The value the text `body` between the quotes of a literal that opens as `open` stands
+    /// for: a doubled quote is one, and with backslash escapes each escape is its character
+    /// (PostgreSQL's `E'…'`: `\n`, `\t`, octal, `\x`, `\u` and the others; MySQL's: `\0`, `\n`,
+    /// `\Z`, … and `\%`, `\_` kept as written). Lenient: an escape cut short (a literal being
+    /// typed) is kept as written.
+    pub fn unescape_literal_body(self, body: &str, open: LiteralOpen) -> String {
+        let mut out = String::with_capacity(body.len());
+        let mut chars = body.chars().peekable();
+        while let Some(c) = chars.next() {
+            if c == open.quote {
+                out.push(c);
+                if chars.peek() == Some(&c) {
+                    chars.next();
+                }
+            } else if c == '\\' && open.backslash {
+                let Some(e) = chars.next() else {
+                    out.push(c);
+                    break;
+                };
+                match self {
+                    Self::Postgres => unescape_pg(e, &mut chars, &mut out),
+                    Self::MySql(_) => match e {
+                        '0' => out.push('\0'),
+                        'b' => out.push('\x08'),
+                        'n' => out.push('\n'),
+                        'r' => out.push('\r'),
+                        't' => out.push('\t'),
+                        'Z' => out.push('\x1a'),
+                        '%' | '_' => {
+                            out.push('\\');
+                            out.push(e);
+                        }
+                        e => out.push(e),
+                    },
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    }
+
+    /// The value string literal `token` holds ([`Dialect::literal_open`], with nothing before
+    /// it), `None` unless it is such a literal and closed.
+    pub fn unquote_literal(self, token: &str) -> Option<String> {
+        let open = self.literal_open("", token)?;
+        let body = token.get(open.prefix + open.quote.len_utf8()..)?.strip_suffix(open.quote)?;
+        // The last quote must close it: not one half of a doubled quote, nor escaped.
+        let lexed = super::lexer::lex_in(&format!("{token} "), self);
+        lexed.first().filter(|t| t.end == token.len())?;
+        Some(self.unescape_literal_body(body, open))
+    }
+
+    /// The dialect of the SQL a server shows of its own (a check's condition, a column's
+    /// type): MySQL writes it as its default mode reads it (a quote in a string escaped `\'`,
+    /// names in backticks), whatever the session's mode.
+    pub fn printed(self) -> Self {
+        match self {
+            Self::Postgres => Self::Postgres,
+            Self::MySql(_) => Self::MySql(MySqlMode::default()),
         }
     }
 
@@ -236,6 +353,62 @@ impl Dialect {
             Self::Postgres => Some(plan::explain_sql(statement, analyze)),
             Self::MySql(_) => None,
         }
+    }
+}
+
+/// How a string literal opens ([`Dialect::literal_open`]): the bytes of its prefix before the
+/// quote (`E'…'`: 1), its quote character, and whether a backslash escapes in it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LiteralOpen {
+    pub prefix: usize,
+    pub quote: char,
+    pub backslash: bool,
+}
+
+/// PostgreSQL's escape `\e` in an `E'…'` string (the backslash read), the characters after it
+/// taken from `chars` as it needs them.
+fn unescape_pg(e: char, chars: &mut std::iter::Peekable<std::str::Chars>, out: &mut String) {
+    let mut digits = |radix: u32, max: usize| {
+        let mut n = 0u32;
+        let mut read = String::new();
+        while read.len() < max
+            && let Some(d) = chars.peek().and_then(|c| c.to_digit(radix))
+        {
+            n = n * radix + d;
+            read.push(chars.next().unwrap_or_default());
+        }
+        (n, read)
+    };
+    match e {
+        'b' => out.push('\x08'),
+        'f' => out.push('\x0c'),
+        'n' => out.push('\n'),
+        'r' => out.push('\r'),
+        't' => out.push('\t'),
+        '0'..='7' => {
+            let (n, read) = digits(8, 2);
+            let n = (e.to_digit(8).unwrap_or(0) << (3 * read.len() as u32)) + n;
+            out.extend(char::from_u32(n));
+        }
+        'x' | 'u' | 'U' => {
+            let max = match e {
+                'x' => 2,
+                'u' => 4,
+                _ => 8,
+            };
+            match digits(16, max) {
+                (_, read) if read.is_empty() => out.push(e),
+                (n, read) => match char::from_u32(n) {
+                    Some(c) => out.push(c),
+                    None => {
+                        out.push('\\');
+                        out.push(e);
+                        out.push_str(&read);
+                    }
+                },
+            }
+        }
+        e => out.push(e),
     }
 }
 

@@ -92,8 +92,17 @@ pub fn paging(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
 
 pub fn editor(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
     let max = num(b, "editor", "p95_ms_max")?;
-    let keys =
-        ["typing_ms", "movement_ms", "scrolling_ms", "normal_edit_ms", "vim_ms", "run_hints_ms", "theme_switch_ms"];
+    let keys = [
+        "typing_ms",
+        "movement_ms",
+        "scrolling_ms",
+        "normal_edit_ms",
+        "vim_ms",
+        "run_hints_ms",
+        "theme_switch_ms",
+        "values_ms",
+        "values_top_ms",
+    ];
     for what in keys.into_iter().chain(["search_miss_ms", "search_next_ms"]) {
         match f(result, &[what, "p95"]) {
             Some(m) => c.check(&format!("editor {what} p95"), m, max, " ms"),
@@ -129,7 +138,7 @@ pub fn editor(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
 /// The editor with a MySQL script: its keystrokes and memory are held to the editor's budgets.
 pub fn editor_mysql(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
     let max = num(b, "editor", "p95_ms_max")?;
-    for what in ["typing_ms", "movement_ms", "scrolling_ms", "normal_edit_ms", "vim_ms", "run_hints_ms"] {
+    for what in ["typing_ms", "movement_ms", "scrolling_ms", "normal_edit_ms", "vim_ms", "run_hints_ms", "values_ms"] {
         match f(result, &[what, "p95"]) {
             Some(m) => c.check(&format!("editor_mysql {what} p95"), m, max, " ms"),
             None => c.missing(&format!("editor_mysql {what} p95")),

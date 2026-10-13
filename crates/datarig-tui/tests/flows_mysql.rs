@@ -751,3 +751,28 @@ fn a_statement_that_answered_while_its_stop_went_unanswered_keeps_its_outcome() 
     assert!(!status.contains("may still run"), "{status}");
     assert!(!status.contains("cancel"), "{status}");
 }
+
+/// In MySQL a `"…"` string is a literal like `'…'`: its column's values are offered there
+/// (an `ENUM`'s, as the driver reads them); under `ANSI_QUOTES` it is a name, and names are.
+#[test]
+fn values_complete_in_both_mysql_strings() {
+    let mut h = mysql();
+    h.db(DbEvent::Connected);
+    h.db(DbEvent::Schemas(Ok(vec!["shop".into()])));
+    h.db(DbEvent::Catalog(Ok(values_catalog())));
+    h.keys("ggdGi");
+    h.keys("SELECT * FROM shop.orders WHERE status = \"sh");
+    h.settle();
+    let labels = |h: &Harness| h.popup().map(|p| p.items.iter().map(|i| i.label.clone()).collect::<Vec<_>>());
+    assert_eq!(labels(&h), Some(vec!["shipped".to_string()]));
+    h.key(KeyCode::Enter);
+    assert_eq!(h.app.tab().editor.text(), "SELECT * FROM shop.orders WHERE status = \"shipped\"");
+    h.key(KeyCode::Esc);
+    h.ctrl('e');
+    let ansi = MySqlMode { ansi_quotes: true, ..MySqlMode::default() };
+    h.tab_db(0, DbEvent::Language(my(ansi)));
+    h.keys("ggdGi");
+    h.keys("SELECT * FROM shop.orders WHERE status = \"st");
+    h.settle();
+    assert_eq!(labels(&h), Some(vec!["`status`".to_string()]), "a name, quoted as MySQL writes it");
+}

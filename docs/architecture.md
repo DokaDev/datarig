@@ -684,6 +684,22 @@ text" and "The MySQL classifier" below).
     `public`; `complete::default_path`/`schema_path` are its wrappers; MySQL: the session's
     database), `App::tab_path` asks it in the tab's dialect. A relation is found whatever the
     ASCII case of its name; in MySQL one written in the catalog's case comes first.
+    `complete::complete_with(…, checks)` also offers values in a string literal compared with a
+    column (`=`, `<>`, `!=`, `<=>`, an `IN` list): `ColumnInfo::values` (an enum's labels, which
+    the PostgreSQL catalog read gets from `pg_type`/`pg_enum` in the same statement, through
+    domains; MySQL's from `COLUMN_TYPE`), then what the table's checks list
+    (`values::check_values`, read from a `TableStructure`: `IN`, `= ANY (ARRAY[…])`, `=`, an
+    `OR` of them; nothing for another shape). The literal's opening, escaping and reading are
+    `Dialect::literal_open`, `literal_body` and `unescape_literal_body` (bit, hex, `U&` and
+    dollar strings hold no value). When the checks are not known, `Outcome::wants_checks` says
+    so: the app asks `LoadStructure` once (`ChecksCache` per profile and per database, forgotten
+    when the catalog is read again or DDL ran in a tab of the profile, in every database of it),
+    and redoes the popup when the answer comes only if the tab is bound as before and its cursor
+    is in the same literal (`ValuesWait`; typing keeps the wait, moving drops it). A failed read
+    leaves the table unknown (`TableChecks::Failed`), asked again after `CHECKS_RETRY` (10 s);
+    the explorer's tree takes only a structure that came, or a failure it was waiting for. An
+    unqualified column is looked up in the innermost subquery around the literal first; a
+    column inside a call gets nothing.
   - Formatter: `format::format_in(src, opts, indent, d)` (`format`): `sqlformat` lays the text
     out as `Dialect::sqlformat_dialect` (PostgreSQL: `PostgreSql`), and the checks lex in `d`.
     Only PostgreSQL masks dollar bodies and keeps `U&`, psql's `:var` and `\` together. MySQL

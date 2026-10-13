@@ -1,7 +1,7 @@
 use super::*;
 
 fn cat() -> Catalog {
-    let col = |n: &str, t: &str| ColumnInfo { name: n.into(), type_name: t.into() };
+    let col = |n: &str, t: &str| ColumnInfo::new(n, t);
     let rel = |s: &str, n: &str, v: bool, cols: Vec<ColumnInfo>| Relation {
         schema: s.into(),
         name: n.into(),
@@ -148,7 +148,7 @@ fn public_follows_the_chosen_schema() {
     assert_eq!(schema_path("shop"), ["shop", "public"]);
     assert_eq!(schema_path("public"), ["public"]);
     let mut c = cat();
-    let col = |n: &str| ColumnInfo { name: n.into(), type_name: "text".into() };
+    let col = |n: &str| ColumnInfo::new(n, "text");
     let rel = |s: &str, n: &str, cols: Vec<ColumnInfo>| Relation {
         schema: s.into(),
         name: n.into(),
@@ -177,7 +177,7 @@ fn public_follows_the_chosen_schema() {
 /// A catalog with names PostgreSQL reads back only when they are quoted.
 fn mixed() -> Catalog {
     let mut c = cat();
-    let col = |n: &str| ColumnInfo { name: n.into(), type_name: "text".into() };
+    let col = |n: &str| ColumnInfo::new(n, "text");
     c.schemas.push("Sales".into());
     c.relations.push(Relation {
         schema: "Sales".into(),
@@ -352,4 +352,324 @@ fn complete_in_postgres_is_complete_in() {
             }
         }
     }
+}
+
+/// A string whose last quote is one half of a doubled quote, or escaped (`E'…\'`), is not
+/// closed: the cursor at its end is inside it, where nothing is offered, not even on demand.
+#[test]
+fn an_unclosed_string_ending_in_a_quote_is_inside() {
+    for src in ["SELECT * FROM shop.orders WHERE 'it''", "SELECT * FROM shop.orders WHERE E'it\\'"] {
+        assert!(complete(src, src.len(), &cat(), true).is_none(), "{src}");
+    }
+    // A closed one is left: after it the statement goes on.
+    let src = "SELECT * FROM shop.orders WHERE 'it''s'";
+    assert!(complete(src, src.len(), &cat(), true).is_some(), "{src}");
+}
+
+// ── values inside string literals ───────────────────────────────────────────
+
+/// [`cat`] with enumerated columns: `shop.orders.status` (`order_status`), and `shop.notes.kind`
+/// whose values hold a quote, a backslash and a double quote.
+fn enums() -> Catalog {
+    let mut c = cat();
+    let values = |v: &[&str]| Some(v.iter().map(|s| s.to_string()).collect::<Vec<_>>().into());
+    let orders = c.relations.iter_mut().find(|r| r.name == "orders").unwrap();
+    let status = orders.columns.iter_mut().find(|c| c.name == "status").unwrap();
+    status.type_name = "order_status".into();
+    status.values = values(&["pending", "paid", "shipped", "cancelled"]);
+    let mut kind = ColumnInfo::new("kind", "note_kind");
+    kind.values = values(&["it's", "back\\slash", "say \"hi\"", "plain"]);
+    c.relations.push(Relation {
+        schema: "shop".into(),
+        name: "notes".into(),
+        is_view: false,
+        columns: vec![ColumnInfo::new("id", "bigint"), kind, ColumnInfo::new("body", "text")],
+    });
+    c
+}
+
+/// Completion at `|` in dialect `d` with the checks of `shop.orders` given (`None`: unknown).
+fn values_in(d: Dialect, src_with_bar: &str, checks: Option<&[CheckValues]>) -> Outcome {
+    let cursor = src_with_bar.find('|').unwrap();
+    let src = src_with_bar.replacen('|', "", 1);
+    let lookup = |s: &str, t: &str| if (s, t) == ("shop", "orders") { checks } else { Some(&[][..]) };
+    complete_with(&src, cursor, &enums(), false, &default_path(), d, LexState::default(), &lookup)
+}
+
+fn value_labels(d: Dialect, src_with_bar: &str) -> Vec<String> {
+    let o = values_in(d, src_with_bar, Some(&[]));
+    o.completion.map(|c| c.items.into_iter().map(|i| i.label).collect()).unwrap_or_default()
+}
+
+fn pg_values(src_with_bar: &str) -> Vec<String> {
+    value_labels(Dialect::Postgres, src_with_bar)
+}
+
+const ALL: [&str; 4] = ["pending", "paid", "shipped", "cancelled"];
+
+/// In a literal compared with an enumerated column its values are offered, in the type's
+/// order, whatever the comparison: `=`, `<>`, `!=`, an `IN` / `NOT IN` list (also after other
+/// items), `UPDATE … SET`.
+#[test]
+fn values_of_the_column_a_literal_is_compared_with() {
+    for src in [
+        "SELECT * FROM shop.orders WHERE status = '|'",
+        "SELECT * FROM shop.orders WHERE status = '|",
+        "SELECT * FROM shop.orders WHERE status <> '|'",
+        "SELECT * FROM shop.orders WHERE status != '|'",
+        "SELECT * FROM shop.orders WHERE status IN ('|')",
+        "SELECT * FROM shop.orders WHERE status IN ('paid', 3, NULL, '|')",
+        "SELECT * FROM shop.orders WHERE status NOT IN ('paid', '|",
+        "UPDATE shop.orders SET status = '|' WHERE id = 1",
+        "SELECT * FROM shop.orders o WHERE o.status = '|'",
+        "SELECT * FROM shop.orders WHERE shop.orders.status = '|'",
+        "SELECT * FROM shop.orders WHERE orders.status = '|'",
+        "SELECT * FROM shop.orders WHERE (status) = '|'",
+        "SELECT * FROM shop.users u JOIN shop.orders o ON o.user_id = u.id WHERE status = '|'",
+        "SELECT * FROM shop.orders WHERE status /* c */ = -- d\n '|'",
+        "SELECT *\n  FROM shop.orders\n WHERE status =\n   '|'",
+        "SELECT * FROM shop.orders WHERE STATUS = '|'",
+    ] {
+        assert_eq!(pg_values(src), ALL, "{src:?}");
+    }
+    // The alias defined after the literal; another statement before it.
+    assert_eq!(pg_values("SELECT 1; SELECT o.id FROM shop.orders AS o WHERE o.status = 'pa|'"), ["paid"]);
+    let o = values_in(Dialect::Postgres, "SELECT * FROM shop.orders WHERE status = '|'", Some(&[]));
+    let c = o.completion.unwrap();
+    assert_eq!((c.items[0].kind, c.items[0].detail.as_deref()), (Kind::Value, Some("order_status")));
+}
+
+/// No values: not compared with a column, a column without values or unknown, a `WITH`
+/// query's column, the cursor outside the literal's value, strings that hold no plain value.
+#[test]
+fn no_values_elsewhere() {
+    for src in [
+        "SELECT '|'",
+        "SELECT 'sh|",
+        "SELECT * FROM shop.orders WHERE status = 'paid'|",
+        "SELECT * FROM shop.orders WHERE status = |'paid'",
+        "SELECT * FROM shop.orders WHERE status = E|'paid'",
+        "SELECT * FROM shop.orders WHERE status LIKE '|'",
+        "SELECT * FROM shop.orders WHERE status > '|'",
+        "SELECT * FROM shop.orders WHERE nope = '|'",
+        "SELECT * FROM shop.orders WHERE x.status = '|'",
+        "SELECT * FROM shop.orders WHERE status = B'|'",
+        "SELECT * FROM shop.orders WHERE status = X'|'",
+        "SELECT * FROM shop.orders WHERE status = U&'|'",
+        "SELECT * FROM shop.orders WHERE status = $$|$$",
+        "SELECT * FROM shop.orders WHERE status IN (lower('a'), '|')",
+        "SELECT * FROM shop.orders WHERE status = 'a' || '|'",
+        "WITH w AS (SELECT status FROM shop.orders) SELECT * FROM w WHERE w.status = '|'",
+        "SELECT * FROM shop.orders WHERE status = -- '|\n 1",
+    ] {
+        assert_eq!(pg_values(src), Vec::<String>::new(), "{src:?}");
+        assert_eq!(values_in(Dialect::Postgres, src, None).wants_checks, None, "{src:?}");
+    }
+    // A column without values of its type: none, its checks asked for.
+    let src = "SELECT * FROM shop.orders WHERE id = '|'";
+    assert_eq!(pg_values(src), Vec::<String>::new());
+    assert!(values_in(Dialect::Postgres, src, None).wants_checks.is_some());
+}
+
+/// What the literal holds before the cursor filters them, as names are: a prefix first, then
+/// letters in order. Accepting one replaces the literal's value, the rest after the cursor too,
+/// never the closing quote; an open literal gets its closing quote with it.
+#[test]
+fn values_are_filtered_and_replace_the_literal() {
+    assert_eq!(pg_values("SELECT * FROM shop.orders WHERE status = 'p|'"), ["pending", "paid", "shipped"]);
+    assert_eq!(pg_values("SELECT * FROM shop.orders WHERE status = 'PA|'"), ["paid"]);
+    assert_eq!(pg_values("SELECT * FROM shop.orders WHERE status = 'pd|'"), ["pending", "paid", "shipped"]);
+    assert_eq!(pg_values("SELECT * FROM shop.orders WHERE status = 'sd|'"), ["shipped"]);
+    assert_eq!(pg_values("SELECT * FROM shop.orders WHERE status = 'zz|'"), Vec::<String>::new());
+    let at = |src: &str| {
+        let c = values_in(Dialect::Postgres, src, Some(&[])).completion.expect(src);
+        (c.replace_start, c.trail, c.items[0].text().to_string())
+    };
+    let closed = "SELECT * FROM shop.orders WHERE status = 'pa|id'";
+    let start = closed.find('\'').unwrap() + 1;
+    assert_eq!(at(closed), (start, 2, "paid".to_string()), "the rest of the value goes, the quote stays");
+    assert_eq!(at("SELECT * FROM shop.orders WHERE status = 'pa|"), (start, 0, "paid'".to_string()));
+    // A quote typed before other text that pairs with a quote on another line, or right before
+    // a name: open at the cursor.
+    let far = "SELECT * FROM shop.orders WHERE status = 'pa|\n  AND note = 'x'";
+    assert_eq!(at(far), (start, 0, "paid'".to_string()));
+    let glued = "SELECT * FROM shop.orders WHERE status = 'pa| AND user_id = 'x'";
+    assert_eq!(at(glued), (start, 0, "paid'".to_string()));
+    // Across segments: offsets are the whole text's.
+    let two = "SELECT 1;\nSELECT * FROM shop.orders WHERE status = '|'";
+    assert_eq!(at(two).0, two.find("'|").unwrap() + 1);
+}
+
+/// A table's checks add their values after the type's, once each; unknown checks are asked
+/// for, with where the literal's value starts.
+#[test]
+fn check_values_follow_the_type_values() {
+    let checks = [CheckValues { column: "status".into(), values: vec!["paid".into(), "refunded".into()] }];
+    let o = values_in(Dialect::Postgres, "SELECT * FROM shop.orders WHERE status = '|'", Some(&checks));
+    let c = o.completion.unwrap();
+    let got: Vec<_> = c.items.iter().map(|i| (i.label.as_str(), i.detail.as_deref())).collect();
+    assert_eq!(
+        got,
+        [
+            ("pending", Some("order_status")),
+            ("paid", Some("order_status")),
+            ("shipped", Some("order_status")),
+            ("cancelled", Some("order_status")),
+            ("refunded", Some("CHECK"))
+        ]
+    );
+    assert_eq!(o.wants_checks, None);
+    // A column with check values only.
+    let checks = [CheckValues { column: "user_id".into(), values: vec!["7".into()] }];
+    let o = values_in(Dialect::Postgres, "SELECT * FROM shop.orders WHERE user_id = '|'", Some(&checks));
+    assert_eq!(o.completion.unwrap().items[0].label, "7");
+    // Unknown checks: asked for; the type's values are offered meanwhile.
+    let src = "SELECT 1;\nSELECT * FROM shop.orders o WHERE o.status = 'p|'";
+    let o = values_in(Dialect::Postgres, src, None);
+    let literal = src.find("'p").unwrap() + 1;
+    assert_eq!(o.wants_checks, Some(WantsChecks { schema: "shop".into(), table: "orders".into(), literal }));
+    assert_eq!(o.completion.unwrap().items.len(), 3);
+    let o = values_in(Dialect::Postgres, "SELECT * FROM shop.orders WHERE user_id = '|'", None);
+    assert!(o.completion.is_none() && o.wants_checks.is_some(), "nothing known yet, asked");
+    // `complete_from` knows no checks: the type's values only.
+    let src = "SELECT * FROM shop.orders WHERE status = '";
+    let c = complete_from(src, src.len(), &enums(), false, &default_path(), Dialect::Postgres, LexState::default());
+    assert_eq!(c.unwrap().items.len(), 4);
+}
+
+/// A value is written as its literal reads it: PostgreSQL `'…'` doubles a quote only, `E'…'`
+/// a backslash too; MySQL doubles a backslash unless `NO_BACKSLASH_ESCAPES`, and in a `"…"`
+/// string doubles `"`. What is typed is read back the same way to filter.
+#[test]
+fn values_are_escaped_for_their_literal() {
+    use crate::sql::dialect::MySqlMode;
+    let my = |nbe: bool, ansi: bool| {
+        Dialect::MySql(MySqlMode { ansi_quotes: ansi, no_backslash_escapes: nbe, dollar_quotes: false })
+    };
+    let inserts = |d: Dialect, src: &str| -> Vec<String> {
+        values_in(d, src, Some(&[]))
+            .completion
+            .map(|c| c.items.iter().map(|i| i.text().to_string()).collect())
+            .unwrap_or_default()
+    };
+    let q = "SELECT * FROM shop.notes WHERE kind = ";
+    let pg = Dialect::Postgres;
+    assert_eq!(inserts(pg, &format!("{q}'|'")), ["it''s", "back\\slash", "say \"hi\"", "plain"]);
+    assert_eq!(inserts(pg, &format!("{q}E'|'")), ["it''s", "back\\\\slash", "say \"hi\"", "plain"]);
+    assert_eq!(inserts(pg, &format!("{q}e'|")), ["it''s'", "back\\\\slash'", "say \"hi\"'", "plain'"]);
+    assert_eq!(inserts(pg, &format!("{q}N'|'")), ["it''s", "back\\slash", "say \"hi\"", "plain"]);
+    assert_eq!(inserts(my(false, false), &format!("{q}'|'")), ["it''s", "back\\\\slash", "say \"hi\"", "plain"]);
+    assert_eq!(inserts(my(true, false), &format!("{q}'|'")), ["it''s", "back\\slash", "say \"hi\"", "plain"]);
+    assert_eq!(inserts(my(false, false), &format!("{q}\"|\"")), ["it's", "back\\\\slash", "say \"\"hi\"\"", "plain"]);
+    assert_eq!(
+        inserts(my(true, false), &format!("{q}\"|")),
+        ["it's\"", "back\\slash\"", "say \"\"hi\"\"\"", "plain\""]
+    );
+    // Under ANSI_QUOTES `"…"` is a name: names are offered there, not values.
+    let names = values_in(my(false, true), &format!("{q}\"|\""), Some(&[])).completion.unwrap();
+    assert!(names.items.iter().all(|i| i.kind == Kind::Column), "{:?}", names.items);
+    // Typed escapes are read back: a doubled quote, a backslash escape.
+    assert_eq!(value_labels(pg, &format!("{q}'it''|'")), ["it's"]);
+    assert_eq!(value_labels(pg, &format!("{q}E'it\\'|'")), ["it's"]);
+    assert_eq!(value_labels(pg, &format!("{q}E'back\\\\|'")), ["back\\slash"]);
+    assert_eq!(value_labels(pg, &format!("{q}'back\\|'")), ["back\\slash"], "a backslash is a character");
+    assert_eq!(value_labels(my(false, false), &format!("{q}'it\\'|'")), ["it's"]);
+    assert_eq!(value_labels(my(false, false), &format!("{q}'back\\\\|'")), ["back\\slash"]);
+    assert_eq!(value_labels(my(true, false), &format!("{q}'back\\|'")), ["back\\slash"]);
+    // MySQL: a charset introducer in the list; a string glued to one.
+    assert_eq!(value_labels(my(false, false), &format!("{q}_utf8mb4'pl|'")), ["plain"]);
+    let list = "SELECT * FROM shop.notes WHERE kind IN (_utf8mb4'plain', '|')";
+    assert_eq!(value_labels(my(false, false), list).len(), 4);
+    // MySQL: `$$` is a string when the server reads dollar quotes, but no value's.
+    let dollar = Dialect::MySql(MySqlMode { dollar_quotes: true, ..MySqlMode::default() });
+    assert_eq!(value_labels(dollar, &format!("{q}$$|$$")), Vec::<String>::new());
+    assert_eq!(value_labels(my(false, false), &format!("{q}X'|'")), Vec::<String>::new());
+}
+
+/// A column inside a function call is not compared as itself: `lower(status)` never equals a
+/// label, so nothing is offered (and nothing asked for).
+#[test]
+fn no_values_for_a_column_inside_a_call() {
+    for src in [
+        "SELECT * FROM shop.orders WHERE lower(status) = '|'",
+        "SELECT * FROM shop.orders WHERE upper(status) IN ('|')",
+        "SELECT * FROM shop.orders GROUP BY 1 HAVING count(status) = '|'",
+        "SELECT * FROM shop.orders WHERE coalesce(x, status) = '|'",
+        "SELECT * FROM shop.orders WHERE f(o.status) = '|'",
+    ] {
+        assert_eq!(pg_values(src), Vec::<String>::new(), "{src:?}");
+        assert_eq!(values_in(Dialect::Postgres, src, None).wants_checks, None, "{src:?}");
+    }
+    // A reference in parentheses of its own still is one.
+    for src in [
+        "SELECT * FROM shop.orders WHERE (status) = '|'",
+        "SELECT * FROM shop.orders WHERE NOT (status) = '|'",
+        "SELECT * FROM shop.orders WHERE id = 1 AND (status) IN ('|')",
+    ] {
+        assert_eq!(pg_values(src), ALL, "{src:?}");
+    }
+}
+
+/// A closed literal is replaced up to its closing quote, also when a name follows the quote
+/// right away (MySQL written tight) or the literal holds a line break after the cursor; it is
+/// open at the cursor only when a quote typed before other SQL paired with a later one.
+#[test]
+fn a_closed_literal_keeps_its_closing_quote() {
+    let at = |src: &str| {
+        let c = values_in(Dialect::Postgres, src, Some(&[])).completion.expect(src);
+        (c.trail, c.items[0].text().to_string())
+    };
+    assert_eq!(at("SELECT * FROM shop.orders WHERE status='pa|id'AND id = 1"), (2, "paid".to_string()));
+    assert_eq!(at("SELECT * FROM shop.orders WHERE status = 'pa|id\n'"), (3, "paid".to_string()));
+    assert_eq!(at("SELECT * FROM shop.orders WHERE status = 'pa|\n'"), (1, "paid".to_string()));
+    assert_eq!(at("SELECT * FROM shop.orders WHERE status = 'pa|id' AND id = 1"), (2, "paid".to_string()));
+    // Typed before other SQL: open at the cursor.
+    assert_eq!(at("SELECT * FROM shop.orders WHERE status = 'pa|\n  AND note = 'x'"), (0, "paid'".to_string()));
+    assert_eq!(at("SELECT * FROM shop.orders WHERE status = 'pa| AND user_id = 'x'"), (0, "paid'".to_string()));
+}
+
+/// An unqualified column of the query the literal is in: a subquery's own table before the
+/// outer query's, the outer one's when the subquery has none of that name.
+#[test]
+fn the_innermost_query_names_an_unqualified_column() {
+    let mut c = enums();
+    let mut state = ColumnInfo::new("status", "ticket_state");
+    state.values = Some(vec!["open".to_string(), "closed".to_string()].into());
+    c.relations.push(Relation {
+        schema: "shop".into(),
+        name: "tickets".into(),
+        is_view: false,
+        columns: vec![ColumnInfo::new("order_id", "bigint"), state],
+    });
+    let at = |src: &str| {
+        let cursor = src.find('|').unwrap();
+        let text = src.replacen('|', "", 1);
+        complete_with(&text, cursor, &c, false, &default_path(), Dialect::Postgres, LexState::default(), &|_, _| {
+            Some(&[][..])
+        })
+        .completion
+        .map(|c| c.items.into_iter().map(|i| i.label).collect::<Vec<_>>())
+        .unwrap_or_default()
+    };
+    let inner = "SELECT * FROM shop.orders WHERE id IN (SELECT order_id FROM shop.tickets WHERE status = '|')";
+    assert_eq!(at(inner), ["open", "closed"]);
+    let after = "SELECT * FROM shop.orders WHERE id IN (SELECT order_id FROM shop.tickets) AND status = '|'";
+    assert_eq!(at(after), ALL, "the outer query's, after the subquery");
+    let outer_only = "SELECT * FROM shop.tickets t WHERE EXISTS (SELECT 1 FROM shop.users u WHERE status = '|')";
+    assert_eq!(at(outer_only), ["open", "closed"], "the subquery has no such column: the outer one's");
+}
+
+/// The detail of a type's value is the type's name without its parameters (MySQL's
+/// `enum('a','b')` is `enum`).
+#[test]
+fn a_values_detail_is_its_types_name() {
+    use crate::sql::dialect::MySqlMode;
+    let mut c = enums();
+    let orders = c.relations.iter_mut().find(|r| r.name == "orders").unwrap();
+    orders.columns.iter_mut().find(|c| c.name == "status").unwrap().type_name =
+        "enum('pending','paid','shipped','cancelled')".into();
+    let src = "SELECT * FROM shop.orders WHERE status = '";
+    let d = Dialect::MySql(MySqlMode::default());
+    let c = complete_with(src, src.len(), &c, false, &[], d, LexState::default(), &|_, _| Some(&[][..]));
+    assert_eq!(c.completion.unwrap().items[0].detail.as_deref(), Some("enum"));
 }

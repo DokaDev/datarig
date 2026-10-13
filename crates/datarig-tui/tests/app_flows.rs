@@ -439,7 +439,7 @@ fn completion_inserts_names_as_sql() {
     use datarig_core::sql::complete::{ColumnInfo, Relation};
     let mut h = Harness::connected(Lang::En);
     let mut cat = catalog();
-    let col = |n: &str| ColumnInfo { name: n.into(), type_name: "text".into() };
+    let col = |n: &str| ColumnInfo::new(n, "text");
     cat.relations.push(Relation {
         schema: "shop".into(),
         name: "Order Lines".into(),
@@ -478,6 +478,262 @@ fn completion_inserts_names_as_sql() {
     h.settle();
     let p = h.popup().expect("popup");
     assert_eq!(p.items[0].label, "recent");
+}
+
+/// The labels of the completion popup.
+fn popup_labels(h: &Harness) -> Vec<String> {
+    h.popup().map(|p| p.items.iter().map(|i| i.label.clone()).collect()).unwrap_or_default()
+}
+
+/// The structure requests sent since the last look.
+fn structure_asks(h: &mut Harness) -> Vec<(String, String)> {
+    h.sent()
+        .into_iter()
+        .filter_map(|c| match c {
+            DbCommand::LoadStructure { schema, table } => Some((schema, table)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// In a string literal compared with an enumerated column the popup offers its values: after
+/// the opening quote (with the usual delay), refined by every character typed in the literal,
+/// accepted into the literal (an open one gets its closing quote; a paired one keeps its
+/// closer, which the next quote steps over), dismissed with Esc. With auto-pairs off and on.
+#[test]
+fn completion_offers_values_in_literals() {
+    for pairs in [false, true] {
+        let mut h = Harness::connected(Lang::En);
+        h.db(DbEvent::Catalog(Ok(values_catalog())));
+        if pairs {
+            h.command("set editor.auto_pairs=on");
+        }
+        h.keys("ggdGi");
+        h.keys("SELECT * FROM shop.orders WHERE status = '");
+        assert!(h.popup().is_none(), "debounced");
+        h.settle();
+        assert_eq!(popup_labels(&h), ["pending", "paid", "shipped", "cancelled"], "pairs {pairs}");
+        let p = h.popup().unwrap();
+        assert_eq!(p.items[0].kind, datarig_core::sql::complete::Kind::Value);
+        assert_eq!(structure_asks(&mut h), [("shop".to_string(), "orders".to_string())], "its checks asked for");
+        h.keys("p");
+        assert_eq!(popup_labels(&h), ["pending", "paid", "shipped"], "refined at once");
+        h.keys(" ");
+        assert!(h.popup().is_none(), "a space refines too: nothing has one");
+        h.key(KeyCode::Backspace);
+        assert!(h.popup().is_none(), "Backspace refines a popup only while one is open");
+        h.ctrl('n');
+        assert_eq!(popup_labels(&h).len(), 3);
+        h.keys("a");
+        assert_eq!(popup_labels(&h), ["paid"]);
+        h.key(KeyCode::Tab);
+        let text = h.app.tab().editor.text();
+        assert_eq!(text, "SELECT * FROM shop.orders WHERE status = 'paid'", "pairs {pairs}");
+        if pairs {
+            // The cursor before the closer the editor put, which the next quote steps over.
+            assert_eq!(h.app.tab().editor.offset(), text.len() - 1);
+            h.keys("'");
+            assert_eq!(h.app.tab().editor.text(), text);
+        }
+        assert_eq!(h.app.tab().editor.offset(), text.len());
+        h.settle();
+        assert!(h.popup().is_none(), "after the literal: nothing");
+        assert_eq!(structure_asks(&mut h), Vec::<(String, String)>::new(), "asked once");
+        // Esc dismisses; the popup does not come back by itself.
+        h.keys(" OR status IN ('paid', '");
+        h.settle();
+        assert_eq!(popup_labels(&h).len(), 4, "in an IN list");
+        h.key(KeyCode::Esc);
+        assert!(h.popup().is_none());
+        h.settle();
+        assert!(h.popup().is_none());
+        // No values for a column without them; no request for a table already asked about.
+        h.key(KeyCode::Esc);
+        h.keys("ggdGi");
+        h.keys("SELECT * FROM shop.users WHERE name = '");
+        h.settle();
+        assert!(h.popup().is_none());
+    }
+}
+
+/// The values of a table's checks come with its structure, which completion asks for once per
+/// table: when it comes while the cursor is still in the literal, the popup shows them after
+/// the type's; when the cursor left it, the user dismissed the popup or the tab was rebound,
+/// it is not shown. A structure that could not be read is asked for again on the next use, and
+/// a catalog read again forgets what was known.
+#[test]
+fn check_values_come_with_the_structure() {
+    let structure = |values: &str| {
+        let mut st = orders_structure();
+        st.checks[0].expression = format!("status = ANY (ARRAY[{values}])");
+        DbEvent::Structure { schema: "shop".into(), table: "orders".into(), result: Ok(Box::new(st)) }
+    };
+    let mut h = Harness::connected(Lang::En);
+    h.db(DbEvent::Catalog(Ok(values_catalog())));
+    h.keys("ggdGi");
+    h.keys("SELECT * FROM shop.orders WHERE status = 're");
+    h.settle();
+    assert!(h.popup().is_none(), "no type value starts with it");
+    assert_eq!(structure_asks(&mut h).len(), 1);
+    h.db(structure("'paid'::text, 'refunded'::text"));
+    assert_eq!(popup_labels(&h), ["refunded"], "the check's value, once it came");
+    assert_eq!(h.popup().unwrap().items[0].detail.as_deref(), Some("CHECK"));
+    h.key(KeyCode::Tab);
+    assert_eq!(h.app.tab().editor.text(), "SELECT * FROM shop.orders WHERE status = 'refunded'");
+    // Known now: no request, at once.
+    h.keys(" AND status <> '");
+    h.settle();
+    assert_eq!(popup_labels(&h), ["pending", "paid", "shipped", "cancelled", "refunded"]);
+    assert!(structure_asks(&mut h).is_empty());
+    h.key(KeyCode::Esc);
+
+    // A catalog read again forgets it: asked again. The cursor leaves the literal before the
+    // answer: nothing shows.
+    h.key(KeyCode::Esc);
+    h.db(DbEvent::Catalog(Ok(values_catalog())));
+    h.keys("ggdGi");
+    h.keys("SELECT * FROM shop.orders WHERE status = 'x");
+    h.settle();
+    assert_eq!(structure_asks(&mut h).len(), 1, "asked again after the catalog was read again");
+    h.key(KeyCode::Left);
+    h.key(KeyCode::Left);
+    h.key(KeyCode::Left);
+    h.db(structure("'xa'::text"));
+    assert!(h.popup().is_none(), "the cursor left the literal: a late answer shows nothing");
+
+    // Dismissed with Esc before the answer: nothing shows.
+    h.key(KeyCode::Esc);
+    h.db(DbEvent::Catalog(Ok(values_catalog())));
+    h.keys("ggdGi");
+    h.keys("SELECT * FROM shop.orders WHERE status = 'p");
+    h.settle();
+    assert_eq!(popup_labels(&h), ["pending", "paid", "shipped"]);
+    assert_eq!(structure_asks(&mut h).len(), 1);
+    h.key(KeyCode::Esc);
+    assert_eq!(h.app.tab().editor.mode, Mode::Insert);
+    h.db(structure("'pz'::text"));
+    assert!(h.popup().is_none(), "dismissed: a late answer shows nothing");
+    h.ctrl('n');
+    assert_eq!(popup_labels(&h), ["pending", "paid", "pz", "shipped"], "what came is known all the same");
+
+    // The tab was rebound before the answer: dropped.
+    h.key(KeyCode::Esc);
+    h.db(DbEvent::Catalog(Ok(values_catalog())));
+    h.ctrl('n');
+    assert_eq!(structure_asks(&mut h).len(), 1);
+    h.app.tabs.active_mut().binding += 1;
+    h.db(structure("'pq'::text"));
+    assert_eq!(popup_labels(&h), ["pending", "paid", "shipped"], "rebound: a late answer changes nothing");
+
+    // A structure that could not be read: nothing, asked again on the next use.
+    h.key(KeyCode::Esc);
+    h.db(DbEvent::Catalog(Ok(values_catalog())));
+    h.ctrl('n');
+    assert_eq!(structure_asks(&mut h).len(), 1);
+    let locked = DbEvent::Structure {
+        schema: "shop".into(),
+        table: "orders".into(),
+        result: Err(datarig_core::driver::DbError::Locked),
+    };
+    h.db(locked);
+    assert_eq!(popup_labels(&h), ["pending", "paid", "shipped"]);
+    assert!(structure_asks(&mut h).is_empty(), "not asked again by itself");
+    h.keys("e");
+    assert_eq!(popup_labels(&h), ["pending", "shipped"]);
+    assert!(structure_asks(&mut h).is_empty(), "nor on every key right after");
+    let pg = h.app.tab().profile.unwrap();
+    let tree = &h.app.conns.get(pg).unwrap().tree;
+    let view = tree.structures.get(&("shop".to_string(), "orders".to_string()));
+    assert!(view.is_none_or(|v| v.loaded().is_some()), "the explorer, which did not ask, keeps no failure");
+    h.advance(Duration::from_secs(30));
+    h.key(KeyCode::Backspace);
+    assert_eq!(structure_asks(&mut h).len(), 1, "asked again a while later");
+}
+
+/// The metadata session lost while a structure is asked for: the table is not known, and is
+/// asked for again on the next use (not stuck waiting for an answer that never comes).
+#[test]
+fn a_lost_metadata_session_forgets_what_it_was_asked() {
+    use datarig_tui::app::TableChecks;
+    let mut h = Harness::connected(Lang::En);
+    h.db(DbEvent::Catalog(Ok(values_catalog())));
+    h.keys("ggdGi");
+    h.keys("SELECT * FROM shop.orders WHERE status = '");
+    h.settle();
+    assert_eq!(structure_asks(&mut h).len(), 1);
+    let pg = h.app.tab().profile.unwrap();
+    h.db(DbEvent::Lost { error: datarig_core::driver::DbError::Closed });
+    let checks = &h.app.conns.get(pg).unwrap().checks;
+    assert!(!checks.values().any(|c| *c == TableChecks::Asked), "{checks:?}");
+}
+
+/// DDL run in a tab forgets what completion knew of the profile's checks, in its own database
+/// and in the others the profile has sessions in.
+#[test]
+fn ddl_forgets_the_checks_of_every_database_of_the_profile() {
+    use datarig_core::driver::Outcome;
+    use datarig_tui::app::TableChecks;
+    let mut h = Harness::connected(Lang::En);
+    let pg = h.app.tab().profile.unwrap();
+    let key = ("shop".to_string(), "orders".to_string());
+    let now = h.app.now();
+    h.app.conns.add_aux(pg, "other", now);
+    h.app.conns.aux_mut(pg, "other").unwrap().checks.insert(key.clone(), TableChecks::Known(Vec::new()));
+    h.app.conns.get_mut(pg).unwrap().checks.insert(key.clone(), TableChecks::Known(Vec::new()));
+    h.app.run(vec!["ALTER TABLE shop.orders ADD CHECK (status <> 'x')".into()]);
+    h.db(DbEvent::Done { id: 1, outcome: Outcome::Command("ALTER TABLE".into()), elapsed: Duration::ZERO });
+    assert!(h.app.conns.get(pg).unwrap().checks.is_empty());
+    assert!(h.app.conns.aux(pg, "other").unwrap().checks.is_empty(), "another database's too");
+}
+
+/// A blank or a sign typed while the structure is on its way keeps the wait: its values show
+/// when it comes, as long as the cursor is in the same literal.
+#[test]
+fn typing_a_blank_keeps_waiting_for_the_checks() {
+    let mut h = Harness::connected(Lang::En);
+    h.db(DbEvent::Catalog(Ok(values_catalog())));
+    h.keys("ggdGi");
+    h.keys("SELECT * FROM shop.orders WHERE status = 'x");
+    h.settle();
+    assert_eq!(structure_asks(&mut h).len(), 1);
+    h.keys(" ");
+    let mut st = orders_structure();
+    st.checks[0].expression = "status = ANY (ARRAY['x y'::text, 'z'::text])".into();
+    h.db(DbEvent::Structure { schema: "shop".into(), table: "orders".into(), result: Ok(Box::new(st)) });
+    assert_eq!(popup_labels(&h), ["x y"]);
+}
+
+/// A value holding a line break or a tab is shown with the grid's marks for them, and goes in
+/// as it is.
+#[test]
+fn values_with_control_characters_are_shown_marked() {
+    let mut h = Harness::connected(Lang::En);
+    let mut cat = values_catalog();
+    let orders = cat.relations.iter_mut().find(|r| r.name == "orders").unwrap();
+    let status = orders.columns.iter_mut().find(|c| c.name == "status").unwrap();
+    status.values = Some(vec!["two\nlines".to_string(), "tab\there".to_string()].into());
+    h.db(DbEvent::Catalog(Ok(cat)));
+    h.keys("ggdGi");
+    h.keys("SELECT * FROM shop.orders WHERE status = '");
+    h.settle();
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("two\u{21b5}lines") && screen.contains("tab\u{2192}here"), "{screen}");
+    h.key(KeyCode::Tab);
+    assert!(h.app.tab().editor.text().ends_with("'two\nlines'"));
+}
+
+/// A driver that reads no structures: the type's values only, nothing asked.
+#[test]
+fn values_without_structures() {
+    let mut h = Harness::connected(Lang::En);
+    h.driver.no_structure.store(true, std::sync::atomic::Ordering::SeqCst);
+    h.db(DbEvent::Catalog(Ok(values_catalog())));
+    h.keys("ggdGi");
+    h.keys("UPDATE shop.orders SET status = '");
+    h.settle();
+    assert_eq!(popup_labels(&h).len(), 4);
+    assert!(structure_asks(&mut h).is_empty());
+    assert!(h.app.tab().values_wait.is_none());
 }
 
 // ── connection profiles ──────────────────────────────────────────────────────

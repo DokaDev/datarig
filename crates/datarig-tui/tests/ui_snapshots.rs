@@ -97,7 +97,7 @@ fn tree_all_kinds(icons: bool) -> Harness {
     h.driver.no_structure.store(true, std::sync::atomic::Ordering::SeqCst);
     h.app.icons = if icons { IconsSetting::On } else { IconsSetting::Off };
     let mut cat = catalog();
-    let col = |n: &str, t: &str| ColumnInfo { name: n.into(), type_name: t.into() };
+    let col = |n: &str, t: &str| ColumnInfo::new(n, t);
     cat.relations.push(Relation {
         schema: "shop".into(),
         name: "zz_types".into(),
@@ -294,6 +294,38 @@ fn autocomplete_schema_then_tables_in(lang: Lang) {
     h.keys("op.");
     h.settle();
     assert_screen!(format!("autocomplete_schema_then_tables_{}", lang_tag(lang)), lang, h.draw(120, 30));
+}
+
+/// The values of an enumerated column in a string literal, with one its check adds (which
+/// came with the table's structure), in a small terminal and a large one.
+#[test]
+fn autocomplete_enum_values() {
+    for lang in [Lang::En, Lang::Ko] {
+        autocomplete_enum_values_in(lang);
+    }
+}
+
+fn autocomplete_enum_values_in(lang: Lang) {
+    let mut h = Harness::connected(lang);
+    h.db(DbEvent::Catalog(Ok(values_catalog())));
+    h.keys("Go");
+    h.keys("SELECT * FROM shop.orders o WHERE o.status = '");
+    h.settle();
+    let mut st = orders_structure();
+    st.checks[0].expression = "status = ANY (ARRAY['paid'::text, 'refunded'::text])".into();
+    h.db(DbEvent::Structure { schema: "shop".into(), table: "orders".into(), result: Ok(Box::new(st)) });
+    let labels: Vec<_> = h.popup().expect("values").items.iter().map(|c| c.label.clone()).collect();
+    assert_eq!(labels, ["pending", "paid", "shipped", "cancelled", "refunded"]);
+    let tag = lang_tag(lang);
+    assert_screen!(format!("autocomplete_enum_values_120x40_{tag}"), lang, h.draw(120, 40));
+    assert_screen!(format!("autocomplete_enum_values_80x24_{tag}"), lang, h.draw(80, 24));
+    h.keys("s");
+    h.key(KeyCode::Tab);
+    assert!(h.popup().is_none());
+    assert!(
+        h.app.tab().editor.text().ends_with("WHERE o.status = 'shipped'"),
+        "an open literal gets its closing quote"
+    );
 }
 
 #[test]
