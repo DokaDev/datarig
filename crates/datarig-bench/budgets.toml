@@ -190,8 +190,9 @@ build_work_per_row_max = 6.0
 
 [explorer]
 # One connected profile with 20 schemas of 500 relations each, all listed and open (10,000
-# relations, about 10,060 rows), the explorer's `/` filter typed and erased a key at a time at
-# 160x45: the key with its frame (the filter edit, the rows it shows, the frame drawn), from one
-# letter that matches nearly every relation to an empty filter that shows every row. A
-# developer machine: about 0.6 ms (p95 under 1 ms) under load.
+# relations, about 10,060 rows), the structure of 300 tables read (columns the filter finds),
+# the explorer's `/` filter typed and erased a key at a time at 160x45: the key with its frame
+# (the filter edit, the rows it shows, the frame drawn), from one letter that matches nearly
+# every relation to an empty filter that shows every row. A developer machine: about 1.5 ms
+# (p95 under 3 ms) under load.
 p95_ms_max = 25.0

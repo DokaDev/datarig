@@ -1,6 +1,5 @@
 ---
 source: crates/datarig-tui/tests/ui_snapshots.rs
-assertion_line: 1244
 expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×                                          "

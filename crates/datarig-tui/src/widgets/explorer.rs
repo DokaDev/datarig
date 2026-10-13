@@ -801,12 +801,13 @@ fn draw_row(app: &App, row: &Row, line: Rect, bg: Style, buf: &mut Buffer) {
         cx += used as usize;
     }
     // An object's estimates on the right, in the room its name leaves: never over the name;
-    // dim, or in its size tier's color.
+    // dim, or in its size tier's color when the size is shown (the first text; the rows alone
+    // of a narrow explorer stay dim).
     let room = w.saturating_sub(cx + STATS_GAP);
     let stats = row_stats(app, row).map(|s| inline_stats(app, s)).unwrap_or_default();
-    if let Some(text) = stats.into_iter().find(|t| width(t) <= room) {
+    if let Some((i, text)) = stats.into_iter().enumerate().find(|(_, t)| width(t) <= room) {
         let at = w - width(&text);
-        let style = match row_heat(app, row) {
+        let style = match row_heat(app, row).filter(|_| i == 0) {
             Some(Heat::Hot) => th.size_hot,
             Some(Heat::Warm) => th.size_warm,
             None => Style::new().fg(th.fg_dim),

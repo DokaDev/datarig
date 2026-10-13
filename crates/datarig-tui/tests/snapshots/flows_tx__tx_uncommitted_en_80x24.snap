@@ -1,6 +1,5 @@
 ---
 source: crates/datarig-tui/tests/flows_tx.rs
-assertion_line: 79
 expression: "h.draw(80, 24).backend()"
 ---
 "╭ Explorer ────────────╮ 1 console 1 ◆ ×                                        "

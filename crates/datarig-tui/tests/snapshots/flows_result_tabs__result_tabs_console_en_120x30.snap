@@ -1,6 +1,5 @@
 ---
 source: crates/datarig-tui/tests/flows_result_tabs.rs
-assertion_line: 107
 expression: backend
 ---
 "╭ Explorer ──────────────────╮ 1 console 1 ×                                                                            "

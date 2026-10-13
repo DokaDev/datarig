@@ -76,10 +76,12 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
   Nerd Font icons are optional (asked once, `:set icons=on|off`).
 - `/` filters the explorer by a part of a name, ignoring case: profiles (by name, host or
   database), folders (a matching folder shows everything in it), tunnel presets, environments
-  and saved queries, and under a connected profile the databases, schemas, tables, views and
-  structure items (columns, keys, indexes, constraints, triggers) the explorer has already read.
-  A schema whose tables were never listed, a table whose structure was never opened and a
-  profile that is not connected are not searched, and nothing is asked of the server. Matches
+  and saved queries, and under a connected profile the databases, schemas, tables and views
+  the explorer has already read, and the structure items (columns, keys, indexes, constraints,
+  triggers) of a table whose structure it has read (where it shows a table's columns from the
+  completion catalog instead, they are not searched). A schema whose tables were never listed
+  and a table whose structure was never opened are not searched, nor is the tree of a profile
+  that is not connected (its name still matches), and nothing is asked of the server. Matches
   show with the way to them opened and the cursor on the first one; what you opened or closed
   yourself does not change, and `Esc` gives the tree back as it was.
 - Show DDL (PostgreSQL; MySQL shows the server's own text, see [MySQL](#mysql)): `D` on a

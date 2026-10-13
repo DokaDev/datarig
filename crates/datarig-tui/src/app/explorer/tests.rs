@@ -53,12 +53,12 @@ fn open(a: &mut App, path: &str) {
 
 #[test]
 fn the_filter_matches_a_part_of_the_name_ignoring_case() {
-    assert!(filter_matches("", &profile("x", None)));
-    assert!(filter_matches("  ", &profile("x", None)));
-    assert!(filter_matches("PROD", &profile("orders-prod", None)));
-    assert!(filter_matches("分析", &profile("分析-replica", None)));
-    assert!(!filter_matches("ord prod", &profile("orders-prod", None)), "a part, not a fuzzy match");
-    assert!(!filter_matches("zzz", &profile("orders-prod", None)));
+    // An empty filter (spaces only too) is no filter: every row is listed.
+    assert!(Needle::new("").is_empty() && Needle::new("  ").is_empty());
+    assert!(Needle::new("PROD").profile(&profile("orders-prod", None)));
+    assert!(Needle::new("分析").profile(&profile("分析-replica", None)));
+    assert!(!Needle::new("ord prod").profile(&profile("orders-prod", None)), "a part, not a fuzzy match");
+    assert!(!Needle::new("zzz").profile(&profile("orders-prod", None)));
 }
 
 #[test]

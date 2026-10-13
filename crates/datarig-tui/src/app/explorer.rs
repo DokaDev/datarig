@@ -213,6 +213,8 @@ impl Needle {
                 .windows(n.len())
                 .any(|w| w.iter().zip(n).all(|(a, b)| a.to_ascii_lowercase() == *b));
         }
+        // Folded a character at a time: unlike `str::to_lowercase` for context-dependent cases
+        // only (a final sigma folds to `σ`, not `ς`).
         text.char_indices().any(|(at, _)| {
             let mut folded = text[at..].chars().flat_map(char::to_lowercase);
             self.chars.iter().all(|c| folded.next() == Some(*c))
@@ -227,13 +229,6 @@ impl Needle {
         let (addr, db, _) = p.endpoint();
         self.matches(&addr) || self.matches(&db)
     }
-}
-
-/// Whether profile `p` passes the filter `query`: a part of its name, its host (`host:port`)
-/// or its database, ignoring case.
-pub fn filter_matches(query: &str, p: &ConnectionConfig) -> bool {
-    let n = Needle::new(query);
-    n.is_empty() || n.profile(p)
 }
 
 /// How many columns `catalog` has for `schema.name` (`None`: it does not have the object).
@@ -680,8 +675,12 @@ impl App {
     }
 
     /// Expand (`Some(true)`), collapse (`Some(false)`) or toggle (`None`) the row. A profile that
-    /// is not connected connects (and expands once it is).
+    /// is not connected connects (and expands once it is). A row the filter shows open keeps
+    /// its own expansion: a change would not show (and could ask the server for something).
     fn explorer_set_open(&mut self, row: &Row, want: Option<bool>) {
+        if row.opened {
+            return;
+        }
         match &row.kind {
             RowKind::Folder(f) => {
                 let open = self.folders.is_expanded(f);
@@ -829,7 +828,7 @@ impl App {
             ExplorerAction::Bottom => self.explorer_move(|_, n| n.saturating_sub(1)),
             ExplorerAction::Expand => self.explorer_set_open(&row, Some(true)),
             ExplorerAction::Collapse => {
-                if self.row_expanded(&row) == Some(true) {
+                if !row.opened && self.row_expanded(&row) == Some(true) {
                     self.explorer_set_open(&row, Some(false));
                 } else {
                     self.explorer_parent();
@@ -878,7 +877,7 @@ impl App {
             ExplorerAction::Filter => self.explorer.filtering = true,
             ExplorerAction::FilterClear => {
                 self.explorer.filtering = false;
-                self.explorer.filter.set("");
+                self.explorer_clear_filter();
             }
             ExplorerAction::FilterAccept => self.explorer.filtering = false,
             ExplorerAction::Back => {
@@ -888,7 +887,7 @@ impl App {
                 } else if let Some(id) = attempt.or_else(|| self.latest_attempt()) {
                     self.cancel_connect(id);
                 } else if !self.explorer.filter.text().is_empty() {
-                    self.explorer.filter.set("");
+                    self.explorer_clear_filter();
                 }
             }
             ExplorerAction::ContextMenu => self.open_context_menu_here(),
@@ -1003,8 +1002,36 @@ impl App {
         }
     }
 
-    /// Enter (or a double click) on `row`.
+    /// Clear the `/` filter. A cursor on a row the tree does not show without it goes to the
+    /// nearest row above it (its parent, else the parent's) that it shows.
+    fn explorer_clear_filter(&mut self) {
+        let filtered = self.explorer_rows();
+        self.explorer.filter.set("");
+        let rows = self.explorer_rows();
+        let Some(i) = filtered.iter().position(|r| &r.kind == self.explorer.cursor()) else { return };
+        if rows.iter().any(|r| &r.kind == self.explorer.cursor()) {
+            return;
+        }
+        let mut depth = filtered[i].depth;
+        for r in filtered[..i].iter().rev() {
+            if r.depth >= depth {
+                continue;
+            }
+            if let Some(j) = rows.iter().position(|x| x.kind == r.kind) {
+                return self.explorer.select(&rows, j);
+            }
+            depth = r.depth;
+        }
+    }
+
+    /// Enter (or a double click) on `row`. On a row the filter shows open, only what opens
+    /// something else (a table) runs: its own expansion does not change.
     fn explorer_activate(&mut self, row: &Row) {
+        if row.opened
+            && !matches!(row.kind, RowKind::Node(_, Node::Object(..)) | RowKind::AuxNode(_, _, Node::Object(..)))
+        {
+            return;
+        }
         match &row.kind {
             RowKind::NewConnection => self.dispatch(Action::NewProfile),
             RowKind::Script(p) => {

@@ -152,8 +152,8 @@ fn unread_schemas_and_profiles_that_are_not_connected_are_not_searched() {
 }
 
 /// While filtering, Up and Down move among the rows shown and Enter keeps the filter; the
-/// cursor goes to the first row that matches whatever its kind. Opening a node the filter
-/// opened for its matches changes only that node's own expansion.
+/// cursor goes to the first row that matches whatever its kind. A node the filter shows open
+/// for its matches keeps its own expansion (closed).
 #[test]
 fn keys_work_on_the_filtered_rows() {
     let mut h = searchable();
@@ -181,6 +181,87 @@ fn keys_work_on_the_filtered_rows() {
     let shop = rows.iter().find(|r| matches!(r.kind, RowKind::Node(..)) && r.opened).unwrap();
     let RowKind::Node(id, n) = shop.kind else { unreachable!() };
     assert_eq!(h.app.conns.get(id).unwrap().tree.is_expanded(n), Some(false), "shown open, still closed");
+}
+
+/// A double click on the explorer row the harness shows as `name` (drawn first so that the
+/// explorer's area is known).
+fn double_click(h: &mut Harness, name: &str) {
+    use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+    h.draw(120, 40);
+    let i = h.rows().iter().position(|r| r.trim() == name).unwrap_or_else(|| panic!("no {name} in {:?}", h.rows()));
+    let area = h.app.explorer.area;
+    for _ in 0..2 {
+        h.mouse(MouseEventKind::Down(MouseButton::Left), area.x + 4, area.y + i as u16);
+    }
+}
+
+/// `l`, `h`, Enter and a double click on the rows the filter shows open for a match below them
+/// (a closed profile whose databases were not asked yet, its database, a closed schema, its
+/// group) change nothing that is stored: `h` goes to the row above, the others do nothing, and
+/// nothing is asked of the server. `Esc` gives the tree back exactly as it was.
+#[test]
+fn keys_and_clicks_on_rows_the_filter_opened_change_nothing() {
+    let mut h = searchable();
+    to(&mut h, "local-pg");
+    h.key(KeyCode::Char('h'));
+    let id = h.app.profiles[0].id;
+    let c = h.app.conns.entry(id);
+    assert!(c.connected && !c.expanded);
+    c.databases = None;
+    c.databases_asked = false;
+    let before = lines(&h);
+    h.sent();
+    filter(&mut h, "items");
+    h.key(KeyCode::Enter);
+    let filtered = ["+", "local-pg", "  db:datarig*", "    shop", "      Tables", "        order_items"];
+    assert_eq!(h.rows(), filtered);
+    for (row, parent) in [("Tables", "▾ shop"), ("shop", "▾ datarig default"), ("db:datarig*", "local-pg")] {
+        let name = if row.starts_with("db:") { "datarig default" } else { row };
+        to(&mut h, row);
+        h.key(KeyCode::Char('l'));
+        h.key(KeyCode::Right);
+        assert!(h.explorer_line().contains(name), "{row}: `l` stays: {}", h.explorer_line());
+        h.key(KeyCode::Enter);
+        double_click(&mut h, row);
+        assert_eq!(h.rows(), filtered, "{row}");
+        assert!(h.explorer_line().contains(name), "{row}: {}", h.explorer_line());
+        h.key(KeyCode::Char('h'));
+        assert!(h.explorer_line().contains(parent), "{row}: `h` goes up to {parent}: {}", h.explorer_line());
+        assert_eq!(h.rows(), filtered, "{row}");
+    }
+    h.key(KeyCode::Char('l'));
+    h.key(KeyCode::Enter);
+    double_click(&mut h, "local-pg");
+    h.key(KeyCode::Left);
+    assert_eq!(h.rows(), filtered);
+    assert!(h.sent().is_empty(), "nothing asked of the server");
+    h.key(KeyCode::Esc);
+    assert_eq!(lines(&h), before, "the tree as it was");
+    let c = h.app.conns.get(id).unwrap();
+    assert!(!c.expanded && !c.databases_asked);
+}
+
+/// Clearing the filter (`Esc`, or `Esc` while typing) with the cursor on a row the tree does
+/// not show without it puts the cursor on the nearest row above it that it shows.
+#[test]
+fn clearing_the_filter_puts_the_cursor_on_the_nearest_shown_ancestor() {
+    let mut h = searchable();
+    filter(&mut h, "email");
+    assert_eq!(h.explorer_line().trim(), "email  text, not null");
+    h.key(KeyCode::Esc);
+    assert_eq!(h.app.explorer.filter.text(), "");
+    assert_eq!(h.explorer_line().trim(), "▸ shop", "the closed schema it was in");
+    to(&mut h, "local-pg");
+    h.key(KeyCode::Char('h'));
+    filter(&mut h, "items");
+    h.key(KeyCode::Enter);
+    assert_eq!(h.explorer_line().trim(), "▸ order_items");
+    h.key(KeyCode::Esc);
+    assert!(h.explorer_line().contains("local-pg"), "the closed profile: {}", h.explorer_line());
+    // A row the tree shows without the filter keeps the cursor.
+    filter(&mut h, "cold");
+    h.key(KeyCode::Esc);
+    assert!(h.explorer_line().contains("cold"), "{}", h.explorer_line());
 }
 
 /// A filtered tree on a small screen.

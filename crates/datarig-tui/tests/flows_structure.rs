@@ -664,7 +664,9 @@ fn the_estimates_of_the_largest_tables_are_colored_by_size() {
     use datarig_core::driver::structure::RelationStats;
     use datarig_tui::theme::DARK;
     let mut h = shop_with_estimates(Lang::En);
-    // The color of the estimates on `name`'s line, and of its name (160x45: room for both).
+    // A wide explorer: room for the size of every line (the rows alone stay dim).
+    h.app.explorer.width = Some(60);
+    // The color of the estimates on `name`'s line, and of its name.
     let colors = |h: &mut Harness, name: &str, stats: &str| {
         let t = h.draw(160, 45);
         let buf = t.backend().buffer();
@@ -727,6 +729,13 @@ fn the_name_wins_over_the_estimates() {
     assert_eq!(line(&mut h, 160, 45, "users"), "        ▸ users      ~5k rows · 1.6 MB");
     assert_eq!(line(&mut h, 160, 45, "order_items"), "        ▸ order_items       ~150k rows");
     assert_eq!(line(&mut h, 160, 45, long), "        ▸ customer_loyalty_points");
+    // The largest table's rows alone stay dim: its color goes with its size.
+    let t = h.draw(160, 45);
+    let buf = t.backend().buffer();
+    let y = (0..45).find(|&y| row_text(buf, y).contains("▸ order_items ")).unwrap();
+    let text = row_text(buf, y);
+    let x = text[..text.find("~150k").unwrap()].chars().count() as u16;
+    assert_eq!(buf[(x, y)].fg, datarig_tui::theme::DARK.fg_dim);
     assert_eq!(line(&mut h, 120, 40, "users"), "        ▸ users     ~5k rows");
     assert_eq!(line(&mut h, 120, 40, "order_items"), "        ▸ order_items");
     assert_eq!(line(&mut h, 120, 40, long), "        ▸ customer_loyalty_…");

@@ -1,12 +1,13 @@
 //! The explorer's `/` filter over a large schema tree: one connected profile whose schemas are
-//! all listed and open (`schemas` × `per_schema` relations, with estimates), the filter typed
+//! all listed and open (`schemas` × `per_schema` relations, with estimates; the structure of
+//! every thirtieth table read, some of its columns' names matched by the filter), the filter typed
 //! and erased a key at a time at 160x45. Measured: each key with its frame (the filter edit, the
 //! rows it shows and the explorer drawn).
 
 use crate::apps;
 use crate::stats::{Summary, ms};
 use datarig_core::driver::SchemaObjects;
-use datarig_core::driver::structure::RelationStats;
+use datarig_core::driver::structure::{ColumnFill, RelationKind, RelationStats, StructureColumn, TableStructure};
 use datarig_tui::app::Focus;
 use ratatui::crossterm::event::{KeyCode, KeyModifiers};
 use serde_json::{Value, json};
@@ -31,6 +32,28 @@ fn objects(s: usize, per_schema: usize) -> SchemaObjects {
     }
 }
 
+/// Every this many tables of a schema, the structure of one is read.
+const STRUCTURE_EVERY: usize = 30;
+
+/// The structure of the `j`th table of schema `s`: a few columns, one named like an `events`
+/// table (`events_07_120_ref`, whatever the table's own name), so that the filter's first
+/// letters and its whole text find some in tables whose names do not match.
+fn structure(s: usize, j: usize) -> Box<TableStructure> {
+    let col = |name: String| StructureColumn {
+        name,
+        type_name: "bigint".into(),
+        not_null: true,
+        default: None,
+        fill: ColumnFill::Default,
+    };
+    let mut st = TableStructure::new(RelationKind::Table);
+    st.columns = ["id".to_string(), "event_at".into(), format!("events_{s:02}_{j:03}_ref"), "user_id".into()]
+        .into_iter()
+        .map(col)
+        .collect();
+    Box::new(st)
+}
+
 pub fn run(schemas: usize, per_schema: usize, n: usize) -> Result<Value, String> {
     let mut app = apps::offline("SELECT 1;", None);
     let id = app.profiles[0].id;
@@ -39,8 +62,15 @@ pub fn run(schemas: usize, per_schema: usize, n: usize) -> Result<Value, String>
     c.expanded = true;
     let names: Vec<String> = (0..schemas).map(|s| format!("schema_{s:02}")).collect();
     c.tree.set_schemas(names.clone());
+    let mut structures = 0;
     for (s, name) in names.iter().enumerate() {
-        c.tree.set_objects(name, Ok(objects(s, per_schema)));
+        let objects = objects(s, per_schema);
+        let tables = objects.tables.clone();
+        c.tree.set_objects(name, Ok(objects));
+        for (j, table) in tables.iter().enumerate().step_by(STRUCTURE_EVERY) {
+            c.tree.set_structure(name, table, Ok(structure(s, j)));
+            structures += 1;
+        }
     }
     c.tree.schemas.iter_mut().for_each(|s| s.expanded = true);
     let unfiltered = app.explorer_rows().len();
@@ -69,7 +99,7 @@ pub fn run(schemas: usize, per_schema: usize, n: usize) -> Result<Value, String>
     }
     let f = Summary::of(&frame);
     println!(
-        "explorer filter: {} relations in {schemas} open schemas ({unfiltered} rows) at {}x{}",
+        "explorer filter: {} relations in {schemas} open schemas ({unfiltered} rows, {structures} structures read) at {}x{}",
         schemas * per_schema,
         apps::WIDTH,
         apps::HEIGHT
@@ -78,6 +108,7 @@ pub fn run(schemas: usize, per_schema: usize, n: usize) -> Result<Value, String>
     Ok(json!({
         "relations": schemas * per_schema,
         "rows_unfiltered": unfiltered,
+        "structures": structures,
         "rows_most": most,
         "frame_ms": f.json(),
     }))

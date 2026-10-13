@@ -1,6 +1,5 @@
 ---
 source: crates/datarig-tui/tests/flows_strip_keys.rs
-assertion_line: 68
 expression: "h.draw(120, 30).backend()"
 ---
 "╭ Explorer ──────────────────╮ 1 console 1 ×                                                                            "

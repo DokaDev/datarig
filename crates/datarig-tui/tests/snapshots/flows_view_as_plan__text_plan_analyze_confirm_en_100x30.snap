@@ -1,6 +1,5 @@
 ---
 source: crates/datarig-tui/tests/flows_view_as_plan.rs
-assertion_line: 237
 expression: "h.draw(W, H).backend()"
 ---
 "╭ Explorer ─────────────╮ 1 console 1 ×                                                             "
