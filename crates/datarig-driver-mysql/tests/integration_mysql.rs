@@ -392,10 +392,12 @@ async fn sessions_are_set_up_on_the_server_by_role_and_policy() {
         (SessionRole::Meta, false, "ON", "18446744073709551615".to_string()),
     ] {
         let mut c = Conn::open(&url, role, read_only, "sessions_are_set_up_on_the_server_by_role_and_policy").await;
-        // The metadata session reads at once: its variables are looked at once it is idle (MySQL
-        // 8.0 shows a busy thread's as they were before its `SET`).
+        // The metadata session reads at once: its variables are looked at once it is idle, after
+        // its last read at connect (the keys). While a session reads `information_schema`, the
+        // server shows its `character_set_client` and `character_set_connection` as the views'
+        // own (`utf8mb3`), not the session's.
         if role == SessionRole::Meta {
-            c.wait(|e| matches!(e, DbEvent::Catalog(_)), 30).await;
+            c.wait(|e| matches!(e, DbEvent::Keys(_)), 30).await;
         }
         let id = only_session(&mut admin, role, "sessions_are_set_up_on_the_server_by_role_and_policy").await;
         let mut vars = std::collections::HashMap::new();
