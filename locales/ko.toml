@@ -97,6 +97,7 @@
 "complete.kind.view" = "뷰"
 "complete.kind.column" = "컬럼"
 "complete.kind.keyword" = "키워드"
+"complete.kind.value" = "값"
 
 "lang.switched" = "언어: 한국어"
 "icons.switched_on" = "Nerd Font 아이콘을 켰습니다"

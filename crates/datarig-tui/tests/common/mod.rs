@@ -970,7 +970,7 @@ pub fn sample_config(last_used: Option<&str>) -> Config {
 }
 
 pub fn catalog() -> Catalog {
-    let col = |n: &str, t: &str| ColumnInfo { name: n.into(), type_name: t.into() };
+    let col = |n: &str, t: &str| ColumnInfo::new(n, t);
     let rel = |s: &str, n: &str, v: bool, cols: Vec<ColumnInfo>| Relation {
         schema: s.into(),
         name: n.into(),
@@ -996,6 +996,18 @@ pub fn catalog() -> Catalog {
             ),
         ],
     }
+}
+
+/// [`catalog`] with `shop.orders.status` of an enumerated type (`order_status`: pending, paid,
+/// shipped, cancelled), as the PostgreSQL driver reads an enum.
+pub fn values_catalog() -> Catalog {
+    let mut cat = catalog();
+    let orders = cat.relations.iter_mut().find(|r| r.name == "orders").expect("shop.orders");
+    let status = orders.columns.iter_mut().find(|c| c.name == "status").expect("its status");
+    status.type_name = "order_status".into();
+    let values: Vec<String> = ["pending", "paid", "shipped", "cancelled"].map(String::from).into();
+    status.values = Some(values.into());
+    cat
 }
 
 pub fn meta(name: &str, ty: &str, numeric: bool, json: bool) -> ColumnMeta {

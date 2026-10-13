@@ -8,9 +8,23 @@ use crate::widgets::tree::Tree;
 use datarig_core::driver::{KeyCatalog, KeyMarks, Session};
 use datarig_core::profile::{ConnectionConfig, ProfileId};
 use datarig_core::sql::complete::Catalog;
+use datarig_core::sql::values::CheckValues;
 use std::collections::{BTreeSet, HashMap};
 use std::sync::LazyLock;
 use std::time::Instant;
+
+/// What completion knows of a table's checks (the values they allow its columns), by
+/// `(schema, table)`. Read from the table's structure, which the explorer or completion asks
+/// for; forgotten when the catalog is read again. A table not in the map is not known: a
+/// structure that could not be read leaves it so (asked again on the next use).
+pub type ChecksCache = HashMap<(String, String), TableChecks>;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TableChecks {
+    /// Its structure was asked for and has not come.
+    Asked,
+    Known(Vec<CheckValues>),
+}
 
 /// A connection attempt in progress (a spinner; `Esc` cancels it).
 #[derive(Clone, Debug)]
@@ -93,6 +107,8 @@ pub struct ProfileConn {
     pub catalog: Catalog,
     /// Why the catalog could not be read (the last one read, if any, stays).
     pub catalog_error: Option<String>,
+    /// The checks' values completion knows, of the profile's own database.
+    pub checks: ChecksCache,
     /// The key constraints of the profile's tables, read once per
     /// connection and again on a schema refresh.
     pub keys: Keys,
@@ -147,6 +163,7 @@ impl ProfileConn {
             tree: Tree::new(),
             catalog: Catalog::default(),
             catalog_error: None,
+            checks: ChecksCache::new(),
             keys: Keys::Unknown,
             resolved: None,
             pending: Vec::new(),
@@ -210,6 +227,8 @@ pub struct AuxMeta {
     /// The database's schemas, once read, or why they could not be (unknown until then).
     pub schemas: Option<Result<Vec<String>, String>>,
     pub catalog: Catalog,
+    /// The checks' values completion knows, of this database.
+    pub checks: ChecksCache,
     pub keys: Keys,
     /// When something last used it (the picker, the explorer, completion, a run).
     pub used: Instant,
@@ -314,6 +333,7 @@ impl ConnectionManager {
             session: None,
             schemas: None,
             catalog: Catalog::default(),
+            checks: ChecksCache::new(),
             keys: Keys::Unknown,
             used: now,
             tree: Tree::new(),
@@ -365,6 +385,23 @@ impl ConnectionManager {
         match database {
             None => self.catalog(profile),
             Some(d) => profile.and_then(|p| self.aux(p, d)).map_or(&EMPTY_CATALOG, |a| &a.catalog),
+        }
+    }
+
+    /// The checks' values completion knows of `profile` in `database` (`None`: the profile's
+    /// own), if it has a connection there.
+    pub fn checks_in(&self, profile: ProfileId, database: Option<&str>) -> Option<&ChecksCache> {
+        match database {
+            None => self.conns.get(&profile).map(|c| &c.checks),
+            Some(d) => self.aux(profile, d).map(|a| &a.checks),
+        }
+    }
+
+    /// [`ConnectionManager::checks_in`], to change.
+    pub fn checks_in_mut(&mut self, profile: ProfileId, database: Option<&str>) -> Option<&mut ChecksCache> {
+        match database {
+            None => self.conns.get_mut(&profile).map(|c| &mut c.checks),
+            Some(d) => self.aux_mut(profile, d).map(|a| &mut a.checks),
         }
     }
 

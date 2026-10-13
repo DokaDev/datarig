@@ -9,6 +9,8 @@
 //! whole text with the bytes it searched, and typing next to a hinted statement of about 4.7 MB
 //! (after a 100,000-line INSERT, above the same INSERT on one line, above a statement under a
 //! 100,000-line comment header) with the bytes the hint checks lexed per key counted.
+//! In both, keys typed in a string literal compared with an enumerated column, the completion
+//! popup offering its values made at each key.
 //! `editor_mysql`: the same keys in a 5 MB MySQL script with `DELIMITER` blocks.
 
 use crate::apps;
@@ -83,6 +85,43 @@ fn search_keys(
         most.highlighted = most.highlighted.max(w.highlighted);
     }
     (out, most)
+}
+
+/// Keys typed in a string literal compared with an enumerated column, on a new line of the
+/// text (with `ender` before it, which ends the statement it is in): each key, the completion
+/// timer run past its delay, and the frame. The popup offers the column's values, refined by
+/// each key typed in the literal and made again after it. The catalog of the app's profile has
+/// that column, and the editor is in Normal mode before and after.
+fn values_keys(app: &mut App, term: &mut Terminal<TestBackend>, n: usize, ender: &str) -> Vec<f64> {
+    use datarig_core::sql::complete::{Catalog, ColumnInfo, Relation};
+    let mut status = ColumnInfo::new("status", "order_status");
+    let values: Vec<String> = ["pending", "paid", "shipped", "cancelled"].map(String::from).into();
+    status.values = Some(values.into());
+    let orders = Relation {
+        schema: "shop".into(),
+        name: "orders".into(),
+        is_view: false,
+        columns: vec![ColumnInfo::new("id", "bigint"), status],
+    };
+    let pid = app.profiles[0].id;
+    app.conns.entry(pid).catalog = Catalog { schemas: vec!["shop".into()], relations: vec![orders] };
+    apps::key(app, KeyCode::Esc, KeyModifiers::NONE);
+    apps::char(app, 'o');
+    for c in format!("{ender} SELECT * FROM shop.orders o WHERE o.status = '").chars() {
+        apps::char(app, c);
+    }
+    let later = datarig_tui::app::COMPLETION_DEBOUNCE * 2;
+    let keys = keystrokes(app, term, n, |a, i| {
+        match i % 8 {
+            k @ 0..4 => apps::char(a, ['p', 'a', 'i', 'd'][k]),
+            _ => apps::key(a, KeyCode::Backspace, KeyModifiers::NONE),
+        }
+        let due = a.now() + later;
+        a.on_tick(due);
+    });
+    apps::key(app, KeyCode::Esc, KeyModifiers::NONE);
+    apps::key(app, KeyCode::Esc, KeyModifiers::NONE);
+    keys
 }
 
 /// Time `n` keystrokes from `each(i)`, each followed by a frame.
@@ -204,6 +243,9 @@ pub fn run(scratch: &Path, bytes: usize, n: usize) -> Result<Value, String> {
     // What a search of the whole text searches: each line with its line break.
     let text_bytes = app.tab().editor.len_bytes() + 1;
 
+    // Completion of an enumerated column's values in a string literal.
+    let values = values_keys(&mut app, &mut term, n, ";");
+
     // A theme switch: every built-in theme in turn, each drawn at once.
     let names = datarig_tui::theme::NAMES;
     let themes = keystrokes(&mut app, &mut term, n.min(200), |a, i| {
@@ -240,6 +282,7 @@ pub fn run(scratch: &Path, bytes: usize, n: usize) -> Result<Value, String> {
         "theme_switch_ms": report("theme", &themes),
         "search_miss_ms": report("/ miss", &search_miss),
         "search_next_ms": report("n", &search_next),
+        "values_ms": report("values", &values),
         "search": {
             "miss_bytes_max": miss.bytes,
             "next_bytes_max": next.bytes,
@@ -391,6 +434,7 @@ pub fn run_mysql(bytes: usize, n: usize) -> Result<Value, String> {
         k => apps::char(a, hint_keys[k % hint_keys.len()]),
     });
     apps::key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+    let values = values_keys(&mut app, &mut term, n, ";");
     let jump_keys = ["x", "G", "g", "g", "u"];
     let jumps = keystrokes(&mut app, &mut term, n.min(50), |a, i| match jump_keys[i % jump_keys.len()] {
         "G" => apps::key(a, KeyCode::Char('G'), KeyModifiers::SHIFT),
@@ -413,6 +457,7 @@ pub fn run_mysql(bytes: usize, n: usize) -> Result<Value, String> {
         "run_hints_ms": report("run hints", &hints),
         "run_hints": hinted,
         "jump_ms": report("jumps", &jumps),
+        "values_ms": report("values", &values),
         "rss_kb": { "after_edits": rss_edits },
     }))
 }

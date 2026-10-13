@@ -5,10 +5,18 @@
 //! ([`complete_in_dialect`]). Names are offered as SQL: quoted when the server would not read
 //! them back bare ([`Dialect::quote_ident`]), and always quoted after an opening quote. A name matches when the
 //! typed prefix starts it; names the typed letters only appear in, in order, follow those.
+//!
+//! Inside a string literal compared with a column (`col = '…'`, `col <> '…'`, `col IN ('a',
+//! '…')`, `SET col = '…'`), the values the column may hold are offered ([`complete_with`]):
+//! those of its enumerated type ([`ColumnInfo::values`]), then those its table's checks list
+//! ([`values::check_values`](super::values::check_values)). They are written into the literal
+//! as the dialect escapes them there ([`Dialect::literal_body`]).
 
-use super::dialect::Dialect;
+use super::dialect::{Dialect, LiteralOpen};
 use super::lexer::{LexState, Tok, Token, is_space, lex_from};
+use super::values::CheckValues;
 use crate::i18n::Label;
+use std::sync::Arc;
 
 #[derive(Clone, Debug, Default)]
 pub struct Catalog {
@@ -28,6 +36,17 @@ pub struct Relation {
 pub struct ColumnInfo {
     pub name: String,
     pub type_name: String,
+    /// The values the column's type allows, in the type's order (a PostgreSQL enum, also
+    /// through domains over one; a MySQL `ENUM`); `None` for any other type. Columns of one
+    /// type share them.
+    pub values: Option<Arc<[String]>>,
+}
+
+impl ColumnInfo {
+    /// A column of type `type_name` with no values of its type ([`ColumnInfo::values`]).
+    pub fn new(name: impl Into<String>, type_name: impl Into<String>) -> Self {
+        Self { name: name.into(), type_name: type_name.into(), values: None }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -37,6 +56,8 @@ pub enum Kind {
     Table,
     View,
     Keyword,
+    /// A value the column a string literal is compared with may hold.
+    Value,
 }
 
 impl Kind {
@@ -48,6 +69,7 @@ impl Kind {
             Kind::Table => Label::CompleteKindTable,
             Kind::View => Label::CompleteKindView,
             Kind::Keyword => Label::CompleteKindKeyword,
+            Kind::Value => Label::CompleteKindValue,
         }
     }
 }
@@ -57,17 +79,46 @@ pub struct Candidate {
     pub label: String,
     pub kind: Kind,
     pub detail: Option<String>,
+    /// The text accepting it writes, when it is not the label: a value written inside its
+    /// literal (`it''s` for `it's`).
+    pub insert: Option<String>,
+}
+
+impl Candidate {
+    /// The text accepting the candidate writes.
+    pub fn text(&self) -> &str {
+        self.insert.as_deref().unwrap_or(&self.label)
+    }
 }
 
 #[derive(Clone, Debug)]
 pub struct Completion {
     pub items: Vec<Candidate>,
     /// Byte offset (in the full source) where the typed prefix starts; accepting a candidate
-    /// replaces `replace_start..cursor + trail` with the label.
+    /// replaces `replace_start..cursor + trail` with its text ([`Candidate::text`]).
     pub replace_start: usize,
     /// Bytes after the cursor that the label replaces too: the closing `"` of a quoted name
-    /// being typed (`"Mi|"`), which the label brings itself.
+    /// being typed (`"Mi|"`), which the label brings itself, or the rest of a literal's value
+    /// (`'pa|id'`; its closing quote stays).
     pub trail: usize,
+}
+
+/// What [`complete_with`] found: the completion, and the table whose checks would give values
+/// if they were known.
+#[derive(Clone, Debug, Default)]
+pub struct Outcome {
+    pub completion: Option<Completion>,
+    pub wants_checks: Option<WantsChecks>,
+}
+
+/// The cursor is in a string literal compared with a column of `schema.table`, whose checks are
+/// not known ([`complete_with`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WantsChecks {
+    pub schema: String,
+    pub table: String,
+    /// Where the literal's value starts: a byte offset in the full source.
+    pub literal: usize,
 }
 
 pub const MAX_ITEMS: usize = 10;
@@ -249,13 +300,13 @@ fn columns_of(rel: &Relation, typed: &Typed) -> Vec<Ranked> {
         .filter_map(|c| {
             let detail = (!c.type_name.is_empty()).then(|| c.type_name.clone());
             rank(&c.name, &typed.text)
-                .map(|m| (m, Candidate { label: typed.ident(&c.name), kind: Kind::Column, detail }))
+                .map(|m| (m, Candidate { label: typed.ident(&c.name), kind: Kind::Column, detail, insert: None }))
         })
         .collect()
 }
 
 fn relation_candidate(r: &Relation, label: String) -> Candidate {
-    Candidate { label, kind: if r.is_view { Kind::View } else { Kind::Table }, detail: None }
+    Candidate { label, kind: if r.is_view { Kind::View } else { Kind::Table }, detail: None, insert: None }
 }
 
 /// Compute completion candidates at byte offset `cursor` of `src`, unqualified names resolved in
@@ -288,7 +339,7 @@ pub fn complete_in_dialect(
 }
 
 /// [`complete_in_dialect`] for text that starts where the lexer's state is `state` (lines of a
-/// longer text: see [`lex_from`]).
+/// longer text: see [`lex_from`]). No table's checks are known ([`complete_with`]).
 pub fn complete_from(
     src: &str,
     cursor: usize,
@@ -298,6 +349,28 @@ pub fn complete_from(
     d: Dialect,
     state: LexState,
 ) -> Option<Completion> {
+    complete_with(src, cursor, cat, force, path, d, state, &|_, _| None).completion
+}
+
+/// [`complete_from`] where `checks(schema, table)` are the values the checks of a table allow
+/// its columns, when they are known. In a string literal compared with a column the values of
+/// the column are offered: its type's, then its checks' (once each), filtered as names are by
+/// what the literal holds before the cursor (an empty one: all). Accepting one replaces the
+/// literal's value (not its quotes; one being typed, open at the cursor, gets its closing
+/// quote). When the column's table's checks are not known, the outcome says so
+/// ([`Outcome::wants_checks`]).
+#[allow(clippy::too_many_arguments)]
+pub fn complete_with<'c>(
+    src: &str,
+    cursor: usize,
+    cat: &Catalog,
+    force: bool,
+    path: &[String],
+    d: Dialect,
+    state: LexState,
+    checks: &dyn Fn(&str, &str) -> Option<&'c [CheckValues]>,
+) -> Outcome {
+    let none = Outcome::default();
     // The segment around the cursor (between the statement ends around it), and the lexer's
     // state where it starts.
     let (mut seg_start, mut seg_end, mut seg_state) = (0, src.len(), state);
@@ -311,7 +384,7 @@ pub fn complete_from(
             }
             // Inside a terminator of more than one character, or a client command line.
             if cursor < t.end {
-                return None;
+                return none;
             }
             (seg_start, seg_state) = (t.end, lexed);
         }
@@ -334,6 +407,23 @@ pub fn complete_from(
             })
     });
 
+    // In a string: the values of the column it is compared with.
+    if let Some(lit) = toks.iter().find(|t| t.kind == Tok::Str && t.start < cur && (cur < t.end || !closed(d, t, seg)))
+    {
+        let ctx = Context { d, cat, path, seg, state: seg_state };
+        return literal_values(&ctx, &toks, lit, cur, checks)
+            .map(|mut o| {
+                if let Some(c) = &mut o.completion {
+                    c.replace_start += seg_start;
+                }
+                if let Some(w) = &mut o.wants_checks {
+                    w.literal += seg_start;
+                }
+                o
+            })
+            .unwrap_or_default();
+    }
+
     // No completion inside strings, comments, other quoted identifiers or dollar bodies.
     for t in &toks {
         let inside = match t.kind {
@@ -344,7 +434,7 @@ pub fn complete_from(
             _ => false,
         };
         if inside {
-            return None;
+            return none;
         }
     }
 
@@ -379,7 +469,7 @@ pub fn complete_from(
     };
 
     if prefix.is_empty() && qualifier.is_none() && !force && !typed.quoted {
-        return None;
+        return none;
     }
 
     // The statement's tables and `WITH` queries. An open quote runs to the end of the text, so
@@ -394,14 +484,7 @@ pub fn complete_from(
     };
     let refs = table_refs(d, &ctx_toks, ctx_src);
     let ctes = with_queries(d, &ctx_toks, ctx_src);
-    let resolve = |schema: Option<&str>, name: &str| -> Option<&Relation> {
-        match schema {
-            None => {
-                ctes.iter().find(|c| c.name.eq_ignore_ascii_case(name)).or_else(|| find_rel(d, cat, None, name, path))
-            }
-            Some(_) => find_rel(d, cat, schema, name, path),
-        }
-    };
+    let resolve = |schema: Option<&str>, name: &str| resolve_in(d, cat, &ctes, path, schema, name);
     let mut items: Vec<Ranked> = Vec::new();
 
     if let Some((qs, q)) = qualifier {
@@ -409,12 +492,7 @@ pub fn complete_from(
             if let Some(rel) = find_rel(d, cat, Some(&s), &q, path) {
                 items.extend(columns_of(rel, &typed));
             }
-        } else if let Some(rel) = refs
-            .iter()
-            .filter(|r| r.alias.as_deref().is_some_and(|a| a.eq_ignore_ascii_case(&q)))
-            .chain(refs.iter().filter(|r| r.alias.is_none() && r.name.eq_ignore_ascii_case(&q)))
-            .find_map(|r| resolve(r.schema.as_deref(), &r.name))
-        {
+        } else if let Some(rel) = referenced(&refs, &q, &resolve) {
             items.extend(columns_of(rel, &typed));
         } else if cat.schemas.iter().any(|s| s.eq_ignore_ascii_case(&q)) {
             let mut rels: Vec<(u8, &Relation)> = cat
@@ -432,10 +510,11 @@ pub fn complete_from(
         // The statement's `WITH` queries hide relations of the same name.
         items.extend(ctes.iter().filter_map(|c| {
             rank(&c.name, prefix)
-                .map(|m| (m, Candidate { label: typed.ident(&c.name), kind: Kind::Table, detail: None }))
+                .map(|m| (m, Candidate { label: typed.ident(&c.name), kind: Kind::Table, detail: None, insert: None }))
         }));
         items.extend(cat.schemas.iter().filter_map(|s| {
-            rank(s, prefix).map(|m| (m, Candidate { label: typed.ident(s), kind: Kind::Schema, detail: None }))
+            rank(s, prefix)
+                .map(|m| (m, Candidate { label: typed.ident(s), kind: Kind::Schema, detail: None, insert: None }))
         }));
         // The relations the search path reaches, by their bare name (the first schema of the
         // path that has a name wins, as the server resolves it) ...
@@ -479,7 +558,7 @@ pub fn complete_from(
             let lower = !prefix.is_empty() && prefix.chars().all(|c| !c.is_uppercase());
             items.extend(d.keywords().iter().filter(|k| starts_ci(k, prefix)).map(|k| {
                 let label = if lower { k.to_lowercase() } else { k.to_string() };
-                (PREFIX, Candidate { label, kind: Kind::Keyword, detail: None })
+                (PREFIX, Candidate { label, kind: Kind::Keyword, detail: None, insert: None })
             }));
         }
     }
@@ -489,9 +568,235 @@ pub fn complete_from(
     let mut items: Vec<Candidate> = items.into_iter().map(|(_, c)| c).collect();
     items.truncate(MAX_ITEMS);
     if items.is_empty() {
+        return none;
+    }
+    Outcome {
+        completion: Some(Completion { items, replace_start: seg_start + prefix_start, trail }),
+        wants_checks: None,
+    }
+}
+
+/// The relation `schema.name` (`schema` `None`: unqualified) of a statement whose `WITH`
+/// queries are `ctes`: an unqualified name is one of those first, else a relation of `cat` as
+/// the search path `path` finds it.
+fn resolve_in<'a>(
+    d: Dialect,
+    cat: &'a Catalog,
+    ctes: &'a [Relation],
+    path: &[String],
+    schema: Option<&str>,
+    name: &str,
+) -> Option<&'a Relation> {
+    match schema {
+        None => ctes.iter().find(|c| c.name.eq_ignore_ascii_case(name)).or_else(|| find_rel(d, cat, None, name, path)),
+        Some(_) => find_rel(d, cat, schema, name, path),
+    }
+}
+
+/// The relation qualifier `q` stands for in a statement that reads `refs`: the one it is an
+/// alias of, else one read by that name without an alias.
+fn referenced<'a>(
+    refs: &[TableRef],
+    q: &str,
+    resolve: &dyn Fn(Option<&str>, &str) -> Option<&'a Relation>,
+) -> Option<&'a Relation> {
+    refs.iter()
+        .filter(|r| r.alias.as_deref().is_some_and(|a| a.eq_ignore_ascii_case(q)))
+        .chain(refs.iter().filter(|r| r.alias.is_none() && r.name.eq_ignore_ascii_case(q)))
+        .find_map(|r| resolve(r.schema.as_deref(), &r.name))
+}
+
+/// What completion reads names in: the dialect, the catalog, the search path, and the segment
+/// around the cursor with the lexer's state where it starts.
+struct Context<'a> {
+    d: Dialect,
+    cat: &'a Catalog,
+    path: &'a [String],
+    seg: &'a str,
+    state: LexState,
+}
+
+/// The values offered in string literal `lit` of the segment (tokens `toks`), the cursor at
+/// `cur` inside it ([`complete_with`]); offsets in the segment. `None`: it is not compared
+/// with a column whose values are known.
+fn literal_values<'c>(
+    ctx: &Context,
+    toks: &[Token],
+    lit: &Token,
+    cur: usize,
+    checks: &dyn Fn(&str, &str) -> Option<&'c [CheckValues]>,
+) -> Option<Outcome> {
+    let (d, seg) = (ctx.d, ctx.seg);
+    let open: LiteralOpen = d.literal_open(&seg[..lit.start], lit.text(seg))?;
+    let quote = open.quote.len_utf8();
+    let start = lit.start + open.prefix + quote;
+    if cur < start {
         return None;
     }
-    Some(Completion { items, replace_start: seg_start + prefix_start, trail })
+    // A quote typed before other text pairs with a quote further on: one on another line, or
+    // one a name or another quote follows right away. The literal is then open at the cursor.
+    let is_closed = closed(d, lit, seg);
+    let end = if is_closed { lit.end - quote } else { lit.end };
+    let far = is_closed
+        && (seg[cur..end].contains('\n')
+            || seg[lit.end..].chars().next().is_some_and(|c| c.is_alphanumeric() || c == '_' || c == '\'' || c == '"'));
+    let open_here = !is_closed || far;
+    let mut before: Vec<&Token> = toks.iter().filter(|t| t.end <= lit.start && !t.is_trivia()).collect();
+    // A MySQL charset introducer (`_utf8mb4'…'`) is the literal's.
+    if matches!(d, Dialect::MySql(_))
+        && before.last().is_some_and(|t| t.kind == Tok::Ident && t.end == lit.start && t.text(seg).starts_with('_'))
+    {
+        before.pop();
+    }
+    let target = compared_column(&before, seg)?;
+    // The statement's tables, read with the literal left out (an open one runs to the end).
+    let rest = format!("{} {}", &seg[..lit.start], &seg[if open_here { cur } else { lit.end }..]);
+    let rest_toks = lex_from(&rest, d, ctx.state);
+    let refs = table_refs(d, &rest_toks, &rest);
+    let ctes = with_queries(d, &rest_toks, &rest);
+    let resolve = |schema: Option<&str>, name: &str| resolve_in(d, ctx.cat, &ctes, ctx.path, schema, name);
+    let names: Vec<String> = target.iter().map(|t| unquote(d, t, seg)).collect();
+    let (rel, column) = match names.as_slice() {
+        [c] => refs.iter().find_map(|r| {
+            let rel = resolve(r.schema.as_deref(), &r.name)?;
+            Some((rel, column_named(rel, c)?))
+        })?,
+        [q, c] => {
+            let rel = referenced(&refs, q, &resolve).or_else(|| resolve(None, q))?;
+            (rel, column_named(rel, c)?)
+        }
+        [s, t, c] => {
+            let rel = find_rel(d, ctx.cat, Some(s), t, ctx.path)?;
+            (rel, column_named(rel, c)?)
+        }
+        _ => return None,
+    };
+    // The column's type's values, then its checks' (a `WITH` query's columns have neither).
+    let mut values: Vec<(&str, Option<&str>)> = Vec::new();
+    for v in column.values.iter().flat_map(|v| v.iter()) {
+        values.push((v.as_str(), Some(column.type_name.as_str())));
+    }
+    let mut wants_checks = None;
+    if !rel.schema.is_empty() {
+        match checks(&rel.schema, &rel.name) {
+            Some(cs) => {
+                for v in cs.iter().filter(|c| c.column == column.name).flat_map(|c| c.values.iter()) {
+                    if !values.iter().any(|(x, _)| *x == v.as_str()) {
+                        values.push((v.as_str(), Some("CHECK")));
+                    }
+                }
+            }
+            None => {
+                wants_checks = Some(WantsChecks { schema: rel.schema.clone(), table: rel.name.clone(), literal: start })
+            }
+        }
+    }
+    let typed = d.unescape_literal_body(&seg[start..cur], open);
+    let mut items: Vec<Ranked> = values
+        .into_iter()
+        .filter_map(|(v, detail)| {
+            let mut insert = d.literal_body(v, open);
+            if open_here {
+                insert.push(open.quote);
+            }
+            let detail = detail.filter(|t| !t.is_empty()).map(str::to_string);
+            rank(v, &typed)
+                .map(|m| (m, Candidate { label: v.to_string(), kind: Kind::Value, detail, insert: Some(insert) }))
+        })
+        .collect();
+    items.sort_by_key(|(m, _)| *m);
+    let items: Vec<Candidate> = items.into_iter().map(|(_, c)| c).take(MAX_ITEMS).collect();
+    let trail = if open_here { 0 } else { end - cur };
+    let completion = (!items.is_empty()).then_some(Completion { items, replace_start: start, trail });
+    Some(Outcome { completion, wants_checks })
+}
+
+/// Column `name` of `rel`: as written, else whatever its ASCII case.
+fn column_named<'a>(rel: &'a Relation, name: &str) -> Option<&'a ColumnInfo> {
+    rel.columns
+        .iter()
+        .find(|c| c.name == name)
+        .or_else(|| rel.columns.iter().find(|c| c.name.eq_ignore_ascii_case(name)))
+}
+
+/// The column reference (`col`, `t.col`, `s.t.col`: its names' tokens) a literal right after
+/// `before` (the significant tokens before it) is compared with: `col = ` (also `<>`, `!=`,
+/// `<=>`, and `SET col = `), or `col IN (` / `col NOT IN (` with literals before it in the list.
+fn compared_column<'t>(before: &[&'t Token], src: &str) -> Option<Vec<&'t Token>> {
+    let mut i = before.len();
+    let last = before.last()?;
+    if last.kind == Tok::Op {
+        // The operator: its one-character tokens written together.
+        let mut from = i - 1;
+        while from > 0 && before[from - 1].kind == Tok::Op && before[from - 1].end == before[from].start {
+            from -= 1;
+        }
+        let op: String = before[from..i].iter().map(|t| t.text(src)).collect();
+        if !matches!(op.as_str(), "=" | "<>" | "!=" | "<=>") {
+            return None;
+        }
+        i = from;
+    } else {
+        // An `IN` list: literals (a MySQL charset introducer before a string), numbers, `NULL`.
+        loop {
+            let t = before.get(i.checked_sub(1)?)?;
+            match t.kind {
+                Tok::LParen => break,
+                Tok::Comma => {}
+                _ => return None,
+            }
+            i -= 1;
+            let item = before.get(i.checked_sub(1)?)?;
+            match item.kind {
+                Tok::Str | Tok::Number => i -= 1,
+                Tok::Keyword if item.text(src).eq_ignore_ascii_case("NULL") => i -= 1,
+                _ => return None,
+            }
+            if item.kind == Tok::Str
+                && let Some(cs) = i.checked_sub(1).map(|k| before[k])
+                && cs.kind == Tok::Ident
+                && cs.end == item.start
+                && cs.text(src).starts_with('_')
+            {
+                i -= 1;
+            }
+        }
+        i -= 1;
+        let kw_at =
+            |k: usize, w: &str| before.get(k).is_some_and(|t| t.is_word() && t.text(src).eq_ignore_ascii_case(w));
+        if !kw_at(i.checked_sub(1)?, "IN") {
+            return None;
+        }
+        i -= 1;
+        if i > 0 && kw_at(i - 1, "NOT") {
+            i -= 1;
+        }
+    }
+    // The reference, in parentheses or not.
+    let mut end = i;
+    let paren = end > 0 && before[end - 1].kind == Tok::RParen;
+    if paren {
+        end -= 1;
+    }
+    let mut start = end;
+    while start > 0 {
+        let t = before[start - 1];
+        let name = matches!(t.kind, Tok::Ident | Tok::QuotedIdent | Tok::Keyword);
+        let expect_name = (end - start).is_multiple_of(2);
+        if (expect_name && name) || (!expect_name && t.kind == Tok::Dot) {
+            start -= 1;
+        } else {
+            break;
+        }
+    }
+    // It starts with a name, and holds three at most.
+    if start == end || before[start].kind == Tok::Dot || end - start > 5 {
+        return None;
+    }
+    if paren && !(start > 0 && before[start - 1].kind == Tok::LParen) {
+        return None;
+    }
+    Some(before[start..end].iter().copied().filter(|t| t.kind != Tok::Dot).collect())
 }
 
 /// The `WITH` queries of a statement (`WITH a AS (…), b(x, y) AS (…)`, also nested ones) as
@@ -535,7 +840,7 @@ fn with_queries(d: Dialect, toks: &[Token], src: &str) -> Vec<Relation> {
             }
             let close = matching_paren(&sig, j);
             let names: Vec<String> = listed.unwrap_or_else(|| select_list_names(d, &sig[j + 1..close], src));
-            let columns = names.into_iter().map(|name| ColumnInfo { name, type_name: String::new() }).collect();
+            let columns = names.into_iter().map(|name| ColumnInfo::new(name, "")).collect();
             out.push(Relation { schema: String::new(), name, is_view: false, columns });
             j = close + 1;
             if !sig.get(j).is_some_and(|t| t.kind == Tok::Comma) {

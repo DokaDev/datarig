@@ -363,6 +363,21 @@ impl TabSession {
     }
 }
 
+/// Where completion in a string literal waits for a table's structure (its checks' values): the
+/// tab's binding and its profile's attempt, the database (`None`: the profile's own) and table,
+/// and where the literal's value starts. A structure that comes when any of these changed, or
+/// the cursor left the literal, makes nothing.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ValuesWait {
+    pub binding: u64,
+    pub profile: ProfileId,
+    pub generation: u64,
+    pub database: Option<String>,
+    pub schema: String,
+    pub table: String,
+    pub literal: usize,
+}
+
 pub struct Tab {
     pub id: TabId,
     pub kind: TabKind,
@@ -380,6 +395,9 @@ pub struct Tab {
     pub popup: Option<Popup>,
     /// When the debounced auto-completion pops up.
     pub completion_due: Option<Instant>,
+    /// Completion in a string literal asked for a table's structure for the values its checks
+    /// allow: when it comes, the popup is made again if the tab is still where it asked.
+    pub values_wait: Option<ValuesWait>,
     pub results: Results,
     pub grid: GridState,
     pub exec: TabSession,
@@ -506,6 +524,7 @@ impl Tab {
             editor,
             popup: None,
             completion_due: None,
+            values_wait: None,
             results: Results::Empty,
             grid: GridState::default(),
             exec: TabSession::new(),

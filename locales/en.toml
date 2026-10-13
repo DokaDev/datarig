@@ -99,6 +99,7 @@
 "complete.kind.view" = "view"
 "complete.kind.column" = "column"
 "complete.kind.keyword" = "keyword"
+"complete.kind.value" = "value"
 
 "lang.switched" = "Language: English"
 "icons.switched_on" = "Nerd Font icons on"

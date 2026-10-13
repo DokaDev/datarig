@@ -183,6 +183,75 @@ async fn introspection_lists_schemas_objects_and_catalog() {
     }
 }
 
+/// Completion's values: an enum column's labels in their order (`enumsortorder`, which
+/// `ADD VALUE … BEFORE` makes differ from the labels' creation), also through domains over it
+/// (columns of one enum share them), none for an array of it or another type; read with the
+/// catalog. The values a check lists come from the table's structure, in the shapes the server
+/// writes for `text` and `varchar` columns; the dev database's `shop.orders.status` check too.
+#[tokio::test(flavor = "multi_thread")]
+async fn enum_and_check_values_for_completion() {
+    use datarig_core::sql::dialect::Dialect;
+    use datarig_core::sql::values::{CheckValues, check_values};
+    let Some(url) = pg_url("enum_and_check_values_for_completion") else { return };
+    let schema = format!("zz_values_{}", std::process::id());
+    let _guard = SchemaGuard::new(&url, &schema);
+    let s = &schema;
+    for sql in [
+        format!("CREATE SCHEMA {s}"),
+        format!("CREATE TYPE {s}.mood AS ENUM ('b', 'a')"),
+        format!("ALTER TYPE {s}.mood ADD VALUE 'c' BEFORE 'b'"),
+        format!("ALTER TYPE {s}.mood ADD VALUE 'it''s'"),
+        format!("ALTER TYPE {s}.mood ADD VALUE 'back\\slash'"),
+        format!("CREATE DOMAIN {s}.d1 AS {s}.mood"),
+        format!("CREATE DOMAIN {s}.d2 AS {s}.d1 NOT NULL"),
+        format!(
+            "CREATE TABLE {s}.t (m {s}.mood, d {s}.d2, arr {s}.mood[], \
+             txt text CHECK (txt IN ('x', 'y''z')), vc varchar(10) CHECK (vc IN ('u', 'v')), \
+             one text CHECK (one = 'k' OR one = 'l'), n int CHECK (n IN (1, 2)))"
+        ),
+    ] {
+        pg_clean::run_fresh(&url, &sql).unwrap_or_else(|e| panic!("{e}: {sql}"));
+    }
+    let mut c = Conn::open(&url, SessionRole::Meta).await;
+    let DbEvent::Catalog(Ok(cat)) = c.wait(|e| matches!(e, DbEvent::Catalog(_)), 30).await else {
+        panic!("catalog failed")
+    };
+    let t = cat.relations.iter().find(|r| r.schema == *s && r.name == "t").expect("the table");
+    let values = |name: &str| {
+        let col = t.columns.iter().find(|c| c.name == name).expect(name);
+        col.values.as_ref().map(|v| v.to_vec())
+    };
+    let labels: Vec<String> = ["c", "b", "a", "it's", "back\\slash"].map(String::from).into();
+    assert_eq!(values("m"), Some(labels.clone()));
+    assert_eq!(values("d"), Some(labels), "through two domains");
+    let (m, d) = (&t.columns[0], &t.columns[1]);
+    assert!(std::sync::Arc::ptr_eq(m.values.as_ref().unwrap(), d.values.as_ref().unwrap()), "shared");
+    assert_eq!((values("arr"), values("txt"), values("n")), (None, None, None));
+    let orders = cat.relations.iter().find(|r| r.schema == "shop" && r.name == "orders").expect("shop.orders");
+    assert!(orders.columns.iter().all(|c| c.values.is_none()), "the dev database has no enum");
+
+    let mut structure = async |table: &str, schema: &str| {
+        c.session.send(DbCommand::LoadStructure { schema: schema.into(), table: table.into() });
+        let DbEvent::Structure { result, .. } = c.wait(|e| matches!(e, DbEvent::Structure { .. }), 30).await else {
+            unreachable!()
+        };
+        result.expect(table)
+    };
+    let st = structure("t", s).await;
+    let v = |column: &str, xs: &[&str]| CheckValues {
+        column: column.into(),
+        values: xs.iter().map(|x| x.to_string()).collect(),
+    };
+    let mut found = check_values(Dialect::Postgres, &st.checks);
+    found.sort_by(|a, b| a.column.cmp(&b.column));
+    assert_eq!(found, [v("one", &["k", "l"]), v("txt", &["x", "y'z"]), v("vc", &["u", "v"])], "{:?}", st.checks);
+    let st = structure("orders", "shop").await;
+    assert_eq!(
+        check_values(Dialect::Postgres, &st.checks),
+        [v("status", &["pending", "paid", "shipped", "cancelled"])]
+    );
+}
+
 /// A schema's materialized views are listed with its views and named as materialized (step
 /// 2.7.5: the explorer draws them with an icon of their own); partitioned and foreign tables
 /// are tables.

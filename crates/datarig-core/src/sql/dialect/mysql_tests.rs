@@ -26,7 +26,7 @@ fn bodies(src: &str, d: Dialect) -> Vec<&str> {
 }
 
 fn catalog() -> Catalog {
-    let col = |name: &str| ColumnInfo { name: name.to_string(), type_name: "int".to_string() };
+    let col = |name: &str| ColumnInfo::new(name, "int");
     Catalog {
         schemas: vec!["shop".to_string(), "public".to_string()],
         relations: vec![
@@ -403,7 +403,7 @@ fn mysql_explain_statements() {
 /// case; only then in other databases.
 #[test]
 fn mysql_names_resolve_in_the_database_first() {
-    let col = |n: &str| ColumnInfo { name: n.into(), type_name: String::new() };
+    let col = |n: &str| ColumnInfo::new(n, "");
     let rel = |schema: &str, name: &str, c: &str| Relation {
         schema: schema.into(),
         name: name.into(),

@@ -1,0 +1,28 @@
+---
+source: crates/datarig-tui/tests/ui_snapshots.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 ×                                          "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ ●   local-pg        ││ local-pg / datarig  127.0.0.1:55432                  │"
+"│  ▾ datarig default   ││  1 -- datarig 🐘  Ctrl+E: run the statement under the│" Hidden by multi-width symbols: [(41, " ")]
+"│    ▸ analytics       ││  2 SELECT * FROM shop.users WHERE id <= 8;           │"
+"│    ▸ public          ││  3                                                   │"
+"│    ▸ shop            ││  4 SELECT u.name, o.status, o.total_amount           │"
+"│                      ││  5 FROM shop.orders o                                │"
+"│                      ││  6 JOIN shop.users u ON u.id = o.user_id             │"
+"│                      ││  7 WHERE o.status = 'paid';                          │"
+"│                      ││  8                                                   │"
+"│                      ││  9 SELECT * FROM analytics.events;                   │"
+"│                      ││ 10                  ╭────────────────────────────────╮"
+"│                      ││ 11 SELECT * FROM ana│ pending    value  order_status │"
+"│                      ││ 12                  │ paid       value  order_status │"
+"│                      ││ 13 SELECT analytics.│ shipped    value  order_status │"
+"│                      ││ 14                  │ cancelled  value  order_status │"
+"│                      ││ 15 SELECT $$a body; │ refunded   value  CHECK        │"
+"│                      ││ 16                  ╰────────────────────────────────╯"
+"│                      ││ 17▎SELECT * FROM shop.orders o WHERE o.status = '    │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" INSERT  local-pg │ Connected to local-pg     │ Esc stop typing · Ctrl+E run EN "

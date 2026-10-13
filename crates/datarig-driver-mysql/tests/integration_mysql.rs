@@ -2482,6 +2482,47 @@ async fn a_structure_read_never_queues_behind_a_metadata_lock_nor_keeps_one() {
     side_admin.disconnect().await.unwrap();
 }
 
+/// Completion's values: an `ENUM` column's, from the `COLUMN_TYPE` the catalog reads (a quote
+/// and a backslash in a value as the server writes them there), and those a check lists, from
+/// the table's structure (`IN` and an `OR` of `=`, charset introducers and escapes as the server
+/// keeps them); the dev database's `shop.orders.status` is an `ENUM`.
+#[tokio::test(flavor = "multi_thread")]
+async fn enum_and_check_values_for_completion() {
+    use datarig_core::sql::values::{CheckValues, check_values};
+    let test = "enum_and_check_values_for_completion";
+    let Some((url, admin)) = urls(test) else { return };
+    let pid = std::process::id();
+    let t = Table::make(
+        &admin,
+        "values",
+        &[&format!(
+            r#"CREATE TABLE {{t}} (id INT PRIMARY KEY, s ENUM('a', 'it''s', 'b\\c', 'd"q', 'x,y', ''),
+               st VARCHAR(20), u VARCHAR(10), n INT,
+               CONSTRAINT zz_it_values_st_{pid} CHECK (st IN ('p', 'it''s', 'b\\c')),
+               CONSTRAINT zz_it_values_u_{pid} CHECK (u = 'k' OR u = 'm'),
+               CONSTRAINT zz_it_values_n_{pid} CHECK (n IN (1, 2)))"#
+        )],
+    )
+    .await;
+    let mut m = Conn::start(&url, SessionRole::Meta, false, test);
+    let DbEvent::Catalog(Ok(cat)) = m.wait(|e| matches!(e, DbEvent::Catalog(_)), 30).await else {
+        panic!("catalog failed")
+    };
+    let values = |table: &str, column: &str| {
+        let rel = cat.relations.iter().find(|r| r.schema == "shop" && r.name == table).expect(table);
+        rel.columns.iter().find(|c| c.name == column).expect(column).values.as_ref().map(|v| v.to_vec())
+    };
+    let strings = |xs: &[&str]| xs.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    assert_eq!(values(&t.name, "s"), Some(strings(&["a", "it's", "b\\c", "d\"q", "x,y", ""])));
+    assert_eq!((values(&t.name, "st"), values(&t.name, "n")), (None, None));
+    assert_eq!(values("orders", "status"), Some(strings(&["pending", "paid", "shipped", "cancelled"])));
+    let st = structure_of(&mut m, &t.name).await.unwrap();
+    let mut found = check_values(Dialect::MySql(MySqlMode::default()), &st.checks);
+    found.sort_by(|a, b| a.column.cmp(&b.column));
+    let v = |column: &str, xs: &[&str]| CheckValues { column: column.into(), values: strings(xs) };
+    assert_eq!(found, [v("st", &["p", "it's", "b\\c"]), v("u", &["k", "m"])], "{:?}", st.checks);
+}
+
 /// What MySQL keeps of expressions with string literals (a check, a generated column, a
 /// functional key, an expression default), keys of other kinds (spatial, invisible, a unique
 /// prefix) and an `ON UPDATE` column that is invisible read back as SQL: each definition runs on

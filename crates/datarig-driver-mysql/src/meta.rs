@@ -23,6 +23,7 @@ use datarig_core::driver::{DbCommand, DbError, DbEvent, SchemaObjects};
 use datarig_core::fault::Fault;
 use datarig_core::sql::complete::{Catalog, ColumnInfo, Relation};
 use datarig_core::sql::dialect::{Dialect, MySqlMode};
+use datarig_core::sql::lexer::{Tok, lex_in};
 use mysql_async::prelude::{FromRow, Queryable};
 use mysql_async::{Conn, Row};
 use tokio::sync::mpsc::UnboundedSender;
@@ -176,8 +177,32 @@ async fn load_catalog(conn: &mut Conn) -> Result<Catalog, DbError> {
             relations.push(Relation { schema, name, is_view: kind != "BASE TABLE", columns: Vec::new() });
         }
         if let Some(rel) = relations.last_mut() {
-            rel.columns.push(ColumnInfo { name: column, type_name: ty });
+            let values = enum_values(&ty).map(Into::into);
+            rel.columns.push(ColumnInfo { values, ..ColumnInfo::new(column, ty) });
         }
     }
     Ok(Catalog { schemas, relations })
 }
+
+/// The values of an `ENUM` column from its `COLUMN_TYPE` (`enum('a','it''s','b\\c')`: each
+/// value a string literal as the server writes it, in its default mode), in their order;
+/// `None` for another type, or one that does not read so.
+fn enum_values(column_type: &str) -> Option<Vec<String>> {
+    let list = column_type.get(..5).filter(|p| p.eq_ignore_ascii_case("enum("))?;
+    let d = Dialect::MySql(MySqlMode::default());
+    let body = column_type[list.len()..].strip_suffix(')')?;
+    let mut values = Vec::new();
+    let mut comma = true;
+    for t in lex_in(body, d).iter().filter(|t| !t.is_trivia()) {
+        match (comma, t.kind) {
+            (true, Tok::Str) => values.push(d.unquote_literal(t.text(body))?),
+            (false, Tok::Comma) => {}
+            _ => return None,
+        }
+        comma = !comma;
+    }
+    (!values.is_empty() && !comma).then_some(values)
+}
+
+#[cfg(test)]
+mod tests;

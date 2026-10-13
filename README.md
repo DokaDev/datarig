@@ -190,6 +190,16 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
   tables, with their columns when the query lists them or names them in its select list. Names
   that start with what you typed come first, then names that contain its letters in order
   (`oi` finds `order_items`); keywords only by their start.
+- Completion of values in a string literal compared with a column (`status = '`, `<>`, `!=`,
+  `status IN ('paid', '`, `NOT IN`, `UPDATE … SET status = '`; aliases and qualified names as
+  above): the column's allowed values, filtered as you type. They come from its type
+  (PostgreSQL enums, also through domains; MySQL `ENUM`), then from its table's CHECK
+  constraints of the forms `col IN ('a', 'b')` (PostgreSQL writes it `col = ANY (ARRAY[…])`),
+  `col = 'a'` and an `OR` of those on one column. The checks are read with the table's
+  structure (PostgreSQL 12+, MySQL 8.0.16+), once per table until the explorer is refreshed, so
+  their values show a moment after the first use. A value goes in escaped as the literal reads
+  it (`''`, and a backslash doubled where a backslash escapes), and an unclosed literal gets its
+  closing quote. Like every popup it shows 10 items at most; `INSERT … VALUES` is not covered.
 - A formatter you run yourself (`Space e f`, `:format`, `:'<,'>format`; never automatic): it
   lays out the statement under the cursor or the selection, as one undo step. It changes only
   the layout (line breaks, indent of 4 or 2 spaces, and keyword case if you ask for it with

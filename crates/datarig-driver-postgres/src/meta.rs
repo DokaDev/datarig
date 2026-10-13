@@ -19,6 +19,8 @@ use datarig_core::driver::keys::{Generated, KeyCatalog, KeyKind};
 use datarig_core::driver::structure::RelationStats;
 use datarig_core::driver::{DbCommand, DbError, DbEvent, SchemaObjects};
 use datarig_core::sql::complete::{Catalog, ColumnInfo, Relation};
+use std::collections::HashMap;
+use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_postgres::error::SqlState;
 use tokio_postgres::types::{ToSql, Type};
@@ -279,17 +281,39 @@ pub(crate) fn relation_stats(rows: Option<f64>, bytes: Option<i64>) -> RelationS
     RelationStats { rows: rows.filter(|r| *r >= 0.0).map(|r| r.round() as u64), bytes: bytes.map(|b| b.max(0) as u64) }
 }
 
+/// The values of each column whose type is an enum, or a domain over one (through domains over
+/// domains): the enum's labels in their order. Read with the columns, from `pg_type` and
+/// `pg_enum` only, so no relation is locked. An array of an enum has none.
+const ENUM_CTES: &str = "WITH RECURSIVE domains AS (
+  SELECT t.oid, t.typbasetype AS base FROM pg_catalog.pg_type t WHERE t.typtype = 'd'
+  UNION ALL
+  SELECT d.oid, t.typbasetype FROM domains d JOIN pg_catalog.pg_type t ON t.oid = d.base WHERE t.typtype = 'd'
+), labels AS (
+  SELECT e.enumtypid, pg_catalog.array_agg(e.enumlabel::text ORDER BY e.enumsortorder) AS labels
+  FROM pg_catalog.pg_enum e GROUP BY e.enumtypid
+), enum_of AS (
+  SELECT l.enumtypid AS typ, l.enumtypid AS enum FROM labels l
+  UNION ALL
+  SELECT d.oid, d.base FROM domains d JOIN labels l ON l.enumtypid = d.base
+)";
+
 async fn load_catalog(client: &Client) -> Result<Catalog, DbError> {
     let schemas = load_schemas(client).await?;
     let sql = format!(
-        "SELECT n.nspname, c.relname, c.relkind::text, a.attname, format_type(a.atttypid, a.atttypmod) \
+        "{ENUM_CTES} \
+         SELECT n.nspname, c.relname, c.relkind::text, a.attname, format_type(a.atttypid, a.atttypmod), \
+         l.enumtypid::int8, l.labels \
          FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace \
          LEFT JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped \
+         LEFT JOIN enum_of eo ON eo.typ = a.atttypid \
+         LEFT JOIN labels l ON l.enumtypid = eo.enum \
          WHERE c.relkind IN ('r', 'p', 'f', 'v', 'm') AND {HIDDEN_SCHEMAS} \
          ORDER BY n.nspname, c.relname, a.attnum"
     );
     let rows = read(client, &sql, &[]).await?;
     let mut relations: Vec<Relation> = Vec::new();
+    // Columns of one enum share its labels.
+    let mut enums: HashMap<i64, Arc<[String]>> = HashMap::new();
     for r in rows {
         let (schema, name): (String, String) = (r.get(0), r.get(1));
         let is_new = relations.last().is_none_or(|l| l.schema != schema || l.name != name);
@@ -300,7 +324,11 @@ async fn load_catalog(client: &Client) -> Result<Catalog, DbError> {
         if let (Some(col), Some(ty)) = (r.get::<_, Option<String>>(3), r.get::<_, Option<String>>(4))
             && let Some(rel) = relations.last_mut()
         {
-            rel.columns.push(ColumnInfo { name: col, type_name: ty });
+            let mut column = ColumnInfo::new(col, ty);
+            if let (Some(oid), Some(labels)) = (r.get::<_, Option<i64>>(5), r.get::<_, Option<Vec<String>>>(6)) {
+                column.values = Some(enums.entry(oid).or_insert_with(|| labels.into()).clone());
+            }
+            rel.columns.push(column);
         }
     }
     Ok(Catalog { schemas, relations })

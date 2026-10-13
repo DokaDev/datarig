@@ -67,11 +67,13 @@ pub mod themes;
 pub mod tunnel;
 mod update;
 
-pub use conn::{AUX_IDLE, AuxMeta, Connecting, ConnectionManager, Keys, NodeState, ProfileConn, Queued};
+pub use conn::{
+    AUX_IDLE, AuxMeta, ChecksCache, Connecting, ConnectionManager, Keys, NodeState, ProfileConn, Queued, TableChecks,
+};
 pub use paging::Paging;
 pub use password::{EnvLookup, PromptPurpose, Secret};
 pub use persist::fault_reason;
-pub use tabs::{SessionState, Tab, TabId, TabKind, TabManager};
+pub use tabs::{SessionState, Tab, TabId, TabKind, TabManager, ValuesWait};
 
 use crate::app::profiles::{FormOutcome, ProfileForm, copy_name};
 use crate::drivers::{DriverLookup, driver_for};
@@ -93,7 +95,7 @@ use datarig_core::policy::Policies;
 use datarig_core::profile::folder::{FolderPath, Folders};
 use datarig_core::profile::{ConnectionConfig, ProfileId};
 use datarig_core::secret::{DefaultSource, MemoryStore, SecretStore, Secrets, SourceError, SourceKind, Stores};
-use datarig_core::sql::complete::{Candidate, complete_from};
+use datarig_core::sql::complete::{Candidate, Kind, complete_with};
 use datarig_core::sql::dialect::{Dialect, Language};
 use datarig_core::sql::risk::Classifier;
 use explorer::Explorer;
