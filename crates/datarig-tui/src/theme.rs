@@ -115,6 +115,11 @@ pub struct Theme {
     pub plan_hot: Style,
     /// A plan node whose estimated rows are far from the actual rows (not drawn yet).
     pub plan_misestimate: Style,
+    /// The estimates of an object among the largest of its schema in the explorer (1 MiB or
+    /// more): a subtle warning, amber.
+    pub size_warm: Style,
+    /// The same for one of 1 GiB or more: red.
+    pub size_hot: Style,
     /// The colors of a chart's series, in turn. Each reads on the background and stays apart
     /// from the others, also in 256 colors (theme tests).
     pub chart_1: Color,
@@ -176,6 +181,8 @@ pub const DARK: Theme = Theme {
     danger_mark: Style::new().fg(rgb(0xE06C75)).add_modifier(Modifier::BOLD),
     plan_hot: Style::new().fg(rgb(0xE0A96D)).add_modifier(Modifier::BOLD),
     plan_misestimate: Style::new().fg(rgb(0xE6C35C)).add_modifier(Modifier::UNDERLINED),
+    size_warm: Style::new().fg(rgb(0xE0A96D)),
+    size_hot: Style::new().fg(rgb(0xE06C75)),
     chart_1: rgb(0x61AFEF),
     chart_2: rgb(0xE0A96D),
     chart_3: rgb(0x8FC77A),
@@ -379,7 +386,7 @@ tokens! {
         mode_fg, chart_1, chart_2, chart_3, chart_4, chart_5, chart_6;
     styles: selection, range, cursor_line, current_stmt, running_stmt, run_hint, syn_keyword, syn_function, syn_string, syn_number,
         syn_comment, syn_operator, syn_identifier, syn_quoted_ident, syn_exec_comment, search_match, match_paren, read_only_mark,
-        danger_mark, plan_hot, plan_misestimate,
+        danger_mark, plan_hot, plan_misestimate, size_warm, size_hot,
 }
 
 /// The token names of a theme file.

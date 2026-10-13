@@ -333,6 +333,19 @@ impl App {
         users
     }
 
+    /// The profiles connected through preset `id`'s shared connection now (their database
+    /// session is up; one still connecting is not), by name.
+    pub fn preset_connected_users(&self, id: TunnelId) -> Vec<&ConnectionConfig> {
+        let through = |p: &&ConnectionConfig| {
+            self.conns
+                .get(p.id)
+                .is_some_and(|c| c.connected && c.tunnel.as_ref().and_then(|t| t.shared).is_some_and(|(_, t)| t == id))
+        };
+        let mut users: Vec<&ConnectionConfig> = self.profiles.iter().filter(through).collect();
+        users.sort_by_key(|p| p.name.to_lowercase());
+        users
+    }
+
     /// Write a secret typed for the shared connection `serial` to the preset's store, now that
     /// it opened.
     fn save_shared_secret(&mut self, serial: u64) {

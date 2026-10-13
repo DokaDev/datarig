@@ -22,14 +22,50 @@ pub enum Children {
     NotLoaded,
     Loading,
     /// Materialized views are among `views` and named again in `materialized`; `stats` has the
-    /// estimates of the objects with storage, by name.
+    /// estimates of the objects with storage, by name, and `heat` the size tier of the largest
+    /// of them (see [`size_heat`]), kept with the estimates.
     Loaded {
         tables: Vec<String>,
         views: Vec<String>,
         materialized: BTreeSet<String>,
         stats: BTreeMap<String, RelationStats>,
+        heat: BTreeMap<String, Heat>,
     },
     Failed(String),
+}
+
+/// How large an object is among those of its schema: its estimates are drawn in a warmer color.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Heat {
+    /// Among the largest tenth of its schema (by size, at least one object), and 1 MiB or more.
+    Warm,
+    /// Warm, and 1 GiB or more.
+    Hot,
+}
+
+/// The size an object must have at least to be warm, and hot.
+const WARM_BYTES: u64 = 1 << 20;
+const HOT_BYTES: u64 = 1 << 30;
+
+/// The size tiers of a schema's objects, from their estimates: of the `n` with a known size, the
+/// `max(1, round(n / 10))` largest are warm when they take 1 MiB or more, and hot when they take
+/// 1 GiB or more. Equal sizes rank alike (an object's rank is how many are strictly larger). An
+/// object whose size is not known, and one without storage, has no tier (left out).
+pub fn size_heat(stats: &BTreeMap<String, RelationStats>) -> BTreeMap<String, Heat> {
+    let mut sizes: Vec<u64> = stats.values().filter_map(|s| s.bytes).collect();
+    if sizes.is_empty() {
+        return BTreeMap::new();
+    }
+    sizes.sort_unstable_by(|a, b| b.cmp(a));
+    let top = ((sizes.len() as f64 * 0.10).round() as usize).max(1);
+    stats
+        .iter()
+        .filter_map(|(name, s)| {
+            let bytes = s.bytes.filter(|&b| b >= WARM_BYTES)?;
+            let rank = sizes.partition_point(|&x| x > bytes);
+            (rank < top).then(|| (name.clone(), if bytes >= HOT_BYTES { Heat::Hot } else { Heat::Warm }))
+        })
+        .collect()
 }
 
 #[derive(Clone, Debug)]
@@ -151,6 +187,93 @@ pub struct Row {
     /// Below the profile node: schemas are at depth 0.
     pub depth: usize,
     pub node: Node,
+    /// The explorer's `/` filter shows it open for a match below it, whatever its own
+    /// expansion (which stays as it is).
+    pub opened: bool,
+    /// Its name matches the explorer's `/` filter.
+    pub hit: bool,
+}
+
+impl Row {
+    /// `node` at `depth`, as its own expansion shows it.
+    fn at(depth: usize, node: Node) -> Self {
+        Self { depth, node, opened: false, hit: false }
+    }
+
+    /// `node` at `depth`, shown open by the filter.
+    fn opened(depth: usize, node: Node) -> Self {
+        Self { opened: true, ..Self::at(depth, node) }
+    }
+}
+
+/// The name of item `k` of group `sg` (a column, a key, an index, a check, a trigger).
+fn item_name(st: &TableStructure, sg: StructureGroup, k: usize) -> Option<&str> {
+    Some(match sg {
+        StructureGroup::Columns => &st.columns.get(k)?.name,
+        StructureGroup::PrimaryKey => &st.primary_key.as_ref().filter(|_| k == 0)?.name,
+        StructureGroup::ForeignKeys => &st.foreign_keys.get(k)?.name,
+        StructureGroup::Indexes => &st.indexes.get(k)?.name,
+        StructureGroup::UniqueConstraints => &st.unique_constraints.get(k)?.name,
+        StructureGroup::CheckConstraints => &st.checks.get(k)?.name,
+        StructureGroup::Triggers => &st.triggers.get(k)?.name,
+    })
+}
+
+/// Item `k` of group `sg` of object `(i, g, j)` and, open, its lines and its `Columns` (open:
+/// the columns).
+fn push_item(
+    out: &mut Vec<Row>,
+    view: &ObjectView,
+    st: &TableStructure,
+    (i, g, j): (usize, Group, usize),
+    sg: StructureGroup,
+    k: usize,
+) {
+    out.push(Row::at(4, Node::StructItem(i, g, j, sg, k)));
+    if !view.open_items.contains(&(sg, k)) {
+        return;
+    }
+    let lines = item_details(st, sg, k);
+    out.extend((0..lines).map(|m| Row::at(5, Node::StructDetail(i, g, j, sg, k, m))));
+    let columns = st.item_columns(sg, k).len();
+    if columns == 0 {
+        return;
+    }
+    out.push(Row::at(5, Node::StructColumns(i, g, j, sg, k)));
+    if view.open_columns.contains(&(sg, k)) {
+        out.extend((0..columns).map(|m| Row::at(6, Node::StructColumn(i, g, j, sg, k, m))));
+    }
+}
+
+/// Object `(i, g, j)` opened by the filter with the items of its structure (`view`, `st`) whose
+/// name matches, each in its group (opened) and as its own expansion shows it; nothing when
+/// none does.
+fn push_structure_matching(
+    out: &mut Vec<Row>,
+    (i, g, j): (usize, Group, usize),
+    view: &ObjectView,
+    st: &TableStructure,
+    hit: &impl Fn(&str) -> bool,
+) {
+    let at = out.len();
+    out.push(Row::opened(2, Node::Object(i, g, j)));
+    for &sg in st.kind.groups() {
+        let group = out.len();
+        out.push(Row::opened(3, Node::StructGroup(i, g, j, sg)));
+        for k in 0..st.count(sg) {
+            if item_name(st, sg, k).is_some_and(hit) {
+                let o = out.len();
+                push_item(out, view, st, (i, g, j), sg, k);
+                out[o].hit = true;
+            }
+        }
+        if out.len() == group + 1 {
+            out.truncate(group);
+        }
+    }
+    if out.len() == at + 1 {
+        out.truncate(at);
+    }
 }
 
 pub enum TreeAction {
@@ -239,7 +362,8 @@ impl Tree {
         if let Some(s) = self.schemas.iter_mut().find(|s| s.name == schema) {
             s.children = match result {
                 Ok(SchemaObjects { tables, views, materialized, stats }) => {
-                    Children::Loaded { tables, views, materialized, stats }
+                    let heat = size_heat(&stats);
+                    Children::Loaded { tables, views, materialized, stats, heat }
                 }
                 Err(e) => Children::Failed(e),
             };
@@ -257,50 +381,135 @@ impl Tree {
     pub fn rows_with(&self, columns: impl Fn(&str, &str) -> Option<usize>, structured: bool) -> Vec<Row> {
         let mut out = Vec::new();
         if self.schemas_loading {
-            out.push(Row { depth: 0, node: Node::Loading(None) });
+            out.push(Row::at(0, Node::Loading(None)));
         }
+        for i in 0..self.schemas.len() {
+            self.push_schema(&mut out, i, &columns, structured);
+        }
+        out
+    }
+
+    /// The nodes the explorer's `/` filter shows, in order (`hit`: whether a name matches). A
+    /// schema, an object or an item of an object's structure whose name matches shows as
+    /// [`Tree::rows_with`] shows it (its own expansion, nothing else filtered); one with a match
+    /// below it shows opened, whatever its own expansion, with only the branches that lead to
+    /// matches; the others are left out. Only what was read is searched: the objects of a schema
+    /// that were never listed, and the structure of an object that was never opened, are not.
+    /// Nothing is asked for, and no expansion changes.
+    pub fn rows_matching(
+        &self,
+        columns: impl Fn(&str, &str) -> Option<usize>,
+        structured: bool,
+        hit: impl Fn(&str) -> bool,
+    ) -> Vec<Row> {
+        let mut out = Vec::new();
         for (i, s) in self.schemas.iter().enumerate() {
-            out.push(Row { depth: 0, node: Node::Schema(i) });
-            if !s.expanded {
+            if hit(&s.name) {
+                let at = out.len();
+                self.push_schema(&mut out, i, &columns, structured);
+                out[at].hit = true;
                 continue;
             }
-            match &s.children {
-                Children::NotLoaded | Children::Loading => out.push(Row { depth: 1, node: Node::Loading(Some(i)) }),
-                Children::Failed(_) => out.push(Row { depth: 1, node: Node::Error(i) }),
-                Children::Loaded { tables, views, .. } => {
-                    if tables.is_empty() && views.is_empty() {
-                        out.push(Row { depth: 1, node: Node::Empty(i) });
+            let Children::Loaded { tables, views, .. } = &s.children else { continue };
+            // The objects of this schema with a matching item in the structure read for them.
+            let found: Vec<(Group, usize, &ObjectView, &TableStructure)> = if structured {
+                self.structures
+                    .iter()
+                    .filter(|((schema, _), _)| *schema == s.name)
+                    .filter_map(|((_, name), v)| {
+                        let st = v.loaded()?;
+                        let (g, j) = match tables.iter().position(|t| t == name) {
+                            Some(j) => (Group::Tables, j),
+                            None => (Group::Views, views.iter().position(|t| t == name)?),
+                        };
+                        Some((g, j, v, st))
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let at = out.len();
+            out.push(Row::opened(0, Node::Schema(i)));
+            for (g, items) in [(Group::Tables, tables), (Group::Views, views)] {
+                let group = out.len();
+                out.push(Row::opened(1, Node::Group(i, g)));
+                for (j, name) in items.iter().enumerate() {
+                    if hit(name) {
+                        let o = out.len();
+                        self.push_object(&mut out, (i, g, j), &s.name, name, &columns, structured);
+                        out[o].hit = true;
+                    } else if let Some((_, _, v, st)) = found.iter().find(|f| (f.0, f.1) == (g, j)) {
+                        push_structure_matching(&mut out, (i, g, j), v, st, &hit);
                     }
-                    for (g, items, open) in
-                        [(Group::Tables, tables, s.tables_open), (Group::Views, views, s.views_open)]
-                    {
-                        if items.is_empty() {
-                            continue;
-                        }
-                        out.push(Row { depth: 1, node: Node::Group(i, g) });
-                        if open {
-                            for (j, name) in items.iter().enumerate() {
-                                out.push(Row { depth: 2, node: Node::Object(i, g, j) });
-                                if !s.open.contains(&(g, j)) {
-                                    continue;
-                                }
-                                if structured {
-                                    self.push_structure(&mut out, (i, g, j), &s.name, name);
-                                    continue;
-                                }
-                                match columns(&s.name, name) {
-                                    Some(n) => {
-                                        out.extend((0..n).map(|k| Row { depth: 3, node: Node::Column(i, g, j, k) }))
-                                    }
-                                    None => out.push(Row { depth: 3, node: Node::NoColumns(i, g, j) }),
-                                }
-                            }
+                }
+                if out.len() == group + 1 {
+                    out.truncate(group);
+                }
+            }
+            if out.len() == at + 1 {
+                out.truncate(at);
+            }
+        }
+        out
+    }
+
+    /// Schema `i` and, open, what it shows (see [`Tree::rows_with`]).
+    fn push_schema(
+        &self,
+        out: &mut Vec<Row>,
+        i: usize,
+        columns: &impl Fn(&str, &str) -> Option<usize>,
+        structured: bool,
+    ) {
+        let s = &self.schemas[i];
+        out.push(Row::at(0, Node::Schema(i)));
+        if !s.expanded {
+            return;
+        }
+        match &s.children {
+            Children::NotLoaded | Children::Loading => out.push(Row::at(1, Node::Loading(Some(i)))),
+            Children::Failed(_) => out.push(Row::at(1, Node::Error(i))),
+            Children::Loaded { tables, views, .. } => {
+                if tables.is_empty() && views.is_empty() {
+                    out.push(Row::at(1, Node::Empty(i)));
+                }
+                for (g, items, open) in [(Group::Tables, tables, s.tables_open), (Group::Views, views, s.views_open)] {
+                    if items.is_empty() {
+                        continue;
+                    }
+                    out.push(Row::at(1, Node::Group(i, g)));
+                    if open {
+                        for (j, name) in items.iter().enumerate() {
+                            self.push_object(out, (i, g, j), &s.name, name, columns, structured);
                         }
                     }
                 }
             }
         }
-        out
+    }
+
+    /// Object `(i, g, j)`, `schema.name`, and, open, what it shows: its structure
+    /// (`structured`) or its columns.
+    fn push_object(
+        &self,
+        out: &mut Vec<Row>,
+        (i, g, j): (usize, Group, usize),
+        schema: &str,
+        name: &str,
+        columns: &impl Fn(&str, &str) -> Option<usize>,
+        structured: bool,
+    ) {
+        out.push(Row::at(2, Node::Object(i, g, j)));
+        if !self.schemas[i].open.contains(&(g, j)) {
+            return;
+        }
+        if structured {
+            return self.push_structure(out, (i, g, j), schema, name);
+        }
+        match columns(schema, name) {
+            Some(n) => out.extend((0..n).map(|k| Row::at(3, Node::Column(i, g, j, k)))),
+            None => out.push(Row::at(3, Node::NoColumns(i, g, j))),
+        }
     }
 
     /// The rows of open object `(i, g, j)`, `schema.name`, below it: the groups of its kind,
@@ -309,28 +518,15 @@ impl Tree {
     fn push_structure(&self, out: &mut Vec<Row>, (i, g, j): (usize, Group, usize), schema: &str, name: &str) {
         let view = self.structures.get(&(schema.to_string(), name.to_string()));
         let Some((view, st)) = view.and_then(|v| v.loaded().map(|s| (v, s))) else {
-            return out.push(Row { depth: 3, node: Node::StructNote(i, g, j) });
+            return out.push(Row::at(3, Node::StructNote(i, g, j)));
         };
         for &sg in st.kind.groups() {
-            out.push(Row { depth: 3, node: Node::StructGroup(i, g, j, sg) });
+            out.push(Row::at(3, Node::StructGroup(i, g, j, sg)));
             if !view.open_groups.contains(&sg) {
                 continue;
             }
             for k in 0..st.count(sg) {
-                out.push(Row { depth: 4, node: Node::StructItem(i, g, j, sg, k) });
-                if !view.open_items.contains(&(sg, k)) {
-                    continue;
-                }
-                let lines = item_details(st, sg, k);
-                out.extend((0..lines).map(|m| Row { depth: 5, node: Node::StructDetail(i, g, j, sg, k, m) }));
-                let columns = st.item_columns(sg, k).len();
-                if columns == 0 {
-                    continue;
-                }
-                out.push(Row { depth: 5, node: Node::StructColumns(i, g, j, sg, k) });
-                if view.open_columns.contains(&(sg, k)) {
-                    out.extend((0..columns).map(|m| Row { depth: 6, node: Node::StructColumn(i, g, j, sg, k, m) }));
-                }
+                push_item(out, view, st, (i, g, j), sg, k);
             }
         }
     }
@@ -352,13 +548,15 @@ impl Tree {
     }
 
     /// The structure of `schema.name` came, or why it could not be read. Its estimates, read
-    /// with it, are the object's from now on (its line shows them).
+    /// with it, are the object's from now on (its line shows them), and the schema's size tiers
+    /// follow them.
     pub fn set_structure(&mut self, schema: &str, name: &str, result: Result<Box<TableStructure>, String>) {
         if let Some(st) = result.as_ref().ok().and_then(|s| s.stats())
-            && let Some(Children::Loaded { stats, .. }) =
+            && let Some(Children::Loaded { stats, heat, .. }) =
                 self.schemas.iter_mut().find(|s| s.name == schema).map(|s| &mut s.children)
         {
             stats.insert(name.to_string(), st);
+            *heat = size_heat(stats);
         }
         let v = self.structures.entry((schema.to_string(), name.to_string())).or_insert_with(ObjectView::new);
         v.structure = match result {
@@ -434,6 +632,16 @@ impl Tree {
         let (_, name) = self.object_name(i, g, j)?;
         match &self.schemas.get(i)?.children {
             Children::Loaded { stats, .. } => stats.get(&name).copied(),
+            _ => None,
+        }
+    }
+
+    /// The size tier of object `(i, g, j)` in its schema (`None`: not among the largest, or its
+    /// size is not known).
+    pub fn object_heat(&self, i: usize, g: Group, j: usize) -> Option<Heat> {
+        let (_, name) = self.object_name(i, g, j)?;
+        match &self.schemas.get(i)?.children {
+            Children::Loaded { heat, .. } => heat.get(&name).copied(),
             _ => None,
         }
     }
@@ -648,3 +856,6 @@ impl Tree {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

@@ -4,8 +4,8 @@ expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×                                          "
 "│ ╭ Settings ────────────────────────────────────────────────────────────────╮─╮"
-"│▾│   Command line position     ‹ popup         ›  A popup near the top of … │ │"
-"│ │   Theme                     ‹ terminal      ›  Your terminal's own colo… │e│"
+"│▾│   Theme                     ‹ terminal      ›  Your terminal's own colo… │ │"
+"│ │   Explorer: size colors     ‹ on            ›  On, the largest tables s… │e│"
 "│ │ Editor                                                                   │ │"
 "│ │   Cursor shape              ‹ on            ›  By mode (block or bar)    │ │"
 "│ │   Yank╭ Keychain access through security ────────────────────────╮ipboa… │ │"

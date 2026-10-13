@@ -26,7 +26,7 @@ expression: backend
 "│      │  New console on this connection           o │                                                                                                         │"
 "│      │  Move connection profile to a folder      m │                                                                                                         │"
 "│      │ Explorer                                    │                                                                                                         │"
-"│      │  Explorer: filter profiles                / │                                                                                                         │"
+"│      │  Explorer: filter by name                 / │                                                                                                         │"
 "│      │  New connection profile                   n │                                                                                                         │"
 "│      │  New folder                               N │                                                                                                         │"
 "│      ╰─────────────────────────────────────────────╯                                                                                                         │"

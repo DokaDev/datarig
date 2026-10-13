@@ -15,7 +15,7 @@
 use super::action::{Action, LangSetting};
 use datarig_core::config::{
     AutoPairs, ClipboardSetting, CommandsPosition, CopyHeader, CursorShape, DetailView, EditorClipboard, FormatIndent,
-    IconsSetting, KeychainAccess, KeywordCase, RunHints,
+    IconsSetting, KeychainAccess, KeywordCase, RunHints, SizeHeat,
 };
 use datarig_core::i18n::Label;
 use datarig_core::secret::{DefaultSource, SourceKind};
@@ -363,6 +363,7 @@ pub enum Setting {
     AutoPairs(AutoPairs),
     RunHints(RunHints),
     KeychainAccess(KeychainAccess),
+    SizeHeat(SizeHeat),
 }
 
 /// The categories of the settings screen, in its order.
@@ -590,6 +591,16 @@ pub const SETTINGS: &[SettingSpec] = &[
                 Setting::KeychainAccess(KeychainAccess::SecurityTool),
                 Label::SettingKeychainAccessSecurityTool,
             ),
+        ]),
+    },
+    SettingSpec {
+        key: "explorer.size_heat",
+        label: Label::SettingSizeHeat,
+        about: Label::SettingSizeHeatAbout,
+        group: SettingGroup::Display,
+        values: Values::Fixed(&[
+            ("on", Setting::SizeHeat(SizeHeat::On), Label::SettingSizeHeatOn),
+            ("off", Setting::SizeHeat(SizeHeat::Off), Label::SettingSizeHeatOff),
         ]),
     },
 ];

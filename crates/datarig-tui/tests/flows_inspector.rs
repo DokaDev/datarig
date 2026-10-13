@@ -78,12 +78,13 @@ fn click(h: &mut Harness, x: u16, y: u16) {
 #[test]
 fn enter_in_the_inspector_shows_the_value_whole() {
     let mut h = focused_inspector("$");
+    assert_eq!(h.app.detail.tab, DetailTab::Row);
     h.key(KeyCode::Enter);
     assert_eq!(h.overlay_kind(), Some(OverlayKind::CellViewer));
     assert_eq!(h.viewer().unwrap().text.lines().next(), Some("{"));
     h.key(KeyCode::Esc);
     h.keys("I");
-    assert_eq!(h.app.detail.tab, DetailTab::Row);
+    assert_eq!(h.app.detail.tab, DetailTab::Cell);
     h.key(KeyCode::Enter);
     assert_eq!(h.overlay_kind(), Some(OverlayKind::CellViewer));
 }
@@ -94,7 +95,6 @@ fn enter_in_the_inspector_shows_the_value_whole() {
 fn the_row_tab_follows_the_grids_column_and_keeps_it_in_view() {
     for lang in [Lang::En, Lang::Ko] {
         let mut h = wide(lang, 40);
-        h.keys("I");
         h.draw(W, H);
         let room = h.app.layout.detail_list.height as usize;
         assert!(room > 3 && room < 40, "the entries do not all fit: {room}");
@@ -131,7 +131,7 @@ fn the_row_tab_follows_the_grids_column_and_keeps_it_in_view() {
 #[test]
 fn j_and_k_in_the_inspector_move_the_grids_column() {
     let mut h = wide(Lang::En, 40);
-    h.keys("jI");
+    h.keys("j");
     h.draw(W, H);
     let d = h.app.layout.detail;
     click(&mut h, d.x + 3, d.y + d.height - 1);
@@ -166,7 +166,7 @@ fn j_and_k_in_the_inspector_move_the_grids_column() {
 #[test]
 fn a_click_on_an_entry_moves_the_grids_cell_and_scrolls_the_grid() {
     let mut h = wide(Lang::En, 40);
-    h.keys("jI");
+    h.keys("j");
     h.draw(W, H);
     h.advance(ARM_DELAY);
     let l = h.app.layout.detail_list;
@@ -192,7 +192,6 @@ fn a_click_on_an_entry_moves_the_grids_cell_and_scrolls_the_grid() {
 #[test]
 fn the_pointer_lights_an_entry_and_only_a_release_on_the_pressed_one_picks_it() {
     let mut h = wide(Lang::En, 40);
-    h.keys("I");
     h.draw(W, H);
     h.advance(ARM_DELAY);
     let l = h.app.layout.detail_list;
@@ -246,7 +245,6 @@ fn unfocused() -> Color {
 #[test]
 fn a_release_after_the_result_changed_picks_nothing() {
     let mut h = wide(Lang::En, 40);
-    h.keys("I");
     h.draw(W, H);
     h.advance(ARM_DELAY);
     let l = h.app.layout.detail_list;
@@ -267,7 +265,6 @@ fn a_release_after_the_result_changed_picks_nothing() {
 #[test]
 fn a_double_click_whose_first_press_was_ignored_only_picks() {
     let mut h = wide(Lang::En, 40);
-    h.keys("I");
     h.draw(W, H);
     let l = h.app.layout.detail_list;
     click(&mut h, l.x + 3, l.y + 4);
@@ -284,7 +281,6 @@ fn a_double_click_whose_first_press_was_ignored_only_picks() {
 #[test]
 fn a_press_released_elsewhere_ends_a_double_click() {
     let mut h = wide(Lang::En, 40);
-    h.keys("I");
     h.draw(W, H);
     h.advance(ARM_DELAY);
     h.draw(W, H);
@@ -304,7 +300,6 @@ fn a_press_released_elsewhere_ends_a_double_click() {
 #[test]
 fn a_dialog_over_the_inspector_drops_the_lit_entry() {
     let mut h = wide(Lang::En, 40);
-    h.keys("I");
     h.draw(W, H);
     let l = h.app.layout.detail_list;
     h.mouse(MouseEventKind::Moved, l.x + 3, l.y + 2);
@@ -323,7 +318,6 @@ fn a_dialog_over_the_inspector_drops_the_lit_entry() {
 #[test]
 fn the_lit_entry_goes_with_the_row_tab() {
     let mut h = wide(Lang::En, 40);
-    h.keys("I");
     h.draw(W, H);
     let l = h.app.layout.detail_list;
     for keys in ["I", "i", "c"] {
@@ -342,7 +336,6 @@ fn the_lit_entry_goes_with_the_row_tab() {
 #[test]
 fn the_selected_entry_is_weak_while_the_grid_has_the_focus() {
     let mut h = wide(Lang::En, 40);
-    h.keys("I");
     assert_eq!(h.app.focus, Focus::Results);
     assert_eq!(entry(&mut h, 0).1, unfocused());
     assert_screen!(format!("inspector_row_unfocused_en_{W}x{H}"), Lang::En, h.draw(W, H));

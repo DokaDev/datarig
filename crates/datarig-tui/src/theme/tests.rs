@@ -362,6 +362,8 @@ fn every_token_of_a_theme_can_be_set_by_name() {
         danger_mark: _,
         plan_hot: _,
         plan_misestimate: _,
+        size_warm: _,
+        size_hot: _,
         chart_1: _,
         chart_2: _,
         chart_3: _,
@@ -371,7 +373,7 @@ fn every_token_of_a_theme_can_be_set_by_name() {
         dim: _,
     } = DARK;
     // Every field above but `dim`.
-    assert_eq!(COLOR_TOKENS.len() + STYLE_TOKENS.len(), 50);
+    assert_eq!(COLOR_TOKENS.len() + STYLE_TOKENS.len(), 52);
     let mut th = DARK;
     for (i, name) in COLOR_TOKENS.iter().enumerate() {
         *color_token(&mut th, name).unwrap() = Color::Indexed(i as u8);
@@ -381,6 +383,10 @@ fn every_token_of_a_theme_can_be_set_by_name() {
     }
     assert_eq!((th.bg, th.mode_fg), (Color::Indexed(0), Color::Indexed(22)));
     assert_eq!(th.plan_misestimate, Style::new().bg(Color::Indexed(120)));
+    assert_eq!(
+        (th.size_warm, th.size_hot),
+        (Style::new().bg(Color::Indexed(121)), Style::new().bg(Color::Indexed(122)))
+    );
     assert_eq!(th.chart(), [23, 24, 25, 26, 27, 28].map(Color::Indexed));
     assert!(color_token(&mut th, "selection").is_none() && style_token(&mut th, "bg").is_none());
 }
@@ -636,5 +642,34 @@ fn executable_comments_stand_apart_from_comments_and_keywords_in_every_theme() {
         assert_ne!(exec, th.syn_comment, "{name}");
         assert_ne!(exec, th.syn_keyword, "{name}");
         assert_ne!(exec.fg, th.syn_comment.fg, "{name}");
+    }
+}
+
+/// The size tiers of the explorer's estimates read as a subtle warning: a foreground only
+/// (the row's background stays), apart from the dim estimates, from body text and from each
+/// other; in RGB themes they read (3:1, as marks) on the explorer's background and on the
+/// selected row's (focused or not), also in 256 colors. The terminal theme uses its ANSI
+/// yellow and red.
+#[test]
+fn size_heat_reads_on_the_explorer_rows_in_every_theme() {
+    for (name, th) in BUILTINS.iter().copied() {
+        for (token, s) in [("size_warm", th.size_warm), ("size_hot", th.size_hot)] {
+            assert!(s.bg.is_none(), "{name}: {token} keeps the row's background");
+            let c = fg(s);
+            assert!(c != th.fg_dim && c != th.fg && c != th.bg, "{name}: {token} looks like text");
+        }
+        assert_ne!(fg(th.size_warm), fg(th.size_hot), "{name}");
+    }
+    assert_eq!((fg(TERMINAL.size_warm), fg(TERMINAL.size_hot)), (Color::Yellow, Color::Red));
+    for (name, th) in rgb_themes() {
+        for bg in [th.bg, bg(th.selection), bg(th.cursor_line)] {
+            for (token, s) in [("size_warm", th.size_warm), ("size_hot", th.size_hot)] {
+                let c = contrast(fg(s), bg);
+                assert!(c >= 3.0, "{name}: {token} on {bg:?}: {c:.2}");
+                assert_ne!(xterm256(fg(s)), xterm256(bg), "{name}: {token} on {bg:?} in 256 colors");
+            }
+        }
+        assert_ne!(xterm256(fg(th.size_warm)), xterm256(fg(th.size_hot)), "{name}: the tiers in 256 colors");
+        assert_ne!(xterm256(fg(th.size_warm)), xterm256(th.fg_dim), "{name}: warm and dim in 256 colors");
     }
 }

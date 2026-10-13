@@ -3,12 +3,12 @@ source: crates/datarig-tui/tests/flows_result_tabs.rs
 expression: backend
 ---
 "╭ Explorer ──────────────────╮ 1 console 1 ×  2 shop.users ×                                                            "
-"│  ＋ New connection         │╭ Results · 8 rows ──────────────────────────────────╮╭ [Cell] Row · I ──────────────────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾ ●   local-pg              ││ [Result 1]  Chart  Messages                    H/L ││ id                               │"
-"│  ▾ datarig default         ││   │ id   │ name                 │ nickname    │ ad…││ int8 · 1 character               │"
-"│    ▸ analytics             ││   │ int8 │ text                 │ text        │ te…││                                  │"
-"│    ▸ public                ││ 1 │    1 │ 陳大文               │ 大文🐘      │ 臺…││ 1                                │" Hidden by multi-width symbols: [(44, " "), (46, " "), (48, " "), (67, " "), (69, " "), (71, " "), (81, " ")]
-"│    ▾ shop                  ││ 2 │    2 │ 林美玲               │ NULL        │ 高…││                                  │" Hidden by multi-width symbols: [(44, " "), (46, " "), (48, " "), (81, " ")]
+"│  ＋ New connection         │╭ Results · 8 rows ──────────────────────────────────╮╭ Cell [Row] · I ──────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ ●   local-pg              ││ [Result 1]  Chart  Messages                    H/L ││ id: 1                            │"
+"│  ▾ datarig default         ││   │ id   │ name                 │ nickname    │ ad…││ name: 陳大文                     │" Hidden by multi-width symbols: [(93, " "), (95, " "), (97, " ")]
+"│    ▸ analytics             ││   │ int8 │ text                 │ text        │ te…││ nickname: 大文🐘                 │" Hidden by multi-width symbols: [(97, " "), (99, " "), (101, " ")]
+"│    ▸ public                ││ 1 │    1 │ 陳大文               │ 大文🐘      │ 臺…││ address: 臺北市信義區信義路五段7…│" Hidden by multi-width symbols: [(44, " "), (46, " "), (48, " "), (67, " "), (69, " "), (71, " "), (81, " "), (96, " "), (98, " "), (100, " "), (102, " "), (104, " "), (106, " "), (108, " "), (110, " "), (112, " "), (114, " "), (116, " ")]
+"│    ▾ shop                  ││ 2 │    2 │ 林美玲               │ NULL        │ 高…││ profile: {"lang": "ko", "tags": …│" Hidden by multi-width symbols: [(44, " "), (46, " "), (48, " "), (81, " ")]
 "│      ▾ Tables              ││ 3 │    3 │ 張志明               │ 👨‍👩‍👧‍👦 family   │ NU…││                                  │" Hidden by multi-width symbols: [(44, " "), (46, " "), (48, " "), (67, " ")]
 "│        ▸ orders            ││ 4 │    4 │ Emoji テスト         │ 🔥🚀✨🎉    │ 沖…││                                  │" Hidden by multi-width symbols: [(50, " "), (52, " "), (54, " "), (67, " "), (69, " "), (71, " "), (73, " "), (81, " ")]
 "│        ▸ users             ││ 5 │    5 │ 山田太郎             │ やまだ      │ 東…││                                  │" Hidden by multi-width symbols: [(44, " "), (46, " "), (48, " "), (50, " "), (67, " "), (69, " "), (71, " "), (81, " ")]

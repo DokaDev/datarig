@@ -356,7 +356,7 @@ impl App {
             return match a {
                 Action::NewProfile | Action::NewEnvironment | Action::EditProfile => true,
                 Action::Explorer(ExplorerAction::Activate) => {
-                    self.explorer_arrow(&explorer::Row { kind: row.clone(), depth: 1 }).is_some()
+                    self.explorer_arrow(&explorer::Row::new(row.clone(), 1)).is_some()
                 }
                 _ => false,
             };
@@ -365,7 +365,7 @@ impl App {
             return match a {
                 Action::NewProfile | Action::NewEnvironment => true,
                 Action::Explorer(ExplorerAction::Activate) => {
-                    !env || self.explorer_arrow(&explorer::Row { kind: row.clone(), depth: 1 }).is_some()
+                    !env || self.explorer_arrow(&explorer::Row::new(row.clone(), 1)).is_some()
                 }
                 Action::EditProfile
                 | Action::DuplicateProfile

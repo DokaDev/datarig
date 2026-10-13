@@ -176,7 +176,7 @@ The explorer: folders, connection profiles, their databases and schema trees. In
 | `g g` | `explorer.top` | Explorer: first item |  |
 | `G` | `explorer.bottom` | Explorer: last item |  |
 | `r` | `explorer.refresh` | Explorer: reload |  |
-| `/` | `explorer.filter` | Explorer: filter profiles |  |
+| `/` | `explorer.filter` | Explorer: filter by name |  |
 | `n` | `conn.new` | New connection profile |  |
 | `e` | `conn.edit` | Edit connection profile |  |
 | `c` | `conn.duplicate` | Duplicate connection profile |  |
@@ -195,7 +195,7 @@ The explorer: folders, connection profiles, their databases and schema trees. In
 
 ## `explorer.filter` [text]
 
-The `/` filter of the explorer (profile names). Inside `workspace`.
+The `/` filter of the explorer: profiles (name, host, database), folders, tunnels, environments and saved queries, and under connected profiles the databases, schemas, tables, views and structure items already loaded. Inside `workspace`.
 
 | Keys | Action | Description | R |
 |---|---|---|---|
@@ -623,6 +623,7 @@ Settings of `:set` (saved to `config.toml` like the matching actions):
 | `editor.auto_pairs` | `off` `on` | Auto-pairs |
 | `editor.run_hints` | `on` `off` | Run hints |
 | `secrets.macos_keychain_access` | `direct` `security_tool` | macOS keychain access |
+| `explorer.size_heat` | `on` `off` | Explorer: size colors |
 
 ## Command line only
 

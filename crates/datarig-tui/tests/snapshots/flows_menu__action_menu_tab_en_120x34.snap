@@ -16,12 +16,12 @@ expression: "h.draw(120, 34).backend()"
 "│                            ││ Tabs                                              │                                    │"
 "│                            ││  New console tab                           Ctrl+T │                                    │"
 "│                            ││  List tabs                              Space t t │────────────────────────────────────╯"
-"│                            ││  Reopen closed tab                      Space t u │╮╭ [Cell] Row · I ──────────────────╮"
-"│                            ││  Toggle pane zoom                         Space z │││ id                               │"
-"│                            ││  Toggle explorer                          Space b │││ int8 · 1 character               │"
-"│                            ││  Narrow explorer                          Space < │││                                  │"
-"│                            ││  Widen explorer                           Space > │││ 2                                │"
-"│                            │╰───────────────────────────────────────────────────╯││                                  │"
+"│                            ││  Reopen closed tab                      Space t u │╮╭ Cell [Row] · I ──────────────────╮"
+"│                            ││  Toggle pane zoom                         Space z │││ id: 2                            │"
+"│                            ││  Toggle explorer                          Space b │││ name: 林美玲                     │" Hidden by multi-width symbols: [(93, " "), (95, " "), (97, " ")]
+"│                            ││  Narrow explorer                          Space < │││ nickname: NULL                   │"
+"│                            ││  Widen explorer                           Space > │││ address: 高雄市前鎮區成功二路 55…│" Hidden by multi-width symbols: [(96, " "), (98, " "), (100, " "), (102, " "), (104, " "), (106, " "), (108, " "), (110, " "), (112, " "), (114, " ")]
+"│                            │╰───────────────────────────────────────────────────╯││ profile: {}                      │"
 "│                            ││ 3 │    3 │ 張志明               │ 👨‍👩‍👧‍👦 family   │ NU…││                                  │" Hidden by multi-width symbols: [(44, " "), (46, " "), (48, " "), (67, " ")]
 "│                            ││ 4 │    4 │ Emoji テスト         │ 🔥🚀✨🎉    │ 沖…││                                  │" Hidden by multi-width symbols: [(50, " "), (52, " "), (54, " "), (67, " "), (69, " "), (71, " "), (73, " "), (81, " ")]
 "│                            ││ 5 │    5 │ 山田太郎             │ やまだ      │ 東…││                                  │" Hidden by multi-width symbols: [(44, " "), (46, " "), (48, " "), (50, " "), (67, " "), (69, " "), (71, " "), (81, " ")]

@@ -54,7 +54,15 @@ fn the_inspector_follows_the_selection() {
     let mut h = grid(Lang::En);
     assert!(h.app.detail.visible, "shown by default");
     let text = inspector(&mut h);
-    // The title names the tabs, the active one in brackets, and the key that switches them.
+    // The title names the tabs, the active one in brackets, and the key that switches them: the
+    // Row tab first.
+    assert_eq!(h.app.detail.tab, DetailTab::Row);
+    assert!(text.lines().next().unwrap().contains(" Cell [Row] · I "), "{text}");
+    assert!(text.contains("id: 1"), "{text}");
+    // The Cell tab: the selected cell's whole value.
+    h.keys("I");
+    assert_eq!(h.app.detail.tab, DetailTab::Cell);
+    let text = inspector(&mut h);
     assert!(text.lines().next().unwrap().contains(" [Cell] Row · I "), "{text}");
     assert!(text.contains("id") && text.contains("int8 · 1 character"), "{text}");
     // Another column, another row: it follows.
@@ -110,7 +118,7 @@ fn a_clicked_inspector_switches_tabs_with_tab() {
     let t = h.draw(160, 45);
     assert_eq!(t.backend().buffer()[(d.x, d.y)].fg, datarig_tui::theme::DARK.accent, "its border shows the focus");
     for (key, want) in
-        [(KeyCode::Tab, DetailTab::Row), (KeyCode::BackTab, DetailTab::Cell), (KeyCode::Char('I'), DetailTab::Row)]
+        [(KeyCode::Tab, DetailTab::Cell), (KeyCode::BackTab, DetailTab::Row), (KeyCode::Char('I'), DetailTab::Cell)]
     {
         h.key(key);
         assert_eq!(h.app.detail.tab, want, "{key:?}");
@@ -120,7 +128,7 @@ fn a_clicked_inspector_switches_tabs_with_tab() {
     assert_eq!(h.app.focus, Focus::Results);
     // `Space r` lists the switch too, and it runs from the grid.
     h.keys(" rI");
-    assert_eq!(h.app.detail.tab, DetailTab::Cell);
+    assert_eq!(h.app.detail.tab, DetailTab::Row);
     // Hidden, the inspector gives the focus back to its grid.
     click(&mut h, d.x + 5, d.y + 4, MouseButton::Left);
     h.keys("i");

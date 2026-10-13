@@ -25,7 +25,8 @@
 //! quotes typed in Insert mode get their closing character, `[editor] run_hints` whether the
 //! editor shows what a statement's last run did after its last line. The retired
 //! `[editor] mode` key (the editor has vim keys only) is accepted with any value, ignored and
-//! dropped by the next save.
+//! dropped by the next save. `[explorer] size_heat` says whether the explorer colors the
+//! estimates of the largest tables of each schema.
 //! [`Prefs`] holds `[commands] position` (the `:` command line as a popup near
 //! the top, or the bottom line), `detail_view` (the result inspector as a panel or a status bar
 //! preview), `clipboard` (how copies reach the clipboard) and `copy_header`
@@ -95,6 +96,8 @@ struct FileConfig {
     last_used: Option<String>,
     #[serde(default)]
     editor: Option<EditorSection>,
+    #[serde(default)]
+    explorer: Option<ExplorerSection>,
     #[serde(default)]
     secrets: Option<SecretsSection>,
     #[serde(default)]
@@ -211,6 +214,13 @@ struct EditorSection {
     auto_pairs: Option<String>,
     #[serde(default)]
     run_hints: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ExplorerSection {
+    #[serde(default)]
+    size_heat: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -482,6 +492,25 @@ impl Choice for KeychainAccess {
     }
 }
 
+/// `[explorer] size_heat`: whether the explorer colors the estimates of the largest objects of
+/// each schema (amber from 1 MiB, red from 1 GiB; on by default).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SizeHeat {
+    #[default]
+    On,
+    Off,
+}
+
+impl Choice for SizeHeat {
+    const ALL: &'static [Self] = &[SizeHeat::On, SizeHeat::Off];
+    fn as_str(self) -> &'static str {
+        match self {
+            SizeHeat::On => "on",
+            SizeHeat::Off => "off",
+        }
+    }
+}
+
 /// The default of `osc52_max_bytes`: about 100 KB of base64 (75 KB of text). Terminals and
 /// tmux drop longer OSC 52 sequences silently (tmux 3.x, many terminals cap them near here).
 pub const OSC52_MAX_BYTES: usize = 100_000;
@@ -511,6 +540,8 @@ pub struct Prefs {
     pub run_hints: RunHints,
     /// `[secrets] macos_keychain_access`.
     pub keychain_access: KeychainAccess,
+    /// `[explorer] size_heat`.
+    pub size_heat: SizeHeat,
 }
 
 impl Default for Prefs {
@@ -528,6 +559,7 @@ impl Default for Prefs {
             auto_pairs: AutoPairs::default(),
             run_hints: RunHints::default(),
             keychain_access: KeychainAccess::default(),
+            size_heat: SizeHeat::default(),
         }
     }
 }
@@ -801,6 +833,7 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
         auto_pairs: choice("editor.auto_pairs", auto_pairs, "off, on")?,
         run_hints: choice("editor.run_hints", run_hints, "on, off")?,
         keychain_access: choice("secrets.macos_keychain_access", keychain_access, "direct, security_tool")?,
+        size_heat: choice("explorer.size_heat", f.explorer.and_then(|e| e.size_heat), "on, off")?,
     };
     // The environments in the file's order (the deserializer sorts its map by name).
     let order: Vec<String> = text
@@ -1180,6 +1213,8 @@ pub fn save(path: &Path, settings: Settings, profiles: Option<Profiles>) -> Resu
     orphans += &nested_setting(&mut doc, "editor", "auto_pairs", pairs)?;
     let hints = (prefs.run_hints.as_str().into(), prefs.run_hints == RunHints::default());
     orphans += &nested_setting(&mut doc, "editor", "run_hints", hints)?;
+    let heat = (prefs.size_heat.as_str().into(), prefs.size_heat == SizeHeat::default());
+    orphans += &nested_setting(&mut doc, "explorer", "size_heat", heat)?;
     let source = (default_source.as_str().into(), default_source == DefaultSource::Auto);
     orphans += &nested_setting(&mut doc, "secrets", "default_source", source)?;
     let access = (prefs.keychain_access.as_str().into(), prefs.keychain_access == KeychainAccess::default());

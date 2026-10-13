@@ -7,11 +7,13 @@
 //! `default`), each with its schema tree. With icons on every node of the tree has
 //! an icon of its kind, and a column that is no key the icon of its type. A table or a
 //! materialized view has the estimates of its rows and size after its name, dim and on the
-//! right, as many of them as there is room for (the name first). An open table shows
+//! right, as many of them as there is room for (the name first); those of the largest objects
+//! of their schema are amber, or red from 1 GiB (`[explorer] size_heat`, see
+//! [`crate::widgets::tree::size_heat`]). An open table shows
 //! its structure (see `widgets::tree`): each group with its icon, each item with its group's.
 //! The "Tunnels" section lists the tunnel presets: each with the state of its shared connection
 //! (`○` closed, a spinner while it opens, `●` open, `✕` lost), its bastion and how many
-//! profiles name it, and under it, opened, those profiles. The "Environments" section lists the
+//! profiles name it, and under it, opened, the profiles connected through it now. The "Environments" section lists the
 //! environments the same way: each with its color's dot, its badge, its rules in a few words
 //! and how many profiles name it; without one, a row that adds the presets.
 
@@ -22,7 +24,7 @@ use crate::icons::{self, KeyMark, TreeIcon, TypeCategory};
 use crate::keymap::Ctx;
 use crate::text::{Align, clip, fit, human_bytes, human_count, width, wrap_words};
 use crate::theme::{self, Theme};
-use crate::widgets::tree::{Group, Node, ObjectView, Structure, Tree};
+use crate::widgets::tree::{Group, Heat, Node, ObjectView, Structure, Tree};
 use crate::widgets::{put, spinner_at};
 use datarig_core::driver::KeyMarks;
 use datarig_core::driver::structure::{
@@ -654,6 +656,17 @@ fn row_stats(app: &App, row: &Row) -> Option<RelationStats> {
     }
 }
 
+/// The size tier of the object `row` is in its schema, when the setting draws it.
+fn row_heat(app: &App, row: &Row) -> Option<Heat> {
+    if app.prefs.size_heat == datarig_core::config::SizeHeat::Off {
+        return None;
+    }
+    match row_node(app, row)? {
+        (tree, Node::Object(i, g, j)) => tree.object_heat(i, g, j),
+        _ => None,
+    }
+}
+
 /// The estimates as an object's line shows them, the longest first: the rows and the size,
 /// then the rows alone (a short line drops the size first); the size alone when the rows are
 /// not known; nothing when neither is (no statistics yet: the status bar says so).
@@ -787,12 +800,19 @@ fn draw_row(app: &App, row: &Row, line: Rect, bg: Style, buf: &mut Buffer) {
         let used = put(buf, x + cx as u16, y, &text, w - cx, style.patch(bg));
         cx += used as usize;
     }
-    // An object's estimates on the right, in the room its name leaves: never over the name.
+    // An object's estimates on the right, in the room its name leaves: never over the name;
+    // dim, or in its size tier's color when the size is shown (the first text; the rows alone
+    // of a narrow explorer stay dim).
     let room = w.saturating_sub(cx + STATS_GAP);
     let stats = row_stats(app, row).map(|s| inline_stats(app, s)).unwrap_or_default();
-    if let Some(text) = stats.into_iter().find(|t| width(t) <= room) {
+    if let Some((i, text)) = stats.into_iter().enumerate().find(|(_, t)| width(t) <= room) {
         let at = w - width(&text);
-        put(buf, x + at as u16, y, &text, width(&text), Style::new().fg(th.fg_dim).patch(bg));
+        let style = match row_heat(app, row).filter(|_| i == 0) {
+            Some(Heat::Hot) => th.size_hot,
+            Some(Heat::Warm) => th.size_warm,
+            None => Style::new().fg(th.fg_dim),
+        };
+        put(buf, x + at as u16, y, &text, width(&text), style.patch(bg));
     }
 }
 

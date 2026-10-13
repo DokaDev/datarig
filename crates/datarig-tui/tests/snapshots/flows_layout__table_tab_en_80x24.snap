@@ -3,12 +3,12 @@ source: crates/datarig-tui/tests/flows_layout.rs
 expression: "h.draw(80, 24).backend()"
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×  2 shop.users ×                          "
-"│  ＋ New connection   │╭ Results · 8 rows ────────────╮╭ [Cell] Row · I ──────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾ ●   local-pg        ││ [Result 1]  Chart  Messages  ││ id                   │"
-"│  ▾ datarig default   ││   │ id   │ name              ││ int8 · 1 character   │"
-"│    ▸ analytics       ││   │ int8 │ text              ││                      │"
-"│    ▸ public          ││ 1 │    1 │ 陳大文            ││ 1                    │" Hidden by multi-width symbols: [(38, " "), (40, " "), (42, " ")]
-"│    ▾ shop            ││ 2 │    2 │ 林美玲            ││                      │" Hidden by multi-width symbols: [(38, " "), (40, " "), (42, " ")]
+"│  ＋ New connection   │╭ Results · 8 rows ────────────╮╭ Cell [Row] · I ──────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ ●   local-pg        ││ [Result 1]  Chart  Messages  ││ id: 1                │"
+"│  ▾ datarig default   ││   │ id   │ name              ││ name: 陳大文         │" Hidden by multi-width symbols: [(65, " "), (67, " "), (69, " ")]
+"│    ▸ analytics       ││   │ int8 │ text              ││ nickname: 大文🐘     │" Hidden by multi-width symbols: [(69, " "), (71, " "), (73, " ")]
+"│    ▸ public          ││ 1 │    1 │ 陳大文            ││ address: 臺北市信義… │" Hidden by multi-width symbols: [(38, " "), (40, " "), (42, " "), (68, " "), (70, " "), (72, " "), (74, " "), (76, " ")]
+"│    ▾ shop            ││ 2 │    2 │ 林美玲            ││ profile: {"lang": "k…│" Hidden by multi-width symbols: [(38, " "), (40, " "), (42, " ")]
 "│      ▾ Tables        ││ 3 │    3 │ 張志明            ││                      │" Hidden by multi-width symbols: [(38, " "), (40, " "), (42, " ")]
 "│        ▸ orders      ││ 4 │    4 │ Emoji テスト      ││                      │" Hidden by multi-width symbols: [(44, " "), (46, " "), (48, " ")]
 "│        ▸ users       ││ 5 │    5 │ 山田太郎          ││                      │" Hidden by multi-width symbols: [(38, " "), (40, " "), (42, " "), (44, " ")]

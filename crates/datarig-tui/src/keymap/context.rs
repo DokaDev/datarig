@@ -214,7 +214,9 @@ impl Ctx {
             Ctx::Workspace => "The workspace without a dialog, including text input in the editor.",
             Ctx::Nav => "Every pane that is not text input (explorer, results, vim Normal/Visual).",
             Ctx::Explorer => "The explorer: folders, connection profiles, their databases and schema trees.",
-            Ctx::ExplorerFilter => "The `/` filter of the explorer (profile names).",
+            Ctx::ExplorerFilter => {
+                "The `/` filter of the explorer: profiles (name, host, database), folders, tunnels, environments and saved queries, and under connected profiles the databases, schemas, tables, views and structure items already loaded."
+            }
             Ctx::Grid => "The result grid.",
             Ctx::Inspector => {
                 "The result inspector next to the grid, after a click on it: `j`/`k` move between the columns and the grid's cell follows (on the Row tab, a click on a column moves it there too), `Enter` shows the value whole."

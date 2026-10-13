@@ -655,6 +655,54 @@ fn every_table_line_has_its_estimates() {
     }
 }
 
+/// The estimates of the largest tables of a schema (its largest tenth by size, one at least)
+/// are amber from 1 MiB and red from 1 GiB, on any row background; the others stay dim, and the
+/// table names do not change. `[explorer] size_heat = "off"` keeps them all dim.
+#[test]
+fn the_estimates_of_the_largest_tables_are_colored_by_size() {
+    use datarig_core::config::SizeHeat;
+    use datarig_core::driver::structure::RelationStats;
+    use datarig_tui::theme::DARK;
+    let mut h = shop_with_estimates(Lang::En);
+    // A wide explorer: room for the size of every line (the rows alone stay dim).
+    h.app.explorer.width = Some(60);
+    // The color of the estimates on `name`'s line, and of its name.
+    let colors = |h: &mut Harness, name: &str, stats: &str| {
+        let t = h.draw(160, 45);
+        let buf = t.backend().buffer();
+        let y = (0..45).find(|&y| row_text(buf, y).contains(&format!("▸ {name} "))).unwrap();
+        let text = row_text(buf, y);
+        let col = |part: &str| text[..text.find(part).unwrap()].chars().count() as u16;
+        (buf[(col(stats), y)].fg, buf[(col(name), y)].fg)
+    };
+    // Three tables with a known size: the largest only, 19 MB.
+    assert_eq!(colors(&mut h, "order_items", "~150k"), (DARK.size_warm.fg.unwrap(), DARK.fg));
+    assert_eq!(colors(&mut h, "users", "~5k").0, DARK.fg_dim, "not among the largest");
+    assert_eq!(colors(&mut h, "zz_mv", "~950").0, DARK.fg_dim);
+    // On the selected row too (its background).
+    h.goto("order_items");
+    assert_eq!(colors(&mut h, "order_items", "~150k").0, DARK.size_warm.fg.unwrap());
+    // 1 GiB or more: hot.
+    let objects = SchemaObjects {
+        tables: vec!["events".into(), "users".into()],
+        stats: [
+            ("events".to_string(), RelationStats { rows: Some(9_000_000), bytes: Some(3 << 30) }),
+            ("users".to_string(), RelationStats { rows: Some(5_000), bytes: Some(1_677_722) }),
+        ]
+        .into(),
+        ..Default::default()
+    };
+    h.db(DbEvent::Objects { schema: "shop".into(), result: Ok(objects) });
+    assert_eq!(colors(&mut h, "events", "~9M").0, DARK.size_hot.fg.unwrap());
+    assert_eq!(colors(&mut h, "users", "~5k").0, DARK.fg_dim);
+    // Turned off: dim, as before.
+    h.command("set explorer.size_heat=off");
+    assert_eq!(h.app.prefs.size_heat, SizeHeat::Off);
+    assert_eq!(colors(&mut h, "events", "~9M").0, DARK.fg_dim);
+    h.command("set explorer.size_heat=on");
+    assert_eq!(colors(&mut h, "events", "~9M").0, DARK.size_hot.fg.unwrap());
+}
+
 /// The name always wins: the estimates take the room it leaves (two blanks at least), the
 /// size going first, then the rows; a name too long for the explorer is cut as before, and
 /// never for them. 80x24 (a 22-column explorer), 120x40 (28) and 160x45 (38).
@@ -681,6 +729,13 @@ fn the_name_wins_over_the_estimates() {
     assert_eq!(line(&mut h, 160, 45, "users"), "        ▸ users      ~5k rows · 1.6 MB");
     assert_eq!(line(&mut h, 160, 45, "order_items"), "        ▸ order_items       ~150k rows");
     assert_eq!(line(&mut h, 160, 45, long), "        ▸ customer_loyalty_points");
+    // The largest table's rows alone stay dim: its color goes with its size.
+    let t = h.draw(160, 45);
+    let buf = t.backend().buffer();
+    let y = (0..45).find(|&y| row_text(buf, y).contains("▸ order_items ")).unwrap();
+    let text = row_text(buf, y);
+    let x = text[..text.find("~150k").unwrap()].chars().count() as u16;
+    assert_eq!(buf[(x, y)].fg, datarig_tui::theme::DARK.fg_dim);
     assert_eq!(line(&mut h, 120, 40, "users"), "        ▸ users     ~5k rows");
     assert_eq!(line(&mut h, 120, 40, "order_items"), "        ▸ order_items");
     assert_eq!(line(&mut h, 120, 40, long), "        ▸ customer_loyalty_…");

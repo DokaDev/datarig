@@ -7,7 +7,7 @@
 //! ```
 //!
 //! Scenarios: `rtt`, `rtt_ssh`, `rtt_mysql`, `paging`, `editor`, `editor_block`, `editor_mysql`, `grid`, `plan`,
-//! `chart`, `idle`, `startup`, or `all`. The PostgreSQL ones (`rtt`, `rtt_ssh`, `paging`, `idle`) need
+//! `chart`, `explorer`, `idle`, `startup`, or `all`. The PostgreSQL ones (`rtt`, `rtt_ssh`, `paging`, `idle`) need
 //! `DATARIG_TEST_PG_URL` and the test database of `dev/init`; `rtt_ssh` also the SSH bastion of the tests (see
 //! `ssh.rs`); `rtt_mysql` needs `DATARIG_TEST_MYSQL_URL` (a MySQL server and a database the user may make a temporary
 //! table in).
@@ -20,6 +20,7 @@ mod apps;
 mod budget;
 mod chart;
 mod editor;
+mod explorer;
 mod grid;
 mod idle;
 mod paging;
@@ -85,6 +86,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
             "grid",
             "plan",
             "chart",
+            "explorer",
             "startup",
             "idle",
             "paging",
@@ -96,7 +98,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
     }
     if o.scenarios.is_empty() {
         return Err(
-            "name a scenario: rtt, rtt_ssh, rtt_mysql, paging, editor, editor_block, editor_mysql, grid, plan, chart, idle, startup, all or budget"
+            "name a scenario: rtt, rtt_ssh, rtt_mysql, paging, editor, editor_block, editor_mysql, grid, plan, chart, explorer, idle, startup, all or budget"
                 .into(),
         );
     }
@@ -129,6 +131,7 @@ async fn scenario(name: &str, o: &Opts) -> Result<Value, String> {
         "grid" => grid::run(2_000, 24, o.runs.unwrap_or(400)),
         "plan" => plan::run(PLAN_JOINS, PLAN_PARTITIONS, o.runs.unwrap_or(300)),
         "chart" => chart::run_in_own_process(&o.scratch, CHART_ROWS, o.runs.unwrap_or(300)),
+        "explorer" => explorer::run(EXPLORER_SCHEMAS, EXPLORER_PER_SCHEMA, o.runs.unwrap_or(300)),
         "idle" => idle::idle(&o.scratch, &o.bin, &pg_url()?, o.idle_secs),
         "startup" => idle::startup(&o.scratch, &o.bin, o.runs.unwrap_or(20)),
         _ => Err(format!("unknown scenario {name}")),
@@ -153,6 +156,10 @@ fn record(o: &Opts, record: &Value) {
 
 /// The rows of the `chart` scenario.
 const CHART_ROWS: usize = 100_000;
+
+/// The tree of the `explorer` scenario: this many schemas, each with this many relations.
+const EXPLORER_SCHEMAS: usize = 20;
+const EXPLORER_PER_SCHEMA: usize = 500;
 
 /// The plan of the `plan` scenario: this many joins deep, over this many partitions.
 const PLAN_JOINS: usize = 40;
@@ -197,6 +204,8 @@ async fn budget(o: &Opts) -> Result<Vec<String>, String> {
     budget::plan(&mut c, &b, &run("plan", r))?;
     let r = chart::run_in_own_process(&o.scratch, CHART_ROWS, 200)?;
     budget::chart(&mut c, &b, &run("chart", r))?;
+    let r = explorer::run(EXPLORER_SCHEMAS, EXPLORER_PER_SCHEMA, 200)?;
+    budget::explorer(&mut c, &b, &run("explorer", r))?;
     let r = paging::run(&url, &o.scratch, "SELECT * FROM analytics.events", int("paging", "max_pages")?, 250).await?;
     budget::paging(&mut c, &b, &run("paging", r))?;
     let r = idle::idle(&o.scratch, &o.bin, &url, int("idle", "secs")? as u64)?;

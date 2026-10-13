@@ -44,7 +44,11 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
   (`orders   ~50k rows · 19 MB`), read with the schema's list in the same round trip from the
   statistics that `VACUUM` and `ANALYZE` keep, without opening it and without a lock on any
   table (`r` lists them again); a table that has grown to more than twice the rows its last
-  `ANALYZE` saw shows the live rows the server has counted since, its size grown with them. The name always wins: on a short line the size goes first, then
+  `ANALYZE` saw shows the live rows the server has counted since, its size grown with them.
+  The largest tables of each schema stand out: of those with a known size, the largest tenth
+  (one at least) has its estimates in amber from 1 MiB and in red from 1 GiB, from the estimates
+  already read (`[explorer] size_heat = "off"`, or `:set explorer.size_heat=off`, keeps them all
+  dim). The name always wins: on a short line the size goes first, then
   the rows; a table with no statistics yet shows nothing there, and the status bar says "rows and
   size unknown (no statistics yet)". An open table shows its structure, read
   from the catalog in one round trip the first time it opens (`r` reads it again, and its
@@ -70,6 +74,16 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
   at once when the lock is already there, after at most 2 s when it is taken while the
   structure is being read.
   Nerd Font icons are optional (asked once, `:set icons=on|off`).
+- `/` filters the explorer by a part of a name, ignoring case: profiles (by name, host or
+  database), folders (a matching folder shows everything in it), tunnel presets, environments
+  and saved queries, and under a connected profile the databases, schemas, tables and views
+  the explorer has already read, and the structure items (columns, keys, indexes, constraints,
+  triggers) of a table whose structure it has read (where it shows a table's columns from the
+  completion catalog instead, they are not searched). A schema whose tables were never listed
+  and a table whose structure was never opened are not searched, nor is the tree of a profile
+  that is not connected (its name still matches), and nothing is asked of the server. Matches
+  show with the way to them opened and the cursor on the first one; what you opened or closed
+  yourself does not change, and `Esc` gives the tree back as it was.
 - Show DDL (PostgreSQL; MySQL shows the server's own text, see [MySQL](#mysql)): `D` on a
   table, view, materialized view, index or trigger in the explorer (or its menu, or
   `:ddl [schema.name]`), `F` on a trigger for its function, opens its
@@ -215,7 +229,8 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
   and why. An environment can keep the server-side cursor open instead (`paging = "hold"`, see
   [Paging and locks](#paging-and-locks)).
 - A row count on demand, with a label that says whether it matches the pages you saw.
-- An inspector for the selected cell or row (JSON pretty-printed), a cell viewer, and cell,
+- An inspector for the selected row or cell (JSON pretty-printed; it starts on the Row tab, `I`
+  switches, and the tab you pick stays for the session), a cell viewer, and cell,
   row, column and range selection with the keyboard or the mouse. The inspector's Row tab stays
   on the grid's column: it highlights that column and scrolls to it, and `j`/`k` (once the
   inspector is clicked) or a click on another column moves the grid's cell there, the grid
@@ -415,6 +430,9 @@ order are kept); you can also write it by hand. Passwords are never written to i
 version = 2
 language = "en"            # en | ko | auto
 theme = "catppuccin"       # see Themes below; terminal when left out
+
+[explorer]
+size_heat = "on"           # amber and red estimates for each schema's largest tables (on | off)
 
 [[connections]]
 name = "local"
@@ -804,8 +822,10 @@ comes back with the new preset picked.
 - **Tunnel presets** (`[tunnels.<name>]`, the profile names one with `tunnel = "<name>"`) live in
   the explorer's **Tunnels** section, below the connections: `n` makes one, `e` edits it (its name
   too: the profiles that name it follow), `c` copies it, `d` deletes it, `t` tests it, and `Enter`
-  shows the profiles that name it. Each preset shows whether its connection is closed, opening,
-  open (and how many profiles are on it) or lost (and why).
+  shows the profiles connected through it now (one that names it but is not connected, or is
+  still connecting, is not listed; a preset nobody is connected through has nothing to open).
+  Each preset shows whether its connection is closed, opening, open (and how many profiles are
+  on it) or lost (and why), and otherwise how many profiles name it.
 - Profiles that use the same preset at the same time share **one SSH connection**: the first one
   opens it (one login, one host key question, one secret prompt, for every profile waiting), the
   others take it as it is, and it closes when the last of them disconnects. When it is lost,

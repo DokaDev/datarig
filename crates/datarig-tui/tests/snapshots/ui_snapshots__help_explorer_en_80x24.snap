@@ -15,7 +15,7 @@ expression: backend
 "│ │   Explorer: first item                    g g                            │ │"
 "│ │   Explorer: last item                     G                              │ │"
 "│ │   Explorer: reload                        r                              │ │"
-"│ │   Explorer: filter profiles               /                              │t│"
+"│ │   Explorer: filter by name                /                              │t│"
 "│ │   New connection profile                  n                              │ │"
 "│ │   Edit connection profile                 e                              │ │"
 "│ │   Duplicate connection profile            c                              │ │"
