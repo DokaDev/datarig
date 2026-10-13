@@ -3,9 +3,10 @@
 //! dev stay apart without a chip; the profile's name is on the editor's first line), muted while
 //! it is not (the normal idle state: sessions open lazily), and replaced by the status bar's
 //! spinner while a statement runs or waits. The document is a console's `console <n>`, a saved
-//! query's name or a table tab's `schema.table`, `*` marks a text that could not be saved, the
-//! environment's badge (`PROD`) follows as a chip of its color, and `RO` marks a read-only
-//! environment. A mark after it warns, by shape first ([`State`]): `◆` in the warning
+//! query's name or a table tab's `schema.table` (in the color of its connection's environment
+//! when that has one, muted on an inactive tab), `*` marks a text that could not be saved, the
+//! environment's badge (`PROD`) follows as a chip of its color, and the lock (`RO` with icons
+//! off) in the read-only mark's blue marks read-only rules. A mark after it warns, by shape first ([`State`]): `◆` in the warning
 //! color while the user's transaction is open, `!` for a lost connection, a failed profile or
 //! an aborted transaction; a tab with nothing to warn about has no mark. `×` closes the tab as
 //! `Ctrl+W` does. A tab without a connection says so in the mark's place. When the tabs do not
@@ -148,16 +149,21 @@ pub(crate) fn marks(app: &App, tab: &Tab, bg: Color) -> Vec<(String, Style)> {
     }
     if let Some(p) = tab.profile.and_then(|id| app.profiles.iter().find(|p| p.id == id)) {
         // The environment's badge, a chip of its color.
-        if let Some(e) = app.profile_environment(p.id)
-            && let Some(b) = &e.badge
-        {
+        if let Some(chip) = app.profile_environment(p.id).and_then(App::badge_chip) {
             out.push((" ".to_string(), mark(th.fg)));
-            out.push((format!(" {b} "), theme::chip(App::badge_color(e))));
+            out.push(chip);
         }
-        // A read-only environment, in words.
+        // Read-only (the effective rules): the lock, or `RO` with icons off, in the read-only
+        // mark's color.
         if app.read_only(p.id) {
-            let ro = Style::new().fg(th.fg).bg(bg).add_modifier(Modifier::BOLD);
-            out.push((format!(" {}", app.i18n.label(Label::TabReadOnly)), ro));
+            let ro =
+                Style::new().fg(crate::app::environments::read_only_color(&th)).bg(bg).add_modifier(Modifier::BOLD);
+            let text = if app.icons_on() {
+                icons::READ_ONLY.to_string()
+            } else {
+                app.i18n.label(Label::TabReadOnly).to_string()
+            };
+            out.push((format!(" {text}"), ro));
         }
         if let Some((m, c)) = warning_mark(state(app, tab), tab.exec.user_tx()) {
             out.push((format!(" {m}"), mark(c)));
@@ -175,10 +181,24 @@ pub(crate) fn unbound(app: &App, tab: &Tab) -> Option<Label> {
     Some(if tab.doc.recovered { Label::TabRecovered } else { Label::TabUnbound })
 }
 
-/// One tab label, `doc_max` columns at most for the document's name.
+/// One tab label, `doc_max` columns at most for the document's name. Another tab than the
+/// active one under the pointer (its body or its `×`) is on the surface's background, between
+/// the bar's and the active tab's; in italics where the surface is the bar's background (the
+/// terminal theme).
 fn label(app: &App, index: usize, tab: &Tab, active: bool, doc_max: usize) -> Vec<Part> {
     let th = theme::cur();
-    let bg = if active { th.surface_alt } else { th.bg };
+    let hovered = !active
+        && matches!(
+            app.pointer_hover(),
+            Some(crate::app::hover::PointerOn::Tab(TabHit::Tab(i) | TabHit::Close(i))) if i == index
+        );
+    let bg = if active {
+        th.surface_alt
+    } else if hovered {
+        th.surface
+    } else {
+        th.bg
+    };
     let part = |text: String, style: Style| Part { text, style, kind: PartKind::Plain };
     let (n, color) = number(app, index, tab);
     let mut num = Style::new().fg(color).bg(bg).add_modifier(Modifier::BOLD);
@@ -186,7 +206,17 @@ fn label(app: &App, index: usize, tab: &Tab, active: bool, doc_max: usize) -> Ve
         num = num.remove_modifier(Modifier::BOLD);
     }
     let mark = |c: Color| Style::new().fg(c).bg(bg);
-    let mut doc = Style::new().fg(if active { th.fg } else { th.fg_muted }).bg(bg);
+    // The document's name: in the color of its connection's environment when that has one
+    // (muted on an inactive tab), else the body text (muted on an inactive tab); bold on the
+    // active tab.
+    let env = tab.profile.filter(|id| app.profile(*id).is_some()).and_then(|id| app.name_env_color(id));
+    let mut doc = match (env, active) {
+        (Some(c), true) => Style::new().fg(th.name_color(Some(c))),
+        (Some(c), false) => th.name_muted(th.name_color(Some(c))),
+        (None, true) => Style::new().fg(th.fg),
+        (None, false) => Style::new().fg(th.fg_muted),
+    }
+    .bg(bg);
     if active {
         doc = doc.add_modifier(Modifier::BOLD);
     }
@@ -214,6 +244,11 @@ fn label(app: &App, index: usize, tab: &Tab, active: bool, doc_max: usize) -> Ve
         kind: PartKind::Close,
     });
     parts.push(part(" ".to_string(), mark(th.fg_dim)));
+    if hovered && th.surface == th.bg {
+        for p in &mut parts {
+            p.style = p.style.add_modifier(Modifier::ITALIC);
+        }
+    }
     parts
 }
 

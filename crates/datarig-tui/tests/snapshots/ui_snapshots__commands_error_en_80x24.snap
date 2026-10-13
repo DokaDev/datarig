@@ -4,14 +4,14 @@ expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×                                          "
 "│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾ ●   local-pg        ││ local-pg / datarig  127.0.0.1:55432                  │"
-"│  ▾ datarig default   ││  1 -- datarig 🐘  Ctrl+E: run the statement under the│" Hidden by multi-width symbols: [(41, " ")]
-"│    ▸ ana╭ Commands ────────────────────────────────────────────────╮         │"
-"│    ▸ pub│ : frobz                                                  │         │"
-"│    ▸ sho├──────────────────────────────────────────────────────────┤         │"
-"│▸ ○   分 │  No matching commands                                    │         │" Hidden by multi-width symbols: [(8, " ")]
-"│▸ ○   分 │  Not a command: frobz                                    │         │" Hidden by multi-width symbols: [(8, " ")]
-"│         ╰─────────────────── Tab/↑↓ select · Enter run · Esc close ╯         │"
+"│▾ Connections 3       ││ local-pg / datarig  127.0.0.1:55432                  │"
+"│  ▾ ●   local-pg      ││  1 -- datarig 🐘  Ctrl+E: run the statement under the│" Hidden by multi-width symbols: [(41, " ")]
+"│    ▾ dat╭ Commands ────────────────────────────────────────────────╮         │"
+"│      ▸ a│ : frobz                                                  │         │"
+"│      ▸ p├──────────────────────────────────────────────────────────┤         │"
+"│      ▸ s│  No matching commands                                    │         │"
+"│  ▸ ○    │  Not a command: frobz                                    │         │"
+"│  ▸ ○    ╰─────────────────── Tab/↑↓ select · Enter run · Esc close ╯         │"
 "│                      ││  8                                                   │"
 "│                      ││  9 SELECT * FROM analytics.events;                   │"
 "│                      ││ 10                                                   │"

@@ -4,17 +4,17 @@ expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1  PROD  RO ×                                "
 "│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾ ●   local-pg RO     ││ local-pg / datarig  PROD   READ-ONLY                 │"
-"│  ▾ datarig default   ││  1 -- datarig 🐘  Ctrl+E: run the statement under the│" Hidden by multi-width symbols: [(41, " ")]
-"│      Loading…        ││  2▎SELECT * FROM shop.users WHERE id <= 8;           │"
-"│    Loading…          ││  3                                                   │"
-"│▸ ○   v6              ││  4 SELECT u.name, o.status, o.total_amount           │"
-"│▸ ○   分析-replica    ││  5 FROM shop.orders o                                │" Hidden by multi-width symbols: [(8, " "), (10, " ")]
-"│▾ Environments 2      ││  6 JOIN shop.users u ON u.id = o.user_id             │"
-"│  ▸ ○ Default rules (…││  7 WHERE o.status = 'paid';                          │"
-"│  ▸ ● prod  PROD   re…││  8                                                   │"
-"│    ● dev  standard r…││  9 SELECT * FROM analytics.events;                   │"
-"│                      ││ 10                                                   │"
+"│▾ Connections 3       ││ local-pg / datarig  PROD   READ-ONLY                 │"
+"│  ▾ ●   local-pg RO   ││  1 -- datarig 🐘  Ctrl+E: run the statement under the│" Hidden by multi-width symbols: [(41, " ")]
+"│    ▾ datarig default ││  2▎SELECT * FROM shop.users WHERE id <= 8;           │"
+"│        Loading…      ││  3                                                   │"
+"│      Loading…        ││  4 SELECT u.name, o.status, o.total_amount           │"
+"│  ▸ ○   v6            ││  5 FROM shop.orders o                                │"
+"│  ▸ ○   分析-replica  ││  6 JOIN shop.users u ON u.id = o.user_id             │" Hidden by multi-width symbols: [(10, " "), (12, " ")]
+"│▾ Environments 2      ││  7 WHERE o.status = 'paid';                          │"
+"│  ▸ ○ Default rules (…││  8                                                   │"
+"│  ▸ ● prod  PROD   re…││  9 SELECT * FROM analytics.events;                   │"
+"│    ● dev  standard r…││ 10                                                   │"
 "│                      ││ 11 SELECT * FROM analytics.events ORDER BY created_at│"
 "│                      ││ 12                                                   │"
 "│                      ││ 13 SELECT analytics.slow(30);                        │"

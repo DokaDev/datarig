@@ -261,8 +261,6 @@ The result inspector next to the grid, after a click on it: `j`/`k` move between
 | `k` | `results.detail_prev` | Result detail → previous column | ✓ |
 | `Up` | `results.detail_prev` | Result detail → previous column | ✓ |
 | `Enter` | `grid.view_cell` | Results: view cell value |  |
-| `Tab` | `results.detail_tab` | Result detail → Cell / Row |  |
-| `Shift+Tab` | `results.detail_tab` | Result detail → Cell / Row |  |
 | `I` | `results.detail_tab` | Result detail → Cell / Row |  |
 | `i` | `results.detail` | Result detail → show / hide |  |
 | `Esc` | `pane.back` | Back to the editor |  |
@@ -623,7 +621,7 @@ Settings of `:set` (saved to `config.toml` like the matching actions):
 | `editor.auto_pairs` | `off` `on` | Auto-pairs |
 | `editor.run_hints` | `on` `off` | Run hints |
 | `secrets.macos_keychain_access` | `direct` `security_tool` | macOS keychain access |
-| `explorer.size_heat` | `on` `off` | Explorer: size colors |
+| `explorer.size_heat` | `3` `5` `off` | Explorer: size colors |
 
 ## Command line only
 

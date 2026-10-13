@@ -642,7 +642,7 @@ fn step_2_settings_are_read_checked_and_saved_only_when_set() {
             auto_pairs: AutoPairs::Off,
             run_hints: RunHints::On,
             keychain_access: KeychainAccess::Direct,
-            size_heat: SizeHeat::On,
+            size_heat: SizeHeat::Three,
         }
     );
     assert_eq!(parse("osc52_max_bytes = 5000\n").unwrap().prefs.osc52_max_bytes, 5000);
@@ -755,17 +755,20 @@ fn formatter_settings() {
 }
 
 #[test]
-fn the_size_heat_of_the_explorer_is_on_by_default_and_can_be_turned_off() {
-    assert_eq!(parse("").unwrap().prefs.size_heat, SizeHeat::On);
+fn the_size_heat_of_the_explorer_is_three_levels_by_default_five_or_off() {
+    assert_eq!(parse("").unwrap().prefs.size_heat, SizeHeat::Three);
     assert_eq!(parse("[explorer]\nsize_heat = \"off\"\n").unwrap().prefs.size_heat, SizeHeat::Off);
-    assert_eq!(parse("[explorer]\nsize_heat = \"on\"\n").unwrap().prefs.size_heat, SizeHeat::On);
+    assert_eq!(parse("[explorer]\nsize_heat = \"3\"\n").unwrap().prefs.size_heat, SizeHeat::Three);
+    assert_eq!(parse("[explorer]\nsize_heat = \"5\"\n").unwrap().prefs.size_heat, SizeHeat::Five);
+    // `on`, from before there were levels, keeps working: three levels.
+    assert_eq!(parse("[explorer]\nsize_heat = \"on\"\n").unwrap().prefs.size_heat, SizeHeat::Three);
     assert_eq!(
         parse("[explorer]\nsize_heat = \"warm\"\n").unwrap_err(),
         ConfigError::Value {
             key: "explorer.size_heat".into(),
             value: "warm".into(),
             profile: None,
-            allowed: Some("on, off")
+            allowed: Some("3, 5, off")
         }
     );
     assert!(matches!(parse("[explorer]\nhidden = true\n"), Err(ConfigError::Syntax(_))), "only its own keys");
@@ -777,8 +780,12 @@ fn the_size_heat_of_the_explorer_is_on_by_default_and_can_be_turned_off() {
     let text = std::fs::read_to_string(&path).unwrap();
     assert!(text.contains("[explorer]\nsize_heat = \"off\"\n"), "{text}");
     assert_eq!(load(Some(path.clone())).0.prefs, prefs);
+    let five = Prefs { size_heat: SizeHeat::Five, ..Prefs::default() };
+    save(&path, Settings { prefs: five, ..settings("en") }, None).unwrap();
+    assert!(std::fs::read_to_string(&path).unwrap().contains("[explorer]\nsize_heat = \"5\"\n"));
+    assert_eq!(load(Some(path.clone())).0.prefs, five);
     save(&path, settings("en"), None).unwrap();
-    assert!(!std::fs::read_to_string(&path).unwrap().contains("size_heat"), "on is the default: the key goes");
+    assert!(!std::fs::read_to_string(&path).unwrap().contains("size_heat"), "3 is the default: the key goes");
 }
 
 #[test]

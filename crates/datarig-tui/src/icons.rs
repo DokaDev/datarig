@@ -78,8 +78,24 @@ pub fn page_arrows(on: bool) -> (&'static str, &'static str) {
     if on { (PAGE_PREV, PAGE_NEXT) } else { ("\u{2039}", "\u{203a}") }
 }
 
-/// A profile that connects through an SSH tunnel (nf-md-ssh).
-pub const TUNNEL: &str = "\u{f08c0}";
+/// A profile that connects through an SSH tunnel, and a tunnel preset of the explorer (in the
+/// color of its connection's state there) (nf-md-lan_connect).
+pub const TUNNEL: &str = "\u{f0318}";
+
+/// The head of the explorer's "Connections" section (nf-md-server_network).
+pub const CONNECTIONS: &str = "\u{f048d}";
+
+/// The head of the explorer's "Tunnels" section (nf-md-tunnel).
+pub const TUNNELS: &str = "\u{f183d}";
+
+/// The head of the explorer's "Saved queries" section (nf-md-script_text).
+pub const SCRIPTS: &str = "\u{f0bc2}";
+
+/// An environment's chip in the explorer, in its color (nf-md-square_rounded).
+pub const ENVIRONMENT_CHIP: &str = "\u{f14fb}";
+
+/// A read-only connection, on its explorer row and its tabs (nf-md-lock).
+pub const READ_ONLY: &str = "\u{f033e}";
 
 /// The tunnel mark: the glyph, or `SSH` with icons off (never an emoji).
 pub fn tunnel(on: bool) -> &'static str {

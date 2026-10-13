@@ -130,6 +130,7 @@ impl App {
         }
         if loaded.found {
             self.scripts_expanded = ws.explorer.scripts_expanded;
+            self.connections_expanded = !ws.explorer.connections_collapsed;
         }
         self.script_folders = ws.explorer.script_folders.iter().cloned().collect();
         self.explorer.hidden = ws.explorer.hidden;
@@ -341,6 +342,7 @@ impl App {
             active: self.tabs.active_index(),
             explorer: ExplorerState {
                 expanded_folders: self.folders.expanded().map(ToString::to_string).collect(),
+                connections_collapsed: !self.connections_expanded,
                 scripts_expanded: self.scripts_expanded,
                 script_folders: self.script_folders.iter().cloned().collect(),
                 hidden: self.explorer.hidden,

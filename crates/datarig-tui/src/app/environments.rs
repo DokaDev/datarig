@@ -23,23 +23,75 @@ pub fn name_taken(envs: &[Environment], id: EnvironmentId, original: Option<&str
     envs.iter().any(|e| e.id != id && (e.name == n || (same_name(&e.name, n) && original != Some(n))))
 }
 
-/// The rules of `p` in a few words: `read-only · confirm all writes`, … (`standard rules` when
-/// it has none of them).
+/// The rules of `p` in a few words: `read-only · asks before every write`, … (`standard rules`
+/// when it has none of them).
 pub fn rules_hint(i18n: &datarig_core::i18n::I18n, p: &Policy) -> String {
-    let mut parts = Vec::new();
+    rules_tones(i18n, p, false).into_iter().map(|(t, _)| t).collect()
+}
+
+/// How a part of an environment's rules in words is drawn ([`rules_tones`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RuleTone {
+    /// Read-only: the read-only mark's color.
+    ReadOnly,
+    /// Asks before every write: the warning color.
+    Warning,
+    /// Holds locks while paging: the error color.
+    Error,
+    /// The standard rules, the separators, and words around them: dim.
+    Dim,
+}
+
+impl RuleTone {
+    /// The style of the tone in the current theme.
+    pub fn style(self) -> ratatui::style::Style {
+        let th = crate::theme::cur();
+        ratatui::style::Style::new().fg(match self {
+            RuleTone::ReadOnly => read_only_color(&th),
+            RuleTone::Warning => th.warning,
+            RuleTone::Error => th.error,
+            RuleTone::Dim => th.fg_dim,
+        })
+    }
+}
+
+/// [`rules_hint`] in parts with the tone each is drawn in, the same wherever they are (the
+/// explorer's rows, the environment list, the profile form): read-only (after the lock with
+/// `icons` on), asking before every write, holding locks while paging, the standard rules and
+/// the separators.
+pub fn rules_tones(i18n: &datarig_core::i18n::I18n, p: &Policy, icons: bool) -> Vec<(String, RuleTone)> {
+    let mut rules: Vec<(String, RuleTone)> = Vec::new();
     if p.read_only {
-        parts.push(i18n.label(Label::EnvRuleReadOnly).to_string());
+        let lock = if icons { format!("{} ", crate::icons::READ_ONLY) } else { String::new() };
+        rules.push((format!("{lock}{}", i18n.label(Label::EnvRuleReadOnly)), RuleTone::ReadOnly));
     }
     if p.confirm.writes() {
-        parts.push(i18n.label(Label::EnvRuleConfirmWrites).to_string());
+        rules.push((i18n.label(Label::EnvRuleConfirmWrites).to_string(), RuleTone::Warning));
     }
     if p.paging == datarig_core::driver::PagingMode::Hold {
-        parts.push(i18n.label(Label::EnvRuleHold).to_string());
+        rules.push((i18n.label(Label::EnvRuleHold).to_string(), RuleTone::Error));
     }
-    if parts.is_empty() {
-        parts.push(i18n.label(Label::EnvRuleStandard).to_string());
+    if rules.is_empty() {
+        rules.push((i18n.label(Label::EnvRuleStandard).to_string(), RuleTone::Dim));
     }
-    parts.join(" · ")
+    let mut out = Vec::new();
+    for (i, r) in rules.into_iter().enumerate() {
+        if i > 0 {
+            out.push((" · ".to_string(), RuleTone::Dim));
+        }
+        out.push(r);
+    }
+    out
+}
+
+/// [`rules_tones`] in the current theme's styles.
+pub fn rules_parts(i18n: &datarig_core::i18n::I18n, p: &Policy, icons: bool) -> Vec<(String, ratatui::style::Style)> {
+    rules_tones(i18n, p, icons).into_iter().map(|(t, tone)| (t, tone.style())).collect()
+}
+
+/// The color of the read-only mark (the lock, the rule's words): the theme's read-only mark.
+pub fn read_only_color(th: &crate::theme::Theme) -> ratatui::style::Color {
+    th.read_only_mark.fg.unwrap_or(th.accent)
 }
 
 impl App {
@@ -147,12 +199,38 @@ impl App {
         rules_hint(&self.i18n, p)
     }
 
-    /// The color an environment's badge is drawn in: its own, else a neutral one.
+    /// The color an environment's badge is drawn in: its own, else a neutral one (the theme's
+    /// muted text color; the terminal's light gray where that is no RGB color, as the terminal
+    /// theme's dark gray would not take the chip's dark text).
     pub fn badge_color(e: &Environment) -> ratatui::style::Color {
+        use ratatui::style::Color;
         match e.display_color() {
             Some(pc) => crate::theme::profile_color(pc),
-            None => crate::theme::cur().fg_muted,
+            None => match crate::theme::cur().fg_muted {
+                c @ Color::Rgb(..) => c,
+                _ => Color::Gray,
+            },
         }
+    }
+
+    /// An environment's badge as every place draws it (explorer, picker, forms, tab bar, status
+    /// bar): ` PROD ` as a chip of its color ([`crate::theme::chip`]), drawn as is, never on the
+    /// background of the row it is on. `None` without a badge.
+    pub fn badge_chip(e: &Environment) -> Option<(String, ratatui::style::Style)> {
+        e.badge.as_ref().map(|b| (format!(" {b} "), crate::theme::chip(Self::badge_color(e))))
+    }
+
+    /// The color of profile `id`'s name ([`crate::theme::Theme::name_style`]): its
+    /// environment's, if that has one.
+    pub fn name_env_color(&self, id: ProfileId) -> Option<ratatui::style::Color> {
+        self.profile_environment(id).and_then(Environment::display_color).map(crate::theme::profile_color)
+    }
+
+    /// The style of profile `id`'s name: its environment's color, bold while connected, muted
+    /// while not.
+    pub fn profile_name_style(&self, id: ProfileId) -> ratatui::style::Style {
+        let connected = self.conns.state(id) == NodeState::Connected;
+        crate::theme::cur().name_style(self.name_env_color(id), connected)
     }
 
     // ── the form ────────────────────────────────────────────────────────────

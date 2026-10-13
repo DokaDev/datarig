@@ -190,7 +190,8 @@ fn draw_cell(app: &App, rs: &ResultSet, marks: &[KeyMarks], body: Rect, buf: &mu
 }
 
 /// The Row tab: every column of the selected row, `name: value` on one line each (key marks
-/// first), the selected column highlighted and kept in view, the one under the pointer lit.
+/// first), the selected column highlighted (dimmer without the focus) and kept in view, the
+/// one under the pointer lit, or the one of the grid's cell under it.
 /// Returns the first column drawn and where the entries are.
 fn draw_row(app: &App, rs: &ResultSet, marks: &[KeyMarks], body: Rect, buf: &mut Buffer) -> (usize, Rect) {
     let th = theme::cur();
@@ -216,8 +217,11 @@ fn draw_row(app: &App, rs: &ResultSet, marks: &[KeyMarks], body: Rect, buf: &mut
     }
     let first = first.min(rs.columns.len().saturating_sub(room));
     let list = Rect::new(body.x, y, body.width, room.min(rs.columns.len() - first) as u16);
+    // The entry under the pointer, or the one of the grid's cell under it (in the selected
+    // row): lit as a hover is, never selected.
     let hovered = match app.pointer_hover() {
         Some(PointerOn::Detail(c)) => Some(c),
+        Some(PointerOn::Cell(r, c)) if r == row => Some(c),
         _ => None,
     };
     let null = app.i18n.label(Label::ResultsNull);
@@ -228,9 +232,9 @@ fn draw_row(app: &App, rs: &ResultSet, marks: &[KeyMarks], body: Rect, buf: &mut
         let bg = if ci == col && focused {
             th.selection
         } else if ci == col {
-            th.cursor_line
+            th.selection_unfocused()
         } else if hovered == Some(ci) {
-            Style::new().bg(th.bg).patch(crate::widgets::hover_style())
+            Style::new().bg(th.bg).patch(crate::widgets::cell_hover_style())
         } else {
             Style::new().bg(th.bg)
         };

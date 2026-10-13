@@ -35,14 +35,18 @@ pub struct Entry<T> {
     /// A mark before the label in its color (an environment's `●`); when an entry has one,
     /// every label leaves room for it.
     pub mark: Option<(String, Color)>,
-    /// A badge after the label, drawn as a chip of its color (an environment's `PROD`).
-    pub badge: Option<(String, Color)>,
+    /// A badge after the label, its text and style as drawn (an environment's ` PROD ` chip,
+    /// [`crate::app::App::badge_chip`]).
+    pub badge: Option<(String, Style)>,
+    /// The hint in parts, each in its tone (an environment's rules); drawn instead of `hint`
+    /// when there are any (`hint` keeps the same words).
+    pub hint_tones: Vec<(String, crate::app::environments::RuleTone)>,
 }
 
 impl<T> Entry<T> {
     /// An entry of `value` with `label` and `hint`, no mark and no badge.
     pub fn new(value: T, label: String, hint: String) -> Self {
-        Entry { value, label, hint, mark: None, badge: None }
+        Entry { value, label, hint, mark: None, badge: None, hint_tones: Vec::new() }
     }
 }
 
@@ -281,7 +285,7 @@ impl<T: Clone + PartialEq> ListPicker<T> {
         // The hints in a column after the widest label with its badge (at most half the box, so
         // a narrow one still shows some of them); the marks before the labels, when there are.
         let marks = self.entries.iter().any(|e| e.mark.is_some());
-        let badge_w = |e: &Entry<T>| e.badge.as_ref().map_or(0, |(b, _)| width(b) + 3);
+        let badge_w = |e: &Entry<T>| e.badge.as_ref().map_or(0, |(b, _)| width(b) + 1);
         let label_w =
             self.entries.iter().map(|e| width(&e.label) + badge_w(e)).max().unwrap_or(0).min(iw.saturating_sub(6) / 2);
         put(buf, inner.x + 1, inner.y, "›", 1, base.fg(th.accent).add_modifier(Modifier::BOLD));
@@ -320,13 +324,18 @@ impl<T: Clone + PartialEq> ListPicker<T> {
                         x += 2;
                     }
                     let used = put(buf, x, y, &e.label, room(x).min(label_w), Style::new().fg(th.fg).patch(bg));
-                    if let Some((b, c)) = &e.badge {
+                    if let Some((b, chip)) = &e.badge {
                         let bx = x + used + 1;
                         let left = (label_w + 1).saturating_sub(usize::from(used)).min(room(bx));
-                        put(buf, bx, y, &format!(" {b} "), left, crate::theme::chip(*c));
+                        put(buf, bx, y, b, left, *chip);
                     }
-                    if !e.hint.is_empty() {
-                        let hx = x + label_w as u16 + 2;
+                    let hx = x + label_w as u16 + 2;
+                    if !e.hint_tones.is_empty() {
+                        let mut hx = hx;
+                        for (t, tone) in &e.hint_tones {
+                            hx += put(buf, hx, y, t, room(hx), tone.style().patch(bg));
+                        }
+                    } else if !e.hint.is_empty() {
                         put(buf, hx, y, &e.hint, room(hx), Style::new().fg(th.fg_dim).patch(bg));
                     }
                 }

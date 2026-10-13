@@ -38,8 +38,13 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
   row shows the tab's number, name, kind and connection, database and schema, with the tab
   bar's marks. Type to filter by any of them; `Enter` goes to a tab or brings a closed one back,
   `Ctrl+D` closes the selected tab (asking first as `Ctrl+W` does).
-- The explorer lists every connection profile, the server's databases, their schemas, tables and
-  views (materialized views with an icon of their own). Each table and materialized view shows
+- The explorer lists every connection profile (in its **Connections** section, which opens and
+  closes like the **Tunnels**, **Environments** and **Saved queries** sections below it and is
+  kept closed across restarts; each section's head shows its icon with icons on, its name and
+  how many it has), the server's databases, their schemas, tables and
+  views (materialized views with an icon of their own). A profile through an SSH tunnel carries
+  the tunnel mark (`SSH` with icons off), and one with read-only rules a lock in blue (`RO` with
+  icons off): that comes from the rules alone, never from an environment's name. Each table and materialized view shows
   the server's estimates of its rows and its size on disk on its own line, dim and on the right
   (`orders   ~50k rows · 19 MB`), read with the schema's list in the same round trip from the
   statistics that `VACUUM` and `ANALYZE` keep, without opening it and without a lock on any
@@ -47,8 +52,9 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
   `ANALYZE` saw shows the live rows the server has counted since, its size grown with them.
   The largest tables of each schema stand out: of those with a known size, the largest tenth
   (one at least) has its estimates in amber from 1 MiB and in red from 1 GiB, from the estimates
-  already read (`[explorer] size_heat = "off"`, or `:set explorer.size_heat=off`, keeps them all
-  dim). The name always wins: on a short line the size goes first, then
+  already read. `[explorer] size_heat = "5"` (or `:set explorer.size_heat=5`) uses five levels
+  instead: yellow from 1 MiB, amber from 100 MiB, orange from 1 GiB, red from 10 GiB; `"off"`
+  keeps them all dim (`"3"` is the default, and `"on"` still reads as `"3"`). The name always wins: on a short line the size goes first, then
   the rows; a table with no statistics yet shows nothing there, and the status bar says "rows and
   size unknown (no statistics yet)". An open table shows its structure, read
   from the catalog in one round trip the first time it opens (`r` reads it again, and its
@@ -241,8 +247,9 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
   and why. An environment can keep the server-side cursor open instead (`paging = "hold"`, see
   [Paging and locks](#paging-and-locks)).
 - A row count on demand, with a label that says whether it matches the pages you saw.
-- An inspector for the selected row or cell (JSON pretty-printed; it starts on the Row tab, `I`
-  switches, and the tab you pick stays for the session), a cell viewer, and cell,
+- An inspector for the selected row or cell (JSON pretty-printed; it starts on the Row tab for
+  every result, `I` switches, and the tab you pick stays for the session; `Tab` there moves to
+  the next pane as everywhere), a cell viewer, and cell,
   row, column and range selection with the keyboard or the mouse. The inspector's Row tab stays
   on the grid's column: it highlights that column and scrolls to it, and `j`/`k` (once the
   inspector is clicked) or a click on another column moves the grid's cell there, the grid
@@ -311,7 +318,10 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
 - Environments (`dev`, `staging`, `prod`, …) that profiles pick: each sets `read_only`, which
   statements need a confirmation (`confirm = "destructive"` or `"writes"`), whether results hold
   a server-side cursor (`paging`) and for how long when idle, and the spill limit, and has an
-  optional color and a short badge (`PROD`) shown on its tabs and in the status bar. See
+  optional color and a short badge (`PROD`) shown on its tabs, in the explorer and in the status
+  bar. A profile's name takes its environment's color in the explorer, the tab list and quick
+  connect (bold while connected, muted while not; its icon and state mark keep the profile's
+  color), and so does the title of a tab on it in the tab bar. See
   [Environments](#environments). **Read-only is enforced by the server**: every transaction of a
   read-only profile is opened `READ ONLY`, so even a function called from a `SELECT` cannot write.
 - `EXPLAIN ANALYZE` of a write is rolled back.
@@ -325,8 +335,12 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
   key where the terminal reports it) opens it next to the selection, and `Space t m` under the
   active tab. It lists what you can do with the selected thing, then with the pane, each with
   its key. Type to filter it; when nothing in it matches, every action is searched.
-- The tab bar's `×` turns red under the pointer (its text color alone); the tab bar's scroll
-  marks, the result tabs, the paging arrows and the plan's view names light up under it.
+- The tab bar's `×` turns red under the pointer (its text color alone), and a tab other than
+  the active one takes a subtle background of its own; the tab bar's scroll marks, the result
+  tabs, the paging arrows and the plan's view names light up under it. A result grid cell and
+  an inspector entry under the pointer are lit faintly, and light each other: the entry of the
+  cell's column when the cell is in the selected row, the selected row's cell of the entry's
+  column. The pointer never moves the selection or the focus there.
 - The dialogs take the mouse too: the profile and tunnel forms (fields, the cursor in a text,
   choices, sections, buttons), the settings, the confirmations, the password prompt, the lists
   to pick from, quick connect and the command line. A button or a list row acts when it is
@@ -444,7 +458,7 @@ language = "en"            # en | ko | auto
 theme = "catppuccin"       # see Themes below; terminal when left out
 
 [explorer]
-size_heat = "on"           # amber and red estimates for each schema's largest tables (on | off)
+size_heat = "3"            # colors for each schema's largest tables' estimates (3 | 5 | off)
 
 [[connections]]
 name = "local"
@@ -513,7 +527,10 @@ environment…", which opens the environment form and comes back with the new on
 The explorer's **Environments** section starts with **Default rules (no environment)**: the
 rules of every profile without an environment (`e` edits them; `Enter` lists those profiles;
 they cannot be renamed, copied or deleted, and have no color or badge). Then it lists the
-environments (the same keys as the Tunnels section:
+environments, each with a chip in its color (a dot with icons off), its badge and its rules in a
+few words, colored by what they do: read-only in blue, "asks before every write" in the warning
+color, "holds locks while paging" in the error color (the same in the profile form's list)
+(the same keys as the Tunnels section:
 `n` new, `e` edit, `c` copy, `R` rename, `d` delete, `Enter` or `l` to see the profiles that
 use one). A rename takes those profiles along; deleting one that profiles use asks first and
 names them. While there is no environment the section offers one row, **Add presets: dev,
@@ -528,7 +545,9 @@ written together with the profile, and only when the profile is saved):
 | `prod` | read-only, every write asks | red | `PROD` |
 
 Nothing is written on its own: presets are added only when you ask, and once written they are
-ordinary environments you can edit, rename or delete.
+ordinary environments you can edit, rename or delete. No behavior depends on an environment's
+name: a preset only gives the first values of its rules, color and badge, and renaming one
+changes nothing but its name.
 
 In the file an environment is a `[policy.<name>]` table (the key from before environments had
 that name, so existing files keep working) with these keys, each optional:
@@ -864,7 +883,8 @@ comes back with the new preset picked.
   shows the profiles connected through it now (one that names it but is not connected, or is
   still connecting, is not listed; a preset nobody is connected through has nothing to open).
   Each preset shows whether its connection is closed, opening, open (and how many profiles are
-  on it) or lost (and why), and otherwise how many profiles name it.
+  on it) or lost (and why) by the color of its icon (muted, a spinner, the success color, the
+  error color; `○`, `●` and `✕` with icons off), and otherwise how many profiles name it.
 - Profiles that use the same preset at the same time share **one SSH connection**: the first one
   opens it (one login, one host key question, one secret prompt, for every profile waiting), the
   others take it as it is, and it closes when the last of them disconnects. When it is lost,

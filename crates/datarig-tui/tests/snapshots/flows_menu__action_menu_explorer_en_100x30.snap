@@ -4,7 +4,7 @@ expression: "h.draw(100, 30).backend()"
 ---
 "╭ Explorer ─────────────╮ 1 console 1 ×                                                             "
 "│   ╭─────────────────────────────────────────────╮────────────────────────────────────────────────╮"
-"│▾ ●│ › type to filter                            │0.0.1:55432         Space c s switch connection │"
+"│▾ C│ › type to filter                            │0.0.1:55432         Space c s switch connection │"
 "│  ▾│ ● local-pg                                  │: run the statement under the cursor            │"
 "│   │  Explorer: open or toggle             Enter │ers WHERE id <= 8;                              │"
 "│   │  Explorer: reload                         r │                                                │"

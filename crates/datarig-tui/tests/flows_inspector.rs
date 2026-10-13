@@ -235,9 +235,10 @@ fn the_pointer_lights_an_entry_and_only_a_release_on_the_pressed_one_picks_it() 
     assert_eq!(h.app.tab().grid.col, 3);
 }
 
-/// The grid's cursor background where its pane is not focused.
+/// The grid's cursor background where its pane is not focused: the selection, a little
+/// dimmer (no longer the faint cursor line, which is the hover's look now).
 fn unfocused() -> Color {
-    theme::DARK.cursor_line.bg.expect("a background")
+    theme::DARK.selection_unfocused().bg.expect("a background")
 }
 
 /// A press on an entry armed for one result is not picked by a release over the same place once
@@ -347,5 +348,30 @@ fn the_selected_entry_is_weak_while_the_grid_has_the_focus() {
     let t = h.draw(W, H);
     let g = &h.app.tab().grid;
     let (x, y) = (g.hit_cols[0].0 + 2, g.data_y);
-    assert_eq!(Some(t.backend().buffer()[(x, y)].bg), theme::DARK.cursor_line.bg);
+    assert_eq!(t.backend().buffer()[(x, y)].bg, unfocused());
+}
+
+/// A console's query result opens the inspector on the Row tab, as a table tab's does.
+#[test]
+fn a_console_result_opens_the_inspector_on_the_row_tab() {
+    let mut h = with_edge_results(Lang::En);
+    assert!(!h.app.tab().is_table());
+    assert_eq!(h.app.detail.tab, DetailTab::Row);
+    let screen = h.screen(160, 45);
+    assert!(screen.contains("Cell [Row]"), "{screen}");
+}
+
+/// `Tab` and `Shift+Tab` in the focused inspector move to another pane, as everywhere else; they
+/// do not switch its tab, which stays the Row tab (`I` switches it).
+#[test]
+fn tab_in_the_inspector_moves_to_another_pane_and_keeps_its_tab() {
+    for key in [KeyCode::Tab, KeyCode::BackTab] {
+        let mut h = focused_inspector("");
+        h.key(key);
+        assert_ne!(h.app.focus, Focus::Inspector, "{key:?}");
+        assert_eq!(h.app.detail.tab, DetailTab::Row, "{key:?}");
+    }
+    let mut h = focused_inspector("");
+    h.keys("I");
+    assert_eq!((h.app.focus, h.app.detail.tab), (Focus::Inspector, DetailTab::Cell));
 }

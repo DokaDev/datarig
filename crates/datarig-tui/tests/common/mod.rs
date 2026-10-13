@@ -506,6 +506,21 @@ pub struct Harness {
     pub clock: FakeClock,
 }
 
+/// The row is in the explorer's Connections section (below its head).
+fn in_connections(kind: &RowKind) -> bool {
+    matches!(
+        kind,
+        RowKind::Folder(_)
+            | RowKind::Profile(_)
+            | RowKind::ProfileError(_)
+            | RowKind::Database(..)
+            | RowKind::DatabasesNote(_)
+            | RowKind::DatabaseNote(..)
+            | RowKind::Node(..)
+            | RowKind::AuxNode(..)
+    )
+}
+
 impl Harness {
     /// Connecting to the test DB profile (`local-pg`) in the workspace: its node open, the
     /// first tab on it, the editor focused (feed `Connected` next).
@@ -704,10 +719,12 @@ impl Harness {
         self.app.explorer_selected()
     }
 
-    /// The explorer's rows as text: folders `name/`, profiles by name, error lines `!`, tunnel
-    /// presets `~name`, environments `%name` (the profiles under either `@name`),
-    /// databases `db:name` (the profile's own `db:name*`), notes `(note)`, schema nodes by their
-    /// label, each indented by its depth.
+    /// The explorer's rows as text: the Connections section's head `[connections]`, folders
+    /// `name/`, profiles by name, error lines `!`, tunnel presets `~name`, environments `%name`
+    /// (the profiles under either `@name`), databases `db:name` (the profile's own `db:name*`),
+    /// notes `(note)`, schema nodes by their label, each indented by its depth; the rows of the
+    /// Connections section by their depth within it (one less), as the other sections' rows
+    /// are by theirs below their heads' level.
     pub fn rows(&self) -> Vec<String> {
         self.app
             .explorer_rows()
@@ -715,6 +732,7 @@ impl Harness {
             .map(|r| {
                 let text = match &r.kind {
                     RowKind::NewConnection => "+".to_string(),
+                    RowKind::ConnectionsHeader => "[connections]".to_string(),
                     RowKind::Folder(f) => format!("{}/", f.name()),
                     RowKind::Profile(id) => self.app.profile(*id).map(|p| p.name.clone()).unwrap_or_default(),
                     RowKind::ProfileError(_) => "!".to_string(),
@@ -759,7 +777,7 @@ impl Harness {
                         format!("@{}", self.app.profile(*id).map(|p| p.name.clone()).unwrap_or_default())
                     }
                 };
-                format!("{}{text}", "  ".repeat(r.depth))
+                format!("{}{text}", "  ".repeat(r.depth - usize::from(in_connections(&r.kind))))
             })
             .collect()
     }

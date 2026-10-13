@@ -8,7 +8,7 @@ expression: backend
 "│ │   Nerd Font icons           ‹ auto          ›  Nerd Font icons → ask ag… │e│"
 "│ │   Command line position     ‹ popup         ›  A popup near the top of … │ │"
 "│ │   Theme                     ‹ terminal      ›  Your terminal's own colo… │ │"
-"│ │   Explorer: size colors     ‹ on            ›  On, the largest tables s… │ │"
+"│ │   Explorer: size colors     ‹ 3             ›  3 levels: amber from 1 M… │ │"
 "│ │ Editor                                                                   │ │"
 "│ │   Cursor shape              ‹ on            ›  By mode (block or bar)    │ │"
 "│ │   Yanks to the clipboard    ‹ on            ›  Yes, as Vim with clipboa… │ │"

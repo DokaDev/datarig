@@ -9,8 +9,8 @@ expression: backend
 "│ │                                                                          │ │"
 "│ │ Driver            ‹PostgreSQL› MySQL  Redis  Elasticsearch   unsupported │ │"
 "│ │ Name              分析-replica                                           │ │" Hidden by multi-width symbols: [(23, " "), (25, " ")]
-"│▸│ Host              analytics.internal                                     │ │"
-"│▸│ Port              6432                                                   │ │"
+"│ │ Host              analytics.internal                                     │ │"
+"│ │ Port              6432                                                   │ │"
 "│ │ User              report                                                 │ │"
 "│ │ Password storage  ‹Keychain› File  Command  Env  Prompt   ←/→ change     │ │"
 "│ │ Password                                    kept in the OS keychain      │ │"

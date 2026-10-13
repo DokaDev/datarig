@@ -30,10 +30,8 @@ pub(crate) fn environment_parts(
     let th = theme::cur();
     let Some(name) = app.environment_name(id) else { return Vec::new() };
     match app.profile_environment(id) {
-        Some(e) => match &e.badge {
-            Some(b) => {
-                vec![(" ".to_string(), Style::new().bg(bg)), (format!(" {b} "), theme::chip(App::badge_color(e)))]
-            }
+        Some(e) => match App::badge_chip(e) {
+            Some(chip) => vec![(" ".to_string(), Style::new().bg(bg)), chip],
             None => {
                 let color = e.display_color().map_or(th.fg_muted, theme::profile_color);
                 vec![(format!(" · {name}"), Style::new().fg(color).bg(bg).add_modifier(Modifier::BOLD))]

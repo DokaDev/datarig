@@ -2,9 +2,8 @@
 //! ancestors must not:
 //!
 //! 1. bind the same keys twice in one context ([`ConflictKind::Duplicate`]);
-//! 2. hide an ancestor's keys, unless the inner context is the editor, the inner binding is a
-//!    user's `"none"`, or it is the inspector's `Tab`/`Shift+Tab` over the pane keys
-//!    ([`ConflictKind::Shadow`], see [`tabs_its_own`]);
+//! 2. hide an ancestor's keys, unless the inner context is the editor or the inner binding is
+//!    a user's `"none"` ([`ConflictKind::Shadow`]);
 //! 3. make one sequence a prefix of another, e.g. `g` and `g t` ([`ConflictKind::Prefix`]);
 //! 4. put an app binding on a reserved key ([`ConflictKind::Reserved`]);
 //! 5. name an action that does not exist ([`ConflictKind::UnknownAction`], see [`check_ids`]);
@@ -139,7 +138,7 @@ pub fn check_contexts(bindings: &[Bound], contexts: &[Ctx]) -> Vec<Conflict> {
                     Some(ConflictKind::Prefix)
                 } else if dx == dy {
                     Some(if reserved(x) || reserved(y) { ConflictKind::Reserved } else { ConflictKind::Duplicate })
-                } else if inner.target == Target::Disabled || inner.ctx.is_editor() || tabs_its_own(inner, outer) {
+                } else if inner.target == Target::Disabled || inner.ctx.is_editor() {
                     None
                 } else if reserved(inner) || reserved(outer) {
                     Some(ConflictKind::Reserved)
@@ -153,15 +152,6 @@ pub fn check_contexts(bindings: &[Bound], contexts: &[Ctx]) -> Vec<Conflict> {
         }
     }
     out
-}
-
-/// The one pane whose `Tab` and `Shift+Tab` switch its own tabs instead of moving between
-/// panes: the result inspector, once clicked. Leaving it stays one key away
-/// (`Esc`, `F6`, `Shift+F6`), so hiding `pane.next`/`pane.prev` there is allowed; nothing else
-/// may hide them.
-fn tabs_its_own(inner: &Bound, outer: &Bound) -> bool {
-    let pane = |t: Target| matches!(t, Target::Action(a) if matches!(a, action::Action::FocusNext | action::Action::FocusPrev));
-    inner.ctx == Ctx::Inspector && pane(outer.target) && inner.target == Target::Action(action::Action::DetailTab)
 }
 
 /// Default-table entries whose keys do not parse or whose action id is unknown (the resolved

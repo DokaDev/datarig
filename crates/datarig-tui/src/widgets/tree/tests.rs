@@ -14,15 +14,15 @@ fn heat(sizes: &[(&str, Option<u64>)]) -> Vec<(String, Heat)> {
 }
 
 #[test]
-fn the_largest_tenth_of_a_schema_is_warm_from_one_mib_and_hot_from_one_gib() {
+fn the_largest_tenth_of_a_schema_has_the_tier_of_its_size_from_one_mib() {
     // Small schemas: the largest one only (a tenth rounds to none, one at least).
-    assert_eq!(heat(&[("a", Some(5 * MIB)), ("b", Some(2 * MIB))]), [("a".to_string(), Heat::Warm)]);
-    assert_eq!(heat(&[("only", Some(3 * GIB))]), [("only".to_string(), Heat::Hot)]);
+    assert_eq!(heat(&[("a", Some(5 * MIB)), ("b", Some(2 * MIB))]), [("a".to_string(), Heat::Mib)]);
+    assert_eq!(heat(&[("only", Some(3 * GIB))]), [("only".to_string(), Heat::Gib)]);
     // Twenty with a known size: the two largest.
     let mut sizes: Vec<(String, Option<u64>)> = (0..20).map(|i| (format!("t{i:02}"), Some(i * MIB))).collect();
     sizes[19].1 = Some(2 * GIB);
     let named: Vec<(&str, Option<u64>)> = sizes.iter().map(|(n, b)| (n.as_str(), *b)).collect();
-    assert_eq!(heat(&named), [("t18".to_string(), Heat::Warm), ("t19".to_string(), Heat::Hot)]);
+    assert_eq!(heat(&named), [("t18".to_string(), Heat::Mib), ("t19".to_string(), Heat::Gib)]);
     // Fifteen: 1.5 rounds to two.
     let named: Vec<(String, Option<u64>)> = (0..15).map(|i| (format!("t{i:02}"), Some((i + 1) * MIB))).collect();
     let named: Vec<(&str, Option<u64>)> = named.iter().map(|(n, b)| (n.as_str(), *b)).collect();
@@ -31,23 +31,27 @@ fn the_largest_tenth_of_a_schema_is_warm_from_one_mib_and_hot_from_one_gib() {
 
 #[test]
 fn size_tiers_need_a_known_size_of_one_mib_and_rank_ties_alike() {
-    // Under 1 MiB nothing is warm, however large it is among its schema's.
+    // Under 1 MiB nothing has a tier, however large it is among its schema's.
     assert!(heat(&[("a", Some(MIB - 1)), ("b", Some(10))]).is_empty());
-    assert_eq!(heat(&[("a", Some(MIB)), ("b", Some(10))]), [("a".to_string(), Heat::Warm)], "1 MiB is warm");
-    assert_eq!(heat(&[("a", Some(GIB - 1))]), [("a".to_string(), Heat::Warm)]);
-    assert_eq!(heat(&[("a", Some(GIB))]), [("a".to_string(), Heat::Hot)], "1 GiB is hot");
+    assert_eq!(heat(&[("a", Some(MIB)), ("b", Some(10))]), [("a".to_string(), Heat::Mib)], "1 MiB");
+    assert_eq!(heat(&[("a", Some(GIB - 1))]), [("a".to_string(), Heat::Mib100)]);
+    assert_eq!(heat(&[("a", Some(GIB))]), [("a".to_string(), Heat::Gib)], "1 GiB");
+    assert_eq!(heat(&[("a", Some(100 * MIB - 1))]), [("a".to_string(), Heat::Mib)]);
+    assert_eq!(heat(&[("a", Some(100 * MIB))]), [("a".to_string(), Heat::Mib100)], "100 MiB");
+    assert_eq!(heat(&[("a", Some(10 * GIB - 1))]), [("a".to_string(), Heat::Gib)]);
+    assert_eq!(heat(&[("a", Some(10 * GIB))]), [("a".to_string(), Heat::Gib10)], "10 GiB");
     // Unknown sizes are no tier and do not count: the one known size is the largest.
     assert_eq!(
         heat(&[("a", None), ("b", None), ("c", Some(4 * MIB))]),
-        [("c".to_string(), Heat::Warm)],
+        [("c".to_string(), Heat::Mib)],
         "one known of three"
     );
     assert!(heat(&[("a", None)]).is_empty());
     assert!(size_heat(&BTreeMap::new()).is_empty());
-    // Equal sizes rank alike: both largest are warm although the tenth is one.
+    // Equal sizes rank alike: both largest have a tier although the tenth is one.
     assert_eq!(
         heat(&[("a", Some(8 * MIB)), ("b", Some(8 * MIB)), ("c", Some(2 * MIB))]),
-        [("a".to_string(), Heat::Warm), ("b".to_string(), Heat::Warm)]
+        [("a".to_string(), Heat::Mib), ("b".to_string(), Heat::Mib)]
     );
 }
 
@@ -62,14 +66,14 @@ fn size_tiers_are_kept_with_the_estimates_and_follow_a_structure_read() {
         stats: stats(&[("big", Some(50 * MIB)), ("small", Some(2 * MIB))]),
     };
     t.set_objects("public", Ok(objects));
-    assert_eq!(t.object_heat(0, Group::Tables, 0), Some(Heat::Warm));
+    assert_eq!(t.object_heat(0, Group::Tables, 0), Some(Heat::Mib));
     assert_eq!(t.object_heat(0, Group::Tables, 1), None);
     assert_eq!(t.object_heat(0, Group::Views, 0), None, "a view without storage");
     // The small table's structure says it grew past the other: the tiers follow.
     let mut st = TableStructure::new(RelationKind::Table);
     st.total_bytes = Some(2 * GIB);
     t.set_structure("public", "small", Ok(Box::new(st)));
-    assert_eq!(t.object_heat(0, Group::Tables, 1), Some(Heat::Hot));
+    assert_eq!(t.object_heat(0, Group::Tables, 1), Some(Heat::Gib));
     assert_eq!(t.object_heat(0, Group::Tables, 0), None);
 }
 

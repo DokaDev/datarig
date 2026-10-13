@@ -656,6 +656,9 @@ pub struct App {
     shared_saves: std::collections::HashMap<u64, (SourceKind, String)>,
     /// The explorer's "Tunnels" section is open.
     pub tunnels_expanded: bool,
+    /// The explorer's "Connections" section (its folders and profiles) is open; kept in the
+    /// workspace file.
+    pub connections_expanded: bool,
     /// The presets whose profiles the explorer lists under them.
     pub tunnels_open: std::collections::BTreeSet<datarig_core::profile::tunnel::TunnelId>,
     /// The explorer's "Environments" section is open.
@@ -939,6 +942,7 @@ impl App {
             shared_tunnel_requests: Vec::new(),
             shared_saves: std::collections::HashMap::new(),
             tunnels_expanded: true,
+            connections_expanded: true,
             tunnels_open: std::collections::BTreeSet::new(),
             environments_expanded: true,
             default_rules_open: false,

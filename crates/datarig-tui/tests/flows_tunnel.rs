@@ -580,12 +580,12 @@ fn the_explorer_marks_a_tunnelled_profile() {
     assert!(row(&mut h, "local-pg").contains("local-pg SSH"), "{}", row(&mut h, "local-pg"));
     assert!(!row(&mut h, "v6").contains("SSH"), "{}", row(&mut h, "v6"));
     h.app.icons = IconsSetting::On;
-    assert!(row(&mut h, "local-pg").contains("local-pg \u{f08c0}"), "{}", row(&mut h, "local-pg"));
+    assert!(row(&mut h, "local-pg").contains("local-pg \u{f0318}"), "{}", row(&mut h, "local-pg"));
     assert!(!row(&mut h, "local-pg").contains("SSH"));
-    assert!(!row(&mut h, "v6").contains('\u{f08c0}'));
+    assert!(!row(&mut h, "v6").contains('\u{f0318}'));
     // The tunnel turned off in the profile: no mark.
     h.app.profiles.iter_mut().find(|p| p.id == id).unwrap().ssh.as_mut().unwrap().enabled = false;
-    assert!(!row(&mut h, "local-pg").contains('\u{f08c0}'));
+    assert!(!row(&mut h, "local-pg").contains('\u{f0318}'));
 }
 
 /// The passphrase prompt's title keeps its words in every language (the Korean title ended

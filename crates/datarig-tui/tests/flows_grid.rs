@@ -104,7 +104,8 @@ fn the_inspector_follows_the_selection() {
 }
 
 /// The inspector says how to switch its tabs, and once clicked it has keys of
-/// its own: `Tab`/`Shift+Tab` (and `I`) switch, `Esc` goes back to the grid.
+/// its own: `I` switches (`Tab` moves to the next pane, as everywhere), `Esc` goes back to the
+/// grid.
 #[test]
 fn a_clicked_inspector_switches_tabs_with_tab() {
     use datarig_tui::keymap::Ctx;
@@ -114,16 +115,14 @@ fn a_clicked_inspector_switches_tabs_with_tab() {
     click(&mut h, d.x + 5, d.y + 4, MouseButton::Left);
     assert_eq!((h.app.focus, h.app.key_context()), (Focus::Inspector, Ctx::Inspector));
     let status = h.status(160, 45);
-    assert!(status.contains("Tab cell/row") && status.contains("Esc back"), "{status}");
+    assert!(status.contains("I cell/row") && status.contains("Esc back"), "{status}");
     let t = h.draw(160, 45);
     assert_eq!(t.backend().buffer()[(d.x, d.y)].fg, datarig_tui::theme::DARK.accent, "its border shows the focus");
-    for (key, want) in
-        [(KeyCode::Tab, DetailTab::Cell), (KeyCode::BackTab, DetailTab::Row), (KeyCode::Char('I'), DetailTab::Cell)]
-    {
-        h.key(key);
-        assert_eq!(h.app.detail.tab, want, "{key:?}");
+    for want in [DetailTab::Cell, DetailTab::Row, DetailTab::Cell] {
+        h.keys("I");
+        assert_eq!(h.app.detail.tab, want);
     }
-    assert_eq!(h.app.focus, Focus::Inspector, "Tab stays in the inspector");
+    assert_eq!(h.app.focus, Focus::Inspector, "I stays in the inspector");
     h.key(KeyCode::Esc);
     assert_eq!(h.app.focus, Focus::Results);
     // `Space r` lists the switch too, and it runs from the grid.

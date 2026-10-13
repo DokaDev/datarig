@@ -97,7 +97,7 @@ fn other_keys_still_work_with_enhancement() {
     // Held j in the explorer moves (navigation, not an action): from the profile to its first
     // schema.
     h.key_kind(KeyCode::Char('j'), NONE, KeyEventKind::Repeat);
-    assert_eq!(h.selected(), 2);
+    assert_eq!(h.selected(), 3);
 }
 
 #[test]
@@ -912,7 +912,7 @@ fn startup_focuses_the_explorer_on_the_last_used_profile() {
     assert_eq!(h.app.focus, Focus::Tree);
     assert!(h.app.conns.attempt().is_none() && h.app.tab().exec.session.is_none(), "nothing connects by itself");
     assert_eq!(h.app.selected_profile(), Some(id(&h, "v6")), "cursor on last_used");
-    assert_eq!(h.rows(), ["+", "local-pg", "v6", "分析-replica"], "every profile, by name");
+    assert_eq!(h.rows(), ["+", "[connections]", "local-pg", "v6", "分析-replica"], "every profile, by name");
     let screen = h.screen(80, 24);
     assert!(screen.contains("＋ New connection") && screen.contains("分析-replica"), "{screen}");
     // Navigation and the `/` filter (a part of the name).
@@ -921,16 +921,19 @@ fn startup_focuses_the_explorer_on_the_last_used_profile() {
     h.keys("/");
     assert_eq!(h.app.key_context(), Ctx::ExplorerFilter);
     h.type_text("分析");
-    assert_eq!(h.rows(), ["+", "分析-replica"]);
+    assert_eq!(h.rows(), ["+", "[connections]", "分析-replica"]);
     assert_eq!(h.app.selected_profile(), Some(id(&h, "分析-replica")), "cursor follows the filter");
     h.key(KeyCode::Esc);
     assert!(h.app.explorer.filter.text().is_empty(), "Esc clears the filter");
     h.keys("/");
     h.type_text("V");
     h.key(KeyCode::Enter);
-    assert_eq!((h.app.key_context(), h.rows()), (Ctx::Explorer, vec!["+".to_string(), "v6".to_string()]));
+    assert_eq!(
+        (h.app.key_context(), h.rows()),
+        (Ctx::Explorer, vec!["+".to_string(), "[connections]".to_string(), "v6".to_string()])
+    );
     h.key(KeyCode::Esc);
-    assert_eq!(h.rows().len(), 4, "Esc clears a kept filter too");
+    assert_eq!(h.rows().len(), 5, "Esc clears a kept filter too");
     // Enter connects; Esc cancels the attempt; a late event of it is dropped.
     h.explore("分析-replica");
     h.key(KeyCode::Enter);
@@ -964,7 +967,7 @@ fn cli_profile_connects_directly_and_remembers_it() {
     assert_eq!(h.app.tab().profile, Some(prod), "a console on it");
     assert_eq!(h.app.focus, Focus::Tree, "the focus stays in the explorer");
     assert!(h.status(160, 45).contains("Connected to prod"));
-    assert_eq!(h.rows()[2], "prod", "its node is open");
+    assert_eq!(h.rows()[3], "prod", "its node is open");
     // Stored by id (the v1 file was upgraded at launch).
     let text = std::fs::read_to_string(&path).unwrap();
     assert!(text.contains(&format!("last_used = \"{prod}\"\n")), "{text}");
@@ -995,7 +998,11 @@ fn connect_failure_and_timeout_show_on_the_node() {
         h.node_error("local-pg").as_deref(),
         Some("Connection failed: error connecting to server: Connection refused (os error 61)")
     );
-    assert_eq!(h.rows(), ["+", "local-pg", "  !", "v6", "分析-replica"], "an error line under the node");
+    assert_eq!(
+        h.rows(),
+        ["+", "[connections]", "local-pg", "  !", "v6", "分析-replica"],
+        "an error line under the node"
+    );
     assert!(h.screen(80, 24).contains("✕   local-pg"));
     assert!(h.app.tab().profile.is_none(), "no console for a failed attempt");
     // A server that never answers: the attempt gives up after CONNECT_TIMEOUT.
@@ -1133,7 +1140,7 @@ fn deleting_the_last_profile_shows_the_welcome_panel() {
     assert!(!h.form_open());
     let screen = h.screen(80, 24);
     assert!(screen.contains("No connection profiles yet") && screen.contains("Welcome"), "{screen}");
-    assert_eq!(h.rows(), ["+"]);
+    assert_eq!(h.rows(), ["+", "[connections]"]);
 }
 
 #[test]
@@ -1150,11 +1157,11 @@ fn explorer_mouse_and_delete() {
         }))
     };
     let name = |h: &Harness| h.app.selected_profile().and_then(|id| h.app.profile(id)).map(|p| p.name.clone());
-    click(&mut h, 2);
+    click(&mut h, 3);
     assert_eq!(name(&h).as_deref(), Some("v6"));
     assert!(h.app.conns.attempt().is_none(), "single click only selects");
-    click(&mut h, 3);
-    click(&mut h, 3);
+    click(&mut h, 4);
+    click(&mut h, 4);
     assert_eq!(h.connecting().map(|c| c.0).as_deref(), Some("分析-replica"), "double click connects");
     h.key(KeyCode::Esc);
     // The wheel scrolls the list, not the cursor.
@@ -1638,9 +1645,9 @@ fn hangul_input_source_navigates_outside_text_input() {
     let mut h = Harness::connected(Lang::En);
     h.key(KeyCode::BackTab); // explorer
     h.type_text("\u{3153}\u{3153}");
-    assert_eq!(h.selected(), 3, "\u{3153} = j");
+    assert_eq!(h.selected(), 4, "\u{3153} = j");
     h.type_text("\u{314F}");
-    assert_eq!(h.selected(), 2, "\u{314F} = k");
+    assert_eq!(h.selected(), 3, "\u{314F} = k");
     h.type_text("\u{314E}\u{314E}"); // g g
     assert_eq!(h.selected(), 0);
     assert!(h.status(160, 45).contains("\u{D55C}/A"), "the status bar says the input source is Korean");
@@ -1670,12 +1677,12 @@ fn hangul_input_source_navigates_outside_text_input() {
     // The explorer at launch: the jamo on `j` moves; its `/` filter takes CJK text as text.
     let mut h = launch(&sample_config(None), Startup::Normal);
     h.type_text("\u{3153}");
-    assert_eq!(h.selected(), 2);
+    assert_eq!(h.selected(), 3);
     h.keys("/");
     assert_eq!(h.app.key_context(), Ctx::ExplorerFilter);
     h.type_text("分析");
     assert_eq!(h.app.explorer.filter.text(), "分析");
-    assert_eq!(h.rows(), ["+", "分析-replica"]);
+    assert_eq!(h.rows(), ["+", "[connections]", "分析-replica"]);
     // A confirmation reads the jamo on `y` (U+315B) as y.
     h.key(KeyCode::Esc);
     h.keys("d");
@@ -1691,10 +1698,10 @@ fn held_keys_repeat_movement_but_not_commands() {
     for _ in 0..2 {
         h.key_kind(KeyCode::Char('j'), NONE, KeyEventKind::Repeat);
     }
-    assert_eq!(h.selected(), 4, "held j keeps moving");
+    assert_eq!(h.selected(), 5, "held j keeps moving");
     h.key_kind(KeyCode::Char('g'), NONE, KeyEventKind::Repeat);
     h.key_kind(KeyCode::Char('g'), NONE, KeyEventKind::Repeat);
-    assert_eq!(h.selected(), 4, "a held key does not start a sequence");
+    assert_eq!(h.selected(), 5, "a held key does not start a sequence");
     h.key_kind(KeyCode::Char('e'), CTRL, KeyEventKind::Press);
     h.key_kind(KeyCode::Char('e'), CTRL, KeyEventKind::Repeat);
     h.key_kind(KeyCode::Char('e'), CTRL, KeyEventKind::Repeat);
@@ -2191,7 +2198,7 @@ fn keyboard_help_sections_open_and_close_by_key_and_mouse() {
     click(&mut h, 2);
     assert!(matches!(help_selected(&h), HelpRow::Entry(ref e) if e.label == "Explorer: previous item"));
     assert_eq!(h.overlay_kind(), Some(OverlayKind::Help), "a click does not run the action");
-    assert_eq!(h.selected(), 1, "the cursor stays on the profile");
+    assert_eq!(h.selected(), 2, "the cursor stays on the profile");
 }
 
 #[test]

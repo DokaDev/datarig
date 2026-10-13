@@ -8,6 +8,7 @@
 //! with an environment's fields: its name, color, badge and rules.
 
 use crate::app::action::Action;
+use crate::app::environments::{RuleTone, rules_tones};
 use crate::app::profiles::{
     BUTTONS, CONFIRMS, DRIVERS, ENVIRONMENT, EnvChoice, FIELDS, Field, FormHit, FormKind, PAGINGS, Section, SshChoice,
     secret_field, source_choice,
@@ -439,27 +440,34 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
                 let rules = match (&choice, &picked) {
                     (EnvChoice::Default, _) => {
                         parts.push((i18n.label(Label::EnvPickerDefault).to_string(), Style::new().fg(th.fg)));
-                        crate::app::environments::rules_hint(i18n, app_default_rules)
+                        rules_tones(i18n, app_default_rules, icons_on)
                     }
                     (EnvChoice::Named(name) | EnvChoice::Preset(name), Some(e)) => {
-                        let dot =
-                            e.display_color().map_or(("○ ", th.fg_muted), |pc| ("● ", theme::profile_color(pc)));
-                        parts.push((dot.0.to_string(), Style::new().fg(dot.1)));
+                        // Its chip in its color (circles with icons off).
+                        let (on, off) = if icons_on {
+                            (crate::icons::ENVIRONMENT_CHIP, crate::icons::ENVIRONMENT_CHIP)
+                        } else {
+                            ("●", "○")
+                        };
+                        let dot = e.display_color().map_or((format!("{off} "), th.fg_muted), |pc| {
+                            (format!("{on} "), theme::profile_color(pc))
+                        });
+                        parts.push((dot.0, Style::new().fg(dot.1)));
                         let shown = match choice {
                             EnvChoice::Preset(_) => i18n.msg(&Msg::FormEnvPresetNew { name: name.clone() }).to_string(),
                             _ => name.clone(),
                         };
                         parts.push((shown, Style::new().fg(th.fg)));
-                        if let Some(b) = &e.badge {
+                        if let Some(chip) = crate::app::App::badge_chip(e) {
                             parts.push((" ".to_string(), Style::new()));
-                            parts.push((format!(" {b} "), theme::chip(crate::app::App::badge_color(e))));
+                            parts.push(chip);
                         }
-                        crate::app::environments::rules_hint(i18n, &e.policy)
+                        rules_tones(i18n, &e.policy, icons_on)
                     }
                     (EnvChoice::Named(name) | EnvChoice::Preset(name), None) => {
                         let missing = i18n.msg(&Msg::FormEnvMissing { name: name.clone() }).to_string();
                         parts.push((missing, Style::new().fg(th.error)));
-                        i18n.label(Label::FormEnvMissingHint).to_string()
+                        vec![(i18n.label(Label::FormEnvMissingHint).to_string(), RuleTone::Dim)]
                     }
                 };
                 let mut used = 0;
@@ -470,11 +478,15 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
                 used += put(buf, x + used, y, " ▾ ", room_from(x + used), Style::new().fg(th.fg_muted).patch(field_bg));
                 hits.push((Rect::new(x, y, used, 1), FormHit::Value(f)));
                 let hx = x + used + 2;
-                let hint = match &choice {
-                    EnvChoice::Preset(_) => format!("{} · {}", i18n.label(Label::FormEnvPresetNewHint), rules),
-                    _ => format!("{} · {rules}", i18n.label(Label::FormSshListHint)),
+                // What it is, then its rules, each part in its tone.
+                let what = match &choice {
+                    EnvChoice::Preset(_) => i18n.label(Label::FormEnvPresetNewHint),
+                    _ => i18n.label(Label::FormSshListHint),
                 };
-                put(buf, hx, y, &hint, room_from(hx), dim);
+                let mut hx = hx + put(buf, hx, y, &format!("{what} · "), room_from(hx), dim);
+                for (t, tone) in &rules {
+                    hx += put(buf, hx, y, t, room_from(hx), dim.patch(tone.style()));
+                }
                 continue;
             }
             Field::EnvReadOnly => {

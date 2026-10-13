@@ -21,6 +21,7 @@
 //!
 //! [explorer]
 //! expanded_folders = ["work", "work/prod"]
+//! connections_collapsed = false   # the "Connections" section is closed
 //! scripts_expanded = true
 //! script_folders = ["reports"]
 //! hidden = false          # the explorer is hidden (the panes take the whole width)
@@ -161,6 +162,8 @@ pub struct TabState {
 pub struct ExplorerState {
     /// Open profile folders.
     pub expanded_folders: Vec<String>,
+    /// The "Connections" section is closed (it is open unless the file says so).
+    pub connections_collapsed: bool,
     /// The "Saved queries" section is open.
     pub scripts_expanded: bool,
     /// Open folders of the saved queries.
@@ -248,6 +251,7 @@ fn parse(text: &str) -> Result<(WorkspaceState, u64), Fault> {
     if let Some(e) = doc.get("explorer").and_then(toml::Value::as_table) {
         s.explorer = ExplorerState {
             expanded_folders: strings(e.get("expanded_folders")),
+            connections_collapsed: e.get("connections_collapsed").and_then(toml::Value::as_bool).unwrap_or(false),
             scripts_expanded: e.get("scripts_expanded").and_then(toml::Value::as_bool).unwrap_or(false),
             script_folders: strings(e.get("script_folders")),
             hidden: e.get("hidden").and_then(toml::Value::as_bool).unwrap_or(false),
@@ -368,7 +372,8 @@ pub fn save(state: &Path, s: &WorkspaceState) -> io::Result<()> {
 /// The keys of the file this version writes, at the top, in `[explorer]`, in a tab and in its
 /// `results`.
 const TOP_KEYS: [&str; 4] = ["version", "active", "explorer", "tabs"];
-const EXPLORER_KEYS: [&str; 5] = ["expanded_folders", "scripts_expanded", "script_folders", "hidden", "width"];
+const EXPLORER_KEYS: [&str; 6] =
+    ["expanded_folders", "connections_collapsed", "scripts_expanded", "script_folders", "hidden", "width"];
 const TAB_KEYS: [&str; 14] = [
     "id", "kind", "script", "console", "schema", "table", "profile", "cursor", "top", "results", "context", "object",
     "on", "name",
@@ -504,6 +509,7 @@ fn build(s: &WorkspaceState) -> toml_edit::DocumentMut {
     let list = |v: &[String]| toml_edit::value(v.iter().map(String::as_str).collect::<toml_edit::Array>());
     let mut e = toml_edit::Table::new();
     e["expanded_folders"] = list(&s.explorer.expanded_folders);
+    e["connections_collapsed"] = toml_edit::value(s.explorer.connections_collapsed);
     e["scripts_expanded"] = toml_edit::value(s.explorer.scripts_expanded);
     e["script_folders"] = list(&s.explorer.script_folders);
     e["hidden"] = toml_edit::value(s.explorer.hidden);

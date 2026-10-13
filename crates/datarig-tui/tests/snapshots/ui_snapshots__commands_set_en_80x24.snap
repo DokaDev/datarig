@@ -4,14 +4,14 @@ expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×                                          "
 "│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾ ●   local-pg        ││ local-pg / datarig  127.0.0.1:55432                  │"
-"│  ▾ datarig default   ││  1 -- datarig 🐘  Ctrl+E: run the statement under the│" Hidden by multi-width symbols: [(41, " ")]
-"│    ▸ ana╭ Commands ────────────────────────────────────────────────╮         │"
-"│    ▸ pub│ : set language=                                          │         │"
-"│    ▸ sho├──────────────────────────────────────────────────────────┤         │"
-"│▸ ○   分 │  language=en    Change language → English                │         │" Hidden by multi-width symbols: [(8, " ")]
-"│▸ ○   分 │  language=ko    Change language → Korean                 │         │" Hidden by multi-width symbols: [(8, " ")]
-"│         │  language=auto  Change language → Auto (system locale)   │         │"
+"│▾ Connections 3       ││ local-pg / datarig  127.0.0.1:55432                  │"
+"│  ▾ ●   local-pg      ││  1 -- datarig 🐘  Ctrl+E: run the statement under the│" Hidden by multi-width symbols: [(41, " ")]
+"│    ▾ dat╭ Commands ────────────────────────────────────────────────╮         │"
+"│      ▸ a│ : set language=                                          │         │"
+"│      ▸ p├──────────────────────────────────────────────────────────┤         │"
+"│      ▸ s│  language=en    Change language → English                │         │"
+"│  ▸ ○    │  language=ko    Change language → Korean                 │         │"
+"│  ▸ ○    │  language=auto  Change language → Auto (system locale)   │         │"
 "│         ╰─────────────────── Tab/↑↓ select · Enter run · Esc close ╯         │"
 "│                      ││  9 SELECT * FROM analytics.events;                   │"
 "│                      ││ 10                                                   │"

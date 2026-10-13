@@ -947,6 +947,13 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
         .unwrap_or_default();
     let run_again = app.can_run_again();
     let text_plan = app.text_plan_hint();
+    // Where the grid's cells were before this frame: laid out otherwise (scrolled, another
+    // result), the cell under the pointer is not there any more.
+    let grid_was = |t: &crate::app::Tab| {
+        let id = if let Results::Rows(rs) = &t.results { Some(rs.id) } else { None };
+        (id, t.grid.top, t.grid.data_y, t.grid.hit_cols.clone())
+    };
+    let before = grid_was(app.tab());
     let t = app.tabs.active_mut();
     match &mut t.results {
         Results::Empty => {
@@ -1018,6 +1025,22 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
             msg_line(buf, &app.i18n.msg(&msg), th.error)
         }
         Results::Cancelled => msg_line(buf, &app.i18n.label(Label::QueryCancelled), th.warning),
+    }
+    if grid_was(app.tab()) != before && matches!(app.pointer_on, Some(PointerOn::Cell(..))) {
+        app.pointer_on = None;
+    }
+    // The cell under the pointer, or the one of the inspector's entry under it (in the selected
+    // row): lit as a hover is, never selected.
+    let t = app.tab();
+    let hovered = match app.pointer_hover() {
+        Some(PointerOn::Cell(r, c)) => Some((r, c)),
+        Some(PointerOn::Detail(c)) => Some((t.grid.row, c)),
+        _ => None,
+    };
+    if let (Some((r, c)), Results::Rows(rs)) = (hovered.filter(|&h| h != (t.grid.row, t.grid.col)), &t.results)
+        && let Some(cell) = t.grid.cell_rect(r, c, rs.rows.len())
+    {
+        buf.set_style(cell.intersection(area), crate::widgets::cell_hover_style());
     }
     // Rows of the spill file that could not be read are shown as not read, and said so.
     if let Some(fault) = app.tabs.active_mut().grid.read_error.take() {

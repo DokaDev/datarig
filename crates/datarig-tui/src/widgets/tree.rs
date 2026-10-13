@@ -34,22 +34,36 @@ pub enum Children {
     Failed(String),
 }
 
-/// How large an object is among those of its schema: its estimates are drawn in a warmer color.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// How large an object among the largest tenth of its schema (by size, at least one object) is:
+/// its estimates are drawn in a warmer color (`[explorer] size_heat`: in three levels, the two
+/// smaller tiers amber and the two larger red; in five, each tier its own color).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Heat {
-    /// Among the largest tenth of its schema (by size, at least one object), and 1 MiB or more.
-    Warm,
-    /// Warm, and 1 GiB or more.
-    Hot,
+    /// 1 MiB or more.
+    Mib,
+    /// 100 MiB or more.
+    Mib100,
+    /// 1 GiB or more.
+    Gib,
+    /// 10 GiB or more.
+    Gib10,
 }
 
-/// The size an object must have at least to be warm, and hot.
-const WARM_BYTES: u64 = 1 << 20;
-const HOT_BYTES: u64 = 1 << 30;
+impl Heat {
+    /// The tier of `bytes`, if it is 1 MiB or more.
+    fn of(bytes: u64) -> Option<Heat> {
+        const MIB: u64 = 1 << 20;
+        const GIB: u64 = 1 << 30;
+        [(10 * GIB, Heat::Gib10), (GIB, Heat::Gib), (100 * MIB, Heat::Mib100), (MIB, Heat::Mib)]
+            .into_iter()
+            .find(|(min, _)| bytes >= *min)
+            .map(|(_, h)| h)
+    }
+}
 
 /// The size tiers of a schema's objects, from their estimates: of the `n` with a known size, the
-/// `max(1, round(n / 10))` largest are warm when they take 1 MiB or more, and hot when they take
-/// 1 GiB or more. Equal sizes rank alike (an object's rank is how many are strictly larger). An
+/// `max(1, round(n / 10))` largest have the tier of their size ([`Heat`]) when they take 1 MiB
+/// or more. Equal sizes rank alike (an object's rank is how many are strictly larger). An
 /// object whose size is not known, and one without storage, has no tier (left out).
 pub fn size_heat(stats: &BTreeMap<String, RelationStats>) -> BTreeMap<String, Heat> {
     let mut sizes: Vec<u64> = stats.values().filter_map(|s| s.bytes).collect();
@@ -61,9 +75,10 @@ pub fn size_heat(stats: &BTreeMap<String, RelationStats>) -> BTreeMap<String, He
     stats
         .iter()
         .filter_map(|(name, s)| {
-            let bytes = s.bytes.filter(|&b| b >= WARM_BYTES)?;
+            let bytes = s.bytes?;
+            let heat = Heat::of(bytes)?;
             let rank = sizes.partition_point(|&x| x > bytes);
-            (rank < top).then(|| (name.clone(), if bytes >= HOT_BYTES { Heat::Hot } else { Heat::Warm }))
+            (rank < top).then(|| (name.clone(), heat))
         })
         .collect()
 }

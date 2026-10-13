@@ -10,13 +10,17 @@ fn app(profiles: Vec<ConnectionConfig>) -> App {
     App::new(&Config { connections: profiles, ..Config::default() }, None, Lang::En)
 }
 
-/// Rows as text: `+`, `name/` for folders, profile names, `!` for error lines, indented.
+/// Rows as text: `+`, `[connections]`, `name/` for folders, profile names, `!` for error lines,
+/// indented (the Connections section's rows by their depth within it).
 fn rows(a: &App) -> Vec<String> {
     a.explorer_rows()
         .into_iter()
         .map(|r| {
+            // The Connections section's rows by their depth within it (one less).
+            let inside = r.profile().is_some() || matches!(r.kind, RowKind::Folder(_));
             let t = match r.kind {
                 RowKind::NewConnection => "+".to_string(),
+                RowKind::ConnectionsHeader => "[connections]".to_string(),
                 RowKind::Folder(f) => format!("{}/", f.name()),
                 RowKind::Profile(id) => a.profile(id).unwrap().name.clone(),
                 RowKind::ProfileError(_) => "!".to_string(),
@@ -39,7 +43,7 @@ fn rows(a: &App) -> Vec<String> {
                 RowKind::DefaultRules => "(default rules)".to_string(),
                 RowKind::DefaultRulesUser(id) => format!("@{}", a.profile(id).unwrap().name),
             };
-            format!("{}{t}", "  ".repeat(r.depth))
+            format!("{}{t}", "  ".repeat(r.depth - usize::from(inside)))
         })
         .collect()
 }
@@ -70,14 +74,17 @@ fn folders_come_first_then_profiles_each_by_name() {
         profile("a-stage", Some("work")),
         profile("beta", None),
     ]);
-    assert_eq!(rows(&a), ["+", "work/", "Alpha", "beta", "zeta"], "folders start closed");
+    assert_eq!(rows(&a), ["+", "[connections]", "work/", "Alpha", "beta", "zeta"], "folders start closed");
     open(&mut a, "work");
-    assert_eq!(rows(&a), ["+", "work/", "  prod/", "  a-stage", "Alpha", "beta", "zeta"]);
+    assert_eq!(rows(&a), ["+", "[connections]", "work/", "  prod/", "  a-stage", "Alpha", "beta", "zeta"]);
     open(&mut a, "work/prod");
-    assert_eq!(rows(&a), ["+", "work/", "  prod/", "    b-prod", "  a-stage", "Alpha", "beta", "zeta"]);
+    assert_eq!(
+        rows(&a),
+        ["+", "[connections]", "work/", "  prod/", "    b-prod", "  a-stage", "Alpha", "beta", "zeta"]
+    );
     // An empty folder is listed too (the config keeps it).
     a.folders.insert(&FolderPath::parse("archive").unwrap());
-    assert_eq!(rows(&a)[1], "archive/");
+    assert_eq!(rows(&a)[2], "archive/");
 }
 
 #[test]
@@ -91,7 +98,7 @@ fn the_filter_shows_matching_profiles_inside_their_folders() {
     a.explorer.filter.set("orders");
     assert_eq!(
         rows(&a),
-        ["+", "work/", "  prod/", "    orders-prod", "  orders-stage", "orders-local"],
+        ["+", "[connections]", "work/", "  prod/", "    orders-prod", "  orders-stage", "orders-local"],
         "folders of matches open, others hidden"
     );
     a.explorer.filter.set("zzz");
@@ -103,19 +110,19 @@ fn the_cursor_stays_on_its_row_when_rows_change_around_it() {
     let mut a = app(vec![profile("a", Some("f")), profile("b", None), profile("c", None)]);
     let c = a.profiles[2].id;
     a.reveal_profile(c);
-    assert_eq!(a.explorer_selected(), 3);
+    assert_eq!(a.explorer_selected(), 4);
     // A folder above opens: the cursor follows its profile.
     open(&mut a, "f");
-    assert_eq!(a.explorer_selected(), 4);
+    assert_eq!(a.explorer_selected(), 5);
     assert_eq!(a.selected_profile(), Some(c));
     // Its row disappears (deleted): the cursor stays where it was, clamped.
     a.profiles.remove(2);
-    assert_eq!(a.explorer_selected(), 3);
+    assert_eq!(a.explorer_selected(), 4);
     // Revealing a profile in a closed folder opens the folder.
     let mut a = app(vec![profile("deep", Some("x/y")), profile("top", None)]);
     let deep = a.profiles[0].id;
     a.reveal_profile(deep);
-    assert_eq!(rows(&a), ["+", "x/", "  y/", "    deep", "top"]);
+    assert_eq!(rows(&a), ["+", "[connections]", "x/", "  y/", "    deep", "top"]);
     assert_eq!(a.selected_profile(), Some(deep));
 }
 
@@ -123,7 +130,7 @@ fn the_cursor_stays_on_its_row_when_rows_change_around_it() {
 fn a_profile_in_an_unknown_folder_shows_at_the_top() {
     // The loader adds the folders of profiles; a bad path is kept but shown at the top level.
     let a = app(vec![profile("bad", Some("a//b"))]);
-    assert_eq!(rows(&a), ["+", "bad"]);
+    assert_eq!(rows(&a), ["+", "[connections]", "bad"]);
 }
 
 #[test]
@@ -150,13 +157,13 @@ fn a_folder_whose_name_matches_shows_all_it_has() {
     a.explorer.filter.set("report");
     // `reports` matches: every profile and subfolder in it, the subfolder as it is (closed);
     // `other` opens for the profile that matches in it.
-    assert_eq!(rows(&a), ["+", "other/", "  reports-db", "reports/", "  2024/", "  alpha"]);
+    assert_eq!(rows(&a), ["+", "[connections]", "other/", "  reports-db", "reports/", "  2024/", "  alpha"]);
     let shown = a.explorer_rows();
-    assert!(shown[3].hit && shown[3].opened, "the folder matched and shows open");
-    assert!(!shown[4].opened && a.explorer_arrow(&shown[4]) == Some(false), "its subfolder as it is");
-    assert!(shown[1].opened && !shown[1].hit, "opened for a match inside");
+    assert!(shown[4].hit && shown[4].opened, "the folder matched and shows open");
+    assert!(!shown[5].opened && a.explorer_arrow(&shown[5]) == Some(false), "its subfolder as it is");
+    assert!(shown[2].opened && !shown[2].hit, "opened for a match inside");
     // The filter changed no folder.
     assert!(!a.folders.is_expanded(&FolderPath::parse("reports").unwrap()));
     a.explorer.filter.set("");
-    assert_eq!(rows(&a), ["+", "other/", "  reports-db", "reports/", "gamma"]);
+    assert_eq!(rows(&a), ["+", "[connections]", "other/", "  reports-db", "reports/", "gamma"]);
 }

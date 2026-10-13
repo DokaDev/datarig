@@ -630,7 +630,7 @@ fn every_table_line_has_its_estimates() {
     // On the right of a 40-column explorer, dim.
     let screen = explorer_screen(&mut h, 160, 45);
     let users = screen.iter().find(|l| l.contains("users")).unwrap();
-    assert!(users.ends_with("  ~5k rows · 1.6 MB") && users.starts_with("        ▸ users  "), "{users:?}");
+    assert!(users.ends_with("  ~5k rows · 1.6 MB") && users.starts_with("          ▸ users  "), "{users:?}");
     let t = h.draw(160, 45);
     let buf = t.backend().buffer();
     let y = (0..45).find(|&y| row_text(buf, y).contains("▸ users")).unwrap();
@@ -699,8 +699,56 @@ fn the_estimates_of_the_largest_tables_are_colored_by_size() {
     h.command("set explorer.size_heat=off");
     assert_eq!(h.app.prefs.size_heat, SizeHeat::Off);
     assert_eq!(colors(&mut h, "events", "~9M").0, DARK.fg_dim);
-    h.command("set explorer.size_heat=on");
+    h.command("set explorer.size_heat=3");
     assert_eq!(colors(&mut h, "events", "~9M").0, DARK.size_hot.fg.unwrap());
+}
+
+/// `[explorer] size_heat = "5"`: the largest tenth of a schema in five levels, yellow from
+/// 1 MiB, amber from 100 MiB, orange from 1 GiB and red from 10 GiB (three levels: amber, then
+/// red from 1 GiB); the others dim, the names unchanged.
+#[test]
+fn five_size_levels_color_the_largest_tables_by_tier() {
+    use datarig_core::config::SizeHeat;
+    use datarig_core::driver::structure::RelationStats;
+    use datarig_tui::theme::DARK;
+    let mut h = shop_with_estimates(Lang::En);
+    h.app.explorer.width = Some(60);
+    // Forty tables: the four largest are the tenth, one in each tier.
+    let big: [(&str, u64); 4] =
+        [("a_mib", 5 << 20), ("b_mib100", 200 << 20), ("c_gib", 2 << 30), ("d_gib10", 20 << 30)];
+    let mut tables: Vec<String> = big.iter().map(|(n, _)| n.to_string()).collect();
+    let mut stats: std::collections::BTreeMap<String, RelationStats> =
+        big.iter().map(|(n, b)| (n.to_string(), RelationStats { rows: Some(1_000), bytes: Some(*b) })).collect();
+    for i in 0..36 {
+        let n = format!("t{i:02}");
+        stats.insert(n.clone(), RelationStats { rows: Some(10), bytes: Some(64 << 10) });
+        tables.push(n);
+    }
+    let objects = SchemaObjects { tables, stats, ..Default::default() };
+    h.db(DbEvent::Objects { schema: "shop".into(), result: Ok(objects) });
+    let colors = |h: &mut Harness| -> Vec<ratatui::style::Color> {
+        let t = h.draw(160, 45);
+        let buf = t.backend().buffer();
+        ["a_mib", "b_mib100", "c_gib", "d_gib10", "t00"]
+            .iter()
+            .map(|name| {
+                let y = (0..45).find(|&y| row_text(buf, y).contains(&format!("▸ {name} "))).unwrap();
+                let text = row_text(buf, y);
+                buf[(text[..text.find("~").unwrap()].chars().count() as u16, y)].fg
+            })
+            .collect()
+    };
+    let (warm, hot) = (DARK.size_warm.fg.unwrap(), DARK.size_hot.fg.unwrap());
+    assert_eq!(h.app.prefs.size_heat, SizeHeat::Three);
+    assert_eq!(colors(&mut h), [warm, warm, hot, hot, DARK.fg_dim], "three levels");
+    h.command("set explorer.size_heat=5");
+    assert_eq!(h.app.prefs.size_heat, SizeHeat::Five);
+    let five = [DARK.size_mild.fg.unwrap(), warm, DARK.size_heated.fg.unwrap(), hot, DARK.fg_dim];
+    assert_eq!(colors(&mut h), five);
+    assert_screen!("explorer_size_heat_five_en_160x45", Lang::En, h.draw(160, 45));
+    // A row under the cursor keeps them.
+    h.goto("c_gib");
+    assert_eq!(colors(&mut h)[2], DARK.size_heated.fg.unwrap());
 }
 
 /// The name always wins: the estimates take the room it leaves (two blanks at least), the
@@ -726,9 +774,9 @@ fn the_name_wins_over_the_estimates() {
         explorer_screen(h, w, hh).into_iter().find(|l| l.contains(&name[..5])).unwrap().trim_end().to_string()
     };
     // Room for both, for the rows alone, for none.
-    assert_eq!(line(&mut h, 160, 45, "users"), "        ▸ users      ~5k rows · 1.6 MB");
-    assert_eq!(line(&mut h, 160, 45, "order_items"), "        ▸ order_items       ~150k rows");
-    assert_eq!(line(&mut h, 160, 45, long), "        ▸ customer_loyalty_points");
+    assert_eq!(line(&mut h, 160, 45, "users"), "          ▸ users    ~5k rows · 1.6 MB");
+    assert_eq!(line(&mut h, 160, 45, "order_items"), "          ▸ order_items     ~150k rows");
+    assert_eq!(line(&mut h, 160, 45, long), "          ▸ customer_loyalty_points");
     // The largest table's rows alone stay dim: its color goes with its size.
     let t = h.draw(160, 45);
     let buf = t.backend().buffer();
@@ -736,11 +784,11 @@ fn the_name_wins_over_the_estimates() {
     let text = row_text(buf, y);
     let x = text[..text.find("~150k").unwrap()].chars().count() as u16;
     assert_eq!(buf[(x, y)].fg, datarig_tui::theme::DARK.fg_dim);
-    assert_eq!(line(&mut h, 120, 40, "users"), "        ▸ users     ~5k rows");
-    assert_eq!(line(&mut h, 120, 40, "order_items"), "        ▸ order_items");
-    assert_eq!(line(&mut h, 120, 40, long), "        ▸ customer_loyalty_…");
-    assert_eq!(line(&mut h, 80, 24, "users"), "        ▸ users");
-    assert_eq!(line(&mut h, 80, 24, "order_items"), "        ▸ order_items");
+    assert_eq!(line(&mut h, 120, 40, "users"), "          ▸ users   ~5k rows");
+    assert_eq!(line(&mut h, 120, 40, "order_items"), "          ▸ order_items");
+    assert_eq!(line(&mut h, 120, 40, long), "          ▸ customer_loyalt…");
+    assert_eq!(line(&mut h, 80, 24, "users"), "          ▸ users");
+    assert_eq!(line(&mut h, 80, 24, "order_items"), "          ▸ order_ite…");
 }
 
 /// `r` on the schema, or on a closed table, lists the schema's objects again, and their

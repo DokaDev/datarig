@@ -4,14 +4,14 @@ expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×                                          "
 "│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▸╭ Edit connection — 分析-replica ──────────────────────────────────────────╮ │" Hidden by multi-width symbols: [(23, " "), (25, " ")]
-"│▾│  Basic   SSH   Advanced                            Ctrl+N/Ctrl+P section │e│"
+"│▾╭ Edit connection — 分析-replica ──────────────────────────────────────────╮ │" Hidden by multi-width symbols: [(23, " "), (25, " ")]
+"│ │  Basic   SSH   Advanced                            Ctrl+N/Ctrl+P section │e│"
 "│ │                                                                          │ │"
 "│ │ SSL mode          ‹ require ›  ←/→ change                                │ │"
 "│ │ Statement cache   ‹ off ›  ←/→ change · off behind PgBouncer in transac… │ │"
 "│ │ Environment       None (default rules) ▾   Enter list · standard rules   │ │"
-"│▸│ Color             ‹ ● red ›  ←/→ change · Enter list                     │ │"
-"│▸│ Icon              ‹ the driver's icon ›  ←/→ change · Enter list         │ │"
+"│ │ Color             ‹ ● red ›  ←/→ change · Enter list                     │ │"
+"│ │ Icon              ‹ the driver's icon ›  ←/→ change · Enter list         │ │"
 "│ │ Folder            ‹ work/prod/ ›  ←/→ change · Enter list                │ │"
 "│ │                                                                          │ │"
 "│ │                                                                          │ │"

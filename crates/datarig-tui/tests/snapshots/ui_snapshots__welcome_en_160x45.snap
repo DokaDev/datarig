@@ -4,10 +4,10 @@ expression: backend
 ---
 "╭ Explorer ────────────────────────────╮╭ Welcome ─────────────────────────────────────────────────────────────────────────────────────────────────────────────╮"
 "│  ＋ New connection                   ││                                                                                                                      │" Hidden by multi-width symbols: [(4, " ")]
-"│                                      ││  datarig                                                                                                             │"
-"│ No connection profiles yet           ││  Dive into any database — right from your terminal.                                                                  │"
-"│ Press n to create one, or paste a    ││                                                                                                                      │"
-"│ postgres:// or mysql:// URL          ││  No connection profiles yet.                                                                                         │"
+"│▾ Connections 0                       ││  datarig                                                                                                             │"
+"│                                      ││  Dive into any database — right from your terminal.                                                                  │"
+"│                                      ││                                                                                                                      │"
+"│                                      ││  No connection profiles yet.                                                                                         │"
 "│                                      ││                                                                                                                      │"
 "│                                      ││  n   New connection                                                                                                  │"
 "│                                      ││  F1  Keyboard help                                                                                                   │"

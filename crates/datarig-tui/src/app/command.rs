@@ -599,7 +599,8 @@ pub const SETTINGS: &[SettingSpec] = &[
         about: Label::SettingSizeHeatAbout,
         group: SettingGroup::Display,
         values: Values::Fixed(&[
-            ("on", Setting::SizeHeat(SizeHeat::On), Label::SettingSizeHeatOn),
+            ("3", Setting::SizeHeat(SizeHeat::Three), Label::SettingSizeHeatThree),
+            ("5", Setting::SizeHeat(SizeHeat::Five), Label::SettingSizeHeatFive),
             ("off", Setting::SizeHeat(SizeHeat::Off), Label::SettingSizeHeatOff),
         ]),
     },

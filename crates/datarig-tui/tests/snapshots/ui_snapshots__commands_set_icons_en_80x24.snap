@@ -4,14 +4,14 @@ expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×                                          "
 "│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾ ●   local-pg        ││ local-pg / datarig  127.0.0.1:55432                  │"
-"│  ▾ datarig default   ││  1 -- datarig 🐘  Ctrl+E: run the statement under the│" Hidden by multi-width symbols: [(41, " ")]
-"│    ▸ ana╭ Commands ────────────────────────────────────────────────╮         │"
-"│    ▸ pub│ : set icons=                                             │         │"
-"│    ▸ sho├──────────────────────────────────────────────────────────┤         │"
-"│▸ ○   分 │  icons=on    Nerd Font icons → on                        │         │" Hidden by multi-width symbols: [(8, " ")]
-"│▸ ○   分 │  icons=off   Nerd Font icons → off                       │         │" Hidden by multi-width symbols: [(8, " ")]
-"│         │  icons=auto  Nerd Font icons → ask again (with a previe… │         │"
+"│▾ Connections 3       ││ local-pg / datarig  127.0.0.1:55432                  │"
+"│  ▾ ●   local-pg      ││  1 -- datarig 🐘  Ctrl+E: run the statement under the│" Hidden by multi-width symbols: [(41, " ")]
+"│    ▾ dat╭ Commands ────────────────────────────────────────────────╮         │"
+"│      ▸ a│ : set icons=                                             │         │"
+"│      ▸ p├──────────────────────────────────────────────────────────┤         │"
+"│      ▸ s│  icons=on    Nerd Font icons → on                        │         │"
+"│  ▸ ○    │  icons=off   Nerd Font icons → off                       │         │"
+"│  ▸ ○    │  icons=auto  Nerd Font icons → ask again (with a previe… │         │"
 "│         │  Needs a Nerd Font as the terminal font. Preview:     │         │"
 "│         │   — if these look like □ or ?, turn icons off or        │         │"
 "│         │  install a font from nerdfonts.com. auto: not decided    │         │"
