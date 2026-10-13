@@ -572,20 +572,29 @@ fn the_form_has_basic_and_advanced_sections() {
     let mut h = launched(&sample_config(None));
     h.keys("e"); // local-pg
     assert_eq!((h.form().section, h.form().focus), (Section::Basic, Field::Name));
-    // The driver comes first; PostgreSQL and MySQL can be picked.
+    // The driver comes first: `Enter` lists the drivers; PostgreSQL and MySQL can be picked,
+    // the others are listed, struck through, and picking one leaves the list open.
     h.key(KeyCode::BackTab);
     assert_eq!(h.form().focus, Field::Driver);
-    h.key(KeyCode::Right);
-    assert_eq!(h.form().driver, 1, "MySQL");
+    h.key(KeyCode::Enter);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Picker));
+    let screen = h.screen(80, 24);
+    let row = screen.lines().find(|l| l.contains("Elasticsearch")).unwrap();
+    assert!(row.contains("not yet supported") && !row.contains('…'), "{row}");
+    h.type_text("redis");
+    h.key(KeyCode::Enter);
+    assert_eq!((h.overlay_kind(), h.form().driver), (Some(OverlayKind::Picker), 0));
+    h.key(KeyCode::Esc);
+    assert_eq!((h.overlay_kind(), h.form().driver), (Some(OverlayKind::ProfileForm), 0));
+    h.key(KeyCode::Enter);
+    h.type_text("my");
+    h.key(KeyCode::Enter);
+    assert_eq!((h.overlay_kind(), h.form().driver), (Some(OverlayKind::ProfileForm), 1), "MySQL");
     assert!(h.form().dsn.text().starts_with("mysql://"), "{}", h.form().dsn.text());
+    // The arrows still step through the ones that can be picked.
     h.key(KeyCode::Right);
     assert_eq!(h.form().driver, 0, "the others are not supported yet: back to PostgreSQL");
     assert!(h.form().dsn.text().starts_with("postgres://"), "{}", h.form().dsn.text());
-    assert!(h.screen(160, 45).contains("not yet supported"));
-    // At 80 columns the full label does not fit: the short one does, uncut.
-    let screen = h.screen(80, 24);
-    let row = screen.lines().find(|l| l.contains("Driver")).unwrap();
-    assert!(row.contains("Elasticsearch   unsupported") && !row.contains('…'), "{row}");
     // Ctrl+N: the SSH section, then the advanced one (SSL mode, environment, color, icon, folder).
     h.ctrl('n');
     assert_eq!((h.form().section, h.form().focus), (Section::Ssh, Field::SshEnabled));

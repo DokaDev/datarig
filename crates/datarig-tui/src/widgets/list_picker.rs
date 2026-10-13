@@ -10,7 +10,8 @@
 //! new entry is listed whatever the filter, so it is always there to pick. With the mouse, as
 //! the other lists: a press arms a row and the release over it picks it (not right after the
 //! list came on top), the pointer only highlights the row under it, the wheel moves the
-//! selection and a click outside the list does nothing.
+//! selection and a click outside the list does nothing. An entry that cannot be picked is
+//! listed (struck through) but neither `Enter` nor a click picks it.
 
 use crate::app::overlay::Press;
 use crate::text::{Align, fit, width};
@@ -41,12 +42,15 @@ pub struct Entry<T> {
     /// The hint in parts, each in its tone (an environment's rules); drawn instead of `hint`
     /// when there are any (`hint` keeps the same words).
     pub hint_tones: Vec<(String, crate::app::environments::RuleTone)>,
+    /// Listed but not picked (a driver the app has none for): dimmed and struck through, its
+    /// hint says why.
+    pub disabled: bool,
 }
 
 impl<T> Entry<T> {
     /// An entry of `value` with `label` and `hint`, no mark and no badge.
     pub fn new(value: T, label: String, hint: String) -> Self {
-        Entry { value, label, hint, mark: None, badge: None, hint_tones: Vec::new() }
+        Entry { value, label, hint, mark: None, badge: None, hint_tones: Vec::new(), disabled: false }
     }
 }
 
@@ -177,9 +181,10 @@ impl<T: Clone + PartialEq> ListPicker<T> {
         }
     }
 
-    /// What picking the selected row does.
+    /// What picking the selected row does (nothing on an entry that cannot be picked).
     fn pick(&self) -> Outcome<T> {
         match self.selected() {
+            Some(Row::Entry(i)) if self.entries[i].disabled => Outcome::Pending,
             Some(Row::Entry(i)) => Outcome::Picked(self.entries[i].value.clone()),
             Some(Row::New) => Outcome::New,
             None => Outcome::Pending,
@@ -323,7 +328,12 @@ impl<T: Clone + PartialEq> ListPicker<T> {
                         }
                         x += 2;
                     }
-                    let used = put(buf, x, y, &e.label, room(x).min(label_w), Style::new().fg(th.fg).patch(bg));
+                    let label = if e.disabled {
+                        Style::new().fg(th.fg_dim).add_modifier(Modifier::CROSSED_OUT)
+                    } else {
+                        Style::new().fg(th.fg)
+                    };
+                    let used = put(buf, x, y, &e.label, room(x).min(label_w), label.patch(bg));
                     if let Some((b, chip)) = &e.badge {
                         let bx = x + used + 1;
                         let left = (label_w + 1).saturating_sub(usize::from(used)).min(room(bx));

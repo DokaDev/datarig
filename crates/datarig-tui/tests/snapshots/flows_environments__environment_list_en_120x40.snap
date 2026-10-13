@@ -15,7 +15,7 @@ expression: backend
 "│    ● dev╭ Edit connection — local-pg ──────────────────────────────────────────────────────────────────────╮         │"
 "│    ● tes│  Basic   SSH   Advanced                                                    Ctrl+N/Ctrl+P section │         │"
 "│    ● sta│                                                                                                  │         │"
-"│  ▾ ● pro│ SSL mode          ‹ disable ›  ←/→ change                                                        │         │"
+"│  ▾ ● pro│ SSL mode          disable ▾   ←/→ change · Enter list                                            │         │"
 "│      ○  │ Statement cache   ‹ ╭ Environment ─────────────────────────────────────────╮ode                  │         │"
 "│         │ Environment       ● │ › type to filter                                     │ry write             │         │"
 "│         │ Color             ‹ │                                                      │                     │         │"

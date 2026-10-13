@@ -280,3 +280,36 @@ fn a_release_picks_the_entry_pressed_not_the_one_typing_moved_under_it() {
     assert_eq!(p.mouse(&mouse(MouseEventKind::Up(MouseButton::Left), x, y), later), Outcome::Pending);
     assert_eq!(p.selected(), Some(Row::Entry(0)), "the selection stays");
 }
+
+#[test]
+fn an_entry_that_cannot_be_picked_is_listed_struck_through_and_neither_enter_nor_a_click_picks_it() {
+    let mut redis = entry(2, "Redis", "not yet supported");
+    redis.disabled = true;
+    let mut p = ListPicker::new(vec![entry(0, "PostgreSQL", ""), entry(1, "MySQL", ""), redis], None, Some(&0));
+    let now = Instant::now();
+    let screen = draw(&mut p, now);
+    assert!(screen.contains("not yet supported"), "{screen}");
+    let list = p.list_area();
+    assert!(buf_crossed(&mut p, list.x + 1, list.y + 2, now), "struck through");
+    assert!(!buf_crossed(&mut p, list.x + 1, list.y + 1, now));
+    p.key(&k(KeyCode::Up), false);
+    assert_eq!(p.selected(), Some(Row::Entry(2)), "it can be selected");
+    assert_eq!(p.key(&k(KeyCode::Enter), false), Outcome::Pending, "not picked: the list stays");
+    let later = now + Duration::from_millis(500);
+    p.mouse(&mouse(MouseEventKind::Down(MouseButton::Left), list.x + 2, list.y + 2), later);
+    assert_eq!(p.mouse(&mouse(MouseEventKind::Up(MouseButton::Left), list.x + 2, list.y + 2), later), Outcome::Pending);
+    p.mouse(&mouse(MouseEventKind::Down(MouseButton::Left), list.x + 2, list.y + 1), later);
+    assert_eq!(
+        p.mouse(&mouse(MouseEventKind::Up(MouseButton::Left), list.x + 2, list.y + 1), later),
+        Outcome::Picked(1)
+    );
+}
+
+/// Whether the cell at (x, y) of `p` drawn at `now` is struck through.
+fn buf_crossed(p: &mut ListPicker<u8>, x: u16, y: u16, now: Instant) -> bool {
+    let area = Rect::new(0, 0, 80, 24);
+    let mut buf = Buffer::empty(area);
+    let (title, footer) = (Localized::verbatim("Driver"), Localized::verbatim("Enter pick"));
+    p.draw(area, &mut buf, (&title, &footer), ("type to filter", "Nothing matches"), true, now);
+    buf[(x, y)].modifier.contains(Modifier::CROSSED_OUT)
+}

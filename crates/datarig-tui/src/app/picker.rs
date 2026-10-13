@@ -1,6 +1,9 @@
 //! The lists to pick from with a typed filter ([`ListPicker`]) as dialogs, each for a field of
-//! the profile form: the SSH tunnel and the environment. `Enter` on the field (or a click on its
-//! value) lists what it can be and, when the config file can be written, a last entry that
+//! the profile form: the SSH tunnel, the environment and the fields with a few fixed values
+//! (the driver, the SSL mode, a password's storage, the bastion login), each value with what it
+//! means. `Enter` on the field (or a click on its
+//! value) lists what it can be and, for the tunnel and the environment, when the config file
+//! can be written, a last entry that
 //! makes a new one ("New SSH tunnel…", "New environment…"), which opens its form over the
 //! profile form; once that is saved, the profile form comes back with the new one picked
 //! (cancelled: as it was).
@@ -10,11 +13,14 @@
 //! name the profile has when no environment has it, and while there is no environment the
 //! presets (`dev`, `test`, `staging`, `prod`): a preset picked is written with the profile.
 
-use super::profiles::{EnvChoice, FormKind, SshChoice};
+use super::profiles::{DRIVERS, EnvChoice, Field, FormKind, SshChoice, source_choice, ssh_auth_choice};
 use super::*;
 use crate::theme;
 use crate::widgets::list_picker::{Entry, ListPicker, Outcome};
 use datarig_core::policy::{self, Environment};
+use datarig_core::profile::SSL_MODES;
+use datarig_core::profile::ssh::SshAuth;
+use datarig_core::secret::SourceKind;
 
 /// A list to pick from, by what it picks (a pick goes to the profile form of profile `form`
 /// only).
@@ -23,6 +29,9 @@ pub enum Picker {
     Tunnel { form: ProfileId, list: ListPicker<SshChoice> },
     /// The environment.
     Environment { form: ProfileId, list: ListPicker<EnvChoice> },
+    /// A field with a few fixed values ([`Field::is_choice`]) of the form `form` names: the
+    /// value's index.
+    Choice { form: (FormKind, ProfileId), field: Field, list: ListPicker<usize> },
 }
 
 /// `$body` with the list of whichever picker `$p` is, as `$list`.
@@ -31,6 +40,7 @@ macro_rules! with_list {
         match $p {
             Picker::Tunnel { $list, .. } => $body,
             Picker::Environment { $list, .. } => $body,
+            Picker::Choice { $list, .. } => $body,
         }
     };
 }
@@ -40,7 +50,7 @@ impl Picker {
     pub fn tunnel(&self) -> Option<&ListPicker<SshChoice>> {
         match self {
             Picker::Tunnel { list, .. } => Some(list),
-            Picker::Environment { .. } => None,
+            _ => None,
         }
     }
 
@@ -48,7 +58,15 @@ impl Picker {
     pub fn environment(&self) -> Option<&ListPicker<EnvChoice>> {
         match self {
             Picker::Environment { list, .. } => Some(list),
-            Picker::Tunnel { .. } => None,
+            _ => None,
+        }
+    }
+
+    /// The list of a field with a few fixed values, and the field.
+    pub fn choice(&self) -> Option<(Field, &ListPicker<usize>)> {
+        match self {
+            Picker::Choice { field, list, .. } => Some((*field, list)),
+            _ => None,
         }
     }
 
@@ -57,6 +75,7 @@ impl Picker {
         match self {
             Picker::Tunnel { .. } => Label::FormFieldSshEnabled,
             Picker::Environment { .. } => Label::FormFieldEnvironment,
+            Picker::Choice { field, .. } => field.label(),
         }
     }
 
@@ -139,6 +158,10 @@ impl App {
                 let out = list.key(&key, repeat);
                 self.environment_picked(form, out);
             }
+            Some(&mut Picker::Choice { form, field, ref mut list }) => {
+                let out = list.key(&key, repeat);
+                self.choice_picked(form, field, out);
+            }
             None => {}
         }
     }
@@ -161,6 +184,10 @@ impl App {
             Some(&mut Picker::Environment { form, ref mut list }) => {
                 let out = list.mouse(&m, now);
                 self.environment_picked(form, out);
+            }
+            Some(&mut Picker::Choice { form, field, ref mut list }) => {
+                let out = list.mouse(&m, now);
+                self.choice_picked(form, field, out);
             }
             None => {}
         }
@@ -312,6 +339,104 @@ impl App {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// `Enter` on a field of the form with a few fixed values: the list of them, each with
+    /// what it means (one that cannot be picked struck through, with why), the current one
+    /// selected.
+    pub(super) fn open_choice_picker(&mut self, field: Field) {
+        let Some(f) = self.overlays.form() else { return };
+        let i18n = &self.i18n;
+        let entry = |i: usize, name: String, hint: Option<Label>, ok: bool| {
+            let mut e = Entry::new(i, name, hint.map(|h| i18n.label(h).to_string()).unwrap_or_default());
+            e.disabled = !ok;
+            e
+        };
+        let sources = |current: SourceKind| {
+            let entries = SourceKind::ALL
+                .into_iter()
+                .enumerate()
+                .map(|(i, k)| {
+                    let ok = k != SourceKind::Keychain || f.keychain_ok;
+                    let hint = match k {
+                        SourceKind::Keychain if !ok => Label::FormSourceKeychainOff,
+                        SourceKind::Keychain => Label::FormPasswordKeychain,
+                        SourceKind::File => Label::FormPasswordFile,
+                        SourceKind::Command => Label::FormSourceCommandHint,
+                        SourceKind::Env => Label::FormSourceEnvHint,
+                        SourceKind::Prompt => Label::FormPromptHint,
+                    };
+                    entry(i, i18n.label(source_choice(k)).to_string(), Some(hint), ok)
+                })
+                .collect();
+            (entries, SourceKind::ALL.iter().position(|k| *k == current))
+        };
+        let (entries, current): (Vec<Entry<usize>>, Option<usize>) = match field {
+            Field::Driver => {
+                let entries = DRIVERS
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (_, name))| {
+                        let ok = f.drivers_enabled[i];
+                        entry(i, name.to_string(), (!ok).then_some(Label::FormDriverUnsupported), ok)
+                    })
+                    .collect();
+                (entries, Some(f.driver))
+            }
+            Field::SslMode => {
+                let hints = [
+                    Label::FormSslmodeDisable,
+                    Label::FormSslmodePrefer,
+                    Label::FormSslmodeRequire,
+                    Label::FormSslmodeVerifyCa,
+                    Label::FormSslmodeVerifyFull,
+                ];
+                let entries = SSL_MODES
+                    .iter()
+                    .zip(hints)
+                    .enumerate()
+                    .map(|(i, (m, h))| entry(i, m.to_string(), Some(h), true))
+                    .collect();
+                (entries, Some(f.sslmode))
+            }
+            Field::Source => sources(f.source),
+            Field::SshSource => sources(f.ssh_source),
+            Field::SshAuth => {
+                let entries = SshAuth::ALL
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, a)| {
+                        let hint = match a {
+                            SshAuth::Key => Label::FormSshAuthKeyHint,
+                            SshAuth::Password => Label::FormSshAuthPasswordHint,
+                            SshAuth::Agent => Label::FormSshAuthAgentHint,
+                            SshAuth::KeyboardInteractive => Label::FormSshAuthKeyboardInteractiveHint,
+                        };
+                        entry(i, i18n.label(ssh_auth_choice(a)).to_string(), Some(hint), true)
+                    })
+                    .collect();
+                (entries, SshAuth::ALL.iter().position(|a| *a == f.ssh_auth))
+            }
+            _ => return,
+        };
+        let list = ListPicker::new(entries, None, current.as_ref());
+        let form = (f.kind, f.profile_id());
+        self.overlays.push(Overlay::Picker(Picker::Choice { form, field, list }));
+    }
+
+    /// What the list of `field` of the form `form` names did: a pick sets that field, only
+    /// while that form is the dialog on top once the list closed.
+    fn choice_picked(&mut self, form: (FormKind, ProfileId), field: Field, out: Outcome<usize>) {
+        if out == Outcome::Pending {
+            return;
+        }
+        self.overlays.close(OverlayKind::Picker);
+        let on_top = matches!(self.overlays.top(), Some(Overlay::ProfileForm(f)) if (f.kind, f.profile_id()) == form);
+        if let (Outcome::Picked(i), true) = (out, on_top)
+            && let Some(f) = self.overlays.form_mut()
+        {
+            f.pick(field, i);
         }
     }
 }

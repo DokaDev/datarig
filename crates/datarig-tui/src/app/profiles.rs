@@ -205,6 +205,16 @@ pub fn source_choice(kind: SourceKind) -> Label {
     }
 }
 
+/// The name of a way to log in to the bastion, in its field.
+pub fn ssh_auth_choice(a: SshAuth) -> Label {
+    match a {
+        SshAuth::Key => Label::FormSshAuthKey,
+        SshAuth::Password => Label::FormSshAuthPassword,
+        SshAuth::Agent => Label::FormSshAuthAgent,
+        SshAuth::KeyboardInteractive => Label::FormSshAuthKeyboardInteractive,
+    }
+}
+
 /// Name of a source in messages ("the OS keychain", "the secrets file", …).
 pub fn source_name(kind: SourceKind) -> Label {
     match kind {
@@ -284,10 +294,16 @@ impl Field {
         matches!(self, Field::Color | Field::Icon | Field::Folder)
     }
 
-    /// `Enter` (or a click on its value) opens a list to pick from: the pickers, the SSH
-    /// tunnel and the environment.
+    /// A field with a few fixed values (the driver, the SSL mode, a password's storage, the
+    /// bastion login): `Enter` lists them, `←`/`→` step through them.
+    pub fn is_choice(self) -> bool {
+        matches!(self, Field::Driver | Field::SslMode | Field::Source | Field::SshAuth | Field::SshSource)
+    }
+
+    /// `Enter` (or a click on its value) opens a list to pick from: the pickers, the fields
+    /// with a few fixed values, the SSH tunnel and the environment.
     pub fn has_list(self) -> bool {
-        self.is_picker() || matches!(self, Field::SshEnabled | Field::Environment)
+        self.is_picker() || self.is_choice() || matches!(self, Field::SshEnabled | Field::Environment)
     }
 }
 
@@ -436,7 +452,8 @@ pub enum FormOutcome {
     Save,
     Test,
     Cancel,
-    /// Open the list of a field (color, icon, folder, the SSH tunnel, the environment).
+    /// Open the list of a field (color, icon, folder, a field with a few fixed values, the SSH
+    /// tunnel, the environment).
     Choose(Field),
 }
 
@@ -1221,12 +1238,17 @@ impl ProfileForm {
         self.hits.iter().rev().find(|(r, _)| r.contains(at)).map(|(_, h)| *h)
     }
 
-    /// Value `i` of field `f` among those it shows side by side, as the arrows would pick it
-    /// (a driver the app has no driver for and the keychain while it does not work are not).
+    /// Value `i` of field `f` among those it shows side by side or lists, as the arrows would
+    /// pick it (a driver the app has no driver for and the keychain while it does not work are
+    /// not).
     pub fn pick(&mut self, f: Field, i: usize) {
         let keychain = |k: SourceKind| k != SourceKind::Keychain || self.keychain_ok;
         match f {
             Field::Driver if self.drivers_enabled.get(i) == Some(&true) => self.set_driver(i),
+            Field::SslMode if i < SSL_MODES.len() => {
+                self.sslmode = i;
+                self.sync_dsn();
+            }
             Field::Source => {
                 if let Some(&k) = SourceKind::ALL.get(i).filter(|k| keychain(**k)) {
                     self.source = k;

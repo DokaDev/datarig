@@ -1,6 +1,7 @@
 //! The connection profile form: a large centered dialog with section tabs (Basic /
-//! Advanced), the password storage selector, the pickers of color, icon and folder, and the
-//! inline test-connection result line. The SSH section's first row picks the tunnel from a
+//! Advanced), the fields with a few fixed values (the driver, the SSL mode, the password
+//! storage, the bastion login), each picked from a list (`Enter`, or a click on it), the
+//! pickers of color, icon and folder, and the inline test-connection result line. The SSH section's first row picks the tunnel from a
 //! list (`Enter`, or a click on it): none, a tunnel preset (shown, not edited, here), or one of this profile only
 //! (its fields, and a button that makes a preset of them). The tunnel form is the same dialog with the SSH
 //! section alone, the preset's name first. The Advanced section's environment is picked from a
@@ -11,7 +12,7 @@ use crate::app::action::Action;
 use crate::app::environments::{RuleTone, rules_tones};
 use crate::app::profiles::{
     BUTTONS, CONFIRMS, DRIVERS, ENVIRONMENT, EnvChoice, FIELDS, Field, FormHit, FormKind, PAGINGS, Section, SshChoice,
-    secret_field, source_choice,
+    secret_field, source_choice, ssh_auth_choice,
 };
 use crate::app::{App, Level};
 use crate::keymap::Ctx;
@@ -95,6 +96,28 @@ fn selector(buf: &mut Buffer, x: u16, y: u16, room: usize, parts: &[(String, Sty
         full += width(&t);
     }
     (cx - x, usize::from(cx - x) == full)
+}
+
+/// A value picked from a list (`Enter`, or a click on it) at (x, y): the value and a mark that
+/// it drops down, then `hint` dimmed. The value is clicked as field `f`'s.
+#[allow(clippy::too_many_arguments)]
+fn drop_down(
+    buf: &mut Buffer,
+    hits: &mut Vec<(Rect, FormHit)>,
+    f: Field,
+    (x, y): (u16, u16),
+    right: u16,
+    value: &str,
+    hint: &str,
+    focused: bool,
+) {
+    let th = theme::cur();
+    let bg = if focused { th.selection } else { Style::new().bg(th.surface_alt) };
+    let room = |x: u16| right.saturating_sub(x + 1) as usize;
+    let used = put(buf, x, y, value, room(x), Style::new().fg(th.fg).patch(bg));
+    let used = used + put(buf, x + used, y, " ▾ ", room(x + used), Style::new().fg(th.fg_muted).patch(bg));
+    hits.push((Rect::new(x, y, used, 1), FormHit::Value(f)));
+    put(buf, x + used + 2, y, hint, room(x + used + 2), Style::new().fg(th.fg_dim).bg(th.surface));
 }
 
 /// The profile form: a large centered dialog with its section tabs (Basic / Advanced), the
@@ -253,38 +276,16 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
         let field_bg = if focused { th.selection } else { Style::new().bg(th.surface_alt) };
         let text = |t: &str| (t.to_string(), Style::new().fg(th.fg));
         let after = match f {
-            Field::Driver => {
-                let mut cx = x;
-                for (i, (_, name)) in DRIVERS.iter().enumerate() {
-                    let (t, style) = if i == form.driver {
-                        (format!("‹{name}›"), Style::new().fg(th.fg).patch(field_bg).add_modifier(Modifier::BOLD))
-                    } else if form.drivers_enabled[i] {
-                        (format!(" {name} "), Style::new().fg(th.fg_muted).bg(th.surface))
-                    } else {
-                        (format!(" {name} "), dim.add_modifier(Modifier::CROSSED_OUT))
-                    };
-                    let used = put(buf, cx, y, &t, room_from(cx), style);
-                    hits.push((Rect::new(cx, y, used, 1), FormHit::Choice(f, i)));
-                    cx += used;
-                }
-                if form.drivers_enabled.iter().any(|e| !e) {
-                    // The short label where the full one does not fit (80 columns).
-                    let hx = cx + 2;
-                    let full = i18n.label(Label::FormDriverUnsupported);
-                    let hint = if width(&full) <= room_from(hx) {
-                        full
-                    } else {
-                        i18n.label(Label::FormDriverUnsupportedShort)
-                    };
-                    put(buf, hx, y, &hint, room_from(hx), dim);
-                }
-                continue;
-            }
-            Field::SslMode => {
-                let drawn = selector(buf, x, y, room_from(x), &[text(SSL_MODES[form.sslmode])], focused);
-                selector_hits(&mut hits, f, x, y, drawn);
-                let used = drawn.0;
-                put(buf, x + used + 2, y, &i18n.label(Label::FormSslmodeHint), room_from(x + used + 2), dim);
+            Field::Driver | Field::SslMode | Field::Source | Field::SshAuth | Field::SshSource => {
+                let value = match f {
+                    Field::Driver => DRIVERS[form.driver].1.to_string(),
+                    Field::SslMode => SSL_MODES[form.sslmode].to_string(),
+                    Field::Source => i18n.label(source_choice(form.source)).to_string(),
+                    Field::SshSource => i18n.label(source_choice(form.ssh_source)).to_string(),
+                    _ => i18n.label(ssh_auth_choice(form.ssh_auth)).to_string(),
+                };
+                let hint = i18n.label(Label::FormPickerHint);
+                drop_down(buf, &mut hits, f, (x, y), right, &value, &hint, focused);
                 continue;
             }
             Field::SshEnabled => {
@@ -363,33 +364,6 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
                         put(buf, inner.x + 1, ly, &i18n.label(label), label_w, label_style(false));
                         put(buf, x, ly, &value, room_from(x), style.bg(th.surface));
                     }
-                }
-                continue;
-            }
-            Field::SshAuth | Field::SshSource => {
-                let names: Vec<(String, bool)> = match f {
-                    Field::SshAuth => SshAuth::ALL
-                        .iter()
-                        .map(|a| (i18n.label(ssh_auth_choice(*a)).to_string(), *a == form.ssh_auth))
-                        .collect(),
-                    _ => SourceKind::ALL
-                        .iter()
-                        .map(|k| (i18n.label(source_choice(*k)).to_string(), *k == form.ssh_source))
-                        .collect(),
-                };
-                let mut cx = x;
-                for (i, (name, chosen)) in names.into_iter().enumerate() {
-                    let text = if chosen { format!("‹{name}›") } else { format!(" {name} ") };
-                    let style = if chosen && focused {
-                        Style::new().fg(th.bg).bg(th.accent).add_modifier(Modifier::BOLD)
-                    } else if chosen {
-                        Style::new().fg(th.fg).bg(th.surface_alt).add_modifier(Modifier::BOLD)
-                    } else {
-                        Style::new().fg(th.fg_muted).bg(th.surface)
-                    };
-                    let used = put(buf, cx, y, &text, room_from(cx), style);
-                    hits.push((Rect::new(cx, y, used, 1), FormHit::Choice(f, i)));
-                    cx += used;
                 }
                 continue;
             }
@@ -564,28 +538,6 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
                 selector_hits(&mut hits, f, x, y, drawn);
                 let used = drawn.0;
                 x + used
-            }
-            Field::Source => {
-                let mut cx = x;
-                for (i, kind) in SourceKind::ALL.into_iter().enumerate() {
-                    let name = i18n.label(source_choice(kind));
-                    // The chosen one in ‹ › (like the SSL mode), so it shows without colors too.
-                    let text = if kind == form.source { format!("‹{name}›") } else { format!(" {name} ") };
-                    let style = if kind == form.source && focused {
-                        Style::new().fg(th.bg).bg(th.accent).add_modifier(Modifier::BOLD)
-                    } else if kind == form.source {
-                        Style::new().fg(th.fg).bg(th.surface_alt).add_modifier(Modifier::BOLD)
-                    } else if kind == SourceKind::Keychain && !form.keychain_ok {
-                        dim.add_modifier(Modifier::CROSSED_OUT)
-                    } else {
-                        Style::new().fg(th.fg_muted).bg(th.surface)
-                    };
-                    let used = put(buf, cx, y, &text, room_from(cx), style);
-                    hits.push((Rect::new(cx, y, used, 1), FormHit::Choice(f, i)));
-                    cx += used;
-                }
-                put(buf, cx + 2, y, &i18n.label(Label::FormSslmodeHint), room_from(cx + 2), dim);
-                continue;
             }
             _ => {
                 let mask = matches!(f, Field::Password | Field::SshSecret);
@@ -774,14 +726,4 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
         test_line(app, inner.x + 1, inner.y + 15, iw.saturating_sub(2), 2, buf);
     }
     cursor
-}
-
-/// The name of a way to log in to the bastion, in its selector.
-fn ssh_auth_choice(a: SshAuth) -> Label {
-    match a {
-        SshAuth::Key => Label::FormSshAuthKey,
-        SshAuth::Password => Label::FormSshAuthPassword,
-        SshAuth::Agent => Label::FormSshAuthAgent,
-        SshAuth::KeyboardInteractive => Label::FormSshAuthKeyboardInteractive,
-    }
 }
