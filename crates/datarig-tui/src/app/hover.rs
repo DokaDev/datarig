@@ -1,10 +1,10 @@
 //! The pointer over the workspace's small clickable targets (no dialog open): the document tab
 //! bar's tabs, their `×` and scroll marks, the result tab strip, the paging arrows, the Plan
 //! tab's view names, the entries of the inspector's Row tab and the grid's cells. The one
-//! under the pointer is drawn highlighted (an inspector entry and the grid's cell of its column in
-//! the selected row light each other; a hover never moves the selection or the focus); it is found in what the last frame drew (the same
-//! hits a click uses), and a frame that lays those targets out differently drops it, so no
-//! highlight is left on something else.
+//! under the pointer is drawn highlighted (an inspector entry and the grid's cell of its column
+//! in the selected row light each other; a hover never moves the selection or the focus); it
+//! is found in what the last frame drew (the same hits a click uses), and a frame that lays
+//! those targets out differently drops it, so no highlight is left on something else.
 
 use super::*;
 use crate::widgets::tabbar::TabHit;

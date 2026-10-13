@@ -6,8 +6,8 @@
 //! query's name or a table tab's `schema.table` (in the color of its connection's environment
 //! when that has one, muted on an inactive tab), `*` marks a text that could not be saved, the
 //! environment's badge (`PROD`) follows as a chip of its color, and the lock (`RO` with icons
-//! off) in the read-only mark's blue marks read-only rules. A mark after it warns, by shape first ([`State`]): `◆` in the warning
-//! color while the user's transaction is open, `!` for a lost connection, a failed profile or
+//! off) in the read-only mark's blue marks read-only rules. A mark after it warns, by shape
+//! first ([`State`]): `◆` in the warning color while the user's transaction is open, `!` for a lost connection, a failed profile or
 //! an aborted transaction; a tab with nothing to warn about has no mark. `×` closes the tab as
 //! `Ctrl+W` does. A tab without a connection says so in the mark's place. When the tabs do not
 //! fit, the documents' names are shortened first, then the bar scrolls to keep the active tab

@@ -1021,8 +1021,10 @@ fn an_unreadable_database_shows_why() {
     let rows = h.rows();
     let at = rows.iter().position(|r| r == "  db:locked").unwrap();
     assert_eq!(rows[at + 1], "    (note)", "{rows:?}");
+    // A wide explorer: room for the line under the database (the Connections head indents it).
+    h.app.explorer.width = Some(60);
     let screen = h.screen(160, 45);
-    assert!(screen.contains("This database can't be read:"), "{screen}");
+    assert!(screen.contains("This database can't be read: FA"), "{screen}");
     assert!(!screen.contains("(empty)"), "{screen}");
     // The whole reason in the status bar.
     let status = h.status(200, 45);

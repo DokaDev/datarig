@@ -1724,7 +1724,7 @@
 "env_form.section" = "환경"
 "env_form.hint" = "이 환경을 고른 프로필은 규칙, 색, 배지를 함께 씁니다"
 "form.env.read_only_hint" = "읽기만 실행하고 서버도 쓰기를 거부합니다"
-"form.env.confirm_destructive" = "위험한 문장만 확인 (기본)"
+"form.env.confirm_destructive" = "위험한 문만 확인 (기본)"
 "form.env.confirm_writes" = "모든 쓰기 전 확인"
 "form.env.paging_no_hold" = "유지 안 함"
 "form.env.paging_hold" = "유지"

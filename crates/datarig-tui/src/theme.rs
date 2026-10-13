@@ -514,7 +514,9 @@ impl Theme {
             Color::Rgb(..) => BLACK,
             _ => return c,
         };
-        let backs = [self.bg, self.surface, self.surface_alt];
+        // The RGB backgrounds only (a user theme may leave a surface to the terminal).
+        let backs: Vec<Color> =
+            [self.bg, self.surface, self.surface_alt].into_iter().filter(|c| matches!(c, Color::Rgb(..))).collect();
         (0..=20)
             .map(|step| blend(c, toward, 100 - step * 5))
             .find(|m| backs.iter().all(|b| contrast_ratio(*m, *b) >= 4.5))
@@ -528,7 +530,8 @@ impl Theme {
         if !matches!((c, self.bg), (Color::Rgb(..), Color::Rgb(..))) {
             return Style::new().fg(c).add_modifier(Modifier::DIM);
         }
-        let backs = [self.bg, self.surface, self.surface_alt];
+        let backs: Vec<Color> =
+            [self.bg, self.surface, self.surface_alt].into_iter().filter(|c| matches!(c, Color::Rgb(..))).collect();
         let muted = (0..=8)
             .map(|step| blend(c, self.bg, 60 + step * 5))
             .find(|m| backs.iter().all(|b| contrast_ratio(*m, *b) >= 3.0))

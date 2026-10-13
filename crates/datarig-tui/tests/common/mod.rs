@@ -777,7 +777,9 @@ impl Harness {
                         format!("@{}", self.app.profile(*id).map(|p| p.name.clone()).unwrap_or_default())
                     }
                 };
-                format!("{}{text}", "  ".repeat(r.depth - usize::from(in_connections(&r.kind))))
+                let inside = usize::from(in_connections(&r.kind));
+                assert!(r.depth >= inside, "a Connections row below its head: {:?}", r.kind);
+                format!("{}{text}", "  ".repeat(r.depth.saturating_sub(inside)))
             })
             .collect()
     }

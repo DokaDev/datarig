@@ -896,8 +896,10 @@ pub(crate) fn draw_explorer(app: &mut App, area: Rect, buf: &mut Buffer, focused
         let ry = y + (i - 1 - scroll) as u16;
         draw_row(app, r, Rect::new(area.x, ry, area.width, 1), row_bg(&th, i == sel, focused), buf);
     }
-    // Empty states: no profile at all, or none matching the filter.
-    if n == 0 && h > 1 {
+    // Empty states: no profile at all (under the Connections head), or none matching the
+    // filter.
+    let head = usize::from(rows.get(1).is_some_and(|r| r.kind == RowKind::ConnectionsHeader));
+    if n == head && h > 1 + head {
         let (title, hint) = if app.profiles.is_empty() {
             (
                 app.i18n.label(Label::ExplorerEmptyTitle).to_string(),
@@ -907,7 +909,7 @@ pub(crate) fn draw_explorer(app: &mut App, area: Rect, buf: &mut Buffer, focused
             let query = app.explorer.filter.text().to_string();
             (app.i18n.msg(&Msg::ExplorerFilterNone { query }).to_string(), String::new())
         };
-        let mut ly = y + 1;
+        let mut ly = y + 1 + head as u16;
         for (text, style) in [
             (title, Style::new().fg(th.fg).bg(th.bg).add_modifier(Modifier::BOLD)),
             (hint, Style::new().fg(th.fg_muted).bg(th.bg)),

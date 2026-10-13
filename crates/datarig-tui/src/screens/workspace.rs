@@ -315,6 +315,12 @@ fn draw_results_pane(app: &mut App, area: Rect, buf: &mut Buffer) {
         app.layout.strip = Rect::default();
         rinner
     };
+    // Another view than the rows: no grid, so no cell of it is under the pointer (it would
+    // still be lit when the rows come back).
+    let rows = app.tab().exec.view != ResultView::Messages && !app.plan_shown() && !app.chart_shown();
+    if !rows && matches!(app.pointer_on, Some(PointerOn::Cell(..))) {
+        app.pointer_on = None;
+    }
     if app.tab().exec.view == ResultView::Messages {
         draw_messages(app, content, buf);
     } else if app.plan_shown() {
@@ -1048,7 +1054,17 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
     if let (Some((r, c)), Results::Rows(rs)) = (hovered.filter(|&h| h != (t.grid.row, t.grid.col)), &t.results)
         && let Some(cell) = t.grid.cell_rect(r, c, rs.rows.len())
     {
-        buf.set_style(cell.intersection(area), crate::widgets::cell_hover_style());
+        // In a selected range only the underline: the range's background stays.
+        let in_range = t
+            .grid
+            .selection(rs.rows.len(), rs.columns.len())
+            .is_some_and(|(rr, cr)| rr.contains(&r) && cr.contains(&c));
+        let style = if in_range {
+            ratatui::style::Style::new().add_modifier(Modifier::UNDERLINED)
+        } else {
+            crate::widgets::cell_hover_style()
+        };
+        buf.set_style(cell.intersection(area), style);
     }
     // Rows of the spill file that could not be read are shown as not read, and said so.
     if let Some(fault) = app.tabs.active_mut().grid.read_error.take() {

@@ -50,7 +50,8 @@ pub const TERMINAL: Theme = Theme {
     mode_fg: Color::Black,
     search_match: Style::new().fg(Color::Black).bg(Color::Yellow),
     match_paren: Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD.union(Modifier::UNDERLINED)),
-    read_only_mark: Style::new().fg(Color::Blue).add_modifier(Modifier::BOLD),
+    // The bright blue: the plain one is too dark on many terminals' black.
+    read_only_mark: Style::new().fg(Color::LightBlue).add_modifier(Modifier::BOLD),
     danger_mark: Style::new().fg(Color::Red).add_modifier(Modifier::BOLD),
     plan_hot: Style::new().fg(Color::Magenta).add_modifier(Modifier::BOLD),
     plan_misestimate: Style::new().fg(Color::Yellow).add_modifier(Modifier::UNDERLINED),

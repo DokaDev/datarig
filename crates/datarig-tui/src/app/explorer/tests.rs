@@ -43,7 +43,8 @@ fn rows(a: &App) -> Vec<String> {
                 RowKind::DefaultRules => "(default rules)".to_string(),
                 RowKind::DefaultRulesUser(id) => format!("@{}", a.profile(id).unwrap().name),
             };
-            format!("{}{t}", "  ".repeat(r.depth - usize::from(inside)))
+            assert!(r.depth >= usize::from(inside), "a Connections row below its head");
+            format!("{}{t}", "  ".repeat(r.depth.saturating_sub(usize::from(inside))))
         })
         .collect()
 }

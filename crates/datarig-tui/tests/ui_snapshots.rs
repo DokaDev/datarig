@@ -931,6 +931,15 @@ fn welcome_panel_en_ko() {
         assert_screen!(format!("welcome_form_{}_80x24", lang_tag(lang)), lang, h.draw(80, 24));
         h.key(KeyCode::Esc);
         for (w, hh) in SIZES {
+            // The explorer says so under its Connections head (the Welcome panel too).
+            let t = h.draw(w, hh);
+            let tree = h.app.layout.tree;
+            let explorer: String = (tree.y..tree.y + tree.height)
+                .map(|y| row_text(t.backend().buffer(), y).chars().take(usize::from(tree.width)).collect::<String>())
+                .collect();
+            if lang == Lang::En {
+                assert!(explorer.contains("No connection") && explorer.contains("Press n to create"), "{explorer}");
+            }
             assert_screen!(format!("welcome_{}_{w}x{hh}", lang_tag(lang)), lang, h.draw(w, hh));
         }
         // The name as text, never an emoji or a glyph, icons on or off.

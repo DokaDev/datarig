@@ -37,7 +37,7 @@ pub enum Children {
 /// How large an object among the largest tenth of its schema (by size, at least one object) is:
 /// its estimates are drawn in a warmer color (`[explorer] size_heat`: in three levels, the two
 /// smaller tiers amber and the two larger red; in five, each tier its own color).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Heat {
     /// 1 MiB or more.
     Mib,

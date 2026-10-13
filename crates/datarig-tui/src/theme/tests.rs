@@ -701,7 +701,7 @@ fn size_heat_reads_on_the_explorer_rows_in_every_theme() {
 
 /// The selection of a pane without the focus (the grid's cell, the inspector's entry) stays
 /// clearly visible: its own background, close to the selection's and further from the pane's
-/// than the faint cursor line (now the hover's look), apart from the background in 256 colors,
+/// than the faint cursor line it used to be, apart from the background in 256 colors,
 /// with body text readable on it; never the focused selection. The terminal theme dims its
 /// reversed text.
 #[test]

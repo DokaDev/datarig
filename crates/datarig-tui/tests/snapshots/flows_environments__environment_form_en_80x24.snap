@@ -11,7 +11,7 @@ expression: backend
 "│▾│ Color                ‹ ● red ›  ←/→ change · Enter list                  │ │"
 "│ │ Badge                PROD                   shown on its tabs, e.g. PROD │ │"
 "│▾│ Read-only            ‹ on ›  ←/→ change · only reads run; the server re… │ │"
-"│ │ Confirm               Dangerous statements only (default) ‹Before every… │ │"
+"│ │ Confirm               dangerous statements only (default) ‹before every… │ │"
 "│ │ Paging               ‹no hold› hold   hold keeps a result's transaction… │ │"
 "│ │ Paging idle timeout  30s                    with hold: 30s, 5m, 1h or o… │ │"
 "│ │ Spill limit                                 empty: the config's · 512MB… │ │"

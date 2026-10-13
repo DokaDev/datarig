@@ -16,7 +16,7 @@ expression: backend
 "│    ● tes│  Environment                                           profiles without an environment use these │         │"
 "│    ● sta│                                                                                                  │         │"
 "│  ▾ ● pro│ Read-only            ‹ off ›  ←/→ change · only reads run; the server refuses writes too         │         │"
-"│      ○  │ Confirm              ‹Dangerous statements only (default)› Before every write   ←/→ change       │         │"
+"│      ○  │ Confirm              ‹dangerous statements only (default)› before every write   ←/→ change       │         │"
 "│         │ Paging               ‹no hold› hold   hold keeps a result's transaction open while you page      │         │"
 "│         │ Paging idle timeout  30s                                 with hold: 30s, 5m, 1h or off           │         │"
 "│         │ Spill limit                                              empty: the config's · 512MB, 2GB or off │         │"
