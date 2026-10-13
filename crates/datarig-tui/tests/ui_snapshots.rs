@@ -805,6 +805,47 @@ fn profile_form_ssh_section() {
     }
 }
 
+/// The lists of the profile form's fields with a few fixed values, each value with what it
+/// means: the driver (the ones the app has no driver for struck through), the SSL mode, the
+/// password's storage and the bastion login.
+#[test]
+fn profile_form_value_lists() {
+    for lang in [Lang::En, Lang::Ko] {
+        let tag = lang_tag(lang);
+        for (w, hh) in [(80, 24), (120, 40)] {
+            let mut h = with_profiles(lang);
+            h.explore("local-pg");
+            h.keys("e");
+            h.key(KeyCode::BackTab);
+            h.key(KeyCode::Enter);
+            assert_screen!(format!("profile_form_driver_list_{tag}_{w}x{hh}"), lang, h.draw(w, hh));
+            h.key(KeyCode::Esc);
+            h.ctrl('p');
+            h.key(KeyCode::Enter);
+            assert_screen!(format!("profile_form_sslmode_list_{tag}_{w}x{hh}"), lang, h.draw(w, hh));
+        }
+        let mut h = with_profiles(lang);
+        h.explore("local-pg");
+        h.keys("e");
+        while h.form().focus != datarig_tui::app::profiles::Field::Source {
+            h.key(KeyCode::Tab);
+        }
+        h.key(KeyCode::Enter);
+        assert_screen!(format!("profile_form_source_list_{tag}_80x24"), lang, h.draw(80, 24));
+        h.key(KeyCode::Esc);
+        // Its own tunnel, the row after "off" in the list; then the login's list.
+        h.ctrl('n');
+        h.key(KeyCode::Enter);
+        h.key(KeyCode::Down);
+        h.key(KeyCode::Enter);
+        while h.form().focus != datarig_tui::app::profiles::Field::SshAuth {
+            h.key(KeyCode::Tab);
+        }
+        h.key(KeyCode::Enter);
+        assert_screen!(format!("profile_form_ssh_auth_list_{tag}_80x24"), lang, h.draw(80, 24));
+    }
+}
+
 #[test]
 fn profile_form_advanced_section_and_pickers() {
     use datarig_core::config::IconsSetting;

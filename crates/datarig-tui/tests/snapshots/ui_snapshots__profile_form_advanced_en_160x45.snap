@@ -17,7 +17,7 @@ expression: backend
 "│                             ╭ Edit connection — 分析-replica ──────────────────────────────────────────────────────────────────╮                             │" Hidden by multi-width symbols: [(51, " "), (53, " ")]
 "│                             │  Basic   SSH   Advanced                                                    Ctrl+N/Ctrl+P section │                             │"
 "│                             │                                                                                                  │                             │"
-"│                             │ SSL mode          ‹ require ›  ←/→ change                                                        │                             │"
+"│                             │ SSL mode          require ▾   ←/→ change · Enter list                                            │                             │"
 "│                             │ Statement cache   ‹ off ›  ←/→ change · off behind PgBouncer in transaction mode                 │                             │"
 "│                             │ Environment       None (default rules) ▾   Enter list · standard rules                           │                             │"
 "│                             │ Color             ‹ ● red ›  ←/→ change · Enter list                                             │                             │"

@@ -1,0 +1,28 @@
+---
+source: crates/datarig-tui/tests/ui_snapshots.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 ×                                          "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾╭ Edit connection — local-pg ──────────────────────────────────────────────╮ │"
+"│ │  Basic   SSH   Advanced                            Ctrl+N/Ctrl+P section │e│"
+"│ │                                                                          │ │"
+"│ │ SSH tunnel        this profile only ▾   [save as tunnel preset Ctrl+B]   │ │"
+"│ │ Bastion                                                                  │ │"
+"│ │ Port    ╭ Log in with ─────────────────────────────────────────╮         │ │"
+"│ │ User    │ › type to filter                                     │         │ │"
+"│ │ Log in w│                                                      │         │ │"
+"│ │ Key file│ key file          an OpenSSH private key             │ is you… │ │"
+"│ │ Password│ password          the bastion account's password     │         │ │"
+"│ │ Passphra│ ssh-agent         the keys your ssh-agent holds      │stored;… │ │"
+"│ │ Keepaliv│ server questions  the server asks when connecting    │         │t│"
+"│ │ Timeout,╰───────────────── Enter pick · ↑↓ select · Esc cancel ╯         │ │"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ │                    Test    Save    Cancel                                │t│"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ ╰─ Tab/↑↓ move · Ctrl+N/P section · Ctrl+T test · Ctrl+S save · Esc cancel ╯ │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" NORMAL  local-pg │ Connected to local-pg                                    EN "

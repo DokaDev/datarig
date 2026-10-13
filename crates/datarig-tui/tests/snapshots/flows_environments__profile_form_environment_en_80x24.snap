@@ -7,7 +7,7 @@ expression: backend
 "│▾╭ Edit connection — local-pg ──────────────────────────────────────────────╮ │"
 "│ │  Basic   SSH   Advanced                            Ctrl+N/Ctrl+P section │ │"
 "│ │                                                                          │ │"
-"│ │ SSL mode          ‹ disable ›  ←/→ change                                │ │"
+"│ │ SSL mode          disable ▾   ←/→ change · Enter list                    │ │"
 "│▾│ Statement cache   ‹ on ›  ←/→ change · off behind PgBouncer in transact… │ │"
 "│ │ Environment       ● prod  PROD  ▾   Enter list · read-only · asks befor… │ │"
 "│▾│ Color             ‹ ● auto (from the name) ›  ←/→ change · Enter list    │ │"

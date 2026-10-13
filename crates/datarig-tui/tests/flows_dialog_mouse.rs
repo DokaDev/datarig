@@ -116,19 +116,25 @@ fn a_click_focuses_a_field_and_puts_the_cursor_under_the_pointer() {
 }
 
 #[test]
-fn a_click_on_a_choice_picks_it_as_the_arrows_would() {
+fn a_click_on_a_value_lists_them_and_a_click_on_a_row_picks_it() {
     let mut h = new_form();
     assert_eq!(h.form().source, SourceKind::Keychain);
+    // The storage's value (or its mark): the list of storages, each with what it means.
+    click_on(&mut h, "Keychain ▾", 1);
+    assert_eq!((h.overlay_kind(), focus(&h)), (Some(OverlayKind::Picker), Field::Source));
+    let screen = h.screen(W, H);
+    assert!(screen.contains("a command's output, when connecting"), "{screen}");
     click_on(&mut h, "Command ", 1);
-    assert_eq!((h.form().source, focus(&h)), (SourceKind::Command, Field::Source));
-    click_on(&mut h, "File ", 0);
-    assert_eq!(h.form().source, SourceKind::File);
-    // A driver the app has is picked (with its default port); one it has no driver for is not.
-    click_on(&mut h, "MySQL", 1);
-    assert_eq!((h.form().driver, focus(&h)), (1, Field::Driver));
-    assert_eq!(h.form().port.text(), "3306");
+    assert_eq!((h.overlay_kind(), h.form().source), (Some(OverlayKind::ProfileForm), SourceKind::Command));
+    // A driver the app has is picked (with its default port); one it has no driver for is
+    // listed but not picked: the list stays.
+    click_on(&mut h, "PostgreSQL ▾", 1);
+    assert_eq!((h.overlay_kind(), focus(&h)), (Some(OverlayKind::Picker), Field::Driver));
     click_on(&mut h, "Redis", 1);
-    assert_eq!((h.form().driver, focus(&h)), (1, Field::Driver));
+    assert_eq!((h.overlay_kind(), h.form().driver), (Some(OverlayKind::Picker), 0));
+    click_on(&mut h, "MySQL", 1);
+    assert_eq!((h.overlay_kind(), h.form().driver), (Some(OverlayKind::ProfileForm), 1));
+    assert_eq!(h.form().port.text(), "3306");
 }
 
 #[test]
@@ -142,18 +148,21 @@ fn section_tabs_selectors_and_the_ssh_choices_take_clicks() {
     assert_eq!(h.overlay_kind(), Some(OverlayKind::Picker));
     click_on(&mut h, "this profile only", 1);
     assert_eq!(h.form().ssh_choice(), SshChoice::Inline);
+    click_on(&mut h, "key file ▾", 1);
+    assert_eq!((h.overlay_kind(), focus(&h)), (Some(OverlayKind::Picker), Field::SshAuth));
     click_on(&mut h, "password ", 1);
-    assert_eq!((h.form().ssh_auth, focus(&h)), (datarig_core::profile::ssh::SshAuth::Password, Field::SshAuth));
+    assert_eq!(h.form().ssh_auth, datarig_core::profile::ssh::SshAuth::Password);
     click_on(&mut h, "this profile only ▾", 18);
     assert_eq!((h.overlay_kind(), focus(&h)), (Some(OverlayKind::Picker), Field::SshEnabled));
     h.key(KeyCode::Esc);
     assert_eq!(h.form().ssh_choice(), SshChoice::Inline);
     click_on(&mut h, " Advanced ", 2);
     assert_eq!(h.form().section, Section::Advanced);
-    let sslmode = h.form().sslmode;
-    click_on(&mut h, "‹ prefer ›", 9);
-    assert_eq!(h.form().sslmode, sslmode + 1);
-    assert_eq!(focus(&h), Field::SslMode);
+    click_on(&mut h, "prefer ▾", 1);
+    assert_eq!((h.overlay_kind(), focus(&h)), (Some(OverlayKind::Picker), Field::SslMode));
+    click_on(&mut h, "verify-full", 1);
+    assert_eq!(h.form().sslmode, 4);
+    assert!(h.form().dsn.text().ends_with("sslmode=verify-full"), "{}", h.form().dsn.text());
     click_on(&mut h, "‹ on ›", 3);
     assert!(!h.form().statement_cache);
     click_on(&mut h, " Basic ", 2);

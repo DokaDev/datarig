@@ -7,7 +7,7 @@ expression: backend
 "│▾╭ Edit connection — 分析-replica ──────────────────────────────────────────╮ │" Hidden by multi-width symbols: [(23, " "), (25, " ")]
 "│ │  Basic   SSH   Advanced                            Ctrl+N/Ctrl+P section │e│"
 "│ │                                                                          │ │"
-"│ │ SSL mode          ‹ require ›  ←/→ change                                │ │"
+"│ │ SSL mode          require ▾   ←/→ change · Enter list                    │ │"
 "│ │ Statement cache   ‹ off ›  ←/→ change · off behind PgBouncer in transac… │ │"
 "│ │ Environment       None (default rules) ▾   Enter list · standard rules   │ │"
 "│ │ Color             ‹ ● red ›  ←/→ change · Enter list                     │ │"

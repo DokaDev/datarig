@@ -940,7 +940,7 @@ fn save_as_tunnel_preset_offers_a_name_from_the_bastion() {
     assert_eq!(h.app.overlays.name_input().expect("asked").input.text(), "tunnel");
 }
 
-/// The tunnel form by mouse: fields by a click, the login by a click on its value, Save by its
+/// The tunnel form by mouse: fields by a click, the login from its list, Save by its
 /// button; the form keeps its one section (a click on a field never shows another).
 #[test]
 fn the_tunnel_form_is_filled_and_saved_by_mouse() {
@@ -970,7 +970,13 @@ fn the_tunnel_form_is_filled_and_saved_by_mouse() {
     h.type_text("bastion.example.com");
     hit(&mut h, FormHit::Field(Field::SshUser));
     h.type_text("ec2-user");
-    hit(&mut h, FormHit::Choice(Field::SshAuth, 2));
+    // The login: its value lists the ways, a click on a row picks one.
+    hit(&mut h, FormHit::Value(Field::SshAuth));
+    h.draw(100, 30);
+    let list = h.app.overlays.picker().and_then(|p| p.choice()).expect("the login's list is open").1.list_area();
+    h.advance(std::time::Duration::from_millis(500));
+    h.mouse(MouseEventKind::Down(MouseButton::Left), list.x + 2, list.y + 2);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), list.x + 2, list.y + 2);
     assert_eq!(h.form().ssh_auth, SshAuth::Agent);
     hit(&mut h, FormHit::Button(Field::Save));
     assert!(!h.form_open(), "saved");

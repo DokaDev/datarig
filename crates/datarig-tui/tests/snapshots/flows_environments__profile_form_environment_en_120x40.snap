@@ -15,7 +15,7 @@ expression: backend
 "│    ● dev╭ Edit connection — local-pg ──────────────────────────────────────────────────────────────────────╮         │"
 "│    ● tes│  Basic   SSH   Advanced                                                    Ctrl+N/Ctrl+P section │         │"
 "│    ● sta│                                                                                                  │         │"
-"│  ▾ ● pro│ SSL mode          ‹ disable ›  ←/→ change                                                        │         │"
+"│  ▾ ● pro│ SSL mode          disable ▾   ←/→ change · Enter list                                            │         │"
 "│      ○  │ Statement cache   ‹ on ›  ←/→ change · off behind PgBouncer in transaction mode                  │         │"
 "│         │ Environment       ● prod  PROD  ▾   Enter list · read-only · asks before every write             │         │"
 "│         │ Color             ‹ ● auto (from the name) ›  ←/→ change · Enter list                            │         │"

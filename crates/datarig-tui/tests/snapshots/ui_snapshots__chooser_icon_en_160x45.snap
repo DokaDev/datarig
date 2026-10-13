@@ -17,7 +17,7 @@ expression: backend
 "│                             ╭ Edit connection — lo│  server                                             │─────────────────────╮                             │"
 "│                             │  Basic   SSH   Advan│  cloud                                              │trl+N/Ctrl+P section │                             │"
 "│                             │                     │  cube                                               │                     │                             │"
-"│                             │ SSL mode          ‹ │  cubes                                              │                     │                             │"
+"│                             │ SSL mode          di│  cubes                                              │                     │                             │"
 "│                             │ Statement cache   ‹ │  leaf                                               │ode                  │                             │"
 "│                             │ Environment       No│  fire                                               │                     │                             │"
 "│                             │ Color             ‹ │  bolt                                               │                     │                             │"

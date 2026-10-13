@@ -430,7 +430,7 @@ Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+
 
 ## `overlay.profile_form` [text]
 
-Connection profile form. With the mouse: a click focuses a field (in a text, the cursor goes there), picks a value, steps a `‹ value ›` (its arrows; the value opens a list), switches the section or presses a button. Inside `root`.
+Connection profile form. With the mouse: a click focuses a field (in a text, the cursor goes there), picks a value, opens the list of a `value ▾`, steps a `‹ value ›` (its arrows; the value opens a list), switches the section or presses a button. Inside `root`.
 
 | Keys | Action | Description | R |
 |---|---|---|---|
@@ -463,7 +463,7 @@ Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+
 
 ## `overlay.picker` [text]
 
-A list to pick from with a typed filter: a field of the profile form (`Enter` on it), its SSH tunnel or its environment, with the entry that makes a new one ("New SSH tunnel…", "New environment…") last. Typing filters it as the action menu is filtered; the arrows, `Ctrl+N`/`Ctrl+P` and `Tab` move, `Enter` picks, `Esc` closes it and changes nothing. A click picks a row, the wheel selects, the pointer only highlights. Inside `root`.
+A list to pick from with a typed filter: a field of the profile form (`Enter` on it) — its driver, SSL mode, password storage, bastion login and its secret's storage, SSH tunnel or environment — each value with what it means; the tunnel's and the environment's end with the entry that makes a new one ("New SSH tunnel…", "New environment…"), and a value that cannot be picked (a driver the app has none for, the keychain while it does not work) is struck through. Typing filters it as the action menu is filtered; the arrows, `Ctrl+N`/`Ctrl+P` and `Tab` move, `Enter` picks, `Esc` closes it and changes nothing. A click picks a row, the wheel selects, the pointer only highlights. Inside `root`.
 
 Reserved — list picker: `Down` `Up` `Ctrl+N` `Ctrl+P` `Tab` `Shift+Tab` `Enter` `Esc`
 
