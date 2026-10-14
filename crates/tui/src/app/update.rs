@@ -72,7 +72,13 @@ impl App {
                 self.overlay_mouse(m)
             }
             Event::Mouse(m) => self.handle_mouse(m),
-            Event::Paste(text) => self.paste(&text),
+            Event::Paste(text) => {
+                // A paste ends a tab moved by keys as any other key does.
+                if self.tab_drag.as_ref().is_some_and(|d| d.keys) {
+                    self.end_tab_drag();
+                }
+                self.paste(&text)
+            }
             _ => {}
         }
         // A dialog on top ends a tab's drag: it stays where it was (its `Esc` is the dialog's).

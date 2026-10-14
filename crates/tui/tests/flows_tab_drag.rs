@@ -988,3 +988,27 @@ fn space_t_angle_brackets_slide_the_tabs_too() {
     assert_eq!(h.app.tab_x(0), Some(i32::from(a0)));
     no_more_frames(&h);
 }
+
+/// The tabs changing under a tab moved by keys (a background answer opened or closed one) end
+/// the move; the next key does what it always does, and a paste ends it too.
+#[test]
+fn a_tab_moved_by_keys_ends_when_the_tabs_change_or_on_a_paste() {
+    let mut h = three_tabs();
+    h.keys(" tgl");
+    assert_eq!(h.app.tab_drag_view(), Some((0, Some(1))));
+    // As a background answer would: another tab, not through a key.
+    h.app.tabs.move_tab(2, 1);
+    assert_eq!(h.app.tab_drag_view(), None, "shown no more");
+    assert!(!h.app.tab_grabbed());
+    h.keys("i");
+    assert_eq!(h.app.tab().editor.mode, datarig_tui::widgets::editor::Mode::Insert, "the key was the editor's");
+    h.key(KeyCode::Esc);
+    slide_out(&mut h, W);
+    assert_eq!(texts(&h), ["a", "c", "b"]);
+    // A paste.
+    h.keys(" tgl");
+    assert!(h.app.tab_grabbed());
+    h.app.handle_event(ratatui::crossterm::event::Event::Paste("x".into()));
+    assert!(!h.app.tab_grabbed());
+    assert_eq!(texts(&h), ["xa", "c", "b"], "pasted into the editor, the order as before");
+}

@@ -392,20 +392,30 @@ impl App {
     /// an end), `Enter` keeps the order, `Esc` puts it back. Any other key ends the move as
     /// `Esc` does and is not taken (`false`), so it does what it always does.
     pub(super) fn tab_grab_key(&mut self, k: &KeyEvent) -> bool {
+        if !self.tab_drag.as_ref().is_some_and(|d| d.keys) {
+            return false;
+        }
+        // The tabs changed under it (an answer from a session opened or closed one): it is
+        // shown no more, it ends, and the key does what it always does.
+        if !self.tab_grabbed() {
+            self.end_tab_drag();
+            return false;
+        }
         let n = self.tabs.len();
+        let arm = !self.layout.too_small;
         let Some(d) = self.tab_drag.as_mut().filter(|d| d.keys) else { return false };
         let plain = k.modifiers.difference(KeyModifiers::SHIFT).is_empty();
         match k.code {
             KeyCode::Char('h') | KeyCode::Left if plain => {
                 if d.slot > 0 {
                     d.slot -= 1;
-                    self.tab_slide.armed = true;
+                    self.tab_slide.armed = arm;
                 }
             }
             KeyCode::Char('l') | KeyCode::Right if plain => {
                 if d.slot + 1 < n {
                     d.slot += 1;
-                    self.tab_slide.armed = true;
+                    self.tab_slide.armed = arm;
                 }
             }
             KeyCode::Enter if plain => {
