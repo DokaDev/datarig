@@ -135,8 +135,27 @@ pub(crate) enum Endpoint {
     Socket(Socket),
 }
 
-/// datarig: the stream of [`Endpoint::Custom`], printed without its contents.
-pub(crate) struct CustomEndpoint(pub(crate) Box<dyn CustomStream>);
+/// datarig: the stream of [`Endpoint::Custom`], printed without its contents, and once the
+/// caller encrypted it ([`StreamTls`]), whether the password itself may be sent over it
+/// (`Some(password_ok)`; `None`: not encrypted).
+pub(crate) struct CustomEndpoint(pub(crate) Box<dyn CustomStream>, pub(crate) Option<bool>);
+
+/// datarig: TLS over a stream the caller opened ([`crate::Conn::connect_with_stream_tls`]).
+/// When the server offers it (`CLIENT_SSL`) the connection sends its SSLRequest and hands the
+/// stream to `upgrade`, which does the handshake and gives back the stream to speak MySQL's
+/// protocol over; when it does not, the connection goes on unencrypted, or fails with
+/// [`crate::DriverError::NoClientSslFlagFromServer`] when `required`. `password_ok`: a
+/// `caching_sha2_password` login that needs the password itself may send it over the encrypted
+/// stream (else it fails with [`crate::DriverError::PasswordOverUnverifiedTls`]: the caller did
+/// not check who is at the other end).
+pub struct StreamTls {
+    pub required: bool,
+    pub password_ok: bool,
+    pub upgrade: Box<dyn FnOnce(Box<dyn CustomStream>) -> UpgradeFuture + Send>,
+}
+
+/// datarig: what [`StreamTls::upgrade`] returns.
+pub type UpgradeFuture = Pin<Box<dyn Future<Output = io::Result<Box<dyn CustomStream>>> + Send>>;
 
 impl fmt::Debug for CustomEndpoint {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -413,7 +432,7 @@ impl Stream {
         Stream {
             closed: false,
             codec: Box::new(Framed::new(
-                Endpoint::Custom(CustomEndpoint(stream)),
+                Endpoint::Custom(CustomEndpoint(stream, None)),
                 PacketCodec::default(),
             ))
             .into(),
@@ -427,6 +446,38 @@ impl Stream {
 
     pub(crate) fn set_tcp_nodelay(&self, val: bool) -> io::Result<()> {
         self.codec.as_ref().unwrap().get_ref().set_tcp_nodelay(val)
+    }
+
+    /// datarig: hand a stream the caller opened to `tls.upgrade` (right after the SSLRequest,
+    /// when nothing more of the server's is read yet) and go on over the stream it gives back.
+    pub(crate) async fn upgrade_custom(&mut self, tls: StreamTls) -> crate::error::Result<()> {
+        let codec = self.codec.take().unwrap();
+        let parts = codec.into_parts();
+        if !parts.read_buf.is_empty() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "the server sent data before the TLS handshake",
+            )
+            .into());
+        }
+        let io = match parts.io {
+            Endpoint::Custom(CustomEndpoint(stream, None)) => {
+                let stream = (tls.upgrade)(stream).await?;
+                Endpoint::Custom(CustomEndpoint(stream, Some(tls.password_ok)))
+            }
+            _ => return Err(crate::DriverError::NoClientSslFlagFromServer.into()),
+        };
+        self.codec = Some(Box::new(Framed::new(io, parts.codec)));
+        Ok(())
+    }
+
+    /// datarig: whether a stream the caller opened is encrypted, and then whether the password
+    /// may be sent over it (`None`: not encrypted, or not such a stream).
+    pub(crate) fn custom_tls(&self) -> Option<bool> {
+        match self.codec.as_ref()?.get_ref() {
+            Endpoint::Custom(CustomEndpoint(_, tls)) => *tls,
+            _ => None,
+        }
     }
 
     pub(crate) async fn make_secure(

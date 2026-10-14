@@ -194,6 +194,12 @@ pub enum DriverError {
     )]
     PasswordTooLongForKey { max: usize },
 
+    /// datarig: a `caching_sha2_password` login needed the password itself, over a stream the
+    /// caller encrypted without checking who is at the other end (`StreamTls::password_ok`):
+    /// nothing about the password was sent.
+    #[error("the server asked for the password over a TLS connection whose server was not verified")]
+    PasswordOverUnverifiedTls,
+
     /// datarig: the server's public key (the one the options give, or the one the server sent)
     /// is not an RSA public key in PEM of 2048 bits or more (`crate::server_public_key_ok`).
     #[error("the server's public key is not an RSA public key in PEM of 2048 bits or more")]

@@ -4,7 +4,8 @@
 #   channel), as `Conn::new` makes one over its own socket;
 # - the client capabilities: no multi-statements and no `LOAD DATA LOCAL`, and the server's
 #   session state tracking asked for;
-# - `Conn::is_mariadb`.
+# - `Conn::is_mariadb`;
+# - `Conn::connect_with_stream_tls`: TLS over such a stream, the handshake the caller's.
 # Every other upstream API behaves as published. This file lost the `[[test]]` targets, the
 # `[dev-dependencies]` and `[profile.bench]`; `Cargo.toml.orig` is upstream's. See ../README.md
 # (vendor/README.md) for the full list and how to re-sync.

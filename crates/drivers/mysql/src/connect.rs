@@ -3,7 +3,6 @@
 //! canceller (`KILL QUERY` on a connection of its own).
 
 use crate::link::Link;
-use crate::route::Route;
 use crate::session::{self, CONNECT_GUARD, Killer, Opened, Settings, Target, connect_error, my_error};
 use datarig_core::driver::{
     Canceller, Capabilities, ConnectOptions, DbCommand, DbError, DbEvent, Driver, Hierarchy, PingError, PingInfo,
@@ -13,7 +12,6 @@ use datarig_core::fault::Fault;
 use datarig_core::panics::caught;
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
-use datarig_core::tls::Encryption;
 use datarig_core::transport::DialerRef;
 use futures::FutureExt;
 use futures::future::BoxFuture;
@@ -109,27 +107,25 @@ impl Driver for MyDriver {
         let cfg = cfg.clone();
         Box::pin(async move {
             let target = Target::of(&cfg).map_err(PingError::Failed)?;
-            let route = Route::new(&target.host, target.port, dialer);
+            let route = target.route(dialer).map_err(PingError::Failed)?;
             let opts = target.opts(target.database.as_deref(), "datarig-test", &route);
             let start = Instant::now();
             let attempt = async {
                 let stream = route.dial(timeout).await?;
-                let (_wire, stream) = crate::wire::Wire::new(stream);
-                let mut conn = mysql_async::Conn::connect_with_stream(opts, Box::new(stream))
-                    .await
-                    .map_err(|e| connect_error(&e).0)?;
+                let (_wire, conn, encryption) = session::login(&route, stream, opts).await;
+                let mut conn = conn.map_err(|e| connect_error(&e).0)?;
                 let server = session::Server { version: conn.server_version(), mariadb: conn.is_mariadb() };
                 let version: Result<Option<String>, _> = match server.check() {
                     Ok(()) => conn.query_first("SELECT VERSION()").await.map_err(|e| my_error(&e)),
                     Err(e) => Err(e),
                 };
                 session::quit(conn).await;
-                Ok::<_, DbError>(version?.unwrap_or_else(|| server.label()))
+                Ok::<_, DbError>((version?.unwrap_or_else(|| server.label()), encryption))
             };
             // A panic in the attempt fails the test like any other error.
             match AssertUnwindSafe(caught(tokio::time::timeout(timeout, attempt))).catch_unwind().await {
-                Ok(Ok(Ok(server_version))) => {
-                    Ok(PingInfo { server_version, latency: start.elapsed(), encryption: Encryption::Plain })
+                Ok(Ok(Ok((server_version, encryption)))) => {
+                    Ok(PingInfo { server_version, latency: start.elapsed(), encryption })
                 }
                 Ok(Ok(Err(e))) => Err(PingError::Failed(e)),
                 Ok(Err(_)) => Err(PingError::Timeout(timeout)),
@@ -178,7 +174,13 @@ async fn run_session(
     canceller: Arc<MyCanceller>,
     connected: &AtomicBool,
 ) {
-    let route = Route::new(&target.host, target.port, opts.dialer.clone());
+    let route = match target.route(opts.dialer.clone()) {
+        Ok(route) => route,
+        Err(error) => {
+            let _ = events.send(DbEvent::ConnectFailed { error, auth: false });
+            return;
+        }
+    };
     let database = start_database(&target, &opts);
     let my_opts = target.opts(database.as_deref(), &opts.application_name, &route);
     let select_limit = (role == SessionRole::Query).then(|| opts.page_size as u64 + 1);
@@ -196,7 +198,7 @@ async fn run_session(
             return;
         }
     };
-    let Opened { conn, wire, server, tracked, id } = opened;
+    let Opened { conn, wire, encryption, server, tracked, id } = opened;
     // The cancel logs in as the session does, without a database (one could be dropped since).
     let kill_opts = target.opts(None, &opts.application_name, &route);
     let killer = Killer::new(route, kill_opts, id);
@@ -204,7 +206,7 @@ async fn run_session(
         *g = Some(killer);
     }
     connected.store(true, Ordering::SeqCst);
-    let _ = events.send(DbEvent::Encryption(Encryption::Plain));
+    let _ = events.send(DbEvent::Encryption(encryption));
     let _ = events.send(DbEvent::Connected);
     // The mode the session starts in; the metadata session's is what a new session of this
     // account starts in, which the app checks a tab's first run in.
