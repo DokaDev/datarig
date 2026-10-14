@@ -15,7 +15,7 @@
 use super::action::{Action, LangSetting};
 use datarig_core::config::{
     AutoPairs, ClipboardSetting, CommandsPosition, CopyHeader, CursorShape, DetailView, EditorClipboard, FormatIndent,
-    IconsSetting, KeychainAccess, KeywordCase, RunHints, SizeHeat,
+    IconsSetting, KeychainAccess, KeywordCase, RunHints, SizeHeat, YankFlash,
 };
 use datarig_core::i18n::Label;
 use datarig_core::secret::{DefaultSource, SourceKind};
@@ -376,6 +376,7 @@ pub enum Setting {
     RunHints(RunHints),
     KeychainAccess(KeychainAccess),
     SizeHeat(SizeHeat),
+    YankFlash(YankFlash),
 }
 
 /// The categories of the settings screen, in its order.
@@ -614,6 +615,16 @@ pub const SETTINGS: &[SettingSpec] = &[
             ("3", Setting::SizeHeat(SizeHeat::Three), Label::SettingSizeHeatThree),
             ("5", Setting::SizeHeat(SizeHeat::Five), Label::SettingSizeHeatFive),
             ("off", Setting::SizeHeat(SizeHeat::Off), Label::SettingSizeHeatOff),
+        ]),
+    },
+    SettingSpec {
+        key: "ui.yank_flash",
+        label: Label::SettingYankFlash,
+        about: Label::SettingYankFlashAbout,
+        group: SettingGroup::Results,
+        values: Values::Fixed(&[
+            ("on", Setting::YankFlash(YankFlash::On), Label::SettingYankFlashOn),
+            ("off", Setting::YankFlash(YankFlash::Off), Label::SettingYankFlashOff),
         ]),
     },
 ];

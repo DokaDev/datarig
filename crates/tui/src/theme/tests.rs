@@ -367,6 +367,7 @@ fn every_token_of_a_theme_can_be_set_by_name() {
         size_hot: _,
         size_mild: _,
         size_heated: _,
+        yank_flash: _,
         chart_1: _,
         chart_2: _,
         chart_3: _,
@@ -376,7 +377,7 @@ fn every_token_of_a_theme_can_be_set_by_name() {
         dim: _,
     } = DARK;
     // Every field above but `dim`.
-    assert_eq!(COLOR_TOKENS.len() + STYLE_TOKENS.len(), 55);
+    assert_eq!(COLOR_TOKENS.len() + STYLE_TOKENS.len(), 56);
     let mut th = DARK;
     for (i, name) in COLOR_TOKENS.iter().enumerate() {
         *color_token(&mut th, name).unwrap() = Color::Indexed(i as u8);
@@ -385,14 +386,15 @@ fn every_token_of_a_theme_can_be_set_by_name() {
         *style_token(&mut th, name).unwrap() = Style::new().bg(Color::Indexed(100 + i as u8));
     }
     assert_eq!((th.bg, th.mode_fg), (Color::Indexed(0), Color::Indexed(22)));
-    assert_eq!(th.plan_misestimate, Style::new().bg(Color::Indexed(121)));
+    assert_eq!(th.yank_flash, Style::new().bg(Color::Indexed(104)));
+    assert_eq!(th.plan_misestimate, Style::new().bg(Color::Indexed(122)));
     assert_eq!(
         (th.size_warm, th.size_hot),
-        (Style::new().bg(Color::Indexed(122)), Style::new().bg(Color::Indexed(123)))
+        (Style::new().bg(Color::Indexed(123)), Style::new().bg(Color::Indexed(124)))
     );
     assert_eq!(
         (th.size_mild, th.size_heated),
-        (Style::new().bg(Color::Indexed(124)), Style::new().bg(Color::Indexed(125)))
+        (Style::new().bg(Color::Indexed(125)), Style::new().bg(Color::Indexed(126)))
     );
     assert_eq!(th.chart(), [23, 24, 25, 26, 27, 28].map(Color::Indexed));
     assert!(color_token(&mut th, "selection").is_none() && style_token(&mut th, "bg").is_none());
@@ -886,5 +888,45 @@ fn hover_is_a_background_apart_from_the_surfaces_and_the_selections_in_every_the
             let k = contrast(c, h);
             assert!(k >= min, "{name}: {c:?} on the hover: {k:.2}");
         }
+    }
+}
+
+/// Copied cells flash on a background of their own with a text color of their own (the cell's
+/// NULL or muted text would not read on it): never underlined; on the terminal theme black on
+/// the yellow, apart from the reversed selection (the cursor's cell flashes too), the range and
+/// the hover; on the others a background that stands apart (10 ΔE or more) from the
+/// background, both surfaces, the cursor line, the selection (focused or not), a selected range
+/// and the hover, also in 256 colors, with its text reading on it at 4.5:1.
+#[test]
+fn copied_cells_flash_apart_from_every_grid_background_in_every_theme() {
+    for (name, th) in BUILTINS.iter().copied() {
+        let s = th.yank_flash;
+        assert!(s.bg.is_some() && s.fg.is_some(), "{name}: {s:?}");
+        assert!(!s.add_modifier.contains(Modifier::UNDERLINED), "{name}");
+    }
+    let t = &TERMINAL;
+    assert_eq!((t.yank_flash.fg, t.yank_flash.bg), (Some(Color::Black), Some(Color::Yellow)));
+    for other in [t.selection, t.selection_unfocused(), t.range, t.cursor_line, t.hover] {
+        assert_ne!(t.yank_flash, other);
+        assert_ne!(t.yank_flash.bg, other.bg, "{other:?}");
+    }
+    for (name, th) in rgb_themes() {
+        let f = bg(th.yank_flash);
+        for other in [
+            th.bg,
+            th.surface,
+            th.surface_alt,
+            bg(th.cursor_line),
+            bg(th.selection),
+            bg(th.selection_unfocused()),
+            bg(th.range),
+            bg(th.hover),
+        ] {
+            let d = delta_e(f, other);
+            assert!(d >= 10.0, "{name}: the flash and {other:?} are too close ({d:.2})");
+            assert_ne!(xterm256(f), xterm256(other), "{name}: the flash and {other:?} in 256 colors");
+        }
+        let k = contrast(fg(th.yank_flash), f);
+        assert!(k >= 4.5, "{name}: text on the flash: {k:.2}");
     }
 }

@@ -74,8 +74,9 @@ fn set_accepts_known_settings_and_values_only() {
     );
     assert_eq!(
         setting_keys(),
-        "language|icons|secrets.default_source|commands.position|detail_view|clipboard|copy_header|editor.cursor_shape|editor.clipboard|theme|editor.format_keyword_case|editor.format_indent|editor.auto_pairs|editor.run_hints|secrets.macos_keychain_access|explorer.size_heat"
+        "language|icons|secrets.default_source|commands.position|detail_view|clipboard|copy_header|editor.cursor_shape|editor.clipboard|theme|editor.format_keyword_case|editor.format_indent|editor.auto_pairs|editor.run_hints|secrets.macos_keychain_access|explorer.size_heat|ui.yank_flash"
     );
+    assert_eq!(set("ui.yank_flash=off"), Ok(Setting::YankFlash(datarig_core::config::YankFlash::Off)));
     assert_eq!(set("editor.run_hints=off"), Ok(Setting::RunHints(datarig_core::config::RunHints::Off)));
     assert_eq!(set("explorer.size_heat=off"), Ok(Setting::SizeHeat(datarig_core::config::SizeHeat::Off)));
     assert_eq!(set("explorer.size_heat=5"), Ok(Setting::SizeHeat(datarig_core::config::SizeHeat::Five)));
@@ -144,7 +145,7 @@ fn completes_profile_names() {
 #[test]
 fn completes_setting_keys_then_values() {
     let got = |arg: &str| complete_arg(ArgKind::Setting, arg, &[]);
-    assert_eq!(got(""), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15].map(ArgCompletion::SetKey));
+    assert_eq!(got(""), [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16].map(ArgCompletion::SetKey));
     assert_eq!(got("c"), [3, 5, 6].map(ArgCompletion::SetKey));
     assert_eq!(got("commands.position="), [ArgCompletion::SetValue(3, 0), ArgCompletion::SetValue(3, 1)]);
     assert_eq!(got("sec"), [ArgCompletion::SetKey(2), ArgCompletion::SetKey(14)]);

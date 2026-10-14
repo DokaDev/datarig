@@ -66,6 +66,7 @@ pub mod tabs;
 pub mod themes;
 pub mod tunnel;
 mod update;
+pub mod yank_flash;
 
 pub use conn::{
     AUX_IDLE, AuxMeta, CHECKS_RETRY, ChecksCache, Connecting, ConnectionManager, Keys, NodeState, ProfileConn, Queued,
@@ -531,6 +532,8 @@ pub struct App {
     /// When Hangul was last read as QWERTY keys (the status bar shows the Hangul/Latin
     /// indicator `status.hangul` for a while).
     pub hangul_hint: Option<Instant>,
+    /// Cells a copy just took from the result grid, flashing (see [`yank_flash`]).
+    pub copy_flash: Option<yank_flash::CopyFlash>,
     pub lang_setting: LangSetting,
     /// `[secrets] default_source`: the password source a new profile starts with.
     pub default_source: DefaultSource,
@@ -884,6 +887,7 @@ impl App {
             idle_event: false,
             keymap_notices: keymap_issues.iter().map(issue_msg).collect(),
             hangul_hint: None,
+            copy_flash: None,
             lang_setting: LangSetting::parse(&cfg.language),
             default_source: cfg.default_source,
             prefs: cfg.prefs,
@@ -1564,6 +1568,7 @@ impl App {
             || self.hangul_hint.is_some()
             || self.leader_at.is_some()
             || self.quitting.is_some()
+            || self.copy_flash.is_some()
             || self.tabs.iter().any(|t| {
                 matches!(t.exec.paging, Paging::Open { in_block: false, .. }) && self.paging_timeout(t).is_some()
             })
@@ -1582,9 +1587,10 @@ impl App {
     /// When the event loop should next run [`App::on_tick`] (no timer while
     /// nothing waits for time). While something counts in tenths of a second or animates (a
     /// running statement's time, a connection attempt, a debounce, a key sequence, a flash, the
-    /// quit grace): [`FINE_TICK`] from `now`. Otherwise the earliest deadline: a tab's or the
-    /// workspace's autosave, an open portal's idle close, and the next second the active tab's
-    /// countdown shows. `None`: nothing waits.
+    /// quit grace): [`FINE_TICK`] from `now`, or the end of a copy's flash when that is sooner.
+    /// Otherwise the earliest deadline: a tab's or the workspace's autosave, an open portal's
+    /// idle close, the end of a copy's flash, and the next second the active tab's countdown
+    /// shows. `None`: nothing waits.
     pub fn next_tick(&self, now: Instant) -> Option<Instant> {
         if !self.needs_tick() {
             return None;
@@ -1597,11 +1603,17 @@ impl App {
             || self.leader_at.is_some()
             || self.quitting.is_some()
             || self.conn_test.as_ref().is_some_and(|t| t.state == TestState::Running);
+        // A copy's flash ends at its own deadline (one wakeup), also between fine ticks.
+        let flash = self.copy_flash_due();
         if fine {
-            return Some(now + FINE_TICK);
+            let tick = flash.map_or(now + FINE_TICK, |f| f.min(now + FINE_TICK));
+            return Some(tick.max(now + Duration::from_millis(1)));
         }
         let mut next: Option<Instant> = self.workspace_due;
         let mut at = |t: Instant| next = Some(next.map_or(t, |n| n.min(t)));
+        if let Some(due) = flash {
+            at(due);
+        }
         for t in self.tabs.iter() {
             if let Some(due) = t.doc.save_due {
                 at(due);
@@ -1672,6 +1684,7 @@ impl App {
         if self.hangul_hint.is_some_and(|t| now.saturating_duration_since(t) >= TRANSIENT) {
             self.hangul_hint = None;
         }
+        self.copy_flash_tick(now);
         // An attempt opening its tunnel is not timed here (each step of the tunnel has a limit
         // of its own, which stops while the user answers a question).
         let late: Vec<ProfileId> = self

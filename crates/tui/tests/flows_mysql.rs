@@ -776,3 +776,31 @@ fn values_complete_in_both_mysql_strings() {
     h.settle();
     assert_eq!(labels(&h), Some(vec!["`status`".to_string()]), "a name, quoted as MySQL writes it");
 }
+
+/// A copy as SQL INSERT flashes only the columns it wrote: a generated column left out of it
+/// does not flash; a copy of every column flashes them all.
+#[test]
+fn an_insert_copy_flashes_only_the_columns_it_wrote() {
+    use datarig_core::driver::keys::Generated;
+    let mut h = mysql();
+    let clip = FakeClipboard::attach(&mut h, false, &[]);
+    h.db(DbEvent::Connected);
+    h.tab_db(0, session("SYSTEM", "utf8mb4"));
+    let mut keys = items_keys();
+    keys.set_generated(1, 4, Generated::Expression);
+    h.db(DbEvent::Keys(Ok(keys)));
+    items_result(&mut h, "Items", "7", "x", 4);
+    h.command("copy insert");
+    let copied = clip.last().unwrap_or_default();
+    assert!(copied.starts_with("INSERT INTO `shop`.`Items` (`id`, `bin`, `bt`) VALUES"), "{copied}");
+    let flash = |h: &Harness| h.app.copy_flash.as_ref().map(|f| (f.rows.clone(), f.cols.clone()));
+    assert_eq!(flash(&h), Some((0..1, vec![0, 1, 2])), "not the generated `txt`");
+    // A range from the second column: the columns of the result it wrote.
+    h.keys("lvll");
+    h.keys(" ryi");
+    let copied = clip.last().unwrap_or_default();
+    assert!(copied.starts_with("INSERT INTO `shop`.`Items` (`bin`, `bt`) VALUES"), "{copied}");
+    assert_eq!(flash(&h), Some((0..1, vec![1, 2])));
+    h.command("copy csv all");
+    assert_eq!(flash(&h), Some((0..1, vec![0, 1, 2, 3])));
+}
