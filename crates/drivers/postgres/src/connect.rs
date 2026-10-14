@@ -1,12 +1,14 @@
-//! Opening sessions and test connections: profile -> `tokio_postgres::Config`, auth error
-//! detection, error text. A session with a dialer (`ConnectOptions::dialer`, a tunnel) reaches
-//! the server through a stream the dialer opens to the profile's host and port
-//! (`Config::connect_raw`), and so do its cancel requests (`CancelToken::cancel_query_raw`).
+//! Opening sessions and test connections: profile -> `tokio_postgres::Config` and its TLS
+//! ([`PgTls`]), auth error detection, error text. A session with a dialer
+//! (`ConnectOptions::dialer`, a tunnel) reaches the server through a stream the dialer opens to
+//! the profile's host and port (`Config::connect_raw`), and so do its cancel requests
+//! (`CancelToken::cancel_query_raw`), each with the session's TLS.
 
 use crate::link::Link;
 use crate::meta::meta_loop;
 use crate::query::query_loop;
 use crate::route::{Cancel, Route, route};
+use crate::tls::{PgTls, TlsError};
 use datarig_core::driver::{
     Canceller, Capabilities, ConnectOptions, DbCommand, DbError, DbEvent, Driver, ExplainFormat, Hierarchy, PingError,
     PingInfo, Session, SessionRole,
@@ -14,7 +16,7 @@ use datarig_core::driver::{
 use datarig_core::fault::{Fault, FaultKind};
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::sql::dialect::{Dialect, Language};
-use datarig_core::tls::Encryption;
+use datarig_core::tls::{TlsProblem, TlsSettings};
 use datarig_core::transport::DialerRef;
 use futures::future::BoxFuture;
 use std::str::FromStr;
@@ -24,9 +26,9 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 use tokio::task::AbortHandle;
-use tokio_postgres::config::SslMode;
+use tokio_postgres::config::{Host, SslNegotiation};
 use tokio_postgres::error::SqlState;
-use tokio_postgres::{Client, Config, NoTls, SimpleQueryMessage};
+use tokio_postgres::{Client, Config, SimpleQueryMessage};
 
 pub struct PgDriver;
 
@@ -83,7 +85,7 @@ impl Driver for PgDriver {
                 Err(error) => {
                     let _ = events.send(DbEvent::ConnectFailed { error, auth: false });
                 }
-                Ok(mut pgcfg) => {
+                Ok((mut pgcfg, tls)) => {
                     pgcfg.application_name(&opts.application_name);
                     if opts.read_only {
                         read_only(&mut pgcfg);
@@ -101,7 +103,7 @@ impl Driver for PgDriver {
                             return;
                         }
                     };
-                    run_session(pgcfg, route, role, opts, events, rx, c2).await
+                    run_session(pgcfg, tls, route, role, opts, events, rx, c2).await
                 }
             }
         });
@@ -116,18 +118,18 @@ impl Driver for PgDriver {
     ) -> BoxFuture<'static, Result<PingInfo, PingError>> {
         let cfg = pg_config(cfg);
         Box::pin(async move {
-            let mut pgcfg = cfg.map_err(PingError::Failed)?;
+            let (mut pgcfg, tls) = cfg.map_err(PingError::Failed)?;
             pgcfg.connect_timeout(timeout);
             let route = dialer.map(|d| route(&pgcfg, d)).transpose().map_err(PingError::Failed)?;
             let start = Instant::now();
             let attempt = async {
-                let (client, _, _) = open(&pgcfg, route.as_ref()).await.map_err(|(e, _)| e)?;
+                let (client, _, _) = open(&pgcfg, &tls, route.as_ref()).await.map_err(|(e, _)| e)?;
                 let row = client.query_typed_one("SHOW server_version", &[]).await.map_err(|e| db_error(&e))?;
                 Ok::<_, DbError>(row.get::<_, String>(0))
             };
             match tokio::time::timeout(timeout, attempt).await {
                 Ok(Ok(server_version)) => {
-                    Ok(PingInfo { server_version, latency: start.elapsed(), encryption: Encryption::Plain })
+                    Ok(PingInfo { server_version, latency: start.elapsed(), encryption: tls.encryption() })
                 }
                 Ok(Err(e)) => Err(PingError::Failed(e)),
                 Err(_) => Err(PingError::Timeout(timeout)),
@@ -136,24 +138,72 @@ impl Driver for PgDriver {
     }
 }
 
-fn pg_config(c: &ConnectionConfig) -> Result<Config, DbError> {
+/// The profile's connection settings and its TLS. The TLS settings are datarig's own
+/// (`ConnectionConfig::tls`): a DSN's TLS parameters are read there and left out of what
+/// tokio-postgres parses. A connection to Unix sockets only is never encrypted (PostgreSQL has
+/// no TLS on them; libpq ignores `sslmode` there too): only settings that cannot be read are an
+/// error there. A server named by its address alone (`hostaddr`, no `host`) has the certificate
+/// checked against that address, as the tunnel's route does. `sslnegotiation=direct` (a
+/// handshake without the SSLRequest) is not supported.
+fn pg_config(c: &ConnectionConfig) -> Result<(Config, PgTls), DbError> {
+    let settings = c.tls();
     let mut cfg = if let Some(dsn) = &c.dsn {
-        Config::from_str(dsn).map_err(|e| DbError::Settings(Fault::other(chain(&e))))?
+        Config::from_str(&without_tls_params(dsn)).map_err(|e| DbError::Settings(Fault::other(chain(&e))))?
     } else {
         let mut cfg = Config::new();
         cfg.host(&c.host).port(c.port).user(&c.user).dbname(&c.database);
         if !c.password.is_empty() {
             cfg.password(&c.password);
         }
-        cfg.ssl_mode(match c.sslmode.as_str() {
-            "disable" => SslMode::Disable,
-            "require" | "verify-ca" | "verify-full" => SslMode::Require,
-            _ => SslMode::Prefer,
-        });
         cfg
     };
+    if cfg.get_ssl_negotiation() == SslNegotiation::Direct {
+        let why = "sslnegotiation=direct is not supported: TLS starts with an SSLRequest";
+        return Err(DbError::Settings(Fault::other(why)));
+    }
+    let sockets_only = !cfg.get_hosts().is_empty()
+        && cfg.get_hostaddrs().is_empty()
+        && cfg.get_hosts().iter().all(|h| !matches!(h, Host::Tcp(_)));
+    let tls = match (sockets_only, settings) {
+        (_, Err(e @ (TlsProblem::UnknownMode(_) | TlsProblem::DsnUnreadable))) => return Err(DbError::Tls(e)),
+        (true, _) => PgTls::new(TlsSettings::plain()),
+        (false, settings) => PgTls::new(settings.map_err(DbError::Tls)?),
+    };
+    if cfg.get_hosts().is_empty() {
+        for addr in cfg.get_hostaddrs().to_vec() {
+            cfg.host(addr.to_string());
+        }
+    }
+    cfg.ssl_mode(tls.ssl_mode());
     cfg.application_name("datarig").connect_timeout(Duration::from_secs(5));
-    Ok(cfg)
+    Ok((cfg, tls))
+}
+
+/// The TLS parameters a DSN may carry (datarig reads them itself).
+const TLS_PARAMS: [&str; 4] = ["sslmode", "sslrootcert", "sslcert", "sslkey"];
+
+/// A DSN without its TLS parameters, otherwise as written: a URL's query pairs (also of a URL
+/// with several hosts), a `key=value` string's pairs.
+fn without_tls_params(text: &str) -> String {
+    use datarig_core::profile::dsn;
+    if dsn::is_url(text) {
+        let Some((head, query)) = text.trim().split_once('?') else { return text.to_string() };
+        let decoded = |k: &str| dsn::url_params(k).and_then(|p| p.into_iter().next()).map(|(k, _)| k);
+        let kept: Vec<&str> = query
+            .split('&')
+            .filter(|pair| {
+                let key = pair.split_once('=').map_or(*pair, |(k, _)| k);
+                !decoded(&format!("?{key}")).is_some_and(|k| TLS_PARAMS.contains(&k.as_str()))
+            })
+            .collect();
+        return if kept.is_empty() { head.to_string() } else { format!("{head}?{}", kept.join("&")) };
+    }
+    let Some(pairs) = dsn::conninfo(text) else { return text.to_string() };
+    let mut out = text.to_string();
+    for p in pairs.iter().rev().filter(|p| TLS_PARAMS.contains(&p.key.as_str())) {
+        out.replace_range(p.span.clone(), "");
+    }
+    out
 }
 
 /// The startup setting that makes every transaction of the session read-only unless it asks
@@ -288,20 +338,22 @@ fn is_auth_error(e: &tokio_postgres::Error) -> bool {
 /// handle that closes it (aborts the task that drives it).
 type Opened = (Client, oneshot::Receiver<DbError>, AbortHandle);
 
-/// Open a connection, directly or through `route`.
-async fn open(cfg: &Config, route: Option<&Route>) -> Result<Opened, (DbError, bool)> {
+/// Open a connection, directly or through `route`, with `tls`.
+async fn open(cfg: &Config, tls: &PgTls, route: Option<&Route>) -> Result<Opened, (DbError, bool)> {
     let (done_tx, done_rx) = oneshot::channel();
     let fail = |e: tokio_postgres::Error| (db_error(&e), is_auth_error(&e));
     let (client, conn) = match route {
         None => {
-            let (client, conn) = cfg.connect(NoTls).await.map_err(fail)?;
+            let (client, conn) = cfg.connect(tls.clone()).await.map_err(fail)?;
             (client, tokio::spawn(watch(conn, done_tx)))
         }
         Some(route) => {
             // `connect_timeout` covers the socket of a direct connect; here, the dial.
             let timeout = cfg.get_connect_timeout().copied().unwrap_or(CONNECT_GUARD);
+            // The certificate names the profile's host, not the tunnel's end.
+            let handshake = tls.to(route.name()).map_err(|e| (DbError::Tls(e.0), false))?;
             let stream = route.dial(timeout).await.map_err(|e| (e, false))?;
-            let (client, conn) = cfg.connect_raw(stream, NoTls).await.map_err(fail)?;
+            let (client, conn) = cfg.connect_raw(stream, handshake).await.map_err(fail)?;
             (client, tokio::spawn(watch(conn, done_tx)))
         }
     };
@@ -324,6 +376,7 @@ where
 #[allow(clippy::too_many_arguments)]
 async fn run_session(
     cfg: Config,
+    tls: PgTls,
     route: Option<Route>,
     role: SessionRole,
     opts: ConnectOptions,
@@ -334,7 +387,7 @@ async fn run_session(
     // `connect_timeout` only covers the socket; a server that accepts TCP but never answers
     // would otherwise keep this task alive forever (the UI gives up earlier, see
     // `app::CONNECT_TIMEOUT`).
-    let Ok(opened) = tokio::time::timeout(CONNECT_GUARD, open(&cfg, route.as_ref())).await else {
+    let Ok(opened) = tokio::time::timeout(CONNECT_GUARD, open(&cfg, &tls, route.as_ref())).await else {
         let _ = events.send(DbEvent::ConnectFailed { error: DbError::NoAnswer(CONNECT_GUARD), auth: false });
         return;
     };
@@ -362,7 +415,7 @@ async fn run_session(
             }
         },
     };
-    let _ = events.send(DbEvent::Encryption(Encryption::Plain));
+    let _ = events.send(DbEvent::Encryption(tls.encryption()));
     let _ = events.send(DbEvent::Connected);
     if default_ignored {
         let _ = events.send(DbEvent::ReadOnlyPerTransaction);
@@ -380,7 +433,7 @@ async fn run_session(
     match role {
         SessionRole::Meta => meta_loop(client, Link::new(rx, ended, conn, None), events).await,
         SessionRole::Query => {
-            let cancel = Cancel::new(client.cancel_token(), route.clone());
+            let cancel = Cancel::new(client.cancel_token(), route.clone(), tls.clone());
             let link = Link::new(rx, ended, conn, Some(cancel.unsent.clone()));
             if let Ok(mut g) = canceller.0.lock() {
                 *g = Some(cancel.clone());
@@ -400,6 +453,9 @@ async fn run_session(
 /// fault (a host name that did not resolve, else the io kind when the cause is an io error;
 /// the whole chain as its detail).
 pub(crate) fn db_error(e: &tokio_postgres::Error) -> DbError {
+    if let Some(problem) = tls_problem(e) {
+        return DbError::Tls(problem);
+    }
     if let Some(db) = e.as_db_error() {
         let mut s = format!("{}: {}", db.severity(), db.message());
         if let Some(d) = db.detail() {
@@ -424,6 +480,27 @@ pub(crate) fn db_error(e: &tokio_postgres::Error) -> DbError {
         src = inner.source();
     }
     DbError::Connection(Fault::new(kind, chain(e)))
+}
+
+/// The TLS problem behind an error: the handshake's (or getting ready for it), a server that
+/// answered it has no TLS when the mode needs it, or a TLS alert on the connection afterwards (a
+/// server refusing the client certificate says so after a TLS 1.3 handshake, on the first read).
+fn tls_problem(e: &tokio_postgres::Error) -> Option<TlsProblem> {
+    let mut src = std::error::Error::source(e);
+    while let Some(inner) = src {
+        if let Some(t) = inner.downcast_ref::<TlsError>() {
+            return Some(t.0.clone());
+        }
+        // tokio-postgres's own words when the server answers the SSLRequest with `N`.
+        if inner.to_string() == "server does not support TLS" {
+            return Some(TlsProblem::Unsupported);
+        }
+        if let Some(io) = inner.downcast_ref::<std::io::Error>() {
+            return datarig_tls::problem_in_io(io, "");
+        }
+        src = inner.source();
+    }
+    None
 }
 
 /// Whether `io` is a failed name lookup (getaddrinfo). The standard library reports one only in

@@ -5,6 +5,7 @@
 //! session's config names).
 
 use crate::connect::db_error;
+use crate::tls::PgTls;
 use datarig_core::driver::DbError;
 use datarig_core::fault::Fault;
 use datarig_core::transport::{BoxedStream, DialError, DialerRef};
@@ -13,7 +14,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::sync::watch;
 use tokio_postgres::config::Host;
-use tokio_postgres::{CancelToken, Config, NoTls};
+use tokio_postgres::{CancelToken, Config};
 
 /// Where a session reaches its server through a dialer: the dialer and the server's host and
 /// port (as the far end of the transport sees them).
@@ -22,9 +23,17 @@ pub(crate) struct Route {
     dialer: DialerRef,
     host: String,
     port: u16,
+    /// The name the server's certificate is checked against: the profile's host (the
+    /// `hostaddr` only when there is no host name).
+    name: String,
 }
 
 impl Route {
+    /// The name the server's certificate is checked against.
+    pub(crate) fn name(&self) -> &str {
+        &self.name
+    }
+
     /// A new stream to the server, within `timeout`.
     pub(crate) async fn dial(&self, timeout: Duration) -> Result<BoxedStream, DbError> {
         match tokio::time::timeout(timeout, self.dialer.dial(&self.host, self.port)).await {
@@ -54,7 +63,11 @@ pub(crate) fn route(cfg: &Config, dialer: DialerRef) -> Result<Route, DbError> {
         [p] => *p,
         _ => return Err(unusable("several ports")),
     };
-    Ok(Route { dialer, host, port })
+    let name = match cfg.get_hosts() {
+        [Host::Tcp(h)] => h.clone(),
+        _ => host.clone(),
+    };
+    Ok(Route { dialer, host, port, name })
 }
 
 /// How long a cancel request may take to reach the server (its stream through a dialer
@@ -66,13 +79,15 @@ pub const CANCEL_DIAL: Duration = Duration::from_secs(10);
 pub(crate) struct Cancel {
     pub(crate) token: CancelToken,
     pub(crate) route: Option<Route>,
+    /// The session's TLS: a cancel request is a connection of its own, made as the session's.
+    pub(crate) tls: PgTls,
     /// The user's cancels that could not be sent, for the session task to see.
     pub(crate) unsent: Unsent,
 }
 
 impl Cancel {
-    pub(crate) fn new(token: CancelToken, route: Option<Route>) -> Self {
-        Self { token, route, unsent: Unsent::default() }
+    pub(crate) fn new(token: CancelToken, route: Option<Route>, tls: PgTls) -> Self {
+        Self { token, route, tls, unsent: Unsent::default() }
     }
 
     /// Send a cancel request (directly, or through the route), within [`CANCEL_DIAL`]; why it
@@ -80,10 +95,11 @@ impl Cancel {
     pub(crate) async fn send(&self) -> Result<(), DbError> {
         let sent = async {
             match &self.route {
-                None => self.token.cancel_query(NoTls).await.map_err(|e| db_error(&e)),
+                None => self.token.cancel_query(self.tls.clone()).await.map_err(|e| db_error(&e)),
                 Some(route) => {
+                    let handshake = self.tls.to(route.name()).map_err(|e| DbError::Tls(e.0))?;
                     let stream = route.dial(CANCEL_DIAL).await?;
-                    self.token.cancel_query_raw(stream, NoTls).await.map_err(|e| db_error(&e))
+                    self.token.cancel_query_raw(stream, handshake).await.map_err(|e| db_error(&e))
                 }
             }
         };

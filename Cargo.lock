@@ -986,6 +986,7 @@ version = "0.22.0"
 dependencies = [
  "chrono",
  "datarig-core",
+ "datarig-tls",
  "fallible-iterator",
  "futures",
  "postgres-protocol",
