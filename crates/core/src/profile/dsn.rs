@@ -260,5 +260,77 @@ pub fn secret_span(text: &str) -> Option<(usize, usize)> {
     Some((lead + scheme_end + colon + 1, lead + scheme_end + at))
 }
 
+/// One `key = value` of a PostgreSQL `key=value` connection string ([`conninfo`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConninfoPair {
+    pub key: String,
+    /// The value, unquoted and unescaped.
+    pub value: String,
+    /// Where the pair is in the text, from its key to the end of its value.
+    pub span: std::ops::Range<usize>,
+}
+
+/// The pairs of a PostgreSQL `key=value` connection string (`host=h port=5432 sslmode=require`),
+/// read as libpq reads one: pairs separated by white space, `=` with optional white space around
+/// it, a value either single-quoted (`'a b'`) or ending at white space, a backslash taking the
+/// next character as it is. `None` when the text is not one (a key without `=`, an unclosed
+/// quote).
+pub fn conninfo(text: &str) -> Option<Vec<ConninfoPair>> {
+    let b = text.as_bytes();
+    let mut i = 0;
+    let mut pairs = Vec::new();
+    let skip_ws = |i: &mut usize| {
+        while *i < b.len() && b[*i].is_ascii_whitespace() {
+            *i += 1;
+        }
+    };
+    loop {
+        skip_ws(&mut i);
+        if i == b.len() {
+            return Some(pairs);
+        }
+        let start = i;
+        while i < b.len() && b[i] != b'=' && !b[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        let key = text[start..i].to_string();
+        skip_ws(&mut i);
+        if key.is_empty() || b.get(i) != Some(&b'=') {
+            return None;
+        }
+        i += 1;
+        skip_ws(&mut i);
+        let mut value = Vec::new();
+        if b.get(i) == Some(&b'\'') {
+            i += 1;
+            loop {
+                match b.get(i)? {
+                    b'\\' => {
+                        value.push(*b.get(i + 1)?);
+                        i += 2;
+                    }
+                    b'\'' => {
+                        i += 1;
+                        break;
+                    }
+                    c => {
+                        value.push(*c);
+                        i += 1;
+                    }
+                }
+            }
+        } else {
+            while i < b.len() && !b[i].is_ascii_whitespace() {
+                if b[i] == b'\\' && i + 1 < b.len() {
+                    i += 1;
+                }
+                value.push(b[i]);
+                i += 1;
+            }
+        }
+        pairs.push(ConninfoPair { key, value: String::from_utf8(value).ok()?, span: start..i });
+    }
+}
+
 #[cfg(test)]
 mod tests;

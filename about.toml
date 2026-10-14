@@ -17,6 +17,14 @@ accepted = [
     "Unicode-DFS-2016",
     "PostgreSQL",
 ]
+# The platforms datarig is built for (the release targets), as in deny.toml.
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+]
 # The notices of what ships in the binary, not of test-only tools.
 ignore-dev-dependencies = true
 ignore-build-dependencies = false

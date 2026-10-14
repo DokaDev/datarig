@@ -38,5 +38,6 @@ pub mod scripts;
 pub mod secret;
 pub mod sql;
 pub mod theme;
+pub mod tls;
 pub mod transport;
 pub mod workspace;

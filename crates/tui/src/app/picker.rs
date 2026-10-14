@@ -17,9 +17,9 @@ use super::*;
 use crate::theme;
 use crate::widgets::list_picker::{Entry, ListPicker, Outcome};
 use datarig_core::policy::{self, Environment};
-use datarig_core::profile::SSL_MODES;
 use datarig_core::profile::ssh::SshAuth;
 use datarig_core::secret::SourceKind;
+use datarig_core::tls::TlsMode;
 
 /// A list to pick from, by what it picks (a pick goes to the profile form of profile `form`
 /// only).
@@ -391,11 +391,12 @@ impl App {
                     Label::FormSslmodeVerifyCa,
                     Label::FormSslmodeVerifyFull,
                 ];
-                let entries = SSL_MODES
+                let scheme = f.scheme();
+                let entries = TlsMode::ALL
                     .iter()
                     .zip(hints)
                     .enumerate()
-                    .map(|(i, (m, h))| entry(i, m.to_string(), Some(h), true))
+                    .map(|(i, (m, h))| entry(i, m.name(scheme).to_string(), Some(h), true))
                     .collect();
                 (entries, Some(f.sslmode))
             }

@@ -12,6 +12,7 @@ pub mod ssh;
 pub mod tunnel;
 
 use crate::secret::{PasswordSource, SourceKind};
+use crate::tls::{TlsFile, TlsMode, TlsProblem, TlsSettings};
 use serde::{Deserialize, Deserializer};
 use std::fmt;
 use uuid::Uuid;
@@ -72,6 +73,7 @@ impl<'de> Deserialize<'de> for ProfileId {
     }
 }
 
+/// PostgreSQL's `sslmode` values, in the order of [`TlsMode::ALL`].
 pub const SSL_MODES: [&str; 5] = ["disable", "prefer", "require", "verify-ca", "verify-full"];
 
 /// `<redacted>` for a non-empty secret, `<unset>` for an empty one — never the value itself.
@@ -113,10 +115,21 @@ pub struct ConnectionConfig {
     pub password: String,
     #[serde(default)]
     pub database: String,
-    #[serde(default = "default_sslmode")]
+    /// The TLS mode as the driver spells it ([`TlsMode::name`]); empty: none set (see
+    /// [`TlsMode::default_for`]). Read with [`Self::tls`].
+    #[serde(default)]
     pub sslmode: String,
+    /// The CA file the server's certificate chain is checked against (`sslrootcert`).
+    #[serde(default)]
+    pub sslrootcert: Option<String>,
+    /// The client certificate file (`sslcert`), with its key.
+    #[serde(default)]
+    pub sslcert: Option<String>,
+    /// The client certificate's private key file (`sslkey`).
+    #[serde(default)]
+    pub sslkey: Option<String>,
     /// A DSN that could not be turned into fields (non-URL form or extra parameters). URL
-    /// DSNs with only `sslmode` are converted to fields when the file is loaded.
+    /// DSNs with only the TLS parameters are converted to fields when the file is loaded.
     #[serde(default)]
     pub dsn: Option<String>,
     /// Folder path (`work/prod`, validated by the config loader); `None` is the top level.
@@ -187,6 +200,9 @@ impl fmt::Debug for ConnectionConfig {
             .field("password", &redact(&self.password))
             .field("database", &self.database)
             .field("sslmode", &self.sslmode)
+            .field("sslrootcert", &self.sslrootcert)
+            .field("sslcert", &self.sslcert)
+            .field("sslkey", &self.sslkey)
             .field("dsn", &self.dsn.as_deref().map(redact_dsn))
             .field("folder", &self.folder)
             .field("color", &self.color)
@@ -218,9 +234,6 @@ fn default_port() -> u16 {
 fn yes() -> bool {
     true
 }
-fn default_sslmode() -> String {
-    "disable".into()
-}
 
 /// An unnamed PostgreSQL profile on `127.0.0.1:5432` with a new id.
 impl Default for ConnectionConfig {
@@ -234,7 +247,10 @@ impl Default for ConnectionConfig {
             user: String::new(),
             password: String::new(),
             database: String::new(),
-            sslmode: default_sslmode(),
+            sslmode: String::new(),
+            sslrootcert: None,
+            sslcert: None,
+            sslkey: None,
             dsn: None,
             folder: None,
             color: None,
@@ -264,6 +280,7 @@ impl ConnectionConfig {
             user: "datarig".into(),
             password: "datarig".into(),
             database: "datarig".into(),
+            sslmode: "disable".into(),
             ..Self::default()
         }
     }
@@ -329,12 +346,30 @@ impl ConnectionConfig {
             host: self.host.clone(),
             port: Some(self.port),
             database: self.database.clone(),
-            // MySQL connections have no TLS settings yet.
+            // MySQL URLs take no parameters: their TLS settings are fields only.
             params: match scheme {
-                dsn::Scheme::Postgres => vec![("sslmode".into(), self.sslmode.clone())],
+                dsn::Scheme::Postgres => self.tls_params(),
                 dsn::Scheme::MySql => Vec::new(),
             },
         })
+    }
+
+    /// The PostgreSQL URL parameters of the TLS fields: `sslmode` (the default's name when none
+    /// is set), then the files that are set.
+    pub fn tls_params(&self) -> Vec<(String, String)> {
+        let mode = match self.sslmode.trim() {
+            "" => TlsMode::default_for(dsn::Scheme::Postgres, false).name(dsn::Scheme::Postgres).to_string(),
+            m => m.to_string(),
+        };
+        let mut params = vec![("sslmode".to_string(), mode)];
+        for (file, value) in
+            [(TlsFile::Ca, &self.sslrootcert), (TlsFile::Cert, &self.sslcert), (TlsFile::Key, &self.sslkey)]
+        {
+            if let Some(v) = value.as_deref().filter(|v| !v.trim().is_empty()) {
+                params.push((file.key().to_string(), v.to_string()));
+            }
+        }
+        params
     }
 
     /// `(host:port, database, sslmode)` for lists of profiles. A DSN that is not a
@@ -354,15 +389,26 @@ impl ConnectionConfig {
     }
 
     /// Convert a URL `dsn` into fields when nothing would be lost: a URL of the profile's
-    /// driver with no parameters but PostgreSQL's `sslmode`.
+    /// driver with no parameters but PostgreSQL's TLS ones (a known `sslmode`, `sslrootcert`,
+    /// `sslcert`, `sslkey`, each once), whose file fields the profile does not set already.
     pub(crate) fn normalize(&mut self) {
         let Some(text) = &self.dsn else { return };
         let Ok(d) = dsn::parse(text) else { return };
         if d.scheme != dsn::Scheme::of_driver(&self.driver) {
             return;
         }
-        let sslmode = |k: &str, v: &str| d.scheme == dsn::Scheme::Postgres && k == "sslmode" && SSL_MODES.contains(&v);
-        if d.params.iter().any(|(k, v)| !sslmode(k, v)) {
+        let tls = |k: &str, v: &str| {
+            d.scheme == dsn::Scheme::Postgres
+                && d.params.iter().filter(|(other, _)| other == k).count() == 1
+                && match k {
+                    "sslmode" => SSL_MODES.contains(&v),
+                    "sslrootcert" => self.sslrootcert.is_none(),
+                    "sslcert" => self.sslcert.is_none(),
+                    "sslkey" => self.sslkey.is_none(),
+                    _ => false,
+                }
+        };
+        if d.params.iter().any(|(k, v)| !tls(k, v)) {
             return;
         }
         self.host = if d.host.is_empty() { default_host() } else { d.host.clone() };
@@ -372,20 +418,50 @@ impl ConnectionConfig {
         if let Some(m) = d.param("sslmode") {
             self.sslmode = m.to_string();
         }
+        self.sslrootcert = d.param("sslrootcert").map(str::to_string).or(self.sslrootcert.take());
+        self.sslcert = d.param("sslcert").map(str::to_string).or(self.sslcert.take());
+        self.sslkey = d.param("sslkey").map(str::to_string).or(self.sslkey.take());
         if let Some(p) = d.password {
             self.password = p;
         }
         self.dsn = None;
     }
 
-    /// A MySQL profile whose connection goes through the network unencrypted: directly (no SSH
-    /// tunnel) to a server that is not on this machine. The driver has no TLS yet, so the
-    /// password exchange and every result can be read (or changed) on the way.
-    pub fn mysql_unencrypted(&self) -> bool {
-        if dsn::Scheme::of_driver(&self.driver) != dsn::Scheme::MySql
-            || self.tunnel.is_some()
-            || self.inline_ssh().is_some()
-        {
+    /// The profile's TLS settings, checked ([`TlsSettings::new`]): from its fields, and for a
+    /// PostgreSQL profile kept as a DSN, from the DSN's own parameters (`sslmode`,
+    /// `sslrootcert`, `sslcert`, `sslkey`, in a URL or in `key=value` form), each over the
+    /// field of the same name.
+    pub fn tls(&self) -> Result<TlsSettings, TlsProblem> {
+        let scheme = dsn::Scheme::of_driver(&self.driver);
+        let pinned = self.server_public_key_file.as_deref().is_some_and(|k| !k.trim().is_empty());
+        let mut mode = self.sslmode.clone();
+        let mut files = [self.sslrootcert.clone(), self.sslcert.clone(), self.sslkey.clone()];
+        if let (dsn::Scheme::Postgres, Some(text)) = (scheme, &self.dsn) {
+            let params = match dsn::parse(text) {
+                Ok(d) => d.params,
+                Err(_) => {
+                    dsn::conninfo(text).map(|c| c.into_iter().map(|p| (p.key, p.value)).collect()).unwrap_or_default()
+                }
+            };
+            for (k, v) in params {
+                match k.as_str() {
+                    "sslmode" => mode = v,
+                    "sslrootcert" => files[0] = Some(v),
+                    "sslcert" => files[1] = Some(v),
+                    "sslkey" => files[2] = Some(v),
+                    _ => {}
+                }
+            }
+        }
+        let [ca, cert, key] = &files;
+        TlsSettings::new(scheme, &mode, [ca.as_deref(), cert.as_deref(), key.as_deref()], pinned)
+    }
+
+    /// Whether the profile's connection goes through the network on its own: directly (no SSH
+    /// tunnel) to a server that is not on this machine. Unless it is encrypted (TLS), the
+    /// password exchange and every result can then be read (or changed) on the way.
+    pub fn exposed(&self) -> bool {
+        if self.tunnel.is_some() || self.inline_ssh().is_some() {
             return false;
         }
         // The driver's host: the URL's (none: `localhost`) when the profile keeps one.
@@ -396,6 +472,13 @@ impl ConnectionConfig {
             None => self.host.clone(),
         };
         !is_loopback(&host)
+    }
+
+    /// Whether the profile's connection is sure to go through the network unencrypted:
+    /// [`Self::exposed`], and its TLS mode is off (`disable`). With `prefer` it may still
+    /// be; the connection says what it got ([`crate::tls::Encryption`]).
+    pub fn unencrypted(&self) -> bool {
+        self.exposed() && self.tls().is_ok_and(|t| t.mode == TlsMode::Disable)
     }
 }
 

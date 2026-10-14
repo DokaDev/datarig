@@ -5,6 +5,7 @@ members = [
     "crates/drivers/postgres",
     "crates/drivers/mysql",
     "crates/ssh",
+    "crates/tls",
     "crates/tui",
     "crates/bench",
 ]
@@ -33,6 +34,7 @@ datarig-core = { path = "crates/core" }
 datarig-driver-mysql = { path = "crates/drivers/mysql" }
 datarig-driver-postgres = { path = "crates/drivers/postgres" }
 datarig-ssh = { path = "crates/ssh" }
+datarig-tls = { path = "crates/tls" }
 datarig-tui = { path = "crates/tui" }
 
 arboard = { version = "3.6", default-features = false }
@@ -59,12 +61,26 @@ pg_query = "6.2"
 prost = { version = "0.13", default-features = false, features = ["no-recursion-limit"] }
 postgres-protocol = "0.6"
 ratatui = "0.30"
+# Test certificates (CAs, servers, clients), made when the tests run: no key material in the
+# repository.
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
 # The editor's search (`/`, `?`, `*`): Rust regular expressions, linear time, Unicode-aware.
 # Already in the tree on Windows (through keyring).
 regex = "1.13"
+# PostgreSQL SCRAM channel binding: the hash of the server's certificate. Already in the tree
+# through russh and rustls.
+ring = "0.17"
 # Unix: the effective user id (spill directory ownership) and SIGTSTP for suspending; already in
 # the tree via crossterm.
 rustix = { version = "1.1", default-features = false, features = ["std", "process"] }
+# TLS to the database servers (crates/tls): pure Rust with the `ring` provider (as the SSH
+# tunnels), TLS 1.2 and 1.3. The server's certificate is checked against the profile's CA file,
+# or the system's trusted certificates through the platform's own verifier (macOS Security
+# framework, Windows CryptoAPI, Linux rustls-native-certs): no bundled root list.
+rustls = { version = "0.23.45", default-features = false, features = ["std", "tls12", "ring"] }
+rustls-platform-verifier = "0.7.1"
+# rustls for tokio (the same features).
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
 # SSH tunnels: pure Rust with the `ring` backend
 # (no cmake/nasm), RSA keys, and no compression (never negotiated).
 russh = { version = "0.63.3", default-features = false, features = ["ring", "rsa"] }

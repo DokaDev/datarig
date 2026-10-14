@@ -214,6 +214,8 @@ pub trait Driver: Send + Sync {
 pub struct PingInfo {
     pub server_version: String,
     pub latency: Duration,
+    /// How the test connection's traffic went.
+    pub encryption: crate::tls::Encryption,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -23,7 +23,6 @@ use crate::widgets::dialog::{centered, modal};
 use crate::widgets::statusbar::level_color;
 use crate::widgets::{SPINNER, put};
 use datarig_core::i18n::{Label, Msg};
-use datarig_core::profile::SSL_MODES;
 use datarig_core::profile::ssh::SshAuth;
 use datarig_core::secret::SourceKind;
 use ratatui::buffer::Buffer;
@@ -280,7 +279,7 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
             Field::Driver | Field::SslMode | Field::Source | Field::SshAuth | Field::SshSource => {
                 let value = match f {
                     Field::Driver => DRIVERS[form.driver].1.to_string(),
-                    Field::SslMode => SSL_MODES[form.sslmode].to_string(),
+                    Field::SslMode => form.tls_mode().name(form.scheme()).to_string(),
                     Field::Source => i18n.label(source_choice(form.source)).to_string(),
                     Field::SshSource => i18n.label(source_choice(form.ssh_source)).to_string(),
                     _ => i18n.label(ssh_auth_choice(form.ssh_auth)).to_string(),
@@ -586,6 +585,9 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
                 (Field::EnvIdle, _) => Some(Label::FormEnvIdleHint.into()),
                 (Field::EnvSpill, _) => Some(Label::FormEnvSpillHint.into()),
                 (Field::ServerKey, _) => Some(Label::FormServerKeyHint.into()),
+                (Field::TlsCa, _) => Some(Label::FormTlsCaHint.into()),
+                (Field::TlsCert, _) => Some(Label::FormTlsCertHint.into()),
+                (Field::TlsKey, _) => Some(Label::FormTlsKeyHint.into()),
                 (Field::Color | Field::Icon | Field::Folder, _) => Some(Label::FormPickerHint.into()),
                 (Field::SshSecret, _) => Some(Label::FormSshSecretHint.into()),
                 (Field::SshCommand, _) => Some(Label::FormCommandHint.into()),
@@ -598,7 +600,7 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
             }
         }
     }
-    // A MySQL connection without a tunnel to another machine: not encrypted.
+    // A connection without a tunnel to another machine, with TLS off: not encrypted.
     if form.section == Section::Ssh && unencrypted {
         let text = i18n.label(Label::FormUnencrypted);
         let style = Style::new().fg(th.warning).bg(th.surface);

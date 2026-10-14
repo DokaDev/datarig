@@ -605,6 +605,39 @@ fn name_style(p: &datarig_core::profile::ConnectionConfig, bg: ratatui::style::C
     Style::new().fg(theme::profile_color(p.display_color())).bg(bg).add_modifier(Modifier::BOLD)
 }
 
+/// How the profile's connection is encrypted, once connected: `TLS 1.3` (with a shield when
+/// icons are on), `· CA only` when only the chain was checked, `· not verified` when the
+/// certificate was not checked; a connection to another machine without TLS (and without a
+/// tunnel) says `not encrypted` in the warning color. Nothing for an unencrypted connection to
+/// this machine or through a tunnel.
+fn encryption_part(
+    app: &App,
+    p: &datarig_core::profile::ConnectionConfig,
+    bg: ratatui::style::Color,
+) -> Option<(String, Style)> {
+    use datarig_core::tls::{Encryption, Verified};
+    let th = theme::cur();
+    let c = app.conns.get(p.id).filter(|c| c.connected)?;
+    let icons = app.icons_on();
+    let glyph = |g: &str| if icons { format!("{g} ") } else { String::new() };
+    let (text, fg) = match c.encryption? {
+        Encryption::Tls { version, verified } => {
+            let (g, note) = match verified {
+                Verified::Full => (crate::icons::TLS_VERIFIED, None),
+                Verified::Chain => (crate::icons::TLS_VERIFIED, Some(Label::ConnbarTlsCa)),
+                Verified::No => (crate::icons::TLS_UNVERIFIED, Some(Label::ConnbarTlsUnverified)),
+            };
+            let note = note.map(|n| format!(" · {}", app.i18n.label(n))).unwrap_or_default();
+            (format!("{}{}{note}", glyph(g), version.label()), th.fg_muted)
+        }
+        Encryption::Plain if p.exposed() => {
+            (format!("{}{}", glyph(crate::icons::UNENCRYPTED), app.i18n.label(Label::ConnbarPlain)), th.warning)
+        }
+        Encryption::Plain => return None,
+    };
+    Some((format!(" · {text}"), Style::new().fg(fg).bg(bg)))
+}
+
 /// The first line of the editor of a tab with a connection: the profile (its icon and name in
 /// its color), where it points, its environment (its badge, else its name; and read-only), and
 /// the key that switches the tab to another connection. A table tab's results pane shows it
@@ -655,6 +688,7 @@ fn draw_connection_bar(app: &App, area: Rect, buf: &mut Buffer) {
     parts.push((place, name));
     parts.extend(schema);
     parts.push((format!("  {endpoint}"), muted));
+    parts.extend(encryption_part(app, p, bg));
     parts.extend(crate::widgets::statusbar::environment_parts(app, p.id, bg));
     if app.read_only(p.id) {
         let ro = Style::new()

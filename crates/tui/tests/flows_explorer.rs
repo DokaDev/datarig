@@ -624,6 +624,9 @@ fn the_form_has_basic_and_advanced_sections() {
     assert_eq!((h.form().section, h.form().focus), (Section::Advanced, Field::SslMode));
     assert!(h.form().fields().iter().all(|f| !matches!(f, Field::Name | Field::Dsn)));
     h.key(KeyCode::Right); // disable -> prefer
+    h.key(KeyCode::Tab); // the CA file, the client certificate and its key: none
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Tab);
     h.key(KeyCode::Tab);
     h.key(KeyCode::Right); // statement cache: on -> off
     h.key(KeyCode::Tab);
@@ -685,17 +688,18 @@ fn a_mysql_profile_takes_its_port_and_url_and_has_no_postgresql_settings() {
     h.key(KeyCode::Tab);
     h.type_text("datarig");
     assert_eq!(h.form().dsn.text(), "mysql://datarig@localhost:53306");
-    // No SSL mode nor statement cache: those are PostgreSQL's. MySQL's own come first.
+    // No statement cache: that is PostgreSQL's. The SSL mode comes first, in MySQL's words.
     h.ctrl('n');
     h.ctrl('n');
     assert_eq!(h.form().section, Section::Advanced);
-    assert_eq!(h.form().focus, Field::ServerKey);
-    assert!(h.form().fields().iter().all(|f| !matches!(f, Field::SslMode | Field::StatementCache)));
+    assert_eq!(h.form().focus, Field::SslMode);
+    assert!(h.form().fields().iter().all(|f| *f != Field::StatementCache));
     let screen = h.screen(160, 45);
-    assert!(!screen.contains("SSL mode"), "{screen}");
+    assert!(screen.contains("SSL mode") && screen.contains("PREFERRED"), "{screen}");
     h.ctrl('s');
     let p = h.app.profiles.iter().find(|p| p.name == "shop-db").unwrap();
     assert_eq!((p.driver.as_str(), p.port, p.user.as_str()), ("mysql", 53306, "datarig"));
+    assert_eq!(p.sslmode, "PREFERRED");
     assert_eq!(p.display_dsn(), "mysql://datarig@localhost:53306");
     // A pasted mysql:// URL picks MySQL; a parameter is refused (a mysql:// URL takes none).
     h.app.handle_event(ratatui::crossterm::event::Event::Paste("mysql://me:pw@db.example/sales".into()));

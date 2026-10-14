@@ -9,6 +9,7 @@ use datarig_core::driver::{CancelFailure, DbError, ReadIn};
 use datarig_core::fault::{ErrorLog, FaultKind};
 use datarig_core::sql::lexer::changes_schema_in;
 use datarig_core::sql::values::check_values;
+use datarig_core::tls::{FileProblem, TlsFile, TlsProblem};
 use datarig_core::transport::{DialError, Refusal};
 
 impl App {
@@ -602,6 +603,7 @@ impl App {
         let Some(name) = self.profile(id).map(|p| p.name.clone()) else { return };
         let text = self.event_error_text(&ev);
         match ev {
+            DbEvent::Encryption(e) => self.conns.entry(id).encryption = Some(e),
             DbEvent::Connected => self.on_connected(id),
             // The profile's sessions are read-only per transaction only: said once it connected.
             DbEvent::ReadOnlyPerTransaction => {
@@ -932,8 +934,8 @@ impl App {
                 t.exec.state = SessionState::Ready;
                 None
             }
-            // Said by the profile's metadata session.
-            DbEvent::ReadOnlyPerTransaction => None,
+            // Said by the profile's metadata session (a query session connects as it does).
+            DbEvent::ReadOnlyPerTransaction | DbEvent::Encryption(_) => None,
             // Handled first (`statement_cache_off`, `sync_tab_language`, the cancel's clock).
             DbEvent::StatementCacheOff
             | DbEvent::Language(_)
@@ -1666,6 +1668,7 @@ impl App {
                 return self.i18n.msg(&Msg::DbKindUnsupported { kind: kind.clone() }).to_string();
             }
             DbError::TlsRequired => Label::DbTlsRequired,
+            DbError::Tls(p) => return self.tls_problem_text(p),
             DbError::VersionUnsupported { server, needed } => {
                 return self
                     .i18n
@@ -1706,6 +1709,62 @@ impl App {
             }
         };
         self.i18n.label(label).to_string()
+    }
+
+    /// Why a TLS connection was not made, in words; a fault's detail goes to the error log.
+    pub(super) fn tls_problem_text(&self, p: &TlsProblem) -> String {
+        let log = |f: &datarig_core::fault::Fault| ErrorLog::new(self.paths.errors_log()).record("db.tls", f);
+        let file_name = |f: TlsFile| {
+            let label = match f {
+                TlsFile::Ca => Label::TlsFileCa,
+                TlsFile::Cert => Label::TlsFileCert,
+                TlsFile::Key => Label::TlsFileKey,
+            };
+            self.i18n.label(label).to_string()
+        };
+        let msg: Msg = match p {
+            TlsProblem::UnknownMode(mode) => Msg::TlsUnknownMode { mode: mode.clone() },
+            TlsProblem::NeedsCaFile => Label::TlsNeedsCa.into(),
+            TlsProblem::CertWithoutKey => Label::TlsCertWithoutKey.into(),
+            TlsProblem::KeyWithoutCert => Label::TlsKeyWithoutCert.into(),
+            TlsProblem::PathRelative { file, path } => {
+                Msg::TlsPathRelative { file: file_name(*file), path: path.clone() }
+            }
+            TlsProblem::File { file, path, problem } => {
+                let (file, path) = (file_name(*file), path.clone());
+                match problem {
+                    FileProblem::Unreadable(f) => {
+                        log(f);
+                        let error = self.i18n.msg(&persist::fault_reason(f)).to_string();
+                        Msg::TlsFileUnreadable { file, path, error }
+                    }
+                    FileProblem::NoCertificate => Msg::TlsFileNoCertificate { file, path },
+                    FileProblem::NoKey => Msg::TlsFileNoKey { path },
+                    FileProblem::Encrypted => Msg::TlsKeyEncrypted { path },
+                    FileProblem::Invalid(f) => {
+                        log(f);
+                        Msg::TlsFileInvalid { file, path }
+                    }
+                }
+            }
+            TlsProblem::Unsupported => Label::TlsUnsupported.into(),
+            TlsProblem::Untrusted => Label::TlsUntrusted.into(),
+            TlsProblem::NameMismatch { host } => Msg::TlsNameMismatch { host: host.clone() },
+            TlsProblem::Expired => Label::TlsExpired.into(),
+            TlsProblem::NotYetValid => Label::TlsNotYetValid.into(),
+            TlsProblem::Revoked => Label::TlsRevoked.into(),
+            TlsProblem::ClientCertRejected => Label::TlsClientCertRejected.into(),
+            TlsProblem::PasswordUnverified => Label::TlsPasswordUnverified.into(),
+            TlsProblem::SystemRoots(f) => {
+                log(f);
+                Label::TlsSystemRoots.into()
+            }
+            TlsProblem::Handshake(f) => {
+                log(f);
+                Label::TlsHandshake.into()
+            }
+        };
+        self.i18n.msg(&msg).to_string()
     }
 
     /// A failure of the transport a session reaches its server through (a tunnel),

@@ -1328,6 +1328,9 @@ pub fn save(path: &Path, settings: Settings, profiles: Option<Profiles>) -> Resu
             } else {
                 set(&mut t, "statement_cache", false);
             }
+            set_opt(&mut t, "sslrootcert", c.sslrootcert.as_deref());
+            set_opt(&mut t, "sslcert", c.sslcert.as_deref());
+            set_opt(&mut t, "sslkey", c.sslkey.as_deref());
             set_opt(&mut t, "server_public_key_file", c.server_public_key_file.as_deref());
             if c.allow_public_key_retrieval {
                 set(&mut t, "allow_public_key_retrieval", true);
@@ -1349,7 +1352,8 @@ pub fn save(path: &Path, settings: Settings, profiles: Option<Profiles>) -> Resu
                 set(&mut t, "port", i64::from(c.port));
                 set(&mut t, "user", c.user.as_str());
                 set(&mut t, "database", c.database.as_str());
-                set(&mut t, "sslmode", c.sslmode.as_str());
+                // No mode set stays none (the driver's default, see `TlsMode::default_for`).
+                set_opt(&mut t, "sslmode", Some(c.sslmode.as_str()).filter(|m| !m.is_empty()));
             }
             if c.password.is_empty() {
                 t.remove("password");

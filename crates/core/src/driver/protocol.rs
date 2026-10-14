@@ -7,6 +7,7 @@ use super::structure::{RelationStats, TableStructure};
 use crate::fault::Fault;
 use crate::sql::complete::Catalog;
 use crate::sql::risk::repeat::NotRepeatable;
+use crate::tls::{Encryption, TlsProblem};
 use crate::transport::DialError;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
@@ -115,12 +116,14 @@ pub enum DbError {
     /// (`MySQL 5.7.44`), `needed` the oldest version the driver works with (`MySQL 8.0`).
     VersionUnsupported { server: String, needed: String },
     /// The server accepts only encrypted connections (MySQL's `require_secure_transport`), and
-    /// the driver does not encrypt yet.
+    /// the profile's TLS mode is off.
     TlsRequired,
+    /// A TLS connection could not be made (or its settings cannot be used).
+    Tls(TlsProblem),
     /// The server asked for an authentication method the driver does not have (its name).
     AuthUnsupported(String),
     /// MySQL's server refused the login (`ER_ACCESS_DENIED_ERROR`): a wrong user or password,
-    /// or an account that requires TLS (`REQUIRE SSL`), which the driver does not do yet. The
+    /// or an account that requires TLS (`REQUIRE SSL`) on a connection without it. The
     /// server's message.
     AccessDenied(String),
     /// A MySQL login needed the server's public key to send the password, the profile names no
@@ -189,6 +192,7 @@ impl DbError {
             DbError::Transport(e) => Cow::Borrowed(e.raw()),
             DbError::CancelNotTaken(CancelFailure::NotSent(why)) => why.raw(),
             DbError::AuthUnsupported(s) | DbError::AccessDenied(s) => Cow::Borrowed(s),
+            DbError::Tls(p) => Cow::Borrowed(p.raw()),
             DbError::ServerKeyFile { fault, .. } => {
                 fault.as_ref().map_or(Cow::Borrowed(""), |f| Cow::Borrowed(&f.detail))
             }
@@ -530,6 +534,9 @@ impl ReadIn {
 
 #[derive(Debug)]
 pub enum DbEvent {
+    /// How the connection's traffic goes (encrypted with TLS or not): sent right before
+    /// `Connected`.
+    Encryption(Encryption),
     Connected,
     /// The next result of run `id` (its first `Page` or `StepRows`) is read while code of the
     /// server's runs (a procedure, a prepared statement, an executable comment), which may change

@@ -857,6 +857,10 @@ fn profile_form_advanced_section_and_pickers() {
             h.keys("e");
             h.ctrl('p');
             h.key(KeyCode::Tab);
+            h.type_text("/etc/ssl/db-ca.pem");
+            for _ in 0..3 {
+                h.key(KeyCode::Tab);
+            }
             h.key(KeyCode::Right);
             h.key(KeyCode::Tab);
             h.type_text("prod-rules");
@@ -876,7 +880,7 @@ fn profile_form_advanced_section_and_pickers() {
             h.explore("local-pg");
             h.keys("e");
             h.ctrl('p');
-            for _ in 0..4 {
+            while h.form().focus != datarig_tui::app::profiles::Field::Icon {
                 h.key(KeyCode::Tab);
             }
             h.key(KeyCode::Enter);
@@ -924,7 +928,11 @@ fn test_connection_success_and_error_states() {
             .to_string();
         let testing = testing.split('…').next().unwrap();
         assert!(screen.contains(testing), "{testing:?} in {screen}");
-        h.ping(Ok(PingInfo { server_version: "17.2".into(), latency: Duration::from_millis(12) }));
+        h.ping(Ok(PingInfo {
+            server_version: "17.2".into(),
+            latency: Duration::from_millis(12),
+            encryption: Default::default(),
+        }));
         assert_screen!(format!("test_connection_ok_{}_80x24", lang_tag(lang)), lang, h.draw(80, 24));
         h.ctrl('t');
         h.ping(Err(PingError::Failed("error connecting to server: Connection refused (os error 61)".into())));

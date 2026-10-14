@@ -215,7 +215,11 @@ fn mysql_key_options_are_edited_and_saved() {
     };
     let mut f = ProfileForm::from_profile(&my, String::new(), Some(0));
     f.open_section(Section::Advanced);
-    assert_eq!(f.fields()[..2], [Field::ServerKey, Field::KeyRetrieval]);
+    // After the TLS settings, which both drivers have.
+    assert_eq!(
+        f.fields()[..6],
+        [Field::SslMode, Field::TlsCa, Field::TlsCert, Field::TlsKey, Field::ServerKey, Field::KeyRetrieval]
+    );
     assert_eq!(f.server_key.text(), "~/db.pem");
     focus(&mut f, Field::ServerKey);
     clear(&mut f);

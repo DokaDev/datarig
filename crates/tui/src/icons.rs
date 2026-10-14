@@ -97,6 +97,16 @@ pub const ENVIRONMENT_CHIP: &str = "\u{f14fb}";
 /// A read-only connection, on its explorer row and its tabs (nf-md-lock).
 pub const READ_ONLY: &str = "\u{f033e}";
 
+/// An encrypted (TLS) connection whose server's certificate was checked, in the connection bar
+/// (nf-md-shield_lock).
+pub const TLS_VERIFIED: &str = "\u{f099d}";
+
+/// An encrypted (TLS) connection whose server's certificate was not checked (nf-md-shield_alert).
+pub const TLS_UNVERIFIED: &str = "\u{f0ecc}";
+
+/// A connection to another machine that is not encrypted (nf-md-lock_open_alert).
+pub const UNENCRYPTED: &str = "\u{f139b}";
+
 /// The tunnel mark: the glyph, or `SSH` with icons off (never an emoji).
 pub fn tunnel(on: bool) -> &'static str {
     if on { TUNNEL } else { "SSH" }

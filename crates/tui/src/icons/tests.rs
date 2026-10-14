@@ -234,3 +234,16 @@ fn type_categories_follow_the_type_name() {
         assert_eq!(TypeCategory::of(name), want, "{name:?}");
     }
 }
+
+#[test]
+fn the_encryption_glyphs_are_pinned() {
+    // Nerd Fonts 3.5.1 glyphnames.json: "md-shield_lock" f099d, "md-shield_alert" f0ecc,
+    // "md-lock_open_alert" f139b. Not the read-only lock (md-lock): a lock means read-only.
+    assert_eq!((TLS_VERIFIED, TLS_UNVERIFIED, UNENCRYPTED), ("\u{f099d}", "\u{f0ecc}", "\u{f139b}"));
+    for g in [TLS_VERIFIED, TLS_UNVERIFIED, UNENCRYPTED] {
+        assert_ne!(g, READ_ONLY);
+        let c = g.chars().next().unwrap();
+        assert!(('\u{f0001}'..='\u{f1af0}').contains(&c), "{g:?}: Material Design range");
+        assert_eq!(width(g), 1, "{g:?}");
+    }
+}
