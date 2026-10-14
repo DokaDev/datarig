@@ -331,7 +331,11 @@ mod terminal {
             let (client, ended, conn) = connect(url).await;
             let (cmds, cmd_rx) = unbounded_channel();
             let (events, rx) = unbounded_channel();
-            let token = crate::route::Cancel::new(client.cancel_token(), None);
+            let token = crate::route::Cancel::new(
+                client.cancel_token(),
+                None,
+                crate::tls::PgTls::new(datarig_core::tls::TlsSettings::plain()),
+            );
             let link = Link::new(cmd_rx, ended, conn, Some(token.unsent.clone()));
             Self {
                 client,

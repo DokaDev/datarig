@@ -14,12 +14,16 @@
 //!   may still run to its end there.
 //! * A session with a dialer (`ConnectOptions::dialer`, an SSH tunnel) reaches the server over
 //!   a stream the dialer opens (`route`).
+//! * TLS follows the profile's settings (`tls`: datarig-tls behind tokio-postgres's
+//!   `MakeTlsConnect`), for the session's connection and its cancel requests alike; the
+//!   certificate is checked against the profile's host, also through a tunnel.
 
 mod connect;
 mod link;
 mod meta;
 mod query;
 mod route;
+mod tls;
 mod values;
 
 pub use connect::PgDriver;

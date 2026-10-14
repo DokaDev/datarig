@@ -188,3 +188,53 @@ async fn the_bastion_forwards_only_where_it_allows() {
     let dialer = Some(DialerRef(tunnel.clone() as Arc<dyn Dialer>));
     PgDriver.ping(&pooler, Duration::from_secs(10), dialer).await.expect("pgbouncer through the tunnel");
 }
+
+/// Through the bastion to a PostgreSQL with TLS (`dev/tls/up.sh`, on the bastion's network as
+/// `pg-tls.test`): the session is encrypted end to end and the certificate is checked against
+/// the profile's host, which only the bastion can resolve (a name the certificate does not have
+/// is the driver's tests' `through_a_tunnel_…`). Needs `DATARIG_TEST_TLS_CERTS` too.
+#[tokio::test(flavor = "multi_thread")]
+async fn tls_through_the_bastion_checks_the_profiles_host() {
+    let Some(b) = bastion("tls_through_the_bastion_checks_the_profiles_host") else { return };
+    let Some(certs) = std::env::var("DATARIG_TEST_TLS_CERTS").ok().filter(|v| !v.is_empty()) else {
+        if std::env::var("DATARIG_REQUIRE_TLS").is_ok_and(|v| v == "1") {
+            panic!("DATARIG_TEST_TLS_CERTS must be set when DATARIG_REQUIRE_TLS=1");
+        }
+        let _ = writeln!(
+            std::io::stderr(),
+            "SKIPPED tls_through_the_bastion_checks_the_profiles_host: set DATARIG_TEST_TLS_CERTS"
+        );
+        return;
+    };
+    let d = scratch("bastion-tls");
+    let tunnel = open(&b, "tunnel", b.key("id_ed25519"), &d).await;
+    let dialer = Some(DialerRef(tunnel.clone() as Arc<dyn Dialer>));
+    let profile = |host: &str| ConnectionConfig {
+        name: "behind-tls".into(),
+        host: host.into(),
+        port: 5432,
+        sslmode: "verify-full".into(),
+        sslrootcert: Some(format!("{certs}/ca.crt")),
+        ..ConnectionConfig::test_db()
+    };
+    let connect = |cfg: ConnectionConfig| {
+        let dialer = dialer.clone();
+        async move {
+            let (tx, mut rx) = unbounded_channel();
+            let opts = ConnectOptions::new(100, SessionRole::Meta, "bastion-tls").dialer(dialer);
+            let _session = PgDriver.connect(&cfg, SessionRole::Meta, opts, tx);
+            let mut encryption = None;
+            loop {
+                match tokio::time::timeout(Duration::from_secs(20), rx.recv()).await.expect("event").expect("open") {
+                    DbEvent::Encryption(e) => encryption = Some(e),
+                    DbEvent::Connected => return Ok(encryption),
+                    DbEvent::ConnectFailed { error, .. } => return Err(error),
+                    _ => {}
+                }
+            }
+        }
+    };
+    let full =
+        Encryption::Tls { version: datarig_core::tls::TlsVersion::Tls13, verified: datarig_core::tls::Verified::Full };
+    assert_eq!(connect(profile("pg-tls.test")).await, Ok(Some(full)));
+}

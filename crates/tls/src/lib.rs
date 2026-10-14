@@ -25,6 +25,7 @@ use std::io;
 use std::sync::{Arc, Mutex};
 use tokio::io::{AsyncRead, AsyncWrite};
 
+pub use tokio_rustls::Connect;
 pub use tokio_rustls::client::TlsStream;
 
 mod binding;
@@ -114,13 +115,27 @@ impl Connector {
         self.mode != TlsMode::Prefer
     }
 
-    /// The handshake over `stream`.
-    pub async fn connect<S>(&self, stream: S) -> Result<TlsStream<S>, TlsProblem>
+    /// The handshake over `stream` (a future that owns what it needs: it borrows nothing).
+    pub fn connect<S>(&self, stream: S) -> impl Future<Output = Result<TlsStream<S>, TlsProblem>> + Send + 'static
+    where
+        S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    {
+        let handshake = tokio_rustls::TlsConnector::from(self.config.clone()).connect(self.name.clone(), stream);
+        let host = self.host.clone();
+        async move {
+            handshake
+                .await
+                .map_err(|e| problem_in_io(&e, &host).unwrap_or_else(|| TlsProblem::Handshake(Fault::io(&e))))
+        }
+    }
+
+    /// The handshake over `stream`, as tokio-rustls's own future (its error is
+    /// [`Self::io_problem`]'s to word).
+    pub fn handshake<S>(&self, stream: S) -> Connect<S>
     where
         S: AsyncRead + AsyncWrite + Unpin,
     {
-        let connector = tokio_rustls::TlsConnector::from(self.config.clone());
-        connector.connect(self.name.clone(), stream).await.map_err(|e| self.io_problem(&e))
+        tokio_rustls::TlsConnector::from(self.config.clone()).connect(self.name.clone(), stream)
     }
 
     /// What a connection made by [`Self::connect`] got.
