@@ -629,3 +629,82 @@ fn the_storage_lists_refuse_the_keychain_while_it_does_not_work() {
     h.key(KeyCode::Enter);
     assert_eq!((h.overlay_kind(), h.form().ssh_source), (Some(OverlayKind::ProfileForm), SourceKind::Env));
 }
+
+/// The sample profiles and a saved tunnel preset (so tunnels can be made), new profiles
+/// starting on `default`.
+fn with_a_preset(default: DefaultSource) -> Config {
+    use datarig_core::profile::ssh::SshSettings;
+    use datarig_core::profile::tunnel::TunnelPreset;
+    let office = SshSettings { enabled: true, host: "bastion".into(), user: "ops".into(), ..Default::default() };
+    Config { default_source: default, tunnels: vec![TunnelPreset::new("office", office)], ..sample_config(None) }
+}
+
+/// The bastion secret's storage of a tunnel of the profile's own starts where a new profile's
+/// password would (never on a keychain that does not work); a saved one stays.
+#[test]
+fn an_own_tunnel_starts_its_secret_on_the_default_source() {
+    use datarig_tui::app::profiles::SshChoice;
+    for default in [DefaultSource::Auto, DefaultSource::Kind(SourceKind::Keychain)] {
+        let cfg = with_a_preset(default);
+        let mut h = Harness::launched(&cfg, Lang::En, Arc::new(MemoryStore::unavailable("no dbus")), Startup::Normal);
+        // A new profile.
+        h.keys("n");
+        h.app.overlays.form_mut().unwrap().set_ssh_choice(SshChoice::Inline);
+        assert_eq!(h.form().ssh_source, SourceKind::Prompt, "new profile, {default:?}");
+        h.key(KeyCode::Esc);
+        // A profile without a tunnel of its own.
+        h.keys("e");
+        h.app.overlays.form_mut().unwrap().set_ssh_choice(SshChoice::Inline);
+        assert_eq!(h.form().ssh_source, SourceKind::Prompt, "existing profile, {default:?}");
+        h.key(KeyCode::Esc);
+        // A new tunnel preset.
+        h.command("tunnel.new");
+        assert!(h.form().is_tunnel());
+        assert_eq!(h.form().ssh_source, SourceKind::Prompt, "new preset, {default:?}");
+        h.key(KeyCode::Esc);
+    }
+    // An explicit default, the keychain working.
+    let cfg = with_a_preset(DefaultSource::Kind(SourceKind::File));
+    let mut h = Harness::launched(&cfg, Lang::En, Arc::new(MemoryStore::new()), Startup::Normal);
+    h.keys("n");
+    assert_eq!(h.form().ssh_source, SourceKind::File);
+    h.key(KeyCode::Esc);
+    // A saved tunnel keeps its storage, even one the keychain no longer serves.
+    let mut cfg = with_a_preset(DefaultSource::Auto);
+    let mut own = cfg.tunnels[0].settings.clone();
+    own.set_source(PasswordSource::Keychain);
+    cfg.connections[0].ssh = Some(own);
+    let mut h = Harness::launched(&cfg, Lang::En, Arc::new(MemoryStore::unavailable("no dbus")), Startup::Normal);
+    h.keys("e");
+    assert_eq!(h.form().ssh_source, SourceKind::Keychain, "saved");
+}
+
+/// A form opened before the launch probe said the keychain does not work leaves it for the
+/// bastion secret too, unless a saved setting put it there.
+#[test]
+fn a_late_keychain_probe_moves_an_unsaved_tunnel_secret_off_the_keychain() {
+    use datarig_core::fault::{Fault, FaultKind, KeychainFault};
+    use datarig_tui::app::AppEvent;
+    let no_store = || Fault::new(FaultKind::Keychain(KeychainFault::NoStore), "no secret service");
+    let cfg = with_a_preset(DefaultSource::Auto);
+    let mut h = Harness::launched(&cfg, Lang::En, Arc::new(MemoryStore::new()), Startup::Normal);
+    h.keys("n");
+    assert_eq!(h.form().ssh_source, SourceKind::Keychain);
+    h.app.on_app_event(AppEvent::KeychainProbed(Some(no_store())));
+    assert_eq!(h.form().ssh_source, SourceKind::Prompt, "new profile");
+    let mut h = Harness::launched(&cfg, Lang::En, Arc::new(MemoryStore::new()), Startup::Normal);
+    h.command("tunnel.new");
+    assert_eq!(h.form().ssh_source, SourceKind::Keychain);
+    h.app.on_app_event(AppEvent::KeychainProbed(Some(no_store())));
+    assert_eq!(h.form().ssh_source, SourceKind::Prompt, "new preset");
+    // A profile whose own tunnel keeps its secret in the keychain: that stays.
+    let mut cfg = with_a_preset(DefaultSource::Auto);
+    let mut own = cfg.tunnels[0].settings.clone();
+    own.set_source(PasswordSource::Keychain);
+    cfg.connections[0].ssh = Some(own);
+    let mut h = Harness::launched(&cfg, Lang::En, Arc::new(MemoryStore::new()), Startup::Normal);
+    h.keys("e");
+    assert_eq!(h.form().ssh_source, SourceKind::Keychain);
+    h.app.on_app_event(AppEvent::KeychainProbed(Some(no_store())));
+    assert_eq!(h.form().ssh_source, SourceKind::Keychain, "saved");
+}
