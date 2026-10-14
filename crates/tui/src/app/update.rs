@@ -73,7 +73,8 @@ impl App {
             _ => {}
         }
         // A dialog on top ends a tab's drag: it stays where it was (its `Esc` is the dialog's).
-        if self.modal_open() {
+        // So do other tabs or another order (a key opened, closed or moved one).
+        if self.modal_open() || self.tab_drag.as_ref().is_some_and(|d| d.lifted) && self.tab_drag_live().is_none() {
             self.end_tab_drag();
         }
         self.after_input();

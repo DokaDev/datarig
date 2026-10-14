@@ -251,9 +251,9 @@ fn a_pointer_that_jumps_passes_every_tab_on_the_way() {
     drag(&mut h, 0, y);
     assert_eq!(h.app.tab_drag_view(), Some((0, Some(0))));
     drag(&mut h, c1 - 1, y);
-    // A release where no move was reported lands there too.
     h.mouse(MouseEventKind::Up(MouseButton::Left), c1 - 1, y);
     assert_eq!(texts(&h), ["b", "c", "a"]);
+    // A release where no move was reported lands there too.
     let mut h = three_tabs();
     press(&mut h, a0 + 3, y);
     drag(&mut h, a0 + 5, y);
@@ -557,6 +557,81 @@ fn released_over_a_scroll_mark_a_tab_lands_where_it_was_shown() {
     // The release reports the same place as the last move: no step further.
     h.mouse(MouseEventKind::Up(MouseButton::Left), w - 1, y);
     assert_eq!(texts(&h).iter().position(|t| t == "0"), Some(shown));
+}
+
+/// Released next to a scroll mark where no move was reported (a row lower): the tab lands where
+/// it was shown, not past one more hidden tab.
+#[test]
+fn released_off_the_last_move_next_to_a_scroll_mark_a_tab_lands_where_it_was_shown() {
+    let w = 80;
+    let mut h = many_tabs(w);
+    let y = bar_y(&h);
+    let (a0, _) = span(&h, 0);
+    h.mouse(MouseEventKind::Down(MouseButton::Left), a0 + 2, y);
+    h.draw(w, H);
+    for x in [a0 + 6, w - 1] {
+        h.mouse(MouseEventKind::Drag(MouseButton::Left), x, y);
+        h.draw(w, H);
+    }
+    let shown = h.app.tab_drag_view().unwrap().1.unwrap();
+    assert!(h.app.tab_hits().iter().any(|t| matches!(t.2, TabHit::More(_))), "more tabs hidden: {}", bar(&mut h, w));
+    h.mouse(MouseEventKind::Up(MouseButton::Left), w - 1, y + 1);
+    assert_eq!(texts(&h).iter().position(|t| t == "0"), Some(shown));
+}
+
+/// A tab pressed while it slides is held where it was drawn, not where it is going.
+#[test]
+fn a_tab_pressed_while_it_slides_is_held_where_it_was_drawn() {
+    let mut h = three_tabs();
+    let y = bar_y(&h);
+    let (a0, a1) = span(&h, 0);
+    let (b0, b1) = span(&h, 1);
+    let x = dragged_past_b(&mut h);
+    release(&mut h, x, y);
+    assert_eq!(texts(&h), ["b", "a", "c"]);
+    h.advance(SLIDE_FRAME);
+    h.draw(W, H);
+    // `a` belongs after `b` now, at a0 + b's width.
+    let (place, drawn) = (i32::from(a0 + b1 - b0), h.app.tab_x(1).unwrap());
+    assert!(drawn < place, "still sliding to its place at {place}: {drawn}");
+    let at = u16::try_from(drawn).unwrap() + 3;
+    press(&mut h, at, y);
+    drag(&mut h, at + 2, y);
+    assert_eq!(lifted(&mut h, W).map(|l| l.0), Some(at + 2 - 3), "held by its fourth column");
+    assert_eq!(lifted(&mut h, W).map(|l| l.1 - l.0), Some(a1 - a0));
+}
+
+/// Other tabs or another order (a key opened or moved one) end the drag: every tab goes back,
+/// the rest of the drag moves nothing.
+#[test]
+fn a_key_that_opens_or_moves_a_tab_ends_the_drag() {
+    let mut h = three_tabs();
+    let y = bar_y(&h);
+    let before = bar(&mut h, W);
+    let spans: Vec<(u16, u16)> = (0..3).map(|i| span(&h, i)).collect();
+    let x = dragged_past_b(&mut h);
+    h.keys(" t>");
+    h.draw(W, H);
+    assert_eq!(texts(&h), ["b", "a", "c"], "the key moved the tab");
+    assert_eq!(h.app.tab_drag_view(), None);
+    slide_out(&mut h, W);
+    assert_eq!(lifted(&mut h, W), None);
+    drag(&mut h, x + 20, y);
+    release(&mut h, x + 20, y);
+    assert_eq!(texts(&h), ["b", "a", "c"], "the rest of the drag moves nothing");
+    h.keys(" t<");
+    h.draw(W, H);
+    slide_out(&mut h, W);
+    assert_eq!(bar(&mut h, W), before);
+    let x = dragged_past_b(&mut h);
+    h.ctrl('t');
+    h.draw(W, H);
+    assert_eq!(h.app.tab_drag_view(), None);
+    release(&mut h, x, y);
+    let kept: Vec<String> = texts(&h).into_iter().filter(|t| !t.is_empty()).collect();
+    assert_eq!(kept, ["a", "b", "c"], "the new tab is the only change");
+    slide_out(&mut h, W);
+    assert_eq!(span(&h, 0), spans[0]);
 }
 
 /// A release while the screen is too small to draw the workspace still ends the drag.

@@ -252,12 +252,13 @@ impl App {
             d.order = self.tabs.iter().map(|t| t.id).collect();
             d.slot = from;
             d.lifted = true;
-            // Held where the press was (the press may have scrolled the bar: within the tab).
-            let at = self.tab_geom.at.get(from).copied().flatten();
-            let width = self.tab_geom.widths.get(from).copied().unwrap_or(1).max(1);
-            d.grab = at.map_or(0, |a| d.press_x.saturating_sub(a).min(width - 1));
+            // Held where the press was, on the tab as it was drawn (sliding, or scrolled by the
+            // press: within the tab).
+            let at = self.tab_geom.drawn.get(from).copied().flatten();
+            let width = i32::from(self.tab_geom.widths.get(from).copied().unwrap_or(1).max(1));
+            d.grab = at.map_or(0, |a| (i32::from(d.press_x) - a).clamp(0, width - 1) as u16);
         }
-        self.tab_drag_follow(&mut d, x, y);
+        self.tab_drag_follow(&mut d, x, y, true);
         self.tab_drag = Some(d);
         true
     }
@@ -268,12 +269,13 @@ impl App {
     }
 
     /// The lifted tab `d` follows the pointer at (x, y): its place, by what the tab bar drew
-    /// last. A change of place makes the tabs it moves slide.
-    fn tab_drag_follow(&mut self, d: &mut TabDrag, x: u16, y: u16) {
+    /// last (`scroll`: over a scroll mark, past the next hidden tab). A change of place makes
+    /// the tabs it moves slide.
+    fn tab_drag_follow(&mut self, d: &mut TabDrag, x: u16, y: u16, scroll: bool) {
         let bar = self.layout.tab_bar;
         let far = bar.width == 0 || y.abs_diff(bar.y) > OUTSIDE_ROWS;
         let from = d.from();
-        let slot = if far { from } else { self.tab_drag_slot(d, x).unwrap_or(d.slot) };
+        let slot = if far { from } else { self.tab_drag_slot(d, x, scroll).unwrap_or(d.slot) };
         if slot != d.slot || far != d.far {
             self.tab_slide.armed = true;
         }
@@ -284,7 +286,7 @@ impl App {
 
     /// Where the lifted tab `d` goes with the pointer at column `x`, by what the tab bar drew
     /// last (`None`: it drew another set of tabs).
-    fn tab_drag_slot(&self, d: &TabDrag, x: u16) -> Option<usize> {
+    fn tab_drag_slot(&self, d: &TabDrag, x: u16, scroll: bool) -> Option<usize> {
         let g = &self.tab_geom;
         let n = d.order.len();
         let from = d.from();
@@ -301,9 +303,9 @@ impl App {
         let mut slot = follow(&others, d.slot, first, last, g.left, left as u16);
         // Over a scroll mark (or past it), next to the last tab shown on that side: past the
         // next hidden tab, one per move.
-        if x >= g.stop && last + 1 < n && slot == last {
+        if scroll && x >= g.stop && last + 1 < n && slot == last {
             slot += 1;
-        } else if x < g.left && first > 0 && slot == first {
+        } else if scroll && x < g.left && first > 0 && slot == first {
             slot -= 1;
         }
         Some(slot)
@@ -320,10 +322,10 @@ impl App {
             self.end_lifted(&d);
             return true;
         }
-        // Where it was shown, when released where the last move was (over a scroll mark that
-        // move went past a hidden tab already).
+        // Where it was shown, when released where the last move was; elsewhere where the
+        // pointer takes it, but never past a hidden tab no frame showed it next to.
         if (x, y) != (d.x, d.y) {
-            self.tab_drag_follow(&mut d, x, y);
+            self.tab_drag_follow(&mut d, x, y, false);
         }
         self.end_lifted(&d);
         if !d.far {
@@ -349,7 +351,8 @@ impl App {
     /// A lifted tab is let go: the tabs slide to where they belong now, the tab over the
     /// others.
     fn end_lifted(&mut self, d: &TabDrag) {
-        if d.lifted {
+        // On a screen too small for the bar nothing is drawn that could slide.
+        if d.lifted && !self.layout.too_small {
             self.tab_slide.armed = true;
             self.tab_slide.top = Some(d.tab);
         }

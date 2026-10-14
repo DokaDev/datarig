@@ -60,7 +60,7 @@ fn a_tab_drawn_over_another_never_leaves_half_a_wide_character() {
     put_tab(&mut line, 10, 16, 9, &plain("\u{AC00}\u{B098}"), 1, None);
     mend(&mut line);
     assert_eq!(symbols(&line), " \u{B098}|def", "the first one's left half is off the bar");
-    // Cut at the right edge: shortened with `…` at a whole character, as before.
+    // Cut at the right edge: shortened with `…` at a whole character.
     let mut line = vec![None; 4];
     put_tab(&mut line, 0, 4, 0, &plain("a\u{AC00}\u{B098}"), 0, None);
     mend(&mut line);
