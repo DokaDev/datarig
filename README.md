@@ -929,7 +929,7 @@ The workspace layout:
 | `crates/tui` | the terminal UI and the `datarig` binary |
 | `crates/bench` | benchmarks and the CI performance budgets |
 | `vendor/tokio-postgres` | a patched tokio-postgres (per-column result formats, pipelining); see [vendor/README.md](vendor/README.md) |
-| `vendor/mysql_async` | a patched mysql_async (connects over a stream the driver opens, never opens a local port for a tunnel, and more); see [vendor/README.md](vendor/README.md) |
+| `vendor/mysql_async` | a patched mysql_async (connects over a stream the driver opens, so a tunnel needs no local port; never asks for multi-statements or `LOAD DATA LOCAL`); see [vendor/README.md](vendor/README.md) |
 | `locales` | the UI text catalogs (`en.toml`, `ko.toml`) |
 | `dev` | Docker Compose with PostgreSQL, MySQL, PgBouncer and an SSH bastion for the tests |
 | `docs` | [architecture](docs/architecture.md), [key bindings](docs/keybindings.md), [performance](docs/perf.md) |

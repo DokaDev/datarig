@@ -596,9 +596,9 @@ Held by CI budgets (`docs/perf.md`).
 ## The dialect seam
 
 Every SQL tool takes the dialect of the text it works on, and quoting and value kinds go
-through it. PostgreSQL's dialect is the PostgreSQL driver's, and MySQL's (lexed, split, completed,
-formatted, quoted, classified) the MySQL driver's (see "MySQL text" and "The MySQL
-classifier" below).
+through it. The PostgreSQL driver's text is read in the PostgreSQL dialect and the MySQL driver's in
+the MySQL dialect (lexed, split, completed, formatted, quoted, classified; see "MySQL text"
+and "The MySQL classifier" below).
 
 - **Types** (`datarig_core::sql::dialect`): `Dialect` (`Postgres`, the default, and
   `MySql(MySqlMode)`) is the SQL dialect of a text, and `Language` (`Sql(Dialect)`) the

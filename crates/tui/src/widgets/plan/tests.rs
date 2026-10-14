@@ -148,7 +148,7 @@ fn every_view_stays_inside_its_area_at_every_small_size() {
     let json = r#"[{"Plan": {"Node Type": "Hash Join", "Join Type": "Semi", "Startup Cost": 1e20, "Total Cost": 1e40,
         "Plan Rows": 1e15, "Plan Width": 4, "Actual Startup Time": 0.5, "Actual Total Time": 9e9, "Actual Rows": 3e12,
         "Actual Loops": 1, "Plans": [
-        {"Node Type": "Seq Scan", "Relation Name": "\uD45C\uC2DC", "Alias": "表", "Parent Relationship": "Outer",
+        {"Node Type": "Seq Scan", "Relation Name": "\uD45C\uC2DC", "Alias": "\u8868", "Parent Relationship": "Outer",
          "Startup Cost": 0, "Total Cost": 5e39, "Plan Rows": 7, "Plan Width": 4, "Actual Startup Time": 0.1,
          "Actual Total Time": 4e9, "Actual Rows": 1e12, "Actual Loops": 3, "Rows Removed by Filter": 1e9},
         {"Node Type": "Seq Scan", "Relation Name": "t", "Parent Relationship": "Inner", "Startup Cost": 0,
