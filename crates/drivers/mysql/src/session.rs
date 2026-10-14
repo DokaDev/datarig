@@ -460,6 +460,11 @@ pub(crate) fn connect_error(e: &mysql_async::Error) -> (DbError, bool) {
         mysql_async::Error::Driver(mysql_async::DriverError::PasswordOverUnverifiedTls) => {
             (DbError::Tls(TlsProblem::PasswordUnverified), false)
         }
+        // A TLS alert while logging in (a server that refuses the client certificate says so
+        // after a TLS 1.3 handshake, on the first read).
+        mysql_async::Error::Io(mysql_async::IoError::Io(io)) if datarig_tls::problem_in_io(io, "").is_some() => {
+            (DbError::Tls(datarig_tls::problem_in_io(io, "").expect("checked")), false)
+        }
         mysql_async::Error::Driver(mysql_async::DriverError::PasswordTooLongForKey { max }) => {
             (DbError::PasswordTooLong { max: *max }, false)
         }
@@ -490,10 +495,9 @@ pub(crate) fn my_error(e: &mysql_async::Error) -> DbError {
         mysql_async::Error::Server(s) if s.code == SECURE_TRANSPORT_REQUIRED => DbError::TlsRequired,
         mysql_async::Error::Server(s) => DbError::Server(format!("ERROR {} ({}): {}", s.code, s.state, s.message)),
         mysql_async::Error::Driver(mysql_async::DriverError::ConnectionClosed) => DbError::Closed,
-        // The TLS handshake's failure, or a TLS alert afterwards (a server that refuses the
-        // client certificate says so after a TLS 1.3 handshake, on the first read).
-        mysql_async::Error::Io(mysql_async::IoError::Io(io)) if tls_problem(io).is_some() => {
-            DbError::Tls(tls_problem(io).expect("checked"))
+        // The TLS handshake's failure.
+        mysql_async::Error::Io(mysql_async::IoError::Io(io)) if handshake_problem(io).is_some() => {
+            DbError::Tls(handshake_problem(io).expect("checked"))
         }
         mysql_async::Error::Io(mysql_async::IoError::Io(io)) => match io.kind() {
             std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::BrokenPipe => DbError::Closed,
@@ -503,12 +507,10 @@ pub(crate) fn my_error(e: &mysql_async::Error) -> DbError {
     }
 }
 
-/// The TLS problem an io error carries: the handshake's ([`TlsFailed`]) or rustls's own.
-fn tls_problem(io: &std::io::Error) -> Option<TlsProblem> {
-    if let Some(TlsFailed(p)) = io.get_ref().and_then(|e| e.downcast_ref::<TlsFailed>()) {
-        return Some(p.clone());
-    }
-    datarig_tls::problem_in_io(io, "")
+/// The problem of a failed TLS handshake an io error carries ([`TlsFailed`]). A TLS error of a
+/// connection that is up (a broken record) is the connection's failure, not the handshake's.
+fn handshake_problem(io: &std::io::Error) -> Option<TlsProblem> {
+    io.get_ref().and_then(|e| e.downcast_ref::<TlsFailed>()).map(|TlsFailed(p)| p.clone())
 }
 
 /// How long asking the server whether a stopped statement is still there may take.

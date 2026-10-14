@@ -84,8 +84,17 @@ fn run_dialer() -> Option<Arc<TcpDialer>> {
         .clone()
 }
 
+/// The profile of `url`, in the TLS mode `DATARIG_TEST_MYSQL_SSLMODE` names (unset: `DISABLED`,
+/// as these tests were written; CI runs them once more with `PREFERRED`, over TLS).
 fn profile(url: &str) -> ConnectionConfig {
-    ConnectionConfig { name: "it".into(), driver: "mysql".into(), dsn: Some(url.to_string()), ..Default::default() }
+    let sslmode = std::env::var("DATARIG_TEST_MYSQL_SSLMODE").unwrap_or_else(|_| "DISABLED".into());
+    ConnectionConfig {
+        name: "it".into(),
+        driver: "mysql".into(),
+        dsn: Some(url.to_string()),
+        sslmode,
+        ..Default::default()
+    }
 }
 
 /// `url` with another user and password.
@@ -645,8 +654,8 @@ async fn caching_sha2_logs_in_on_a_plain_connection_first_and_cached() {
     let Some((url, admin)) = urls("caching_sha2_logs_in_on_a_plain_connection_first_and_cached") else { return };
     let account = Account::make(&admin, "sha2", "WITH caching_sha2_password BY 'pw'").await.unwrap();
     // A new account is not in the server's cache: the first login sends the password, which
-    // over a plain connection goes encrypted with the server's public key; the second is
-    // answered from the cache.
+    // over a plain connection (TLS off, as by default here) goes encrypted with the server's
+    // public key, and over TLS inside TLS (this machine); the second is answered from the cache.
     for _ in 0..2 {
         let c = Conn::open(
             &as_user(&url, &account.name, "pw"),
@@ -723,8 +732,12 @@ async fn a_pinned_server_key_encrypts_the_first_login() {
     let server_key = temp_file("server.pem", &key.expect("the server's public key").1);
     let other_key = temp_file("other.pem", OTHER_KEY);
     let start = |user: &str, key: &str| {
-        let cfg =
-            ConnectionConfig { server_public_key_file: Some(key.to_string()), ..profile(&as_user(&url, user, "pw")) };
+        // A pinned key is for an unencrypted login (over TLS the password goes inside TLS).
+        let cfg = ConnectionConfig {
+            server_public_key_file: Some(key.to_string()),
+            sslmode: "DISABLED".into(),
+            ..profile(&as_user(&url, user, "pw"))
+        };
         let (tx, rx) = unbounded_channel();
         let session = MyDriver.connect(&cfg, SessionRole::Meta, opts(SessionRole::Meta, test), tx);
         Conn { session, rx }

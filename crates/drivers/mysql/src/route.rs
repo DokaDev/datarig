@@ -5,7 +5,7 @@
 
 use datarig_core::driver::DbError;
 use datarig_core::fault::{Fault, FaultKind};
-use datarig_core::tls::{TlsMode, TlsSettings};
+use datarig_core::tls::TlsSettings;
 use datarig_core::transport::{BoxedStream, DialError, DialerRef};
 use datarig_tls::Connector;
 use std::sync::Arc;
@@ -45,7 +45,7 @@ impl Route {
     pub(crate) fn with_tls(mut self, settings: &TlsSettings, key_retrieval: bool) -> Result<Self, DbError> {
         let connector = Connector::new(settings, &self.host).map_err(DbError::Tls)?;
         self.tls = RouteTls {
-            required: settings.mode != TlsMode::Prefer,
+            required: connector.as_ref().is_some_and(Connector::required),
             password_ok: settings.mode.verifies() || !self.exposed() || key_retrieval,
             connector: connector.map(Arc::new),
         };
