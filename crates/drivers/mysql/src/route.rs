@@ -1,11 +1,14 @@
 //! How a session reaches its server: a TCP connection of its own, or a stream its dialer opens
 //! (a channel of an SSH tunnel). Either way the driver holds the stream and hands it to
 //! mysql_async, so a connection, a test connection and a cancel's connection ([`Route::dial`])
-//! all go the same way.
+//! all go the same way, with the profile's TLS ([`RouteTls`]).
 
 use datarig_core::driver::DbError;
 use datarig_core::fault::{Fault, FaultKind};
+use datarig_core::tls::TlsSettings;
 use datarig_core::transport::{BoxedStream, DialError, DialerRef};
+use datarig_tls::Connector;
+use std::sync::Arc;
 use std::time::Duration;
 
 /// Where the server is, and how to get there.
@@ -15,11 +18,38 @@ pub(crate) struct Route {
     port: u16,
     /// Through this dialer (as the far end of its transport sees `host`); `None`: directly.
     dialer: Option<DialerRef>,
+    /// How its connections are encrypted.
+    pub(crate) tls: RouteTls,
+}
+
+/// The TLS of a route's connections: the connector (`None`: TLS off), whether a server without
+/// TLS is an error, and whether a login may send the password itself over it.
+#[derive(Clone, Default)]
+pub(crate) struct RouteTls {
+    pub(crate) connector: Option<Arc<Connector>>,
+    pub(crate) required: bool,
+    pub(crate) password_ok: bool,
 }
 
 impl Route {
     pub(crate) fn new(host: &str, port: u16, dialer: Option<DialerRef>) -> Self {
-        Self { host: host.to_string(), port, dialer }
+        Self { host: host.to_string(), port, dialer, tls: RouteTls::default() }
+    }
+
+    /// The route with TLS as `settings` say (files read now; the certificate is checked against
+    /// the route's host, the profile's, also through a tunnel). A full `caching_sha2_password`
+    /// login may send the password itself over TLS when the server was verified, when the route
+    /// does not go through the network on its own (loopback, a tunnel), or when the profile lets
+    /// a login trust whoever answers (`key_retrieval`, as it trusts the key such a server
+    /// sends): never otherwise, as it would go to whoever is in between.
+    pub(crate) fn with_tls(mut self, settings: &TlsSettings, key_retrieval: bool) -> Result<Self, DbError> {
+        let connector = Connector::new(settings, &self.host).map_err(DbError::Tls)?;
+        self.tls = RouteTls {
+            required: connector.as_ref().is_some_and(Connector::required),
+            password_ok: settings.mode.verifies() || !self.exposed() || key_retrieval,
+            connector: connector.map(Arc::new),
+        };
+        Ok(self)
     }
 
     /// The route goes through the network unencrypted: directly (no tunnel) to a server that is

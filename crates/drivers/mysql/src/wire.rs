@@ -10,10 +10,15 @@
 //!   cleans a dropped connection up on a task of its own, reading what the server still
 //!   sends);
 //! * seal it ([`Wire::seal`]): what the server still sends is read, and the next write (a new
-//!   request) cuts it instead of reaching the server.
+//!   request) cuts it instead of reaching the server;
+//! * encrypt it ([`Wire::encrypt`]): the TLS handshake over the stream, which the wire then
+//!   reads and writes through, so all of the above is about MySQL's packets, never TLS records
+//!   (a key update TLS writes while it reads is no new request).
 
 use datarig_core::driver::DbError;
+use datarig_core::tls::{Encryption, TlsProblem};
 use datarig_core::transport::BoxedStream;
+use datarig_tls::Connector;
 use std::io;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -71,6 +76,24 @@ impl Wire {
         self.lock().map_or(0, |s| s.pushback.len())
     }
 
+    /// The TLS handshake over the stream with `connector` (right after the SSLRequest, when
+    /// nothing of the server's is kept); from then on the wire reads and writes through TLS.
+    /// A failure is an io error carrying the problem ([`TlsFailed`]).
+    pub(crate) async fn encrypt(&self, connector: &Connector) -> io::Result<Encryption> {
+        let raw = {
+            let mut s = self.lock()?;
+            if s.cut || !s.pushback.is_empty() {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "the stream is not ready for TLS"));
+            }
+            // In its place while the handshake runs: nothing else uses the wire meanwhile.
+            std::mem::replace(&mut s.stream, Box::new(tokio::io::duplex(1).0))
+        };
+        let tls = connector.connect(raw).await.map_err(|p| io::Error::other(TlsFailed(p)))?;
+        let encryption = connector.encryption(&tls);
+        self.lock()?.stream = Box::new(tls);
+        Ok(encryption)
+    }
+
     /// Every read and write fails from now on.
     pub(crate) fn cut(&self) {
         if let Ok(mut s) = self.lock() {
@@ -85,9 +108,8 @@ impl Wire {
 
     /// Nothing more is sent: the answer the server still owes is read as before, and the next
     /// write, which can only be a new request, cuts the wire instead of reaching the server.
-    /// (Encryption over the wire would change that: TLS may write on its own while it reads, a
-    /// key update, and such a write cuts too. The session is then lost before the answer's end,
-    /// never kept on a connection that runs more.)
+    /// (Over TLS the wire carries MySQL's packets: what TLS writes on its own while it reads, a
+    /// key update, goes below the wire and is no request.)
     pub(crate) fn seal(&self) {
         if let Ok(mut s) = self.lock() {
             s.sealed = true;
@@ -130,6 +152,18 @@ impl Wire {
         Poll::Ready(())
     }
 }
+
+/// Why the TLS handshake failed, carried in the io error mysql_async reports.
+#[derive(Debug)]
+pub(crate) struct TlsFailed(pub(crate) TlsProblem);
+
+impl std::fmt::Display for TlsFailed {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "TLS: {:?}", self.0)
+    }
+}
+
+impl std::error::Error for TlsFailed {}
 
 fn cut_error() -> io::Error {
     io::Error::new(io::ErrorKind::BrokenPipe, "the session closed the connection")

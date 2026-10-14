@@ -4,14 +4,16 @@
 //! ([`Tracked`]); and the cancel's connection of its own ([`Killer`]).
 
 use crate::route::{Route, io_fault};
-use crate::wire::Wire;
+use crate::wire::{TlsFailed, Wire};
 use datarig_core::driver::{CancelFailure, DbError, SessionRole, SessionValues};
 use datarig_core::fault::{Fault, FaultKind};
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::profile::dsn::{self, Scheme};
 use datarig_core::sql::dialect::MySqlMode;
+use datarig_core::tls::{Encryption, TlsProblem, TlsSettings};
+use datarig_core::transport::{BoxedStream, DialerRef};
 use mysql_async::prelude::Queryable;
-use mysql_async::{Conn, Opts, OptsBuilder, SessionStateChange};
+use mysql_async::{Conn, Opts, OptsBuilder, SessionStateChange, StreamTls, UpgradeFuture};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -40,6 +42,8 @@ pub(crate) struct Target {
     server_key: Option<Vec<u8>>,
     /// The profile lets a direct login to another machine ask the server for its key.
     allow_key_retrieval: bool,
+    /// The profile's TLS settings.
+    tls: TlsSettings,
 }
 
 impl Target {
@@ -48,6 +52,7 @@ impl Target {
         let settings = |why: String| DbError::Settings(Fault::other(why));
         let some = |s: &str| (!s.is_empty()).then(|| s.to_string());
         let server_key = cfg.server_public_key_file.as_deref().map(crate::server_key::read).transpose()?;
+        let tls = cfg.tls().map_err(DbError::Tls)?;
         match &cfg.dsn {
             Some(text) => {
                 // The parser's error may quote a piece of the URL, a password among them.
@@ -70,6 +75,7 @@ impl Target {
                     database: some(&d.database),
                     server_key,
                     allow_key_retrieval: cfg.allow_public_key_retrieval,
+                    tls,
                 })
             }
             None => Ok(Self {
@@ -80,16 +86,24 @@ impl Target {
                 database: some(&cfg.database),
                 server_key,
                 allow_key_retrieval: cfg.allow_public_key_retrieval,
+                tls,
             }),
         }
+    }
+
+    /// The route to the server: directly or through `dialer`, with the profile's TLS.
+    pub(crate) fn route(&self, dialer: Option<DialerRef>) -> Result<Route, DbError> {
+        Route::new(&self.host, self.port, dialer).with_tls(&self.tls, self.allow_key_retrieval)
     }
 
     /// The client's options for a connection over `route` to `database` (or none) that the
     /// server lists as `program_name` (`performance_schema.session_connect_attrs`). mysql_async
     /// asks the server nothing more after the login (`max_allowed_packet` and `wait_timeout` are
-    /// given), never moves to the server's socket file, and never sends the password as it is:
-    /// the cleartext method is off, and a full `caching_sha2_password` login over a stream that
-    /// is not encrypted (no TLS yet) sends it encrypted with the server's public key. That is
+    /// given), never moves to the server's socket file, and never sends the password as it is
+    /// over an unencrypted stream: the cleartext method is off, a full `caching_sha2_password`
+    /// login over TLS sends it inside TLS only where the route allows it ([`Route::with_tls`]),
+    /// and one over a stream that is not encrypted sends it encrypted with the server's public
+    /// key. That is
     /// the profile's key file (`--server-public-key-path`), else the key the server sends when
     /// asked (`--get-server-public-key`), over the same connection: on a direct connection to
     /// another machine whoever sits in between could send theirs, so it is asked only when the
@@ -331,6 +345,8 @@ fn on(value: &str) -> bool {
 pub(crate) struct Opened {
     pub(crate) conn: Conn,
     pub(crate) wire: Wire,
+    /// How its traffic goes.
+    pub(crate) encryption: Encryption,
     pub(crate) server: Server,
     pub(crate) tracked: Tracked,
     /// The connection's id on the server (what `KILL QUERY` names).
@@ -342,8 +358,8 @@ pub(crate) struct Opened {
 /// server. A failure says whether it is about the password (`true`: a prompt can help).
 pub(crate) async fn open(route: &Route, opts: Opts, settings: Settings) -> Result<Opened, (DbError, bool)> {
     let stream = route.dial(DIAL_TIMEOUT).await.map_err(|e| (e, false))?;
-    let (wire, stream) = Wire::new(stream);
-    let mut conn = Conn::connect_with_stream(opts, Box::new(stream)).await.map_err(|e| connect_error(&e))?;
+    let (wire, conn, encryption) = login(route, stream, opts).await;
+    let mut conn = conn.map_err(|e| connect_error(&e))?;
     let server = Server { version: conn.server_version(), mariadb: conn.is_mariadb() };
     if let Err(e) = server.check() {
         quit(conn).await;
@@ -384,7 +400,38 @@ pub(crate) async fn open(route: &Route, opts: Opts, settings: Settings) -> Resul
             id.unwrap_or(u64::from(conn.id()))
         }
     };
-    Ok(Opened { conn, wire, server, tracked, id })
+    Ok(Opened { conn, wire, encryption, server, tracked, id })
+}
+
+/// The handshake and login over `stream` of `route`, through a [`Wire`]: encrypted as the
+/// route's TLS says (the wire carries TLS from the SSLRequest on, [`Wire::encrypt`]). How its
+/// traffic went, once logged in.
+pub(crate) async fn login(
+    route: &Route,
+    stream: BoxedStream,
+    opts: Opts,
+) -> (Wire, Result<Conn, mysql_async::Error>, Encryption) {
+    let (wire, stream) = Wire::new(stream);
+    let outcome: Arc<std::sync::Mutex<Option<Encryption>>> = Arc::default();
+    let tls = route.tls.connector.clone().map(|connector| {
+        let (wire, outcome) = (wire.clone(), outcome.clone());
+        StreamTls {
+            required: route.tls.required,
+            password_ok: route.tls.password_ok,
+            upgrade: Box::new(move |stream| -> UpgradeFuture {
+                Box::pin(async move {
+                    let encryption = wire.encrypt(&connector).await?;
+                    if let Ok(mut o) = outcome.lock() {
+                        *o = Some(encryption);
+                    }
+                    Ok(stream)
+                })
+            }),
+        }
+    });
+    let conn = Conn::connect_with_stream_tls(opts, Box::new(stream), tls).await;
+    let encryption = outcome.lock().ok().and_then(|o| *o).unwrap_or(Encryption::Plain);
+    (wire, conn, encryption)
 }
 
 /// How long closing a connection waits for the server to take its `COM_QUIT`.
@@ -406,6 +453,17 @@ pub(crate) fn connect_error(e: &mysql_async::Error) -> (DbError, bool) {
         }
         mysql_async::Error::Driver(mysql_async::DriverError::PublicKeyRetrievalDisabled) => {
             (DbError::KeyRetrievalRefused, false)
+        }
+        mysql_async::Error::Driver(mysql_async::DriverError::NoClientSslFlagFromServer) => {
+            (DbError::Tls(TlsProblem::Unsupported), false)
+        }
+        mysql_async::Error::Driver(mysql_async::DriverError::PasswordOverUnverifiedTls) => {
+            (DbError::Tls(TlsProblem::PasswordUnverified), false)
+        }
+        // A TLS alert while logging in (a server that refuses the client certificate says so
+        // after a TLS 1.3 handshake, on the first read).
+        mysql_async::Error::Io(mysql_async::IoError::Io(io)) if datarig_tls::problem_in_io(io, "").is_some() => {
+            (DbError::Tls(datarig_tls::problem_in_io(io, "").expect("checked")), false)
         }
         mysql_async::Error::Driver(mysql_async::DriverError::PasswordTooLongForKey { max }) => {
             (DbError::PasswordTooLong { max: *max }, false)
@@ -437,12 +495,22 @@ pub(crate) fn my_error(e: &mysql_async::Error) -> DbError {
         mysql_async::Error::Server(s) if s.code == SECURE_TRANSPORT_REQUIRED => DbError::TlsRequired,
         mysql_async::Error::Server(s) => DbError::Server(format!("ERROR {} ({}): {}", s.code, s.state, s.message)),
         mysql_async::Error::Driver(mysql_async::DriverError::ConnectionClosed) => DbError::Closed,
+        // The TLS handshake's failure.
+        mysql_async::Error::Io(mysql_async::IoError::Io(io)) if handshake_problem(io).is_some() => {
+            DbError::Tls(handshake_problem(io).expect("checked"))
+        }
         mysql_async::Error::Io(mysql_async::IoError::Io(io)) => match io.kind() {
             std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::BrokenPipe => DbError::Closed,
             _ => DbError::Connection(io_fault(io)),
         },
         e => DbError::Connection(Fault::new(FaultKind::Other, e.to_string())),
     }
+}
+
+/// The problem of a failed TLS handshake an io error carries ([`TlsFailed`]). A TLS error of a
+/// connection that is up (a broken record) is the connection's failure, not the handshake's.
+fn handshake_problem(io: &std::io::Error) -> Option<TlsProblem> {
+    io.get_ref().and_then(|e| e.downcast_ref::<TlsFailed>()).map(|TlsFailed(p)| p.clone())
 }
 
 /// How long asking the server whether a stopped statement is still there may take.
@@ -622,8 +690,7 @@ impl Killer {
         };
         let kill = async {
             let stream = self.route.dial(DIAL_TIMEOUT).await.map_err(&why).ok()?;
-            let (_wire, stream) = Wire::new(stream);
-            let conn = Conn::connect_with_stream(self.opts.clone(), Box::new(stream)).await;
+            let (_wire, conn, _) = login(&self.route, stream, self.opts.clone()).await;
             let mut conn = conn.map_err(|e| why(connect_error(&e).0)).ok()?;
             let mut sent = None;
             for n in 0..KILL_TRIES {
@@ -686,8 +753,8 @@ impl Killer {
         tokio::spawn(async move {
             let again = async {
                 let stream = killer.route.dial(DIAL_TIMEOUT).await.ok()?;
-                let (_wire, stream) = Wire::new(stream);
-                let mut conn = Conn::connect_with_stream(killer.opts.clone(), Box::new(stream)).await.ok()?;
+                let (_wire, conn, _) = login(&killer.route, stream, killer.opts.clone()).await;
+                let mut conn = conn.ok()?;
                 {
                     let _sending = gate.sending.lock().await;
                     if gate.is_open() {
@@ -725,8 +792,8 @@ impl Killer {
     pub(crate) async fn still_there(&self) -> bool {
         let ask = async {
             let stream = self.route.dial(DIAL_TIMEOUT).await.ok()?;
-            let (_wire, stream) = Wire::new(stream);
-            let mut conn = Conn::connect_with_stream(self.opts.clone(), Box::new(stream)).await.ok()?;
+            let (_wire, conn, _) = login(&self.route, stream, self.opts.clone()).await;
+            let mut conn = conn.ok()?;
             let sql = format!(
                 "SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE ID = {} AND COMMAND = 'Query'",
                 self.id

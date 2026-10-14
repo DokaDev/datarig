@@ -219,14 +219,24 @@ statements, and with `LOAD DATA LOCAL` a server could ask for any file of the cl
 Every change in the source is marked with a `datarig:` comment.
 
 - `src/io/mod.rs`: the trait `CustomStream` (any `AsyncRead + AsyncWrite + Send + Unpin`), the
-  endpoint `Endpoint::Custom` over one (neither a socket nor secure, so a full
+  endpoint `Endpoint::Custom` over one (neither a socket nor secure unless the caller encrypted
+  it, `StreamTls` and `Stream::upgrade_custom`; unencrypted, a full
   `caching_sha2_password` login sends the password encrypted with the server's public key;
   its liveness check is left to the stream's owner), and `Stream::custom`. `src/io/tls/rustls_io.rs` and `native_tls_io.rs` refuse TLS over such a
   stream (not built here: no TLS feature is on).
 - `src/conn/mod.rs`: `Conn::connect_with_stream(opts, stream)`, a connection over the
   caller's stream (handshake, authentication, settings, init and setup commands as `Conn::new`
   does them, which now share them in `Conn::open`; it never moves to the server's socket file),
-  and `Conn::is_mariadb`. `continue_caching_sha2_password_auth`: a full login over a
+  and `Conn::is_mariadb`. `Conn::connect_with_stream_tls(opts, stream, tls)` (`connect_with_stream`
+  is it without TLS): with a `StreamTls` (`src/io/mod.rs`), once the server's handshake offers
+  `CLIENT_SSL` the connection sends its SSLRequest and hands the stream to the caller's
+  `upgrade` (datarig's own TLS handshake), then goes on over the stream it gives back; a server
+  without `CLIENT_SSL` gets the connection unencrypted, or `DriverError::NoClientSslFlagFromServer`
+  when `required`. Such a stream counts as secure (a full `caching_sha2_password` login sends the
+  password inside TLS) only when the caller says the password may go over it
+  (`StreamTls::password_ok`); otherwise that login fails with
+  `DriverError::PasswordOverUnverifiedTls` before it sends anything.
+  `continue_caching_sha2_password_auth`: a full login over a
   connection that is neither secure nor a socket encrypts the password with the key of the
   options (`server_public_key`) when there is one and then never asks the server for its key;
   without one it asks (`0x02`) only when `public_key_retrieval` is on, and otherwise fails
