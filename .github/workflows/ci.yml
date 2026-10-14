@@ -75,7 +75,7 @@ jobs:
           DATARIG_TEST_SECURITY_CLI: ${{ runner.os == 'macOS' && '1' || '0' }}
 
   integration:
-    name: integration (PostgreSQL 17, PgBouncer, MySQL 8.4, SSH)
+    name: integration (PostgreSQL 17, PgBouncer, MySQL 8.4, SSH, TLS)
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -136,6 +136,12 @@ jobs:
       # The SSH bastion started below (crates/ssh/tests/bastion.rs, crates/tui/tests/integration_ssh.rs).
       DATARIG_TEST_SSH_BASTION: 127.0.0.1:52222
       DATARIG_REQUIRE_SSH: "1"
+      # The scratch TLS servers started below (crates/drivers/*/tests/tls_*.rs, and through the
+      # bastion in crates/ssh/tests/bastion.rs); DATARIG_TEST_TLS_CERTS is set by that step.
+      DATARIG_TEST_PG_TLS_URL: postgres://datarig:datarig@localhost:55433/datarig
+      DATARIG_TEST_MYSQL_TLS_URL: mysql://datarig:datarig@localhost:53307/datarig
+      DATARIG_TEST_MYSQL_TLS_ADMIN_URL: mysql://root:datarig-root@localhost:53307/
+      DATARIG_REQUIRE_TLS: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: Swatinem/rust-cache@v2
@@ -153,6 +159,16 @@ jobs:
         env:
           NETWORK: ${{ job.services.postgres.network }}
         run: bash .github/scripts/start-ssh-bastion.sh "$NETWORK"
+      # PostgreSQL 17 with TLS logins only and MySQL 8.4 that takes TLS only (dev/tls), on the
+      # services' network (the bastion reaches them as pg-tls.test and mysql-tls.test); their
+      # certificates are made here, never committed.
+      - name: TLS servers
+        env:
+          NETWORK: ${{ job.services.postgres.network }}
+        run: |
+          sh dev/tls/make-certs.sh "$RUNNER_TEMP/tls"
+          sh dev/tls/up.sh "$RUNNER_TEMP/tls" "$NETWORK"
+          echo "DATARIG_TEST_TLS_CERTS=$RUNNER_TEMP/tls" >> "$GITHUB_ENV"
       # The MySQL client the gated MySQL tests of datarig-core read their scripts with
       # (tests/mysql_split.rs, tests/mysql_classify.rs): the service container's own.
       - run: cargo test --workspace --locked
@@ -168,6 +184,12 @@ jobs:
       - name: The MySQL suite through a dialer
         env:
           DATARIG_TEST_DIAL: tcp
+        run: cargo test -p datarig-driver-mysql --test integration_mysql --locked
+      # The MySQL suite once more over TLS (the profile's default, PREFERRED: the service's
+      # server offers TLS with its own certificate), so the session's wire works the same above it.
+      - name: The MySQL suite over TLS
+        env:
+          DATARIG_TEST_MYSQL_SSLMODE: PREFERRED
         run: cargo test -p datarig-driver-mysql --test integration_mysql --locked
       # The tests drop the tables they create, even when they fail (tests/pg_clean in the
       # driver crate): nothing may be left in `public`, which the init scripts leave empty.

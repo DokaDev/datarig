@@ -63,7 +63,26 @@ make only `zz_`-named tables, databases and accounts, and drop them.
 | `DATARIG_TEST_MYSQL_URL` | `mysql://datarig:datarig@127.0.0.1:53306/shop` |
 | `DATARIG_TEST_MYSQL_ADMIN_URL` | `mysql://root:datarig-root@127.0.0.1:53306/` (looks at the driver's sessions from the side, makes test accounts) |
 | `DATARIG_TEST_MYSQL_CLIENT` | `docker exec -i datarig-mysql mysql -udatarig -pdatarig shop` (the MySQL client of the lexer and classifier tests) |
-| `DATARIG_REQUIRE_PG`, `DATARIG_REQUIRE_POOLER`, `DATARIG_REQUIRE_SSH`, `DATARIG_REQUIRE_MYSQL` | `1` makes a missing service a failure instead of a skip |
+| `DATARIG_TEST_PG_TLS_URL` | `postgres://datarig:datarig@localhost:55433/datarig` (the TLS servers below) |
+| `DATARIG_TEST_MYSQL_TLS_URL` | `mysql://datarig:datarig@localhost:53307/datarig` |
+| `DATARIG_TEST_MYSQL_TLS_ADMIN_URL` | `mysql://root:datarig-root@localhost:53307/` |
+| `DATARIG_TEST_TLS_CERTS` | the directory `tls/make-certs.sh` printed |
+| `DATARIG_TEST_MYSQL_SSLMODE` | the TLS mode of the MySQL suite's profiles (default `DISABLED`; CI runs it again with `PREFERRED`) |
+| `DATARIG_REQUIRE_PG`, `DATARIG_REQUIRE_POOLER`, `DATARIG_REQUIRE_SSH`, `DATARIG_REQUIRE_MYSQL`, `DATARIG_REQUIRE_TLS` | `1` makes a missing service a failure instead of a skip |
+
+## TLS servers
+
+Scratch servers for the TLS tests, never the services above or their volumes: PostgreSQL 17 on
+55433 (every login over TLS; the user `zz_cert` logs in with its client certificate) and MySQL
+8.4 on 53307 (`require_secure_transport=ON`), with throwaway certificates made by
+`tls/make-certs.sh` (git-ignored, never committed), on the compose network so the SSH bastion
+reaches them as `pg-tls.test` and `mysql-tls.test`.
+
+```sh
+sh tls/make-certs.sh          # prints the certificates' directory (default tls/.fixture)
+sh tls/up.sh tls/.fixture     # starts zz_datarig_pg_tls and zz_datarig_mysql_tls
+sh tls/down.sh                # removes them
+```
 
 ## Stop and reset
 
