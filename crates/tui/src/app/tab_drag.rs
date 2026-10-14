@@ -37,6 +37,10 @@ pub struct TabDrag {
     /// Where the tab would land, as a place between tabs (`0`: before the first, the number
     /// of tabs: after the last); `None` while the pointer is too far from the bar.
     pub slot: Option<usize>,
+    /// Where the pointer was when `slot` was found, and how many tabs there were then: a
+    /// release there drops the tab where the marker showed (the frame drawn since may have
+    /// scrolled the bar under the pointer); other tabs since make the marker stale.
+    pub at: Option<(u16, u16, usize)>,
 }
 
 /// Where a tab dragged to column `x` lands, as a place between tabs, by what the tab bar drew
@@ -74,14 +78,15 @@ impl App {
         if self.tabs.active_index() != index {
             return;
         }
-        self.tab_drag = Some(TabDrag { tab: self.tab().id, press_x: x, lifted: false, slot: None });
+        self.tab_drag = Some(TabDrag { tab: self.tab().id, press_x: x, lifted: false, slot: None, at: None });
     }
 
     /// The tab being dragged, as the tab bar draws it: its place and where it would land
     /// (`None`: nowhere, the pointer is too far from the bar). Only once it is lifted.
     pub fn tab_drag_view(&self) -> Option<(usize, Option<usize>)> {
         let d = self.tab_drag.filter(|d| d.lifted && !self.modal_open())?;
-        Some((self.tabs.position(d.tab)?, d.slot))
+        let current = d.at.is_some_and(|(_, _, n)| n == self.tabs.len());
+        Some((self.tabs.position(d.tab)?, d.slot.filter(|_| current)))
     }
 
     /// The left button moved to (x, y) while held: the pressed tab follows once it is lifted.
@@ -101,6 +106,7 @@ impl App {
         }
         d.lifted = true;
         d.slot = self.drop_slot_at(x, y);
+        d.at = Some((x, y, self.tabs.len()));
         self.tab_drag = Some(d);
         true
     }
@@ -121,7 +127,12 @@ impl App {
         if !d.lifted {
             return true;
         }
-        let (Some(from), Some(slot)) = (self.tabs.position(d.tab), self.drop_slot_at(x, y)) else { return true };
+        // Where the marker showed it, when released where it was drawn.
+        let slot = match d.at {
+            Some(at) if at == (x, y, self.tabs.len()) => d.slot,
+            _ => self.drop_slot_at(x, y),
+        };
+        let (Some(from), Some(slot)) = (self.tabs.position(d.tab), slot) else { return true };
         self.move_tab_to(from, slot_index(from, slot));
         true
     }

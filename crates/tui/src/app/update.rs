@@ -46,8 +46,13 @@ impl App {
         {
             self.drag = None;
             self.drag_at = None;
-            self.tab_drag = None;
             self.detail_press.disarm();
+        }
+        // A press of any button ends a tab's drag (it stays where it was).
+        if let Event::Mouse(m) = ev
+            && matches!(m.kind, MouseEventKind::Down(_))
+        {
+            self.tab_drag = None;
         }
         match ev {
             Event::Key(k) => {
@@ -55,18 +60,21 @@ impl App {
                 match keyboard::key_use(&k) {
                     KeyUse::Ignore => {}
                     // `Esc` while a tab is dragged only puts it back.
-                    KeyUse::Press if k.code == KeyCode::Esc && self.cancel_tab_drag() => {}
+                    KeyUse::Press if k.code == KeyCode::Esc && !self.modal_open() && self.cancel_tab_drag() => {}
                     u => self.handle_key(k, u == KeyUse::Repeat),
                 }
             }
             Event::Mouse(m) if self.modal_open() => {
-                // A dialog on top ends a tab's drag: it stays where it was.
                 self.tab_drag = None;
                 self.overlay_mouse(m)
             }
             Event::Mouse(m) => self.handle_mouse(m),
             Event::Paste(text) => self.paste(&text),
             _ => {}
+        }
+        // A dialog on top ends a tab's drag: it stays where it was (its `Esc` is the dialog's).
+        if self.modal_open() {
+            self.tab_drag = None;
         }
         self.after_input();
     }
@@ -638,6 +646,12 @@ impl App {
 
     pub(super) fn handle_mouse(&mut self, m: MouseEvent) {
         if self.layout.too_small {
+            // A release there still ends a drag (nothing moves).
+            if m.kind == MouseEventKind::Up(MouseButton::Left) {
+                self.tab_drag = None;
+                self.drag = None;
+                self.drag_at = None;
+            }
             return;
         }
         // A click while the search prompt is open only closes it.

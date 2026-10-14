@@ -212,9 +212,9 @@ fn esc_a_dialog_or_a_lost_release_put_the_tab_back() {
     h.keys(":");
     assert_eq!(h.overlay_kind(), Some(OverlayKind::Commands));
     assert_eq!(h.app.tab_drag_view(), None, "not drawn lifted under the dialog");
-    release(&mut h, c1 - 1, y);
     h.key(KeyCode::Esc);
-    assert_eq!(h.overlay_kind(), None);
+    assert_eq!(h.overlay_kind(), None, "the Esc is the dialog's");
+    release(&mut h, c1 - 1, y);
     drag(&mut h, c1 - 2, y);
     release(&mut h, c1 - 2, y);
     assert_eq!(texts(&h), ["a", "b", "c"]);
@@ -321,6 +321,88 @@ fn dragging_past_the_end_of_an_overflowing_bar_scrolls_it() {
     h.mouse(MouseEventKind::Up(MouseButton::Left), left, y);
     assert_eq!(texts(&h)[0], "0");
     assert_eq!(h.app.tabs.active_index(), 0);
+}
+
+/// Fourteen tabs at 80 columns, the first one active: the bar hides tabs on its right.
+fn many_tabs(w: u16) -> Harness {
+    let mut h = Harness::connected(Lang::En);
+    set_text(&mut h, "0");
+    for i in 1..14 {
+        h.ctrl('t');
+        set_text(&mut h, &i.to_string());
+    }
+    h.keys(" 1");
+    h.draw(w, H);
+    h
+}
+
+/// Released over a scroll mark while more tabs are hidden on its side: the tab lands where the
+/// marker showed, not past the tab the bar scrolled to after the marker was drawn.
+#[test]
+fn released_over_a_scroll_mark_a_tab_lands_where_the_marker_showed() {
+    let w = 80;
+    let mut h = many_tabs(w);
+    let y = bar_y(&h);
+    let (a0, _) = span(&h, 0);
+    h.mouse(MouseEventKind::Down(MouseButton::Left), a0 + 2, y);
+    h.draw(w, H);
+    h.mouse(MouseEventKind::Drag(MouseButton::Left), a0 + 6, y);
+    h.draw(w, H);
+    h.mouse(MouseEventKind::Drag(MouseButton::Left), w - 1, y);
+    h.draw(w, H);
+    let shown = h.app.tab_drag_view().unwrap().1.unwrap();
+    assert!(h.app.tab_hits().iter().any(|t| t.2 == TabHit::More(shown)), "more tabs hidden: {}", bar(&mut h, w));
+    h.mouse(MouseEventKind::Up(MouseButton::Left), w - 1, y);
+    assert_eq!(texts(&h).iter().position(|t| t == "0"), Some(shown - 1), "the marker said place {shown}");
+    // And back over `‹`.
+    h.draw(w, H);
+    let (x0, _) = span(&h, shown - 1);
+    let left = h.app.layout.tab_bar.x;
+    h.mouse(MouseEventKind::Down(MouseButton::Left), x0 + 2, y);
+    h.draw(w, H);
+    for x in [x0, left, left] {
+        h.mouse(MouseEventKind::Drag(MouseButton::Left), x, y);
+        h.draw(w, H);
+    }
+    let (_, Some(shown)) = h.app.tab_drag_view().unwrap() else { panic!("a place") };
+    assert!(shown > 0 && h.app.tab_hits().first().is_some_and(|t| t.2 == TabHit::More(shown - 1)));
+    h.mouse(MouseEventKind::Up(MouseButton::Left), left, y);
+    assert_eq!(texts(&h).iter().position(|t| t == "0"), Some(shown));
+}
+
+/// A release while the screen is too small to draw the workspace still ends the drag.
+#[test]
+fn a_release_on_a_screen_too_small_ends_the_drag() {
+    let mut h = three_tabs();
+    let y = bar_y(&h);
+    let (a0, _) = span(&h, 0);
+    press(&mut h, a0 + 2, y);
+    drag(&mut h, a0 + 30, y);
+    assert!(h.app.tab_drag_view().is_some());
+    h.draw(20, 5);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), 3, 0);
+    h.draw(W, H);
+    assert_eq!(h.app.tab_drag_view(), None);
+    assert!(!bar(&mut h, W).contains(DROP));
+    assert_eq!(texts(&h), ["a", "b", "c"]);
+}
+
+/// A press of another button ends a drag (a middle press on another tab closes that tab).
+#[test]
+fn another_buttons_press_ends_the_drag() {
+    let mut h = three_tabs();
+    let y = bar_y(&h);
+    let (a0, _) = span(&h, 0);
+    let (c0, c1) = span(&h, 2);
+    press(&mut h, a0 + 2, y);
+    drag(&mut h, c1 - 1, y);
+    h.mouse(MouseEventKind::Down(MouseButton::Middle), c0 + 2, y);
+    h.draw(W, H);
+    assert_eq!(texts(&h), ["a", "b"], "the middle press closed its tab");
+    assert_eq!(h.app.tab_drag_view(), None);
+    drag(&mut h, a0 + 20, y);
+    release(&mut h, a0 + 20, y);
+    assert_eq!(texts(&h), ["a", "b"], "the rest of the drag moves nothing");
 }
 
 #[test]
