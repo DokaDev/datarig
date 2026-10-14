@@ -112,6 +112,8 @@ pub enum Action {
     PrevTab,
     /// Tab 1..9.
     GotoTab(u8),
+    /// Move the active tab one place to the right (`true`) or left in the tab bar.
+    MoveTab(bool),
     /// Save the active tab: a console asks for a name, a saved query is written.
     ScriptSave,
     /// Save the active tab under a new name (the tab shows the new file).
@@ -271,7 +273,7 @@ fn in_workspace(a: &App) -> bool {
 }
 
 /// There is a tab (the workspace may have none: its empty state is shown then).
-fn has_tab(a: &App) -> bool {
+pub(super) fn has_tab(a: &App) -> bool {
     in_workspace(a) && !a.tabs.is_empty()
 }
 
@@ -315,6 +317,16 @@ fn drawn(a: &App) -> bool {
 /// There is a tab and the tab bar is drawn.
 fn tab_drawn(a: &App) -> bool {
     has_tab(a) && drawn(a)
+}
+
+/// The active tab has a tab to its left, so it can move there.
+fn tab_movable_left(a: &App) -> bool {
+    has_tab(a) && a.tabs.active_index() > 0
+}
+
+/// The active tab has a tab to its right, so it can move there.
+fn tab_movable_right(a: &App) -> bool {
+    has_tab(a) && a.tabs.active_index() + 1 < a.tabs.len()
 }
 
 /// The tab list can open: there are profiles and the panes are drawn.
@@ -598,6 +610,8 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::GotoTab(7), "tab.goto.7", Label::ActionTabGoto7, has_tab),
     act(Action::GotoTab(8), "tab.goto.8", Label::ActionTabGoto8, has_tab),
     act(Action::GotoTab(9), "tab.goto.9", Label::ActionTabGoto9, has_tab),
+    mv(Action::MoveTab(false), "tab.move_left", Label::ActionTabMoveLeft, tab_movable_left),
+    mv(Action::MoveTab(true), "tab.move_right", Label::ActionTabMoveRight, tab_movable_right),
     // Without a data directory these say why (they are the first thing a user tries).
     act(Action::ScriptSave, "script.save", Label::ActionScriptSave, query_tab),
     act(Action::ScriptSaveAs, "script.save_as", Label::ActionScriptSaveAs, query_tab),

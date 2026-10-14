@@ -285,6 +285,8 @@
 "action.tab.goto.7" = "Go to tab 7"
 "action.tab.goto.8" = "Go to tab 8"
 "action.tab.goto.9" = "Go to tab 9"
+"action.tab.move_left" = "Move tab left"
+"action.tab.move_right" = "Move tab right"
 "whichkey.goto_tab" = "Go to tab N"
 "profiles.deleted" = "Deleted {name}"
 "profiles.saved" = "Saved {name}"
@@ -1550,6 +1552,9 @@
 "command.explain" = "The plan of the statement under the cursor (:explain analyze runs and measures it; a write is rolled back)"
 "commands.arg.analyze" = "analyze"
 "plan.command_usage" = ":explain shows the plan of the statement under the cursor; :explain analyze runs and measures it"
+"command.tabmove" = "Move this tab (:tabmove N: after tab N, 0 first; +N / -N: N places; alone: last)"
+"commands.arg.tab_position" = "<place>"
+"commands.error.tabmove_usage" = "Usage: :tabmove [N|+N|-N|$] (N: after tab N, 0: first; +N / -N: N places right / left; alone or $: last)"
 "plan.one_statement" = { one = "Explain takes one statement; the selection has {count}", other = "Explain takes one statement; the selection has {count}" }
 "plan.already_explain" = "This statement is an EXPLAIN already: {key} runs it (a JSON plan shows in the Plan tab)"
 "action.results.view_as_plan" = "View as plan: the text EXPLAIN again as JSON"

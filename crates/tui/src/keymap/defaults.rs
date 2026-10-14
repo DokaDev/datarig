@@ -220,6 +220,8 @@ const ACTIONS: &[(Ctx, &str, &str)] = &[
     (Nav, "space t c", "tab.close"),
     (Nav, "space t u", "tab.reopen_closed"),
     (Nav, "space t t", "tab.list"),
+    (Nav, "space t <", "tab.move_left"),
+    (Nav, "space t >", "tab.move_right"),
     (Nav, "space 1", "tab.goto.1"),
     (Nav, "space 2", "tab.goto.2"),
     (Nav, "space 3", "tab.goto.3"),

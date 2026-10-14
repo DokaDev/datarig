@@ -12,7 +12,8 @@
 //! about has no mark. `×` closes the tab as `Ctrl+W` does. A tab without a connection says so
 //! in the mark's place. When the tabs do not fit, the documents' names are shortened first,
 //! then the bar scrolls to keep the active tab visible and `‹` / `›` show that more tabs are
-//! hidden.
+//! hidden. A tab dragged by the mouse (`app::tab_drag`) is drawn in the theme's selection
+//! style, with [`DROP`] where it would land; the bar then scrolls to keep that place visible.
 
 use crate::app::{App, NodeState, SessionState, Tab};
 use crate::icons;
@@ -29,6 +30,8 @@ pub const TX_OPEN: &str = "◆";
 pub const TROUBLE: &str = "!";
 /// The close button.
 pub const CLOSE: &str = "×";
+/// Where a dragged tab would land, on the blank between two tabs.
+pub const DROP: &str = "┃";
 /// The tab's text could not be saved (a failed write, or its file changed on disk).
 pub const UNSAVED: &str = "*";
 
@@ -271,6 +274,34 @@ fn window(widths: &[usize], active: usize, room: usize) -> (usize, usize) {
     }
 }
 
+/// The tabs `first..=last` to show while a tab is dragged: from the first one the last frame
+/// showed (`shown`), scrolled only as far as tab `anchor` needs, so the bar moves one tab at a
+/// time as the pointer goes past an end.
+fn drag_window(widths: &[usize], anchor: usize, shown: usize, room: usize) -> (usize, usize) {
+    let fill_right = |first: usize| {
+        let (mut last, mut used) = (first, widths[first]);
+        while last + 1 < widths.len() && used + widths[last + 1] <= room {
+            last += 1;
+            used += widths[last];
+        }
+        last
+    };
+    let fill_left = |last: usize| {
+        let (mut first, mut used) = (last, widths[last]);
+        while first > 0 && used + widths[first - 1] <= room {
+            first -= 1;
+            used += widths[first];
+        }
+        first
+    };
+    let first = shown.min(widths.len() - 1);
+    if anchor < first {
+        return (anchor, fill_right(anchor));
+    }
+    let last = fill_right(first);
+    if anchor <= last { (first, last) } else { (fill_left(anchor), anchor) }
+}
+
 /// Where a column of the tab bar leads when clicked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TabHit {
@@ -297,6 +328,8 @@ pub(crate) fn draw_tab_bar(app: &App, area: Rect, buf: &mut Buffer) -> Vec<(u16,
     buf.set_style(area, Style::new().bg(th.bg));
     let total = area.width as usize;
     let active = app.tabs.active_index();
+    // A dragged tab: its place, and where it would land.
+    let dragged = app.tab_drag_view();
     // Full names when they fit; else shorter ones (the number, RO, mark and × stay).
     let make = |max: usize| -> Vec<Vec<Part>> {
         app.tabs.iter().enumerate().map(|(i, t)| label(app, i, t, i == active, max)).collect()
@@ -314,12 +347,33 @@ pub(crate) fn draw_tab_bar(app: &App, area: Rect, buf: &mut Buffer) -> Vec<(u16,
     if rest + 1 < total && label_width(&labels[active]) > total {
         labels[active] = label(app, active, app.tabs.iter().nth(active).expect("active tab"), true, total - rest);
     }
+    if let Some((from, _)) = dragged {
+        // Lifted: the theme's selection style, but for the environment's badge.
+        for p in labels[from].iter_mut().filter(|p| p.style.bg == Some(th.surface_alt) || p.style.bg == Some(th.bg)) {
+            p.style = p.style.patch(th.selection);
+        }
+    }
+    // Where a dragged tab would land, as the tab whose blank the marker is drawn on: the one
+    // after that place when it goes left, the one before it when it goes right.
+    let drop = dragged.and_then(|(from, slot)| match slot? {
+        s if s < from => Some((s, false)),
+        s if s > from + 1 => Some((s - 1, true)),
+        _ => None,
+    });
     let widths: Vec<usize> = labels.iter().map(|l| label_width(l)).collect();
     let (first, last) = if widths.iter().sum::<usize>() <= total {
         (0, labels.len() - 1)
     } else {
-        // One column on each side for the scroll marks.
-        window(&widths, active, total.saturating_sub(2))
+        // One column on each side for the scroll marks. In view: the active tab, or while one
+        // is dragged where it would land (the bar scrolls as it goes past an end).
+        let room = total.saturating_sub(2);
+        match (drop, dragged) {
+            (Some((i, _)), _) | (None, Some((i, _))) => {
+                let shown = app.tab_hits.iter().find_map(|h| if let TabHit::Tab(i) = h.2 { Some(i) } else { None });
+                drag_window(&widths, i.min(labels.len() - 1), shown.unwrap_or(0), room)
+            }
+            (None, None) => window(&widths, active, room),
+        }
     };
     let arrow = Style::new().fg(th.accent).bg(th.bg).add_modifier(Modifier::BOLD);
     let mark = |h: TabHit| if hover == Some(h) { arrow.patch(crate::widgets::pointer_style()) } else { arrow };
@@ -363,6 +417,17 @@ pub(crate) fn draw_tab_bar(app: &App, area: Rect, buf: &mut Buffer) -> Vec<(u16,
     if last + 1 < labels.len() {
         buf.set_string(end - 1, area.y, "›", mark(TabHit::More(last + 1)));
         hits.push((end - 1, end, TabHit::More(last + 1)));
+    }
+    // The marker on the tab's first blank (before its number) or its last (after its `×`).
+    if let Some((i, after)) = drop {
+        let of_tab = |h: &&(u16, u16, TabHit)| matches!(h.2, TabHit::Tab(j) | TabHit::Close(j) if j == i);
+        let x = match after {
+            false => hits.iter().filter(of_tab).map(|h| h.0).min(),
+            true => hits.iter().filter(of_tab).map(|h| h.1).max().map(|x| x - 1),
+        };
+        if let Some(x) = x {
+            buf.set_string(x, area.y, DROP, Style::new().fg(th.accent).bg(th.bg).add_modifier(Modifier::BOLD));
+        }
     }
     hits
 }

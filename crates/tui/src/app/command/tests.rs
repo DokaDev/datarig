@@ -221,3 +221,39 @@ fn use_reads_a_database_and_a_schema() {
     assert_eq!(parse_context("\"Sales\".\"Shop\""), Some((s("Sales"), s("Shop"))));
     assert_eq!(parse_context(".\"MiXed\""), Some((None, s("MiXed"))));
 }
+
+#[test]
+fn tabmove_reads_places_as_vim_does() {
+    // The second of four tabs.
+    let to = |arg: &str| tabmove_target(arg, 1, 4);
+    assert_eq!(to(""), Some(3), "alone: last");
+    assert_eq!(to("$"), Some(3));
+    assert_eq!(to("0"), Some(0), "0: first");
+    assert_eq!(to("1"), Some(1), "after tab 1, counted before the move: where it is");
+    assert_eq!(to("2"), Some(1), "after itself: where it is");
+    assert_eq!(to("3"), Some(2));
+    assert_eq!(to("4"), Some(3));
+    assert_eq!(to("9"), Some(3), "past the end: last");
+    assert_eq!(to("99999999999999999999999"), Some(3));
+    assert_eq!(to("+1"), Some(2));
+    assert_eq!(to("+"), Some(2), "`+` alone: one place");
+    assert_eq!(to("+5"), Some(3), "not past the end");
+    assert_eq!(to("-1"), Some(0));
+    assert_eq!(to("-"), Some(0));
+    assert_eq!(to("-7"), Some(0), "not past the start");
+    assert_eq!(to(" +1 "), Some(2));
+    for bad in ["x", "1x", "+x", "--1", "+-1", "1 2", "-1.5", "\u{0663}"] {
+        assert_eq!(to(bad), None, "{bad:?}");
+    }
+    assert_eq!(tabmove_target("0", 0, 0), None, "no tab");
+}
+
+#[test]
+fn tabmove_is_a_command_with_an_optional_place() {
+    let Parsed::Command { spec, arg, .. } = parse("tabm +2") else { panic!() };
+    assert_eq!(spec.command, Command::TabMove);
+    assert_eq!(arg, "+2");
+    assert!(spec.arg.is_some_and(ArgKind::optional));
+    assert!(matches!(parse("tabmove"), Parsed::Command { arg: "", .. }));
+    assert!(complete_arg(ArgKind::TabPosition, "", &["a profile"]).is_empty());
+}

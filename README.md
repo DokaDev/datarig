@@ -38,6 +38,12 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
   row shows the tab's number, name, kind and connection, database and schema, with the tab
   bar's marks. Type to filter by any of them; `Enter` goes to a tab or brings a closed one back,
   `Ctrl+D` closes the selected tab (asking first as `Ctrl+W` does).
+- Tabs can be put in another order: drag one with the mouse (a marker shows where it lands;
+  past an end of a bar with hidden tabs the bar scrolls; `Esc`, or letting go far from the bar,
+  leaves it where it was), `Space t <` / `Space t >`, the tab's menu, or `:tabmove` as in Vim
+  (`:tabmove 0` first, `:tabmove` last, `:tabmove +1`). The tab bar's numbers (and `Space 1`
+  .. `Space 9`) follow the new order; a console keeps its own name (`console 3`). The order is
+  kept across restarts.
 - The explorer lists every connection profile (in its **Connections** section, which opens and
   closes like the **Tunnels**, **Environments** and **Saved queries** sections below it and is
   kept closed across restarts; each section's head shows its icon with icons on, its name and

@@ -118,6 +118,8 @@ const QUERY_MENU: &[Action] = &[
 /// The actions of a tab.
 const TAB_MENU: &[Action] = &[
     Action::CloseTab,
+    Action::MoveTab(false),
+    Action::MoveTab(true),
     Action::ScriptSave,
     Action::ScriptSaveAs,
     Action::ScriptRename,

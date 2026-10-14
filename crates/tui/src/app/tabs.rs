@@ -928,6 +928,24 @@ impl TabManager {
         self.activate((self.active as isize + delta).rem_euclid(n) as usize);
     }
 
+    /// Move the tab at `from` to index `to` (clamped to the last one); the others keep their
+    /// order and the active tab stays the same tab. The tabs' numbers are their places, so they
+    /// follow; a console's own number (its name) does not change. `false`: nothing moved.
+    pub fn move_tab(&mut self, from: usize, to: usize) -> bool {
+        if from >= self.tabs.len() {
+            return false;
+        }
+        let to = to.min(self.tabs.len() - 1);
+        if to == from {
+            return false;
+        }
+        let active = self.tabs[self.active].id;
+        let tab = self.tabs.remove(from);
+        self.tabs.insert(to, tab);
+        self.active = self.position(active).unwrap_or(0);
+        true
+    }
+
     /// Remove tab `id` and remember it for [`TabManager::reopen`]. The active tab becomes the
     /// one to its right, or the new last one; closing the last tab leaves none.
     pub fn close(&mut self, id: TabId) -> Option<Tab> {

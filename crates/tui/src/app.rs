@@ -60,6 +60,7 @@ pub mod safety;
 mod script_ops;
 pub mod script_tree;
 pub mod settings;
+pub mod tab_drag;
 pub mod tab_list;
 mod tab_ops;
 pub mod tabs;
@@ -727,6 +728,8 @@ pub struct App {
     pending_context: Option<(TabId, datarig_core::driver::SessionContext)>,
     /// A `:use` whose name a list read earlier does not have, while the server is asked again.
     pending_use: Option<cmdline::PendingUse>,
+    /// A press on a tab of the tab bar, and the drag of that tab that may follow.
+    pub(crate) tab_drag: Option<tab_drag::TabDrag>,
     /// Where each tab and scroll mark of the document tab bar was drawn last.
     pub(crate) tab_hits: Vec<(u16, u16, crate::widgets::tabbar::TabHit)>,
     /// The small clickable target under the pointer (drawn highlighted).
@@ -1001,6 +1004,7 @@ impl App {
             last_focus: Focus::Tree,
             unknown_tabs: Vec::new(),
             strip_hits: Vec::new(),
+            tab_drag: None,
             tab_hits: Vec::new(),
             pointer_on: None,
             pointer_tab: None,
