@@ -127,6 +127,10 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
   instead, so upgrades of the unsigned binary stop asking again (opt in, with a trade-off:
   [macOS: keychain access through `security`](#macos-keychain-access-through-security)).
 - Connection URLs (`postgres://user@host:port/db?...`) can be pasted into the profile form.
+- **TLS** for PostgreSQL and MySQL (rustls): every libpq `sslmode` and MySQL `--ssl-mode`, a CA
+  file, a client certificate; the server's certificate checked against the CA file or the
+  system's trusted certificates, also through an SSH tunnel. Each connection says how it is
+  encrypted ([TLS](#tls)).
 - **SSH tunnels** through one bastion per profile: key files (OpenSSH, PEM including AWS `.pem`,
   PKCS#8, encrypted or not, with certificates), password, ssh-agent, or keyboard-interactive
   (one-time codes). Host keys are checked against `~/.ssh/known_hosts` (read only; hashed
@@ -142,8 +146,8 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
   prepared statements, statement names are unique per process, and a profile can turn the
   server-side statement cache off (`statement_cache = false`). When the server keeps losing
   prepared statements, the session turns the cache off by itself and says so.
-- A test connection from the profile form, with the server version and the latency (and the
-  tunnel's time).
+- A test connection from the profile form, with the server version, the latency, how it was
+  encrypted (and the tunnel's time).
 
 **SQL editor**
 - Vim keys: Normal, Insert and Visual modes, with counts. The motions `h` `j` `k` `l`, `w` `b` `e`,
@@ -367,8 +371,7 @@ Planned, in no particular order and with no dates:
 
 - MySQL: the plan view; MariaDB as a driver of its own
 - Drivers for Valkey/Redis and Elasticsearch
-- TLS connections (today every connection is plain TCP; use an SSH tunnel across untrusted
-  networks, and servers that require TLS cannot be reached yet)
+- TLS: passphrase-protected client keys, certificate revocation lists, `sslnegotiation=direct`
 - A server monitor (sessions, locks, activity)
 - More of vim: `gv`, macros, Ex commands other than `:{n}` and `:s` (`:d`, `:g`, …)
 - DDL of objects the explorer does not list yet (functions on their own, sequences, types),
@@ -488,6 +491,8 @@ policy = "prod"                # its environment (see Environments below)
 password_source = "command"
 password_command = "op read op://work/prod-db/password"
 tunnel = "office"              # the tunnel preset below
+sslmode = "verify-full"        # TLS: disable | prefer | require | verify-ca | verify-full
+sslrootcert = "~/certs/company-ca.pem"
 
 [[connections]]
 name = "lab"
@@ -827,8 +832,6 @@ is tested only lightly.
 
 **What does not work yet**
 - The plan view (`EXPLAIN` runs and shows its text).
-- TLS: a server that requires it (`require_secure_transport`) cannot be reached yet, and is said
-  so.
 - A `USE` typed in a console is not followed by the header and completion; use `:use`.
 - The estimates are the server's (`TABLE_ROWS`), which can be far off for InnoDB. A view whose
   table was dropped is listed without columns, and a database that does not exist or that you
@@ -859,23 +862,87 @@ statement turn its read-only off, so the server's layer depends on datarig's: fo
 that does not, use an account with `SELECT` privileges only. Views, triggers, generated columns
 and `DEFAULT` expressions are not inspected; the server still refuses their writes.
 
-**Passwords on a direct connection.** There is no TLS yet, so a direct connection to another
-machine is unencrypted: datarig says so in the profile form and when it connects. A
-`caching_sha2_password` login the server has not cached (the first one, or after a restart)
-encrypts the password with the server's RSA public key. Asked for over the same plain
-connection, that key could come from anyone in between, who could then read the password, so
-on a direct connection to another machine datarig does not ask for it and the login fails with
-an explanation. Use an SSH tunnel (the key is then asked for through it), name the server's key
-file in the profile (`server_public_key_file`, the PEM of `SHOW STATUS LIKE
-'Caching_sha2_password_rsa_public_key'`), or allow asking for it
-(`allow_public_key_retrieval = true`). A server on your own machine is asked as before. A
-`mysql_native_password` login over plain TCP can be cracked offline from a capture whatever the
-key, and so can a weak password from any captured login exchange (someone in between can also
-choose what the server's side of it says). Use an SSH tunnel for any server that is not on your
-own machine: through a tunnel the connection is encrypted as far as the bastion, and the hop from
-the bastion to the server is only as private as the network there. `ERROR 1045` may also mean
-the account requires TLS (`REQUIRE SSL`), which no password fixes: after a typed password is
-refused, datarig shows the error instead of asking again, and connecting again asks again.
+**Passwords on a direct connection.** A MySQL profile uses TLS when the server offers it
+(`PREFERRED`, the mysql client's default; see [TLS](#tls)). A `caching_sha2_password` login the
+server has not cached (the first one, or after a restart) needs the password itself:
+
+- Over TLS it goes inside TLS, as the mysql client sends it, but to another machine only when
+  the server's certificate was checked (`VERIFY_CA`, `VERIFY_IDENTITY`), or the connection goes
+  through an SSH tunnel, or the profile allows key retrieval (below). Over `PREFERRED` or
+  `REQUIRED` to another machine the certificate is not checked, so whoever is in between could
+  answer in the server's place: the login fails with an explanation before anything about the
+  password is sent.
+- Unencrypted (a server without TLS, or `DISABLED`), the password goes encrypted with the
+  server's RSA public key. Asked for over the same plain connection, that key could come from
+  anyone in between, who could then read the password, so on a direct connection to another
+  machine datarig does not ask for it and the login fails with an explanation. Name the server's
+  key file in the profile (`server_public_key_file`, the PEM of `SHOW STATUS LIKE
+  'Caching_sha2_password_rsa_public_key'`), or allow asking for it
+  (`allow_public_key_retrieval = true`). A profile that names a key file and no TLS mode stays
+  unencrypted (`DISABLED`), so its login works as before.
+
+A server on your own machine, or one reached through an SSH tunnel, gets the password either
+way. A `mysql_native_password` login over plain TCP can be cracked offline from a capture
+whatever the key, and so can a weak password from any captured login exchange (someone in
+between can also choose what the server's side of it says): use `VERIFY_IDENTITY` (or an SSH
+tunnel) for any server that is not on your own machine. `ERROR 1045` may also mean the account
+requires TLS (`REQUIRE SSL`) on a connection without it: after a typed password is refused,
+datarig shows the error instead of asking again, and connecting again asks again.
+
+## TLS
+
+PostgreSQL and MySQL connections are encrypted with TLS 1.2 or 1.3 (rustls, pure Rust) as the
+profile's **SSL mode** says, in each database's own words. The profile form's Advanced section
+has the mode (a list), the **CA file**, the **client certificate** and its **key**; in the
+config file they are `sslmode`, `sslrootcert`, `sslcert` and `sslkey`, and a PostgreSQL URL
+takes the same four as parameters (`postgres://me@db/app?sslmode=verify-full&sslrootcert=...`).
+
+| PostgreSQL | MySQL | Encrypted | What is checked of the server's certificate |
+|---|---|---|---|
+| `disable` | `DISABLED` | never | – |
+| `prefer` | `PREFERRED` | when the server offers TLS | nothing |
+| `require` | `REQUIRED` | always | nothing; with a CA file, as `verify-ca` |
+| `verify-ca` | `VERIFY_CA` | always | its chain, against the CA file (needed) |
+| `verify-full` | `VERIFY_IDENTITY` | always | its chain and that it is the profile's host |
+
+- `prefer` / `PREFERRED` goes on unencrypted only when the server says it has no TLS. A server
+  that offers TLS and then fails the handshake is an error, never a plain connection.
+- The CA file is the only trust: with one, only its certificates are trusted (a server's own
+  self-signed certificate copied to your machine works too). Without one, `verify-full` /
+  `VERIFY_IDENTITY` checks the certificate against the certificates your system trusts: the
+  macOS keychain's trust settings (read only; no password is ever asked), Windows' certificate
+  store, the system's certificate files on Linux. `sslrootcert = "system"` says so explicitly.
+- The name checked is the profile's host, also through an SSH tunnel (never `127.0.0.1`). An IP
+  address is checked against the certificate's IP addresses.
+- The client certificate and key are PEM files (PKCS#8, RSA or EC keys). A key protected by a
+  passphrase is refused with how to make an unprotected copy.
+- PostgreSQL's SCRAM login binds itself to the TLS connection (`SCRAM-SHA-256-PLUS`) where the
+  server offers it, so even without certificate checks a server in between cannot log in as
+  you. Cancel requests (PostgreSQL) and `KILL QUERY` connections (MySQL) are encrypted as the
+  session is.
+- Defaults, unchanged for what connected before: a PostgreSQL profile without `sslmode` is
+  `disable` (the form writes `prefer` for a new one); a MySQL profile without one is
+  `PREFERRED`, except one that names a server public key file (`DISABLED`, see
+  [MySQL](#mysql)). A mode the driver does not know is an error of the profile.
+- Each connection says what it got: `Connected to prod · TLS 1.3, server verified` (or
+  `certificate not checked`, `CA checked`), a shield and `TLS 1.3` in the editor's connection
+  line, and the same in the form's test. A connection to another machine without TLS (not
+  through a tunnel) says it is not encrypted, for both databases.
+- Failures say which: the server has no TLS, the certificate is not trusted, is for another
+  name, has expired or is not valid yet, is not meant for a server, or the server refused the
+  client certificate; a file that cannot be read names the file.
+
+Tested: every mode against PostgreSQL 17 and MySQL 8.4 with certificates made for the tests
+(trusted, another CA's, another name, client certificates accepted and refused), through a
+dialer and a real SSH bastion, cancel requests included; in-process tests for expired and
+not-yet-valid certificates, other purposes, a self-signed certificate as its own CA file, and
+TLS 1.2. Not tested: real company servers, PgBouncer with TLS between datarig and the pooler,
+Windows. Limits: no passphrase-protected keys, no
+certificate revocation lists, no `sslnegotiation=direct` (refused), no TLS 1.0/1.1, RSA keys
+under 2048 bits are refused; a MySQL URL takes no TLS parameters (use the fields). On macOS,
+`verify-full` against the system's certificates follows Apple's rules, which refuse server
+certificates valid for more than 825 days from a CA you added yourself: name that CA as the
+profile's CA file.
 
 ## SSH tunnels
 
