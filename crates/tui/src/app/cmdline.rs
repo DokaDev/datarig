@@ -89,7 +89,8 @@ fn setting_action(s: Setting) -> Option<Action> {
         | Setting::AutoPairs(_)
         | Setting::RunHints(_)
         | Setting::KeychainAccess(_)
-        | Setting::SizeHeat(_) => None,
+        | Setting::SizeHeat(_)
+        | Setting::YankFlash(_) => None,
     }
 }
 
@@ -821,6 +822,7 @@ impl App {
             Setting::RunHints(h) => self.set_prefs(s, |x| x.run_hints = h),
             Setting::KeychainAccess(a) => self.set_keychain_access(a),
             Setting::SizeHeat(h) => self.set_prefs(s, |x| x.size_heat = h),
+            Setting::YankFlash(f) => self.set_prefs(s, |x| x.yank_flash = f),
         }
     }
 

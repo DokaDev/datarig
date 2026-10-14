@@ -90,6 +90,10 @@ pub struct Theme {
     /// a subtle background of its own, apart from the background, both surfaces, the cursor line,
     /// the selection (focused or not) and a selected range; never an underline.
     pub hover: Style,
+    /// Cells a copy took from the result grid, for a moment after the copy reached the
+    /// clipboard: a background (with its own text color) that stands apart from every other
+    /// background of the grid; never an underline.
+    pub yank_flash: Style,
     /// A faint tint behind the statement a run would take.
     pub current_stmt: Style,
     /// The bar in the editor's gutter next to the statement a run would take (or the
@@ -184,6 +188,7 @@ pub const DARK: Theme = Theme {
     range: Style::new().bg(rgb(0x1E3438)),
     cursor_line: Style::new().bg(rgb(0x1F2530)),
     hover: Style::new().bg(rgb(0x2D3035)),
+    yank_flash: Style::new().fg(rgb(0xD8DEE9)).bg(rgb(0x514233)),
     current_stmt: Style::new().bg(rgb(0x1A2129)),
     current_stmt_bar: rgb(0x3F8F87),
     running_stmt: Style::new().bg(rgb(0x2C2825)),
@@ -500,6 +505,7 @@ tokens! {
         range => "Cells and headers of a selected range in the result grid (the cursor's cell keeps selection).",
         cursor_line => "The row under the cursor of an unfocused list or plan, the editor's line, and (its background) the chart's cursor while focused.",
         hover => "What is under the mouse pointer: a list row, a grid cell, a tab, a button.",
+        yank_flash => "Cells copied from the result grid, for a moment after the copy reached the clipboard.",
         current_stmt => "A faint tint behind the statement a run would take.",
         running_stmt => "A tint behind the statement that runs now.",
         run_hint => "The hint after a statement's last line that says what its last run did.",

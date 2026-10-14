@@ -27,7 +27,8 @@
 //! `[editor] mode` key (the editor has vim keys only) is accepted with any value, ignored and
 //! dropped by the next save. `[explorer] size_heat` says whether, and in how many levels, the
 //! explorer colors the estimates of the largest tables of each schema (`on`, its old value,
-//! reads as `3`).
+//! reads as `3`). `[ui] yank_flash` says whether the cells a copy took from the results grid
+//! flash briefly.
 //! [`Prefs`] holds `[commands] position` (the `:` command line as a popup near
 //! the top, or the bottom line), `detail_view` (the result inspector as a panel or a status bar
 //! preview), `clipboard` (how copies reach the clipboard) and `copy_header`
@@ -99,6 +100,8 @@ struct FileConfig {
     editor: Option<EditorSection>,
     #[serde(default)]
     explorer: Option<ExplorerSection>,
+    #[serde(default)]
+    ui: Option<UiSection>,
     #[serde(default)]
     secrets: Option<SecretsSection>,
     #[serde(default)]
@@ -223,6 +226,13 @@ struct ExplorerSection {
     /// A string, or the number of levels written without quotes (`size_heat = 5`).
     #[serde(default)]
     size_heat: Option<toml::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UiSection {
+    #[serde(default)]
+    yank_flash: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -469,6 +479,25 @@ impl Choice for RunHints {
     }
 }
 
+/// `[ui] yank_flash`: whether the cells a copy took from the results grid flash briefly (on by
+/// default).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum YankFlash {
+    #[default]
+    On,
+    Off,
+}
+
+impl Choice for YankFlash {
+    const ALL: &'static [Self] = &[YankFlash::On, YankFlash::Off];
+    fn as_str(self) -> &'static str {
+        match self {
+            YankFlash::On => "on",
+            YankFlash::Off => "off",
+        }
+    }
+}
+
 /// `[secrets] macos_keychain_access`: how datarig reaches the macOS keychain. Accepted on every
 /// platform; only the macOS keychain store reads it (see [`crate::secret::SwitchedKeychain`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -555,6 +584,8 @@ pub struct Prefs {
     pub keychain_access: KeychainAccess,
     /// `[explorer] size_heat`.
     pub size_heat: SizeHeat,
+    /// `[ui] yank_flash`.
+    pub yank_flash: YankFlash,
 }
 
 impl Default for Prefs {
@@ -573,6 +604,7 @@ impl Default for Prefs {
             run_hints: RunHints::default(),
             keychain_access: KeychainAccess::default(),
             size_heat: SizeHeat::default(),
+            yank_flash: YankFlash::default(),
         }
     }
 }
@@ -854,6 +886,7 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
             }),
             "3, 5, off",
         )?,
+        yank_flash: choice("ui.yank_flash", f.ui.and_then(|u| u.yank_flash), "on, off")?,
     };
     // The environments in the file's order (the deserializer sorts its map by name).
     let order: Vec<String> = text
@@ -1235,6 +1268,8 @@ pub fn save(path: &Path, settings: Settings, profiles: Option<Profiles>) -> Resu
     orphans += &nested_setting(&mut doc, "editor", "run_hints", hints)?;
     let heat = (prefs.size_heat.as_str().into(), prefs.size_heat == SizeHeat::default());
     orphans += &nested_setting(&mut doc, "explorer", "size_heat", heat)?;
+    let flash = (prefs.yank_flash.as_str().into(), prefs.yank_flash == YankFlash::default());
+    orphans += &nested_setting(&mut doc, "ui", "yank_flash", flash)?;
     let source = (default_source.as_str().into(), default_source == DefaultSource::Auto);
     orphans += &nested_setting(&mut doc, "secrets", "default_source", source)?;
     let access = (prefs.keychain_access.as_str().into(), prefs.keychain_access == KeychainAccess::default());

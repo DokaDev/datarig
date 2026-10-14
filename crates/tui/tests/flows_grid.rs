@@ -7,10 +7,12 @@ mod common;
 
 use common::*;
 use datarig_core::config::DetailView;
+use datarig_core::driver::DbEvent;
 use datarig_core::i18n::Lang;
 use datarig_tui::app::overlay::OverlayKind;
 use datarig_tui::app::{DetailTab, Focus};
 use ratatui::crossterm::event::{Event, KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use std::time::Duration;
 
 /// The edge-case users in the grid, the grid focused.
 fn grid(lang: Lang) -> Harness {
@@ -915,4 +917,201 @@ fn dropping_a_selection_drops_its_notice() {
     h.key(KeyCode::Esc);
     assert_eq!((h.app.tab().grid.anchor, h.app.focus), (None, Focus::Results));
     assert!(!h.status(160, 45).contains("Selecting"), "{}", h.status(160, 45));
+}
+
+/// Whether cell (row, col) of the active grid is drawn on the copy flash's background (160×45,
+/// the `dark` theme).
+fn flashed(h: &mut Harness, row: usize, col: usize) -> bool {
+    let t = h.draw(160, 45);
+    let total = match &h.app.tab().results {
+        datarig_tui::app::Results::Rows(rs) => rs.rows.len(),
+        _ => return false,
+    };
+    let Some(cell) = h.app.tab().grid.cell_rect(row, col, total) else { return false };
+    let buf = t.backend().buffer();
+    // Its padding on both sides (the second half of a wide character is not a cell of its own).
+    [cell.x, cell.x + cell.width - 1]
+        .iter()
+        .all(|&x| Some(buf[(x, cell.y)].bg) == datarig_tui::theme::DARK.yank_flash.bg)
+}
+
+/// Every cell of the active grid drawn on the copy flash's background, as (row, col).
+fn flashed_cells(h: &mut Harness) -> Vec<(usize, usize)> {
+    h.draw(160, 45);
+    let (top, rows) = (h.app.tab().grid.top, h.app.tab().grid.page_rows);
+    let cols: Vec<usize> = h.app.tab().grid.hit_cols.iter().map(|c| c.2).collect();
+    let mut out = Vec::new();
+    for r in top..top + rows {
+        for &c in &cols {
+            if flashed(h, r, c) {
+                out.push((r, c));
+            }
+        }
+    }
+    out
+}
+
+/// A copy from the grid flashes the cells it took once they are on the clipboard: `y` the
+/// cell (the cursor's cell too), a range its cells, `Y` the row's every column; for
+/// [`YANK_FLASH`], then the next tick ends it and the cells are drawn as before.
+#[test]
+fn a_copy_flashes_the_cells_it_took_until_its_deadline() {
+    use datarig_tui::app::yank_flash::YANK_FLASH;
+    let mut h = grid(Lang::En);
+    let clip = FakeClipboard::attach(&mut h, false, &[]);
+    h.keys("jl");
+    assert!(flashed_cells(&mut h).is_empty(), "nothing copied yet");
+    h.keys("y");
+    assert_eq!(clip.last().as_deref(), Some("林美玲"));
+    assert_eq!(flashed_cells(&mut h), [(1, 1)], "the cursor's cell");
+    // Still there a moment before its end, gone at it.
+    h.advance(YANK_FLASH - Duration::from_millis(1));
+    assert!(flashed(&mut h, 1, 1));
+    h.advance(Duration::from_millis(1));
+    assert!(h.app.copy_flash.is_none(), "the tick at its deadline ends it");
+    assert!(flashed_cells(&mut h).is_empty());
+    // A range: its cells.
+    h.keys("vjly");
+    assert_eq!(flashed_cells(&mut h), [(1, 1), (1, 2), (2, 1), (2, 2)]);
+    // A new copy while one flashes starts over with its own cells and its own time.
+    h.advance(YANK_FLASH / 2);
+    h.keys("Y");
+    let cols = h.app.tab().grid.hit_cols.len();
+    assert_eq!(flashed_cells(&mut h), (0..cols).map(|c| (2, c)).collect::<Vec<_>>(), "the row, every column");
+    h.advance(YANK_FLASH / 2);
+    assert!(flashed(&mut h, 2, 0), "the second copy's time counts");
+    h.advance(YANK_FLASH / 2);
+    assert!(flashed_cells(&mut h).is_empty());
+}
+
+/// The flash ends with exactly one wakeup at its deadline: with nothing else waiting the timer
+/// is due then, not before (no animation); with the copy's notice counting tenths, the next tick
+/// is the sooner of the two. Then nothing waits for it.
+#[test]
+fn the_flash_needs_one_wakeup_at_its_end() {
+    use datarig_tui::app::FINE_TICK;
+    use datarig_tui::app::yank_flash::YANK_FLASH;
+    let mut h = grid(Lang::En);
+    FakeClipboard::attach(&mut h, false, &[]);
+    h.app.transient = None;
+    assert_eq!(h.app.next_tick(h.clock.now()), None, "idle");
+    h.keys("y");
+    let until = h.app.copy_flash.as_ref().unwrap().until;
+    assert_eq!(until, h.clock.now() + YANK_FLASH);
+    let now = h.clock.now();
+    assert_eq!(h.app.next_tick(now), Some(now + FINE_TICK), "the notice's tick comes first");
+    let late = now + YANK_FLASH - Duration::from_millis(50);
+    assert_eq!(h.app.next_tick(late), Some(until), "the flash's end comes before the next tenth");
+    h.app.transient = None;
+    assert_eq!(h.app.next_tick(now), Some(until), "nothing else: one wakeup, at its end");
+    h.advance(YANK_FLASH);
+    assert_eq!(h.app.next_tick(h.clock.now()), None, "idle again");
+}
+
+/// Only a copy that reached the clipboard flashes: not one the clipboard refused, not a copy
+/// as SQL refused before it was made, not with nothing to copy; and not with
+/// `[ui] yank_flash = "off"`.
+#[test]
+fn a_failed_or_refused_copy_does_not_flash() {
+    let mut h = grid(Lang::En);
+    let clip = FakeClipboard::attach(&mut h, true, &[]);
+    h.command("set clipboard=system");
+    h.keys("y");
+    assert!(clip.last().is_none());
+    assert!(message(&mut h).starts_with("Could not copy"), "{}", message(&mut h));
+    assert!(h.app.copy_flash.is_none());
+    assert!(flashed_cells(&mut h).is_empty());
+    let mut h = grid(Lang::En);
+    let clip = FakeClipboard::attach(&mut h, false, &[]);
+    // SQL INSERT of columns that name no table: refused, nothing copied.
+    h.keys(" rai");
+    assert!(clip.last().is_none());
+    assert!(h.app.copy_flash.is_none());
+    assert!(flashed_cells(&mut h).is_empty());
+    h.command("set ui.yank_flash=off");
+    assert_eq!(h.app.prefs.yank_flash, datarig_core::config::YankFlash::Off);
+    h.keys("y");
+    assert_eq!(clip.last().as_deref(), Some("1"));
+    assert!(h.app.copy_flash.is_none() && flashed_cells(&mut h).is_empty());
+    h.command("set ui.yank_flash=on");
+    h.keys("y");
+    assert_eq!(flashed_cells(&mut h), [(0, 0)]);
+}
+
+/// Every way to copy from the grid flashes: `Space r a` every fetched row (the rows on screen
+/// show it), `:copy`, the context menu.
+#[test]
+fn copies_through_keys_commands_and_the_menu_flash() {
+    let mut h = grid(Lang::En);
+    let clip = FakeClipboard::attach(&mut h, false, &[]);
+    let every: Vec<(usize, usize)> = {
+        h.draw(160, 45);
+        let cols: Vec<usize> = h.app.tab().grid.hit_cols.iter().map(|c| c.2).collect();
+        (0..8).flat_map(|r| cols.iter().map(move |&c| (r, c))).collect()
+    };
+    h.keys(" rac");
+    assert!(clip.last().unwrap().starts_with("id,name"));
+    assert_eq!(flashed_cells(&mut h), every, "every fetched row");
+    h.app.copy_flash = None;
+    h.command("copy json all");
+    assert_eq!(flashed_cells(&mut h), every);
+    h.app.copy_flash = None;
+    h.keys("jl");
+    h.command("copy csv selection");
+    assert_eq!(flashed_cells(&mut h), [(1, 1)], "no range: the cursor's cell");
+    h.app.copy_flash = None;
+    h.draw(160, 45);
+    let (x, y) = (h.app.tabs.active().grid.hit_cols[1].0 + 2, h.app.tabs.active().grid.data_y + 2);
+    click(&mut h, x, y, MouseButton::Right);
+    h.menu_pick("Copy the cell (a selected range as TSV)");
+    assert_eq!(clip.last().as_deref(), Some("張志明"));
+    assert_eq!(flashed_cells(&mut h), [(2, 1)]);
+}
+
+/// A flash belongs to the tab and the result it was copied from: another tab never shows it,
+/// nor a new result of the same tab.
+#[test]
+fn the_flash_stays_with_the_copied_result() {
+    let mut h = grid(Lang::En);
+    FakeClipboard::attach(&mut h, false, &[]);
+    h.keys("jY");
+    assert!(flashed(&mut h, 1, 0));
+    // Another tab: not there.
+    h.ctrl('t');
+    assert_ne!(h.app.tab().id, h.app.copy_flash.as_ref().unwrap().tab);
+    assert!(h.app.copy_flash_shown().is_none());
+    assert!(flashed_cells(&mut h).is_empty());
+    // Back (in time): there again, on the same cells.
+    h.keys("gT");
+    assert!(h.app.copy_flash_shown().is_some());
+    assert!(flashed(&mut h, 1, 0));
+    // Run again: the new result never shows the old copy's cells.
+    h.app.focus = Focus::Editor;
+    h.ctrl('e');
+    let id = h.app.tab().exec.query_id;
+    assert!(id > 1, "a new run");
+    let (cols, rows) = edge_rows();
+    h.db(DbEvent::Page { id, columns: Some(cols), rows, more: false, elapsed: Duration::from_millis(5) });
+    assert!(matches!(&h.app.tab().results, datarig_tui::app::Results::Rows(_)));
+    assert!(h.app.copy_flash_shown().is_none());
+    assert!(flashed_cells(&mut h).is_empty());
+}
+
+/// On the terminal theme the cursor's cell (reversed text) flashes too: black on the yellow,
+/// not reversed.
+#[test]
+fn the_cursor_cell_flashes_on_the_terminal_theme() {
+    use ratatui::style::{Color, Modifier};
+    let mut h = grid(Lang::En);
+    FakeClipboard::attach(&mut h, false, &[]);
+    h.app.theme = std::sync::Arc::new(datarig_tui::theme::TERMINAL);
+    let at = |h: &mut Harness| {
+        let t = h.draw(160, 45);
+        let cell = h.app.tab().grid.cell_rect(0, 0, 8).unwrap();
+        let c = t.backend().buffer()[(cell.x, cell.y)].clone();
+        (c.fg, c.bg, c.modifier.contains(Modifier::REVERSED))
+    };
+    assert!(at(&mut h).2, "the cursor's cell is reversed");
+    h.keys("y");
+    assert_eq!(at(&mut h), (Color::Black, Color::Yellow, false));
 }

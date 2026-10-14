@@ -564,6 +564,7 @@ impl App {
         } else {
             Msg::CopyDoneRows { count: count as u64, format: format_name, method }
         };
+        self.flash_copied(b.rows.clone(), b.cols.clone());
         self.tab_mut().grid.anchor = None;
         // Said at once (over an older flash), and kept in the status bar.
         let done = Notice::new(done, Level::Success);

@@ -623,6 +623,7 @@ Settings of `:set` (saved to `config.toml` like the matching actions):
 | `editor.run_hints` | `on` `off` | Run hints |
 | `secrets.macos_keychain_access` | `direct` `security_tool` | macOS keychain access |
 | `explorer.size_heat` | `3` `5` `off` | Explorer: size colors |
+| `ui.yank_flash` | `on` `off` | Flash copied cells |
 
 ## Command line only
 

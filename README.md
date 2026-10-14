@@ -256,7 +256,8 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
   scrolling sideways to it; `Enter` or a double-click shows the value whole, as in the grid.
 - Copy as TSV (with or without headers), CSV, JSON, indented JSON, Markdown, HTML, XML, an SQL
   `IN` list, or SQL `INSERT`/`UPDATE` statements (only when the target table is certain), to the
-  system clipboard or through OSC 52 over SSH.
+  system clipboard or through OSC 52 over SSH. The copied cells flash briefly once the copy is
+  on the clipboard (`[ui] yank_flash = "off"` turns that off).
 - Transaction indicators in the tab bar and the status bar (open, aborted, "rollback required"),
   and questions before closing, quitting or disconnecting would roll back your work.
 - Query plans (PostgreSQL): `Space e x` (or `:explain`) runs the statement under the cursor as
@@ -459,6 +460,9 @@ theme = "catppuccin"       # see Themes below; terminal when left out
 
 [explorer]
 size_heat = "3"            # colors for each schema's largest tables' estimates (3 | 5 | off)
+
+[ui]
+yank_flash = "on"          # copied grid cells flash briefly (on | off)
 
 [[connections]]
 name = "local"

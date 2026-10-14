@@ -643,6 +643,7 @@ fn step_2_settings_are_read_checked_and_saved_only_when_set() {
             run_hints: RunHints::On,
             keychain_access: KeychainAccess::Direct,
             size_heat: SizeHeat::Three,
+            yank_flash: YankFlash::On,
         }
     );
     assert_eq!(parse("osc52_max_bytes = 5000\n").unwrap().prefs.osc52_max_bytes, 5000);
@@ -790,6 +791,33 @@ fn the_size_heat_of_the_explorer_is_three_levels_by_default_five_or_off() {
     assert_eq!(load(Some(path.clone())).0.prefs, five);
     save(&path, settings("en"), None).unwrap();
     assert!(!std::fs::read_to_string(&path).unwrap().contains("size_heat"), "3 is the default: the key goes");
+}
+
+#[test]
+fn the_yank_flash_is_on_by_default_and_can_be_turned_off() {
+    assert_eq!(parse("").unwrap().prefs.yank_flash, YankFlash::On);
+    assert_eq!(parse("[ui]\nyank_flash = \"off\"\n").unwrap().prefs.yank_flash, YankFlash::Off);
+    assert_eq!(parse("[ui]\nyank_flash = \"on\"\n").unwrap().prefs.yank_flash, YankFlash::On);
+    assert_eq!(
+        parse("[ui]\nyank_flash = \"blink\"\n").unwrap_err(),
+        ConfigError::Value {
+            key: "ui.yank_flash".into(),
+            value: "blink".into(),
+            profile: None,
+            allowed: Some("on, off")
+        }
+    );
+    assert!(matches!(parse("[ui]\nflash = true\n"), Err(ConfigError::Syntax(_))), "only its own keys");
+    let path = temp_file("yank_flash");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "").unwrap();
+    let prefs = Prefs { yank_flash: YankFlash::Off, ..Prefs::default() };
+    save(&path, Settings { prefs, ..settings("en") }, None).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("[ui]\nyank_flash = \"off\"\n"), "{text}");
+    assert_eq!(load(Some(path.clone())).0.prefs, prefs);
+    save(&path, settings("en"), None).unwrap();
+    assert!(!std::fs::read_to_string(&path).unwrap().contains("yank_flash"), "on is the default: the key goes");
 }
 
 #[test]

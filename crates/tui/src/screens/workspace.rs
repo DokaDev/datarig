@@ -1069,6 +1069,20 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
     {
         buf.set_style(cell.intersection(area), crate::widgets::hover_style());
     }
+    // Cells a copy just took flash over everything else, the cursor's cell included (whose
+    // reversed text would hide a reversed flash).
+    if let (Some(f), Results::Rows(rs)) = (app.copy_flash_shown(), &t.results) {
+        let style = Style::new().remove_modifier(Modifier::REVERSED | Modifier::DIM).patch(th.yank_flash);
+        let g = &t.grid;
+        let shown = g.top.max(f.rows.start)..(g.top + g.page_rows).min(f.rows.end);
+        for r in shown {
+            for &(_, _, c) in g.hit_cols.iter().filter(|h| f.covers(r, h.2)) {
+                if let Some(cell) = g.cell_rect(r, c, rs.rows.len()) {
+                    buf.set_style(cell.intersection(area), style);
+                }
+            }
+        }
+    }
     // Rows of the spill file that could not be read are shown as not read, and said so.
     if let Some(fault) = app.tabs.active_mut().grid.read_error.take() {
         app.results_read_failed(&fault);
