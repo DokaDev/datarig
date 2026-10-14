@@ -12,7 +12,7 @@ use datarig_tui::app::{App, Startup};
 use datarig_tui::external::{self, Edited, Handover};
 use datarig_tui::screens;
 use datarig_tui::terminal::{Cursor, cursor_shape};
-use futures::{FutureExt, StreamExt};
+use futures::StreamExt;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use ratatui::crossterm::event::{Event, EventStream, MouseEventKind};
@@ -20,6 +20,7 @@ use ratatui::crossterm::terminal::{Clear, ClearType};
 use std::io::{self, IsTerminal, Stdout, Write};
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::task::Poll;
 use std::time::Instant;
 
 fn main() -> ExitCode {
@@ -195,7 +196,7 @@ async fn wait(
     pending: &mut Option<Event>,
 ) -> io::Result<bool> {
     if let Some(ev) = pending.take() {
-        return input(app, events, ev, pending);
+        return input(app, events, ev, pending).await;
     }
     let deadline = app.next_tick(Instant::now());
     let timer = async {
@@ -206,7 +207,7 @@ async fn wait(
     };
     tokio::select! {
         ev = events.next() => match ev {
-            Some(Ok(ev)) => return input(app, events, ev, pending),
+            Some(Ok(ev)) => return input(app, events, ev, pending).await,
             Some(Err(e)) => return Err(e),
             None => return Ok(true),
         },
@@ -231,7 +232,9 @@ const MOTIONS_PER_FRAME: usize = 64;
 /// takes the motions already read after it along: one frame shows where the pointer is now,
 /// not each place it went through (a terminal over SSH sends them in bursts). The first other
 /// event read is kept in `pending` for the next turn. `true` when the input stream ended.
-fn input(app: &mut App, events: &mut EventStream, ev: Event, pending: &mut Option<Event>) -> io::Result<bool> {
+/// (The stream is asked with this task's own waker: one asked with another waker that answers
+/// "not yet" would leave its wake-up to that waker and never wake the loop.)
+async fn input(app: &mut App, events: &mut EventStream, ev: Event, pending: &mut Option<Event>) -> io::Result<bool> {
     let motion =
         |ev: &Event| matches!(ev, Event::Mouse(m) if matches!(m.kind, MouseEventKind::Drag(_) | MouseEventKind::Moved));
     let mut more = motion(&ev);
@@ -241,18 +244,18 @@ fn input(app: &mut App, events: &mut EventStream, ev: Event, pending: &mut Optio
     }
     let mut changed = !app.take_idle_event();
     for _ in 1..MOTIONS_PER_FRAME {
-        match events.next().now_or_never() {
-            Some(Some(Ok(ev))) if motion(&ev) => {
+        match futures::poll!(events.next()) {
+            Poll::Ready(Some(Ok(ev))) if motion(&ev) => {
                 app.handle_event(ev);
                 changed |= !app.take_idle_event();
             }
-            Some(Some(Ok(ev))) => {
+            Poll::Ready(Some(Ok(ev))) => {
                 *pending = Some(ev);
                 more = false;
             }
-            Some(Some(Err(e))) => return Err(e),
-            Some(None) => return Ok(true),
-            None => more = false,
+            Poll::Ready(Some(Err(e))) => return Err(e),
+            Poll::Ready(None) => return Ok(true),
+            Poll::Pending => more = false,
         }
         if !more {
             break;
