@@ -1147,3 +1147,69 @@ async fn a_kill_sent_again_and_answered_after_one_given_up_on_leaves_the_gate_un
     first.abort();
     second.abort();
 }
+
+/// [`server_greeting`] with TLS (`CLIENT_SSL`) offered or not.
+fn greeting_with_tls(offered: bool) -> Vec<u8> {
+    let mut g = server_greeting();
+    // The lower capability flags: after the header (4), the protocol (1), the version, the id
+    // (4), the first scramble (8) and its filler (1).
+    let at = 4 + 1 + b"8.4.0\0".len() + 4 + 8 + 1;
+    if !offered {
+        g[at + 1] &= !0x08;
+    }
+    g
+}
+
+/// A route of a profile on another machine with TLS mode `mode`.
+fn tls_route(mode: &str) -> (ConnectionConfig, Route) {
+    let cfg = ConnectionConfig {
+        driver: "mysql".into(),
+        host: "db.example".into(),
+        user: "u".into(),
+        password: "s3cret-Pass-zz".into(),
+        sslmode: mode.into(),
+        ..Default::default()
+    };
+    let target = Target::of(&cfg).unwrap();
+    let route = target.route(None).unwrap();
+    (cfg, route)
+}
+
+#[tokio::test]
+async fn a_server_without_tls_is_refused_or_gets_a_plain_login_as_the_mode_says() {
+    for (mode, refused) in [("REQUIRED", true), ("VERIFY_IDENTITY", true), ("PREFERRED", false)] {
+        let (cfg, route) = tls_route(mode);
+        let opts = Target::of(&cfg).unwrap().opts(None, "datarig-tls-test", &route);
+        let (client, mut server) = tokio::io::duplex(1 << 16);
+        let login = tokio::spawn(async move { super::login(&route, Box::new(client), opts).await.1 });
+        server.write_all(&greeting_with_tls(false)).await.unwrap();
+        let next = read_packet(&mut server).await;
+        if refused {
+            assert_eq!(next, None, "{mode}: nothing sent");
+            let err = login.await.unwrap().expect_err("refused");
+            assert_eq!(connect_error(&err).0, DbError::Tls(TlsProblem::Unsupported), "{mode}");
+        } else {
+            // The handshake response itself (not a 32-byte SSLRequest), without the password.
+            let response = next.expect("a plain login");
+            assert!(response.len() > 32, "{mode}");
+            assert!(!response.windows(14).any(|w| w == b"s3cret-Pass-zz"));
+            drop(server);
+            assert!(login.await.unwrap().is_err());
+        }
+    }
+}
+
+#[tokio::test]
+async fn data_the_server_sent_before_the_tls_handshake_is_refused() {
+    let (cfg, route) = tls_route("REQUIRED");
+    let opts = Target::of(&cfg).unwrap().opts(None, "datarig-tls-test", &route);
+    let (client, mut server) = tokio::io::duplex(1 << 16);
+    let login = tokio::spawn(async move { super::login(&route, Box::new(client), opts).await.1 });
+    // The greeting and, in the same write, bytes that would be read as if they came over TLS.
+    let mut first = greeting_with_tls(true);
+    first.extend_from_slice(&packet(1, b"injected"));
+    server.write_all(&first).await.unwrap();
+    let request = read_packet(&mut server).await.expect("the SSLRequest");
+    assert_eq!(request.len(), 32, "an SSLRequest");
+    assert!(login.await.unwrap().is_err(), "nothing read before TLS is taken");
+}

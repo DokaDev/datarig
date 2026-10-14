@@ -108,9 +108,8 @@ impl Wire {
 
     /// Nothing more is sent: the answer the server still owes is read as before, and the next
     /// write, which can only be a new request, cuts the wire instead of reaching the server.
-    /// (Encryption over the wire would change that: TLS may write on its own while it reads, a
-    /// key update, and such a write cuts too. The session is then lost before the answer's end,
-    /// never kept on a connection that runs more.)
+    /// (Over TLS the wire carries MySQL's packets: what TLS writes on its own while it reads, a
+    /// key update, goes below the wire and is no request.)
     pub(crate) fn seal(&self) {
         if let Ok(mut s) = self.lock() {
             s.sealed = true;

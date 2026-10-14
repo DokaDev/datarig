@@ -465,7 +465,13 @@ impl Stream {
                 let stream = (tls.upgrade)(stream).await?;
                 Endpoint::Custom(CustomEndpoint(stream, Some(tls.password_ok)))
             }
-            _ => return Err(crate::DriverError::NoClientSslFlagFromServer.into()),
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "TLS by the caller needs a stream the caller opened",
+                )
+                .into())
+            }
         };
         self.codec = Some(Box::new(Framed::new(io, parts.codec)));
         Ok(())

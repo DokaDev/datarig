@@ -179,6 +179,17 @@ async fn the_server_sees_the_session_encrypted_and_the_test_says_how() {
     let cfg = profile(&env.url, "VERIFY_IDENTITY", &env.certs, Some("ca.crt"));
     forget_logins(&env).await;
     assert_eq!(cell(&cfg, "SHOW SESSION STATUS LIKE 'Ssl_version'").await.as_deref(), Some("TLSv1.3"));
+    // The login over TLS still carries the connection's attributes (its program name; root
+    // may read them).
+    let mut root = profile(&env.admin, "VERIFY_IDENTITY", &env.certs, Some("ca.crt"));
+    root.database = String::new();
+    let program = cell(
+        &root,
+        "SELECT 'program', ATTR_VALUE FROM performance_schema.session_connect_attrs \
+         WHERE PROCESSLIST_ID = CONNECTION_ID() AND ATTR_NAME = 'program_name'",
+    )
+    .await;
+    assert!(program.as_deref().is_some_and(|p| p.contains("tls-test")), "{program:?}");
     let test = MyDriver.ping(&cfg, Duration::from_secs(10), None).await.expect("the test connects");
     assert_eq!(test.encryption, Encryption::Tls { version: TlsVersion::Tls13, verified: Verified::Full });
 }

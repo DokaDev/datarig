@@ -584,8 +584,14 @@ impl Conn {
             } else {
                 UTF8_GENERAL_CI
             };
+            // The capabilities the handshake response will have: MySQL takes them from this
+            // packet (the connection attributes are read only when it says so).
+            let mut capabilities = self.inner.capabilities;
+            if self.inner.opts.connect_attributes().is_some() {
+                capabilities.insert(CapabilityFlags::CLIENT_CONNECT_ATTRS);
+            }
             let ssl_request = SslRequest::new(
-                self.inner.capabilities,
+                capabilities,
                 DEFAULT_MAX_ALLOWED_PACKET as u32,
                 collation as u8,
             )
