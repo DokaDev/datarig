@@ -1,12 +1,12 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/datarig-core",
-    "crates/datarig-driver-postgres",
-    "crates/datarig-driver-mysql",
-    "crates/datarig-ssh",
-    "crates/datarig-tui",
-    "crates/datarig-bench",
+    "crates/core",
+    "crates/drivers/postgres",
+    "crates/drivers/mysql",
+    "crates/ssh",
+    "crates/tui",
+    "crates/bench",
 ]
 # A patched dependency, not ours to lint or test (see [patch.crates-io]).
 exclude = ["vendor"]
@@ -29,11 +29,11 @@ publish = false
 [workspace.dependencies]
 # Internal crates (dependency direction: tui → core ← driver-postgres/driver-mysql, tui → ssh → core;
 # bench → all).
-datarig-core = { path = "crates/datarig-core" }
-datarig-driver-mysql = { path = "crates/datarig-driver-mysql" }
-datarig-driver-postgres = { path = "crates/datarig-driver-postgres" }
-datarig-ssh = { path = "crates/datarig-ssh" }
-datarig-tui = { path = "crates/datarig-tui" }
+datarig-core = { path = "crates/core" }
+datarig-driver-mysql = { path = "crates/drivers/mysql" }
+datarig-driver-postgres = { path = "crates/drivers/postgres" }
+datarig-ssh = { path = "crates/ssh" }
+datarig-tui = { path = "crates/tui" }
 
 arboard = { version = "3.6", default-features = false }
 chrono = "0.4.45"
@@ -107,7 +107,7 @@ tokio-postgres = { path = "vendor/tokio-postgres" }
 [profile.dev.package.pg_query]
 opt-level = 2
 
-# The release binary is held to 19 MiB (crates/datarig-bench/budgets.toml): a single codegen
+# The release binary is held to 19 MiB (crates/bench/budgets.toml): a single codegen
 # unit with LTO drops the code no caller reaches, and stripping drops the symbol table (panic
 # messages keep their file and line). Without them the Linux x86_64 binary was 20.7 MiB.
 [profile.release]

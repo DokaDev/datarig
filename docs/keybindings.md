@@ -1,6 +1,6 @@
 # datarig key bindings
 
-<!-- Generated from crates/datarig-tui/src/keymap/defaults.rs and the action registry. Do not edit;
+<!-- Generated from crates/tui/src/keymap/defaults.rs and the action registry. Do not edit;
      run `DATARIG_BLESS=1 cargo test -p datarig-tui --test keybindings_doc` at the repository root. -->
 
 Keys resolve from the current context outwards to `root`; the first binding found wins. Dialogs (`overlay.*`) sit directly under `root`, so only `root` keys pass through them. The cell viewer is not modal: it sits under `workspace`, so the workspace keys (run, …) keep working.

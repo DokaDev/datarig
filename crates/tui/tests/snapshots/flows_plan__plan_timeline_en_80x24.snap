@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/flows_plan.rs
+expression: "h.draw(80, 24).backend()"
+---
+"╭ Explorer ────────────╮ 1 console 1 ×                                          "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1       ││ local-pg / datarig  127.0.0.1:55432                  │"
+"│  ▾ ●   local-pg      ││  1▎SELECT * FROM t;  ✓ plan · 3ms · 14:03            │"
+"│    ▾ datarig default ││                                                      │"
+"│      ▸ analytics     ││                                                      │"
+"│      ▸ public        ││                                                      │"
+"│      ▸ shop          ││                                                      │"
+"│                      ││                                                      │"
+"│                      │╰──────────────────────────────────────────────────────╯"
+"│                      │╭ Plan · Timeline ─────────────────────────────────────╮"
+"│                      ││ Result 1  [Plan]  Chart  Messages                H/L │"
+"│                      ││ … [Timeline] … execution 82.4 ms · planning 0.824 ms │"
+"│                      ││ ░ to the first row ·… 0           40.3 ms    80.5 ms │"
+"│                      ││ Seq Scan on zz_custo… ░█████████████████████████████ │"
+"│                      ││   InitPlan 3: Result  █                              │"
+"│                      ││     InitPlan 2: Limit █                              │"
+"│                      ││       Index Only Sca… █                              │"
+"│                      ││   SubPlan 1: Aggrega… █ per loop ×250                │"
+"│                      ││     Bitmap Heap Scan… █ per loop ×250                │"
+"│                      ││       Bitmap Index S… █ per loop ×250                │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" NORMAL  local-pg │ 1 row · 3ms   │ Enter detail · v views · h fold · y copy EN "

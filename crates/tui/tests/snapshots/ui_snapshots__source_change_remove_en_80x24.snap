@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/ui_snapshots.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 ×                                          "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾╭ Edit connection — local-pg ──────────────────────────────────────────────╮ │"
+"│ │  Basic   SSH   Advanced                            Ctrl+N/Ctrl+P section │e│"
+"│ │                                                                          │ │"
+"│ │ Driver            PostgreSQL ▾   ←/→ change · Enter list                 │ │"
+"│ │ Name              local-pg                                               │ │"
+"│ │ Host              127.0.0.1                                              │ │"
+"│ │ Port  ╭ Password storage ────────────────────────────────────────╮       │ │"
+"│ │ User  │                                                          │       │ │"
+"│ │ Passwo│ Switch “local-pg” to the prompt on every connect? Its    │       │ │"
+"│ │ Passwo│ saved password is removed from the OS keychain.          │       │ │"
+"│ │ Databa│                                                          │       │ │"
+"│ │       │                [ Cancel ]     Continue                   │       │t│"
+"│ │ DSN   ╰───────────────────────────── y continue · n/Enter cancel ╯de=dis │ │"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ │                    Test    Save    Cancel                                │t│"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ ╰─ Tab/↑↓ move · Ctrl+N/P section · Ctrl+T test · Ctrl+S save · Esc cancel ╯ │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" NORMAL  local-pg │ Connected to local-pg                                    EN "

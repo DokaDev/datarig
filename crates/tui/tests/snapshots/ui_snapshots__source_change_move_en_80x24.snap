@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/ui_snapshots.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 ×                                          "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾╭ Edit connection — local-pg ──────────────────────────────────────────────╮ │"
+"│ │  Basic   SSH   Advanced                            Ctrl+N/Ctrl+P section │e│"
+"│ │                                                                          │ │"
+"│ │ Driver            PostgreSQL ▾   ←/→ change · Enter list                 │ │"
+"│ │ Name              local-pg                                               │ │"
+"│ │ Host  ╭ Password storage ────────────────────────────────────────╮       │ │"
+"│ │ Port  │                                                          │       │ │"
+"│ │ User  │ Move the saved password of “local-pg” from the OS        │       │ │"
+"│ │ Passwo│ keychain to the secrets file? It is written and checked  │       │ │"
+"│ │ Passwo│ there first, then removed from the OS keychain.          │0600)  │ │"
+"│ │ Databa│                                                          │       │ │"
+"│ │       │                [ Cancel ]     Continue                   │       │t│"
+"│ │ DSN   ╰───────────────────────────── y continue · n/Enter cancel ╯de=dis │ │"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ │                    Test    Save    Cancel                                │t│"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ ╰─ Tab/↑↓ move · Ctrl+N/P section · Ctrl+T test · Ctrl+S save · Esc cancel ╯ │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" NORMAL  local-pg │ Connected to local-pg                                    EN "

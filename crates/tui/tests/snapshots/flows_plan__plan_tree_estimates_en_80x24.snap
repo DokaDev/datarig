@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/flows_plan.rs
+expression: "h.draw(80, 24).backend()"
+---
+"╭ Explorer ────────────╮ 1 console 1 ×                                          "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1       ││ local-pg / datarig  127.0.0.1:55432                  │"
+"│  ▾ ●   local-pg      ││  1 SELECT 1;                                         │"
+"│    ▾ datarig default ││  2▎SELECT * FROM t WHERE a > 1;  ✓ plan · 3ms · 14:03│"
+"│      ▸ analytics     ││                                                      │"
+"│      ▸ public        ││                                                      │"
+"│      ▸ shop          ││                                                      │"
+"│                      ││                                                      │"
+"│                      │╰──────────────────────────────────────────────────────╯"
+"│                      │╭ Plan · Tree ─────────────────────────────────────────╮"
+"│                      ││ Result 1  [Plan]  Chart  Messages                    │"
+"│                      ││ [Tree] …       estimated cost, not time (no ANALYZE) │"
+"│                      ││ Node                         self cost share         │"
+"│                      ││ ▾ Sort                               0 ▏          <1%│"
+"│                      ││ └─▾ HashAggregate                  875 █▋         17%│"
+"│                      ││   └─▾ Hash Join                    320 ▋           6%│"
+"│                      ││     ├── Seq Scan on zz… hot       3774 ██████▉    75%│"
+"│                      ││     └─▾ Hash                         0             0%│"
+"│                      ││       └── Seq Scan on zz_c…         16 ▏          <1%│"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" NORMAL  local-pg │ 1 row · 3ms        │ i type · Ctrl+E run · Tab next pane EN "

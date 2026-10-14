@@ -17,7 +17,7 @@ column, and does not let a caller choose. datarig's query session needs PostgreS
 output for the types it does not decode from binary (ranges, multiranges, geometry, bit strings,
 text search, `money`, `"char"`, `reg*`, enums, composites, extension and unknown types), so that
 the grid, every copy format and a copied `INSERT` show and round-trip those values exactly. The
-driver picks a format per column (`datarig-driver-postgres/src/query.rs`, `format_code`) and
+driver picks a format per column (`crates/drivers/postgres/src/query.rs`, `format_code`) and
 binds with it.
 
 Upstream has no API for this in 0.7.18: the format is hard-coded (`Some(1)` in
@@ -294,7 +294,7 @@ not include them.
 | C library | libpg_query 17-6.2 ([pganalyze/libpg_query](https://github.com/pganalyze/libpg_query)), BSD-3-Clause (`LICENSE-libpg_query`): PostgreSQL 17.7's parser and scanner extracted as a library |
 | PostgreSQL source in it | PostgreSQL License (`COPYRIGHT-PostgreSQL`, from `REL_17_STABLE`) |
 | Also compiled in | protobuf-c (BSD-2-Clause, `LICENSE-protobuf-c`) and xxHash (BSD-2-Clause, `LICENSE-xxhash`), from `libpg_query/vendor` |
-| Used for | the safety classifier (`datarig-core/src/sql/risk.rs`) and the splitter's differential tests (`sql/split/tests.rs`) |
+| Used for | the safety classifier (`crates/core/src/sql/risk.rs`) and the splitter's differential tests (`sql/split/tests.rs`) |
 | Build needs | a C compiler (`cc`) and libclang (`bindgen`); both are on GitHub's hosted runners (Linux, macOS, Windows) and come with Xcode or LLVM. `protoc` is not needed (the crate ships its generated protobuf code and regenerates it only when `protoc` is found) |
 | Binary size | about +3.6 MB in the release build |
 

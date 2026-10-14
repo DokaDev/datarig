@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/ui_snapshots.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 ×                                          "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 5       ││ local-pg / datarig  127.0.0.1:55432                  │"
+"│  ▾ local             ││  1 -- datarig 🐘  Ctrl+E: run the statement under the│" Hidden by multi-width symbols: [(41, " ")]
+"│    ▸ ○   scratch     ││  2▎SELECT * FROM shop.users WHERE id <= 8;           │"
+"│  ▾ work              ││  3                                                   │"
+"│    ▾ ╭─────────────────────────────────────────────╮o.total_amount           │"
+"│      │ › type to filter                            │                         │"
+"│      │ ● local-pg                                  │ = o.user_id             │"
+"│      │  Explorer: open or toggle             Enter │                         │"
+"│    ▸ │  Explorer: reload                         r │                         │"
+"│  ▾ ● │  Edit connection profile                  e │vents;                   │"
+"│    ▾ │  Duplicate connection profile             c │                         │"
+"│      │  Delete connection profile                d │vents ORDER BY created_at│"
+"│      │  Test connection                          t │                         │"
+"│      │  Disconnect                               x │;                        │"
+"│      │  New console on this connection           o │                         │"
+"│      │  Move connection profile to a folder      m │emicolon$$ AS dollar, 'it│"
+"│      │ Explorer                                    │                         │"
+"│      │  Explorer: filter by name                 / │                         │"
+"│      │  New connection profile                   n │                         │"
+"│      │  New folder                               N │                         │"
+"╰──────╰─────────────────────────────────────────────╯─────────────────────────╯"
+" NORMAL  local-pg │ Connection failed: password authentication failed for u… EN "

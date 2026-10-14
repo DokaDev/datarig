@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/flows_keychain_offer.rs
+expression: "o.h.draw(w, hh).backend()"
+---
+"╭ Explorer ────────────╮ 1 console 1 ×                                          "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 3       ││ local-pg / datarig  127.0.0.1:55432                  │"
+"│  ▾ ●   local-pg      ││  1                                                   │"
+"│    ▾ datarig default ││                                                      │"
+"│        Loading…      ││                                                      │"
+"│      Loading…        ││                                                      │"
+"│  ▸ ○   v╭ Keychain access through security ────────────────────────╮         │"
+"│  ▸ ○    │                                                          │         │"
+"│▾ Tunnels│ macOS likely asked for your login password because       │         │"
+"│    n her│ datarig was updated. Stop asking after every update?     │         │"
+"│▾ Environ│ Other programs running as you could then read these      │         │"
+"│  ▸ ○ Def│ saved passwords through the `security` tool.             │         │"
+"│    ＋ Ad│                                                          │         │" Hidden by multi-width symbols: [(6, " ")]
+"│▾ Saved q│            No, keep asking       Yes, switch             │         │"
+"│    Ctrl+╰─────── y switch · n keep asking · Esc/Enter decide later ╯         │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" NORMAL  local-pg │ Connected to local-pg                                    EN "

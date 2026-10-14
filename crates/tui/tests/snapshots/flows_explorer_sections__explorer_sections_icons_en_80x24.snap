@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/flows_explorer_sections.rs
+expression: backend
+---
+"╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
+"│  ＋ New connection   ││                                                      │" Hidden by multi-width symbols: [(4, " ")]
+"│▾ 󰒍 Connections 3     ││  No open tabs                                        │"
+"│  ▸ ○  local-pg 󰌘 󰌾  ││  Pick a connection in the explorer, or press         │"
+"│  ▸ ○  v6            ││  Ctrl+O.                                             │"
+"│  ▸ ○  分析-replica  ││                                                      │" Hidden by multi-width symbols: [(10, " "), (12, " ")]
+"│▾ 󱠽 Tunnels 1         ││  Enter      Connect and open a console               │"
+"│    󰌘 office  ec2-use…││  Ctrl+O     Quick connect                            │"
+"│▾  Environments 2    ││  Ctrl+T     New console tab                          │"
+"│  ▸ 󱓻 Default rules (…││  Space t u  Reopen a closed tab                      │"
+"│  ▸ 󱓻 prod  PROD   󰌾 …││  n          New connection                           │"
+"│  ▸ 󱓻 dev  standard r…││  F1         Keyboard help                            │"
+"│                      ││  :          Commands                                 │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+"                   │ Enter open · : commands · F1 help · q quit · Space more EN "
