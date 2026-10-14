@@ -39,8 +39,12 @@ impl PgTls {
         }
     }
 
-    /// The handshake for a server whose certificate names `host`.
+    /// The handshake for a server whose certificate names `host`. A new attempt: what an earlier
+    /// one got (another host of the same settings) is forgotten.
     pub(crate) fn to(&self, host: &str) -> Result<PgTlsConnect, TlsError> {
+        if let Ok(mut o) = self.outcome.lock() {
+            *o = None;
+        }
         let connector = Connector::new(&self.settings, host).map_err(TlsError)?;
         Ok(PgTlsConnect { connector: connector.map(Arc::new), outcome: self.outcome.clone() })
     }

@@ -1,4 +1,5 @@
 use super::*;
+use tokio_postgres::config::SslMode;
 
 #[test]
 fn read_only_goes_after_the_dsn_options() {
@@ -54,9 +55,31 @@ fn the_tls_settings_reach_the_connection_settings() {
     for (m, want) in [("prefer", SslMode::Prefer), ("require", SslMode::Require), ("verify-full", SslMode::Require)] {
         assert_eq!(mode(&ConnectionConfig { sslmode: m.into(), ..base.clone() }), Ok(want), "{m}");
     }
-    // A Unix socket: never TLS (PostgreSQL has none there).
-    let socket = ConnectionConfig { host: "/var/run/postgresql".into(), sslmode: "require".into(), ..base.clone() };
-    assert_eq!(mode(&socket), Ok(SslMode::Disable));
+    // A Unix socket: never TLS (PostgreSQL has none there), whatever the settings say, unless
+    // they cannot be read.
+    for (m, ca) in [("require", None), ("verify-full", None), ("verify-ca", None), ("verify-full", Some("/none.pem"))] {
+        let socket = ConnectionConfig {
+            host: "/var/run/postgresql".into(),
+            sslmode: m.into(),
+            sslrootcert: ca.map(str::to_string),
+            ..base.clone()
+        };
+        let (cfg, mut tls) = pg_config(&socket).unwrap();
+        assert_eq!(cfg.get_ssl_mode(), SslMode::Disable, "{m}");
+        // tokio-postgres asks for a handshake of a socket host by an empty name: none is made.
+        let made = tokio_postgres::tls::MakeTlsConnect::<tokio::net::TcpStream>::make_tls_connect(&mut tls, "");
+        assert!(made.is_ok(), "{m}");
+    }
+    let unknown = ConnectionConfig { host: "/tmp".into(), sslmode: "verify".into(), ..base.clone() };
+    assert!(pg_config(&unknown).is_err());
+    // An address alone: it is the certificate's name too.
+    let addr = ConnectionConfig { dsn: Some("hostaddr=10.0.0.5 sslmode=require".into()), ..base.clone() };
+    let (cfg, _) = pg_config(&addr).unwrap();
+    assert_eq!(cfg.get_hosts(), [Host::Tcp("10.0.0.5".into())]);
+    // A handshake without the SSLRequest is not supported.
+    let direct =
+        ConnectionConfig { dsn: Some("postgres://h/db?sslnegotiation=direct&sslmode=require".into()), ..base.clone() };
+    assert!(matches!(pg_config(&direct), Err(DbError::Settings(_))));
     // A DSN's own mode, also one tokio-postgres would not read.
     let dsn = ConnectionConfig { dsn: Some("postgres://u@h/db?sslmode=verify-full".into()), ..base.clone() };
     assert_eq!(mode(&dsn), Ok(SslMode::Require));

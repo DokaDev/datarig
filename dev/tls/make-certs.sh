@@ -7,11 +7,17 @@
 #   client-ca.crt             the CA the PostgreSQL server takes client certificates of
 #   client.crt, client.key    a client certificate of the user zz_cert, by client-ca
 #   stranger.crt, stranger.key  a client certificate of zz_cert by another CA (refused)
-# Usage: make-certs.sh [dir]   (default: dev/tls/.fixture, git-ignored)
+# Usage: make-certs.sh [dir]   (default: dev/tls/.fixture, git-ignored). The directory must be
+# empty or one this script made (it replaces the keys in it). Needs OpenSSL 1.1.1 or later.
 set -eu
 dir=${1:-$(dirname "$0")/.fixture}
 mkdir -p "$dir"
 cd "$dir"
+if [ -n "$(ls -A)" ] && [ ! -e .datarig-tls-fixture ]; then
+    echo "$dir is not empty and not a fixture of make-certs.sh: refusing to replace its files" >&2
+    exit 1
+fi
+touch .datarig-tls-fixture
 rm -f ./*.crt ./*.key ./*.csr ./*.srl ./*.cnf
 ca() {
     openssl req -x509 -newkey rsa:2048 -nodes -days 30 -subj "/CN=$2" \

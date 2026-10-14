@@ -140,7 +140,13 @@ async fn every_mode_against_a_trusted_an_untrusted_and_a_misnamed_certificate() 
 #[tokio::test(flavor = "multi_thread")]
 async fn without_tls_on_the_server_prefer_is_plain_and_require_says_so() {
     let Some((_, certs)) = tls_env("without_tls_on_the_server_prefer_is_plain_and_require_says_so") else { return };
-    let Ok(plain_url) = std::env::var("DATARIG_TEST_PG_URL") else { return };
+    let Some(plain_url) = std::env::var("DATARIG_TEST_PG_URL").ok().filter(|u| !u.is_empty()) else {
+        if std::env::var("DATARIG_REQUIRE_TLS").is_ok_and(|v| v == "1") {
+            panic!("DATARIG_TEST_PG_URL (a server without TLS) must be set when DATARIG_REQUIRE_TLS=1");
+        }
+        let _ = writeln!(std::io::stderr(), "SKIPPED without_tls_on_the_server_…: set DATARIG_TEST_PG_URL");
+        return;
+    };
     // The server answers the SSLRequest with `N`: `prefer` goes on unencrypted, and says so.
     assert_eq!(connect(&profile(&plain_url, "prefer", &certs, [None; 3]), None).await, Ok(Encryption::Plain));
     for mode in ["require", "verify-full"] {
@@ -197,6 +203,16 @@ async fn the_server_sees_the_session_encrypted_and_the_test_says_how() {
         }
     };
     assert_eq!(row.as_deref(), Some("true TLSv1.3"));
+    // SCRAM with channel binding (SCRAM-SHA-256-PLUS): required, the login still works, so the
+    // binding data of the server's certificate is right.
+    let bound = ConnectionConfig {
+        dsn: Some(format!(
+            "{url}?channel_binding=require&sslmode=verify-full&sslrootcert={certs}/ca.crt",
+            url = url.trim_end_matches('/')
+        )),
+        ..cfg.clone()
+    };
+    assert_eq!(connect(&bound, None).await, tls(Verified::Full));
     let test = PgDriver.ping(&cfg, Duration::from_secs(10), None).await.expect("the test connects");
     assert_eq!(test.encryption, Encryption::Tls { version: TLS13, verified: Verified::Full });
 }

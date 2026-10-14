@@ -16,7 +16,7 @@ use datarig_core::driver::{
 use datarig_core::fault::{Fault, FaultKind};
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::sql::dialect::{Dialect, Language};
-use datarig_core::tls::TlsProblem;
+use datarig_core::tls::{TlsProblem, TlsSettings};
 use datarig_core::transport::DialerRef;
 use futures::future::BoxFuture;
 use std::str::FromStr;
@@ -26,7 +26,7 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
 use tokio::task::AbortHandle;
-use tokio_postgres::config::{Host, SslMode};
+use tokio_postgres::config::{Host, SslNegotiation};
 use tokio_postgres::error::SqlState;
 use tokio_postgres::{Client, Config, SimpleQueryMessage};
 
@@ -141,9 +141,12 @@ impl Driver for PgDriver {
 /// The profile's connection settings and its TLS. The TLS settings are datarig's own
 /// (`ConnectionConfig::tls`): a DSN's TLS parameters are read there and left out of what
 /// tokio-postgres parses. A connection to Unix sockets only is never encrypted (PostgreSQL has
-/// no TLS on them; libpq ignores `sslmode` there too).
+/// no TLS on them; libpq ignores `sslmode` there too): only settings that cannot be read are an
+/// error there. A server named by its address alone (`hostaddr`, no `host`) has the certificate
+/// checked against that address, as the tunnel's route does. `sslnegotiation=direct` (a
+/// handshake without the SSLRequest) is not supported.
 fn pg_config(c: &ConnectionConfig) -> Result<(Config, PgTls), DbError> {
-    let tls = PgTls::new(c.tls().map_err(DbError::Tls)?);
+    let settings = c.tls();
     let mut cfg = if let Some(dsn) = &c.dsn {
         Config::from_str(&without_tls_params(dsn)).map_err(|e| DbError::Settings(Fault::other(chain(&e))))?
     } else {
@@ -154,10 +157,24 @@ fn pg_config(c: &ConnectionConfig) -> Result<(Config, PgTls), DbError> {
         }
         cfg
     };
+    if cfg.get_ssl_negotiation() == SslNegotiation::Direct {
+        let why = "sslnegotiation=direct is not supported: TLS starts with an SSLRequest";
+        return Err(DbError::Settings(Fault::other(why)));
+    }
     let sockets_only = !cfg.get_hosts().is_empty()
         && cfg.get_hostaddrs().is_empty()
         && cfg.get_hosts().iter().all(|h| !matches!(h, Host::Tcp(_)));
-    cfg.ssl_mode(if sockets_only { SslMode::Disable } else { tls.ssl_mode() });
+    let tls = match (sockets_only, settings) {
+        (_, Err(e @ (TlsProblem::UnknownMode(_) | TlsProblem::DsnUnreadable))) => return Err(DbError::Tls(e)),
+        (true, _) => PgTls::new(TlsSettings::plain()),
+        (false, settings) => PgTls::new(settings.map_err(DbError::Tls)?),
+    };
+    if cfg.get_hosts().is_empty() {
+        for addr in cfg.get_hostaddrs().to_vec() {
+            cfg.host(addr.to_string());
+        }
+    }
+    cfg.ssl_mode(tls.ssl_mode());
     cfg.application_name("datarig").connect_timeout(Duration::from_secs(5));
     Ok((cfg, tls))
 }
