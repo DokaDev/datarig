@@ -26,7 +26,7 @@ impl App {
         {
             // A move has no button held: a tab dragged lost its release (let go outside the
             // window), so it stays where it was.
-            let dropped = self.tab_drag.take().is_some_and(|d| d.lifted);
+            let dropped = self.end_tab_drag();
             let hovered = if self.modal_open() {
                 // Under a dialog the workspace draws no highlight (`App::pointer_hover`); it is
                 // dropped so none comes back where the pointer no longer is.
@@ -52,7 +52,7 @@ impl App {
         if let Event::Mouse(m) = ev
             && matches!(m.kind, MouseEventKind::Down(_))
         {
-            self.tab_drag = None;
+            self.end_tab_drag();
         }
         match ev {
             Event::Key(k) => {
@@ -65,7 +65,7 @@ impl App {
                 }
             }
             Event::Mouse(m) if self.modal_open() => {
-                self.tab_drag = None;
+                self.end_tab_drag();
                 self.overlay_mouse(m)
             }
             Event::Mouse(m) => self.handle_mouse(m),
@@ -74,7 +74,7 @@ impl App {
         }
         // A dialog on top ends a tab's drag: it stays where it was (its `Esc` is the dialog's).
         if self.modal_open() {
-            self.tab_drag = None;
+            self.end_tab_drag();
         }
         self.after_input();
     }
@@ -648,7 +648,7 @@ impl App {
         if self.layout.too_small {
             // A release there still ends a drag (nothing moves).
             if m.kind == MouseEventKind::Up(MouseButton::Left) {
-                self.tab_drag = None;
+                self.end_tab_drag();
                 self.drag = None;
                 self.drag_at = None;
             }

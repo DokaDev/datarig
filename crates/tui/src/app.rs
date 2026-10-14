@@ -732,6 +732,10 @@ pub struct App {
     pub(crate) tab_drag: Option<tab_drag::TabDrag>,
     /// Where each tab and scroll mark of the document tab bar was drawn last.
     pub(crate) tab_hits: Vec<(u16, u16, crate::widgets::tabbar::TabHit)>,
+    /// How the document tab bar laid its tabs out last (a dragged tab follows the pointer by it).
+    pub(crate) tab_geom: crate::widgets::tabbar::BarGeom,
+    /// Tabs sliding to their places after a drag moved them.
+    pub(crate) tab_slide: tab_drag::TabSlide,
     /// The small clickable target under the pointer (drawn highlighted).
     pub pointer_on: Option<hover::PointerOn>,
     /// The tab the pointer was over its grid or inspector in (a grid cell or an inspector entry
@@ -1006,6 +1010,8 @@ impl App {
             strip_hits: Vec::new(),
             tab_drag: None,
             tab_hits: Vec::new(),
+            tab_geom: Default::default(),
+            tab_slide: Default::default(),
             pointer_on: None,
             pointer_tab: None,
             detail_press: overlay::Press::default(),
@@ -1573,6 +1579,12 @@ impl App {
         self.tab_hits.clone()
     }
 
+    /// The column tab `index` was drawn from last (a sliding or dragged tab where it was at
+    /// that frame; tests follow it).
+    pub fn tab_x(&self, index: usize) -> Option<i32> {
+        self.tab_geom.drawn.get(index).copied().flatten()
+    }
+
     /// Where each result tab of the strip was drawn last, and what it shows (tests click them).
     pub fn strip_hits(&self) -> Vec<(u16, u16, Option<usize>, tabs::ResultView)> {
         self.strip_hits.clone()
@@ -1597,6 +1609,7 @@ impl App {
             || self.leader_at.is_some()
             || self.quitting.is_some()
             || self.copy_flash.is_some()
+            || self.tab_slide.due(self.now()).is_some()
             || self.tabs.iter().any(|t| {
                 matches!(t.exec.paging, Paging::Open { in_block: false, .. }) && self.paging_timeout(t).is_some()
             })
@@ -1631,8 +1644,9 @@ impl App {
             || self.leader_at.is_some()
             || self.quitting.is_some()
             || self.conn_test.as_ref().is_some_and(|t| t.state == TestState::Running);
-        // A copy's flash ends at its own deadline (one wakeup), also between fine ticks.
-        let flash = self.copy_flash_due();
+        // A copy's flash ends at its own deadline (one wakeup), also between fine ticks; tabs
+        // sliding after a drag want their next frame sooner than a fine tick.
+        let flash = [self.copy_flash_due(), self.tab_slide.due(now)].into_iter().flatten().min();
         if fine {
             let tick = flash.map_or(now + FINE_TICK, |f| f.min(now + FINE_TICK));
             return Some(tick.max(now + Duration::from_millis(1)));
@@ -1713,6 +1727,7 @@ impl App {
             self.hangul_hint = None;
         }
         self.copy_flash_tick(now);
+        self.tab_slide.tick(now);
         // An attempt opening its tunnel is not timed here (each step of the tunnel has a limit
         // of its own, which stops while the user answers a question).
         let late: Vec<ProfileId> = self

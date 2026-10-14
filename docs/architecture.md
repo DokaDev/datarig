@@ -247,6 +247,15 @@ Held by CI budgets (`docs/perf.md`).
   labels are `Part`s whose document part shortens first when the tabs do not fit, and the `×`
   part records a `TabHit::Close` of its own, which `tab_bar_click` sends down the `Ctrl+W`
   path (`ConfirmAction::CloseTab` keeps the tab on Enter).
+  A dragged tab (`app::tab_drag`) is shown at its place among the others
+  (`tab_drag::shown_order`) and drawn where the pointer holds it, over them; `tab_drag::follow`
+  moves it past a neighbour once it went past that neighbour's middle, by what the bar drew
+  last (`tabbar::BarGeom`). Tabs are put together in a line of cells before the buffer
+  (`put_tab`, then `mend` blanks what is left of a wide character another tab covers). A change
+  of places the drag made (a neighbour moving over, the drop, a cancel) slides
+  (`tab_drag::TabSlide`, keyed by `TabId`: `SLIDE` long, a frame every `SLIDE_FRAME`, the only
+  timer it asks for, and only while something slides); any other change of places is drawn
+  at once.
 - **The pointer on the workspace's small targets** (`app::hover`): the tab bar's tabs, `×` and
   scroll marks, the result tab strip's entries, the paging arrows, the Plan tab's view names and
   the entries of the inspector's Row tab (`Layout::detail_list` from `Detail::first`, lit with
