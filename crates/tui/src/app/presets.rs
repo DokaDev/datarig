@@ -109,7 +109,8 @@ impl App {
         let ok = self.keychain_ok();
         // A new preset's secret starts in the store a new profile's password would.
         f.default_ssh_source(self.default_source.resolve(ok));
-        // A copy is not saved yet: it does not start on a keychain that does not work.
+        // The form knows the keychain's state; a copy (not saved yet) does not start on a
+        // keychain that does not work.
         f.follow_keychain(ok, self.default_source.resolve(false));
         self.clear_test();
         self.overlays.close(OverlayKind::Commands);

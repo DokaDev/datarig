@@ -607,8 +607,9 @@ impl ProfileForm {
 
     /// The keychain is known to work (`ok`) or not. When it stops working, a storage selector
     /// on it moves to `default` (where a new profile's password goes) unless a saved setting
-    /// put it there: a new profile's or a copy's password, and a bastion secret with no saved
-    /// tunnel setting or in a new preset or a copy.
+    /// put it there. What moves: the password of a new profile or a copy; the bastion secret
+    /// of a new preset or a copy, or one with no saved tunnel setting. Nothing moves back when
+    /// it works again.
     pub fn follow_keychain(&mut self, ok: bool, default: SourceKind) {
         if std::mem::replace(&mut self.keychain_ok, ok) == ok || ok {
             return;

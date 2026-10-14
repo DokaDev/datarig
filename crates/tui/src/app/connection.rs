@@ -944,7 +944,8 @@ impl App {
                 };
                 // A tunnel of its own turned on here stores its secret where a new profile's would.
                 f.default_ssh_source(self.default_source.resolve(keychain_ok));
-                // A copy is not saved yet: it does not start on a keychain that does not work.
+                // The form knows the keychain's state; a copy (not saved yet) does not start on a
+                // keychain that does not work.
                 f.follow_keychain(keychain_ok, self.default_source.resolve(false));
                 f.password_unread = !matches!(stored, password::Stored::Known(_));
                 if matches!(stored, password::Stored::Keychain) {

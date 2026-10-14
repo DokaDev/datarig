@@ -754,7 +754,8 @@ fn a_late_keychain_probe_moves_a_copys_secrets_off_the_keychain() {
 
 /// A keychain that stops working while a form is open (here: it fails to give the edited
 /// profile its password) is known to the form at once: the selectors skip it, and a value not
-/// saved yet (the storage of a tunnel of the profile's own, not turned on) leaves it.
+/// saved yet (the storage of a tunnel of the profile's own, not turned on; a copy's password)
+/// leaves it. When it works again, the form may pick it again.
 #[test]
 fn an_open_form_follows_a_keychain_that_fails_mid_session() {
     use datarig_core::fault::{Fault, FaultKind, KeychainFault};
@@ -769,4 +770,17 @@ fn an_open_form_follows_a_keychain_that_fails_mid_session() {
     assert!(!h.form().keychain_ok, "the open form knows");
     assert_eq!(h.form().source, SourceKind::Keychain, "saved");
     assert_eq!(h.form().ssh_source, SourceKind::Prompt, "not saved");
+    // A copy (not saved yet) reading its original's password: both leave it.
+    h.key(KeyCode::Esc);
+    let mut h = Harness::launched(&cfg, Lang::En, Arc::new(MemoryStore::new()), Startup::Normal);
+    let locked = Fault::new(FaultKind::Keychain(KeychainFault::NoAnswer), "no answer");
+    h.app.set_secret_store(Arc::new(MemoryStore::failing(locked)));
+    h.keys("c");
+    assert!(!h.form().keychain_ok);
+    assert_eq!((h.form().source, h.form().ssh_source), (SourceKind::Prompt, SourceKind::Prompt), "copy");
+    // The keychain works again: the form may pick it again; what moved stays.
+    h.app.set_secret_store(Arc::new(MemoryStore::new()));
+    h.key(KeyCode::Tab);
+    assert!(h.form().keychain_ok);
+    assert_eq!(h.form().source, SourceKind::Prompt);
 }
