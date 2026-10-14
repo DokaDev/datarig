@@ -121,6 +121,13 @@ impl Conn {
     /// A session of `url`'s profile for test `test`, read-only or not, once it connected.
     async fn open(url: &str, role: SessionRole, read_only: bool, test: &str) -> Conn {
         let mut c = Conn::start(url, role, read_only, test);
+        let encryption = c.wait(|e| matches!(e, DbEvent::Encryption(_)), 15).await;
+        // A run over TLS (`DATARIG_TEST_MYSQL_SSLMODE`) is over TLS indeed: the server offers it.
+        let tls = std::env::var("DATARIG_TEST_MYSQL_SSLMODE").is_ok_and(|m| !m.eq_ignore_ascii_case("DISABLED"));
+        if tls {
+            let encrypted = matches!(encryption, DbEvent::Encryption(datarig_core::tls::Encryption::Tls { .. }));
+            assert!(encrypted, "{encryption:?}");
+        }
         c.wait(|e| matches!(e, DbEvent::Connected), 15).await;
         c
     }

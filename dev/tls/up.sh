@@ -29,9 +29,13 @@ docker run -d --name zz_datarig_mysql_tls --network "$net" --network-alias mysql
             --ssl-cert=/certs/server.crt --ssl-key=/certs/server.key'
 for i in $(seq 1 90); do
     pg=$(docker exec zz_datarig_pg_tls pg_isready -h 127.0.0.1 -U datarig >/dev/null 2>&1 && echo ok || true)
-    my=$(docker exec zz_datarig_mysql_tls mysql -uroot -pdatarig-root --ssl-mode=REQUIRED -e 'SELECT 1' >/dev/null 2>&1 && echo ok || true)
+    # Over TCP: the image's first, temporary server listens on its socket only.
+    my=$(docker exec zz_datarig_mysql_tls mysql -h127.0.0.1 -P3306 --protocol=TCP -uroot -pdatarig-root \
+        --ssl-mode=REQUIRED -e 'SELECT 1' >/dev/null 2>&1 && echo ok || true)
     [ "$pg$my" = okok ] && exit 0
     sleep 2
 done
 echo "the TLS servers did not come up" >&2
+docker logs zz_datarig_pg_tls 2>&1 | tail -20 >&2
+docker logs zz_datarig_mysql_tls 2>&1 | tail -20 >&2
 exit 1

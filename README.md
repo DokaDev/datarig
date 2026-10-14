@@ -127,7 +127,8 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
   instead, so upgrades of the unsigned binary stop asking again (opt in, with a trade-off:
   [macOS: keychain access through `security`](#macos-keychain-access-through-security)).
 - Connection URLs (`postgres://user@host:port/db?...`) can be pasted into the profile form.
-- **TLS** for PostgreSQL and MySQL (rustls): every libpq `sslmode` and MySQL `--ssl-mode`, a CA
+- **TLS** for PostgreSQL and MySQL (rustls): libpq's `sslmode` values (but `allow`) and MySQL's
+  `--ssl-mode` values, a CA
   file, a client certificate; the server's certificate checked against the CA file or the
   system's trusted certificates, also through an SSH tunnel. Each connection says how it is
   encrypted ([TLS](#tls)).
@@ -869,7 +870,7 @@ server has not cached (the first one, or after a restart) needs the password its
 - Over TLS it goes inside TLS, as the mysql client sends it, but to another machine only when
   the server's certificate was checked (`VERIFY_CA`, `VERIFY_IDENTITY`), or the connection goes
   through an SSH tunnel, or the profile allows key retrieval (below). Over `PREFERRED` or
-  `REQUIRED` to another machine the certificate is not checked, so whoever is in between could
+  `REQUIRED` (without a CA file) to another machine the certificate is not checked, so whoever is in between could
   answer in the server's place: the login fails with an explanation before anything about the
   password is sent.
 - Unencrypted (a server without TLS, or `DISABLED`), the password goes encrypted with the
@@ -891,7 +892,7 @@ datarig shows the error instead of asking again, and connecting again asks again
 
 ## TLS
 
-PostgreSQL and MySQL connections are encrypted with TLS 1.2 or 1.3 (rustls, pure Rust) as the
+PostgreSQL and MySQL connections are encrypted with TLS 1.2 or 1.3 (rustls with `ring`) as the
 profile's **SSL mode** says, in each database's own words. The profile form's Advanced section
 has the mode (a list), the **CA file**, the **client certificate** and its **key**; in the
 config file they are `sslmode`, `sslrootcert`, `sslcert` and `sslkey`, and a PostgreSQL URL
@@ -910,20 +911,23 @@ takes the same four as parameters (`postgres://me@db/app?sslmode=verify-full&ssl
 - The CA file is the only trust: with one, only its certificates are trusted (a server's own
   self-signed certificate copied to your machine works too). Without one, `verify-full` /
   `VERIFY_IDENTITY` checks the certificate against the certificates your system trusts: the
-  macOS keychain's trust settings (read only; no password is ever asked), Windows' certificate
+  macOS keychain's trust settings (datarig reads no keychain item), Windows' certificate
   store, the system's certificate files on Linux. `sslrootcert = "system"` says so explicitly.
 - The name checked is the profile's host, also through an SSH tunnel (never `127.0.0.1`). An IP
   address is checked against the certificate's IP addresses.
 - The client certificate and key are PEM files (PKCS#8, RSA or EC keys). A key protected by a
   passphrase is refused with how to make an unprotected copy.
 - PostgreSQL's SCRAM login binds itself to the TLS connection (`SCRAM-SHA-256-PLUS`) where the
-  server offers it, so even without certificate checks a server in between cannot log in as
-  you. Cancel requests (PostgreSQL) and `KILL QUERY` connections (MySQL) are encrypted as the
+  server offers it, so a server in between that passes the login on is found out. One that
+  answers itself can still ask for the password (cleartext or MD5) unless the certificate is
+  checked: use `verify-full`, or `channel_binding=require` in the URL. Cancel requests (PostgreSQL) and `KILL QUERY` connections (MySQL) are encrypted as the
   session is.
 - Defaults, unchanged for what connected before: a PostgreSQL profile without `sslmode` is
   `disable` (the form writes `prefer` for a new one); a MySQL profile without one is
   `PREFERRED`, except one that names a server public key file (`DISABLED`, see
-  [MySQL](#mysql)). A mode the driver does not know is an error of the profile.
+  [MySQL](#mysql)). In a MySQL profile `disable` and `prefer` (what older versions of the form
+  wrote there) count as no mode: write `DISABLED` to turn TLS off. A mode the driver does not
+  know is an error of the profile.
 - Each connection says what it got: `Connected to prod · TLS 1.3, server verified` (or
   `certificate not checked`, `CA checked`), a shield and `TLS 1.3` in the editor's connection
   line, and the same in the form's test. A connection to another machine without TLS (not
@@ -933,13 +937,15 @@ takes the same four as parameters (`postgres://me@db/app?sslmode=verify-full&ssl
   client certificate; a file that cannot be read names the file.
 
 Tested: every mode against PostgreSQL 17 and MySQL 8.4 with certificates made for the tests
-(trusted, another CA's, another name, client certificates accepted and refused), through a
-dialer and a real SSH bastion, cancel requests included; in-process tests for expired and
+(trusted, another CA's, another name; client certificates accepted and refused on PostgreSQL),
+through a dialer as a tunnel uses one (cancel requests and `KILL QUERY` included), and
+PostgreSQL `verify-full` through a real SSH bastion; in-process tests for expired and
 not-yet-valid certificates, other purposes, a self-signed certificate as its own CA file, and
-TLS 1.2. Not tested: real company servers, PgBouncer with TLS between datarig and the pooler,
-Windows. Limits: no passphrase-protected keys, no
-certificate revocation lists, no `sslnegotiation=direct` (refused), no TLS 1.0/1.1, RSA keys
-under 2048 bits are refused; a MySQL URL takes no TLS parameters (use the fields). On macOS,
+TLS 1.2. The system's certificates are tested refusing a CA they do not have; a server they do
+trust, and `sslrootcert = "system"`, are not tested end to end. Not tested either: real company
+servers, PgBouncer with TLS between datarig and the pooler, Windows. Limits: no
+passphrase-protected keys, no certificate revocation lists, no `sslnegotiation=direct`
+(refused), no TLS 1.0/1.1, RSA keys (the server's and the client's) under 2048 bits are refused; a MySQL URL takes no TLS parameters (use the fields). On macOS,
 `verify-full` against the system's certificates follows Apple's rules, which refuse server
 certificates valid for more than 825 days from a CA you added yourself: name that CA as the
 profile's CA file.
