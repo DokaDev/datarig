@@ -35,7 +35,8 @@ impl CopyFlash {
 
 impl App {
     /// A copy of cells `rows` × `cols` of the active tab's result reached the clipboard: they
-    /// flash (unless `[ui] yank_flash = "off"`), a flash still on screen starting over.
+    /// flash (unless `[ui] yank_flash = "off"`, or the tab shows its chart, plan or messages
+    /// instead of the rows), a flash still on screen starting over.
     pub(super) fn flash_copied(&mut self, rows: Range<usize>, mut cols: Vec<usize>) {
         self.copy_flash = None;
         if self.prefs.yank_flash == YankFlash::Off {
@@ -43,6 +44,9 @@ impl App {
         }
         let t = self.tab();
         let Results::Rows(rs) = &t.results else { return };
+        if t.exec.view != tabs::ResultView::Rows {
+            return;
+        }
         cols.sort_unstable();
         cols.dedup();
         let (tab, result, generation) = (t.id, rs.id, t.exec.generation);

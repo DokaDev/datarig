@@ -1097,7 +1097,7 @@
 "setting.size_heat.five" = "5 levels: yellow, amber from 100 MiB, orange from 1 GiB, red from 10 GiB"
 "setting.size_heat.off" = "Off, every estimate is dim"
 "setting.yank_flash" = "Flash copied cells"
-"setting.yank_flash.about" = "Whether the cells a copy took from the results grid flash briefly once the copy is on the clipboard. A copy that fails or is refused does not flash."
+"setting.yank_flash.about" = "Whether the cells a copy took from the results grid flash briefly once the copy was sent to the clipboard. A copy that fails or is refused does not flash."
 "setting.yank_flash.on" = "On, copied cells flash briefly"
 "setting.yank_flash.off" = "Off, a copy is said in the status bar only"
 "editor.register.empty" = "Nothing in register {name}"

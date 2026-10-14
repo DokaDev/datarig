@@ -357,6 +357,9 @@ impl App {
         let mut skipped = String::new();
         // `:copy insert` of rows that are not a projection of that table: said after the copy.
         let mut as_is = None;
+        // The columns an SQL INSERT copy wrote (generated ones and those not of the table left
+        // out): only they flash.
+        let mut wrote_cols = None;
         // A value of an SQL copy that would not be written whole ([`export::sql_cells`]): the
         // copy is refused once the rows were read.
         let mut refused: Option<export::Refused> = None;
@@ -511,6 +514,7 @@ impl App {
                         Err(refused) => return self.flash(refused),
                     };
                     skipped = s.join(", ");
+                    wrote_cols = Some(written.iter().map(|w| b.cols[w.0]).collect());
                     let target = Target::Table {
                         schema: &table.schema,
                         name: &table.name,
@@ -564,7 +568,7 @@ impl App {
         } else {
             Msg::CopyDoneRows { count: count as u64, format: format_name, method }
         };
-        self.flash_copied(b.rows.clone(), b.cols.clone());
+        self.flash_copied(b.rows, wrote_cols.unwrap_or(b.cols));
         self.tab_mut().grid.anchor = None;
         // Said at once (over an older flash), and kept in the status bar.
         let done = Notice::new(done, Level::Success);

@@ -505,7 +505,7 @@ tokens! {
         range => "Cells and headers of a selected range in the result grid (the cursor's cell keeps selection).",
         cursor_line => "The row under the cursor of an unfocused list or plan, the editor's line, and (its background) the chart's cursor while focused.",
         hover => "What is under the mouse pointer: a list row, a grid cell, a tab, a button.",
-        yank_flash => "Cells copied from the result grid, for a moment after the copy reached the clipboard.",
+        yank_flash => "Cells copied from the result grid, for a moment after the copy was sent to the clipboard (set fg and bg: it covers the cursor's cell too).",
         current_stmt => "A faint tint behind the statement a run would take.",
         running_stmt => "A tint behind the statement that runs now.",
         run_hint => "The hint after a statement's last line that says what its last run did.",
