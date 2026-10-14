@@ -120,6 +120,7 @@ const TAB_MENU: &[Action] = &[
     Action::CloseTab,
     Action::MoveTab(false),
     Action::MoveTab(true),
+    Action::GrabTab,
     Action::ScriptSave,
     Action::ScriptSaveAs,
     Action::ScriptRename,

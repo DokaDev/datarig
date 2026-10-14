@@ -26,7 +26,8 @@ impl App {
         {
             // A move has no button held: a tab dragged lost its release (let go outside the
             // window), so it stays where it was.
-            let dropped = self.end_tab_drag();
+            // (A tab moved by keys stays: only a press ends that.)
+            let dropped = !self.tab_drag.as_ref().is_some_and(|d| d.keys) && self.end_tab_drag();
             let hovered = if self.modal_open() {
                 // Under a dialog the workspace draws no highlight (`App::pointer_hover`); it is
                 // dropped so none comes back where the pointer no longer is.
@@ -61,6 +62,8 @@ impl App {
                     KeyUse::Ignore => {}
                     // `Esc` while a tab is dragged only puts it back.
                     KeyUse::Press if k.code == KeyCode::Esc && !self.modal_open() && self.cancel_tab_drag() => {}
+                    // A tab moved by keys takes its keys.
+                    KeyUse::Press | KeyUse::Repeat if !self.modal_open() && self.tab_grab_key(&k) => {}
                     u => self.handle_key(k, u == KeyUse::Repeat),
                 }
             }
@@ -74,7 +77,15 @@ impl App {
         }
         // A dialog on top ends a tab's drag: it stays where it was (its `Esc` is the dialog's).
         // So do other tabs or another order (a key opened, closed or moved one).
-        if self.modal_open() || (self.tab_drag.as_ref().is_some_and(|d| d.lifted) && self.tab_drag_live().is_none()) {
+        // A tab moved by keys ends as well when another tab became the active one.
+        let other_tab = self
+            .tab_drag
+            .as_ref()
+            .is_some_and(|d| d.keys && self.tabs.position(d.tab) != Some(self.tabs.active_index()));
+        if self.modal_open()
+            || other_tab
+            || (self.tab_drag.as_ref().is_some_and(|d| d.lifted) && self.tab_drag_live().is_none())
+        {
             self.end_tab_drag();
         }
         self.after_input();
@@ -83,6 +94,12 @@ impl App {
     /// The last input event changed nothing (a mouse move): no frame is needed for it.
     pub fn take_idle_event(&mut self) -> bool {
         std::mem::take(&mut self.idle_event)
+    }
+
+    /// Whether the input events handled together changed nothing (the event loop draws
+    /// several pointer motions as one frame).
+    pub fn set_idle_event(&mut self, idle: bool) {
+        self.idle_event = idle;
     }
 
     pub fn on_app_event(&mut self, ev: AppEvent) {

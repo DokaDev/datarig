@@ -12,10 +12,10 @@ use datarig_tui::app::{App, Startup};
 use datarig_tui::external::{self, Edited, Handover};
 use datarig_tui::screens;
 use datarig_tui::terminal::{Cursor, cursor_shape};
-use futures::StreamExt;
+use futures::{FutureExt, StreamExt};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use ratatui::crossterm::event::EventStream;
+use ratatui::crossterm::event::{Event, EventStream, MouseEventKind};
 use ratatui::crossterm::terminal::{Clear, ClearType};
 use std::io::{self, IsTerminal, Stdout, Write};
 use std::process::ExitCode;
@@ -125,6 +125,8 @@ async fn run(
     // A frame is drawn after anything that may change the screen; a mouse move (reported
     // with every motion) changes nothing unless it selects another item of a menu or the help.
     let mut redraw = true;
+    // An input event read while pointer motions were drawn together, handled next.
+    let mut pending = None;
     while !app.quit {
         if redraw {
             // A block in Normal and Visual, a bar in Insert and text inputs (unless
@@ -152,7 +154,7 @@ async fn run(
         if let Some(s) = stats.as_mut() {
             s.woke();
         }
-        if wait(&mut app, &mut events, &mut rx, &mut signals).await? {
+        if wait(&mut app, &mut events, &mut rx, &mut signals, &mut pending).await? {
             break;
         }
         redraw = !app.take_idle_event();
@@ -190,7 +192,11 @@ async fn wait(
     events: &mut EventStream,
     rx: &mut tokio::sync::mpsc::UnboundedReceiver<datarig_tui::app::AppEvent>,
     signals: &mut Signals,
+    pending: &mut Option<Event>,
 ) -> io::Result<bool> {
+    if let Some(ev) = pending.take() {
+        return input(app, events, ev, pending);
+    }
     let deadline = app.next_tick(Instant::now());
     let timer = async {
         match deadline {
@@ -200,7 +206,7 @@ async fn wait(
     };
     tokio::select! {
         ev = events.next() => match ev {
-            Some(Ok(ev)) => app.handle_event(ev),
+            Some(Ok(ev)) => return input(app, events, ev, pending),
             Some(Err(e)) => return Err(e),
             None => return Ok(true),
         },
@@ -215,6 +221,44 @@ async fn wait(
         // loop ends and the terminal is restored on the way out, as on a normal quit.
         _ = signals.recv() => app.quit_on_signal(),
     }
+    Ok(false)
+}
+
+/// The most pointer motions drawn as one frame.
+const MOTIONS_PER_FRAME: usize = 64;
+
+/// Hand input event `ev` to the app. A pointer motion (a drag, or a move without a button)
+/// takes the motions already read after it along: one frame shows where the pointer is now,
+/// not each place it went through (a terminal over SSH sends them in bursts). The first other
+/// event read is kept in `pending` for the next turn. `true` when the input stream ended.
+fn input(app: &mut App, events: &mut EventStream, ev: Event, pending: &mut Option<Event>) -> io::Result<bool> {
+    let motion =
+        |ev: &Event| matches!(ev, Event::Mouse(m) if matches!(m.kind, MouseEventKind::Drag(_) | MouseEventKind::Moved));
+    let mut more = motion(&ev);
+    app.handle_event(ev);
+    if !more {
+        return Ok(false);
+    }
+    let mut changed = !app.take_idle_event();
+    for _ in 1..MOTIONS_PER_FRAME {
+        match events.next().now_or_never() {
+            Some(Some(Ok(ev))) if motion(&ev) => {
+                app.handle_event(ev);
+                changed |= !app.take_idle_event();
+            }
+            Some(Some(Ok(ev))) => {
+                *pending = Some(ev);
+                more = false;
+            }
+            Some(Some(Err(e))) => return Err(e),
+            Some(None) => return Ok(true),
+            None => more = false,
+        }
+        if !more {
+            break;
+        }
+    }
+    app.set_idle_event(!changed);
     Ok(false)
 }
 

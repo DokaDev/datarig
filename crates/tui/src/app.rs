@@ -1753,6 +1753,10 @@ impl App {
 
     /// Message for the status bar: transient > running > last status.
     pub fn status_line(&mut self) -> Option<(Localized, Level, bool)> {
+        // A tab moved by keys: how (no timer: it stays while the move does).
+        if self.tab_grabbed() {
+            return Some((self.i18n.label(Label::StatusTabMove), Level::Info, false));
+        }
         if let Some((_, at)) = &self.transient
             && at.elapsed() >= TRANSIENT
         {

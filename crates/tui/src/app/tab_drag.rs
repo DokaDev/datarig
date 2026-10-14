@@ -58,6 +58,8 @@ pub struct TabDrag {
     pub slot: usize,
     /// The pointer is too far from the bar: the tab is back at its own place and lands nowhere.
     pub far: bool,
+    /// Moved by keys (`tab.grab`), not held by the pointer: drawn at its place, sliding there.
+    pub keys: bool,
 }
 
 impl TabDrag {
@@ -215,6 +217,7 @@ impl App {
             y: 0,
             slot: index,
             far: false,
+            keys: false,
         });
     }
 
@@ -236,6 +239,9 @@ impl App {
     /// The left button moved to (x, y) while held: the pressed tab follows once it is lifted.
     /// `false`: no tab was pressed (the move is another drag's).
     pub(super) fn tab_drag_to(&mut self, x: u16, y: u16) -> bool {
+        if self.tab_drag.as_ref().is_some_and(|d| d.keys) {
+            return false;
+        }
         let Some(mut d) = self.tab_drag.take() else { return false };
         if self.tabs.position(d.tab).is_none() || (d.lifted && self.tab_drag_live_of(&d).is_none()) {
             self.end_lifted(&d);
@@ -314,6 +320,9 @@ impl App {
     /// The left button was released at (x, y): a lifted tab lands where it is shown (nowhere:
     /// it stays). `false`: no tab was pressed.
     pub(super) fn tab_drag_release(&mut self, x: u16, y: u16) -> bool {
+        if self.tab_drag.as_ref().is_some_and(|d| d.keys) {
+            return false;
+        }
         let Some(mut d) = self.tab_drag.take() else { return false };
         if !d.lifted {
             return true;
@@ -361,6 +370,62 @@ impl App {
         }
     }
 
+    /// `tab.grab`: the active tab is lifted to be moved by keys, live as a dragged one: `h` / `l`
+    /// (`←` / `→`) one place, `Enter` keeps the order shown, `Esc` puts it back.
+    pub(super) fn grab_tab(&mut self) {
+        self.end_tab_drag();
+        if self.tabs.len() < 2 {
+            return;
+        }
+        let (tab, slot) = (self.tab().id, self.tabs.active_index());
+        let order = self.tabs.iter().map(|t| t.id).collect();
+        let d = TabDrag { tab, press_x: 0, lifted: true, order, grab: 0, x: 0, y: 0, slot, far: false, keys: true };
+        self.tab_drag = Some(d);
+    }
+
+    /// Whether a tab is being moved by keys (shown: the status bar says how).
+    pub fn tab_grabbed(&self) -> bool {
+        self.tab_drag_live().is_some_and(|d| d.keys)
+    }
+
+    /// A key while a tab is moved by keys: `h` / `l` and the arrows move it one place (not past
+    /// an end), `Enter` keeps the order, `Esc` puts it back. Any other key ends the move as
+    /// `Esc` does and is not taken (`false`), so it does what it always does.
+    pub(super) fn tab_grab_key(&mut self, k: &KeyEvent) -> bool {
+        let n = self.tabs.len();
+        let Some(d) = self.tab_drag.as_mut().filter(|d| d.keys) else { return false };
+        let plain = k.modifiers.difference(KeyModifiers::SHIFT).is_empty();
+        match k.code {
+            KeyCode::Char('h') | KeyCode::Left if plain => {
+                if d.slot > 0 {
+                    d.slot -= 1;
+                    self.tab_slide.armed = true;
+                }
+            }
+            KeyCode::Char('l') | KeyCode::Right if plain => {
+                if d.slot + 1 < n {
+                    d.slot += 1;
+                    self.tab_slide.armed = true;
+                }
+            }
+            KeyCode::Enter if plain => {
+                let d = self.tab_drag.take().expect("a tab moved by keys");
+                self.end_lifted(&d);
+                if self.tab_drag_live_of(&d).is_some() {
+                    self.move_tab_to(d.from(), d.slot);
+                }
+            }
+            KeyCode::Esc => {
+                self.end_tab_drag();
+            }
+            _ => {
+                self.end_tab_drag();
+                return false;
+            }
+        }
+        true
+    }
+
     /// `tab.move_left` / `tab.move_right`: the active tab one place over (not past an end).
     pub(super) fn move_active_tab(&mut self, right: bool) {
         if self.tabs.is_empty() {
@@ -373,7 +438,13 @@ impl App {
 
     /// Move the tab at `from` to place `to`; the new order is written to the workspace state.
     pub(super) fn move_tab_to(&mut self, from: usize, to: usize) {
+        let tab = self.tabs.iter().nth(from).map(|t| t.id);
         if self.tabs.move_tab(from, to) {
+            // The tabs slide to their new places, the moved one over the others.
+            if !self.layout.too_small {
+                self.tab_slide.armed = true;
+                self.tab_slide.top = self.tab_slide.top.or(tab);
+            }
             self.save_workspace();
         }
     }
