@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/ui_snapshots.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 ×                                          "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1       ││ local-pg / datarig  127.0.0.1:55432                  │"
+"│  ▾ ●   local-pg      ││  1 -- datarig 🐘  Ctrl+E: run the statement under the│" Hidden by multi-width symbols: [(41, " ")]
+"│    ▾ datarig default ││  2▎SELECT * FROM shop.users WHERE id <= 8;  ✓ 8 rows…│"
+"│      ▸ analytics     ││  3                                                   │"
+"│      ▸ public        ││  4 SELECT u.name, o.status, o.total_amount           │"
+"│      ▸ shop          ││  5 FROM shop.orders o                                │"
+"│                      ││  6 JOIN shop.users u ON u.id = o.user_id             │"
+"│                      │╰──────────────────────────────────────────────────────╯"
+"│                      │╭ Results · 8 rows ────────────╮╭ [Cell] Row · I ──────╮"
+"│                      ││ [Result 1]  Chart  Messages  ││ profile              │"
+"│                      ││   │ profile                  ││ jsonb · 37 characters│"
+"│                      ││   │ jsonb                    ││                      │"
+"│                      ││ 1 │ {"lang": "ko", "tags": […││ {                    │"
+"│                      ││ 2 │ {}                       ││   "lang": "ko",      │"
+"│                      ││ 3 │ {"vip": true, "level": 7}││   "tags": [          │"
+"│                      ││ 4 │ {"flags": ["🇰🇷", "🇺🇸"]}  ││     "dev",           │" Hidden by multi-width symbols: [(43, " "), (49, " ")]
+"│                      ││ 5 │ {"lang": "ja"}           ││     "db"             │"
+"│                      ││ 6 │ {"lang": "zh"}           ││   ]                  │"
+"│                      ││ 7 │ {"lang": "en"}           ││ }                    │"
+"│                      ││ 8 │ {"multiline": true}      ││                      │"
+"╰──────────────────────╯╰──────────────────────────────╯╰──────────────────────╯"
+" NORMAL  local-pg │ 8 rows · 12ms   │ Enter view cell · n next page · y copy EN "

@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/ui_snapshots.rs
+expression: "h.draw(80, 24).backend()"
+---
+"╭ Explorer ────────────╮ 1 console 1 ×                                          "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1       ││ local-pg / datarig  127.0.0.1:55432                  │"
+"│  ▾ ●   local-pg      ││  1 -- datarig 🐘  Ctrl+E: run the statement under the│" Hidden by multi-width symbols: [(41, " ")]
+"│    ▾ dat╭ Commands ────────────────────────────────────────────────╮         │"
+"│      ▸ a│ : tst con                                                │         │"
+"│      ▸ p├──────────────────────────────────────────────────────────┤         │"
+"│      ▸ s│  Test connection                                       t │         │"
+"│         │  Change this tab's connection                  Space c s │         │"
+"│         │  Choose this tab's database and schema         Space c d │         │"
+"│         │  Test this tab's connection                    Space c t │         │"
+"│         │  Edit this tab's connection profile            Space c e │         │"
+"│         │  Disconnect this tab's connection              Space c x │         │"
+"│         │  Reconnect this tab's connection               Space c r │reated_at│"
+"│         │  Format the statement under the cursor or th…  Space e f │         │"
+"│         ╰─────────────────── Tab/↑↓ select · Enter run · Esc close ╯         │"
+"│                      ││ 14                                                   │"
+"│                      ││ 15 SELECT $$a body; with a semicolon$$ AS dollar, 'it│"
+"│                      ││ 16                                                   │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" COMMAND  local-pg │ Connected to local-pg                                   EN "

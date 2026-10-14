@@ -1,6 +1,6 @@
 # datarig themes
 
-<!-- Generated from crates/datarig-tui/src/theme.rs and theme/authoring.rs. Do not edit;
+<!-- Generated from crates/tui/src/theme.rs and theme/authoring.rs. Do not edit;
      run `DATARIG_BLESS=1 cargo test -p datarig-tui --test themes_doc` at the repository root. -->
 
 The setting `theme` (`:set theme=<name>`, or the settings screen, `Space ,`) names a built-in theme or a theme file. A theme file is `themes/<name>.toml` next to the config file (`$XDG_CONFIG_HOME/datarig/themes/`, else `~/.config/datarig/themes/`); its name is ASCII letters, digits, `-` and `_` (at most 64), and never a built-in theme's.

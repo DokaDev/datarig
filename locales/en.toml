@@ -1,5 +1,5 @@
 # datarig — English message catalog (the source of truth for keys)
-# Placeholders use {name}. crates/datarig-core/build.rs checks and embeds this file.
+# Placeholders use {name}. crates/core/build.rs checks and embeds this file.
 # Text that is not English (the Korean input-source mark) is written with \u escapes.
 
 "app.title" = "datarig"

@@ -1,6 +1,6 @@
 #!/bin/sh
 # Writes THIRD-PARTY-NOTICES.html: the licenses of every crate built into the `datarig` binary
-# (the dependency tree of crates/datarig-tui, through cargo-about with about.toml and about.hbs),
+# (the dependency tree of crates/tui, through cargo-about with about.toml and about.hbs),
 # followed by the notices of the C code pg_query compiles in (vendor/licenses/pg_query).
 # Needs cargo-about: `cargo install --locked cargo-about --features cli`.
 # Usage: scripts/third-party-notices.sh [output file]
@@ -9,7 +9,7 @@ cd "$(dirname "$0")/.."
 out=${1:-THIRD-PARTY-NOTICES.html}
 tmp=$(mktemp)
 trap 'rm -f "$tmp"' EXIT
-cargo about generate --manifest-path crates/datarig-tui/Cargo.toml --locked --fail about.hbs > "$tmp"
+cargo about generate --manifest-path crates/tui/Cargo.toml --locked --fail about.hbs > "$tmp"
 {
     sed '/<\/body>/,$d' "$tmp"
     echo '<h2>C code built in through pg_query</h2>'

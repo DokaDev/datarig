@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/ui_snapshots.rs
+expression: backend
+---
+"╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
+"│  ＋ New connection   ││                                                      │" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1       ││  No open tabs                                        │"
+"│  ▸ ○   local-pg      ││  Pick a connection in the explorer, or press         │"
+"│▾ Tunnels 0           ││  Ctrl+O.                                             │"
+"│    n here makes an S…││                                                      │"
+"│▾ Environments 0      ││  Enter      Connect and open a console               │"
+"│  ▸ ○ Default rules (…││  Ctrl+O     Quick connect                            │"
+"│    ＋ Ad╭ Keychain ────────────────────────────────────────────────╮         │" Hidden by multi-width symbols: [(6, " ")]
+"│         │                                                          │         │"
+"│         │ Moving saved passwords to the system keychain… (your OS  │         │"
+"│         │ may ask for permission)                                  │         │"
+"│         │                                                          │         │"
+"│         ╰─────────────────────────────────────────── q/Ctrl+C quit ╯         │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+"                                                                             EN "

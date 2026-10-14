@@ -1,6 +1,6 @@
 # Performance measurements
 
-`crates/datarig-bench` measures datarig the same way every time. Build it in
+`crates/bench` measures datarig the same way every time. Build it in
 release mode; the scenarios that need PostgreSQL use `DATARIG_TEST_PG_URL` and the test
 database of `dev/init` (the 4,000,000-row `analytics.events`).
 
@@ -37,7 +37,7 @@ the file named by `DATARIG_BENCH_STATS` (off when unset).
 ## Budgets
 
 `datarig-bench budget` runs the scenarios with the settings of
-`crates/datarig-bench/budgets.toml` and fails when a measurement is over its budget.
+`crates/bench/budgets.toml` and fails when a measurement is over its budget.
 CI runs it in the `perf` job of `.github/workflows/ci.yml` (Linux, PostgreSQL 17 with the
 init scripts loaded, MySQL 8.4, tmux installed):
 

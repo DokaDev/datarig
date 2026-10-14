@@ -23,7 +23,7 @@ datarig-tui ──▶ datarig-driver-postgres ──▶ datarig-core
 ## Dependency rules
 
 1. **Dependencies point one way: `tui → core ← driver-*`** (and `tui → ssh → core`). Core depends on no driver crate and no UI crate (ratatui, crossterm). A driver crate depends on core only and knows no other driver.
-2. **The UI does not know driver types.** `datarig-tui` talks to a driver only through `Box<dyn Driver>` and a `Session`'s command and event channels, and turns menus and panels on and off with `Capabilities`. The only place that names a concrete type (`PgDriver`) is the registry, `crates/datarig-tui/src/drivers.rs`.
+2. **The UI does not know driver types.** `datarig-tui` talks to a driver only through `Box<dyn Driver>` and a `Session`'s command and event channels, and turns menus and panels on and off with `Capabilities`. The only place that names a concrete type (`PgDriver`) is the registry, `crates/tui/src/drivers.rs`.
 3. **Keep visibility narrow.** Only what is used outside a crate is `pub`; the rest is `pub(crate)` or private. A driver crate exports its driver type only.
 4. **Versions and lints live at the root.** Versions go to `[workspace.dependencies]` and lints to `[workspace.lints]`; each crate takes them with `x.workspace = true` and `[lints] workspace = true`, and turns on only the features it needs.
 
@@ -39,7 +39,7 @@ cargo tree -p datarig-core | grep -Ei 'ratatui|crossterm|datarig-driver' && echo
 - Unit tests live next to the source in `foo/tests.rs`; `foo.rs` keeps only `#[cfg(test)] mod tests;`, and the tests reach private items with `use super::*`.
 - Integration tests live in the `tests/` directory of the crate they check. Real-database tests that use only the driver belong to the driver crate; tests that drive the `App` (app flows, snapshots, the explorer against a real database) belong to `datarig-tui`.
 - The locale catalogs (`locales/*.toml`) are read by core's `build.rs` at compile time (see "UI strings (i18n)" below). If the crate moves, fix the relative paths in `build.rs` and `tests/catalog.rs`.
-- Snapshot tests pin English screens only. A screen in another language is checked against its catalog (`assert_screen!` in `crates/datarig-tui/tests/common/mod.rs`), so the only non-English UI text in the repository is in `locales/`.
+- Snapshot tests pin English screens only. A screen in another language is checked against its catalog (`assert_screen!` in `crates/tui/tests/common/mod.rs`), so the only non-English UI text in the repository is in `locales/`.
 
 ## Workspace state
 
@@ -464,7 +464,7 @@ Held by CI budgets (`docs/perf.md`).
   process (upstream `s<n>`), so statements other clients left on a pooled server connection do
   not collide with ours. `DEALLOCATE`/`DISCARD ALL` also drops the client's type lookup
   statements (they are gone on the server too).
-- Tests: `datarig-driver-postgres/tests/pooler_pg.rs` against PgBouncer 1.25 (compose profile
+- Tests: `crates/drivers/postgres/tests/pooler_pg.rs` against PgBouncer 1.25 (compose profile
   `pooler`, and a CI service) in transaction mode without prepared statements and with round
   robin over three server connections, which makes the loss reproducible.
 
@@ -583,11 +583,11 @@ Held by CI budgets (`docs/perf.md`).
   `PROBE_MAX`), nothing sent (`AppEvent::TestProbe`).
 - **Test connection**: a throwaway tunnel of the form's settings; the stage while it opens, then
   its time next to the database's result (`TunnelTest`, `test_msg`).
-- **Tests**: an SSH server in the test process (`datarig-ssh/tests/tunnel.rs`: host keys, every
+- **Tests**: an SSH server in the test process (`crates/ssh/tests/tunnel.rs`: host keys, every
   login, refused channels, timeouts, keepalive loss, a scratch `ssh-agent`); a real OpenSSH bastion
   (`dev/ssh`, compose profile `ssh`, a CI step; keys made at test time by
-  `make-fixture.sh`) in front of PostgreSQL and PgBouncer (`datarig-ssh/tests/bastion.rs`,
-  `datarig-tui/tests/integration_ssh.rs`, where two profiles of one preset go through one TCP
+  `make-fixture.sh`) in front of PostgreSQL and PgBouncer (`crates/ssh/tests/bastion.rs`,
+  `crates/tui/tests/integration_ssh.rs`, where two profiles of one preset go through one TCP
   connection of a counting proxy); the app's flows with a recorded tunnel (`flows_tunnel.rs`,
   `flows_presets.rs`); round trips through the tunnel (`[rtt_ssh]` budgets); `cargo audit`.
 
@@ -760,7 +760,7 @@ text" and "The MySQL classifier" below).
   are not folded. `quote_literal` doubles `'` and, unless `NO_BACKSLASH_ESCAPES`, `\` (and
   writes NUL as `\0`): it is right for the session's mode only, so a MySQL driver must give
   the dialect its session's mode and keep it current (`MySqlMode` documents this).
-  `crates/datarig-core/tests/mysql_split.rs` holds the splitter to MySQL's client and server
+  `crates/core/tests/mysql_split.rs` holds the splitter to MySQL's client and server
   (`DATARIG_TEST_MYSQL_CLIENT`; run against 8.0.45, 8.4.11 and 9.7.2): a script's statements
   are the ones the client sends (also for the quirks above), each runs alone, and literals and
   names the app writes read back as written, also under `NO_BACKSLASH_ESCAPES`.
@@ -785,7 +785,7 @@ text" and "The MySQL classifier" below).
   COUNT(*) FROM (…) AS datarig_count`) takes one query with built-in functions not in
   `risk::mysql::VOLATILE` and no variable; whether a name it reads is a view is the driver's to ask
   (`risk::mysql::names`). Tests: the corpus `risk/mysql/corpus.rs` (every statement with its
-  expected verdict) and `crates/datarig-core/tests/mysql_classify.rs`, which runs the corpus on a
+  expected verdict) and `crates/core/tests/mysql_classify.rs`, which runs the corpus on a
   session whose `transaction_read_only` is on (run against 8.0.45, 8.4.11 and 9.7.2): every read
   runs without error 1792, every write and DDL fails with it unless marked as one the server lets
   through (`FOR SHARE`, `LOCK TABLES … READ`, `HANDLER`, `INTO OUTFILE`, which only the classifier
@@ -838,7 +838,7 @@ text" and "The MySQL classifier" below).
 
 Every piece of UI chrome text (titles, labels, hints, status and error messages, action and key-context names) comes from the locale catalogs, and the compiler enforces it.
 
-- **Source of truth**: `locales/en.toml` defines the keys. `crates/datarig-core/build.rs` checks every catalog listed in its `LOCALES` table and generates `OUT_DIR/messages.rs`, which `datarig_core::i18n` includes:
+- **Source of truth**: `locales/en.toml` defines the keys. `crates/core/build.rs` checks every catalog listed in its `LOCALES` table and generates `OUT_DIR/messages.rs`, which `datarig_core::i18n` includes:
   - `Label`: one `Copy` variant per key without placeholders (`pane.tree.title` → `Label::PaneTreeTitle`).
   - `Msg`: `Msg::Label(Label)` or one variant per key with placeholders, whose fields are the arguments (`query.done_rows` → `Msg::QueryDoneRows { count: u64, elapsed: Duration }`). The field type follows the placeholder name: `count` is a `u64` (thousands separators), `elapsed`/`latency` a `Duration` (`123ms` / `1.2s`), anything else a `String`.
   - **Plurals**: an entry with `{count}` is a table with two forms, `"key" = { one = "…", other = "…" }`; the generated `render` picks `one` when `count` is 1. The `one` form may leave the number out (`"its open tab"`). A language without plural forms (Korean) gives a plain string for the same key. Never write `tab(s)`.
@@ -859,19 +859,19 @@ The build fails, naming the file, the key and the problem, when a locale misses 
 ### Adding a locale
 
 1. Add `locales/<code>.toml` with the keys of `en.toml`.
-2. Add `("<code>", Policy::Required)` (or `Policy::Optional` for a partial translation) to `LOCALES` in `crates/datarig-core/build.rs`.
-3. Add the matching `Lang` variant (`ja` → `Lang::Ja`) in `crates/datarig-core/src/i18n.rs` and its detection in `detect_lang`; the generated `match lang` does not compile until the variant exists. Then add the language setting and actions in the TUI (`LangSetting`, `action.ui.language.*`).
+2. Add `("<code>", Policy::Required)` (or `Policy::Optional` for a partial translation) to `LOCALES` in `crates/core/build.rs`.
+3. Add the matching `Lang` variant (`ja` → `Lang::Ja`) in `crates/core/src/i18n.rs` and its detection in `detect_lang`; the generated `match lang` does not compile until the variant exists. Then add the language setting and actions in the TUI (`LangSetting`, `action.ui.language.*`).
 
 
 ## Adding a driver crate (for example MySQL)
 
-1. Create `crates/datarig-driver-mysql/` with `datarig-core.workspace = true` and the database client crate in its `Cargo.toml` (versions go to the root `[workspace.dependencies]`), and `[lints] workspace = true`.
-2. Add it to `members` and to `[workspace.dependencies]` (`datarig-driver-mysql = { path = "crates/datarig-driver-mysql" }`) in the root `Cargo.toml`.
+1. Create `crates/drivers/mysql/` with `datarig-core.workspace = true` and the database client crate in its `Cargo.toml` (versions go to the root `[workspace.dependencies]`), and `[lints] workspace = true`.
+2. Add it to `members` and to `[workspace.dependencies]` (`datarig-driver-mysql = { path = "crates/drivers/mysql" }`) in the root `Cargo.toml`.
 3. Implement `datarig_core::driver::Driver`:
    - `capabilities()`: turn on only what the driver really supports (`server_paging`, `cancel`, `introspection`, `contexts`, `key_metadata`, ...), and name the `language` of its sessions.
    - `connect(cfg, role, opts, events)`: for each role (`SessionRole::Meta` for the tree and completion, `SessionRole::Query` for a tab's statements) start a background task with **one connection** and return `Session::new(caps, role, tx, canceller)`. Report `opts.application_name` to the server. Progress and results go out as `DbEvent`s (`Connected` / `ConnectFailed`, `Schemas`, `Objects`, `Catalog`, `Page`, `Done`, `Failed`, `TxOpen`). A metadata session answers `Execute` with `Failed`. With `Capabilities::structure` the metadata session also answers `LoadStructure` with a `driver::structure::TableStructure` (`DbEvent::Structure`), which the explorer shows under an open table.
    - `ping()`: the test connection. It honours the time limit and cancellation (the future being dropped).
    - Export the driver type only (`pub use connect::MySqlDriver;`).
 4. Add the dependency to `datarig-tui`'s `Cargo.toml` and register the name in `driver_for` in `src/drivers.rs` (`"mysql" | "mariadb" => Some(Box::new(MySqlDriver))`). No UI code changes.
-5. Tests: unit tests such as value decoding go to `src/<module>/tests.rs`, real-database tests to `crates/datarig-driver-mysql/tests/`. Take the connection URL from an environment variable, print `SKIPPED` without it, and fail when the matching `DATARIG_REQUIRE_*` variable is set (as `integration_pg.rs` does with `DATARIG_REQUIRE_PG`). Add a service container to the CI `integration` job.
+5. Tests: unit tests such as value decoding go to `src/<module>/tests.rs`, real-database tests to `crates/drivers/mysql/tests/`. Take the connection URL from an environment variable, print `SKIPPED` without it, and fail when the matching `DATARIG_REQUIRE_*` variable is set (as `integration_pg.rs` does with `DATARIG_REQUIRE_PG`). Add a service container to the CI `integration` job.
 6. If core seems to need driver-specific code (a dialect's statement splitting, say), do not branch on the driver's name: add a trait or a capability to core and let the driver implement it.

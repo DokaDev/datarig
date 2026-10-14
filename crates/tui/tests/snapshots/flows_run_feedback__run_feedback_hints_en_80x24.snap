@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/flows_run_feedback.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 ×                                          "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1       ││ local-pg / datarig  127.0.0.1:55432                  │"
+"│  ▾ ●   local-pg      ││  1 SELECT 1;  ✓ 1,200 rows affected · 42ms · 14:03   │"
+"│    ▾ datarig default ││  2 SELECT 2 FROM t                                   │"
+"│      ▸ analytics     ││  3 WHERE a > 1;  ✗ ERROR: relation "t" does not exist│"
+"│      ▸ public        ││  4▎SELECT 3;                                         │"
+"│      ▸ shop          ││                                                      │"
+"│                      ││                                                      │"
+"│                      │╰──────────────────────────────────────────────────────╯"
+"│                      │╭ Results ─────────────────────────────────────────────╮"
+"│                      ││ Result  Chart  [Messages]                            │"
+"│                      ││ 1  SELECT 1                     1,200 rows affected …│"
+"│                      ││ 2  SELECT 2 FROM t…             Error: ERROR: relati…│"
+"│                      ││ 3  SELECT 3                     not run              │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" NORMAL  local-pg │ Statement 2 of 3 failed (SELECT 2 FROM t…): ERROR: rela… EN "

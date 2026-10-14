@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/ui_snapshots.rs
+expression: "h.draw(w, hh).backend()"
+---
+"╭ Explorer ────────────╮ 1 console 1 ×                                          "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│        ▾ 󱏈 Tables    ││  local-pg / datarig  127.0.0.1:55432                │"
+"│          ▾ 󰓫 users   ││  1 -- datarig 🐘  Ctrl+E: run the statement under the│" Hidden by multi-width symbols: [(41, " ")]
+"│               id  b…││  2▎SELECT * FROM shop.users WHERE id <= 8;           │"
+"│               email…││  3                                                   │"
+"│              󰊄 name …││  4 SELECT u.name, o.status, o.total_amount           │"
+"│              󰊄 nickn…││  5 FROM shop.orders o                                │"
+"│              󰘦 profi…││  6 JOIN shop.users u ON u.id = o.user_id             │"
+"│          ▾ 󰓫 zz_types││  7 WHERE o.status = 'paid';                          │"
+"│              󰊄 t  te…││  8                                                   │"
+"│              󰎠 n  nu…││  9 SELECT * FROM analytics.events;                   │"
+"│              󰃰 at  t…││ 10                                                   │"
+"│              󰨚 ok  b…││ 11 SELECT * FROM analytics.events ORDER BY created_at│"
+"│              󰘦 doc  …││ 12                                                   │"
+"│              󰻾 uid  …││ 13 SELECT analytics.slow(30);                        │"
+"│              󱊧 raw  …││ 14                                                   │"
+"│              󰅪 tags …││ 15 SELECT $$a body; with a semicolon$$ AS dollar, 'it│"
+"│              󰠲 mood …││ 16                                                   │"
+"│        ▾ 󰛐 Views     ││                                                      │"
+"│          ▸ 󱂔 order_s…││                                                      │"
+"│          ▸ 󱎠 zz_mv   ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" NORMAL  local-pg │ zz_mv  ~950 rows · ~16 KB   │ Enter open · Tab next pane EN "

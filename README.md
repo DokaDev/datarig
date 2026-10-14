@@ -349,7 +349,7 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
   confirmation still keeps; a click outside a dialog does nothing. Text inputs have no mouse
   selection.
 
-**Performance**, held by budgets that CI enforces (`crates/datarig-bench/budgets.toml`,
+**Performance**, held by budgets that CI enforces (`crates/bench/budgets.toml`,
 [docs/perf.md](docs/perf.md)):
 - One round trip for the first page of a prepared `SELECT`, one for each later page and one
   for an `INSERT`, counted exactly through a latency proxy, also through an SSH tunnel.
@@ -415,7 +415,7 @@ datarig builds from source with the Rust toolchain. You need:
 ```sh
 git clone https://github.com/DokaDev/datarig
 cd datarig
-cargo install --locked --path crates/datarig-tui   # installs the `datarig` binary
+cargo install --locked --path crates/tui   # installs the `datarig` binary
 # or: cargo build --release   (the binary is target/release/datarig)
 ```
 
@@ -922,11 +922,11 @@ The workspace layout:
 
 | Path | What |
 |---|---|
-| `crates/datarig-core` | UI-free core: driver interface, SQL tooling and the safety classifier, profiles, secrets, config, i18n |
-| `crates/datarig-driver-postgres` | the PostgreSQL driver |
-| `crates/datarig-ssh` | SSH tunnels |
-| `crates/datarig-tui` | the terminal UI and the `datarig` binary |
-| `crates/datarig-bench` | benchmarks and the CI performance budgets |
+| `crates/core` | UI-free core: driver interface, SQL tooling and the safety classifier, profiles, secrets, config, i18n |
+| `crates/drivers/postgres` | the PostgreSQL driver |
+| `crates/ssh` | SSH tunnels |
+| `crates/tui` | the terminal UI and the `datarig` binary |
+| `crates/bench` | benchmarks and the CI performance budgets |
 | `vendor/tokio-postgres` | a patched tokio-postgres (per-column result formats, pipelining); see [vendor/README.md](vendor/README.md) |
 | `locales` | the UI text catalogs (`en.toml`, `ko.toml`) |
 | `dev` | Docker Compose with PostgreSQL, MySQL, PgBouncer and an SSH bastion for the tests |

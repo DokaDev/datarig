@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Expected results of vim commands, from Neovim, for the editor's table tests.
 
-The editor's vim tests (crates/datarig-tui/src/widgets/editor/*/tests.rs) are tables of
+The editor's vim tests (crates/tui/src/widgets/editor/*/tests.rs) are tables of
 cases whose expected text, cursor and register come from Neovim run on the same text with the
 same keys. This script runs the cases in a headless Neovim (no user config) and prints the
 table rows.

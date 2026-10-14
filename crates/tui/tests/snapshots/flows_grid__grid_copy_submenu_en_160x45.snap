@@ -1,0 +1,49 @@
+---
+source: crates/tui/tests/flows_grid.rs
+expression: "h.draw(160, 45).backend()"
+---
+"╭ Explorer ────────────────────────────╮ 1 console 1 ×                                                                                                          "
+"│  ＋ New connection                   │╭ Query · console 1 ───────────────────────────────────────────────────────────────────────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1                       ││ local-pg / datarig  127.0.0.1:55432                                                      Space c s switch connection │"
+"│  ▾ ●   local-pg                      ││  1 -- datarig 🐘  Ctrl+E: run the statement under the cursor                                                         │" Hidden by multi-width symbols: [(57, " ")]
+"│    ▾ datarig default                 ││  2▎SELECT * FROM shop.users WHERE id <= 8;  ✓ 8 rows · 12ms · 14:03                                                  │"
+"│      ▸ analytics                     ││  3                                                                                                                   │"
+"│      ▸ public                        ││  4 SELECT u.name, o.status, o.total_amount                                                                           │"
+"│      ▸ shop                          ││  5 FROM shop.orders o                                                                                                │"
+"│                                      ││  6 JOIN shop.users u ON u.id = o.user_id                                                                             │"
+"│                                      ││  7 WHERE o.status = 'paid';                                                                                          │"
+"│                                      ││  8                                                                                                                   │"
+"│                                      ││  9 SELECT * FROM analytics.events;                                                                                   │"
+"│                                      ││ 10                                                                                                                   │"
+"│                                      ││ 11 SELECT * FROM analytics.events ORDER BY created_at DESC;                                                          │"
+"│                                      ││ 12                                                                                                                   │"
+"│                                      ││ 13 SELECT analytics.slow(30);                                                                                        │"
+"│                                      ││ 14                                                                                                                   │"
+"│                                      │╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯"
+"│                                      │╭ Results · 8 rows ────────────────────────────────────────────────────╮╭ Cell [Row] · I ──────────────────────────────╮"
+"│                                      ││ [Result 1]  Chart  Messages                                      H/L ││ id: 3                                        │"
+"│                                      ││   │ id   │ name                 │ nickname    │ address              ││ name: 張志明                                 │" Hidden by multi-width symbols: [(121, " "), (123, " "), (125, " ")]
+"│                                      ││   │ int8 │ text                 │ text        │ text                 ││ nickname: 👨‍👩‍👧‍👦 family                          │" Hidden by multi-width symbols: [(125, " ")]
+"│                                      ││ 1 │    1 │ 陳大文               │ 大文🐘      │ 臺北市信義區信義路五…││ address: NULL                                │" Hidden by multi-width symbols: [(54, " "), (56, " "), (58, " "), (77, " "), (79, " "), (81, " "), (91, " "), (93, " "), (95, " "), (97, " "), (99, " "), (101, " "), (103, " "), (105, " "), (107, " "), (109, " ")]
+"│                                      ││ 2 │    2 │ 林美玲               │ NULL        │ 高雄市前鎮區成功二路…││ profile: {"vip": true, "level": 7}           │" Hidden by multi-width symbols: [(54, " "), (56, " "), (58, " "), (91, " "), (93, " "), (95, " "), (97, " "), (99, " "), (101, " "), (103, " "), (105, " "), (107, " "), (109, " ")]
+"│                                      ││ 3 │    3 │ 張志明               │ 👨‍👩‍👧‍👦 family   │ NULL                 ││                                              │" Hidden by multi-width symbols: [(54, " "), (56, " "), (58, " "), (77, " ")]
+"│                                      ││ 4 │    4 │ ╭────────────────────────────────────────────────────────╮││                                              │"
+"│                                      ││ 5 │    5 │ │ › type to filter                                       │││                                              │"
+"│                                      ││ 6 │    6 │ │ Cell name, row 3                                       │││                                              │"
+"│                                      ││ 7 │    7 │ │  Results: view cell value                        Enter │││                                              │"
+"│                                      ││ 8 │    8 │ │  Result detail → show / hide                         i │││                                              │"
+"│                                      ││            │  Copy the cell (a selected range as TSV)             y │╭─────────────────────────╮                     │"
+"│                                      ││            │  Copy the row (the selected rows) as TSV             Y ││ Without headers (TSV) t │                     │"
+"│                                      ││            │  Copy selection ▸                                      ││ With headers (TSV)    T │                     │"
+"│                                      ││            │ Results                                                ││ Comma list            l │                     │"
+"│                                      ││            │  Copy all fetched rows ▸                               ││ CSV                   c │                     │"
+"│                                      ││            │  Results → show as a chart / as rows                 c ││ JSON                  j │                     │"
+"│                                      ││            │  Results → count every row (runs a count query)      # ││ JSON (pretty)         J │                     │"
+"│                                      ││            │  Result tabs → next                                  L ││ Markdown              m │                     │"
+"│                                      ││            │  Result tabs → previous                              H ││ HTML table            h │                     │"
+"│                                      ││            │  Results pane → zoom (maximise) / restore            z ││ XML                   x │                     │"
+"│                                      ││            ╰────────────────────────────────────────────────────────╯│ SQL IN clause         n │                     │"
+"│                                      ││                                                                      │ SQL INSERT            i │                     │"
+"│                                      ││                                                                      │ SQL UPDATE            u │                     │"
+"╰──────────────────────────────────────╯╰──────────────────────────────────────────────────────────────────────╰─────────────────────────╯─────────────────────╯"
+" NORMAL  local-pg │ Copied 8 rows as JSON (system clipboard)                                                                                                 EN "

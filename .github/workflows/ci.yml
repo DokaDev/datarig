@@ -128,12 +128,12 @@ jobs:
       DATARIG_REQUIRE_PG: "1"
       DATARIG_TEST_POOLER_URL: postgres://datarig:datarig@127.0.0.1:56432/datarig
       DATARIG_REQUIRE_POOLER: "1"
-      # The MySQL driver's suite (datarig-driver-mysql/tests/integration_mysql.rs); the admin URL
+      # The MySQL driver's suite (crates/drivers/mysql/tests/integration_mysql.rs); the admin URL
       # looks at its sessions from the side (performance_schema) and makes test accounts.
       DATARIG_TEST_MYSQL_URL: mysql://datarig:datarig@127.0.0.1:53306/shop
       DATARIG_TEST_MYSQL_ADMIN_URL: mysql://root:datarig-root@127.0.0.1:53306/
       DATARIG_REQUIRE_MYSQL: "1"
-      # The SSH bastion started below (datarig-ssh/tests/bastion.rs, datarig-tui/tests/integration_ssh.rs).
+      # The SSH bastion started below (crates/ssh/tests/bastion.rs, crates/tui/tests/integration_ssh.rs).
       DATARIG_TEST_SSH_BASTION: 127.0.0.1:52222
       DATARIG_REQUIRE_SSH: "1"
     steps:
@@ -206,7 +206,7 @@ jobs:
   # Performance budgets (docs/perf.md): round trips per statement through a latency proxy
   # (exact counts, also through the SSH bastion), memory while paging 4,000,000 rows (flat past
   # the window of rows kept in memory), keystroke-to-frame time in a 5 MB file, idle memory, CPU
-  # and wakeups, and startup time, held to crates/datarig-bench/budgets.toml. The binary
+  # and wakeups, and startup time, held to crates/bench/budgets.toml. The binary
   # scenarios run the release build in tmux (a server of their own, `-L perf`).
   perf:
     name: performance budgets

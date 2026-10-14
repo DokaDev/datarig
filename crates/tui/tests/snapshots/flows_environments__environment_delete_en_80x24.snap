@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/flows_environments.rs
+expression: backend
+---
+"╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
+"│  ＋ New connection   ││                                                      │" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 3       ││  No open tabs                                        │"
+"│  ▸ ○   local-pg RO   ││  Pick a connection in the explorer, or press         │"
+"│  ▸ ○   v6            ││  Ctrl+O.                                             │"
+"│  ▸ ○   分析-replica  ││                                                      │" Hidden by multi-width symbols: [(10, " "), (12, " ")]
+"│▾ Tunnels 0           ││  Enter      Connect and open a console               │"
+"│    n her╭ Delete ──────────────────────────────────────────────────╮         │"
+"│▾ Environ│                                                          │         │"
+"│  ▸ ○ Def│ Delete the environment “prod”?                           │         │"
+"│    ● dev│ local-pg uses it: it will not connect until you pick     │         │"
+"│    ● tes│ another environment in its form (never under the default │         │"
+"│    ● sta│ rules instead).                                          │         │"
+"│  ▾ ● pro│                                                          │         │"
+"│      ○  │                 [ Cancel ]     Delete                    │         │"
+"│         ╰─────────────────────────────── y delete · n/Enter cancel ╯         │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" Added the environments dev, test, staging, prod                             EN "
