@@ -40,8 +40,9 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
   `Ctrl+D` closes the selected tab (asking first as `Ctrl+W` does).
 - Tabs can be put in another order: drag one with the mouse as in a browser (it follows the
   pointer over the other tabs, which slide out of its way; past an end of a bar with hidden
-  tabs the bar scrolls; `Esc`, or letting go far from the bar, puts every tab back), `Space t
-  <` / `Space t >`, the tab's menu, or `:tabmove` as in Vim
+  tabs the bar scrolls; `Esc`, or letting go far from the bar, puts every tab back), by keys the
+  same way (`Space t g`, then `h` / `l` or `←` / `→`, `Enter` keeps, `Esc` puts it back),
+  `Space t <` / `Space t >`, the tab's menu, or `:tabmove` as in Vim
   (`:tabmove 0` first, `:tabmove` last, `:tabmove +1`). The tab bar's numbers (and `Space 1`
   .. `Space 9`) follow the new order; a console keeps its own name (`console 3`). The order is
   kept across restarts.

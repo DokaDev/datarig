@@ -255,7 +255,10 @@ Held by CI budgets (`docs/perf.md`).
   of places the drag made (a neighbour moving over, the drop, a cancel) slides
   (`tab_drag::TabSlide`, keyed by `TabId`: `SLIDE` long, a frame every `SLIDE_FRAME`, the only
   timer it asks for, and only while something slides); any other change of places is drawn
-  at once.
+  at once. `tab.grab` lifts the active tab the same way for keys (`TabDrag::keys`: drawn at its
+  place, sliding, never under the pointer; a press, a dialog or another active tab ends it);
+  `App::move_tab_to` makes every move slide. The event loop draws pointer motions read
+  together as one frame (`main.rs` `input`).
 - **The pointer on the workspace's small targets** (`app::hover`): the tab bar's tabs, `×` and
   scroll marks, the result tab strip's entries, the paging arrows, the Plan tab's view names and
   the entries of the inspector's Row tab (`Layout::detail_list` from `Detail::first`, lit with

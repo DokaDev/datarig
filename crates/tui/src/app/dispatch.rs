@@ -174,6 +174,7 @@ impl App {
             }),
             Action::GotoTab(n) => self.switch_tab(|t| t.activate(usize::from(n) - 1)),
             Action::MoveTab(right) => self.move_active_tab(right),
+            Action::GrabTab => self.grab_tab(),
             Action::ScriptSave => self.save_current(),
             Action::ScriptSaveAs => {
                 let id = self.tab().id;

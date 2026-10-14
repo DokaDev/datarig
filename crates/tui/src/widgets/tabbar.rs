@@ -430,7 +430,9 @@ pub(crate) fn draw_tab_bar(app: &mut App, area: Rect, buf: &mut Buffer) -> Vec<(
     let active = app.tabs.active_index();
     // A dragged tab: its place, the place it is shown at among the others, whether the pointer
     // is too far from the bar, the pointer's column and where it holds the tab.
-    let drag = app.tab_drag_live().map(|d| (d.from(), d.slot, d.far, d.x, d.grab));
+    let drag = app.tab_drag_live().map(|d| (d.from(), d.slot, d.far || d.keys, d.x, d.grab));
+    // Moved by keys: drawn at its place (sliding there), over the others.
+    let keyed = app.tab_drag_live().filter(|d| d.keys).map(|d| d.from());
     let order = match drag {
         Some((from, slot, ..)) => tab_drag::shown_order(n, from, slot),
         None => (0..n).collect::<Vec<_>>(),
@@ -520,7 +522,7 @@ pub(crate) fn draw_tab_bar(app: &mut App, area: Rect, buf: &mut Buffer) -> Vec<(
         at,
     };
     // Tabs in place first, sliding ones over them, the dragged (or just dropped) one on top.
-    let top = held.map(|h| h.0).or_else(|| app.tab_slide.top.and_then(|t| app.tabs.position(t)));
+    let top = held.map(|h| h.0).or(keyed).or_else(|| app.tab_slide.top.and_then(|t| app.tabs.position(t)));
     let mut draw: Vec<usize> = (0..places.len()).collect();
     draw.sort_by_key(|&k| (Some(order[first + k]) == top, app.tab_slide.moving(places[k].0)));
     let mut line: Vec<Option<Cell>> = vec![None; usize::from(stop.saturating_sub(left))];

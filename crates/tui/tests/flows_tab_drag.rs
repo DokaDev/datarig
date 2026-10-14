@@ -847,3 +847,168 @@ fn the_new_order_is_written_at_once_and_comes_back_on_restart() {
     assert_eq!(console_nos(&h), [3, 1, 2]);
     assert_eq!(h.app.tabs.active_index(), 0);
 }
+
+/// The status bar's line as drawn now.
+fn status_line(h: &mut Harness) -> String {
+    h.status(W, H)
+}
+
+/// No timer is left once nothing slides (no wakeup while idle).
+fn no_more_frames(h: &Harness) {
+    let now = h.clock.now();
+    assert!(h.app.next_tick(now).is_none_or(|t| t >= now + std::time::Duration::from_secs(1)), "no more frames");
+}
+
+#[test]
+fn a_tab_moved_by_keys_slides_one_place_at_a_time_and_enter_keeps_the_order() {
+    let mut h = three_tabs();
+    let y = bar_y(&h);
+    let spans: Vec<(u16, u16)> = (0..3).map(|i| span(&h, i)).collect();
+    let (a0, a1) = spans[0];
+    let (b0, b1) = spans[1];
+    h.keys(" tg");
+    h.draw(W, H);
+    assert_eq!(h.app.tab_drag_view(), Some((0, Some(0))), "lifted where it is");
+    assert_eq!(lifted(&mut h, W), Some((a0, a1)));
+    assert!(status_line(&mut h).contains("Moving the tab: h/l or"), "{}", status_line(&mut h));
+    no_more_frames(&h);
+    // `h` at the first place: nothing moves.
+    h.keys("h");
+    assert_eq!(h.app.tab_drag_view(), Some((0, Some(0))));
+    // `l`: the next tab slides left as the moved one slides right, over it.
+    h.keys("l");
+    assert_eq!(h.app.tab_drag_view(), Some((0, Some(1))));
+    h.draw(W, H);
+    let now = h.clock.now();
+    assert!(h.app.next_tick(now).is_some_and(|t| t <= now + SLIDE_FRAME), "a frame soon");
+    let (mut xa, mut xb) = (vec![h.app.tab_x(0).unwrap()], vec![h.app.tab_x(1).unwrap()]);
+    for _ in 0..5 {
+        h.advance(SLIDE_FRAME);
+        h.draw(W, H);
+        xa.push(h.app.tab_x(0).unwrap());
+        xb.push(h.app.tab_x(1).unwrap());
+    }
+    assert_eq!((xa[0], xb[0]), (i32::from(a0), i32::from(b0)), "from where they were: {xa:?} {xb:?}");
+    assert_eq!((*xa.last().unwrap(), *xb.last().unwrap()), (i32::from(a0 + b1 - b0), i32::from(a0)));
+    assert!(xa.windows(2).all(|p| p[1] >= p[0]) && xb.windows(2).all(|p| p[1] <= p[0]), "{xa:?} {xb:?}");
+    no_more_frames(&h);
+    assert_eq!(lifted(&mut h, W), Some((a0 + b1 - b0, a0 + b1 - b0 + a1 - a0)), "still lifted, drawn on top");
+    assert!(bar(&mut h, W).contains(" 1 console 2 ") && bar(&mut h, W).contains(" 2 console 1 "), "places");
+    assert_eq!(texts(&h), ["a", "b", "c"], "nothing moved before Enter");
+    // The arrows too; not past the end.
+    for _ in 0..3 {
+        h.key(KeyCode::Right);
+    }
+    assert_eq!(h.app.tab_drag_view(), Some((0, Some(2))));
+    h.key(KeyCode::Left);
+    assert_eq!(h.app.tab_drag_view(), Some((0, Some(1))));
+    // A mouse move without a button does not end it.
+    h.mouse(MouseEventKind::Moved, 5, y + 4);
+    assert_eq!(h.app.tab_drag_view(), Some((0, Some(1))));
+    slide_out(&mut h, W);
+    h.key(KeyCode::Enter);
+    assert_eq!(texts(&h), ["b", "a", "c"]);
+    assert_eq!(h.app.tabs.active_index(), 1, "the moved tab stays active");
+    assert_eq!(h.app.tab().editor.text(), "a", "Enter went nowhere else");
+    slide_out(&mut h, W);
+    assert_eq!(lifted(&mut h, W), None);
+    assert!(!status_line(&mut h).contains("Moving the tab"));
+    no_more_frames(&h);
+}
+
+#[test]
+fn esc_or_anything_else_puts_a_tab_moved_by_keys_back() {
+    let mut h = three_tabs();
+    let y = bar_y(&h);
+    let before = bar(&mut h, W);
+    let spans: Vec<(u16, u16)> = (0..3).map(|i| span(&h, i)).collect();
+    let back = |h: &mut Harness| {
+        assert_eq!(texts(h), ["a", "b", "c"]);
+        assert_eq!(h.app.tab_drag_view(), None);
+        slide_out(h, W);
+        assert_eq!(bar(h, W), before);
+        assert_eq!((0..3).map(|i| span(h, i)).collect::<Vec<_>>(), spans);
+        no_more_frames(h);
+    };
+    // Esc.
+    h.keys(" tgll");
+    h.key(KeyCode::Esc);
+    back(&mut h);
+    // A dialog on top (`:`); its Esc is its own.
+    h.keys(" tgl:");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Commands));
+    h.key(KeyCode::Esc);
+    back(&mut h);
+    // Another tab (`g t`): the key does what it always does.
+    h.keys(" tglgt");
+    assert_eq!(h.app.tabs.active_index(), 1, "g t went to the next tab");
+    h.keys(" 1");
+    back(&mut h);
+    // A mouse press anywhere.
+    h.keys(" tgl");
+    h.mouse(MouseEventKind::Down(MouseButton::Left), 5, y + 6);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), 5, y + 6);
+    back(&mut h);
+}
+
+#[test]
+fn moving_a_tab_by_keys_is_in_the_tab_menu_and_the_command_line() {
+    let mut h = three_tabs();
+    h.keys(" tm");
+    h.menu_pick("Move tab with keys");
+    assert_eq!(h.app.tab_drag_view(), Some((0, Some(0))));
+    h.keys("l");
+    h.key(KeyCode::Enter);
+    assert_eq!(texts(&h), ["b", "a", "c"]);
+    assert!(datarig_tui::app::action::by_id("tab.grab").is_some());
+    // One tab alone: nothing to move past, not offered.
+    let mut h = tabs_in(Lang::En, 1, W);
+    h.keys(" tm");
+    assert!(!h.menu_labels().contains(&"Move tab with keys".to_string()));
+    h.key(KeyCode::Esc);
+    h.keys(" tg");
+    assert_eq!(h.app.tab_drag_view(), None);
+}
+
+#[test]
+fn space_t_angle_brackets_slide_the_tabs_too() {
+    let mut h = three_tabs();
+    let (a0, _) = span(&h, 0);
+    let (b0, b1) = span(&h, 1);
+    h.keys(" t>");
+    h.draw(W, H);
+    assert_eq!(texts(&h), ["b", "a", "c"]);
+    assert_eq!(h.app.tab_x(1), Some(i32::from(a0)), "drawn where it was first");
+    h.advance(SLIDE_FRAME);
+    h.draw(W, H);
+    let mid = h.app.tab_x(1).unwrap();
+    assert!(mid > i32::from(a0) && mid < i32::from(a0 + b1 - b0), "sliding: {mid}");
+    slide_out(&mut h, W);
+    assert_eq!(h.app.tab_x(1), Some(i32::from(a0 + b1 - b0)));
+    assert_eq!(h.app.tab_x(0), Some(i32::from(a0)));
+    no_more_frames(&h);
+}
+
+/// The tabs changing under a tab moved by keys (a background answer opened or closed one) end
+/// the move; the next key does what it always does, and a paste ends it too.
+#[test]
+fn a_tab_moved_by_keys_ends_when_the_tabs_change_or_on_a_paste() {
+    let mut h = three_tabs();
+    h.keys(" tgl");
+    assert_eq!(h.app.tab_drag_view(), Some((0, Some(1))));
+    // As a background answer would: another tab, not through a key.
+    h.app.tabs.move_tab(2, 1);
+    assert_eq!(h.app.tab_drag_view(), None, "shown no more");
+    assert!(!h.app.tab_grabbed());
+    h.keys("i");
+    assert_eq!(h.app.tab().editor.mode, datarig_tui::widgets::editor::Mode::Insert, "the key was the editor's");
+    h.key(KeyCode::Esc);
+    slide_out(&mut h, W);
+    assert_eq!(texts(&h), ["a", "c", "b"]);
+    // A paste.
+    h.keys(" tgl");
+    assert!(h.app.tab_grabbed());
+    h.app.handle_event(ratatui::crossterm::event::Event::Paste("x".into()));
+    assert!(!h.app.tab_grabbed());
+    assert_eq!(texts(&h), ["xa", "c", "b"], "pasted into the editor, the order as before");
+}

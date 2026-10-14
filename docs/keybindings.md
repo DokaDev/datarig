@@ -72,6 +72,7 @@ Every pane that is not text input (explorer, results, vim Normal/Visual). Inside
 | `Space t t` | `tab.list` | List tabs |  |
 | `Space t <` | `tab.move_left` | Move tab left | ✓ |
 | `Space t >` | `tab.move_right` | Move tab right | ✓ |
+| `Space t g` | `tab.grab` | Move tab with keys |  |
 | `Space 1` | `tab.goto.1` | Go to tab 1 |  |
 | `Space 2` | `tab.goto.2` | Go to tab 2 |  |
 | `Space 3` | `tab.goto.3` | Go to tab 3 |  |
