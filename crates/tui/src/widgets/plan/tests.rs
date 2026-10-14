@@ -148,12 +148,14 @@ fn every_view_stays_inside_its_area_at_every_small_size() {
     let json = r#"[{"Plan": {"Node Type": "Hash Join", "Join Type": "Semi", "Startup Cost": 1e20, "Total Cost": 1e40,
         "Plan Rows": 1e15, "Plan Width": 4, "Actual Startup Time": 0.5, "Actual Total Time": 9e9, "Actual Rows": 3e12,
         "Actual Loops": 1, "Plans": [
-        {"Node Type": "Seq Scan", "Relation Name": "표시", "Alias": "表", "Parent Relationship": "Outer",
+        {"Node Type": "Seq Scan", "Relation Name": "\uD45C\uC2DC", "Alias": "\u8868", "Parent Relationship": "Outer",
          "Startup Cost": 0, "Total Cost": 5e39, "Plan Rows": 7, "Plan Width": 4, "Actual Startup Time": 0.1,
          "Actual Total Time": 4e9, "Actual Rows": 1e12, "Actual Loops": 3, "Rows Removed by Filter": 1e9},
         {"Node Type": "Seq Scan", "Relation Name": "t", "Parent Relationship": "Inner", "Startup Cost": 0,
          "Total Cost": 1, "Plan Rows": 1, "Plan Width": 4, "Actual Startup Time": 0, "Actual Total Time": 0,
          "Actual Rows": 0, "Actual Loops": 0}]}, "Execution Time": 9.1e9}]"#;
+    // The JSON escapes are wide characters in the name.
+    assert_eq!(parse(json).unwrap().nodes[1].target.as_deref(), Some("on \"\u{D45C}\u{C2DC}\" \"\u{8868}\""));
     let th = crate::theme::DARK;
     let i18n = datarig_core::i18n::I18n::new(datarig_core::i18n::Lang::En);
     for view in PlanView::ALL {
@@ -197,7 +199,9 @@ fn boxes_keep_their_edges_with_wide_characters() {
     use crate::app::plan::{PlanTab, PlanView};
     use datarig_core::sql::plan::pg::parse;
     use ratatui::buffer::Buffer;
-    let json = r#"{"Plan": {"Node Type": "Seq Scan", "Relation Name": "주문내역테이블", "Alias": "주", "Startup Cost": 0, "Total Cost": 1, "Plan Rows": 1, "Plan Width": 4}}"#;
+    let json = r#"{"Plan": {"Node Type": "Seq Scan", "Relation Name": "\uC8FC\uBB38\uB0B4\uC5ED\uD14C\uC774\uBE14", "Alias": "\uC8FC", "Startup Cost": 0, "Total Cost": 1, "Plan Rows": 1, "Plan Width": 4}}"#;
+    let target = "on \"\u{C8FC}\u{BB38}\u{B0B4}\u{C5ED}\u{D14C}\u{C774}\u{BE14}\" \"\u{C8FC}\"";
+    assert_eq!(parse(json).unwrap().nodes[0].target.as_deref(), Some(target));
     let mut p = PlanTab::new(parse(json).unwrap(), 0, 0, json);
     p.view = PlanView::Boxes;
     let th = crate::theme::DARK;

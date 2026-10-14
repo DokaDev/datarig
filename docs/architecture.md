@@ -10,12 +10,14 @@ the PostgreSQL driver, SSH tunnels and the UI strings.
 |---|---|---|
 | `datarig-core` | The UI-free core. The driver interface (`Driver`, `Capabilities`, `Session`, `DbCommand`/`DbEvent`, key metadata `driver::keys::KeyCatalog`), the copy formats of result rows (`export`), SQL tooling (lexer, statement splitter, completion engine, the safety classifier `sql::risk`), the connection profile model and DSNs, password stores (`SecretStore`: OS keychain, the secrets file `secrets.toml`, memory) and per-profile password sources (`keychain`, `file`, `command`, `env`, `prompt`), the trash, reading and saving the config file (`toml_edit`), the i18n catalogs, and the transport seam (`transport`) | External crates only (tokio `sync`, serde, toml, keyring, pg_query, ...) |
 | `datarig-driver-postgres` | The PostgreSQL implementation `PgDriver`: connecting (`connect`), one connection per session role: metadata (`meta`: introspection for the tree and completion, one per profile) and query (`query`: one per tab, portal paging, cancel), value decoding (`values`) | `datarig-core` + tokio-postgres (vendored) |
+| `datarig-driver-mysql` | The MySQL implementation `MyDriver` on mysql_async (vendored): connecting directly or over a tunnel's channel (`connect`, `route`, `link`), the same session roles as the PostgreSQL driver: metadata (`meta`) and query (`query`), what the server says changed in the session (`session`), value decoding (`values`) | `datarig-core` + mysql_async (vendored) |
 | `datarig-ssh` | SSH tunnels: one bastion's `direct-tcpip` channels as a `transport::Dialer` (`Tunnel`), host keys against `~/.ssh/known_hosts` (read only) and datarig's own `known_hosts`, key files (`keys`). The only crate that names russh | `datarig-core` + russh |
-| `datarig-tui` | The Ratatui UI and the `datarig` binary: app state, actions and the overlay stack (`app/`), the context keymap (`keymap/`), screens (`screens/`), widgets (`widgets/`), key input and the Hangul key mapping (`input/`), the clipboard (`clipboard.rs`: the system clipboard or OSC 52), the user's own editor (`external.rs`), the driver registry (`drivers.rs`) | `datarig-core`, `datarig-driver-postgres`, `datarig-ssh`, ratatui/crossterm |
+| `datarig-tui` | The Ratatui UI and the `datarig` binary: app state, actions and the overlay stack (`app/`), the context keymap (`keymap/`), screens (`screens/`), widgets (`widgets/`), key input and the Hangul key mapping (`input/`), the clipboard (`clipboard.rs`: the system clipboard or OSC 52), the user's own editor (`external.rs`), the driver registry (`drivers.rs`) | `datarig-core`, `datarig-driver-postgres`, `datarig-driver-mysql`, `datarig-ssh`, ratatui/crossterm |
 | `datarig-bench` | Performance measurements and the CI budgets (binary `datarig-bench`): round trips counted through a latency proxy, paging, the editor and the grid in a headless `App`, and the real binary idle and at startup in `tmux -L perf`. Not product code (see `docs/perf.md`) | All of the above |
 
 ```
 datarig-tui ──▶ datarig-driver-postgres ──▶ datarig-core
+     │  ├──────▶ datarig-driver-mysql ────────▲
      │  └──────▶ datarig-ssh ─────────────────▲
      └────────────────────────────────────────┘
 ```
@@ -23,7 +25,7 @@ datarig-tui ──▶ datarig-driver-postgres ──▶ datarig-core
 ## Dependency rules
 
 1. **Dependencies point one way: `tui → core ← driver-*`** (and `tui → ssh → core`). Core depends on no driver crate and no UI crate (ratatui, crossterm). A driver crate depends on core only and knows no other driver.
-2. **The UI does not know driver types.** `datarig-tui` talks to a driver only through `Box<dyn Driver>` and a `Session`'s command and event channels, and turns menus and panels on and off with `Capabilities`. The only place that names a concrete type (`PgDriver`) is the registry, `crates/tui/src/drivers.rs`.
+2. **The UI does not know driver types.** `datarig-tui` talks to a driver only through `Box<dyn Driver>` and a `Session`'s command and event channels, and turns menus and panels on and off with `Capabilities`. The only place that names a concrete type (`PgDriver`, `MyDriver`) is the registry, `crates/tui/src/drivers.rs`.
 3. **Keep visibility narrow.** Only what is used outside a crate is `pub`; the rest is `pub(crate)` or private. A driver crate exports its driver type only.
 4. **Versions and lints live at the root.** Versions go to `[workspace.dependencies]` and lints to `[workspace.lints]`; each crate takes them with `x.workspace = true` and `[lints] workspace = true`, and turns on only the features it needs.
 
@@ -594,9 +596,9 @@ Held by CI budgets (`docs/perf.md`).
 ## The dialect seam
 
 Every SQL tool takes the dialect of the text it works on, and quoting and value kinds go
-through it. PostgreSQL is the dialect of every driver today; MySQL's text is read (lexed,
-split, completed, formatted, quoted, classified) for the MySQL driver to come (see "MySQL
-text" and "The MySQL classifier" below).
+through it. The PostgreSQL driver's text is read in the PostgreSQL dialect and the MySQL driver's in
+the MySQL dialect (lexed, split, completed, formatted, quoted, classified; see "MySQL text"
+and "The MySQL classifier" below).
 
 - **Types** (`datarig_core::sql::dialect`): `Dialect` (`Postgres`, the default, and
   `MySql(MySqlMode)`) is the SQL dialect of a text, and `Language` (`Sql(Dialect)`) the
