@@ -594,6 +594,17 @@ impl App {
                 self.focus = Focus::Editor;
                 self.dispatch(Action::Explain(analyze));
             }
+            (command::Command::TabMove, _) => {
+                if !action::has_tab(self) {
+                    return err(Msg::CommandsErrorUnavailable { name });
+                }
+                let from = self.tabs.active_index();
+                let Some(to) = command::tabmove_target(arg, from, self.tabs.len()) else {
+                    return err(Msg::Label(Label::CommandsErrorTabmoveUsage));
+                };
+                self.overlays.close(OverlayKind::Commands);
+                self.move_tab_to(from, to);
+            }
             (command::Command::Recover, _) => {
                 if !arg.is_empty() {
                     return err(Msg::CommandsErrorNoArgs { name });
@@ -888,6 +899,7 @@ impl App {
                             ArgKind::Object => (Label::CommandsArgObject, true),
                             ArgKind::Analyze => (Label::CommandsArgAnalyze, true),
                             ArgKind::Theme => (Label::CommandsArgTheme, false),
+                            ArgKind::TabPosition => (Label::CommandsArgTabPosition, true),
                         };
                         let arg = arg.text(self.i18n.lang);
                         name.push_str(&if optional { format!(" [{arg}]") } else { format!(" {arg}") });

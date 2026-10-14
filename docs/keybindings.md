@@ -70,6 +70,8 @@ Every pane that is not text input (explorer, results, vim Normal/Visual). Inside
 | `Space t c` | `tab.close` | Close tab |  |
 | `Space t u` | `tab.reopen_closed` | Reopen closed tab |  |
 | `Space t t` | `tab.list` | List tabs |  |
+| `Space t <` | `tab.move_left` | Move tab left | ✓ |
+| `Space t >` | `tab.move_right` | Move tab right | ✓ |
 | `Space 1` | `tab.goto.1` | Go to tab 1 |  |
 | `Space 2` | `tab.goto.2` | Go to tab 2 |  |
 | `Space 3` | `tab.goto.3` | Go to tab 3 |  |
@@ -592,6 +594,7 @@ An editor command closes the line; what went wrong is said in the status bar.
 | `:tabnew` |  | New console tab |
 | `:tabclose` |  | Close tab |
 | `:tabs` | `:ls` `:buffers` | List tabs |
+| `:tabmove [N / +N / -N / $]` | `:tabm` | Move this tab (:tabmove N: after tab N, 0 first; +N / -N: N places; alone: last) |
 | `:recover` |  | Bring back a closed console (also from earlier runs) |
 | `:settings` |  | Open the settings |
 | `:copy <format>` |  | Copy the selected range, or every fetched row, as… (:copy <format> [selection|all]) |

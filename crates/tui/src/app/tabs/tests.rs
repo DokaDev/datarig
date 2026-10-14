@@ -179,3 +179,46 @@ fn tabs_by_recent_use_put_the_active_one_first_and_restored_ones_in_bar_order() 
     let back = m.reopen_closed(older);
     assert_eq!(m.get(back).unwrap().doc.console_no, 5);
 }
+
+#[test]
+fn moving_a_tab_keeps_the_active_tab_and_the_console_numbers() {
+    let mut m = TabManager::new(None, ed("a"));
+    let b = m.open(TabKind::Console, None, ed("b"));
+    m.open(TabKind::Console, None, ed("c"));
+    m.activate(1);
+    let nos: Vec<u32> = m.iter().map(|t| t.doc.console_no).collect();
+    assert_eq!(nos, [1, 2, 3]);
+    // The active tab to the end: it stays active, its console number goes with it.
+    assert!(m.move_tab(1, 2));
+    assert_eq!(texts(&m), ["a", "c", "b"]);
+    assert_eq!(m.active().id, b);
+    assert_eq!(m.active_index(), 2);
+    let nos: Vec<u32> = m.iter().map(|t| t.doc.console_no).collect();
+    assert_eq!(nos, [1, 3, 2], "each console keeps its own number");
+    // Another tab moved past the active one: the active tab is still the same tab.
+    assert!(m.move_tab(0, 2));
+    assert_eq!(texts(&m), ["c", "b", "a"]);
+    assert_eq!(m.active().id, b);
+    assert_eq!(m.active_index(), 1);
+    // Out of range: clamped to the last place; the same place or no such tab: nothing.
+    assert!(m.move_tab(0, 99));
+    assert_eq!(texts(&m), ["b", "a", "c"]);
+    assert!(!m.move_tab(2, 2));
+    assert!(!m.move_tab(3, 0));
+    assert_eq!(texts(&m), ["b", "a", "c"]);
+    // Moving changes no tab's place in the recently-used order.
+    assert_eq!(m.by_recent()[0], b);
+}
+
+#[test]
+fn a_moved_tab_closed_comes_back_where_it_was_closed() {
+    let mut m = TabManager::new(None, ed("a"));
+    m.open(TabKind::Console, None, ed("b"));
+    let c = m.open(TabKind::Console, None, ed("c"));
+    assert!(m.move_tab(2, 0));
+    assert_eq!(texts(&m), ["c", "a", "b"]);
+    m.close(c);
+    let back = m.reopen().unwrap();
+    assert_eq!(texts(&m), ["c", "a", "b"], "at the place it had when it was closed");
+    assert_eq!(m.get(back).unwrap().doc.console_no, 3, "with its number");
+}

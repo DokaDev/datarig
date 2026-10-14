@@ -46,6 +46,8 @@ pub enum Command {
     TabClose,
     /// `:tabs`, `:ls`, `:buffers`: the tab list.
     Tabs,
+    /// `:tabmove [N|+N|-N|$]` (`:tabm`): move the active tab, as Vim's `:tabmove`.
+    TabMove,
     /// `:recover`: pick a closed console from the trash and bring it back.
     Recover,
     /// `:settings`: the settings screen.
@@ -97,12 +99,22 @@ pub enum ArgKind {
     Analyze,
     /// `copy <from> <name>` or `new <name>` ([`THEME_ACTIONS`]); `<from>` is a theme name.
     Theme,
+    /// Where a tab goes (`:tabmove`): see [`tabmove_target`]; may be left out.
+    TabPosition,
 }
 
 impl ArgKind {
     /// The command also runs without it.
     pub fn optional(self) -> bool {
-        matches!(self, ArgKind::NewScript | ArgKind::Context | ArgKind::Script | ArgKind::Object | ArgKind::Analyze)
+        matches!(
+            self,
+            ArgKind::NewScript
+                | ArgKind::Context
+                | ArgKind::Script
+                | ArgKind::Object
+                | ArgKind::Analyze
+                | ArgKind::TabPosition
+        )
     }
 }
 
@@ -224,6 +236,14 @@ pub const COMMANDS: &[CommandSpec] = &[
         arg: None,
         label: Label::ActionTabList,
         action: Some(Action::TabList),
+    },
+    CommandSpec {
+        command: Command::TabMove,
+        name: "tabmove",
+        aliases: &["tabm"],
+        arg: Some(ArgKind::TabPosition),
+        label: Label::CommandTabmove,
+        action: None,
     },
     CommandSpec {
         command: Command::Recover,
@@ -778,6 +798,25 @@ fn ident(s: &str) -> Result<(String, &str), ()> {
     Ok((s[..end].to_ascii_lowercase(), &s[end..]))
 }
 
+/// Where `:tabmove <arg>` puts the tab at `from` of `len` tabs, as Vim does: `N` after tab `N`
+/// counted before the move (`0`: first), `+N` / `-N` that many places right or left (`+` and
+/// `-` alone: one), nothing or `$` last. Past an end: that end. `None`: not one of these, or no
+/// tab.
+pub fn tabmove_target(arg: &str, from: usize, len: usize) -> Option<usize> {
+    let last = len.checked_sub(1)?;
+    // Digits only; too many of them count as a place past every tab.
+    let number = |s: &str| -> Option<usize> {
+        (!s.is_empty() && s.bytes().all(|b| b.is_ascii_digit())).then(|| s.parse().unwrap_or(usize::MAX))
+    };
+    let count = |s: &str| if s.is_empty() { Some(1) } else { number(s) };
+    match arg.trim() {
+        "" | "$" => Some(last),
+        a if a.starts_with('+') => count(&a[1..]).map(|n| from.saturating_add(n).min(last)),
+        a if a.starts_with('-') => count(&a[1..]).map(|n| from.saturating_sub(n)),
+        a => number(a).map(|n| super::tab_drag::slot_index(from, n.min(len))),
+    }
+}
+
 /// The argument of `:use`: `(database, schema)`, each `None` when left out (`db`: its default
 /// schema; `.schema`: the tab's database). Unquoted names fold to lower case, `"Quoted"` ones
 /// keep their case (and dots). `None`: it cannot be read.
@@ -835,8 +874,9 @@ pub fn complete_arg(kind: ArgKind, arg: &str, names: &[&str]) -> Vec<ArgCompleti
         ArgKind::Context => {
             rank(arg, names.iter().copied().enumerate()).into_iter().map(ArgCompletion::Context).collect()
         }
-        // A new name, or any object's: nothing to pick from (`analyze` is the only word).
-        ArgKind::NewScript | ArgKind::Object | ArgKind::Analyze => Vec::new(),
+        // A new name, or any object's: nothing to pick from (`analyze` is the only word; a
+        // tab's place is a number).
+        ArgKind::NewScript | ArgKind::Object | ArgKind::Analyze | ArgKind::TabPosition => Vec::new(),
         ArgKind::Format => {
             use super::copy::{CopyFormat, CopyScope};
             let names = CopyFormat::MENU.map(|f| f.name());

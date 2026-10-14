@@ -24,6 +24,9 @@ impl App {
         if let Event::Mouse(m) = ev
             && m.kind == MouseEventKind::Moved
         {
+            // A move has no button held: a tab dragged lost its release (let go outside the
+            // window), so it stays where it was.
+            let dropped = self.tab_drag.take().is_some_and(|d| d.lifted);
             let hovered = if self.modal_open() {
                 // Under a dialog the workspace draws no highlight (`App::pointer_hover`); it is
                 // dropped so none comes back where the pointer no longer is.
@@ -32,7 +35,7 @@ impl App {
             } else {
                 self.workspace_hover(m)
             };
-            self.idle_event = !hovered;
+            self.idle_event = !hovered && !dropped;
             return;
         }
         // A press starts afresh, whatever takes it (a dialog, the menu, the pane): a drag whose
@@ -45,18 +48,33 @@ impl App {
             self.drag_at = None;
             self.detail_press.disarm();
         }
+        // A press of any button ends a tab's drag (it stays where it was).
+        if let Event::Mouse(m) = ev
+            && matches!(m.kind, MouseEventKind::Down(_))
+        {
+            self.tab_drag = None;
+        }
         match ev {
             Event::Key(k) => {
                 let k = keyboard::normalize(k);
                 match keyboard::key_use(&k) {
                     KeyUse::Ignore => {}
+                    // `Esc` while a tab is dragged only puts it back.
+                    KeyUse::Press if k.code == KeyCode::Esc && !self.modal_open() && self.cancel_tab_drag() => {}
                     u => self.handle_key(k, u == KeyUse::Repeat),
                 }
             }
-            Event::Mouse(m) if self.modal_open() => self.overlay_mouse(m),
+            Event::Mouse(m) if self.modal_open() => {
+                self.tab_drag = None;
+                self.overlay_mouse(m)
+            }
             Event::Mouse(m) => self.handle_mouse(m),
             Event::Paste(text) => self.paste(&text),
             _ => {}
+        }
+        // A dialog on top ends a tab's drag: it stays where it was (its `Esc` is the dialog's).
+        if self.modal_open() {
+            self.tab_drag = None;
         }
         self.after_input();
     }
@@ -628,6 +646,12 @@ impl App {
 
     pub(super) fn handle_mouse(&mut self, m: MouseEvent) {
         if self.layout.too_small {
+            // A release there still ends a drag (nothing moves).
+            if m.kind == MouseEventKind::Up(MouseButton::Left) {
+                self.tab_drag = None;
+                self.drag = None;
+                self.drag_at = None;
+            }
             return;
         }
         // A click while the search prompt is open only closes it.
@@ -721,8 +745,13 @@ impl App {
                 }
                 self.left_click(m, inside(l.divider) && l.divider.height > 0);
             }
-            MouseEventKind::Drag(MouseButton::Left) => self.drag_to(x, y),
+            MouseEventKind::Drag(MouseButton::Left) => {
+                if !self.tab_drag_to(x, y) {
+                    self.drag_to(x, y)
+                }
+            }
             MouseEventKind::Up(MouseButton::Left) => {
+                self.tab_drag_release(x, y);
                 self.drag = None;
                 self.drag_at = None;
                 self.detail_release(x, y);
@@ -775,6 +804,7 @@ impl App {
     /// A click on the document tab bar at column `x`, by what was drawn there: a
     /// tab becomes active (`close`: a middle click closes it, asking first as `Ctrl+W` does); a
     /// scroll mark activates the nearest hidden tab on its side. The focus stays where it is.
+    /// A left press on a tab's body may start a drag of it (`app::tab_drag`).
     fn tab_bar_click(&mut self, x: u16, close: bool) {
         use crate::widgets::tabbar::TabHit;
         let Some(hit) = self.tab_hits.iter().find(|(a, b, _)| x >= *a && x < *b).map(|h| h.2) else { return };
@@ -789,6 +819,8 @@ impl App {
         self.switch_tab(|m| m.activate(index));
         if close && self.tabs.active_index() == index {
             self.request_close_tab();
+        } else if !close && hit == TabHit::Tab(index) {
+            self.arm_tab_drag(index, x);
         }
     }
 
