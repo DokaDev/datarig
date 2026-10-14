@@ -337,7 +337,10 @@ impl App {
     /// `Esc`: a lifted tab goes back where it was. `false`: no tab was being dragged (a press
     /// that was not a drag yet is forgotten too).
     pub(super) fn cancel_tab_drag(&mut self) -> bool {
-        self.end_tab_drag()
+        // A drag the tabs changed under (an answer from a session closed one) is shown no more:
+        // it ends, and the `Esc` goes on to where it would have gone.
+        let shown = self.tab_drag_live().is_some();
+        self.end_tab_drag() && shown
     }
 
     /// The drag ends where it is (a dialog, another button, a lost release): every tab goes back
