@@ -1022,6 +1022,49 @@ fn mysql_key_options_are_read_and_written_only_when_set() {
     assert!(!std::fs::read_to_string(&path).unwrap().contains("allow_public_key_retrieval"));
 }
 
+/// The TLS settings: read from the fields and from a PostgreSQL URL (which becomes fields),
+/// written back as they were (no mode stays no mode), and removed when cleared.
+#[test]
+fn tls_settings_are_read_and_written_back() {
+    let path = temp_file("tls");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        &path,
+        "[[connections]]\nname = \"a\"\nhost = \"h\"\n\n\
+         [[connections]]\nname = \"b\"\nhost = \"h\"\nsslmode = \"verify-full\"\n\
+         sslrootcert = \"/etc/ca.pem\" # the company CA\nsslcert = \"~/me.pem\"\nsslkey = \"~/me.key\"\n\n\
+         [[connections]]\nname = \"c\"\ndsn = \"postgres://u@h/db?sslmode=require&sslrootcert=%2Fca.pem\"\n\n\
+         [[connections]]\nname = \"d\"\ndriver = \"mysql\"\nhost = \"h\"\nsslmode = \"VERIFY_IDENTITY\"\n",
+    )
+    .unwrap();
+    let (mut cfg, err) = load(Some(path.clone()));
+    assert!(err.is_none(), "{err:?}");
+    let c = &cfg.connections;
+    assert_eq!((c[0].sslmode.as_str(), c[0].tls().unwrap().mode), ("", crate::tls::TlsMode::Disable));
+    assert_eq!(
+        (c[1].sslrootcert.as_deref(), c[1].sslcert.as_deref(), c[1].sslkey.as_deref()),
+        (Some("/etc/ca.pem"), Some("~/me.pem"), Some("~/me.key"))
+    );
+    assert_eq!(
+        (c[2].dsn.as_deref(), c[2].sslmode.as_str(), c[2].sslrootcert.as_deref()),
+        (None, "require", Some("/ca.pem"))
+    );
+    assert_eq!(c[3].tls().unwrap().mode, crate::tls::TlsMode::VerifyFull);
+    save(&path, settings("auto"), Some(profiles(&cfg.connections, &cfg.folders, None))).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(text.matches("sslmode").count(), 3, "no mode stays no mode: {text}");
+    assert!(text.contains("sslrootcert = \"/etc/ca.pem\" # the company CA"), "{text}");
+    assert!(text.contains("sslmode = \"VERIFY_IDENTITY\""), "{text}");
+    cfg.connections[1].sslcert = None;
+    cfg.connections[1].sslkey = None;
+    save(&path, settings("auto"), Some(profiles(&cfg.connections, &cfg.folders, None))).unwrap();
+    let (back, err) = load(Some(path.clone()));
+    assert!(err.is_none(), "{err:?}");
+    assert_eq!((back.connections[1].sslcert.as_deref(), back.connections[1].sslkey.as_deref()), (None, None));
+    assert_eq!(back.connections[1].sslrootcert.as_deref(), Some("/etc/ca.pem"));
+    assert_eq!(back.connections[2].sslrootcert.as_deref(), Some("/ca.pem"));
+}
+
 /// The SSH tunnel's table: read, checked when on, written back with its
 /// comments, left out when never set up, kept when turned off.
 #[test]

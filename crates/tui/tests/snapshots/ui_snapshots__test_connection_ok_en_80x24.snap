@@ -20,7 +20,7 @@ expression: backend
 "│ │                                                                          │ │"
 "│ │                                                                          │ │"
 "│ │                    Test    Save    Cancel                                │t│"
-"│ │ Connection OK · server 17.2 · 12ms                                       │ │"
+"│ │ Connection OK · server 17.2 · 12ms · unencrypted                         │ │"
 "│ │                                                                          │ │"
 "│ ╰─ Tab/↑↓ move · Ctrl+N/P section · Ctrl+T test · Ctrl+S save · Esc cancel ╯ │"
 "│                      ││                                                      │"

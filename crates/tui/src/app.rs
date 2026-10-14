@@ -100,6 +100,7 @@ use datarig_core::secret::{DefaultSource, MemoryStore, SecretStore, Secrets, Sou
 use datarig_core::sql::complete::{Candidate, Kind, complete_with};
 use datarig_core::sql::dialect::{Dialect, Language};
 use datarig_core::sql::risk::Classifier;
+use datarig_core::tls::{Encryption, Verified};
 use explorer::Explorer;
 use overlay::{Busy, Confirm, ConfirmAction, Overlay, OverlayKind, Overlays};
 pub use presets::PROBE_MAX;
@@ -776,10 +777,13 @@ fn test_msg(i18n: &I18n, t: &ConnTest) -> Notice {
                 return Notice::new(Msg::TestSshDb { host, elapsed: ssh }, Level::Info);
             }
             (TestState::Ok(info), Some(ssh)) => {
-                return Notice::new(
-                    Msg::TestOkSsh { host, elapsed: ssh, version: info.server_version.clone(), latency: info.latency },
-                    Level::Success,
-                );
+                // Plain through the tunnel: the tunnel encrypts it as far as the bastion.
+                let tls = match info.encryption {
+                    Encryption::Plain => i18n.label(Label::TlsPlainTunnel).to_string(),
+                    e => encryption_text(i18n, e),
+                };
+                let (version, latency) = (info.server_version.clone(), info.latency);
+                return Notice::new(Msg::TestOkSsh { host, elapsed: ssh, version, latency, tls }, Level::Success);
             }
             (TestState::Failed(e), Some(ssh)) => {
                 return Notice::new(Msg::TestFailedDb { host, elapsed: ssh, error: e.clone() }, Level::Error);
@@ -790,7 +794,11 @@ fn test_msg(i18n: &I18n, t: &ConnTest) -> Notice {
     match state {
         TestState::Running => Notice::new(Msg::TestRunning { elapsed: started.elapsed() }, Level::Info),
         TestState::Ok(info) => {
-            Notice::new(Msg::TestOk { version: info.server_version.clone(), latency: info.latency }, Level::Success)
+            let tls = encryption_text(i18n, info.encryption);
+            Notice::new(
+                Msg::TestOk { version: info.server_version.clone(), latency: info.latency, tls },
+                Level::Success,
+            )
         }
         TestState::Failed(e) => Notice::new(Msg::TestFailed { error: e.clone() }, Level::Error),
         TestState::Timeout(d) => Notice::new(Msg::TestTimeout { elapsed: *d }, Level::Error),
@@ -800,6 +808,22 @@ fn test_msg(i18n: &I18n, t: &ConnTest) -> Notice {
             None => Notice::new(Msg::TestReached { targets: reached_targets(v) }, Level::Success),
             Some(error) => Notice::new(Msg::TestFailed { error }, Level::Error),
         },
+    }
+}
+
+/// How a connection's traffic goes, in words: `TLS 1.3`, `TLS 1.3, certificate not checked`,
+/// `not encrypted`.
+pub(crate) fn encryption_text(i18n: &I18n, e: Encryption) -> String {
+    match e {
+        Encryption::Plain => i18n.label(Label::TlsPlain).to_string(),
+        Encryption::Tls { version, verified } => {
+            let version = version.label().to_string();
+            match verified {
+                Verified::Full => i18n.msg(&Msg::TlsVerified { version }).to_string(),
+                Verified::Chain => i18n.msg(&Msg::TlsChain { version }).to_string(),
+                Verified::No => i18n.msg(&Msg::TlsUnverified { version }).to_string(),
+            }
+        }
     }
 }
 

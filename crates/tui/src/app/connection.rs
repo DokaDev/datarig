@@ -7,6 +7,7 @@ use super::*;
 use crate::widgets::tree::Tree;
 use datarig_core::profile::folder::FolderPath;
 use datarig_core::profile::ssh::SshSettings;
+use datarig_core::tls::Encryption;
 
 impl App {
     /// Connect to profile `id` with its source's password: at once for the secrets file and
@@ -339,12 +340,17 @@ impl App {
         if self.conns.get(id).is_some_and(|c| c.expanded) {
             self.ask_databases(id, false);
         }
-        // A MySQL connection to another machine without a tunnel is not encrypted: said once,
-        // in place of "connected".
-        let unencrypted = self.profile(id).is_some_and(ConnectionConfig::mysql_unencrypted);
-        self.show_status(match unencrypted {
-            true => Notice::new(Msg::ConnConnectedUnencrypted { name: name.clone() }, Level::Warning),
-            false => Notice::new(Msg::ConnConnected { name: name.clone() }, Level::Success),
+        // How it is encrypted, in place of "connected"; a connection to another machine without a
+        // tunnel that is not (TLS off, or a server that does not offer it) is a warning.
+        let exposed = self.profile(id).is_some_and(ConnectionConfig::exposed);
+        let encryption = self.conns.get(id).and_then(|c| c.encryption);
+        self.show_status(match encryption {
+            Some(tls @ Encryption::Tls { .. }) => {
+                let tls = encryption_text(&self.i18n, tls);
+                Notice::new(Msg::ConnConnectedTls { name: name.clone(), tls }, Level::Success)
+            }
+            _ if exposed => Notice::new(Msg::ConnConnectedUnencrypted { name: name.clone() }, Level::Warning),
+            _ => Notice::new(Msg::ConnConnected { name: name.clone() }, Level::Success),
         });
         if let Some(m) = flash {
             self.flash(m);

@@ -1533,7 +1533,7 @@ fn test_connection_cancel_and_stale_results() {
     // A late result of the cancelled test is ignored.
     h.app.on_app_event(AppEvent::Ping {
         seq,
-        result: Ok(PingInfo { server_version: "17".into(), latency: Duration::ZERO }),
+        result: Ok(PingInfo { server_version: "17".into(), latency: Duration::ZERO, encryption: Default::default() }),
     });
     assert_eq!(h.app.conn_test.as_ref().unwrap().state, TestState::Cancelled);
     h.keys("t");
@@ -1541,7 +1541,11 @@ fn test_connection_cancel_and_stale_results() {
     assert!(h.status(160, 45).contains("no answer within 5.0s"), "{}", h.status(160, 45));
     // The command line runs the same action; the result goes to the status bar.
     h.command("test connection");
-    h.ping(Ok(PingInfo { server_version: "17.2".into(), latency: Duration::from_millis(3) }));
+    h.ping(Ok(PingInfo {
+        server_version: "17.2".into(),
+        latency: Duration::from_millis(3),
+        encryption: Default::default(),
+    }));
     assert!(h.status(160, 45).contains("Connection OK · server 17.2 · 3ms"));
 }
 

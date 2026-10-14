@@ -13,6 +13,7 @@ use datarig_core::fault::Fault;
 use datarig_core::panics::caught;
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
+use datarig_core::tls::Encryption;
 use datarig_core::transport::DialerRef;
 use futures::FutureExt;
 use futures::future::BoxFuture;
@@ -127,7 +128,9 @@ impl Driver for MyDriver {
             };
             // A panic in the attempt fails the test like any other error.
             match AssertUnwindSafe(caught(tokio::time::timeout(timeout, attempt))).catch_unwind().await {
-                Ok(Ok(Ok(server_version))) => Ok(PingInfo { server_version, latency: start.elapsed() }),
+                Ok(Ok(Ok(server_version))) => {
+                    Ok(PingInfo { server_version, latency: start.elapsed(), encryption: Encryption::Plain })
+                }
                 Ok(Ok(Err(e))) => Err(PingError::Failed(e)),
                 Ok(Err(_)) => Err(PingError::Timeout(timeout)),
                 Err(_) => Err(PingError::Failed(internal_error())),
@@ -201,6 +204,7 @@ async fn run_session(
         *g = Some(killer);
     }
     connected.store(true, Ordering::SeqCst);
+    let _ = events.send(DbEvent::Encryption(Encryption::Plain));
     let _ = events.send(DbEvent::Connected);
     // The mode the session starts in; the metadata session's is what a new session of this
     // account starts in, which the app checks a tab's first run in.

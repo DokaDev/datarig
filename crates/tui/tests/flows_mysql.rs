@@ -122,16 +122,25 @@ fn a_direct_connection_to_another_machine_warns_in_the_status_bar() {
     assert!(status.contains("Connected to lab-local") && !status.contains("without encryption"), "{status}");
 }
 
-/// The profile form of a MySQL profile that would connect directly to another machine says
-/// the connection is not encrypted, next to the host and in the SSH section; not once a
-/// tunnel is picked, not for a loopback host, and never for PostgreSQL.
+/// The profile form of a profile that would connect directly to another machine with TLS off
+/// says the connection is not encrypted, next to the host and in the SSH section; not with TLS
+/// on (MySQL's default is PREFERRED), not once a tunnel is picked, not for a loopback host. The
+/// same for PostgreSQL.
 #[test]
-fn the_form_warns_of_an_unencrypted_mysql_connection() {
+fn the_form_warns_of_an_unencrypted_connection() {
     let mut h = launched(PasswordSource::File);
     h.command("conn.edit");
     assert_eq!(h.form().host.text(), "db.example.com");
-    let short = "not encrypted: use SSH";
-    let long = "This MySQL connection is not encrypted";
+    let short = "not encrypted: use TLS or SSH";
+    let long = "This connection is not encrypted (SSL mode off)";
+    // PREFERRED: it may be encrypted; the connection says what it got.
+    assert_eq!(h.form().tls_mode(), datarig_core::tls::TlsMode::Prefer);
+    assert!(!h.screen(120, 40).contains(short), "{}", h.screen(120, 40));
+    let off = |h: &mut Harness| {
+        let i = datarig_core::tls::TlsMode::Disable.index();
+        h.app.overlays.form_mut().unwrap().pick(Field::SslMode, i);
+    };
+    off(&mut h);
     assert!(h.screen(120, 40).contains(short), "{}", h.screen(120, 40));
     h.ctrl('n');
     assert_eq!(h.form().section, Section::Ssh);
@@ -154,13 +163,15 @@ fn the_form_warns_of_an_unencrypted_mysql_connection() {
     h.type_text("localhost");
     assert!(!h.screen(120, 40).contains(short));
     h.key(KeyCode::Esc);
-    // PostgreSQL has its own TLS settings.
+    // PostgreSQL: a new profile prefers TLS; with it off, the same warning.
     h.command("conn.new");
     h.app.overlays.form_mut().unwrap().focus_field(Field::Host);
     h.ctrl('u');
     h.type_text("db.example.com");
     assert!(!h.form().is_mysql());
     assert!(!h.screen(120, 40).contains(short));
+    off(&mut h);
+    assert!(h.screen(120, 40).contains(short), "{}", h.screen(120, 40));
 }
 
 /// MySQL's server key file and key retrieval are in the Advanced section of a MySQL profile,
@@ -172,6 +183,11 @@ fn the_server_key_options_are_set_in_the_form() {
     h.ctrl('n');
     h.ctrl('n');
     assert_eq!(h.form().section, Section::Advanced);
+    // After the SSL mode and its files.
+    assert_eq!(h.form().focus, Field::SslMode, "{:?}", h.form().fields());
+    for _ in 0..4 {
+        h.key(KeyCode::Tab);
+    }
     assert_eq!(h.form().focus, Field::ServerKey, "{:?}", h.form().fields());
     let screen = h.screen(120, 40);
     assert!(screen.contains("Server key file") && screen.contains("Key retrieval"), "{screen}");

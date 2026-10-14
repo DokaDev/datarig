@@ -3,6 +3,16 @@
 
 [graph]
 all-features = true
+# The platforms datarig is built for (the release targets): what is checked is what ships. A
+# crate only another platform pulls in is left out (rustls-platform-verifier's bundled root
+# certificates, CDLA-Permissive-2.0, are WebAssembly's only).
+targets = [
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+]
 
 [advisories]
 # RustSec advisories of every crate in the lock file. Each ignored advisory says why it does not

@@ -1365,7 +1365,11 @@ fn the_profile_forms_test_comes_back_after_a_new_tunnel() {
     let ping = |h: &mut Harness, seq| {
         h.app.on_app_event(AppEvent::Ping {
             seq,
-            result: Ok(PingInfo { server_version: "17.2".into(), latency: Duration::from_millis(12) }),
+            result: Ok(PingInfo {
+                server_version: "17.2".into(),
+                latency: Duration::from_millis(12),
+                encryption: Default::default(),
+            }),
         });
     };
     let (tx, _rx) = oneshot::channel();

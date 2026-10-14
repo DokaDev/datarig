@@ -234,6 +234,7 @@ async fn only_session(admin: &mut mysql_async::Conn, role: SessionRole, test: &s
 async fn a_query_session_says_how_its_text_is_read() {
     let Some(url) = my_url("a_query_session_says_how_its_text_is_read") else { return };
     let mut c = Conn::start(&url, SessionRole::Query, false, "a_query_session_says_how_its_text_is_read");
+    assert!(matches!(c.next(15).await, DbEvent::Encryption(_)), "how its traffic goes, first");
     assert!(matches!(c.next(15).await, DbEvent::Connected));
     let DbEvent::Language(Language::Sql(Dialect::MySql(mode))) = c.next(5).await else {
         panic!("the language follows Connected")
@@ -255,6 +256,7 @@ async fn a_query_session_says_how_its_text_is_read() {
 async fn the_metadata_session_reads_the_databases_and_the_catalog() {
     let Some(url) = my_url("the_metadata_session_reads_the_databases_and_the_catalog") else { return };
     let mut c = Conn::start(&url, SessionRole::Meta, false, "metaread");
+    assert!(matches!(c.next(15).await, DbEvent::Encryption(_)), "how its traffic goes, first");
     assert!(matches!(c.next(15).await, DbEvent::Connected));
     let lang = c.next(15).await;
     assert!(matches!(lang, DbEvent::Language(Language::Sql(Dialect::MySql(_)))), "{lang:?}");
@@ -552,6 +554,7 @@ async fn a_session_may_start_without_a_database() {
     let Some(url) = my_url("a_session_may_start_without_a_database") else { return };
     let mut c =
         Conn::start(&in_database(&url, ""), SessionRole::Query, false, "a_session_may_start_without_a_database");
+    assert!(matches!(c.next(15).await, DbEvent::Encryption(_)), "how its traffic goes, first");
     assert!(matches!(c.next(15).await, DbEvent::Connected));
 }
 
@@ -580,7 +583,9 @@ async fn sessions_and_test_connections_go_through_a_dialer() {
         tx,
     );
     let first = tokio::time::timeout(Duration::from_secs(15), rx.recv()).await.unwrap();
-    assert!(matches!(first, Some(DbEvent::Connected)), "{first:?}");
+    assert!(matches!(first, Some(DbEvent::Encryption(_))), "{first:?}");
+    let next = tokio::time::timeout(Duration::from_secs(15), rx.recv()).await.unwrap();
+    assert!(matches!(next, Some(DbEvent::Connected)), "{next:?}");
     MyDriver.ping(&profile(&url), Duration::from_secs(10), via).await.expect("the server answers");
     assert_eq!(d.dials.load(std::sync::atomic::Ordering::SeqCst), 2);
 }

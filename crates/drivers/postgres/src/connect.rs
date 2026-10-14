@@ -14,6 +14,7 @@ use datarig_core::driver::{
 use datarig_core::fault::{Fault, FaultKind};
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::sql::dialect::{Dialect, Language};
+use datarig_core::tls::Encryption;
 use datarig_core::transport::DialerRef;
 use futures::future::BoxFuture;
 use std::str::FromStr;
@@ -125,7 +126,9 @@ impl Driver for PgDriver {
                 Ok::<_, DbError>(row.get::<_, String>(0))
             };
             match tokio::time::timeout(timeout, attempt).await {
-                Ok(Ok(server_version)) => Ok(PingInfo { server_version, latency: start.elapsed() }),
+                Ok(Ok(server_version)) => {
+                    Ok(PingInfo { server_version, latency: start.elapsed(), encryption: Encryption::Plain })
+                }
                 Ok(Err(e)) => Err(PingError::Failed(e)),
                 Err(_) => Err(PingError::Timeout(timeout)),
             }
@@ -359,6 +362,7 @@ async fn run_session(
             }
         },
     };
+    let _ = events.send(DbEvent::Encryption(Encryption::Plain));
     let _ = events.send(DbEvent::Connected);
     if default_ignored {
         let _ = events.send(DbEvent::ReadOnlyPerTransaction);

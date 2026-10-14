@@ -142,3 +142,30 @@ fn schemes_of_drivers() {
     }
     assert_eq!((Scheme::Postgres.default_port(), Scheme::MySql.default_port()), (5432, 3306));
 }
+
+#[test]
+fn key_value_connection_strings_are_read_as_libpq_reads_them() {
+    let text = "host=db.example port = 5432  sslrootcert='/etc/my certs/ca.pem' password=a\\ b sslmode=verify-full";
+    let pairs = conninfo(text).unwrap();
+    let kv: Vec<_> = pairs.iter().map(|p| (p.key.as_str(), p.value.as_str())).collect();
+    assert_eq!(
+        kv,
+        [
+            ("host", "db.example"),
+            ("port", "5432"),
+            ("sslrootcert", "/etc/my certs/ca.pem"),
+            ("password", "a b"),
+            ("sslmode", "verify-full")
+        ]
+    );
+    // Each span covers its pair, so the text without one is the others as written.
+    assert_eq!(&text[pairs[1].span.clone()], "port = 5432");
+    assert_eq!(&text[pairs[2].span.clone()], "sslrootcert='/etc/my certs/ca.pem'");
+    assert_eq!(conninfo("a='it\\'s' b=''").unwrap()[0].value, "it's");
+    assert_eq!(conninfo("b=''").unwrap()[0].value, "");
+    assert_eq!(conninfo("   ").unwrap(), []);
+    // Not a connection string.
+    for bad in ["host", "host=x port", "=x", "a='open", "a='x\\"] {
+        assert_eq!(conninfo(bad), None, "{bad}");
+    }
+}

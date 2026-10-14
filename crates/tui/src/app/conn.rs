@@ -156,6 +156,9 @@ pub struct ProfileConn {
     /// (`DbEvent::Language`: a MySQL server's sql mode): what a tab of the profile reads its text
     /// in until its own session says. Kept while the profile is not connected.
     pub language: Option<datarig_core::sql::dialect::Language>,
+    /// How the current attempt's metadata session's traffic goes (`DbEvent::Encryption`, sent
+    /// right before `Connected`); `None` until it says.
+    pub encryption: Option<datarig_core::tls::Encryption>,
 }
 
 impl ProfileConn {
@@ -187,6 +190,7 @@ impl ProfileConn {
             tunnel_wait: None,
             tunnel_lost: None,
             language: None,
+            encryption: None,
         }
     }
 
@@ -277,7 +281,9 @@ impl ConnectionManager {
     pub fn next_generation(&mut self, id: ProfileId) -> u64 {
         self.generation += 1;
         let generation = self.generation;
-        self.entry(id).generation = generation;
+        let c = self.entry(id);
+        c.generation = generation;
+        c.encryption = None;
         generation
     }
 

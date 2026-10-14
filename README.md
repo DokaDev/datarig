@@ -930,6 +930,7 @@ The workspace layout:
 | `crates/drivers/postgres` | the PostgreSQL driver |
 | `crates/drivers/mysql` | the MySQL driver (in part: see [MySQL](#mysql)) |
 | `crates/ssh` | SSH tunnels |
+| `crates/tls` | TLS for the database connections (rustls) |
 | `crates/tui` | the terminal UI and the `datarig` binary |
 | `crates/bench` | benchmarks and the CI performance budgets |
 | `vendor/tokio-postgres` | a patched tokio-postgres (per-column result formats, pipelining); see [vendor/README.md](vendor/README.md) |
