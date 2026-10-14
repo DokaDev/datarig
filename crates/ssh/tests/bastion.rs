@@ -13,6 +13,7 @@ use common::{Answers, TestAsker, scratch};
 use datarig_core::driver::PagingMode;
 use datarig_core::driver::{ConnectOptions, DbCommand, DbEvent, Driver, SessionRole};
 use datarig_core::profile::ConnectionConfig;
+use datarig_core::tls::Encryption;
 use datarig_core::transport::{DialError, Dialer, DialerRef, Refusal};
 use datarig_driver_postgres::PgDriver;
 use datarig_ssh::known_hosts::{KnownHosts, fingerprint};
@@ -127,6 +128,8 @@ async fn a_session_pages_and_cancels_through_the_bastion() {
     let session = PgDriver.connect(&db_behind(), SessionRole::Query, opts, tx);
     let mut next =
         async || tokio::time::timeout(Duration::from_secs(20), rx.recv()).await.expect("event").expect("open");
+    // Over the tunnel, the connection itself is not encrypted (the tunnel is).
+    assert!(matches!(next().await, DbEvent::Encryption(Encryption::Plain)));
     assert!(matches!(next().await, DbEvent::Connected));
     session.send(DbCommand::Execute {
         id: 1,

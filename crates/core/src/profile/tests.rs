@@ -30,6 +30,17 @@ fn a_profile_is_exposed_when_it_connects_directly_to_another_machine() {
     assert!(url("mysql://u@db.example/shop?x=1").exposed());
     assert!(!url("mysql://u@127.0.0.1/shop?x=1").exposed());
     assert!(!url("mysql://u@/shop?x=1").exposed());
+    // PostgreSQL: a socket directory is this machine; a `key=value` string's hosts (none: the
+    // socket) count; a URL with several hosts counts as another machine.
+    let pg = ConnectionConfig { driver: "postgres".into(), ..my.clone() };
+    assert!(!ConnectionConfig { host: "/var/run/postgresql".into(), ..pg.clone() }.exposed());
+    let dsn = |d: &str| ConnectionConfig { dsn: Some(d.into()), ..pg.clone() };
+    assert!(!dsn("dbname=app user=me").exposed());
+    assert!(!dsn("host=localhost dbname=app").exposed());
+    assert!(!dsn("host=/tmp,127.0.0.1 dbname=app").exposed());
+    assert!(dsn("host=localhost,db.example dbname=app").exposed());
+    assert!(dsn("host=db hostaddr=10.0.0.5").exposed());
+    assert!(dsn("postgres://u@h1,h2/db").exposed());
 }
 
 #[test]
@@ -69,6 +80,14 @@ fn tls_settings_come_from_the_fields_or_a_postgres_dsn() {
     assert_eq!((t.mode, t.ca_file), (TlsMode::Prefer, None));
     let bad = ConnectionConfig { dsn: Some("host=h sslmode=verify".into()), ..pg.clone() };
     assert_eq!(bad.tls(), Err(TlsProblem::UnknownMode("verify".into())));
+    // A URL the profile keeps as written (several hosts): its parameters still count.
+    let hosts = ConnectionConfig { dsn: Some("postgres://u@h1,h2/db?sslmode=require".into()), ..pg.clone() };
+    assert_eq!(hosts.tls().map(|t| t.mode), Ok(TlsMode::VerifyCa), "require, and the field's CA file");
+    // Neither form: not readable, never the fields' settings.
+    for text in ["postgres://u@h1,h2/db?sslmode=%zz", "host='open"] {
+        let c = ConnectionConfig { dsn: Some(text.into()), ..pg.clone() };
+        assert_eq!(c.tls(), Err(TlsProblem::DsnUnreadable), "{text}");
+    }
     // MySQL's come from its fields; a pinned server key keeps its old default.
     let my = ConnectionConfig { driver: "mysql".into(), ..ConnectionConfig::default() };
     assert_eq!(my.tls().unwrap().mode, TlsMode::Prefer);

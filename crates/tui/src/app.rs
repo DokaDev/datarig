@@ -777,8 +777,12 @@ fn test_msg(i18n: &I18n, t: &ConnTest) -> Notice {
                 return Notice::new(Msg::TestSshDb { host, elapsed: ssh }, Level::Info);
             }
             (TestState::Ok(info), Some(ssh)) => {
-                let (version, latency, tls) =
-                    (info.server_version.clone(), info.latency, encryption_text(i18n, info.encryption));
+                // Plain through the tunnel: the tunnel encrypts it as far as the bastion.
+                let tls = match info.encryption {
+                    Encryption::Plain => i18n.label(Label::TlsPlainTunnel).to_string(),
+                    e => encryption_text(i18n, e),
+                };
+                let (version, latency) = (info.server_version.clone(), info.latency);
                 return Notice::new(Msg::TestOkSsh { host, elapsed: ssh, version, latency, tls }, Level::Success);
             }
             (TestState::Failed(e), Some(ssh)) => {

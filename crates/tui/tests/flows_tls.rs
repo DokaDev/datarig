@@ -75,7 +75,7 @@ fn a_plain_connection_to_another_machine_is_a_warning_and_never_silent() {
     connect(&mut h, "db-remote", Some(Encryption::Plain));
     let status = h.status(200, 40);
     assert!(status.contains("Connected to db-remote without encryption"), "{status}");
-    assert!(status.contains("turn TLS on in the profile, or use an SSH tunnel"), "{status}");
+    assert!(status.contains("set the profile's SSL mode to require or stricter, or use an SSH tunnel"), "{status}");
     h.ctrl('t');
     assert!(h.screen(160, 40).contains("· unencrypted"), "{}", h.screen(160, 40));
     // To this machine: plain is nothing to warn about, and the bar says nothing.

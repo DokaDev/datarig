@@ -1021,6 +1021,7 @@ dependencies = [
  "ring",
  "rustls",
  "rustls-platform-verifier",
+ "rustls-webpki",
  "tokio",
  "tokio-rustls",
 ]

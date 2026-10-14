@@ -260,6 +260,27 @@ pub fn secret_span(text: &str) -> Option<(usize, usize)> {
     Some((lead + scheme_end + colon + 1, lead + scheme_end + at))
 }
 
+/// Whether `text` is written as a URL (`postgres://`, `postgresql://`, `mysql://`,
+/// `mariadb://`), whether or not it is one [`parse`] reads.
+pub fn is_url(text: &str) -> bool {
+    let t = text.trim();
+    ["postgres://", "postgresql://", "mysql://", "mariadb://"].iter().any(|p| strip_prefix_ci(t, p).is_some())
+}
+
+/// The query parameters of a URL, decoded, also of one [`parse`] refuses (several hosts, as
+/// libpq and tokio-postgres take them); `None` when they cannot be decoded.
+pub fn url_params(text: &str) -> Option<Vec<(String, String)>> {
+    let Some((_, query)) = text.trim().split_once('?') else { return Some(Vec::new()) };
+    query
+        .split('&')
+        .filter(|p| !p.is_empty())
+        .map(|pair| {
+            let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+            Some((decode(k).ok()?, decode(v).ok()?))
+        })
+        .collect()
+}
+
 /// One `key = value` of a PostgreSQL `key=value` connection string ([`conninfo`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConninfoPair {

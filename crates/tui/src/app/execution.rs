@@ -1724,6 +1724,7 @@ impl App {
         };
         let msg: Msg = match p {
             TlsProblem::UnknownMode(mode) => Msg::TlsUnknownMode { mode: mode.clone() },
+            TlsProblem::DsnUnreadable => Label::TlsDsnUnreadable.into(),
             TlsProblem::NeedsCaFile => Label::TlsNeedsCa.into(),
             TlsProblem::CertWithoutKey => Label::TlsCertWithoutKey.into(),
             TlsProblem::KeyWithoutCert => Label::TlsKeyWithoutCert.into(),
@@ -1750,6 +1751,8 @@ impl App {
             TlsProblem::Unsupported => Label::TlsUnsupported.into(),
             TlsProblem::Untrusted => Label::TlsUntrusted.into(),
             TlsProblem::NameMismatch { host } => Msg::TlsNameMismatch { host: host.clone() },
+            TlsProblem::HostNotCheckable { host } => Msg::TlsHostNotCheckable { host: host.clone() },
+            TlsProblem::NotForServer => Label::TlsNotForServer.into(),
             TlsProblem::Expired => Label::TlsExpired.into(),
             TlsProblem::NotYetValid => Label::TlsNotYetValid.into(),
             TlsProblem::Revoked => Label::TlsRevoked.into(),

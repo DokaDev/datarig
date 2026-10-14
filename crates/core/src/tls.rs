@@ -121,20 +121,30 @@ impl TlsSettings {
 
     /// The settings of a profile of `scheme` whose mode is written `mode` (empty: none, see
     /// [`TlsMode::default_for`]) with these files (empty: none). As libpq does, `require` with
-    /// a CA file checks the chain (`verify-ca`). `verify-ca` needs a CA file (there is nothing
-    /// else a chain without a name could be checked against). A client certificate needs its
-    /// key and the other way round. Paths must be absolute or start with `~/`.
+    /// a CA file checks the chain (`verify-ca`), and the CA file `system` (libpq 16) means the
+    /// system's trusted certificates and checks the name too (`verify-full`). `verify-ca` needs
+    /// a CA file (there is nothing else a chain without a name could be checked against). A
+    /// client certificate needs its key and the other way round. Paths must be absolute or start
+    /// with `~/`. With TLS off (`disable`) the files are not used, nor checked.
     ///
-    /// For MySQL, a PostgreSQL spelling (`prefer`, `disable`, …) counts as no mode: the
-    /// profile form wrote one into MySQL profiles before MySQL had TLS, and the MySQL driver
-    /// never read it.
+    /// For MySQL, `prefer` and `disable` count as no mode: the profile form wrote them into MySQL
+    /// profiles before MySQL had TLS, and the MySQL driver never read them. The other libpq
+    /// spellings are read as the MySQL mode they mean, never as a weaker one.
     pub fn new(scheme: Scheme, mode: &str, files: [Option<&str>; 3], pinned_key: bool) -> Result<Self, TlsProblem> {
-        let mode = mode.trim();
-        let legacy = scheme == Scheme::MySql && TlsMode::parse(Scheme::Postgres, mode).is_some();
-        let mut mode = match mode.is_empty() || legacy {
-            true => TlsMode::default_for(scheme, pinned_key),
-            false => TlsMode::parse(scheme, mode).ok_or_else(|| TlsProblem::UnknownMode(mode.to_string()))?,
+        let text = mode.trim();
+        let mut mode = match TlsMode::parse(scheme, text) {
+            _ if text.is_empty() => TlsMode::default_for(scheme, pinned_key),
+            Some(m) => m,
+            None if scheme == Scheme::MySql => match TlsMode::parse(Scheme::Postgres, text) {
+                Some(TlsMode::Disable | TlsMode::Prefer) => TlsMode::default_for(scheme, pinned_key),
+                Some(m) => m,
+                None => return Err(TlsProblem::UnknownMode(text.to_string())),
+            },
+            None => return Err(TlsProblem::UnknownMode(text.to_string())),
         };
+        if mode == TlsMode::Disable {
+            return Ok(Self::plain());
+        }
         let file = |f: TlsFile, p: Option<&str>| -> Result<Option<String>, TlsProblem> {
             let Some(p) = p.map(str::trim).filter(|p| !p.is_empty()) else { return Ok(None) };
             match p.starts_with("~/") || std::path::Path::new(p).has_root() {
@@ -143,10 +153,12 @@ impl TlsSettings {
             }
         };
         let [ca, cert, key] = files;
+        let system = ca.map(str::trim) == Some(SYSTEM_CA);
+        let ca = ca.filter(|_| !system);
         let (ca_file, cert_file, key_file) =
             (file(TlsFile::Ca, ca)?, file(TlsFile::Cert, cert)?, file(TlsFile::Key, key)?);
-        if mode == TlsMode::Disable {
-            return Ok(Self { mode, ca_file, cert_file, key_file });
+        if system {
+            mode = TlsMode::VerifyFull;
         }
         if mode == TlsMode::Require && ca_file.is_some() {
             mode = TlsMode::VerifyCa;
@@ -162,6 +174,9 @@ impl TlsSettings {
         Ok(Self { mode, ca_file, cert_file, key_file })
     }
 }
+
+/// The CA file that names the system's trusted certificates (libpq's `sslrootcert=system`).
+pub const SYSTEM_CA: &str = "system";
 
 /// Why a file of the TLS settings cannot be used.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -184,6 +199,9 @@ pub enum FileProblem {
 pub enum TlsProblem {
     /// The profile's mode is not one its driver knows (as written).
     UnknownMode(String),
+    /// The profile is kept as a DSN that cannot be read for its TLS settings (neither a URL nor
+    /// a `key=value` string).
+    DsnUnreadable,
     /// `verify-ca` / `VERIFY_CA` without a CA file.
     NeedsCaFile,
     /// A client certificate without its key.
@@ -201,6 +219,12 @@ pub enum TlsProblem {
     Untrusted,
     /// The server's certificate is valid, and not for this host (the name checked).
     NameMismatch { host: String },
+    /// The profile's host is neither a host name nor an IP address a certificate could name, so
+    /// the server's certificate cannot be checked against it (as written).
+    HostNotCheckable { host: String },
+    /// The server's certificate is not meant for a server (its extended key usage says another
+    /// purpose).
+    NotForServer,
     /// The server's certificate (or one of its chain) has expired.
     Expired,
     /// The server's certificate (or one of its chain) is not valid yet.

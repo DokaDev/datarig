@@ -437,12 +437,12 @@ impl ConnectionConfig {
         let mut mode = self.sslmode.clone();
         let mut files = [self.sslrootcert.clone(), self.sslcert.clone(), self.sslkey.clone()];
         if let (dsn::Scheme::Postgres, Some(text)) = (scheme, &self.dsn) {
-            let params = match dsn::parse(text) {
-                Ok(d) => d.params,
-                Err(_) => {
-                    dsn::conninfo(text).map(|c| c.into_iter().map(|p| (p.key, p.value)).collect()).unwrap_or_default()
-                }
+            // A URL's parameters, also of one with several hosts; a `key=value` string's pairs.
+            let params = match dsn::is_url(text) {
+                true => dsn::parse(text).map(|d| d.params).ok().or_else(|| dsn::url_params(text)),
+                false => dsn::conninfo(text).map(|c| c.into_iter().map(|p| (p.key, p.value)).collect()),
             };
+            let params = params.ok_or(TlsProblem::DsnUnreadable)?;
             for (k, v) in params {
                 match k.as_str() {
                     "sslmode" => mode = v,
@@ -464,14 +464,25 @@ impl ConnectionConfig {
         if self.tunnel.is_some() || self.inline_ssh().is_some() {
             return false;
         }
-        // The driver's host: the URL's (none: `localhost`) when the profile keeps one.
-        let host = match self.dsn.as_deref().map(dsn::parse) {
-            Some(Ok(d)) if d.host.is_empty() => "localhost".to_string(),
-            Some(Ok(d)) => d.host,
-            Some(Err(_)) => return true,
-            None => self.host.clone(),
+        // The driver's hosts: a URL's (none: `localhost`), a `key=value` string's `host` and
+        // `hostaddr` (none: the server's socket on this machine), else the profile's.
+        let hosts = match self.dsn.as_deref() {
+            Some(text) if dsn::is_url(text) => match dsn::parse(text) {
+                Ok(d) if d.host.is_empty() => vec!["localhost".to_string()],
+                Ok(d) => vec![d.host],
+                Err(_) => return true,
+            },
+            Some(text) => match dsn::conninfo(text) {
+                Some(pairs) => pairs
+                    .into_iter()
+                    .filter(|p| p.key == "host" || p.key == "hostaddr")
+                    .flat_map(|p| p.value.split(',').map(str::to_string).collect::<Vec<_>>())
+                    .collect(),
+                None => return true,
+            },
+            None => vec![self.host.clone()],
         };
-        !is_loopback(&host)
+        hosts.iter().any(|h| !is_local(h.trim()))
     }
 
     /// Whether the profile's connection is sure to go through the network unencrypted:
@@ -480,6 +491,13 @@ impl ConnectionConfig {
     pub fn unencrypted(&self) -> bool {
         self.exposed() && self.tls().is_ok_and(|t| t.mode == TlsMode::Disable)
     }
+}
+
+/// Whether a connection to `host` stays on this machine: a loopback host ([`is_loopback`]), a
+/// PostgreSQL socket directory (`/run/postgresql`) or an abstract socket (`@name`), or no host
+/// at all (the server's socket).
+fn is_local(host: &str) -> bool {
+    host.is_empty() || host.starts_with('/') || host.starts_with('@') || is_loopback(host)
 }
 
 /// Whether `host` names this machine: `localhost` or a loopback address (`127.0.0.0/8`,

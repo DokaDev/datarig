@@ -370,3 +370,36 @@ fn only_a_storing_source_takes_a_typed_tunnel_secret() {
     assert_eq!(f.ssh_source, SourceKind::Prompt);
     assert_eq!(f.ssh_typed_secret(), None);
 }
+
+/// A profile without a TLS mode shows the mode it connects with, which follows the server key
+/// file (a MySQL profile that pins one stays unencrypted), and keeps no mode when saved; a mode
+/// picked is kept as picked. A MySQL profile with a stricter libpq spelling shows, and saves, the
+/// MySQL mode it means.
+#[test]
+fn a_profile_without_a_tls_mode_shows_and_keeps_the_one_it_connects_with() {
+    use datarig_core::tls::TlsMode;
+    let my = ConnectionConfig { driver: "mysql".into(), port: 3306, ..ConnectionConfig::default() };
+    let mut f = ProfileForm::from_profile(&my, String::new(), Some(0));
+    assert_eq!(f.tls_mode(), TlsMode::Prefer);
+    focus(&mut f, Field::ServerKey);
+    typ(&mut f, "/keys/db.pem");
+    assert_eq!(f.tls_mode(), TlsMode::Disable, "a pinned key keeps its unencrypted login");
+    assert_eq!(f.to_profile().sslmode, "", "still no mode");
+    clear(&mut f);
+    assert_eq!(f.tls_mode(), TlsMode::Prefer);
+    f.pick(Field::SslMode, TlsMode::Require.index());
+    focus(&mut f, Field::ServerKey);
+    typ(&mut f, "/keys/db.pem");
+    assert_eq!((f.tls_mode(), f.to_profile().sslmode.as_str()), (TlsMode::Require, "REQUIRED"));
+    for (written, shown, saved) in
+        [("verify-full", TlsMode::VerifyFull, "VERIFY_IDENTITY"), ("require", TlsMode::Require, "REQUIRED")]
+    {
+        let c = ConnectionConfig { sslmode: written.into(), ..my.clone() };
+        let f = ProfileForm::from_profile(&c, String::new(), Some(0));
+        assert_eq!((f.tls_mode(), f.to_profile().sslmode.as_str()), (shown, saved), "{written}");
+    }
+    // The legacy `prefer` a MySQL profile carries is no mode: saved as none.
+    let legacy = ConnectionConfig { sslmode: "prefer".into(), ..my.clone() };
+    let f = ProfileForm::from_profile(&legacy, String::new(), Some(0));
+    assert_eq!((f.tls_mode(), f.to_profile().sslmode.as_str()), (TlsMode::Prefer, ""));
+}

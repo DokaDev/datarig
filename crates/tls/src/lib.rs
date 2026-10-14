@@ -28,6 +28,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 pub use tokio_rustls::client::TlsStream;
 
 mod binding;
+mod der;
 pub use binding::server_end_point;
 
 /// The handshake of one connection, ready: the client's configuration and the name the server's
@@ -56,18 +57,26 @@ impl Connector {
         }
         let host = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')).unwrap_or(host).to_string();
         let provider = provider();
-        let roots = settings.ca_file.as_deref().map(ca_roots).transpose()?;
+        // The CA file is read only where it is used: the modes that check the chain.
+        let roots = match settings.mode.verifies() {
+            true => settings.ca_file.as_deref().map(ca_roots).transpose()?,
+            false => None,
+        };
         let verifier: Arc<dyn ServerCertVerifier> = match (settings.mode, roots) {
             (TlsMode::Prefer | TlsMode::Require, _) => Arc::new(Unverified(provider.clone())),
-            (TlsMode::VerifyCa, Some(roots)) => Arc::new(ChainOnly(webpki(roots, &provider)?)),
-            (TlsMode::VerifyFull, Some(roots)) => webpki(roots, &provider)?,
+            (TlsMode::VerifyCa, Some((roots, anchors))) => {
+                Arc::new(Anchored { inner: Arc::new(ChainOnly(webpki(roots, &provider)?)), anchors, name: false })
+            }
+            (TlsMode::VerifyFull, Some((roots, anchors))) => {
+                Arc::new(Anchored { inner: webpki(roots, &provider)?, anchors, name: true })
+            }
             (TlsMode::VerifyFull, None) => system_verifier(&provider)?,
             (TlsMode::VerifyCa, None) => return Err(TlsProblem::NeedsCaFile),
             (TlsMode::Disable, _) => return Ok(None),
         };
         let (name, sni) = server_name(&host);
         if name.is_none() && settings.mode == TlsMode::VerifyFull {
-            return Err(TlsProblem::NameMismatch { host });
+            return Err(TlsProblem::HostNotCheckable { host });
         }
         let builder = ClientConfig::builder_with_provider(provider)
             .with_safe_default_protocol_versions()
@@ -155,6 +164,7 @@ pub fn problem(e: &rustls::Error, host: &str) -> TlsProblem {
         InvalidCertificate(C::Expired | C::ExpiredContext { .. }) => TlsProblem::Expired,
         InvalidCertificate(C::NotValidYet | C::NotValidYetContext { .. }) => TlsProblem::NotYetValid,
         InvalidCertificate(C::Revoked) => TlsProblem::Revoked,
+        InvalidCertificate(C::InvalidPurpose | C::InvalidPurposeContext { .. }) => TlsProblem::NotForServer,
         // The platform's verifier says why in words only (an expired or otherwise untrusted
         // certificate, `Other`): not trusted, the words in the log.
         InvalidCertificate(C::UnknownIssuer | C::BadSignature | C::Other(_)) => TlsProblem::Untrusted,
@@ -221,16 +231,22 @@ fn certificates(file: TlsFile, path: &str) -> Result<Vec<CertificateDer<'static>
 }
 
 /// The CA file's certificates, as trust anchors.
-fn ca_roots(path: &str) -> Result<RootCertStore, TlsProblem> {
+/// The CA file's certificates as trust anchors, and the certificates themselves. One that cannot
+/// be a trust anchor (an old or odd certificate in a large bundle) is left out; a file none of
+/// whose certificates can be one is an error.
+fn ca_roots(path: &str) -> Result<(RootCertStore, Vec<CertificateDer<'static>>), TlsProblem> {
+    let certs = certificates(TlsFile::Ca, path)?;
     let mut roots = RootCertStore::empty();
-    for cert in certificates(TlsFile::Ca, path)? {
-        roots.add(cert).map_err(|e| TlsProblem::File {
+    let (added, ignored) = roots.add_parsable_certificates(certs.iter().cloned());
+    if added == 0 {
+        let why = format!("none of its {ignored} certificates can be a trust anchor");
+        return Err(TlsProblem::File {
             file: TlsFile::Ca,
             path: path.to_string(),
-            problem: FileProblem::Invalid(Fault::other(e.to_string())),
-        })?;
+            problem: FileProblem::Invalid(Fault::other(why)),
+        });
     }
-    Ok(roots)
+    Ok((roots, certs))
 }
 
 /// The client's private key (PEM: PKCS#8, PKCS#1 RSA or SEC1 EC). An encrypted one is refused:
@@ -307,6 +323,72 @@ impl ServerCertVerifier for Unverified {
 
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
         self.0.signature_verification_algorithms.supported_schemes()
+    }
+}
+
+/// `verify-ca` and `verify-full` against a CA file whose certificates include the server's own (a
+/// self-signed server certificate copied to the client, as PostgreSQL's documentation sets one
+/// up, often marked as a CA): trusted as it is, as libpq trusts it, once its dates and (with
+/// `name`) its name are checked; anything else as `inner` checks it. The handshake's signatures
+/// are always `inner`'s to check.
+#[derive(Debug)]
+struct Anchored {
+    inner: Arc<dyn ServerCertVerifier>,
+    anchors: Vec<CertificateDer<'static>>,
+    name: bool,
+}
+
+impl ServerCertVerifier for Anchored {
+    fn verify_server_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        intermediates: &[CertificateDer<'_>],
+        server_name: &ServerName<'_>,
+        ocsp_response: &[u8],
+        now: UnixTime,
+    ) -> Result<ServerCertVerified, rustls::Error> {
+        let verdict = self.inner.verify_server_cert(end_entity, intermediates, server_name, ocsp_response, now);
+        if verdict.is_ok() || !self.anchors.iter().any(|a| a.as_ref() == end_entity.as_ref()) {
+            return verdict;
+        }
+        let (not_before, not_after) =
+            der::validity(end_entity).ok_or(rustls::Error::InvalidCertificate(CertificateError::BadEncoding))?;
+        let now = now.as_secs() as i64;
+        if now < not_before {
+            return Err(rustls::Error::InvalidCertificate(CertificateError::NotValidYet));
+        }
+        if now > not_after {
+            return Err(rustls::Error::InvalidCertificate(CertificateError::Expired));
+        }
+        if self.name {
+            let cert = webpki::EndEntityCert::try_from(end_entity)
+                .map_err(|_| rustls::Error::InvalidCertificate(CertificateError::BadEncoding))?;
+            cert.verify_is_valid_for_subject_name(server_name)
+                .map_err(|_| rustls::Error::InvalidCertificate(CertificateError::NotValidForName))?;
+        }
+        Ok(ServerCertVerified::assertion())
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        self.inner.verify_tls12_signature(message, cert, dss)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        self.inner.verify_tls13_signature(message, cert, dss)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.inner.supported_verify_schemes()
     }
 }
 

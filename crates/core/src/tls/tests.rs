@@ -32,9 +32,14 @@ fn a_profile_without_a_mode_connects_as_before() {
     // MySQL had no TLS; its default is now the mysql client's.
     assert_eq!(mode(MY, ""), Ok(TlsMode::Prefer));
     // The PostgreSQL value the form wrote into MySQL profiles was never read: no mode.
-    for legacy in ["disable", "prefer", "require", "verify-ca", "verify-full"] {
+    for legacy in ["disable", "prefer"] {
         assert_eq!(mode(MY, legacy), Ok(TlsMode::Prefer), "{legacy}");
     }
+    // A stricter libpq spelling (written by hand: the keys are libpq's) means its MySQL mode,
+    // never a weaker one.
+    assert_eq!(mode(MY, "require"), Ok(TlsMode::Require));
+    assert_eq!(mode(MY, "verify-full"), Ok(TlsMode::VerifyFull));
+    assert_eq!(mode(MY, "verify-ca"), Err(TlsProblem::NeedsCaFile));
     // A MySQL profile that pins the server's key keeps its unencrypted, key-protected login.
     let pinned = |m: &str| TlsSettings::new(MY, m, [None, None, None], true).map(|s| s.mode);
     assert_eq!(pinned(""), Ok(TlsMode::Disable));
@@ -77,6 +82,21 @@ fn a_client_certificate_and_its_key_go_together() {
     // Blank paths are no path.
     let s = TlsSettings::new(PG, "require", [Some("  "), Some(""), None], false).unwrap();
     assert_eq!((s.ca_file, s.cert_file), (None, None));
+}
+
+#[test]
+fn the_system_ca_file_means_the_systems_certificates_and_the_name_checked() {
+    for m in ["prefer", "require", "verify-ca", "verify-full"] {
+        let s = TlsSettings::new(PG, m, [Some("system"), None, None], false).unwrap();
+        assert_eq!((s.mode, s.ca_file), (TlsMode::VerifyFull, None), "{m}");
+    }
+    assert_eq!(TlsSettings::new(PG, "disable", [Some("system"), None, None], false), Ok(TlsSettings::plain()));
+}
+
+#[test]
+fn with_tls_off_the_files_are_not_used_nor_checked() {
+    let s = TlsSettings::new(PG, "disable", [Some("ca.pem"), Some("c.pem"), None], false);
+    assert_eq!(s, Ok(TlsSettings::plain()));
 }
 
 #[test]

@@ -273,7 +273,7 @@ fn files_that_cannot_be_used_are_errors_naming_the_file() {
     // A name that names nothing a certificate could is refused where names are checked.
     let ca_file = dir.file("ca.pem", &ca.0.pem());
     let bad = Connector::new(&settings("verify-full", Some(&ca_file), None), "not a host").err();
-    assert_eq!(bad, Some(TlsProblem::NameMismatch { host: "not a host".into() }));
+    assert_eq!(bad, Some(TlsProblem::HostNotCheckable { host: "not a host".into() }));
     assert!(Connector::new(&settings("verify-ca", Some(&ca_file), None), "not a host").is_ok());
 }
 
@@ -294,4 +294,86 @@ fn channel_binding_hashes_the_certificate_with_its_signatures_hash() {
     let cert = CertificateParams::new(vec!["db.test".to_string()]).unwrap().self_signed(&key).unwrap();
     assert_eq!(binding::end_point(cert.der()), None);
     assert_eq!(binding::end_point(b"\x30\x03\x02\x01\x00"), None);
+}
+
+/// A self-signed server certificate copied to the client as its CA file (PostgreSQL's own
+/// documentation sets TLS up so; OpenSSL marks such a certificate as a CA): trusted as libpq
+/// trusts it, its dates and name still checked.
+#[tokio::test]
+async fn a_self_signed_server_certificate_can_be_its_own_ca_file() {
+    let dir = Dir::new("selfsigned");
+    let self_signed = |edit: fn(&mut CertificateParams)| {
+        let mut params = CertificateParams::new(vec!["db.test".to_string()]).unwrap();
+        params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        edit(&mut params);
+        let key = KeyPair::generate().unwrap();
+        (params.self_signed(&key).unwrap().pem(), key.serialize_pem())
+    };
+    let (cert, key) = self_signed(|_| {});
+    let server = Server::new((cert.clone(), key));
+    let ca = dir.file("root.crt", &cert);
+    let full = settings("verify-full", Some(&ca), None);
+    assert_eq!(talk(&server, &full, "db.test").await, Ok(Encryption::Tls { version: TLS13, verified: Verified::Full }));
+    assert_eq!(talk(&server, &full, "other.test").await, Err(TlsProblem::NameMismatch { host: "other.test".into() }));
+    let chain = settings("verify-ca", Some(&ca), None);
+    assert_eq!(
+        talk(&server, &chain, "other.test").await,
+        Ok(Encryption::Tls { version: TLS13, verified: Verified::Chain })
+    );
+    // `require` with that file is `verify-ca`, as in libpq.
+    assert!(talk(&server, &settings("require", Some(&ca), None), "db.test").await.is_ok());
+    // Its dates still count.
+    let (cert, key) =
+        self_signed(|p| (p.not_before, p.not_after) = (date_time_ymd(2000, 1, 1), date_time_ymd(2001, 1, 1)));
+    let expired = Server::new((cert.clone(), key));
+    let ca = dir.file("expired.crt", &cert);
+    assert_eq!(talk(&expired, &settings("verify-ca", Some(&ca), None), "db.test").await, Err(TlsProblem::Expired));
+    let (cert, key) =
+        self_signed(|p| (p.not_before, p.not_after) = (date_time_ymd(2090, 1, 1), date_time_ymd(2091, 1, 1)));
+    let early = Server::new((cert.clone(), key));
+    let ca = dir.file("early.crt", &cert);
+    assert_eq!(talk(&early, &settings("verify-full", Some(&ca), None), "db.test").await, Err(TlsProblem::NotYetValid));
+}
+
+#[tokio::test]
+async fn a_certificate_for_another_purpose_is_told_as_such() {
+    let dir = Dir::new("purpose");
+    let ca = Ca::new("datarig test CA");
+    let ca_file = dir.file("ca.pem", &ca.0.pem());
+    let server = Server::new(ca.leaf(&["db.test"], |p| {
+        p.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ClientAuth];
+    }));
+    assert_eq!(
+        talk(&server, &settings("verify-full", Some(&ca_file), None), "db.test").await,
+        Err(TlsProblem::NotForServer)
+    );
+}
+
+#[tokio::test]
+async fn a_ca_bundle_with_an_unusable_certificate_still_works() {
+    let dir = Dir::new("bundle");
+    let ca = Ca::new("datarig test CA");
+    let server = Server::new(ca.leaf(&["db.test"], |_| {}));
+    // A certificate webpki cannot take as a trust anchor (not DER), then the real one.
+    let junk = "-----BEGIN CERTIFICATE-----\nAAECAwQF\n-----END CERTIFICATE-----\n";
+    let bundle = dir.file("bundle.pem", &format!("{junk}{}", ca.0.pem()));
+    assert!(talk(&server, &settings("verify-full", Some(&bundle), None), "db.test").await.is_ok());
+    // Nothing usable: an error naming the file.
+    let only_junk = dir.file("junk.pem", junk);
+    let err = Connector::new(&settings("verify-full", Some(&only_junk), None), "db.test").expect_err("unusable");
+    assert!(matches!(err, TlsProblem::File { file: TlsFile::Ca, problem: FileProblem::Invalid(_), .. }), "{err:?}");
+    // A CA file is read only where it is used: `prefer` and `require` without one never open it.
+    let missing = dir.0.join("missing.pem").to_string_lossy().into_owned();
+    assert!(Connector::new(&settings("prefer", Some(&missing), None), "db.test").is_ok());
+}
+
+#[test]
+fn certificate_dates_are_read_in_both_time_forms() {
+    let ca = Ca::new("x");
+    // rcgen writes dates before 2050 as UTCTime, later ones as GeneralizedTime.
+    let (pem, _) = ca
+        .leaf(&["db.test"], |p| (p.not_before, p.not_after) = (date_time_ymd(2001, 2, 3), date_time_ymd(2091, 12, 31)));
+    let der = CertificateDer::from_pem_slice(pem.as_bytes()).unwrap();
+    assert_eq!(der::validity(&der), Some((981_158_400, 3_849_897_600)));
+    assert_eq!(der::validity(b"\x30\x00"), None);
 }

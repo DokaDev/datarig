@@ -505,6 +505,9 @@ pub struct ProfileForm {
     /// The profile's mode as written when its driver does not know it: shown as an error until
     /// a mode is picked (saving would replace it).
     pub unknown_sslmode: Option<String>,
+    /// A mode was picked in the form (or its URL). Until then a profile that had none shows the
+    /// mode it connects with, which follows the driver and the server key file, and keeps none.
+    sslmode_picked: bool,
     /// The TLS files (empty: none): the CA file, the client certificate and its key.
     pub tls_ca: TextInput,
     pub tls_cert: TextInput,
@@ -683,6 +686,7 @@ impl ProfileForm {
             dsn: TextInput::new(""),
             sslmode: form_mode(c).0,
             unknown_sslmode: form_mode(c).1,
+            sslmode_picked: false,
             tls_ca: TextInput::new(c.sslrootcert.as_deref().unwrap_or("")),
             tls_cert: TextInput::new(c.sslcert.as_deref().unwrap_or("")),
             tls_key: TextInput::new(c.sslkey.as_deref().unwrap_or("")),
@@ -1037,12 +1041,28 @@ impl ProfileForm {
     /// The TLS mode as the profile writes it: none when it had none and the mode it connects
     /// with without one is still picked (the file stays as it was), else the driver's name.
     fn sslmode_text(&self) -> String {
-        let scheme = self.scheme();
-        let pinned = scheme == Scheme::MySql && !self.server_key.text().trim().is_empty();
-        let unset = self.base.sslmode.trim().is_empty() && Scheme::of_driver(&self.base.driver) == scheme;
-        match unset && self.tls_mode() == TlsMode::default_for(scheme, pinned) {
+        match self.sslmode_unset() {
             true => String::new(),
-            false => self.tls_mode().name(scheme).to_string(),
+            false => self.tls_mode().name(self.scheme()).to_string(),
+        }
+    }
+
+    /// The profile had no mode (for MySQL: a PostgreSQL value it never read), and none was
+    /// picked since.
+    fn sslmode_unset(&self) -> bool {
+        let raw = self.base.sslmode.trim();
+        let legacy = Scheme::of_driver(&self.base.driver) == Scheme::MySql
+            && matches!(TlsMode::parse(Scheme::Postgres, raw), Some(TlsMode::Disable | TlsMode::Prefer));
+        !self.sslmode_picked && self.unknown_sslmode.is_none() && (raw.is_empty() || legacy)
+    }
+
+    /// While no mode is set, show the one the profile connects with: it follows the driver and
+    /// (MySQL) the server key file.
+    fn follow_default_mode(&mut self) {
+        if self.sslmode_unset() {
+            let scheme = self.scheme();
+            let pinned = scheme == Scheme::MySql && !self.server_key.text().trim().is_empty();
+            self.sslmode = TlsMode::default_for(scheme, pinned).index();
         }
     }
 
@@ -1069,6 +1089,7 @@ impl ProfileForm {
         if before != after && self.port_value() == Some(before.default_port()) {
             self.port.set(&after.default_port().to_string());
         }
+        self.follow_default_mode();
         self.sync_dsn();
     }
 
@@ -1157,6 +1178,7 @@ impl ProfileForm {
         if let Some(i) = sslmode {
             self.sslmode = i;
             self.unknown_sslmode = None;
+            self.sslmode_picked = true;
         }
         // The URL names every TLS file the profile has: one it leaves out is none.
         for (input, value) in [&mut self.tls_ca, &mut self.tls_cert, &mut self.tls_key].into_iter().zip(files) {
@@ -1371,6 +1393,7 @@ impl ProfileForm {
             Field::SslMode if i < TlsMode::ALL.len() => {
                 self.sslmode = i;
                 self.unknown_sslmode = None;
+                self.sslmode_picked = true;
                 self.sync_dsn();
             }
             Field::Source => {
@@ -1499,6 +1522,7 @@ impl ProfileForm {
             Field::Dsn => self.sync_fields(),
             Field::Host | Field::Port | Field::User | Field::Database => self.sync_dsn(),
             Field::TlsCa | Field::TlsCert | Field::TlsKey => self.sync_dsn(),
+            Field::ServerKey => self.follow_default_mode(),
             Field::SshKeyFile => self.ssh_key_note = None,
             _ => {}
         }
@@ -1513,6 +1537,7 @@ impl ProfileForm {
     fn cycle_sslmode(&mut self, d: isize) {
         self.sslmode = (self.sslmode as isize + d).rem_euclid(TlsMode::ALL.len() as isize) as usize;
         self.unknown_sslmode = None;
+        self.sslmode_picked = true;
         self.sync_dsn();
     }
 
@@ -1692,14 +1717,16 @@ impl ProfileForm {
         if self.unknown_sslmode.is_some() {
             out.push((Field::SslMode, FieldError::UnknownMode));
         }
-        let fields = [(Field::TlsCa, TlsFile::Ca), (Field::TlsCert, TlsFile::Cert), (Field::TlsKey, TlsFile::Key)];
-        for (field, file) in fields {
-            if relative(self.tls_input(file).text().trim()) {
-                out.push((field, FieldError::AbsolutePath));
-            }
-        }
+        // With TLS off the files are not used.
         if self.tls_mode() == TlsMode::Disable {
             return out;
+        }
+        let fields = [(Field::TlsCa, TlsFile::Ca), (Field::TlsCert, TlsFile::Cert), (Field::TlsKey, TlsFile::Key)];
+        for (field, file) in fields {
+            let text = self.tls_input(file).text().trim();
+            if relative(text) && !(file == TlsFile::Ca && text == datarig_core::tls::SYSTEM_CA) {
+                out.push((field, FieldError::AbsolutePath));
+            }
         }
         let (ca, cert, key) = (self.tls_file(TlsFile::Ca), self.tls_file(TlsFile::Cert), self.tls_file(TlsFile::Key));
         if self.tls_mode() == TlsMode::VerifyCa && ca.is_none() {
@@ -1832,16 +1859,23 @@ pub const PAGINGS: [PagingMode; 2] = [PagingMode::NoHold, PagingMode::Hold];
 
 /// The TLS mode a form shows for profile `c` ([`TlsMode::ALL`] index) and, when the profile's
 /// mode is one its driver does not know, that mode as written. A profile with no mode (or, for
-/// MySQL, a PostgreSQL spelling it never read) shows the mode it connects with.
+/// MySQL, the `prefer`/`disable` it never read) shows the mode it connects with; a MySQL profile
+/// with a stricter libpq spelling shows the MySQL mode it means (as `TlsSettings::new` reads it).
 fn form_mode(c: &ConnectionConfig) -> (usize, Option<String>) {
     let scheme = Scheme::of_driver(&c.driver);
     let raw = c.sslmode.trim();
     let pinned = c.server_public_key_file.as_deref().is_some_and(|k| !k.trim().is_empty());
     let default = TlsMode::default_for(scheme, pinned);
-    if raw.is_empty() || (scheme == Scheme::MySql && TlsMode::parse(Scheme::Postgres, raw).is_some()) {
-        return (default.index(), None);
-    }
-    match TlsMode::parse(scheme, raw) {
+    let mode = match TlsMode::parse(scheme, raw) {
+        _ if raw.is_empty() => Some(default),
+        Some(m) => Some(m),
+        None if scheme == Scheme::MySql => match TlsMode::parse(Scheme::Postgres, raw) {
+            Some(TlsMode::Disable | TlsMode::Prefer) => Some(default),
+            other => other,
+        },
+        None => None,
+    };
+    match mode {
         Some(m) => (m.index(), None),
         None => (default.index(), Some(raw.to_string())),
     }

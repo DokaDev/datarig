@@ -22,7 +22,7 @@ expression: backend
 "│         │ Statement cache   ‹ │                                                      │ode                  │         │"
 "│         │ Environment       No│ disable      not encrypted                           │                     │         │"
 "│         │ Color             ‹ │ prefer       encrypted if the server offers it       │                     │         │"
-"│         │ Icon              ‹ │ require      encrypted, certificate not checked      │                     │         │"
+"│         │ Icon              ‹ │ require      encrypted, certificate not checked (wi… │                     │         │"
 "│         │ Folder            ‹ │ verify-ca    encrypted, signed by the CA file (need… │                     │         │"
 "│         │                     │ verify-full  CA-signed, and the host name matches    │                     │         │"
 "│         │                     ╰───────────────── Enter pick · ↑↓ select · Esc cancel ╯                     │         │"

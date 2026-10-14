@@ -79,6 +79,8 @@ rustix = { version = "1.1", default-features = false, features = ["std", "proces
 # framework, Windows CryptoAPI, Linux rustls-native-certs): no bundled root list.
 rustls = { version = "0.23.45", default-features = false, features = ["std", "tls12", "ring"] }
 rustls-platform-verifier = "0.7.1"
+# A server certificate's names, for the one a CA file trusts as it is (crates/tls); rustls's own.
+webpki = { package = "rustls-webpki", version = "0.103", default-features = false, features = ["std"] }
 # rustls for tokio (the same features).
 tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12"] }
 # SSH tunnels: pure Rust with the `ring` backend

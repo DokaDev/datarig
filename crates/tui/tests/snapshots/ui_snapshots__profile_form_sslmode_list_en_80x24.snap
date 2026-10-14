@@ -14,7 +14,7 @@ expression: backend
 "│ │ Statemen│                                                      │ransact… │ │"
 "│ │ Environm│ disable      not encrypted                           │ rules   │ │"
 "│ │ Color   │ prefer       encrypted if the server offers it       │ list    │ │"
-"│ │ Icon    │ require      encrypted, certificate not checked      │         │ │"
+"│ │ Icon    │ require      encrypted, certificate not checked (wi… │         │ │"
 "│ │ Folder  │ verify-ca    encrypted, signed by the CA file (need… │         │t│"
 "│ │         │ verify-full  CA-signed, and the host name matches    │         │ │"
 "│ │         ╰───────────────── Enter pick · ↑↓ select · Esc cancel ╯         │ │"

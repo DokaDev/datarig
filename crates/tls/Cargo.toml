@@ -19,6 +19,7 @@ rustls.workspace = true
 rustls-platform-verifier.workspace = true
 tokio = { workspace = true, features = ["io-util"] }
 tokio-rustls.workspace = true
+webpki.workspace = true
 
 [dev-dependencies]
 rcgen.workspace = true
