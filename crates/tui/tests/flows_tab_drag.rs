@@ -614,6 +614,8 @@ fn a_key_that_opens_or_moves_a_tab_ends_the_drag() {
     h.draw(W, H);
     assert_eq!(texts(&h), ["b", "a", "c"], "the key moved the tab");
     assert_eq!(h.app.tab_drag_view(), None);
+    let now = h.clock.now();
+    assert!(h.app.next_tick(now).is_some_and(|t| t <= now + SLIDE_FRAME), "the drag ended with the key: a slide");
     slide_out(&mut h, W);
     assert_eq!(lifted(&mut h, W), None);
     drag(&mut h, x + 20, y);
