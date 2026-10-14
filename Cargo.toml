@@ -49,8 +49,8 @@ hmac = "0.13"
 insta = "1.48.0"
 keyring = "4.2.0"
 log = "0.4"
-# The MySQL driver's client (the vendored copy of `vendor/`, see [patch.crates-io]): no TLS yet,
-# no compression C library (pure Rust `flate2`, never negotiated), none of the value conversion
+# The MySQL driver's client (the vendored copy of `vendor/`, see [patch.crates-io]): none of its
+# TLS features (datarig does the handshake over the stream, crates/tls), no compression C library (pure Rust `flate2`, never negotiated), none of the value conversion
 # features (the driver reads every value as the text the server sends).
 mysql_async = { version = "0.37.1", default-features = false, features = ["minimal-rust"] }
 # PostgreSQL's own parser (libpg_query), for the safety classifier (sql::risk).

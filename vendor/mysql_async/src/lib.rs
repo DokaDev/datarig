@@ -472,6 +472,9 @@ pub use self::conn::Conn;
 /// datarig: what [`Conn::connect_with_stream`] takes.
 pub use self::io::CustomStream;
 
+/// datarig: TLS over such a stream ([`Conn::connect_with_stream_tls`]).
+pub use self::io::{StreamTls, UpgradeFuture};
+
 /// datarig: the check of a server public key a `caching_sha2_password` login makes.
 pub use self::server_key::server_public_key_ok;
 

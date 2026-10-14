@@ -122,6 +122,10 @@ struct ConnInner {
     active_since: Instant,
     /// Connection is already disconnected.
     pub(crate) disconnected: bool,
+    /// datarig: TLS over the caller's stream, until the handshake uses it.
+    datarig_tls: Option<crate::io::StreamTls>,
+    /// datarig: the server's handshake offers TLS (`CLIENT_SSL`).
+    datarig_server_ssl: bool,
     /// One-time connection-level infile handler.
     infile_handler:
         Option<Pin<Box<dyn Future<Output = crate::Result<InfileData>> + Send + Sync + 'static>>>,
@@ -173,6 +177,8 @@ impl ConnInner {
             auth_plugin: AuthPlugin::MysqlNativePassword,
             auth_switched: false,
             disconnected: false,
+            datarig_tls: None,
+            datarig_server_ssl: false,
             server_key: None,
             infile_handler: None,
             reset_upon_returning_to_a_pool: false,
@@ -466,6 +472,10 @@ impl Conn {
 
     /// Returns true if io stream is encrypted.
     fn is_secure(&self) -> bool {
+        // datarig: a stream the caller encrypted counts when the password may go over it.
+        if let Some(password_ok) = self.inner.stream.as_ref().and_then(|s| s.custom_tls()) {
+            return password_ok;
+        }
         #[cfg(any(feature = "native-tls-tls", feature = "rustls-tls"))]
         {
             self.inner
@@ -531,6 +541,8 @@ impl Conn {
         };
 
         self.inner.capabilities = handshake.capabilities() & self.inner.opts.get_capabilities();
+        // datarig
+        self.inner.datarig_server_ssl = handshake.capabilities().contains(CapabilityFlags::CLIENT_SSL);
         self.inner.version = handshake
             .maria_db_server_version_parsed()
             .inspect(|_| self.inner.is_mariadb = true)
@@ -558,6 +570,29 @@ impl Conn {
     }
 
     async fn switch_to_ssl_if_needed(&mut self) -> Result<()> {
+        // datarig: TLS over the caller's stream, when the caller asked for it.
+        if let Some(tls) = self.inner.datarig_tls.take() {
+            if !self.inner.datarig_server_ssl {
+                return match tls.required {
+                    true => Err(DriverError::NoClientSslFlagFromServer.into()),
+                    false => Ok(()),
+                };
+            }
+            self.inner.capabilities.insert(CapabilityFlags::CLIENT_SSL);
+            let collation = if self.inner.version >= (5, 5, 3) {
+                UTF8MB4_GENERAL_CI
+            } else {
+                UTF8_GENERAL_CI
+            };
+            let ssl_request = SslRequest::new(
+                self.inner.capabilities,
+                DEFAULT_MAX_ALLOWED_PACKET as u32,
+                collation as u8,
+            )
+            .with_mariadb_capabilities(self.inner.mariadb_capabilities);
+            self.write_struct(&ssl_request).await?;
+            return self.stream_mut()?.upgrade_custom(tls).await;
+        }
         if self
             .inner
             .opts
@@ -809,6 +844,10 @@ impl Conn {
                     let mut pass = crate::buffer_pool().get_with(pass.as_bytes());
                     pass.as_mut().push(0);
 
+                    // datarig: never the password over TLS to a server nobody checked.
+                    if self.inner.stream.as_ref().and_then(|s| s.custom_tls()) == Some(false) {
+                        return Err(DriverError::PasswordOverUnverifiedTls.into());
+                    }
                     if self.is_secure() || self.is_socket() {
                         self.write_packet(pass).await?;
                     } else {
@@ -1110,10 +1149,21 @@ impl Conn {
         opts: T,
         stream: Box<dyn crate::io::CustomStream>,
     ) -> crate::BoxFuture<'static, Conn> {
+        Conn::connect_with_stream_tls(opts, stream, None)
+    }
+
+    /// datarig: [`Conn::connect_with_stream`], encrypted with `tls` when it is given and the
+    /// server offers TLS ([`crate::StreamTls`]).
+    pub fn connect_with_stream_tls<T: Into<Opts>>(
+        opts: T,
+        stream: Box<dyn crate::io::CustomStream>,
+        tls: Option<crate::io::StreamTls>,
+    ) -> crate::BoxFuture<'static, Conn> {
         let opts = opts.into();
         async move {
             let mut conn = Conn::empty(opts);
             conn.inner.socket = None;
+            conn.inner.datarig_tls = tls;
             conn.inner.stream = Some(Stream::custom(stream));
             conn.open().await?;
             conn.run_init_commands().await?;

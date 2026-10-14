@@ -973,6 +973,7 @@ name = "datarig-driver-mysql"
 version = "0.22.0"
 dependencies = [
  "datarig-core",
+ "datarig-tls",
  "futures",
  "mysql_async",
  "serde",
