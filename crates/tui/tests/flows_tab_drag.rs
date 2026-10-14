@@ -1,7 +1,9 @@
 //! Moving tabs through the real `App` event path: a tab dragged by the mouse (raw press,
-//! drag and release events, a frame drawn after each as the event loop does), the keys and
-//! `:tabmove`. The tab bar's numbers are places and follow the new order; a console's own
-//! number does not; the order is written to the workspace state and comes back on restart.
+//! drag and release events, a frame drawn after each as the event loop does, the clock moved
+//! for the frames of a slide), the keys and `:tabmove`. The dragged tab is drawn where the
+//! pointer holds it, over its neighbours; a neighbour it went past the middle of slides into
+//! the gap; the bar's numbers are places and follow the order shown; a console's own number
+//! does not; the order is written to the workspace state and comes back on restart.
 
 mod common;
 
@@ -12,14 +14,31 @@ use datarig_core::paths::Paths;
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::secret::{MemoryStore, SecretStore};
 use datarig_tui::app::overlay::OverlayKind;
+use datarig_tui::app::tab_drag::{SLIDE, SLIDE_FRAME};
 use datarig_tui::app::{Focus, Startup};
-use datarig_tui::widgets::tabbar::{DROP, TabHit};
+use datarig_tui::widgets::tabbar::TabHit;
+use ratatui::buffer::Cell;
 use ratatui::crossterm::event::{KeyCode, MouseButton, MouseEventKind};
 use std::path::PathBuf;
 use std::sync::Arc;
+use unicode_width::UnicodeWidthStr;
 
 const W: u16 = 120;
 const H: u16 = 30;
+
+/// Connected, `n` console tabs with texts `0`, `1`, … (the first one active), drawn `w` wide.
+fn tabs_in(lang: Lang, n: usize, w: u16) -> Harness {
+    let mut h = Harness::connected(lang);
+    set_text(&mut h, "0");
+    for i in 1..n {
+        h.ctrl('t');
+        set_text(&mut h, &i.to_string());
+    }
+    h.keys(" 1");
+    assert_eq!(h.app.tabs.active_index(), 0);
+    h.draw(w, H);
+    h
+}
 
 /// Connected, three console tabs with texts `a`, `b`, `c` (the first one active), drawn.
 fn three_tabs() -> Harness {
@@ -50,7 +69,8 @@ fn console_nos(h: &Harness) -> Vec<u32> {
     h.app.tabs.iter().map(|t| t.doc.console_no).collect()
 }
 
-/// The columns `[x0, x1)` tab `i` was drawn on (body and `×`).
+/// The columns `[x0, x1)` tab `i` was drawn on (body and `×`; what another tab covers is not
+/// its).
 fn span(h: &Harness, i: usize) -> (u16, u16) {
     let of = |t: &(u16, u16, TabHit)| matches!(t.2, TabHit::Tab(j) | TabHit::Close(j) if j == i);
     let hits = h.app.tab_hits();
@@ -79,61 +99,170 @@ fn release(h: &mut Harness, x: u16, y: u16) {
     h.draw(W, H);
 }
 
+/// The frames of a slide, `w` wide, until it is over.
+fn slide_out(h: &mut Harness, w: u16) {
+    for _ in 0..SLIDE.as_millis() / SLIDE_FRAME.as_millis() {
+        h.advance(SLIDE_FRAME);
+        h.draw(w, H);
+    }
+}
+
 /// The tab bar's line as drawn now.
 fn bar(h: &mut Harness, w: u16) -> String {
     h.screen(w, H).lines().nth(usize::from(bar_y(h))).unwrap().to_string()
 }
 
+/// The columns `[x0, x1)` drawn lifted (the theme's selection background; the second column
+/// of a wide character is the blank the terminal draws it over), checked to be one stretch.
+fn lifted(h: &mut Harness, w: u16) -> Option<(u16, u16)> {
+    let t = h.draw(w, H);
+    let buf = t.backend().buffer();
+    let y = bar_y(h);
+    let sel = datarig_tui::theme::DARK.selection.bg;
+    let xs: Vec<u16> = (0..w).filter(|x| buf[(*x, y)].bg == sel.unwrap()).collect();
+    let (&x0, &last) = (xs.first()?, xs.last()?);
+    let x1 = last + buf[(last, y)].symbol().width() as u16;
+    for x in x0..x1 {
+        let after_wide = x > 0 && buf[(x - 1, y)].symbol().width() == 2;
+        assert!(xs.contains(&x) || after_wide, "one stretch {x0}..{x1}, not {x}: {}", bar(h, w));
+    }
+    Some((x0, x1))
+}
+
+/// The column right of the last tab drawn.
+fn tabs_end(h: &Harness) -> u16 {
+    h.app.tab_hits().iter().filter(|t| !matches!(t.2, TabHit::More(_))).map(|t| t.1).max().unwrap()
+}
+
+/// No wide character of the bar is drawn by halves: each is followed by the blank the terminal
+/// draws it over, never by another tab's column.
+fn whole(h: &mut Harness, w: u16) {
+    let t = h.draw(w, H);
+    let buf = t.backend().buffer();
+    let y = bar_y(h);
+    for x in 0..w {
+        if buf[(x, y)].symbol().width() == 2 {
+            assert!(x + 1 < w && buf[(x + 1, y)] == Cell::default(), "half a character at {x}: {}", bar(h, w));
+        }
+    }
+}
+
 #[test]
-fn a_dragged_tab_is_lifted_shows_where_it_lands_and_lands_there() {
+fn a_dragged_tab_follows_the_pointer_over_its_neighbour() {
     let mut h = three_tabs();
     let focus = h.app.focus;
-    assert_eq!(console_nos(&h), [1, 2, 3]);
     let y = bar_y(&h);
-    let (a0, _) = span(&h, 0);
-    let (c0, c1) = span(&h, 2);
+    let (a0, a1) = span(&h, 0);
+    let (b0, b1) = span(&h, 1);
+    assert_eq!(b0, a1);
     press(&mut h, a0 + 3, y);
     assert_eq!(h.app.tab_drag_view(), None, "a press alone lifts nothing");
-    // Sideways past the threshold: lifted, drawn in the selection style.
+    assert_eq!(lifted(&mut h, W), None);
+    // Sideways past the threshold: lifted, held where it was pressed.
     drag(&mut h, a0 + 5, y);
-    assert_eq!(h.app.tab_drag_view(), Some((0, Some(0))), "still over its own left half");
-    let t = h.draw(W, H);
-    let sel = datarig_tui::theme::DARK.selection.bg.unwrap();
-    assert_eq!(t.backend().buffer()[(a0 + 1, y)].bg, sel, "the dragged tab is lifted");
-    assert!(!bar(&mut h, W).contains(DROP), "no marker where it would stay: {}", bar(&mut h, W));
-    // Over the right half of the last tab: after it, the marker on its last blank.
-    drag(&mut h, c1 - 2, y);
-    assert_eq!(h.app.tab_drag_view(), Some((0, Some(3))));
-    let t = h.draw(W, H);
-    assert_eq!(t.backend().buffer()[(c1 - 1, y)].symbol(), DROP, "{}", bar(&mut h, W));
-    assert_eq!(t.backend().buffer()[(c1 - 1, y)].fg, datarig_tui::theme::DARK.accent);
+    assert_eq!(h.app.tab_drag_view(), Some((0, Some(0))));
+    assert_eq!(lifted(&mut h, W), Some((a0 + 2, a1 + 2)), "it moved with the pointer");
+    // Five columns over the next tab: drawn over it; the gap it left is blank; nothing moved.
+    drag(&mut h, a0 + 8, y);
+    assert_eq!(lifted(&mut h, W), Some((a0 + 5, a1 + 5)));
+    assert_eq!(h.app.tab_drag_view(), Some((0, Some(0))), "not past the middle of the next tab yet");
+    let line = bar(&mut h, W);
+    let cols: Vec<char> = line.chars().collect();
+    assert!(cols[usize::from(a0)..usize::from(a0 + 5)].iter().all(|c| *c == ' '), "the gap: {line}");
+    assert_eq!(span(&h, 1), (a1 + 5, b1), "what shows of the next tab");
+    assert!(line.contains(" 1 console 1 ") && !line.contains(" 2 console 2 "), "{line}");
     assert_eq!(texts(&h), ["a", "b", "c"], "nothing moved before the release");
-    // Over the left half of the last tab: before it, the marker on its first blank.
-    drag(&mut h, c0 + 1, y);
-    assert_eq!(h.app.tab_drag_view(), Some((0, Some(2))));
-    assert_eq!(h.draw(W, H).backend().buffer()[(c0 - 1, y)].symbol(), DROP, "on the middle tab's last blank");
-    release(&mut h, c0 + 1, y);
+    assert_eq!(h.app.focus, focus);
+}
+
+#[test]
+fn past_the_middle_of_a_neighbour_it_slides_into_the_gap_and_the_release_keeps_the_order() {
+    let mut h = three_tabs();
+    let y = bar_y(&h);
+    let (a0, a1) = span(&h, 0);
+    let (b0, b1) = span(&h, 1);
+    let (w, wb) = (a1 - a0, b1 - b0);
+    press(&mut h, a0 + 3, y);
+    drag(&mut h, a0 + 5, y);
+    // Just short of half of the next tab, then just past it.
+    let half = wb / 2;
+    drag(&mut h, a0 + 3 + half, y);
+    assert_eq!(h.app.tab_drag_view(), Some((0, Some(0))));
+    drag(&mut h, a0 + 3 + half + 1, y);
+    assert_eq!(h.app.tab_drag_view(), Some((0, Some(1))));
+    // The next tab slides over, a few columns a frame, faster first; then the timer stops.
+    let now = h.clock.now();
+    assert!(h.app.next_tick(now).is_some_and(|t| t <= now + SLIDE_FRAME), "a frame soon");
+    let mut xs = vec![h.app.tab_x(1).unwrap()];
+    for _ in 0..5 {
+        h.advance(SLIDE_FRAME);
+        h.draw(W, H);
+        xs.push(h.app.tab_x(1).unwrap());
+    }
+    assert_eq!(xs.first(), Some(&i32::from(b0)), "it starts where it was: {xs:?}");
+    assert_eq!(xs.last(), Some(&i32::from(a0)), "it ends in the gap: {xs:?}");
+    assert!(xs.windows(2).all(|p| p[1] <= p[0]) && xs.windows(3).any(|p| p[0] > p[1] && p[1] > p[2]), "{xs:?}");
+    let steps: Vec<i32> = xs.windows(2).map(|p| p[0] - p[1]).collect();
+    assert!(steps[0] >= steps[steps.len() - 1], "faster first: {steps:?}");
+    let now = h.clock.now();
+    assert!(h.app.next_tick(now).is_none_or(|t| t >= now + std::time::Duration::from_secs(1)), "no more frames");
+    // The numbers are places: of the order shown.
+    let line = bar(&mut h, W);
+    assert!(line.contains(" 1 conso") && line.contains(" 2 console 1 \u{d7} "), "{line}");
+    assert_eq!(texts(&h), ["a", "b", "c"], "nothing moved before the release");
+    release(&mut h, a0 + 3 + half + 1, y);
     assert_eq!(texts(&h), ["b", "a", "c"]);
     assert_eq!(h.app.tab_drag_view(), None);
-    // The moved tab stays active, its console number (its name) goes with it, the bar's
-    // numbers are places; the focus did not move.
+    // The moved tab stays active, its console number (its name) goes with it; it settles
+    // into its place from where it was let go.
     assert_eq!(h.app.tabs.active_index(), 1);
-    assert_eq!(h.app.tab().editor.text(), "a");
     assert_eq!(console_nos(&h), [2, 1, 3]);
-    assert_eq!(h.app.focus, focus);
+    assert_eq!(h.app.tab_x(1), Some(i32::from(a0 + half + 1)), "drawn where it was let go");
+    slide_out(&mut h, W);
+    assert_eq!(span(&h, 1), (a0 + wb, a0 + wb + w));
+    assert_eq!(lifted(&mut h, W), None);
     let line = bar(&mut h, W);
     assert!(
         line.contains(" 1 console 2 ") && line.contains(" 2 console 1 ") && line.contains(" 3 console 3 "),
         "{line}"
     );
-    assert!(!line.contains(DROP));
     // `Space 1` goes to the first place.
     h.keys(" 1");
     assert_eq!(h.app.tab().editor.text(), "b");
 }
 
 #[test]
-fn a_tab_dragged_left_lands_before_the_tab_under_the_pointer() {
+fn a_pointer_that_jumps_passes_every_tab_on_the_way() {
+    let mut h = three_tabs();
+    let y = bar_y(&h);
+    let (a0, _) = span(&h, 0);
+    let (_, c1) = span(&h, 2);
+    press(&mut h, a0 + 3, y);
+    drag(&mut h, a0 + 5, y);
+    // One move from the first tab to the end (a remote terminal reports few moves).
+    drag(&mut h, c1 - 1, y);
+    assert_eq!(h.app.tab_drag_view(), Some((0, Some(2))));
+    // Both slide, at once.
+    slide_out(&mut h, W);
+    let line = bar(&mut h, W);
+    assert!(line.contains(" 1 console 2 ") && line.contains(" 2 console 3 "), "{line}");
+    assert_eq!(lifted(&mut h, W).map(|l| l.1), Some(c1), "held at the end of the tabs, not past it");
+    // And back in one move: before the first.
+    drag(&mut h, 0, y);
+    assert_eq!(h.app.tab_drag_view(), Some((0, Some(0))));
+    drag(&mut h, c1 - 1, y);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), c1 - 1, y);
+    assert_eq!(texts(&h), ["b", "c", "a"]);
+    // A release where no move was reported lands there too.
+    let mut h = three_tabs();
+    press(&mut h, a0 + 3, y);
+    drag(&mut h, a0 + 5, y);
+    release(&mut h, c1 - 1, y);
+    assert_eq!(texts(&h), ["b", "c", "a"]);
+}
+
+#[test]
+fn a_tab_dragged_left_lands_before_the_tab_it_went_past() {
     let mut h = three_tabs();
     h.keys(" 3");
     h.draw(W, H);
@@ -143,10 +272,10 @@ fn a_tab_dragged_left_lands_before_the_tab_under_the_pointer() {
     press(&mut h, c0 + 4, y);
     assert_eq!(h.app.tabs.active_index(), 2);
     drag(&mut h, c0 + 1, y);
-    drag(&mut h, a0 + 1, y);
+    drag(&mut h, a0 + 4, y);
     assert_eq!(h.app.tab_drag_view(), Some((2, Some(0))));
-    assert_eq!(h.draw(W, H).backend().buffer()[(a0, y)].symbol(), DROP, "on the first tab's first blank");
-    release(&mut h, a0 + 1, y);
+    assert_eq!(lifted(&mut h, W).map(|l| l.0), Some(a0), "not left of the first tab");
+    release(&mut h, a0 + 4, y);
     assert_eq!(texts(&h), ["c", "a", "b"]);
     assert_eq!(h.app.tabs.active_index(), 0);
 }
@@ -161,6 +290,7 @@ fn a_press_and_release_that_did_not_go_far_is_a_click() {
     drag(&mut h, b0 + 4, y);
     drag(&mut h, b0 + 3, y + 1);
     assert_eq!(h.app.tab_drag_view(), None, "one column sideways (or down) is no drag");
+    assert_eq!(lifted(&mut h, W), None);
     release(&mut h, b0 + 4, y + 1);
     assert_eq!(texts(&h), ["a", "b", "c"]);
     assert_eq!(h.app.tabs.active_index(), 1);
@@ -188,67 +318,102 @@ fn the_close_button_still_closes_and_drags_nothing() {
     assert_eq!(h.app.tab_drag_view(), None);
 }
 
+/// A tab dragged past the next one (`b` slid into its place), from the first tab's column 3.
+fn dragged_past_b(h: &mut Harness) -> u16 {
+    let y = bar_y(h);
+    let (a0, _) = span(h, 0);
+    let (b0, b1) = span(h, 1);
+    press(h, a0 + 3, y);
+    let x = a0 + 3 + (b1 - b0) / 2 + 2;
+    drag(h, x, y);
+    assert_eq!(h.app.tab_drag_view(), Some((0, Some(1))));
+    slide_out(h, W);
+    x
+}
+
+/// Every tab is back where it was, drawn as before the drag.
+fn all_back(h: &mut Harness, before: &str, spans: &[(u16, u16)]) {
+    assert_eq!(texts(h), ["a", "b", "c"]);
+    assert_eq!(h.app.tab_drag_view(), None);
+    slide_out(h, W);
+    assert_eq!(bar(h, W), before);
+    assert_eq!(lifted(h, W), None);
+    assert_eq!((0..3).map(|i| span(h, i)).collect::<Vec<_>>(), spans);
+    let now = h.clock.now();
+    assert!(h.app.next_tick(now).is_none_or(|t| t >= now + std::time::Duration::from_secs(1)), "no more frames");
+}
+
 #[test]
-fn esc_a_dialog_or_a_lost_release_put_the_tab_back() {
+fn esc_a_dialog_another_button_or_a_lost_release_put_every_tab_back() {
     let mut h = three_tabs();
     let y = bar_y(&h);
-    let (a0, _) = span(&h, 0);
-    let (_, c1) = span(&h, 2);
+    let before = bar(&mut h, W);
+    let spans: Vec<(u16, u16)> = (0..3).map(|i| span(&h, i)).collect();
     let mode = h.app.tab().editor.mode;
-    // Esc: back where it was; the Esc goes nowhere else.
-    press(&mut h, a0 + 2, y);
-    drag(&mut h, c1 - 1, y);
-    assert!(h.app.tab_drag_view().is_some());
+    // Esc: back where they were; the Esc goes nowhere else; the rest of the drag moves nothing.
+    let x = dragged_past_b(&mut h);
     h.key(KeyCode::Esc);
-    assert_eq!(h.app.tab_drag_view(), None);
-    assert!(!bar(&mut h, W).contains(DROP));
-    drag(&mut h, c1 - 2, y);
-    release(&mut h, c1 - 2, y);
-    assert_eq!(texts(&h), ["a", "b", "c"], "the rest of the drag moves nothing");
+    h.draw(W, H);
+    assert!(lifted(&mut h, W).is_none());
+    assert_eq!(h.app.tab_x(1), Some(i32::from(spans[0].0)), "b slides back from where it was drawn");
+    all_back(&mut h, &before, &spans);
+    drag(&mut h, x + 10, y);
+    release(&mut h, x + 10, y);
+    all_back(&mut h, &before, &spans);
     assert_eq!(h.app.tab().editor.mode, mode);
-    // A dialog coming on top (`:`) ends the drag.
-    press(&mut h, a0 + 2, y);
-    drag(&mut h, c1 - 1, y);
+    // A dialog coming on top (`:`) ends the drag; its Esc is the dialog's.
+    let x = dragged_past_b(&mut h);
     h.keys(":");
     assert_eq!(h.overlay_kind(), Some(OverlayKind::Commands));
     assert_eq!(h.app.tab_drag_view(), None, "not drawn lifted under the dialog");
     h.key(KeyCode::Esc);
     assert_eq!(h.overlay_kind(), None, "the Esc is the dialog's");
-    release(&mut h, c1 - 1, y);
-    drag(&mut h, c1 - 2, y);
-    release(&mut h, c1 - 2, y);
-    assert_eq!(texts(&h), ["a", "b", "c"]);
+    release(&mut h, x, y);
+    all_back(&mut h, &before, &spans);
     // Let go outside the window: the next move has no button; it needs a frame.
-    press(&mut h, a0 + 2, y);
-    drag(&mut h, c1 - 1, y);
-    h.mouse(MouseEventKind::Moved, c1 - 1, y + 10);
-    assert!(!h.app.take_idle_event(), "the marker goes: a frame");
-    assert_eq!(h.app.tab_drag_view(), None);
-    release(&mut h, c1 - 1, y);
-    assert_eq!(texts(&h), ["a", "b", "c"]);
+    let x = dragged_past_b(&mut h);
+    h.mouse(MouseEventKind::Moved, x, y + 10);
+    assert!(!h.app.take_idle_event(), "the tabs go back: a frame");
+    h.draw(W, H);
+    release(&mut h, x, y);
+    all_back(&mut h, &before, &spans);
+    // A press of another button (the right one opens the tab's menu).
+    let x = dragged_past_b(&mut h);
+    h.mouse(MouseEventKind::Down(MouseButton::Right), x, y + 5);
+    h.draw(W, H);
+    h.key(KeyCode::Esc);
+    release(&mut h, x, y);
+    all_back(&mut h, &before, &spans);
 }
 
 #[test]
-fn released_far_from_the_bar_it_stays_near_it_it_lands() {
+fn far_from_the_bar_the_tab_goes_back_to_its_place_and_near_it_follows_again() {
     let mut h = three_tabs();
     let y = bar_y(&h);
-    let (a0, _) = span(&h, 0);
-    let (_, c1) = span(&h, 2);
-    // Far below the bar: nowhere to land, no marker; the release moves nothing.
-    press(&mut h, a0 + 2, y);
-    drag(&mut h, c1 - 1, y + 3);
+    let before = bar(&mut h, W);
+    let spans: Vec<(u16, u16)> = (0..3).map(|i| span(&h, i)).collect();
+    let (a0, a1) = spans[0];
+    let (_, c1) = spans[2];
+    // Far below the bar: nowhere to land; back at its place, still lifted; the release moves
+    // nothing.
+    let x = dragged_past_b(&mut h);
+    drag(&mut h, x, y + 3);
     assert_eq!(h.app.tab_drag_view(), Some((0, None)));
-    assert!(!bar(&mut h, W).contains(DROP));
-    release(&mut h, c1 - 1, y + 3);
-    assert_eq!(texts(&h), ["a", "b", "c"]);
-    // Back near the bar it goes on; two rows below and right of every tab: the end.
+    slide_out(&mut h, W);
+    assert_eq!(lifted(&mut h, W), Some((a0, a1)), "at its own place");
+    assert_eq!(span(&h, 1), spans[1]);
+    release(&mut h, x, y + 3);
+    all_back(&mut h, &before, &spans);
+    // Back near the bar it follows again; two rows below and right of every tab: the end.
     press(&mut h, a0 + 2, y);
     drag(&mut h, c1 - 1, y + 5);
+    assert_eq!(h.app.tab_drag_view(), Some((0, None)));
     drag(&mut h, W - 2, y + 2);
-    assert_eq!(h.app.tab_drag_view(), Some((0, Some(3))));
+    assert_eq!(h.app.tab_drag_view(), Some((0, Some(2))));
     release(&mut h, W - 2, y + 2);
     assert_eq!(texts(&h), ["b", "c", "a"]);
     // Left of every tab (over the explorer): the start.
+    slide_out(&mut h, W);
     let x = span(&h, 2).0 + 2;
     press(&mut h, x, y);
     drag(&mut h, 1, y);
@@ -258,50 +423,99 @@ fn released_far_from_the_bar_it_stays_near_it_it_lands() {
 }
 
 #[test]
-fn dragging_past_the_end_of_an_overflowing_bar_scrolls_it() {
-    let w = 80;
-    let mut h = Harness::connected(Lang::En);
-    set_text(&mut h, "0");
-    for i in 1..14 {
-        h.ctrl('t');
-        set_text(&mut h, &i.to_string());
-    }
-    h.keys(" 1");
-    h.draw(w, H);
+fn wide_tab_names_are_covered_and_uncovered_by_whole_characters() {
+    // Korean console names: two columns a character.
+    let mut h = tabs_in(Lang::Ko, 3, W);
     let y = bar_y(&h);
-    let hits = h.app.tab_hits();
-    let right = hits
-        .iter()
-        .find(|t| matches!(t.2, TabHit::More(_)))
-        .unwrap_or_else(|| panic!("a scroll mark: {:?}\n{}", h.app.tabs.len(), h.screen(w, H)));
-    let TabHit::More(hidden) = right.2 else { unreachable!() };
-    let last_shown = hidden - 1;
-    assert!(last_shown < 12, "tabs hidden on the right: {}", bar(&mut h, w));
+    let (a0, a1) = span(&h, 0);
+    let (_, c1) = span(&h, 2);
+    let w = a1 - a0;
+    press(&mut h, a0 + 3, y);
+    // Column by column to the end and back, each frame and the frames of each slide checked.
+    let path: Vec<u16> = (a0 + 5..c1 + 3).chain((0..c1 + 3).rev()).collect();
+    for x in path {
+        drag(&mut h, x, y);
+        whole(&mut h, W);
+        let (l0, l1) = lifted(&mut h, W).unwrap_or_else(|| panic!("lifted at {x}: {}", bar(&mut h, W)));
+        assert_eq!(l1 - l0, w, "drawn whole at {x}: {}", bar(&mut h, W));
+        h.advance(SLIDE_FRAME / 2);
+        whole(&mut h, W);
+    }
+    assert_eq!(h.app.tab_drag_view(), Some((0, Some(0))));
+    drag(&mut h, c1 - 4, y);
+    release(&mut h, c1 - 4, y);
+    for _ in 0..6 {
+        whole(&mut h, W);
+        h.advance(SLIDE_FRAME);
+    }
+    assert_eq!(texts(&h), ["1", "2", "0"]);
+}
+
+#[test]
+fn a_narrow_bar_keeps_the_dragged_tab_whole_and_lands_it_where_shown() {
+    // The smallest screen, five tabs; the explorer widened (`Space >`) until the bar has room
+    // for four of them, three, then less than three.
+    let w = 80;
+    for widen in [0, 3, 5] {
+        let mut h = tabs_in(Lang::Ko, 5, w);
+        for _ in 0..widen {
+            h.keys(" >");
+        }
+        h.draw(w, H);
+        let y = bar_y(&h);
+        assert!(h.app.tab_hits().iter().any(|t| matches!(t.2, TabHit::More(_))), "{widen}: {}", bar(&mut h, w));
+        let (a0, _) = span(&h, 0);
+        h.mouse(MouseEventKind::Down(MouseButton::Left), a0 + 2, y);
+        h.draw(w, H);
+        let mut shown = None;
+        for x in (a0 + 4..w).chain((0..w).rev()).chain(a0..w) {
+            h.mouse(MouseEventKind::Drag(MouseButton::Left), x, y);
+            h.draw(w, H);
+            whole(&mut h, w);
+            assert!(lifted(&mut h, w).is_some(), "{widen} {x}: {}", bar(&mut h, w));
+            shown = h.app.tab_drag_view().and_then(|v| v.1);
+        }
+        let shown = shown.expect("a place");
+        h.mouse(MouseEventKind::Up(MouseButton::Left), w - 1, y);
+        assert_eq!(texts(&h).iter().position(|t| t == "0"), Some(shown), "{widen}");
+    }
+}
+
+/// Fourteen tabs at 80 columns, the first one active: the bar hides tabs on its right.
+fn many_tabs(w: u16) -> Harness {
+    tabs_in(Lang::En, 14, w)
+}
+
+#[test]
+fn dragging_past_the_end_of_an_overflowing_bar_scrolls_it_one_tab_at_a_time() {
+    let w = 80;
+    let mut h = many_tabs(w);
+    let y = bar_y(&h);
+    assert!(h.app.tab_hits().iter().any(|t| matches!(t.2, TabHit::More(_))), "tabs hidden: {}", bar(&mut h, w));
     let (a0, _) = span(&h, 0);
     h.mouse(MouseEventKind::Down(MouseButton::Left), a0 + 2, y);
     h.draw(w, H);
     h.mouse(MouseEventKind::Drag(MouseButton::Left), a0 + 6, y);
     h.draw(w, H);
-    // Each move over `›` goes past the next hidden tab; the bar follows.
+    // Each move over `›` goes past the next hidden tab; the bar follows; the tab stays at the
+    // pointer, next to the mark.
     let mut slots = Vec::new();
-    for k in 0..30 {
-        h.mouse(MouseEventKind::Drag(MouseButton::Left), w - 1 - (k % 2), y);
+    for _ in 0..30 {
+        h.mouse(MouseEventKind::Drag(MouseButton::Left), w - 1, y);
         h.draw(w, H);
         let v = h.app.tab_drag_view();
-        slots.push(
-            v.and_then(|v| v.1).unwrap_or_else(|| panic!("{k} {v:?} {:?}\n{}", h.app.tab_hits(), bar(&mut h, w))),
-        );
+        slots.push(v.and_then(|v| v.1).unwrap_or_else(|| panic!("{v:?} {}", bar(&mut h, w))));
+        assert_eq!(lifted(&mut h, w).map(|l| l.1), Some(tabs_end(&h)), "at the end of the tabs: {}", bar(&mut h, w));
+        whole(&mut h, w);
     }
-    assert!(slots.windows(2).all(|s| s[1] == s[0] || s[1] == s[0] + 1), "one tab at a time: {slots:?}");
-    assert_eq!(*slots.last().unwrap(), 14, "after the last tab: {slots:?}");
-    assert!(h.app.tab_hits().iter().any(|t| t.2 == TabHit::Tab(13)), "the last tab came into view");
-    assert!(bar(&mut h, w).contains(DROP), "{}", bar(&mut h, w));
+    assert!(slots.windows(2).skip(1).all(|s| s[1] == s[0] || s[1] == s[0] + 1), "one tab at a time: {slots:?}");
+    assert_eq!(*slots.last().unwrap(), 13, "the last place: {slots:?}");
     h.mouse(MouseEventKind::Up(MouseButton::Left), w - 1, y);
-    let order: Vec<String> = texts(&h);
     let want: Vec<String> = (1..14).chain([0]).map(|i| i.to_string()).collect();
-    assert_eq!(order, want);
+    assert_eq!(texts(&h), want);
     assert_eq!(h.app.tabs.active_index(), 13);
     h.draw(w, H);
+    slide_out(&mut h, w);
     assert!(h.app.tab_hits().iter().any(|t| t.2 == TabHit::Tab(13)), "the active tab is in view");
     // Back over `‹`: one tab at a time to the start.
     let (x0, _) = span(&h, 13);
@@ -315,31 +529,19 @@ fn dragging_past_the_end_of_an_overflowing_bar_scrolls_it() {
         h.mouse(MouseEventKind::Drag(MouseButton::Left), left, y);
         h.draw(w, H);
         slots.push(h.app.tab_drag_view().and_then(|v| v.1).unwrap());
+        assert_eq!(lifted(&mut h, w).map(|l| l.0), Some(left + u16::from(slots.last() != Some(&0))));
     }
-    assert!(slots.windows(2).all(|s| s[1] == s[0] || s[1] + 1 == s[0]), "one tab at a time: {slots:?}");
+    assert!(slots.windows(2).skip(1).all(|s| s[1] == s[0] || s[1] + 1 == s[0]), "one tab at a time: {slots:?}");
     assert_eq!(*slots.last().unwrap(), 0, "{slots:?}");
     h.mouse(MouseEventKind::Up(MouseButton::Left), left, y);
     assert_eq!(texts(&h)[0], "0");
     assert_eq!(h.app.tabs.active_index(), 0);
 }
 
-/// Fourteen tabs at 80 columns, the first one active: the bar hides tabs on its right.
-fn many_tabs(w: u16) -> Harness {
-    let mut h = Harness::connected(Lang::En);
-    set_text(&mut h, "0");
-    for i in 1..14 {
-        h.ctrl('t');
-        set_text(&mut h, &i.to_string());
-    }
-    h.keys(" 1");
-    h.draw(w, H);
-    h
-}
-
-/// Released over a scroll mark while more tabs are hidden on its side: the tab lands where the
-/// marker showed, not past the tab the bar scrolled to after the marker was drawn.
+/// Released over a scroll mark while more tabs are hidden on its side: the tab lands where it
+/// was shown.
 #[test]
-fn released_over_a_scroll_mark_a_tab_lands_where_the_marker_showed() {
+fn released_over_a_scroll_mark_a_tab_lands_where_it_was_shown() {
     let w = 80;
     let mut h = many_tabs(w);
     let y = bar_y(&h);
@@ -351,23 +553,87 @@ fn released_over_a_scroll_mark_a_tab_lands_where_the_marker_showed() {
     h.mouse(MouseEventKind::Drag(MouseButton::Left), w - 1, y);
     h.draw(w, H);
     let shown = h.app.tab_drag_view().unwrap().1.unwrap();
-    assert!(h.app.tab_hits().iter().any(|t| t.2 == TabHit::More(shown)), "more tabs hidden: {}", bar(&mut h, w));
+    assert!(h.app.tab_hits().iter().any(|t| matches!(t.2, TabHit::More(_))), "more tabs hidden: {}", bar(&mut h, w));
+    // The release reports the same place as the last move: no step further.
     h.mouse(MouseEventKind::Up(MouseButton::Left), w - 1, y);
-    assert_eq!(texts(&h).iter().position(|t| t == "0"), Some(shown - 1), "the marker said place {shown}");
-    // And back over `‹`.
+    assert_eq!(texts(&h).iter().position(|t| t == "0"), Some(shown));
+}
+
+/// Released next to a scroll mark where no move was reported (a row lower): the tab lands where
+/// it was shown, not past one more hidden tab.
+#[test]
+fn released_off_the_last_move_next_to_a_scroll_mark_a_tab_lands_where_it_was_shown() {
+    let w = 80;
+    let mut h = many_tabs(w);
+    let y = bar_y(&h);
+    let (a0, _) = span(&h, 0);
+    h.mouse(MouseEventKind::Down(MouseButton::Left), a0 + 2, y);
     h.draw(w, H);
-    let (x0, _) = span(&h, shown - 1);
-    let left = h.app.layout.tab_bar.x;
-    h.mouse(MouseEventKind::Down(MouseButton::Left), x0 + 2, y);
-    h.draw(w, H);
-    for x in [x0, left, left] {
+    for x in [a0 + 6, w - 1] {
         h.mouse(MouseEventKind::Drag(MouseButton::Left), x, y);
         h.draw(w, H);
     }
-    let (_, Some(shown)) = h.app.tab_drag_view().unwrap() else { panic!("a place") };
-    assert!(shown > 0 && h.app.tab_hits().first().is_some_and(|t| t.2 == TabHit::More(shown - 1)));
-    h.mouse(MouseEventKind::Up(MouseButton::Left), left, y);
+    let shown = h.app.tab_drag_view().unwrap().1.unwrap();
+    assert!(h.app.tab_hits().iter().any(|t| matches!(t.2, TabHit::More(_))), "more tabs hidden: {}", bar(&mut h, w));
+    h.mouse(MouseEventKind::Up(MouseButton::Left), w - 1, y + 1);
     assert_eq!(texts(&h).iter().position(|t| t == "0"), Some(shown));
+}
+
+/// A tab pressed while it slides is held where it was drawn, not where it is going.
+#[test]
+fn a_tab_pressed_while_it_slides_is_held_where_it_was_drawn() {
+    let mut h = three_tabs();
+    let y = bar_y(&h);
+    let (a0, a1) = span(&h, 0);
+    let (b0, b1) = span(&h, 1);
+    let x = dragged_past_b(&mut h);
+    release(&mut h, x, y);
+    assert_eq!(texts(&h), ["b", "a", "c"]);
+    h.advance(SLIDE_FRAME);
+    h.draw(W, H);
+    // `a` belongs after `b` now, at a0 + b's width.
+    let (place, drawn) = (i32::from(a0 + b1 - b0), h.app.tab_x(1).unwrap());
+    assert!(drawn < place, "still sliding to its place at {place}: {drawn}");
+    let at = u16::try_from(drawn).unwrap() + 3;
+    press(&mut h, at, y);
+    drag(&mut h, at + 2, y);
+    assert_eq!(lifted(&mut h, W).map(|l| l.0), Some(at + 2 - 3), "held by its fourth column");
+    assert_eq!(lifted(&mut h, W).map(|l| l.1 - l.0), Some(a1 - a0));
+}
+
+/// Other tabs or another order (a key opened or moved one) end the drag: every tab goes back,
+/// the rest of the drag moves nothing.
+#[test]
+fn a_key_that_opens_or_moves_a_tab_ends_the_drag() {
+    let mut h = three_tabs();
+    let y = bar_y(&h);
+    let before = bar(&mut h, W);
+    let spans: Vec<(u16, u16)> = (0..3).map(|i| span(&h, i)).collect();
+    let x = dragged_past_b(&mut h);
+    h.keys(" t>");
+    h.draw(W, H);
+    assert_eq!(texts(&h), ["b", "a", "c"], "the key moved the tab");
+    assert_eq!(h.app.tab_drag_view(), None);
+    let now = h.clock.now();
+    assert!(h.app.next_tick(now).is_some_and(|t| t <= now + SLIDE_FRAME), "the drag ended with the key: a slide");
+    slide_out(&mut h, W);
+    assert_eq!(lifted(&mut h, W), None);
+    drag(&mut h, x + 20, y);
+    release(&mut h, x + 20, y);
+    assert_eq!(texts(&h), ["b", "a", "c"], "the rest of the drag moves nothing");
+    h.keys(" t<");
+    h.draw(W, H);
+    slide_out(&mut h, W);
+    assert_eq!(bar(&mut h, W), before);
+    let x = dragged_past_b(&mut h);
+    h.ctrl('t');
+    h.draw(W, H);
+    assert_eq!(h.app.tab_drag_view(), None);
+    release(&mut h, x, y);
+    let kept: Vec<String> = texts(&h).into_iter().filter(|t| !t.is_empty()).collect();
+    assert_eq!(kept, ["a", "b", "c"], "the new tab is the only change");
+    slide_out(&mut h, W);
+    assert_eq!(span(&h, 0), spans[0]);
 }
 
 /// A release while the screen is too small to draw the workspace still ends the drag.
@@ -383,7 +649,8 @@ fn a_release_on_a_screen_too_small_ends_the_drag() {
     h.mouse(MouseEventKind::Up(MouseButton::Left), 3, 0);
     h.draw(W, H);
     assert_eq!(h.app.tab_drag_view(), None);
-    assert!(!bar(&mut h, W).contains(DROP));
+    slide_out(&mut h, W);
+    assert_eq!(lifted(&mut h, W), None);
     assert_eq!(texts(&h), ["a", "b", "c"]);
 }
 
@@ -393,10 +660,12 @@ fn another_buttons_press_ends_the_drag() {
     let mut h = three_tabs();
     let y = bar_y(&h);
     let (a0, _) = span(&h, 0);
-    let (c0, c1) = span(&h, 2);
+    let (_, c1) = span(&h, 2);
     press(&mut h, a0 + 2, y);
     drag(&mut h, c1 - 1, y);
-    h.mouse(MouseEventKind::Down(MouseButton::Middle), c0 + 2, y);
+    // The last frame drew `c` slid over: the middle press hits what is drawn there.
+    slide_out(&mut h, W);
+    h.mouse(MouseEventKind::Down(MouseButton::Middle), span(&h, 2).0 + 1, y);
     h.draw(W, H);
     assert_eq!(texts(&h), ["a", "b"], "the middle press closed its tab");
     assert_eq!(h.app.tab_drag_view(), None);
@@ -404,7 +673,6 @@ fn another_buttons_press_ends_the_drag() {
     release(&mut h, a0 + 20, y);
     assert_eq!(texts(&h), ["a", "b"], "the rest of the drag moves nothing");
 }
-
 #[test]
 fn keys_move_the_active_tab_one_place_and_stop_at_the_ends() {
     let mut h = three_tabs();

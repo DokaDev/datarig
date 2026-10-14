@@ -13,16 +13,19 @@
 //! in the mark's place. When the tabs do not fit, the documents' names are shortened first,
 //! then the bar scrolls to keep the active tab visible and `‹` / `›` show that more tabs are
 //! hidden. A tab dragged by the mouse (`app::tab_drag`) is drawn in the theme's selection
-//! style, with [`DROP`] where it would land; the bar then scrolls to keep that place visible.
+//! style where the pointer holds it, over its neighbours, which leave a gap where it would land
+//! (the bar then scrolls to keep that place visible); tabs it moves slide to their places.
 
-use crate::app::{App, NodeState, SessionState, Tab};
+use crate::app::tab_drag;
+use crate::app::{App, NodeState, SessionState, Tab, TabId};
 use crate::icons;
-use crate::text::{clip, width};
+use crate::text::{clip, grapheme_width, width};
 use crate::theme;
 use datarig_core::i18n::{Label, Msg};
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
+use unicode_segmentation::UnicodeSegmentation;
 
 /// The warning marks (plain Unicode, not Nerd Font glyphs: the same with icons off), each its
 /// own shape, not only another color.
@@ -30,8 +33,6 @@ pub const TX_OPEN: &str = "◆";
 pub const TROUBLE: &str = "!";
 /// The close button.
 pub const CLOSE: &str = "×";
-/// Where a dragged tab would land, on the blank between two tabs.
-pub const DROP: &str = "┃";
 /// The tab's text could not be saved (a failed write, or its file changed on disk).
 pub const UNSAVED: &str = "*";
 
@@ -185,10 +186,11 @@ pub(crate) fn unbound(app: &App, tab: &Tab) -> Option<Label> {
     Some(if tab.doc.recovered { Label::TabRecovered } else { Label::TabUnbound })
 }
 
-/// One tab label, `doc_max` columns at most for the document's name. Another tab than the
-/// active one under the pointer (its body or its `×`) is on the theme's hover background (the
-/// environment's badge keeps its own).
-fn label(app: &App, index: usize, tab: &Tab, active: bool, doc_max: usize) -> Vec<Part> {
+/// One tab label, `doc_max` columns at most for the document's name, numbered as place
+/// `place` (where a dragged tab shows it). Another tab than the active one under the pointer
+/// (its body or its `×`) is on the theme's hover background (the environment's badge keeps its
+/// own).
+fn label(app: &App, index: usize, place: usize, tab: &Tab, active: bool, doc_max: usize) -> Vec<Part> {
     let th = theme::cur();
     let hovered = !active
         && matches!(
@@ -197,7 +199,7 @@ fn label(app: &App, index: usize, tab: &Tab, active: bool, doc_max: usize) -> Ve
         );
     let bg = if active { th.surface_alt } else { th.bg };
     let part = |text: String, style: Style| Part { text, style, kind: PartKind::Plain };
-    let (n, color) = number(app, index, tab);
+    let (n, color) = number(app, place, tab);
     let mut num = Style::new().fg(color).bg(bg).add_modifier(Modifier::BOLD);
     if !active {
         num = num.remove_modifier(Modifier::BOLD);
@@ -316,9 +318,106 @@ pub enum TabHit {
 /// The longest a document's name is drawn when the tabs do not fit, tried in turn.
 const DOC_STEPS: [usize; 4] = [24, 16, 10, 6];
 
+/// What the tab bar drew last: a dragged tab follows the pointer by it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BarGeom {
+    /// The tabs in the order drawn (indexes; a dragged tab at the place it is shown at).
+    pub order: Vec<usize>,
+    /// Each tab's width, by index.
+    pub widths: Vec<u16>,
+    /// The places shown: `order[first..=last]`.
+    pub first: usize,
+    pub last: usize,
+    /// The columns tabs are drawn in: `[left, stop)` (the scroll marks are outside).
+    pub left: u16,
+    pub stop: u16,
+    /// Where each shown tab belongs (its first column), by index; a sliding or dragged tab may
+    /// be drawn elsewhere for now.
+    pub at: Vec<Option<u16>>,
+    /// Where each shown tab was drawn (its first column), by index.
+    pub drawn: Vec<Option<i32>>,
+}
+
+/// One column of the tab bar while its tabs are put together, later ones over earlier ones
+/// (a dragged tab over its neighbours).
+#[derive(Clone, Debug)]
+struct Cell {
+    /// Empty for the right half of a wide character.
+    symbol: String,
+    style: Style,
+    hit: TabHit,
+    half: Half,
+}
+
+/// Which part of a character a [`Cell`] is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Half {
+    /// A character one column wide.
+    Whole,
+    /// The first column of a wide character (Hangul, CJK).
+    Left,
+    /// Its second column.
+    Right,
+}
+
+/// Write tab `index`'s label (`parts`) from column `x` into `line` (columns `[x0, stop)`), as
+/// [`Buffer::set_stringn`] would: what falls left of `x0` or right of `stop` is cut off.
+fn put_tab(line: &mut [Option<Cell>], x0: u16, stop: u16, x: i32, parts: &[Part], index: usize, hover: Option<TabHit>) {
+    let th = theme::cur();
+    let mut x = x;
+    for p in parts {
+        if x >= i32::from(stop) {
+            break;
+        }
+        let room = usize::try_from(i32::from(stop) - x).unwrap_or(0);
+        let s = clip(&p.text, room);
+        // Under the pointer: only the `×` changes, to the theme's error color.
+        let style = match (p.kind == PartKind::Close, hover) {
+            (true, Some(TabHit::Close(i))) if i == index => p.style.fg(th.error),
+            _ => p.style,
+        };
+        let hit = if p.kind == PartKind::Close { TabHit::Close(index) } else { TabHit::Tab(index) };
+        for g in s.graphemes(true) {
+            let w = grapheme_width(g);
+            if w > 0 && !g.contains(char::is_control) {
+                for k in 0..w {
+                    let Ok(at) = usize::try_from(x + k as i32 - i32::from(x0)) else { continue };
+                    let Some(cell) = line.get_mut(at) else { continue };
+                    let (symbol, half) = match (k, w) {
+                        (0, 1) => (g.to_string(), Half::Whole),
+                        (0, _) => (g.to_string(), Half::Left),
+                        _ => (String::new(), Half::Right),
+                    };
+                    *cell = Some(Cell { symbol, style, hit, half });
+                }
+            }
+            x += w as i32;
+        }
+    }
+}
+
+/// A wide character partly covered by another tab is not drawn by halves: what is left of it
+/// is a blank of its style.
+fn mend(line: &mut [Option<Cell>]) {
+    let half = |c: &Option<Cell>| c.as_ref().map(|c| c.half);
+    for k in 0..line.len() {
+        let orphan = match half(&line[k]) {
+            Some(Half::Left) => line.get(k + 1).map(half) != Some(Some(Half::Right)),
+            Some(Half::Right) => k == 0 || half(&line[k - 1]) != Some(Half::Left),
+            _ => false,
+        };
+        if let Some(c) = line[k].as_mut().filter(|_| orphan) {
+            c.symbol = " ".to_string();
+            c.half = Half::Whole;
+        }
+    }
+}
+
 /// Draw the tab bar; returns what each drawn stretch of columns leads to (`[x0, x1)`), exactly
-/// as drawn (a clipped tab counts for the columns it got).
-pub(crate) fn draw_tab_bar(app: &App, area: Rect, buf: &mut Buffer) -> Vec<(u16, u16, TabHit)> {
+/// as drawn (a clipped tab counts for the columns it got, a dragged tab for those it covers).
+/// What it drew is kept for a drag to follow the pointer by ([`BarGeom`]), and the tabs a drag
+/// moved slide to their places ([`tab_drag::TabSlide`]).
+pub(crate) fn draw_tab_bar(app: &mut App, area: Rect, buf: &mut Buffer) -> Vec<(u16, u16, TabHit)> {
     let th = theme::cur();
     let hover = match app.pointer_hover() {
         Some(crate::app::hover::PointerOn::Tab(h)) => Some(h),
@@ -327,12 +426,24 @@ pub(crate) fn draw_tab_bar(app: &App, area: Rect, buf: &mut Buffer) -> Vec<(u16,
     let mut hits = Vec::new();
     buf.set_style(area, Style::new().bg(th.bg));
     let total = area.width as usize;
+    let n = app.tabs.len();
     let active = app.tabs.active_index();
-    // A dragged tab: its place, and where it would land.
-    let dragged = app.tab_drag_view();
+    // A dragged tab: its place, the place it is shown at among the others, whether the pointer
+    // is too far from the bar, the pointer's column and where it holds the tab.
+    let drag = app.tab_drag_live().map(|d| (d.from(), d.slot, d.far, d.x, d.grab));
+    let order = match drag {
+        Some((from, slot, ..)) => tab_drag::shown_order(n, from, slot),
+        None => (0..n).collect::<Vec<_>>(),
+    };
+    // The numbers are places: of the order shown.
+    let mut place = vec![0; n];
+    for (k, i) in order.iter().enumerate() {
+        place[*i] = k;
+    }
     // Full names when they fit; else shorter ones (the number, RO, mark and × stay).
+    let app_ref: &App = app;
     let make = |max: usize| -> Vec<Vec<Part>> {
-        app.tabs.iter().enumerate().map(|(i, t)| label(app, i, t, i == active, max)).collect()
+        app_ref.tabs.iter().enumerate().map(|(i, t)| label(app_ref, i, place[i], t, i == active, max)).collect()
     };
     let mut labels = make(usize::MAX);
     for max in DOC_STEPS {
@@ -345,89 +456,112 @@ pub(crate) fn draw_tab_bar(app: &App, area: Rect, buf: &mut Buffer) -> Vec<(u16,
     let rest = label_width(&labels[active])
         - labels[active].iter().filter(|p| p.kind == PartKind::Document).map(|p| width(&p.text)).sum::<usize>();
     if rest + 1 < total && label_width(&labels[active]) > total {
-        labels[active] = label(app, active, app.tabs.iter().nth(active).expect("active tab"), true, total - rest);
+        let tab = app_ref.tabs.iter().nth(active).expect("active tab");
+        labels[active] = label(app_ref, active, place[active], tab, true, total - rest);
     }
-    if let Some((from, _)) = dragged {
+    if let Some((from, ..)) = drag {
         // Lifted: the theme's selection style, but for the environment's badge.
         for p in labels[from].iter_mut().filter(|p| p.style.bg == Some(th.surface_alt) || p.style.bg == Some(th.bg)) {
             p.style = p.style.patch(th.selection);
         }
     }
-    // Where a dragged tab would land, as the tab whose blank the marker is drawn on: the one
-    // after that place when it goes left, the one before it when it goes right.
-    let drop = dragged.and_then(|(from, slot)| match slot? {
-        s if s < from => Some((s, false)),
-        s if s > from + 1 => Some((s - 1, true)),
-        _ => None,
-    });
+    let ids: Vec<TabId> = app_ref.tabs.iter().map(|t| t.id).collect();
     let widths: Vec<usize> = labels.iter().map(|l| label_width(l)).collect();
-    let (first, last) = if widths.iter().sum::<usize>() <= total {
-        (0, labels.len() - 1)
+    let shown: Vec<usize> = order.iter().map(|i| widths[*i]).collect();
+    let (first, last) = if shown.iter().sum::<usize>() <= total {
+        (0, n - 1)
     } else {
         // One column on each side for the scroll marks. In view: the active tab, or while one
-        // is dragged where it would land (the bar scrolls as it goes past an end).
+        // is dragged the place it is shown at (the bar scrolls as it goes past an end).
         let room = total.saturating_sub(2);
-        match (drop, dragged) {
-            (Some((i, _)), _) | (None, Some((i, _))) => {
-                let shown = app.tab_hits.iter().find_map(|h| if let TabHit::Tab(i) = h.2 { Some(i) } else { None });
-                drag_window(&widths, i.min(labels.len() - 1), shown.unwrap_or(0), room)
-            }
-            (None, None) => window(&widths, active, room),
+        match drag {
+            Some((_, slot, ..)) => drag_window(&shown, slot.min(n - 1), app_ref.tab_geom.first, room),
+            None => window(&shown, active, room),
         }
     };
+    let end = area.x + area.width;
+    let left = area.x + u16::from(first > 0);
+    let stop = if last + 1 < n { end.saturating_sub(1) } else { end };
+    // Where each shown tab belongs.
+    let mut at = vec![None; n];
+    let mut x = usize::from(left);
+    for k in first..=last {
+        at[order[k]] = Some(u16::try_from(x).unwrap_or(u16::MAX));
+        x += shown[k];
+    }
+    let tabs_end = i32::try_from(x.min(usize::from(stop))).unwrap_or(i32::MAX);
+    // The dragged tab is drawn where the pointer holds it, within the tabs shown.
+    let held = drag.filter(|d| !d.2).map(|(from, _, _, px, grab)| {
+        let w = i32::try_from(widths[from]).unwrap_or(i32::MAX);
+        let x = (i32::from(px) - i32::from(grab)).clamp(i32::from(left), (tabs_end - w).max(i32::from(left)));
+        (from, x)
+    });
+    let places: Vec<(TabId, i32, bool)> = order[first..=last]
+        .iter()
+        .map(|&i| match held {
+            Some((from, x)) if from == i => (ids[i], x, true),
+            _ => (ids[i], at[i].map_or(0, i32::from), false),
+        })
+        .collect();
+    let now = app.now();
+    let xs = app.tab_slide.place(&places, now);
+    let mut drawn = vec![None; n];
+    for (k, x) in xs.iter().enumerate() {
+        drawn[order[first + k]] = Some(*x);
+    }
+    app.tab_geom = BarGeom {
+        drawn,
+        order: order.clone(),
+        widths: widths.iter().map(|w| u16::try_from(*w).unwrap_or(u16::MAX)).collect(),
+        first,
+        last,
+        left,
+        stop,
+        at,
+    };
+    // Tabs in place first, sliding ones over them, the dragged (or just dropped) one on top.
+    let top = held.map(|h| h.0).or_else(|| app.tab_slide.top.and_then(|t| app.tabs.position(t)));
+    let mut draw: Vec<usize> = (0..places.len()).collect();
+    draw.sort_by_key(|&k| (Some(order[first + k]) == top, app.tab_slide.moving(places[k].0)));
+    let mut line: Vec<Option<Cell>> = vec![None; usize::from(stop.saturating_sub(left))];
+    for k in draw {
+        let i = order[first + k];
+        put_tab(&mut line, left, stop, xs[k], &labels[i], i, hover);
+    }
+    mend(&mut line);
     let arrow = Style::new().fg(th.accent).bg(th.bg).add_modifier(Modifier::BOLD);
     let mark = |h: TabHit| if hover == Some(h) { arrow.patch(crate::widgets::pointer_style()) } else { arrow };
-    let mut x = area.x;
-    let end = area.x + area.width;
     if first > 0 {
-        buf.set_string(x, area.y, "‹", mark(TabHit::More(first - 1)));
-        hits.push((x, x + 1, TabHit::More(first - 1)));
-        x += 1;
+        let h = TabHit::More(order[first - 1]);
+        buf.set_string(area.x, area.y, "‹", mark(h));
+        hits.push((area.x, area.x + 1, h));
     }
-    let stop = if last + 1 < labels.len() { end.saturating_sub(1) } else { end };
-    for (i, parts) in labels[first..=last].iter().enumerate() {
-        let index = first + i;
-        let start = x;
-        for p in parts {
-            if x >= stop {
-                break;
-            }
-            let s = clip(&p.text, (stop - x) as usize);
-            let from = x;
-            // Under the pointer: only the `×` changes, to the theme's error color.
-            let style = match (p.kind == PartKind::Close, hover) {
-                (true, Some(TabHit::Close(i))) if i == index => p.style.fg(th.error),
-                _ => p.style,
-            };
-            buf.set_stringn(x, area.y, &s, (stop - x) as usize, style);
-            x += width(&s) as u16;
-            // The close button has a hit of its own, exactly where it is drawn.
-            if p.kind == PartKind::Close && x > from {
-                if from > start {
-                    hits.push((start, from, TabHit::Tab(index)));
-                }
-                hits.push((from, x, TabHit::Close(index)));
-            }
-        }
-        let body_from = hits.last().filter(|h| h.2 == TabHit::Close(index)).map_or(start, |h| h.1);
-        if x > body_from {
-            hits.push((body_from, x, TabHit::Tab(index)));
-        }
-    }
-    if last + 1 < labels.len() {
-        buf.set_string(end - 1, area.y, "›", mark(TabHit::More(last + 1)));
-        hits.push((end - 1, end, TabHit::More(last + 1)));
-    }
-    // The marker on the tab's first blank (before its number) or its last (after its `×`).
-    if let Some((i, after)) = drop {
-        let of_tab = |h: &&(u16, u16, TabHit)| matches!(h.2, TabHit::Tab(j) | TabHit::Close(j) if j == i);
-        let x = match after {
-            false => hits.iter().filter(of_tab).map(|h| h.0).min(),
-            true => hits.iter().filter(of_tab).map(|h| h.1).max().map(|x| x - 1),
+    let mut run: Option<(u16, u16, TabHit)> = None;
+    for (k, c) in line.iter().enumerate() {
+        let x = left + k as u16;
+        let Some(c) = c else {
+            hits.extend(run.take());
+            continue;
         };
-        if let Some(x) = x {
-            buf.set_string(x, area.y, DROP, Style::new().fg(th.accent).bg(th.bg).add_modifier(Modifier::BOLD));
+        if c.half == Half::Right {
+            // Hidden by the wide character before it, as `Buffer::set_stringn` leaves it.
+            buf[(x, area.y)].reset();
+        } else {
+            buf[(x, area.y)].set_symbol(&c.symbol).set_style(c.style);
         }
+        match &mut run {
+            Some(r) if r.2 == c.hit => r.1 = x + 1,
+            _ => {
+                hits.extend(run.take());
+                run = Some((x, x + 1, c.hit));
+            }
+        }
+    }
+    hits.extend(run);
+    if last + 1 < n {
+        let h = TabHit::More(order[last + 1]);
+        buf.set_string(end - 1, area.y, "›", mark(h));
+        hits.push((end - 1, end, h));
     }
     hits
 }
