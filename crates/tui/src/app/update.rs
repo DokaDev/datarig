@@ -12,6 +12,7 @@ impl App {
         self.handle_event_here(ev);
         self.sweep_as_plan();
         self.keychain_offer_check();
+        self.forms_follow_keychain();
     }
 
     fn handle_event_here(&mut self, ev: Event) {
@@ -69,6 +70,7 @@ impl App {
         self.on_app_event_here(ev);
         self.sweep_as_plan();
         self.keychain_offer_check();
+        self.forms_follow_keychain();
     }
 
     fn on_app_event_here(&mut self, ev: AppEvent) {

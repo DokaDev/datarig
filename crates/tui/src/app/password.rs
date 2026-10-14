@@ -146,23 +146,20 @@ impl App {
         let Some(reason) = r else { return };
         ErrorLog::new(self.paths.errors_log()).record("secret.unavailable", &reason);
         self.secrets.unavailable = Some(reason);
+        self.forms_follow_keychain();
+    }
+
+    /// The open form, and the profile form waiting under it, follow what is known about the
+    /// keychain now (it may stop or start working while they are open: the launch probe, or any
+    /// keychain call that fails or answers). Called after every event.
+    pub(super) fn forms_follow_keychain(&mut self) {
+        let ok = self.keychain_ok();
         let default = self.default_source.resolve(false);
-        // A new profile form (or a bastion secret not saved yet) that opened before the answer
-        // came must not keep the keychain: the open form, and the one waiting under it.
-        let unusable = |f: &mut super::profiles::ProfileForm| {
-            f.keychain_ok = false;
-            if f.editing.is_none() && f.source == SourceKind::Keychain {
-                f.source = default;
-            }
-            if f.ssh_source == SourceKind::Keychain {
-                f.default_ssh_source(default);
-            }
-        };
         if let Some(f) = self.overlays.form_mut() {
-            unusable(f);
-        }
-        if let Some(f) = self.overlays.profile_form_mut() {
-            unusable(f);
+            f.follow_keychain(ok, default);
+            if let Some(under) = f.back_to.as_deref_mut() {
+                under.follow_keychain(ok, default);
+            }
         }
     }
 

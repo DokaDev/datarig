@@ -708,3 +708,79 @@ fn a_late_keychain_probe_moves_an_unsaved_tunnel_secret_off_the_keychain() {
     h.app.on_app_event(AppEvent::KeychainProbed(Some(no_store())));
     assert_eq!(h.form().ssh_source, SourceKind::Keychain, "saved");
 }
+
+/// A copy is a profile not saved yet: a late probe that finds no keychain moves its bastion
+/// secret off the keychain with its password, though the profile it copies saved both there;
+/// so does a copied tunnel preset's. The profile itself and the preset keep theirs.
+#[test]
+fn a_late_keychain_probe_moves_a_copys_secrets_off_the_keychain() {
+    use datarig_core::fault::{Fault, FaultKind, KeychainFault};
+    use datarig_tui::app::AppEvent;
+    use datarig_tui::app::explorer::RowKind;
+    let no_store = || Fault::new(FaultKind::Keychain(KeychainFault::NoStore), "no secret service");
+    let mut cfg = with_a_preset(DefaultSource::Auto);
+    let mut own = cfg.tunnels[0].settings.clone();
+    own.set_source(PasswordSource::Keychain);
+    cfg.connections[0].ssh = Some(own.clone());
+    cfg.connections[0].set_source(PasswordSource::Keychain);
+    cfg.tunnels[0].settings = own;
+    for preset in [false, true] {
+        let mut h = Harness::launched(&cfg, Lang::En, Arc::new(MemoryStore::new()), Startup::Normal);
+        if preset {
+            h.app.explorer.select_kind(RowKind::Tunnel(h.app.presets[0].id));
+        }
+        h.keys("c");
+        assert_eq!(h.form().ssh_source, SourceKind::Keychain, "preset {preset}");
+        h.app.on_app_event(AppEvent::KeychainProbed(Some(no_store())));
+        assert_eq!(h.form().ssh_source, SourceKind::Prompt, "preset {preset}");
+        if !preset {
+            assert_eq!(h.form().source, SourceKind::Prompt);
+        }
+    }
+    // Copied once the keychain is known not to work: the same.
+    let mut h = Harness::launched(&cfg, Lang::En, Arc::new(MemoryStore::new()), Startup::Normal);
+    h.app.on_app_event(AppEvent::KeychainProbed(Some(no_store())));
+    h.keys("c");
+    assert_eq!((h.form().source, h.form().ssh_source), (SourceKind::Prompt, SourceKind::Prompt), "copied after");
+    h.key(KeyCode::Esc);
+    // The profile and the preset themselves keep what they saved.
+    h.keys("e");
+    assert_eq!((h.form().source, h.form().ssh_source), (SourceKind::Keychain, SourceKind::Keychain), "edited");
+    h.key(KeyCode::Esc);
+    h.app.explorer.select_kind(RowKind::Tunnel(h.app.presets[0].id));
+    h.keys("e");
+    assert_eq!(h.form().ssh_source, SourceKind::Keychain, "edited preset");
+}
+
+/// A keychain that stops working while a form is open (here: it fails to give the edited
+/// profile its password) is known to the form at once: the selectors skip it, and a value not
+/// saved yet (the storage of a tunnel of the profile's own, not turned on; a copy's password)
+/// leaves it. When it works again, the form may pick it again.
+#[test]
+fn an_open_form_follows_a_keychain_that_fails_mid_session() {
+    use datarig_core::fault::{Fault, FaultKind, KeychainFault};
+    let mut cfg = with_a_preset(DefaultSource::Auto);
+    cfg.connections[0].set_source(PasswordSource::Keychain);
+    let mut h = Harness::launched(&cfg, Lang::En, Arc::new(MemoryStore::new()), Startup::Normal);
+    assert!(h.app.keychain_ok());
+    let locked = Fault::new(FaultKind::Keychain(KeychainFault::NoAnswer), "no answer");
+    h.app.set_secret_store(Arc::new(MemoryStore::failing(locked)));
+    h.keys("e");
+    assert!(!h.app.keychain_ok(), "the read failed");
+    assert!(!h.form().keychain_ok, "the open form knows");
+    assert_eq!(h.form().source, SourceKind::Keychain, "saved");
+    assert_eq!(h.form().ssh_source, SourceKind::Prompt, "not saved");
+    // A copy (not saved yet) reading its original's password: both leave it.
+    h.key(KeyCode::Esc);
+    let mut h = Harness::launched(&cfg, Lang::En, Arc::new(MemoryStore::new()), Startup::Normal);
+    let locked = Fault::new(FaultKind::Keychain(KeychainFault::NoAnswer), "no answer");
+    h.app.set_secret_store(Arc::new(MemoryStore::failing(locked)));
+    h.keys("c");
+    assert!(!h.form().keychain_ok);
+    assert_eq!((h.form().source, h.form().ssh_source), (SourceKind::Prompt, SourceKind::Prompt), "copy");
+    // The keychain works again: the form may pick it again; what moved stays.
+    h.app.set_secret_store(Arc::new(MemoryStore::new()));
+    h.key(KeyCode::Tab);
+    assert!(h.form().keychain_ok);
+    assert_eq!(h.form().source, SourceKind::Prompt);
+}

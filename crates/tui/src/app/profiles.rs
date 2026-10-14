@@ -605,6 +605,28 @@ impl ProfileForm {
         }
     }
 
+    /// The keychain is known to work (`ok`) or not. When it stops working, a storage selector
+    /// on it moves to `default` (where a new profile's password goes) unless a saved setting
+    /// put it there. What moves: the password of a new profile or a copy; the bastion secret
+    /// of a new preset or a copy, or one with no saved tunnel setting. Nothing moves back when
+    /// it works again.
+    pub fn follow_keychain(&mut self, ok: bool, default: SourceKind) {
+        if std::mem::replace(&mut self.keychain_ok, ok) == ok || ok {
+            return;
+        }
+        let unsaved = match self.kind {
+            FormKind::Profile => self.editing.is_none(),
+            FormKind::Tunnel { editing, .. } | FormKind::Environment { editing, .. } => !editing,
+            FormKind::DefaultRules => false,
+        };
+        if unsaved && self.source == SourceKind::Keychain {
+            self.source = default;
+        }
+        if self.ssh_source == SourceKind::Keychain && (unsaved || !self.ssh_had) {
+            self.ssh_source = default;
+        }
+    }
+
     /// A form for `c` (`editing`: its index in the list; `None` for a new profile or a copy,
     /// which must come with its own id).
     pub fn from_profile(c: &ConnectionConfig, password: String, editing: Option<usize>) -> Self {
