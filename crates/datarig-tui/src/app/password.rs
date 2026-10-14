@@ -147,12 +147,15 @@ impl App {
         ErrorLog::new(self.paths.errors_log()).record("secret.unavailable", &reason);
         self.secrets.unavailable = Some(reason);
         let default = self.default_source.resolve(false);
-        // A new profile form that opened before the answer came must not keep the keychain:
-        // the open form, and the one waiting under it.
+        // A new profile form (or a bastion secret not saved yet) that opened before the answer
+        // came must not keep the keychain: the open form, and the one waiting under it.
         let unusable = |f: &mut super::profiles::ProfileForm| {
             f.keychain_ok = false;
             if f.editing.is_none() && f.source == SourceKind::Keychain {
                 f.source = default;
+            }
+            if f.ssh_source == SourceKind::Keychain {
+                f.default_ssh_source(default);
             }
         };
         if let Some(f) = self.overlays.form_mut() {

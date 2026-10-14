@@ -107,10 +107,8 @@ impl App {
         let copy = p.as_ref().filter(|_| duplicate).map(|p| profiles::copy_name(&p.name, taken));
         let mut f = ProfileForm::for_tunnel(p.as_ref(), copy);
         f.keychain_ok = self.keychain_ok();
-        if p.is_none() {
-            // A new preset's secret starts in the store a new profile's password would.
-            f.ssh_source = self.default_source.resolve(f.keychain_ok);
-        }
+        // A new preset's secret starts in the store a new profile's password would.
+        f.default_ssh_source(self.default_source.resolve(f.keychain_ok));
         self.clear_test();
         self.overlays.close(OverlayKind::Commands);
         self.overlays.close(OverlayKind::WhichKey);

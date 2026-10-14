@@ -943,6 +943,8 @@ impl App {
                     ProfileForm::from_profile(&p, pw, Some(i))
                 };
                 f.keychain_ok = keychain_ok;
+                // A tunnel of its own turned on here stores its secret where a new profile's would.
+                f.default_ssh_source(self.default_source.resolve(keychain_ok));
                 f.password_unread = !matches!(stored, password::Stored::Known(_));
                 if matches!(stored, password::Stored::Keychain) {
                     f.reading = Some(p.id);

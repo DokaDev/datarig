@@ -528,8 +528,9 @@ pub struct ProfileForm {
     /// time limit).
     pub saving: bool,
     /// The SSH tunnel. `ssh_enabled`: the profile's own (the bastion fields below);
-    /// `ssh_had`: the profile has settings of its own (kept when turned off or when a preset
-    /// is picked); a profile that never had any gets none until they are turned on.
+    /// `ssh_had`: the profile (or preset) has saved settings of its own (kept when turned off
+    /// or when a preset is picked); a profile that never had any gets none until they are
+    /// turned on.
     pub ssh_enabled: bool,
     ssh_had: bool,
     /// The tunnel preset picked (its name); `None`: none. Never together with `ssh_enabled`.
@@ -592,7 +593,16 @@ impl ProfileForm {
         let mut f = Self::new_profile();
         f.source = source;
         f.keychain_ok = keychain_ok;
+        f.default_ssh_source(source);
         f
+    }
+
+    /// Start the bastion secret's storage selector on `source` (where a new profile's password
+    /// goes) when no saved tunnel setting fills it.
+    pub fn default_ssh_source(&mut self, source: SourceKind) {
+        if !self.ssh_had {
+            self.ssh_source = source;
+        }
     }
 
     /// A form for `c` (`editing`: its index in the list; `None` for a new profile or a copy,
@@ -701,6 +711,8 @@ impl ProfileForm {
         };
         let editing = p.is_some() && copy.is_none();
         let mut f = Self::from_profile(&c, String::new(), None);
+        // A new preset has no saved settings (a copy has its original's).
+        f.ssh_had = p.is_some();
         f.kind = FormKind::Tunnel { id: p.filter(|_| editing).map_or_else(TunnelId::new, |p| p.id), editing };
         f.original_name = p.filter(|_| editing).map(|p| p.name.clone());
         f.section = Section::Ssh;
