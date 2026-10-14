@@ -795,6 +795,12 @@ fn an_insert_copy_flashes_only_the_columns_it_wrote() {
     assert!(copied.starts_with("INSERT INTO `shop`.`Items` (`id`, `bin`, `bt`) VALUES"), "{copied}");
     let flash = |h: &Harness| h.app.copy_flash.as_ref().map(|f| (f.rows.clone(), f.cols.clone()));
     assert_eq!(flash(&h), Some((0..1, vec![0, 1, 2])), "not the generated `txt`");
+    // A range from the second column: the columns of the result it wrote.
+    h.keys("lvll");
+    h.keys(" ryi");
+    let copied = clip.last().unwrap_or_default();
+    assert!(copied.starts_with("INSERT INTO `shop`.`Items` (`bin`, `bt`) VALUES"), "{copied}");
+    assert_eq!(flash(&h), Some((0..1, vec![1, 2])));
     h.command("copy csv all");
     assert_eq!(flash(&h), Some((0..1, vec![0, 1, 2, 3])));
 }
