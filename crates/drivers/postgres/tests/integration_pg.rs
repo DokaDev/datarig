@@ -4479,6 +4479,25 @@ async fn start(q: &Conn, obs: &mut Conn, tag: &str, sql: &str) {
     started(obs, tag).await;
 }
 
+/// Wait until the statement of the session tagged `tag` sleeps in `pg_sleep`.
+async fn sleeping(obs: &mut Conn, tag: &str) {
+    let sql = format!(
+        "SELECT count(*) FROM pg_stat_activity WHERE application_name = 'datarig-q-{tag}' \
+         AND state = 'active' AND wait_event = 'PgSleep'"
+    );
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut n = 2_000;
+    loop {
+        let DbEvent::Page { rows, .. } = obs.run(n, &sql).await else { panic!("pg_stat_activity") };
+        if rows[0][0].as_deref() == Some("1") {
+            return;
+        }
+        assert!(Instant::now() < deadline, "the statement never slept");
+        n += 1;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 /// Every event until the session ends (its channel closes), within `secs`.
 async fn until_ended(q: &mut Conn, secs: u64) -> Vec<DbEvent> {
     let mut seen = Vec::new();
@@ -4568,6 +4587,9 @@ async fn a_cancel_written_is_sent_even_when_its_stream_cannot_be_shut_down() {
         let _backends = Backends::new(&url, &tag);
         let (mut q, _, mut obs) = open_cancel_dial(&url, &tag, later).await;
         start(&q, &mut obs, &tag, caught).await;
+        // Active is not enough: a cancel that lands before the block (and its handler) is
+        // entered is not caught, and the run would fail instead of ending.
+        sleeping(&mut obs, &tag).await;
         q.session.cancel();
         let ev = q
             .wait(

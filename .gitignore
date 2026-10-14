@@ -10,6 +10,9 @@
 # Release archives made by .github/scripts/release-archive.sh
 /dist/
 
+# Python bytecode (dev/vim-cases.py)
+__pycache__/
+
 # OS and editor files
 .DS_Store
 ._*
