@@ -79,16 +79,27 @@ impl WiredSession {
             user: d.user.clone(),
             password: d.password.clone().unwrap_or_default(),
             database: d.database.clone(),
-            sslmode: "disable".into(),
+            // Plain, as the budgets were measured (MySQL's default would be TLS).
+            sslmode: datarig_core::tls::TlsMode::Disable.name(d.scheme).into(),
             ..ConnectionConfig::default()
         };
         let (tx, rx) = unbounded_channel();
         let opts = ConnectOptions::new(500, role, &format!("bench{}", std::process::id())).read_only(read_only);
         let session = driver.connect(&cfg, role, opts, tx);
         let mut s = WiredSession { session, rx, id: 0, counts: p.counts, one_way, paging: PagingMode::NoHold };
-        match s.next(Duration::from_secs(10)).await? {
-            DbEvent::Connected => Ok(s),
-            ev => Err(format!("connect: {ev:?}")),
+        s.connected(Duration::from_secs(10)).await?;
+        Ok(s)
+    }
+
+    /// Wait for `Connected` (how the traffic goes comes first and must be plain: the budgets
+    /// count unencrypted round trips).
+    async fn connected(&mut self, within: Duration) -> Result<(), String> {
+        loop {
+            match self.next(within).await? {
+                DbEvent::Encryption(datarig_core::tls::Encryption::Plain) => {}
+                DbEvent::Connected => return Ok(()),
+                ev => return Err(format!("connect: {ev:?}")),
+            }
         }
     }
 
@@ -106,10 +117,8 @@ impl WiredSession {
         one_way: Duration,
     ) -> Result<WiredSession, String> {
         let mut s = WiredSession { session, rx, id: 0, counts, one_way, paging: PagingMode::NoHold };
-        match s.next(Duration::from_secs(20)).await? {
-            DbEvent::Connected => Ok(s),
-            ev => Err(format!("connect: {ev:?}")),
-        }
+        s.connected(Duration::from_secs(20)).await?;
+        Ok(s)
     }
 
     async fn next(&mut self, within: Duration) -> Result<DbEvent, String> {
