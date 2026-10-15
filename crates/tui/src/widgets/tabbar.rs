@@ -493,7 +493,8 @@ pub(crate) fn draw_tab_bar(app: &mut App, area: Rect, buf: &mut Buffer) -> Vec<(
         labels[active] = label(app_ref, active, place[active], tab, true, total - rest);
     }
     if let Some((from, ..)) = drag {
-        // Lifted: the theme's selection style, but for the environment's badge.
+        // Lifted: the theme's selection style, but for the environment's badge (and a number
+        // drawn as its profile's chip).
         let fill = th.tab_active_bg();
         for p in labels[from].iter_mut().filter(|p| p.style.bg == Some(fill) || p.style.bg == Some(th.bg)) {
             p.style = p.style.patch(th.selection);

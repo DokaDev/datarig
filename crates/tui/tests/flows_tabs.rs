@@ -489,6 +489,11 @@ fn the_tab_number_carries_the_connection_state() {
         assert!(tab_line(&mut h, 160, 45).contains(&format!(" {} console 1 ×", SPINNER[0])));
         h.tab_db(0, done(last_query_id(&h, 0)));
         assert_eq!(look(&mut h), (one(profile), None), "connected");
+        if th.tab_active.fg.is_some() {
+            let x0 = h.app.layout.tree.x + h.app.layout.tree.width;
+            let bg = h.draw(160, 45).backend().buffer()[(x0 + 1, 0)].bg;
+            assert_eq!(bg, theme::chip(theme::profile_color(h.app.profiles[0].display_color())).bg.unwrap());
+        }
         h.tab_db(0, DbEvent::Block(true));
         h.tab_db(0, DbEvent::TxOpen(true));
         assert_eq!(look(&mut h), (one(profile), warn("◆", warning)), "the user's transaction");
