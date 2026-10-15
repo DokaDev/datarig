@@ -368,6 +368,7 @@ fn every_token_of_a_theme_can_be_set_by_name() {
         size_mild: _,
         size_heated: _,
         yank_flash: _,
+        tab_active: _,
         chart_1: _,
         chart_2: _,
         chart_3: _,
@@ -377,7 +378,7 @@ fn every_token_of_a_theme_can_be_set_by_name() {
         dim: _,
     } = DARK;
     // Every field above but `dim`.
-    assert_eq!(COLOR_TOKENS.len() + STYLE_TOKENS.len(), 56);
+    assert_eq!(COLOR_TOKENS.len() + STYLE_TOKENS.len(), 57);
     let mut th = DARK;
     for (i, name) in COLOR_TOKENS.iter().enumerate() {
         *color_token(&mut th, name).unwrap() = Color::Indexed(i as u8);
@@ -396,6 +397,7 @@ fn every_token_of_a_theme_can_be_set_by_name() {
         (th.size_mild, th.size_heated),
         (Style::new().bg(Color::Indexed(125)), Style::new().bg(Color::Indexed(126)))
     );
+    assert_eq!(th.tab_active, Style::new().bg(Color::Indexed(127)));
     assert_eq!(th.chart(), [23, 24, 25, 26, 27, 28].map(Color::Indexed));
     assert!(color_token(&mut th, "selection").is_none() && style_token(&mut th, "bg").is_none());
 }
@@ -472,6 +474,30 @@ fn a_theme_file_replaces_tokens_of_the_theme_it_extends() {
     assert!(matches!(resolve("gone", Background::Dark, dir), Err(ThemeError::Unknown { .. })));
     assert_eq!(resolve("mine", Background::Dark, None), Err(ThemeError::Unknown { name: "mine".into(), dir: None }));
     assert_eq!(resolve("terminal", Background::Dark, None).unwrap(), TERMINAL);
+}
+
+/// A theme file that leaves `tab_active` out keeps the fill of the theme it extends while its
+/// background and accent are that theme's; with its own background or accent (a file written
+/// before the token existed), the active tab is that accent blended into that background, so it
+/// never keeps a fill made for other colors. A file that sets it keeps what it set.
+#[test]
+fn a_theme_file_without_the_active_tab_fill_gets_one_of_its_own_colors() {
+    let d = ThemesDir::new("tab-active");
+    let dir = Some(d.0.as_path());
+    d.file("same", "extends = \"nord\"\n[colors]\nwarning = \"#ffcc00\"\n");
+    assert_eq!(resolve("same", Background::Dark, dir).unwrap().tab_active, NORD.tab_active);
+    d.file("old", "extends = \"dark\"\n[colors]\nbg = \"#000000\"\naccent = \"#ff0000\"\n");
+    let old = resolve("old", Background::Dark, dir).unwrap();
+    assert_eq!(old.tab_active, Style::new().bg(Color::Rgb(0x4C, 0, 0)), "30% of the accent");
+    assert_eq!(old.tab_active, old.tab_active_derived());
+    d.file("set", "extends = \"dark\"\n[colors]\nbg = \"#000000\"\n[styles]\ntab_active = { bg = \"blue\" }\n");
+    assert_eq!(resolve("set", Background::Dark, dir).unwrap().tab_active, Style::new().bg(Color::Blue));
+    // Terminal colors cannot be blended: the extended theme's fill stays.
+    d.file("ansi", "extends = \"terminal\"\n[colors]\naccent = \"magenta\"\n");
+    assert_eq!(resolve("ansi", Background::Dark, dir).unwrap().tab_active, TERMINAL.tab_active);
+    // Without a background of its own the active tab is on the alternate surface.
+    let th = Theme { tab_active: Style::new().fg(Color::Red), ..DARK };
+    assert_eq!(th.tab_active_bg(), DARK.surface_alt);
 }
 
 #[test]
@@ -929,4 +955,68 @@ fn copied_cells_flash_apart_from_every_grid_background_in_every_theme() {
         let k = contrast(fg(th.yank_flash), f);
         assert!(k >= 4.5, "{name}: text on the flash: {k:.2}");
     }
+}
+
+/// The active tab is on a fill of its own that stands out clearly and is never underlined: on
+/// the terminal theme black on the cyan (apart from the reversed selection a dragged tab takes,
+/// the hover's bright black, the range, the cursor line and the copied cells' yellow); on the
+/// others a background with no text color of its own (the tab's colors stay), apart (8 ΔE or
+/// more) from the background, both surfaces, the cursor line, the selection (focused or not), a
+/// selected range, the hover and the flash, also in 256 colors, further from the background
+/// than the hover; the tab's name reads on it as text (4.5:1) in body text and every
+/// environment color, its number, marks and `×` (also the error color it takes under the
+/// pointer) as marks (3:1), as [`Theme::readable_on`] makes them, which keeps a color that
+/// already reads.
+#[test]
+fn the_active_tab_stands_apart_from_every_other_background_in_every_theme() {
+    for (name, th) in BUILTINS.iter().copied() {
+        assert!(th.tab_active.bg.is_some(), "{name}");
+        assert!(!th.tab_active.add_modifier.intersects(Modifier::UNDERLINED | Modifier::REVERSED), "{name}");
+        assert_eq!(th.tab_active_bg(), bg(th.tab_active), "{name}");
+    }
+    let t = &TERMINAL;
+    assert_eq!(t.tab_active, Style::new().fg(Color::Black).bg(Color::Cyan));
+    assert_eq!(t.tab_active.bg, Some(t.accent), "the accent's cyan");
+    for other in [t.selection, t.selection_unfocused(), t.range, t.cursor_line, t.hover, t.yank_flash] {
+        assert_ne!(t.tab_active, other);
+        assert_ne!(t.tab_active.bg, other.bg, "{other:?}");
+    }
+    assert_ne!(t.tab_active.patch(t.selection), t.tab_active, "a dragged active tab looks lifted");
+    for (name, th) in rgb_themes() {
+        assert_eq!(th.tab_active.fg, None, "{name}: the tab's own colors stay");
+        let f = bg(th.tab_active);
+        for other in [
+            th.bg,
+            th.surface,
+            th.surface_alt,
+            bg(th.cursor_line),
+            bg(th.selection),
+            bg(th.selection_unfocused()),
+            bg(th.range),
+            bg(th.hover),
+            bg(th.yank_flash),
+        ] {
+            let d = delta_e(f, other);
+            assert!(d >= 8.0, "{name}: the active tab and {other:?} are too close ({d:.2})");
+        }
+        for other in [th.bg, th.surface_alt, bg(th.hover), bg(th.selection)] {
+            assert_ne!(xterm256(f), xterm256(other), "{name}: the active tab and {other:?} in 256 colors");
+        }
+        let (k, hover) = (contrast(f, th.bg), contrast(bg(th.hover), th.bg));
+        assert!(k > hover, "{name}: the active tab ({k:.3}) stands out less than the hover ({hover:.3})");
+        assert!(contrast(th.fg, f) >= 4.5, "{name}: body text on it: {:.2}", contrast(th.fg, f));
+        for env in std::iter::once(None).chain(PROFILE_COLORS.iter().copied().map(Some)) {
+            let c = Theme::readable_on(th.name_color(env), f, 4.5);
+            assert!(contrast(c, f) >= 4.5, "{name}: {env:?} as the name: {:.2}", contrast(c, f));
+        }
+        let marks = [th.fg_muted, th.accent, th.accent_warm, th.warning, th.error, fg(th.read_only_mark)];
+        for c in PROFILE_COLORS.iter().copied().chain(marks) {
+            let m = Theme::readable_on(c, f, 3.0);
+            assert!(contrast(m, f) >= 3.0, "{name}: {c:?} as a mark: {:.2}", contrast(m, f));
+            if contrast(c, f) >= 3.0 {
+                assert_eq!(m, c, "{name}: a color that reads stays");
+            }
+        }
+    }
+    assert_eq!(Theme::readable_on(Color::Red, bg(DARK.tab_active), 3.0), Color::Red, "a terminal color stays");
 }

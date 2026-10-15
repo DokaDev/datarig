@@ -12,7 +12,8 @@
 //! about has no mark. `×` closes the tab as `Ctrl+W` does. A tab without a connection says so
 //! in the mark's place. When the tabs do not fit, the documents' names are shortened first,
 //! then the bar scrolls to keep the active tab visible and `‹` / `›` show that more tabs are
-//! hidden. A tab dragged by the mouse (`app::tab_drag`) is drawn in the theme's selection
+//! hidden. The active tab is on the theme's fill for it (`tab_active`), the others on the bar's
+//! background. A tab dragged by the mouse (`app::tab_drag`) is drawn in the theme's selection
 //! style where the pointer holds it, over its neighbours, which leave a gap where it would land
 //! (the bar then scrolls to keep that place visible); tabs it moves slide to their places.
 
@@ -115,6 +116,8 @@ struct Part {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PartKind {
     Plain,
+    /// The tab's number (or the spinner in its place).
+    Number,
     /// The document's name (shortened first when the tabs do not fit).
     Document,
     /// The close button.
@@ -140,6 +143,14 @@ pub(crate) fn number(app: &App, index: usize, tab: &Tab) -> (String, Color) {
         (Some(p), _) if connected(tab) => (n, theme::profile_color(p.display_color())),
         _ => (n, th.fg_muted),
     }
+}
+
+/// Whether [`number`] draws tab `tab`'s number in its profile's color: connected, nothing
+/// running.
+fn in_profile_color(app: &App, tab: &Tab) -> bool {
+    tab.profile.is_some_and(|id| app.profiles.iter().any(|p| p.id == id))
+        && connected(tab)
+        && state(app, tab) != State::Running
 }
 
 /// The marks after a tab's name, each with a blank before it, on background `bg`: `*` (its
@@ -187,9 +198,11 @@ pub(crate) fn unbound(app: &App, tab: &Tab) -> Option<Label> {
 }
 
 /// One tab label, `doc_max` columns at most for the document's name, numbered as place
-/// `place` (where a dragged tab shows it). Another tab than the active one under the pointer
-/// (its body or its `×`) is on the theme's hover background (the environment's badge keeps its
-/// own).
+/// `place` (where a dragged tab shows it). The active tab is on the theme's fill for it, its
+/// colors made to read there (the name as text, the rest as marks) or replaced by the fill's own
+/// text color (a connected number then a chip of its profile's color); another tab under the
+/// pointer (its body or its `×`) is on the theme's hover background. The environment's badge
+/// keeps its own colors on both.
 fn label(app: &App, index: usize, place: usize, tab: &Tab, active: bool, doc_max: usize) -> Vec<Part> {
     let th = theme::cur();
     let hovered = !active
@@ -197,7 +210,7 @@ fn label(app: &App, index: usize, place: usize, tab: &Tab, active: bool, doc_max
             app.pointer_hover(),
             Some(crate::app::hover::PointerOn::Tab(TabHit::Tab(i) | TabHit::Close(i))) if i == index
         );
-    let bg = if active { th.surface_alt } else { th.bg };
+    let bg = if active { th.tab_active_bg() } else { th.bg };
     let part = |text: String, style: Style| Part { text, style, kind: PartKind::Plain };
     let (n, color) = number(app, place, tab);
     let mut num = Style::new().fg(color).bg(bg).add_modifier(Modifier::BOLD);
@@ -219,7 +232,7 @@ fn label(app: &App, index: usize, place: usize, tab: &Tab, active: bool, doc_max
     if active {
         doc = doc.add_modifier(Modifier::BOLD);
     }
-    let mut parts = vec![part(format!(" {n} "), num)];
+    let mut parts = vec![Part { text: format!(" {n} "), style: num, kind: PartKind::Number }];
     let mut name = document_name(app, tab);
     if tab.is_table() && app.icons_on() {
         name = format!("{} {name}", icons::TABLE);
@@ -246,6 +259,21 @@ fn label(app: &App, index: usize, place: usize, tab: &Tab, active: bool, doc_max
     if hovered {
         for p in parts.iter_mut().filter(|p| p.style.bg == Some(bg)) {
             p.style = p.style.patch(crate::widgets::hover_style());
+        }
+    }
+    if active {
+        for p in parts.iter_mut().filter(|p| p.style.bg == Some(bg)) {
+            p.style = match (th.tab_active.fg, p.style.fg) {
+                // A connected number keeps its profile's color as a chip: which connection,
+                // at a glance, also where the fill's own text color replaces the others.
+                (Some(_), Some(c)) if p.kind == PartKind::Number && in_profile_color(app, tab) => theme::chip(c),
+                (Some(_), _) => p.style.patch(th.tab_active),
+                (None, Some(c)) => {
+                    let min = if p.kind == PartKind::Document { 4.5 } else { 3.0 };
+                    p.style.fg(theme::Theme::readable_on(c, bg, min))
+                }
+                (None, None) => p.style,
+            };
         }
     }
     parts
@@ -371,9 +399,12 @@ fn put_tab(line: &mut [Option<Cell>], x0: u16, stop: u16, x: i32, parts: &[Part]
         }
         let room = usize::try_from(i32::from(stop) - x).unwrap_or(0);
         let s = clip(&p.text, room);
-        // Under the pointer: only the `×` changes, to the theme's error color.
+        // Under the pointer: only the `×` changes, to the theme's error color (made to read on
+        // the tab's background).
         let style = match (p.kind == PartKind::Close, hover) {
-            (true, Some(TabHit::Close(i))) if i == index => p.style.fg(th.error),
+            (true, Some(TabHit::Close(i))) if i == index => {
+                p.style.fg(theme::Theme::readable_on(th.error, p.style.bg.unwrap_or(th.bg), 3.0))
+            }
             _ => p.style,
         };
         let hit = if p.kind == PartKind::Close { TabHit::Close(index) } else { TabHit::Tab(index) };
@@ -462,8 +493,10 @@ pub(crate) fn draw_tab_bar(app: &mut App, area: Rect, buf: &mut Buffer) -> Vec<(
         labels[active] = label(app_ref, active, place[active], tab, true, total - rest);
     }
     if let Some((from, ..)) = drag {
-        // Lifted: the theme's selection style, but for the environment's badge.
-        for p in labels[from].iter_mut().filter(|p| p.style.bg == Some(th.surface_alt) || p.style.bg == Some(th.bg)) {
+        // Lifted: the theme's selection style, but for the environment's badge (and a number
+        // drawn as its profile's chip).
+        let fill = th.tab_active_bg();
+        for p in labels[from].iter_mut().filter(|p| p.style.bg == Some(fill) || p.style.bg == Some(th.bg)) {
             p.style = p.style.patch(th.selection);
         }
     }

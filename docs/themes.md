@@ -42,7 +42,7 @@ Each writes a new file and never replaces one: a name that is taken, that is not
 |---|---|
 | `bg` | The background of the panes: explorer, editor, results. |
 | `surface` | The background of dialogs, popups, menus, the command line and the status bar. |
-| `surface_alt` | A second surface: the active tab, every other row of the result grid, form fields and buttons. |
+| `surface_alt` | A second surface: every other row of the result grid, form fields and buttons. |
 | `border` | Borders and rules between panes and around dialogs. |
 | `accent` | The main accent: the focused pane's border, dialog borders, labels and names to notice. |
 | `accent_warm` | The warm accent: values on the settings screen, an open transaction, keys in menus. |
@@ -101,3 +101,4 @@ Each writes a new file and never replaces one: a name that is taken, that is not
 | `size_hot` | Explorer size estimates of 1 GiB or more (with five levels: 10 GiB or more). |
 | `size_mild` | With five size levels, explorer size estimates of 1 MiB or more. |
 | `size_heated` | With five size levels, explorer size estimates of 1 GiB or more. |
+| `tab_active` | The active tab's fill (its bg; the alternate surface without one). An fg replaces every text color on it but the environment's badge (a connected tab's number becomes a chip of its profile's color); without one the tab's colors stay, made to read on it. A file that leaves it out but sets bg or accent, both RGB, gets that accent blended into that bg; else the fill of the theme it extends stays. |
