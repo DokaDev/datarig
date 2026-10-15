@@ -164,14 +164,17 @@ fn explorer_names_take_their_environments_color_muted_until_connected() {
 }
 
 /// The tab bar's titles: the color of the tab's connection's environment, bold on the active
-/// tab, muted on another; without an environment the body text (muted on another tab) as
-/// before. The badge chip stays.
+/// tab (made to read as text on its fill), muted on another; without an environment the body
+/// text (muted on another tab) as before. The badge chip stays.
 #[test]
 fn tab_titles_take_their_connections_environment_color() {
     let mut h = Harness::with_config(&config(), Lang::En);
     let th = theme::DARK;
     let bar = |h: &Harness| h.app.layout.tab_bar;
-    assert_text(style_of(&mut h, bar, "console 1"), th.name_style(Some(red()), true), "active");
+    let on_fill = Theme::readable_on(th.name_color(Some(red())), th.tab_active_bg(), 4.5);
+    assert_ne!(on_fill, red(), "the red reads at less than 4.5:1 on dark's fill");
+    let active = Style::new().fg(on_fill).add_modifier(Modifier::BOLD);
+    assert_text(style_of(&mut h, bar, "console 1"), active, "active");
     let s = style_of(&mut h, bar, " PROD ");
     assert_eq!(s.bg, Some(red()), "the chip stays");
     // A second tab, made active: the first one's title is muted now.
@@ -180,7 +183,7 @@ fn tab_titles_take_their_connections_environment_color() {
     let first = style_of(&mut h, bar, "console 1");
     assert_eq!(first.fg, th.name_style(Some(red()), false).fg);
     assert!(!first.add_modifier.contains(Modifier::BOLD));
-    assert_text(style_of(&mut h, bar, "console 2"), th.name_style(Some(red()), true), "active");
+    assert_text(style_of(&mut h, bar, "console 2"), active, "active");
     // Without a connection: the body text, as before.
     h.app.tab_mut().profile = None;
     let second = style_of(&mut h, bar, "console 2");

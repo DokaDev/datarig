@@ -16,10 +16,10 @@ use ratatui::style::{Color, Modifier, Style};
 /// text in bright black never vanishes on it; a hovered row or tab shows that text color, so its
 /// colored marks go plain while it is hovered), copied cells flash in black on the yellow (a
 /// selection's reversed text would not show on the cursor's cell), the active tab is black on the
-/// cyan of the accent (its colored marks go plain there, as on a hovered tab; dark text reads on
-/// the cyan of common palettes, light or dark, where the bright black is the hover's and a
-/// reversed tab would look like a dragged one), and the screen behind a
-/// dialog is dimmed with [`Modifier::DIM`].
+/// cyan of the accent (its colored marks go plain there, as on a hovered tab, and a connected
+/// number is a chip of its profile's color; dark text reads on the cyan of common palettes,
+/// light or dark, where the bright black is the hover's and a reversed tab would look like a
+/// dragged one), and the screen behind a dialog is dimmed with [`Modifier::DIM`].
 pub const TERMINAL: Theme = Theme {
     bg: Color::Reset,
     surface: Color::Reset,

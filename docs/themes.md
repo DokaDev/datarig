@@ -101,4 +101,4 @@ Each writes a new file and never replaces one: a name that is taken, that is not
 | `size_hot` | Explorer size estimates of 1 GiB or more (with five levels: 10 GiB or more). |
 | `size_mild` | With five size levels, explorer size estimates of 1 MiB or more. |
 | `size_heated` | With five size levels, explorer size estimates of 1 GiB or more. |
-| `tab_active` | The active tab (set bg: surface_alt without one). An fg replaces every text color on it but the environment's badge; without one they stay, made to read on it. Left out, a file that sets bg or accent gets the accent blended into its bg. |
+| `tab_active` | The active tab's fill (its bg; the alternate surface without one). An fg replaces every text color on it but the environment's badge (a connected tab's number becomes a chip of its profile's color); without one the tab's colors stay, made to read on it. A file that leaves it out but sets bg or accent, both RGB, gets that accent blended into that bg; else the fill of the theme it extends stays. |

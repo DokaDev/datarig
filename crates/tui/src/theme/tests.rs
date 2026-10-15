@@ -964,8 +964,9 @@ fn copied_cells_flash_apart_from_every_grid_background_in_every_theme() {
 /// more) from the background, both surfaces, the cursor line, the selection (focused or not), a
 /// selected range, the hover and the flash, also in 256 colors, further from the background
 /// than the hover; the tab's name reads on it as text (4.5:1) in body text and every
-/// environment color, its number, marks and `×` as marks (3:1), as [`Theme::readable_on`] makes
-/// them, which keeps a color that already reads.
+/// environment color, its number, marks and `×` (also the error color it takes under the
+/// pointer) as marks (3:1), as [`Theme::readable_on`] makes them, which keeps a color that
+/// already reads.
 #[test]
 fn the_active_tab_stands_apart_from_every_other_background_in_every_theme() {
     for (name, th) in BUILTINS.iter().copied() {
@@ -1008,7 +1009,7 @@ fn the_active_tab_stands_apart_from_every_other_background_in_every_theme() {
             let c = Theme::readable_on(th.name_color(env), f, 4.5);
             assert!(contrast(c, f) >= 4.5, "{name}: {env:?} as the name: {:.2}", contrast(c, f));
         }
-        let marks = [th.fg_muted, th.accent, th.accent_warm, th.warning, fg(th.read_only_mark)];
+        let marks = [th.fg_muted, th.accent, th.accent_warm, th.warning, th.error, fg(th.read_only_mark)];
         for c in PROFILE_COLORS.iter().copied().chain(marks) {
             let m = Theme::readable_on(c, f, 3.0);
             assert!(contrast(m, f) >= 3.0, "{name}: {c:?} as a mark: {:.2}", contrast(m, f));

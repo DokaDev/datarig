@@ -98,7 +98,8 @@ pub struct Theme {
     /// surfaces, the hover, the selections and the copied cells' flash. Without an fg the tab's
     /// colors stay, moved where they would not read on it ([`Self::tab_active_bg`],
     /// [`Self::readable_on`]); an fg replaces every text color on it but the environment's
-    /// badge (the terminal theme's, whose colors cannot be checked).
+    /// badge, and a connected tab's number becomes a chip of its profile's color (as on the
+    /// terminal theme, whose colors cannot be checked against it).
     pub tab_active: Style,
     /// A faint tint behind the statement a run would take.
     pub current_stmt: Style,
@@ -543,7 +544,7 @@ tokens! {
         size_hot => "Explorer size estimates of 1 GiB or more (with five levels: 10 GiB or more).",
         size_mild => "With five size levels, explorer size estimates of 1 MiB or more.",
         size_heated => "With five size levels, explorer size estimates of 1 GiB or more.",
-        tab_active => "The active tab (set bg: surface_alt without one). An fg replaces every text color on it but the environment's badge; without one they stay, made to read on it. Left out, a file that sets bg or accent gets the accent blended into its bg.",
+        tab_active => "The active tab's fill (its bg; the alternate surface without one). An fg replaces every text color on it but the environment's badge (a connected tab's number becomes a chip of its profile's color); without one the tab's colors stay, made to read on it. A file that leaves it out but sets bg or accent, both RGB, gets that accent blended into that bg; else the fill of the theme it extends stays.",
 }
 
 /// The token names of a theme file.

@@ -461,7 +461,9 @@ fn tab1_look(h: &mut Harness) -> (String, ratatui::style::Color, Option<(String,
 /// The tab's number carries its connection, in theme colors (never red): muted with no session,
 /// the profile's color once connected, the status bar's spinner (accent) in its place while a
 /// statement runs; after the name `◆` (warning) while the user's transaction is open, also while
-/// a statement runs in it, and `!` (warm) for an aborted transaction or a lost connection.
+/// a statement runs in it, and `!` (warm) for an aborted transaction or a lost connection. On
+/// the active tab of a theme whose fill has its own text color (the terminal theme) the marks
+/// keep their shapes in that color and a connected number is a chip of the profile's color.
 #[test]
 fn the_tab_number_carries_the_connection_state() {
     use datarig_tui::theme::{self, Theme};
@@ -475,8 +477,12 @@ fn the_tab_number_carries_the_connection_state() {
             let (n, c, mark) = tab1_look(h);
             ((n, c), mark)
         };
-        let warn = |m: &str, c| Some((m.to_string(), c));
+        // The active tab's colors: the fill's own text color, where it has one.
+        let on = |c| th.tab_active.fg.unwrap_or(c);
+        let warn = |m: &str, c| Some((m.to_string(), on(c)));
+        let profile = if th.tab_active.fg.is_some() { theme::chip(profile).fg.unwrap() } else { profile };
         let Theme { fg_muted, accent, warning, accent_warm, .. } = th;
+        let (fg_muted, accent) = (on(fg_muted), on(accent));
         assert_eq!(look(&mut h), (one(fg_muted), None), "no session yet");
         h.ctrl('e');
         assert_eq!(look(&mut h), ((SPINNER[0].to_string(), accent), None), "running: the spinner, as wide");

@@ -237,7 +237,7 @@ fn the_pointer_lights_up_a_tabs_close_button() {
 
 /// On every built-in theme the hovered `×` has another text color than the plain one, on the
 /// hovered tab's background (the theme's hover), no modifier added (the terminal theme uses an
-/// ANSI color).
+/// ANSI color): the error color, moved where it would read at less than 3:1 there.
 #[test]
 fn a_lit_close_button_reads_on_every_built_in_theme() {
     for (name, theme) in datarig_tui::theme::BUILTINS {
@@ -249,7 +249,12 @@ fn a_lit_close_button_reads_on_every_built_in_theme() {
         hover(&mut h, x, y);
         let lit = h.draw(100, 30).backend().buffer()[(x, y)].clone();
         assert_ne!(lit.fg, plain.fg, "{name}: the × changes its text color");
-        assert_eq!(lit.fg, theme.error, "{name}: to the error color");
+        let error = datarig_tui::theme::Theme::readable_on(theme.error, lit.bg, 3.0);
+        assert_eq!(lit.fg, error, "{name}: to the error color");
+        if let ratatui::style::Color::Rgb(..) = lit.bg {
+            let k = datarig_tui::theme::contrast_ratio(lit.fg, lit.bg);
+            assert!(k >= 3.0, "{name}: the lit × on the hover: {k:.2}");
+        }
         assert_ne!(lit.fg, lit.bg, "{name}: its text reads");
         assert_eq!(Some(lit.bg), theme.hover.bg, "{name}: the hovered tab's background");
         assert_eq!(lit.modifier, plain.modifier, "{name}: no modifier added");
@@ -319,24 +324,31 @@ fn the_active_tab_is_on_a_fill_of_its_own() {
         let other = 1 - active;
         let fill = th.tab_active_bg();
         assert_ne!(fill, th.bg, "{name}");
-        let t = h.draw(100, 30);
-        let buf = t.backend().buffer();
+        let buf = h.draw(100, 30).backend().buffer().clone();
         let (a, b) = tab_span(&h, active);
-        let mut name_cells = 0;
+        let row: String = (a..b).map(|x| buf[(x, y)].symbol().to_string()).collect();
+        let at = a + u16::try_from(row.find("console").unwrap_or_else(|| panic!("{name}: {row}"))).unwrap();
         for x in a..b {
             let cell = &buf[(x, y)];
             assert_eq!(cell.bg, fill, "{name}: column {x} of the active tab");
             assert!(!cell.modifier.contains(Modifier::UNDERLINED), "{name}: column {x}");
             if let Some(fg) = th.tab_active.fg {
                 assert_eq!(cell.fg, fg, "{name}: column {x}: the fill's text color");
-            } else if cell.symbol().chars().all(char::is_alphabetic) {
-                name_cells += 1;
+            } else if (at..at + 7).contains(&x) {
                 let k = contrast_ratio(cell.fg, fill);
                 assert!(k >= 4.5, "{name}: column {x}: the name on the fill: {k:.2}");
             }
         }
-        if th.tab_active.fg.is_none() {
-            assert!(name_cells >= "console".len(), "{name}: the name was checked");
+        // Its `×` under the pointer: the error color, still on the fill and reading there.
+        let close = hit_x(&h, TabHit::Close(active));
+        assert!(hover(&mut h, close, y), "{name}");
+        let t = h.draw(100, 30);
+        let cell = &t.backend().buffer()[(close, y)];
+        assert_eq!(cell.bg, fill, "{name}: the active tab's hovered `×`");
+        if matches!(fill, ratatui::style::Color::Rgb(..)) {
+            assert_ne!(cell.fg, buf[(close, y)].fg, "{name}: the `×` lights up");
+            let k = contrast_ratio(cell.fg, fill);
+            assert!(k >= 3.0, "{name}: the hovered `×` on the fill: {k:.2}");
         }
         let (c, d) = tab_span(&h, other);
         for x in c..d {
