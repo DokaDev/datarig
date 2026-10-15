@@ -292,6 +292,64 @@ fn a_lit_close_button_goes_out_when_the_bar_changes() {
     assert_ne!(t.backend().buffer()[(x, y)].bg, sel, "not lit under the command line");
 }
 
+/// The columns `[x0, x1)` of tab `i` (its body and its `×`).
+fn tab_span(h: &Harness, i: usize) -> (u16, u16) {
+    let hits: Vec<_> = h
+        .app
+        .tab_hits()
+        .iter()
+        .filter(|t| matches!(t.2, TabHit::Tab(j) | TabHit::Close(j) if j == i))
+        .copied()
+        .collect();
+    (hits.iter().map(|t| t.0).min().unwrap(), hits.iter().map(|t| t.1).max().unwrap())
+}
+
+/// The active tab is on the theme's fill for it, whole (its number, name, marks and `×`), and
+/// the other tab on the bar's background, in every built-in theme: on the terminal theme in
+/// black on the cyan; on the others in the tab's own colors, its name reading on the fill as
+/// text (4.5:1). An inactive tab under the pointer takes the hover, apart from the fill.
+#[test]
+fn the_active_tab_is_on_a_fill_of_its_own() {
+    use datarig_tui::theme::contrast_ratio;
+    for (name, th) in datarig_tui::theme::BUILTINS.iter().copied() {
+        let mut h = two_tabs();
+        h.app.theme = std::sync::Arc::new(th.clone());
+        let y = h.app.layout.tab_bar.y;
+        let active = h.app.tabs.active_index();
+        let other = 1 - active;
+        let fill = th.tab_active_bg();
+        assert_ne!(fill, th.bg, "{name}");
+        let t = h.draw(100, 30);
+        let buf = t.backend().buffer();
+        let (a, b) = tab_span(&h, active);
+        let mut name_cells = 0;
+        for x in a..b {
+            let cell = &buf[(x, y)];
+            assert_eq!(cell.bg, fill, "{name}: column {x} of the active tab");
+            assert!(!cell.modifier.contains(Modifier::UNDERLINED), "{name}: column {x}");
+            if let Some(fg) = th.tab_active.fg {
+                assert_eq!(cell.fg, fg, "{name}: column {x}: the fill's text color");
+            } else if cell.symbol().chars().all(char::is_alphabetic) {
+                name_cells += 1;
+                let k = contrast_ratio(cell.fg, fill);
+                assert!(k >= 4.5, "{name}: column {x}: the name on the fill: {k:.2}");
+            }
+        }
+        if th.tab_active.fg.is_none() {
+            assert!(name_cells >= "console".len(), "{name}: the name was checked");
+        }
+        let (c, d) = tab_span(&h, other);
+        for x in c..d {
+            assert_eq!(buf[(x, y)].bg, th.bg, "{name}: column {x} of the other tab");
+        }
+        assert!(hover(&mut h, c + 1, y), "{name}");
+        let t = h.draw(100, 30);
+        let cell = &t.backend().buffer()[(c + 1, y)];
+        assert_eq!(Some(cell.bg), th.hover.bg, "{name}: the hovered tab");
+        assert_ne!(cell.bg, fill, "{name}: the hover is not the fill");
+    }
+}
+
 /// Another tab than the active one under the pointer takes the theme's hover background, whole
 /// (its number, title, marks and `×`): apart from the bar's background and the active tab's on
 /// every built-in theme, never underlined or in italics, its text keeping its color (the
@@ -328,7 +386,7 @@ fn a_hovered_tab_takes_a_background_of_its_own() {
             }
             assert_eq!(Some(cell.bg), th.hover.bg, "{name}: column {x}");
             assert_ne!(cell.bg, th.bg, "{name}");
-            assert_ne!(cell.bg, th.surface_alt, "{name}: not the active tab's");
+            assert_ne!(cell.bg, th.tab_active_bg(), "{name}: not the active tab's");
             assert_eq!(cell.fg, th.hover.fg.unwrap_or(plain[i].fg), "{name}: column {x}: its text color");
             assert_eq!(cell.modifier, plain[i].modifier, "{name}: column {x}: no underline, no italics");
         }

@@ -94,6 +94,12 @@ pub struct Theme {
     /// clipboard: a background (with its own text color) that stands apart from every other
     /// background of the grid; never an underline.
     pub yank_flash: Style,
+    /// The active tab: a fill (its bg) that stands clearly apart from the bar's background, both
+    /// surfaces, the hover, the selections and the copied cells' flash. Without an fg the tab's
+    /// colors stay, moved where they would not read on it ([`Self::tab_active_bg`],
+    /// [`Self::readable_on`]); an fg replaces every text color on it but the environment's
+    /// badge (the terminal theme's, whose colors cannot be checked).
+    pub tab_active: Style,
     /// A faint tint behind the statement a run would take.
     pub current_stmt: Style,
     /// The bar in the editor's gutter next to the statement a run would take (or the
@@ -189,6 +195,8 @@ pub const DARK: Theme = Theme {
     cursor_line: Style::new().bg(rgb(0x1F2530)),
     hover: Style::new().bg(rgb(0x2D3035)),
     yank_flash: Style::new().fg(rgb(0xD8DEE9)).bg(rgb(0x514233)),
+    // 34% of the accent blended into the background.
+    tab_active: Style::new().bg(rgb(0x284B4B)),
     current_stmt: Style::new().bg(rgb(0x1A2129)),
     current_stmt_bar: rgb(0x3F8F87),
     running_stmt: Style::new().bg(rgb(0x2C2825)),
@@ -359,6 +367,10 @@ pub fn resolve_with_base(
 
 /// `base` with the tokens of a theme file.
 pub fn from_spec(spec: &ThemeSpec, mut base: Theme) -> Theme {
+    // A file written before `tab_active` existed (or leaving it out) with its own background or
+    // accent: a fill of those, not the one made for the theme it extends.
+    let derive = !spec.styles.iter().any(|(n, _)| n == "tab_active")
+        && spec.colors.iter().any(|(n, _)| n == "bg" || n == "accent");
     for (name, c) in &spec.colors {
         if let Some(slot) = color_token(&mut base, name) {
             *slot = color(*c);
@@ -368,6 +380,9 @@ pub fn from_spec(spec: &ThemeSpec, mut base: Theme) -> Theme {
         if let Some(slot) = style_token(&mut base, name) {
             *slot = style(s);
         }
+    }
+    if derive {
+        base.tab_active = base.tab_active_derived();
     }
     base
 }
@@ -473,7 +488,7 @@ tokens! {
     colors:
         bg => "The background of the panes: explorer, editor, results.",
         surface => "The background of dialogs, popups, menus, the command line and the status bar.",
-        surface_alt => "A second surface: the active tab, every other row of the result grid, form fields and buttons.",
+        surface_alt => "A second surface: every other row of the result grid, form fields and buttons.",
         border => "Borders and rules between panes and around dialogs.",
         accent => "The main accent: the focused pane's border, dialog borders, labels and names to notice.",
         accent_warm => "The warm accent: values on the settings screen, an open transaction, keys in menus.",
@@ -528,6 +543,7 @@ tokens! {
         size_hot => "Explorer size estimates of 1 GiB or more (with five levels: 10 GiB or more).",
         size_mild => "With five size levels, explorer size estimates of 1 MiB or more.",
         size_heated => "With five size levels, explorer size estimates of 1 GiB or more.",
+        tab_active => "The active tab (set bg: surface_alt without one). An fg replaces every text color on it but the environment's badge; without one they stay, made to read on it. Left out, a file that sets bg or accent gets the accent blended into its bg.",
 }
 
 /// The token names of a theme file.
@@ -561,6 +577,34 @@ impl Drop for Scope {
 }
 
 impl Theme {
+    /// The active tab's background: [`Self::tab_active`]'s, else the alternate surface.
+    pub fn tab_active_bg(&self) -> Color {
+        self.tab_active.bg.unwrap_or(self.surface_alt)
+    }
+
+    /// A fill for the active tab made of this theme's colors: 30% of the accent blended into
+    /// the background where both are RGB, else [`Self::tab_active`] as it is.
+    pub fn tab_active_derived(&self) -> Style {
+        match (self.accent, self.bg) {
+            (Color::Rgb(..), Color::Rgb(..)) => Style::new().bg(blend(self.accent, self.bg, 30)),
+            _ => self.tab_active,
+        }
+    }
+
+    /// `c` as text on `back` at a contrast of `min` or more: blended toward white on a dark
+    /// `back`, toward black on a light one, in steps of 5%. Unchanged where either is not RGB
+    /// (the terminal's palette decides).
+    pub fn readable_on(c: Color, back: Color, min: f64) -> Color {
+        if !matches!((c, back), (Color::Rgb(..), Color::Rgb(..))) {
+            return c;
+        }
+        let toward = if contrast_ratio(back, WHITE) > contrast_ratio(back, BLACK) { WHITE } else { BLACK };
+        (0..=20)
+            .map(|step| blend(c, toward, 100 - step * 5))
+            .find(|m| contrast_ratio(*m, back) >= min)
+            .unwrap_or(toward)
+    }
+
     /// The colors of a chart's series, in turn.
     pub fn chart(&self) -> [Color; 6] {
         [self.chart_1, self.chart_2, self.chart_3, self.chart_4, self.chart_5, self.chart_6]

@@ -2,7 +2,8 @@
 //! projects' own (each credited above its constants); a color moved from its palette for
 //! contrast says so. The hover backgrounds are not from the palettes: each is chosen to stand
 //! apart from the theme's backgrounds and selections; so are the backgrounds of copied cells
-//! (`yank_flash`, the warm accent blended into the background). Every theme passes the checks of
+//! (`yank_flash`, the warm accent blended into the background) and of the active tab
+//! (`tab_active`, mostly the accent blended into the background). Every theme passes the checks of
 //! `theme/tests.rs`.
 
 use super::{Dim, Theme, rgb};
@@ -14,7 +15,10 @@ use ratatui::style::{Color, Modifier, Style};
 /// is bold, what is under the pointer is on the bright black with the terminal's text color (so
 /// text in bright black never vanishes on it; a hovered row or tab shows that text color, so its
 /// colored marks go plain while it is hovered), copied cells flash in black on the yellow (a
-/// selection's reversed text would not show on the cursor's cell), and the screen behind a
+/// selection's reversed text would not show on the cursor's cell), the active tab is black on the
+/// cyan of the accent (its colored marks go plain there, as on a hovered tab; dark text reads on
+/// the cyan of common palettes, light or dark, where the bright black is the hover's and a
+/// reversed tab would look like a dragged one), and the screen behind a
 /// dialog is dimmed with [`Modifier::DIM`].
 pub const TERMINAL: Theme = Theme {
     bg: Color::Reset,
@@ -31,6 +35,7 @@ pub const TERMINAL: Theme = Theme {
     cursor_line: Style::new().add_modifier(Modifier::UNDERLINED),
     hover: Style::new().fg(Color::Reset).bg(Color::DarkGray),
     yank_flash: Style::new().fg(Color::Black).bg(Color::Yellow),
+    tab_active: Style::new().fg(Color::Black).bg(Color::Cyan),
     current_stmt: Style::new(),
     current_stmt_bar: Color::Blue,
     running_stmt: Style::new().add_modifier(Modifier::BOLD),
@@ -93,6 +98,8 @@ pub const LIGHT: Theme = Theme {
     cursor_line: Style::new().bg(rgb(0xEBEEF3)),
     hover: Style::new().bg(rgb(0xE6E2DE)),
     yank_flash: Style::new().fg(rgb(0x1F2328)).bg(rgb(0xE0CAB0)),
+    // 27% of the accent blended into the background.
+    tab_active: Style::new().bg(rgb(0xB9D9D8)),
     current_stmt: Style::new().bg(rgb(0xF3F5F8)),
     current_stmt_bar: rgb(0x2E8078),
     running_stmt: Style::new().bg(rgb(0xF1E8DE)),
@@ -154,6 +161,8 @@ pub const HIGH_CONTRAST: Theme = Theme {
     cursor_line: Style::new().bg(rgb(0x262626)),
     hover: Style::new().bg(rgb(0x303131)),
     yank_flash: Style::new().fg(rgb(0xFFFFFF)).bg(rgb(0x533B07)),
+    // 22% of the accent blended into the background.
+    tab_active: Style::new().bg(rgb(0x073A3F)),
     current_stmt: Style::new().bg(rgb(0x121212)),
     current_stmt_bar: rgb(0x00E5FF),
     running_stmt: Style::new().bg(rgb(0x271E09)),
@@ -216,6 +225,8 @@ pub const CATPPUCCIN_MOCHA: Theme = Theme {
     cursor_line: Style::new().bg(rgb(0x2A2B3C)),
     hover: Style::new().bg(rgb(0x282338)),
     yank_flash: Style::new().fg(rgb(0xCDD6F4)).bg(rgb(0x644D4A)),
+    // 32% of the accent blended into the background.
+    tab_active: Style::new().bg(rgb(0x404E6F)),
     current_stmt: Style::new().bg(rgb(0x232334)),
     current_stmt_bar: rgb(0x7F849C),
     running_stmt: Style::new().bg(rgb(0x383039)),
@@ -280,6 +291,8 @@ pub const CATPPUCCIN_LATTE: Theme = Theme {
     cursor_line: Style::new().bg(rgb(0xE3E6ED)),
     hover: Style::new().bg(rgb(0xE3EBE8)),
     yank_flash: Style::new().fg(rgb(0x4C4F69)).bg(rgb(0xE8C2AE)),
+    // 23% of the accent blended into the background.
+    tab_active: Style::new().bg(rgb(0xBED1F5)),
     current_stmt: Style::new().bg(rgb(0xEAECF2)),
     current_stmt_bar: rgb(0x6C6F85),
     running_stmt: Style::new().bg(rgb(0xECDED9)),
@@ -344,6 +357,8 @@ pub const TOKYO_NIGHT_NIGHT: Theme = Theme {
     cursor_line: Style::new().bg(rgb(0x292E42)),
     hover: Style::new().bg(rgb(0x282A37)),
     yank_flash: Style::new().fg(rgb(0xC0CAF5)).bg(rgb(0x714C3D)),
+    // 22% of the cyan blended into the background (the accent's blue is the selection's).
+    tab_active: Style::new().bg(rgb(0x2F4255)),
     current_stmt: Style::new().bg(rgb(0x1E202E)),
     current_stmt_bar: rgb(0x737AA2),
     running_stmt: Style::new().bg(rgb(0x352B2D)),
@@ -409,6 +424,8 @@ pub const TOKYO_NIGHT_DAY: Theme = Theme {
     cursor_line: Style::new().bg(rgb(0xD0D5E3)),
     hover: Style::new().bg(rgb(0xD6DFDD)),
     yank_flash: Style::new().fg(rgb(0x2E4B91)).bg(rgb(0xD7C7B8)),
+    // 24% of the cyan blended into the background (the accent's blue is the selection's).
+    tab_active: Style::new().bg(rgb(0xABC6D3)),
     current_stmt: Style::new().bg(rgb(0xDADCE4)),
     current_stmt_bar: rgb(0x68709A),
     running_stmt: Style::new().bg(rgb(0xDBD2CB)),
@@ -471,6 +488,9 @@ pub const GRUVBOX_DARK: Theme = Theme {
     cursor_line: Style::new().bg(rgb(0x3C3836)),
     hover: Style::new().bg(rgb(0x45453B)),
     yank_flash: Style::new().fg(rgb(0xEBDBB2)).bg(rgb(0x684223)),
+    // 19% of the yellow blended into the background (the accent's aqua comes too near the hover
+    // and the selection).
+    tab_active: Style::new().bg(rgb(0x4F4429)),
     current_stmt: Style::new().bg(rgb(0x2E2C2B)),
     current_stmt_bar: rgb(0xA89984),
     running_stmt: Style::new().bg(rgb(0x423326)),
@@ -535,6 +555,8 @@ pub const GRUVBOX_LIGHT: Theme = Theme {
     cursor_line: Style::new().bg(rgb(0xEBDBB2)),
     hover: Style::new().bg(rgb(0xE3E0BB)),
     yank_flash: Style::new().fg(rgb(0x3C3836)).bg(rgb(0xE4BA8C)),
+    // 25% of the accent blended into the background.
+    tab_active: Style::new().bg(rgb(0xBECEB3)),
     current_stmt: Style::new().bg(rgb(0xF5EBC2)),
     current_stmt_bar: rgb(0x7C6F64),
     running_stmt: Style::new().bg(rgb(0xF2DBAF)),
@@ -599,6 +621,8 @@ pub const NORD: Theme = Theme {
     cursor_line: Style::new().bg(rgb(0x3B4252)),
     hover: Style::new().bg(rgb(0x424952)),
     yank_flash: Style::new().fg(rgb(0xD8DEE9)).bg(rgb(0x604D4E)),
+    // 32% of the accent blended into the background.
+    tab_active: Style::new().bg(rgb(0x4A606E)),
     current_stmt: Style::new().bg(rgb(0x323846)),
     current_stmt_bar: rgb(0x81A1C1),
     running_stmt: Style::new().bg(rgb(0x413E46)),
@@ -664,6 +688,8 @@ pub const DRACULA: Theme = Theme {
     cursor_line: Style::new().bg(rgb(0x343746)),
     hover: Style::new().bg(rgb(0x444650)),
     yank_flash: Style::new().fg(rgb(0xF8F8F2)).bg(rgb(0x685446)),
+    // 26% of the accent blended into the background.
+    tab_active: Style::new().bg(rgb(0x4E4568)),
     current_stmt: Style::new().bg(rgb(0x2D2F3D)),
     current_stmt_bar: rgb(0xBD93F9),
     running_stmt: Style::new().bg(rgb(0x423B3C)),
