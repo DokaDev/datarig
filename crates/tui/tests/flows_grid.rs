@@ -991,7 +991,7 @@ fn a_copy_flashes_the_cells_it_took_until_its_deadline() {
     assert!(flashed_cells(&mut h).is_empty());
 }
 
-/// The background (and text colour) of cell (row, col) of the active grid as drawn now, at
+/// The text colour and the background of cell (row, col) of the active grid as drawn now, at
 /// 160×45, at its first column.
 fn cell_colors(h: &mut Harness, row: usize, col: usize) -> (Color, Color) {
     let t = h.draw(160, 45);
@@ -1125,7 +1125,8 @@ fn a_flash_in_terminal_colors_is_on_then_off() {
 }
 
 /// A theme whose flash is RGB but whose grid is drawn in the terminal's colours: the cells
-/// cannot be mixed, so they are on at full for [`YANK_FLASH`] and then off, never a mix.
+/// cannot be mixed, so the flash does not fade: on at full for [`YANK_FLASH`] and then off,
+/// with one wakeup, at its end.
 #[test]
 fn cells_in_terminal_colors_do_not_fade() {
     use datarig_tui::app::yank_flash::YANK_FLASH;
@@ -1135,15 +1136,49 @@ fn cells_in_terminal_colors_do_not_fade() {
     th.yank_flash = datarig_tui::theme::DARK.yank_flash;
     let flash = th.yank_flash;
     h.app.theme = std::sync::Arc::new(th);
-    assert!(h.app.copy_flash_fades());
+    assert!(!h.app.copy_flash_fades());
     h.keys("jly");
+    h.app.transient = None;
+    let since = h.clock.now();
     assert_eq!(cell_colors(&mut h, 1, 1), (flash.fg.unwrap(), flash.bg.unwrap()));
-    h.advance(YANK_FLASH - Duration::from_millis(1));
-    assert_eq!(cell_colors(&mut h, 1, 1), (flash.fg.unwrap(), flash.bg.unwrap()), "full while on");
-    h.advance(Duration::from_millis(1));
-    assert!(h.app.copy_flash_shown().is_some(), "the flash still fades elsewhere");
+    let mut wakeups = Vec::new();
+    while let Some(at) = h.app.next_tick(h.clock.now()) {
+        assert!(wakeups.len() < 20, "{wakeups:?}");
+        let step = at - h.clock.now();
+        if step > Duration::from_millis(1) {
+            h.advance(step - Duration::from_millis(1));
+            assert_eq!(cell_colors(&mut h, 1, 1), (flash.fg.unwrap(), flash.bg.unwrap()), "full while on");
+            h.advance(Duration::from_millis(1));
+        } else {
+            h.advance(step);
+        }
+        wakeups.push(at - since);
+    }
+    assert_eq!(wakeups, [YANK_FLASH]);
     let (fg, bg) = cell_colors(&mut h, 1, 1);
     assert!(!matches!(bg, Color::Rgb(..)) && !matches!(fg, Color::Rgb(..)), "its own colours: {fg:?} on {bg:?}");
+}
+
+/// The modifiers a theme gives the flash show while it is mostly there, the cell's own after.
+#[test]
+fn a_fading_flash_keeps_its_modifiers() {
+    use datarig_tui::app::yank_flash::{FRAME, HOLD};
+    use ratatui::style::Modifier;
+    let mut h = grid(Lang::En);
+    FakeClipboard::attach(&mut h, false, &[]);
+    let mut th = datarig_tui::theme::DARK;
+    th.yank_flash = th.yank_flash.add_modifier(Modifier::BOLD);
+    h.app.theme = std::sync::Arc::new(th);
+    assert!(h.app.copy_flash_fades());
+    h.keys("jly");
+    let bold = |h: &mut Harness| {
+        let t = h.draw(160, 45);
+        let cell = h.app.tab().grid.cell_rect(1, 1, 8).unwrap();
+        t.backend().buffer()[(cell.x, cell.y)].modifier.contains(Modifier::BOLD)
+    };
+    assert!(bold(&mut h), "at full");
+    h.advance(HOLD + FRAME * 6);
+    assert!(!bold(&mut h), "the cell's own once mostly faded");
 }
 
 /// Only a copy that reached the clipboard flashes: not one the clipboard refused, not a copy

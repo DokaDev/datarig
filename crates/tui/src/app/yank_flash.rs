@@ -71,7 +71,8 @@ impl CopyFlash {
 
     /// When the next frame of the flash is due at `now`: its end when it cannot fade; while it
     /// fades the next whole [`FRAME`] after its hold (never one during the hold, nothing changes
-    /// there), the last one at its end.
+    /// there), the last one at its end. (A cell that cannot be mixed in a fading flash goes off
+    /// with the first frame from [`YANK_FLASH`] on, no wakeup of its own.)
     pub fn due(&self, now: Instant, fades: bool) -> Instant {
         if !fades {
             return self.end(false);
@@ -79,15 +80,21 @@ impl CopyFlash {
         let hold = self.since + HOLD;
         let frames = (FADE.as_nanos() / FRAME.as_nanos()) as u32;
         let done = now.saturating_duration_since(hold).as_nanos() / FRAME.as_nanos();
-        let next = u32::try_from(done + 1).unwrap_or(u32::MAX).min(frames);
-        hold + FRAME * next
+        hold + FRAME * u32::try_from(done + 1).unwrap_or(u32::MAX).min(frames)
     }
 }
 
-/// Whether a flash of `style` can fade: its background (and its text colour, if it sets one)
-/// are RGB colours.
-pub fn fades(style: Style) -> bool {
-    matches!(style.bg, Some(Color::Rgb(..))) && matches!(style.fg, None | Some(Color::Rgb(..)))
+/// Whether a flash can fade on theme `th`: its flash background (and its text colour, if it sets
+/// one) are RGB colours, and so are the backgrounds a grid cell is drawn on (surfaces,
+/// selection, range, cursor line, hover) and the text. A grid in the terminal's colours would
+/// only redraw the same full flash frame after frame.
+pub fn fades(th: &crate::theme::Theme) -> bool {
+    let rgb = |c: Option<Color>| matches!(c, None | Some(Color::Rgb(..)));
+    let style = th.yank_flash;
+    matches!(style.bg, Some(Color::Rgb(..)))
+        && rgb(style.fg)
+        && [th.bg, th.surface, th.surface_alt, th.fg].into_iter().all(|c| rgb(Some(c)))
+        && [th.selection, th.selection_unfocused(), th.range, th.cursor_line, th.hover].iter().all(|s| rgb(s.bg))
 }
 
 /// `a` mixed into `b`: `level` 1 = `a`, 0 = `b`. `None` unless both are RGB.
@@ -125,8 +132,11 @@ pub fn paint(buf: &mut Buffer, area: Rect, style: Style, level: Option<f32>, on:
             match mixed {
                 Some((new_bg, new_fg)) => {
                     cell.modifier.remove(Modifier::REVERSED);
+                    // Modifiers cannot be mixed: the flash's (and no DIM) for the first half
+                    // of the fade, the cell's own after.
                     if level >= 0.5 {
-                        cell.modifier.remove(Modifier::DIM);
+                        cell.modifier.remove(Modifier::DIM | style.sub_modifier);
+                        cell.modifier.insert(style.add_modifier);
                     }
                     cell.bg = new_bg;
                     cell.fg = new_fg;
@@ -162,7 +172,7 @@ impl App {
 
     /// Whether the flash fades on the current theme (see [`fades`]).
     pub fn copy_flash_fades(&self) -> bool {
-        fades(self.theme.yank_flash)
+        fades(&self.theme)
     }
 
     /// The flash to draw over the active tab's grid now: none once it ended, or when the tab,
