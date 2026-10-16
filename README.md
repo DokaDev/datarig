@@ -274,7 +274,8 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
 - Copy as TSV (with or without headers), CSV, JSON, indented JSON, Markdown, HTML, XML, an SQL
   `IN` list, or SQL `INSERT`/`UPDATE` statements (only when the target table is certain), to the
   system clipboard or through OSC 52 over SSH. The copied cells flash briefly once the copy is
-  sent to the clipboard (`[ui] yank_flash = "off"` turns that off).
+  sent to the clipboard and fade back (themes in RGB colours; with the terminal's own colours
+  the flash goes off at once); `[ui] yank_flash = "off"` turns that off.
 - Transaction indicators in the tab bar and the status bar (open, aborted, "rollback required"),
   and questions before closing, quitting or disconnecting would roll back your work.
 - Query plans (PostgreSQL): `Space e x` (or `:explain`) runs the statement under the cursor as
