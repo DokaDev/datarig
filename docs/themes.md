@@ -78,7 +78,7 @@ Each writes a new file and never replaces one: a name that is taken, that is not
 | `range` | Cells and headers of a selected range in the result grid (the cursor's cell keeps selection). |
 | `cursor_line` | The row under the cursor of an unfocused list or plan, the editor's line, and (its background) the chart's cursor while focused. |
 | `hover` | What is under the mouse pointer: a list row, a grid cell, a tab, a button. |
-| `yank_flash` | Cells copied from the result grid, for a moment after the copy was sent to the clipboard (set fg and bg: it covers the cursor's cell too). |
+| `yank_flash` | Cells copied from the result grid, for a moment after the copy was sent to the clipboard (set fg and bg: it covers the cursor's cell too). With RGB colours it fades back into each cell's own colours; with terminal colours it goes off at once. |
 | `current_stmt` | A faint tint behind the statement a run would take. |
 | `running_stmt` | A tint behind the statement that runs now. |
 | `run_hint` | The hint after a statement's last line that says what its last run did. |

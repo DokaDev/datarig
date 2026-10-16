@@ -12,6 +12,7 @@ use datarig_core::i18n::Lang;
 use datarig_tui::app::overlay::OverlayKind;
 use datarig_tui::app::{DetailTab, Focus};
 use ratatui::crossterm::event::{Event, KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use ratatui::style::Color;
 use std::time::Duration;
 
 /// The edge-case users in the grid, the grid focused.
@@ -952,11 +953,12 @@ fn flashed_cells(h: &mut Harness) -> Vec<(usize, usize)> {
 }
 
 /// A copy from the grid flashes the cells it took once they are on the clipboard: `y` the
-/// cell (the cursor's cell too), a range its cells, `Y` the row's every column; for
-/// [`YANK_FLASH`], then the next tick ends it and the cells are drawn as before.
+/// cell (the cursor's cell too), a range its cells, `Y` the row's every column; at the full
+/// flash colour for [`HOLD`], then it fades and at its end the next tick ends it and the cells
+/// are drawn as before.
 #[test]
 fn a_copy_flashes_the_cells_it_took_until_its_deadline() {
-    use datarig_tui::app::yank_flash::YANK_FLASH;
+    use datarig_tui::app::yank_flash::{FADE, FRAME, HOLD};
     let mut h = grid(Lang::En);
     let clip = FakeClipboard::attach(&mut h, false, &[]);
     h.keys("jl");
@@ -964,48 +966,184 @@ fn a_copy_flashes_the_cells_it_took_until_its_deadline() {
     h.keys("y");
     assert_eq!(clip.last().as_deref(), Some("林美玲"));
     assert_eq!(flashed_cells(&mut h), [(1, 1)], "the cursor's cell");
-    // Still there a moment before its end, gone at it.
-    h.advance(YANK_FLASH - Duration::from_millis(1));
+    // At full a moment before the fade, fading after it, gone at its end.
+    h.advance(HOLD - Duration::from_millis(1));
     assert!(flashed(&mut h, 1, 1));
+    h.advance(FRAME + Duration::from_millis(1));
+    assert!(h.app.copy_flash_shown().is_some() && !flashed(&mut h, 1, 1), "fading");
+    h.advance(FADE - FRAME - Duration::from_millis(1));
+    assert!(h.app.copy_flash_shown().is_some(), "still fading a moment before its end");
     h.advance(Duration::from_millis(1));
-    assert!(h.app.copy_flash.is_none(), "the tick at its deadline ends it");
+    assert!(h.app.copy_flash.is_none(), "the tick at its end ends it");
     assert!(flashed_cells(&mut h).is_empty());
     // A range: its cells.
     h.keys("vjly");
     assert_eq!(flashed_cells(&mut h), [(1, 1), (1, 2), (2, 1), (2, 2)]);
-    // A new copy while one flashes starts over with its own cells and its own time.
-    h.advance(YANK_FLASH / 2);
+    // A new copy while one fades starts over at full, with its own cells and its own time.
+    h.advance(HOLD + FADE / 2);
     h.keys("Y");
     let cols = h.app.tab().grid.hit_cols.len();
     assert_eq!(flashed_cells(&mut h), (0..cols).map(|c| (2, c)).collect::<Vec<_>>(), "the row, every column");
-    h.advance(YANK_FLASH / 2);
+    h.advance(HOLD / 2);
     assert!(flashed(&mut h, 2, 0), "the second copy's time counts");
-    h.advance(YANK_FLASH / 2);
+    h.advance(HOLD / 2 + FADE);
+    assert!(h.app.copy_flash.is_none());
     assert!(flashed_cells(&mut h).is_empty());
 }
 
-/// The flash ends with exactly one wakeup at its deadline: with nothing else waiting the timer
-/// is due then, not before (no animation); with the copy's notice counting tenths, the next tick
-/// is the sooner of the two. Then nothing waits for it.
+/// The background (and text colour) of cell (row, col) of the active grid as drawn now, at
+/// 160×45, at its first column.
+fn cell_colors(h: &mut Harness, row: usize, col: usize) -> (Color, Color) {
+    let t = h.draw(160, 45);
+    let cell = h.app.tab().grid.cell_rect(row, col, 8).unwrap();
+    let c = &t.backend().buffer()[(cell.x, cell.y)];
+    (c.fg, c.bg)
+}
+
+fn rgb(c: Color) -> [f64; 3] {
+    match c {
+        Color::Rgb(r, g, b) => [f64::from(r), f64::from(g), f64::from(b)],
+        other => panic!("not RGB: {other:?}"),
+    }
+}
+
+fn distance(a: Color, b: Color) -> f64 {
+    let (a, b) = (rgb(a), rgb(b));
+    (0..3).map(|i| (a[i] - b[i]).powi(2)).sum::<f64>().sqrt()
+}
+
+/// On an RGB theme the flash fades frame by frame from the flash colour to the colours each
+/// cell has anyway: the cursor's cell back to the cursor's colours, a selected cell to the
+/// selection's, another cell to its row's. Every frame is closer to the cell's own colours than
+/// the one before, background and text alike, and the last one is them.
 #[test]
-fn the_flash_needs_one_wakeup_at_its_end() {
+fn the_flash_fades_into_each_cells_own_colors() {
+    use datarig_tui::app::yank_flash::{FADE, FRAME, HOLD};
+    let mut h = grid(Lang::En);
+    FakeClipboard::attach(&mut h, false, &[]);
+    let flash = datarig_tui::theme::DARK.yank_flash;
+    let (flash_fg, flash_bg) = (flash.fg.unwrap(), flash.bg.unwrap());
+    // A range (1, 1)..(2, 2) with the cursor at its end: the cursor's cell (2, 2) and another
+    // cell (1, 1).
+    h.keys("jlvjl");
+    let cells = [(2, 2), (1, 1)];
+    let own: Vec<(Color, Color)> = cells.iter().map(|&(r, c)| cell_colors(&mut h, r, c)).collect();
+    h.keys("y");
+    // `y` ends Visual mode: the cells' own colours are now those without the range.
+    let own_after: Vec<(Color, Color)> = {
+        let since = h.app.copy_flash.as_ref().unwrap().since;
+        let saved = h.app.copy_flash.take();
+        let o = cells.iter().map(|&(r, c)| cell_colors(&mut h, r, c)).collect();
+        h.app.copy_flash = saved;
+        assert_eq!(h.app.copy_flash.as_ref().unwrap().since, since);
+        o
+    };
+    assert_ne!(own, own_after, "the range was drawn on its own colours");
+    for &(r, c) in &cells {
+        assert_eq!(cell_colors(&mut h, r, c), (flash_fg, flash_bg), "full at first: ({r}, {c})");
+    }
+    h.advance(HOLD);
+    let mut last: Vec<(f64, f64)> =
+        own_after.iter().map(|&(fg, bg)| (distance(flash_fg, fg), distance(flash_bg, bg))).collect();
+    let mut frames = 0;
+    while h.app.copy_flash.is_some() {
+        h.advance(FRAME);
+        frames += 1;
+        for (i, &(r, c)) in cells.iter().enumerate() {
+            let (fg, bg) = cell_colors(&mut h, r, c);
+            let d = (distance(fg, own_after[i].0), distance(bg, own_after[i].1));
+            assert!(d.0 <= last[i].0 && d.1 <= last[i].1, "frame {frames} of ({r}, {c}): {d:?} after {:?}", last[i]);
+            assert!(d.1 < last[i].1 || d.1 == 0.0, "frame {frames} of ({r}, {c}) moves: {d:?}");
+            last[i] = d;
+        }
+    }
+    assert_eq!(frames, (FADE.as_millis() / FRAME.as_millis()) as usize);
+    for (i, &(r, c)) in cells.iter().enumerate() {
+        assert_eq!(cell_colors(&mut h, r, c), own_after[i], "its own colours at the end: ({r}, {c})");
+    }
+}
+
+/// The fade wants a frame every [`FRAME`] while it fades and nothing else: no wakeup during
+/// its hold before the first fading frame, one per frame, the last one at its end; then
+/// nothing waits. With the copy's notice counting tenths, the next tick is the sooner of the
+/// two.
+#[test]
+fn the_fade_wakes_once_per_frame_and_never_after() {
     use datarig_tui::app::FINE_TICK;
-    use datarig_tui::app::yank_flash::YANK_FLASH;
+    use datarig_tui::app::yank_flash::{FADE, FRAME, HOLD};
     let mut h = grid(Lang::En);
     FakeClipboard::attach(&mut h, false, &[]);
     h.app.transient = None;
     assert_eq!(h.app.next_tick(h.clock.now()), None, "idle");
     h.keys("y");
-    let until = h.app.copy_flash.as_ref().unwrap().until;
-    assert_eq!(until, h.clock.now() + YANK_FLASH);
+    let since = h.app.copy_flash.as_ref().unwrap().since;
     let now = h.clock.now();
+    assert_eq!(since, now);
     assert_eq!(h.app.next_tick(now), Some(now + FINE_TICK), "the notice's tick comes first");
-    let late = now + YANK_FLASH - Duration::from_millis(50);
-    assert_eq!(h.app.next_tick(late), Some(until), "the flash's end comes before the next tenth");
     h.app.transient = None;
-    assert_eq!(h.app.next_tick(now), Some(until), "nothing else: one wakeup, at its end");
-    h.advance(YANK_FLASH);
+    let mut wakeups = Vec::new();
+    while let Some(at) = h.app.next_tick(h.clock.now()) {
+        assert!(wakeups.len() < 20, "{wakeups:?}");
+        let step = at - h.clock.now();
+        h.advance(step);
+        wakeups.push(at - since);
+    }
+    let frames = (FADE.as_millis() / FRAME.as_millis()) as u32;
+    let expected: Vec<Duration> = (1..=frames).map(|k| HOLD + FRAME * k).collect();
+    assert_eq!(wakeups, expected);
+    assert!(h.app.copy_flash.is_none());
     assert_eq!(h.app.next_tick(h.clock.now()), None, "idle again");
+    // A tick off the frame grid (another timer) asks for the next frame on it.
+    h.keys("y");
+    let since = h.clock.now();
+    h.app.transient = None;
+    h.advance(HOLD + FRAME + Duration::from_millis(7));
+    assert_eq!(h.app.next_tick(h.clock.now()), Some(since + HOLD + FRAME * 2));
+}
+
+/// A flash colour the terminal picks (the terminal theme's yellow) cannot fade: the flash is on
+/// at full for [`YANK_FLASH`], then off, with one wakeup at its end.
+#[test]
+fn a_flash_in_terminal_colors_is_on_then_off() {
+    use datarig_tui::app::yank_flash::YANK_FLASH;
+    let mut h = grid(Lang::En);
+    FakeClipboard::attach(&mut h, false, &[]);
+    h.app.theme = std::sync::Arc::new(datarig_tui::theme::TERMINAL);
+    assert!(!h.app.copy_flash_fades());
+    h.keys("jly");
+    h.app.transient = None;
+    let now = h.clock.now();
+    assert_eq!(cell_colors(&mut h, 1, 1), (Color::Black, Color::Yellow));
+    assert_eq!(h.app.next_tick(now), Some(now + YANK_FLASH), "one wakeup, at its end");
+    h.advance(YANK_FLASH - Duration::from_millis(1));
+    assert_eq!(cell_colors(&mut h, 1, 1), (Color::Black, Color::Yellow), "still full");
+    assert_eq!(h.app.next_tick(h.clock.now()), Some(now + YANK_FLASH));
+    h.advance(Duration::from_millis(1));
+    assert!(h.app.copy_flash.is_none());
+    assert_ne!(cell_colors(&mut h, 1, 1).1, Color::Yellow);
+    assert_eq!(h.app.next_tick(h.clock.now()), None);
+}
+
+/// A theme whose flash is RGB but whose grid is drawn in the terminal's colours: the cells
+/// cannot be mixed, so they are on at full for [`YANK_FLASH`] and then off, never a mix.
+#[test]
+fn cells_in_terminal_colors_do_not_fade() {
+    use datarig_tui::app::yank_flash::YANK_FLASH;
+    let mut h = grid(Lang::En);
+    FakeClipboard::attach(&mut h, false, &[]);
+    let mut th = datarig_tui::theme::TERMINAL;
+    th.yank_flash = datarig_tui::theme::DARK.yank_flash;
+    let flash = th.yank_flash;
+    h.app.theme = std::sync::Arc::new(th);
+    assert!(h.app.copy_flash_fades());
+    h.keys("jly");
+    assert_eq!(cell_colors(&mut h, 1, 1), (flash.fg.unwrap(), flash.bg.unwrap()));
+    h.advance(YANK_FLASH - Duration::from_millis(1));
+    assert_eq!(cell_colors(&mut h, 1, 1), (flash.fg.unwrap(), flash.bg.unwrap()), "full while on");
+    h.advance(Duration::from_millis(1));
+    assert!(h.app.copy_flash_shown().is_some(), "the flash still fades elsewhere");
+    let (fg, bg) = cell_colors(&mut h, 1, 1);
+    assert!(!matches!(bg, Color::Rgb(..)) && !matches!(fg, Color::Rgb(..)), "its own colours: {fg:?} on {bg:?}");
 }
 
 /// Only a copy that reached the clipboard flashes: not one the clipboard refused, not a copy

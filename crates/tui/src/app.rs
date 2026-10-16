@@ -1628,9 +1628,10 @@ impl App {
     /// When the event loop should next run [`App::on_tick`] (no timer while
     /// nothing waits for time). While something counts in tenths of a second or animates (a
     /// running statement's time, a connection attempt, a debounce, a key sequence, a flash, the
-    /// quit grace): [`FINE_TICK`] from `now`, or the end of a copy's flash when that is sooner.
-    /// Otherwise the earliest deadline: a tab's or the workspace's autosave, an open portal's
-    /// idle close, the end of a copy's flash, and the next second the active tab's countdown
+    /// quit grace): [`FINE_TICK`] from `now`, or the next frame of a copy's flash or of sliding
+    /// tabs when that is sooner. Otherwise the earliest deadline: a tab's or the workspace's
+    /// autosave, an open portal's idle close, the next frame of a copy's flash (its end when it
+    /// cannot fade) or of sliding tabs, and the next second the active tab's countdown
     /// shows. `None`: nothing waits.
     pub fn next_tick(&self, now: Instant) -> Option<Instant> {
         if !self.needs_tick() {
@@ -1644,9 +1645,9 @@ impl App {
             || self.leader_at.is_some()
             || self.quitting.is_some()
             || self.conn_test.as_ref().is_some_and(|t| t.state == TestState::Running);
-        // A copy's flash ends at its own deadline (one wakeup), also between fine ticks; tabs
-        // sliding after a drag want their next frame sooner than a fine tick.
-        let flash = [self.copy_flash_due(), self.tab_slide.due(now)].into_iter().flatten().min();
+        // A copy's flash wants its next frame (or, when it cannot fade, its end) and tabs
+        // sliding after a drag theirs, also between fine ticks.
+        let flash = [self.copy_flash_due(now), self.tab_slide.due(now)].into_iter().flatten().min();
         if fine {
             let tick = flash.map_or(now + FINE_TICK, |f| f.min(now + FINE_TICK));
             return Some(tick.max(now + Duration::from_millis(1)));
