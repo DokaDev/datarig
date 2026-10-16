@@ -82,6 +82,7 @@ impl App {
             Setting::FormatCase(c) => *c == self.prefs.format_case,
             Setting::FormatIndent(i) => *i == self.prefs.format_indent,
             Setting::AutoPairs(a) => *a == self.prefs.auto_pairs,
+            Setting::SoftTabBackspace(b) => *b == self.prefs.soft_tab_backspace,
             Setting::RunHints(h) => *h == self.prefs.run_hints,
             Setting::KeychainAccess(a) => *a == self.prefs.keychain_access,
             Setting::SizeHeat(h) => *h == self.prefs.size_heat,

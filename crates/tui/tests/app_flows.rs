@@ -271,7 +271,7 @@ fn set_command_changes_and_saves_settings() {
     h.command("set colour=red");
     let error = h.cmdline().and_then(|c| c.error.as_ref()).map(|e| e.render(&h.app.i18n).to_string());
     let keys = "language|icons|secrets.default_source|commands.position|detail_view|clipboard|copy_header|\
-                editor.cursor_shape|editor.clipboard|theme|editor.format_keyword_case|editor.format_indent|editor.auto_pairs|editor.run_hints|\
+                editor.cursor_shape|editor.clipboard|theme|editor.format_keyword_case|editor.format_indent|editor.auto_pairs|editor.soft_tab_backspace|editor.run_hints|\
                 secrets.macos_keychain_access|explorer.size_heat|ui.yank_flash";
     let unknown = ko_msg(&datarig_core::i18n::Msg::CommandsErrorSetKey { key: "colour".into(), keys: keys.into() });
     assert_eq!(error.as_deref(), Some(unknown.as_str()));
@@ -2320,4 +2320,23 @@ fn without_the_kitty_protocol_the_run_key_shown_is_ctrl_e() {
     let entries = help_entries(&h);
     assert!(entries.contains(&"Ctrl+E = Run statement under cursor".to_string()), "{entries:?}");
     assert!(!entries.iter().any(|e| e.contains("Ctrl+Enter")), "{entries:?}");
+}
+
+/// In Insert mode Backspace after the spaces Tab typed goes back to the tab stop
+/// (`[editor] soft_tab_backspace`, on by default); `:set editor.soft_tab_backspace=off` makes it
+/// delete one space at a time.
+#[test]
+fn backspace_goes_back_to_the_tab_stop_unless_turned_off() {
+    let mut h = Harness::connected(Lang::En);
+    h.keys("ggdGi");
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Backspace);
+    assert_eq!(h.app.tab().editor.text(), "    ");
+    h.key(KeyCode::Esc);
+    h.command("set editor.soft_tab_backspace=off");
+    assert_eq!(h.app.prefs.soft_tab_backspace, datarig_core::config::SoftTabBackspace::Off);
+    h.keys("A");
+    h.key(KeyCode::Backspace);
+    assert_eq!(h.app.tab().editor.text(), "   ", "off: one space");
 }

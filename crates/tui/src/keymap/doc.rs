@@ -85,7 +85,10 @@ pub fn render() -> String {
          every line of the block); `.` repeats a block operator on a block of the same size from the \
          cursor (after `p` only the delete); a paste from the terminal replaces the block; in Insert \
          mode `Ctrl+W` (the word before the cursor), `Ctrl+U` (the line before the cursor), `Ctrl+R \
-         {register}` (its text) and `Enter` keeping the indent; with `[editor] auto_pairs = \"on\"` (off \
+         {register}` (its text), `Enter` keeping the indent, `Tab` (4 spaces) and `Backspace`, which \
+         deletes the spaces before the cursor back to the tab stop (every 4 columns) at once when \
+         there is nothing else between, as Vim with `softtabstop=4` does then (with anything else \
+         between it deletes one character; `[editor] soft_tab_backspace = \"off\"` always one); with `[editor] auto_pairs = \"on\"` (off \
          by default, as Vim types) `( [ { ' \" `` ` `` also put their closing character after the \
          cursor, typing it there steps over it and `Backspace` deletes the empty pair (only pairs it \
          put in; never inside strings, quoted names, comments or dollar bodies, before a word, or \

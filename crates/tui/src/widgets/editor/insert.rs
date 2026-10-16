@@ -1,14 +1,15 @@
-//! Insert mode: typing, Enter with the line's indent (autoindent), Tab, Backspace, Delete,
-//! `Ctrl+W` (the word before the cursor), `Ctrl+U` (the line before the cursor), `Ctrl+R`
-//! and a register's name (its text, as it is; `Ctrl+R Ctrl+R`, `Ctrl+O`, `Ctrl+P` the same),
-//! arrows. What a session types becomes the `".` register when it ends.
+//! Insert mode: typing, Enter with the line's indent (autoindent), Tab, Backspace (back to the
+//! tab stop over spaces, `[editor] soft_tab_backspace`), Delete, `Ctrl+W` (the word before the
+//! cursor), `Ctrl+U` (the line before the cursor), `Ctrl+R` and a register's name (its text,
+//! as it is; `Ctrl+R Ctrl+R`, `Ctrl+O`, `Ctrl+P` the same), arrows. What a session types
+//! becomes the `".` register when it ends.
 
-use super::buffer::{class, graphemes, indent_of};
+use super::buffer::{class, graphemes, gw, indent_of};
 use super::marks::Hint;
 use super::motion::{Motion, Pos};
 use super::pairs::Pair;
 use super::registers::{self, RegKind};
-use super::{EdEvent, Editor, Mode};
+use super::{EdEvent, Editor, Mode, TAB_WIDTH};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use unicode_segmentation::UnicodeSegmentation;
 
@@ -160,6 +161,13 @@ impl Editor {
                     self.record_pair(p);
                     return EdEvent::Changed { typed: None };
                 }
+                if let Some(n) = self.soft_tab_back() {
+                    let b = self.offset();
+                    self.delete_range(b - n, b);
+                    self.untyped_spaces(n);
+                    self.deleted_back();
+                    return EdEvent::Changed { typed: None };
+                }
                 let removed = if self.col > 0 {
                     let a = self.offset_of(self.row, self.col - 1);
                     let b = self.offset();
@@ -193,6 +201,24 @@ impl Editor {
         }
     }
 
+    /// With `[editor] soft_tab_backspace`: how many spaces (one byte each) Backspace deletes,
+    /// when every character between the cursor and the tab stop before it (a multiple of
+    /// [`TAB_WIDTH`] screen columns) is a space. Not in a Visual mode block's Insert, whose text
+    /// goes to the other lines as typed.
+    fn soft_tab_back(&self) -> Option<usize> {
+        if !self.soft_tab_backspace || self.block_insert.is_some() {
+            return None;
+        }
+        let before = self.lines[self.row][..self.byte_at(self.row, self.col)].graphemes(true);
+        let spaces = before.clone().rev().take_while(|g| *g == " ").count();
+        if spaces == 0 {
+            return None;
+        }
+        let x: usize = before.map(gw).sum();
+        let stop = (x - 1) / TAB_WIDTH * TAB_WIDTH;
+        (x - spaces <= stop).then_some(x - stop)
+    }
+
     /// `Ctrl+R` and register `c`: its text goes in at the cursor as it is (whole lines with a
     /// line break after the last one, a block's pieces on lines of their own). A name that is
     /// not a register, or an empty register, puts nothing.
@@ -214,6 +240,13 @@ impl Editor {
         self.ins_text.push_str(&text);
         self.rec.register_text(&text);
         EdEvent::Changed { typed: None }
+    }
+
+    /// `n` spaces before the cursor were deleted, of which this session may have typed the last
+    /// ones only (the rest were there before): `".` loses those.
+    fn untyped_spaces(&mut self, n: usize) {
+        let typed = self.ins_text.bytes().rev().take(n).take_while(|&b| b == b' ').count();
+        self.ins_text.truncate(self.ins_text.len() - typed);
     }
 
     /// Text this session typed was deleted again: `".` loses it too.

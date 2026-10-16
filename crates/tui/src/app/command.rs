@@ -15,7 +15,7 @@
 use super::action::{Action, LangSetting};
 use datarig_core::config::{
     AutoPairs, ClipboardSetting, CommandsPosition, CopyHeader, CursorShape, DetailView, EditorClipboard, FormatIndent,
-    IconsSetting, KeychainAccess, KeywordCase, RunHints, SizeHeat, YankFlash,
+    IconsSetting, KeychainAccess, KeywordCase, RunHints, SizeHeat, SoftTabBackspace, YankFlash,
 };
 use datarig_core::i18n::Label;
 use datarig_core::secret::{DefaultSource, SourceKind};
@@ -393,6 +393,7 @@ pub enum Setting {
     FormatCase(KeywordCase),
     FormatIndent(FormatIndent),
     AutoPairs(AutoPairs),
+    SoftTabBackspace(SoftTabBackspace),
     RunHints(RunHints),
     KeychainAccess(KeychainAccess),
     SizeHeat(SizeHeat),
@@ -600,6 +601,16 @@ pub const SETTINGS: &[SettingSpec] = &[
         values: Values::Fixed(&[
             ("off", Setting::AutoPairs(AutoPairs::Off), Label::SettingAutoPairsOff),
             ("on", Setting::AutoPairs(AutoPairs::On), Label::SettingAutoPairsOn),
+        ]),
+    },
+    SettingSpec {
+        key: "editor.soft_tab_backspace",
+        label: Label::SettingSoftTabBackspace,
+        about: Label::SettingSoftTabBackspaceAbout,
+        group: SettingGroup::Editor,
+        values: Values::Fixed(&[
+            ("on", Setting::SoftTabBackspace(SoftTabBackspace::On), Label::SettingSoftTabBackspaceOn),
+            ("off", Setting::SoftTabBackspace(SoftTabBackspace::Off), Label::SettingSoftTabBackspaceOff),
         ]),
     },
     SettingSpec {

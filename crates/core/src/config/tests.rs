@@ -640,6 +640,7 @@ fn step_2_settings_are_read_checked_and_saved_only_when_set() {
             format_case: KeywordCase::Preserve,
             format_indent: FormatIndent::Four,
             auto_pairs: AutoPairs::Off,
+            soft_tab_backspace: SoftTabBackspace::On,
             run_hints: RunHints::On,
             keychain_access: KeychainAccess::Direct,
             size_heat: SizeHeat::Three,
@@ -753,6 +754,34 @@ fn formatter_settings() {
     assert_eq!(load(Some(path.clone())).0.prefs, prefs);
     save(&path, settings("en"), None).unwrap();
     assert!(!std::fs::read_to_string(&path).unwrap().contains("run_hints"), "on is the default: the key goes");
+}
+
+#[test]
+fn backspace_back_to_the_tab_stop_is_on_by_default_and_can_be_turned_off() {
+    assert_eq!(parse("").unwrap().prefs.soft_tab_backspace, SoftTabBackspace::On);
+    assert_eq!(
+        parse("[editor]\nsoft_tab_backspace = \"off\"\n").unwrap().prefs.soft_tab_backspace,
+        SoftTabBackspace::Off
+    );
+    assert_eq!(
+        parse("[editor]\nsoft_tab_backspace = \"4\"\n").unwrap_err(),
+        ConfigError::Value {
+            key: "editor.soft_tab_backspace".into(),
+            value: "4".into(),
+            profile: None,
+            allowed: Some("on, off")
+        }
+    );
+    let path = temp_file("soft-tab");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "").unwrap();
+    let prefs = Prefs { soft_tab_backspace: SoftTabBackspace::Off, ..Prefs::default() };
+    save(&path, Settings { prefs, ..settings("en") }, None).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("[editor]\nsoft_tab_backspace = \"off\"\n"), "{text}");
+    assert_eq!(load(Some(path.clone())).0.prefs, prefs);
+    save(&path, settings("en"), None).unwrap();
+    assert!(!std::fs::read_to_string(&path).unwrap().contains("soft_tab"), "on is the default: the key goes");
 }
 
 #[test]
