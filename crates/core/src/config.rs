@@ -22,8 +22,10 @@
 //! whether yanks and deletes without a register also go to the system clipboard,
 //! `[editor] format_keyword_case` and `format_indent` how the formatter writes keywords and how
 //! far it indents (see [`crate::sql::format`]), `[editor] auto_pairs` whether brackets and
-//! quotes typed in Insert mode get their closing character, `[editor] run_hints` whether the
-//! editor shows what a statement's last run did after its last line. The retired
+//! quotes typed in Insert mode get their closing character, `[editor] soft_tab_backspace`
+//! whether Backspace in Insert mode deletes the spaces back to the tab stop at once,
+//! `[editor] run_hints` whether the editor shows what a statement's last run did after its
+//! last line. The retired
 //! `[editor] mode` key (the editor has vim keys only) is accepted with any value, ignored and
 //! dropped by the next save. `[explorer] size_heat` says whether, and in how many levels, the
 //! explorer colors the estimates of the largest tables of each schema (`on`, its old value,
@@ -216,6 +218,8 @@ struct EditorSection {
     format_indent: Option<i64>,
     #[serde(default)]
     auto_pairs: Option<String>,
+    #[serde(default)]
+    soft_tab_backspace: Option<String>,
     #[serde(default)]
     run_hints: Option<String>,
 }
@@ -460,6 +464,26 @@ impl Choice for AutoPairs {
     }
 }
 
+/// `[editor] soft_tab_backspace`: whether Backspace in Insert mode, after spaces that reach
+/// back to the tab stop before the cursor, deletes them all at once (on, as Vim's
+/// `softtabstop` does), or one at a time.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SoftTabBackspace {
+    #[default]
+    On,
+    Off,
+}
+
+impl Choice for SoftTabBackspace {
+    const ALL: &'static [Self] = &[SoftTabBackspace::On, SoftTabBackspace::Off];
+    fn as_str(self) -> &'static str {
+        match self {
+            SoftTabBackspace::On => "on",
+            SoftTabBackspace::Off => "off",
+        }
+    }
+}
+
 /// `[editor] run_hints`: whether the editor shows what a statement's last run did (its rows,
 /// its error, …) as a dim hint after its last line (on by default).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -578,6 +602,8 @@ pub struct Prefs {
     pub format_indent: FormatIndent,
     /// `[editor] auto_pairs`.
     pub auto_pairs: AutoPairs,
+    /// `[editor] soft_tab_backspace`.
+    pub soft_tab_backspace: SoftTabBackspace,
     /// `[editor] run_hints`.
     pub run_hints: RunHints,
     /// `[secrets] macos_keychain_access`.
@@ -601,6 +627,7 @@ impl Default for Prefs {
             format_case: KeywordCase::default(),
             format_indent: FormatIndent::default(),
             auto_pairs: AutoPairs::default(),
+            soft_tab_backspace: SoftTabBackspace::default(),
             run_hints: RunHints::default(),
             keychain_access: KeychainAccess::default(),
             size_heat: SizeHeat::default(),
@@ -845,9 +872,19 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
         None => policy::SpillLimit::default(),
         Some(v) => policy::parse_size(v).map_err(|e| bad("spill_limit", e).allowed(Some(SIZES)))?,
     };
-    let (cursor_shape, editor_clipboard, format_case, format_indent, auto_pairs, run_hints) = f
+    let (cursor_shape, editor_clipboard, format_case, format_indent, auto_pairs, soft_tab, run_hints) = f
         .editor
-        .map(|e| (e.cursor_shape, e.clipboard, e.format_keyword_case, e.format_indent, e.auto_pairs, e.run_hints))
+        .map(|e| {
+            (
+                e.cursor_shape,
+                e.clipboard,
+                e.format_keyword_case,
+                e.format_indent,
+                e.auto_pairs,
+                e.soft_tab_backspace,
+                e.run_hints,
+            )
+        })
         .unwrap_or_default();
     let (default_source, keychain_access) =
         f.secrets.map(|s| (s.default_source, s.macos_keychain_access)).unwrap_or_default();
@@ -876,6 +913,7 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
                 .ok_or_else(|| bad("editor.format_indent", n).allowed(Some("4, 2")))?,
         },
         auto_pairs: choice("editor.auto_pairs", auto_pairs, "off, on")?,
+        soft_tab_backspace: choice("editor.soft_tab_backspace", soft_tab, "on, off")?,
         run_hints: choice("editor.run_hints", run_hints, "on, off")?,
         keychain_access: choice("secrets.macos_keychain_access", keychain_access, "direct, security_tool")?,
         size_heat: choice(
@@ -1264,6 +1302,8 @@ pub fn save(path: &Path, settings: Settings, profiles: Option<Profiles>) -> Resu
     orphans += &nested_setting(&mut doc, "editor", "format_indent", indent)?;
     let pairs = (prefs.auto_pairs.as_str().into(), prefs.auto_pairs == AutoPairs::default());
     orphans += &nested_setting(&mut doc, "editor", "auto_pairs", pairs)?;
+    let soft = (prefs.soft_tab_backspace.as_str().into(), prefs.soft_tab_backspace == SoftTabBackspace::default());
+    orphans += &nested_setting(&mut doc, "editor", "soft_tab_backspace", soft)?;
     let hints = (prefs.run_hints.as_str().into(), prefs.run_hints == RunHints::default());
     orphans += &nested_setting(&mut doc, "editor", "run_hints", hints)?;
     let heat = (prefs.size_heat.as_str().into(), prefs.size_heat == SizeHeat::default());

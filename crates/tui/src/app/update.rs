@@ -531,8 +531,10 @@ impl App {
             self.tab_mut().editor.set_clipboard_text(text.as_deref());
         }
         let pairs = self.prefs.auto_pairs == datarig_core::config::AutoPairs::On;
+        let soft_tab = self.prefs.soft_tab_backspace == datarig_core::config::SoftTabBackspace::On;
         let t = self.tabs.active_mut();
         t.editor.auto_pairs = pairs;
+        t.editor.soft_tab_backspace = soft_tab;
         let ev = t.editor.handle_key(key);
         let refused = t.editor.take_refused();
         let problem = t.editor.take_register_problem();

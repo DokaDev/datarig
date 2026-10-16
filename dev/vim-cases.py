@@ -28,6 +28,9 @@ Any case may add {"vim": KEYS}: the keys Neovim gets in place of `keys`, for a c
 notation differs between the two (a search pattern: the editor's are Rust regular expressions,
 `/\\bab\\b<CR>` where Vim types `/\\<ab\\><CR>`). The row keeps `keys`.
 
+Any case may add {"options": "sts=4"}: Vim options set after the ones below, for a case of an
+editor setting that matches a Vim option (`[editor] soft_tab_backspace` is `softtabstop=4`).
+
 In a register row a register is (name, text, kind) and kind is 'v' (by character), 'V' (by
 line, its text without the last line break) or 'b' (a block); a register that is empty after
 is None. "set" is optional and fills registers before the keys (setreg()). `"` names the
@@ -55,16 +58,18 @@ OPTIONS = ("set nofixeol noeol autoindent sol backspace=indent,eol,start sw=4 ts
            "nojoinspaces so=0 nowrap cpo-=; nosmartindent commentstring=--\\ %s")
 
 
-def run(text, row, col, keys, lines=None, top=None, regs="", preset=None, marks=""):
+def run(text, row, col, keys, lines=None, top=None, regs="", preset=None, marks="", options=""):
     """Neovim's text, cursor (row, byte column), register and top line after `keys`; `regs`:
     the registers to read after, `preset`: {name: [text, kind]} set before, `marks`: the marks
-    to read after."""
+    to read after, `options`: more Vim options to set."""
     with tempfile.TemporaryDirectory() as d:
         src, out, script = (os.path.join(d, n) for n in ("in.txt", "out.json", "run.vim"))
         with open(src, "w") as f:
             f.write(text)
         k = keys.replace("\\", "\\\\").replace("<", "\\<").replace('"', '\\"')
         cmds = ["let g:loaded_clipboard_provider = 1", OPTIONS, "silent! nunmap Y"]
+        if options:
+            cmds.append(f"set {options}")
         for name, (value, kind) in (preset or {}).items():
             cmds.append(f"call setreg({json.dumps(name)}, {json.dumps(value)}, {json.dumps(kind)})")
         if lines:
@@ -137,7 +142,8 @@ def main():
         view = opts if "lines" in opts else None
         byte_col = len(text.split("\n")[row][:col].encode())
         o = run(text, row, byte_col, opts.get("vim", keys), *(view["lines"], view.get("top", 0)) if view else (None, None),
-                regs=opts.get("regs", ""), preset=opts.get("set"), marks=opts.get("marks", ""))
+                regs=opts.get("regs", ""), preset=opts.get("set"), marks=opts.get("marks", ""),
+                options=opts.get("options", ""))
         at = (o["row"], char_col(o["text"].split("\n")[o["row"]], o["col"]))
         if "marks" in opts:
             lines = o["text"].split("\n")

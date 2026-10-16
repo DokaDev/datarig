@@ -203,6 +203,9 @@ pub struct Editor {
     /// `[editor] auto_pairs`: brackets and quotes typed in Insert mode get their closing
     /// character (`pairs`).
     pub auto_pairs: bool,
+    /// `[editor] soft_tab_backspace`: Backspace in Insert mode after spaces only, back to the
+    /// tab stop before the cursor, deletes them all at once.
+    pub soft_tab_backspace: bool,
     /// The closing characters auto-pairs put in during this Insert session, last on top: their
     /// line and bytes from the line's end.
     pairs: Vec<(usize, usize, char)>,
@@ -284,6 +287,7 @@ impl Editor {
             valid: 0,
             region: REGION_LINES,
             auto_pairs: false,
+            soft_tab_backspace: false,
             pairs: Vec::new(),
             read_only: false,
             refused: false,

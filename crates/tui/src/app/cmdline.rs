@@ -87,6 +87,7 @@ fn setting_action(s: Setting) -> Option<Action> {
         | Setting::FormatCase(_)
         | Setting::FormatIndent(_)
         | Setting::AutoPairs(_)
+        | Setting::SoftTabBackspace(_)
         | Setting::RunHints(_)
         | Setting::KeychainAccess(_)
         | Setting::SizeHeat(_)
@@ -830,6 +831,7 @@ impl App {
             Setting::FormatCase(c) => self.set_prefs(s, |x| x.format_case = c),
             Setting::FormatIndent(i) => self.set_prefs(s, |x| x.format_indent = i),
             Setting::AutoPairs(a) => self.set_prefs(s, |x| x.auto_pairs = a),
+            Setting::SoftTabBackspace(b) => self.set_prefs(s, |x| x.soft_tab_backspace = b),
             Setting::RunHints(h) => self.set_prefs(s, |x| x.run_hints = h),
             Setting::KeychainAccess(a) => self.set_keychain_access(a),
             Setting::SizeHeat(h) => self.set_prefs(s, |x| x.size_heat = h),

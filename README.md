@@ -175,7 +175,11 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
   says `i` starts typing and `Esc` stops. Insert mode keeps the usual editing keys (arrows,
   `Home`/`End`, `Backspace`/`Delete`), plus `Ctrl+W`, `Ctrl+U` and `Ctrl+R {register}`, and
   `Enter` keeps the line's indent; a paste from the terminal goes in at the cursor in every
-  mode. Auto-pairs are off by default, as in Vim; `[editor] auto_pairs = "on"` makes `( [ { ' "`
+  mode. `Tab` types 4 spaces, and `Backspace` after spaces that reach back to the tab stop
+  (every 4 columns) deletes them back to it in one press, as Vim with `softtabstop=4` does
+  then; with anything else between, such as a letter or a tab character, it deletes one
+  character (`[editor] soft_tab_backspace = "off"` always deletes one).
+  Auto-pairs are off by default, as in Vim; `[editor] auto_pairs = "on"` makes `( [ { ' "`
   and `` ` `` put their closing character after the cursor (not inside strings or comments,
   not before a word, never for a paste), step over it when you type it, and delete the empty
   pair on `Backspace`. Registers work as in Vim (`"a`-`"z` and `"A`-`"Z` to append, `"0`, the `"1`-`"9` delete

@@ -82,9 +82,15 @@ pub(super) type Case =
 /// Run each case from a fresh editor and compare the text, the cursor and the register; the
 /// failures are listed together.
 pub(super) fn check(cases: &[Case]) {
+    check_with(cases, |_| {});
+}
+
+/// [`check`] with each editor set up by `prepare` first (a setting turned on).
+pub(super) fn check_with(cases: &[Case], prepare: impl Fn(&mut Editor)) {
     let mut failed = Vec::new();
     for &(text, cursor, keys, want, want_cursor, want_reg) in cases {
         let mut e = at(text, cursor);
+        prepare(&mut e);
         typ(&mut e, keys);
         let reg = e.register('"').map(|r| (r.text.as_str(), r.linewise()));
         let have = (e.text(), (e.row, e.col), reg, e.mode);
