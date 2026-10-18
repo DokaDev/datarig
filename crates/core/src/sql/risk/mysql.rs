@@ -1846,6 +1846,44 @@ fn names_of(stmts: &[Vec<W>], hint: bool) -> Result<Vec<String>, NotRepeatable> 
     Ok(out)
 }
 
+/// The form of `sql` for [`super::opens_tx`] when it is exactly one statement in every sql mode
+/// that reads it differently ([`readings`]; one the server would refuse as a syntax error does
+/// not count, unless it is `mode`) and the readings agree: a query, a `SHOW`, `HELP`,
+/// `DESCRIBE`/`DESC` or `EXPLAIN` (a plain read; what it calls and whether it runs anything is
+/// in its risk), or something else. `None` otherwise.
+pub(super) fn form(sql: &str, mode: MySqlMode) -> Option<super::Form> {
+    use super::Form;
+    guarded(
+        || None,
+        || {
+            let mut agreed = None;
+            for (k, m) in readings(sql, mode).into_iter().enumerate() {
+                let stmts = match statements(sql, m) {
+                    Ok((stmts, _)) => stmts,
+                    Err(Unread::Syntax) if k > 0 => continue,
+                    Err(_) => return None,
+                };
+                let [ws] = stmts.as_slice() else { return None };
+                let first = ws.first().map(|w| w.up.as_str());
+                let query = starts_query(ws, 0)
+                    || (first == Some("WITH") && with_main(ws).is_some_and(|i| starts_query(ws, i)));
+                let form = if query {
+                    Form::Query
+                } else if matches!(first, Some("SHOW" | "HELP" | "DESCRIBE" | "DESC" | "EXPLAIN")) {
+                    Form::Plain
+                } else {
+                    Form::Other
+                };
+                if agreed.is_some_and(|a| a != form) {
+                    return None;
+                }
+                agreed = Some(form);
+            }
+            agreed
+        },
+    )
+}
+
 /// Whether the query `sql` sorts its rows at the top (`ORDER BY` outside every parenthesis,
 /// once the parentheses around all of it are left out).
 pub fn ordered(sql: &str, mode: MySqlMode) -> bool {
