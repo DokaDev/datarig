@@ -116,14 +116,16 @@ impl ScriptTree {
             }
             true
         };
+        let hits = (filtering && export).then(|| self.export_hits(&q));
         for e in &self.entries {
-            if export && !self.export_listed(&e.path) {
+            // The folder shown, when it cannot be listed: its mark, no row.
+            if e.path.is_empty() || (export && !self.export_listed(&e.path)) {
                 continue;
             }
             let shown = if filtering && folder_mode {
                 self.folder_shown(&e.path, &q)
-            } else if filtering && export {
-                self.export_shown(&e.path, &q)
+            } else if let Some(hits) = &hits {
+                hits.contains(e.path.as_str())
             } else if filtering {
                 if e.folder {
                     self.entries.iter().any(|x| !x.folder && scripts::is_within(&x.path, &e.path) && matches(&x.path))
@@ -178,7 +180,11 @@ impl ScriptTree {
 
     /// A folder whose contents could not be listed.
     pub fn unreadable(&self, row: &TreeRow) -> bool {
-        matches!(row, TreeRow::Folder(p) if self.entry(p).is_some_and(|e| e.unreadable))
+        match row {
+            TreeRow::Folder(p) => self.entry(p).is_some_and(|e| e.unreadable),
+            TreeRow::Top => self.entry("").is_some_and(|e| e.unreadable),
+            TreeRow::Up | TreeRow::File(_) => false,
+        }
     }
 
     /// Select row `i`; in save mode a file gives the name field its name.

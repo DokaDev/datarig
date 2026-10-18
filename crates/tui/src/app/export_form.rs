@@ -359,6 +359,16 @@ impl App {
         if matches!(self.overlays.picker(), Some(Picker::Export { .. })) {
             self.overlays.close(OverlayKind::Picker);
         }
+        // The picker of where to write, and its new-folder prompt, go with it.
+        if matches!(self.overlays.script_tree().map(|t| t.mode), Some(super::script_tree::TreeMode::ExportPath(_))) {
+            self.overlays.close(OverlayKind::ScriptTree);
+        }
+        if matches!(
+            self.overlays.name_input().map(|n| &n.purpose),
+            Some(super::chooser::NamePurpose::NewExportFolder { .. })
+        ) {
+            self.overlays.close(OverlayKind::NameInput);
+        }
     }
 
     /// The id of the active tab's result shown.

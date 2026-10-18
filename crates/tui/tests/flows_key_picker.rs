@@ -303,3 +303,28 @@ fn a_click_on_the_filter_types_there() {
     h.mouse(MouseEventKind::Down(MouseButton::Left), list.x + 3, list.y);
     assert_eq!(h.app.overlays.script_tree().unwrap().focus, TreeFocus::Tree);
 }
+
+/// The folder shown cannot be listed: its row says so, and still does after a key.
+#[cfg(unix)]
+#[test]
+fn an_unreadable_folder_shown_stays_marked() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = home("locked-root");
+    let locked = home.0.join("locked");
+    std::fs::create_dir(&locked).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read_dir(&locked).is_ok() {
+        let _ = std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755));
+        return;
+    }
+    let mut h = form(&home, Some("~/locked/id_x"));
+    h.ctrl('o');
+    assert_eq!(picker_root(&h), locked);
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Down);
+    h.key(KeyCode::Up);
+    let screen = h.screen(120, 40);
+    let ok = screen.lines().any(|l| l.contains("~/locked/") && l.contains("(can't be read)"));
+    let _ = std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755));
+    assert!(ok, "{screen}");
+}

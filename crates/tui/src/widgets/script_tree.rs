@@ -131,7 +131,7 @@ pub(crate) fn draw_script_tree(app: &mut App, area: Rect, buf: &mut Buffer) -> O
             }
         };
         x += put(buf, x, y, &text, room(x), style);
-        if export && *row == TreeRow::Top {
+        if export && *row == TreeRow::Top && !t.unreadable(row) {
             put(buf, x + 2, y, &save_here, room(x + 2), Style::new().fg(th.accent).patch(bg));
         }
         if t.unreadable(row) {

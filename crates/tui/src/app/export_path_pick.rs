@@ -28,7 +28,7 @@ use super::script_tree::{ScriptTree, TreeFocus, TreeMode, TreeRow};
 use super::*;
 use crate::widgets::text_input::InputResult;
 use datarig_core::scripts::{self, display_name, is_within};
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
 
 /// The picker's own state.
@@ -106,26 +106,54 @@ impl ScriptTree {
 
     /// With filter `q` (case folded): `path` is shown when its name or that of something listed
     /// inside it holds `q`.
-    pub(super) fn export_shown(&self, path: &str, q: &str) -> bool {
-        self.entries.iter().any(|e| {
-            is_within(&e.path, path)
-                && self.export_listed(&e.path)
-                && scripts::name::fold(display_name(&e.path, true)).contains(q)
-        })
+    /// The paths shown with filter `q` (case folded), in one pass: each listed entry whose name
+    /// holds `q`, and the folders on the way to it.
+    pub(super) fn export_hits(&self, q: &str) -> HashSet<&str> {
+        let mut hits = HashSet::new();
+        for e in &self.entries {
+            if e.path.is_empty()
+                || !self.export_listed(&e.path)
+                || !scripts::name::fold(display_name(&e.path, true)).contains(q)
+            {
+                continue;
+            }
+            let mut p = Some(e.path.as_str());
+            while let Some(x) = p {
+                if !hits.insert(x) {
+                    break;
+                }
+                p = scripts::parent(x);
+            }
+        }
+        hits
     }
 
-    /// Folder `rel` is a link back to the folder that holds it or one on the way to it: it is
-    /// not opened, and says so.
+    /// Shown at a hidden name (a hidden folder or file of the field, or the hidden folder gone
+    /// up from): hidden names are listed, so the selection is a row on screen.
+    pub(super) fn export_reveal(&mut self, select: Option<&str>) {
+        if let TreeMode::ExportPath(p) = &mut self.mode
+            && select.is_some_and(|n| n.starts_with('.') && self.entries.iter().any(|e| e.path == n))
+        {
+            p.hidden = true;
+        }
+    }
+
+    /// Folder `rel` is a link to a folder on the way to it (the folder shown, or one between it
+    /// and the link, as they really are: through any number of links): it is not opened, and
+    /// says so.
     pub(super) fn loops(&mut self, rel: &str) -> bool {
         let dir = self.root.join(rel);
         if !std::fs::symlink_metadata(&dir).is_ok_and(|m| m.file_type().is_symlink()) {
             return false;
         }
-        let holder = dir.parent().map(Path::to_path_buf).unwrap_or_default();
-        let (Ok(target), Ok(holder)) = (std::fs::canonicalize(&dir), std::fs::canonicalize(&holder)) else {
-            return false;
-        };
-        if !holder.starts_with(&target) {
+        let Ok(target) = std::fs::canonicalize(&dir) else { return false };
+        let mut way = vec![self.root.clone()];
+        let parts: Vec<&str> = rel.split('/').collect();
+        for part in &parts[..parts.len() - 1] {
+            let next = way[way.len() - 1].join(part);
+            way.push(next);
+        }
+        if !way.iter().filter_map(|p| std::fs::canonicalize(p).ok()).any(|p| p.starts_with(&target)) {
             return false;
         }
         self.error = Some(Msg::ExportPathLoop { name: rel.to_string() });
@@ -148,6 +176,8 @@ impl ScriptTree {
         self.entries.retain(|e| e.path == rel || !is_within(&e.path, rel));
         self.loaded.retain(|l| l == rel || !is_within(l, rel));
         self.loaded.remove(rel);
+        // Listed again below: what was open inside it is closed, never open and empty.
+        self.open.retain(|o| o == rel || !is_within(o, rel));
         self.load(rel);
         self.open.insert(rel.to_string());
         self.row = TreeRow::Folder(select);
@@ -305,7 +335,7 @@ impl App {
     /// "Save here" (`Ctrl+S`): the selected folder, with the file name the field has (the one
     /// made for the format when it names no file).
     fn export_path_save_here(&mut self) {
-        let home = self.home();
+        let (home, folder) = (self.home(), self.export_folder());
         let Some(t) = self.overlays.script_tree_mut() else { return };
         let dir = t.export_dir();
         // Unknown is not empty: a folder that cannot be listed is not saved into.
@@ -315,8 +345,11 @@ impl App {
         }
         let Some(f) = self.overlays.export_form() else { return };
         let typed = f.path.text().trim();
-        let named =
-            if typed.is_empty() || typed.ends_with(['/', '\\']) { f.default_text(f.format) } else { typed.to_string() };
+        // A field that names a folder (with or without `/`) has no file name of its own.
+        let folder_typed = typed.is_empty()
+            || typed.ends_with(['/', '\\'])
+            || expand_path(typed, home.as_deref(), &folder).is_some_and(|p| p.is_dir());
+        let named = if folder_typed { f.default_text(f.format) } else { typed.to_string() };
         let cut = named.rfind(['/', '\\']).map_or(0, |i| i + 1);
         let name = named[cut..].to_string();
         self.export_path_picked(dir.join(name));
@@ -338,7 +371,8 @@ impl App {
         let home = self.home();
         let Some(t) = self.overlays.script_tree_mut() else { return };
         let parent = t.folder();
-        if parent.as_ref().is_some_and(|p| t.unreadable(&TreeRow::Folder(p.clone()))) {
+        // Not in a folder that cannot be listed (the new one could not be shown).
+        if std::fs::read_dir(t.export_dir()).is_err() {
             t.error = Some(Msg::ExportPathUnreadable { path: key_picker::shown(&t.export_dir(), home.as_deref()) });
             return;
         }
@@ -401,12 +435,16 @@ impl App {
         let (home, folder) = (self.home(), self.export_folder());
         let Some(f) = self.overlays.export_form_mut() else { return false };
         let text = f.path.text().to_string();
+        if text.trim().is_empty() {
+            f.completion = None;
+            return false;
+        }
         if let Some(c) = f.completion.as_mut().filter(|c| c.text == text && c.matches.len() > 1) {
             let i = c.at.map_or(0, |i| (i + 1) % c.matches.len());
             c.at = Some(i);
             c.text = c.matches[i].clone();
             let next = c.text.clone();
-            f.path.set(&next);
+            f.set_path(&next);
             return true;
         }
         let matches = path_matches(&text, home.as_deref(), &folder);
@@ -428,6 +466,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datarig_core::scripts::Entry;
 
     #[test]
     fn the_common_prefix_stops_where_two_names_part() {
@@ -436,5 +475,39 @@ mod tests {
         assert_eq!(common_prefix(&v(&["one"])), "one");
         assert_eq!(common_prefix(&v(&["\u{e9}a", "\u{e9}b"])), "\u{e9}");
         assert_eq!(common_prefix(&[]), "");
+    }
+
+    /// Filtering is one pass over the entries, not one per entry: 40,000 names filter well
+    /// inside the budget (a pass per entry takes over a billion steps here).
+    #[test]
+    fn filtering_a_large_folder_is_linear() {
+        let mut entries = Vec::new();
+        for i in 0..200 {
+            entries.push(Entry { path: format!("d{i}"), folder: true, unreadable: false });
+            for j in 0..199 {
+                entries.push(Entry { path: format!("d{i}/f{j}.csv"), folder: false, unreadable: false });
+            }
+        }
+        let t = ScriptTree {
+            mode: TreeMode::ExportPath(ExportPick::default()),
+            entries,
+            open: BTreeSet::new(),
+            row: TreeRow::Top,
+            focus: TreeFocus::Name,
+            input: TextInput::new("f19"),
+            error: None,
+            scroll: 0,
+            detached: false,
+            list: Rect::default(),
+            overwrite: None,
+            root: PathBuf::from("/"),
+            loaded: BTreeSet::new(),
+            moving: None,
+        };
+        let start = std::time::Instant::now();
+        let rows = t.rows();
+        assert!(start.elapsed() < std::time::Duration::from_secs(5), "{:?}", start.elapsed());
+        // The top row (`/` has no `../`), then each folder with `f19` and `f190`..`f198`.
+        assert_eq!(rows.len(), 1 + 200 * 11);
     }
 }

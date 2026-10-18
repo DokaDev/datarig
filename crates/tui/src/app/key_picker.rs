@@ -103,6 +103,9 @@ impl ScriptTree {
                 if let Some(entry) = self.entries.iter_mut().find(|x| x.path == rel) {
                     entry.unreadable = true;
                 } else {
+                    // The folder shown: an entry of its own (no row) keeps it marked whatever
+                    // is pressed, so it never reads as empty.
+                    self.entries.push(Entry { path: String::new(), folder: true, unreadable: true });
                     self.error = Some(crate::app::fault_reason(&datarig_core::fault::Fault::io_at(&e, &dir)));
                 }
                 return;
@@ -134,6 +137,7 @@ impl ScriptTree {
         self.scroll = 0;
         self.detached = false;
         self.load("");
+        self.export_reveal(select);
         self.row = select
             .and_then(|n| self.entries.iter().find(|e| e.path == n))
             .map(|e| if e.folder { TreeRow::Folder(e.path.clone()) } else { TreeRow::File(e.path.clone()) })

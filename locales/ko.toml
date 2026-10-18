@@ -893,7 +893,7 @@
 "key_picker.keys" = "Enter 선택 · 찾기 또는 경로 입력 · Tab 트리 · ←→ 폴더 · Esc 취소"
 "folder_pick.keys" = "Enter 선택 · →← 폴더 · / 찾기 · n 새 폴더 · Esc 취소"
 "export_path.title" = "내보낼 위치"
-"export_path.keys" = "Enter 선택 · Ctrl+S 여기에 저장 · / 찾기 · . 숨김 · n 새 폴더 · Esc"
+"export_path.keys" = "Enter 선택 · Ctrl+S 여기에 저장 · / 찾기 · . 숨김 · n 폴더 · Esc"
 "export_path.save_here" = "여기에 저장"
 "export_path.browse" = "찾아보기…"
 "export_path.loop" = "{name}은(는) 상위 폴더로 되돌아가는 링크라서 열지 않습니다"

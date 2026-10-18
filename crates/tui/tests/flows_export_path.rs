@@ -505,3 +505,143 @@ fn the_browse_button_and_the_mouse_pick() {
     h.key(KeyCode::Esc);
     assert!(!(spec.when)(&h.app), "only in the export dialog");
 }
+
+/// The folder shown cannot be listed: it says so on its row, and keeps saying so after keys,
+/// a filter and moves (it never reads as empty).
+#[cfg(unix)]
+#[test]
+fn an_unreadable_folder_shown_stays_marked_after_keys() {
+    use std::os::unix::fs::PermissionsExt;
+    let home = home("locked-root");
+    let locked = home.0.join("Downloads/locked");
+    std::fs::create_dir(&locked).unwrap();
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    if std::fs::read_dir(&locked).is_ok() {
+        return;
+    }
+    let mut h = dialog(&home);
+    set_path(&mut h, "~/Downloads/locked/x.csv");
+    h.ctrl('o');
+    assert_eq!(root(&h), locked);
+    let marked = |h: &mut Harness| {
+        let screen = h.screen(120, 40);
+        screen.contains("~/Downloads/locked/  Save here (can't be read)")
+            || screen.contains("~/Downloads/locked/ (can't be read)")
+            || screen.lines().any(|l| l.contains("~/Downloads/locked/") && l.contains("(can't be read)"))
+    };
+    assert!(marked(&mut h), "{}", h.screen(120, 40));
+    h.key(KeyCode::Down);
+    h.key(KeyCode::Up);
+    assert!(marked(&mut h), "after moves:\n{}", h.screen(120, 40));
+    h.keys("/");
+    h.type_text("q");
+    assert!(marked(&mut h), "after a filter:\n{}", h.screen(120, 40));
+    let t = h.app.overlays.script_tree().unwrap();
+    assert!(t.unreadable(&TreeRow::Top));
+}
+
+/// Coming up out of a hidden folder: its row is selected and shown, never selected unseen.
+#[test]
+fn going_up_out_of_a_hidden_folder_shows_it() {
+    let home = home("hidden-up");
+    let mut h = dialog(&home);
+    set_path(&mut h, "~/Downloads/.cache/x.csv");
+    h.ctrl('o');
+    assert_eq!(root(&h), home.0.join("Downloads/.cache"));
+    h.key(KeyCode::Left);
+    assert_eq!(row(&h), TreeRow::Folder(".cache".into()));
+    assert!(rows(&h).contains(&row(&h)), "the selection is a row on screen: {:?}", rows(&h));
+}
+
+/// A cycle made of two links is caught too: `x/l1` is `y`, whose `l2` is `x` again.
+#[cfg(unix)]
+#[test]
+fn a_cycle_of_two_links_is_not_opened() {
+    let home = home("loop2");
+    let d = home.0.join("Downloads");
+    std::fs::create_dir_all(d.join("x")).unwrap();
+    std::fs::create_dir_all(d.join("y")).unwrap();
+    std::os::unix::fs::symlink(d.join("y"), d.join("x/l1")).unwrap();
+    std::os::unix::fs::symlink(d.join("x"), d.join("y/l2")).unwrap();
+    let mut h = dialog(&home);
+    h.ctrl('o');
+    go_to(&mut h, TreeRow::Folder("x".into()));
+    h.key(KeyCode::Right);
+    go_to(&mut h, TreeRow::Folder("x/l1".into()));
+    h.key(KeyCode::Right);
+    go_to(&mut h, TreeRow::Folder("x/l1/l2".into()));
+    h.key(KeyCode::Right);
+    assert_eq!(h.app.overlays.script_tree().unwrap().is_open(&TreeRow::Folder("x/l1/l2".into())), Some(false));
+    assert!(tree_error(&h).is_some_and(|e| e.contains("links back")), "{:?}", tree_error(&h));
+}
+
+/// The dialog goes stale under the picker and its new-folder prompt: all three close.
+#[test]
+fn a_stale_dialog_closes_the_picker_and_its_prompt() {
+    let home = home("stale");
+    let mut h = dialog(&home);
+    h.key(KeyCode::Esc);
+    h.ctrl('e');
+    let qid = h.app.tab().exec.query_id;
+    h.sent();
+    h.keys(" re");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Export));
+    h.ctrl('o');
+    h.keys("n");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::NameInput));
+    let index = h.app.tabs.active_index();
+    let rows = vec![vec![Some("z".to_string())]];
+    h.tab_db(
+        index,
+        DbEvent::Page { id: qid, columns: Some(vec![meta("v")]), rows, more: false, elapsed: Duration::ZERO },
+    );
+    assert!(h.app.overlays.script_tree().is_none(), "the picker closed");
+    assert!(h.app.overlays.name_input().is_none(), "its prompt closed");
+    assert_eq!(h.overlay_kind(), None);
+}
+
+/// A new folder inside `a` lists `a` again: a folder open below it is closed, never left
+/// open and empty.
+#[test]
+fn a_new_folder_leaves_no_open_folder_empty() {
+    let home = home("reopen");
+    std::fs::create_dir_all(home.0.join("Downloads/a/sub")).unwrap();
+    std::fs::write(home.0.join("Downloads/a/sub/deep.csv"), "x").unwrap();
+    let mut h = dialog(&home);
+    h.ctrl('o');
+    go_to(&mut h, TreeRow::Folder("a".into()));
+    h.key(KeyCode::Right);
+    go_to(&mut h, TreeRow::Folder("a/sub".into()));
+    h.key(KeyCode::Right);
+    assert!(rows(&h).contains(&TreeRow::File("a/sub/deep.csv".into())));
+    go_to(&mut h, TreeRow::Folder("a".into()));
+    h.keys("n");
+    h.type_text("made");
+    h.key(KeyCode::Enter);
+    let t = h.app.overlays.script_tree().unwrap();
+    let open = t.is_open(&TreeRow::Folder("a/sub".into())) == Some(true);
+    assert!(!open || rows(&h).contains(&TreeRow::File("a/sub/deep.csv".into())), "open and empty: {:?}", rows(&h));
+}
+
+/// A field that names a folder (no `/` at its end): Save here keeps the made file name.
+#[test]
+fn save_here_on_a_folder_typed_without_a_slash() {
+    let home = home("noslash");
+    let mut h = dialog(&home);
+    let name = made_name(&h);
+    set_path(&mut h, "~/proj");
+    h.ctrl('o');
+    assert_eq!(root(&h), home.0.join("proj"));
+    h.key(KeyCode::Enter);
+    assert_eq!(path_text(&h), format!("~/proj/{name}"));
+}
+
+/// `Tab` in an empty path field completes nothing: the focus moves on.
+#[test]
+fn tab_on_an_empty_path_moves_on() {
+    let home = home("empty-tab");
+    let mut h = dialog(&home);
+    set_path(&mut h, "");
+    h.key(KeyCode::Tab);
+    assert_eq!(focus(&h), ExportField::Export);
+}

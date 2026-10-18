@@ -506,7 +506,7 @@ Reserved — saved-queries tree: `j` `k` `h` `l` `Up` `Down` `Left` `Right` `Ent
 
 ## `overlay.script_tree.name` [text]
 
-The folder tree of the saved queries: its name field (save as) or filter (open). Inside `root`.
+The folder tree of the saved queries: its name field (save as) or filter (open); of the file system: its filter, where a text with `/` or a leading `~` is a path `Enter` goes to. Inside `root`.
 
 Reserved — saved-queries tree: name or filter: `Up` `Down` `Enter` `Tab` `Shift+Tab` `Esc` `Ctrl+S`
 
