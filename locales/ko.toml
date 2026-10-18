@@ -884,7 +884,7 @@
 "key_picker.title" = "SSH 키 파일"
 "key_picker.filter" = "찾기 또는 경로"
 "key_picker.keys" = "Enter 선택 · 찾기 또는 경로 입력 · Tab 트리 · ←→ 폴더 · Esc 취소"
-"folder_pick.keys" = "Enter 고르기 · ←→ 폴더 · / 찾기 · n 새 폴더 · Esc 취소"
+"folder_pick.keys" = "Enter 선택 · →← 폴더 · / 찾기 · n 새 폴더 · Esc 취소"
 "scripts.index_save_failed" = "저장된 쿼리의 연결 정보를 저장할 수 없음: {error}"
 "conn.unknown_driver" = "이 프로필의 드라이버 “{driver}”을(를) 알 수 없습니다"
 "io.permission_denied" = "권한이 없습니다"

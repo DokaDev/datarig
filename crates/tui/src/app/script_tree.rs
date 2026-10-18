@@ -229,7 +229,9 @@ impl App {
         };
         let (row, name) = match (&current, mode) {
             (Some(p), TreeMode::Save { .. }) => (TreeRow::File(p.clone()), scripts::display_name(p, false).to_string()),
-            (Some(p), _) => (TreeRow::File(p.clone()), String::new()),
+            (Some(p), TreeMode::Open | TreeMode::KeyFile | TreeMode::Folder(_)) => {
+                (TreeRow::File(p.clone()), String::new())
+            }
             (None, _) => (self.last_save_folder.clone().map_or(TreeRow::Top, TreeRow::Folder), String::new()),
         };
         // The folders on the way to the selection are open.

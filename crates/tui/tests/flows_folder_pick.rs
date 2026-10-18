@@ -8,7 +8,7 @@ mod common;
 
 use common::*;
 use datarig_core::config::{Config, IconsSetting};
-use datarig_core::i18n::Lang;
+use datarig_core::i18n::{Label, Lang};
 use datarig_core::paths::Paths;
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::profile::folder::FolderPath;
@@ -192,6 +192,12 @@ fn a_filter_keeps_the_way_to_a_match() {
     assert_eq!(row(&h), folder("a/b/c"));
     let t = h.app.overlays.script_tree().unwrap();
     assert_eq!((t.is_open(&folder("a")), t.is_open(&folder("a/b"))), (Some(true), Some(true)));
+    // `↑`/`↓` move the selection; the keyboard stays on the filter.
+    h.key(KeyCode::Up);
+    assert_eq!(row(&h), folder("a/b"));
+    h.key(KeyCode::Down);
+    assert_eq!(row(&h), folder("a/b/c"));
+    assert_eq!(h.app.overlays.script_tree().unwrap().focus, TreeFocus::Name);
     // `Esc` clears the filter (the tree is back); `/` and typing again.
     h.key(KeyCode::Esc);
     assert_eq!(h.overlay_kind(), Some(OverlayKind::ScriptTree));
@@ -228,6 +234,16 @@ fn a_new_profile_folder_is_saved_only_when_picked() {
     h.type_text("new");
     h.key(KeyCode::Enter);
     assert!(h.screen(80, 24).contains("that folder exists already"));
+    // Beside `c`, `C` is the same name (names ignore case); a name with spaces or dots is no
+    // name.
+    for (typed, error) in
+        [("C", Label::ValidateFolderExists), ("x /y", Label::ValidateFolderSpaces), ("..", Label::ValidateFolderDots)]
+    {
+        h.ctrl('u');
+        h.type_text(typed);
+        h.key(KeyCode::Enter);
+        assert_eq!(h.app.overlays.name_input().map(|n| n.error), Some(Some(error)), "{typed:?}");
+    }
     h.key(KeyCode::Esc);
     h.key(KeyCode::Esc);
     assert!(h.overlay_kind().is_none());
@@ -282,6 +298,17 @@ fn the_mouse_selects_toggles_picks_and_scrolls() {
         h.mouse(MouseEventKind::Up(MouseButton::Left), x, y);
         h.draw(80, 24);
     };
+    assert_eq!(rows(&h)[..4], ["top", "a", "a/b", "f00"]);
+    click(&mut h, list.x + 6, list.y);
+    assert_eq!(row(&h), TreeRow::Top, "the top row");
+    click(&mut h, list.x + 6, list.y + 1);
+    assert_eq!((row(&h), &rows(&h)[..4]), (folder("a"), &["top", "a", "a/b", "f00"].map(String::from)[..]));
+    // The arrow of the selected `a` (depth 1: columns 2 and 3) closes and opens it, no pick.
+    click(&mut h, list.x + 3, list.y + 1);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ScriptTree), "the arrow does not pick");
+    assert_eq!(rows(&h)[..3], ["top", "a", "f00"]);
+    click(&mut h, list.x + 2, list.y + 1);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ScriptTree));
     assert_eq!(rows(&h)[..4], ["top", "a", "a/b", "f00"]);
     // `a/b` (depth 2: its arrow at columns 4 and 5).
     click(&mut h, list.x + 4, list.y + 2);
@@ -387,8 +414,11 @@ fn moving_a_saved_query_or_folder_lists_the_other_folders() {
     assert_eq!((rows(&h), row(&h)), (vec!["top".to_string(), "a".into(), "z".into()], folder("a")));
     insta::assert_snapshot!("folder_pick_move_script_en_80x24", h.draw(80, 24).backend());
     // Its own parent: nothing moves, nothing is said.
+    h.app.status = None;
     h.key(KeyCode::Enter);
+    assert!(h.overlay_kind().is_none());
     assert!(dir.scripts().join("a/b/c").is_dir());
+    assert!(h.app.status.is_none(), "a notice: {:?}", h.app.status);
     // Into `z`, then back to the top through the filter.
     select_row(&mut h, "b/");
     h.keys("m");
@@ -435,4 +465,52 @@ fn a_new_folder_of_the_saved_queries_is_made_at_once() {
     h.key(KeyCode::Enter);
     h.key(KeyCode::Enter);
     assert!(dir.scripts().join("a/made/z").is_dir());
+}
+
+/// Folders `A`, `a` and `A/x`: `A/x` is under `A`, siblings by name ignoring case.
+#[test]
+fn folders_differing_in_case_keep_their_own_children() {
+    let dir = Scratch::new("profile-case");
+    let mut h = profiles(&dir);
+    h.app.folders = Default::default();
+    for f in ["a", "A/x"] {
+        h.app.folders.insert(&FolderPath::parse(f).unwrap());
+    }
+    h.explore("local-pg");
+    h.keys("m");
+    assert_eq!(rows(&h), ["top", "A", "a"]);
+    h.keys("jl");
+    assert_eq!(rows(&h), ["top", "A", "A/x", "a"]);
+    h.keys("j");
+    h.key(KeyCode::Enter);
+    assert_eq!(profile_folder(&h, "local-pg").as_deref(), Some("A/x"));
+}
+
+/// A folder of the saved queries that cannot be read is not picked: the dialog says so and
+/// stays (`Enter` and a click again on it).
+#[cfg(unix)]
+#[test]
+fn an_unreadable_folder_is_not_picked() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = Scratch::new("scripts-unreadable");
+    let z = dir.scripts().join("z");
+    std::fs::create_dir_all(&z).unwrap();
+    std::fs::set_permissions(&z, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let mut h = scripts(&dir);
+    select_row(&mut h, "top");
+    h.keys("m");
+    h.keys("jj");
+    assert_eq!(row(&h), folder("z"));
+    assert!(h.app.overlays.script_tree().unwrap().unreadable(&folder("z")));
+    h.key(KeyCode::Enter);
+    let error = |h: &Harness| h.app.overlays.script_tree().and_then(|t| t.error.clone());
+    assert_eq!(error(&h), Some(datarig_core::i18n::Msg::Label(Label::ValidateScriptUnreadable)));
+    h.draw(80, 24);
+    let list = h.app.overlays.script_tree().unwrap().list;
+    h.app.overlays.script_tree_mut().unwrap().error = None;
+    h.mouse(MouseEventKind::Down(MouseButton::Left), list.x + 6, list.y + 2);
+    assert_eq!(error(&h), Some(datarig_core::i18n::Msg::Label(Label::ValidateScriptUnreadable)));
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ScriptTree));
+    std::fs::set_permissions(&z, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(dir.scripts().join("top.sql").is_file(), "nothing moved");
 }

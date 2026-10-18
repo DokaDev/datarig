@@ -8,8 +8,10 @@
 //! one goes to its parent), `Enter` picks the selected folder, `/` or `Tab` puts the keyboard
 //! on the filter, `n` names a new folder inside the selected one, `Esc`/`q` cancel. Filter:
 //! typing keeps the folders whose name holds the text (ignoring case) and the folders on the
-//! way to them; the selection goes to the first match unless it is on one. `Enter`, `↓` or
-//! `Tab` go back to the tree, `Esc` clears the filter.
+//! way to them; the selection goes to the first match unless it is on one. `↑`/`↓` move the
+//! selection (the keyboard stays on the filter), `Enter` or `Tab` go back to the tree, `Esc`
+//! clears the filter and goes back. A new folder is refused when a folder beside it has its
+//! name, ignoring case; a folder of the saved queries that cannot be read is not picked.
 //!
 //! A new profile folder is only a row until it is picked, so browsing never writes the config;
 //! a new folder of the saved queries is made on disk at once, as in "save as".
@@ -52,7 +54,8 @@ fn profile_entries(paths: impl IntoIterator<Item = String>) -> Vec<Entry> {
         .flat_map(|p| p.with_ancestors())
         .map(|p| p.to_string())
         .collect();
-    let key = |p: &str| p.split('/').map(str::to_lowercase).collect::<Vec<_>>();
+    // Segment by segment, so `A/x` stays under `A` whatever `a` is beside it.
+    let key = |p: &str| p.split('/').map(|s| (s.to_lowercase(), s.to_string())).collect::<Vec<_>>();
     all.sort_by(|a, b| key(a).cmp(&key(b)).then_with(|| a.cmp(b)));
     all.dedup();
     all.into_iter().map(|path| Entry { path, folder: true, unreadable: false }).collect()
@@ -168,8 +171,9 @@ impl App {
                     t.focus = TreeFocus::Tree;
                     t.follow_filter();
                 }
-                KeyCode::Enter | KeyCode::Down | KeyCode::Tab | KeyCode::BackTab => t.focus = TreeFocus::Tree,
+                KeyCode::Enter | KeyCode::Tab | KeyCode::BackTab => t.focus = TreeFocus::Tree,
                 KeyCode::Up => t.step(-1),
+                KeyCode::Down => t.step(1),
                 _ => {
                     if t.input.handle_key(&key) == InputResult::Changed {
                         t.error = None;
@@ -239,7 +243,12 @@ impl App {
         };
         let path = FolderPath::parse(&path).map_err(|e| super::chooser::folder_error(&e))?.to_string();
         let Some(t) = self.overlays.script_tree_mut() else { return Ok(()) };
-        if t.entries.iter().any(|e| e.path == path) {
+        let name = scripts::name::fold(display_name(&path, true));
+        let parent = scripts::parent(&path);
+        if t.entries
+            .iter()
+            .any(|e| scripts::parent(&e.path) == parent && scripts::name::fold(display_name(&e.path, true)) == name)
+        {
             return Err(Label::ValidateFolderExists);
         }
         let paths: Vec<String> = t.entries.drain(..).map(|e| e.path).chain([path.clone()]).collect();
@@ -257,9 +266,18 @@ impl App {
         let Some(t) = self.overlays.script_tree() else { return };
         let TreeMode::Folder(pick) = t.mode else { return };
         let (folder, moving) = (t.folder(), t.moving.clone());
+        if pick == FolderPick::MoveScript && t.unreadable(&t.row) {
+            if let Some(t) = self.overlays.script_tree_mut() {
+                t.error = Some(Msg::Label(Label::ValidateScriptUnreadable));
+            }
+            return;
+        }
         self.overlays.close(OverlayKind::ScriptTree);
         match pick {
             FolderPick::MoveProfile(id) => {
+                if self.profile(id).is_none() {
+                    return;
+                }
                 // A new folder joins the config with the move: one write.
                 if let Some(f) = folder.as_deref().and_then(|f| FolderPath::parse(f).ok()) {
                     self.folders.insert(&f);
