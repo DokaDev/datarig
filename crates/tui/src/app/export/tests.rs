@@ -21,7 +21,8 @@ fn the_words_of_export_are_a_format_a_scope_and_a_path() {
     assert_eq!(args("out.csv"), ExportArgs { path: Some("out.csv".into()), ..Default::default() });
     assert_eq!(args("ndjson all a.txt").format, Some(ExportFormat::JsonLines));
     assert_eq!(args("SQL").format, Some(ExportFormat::SqlInsert));
-    assert_eq!(parse_args("parquet"), Err(ArgsError::UnknownFormat("parquet".into())));
+    assert_eq!(parse_args("avro"), Err(ArgsError::UnknownFormat("avro".into())));
+    assert_eq!(args("parquet").format, Some(ExportFormat::Parquet));
 }
 
 #[test]
@@ -38,6 +39,8 @@ fn a_path_names_its_format() {
     assert_eq!(of("a.XLSX"), Some(ExportFormat::Xlsx));
     assert_eq!(ExportFormat::parse("excel"), Some(ExportFormat::Xlsx));
     assert_eq!(ExportFormat::Xlsx.extension(), "xlsx");
+    assert_eq!(of("a.parquet"), Some(ExportFormat::Parquet));
+    assert_eq!(ExportFormat::Parquet.extension(), "parquet");
     assert_eq!(of("a.txt"), None);
     assert_eq!(of("noext"), None);
     for f in ExportFormat::ALL {

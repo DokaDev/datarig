@@ -484,9 +484,9 @@ fn the_default_path_is_in_downloads_under_home_or_home_itself() {
 fn the_command_says_what_it_does_not_understand() {
     let mut h = Harness::connected(Lang::En);
     first_page(&mut h, 3, false);
-    h.command("export parquet");
+    h.command("export avro");
     let err = h.cmdline().and_then(|c| c.error.clone()).map(|n| n.render(&h.app.i18n).to_string());
-    assert!(err.as_deref().is_some_and(|e| e.starts_with("Unknown export format: parquet")), "{err:?}");
+    assert!(err.as_deref().is_some_and(|e| e.starts_with("Unknown export format: avro")), "{err:?}");
     h.key(KeyCode::Esc);
     h.command("export all out.txt");
     let err = h.cmdline().and_then(|c| c.error.clone()).map(|n| n.render(&h.app.i18n).to_string());
