@@ -245,6 +245,8 @@ pub enum GridAction {
     Select,
     /// `V`: start or drop a selection of whole rows.
     SelectRows,
+    /// `Ctrl+A`: every cell of the page shown, as a range.
+    SelectAll,
 }
 
 pub struct ActionSpec {
@@ -695,6 +697,7 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::Grid(G::CopyRow), "grid.copy_row", Label::ActionGridCopyRow, grid_focused),
     act(Action::Grid(G::Select), "grid.select", Label::ActionGridSelect, grid_focused),
     act(Action::Grid(G::SelectRows), "grid.select_rows", Label::ActionGridSelectRows, grid_focused),
+    act(Action::Grid(G::SelectAll), "grid.select_all", Label::ActionGridSelectAll, grid_focused),
     act(
         Action::Copy(CopyScope::Selection, CopyFormat::TsvPlain),
         "results.copy.selection.tsv",

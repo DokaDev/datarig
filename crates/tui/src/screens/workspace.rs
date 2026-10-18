@@ -273,13 +273,13 @@ fn draw_results_pane(app: &mut App, area: Rect, buf: &mut Buffer) {
     if app.chart_shown() {
         app.chart_sync();
     }
-    let (title, status) = results_title(app);
-    let status = status.as_ref().map(|(texts, style)| (texts.as_slice(), *style));
     let panel_w = app.inspector_shown().then(|| crate::widgets::inspector::width_for(area.width)).flatten();
     let (grid_area, detail_area) = match panel_w {
         Some(w) => (Rect { width: area.width - w, ..area }, Rect { x: area.x + area.width - w, width: w, ..area }),
         None => (area, Rect::default()),
     };
+    let (title, status) = results_title(app, grid_area.width);
+    let status = status.as_ref().map(|(texts, style)| (texts.as_slice(), *style));
     app.layout.results = grid_area;
     app.layout.detail = detail_area;
     // Where the previous and next page marks are, for the mouse: at both ends of the right
@@ -732,15 +732,19 @@ fn draw_connection_bar(app: &App, area: Rect, buf: &mut Buffer) {
 }
 
 /// The results pane's title and, on its right in parentheses, where the pages are:
-/// `Results · rows 501–1,000` ─── `‹ (page 2 / ? · 23s) ›`. The page and the pages
-/// (`?` until the result is complete or counted), then the state of the result's portal: the
-/// countdown to its idle close, `in tx` inside the user's transaction (never closed for being
-/// idle), `paging` when the environment never closes it, `paging closed`, `fetching stopped`,
-/// `counting…`, and the count once known. `‹` and `›` (Nerd Font carets with icons on) are the
-/// previous and next page for the mouse. A complete result of one page shows nothing there.
-/// Returns the title, and the texts of the right side from the longest to the shortest (the
-/// shortest is the state alone, without the marks) with their style.
-fn results_title(app: &App) -> (datarig_core::i18n::Localized, Option<(Vec<String>, Style)>) {
+/// `Results · rows 501–1,000` ─── `‹ (page 2 / ? · 23s) ›`. The page and the pages: exact once
+/// the result is complete or counted, `~` from a table tab's estimate in the explorer's
+/// statistics, else `?` with the key that counts them (`page 2 / ? · # count`). Then the state
+/// of the result's portal: the countdown to its idle close, `in tx` inside the user's
+/// transaction (never closed for being idle), `paging` when the environment never closes it,
+/// `paging closed`, `fetching stopped`, `counting…`, and the count once known. `‹` and `›`
+/// (Nerd Font carets with icons on) are the previous and next page for the mouse. A complete
+/// result of one page shows nothing there.
+/// The count key's hint goes first: it is offered only where the title stays whole beside it
+/// in a pane `width` columns wide. Returns the title, and the texts of the right side from the
+/// longest to the shortest (the shortest is the state alone, without the marks) with their
+/// style.
+fn results_title(app: &App, width: u16) -> (datarig_core::i18n::Localized, Option<(Vec<String>, Style)>) {
     let th = theme::cur();
     let t = app.tab();
     if let (ResultView::Plan, Some(p)) = (t.exec.view, &t.exec.plan) {
@@ -772,7 +776,8 @@ fn results_title(app: &App) -> (datarig_core::i18n::Localized, Option<(Vec<Strin
     let muted = Style::new().fg(th.fg_muted).bg(th.bg);
     let mut states: Vec<String> = Vec::new();
     let mut style = muted;
-    if t.exec.running.is_some_and(|r| r.count) {
+    let counting = t.exec.running.is_some_and(|r| r.count);
+    if counting {
         states.push(app.i18n.label(Label::ResultsTitleCounting).to_string());
     }
     match (paging, app.paging_left()) {
@@ -812,24 +817,47 @@ fn results_title(app: &App) -> (datarig_core::i18n::Localized, Option<(Vec<Strin
         return (title, None);
     }
     let page = (win.start / size + 1).to_string();
-    let pages = rs.total().map_or_else(|| "?".to_string(), |n| crate::app::paging::pages(n, size).to_string());
+    // A table's estimate holds only while the rows fetched do not contradict it (an estimate
+    // of 0 rows, or below the rows here, is stale: it would read `page 5 / ~3`).
+    let estimate = app.table_estimate(t).filter(|&n| n > 0 && n >= len as u64);
+    let pages_of = |n| fmt_count(crate::app::paging::pages(n, size));
+    let (pages, unknown) = match (rs.total(), estimate) {
+        (Some(n), _) => (pages_of(n), false),
+        (None, Some(n)) => (format!("~{}", pages_of(n)), false),
+        (None, None) => ("?".to_string(), true),
+    };
+    // Unknown pages say which key counts the rows, when they can be counted.
+    let count_key = (unknown && !counting && app.may_count())
+        .then(|| app.keymap.hint_keys(Action::CountRows, Ctx::Grid, app.enhanced_keys))
+        .flatten()
+        .map(|k| crate::keymap::keys::label(&k));
     let (prev, next) = crate::icons::page_arrows(app.icons_on());
+    let with_states =
+        |label: String| std::iter::once(label).chain(states.iter().cloned()).collect::<Vec<_>>().join(" · ");
+    let hinted = count_key.map(|key| {
+        let long = app.i18n.msg(&Msg::ResultsTitlePageCount { page: page.clone(), key });
+        format!("{prev} ({}) {next}", with_states(long.to_string()))
+    });
+    // As `title_and_status` lays them out: the title, a blank and the text, each with its gaps.
+    let title_w = crate::text::width(&title.to_string());
+    let whole = |text: &str| title_w + crate::text::width(text) + 5 <= (width as usize).saturating_sub(2);
+    let hinted = hinted.filter(|h| whole(h));
     let long = app.i18n.msg(&Msg::ResultsTitlePage { page: page.clone(), pages: pages.clone() });
     let short = app.i18n.msg(&Msg::ResultsTitlePageShort { page, pages });
-    let full = std::iter::once(long.to_string()).chain(states.iter().cloned()).collect::<Vec<_>>().join(" · ");
+    let full = with_states(long.to_string());
     let brief = std::iter::once(short.to_string()).chain(states.first().cloned()).collect::<Vec<_>>().join(" · ");
     let least = states.first().cloned().unwrap_or_else(|| short.to_string());
     // Narrower: the arrows go before the page number does, then the state before the page
     // number (the line below the rows says a closed portal too).
-    let texts = vec![
+    let texts = hinted.into_iter().chain([
         format!("{prev} ({full}) {next}"),
         format!("{prev} ({brief}) {next}"),
         format!("({brief})"),
         format!("{prev} ({short}) {next}"),
         format!("({short})"),
         format!("({least})"),
-    ];
-    (title, Some((texts, style)))
+    ]);
+    (title, Some((texts.collect(), style)))
 }
 
 /// Launch messages (migration, key map problems, an unknown profile) from line `y` down to

@@ -322,6 +322,7 @@ const ACTIONS: &[(Ctx, &str, &str)] = &[
     (Grid, "Y", "grid.copy_row"),
     (Grid, "v", "grid.select"),
     (Grid, "V", "grid.select_rows"),
+    (Grid, "ctrl+a", "grid.select_all"),
     (Nav, "space r y t", "results.copy.selection.tsv"),
     (Nav, "space r y T", "results.copy.selection.tsv_header"),
     (Nav, "space r y l", "results.copy.selection.list"),

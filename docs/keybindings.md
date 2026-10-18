@@ -238,6 +238,7 @@ The result grid. Inside `nav`.
 | `Y` | `grid.copy_row` | Copy the row (the selected rows) as TSV |  |
 | `v` | `grid.select` | Select a range of cells (again: cancel) |  |
 | `V` | `grid.select_rows` | Select whole rows (again: cancel) |  |
+| `Ctrl+A` | `grid.select_all` | Select every cell of the page |  |
 | `i` | `results.detail` | Result detail → show / hide |  |
 | `I` | `results.detail_tab` | Result detail → Cell / Row |  |
 | `z` | `results.panel.maximize` | Results pane → zoom (maximise) / restore |  |

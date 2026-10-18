@@ -658,6 +658,15 @@ impl Tree {
         }
     }
 
+    /// The estimates of object `name` of schema `schema`, as [`Tree::object_stats`] has them:
+    /// `None` while its schema's objects are not listed.
+    pub fn stats_of(&self, schema: &str, name: &str) -> Option<RelationStats> {
+        match &self.schemas.iter().find(|s| s.name == schema)?.children {
+            Children::Loaded { stats, .. } => stats.get(name).copied(),
+            _ => None,
+        }
+    }
+
     /// The size tier of object `(i, g, j)` in its schema (`None`: not among the largest, or its
     /// size is not known).
     pub fn object_heat(&self, i: usize, g: Group, j: usize) -> Option<Heat> {

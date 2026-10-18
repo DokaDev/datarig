@@ -97,10 +97,10 @@ fn an_idle_portal_closes_and_the_next_page_runs_a_select_again() {
     h.sent();
     assert!(h.app.needs_tick(), "the countdown needs the tick");
     let title = results_title(&mut h, 160, 45);
-    assert!(title.contains("Results · rows 1–500") && title.contains("‹ (page 1 / ? · 30s) › ╮"), "{title}");
+    assert!(title.contains("Results · rows 1–500") && title.contains("‹ (page 1 / ? · # count · 30s) › ╮"), "{title}");
     assert!(!h.status(160, 45).contains("paging"), "no countdown in the status bar");
     h.advance(Duration::from_millis(6_500));
-    assert!(results_title(&mut h, 160, 45).contains("(page 1 / ? · 24s)"));
+    assert!(results_title(&mut h, 160, 45).contains("(page 1 / ? · # count · 24s)"));
 
     // Scrolling to the end of the page fetches nothing; it says which key shows the next.
     h.key(KeyCode::Tab); // results
@@ -119,7 +119,7 @@ fn an_idle_portal_closes_and_the_next_page_runs_a_select_again() {
     h.advance(29 * SEC);
     assert!(close_requests(&h.sent()).is_empty(), "the new page restarted the count");
     let title = results_title(&mut h, 160, 45);
-    assert!(title.contains("Results · rows 501–1,000") && title.contains("(page 2 / ? · 1s)"), "{title}");
+    assert!(title.contains("Results · rows 501–1,000") && title.contains("(page 2 / ? · # count · 1s)"), "{title}");
 
     // 30s without a fetch: the app asks the driver to close the portal, once.
     h.advance(SEC);
@@ -132,7 +132,7 @@ fn an_idle_portal_closes_and_the_next_page_runs_a_select_again() {
         screen.contains("Showing 1,000 rows · paging closed — n runs the SELECT again for the next page"),
         "{screen}"
     );
-    assert!(results_title(&mut h, 160, 45).contains("(page 2 / ? · paging closed) › ╮"));
+    assert!(results_title(&mut h, 160, 45).contains("(page 2 / ? · # count · paging closed) › ╮"));
     // Unknown is not absent: the server may have more rows.
     assert!(matches!(&h.app.tab().results, Results::Rows(rs) if rs.more));
     // Autocommit: the driver ended the implicit transaction.
@@ -192,7 +192,7 @@ fn an_idle_portal_closes_and_the_next_page_runs_a_select_again() {
     assert_ne!(id2, id);
     assert!(matches!(h.app.tab().exec.paging, Paging::Open { .. }));
     assert!(!h.screen(160, 45).contains("paging closed"));
-    assert!(results_title(&mut h, 160, 45).contains("(page 1 / ? · 30s)"));
+    assert!(results_title(&mut h, 160, 45).contains("(page 1 / ? · # count · 30s)"));
 }
 
 /// A portal read inside the user's own transaction is never closed for being
@@ -205,7 +205,7 @@ fn inside_the_users_transaction_the_portal_stays_open() {
     first_page(&mut h, 500, true);
     h.sent();
     assert!(matches!(h.app.tab().exec.paging, Paging::Open { in_block: true, .. }));
-    assert!(results_title(&mut h, 160, 45).contains("(page 1 / ? · in tx) ›"));
+    assert!(results_title(&mut h, 160, 45).contains("(page 1 / ? · # count · in tx) ›"));
     assert!(!h.app.needs_tick(), "no countdown, no timer");
     assert_eq!(h.app.next_tick(h.clock.now()), None);
     h.advance(3600 * SEC);
@@ -254,7 +254,10 @@ fn background_tabs_close_too_and_off_disables_it() {
     first_page(&mut h, 500, true);
     h.sent();
     let title = results_title(&mut h, 160, 45);
-    assert!(title.contains("(page 1 / ? · paging) › ╮") && !title.contains("s)"), "open, no countdown: {title}");
+    assert!(
+        title.contains("(page 1 / ? · # count · paging) › ╮") && !title.contains("s)"),
+        "open, no countdown: {title}"
+    );
     h.advance(3600 * SEC);
     assert!(close_requests(&h.sent()).is_empty());
     assert!(matches!(h.app.tab().exec.paging, Paging::Open { .. }));
@@ -273,7 +276,7 @@ fn a_short_policy_timeout_and_korean_title() {
     let ko = datarig_core::i18n::I18n::new(Lang::Ko);
     use datarig_core::i18n::Msg;
     let rows = ko.msg(&Msg::PaneResultsRange { from: "1".into(), to: "500".into() }).to_string();
-    let page = ko.msg(&Msg::ResultsTitlePage { page: "1".into(), pages: "?".into() }).to_string();
+    let page = ko.msg(&Msg::ResultsTitlePageCount { page: "1".into(), key: "#".into() }).to_string();
     assert!(title.contains(&rows) && title.contains(&format!("({page} · 10s)")), "{title}");
     h.advance(10 * SEC);
     assert_eq!(close_requests(&h.sent()).len(), 1);
@@ -522,7 +525,7 @@ fn a_stopped_fetch_keeps_the_result_incomplete() {
         assert!(h.app.tab().exec.paging.closed(), "the portal is gone, the rows may go on");
         let title = results_title(&mut h, 160, 45);
         assert!(
-            title.contains("Results · rows 1–500") && title.contains("(page 1 / ? · paging closed)"),
+            title.contains("Results · rows 1–500") && title.contains("(page 1 / ? · # count · paging closed)"),
             "{cancelled}: {title}"
         );
         let screen = h.screen(160, 45);
@@ -866,7 +869,10 @@ fn a_result_not_held_pages_by_running_its_select_again() {
     assert!(!h.app.needs_tick(), "nothing counts down");
     assert_eq!(h.app.next_tick(h.clock.now()), None);
     let title = results_title(&mut h, 160, 45);
-    assert!(title.contains("Results · rows 1–500") && title.contains("(page 1 / ? · next page re-runs) ›"), "{title}");
+    assert!(
+        title.contains("Results · rows 1–500") && title.contains("(page 1 / ? · # count · next page re-runs) ›"),
+        "{title}"
+    );
     let screen = h.screen(160, 45);
     assert!(
         screen.contains(
@@ -906,7 +912,7 @@ fn a_result_not_held_pages_by_running_its_select_again() {
     assert_eq!(h.app.tab().exec.paging, Paging::Released);
     let title = results_title(&mut h, 160, 45);
     assert!(
-        title.contains("Results · rows 501–1,000") && title.contains("(page 2 / ? · next page re-runs)"),
+        title.contains("Results · rows 501–1,000") && title.contains("(page 2 / ? · # count · next page re-runs)"),
         "{title}"
     );
     // Nothing is offered that would need the portal: the rest cannot be fetched for a copy.
@@ -977,7 +983,7 @@ fn a_hold_policy_asks_for_the_portal_to_be_held() {
         "{sent:?}"
     );
     assert!(matches!(h.app.tab().exec.paging, Paging::Open { in_block: false, .. }));
-    assert!(results_title(&mut h, 160, 45).contains("(page 1 / ? · 30s)"));
+    assert!(results_title(&mut h, 160, 45).contains("(page 1 / ? · # count · 30s)"));
     h.advance(30 * SEC);
     assert_eq!(close_requests(&h.sent()), [id]);
     // Past the closed portal the statement runs again, held again.
@@ -1072,4 +1078,194 @@ fn the_title_arrows_light_up_under_the_pointer() {
     assert!(!h.app.take_idle_event());
     let t = h.draw(160, 45);
     assert_ne!(t.backend().buffer()[(next.x, next.y)].bg, sel);
+}
+
+/// A table tab of `shop.users`, listed by the explorer with `rows` estimated (`None`: the server
+/// has no estimate, as PostgreSQL's `reltuples = -1`), answered with a first page of 500 rows
+/// and more after it, nothing held (the default).
+fn users_table(h: &mut Harness, rows: Option<u64>) {
+    use datarig_core::driver::SchemaObjects;
+    use datarig_core::driver::structure::RelationStats;
+    h.key(KeyCode::BackTab);
+    h.keys("jjjj"); // profile -> its database -> analytics -> public -> shop
+    h.key(KeyCode::Char('l'));
+    let stats = [("users".to_string(), RelationStats { rows, bytes: Some(8_192) })].into();
+    let objects = SchemaObjects { tables: vec!["orders".into(), "users".into()], stats, ..Default::default() };
+    h.db(DbEvent::Objects { schema: "shop".into(), result: Ok(objects) });
+    h.keys("jjj"); // Tables, orders, users
+    h.key(KeyCode::Enter);
+    assert!(h.app.tab().is_table());
+    table_page(h);
+}
+
+/// Answer the active table tab's run with a first page of 500 rows and more after it, nothing
+/// held.
+fn table_page(h: &mut Harness) {
+    let id = h.app.tab().exec.query_id;
+    let index = h.app.tabs.active_index();
+    let columns = Some(vec![meta("id", "int8", true, false)]);
+    h.tab_db(index, DbEvent::Released { id });
+    h.tab_db(index, DbEvent::Page { id, columns, rows: page(0, 500), more: true, elapsed: SEC / 100 });
+}
+
+/// A table tab's pages come from the explorer's estimate of its rows (nothing is counted or
+/// asked for it), marked `~`, the pages with thousands separators.
+#[test]
+fn a_table_tab_shows_its_pages_from_the_estimate() {
+    let mut h = Harness::connected(Lang::En);
+    h.app.detail.visible = false;
+    users_table(&mut h, Some(1_234_567));
+    let title = results_title(&mut h, 160, 45);
+    assert!(title.contains("(page 1 / ~2,470 · next page re-runs) ›"), "{title}");
+    assert!(counts(&h.sent()).is_empty(), "nothing counted");
+    // At 80 columns too.
+    let title = results_title(&mut h, 80, 24);
+    assert!(title.contains("/ ~2,470"), "{title}");
+}
+
+/// No estimate (never analyzed), an estimate of no rows, or one below the rows already
+/// fetched: the pages are not known, and the title says which key counts them.
+#[test]
+fn an_unknown_or_stale_estimate_shows_no_pages_and_the_count_key() {
+    for rows in [None, Some(0), Some(300)] {
+        let mut h = Harness::connected(Lang::En);
+        h.app.detail.visible = false;
+        users_table(&mut h, rows);
+        let title = results_title(&mut h, 160, 45);
+        assert!(title.contains("(page 1 / ? · # count · next page re-runs) ›"), "{rows:?}: {title}");
+        assert!(!title.contains('~'), "{rows:?}: {title}");
+    }
+}
+
+/// A console's result has no estimate: `?` and the count key; once counted the title shows
+/// the exact pages of that result. Running the statement again drops the count with the
+/// result it was of.
+#[test]
+fn a_count_gives_the_exact_pages_until_the_statement_runs_again() {
+    let mut h = Harness::connected(Lang::En);
+    h.app.detail.visible = false;
+    let id = first_page_released(&mut h, 500);
+    let title = results_title(&mut h, 160, 45);
+    assert!(title.contains("(page 1 / ? · # count · next page re-runs) ›"), "{title}");
+    // At 80 columns the hint goes first.
+    let title = results_title(&mut h, 80, 24);
+    assert!(!title.contains("count"), "{title}");
+    h.sent();
+    h.key(KeyCode::Tab);
+    h.keys("#");
+    assert_eq!(counts(&h.sent()).len(), 1);
+    let title = results_title(&mut h, 160, 45);
+    assert!(title.contains("(page 1 / ? · counting… · next page re-runs)"), "no hint while it counts: {title}");
+    h.tab_db(0, DbEvent::Counted { id, result: Ok(1_206_500), snapshot: false });
+    let title = results_title(&mut h, 160, 45);
+    assert!(title.contains("(page 1 / 2,413 · next page re-runs · 1,206,500 rows now)"), "{title}");
+    // Run again: a new result, not counted.
+    h.ctrl('e');
+    let rid = h.app.tab().exec.query_id;
+    assert_ne!(rid, id);
+    let columns = Some(vec![meta("id", "int8", true, false)]);
+    h.tab_db(0, DbEvent::Released { id: rid });
+    h.tab_db(0, DbEvent::Page { id: rid, columns, rows: page(0, 500), more: true, elapsed: SEC / 100 });
+    let title = results_title(&mut h, 160, 45);
+    assert!(title.contains("(page 1 / ? · # count · next page re-runs) ›"), "{title}");
+    // A late answer for the old result changes nothing.
+    h.tab_db(0, DbEvent::Counted { id, result: Ok(9), snapshot: false });
+    assert!(results_title(&mut h, 160, 45).contains("(page 1 / ? · # count"));
+}
+
+/// The hint names the key the count is bound to, remapping included.
+#[test]
+fn the_count_hint_follows_the_key_map() {
+    let mut cfg = datarig_core::config::parse("[keymap.grid]\n\"#\" = \"none\"\n\"C\" = \"results.count\"\n")
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    cfg.connections = test_db_config().connections;
+    let mut h = Harness::with_config(&cfg, Lang::En);
+    h.db(DbEvent::Connected);
+    h.app.detail.visible = false;
+    first_page_released(&mut h, 500);
+    let title = results_title(&mut h, 160, 45);
+    assert!(title.contains("(page 1 / ? · C count · next page re-runs) ›"), "{title}");
+    // Korean words it in its own catalog, with the same key.
+    let mut h = Harness::with_config(&cfg, Lang::Ko);
+    h.db(DbEvent::Connected);
+    h.app.detail.visible = false;
+    first_page_released(&mut h, 500);
+    let ko = datarig_core::i18n::I18n::new(Lang::Ko);
+    let hint =
+        ko.msg(&datarig_core::i18n::Msg::ResultsTitlePageCount { page: "1".into(), key: "C".into() }).to_string();
+    let title = results_title(&mut h, 160, 45);
+    assert!(title.contains(&format!("({hint} · ")), "{title}");
+}
+
+/// `Ctrl+A` selects the page shown, not the rows of the pages before it.
+#[test]
+fn ctrl_a_selects_the_page_shown() {
+    let mut h = Harness::connected(Lang::En);
+    let clip = FakeClipboard::attach(&mut h, false, &[]);
+    let id = first_page(&mut h, 500, true);
+    h.key(KeyCode::Tab);
+    h.keys("n");
+    h.tab_db(0, DbEvent::Page { id, columns: None, rows: page(500, 500), more: true, elapsed: SEC / 100 });
+    assert_eq!(first_shown(&h).as_deref(), Some("500"));
+    h.ctrl('a');
+    let g = &h.app.tab().grid;
+    assert_eq!((g.anchor, g.row, g.col), (Some((999, 0)), 500, 0));
+    h.keys("y");
+    let text = clip.last().unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!((lines.len(), lines[0], lines[1], lines[500]), (501, "id", "500", "999"), "a header, then the page");
+}
+
+/// The estimate is of the table's own query: rows of another statement run in the table tab
+/// (a WHERE) have no pages from it.
+#[test]
+fn a_table_tab_running_another_statement_has_no_estimate() {
+    let mut h = Harness::connected(Lang::En);
+    h.app.detail.visible = false;
+    users_table(&mut h, Some(1_234_567));
+    assert!(results_title(&mut h, 160, 45).contains("/ ~2,470"));
+    h.app.tab_mut().editor = Editor::new(r#"SELECT * FROM "shop"."users" WHERE id > 10"#);
+    h.ctrl('e');
+    table_page(&mut h);
+    let title = results_title(&mut h, 160, 45);
+    assert!(title.contains("(page 1 / ? · # count · next page re-runs) ›") && !title.contains('~'), "{title}");
+}
+
+/// A table of the same name in another schema lends its estimate to nothing: `shop.users` has
+/// none, `analytics.users` has one.
+#[test]
+fn the_estimate_is_of_the_tabs_own_schema() {
+    use datarig_core::driver::SchemaObjects;
+    use datarig_core::driver::structure::RelationStats;
+    let mut h = Harness::connected(Lang::En);
+    h.app.detail.visible = false;
+    h.key(KeyCode::BackTab);
+    h.goto("analytics");
+    h.key(KeyCode::Char('l'));
+    let stats = [("users".to_string(), RelationStats { rows: Some(1_234_567), bytes: Some(8_192) })].into();
+    let objects = SchemaObjects { tables: vec!["users".into()], stats, ..Default::default() };
+    h.db(DbEvent::Objects { schema: "analytics".into(), result: Ok(objects) });
+    h.goto("shop");
+    h.key(KeyCode::Char('l'));
+    h.db(DbEvent::Objects { schema: "shop".into(), result: Ok((vec!["users".into()], Vec::new()).into()) });
+    h.goto("users");
+    h.key(KeyCode::Enter);
+    assert_eq!(h.app.tab().doc.table.as_ref().map(|t| t.label()).as_deref(), Some("shop.users"));
+    table_page(&mut h);
+    let title = results_title(&mut h, 160, 45);
+    assert!(title.contains("(page 1 / ? · # count · next page re-runs) ›") && !title.contains('~'), "{title}");
+}
+
+/// The count key's hint is the first thing a narrow title drops: beside the inspector the row
+/// range stays whole and the page label goes back to its form without the hint.
+#[test]
+fn a_narrow_title_drops_the_count_hint_before_the_row_range() {
+    let mut h = Harness::connected(Lang::En);
+    first_page_released(&mut h, 500);
+    let title = results_title(&mut h, 160, 45);
+    assert!(title.contains("Results · rows 1–500 ─"), "{title}");
+    assert!(title.contains("(page 1 / ? · next page re-runs) ›") && !title.contains("count"), "{title}");
+    // With the room for it, the hint is there.
+    h.app.detail.visible = false;
+    assert!(results_title(&mut h, 160, 45).contains("(page 1 / ? · # count · next page re-runs) ›"));
 }
