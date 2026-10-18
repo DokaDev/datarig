@@ -61,6 +61,25 @@ pub async fn batch_execute(client: &InnerClient, query: &str) -> Result<(), Erro
     }
 }
 
+// datarig: `batch_execute` that answers the command tag of the last statement (`COMMIT` of an
+// aborted transaction is answered with the tag `ROLLBACK`).
+pub async fn command_tag(client: &InnerClient, query: &str) -> Result<String, Error> {
+    debug!("executing statement for its tag: {query}");
+
+    let buf = encode(client, query)?;
+    let mut responses = client.send(RequestMessages::Single(FrontendMessage::Raw(buf)))?;
+    let mut tag = String::new();
+
+    loop {
+        match responses.next().await? {
+            Message::ReadyForQuery(_) => return Ok(tag),
+            Message::CommandComplete(body) => tag = body.tag().map_err(Error::parse)?.to_string(),
+            Message::EmptyQueryResponse | Message::RowDescription(_) | Message::DataRow(_) => {}
+            _ => return Err(Error::unexpected_message()),
+        }
+    }
+}
+
 fn encode(client: &InnerClient, query: &str) -> Result<Bytes, Error> {
     client.with_buf(|buf| {
         frontend::query(query, buf).map_err(Error::encode)?;

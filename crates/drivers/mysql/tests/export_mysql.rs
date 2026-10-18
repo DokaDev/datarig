@@ -7,7 +7,7 @@
 
 use datarig_core::driver::{
     Cell, ColumnMeta, ConnectOptions, DbCommand, DbError, DbEvent, Driver, ExportBatch, ExportGuard, ExportRead,
-    PagingMode, Session, SessionRole,
+    PagingMode, Session, SessionRole, TxRule,
 };
 use datarig_core::export::keyset::{Keyset, table_key};
 use datarig_core::profile::ConnectionConfig;
@@ -136,7 +136,12 @@ impl Conn {
     async fn run(&mut self, sql: &str) -> DbEvent {
         self.id += 1;
         let id = self.id;
-        self.session.send(DbCommand::Execute { id, statements: vec![sql.to_string()], paging: PagingMode::NoHold });
+        self.session.send(DbCommand::Execute {
+            id,
+            statements: vec![sql.to_string()],
+            paging: PagingMode::NoHold,
+            tx: TxRule::Auto,
+        });
         self.wait(
             |e| matches!(e, DbEvent::Page { id: i, columns: Some(_), .. } | DbEvent::Done { id: i, .. } | DbEvent::Failed { id: i, .. } if *i == id),
             60,

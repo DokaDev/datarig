@@ -15,7 +15,7 @@
 
 use datarig_core::driver::{
     CancelFailure, Cell, ConnectOptions, DbCommand, DbError, DbEvent, Driver, PagingMode, PingError, Session,
-    SessionRole, StatementInfo, ValueKind,
+    SessionRole, StatementInfo, TxRule, ValueKind,
 };
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
@@ -178,7 +178,7 @@ impl Conn {
 
     async fn run_as(&mut self, id: u64, sql: &[&str], paging: PagingMode) -> Vec<DbEvent> {
         let statements = sql.iter().map(|s| s.to_string()).collect();
-        self.session.send(DbCommand::Execute { id, statements, paging });
+        self.session.send(DbCommand::Execute { id, statements, paging, tx: TxRule::Auto });
         self.answer(id).await
     }
 
@@ -1306,6 +1306,7 @@ async fn a_cancel_stops_the_statement_on_the_server() {
         id: 1,
         statements: vec!["SELECT SLEEP(30)".into()],
         paging: PagingMode::NoHold,
+        tx: TxRule::Auto,
     });
     tokio::time::sleep(Duration::from_millis(300)).await;
     c.session.cancel();
@@ -1323,6 +1324,7 @@ async fn a_cancel_stops_the_statement_on_the_server() {
         id: 3,
         statements: vec!["SELECT SLEEP(30)".into(), "SELECT 2".into()],
         paging: PagingMode::NoHold,
+        tx: TxRule::Auto,
     });
     tokio::time::sleep(Duration::from_millis(300)).await;
     c.session.cancel();
@@ -1343,6 +1345,7 @@ async fn closing_a_session_stops_what_it_runs() {
         id: 1,
         statements: vec!["SELECT SLEEP(30)".into()],
         paging: PagingMode::NoHold,
+        tx: TxRule::Auto,
     });
     tokio::time::sleep(Duration::from_millis(300)).await;
     drop(c);
@@ -1373,6 +1376,7 @@ async fn a_connection_lost_while_a_statement_runs_fails_it_then_is_lost() {
         id: 1,
         statements: vec!["SELECT SLEEP(30)".into()],
         paging: PagingMode::NoHold,
+        tx: TxRule::Auto,
     });
     tokio::time::sleep(Duration::from_millis(300)).await;
     a.query_drop(format!("KILL {id}")).await.unwrap();
@@ -1466,6 +1470,7 @@ async fn a_cancel_the_server_refuses_ends_the_session_instead_of_reading_on() {
         id: 1,
         statements: vec![format!("CALL shop.{p}()")],
         paging: PagingMode::NoHold,
+        tx: TxRule::Auto,
     });
     tokio::time::sleep(Duration::from_millis(1000)).await;
     let t0 = Instant::now();
@@ -1518,6 +1523,7 @@ async fn a_cancel_taken_by_a_long_rollback_keeps_the_session_and_its_transaction
         id: 3,
         statements: vec![format!("UPDATE {t} SET v = v + 1, pad = 'y'")],
         paging: PagingMode::NoHold,
+        tx: TxRule::Auto,
     });
     // Long enough for its rollback to take longer than any bound a cancel could be given.
     tokio::time::sleep(Duration::from_secs(15)).await;
@@ -1580,6 +1586,7 @@ async fn a_cancel_refused_for_a_moment_is_tried_again() {
             "SELECT COUNT(*) FROM shop.events a CROSS JOIN shop.events b WHERE shop.{f}(a.id) > 0"
         )],
         paging: PagingMode::NoHold,
+        tx: TxRule::Auto,
     });
     tokio::time::sleep(Duration::from_millis(1500)).await;
     c.session.cancel();
@@ -1663,6 +1670,7 @@ async fn a_refused_cancel_of_a_silent_statement_keeps_the_session_and_says_why()
         id: 1,
         statements: vec![format!("CALL shop.{p}()")],
         paging: PagingMode::NoHold,
+        tx: TxRule::Auto,
     });
     tokio::time::sleep(Duration::from_millis(1000)).await;
     c.session.cancel();
@@ -1825,7 +1833,12 @@ async fn a_held_result_the_server_will_not_stop_is_not_read_to_its_end() {
     let id = only_session(&mut a, SessionRole::Query, test).await;
     let first = c.run_as(1, &[&format!("CALL shop.{p}()")], PagingMode::Hold).await;
     assert!(matches!(first.last(), Some(DbEvent::Page { id: 1, columns: Some(_), more: true, .. })), "{first:?}");
-    c.session.send(DbCommand::Execute { id: 2, statements: vec!["SELECT 1".into()], paging: PagingMode::NoHold });
+    c.session.send(DbCommand::Execute {
+        id: 2,
+        statements: vec!["SELECT 1".into()],
+        paging: PagingMode::NoHold,
+        tx: TxRule::Auto,
+    });
     let evs = until_lost(&mut c, 20).await;
     assert!(failures(&evs, 1).is_empty(), "{evs:?}");
     let refused = DbError::CancelNotTaken(CancelFailure::Refused);
@@ -1852,6 +1865,7 @@ async fn a_held_result_the_server_will_not_stop_is_not_read_to_its_end() {
         id: 1,
         statements: vec![format!("CALL shop.{p}()")],
         paging: PagingMode::NoHold,
+        tx: TxRule::Auto,
     });
     tokio::time::sleep(Duration::from_millis(1000)).await;
     drop(c);
@@ -2149,6 +2163,7 @@ async fn a_late_cancel_does_not_stop_the_next_run() {
         id: 1,
         statements: vec!["SELECT SLEEP(0.5)".into()],
         paging: PagingMode::NoHold,
+        tx: TxRule::Auto,
     });
     tokio::time::sleep(Duration::from_millis(200)).await;
     c.session.cancel();
@@ -3900,7 +3915,7 @@ async fn a_stopped_procedure_leaves_the_values_not_known() {
     // cannot be stopped so, see
     // `a_cancel_the_server_refuses_ends_the_session_instead_of_reading_on`).
     let statements = vec![format!("CALL shop.{p}()"), "SELECT 1".to_string()];
-    q.session.send(DbCommand::Execute { id: 2, statements, paging: PagingMode::NoHold });
+    q.session.send(DbCommand::Execute { id: 2, statements, paging: PagingMode::NoHold, tx: TxRule::Auto });
     let mut evs = Vec::new();
     loop {
         let ev = q.next(60).await;

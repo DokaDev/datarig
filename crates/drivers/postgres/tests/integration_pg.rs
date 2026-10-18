@@ -17,10 +17,11 @@
 mod pg_clean;
 mod pg_proxy;
 
-use datarig_core::driver::PagingMode;
 use datarig_core::driver::{
     CancelFailure, ConnectOptions, DbCommand, DbError, DbEvent, Driver, Outcome, PingError, Session, SessionRole,
+    TxOutcome,
 };
+use datarig_core::driver::{PagingMode, TxRule};
 use datarig_core::fault::FaultKind;
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::transport::{DialError, Dialer, DialerRef, TcpDialer};
@@ -138,7 +139,12 @@ impl Conn {
     }
 
     async fn run(&mut self, id: u64, sql: &str) -> DbEvent {
-        self.session.send(DbCommand::Execute { id, statements: vec![sql.to_string()], paging: PagingMode::Hold });
+        self.session.send(DbCommand::Execute {
+            id,
+            statements: vec![sql.to_string()],
+            paging: PagingMode::Hold,
+            tx: TxRule::Auto,
+        });
         self.result(id).await
     }
 }
@@ -854,6 +860,7 @@ async fn table_structure_never_waits_for_a_lock() {
         id: 2,
         statements: vec![format!("LOCK TABLE {s}.t")],
         paging: PagingMode::Hold,
+        tx: TxRule::Auto,
     });
     let waiting = format!(
         "SELECT count(*) FROM pg_locks WHERE relation = '{s}.t'::regclass \
@@ -1239,6 +1246,7 @@ async fn portal_paging_fetches_500_rows_per_page() {
         id: 1,
         statements: vec!["SELECT * FROM analytics.events".into()],
         paging: PagingMode::Hold,
+        tx: TxRule::Auto,
     });
     c.wait(|e| matches!(e, DbEvent::TxOpen(true)), 10).await;
     let t0 = Instant::now();
@@ -1263,7 +1271,12 @@ async fn portal_paging_fetches_500_rows_per_page() {
     assert_eq!(ids.len(), 2 * PAGE, "pages must not overlap");
 
     // Running another statement closes the implicit transaction first.
-    c.session.send(DbCommand::Execute { id: 2, statements: vec!["SELECT 1 AS one".into()], paging: PagingMode::Hold });
+    c.session.send(DbCommand::Execute {
+        id: 2,
+        statements: vec!["SELECT 1 AS one".into()],
+        paging: PagingMode::Hold,
+        tx: TxRule::Auto,
+    });
     c.wait(|e| matches!(e, DbEvent::TxOpen(false)), 10).await;
     let DbEvent::Page { rows, more, .. } = c.result(2).await else { panic!() };
     assert_eq!(rows, vec![vec![Some("1".to_string())]]);
@@ -1279,6 +1292,7 @@ async fn cancel_request_stops_slow_function() {
         id: 1,
         statements: vec!["SELECT analytics.slow(30)".into()],
         paging: PagingMode::Hold,
+        tx: TxRule::Auto,
     });
     // Cancel once the server runs it (a cancel that arrives before the statement is lost).
     started(&mut obs, &tag).await;
@@ -1354,6 +1368,7 @@ async fn value_formats_and_outcomes() {
         id: 4,
         statements: vec!["SELECT 1".into(), "SELECT 'last'".into()],
         paging: PagingMode::Hold,
+        tx: TxRule::Auto,
     });
     let DbEvent::Page { rows, .. } = c.result(4).await else { panic!() };
     assert_eq!(rows[0][0].as_deref(), Some("last"));
@@ -1501,6 +1516,7 @@ async fn closing_the_session_cancels_the_running_statement() {
         id: 1,
         statements: vec!["SELECT pg_sleep(60)".into()],
         paging: PagingMode::Hold,
+        tx: TxRule::Auto,
     });
     started(&mut obs, &tag).await;
     let mut n = 100;
@@ -1536,6 +1552,7 @@ async fn closing_the_session_while_rows_stream_in_ends_it_at_once() {
         id: 1,
         statements: vec![endless.into(), "SELECT 1".into()],
         paging: PagingMode::Hold,
+        tx: TxRule::Auto,
     });
     let Conn { session, mut rx } = q;
     let mut pages = 0;
@@ -1566,7 +1583,12 @@ async fn a_terminated_backend_fails_the_statement_then_reports_lost_once() {
     for (paging, mode) in [(PagingMode::Hold, "h"), (PagingMode::NoHold, "n")] {
         let tag = format!("lost{mode}{}", std::process::id());
         let (mut q, mut obs) = tagged(&url, &tag).await;
-        q.session.send(DbCommand::Execute { id: 1, statements: vec!["SELECT pg_sleep(30)".into()], paging });
+        q.session.send(DbCommand::Execute {
+            id: 1,
+            statements: vec!["SELECT pg_sleep(30)".into()],
+            paging,
+            tx: TxRule::Auto,
+        });
         started(&mut obs, &tag).await;
         let kill = format!(
             "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = 'datarig-q-{tag}'"
@@ -1605,7 +1627,12 @@ async fn reading_inside_a_transaction_keeps_it_open() {
     // An error aborts the block; it stays open until ROLLBACK.
     assert!(matches!(q.run(5, "SELECT 1/0").await, DbEvent::Failed { .. }));
     assert!(matches!(q.run(6, "SELECT 1").await, DbEvent::Failed { .. }), "aborted block refuses statements");
-    q.session.send(DbCommand::Execute { id: 7, statements: vec!["ROLLBACK".into()], paging: PagingMode::Hold });
+    q.session.send(DbCommand::Execute {
+        id: 7,
+        statements: vec!["ROLLBACK".into()],
+        paging: PagingMode::Hold,
+        tx: TxRule::Auto,
+    });
     q.wait(|e| matches!(e, DbEvent::TxOpen(false)), 5).await;
     let DbEvent::Page { rows, .. } =
         q.run(8, &format!("SELECT count(*) FROM pg_class WHERE relname = 'it_tx_{tag}'")).await
@@ -1633,7 +1660,12 @@ impl Indicator {
     async fn run(&mut self, sql: &str) -> DbEvent {
         self.id += 1;
         let id = self.id;
-        self.c.session.send(DbCommand::Execute { id, statements: vec![sql.to_string()], paging: PagingMode::Hold });
+        self.c.session.send(DbCommand::Execute {
+            id,
+            statements: vec![sql.to_string()],
+            paging: PagingMode::Hold,
+            tx: TxRule::Auto,
+        });
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
             let left = deadline.saturating_duration_since(Instant::now());
@@ -2373,6 +2405,7 @@ async fn pipelined_statements_keep_the_transaction_rules() {
         id,
         statements: vec!["INSERT INTO child VALUES (1) RETURNING p".into()],
         paging: PagingMode::Hold,
+        tx: TxRule::Auto,
     });
     match s.c.result(id).await {
         DbEvent::Failed { error: DbError::Server(e), .. } => assert!(e.contains("foreign key"), "{e}"),
@@ -2403,7 +2436,7 @@ async fn cancelling_a_first_page_ends_its_transaction() {
     {
         s.id += 1;
         let id = s.id;
-        s.c.session.send(DbCommand::Execute { id, statements: vec![slow.into()], paging });
+        s.c.session.send(DbCommand::Execute { id, statements: vec![slow.into()], paging, tx: TxRule::Auto });
         tokio::time::sleep(Duration::from_millis(400)).await;
         s.c.session.cancel();
         match s.c.result(id).await {
@@ -2417,7 +2450,12 @@ async fn cancelling_a_first_page_ends_its_transaction() {
     assert!(s.settled().await);
     s.id += 1;
     let id = s.id;
-    s.c.session.send(DbCommand::Execute { id, statements: vec![slow.into()], paging: PagingMode::NoHold });
+    s.c.session.send(DbCommand::Execute {
+        id,
+        statements: vec![slow.into()],
+        paging: PagingMode::NoHold,
+        tx: TxRule::Auto,
+    });
     tokio::time::sleep(Duration::from_millis(400)).await;
     s.c.session.cancel();
     let ev = s.c.result(id).await;
@@ -2547,7 +2585,7 @@ async fn every_run_ends_while_the_table_keeps_changing() {
         let id = s.id;
         // Held and not held in turn (not held, the first page's COMMIT goes out with it).
         let paging = if i % 2 == 0 { PagingMode::Hold } else { PagingMode::NoHold };
-        s.c.session.send(DbCommand::Execute { id, statements: vec![sql.clone()], paging });
+        s.c.session.send(DbCommand::Execute { id, statements: vec![sql.clone()], paging, tx: TxRule::Auto });
         let ended = tokio::time::timeout(PER_RUN, async {
             loop {
                 match s.c.rx.recv().await {
@@ -3210,6 +3248,7 @@ async fn block_reports_the_users_transaction_only() {
         id: 1,
         statements: vec!["SELECT g FROM generate_series(1, 2000) g".into()],
         paging: PagingMode::Hold,
+        tx: TxRule::Auto,
     });
     let DbEvent::Page { more: true, .. } = c.result(1).await else { panic!("a page with more") };
     let events = c.drain(150).await;
@@ -3217,7 +3256,12 @@ async fn block_reports_the_users_transaction_only() {
     c.session.send(DbCommand::ClosePortal { id: 1 });
     c.wait(|e| matches!(e, DbEvent::TxOpen(false)), 10).await;
 
-    c.session.send(DbCommand::Execute { id: 2, statements: vec!["BEGIN".into()], paging: PagingMode::Hold });
+    c.session.send(DbCommand::Execute {
+        id: 2,
+        statements: vec!["BEGIN".into()],
+        paging: PagingMode::Hold,
+        tx: TxRule::Auto,
+    });
     let mut seen = Vec::new();
     while seen.len() < 3 {
         let ev = c.wait(|e| matches!(e, DbEvent::Block(_) | DbEvent::TxOpen(_) | DbEvent::Done { .. }), 10).await;
@@ -3230,7 +3274,12 @@ async fn block_reports_the_users_transaction_only() {
     let _ = c.run(3, "SELECT 1/0").await;
     let events = c.drain(150).await;
     assert!(!events.iter().any(|e| matches!(e, DbEvent::Block(false))), "{events:?}");
-    c.session.send(DbCommand::Execute { id: 4, statements: vec!["ROLLBACK".into()], paging: PagingMode::Hold });
+    c.session.send(DbCommand::Execute {
+        id: 4,
+        statements: vec!["ROLLBACK".into()],
+        paging: PagingMode::Hold,
+        tx: TxRule::Auto,
+    });
     c.wait(|e| matches!(e, DbEvent::Block(false)), 10).await;
     c.wait(|e| matches!(e, DbEvent::TxOpen(false)), 10).await;
 }
@@ -3242,7 +3291,12 @@ async fn a_count_while_paging_keeps_the_portal() {
     let Some(url) = pg_url("a_count_while_paging_keeps_the_portal") else { return };
     let mut c = Conn::open(&url, SessionRole::Query).await;
     let sql = "SELECT g FROM generate_series(1, 2345) g ORDER BY g";
-    c.session.send(DbCommand::Execute { id: 1, statements: vec![sql.into()], paging: PagingMode::Hold });
+    c.session.send(DbCommand::Execute {
+        id: 1,
+        statements: vec![sql.into()],
+        paging: PagingMode::Hold,
+        tx: TxRule::Auto,
+    });
     let DbEvent::Page { rows, more: true, .. } = c.result(1).await else { panic!("a page with more") };
     assert_eq!(rows.last().unwrap()[0].as_deref(), Some("500"));
     assert_eq!(c.count(1, &count_of(sql)).await, Ok(2345));
@@ -3327,7 +3381,12 @@ async fn the_allowlist_question_alone_changes_nothing() {
     let _ = c.run(6, "ROLLBACK").await;
     // While a portal pages.
     let sql = "SELECT g FROM generate_series(1, 2345) g ORDER BY g";
-    c.session.send(DbCommand::Execute { id: 7, statements: vec![sql.into()], paging: PagingMode::Hold });
+    c.session.send(DbCommand::Execute {
+        id: 7,
+        statements: vec![sql.into()],
+        paging: PagingMode::Hold,
+        tx: TxRule::Auto,
+    });
     let DbEvent::Page { more: true, .. } = c.result(7).await else { panic!("a page with more") };
     assert!(view(c.check_repeat(15, "SELECT * FROM zz_check_v").await));
     c.session.send(DbCommand::FetchMore { id: 7 });
@@ -3442,7 +3501,12 @@ async fn a_cancelled_count_answers_once_and_the_portal_pages_on() {
     let Some(url) = pg_url("a_cancelled_count_answers_once_and_the_portal_pages_on") else { return };
     let mut c = Conn::open(&url, SessionRole::Query).await;
     let sql = "SELECT g FROM generate_series(1, 2000) g ORDER BY g";
-    c.session.send(DbCommand::Execute { id: 1, statements: vec![sql.into()], paging: PagingMode::Hold });
+    c.session.send(DbCommand::Execute {
+        id: 1,
+        statements: vec![sql.into()],
+        paging: PagingMode::Hold,
+        tx: TxRule::Auto,
+    });
     let DbEvent::Page { more: true, .. } = c.result(1).await else { panic!("a page with more") };
     let slow = count_of("SELECT g FROM generate_series(1, 2000000000) g");
     c.session.send(DbCommand::Count { id: 1, sql: slow });
@@ -4261,6 +4325,7 @@ async fn sessions_cancels_and_tests_go_through_the_dialer() {
         id: 2,
         statements: vec!["SELECT pg_sleep(60)".into()],
         paging: PagingMode::Hold,
+        tx: TxRule::Auto,
     });
     started(&mut obs, &tag).await;
     let t0 = Instant::now();
@@ -4276,6 +4341,7 @@ async fn sessions_cancels_and_tests_go_through_the_dialer() {
         id: 3,
         statements: vec!["SELECT pg_sleep(61)".into()],
         paging: PagingMode::Hold,
+        tx: TxRule::Auto,
     });
     let mut n = 20_000;
     while !active_queries(&mut obs, n, &tag).await.iter().any(|t| t.contains("pg_sleep(61)")) {
@@ -4475,7 +4541,12 @@ const ENDLESS_NOTICES: &str = "DO $$ BEGIN LOOP RAISE NOTICE 'tick'; PERFORM pg_
 
 /// Start `sql` on `q` (tagged `tag`) and wait until the server runs it.
 async fn start(q: &Conn, obs: &mut Conn, tag: &str, sql: &str) {
-    q.session.send(DbCommand::Execute { id: 1, statements: vec![sql.into()], paging: PagingMode::Hold });
+    q.session.send(DbCommand::Execute {
+        id: 1,
+        statements: vec![sql.into()],
+        paging: PagingMode::Hold,
+        tx: TxRule::Auto,
+    });
     started(obs, tag).await;
 }
 
@@ -4644,7 +4715,7 @@ async fn a_cancel_not_sent_ends_a_run_of_several_statements_once() {
     let _backends = Backends::new(&url, &tag);
     let (mut q, _, mut obs) = open_cancel_dial(&url, &tag, LaterDials::Refuse).await;
     let statements = vec!["SELECT 1".into(), "SELECT pg_sleep(30)".into()];
-    q.session.send(DbCommand::Execute { id: 1, statements, paging: PagingMode::Hold });
+    q.session.send(DbCommand::Execute { id: 1, statements, paging: PagingMode::Hold, tx: TxRule::Auto });
     let mut n = 70_000;
     while !active_queries(&mut obs, n, &tag).await.iter().any(|t| t.contains("pg_sleep(30)")) {
         n += 1;
@@ -4766,7 +4837,7 @@ async fn alter_quickly(migration: &mut Conn, id: u64, table: &str, column: &str)
         format!("ALTER TABLE {table} ADD COLUMN {column} int"),
         "COMMIT".to_string(),
     ];
-    migration.session.send(DbCommand::Execute { id, statements, paging: PagingMode::Hold });
+    migration.session.send(DbCommand::Execute { id, statements, paging: PagingMode::Hold, tx: TxRule::Auto });
     match migration.result(id).await {
         DbEvent::Done { .. } => Ok(()),
         DbEvent::Failed { error, .. } => {
@@ -4793,7 +4864,12 @@ async fn a_result_not_held_leaves_no_lock_and_no_transaction() {
     let create = format!("CREATE TABLE {table} AS SELECT g AS x FROM generate_series(1, 1200) g");
     assert!(matches!(obs.run(1, &create).await, DbEvent::Done { .. }));
     let sql = format!("SELECT x FROM {table} ORDER BY x");
-    q.session.send(DbCommand::Execute { id: 1, statements: vec![sql.clone()], paging: PagingMode::NoHold });
+    q.session.send(DbCommand::Execute {
+        id: 1,
+        statements: vec![sql.clone()],
+        paging: PagingMode::NoHold,
+        tx: TxRule::Auto,
+    });
     let mut events = Vec::new();
     loop {
         let ev = q.wait(|_| true, 30).await;
@@ -4841,7 +4917,7 @@ async fn a_held_result_keeps_its_transaction_and_lock_until_closed() {
     let create = format!("CREATE TABLE {table} AS SELECT g AS x FROM generate_series(1, 1200) g");
     assert!(matches!(obs.run(1, &create).await, DbEvent::Done { .. }));
     let sql = format!("SELECT x FROM {table} ORDER BY x");
-    q.session.send(DbCommand::Execute { id: 1, statements: vec![sql], paging: PagingMode::Hold });
+    q.session.send(DbCommand::Execute { id: 1, statements: vec![sql], paging: PagingMode::Hold, tx: TxRule::Auto });
     q.wait(|e| matches!(e, DbEvent::TxOpen(true)), 10).await;
     let DbEvent::Page { more: true, .. } = q.result(1).await else { panic!("a page with more") };
     let (state, locks) = server_view(&mut obs, 2, &tag).await;
@@ -4867,7 +4943,12 @@ async fn a_result_in_the_users_block_is_held_without_hold_too() {
     let mut c = Conn::open(&url, SessionRole::Query).await;
     assert!(matches!(c.run(1, "BEGIN").await, DbEvent::Done { .. }));
     let sql = "SELECT g FROM generate_series(1, 1200) g";
-    c.session.send(DbCommand::Execute { id: 2, statements: vec![sql.into()], paging: PagingMode::NoHold });
+    c.session.send(DbCommand::Execute {
+        id: 2,
+        statements: vec![sql.into()],
+        paging: PagingMode::NoHold,
+        tx: TxRule::Auto,
+    });
     let DbEvent::Page { more: true, .. } = c.result(2).await else { panic!("a page with more") };
     c.session.send(DbCommand::FetchMore { id: 2 });
     let DbEvent::Page { columns: None, rows, more: true, .. } = c.result(2).await else { panic!("the next page") };
@@ -4884,7 +4965,12 @@ async fn a_result_not_held_is_read_only_on_a_read_only_session() {
     let Some(url) = pg_url("a_result_not_held_is_read_only_on_a_read_only_session") else { return };
     let mut c = Conn::open_with(&url, SessionRole::Query, true).await;
     let sql = "SELECT current_setting('transaction_read_only') FROM generate_series(1, 700)";
-    c.session.send(DbCommand::Execute { id: 1, statements: vec![sql.into()], paging: PagingMode::NoHold });
+    c.session.send(DbCommand::Execute {
+        id: 1,
+        statements: vec![sql.into()],
+        paging: PagingMode::NoHold,
+        tx: TxRule::Auto,
+    });
     let DbEvent::Page { rows, more: true, .. } = c.result(1).await else { panic!("a page") };
     assert_eq!(rows[0][0].as_deref(), Some("on"));
     c.session.send(DbCommand::Resume { id: 2, sql: sql.into(), skip: 500, paging: PagingMode::NoHold });
@@ -4904,13 +4990,23 @@ async fn a_write_not_held_is_shown_only_once_committed() {
     let create = "CREATE TEMP TABLE zz_nohold_w (x int UNIQUE DEFERRABLE INITIALLY DEFERRED)";
     assert!(matches!(c.run(1, create).await, DbEvent::Done { .. }));
     let insert = "INSERT INTO zz_nohold_w SELECT g FROM generate_series(1, 700) g RETURNING x";
-    c.session.send(DbCommand::Execute { id: 2, statements: vec![insert.into()], paging: PagingMode::NoHold });
+    c.session.send(DbCommand::Execute {
+        id: 2,
+        statements: vec![insert.into()],
+        paging: PagingMode::NoHold,
+        tx: TxRule::Auto,
+    });
     let DbEvent::Page { rows, more: true, .. } = c.result(2).await else { panic!("a page with more") };
     assert_eq!(rows.len(), PAGE);
     let DbEvent::Page { rows, .. } = c.run(3, "SELECT count(*) FROM zz_nohold_w").await else { panic!() };
     assert_eq!(rows[0][0].as_deref(), Some("700"), "committed");
     let twice = "INSERT INTO zz_nohold_w SELECT 1 FROM generate_series(1, 600) RETURNING x";
-    c.session.send(DbCommand::Execute { id: 4, statements: vec![twice.into()], paging: PagingMode::NoHold });
+    c.session.send(DbCommand::Execute {
+        id: 4,
+        statements: vec![twice.into()],
+        paging: PagingMode::NoHold,
+        tx: TxRule::Auto,
+    });
     let DbEvent::Failed { error: DbError::Server(e), .. } = c.result(4).await else { panic!("the COMMIT fails") };
     assert!(e.contains("duplicate key"), "{e}");
     let DbEvent::Page { rows, .. } = c.run(5, "SELECT count(*) FROM zz_nohold_w").await else {
@@ -5000,7 +5096,7 @@ async fn copy_to_or_from_the_client_ends_the_run_and_leaves_nothing_running() {
             let (mut q, mut obs) = tagged(&url, &tag).await;
             let create = "CREATE TEMP TABLE zz_copy AS SELECT g FROM generate_series(1, 10) g";
             assert!(matches!(q.run(1, create).await, DbEvent::Done { .. }));
-            q.session.send(DbCommand::Execute { id: 2, statements: vec![copy.to_string()], paging });
+            q.session.send(DbCommand::Execute { id: 2, statements: vec![copy.to_string()], paging, tx: TxRule::Auto });
             let answers = answers_to(&mut q, 2).await;
             assert_eq!(answers.len(), 1, "{copy} ({paging:?}): one answer: {answers:?}");
             assert!(
@@ -5071,7 +5167,12 @@ async fn a_copy_hidden_by_backslash_strings_is_refused_too() {
             let ev = q.run(k as u64 + 1, sql).await;
             assert!(matches!(ev, DbEvent::Done { .. }), "{case}: {sql}: {ev:?}");
         }
-        q.session.send(DbCommand::Execute { id: 10, statements: vec![hidden(*rows)], paging: PagingMode::Hold });
+        q.session.send(DbCommand::Execute {
+            id: 10,
+            statements: vec![hidden(*rows)],
+            paging: PagingMode::Hold,
+            tx: TxRule::Auto,
+        });
         let seen = answers_to(&mut q, 10).await;
         assert!(
             matches!(&seen[..], [DbEvent::Failed { id: 10, error: DbError::CopyStdio, cancelled: false }]),
@@ -5100,6 +5201,7 @@ async fn a_copy_of_a_table_named_to_is_refused() {
         id: 2,
         statements: vec!["COPY pg_temp.to TO STDOUT".into()],
         paging: PagingMode::Hold,
+        tx: TxRule::Auto,
     });
     let seen = answers_to(&mut q, 2).await;
     assert!(
@@ -5111,4 +5213,463 @@ async fn a_copy_of_a_table_named_to_is_refused() {
         panic!("the session goes on")
     };
     assert_eq!(rows[0][0].as_deref(), Some("0"));
+}
+
+// ── manual commit ────────────────────────────────────────────────
+
+/// Manual commit: statement `i` opens a transaction when `opens[i]` and none is open.
+fn manual(opens: &[bool]) -> TxRule {
+    TxRule::Manual { opens: opens.to_vec(), idle_timeout: None }
+}
+
+/// The id of a fetch of no result: the session answers it at once without asking the server, so
+/// sent after a command its answer comes after every event of that command.
+const MARK: u64 = u64::MAX;
+
+impl Conn {
+    /// Every event `cmd` brings, up to the state that follows its answer.
+    async fn events_of(&mut self, cmd: DbCommand) -> Vec<DbEvent> {
+        self.session.send(cmd);
+        self.marked().await
+    }
+
+    /// Every event up to the answer of a [`MARK`] fetch sent now.
+    async fn marked(&mut self) -> Vec<DbEvent> {
+        self.session.send(DbCommand::FetchMore { id: MARK });
+        let mut out = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match tokio::time::timeout(left, self.rx.recv()).await {
+                Ok(Some(DbEvent::Page { id: MARK, .. })) => return out,
+                Ok(Some(ev)) => out.push(ev),
+                Ok(None) => panic!("event channel closed: {out:?}"),
+                Err(_) => panic!("no answer within 30s: {out:?}"),
+            }
+        }
+    }
+
+    /// Run `statements` under manual commit (`opens`): every event of the run.
+    async fn manual(&mut self, id: u64, statements: &[&str], opens: &[bool]) -> Vec<DbEvent> {
+        self.manual_with(id, statements, manual(opens)).await
+    }
+
+    async fn manual_with(&mut self, id: u64, statements: &[&str], tx: TxRule) -> Vec<DbEvent> {
+        let statements = statements.iter().map(|s| s.to_string()).collect();
+        self.events_of(DbCommand::Execute { id, statements, paging: PagingMode::Hold, tx }).await
+    }
+
+    /// End the open transaction (`commit` or roll back): every event it brings.
+    async fn end_tx(&mut self, id: u64, commit: bool) -> Vec<DbEvent> {
+        self.events_of(DbCommand::EndTx { id, commit }).await
+    }
+
+    /// The first value of the first row of `sql`.
+    async fn value(&mut self, id: u64, sql: &str) -> String {
+        match self.run(id, sql).await {
+            DbEvent::Page { rows, .. } => rows[0][0].clone().unwrap_or_default(),
+            ev => panic!("{sql}: {ev:?}"),
+        }
+    }
+}
+
+/// The one answer among `events`: a first page, `Done`, `Failed` or `TxEnded`.
+fn answer(events: &[DbEvent]) -> &DbEvent {
+    let mut answers = events.iter().filter(|e| {
+        matches!(
+            e,
+            DbEvent::Page { columns: Some(_), .. }
+                | DbEvent::Done { .. }
+                | DbEvent::Failed { .. }
+                | DbEvent::TxEnded { .. }
+        )
+    });
+    let first = answers.next().unwrap_or_else(|| panic!("no answer: {events:?}"));
+    assert!(answers.next().is_none(), "one answer: {events:?}");
+    first
+}
+
+/// What `events` say about the transaction, in order.
+fn facts(events: &[DbEvent]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            DbEvent::ManualBegun { index, .. } => Some(format!("begun {index}")),
+            DbEvent::ManualRolledBack { index, .. } => Some(format!("not kept {index}")),
+            DbEvent::RunRolledBack { .. } => Some("run undone".to_string()),
+            DbEvent::TxEnded { outcome, .. } => Some(format!("{outcome:?}")),
+            DbEvent::Block(b) => Some(format!("block {b}")),
+            DbEvent::TxOpen(b) => Some(format!("open {b}")),
+            DbEvent::TxAborted(b) => Some(format!("aborted {b}")),
+            _ => None,
+        })
+        .collect()
+}
+
+const OPENED: [&str; 3] = ["begun 0", "block true", "open true"];
+const CLOSED: [&str; 2] = ["block false", "open false"];
+
+/// A scratch schema `zz_<what>_<pid>` with a table `t (x int PRIMARY KEY)`, dropped with the
+/// guard; and a guard that ends the sessions tagged `<what><pid>` first (their open
+/// transactions would hold the drop up).
+fn scratch(url: &str, what: &str) -> (SchemaGuard, TerminateGuard, String, String) {
+    let schema = format!("zz_{what}_{}", std::process::id());
+    let guard = SchemaGuard::new(url, &schema);
+    for sql in [
+        format!("DROP SCHEMA IF EXISTS {schema} CASCADE"),
+        format!("CREATE SCHEMA {schema}"),
+        format!("CREATE TABLE {schema}.t (x int PRIMARY KEY)"),
+    ] {
+        pg_clean::run_fresh(url, &sql).unwrap_or_else(|e| panic!("{e}: {sql}"));
+    }
+    let tag = format!("{what}{}", std::process::id());
+    (guard, TerminateGuard { url: url.to_string(), tag: tag.clone() }, schema, tag)
+}
+
+/// The state of the session tagged `tag` (`pg_stat_activity.state`) and how many locks it holds.
+async fn session_state(obs: &mut Conn, id: u64, tag: &str) -> (String, String) {
+    let sql = format!(
+        "SELECT a.state, (SELECT count(*) FROM pg_locks l WHERE l.pid = a.pid) \
+         FROM pg_stat_activity a WHERE a.application_name = 'datarig-q-{tag}'"
+    );
+    let DbEvent::Page { rows, .. } = obs.run(id, &sql).await else { panic!("pg_stat_activity") };
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    (rows[0][0].clone().unwrap_or_default(), rows[0][1].clone().unwrap_or_default())
+}
+
+/// The first write of manual commit costs what an autocommit write costs: its `BEGIN` goes out
+/// in the same write (one round trip, no probe); a write in the open transaction is one round
+/// trip too, its run savepoint (and the release of the last run's) pipelined with it; `EndTx`
+/// is one. Autocommit sends none of these.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_manual_first_write_costs_what_an_autocommit_write_costs() {
+    let Some(url) = pg_url("a_manual_first_write_costs_what_an_autocommit_write_costs") else { return };
+    let (_schema, _end, s, _) = scratch(&url, "mrtt");
+    let (mut q, wire) = wired(&url, ONE_WAY).await;
+    // Round trips until the run's answer was in front of the client, the texts it sent, and
+    // its events.
+    let mut cost = async |cmd: DbCommand| {
+        tokio::time::sleep(ONE_WAY * 8).await;
+        let (before, texts, probes) = (wire.flights(), wire.texts().len(), wire.get().1);
+        let events = q.c.events_of(cmd).await;
+        assert_eq!(wire.get().1, probes, "no probe: {events:?}");
+        (wire.delivered() - before, wire.texts()[texts..].to_vec(), events)
+    };
+    let exec =
+        |id, sql: &str, tx| DbCommand::Execute { id, statements: vec![sql.into()], paging: PagingMode::Hold, tx };
+    let insert = |x| format!("INSERT INTO {s}.t VALUES ({x})");
+    let (n, texts, events) = cost(exec(1, &insert(1), TxRule::Auto)).await;
+    assert_eq!((n, texts), (1, vec![insert(1)]), "autocommit");
+    assert!(facts(&events).is_empty(), "{events:?}");
+    let (n, texts, events) = cost(exec(2, &insert(2), manual(&[true]))).await;
+    assert_eq!((n, texts), (1, vec!["BEGIN".to_string(), insert(2)]), "the first write");
+    assert_eq!(facts(&events), OPENED);
+    let (n, texts, events) = cost(exec(3, &insert(3), manual(&[true]))).await;
+    assert_eq!((n, texts), (1, vec!["SAVEPOINT datarig_run".to_string(), insert(3)]), "a write in the transaction");
+    assert!(facts(&events).is_empty(), "{events:?}");
+    let (n, texts, _) = cost(exec(4, &insert(4), manual(&[true]))).await;
+    let run = ["RELEASE SAVEPOINT datarig_run", "SAVEPOINT datarig_run"].map(String::from);
+    assert_eq!((n, texts), (1, [&run[..], &[insert(4)]].concat()));
+    let (n, texts, events) = cost(DbCommand::EndTx { id: 5, commit: true }).await;
+    assert_eq!((n, texts), (1, vec!["COMMIT".to_string()]));
+    assert_eq!(facts(&events), ["Committed", "block false", "open false"]);
+    let (n, texts, events) = cost(exec(6, &insert(5), manual(&[true]))).await;
+    assert_eq!((n, texts), (1, vec!["BEGIN".to_string(), insert(5)]), "the next transaction's first write");
+    assert_eq!(facts(&events), OPENED);
+    let (_, _, events) = cost(DbCommand::EndTx { id: 7, commit: true }).await;
+    assert_eq!(facts(&events), ["Committed", "block false", "open false"]);
+    assert_eq!(q.c.value(8, &format!("SELECT count(*) FROM {s}.t")).await, "5");
+}
+
+/// Reads before the first write leave nothing open (the session idle, no lock); the first write
+/// opens the transaction, which another session does not see into until it commits; a read
+/// inside sees it; a rollback keeps nothing; ending a transaction when none is open is refused.
+#[tokio::test(flavor = "multi_thread")]
+async fn manual_commit_opens_at_the_first_write_and_ends_when_asked() {
+    let Some(url) = pg_url("manual_commit_opens_at_the_first_write_and_ends_when_asked") else { return };
+    let (_schema, _end, s, tag) = scratch(&url, "mopen");
+    let (mut q, mut obs) = tagged(&url, &tag).await;
+    let count = format!("SELECT count(*) FROM {s}.t");
+    let events = q.manual(1, &[&count, "SELECT 1"], &[false, false]).await;
+    assert!(matches!(answer(&events), DbEvent::Page { .. }), "{events:?}");
+    assert!(facts(&events).is_empty(), "{events:?}");
+    assert_eq!(session_state(&mut obs, 1, &tag).await, ("idle".to_string(), "0".to_string()), "reads hold nothing");
+    let events = q.manual(2, &[&count, &format!("INSERT INTO {s}.t VALUES (1)"), &count], &[false, true, false]).await;
+    let DbEvent::Page { rows, .. } = answer(&events) else { panic!("{events:?}") };
+    assert_eq!(rows[0][0].as_deref(), Some("1"), "the read after the write sees it");
+    assert_eq!(facts(&events), ["begun 1", "block true", "open true"]);
+    assert_eq!(session_state(&mut obs, 2, &tag).await.0, "idle in transaction");
+    assert_eq!(obs.value(3, &count).await, "0", "uncommitted");
+    let events = q.end_tx(3, true).await;
+    assert!(matches!(answer(&events), DbEvent::TxEnded { id: 3, outcome: TxOutcome::Committed }), "{events:?}");
+    assert_eq!(facts(&events), ["Committed", "block false", "open false"]);
+    assert_eq!(obs.value(4, &count).await, "1", "committed");
+    assert_eq!(session_state(&mut obs, 5, &tag).await, ("idle".to_string(), "0".to_string()));
+    let events = q.manual(4, &[&format!("INSERT INTO {s}.t VALUES (2)")], &[true]).await;
+    assert_eq!(facts(&events), OPENED);
+    let events = q.end_tx(5, false).await;
+    assert!(matches!(answer(&events), DbEvent::TxEnded { id: 5, outcome: TxOutcome::RolledBack }), "{events:?}");
+    assert_eq!(q.value(6, &count).await, "1", "rolled back");
+    let events = q.end_tx(7, true).await;
+    assert!(
+        matches!(answer(&events), DbEvent::Failed { id: 7, error: DbError::NoTransaction, cancelled: false }),
+        "{events:?}"
+    );
+    assert!(facts(&events).is_empty());
+}
+
+/// A run that fails or is cancelled in a transaction opened for manual commit before it goes
+/// back to its savepoint: the transaction stays open, not aborted, with what earlier runs did.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_or_cancelled_run_is_undone_and_the_transaction_kept() {
+    let Some(url) = pg_url("a_failed_or_cancelled_run_is_undone_and_the_transaction_kept") else { return };
+    let (_schema, _end, s, tag) = scratch(&url, "mundo");
+    let (mut q, mut obs) = tagged(&url, &tag).await;
+    let insert = |x| format!("INSERT INTO {s}.t VALUES ({x})");
+    let count = format!("SELECT count(*) FROM {s}.t");
+    assert_eq!(facts(&q.manual(1, &[&insert(1)], &[true]).await), OPENED);
+    let events = q.manual(2, &[&insert(2), &insert(1)], &[true, true]).await;
+    assert!(matches!(answer(&events), DbEvent::Failed { id: 2, cancelled: false, .. }), "{events:?}");
+    assert_eq!(facts(&events), ["run undone"], "not aborted, still open");
+    let events = q.manual(3, &[&count], &[false]).await;
+    let DbEvent::Page { rows, .. } = answer(&events) else { panic!("{events:?}") };
+    assert_eq!(rows[0][0].as_deref(), Some("1"), "the failed run's insert is gone, the earlier one kept");
+    // Cancelled while its second statement runs.
+    q.session.send(DbCommand::Execute {
+        id: 4,
+        statements: vec![insert(3), "SELECT pg_sleep(30)".into()],
+        paging: PagingMode::Hold,
+        tx: manual(&[true, false]),
+    });
+    started(&mut obs, &tag).await;
+    q.session.cancel();
+    let events = q.marked().await;
+    assert!(matches!(answer(&events), DbEvent::Failed { id: 4, cancelled: true, .. }), "{events:?}");
+    assert_eq!(facts(&events), ["run undone"]);
+    let events = q.manual(5, &[&format!("SELECT array_agg(x ORDER BY x)::text FROM {s}.t")], &[false]).await;
+    let DbEvent::Page { rows, .. } = answer(&events) else { panic!("{events:?}") };
+    assert_eq!(rows[0][0].as_deref(), Some("{1}"));
+    assert_eq!(facts(&q.end_tx(6, true).await), ["Committed", "block false", "open false"]);
+    assert_eq!(obs.value(7, &count).await, "1");
+}
+
+/// A transaction opened for a run that then fails is rolled back at once: nothing of it is
+/// kept and no transaction is left open, whether the first write failed (nothing was reported
+/// open) or a later statement did.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_transaction_opened_by_a_failed_run_is_not_kept() {
+    let Some(url) = pg_url("a_transaction_opened_by_a_failed_run_is_not_kept") else { return };
+    let (_schema, _end, s, tag) = scratch(&url, "mfail");
+    let (mut q, mut obs) = tagged(&url, &tag).await;
+    let events = q.manual(1, &[&format!("INSERT INTO {s}.t VALUES ('x')")], &[true]).await;
+    assert!(matches!(answer(&events), DbEvent::Failed { error: DbError::Server(_), .. }), "{events:?}");
+    assert_eq!(facts(&events), ["not kept 0"], "never reported open");
+    assert_eq!(session_state(&mut obs, 1, &tag).await, ("idle".to_string(), "0".to_string()));
+    let insert = format!("INSERT INTO {s}.t VALUES (1)");
+    let events = q.manual(2, &[&insert, &insert], &[true, true]).await;
+    assert!(matches!(answer(&events), DbEvent::Failed { id: 2, .. }), "{events:?}");
+    assert_eq!(facts(&events), [&OPENED[..], &["not kept 0"], &CLOSED[..]].concat());
+    assert_eq!(session_state(&mut obs, 2, &tag).await, ("idle".to_string(), "0".to_string()));
+    assert_eq!(obs.value(3, &format!("SELECT count(*) FROM {s}.t")).await, "0");
+    // A statement refused before it is sent opens nothing.
+    let events = q.manual(3, &["COPY pg_catalog.pg_class TO STDOUT"], &[true]).await;
+    assert!(matches!(answer(&events), DbEvent::Failed { error: DbError::CopyStdio, .. }), "{events:?}");
+    assert!(facts(&events).is_empty(), "{events:?}");
+    assert!(matches!(q.run(4, "SELECT 1").await, DbEvent::Page { .. }));
+    assert_eq!(session_state(&mut obs, 4, &tag).await.0, "idle");
+}
+
+/// `COMMIT` of an aborted block (the user's own `BEGIN`, with PostgreSQL's own rules: no
+/// savepoint, nothing opened by the session) is answered as rolled back instead, never as
+/// committed; a deferred constraint that fails at `COMMIT` fails it, and the block is closed.
+#[tokio::test(flavor = "multi_thread")]
+async fn end_tx_tells_a_rollback_instead_and_a_failed_commit() {
+    let Some(url) = pg_url("end_tx_tells_a_rollback_instead_and_a_failed_commit") else { return };
+    let (_schema, _end, s, tag) = scratch(&url, "mend");
+    let (mut q, mut obs) = tagged(&url, &tag).await;
+    let count = format!("SELECT count(*) FROM {s}.t");
+    let events = q.manual(1, &["BEGIN", &format!("INSERT INTO {s}.t VALUES (1)")], &[false, true]).await;
+    assert_eq!(facts(&events), ["block true", "open true"], "the user's block: nothing opened by the session");
+    let events = q.manual(2, &["SELECT 1/0"], &[false]).await;
+    assert_eq!(facts(&events), ["aborted true"], "the server's own rules");
+    let events = q.end_tx(3, true).await;
+    assert!(matches!(answer(&events), DbEvent::TxEnded { id: 3, outcome: TxOutcome::RolledBackInstead }), "{events:?}");
+    assert_eq!(facts(&events), ["RolledBackInstead", "block false", "open false", "aborted false"]);
+    assert_eq!(obs.value(1, &count).await, "0");
+    for sql in [
+        format!("CREATE TABLE {s}.parent (id int PRIMARY KEY)"),
+        format!("CREATE TABLE {s}.child (p int REFERENCES {s}.parent DEFERRABLE INITIALLY DEFERRED)"),
+    ] {
+        pg_clean::run_fresh(&url, &sql).unwrap_or_else(|e| panic!("{e}: {sql}"));
+    }
+    assert_eq!(facts(&q.manual(4, &[&format!("INSERT INTO {s}.child VALUES (1)")], &[true]).await), OPENED);
+    let events = q.end_tx(5, true).await;
+    let DbEvent::Failed { id: 5, error: DbError::Server(e), .. } = answer(&events) else { panic!("{events:?}") };
+    assert!(e.contains("foreign key"), "{e}");
+    assert_eq!(facts(&events), CLOSED, "the failed commit ended the transaction");
+    assert!(matches!(answer(&q.end_tx(6, false).await), DbEvent::Failed { error: DbError::NoTransaction, .. }));
+    assert_eq!(obs.value(2, &format!("SELECT count(*) FROM {s}.child")).await, "0");
+}
+
+/// The idle limit of manual commit goes out with the `BEGIN`, for that transaction only: past
+/// it the server ends the session (SQLSTATE `25P03`, a reason of its own) and rolls back.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_idle_limit_ends_an_idle_manual_transaction() {
+    let Some(url) = pg_url("the_idle_limit_ends_an_idle_manual_transaction") else { return };
+    let (_schema, _end, s, tag) = scratch(&url, "midle");
+    let (mut q, mut obs) = tagged(&url, &tag).await;
+    let rule = TxRule::Manual { opens: vec![true, false], idle_timeout: Some(Duration::from_millis(400)) };
+    let events = q
+        .manual_with(1, &[&format!("INSERT INTO {s}.t VALUES (1)"), "SHOW idle_in_transaction_session_timeout"], rule)
+        .await;
+    let DbEvent::Page { rows, .. } = answer(&events) else { panic!("{events:?}") };
+    assert_eq!(rows[0][0].as_deref(), Some("400ms"));
+    assert_eq!(facts(&events), OPENED);
+    let lost = q.wait(|e| matches!(e, DbEvent::Lost { .. }), 10).await;
+    let DbEvent::Lost { error: DbError::IdleInTransactionTimeout(msg) } = lost else { panic!("{lost:?}") };
+    assert!(msg.starts_with("FATAL"), "{msg}");
+    assert_eq!(obs.value(1, &format!("SELECT count(*) FROM {s}.t")).await, "0", "rolled back");
+}
+
+/// A manual transaction whose backend is terminated: `Lost`, the server rolled back. One
+/// terminated while its `COMMIT` runs (a slow deferred trigger): the commit's outcome is not
+/// known (`CommitUnknown`, never `TxEnded`), then `Lost`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_terminated_manual_transaction_is_lost_and_its_commit_unknown() {
+    let Some(url) = pg_url("a_terminated_manual_transaction_is_lost_and_its_commit_unknown") else { return };
+    let (_schema, _end, s, tag) = scratch(&url, "mlost");
+    let kill =
+        format!("SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE application_name = 'datarig-q-{tag}'");
+    let (mut q, mut obs) = tagged(&url, &tag).await;
+    assert_eq!(facts(&q.manual(1, &[&format!("INSERT INTO {s}.t VALUES (1)")], &[true]).await), OPENED);
+    let DbEvent::Page { .. } = obs.run(1, &kill).await else { panic!("terminate") };
+    let lost = q.wait(|e| matches!(e, DbEvent::Lost { .. }), 10).await;
+    assert!(matches!(lost, DbEvent::Lost { error: DbError::Server(_) | DbError::Closed }), "{lost:?}");
+    for sql in [
+        format!(
+            "CREATE FUNCTION {s}.slow() RETURNS trigger LANGUAGE plpgsql AS \
+             $$BEGIN PERFORM pg_sleep(30); RETURN NULL; END$$"
+        ),
+        format!(
+            "CREATE CONSTRAINT TRIGGER slow AFTER INSERT ON {s}.t DEFERRABLE INITIALLY DEFERRED \
+             FOR EACH ROW EXECUTE FUNCTION {s}.slow()"
+        ),
+    ] {
+        pg_clean::run_fresh(&url, &sql).unwrap_or_else(|e| panic!("{e}: {sql}"));
+    }
+    let (mut q, _) = tagged(&url, &tag).await;
+    assert_eq!(facts(&q.manual(1, &[&format!("INSERT INTO {s}.t VALUES (2)")], &[true]).await), OPENED);
+    q.session.send(DbCommand::EndTx { id: 2, commit: true });
+    started(&mut obs, &tag).await;
+    let DbEvent::Page { .. } = obs.run(2, &kill).await else { panic!("terminate") };
+    let mut seen = Vec::new();
+    while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_secs(5), q.rx.recv()).await {
+        seen.push(ev);
+    }
+    assert!(
+        matches!(&seen[..], [DbEvent::Failed { id: 2, error: DbError::CommitUnknown, .. }, DbEvent::Lost { .. }]),
+        "{seen:?}"
+    );
+    assert_eq!(obs.value(3, &format!("SELECT count(*) FROM {s}.t")).await, "0");
+}
+
+/// `EXPLAIN ANALYZE`, a count and a `Resume` inside a manual transaction run under their own
+/// savepoints, as in the user's block: the transaction keeps what it did, and a failed run after
+/// them is still undone to its own savepoint.
+#[tokio::test(flavor = "multi_thread")]
+async fn explain_count_and_resume_inside_a_manual_transaction() {
+    let Some(url) = pg_url("explain_count_and_resume_inside_a_manual_transaction") else { return };
+    let (_schema, _end, s, tag) = scratch(&url, "mtools");
+    let (mut q, mut obs) = tagged(&url, &tag).await;
+    let fill = format!("INSERT INTO {s}.t SELECT generate_series(1, 30)");
+    assert_eq!(facts(&q.manual(1, &[&fill], &[true]).await), OPENED);
+    let events = q.manual(2, &[&format!("EXPLAIN ANALYZE DELETE FROM {s}.t")], &[false]).await;
+    assert!(matches!(answer(&events), DbEvent::Page { .. }), "{events:?}");
+    assert!(facts(&events).is_empty(), "{events:?}");
+    let select = format!("SELECT x FROM {s}.t ORDER BY x");
+    assert_eq!(q.count(3, &count_of(&select)).await, Ok(30));
+    q.session.send(DbCommand::Resume { id: 4, sql: select.clone(), skip: 25, paging: PagingMode::Hold });
+    let DbEvent::Page { rows, more: false, .. } = q.result(4).await else { panic!("the rest") };
+    assert_eq!(
+        rows.iter().map(|r| r[0].clone().unwrap_or_default()).collect::<Vec<_>>(),
+        ["26", "27", "28", "29", "30"]
+    );
+    let events = q.manual(5, &[&format!("INSERT INTO {s}.t VALUES (31)"), "SELECT 1/0"], &[true, false]).await;
+    assert!(matches!(answer(&events), DbEvent::Failed { id: 5, .. }), "{events:?}");
+    assert_eq!(facts(&events), ["run undone"]);
+    assert_eq!(q.count(6, &count_of(&select)).await, Ok(30));
+    assert_eq!(facts(&q.end_tx(7, true).await), ["Committed", "block false", "open false"]);
+    assert_eq!(obs.value(1, &format!("SELECT count(*) FROM {s}.t")).await, "30");
+}
+
+/// Transaction control of the user's inside manual commit: `INSERT; COMMIT; INSERT` opens twice
+/// (the second stays open), a `ROLLBACK` mid-run ends the transaction, and the user's own
+/// savepoints keep their meaning across runs (a run with one gets no run savepoint, and the last
+/// run's is released before it).
+#[tokio::test(flavor = "multi_thread")]
+async fn the_users_transaction_control_inside_manual_commit() {
+    let Some(url) = pg_url("the_users_transaction_control_inside_manual_commit") else { return };
+    let (_schema, _end, s, tag) = scratch(&url, "mctl");
+    let (mut q, mut obs) = tagged(&url, &tag).await;
+    let insert = |x| format!("INSERT INTO {s}.t VALUES ({x})");
+    let rows = format!("SELECT coalesce(array_agg(x ORDER BY x)::text, '{{}}') FROM {s}.t");
+    let events = q.manual(1, &[&insert(1), "COMMIT", &insert(2)], &[true, false, true]).await;
+    assert!(matches!(answer(&events), DbEvent::Done { id: 1, .. }), "{events:?}");
+    let reopened = ["block false", "open false", "begun 2", "block true", "open true"];
+    assert_eq!(facts(&events), [&OPENED[..], &reopened[..]].concat());
+    assert_eq!(obs.value(1, &rows).await, "{1}");
+    assert_eq!(facts(&q.end_tx(2, false).await), ["RolledBack", "block false", "open false"]);
+    // In a transaction open before the run (whose savepoint the run before left).
+    assert_eq!(facts(&q.manual(3, &[&insert(3)], &[true]).await), OPENED);
+    assert!(facts(&q.manual(4, &[&insert(4)], &[true]).await).is_empty());
+    let events = q.manual(5, &[&insert(5), "COMMIT", &insert(6)], &[true, false, true]).await;
+    assert!(matches!(answer(&events), DbEvent::Done { id: 5, .. }), "{events:?}");
+    assert_eq!(facts(&events), reopened);
+    assert_eq!(obs.value(2, &rows).await, "{1,3,4,5}");
+    let events = q.manual(6, &[&insert(7), "ROLLBACK", "SELECT 1"], &[true, false, false]).await;
+    assert!(matches!(answer(&events), DbEvent::Page { id: 6, .. }), "{events:?}");
+    assert_eq!(facts(&events), CLOSED);
+    assert_eq!(obs.value(3, &rows).await, "{1,3,4,5}");
+    // The user's savepoints.
+    assert_eq!(facts(&q.manual(7, &[&insert(8)], &[true]).await), OPENED);
+    assert!(facts(&q.manual(8, &["SAVEPOINT x", &insert(9)], &[false, true]).await).is_empty());
+    assert!(facts(&q.manual(9, &[&insert(10)], &[true]).await).is_empty());
+    let events = q.manual(10, &["ROLLBACK TO SAVEPOINT x"], &[false]).await;
+    assert!(matches!(answer(&events), DbEvent::Done { id: 10, .. }), "{events:?}");
+    assert!(facts(&events).is_empty(), "{events:?}");
+    assert_eq!(q.value(11, &rows).await, "{1,3,4,5,8}");
+    let events = q.manual(12, &[&insert(1)], &[true]).await;
+    assert_eq!(facts(&events), ["run undone"]);
+    let events = q.manual(13, &["RELEASE SAVEPOINT x", &insert(11)], &[false, true]).await;
+    assert!(matches!(answer(&events), DbEvent::Done { id: 13, .. }), "{events:?}");
+    assert_eq!(facts(&q.end_tx(14, true).await), ["Committed", "block false", "open false"]);
+    assert_eq!(obs.value(4, &rows).await, "{1,3,4,5,8,11}");
+}
+
+/// A procedure that commits cannot run in a transaction (`2D000`): as the first write, the
+/// transaction opened for it is rolled back and the failure says it needs none; with earlier
+/// changes, the run alone is undone and they stay; outside a transaction it runs.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_procedure_that_commits_inside_manual_commit() {
+    let Some(url) = pg_url("a_procedure_that_commits_inside_manual_commit") else { return };
+    let (_schema, _end, s, tag) = scratch(&url, "mcall");
+    let sql =
+        format!("CREATE PROCEDURE {s}.p() LANGUAGE plpgsql AS $$BEGIN INSERT INTO {s}.t VALUES (100); COMMIT; END$$");
+    pg_clean::run_fresh(&url, &sql).unwrap_or_else(|e| panic!("{e}: {sql}"));
+    let (mut q, mut obs) = tagged(&url, &tag).await;
+    let call = format!("CALL {s}.p()");
+    let count = format!("SELECT count(*) FROM {s}.t");
+    let events = q.manual(1, &[&call], &[true]).await;
+    assert!(matches!(answer(&events), DbEvent::Failed { error: DbError::NeedsNoTransaction(_), .. }), "{events:?}");
+    assert_eq!(facts(&events), ["not kept 0"]);
+    assert_eq!(session_state(&mut obs, 1, &tag).await, ("idle".to_string(), "0".to_string()));
+    assert_eq!(facts(&q.manual(2, &[&format!("INSERT INTO {s}.t VALUES (1)")], &[true]).await), OPENED);
+    let events = q.manual(3, &[&call], &[true]).await;
+    assert!(matches!(answer(&events), DbEvent::Failed { error: DbError::Server(_), .. }), "{events:?}");
+    assert_eq!(facts(&events), ["run undone"]);
+    assert_eq!(facts(&q.end_tx(4, true).await), ["Committed", "block false", "open false"]);
+    assert_eq!(obs.value(2, &count).await, "1");
+    let events = q.manual(5, &[&call], &[false]).await;
+    assert!(matches!(answer(&events), DbEvent::Done { .. }), "{events:?}");
+    assert_eq!(obs.value(3, &count).await, "2");
 }

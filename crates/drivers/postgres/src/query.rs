@@ -60,6 +60,16 @@
 //! parses. Nothing is ever set for the session: behind a transaction pooler it would stay on a
 //! server connection other clients get.
 //!
+//! **Manual commit** (`TxRule::Manual`): right before a statement the app flags as one that
+//! opens a transaction, while no block is open, the session's own start ([`Env::begin`], then
+//! the idle limit as `SET LOCAL`) goes out in the same write as the statement, through the same
+//! path as the user's block's first statements, so the first write costs no round trip more.
+//! The block is reported (`ManualBegun`, then `Block`) once the statement succeeded; when the
+//! run fails it is rolled back at once. A run in such a block, opened before it, goes under a
+//! savepoint ([`RUN_SAVEPOINT`]) set with its first statement and released with the next run's
+//! first: a failed or cancelled run goes back to it and the block keeps what earlier runs did.
+//! The user's own `BEGIN` keeps the server's rules. `EndTx` commits or rolls back.
+//!
 //! **The statement cache**: prepared row-returning statements are kept between
 //! transactions ([`Prepared`]) unless the profile turned the cache off or the session turned it
 //! off itself after the server lost them twice or had one of their names already
@@ -85,7 +95,7 @@ use crate::link::{Closed, Link, Next};
 use crate::route::Cancel;
 use crate::values::{Raw, format_code, format_value, is_json, is_numeric, type_display, value_kind};
 use datarig_core::driver::{
-    CancelFailure, Cell, ColumnMeta, ColumnOrigin, DbCommand, DbError, DbEvent, Outcome, PagingMode,
+    CancelFailure, Cell, ColumnMeta, ColumnOrigin, DbCommand, DbError, DbEvent, Outcome, PagingMode, TxOutcome, TxRule,
 };
 use datarig_core::sql::lexer::{Tok, Token, lex, lex_backslash_strings};
 use datarig_core::sql::risk::{self, Class};
@@ -113,6 +123,37 @@ struct Tx {
     /// The user opened a block on a session that sends statements first in each transaction
     /// (read-only, a search path per transaction): they go out with the next statement.
     first_pending: bool,
+    /// The block was opened by the session for manual commit ([`TxRule::Manual`]), not by the
+    /// user's `BEGIN`.
+    manual: bool,
+    /// The run savepoint ([`RUN_SAVEPOINT`]) of the last run, which went well, is still set in
+    /// the block: the next run releases it first, in the same write as its first statement (so
+    /// ending a run costs nothing).
+    run_savepoint: bool,
+    /// Statements that go out with the next statement, after the block's own first ones: the
+    /// `BEGIN` the session opens a block with for manual commit, or the release of the last
+    /// run's savepoint and the next one's.
+    queued: Vec<String>,
+    /// The block is being opened for manual commit by statement `.1` of run `.0`: until that
+    /// statement succeeds it is the session's own guess (never reported).
+    opening: Option<(u64, usize)>,
+    /// How the run going on undoes itself when it fails ([`Guard`]).
+    guard: Guard,
+}
+
+/// How a run undoes what it did when it fails or is cancelled. While it has one, a failure asks
+/// the server nothing ([`probe`]): the run ends the block or goes back to its savepoint anyway
+/// ([`settle`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Guard {
+    /// It does not: the server's own rules apply (a failure aborts the block).
+    #[default]
+    None,
+    /// It runs under the run savepoint ([`RUN_SAVEPOINT`]), set with its first statement in a
+    /// block opened for manual commit before the run: it rolls back to it.
+    Savepoint,
+    /// Its statement `index` opened the block for manual commit: it rolls the block back.
+    Opened(usize),
 }
 
 impl Tx {
@@ -122,19 +163,41 @@ impl Tx {
     fn set_block(&mut self, open: bool, due: bool) {
         self.first_pending = due && open && (self.first_pending || !self.block);
         self.block = open;
+        if !open {
+            (self.manual, self.run_savepoint) = (false, false);
+        }
     }
 
     /// `COMMIT AND CHAIN` / `ROLLBACK AND CHAIN` ended the block and opened a new one at once:
     /// the new one gets the session's first statements (`due`) as any new block does (a path
     /// set per transaction ended with the old one).
+    ///
+    /// A block opened for manual commit stays one (the user's commit chained it); its savepoints
+    /// ended with the old one.
     fn chained(&mut self, due: bool) {
         self.first_pending = due;
         self.block = true;
+        self.run_savepoint = false;
     }
 
-    /// The statements to run first in the user's block, if they are due (they are sent now).
+    /// The statements to run first in the user's block, if they are due, then the queued ones
+    /// (they are sent now).
     fn take_first(&mut self, env: &Env<'_>) -> Vec<String> {
-        if std::mem::take(&mut self.first_pending) { env.first_in_block() } else { Vec::new() }
+        let mut first = if std::mem::take(&mut self.first_pending) { env.first_in_block() } else { Vec::new() };
+        first.append(&mut self.queued);
+        first
+    }
+
+    /// Open a block for manual commit before statement `index` of run `id`: its `BEGIN` (the
+    /// session's own start, [`Env::begin`], then the idle limit) goes out with the statement, and
+    /// the statement runs in the block. Reported once the statement succeeded ([`Env::report`]);
+    /// a failure rolls it back ([`settle`]).
+    fn open_manual(&mut self, env: &Env<'_>, id: u64, index: usize, idle: Option<std::time::Duration>) {
+        (self.block, self.aborted, self.first_pending) = (true, false, false);
+        self.queued = env.begin();
+        self.queued.extend(idle.map(idle_limit));
+        self.opening = Some((id, index));
+        self.guard = Guard::Opened(index);
     }
 
     /// [`Tx::take_first`] as the start of a simple query (`…; `), or nothing.
@@ -148,6 +211,45 @@ const BEGIN_READ_ONLY: &str = "BEGIN READ ONLY";
 
 /// What a read-only session runs first in the user's block.
 const SET_READ_ONLY: &str = "SET TRANSACTION READ ONLY";
+
+/// The savepoint a run goes under in a block opened for manual commit before it: a failed or
+/// cancelled run goes back to it, and the block keeps what earlier runs did.
+const RUN_SAVEPOINT: &str = "SAVEPOINT datarig_run";
+
+/// Leaves [`RUN_SAVEPOINT`] of a run that went well (sent first in the next run).
+const RUN_RELEASE: &str = "RELEASE SAVEPOINT datarig_run";
+
+/// Back to before a run that failed or was cancelled ([`RUN_SAVEPOINT`]): the block is as it was
+/// before the run (not aborted, what earlier runs did kept).
+const RUN_UNDO: &str = "ROLLBACK TO SAVEPOINT datarig_run; RELEASE SAVEPOINT datarig_run";
+
+/// The most a block opened for manual commit may sit idle, for that transaction only (gone at
+/// its end, so nothing is left on a pooled server connection): in milliseconds, at least one
+/// (zero would turn the limit off), at most what the setting takes.
+fn idle_limit(idle: std::time::Duration) -> String {
+    let ms = idle.as_millis().clamp(1, i32::MAX as u128);
+    format!("SET LOCAL idle_in_transaction_session_timeout = {ms}")
+}
+
+/// Whether `sql` may end, open or move within the transaction itself, so a run with it gets no
+/// run savepoint ([`RUN_SAVEPOINT`]): transaction control (`COMMIT`, `ROLLBACK`, `SAVEPOINT`,
+/// `ROLLBACK TO`, …, whose effect a savepoint of the session's would break or undo) and text the
+/// session cannot tell is not (no leading word, more than one statement). `CALL` and `DO` cannot
+/// end a block (the server refuses that inside one), so they get the savepoint.
+fn controls_tx(sql: &str) -> bool {
+    match tx_after(sql) {
+        TxAfter::Same => false,
+        TxAfter::Block(_) | TxAfter::Chain => true,
+        TxAfter::Ask => {
+            let toks: Vec<Token> = lex(sql).into_iter().filter(|t| !t.is_trivia()).collect();
+            let several = toks
+                .iter()
+                .position(|t| t.kind == Tok::Semi)
+                .is_some_and(|semi| toks[semi..].iter().any(|t| t.kind != Tok::Semi));
+            several || !matches!(first_word(sql).as_deref(), Some("CALL" | "DO"))
+        }
+    }
+}
 
 /// Whether `sql`, outside the user's block on a read-only session, runs in a `BEGIN READ ONLY`
 /// transaction of its own: everything but transaction control and session settings.
@@ -191,6 +293,9 @@ struct Env<'a> {
     /// The UI asked to cancel (set by the session's canceller, cleared when a run starts): a
     /// run of several statements stops before its next one.
     cancel: &'a AtomicBool,
+    /// The run going on was answered with a failure (set by its [`Reply`] or [`Paged`], cleared
+    /// when a run starts).
+    failed: &'a AtomicBool,
     page_size: usize,
     /// The session is read-only: every transaction it opens is `READ ONLY`.
     read_only: bool,
@@ -240,6 +345,14 @@ impl Env<'_> {
     }
 
     fn report(&self, tx: &mut Tx, open: bool) {
+        // A block opened for manual commit is one once its statement succeeded.
+        if tx.block
+            && !self.failed.load(Ordering::SeqCst)
+            && let Some((id, index)) = tx.opening.take()
+        {
+            tx.manual = true;
+            let _ = self.events.send(DbEvent::ManualBegun { id, index });
+        }
         // The user's block first: the UI learns how it ended (a rollback, an aborted block
         // committed) before the transaction reads as closed.
         if tx.reported_block != tx.block {
@@ -274,14 +387,16 @@ impl Env<'_> {
 ///   ([`Reply::closed`]) answers nothing, as the UI expects.
 struct Reply<'a> {
     events: &'a UnboundedSender<DbEvent>,
+    /// Set when it answers with a failure ([`Env::failed`]).
+    failed: &'a AtomicBool,
     id: u64,
     /// An answer was given (or the UI closed the session): the drop guard stays quiet.
     answered: bool,
 }
 
 impl<'a> Reply<'a> {
-    fn new(events: &'a UnboundedSender<DbEvent>, id: u64) -> Self {
-        Self { events, id, answered: false }
+    fn new(events: &'a UnboundedSender<DbEvent>, failed: &'a AtomicBool, id: u64) -> Self {
+        Self { events, failed, id, answered: false }
     }
 
     /// The first page of the result; one failure may still follow ([`Paged::fail`]).
@@ -294,7 +409,7 @@ impl<'a> Reply<'a> {
     ) -> Paged<'a> {
         self.answered = true;
         let _ = self.events.send(DbEvent::Page { id: self.id, columns: Some(columns), rows, more, elapsed });
-        Paged { events: self.events, id: self.id }
+        Paged { events: self.events, failed: self.failed, id: self.id }
     }
 
     fn done(mut self, outcome: Outcome, elapsed: std::time::Duration) {
@@ -304,6 +419,7 @@ impl<'a> Reply<'a> {
 
     fn fail(mut self, error: DbError, cancelled: bool) {
         self.answered = true;
+        self.failed.store(true, Ordering::SeqCst);
         let _ = self.events.send(DbEvent::Failed { id: self.id, error, cancelled });
     }
 
@@ -327,6 +443,7 @@ impl<'a> Reply<'a> {
 impl Drop for Reply<'_> {
     fn drop(&mut self) {
         if !self.answered {
+            self.failed.store(true, Ordering::SeqCst);
             let _ = self.events.send(DbEvent::Failed { id: self.id, error: DbError::NoResult, cancelled: false });
             debug_assert!(std::thread::panicking(), "run {} ended without a terminal event", self.id);
         }
@@ -334,9 +451,9 @@ impl Drop for Reply<'_> {
 }
 
 /// A failure of a statement as the UI hears it (and whether it was a cancel). `path_tx`: it ran
-/// in a transaction the session opened only to set its search path: a statement
-/// that cannot run in a transaction, or a procedure that commits, failed only for that, which the
-/// UI says ([`DbError::NeedsNoTransaction`]).
+/// in a transaction the session opened only to set its search path, or one it opened for manual
+/// commit right before it: a statement that cannot run in a transaction, or a procedure that
+/// commits, failed only for that, which the UI says ([`DbError::NeedsNoTransaction`]).
 fn failure(e: &tokio_postgres::Error, path_tx: bool) -> (DbError, bool) {
     let code = e.code();
     let blocked =
@@ -351,11 +468,13 @@ fn failure(e: &tokio_postgres::Error, path_tx: bool) -> (DbError, bool) {
 /// else. Dropping it sends nothing (the page was the answer).
 struct Paged<'a> {
     events: &'a UnboundedSender<DbEvent>,
+    failed: &'a AtomicBool,
     id: u64,
 }
 
 impl Paged<'_> {
     fn fail(self, error: DbError, cancelled: bool) {
+        self.failed.store(true, Ordering::SeqCst);
         let _ = self.events.send(DbEvent::Failed { id: self.id, error, cancelled });
     }
 
@@ -431,10 +550,12 @@ pub(crate) async fn query_loop(
     events: UnboundedSender<DbEvent>,
     settings: Settings,
 ) {
+    let failed = AtomicBool::new(false);
     let env = Env {
         events: &events,
         token: &token,
         cancel: &cancel,
+        failed: &failed,
         page_size: settings.page_size,
         read_only: settings.read_only,
         path: settings.path.as_deref(),
@@ -446,9 +567,10 @@ pub(crate) async fn query_loop(
     let mut prepared = Prepared { off: !settings.statement_cache, ..Prepared::default() };
     loop {
         let stop = match link.next().await {
-            Next::Command(DbCommand::Execute { id, statements, paging }) => {
+            Next::Command(DbCommand::Execute { id, statements, paging, tx: rule }) => {
                 let mut s = State { tx: &mut tx, prepared: &mut prepared };
-                match execute(&mut client, &mut link, &env, &mut s, id, statements, None, paging).await {
+                let job = Job { statements, resume: None, paging, rule };
+                match execute(&mut client, &mut link, &env, &mut s, id, job).await {
                     Ok(()) => continue,
                     Err(stop) => stop,
                 }
@@ -456,7 +578,8 @@ pub(crate) async fn query_loop(
             // Run again past `skip` rows: an `Execute` of one statement that drops them first.
             Next::Command(DbCommand::Resume { id, sql, skip, paging }) => {
                 let mut s = State { tx: &mut tx, prepared: &mut prepared };
-                match execute(&mut client, &mut link, &env, &mut s, id, vec![sql], Some(skip), paging).await {
+                let job = Job { statements: vec![sql], resume: Some(skip), paging, rule: TxRule::Auto };
+                match execute(&mut client, &mut link, &env, &mut s, id, job).await {
                     Ok(()) => continue,
                     Err(stop) => stop,
                 }
@@ -490,6 +613,13 @@ pub(crate) async fn query_loop(
                     Err(closed) => unanswered(&events, closed, cancelled_export(id)),
                 }
             }
+            // Answered once; a session the UI closed meanwhile answers nothing.
+            Next::Command(DbCommand::EndTx { id, commit }) => {
+                match end_tx(&client, &mut link, &env, &mut tx, id, commit).await {
+                    Ok(()) => continue,
+                    Err(closed) => Stop::from(closed),
+                }
+            }
             // A fetch for a result whose portal is gone (complete, failed or closed): answered
             // with an empty last page, so the UI never waits for it.
             Next::Command(DbCommand::FetchMore { id }) => {
@@ -515,7 +645,13 @@ pub(crate) async fn query_loop(
 
 /// Ask the server whether a transaction block is open (an aborted block answers with
 /// `25P02`) and report a change.
+///
+/// Not while a run has a [`Guard`]: it ends the block or goes back to its savepoint after the
+/// failure anyway, and says how ([`settle`]).
 async fn probe(client: &Client, link: &mut Link, env: &Env<'_>, tx: &mut Tx) -> Result<(), Closed> {
+    if tx.guard != Guard::None {
+        return Ok(());
+    }
     // The simple protocol runs it as one message: outside a block its implicit transaction
     // starts with this very statement, so both timestamps are equal. (With the extended
     // protocol the timestamps of Parse and Execute differ.)
@@ -929,6 +1065,10 @@ async fn no_rows_done<'a>(
     } else {
         Some((reply, outcome))
     };
+    // It succeeded in a block opened for it (manual commit): the block is one now.
+    if tx.opening.is_some() {
+        env.report(tx, tx.block);
+    }
     match tx_after(sql) {
         TxAfter::Same => {}
         // Transaction control that succeeded leaves no aborted block (`ROLLBACK TO` repairs one).
@@ -947,23 +1087,30 @@ async fn no_rows_done<'a>(
     Ok(reply)
 }
 
+/// What a run is asked to do: its statements (one for a `Resume`, past `resume` rows), what
+/// happens to the last one's result ([`PagingMode`]) and whether its statements open a
+/// transaction for manual commit ([`TxRule`]).
+struct Job {
+    statements: Vec<String>,
+    resume: Option<u64>,
+    paging: PagingMode,
+    rule: TxRule,
+}
+
 /// Run `statements`; for the last row-returning one keep the portal open and serve
 /// `FetchMore` requests (`PagingMode::Hold`, or inside the user's block), or end it with its
 /// first page (`PagingMode::NoHold`). A command that ends the open portal is processed next.
 /// The run ends with exactly one terminal event ([`Reply`]).
-#[allow(clippy::too_many_arguments)]
 async fn execute(
     client: &mut Client,
     link: &mut Link,
     env: &Env<'_>,
     s: &mut State<'_>,
     id: u64,
-    statements: Vec<String>,
-    resume: Option<u64>,
-    paging: PagingMode,
+    job: Job,
 ) -> Result<(), Stop> {
-    let reply = Reply::new(env.events, id);
-    match run(client, link, env, s, reply, statements, resume, paging).await {
+    let reply = Reply::new(env.events, env.failed, id);
+    match run(client, link, env, s, reply, job).await {
         Ok(()) => Ok(()),
         Err(Halted { stop, reply }) => {
             match (&stop, reply) {
@@ -979,17 +1126,16 @@ async fn execute(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn run<'a>(
     client: &mut Client,
     link: &mut Link,
     env: &Env<'a>,
     s: &mut State<'_>,
     reply: Reply<'a>,
-    statements: Vec<String>,
-    resume: Option<u64>,
-    paging: PagingMode,
+    job: Job,
 ) -> Result<(), Halted<'a>> {
+    let Job { statements, resume, paging, rule } = job;
+    let id = reply.id;
     let n = statements.len();
     if s.tx.unsure {
         halt!(probe(client, link, env, s.tx).await, Some(reply));
@@ -1000,6 +1146,7 @@ async fn run<'a>(
     }
     // A cancel asked for before this run belonged to the one before.
     env.cancel.store(false, Ordering::SeqCst);
+    env.failed.store(false, Ordering::SeqCst);
     // A statement run again for the user (`Resume`): what only the server can tell for the
     // allowlist is asked first, and inside the user's block the savepoint it runs under is set
     // in the same request (made read-only before it when that is due, so a rollback to the
@@ -1030,60 +1177,192 @@ async fn run<'a>(
             return Ok(());
         }
     }
-    let mut reply = reply;
-    for (i, sql) in statements.iter().enumerate() {
-        let (skip, resume) = (resume.unwrap_or(0), resume.is_some());
-        let hold = paging == PagingMode::Hold;
-        let step = Step { last: i + 1 == n, index: i, start: Instant::now(), skip, resume, hold };
-        if n > 1 {
-            // Cancelled between two statements: the rest does not run.
-            if i > 0 && env.cancel.load(Ordering::SeqCst) {
-                reply.fail(DbError::Cancelled, true);
-                return Ok(());
-            }
-            let _ = env.events.send(DbEvent::Started { id: reply.id, index: i });
-        }
-        // `EXPLAIN ANALYZE` inside the user's block: a savepoint keeps the block as it was.
-        let savepoint = s.tx.block && rolls_back(sql);
-        if savepoint {
-            // A read-only block is made so before the savepoint: set inside it, a rollback to
-            // the savepoint would undo it.
-            let set = format!("{}SAVEPOINT {SAVEPOINT}", s.tx.take_first_text(env));
-            if let Err(e) = halt!(link.guard(Some(env.token), client.batch_execute(&set)).await, Some(reply)) {
-                // An aborted block refuses it, as it would refuse the statement.
-                reply.fail_with(&e);
-                halt!(probe(client, link, env, s.tx).await, None);
-                return Ok(());
-            }
-        }
-        let answer = statement(client, link, env, s, reply, sql, step).await?;
-        if savepoint {
-            let undo = format!("ROLLBACK TO SAVEPOINT {SAVEPOINT}; RELEASE SAVEPOINT {SAVEPOINT}");
-            let undone = halt!(link.guard(None, client.batch_execute(&undo)).await, answer.map(|(r, _)| r));
-            if let Err(e) = undone {
-                // Only a broken connection gets here; the failure aborts the block, so a later
-                // COMMIT cannot keep the statement's changes.
-                if let Some((reply, _)) = answer {
-                    reply.fail_with(&e);
-                }
-                halt!(probe(client, link, env, s.tx).await, None);
-                return Ok(());
-            }
-            // Rolled back to before the statement: a failure of it no longer aborts the block.
-            s.tx.aborted = false;
-            env.report(s.tx, s.tx.block);
-        }
-        reply = match answer {
-            Some((reply, outcome)) => {
-                let elapsed = step.start.elapsed();
-                let _ = env.events.send(DbEvent::Finished { id: reply.id, index: i, outcome, elapsed });
-                reply
-            }
-            None => return Ok(()),
-        };
+    let (opens, idle) = match &rule {
+        TxRule::Auto => (&[][..], None),
+        TxRule::Manual { opens, idle_timeout } => (&opens[..], *idle_timeout),
+    };
+    // A run (not the app's `Resume`) in a block opened for manual commit: the last run's
+    // savepoint is released and the run's own set, both with its first statement. A run with
+    // transaction control of its own gets none (its `COMMIT` would end the block under it, its
+    // `ROLLBACK TO` an earlier savepoint drop it), nor does an aborted block (it takes nothing).
+    let released = resume.is_none() && s.tx.block && s.tx.run_savepoint;
+    if released {
+        s.tx.queued.push(RUN_RELEASE.to_string());
     }
-    // The last statement always answers; a path that forgot is answered by the drop guard.
-    drop(reply);
+    if resume.is_none() && s.tx.block && s.tx.manual && !s.tx.aborted && !statements.iter().any(|q| controls_tx(q)) {
+        s.tx.queued.push(RUN_SAVEPOINT.to_string());
+        s.tx.guard = Guard::Savepoint;
+    }
+    let mut reply = reply;
+    'steps: {
+        for (i, sql) in statements.iter().enumerate() {
+            let (skip, resume) = (resume.unwrap_or(0), resume.is_some());
+            let hold = paging == PagingMode::Hold;
+            let step = Step { last: i + 1 == n, index: i, start: Instant::now(), skip, resume, hold };
+            if n > 1 {
+                // Cancelled between two statements: the rest does not run.
+                if i > 0 && env.cancel.load(Ordering::SeqCst) {
+                    reply.fail(DbError::Cancelled, true);
+                    break 'steps;
+                }
+                let _ = env.events.send(DbEvent::Started { id: reply.id, index: i });
+            }
+            // A block opened earlier in the run that a statement of the user's ended (`INSERT;
+            // COMMIT; …`): nothing of the run is left to undo; a later write opens a new one.
+            if matches!(s.tx.guard, Guard::Opened(_)) && !s.tx.block {
+                s.tx.guard = Guard::None;
+            }
+            if !s.tx.block && opens.get(i) == Some(&true) {
+                s.tx.open_manual(env, id, i, idle);
+            }
+            // `EXPLAIN ANALYZE` inside the user's block: a savepoint keeps the block as it was.
+            let savepoint = s.tx.block && rolls_back(sql);
+            if savepoint {
+                // A read-only block is made so before the savepoint: set inside it, a rollback to
+                // the savepoint would undo it.
+                let set = format!("{}SAVEPOINT {SAVEPOINT}", s.tx.take_first_text(env));
+                if let Err(e) = halt!(link.guard(Some(env.token), client.batch_execute(&set)).await, Some(reply)) {
+                    // An aborted block refuses it, as it would refuse the statement.
+                    reply.fail_with(&e);
+                    halt!(probe(client, link, env, s.tx).await, None);
+                    break 'steps;
+                }
+            }
+            let answer = statement(client, link, env, s, reply, sql, step).await?;
+            if savepoint {
+                let undo = format!("ROLLBACK TO SAVEPOINT {SAVEPOINT}; RELEASE SAVEPOINT {SAVEPOINT}");
+                let undone = halt!(link.guard(None, client.batch_execute(&undo)).await, answer.map(|(r, _)| r));
+                if let Err(e) = undone {
+                    // Only a broken connection gets here; the failure aborts the block, so a later
+                    // COMMIT cannot keep the statement's changes.
+                    if let Some((reply, _)) = answer {
+                        reply.fail_with(&e);
+                    }
+                    halt!(probe(client, link, env, s.tx).await, None);
+                    break 'steps;
+                }
+                // Rolled back to before the statement: a failure of it no longer aborts the block.
+                s.tx.aborted = false;
+                env.report(s.tx, s.tx.block);
+            }
+            reply = match answer {
+                Some((reply, outcome)) => {
+                    let elapsed = step.start.elapsed();
+                    let _ = env.events.send(DbEvent::Finished { id: reply.id, index: i, outcome, elapsed });
+                    reply
+                }
+                None => break 'steps,
+            };
+        }
+        // The last statement always answers; a path that forgot is answered by the drop guard.
+        drop(reply);
+    }
+    halt!(settle(client, link, env, s.tx, id, released).await, None);
+    Ok(())
+}
+
+/// After run `id`: what it queued for its first statement and did not send is dropped (a
+/// statement refused before it was sent; nothing of it ran in a block), the release of the last
+/// run's savepoint is done when it went out (`released`), the run savepoint of a run that went
+/// well stays for the next run to release, and a block opened for the run is reported once
+/// (if no path did yet). A run that failed or was cancelled under a [`Guard`] is undone: the
+/// block it opened is rolled back ([`DbEvent::ManualRolledBack`]), or the block goes back to
+/// the run savepoint ([`DbEvent::RunRolledBack`]); when that fails, the server is asked.
+async fn settle(
+    client: &Client,
+    link: &mut Link,
+    env: &Env<'_>,
+    tx: &mut Tx,
+    id: u64,
+    released: bool,
+) -> Result<(), Closed> {
+    let guard = std::mem::take(&mut tx.guard);
+    if !tx.queued.is_empty() {
+        tx.queued.clear();
+        if tx.opening.take().is_some() {
+            tx.block = false;
+        }
+        return Ok(());
+    }
+    if released {
+        tx.run_savepoint = false;
+    }
+    let failed = env.failed.load(Ordering::SeqCst);
+    match guard {
+        Guard::Savepoint if !failed => tx.run_savepoint = true,
+        _ if !failed => {}
+        Guard::None => {}
+        Guard::Opened(index) => {
+            tx.opening = None;
+            if link.guard(None, client.batch_execute("ROLLBACK")).await?.is_err() {
+                return probe(client, link, env, tx).await;
+            }
+            tx.set_block(false, env.wraps());
+            (tx.aborted, tx.unsure) = (false, false);
+            let _ = env.events.send(DbEvent::ManualRolledBack { id, index });
+            env.report(tx, false);
+        }
+        Guard::Savepoint => {
+            if link.guard(None, client.batch_execute(RUN_UNDO)).await?.is_err() {
+                return probe(client, link, env, tx).await;
+            }
+            tx.aborted = false;
+            let _ = env.events.send(DbEvent::RunRolledBack { id });
+            env.report(tx, tx.block);
+        }
+    }
+    if tx.opening.is_some() {
+        env.report(tx, tx.block);
+    }
+    Ok(())
+}
+
+/// End the open block for the user (`DbCommand::EndTx` `id`): `COMMIT` (`commit`) or
+/// `ROLLBACK` as a query of its own, answered with exactly one `TxEnded` or `Failed`, then the
+/// state. The server's command tag tells a commit from the rollback it does instead of
+/// committing an aborted block ([`TxOutcome::RolledBackInstead`]). A refused commit (a deferred
+/// constraint, a serialization failure) ended the block on the server: the probe says so. A
+/// connection that ended meanwhile leaves a commit's outcome unknown ([`DbError::CommitUnknown`]),
+/// and `Lost` follows.
+async fn end_tx(
+    client: &Client,
+    link: &mut Link,
+    env: &Env<'_>,
+    tx: &mut Tx,
+    id: u64,
+    commit: bool,
+) -> Result<(), Closed> {
+    if tx.unsure {
+        probe(client, link, env, tx).await?;
+    }
+    if !tx.block {
+        let _ = env.events.send(DbEvent::Failed { id, error: DbError::NoTransaction, cancelled: false });
+        return Ok(());
+    }
+    let sql = if commit { "COMMIT" } else { "ROLLBACK" };
+    match link.guard(None, client.command_tag(sql)).await? {
+        Ok(tag) => {
+            let outcome = match (commit, tag.as_str()) {
+                (false, _) => TxOutcome::RolledBack,
+                (true, "ROLLBACK") => TxOutcome::RolledBackInstead,
+                (true, _) => TxOutcome::Committed,
+            };
+            let _ = env.events.send(DbEvent::TxEnded { id, outcome });
+            tx.set_block(false, env.wraps());
+            (tx.aborted, tx.unsure) = (false, false);
+            env.report(tx, false);
+        }
+        // The connection ended (a server error that ends the session is a `FATAL` one).
+        Err(e) if e.as_db_error().is_none_or(|d| matches!(d.severity(), "FATAL" | "PANIC")) => {
+            let error = if commit { DbError::CommitUnknown } else { db_error(&e) };
+            let _ = env.events.send(DbEvent::Failed { id, error, cancelled: false });
+            tx.unsure = true;
+        }
+        Err(e) => {
+            let _ = env.events.send(DbEvent::Failed { id, error: db_error(&e), cancelled: false });
+            probe(client, link, env, tx).await?;
+        }
+    }
     Ok(())
 }
 
@@ -1207,7 +1486,7 @@ async fn statement<'a>(
                     continue;
                 }
                 Err(e) => {
-                    reply.fail_with(&e);
+                    reply.fail_in(&e, s.tx.opening.is_some());
                     halt!(probe(client, link, env, s.tx).await, None);
                     Ok(None)
                 }
@@ -1310,6 +1589,9 @@ async fn no_rows<'a>(
                 } else {
                     Some((reply, Outcome::Command(command_tag(sql).0)))
                 };
+                if tx.opening.is_some() {
+                    env.report(tx, tx.block);
+                }
                 match tx_after(sql) {
                     TxAfter::Same => {}
                     _ => halt!(probe(client, link, env, tx).await, reply.map(|(r, _)| r)),
@@ -1318,7 +1600,7 @@ async fn no_rows<'a>(
             }
         },
         Err(e) => {
-            reply.fail_in(&e, after.is_some() && env.path.is_some());
+            reply.fail_in(&e, after.is_some() && env.path.is_some() || tx.opening.is_some());
             halt!(probe(client, link, env, tx).await, None);
             Ok(None)
         }
@@ -1352,6 +1634,12 @@ async fn prepare(
             let first = tx.take_first(env);
             client.prepare_wrapped(sql, &first, None).await
         }
+        // What is queued (a manual commit's `BEGIN`, the run savepoint) goes out first: a
+        // statement that fails to parse would abort the block without it.
+        _ if !tx.queued.is_empty() => {
+            let first = tx.take_first(env);
+            client.prepare_wrapped(sql, &first, None).await
+        }
         _ => client.prepare(sql).await,
     }
 }
@@ -1382,8 +1670,9 @@ async fn wrapped_no_rows<'a>(
     sql: &str,
     step: Step,
 ) -> Result<Option<(Reply<'a>, Outcome)>, Halted<'a>> {
-    // A transaction of the session's own that sets the path (not the user's block).
-    let path_tx = !tx.block && env.path.is_some();
+    // A transaction of the session's own that sets the path (not the user's block), or one
+    // opened for it (manual commit).
+    let path_tx = !tx.block && env.path.is_some() || tx.opening.is_some();
     let txn = if tx.block {
         client.transaction_in_block_with(tx.take_first(env))
     } else {
@@ -1540,7 +1829,7 @@ async fn portal<'a>(
                 env.report(tx, tx.block);
                 return Ok(After::Stale { all: gone(&e), reply });
             }
-            reply.fail_in(&e, !tx.block && env.path.is_some());
+            reply.fail_in(&e, !tx.block && env.path.is_some() || tx.opening.is_some());
             return Ok(After::Failed);
         }
     };

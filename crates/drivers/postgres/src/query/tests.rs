@@ -1,6 +1,48 @@
 use super::{
-    TxAfter, command_tag, copies_with_client, forgets_prepared, plain_read, returns_no_rows, split_page, tx_after,
+    TxAfter, command_tag, controls_tx, copies_with_client, forgets_prepared, idle_limit, plain_read, returns_no_rows,
+    split_page, tx_after,
 };
+
+/// A run with transaction control of the user's (or text the session cannot tell has none)
+/// gets no run savepoint; `CALL` and `DO`, which cannot end a block, do.
+#[test]
+fn transaction_control_keeps_the_run_savepoint_out() {
+    for sql in [
+        "COMMIT",
+        "rollback",
+        "END",
+        "SAVEPOINT x",
+        "RELEASE x",
+        "ROLLBACK TO SAVEPOINT x",
+        "BEGIN",
+        "COMMIT AND CHAIN",
+        "PREPARE TRANSACTION 'x'",
+        "COMMIT PREPARED 'x'",
+        "SELECT 1; COMMIT",
+        "CALL p(); COMMIT",
+        "",
+    ] {
+        assert!(controls_tx(sql), "{sql:?}");
+    }
+    for sql in
+        ["INSERT INTO t VALUES (1)", "CALL p()", "do $$ begin null; end $$", "SELECT 1", "ALTER TABLE t ADD c int"]
+    {
+        assert!(!controls_tx(sql), "{sql:?}");
+    }
+}
+
+/// The idle limit is whole milliseconds for the transaction only, never zero (which turns it
+/// off) and never past what the setting takes.
+#[test]
+fn the_idle_limit_is_set_for_the_transaction() {
+    use std::time::Duration;
+    assert_eq!(idle_limit(Duration::from_secs(1800)), "SET LOCAL idle_in_transaction_session_timeout = 1800000");
+    assert_eq!(idle_limit(Duration::from_micros(10)), "SET LOCAL idle_in_transaction_session_timeout = 1");
+    assert_eq!(
+        idle_limit(Duration::from_secs(u64::MAX)),
+        format!("SET LOCAL idle_in_transaction_session_timeout = {}", i32::MAX)
+    );
+}
 
 #[test]
 fn tags() {
@@ -259,9 +301,9 @@ fn statements_that_deallocate_prepared_statements() {
 // ── every run ends with exactly one terminal event ───────────────────────────
 
 mod terminal {
-    use super::super::{BeforeBind, Env, Prepared, Reply, State, Tx, execute};
+    use super::super::{BeforeBind, Env, Job, Prepared, Reply, State, Tx, execute};
     use crate::link::Link;
-    use datarig_core::driver::{DbCommand, DbError, DbEvent, PagingMode};
+    use datarig_core::driver::{DbCommand, DbError, DbEvent, PagingMode, TxRule};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
@@ -322,6 +364,7 @@ mod terminal {
         prepared: Prepared,
         id: u64,
         cancel: Arc<AtomicBool>,
+        failed: AtomicBool,
         /// What a result with more rows keeps (`Hold` unless a test says otherwise).
         paging: PagingMode,
     }
@@ -348,6 +391,7 @@ mod terminal {
                 prepared: Prepared::default(),
                 id: 0,
                 cancel: Arc::new(AtomicBool::new(false)),
+                failed: AtomicBool::new(false),
                 paging: PagingMode::Hold,
             }
         }
@@ -359,6 +403,7 @@ mod terminal {
                 events: &self.events,
                 token: &self.token,
                 cancel: &self.cancel,
+                failed: &self.failed,
                 page_size: 10,
                 read_only: false,
                 path: None,
@@ -367,7 +412,8 @@ mod terminal {
             };
             let mut s = State { tx: &mut self.tx, prepared: &mut self.prepared };
             let statements = statements.iter().map(|s| s.to_string()).collect();
-            let run = execute(&mut self.client, &mut self.link, &env, &mut s, self.id, statements, None, self.paging);
+            let job = Job { statements, resume: None, paging: self.paging, rule: TxRule::Auto };
+            let run = execute(&mut self.client, &mut self.link, &env, &mut s, self.id, job);
             tokio::time::timeout(std::time::Duration::from_secs(20), run).await.expect("the run returns").ok();
             let mut events = Vec::new();
             while let Ok(ev) = self.rx.try_recv() {
@@ -384,6 +430,7 @@ mod terminal {
                 events: &self.events,
                 token: &self.token,
                 cancel: &self.cancel,
+                failed: &self.failed,
                 page_size: 10,
                 read_only: false,
                 path: None,
@@ -391,16 +438,8 @@ mod terminal {
                 before_bind: hook,
             };
             let mut s = State { tx: &mut self.tx, prepared: &mut self.prepared };
-            let run = execute(
-                &mut self.client,
-                &mut self.link,
-                &env,
-                &mut s,
-                self.id,
-                vec![sql.to_string()],
-                None,
-                self.paging,
-            );
+            let job = Job { statements: vec![sql.to_string()], resume: None, paging: self.paging, rule: TxRule::Auto };
+            let run = execute(&mut self.client, &mut self.link, &env, &mut s, self.id, job);
             tokio::time::timeout(std::time::Duration::from_secs(20), run).await.expect("the run returns").ok();
             let mut terminal = Vec::new();
             while let Ok(ev) = self.rx.try_recv() {
@@ -781,21 +820,23 @@ mod terminal {
     #[test]
     fn an_unanswered_run_answers_when_dropped() {
         let (events, mut rx) = unbounded_channel();
-        let dropped = std::panic::catch_unwind(move || drop(Reply::new(&events, 7)));
+        let failed = AtomicBool::new(false);
+        let dropped = std::panic::catch_unwind(move || drop(Reply::new(&events, &failed, 7)));
         assert_eq!(dropped.is_err(), cfg!(debug_assertions), "the debug assertion");
         assert!(matches!(rx.try_recv(), Ok(DbEvent::Failed { id: 7, error: DbError::NoResult, cancelled: false })));
         assert!(rx.try_recv().is_err(), "once");
         // Answered, or closed by the UI: nothing more. (Each answer consumes the reply, so a
         // second one does not compile.)
         let (events, mut rx) = unbounded_channel();
-        Reply::new(&events, 8).fail(DbError::SchemaChanged, false);
-        Reply::new(&events, 9).closed();
+        let failed = AtomicBool::new(false);
+        Reply::new(&events, &failed, 8).fail(DbError::SchemaChanged, false);
+        Reply::new(&events, &failed, 9).closed();
         assert!(matches!(rx.try_recv(), Ok(DbEvent::Failed { id: 8, .. })));
         assert!(rx.try_recv().is_err());
         // A first page may be followed by one failure, and dropping it sends nothing more.
-        let paged = Reply::new(&events, 10).page(Vec::new(), Vec::new(), true, std::time::Duration::ZERO);
+        let paged = Reply::new(&events, &failed, 10).page(Vec::new(), Vec::new(), true, std::time::Duration::ZERO);
         paged.fail(DbError::Closed, false);
-        let _paged = Reply::new(&events, 11).page(Vec::new(), Vec::new(), false, std::time::Duration::ZERO);
+        let _paged = Reply::new(&events, &failed, 11).page(Vec::new(), Vec::new(), false, std::time::Duration::ZERO);
         assert!(matches!(rx.try_recv(), Ok(DbEvent::Page { id: 10, columns: Some(_), .. })));
         assert!(matches!(rx.try_recv(), Ok(DbEvent::Failed { id: 10, error: DbError::Closed, .. })));
         assert!(matches!(rx.try_recv(), Ok(DbEvent::Page { id: 11, .. })));

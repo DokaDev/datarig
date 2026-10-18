@@ -79,6 +79,7 @@ use crate::session::{Gate, Killer, Server, Tracked, my_error};
 use crate::values::{column_meta, display};
 use datarig_core::driver::{
     CancelFailure, Cell, ColumnMeta, DbCommand, DbError, DbEvent, Outcome, PagingMode, SessionValues, StatementInfo,
+    TxRule,
 };
 use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
 use datarig_core::sql::lexer::{Tok, Token, lex_in};
@@ -337,8 +338,13 @@ pub(crate) async fn query_loop(
     };
     let stop = loop {
         let done = match link.next().await {
-            Next::Command(DbCommand::Execute { id, statements, paging }) => {
+            Next::Command(DbCommand::Execute { id, statements, paging, tx: TxRule::Auto }) => {
                 execute(&mut conn, &mut link, &env, &mut s, id, statements, None, paging).await
+            }
+            // Manual commit is not the driver's yet (`Capabilities::manual_commit`): nothing runs.
+            Next::Command(DbCommand::Execute { id, tx: TxRule::Manual { .. }, .. } | DbCommand::EndTx { id, .. }) => {
+                let _ = events.send(DbEvent::Failed { id, error: DbError::NotSupported, cancelled: false });
+                Ok(())
             }
             Next::Command(DbCommand::Resume { id, sql, skip, paging }) => {
                 execute(&mut conn, &mut link, &env, &mut s, id, vec![sql], Some(skip), paging).await
@@ -408,7 +414,7 @@ pub(crate) async fn query_loop(
 /// run fails with it, as a running statement does; a count or a check gets it as its result.
 fn unanswered(events: &UnboundedSender<DbEvent>, c: DbCommand, error: &DbError) {
     let ev = match c {
-        DbCommand::Execute { id, .. } | DbCommand::Resume { id, .. } => {
+        DbCommand::Execute { id, .. } | DbCommand::Resume { id, .. } | DbCommand::EndTx { id, .. } => {
             DbEvent::Failed { id, error: error.clone(), cancelled: false }
         }
         DbCommand::Count { id, .. } => DbEvent::Counted { id, result: Err(error.clone()), snapshot: false },

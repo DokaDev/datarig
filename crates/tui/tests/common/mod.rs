@@ -6,12 +6,12 @@
 #![allow(dead_code)]
 
 use datarig_core::config::Config;
-use datarig_core::driver::PagingMode;
 use datarig_core::driver::structure::TableStructure;
 use datarig_core::driver::{
     Canceller, Capabilities, ColumnMeta, ColumnOrigin, ConnectOptions, DbCommand, DbEvent, Driver, ExplainFormat,
     Hierarchy, KeyCatalog, PingError, PingInfo, Session, SessionRole, ValueKind,
 };
+use datarig_core::driver::{PagingMode, TxRule};
 use datarig_core::i18n::Lang;
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::secret::{MemoryStore, SecretStore};
@@ -108,6 +108,7 @@ impl Driver for FakeDriver {
                 .then_some(ExplainFormat::PostgresJson),
             reads_held_to_end: self.mysql.load(Ordering::SeqCst),
             export: true,
+            manual_commit: !self.mysql.load(Ordering::SeqCst),
         }
     }
 
@@ -1238,7 +1239,7 @@ pub fn with_edge_results(lang: Lang) -> Harness {
     h.ctrl('e');
     let sent = h.sent();
     assert!(
-        matches!(&sent[..], [DbCommand::Execute { id: 1, statements, paging: PagingMode::NoHold }] if statements == &["SELECT * FROM shop.users WHERE id <= 8"]),
+        matches!(&sent[..], [DbCommand::Execute { id: 1, statements, paging: PagingMode::NoHold, tx: TxRule::Auto }] if statements == &["SELECT * FROM shop.users WHERE id <= 8"]),
         "{sent:?}"
     );
     let (cols, rows) = edge_rows();

@@ -112,9 +112,8 @@ pub(crate) async fn meta_loop(mut conn: Conn, mut link: Link, events: UnboundedS
                 DbCommand::Execute { id, .. }
                 | DbCommand::Resume { id, .. }
                 | DbCommand::FetchMore { id }
-                | DbCommand::ClosePortal { id } => {
-                    DbEvent::Failed { id, error: DbError::NotSupported, cancelled: false }
-                }
+                | DbCommand::ClosePortal { id }
+                | DbCommand::EndTx { id, .. } => DbEvent::Failed { id, error: DbError::NotSupported, cancelled: false },
                 DbCommand::Count { id, .. } => {
                     DbEvent::Counted { id, result: Err(DbError::NotSupported), snapshot: false }
                 }

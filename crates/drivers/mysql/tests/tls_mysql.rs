@@ -11,7 +11,9 @@
 //! verified logins is emptied first (`FLUSH PRIVILEGES`), so the server asks for the password
 //! itself.
 
-use datarig_core::driver::{ConnectOptions, DbCommand, DbError, DbEvent, Driver, PagingMode, Session, SessionRole};
+use datarig_core::driver::{
+    ConnectOptions, DbCommand, DbError, DbEvent, Driver, PagingMode, Session, SessionRole, TxRule,
+};
 use datarig_core::fault::Fault;
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::profile::dsn;
@@ -105,7 +107,12 @@ async fn connect(cfg: &ConnectionConfig, dialer: Option<DialerRef>) -> Result<En
 /// The first cell of `sql` run on a query session of `cfg` (connected).
 async fn cell(cfg: &ConnectionConfig, sql: &str) -> Option<String> {
     let (session, mut rx) = start(cfg, SessionRole::Query, None);
-    session.send(DbCommand::Execute { id: 1, statements: vec![sql.into()], paging: PagingMode::Hold });
+    session.send(DbCommand::Execute {
+        id: 1,
+        statements: vec![sql.into()],
+        paging: PagingMode::Hold,
+        tx: TxRule::Auto,
+    });
     loop {
         match next(&mut rx).await {
             DbEvent::Page { rows, .. } => return rows.first().and_then(|r| r.get(1).or(r.first())).cloned().flatten(),
@@ -121,7 +128,12 @@ async fn forget_logins(env: &Env) {
     let mut admin = profile(&env.admin, "REQUIRED", &env.certs, None);
     admin.database = String::new();
     let (session, mut rx) = start(&admin, SessionRole::Query, None);
-    session.send(DbCommand::Execute { id: 1, statements: vec!["FLUSH PRIVILEGES".into()], paging: PagingMode::Hold });
+    session.send(DbCommand::Execute {
+        id: 1,
+        statements: vec!["FLUSH PRIVILEGES".into()],
+        paging: PagingMode::Hold,
+        tx: TxRule::Auto,
+    });
     loop {
         match next(&mut rx).await {
             DbEvent::Done { .. } => return,
@@ -299,7 +311,12 @@ async fn through_a_tunnel_the_profiles_host_is_checked_and_the_kill_is_encrypted
             _ => {}
         }
     }
-    session.send(DbCommand::Execute { id: 1, statements: vec!["SELECT SLEEP(30)".into()], paging: PagingMode::Hold });
+    session.send(DbCommand::Execute {
+        id: 1,
+        statements: vec!["SELECT SLEEP(30)".into()],
+        paging: PagingMode::Hold,
+        tx: TxRule::Auto,
+    });
     tokio::time::sleep(Duration::from_millis(1500)).await;
     let t0 = Instant::now();
     session.cancel();

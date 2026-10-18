@@ -69,6 +69,7 @@ impl Driver for MyDriver {
             explain: None,
             reads_held_to_end: true,
             export: true,
+            manual_commit: false,
         }
     }
 

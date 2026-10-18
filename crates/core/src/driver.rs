@@ -11,7 +11,7 @@ pub use keys::{KeyCatalog, KeyMarks};
 pub use protocol::{
     ArrayElement, CancelFailure, Cell, ColumnMeta, ColumnOrigin, DbCommand, DbError, DbEvent, EXPORT_BATCH_BYTES,
     ExportBatch, ExportGuard, ExportRead, ExportSink, Outcome, PagingMode, ReadIn, SchemaObjects, SessionValues,
-    StatementInfo, ValueKind,
+    StatementInfo, TxOutcome, TxRule, ValueKind,
 };
 
 use crate::profile::ConnectionConfig;
@@ -69,6 +69,10 @@ pub struct Capabilities {
     /// Exports: the query session reads every row of a statement into a bounded channel
     /// ([`DbCommand::Export`]) for the app to write to a file.
     pub export: bool,
+    /// Manual commit: the query session opens a transaction for a run's writes and keeps it open
+    /// for the user ([`TxRule::Manual`]), and ends one when asked ([`DbCommand::EndTx`]). A driver
+    /// without it answers both with [`DbError::NotSupported`] and runs nothing.
+    pub manual_commit: bool,
 }
 
 /// How a server's namespaces nest (`Capabilities::hierarchy`).

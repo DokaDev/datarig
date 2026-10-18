@@ -9,11 +9,12 @@
 //! * unset locally  -> each test prints a visible `SKIPPED` line to stderr and returns;
 //! * unset with `DATARIG_REQUIRE_POOLER=1` (CI's `integration` job) -> the test fails.
 //!
-//! The tests only read: nothing is created behind the pooler.
+//! The tests only read: nothing is created behind the pooler (a temporary table dropped with
+//! its transaction at most).
 
-use datarig_core::driver::PagingMode;
 use datarig_core::driver::ddl::DdlObject;
 use datarig_core::driver::{ConnectOptions, DbCommand, DbError, DbEvent, Driver, Session, SessionContext, SessionRole};
+use datarig_core::driver::{PagingMode, TxOutcome, TxRule};
 use datarig_core::profile::ConnectionConfig;
 use datarig_driver_postgres::PgDriver;
 use std::io::Write;
@@ -77,7 +78,12 @@ impl Conn {
     }
 
     async fn run(&mut self, id: u64, sql: &str) -> DbEvent {
-        self.session.send(DbCommand::Execute { id, statements: vec![sql.to_string()], paging: PagingMode::Hold });
+        self.session.send(DbCommand::Execute {
+            id,
+            statements: vec![sql.to_string()],
+            paging: PagingMode::Hold,
+            tx: TxRule::Auto,
+        });
         self.wait(
             |e| matches!(e, DbEvent::Page { id: i, .. } | DbEvent::Done { id: i, .. } | DbEvent::Failed { id: i, .. } if *i == id),
             30,
@@ -300,7 +306,12 @@ async fn results_not_held_page_behind_a_pooler() {
         let mut id = 0;
         for round in 0..10 {
             id += 1;
-            c.session.send(DbCommand::Execute { id, statements: vec![sql.into()], paging: PagingMode::NoHold });
+            c.session.send(DbCommand::Execute {
+                id,
+                statements: vec![sql.into()],
+                paging: PagingMode::NoHold,
+                tx: TxRule::Auto,
+            });
             let first = c
                 .wait(|e| matches!(e, DbEvent::Released { .. } | DbEvent::Page { .. } | DbEvent::Failed { .. }), 30)
                 .await;
@@ -358,7 +369,7 @@ async fn copy_to_the_client_is_refused_behind_a_pooler() {
         let opts = ConnectOptions::new(PAGE, SessionRole::Query, "pool").read_only(read_only).statement_cache(cache);
         let mut c = Conn::open_with(&url, SessionRole::Query, opts).await;
         for (id, paging) in [(1, PagingMode::Hold), (2, PagingMode::NoHold)] {
-            c.session.send(DbCommand::Execute { id, statements: vec![copy.into()], paging });
+            c.session.send(DbCommand::Execute { id, statements: vec![copy.into()], paging, tx: TxRule::Auto });
             let ev = c
                 .wait(|e| matches!(e, DbEvent::Page { id: i, .. } | DbEvent::Done { id: i, .. } | DbEvent::Failed { id: i, .. } if *i == id), 30)
                 .await;
@@ -433,7 +444,7 @@ async fn a_copy_hidden_by_backslash_strings_is_refused_behind_a_pooler() {
         assert!(matches!(ev, DbEvent::Done { .. }), "{sql}: {ev:?}");
     }
     let copy = format!(r"COPY (SELECT g, 'a\'' FROM generate_series(1, 200000000) g) TO STDOUT -- ' {tag}");
-    c.session.send(DbCommand::Execute { id: 3, statements: vec![copy], paging: PagingMode::Hold });
+    c.session.send(DbCommand::Execute { id: 3, statements: vec![copy], paging: PagingMode::Hold, tx: TxRule::Auto });
     let mut seen = Vec::new();
     let mut deadline = Instant::now() + Duration::from_secs(10);
     while let Ok(Some(ev)) = tokio::time::timeout_at(deadline.into(), c.rx.recv()).await {
@@ -479,6 +490,7 @@ async fn a_copy_of_a_table_named_to_is_refused_behind_a_pooler() {
         id: 3,
         statements: vec!["COPY pg_temp.to TO STDOUT".into()],
         paging: PagingMode::Hold,
+        tx: TxRule::Auto,
     });
     let mut seen = Vec::new();
     let mut deadline = Instant::now() + Duration::from_secs(10);
@@ -514,6 +526,7 @@ async fn a_cancel_goes_through_the_pooler_and_the_session_works_on() {
         id: 1,
         statements: vec!["SELECT pg_sleep(30)".into()],
         paging: PagingMode::Hold,
+        tx: TxRule::Auto,
     });
     // A cancel that arrives before the statement runs is lost; this one is well after.
     tokio::time::sleep(Duration::from_millis(1500)).await;
@@ -536,4 +549,91 @@ async fn a_cancel_goes_through_the_pooler_and_the_session_works_on() {
     assert_eq!(rows[0][0].as_deref(), Some("42"));
     // Nothing else came: no `Lost` after the answer either.
     assert!(c.rx.try_recv().is_err());
+}
+
+impl Conn {
+    /// Every event `cmd` brings, up to the state that follows its answer (a fetch of no result
+    /// answers at once, without asking the server, after them).
+    async fn events_of(&mut self, cmd: DbCommand) -> Vec<DbEvent> {
+        const MARK: u64 = u64::MAX;
+        self.session.send(cmd);
+        self.session.send(DbCommand::FetchMore { id: MARK });
+        let mut out = Vec::new();
+        loop {
+            match self.wait(|_| true, 30).await {
+                DbEvent::Page { id: MARK, .. } => return out,
+                ev => out.push(ev),
+            }
+        }
+    }
+}
+
+/// Manual commit behind the pooler, with the statement cache off and on: from the first write
+/// (a temporary table dropped when the transaction ends, so nothing is left behind) to the
+/// commit, the transaction stays on one server connection, and row-returning statements run in
+/// it; its idle limit (`SET LOCAL`, with the `BEGIN`) is that transaction's only: the pooled
+/// connections show the server's defaults afterwards, as they do `lock_timeout`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_manual_transaction_stays_on_one_server_connection_behind_a_pooler() {
+    let Some(url) = pooler_url("a_manual_transaction_stays_on_one_server_connection_behind_a_pooler") else {
+        return;
+    };
+    let mut other = Conn::open(&url, SessionRole::Query, false).await;
+    let show = "SHOW idle_in_transaction_session_timeout";
+    let DbEvent::Page { rows, .. } = other.run(1, show).await else { panic!("{show}") };
+    let idle = rows[0][0].clone();
+    let mut id = 1;
+    for cache in [false, true] {
+        let mut q = Conn::open(&url, SessionRole::Query, cache).await;
+        let rule =
+            |opens: &[bool]| TxRule::Manual { opens: opens.to_vec(), idle_timeout: Some(Duration::from_secs(90)) };
+        let run = |id, sqls: &[&str], tx| DbCommand::Execute {
+            id,
+            statements: sqls.iter().map(|s| s.to_string()).collect(),
+            paging: PagingMode::Hold,
+            tx,
+        };
+        let first = [
+            "CREATE TEMP TABLE zz_manual (x int) ON COMMIT DROP",
+            "INSERT INTO zz_manual VALUES (1) RETURNING x",
+            "SELECT pg_backend_pid()",
+        ];
+        let events = q.events_of(run(1, &first, rule(&[true, true, false]))).await;
+        assert!(events.iter().any(|e| matches!(e, DbEvent::ManualBegun { id: 1, index: 0 })), "{events:?}");
+        let Some(DbEvent::Page { rows, .. }) = events.iter().find(|e| matches!(e, DbEvent::Page { id: 1, .. })) else {
+            panic!("cache {cache}: {events:?}")
+        };
+        let pid = rows[0][0].clone();
+        for i in 2..8 {
+            let sqls =
+                ["INSERT INTO zz_manual SELECT max(x) + 1 FROM zz_manual RETURNING x", "SELECT pg_backend_pid()"];
+            let events = q.events_of(run(i, &sqls, rule(&[true, false]))).await;
+            let Some(DbEvent::Page { rows, .. }) =
+                events.iter().find(|e| matches!(e, DbEvent::Page { id, .. } if *id == i))
+            else {
+                panic!("cache {cache}: {events:?}")
+            };
+            assert_eq!(rows[0][0], pid, "cache {cache}: one server connection for the transaction");
+        }
+        let DbEvent::Page { rows, .. } = q.run(8, "SELECT count(*) FROM zz_manual").await else { panic!() };
+        assert_eq!(rows[0][0].as_deref(), Some("7"), "cache {cache}");
+        let DbEvent::Page { rows, .. } = q.run(9, show).await else { panic!() };
+        assert_eq!(rows[0][0].as_deref(), Some("90s"), "cache {cache}: the transaction's limit");
+        let events = q.events_of(DbCommand::EndTx { id: 10, commit: true }).await;
+        assert!(
+            events.iter().any(|e| matches!(e, DbEvent::TxEnded { id: 10, outcome: TxOutcome::Committed })),
+            "cache {cache}: {events:?}"
+        );
+        assert!(events.iter().any(|e| matches!(e, DbEvent::Block(false))), "{events:?}");
+        for _ in 0..8 {
+            for c in [&mut q, &mut other] {
+                id += 1;
+                let DbEvent::Page { rows, .. } = c.run(id, show).await else { panic!() };
+                assert_eq!(rows[0][0], idle, "cache {cache}: nothing left on the server connection");
+                id += 1;
+                let DbEvent::Page { rows, .. } = c.run(id, "SHOW lock_timeout").await else { panic!() };
+                assert_eq!(rows[0][0].as_deref(), Some("0"), "cache {cache}: nothing left on the server connection");
+            }
+        }
+    }
 }

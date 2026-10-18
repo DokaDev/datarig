@@ -107,6 +107,14 @@ trip per step. These additions put the steps of one request into one write with 
   `pipeline::prepare_wrapped` (`s<prefix>_<n>` with a random prefix per process,
   see below).
 
+**Command tags**:
+
+- `src/simple_query.rs`: `command_tag`, a copy of `batch_execute` that keeps the tag of the
+  last `CommandComplete` (upstream's simple-query API answers only the rows affected).
+- `src/client.rs`: `Client::command_tag`, the public method behind it. The query session ends
+  a transaction with it, because PostgreSQL answers `COMMIT` of an aborted transaction with the
+  tag `ROLLBACK` and no error.
+
 **Statements that live in one transaction** (a pooler in transaction mode
 without prepared statement support, where the next transaction may run on another server
 connection):

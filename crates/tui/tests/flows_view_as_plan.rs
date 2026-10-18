@@ -9,7 +9,7 @@ mod common;
 
 use common::*;
 use datarig_core::config::Config;
-use datarig_core::driver::{DbCommand, DbEvent, PagingMode};
+use datarig_core::driver::{DbCommand, DbEvent, PagingMode, TxRule};
 use datarig_core::i18n::{Label, Lang, Msg};
 use datarig_core::policy::Policy;
 use datarig_core::profile::ConnectionConfig;
@@ -60,7 +60,9 @@ fn runs(h: &mut Harness) -> Vec<(u64, Vec<String>)> {
     h.sent()
         .into_iter()
         .filter_map(|c| match c {
-            DbCommand::Execute { id, statements, paging: PagingMode::NoHold } => Some((id, statements)),
+            DbCommand::Execute { id, statements, paging: PagingMode::NoHold, tx: TxRule::Auto } => {
+                Some((id, statements))
+            }
             _ => None,
         })
         .collect()

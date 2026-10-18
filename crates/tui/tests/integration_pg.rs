@@ -14,7 +14,7 @@
 mod pg_clean;
 
 use datarig_core::config::Config;
-use datarig_core::driver::PagingMode;
+use datarig_core::driver::{PagingMode, TxRule};
 use datarig_core::i18n::Lang;
 use datarig_core::profile::{ConnectionConfig, ProfileId};
 use datarig_core::secret::{MemoryStore, SecretStore};
@@ -223,7 +223,12 @@ impl Observer {
         use datarig_core::driver::{DbCommand, DbEvent};
         self.seq += 1;
         let id = self.seq;
-        self.session.send(DbCommand::Execute { id, statements: vec![sql.to_string()], paging: PagingMode::Hold });
+        self.session.send(DbCommand::Execute {
+            id,
+            statements: vec![sql.to_string()],
+            paging: PagingMode::Hold,
+            tx: TxRule::Auto,
+        });
         loop {
             match tokio::time::timeout(Duration::from_secs(10), self.rx.recv()).await {
                 Ok(Some(DbEvent::Page { id: i, rows, .. })) if i == id => {
