@@ -6,9 +6,9 @@
 //!                               [--delay-ms MS] [--max-pages N] [--idle-secs S]
 //! ```
 //!
-//! Scenarios: `rtt`, `rtt_ssh`, `rtt_mysql`, `paging`, `export_stream`, `export_keyset`, `export_xlsx`, `editor`,
-//! `editor_block`, `editor_mysql`, `grid`, `plan`, `chart`, `explorer`, `idle`, `startup`, or `all`. The PostgreSQL
-//! ones (`rtt`, `rtt_ssh`, `paging`, `export_stream`, `export_keyset`, `export_xlsx`, `idle`) need
+//! Scenarios: `rtt`, `rtt_ssh`, `rtt_mysql`, `paging`, `export_stream`, `export_keyset`, `export_xlsx`, `export_parquet`,
+//! `editor`, `editor_block`, `editor_mysql`, `grid`, `plan`, `chart`, `explorer`, `idle`, `startup`, or `all`. The PostgreSQL
+//! ones (`rtt`, `rtt_ssh`, `paging`, `export_stream`, `export_keyset`, `export_xlsx`, `export_parquet`, `idle`) need
 //! `DATARIG_TEST_PG_URL` and the test database of `dev/init`; `rtt_ssh` also the SSH bastion of the tests (see
 //! `ssh.rs`); `rtt_mysql` needs `DATARIG_TEST_MYSQL_URL` (a MySQL server and a database the user may make a temporary
 //! table in).
@@ -95,6 +95,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
             "export_stream",
             "export_keyset",
             "export_xlsx",
+            "export_parquet",
             "editor_block",
             "editor_mysql",
         ]
@@ -103,7 +104,7 @@ fn parse(args: &[String]) -> Result<Opts, String> {
     }
     if o.scenarios.is_empty() {
         return Err(
-            "name a scenario: rtt, rtt_ssh, rtt_mysql, paging, export_stream, export_keyset, export_xlsx, editor, editor_block, editor_mysql, grid, plan, chart, explorer, idle, startup, all or budget"
+            "name a scenario: rtt, rtt_ssh, rtt_mysql, paging, export_stream, export_keyset, export_xlsx, export_parquet, editor, editor_block, editor_mysql, grid, plan, chart, explorer, idle, startup, all or budget"
                 .into(),
         );
     }
@@ -130,9 +131,10 @@ async fn scenario(name: &str, o: &Opts) -> Result<Value, String> {
         "rtt_ssh" => ssh::run(&pg_url()?, &o.scratch, o.delay, o.runs.unwrap_or(20)).await,
         "rtt_mysql" => rtt_mysql::run(&mysql_url()?, o.delay, o.runs.unwrap_or(20)).await,
         "paging" => paging::run(&pg_url()?, &o.scratch, "SELECT * FROM analytics.events", o.max_pages, 250).await,
-        "export_stream" => export::run(&pg_url()?, &o.scratch, false, false).await,
-        "export_keyset" => export::run(&pg_url()?, &o.scratch, true, false).await,
-        "export_xlsx" => export::run(&pg_url()?, &o.scratch, false, true).await,
+        "export_stream" => export::run(&pg_url()?, &o.scratch, false, "csv").await,
+        "export_keyset" => export::run(&pg_url()?, &o.scratch, true, "csv").await,
+        "export_xlsx" => export::run(&pg_url()?, &o.scratch, false, "xlsx").await,
+        "export_parquet" => export::run(&pg_url()?, &o.scratch, false, "parquet").await,
         "editor" => editor::run(&o.scratch, 5 * 1024 * 1024, o.runs.unwrap_or(300)),
         "editor_block" => editor::block_in_own_process(&o.scratch, 5 * 1024 * 1024),
         "editor_mysql" => editor::run_mysql_in_own_process(&o.scratch, 5 * 1024 * 1024, o.runs.unwrap_or(300)),
@@ -216,10 +218,13 @@ async fn budget(o: &Opts) -> Result<Vec<String>, String> {
     budget::explorer(&mut c, &b, &run("explorer", r))?;
     let r = paging::run(&url, &o.scratch, "SELECT * FROM analytics.events", int("paging", "max_pages")?, 250).await?;
     budget::paging(&mut c, &b, &run("paging", r))?;
-    for (name, keyset, xlsx) in
-        [("export_stream", false, false), ("export_keyset", true, false), ("export_xlsx", false, true)]
-    {
-        let r = export::run(&url, &o.scratch, keyset, xlsx).await?;
+    for (name, keyset, ext) in [
+        ("export_stream", false, "csv"),
+        ("export_keyset", true, "csv"),
+        ("export_xlsx", false, "xlsx"),
+        ("export_parquet", false, "parquet"),
+    ] {
+        let r = export::run(&url, &o.scratch, keyset, ext).await?;
         budget::export(&mut c, &b, name, &run(name, r))?;
     }
     let r = idle::idle(&o.scratch, &o.bin, &url, int("idle", "secs")? as u64)?;

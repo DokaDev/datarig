@@ -153,7 +153,7 @@ fn the_fields_follow_the_format_and_the_file_name_its_extension() {
     assert!(made.starts_with("~/Downloads/console 1-") && made.ends_with(".csv"), "{made}");
     // Scope: no selection, no Selection.
     assert_eq!(h.app.overlays.export_form().unwrap().scopes.len(), 2);
-    // `→` on the format: TSV (its header only), Excel, then JSON past the formats still to come.
+    // `→` on the format: TSV (its header only), Excel, Parquet, then JSON.
     tab_to(&mut h, Format);
     h.key(KeyCode::Right);
     assert_eq!(fields(&h), vec![Scope, Format, Header, Path, Export, Cancel]);
@@ -161,6 +161,9 @@ fn the_fields_follow_the_format_and_the_file_name_its_extension() {
     h.key(KeyCode::Right);
     assert_eq!(fields(&h), vec![Scope, Format, Null, Path, Export, Cancel], "Excel: its NULL text");
     assert_eq!(path_text(&h), made.replace(".csv", ".xlsx"));
+    h.key(KeyCode::Right);
+    assert_eq!(fields(&h), vec![Scope, Format, Path, Export, Cancel], "Parquet: no options");
+    assert_eq!(path_text(&h), made.replace(".csv", ".parquet"));
     h.key(KeyCode::Right);
     assert_eq!(fields(&h), vec![Scope, Format, Path, Export, Cancel]);
     assert_eq!(path_text(&h), made.replace(".csv", ".json"));
@@ -263,7 +266,8 @@ fn export_writes_the_rows_fetched_as_the_dialog_says() {
     h.key(KeyCode::Right);
     h.key(KeyCode::Right);
     tab_to(&mut h, ExportField::Format);
-    // TSV, Excel, JSON.
+    // TSV, Excel, Parquet, JSON.
+    h.key(KeyCode::Right);
     h.key(KeyCode::Right);
     h.key(KeyCode::Right);
     h.key(KeyCode::Right);
@@ -359,7 +363,7 @@ fn insert_and_update_are_struck_with_the_copys_reason() {
     tab_to(&mut h, ExportField::Format);
     h.key(KeyCode::Enter);
     let s = screen(&mut h);
-    assert!(s.contains("SQL INSERT") && s.contains("coming in a later version"), "{s}");
+    assert!(s.contains("SQL INSERT") && s.contains("Parquet") && !s.contains("coming in a later version"), "{s}");
     let reason = "a column is computed, not a column of the table";
     assert!(s.lines().any(|l| l.contains("SQL INSERT") && l.contains(reason)), "{s}");
     assert!(s.lines().any(|l| l.contains("SQL UPDATE") && l.contains(reason)), "{s}");

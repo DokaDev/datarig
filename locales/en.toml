@@ -1869,7 +1869,7 @@
 "commands.arg.export" = "<format> <scope> <path>"
 "export.format.json_lines" = "JSON Lines"
 "export.usage" = "Usage: :export [format] [all|fetched|selection] [delim=… quote=… header=… null=…] [path]"
-"export.unknown_format" = "Unknown export format: {format} (csv, tsv, json, json_pretty, jsonl, markdown, html, xml, insert, update, xlsx)"
+"export.unknown_format" = "Unknown export format: {format} (csv, tsv, json, json_pretty, jsonl, markdown, html, xml, insert, update, xlsx, parquet)"
 "export.unknown_extension" = "Which format is {path}? Name it first: :export csv {path}"
 "export.busy_tab" = "An export runs in this tab already (cancel it first)"
 "export.bad_delimiter" = "Not exported: a double quote or a line break cannot separate CSV values"
@@ -1915,6 +1915,8 @@
 "export.why.internal" = "the export stopped without saying why"
 "export.why.too_long" = "a value of column {column} (row {row}) has {length} characters, more than an Excel cell holds (32,767); the workbook has the rows before it"
 "export.why.not_saved" = "the workbook could not be made: {error}; nothing was kept (a workbook reads only once it is complete)"
+"export.why.bad_value" = "a value of column {column} (row {row}), {value}, does not fit the column's Parquet type {parquet_type}; the file has the rows before it"
+"export.why.not_finished" = "the Parquet file could not be finished: {error}; nothing was kept (a Parquet file reads only once its footer is written)"
 "export.too_wide" = { one = "Not exported: an Excel sheet holds 16,384 columns, and the result has {count}; export fewer columns, or another format", other = "Not exported: an Excel sheet holds 16,384 columns, and the result has {count}; export fewer columns, or another format" }
 "export.done_sheets" = { one = "Exported {count} row to {path} ({size}) on {sheets} sheets", other = "Exported {count} rows to {path} ({size}) on {sheets} sheets (a sheet holds 1,048,575 rows under its header)" }
 "dialog.button.export" = "Export"

@@ -14,8 +14,10 @@ publish.workspace = true
 
 # No UI crates (ratatui/crossterm) and no concrete drivers here.
 [dependencies]
+bytes.workspace = true
 futures.workspace = true
 keyring.workspace = true
+parquet.workspace = true
 pg_query.workspace = true
 # Only for its feature: see the workspace manifest.
 prost.workspace = true

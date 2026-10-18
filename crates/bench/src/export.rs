@@ -1,7 +1,8 @@
 //! Exporting every row of `analytics.events` (4,000,000 rows) to a CSV file as a user would
 //! (`:export all <file>`), with the headless app: once as a console's statement, read with one
 //! streaming statement, and once as a table tab, read in chunks by its key; and to an Excel
-//! workbook (`<file>.xlsx`, four sheets), streamed. What it measures: the rows written per second
+//! workbook (`<file>.xlsx`, four sheets) and a Parquet file (`<file>.parquet`, row groups of
+//! 65,536 rows), streamed. What it measures: the rows written per second
 //! and the process's resident memory as the rows go by, and each second nothing is said (a
 //! workbook is zipped at the end), which must stay flat (the rows go from the session through a
 //! bounded channel to the file, never into the app's result).
@@ -17,12 +18,14 @@ use std::time::{Duration, Instant};
 /// Rows between two samples of the resident memory.
 const SAMPLE_ROWS: u64 = 250_000;
 
-/// Every row as CSV (`keyset`: the table tab, read by its key), or (`xlsx`) a workbook streamed.
-pub async fn run(url: &str, scratch: &std::path::Path, keyset: bool, xlsx: bool) -> Result<Value, String> {
-    let name = match (keyset, xlsx) {
-        (_, true) => "export_xlsx",
-        (true, false) => "export_keyset",
-        (false, false) => "export_stream",
+/// Every row as CSV (`keyset`: the table tab, read by its key), or streamed to a file of extension
+/// `ext` (`xlsx`, `parquet`; `csv` is CSV).
+pub async fn run(url: &str, scratch: &std::path::Path, keyset: bool, ext: &str) -> Result<Value, String> {
+    let name = match (keyset, ext) {
+        (_, "xlsx") => "export_xlsx",
+        (_, "parquet") => "export_parquet",
+        (true, _) => "export_keyset",
+        (false, _) => "export_stream",
     };
     let state = scratch.join(format!("{name}-state"));
     let _ = std::fs::remove_dir_all(&state);
@@ -39,7 +42,7 @@ pub async fn run(url: &str, scratch: &std::path::Path, keyset: bool, xlsx: bool)
         matches!(a.tab().results, Results::Rows(_)) && a.tab().exec.running.is_none()
     })
     .await?;
-    let path = scratch.join(format!("{name}.{}", if xlsx { "xlsx" } else { "csv" }));
+    let path = scratch.join(format!("{name}.{ext}"));
     let _ = std::fs::remove_file(&path);
     let _ = std::fs::remove_file(datarig_tui::app::export::partial_path(&path));
     let req = app.export_request(&format!("all {}", path.display())).map_err(|n| format!("{:?}", n.msg))?;
