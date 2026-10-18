@@ -1,0 +1,49 @@
+---
+source: crates/tui/tests/flows_export_dialog.rs
+expression: s
+---
+╭ Explorer ────────────────────────────╮ 1 console 1 ×                                                                                                          
+│  ＋ New connection                   │╭ Query · console 1 ───────────────────────────────────────────────────────────────────────────────────────────────────╮
+│▾ Connections 1                       ││ local-pg / datarig  127.0.0.1:55432                                                      Space c s switch connection │
+│  ▾ ●   local-pg                      ││  1 -- datarig 🐘  Ctrl+E: run the statement under the cursor                                                         │
+│    ▾ datarig default                 ││  2▎SELECT * FROM shop.users WHERE id <= 8;  ✓ 5 rows · 0ms · 14:03                                                   │
+│      ▸ analytics                     ││  3                                                                                                                   │
+│      ▸ public                        ││  4 SELECT u.name, o.status, o.total_amount                                                                           │
+│      ▸ shop                          ││  5 FROM shop.orders o                                                                                                │
+│                                      ││  6 JOIN shop.users u ON u.id = o.user_id                                                                             │
+│                                      ││  7 WHERE o.status = 'paid';                                                                                          │
+│                                      ││  8                                                                                                                   │
+│                                      ││  9 SELECT * FROM analytics.events;                                                                                   │
+│                                      ││ 10                                                                                                                   │
+│                                      ││ 11 SELECT * FROM analytics.events ORDER BY created_at DESC;                                                          │
+│                               ╭ Format ──────────────────────────────────────────────────────────────────────────────────────╮                               │
+│                             ╭ │ › type to filter                                                                             │─╮                             │
+│                             │ │                                                                                              │ │                             │
+│                             │ │ CSV            .csv                                                                          │ │─────────────────────────────╯
+│                             │ │ TSV            .tsv                                                                          │ │─────────────────────────────╮
+│                             │ │ Excel (.xlsx)  coming in a later version                                                     │ │                             │
+│                             │ │ Parquet        coming in a later version                                                     │ │                             │
+│                             │ │ JSON           .json                                                                         │ │                             │
+│                             │ │ JSON Pretty    .json                                                                         │ │                             │
+│                             │ │ JSON Lines     .jsonl                                                                        │ │                             │
+│                             │ │ Markdown       .md                                                                           │ │                             │
+│                             │ │ HTML table     .html                                                                         │ │                             │
+│                             │ │ XML            .xml                                                                          │ │                             │
+│                             │ │ SQL INSERT     a column is computed, not a column of the table                               │ │                             │
+│                             ╰─│ SQL UPDATE     a column is computed, not a column of the table                               │ ╯                             │
+│                               ╰───────────────────────────────────────────────────────── Enter pick · ↑↓ select · Esc cancel ╯                               │
+│                                      ││                                                                      ││                                              │
+│                                      ││                                                                      ││                                              │
+│                                      ││                                                                      ││                                              │
+│                                      ││                                                                      ││                                              │
+│                                      ││                                                                      ││                                              │
+│                                      ││                                                                      ││                                              │
+│                                      ││                                                                      ││                                              │
+│                                      ││                                                                      ││                                              │
+│                                      ││                                                                      ││                                              │
+│                                      ││                                                                      ││                                              │
+│                                      ││                                                                      ││                                              │
+│                                      ││                                                                      ││                                              │
+│                                      ││                                                                      ││                                              │
+╰──────────────────────────────────────╯╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯
+ NORMAL  local-pg │ 5 rows · 0ms                                                                                                                             EN

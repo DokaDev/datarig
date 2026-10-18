@@ -37,6 +37,7 @@ pub mod environments;
 mod execution;
 pub mod explorer;
 pub mod export;
+pub mod export_form;
 pub mod folder_pick;
 mod format;
 pub mod guide;
@@ -1542,6 +1543,7 @@ impl App {
             Some(Overlay::Help(_)) => Ctx::Help,
             Some(Overlay::ProfileForm(_)) => Ctx::ProfileForm,
             Some(Overlay::Settings(_)) => Ctx::Settings,
+            Some(Overlay::Export(_)) => Ctx::Export,
             Some(Overlay::QuickConnect(_)) => Ctx::QuickConnect,
             Some(Overlay::TabList(_)) => Ctx::TabList,
             Some(Overlay::NameInput(_)) => Ctx::NameInput,

@@ -95,6 +95,8 @@ pub struct ListPicker<T> {
     press: Press<Row>,
     /// The entry of the value the list was opened on: selected while nothing is typed.
     current: Option<usize>,
+    /// The widest the box is drawn.
+    max_width: u16,
 }
 
 impl<T: Clone + PartialEq> ListPicker<T> {
@@ -112,10 +114,17 @@ impl<T: Clone + PartialEq> ListPicker<T> {
             hover: None,
             press: Press::default(),
             current: None,
+            max_width: 56,
         };
         p.current = current.and_then(|c| p.entries.iter().position(|e| e.value == *c));
         p.refilter();
         p
+    }
+
+    /// Drawn up to `w` columns wide (56 by default): for hints that say more.
+    pub fn with_max_width(mut self, w: u16) -> Self {
+        self.max_width = w;
+        self
     }
 
     pub fn entries(&self) -> &[Entry<T>] {
@@ -281,7 +290,7 @@ impl<T: Clone + PartialEq> ListPicker<T> {
         self.press.drawn(top, now);
         // No entry matches: a line says so above the new entry.
         let note = usize::from(!self.rows.iter().any(|r| matches!(r, Row::Entry(_))));
-        let w = area.width.saturating_sub(8).min(56);
+        let w = area.width.saturating_sub(8).min(self.max_width);
         let rows = (self.rows.len() + note).clamp(1, (area.height as usize).saturating_sub(6).max(1));
         let rect = centered(area, w, rows as u16 + 4);
         let inner = modal(rect, title, footer, buf);

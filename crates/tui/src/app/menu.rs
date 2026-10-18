@@ -53,6 +53,7 @@ const GRID_MENU: &[Action] = &[
 
 /// The results pane's actions, after the copies of every row.
 const RESULTS_MENU: &[Action] = &[
+    Action::Export,
     Action::Grid(GridAction::SelectAll),
     Action::Chart(ChartAction::Toggle),
     Action::ExplainAsPlan,

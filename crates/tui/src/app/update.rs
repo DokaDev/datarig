@@ -185,6 +185,8 @@ impl App {
             // A list, not text: nothing to paste into.
         } else if self.overlays.is_open(OverlayKind::Picker) {
             self.picker_paste(text);
+        } else if self.overlays.top().is_some_and(|o| o.kind() == OverlayKind::Export) {
+            self.export_form_paste(text);
         } else if let Some(f) = self.overlays.form_mut() {
             f.paste(text);
         } else if self.focus == Focus::Tree && self.explorer.filtering && self.overlays.is_empty() {
@@ -307,6 +309,7 @@ impl App {
             Ctx::IconsAsk => keys.iter().for_each(|k| self.icons_ask_key(k.to_event(), repeat)),
             Ctx::ProfileForm => keys.iter().for_each(|k| self.form_key(k.to_event(), repeat)),
             Ctx::Settings => keys.iter().for_each(|k| self.settings_key(k.to_event(), repeat)),
+            Ctx::Export => keys.iter().for_each(|k| self.export_form_key(k.to_event(), repeat)),
             Ctx::CellViewer => self.viewer_keys(keys),
             Ctx::WhichKey => keys.iter().for_each(|k| self.which_key_key(*k, repeat)),
             Ctx::Help => self.help_keys(keys, repeat),

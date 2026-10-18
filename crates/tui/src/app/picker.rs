@@ -1,5 +1,5 @@
 //! The lists to pick from with a typed filter ([`ListPicker`]) as dialogs, each for a field of
-//! the profile form: the SSH tunnel, the environment and the fields with a few fixed values
+//! the export dialog ([`super::export_form`]) or of the profile form: the SSH tunnel, the environment and the fields with a few fixed values
 //! (the driver, the SSL mode, the password's storage, the bastion login and its secret's
 //! storage), each value with what it means. `Enter` on the field (or a click on its value)
 //! lists what it can be. The tunnel's and the environment's lists end, when the config file can
@@ -31,6 +31,8 @@ pub enum Picker {
     /// A field with a few fixed values ([`Field::is_choice`]) of the form `form` names: the
     /// value's index.
     Choice { form: (FormKind, ProfileId), field: Field, list: ListPicker<usize> },
+    /// A choice field of the export dialog: the value's index in its list.
+    Export { field: super::export_form::ExportField, list: ListPicker<usize> },
 }
 
 /// `$body` with the list of whichever picker `$p` is, as `$list`.
@@ -40,6 +42,7 @@ macro_rules! with_list {
             Picker::Tunnel { $list, .. } => $body,
             Picker::Environment { $list, .. } => $body,
             Picker::Choice { $list, .. } => $body,
+            Picker::Export { $list, .. } => $body,
         }
     };
 }
@@ -75,6 +78,7 @@ impl Picker {
             Picker::Tunnel { .. } => Label::FormFieldSshEnabled,
             Picker::Environment { .. } => Label::FormFieldEnvironment,
             Picker::Choice { field, .. } => field.label(),
+            Picker::Export { field, .. } => field.label(),
         }
     }
 
@@ -161,6 +165,10 @@ impl App {
                 let out = list.key(&key, repeat);
                 self.choice_picked(form, field, out);
             }
+            Some(&mut Picker::Export { field, ref mut list }) => {
+                let out = list.key(&key, repeat);
+                self.export_choice_picked(field, out);
+            }
             None => {}
         }
     }
@@ -187,6 +195,10 @@ impl App {
             Some(&mut Picker::Choice { form, field, ref mut list }) => {
                 let out = list.mouse(&m, now);
                 self.choice_picked(form, field, out);
+            }
+            Some(&mut Picker::Export { field, ref mut list }) => {
+                let out = list.mouse(&m, now);
+                self.export_choice_picked(field, out);
             }
             None => {}
         }

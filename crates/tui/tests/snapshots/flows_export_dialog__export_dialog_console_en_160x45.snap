@@ -1,0 +1,49 @@
+---
+source: crates/tui/tests/flows_export_dialog.rs
+expression: s
+---
+╭ Explorer ────────────────────────────╮ 1 console 1 ×                                                                                                          
+│  ＋ New connection                   │╭ Query · console 1 ───────────────────────────────────────────────────────────────────────────────────────────────────╮
+│▾ Connections 1                       ││ local-pg / datarig  127.0.0.1:55432                                                      Space c s switch connection │
+│  ▾ ●   local-pg                      ││  1 -- datarig 🐘  Ctrl+E: run the statement under the cursor                                                         │
+│    ▾ datarig default                 ││  2▎SELECT * FROM shop.users WHERE id <= 8;  ✓ 5+ rows · 0ms · 14:03                                                  │
+│      ▸ analytics                     ││  3                                                                                                                   │
+│      ▸ public                        ││  4 SELECT u.name, o.status, o.total_amount                                                                           │
+│      ▸ shop                          ││  5 FROM shop.orders o                                                                                                │
+│                                      ││  6 JOIN shop.users u ON u.id = o.user_id                                                                             │
+│                                      ││  7 WHERE o.status = 'paid';                                                                                          │
+│                                      ││  8                                                                                                                   │
+│                                      ││  9 SELECT * FROM analytics.events;                                                                                   │
+│                                      ││ 10                                                                                                                   │
+│                                      ││ 11 SELECT * FROM analytics.events ORDER BY created_at DESC;                                                          │
+│                                      ││ 12                                                                                                                   │
+│                             ╭ Export console 1 ────────────────────────────────────────────────────────────────────────────────╮                             │
+│                             │                                                                                                  │                             │
+│                             │ Rows       All rows ▾                                                                            │─────────────────────────────╯
+│                             │            Runs the statement again, once: until its last row is written it holds a read lock on │─────────────────────────────╮
+│                             │            the tables it reads (a schema change on them waits) and one snapshot.                 │                             │
+│                             │ Format     CSV ▾   .csv                                                                          │                             │
+│                             │ Delimiter  ,       one character; \t for a tab                                                   │                             │
+│                             │ Quotes     As needed ▾                                                                           │                             │
+│                             │ Header     [x] column names on the first line                                                    │                             │
+│                             │ NULL as                      empty: NULL is an empty field                                       │                             │
+│                             │ File       ~/Downloads/console 1-YYYYMMDD-HHMMSS.csv                                             │                             │
+│                             │                                                                                                  │                             │
+│                             │                                     [ Export ]     Cancel                                        │                             │
+│                             ╰──────────────────────────────────── Tab/↑↓ field · Enter list or export · ←→ change · Esc cancel ╯                             │
+│                                      ││                                                                      ││                                              │
+│                                      ││                                                                      ││                                              │
+│                                      ││                                                                      ││                                              │
+│                                      ││                                                                      ││                                              │
+│                                      ││                                                                      ││                                              │
+│                                      ││                                                                      ││                                              │
+│                                      ││                                                                      ││                                              │
+│                                      ││                                                                      ││                                              │
+│                                      ││                                                                      ││                                              │
+│                                      ││                                                                      ││                                              │
+│                                      ││                                                                      ││                                              │
+│                                      ││                                                                      ││                                              │
+│                                      ││                                                                      ││                                              │
+│                                      ││                                                                      ││                                              │
+╰──────────────────────────────────────╯╰──────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────────╯
+ NORMAL  local-pg │ 5+ rows (more pages) · 0ms                                                                                                               EN

@@ -43,7 +43,7 @@ expression: backend
 "│ #  Results → count every row (runs a count query)   ]  Result tabs → next                               i  Result detail → show / hide                       │"
 "│ +  Results pane → taller                            a  +Copy all fetched rows                           n  Results → next page                               │"
 "│ -  Results pane → shorter                           c  Results → show as a chart / as rows              p  Results → previous page                           │"
-"│ I  Result detail → Cell / Row                       e  Results → export to a file (every row as CSV)    y  +Copy selection                                   │"
+"│ I  Result detail → Cell / Row                       e  Results → export to a file…                      y  +Copy selection                                   │"
 "│ [  Result tabs → previous                           h  Results pane → hide / show                       z  Results pane → zoom (maximise) / restore          │"
 "╰───────────────────────────────────────────────────────────────────────────────────────────────────────────────────── Esc close · Backspace back · : commands ╯"
 " NORMAL  local-pg │ Connected to local-pg                                                                                                                    EN "

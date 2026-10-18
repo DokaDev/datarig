@@ -16,6 +16,7 @@ pub(crate) mod chooser;
 pub(crate) mod cmdline;
 pub(crate) mod dialog;
 pub(crate) mod explorer;
+pub(crate) mod export;
 pub(crate) mod form;
 pub(crate) mod guide;
 pub(crate) mod inspector;

@@ -21,7 +21,7 @@ expression: backend
 "│ ]  Result tabs → next                                                        │"
 "│ a  +Copy all fetched rows                                                    │"
 "│ c  Results → show as a chart / as rows                                       │"
-"│ e  Results → export to a file (every row as CSV)                             │"
+"│ e  Results → export to a file…                                               │"
 "│ h  Results pane → hide / show                                                │"
 "│ …                                                                            │"
 "╰───────────────────────────────────── Esc close · Backspace back · : commands ╯"

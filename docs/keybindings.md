@@ -145,7 +145,7 @@ Every pane that is not text input (explorer, results, vim Normal/Visual). Inside
 | `Space r n` | `results.page.next` | Results → next page | ✓ |
 | `Space r p` | `results.page.prev` | Results → previous page | ✓ |
 | `Space r #` | `results.count` | Results → count every row (runs a count query) |  |
-| `Space r e` | `results.export` | Results → export to a file (every row as CSV) |  |
+| `Space r e` | `results.export` | Results → export to a file… |  |
 | `Space r ]` | `results.tab.next` | Result tabs → next |  |
 | `Space r [` | `results.tab.prev` | Result tabs → previous |  |
 
@@ -452,6 +452,14 @@ The settings screen: one list by category, each setting with its description; a 
 
 Reserved — settings screen; c on the theme row: copy the theme to a new theme file: `j` `k` `Down` `Up` `h` `l` `Left` `Right` `Enter` `Space` `Esc` `q` `c`
 
+## `overlay.export` [text]
+
+The export dialog (`results.export`, `:export` alone): the rows (every row, the rows fetched, the selection while there is one), the format, CSV's options and the file. `Tab`/`Shift+Tab` and the arrows move between the fields, `Enter` or `Space` on a value lists what it can be (`←`/`→` step through them), `Space`, `Enter` or `←`/`→` tick the header line, `Enter` in a text field or `Enter`/`Space` on Export exports (on Cancel: closes), `Esc` cancels. Under the rows it says how they will be read, under the format what it cannot do here (a format that comes later, an INSERT or UPDATE the result's keys do not allow, struck through in the list). A click focuses a field, puts the cursor in a text, opens a value's list or ticks the checkbox; Export and Cancel act on the release. Inside `root`.
+
+Reserved — export dialog: `Tab` `Shift+Tab` `Down` `Up` `Enter` `Esc`
+
+Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
+
 ## `overlay.chooser`
 
 A list to pick from: a profile's color, icon or folder, a chart's columns (the values' list stays open: `Enter` adds or removes one); a click picks a row, the wheel selects, the pointer only highlights. Inside `root`.
@@ -608,7 +616,7 @@ An editor command closes the line; what went wrong is said in the status bar.
 | `:ddl [schema.name]` |  | Show the DDL of the explorer's object, the table tab's table, or a name (:ddl [schema.name]) |
 | `:explain [analyze]` |  | The plan of the statement under the cursor (:explain analyze runs and measures it; a write is rolled back) |
 | `:theme copy <from> <name> / new <name>` |  | Write a theme file: a full copy of a theme, or a new one to fill in |
-| `:export [format] [all / fetched / selection] [delim= quote= header= null=] [path]` |  | Export the result to a file: every row by default, the format from the file's extension (:export [format] [all|fetched|selection] [delim=… quote=… header=… null=…] [path]) |
+| `:export [format] [all / fetched / selection] [delim= quote= header= null=] [path]` |  | Export the result to a file: alone, the export dialog; else every row by default, the format from the file's extension (:export [format] [all|fetched|selection] [delim=… quote=… header=… null=…] [path]) |
 
 Settings of `:set` (saved to `config.toml` like the matching actions):
 

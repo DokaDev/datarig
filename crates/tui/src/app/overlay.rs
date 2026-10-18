@@ -1,5 +1,6 @@
 //! Dialogs shown on top of the workspace, kept in one stack. The last entry has the keyboard
 //! and is drawn last. Entries are kept in a fixed rank order (cell viewer < profile form < settings <
+//! export dialog <
 //! keyboard help < which-key < quick connect < tab list < context menu < saved-queries tree < name input <
 //! chooser < picker <
 //! confirmation < run confirmation < busy notice < password prompt < command line), so a dialog that opens later but ranks lower —
@@ -274,6 +275,8 @@ pub enum Overlay {
     ProfileForm(Box<ProfileForm>),
     /// The settings screen.
     Settings(super::settings::SettingsScreen),
+    /// The export dialog.
+    Export(Box<super::export_form::ExportForm>),
     /// Keyboard help (`Space ?`, `F1`).
     Help(Help),
     /// Keys that may follow an unfinished leader sequence.
@@ -311,6 +314,7 @@ pub enum OverlayKind {
     CellViewer,
     ProfileForm,
     Settings,
+    Export,
     Help,
     WhichKey,
     QuickConnect,
@@ -334,6 +338,7 @@ impl Overlay {
             Overlay::CellViewer(_) => OverlayKind::CellViewer,
             Overlay::ProfileForm(_) => OverlayKind::ProfileForm,
             Overlay::Settings(_) => OverlayKind::Settings,
+            Overlay::Export(_) => OverlayKind::Export,
             Overlay::Help(_) => OverlayKind::Help,
             Overlay::WhichKey(_) => OverlayKind::WhichKey,
             Overlay::QuickConnect(_) => OverlayKind::QuickConnect,
@@ -396,6 +401,7 @@ impl Overlays {
             Some(Overlay::Password(p)) => p.buttons.press = Press::default(),
             Some(Overlay::NameInput(n)) => n.buttons.press = Press::default(),
             Some(Overlay::ProfileForm(f)) => f.press = Press::default(),
+            Some(Overlay::Export(f)) => f.buttons.press = Press::default(),
             Some(Overlay::Chooser(c)) => c.press = Press::default(),
             Some(Overlay::Picker(p)) => p.rearm(),
             Some(Overlay::QuickConnect(q)) => q.press = Press::default(),
@@ -444,6 +450,14 @@ impl Overlays {
 
     pub fn settings(&self) -> Option<&super::settings::SettingsScreen> {
         self.0.iter().find_map(|o| if let Overlay::Settings(s) = o { Some(s) } else { None })
+    }
+
+    pub fn export_form(&self) -> Option<&super::export_form::ExportForm> {
+        self.0.iter().find_map(|o| if let Overlay::Export(f) = o { Some(&**f) } else { None })
+    }
+
+    pub fn export_form_mut(&mut self) -> Option<&mut super::export_form::ExportForm> {
+        self.0.iter_mut().find_map(|o| if let Overlay::Export(f) = o { Some(&mut **f) } else { None })
     }
 
     pub fn settings_mut(&mut self) -> Option<&mut super::settings::SettingsScreen> {
