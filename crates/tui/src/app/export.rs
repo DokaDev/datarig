@@ -1,5 +1,5 @@
-//! Exporting a result to a file: `:export [format] [all|fetched|selection] [path]` and the
-//! `results.export` action (every row as CSV to `~/Downloads/<name>-<time>.csv`). A job writes
+//! Exporting a result to a file: `:export [format] [all|fetched|selection] [path]`, and the
+//! export dialog (`results.export`, `:export` alone: [`super::export_form`]). A job writes
 //! on a thread of its own ([`spawn_writer`]): the UI thread never writes the file and never
 //! sees a row of an export of every row, which the tab's session streams into a bounded channel
 //! (`DbCommand::Export`) the writer drains. Each job ends with exactly one terminal event
@@ -36,6 +36,7 @@
 //! while the tab runs another statement (the cancel is that statement's).
 
 use super::copy::{CopyWhat, Intent};
+use super::tabs::TableRef;
 use super::*;
 use datarig_core::driver::keys::{Generated, InsertPlan, insert_source, update_source};
 use datarig_core::driver::structure::TableStructure;
@@ -153,6 +154,17 @@ impl ExportFormat {
         })
     }
 
+    /// Its name in the export dialog's list.
+    pub fn dialog_label(self) -> Label {
+        match self {
+            ExportFormat::Tsv => Label::CopyFormatTsv,
+            ExportFormat::JsonPretty => Label::ExportFormatJsonPretty,
+            ExportFormat::Markdown => Label::ExportFormatMarkdown,
+            ExportFormat::Html => Label::ExportFormatHtml,
+            f => f.label(),
+        }
+    }
+
     /// Its name in messages.
     pub fn label(self) -> Label {
         match self {
@@ -169,6 +181,12 @@ impl ExportFormat {
         }
     }
 }
+
+/// Formats the export dialog lists before the app writes them, by the name `:export` is to take
+/// for each: greyed, with a word that they come later, while [`ExportFormat::parse`] knows no
+/// format of that name.
+pub const LATER_FORMATS: [(&str, Label); 2] =
+    [("xlsx", Label::ExportFormatXlsx), ("parquet", Label::ExportFormatParquet)];
 
 /// What an export takes from the result.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -355,8 +373,9 @@ enum Plan {
 /// Where a job is.
 #[derive(Debug, PartialEq, Eq)]
 enum Stage {
-    /// Waiting for the table's structure (its key): `schema.table` of profile `profile`.
-    Structure { profile: ProfileId, schema: String, table: String },
+    /// Waiting for the table's structure (its key): `schema.table` of profile `profile`, asked
+    /// of its metadata session of generation `generation`.
+    Structure { profile: ProfileId, schema: String, table: String, generation: u64 },
     /// Waiting for the user's answer.
     Asking,
     /// The writer opens the file.
@@ -605,6 +624,15 @@ impl App {
             })?,
             (None, None) => ExportFormat::Csv,
         };
+        // CSV's options are CSV's; TSV takes its header line only.
+        let ignored = match format {
+            ExportFormat::Csv => false,
+            ExportFormat::Tsv => Delimited { header: args.csv.header, ..Delimited::default() } != args.csv,
+            _ => args.csv != Delimited::default(),
+        };
+        if ignored {
+            return Err(Notice::new(Label::ExportCsvOptionsOnly, Level::Error));
+        }
         let default_path = path.is_none();
         let path = path.unwrap_or_else(|| self.default_export_path(format));
         Ok(ExportRequest {
@@ -617,18 +645,9 @@ impl App {
         })
     }
 
-    /// The `results.export` action: every row of the active tab's result as CSV to the default
-    /// path.
+    /// The `results.export` action: the export dialog on the active tab's result.
     pub(super) fn export_action(&mut self) {
-        let path = self.default_export_path(ExportFormat::Csv);
-        self.start_export(ExportRequest {
-            scope: ExportScope::All,
-            format: ExportFormat::Csv,
-            csv: Delimited::default(),
-            path,
-            default_path: true,
-            overwrite: false,
-        });
+        self.open_export_dialog();
     }
 
     /// Where exports go by default: `~/Downloads` (the writer falls back to the home folder
@@ -640,13 +659,18 @@ impl App {
     /// `~/Downloads/<name>-<YYYYMMDD-HHMMSS>.<ext>`: the table's name for a table tab, else the
     /// tab's.
     pub(super) fn default_export_path(&self, format: ExportFormat) -> PathBuf {
+        let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
+        self.export_folder().join(format!("{}-{stamp}.{}", self.export_stem(), format.extension()))
+    }
+
+    /// The name of the active tab's exports: its table's for a table tab, else the tab's.
+    pub(super) fn export_stem(&self) -> String {
         let t = self.tab();
         let name = match &t.doc.table {
             Some(table) => table.name.clone(),
             None => crate::widgets::tabbar::document_name(self, t),
         };
-        let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
-        self.export_folder().join(format!("{}-{stamp}.{}", file_stem(&name), format.extension()))
+        file_stem(&name)
     }
 
     /// Whether tab `id` has an export (asking, opening its file, or writing).
@@ -702,8 +726,7 @@ impl App {
         }
         self.exports.seq += 1;
         let total = snapshot.as_ref().map(|s| (s.len() as u64, true));
-        let (in_block, sql, d) =
-            (self.tab().exec.in_block, self.tab().shown_sql().trim().to_string(), self.tab_dialect(id));
+        let (in_block, sql) = (self.tab().exec.in_block, self.tab().shown_sql().trim().to_string());
         let job = Job {
             id: self.exports.seq,
             intent,
@@ -734,31 +757,49 @@ impl App {
         }
         // Every row: the statement runs again on the tab's session; a table tab's own query
         // outside the user's block is read by the table's key, once its structure says it.
-        let t = self.tab();
-        let keyset_table = t
-            .doc
-            .table
-            .clone()
-            .filter(|table| sql == table.query(d) && !t.exec.in_block && t.context.database.is_none());
-        match (keyset_table, t.profile) {
-            // The key comes from the table's structure, read on the metadata session (without
-            // one, nothing would answer: one statement then).
-            (Some(table), Some(pid))
-                if self.structure_on(pid) && self.conns.get(pid).is_some_and(|c| c.meta.is_some()) =>
-            {
+        match self.export_keyset_table(id) {
+            Some((pid, table)) => {
+                let generation = self.conns.get(pid).map_or(0, |c| c.generation);
                 if let Some(j) = self.exports.jobs.get_mut(&id) {
-                    j.stage =
-                        Stage::Structure { profile: pid, schema: table.schema.clone(), table: table.name.clone() };
+                    let (schema, name) = (table.schema.clone(), table.name.clone());
+                    j.stage = Stage::Structure { profile: pid, schema, table: name, generation };
                 }
                 self.tab_status(id, Notice::new(Label::ExportReadingKey, Level::Info));
                 self.send_meta(pid, DbCommand::LoadStructure { schema: table.schema, table: table.name });
             }
-            _ => self.export_stream(id, sql, None),
+            None => self.export_stream(id, sql, None),
         }
     }
 
+    /// The table of table tab `id` when every row of its result may be read by the table's key:
+    /// its query is the table's own, outside the user's block, in the profile's own database,
+    /// with a metadata session to read the key on (without one, nothing would answer).
+    pub(super) fn export_keyset_table(&self, id: TabId) -> Option<(ProfileId, TableRef)> {
+        let t = self.tabs.get(id)?;
+        let table = t.doc.table.clone()?;
+        let pid = t.profile?;
+        let own = t.shown_sql().trim() == table.query(self.tab_dialect(id));
+        let meta = self.structure_on(pid) && self.conns.get(pid).is_some_and(|c| c.meta.is_some());
+        (own && !t.exec.in_block && t.context.database.is_none() && meta).then_some((pid, table))
+    }
+
+    /// How tab `id`'s result is read by the key of its table `schema.table`, whose structure is
+    /// `s`: `None` when it has no key that fits, or the result is not the table's columns.
+    pub(super) fn export_keyset(&self, id: TabId, schema: &str, table: &str, s: &TableStructure) -> Option<Keyset> {
+        let t = self.tabs.get(id)?;
+        let d = self.tab_dialect(id);
+        let text_ok = match d {
+            Dialect::Postgres => true,
+            Dialect::MySql(_) => t.exec.values.as_ref().is_some_and(|v| v.charset.eq_ignore_ascii_case("utf8mb4")),
+        };
+        let Results::Rows(rs) = &t.results else { return None };
+        let metas: Vec<ColumnMeta> = rs.columns.iter().map(|c| c.meta.clone()).collect();
+        let table_columns: Vec<String> = s.columns.iter().map(|c| c.name.clone()).collect();
+        keyset::table_key(s).and_then(|key| Keyset::new(d, schema, table, &key, &metas, &table_columns, text_ok)).ok()
+    }
+
     /// Why every row of tab `id`'s result cannot be read again for an export now.
-    fn export_db_checks(&self, id: TabId) -> Result<(), Notice> {
+    pub(super) fn export_db_checks(&self, id: TabId) -> Result<(), Notice> {
         let t = self.tabs.get(id).ok_or_else(|| Notice::new(Label::ExportNothing, Level::Warning))?;
         if t.exec.running.is_some() || self.is_queued(id) {
             let key = self.key_for(Action::CancelQuery, Ctx::Nav);
@@ -803,7 +844,7 @@ impl App {
             .jobs
             .iter()
             .filter(|(_, j)| {
-                matches!(&j.stage, Stage::Structure { profile: p, schema: s, table: t }
+                matches!(&j.stage, Stage::Structure { profile: p, schema: s, table: t, .. }
                     if *p == profile && s == schema && t == table)
             })
             .map(|(id, _)| *id)
@@ -820,30 +861,24 @@ impl App {
                 self.export_stream(id, sql, None);
                 continue;
             };
-            let d = self.tab_dialect(id);
-            let text_ok = match d {
-                Dialect::Postgres => true,
-                Dialect::MySql(_) => t.exec.values.as_ref().is_some_and(|v| v.charset.eq_ignore_ascii_case("utf8mb4")),
-            };
-            let Results::Rows(rs) = &t.results else { continue };
-            let metas: Vec<ColumnMeta> = rs.columns.iter().map(|c| c.meta.clone()).collect();
-            let table_columns: Vec<String> = s.columns.iter().map(|c| c.name.clone()).collect();
-            let keyset = keyset::table_key(s)
-                .and_then(|key| Keyset::new(d, schema, table, &key, &metas, &table_columns, text_ok));
+            if !matches!(t.results, Results::Rows(_)) {
+                continue;
+            }
+            let keyset = self.export_keyset(id, schema, table, s);
             let estimate = s.estimated_rows;
             if let Some(j) = self.exports.jobs.get_mut(&id) {
                 j.estimate = estimate;
                 j.own = true;
             }
             match keyset {
-                Ok(k) => {
+                Some(k) => {
                     if let Some(j) = self.exports.jobs.get_mut(&id) {
                         j.total = estimate.map(|e| (e, false));
                         j.plan = Plan::Keyset(k);
                     }
                     self.export_launch(id);
                 }
-                Err(_) => self.export_stream(id, sql, estimate),
+                None => self.export_stream(id, sql, estimate),
             }
         }
     }
@@ -1206,7 +1241,11 @@ impl App {
                 {
                     ended.push(*id)
                 }
-                Stage::Structure { profile, .. } if self.conns.get(*profile).is_none_or(|c| c.meta.is_none()) => {
+                // No metadata session, or another one than the key was asked of (its answer
+                // will not come): one statement.
+                Stage::Structure { profile, generation, .. }
+                    if self.conns.get(*profile).is_none_or(|c| c.meta.is_none() || c.generation != *generation) =>
+                {
                     no_key.push(*id)
                 }
                 Stage::Structure { .. } | Stage::Asking => {}
@@ -1225,6 +1264,10 @@ impl App {
             }
         }
         for id in no_key {
+            // A question it opens comes by itself: a key typed as it comes up does not answer it.
+            if let Some(j) = self.exports.jobs.get_mut(&id) {
+                j.own = true;
+            }
             let sql = self.tabs.get(id).map(|t| t.shown_sql().trim().to_string()).unwrap_or_default();
             self.export_stream(id, sql, None);
         }
@@ -1419,6 +1462,12 @@ impl App {
 
     /// How the SQL formats, and every format, write the columns `cols` of the active tab's
     /// result; why not, as a notice.
+    /// Why `req` cannot write the columns `cols` of the active tab's result read as `read_in`
+    /// ([`App::export_spec`]'s refusal).
+    pub(super) fn export_refused(&self, cols: &[usize], req: &ExportRequest, read_in: &ReadIn) -> Option<Notice> {
+        self.export_spec(cols, req, read_in).err()
+    }
+
     fn export_spec(&self, cols: &[usize], req: &ExportRequest, read_in: &ReadIn) -> Result<Spec, Notice> {
         let t = self.tab();
         let Results::Rows(rs) = &t.results else { return Err(Notice::new(Label::ExportNothing, Level::Warning)) };
@@ -1779,21 +1828,24 @@ fn db_rows<W: Write>(
     // The rows of the statement being read, then those of the next one the app handed over.
     let mut rows: Option<tokio::sync::mpsc::Receiver<ExportBatch>> = None;
     let mut queued: std::collections::VecDeque<tokio::sync::mpsc::Receiver<ExportBatch>> = Default::default();
+    // The app's word taken between two batches.
+    let mut said: Option<Next> = None;
     loop {
         if rows.is_none() {
             rows = queued.pop_front();
         }
-        let next = match rows.as_mut() {
+        let next = match (said.take(), rows.as_mut()) {
+            (Some(n), _) => n,
             // Rows first: what the session sent before it answered is written before the app's
             // word that followed its answer.
-            Some(rx) => rt.block_on(async {
+            (None, Some(rx)) => rt.block_on(async {
                 tokio::select! {
                     biased;
                     b = rx.recv() => Next::Batch(b),
                     c = ctl.recv() => Next::Ctl(c),
                 }
             }),
-            None => Next::Ctl(rt.block_on(ctl.recv())),
+            (None, None) => Next::Ctl(rt.block_on(ctl.recv())),
         };
         match next {
             Next::Batch(Some(ExportBatch::Columns(cols))) => {
@@ -1808,6 +1860,13 @@ fn db_rows<W: Write>(
                     return Stopped::Failed(f);
                 }
                 progress.tick(w.rows_written(), w.bytes(), false);
+                // A session that always has rows ready would keep the app's word (a cancel, a
+                // quit) waiting: it is looked at after every batch.
+                said = match ctl.try_recv() {
+                    Ok(c) => Some(Next::Ctl(Some(c))),
+                    Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => Some(Next::Ctl(None)),
+                    Err(tokio::sync::mpsc::error::TryRecvError::Empty) => None,
+                };
             }
             // That statement's rows are all here.
             Next::Batch(None) => rows = None,

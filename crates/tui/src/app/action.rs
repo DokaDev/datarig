@@ -173,8 +173,7 @@ pub enum Action {
     Plan(PlanAction),
     /// The Chart tab of the results pane.
     Chart(ChartAction),
-    /// Export the shown result to a file (every row, CSV, to the default path: `:export` names
-    /// another format, scope or path).
+    /// Export the shown result to a file: the export dialog.
     Export,
 }
 

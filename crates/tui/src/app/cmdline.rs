@@ -668,6 +668,11 @@ impl App {
                 if !self.command_available(spec) {
                     return err(Msg::CommandsErrorUnavailable { name });
                 }
+                if arg.trim().is_empty() {
+                    self.overlays.close(OverlayKind::Commands);
+                    self.open_export_dialog();
+                    return Ok(());
+                }
                 let request = self.export_request(arg)?;
                 self.overlays.close(OverlayKind::Commands);
                 self.start_export(request);

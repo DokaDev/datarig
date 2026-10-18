@@ -20,7 +20,7 @@
 //! │  ├─ explorer.filter       [text]
 //! │  └─ overlay.cell_viewer
 //! └─ overlay.*              (which-key, help, help filter, command line, quick connect,
-//!                            tab list, profile form, settings, chooser, chooser filter, name input,
+//!                            tab list, profile form, settings, export dialog, chooser, chooser filter, name input,
 //!                            saved-queries tree and its name field, action menu, password,
 //!                            confirm, run confirm, completion)
 //! ```
@@ -49,6 +49,7 @@ pub enum Ctx {
     TabList,
     ProfileForm,
     Settings,
+    Export,
     Chooser,
     ChooserFilter,
     Picker,
@@ -69,7 +70,7 @@ pub enum Ctx {
 }
 
 impl Ctx {
-    pub const ALL: [Ctx; 37] = [
+    pub const ALL: [Ctx; 38] = [
         Ctx::Root,
         Ctx::Workspace,
         Ctx::Nav,
@@ -90,6 +91,7 @@ impl Ctx {
         Ctx::TabList,
         Ctx::ProfileForm,
         Ctx::Settings,
+        Ctx::Export,
         Ctx::Chooser,
         Ctx::ChooserFilter,
         Ctx::Picker,
@@ -139,6 +141,7 @@ impl Ctx {
             Ctx::ContextMenu => "overlay.context_menu",
             Ctx::ProfileForm => "overlay.profile_form",
             Ctx::Settings => "overlay.settings",
+            Ctx::Export => "overlay.export",
             Ctx::Password => "overlay.password",
             Ctx::Confirm => "overlay.confirm",
             Ctx::RunConfirm => "overlay.run_confirm",
@@ -191,6 +194,7 @@ impl Ctx {
                 | Ctx::QuickConnect
                 | Ctx::TabList
                 | Ctx::ProfileForm
+                | Ctx::Export
                 | Ctx::ChooserFilter
                 | Ctx::Picker
                 | Ctx::NameInput
@@ -265,6 +269,9 @@ impl Ctx {
             Ctx::Settings => {
                 "The settings screen: one list by category, each setting with its description; a click selects a row and its `‹`/`›` change the value, the wheel selects, the pointer only highlights."
             }
+            Ctx::Export => {
+                "The export dialog (`results.export`, `:export` alone): the rows (every row, the rows fetched, the selection while there is one), the format, CSV's options and the file. `Tab`/`Shift+Tab` and the arrows move between the fields, `Enter` or `Space` on a value lists what it can be (`←`/`→` step through them), `Space` ticks the header line, `Enter` in a text field or on Export exports, `Esc` cancels. Under the rows it says how they will be read, under the format what it cannot do here (a format that comes later, an INSERT or UPDATE the result's keys do not allow, struck through in the list). A click focuses a field, puts the cursor in a text, opens a value's list or ticks the checkbox; Export and Cancel act on the release."
+            }
             Ctx::Password => "Password prompt; a click on the field, the checkbox, OK or Cancel.",
             Ctx::Confirm => {
                 "Yes/no confirmation: `y` does it; Enter keeps what the answer would lose (quit, delete, disconnect, close, switch, replace); for a copy it says yes. A button acts on its release (pressed and released on it, not right after the question appeared) and does what its key does; the pointer only lights its background (Enter stays on the safe one)."
@@ -318,6 +325,7 @@ impl Ctx {
             Ctx::ContextMenu => Label::KeyctxOverlayContextMenu,
             Ctx::ProfileForm => Label::KeyctxOverlayProfileForm,
             Ctx::Settings => Label::KeyctxOverlaySettings,
+            Ctx::Export => Label::KeyctxOverlayExport,
             Ctx::Password => Label::KeyctxOverlayPassword,
             Ctx::Confirm => Label::KeyctxOverlayConfirm,
             Ctx::RunConfirm => Label::KeyctxOverlayRunConfirm,

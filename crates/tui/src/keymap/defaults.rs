@@ -528,6 +528,9 @@ const RESERVED: &[(Ctx, &[&str], &str)] = &[
         &["tab", "shift+tab", "down", "up", "enter", "esc", "ctrl+s", "ctrl+t", "ctrl+n", "ctrl+p"],
         "profile form",
     ),
+    (Export, &["tab", "shift+tab", "down", "up", "enter", "esc"], "export dialog"),
+    // On a value `←`/`→` step through what it can be.
+    (Export, TEXT, "text input"),
     (Chooser, &["j", "k", "down", "up", "enter", "/", "esc", "q"], "chooser"),
     (ChooserFilter, &["esc", "enter", "down", "up"], "chooser filter"),
     (ChooserFilter, TEXT, "text input"),

@@ -871,3 +871,71 @@ fn a_chunk_that_would_repeat_the_one_before_ends_the_export() {
     pump_until(&mut h, "the end", done);
     assert!(status(&h).contains("the next chunk could not be asked for"), "{}", status(&h));
 }
+
+#[test]
+fn quitting_stops_an_export_whose_session_keeps_sending() {
+    let dir = scratch("quit-flood");
+    let mut h = Harness::connected(Lang::En);
+    first_page(&mut h, 100, true);
+    h.sent();
+    h.command(&format!("export {}", dir.join("f.json").display()));
+    let (_, _, _, sink) = wait_export(&mut h);
+    // A session that always has rows ready, until the writer goes.
+    let feeder = std::thread::spawn(move || {
+        if sink.blocking_send(ExportBatch::Columns(columns())).is_err() {
+            return;
+        }
+        let batch = rows(0, 2_000);
+        while sink.blocking_send(ExportBatch::Rows(batch.clone())).is_ok() {}
+    });
+    std::thread::sleep(Duration::from_millis(100));
+    h.app.quit_on_signal();
+    assert!(h.app.quit);
+    // The writer took the cancel between two batches and closed the array.
+    let partial = dir.join("f.json.partial");
+    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&partial).unwrap()).unwrap();
+    assert!(v.as_array().is_some_and(|a| !a.is_empty()));
+    feeder.join().unwrap();
+}
+
+#[test]
+fn a_question_the_lost_metadata_session_opens_takes_no_key_typed_as_it_comes() {
+    let dir = scratch("meta-lost-ask");
+    let mut h = Harness::connected(Lang::En);
+    h.app.policies.insert("default", Policy { read_only: true, ..Policy::default() });
+    table_tab(&mut h, 10);
+    h.command(&format!("export {}", dir.join("a.csv").display()));
+    h.meta_db("local-pg", DbEvent::Lost { error: DbError::Closed });
+    assert_eq!(h.app.overlays.confirm().map(|c| c.action), Some(ConfirmAction::ExportStart));
+    h.key(KeyCode::Char('y'));
+    assert_eq!(h.app.overlays.confirm().map(|c| c.action), Some(ConfirmAction::ExportStart), "still asked");
+    assert!(export_sent(&mut h).is_none());
+}
+
+#[test]
+fn a_new_metadata_session_while_the_key_is_read_exports_with_one_statement() {
+    let dir = scratch("meta-new");
+    let mut h = Harness::connected(Lang::En);
+    table_tab(&mut h, 10);
+    h.command(&format!("export {}", dir.join("a.csv").display()));
+    assert!(h.sent().iter().any(|c| matches!(c, DbCommand::LoadStructure { .. })));
+    // Lost and connected again between two looks: the key's answer will not come.
+    let pid = h.app.tab().profile.unwrap();
+    h.app.conns.next_generation(pid);
+    h.app.handle_event(ratatui::crossterm::event::Event::FocusGained);
+    let (_, _, guard, sink) = wait_export(&mut h);
+    assert_eq!(guard, ExportGuard::Repeatable);
+    drop(sink);
+}
+
+#[test]
+fn csv_options_are_refused_for_the_other_formats() {
+    let mut h = Harness::connected(Lang::En);
+    first_page(&mut h, 3, false);
+    h.command("export json delim=; out.json");
+    let err = h.cmdline().and_then(|c| c.error.clone()).map(|n| n.render(&h.app.i18n).to_string());
+    assert!(err.as_deref().is_some_and(|e| e.starts_with("Those options are CSV's")), "{err:?}");
+    h.key(KeyCode::Esc);
+    h.command("export tsv quote=always out.tsv");
+    assert!(h.cmdline().and_then(|c| c.error.clone()).is_some());
+}

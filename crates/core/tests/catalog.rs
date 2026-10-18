@@ -341,6 +341,7 @@ const SAME_IN_KO: &[&str] = &[
     "copy.menu.markdown",
     "copy.menu.insert",
     "copy.menu.update",
+    "export.format.parquet",
     // Kept in English, as the Korean hint of the same form (`form.ssh.on_hint`) writes it.
     "form.field.ssh_host",
     // A file, its line and the (already translated) problem, in the compilers' form.

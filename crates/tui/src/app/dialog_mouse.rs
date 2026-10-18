@@ -63,6 +63,7 @@ impl App {
             OverlayKind::QuickConnect => self.quick_mouse(m),
             OverlayKind::TabList => self.tab_list_mouse(m),
             OverlayKind::Settings => self.settings_mouse(m),
+            OverlayKind::Export => self.export_form_mouse(m),
             OverlayKind::Commands => self.command_mouse(m),
             OverlayKind::CellViewer | OverlayKind::WhichKey | OverlayKind::Busy => {}
         }
@@ -107,6 +108,7 @@ impl App {
                 std::mem::replace(&mut c.hover, h) != h
             }
             Some(OverlayKind::Picker) => self.picker_hover(m),
+            Some(OverlayKind::Export) => self.overlays.export_form_mut().is_some_and(|f| f.buttons.hover(x, y)),
             Some(OverlayKind::QuickConnect) => {
                 let Some(q) = self.overlays.quick_mut() else { return false };
                 let h = row_at(q.list, q.scroll, q.items.len(), x, y).filter(|i| *i != q.selected);
