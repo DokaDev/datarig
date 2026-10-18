@@ -12,7 +12,7 @@ expression: backend
 "│ ╭ Run a statement that may do harm? ───────────────────────────────────────╮ │"
 "│ │ ● local-pg · stg                                                         │ │"
 "│ │                                                                          │─╯"
-"│ │ 1/1  first commits 1 open statement (3 rows): can't be rolled back       │─╮"
+"│ │ 1/1  first commits the open transaction: 1 statement (3 rows)            │─╮"
 "│ │      ALTER TABLE users ADD COLUMN zz_c int                               │ │"
 "│ │                                                                          │s│"
 "│ │                           [ Cancel ]     Run                             │ │"

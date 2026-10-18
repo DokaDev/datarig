@@ -279,7 +279,7 @@ fn mysql_asks_before_a_statement_commits_the_open_transaction() {
     assert!(executes(&mut h).is_empty(), "asked first");
     assert_eq!(h.overlay_kind(), Some(OverlayKind::RunConfirm));
     let screen = h.screen(160, 45);
-    assert!(screen.contains("first commits 2 open statements (4 rows): can't be rolled back"), "{screen}");
+    assert!(screen.contains("first commits the open transaction: 2 statements (4 rows)"), "{screen}");
     h.key(KeyCode::Esc);
     assert!(executes(&mut h).is_empty());
     run_all(&mut h, "ALTER TABLE users ADD COLUMN zz_c int");

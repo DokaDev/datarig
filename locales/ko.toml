@@ -2013,4 +2013,4 @@
 "tx.outside_kept" = "실행하지 않음: 프로시저는 실행하지 않은 채로 두었습니다"
 "safety.why_outside_tx" = "트랜잭션 밖에서 바로 실행됨: 롤백할 수 없습니다"
 "safety.why_commits_itself" = "스스로 커밋함: 트랜잭션 밖에서 바로 실행되며 롤백할 수 없습니다"
-"safety.why_implicit_commit" = "열린 트랜잭션의 문장 {count}개({rows})를 먼저 커밋함: 롤백할 수 없습니다"
+"safety.why_implicit_commit" = "열린 트랜잭션을 먼저 커밋함: 문장 {count}개({rows})"

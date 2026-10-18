@@ -2016,4 +2016,4 @@
 "tx.outside_kept" = "Not run: the procedure stays unrun"
 "safety.why_outside_tx" = "runs outside a transaction, at once: can't be rolled back"
 "safety.why_commits_itself" = "commits by itself: runs outside, at once; can't be rolled back"
-"safety.why_implicit_commit" = { one = "first commits {count} open statement ({rows}): can't be rolled back", other = "first commits {count} open statements ({rows}): can't be rolled back" }
+"safety.why_implicit_commit" = { one = "first commits the open transaction: {count} statement ({rows})", other = "first commits the open transaction: {count} statements ({rows})" }
