@@ -11,6 +11,7 @@ use datarig_core::driver::{DbCommand, DbEvent, SessionContext, SessionRole};
 use datarig_core::i18n::Lang;
 use datarig_core::profile::{ConnectionConfig, ProfileId};
 use datarig_tui::app::overlay::OverlayKind;
+use datarig_tui::app::script_tree::TreeRow;
 use datarig_tui::app::{Focus, Keys, NodeState, Startup};
 use datarig_tui::keymap::Ctx;
 use ratatui::crossterm::event::KeyCode;
@@ -508,12 +509,12 @@ fn folders_are_created_renamed_and_profiles_moved() {
     h.key(KeyCode::Enter);
     assert!(h.screen(80, 24).contains("that folder exists already"));
     h.key(KeyCode::Esc);
-    // `m` moves a profile to a folder picked from a list (with a `/` filter).
+    // `m` moves a profile to a folder picked from a tree (with a `/` filter).
     h.explore("v6");
     h.keys("m");
-    assert_eq!(h.app.key_context(), Ctx::Chooser);
+    assert_eq!(h.app.key_context(), Ctx::ScriptTree);
     h.keys("/");
-    assert_eq!(h.app.key_context(), Ctx::ChooserFilter);
+    assert_eq!(h.app.key_context(), Ctx::ScriptTreeName);
     h.type_text("prod");
     h.key(KeyCode::Enter);
     h.key(KeyCode::Enter);
@@ -532,7 +533,9 @@ fn folders_are_created_renamed_and_profiles_moved() {
     // And back to the top level.
     h.explore("v6");
     h.keys("m");
-    assert_eq!(h.app.overlays.chooser().unwrap().selected, 2, "the list starts on its folder");
+    let t = h.app.overlays.script_tree().unwrap();
+    assert_eq!(t.row, TreeRow::Folder("team/prod".into()), "the tree starts on its folder");
+    assert_eq!(t.selected(), 2, "below the top and its open parent");
     h.keys("kkk"); // "(top level)" is first
     h.key(KeyCode::Enter);
     assert_eq!(h.app.profiles.iter().find(|p| p.name == "v6").unwrap().folder, None);
@@ -1255,6 +1258,6 @@ fn the_menu_of_a_folder_and_of_a_profile() {
     h.keys("n");
     h.right_click_row("v6");
     h.menu_pick("Move connection profile to a folder");
-    assert_eq!(h.overlay_kind(), Some(OverlayKind::Chooser));
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ScriptTree));
     assert_eq!(h.app.selected_profile(), Some(id(&h, "v6")));
 }

@@ -4,7 +4,7 @@
 //! open in one tab at most: opening it again goes to that tab. A script that changed on disk
 //! since it was read is never overwritten without asking.
 
-use super::chooser::{Chooser, ChooserPurpose, NameInput, NamePurpose};
+use super::chooser::{NameInput, NamePurpose};
 use super::persist::Saved;
 use super::*;
 use datarig_core::scripts::name::NameError;
@@ -365,31 +365,6 @@ impl App {
         let (from_t, to_t) = (from.to_string(), to.clone());
         self.flash(Notice::new(Msg::ScriptsRenamed { from: from_t, to: to_t }, Level::Success));
         Ok(())
-    }
-
-    /// `m` on a saved query or folder: pick the folder to move it to.
-    pub(super) fn open_move_script(&mut self, path: String) {
-        let mut items = vec![(None, self.i18n.label(Label::ChooserFolderTop).to_string())];
-        items.extend(
-            self.script_list
-                .iter()
-                .filter(|e| e.folder && !is_within(&e.path, &path))
-                .map(|e| (Some(e.path.clone()), format!("{}/", e.path))),
-        );
-        let current = scripts::parent(&path).map(str::to_string);
-        let selected = items.iter().position(|(v, _)| *v == current).unwrap_or(0);
-        self.overlays.push(Overlay::Chooser(Chooser {
-            title: Label::ChooserMoveTitle,
-            items,
-            selected,
-            filter: TextInput::default(),
-            filtering: false,
-            scroll: 0,
-            list: Default::default(),
-            hover: None,
-            press: Default::default(),
-            purpose: ChooserPurpose::MoveScript(path),
-        }));
     }
 
     /// Move saved query or folder `path` into `folder` (`None`: the top).

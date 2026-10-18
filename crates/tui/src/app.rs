@@ -36,6 +36,7 @@ pub mod effects;
 pub mod environments;
 mod execution;
 pub mod explorer;
+pub mod folder_pick;
 mod format;
 pub mod guide;
 pub mod hover;

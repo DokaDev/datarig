@@ -357,9 +357,10 @@ fn rename_move_and_delete_from_the_explorer() {
     // m: move to another folder.
     select_row(&mut h, "renamed");
     h.keys("m");
-    assert_eq!(h.overlay_kind(), Some(OverlayKind::Chooser));
-    let target = h.app.overlays.chooser().unwrap().items.iter().position(|(v, _)| v.as_deref() == Some("b")).unwrap();
-    h.app.overlays.chooser_mut().unwrap().selected = target;
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ScriptTree));
+    assert_eq!(h.app.overlays.script_tree().unwrap().row, TreeRow::Folder("a".into()), "on its folder");
+    h.keys("j");
+    assert_eq!(h.app.overlays.script_tree().unwrap().row, TreeRow::Folder("b".into()));
     h.key(KeyCode::Enter);
     assert!(dirs.read("b/renamed.sql").is_some() && dirs.read("a/renamed.sql").is_none());
     assert!(h.app.tabs.find_script("b/renamed.sql").is_some());
@@ -413,7 +414,7 @@ fn the_menu_of_a_saved_query_and_of_a_folder() {
     h.keys("n");
     h.right_click_row("q1");
     h.menu_pick("Move saved query to a folder");
-    assert_eq!(h.overlay_kind(), Some(OverlayKind::Chooser));
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ScriptTree));
     h.key(KeyCode::Esc);
     // Its folder (the cursor on the saved query).
     select_row(&mut h, "q1");

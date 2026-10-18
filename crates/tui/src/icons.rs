@@ -60,6 +60,9 @@ pub const UNKNOWN_DRIVER: &str = "\u{f1c0}";
 /// A saved query (nf-fa-file_code_o).
 pub const SCRIPT: &str = "\u{f1c9}";
 
+/// A folder of the folder picker (nf-fa-folder).
+pub const FOLDER: &str = "\u{f07b}";
+
 /// A table tab (nf-fa-table); with icons off the tab shows the name alone.
 pub const TABLE: &str = "\u{f0ce}";
 

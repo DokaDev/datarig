@@ -887,6 +887,7 @@
 "key_picker.title" = "SSH key file"
 "key_picker.filter" = "Filter or path"
 "key_picker.keys" = "Enter pick · type a filter or path · Tab tree · ←→ folders · Esc"
+"folder_pick.keys" = "Enter pick · →← folders · / filter · n new folder · Esc cancel"
 "scripts.index_save_failed" = "Could not save which connection the saved queries use: {error}"
 "conn.unknown_driver" = "Unknown driver “{driver}” in this profile"
 "io.permission_denied" = "permission denied"

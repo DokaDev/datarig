@@ -484,7 +484,7 @@ Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+
 
 The folder tree of the saved queries (save as, open): the tree has the keyboard. Inside `root`.
 
-Reserved — saved-queries tree: `j` `k` `h` `l` `Up` `Down` `Left` `Right` `Enter` `n` `Tab` `Shift+Tab` `Esc`
+Reserved — saved-queries tree: `j` `k` `h` `l` `Up` `Down` `Left` `Right` `Enter` `n` `/` `q` `Tab` `Shift+Tab` `Esc`
 
 ## `overlay.script_tree.name` [text]
 
