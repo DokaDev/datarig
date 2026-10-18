@@ -443,6 +443,7 @@ pub(crate) async fn query_loop(
             // nothing, a lost one answers what waited for it.
             Next::Command(DbCommand::Export { id, sql, guard, sink, batch }) => {
                 link.serving(&events, id);
+                s.request = id;
                 export::export(&mut conn, &mut link, &env, &mut s, &sql, guard, sink, batch).await.map(
                     |(result, cancelled)| {
                         let _ = events.send(DbEvent::Exported { id, result, cancelled });
