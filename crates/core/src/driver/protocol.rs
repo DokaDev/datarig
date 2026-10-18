@@ -314,14 +314,16 @@ pub enum TxRule {
     /// stays open). A run with transaction control of its own (`COMMIT`, `ROLLBACK`, `SAVEPOINT`,
     /// …) and a block the user opened (`BEGIN`) get none: the server's own rules apply (a failure
     /// aborts the block). Savepoint names starting with `datarig_` are the driver's
-    /// ([`DbError::ReservedSavepoint`]).
+    /// ([`DbError::ReservedSavepoint`]). MySQL sets no such savepoint (it would cost a round
+    /// trip of its own): a failed statement there is undone by the server alone, the transaction
+    /// stays open, and the statements of the run before it keep what they did.
     ///
     /// `idle_timeout`: the most the server lets the transaction sit idle (PostgreSQL's
     /// `idle_in_transaction_session_timeout`, set for that transaction only, again after a
     /// `COMMIT AND CHAIN`; PostgreSQL 9.6 or later): past it the server ends the session and
     /// rolls back ([`DbError::IdleInTransactionTimeout`]). Less than a second is taken as one
     /// second (a shorter limit could end the transaction between two statements of a run).
-    /// `None` leaves the server's setting as it is.
+    /// `None` leaves the server's setting as it is. MySQL has no such limit and ignores it.
     Manual { steps: Vec<TxStep>, idle_timeout: Option<Duration> },
 }
 
@@ -336,7 +338,9 @@ pub enum TxStep {
     /// transaction block is open it runs in a read-only transaction of its own (PostgreSQL:
     /// `BEGIN READ ONLY` where the driver sends `BEGIN`, in the same write), so a write hidden
     /// in it fails (`25006`) instead of being committed by itself. Inside an open block it runs
-    /// as it is. Drivers without read-only transactions run it as [`TxStep::AsIs`].
+    /// as it is. Drivers without read-only transactions run it as [`TxStep::AsIs`]. MySQL does
+    /// so: a read-only transaction would cost a round trip of its own for every read, so a write
+    /// hidden in a read there (a view's stored function) commits by itself.
     ReadOnly,
     /// It runs as it would under [`TxRule::Auto`] (transaction control, session settings,
     /// statements that cannot run in a transaction).
@@ -868,6 +872,12 @@ pub enum DbEvent {
     /// refuses everything but `ROLLBACK` (or `ROLLBACK TO SAVEPOINT`) until it ends. Sent when
     /// that changes; `TxOpen(false)` ends it too.
     TxAborted(bool),
+    /// Whether the session runs with autocommit, as the server says (MySQL's
+    /// `SERVER_STATUS_AUTOCOMMIT`), when that changed: sessions start with it on; a statement
+    /// of the user's (`SET autocommit = 0`) turns it off for the session, and every statement
+    /// then opens a transaction (`Block`, `TxOpen`) that stays open until it is committed or
+    /// rolled back.
+    Autocommit(bool),
     /// The connection ended after `Connected` without the UI closing the session (network,
     /// server restart, `pg_terminate_backend`). Sent once, after the `Failed` of a statement
     /// that was running. Never sent before `Connected` (that is `ConnectFailed`) nor after

@@ -758,7 +758,8 @@ impl App {
             | DbEvent::ManualBegun { .. }
             | DbEvent::ManualRolledBack { .. }
             | DbEvent::RunRolledBack { .. }
-            | DbEvent::TxEnded { .. } => {}
+            | DbEvent::TxEnded { .. }
+            | DbEvent::Autocommit(_) => {}
             DbEvent::Ddl { id: request, result } => self.ddl_answered(id, None, request, result),
         }
     }
@@ -964,6 +965,8 @@ impl App {
             | DbEvent::ManualRolledBack { .. }
             | DbEvent::RunRolledBack { .. }
             | DbEvent::TxEnded { .. } => None,
+            // Not shown yet: the transaction it leaves open is (`Block`, `TxOpen`).
+            DbEvent::Autocommit(_) => None,
             // The server dropped the schema's startup option (a pooler): the driver sets the
             // path in each transaction instead. Said in the run's Messages.
             DbEvent::ContextPerTransaction => {
