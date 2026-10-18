@@ -362,8 +362,13 @@ pub enum ServerEnd {
     /// lock wait timeout under `innodb_rollback_on_timeout`). Nothing of it was kept.
     RolledBack,
     /// A statement committed it before running (MySQL's implicit commit: DDL, `BEGIN` inside a
-    /// transaction, `LOCK TABLES`, …). What it did was kept.
+    /// transaction, `LOCK TABLES`, …), also when that statement then failed (`CREATE TABLE` of
+    /// a table that exists). What it did was kept.
     Committed,
+    /// It ended while a statement that runs code of the server's (a procedure) failed: the code
+    /// may have committed it before failing, or the server rolled it back. What it did may or
+    /// may not have been kept.
+    Unknown,
 }
 
 /// How [`DbCommand::EndTx`] ended the transaction ([`DbEvent::TxEnded`]).

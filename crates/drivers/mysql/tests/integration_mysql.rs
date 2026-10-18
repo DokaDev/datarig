@@ -3963,7 +3963,10 @@ impl Conn {
     }
 
     /// The events that follow an answer: up to the answer of a request sent after it (a page of
-    /// a result that is not there, answered with an empty one in its turn).
+    /// a result that is not there, answered with an empty one in its turn). Not after a result
+    /// held open (more rows to come): the session then takes pages of that result only, and
+    /// this request waits until the result ends, so the call would hang; such a run waits for
+    /// its answer alone.
     async fn settled(&mut self) -> Vec<DbEvent> {
         const MARK: u64 = u64::MAX;
         self.session.send(DbCommand::FetchMore { id: MARK });
@@ -4366,4 +4369,36 @@ async fn a_held_result_of_the_opening_statement_says_the_transaction_open() {
     assert_eq!(tx_of(&c.end_tx(2, true).await), ["ended Committed", "block false", "tx false"]);
     assert_eq!(innodb_trx(&mut a, id, 0).await, 0);
     a.disconnect().await.unwrap();
+}
+
+/// A statement that commits implicitly and then fails (`CREATE TABLE` of a table that exists):
+/// MySQL committed the open transaction before it ran, so that is what is said (never a
+/// rollback), and another session sees the work; also in the run that opened the transaction.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failed_statement_that_commits_implicitly_says_the_transaction_committed() {
+    let test = "a_failed_statement_that_commits_implicitly";
+    let Some((url, admin)) = urls(test) else { return };
+    let t = Table::make(&admin, "mddlfail", &["CREATE TABLE {t} (id INT PRIMARY KEY)"]).await;
+    let q = t.q();
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let count = format!("SELECT CAST(COUNT(*) AS CHAR) FROM {q}");
+    let exists = format!("CREATE TABLE {q} (id INT)");
+    let evs = c.manual(1, &[&format!("INSERT INTO {q} VALUES (1)")], &[true]).await;
+    assert_eq!(tx_of(&evs), ["begun 0", "block true", "tx true"], "{evs:?}");
+    let evs = c.manual(2, &[&exists], &[false]).await;
+    match failures(&evs, 2)[..] {
+        [DbEvent::Failed { error: DbError::Server(m), .. }] => assert!(m.starts_with("ERROR 1050 "), "{m}"),
+        _ => panic!("{evs:?}"),
+    }
+    assert_eq!(tx_of(&evs), ["closed Committed", "block false", "tx false"], "{evs:?}");
+    assert_eq!(seen(&url, &count).await, "1", "committed");
+    // In the run that opened it: committed too, never rolled back by the session.
+    let evs = c.manual(3, &[&format!("INSERT INTO {q} VALUES (2)"), &exists], &[true, false]).await;
+    assert_eq!(failures(&evs, 3).len(), 1, "{evs:?}");
+    assert_eq!(
+        tx_of(&evs),
+        ["begun 0", "block true", "tx true", "closed Committed", "block false", "tx false"],
+        "{evs:?}"
+    );
+    assert_eq!(seen(&url, &count).await, "2", "committed");
 }
