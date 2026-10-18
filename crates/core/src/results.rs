@@ -66,7 +66,9 @@ pub struct RowStore {
     len: usize,
     /// Rows `start..start + window.len()` are in memory.
     start: usize,
-    window: Vec<Vec<Cell>>,
+    /// Shared with the snapshots of a reader on another thread ([`RowStore::snapshot`]): taking
+    /// one copies nothing; a change while one lives copies the rows once.
+    window: Arc<Vec<Vec<Cell>>>,
     spill: Option<SpillFile>,
     dir: Option<Arc<SpillDir>>,
     limits: Limits,
@@ -88,14 +90,14 @@ impl RowStore {
         let mut s = Self {
             len: 0,
             start: 0,
-            window: Vec::new(),
+            window: Arc::new(Vec::new()),
             spill: None,
             dir,
             limits: Limits { window: limits.window.max(MIN_WINDOW), ..limits },
         };
         // A first page never spills on its own: pages are far smaller than the window.
         s.len = rows.len();
-        s.window = rows;
+        s.window = Arc::new(rows);
         s
     }
 
@@ -148,7 +150,7 @@ impl RowStore {
         if self.spill.is_none() {
             let (fits, dir) = (self.len + n <= self.limits.window, self.dir.clone());
             let Some(dir) = dir.filter(|_| !fits) else {
-                self.window.extend(rows);
+                Arc::make_mut(&mut self.window).extend(rows);
                 self.len += n;
                 return Ok(Appended { kept: n, capped: false });
             };
@@ -167,10 +169,11 @@ impl RowStore {
         let at_end = self.start + self.window.len() == self.len;
         self.len += kept;
         if at_end {
-            self.window.extend(rows.into_iter().take(kept));
-            let over = self.window.len().saturating_sub(self.limits.window);
+            let window = Arc::make_mut(&mut self.window);
+            window.extend(rows.into_iter().take(kept));
+            let over = window.len().saturating_sub(self.limits.window);
             if over > 0 {
-                self.window.drain(..over);
+                window.drain(..over);
                 self.start += over;
             }
         }
@@ -202,13 +205,13 @@ impl RowStore {
         let mut rows = Vec::with_capacity(ne - ns);
         if ks < ke {
             rows.extend(file.read(ns..ks).map_err(|e| Fault::io_at(&e, file.path()))?);
-            let old = std::mem::take(&mut self.window);
+            let old = Arc::unwrap_or_clone(std::mem::take(&mut self.window));
             rows.extend(old.into_iter().skip(ks - start).take(ke - ks));
             rows.extend(file.read(ke..ne).map_err(|e| Fault::io_at(&e, file.path()))?);
         } else {
             rows = file.read(ns..ne).map_err(|e| Fault::io_at(&e, file.path()))?;
         }
-        self.window = rows;
+        self.window = Arc::new(rows);
         self.start = ns;
         Ok(())
     }
@@ -244,6 +247,80 @@ impl RowStore {
             }
         }
         Ok(())
+    }
+}
+
+/// The rows of a range of a [`RowStore`] as they are now, for a reader on another thread (an
+/// export): a handle on the spill file when the rows spilled (memory stays flat), else a copy
+/// of the rows in memory (at most a window). Rows appended to the store later are not in it.
+#[derive(Debug)]
+pub enum RowsSnapshot {
+    /// The rows in memory, `range` of them (shared, not copied).
+    Rows {
+        rows: Arc<Vec<Vec<Cell>>>,
+        range: Range<usize>,
+    },
+    Spill {
+        reader: spill::SpillReader,
+        range: Range<usize>,
+    },
+}
+
+impl RowsSnapshot {
+    pub fn len(&self) -> usize {
+        match self {
+            RowsSnapshot::Rows { range, .. } => range.len(),
+            RowsSnapshot::Spill { range, .. } => range.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Call `f` with the rows in order, `chunk` at a time, until it returns `false`.
+    pub fn for_each_chunk(&self, chunk: usize, mut f: impl FnMut(&[Vec<Cell>]) -> bool) -> Result<(), Fault> {
+        let chunk = chunk.max(1);
+        match self {
+            RowsSnapshot::Rows { rows, range } => {
+                for c in rows.get(range.clone()).unwrap_or_default().chunks(chunk) {
+                    if !f(c) {
+                        break;
+                    }
+                }
+            }
+            RowsSnapshot::Spill { reader, range } => {
+                let mut a = range.start;
+                while a < range.end {
+                    let e = range.end.min(a + chunk);
+                    let rows = reader.read(a..e).map_err(|err| Fault::io(&err))?;
+                    if rows.len() != e - a {
+                        return Err(Fault::other("spill file: fewer rows than written"));
+                    }
+                    if !f(&rows) {
+                        break;
+                    }
+                    a = e;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl RowStore {
+    /// The rows of `range` as they are now ([`RowsSnapshot`]).
+    pub fn snapshot(&self, range: Range<usize>) -> Result<RowsSnapshot, Fault> {
+        let (a, b) = (range.start.min(self.len), range.end.min(self.len));
+        match &self.spill {
+            // Once spilled, the file has every row from the first.
+            Some(file) => {
+                let reader = file.reader().map_err(|e| Fault::io_at(&e, file.path()))?;
+                Ok(RowsSnapshot::Spill { reader, range: a..b })
+            }
+            // Without a spill file every row is in memory.
+            None => Ok(RowsSnapshot::Rows { rows: Arc::clone(&self.window), range: a..b }),
+        }
     }
 }
 

@@ -11,6 +11,7 @@ impl App {
     pub fn handle_event(&mut self, ev: Event) {
         self.handle_event_here(ev);
         self.sweep_as_plan();
+        self.sweep_exports();
         self.keychain_offer_check();
         self.forms_follow_keychain();
     }
@@ -111,6 +112,7 @@ impl App {
     pub fn on_app_event(&mut self, ev: AppEvent) {
         self.on_app_event_here(ev);
         self.sweep_as_plan();
+        self.sweep_exports();
         self.keychain_offer_check();
         self.forms_follow_keychain();
     }
@@ -134,6 +136,7 @@ impl App {
             AppEvent::TestTunnel { seq, ev } => self.on_test_tunnel_event(seq, ev),
             AppEvent::SharedTunnel { serial, ev } => self.on_shared_event(serial, ev),
             AppEvent::TestProbe { seq, probes } => self.on_test_probe(seq, probes),
+            AppEvent::Export(ev) => self.on_export_event(ev),
         }
         // What an open quick connect list waits for may have arrived.
         if self.overlays.quick().is_some() {

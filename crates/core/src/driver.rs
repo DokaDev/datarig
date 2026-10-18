@@ -9,8 +9,9 @@ pub mod structure;
 
 pub use keys::{KeyCatalog, KeyMarks};
 pub use protocol::{
-    ArrayElement, CancelFailure, Cell, ColumnMeta, ColumnOrigin, DbCommand, DbError, DbEvent, Outcome, PagingMode,
-    ReadIn, SchemaObjects, SessionValues, StatementInfo, ValueKind,
+    ArrayElement, CancelFailure, Cell, ColumnMeta, ColumnOrigin, DbCommand, DbError, DbEvent, EXPORT_BATCH_BYTES,
+    ExportBatch, ExportGuard, ExportRead, ExportSink, Outcome, PagingMode, ReadIn, SchemaObjects, SessionValues,
+    StatementInfo, ValueKind,
 };
 
 use crate::profile::ConnectionConfig;
@@ -65,6 +66,9 @@ pub struct Capabilities {
     /// result to its end at once, a page as soon as the one before came (into its own store, up
     /// to its spill limit), instead of a page whenever the user moves to the next one.
     pub reads_held_to_end: bool,
+    /// Exports: the query session reads every row of a statement into a bounded channel
+    /// ([`DbCommand::Export`]) for the app to write to a file.
+    pub export: bool,
 }
 
 /// How a server's namespaces nest (`Capabilities::hierarchy`).

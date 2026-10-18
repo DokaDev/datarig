@@ -320,6 +320,9 @@ pub struct TableStructure {
     /// (MySQL: the server opens a table to estimate it when it has no cached statistics) leaves
     /// them `None` and this false, and the explorer keeps those of the schema's listing.
     pub estimates: bool,
+    /// Other tables inherit from it (PostgreSQL's legacy inheritance, not partitions): reading it
+    /// reads theirs too, and its keys do not hold across them.
+    pub inherited: bool,
 }
 
 impl TableStructure {
@@ -344,6 +347,7 @@ impl TableStructure {
             triggers: Vec::new(),
             hidden: Vec::new(),
             estimates: true,
+            inherited: false,
         }
     }
 

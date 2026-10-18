@@ -72,6 +72,8 @@ impl App {
         // read): said, so its announcement (or "waiting") is not the last word (one terminal
         // note per request, and per run).
         let stopped = match t.exec.running.take() {
+            // An export says how it ended itself.
+            Some(r) if r.export => None,
             Some(r) if r.count => Some(Label::ResultsCountRebound),
             Some(r) if r.fetch => Some(Label::ResultsFetchRebound),
             Some(_) => {

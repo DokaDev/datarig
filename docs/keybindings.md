@@ -145,6 +145,7 @@ Every pane that is not text input (explorer, results, vim Normal/Visual). Inside
 | `Space r n` | `results.page.next` | Results → next page | ✓ |
 | `Space r p` | `results.page.prev` | Results → previous page | ✓ |
 | `Space r #` | `results.count` | Results → count every row (runs a count query) |  |
+| `Space r e` | `results.export` | Results → export to a file (every row as CSV) |  |
 | `Space r ]` | `results.tab.next` | Result tabs → next |  |
 | `Space r [` | `results.tab.prev` | Result tabs → previous |  |
 
@@ -607,6 +608,7 @@ An editor command closes the line; what went wrong is said in the status bar.
 | `:ddl [schema.name]` |  | Show the DDL of the explorer's object, the table tab's table, or a name (:ddl [schema.name]) |
 | `:explain [analyze]` |  | The plan of the statement under the cursor (:explain analyze runs and measures it; a write is rolled back) |
 | `:theme copy <from> <name> / new <name>` |  | Write a theme file: a full copy of a theme, or a new one to fill in |
+| `:export [format] [all / fetched / selection] [delim= quote= header= null=] [path]` |  | Export the result to a file: every row by default, the format from the file's extension (:export [format] [all|fetched|selection] [delim=… quote=… header=… null=…] [path]) |
 
 Settings of `:set` (saved to `config.toml` like the matching actions):
 

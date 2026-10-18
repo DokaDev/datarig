@@ -43,6 +43,9 @@ ro_select_small_warm = { to_result = 1, total = 1 }
 ro_select_page_of_4m_warm = { to_result = 1, total = 1 }
 ro_set = { to_result = 1, total = 1 }
 ro_first_in_block = { to_result = 2, total = 3 }
+# A chunk of an export of a table read by its key: its own read-only transaction opened with the
+# statement's Parse (one round trip), the rows of the chunk with its Bind (one), its COMMIT (one).
+export_keyset_chunk = { to_result = 3, total = 3 }
 # Opening a table in the explorer: its whole structure (columns, keys, indexes, constraints,
 # triggers, size estimate) is one catalog statement on the metadata session.
 table_structure = { to_result = 1, total = 1 }
@@ -106,6 +109,17 @@ rss_mib_max = 96
 # Growth from 125,000 rows (the window is full and spilling) to 4,000,000 rows: the rows past the
 # window live on disk, so memory must stay flat.
 rss_growth_mib_max = 16
+
+[export]
+# `:export all <file>.csv` of SELECT * FROM analytics.events (4,000,000 rows) with the headless
+# app: once streamed with one statement, once as a table tab read in chunks by its key. The rows
+# go from the session through a channel of two batches to the file, never into the app's result:
+# resident memory of the whole process, and its growth from 250,000 rows written to the end,
+# must stay flat. Rows written per second, with a wide margin for CI (a developer machine:
+# see docs/perf.md).
+rss_mib_max = 96
+rss_growth_mib_max = 16
+rows_per_s_min = 50000
 
 [editor]
 # Keystroke to frame in a 5 MB file at 160x45 (a developer machine: about 0.5 ms). A theme

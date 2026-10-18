@@ -176,7 +176,7 @@ pub fn free_backup(path: &Path) -> PathBuf {
 
 /// Make a rename in `dir` durable (Unix). Best effort: some file systems refuse it, and the
 /// data itself is already on disk.
-fn sync_dir(dir: &Path) {
+pub fn sync_dir(dir: &Path) {
     #[cfg(unix)]
     if let Ok(d) = fs::File::open(dir) {
         let _ = d.sync_all();

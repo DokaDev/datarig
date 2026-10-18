@@ -388,6 +388,24 @@ pub async fn run(url: &str, one_way: Duration, runs: usize) -> Result<Value, Str
     out.push(scenario(&mut s, "insert_in_block", runs, 0, |i| format!("INSERT INTO zz_bench_rtt VALUES ({i})")).await?);
     s.cost("ROLLBACK").await?;
     s.cost("DROP TABLE zz_bench_rtt").await?;
+    // A chunk of a table read by its key for an export: its own read-only transaction opened
+    // with the statement's Parse, its rows (fewer than a batch), its COMMIT.
+    let mut costs = Vec::new();
+    for i in 0..runs {
+        let id = s.next_id();
+        let (sink, mut rows) = tokio::sync::mpsc::channel(4);
+        let drain = tokio::spawn(async move { while rows.recv().await.is_some() {} });
+        let sql =
+            format!("SELECT * FROM \"analytics\".\"events\" WHERE \"id\" > {} ORDER BY \"id\" LIMIT 1000", 1000 * i);
+        let cmd = DbCommand::Export { id, sql, guard: datarig_core::driver::ExportGuard::Keyset, sink, batch: 2_000 };
+        let (c, ev) = s.measure(cmd, |e| matches!(e, DbEvent::Exported { id: x, .. } if *x == id)).await?;
+        let _ = drain.await;
+        if !matches!(&ev, DbEvent::Exported { result: Ok(r), .. } if r.rows == 1000 && r.complete) {
+            return Err(format!("export_keyset_chunk: {ev:?}"));
+        }
+        costs.push(c);
+    }
+    out.push(report("export_keyset_chunk", &costs));
     // A read-only policy: `BEGIN READ ONLY` goes out with the first page, and
     // `SET TRANSACTION READ ONLY` with the first statement of the user's block.
     let mut r = WiredSession::open(url, one_way, true).await?;

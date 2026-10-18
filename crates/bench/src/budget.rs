@@ -18,6 +18,13 @@ impl Checks {
         self.results.push((what.to_string(), ok));
     }
 
+    /// `measured` must be at least `min`.
+    fn check_min(&mut self, what: &str, measured: f64, min: f64, unit: &str) {
+        let ok = measured >= min;
+        println!("  {} {what}: {measured:.3}{unit} (budget at least {min}{unit})", if ok { "PASS" } else { "FAIL" });
+        self.results.push((what.to_string(), ok));
+    }
+
     fn missing(&mut self, what: &str) {
         println!("  FAIL {what}: not measured");
         self.results.push((what.to_string(), false));
@@ -86,6 +93,32 @@ pub fn paging(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
     }
     if result["complete"] != true {
         c.missing("paging to the end of the result");
+    }
+    Ok(())
+}
+
+/// An export of every row (`name`: `export_stream` or `export_keyset`): its memory stays flat,
+/// it writes every row, and fast enough.
+pub fn export(c: &mut Checks, b: &Table, name: &str, result: &Value) -> Result<(), String> {
+    let peak = f(result, &["rss_kb_peak"]).map(|k| k / MIB);
+    match peak {
+        Some(p) => c.check(&format!("{name} RSS peak"), p, num(b, "export", "rss_mib_max")?, " MiB"),
+        None => c.missing(&format!("{name} RSS peak")),
+    }
+    // From the first sample once the export runs (250,000 rows) to the peak.
+    let first = result["samples"].as_array().and_then(|s| s.get(1)).and_then(|s| s["rss_kb"].as_f64());
+    match (first, peak) {
+        (Some(first), Some(peak)) => {
+            c.check(&format!("{name} RSS growth"), peak - first / MIB, num(b, "export", "rss_growth_mib_max")?, " MiB")
+        }
+        _ => c.missing(&format!("{name} RSS growth")),
+    }
+    match f(result, &["rows_per_s"]) {
+        Some(r) => c.check_min(&format!("{name} rows per second"), r, num(b, "export", "rows_per_s_min")?, ""),
+        None => c.missing(&format!("{name} rows per second")),
+    }
+    if result["complete"] != true {
+        c.missing(&format!("{name}: every row exported"));
     }
     Ok(())
 }

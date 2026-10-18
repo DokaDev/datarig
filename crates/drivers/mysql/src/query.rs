@@ -361,6 +361,16 @@ pub(crate) async fn query_loop(
                     let _ = events.send(DbEvent::RepeatChecked { id, result });
                 })
             }
+            // Answered once, after its last batch; a session the UI closed meanwhile answers
+            // nothing, a lost one answers what waited for it.
+            Next::Command(DbCommand::Export { id, sql, guard, sink, batch }) => {
+                link.serving(&events, id);
+                export::export(&mut conn, &mut link, &env, &mut s, &sql, guard, sink, batch).await.map(
+                    |(result, cancelled)| {
+                        let _ = events.send(DbEvent::Exported { id, result, cancelled });
+                    },
+                )
+            }
             // Nothing is held here (a held result serves its pages where it is read): an empty
             // last page, so the UI never waits for one.
             Next::Command(DbCommand::FetchMore { id }) => {
@@ -403,6 +413,7 @@ fn unanswered(events: &UnboundedSender<DbEvent>, c: DbCommand, error: &DbError) 
         }
         DbCommand::Count { id, .. } => DbEvent::Counted { id, result: Err(error.clone()), snapshot: false },
         DbCommand::CheckRepeat { id, .. } => DbEvent::RepeatChecked { id, result: Err(error.clone()) },
+        DbCommand::Export { id, .. } => DbEvent::Exported { id, result: Err(error.clone()), cancelled: false },
         // Nothing to answer: a page of a result that is gone, a close of one.
         _ => return,
     };
@@ -1476,6 +1487,8 @@ async fn check_repeat(
 ) -> Result<Result<(), DbError>, Stop> {
     Ok(asked_server(conn, link, env, s, sql).await?.map(|_| ()))
 }
+
+mod export;
 
 #[cfg(test)]
 mod tests;

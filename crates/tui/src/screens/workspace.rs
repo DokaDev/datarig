@@ -233,7 +233,7 @@ fn draw_editor(app: &mut App, area: Rect, buf: &mut Buffer) -> (u16, u16) {
     let running = t
         .exec
         .running
-        .filter(|r| !r.fetch && !r.count && t.editor.active_run() == Some(r.id))
+        .filter(|r| !r.fetch && !r.count && !r.export && t.editor.active_run() == Some(r.id))
         .and_then(|r| t.exec.run.current().map(|i| (i, crate::widgets::spinner_at(r.started, now))));
     let editor = &mut app.tabs.active_mut().editor;
     editor.set_running(running);

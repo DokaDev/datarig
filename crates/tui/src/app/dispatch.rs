@@ -202,6 +202,7 @@ impl App {
             Action::PageNext => self.page_next(),
             Action::PagePrev => self.page_prev(),
             Action::CountRows => self.count_rows(),
+            Action::Export => self.export_action(),
             Action::ReloadDdl => self.load_ddl(self.tab().id),
             Action::DdlToConsole => self.ddl_to_console(),
             Action::CopyDdl => self.copy_ddl(),
@@ -281,7 +282,8 @@ impl App {
         if self.overlays.confirm().is_some_and(|c| matches!(c.action, ConfirmAction::ScriptConflict(_))) {
             return;
         }
-        let running = self.tabs.iter().any(|t| t.exec.running.is_some());
+        // An export writing a file counts as work that runs.
+        let running = self.tabs.iter().any(|t| t.exec.running.is_some() || self.exporting(t.id));
         let queued = self.tabs.iter().any(|t| self.is_queued(t.id));
         let texts = [Label::QuitRunning, Label::QuitTx, Label::QuitRunningTx, Label::QuitQueued];
         let conflicts = self.conflicted(None) > 0;
@@ -360,6 +362,9 @@ impl App {
         if action == ConfirmAction::ExplainAgain && self.as_plan_unarmed() {
             return;
         }
+        if matches!(action, ConfirmAction::ExportStart | ConfirmAction::ExportReplace) && self.export_unarmed() {
+            return;
+        }
         match code {
             KeyCode::Char('y') | KeyCode::Enter if !repeat => {
                 self.overlays.close(OverlayKind::Confirm);
@@ -397,6 +402,8 @@ impl App {
                     ConfirmAction::DeleteEnvironment(id) => self.delete_environment(id),
                     ConfirmAction::ExplainAgain => self.explain_as_plan_confirmed(),
                     ConfirmAction::KeychainSecurityTool => self.keychain_access_changed(KeychainAccess::SecurityTool),
+                    ConfirmAction::ExportStart => self.export_answered(true, false),
+                    ConfirmAction::ExportReplace => self.export_answered(true, true),
                     ConfirmAction::ScriptConflict(_) | ConfirmAction::KeychainOffer => {}
                 }
             }
@@ -417,6 +424,9 @@ impl App {
                 }
                 if action == ConfirmAction::ExplainAgain {
                     self.as_plan_declined();
+                }
+                if matches!(action, ConfirmAction::ExportStart | ConfirmAction::ExportReplace) {
+                    self.export_answered(false, action == ConfirmAction::ExportReplace);
                 }
             }
             _ => {}
@@ -447,6 +457,8 @@ impl App {
     pub(super) fn finish_quit(&mut self) {
         self.quitting = None;
         self.save_workspace();
+        // Exports end their files (a partial file that reads) before the process goes.
+        self.end_exports_for_quit();
         self.close_sessions();
         let ids: Vec<ProfileId> = self.conns.iter().map(|(id, _)| id).collect();
         for id in ids {

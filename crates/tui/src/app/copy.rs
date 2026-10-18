@@ -224,7 +224,7 @@ pub struct Intent {
 }
 
 impl Intent {
-    fn of(t: &Tab) -> Self {
+    pub(super) fn of(t: &Tab) -> Self {
         Self {
             tab: t.id,
             profile: t.profile,
@@ -235,18 +235,18 @@ impl Intent {
     }
 
     /// The tab it belongs to still shows the same result on the same session.
-    fn holds(&self, app: &App) -> bool {
+    pub(super) fn holds(&self, app: &App) -> bool {
         app.tabs.get(self.tab).is_some_and(|t| Self::of(t) == *self)
     }
 }
 
 /// The rows and columns a copy takes, and whether it is one cell without a selection.
-struct Block {
-    rows: Range<usize>,
-    cols: Vec<usize>,
-    cell: bool,
+pub(super) struct Block {
+    pub(super) rows: Range<usize>,
+    pub(super) cols: Vec<usize>,
+    pub(super) cell: bool,
     /// Every fetched row, and the server has more.
-    partial: bool,
+    pub(super) partial: bool,
 }
 
 /// The rectangle between the selection's anchor and the cursor.
@@ -313,7 +313,7 @@ impl App {
         }
     }
 
-    fn block(&self, what: CopyWhat) -> Option<Block> {
+    pub(super) fn block(&self, what: CopyWhat) -> Option<Block> {
         let t = self.tab();
         let Results::Rows(rs) = &t.results else { return None };
         if rs.rows.is_empty() || rs.columns.is_empty() {
@@ -843,7 +843,7 @@ fn qualified(d: Dialect, t: &datarig_core::driver::keys::TableKeys) -> String {
 
 impl App {
     /// Why an automatic copy as SQL INSERT was refused, in words.
-    fn why(&self, why: &NotInsertable) -> String {
+    pub(super) fn why(&self, why: &NotInsertable) -> String {
         use NotInsertable::*;
         // The key cache could not be read: say why (an old server, a permission).
         let failed = Some(self.tab_keys(self.tab())).and_then(|k| match k {
@@ -888,7 +888,7 @@ impl App {
     }
 
     /// Why a copy as SQL was refused for a value of a column ([`export::sql_cells`]), in words.
-    fn not_whole(&self, r: &export::Refused) -> Notice {
+    pub(super) fn not_whole(&self, r: &export::Refused) -> Notice {
         let reason = match &r.why {
             export::NotWhole::Float => self.i18n.label(Label::CopySqlWhyFloat).to_string(),
             export::NotWhole::Charset(charset) => {
@@ -906,7 +906,7 @@ impl App {
     }
 
     /// Why a copy as SQL UPDATE was refused, in words.
-    fn why_not_update(&self, why: &NotUpdatable) -> String {
+    pub(super) fn why_not_update(&self, why: &NotUpdatable) -> String {
         match why {
             NotUpdatable::NotInsertable(n) => self.why(n),
             NotUpdatable::NoPrimaryKey => self.i18n.label(Label::CopyUpdateWhyNoPrimaryKey).to_string(),

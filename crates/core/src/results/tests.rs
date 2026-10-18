@@ -248,3 +248,63 @@ fn a_sweep_deletes_only_what_dead_runs_left() {
     assert!(spill::sweep(&state.join("nowhere")).failed.is_empty());
     let _ = std::fs::remove_dir_all(&state);
 }
+
+/// Every row of `snap`, read `chunk` at a time.
+fn read_all(snap: &RowsSnapshot, chunk: usize) -> Vec<Vec<Cell>> {
+    let mut out = Vec::new();
+    snap.for_each_chunk(chunk, |c| {
+        out.extend_from_slice(c);
+        true
+    })
+    .unwrap();
+    out
+}
+
+#[test]
+fn a_snapshot_reads_the_rows_of_its_range_from_another_thread() {
+    let state = temp_dir("snapshot");
+    // Resident, and spilled (read from the file whatever the window holds).
+    for n in [700, 9_000] {
+        let (mut s, _dir) = paged(&state, n, 300, MIN_WINDOW);
+        s.load(0..10).unwrap();
+        for (a, b) in [(0, n), (250, 260), (n - 3, n + 50), (n, n)] {
+            let snap = s.snapshot(a..b).unwrap();
+            assert_eq!(snap.len(), b.min(n) - a.min(n));
+            let want = rows(a.min(n)..b.min(n));
+            assert_eq!(read_all(&snap, 97), want, "{n}: {a}..{b}");
+            let moved = std::thread::spawn(move || read_all(&snap, 1_000)).join().unwrap();
+            assert_eq!(moved, want);
+        }
+    }
+    let _ = std::fs::remove_dir_all(&state);
+}
+
+#[test]
+fn a_snapshot_leaves_out_rows_appended_later_and_stops_when_asked() {
+    let state = temp_dir("snapshot-later");
+    let (mut s, _dir) = paged(&state, 4_000, 500, MIN_WINDOW);
+    let snap = s.snapshot(0..4_000).unwrap();
+    s.append(rows(4_000..4_500)).unwrap();
+    assert_eq!(read_all(&snap, 333).len(), 4_000, "its range is fixed when it is made");
+    let mut chunks = 0;
+    snap.for_each_chunk(100, |_| {
+        chunks += 1;
+        chunks < 3
+    })
+    .unwrap();
+    assert_eq!(chunks, 3, "no chunk after `false`");
+    let _ = std::fs::remove_dir_all(&state);
+}
+
+#[test]
+fn a_snapshot_of_rows_in_memory_copies_none_of_them() {
+    let s = RowStore::in_memory(rows(0..50_000));
+    let snap = s.snapshot(10..20).unwrap();
+    assert!(matches!(&snap, RowsSnapshot::Rows { rows, .. } if rows.len() == 50_000), "the store's own rows, shared");
+    assert_eq!(read_all(&snap, 3), rows(10..20));
+    // The store changes on: the snapshot keeps what it had.
+    let mut s = s;
+    s.append(rows(50_000..50_010)).unwrap();
+    assert_eq!(read_all(&snap, 7), rows(10..20));
+    assert_eq!(s.len(), 50_010);
+}

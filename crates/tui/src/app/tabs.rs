@@ -665,6 +665,8 @@ impl Tab {
     pub fn session_closed(&mut self) -> bool {
         self.exec.lost_tx |= self.exec.tx_at_risk();
         let ended = match self.exec.running.take() {
+            // An export says how it ended itself (its writer keeps what it wrote).
+            Some(r) if r.export => false,
             Some(r) if !r.fetch && !r.count => {
                 self.exec.run.answered(super::runlog::StatementOutcome::Cancelled, None);
                 let note = Notice::new(datarig_core::i18n::Label::QueryCancelledSessionClosed, super::Level::Warning);
