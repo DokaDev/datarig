@@ -3936,3 +3936,323 @@ async fn a_stopped_procedure_leaves_the_values_not_known() {
     assert_ne!(zone.as_deref(), Some("+00:00"), "{evs:?}");
     assert!(zone.is_some(), "the session said its values are not known, or asked: {evs:?}");
 }
+
+// ── manual commit ──────────────────────────────────────────────────────────
+
+impl Conn {
+    /// Run `sql` as run `id` with manual commit (`opens`: the statements that open a
+    /// transaction): its events up to its answer.
+    async fn manual(&mut self, id: u64, sql: &[&str], opens: &[bool]) -> Vec<DbEvent> {
+        let statements = sql.iter().map(|s| s.to_string()).collect();
+        let tx = TxRule::Manual { steps: steps(opens), idle_timeout: Some(Duration::from_secs(60)) };
+        self.session.send(DbCommand::Execute { id, statements, paging: PagingMode::NoHold, tx });
+        let mut evs = self.answer(id).await;
+        evs.extend(self.settled().await);
+        evs
+    }
+
+    /// End the open transaction (`EndTx` `id`): its answer and the state that follows.
+    async fn end_tx(&mut self, id: u64, commit: bool) -> Vec<DbEvent> {
+        self.session.send(DbCommand::EndTx { id, commit });
+        let mut evs = vec![
+            self.wait(|e| matches!(e, DbEvent::TxEnded { id: i, .. } | DbEvent::Failed { id: i, .. } if *i == id), 30)
+                .await,
+        ];
+        evs.extend(self.settled().await);
+        evs
+    }
+
+    /// The events that came within a moment (what follows a run's answer).
+    async fn settled(&mut self) -> Vec<DbEvent> {
+        let mut evs = Vec::new();
+        while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_millis(300), self.rx.recv()).await {
+            evs.push(ev);
+        }
+        evs
+    }
+}
+
+/// The transaction events among `evs`, in their order.
+fn tx_of(evs: &[DbEvent]) -> Vec<String> {
+    evs.iter()
+        .filter_map(|e| match e {
+            DbEvent::ManualBegun { index, .. } => Some(format!("begun {index}")),
+            DbEvent::ManualRolledBack { index, .. } => Some(format!("rolled back {index}")),
+            DbEvent::RunRolledBack { .. } => Some("run rolled back".to_string()),
+            DbEvent::Block(b) => Some(format!("block {b}")),
+            DbEvent::TxOpen(b) => Some(format!("tx {b}")),
+            DbEvent::TxEnded { outcome, .. } => Some(format!("ended {outcome:?}")),
+            DbEvent::Autocommit(b) => Some(format!("autocommit {b}")),
+            _ => None,
+        })
+        .collect()
+}
+
+/// How many InnoDB transactions connection `id` has open (`information_schema.innodb_trx`).
+async fn innodb_trx(a: &mut mysql_async::Conn, id: u64) -> u64 {
+    a.query_first(format!("SELECT COUNT(*) FROM information_schema.innodb_trx WHERE trx_mysql_thread_id = {id}"))
+        .await
+        .unwrap()
+        .unwrap()
+}
+
+/// What a query of another session reads (one value).
+async fn seen(url: &str, sql: &str) -> String {
+    let mut b = side(url).await;
+    let v: String = b.query_first(sql).await.unwrap().unwrap();
+    b.disconnect().await.unwrap();
+    v
+}
+
+/// Manual commit: reads before the first write open nothing on the server; the write runs in a
+/// transaction opened right before it (said with `ManualBegun`), which another session does not
+/// see into until it is committed; a read after it in the run sees it; `EndTx` commits or rolls
+/// back, and answers `NoTransaction` with none open.
+#[tokio::test(flavor = "multi_thread")]
+async fn manual_commit_opens_a_transaction_at_the_first_write_only() {
+    let test = "manual_commit_opens_a_transaction_at_the_first_write";
+    let Some((url, admin)) = urls(test) else { return };
+    let t = Table::make(&admin, "manual", &["CREATE TABLE {t} (id INT PRIMARY KEY)"]).await;
+    let mut a = side(&admin).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let id = only_session(&mut a, SessionRole::Query, test).await;
+    let q = t.q();
+    let count = format!("SELECT CAST(COUNT(*) AS CHAR) FROM {q}");
+    // Reads only: autocommit, nothing open on the server.
+    let evs = c.manual(1, &[&format!("SELECT * FROM {q}"), "SELECT 1"], &[false, false]).await;
+    assert!(tx_of(&evs).is_empty(), "{evs:?}");
+    assert_eq!(innodb_trx(&mut a, id).await, 0);
+    // A read, a write, a read: the transaction opens at the write, the last read sees it.
+    let insert = format!("INSERT INTO {q} VALUES (1)");
+    let evs = c.manual(2, &[&count, &insert, &count], &[false, true, false]).await;
+    assert_eq!(tx_of(&evs), ["begun 1", "block true", "tx true"], "{evs:?}");
+    let steps: Vec<_> = evs
+        .iter()
+        .filter_map(|e| match e {
+            DbEvent::StepRows { index: 0, rows, .. } => Some(rows.clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(steps, [vec![vec![Some("0".to_string())]]], "{evs:?}");
+    assert_eq!(
+        page_of(&evs[..evs.iter().rposition(|e| matches!(e, DbEvent::Page { .. })).unwrap() + 1]).1,
+        &vec![vec![Some("1".to_string())]]
+    );
+    assert_eq!(innodb_trx(&mut a, id).await, 1, "the transaction is open on the server");
+    assert_eq!(seen(&url, &count).await, "0", "another session does not see it");
+    // A later write joins it.
+    let evs = c.manual(3, &[&format!("INSERT INTO {q} VALUES (2)")], &[true]).await;
+    assert!(tx_of(&evs).is_empty(), "{evs:?}");
+    assert_eq!(tx_of(&c.end_tx(4, true).await), ["ended Committed", "block false", "tx false"]);
+    assert_eq!(innodb_trx(&mut a, id).await, 0);
+    assert_eq!(seen(&url, &count).await, "2", "committed");
+    // Rolled back.
+    let evs = c.manual(5, &[&format!("DELETE FROM {q}")], &[true]).await;
+    assert_eq!(tx_of(&evs), ["begun 0", "block true", "tx true"], "{evs:?}");
+    // A result held in it (far longer than a page) ends first.
+    let evs = c.manual(50, &["SELECT * FROM shop.events"], &[false]).await;
+    assert!(page_of(&evs[..1 + evs.iter().position(|e| matches!(e, DbEvent::Page { .. })).unwrap()]).2, "{evs:?}");
+    assert_eq!(tx_of(&c.end_tx(6, false).await), ["ended RolledBack", "block false", "tx false"]);
+    assert_eq!(seen(&url, &count).await, "2", "rolled back");
+    // None open: refused, nothing sent.
+    let evs = c.end_tx(7, true).await;
+    assert!(matches!(evs[..], [DbEvent::Failed { id: 7, error: DbError::NoTransaction, .. }]), "{evs:?}");
+    c.ok(8, "SELECT 1").await;
+    a.disconnect().await.unwrap();
+}
+
+/// A first write that fails leaves no transaction (rolled back at once); a statement that fails
+/// in an open transaction is undone alone (the run's statements before it keep what they did,
+/// and the transaction stays); a statement that commits implicitly ends it.
+#[tokio::test(flavor = "multi_thread")]
+async fn manual_commit_failures_and_implicit_commits() {
+    let test = "manual_commit_failures_and_implicit_commits";
+    let Some((url, admin)) = urls(test) else { return };
+    let t =
+        Table::make(&admin, "mfail", &["CREATE TABLE {t} (id INT PRIMARY KEY)", "INSERT INTO {t} VALUES (1)"]).await;
+    let _x = Cleanup { url: admin.clone(), sql: format!("DROP TABLE IF EXISTS {}_x", t.q()) };
+    let mut a = side(&admin).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let id = only_session(&mut a, SessionRole::Query, test).await;
+    let q = t.q();
+    let count = format!("SELECT CAST(COUNT(*) AS CHAR) FROM {q}");
+    let evs = c.manual(1, &[&format!("INSERT INTO {q} VALUES (1)")], &[true]).await;
+    assert!(matches!(failures(&evs, 1)[..], [DbEvent::Failed { error: DbError::Server(_), .. }]), "{evs:?}");
+    assert_eq!(tx_of(&evs), ["rolled back 0"], "never said open: {evs:?}");
+    assert_eq!(innodb_trx(&mut a, id).await, 0, "no transaction left");
+    // Open, then a run whose second statement fails: its first one stays, the transaction too.
+    c.manual(2, &[&format!("INSERT INTO {q} VALUES (10)")], &[true]).await;
+    let evs = c
+        .manual(3, &[&format!("INSERT INTO {q} VALUES (11)"), &format!("INSERT INTO {q} VALUES (1)")], &[true, true])
+        .await;
+    assert_eq!(failures(&evs, 3).len(), 1, "{evs:?}");
+    assert!(tx_of(&evs).is_empty(), "the transaction stays: {evs:?}");
+    assert_eq!(rows_in(&mut c, 4, &q).await, "3", "1, 10 and 11");
+    assert_eq!(seen(&url, &count).await, "1", "not committed");
+    // DDL commits it implicitly (the app asks first; the flags say it ended).
+    let evs = c.manual(5, &[&format!("CREATE TABLE {q}_x (a INT)")], &[false]).await;
+    assert_eq!(tx_of(&evs), ["block false", "tx false"], "{evs:?}");
+    assert_eq!(seen(&url, &count).await, "3", "committed by the DDL");
+    // A DDL flagged by mistake opens nothing either.
+    let evs = c.manual(6, &[&format!("DROP TABLE {q}_x")], &[true]).await;
+    assert!(tx_of(&evs).is_empty(), "{evs:?}");
+    assert_eq!(innodb_trx(&mut a, id).await, 0);
+    a.disconnect().await.unwrap();
+}
+
+/// A deadlock between two sessions: the server rolls back the whole transaction of the one it
+/// picks (here the manual one, which changed less): its failure is the server's error 1213, and
+/// the block is said closed after it. Nothing of the transaction is left.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_deadlock_ends_the_manual_transaction_and_says_so() {
+    let test = "a_deadlock_ends_the_manual_transaction";
+    let Some((url, admin)) = urls(test) else { return };
+    let t = numbers(&admin, "deadlock", 200).await;
+    let _end = EndSessions { admin: admin.clone(), test };
+    let q = t.q();
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let mut b = side(&url).await;
+    b.query_drop("START TRANSACTION").await.unwrap();
+    b.query_drop(format!("UPDATE {q} SET v = 'b' WHERE id >= 2")).await.unwrap();
+    let evs = c.manual(1, &[&format!("UPDATE {q} SET v = 'c' WHERE id = 1")], &[true]).await;
+    assert_eq!(tx_of(&evs), ["begun 0", "block true", "tx true"], "{evs:?}");
+    // The manual session waits for the other's row, then the other for its: a deadlock.
+    let tx = TxRule::Manual { steps: steps(&[true]), idle_timeout: None };
+    let statements = vec![format!("UPDATE {q} SET v = 'c' WHERE id = 2")];
+    c.session.send(DbCommand::Execute { id: 2, statements, paging: PagingMode::NoHold, tx });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    b.query_drop(format!("UPDATE {q} SET v = 'b' WHERE id = 1")).await.expect("the other session goes on");
+    let mut evs = c.answer(2).await;
+    evs.extend(c.settled().await);
+    match failures(&evs, 2)[..] {
+        [DbEvent::Failed { error: DbError::Server(m), cancelled: false, .. }] => {
+            assert!(m.starts_with("ERROR 1213 "), "{m}")
+        }
+        _ => panic!("{evs:?}"),
+    }
+    assert_eq!(tx_of(&evs), ["block false", "tx false"], "the server ended it: {evs:?}");
+    b.query_drop("COMMIT").await.unwrap();
+    assert_eq!(seen(&url, &format!("SELECT v FROM {q} WHERE id = 1")).await, "b", "nothing of it is left");
+    let evs = c.end_tx(3, true).await;
+    assert!(matches!(evs[..], [DbEvent::Failed { error: DbError::NoTransaction, .. }]), "{evs:?}");
+    b.disconnect().await.unwrap();
+}
+
+/// A lock wait timeout (1205) and a cancel (`KILL QUERY`) inside the manual transaction undo
+/// only their statement: the transaction stays open with what it did. A cancel of the run that
+/// opened it rolls it back.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_lock_wait_timeout_or_a_cancel_keeps_the_manual_transaction() {
+    let test = "a_lock_wait_timeout_or_a_cancel_keeps";
+    let Some((url, admin)) = urls(test) else { return };
+    let t = numbers(&admin, "lockwait", 10).await;
+    let _end = EndSessions { admin: admin.clone(), test };
+    let q = t.q();
+    let mut a = side(&admin).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let id = only_session(&mut a, SessionRole::Query, test).await;
+    c.ok(1, "SET SESSION innodb_lock_wait_timeout = 1").await;
+    let mut b = side(&url).await;
+    b.query_drop("START TRANSACTION").await.unwrap();
+    b.query_drop(format!("UPDATE {q} SET v = 'b' WHERE id = 2")).await.unwrap();
+    c.manual(2, &[&format!("UPDATE {q} SET v = 'c' WHERE id = 1")], &[true]).await;
+    let evs = c.manual(3, &[&format!("UPDATE {q} SET v = 'c' WHERE id = 2")], &[true]).await;
+    match failures(&evs, 3)[..] {
+        [DbEvent::Failed { error: DbError::Server(m), .. }] => assert!(m.starts_with("ERROR 1205 "), "{m}"),
+        _ => panic!("{evs:?}"),
+    }
+    assert!(tx_of(&evs).is_empty(), "the transaction stays: {evs:?}");
+    b.query_drop("ROLLBACK").await.unwrap();
+    b.disconnect().await.unwrap();
+    // A cancel in it.
+    let tx = TxRule::Manual { steps: steps(&[true]), idle_timeout: None };
+    let statements = vec![format!("UPDATE {q} SET v = CONCAT(v, SLEEP(30)) WHERE id = 3")];
+    c.session.send(DbCommand::Execute {
+        id: 4,
+        statements: statements.clone(),
+        paging: PagingMode::NoHold,
+        tx: tx.clone(),
+    });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    c.session.cancel();
+    let mut evs = c.answer(4).await;
+    evs.extend(c.settled().await);
+    assert!(matches!(failures(&evs, 4)[..], [DbEvent::Failed { cancelled: true, .. }]), "{evs:?}");
+    assert!(tx_of(&evs).is_empty(), "the transaction stays: {evs:?}");
+    assert_eq!(rows_in(&mut c, 5, &format!("{q} WHERE v = 'c'")).await, "1", "what it did stays");
+    assert_eq!(tx_of(&c.end_tx(6, false).await), ["ended RolledBack", "block false", "tx false"]);
+    // A cancel of the run that opened it: rolled back at once.
+    c.session.send(DbCommand::Execute { id: 7, statements, paging: PagingMode::NoHold, tx });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    c.session.cancel();
+    let mut evs = c.answer(7).await;
+    evs.extend(c.settled().await);
+    assert!(matches!(failures(&evs, 7)[..], [DbEvent::Failed { cancelled: true, .. }]), "{evs:?}");
+    assert_eq!(tx_of(&evs), ["rolled back 0"], "{evs:?}");
+    assert_eq!(innodb_trx(&mut a, id).await, 0);
+    a.disconnect().await.unwrap();
+}
+
+/// Inside the manual transaction an `EXPLAIN ANALYZE` keeps what the transaction did and nothing
+/// of its own, and a count counts in the transaction.
+#[tokio::test(flavor = "multi_thread")]
+async fn explain_analyze_and_counts_inside_the_manual_transaction() {
+    let test = "explain_analyze_and_counts_inside_the_manual";
+    let Some((url, admin)) = urls(test) else { return };
+    let t = numbers(&admin, "mexplain", 10).await;
+    let q = t.q();
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let evs = c.manual(1, &[&format!("DELETE FROM {q} WHERE id = 1")], &[true]).await;
+    assert_eq!(tx_of(&evs), ["begun 0", "block true", "tx true"], "{evs:?}");
+    let delete = format!("EXPLAIN ANALYZE DELETE x FROM {q} x JOIN {q} y ON y.id = x.id WHERE x.id > 5");
+    let evs = c.manual(2, &[&delete], &[false]).await;
+    assert!(
+        page_of(&evs[..evs.iter().rposition(|e| matches!(e, DbEvent::Page { .. })).unwrap() + 1]).1[0][0].is_some()
+    );
+    assert!(tx_of(&evs).is_empty(), "{evs:?}");
+    assert_eq!(rows_in(&mut c, 3, &q).await, "9");
+    let sql = format!("SELECT COUNT(*) FROM (\nSELECT id FROM {q}\n) AS datarig_count");
+    assert_eq!(count(&mut c, 4, sql).await, (Ok(9), true));
+    assert_eq!(tx_of(&c.end_tx(5, false).await), ["ended RolledBack", "block false", "tx false"]);
+    assert_eq!(rows_in(&mut c, 6, &q).await, "10");
+}
+
+/// A connection cut while the manual transaction is open: the session is lost, and the server
+/// rolled the transaction back.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cut_connection_loses_the_manual_transaction() {
+    let test = "a_cut_connection_loses_the_manual";
+    let Some((url, admin)) = urls(test) else { return };
+    let t = Table::make(&admin, "mcut", &["CREATE TABLE {t} (id INT PRIMARY KEY)"]).await;
+    let q = t.q();
+    let mut a = side(&admin).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let id = only_session(&mut a, SessionRole::Query, test).await;
+    c.manual(1, &[&format!("INSERT INTO {q} VALUES (1)")], &[true]).await;
+    a.query_drop(format!("KILL {id}")).await.unwrap();
+    c.wait(|e| matches!(e, DbEvent::Lost { .. }), 10).await;
+    thread_ends(&mut a, id, 10).await;
+    assert_eq!(seen(&url, &format!("SELECT CAST(COUNT(*) AS CHAR) FROM {q}")).await, "0");
+    a.disconnect().await.unwrap();
+}
+
+/// A user's `SET autocommit = 0` is said, and the transaction every statement then opens shows
+/// open; `SET autocommit = 1` is said too.
+#[tokio::test(flavor = "multi_thread")]
+async fn autocommit_turned_off_by_the_user_is_said() {
+    let Some(url) = my_url("autocommit_turned_off_by_the_user_is_said") else { return };
+    let mut c = Conn::open(&url, SessionRole::Query, false, "autocommit").await;
+    assert_eq!(tx_of(&c.manual(1, &["SET autocommit = 0"], &[false]).await), ["autocommit false"]);
+    // A read of a table opens one (`SELECT 1` reads none, and opens none).
+    let read = "SELECT COUNT(*) FROM shop.users";
+    assert_eq!(tx_of(&c.manual(2, &[read], &[false]).await), ["block true", "tx true"]);
+    assert_eq!(tx_of(&c.end_tx(3, true).await), ["ended Committed", "block false", "tx false"]);
+    assert_eq!(tx_of(&c.manual(4, &["SET autocommit = 1"], &[false]).await), ["autocommit true"]);
+    assert!(tx_of(&c.manual(5, &[read], &[false]).await).is_empty());
+}
+
+/// A manual commit run's steps: `true` opens a transaction, `false` runs as it is.
+fn steps(opens: &[bool]) -> Vec<datarig_core::driver::TxStep> {
+    use datarig_core::driver::TxStep;
+    opens.iter().map(|&o| if o { TxStep::Open } else { TxStep::AsIs }).collect()
+}

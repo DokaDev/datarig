@@ -1231,3 +1231,162 @@ async fn data_the_server_sent_before_the_tls_handshake_is_refused() {
     assert_eq!(request.len(), 32, "an SSLRequest");
     assert!(login.await.unwrap().is_err(), "nothing read before TLS is taken");
 }
+
+/// The client's next request as text (its command byte dropped: a query's text, empty for a
+/// ping), answered with `answer`.
+async fn answered(server: &mut tokio::io::DuplexStream, answer: &[u8]) -> String {
+    let sent = read_packet(server).await.expect("a request");
+    server.write_all(answer).await.unwrap();
+    if sent[0] == 0x0e { String::new() } else { String::from_utf8_lossy(&sent[1..]).into_owned() }
+}
+
+/// An `ERR` packet (sequence 1) of server error `code`.
+fn err_packet(code: u16, state: &str, message: &str) -> Vec<u8> {
+    let mut p = vec![0xff];
+    p.extend_from_slice(&code.to_le_bytes());
+    p.extend_from_slice(format!("#{state}{message}").as_bytes());
+    packet(1, &p)
+}
+
+/// The session's events up to and with the first one `end` matches.
+async fn events_until(
+    events: &mut tokio::sync::mpsc::UnboundedReceiver<datarig_core::driver::DbEvent>,
+    end: impl Fn(&datarig_core::driver::DbEvent) -> bool,
+) -> Vec<datarig_core::driver::DbEvent> {
+    let mut evs = Vec::new();
+    loop {
+        let ev = tokio::time::timeout(std::time::Duration::from_secs(30), events.recv())
+            .await
+            .expect("an event")
+            .expect("the session runs");
+        let done = end(&ev);
+        evs.push(ev);
+        if done {
+            return evs;
+        }
+    }
+}
+
+/// The transaction events among `evs`, in their order.
+fn tx_events(evs: &[datarig_core::driver::DbEvent]) -> Vec<String> {
+    use datarig_core::driver::DbEvent;
+    evs.iter()
+        .filter_map(|e| match e {
+            DbEvent::ManualBegun { index, .. } => Some(format!("begun {index}")),
+            DbEvent::ManualRolledBack { index, .. } => Some(format!("rolled back {index}")),
+            DbEvent::Block(b) => Some(format!("block {b}")),
+            DbEvent::TxOpen(b) => Some(format!("tx {b}")),
+            DbEvent::TxEnded { outcome, .. } => Some(format!("ended {outcome:?}")),
+            DbEvent::Autocommit(b) => Some(format!("autocommit {b}")),
+            DbEvent::Failed { error, .. } => Some(format!("failed {error:?}")),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Manual commit: `START TRANSACTION` goes as a request of its own right before the first
+/// flagged statement while no transaction is open (never before one that commits implicitly),
+/// and the transaction is said open (`ManualBegun` first) once that statement succeeded. Later
+/// flagged statements join it. `EndTx` commits it; with none open it sends nothing. A first
+/// write that fails is rolled back at once and the transaction is never said open; a run that
+/// fails after its opened transaction was said open rolls it back too. A user's `SET autocommit
+/// = 0` is said.
+#[tokio::test(start_paused = true)]
+async fn manual_commit_opens_a_transaction_right_before_the_first_write_and_ends_it() {
+    use datarig_core::driver::{DbCommand, DbEvent, PagingMode, TxRule};
+    let Faked { mut server, commands, mut events, kills, session, .. } = faked().await;
+    let run = |id: u64, statements: &[&str], opens: &[bool]| DbCommand::Execute {
+        id,
+        statements: statements.iter().map(|s| s.to_string()).collect(),
+        paging: PagingMode::NoHold,
+        tx: TxRule::Manual { steps: steps(opens), idle_timeout: Some(std::time::Duration::from_secs(60)) },
+    };
+    let ends = |id: u64| move |e: &DbEvent| matches!(e, DbEvent::Done { id: i, .. } | DbEvent::Failed { id: i, .. } if *i == id);
+    let (idle, in_trans, autocommit_off) = (ok_packet(0x0002), ok_packet(0x0003), ok_packet(0x0000));
+
+    // A read, then the first write: the transaction opens right before the write.
+    commands.send(run(1, &["SET @a = 1", "INSERT INTO shop.t VALUES (1)"], &[false, true])).unwrap();
+    assert_eq!(answered(&mut server, &idle).await, "SET @a = 1");
+    assert_eq!(answered(&mut server, &in_trans).await, "START TRANSACTION");
+    assert_eq!(answered(&mut server, &in_trans).await, "INSERT INTO shop.t VALUES (1)");
+    let evs = events_until(&mut events, ends(1)).await;
+    assert_eq!(tx_events(&evs), ["begun 1", "block true", "tx true"], "{evs:?}");
+    assert!(matches!(evs.last(), Some(DbEvent::Done { id: 1, .. })), "{evs:?}");
+    // The next write joins it: nothing goes before it.
+    commands.send(run(2, &["UPDATE shop.t SET a = 2"], &[true])).unwrap();
+    assert_eq!(answered(&mut server, &in_trans).await, "UPDATE shop.t SET a = 2");
+    assert!(tx_events(&events_until(&mut events, ends(2)).await).is_empty());
+    // Committed.
+    commands.send(DbCommand::EndTx { id: 3, commit: true }).unwrap();
+    assert_eq!(answered(&mut server, &idle).await, "COMMIT");
+    let evs = events_until(&mut events, |e| matches!(e, DbEvent::TxOpen(false))).await;
+    assert_eq!(tx_events(&evs), ["ended Committed", "block false", "tx false"], "{evs:?}");
+    // None open: nothing is sent. A statement that commits implicitly opens none.
+    commands.send(DbCommand::EndTx { id: 4, commit: false }).unwrap();
+    commands.send(run(5, &["CREATE TABLE shop.u (a INT)"], &[true])).unwrap();
+    assert_eq!(answered(&mut server, &idle).await, "CREATE TABLE shop.u (a INT)");
+    let evs = events_until(&mut events, ends(5)).await;
+    assert_eq!(tx_events(&evs), ["failed NoTransaction"], "{evs:?}");
+    assert!(matches!(evs[0], DbEvent::Failed { id: 4, .. }), "{evs:?}");
+    // A first write that fails: the server is asked, the transaction rolled back, never said open.
+    commands.send(run(6, &["INSERT INTO shop.t VALUES (1)"], &[true])).unwrap();
+    assert_eq!(answered(&mut server, &in_trans).await, "START TRANSACTION");
+    let duplicate = err_packet(1062, "23000", "Duplicate entry '1' for key 't.PRIMARY'");
+    assert_eq!(answered(&mut server, &duplicate).await, "INSERT INTO shop.t VALUES (1)");
+    assert_eq!(answered(&mut server, &in_trans).await, "", "a ping");
+    assert_eq!(answered(&mut server, &idle).await, "ROLLBACK");
+    let evs = events_until(&mut events, |e| matches!(e, DbEvent::ManualRolledBack { .. })).await;
+    assert_eq!(tx_events(&evs)[1..], ["rolled back 0"], "{evs:?}");
+    // The run fails after its transaction was said open: rolled back, and said closed.
+    commands.send(run(7, &["INSERT INTO shop.t VALUES (3)", "INSERT INTO shop.t VALUES (1)"], &[true, true])).unwrap();
+    assert_eq!(answered(&mut server, &in_trans).await, "START TRANSACTION");
+    assert_eq!(answered(&mut server, &in_trans).await, "INSERT INTO shop.t VALUES (3)");
+    assert_eq!(answered(&mut server, &duplicate).await, "INSERT INTO shop.t VALUES (1)");
+    assert_eq!(answered(&mut server, &in_trans).await, "", "a ping");
+    assert_eq!(answered(&mut server, &idle).await, "ROLLBACK");
+    let evs = events_until(&mut events, |e| matches!(e, DbEvent::TxOpen(false))).await;
+    let tx = tx_events(&evs);
+    assert_eq!(tx[..3], ["begun 0", "block true", "tx true"], "{evs:?}");
+    assert!(tx[3].starts_with("failed Server(\"ERROR 1062"), "{evs:?}");
+    assert_eq!(tx[4..], ["rolled back 0", "block false", "tx false"], "{evs:?}");
+    // The user turns autocommit off: said.
+    commands.send(run(8, &["SET autocommit = 0"], &[false])).unwrap();
+    assert_eq!(answered(&mut server, &autocommit_off).await, "SET autocommit = 0");
+    assert_eq!(tx_events(&events_until(&mut events, ends(8)).await), ["autocommit false"]);
+    drop(commands);
+    drop(server);
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(5), session).await;
+    kills.abort();
+}
+
+/// A connection that ends while a `COMMIT` of `EndTx` is on its way: whether it committed is
+/// not known (`CommitUnknown`, never `TxEnded`), and the session is lost after it.
+#[tokio::test(start_paused = true)]
+async fn a_connection_lost_during_a_commit_leaves_its_outcome_unknown() {
+    use datarig_core::driver::{DbCommand, DbEvent, PagingMode, TxRule};
+    let Faked { mut server, commands, mut events, kills, .. } = faked().await;
+    let begin =
+        DbCommand::Execute { id: 1, statements: vec!["BEGIN".into()], paging: PagingMode::NoHold, tx: TxRule::Auto };
+    commands.send(begin).unwrap();
+    assert_eq!(answered(&mut server, &ok_packet(0x0003)).await, "BEGIN");
+    events_until(&mut events, |e| matches!(e, DbEvent::Done { id: 1, .. })).await;
+    commands.send(DbCommand::EndTx { id: 2, commit: true }).unwrap();
+    let sent = read_packet(&mut server).await.expect("the commit");
+    assert_eq!(&sent[1..], b"COMMIT");
+    drop(server);
+    let evs = events_until(&mut events, |e| matches!(e, DbEvent::Lost { .. })).await;
+    assert!(
+        matches!(
+            evs[..],
+            [DbEvent::Failed { id: 2, error: DbError::CommitUnknown, cancelled: false }, DbEvent::Lost { .. }]
+        ),
+        "{evs:?}"
+    );
+    kills.abort();
+}
+
+/// A manual commit run's steps: `true` opens a transaction, `false` runs as it is.
+fn steps(opens: &[bool]) -> Vec<datarig_core::driver::TxStep> {
+    use datarig_core::driver::TxStep;
+    opens.iter().map(|&o| if o { TxStep::Open } else { TxStep::AsIs }).collect()
+}
