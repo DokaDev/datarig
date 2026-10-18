@@ -5343,6 +5343,21 @@ async fn session_state(obs: &mut Conn, id: u64, tag: &str) -> (String, String) {
     (rows[0][0].clone().unwrap_or_default(), rows[0][1].clone().unwrap_or_default())
 }
 
+/// [`session_state`] once the session tagged `tag` is idle, asked again for at most 10 s: for a
+/// check right after an answer the session sends before it ends its own transaction.
+async fn idle_soon(obs: &mut Conn, id: u64, tag: &str) -> (String, String) {
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut n = id * 1_000;
+    loop {
+        let state = session_state(obs, n, tag).await;
+        if state.0 == "idle" || Instant::now() >= deadline {
+            return state;
+        }
+        n += 1;
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+}
+
 /// The first write of manual commit costs what an autocommit write costs: its `BEGIN` goes out
 /// in the same write (one round trip, no probe); a write in the open transaction is one round
 /// trip too, its run savepoint (and the release of the last run's) pipelined with it; `EndTx`
@@ -5482,7 +5497,10 @@ async fn a_transaction_opened_by_a_failed_run_is_not_kept() {
     assert!(matches!(answer(&events), DbEvent::Failed { error: DbError::CopyStdio, .. }), "{events:?}");
     assert!(facts(&events).is_empty(), "{events:?}");
     assert!(matches!(q.run(4, "SELECT 1").await, DbEvent::Page { .. }));
-    assert_eq!(session_state(&mut obs, 4, &tag).await.0, "idle");
+    // A plain read's rows come before the `COMMIT` of the transaction of its own (the driver
+    // shows them at once and ends that transaction right after), so the session may still be in
+    // it when the page arrives: it must be idle, holding nothing, once that `COMMIT` is in.
+    assert_eq!(idle_soon(&mut obs, 4, &tag).await, ("idle".to_string(), "0".to_string()));
 }
 
 /// `COMMIT` of an aborted block (the user's own `BEGIN`, with PostgreSQL's own rules: no
