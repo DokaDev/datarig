@@ -184,6 +184,7 @@ impl App {
             overwrite: None,
             root: PathBuf::new(),
             loaded: BTreeSet::new(),
+            moving: None,
         };
         t.show_dir(dir, select.as_deref());
         self.overlays.push(Overlay::ScriptTree(t));

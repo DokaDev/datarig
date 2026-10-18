@@ -535,7 +535,7 @@ const RESERVED: &[(Ctx, &[&str], &str)] = &[
     (NameInput, &["enter", "esc"], "name input"),
     (
         ScriptTree,
-        &["j", "k", "h", "l", "up", "down", "left", "right", "enter", "n", "tab", "shift+tab", "esc"],
+        &["j", "k", "h", "l", "up", "down", "left", "right", "enter", "n", "/", "q", "tab", "shift+tab", "esc"],
         "saved-queries tree",
     ),
     (ScriptTreeName, &["up", "down", "enter", "tab", "shift+tab", "esc"], "saved-queries tree: name or filter"),

@@ -6,6 +6,7 @@ fn every_glyph_is_one_private_use_char_one_column_wide() {
     let glyphs = CURATED.iter().map(|c| c.2).chain(DRIVERS.iter().map(|d| d.2)).chain([
         UNKNOWN_DRIVER,
         SCRIPT,
+        FOLDER,
         TABLE,
         DDL,
         WARNING,
@@ -92,6 +93,13 @@ fn the_environment_mark_is_pinned_and_has_a_text_form_without_icons() {
     // label its profiles carry.
     assert_eq!((ENVIRONMENT, environment(true), environment(false)), ("\u{f02b}", "\u{f02b}", "ENV"));
     assert_eq!(width(ENVIRONMENT), 1);
+}
+
+#[test]
+fn the_folder_picker_icon_is_pinned() {
+    // nf-fa-folder (Nerd Fonts 3.x glyphnames.json: "fa-folder", code f07b).
+    assert_eq!(FOLDER, "\u{f07b}");
+    assert_eq!(width(FOLDER), 1);
 }
 
 #[test]

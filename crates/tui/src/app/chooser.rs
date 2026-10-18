@@ -1,6 +1,6 @@
 //! Small pickers of the explorer and the profile form: the chooser (a filtered list for a
-//! profile's color, icon or folder, and for `m` moving a profile to a folder), the name input
-//! (`N` new folder, `R` rename a folder), and a pasted connection URL.
+//! profile's color or icon), the name input (`N` new folder, `R` rename a folder), and a pasted
+//! connection URL. Folders are picked from a tree (`folder_pick`).
 
 use super::*;
 use crate::app::profiles::Field;
@@ -12,10 +12,6 @@ use datarig_core::profile::folder::{FolderError, FolderPath};
 pub enum ChooserPurpose {
     /// Set this picker field of the profile form.
     Form(Field),
-    /// Move this profile to the picked folder (`m`).
-    MoveProfile(ProfileId),
-    /// Move this saved query or folder to the picked folder (`m`).
-    MoveScript(String),
     /// Bring back the picked closed console from the trash (`:recover`).
     Recover,
     /// A chart's X column, value columns or series column, for the result with this id.
@@ -26,7 +22,7 @@ pub enum ChooserPurpose {
 
 pub struct Chooser {
     pub title: Label,
-    /// `(value, text)`: `None` is the automatic color, the driver's icon or the top level.
+    /// `(value, text)`: `None` is the automatic color or the driver's icon.
     pub items: Vec<(Option<String>, String)>,
     /// Index into `visible()`.
     pub selected: usize,
@@ -66,8 +62,11 @@ pub enum NamePurpose {
     /// Rename this folder (its profiles and subfolders follow).
     RenameFolder(FolderPath),
     /// A new folder of the saved queries inside `parent` (`None`: at the top), from the tree
-    /// dialog of "save as".
+    /// dialog of "save as" or the folder picker.
     NewScriptFolder { parent: Option<String> },
+    /// A new profile folder inside `parent` (`None`: at the top) in the folder picker: a row
+    /// of the tree until it is picked.
+    NewPickFolder { parent: Option<String> },
     /// Rename (or move, with `/`) this saved query.
     RenameScript(String),
     /// Rename this folder of the saved queries.
@@ -87,7 +86,7 @@ pub struct NameInput {
     pub buttons: super::overlay::Buttons,
 }
 
-fn folder_error(e: &FolderError) -> Label {
+pub(super) fn folder_error(e: &FolderError) -> Label {
     match e {
         FolderError::Empty | FolderError::EmptySegment => Label::ValidateFolderEmpty,
         FolderError::Spaces => Label::ValidateFolderSpaces,
@@ -96,25 +95,23 @@ fn folder_error(e: &FolderError) -> Label {
 }
 
 impl App {
-    /// Open the chooser of profile form field `f` (color, icon, folder).
+    /// Open the chooser of profile form field `f` (color, icon).
     pub(super) fn open_form_chooser(&mut self, f: Field) {
         let Some(form) = self.overlays.form() else { return };
         let (title, none) = match f {
             // An environment without a color has none (not one from its name).
             Field::Color if form.is_environment() => (Label::FormFieldColor, Label::ChooserColorNone),
             Field::Color => (Label::FormFieldColor, Label::ChooserColorAuto),
-            Field::Icon => (Label::FormFieldIcon, Label::ChooserIconDriver),
-            _ => (Label::FormFieldFolder, Label::ChooserFolderTop),
+            _ => (Label::FormFieldIcon, Label::ChooserIconDriver),
         };
         let current = form.choice(f);
         let items: Vec<(Option<String>, String)> = form
             .choices(f)
             .into_iter()
             .map(|v| {
-                let text = match (&v, f) {
-                    (None, _) => self.i18n.label(none).to_string(),
-                    (Some(v), Field::Folder) => format!("{v}/"),
-                    (Some(v), _) => v.clone(),
+                let text = match &v {
+                    None => self.i18n.label(none).to_string(),
+                    Some(v) => v.clone(),
                 };
                 (v, text)
             })
@@ -134,7 +131,7 @@ impl App {
         }));
     }
 
-    /// `m`: move the selected profile to a folder picked from the list.
+    /// `m`: move the selected profile, saved query or folder to a folder picked from a tree.
     pub(super) fn open_move(&mut self) {
         if let Some(explorer::RowKind::Script(p) | explorer::RowKind::ScriptFolder(p)) =
             self.explorer_row().map(|r| r.kind)
@@ -142,22 +139,7 @@ impl App {
             return self.open_move_script(p);
         }
         let Some(id) = self.selected_profile() else { return };
-        let current = self.profile(id).and_then(|p| p.folder.clone());
-        let mut items = vec![(None, self.i18n.label(Label::ChooserFolderTop).to_string())];
-        items.extend(self.folders.iter().map(|f| (Some(f.to_string()), format!("{f}/"))));
-        let selected = items.iter().position(|(v, _)| *v == current).unwrap_or(0);
-        self.overlays.push(Overlay::Chooser(Chooser {
-            title: Label::ChooserMoveTitle,
-            items,
-            selected,
-            filter: TextInput::default(),
-            filtering: false,
-            scroll: 0,
-            list: Default::default(),
-            hover: None,
-            press: Default::default(),
-            purpose: ChooserPurpose::MoveProfile(id),
-        }));
+        self.open_move_profile(id);
     }
 
     /// Keys of the chooser list (`overlay.chooser`) and its filter (`overlay.chooser.filter`).
@@ -209,8 +191,6 @@ impl App {
                     form.set_choice(f, value);
                 }
             }
-            ChooserPurpose::MoveProfile(id) => self.move_profile(id, value),
-            ChooserPurpose::MoveScript(path) => self.move_script(&path, value),
             ChooserPurpose::Recover => {
                 if let Some(name) = value {
                     self.untrash(&name);
@@ -286,7 +266,7 @@ impl App {
     }
 
     /// Move profile `id` to `folder` (`None`: the top level) and save.
-    fn move_profile(&mut self, id: ProfileId, folder: Option<String>) {
+    pub(super) fn move_profile(&mut self, id: ProfileId, folder: Option<String>) {
         let Some(p) = self.profiles.iter_mut().find(|p| p.id == id) else { return };
         p.folder = folder.clone();
         let name = p.name.clone();
@@ -364,6 +344,7 @@ impl App {
             NamePurpose::SaveAsTunnel => Some(self.save_as_tunnel_named(&raw)),
             NamePurpose::CopyTheme { from } => Some(self.copy_theme_named(&from.clone(), &typed)),
             NamePurpose::NewScriptFolder { parent } => Some(self.new_script_folder(parent.clone(), &typed)),
+            NamePurpose::NewPickFolder { parent } => Some(self.new_pick_folder(parent.clone(), &typed)),
             NamePurpose::RenameScript(from) => Some(self.rename_script(&from.clone(), &typed, false)),
             NamePurpose::RenameScriptFolder(from) => Some(self.rename_script(&from.clone(), &typed, true)),
             _ => None,

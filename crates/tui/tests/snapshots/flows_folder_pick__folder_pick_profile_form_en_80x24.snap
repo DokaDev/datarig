@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/flows_folder_pick.rs
+expression: "h.draw(80, 24).backend()"
+---
+"╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
+"│  ＋ New connection   ││                                                      │" Hidden by multi-width symbols: [(4, " ")]
+"│▾╭ Edit connection — v6 ────────────────────────────────────────────────────╮ │"
+"│ │  Basic   SSH   Advanced                            Ctrl+N/Ctrl+P section │ │"
+"│ │                                                                          │ │"
+"│ │ SSL mode          disable ▾   ←/→ change · Enter list                    │ │"
+"│ │ ╭ Folder ──────────────────────────────────────────────────────────────╮ │ │"
+"│ │ │▾ (top level)                                                         │ │ │"
+"│ │ │  ▾ a/                                                                │ │ │"
+"│▾│ │    ▸ b/                                                              │ │ │"
+"│ │ │  ▸ z/                                                                │ │ │"
+"│▾│ │──────────────────────────────────────────────────────────────────────│ │ │"
+"│ │ │ Filter:                                                              │ │ │"
+"│ │ │                                                                      │ │ │"
+"│ │ │                                                                      │ │ │"
+"│ │ ╰────── Enter pick · ←→ folders · / filter · n new folder · Esc cancel ╯ │ │"
+"│ │                                                                          │ │"
+"│ │                    Test    Save    Cancel                                │ │"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ ╰─ Tab/↑↓ move · Ctrl+N/P section · Ctrl+T test · Ctrl+S save · Esc cancel ╯ │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+"                                                                             EN "

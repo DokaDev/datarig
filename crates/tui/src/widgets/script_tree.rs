@@ -1,5 +1,6 @@
 //! The folder tree of the saved queries: "save as" with a name field below the
-//! tree, "open" with a filter line; and of the file system for the SSH key file.
+//! tree, "open" with a filter line; of the file system for the SSH key file; and of folders
+//! only, to pick one.
 
 use crate::app::App;
 use crate::app::key_picker::{self, KeyLook};
@@ -22,6 +23,7 @@ pub(crate) fn draw_script_tree(app: &mut App, area: Rect, buf: &mut Buffer) -> O
     let t = app.overlays.script_tree()?;
     let save = matches!(t.mode, TreeMode::Save { .. });
     let key_file = t.mode == TreeMode::KeyFile;
+    let folder_mode = matches!(t.mode, TreeMode::Folder(_));
     let (title, footer, field) = match t.mode {
         TreeMode::Save { .. } => {
             (app.i18n.label(Label::NameSaveScript), app.i18n.label(Label::ScriptTreeKeysSave), Label::ScriptTreeName)
@@ -34,11 +36,16 @@ pub(crate) fn draw_script_tree(app: &mut App, area: Rect, buf: &mut Buffer) -> O
         TreeMode::KeyFile => {
             (app.i18n.label(Label::KeyPickerTitle), app.i18n.label(Label::KeyPickerKeys), Label::KeyPickerFilter)
         }
+        TreeMode::Folder(pick) => {
+            (app.i18n.label(pick.title()), app.i18n.label(Label::FolderPickKeys), Label::ScriptTreeFilter)
+        }
     };
     let field = app.i18n.label(field).to_string();
     // Key file mode: the folder shown, `~/…` under the home folder.
     let top = if key_file {
         key_picker::shown_dir(&t.root, app.home().as_deref())
+    } else if folder_mode {
+        app.i18n.label(Label::ChooserFolderTop).to_string()
     } else {
         app.i18n.label(Label::ExplorerScripts).to_string()
     };
@@ -89,10 +96,13 @@ pub(crate) fn draw_script_tree(app: &mut App, area: Rect, buf: &mut Buffer) -> O
         let (text, style) = match row {
             TreeRow::Up => ("../".to_string(), Style::new().fg(th.accent).patch(bg)),
             TreeRow::Top => (
-                if top.ends_with('/') { top.clone() } else { format!("{top}/") },
+                if top.ends_with('/') || folder_mode { top.clone() } else { format!("{top}/") },
                 Style::new().fg(th.fg).patch(bg).add_modifier(Modifier::BOLD),
             ),
             TreeRow::Folder(p) => {
+                if folder_mode && icons_on {
+                    x += put(buf, x, y, &format!("{} ", icons::FOLDER), room(x), Style::new().fg(th.accent).patch(bg));
+                }
                 (format!("{}/", scripts::display_name(p, true)), Style::new().fg(th.accent).patch(bg))
             }
             // Key file mode: the whole name; likely keys stand out, public keys and the like

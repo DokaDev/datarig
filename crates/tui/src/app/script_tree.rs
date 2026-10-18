@@ -11,7 +11,8 @@
 //!
 //! The same dialog picks the SSH key file of the profile form
 //! ([`TreeMode::KeyFile`], see `key_picker`): a folder of the file system instead of the
-//! saved-queries folder, listed a folder at a time as folders open, with `../` above it.
+//! saved-queries folder, listed a folder at a time as folders open, with `../` above it. And
+//! it picks a folder ([`TreeMode::Folder`], see `folder_pick`): folders only, below the top.
 
 use super::chooser::{NameInput, NamePurpose};
 use super::*;
@@ -28,6 +29,8 @@ pub enum TreeMode {
     Open,
     /// Pick the SSH key file of the profile form.
     KeyFile,
+    /// Pick a folder.
+    Folder(super::folder_pick::FolderPick),
 }
 
 /// Which part has the keyboard.
@@ -73,6 +76,8 @@ pub struct ScriptTree {
     /// (relative to it, `""` for itself).
     pub root: std::path::PathBuf,
     pub loaded: BTreeSet<String>,
+    /// Folder mode: the saved query or folder being moved.
+    pub moving: Option<String>,
 }
 
 impl ScriptTree {
@@ -91,6 +96,7 @@ impl ScriptTree {
         let q = scripts::name::fold(self.input.text().trim());
         let filtering = self.filtering();
         let key_file = self.mode == TreeMode::KeyFile;
+        let folder_mode = matches!(self.mode, TreeMode::Folder(_));
         let matches = |p: &str| {
             let p = if key_file { p.rsplit('/').next().unwrap_or(p) } else { stem_path(p) };
             scripts::name::fold(p).contains(&q)
@@ -106,7 +112,9 @@ impl ScriptTree {
             true
         };
         for e in &self.entries {
-            let shown = if filtering {
+            let shown = if filtering && folder_mode {
+                self.folder_shown(&e.path, &q)
+            } else if filtering {
                 if e.folder {
                     self.entries.iter().any(|x| !x.folder && scripts::is_within(&x.path, &e.path) && matches(&x.path))
                 } else {
@@ -129,7 +137,7 @@ impl ScriptTree {
         let q = self.input.text().trim();
         !q.is_empty()
             && match self.mode {
-                TreeMode::Open => true,
+                TreeMode::Open | TreeMode::Folder(_) => true,
                 TreeMode::KeyFile => !super::key_picker::is_path(q),
                 TreeMode::Save { .. } => false,
             }
@@ -164,7 +172,7 @@ impl ScriptTree {
     }
 
     /// Select row `i`; in save mode a file gives the name field its name.
-    fn select(&mut self, i: usize) {
+    pub(super) fn select(&mut self, i: usize) {
         let rows = self.rows();
         let Some((row, _)) = rows.get(i.min(rows.len().saturating_sub(1))).cloned() else { return };
         if let (TreeMode::Save { .. }, TreeRow::File(p)) = (self.mode, &row) {
@@ -175,7 +183,7 @@ impl ScriptTree {
         self.error = None;
     }
 
-    fn step(&mut self, d: isize) {
+    pub(super) fn step(&mut self, d: isize) {
         let n = self.rows().len() as isize;
         let i = (self.selected() as isize + d).clamp(0, n - 1);
         self.select(i as usize);
@@ -217,11 +225,11 @@ impl App {
         let entries = self.scripts.as_ref().map(|s| s.list()).unwrap_or_default();
         let current = match mode {
             TreeMode::Save { tab, .. } => self.tabs.get(tab).and_then(|t| t.script().map(str::to_string)),
-            TreeMode::Open | TreeMode::KeyFile => self.tab().script().map(str::to_string),
+            TreeMode::Open | TreeMode::KeyFile | TreeMode::Folder(_) => self.tab().script().map(str::to_string),
         };
         let (row, name) = match (&current, mode) {
             (Some(p), TreeMode::Save { .. }) => (TreeRow::File(p.clone()), scripts::display_name(p, false).to_string()),
-            (Some(p), TreeMode::Open | TreeMode::KeyFile) => (TreeRow::File(p.clone()), String::new()),
+            (Some(p), _) => (TreeRow::File(p.clone()), String::new()),
             (None, _) => (self.last_save_folder.clone().map_or(TreeRow::Top, TreeRow::Folder), String::new()),
         };
         // The folders on the way to the selection are open.
@@ -259,12 +267,16 @@ impl App {
             overwrite: None,
             root: Default::default(),
             loaded: BTreeSet::new(),
+            moving: None,
         }));
     }
 
     /// Keys of the tree dialog (`overlay.script_tree`, `overlay.script_tree.name`).
     pub(super) fn script_tree_key(&mut self, key: KeyEvent, repeat: bool) {
         let Some(t) = self.overlays.script_tree_mut() else { return };
+        if let TreeMode::Folder(_) = t.mode {
+            return self.folder_pick_key(key, repeat);
+        }
         let tree = t.focus == TreeFocus::Tree;
         let key_file = t.mode == TreeMode::KeyFile;
         match key.code {
@@ -335,6 +347,7 @@ impl App {
         let (mode, row) = (t.mode, t.row.clone());
         match mode {
             TreeMode::KeyFile => self.key_picker_enter(),
+            TreeMode::Folder(_) => self.folder_picked(),
             TreeMode::Open => match row {
                 TreeRow::File(p) => {
                     self.overlays.close(OverlayKind::ScriptTree);
@@ -447,21 +460,25 @@ impl App {
         let entries = self.scripts.as_ref().map(|s| s.list()).unwrap_or_default();
         if let Some(t) = self.overlays.script_tree_mut() {
             t.entries = entries;
+            let folder_mode = matches!(t.mode, TreeMode::Folder(_));
+            if folder_mode {
+                t.keep_folders();
+            }
             let mut dir = scripts::parent(path);
             while let Some(d) = dir {
                 t.open.insert(d.to_string());
                 dir = scripts::parent(d);
             }
             t.row = TreeRow::Folder(path.to_string());
-            t.focus = TreeFocus::Name;
+            t.focus = if folder_mode { TreeFocus::Tree } else { TreeFocus::Name };
             t.error = None;
         }
     }
 
     /// The mouse on the tree dialog: a click selects a row (on a folder's arrow, or again on
     /// the selected folder, it opens or closes it; again on a file of the open dialog, it opens
-    /// it), one on the name or filter puts the keyboard and the cursor there; the wheel scrolls
-    /// the rows.
+    /// it; again on the selected row of the folder picker, it picks it), one on the name or
+    /// filter puts the keyboard and the cursor there; the wheel scrolls the rows.
     pub(super) fn script_tree_mouse(&mut self, m: MouseEvent) {
         let Some(t) = self.overlays.script_tree_mut() else { return };
         let (x, y) = (m.column, m.row);
@@ -483,8 +500,11 @@ impl App {
                 let again = t.row == row;
                 t.focus = TreeFocus::Tree;
                 let arrow = x.saturating_sub(list.x) as usize / 2 == depth;
+                let pick =
+                    again && matches!(t.mode, TreeMode::Folder(_)) && !(arrow && matches!(row, TreeRow::Folder(_)));
                 t.select(i);
                 match row {
+                    _ if pick => self.folder_picked(),
                     TreeRow::Up if again => t.up(),
                     TreeRow::Folder(_) if arrow || again => t.set_open(None),
                     TreeRow::File(_) if again && t.mode == TreeMode::KeyFile => self.key_picker_enter(),
