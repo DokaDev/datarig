@@ -463,7 +463,7 @@ impl App {
         ];
         // Idle a minute or more: for how long; past the warning, that it holds its locks.
         let idle = tx.idle(self.now(), self.tab_busy(self.tab().id));
-        if idle >= IDLE_SHOWN {
+        if idle >= IDLE_SHOWN || tx.warned {
             parts.push(self.i18n.msg(&Msg::StatusTxIdle { time: fmt_clock(idle) }).to_string());
         }
         if tx.warned {
@@ -660,7 +660,9 @@ impl App {
         }
         let Some(t) = self.tabs.get(id) else { return self.end_stopped(id) };
         match t.exec.last_end {
-            Some(true) if !t.exec.user_tx() => self.end_next(),
+            // Once the session says no transaction is open any more (`TxOpen(false)` after the
+            // block's end): what goes on then sees nothing open, nothing rolled back.
+            Some(true) if !t.exec.tx_at_risk() => self.end_next(),
             Some(true) => {}
             Some(false) => self.end_stopped(id),
             // Its session ended without an answer (closed, lost).

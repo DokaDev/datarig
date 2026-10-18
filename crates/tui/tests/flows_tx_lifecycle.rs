@@ -125,8 +125,14 @@ fn closing_a_tab_commits_or_rolls_back_first_and_closes_once_the_server_said() {
         assert_eq!(sent[0].1, commit);
         assert_eq!(h.app.tabs.len(), tabs, "{key}: nothing closes before the server answered");
         let i = h.app.tabs.active_index();
-        ended(&mut h, i, sent[0].0, outcome);
+        h.tab_db(i, DbEvent::TxEnded { id: sent[0].0, outcome });
+        h.tab_db(i, DbEvent::Block(false));
+        assert_eq!(h.app.tabs.len(), tabs, "{key}: not before the session says no transaction is open");
+        h.tab_db(i, DbEvent::TxOpen(false));
         assert_eq!(h.app.tabs.len(), tabs - 1, "{key}: closed once it ended");
+        // Closed with nothing open: it does not say a transaction was rolled back.
+        let said = h.app.status.as_ref().map(|n| n.render(&h.app.i18n).to_string()).unwrap_or_default();
+        assert!(!said.contains("rolled back"), "{key}: {said}");
     }
 }
 
@@ -299,6 +305,11 @@ fn an_idle_transaction_is_warned_about_once_per_idle_period() {
     assert_eq!(status(&h), Some(warning.clone()));
     let status_bar = h.status(160, 45);
     assert!(status_bar.contains("idle 2:00 · holding locks"), "{status_bar}");
+    // A warning shorter than a minute shows the idle time too.
+    let mut q = connected_in(Lang::En, Some(Duration::from_secs(10)));
+    write(&mut q, "UPDATE shop.users SET name = 'x' WHERE id < 4", 3);
+    q.advance(Duration::from_secs(10));
+    assert!(q.status(160, 45).contains("idle 0:10 · holding locks"), "{}", q.status(160, 45));
     assert!(h.explorer_line().contains('◆') || h.screen(160, 45).contains("local-pg ◆"));
     insta::assert_snapshot!("tx_idle_warned_en_160x45", h.draw(160, 45).backend());
     insta::assert_snapshot!("tx_idle_warned_en_80x24", h.draw(80, 24).backend());
