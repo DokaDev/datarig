@@ -959,6 +959,7 @@ impl<'a> Writer<'a> {
 }
 
 pub mod keyset;
+pub mod parquet;
 pub mod stream;
 pub mod xlsx;
 

@@ -97,8 +97,9 @@ pub fn paging(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
     Ok(())
 }
 
-/// An export of every row (`name`: `export_stream`, `export_keyset` or `export_xlsx`): its memory
-/// stays flat, it writes every row, and fast enough (a workbook's rows have a budget of their own).
+/// An export of every row (`name`: `export_stream`, `export_keyset`, `export_xlsx` or
+/// `export_parquet`): its memory stays flat, it writes every row, and fast enough (a workbook's
+/// and a Parquet file's rows have budgets of their own).
 pub fn export(c: &mut Checks, b: &Table, name: &str, result: &Value) -> Result<(), String> {
     let peak = f(result, &["rss_kb_peak"]).map(|k| k / MIB);
     match peak {
@@ -115,7 +116,11 @@ pub fn export(c: &mut Checks, b: &Table, name: &str, result: &Value) -> Result<(
     }
     match f(result, &["rows_per_s"]) {
         Some(r) => {
-            let key = if name == "export_xlsx" { "xlsx_rows_per_s_min" } else { "rows_per_s_min" };
+            let key = match name {
+                "export_xlsx" => "xlsx_rows_per_s_min",
+                "export_parquet" => "parquet_rows_per_s_min",
+                _ => "rows_per_s_min",
+            };
             c.check_min(&format!("{name} rows per second"), r, num(b, "export", key)?, "")
         }
         None => c.missing(&format!("{name} rows per second")),

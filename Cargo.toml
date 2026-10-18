@@ -38,6 +38,8 @@ datarig-tls = { path = "crates/tls" }
 datarig-tui = { path = "crates/tui" }
 
 arboard = { version = "3.6", default-features = false }
+# The Parquet export's byte strings: one buffer per column of a row group, sliced (parquet's own).
+bytes = "1"
 chrono = "0.4.45"
 # known_hosts: hashed host names (`|1|salt|hash`, HMAC-SHA1) and their base64. Already in the
 # tree through russh.
@@ -53,6 +55,9 @@ log = "0.4"
 # TLS features (datarig does the handshake over the stream, crates/tls), no compression C library (pure Rust `flate2`, never negotiated), none of the value conversion
 # features (the driver reads every value as the text the server sends).
 mysql_async = { version = "0.37.1", default-features = false, features = ["minimal-rust"] }
+# Parquet export (export::parquet): the file format's own column writers, no Arrow; Snappy only
+# (pure Rust `snap`), none of the other codecs (zstd is a C library, brotli and lz4 add size).
+parquet = { version = "60", default-features = false, features = ["snap"] }
 # PostgreSQL's own parser (libpg_query), for the safety classifier (sql::risk).
 pg_query = "6.2"
 # pg_query decodes its parse tree with prost, whose default limit of 100 nested messages

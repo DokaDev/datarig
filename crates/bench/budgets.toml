@@ -126,6 +126,9 @@ rows_per_s_min = 50000
 # memory budgets (each second it says nothing is a sample too, the zipping among them). A
 # workbook is slower to write (every cell is XML, then compressed): its own rows per second.
 xlsx_rows_per_s_min = 20000
+# The same rows as a Parquet file (`export_parquet`: row groups of 65,536 rows, each kept in
+# memory until it is written): the same memory budgets, and rows per second of its own.
+parquet_rows_per_s_min = 50000
 
 [editor]
 # Keystroke to frame in a 5 MB file at 160x45 (a developer machine: about 0.5 ms). A theme
