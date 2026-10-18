@@ -37,7 +37,8 @@ fn one_set_sets_the_session_up_by_role() {
          SESSION session_track_schema = ON, SESSION sql_mode = @@SESSION.sql_mode, \
          SESSION time_zone = @@SESSION.time_zone, \
          SESSION character_set_results = @@SESSION.character_set_results, \
-         SESSION character_set_connection = @@SESSION.character_set_connection, SESSION sql_select_limit = 501"
+         SESSION character_set_connection = @@SESSION.character_set_connection, SESSION autocommit = 1, \
+         SESSION sql_select_limit = 501"
     );
     let ro = Settings { read_only: true, ..q };
     assert!(init_sql(&MYSQL_84, &ro).ends_with(", SESSION sql_select_limit = 501, SESSION transaction_read_only = ON"));
@@ -1318,7 +1319,7 @@ async fn manual_commit_opens_a_transaction_right_before_the_first_write_and_ends
     assert!(tx_events(&events_until(&mut events, ends(2)).await).is_empty());
     // Committed.
     commands.send(DbCommand::EndTx { id: 3, commit: true }).unwrap();
-    assert_eq!(answered(&mut server, &idle).await, "COMMIT");
+    assert_eq!(answered(&mut server, &idle).await, "COMMIT AND NO CHAIN NO RELEASE");
     let evs = events_until(&mut events, |e| matches!(e, DbEvent::TxOpen(false))).await;
     assert_eq!(tx_events(&evs), ["ended Committed", "block false", "tx false"], "{evs:?}");
     // None open: nothing is sent. A statement that commits implicitly opens none.
@@ -1334,7 +1335,7 @@ async fn manual_commit_opens_a_transaction_right_before_the_first_write_and_ends
     let duplicate = err_packet(1062, "23000", "Duplicate entry '1' for key 't.PRIMARY'");
     assert_eq!(answered(&mut server, &duplicate).await, "INSERT INTO shop.t VALUES (1)");
     assert_eq!(answered(&mut server, &in_trans).await, "", "a ping");
-    assert_eq!(answered(&mut server, &idle).await, "ROLLBACK");
+    assert_eq!(answered(&mut server, &idle).await, "ROLLBACK AND NO CHAIN NO RELEASE");
     let evs = events_until(&mut events, |e| matches!(e, DbEvent::ManualRolledBack { .. })).await;
     assert_eq!(tx_events(&evs)[1..], ["rolled back 0"], "{evs:?}");
     // The run fails after its transaction was said open: rolled back, and said closed.
@@ -1343,7 +1344,7 @@ async fn manual_commit_opens_a_transaction_right_before_the_first_write_and_ends
     assert_eq!(answered(&mut server, &in_trans).await, "INSERT INTO shop.t VALUES (3)");
     assert_eq!(answered(&mut server, &duplicate).await, "INSERT INTO shop.t VALUES (1)");
     assert_eq!(answered(&mut server, &in_trans).await, "", "a ping");
-    assert_eq!(answered(&mut server, &idle).await, "ROLLBACK");
+    assert_eq!(answered(&mut server, &idle).await, "ROLLBACK AND NO CHAIN NO RELEASE");
     let evs = events_until(&mut events, |e| matches!(e, DbEvent::TxOpen(false))).await;
     let tx = tx_events(&evs);
     assert_eq!(tx[..3], ["begun 0", "block true", "tx true"], "{evs:?}");
@@ -1372,7 +1373,7 @@ async fn a_connection_lost_during_a_commit_leaves_its_outcome_unknown() {
     events_until(&mut events, |e| matches!(e, DbEvent::Done { id: 1, .. })).await;
     commands.send(DbCommand::EndTx { id: 2, commit: true }).unwrap();
     let sent = read_packet(&mut server).await.expect("the commit");
-    assert_eq!(&sent[1..], b"COMMIT");
+    assert_eq!(&sent[1..], b"COMMIT AND NO CHAIN NO RELEASE");
     drop(server);
     let evs = events_until(&mut events, |e| matches!(e, DbEvent::Lost { .. })).await;
     assert!(
@@ -1389,4 +1390,83 @@ async fn a_connection_lost_during_a_commit_leaves_its_outcome_unknown() {
 fn steps(opens: &[bool]) -> Vec<datarig_core::driver::TxStep> {
     use datarig_core::driver::TxStep;
     opens.iter().map(|&o| if o { TxStep::Open } else { TxStep::AsIs }).collect()
+}
+
+/// A fake query session with run `1` answered (`BEGIN`, a transaction open).
+async fn faked_in_transaction() -> Faked {
+    use datarig_core::driver::{DbCommand, DbEvent, PagingMode, TxRule};
+    let mut f = faked().await;
+    let begin =
+        DbCommand::Execute { id: 1, statements: vec!["BEGIN".into()], paging: PagingMode::NoHold, tx: TxRule::Auto };
+    f.commands.send(begin).unwrap();
+    assert_eq!(answered(&mut f.server, &ok_packet(0x0003)).await, "BEGIN");
+    events_until(&mut f.events, |e| matches!(e, DbEvent::Done { id: 1, .. })).await;
+    f
+}
+
+/// A `COMMIT` the server refuses on a connection that then answers nothing (the ping that asks
+/// what it left fails): whether it committed is not known.
+#[tokio::test(start_paused = true)]
+async fn a_refused_commit_on_a_connection_that_then_ends_is_of_unknown_outcome() {
+    use datarig_core::driver::{DbCommand, DbEvent};
+    let Faked { mut server, commands, mut events, kills, .. } = faked_in_transaction().await;
+    commands.send(DbCommand::EndTx { id: 2, commit: true }).unwrap();
+    let refused = err_packet(3101, "HY000", "Plugin instructed the server to rollback the current transaction.");
+    assert_eq!(answered(&mut server, &refused).await, "COMMIT AND NO CHAIN NO RELEASE");
+    let ping = read_packet(&mut server).await.expect("the ping");
+    assert_eq!(ping, [0x0e]);
+    drop(server);
+    let evs = events_until(&mut events, |e| matches!(e, DbEvent::Lost { .. })).await;
+    assert!(
+        matches!(evs[..], [DbEvent::Failed { id: 2, error: DbError::CommitUnknown, .. }, DbEvent::Lost { .. }]),
+        "{evs:?}"
+    );
+    kills.abort();
+}
+
+/// Manual commit, the server's odd answers: `START TRANSACTION` answered without a transaction
+/// open (the statement is not sent: run without one it could not be rolled back); a cancel that
+/// came while the transaction opened (the statement is not sent, the transaction rolled back);
+/// a rollback of a failed first write that the server refuses (the transaction it leaves open
+/// is said, as the one opened for manual commit).
+#[tokio::test(start_paused = true)]
+async fn manual_commit_survives_the_servers_odd_answers() {
+    use datarig_core::driver::{DbCommand, DbEvent, PagingMode, TxRule};
+    let Faked { mut server, commands, mut events, kills, asked, .. } = faked().await;
+    let run = |id: u64, sql: &str| DbCommand::Execute {
+        id,
+        statements: vec![sql.to_string()],
+        paging: PagingMode::NoHold,
+        tx: TxRule::Manual { steps: steps(&[true]), idle_timeout: None },
+    };
+    let (idle, in_trans) = (ok_packet(0x0002), ok_packet(0x0003));
+    // No transaction after START TRANSACTION: refused, the next request is the next run's.
+    commands.send(run(1, "INSERT INTO shop.t VALUES (1)")).unwrap();
+    assert_eq!(answered(&mut server, &idle).await, "START TRANSACTION");
+    let evs = events_until(&mut events, |e| matches!(e, DbEvent::Failed { id: 1, .. })).await;
+    assert_eq!(tx_events(&evs), ["failed TxNotOpened"], "{evs:?}");
+    // Cancelled while the transaction opened.
+    commands.send(run(2, "INSERT INTO shop.t VALUES (2)")).unwrap();
+    let start = read_packet(&mut server).await.expect("the start");
+    assert_eq!(&start[1..], b"START TRANSACTION");
+    asked.store(true, Ordering::SeqCst);
+    server.write_all(&in_trans).await.unwrap();
+    assert_eq!(answered(&mut server, &idle).await, "ROLLBACK AND NO CHAIN NO RELEASE", "the insert is never sent");
+    let evs = events_until(&mut events, |e| matches!(e, DbEvent::ManualRolledBack { .. })).await;
+    assert!(matches!(evs[0], DbEvent::Failed { id: 2, error: DbError::Cancelled, cancelled: true }), "{evs:?}");
+    assert_eq!(tx_events(&evs)[1..], ["rolled back 0"], "{evs:?}");
+    // A failed first write whose rollback the server refuses: the transaction stays, said open.
+    commands.send(run(3, "INSERT INTO shop.t VALUES (1)")).unwrap();
+    assert_eq!(answered(&mut server, &in_trans).await, "START TRANSACTION");
+    let duplicate = err_packet(1062, "23000", "Duplicate entry '1' for key 't.PRIMARY'");
+    assert_eq!(answered(&mut server, &duplicate).await, "INSERT INTO shop.t VALUES (1)");
+    assert_eq!(answered(&mut server, &in_trans).await, "", "a ping");
+    let refused = err_packet(1180, "HY000", "Got error during ROLLBACK");
+    assert_eq!(answered(&mut server, &refused).await, "ROLLBACK AND NO CHAIN NO RELEASE");
+    assert_eq!(answered(&mut server, &in_trans).await, "", "a ping");
+    let evs = events_until(&mut events, |e| matches!(e, DbEvent::TxOpen(true))).await;
+    let tx = tx_events(&evs);
+    assert!(tx[0].starts_with("failed Server(\"ERROR 1062"), "{evs:?}");
+    assert_eq!(tx[1..], ["begun 0", "block true", "tx true"], "{evs:?}");
+    kills.abort();
 }

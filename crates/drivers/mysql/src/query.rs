@@ -46,9 +46,12 @@
 //! transaction open before the run, a failure undoes only the failed statement (the server's
 //! rule; no savepoint is set for the run, which would cost a round trip): the statements of the
 //! run before it keep what they did, and the transaction stays open. A deadlock (`1213`) is the
-//! server rolling back the whole transaction: the failure is the server's error, and the status
-//! flags close the block after it. `EndTx` sends `COMMIT` or `ROLLBACK`; a connection that ends
-//! meanwhile leaves a commit's outcome unknown. A user's `SET autocommit = 0` is reported
+//! server rolling back the whole transaction, and an implicit commit its committing it: said
+//! (`TxClosedBy`) before the status flags close the block. A transaction switched inside the run
+//! that opened one (an implicit commit, `AND CHAIN`, a procedure) is never rolled back by the
+//! session. `EndTx` sends `COMMIT` or `ROLLBACK` (`AND NO CHAIN NO RELEASE`, whatever the
+//! session's `completion_type`); a connection that ends meanwhile leaves a commit's outcome
+//! unknown. A user's `SET autocommit = 0` is reported
 //! (`DbEvent::Autocommit`, from `SERVER_STATUS_AUTOCOMMIT`): every statement then opens a
 //! transaction, which the flags show open.
 //!
@@ -95,11 +98,12 @@ use crate::link::{Closed, Link, Next};
 use crate::session::{Gate, Killer, Server, Tracked, my_error};
 use crate::values::{column_meta, display};
 use datarig_core::driver::{
-    CancelFailure, Cell, ColumnMeta, DbCommand, DbError, DbEvent, Outcome, PagingMode, SessionValues, StatementInfo,
-    TxOutcome, TxRule, TxStep,
+    CancelFailure, Cell, ColumnMeta, DbCommand, DbError, DbEvent, Outcome, PagingMode, ServerEnd, SessionValues,
+    StatementInfo, TxOutcome, TxRule, TxStep,
 };
 use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
 use datarig_core::sql::lexer::{Tok, Token, lex_in};
+use datarig_core::sql::risk::Class;
 use datarig_core::sql::risk::mysql as risk;
 use datarig_core::sql::risk::repeat::NotRepeatable;
 use futures::future::BoxFuture;
@@ -125,6 +129,11 @@ const SAVEPOINT: &str = "datarig_explain";
 
 /// How the session opens a transaction for manual commit.
 const START: &str = "START TRANSACTION";
+
+/// How the session ends a transaction itself: never chained nor ending the session, whatever the
+/// session's `completion_type`.
+const COMMIT: &str = "COMMIT AND NO CHAIN NO RELEASE";
+const ROLLBACK: &str = "ROLLBACK AND NO CHAIN NO RELEASE";
 
 /// How the query session runs what it is sent.
 pub(crate) struct Settings {
@@ -162,6 +171,9 @@ struct State {
     routine: bool,
     limit: Limit,
     tx: Tx,
+    /// The request being served (a run, an `EndTx`, a count), whose id a server's end of the
+    /// transaction is said with ([`DbEvent::TxClosedBy`]).
+    request: u64,
 }
 
 /// `sql_select_limit`: what the session has now (`None`: none), and what the user set
@@ -386,6 +398,7 @@ pub(crate) async fn query_loop(
         routine: false,
         limit: Limit { current: select_limit, user: None },
         tx: Tx::default(),
+        request: 0,
     };
     let stop = loop {
         let done = match link.next().await {
@@ -410,6 +423,7 @@ pub(crate) async fn query_loop(
             // A count or a check the app asks for: a cancel asked before it was another run's.
             Next::Command(DbCommand::Count { id, sql }) => {
                 link.serving(&events, id);
+                s.request = id;
                 env.asked.store(false, Ordering::SeqCst);
                 killer.clear();
                 count(&mut conn, &mut link, &env, &mut s, &sql).await.map(|(result, snapshot)| {
@@ -418,6 +432,7 @@ pub(crate) async fn query_loop(
             }
             Next::Command(DbCommand::CheckRepeat { id, sql }) => {
                 link.serving(&events, id);
+                s.request = id;
                 env.asked.store(false, Ordering::SeqCst);
                 killer.clear();
                 check_repeat(&mut conn, &mut link, &env, &mut s, &sql).await.map(|result| {
@@ -499,6 +514,7 @@ async fn execute(
     opens: &[bool],
 ) -> Result<(), Stop> {
     link.serving(env.events, id);
+    s.request = id;
     env.failed.store(false, Ordering::SeqCst);
     let reply = Reply::new(env.events, env.failed, id);
     let ran = run(conn, link, env, s, reply, statements, resume, paging, opens).await;
@@ -664,8 +680,8 @@ async fn statement<'a>(
         return Ok(None);
     }
     // Manual commit: a transaction for the statement, as a request of its own. Not for one that
-    // commits implicitly, which would end it at once.
-    if step.opens && !s.tx.open && !risk.implicit_commit {
+    // commits implicitly (it would end it at once) nor for transaction control of the user's.
+    if step.opens && !s.tx.open && !risk.implicit_commit && risk.class != Class::Tx {
         if let Err(e) = halt!(link.guard(None, conn.query_drop(START)).await, Some(reply)) {
             return failed(conn, link, env, s, reply, &e, false).await;
         }
@@ -673,8 +689,8 @@ async fn statement<'a>(
         let flags = conn.last_ok_packet().map(|p| p.status_flags());
         if !flags.is_some_and(|f| f.contains(StatusFlags::SERVER_STATUS_IN_TRANS)) {
             // Never run as autocommit what was to be rolled back on asking: nothing is sent.
-            reply.fail(DbError::NoTransaction, false);
-            if let Some(error) = halt!(after(conn, link, env, s, START, true, false, true).await, None) {
+            reply.fail(DbError::TxNotOpened, false);
+            if let Some(error) = halt!(after(conn, link, env, s, START, false, false, true).await, None) {
                 return Err(Halted { stop: Stop::Lost(error), reply: None });
             }
             return Ok(None);
@@ -682,6 +698,11 @@ async fn statement<'a>(
         s.tx.open = true;
         s.tx.opening = Some((reply.id, step.index));
         s.tx.opened = Some(step.index);
+        // Cancelled while it opened: the statement is not sent, and the run's end rolls back.
+        if env.asked.load(Ordering::SeqCst) {
+            reply.fail(DbError::Cancelled, true);
+            return Ok(None);
+        }
     }
     let undo = (explains(sql, s.mode) && risk.rolls_back()).then(|| Undo::of(s.tx.open));
     // The result is held: the user's transaction, a held last statement, a listing the app
@@ -833,6 +854,11 @@ async fn statement<'a>(
                 if s.routine {
                     let _ = env.events.send(DbEvent::ValuesNotKnown { id: reply.id });
                 }
+                // The transaction opened for it is open while the app reads the result (said
+                // from `START TRANSACTION`'s answer; its end is said once the result ended).
+                if s.tx.opening.is_some() {
+                    env.report(&mut s.tx, false);
+                }
                 let paged = reply.page(metas, page, true, step.start.elapsed());
                 let id = paged.id;
                 let held = match hold(&mut qr, link, env, id, &columns, carry, ended).await {
@@ -936,7 +962,9 @@ async fn failed<'a>(
     }
     reply.fail_with(e);
     let cancelled = failure(e).1;
-    if let Some(error) = halt!(after(conn, link, env, s, "", false, was_open || cancelled, false).await, None) {
+    // Without autocommit the failed statement may have opened a transaction: asked too.
+    let ask = was_open || cancelled || !s.tx.autocommit;
+    if let Some(error) = halt!(after(conn, link, env, s, "", false, ask, false).await, None) {
         return Err(Halted { stop: Stop::Lost(error), reply: None });
     }
     Ok(None)
@@ -1009,7 +1037,32 @@ async fn after(
     }
     if let Some(st) = status {
         let open = st.contains(StatusFlags::SERVER_STATUS_IN_TRANS);
-        let chained = ok && s.tx.open && open && (implicit_commit || chains(sql, s.mode));
+        let was_open = s.tx.open;
+        let switches = ok && (implicit_commit || chains(sql, s.mode));
+        let chained = was_open && open && switches;
+        // The transaction the run opened is not the one open any more, or may not be (a
+        // procedure that commits and starts another): the run's end never rolls back what is
+        // open now (committed work, the user's own block).
+        if ok && was_open && (switches || routine) {
+            s.tx.opened = None;
+        }
+        if switches {
+            s.tx.opening = None;
+        }
+        // The server ended the transaction the UI knows open: a statement committed it
+        // implicitly, or a failure rolled all of it back (a deadlock).
+        if s.tx.reported && was_open && (!open || chained) {
+            let how = if !ok && !open {
+                Some(ServerEnd::RolledBack)
+            } else if ok && implicit_commit {
+                Some(ServerEnd::Committed)
+            } else {
+                None
+            };
+            if let Some(how) = how {
+                let _ = env.events.send(DbEvent::TxClosedBy { id: s.request, how });
+            }
+        }
         s.tx.open = open;
         let autocommit = st.contains(StatusFlags::SERVER_STATUS_AUTOCOMMIT);
         if autocommit != s.tx.autocommit {
@@ -1043,13 +1096,21 @@ async fn settle<'a>(conn: &mut Conn, link: &mut Link, env: &Env<'a>, s: &mut Sta
     if !env.failed.load(Ordering::SeqCst) || !s.tx.open || link.tainted() {
         return Ok(());
     }
-    let error = match halt!(link.guard(None, conn.query_drop("ROLLBACK")).await, None) {
+    let error = match halt!(link.guard(None, conn.query_drop(ROLLBACK)).await, None) {
         Ok(()) => {
             let _ = env.events.send(DbEvent::ManualRolledBack { id, index });
-            halt!(after(conn, link, env, s, "ROLLBACK", false, false, true).await, None)
+            halt!(after(conn, link, env, s, ROLLBACK, false, false, true).await, None)
         }
         Err(e) if e.is_fatal() => Some(my_error(&e)),
-        Err(_) => halt!(after(conn, link, env, s, "", false, true, false).await, None),
+        Err(_) => {
+            // Refused: the transaction may still be open, with what the run did in it. Said as
+            // the one opened for manual commit (`ManualBegun` first), never as the user's.
+            if !s.tx.reported {
+                s.tx.opening = Some((id, index));
+                env.failed.store(false, Ordering::SeqCst);
+            }
+            halt!(after(conn, link, env, s, "", false, true, false).await, None)
+        }
     };
     match error {
         Some(error) => Err(Halted { stop: Stop::Lost(error), reply: None }),
@@ -1074,23 +1135,37 @@ async fn end_tx(
         let _ = env.events.send(DbEvent::Failed { id, error: DbError::NoTransaction, cancelled: false });
         return Ok(());
     }
-    let sql = if commit { "COMMIT" } else { "ROLLBACK" };
+    s.request = id;
+    let sql = if commit { COMMIT } else { ROLLBACK };
+    let unknown = |e: &mysql_async::Error| if commit { DbError::CommitUnknown } else { my_error(e) };
     let error = match link.guard(None, conn.query_drop(sql)).await? {
         Ok(()) => {
             let outcome = if commit { TxOutcome::Committed } else { TxOutcome::RolledBack };
             let _ = env.events.send(DbEvent::TxEnded { id, outcome });
-            // A transaction still open after it is a new one (`completion_type = CHAIN`).
-            after(conn, link, env, s, sql, true, false, true).await?
+            after(conn, link, env, s, sql, false, false, true).await?
         }
         Err(e) if e.is_fatal() => {
-            let error = if commit { DbError::CommitUnknown } else { my_error(&e) };
-            let _ = env.events.send(DbEvent::Failed { id, error, cancelled: false });
+            let _ = env.events.send(DbEvent::Failed { id, error: unknown(&e), cancelled: false });
             Some(my_error(&e))
         }
-        Err(e) => {
-            let _ = env.events.send(DbEvent::Failed { id, error: my_error(&e), cancelled: false });
-            after(conn, link, env, s, "", false, true, false).await?
-        }
+        // Refused: the server says what it left. A connection that does not answer that leaves
+        // a commit's outcome unknown.
+        Err(e) => match link.guard(None, conn.ping()).await? {
+            Ok(()) => {
+                let _ = env.events.send(DbEvent::Failed { id, error: my_error(&e), cancelled: false });
+                let open = conn
+                    .last_ok_packet()
+                    .is_some_and(|p| p.status_flags().contains(StatusFlags::SERVER_STATUS_IN_TRANS));
+                if !open && s.tx.reported {
+                    let _ = env.events.send(DbEvent::TxClosedBy { id, how: ServerEnd::RolledBack });
+                }
+                after(conn, link, env, s, "", false, false, true).await?
+            }
+            Err(dead) => {
+                let _ = env.events.send(DbEvent::Failed { id, error: unknown(&e), cancelled: false });
+                Some(my_error(&dead))
+            }
+        },
     };
     match error {
         Some(error) => Err(Stop::Lost(error)),
@@ -1645,8 +1720,8 @@ async fn count(
         Ok(None) => Err(DbError::NoResult),
         Err(e) if e.is_fatal() => return Err(Stop::Lost(my_error(&e))),
         Err(e) => {
-            let open = s.tx.open;
-            if let Some(error) = after(conn, link, env, s, "", false, open, false).await? {
+            let ask = s.tx.open || !s.tx.autocommit;
+            if let Some(error) = after(conn, link, env, s, "", false, ask, false).await? {
                 return Err(Stop::Lost(error));
             }
             Err(failure(&e).0)
