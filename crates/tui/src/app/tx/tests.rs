@@ -21,6 +21,10 @@ fn ddl_locks_are_said_only_where_the_documentation_gives_them() {
         ("ALTER TABLE t SET UNLOGGED", ex("t")),
         ("ALTER TABLE p DETACH PARTITION p1", ex("p")),
         ("ALTER TABLE \"Mixed\".\"T\" ADD c int", ex("\"Mixed\".\"T\"")),
+        // Commas inside parentheses are one action.
+        ("ALTER TABLE t ADD COLUMN c numeric(10,2)", ex("t")),
+        ("ALTER TABLE t ADD COLUMN c int DEFAULT f(a, b)", ex("t")),
+        ("ALTER TABLE t ALTER COLUMN c TYPE numeric(12, 4)", ex("t")),
         ("DROP TABLE IF EXISTS shop.reviews", ex("shop.reviews")),
         ("DROP VIEW v", ex("v")),
         ("DROP MATERIALIZED VIEW mv", ex("mv")),
@@ -41,6 +45,7 @@ fn ddl_locks_are_said_only_where_the_documentation_gives_them() {
         ("ALTER TABLE p ATTACH PARTITION p1 FOR VALUES IN (1)", kept("p")),
         ("ALTER TABLE p DETACH PARTITION p1 FINALIZE", kept("p")),
         ("ALTER TABLE t ADD COLUMN a int, ADD COLUMN b int", kept("t")),
+        ("ALTER TABLE t ADD COLUMN a numeric(10,2), DROP COLUMN b", kept("t")),
         ("ALTER INDEX i RENAME TO j", kept("i")),
         ("ALTER VIEW v RENAME TO w", kept("v")),
         ("ALTER MATERIALIZED VIEW mv RENAME TO m2", kept("mv")),

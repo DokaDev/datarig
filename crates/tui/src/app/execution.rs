@@ -1064,7 +1064,8 @@ impl App {
                         .run
                         .failed()
                         .and_then(|(i, e)| {
-                            // PostgreSQL's 2D000, as its message says it.
+                            // PostgreSQL's 2D000, as its message says it (the driver's error
+                            // carries no SQLSTATE).
                             e.contains("invalid transaction termination").then_some(i)
                         })
                         .and_then(|i| t.exec.run.statements.get(i))

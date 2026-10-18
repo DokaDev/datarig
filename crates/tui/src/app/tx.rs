@@ -856,8 +856,17 @@ pub(crate) fn ddl_lock(sql: &str) -> Option<DdlLock> {
         }
         (!name.is_empty() && name != "ALL" && !name.eq_ignore_ascii_case("all")).then_some((name, next))
     };
-    // One action: no comma at the top (several actions take the strongest of their locks).
-    let one_action = !toks.iter().any(|t| t.kind == Tok::Comma);
+    // One action: no comma outside parentheses (several actions take the strongest of their
+    // locks; `numeric(10,2)`, `DEFAULT f(a, b)` are one).
+    let mut depth = 0i32;
+    let one_action = !toks.iter().any(|t| {
+        match t.kind {
+            Tok::LParen => depth += 1,
+            Tok::RParen => depth -= 1,
+            _ => {}
+        }
+        t.kind == Tok::Comma && depth == 0
+    });
     match (up(0)?.as_str(), up(1).as_deref()) {
         ("CREATE", Some("INDEX" | "UNIQUE")) => {
             if toks.iter().any(|t| t.is_word() && t.text(sql).eq_ignore_ascii_case("CONCURRENTLY")) {
