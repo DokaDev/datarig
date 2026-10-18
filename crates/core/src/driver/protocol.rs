@@ -161,6 +161,10 @@ pub enum DbError {
     CancelNotTaken(CancelFailure),
     /// [`DbCommand::EndTx`] found no transaction block open on the session: nothing was sent.
     NoTransaction,
+    /// The server answered the transaction the driver opened for a statement
+    /// ([`TxRule::Manual`]) without one open: the statement was not sent (run without a
+    /// transaction, it could not be rolled back).
+    TxNotOpened,
     /// The connection ended while a `COMMIT` ([`DbCommand::EndTx`] with `commit`) was on its
     /// way or being carried out: whether the server committed is not known (a server may commit
     /// and lose the connection before it answers). [`DbEvent::Lost`] follows with why.
@@ -246,6 +250,7 @@ impl DbError {
             | DbError::ServerKeyInvalid
             | DbError::ReadOnlyLost
             | DbError::NoTransaction
+            | DbError::TxNotOpened
             | DbError::CommitUnknown
             | DbError::ReservedSavepoint
             | DbError::NotAPlainRead
@@ -315,8 +320,10 @@ pub enum TxRule {
     /// …) and a block the user opened (`BEGIN`) get none: the server's own rules apply (a failure
     /// aborts the block). Savepoint names starting with `datarig_` are the driver's
     /// ([`DbError::ReservedSavepoint`]). MySQL sets no such savepoint (it would cost a round
-    /// trip of its own): a failed statement there is undone by the server alone, the transaction
-    /// stays open, and the statements of the run before it keep what they did.
+    /// trip of its own): a failed statement there is undone by the server alone and the
+    /// statements of the run before it keep what they did; the transaction stays open unless the
+    /// server rolls all of it back (a deadlock, a lock wait timeout under
+    /// `innodb_rollback_on_timeout`: [`DbEvent::TxClosedBy`]).
     ///
     /// `idle_timeout`: the most the server lets the transaction sit idle (PostgreSQL's
     /// `idle_in_transaction_session_timeout`, set for that transaction only, again after a
@@ -346,6 +353,17 @@ pub enum TxStep {
     /// statements that cannot run in a transaction).
     #[default]
     AsIs,
+}
+
+/// How the server ended an open transaction on its own ([`DbEvent::TxClosedBy`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ServerEnd {
+    /// It rolled the whole transaction back as a statement failed (MySQL: a deadlock, `1213`; a
+    /// lock wait timeout under `innodb_rollback_on_timeout`). Nothing of it was kept.
+    RolledBack,
+    /// A statement committed it before running (MySQL's implicit commit: DDL, `BEGIN` inside a
+    /// transaction, `LOCK TABLES`, …). What it did was kept.
+    Committed,
 }
 
 /// How [`DbCommand::EndTx`] ended the transaction ([`DbEvent::TxEnded`]).
@@ -930,6 +948,15 @@ pub enum DbEvent {
     /// what earlier runs did in it. Sent after the run's answer.
     RunRolledBack {
         id: u64,
+    },
+    /// The transaction open on the session (said with `Block(true)`) was ended by the server, not
+    /// by the user's `COMMIT`/`ROLLBACK` nor [`DbCommand::EndTx`], during request `id` (a run's
+    /// statement, an `EndTx` the server refused): `how` says whether its work was kept. Sent
+    /// before the `Block(false)` of that change (a statement that opens another transaction at
+    /// once: before the `Block(false)`, `Block(true)` pair).
+    TxClosedBy {
+        id: u64,
+        how: ServerEnd,
     },
     /// The answer to [`DbCommand::EndTx`] `id`: how the transaction ended. The `Block` and
     /// `TxOpen` changes follow.

@@ -229,6 +229,9 @@ pub(crate) fn init_sql(server: &Server, s: &Settings) -> String {
         "SESSION time_zone = @@SESSION.time_zone".to_string(),
         "SESSION character_set_results = @@SESSION.character_set_results".to_string(),
         "SESSION character_set_connection = @@SESSION.character_set_connection".to_string(),
+        // Each statement outside a transaction commits on its own, whatever the server's default
+        // (`init_connect`, a global `autocommit = 0`): the session follows the flag from here.
+        "SESSION autocommit = 1".to_string(),
     ];
     if let Some(n) = s.select_limit {
         parts.push(format!("SESSION sql_select_limit = {n}"));

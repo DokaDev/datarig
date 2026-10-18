@@ -3962,13 +3962,18 @@ impl Conn {
         evs
     }
 
-    /// The events that came within a moment (what follows a run's answer).
+    /// The events that follow an answer: up to the answer of a request sent after it (a page of
+    /// a result that is not there, answered with an empty one in its turn).
     async fn settled(&mut self) -> Vec<DbEvent> {
+        const MARK: u64 = u64::MAX;
+        self.session.send(DbCommand::FetchMore { id: MARK });
         let mut evs = Vec::new();
-        while let Ok(Some(ev)) = tokio::time::timeout(Duration::from_millis(300), self.rx.recv()).await {
-            evs.push(ev);
+        loop {
+            match self.next(60).await {
+                DbEvent::Page { id: MARK, .. } => return evs,
+                ev => evs.push(ev),
+            }
         }
-        evs
     }
 }
 
@@ -3983,17 +3988,29 @@ fn tx_of(evs: &[DbEvent]) -> Vec<String> {
             DbEvent::TxOpen(b) => Some(format!("tx {b}")),
             DbEvent::TxEnded { outcome, .. } => Some(format!("ended {outcome:?}")),
             DbEvent::Autocommit(b) => Some(format!("autocommit {b}")),
+            DbEvent::TxClosedBy { how, .. } => Some(format!("closed {how:?}")),
             _ => None,
         })
         .collect()
 }
 
-/// How many InnoDB transactions connection `id` has open (`information_schema.innodb_trx`).
-async fn innodb_trx(a: &mut mysql_async::Conn, id: u64) -> u64 {
-    a.query_first(format!("SELECT COUNT(*) FROM information_schema.innodb_trx WHERE trx_mysql_thread_id = {id}"))
-        .await
-        .unwrap()
-        .unwrap()
+/// How many InnoDB transactions connection `id` has open (`information_schema.innodb_trx`),
+/// once that is `want` (the server refreshes the table only when it was not read for 100 ms),
+/// or after 2 s.
+async fn innodb_trx(a: &mut mysql_async::Conn, id: u64, want: u64) -> u64 {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let n: u64 = a
+            .query_first(format!("SELECT COUNT(*) FROM information_schema.innodb_trx WHERE trx_mysql_thread_id = {id}"))
+            .await
+            .unwrap()
+            .unwrap();
+        if n == want || Instant::now() > deadline {
+            return n;
+        }
+        // Read again within 100 ms, the server answers from the cache it did not refresh.
+        tokio::time::sleep(Duration::from_millis(150)).await;
+    }
 }
 
 /// What a query of another session reads (one value).
@@ -4021,37 +4038,41 @@ async fn manual_commit_opens_a_transaction_at_the_first_write_only() {
     // Reads only: autocommit, nothing open on the server.
     let evs = c.manual(1, &[&format!("SELECT * FROM {q}"), "SELECT 1"], &[false, false]).await;
     assert!(tx_of(&evs).is_empty(), "{evs:?}");
-    assert_eq!(innodb_trx(&mut a, id).await, 0);
+    assert_eq!(innodb_trx(&mut a, id, 0).await, 0);
     // A read, a write, a read: the transaction opens at the write, the last read sees it.
     let insert = format!("INSERT INTO {q} VALUES (1)");
     let evs = c.manual(2, &[&count, &insert, &count], &[false, true, false]).await;
     assert_eq!(tx_of(&evs), ["begun 1", "block true", "tx true"], "{evs:?}");
-    let steps: Vec<_> = evs
+    let first_rows: Vec<_> = evs
         .iter()
         .filter_map(|e| match e {
             DbEvent::StepRows { index: 0, rows, .. } => Some(rows.clone()),
             _ => None,
         })
         .collect();
-    assert_eq!(steps, [vec![vec![Some("0".to_string())]]], "{evs:?}");
+    assert_eq!(first_rows, [vec![vec![Some("0".to_string())]]], "{evs:?}");
     assert_eq!(
         page_of(&evs[..evs.iter().rposition(|e| matches!(e, DbEvent::Page { .. })).unwrap() + 1]).1,
         &vec![vec![Some("1".to_string())]]
     );
-    assert_eq!(innodb_trx(&mut a, id).await, 1, "the transaction is open on the server");
+    assert_eq!(innodb_trx(&mut a, id, 1).await, 1, "the transaction is open on the server");
     assert_eq!(seen(&url, &count).await, "0", "another session does not see it");
     // A later write joins it.
     let evs = c.manual(3, &[&format!("INSERT INTO {q} VALUES (2)")], &[true]).await;
     assert!(tx_of(&evs).is_empty(), "{evs:?}");
     assert_eq!(tx_of(&c.end_tx(4, true).await), ["ended Committed", "block false", "tx false"]);
-    assert_eq!(innodb_trx(&mut a, id).await, 0);
+    assert_eq!(innodb_trx(&mut a, id, 0).await, 0);
     assert_eq!(seen(&url, &count).await, "2", "committed");
     // Rolled back.
     let evs = c.manual(5, &[&format!("DELETE FROM {q}")], &[true]).await;
     assert_eq!(tx_of(&evs), ["begun 0", "block true", "tx true"], "{evs:?}");
     // A result held in it (far longer than a page) ends first.
-    let evs = c.manual(50, &["SELECT * FROM shop.events"], &[false]).await;
-    assert!(page_of(&evs[..1 + evs.iter().position(|e| matches!(e, DbEvent::Page { .. })).unwrap()]).2, "{evs:?}");
+    // (Its answer only: a held result waits for its own pages, not for the mark of `settled`.)
+    let tx = TxRule::Manual { steps: steps(&[false]), idle_timeout: None };
+    let statements = vec!["SELECT * FROM shop.events".to_string()];
+    c.session.send(DbCommand::Execute { id: 50, statements, paging: PagingMode::NoHold, tx });
+    let evs = c.answer(50).await;
+    assert!(page_of(&evs).2, "{evs:?}");
     assert_eq!(tx_of(&c.end_tx(6, false).await), ["ended RolledBack", "block false", "tx false"]);
     assert_eq!(seen(&url, &count).await, "2", "rolled back");
     // None open: refused, nothing sent.
@@ -4079,7 +4100,7 @@ async fn manual_commit_failures_and_implicit_commits() {
     let evs = c.manual(1, &[&format!("INSERT INTO {q} VALUES (1)")], &[true]).await;
     assert!(matches!(failures(&evs, 1)[..], [DbEvent::Failed { error: DbError::Server(_), .. }]), "{evs:?}");
     assert_eq!(tx_of(&evs), ["rolled back 0"], "never said open: {evs:?}");
-    assert_eq!(innodb_trx(&mut a, id).await, 0, "no transaction left");
+    assert_eq!(innodb_trx(&mut a, id, 0).await, 0, "no transaction left");
     // Open, then a run whose second statement fails: its first one stays, the transaction too.
     c.manual(2, &[&format!("INSERT INTO {q} VALUES (10)")], &[true]).await;
     let evs = c
@@ -4091,12 +4112,12 @@ async fn manual_commit_failures_and_implicit_commits() {
     assert_eq!(seen(&url, &count).await, "1", "not committed");
     // DDL commits it implicitly (the app asks first; the flags say it ended).
     let evs = c.manual(5, &[&format!("CREATE TABLE {q}_x (a INT)")], &[false]).await;
-    assert_eq!(tx_of(&evs), ["block false", "tx false"], "{evs:?}");
+    assert_eq!(tx_of(&evs), ["closed Committed", "block false", "tx false"], "{evs:?}");
     assert_eq!(seen(&url, &count).await, "3", "committed by the DDL");
     // A DDL flagged by mistake opens nothing either.
     let evs = c.manual(6, &[&format!("DROP TABLE {q}_x")], &[true]).await;
     assert!(tx_of(&evs).is_empty(), "{evs:?}");
-    assert_eq!(innodb_trx(&mut a, id).await, 0);
+    assert_eq!(innodb_trx(&mut a, id, 0).await, 0);
     a.disconnect().await.unwrap();
 }
 
@@ -4130,11 +4151,28 @@ async fn a_deadlock_ends_the_manual_transaction_and_says_so() {
         }
         _ => panic!("{evs:?}"),
     }
-    assert_eq!(tx_of(&evs), ["block false", "tx false"], "the server ended it: {evs:?}");
+    assert_eq!(tx_of(&evs), ["closed RolledBack", "block false", "tx false"], "the server ended it: {evs:?}");
     b.query_drop("COMMIT").await.unwrap();
     assert_eq!(seen(&url, &format!("SELECT v FROM {q} WHERE id = 1")).await, "b", "nothing of it is left");
     let evs = c.end_tx(3, true).await;
     assert!(matches!(evs[..], [DbEvent::Failed { error: DbError::NoTransaction, .. }]), "{evs:?}");
+    // In the run that opened it, once said open: the server's end, never the driver's rollback.
+    b.query_drop("START TRANSACTION").await.unwrap();
+    b.query_drop(format!("UPDATE {q} SET v = 'b2' WHERE id >= 2")).await.unwrap();
+    let tx = TxRule::Manual { steps: steps(&[true, true]), idle_timeout: None };
+    let statements =
+        vec![format!("UPDATE {q} SET v = 'c' WHERE id = 1"), format!("UPDATE {q} SET v = 'c' WHERE id = 2")];
+    c.session.send(DbCommand::Execute { id: 4, statements, paging: PagingMode::NoHold, tx });
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    b.query_drop(format!("UPDATE {q} SET v = 'b2' WHERE id = 1")).await.expect("the other session goes on");
+    let mut evs = c.answer(4).await;
+    evs.extend(c.settled().await);
+    assert_eq!(
+        tx_of(&evs),
+        ["begun 0", "block true", "tx true", "closed RolledBack", "block false", "tx false"],
+        "{evs:?}"
+    );
+    b.query_drop("COMMIT").await.unwrap();
     b.disconnect().await.unwrap();
 }
 
@@ -4189,7 +4227,7 @@ async fn a_lock_wait_timeout_or_a_cancel_keeps_the_manual_transaction() {
     evs.extend(c.settled().await);
     assert!(matches!(failures(&evs, 7)[..], [DbEvent::Failed { cancelled: true, .. }]), "{evs:?}");
     assert_eq!(tx_of(&evs), ["rolled back 0"], "{evs:?}");
-    assert_eq!(innodb_trx(&mut a, id).await, 0);
+    assert_eq!(innodb_trx(&mut a, id, 0).await, 0);
     a.disconnect().await.unwrap();
 }
 
@@ -4255,4 +4293,77 @@ async fn autocommit_turned_off_by_the_user_is_said() {
 fn steps(opens: &[bool]) -> Vec<datarig_core::driver::TxStep> {
     use datarig_core::driver::TxStep;
     opens.iter().map(|&o| if o { TxStep::Open } else { TxStep::AsIs }).collect()
+}
+
+/// A switch of transaction inside the run that opened one (the user's `BEGIN`, which commits
+/// it implicitly; `COMMIT AND CHAIN`): a later failure of the run rolls nothing back (the work
+/// before the switch is committed, the block open now is the user's), and the implicit commit
+/// is said as the server's.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_transaction_switched_in_the_opening_run_is_never_rolled_back_by_the_session() {
+    let test = "a_transaction_switched_in_the_opening_run";
+    let Some((url, admin)) = urls(test) else { return };
+    let t =
+        Table::make(&admin, "mswitch", &["CREATE TABLE {t} (id INT PRIMARY KEY)", "INSERT INTO {t} VALUES (0)"]).await;
+    let q = t.q();
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let count = format!("SELECT CAST(COUNT(*) AS CHAR) FROM {q}");
+    let dup = format!("INSERT INTO {q} VALUES (0)");
+    let evs = c.manual(1, &[&format!("INSERT INTO {q} VALUES (1)"), "BEGIN", &dup], &[true, false, true]).await;
+    assert_eq!(failures(&evs, 1).len(), 1, "{evs:?}");
+    assert_eq!(
+        tx_of(&evs),
+        ["begun 0", "block true", "tx true", "closed Committed", "block false", "tx false", "block true", "tx true"],
+        "{evs:?}"
+    );
+    assert_eq!(seen(&url, &count).await, "2", "the first row is committed");
+    assert_eq!(tx_of(&c.end_tx(2, false).await), ["ended RolledBack", "block false", "tx false"]);
+    let evs =
+        c.manual(3, &[&format!("INSERT INTO {q} VALUES (2)"), "COMMIT AND CHAIN", &dup], &[true, false, true]).await;
+    assert_eq!(failures(&evs, 3).len(), 1, "{evs:?}");
+    assert_eq!(
+        tx_of(&evs),
+        ["begun 0", "block true", "tx true", "block false", "tx false", "block true", "tx true"],
+        "no rollback: {evs:?}"
+    );
+    assert_eq!(seen(&url, &count).await, "3", "the row before the chain is committed");
+    assert_eq!(tx_of(&c.end_tx(4, false).await), ["ended RolledBack", "block false", "tx false"]);
+}
+
+/// Without autocommit a failed statement may open a transaction: the session asks, and says it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failure_without_autocommit_asks_whether_a_transaction_opened() {
+    let test = "a_failure_without_autocommit_asks";
+    let Some((url, admin)) = urls(test) else { return };
+    let t =
+        Table::make(&admin, "mnoauto", &["CREATE TABLE {t} (id INT PRIMARY KEY)", "INSERT INTO {t} VALUES (1)"]).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    assert_eq!(tx_of(&c.manual(1, &["SET autocommit = 0"], &[false]).await), ["autocommit false"]);
+    let evs = c.manual(2, &[&format!("INSERT INTO {} VALUES (1)", t.q())], &[false]).await;
+    assert_eq!(failures(&evs, 2).len(), 1, "{evs:?}");
+    assert_eq!(tx_of(&evs), ["block true", "tx true"], "{evs:?}");
+    assert_eq!(tx_of(&c.end_tx(3, false).await), ["ended RolledBack", "block false", "tx false"]);
+}
+
+/// The statement that opens the transaction returns a result read on (a locking read longer
+/// than a page): the transaction is said open with its first page, and `EndTx` ends the result
+/// first.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_held_result_of_the_opening_statement_says_the_transaction_open() {
+    let test = "a_held_result_of_the_opening_statement";
+    let Some((url, admin)) = urls(test) else { return };
+    let t = numbers(&admin, "mheld", 700).await;
+    let mut a = side(&admin).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, test).await;
+    let id = only_session(&mut a, SessionRole::Query, test).await;
+    let tx = TxRule::Manual { steps: steps(&[true]), idle_timeout: None };
+    let statements = vec![format!("SELECT * FROM {} FOR UPDATE", t.q())];
+    c.session.send(DbCommand::Execute { id: 1, statements, paging: PagingMode::NoHold, tx });
+    let evs = c.answer(1).await;
+    assert!(page_of(&evs).2, "held, more to come: {evs:?}");
+    assert_eq!(tx_of(&evs), ["begun 0", "block true", "tx true"], "{evs:?}");
+    assert_eq!(innodb_trx(&mut a, id, 1).await, 1);
+    assert_eq!(tx_of(&c.end_tx(2, true).await), ["ended Committed", "block false", "tx false"]);
+    assert_eq!(innodb_trx(&mut a, id, 0).await, 0);
+    a.disconnect().await.unwrap();
 }
