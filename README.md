@@ -420,7 +420,7 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
 - Keystroke to frame under 25 ms (p95) in a 5 MB SQL file, in a plan of hundreds of nodes and
   in a chart of 100,000 fetched rows.
 - Idle: under 48 MiB and 1% CPU, and fewer than 0.2 wakeups a second when nothing is waiting.
-- First frame under 250 ms (p95); the release binary is under 21 MiB.
+- First frame under 250 ms (p95); the release binary is under 23 MiB.
 
 ## Not yet (roadmap)
 
