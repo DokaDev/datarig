@@ -56,7 +56,7 @@ fn profile(url: &str) -> ConnectionConfig {
 }
 
 /// An app with the one MySQL profile of `url` (under `policy`: `it-ro` read-only, `it-hold`
-/// held results), connected.
+/// held results, `it-manual` manual commit), connected.
 async fn app_on(url: &str, tag: &str, policy: Option<&str>) -> (App, UnboundedReceiver<AppEvent>) {
     use datarig_core::policy::Policy;
     let pw = datarig_core::profile::dsn::parse(url).unwrap().password.unwrap_or_default();
@@ -67,6 +67,8 @@ async fn app_on(url: &str, tag: &str, policy: Option<&str>) -> (App, UnboundedRe
     let mut cfg = Config { connections: vec![p], ..Config::default() };
     cfg.policies.insert("it-ro", Policy { read_only: true, ..Policy::default() });
     cfg.policies.insert("it-hold", Policy { paging: PagingMode::Hold, ..Policy::default() });
+    let manual = Policy { commit: datarig_core::policy::CommitRule::Manual, ..Policy::default() };
+    cfg.policies.insert("it-manual", manual);
     let mut app = App::new(&cfg, None, Lang::En);
     app.set_secret_store(store as Arc<dyn SecretStore>);
     app.set_instance_tag(tag);
@@ -402,4 +404,36 @@ async fn a_cancel_taken_by_a_long_rollback_keeps_the_tab_and_its_transaction() {
     run(&mut app, &mut rx, &format!("SELECT v FROM {t} WHERE pad = 'marker'")).await;
     assert_eq!(shown_page(&app).0.as_deref(), Some("-1"), "{:?}", app.status);
     run(&mut app, &mut rx, "ROLLBACK").await;
+}
+
+/// Manual commit on the real server: a plain read opens no transaction; the write opens one
+/// that another session does not see into until `tx.commit`; `tx.rollback` undoes the next.
+#[tokio::test(flavor = "multi_thread")]
+async fn manual_commit_keeps_a_write_to_itself_until_it_is_committed() {
+    use datarig_tui::app::action::Action;
+    let Some((url, admin)) = urls("manual_commit_keeps_a_write_to_itself_until_it_is_committed") else { return };
+    let (_t, t) = numbers(&admin, "tuimanual", 3).await;
+    let (mut app, mut rx) = app_on(&url, &format!("mm{}", std::process::id()), Some("it-manual")).await;
+    let mut other = side(&admin).await;
+    let count = format!("SELECT COUNT(*) FROM {t}");
+    run(&mut app, &mut rx, &format!("SELECT * FROM {t}")).await;
+    assert!(!app.tab().exec.user_tx(), "a plain read opens nothing");
+    run(&mut app, &mut rx, &format!("INSERT INTO {t} VALUES (10), (11)")).await;
+    pump(&mut app, &mut rx, 10, |a| a.tab().exec.user_tx()).await;
+    let tx = app.tab().exec.tx.clone().expect("the open transaction");
+    assert_eq!((tx.manual, tx.changes, tx.rows), (true, 1, 2));
+    let seen: i64 = other.query_first(count.as_str()).await.unwrap().unwrap();
+    assert_eq!(seen, 3, "not visible to another session");
+    app.dispatch(Action::TxCommit);
+    pump(&mut app, &mut rx, 10, |a| !a.tab_busy(a.tab().id) && !a.tab().exec.user_tx()).await;
+    assert!(matches!(app.status.as_ref().map(|n| &n.msg), Some(Msg::TxCommitted { count: 1, .. })), "{:?}", app.status);
+    let seen: i64 = other.query_first(count.as_str()).await.unwrap().unwrap();
+    assert_eq!(seen, 5);
+    run(&mut app, &mut rx, &format!("DELETE FROM {t}")).await;
+    pump(&mut app, &mut rx, 10, |a| a.tab().exec.user_tx()).await;
+    app.dispatch(Action::TxRollback);
+    pump(&mut app, &mut rx, 10, |a| !a.tab_busy(a.tab().id) && !a.tab().exec.user_tx()).await;
+    let seen: i64 = other.query_first(count.as_str()).await.unwrap().unwrap();
+    assert_eq!(seen, 5, "rolled back");
+    other.disconnect().await.unwrap();
 }

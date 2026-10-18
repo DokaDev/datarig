@@ -70,6 +70,9 @@ fn the_presets() {
         (p[2].policy.read_only, p[2].policy.confirm, p[2].badge.as_deref()),
         (false, Confirm::Writes, Some("STG"))
     );
+    // Staging and prod commit by hand; dev and test (the default rules) commit by themselves.
+    let commits: Vec<CommitRule> = p.iter().map(|e| e.policy.commit).collect();
+    assert_eq!(commits, [CommitRule::Auto, CommitRule::Auto, CommitRule::Manual, CommitRule::Manual]);
     assert_eq!(
         (p[0].policy.clone(), p[0].color.as_deref(), p[0].badge.clone()),
         (Policy::default(), Some("green"), None)
@@ -137,4 +140,37 @@ fn confirm_levels() {
     assert!(Confirm::Writes.writes() && !Confirm::Destructive.writes());
     let p = Policy::default();
     assert_eq!((p.read_only, p.confirm), (false, Confirm::Destructive));
+}
+
+#[test]
+fn commit_rules() {
+    assert_eq!(CommitRule::parse("auto"), Some(CommitRule::Auto));
+    assert_eq!(CommitRule::parse(" Manual "), Some(CommitRule::Manual));
+    for bad in ["", "off", "manually", "on", "true"] {
+        assert_eq!(CommitRule::parse(bad), None, "{bad:?}");
+    }
+    assert_eq!((CommitRule::Auto.as_str(), CommitRule::Manual.as_str()), ("auto", "manual"));
+    assert!(CommitRule::Manual.manual() && !CommitRule::Auto.manual());
+    let p = Policy::default();
+    assert_eq!(p.commit, CommitRule::Auto, "a missing key commits by itself, as before");
+    assert_eq!((p.tx_idle_warning, p.tx_idle_timeout), (Some(TX_IDLE_WARNING), Some(TX_IDLE_TIMEOUT)));
+    assert_eq!((TX_IDLE_WARNING.as_secs(), TX_IDLE_TIMEOUT.as_secs()), (300, 1800));
+}
+
+#[test]
+fn transaction_idle_times_have_a_floor() {
+    let v = |s: &str| toml::Value::String(s.into());
+    assert_eq!(parse_tx_idle(&v("5m")), Ok(Some(Duration::from_secs(300))));
+    assert_eq!(parse_tx_idle(&v("10s")), Ok(Some(TX_IDLE_FLOOR)), "the floor itself");
+    assert_eq!(parse_tx_idle(&toml::Value::Integer(90)), Ok(Some(Duration::from_secs(90))));
+    assert_eq!(parse_tx_idle(&v("off")), Ok(None));
+    assert_eq!(parse_tx_idle(&toml::Value::Integer(0)), Ok(None), "zero is off, as for paging");
+    for bad in
+        [v("9s"), v("1"), toml::Value::Integer(5), v("soon"), v("-1m"), v("5 minutes"), toml::Value::Boolean(true)]
+    {
+        assert!(parse_tx_idle(&bad).is_err(), "{bad:?}");
+    }
+    assert!(parse_tx_idle(&v("9s")).unwrap_err().contains("10s"), "says the floor");
+    assert_eq!(parse_tx_idle_text("30m"), Ok(Some(TX_IDLE_TIMEOUT)));
+    assert!(parse_tx_idle_text("3s").is_err());
 }

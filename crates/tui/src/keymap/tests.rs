@@ -211,7 +211,7 @@ fn innermost_context_wins_and_sequences_complete() {
     // Unknown keys go to the widget; an unfinished leader sequence is dropped.
     assert_eq!(last(&km, Ctx::Explorer, "z"), Resolved::Forward(k("z")));
     assert_eq!(last(&km, Ctx::Explorer, "g x"), Resolved::Forward(k("g x")));
-    assert_eq!(last(&km, Ctx::Explorer, "space x"), Resolved::Unbound(k("space x")));
+    assert_eq!(last(&km, Ctx::Explorer, "space j"), Resolved::Unbound(k("space j")));
     assert_eq!(last(&km, Ctx::Explorer, "space esc"), Resolved::Unbound(k("space esc")));
     // Switching context drops a pending sequence.
     let mut st = KeyState::default();
@@ -445,10 +445,13 @@ fn leader_groups_list_only_what_leads_to_an_action() {
         keys,
         [
             ",", "/", "1", "2", "3", "4", "5", "6", "7", "8", "9", "<", ">", "?", "Space", "b", "c", "e", "r", "s",
-            "t", "z"
+            "t", "x", "z"
         ],
         "the monitor has no action yet"
     );
+    assert!(root.contains(&("x".into(), Child::Group(Some(Label::GroupTx)))));
+    let tx: Vec<String> = shown(Ctx::Explorer, "space x").into_iter().map(|(k, _)| k).collect();
+    assert_eq!(tx, ["c", "r", "s"]);
     // `Space Space`: the action menu, listed with the groups.
     assert!(root.contains(&("Space".into(), Child::Action(action::by_id("menu.open").unwrap().action))));
     let tabs: Vec<String> = shown(Ctx::VimVisual, "space t").into_iter().map(|(k, _)| k).collect();

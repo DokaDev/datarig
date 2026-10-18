@@ -1968,3 +1968,52 @@
 "export.note.no_quotes" = "Without quotes, a value that holds the delimiter, a double quote or a line break breaks the file's columns, and the file will not read back."
 "export.note.sql_refused" = "{format} is not available here: {reason}"
 "export.csv_options_only" = "Those options are CSV's (delim=, quote=, null=); TSV takes header= only, the other formats none"
+
+# Manual commit and the open transaction
+"group.tx" = "Transaction"
+"action.tx.commit" = "Commit the open transaction"
+"action.tx.rollback" = "Roll back the open transaction"
+"action.tx.summary" = "What the open transaction did"
+"env.rule.manual_commit" = "manual commit"
+"form.field.commit" = "Commit"
+"form.field.tx_idle_warning" = "Idle warning"
+"form.field.tx_idle_timeout" = "Idle limit"
+"form.env.commit_auto" = "automatic (default)"
+"form.env.commit_manual" = "manual: commit yourself"
+"form.env.commit_hint" = "reads run without a transaction; the first write starts one"
+"form.env.tx_idle_warning_hint" = "warn about an idle open transaction: 5m, off"
+"form.env.tx_idle_timeout_hint" = "PostgreSQL only: the server rolls back after it: 30m, off"
+"validate.tx_idle" = "at least 10s, or off"
+"status.autocommit_off" = "autocommit off (session)"
+"tx.changes" = { one = "{count} change", other = "{count} changes" }
+"tx.rows" = { one = "{count} row", other = "{count} rows" }
+"tx.none" = "No transaction is open in this tab"
+"tx.not_supported" = "This connection can't commit or roll back from here: run COMMIT or ROLLBACK instead"
+"tx.committing" = "Committing…"
+"tx.rolling_back" = "Rolling back…"
+"tx.began" = "Statement {step} started a transaction: it stays open until you commit ({commit}) or roll back ({rollback})"
+"tx.committed" = { one = "Committed {count} change · {rows} · {time}", other = "Committed {count} changes · {rows} · {time}" }
+"tx.rolled_back" = { one = "Rolled back {count} change · {time}", other = "Rolled back {count} changes · {time}" }
+"tx.rolled_back_instead" = "Not committed: the transaction had failed, so the server rolled it back; nothing of it was kept"
+"tx.commit_failed" = "Commit failed: {error}. The server rolled the transaction back"
+"tx.rollback_failed" = "Rollback failed: {error}"
+"tx.only_rollback" = "The transaction failed: only rollback is possible ({key})"
+"tx.idle_timeout" = "The server ended the session because the transaction was idle too long, and rolled it back: {error}"
+"tx.lost" = "The server rolls back the transaction that was open"
+"tx.server_rolled_back" = { one = "The server rolled back the whole transaction (a deadlock or a lock wait timeout): {count} change is gone", other = "The server rolled back the whole transaction (a deadlock or a lock wait timeout): {count} changes are gone" }
+"tx.committed_implicitly" = { one = "Statement {step} committed the open transaction implicitly: {count} change was kept", other = "Statement {step} committed the open transaction implicitly: {count} changes were kept" }
+"tx.closed_unknown" = "The transaction ended while server code failed: its changes may or may not have been kept, so check the data"
+"tx.manual_rolled_back" = "Statement {step} and the ones after it were rolled back with the transaction opened for it"
+"tx.run_rolled_back" = "This run was undone; the open transaction keeps what earlier runs did"
+"tx.no_tx_block_refused" = "Not run: {sql} can't run inside a transaction. Commit ({commit}) or roll back ({rollback}) first"
+"tx.lock_tables_refused" = "Not run: LOCK TABLES doesn't work with manual commit (the next write would start a transaction and release the locks). Use automatic commit for this"
+"tx.enum_value" = "Statement {step} adds an enum value: it can't be used until the transaction commits"
+"tx.mysql_ddl" = "Statement {step}: MySQL applies DDL at once; it can't be rolled back"
+"tx.how_manual" = "manual commit"
+"tx.how_user" = "your own transaction"
+"tx.summary" = { one = "Open transaction ({how}): {count} change · {rows} · open for {time}", other = "Open transaction ({how}): {count} changes · {rows} · open for {time}" }
+"tx.outside_title" = "Run outside a transaction?"
+"tx.outside_kept" = "Not run: the procedure stays unrun"
+"safety.why_outside_tx" = "runs outside a transaction, at once: can't be rolled back"
+"safety.why_commits_itself" = "commits by itself: runs outside, at once; can't be rolled back"
+"safety.why_implicit_commit" = { one = "first commits the open transaction: {count} statement ({rows})", other = "first commits the open transaction: {count} statements ({rows})" }

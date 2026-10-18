@@ -5,7 +5,7 @@ use super::persist;
 use super::runlog::StatementOutcome;
 use super::*;
 use datarig_core::driver::structure::TableStructure;
-use datarig_core::driver::{CancelFailure, DbError, ReadIn, TxRule};
+use datarig_core::driver::{CancelFailure, DbError, ReadIn, ServerEnd, TxOutcome, TxRule};
 use datarig_core::fault::{ErrorLog, FaultKind};
 use datarig_core::sql::lexer::changes_schema_in;
 use datarig_core::sql::values::check_values;
@@ -72,7 +72,14 @@ impl App {
             self.unstage_run(id);
             return self.tab_status(id, refused);
         }
-        let items = self.dangerous(id, pid, &statements);
+        // What the run does to the open transaction (manual commit, a statement that cannot
+        // run in one, MySQL's implicit commit): refused, or asked about with the rest.
+        let check = self.tx_check(id, &statements);
+        if let Some(refused) = check.refused {
+            self.unstage_run(id);
+            return self.tab_status(id, refused);
+        }
+        let items = super::safety::with_tx_reasons(self.dangerous(id, pid, &statements), &statements, check.reasons);
         if !items.is_empty() {
             return self.ask_before_run(id, pid, statements, items);
         }
@@ -83,6 +90,12 @@ impl App {
     /// session, or queued until its profile connects. The read-only check is made again right
     /// before, so nothing it refuses ever reaches a session.
     pub(super) fn run_approved(&mut self, id: TabId, statements: Vec<String>) {
+        self.run_approved_as(id, statements, false)
+    }
+
+    /// [`App::run_approved`]; `as_is`: with manual commit, every statement runs as it is (no
+    /// transaction is opened for it: a procedure the user chose to run outside one).
+    pub(super) fn run_approved_as(&mut self, id: TabId, statements: Vec<String>, as_is: bool) {
         if self.tab_busy(id) {
             self.flash_busy();
             return;
@@ -93,6 +106,11 @@ impl App {
             return self.tab_status(id, refused);
         }
         let Some(t) = self.tabs.get(id) else { return };
+        // Outside a transaction: only on the session it was asked for, never queued for another.
+        if as_is && t.exec.session.is_none() {
+            self.unstage_run(id);
+            return self.tab_status(id, Notice::new(Label::SafetyConfirmMoved, Level::Warning));
+        }
         if t.exec.session.is_none() && self.conns.get(pid).is_none_or(|c| c.resolved.is_none()) {
             // Bound to this tab, this profile and this tab generation.
             let q = Queued { tab: id, profile: pid, binding: t.binding, statements };
@@ -106,6 +124,14 @@ impl App {
         if t.exec.session.is_none() && !self.open_query_session(id) {
             return self.unstage_run(id);
         }
+        // Checked again on the session it goes to (a run that waited for its connection).
+        let check = self.tx_check(id, &statements);
+        if let Some(refused) = check.refused {
+            self.unstage_run(id);
+            return self.tab_status(id, refused);
+        }
+        let tx = self.tx_rule(id, &statements, as_is);
+        let manual = self.manual_commit(id);
         self.query_seq += 1;
         let qid = self.query_seq;
         if let Some(t) = self.tabs.get_mut(id) {
@@ -137,13 +163,20 @@ impl App {
             t.exec.messages_scroll = 0;
             let lang = t.exec.prepared.language();
             // A statement that commits the user's open transaction before it runs (MySQL's
-            // implicit commit): said in the run's Messages.
+            // implicit commit): said in the run's Messages (with manual commit it asked).
             if t.exec.user_tx()
+                && !manual
                 && let Some(i) = statements.iter().position(|s| Classifier::classify_once(lang, s).implicit_commit)
             {
                 let m = Notice::new(Msg::QueryImplicitCommit { step: (i + 1).to_string() }, Level::Warning);
                 t.exec.run.notes.push(m);
             }
+            t.exec.run.notes.extend(check.notes);
+            // The statements of the run run in the open transaction from the first on.
+            t.exec.tx_from = t.exec.user_tx().then_some(0);
+            t.exec.sent_manual = tx != TxRule::Auto;
+            t.exec.run_id = qid;
+            t.exec.outside_offer = None;
             t.exec.ddl = statements.iter().any(|s| changes_schema_in(s, lang.dialect()));
             t.exec.explain_rolled_back =
                 statements.iter().any(|s| Classifier::classify_once(lang, s).rollback_matters());
@@ -168,7 +201,7 @@ impl App {
             t.pane.hidden = false;
         }
         let paging = self.tabs.get(id).map(|t| self.paging_mode(t)).unwrap_or_default();
-        self.send_tab(id, DbCommand::Execute { id: qid, statements, paging, tx: TxRule::Auto });
+        self.send_tab(id, DbCommand::Execute { id: qid, statements, paging, tx });
     }
 
     /// Open tab `id`'s query session with its profile's password (the first run, or the next
@@ -265,9 +298,7 @@ impl App {
         t.exec.unsure();
         t.exec.state = SessionState::Lost;
         t.exec.lost_tx = t.exec.tx_at_risk();
-        t.exec.tx_open = false;
-        // The server rolls the user's transaction back when its session ends.
-        t.block_ended(true);
+        t.tx_reset();
         t.exec.paging = Paging::None;
         t.exec.resuming = None;
         t.exec.want_page = None;
@@ -299,10 +330,11 @@ impl App {
         self.conns.iter().any(|(_, c)| c.pending.iter().any(|q| q.tab == id))
     }
 
-    /// Tab `id` runs a statement or has one waiting for its connection (both count
-    /// as work in progress wherever the app asks before ending it).
+    /// Tab `id` runs a statement, has one waiting for its connection, or waits for the answer
+    /// to a commit or rollback (each counts as work in progress wherever the app asks before
+    /// ending it).
     pub fn tab_busy(&self, id: TabId) -> bool {
-        self.tabs.get(id).is_some_and(|t| t.exec.running.is_some()) || self.is_queued(id)
+        self.tabs.get(id).is_some_and(|t| t.exec.running.is_some() || t.exec.ending.is_some()) || self.is_queued(id)
     }
 
     /// Remove the statement waiting in tab `id`, if any.
@@ -914,9 +946,29 @@ impl App {
             }
             _ => None,
         };
+        // A procedure that commits by itself failed as the first statement of the transaction
+        // opened for it (manual commit): once that is rolled back, the user is asked whether to
+        // run it outside one.
+        let outside = match &ev {
+            DbEvent::Failed { id: q, error: DbError::NeedsNoTransaction(_), .. } => self.tabs.get(id).and_then(|t| {
+                let calls = |sql: &str| {
+                    let first = datarig_core::sql::lexer::lex_in(sql, t.exec.prepared.language().dialect())
+                        .into_iter()
+                        .find(|w| w.is_word())
+                        .map(|w| w.text(sql).to_ascii_uppercase());
+                    matches!(first.as_deref(), Some("CALL" | "DO"))
+                };
+                let opened = t.exec.sent_manual && t.exec.tx_from.is_none() && !t.exec.path_per_transaction;
+                let sql = t.exec.run.current().and_then(|i| t.exec.run.statements.get(i)).map(|s| s.sql.clone());
+                sql.filter(|s| *q == t.exec.run_id && opened && calls(s))
+            }),
+            _ => None,
+        };
         // A statement that cannot run in a transaction, refused only because the tab's schema
         // is set in one behind a pooler: said why, and how to run it.
-        let needs_no_tx = matches!(&ev, DbEvent::Failed { error: DbError::NeedsNoTransaction(_), .. }).then(|| {
+        let needs_no_tx = (outside.is_none()
+            && matches!(&ev, DbEvent::Failed { error: DbError::NeedsNoTransaction(_), .. }))
+        .then(|| {
             let t = self.tabs.get(id);
             let own = profile.map(|p| self.own_database(p)).unwrap_or_default();
             t.and_then(|t| t.context.database.clone()).unwrap_or(own)
@@ -933,7 +985,15 @@ impl App {
         let mut close_portal: Option<u64> = None;
         let page_size = self.page_size;
         let origin = self.tabs.get(id).and_then(Self::origin_now);
+        let wall = self.wall_now();
+        let tx_keys = matches!(ev, DbEvent::ManualBegun { .. }).then(|| self.tx_keys());
+        // The transaction the session opened for the run was rolled back: ask about running the
+        // procedure outside one now.
+        let mut offer = false;
         let Some(t) = self.tabs.get_mut(id) else { return };
+        if outside.is_some() {
+            t.exec.outside_offer = outside;
+        }
         // A page with more rows keeps (or opens) the portal and restarts its idle count; any
         // other outcome of this session means no portal is open. A portal read inside the
         // user's own transaction is never closed for being idle.
@@ -960,15 +1020,113 @@ impl App {
             | DbEvent::Stopping { .. }
             | DbEvent::CancelRefused { .. }
             | DbEvent::ValuesNotKnown { .. } => None,
-            // Answers of manual commit, which the app does not ask for (every run is sent with
-            // `TxRule::Auto`, and no `EndTx` is sent).
-            DbEvent::ManualBegun { .. }
-            | DbEvent::ManualRolledBack { .. }
-            | DbEvent::RunRolledBack { .. }
-            | DbEvent::TxEnded { .. } => None,
-            // Not shown yet: the transaction it leaves open is (`Block`, `TxOpen`), and the
-            // server's error says why it ended one.
-            DbEvent::Autocommit(_) | DbEvent::TxClosedBy { .. } => None,
+            // Statement `index` of the run opened a transaction for manual commit: the block that
+            // follows is that one. Said in the run's Messages.
+            DbEvent::ManualBegun { id: q, index } => {
+                t.exec.manual_begun = Some((q, index));
+                if q == t.exec.run_id {
+                    let (commit, rollback) = tx_keys.unwrap_or_default();
+                    let step = (index + 1).to_string();
+                    t.exec.run.notes.push(Notice::new(Msg::TxBegan { step, commit, rollback }, Level::Info));
+                }
+                None
+            }
+            // The transaction opened for the run was rolled back at once (the run failed in it):
+            // nothing it did is kept.
+            DbEvent::ManualRolledBack { id: q, index } => {
+                // Without a block reported open there is no `Block(false)` to come.
+                t.exec.closing = t.exec.in_block.then_some(true);
+                if q == t.exec.run_id {
+                    let m = Notice::new(Msg::TxManualRolledBack { step: (index + 1).to_string() }, Level::Info);
+                    t.exec.run.notes.push(m);
+                    offer = t.exec.outside_offer.is_some();
+                }
+                None
+            }
+            // The failed run was undone to its savepoint: the transaction keeps what earlier runs
+            // did, and nothing of this one.
+            DbEvent::RunRolledBack { id: q } => {
+                if let Some(tx) = t.exec.tx.as_mut() {
+                    tx.undo_run(q);
+                }
+                if q == t.exec.run_id {
+                    t.exec.run.notes.push(Notice::new(Label::TxRunRolledBack, Level::Info));
+                }
+                None
+            }
+            // The answer to the commit or rollback asked for.
+            DbEvent::TxEnded { id: q, outcome } if t.exec.ending.is_some_and(|e| e.id == q) => {
+                t.exec.ending = None;
+                t.exec.closing = Some(outcome != TxOutcome::Committed);
+                let (count, rows, began, began_wall) =
+                    t.exec.tx.as_ref().map_or((0, 0, now, wall), |x| (x.changes, x.rows, x.began, x.began_wall));
+                let open = wall.duration_since(began_wall).unwrap_or_else(|_| now.saturating_duration_since(began));
+                let time = super::tx::fmt_clock(open);
+                let m = match outcome {
+                    TxOutcome::Committed => {
+                        let rows = self.i18n.msg(&Msg::TxRows { count: rows }).to_string();
+                        Notice::new(Msg::TxCommitted { count, rows, time }, Level::Success)
+                    }
+                    TxOutcome::RolledBack => Notice::new(Msg::TxRolledBack { count, time }, Level::Success),
+                    TxOutcome::RolledBackInstead => Notice::new(Label::TxRolledBackInstead, Level::Warning),
+                };
+                t.exec.run.notes.push(m.clone());
+                Some(m)
+            }
+            DbEvent::TxEnded { .. } => None,
+            // The commit or rollback asked for failed.
+            DbEvent::Failed { id: q, error, .. } if t.exec.ending.is_some_and(|e| e.id == q) => {
+                let commit = t.exec.ending.take().is_some_and(|e| e.commit);
+                let m = match error {
+                    DbError::NoTransaction => Notice::new(Label::TxNone, Level::Warning),
+                    // The connection ended while committing: the transaction may have been
+                    // committed. It is no longer followed, so the `Lost` that comes says nothing
+                    // of a rollback (nor does the next run): only that the outcome is unknown.
+                    DbError::CommitUnknown => {
+                        t.exec.tx_open = false;
+                        t.block_ended(false);
+                        Notice::new(Label::DbCommitUnknown, Level::Error)
+                    }
+                    DbError::NotSupported => Notice::new(Label::TxNotSupported, Level::Warning),
+                    // The server refused the commit (a deferred constraint, a serialization
+                    // failure): it rolled the transaction back.
+                    _ if commit => {
+                        t.exec.closing = Some(true);
+                        Notice::new(Msg::TxCommitFailed { error: text.clone() }, Level::Error)
+                    }
+                    _ => Notice::new(Msg::TxRollbackFailed { error: text.clone() }, Level::Error),
+                };
+                t.exec.run.notes.push(m.clone());
+                Some(m)
+            }
+            // The server ended the open transaction by itself during the run (MySQL: a deadlock,
+            // an implicit commit, a procedure that failed).
+            DbEvent::TxClosedBy { how, .. } => {
+                // During an export (which reads, and is no run's statement) the run's log is
+                // booked already.
+                if t.exec.running.is_none_or(|r| !r.export) {
+                    t.book_tx();
+                }
+                let count = t.exec.tx.as_ref().map_or(0, |x| x.changes);
+                let step = (t.exec.run.current().or_else(|| t.ending_statement()).unwrap_or(0) + 1).to_string();
+                let (m, rolled_back) = match how {
+                    ServerEnd::RolledBack => (Notice::new(Msg::TxServerRolledBack { count }, Level::Warning), true),
+                    ServerEnd::Committed => {
+                        (Notice::new(Msg::TxCommittedImplicitly { step, count }, Level::Warning), false)
+                    }
+                    ServerEnd::Unknown => (Notice::new(Label::TxClosedUnknown, Level::Warning), false),
+                };
+                t.exec.closing = t.exec.in_block.then_some(rolled_back);
+                // A commit or rollback the server refused says so itself.
+                if t.exec.ending.is_none() {
+                    t.exec.run.notes.push(m);
+                }
+                None
+            }
+            DbEvent::Autocommit(on) => {
+                t.exec.autocommit_off = !on;
+                None
+            }
             // The server dropped the schema's startup option (a pooler): the driver sets the
             // path in each transaction instead. Said in the run's Messages.
             DbEvent::ContextPerTransaction => {
@@ -1041,14 +1199,34 @@ impl App {
             // and say how it ended once it did. `Block` comes before the `TxOpen` of the same
             // change, so an aborted block is still known here.
             DbEvent::Block(true) => {
-                t.block_began();
+                let manual = t.exec.manual_begun.take();
+                t.block_began(manual.is_some(), now, wall);
+                // Which statements of the last run ran in it: from the one that opened it on.
+                let query = t.exec.run_id;
+                match manual {
+                    Some((q, index)) if q == query => {
+                        t.exec.tx_from = Some(index);
+                        // Reported after the run's answer: what it did goes in now.
+                        if t.exec.running.is_none() {
+                            t.book_tx();
+                        }
+                    }
+                    Some(_) => t.exec.tx_from = None,
+                    None => t.exec.tx_from = t.exec.running.and_then(|_| t.exec.run.current()),
+                }
                 None
             }
             DbEvent::Block(false) => {
-                let rolled_back = t.ending_rolled_back();
-                if let Some(i) = t.ending_statement().filter(|_| rolled_back) {
-                    t.exec.run.rolled_back(i);
-                }
+                let rolled_back = match t.exec.closing.take() {
+                    Some(rolled_back) => rolled_back,
+                    None => {
+                        let rolled_back = t.ending_rolled_back();
+                        if let Some(i) = t.ending_statement().filter(|_| rolled_back) {
+                            t.exec.run.rolled_back(i);
+                        }
+                        rolled_back
+                    }
+                };
                 t.block_ended(rolled_back);
                 None
             }
@@ -1060,17 +1238,34 @@ impl App {
             DbEvent::Exported { id: qid, result, cancelled } => return self.on_exported(id, qid, result, cancelled),
             // The server's half of the allowlist, for a text plan to view as a plan.
             DbEvent::RepeatChecked { id: check, result } => return self.as_plan_checked(id, check, result),
-            DbEvent::Lost { .. } => {
+            DbEvent::Lost { error } => {
                 t.exec.session = None;
                 t.exec.unsure();
                 t.exec.state = SessionState::Lost;
                 t.exec.lost_tx = t.exec.tx_at_risk();
                 t.exec.running = None;
-                t.exec.tx_open = false;
-                // The server rolls the user's transaction back when its session ends.
-                t.block_ended(true);
+                let had_tx = t.exec.user_tx();
+                t.tx_reset();
                 t.exec.paging = Paging::None;
-                Some(Notice::new(Msg::QueryLost { error: text }, Level::Warning))
+                if let DbError::IdleInTransactionTimeout(_) = error {
+                    let m = Notice::new(Msg::TxIdleTimeout { error: text }, Level::Warning);
+                    t.exec.run.notes.push(m.clone());
+                    Some(m)
+                } else {
+                    if had_tx {
+                        t.exec.run.notes.push(Notice::new(Label::TxLost, Level::Warning));
+                    }
+                    let lost = Notice::new(Msg::QueryLost { error: text }, Level::Warning);
+                    // Lost while committing: what matters is that the outcome is not known.
+                    let unknown = Msg::Label(Label::DbCommitUnknown);
+                    match t.exec.run.notes.last().filter(|n| n.msg == unknown).cloned() {
+                        Some(n) => {
+                            t.exec.run.notes.push(lost);
+                            Some(n)
+                        }
+                        None => Some(lost),
+                    }
+                }
             }
             DbEvent::Page { id: qid, .. }
             | DbEvent::Done { id: qid, .. }
@@ -1467,6 +1662,13 @@ impl App {
         }
         if fetch_failed {
             self.fetch_copy_failed(id);
+        }
+        // What the run did in the open transaction goes in its log.
+        if run_ended && let Some(t) = self.tabs.get_mut(id) {
+            t.book_tx();
+        }
+        if offer {
+            self.offer_outside(id);
         }
         if rows_for == Some(None) {
             self.read_held_on(id);

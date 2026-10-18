@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/flows_manual_commit.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 ◆ ×                                        "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1       ││ local-pg / datarig  127.0.0.1:55432 · stg            │"
+"│  ▾ ●   local-pg      ││  1▎ALTER TABLE users ADD COLUMN zz_c int             │"
+"│    ▸ public          ││                                                      │"
+"│    ▸ shop            ││                                                      │"
+"│▾ Environments 2      ││                                                      │"
+"│ ╭ Run a statement that may do harm? ───────────────────────────────────────╮ │"
+"│ │ ● local-pg · stg                                                         │ │"
+"│ │                                                                          │─╯"
+"│ │ 1/1  first commits the open transaction: 1 statement (3 rows)            │─╮"
+"│ │      ALTER TABLE users ADD COLUMN zz_c int                               │ │"
+"│ │                                                                          │s│"
+"│ │                           [ Cancel ]     Run                             │ │"
+"│ ╰─────────────────────── y run · Enter chooses · Tab switch · n/Esc cancel ╯ │"
+"│                      ││   r)                                                 │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" NORMAL  local-pg · stg │ TX open · 1 change · 3 rows · 0:00 │ 3 rows… · 3ms EN "

@@ -12,8 +12,8 @@
 use crate::app::action::Action;
 use crate::app::environments::{RuleTone, rules_tones};
 use crate::app::profiles::{
-    BUTTONS, CONFIRMS, DRIVERS, ENVIRONMENT, EnvChoice, FIELDS, Field, FormHit, FormKind, PAGINGS, Section, SshChoice,
-    secret_field, source_choice, ssh_auth_choice,
+    BUTTONS, COMMITS, CONFIRMS, DRIVERS, ENVIRONMENT, EnvChoice, FIELDS, Field, FormHit, FormKind, PAGINGS, Section,
+    SshChoice, secret_field, source_choice, ssh_auth_choice,
 };
 use crate::app::{App, Level};
 use crate::keymap::Ctx;
@@ -162,7 +162,12 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
         _ => Label::FormKeys,
     });
     let w = area.width.saturating_sub(4).min(100);
-    let rect = centered(area, w, 19);
+    // An environment's fields, then a blank line and the profiles that use it, then the
+    // buttons: below the other forms' rows when there are more of them.
+    let env_rows = if env_form { form.fields().iter().filter(|f| !f.is_button()).count() as u16 } else { 0 };
+    let used_by_row = (env_rows + 3).max(11);
+    let buttons_row = (used_by_row + 2).max(14);
+    let rect = centered(area, w, buttons_row + 5);
     let inner = modal(rect, &title, &footer, buf);
     let iw = inner.width as usize;
     // The environment form has its own fields (its labels set its column).
@@ -473,8 +478,15 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
                 put(buf, x + used + 2, y, &hint, room_from(x + used + 2), dim);
                 continue;
             }
-            Field::EnvConfirm | Field::EnvPaging => {
+            Field::EnvConfirm | Field::EnvPaging | Field::EnvCommit => {
                 let names: Vec<(String, bool)> = match f {
+                    Field::EnvCommit => COMMITS
+                        .iter()
+                        .map(|c| {
+                            let l = if c.manual() { Label::FormEnvCommitManual } else { Label::FormEnvCommitAuto };
+                            (i18n.label(l).to_string(), *c == form.env_commit)
+                        })
+                        .collect(),
                     Field::EnvConfirm => CONFIRMS
                         .iter()
                         .map(|c| {
@@ -508,8 +520,11 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
                     hits.push((Rect::new(cx, y, used, 1), FormHit::Choice(f, i)));
                     cx += used;
                 }
-                let hint =
-                    i18n.label(if f == Field::EnvPaging { Label::FormEnvPagingHint } else { Label::FormSslmodeHint });
+                let hint = i18n.label(match f {
+                    Field::EnvPaging => Label::FormEnvPagingHint,
+                    Field::EnvCommit => Label::FormEnvCommitHint,
+                    _ => Label::FormSslmodeHint,
+                });
                 put(buf, cx + 2, y, &hint, room_from(cx + 2), dim);
                 continue;
             }
@@ -583,6 +598,8 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
                 (Field::Env, _) => Some(Label::FormEnvHint.into()),
                 (Field::EnvBadge, _) => Some(Label::FormEnvBadgeHint.into()),
                 (Field::EnvIdle, _) => Some(Label::FormEnvIdleHint.into()),
+                (Field::EnvTxWarning, _) => Some(Label::FormEnvTxIdleWarningHint.into()),
+                (Field::EnvTxTimeout, _) => Some(Label::FormEnvTxIdleTimeoutHint.into()),
                 (Field::EnvSpill, _) => Some(Label::FormEnvSpillHint.into()),
                 (Field::ServerKey, _) => Some(Label::FormServerKeyHint.into()),
                 (Field::TlsCa, _) => Some(Label::FormTlsCaHint.into()),
@@ -647,7 +664,7 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
             .map(|p| p.name.clone())
             .collect();
         if !users.is_empty() {
-            let y = inner.y + 11;
+            let y = inner.y + used_by_row;
             put(buf, inner.x + 1, y, &i18n.label(Label::FormFieldTunnelUsedBy), label_w, label_style(false));
             put(buf, inner.x + 1 + label_w as u16, y, &users.join(", "), iw.saturating_sub(label_w + 2), dim);
         }
@@ -702,7 +719,7 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
         }
     }
     // Buttons
-    let y = inner.y + 14;
+    let y = inner.y + buttons_row;
     let mut x = inner.x + 1 + label_w as u16;
     // An environment form has nothing to test.
     for b in BUTTONS.into_iter().filter(|b| !(env_form && *b == Field::Test)) {

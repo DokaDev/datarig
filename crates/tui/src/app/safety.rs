@@ -32,7 +32,10 @@ use datarig_core::sql::risk::{Class, Danger, NoWhere, ReadOnlyBlock, Why};
 pub struct Dangerous {
     /// Its place in the run (from 0).
     pub index: usize,
-    pub why: Why,
+    /// Why its risk asks (`None`: only what it does to the open transaction asks).
+    pub why: Option<Why>,
+    /// What it does to the open transaction that asks ([`super::tx::TxReason`]).
+    pub tx: Option<super::tx::TxReason>,
     /// Why it changes every row (or may), for an `UPDATE` or `DELETE`.
     pub no_where: Option<NoWhere>,
     /// An `EXPLAIN ANALYZE`: it runs, then it is rolled back.
@@ -127,7 +130,7 @@ impl App {
     /// The classifier of tab `tab`, with the statements its session has prepared (none without
     /// a session): each run's statements are checked in order against a copy, so an `EXPLAIN`
     /// or `EXECUTE` sees what the run prepared before it.
-    fn classifier(&self, tab: TabId) -> Classifier {
+    pub(super) fn classifier(&self, tab: TabId) -> Classifier {
         // A tab whose language was not pushed when its binding changed would be checked by the
         // rules of another language.
         debug_assert!(self.tabs.get(tab).is_none_or(|t| {
@@ -154,7 +157,8 @@ impl App {
                 let why = r.confirm(writes)?;
                 Some(Dangerous {
                     index,
-                    why,
+                    why: Some(why),
+                    tx: None,
                     no_where: r.no_where,
                     explain: r.rolls_back(),
                     target: r.target,
@@ -167,7 +171,20 @@ impl App {
     /// Ask before `statements` run in tab `id` (bound to profile `pid`); `items` are the ones
     /// that ask.
     pub(super) fn ask_before_run(&mut self, id: TabId, pid: ProfileId, statements: Vec<String>, items: Vec<Dangerous>) {
-        let Some(binding) = self.tabs.get(id).map(|t| t.binding) else { return };
+        self.ask_before_run_as(id, pid, statements, items, false)
+    }
+
+    /// [`App::ask_before_run`]; `as_is`: the statements are to run as they are, outside any
+    /// transaction, on the tab's session as it is now.
+    pub(super) fn ask_before_run_as(
+        &mut self,
+        id: TabId,
+        pid: ProfileId,
+        statements: Vec<String>,
+        items: Vec<Dangerous>,
+        as_is: bool,
+    ) {
+        let Some((binding, generation)) = self.tabs.get(id).map(|t| (t.binding, t.exec.generation)) else { return };
         self.overlays.close(OverlayKind::Commands);
         self.overlays.close(OverlayKind::WhichKey);
         self.key_state.clear();
@@ -178,6 +195,8 @@ impl App {
             statements,
             items,
             run_focused: false,
+            as_is,
+            generation,
             buttons: Default::default(),
         }));
     }
@@ -209,10 +228,16 @@ impl App {
         let Some(c) = self.overlays.take_run_confirm() else { return };
         if !run {
             self.unstage_run(c.tab);
-            return self.tab_status(c.tab, Notice::new(Label::SafetyConfirmCancelled, Level::Warning));
+            let label = if c.as_is { Label::TxOutsideKept } else { Label::SafetyConfirmCancelled };
+            return self.tab_status(c.tab, Notice::new(label, Level::Warning));
         }
-        match self.tabs.get(c.tab).map(|t| (t.profile, t.binding)) {
-            Some((Some(p), b)) if p == c.profile && b == c.binding => self.run_approved(c.tab, c.statements),
+        // Outside a transaction: only on the session it was asked for, still open (a new one
+        // has no part in what failed).
+        let same_session = |t: &Tab| !c.as_is || (t.exec.generation == c.generation && t.exec.session.is_some());
+        match self.tabs.get(c.tab).map(|t| (t.profile, t.binding, same_session(t))) {
+            Some((Some(p), b, true)) if p == c.profile && b == c.binding => {
+                self.run_approved_as(c.tab, c.statements, c.as_is)
+            }
             Some(_) => {
                 self.unstage_run(c.tab);
                 self.tab_status(c.tab, Notice::new(Label::SafetyConfirmMoved, Level::Warning))
@@ -222,9 +247,54 @@ impl App {
     }
 }
 
-/// Why a statement asks, in words: what it does, and what makes it worse.
+/// `items` (the statements of `statements` that ask for their risk, in order) with what the
+/// run does to the open transaction that asks (`reasons`, by statement): one item per
+/// statement, in order.
+pub(super) fn with_tx_reasons(
+    mut items: Vec<Dangerous>,
+    statements: &[String],
+    reasons: Vec<(usize, super::tx::TxReason)>,
+) -> Vec<Dangerous> {
+    for (index, reason) in reasons {
+        match items.iter_mut().find(|d| d.index == index) {
+            Some(d) => d.tx = Some(reason),
+            None => items.push(Dangerous {
+                index,
+                why: None,
+                tx: Some(reason),
+                no_where: None,
+                explain: false,
+                target: None,
+                sql: statements.get(index).cloned().unwrap_or_default(),
+            }),
+        }
+    }
+    items.sort_by_key(|d| d.index);
+    items
+}
+
+/// Why a statement asks, in words: what it does, and what makes it worse, then what it does to
+/// the open transaction.
 pub(crate) fn why_text(i18n: &I18n, d: &Dangerous) -> String {
-    let what = match d.why {
+    let mut parts = Vec::new();
+    if let Some(why) = d.why {
+        parts.push(risk_text(i18n, d, why));
+    }
+    match d.tx {
+        Some(super::tx::TxReason::OutsideTx) => parts.push(i18n.label(Label::SafetyWhyOutsideTx).to_string()),
+        Some(super::tx::TxReason::CommitsItself) => parts.push(i18n.label(Label::SafetyWhyCommitsItself).to_string()),
+        Some(super::tx::TxReason::ImplicitCommit { statements, rows }) => {
+            let rows = i18n.msg(&Msg::TxRows { count: rows }).to_string();
+            parts.push(i18n.msg(&Msg::SafetyWhyImplicitCommit { count: statements, rows }).to_string());
+        }
+        None => {}
+    }
+    parts.join(" · ")
+}
+
+/// Why a statement's risk `why` asks, in words: what it does, and what makes it worse.
+fn risk_text(i18n: &I18n, d: &Dangerous, why: Why) -> String {
+    let what = match why {
         Why::Danger(Danger::Drop) => Label::SafetyWhyDrop,
         Why::Danger(Danger::Truncate) => Label::SafetyWhyTruncate,
         Why::Danger(Danger::DeleteAll) => Label::SafetyWhyDeleteAll,
@@ -257,7 +327,7 @@ pub(crate) fn why_text(i18n: &I18n, d: &Dangerous) -> String {
         Why::Class(_) => Label::SafetyWhyUnknown,
     };
     let mut parts = vec![i18n.label(what).to_string()];
-    if let Why::Danger(Danger::DeleteAll | Danger::UpdateAll) = d.why {
+    if let Why::Danger(Danger::DeleteAll | Danger::UpdateAll) = why {
         let how = match d.no_where {
             Some(NoWhere::AlwaysTrue) => Label::SafetyWhyAlwaysTrue,
             Some(NoWhere::NoColumn) => Label::SafetyWhyNoColumn,

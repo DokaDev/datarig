@@ -943,3 +943,59 @@ fn csv_options_are_refused_for_the_other_formats() {
     h.command("export json delim=, out.json");
     assert!(h.cmdline().and_then(|c| c.error.clone()).is_some(), "an option given is refused");
 }
+
+/// An export in a tab whose manual-commit transaction is open reads there and leaves what the
+/// transaction did as it was; the server ending the transaction during the export (its id) is
+/// said with what was lost, once.
+#[test]
+fn an_export_leaves_the_open_manual_transaction_as_it_was() {
+    use datarig_core::driver::{Outcome, ServerEnd};
+    use datarig_core::i18n::Msg;
+    use datarig_core::policy::CommitRule;
+    let dir = scratch("manual-tx");
+    let mut cfg = test_db_config();
+    cfg.connections[0].policy = Some("stg".into());
+    cfg.policies.insert("stg", Policy { commit: CommitRule::Manual, ..Policy::default() });
+    let mut h = Harness::with_config(&cfg, Lang::En);
+    h.db(DbEvent::Connected);
+    // A write opens the transaction: 1 change, 3 rows.
+    h.app.tab_mut().editor = Editor::new("UPDATE t SET x = 1 WHERE id < 4");
+    h.ctrl('e');
+    let id = h.app.tab().exec.query_id;
+    h.tab_db(0, DbEvent::Done { id, outcome: Outcome::Affected(3), elapsed: Duration::ZERO });
+    h.tab_db(0, DbEvent::ManualBegun { id, index: 0 });
+    h.tab_db(0, DbEvent::Block(true));
+    h.tab_db(0, DbEvent::TxOpen(true));
+    // A read in it, then every row of it exported.
+    h.app.tab_mut().editor = Editor::new("SELECT * FROM t");
+    first_page(&mut h, 100, true);
+    let counts = |h: &Harness| h.app.tab().exec.tx.as_ref().map(|t| (t.changes, t.rows, t.log.len()));
+    assert_eq!(counts(&h), Some((1, 3, 1)));
+    h.sent();
+    let path = dir.join("tx.csv");
+    h.command(&format!("export {}", path.display()));
+    let (eid, ..) = wait_export(&mut h);
+    assert!(h.app.tab().exec.user_tx(), "the transaction stays open");
+    h.tab_db(
+        0,
+        DbEvent::Exported { id: eid, result: Ok(ExportRead { rows: 0, last: None, complete: false }), cancelled: true },
+    );
+    pump_until(&mut h, "the end", done);
+    assert_eq!(counts(&h), Some((1, 3, 1)), "the export changed nothing of the transaction's log");
+    assert!(h.status(160, 45).contains("TX open · 1 change · 3 rows"), "{}", h.status(160, 45));
+    // The server ends the transaction while another export reads (its id): said once, with
+    // what was lost, nothing booked again.
+    h.command(&format!("export {}", dir.join("tx2.csv").display()));
+    if h.app.overlays.confirm().is_some() {
+        h.keys("y");
+    }
+    let (eid, ..) = wait_export(&mut h);
+    h.tab_db(0, DbEvent::TxClosedBy { id: eid, how: ServerEnd::RolledBack });
+    h.tab_db(0, DbEvent::Block(false));
+    h.tab_db(0, DbEvent::TxOpen(false));
+    let notes: Vec<Msg> = h.app.tab().exec.run.notes.iter().map(|n| n.msg.clone()).collect();
+    assert_eq!(notes.iter().filter(|m| **m == Msg::TxServerRolledBack { count: 1 }).count(), 1, "{notes:?}");
+    assert!(!h.app.tab().exec.user_tx() && h.app.tab().exec.tx.is_none());
+    h.tab_db(0, DbEvent::Exported { id: eid, result: Err(DbError::Server("deadlock".into())), cancelled: false });
+    pump_until(&mut h, "the end", done);
+}

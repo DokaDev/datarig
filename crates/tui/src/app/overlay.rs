@@ -258,6 +258,10 @@ pub struct RunConfirm {
     pub items: Vec<super::safety::Dangerous>,
     /// "Run" has the focus (it starts on "Cancel").
     pub run_focused: bool,
+    /// The statements run as they are, outside any transaction (a procedure that commits by
+    /// itself): only on the tab's session `generation`, still open.
+    pub as_is: bool,
+    pub generation: u64,
     pub buttons: Buttons,
 }
 

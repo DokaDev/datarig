@@ -193,6 +193,16 @@ fn the_empty_section_adds_the_presets() {
     for t in ["[policy.dev]", "[policy.test]", "[policy.staging]", "[policy.prod]", "badge = \"PROD\""] {
         assert!(text.contains(t), "{t}: {text}");
     }
+    // Staging and prod commit by hand; dev and test by themselves (nothing written for them).
+    let table =
+        |name: &str| text.split(&format!("[policy.{name}]")).nth(1).unwrap().split("\n[").next().unwrap().to_string();
+    assert!(
+        table("staging").contains("commit = \"manual\"") && table("prod").contains("commit = \"manual\""),
+        "{text}"
+    );
+    assert!(!table("dev").contains("commit") && !table("test").contains("commit"), "{text}");
+    let manual = |name: &str| h.app.policies.get(Some(name)).unwrap().commit.manual();
+    assert_eq!([manual("dev"), manual("test"), manual("staging"), manual("prod")], [false, false, true, true]);
     assert!(h.rows().iter().any(|r| r == "  %prod"), "{:?}", h.rows());
     // The profile that named `prod` before it existed now has it.
     assert!(h.app.policy_of(h.app.profiles[0].id).is_ok_and(|p| p.read_only));
@@ -674,6 +684,9 @@ fn the_default_rules_are_a_row_of_their_own() {
         [
             Field::EnvReadOnly,
             Field::EnvConfirm,
+            Field::EnvCommit,
+            Field::EnvTxWarning,
+            Field::EnvTxTimeout,
             Field::EnvPaging,
             Field::EnvIdle,
             Field::EnvSpill,
@@ -711,4 +724,46 @@ fn no_environment_reads_none_default_rules() {
     env_field(&mut h, "v6");
     let screen = h.screen(100, 30);
     assert!(screen.contains("Environment       None (default rules) ▾"), "{screen}");
+}
+
+/// The commit rule and the idle times of an open transaction are edited in the form: a time
+/// shorter than 10 seconds (or not a time) is a field error and nothing is saved; saved, only
+/// what differs from the defaults is written, and the rules say "manual commit".
+#[test]
+fn the_commit_rule_and_the_idle_times_are_edited_in_the_form() {
+    let dir = scratch("commit");
+    let mut h = harness_with(&config(Some(&dir), two()), Lang::En);
+    on_env(&mut h, "dev");
+    h.keys("e");
+    while h.form().focus != Field::EnvCommit {
+        h.key(KeyCode::Tab);
+    }
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("‹automatic (default)›") && screen.contains("PostgreSQL only"), "{screen}");
+    h.key(KeyCode::Right);
+    h.key(KeyCode::Tab);
+    assert_eq!(h.form().focus, Field::EnvTxWarning);
+    h.ctrl('u');
+    h.type_text("5s");
+    assert!(h.screen(120, 40).contains("at least 10s, or off"), "{}", h.screen(120, 40));
+    h.ctrl('s');
+    assert!(h.form_open(), "not saved");
+    h.ctrl('u');
+    h.type_text("2m");
+    h.key(KeyCode::Tab);
+    h.ctrl('u');
+    h.type_text("off");
+    h.ctrl('s');
+    assert!(!h.form_open());
+    let dev = h.app.environments().iter().find(|e| e.name == "dev").unwrap().policy.clone();
+    assert_eq!(
+        (dev.commit, dev.tx_idle_warning, dev.tx_idle_timeout),
+        (datarig_core::policy::CommitRule::Manual, Some(std::time::Duration::from_secs(120)), None)
+    );
+    let text = dir.text();
+    assert!(
+        text.contains("[policy.dev]\ncolor = \"green\"\ncommit = \"manual\"\ntx_idle_warning = \"2m\"\ntx_idle_timeout = \"off\"\n"),
+        "{text}"
+    );
+    assert!(h.explorer_line().contains("manual commit"), "{}", h.explorer_line());
 }

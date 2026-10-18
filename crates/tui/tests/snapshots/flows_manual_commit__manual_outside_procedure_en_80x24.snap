@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/flows_manual_commit.rs
+expression: "h.draw(80, 24).backend()"
+---
+"╭ Explorer ────────────╮ 1 console 1 ×                                          "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1       ││ local-pg / datarig  127.0.0.1:55432 · stg            │"
+"│  ▾ ●   local-pg      ││  1▎CALL shop.archive()  ✗ invalid transaction termin…│"
+"│    ▾ datarig default ││                                                      │"
+"│      ▸ public        ││                                                      │"
+"│      ▸ shop          ││                                                      │"
+"│ ╭ Run outside a transaction? ──────────────────────────────────────────────╮ │"
+"│▾│ ● local-pg · stg                                                         │ │"
+"│ │                                                                          │─╯"
+"│ │ 1/1  commits by itself: runs outside, at once; can't be rolled back      │─╮"
+"│ │      CALL shop.archive()                                                 │ │"
+"│ │                                                                          │…│"
+"│ │                           [ Cancel ]     Run                             │ │"
+"│ ╰─────────────────────── y run · Enter chooses · Tab switch · n/Esc cancel ╯ │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" NORMAL  local-pg · stg │ Error: invalid transaction termination             EN "

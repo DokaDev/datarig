@@ -57,8 +57,8 @@ impl RuleTone {
 
 /// [`rules_hint`] in parts with the tone each is drawn in, the same wherever they are (the
 /// explorer's rows, the environment list, the profile form): read-only (after the lock with
-/// `icons` on), asking before every write, holding locks while paging, the standard rules and
-/// the separators.
+/// `icons` on), asking before every write, committing by hand (moot when read-only), holding
+/// locks while paging, the standard rules and the separators.
 pub fn rules_tones(i18n: &datarig_core::i18n::I18n, p: &Policy, icons: bool) -> Vec<(String, RuleTone)> {
     let mut rules: Vec<(String, RuleTone)> = Vec::new();
     if p.read_only {
@@ -67,6 +67,10 @@ pub fn rules_tones(i18n: &datarig_core::i18n::I18n, p: &Policy, icons: bool) -> 
     }
     if p.confirm.writes() {
         rules.push((i18n.label(Label::EnvRuleConfirmWrites).to_string(), RuleTone::Warning));
+    }
+    // Read-only refuses every write before it is sent: no transaction ever starts.
+    if p.commit.manual() && !p.read_only {
+        rules.push((i18n.label(Label::EnvRuleManualCommit).to_string(), RuleTone::Warning));
     }
     if p.paging == datarig_core::driver::PagingMode::Hold {
         rules.push((i18n.label(Label::EnvRuleHold).to_string(), RuleTone::Error));

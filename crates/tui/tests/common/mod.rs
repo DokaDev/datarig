@@ -84,6 +84,8 @@ pub struct FakeDriver {
     /// A MySQL driver's language and namespaces (the default sql mode until a session says
     /// otherwise, `DbEvent::Language`), without plans. Set before the app reads the driver.
     pub mysql: Arc<AtomicBool>,
+    /// Without `Capabilities::manual_commit` (as a driver that cannot commit by hand).
+    pub no_manual: Arc<AtomicBool>,
 }
 
 impl Driver for FakeDriver {
@@ -108,7 +110,7 @@ impl Driver for FakeDriver {
                 .then_some(ExplainFormat::PostgresJson),
             reads_held_to_end: self.mysql.load(Ordering::SeqCst),
             export: true,
-            manual_commit: !self.mysql.load(Ordering::SeqCst),
+            manual_commit: !self.no_manual.load(Ordering::SeqCst),
         }
     }
 
@@ -359,6 +361,11 @@ pub fn new_app_with_clock(cfg: &Config, lang: Lang) -> (App, FakeClock) {
     let c = clock.clone();
     app.set_clock(Arc::new(move || c.now()));
     app.set_time_of_day(Arc::new(|| (14, 3)));
+    // The wall clock moves with the fake clock, from a fixed moment.
+    let (c, start) = (clock.clone(), clock.now());
+    app.set_wall_clock(Arc::new(move || {
+        std::time::SystemTime::UNIX_EPOCH + Duration::from_secs(1_760_000_000) + c.now().duration_since(start)
+    }));
     (app, clock)
 }
 

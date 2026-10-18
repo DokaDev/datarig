@@ -22,7 +22,7 @@ expression: backend
 "│         │ Statement cache   ‹ │ ○ None (default rules)  standard rules               │ode                  │         │"
 "│         │ Environment       ● │ ● dev                   standard rules               │ry write             │         │"
 "│         │ Color             ‹ │ ● test                  standard rules               │                     │         │"
-"│         │ Icon              ‹ │ ● staging  STG          asks before every write      │                     │         │"
+"│         │ Icon              ‹ │ ● staging  STG          asks before every write · m… │                     │         │"
 "│         │ Folder            ‹ │ ● prod  PROD            read-only · asks before eve… │                     │         │"
 "│         │                     │   New environment…                                   │                     │         │"
 "│         │                     ╰───────────────── Enter pick · ↑↓ select · Esc cancel ╯                     │         │"

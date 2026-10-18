@@ -90,6 +90,9 @@ Every pane that is not text input (explorer, results, vim Normal/Visual). Inside
 | `Space c r` | `conn.reconnect_current` | Reconnect this tab's connection |  |
 | `Space c s` | `tab.set_connection` | Change this tab's connection |  |
 | `Space c d` | `tab.set_context` | Choose this tab's database and schema |  |
+| `Space x c` | `tx.commit` | Commit the open transaction |  |
+| `Space x r` | `tx.rollback` | Roll back the open transaction |  |
+| `Space x s` | `tx.summary` | What the open transaction did |  |
 | `Space s s` | `script.save` | Save query |  |
 | `Space s a` | `script.save_as` | Save query as… |  |
 | `Space s r` | `script.rename` | Rename this saved query |  |
@@ -160,6 +163,7 @@ Leader groups (the which-key popup lists what follows):
 | `Space r` | Results |
 | `Space r y` | Copy selection |
 | `Space r a` | Copy all fetched rows |
+| `Space x` | Transaction |
 | `Space e` | Editor |
 
 ## `explorer`
@@ -617,6 +621,9 @@ An editor command closes the line; what went wrong is said in the status bar.
 | `:explain [analyze]` |  | The plan of the statement under the cursor (:explain analyze runs and measures it; a write is rolled back) |
 | `:theme copy <from> <name> / new <name>` |  | Write a theme file: a full copy of a theme, or a new one to fill in |
 | `:export [format] [all / fetched / selection] [delim= quote= header= null=] [path]` |  | Export the result to a file: alone, the export dialog; else every row by default, the format from the file's extension (:export [format] [all|fetched|selection] [delim=… quote=… header=… null=…] [path]) |
+| `:commit` |  | Commit the open transaction |
+| `:rollback` | `:rb` | Roll back the open transaction |
+| `:tx` |  | What the open transaction did |
 
 Settings of `:set` (saved to `config.toml` like the matching actions):
 

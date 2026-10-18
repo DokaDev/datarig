@@ -270,6 +270,33 @@ pub struct TabSession {
     /// read in values not known), the values changed while it ran (`DbEvent::SessionValues`
     /// before it answered), and which statement of the run it is (`DbEvent::Started`).
     pub reading: Reading,
+    /// The transaction block open on `session` (`DbEvent::Block`), when it began and what it
+    /// did, as far as the app follows it.
+    pub tx: Option<super::tx::OpenTx>,
+    /// `DbEvent::ManualBegun` of run `.0` at statement `.1`: the block that follows is one the
+    /// session opened for manual commit.
+    pub manual_begun: Option<(u64, usize)>,
+    /// From which statement of the last run the statements ran in `tx` (none: no block was
+    /// open while it ran).
+    pub tx_from: Option<usize>,
+    /// The id the run in `run` was sent with (`DbCommand::Execute`).
+    pub run_id: u64,
+    /// The statements of run `.0` before `.1` are in `tx`'s log already (or never go there).
+    pub booked: (u64, usize),
+    /// How the block that ends next ended, when the app knows it from what came before (its
+    /// `EndTx` answer, the server ending it): `true` rolled back.
+    pub closing: Option<bool>,
+    /// A commit or a rollback asked for (`DbCommand::EndTx`) that has not been answered.
+    pub ending: Option<super::tx::Ending>,
+    /// The session runs without autocommit (the user's `SET autocommit = 0`, MySQL:
+    /// `DbEvent::Autocommit`).
+    pub autocommit_off: bool,
+    /// The last run went to the session with `TxRule::Manual`.
+    pub sent_manual: bool,
+    /// A procedure that commits by itself failed as the first statement of a transaction
+    /// opened for it: the statement, to offer running it outside a transaction once that
+    /// transaction is rolled back.
+    pub outside_offer: Option<String>,
 }
 
 /// See [`TabSession::reading`].
@@ -325,6 +352,16 @@ impl TabSession {
             language: None,
             values: None,
             reading: Reading::default(),
+            tx: None,
+            manual_begun: None,
+            tx_from: None,
+            run_id: 0,
+            booked: (0, 0),
+            closing: None,
+            ending: None,
+            autocommit_off: false,
+            sent_manual: false,
+            outside_offer: None,
         }
     }
 
@@ -695,23 +732,38 @@ impl Tab {
         self.exec.resuming = None;
         self.exec.want_page = None;
         self.exec.paging = Paging::None;
-        self.exec.tx_open = false;
-        // The server rolls the user's transaction back when its session ends.
-        self.block_ended(true);
+        self.tx_reset();
         ended
     }
 
-    /// The user's transaction began.
-    pub fn block_began(&mut self) {
+    /// The user's transaction began (`manual`: the session opened it for manual commit) at
+    /// `began` by the app's clock and `wall` by the wall clock.
+    pub fn block_began(&mut self, manual: bool, began: std::time::Instant, wall: std::time::SystemTime) {
         if !self.exec.in_block {
             self.exec.tx_epoch += 1;
             self.exec.in_block = true;
+            self.exec.tx = Some(super::tx::OpenTx::new(manual, began, wall));
         }
+    }
+
+    /// The session ended (closed, lost, rebound): no transaction is open on it any more, and
+    /// nothing asked of it is answered.
+    pub fn tx_reset(&mut self) {
+        self.exec.tx_open = false;
+        // The server rolls the user's transaction back when its session ends.
+        self.block_ended(true);
+        self.exec.ending = None;
+        self.exec.autocommit_off = false;
+        self.exec.outside_offer = None;
     }
 
     /// The user's transaction ended; `rolled_back` when the app knows it rolled back. Results
     /// read in it say it ended.
     pub fn block_ended(&mut self, rolled_back: bool) {
+        self.exec.tx = None;
+        self.exec.manual_begun = None;
+        self.exec.tx_from = None;
+        self.exec.closing = None;
         if !self.exec.in_block {
             return;
         }

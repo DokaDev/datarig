@@ -14,7 +14,7 @@ expression: backend
 "│ │ Statemen│ ○ None (default rules)  standard rules               │ransact… │ │"
 "│ │ Environm│ ● dev                   standard rules               │s befor… │ │"
 "│ │ Color   │ ● test                  standard rules               │ list    │ │"
-"│ │ Icon    │ ● staging  STG          asks before every write      │         │ │"
+"│ │ Icon    │ ● staging  STG          asks before every write · m… │         │ │"
 "│ │ Folder  │ ● prod  PROD            read-only · asks before eve… │         │ │"
 "│ │         │   New environment…                                   │         │ │"
 "│ │         ╰───────────────── Enter pick · ↑↓ select · Esc cancel ╯         │ │"

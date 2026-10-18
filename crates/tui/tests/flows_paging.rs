@@ -206,8 +206,10 @@ fn inside_the_users_transaction_the_portal_stays_open() {
     h.sent();
     assert!(matches!(h.app.tab().exec.paging, Paging::Open { in_block: true, .. }));
     assert!(results_title(&mut h, 160, 45).contains("(page 1 / ? · # count · in tx) ›"));
-    assert!(!h.app.needs_tick(), "no countdown, no timer");
-    assert_eq!(h.app.next_tick(h.clock.now()), None);
+    // No countdown: the only timer is the open transaction's time in the status bar, once a
+    // second.
+    let now = h.clock.now();
+    assert_eq!(h.app.next_tick(now), Some(now + SEC), "no portal timer, the transaction's second");
     h.advance(3600 * SEC);
     assert!(close_requests(&h.sent()).is_empty(), "never closed for being idle");
     // It still pages.

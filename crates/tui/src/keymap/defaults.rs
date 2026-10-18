@@ -61,6 +61,7 @@ const GROUPS: &[(Ctx, &str, Label)] = &[
     (Nav, "space r y", Label::GroupCopySelection),
     (Nav, "space r a", Label::GroupCopyAll),
     (Nav, "space m", Label::GroupMonitor),
+    (Nav, "space x", Label::GroupTx),
     (Nav, "space e", Label::GroupEditor),
 ];
 
@@ -240,6 +241,9 @@ const ACTIONS: &[(Ctx, &str, &str)] = &[
     (Nav, "space c r", "conn.reconnect_current"),
     (Nav, "space c s", "tab.set_connection"),
     (Nav, "space c d", "tab.set_context"),
+    (Nav, "space x c", "tx.commit"),
+    (Nav, "space x r", "tx.rollback"),
+    (Nav, "space x s", "tx.summary"),
     (Nav, "space s s", "script.save"),
     (Nav, "space s a", "script.save_as"),
     (Nav, "space s r", "script.rename"),

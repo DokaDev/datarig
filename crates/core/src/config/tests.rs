@@ -1420,6 +1420,97 @@ fn environments_are_read_in_file_order_with_color_and_badge() {
     assert!(parse("[policy.\" odd \"]\n").is_ok());
 }
 
+/// `commit`, `tx_idle_warning` and `tx_idle_timeout`: read with their defaults when left out,
+/// garbage and too-short times are errors naming the item, and a save writes them only when
+/// they differ from the default (an existing file without them stays as it is).
+#[test]
+fn commit_rules_are_read_and_written() {
+    use crate::policy::{CommitRule, TX_IDLE_TIMEOUT, TX_IDLE_WARNING};
+    use std::time::Duration;
+    let cfg = parse(
+        r#"
+[policy.careful]
+commit = "manual"
+tx_idle_warning = "2m"
+tx_idle_timeout = "off"
+
+[policy.plain]
+
+[policy.default]
+commit = "manual"
+"#,
+    )
+    .unwrap();
+    let careful = cfg.policies.get(Some("careful")).unwrap();
+    assert_eq!(
+        (careful.commit, careful.tx_idle_warning, careful.tx_idle_timeout),
+        (CommitRule::Manual, Some(Duration::from_secs(120)), None)
+    );
+    let plain = cfg.policies.get(Some("plain")).unwrap();
+    assert_eq!(
+        (plain.commit, plain.tx_idle_warning, plain.tx_idle_timeout),
+        (CommitRule::Auto, Some(TX_IDLE_WARNING), Some(TX_IDLE_TIMEOUT)),
+        "missing keys: automatic commit, 5m, 30m"
+    );
+    assert_eq!(cfg.policies.get(None).unwrap().commit, CommitRule::Manual, "the default rules take it too");
+    for (text, key) in [
+        ("[policy.x]\ncommit = \"yes\"", "policy.x.commit"),
+        ("[policy.x]\ncommit = true", "policy.x.commit"),
+        ("[policy.x]\ntx_idle_warning = \"soon\"", "policy.x.tx_idle_warning"),
+        ("[policy.x]\ntx_idle_warning = \"5s\"", "policy.x.tx_idle_warning"),
+        ("[policy.x]\ntx_idle_timeout = 3", "policy.x.tx_idle_timeout"),
+        ("[policy.x]\ntx_idle_timeout = \"1 day\"", "policy.x.tx_idle_timeout"),
+    ] {
+        let e = parse(text).unwrap_err();
+        assert!(format!("{e:?}").contains(key), "{text}: {e:?}");
+    }
+
+    // Written: only what differs from the default, in the file's key order; read back the same.
+    let path = temp_file("commit-rules");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let text = "version = 2\n\n[policy.old]\nconfirm = \"writes\"\n";
+    std::fs::write(&path, text).unwrap();
+    let (cfg, err) = load(Some(path.clone()));
+    assert!(err.is_none(), "{err:?}");
+    let save_envs = |envs: &[crate::policy::Environment]| {
+        save(
+            &path,
+            Settings { version: 2, ..settings("en") },
+            Some(Profiles {
+                connections: &cfg.connections,
+                tunnels: &cfg.tunnels,
+                environments: Some(envs),
+                default_rules: None,
+                folders: &cfg.folders,
+                last_used: None,
+            }),
+        )
+        .unwrap();
+        std::fs::read_to_string(&path).unwrap()
+    };
+    assert_eq!(save_envs(cfg.policies.environments()), text, "an environment without the keys is untouched");
+    let mut envs = cfg.policies.environments().to_vec();
+    envs[0].policy.commit = CommitRule::Manual;
+    envs[0].policy.tx_idle_warning = None;
+    envs[0].policy.tx_idle_timeout = Some(Duration::from_secs(3600));
+    let out = save_envs(&envs);
+    assert!(
+        out.contains(
+            "[policy.old]\nconfirm = \"writes\"\ncommit = \"manual\"\ntx_idle_warning = \"off\"\ntx_idle_timeout = \"1h\"\n"
+        ),
+        "{out}"
+    );
+    let (back, err) = load(Some(path.clone()));
+    assert!(err.is_none(), "{err:?}");
+    assert!(back.policies.environments()[0].same_settings(&envs[0]));
+    // Back at the defaults: the keys go.
+    envs[0].policy.commit = CommitRule::Auto;
+    envs[0].policy.tx_idle_warning = Some(TX_IDLE_WARNING);
+    envs[0].policy.tx_idle_timeout = Some(TX_IDLE_TIMEOUT);
+    let out = save_envs(&envs);
+    assert!(!out.contains("commit") && !out.contains("tx_idle"), "{out}");
+}
+
 /// Saving environments writes only what the user changed: an unchanged table and an
 /// unchanged value keep their text (`"5m"` stays `"5m"`), a changed value is set in place with
 /// its comment, a value back at its default goes (its comment kept), a rename moves the table
@@ -1535,8 +1626,9 @@ fn new_environments_and_inline_tables() {
     assert_eq!(
         out,
         "version = 2\n\n[policy.dev]\ncolor = \"green\"\n\n[policy.test]\ncolor = \"blue\"\n\n\
-         [policy.staging]\ncolor = \"orange\"\nbadge = \"STG\"\nconfirm = \"writes\"\n\n\
-         [policy.prod]\ncolor = \"red\"\nbadge = \"PROD\"\nread_only = true\nconfirm = \"writes\"\n"
+         [policy.staging]\ncolor = \"orange\"\nbadge = \"STG\"\nconfirm = \"writes\"\ncommit = \"manual\"\n\n\
+         [policy.prod]\ncolor = \"red\"\nbadge = \"PROD\"\nread_only = true\nconfirm = \"writes\"\n\
+         commit = \"manual\"\n"
     );
     let (back, _) = load(Some(path.clone()));
     let names: Vec<&str> = back.policies.environments().iter().map(|e| e.name.as_str()).collect();

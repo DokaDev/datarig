@@ -484,9 +484,7 @@ impl App {
             if t.exec.running.is_some() && t.session_closed() {
                 stopped.push(t.id);
             }
-            t.exec.tx_open = false;
-            // The server rolls the user's transaction back when its session ends.
-            t.block_ended(true);
+            t.tx_reset();
             // Closed by the user, who was told: the next run does not say it again.
             t.exec.lost_tx = false;
             t.exec.paging = Paging::None;
