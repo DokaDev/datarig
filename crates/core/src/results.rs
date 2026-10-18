@@ -247,5 +247,72 @@ impl RowStore {
     }
 }
 
+/// The rows of a range of a [`RowStore`] as they are now, for a reader on another thread (an
+/// export): a handle on the spill file when the rows spilled (memory stays flat), else a copy
+/// of the rows in memory (at most a window). Rows appended to the store later are not in it.
+#[derive(Debug)]
+pub enum RowsSnapshot {
+    Rows(Vec<Vec<Cell>>),
+    Spill { reader: spill::SpillReader, range: Range<usize> },
+}
+
+impl RowsSnapshot {
+    pub fn len(&self) -> usize {
+        match self {
+            RowsSnapshot::Rows(r) => r.len(),
+            RowsSnapshot::Spill { range, .. } => range.len(),
+        }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Call `f` with the rows in order, `chunk` at a time, until it returns `false`.
+    pub fn for_each_chunk(&self, chunk: usize, mut f: impl FnMut(&[Vec<Cell>]) -> bool) -> Result<(), Fault> {
+        let chunk = chunk.max(1);
+        match self {
+            RowsSnapshot::Rows(rows) => {
+                for c in rows.chunks(chunk) {
+                    if !f(c) {
+                        break;
+                    }
+                }
+            }
+            RowsSnapshot::Spill { reader, range } => {
+                let mut a = range.start;
+                while a < range.end {
+                    let e = range.end.min(a + chunk);
+                    let rows = reader.read(a..e).map_err(|err| Fault::io(&err))?;
+                    if rows.len() != e - a {
+                        return Err(Fault::other("spill file: fewer rows than written"));
+                    }
+                    if !f(&rows) {
+                        break;
+                    }
+                    a = e;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+impl RowStore {
+    /// The rows of `range` as they are now ([`RowsSnapshot`]).
+    pub fn snapshot(&self, range: Range<usize>) -> Result<RowsSnapshot, Fault> {
+        let (a, b) = (range.start.min(self.len), range.end.min(self.len));
+        match &self.spill {
+            // Once spilled, the file has every row from the first.
+            Some(file) => {
+                let reader = file.reader().map_err(|e| Fault::io_at(&e, file.path()))?;
+                Ok(RowsSnapshot::Spill { reader, range: a..b })
+            }
+            // Without a spill file every row is in memory.
+            None => Ok(RowsSnapshot::Rows(self.window.get(a..b).unwrap_or_default().to_vec())),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests;

@@ -156,6 +156,11 @@ pub enum ConfirmAction {
     /// `/usr/bin/security` (`App::keychain_offer_key`): `y` switches, `n` declines for good,
     /// `Esc`/`Enter` decide later.
     KeychainOffer,
+    /// Start an export that runs its statement again (or reads in a prod-like environment):
+    /// the tab's export waits for the answer. Cancel is the default.
+    ExportStart,
+    /// Replace the file an export would write. Keeping it is the default.
+    ExportReplace,
 }
 
 /// A yes/no question: `y` yes, `n`/`Esc` no; `Enter` no when the answer would lose something
@@ -219,6 +224,8 @@ impl Confirm {
             ConfirmAction::TrustHostKey => (Label::DialogButtonCancel, Label::DialogButtonTrust),
             ConfirmAction::ExplainAgain => (Label::DialogButtonCancel, Label::SafetyConfirmRun),
             ConfirmAction::KeychainSecurityTool => (Label::DialogButtonCancel, Label::DialogButtonTurnOn),
+            ConfirmAction::ExportStart => (Label::DialogButtonCancel, Label::DialogButtonExport),
+            ConfirmAction::ExportReplace => (Label::DialogButtonKeep, Label::DialogButtonReplace),
         };
         // `Enter` says yes only to a copy (see `App::confirm_key`).
         let enter = if matches!(self.action, ConfirmAction::Copy | ConfirmAction::FetchThenCopy) { 1 } else { 0 };

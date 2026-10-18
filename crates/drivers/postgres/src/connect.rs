@@ -66,6 +66,7 @@ impl Driver for PgDriver {
             hierarchy: Hierarchy::DatabaseSchema,
             explain: Some(ExplainFormat::PostgresJson),
             reads_held_to_end: false,
+            export: true,
         }
     }
 

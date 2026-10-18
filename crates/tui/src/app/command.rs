@@ -74,6 +74,8 @@ pub enum Command {
     Explain,
     /// `:theme copy <from> <name>`, `:theme new <name>`: write a theme file and use it.
     Theme,
+    /// `:export [format] [all|fetched|selection] [path]`: export the result to a file.
+    Export,
 }
 
 /// The type of a command's argument (it decides the completions).
@@ -101,6 +103,8 @@ pub enum ArgKind {
     Theme,
     /// Where a tab goes (`:tabmove`): see [`tabmove_target`]; may be left out.
     TabPosition,
+    /// An export's format, scope and path (`:export`), each optional.
+    Export,
 }
 
 impl ArgKind {
@@ -114,6 +118,7 @@ impl ArgKind {
                 | ArgKind::Object
                 | ArgKind::Analyze
                 | ArgKind::TabPosition
+                | ArgKind::Export
         )
     }
 }
@@ -325,6 +330,14 @@ pub const COMMANDS: &[CommandSpec] = &[
         arg: Some(ArgKind::Theme),
         label: Label::CommandTheme,
         action: None,
+    },
+    CommandSpec {
+        command: Command::Export,
+        name: "export",
+        aliases: &[],
+        arg: Some(ArgKind::Export),
+        label: Label::CommandExport,
+        action: Some(Action::Export),
     },
 ];
 
@@ -887,7 +900,7 @@ pub fn complete_arg(kind: ArgKind, arg: &str, names: &[&str]) -> Vec<ArgCompleti
         }
         // A new name, or any object's: nothing to pick from (`analyze` is the only word; a
         // tab's place is a number).
-        ArgKind::NewScript | ArgKind::Object | ArgKind::Analyze | ArgKind::TabPosition => Vec::new(),
+        ArgKind::NewScript | ArgKind::Object | ArgKind::Analyze | ArgKind::TabPosition | ArgKind::Export => Vec::new(),
         ArgKind::Format => {
             use super::copy::{CopyFormat, CopyScope};
             let names = CopyFormat::MENU.map(|f| f.name());

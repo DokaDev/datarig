@@ -367,6 +367,7 @@ const ACTIONS: &[(Ctx, &str, &str)] = &[
     (Nav, "space r n", "results.page.next"),
     (Nav, "space r p", "results.page.prev"),
     (Nav, "space r #", "results.count"),
+    (Nav, "space r e", "results.export"),
     (Grid, "L", "results.tab.next"),
     (Grid, "H", "results.tab.prev"),
     (Nav, "space r ]", "results.tab.next"),

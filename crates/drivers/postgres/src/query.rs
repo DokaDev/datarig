@@ -394,6 +394,11 @@ fn cancelled_count(id: u64) -> DbEvent {
     DbEvent::Counted { id, result: Err(DbError::Cancelled), snapshot: false }
 }
 
+/// Export `id`'s answer when it was cancelled.
+fn cancelled_export(id: u64) -> DbEvent {
+    DbEvent::Exported { id, result: Err(DbError::Cancelled), cancelled: true }
+}
+
 /// The allowlist's question `id`'s answer when it was cancelled.
 fn cancelled_check(id: u64) -> DbEvent {
     DbEvent::RepeatChecked { id, result: Err(DbError::Cancelled) }
@@ -471,6 +476,18 @@ pub(crate) async fn query_loop(
                         continue;
                     }
                     Err(closed) => unanswered(&events, closed, cancelled_check(id)),
+                }
+            }
+            // Answered once, after its last batch; a session the UI closed meanwhile answers
+            // nothing.
+            Next::Command(DbCommand::Export { id, sql, guard, sink, batch }) => {
+                let mut s = State { tx: &mut tx, prepared: &mut prepared };
+                match export::export(&mut client, &mut link, &env, &mut s, &sql, guard, sink, batch).await {
+                    Ok((result, cancelled)) => {
+                        let _ = events.send(DbEvent::Exported { id, result, cancelled });
+                        continue;
+                    }
+                    Err(closed) => unanswered(&events, closed, cancelled_export(id)),
                 }
             }
             // A fetch for a result whose portal is gone (complete, failed or closed): answered
@@ -2049,6 +2066,8 @@ fn split_page<T>(carry: &mut Option<T>, fetched: Vec<T>, page_size: usize) -> (V
         (rows, false)
     }
 }
+
+mod export;
 
 #[cfg(test)]
 mod tests;

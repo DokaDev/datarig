@@ -68,6 +68,7 @@ impl Driver for MyDriver {
             hierarchy: Hierarchy::SchemaOnly,
             explain: None,
             reads_held_to_end: true,
+            export: true,
         }
     }
 

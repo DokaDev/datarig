@@ -195,6 +195,7 @@ fn commands(s: &mut String) {
             Some(ArgKind::Analyze) => " [analyze]",
             Some(ArgKind::Theme) => " copy <from> <name> / new <name>",
             Some(ArgKind::TabPosition) => " [N / +N / -N / $]",
+            Some(ArgKind::Export) => " [format] [all / fetched / selection] [path]",
             None => "",
         };
         let aliases: Vec<String> = c.aliases.iter().map(|a| format!("`:{a}`")).collect();

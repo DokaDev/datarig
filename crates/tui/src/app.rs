@@ -36,6 +36,7 @@ pub mod effects;
 pub mod environments;
 mod execution;
 pub mod explorer;
+pub mod export;
 pub mod folder_pick;
 mod format;
 pub mod guide;
@@ -217,6 +218,9 @@ pub struct Running {
     /// Its session said the server refused the cancel and the statement runs on to its end
     /// ([`DbEvent::CancelRefused`]). Of this run only, as `stopping`.
     pub refused: bool,
+    /// A statement of an export to a file (`DbCommand::Export`): its rows go to the export's
+    /// writer, never to the tab's result.
+    pub export: bool,
 }
 
 pub struct Popup {
@@ -377,6 +381,8 @@ pub enum AppEvent {
     SharedTunnel { serial: u64, ev: tunnel::TunnelEvent },
     /// What test `seq` of a tunnel preset reached through it.
     TestProbe { seq: u64, probes: Vec<tunnel::Probe> },
+    /// An export's writer (its file, how far, its end).
+    Export(export::ExportEvent),
 }
 
 /// Which session a driver event comes from.
@@ -569,6 +575,8 @@ pub struct App {
     text_plan_cache: std::cell::Cell<Option<plan::TextPlan>>,
     /// A copy waiting for the rest of a tab's rows.
     fetch_copy: Option<(copy::Intent, copy::CopyRequest)>,
+    /// The exports to files, one per tab at most.
+    exports: export::Exports,
     /// Why the config file could not be used (the settings screen says so; nothing is saved).
     config_problem: Option<Notice>,
     /// The default rules and the environments (`[policy.<name>]`); a profile's environment
@@ -935,6 +943,7 @@ impl App {
             pending_as_plan: None,
             text_plan_cache: Default::default(),
             fetch_copy: None,
+            exports: export::Exports::default(),
             config_problem: status.clone(),
             policies: cfg.policies.clone(),
             clock: Arc::new(Instant::now),
@@ -1776,6 +1785,9 @@ impl App {
                 self.i18n.label(Label::QueryCancellingServer)
             } else if r.cancelling.is_some() {
                 self.i18n.label(Label::QueryCancelling)
+            } else if r.export {
+                let id = self.tab().id;
+                self.export_progress(id).map_or_else(|| self.i18n.label(Label::ExportRunning), |m| self.i18n.msg(&m))
             } else if r.count {
                 self.i18n.label(Label::ResultsTitleCounting)
             } else if r.fetch {

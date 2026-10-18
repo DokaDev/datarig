@@ -315,25 +315,63 @@ impl SpillFile {
 
     /// Rows `range` (within the rows written).
     pub fn read(&self, range: Range<usize>) -> io::Result<Vec<Vec<Cell>>> {
-        let (a, b) = (range.start, range.end.min(self.rows));
-        if a >= b {
-            return Ok(Vec::new());
-        }
-        let first = a / BLOCK;
-        let from = self.blocks[first];
-        let to = self.blocks.get(b.div_ceil(BLOCK)).copied().unwrap_or(self.len);
-        let mut buf = vec![0u8; usize::try_from(to - from).map_err(|_| corrupt("range too large"))?];
-        read_at(self.handle()?, &mut buf, from)?;
-        let mut at = 0;
-        let mut out = Vec::with_capacity(b - a);
-        for i in first * BLOCK..b {
-            let row = decode_row(&buf, &mut at)?;
-            if i >= a {
-                out.push(row);
-            }
-        }
-        Ok(out)
+        read_rows(self.handle()?, &self.blocks, self.len, self.rows, range)
     }
+
+    /// A reader of the rows written so far that another thread can own: its own handle on the
+    /// file (positional reads only), the rows appended later left out. On Unix the file stays
+    /// readable after it was deleted; Windows cannot delete it while a reader holds it, and the
+    /// next start's [`sweep`] does.
+    pub fn reader(&self) -> io::Result<SpillReader> {
+        Ok(SpillReader {
+            file: self.handle()?.try_clone()?,
+            blocks: self.blocks.clone(),
+            len: self.len,
+            rows: self.rows,
+        })
+    }
+}
+
+/// The rows a spill file had when [`SpillFile::reader`] was made.
+#[derive(Debug)]
+pub struct SpillReader {
+    file: File,
+    blocks: Vec<u64>,
+    len: u64,
+    rows: usize,
+}
+
+impl SpillReader {
+    pub fn rows(&self) -> usize {
+        self.rows
+    }
+
+    /// Rows `range` (within its rows).
+    pub fn read(&self, range: Range<usize>) -> io::Result<Vec<Vec<Cell>>> {
+        read_rows(&self.file, &self.blocks, self.len, self.rows, range)
+    }
+}
+
+/// Rows `range` of a spill file of `rows` rows and `len` bytes, row `i * BLOCK` at `blocks[i]`.
+fn read_rows(f: &File, blocks: &[u64], len: u64, rows: usize, range: Range<usize>) -> io::Result<Vec<Vec<Cell>>> {
+    let (a, b) = (range.start, range.end.min(rows));
+    if a >= b {
+        return Ok(Vec::new());
+    }
+    let first = a / BLOCK;
+    let from = blocks[first];
+    let to = blocks.get(b.div_ceil(BLOCK)).copied().unwrap_or(len);
+    let mut buf = vec![0u8; usize::try_from(to - from).map_err(|_| corrupt("range too large"))?];
+    read_at(f, &mut buf, from)?;
+    let mut at = 0;
+    let mut out = Vec::with_capacity(b - a);
+    for i in first * BLOCK..b {
+        let row = decode_row(&buf, &mut at)?;
+        if i >= a {
+            out.push(row);
+        }
+    }
+    Ok(out)
 }
 
 /// What [`sweep`] did.

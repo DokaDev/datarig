@@ -173,6 +173,9 @@ pub enum Action {
     Plan(PlanAction),
     /// The Chart tab of the results pane.
     Chart(ChartAction),
+    /// Export the shown result to a file (every row, CSV, to the default path: `:export` names
+    /// another format, scope or path).
+    Export,
 }
 
 /// What the results pane of a query tab does.
@@ -839,6 +842,7 @@ pub const REGISTRY: &[ActionSpec] = &[
         Label::ActionResultsCopyAllUpdate,
         has_rows,
     ),
+    act(Action::Export, "results.export", Label::ActionResultsExport, has_rows),
     act(Action::ToggleDetail, "results.detail", Label::ActionResultsDetail, has_tab),
     act(Action::DetailTab, "results.detail_tab", Label::ActionResultsDetailTab, detail_panel),
     mv(Action::DetailStep(true), "results.detail_next", Label::ActionResultsDetailNext, detail_focused),

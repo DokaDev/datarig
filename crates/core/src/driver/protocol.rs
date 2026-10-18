@@ -349,6 +349,66 @@ pub enum DbCommand {
         skip: u64,
         paging: PagingMode,
     },
+    /// Read every row of `sql` (one statement that reads) for an export to a file, into `sink`
+    /// a batch of at most `batch` rows at a time (its columns first, [`ExportBatch`]), awaiting
+    /// room in the channel before reading on: the export's memory stays bounded whatever the
+    /// result's size, and the rows never go through the UI's events. Answered with exactly one
+    /// [`DbEvent::Exported`] of the same `id`, after the last batch was sent and `sink` was
+    /// dropped.
+    ///
+    /// `guard` says why it may run ([`ExportGuard`]). Outside the user's block it reads in a
+    /// read-only transaction of its own (PostgreSQL), or as one statement without the session's
+    /// paging limit (MySQL): it never writes. Inside the user's block it reads there (seeing
+    /// what the block changed), PostgreSQL under a savepoint of the driver's own released after
+    /// it and rolled back to when it fails or is cancelled, so the block is never aborted; an
+    /// aborted block refuses it ([`DbError::NotSupported`]) without running anything. A cancel
+    /// stops it. When `sink` is closed (the file could not be written), the statement is
+    /// stopped and the answer says it did not read to the end ([`ExportRead::complete`]).
+    Export {
+        id: u64,
+        sql: String,
+        guard: ExportGuard,
+        sink: ExportSink,
+        batch: usize,
+    },
+}
+
+/// Why an export's statement may run ([`DbCommand::Export`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExportGuard {
+    /// On the allowlist of `sql::risk::repeat`, whose server side is asked right before (inside
+    /// the user's block, in the request that sets the driver's savepoint): a statement it refuses
+    /// answers [`DbError::NotRepeatable`] and is not sent.
+    Repeatable,
+    /// The user was asked and said to run it again (it is not on the allowlist).
+    Confirmed,
+    /// A chunk of a table read by its key (`export::keyset`), written by the app: a short read
+    /// that gives up behind a lock (PostgreSQL: `lock_timeout` in its transaction; MySQL: the
+    /// statement's own hint).
+    Keyset,
+}
+
+/// What [`DbCommand::Export`] sends to its sink: the result's columns once, then its rows.
+#[derive(Debug)]
+pub enum ExportBatch {
+    Columns(Vec<ColumnMeta>),
+    Rows(Vec<Vec<Cell>>),
+}
+
+/// Where [`DbCommand::Export`] sends its rows: a bounded channel, so a reader slower than the
+/// server holds the statement back instead of the rows piling up.
+pub type ExportSink = tokio::sync::mpsc::Sender<ExportBatch>;
+
+/// What an export's statement read ([`DbEvent::Exported`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExportRead {
+    /// Rows sent to the sink.
+    pub rows: u64,
+    /// The last row sent (a keyset's next chunk starts after it).
+    pub last: Option<Vec<Cell>>,
+    /// The result was read to its end; `false` when the sink closed first and the statement
+    /// was stopped.
+    pub complete: bool,
 }
 
 impl DbCommand {
@@ -717,5 +777,12 @@ pub enum DbEvent {
     /// seconds while that lasts: the session is waiting on the server, not stuck.
     CancelRefused {
         id: u64,
+    },
+    /// The answer to [`DbCommand::Export`] `id`: what it read, or why it stopped (a cancel is
+    /// `cancelled`, with the error the server gave).
+    Exported {
+        id: u64,
+        result: Result<ExportRead, DbError>,
+        cancelled: bool,
     },
 }

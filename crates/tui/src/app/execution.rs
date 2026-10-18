@@ -158,6 +158,7 @@ impl App {
                 cancelling: None,
                 stopping: false,
                 refused: false,
+                export: false,
             });
             if t.exec.path_per_transaction {
                 t.warn_session_path();
@@ -228,6 +229,11 @@ impl App {
         // A copy that fetches every row first stops now: a page that lands after this asks
         // for nothing more, and nothing is copied.
         let copy = self.stop_fetch_copy(id);
+        // So does an export: the one whose statement runs, or one writing fetched rows while
+        // nothing else runs (a statement the user runs meanwhile is not its).
+        if self.tabs.get(id).is_some_and(|t| t.exec.running.is_none_or(|r| r.export)) {
+            self.stop_export(id);
+        }
         let now = self.now();
         let Some(t) = self.tabs.get_mut(id) else { return };
         let Some(r) = t.exec.running.as_mut() else { return };
@@ -271,7 +277,7 @@ impl App {
         if !matches!(t.results, Results::Rows(_)) {
             t.results = Results::Cancelled;
         }
-        if !r.fetch && !r.count {
+        if !r.fetch && !r.count && !r.export {
             // The statement it was at is cancelled (its hint says so).
             t.exec.run.answered(StatementOutcome::Cancelled, None);
             t.run_ended(true);
@@ -341,6 +347,7 @@ impl App {
             cancelling: None,
             stopping: false,
             refused: false,
+            export: false,
         });
         self.send_tab(id, DbCommand::FetchMore { id: qid });
     }
@@ -405,6 +412,7 @@ impl App {
     pub fn on_db_event(&mut self, ev: DbEvent) {
         self.on_db_event_here(ev);
         self.sweep_as_plan();
+        self.sweep_exports();
         self.keychain_offer_check();
     }
 
@@ -427,7 +435,8 @@ impl App {
             | DbEvent::RepeatChecked { .. }
             | DbEvent::Started { .. }
             | DbEvent::StepRows { .. }
-            | DbEvent::Finished { .. } => EventTarget::Tab(self.tab().id),
+            | DbEvent::Finished { .. }
+            | DbEvent::Exported { .. } => EventTarget::Tab(self.tab().id),
             // The attempt in progress, else the active tab's profile.
             _ => match self.latest_attempt().or(self.tab().profile) {
                 Some(id) => EventTarget::Meta(id),
@@ -671,6 +680,7 @@ impl App {
                 self.revealed(id, None, &schema);
             }
             DbEvent::Structure { schema, table, result } => {
+                self.export_structure_came(id, &schema, &table, result.as_deref());
                 let came = self.checks_came(id, None, &schema, &table, result.as_deref());
                 // A failure the explorer does not wait for (completion's) is not its.
                 let tree = &mut self.conns.entry(id).tree;
@@ -743,7 +753,8 @@ impl App {
             | DbEvent::StepRows { .. }
             | DbEvent::Finished { .. }
             | DbEvent::Stopping { .. }
-            | DbEvent::CancelRefused { .. } => {}
+            | DbEvent::CancelRefused { .. }
+            | DbEvent::Exported { .. } => {}
             DbEvent::Ddl { id: request, result } => self.ddl_answered(id, None, request, result),
         }
     }
@@ -1030,6 +1041,8 @@ impl App {
             DbEvent::Counted { id: qid, result, snapshot } => {
                 return self.on_counted(id, qid, result, snapshot);
             }
+            // A statement of an export.
+            DbEvent::Exported { id: qid, result, cancelled } => return self.on_exported(id, qid, result, cancelled),
             // The server's half of the allowlist, for a text plan to view as a plan.
             DbEvent::RepeatChecked { id: check, result } => return self.as_plan_checked(id, check, result),
             DbEvent::Lost { .. } => {

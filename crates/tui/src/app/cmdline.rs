@@ -664,6 +664,14 @@ impl App {
                     }
                 }
             }
+            (command::Command::Export, _) => {
+                if !self.command_available(spec) {
+                    return err(Msg::CommandsErrorUnavailable { name });
+                }
+                let request = self.export_request(arg)?;
+                self.overlays.close(OverlayKind::Commands);
+                self.start_export(request);
+            }
             (command::Command::Copy, _) => {
                 use super::copy::{CopyFormat, CopyScope};
                 if arg.is_empty() {
@@ -902,6 +910,7 @@ impl App {
                             ArgKind::Analyze => (Label::CommandsArgAnalyze, true),
                             ArgKind::Theme => (Label::CommandsArgTheme, false),
                             ArgKind::TabPosition => (Label::CommandsArgTabPosition, true),
+                            ArgKind::Export => (Label::CommandsArgExport, true),
                         };
                         let arg = arg.text(self.i18n.lang);
                         name.push_str(&if optional { format!(" [{arg}]") } else { format!(" {arg}") });

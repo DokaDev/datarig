@@ -75,7 +75,7 @@ impl App {
 
     /// The shown result is the run's last statement (the one with a portal), on the session and
     /// binding it came from.
-    fn answer_here(&self) -> bool {
+    pub(super) fn answer_here(&self) -> bool {
         let t = self.tab();
         t.exec.kept_log.is_none()
             && t.exec.shown.is_some_and(|i| i + 1 == t.exec.run.len())
@@ -130,7 +130,7 @@ impl App {
 
     /// The rows of an earlier run are shown (a later run returned none) and they are that
     /// run's last statement, on the session and binding they came from.
-    fn kept_answer_here(&self) -> bool {
+    pub(super) fn kept_answer_here(&self) -> bool {
         let t = self.tab();
         t.exec.kept_log.as_ref().is_some_and(|log| t.exec.shown.is_some_and(|i| i + 1 == log.len()))
             && t.exec.session.is_some()
@@ -213,6 +213,7 @@ impl App {
             cancelling: None,
             stopping: false,
             refused: false,
+            export: false,
         });
         t.exec.run.notes.push(note.clone());
         self.tab_status(id, note);
@@ -268,6 +269,7 @@ impl App {
             cancelling: None,
             stopping: false,
             refused: false,
+            export: false,
         });
         let note = Notice::new(Msg::ResultsCountSent { sql: super::runlog::excerpt(&sql, 120) }, Level::Info);
         t.exec.run.notes.push(note.clone());

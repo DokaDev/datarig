@@ -1,4 +1,4 @@
-//! Result rows as text to copy: TSV (what a
+//! Result rows as text to copy or to write to a file: TSV (what a
 //! spreadsheet pastes into cells), CSV (RFC 4180), JSON (an array of objects), a Markdown table
 //! and SQL `INSERT` statements; also a comma list, indented
 //! JSON, an HTML table, XML, an SQL `IN` list and SQL `UPDATE` statements. Pure functions over the values as the driver
@@ -11,6 +11,7 @@
 
 use crate::driver::{ArrayElement, ColumnMeta, ValueKind};
 use crate::sql::dialect::Dialect;
+use stream::RowSink as _;
 
 /// How a column's values are written where the format has types (JSON, SQL).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -330,34 +331,36 @@ pub fn json(columns: &[Column], rows: &[Row]) -> String {
     if objects.is_empty() { "[]".to_string() } else { format!("[\n{objects}\n]") }
 }
 
+/// A value of column `c` in [`json`].
+fn json_value(c: &Column, v: Option<&str>) -> String {
+    let Some(v) = v else { return "null".to_string() };
+    match c.kind {
+        Kind::Number if json_number(v) => v.to_string(),
+        Kind::Bool if v == "true" || v == "false" => v.to_string(),
+        Kind::Array(e) => json_array(v, e).unwrap_or_else(|| json_string(v)),
+        // Embedded as the database wrote it (parsing it into values would round big
+        // numbers through f64); a string when it is not JSON.
+        Kind::Json if serde_json::from_str::<serde::de::IgnoredAny>(v).is_ok() => v.trim().to_string(),
+        _ => json_string(v),
+    }
+}
+
 /// The objects of [`json`] without the brackets, one per line, joined by `,\n`.
 fn json_objects(columns: &[Column], rows: &[Row]) -> String {
     let names = unique_names(columns);
-    let value = |c: &Column, v: Option<&str>| -> String {
-        let Some(v) = v else { return "null".to_string() };
-        match c.kind {
-            Kind::Number if json_number(v) => v.to_string(),
-            Kind::Bool if v == "true" || v == "false" => v.to_string(),
-            Kind::Array(e) => json_array(v, e).unwrap_or_else(|| json_string(v)),
-            // Embedded as the database wrote it (parsing it into values would round big
-            // numbers through f64); a string when it is not JSON.
-            Kind::Json if serde_json::from_str::<serde::de::IgnoredAny>(v).is_ok() => v.trim().to_string(),
-            _ => json_string(v),
-        }
-    };
-    let objects: Vec<String> = rows
-        .iter()
-        .map(|r| {
-            let fields: Vec<String> = columns
-                .iter()
-                .zip(&names)
-                .zip(r)
-                .map(|((c, n), v)| format!("{}: {}", json_string(n), value(c, *v)))
-                .collect();
-            format!("  {{{}}}", fields.join(", "))
-        })
-        .collect();
+    let objects: Vec<String> = rows.iter().map(|r| format!("  {}", json_object(columns, &names, r))).collect();
     objects.join(",\n")
+}
+
+/// One row of [`json`] as an object on one line (`{"id": 1, "name": "x"}`), keys `names`.
+fn json_object(columns: &[Column], names: &[String], r: &Row) -> String {
+    let fields: Vec<String> = columns
+        .iter()
+        .zip(names)
+        .zip(r)
+        .map(|((c, n), v)| format!("{}: {}", json_string(n), json_value(c, *v)))
+        .collect();
+    format!("{{{}}}", fields.join(", "))
 }
 
 /// A Markdown table: `|` escaped, line breaks as `<br>`, NULL as `NULL`, number columns
@@ -893,7 +896,7 @@ pub fn sql_update(d: Dialect, target: &UpdateTarget, columns: &[Column], rows: &
         .join("\n")
 }
 
-/// A format of [`Writer`].
+/// A format of [`Writer`] and [`stream::TextWriter`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Format<'a> {
     Tsv {
@@ -914,75 +917,49 @@ pub enum Format<'a> {
     Xml,
     /// [`sql_update`] in a dialect.
     Update(Dialect, UpdateTarget<'a>),
+    /// Delimited text with the options of a file export ([`stream::Delimited`]): CSV with
+    /// another delimiter, another quoting, another text for NULL.
+    Delimited(stream::Delimited),
+    /// One JSON object per line (JSON Lines), the objects of [`json`] without the array.
+    JsonLines,
 }
 
 /// The same text as the functions above, written a chunk of rows at a time, so a large copy
 /// never holds every row at once (the rows of a spilled result are read from disk chunk by
-/// chunk). The text of any split into chunks is the text of all rows at once.
+/// chunk). The text of any split into chunks is the text of all rows at once. It is a
+/// [`stream::TextWriter`] into memory.
 pub struct Writer<'a> {
-    format: Format<'a>,
-    columns: &'a [Column<'a>],
-    out: String,
-    rows: usize,
+    inner: stream::TextWriter<'a, Vec<u8>>,
 }
 
 impl<'a> Writer<'a> {
     pub fn new(format: Format<'a>, columns: &'a [Column<'a>]) -> Self {
-        Self { format, columns, out: String::new(), rows: 0 }
+        let mut inner = stream::TextWriter::new(format, columns, Vec::new());
+        // Writing to memory does not fail.
+        let _ = inner.begin();
+        Self { inner }
     }
 
     /// Rows written so far.
     pub fn count(&self) -> usize {
-        self.rows
+        usize::try_from(self.inner.rows_written()).unwrap_or(usize::MAX)
     }
 
     /// Write the next rows.
     pub fn rows(&mut self, rows: &[Row]) {
-        if rows.is_empty() {
-            return;
-        }
-        let first = self.rows == 0;
-        let part = match &self.format {
-            // The header line is written with the first rows (or by `finish`).
-            Format::Tsv { header } => tsv(self.columns, rows, *header && first),
-            Format::Csv { header } => csv(self.columns, rows, *header && first),
-            Format::Json | Format::JsonPretty => json_objects(self.columns, rows),
-            Format::Markdown => markdown_rows(rows),
-            Format::Sql(d, target) => sql_insert(*d, target, self.columns, rows),
-            Format::List => comma_list(rows),
-            // Every row ends its own line; the head and the end come with `finish`.
-            Format::Html => html_rows(rows),
-            Format::Xml => xml_rows(self.columns, rows),
-            Format::Update(d, target) => sql_update(*d, target, self.columns, rows),
-        };
-        if !first {
-            match self.format {
-                Format::Json | Format::JsonPretty => self.out.push_str(",\n"),
-                Format::List => self.out.push_str(", "),
-                Format::Html | Format::Xml => {}
-                _ => self.out.push('\n'),
-            }
-        }
-        self.out.push_str(&part);
-        self.rows += rows.len();
+        let _ = self.inner.rows(rows);
     }
 
-    pub fn finish(self) -> String {
-        match self.format {
-            Format::Tsv { header } if self.rows == 0 => tsv(self.columns, &[], header),
-            Format::Csv { header } if self.rows == 0 => csv(self.columns, &[], header),
-            Format::Json if self.rows == 0 => "[]".to_string(),
-            Format::Json => format!("[\n{}\n]", self.out),
-            Format::Markdown if self.rows == 0 => markdown_header(self.columns),
-            Format::Markdown => format!("{}\n{}", markdown_header(self.columns), self.out),
-            Format::JsonPretty if self.rows == 0 => "[]".to_string(),
-            Format::JsonPretty => indent_json(&format!("[\n{}\n]", self.out)),
-            Format::Html => format!("{}{}{HTML_END}", html_head(self.columns), self.out),
-            Format::Xml => format!("{XML_HEAD}{}{XML_END}", self.out),
-            _ => self.out,
-        }
+    pub fn finish(mut self) -> String {
+        let _ = self.inner.end();
+        // Every piece written is a `&str`.
+        String::from_utf8(self.inner.into_inner())
+            .unwrap_or_else(|e| String::from_utf8_lossy(e.as_bytes()).into_owned())
     }
 }
+
+pub mod keyset;
+pub mod stream;
 
 #[cfg(test)]
 mod tests;
