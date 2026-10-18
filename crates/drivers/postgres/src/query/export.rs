@@ -20,9 +20,6 @@ use datarig_core::sql::risk;
 use std::sync::atomic::Ordering;
 use tokio_postgres::{Client, FirstPage, Statement, Transaction};
 
-/// Rows of an export's first page, before the width of its rows is known.
-const FIRST_PAGE: i32 = 8;
-
 /// The bytes of a row's values.
 fn row_bytes(r: &[Cell]) -> usize {
     r.iter().map(|c| c.as_ref().map_or(1, |v| v.len() + 1)).sum()
@@ -183,8 +180,43 @@ async fn send(link: &mut Link, sink: &ExportSink, batch: ExportBatch) -> Result<
     Ok(link.guard(None, sink.send(batch)).await?.is_ok())
 }
 
-/// Bind `stmt` and send its rows, `max` a page, each page asked for after the one before was
-/// taken. A cancel between two pages stops it before the next.
+/// Rows decoded and not sent yet, each batch counted on its own: it goes out at `max` rows or
+/// about [`EXPORT_BATCH_BYTES`], whichever comes first.
+struct Batch {
+    rows: Vec<Vec<Cell>>,
+    bytes: usize,
+    max: usize,
+}
+
+impl Batch {
+    /// Add `row`; whether the batch is full.
+    fn push(&mut self, row: Vec<Cell>) -> bool {
+        self.bytes += row_bytes(&row);
+        self.rows.push(row);
+        self.rows.len() >= self.max || self.bytes >= EXPORT_BATCH_BYTES
+    }
+
+    fn take(&mut self) -> Vec<Vec<Cell>> {
+        self.bytes = 0;
+        std::mem::take(&mut self.rows)
+    }
+}
+
+/// Send the batch's rows (if any), counting them in `read`: `false` when nobody reads them.
+async fn flush(link: &mut Link, sink: &ExportSink, batch: &mut Batch, read: &mut ExportRead) -> Result<bool, Closed> {
+    let rows = batch.take();
+    if rows.is_empty() {
+        return Ok(true);
+    }
+    read.rows += rows.len() as u64;
+    read.last = rows.last().cloned();
+    send(link, sink, ExportBatch::Rows(rows)).await
+}
+
+/// Bind `stmt` and send its rows, `max` a page (the first with the Bind, so a statement of at
+/// most `max` rows costs one round trip), each page asked for after the one before was taken.
+/// A later page's rows are decoded as they arrive and sent in batches bounded by bytes as well
+/// as rows, so wide rows never pile up. A cancel between two pages stops it before the next.
 async fn stream(
     txn: &Transaction<'_>,
     link: &mut Link,
@@ -193,13 +225,10 @@ async fn stream(
     sink: &ExportSink,
     max: i32,
 ) -> Result<Result<ExportRead, (DbError, bool)>, Closed> {
+    use futures::StreamExt;
     let formats = formats_of(stmt);
-    // Pages are sized by bytes too: a first small one, then as many rows as fit in a batch's
-    // bytes at the width seen so far (at most `max`).
-    let mut ask = max.min(FIRST_PAGE);
-    let (mut seen_rows, mut seen_bytes) = (0u64, 0u64);
     let FirstPage { portal, columns, rows, complete, .. } =
-        match link.guard(Some(env.token), txn.bind_first_page(stmt, &formats, ask)).await? {
+        match link.guard(Some(env.token), txn.bind_first_page(stmt, &formats, max)).await? {
             Ok(first) => first,
             Err(e) => return Ok(Err((count_error(&e), is_cancel(&e)))),
         };
@@ -208,35 +237,52 @@ async fn stream(
         read.complete = false;
         return Ok(Ok(read));
     }
-    let (mut rows, mut ended) = (rows, complete);
-    loop {
-        if !rows.is_empty() {
-            let page = decode(&rows, &formats);
-            seen_rows += page.len() as u64;
-            seen_bytes += page.iter().map(|r| row_bytes(r)).sum::<usize>() as u64;
-            let wide = (seen_bytes / seen_rows.max(1)).max(1);
-            ask = i32::try_from((EXPORT_BATCH_BYTES as u64 / wide).max(1)).unwrap_or(i32::MAX).min(max);
-            read.rows += page.len() as u64;
-            read.last = page.last().cloned();
-            if !send(link, sink, ExportBatch::Rows(page)).await? {
-                read.complete = false;
-                break;
-            }
+    let mut batch = Batch { rows: Vec::new(), bytes: 0, max: usize::try_from(max).unwrap_or(usize::MAX) };
+    // The first page came with the Bind: decoded and sent a byte-capped batch at a time.
+    for row in rows {
+        let full = batch.push(decode(std::slice::from_ref(&row), &formats).pop().unwrap_or_default());
+        if full && !flush(link, sink, &mut batch, &mut read).await? {
+            read.complete = false;
+            return Ok(Ok(read));
         }
-        if ended {
-            break;
-        }
+    }
+    if !flush(link, sink, &mut batch, &mut read).await? {
+        read.complete = false;
+        return Ok(Ok(read));
+    }
+    let mut ended = complete;
+    while !ended {
         // Cancelled while the page was being written: nothing runs on the server now, so the
         // cancel stops it here.
         if env.cancel.load(Ordering::SeqCst) {
             return Ok(Err((DbError::Cancelled, true)));
         }
-        match link.guard(Some(env.token), txn.query_portal(&portal, ask)).await? {
-            Ok(more) => {
-                ended = (more.len() as i32) < ask;
-                rows = more;
-            }
+        let mut page = match link.guard(Some(env.token), txn.query_portal_raw(&portal, max)).await? {
+            Ok(page) => Box::pin(page),
             Err(e) => return Ok(Err((count_error(&e), is_cancel(&e)))),
+        };
+        let mut got = 0i32;
+        loop {
+            match link.guard(Some(env.token), page.next()).await? {
+                Some(Ok(row)) => {
+                    got += 1;
+                    let full = batch.push(decode(std::slice::from_ref(&row), &formats).pop().unwrap_or_default());
+                    if full && !flush(link, sink, &mut batch, &mut read).await? {
+                        read.complete = false;
+                        drop(page);
+                        drop(portal);
+                        return Ok(Ok(read));
+                    }
+                }
+                Some(Err(e)) => return Ok(Err((count_error(&e), is_cancel(&e)))),
+                None => break,
+            }
+        }
+        drop(page);
+        ended = got < max;
+        if !flush(link, sink, &mut batch, &mut read).await? {
+            read.complete = false;
+            break;
         }
     }
     drop(portal);

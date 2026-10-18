@@ -403,3 +403,26 @@ async fn wide_rows_come_in_batches_bounded_by_bytes() {
     assert!(largest <= 2 * datarig_core::driver::EXPORT_BATCH_BYTES, "{largest}");
     assert!(c.exported(id).await.0.unwrap().complete);
 }
+
+/// Wide rows after many narrow ones, in the first page and in later ones: each batch is capped
+/// by its own bytes.
+#[tokio::test(flavor = "multi_thread")]
+async fn wide_rows_after_narrow_ones_stay_in_byte_capped_batches() {
+    let Some(url) = pg_url("wide_rows_after_narrow_ones_stay_in_byte_capped_batches") else { return };
+    let mut c = Conn::open(&url, SessionRole::Query, false).await;
+    let sql = "SELECT g, CASE WHEN g % 2000 > 1940 THEN repeat('x', 1000000) ELSE 'a' END \
+               FROM generate_series(1, 6000) g";
+    let (id, mut rx) = c.export(sql, ExportGuard::Confirmed, 1, 2_000);
+    let (mut rows, mut largest) = (0, 0usize);
+    while let Some(b) = rx.recv().await {
+        if let ExportBatch::Rows(r) = b {
+            rows += r.len();
+            let bytes: usize =
+                r.iter().map(|r| r.iter().map(|v| v.as_ref().map_or(0, String::len)).sum::<usize>()).sum();
+            largest = largest.max(bytes);
+        }
+    }
+    assert_eq!(rows, 6_000);
+    assert!(largest <= 2 * datarig_core::driver::EXPORT_BATCH_BYTES, "{largest}");
+    assert!(c.exported(id).await.0.unwrap().complete);
+}

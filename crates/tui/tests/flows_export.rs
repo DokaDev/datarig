@@ -792,3 +792,82 @@ fn quitting_ends_the_exports_files() {
     assert_eq!(v.as_array().map(Vec::len), Some(5), "a closed array of what was written");
     drop(sink);
 }
+
+/// The notes of the active tab's run that say a statement runs again for an export.
+fn runs_again(h: &Harness) -> usize {
+    said(h).iter().filter(|s| s.starts_with("Runs again for the export: ")).count()
+}
+
+#[test]
+fn a_statement_is_said_to_run_again_only_when_it_is_sent_and_once() {
+    let dir = scratch("note-once");
+    let mut h = Harness::connected(Lang::En);
+    first_page(&mut h, 10, true);
+    h.sent();
+    let path = dir.join("there.csv");
+    std::fs::write(&path, "mine\n").unwrap();
+    // Declined: nothing ran, nothing is said to.
+    h.command(&format!("export {}", path.display()));
+    pump_until(&mut h, "the question", |h| h.overlay_kind() == Some(OverlayKind::Confirm));
+    h.draw(160, 45);
+    h.advance(Duration::from_secs(1));
+    h.key(KeyCode::Enter);
+    assert_eq!(runs_again(&h), 0, "{:?}", said(&h));
+    // A path conflict (a folder): nothing ran.
+    h.command(&format!("export csv {}", dir.display()));
+    pump_until(&mut h, "the end", done);
+    assert_eq!(runs_again(&h), 0, "{:?}", said(&h));
+    // Replaced: it runs, said once.
+    h.command(&format!("export {}", path.display()));
+    pump_until(&mut h, "the question", |h| h.overlay_kind() == Some(OverlayKind::Confirm));
+    h.draw(160, 45);
+    h.advance(Duration::from_secs(1));
+    h.key(KeyCode::Char('y'));
+    let (id, _, _, sink) = wait_export(&mut h);
+    assert_eq!(runs_again(&h), 1, "{:?}", said(&h));
+    drop(sink);
+    h.tab_db(
+        0,
+        DbEvent::Exported { id, result: Ok(ExportRead { rows: 0, last: None, complete: true }), cancelled: false },
+    );
+    pump_until(&mut h, "the end", done);
+    assert_eq!(runs_again(&h), 1, "{:?}", said(&h));
+}
+
+#[test]
+fn a_chunk_that_would_repeat_the_one_before_ends_the_export() {
+    let dir = scratch("no-progress");
+    let mut h = Harness::connected(Lang::En);
+    let table = TableRef { schema: "shop".into(), name: "users".into() };
+    h.app.tab_mut().editor = Editor::new("SELECT * FROM \"shop\".\"users\"");
+    h.app.tab_mut().doc.table = Some(table);
+    h.ctrl('e');
+    let qid = h.app.tab().exec.query_id;
+    let cols: Vec<ColumnMeta> = ["id", "email", "name", "nickname", "profile"]
+        .iter()
+        .enumerate()
+        .map(|(i, n)| meta_from(n, if i == 0 { "int8" } else { "text" }, i == 0, USERS, i as i16 + 1))
+        .collect();
+    let row = |i: usize| vec![Some(i.to_string()), Some(format!("u{i}@x")), Some("n".into()), None, None];
+    h.tab_db(
+        0,
+        DbEvent::Page { id: qid, columns: Some(cols), rows: vec![row(0)], more: true, elapsed: Duration::ZERO },
+    );
+    h.sent();
+    h.command(&format!("export {}", dir.join("p.csv").display()));
+    h.meta_db(
+        "local-pg",
+        DbEvent::Structure { schema: "shop".into(), table: "users".into(), result: Ok(Box::new(users_structure())) },
+    );
+    let (id, _, _, sink) = wait_export(&mut h);
+    drop(sink);
+    // A full chunk ending at key 7, twice: the second would ask for the same rows again.
+    let full = || Ok(ExportRead { rows: 10_000, last: Some(row(7)), complete: true });
+    h.tab_db(0, DbEvent::Exported { id, result: full(), cancelled: false });
+    let (_, _, _, sink) = export_sent(&mut h).expect("the next chunk");
+    drop(sink);
+    h.tab_db(0, DbEvent::Exported { id, result: full(), cancelled: false });
+    assert!(export_sent(&mut h).is_none(), "not asked again");
+    pump_until(&mut h, "the end", done);
+    assert!(status(&h).contains("the next chunk could not be asked for"), "{}", status(&h));
+}

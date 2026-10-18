@@ -385,6 +385,8 @@ struct Job {
     ctl: Option<CtlSender>,
     /// Its writer's thread.
     writer: Option<std::thread::JoinHandle<()>>,
+    /// Its start (and what it sends to the server) is in the run's Messages.
+    noted: bool,
     /// The rows of a local export, until its writer takes them.
     snapshot: Option<RowsSnapshot>,
     /// A statement of the job runs on the tab's session.
@@ -717,6 +719,7 @@ impl App {
             path: req.path.clone(),
             ctl: None,
             writer: None,
+            noted: false,
             snapshot,
             db,
             told: false,
@@ -959,20 +962,8 @@ impl App {
             Plan::Stream { .. } if j.in_block => Msg::ExportStartedInTx { format, path },
             _ => Msg::ExportStarted { format, path },
         };
-        // What is sent to the server for the user is said in the run's Messages.
-        let sent = match &j.plan {
-            Plan::Stream { sql, .. } => Some(Msg::ExportRunsAgain { sql: super::runlog::excerpt(sql, 120) }),
-            Plan::Keyset(k) => Some(Msg::ExportRunsInChunks { sql: super::runlog::excerpt(&k.first(), 120) }),
-            Plan::Local => None,
-        };
-        let note = Notice::new(m, Level::Info);
-        if let Some(t) = self.tabs.get_mut(id) {
-            t.exec.run.notes.push(note.clone());
-            if let Some(sent) = sent {
-                t.exec.run.notes.push(Notice::new(sent, Level::Info));
-            }
-        }
-        self.tab_status(id, note);
+        // The run's Messages get it once the export really starts ([`App::export_noted`]).
+        self.tab_status(id, Notice::new(m, Level::Info));
     }
 
     fn export_out(&mut self) -> Out {
@@ -1016,6 +1007,8 @@ impl App {
                 }
                 if self.exports.jobs.get(&tab).is_some_and(|j| j.db) {
                     self.export_first_statement(tab);
+                } else {
+                    self.export_noted(tab);
                 }
             }
             ExportNews::Progress { rows, bytes } => {
@@ -1082,7 +1075,33 @@ impl App {
             refused: false,
             export: true,
         });
+        self.export_noted(id);
         self.export_send(id, sql, guard);
+    }
+
+    /// Tab `id`'s export starts for real (its file is open, its statement is being sent): said
+    /// in the run's Messages, once, with what is sent to the server for the user.
+    fn export_noted(&mut self, id: TabId) {
+        let Some(j) = self.exports.jobs.get_mut(&id).filter(|j| !j.noted) else { return };
+        j.noted = true;
+        let format = self.i18n.label(j.request.format.label()).to_string();
+        let path = j.path.display().to_string();
+        let started = match &j.plan {
+            Plan::Keyset(k) => Msg::ExportStartedKeyset { format, path, table: format!("{}.{}", k.schema, k.table) },
+            Plan::Stream { .. } if j.in_block => Msg::ExportStartedInTx { format, path },
+            _ => Msg::ExportStarted { format, path },
+        };
+        let sent = match &j.plan {
+            Plan::Stream { sql, .. } => Some(Msg::ExportRunsAgain { sql: super::runlog::excerpt(sql, 120) }),
+            Plan::Keyset(k) => Some(Msg::ExportRunsInChunks { sql: super::runlog::excerpt(&k.first(), 120) }),
+            Plan::Local => None,
+        };
+        if let Some(t) = self.tabs.get_mut(id) {
+            t.exec.run.notes.push(Notice::new(started, Level::Info));
+            if let Some(sent) = sent {
+                t.exec.run.notes.push(Notice::new(sent, Level::Info));
+            }
+        }
     }
 
     /// Send statement `sql` of tab `id`'s export with a channel of its own, handed to the writer.
