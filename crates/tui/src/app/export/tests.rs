@@ -35,6 +35,9 @@ fn a_path_names_its_format() {
     assert_eq!(of("a.htm"), Some(ExportFormat::Html));
     assert_eq!(of("a.xml"), Some(ExportFormat::Xml));
     assert_eq!(of("a.sql"), Some(ExportFormat::SqlInsert));
+    assert_eq!(of("a.XLSX"), Some(ExportFormat::Xlsx));
+    assert_eq!(ExportFormat::parse("excel"), Some(ExportFormat::Xlsx));
+    assert_eq!(ExportFormat::Xlsx.extension(), "xlsx");
     assert_eq!(of("a.txt"), None);
     assert_eq!(of("noext"), None);
     for f in ExportFormat::ALL {

@@ -122,6 +122,10 @@ rss_growth_mib_max = 16
 rss_mib_max = 96
 rss_growth_mib_max = 16
 rows_per_s_min = 50000
+# The same rows as an Excel workbook (`export_xlsx`: four sheets, zipped at the end): the same
+# memory budgets (each second it says nothing is a sample too, the zipping among them). A
+# workbook is slower to write (every cell is XML, then compressed): its own rows per second.
+xlsx_rows_per_s_min = 20000
 
 [editor]
 # Keystroke to frame in a 5 MB file at 160x45 (a developer machine: about 0.5 ms). A theme

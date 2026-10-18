@@ -1897,7 +1897,7 @@
 "commands.arg.export" = "<형식> <범위> <경로>"
 "export.format.json_lines" = "JSON Lines (한 줄에 하나)"
 "export.usage" = "사용법: :export [형식] [all|fetched|selection] [delim=… quote=… header=… null=…] [경로]"
-"export.unknown_format" = "알 수 없는 내보내기 형식: {format} (csv, tsv, json, json_pretty, jsonl, markdown, html, xml, insert, update)"
+"export.unknown_format" = "알 수 없는 내보내기 형식: {format} (csv, tsv, json, json_pretty, jsonl, markdown, html, xml, insert, update, xlsx)"
 "export.unknown_extension" = "{path}의 형식을 알 수 없습니다. 먼저 형식을 지정하세요: :export csv {path}"
 "export.busy_tab" = "이 탭에서 이미 내보내기가 진행 중입니다 (먼저 취소하세요)"
 "export.bad_delimiter" = "내보내지 않음: 큰따옴표나 줄바꿈은 CSV 값을 나누는 구분자가 될 수 없습니다"
@@ -1941,6 +1941,10 @@
 "export.why.not_supported" = "이 문은 내보낼 행을 돌려주지 않습니다"
 "export.why.key" = "다음 묶음을 요청할 수 없습니다: 마지막 행의 키 값을 다시 쓸 수 없습니다"
 "export.why.internal" = "내보내기가 이유 없이 멈췄습니다"
+"export.why.too_long" = "{column} 열의 값({row}행)이 {length}자로, 엑셀 셀 하나에 들어가는 길이(32,767자)를 넘습니다; 통합 문서에는 그 앞의 행까지 들어 있습니다"
+"export.why.not_saved" = "통합 문서를 만들지 못했습니다: {error}; 남긴 파일은 없습니다 (통합 문서는 끝까지 만들어져야 읽을 수 있습니다)"
+"export.too_wide" = "내보내지 않음: 엑셀 시트에는 16,384열까지 들어가는데 결과는 {count}열입니다; 열을 줄이거나 다른 형식으로 내보내세요"
+"export.done_sheets" = "{count}행을 {path}에 시트 {sheets}개로 내보냈습니다 ({size}; 시트 하나에는 머리글 아래 1,048,575행까지 들어갑니다)"
 "dialog.button.export" = "내보내기"
 "export.why.mysql_lost" = "행을 쓰는 동안 연결이 끊겼습니다 (네트워크나 서버 문제, 또는 서버의 net_write_timeout: MySQL은 읽는 쪽이 그보다 오래(기본 60초) 늦으면 연결을 끊습니다)"
 "export.question_busy" = "내보내기를 시작하지 않음: 다른 질문이 열려 있습니다. 먼저 답한 다음 다시 내보내세요"
@@ -1995,7 +1999,7 @@
 "export.note.environment" = "먼저 묻습니다: {environment}은(는) 읽기 전용이거나 운영에 준하는 환경입니다."
 "export.note.no_quotes" = "따옴표 없이 쓰면 구분자, 큰따옴표, 줄바꿈이 든 값이 파일의 열을 깨뜨려 다시 읽을 수 없게 됩니다."
 "export.note.sql_refused" = "여기서는 {format}을(를) 쓸 수 없습니다: {reason}"
-"export.csv_options_only" = "그 옵션들은 CSV용입니다 (delim=, quote=, null=). TSV는 header=만, 다른 형식은 옵션이 없습니다"
+"export.csv_options_only" = "그 옵션들은 CSV용입니다 (delim=, quote=, null=). TSV는 header=만, 엑셀은 null=만 받고, 다른 형식은 옵션이 없습니다"
 
 # Manual commit and the open transaction
 "group.tx" = "트랜잭션"

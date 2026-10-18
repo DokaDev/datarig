@@ -83,12 +83,12 @@ pub enum FormatChoice {
 }
 
 /// The format list, in order: every [`ExportFormat`], the formats of [`LATER_FORMATS`] still to
-/// come after the delimited ones.
+/// come after the delimited ones and Excel.
 pub fn format_choices() -> Vec<FormatChoice> {
     let mut out = Vec::new();
     for f in ExportFormat::ALL {
         out.push(FormatChoice::Ready(f));
-        if f == ExportFormat::Tsv {
+        if f == ExportFormat::Xlsx {
             let later = LATER_FORMATS.iter().filter(|(name, _)| ExportFormat::parse(name).is_none());
             out.extend(later.map(|&(_, label)| FormatChoice::Later(label)));
         }
@@ -199,6 +199,8 @@ impl ExportForm {
         match self.format {
             ExportFormat::Csv => v.extend([Delimiter, Quote, Header, Null]),
             ExportFormat::Tsv => v.push(Header),
+            // An empty cell, or this text.
+            ExportFormat::Xlsx => v.push(Null),
             _ => {}
         }
         v.extend([Path, Export, Cancel]);

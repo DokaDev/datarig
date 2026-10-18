@@ -1900,7 +1900,7 @@
 "commands.arg.export" = "<format> <scope> <path>"
 "export.format.json_lines" = "JSON Lines"
 "export.usage" = "Usage: :export [format] [all|fetched|selection] [delim=… quote=… header=… null=…] [path]"
-"export.unknown_format" = "Unknown export format: {format} (csv, tsv, json, json_pretty, jsonl, markdown, html, xml, insert, update)"
+"export.unknown_format" = "Unknown export format: {format} (csv, tsv, json, json_pretty, jsonl, markdown, html, xml, insert, update, xlsx)"
 "export.unknown_extension" = "Which format is {path}? Name it first: :export csv {path}"
 "export.busy_tab" = "An export runs in this tab already (cancel it first)"
 "export.bad_delimiter" = "Not exported: a double quote or a line break cannot separate CSV values"
@@ -1944,6 +1944,10 @@
 "export.why.not_supported" = "the statement returns no rows to export"
 "export.why.key" = "the next chunk could not be asked for: a key value of the last row cannot be written back"
 "export.why.internal" = "the export stopped without saying why"
+"export.why.too_long" = "a value of column {column} (row {row}) has {length} characters, more than an Excel cell holds (32,767); the workbook has the rows before it"
+"export.why.not_saved" = "the workbook could not be made: {error}; nothing was kept (a workbook reads only once it is complete)"
+"export.too_wide" = { one = "Not exported: an Excel sheet holds 16,384 columns, and the result has {count}; export fewer columns, or another format", other = "Not exported: an Excel sheet holds 16,384 columns, and the result has {count}; export fewer columns, or another format" }
+"export.done_sheets" = { one = "Exported {count} row to {path} ({size}) on {sheets} sheets", other = "Exported {count} rows to {path} ({size}) on {sheets} sheets (a sheet holds 1,048,575 rows under its header)" }
 "dialog.button.export" = "Export"
 "export.why.mysql_lost" = "the connection was lost while rows were written (a network or server problem, or the server's net_write_timeout: MySQL drops a connection whose reader stays behind longer, 60 s by default)"
 "export.question_busy" = "Export not started: another question is open; answer it, then export again"
@@ -1998,7 +2002,7 @@
 "export.note.environment" = "Asks first: {environment} is a read-only or prod-like environment."
 "export.note.no_quotes" = "Without quotes, a value that holds the delimiter, a double quote or a line break breaks the file's columns, and the file will not read back."
 "export.note.sql_refused" = "{format} is not available here: {reason}"
-"export.csv_options_only" = "Those options are CSV's (delim=, quote=, null=); TSV takes header= only, the other formats none"
+"export.csv_options_only" = "Those options are CSV's (delim=, quote=, null=); TSV takes header= only, Excel null= only, the other formats none"
 
 # Manual commit and the open transaction
 "group.tx" = "Transaction"

@@ -77,6 +77,9 @@ rustix = { version = "1.1", default-features = false, features = ["std", "proces
 # tunnels), TLS 1.2 and 1.3. The server's certificate is checked against the profile's CA file,
 # or the system's trusted certificates through the platform's own verifier (macOS Security
 # framework, Windows CryptoAPI, Linux rustls-native-certs): no bundled root list.
+# Excel export (export::xlsx): its constant memory mode only (rows go to a temporary file as they
+# come; the workbook is zipped at the end). No other feature.
+rust_xlsxwriter = { version = "0.100", default-features = false, features = ["constant_memory"] }
 rustls = { version = "0.23.45", default-features = false, features = ["std", "tls12", "ring"] }
 rustls-platform-verifier = "0.7.1"
 # A server certificate's names, for the one a CA file trusts as it is (crates/tls); rustls's own.
@@ -103,6 +106,9 @@ unicode-segmentation = "1"
 unicode-width = "0.2"
 uuid = { version = "1.26", features = ["v4"] }
 zeroize = "1.9"
+# Reads the exported workbooks back in the tests (`export::xlsx::read`): the zip rust_xlsxwriter
+# writes with.
+zip = { version = "9", default-features = false }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
