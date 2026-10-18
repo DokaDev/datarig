@@ -264,6 +264,7 @@ impl App {
             GridAction::CopyRow => return self.copy(copy::CopyWhat::Row, copy::CopyFormat::Tsv, false),
             GridAction::Select => return self.toggle_selection(false),
             GridAction::SelectRows => return self.toggle_selection(true),
+            GridAction::SelectAll => return self.select_all(),
         }
         // Pages are explicit: at the end of one, say which key shows the next.
         if matches!(g, GridAction::Down | GridAction::PageDown | GridAction::HalfDown | GridAction::Bottom) {

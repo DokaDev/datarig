@@ -1,10 +1,10 @@
-//! Copying results: `y` copies the cell, `Y` the
-//! row, `v` starts a rectangular selection that `y` copies as TSV. A copy
-//! takes a scope (the selection, or every fetched row: [`CopyScope`]) and a format
-//! ([`CopyFormat::MENU`]: TSV without or with headers, a comma list, CSV, JSON, indented JSON,
-//! Markdown, HTML, XML, an SQL IN list, SQL INSERT or UPDATE statements; `core::export`), from
-//! the grid's menu, `Space r y`/`Space r a` or `:copy <format> [selection|all]`. The text goes to the clipboard the `clipboard` setting picks
-//! ([`crate::clipboard`]) and the status bar says how.
+//! Copying results: `y` copies the cell, `Y` the row, `v` starts a rectangular selection that
+//! `y` copies as TSV, `Ctrl+A` selects every cell of the page. A copy takes a scope (the
+//! selection, or every fetched row: [`CopyScope`]) and a format ([`CopyFormat::MENU`]: TSV
+//! without or with headers, a comma list, CSV, JSON, indented JSON, Markdown, HTML, XML, an SQL
+//! IN list, SQL INSERT or UPDATE statements; `core::export`), from the grid's menu,
+//! `Space r y`/`Space r a` or `:copy <format> [selection|all]`. The text goes to the clipboard
+//! the `clipboard` setting picks ([`crate::clipboard`]) and the status bar says how.
 //!
 //! The editor's registers reach the clipboard here too ([`App::editor_yanked`]): yanks and
 //! deletes that name no register when `[editor] clipboard` is on, and `"+` / `"*` always; `"+p`
@@ -274,14 +274,36 @@ impl App {
         };
         g.shape = shape;
         if g.anchor.is_some() {
-            let (copy, cancel) = (
-                self.key_for(Action::Grid(GridAction::CopyCell), Ctx::Grid),
-                self.key_for(Action::PaneBack, Ctx::Grid),
-            );
-            self.flash(Notice::new(Msg::CopySelecting { copy, cancel }, Level::Info));
+            self.say_selecting();
         } else {
             self.selecting_done();
         }
+    }
+
+    /// `Ctrl+A` in the grid: every cell of the page shown (its rows, every column) as a range
+    /// of cells, which `y` copies and `v` or `Esc` drops like any other. The cursor goes to the
+    /// page's first cell. An empty result has nothing to select.
+    pub(super) fn select_all(&mut self) {
+        let t = self.tabs.active_mut();
+        let Results::Rows(rs) = &t.results else { return };
+        let (total, ncols) = (rs.rows.len(), rs.columns.len());
+        let g = &mut t.grid;
+        let page = g.window(total);
+        if page.is_empty() || ncols == 0 {
+            return;
+        }
+        g.shape = Shape::Cells;
+        g.anchor = Some((page.end - 1, ncols - 1));
+        (g.row, g.col) = (page.start, 0);
+        g.detached = false;
+        self.say_selecting();
+    }
+
+    /// A selection started: the status bar says which keys copy and drop it.
+    fn say_selecting(&mut self) {
+        let (copy, cancel) =
+            (self.key_for(Action::Grid(GridAction::CopyCell), Ctx::Grid), self.key_for(Action::PaneBack, Ctx::Grid));
+        self.flash(Notice::new(Msg::CopySelecting { copy, cancel }, Level::Info));
     }
 
     /// The selection was dropped: its "Selecting…" notice goes with it.

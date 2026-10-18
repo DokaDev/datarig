@@ -91,6 +91,34 @@ impl App {
         self.tab().exec.rerun_ok && (self.answer_here() || self.kept_answer_here())
     }
 
+    /// The active tab's shown result may be counted (`#`), as far as is known without reading
+    /// its statement again: nothing runs in the tab, the result is on the session and binding
+    /// it came from, and, when its portal is closed, its statement is on the allowlist (it was
+    /// checked when the portal closed). While the portal is open the statement has not been
+    /// checked: `#` may then be refused, with the reason.
+    pub fn may_count(&self) -> bool {
+        let t = self.tab();
+        let open = matches!(t.exec.paging, Paging::Open { .. });
+        t.exec.running.is_none() && (open || t.exec.rerun_ok) && (self.answer_here() || self.kept_answer_here())
+    }
+
+    /// The server's estimate of the rows of the table that table tab `t` shows, as the explorer
+    /// read it with the table's schema or structure (nothing is asked for it). Only while the
+    /// result shown is the tab's own query of its table, and only from the explorer of the
+    /// profile and database the tab works in. `None` when the server has none (never analyzed).
+    pub(crate) fn table_estimate(&self, t: &Tab) -> Option<u64> {
+        let table = t.doc.table.as_ref().filter(|_| t.is_table())?;
+        if t.shown_sql().trim() != table.query(self.tab_dialect(t.id)) {
+            return None;
+        }
+        let id = t.profile?;
+        let tree = match t.context.database.as_deref() {
+            None => &self.conns.get(id)?.tree,
+            Some(db) => &self.conns.aux(id, db)?.tree,
+        };
+        tree.stats_of(&table.schema, &table.name)?.rows
+    }
+
     /// `n`: the next page of the shown result. A page already fetched is shown at once; the one
     /// past them is fetched (the portal is open) or read by running the statement again (it
     /// closed), and shown when it arrives.

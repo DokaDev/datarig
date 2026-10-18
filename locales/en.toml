@@ -9,6 +9,7 @@
 "pane.results.title" = "Results"
 "pane.results.rows" = { one = "Results · {count} row", other = "Results · {count} rows" }
 "results.title.page" = "page {page} / {pages}"
+"results.title.page_count" = "page {page} / ? · {key} count"
 "results.title.page_short" = "{page}/{pages}"
 "results.title.paging" = "paging"
 "results.title.in_tx" = "in tx"
@@ -1099,6 +1100,7 @@
 "action.grid.copy_row" = "Copy the row (the selected rows) as TSV"
 "action.grid.select" = "Select a range of cells (again: cancel)"
 "action.grid.select_rows" = "Select whole rows (again: cancel)"
+"action.grid.select_all" = "Select every cell of the page"
 "command.copy" = "Copy the selected range, or every fetched row, as… (:copy <format> [selection|all])"
 "commands.arg.format" = "<format>"
 "hint.copy" = "copy"

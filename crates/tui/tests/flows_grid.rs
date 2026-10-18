@@ -1288,3 +1288,65 @@ fn the_cursor_cell_flashes_on_the_terminal_theme() {
     h.keys("y");
     assert_eq!(at(&mut h), (Color::Black, Color::Yellow, false));
 }
+
+/// `Ctrl+A` selects every cell of the page, the cursor on its first cell; `y` copies the range
+/// as any other (the whole result here, as `Space r a T` does). `Esc` and `v` drop it.
+#[test]
+fn ctrl_a_selects_the_page_that_y_copies() {
+    let mut h = grid(Lang::En);
+    let clip = FakeClipboard::attach(&mut h, false, &[]);
+    h.keys(" raT");
+    let every = clip.last().unwrap();
+    h.keys("jjl");
+    h.ctrl('a');
+    let g = &h.app.tab().grid;
+    assert_eq!((g.anchor, g.row, g.col, g.shape), (Some((7, 4)), 0, 0, datarig_tui::widgets::grid::Shape::Cells));
+    assert!(h.status(160, 45).contains("Selecting"), "{}", h.status(160, 45));
+    h.keys("y");
+    assert_eq!(clip.last(), Some(every));
+    assert_eq!(message(&mut h), "Copied 8 rows as TSV (system clipboard)");
+    assert_eq!(h.app.tab().grid.anchor, None, "the range is done");
+    // Esc drops it before it leaves the grid; `v` drops it too.
+    h.ctrl('a');
+    h.key(KeyCode::Esc);
+    assert_eq!((h.app.tab().grid.anchor, h.app.focus), (None, Focus::Results));
+    assert!(!h.status(160, 45).contains("Selecting"));
+    h.ctrl('a');
+    h.keys("v");
+    assert_eq!(h.app.tab().grid.anchor, None);
+}
+
+/// Select all is in the grid's menu and on the command line, with its key.
+#[test]
+fn select_all_is_in_the_menu_and_on_the_command_line() {
+    let mut h = grid(Lang::En);
+    h.draw(160, 45);
+    let (x, y) = (h.app.tab().grid.hit_cols[0].0 + 2, h.app.tab().grid.data_y);
+    click(&mut h, x, y, MouseButton::Right);
+    let screen = h.screen(160, 45);
+    assert!(screen.contains("Select every cell of the page"), "{screen}");
+    h.key(KeyCode::Esc);
+    h.ctrl('k');
+    h.type_text("select every");
+    let screen = h.screen(160, 45);
+    let line = screen.lines().find(|l| l.contains("Select every cell of the page")).unwrap_or_default();
+    assert!(line.contains("Ctrl+A"), "{screen}");
+    h.key(KeyCode::Enter);
+    assert_eq!(h.app.tab().grid.anchor, Some((7, 4)));
+}
+
+/// An empty result has nothing to select: `Ctrl+A` does nothing.
+#[test]
+fn ctrl_a_on_an_empty_result_selects_nothing() {
+    let mut h = Harness::connected(Lang::En);
+    h.ctrl('e');
+    h.sent();
+    let columns = Some(vec![meta("id", "int8", true, false)]);
+    h.db(DbEvent::Page { id: 1, columns, rows: Vec::new(), more: false, elapsed: Duration::from_millis(1) });
+    h.key(KeyCode::Tab);
+    assert_eq!(h.app.focus, Focus::Results);
+    h.ctrl('a');
+    assert_eq!(h.app.tab().grid.anchor, None);
+    assert!(!h.status(160, 45).contains("Selecting"));
+    h.draw(160, 45);
+}
