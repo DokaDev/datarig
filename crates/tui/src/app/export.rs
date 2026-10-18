@@ -43,12 +43,13 @@ use datarig_core::driver::structure::TableStructure;
 use datarig_core::driver::{Cell, ColumnMeta, DbError, ExportBatch, ExportGuard, ExportRead, ReadIn};
 use datarig_core::export::keyset::{self, Keyset};
 use datarig_core::export::stream::{BadDelimited, Delimited, Quote, RowSink, TextWriter};
+use datarig_core::export::xlsx::{self, XlsxWriter};
 use datarig_core::export::{self as core_export, Kind, Refused, SqlCells};
 use datarig_core::fault::Fault;
 use datarig_core::results::RowsSnapshot;
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::io::{BufWriter, Write};
+use std::io::BufWriter;
 use std::sync::mpsc;
 
 /// Rows the driver sends in one batch, and rows read from a result's store at a time.
@@ -80,12 +81,15 @@ pub enum ExportFormat {
     Xml,
     SqlInsert,
     SqlUpdate,
+    /// An Excel workbook (`export::xlsx`).
+    Xlsx,
 }
 
 impl ExportFormat {
-    pub const ALL: [ExportFormat; 10] = [
+    pub const ALL: [ExportFormat; 11] = [
         ExportFormat::Csv,
         ExportFormat::Tsv,
+        ExportFormat::Xlsx,
         ExportFormat::Json,
         ExportFormat::JsonPretty,
         ExportFormat::JsonLines,
@@ -109,17 +113,19 @@ impl ExportFormat {
             ExportFormat::Xml => "xml",
             ExportFormat::SqlInsert => "insert",
             ExportFormat::SqlUpdate => "update",
+            ExportFormat::Xlsx => "xlsx",
         }
     }
 
     /// The format `:export` names `name` (case and `-` as `_` aside; `ndjson` is JSON Lines,
-    /// `md` Markdown, `sql` INSERT statements).
+    /// `md` Markdown, `sql` INSERT statements, `excel` a workbook).
     pub fn parse(name: &str) -> Option<ExportFormat> {
         let name = name.to_ascii_lowercase().replace('-', "_");
         match name.as_str() {
             "ndjson" | "json_lines" => Some(ExportFormat::JsonLines),
             "md" => Some(ExportFormat::Markdown),
             "sql" => Some(ExportFormat::SqlInsert),
+            "excel" => Some(ExportFormat::Xlsx),
             _ => ExportFormat::ALL.into_iter().find(|f| f.name() == name),
         }
     }
@@ -135,6 +141,7 @@ impl ExportFormat {
             ExportFormat::Html => "html",
             ExportFormat::Xml => "xml",
             ExportFormat::SqlInsert | ExportFormat::SqlUpdate => "sql",
+            ExportFormat::Xlsx => "xlsx",
         }
     }
 
@@ -150,6 +157,7 @@ impl ExportFormat {
             "html" | "htm" => ExportFormat::Html,
             "xml" => ExportFormat::Xml,
             "sql" => ExportFormat::SqlInsert,
+            "xlsx" => ExportFormat::Xlsx,
             _ => return None,
         })
     }
@@ -178,6 +186,7 @@ impl ExportFormat {
             ExportFormat::Xml => Label::CopyFormatXml,
             ExportFormat::SqlInsert => Label::CopyFormatSql,
             ExportFormat::SqlUpdate => Label::CopyFormatUpdate,
+            ExportFormat::Xlsx => Label::ExportFormatXlsx,
         }
     }
 }
@@ -259,6 +268,8 @@ pub enum Outcome {
         path: PathBuf,
         /// Values written without the quotes they needed (CSV's quotes turned off).
         damaged: u64,
+        /// The sheets of a workbook (a sheet holds 1,048,575 rows under its header); 1 for text.
+        sheets: u32,
     },
     Cancelled {
         rows: u64,
@@ -306,6 +317,11 @@ pub enum Failure {
     Db(DbError),
     /// A key value of the last row read cannot be written for the next chunk.
     Key,
+    /// A value is too long for a workbook's cell (its column and row).
+    TooLong(xlsx::TooLong),
+    /// The workbook could not be made from the rows written (the partial file is removed: a
+    /// workbook reads only once it is complete).
+    NotSaved(Fault),
     /// The writer stopped without saying why (a bug).
     Internal,
 }
@@ -631,10 +647,11 @@ impl App {
             })?,
             (None, None) => ExportFormat::Csv,
         };
-        // CSV's options are CSV's; TSV takes its header line only.
+        // CSV's options are CSV's; TSV takes its header line only, Excel the NULL text only.
         let ignored = match format {
             ExportFormat::Csv => false,
             ExportFormat::Tsv => args.given.iter().any(|k| *k != "header"),
+            ExportFormat::Xlsx => args.given.iter().any(|k| *k != "null"),
             _ => !args.given.is_empty(),
         };
         if ignored {
@@ -1404,11 +1421,13 @@ impl App {
                 return;
             }
             Outcome::Exists { .. } => return,
-            Outcome::Done { rows, bytes, path, damaged } => {
+            Outcome::Done { rows, bytes, path, damaged, sheets } => {
                 let path = path.display().to_string();
                 let size = crate::text::human_bytes(bytes);
                 let m = if damaged > 0 {
                     Msg::ExportDoneDamaged { count: rows, path, size, damaged: damaged.to_string() }
+                } else if sheets > 1 {
+                    Msg::ExportDoneSheets { count: rows, path, size, sheets: sheets.to_string() }
                 } else {
                     Msg::ExportDone { count: rows, path, size }
                 };
@@ -1459,6 +1478,18 @@ impl App {
             Failure::Db(DbError::NotSupported) => self.i18n.label(Label::ExportWhyNotSupported).to_string(),
             Failure::Db(e) => self.db_error_text(e),
             Failure::Key => self.i18n.label(Label::ExportWhyKey).to_string(),
+            Failure::TooLong(t) => self
+                .i18n
+                .msg(&Msg::ExportWhyTooLong {
+                    column: t.column.clone(),
+                    row: t.row.to_string(),
+                    length: t.chars.to_string(),
+                })
+                .to_string(),
+            Failure::NotSaved(fault) => {
+                let error = self.fault_text("export.xlsx_not_saved", fault);
+                self.i18n.msg(&Msg::ExportWhyNotSaved { error }).to_string()
+            }
             Failure::Internal => self.i18n.label(Label::ExportWhyInternal).to_string(),
         }
     }
@@ -1492,6 +1523,9 @@ impl App {
     fn export_spec(&self, cols: &[usize], req: &ExportRequest, read_in: &ReadIn) -> Result<Spec, Notice> {
         let t = self.tab();
         let Results::Rows(rs) = &t.results else { return Err(Notice::new(Label::ExportNothing, Level::Warning)) };
+        if req.format == ExportFormat::Xlsx && cols.len() > xlsx::MAX_COLUMNS {
+            return Err(Notice::new(Msg::ExportTooWide { count: cols.len() as u64 }, Level::Warning));
+        }
         let d = self.tab_dialect(t.id);
         let metas: Vec<&ColumnMeta> = cols.iter().map(|&c| &rs.columns[c].meta).collect();
         let columns: Vec<(String, Kind)> = metas.iter().map(|m| (m.name.clone(), Kind::of_column(m))).collect();
@@ -1695,15 +1729,17 @@ fn write(
         _ => columns.clone(),
     };
     let format = match (&spec.format, &spec.sql) {
-        (ExportFormat::Csv, _) => core_export::Format::Delimited(spec.csv.clone()),
-        (ExportFormat::Tsv, _) => core_export::Format::Tsv { header: spec.csv.header },
-        (ExportFormat::Json, _) => core_export::Format::Json,
-        (ExportFormat::JsonPretty, _) => core_export::Format::JsonPretty,
-        (ExportFormat::JsonLines, _) => core_export::Format::JsonLines,
-        (ExportFormat::Markdown, _) => core_export::Format::Markdown,
-        (ExportFormat::Html, _) => core_export::Format::Html,
-        (ExportFormat::Xml, _) => core_export::Format::Xml,
-        (_, Some(SqlTarget::Insert { dialect, schema, name, written, overriding })) => core_export::Format::Sql(
+        // Not text: its own writer below.
+        (ExportFormat::Xlsx, _) => None,
+        (ExportFormat::Csv, _) => Some(core_export::Format::Delimited(spec.csv.clone())),
+        (ExportFormat::Tsv, _) => Some(core_export::Format::Tsv { header: spec.csv.header }),
+        (ExportFormat::Json, _) => Some(core_export::Format::Json),
+        (ExportFormat::JsonPretty, _) => Some(core_export::Format::JsonPretty),
+        (ExportFormat::JsonLines, _) => Some(core_export::Format::JsonLines),
+        (ExportFormat::Markdown, _) => Some(core_export::Format::Markdown),
+        (ExportFormat::Html, _) => Some(core_export::Format::Html),
+        (ExportFormat::Xml, _) => Some(core_export::Format::Xml),
+        (_, Some(SqlTarget::Insert { dialect, schema, name, written, overriding })) => Some(core_export::Format::Sql(
             *dialect,
             core_export::Target::Table {
                 schema,
@@ -1711,8 +1747,8 @@ fn write(
                 columns: written.iter().map(|(_, n)| n.as_str()).collect(),
                 overriding: *overriding,
             },
-        ),
-        (_, Some(SqlTarget::Update { dialect, schema, name, set, keys })) => core_export::Format::Update(
+        )),
+        (_, Some(SqlTarget::Update { dialect, schema, name, set, keys })) => Some(core_export::Format::Update(
             *dialect,
             core_export::UpdateTarget {
                 schema,
@@ -1720,31 +1756,63 @@ fn write(
                 set: set.iter().map(|(i, n)| (*i, n.as_str())).collect(),
                 keys: keys.iter().map(|(i, n)| (*i, n.as_str())).collect(),
             },
-        ),
+        )),
         (ExportFormat::SqlInsert | ExportFormat::SqlUpdate, None) => {
             drop(file);
             let _ = std::fs::remove_file(&partial);
             return failed(Failure::Internal, 0, None);
         }
     };
-    let mut w = TextWriter::new(format, &written, BufWriter::with_capacity(BUFFER, file)).trailing_newline(true);
     let mut progress = Progress { end, last: Instant::now() };
-    let io = |e: std::io::Error| Failure::Io(Fault::io_at(&e, &partial), partial.clone());
-    let stopped = match w.begin().map_err(io) {
-        Err(f) => Stopped::Failed(f),
-        Ok(()) => match source {
-            Source::Local(snap) => local_rows(&mut w, spec, &snap, ctl, &mut progress, &io),
-            Source::Db => db_rows(&mut w, spec, ctl, &mut progress, &io),
-        },
+    let io = |e: std::io::Error| match xlsx::TooLong::of(&e) {
+        Some(t) => Failure::TooLong(t.clone()),
+        None => Failure::Io(Fault::io_at(&e, &partial), partial.clone()),
     };
-    let rows = w.rows_written();
-    // The format is ended whatever stopped it: the rows so far make a file that reads.
-    let ended = w.end().map_err(io);
-    let (bytes, damaged) = (w.bytes(), w.damaged());
-    let ended = ended.and_then(|()| {
-        let file = w.into_inner().into_inner().map_err(|e| io(e.into_error()))?;
-        file.sync_all().map_err(io)
-    });
+    let out = BufWriter::with_capacity(BUFFER, file);
+    let (stopped, rows, ended, bytes, damaged, sheets) = match format {
+        Some(format) => {
+            let mut w = TextWriter::new(format, &written, out).trailing_newline(true);
+            let stopped = fill(&mut w, spec, source, ctl, &mut progress, &io);
+            let rows = w.rows_written();
+            // The format is ended whatever stopped it: the rows so far make a file that reads.
+            let ended = w.end().map_err(io);
+            let (bytes, damaged) = (w.bytes(), w.damaged());
+            let ended = ended.and_then(|()| {
+                let file = w.into_inner().into_inner().map_err(|e| io(e.into_error()))?;
+                file.sync_all().map_err(io)
+            });
+            (stopped, rows, ended, bytes, damaged, 1)
+        }
+        None => {
+            let Ok(w) = XlsxWriter::new(&written, out) else {
+                // Too many columns: refused before the export started (`export_spec`).
+                let _ = std::fs::remove_file(&partial);
+                return failed(Failure::Internal, 0, None);
+            };
+            let mut w = if spec.csv.null.is_empty() { w } else { w.null_text(&spec.csv.null) };
+            let stopped = fill(&mut w, spec, source, ctl, &mut progress, &io);
+            let rows = w.rows_written();
+            // The workbook of the rows so far is made whatever stopped them. One that cannot be
+            // made leaves nothing that reads: nothing is kept.
+            let not_saved = |e: std::io::Error| Failure::NotSaved(Fault::io_at(&e, &partial));
+            let sheets = w.sheets();
+            let ended = w.end().map_err(not_saved).and_then(|()| {
+                let file = w.into_inner().ok_or_else(|| not_saved(std::io::Error::other("no output")))?;
+                let file = file.into_inner().map_err(|e| not_saved(e.into_error()))?;
+                file.sync_all().map_err(not_saved)?;
+                file.metadata().map_err(not_saved)
+            });
+            let ended = match ended {
+                Ok(m) => m.len(),
+                Err(f) => {
+                    let _ = std::fs::remove_file(&partial);
+                    progress.tick(rows, 0, true);
+                    return failed(f, rows, None);
+                }
+            };
+            (stopped, rows, Ok(()), ended, 0, sheets)
+        }
+    };
     progress.tick(rows, bytes, true);
     let stopped = match (stopped, ended) {
         (Stopped::Done, Err(f)) => Stopped::Failed(f),
@@ -1771,7 +1839,7 @@ fn write(
                 datarig_core::fsutil::rename_new(&partial, &path)
             };
             match renamed {
-                Ok(()) => Outcome::Done { rows, bytes, path, damaged },
+                Ok(()) => Outcome::Done { rows, bytes, path, damaged, sheets },
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                     failed(Failure::TargetAppeared(path), rows, Some(partial.clone()))
                 }
@@ -1783,13 +1851,31 @@ fn write(
     }
 }
 
+/// Begin the file and write the rows of `source` into it.
+fn fill<S: RowSink>(
+    w: &mut S,
+    spec: &Spec,
+    source: Source,
+    ctl: &mut tokio::sync::mpsc::UnboundedReceiver<Ctl>,
+    progress: &mut Progress<'_>,
+    io: &dyn Fn(std::io::Error) -> Failure,
+) -> Stopped {
+    match w.begin().map_err(io) {
+        Err(f) => Stopped::Failed(f),
+        Ok(()) => match source {
+            Source::Local(snap) => local_rows(w, spec, &snap, ctl, progress, io),
+            Source::Db => db_rows(w, spec, ctl, progress, io),
+        },
+    }
+}
+
 fn failed(why: Failure, rows: u64, partial: Option<PathBuf>) -> Outcome {
     Outcome::Failed { why, rows, partial }
 }
 
 /// The rows of `snap`, a chunk at a time; a cancel stops them before the next chunk.
-fn local_rows<W: Write>(
-    w: &mut TextWriter<'_, W>,
+fn local_rows<S: RowSink>(
+    w: &mut S,
     spec: &Spec,
     snap: &RowsSnapshot,
     ctl: &mut tokio::sync::mpsc::UnboundedReceiver<Ctl>,
@@ -1836,8 +1922,8 @@ enum Next {
 /// The rows of the statements the app hands over, until it says the export is over. While a
 /// statement's rows come, word from the app is heard too: a session that never closes its end of
 /// the channel (a wedged driver, closed by the app) cannot keep the writer waiting.
-fn db_rows<W: Write>(
-    w: &mut TextWriter<'_, W>,
+fn db_rows<S: RowSink>(
+    w: &mut S,
     spec: &Spec,
     ctl: &mut tokio::sync::mpsc::UnboundedReceiver<Ctl>,
     progress: &mut Progress<'_>,
@@ -1920,8 +2006,8 @@ fn db_rows<W: Write>(
 
 /// Write `rows` of the source as `spec` says: the picked columns, SQL's values as its rules
 /// write them (a value that is not written whole fails the export, with its column).
-fn write_rows<W: Write>(
-    w: &mut TextWriter<'_, W>,
+fn write_rows<S: RowSink>(
+    w: &mut S,
     spec: &Spec,
     rows: &[Vec<Cell>],
     io: &dyn Fn(std::io::Error) -> Failure,

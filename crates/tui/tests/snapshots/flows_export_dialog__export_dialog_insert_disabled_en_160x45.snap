@@ -21,7 +21,7 @@ expression: s
 │                             │ │                                                                                              │ │                             │
 │                             │ │ CSV            .csv                                                                          │ │─────────────────────────────╯
 │                             │ │ TSV            .tsv                                                                          │ │─────────────────────────────╮
-│                             │ │ Excel (.xlsx)  coming in a later version                                                     │ │                             │
+│                             │ │ Excel (.xlsx)  .xlsx                                                                         │ │                             │
 │                             │ │ Parquet        coming in a later version                                                     │ │                             │
 │                             │ │ JSON           .json                                                                         │ │                             │
 │                             │ │ JSON Pretty    .json                                                                         │ │                             │
