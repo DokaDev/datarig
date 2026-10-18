@@ -683,7 +683,7 @@ async fn statement<'a>(
     // commits implicitly (it would end it at once) nor for transaction control of the user's.
     if step.opens && !s.tx.open && !risk.implicit_commit && risk.class != Class::Tx {
         if let Err(e) = halt!(link.guard(None, conn.query_drop(START)).await, Some(reply)) {
-            return failed(conn, link, env, s, reply, &e, false).await;
+            return failed(conn, link, env, s, reply, &e, false, false).await;
         }
         s.tracked.update(conn);
         let flags = conn.last_ok_packet().map(|p| p.status_flags());
@@ -730,7 +730,7 @@ async fn statement<'a>(
     if limit_applies(sql, s.mode) && wanted != s.limit.current && !skip {
         let set = format!("SET SESSION sql_select_limit = {}", wanted.map_or("DEFAULT".to_string(), |n| n.to_string()));
         if let Err(e) = halt!(link.guard(None, conn.query_drop(set)).await, Some(reply)) {
-            return failed(conn, link, env, s, reply, &e, false).await;
+            return failed(conn, link, env, s, reply, &e, false, false).await;
         }
         s.tracked.update(conn);
         s.tracked.select_limit = None;
@@ -739,7 +739,7 @@ async fn statement<'a>(
     if let Some(u) = &undo
         && let Err(e) = halt!(link.guard(None, conn.query_drop(u.before.clone())).await, Some(reply))
     {
-        return failed(conn, link, env, s, reply, &e, false).await;
+        return failed(conn, link, env, s, reply, &e, false, false).await;
     }
     let was_open = s.tx.open;
     env.busy.store(true, Ordering::SeqCst);
@@ -751,7 +751,7 @@ async fn statement<'a>(
             if let Some(u) = &undo {
                 halt!(undone(conn, link, u).await, Some(reply));
             }
-            return failed(conn, link, env, s, reply, &e, was_open).await;
+            return failed(conn, link, env, s, reply, &e, was_open, risk.implicit_commit).await;
         }
     };
     let got = match qr.columns().filter(|c| !c.is_empty()) {
@@ -763,7 +763,7 @@ async fn statement<'a>(
                 Ok(sets) => info.more_results += sets,
                 Err(e) => {
                     drop(qr);
-                    return failed(conn, link, env, s, reply, &e, was_open).await;
+                    return failed(conn, link, env, s, reply, &e, was_open, risk.implicit_commit).await;
                 }
             }
             Got::Done { outcome, info }
@@ -800,7 +800,7 @@ async fn statement<'a>(
                     }
                     Err(e) => {
                         drop(qr);
-                        return failed(conn, link, env, s, reply, &e, was_open).await;
+                        return failed(conn, link, env, s, reply, &e, was_open, risk.implicit_commit).await;
                     }
                 }
             }
@@ -809,7 +809,7 @@ async fn statement<'a>(
                 Ok(sets) => info.more_results += sets,
                 Err(e) => {
                     drop(qr);
-                    return failed(conn, link, env, s, reply, &e, was_open).await;
+                    return failed(conn, link, env, s, reply, &e, was_open, risk.implicit_commit).await;
                 }
             }
             Got::Done { outcome: Outcome::Command(command_tag(sql, s.mode).0), info }
@@ -828,7 +828,7 @@ async fn statement<'a>(
                     }
                     Err(e) => {
                         drop(qr);
-                        return failed(conn, link, env, s, reply, &e, was_open).await;
+                        return failed(conn, link, env, s, reply, &e, was_open, risk.implicit_commit).await;
                     }
                 }
             }
@@ -841,7 +841,7 @@ async fn statement<'a>(
                     Ok(read) => read,
                     Err(e) => {
                         drop(qr);
-                        return failed(conn, link, env, s, reply, &e, was_open).await;
+                        return failed(conn, link, env, s, reply, &e, was_open, risk.implicit_commit).await;
                     }
                 }
             };
@@ -880,7 +880,7 @@ async fn statement<'a>(
                     Ok(_) => {}
                     Err(e) => {
                         drop(qr);
-                        return failed(conn, link, env, s, reply, &e, was_open).await;
+                        return failed(conn, link, env, s, reply, &e, was_open, risk.implicit_commit).await;
                     }
                 }
             }
@@ -889,7 +889,7 @@ async fn statement<'a>(
                 Ok(sets) => info.more_results += sets,
                 Err(e) => {
                     drop(qr);
-                    return failed(conn, link, env, s, reply, &e, was_open).await;
+                    return failed(conn, link, env, s, reply, &e, was_open, risk.implicit_commit).await;
                 }
             }
             Got::Rows { columns, page, more, info }
@@ -953,6 +953,7 @@ async fn failed<'a>(
     reply: Reply<'a>,
     e: &mysql_async::Error,
     was_open: bool,
+    implicit_commit: bool,
 ) -> Result<Option<(Reply<'a>, Outcome)>, Halted<'a>> {
     idle(env, link).await;
     if e.is_fatal() {
@@ -964,7 +965,7 @@ async fn failed<'a>(
     let cancelled = failure(e).1;
     // Without autocommit the failed statement may have opened a transaction: asked too.
     let ask = was_open || cancelled || !s.tx.autocommit;
-    if let Some(error) = halt!(after(conn, link, env, s, "", false, ask, false).await, None) {
+    if let Some(error) = halt!(after(conn, link, env, s, "", implicit_commit, ask, false).await, None) {
         return Err(Halted { stop: Stop::Lost(error), reply: None });
     }
     Ok(None)
@@ -1052,12 +1053,13 @@ async fn after(
         // The server ended the transaction the UI knows open: a statement committed it
         // implicitly, or a failure rolled all of it back (a deadlock).
         if s.tx.reported && was_open && (!open || chained) {
-            let how = if !ok && !open {
-                Some(ServerEnd::RolledBack)
-            } else if ok && implicit_commit {
-                Some(ServerEnd::Committed)
-            } else {
-                None
+            // A statement that commits implicitly does so before it runs: failed or not, what the
+            // transaction did was kept. A procedure that failed may have committed it itself.
+            let how = match (ok, open) {
+                (_, _) if implicit_commit => Some(ServerEnd::Committed),
+                (false, false) if routine => Some(ServerEnd::Unknown),
+                (false, false) => Some(ServerEnd::RolledBack),
+                _ => None,
             };
             if let Some(how) = how {
                 let _ = env.events.send(DbEvent::TxClosedBy { id: s.request, how });
