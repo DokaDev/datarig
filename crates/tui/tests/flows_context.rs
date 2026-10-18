@@ -171,7 +171,9 @@ fn use_switches_the_tab_and_asks_first_with_a_transaction_open() {
     h.command("use .shop");
     assert_eq!(h.overlay_kind(), Some(OverlayKind::Confirm), "an open transaction asks");
     let screen = h.screen(120, 40);
-    assert!(screen.contains("Change this tab's database or schema?") && screen.contains("n / Enter keep"), "{screen}");
+    assert!(screen.contains("Change this tab's database or schema?") && screen.contains("Enter/n stay"), "{screen}");
+    // The transaction can be committed or rolled back first.
+    assert!(screen.contains("Roll back first") && screen.contains("Commit first"), "{screen}");
     // Enter keeps (Cancel is the default).
     h.key(KeyCode::Enter);
     assert_eq!(h.overlay_kind(), None);

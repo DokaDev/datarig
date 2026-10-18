@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/flows_tx_lifecycle.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 ×  2 console 2 ◆ ×                         "
+"│  ＋ New connection   │╭ Query · console 2 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1       ││ local-pg / datarig  127.0.0.1:55432 · stg            │"
+"│  ▾ ●   local-pg ◆    ││  1▎UPDATE shop.users SET name = 'x' WHERE id < 4     │"
+"│    ▾ datarig default ││                                                      │"
+"│      ▸ public        ││                                                      │"
+"│      ▸ shop          ││                                                      │"
+"│ ╭ Close this tab? ─────────────────────────────────────────────────────────╮ │"
+"│▾│                                                                          │ │"
+"│ │ A transaction is open in this tab. Closing it rolls the transaction      │─╯"
+"│ │ back; its uncommitted changes are lost.                                  │─╮"
+"│ │ 1 change (3 rows) uncommitted for 0:00                                   │ │"
+"│ │                                                                          │s│"
+"│ │      [ Keep ]     Roll back first       Commit first       Close         │ │"
+"│ ╰───────────── c commit first · r roll back first · y go on · Enter/n stay ╯ │"
+"│                      ││   r)                                                 │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" NORMAL  local-pg · stg │ TX open · 1 change · 3 rows · 0:00 │ 3 rows… · 3ms EN "

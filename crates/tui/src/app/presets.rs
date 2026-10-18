@@ -307,6 +307,7 @@ impl App {
             action: ConfirmAction::DeleteTunnel(id),
             folder: None,
             path: None,
+            tx: None,
             buttons: Default::default(),
         }));
     }

@@ -679,8 +679,32 @@ fn the_summary_and_the_menus() {
     write(&mut h, "UPDATE shop.users SET name = 'x' WHERE id < 4", 3, true);
     h.advance(Duration::from_secs(75));
     h.keys(" xs");
-    let summary = Msg::TxSummary { how: "manual commit".into(), count: 1, rows: "3 rows".into(), time: "1:15".into() };
-    assert_eq!(status(&h), Some(summary));
+    // The summary: what it did, for how long, the keys.
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::TxSummary));
+    let screen = h.screen(100, 30);
+    for want in [
+        "Open transaction (manual commit)",
+        "UPDATE shop.users SET name = 'x' WHERE id < 4",
+        "1 change · 3 rows · open 1:15 · idle 1:15",
+        "c commit · r roll back · j/k scroll · Esc close",
+    ] {
+        assert!(screen.contains(want), "{want}: {screen}");
+    }
+    insta::assert_snapshot!("manual_tx_summary_en_80x24", h.draw(80, 24).backend());
+    insta::assert_snapshot!("manual_tx_summary_en_160x45", h.draw(160, 45).backend());
+    h.key(KeyCode::Esc);
+    assert_eq!(h.overlay_kind(), None);
+    assert!(ends(&mut h).is_empty(), "Esc only closes it");
+    // :tx opens it too; its r rolls back (and closes it).
+    h.command("tx");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::TxSummary));
+    h.keys("r");
+    assert_eq!(h.overlay_kind(), None);
+    let (id, commit) = ends(&mut h)[0];
+    assert!(!commit);
+    h.tab_db(0, DbEvent::TxEnded { id, outcome: TxOutcome::RolledBack });
+    end_block(&mut h);
+    write(&mut h, "UPDATE shop.users SET name = 'x' WHERE id < 4", 3, true);
     // The tab's menu has them while a transaction is open.
     h.draw(160, 45);
     h.app.dispatch(Action::TabMenu);

@@ -64,6 +64,7 @@ pub(crate) fn draw_status(app: &mut App, area: Rect, buf: &mut Buffer) {
     // The open transaction: what it did and how long it has been open, or that it failed.
     let tx = exec.user_tx().then(|| match app.tx_status() {
         _ if exec.tx_aborted => (app.i18n.label(Label::StatusTxAborted).to_string(), th.error),
+        Some(text) if crate::app::App::tx_idle_warned(app.tab()) => (text, th.error),
         Some(text) => (text, th.accent_warm),
         None => (app.i18n.label(Label::StatusTxOpen).to_string(), th.accent_warm),
     });

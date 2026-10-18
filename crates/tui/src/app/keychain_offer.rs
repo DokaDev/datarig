@@ -106,6 +106,7 @@ impl App {
             action: ConfirmAction::KeychainOffer,
             folder: None,
             path: None,
+            tx: None,
             buttons: Default::default(),
         }));
     }

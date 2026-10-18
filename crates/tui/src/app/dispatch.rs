@@ -318,8 +318,13 @@ impl App {
             action: ConfirmAction::Quit,
             folder: None,
             path: None,
+            tx: None,
             buttons: Default::default(),
         }));
+        // An open transaction is all there is to lose: commit or roll back first.
+        if text == Label::QuitTx {
+            self.offer_tx_choices();
+        }
     }
 
     /// Keys of a yes/no confirmation.
@@ -374,44 +379,13 @@ impl App {
         match code {
             KeyCode::Char('y') | KeyCode::Enter if !repeat => {
                 self.overlays.close(OverlayKind::Confirm);
-                match action {
-                    ConfirmAction::Quit => self.quit_anyway(),
-                    ConfirmAction::ChangeSource => self.source_change_answered(true),
-                    ConfirmAction::CloseTab(id) => self.close_tab(id),
-                    ConfirmAction::Disconnect { id, reconnect } => self.disconnect(id, reconnect),
-                    ConfirmAction::DeleteProfile(id) => self.delete_profile(id),
-                    ConfirmAction::DeleteFolder => {
-                        if let Some(f) = folder {
-                            self.delete_folder(f);
-                        }
-                    }
-                    ConfirmAction::SetConnection(tab) => self.open_quick(QuickPurpose::Bind { tab, run: None }),
-                    ConfirmAction::SetContext(tab) => match self.pending_context.take() {
-                        Some((t, ctx)) if t == tab => self.set_context(tab, ctx),
-                        _ => self.open_context_picker(tab),
-                    },
-                    ConfirmAction::DeleteScript => {
-                        if let Some(p) = path {
-                            self.delete_script(&p);
-                        }
-                    }
-                    ConfirmAction::DeleteScriptFolder => {
-                        if let Some(p) = path {
-                            self.delete_script_folder(&p);
-                        }
-                    }
-                    ConfirmAction::Copy => self.copy_confirmed(),
-                    ConfirmAction::FetchThenCopy => self.fetch_then_copy(),
-                    ConfirmAction::OverwriteScript => self.overwrite_confirmed(),
-                    ConfirmAction::TrustHostKey => self.host_key_answered(true),
-                    ConfirmAction::DeleteTunnel(id) => self.delete_tunnel(id),
-                    ConfirmAction::DeleteEnvironment(id) => self.delete_environment(id),
-                    ConfirmAction::ExplainAgain => self.explain_as_plan_confirmed(),
-                    ConfirmAction::KeychainSecurityTool => self.keychain_access_changed(KeychainAccess::SecurityTool),
-                    ConfirmAction::ExportStart => self.export_answered(true, false),
-                    ConfirmAction::ExportReplace => self.export_answered(true, true),
-                    ConfirmAction::ScriptConflict(_) | ConfirmAction::KeychainOffer => {}
-                }
+                self.confirmed(action, folder, path);
+            }
+            // Roll back, or commit, the open transactions the answer ends first.
+            KeyCode::Char(c @ ('r' | 'c'))
+                if !repeat && self.overlays.confirm().is_some_and(|q| q.tx.is_some_and(|t| c == 'r' || t.commit)) =>
+            {
+                self.tx_choice(c == 'c')
             }
             KeyCode::Char('n') | KeyCode::Esc if keeps => self.confirm_kept(),
             KeyCode::Char('n') | KeyCode::Esc => {
@@ -436,6 +410,53 @@ impl App {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// What a yes to the question of `action` does (`folder`, `path`: what it is about).
+    pub(super) fn confirmed(
+        &mut self,
+        action: ConfirmAction,
+        folder: Option<datarig_core::profile::folder::FolderPath>,
+        path: Option<String>,
+    ) {
+        match action {
+            ConfirmAction::Quit => self.quit_anyway(),
+            ConfirmAction::ChangeSource => self.source_change_answered(true),
+            ConfirmAction::CloseTab(id) => self.close_tab(id),
+            ConfirmAction::Disconnect { id, reconnect } => self.disconnect(id, reconnect),
+            ConfirmAction::DeleteProfile(id) => self.delete_profile(id),
+            ConfirmAction::DeleteFolder => {
+                if let Some(f) = folder {
+                    self.delete_folder(f);
+                }
+            }
+            ConfirmAction::SetConnection(tab) => self.open_quick(QuickPurpose::Bind { tab, run: None }),
+            ConfirmAction::SetContext(tab) => match self.pending_context.take() {
+                Some((t, ctx)) if t == tab => self.set_context(tab, ctx),
+                _ => self.open_context_picker(tab),
+            },
+            ConfirmAction::DeleteScript => {
+                if let Some(p) = path {
+                    self.delete_script(&p);
+                }
+            }
+            ConfirmAction::DeleteScriptFolder => {
+                if let Some(p) = path {
+                    self.delete_script_folder(&p);
+                }
+            }
+            ConfirmAction::Copy => self.copy_confirmed(),
+            ConfirmAction::FetchThenCopy => self.fetch_then_copy(),
+            ConfirmAction::OverwriteScript => self.overwrite_confirmed(),
+            ConfirmAction::TrustHostKey => self.host_key_answered(true),
+            ConfirmAction::DeleteTunnel(id) => self.delete_tunnel(id),
+            ConfirmAction::DeleteEnvironment(id) => self.delete_environment(id),
+            ConfirmAction::ExplainAgain => self.explain_as_plan_confirmed(),
+            ConfirmAction::KeychainSecurityTool => self.keychain_access_changed(KeychainAccess::SecurityTool),
+            ConfirmAction::ExportStart => self.export_answered(true, false),
+            ConfirmAction::ExportReplace => self.export_answered(true, true),
+            ConfirmAction::ScriptConflict(_) | ConfirmAction::KeychainOffer => {}
         }
     }
 

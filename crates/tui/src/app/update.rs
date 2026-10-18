@@ -148,7 +148,11 @@ impl App {
         if self.overlays.top().is_some_and(|o| {
             matches!(
                 o.kind(),
-                OverlayKind::Busy | OverlayKind::Confirm | OverlayKind::RunConfirm | OverlayKind::IconsAsk
+                OverlayKind::Busy
+                    | OverlayKind::Confirm
+                    | OverlayKind::RunConfirm
+                    | OverlayKind::TxSummary
+                    | OverlayKind::IconsAsk
             )
         }) {
             return;
@@ -306,6 +310,7 @@ impl App {
             Ctx::ContextMenu => keys.iter().for_each(|k| self.menu_key(*k, repeat)),
             Ctx::Confirm => keys.iter().for_each(|k| self.confirm_key(k.to_event(), repeat)),
             Ctx::RunConfirm => keys.iter().for_each(|k| self.run_confirm_key(k.to_event(), repeat)),
+            Ctx::TxSummary => keys.iter().for_each(|k| self.tx_summary_key(k.to_event(), repeat)),
             Ctx::IconsAsk => keys.iter().for_each(|k| self.icons_ask_key(k.to_event(), repeat)),
             Ctx::ProfileForm => keys.iter().for_each(|k| self.form_key(k.to_event(), repeat)),
             Ctx::Settings => keys.iter().for_each(|k| self.settings_key(k.to_event(), repeat)),

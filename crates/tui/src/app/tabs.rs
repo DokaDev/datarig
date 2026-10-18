@@ -288,6 +288,9 @@ pub struct TabSession {
     pub closing: Option<bool>,
     /// A commit or a rollback asked for (`DbCommand::EndTx`) that has not been answered.
     pub ending: Option<super::tx::Ending>,
+    /// How the last one asked for ended: as asked (`true`: committed, rolled back), or not (a
+    /// failure, a rollback instead of a commit).
+    pub last_end: Option<bool>,
     /// The session runs without autocommit (the user's `SET autocommit = 0`, MySQL:
     /// `DbEvent::Autocommit`).
     pub autocommit_off: bool,
@@ -359,6 +362,7 @@ impl TabSession {
             booked: (0, 0),
             closing: None,
             ending: None,
+            last_end: None,
             autocommit_off: false,
             sent_manual: false,
             outside_offer: None,

@@ -210,6 +210,7 @@ impl App {
             action: ConfirmAction::ScriptConflict(id),
             folder: None,
             path: None,
+            tx: None,
             buttons: Default::default(),
         }));
     }
@@ -439,6 +440,7 @@ impl App {
             action: ConfirmAction::DeleteScript,
             folder: None,
             path: Some(path),
+            tx: None,
             buttons: Default::default(),
         }));
     }
@@ -461,6 +463,7 @@ impl App {
             action: ConfirmAction::DeleteScriptFolder,
             folder: None,
             path: Some(path),
+            tx: None,
             buttons: Default::default(),
         }));
     }

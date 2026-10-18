@@ -2017,3 +2017,27 @@
 "safety.why_outside_tx" = "runs outside a transaction, at once: can't be rolled back"
 "safety.why_commits_itself" = "commits by itself: runs outside, at once; can't be rolled back"
 "safety.why_implicit_commit" = { one = "first commits the open transaction: {count} statement ({rows})", other = "first commits the open transaction: {count} statements ({rows})" }
+
+# The open transaction's lifecycle
+"tx.button.rollback" = "Roll back first"
+"tx.button.commit" = "Commit first"
+"tx.choice_keys" = "c commit first · r roll back first · y go on · Enter/n stay"
+"tx.choice_keys_rollback" = "r roll back first · y go on · Enter/n stay"
+"tx.pending" = { one = "{count} change ({rows}) uncommitted for {time}", other = "{count} changes ({rows}) uncommitted for {time}" }
+"tx.pending_tab" = { one = "Tab {tab}: {count} change ({rows}) uncommitted for {time}", other = "Tab {tab}: {count} changes ({rows}) uncommitted for {time}" }
+"tx.end_stopped" = "Stopped at tab {tab}: its transaction did not end as asked, so nothing else was done (that tab says why)"
+"status.tx_idle" = "idle {time}"
+"status.tx_holding_locks" = "holding locks"
+"tx.idle_warning" = "Tab {tab}: the open transaction has been idle for {time} and holds its locks: commit ({commit}) or roll back ({rollback})"
+"keyctx.overlay.tx_summary" = "Transaction summary"
+"tx.button.rollback_now" = "Roll back"
+"tx.button.commit_now" = "Commit"
+"tx.summary_title" = "Open transaction ({how})"
+"tx.summary_keys" = "c commit · r roll back · j/k scroll · Esc close"
+"tx.summary_keys_rollback" = "r roll back · j/k scroll · Esc close"
+"tx.summary_empty" = "Nothing that may write has run in it yet"
+"tx.summary_footer" = { one = "{count} change · {rows} · open {time} · idle {idle}", other = "{count} changes · {rows} · open {time} · idle {idle}" }
+"tx.rule_changed" = "The commit rule changed: the open transaction stays open until you commit or roll back"
+"tx.ddl_lock_exclusive" = "Statement {step} holds an ACCESS EXCLUSIVE lock on {target} until you commit or roll back: other sessions' reads of it wait"
+"tx.ddl_lock_share" = "Statement {step} holds a SHARE lock on {target} until you commit or roll back: other sessions' writes to it wait"
+"tx.call_in_tx" = "If this procedure commits by itself, it can't run in the open transaction: commit or roll back first, then run it again"

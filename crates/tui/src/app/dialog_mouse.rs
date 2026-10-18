@@ -55,6 +55,7 @@ impl App {
             OverlayKind::ProfileForm => self.form_mouse(m),
             OverlayKind::Confirm => self.confirm_mouse(m),
             OverlayKind::RunConfirm => self.run_confirm_mouse(m),
+            OverlayKind::TxSummary => self.tx_summary_mouse(m),
             OverlayKind::IconsAsk => self.icons_ask_mouse(m),
             OverlayKind::Password => self.prompt_mouse(m),
             OverlayKind::NameInput => self.name_mouse(m),
@@ -98,6 +99,7 @@ impl App {
             Some(OverlayKind::ProfileForm) => self.form_hover(m),
             Some(OverlayKind::Confirm) => self.overlays.confirm_mut().is_some_and(|c| c.buttons.hover(x, y)),
             Some(OverlayKind::RunConfirm) => self.overlays.run_confirm_mut().is_some_and(|c| c.buttons.hover(x, y)),
+            Some(OverlayKind::TxSummary) => self.overlays.tx_summary_mut().is_some_and(|s| s.buttons.hover(x, y)),
             Some(OverlayKind::IconsAsk) => self.overlays.icons_ask_mut().is_some_and(|q| q.buttons.hover(x, y)),
             Some(OverlayKind::Password) => self.overlays.prompt_mut().is_some_and(|p| p.buttons.hover(x, y)),
             Some(OverlayKind::NameInput) => self.overlays.name_input_mut().is_some_and(|n| n.buttons.hover(x, y)),
@@ -204,6 +206,17 @@ impl App {
         let Some(c) = self.overlays.run_confirm_mut() else { return };
         let Some(i) = c.buttons.press(m.kind, m.column, m.row, now) else { return };
         self.run_confirm_key(press(if i == 1 { KeyCode::Char('y') } else { KeyCode::Char('n') }), false);
+    }
+
+    /// A button of the transaction summary does what its key does.
+    fn tx_summary_mouse(&mut self, m: MouseEvent) {
+        let now = self.now();
+        let keys = self.tx_summary_buttons().into_iter().map(|b| b.1).collect::<Vec<_>>();
+        let Some(s) = self.overlays.tx_summary_mut() else { return };
+        let Some(i) = s.buttons.press(m.kind, m.column, m.row, now) else { return };
+        if let Some(code) = keys.get(i) {
+            self.tx_summary_key(press(*code), false);
+        }
     }
 
     /// Yes or No answers the icons question.

@@ -177,7 +177,18 @@ pub struct Confirm {
     pub folder: Option<FolderPath>,
     /// The saved query or folder the action is about.
     pub path: Option<String>,
+    /// The answer ends open transactions that can be ended first: `r` rolls them back, `c`
+    /// commits them, then the answer goes on (only once the server confirmed each).
+    pub tx: Option<TxChoices>,
     pub buttons: Buttons,
+}
+
+/// What a question whose answer ends open transactions offers besides yes and no
+/// ([`Confirm::tx`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TxChoices {
+    /// `c` too: none of them failed (a failed one can only be rolled back).
+    pub commit: bool,
 }
 
 impl Confirm {
@@ -228,6 +239,15 @@ impl Confirm {
             ConfirmAction::ExportStart => (Label::DialogButtonCancel, Label::DialogButtonExport),
             ConfirmAction::ExportReplace => (Label::DialogButtonKeep, Label::DialogButtonReplace),
         };
+        // Roll back first, commit first, then go on anyway (the server rolls back); Enter stays.
+        if let Some(tx) = self.tx {
+            let mut b = vec![(no, KeyCode::Char('n')), (Label::TxButtonRollback, KeyCode::Char('r'))];
+            if tx.commit {
+                b.push((Label::TxButtonCommit, KeyCode::Char('c')));
+            }
+            b.push((yes, KeyCode::Char('y')));
+            return (b, Some(0));
+        }
         // `Enter` says yes only to a copy (see `App::confirm_key`).
         let enter = if matches!(self.action, ConfirmAction::Copy | ConfirmAction::FetchThenCopy) { 1 } else { 0 };
         (vec![(no, KeyCode::Char('n')), (yes, KeyCode::Char('y'))], Some(enter))
@@ -262,6 +282,16 @@ pub struct RunConfirm {
     /// itself): only on the tab's session `generation`, still open.
     pub as_is: bool,
     pub generation: u64,
+    pub buttons: Buttons,
+}
+
+/// What tab `tab`'s open transaction did (`Space x s`, `:tx`): its statements that may have
+/// written, oldest first, with their rows and time, how long it has been open and idle. `c`
+/// commits, `r` rolls back, `Esc` (or `q`, `Enter`) closes; `j`/`k` scroll.
+pub struct TxSummary {
+    pub tab: super::TabId,
+    /// The first line of the list on screen.
+    pub scroll: usize,
     pub buttons: Buttons,
 }
 
@@ -303,6 +333,8 @@ pub enum Overlay {
     Confirm(Confirm),
     /// Run statements that may do harm?
     RunConfirm(RunConfirm),
+    /// What the open transaction did.
+    TxSummary(TxSummary),
     /// Do the Nerd Font icons show correctly? (asked once)
     IconsAsk(IconsAsk),
     /// Background work the user waits for.
@@ -330,6 +362,7 @@ pub enum OverlayKind {
     Picker,
     Confirm,
     RunConfirm,
+    TxSummary,
     IconsAsk,
     Busy,
     Password,
@@ -354,6 +387,7 @@ impl Overlay {
             Overlay::Picker(_) => OverlayKind::Picker,
             Overlay::Confirm(_) => OverlayKind::Confirm,
             Overlay::RunConfirm(_) => OverlayKind::RunConfirm,
+            Overlay::TxSummary(_) => OverlayKind::TxSummary,
             Overlay::IconsAsk(_) => OverlayKind::IconsAsk,
             Overlay::Busy(_) => OverlayKind::Busy,
             Overlay::Password(_) => OverlayKind::Password,
@@ -401,6 +435,7 @@ impl Overlays {
         match self.0.last_mut() {
             Some(Overlay::Confirm(c)) => c.buttons.press = Press::default(),
             Some(Overlay::RunConfirm(c)) => c.buttons.press = Press::default(),
+            Some(Overlay::TxSummary(s)) => s.buttons.press = Press::default(),
             Some(Overlay::IconsAsk(q)) => q.buttons.press = Press::default(),
             Some(Overlay::Password(p)) => p.buttons.press = Press::default(),
             Some(Overlay::NameInput(n)) => n.buttons.press = Press::default(),
@@ -588,6 +623,14 @@ impl Overlays {
 
     pub fn run_confirm_mut(&mut self) -> Option<&mut RunConfirm> {
         self.0.iter_mut().find_map(|o| if let Overlay::RunConfirm(c) = o { Some(c) } else { None })
+    }
+
+    pub fn tx_summary(&self) -> Option<&TxSummary> {
+        self.0.iter().find_map(|o| if let Overlay::TxSummary(s) = o { Some(s) } else { None })
+    }
+
+    pub fn tx_summary_mut(&mut self) -> Option<&mut TxSummary> {
+        self.0.iter_mut().find_map(|o| if let Overlay::TxSummary(s) = o { Some(s) } else { None })
     }
 
     pub fn viewer(&self) -> Option<&Viewer> {

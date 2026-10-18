@@ -60,6 +60,7 @@ pub enum Ctx {
     Password,
     Confirm,
     RunConfirm,
+    TxSummary,
     IconsAsk,
     Busy,
     CellViewer,
@@ -70,7 +71,7 @@ pub enum Ctx {
 }
 
 impl Ctx {
-    pub const ALL: [Ctx; 38] = [
+    pub const ALL: [Ctx; 39] = [
         Ctx::Root,
         Ctx::Workspace,
         Ctx::Nav,
@@ -102,6 +103,7 @@ impl Ctx {
         Ctx::Password,
         Ctx::Confirm,
         Ctx::RunConfirm,
+        Ctx::TxSummary,
         Ctx::IconsAsk,
         Ctx::Busy,
         Ctx::CellViewer,
@@ -145,6 +147,7 @@ impl Ctx {
             Ctx::Password => "overlay.password",
             Ctx::Confirm => "overlay.confirm",
             Ctx::RunConfirm => "overlay.run_confirm",
+            Ctx::TxSummary => "overlay.tx_summary",
             Ctx::IconsAsk => "overlay.icons_ask",
             Ctx::Busy => "overlay.busy",
             Ctx::CellViewer => "overlay.cell_viewer",
@@ -279,6 +282,9 @@ impl Ctx {
             Ctx::RunConfirm => {
                 "Before statements that may do harm run: each is listed; Cancel has the focus, `y` or Enter on Run runs them, as a click on Run does (the pointer does not move the focus)."
             }
+            Ctx::TxSummary => {
+                "What the open transaction did (its statements that may have written, rows, time; how long it has been open and idle): `c` commits, `r` rolls back, `Esc` closes; a click on a button does what its key does."
+            }
             Ctx::IconsAsk => {
                 "Whether the terminal shows the Nerd Font icons (asked once, with a preview); No has the focus; a click on Yes or No answers."
             }
@@ -329,6 +335,7 @@ impl Ctx {
             Ctx::Password => Label::KeyctxOverlayPassword,
             Ctx::Confirm => Label::KeyctxOverlayConfirm,
             Ctx::RunConfirm => Label::KeyctxOverlayRunConfirm,
+            Ctx::TxSummary => Label::KeyctxOverlayTxSummary,
             Ctx::IconsAsk => Label::KeyctxOverlayIconsAsk,
             Ctx::Busy => Label::KeyctxOverlayBusy,
             Ctx::CellViewer => Label::KeyctxOverlayCellViewer,
