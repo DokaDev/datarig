@@ -1102,7 +1102,11 @@ impl App {
             // The server ended the open transaction by itself during the run (MySQL: a deadlock,
             // an implicit commit, a procedure that failed).
             DbEvent::TxClosedBy { how, .. } => {
-                t.book_tx();
+                // During an export (which reads, and is no run's statement) the run's log is
+                // booked already.
+                if t.exec.running.is_none_or(|r| !r.export) {
+                    t.book_tx();
+                }
                 let count = t.exec.tx.as_ref().map_or(0, |x| x.changes);
                 let step = (t.exec.run.current().or_else(|| t.ending_statement()).unwrap_or(0) + 1).to_string();
                 let (m, rolled_back) = match how {
