@@ -82,8 +82,10 @@ pub enum DbError {
     /// in a transaction block (SQLSTATE `25001`: `VACUUM`, `CREATE INDEX CONCURRENTLY`, `CREATE
     /// DATABASE`, …) or a procedure's transaction control (`2D000`, a `COMMIT` in a `CALL`), in a
     /// transaction the driver opened only to set the session's search path (a session whose
-    /// server ignored the path given at connect, a pooler: [`DbEvent::ContextPerTransaction`]).
-    /// The server's message. The same failure in the user's own block is a plain `Server`.
+    /// server ignored the path given at connect, a pooler: [`DbEvent::ContextPerTransaction`]),
+    /// or one it opened right before the statement for manual commit ([`TxRule::Manual`], rolled
+    /// back since: [`DbEvent::ManualRolledBack`]). The server's message. The same failure in the
+    /// user's own block is a plain `Server`.
     NeedsNoTransaction(String),
     /// A statement the app was to run again or count for the user (`Count`, `Resume`) is not
     /// on the allowlist of `sql::risk::repeat`, as the text says or as the server told when it
@@ -157,6 +159,25 @@ pub enum DbError {
     /// what it does); the user's open transaction is rolled back once the server ends the
     /// session.
     CancelNotTaken(CancelFailure),
+    /// [`DbCommand::EndTx`] found no transaction block open on the session: nothing was sent.
+    NoTransaction,
+    /// The connection ended while a `COMMIT` ([`DbCommand::EndTx`] with `commit`) was on its
+    /// way or being carried out: whether the server committed is not known (a server may commit
+    /// and lose the connection before it answers). [`DbEvent::Lost`] follows with why.
+    CommitUnknown,
+    /// The server ended the session because its transaction stayed idle longer than
+    /// `idle_in_transaction_session_timeout` (PostgreSQL's SQLSTATE `25P03`; the limit may be
+    /// the server's own or the one [`TxRule::Manual`] set for the transaction): the server rolled
+    /// the transaction back. The server's message. Comes as [`DbEvent::Lost`]'s reason.
+    IdleInTransactionTimeout(String),
+    /// A statement in a transaction opened for manual commit names a savepoint whose name starts
+    /// with `datarig_` (`SAVEPOINT`, `RELEASE`, `ROLLBACK TO`): those are the session's own, and
+    /// using one would break how it undoes a failed run. It was not sent.
+    ReservedSavepoint,
+    /// A statement sent as a plain read ([`TxStep::ReadOnly`]) asks for a read-write transaction
+    /// or turns read-only off (`SET TRANSACTION READ WRITE`, `set_config()` of it, …), as the
+    /// driver's own check reads it: it was not sent. Send it as [`TxStep::Open`] instead.
+    NotAPlainRead,
 }
 
 /// Why a request to stop the running statement did not stop it ([`DbError::CancelNotTaken`]).
@@ -187,7 +208,9 @@ impl DbError {
     /// log only.
     pub fn raw(&self) -> Cow<'_, str> {
         match self {
-            DbError::Server(s) | DbError::NeedsNoTransaction(s) => Cow::Borrowed(s),
+            DbError::Server(s) | DbError::NeedsNoTransaction(s) | DbError::IdleInTransactionTimeout(s) => {
+                Cow::Borrowed(s)
+            }
             DbError::Settings(f) | DbError::Connection(f) => Cow::Borrowed(&f.detail),
             DbError::Transport(e) => Cow::Borrowed(e.raw()),
             DbError::CancelNotTaken(CancelFailure::NotSent(why)) => why.raw(),
@@ -222,6 +245,10 @@ impl DbError {
             | DbError::PasswordTooLong { .. }
             | DbError::ServerKeyInvalid
             | DbError::ReadOnlyLost
+            | DbError::NoTransaction
+            | DbError::CommitUnknown
+            | DbError::ReservedSavepoint
+            | DbError::NotAPlainRead
             | DbError::CancelNotTaken(
                 CancelFailure::Refused
                 | CancelFailure::KeptSending
@@ -263,6 +290,73 @@ pub enum PagingMode {
     Hold,
 }
 
+/// How the statements of a run (`DbCommand::Execute`) stand to transactions outside a block the
+/// session has open.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum TxRule {
+    /// Autocommit: each statement outside a transaction block ends with its own (implicit)
+    /// transaction, as the server runs it.
+    #[default]
+    Auto,
+    /// Manual commit: `steps[i]` says how statement `i` stands to a transaction ([`TxStep`]; a
+    /// statement past the end of `steps` is [`TxStep::AsIs`]). Right before a statement that is
+    /// [`TxStep::Open`] while no transaction block is open on the session at that moment (the
+    /// driver's own state, after the statements before it in the run), the driver opens one, in
+    /// the same write as the statement ([`DbEvent::ManualBegun`] once the statement succeeded;
+    /// when it fails, or the run fails later, the new transaction is rolled back at once:
+    /// [`DbEvent::ManualRolledBack`]). The transaction then stays open after the run until the
+    /// user ends it ([`DbCommand::EndTx`], or a `COMMIT`/`ROLLBACK` the user runs).
+    ///
+    /// While a block the driver opened so is open when a run starts, the run goes under a
+    /// savepoint of the driver's: a run that fails or is cancelled is undone, and the transaction
+    /// stays open with what it held before the run ([`DbEvent::RunRolledBack`]). This holds for
+    /// any run in such a block, an [`TxRule::Auto`] one too (a rule changed while the transaction
+    /// stays open). A run with transaction control of its own (`COMMIT`, `ROLLBACK`, `SAVEPOINT`,
+    /// …) and a block the user opened (`BEGIN`) get none: the server's own rules apply (a failure
+    /// aborts the block). Savepoint names starting with `datarig_` are the driver's
+    /// ([`DbError::ReservedSavepoint`]).
+    ///
+    /// `idle_timeout`: the most the server lets the transaction sit idle (PostgreSQL's
+    /// `idle_in_transaction_session_timeout`, set for that transaction only, again after a
+    /// `COMMIT AND CHAIN`; PostgreSQL 9.6 or later): past it the server ends the session and
+    /// rolls back ([`DbError::IdleInTransactionTimeout`]). Less than a second is taken as one
+    /// second (a shorter limit could end the transaction between two statements of a run).
+    /// `None` leaves the server's setting as it is.
+    Manual { steps: Vec<TxStep>, idle_timeout: Option<Duration> },
+}
+
+/// How a statement of a [`TxRule::Manual`] run stands to a transaction.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TxStep {
+    /// It may write: when no transaction block is open, the driver opens one right before it,
+    /// which stays open for the user to commit or roll back.
+    Open,
+    /// A plain read, as far as its text tells (a view, a row-level security policy or a function
+    /// of the user's with a built-in's name may still hide a write behind it): when no
+    /// transaction block is open it runs in a read-only transaction of its own (PostgreSQL:
+    /// `BEGIN READ ONLY` where the driver sends `BEGIN`, in the same write), so a write hidden
+    /// in it fails (`25006`) instead of being committed by itself. Inside an open block it runs
+    /// as it is. Drivers without read-only transactions run it as [`TxStep::AsIs`].
+    ReadOnly,
+    /// It runs as it would under [`TxRule::Auto`] (transaction control, session settings,
+    /// statements that cannot run in a transaction).
+    #[default]
+    AsIs,
+}
+
+/// How [`DbCommand::EndTx`] ended the transaction ([`DbEvent::TxEnded`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TxOutcome {
+    /// The server committed it.
+    Committed,
+    /// The server rolled it back, as asked.
+    RolledBack,
+    /// A commit was asked for and the server rolled the transaction back instead: it was aborted
+    /// (a statement in it failed), and PostgreSQL answers `COMMIT` of an aborted transaction with
+    /// `ROLLBACK`. Nothing of it was kept.
+    RolledBackInstead,
+}
+
 #[derive(Clone, Debug)]
 pub enum DbCommand {
     LoadSchemas,
@@ -295,11 +389,26 @@ pub enum DbCommand {
     /// session reports each one's start ([`DbEvent::Started`]) and, before the last, its end
     /// ([`DbEvent::Finished`]); a cancel between two statements stops the rest
     /// ([`DbError::Cancelled`]). `paging`: what happens to the last statement's result when it
-    /// has more rows than a page (outside the user's block).
+    /// has more rows than a page (outside the user's block). `tx`: whether statements open a
+    /// transaction that stays open for the user to commit ([`TxRule`]).
     Execute {
         id: u64,
         statements: Vec<String>,
         paging: PagingMode,
+        tx: TxRule,
+    },
+    /// End the transaction block open on the session (one the user opened, or the driver for
+    /// [`TxRule::Manual`]): `COMMIT` when `commit`, else `ROLLBACK`. Answered with exactly one
+    /// [`DbEvent::TxEnded`] of the same `id`, or [`DbEvent::Failed`]: no block open
+    /// ([`DbError::NoTransaction`], nothing sent), the server refused the commit (a deferred
+    /// constraint, a serialization failure: the server rolled back, and the block is closed),
+    /// or the connection ended meanwhile ([`DbError::CommitUnknown`] for a commit). A result held
+    /// open in the block ends first. Sent while a run goes on, it waits for the run's end, as
+    /// other commands do. Drivers without [`Capabilities::manual_commit`](super::Capabilities)
+    /// answer [`DbError::NotSupported`].
+    EndTx {
+        id: u64,
+        commit: bool,
     },
     FetchMore {
         id: u64,
@@ -788,5 +897,34 @@ pub enum DbEvent {
         id: u64,
         result: Result<ExportRead, DbError>,
         cancelled: bool,
+    },
+    /// Statement `index` of run `id` ran in a transaction block the driver opened right before
+    /// it ([`TxRule::Manual`]), and succeeded: the block stays open for the user to commit or
+    /// roll back. Sent right before the [`DbEvent::Block`] (`true`) of that block, so a block
+    /// without it before is one the user opened.
+    ManualBegun {
+        id: u64,
+        index: usize,
+    },
+    /// Run `id` failed or was cancelled in a transaction block the driver opened for it
+    /// ([`TxRule::Manual`], at statement `index`): the driver rolled the new transaction back at
+    /// once, so nothing the run did in it is kept and no block is left open. Sent after the
+    /// run's answer; the `Block`/`TxOpen` changes follow when the block had been reported open.
+    ManualRolledBack {
+        id: u64,
+        index: usize,
+    },
+    /// Run `id` failed or was cancelled in a transaction the driver opened for manual commit
+    /// before the run ([`TxRule::Manual`]): everything the run did was rolled back to the
+    /// driver's savepoint taken at its start, and the transaction stays open (not aborted) with
+    /// what earlier runs did in it. Sent after the run's answer.
+    RunRolledBack {
+        id: u64,
+    },
+    /// The answer to [`DbCommand::EndTx`] `id`: how the transaction ended. The `Block` and
+    /// `TxOpen` changes follow.
+    TxEnded {
+        id: u64,
+        outcome: TxOutcome,
     },
 }

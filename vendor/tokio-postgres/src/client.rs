@@ -704,6 +704,12 @@ impl Client {
         simple_query::batch_execute(self.inner(), query).await
     }
 
+    /// datarig: `batch_execute` that answers the command tag the server gave the last
+    /// statement (`COMMIT` of an aborted transaction is answered with `ROLLBACK`).
+    pub async fn command_tag(&self, query: &str) -> Result<String, Error> {
+        simple_query::command_tag(self.inner(), query).await
+    }
+
     /// Check that the connection is alive and wait for the confirmation.
     pub async fn check_connection(&self) -> Result<(), Error> {
         // sync is a very quick message to test the connection health.

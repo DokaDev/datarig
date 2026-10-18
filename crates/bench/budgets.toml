@@ -34,6 +34,8 @@ count_idle = { to_result = 2, total = 2 }
 resume_warm = { to_result = 2, total = 2 }
 resume_in_block = { to_result = 3, total = 3 }
 insert = { to_result = 1, total = 1 }
+# Manual commit: the write that opens the transaction, its BEGIN in the same write.
+manual_first_write = { to_result = 1, total = 1 }
 select_small_in_block = { to_result = 2, total = 3 }
 insert_in_block = { to_result = 1, total = 1 }
 # A read-only policy (every transaction READ ONLY): the same counts as the statements above,

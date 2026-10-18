@@ -5,7 +5,7 @@ use super::persist;
 use super::runlog::StatementOutcome;
 use super::*;
 use datarig_core::driver::structure::TableStructure;
-use datarig_core::driver::{CancelFailure, DbError, ReadIn};
+use datarig_core::driver::{CancelFailure, DbError, ReadIn, TxRule};
 use datarig_core::fault::{ErrorLog, FaultKind};
 use datarig_core::sql::lexer::changes_schema_in;
 use datarig_core::sql::values::check_values;
@@ -168,7 +168,7 @@ impl App {
             t.pane.hidden = false;
         }
         let paging = self.tabs.get(id).map(|t| self.paging_mode(t)).unwrap_or_default();
-        self.send_tab(id, DbCommand::Execute { id: qid, statements, paging });
+        self.send_tab(id, DbCommand::Execute { id: qid, statements, paging, tx: TxRule::Auto });
     }
 
     /// Open tab `id`'s query session with its profile's password (the first run, or the next
@@ -754,7 +754,11 @@ impl App {
             | DbEvent::Finished { .. }
             | DbEvent::Stopping { .. }
             | DbEvent::CancelRefused { .. }
-            | DbEvent::Exported { .. } => {}
+            | DbEvent::Exported { .. }
+            | DbEvent::ManualBegun { .. }
+            | DbEvent::ManualRolledBack { .. }
+            | DbEvent::RunRolledBack { .. }
+            | DbEvent::TxEnded { .. } => {}
             DbEvent::Ddl { id: request, result } => self.ddl_answered(id, None, request, result),
         }
     }
@@ -954,6 +958,12 @@ impl App {
             | DbEvent::Stopping { .. }
             | DbEvent::CancelRefused { .. }
             | DbEvent::ValuesNotKnown { .. } => None,
+            // Answers of manual commit, which the app does not ask for (every run is sent with
+            // `TxRule::Auto`, and no `EndTx` is sent).
+            DbEvent::ManualBegun { .. }
+            | DbEvent::ManualRolledBack { .. }
+            | DbEvent::RunRolledBack { .. }
+            | DbEvent::TxEnded { .. } => None,
             // The server dropped the schema's startup option (a pooler): the driver sets the
             // path in each transaction instead. Said in the run's Messages.
             DbEvent::ContextPerTransaction => {
@@ -1617,7 +1627,9 @@ impl App {
     /// anything else in words, with its raw detail in the error log.
     pub(super) fn db_error_text(&self, e: &DbError) -> String {
         let label = match e {
-            DbError::Server(s) | DbError::NeedsNoTransaction(s) => return s.clone(),
+            DbError::Server(s) | DbError::NeedsNoTransaction(s) | DbError::IdleInTransactionTimeout(s) => {
+                return s.clone();
+            }
             DbError::NoAnswer(d) => return self.i18n.msg(&Msg::DbNoAnswer { elapsed: *d }).to_string(),
             DbError::RowsNotRead(n) => return self.i18n.msg(&Msg::DbRowsNotRead { count: *n }).to_string(),
             DbError::Closed => Label::DbClosed,
@@ -1630,6 +1642,10 @@ impl App {
             DbError::CopyStdio => Label::DbCopyStdio,
             DbError::CopyStarted => Label::DbCopyStarted,
             DbError::ReadOnlyLost => Label::DbReadOnlyLost,
+            DbError::NoTransaction => Label::DbNoTransaction,
+            DbError::CommitUnknown => Label::DbCommitUnknown,
+            DbError::ReservedSavepoint => Label::DbReservedSavepoint,
+            DbError::NotAPlainRead => Label::DbNotAPlainRead,
             DbError::CancelNotTaken(CancelFailure::Refused) => Label::DbCancelRefused,
             // Why it could not be sent, in its own words (logged as they log it).
             DbError::CancelNotTaken(CancelFailure::NotSent(why)) => {

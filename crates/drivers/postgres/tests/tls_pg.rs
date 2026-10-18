@@ -7,7 +7,7 @@
 //! `DATARIG_TEST_PG_URL` for the server without TLS. Unset: each test prints `SKIPPED` and
 //! returns; with `DATARIG_REQUIRE_TLS=1` (CI's integration job) it fails instead.
 
-use datarig_core::driver::{ConnectOptions, DbCommand, DbError, DbEvent, Driver, PagingMode, SessionRole};
+use datarig_core::driver::{ConnectOptions, DbCommand, DbError, DbEvent, Driver, PagingMode, SessionRole, TxRule};
 use datarig_core::fault::Fault;
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::profile::dsn;
@@ -194,6 +194,7 @@ async fn the_server_sees_the_session_encrypted_and_the_test_says_how() {
         id: 1,
         statements: vec!["SELECT ssl::text || ' ' || version FROM pg_stat_ssl WHERE pid = pg_backend_pid()".into()],
         paging: PagingMode::Hold,
+        tx: TxRule::Auto,
     });
     let row = loop {
         match tokio::time::timeout(Duration::from_secs(20), rx.recv()).await.unwrap().unwrap() {
@@ -303,6 +304,7 @@ async fn through_a_tunnel_the_profiles_host_is_checked_and_the_cancel_is_encrypt
         id: 1,
         statements: vec!["SELECT pg_sleep(30)".into()],
         paging: PagingMode::Hold,
+        tx: TxRule::Auto,
     });
     loop {
         match tokio::time::timeout(Duration::from_secs(20), rx.recv()).await.unwrap().unwrap() {

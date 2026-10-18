@@ -4,9 +4,9 @@
 
 use crate::proxy;
 use crate::stats::{Summary, ms};
-use datarig_core::driver::PagingMode;
 use datarig_core::driver::ddl::DdlObject;
 use datarig_core::driver::{ConnectOptions, DbCommand, DbEvent, Driver, Session, SessionRole};
+use datarig_core::driver::{PagingMode, TxRule, TxStep};
 use datarig_core::profile::ConnectionConfig;
 use datarig_driver_postgres::PgDriver;
 use serde_json::{Value, json};
@@ -152,7 +152,12 @@ impl WiredSession {
         let id = self.id;
         let before = self.counts.flights();
         let t0 = Instant::now();
-        self.session.send(DbCommand::Execute { id, statements: vec![sql.to_string()], paging: self.paging });
+        self.session.send(DbCommand::Execute {
+            id,
+            statements: vec![sql.to_string()],
+            paging: self.paging,
+            tx: TxRule::Auto,
+        });
         let ev = loop {
             match self.next(Duration::from_secs(60)).await? {
                 ev @ (DbEvent::Page { id: i, .. } | DbEvent::Done { id: i, .. } | DbEvent::Failed { id: i, .. })
@@ -184,7 +189,12 @@ impl WiredSession {
         self.quiet().await;
         self.id += 1;
         let id = self.id;
-        self.session.send(DbCommand::Execute { id, statements: vec![sql.to_string()], paging: PagingMode::Hold });
+        self.session.send(DbCommand::Execute {
+            id,
+            statements: vec![sql.to_string()],
+            paging: PagingMode::Hold,
+            tx: TxRule::Auto,
+        });
         self.page(id).await?;
         let mut costs = Vec::new();
         for _ in 0..pages {
@@ -325,7 +335,12 @@ pub async fn run(url: &str, one_way: Duration, runs: usize) -> Result<Value, Str
     let count = datarig_core::sql::risk::repeat::count_query(small).map_err(|e| format!("{e:?}"))?;
     let counted = |e: &DbEvent| matches!(e, DbEvent::Counted { .. });
     let paging = s.next_id();
-    s.session.send(DbCommand::Execute { id: paging, statements: vec![big.to_string()], paging: PagingMode::Hold });
+    s.session.send(DbCommand::Execute {
+        id: paging,
+        statements: vec![big.to_string()],
+        paging: PagingMode::Hold,
+        tx: TxRule::Auto,
+    });
     s.page(paging).await?;
     let mut costs = Vec::new();
     for _ in 0..runs {
@@ -364,6 +379,34 @@ pub async fn run(url: &str, one_way: Duration, runs: usize) -> Result<Value, Str
     }
     out.push(report("resume_warm", &costs));
     out.push(scenario(&mut s, "insert", runs, 0, |i| format!("INSERT INTO zz_bench_rtt VALUES ({i})")).await?);
+    // Manual commit: the write that opens the transaction costs what an autocommit write costs
+    // (its `BEGIN` goes out with it); the rollback after each is not measured.
+    let mut costs = Vec::new();
+    for i in 0..runs {
+        let id = s.next_id();
+        let write = DbCommand::Execute {
+            id,
+            statements: vec![format!("INSERT INTO zz_bench_rtt VALUES ({i})")],
+            paging: PagingMode::NoHold,
+            tx: TxRule::Manual { steps: vec![TxStep::Open], idle_timeout: None },
+        };
+        let (c, ev) = s
+            .measure(write, |e| matches!(e, DbEvent::Done { id: d, .. } | DbEvent::Failed { id: d, .. } if *d == id))
+            .await?;
+        if !matches!(ev, DbEvent::Done { .. }) {
+            return Err(format!("manual_first_write: {ev:?}"));
+        }
+        costs.push(c);
+        let end = s.next_id();
+        let rollback = DbCommand::EndTx { id: end, commit: false };
+        let (_, ev) = s
+            .measure(rollback, |e| matches!(e, DbEvent::TxEnded { id, .. } | DbEvent::Failed { id, .. } if *id == end))
+            .await?;
+        if !matches!(ev, DbEvent::TxEnded { .. }) {
+            return Err(format!("manual_first_write: {ev:?}"));
+        }
+    }
+    out.push(report("manual_first_write", &costs));
     s.cost("BEGIN").await?;
     // Inside the user's block a resumed result runs under a savepoint, set with the question.
     let mut costs = Vec::new();

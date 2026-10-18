@@ -67,6 +67,7 @@ impl Driver for PgDriver {
             explain: Some(ExplainFormat::PostgresJson),
             reads_held_to_end: false,
             export: true,
+            manual_commit: true,
         }
     }
 
@@ -461,6 +462,10 @@ pub(crate) fn db_error(e: &tokio_postgres::Error) -> DbError {
         let mut s = format!("{}: {}", db.severity(), db.message());
         if let Some(d) = db.detail() {
             s.push_str(&format!(" ({d})"));
+        }
+        // The server ended the session: its transaction sat idle past the limit.
+        if db.code() == &SqlState::IDLE_IN_TRANSACTION_SESSION_TIMEOUT {
+            return DbError::IdleInTransactionTimeout(s);
         }
         return DbError::Server(s);
     }

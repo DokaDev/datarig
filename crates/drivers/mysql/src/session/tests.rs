@@ -772,7 +772,7 @@ fn call_answer(rows: &[&str]) -> (Vec<u8>, Vec<u8>) {
 /// that the kill was sent and not answered.
 #[tokio::test(start_paused = true)]
 async fn a_result_answered_while_its_kill_hangs_is_read_to_its_end_then_the_session_is_lost() {
-    use datarig_core::driver::{DbCommand, DbEvent, PagingMode};
+    use datarig_core::driver::{DbCommand, DbEvent, PagingMode, TxRule};
     // The kill's server: the kill sent again is read, and never answered.
     let (kill_client, mut kill_server) = tokio::io::duplex(1 << 16);
     let dialed = Arc::new(tokio::sync::Notify::new());
@@ -816,7 +816,9 @@ async fn a_result_answered_while_its_kill_hangs_is_read_to_its_end_then_the_sess
         None,
     ));
     let call = "CALL shop.zz_rows()";
-    commands.send(DbCommand::Execute { id: 1, statements: vec![call.into()], paging: PagingMode::NoHold }).unwrap();
+    commands
+        .send(DbCommand::Execute { id: 1, statements: vec![call.into()], paging: PagingMode::NoHold, tx: TxRule::Auto })
+        .unwrap();
     let sent = read_packet(&mut server).await.expect("the call");
     assert_eq!(&sent[1..], call.as_bytes());
     // The server refused the user's cancel (the call runs as its definer); the session sends it
@@ -980,10 +982,17 @@ async fn sent_next(server: &mut tokio::io::DuplexStream) -> Option<String> {
 /// instead, saying the kill may still be carried out.
 #[tokio::test(start_paused = true)]
 async fn a_kill_left_unanswered_by_a_statement_that_ended_never_reaches_the_next_statement() {
-    use datarig_core::driver::{DbCommand, DbEvent, PagingMode};
+    use datarig_core::driver::{DbCommand, DbEvent, PagingMode, TxRule};
     let Faked { mut server, killer, asked, busy, commands, mut events, session, written, kills } = faked().await;
     let first = "DELETE FROM shop.t";
-    commands.send(DbCommand::Execute { id: 1, statements: vec![first.into()], paging: PagingMode::NoHold }).unwrap();
+    commands
+        .send(DbCommand::Execute {
+            id: 1,
+            statements: vec![first.into()],
+            paging: PagingMode::NoHold,
+            tx: TxRule::Auto,
+        })
+        .unwrap();
     let sent = read_packet(&mut server).await.expect("the statement");
     assert_eq!(&sent[1..], first.as_bytes());
     // The user cancels; the kill is written, and the statement answers before the kill does.
@@ -998,7 +1007,9 @@ async fn a_kill_left_unanswered_by_a_statement_that_ended_never_reaches_the_next
     server.write_all(&ok_packet(0x0002)).await.unwrap();
     // The user runs the next statement.
     let next = "DELETE FROM shop.u";
-    commands.send(DbCommand::Execute { id: 2, statements: vec![next.into()], paging: PagingMode::NoHold }).unwrap();
+    commands
+        .send(DbCommand::Execute { id: 2, statements: vec![next.into()], paging: PagingMode::NoHold, tx: TxRule::Auto })
+        .unwrap();
     let after = sent_next(&mut server).await;
     assert!(after.is_none(), "nothing sent after the first statement: {after:?}");
     tokio::time::timeout(std::time::Duration::from_secs(5), session).await.expect("the session ends").unwrap();
@@ -1019,10 +1030,17 @@ async fn a_kill_left_unanswered_by_a_statement_that_ended_never_reaches_the_next
 /// ends. The session never says a transaction is open meanwhile: none is left.
 #[tokio::test(start_paused = true)]
 async fn an_explain_analyze_whose_kill_hangs_never_shows_its_transaction_open() {
-    use datarig_core::driver::{DbCommand, DbEvent, PagingMode};
+    use datarig_core::driver::{DbCommand, DbEvent, PagingMode, TxRule};
     let Faked { mut server, killer, commands, mut events, session, written, kills, .. } = faked().await;
     let explain = "EXPLAIN ANALYZE DELETE FROM shop.t";
-    commands.send(DbCommand::Execute { id: 1, statements: vec![explain.into()], paging: PagingMode::NoHold }).unwrap();
+    commands
+        .send(DbCommand::Execute {
+            id: 1,
+            statements: vec![explain.into()],
+            paging: PagingMode::NoHold,
+            tx: TxRule::Auto,
+        })
+        .unwrap();
     // What goes before the plan is answered as the server would (a transaction is open after
     // `START TRANSACTION`).
     let mut in_trans = false;

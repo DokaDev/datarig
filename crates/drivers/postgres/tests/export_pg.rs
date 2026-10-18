@@ -8,11 +8,11 @@
 #[allow(dead_code)]
 mod pg_clean;
 
-use datarig_core::driver::PagingMode;
 use datarig_core::driver::{
     Cell, ColumnMeta, ConnectOptions, DbCommand, DbError, DbEvent, Driver, ExportBatch, ExportGuard, ExportRead,
     Session, SessionRole,
 };
+use datarig_core::driver::{PagingMode, TxRule};
 use datarig_core::export::keyset::{Keyset, table_key};
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::sql::dialect::Dialect;
@@ -82,7 +82,12 @@ impl Conn {
     async fn run(&mut self, sql: &str) -> DbEvent {
         self.id += 1;
         let id = self.id;
-        self.session.send(DbCommand::Execute { id, statements: vec![sql.to_string()], paging: PagingMode::Hold });
+        self.session.send(DbCommand::Execute {
+            id,
+            statements: vec![sql.to_string()],
+            paging: PagingMode::Hold,
+            tx: TxRule::Auto,
+        });
         self.wait(
             |e| matches!(e, DbEvent::Page { id: i, columns: Some(_), .. } | DbEvent::Done { id: i, .. } | DbEvent::Failed { id: i, .. } if *i == id),
             60,
