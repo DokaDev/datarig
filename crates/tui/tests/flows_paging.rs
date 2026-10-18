@@ -1255,3 +1255,17 @@ fn the_estimate_is_of_the_tabs_own_schema() {
     let title = results_title(&mut h, 160, 45);
     assert!(title.contains("(page 1 / ? · # count · next page re-runs) ›") && !title.contains('~'), "{title}");
 }
+
+/// The count key's hint is the first thing a narrow title drops: beside the inspector the row
+/// range stays whole and the page label goes back to its form without the hint.
+#[test]
+fn a_narrow_title_drops_the_count_hint_before_the_row_range() {
+    let mut h = Harness::connected(Lang::En);
+    first_page_released(&mut h, 500);
+    let title = results_title(&mut h, 160, 45);
+    assert!(title.contains("Results · rows 1–500 ─"), "{title}");
+    assert!(title.contains("(page 1 / ? · next page re-runs) ›") && !title.contains("count"), "{title}");
+    // With the room for it, the hint is there.
+    h.app.detail.visible = false;
+    assert!(results_title(&mut h, 160, 45).contains("(page 1 / ? · # count · next page re-runs) ›"));
+}

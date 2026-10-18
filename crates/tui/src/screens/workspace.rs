@@ -273,13 +273,13 @@ fn draw_results_pane(app: &mut App, area: Rect, buf: &mut Buffer) {
     if app.chart_shown() {
         app.chart_sync();
     }
-    let (title, status) = results_title(app);
-    let status = status.as_ref().map(|(texts, style)| (texts.as_slice(), *style));
     let panel_w = app.inspector_shown().then(|| crate::widgets::inspector::width_for(area.width)).flatten();
     let (grid_area, detail_area) = match panel_w {
         Some(w) => (Rect { width: area.width - w, ..area }, Rect { x: area.x + area.width - w, width: w, ..area }),
         None => (area, Rect::default()),
     };
+    let (title, status) = results_title(app, grid_area.width);
+    let status = status.as_ref().map(|(texts, style)| (texts.as_slice(), *style));
     app.layout.results = grid_area;
     app.layout.detail = detail_area;
     // Where the previous and next page marks are, for the mouse: at both ends of the right
@@ -740,9 +740,11 @@ fn draw_connection_bar(app: &App, area: Rect, buf: &mut Buffer) {
 /// `paging closed`, `fetching stopped`, `counting…`, and the count once known. `‹` and `›`
 /// (Nerd Font carets with icons on) are the previous and next page for the mouse. A complete
 /// result of one page shows nothing there.
-/// Returns the title, and the texts of the right side from the longest to the shortest (the
-/// shortest is the state alone, without the marks) with their style.
-fn results_title(app: &App) -> (datarig_core::i18n::Localized, Option<(Vec<String>, Style)>) {
+/// The count key's hint goes first: it is offered only where the title stays whole beside it
+/// in a pane `width` columns wide. Returns the title, and the texts of the right side from the
+/// longest to the shortest (the shortest is the state alone, without the marks) with their
+/// style.
+fn results_title(app: &App, width: u16) -> (datarig_core::i18n::Localized, Option<(Vec<String>, Style)>) {
     let th = theme::cur();
     let t = app.tab();
     if let (ResultView::Plan, Some(p)) = (t.exec.view, &t.exec.plan) {
@@ -830,25 +832,32 @@ fn results_title(app: &App) -> (datarig_core::i18n::Localized, Option<(Vec<Strin
         .flatten()
         .map(|k| crate::keymap::keys::label(&k));
     let (prev, next) = crate::icons::page_arrows(app.icons_on());
-    let long = match count_key {
-        Some(key) => app.i18n.msg(&Msg::ResultsTitlePageCount { page: page.clone(), key }),
-        None => app.i18n.msg(&Msg::ResultsTitlePage { page: page.clone(), pages: pages.clone() }),
-    };
+    let with_states =
+        |label: String| std::iter::once(label).chain(states.iter().cloned()).collect::<Vec<_>>().join(" · ");
+    let hinted = count_key.map(|key| {
+        let long = app.i18n.msg(&Msg::ResultsTitlePageCount { page: page.clone(), key });
+        format!("{prev} ({}) {next}", with_states(long.to_string()))
+    });
+    // As `title_and_status` lays them out: the title, a blank and the text, each with its gaps.
+    let title_w = crate::text::width(&title.to_string());
+    let whole = |text: &str| title_w + crate::text::width(text) + 5 <= (width as usize).saturating_sub(2);
+    let hinted = hinted.filter(|h| whole(h));
+    let long = app.i18n.msg(&Msg::ResultsTitlePage { page: page.clone(), pages: pages.clone() });
     let short = app.i18n.msg(&Msg::ResultsTitlePageShort { page, pages });
-    let full = std::iter::once(long.to_string()).chain(states.iter().cloned()).collect::<Vec<_>>().join(" · ");
+    let full = with_states(long.to_string());
     let brief = std::iter::once(short.to_string()).chain(states.first().cloned()).collect::<Vec<_>>().join(" · ");
     let least = states.first().cloned().unwrap_or_else(|| short.to_string());
     // Narrower: the arrows go before the page number does, then the state before the page
     // number (the line below the rows says a closed portal too).
-    let texts = vec![
+    let texts = hinted.into_iter().chain([
         format!("{prev} ({full}) {next}"),
         format!("{prev} ({brief}) {next}"),
         format!("({brief})"),
         format!("{prev} ({short}) {next}"),
         format!("({short})"),
         format!("({least})"),
-    ];
-    (title, Some((texts, style)))
+    ]);
+    (title, Some((texts.collect(), style)))
 }
 
 /// Launch messages (migration, key map problems, an unknown profile) from line `y` down to
