@@ -10,7 +10,8 @@
 //! ([`Indenter`]), with the same result as indenting the whole text.
 //!
 //! A file export adds what a file wants and a copy does not: a line break at the end of the
-//! text ([`TextWriter::trailing_newline`]), CSV's options ([`Delimited`]) and JSON Lines.
+//! text ([`TextWriter::trailing_newline`]), CSV's options ([`Delimited`]) and JSON Lines (one compact
+//! object per line).
 
 use super::{
     Column, Format, HTML_END, Kind, Row, XML_END, XML_HEAD, comma_list, csv, html_head, html_rows, json_object,
@@ -226,6 +227,29 @@ impl Indenter {
     }
 }
 
+/// JSON text `s` without the white space between its tokens (the text of every token kept,
+/// numbers with every digit), appended to `out`.
+fn compact_json(s: &str, out: &mut String) {
+    let (mut in_str, mut escaped) = (false, false);
+    for c in s.chars() {
+        if in_str {
+            out.push(c);
+            if escaped {
+                escaped = false;
+            } else if c == '\\' {
+                escaped = true;
+            } else if c == '"' {
+                in_str = false;
+            }
+        } else if c == '"' {
+            in_str = true;
+            out.push(c);
+        } else if !c.is_whitespace() {
+            out.push(c);
+        }
+    }
+}
+
 /// The formats of [`Format`] as a stream into `out` ([`RowSink`]).
 pub struct TextWriter<'a, W: Write> {
     format: Format<'a>,
@@ -376,7 +400,9 @@ impl<W: Write> RowSink for TextWriter<'_, W> {
             Format::JsonLines => {
                 let mut part = String::new();
                 for r in rows {
-                    part.push_str(&json_object(columns, &self.names, r));
+                    // One line per row: a json value the database kept with line breaks in it
+                    // (PostgreSQL's `json` keeps its input text) is written compact.
+                    compact_json(&json_object(columns, &self.names, r), &mut part);
                     part.push('\n');
                 }
                 self.raw(&part)?;

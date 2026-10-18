@@ -117,7 +117,7 @@ macro_rules! structure_parts {
 /// and size estimates are the explorer's list's (`stats_ctes!`, for the one root).
 pub const SQL: &str = concat!(
     "WITH RECURSIVE rel AS (
-  SELECT c.oid, c.relkind::text AS kind,
+  SELECT c.oid, c.relkind::text AS kind, c.relhassubclass AND c.relkind = 'r' AS inherited,
          EXISTS (SELECT 1 FROM pg_catalog.pg_locks l
            WHERE l.locktype = 'relation' AND l.relation = c.oid AND l.mode = 'AccessExclusiveLock'
              AND l.database = (SELECT d.oid FROM pg_catalog.pg_database d
@@ -132,6 +132,7 @@ pub const SQL: &str = concat!(
 SELECT CASE WHEN rel.locked THEN pg_catalog.json_build_object('kind', rel.kind, 'locked', true)
 ELSE pg_catalog.json_build_object(
   'kind', rel.kind,
+  'inherited', rel.inherited,
   'rows', ",
     stats_rows!("rel.kind"),
     ",
@@ -161,6 +162,9 @@ pub(crate) struct Raw {
     /// deparsed.
     #[serde(default)]
     locked: bool,
+    /// Tables inherit from it (legacy inheritance, not partitions).
+    #[serde(default)]
+    inherited: bool,
     rows: Option<f64>,
     bytes: Option<i64>,
     columns: Option<Vec<RawColumn>>,
@@ -247,6 +251,7 @@ pub(crate) fn model(raw: Raw) -> Result<TableStructure, DbError> {
         _ => return Err(DbError::NotSupported),
     };
     let mut s = TableStructure::new(kind);
+    s.inherited = raw.inherited;
     let stats = super::relation_stats(raw.rows, raw.bytes);
     (s.estimated_rows, s.total_bytes) = (stats.rows, stats.bytes);
     s.columns = raw

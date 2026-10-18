@@ -39,6 +39,7 @@ fn structure(columns: &[(&str, bool)], pk: Option<&[&str]>, unique: &[&[&str]]) 
         triggers: Vec::new(),
         hidden: Vec::new(),
         estimates: false,
+        inherited: false,
     }
 }
 
@@ -165,4 +166,28 @@ fn the_result_must_be_the_table_itself() {
         Keyset::new(PG, "s", "t", &["price".to_string()], &c, &names(&c), true),
         Err(NotKeyset::Kind("price".into()))
     );
+}
+
+#[test]
+fn a_key_read_with_replaced_characters_is_not_written_back() {
+    let c = cols();
+    let k = Keyset::new(PG, "s", "t", &["name".to_string()], &c, &names(&c), true).unwrap();
+    assert_eq!(k.after(&[None, Some("caf\u{FFFD}".into()), None, None]), None);
+    assert!(k.after(&[None, Some("caf\u{e9}".into()), None, None]).is_some());
+}
+
+#[test]
+fn a_table_others_inherit_from_is_not_read_by_its_key() {
+    let mut s = structure(&[("a", true)], Some(&["a"]), &[]);
+    s.inherited = true;
+    assert_eq!(table_key(&s), Err(NotKeyset::NoKey));
+}
+
+#[test]
+fn a_prefix_key_is_not_used() {
+    let mut s = structure(&[("a", true)], None, &[&["a"]]);
+    let mut i = index(&["a"], &[""]);
+    i.columns = vec!["`a`(10)".into()];
+    s.indexes.push(i);
+    assert_eq!(table_key(&s), Err(NotKeyset::Ordered("a".into())));
 }

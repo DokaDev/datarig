@@ -14,11 +14,19 @@ use super::{
     count_undo, decode, finish, formats_of, probe,
 };
 use crate::connect::{db_error, is_cancel};
-use datarig_core::driver::{DbError, ExportBatch, ExportGuard, ExportRead, ExportSink};
+use datarig_core::driver::{Cell, DbError, EXPORT_BATCH_BYTES, ExportBatch, ExportGuard, ExportRead, ExportSink};
 use datarig_core::export::keyset::LOCK_WAIT_SECS;
 use datarig_core::sql::risk;
 use std::sync::atomic::Ordering;
 use tokio_postgres::{Client, FirstPage, Statement, Transaction};
+
+/// Rows of an export's first page, before the width of its rows is known.
+const FIRST_PAGE: i32 = 8;
+
+/// The bytes of a row's values.
+fn row_bytes(r: &[Cell]) -> usize {
+    r.iter().map(|c| c.as_ref().map_or(1, |v| v.len() + 1)).sum()
+}
 
 /// An export's answer: what it read, or why not and whether that was a cancel.
 pub(super) type Answer = (Result<ExportRead, DbError>, bool);
@@ -186,8 +194,12 @@ async fn stream(
     max: i32,
 ) -> Result<Result<ExportRead, (DbError, bool)>, Closed> {
     let formats = formats_of(stmt);
+    // Pages are sized by bytes too: a first small one, then as many rows as fit in a batch's
+    // bytes at the width seen so far (at most `max`).
+    let mut ask = max.min(FIRST_PAGE);
+    let (mut seen_rows, mut seen_bytes) = (0u64, 0u64);
     let FirstPage { portal, columns, rows, complete, .. } =
-        match link.guard(Some(env.token), txn.bind_first_page(stmt, &formats, max)).await? {
+        match link.guard(Some(env.token), txn.bind_first_page(stmt, &formats, ask)).await? {
             Ok(first) => first,
             Err(e) => return Ok(Err((count_error(&e), is_cancel(&e)))),
         };
@@ -200,6 +212,10 @@ async fn stream(
     loop {
         if !rows.is_empty() {
             let page = decode(&rows, &formats);
+            seen_rows += page.len() as u64;
+            seen_bytes += page.iter().map(|r| row_bytes(r)).sum::<usize>() as u64;
+            let wide = (seen_bytes / seen_rows.max(1)).max(1);
+            ask = i32::try_from((EXPORT_BATCH_BYTES as u64 / wide).max(1)).unwrap_or(i32::MAX).min(max);
             read.rows += page.len() as u64;
             read.last = page.last().cloned();
             if !send(link, sink, ExportBatch::Rows(page)).await? {
@@ -215,9 +231,9 @@ async fn stream(
         if env.cancel.load(Ordering::SeqCst) {
             return Ok(Err((DbError::Cancelled, true)));
         }
-        match link.guard(Some(env.token), txn.query_portal(&portal, max)).await? {
+        match link.guard(Some(env.token), txn.query_portal(&portal, ask)).await? {
             Ok(more) => {
-                ended = (more.len() as i32) < max;
+                ended = (more.len() as i32) < ask;
                 rows = more;
             }
             Err(e) => return Ok(Err((count_error(&e), is_cancel(&e)))),

@@ -143,7 +143,10 @@ async fn a_table_tab_exports_by_its_key() {
     let t = format!("public.{name}");
     let _g = TableGuard(url.clone(), t.clone());
     pg_clean::run_fresh(&url, &format!("CREATE TABLE {t} (id int PRIMARY KEY, v text)")).unwrap();
-    pg_clean::run_fresh(&url, &format!("INSERT INTO {t} SELECT g, 'r' || g FROM generate_series(1, 25000) g")).unwrap();
+    // Rows written in the reverse of key order: a single SELECT * would read them so, the key's
+    // chunks read them in key order.
+    pg_clean::run_fresh(&url, &format!("INSERT INTO {t} SELECT g, 'r' || g FROM generate_series(25000, 1, -1) g"))
+        .unwrap();
     let dir = scratch("key");
     let (mut app, mut rx) = app(&url, &format!("exk{}", std::process::id()), None).await;
     let table = TableRef { schema: "public".into(), name: name.clone() };
@@ -159,6 +162,7 @@ async fn a_table_tab_exports_by_its_key() {
     assert!(ids.iter().enumerate().all(|(i, id)| *id == i as i64 + 1), "every row once, in key order");
     let notes: Vec<String> = app.tab().exec.run.notes.iter().map(|n| n.render(&app.i18n).to_string()).collect();
     assert!(notes.iter().any(|n| n.starts_with("Exported 25,000 rows")), "{notes:?}");
+    assert!(notes.iter().any(|n| n.starts_with("Reads the table in chunks by its key")), "{notes:?}");
 }
 
 #[tokio::test(flavor = "multi_thread")]

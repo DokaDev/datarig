@@ -341,3 +341,76 @@ async fn inside_the_users_transaction_it_reads_there() {
     assert_eq!(c.exported(id).await.0, Err(DbError::NotSupported));
     assert_eq!(c.rows(&format!("SELECT COUNT(*) FROM {}", t.q())).await, [[Some("10".into())]]);
 }
+
+/// Outside the user's transaction an export reads in a read-only one: a stored function that
+/// writes fails, and nothing is written.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_export_never_writes_through_a_function() {
+    let Some((url, admin)) = urls("an_export_never_writes_through_a_function") else { return };
+    let t = numbers(&admin, "fnw", 3).await;
+    let f = format!("shop.zz_it_export_fn_{}", std::process::id());
+    let _drop = FunctionGuard(admin.clone(), f.clone());
+    let mut a = side(&admin).await;
+    a.query_drop(format!(
+        "CREATE FUNCTION {f}(x INT) RETURNS INT DETERMINISTIC MODIFIES SQL DATA \
+         BEGIN INSERT INTO {} VALUES (x + 1000, 'w'); RETURN x; END",
+        t.q()
+    ))
+    .await
+    .unwrap();
+    a.disconnect().await.unwrap();
+    let mut c = Conn::open(&url, SessionRole::Query, "fnw").await;
+    let (id, mut rx) = c.export(&format!("SELECT {f}(id) FROM {}", t.q()), ExportGuard::Confirmed, 2, 10);
+    drain(&mut rx).await;
+    let (result, _) = c.exported(id).await;
+    assert!(
+        matches!(&result, Err(DbError::Server(m)) if m.contains("READ ONLY") || m.contains("read only")),
+        "{result:?}"
+    );
+    assert_eq!(c.rows(&format!("SELECT COUNT(*) FROM {}", t.q())).await, [[Some("3".into())]]);
+    // The session is out of the export's transaction: a plain write goes through.
+    c.ok(&format!("INSERT INTO {} VALUES (4, 'ok')", t.q())).await;
+}
+
+/// Wide rows come in batches bounded by bytes.
+#[tokio::test(flavor = "multi_thread")]
+async fn wide_rows_come_in_batches_bounded_by_bytes() {
+    let Some((url, admin)) = urls("wide_rows_come_in_batches_bounded_by_bytes") else { return };
+    let t = Table::make(&admin, "wide", &["CREATE TABLE {t} (id INT PRIMARY KEY, v LONGTEXT)"]).await;
+    let mut a = side(&admin).await;
+    for i in 0..60 {
+        a.query_drop(format!("INSERT INTO {} VALUES ({i}, REPEAT('x', 1000000))", t.q())).await.unwrap();
+    }
+    a.disconnect().await.unwrap();
+    let mut c = Conn::open(&url, SessionRole::Query, "wide").await;
+    let (id, mut rx) = c.export(&format!("SELECT * FROM {}", t.q()), ExportGuard::Repeatable, 1, 2_000);
+    let (mut rows, mut largest) = (0, 0usize);
+    while let Some(b) = rx.recv().await {
+        if let ExportBatch::Rows(r) = b {
+            rows += r.len();
+            largest =
+                largest.max(r.iter().map(|r| r.iter().map(|v| v.as_ref().map_or(0, String::len)).sum::<usize>()).sum());
+        }
+    }
+    assert_eq!(rows, 60);
+    assert!(largest <= 2 * datarig_core::driver::EXPORT_BATCH_BYTES, "{largest}");
+    assert!(c.exported(id).await.0.unwrap().complete);
+}
+
+/// Drops a function from the side when the test ends.
+struct FunctionGuard(String, String);
+
+impl Drop for FunctionGuard {
+    fn drop(&mut self) {
+        let (url, f) = (self.0.clone(), self.1.clone());
+        let _ = std::thread::spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+            rt.block_on(async {
+                let mut c = side(&url).await;
+                let _ = c.query_drop(format!("DROP FUNCTION IF EXISTS {f}")).await;
+                let _ = c.disconnect().await;
+            });
+        })
+        .join();
+    }
+}

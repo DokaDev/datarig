@@ -350,15 +350,15 @@ pub enum DbCommand {
         paging: PagingMode,
     },
     /// Read every row of `sql` (one statement that reads) for an export to a file, into `sink`
-    /// a batch of at most `batch` rows at a time (its columns first, [`ExportBatch`]), awaiting
+    /// a batch of at most `batch` rows (and about [`EXPORT_BATCH_BYTES`]) at a time (its columns first, [`ExportBatch`]), awaiting
     /// room in the channel before reading on: the export's memory stays bounded whatever the
     /// result's size, and the rows never go through the UI's events. Answered with exactly one
     /// [`DbEvent::Exported`] of the same `id`, after the last batch was sent and `sink` was
     /// dropped.
     ///
     /// `guard` says why it may run ([`ExportGuard`]). Outside the user's block it reads in a
-    /// read-only transaction of its own (PostgreSQL), or as one statement without the session's
-    /// paging limit (MySQL): it never writes. Inside the user's block it reads there (seeing
+    /// read-only transaction of its own (MySQL: without the session's paging limit): it never
+    /// writes. Inside the user's block it reads there (seeing
     /// what the block changed), PostgreSQL under a savepoint of the driver's own released after
     /// it and rolled back to when it fails or is cancelled, so the block is never aborted; an
     /// aborted block refuses it ([`DbError::NotSupported`]) without running anything. A cancel
@@ -398,6 +398,10 @@ pub enum ExportBatch {
 /// Where [`DbCommand::Export`] sends its rows: a bounded channel, so a reader slower than the
 /// server holds the statement back instead of the rows piling up.
 pub type ExportSink = tokio::sync::mpsc::Sender<ExportBatch>;
+
+/// About the most bytes of values a batch of [`DbCommand::Export`] holds: wide rows (documents,
+/// images) make smaller batches, so memory is bounded by bytes as well as by rows.
+pub const EXPORT_BATCH_BYTES: usize = 8 << 20;
 
 /// What an export's statement read ([`DbEvent::Exported`]).
 #[derive(Clone, Debug, PartialEq, Eq)]

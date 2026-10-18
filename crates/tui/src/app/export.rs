@@ -28,7 +28,12 @@
 //! path once the export succeeded. A path that exists asks first (`Enter` keeps it, `y` replaces
 //! it). A cancel or a failure leaves the `.partial` file with the rows written so far, its format
 //! ended (a JSON array closed, the XML's root), and the message says where; one without any row
-//! is removed.
+//! is removed. A file that failed to be written (a full disk) may end in the middle of a row.
+//!
+//! A server may end a slow export: MySQL's `net_write_timeout`, PostgreSQL's
+//! `idle_in_transaction_session_timeout` (or a pooler's idle transaction timeout) between two
+//! pages. The export then fails, keeping its partial file. A local export cannot be cancelled
+//! while the tab runs another statement (the cancel is that statement's).
 
 use super::copy::{CopyWhat, Intent};
 use super::*;
@@ -36,7 +41,7 @@ use datarig_core::driver::keys::{Generated, InsertPlan, insert_source, update_so
 use datarig_core::driver::structure::TableStructure;
 use datarig_core::driver::{Cell, ColumnMeta, DbError, ExportBatch, ExportGuard, ExportRead, ReadIn};
 use datarig_core::export::keyset::{self, Keyset};
-use datarig_core::export::stream::{BadDelimited, Delimited, RowSink, TextWriter};
+use datarig_core::export::stream::{BadDelimited, Delimited, Quote, RowSink, TextWriter};
 use datarig_core::export::{self as core_export, Kind, Refused, SqlCells};
 use datarig_core::fault::Fault;
 use datarig_core::results::RowsSnapshot;
@@ -54,6 +59,9 @@ pub const CHANNEL_BATCHES: usize = 2;
 
 /// The writer's buffer.
 const BUFFER: usize = 256 * 1024;
+
+/// How long quitting waits for the writers to end their files.
+const QUIT_WAIT: Duration = Duration::from_secs(2);
 
 /// How often the writer says how far it got, at most.
 const PROGRESS_EVERY: Duration = Duration::from_millis(250);
@@ -261,6 +269,8 @@ pub enum Failure {
     Read(Fault),
     /// The partial file of an earlier export is in the way.
     PartialInTheWay(PathBuf),
+    /// The path names a folder or a link, not a file to write.
+    NotAFile(PathBuf),
     /// A file appeared at the path while the export ran (its rows stay in the partial file).
     TargetAppeared(PathBuf),
     /// The result's columns changed (the table was altered between two chunks).
@@ -373,6 +383,8 @@ struct Job {
     total: Option<(u64, bool)>,
     path: PathBuf,
     ctl: Option<CtlSender>,
+    /// Its writer's thread.
+    writer: Option<std::thread::JoinHandle<()>>,
     /// The rows of a local export, until its writer takes them.
     snapshot: Option<RowsSnapshot>,
     /// A statement of the job runs on the tab's session.
@@ -383,6 +395,8 @@ struct Job {
     cancelled: bool,
     /// It reads inside the user's transaction.
     in_block: bool,
+    /// The last keyset chunk sent: the next one must differ, or the export would not move on.
+    last_chunk: Option<String>,
     /// The table's estimate of its rows, for the question.
     estimate: Option<u64>,
 }
@@ -394,6 +408,9 @@ pub struct Exports {
     seq: u64,
     /// The tab whose export asks (to start, or to replace the file).
     asking: Option<TabId>,
+    /// Jobs the app ended itself (a cancelled one whose session closed): their writer's late
+    /// terminal event says nothing more.
+    quiet: std::collections::HashSet<u64>,
     /// Without the event loop's channel (headless): where the writers' events go.
     local: Option<(mpsc::Sender<AppEvent>, mpsc::Receiver<AppEvent>)>,
 }
@@ -460,11 +477,15 @@ pub fn expand_path(typed: &str, home: Option<&Path>, folder: &Path) -> Option<Pa
     Some(if p.is_absolute() { p } else { folder.join(p) })
 }
 
-/// `:export`'s words: a format, a scope and a path, each optional, in that order.
+/// `:export`'s words: a format, a scope, CSV's options and a path, each optional, in that
+/// order.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ExportArgs {
     pub format: Option<ExportFormat>,
     pub scope: Option<ExportScope>,
+    /// CSV's options (`delim=;`, `quote=never`, `header=off`, `null=NULL`): the defaults when
+    /// none is given.
+    pub csv: Delimited,
     pub path: Option<String>,
 }
 
@@ -472,6 +493,46 @@ pub struct ExportArgs {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ArgsError {
     UnknownFormat(String),
+    /// An option word whose value is not one (`quote=maybe`).
+    BadOption(String),
+}
+
+/// CSV option `word` (`key=value`) applied to `csv`: `Ok(false)` when it is not an option word
+/// (a path), an error for a known key with a value it does not take.
+fn csv_option(word: &str, csv: &mut Delimited) -> Result<bool, ArgsError> {
+    let Some((key, value)) = word.split_once('=') else { return Ok(false) };
+    let bad = || ArgsError::BadOption(word.to_string());
+    match key.to_ascii_lowercase().as_str() {
+        "delim" | "delimiter" => {
+            csv.delimiter = match value {
+                "\\t" | "tab" => '\t',
+                "comma" => ',',
+                "semicolon" => ';',
+                "pipe" => '|',
+                v if v.chars().count() == 1 => v.chars().next().ok_or_else(bad)?,
+                _ => return Err(bad()),
+            }
+        }
+        "quote" => {
+            csv.quote = match value.to_ascii_lowercase().replace('-', "_").as_str() {
+                "necessary" => Quote::Necessary,
+                "always" => Quote::Always,
+                "non_numeric" => Quote::NonNumeric,
+                "never" | "none" => Quote::Never,
+                _ => return Err(bad()),
+            }
+        }
+        "header" => {
+            csv.header = match value.to_ascii_lowercase().as_str() {
+                "on" | "yes" | "true" => true,
+                "off" | "no" | "false" => false,
+                _ => return Err(bad()),
+            }
+        }
+        "null" => csv.null = value.to_string(),
+        _ => return Ok(false),
+    }
+    Ok(true)
 }
 
 /// Read `:export [format] [all|fetched|selection] [path]`. The path is the rest (it may hold
@@ -499,6 +560,13 @@ pub fn parse_args(arg: &str) -> Result<ExportArgs, ArgsError> {
             rest = rest[rest.len() - r.len()..].trim();
         }
     }
+    while !rest.is_empty() {
+        let (w, r) = word(rest);
+        if !csv_option(&w, &mut out.csv)? {
+            break;
+        }
+        rest = rest[rest.len() - r.len()..].trim();
+    }
     if !rest.is_empty() {
         out.path = Some(rest.to_string());
     }
@@ -515,6 +583,9 @@ impl App {
             Ok(a) => a,
             Err(ArgsError::UnknownFormat(format)) => {
                 return Err(Notice::new(Msg::ExportUnknownFormat { format }, Level::Error));
+            }
+            Err(ArgsError::BadOption(option)) => {
+                return Err(Notice::new(Msg::ExportBadOption { option }, Level::Error));
             }
         };
         let folder = self.export_folder();
@@ -537,7 +608,7 @@ impl App {
         Ok(ExportRequest {
             scope: args.scope.unwrap_or(ExportScope::All),
             format,
-            csv: Delimited::default(),
+            csv: args.csv,
             path,
             default_path,
             overwrite: false,
@@ -645,11 +716,13 @@ impl App {
             total,
             path: req.path.clone(),
             ctl: None,
+            writer: None,
             snapshot,
             db,
             told: false,
             cancelled: false,
             in_block,
+            last_chunk: None,
             estimate: None,
         };
         self.exports.jobs.insert(id, job);
@@ -665,11 +738,16 @@ impl App {
             .clone()
             .filter(|table| sql == table.query(d) && !t.exec.in_block && t.context.database.is_none());
         match (keyset_table, t.profile) {
-            (Some(table), Some(pid)) if self.structure_on(pid) => {
+            // The key comes from the table's structure, read on the metadata session (without
+            // one, nothing would answer: one statement then).
+            (Some(table), Some(pid))
+                if self.structure_on(pid) && self.conns.get(pid).is_some_and(|c| c.meta.is_some()) =>
+            {
                 if let Some(j) = self.exports.jobs.get_mut(&id) {
                     j.stage =
                         Stage::Structure { profile: pid, schema: table.schema.clone(), table: table.name.clone() };
                 }
+                self.tab_status(id, Notice::new(Label::ExportReadingKey, Level::Info));
                 self.send_meta(pid, DbCommand::LoadStructure { schema: table.schema, table: table.name });
             }
             _ => self.export_stream(id, sql, None),
@@ -856,7 +934,7 @@ impl App {
         {
             let _ = ctl.send(Ctl::Fail(Failure::Stale));
         }
-        self.tab_status(id, why);
+        self.export_said(id, why);
     }
 
     /// Start tab `id`'s job's writer: it opens the file and says so ([`ExportNews::Ready`]).
@@ -870,9 +948,10 @@ impl App {
             None => Source::Db,
         };
         let fallback = if j.request.default_path { home } else { None };
-        let ctl =
+        let (ctl, writer) =
             spawn_writer(j.id, id, j.spec.clone(), j.request.path.clone(), j.request.overwrite, fallback, source, out);
         j.ctl = Some(ctl);
+        j.writer = writer;
         let format = self.i18n.label(j.request.format.label()).to_string();
         let path = j.request.path.display().to_string();
         let m = match &j.plan {
@@ -880,7 +959,20 @@ impl App {
             Plan::Stream { .. } if j.in_block => Msg::ExportStartedInTx { format, path },
             _ => Msg::ExportStarted { format, path },
         };
-        self.tab_status(id, Notice::new(m, Level::Info));
+        // What is sent to the server for the user is said in the run's Messages.
+        let sent = match &j.plan {
+            Plan::Stream { sql, .. } => Some(Msg::ExportRunsAgain { sql: super::runlog::excerpt(sql, 120) }),
+            Plan::Keyset(k) => Some(Msg::ExportRunsInChunks { sql: super::runlog::excerpt(&k.first(), 120) }),
+            Plan::Local => None,
+        };
+        let note = Notice::new(m, Level::Info);
+        if let Some(t) = self.tabs.get_mut(id) {
+            t.exec.run.notes.push(note.clone());
+            if let Some(sent) = sent {
+                t.exec.run.notes.push(Notice::new(sent, Level::Info));
+            }
+        }
+        self.tab_status(id, note);
     }
 
     fn export_out(&mut self) -> Out {
@@ -939,7 +1031,7 @@ impl App {
                     self.tab_status(tab, Notice::new(m, Level::Info));
                 }
             }
-            ExportNews::Ended(outcome) => self.export_ended(tab, ours, outcome),
+            ExportNews::Ended(outcome) => self.export_ended(tab, job, ours, outcome),
         }
     }
 
@@ -1015,10 +1107,19 @@ impl App {
         };
         let next = match (&result, &j.plan) {
             (Ok(read), Plan::Keyset(k)) if !j.cancelled && read.complete && read.rows == k.chunk => {
-                Some(read.last.as_deref().and_then(|last| k.after(last)))
+                // A chunk that would read the same rows again ends it (no key literal may repeat).
+                Some(
+                    read.last
+                        .as_deref()
+                        .and_then(|last| k.after(last))
+                        .filter(|sql| j.last_chunk.as_ref() != Some(sql)),
+                )
             }
             _ => None,
         };
+        if let Some(Some(sql)) = &next {
+            j.last_chunk = Some(sql.clone());
+        }
         match next {
             Some(Some(sql)) => return self.export_send(id, sql, ExportGuard::Keyset),
             Some(None) => {
@@ -1071,41 +1172,67 @@ impl App {
     }
 
     /// The exports whose tab's statement ended without its answer (the session closed, was
-    /// lost or rebound, the tab closed): their writer finishes with what it has.
+    /// lost or rebound, the tab closed): their writer finishes with what it has, and says so.
+    /// One waiting for its table's key whose metadata session is gone reads with one statement;
+    /// one not started whose result changed ends, with a word.
     pub(super) fn sweep_exports(&mut self) {
-        let gone: Vec<TabId> = self
-            .exports
-            .jobs
-            .iter()
-            .filter(|(id, j)| {
-                let tab = self.tabs.get(**id);
-                match &j.stage {
-                    // Before anything ran: only the tab itself matters.
-                    Stage::Structure { .. } | Stage::Asking => tab.is_none() || !j.intent.holds(self),
-                    // A local export goes on without its tab (its rows are its own).
-                    Stage::Preflight => j.db && tab.is_none(),
-                    Stage::Running => {
-                        j.db && !j.told
-                            && j.ctl.is_some()
-                            && tab.is_none_or(|t| !t.exec.running.is_some_and(|r| r.export))
+        let mut ended = Vec::new();
+        let mut no_key = Vec::new();
+        for (id, j) in &self.exports.jobs {
+            let tab = self.tabs.get(*id);
+            match &j.stage {
+                // Before anything ran: its tab, its result or (to run every row) its session went.
+                Stage::Structure { .. } | Stage::Asking
+                    if tab.is_none_or(|t| j.db && t.exec.session.is_none()) || !j.intent.holds(self) =>
+                {
+                    ended.push(*id)
+                }
+                Stage::Structure { profile, .. } if self.conns.get(*profile).is_none_or(|c| c.meta.is_none()) => {
+                    no_key.push(*id)
+                }
+                Stage::Structure { .. } | Stage::Asking => {}
+                // A local export goes on without its tab (its rows are its own).
+                Stage::Preflight if j.db && tab.is_none() => ended.push(*id),
+                Stage::Preflight => {}
+                Stage::Running => {
+                    if j.db
+                        && !j.told
+                        && j.ctl.is_some()
+                        && tab.is_none_or(|t| !t.exec.running.is_some_and(|r| r.export))
+                    {
+                        ended.push(*id);
                     }
                 }
-            })
-            .map(|(id, _)| *id)
-            .collect();
-        for id in gone {
-            let Some(j) = self.exports.jobs.get_mut(&id) else { continue };
+            }
+        }
+        for id in no_key {
+            let sql = self.tabs.get(id).map(|t| t.shown_sql().trim().to_string()).unwrap_or_default();
+            self.export_stream(id, sql, None);
+        }
+        for id in ended {
+            let Some(j) = self.exports.jobs.get(&id) else { continue };
             match j.stage {
                 Stage::Structure { .. } | Stage::Asking => {
-                    self.exports.jobs.remove(&id);
                     if self.exports.asking == Some(id) {
                         self.exports.asking = None;
                         self.overlays.close(OverlayKind::Confirm);
                     }
+                    self.forget_export(id, Notice::new(Label::ExportStale, Level::Warning));
+                }
+                // Cancelled, and its session closed under it: cancelled, said now (a writer that
+                // waits on its file would say it late, or never).
+                _ if j.cancelled => {
+                    let partial = partial_path(&j.path).display().to_string();
+                    if let Some(j) = self.exports.jobs.remove(&id) {
+                        if let Some(ctl) = &j.ctl {
+                            let _ = ctl.send(Ctl::Cancel);
+                        }
+                        self.exports.quiet.insert(j.id);
+                    }
+                    self.export_said(id, Notice::new(Msg::ExportCancelledClosed { path: partial }, Level::Warning));
                 }
                 _ => {
-                    // Lost while it read (not closed after a cancel nobody answered).
-                    let lost = !j.cancelled && self.tabs.get(id).is_some_and(|t| t.exec.state == SessionState::Lost);
+                    let lost = self.tabs.get(id).is_some_and(|t| t.exec.state == SessionState::Lost);
                     let mysql = matches!(self.tab_dialect(id), Dialect::MySql(_));
                     let why = if lost && mysql { Failure::MySqlLost } else { Failure::SessionEnded };
                     let Some(j) = self.exports.jobs.get_mut(&id) else { continue };
@@ -1117,21 +1244,55 @@ impl App {
         }
     }
 
-    /// Tab `tab`'s export ended (`ours`: the job the tab has): the one message about it.
-    fn export_ended(&mut self, tab: TabId, ours: bool, outcome: Outcome) {
-        let job = if ours { self.exports.jobs.remove(&tab) } else { None };
-        let now = self.now();
-        // A statement still running for it stops (its rows have nowhere to go).
-        if let Some(t) = self.tabs.get_mut(tab)
-            && job.is_some()
-            && let Some(r) = t.exec.running.as_mut().filter(|r| r.export && r.cancelling.is_none())
-            && !matches!(outcome, Outcome::Done { .. })
-        {
-            r.cancelling = Some(now);
-            if let Some(s) = &t.exec.session {
-                s.cancel();
-            }
+    /// Forget tab `id`'s export that never started (its writer did not run), saying `why` once:
+    /// in the tab's status, or the status bar when the tab is gone.
+    fn forget_export(&mut self, id: TabId, why: Notice) {
+        self.exports.jobs.remove(&id);
+        self.export_said(id, why);
+    }
+
+    /// The one message of an export of tab `tab`: in its Messages and status, and said at once
+    /// (the status bar when the tab is gone).
+    fn export_said(&mut self, tab: TabId, notice: Notice) {
+        if let Some(t) = self.tabs.get_mut(tab) {
+            t.exec.run.notes.push(notice.clone());
         }
+        if self.tabs.get(tab).is_some() {
+            self.tab_status(tab, notice.clone());
+        } else {
+            self.show_status(notice.clone());
+        }
+        if self.tab().id == tab || self.tabs.get(tab).is_none() {
+            self.flash(notice);
+        }
+    }
+
+    /// Quitting: every export stops and ends its file (a partial file whose format is ended),
+    /// waiting a moment for the writers.
+    pub(super) fn end_exports_for_quit(&mut self) {
+        let jobs: Vec<Job> = self.exports.jobs.drain().map(|(_, j)| j).collect();
+        let mut writers = Vec::new();
+        for j in jobs {
+            if let Some(ctl) = &j.ctl {
+                let _ = ctl.send(Ctl::Cancel);
+            }
+            writers.extend(j.writer);
+        }
+        let deadline = Instant::now() + QUIT_WAIT;
+        while writers.iter().any(|w| !w.is_finished()) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    /// Tab `tab`'s export ended (`ours`: the job the tab has): the one message about it.
+    fn export_ended(&mut self, tab: TabId, job_id: u64, ours: bool, outcome: Outcome) {
+        let job = if ours { self.exports.jobs.remove(&tab) } else { None };
+        // A late word of a job the app ended itself (its message said so already).
+        if !ours && self.exports.quiet.remove(&job_id) {
+            return;
+        }
+        // A statement still running for it needs no cancel: with nobody reading its channel the
+        // session stops it at its next batch (a cancel sent now could reach the next statement).
         let notice = match outcome {
             // Cancelled before anything was written: nothing to ask.
             Outcome::Exists { .. } if job.as_ref().is_some_and(|j| j.cancelled) => {
@@ -1144,7 +1305,7 @@ impl App {
             Outcome::Exists { path, rows } if ours => {
                 // Asked (it opens by itself: armed): replace it, or keep it.
                 if let Some(j) = job {
-                    let job = Job { ctl: None, stage: Stage::Asking, own: true, snapshot: rows, ..j };
+                    let job = Job { ctl: None, writer: None, stage: Stage::Asking, own: true, snapshot: rows, ..j };
                     self.exports.jobs.insert(tab, job);
                     self.exports.asking = Some(tab);
                     self.confirm(
@@ -1183,18 +1344,7 @@ impl App {
                 Notice::new(m, Level::Error)
             }
         };
-        if let Some(t) = self.tabs.get_mut(tab) {
-            t.exec.run.notes.push(notice.clone());
-        }
-        // Said at once, and kept in the tab's status (the tab may be gone: then the status bar).
-        if self.tabs.get(tab).is_some() {
-            self.tab_status(tab, notice.clone());
-        } else {
-            self.show_status(notice.clone());
-        }
-        if self.tab().id == tab || self.tabs.get(tab).is_none() {
-            self.flash(notice);
-        }
+        self.export_said(tab, notice);
     }
 
     /// Why an export failed, in words.
@@ -1207,6 +1357,9 @@ impl App {
             Failure::Read(fault) => {
                 let error = self.fault_text("export.read_failed", fault);
                 self.i18n.msg(&Msg::ExportWhyRead { error }).to_string()
+            }
+            Failure::NotAFile(p) => {
+                self.i18n.msg(&Msg::ExportWhyNotAFile { path: p.display().to_string() }).to_string()
             }
             Failure::PartialInTheWay(p) => {
                 self.i18n.msg(&Msg::ExportWhyPartialInTheWay { path: p.display().to_string() }).to_string()
@@ -1335,23 +1488,26 @@ fn spawn_writer(
     fallback: Option<PathBuf>,
     source: Source,
     out: Out,
-) -> CtlSender {
+) -> (CtlSender, Option<std::thread::JoinHandle<()>>) {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
     let thread_out = out.clone();
     let spawned = std::thread::Builder::new().name("datarig-export".into()).spawn(move || {
-        let mut end = EndGuard { out: thread_out, job, tab, sent: false };
+        let mut end = EndGuard { out: thread_out, job, tab, sent: false, partial: Default::default() };
         let outcome = write(&end, &spec, path, overwrite, fallback, source, &mut rx);
         end.send(ExportNews::Ended(outcome));
         end.sent = true;
     });
-    if spawned.is_err() {
-        out.send(AppEvent::Export(ExportEvent {
-            job,
-            tab,
-            news: ExportNews::Ended(Outcome::Failed { why: Failure::Internal, rows: 0, partial: None }),
-        }));
+    match spawned {
+        Ok(handle) => (tx, Some(handle)),
+        Err(_) => {
+            out.send(AppEvent::Export(ExportEvent {
+                job,
+                tab,
+                news: ExportNews::Ended(Outcome::Failed { why: Failure::Internal, rows: 0, partial: None }),
+            }));
+            (tx, None)
+        }
     }
-    tx
 }
 
 /// Sends the writer's events, and its terminal one when the thread ends without it (a panic).
@@ -1360,6 +1516,9 @@ struct EndGuard {
     job: u64,
     tab: TabId,
     sent: bool,
+    /// The partial file, once it was made: a writer that stops without its terminal event says
+    /// where it is.
+    partial: std::cell::RefCell<Option<PathBuf>>,
 }
 
 impl EndGuard {
@@ -1371,7 +1530,8 @@ impl EndGuard {
 impl Drop for EndGuard {
     fn drop(&mut self) {
         if !self.sent {
-            self.send(ExportNews::Ended(Outcome::Failed { why: Failure::Internal, rows: 0, partial: None }));
+            let partial = self.partial.borrow_mut().take().filter(|p| p.exists());
+            self.send(ExportNews::Ended(Outcome::Failed { why: Failure::Internal, rows: 0, partial }));
         }
     }
 }
@@ -1415,6 +1575,9 @@ fn write(
         _ => path,
     };
     match std::fs::symlink_metadata(&path) {
+        // A folder or a link is never replaced (renaming over it would fail, or replace the
+        // link rather than what it names).
+        Ok(m) if !m.is_file() => return failed(Failure::NotAFile(path), 0, None),
         Ok(_) if !overwrite => {
             let rows = match source {
                 Source::Local(s) => Some(s),
@@ -1434,6 +1597,7 @@ fn write(
         }
         Err(e) => return failed(Failure::Io(Fault::io_at(&e, &partial), partial.clone()), 0, None),
     };
+    *end.partial.borrow_mut() = Some(partial.clone());
     end.send(ExportNews::Ready { path: path.clone() });
     let columns: Vec<core_export::Column> =
         spec.columns.iter().map(|(name, kind)| core_export::Column { name, kind: *kind }).collect();
@@ -1509,7 +1673,11 @@ fn write(
     match stopped {
         Stopped::Done => {
             let renamed = if overwrite {
-                std::fs::rename(&partial, &path)
+                std::fs::rename(&partial, &path).inspect(|()| {
+                    if let Some(dir) = path.parent() {
+                        datarig_core::fsutil::sync_dir(dir);
+                    }
+                })
             } else {
                 datarig_core::fsutil::rename_new(&partial, &path)
             };
@@ -1659,30 +1827,29 @@ fn write_rows<W: Write>(
     rows: &[Vec<Cell>],
     io: &dyn Fn(std::io::Error) -> Failure,
 ) -> Result<(), Failure> {
-    let picked: Vec<Vec<Option<Cow<str>>>> = rows
-        .iter()
-        .map(|r| {
-            spec.pick
-                .iter()
-                .enumerate()
-                .map(|(i, &c)| {
-                    let v = r.get(c).and_then(|v| v.as_deref());
-                    match (&spec.cells, v) {
-                        (Some(cells), Some(v)) => cells.cell(i, v).map(Some),
-                        (_, v) => Ok(v.map(Cow::Borrowed)),
-                    }
-                })
-                .collect::<Result<Vec<_>, Refused>>()
-        })
-        .collect::<Result<Vec<_>, Refused>>()
-        .map_err(Failure::NotWhole)?;
-    let out: Vec<core_export::Row> = match &spec.sql {
-        Some(SqlTarget::Insert { written, .. }) => {
-            picked.iter().map(|r| written.iter().map(|(i, _)| r[*i].as_deref()).collect()).collect()
-        }
-        _ => picked.iter().map(|r| r.iter().map(|v| v.as_deref()).collect()).collect(),
-    };
-    w.rows(&out).map_err(io)
+    // A row at a time: what is formatted and held beside the batch is one row's text, however
+    // wide the rows.
+    for r in rows {
+        let picked = spec
+            .pick
+            .iter()
+            .enumerate()
+            .map(|(i, &c)| {
+                let v = r.get(c).and_then(|v| v.as_deref());
+                match (&spec.cells, v) {
+                    (Some(cells), Some(v)) => cells.cell(i, v).map(Some),
+                    (_, v) => Ok(v.map(Cow::Borrowed)),
+                }
+            })
+            .collect::<Result<Vec<Option<Cow<str>>>, Refused>>()
+            .map_err(Failure::NotWhole)?;
+        let out: core_export::Row = match &spec.sql {
+            Some(SqlTarget::Insert { written, .. }) => written.iter().map(|(i, _)| picked[*i].as_deref()).collect(),
+            _ => picked.iter().map(|v| v.as_deref()).collect(),
+        };
+        w.rows(&[out]).map_err(io)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

@@ -295,3 +295,16 @@ fn a_snapshot_leaves_out_rows_appended_later_and_stops_when_asked() {
     assert_eq!(chunks, 3, "no chunk after `false`");
     let _ = std::fs::remove_dir_all(&state);
 }
+
+#[test]
+fn a_snapshot_of_rows_in_memory_copies_none_of_them() {
+    let s = RowStore::in_memory(rows(0..50_000));
+    let snap = s.snapshot(10..20).unwrap();
+    assert!(matches!(&snap, RowsSnapshot::Rows { rows, .. } if rows.len() == 50_000), "the store's own rows, shared");
+    assert_eq!(read_all(&snap, 3), rows(10..20));
+    // The store changes on: the snapshot keeps what it had.
+    let mut s = s;
+    s.append(rows(50_000..50_010)).unwrap();
+    assert_eq!(read_all(&snap, 7), rows(10..20));
+    assert_eq!(s.len(), 50_010);
+}

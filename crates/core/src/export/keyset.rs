@@ -79,10 +79,16 @@ pub fn key_kind(d: Dialect, c: &ColumnMeta, text_ok: bool) -> Result<Kind, NotKe
 }
 
 /// The key a table is read by: its primary key, else its first unique constraint whose
-/// columns are all `NOT NULL`, the columns in the constraint's order; `None` when it has none,
+/// columns are all `NOT NULL`, the columns in the constraint's order; `None` when it has none
+/// (or tables inherit from it, whose rows the key does not bind),
 /// or the key's index orders a column otherwise than ascending (`DESC`, a collation of its own:
 /// [`NotKeyset::Ordered`]).
 pub fn table_key(s: &TableStructure) -> Result<Vec<String>, NotKeyset> {
+    // Rows of tables inheriting from it are read with it, and its keys do not bind them: a key
+    // value may repeat, and a chunk would skip the others.
+    if s.inherited {
+        return Err(NotKeyset::NoKey);
+    }
     let not_null = |name: &str| s.columns.iter().any(|c| c.name == name && c.not_null);
     let key = s
         .primary_key
@@ -94,10 +100,14 @@ pub fn table_key(s: &TableStructure) -> Result<Vec<String>, NotKeyset> {
     // collation, an operator class) is not read in the order the comparison uses.
     for i in &s.indexes {
         let cols: Vec<&str> = i.key_columns.iter().map(|c| c.as_deref().unwrap_or("")).collect();
-        if i.unique
-            && cols == key.columns.iter().map(String::as_str).collect::<Vec<_>>()
-            && let Some((c, _)) = key.columns.iter().zip(&i.options).find(|(_, o)| !o.trim().is_empty())
-        {
+        if !(i.unique && cols == key.columns.iter().map(String::as_str).collect::<Vec<_>>()) {
+            continue;
+        }
+        if let Some((c, _)) = key.columns.iter().zip(&i.options).find(|(_, o)| !o.trim().is_empty()) {
+            return Err(NotKeyset::Ordered(c.clone()));
+        }
+        // A MySQL prefix key (`name(10)`) is not the column's order: every chunk would sort.
+        if let Some((c, _)) = key.columns.iter().zip(&i.columns).find(|(_, t)| t.ends_with(')')) {
             return Err(NotKeyset::Ordered(c.clone()));
         }
     }
@@ -172,6 +182,10 @@ impl Keyset {
         let mut values = Vec::with_capacity(self.key.len());
         for k in &self.key {
             let v = last.get(k.index)?.as_deref()?;
+            // Text the driver could not read as UTF-8 (replaced characters) is not the key.
+            if v.contains('\u{FFFD}') {
+                return None;
+            }
             let lit = sql_value(d, k.kind, Some(v));
             // Bytes the MySQL driver did not show as `0x…` would be compared as their text.
             if k.kind == Kind::Bytes && matches!(d, Dialect::MySql(_)) && !lit.starts_with("X'") {

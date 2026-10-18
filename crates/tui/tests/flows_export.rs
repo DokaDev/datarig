@@ -622,3 +622,173 @@ fn a_question_that_comes_later_is_not_asked_over_another() {
     let t1 = h.app.tabs.get(first).and_then(|t| t.status.as_ref()).map(|n| n.render(&h.app.i18n).to_string());
     assert!(t1.as_deref().is_some_and(|s| s.contains("another question is open")), "{t1:?}");
 }
+
+/// A table tab whose query is the table's own, with a page of `n` rows.
+fn table_tab(h: &mut Harness, n: usize) {
+    h.app.tab_mut().editor = Editor::new("SELECT * FROM \"shop\".\"users\"");
+    h.app.tab_mut().doc.table = Some(TableRef { schema: "shop".into(), name: "users".into() });
+    first_page(h, n, true);
+    h.sent();
+}
+
+/// The active tab's status and its run's notes.
+fn said(h: &Harness) -> Vec<String> {
+    let t = h.app.tab();
+    t.exec.run.notes.iter().chain(t.status.iter()).map(|n| n.render(&h.app.i18n).to_string()).collect()
+}
+
+#[test]
+fn a_run_while_the_tables_key_is_read_ends_the_export_with_a_word() {
+    let dir = scratch("key-then-run");
+    let mut h = Harness::connected(Lang::En);
+    table_tab(&mut h, 10);
+    h.command(&format!("export {}", dir.join("k.csv").display()));
+    assert!(h.app.exporting(h.app.tab().id));
+    // Another run changes the result before the key comes.
+    first_page(&mut h, 5, false);
+    assert!(!h.app.exporting(h.app.tab().id));
+    assert!(said(&h).iter().any(|s| s.starts_with("Not exported")), "{:?}", said(&h));
+}
+
+#[test]
+fn a_lost_session_under_the_question_ends_the_export_with_a_word() {
+    let dir = scratch("lost-question");
+    let mut h = Harness::connected(Lang::En);
+    h.app.tab_mut().editor = Editor::new("SELECT random() AS id, 'x' AS name FROM generate_series(1, 5000)");
+    first_page(&mut h, 10, true);
+    h.command(&format!("export {}", dir.join("q.csv").display()));
+    assert_eq!(h.app.overlays.confirm().map(|c| c.action), Some(ConfirmAction::ExportStart));
+    h.tab_db(0, DbEvent::Lost { error: DbError::Closed });
+    assert!(!h.app.exporting(h.app.tab().id));
+    assert!(h.app.overlays.confirm().is_none());
+    assert!(said(&h).iter().any(|s| s.starts_with("Not exported")), "{:?}", said(&h));
+}
+
+#[test]
+fn without_a_metadata_session_a_table_tab_exports_with_one_statement() {
+    let dir = scratch("no-meta");
+    let mut h = Harness::connected(Lang::En);
+    table_tab(&mut h, 10);
+    // Waiting for the key when the metadata session goes: one statement instead.
+    h.command(&format!("export {}", dir.join("a.csv").display()));
+    h.meta_db("local-pg", DbEvent::Lost { error: DbError::Closed });
+    let (id, _, guard, sink) = wait_export(&mut h);
+    assert_eq!(guard, ExportGuard::Repeatable);
+    drop(sink);
+    h.tab_db(
+        0,
+        DbEvent::Exported { id, result: Ok(ExportRead { rows: 0, last: None, complete: true }), cancelled: false },
+    );
+    pump_until(&mut h, "the end", done);
+    // No metadata session at all when it starts: one statement at once.
+    h.command(&format!("export {}", dir.join("b.csv").display()));
+    let sent = wait_export(&mut h);
+    assert_eq!(sent.2, ExportGuard::Repeatable);
+}
+
+#[test]
+fn a_folder_is_not_a_file_to_export_to() {
+    let dir = scratch("folder");
+    let mut h = Harness::connected(Lang::En);
+    first_page(&mut h, 10, true);
+    h.sent();
+    h.command(&format!("export csv {}", dir.display()));
+    pump_until(&mut h, "the end", done);
+    assert_eq!(h.overlay_kind(), None, "no question about replacing a folder");
+    assert!(export_sent(&mut h).is_none(), "nothing ran");
+    assert!(status(&h).contains("is a folder"), "{}", status(&h));
+    assert!(!PathBuf::from(format!("{}.partial", dir.display())).exists());
+}
+
+#[test]
+fn a_statement_run_again_for_the_export_is_in_the_messages() {
+    let dir = scratch("note");
+    let mut h = Harness::connected(Lang::En);
+    first_page(&mut h, 10, true);
+    h.sent();
+    h.command(&format!("export {}", dir.join("n.csv").display()));
+    let (id, _, _, sink) = wait_export(&mut h);
+    assert!(
+        said(&h)
+            .iter()
+            .any(|s| s.starts_with("Runs again for the export: ")
+                && s.contains("SELECT * FROM shop.users WHERE id <= 8")),
+        "{:?}",
+        said(&h)
+    );
+    drop(sink);
+    h.tab_db(
+        0,
+        DbEvent::Exported { id, result: Ok(ExportRead { rows: 0, last: None, complete: true }), cancelled: false },
+    );
+    pump_until(&mut h, "the end", done);
+}
+
+#[test]
+fn a_writer_that_fails_sends_no_cancel_to_the_server() {
+    let dir = scratch("no-cancel");
+    let mut h = Harness::connected(Lang::En);
+    first_page(&mut h, 10, true);
+    h.sent();
+    h.command(&format!("export {}", dir.join("c.csv").display()));
+    let (_, _, _, sink) = wait_export(&mut h);
+    // Other columns than the result's: the writer stops.
+    sink.blocking_send(ExportBatch::Columns(vec![meta("other", "text", false, false)])).unwrap();
+    pump_until(&mut h, "the end", done);
+    assert!(status(&h).contains("columns changed"), "{}", status(&h));
+    assert!(!h.session_cancelled(1), "the session stops reading on its own");
+}
+
+#[test]
+fn a_cancelled_export_whose_session_closes_says_cancelled_at_once() {
+    let dir = scratch("cancel-closed");
+    let mut h = Harness::connected(Lang::En);
+    first_page(&mut h, 10, true);
+    h.sent();
+    h.command(&format!("export {}", dir.join("x.csv").display()));
+    let (_, _, _, sink) = wait_export(&mut h);
+    h.ctrl('c');
+    // The session never answers the cancel and is closed; its channel stays open.
+    h.tab_db(0, DbEvent::Lost { error: DbError::Closed });
+    assert!(!h.app.exporting(h.app.tab().id), "forgotten at once");
+    assert!(status(&h).starts_with("Export cancelled"), "{}", status(&h));
+    // The writer's own late word changes nothing.
+    h.app.pump_exports(Duration::from_millis(300));
+    assert!(status(&h).starts_with("Export cancelled"), "{}", status(&h));
+    drop(sink);
+}
+
+#[test]
+fn csv_options_of_the_command_shape_the_file() {
+    let dir = scratch("csv-options");
+    let mut h = Harness::connected(Lang::En);
+    first_page(&mut h, 3, false);
+    h.sent();
+    let path = dir.join("o.csv");
+    h.command(&format!("export csv fetched delim=; quote=never header=off null=NULL {}", path.display()));
+    pump_until(&mut h, "the end", done);
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(text.lines().next(), Some("0;NULL"), "{text}");
+    assert!(text.contains("1;n\u{d55c}1, \"q\""), "{text}");
+    assert!(status(&h).contains("values without the quotes they need"), "{}", status(&h));
+}
+
+#[test]
+fn quitting_ends_the_exports_files() {
+    let dir = scratch("quit");
+    let mut h = Harness::connected(Lang::En);
+    first_page(&mut h, 100, true);
+    h.sent();
+    h.command(&format!("export {}", dir.join("q.json").display()));
+    let (_, _, _, sink) = wait_export(&mut h);
+    sink.blocking_send(ExportBatch::Columns(columns())).unwrap();
+    sink.blocking_send(ExportBatch::Rows(rows(0, 5))).unwrap();
+    // Quit anyway: the export stops and its file is ended before the app goes.
+    h.app.quit_on_signal();
+    assert!(h.app.quit);
+    assert!(!h.app.exporting(h.app.tab().id));
+    let partial = dir.join("q.json.partial");
+    let v: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&partial).unwrap()).unwrap();
+    assert_eq!(v.as_array().map(Vec::len), Some(5), "a closed array of what was written");
+    drop(sink);
+}

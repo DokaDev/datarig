@@ -467,7 +467,7 @@ fn json_lines_files_have_one_object_per_line() {
     let one: Vec<Row> = vec![vec![Some("1"), Some("\u{c548}\u{b155}"), Some("true"), None, None, None, None]];
     assert_eq!(
         file(Format::JsonLines, &cols, &one, 1).0,
-        "{\"id\": 1, \"name\": \"\u{c548}\u{b155}\", \"ok\": true, \"doc\": null, \"tags\": null, \"name_2\": null, \"\u{d55c} \\\"q\\\"\": null}\n"
+        "{\"id\":1,\"name\":\"\u{c548}\u{b155}\",\"ok\":true,\"doc\":null,\"tags\":null,\"name_2\":null,\"\u{d55c} \\\"q\\\"\":null}\n"
     );
 }
 
@@ -649,5 +649,31 @@ fn every_text_format_writes_the_same_bytes_whatever_the_chunks() {
         for chunk in [1, 2, 3, 7, 39] {
             assert_eq!(file(format.clone(), &cols, &rows, chunk).0, whole, "{format:?} by {chunk}");
         }
+    }
+}
+
+#[test]
+fn json_values_with_line_breaks_keep_json_lines_one_line_per_row() {
+    let cols = [
+        Column { name: "doc", kind: Kind::Json },
+        Column { name: "docs", kind: Kind::Array(crate::export::Element::Json) },
+        Column { name: "t", kind: Kind::Text },
+    ];
+    let doc = "{\n  \"a\": [1,\n 2],\n \"s\": \"x\\ny\",\n \"big\": 123456789012345678901234567890\n}";
+    // `json[]` as PostgreSQL writes it: an element quoted, with a line break inside.
+    let arr = "{\"{\n \\\"b\\\": 1\n}\"}";
+    let rows: Vec<Row> = vec![vec![Some(doc), Some(arr), Some("line\nbreak")], vec![None, None, None]];
+    let (text, _) = file(Format::JsonLines, &cols, &rows, 1);
+    let lines: Vec<&str> = text.split_terminator('\n').collect();
+    assert_eq!(lines.len(), rows.len(), "{text}");
+    let v: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(v["doc"]["s"], serde_json::json!("x\ny"), "text inside strings is kept");
+    assert_eq!(v["docs"][0]["b"], serde_json::json!(1));
+    assert!(lines[0].contains("123456789012345678901234567890"), "numbers keep every digit");
+    // The array formats stay valid JSON with the same values.
+    for f in [Format::Json, Format::JsonPretty] {
+        let (text, _) = file(f, &cols, &rows, 1);
+        let v: serde_json::Value = serde_json::from_str(&text).unwrap_or_else(|e| panic!("{e}: {text}"));
+        assert_eq!(v[0]["doc"]["a"], serde_json::json!([1, 2]));
     }
 }

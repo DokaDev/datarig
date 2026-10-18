@@ -456,6 +456,8 @@ impl App {
     pub(super) fn finish_quit(&mut self) {
         self.quitting = None;
         self.save_workspace();
+        // Exports end their files (a partial file that reads) before the process goes.
+        self.end_exports_for_quit();
         self.close_sessions();
         let ids: Vec<ProfileId> = self.conns.iter().map(|(id, _)| id).collect();
         for id in ids {

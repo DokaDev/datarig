@@ -68,7 +68,10 @@ pub async fn run(url: &str, scratch: &std::path::Path, keyset: bool) -> Result<V
     let secs = t0.elapsed().as_secs_f64();
     let status = app.tab().status.as_ref().map(|n| n.render(&app.i18n).to_string()).unwrap_or_default();
     let bytes = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0);
-    let complete = status.starts_with("Exported 4,000,000 rows");
+    // The keyset scenario must have read by the key (not one statement).
+    let chunked =
+        app.tab().exec.run.notes.iter().any(|n| matches!(n.msg, datarig_core::i18n::Msg::ExportRunsInChunks { .. }));
+    let complete = status.starts_with("Exported 4,000,000 rows") && chunked == keyset;
     let peak = samples.iter().filter_map(|v| v["rss_kb"].as_u64()).max().unwrap_or(0);
     let rows_per_s = rows as f64 / secs.max(0.001);
     println!(
@@ -84,6 +87,7 @@ pub async fn run(url: &str, scratch: &std::path::Path, keyset: bool) -> Result<V
         "secs": secs,
         "rows_per_s": rows_per_s,
         "complete": complete,
+        "chunked": chunked,
         "status": status,
         "rss_kb_before": rss0,
         "rss_kb_peak": peak,

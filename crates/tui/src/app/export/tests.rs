@@ -10,7 +10,8 @@ fn the_words_of_export_are_a_format_a_scope_and_a_path() {
         ExportArgs {
             format: Some(ExportFormat::Json),
             scope: Some(ExportScope::Fetched),
-            path: Some("~/out file.json".into())
+            path: Some("~/out file.json".into()),
+            ..Default::default()
         }
     );
     assert_eq!(
@@ -66,4 +67,34 @@ fn names_become_safe_file_names() {
 #[test]
 fn the_partial_file_is_next_to_the_file() {
     assert_eq!(partial_path(Path::new("/d/out.csv")), PathBuf::from("/d/out.csv.partial"));
+}
+
+#[test]
+fn csv_options_are_words_before_the_path() {
+    let a = parse_args("csv fetched delim=; quote=never header=off null=NULL ~/out.csv").unwrap();
+    assert_eq!(a.csv, Delimited { delimiter: ';', quote: Quote::Never, header: false, null: "NULL".into() });
+    assert_eq!(a.path.as_deref(), Some("~/out.csv"));
+    assert_eq!(parse_args("csv delim=tab x.csv").unwrap().csv.delimiter, '\t');
+    assert_eq!(parse_args("csv delim=\\t x.csv").unwrap().csv.delimiter, '\t');
+    assert_eq!(parse_args("csv quote=maybe x.csv"), Err(ArgsError::BadOption("quote=maybe".into())));
+    assert_eq!(parse_args("csv a=b.csv").unwrap().path.as_deref(), Some("a=b.csv"), "not an option: a path");
+}
+
+#[test]
+fn a_writer_that_stops_without_its_word_says_where_its_partial_file_is() {
+    let dir = std::env::temp_dir().join(format!("datarig-export-guard-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let partial = dir.join("x.csv.partial");
+    std::fs::write(&partial, "id\n1\n").unwrap();
+    let (tx, rx) = mpsc::channel();
+    let guard = EndGuard { out: Out::Local(tx), job: 1, tab: TabId(1), sent: false, partial: Default::default() };
+    *guard.partial.borrow_mut() = Some(partial.clone());
+    drop(guard);
+    match rx.recv().unwrap() {
+        AppEvent::Export(ExportEvent { news: ExportNews::Ended(Outcome::Failed { partial: p, .. }), .. }) => {
+            assert_eq!(p, Some(partial.clone()));
+        }
+        other => panic!("{other:?}"),
+    }
+    let _ = std::fs::remove_dir_all(&dir);
 }

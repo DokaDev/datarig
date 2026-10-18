@@ -358,3 +358,48 @@ async fn an_export_through_a_pooler_streams_every_row() {
     assert!(read.complete && read.rows == 7_000);
     assert_eq!(c.rows("SELECT 1").await, [[Some("1".into())]]);
 }
+
+/// A table others inherit from (legacy inheritance): its key does not bind the children, which
+/// `SELECT *` reads too, so the structure says so and no keyset is made of it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_table_with_inheritance_children_is_not_read_by_its_key() {
+    let Some(url) = pg_url("a_table_with_inheritance_children_is_not_read_by_its_key") else { return };
+    let parent = table("parent");
+    let child = table("child");
+    let _g = Guard(url.clone(), format!("DROP TABLE IF EXISTS {child}, {parent}"));
+    let mut c = Conn::open(&url, SessionRole::Query, false).await;
+    c.ok(&format!("CREATE TABLE {parent} (id int PRIMARY KEY)")).await;
+    c.ok(&format!("CREATE TABLE {child} () INHERITS ({parent})")).await;
+    c.ok(&format!("INSERT INTO {parent} VALUES (1), (2)")).await;
+    c.ok(&format!("INSERT INTO {child} VALUES (2)")).await;
+    let mut meta = Conn::open(&url, SessionRole::Meta, false).await;
+    let name = parent.trim_start_matches("public.").to_string();
+    meta.session.send(DbCommand::LoadStructure { schema: "public".into(), table: name });
+    let DbEvent::Structure { result: Ok(s), .. } = meta.wait(|e| matches!(e, DbEvent::Structure { .. }), 20).await
+    else {
+        panic!("no structure")
+    };
+    assert!(s.inherited);
+    assert_eq!(table_key(&s), Err(datarig_core::export::keyset::NotKeyset::NoKey));
+}
+
+/// Wide rows make smaller batches: memory is bounded by bytes, not only by rows.
+#[tokio::test(flavor = "multi_thread")]
+async fn wide_rows_come_in_batches_bounded_by_bytes() {
+    let Some(url) = pg_url("wide_rows_come_in_batches_bounded_by_bytes") else { return };
+    let mut c = Conn::open(&url, SessionRole::Query, false).await;
+    let (id, mut rx) =
+        c.export("SELECT g, repeat('x', 1000000) FROM generate_series(1, 120) g", ExportGuard::Confirmed, 1, 2_000);
+    let mut largest = 0usize;
+    let mut rows = 0;
+    while let Some(b) = rx.recv().await {
+        if let ExportBatch::Rows(r) = b {
+            rows += r.len();
+            largest =
+                largest.max(r.iter().map(|r| r.iter().map(|v| v.as_ref().map_or(0, String::len)).sum::<usize>()).sum());
+        }
+    }
+    assert_eq!(rows, 120);
+    assert!(largest <= 2 * datarig_core::driver::EXPORT_BATCH_BYTES, "{largest}");
+    assert!(c.exported(id).await.0.unwrap().complete);
+}
