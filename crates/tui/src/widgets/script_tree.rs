@@ -1,6 +1,6 @@
 //! The folder tree of the saved queries: "save as" with a name field below the
-//! tree, "open" with a filter line; of the file system for the SSH key file; and of folders
-//! only, to pick one.
+//! tree, "open" with a filter line; of the file system for the SSH key file and for where an
+//! export goes; and of folders only, to pick one.
 
 use crate::app::App;
 use crate::app::key_picker::{self, KeyLook};
@@ -23,6 +23,7 @@ pub(crate) fn draw_script_tree(app: &mut App, area: Rect, buf: &mut Buffer) -> O
     let t = app.overlays.script_tree()?;
     let save = matches!(t.mode, TreeMode::Save { .. });
     let key_file = t.mode == TreeMode::KeyFile;
+    let export = matches!(t.mode, TreeMode::ExportPath(_));
     let folder_mode = matches!(t.mode, TreeMode::Folder(_));
     let (title, footer, field) = match t.mode {
         TreeMode::Save { .. } => {
@@ -39,10 +40,13 @@ pub(crate) fn draw_script_tree(app: &mut App, area: Rect, buf: &mut Buffer) -> O
         TreeMode::Folder(pick) => {
             (app.i18n.label(pick.title()), app.i18n.label(Label::FolderPickKeys), Label::ScriptTreeFilter)
         }
+        TreeMode::ExportPath(_) => {
+            (app.i18n.label(Label::ExportPathTitle), app.i18n.label(Label::ExportPathKeys), Label::KeyPickerFilter)
+        }
     };
     let field = app.i18n.label(field).to_string();
-    // Key file mode: the folder shown, `~/…` under the home folder.
-    let top = if key_file {
+    // Key file and export path modes: the folder shown, `~/…` under the home folder.
+    let top = if key_file || export {
         key_picker::shown_dir(&t.root, app.home().as_deref())
     } else if folder_mode {
         app.i18n.label(Label::ChooserFolderTop).to_string()
@@ -50,6 +54,7 @@ pub(crate) fn draw_script_tree(app: &mut App, area: Rect, buf: &mut Buffer) -> O
         app.i18n.label(Label::ExplorerScripts).to_string()
     };
     let unreadable = app.i18n.label(Label::ScriptTreeUnreadable).to_string();
+    let save_here = app.i18n.label(Label::ExportPathSaveHere).to_string();
     let error = t.error.as_ref().map(|e| app.i18n.msg(e).to_string());
     let rows = t.rows();
     let selected = t.selected();
@@ -116,6 +121,8 @@ pub(crate) fn draw_script_tree(app: &mut App, area: Rect, buf: &mut Buffer) -> O
                 };
                 (name, style)
             }
+            // Export path mode: files are dimmed (a file of that name would be replaced).
+            TreeRow::File(p) if export => (p.rsplit('/').next().unwrap_or(p).to_string(), dim),
             TreeRow::File(p) => {
                 if icons_on {
                     x += put(buf, x, y, &format!("{} ", icons::SCRIPT), room(x), dim);
@@ -124,6 +131,9 @@ pub(crate) fn draw_script_tree(app: &mut App, area: Rect, buf: &mut Buffer) -> O
             }
         };
         x += put(buf, x, y, &text, room(x), style);
+        if export && *row == TreeRow::Top {
+            put(buf, x + 2, y, &save_here, room(x + 2), Style::new().fg(th.accent).patch(bg));
+        }
         if t.unreadable(row) {
             put(buf, x + 1, y, &unreadable, room(x + 1), Style::new().fg(th.warning).patch(bg));
         }

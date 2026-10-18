@@ -458,7 +458,11 @@ Reserved — settings screen; c on the theme row: copy the theme to a new theme 
 
 ## `overlay.export` [text]
 
-The export dialog (`results.export`, `:export` alone): the rows (every row, the rows fetched, the selection while there is one), the format, CSV's options and the file. `Tab`/`Shift+Tab` and the arrows move between the fields, `Enter` or `Space` on a value lists what it can be (`←`/`→` step through them), `Space`, `Enter` or `←`/`→` tick the header line, `Enter` in a text field or `Enter`/`Space` on Export exports (on Cancel: closes), `Esc` cancels. Under the rows it says how they will be read, under the format what it cannot do here (a format that comes later, an INSERT or UPDATE the result's keys do not allow, struck through in the list). A click focuses a field, puts the cursor in a text, opens a value's list or ticks the checkbox; Export and Cancel act on the release. Inside `root`.
+The export dialog (`results.export`, `:export` alone): the rows (every row, the rows fetched, the selection while there is one), the format, CSV's options and the file. `Tab`/`Shift+Tab` and the arrows move between the fields, `Enter` or `Space` on a value lists what it can be (`←`/`→` step through them), `Space`, `Enter` or `←`/`→` tick the header line, `Enter` in a text field or `Enter`/`Space` on Export exports (on Cancel: closes), `Esc` cancels. Under the rows it says how they will be read, under the format what it cannot do here (a format that comes later, an INSERT or UPDATE the result's keys do not allow, struck through in the list). In the file's field `Tab` first completes a name (again: lists the names, then puts each in turn); `[Browse…]` picks where the file goes in a tree. A click focuses a field, puts the cursor in a text, opens a value's list or ticks the checkbox; Export and Cancel act on the release. Inside `root`.
+
+| Keys | Action | Description | R |
+|---|---|---|---|
+| `Ctrl+O` | `export.pick_path` | Export dialog: pick where the file goes |  |
 
 Reserved — export dialog: `Tab` `Shift+Tab` `Down` `Up` `Enter` `Esc`
 
@@ -496,15 +500,15 @@ Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+
 
 ## `overlay.script_tree`
 
-The folder tree of the saved queries (save as, open): the tree has the keyboard. Inside `root`.
+The folder tree of the saved queries (save as, open) or of the file system (the SSH key file, where an export goes; there `.` shows hidden names and `Ctrl+S` saves in the selected folder): the tree has the keyboard. Inside `root`.
 
-Reserved — saved-queries tree: `j` `k` `h` `l` `Up` `Down` `Left` `Right` `Enter` `n` `/` `q` `Tab` `Shift+Tab` `Esc`
+Reserved — saved-queries tree: `j` `k` `h` `l` `Up` `Down` `Left` `Right` `Enter` `n` `/` `q` `Tab` `Shift+Tab` `Esc` `.` `Ctrl+S`
 
 ## `overlay.script_tree.name` [text]
 
 The folder tree of the saved queries: its name field (save as) or filter (open). Inside `root`.
 
-Reserved — saved-queries tree: name or filter: `Up` `Down` `Enter` `Tab` `Shift+Tab` `Esc`
+Reserved — saved-queries tree: name or filter: `Up` `Down` `Enter` `Tab` `Shift+Tab` `Esc` `Ctrl+S`
 
 Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
 

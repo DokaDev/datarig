@@ -58,7 +58,7 @@ fn expand(text: &str, home: Option<&Path>) -> PathBuf {
 }
 
 /// `path` as the field shows it: under `home` as `~/…`.
-fn shown(path: &Path, home: Option<&Path>) -> String {
+pub(super) fn shown(path: &Path, home: Option<&Path>) -> String {
     match home.and_then(|h| path.strip_prefix(h).ok()) {
         Some(rest) if !rest.as_os_str().is_empty() => format!("~/{}", rest.to_string_lossy().replace('\\', "/")),
         _ => path.to_string_lossy().to_string(),
@@ -75,7 +75,7 @@ pub fn shown_dir(dir: &Path, home: Option<&Path>) -> String {
 
 /// The entries of folder `dir`: folders first, then files, each by name (case folded). Only
 /// the folder is read, and the kind of a link is asked for (`stat`); no file is opened.
-fn list(dir: &Path) -> std::io::Result<Vec<(String, bool)>> {
+pub(super) fn list(dir: &Path) -> std::io::Result<Vec<(String, bool)>> {
     let mut out = Vec::new();
     for e in std::fs::read_dir(dir)? {
         let Ok(e) = e else { continue };

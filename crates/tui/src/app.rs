@@ -38,6 +38,7 @@ mod execution;
 pub mod explorer;
 pub mod export;
 pub mod export_form;
+pub mod export_path_pick;
 pub mod folder_pick;
 mod format;
 pub mod guide;

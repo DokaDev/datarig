@@ -57,6 +57,14 @@ pub(crate) fn draw_export_dialog(app: &mut App, area: Rect, buf: &mut Buffer) ->
             ExportField::Quote if f.quote == Quote::Never => {
                 vec![Notice::new(Label::ExportNoteNoQuotes, Level::Warning)]
             }
+            // `Tab` found more than one name: they are listed.
+            ExportField::Path => f
+                .completion
+                .as_ref()
+                .filter(|c| c.text == f.path.text() && c.matches.len() > 1)
+                .map(|c| Notice::new(Msg::ExportPathMatches { names: c.names() }, Level::Info))
+                .into_iter()
+                .collect(),
             _ => Vec::new(),
         };
         if let Some((at, e)) = &f.error
@@ -94,6 +102,7 @@ pub(crate) fn draw_export_dialog(app: &mut App, area: Rect, buf: &mut Buffer) ->
     let hints: Vec<Localized> = fields.iter().map(|x| hint(*x)).collect();
     let labels: Vec<Localized> = fields.iter().map(|x| i18n.label(x.label())).collect();
     let buttons = [i18n.label(Label::DialogButtonExport), i18n.label(Label::DialogButtonCancel)];
+    let browse = format!("[{}]", i18n.label(Label::ExportPathBrowse));
     // Border (2), a blank line, the lines, a blank line, the buttons.
     let rect = centered(area, w, (lines.len() + 5) as u16);
     let inner = modal(rect, &title, &footer, buf);
@@ -128,7 +137,8 @@ pub(crate) fn draw_export_dialog(app: &mut App, area: Rect, buf: &mut Buffer) ->
                 let mut x = vx;
                 if field.is_text() {
                     let input_w = match field {
-                        ExportField::Path => room(vx) as u16,
+                        // Room for the `[Browse…]` button after it.
+                        ExportField::Path => room(vx).saturating_sub(width(&browse) + 1) as u16,
                         ExportField::Delimiter => 6,
                         _ => 16,
                     };
@@ -140,6 +150,11 @@ pub(crate) fn draw_export_dialog(app: &mut App, area: Rect, buf: &mut Buffer) ->
                         cursor = Some((cx, y));
                     }
                     x += rect.width;
+                    if *field == ExportField::Path {
+                        let used = put(buf, x + 1, y, &browse, room(x + 1), surface(th.accent));
+                        f.hits.push((Rect::new(x + 1, y, used, 1), ExportHit::Browse));
+                        x += used + 1;
+                    }
                 } else {
                     let text = if field.is_choice() { format!("{} ▾ ", values[i]) } else { values[i].clone() };
                     let used = put(buf, x, y, &text, room(x), Style::new().fg(th.fg).patch(bg));
