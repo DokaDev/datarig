@@ -114,9 +114,11 @@ todo = "warn"
 # The query session binds portals with per-column result formats (text for types the driver
 # does not decode from binary); tokio-postgres always asks for binary. mysql_async connects only
 # over a socket of its own, and the MySQL driver connects over a stream it opened (an SSH
-# tunnel's channel). See vendor/README.md.
+# tunnel's channel). ssh-key (russh's key formats, pinned by russh to this exact version)
+# refused an OpenSSH P-256 key whose scalar is shorter than 32 bytes. See vendor/README.md.
 [patch.crates-io]
 mysql_async = { path = "vendor/mysql_async" }
+ssh-key = { path = "vendor/ssh-key" }
 tokio-postgres = { path = "vendor/tokio-postgres" }
 
 # libpg_query's parse tree is decoded (prost) and serialized (serde) by code generated in the

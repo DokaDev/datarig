@@ -292,6 +292,55 @@ stream the caller opened **and** lets the caller leave multi-statements and `LOA
 off, and switch `datarig-driver-mysql` to those APIs. Until then, follow each upstream release
 that fixes a bug or a security issue by re-syncing as above.
 
+## ssh-key 0.7.0-rc.11
+
+| | |
+|---|---|
+| Upstream | [`ssh-key`](https://crates.io/crates/ssh-key) 0.7.0-rc.11 from crates.io, part of [RustCrypto/SSH](https://github.com/RustCrypto/SSH) |
+| License | Apache-2.0 OR MIT (`ssh-key/LICENSE-APACHE`, `ssh-key/LICENSE-MIT`) |
+| Package checksum | sha256 `f9a32fae177b74a22aa9c5b01bf7e68b33545be32d9e381e248058d2adc15ce3` (the crates.io index `cksum` of the `.crate` file) |
+| Upstream commit | `7a1c757d2e2fcde32680e373d5226481de6d434e`, path `ssh-key` (`ssh-key/.cargo_vcs_info.json`, as published) |
+| Used through | `[patch.crates-io]` in `Cargo.toml`: russh (`datarig-ssh`) reads key files with it and pins this exact version; the workspace `exclude`s `vendor` |
+
+### Why it is vendored
+
+OpenSSH writes the private scalar of an ECDSA key (`BEGIN OPENSSH PRIVATE KEY`) as an `mpint`,
+which drops leading zero bytes: the scalar of about one P-256 key in 512 that `ssh-keygen -t
+ecdsa` makes is 31 bytes or shorter. ssh-key refused every scalar shorter than 32 bytes, so such
+a key failed to load ("length invalid"), or, with a passphrase, looked like a wrong passphrase.
+P-384 and P-521 keys were not affected (their scalars are longer than 32 bytes even so), nor
+were PEM and PKCS#8 keys (fixed-length scalars). Upstream's `master` still has the check.
+
+### What is changed
+
+The change in the source is marked with a `datarig:` comment:
+
+- `src/private/ecdsa.rs`: `EcdsaPrivateKey::decode` reads a scalar of half the curve's size or
+  longer (zero-padded on the left, as before), instead of 32 bytes or longer for every curve.
+  That is never stricter than OpenSSH, which refuses a scalar of half the order's bits or fewer.
+
+`crates/ssh/src/keys/tests.rs` makes such keys from fixed scalars in every format (OpenSSH
+plain and encrypted, SEC1, PKCS#8 plain and encrypted, for P-256, P-384 and P-521) and checks
+that each loads, is the key `ssh-keygen -y` names and signs.
+
+### Re-syncing with upstream
+
+1. Fetch the new release (`cargo fetch` after russh moves to it, or
+   `https://static.crates.io/crates/ssh-key/ssh-key-<version>.crate`) and check its sha256
+   against the `cksum` in the crates.io index.
+2. Unpack it over `ssh-key/`, keeping `rustfmt.toml`; remove `tests/` and `Cargo.lock`; in
+   `Cargo.toml` remove the `[[test]]` targets and the `[dev-dependencies]`, and put the note
+   back in place of the generated header.
+3. Reapply the `datarig:` change above, unless upstream fixed the check.
+4. Update the version, checksum and commit in the table above, then run the workspace checks
+   (`cargo test -p datarig-ssh` makes the keys with `ssh-keygen` and `openssl`).
+
+### When to drop it
+
+Drop this copy and its `[patch.crates-io]` entry once the ssh-key release russh depends on reads
+an OpenSSH P-256 key with a scalar shorter than 32 bytes (the test above passes without the
+copy).
+
 ## Third-party code built into the binary: pg_query 6.2.0
 
 Not vendored (a normal crates.io dependency of `datarig-core`), but it compiles C code into

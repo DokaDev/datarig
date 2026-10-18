@@ -6,4 +6,7 @@
 # own SSH login, locally, with the user's own key (through russh); it never decrypts, and never
 # runs a private-key operation on data an attacker supplies. There is no fixed version.
 # Revisit when rsa has one, or when russh no longer needs it.
-ignore = ["RUSTSEC-2023-0071"]
+# RUSTSEC-2026-0370/0371/0372 (zvariant, zbus_names, zvariant_derive): unmaintained, not a
+# vulnerability; they were merged into zbus 6. They come only with keyring's Linux Secret
+# Service store (secret-service 5.2, the newest, needs zbus 5). Revisit when it moves to zbus 6.
+ignore = ["RUSTSEC-2023-0071", "RUSTSEC-2026-0370", "RUSTSEC-2026-0371", "RUSTSEC-2026-0372"]
