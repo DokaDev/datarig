@@ -35,6 +35,26 @@
 //! that ends an open transaction and opens another one (`BEGIN` inside one, `COMMIT AND CHAIN`)
 //! is reported as the end of the one and the start of the other.
 //!
+//! **Manual commit** (`TxRule::Manual`): right before a statement the app flags as one that
+//! opens a transaction, while none is open (the status flags, after the statements before it),
+//! the session sends `START TRANSACTION` as a request of its own (multi-statements stay off: one
+//! round trip more, on the first write of each transaction only) and the statement after it; a
+//! statement that commits implicitly (DDL, `LOCK TABLES`, …) gets none, it would end it at once.
+//! `autocommit` stays on, so reads after the transaction ends are autocommit again. The
+//! transaction is reported (`ManualBegun`, then `Block`) once the statement succeeded; when the
+//! run fails or is cancelled in it, it is rolled back at once (`ManualRolledBack`). In a
+//! transaction open before the run, a failure undoes only the failed statement (the server's
+//! rule; no savepoint is set for the run, which would cost a round trip): the statements of the
+//! run before it keep what they did, and the transaction stays open. A deadlock (`1213`) is the
+//! server rolling back the whole transaction, and an implicit commit its committing it: said
+//! (`TxClosedBy`) before the status flags close the block. A transaction switched inside the run
+//! that opened one (an implicit commit, `AND CHAIN`, a procedure) is never rolled back by the
+//! session. `EndTx` sends `COMMIT` or `ROLLBACK` (`AND NO CHAIN NO RELEASE`, whatever the
+//! session's `completion_type`); a connection that ends meanwhile leaves a commit's outcome
+//! unknown. A user's `SET autocommit = 0` is reported
+//! (`DbEvent::Autocommit`, from `SERVER_STATUS_AUTOCOMMIT`): every statement then opens a
+//! transaction, which the flags show open.
+//!
 //! **`EXPLAIN ANALYZE`** runs its statement to measure it and keeps nothing: outside the user's
 //! transaction it runs in a transaction of its own that is rolled back, inside it under
 //! `SAVEPOINT datarig_explain`, rolled back to and released afterwards (before the run answers).
@@ -78,11 +98,12 @@ use crate::link::{Closed, Link, Next};
 use crate::session::{Gate, Killer, Server, Tracked, my_error};
 use crate::values::{column_meta, display};
 use datarig_core::driver::{
-    CancelFailure, Cell, ColumnMeta, DbCommand, DbError, DbEvent, Outcome, PagingMode, SessionValues, StatementInfo,
-    TxRule,
+    CancelFailure, Cell, ColumnMeta, DbCommand, DbError, DbEvent, Outcome, PagingMode, ServerEnd, SessionValues,
+    StatementInfo, TxOutcome, TxRule, TxStep,
 };
 use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
 use datarig_core::sql::lexer::{Tok, Token, lex_in};
+use datarig_core::sql::risk::Class;
 use datarig_core::sql::risk::mysql as risk;
 use datarig_core::sql::risk::repeat::NotRepeatable;
 use futures::future::BoxFuture;
@@ -106,6 +127,14 @@ const CHUNK: usize = 10_000;
 /// The savepoint an `EXPLAIN ANALYZE` inside the user's transaction runs under.
 const SAVEPOINT: &str = "datarig_explain";
 
+/// How the session opens a transaction for manual commit.
+const START: &str = "START TRANSACTION";
+
+/// How the session ends a transaction itself: never chained nor ending the session, whatever the
+/// session's `completion_type`.
+const COMMIT: &str = "COMMIT AND NO CHAIN NO RELEASE";
+const ROLLBACK: &str = "ROLLBACK AND NO CHAIN NO RELEASE";
+
 /// How the query session runs what it is sent.
 pub(crate) struct Settings {
     pub(crate) page_size: usize,
@@ -122,6 +151,8 @@ struct Env<'a> {
     asked: &'a AtomicBool,
     /// A statement of the session is on its way to the server or running there.
     busy: &'a AtomicBool,
+    /// The run going on answered with a failure (cleared when a run starts; [`Reply`]).
+    failed: &'a AtomicBool,
     page_size: usize,
     read_only: bool,
     server: Server,
@@ -140,6 +171,9 @@ struct State {
     routine: bool,
     limit: Limit,
     tx: Tx,
+    /// The request being served (a run, an `EndTx`, a count), whose id a server's end of the
+    /// transaction is said with ([`DbEvent::TxClosedBy`]).
+    request: u64,
 }
 
 /// `sql_select_limit`: what the session has now (`None`: none), and what the user set
@@ -151,10 +185,24 @@ struct Limit {
 }
 
 /// The user's transaction, as the server's status flags say, and what the UI was last told.
-#[derive(Default)]
 struct Tx {
     open: bool,
     reported: bool,
+    /// The session runs with autocommit (`SERVER_STATUS_AUTOCOMMIT`), as last reported.
+    autocommit: bool,
+    /// The transaction was opened for manual commit right before statement `.1` of run `.0`:
+    /// reported (`ManualBegun`) once that statement succeeded.
+    opening: Option<(u64, usize)>,
+    /// Statement `index` of the run going on opened the transaction for manual commit: when the
+    /// run fails, it is rolled back ([`settle`]).
+    opened: Option<usize>,
+}
+
+impl Default for Tx {
+    fn default() -> Self {
+        // A session starts with autocommit on (it is set up so).
+        Tx { open: false, reported: false, autocommit: true, opening: None, opened: None }
+    }
 }
 
 /// A `sql_select_limit` value the server reported (`18446744073709551615`: none).
@@ -167,6 +215,12 @@ impl Env<'_> {
     /// `TxOpen`: the session has no transaction of its own, so the two agree). `chained`: the
     /// statement ended one transaction and opened another, both said.
     fn report(&self, tx: &mut Tx, chained: bool) {
+        // A transaction opened for manual commit is one once its statement succeeded.
+        if let Some((id, index)) = tx.opening.take()
+            && tx.open
+        {
+            let _ = self.events.send(DbEvent::ManualBegun { id, index });
+        }
         if chained && tx.reported {
             let _ = self.events.send(DbEvent::Block(false));
             let _ = self.events.send(DbEvent::TxOpen(false));
@@ -193,19 +247,21 @@ impl Env<'_> {
 /// one `Failed` that may still follow ([`Paged`]).
 struct Reply<'a> {
     events: &'a UnboundedSender<DbEvent>,
+    /// Set when it answers with a failure ([`Env::failed`]).
+    failed: &'a AtomicBool,
     id: u64,
     answered: bool,
 }
 
 impl<'a> Reply<'a> {
-    fn new(events: &'a UnboundedSender<DbEvent>, id: u64) -> Self {
-        Self { events, id, answered: false }
+    fn new(events: &'a UnboundedSender<DbEvent>, failed: &'a AtomicBool, id: u64) -> Self {
+        Self { events, failed, id, answered: false }
     }
 
     fn page(mut self, columns: Vec<ColumnMeta>, rows: Vec<Vec<Cell>>, more: bool, elapsed: Duration) -> Paged<'a> {
         self.answered = true;
         let _ = self.events.send(DbEvent::Page { id: self.id, columns: Some(columns), rows, more, elapsed });
-        Paged { events: self.events, id: self.id }
+        Paged { events: self.events, failed: self.failed, id: self.id }
     }
 
     fn done(mut self, outcome: Outcome, elapsed: Duration) {
@@ -215,6 +271,7 @@ impl<'a> Reply<'a> {
 
     fn fail(mut self, error: DbError, cancelled: bool) {
         self.answered = true;
+        self.failed.store(true, Ordering::SeqCst);
         let _ = self.events.send(DbEvent::Failed { id: self.id, error, cancelled });
     }
 
@@ -232,6 +289,7 @@ impl<'a> Reply<'a> {
 impl Drop for Reply<'_> {
     fn drop(&mut self) {
         if !self.answered {
+            self.failed.store(true, Ordering::SeqCst);
             let _ = self.events.send(DbEvent::Failed { id: self.id, error: DbError::NoResult, cancelled: false });
             // Nothing is owed to nobody: the session's task is dropped once its UI is gone (the
             // runtime shutting down mid-run).
@@ -247,17 +305,20 @@ impl Drop for Reply<'_> {
 /// A run answered with its first page: one `Failed` may still follow, nothing else terminal.
 struct Paged<'a> {
     events: &'a UnboundedSender<DbEvent>,
+    failed: &'a AtomicBool,
     id: u64,
 }
 
 impl Paged<'_> {
     fn fail_with(self, e: &mysql_async::Error) {
         let (error, cancelled) = failure(e);
+        self.failed.store(true, Ordering::SeqCst);
         let _ = self.events.send(DbEvent::Failed { id: self.id, error, cancelled });
     }
 
     /// The cancel stopped it after its first page.
     fn cancelled(self) {
+        self.failed.store(true, Ordering::SeqCst);
         let _ = self.events.send(DbEvent::Failed { id: self.id, error: DbError::Cancelled, cancelled: true });
     }
 }
@@ -315,11 +376,13 @@ pub(crate) async fn query_loop(
     tracked: Tracked,
     select_limit: Option<u64>,
 ) {
+    let failed = AtomicBool::new(false);
     let env = Env {
         events: &events,
         killer: &killer,
         asked: &asked,
         busy: &busy,
+        failed: &failed,
         page_size: settings.page_size,
         read_only: settings.read_only,
         server,
@@ -335,24 +398,32 @@ pub(crate) async fn query_loop(
         routine: false,
         limit: Limit { current: select_limit, user: None },
         tx: Tx::default(),
+        request: 0,
     };
     let stop = loop {
         let done = match link.next().await {
-            Next::Command(DbCommand::Execute { id, statements, paging, tx: TxRule::Auto }) => {
-                execute(&mut conn, &mut link, &env, &mut s, id, statements, None, paging).await
-            }
-            // Manual commit is not the driver's yet (`Capabilities::manual_commit`): nothing runs.
-            Next::Command(DbCommand::Execute { id, tx: TxRule::Manual { .. }, .. } | DbCommand::EndTx { id, .. }) => {
-                let _ = events.send(DbEvent::Failed { id, error: DbError::NotSupported, cancelled: false });
-                Ok(())
+            Next::Command(DbCommand::Execute { id, statements, paging, tx }) => {
+                // MySQL has no idle limit for a transaction (`idle_timeout`), nor a read-only
+                // transaction that costs no round trip of its own: a `ReadOnly` step runs as it
+                // is (a write hidden behind a view's stored function commits by itself).
+                let opens: Vec<bool> = match tx {
+                    TxRule::Auto => Vec::new(),
+                    TxRule::Manual { steps, .. } => steps.iter().map(|step| *step == TxStep::Open).collect(),
+                };
+                execute(&mut conn, &mut link, &env, &mut s, id, statements, None, paging, &opens).await
             }
             Next::Command(DbCommand::Resume { id, sql, skip, paging }) => {
-                execute(&mut conn, &mut link, &env, &mut s, id, vec![sql], Some(skip), paging).await
+                execute(&mut conn, &mut link, &env, &mut s, id, vec![sql], Some(skip), paging, &[]).await
+            }
+            // Answered once; a session the UI closed meanwhile answers nothing.
+            Next::Command(DbCommand::EndTx { id, commit }) => {
+                end_tx(&mut conn, &mut link, &env, &mut s, id, commit).await
             }
             // Answered once; a session the UI closed meanwhile answers nothing.
             // A count or a check the app asks for: a cancel asked before it was another run's.
             Next::Command(DbCommand::Count { id, sql }) => {
                 link.serving(&events, id);
+                s.request = id;
                 env.asked.store(false, Ordering::SeqCst);
                 killer.clear();
                 count(&mut conn, &mut link, &env, &mut s, &sql).await.map(|(result, snapshot)| {
@@ -361,6 +432,7 @@ pub(crate) async fn query_loop(
             }
             Next::Command(DbCommand::CheckRepeat { id, sql }) => {
                 link.serving(&events, id);
+                s.request = id;
                 env.asked.store(false, Ordering::SeqCst);
                 killer.clear();
                 check_repeat(&mut conn, &mut link, &env, &mut s, &sql).await.map(|result| {
@@ -371,6 +443,7 @@ pub(crate) async fn query_loop(
             // nothing, a lost one answers what waited for it.
             Next::Command(DbCommand::Export { id, sql, guard, sink, batch }) => {
                 link.serving(&events, id);
+                s.request = id;
                 export::export(&mut conn, &mut link, &env, &mut s, &sql, guard, sink, batch).await.map(
                     |(result, cancelled)| {
                         let _ = events.send(DbEvent::Exported { id, result, cancelled });
@@ -426,8 +499,9 @@ fn unanswered(events: &UnboundedSender<DbEvent>, c: DbCommand, error: &DbError) 
     let _ = events.send(ev);
 }
 
-/// Run `statements` (or the one statement of a `Resume` past `skip` rows); the run ends with
-/// exactly one terminal event ([`Reply`]).
+/// Run `statements` (or the one statement of a `Resume` past `skip` rows; `opens`: the ones
+/// that open a transaction for manual commit, [`TxRule::Manual`]); the run ends with exactly one
+/// terminal event ([`Reply`]).
 #[allow(clippy::too_many_arguments)]
 async fn execute(
     conn: &mut Conn,
@@ -438,11 +512,22 @@ async fn execute(
     statements: Vec<String>,
     resume: Option<u64>,
     paging: PagingMode,
+    opens: &[bool],
 ) -> Result<(), Stop> {
     link.serving(env.events, id);
-    let reply = Reply::new(env.events, id);
-    let ran = run(conn, link, env, s, reply, statements, resume, paging).await;
+    s.request = id;
+    env.failed.store(false, Ordering::SeqCst);
+    let reply = Reply::new(env.events, env.failed, id);
+    let ran = run(conn, link, env, s, reply, statements, resume, paging, opens).await;
     idle(env, link).await;
+    let ran = match ran {
+        Ok(()) => settle(conn, link, env, s, id).await,
+        Err(halted) => {
+            // The connection is gone or runs nothing more: the server rolls back what is open.
+            (s.tx.opening, s.tx.opened) = (None, None);
+            Err(halted)
+        }
+    };
     match ran {
         Ok(()) => Ok(()),
         Err(Halted { stop, reply }) => {
@@ -471,6 +556,8 @@ struct Step {
     skip: u64,
     /// The last statement's result is held ([`PagingMode::Hold`]).
     hold: bool,
+    /// It opens a transaction for manual commit when none is open ([`TxRule::Manual`]).
+    opens: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -483,6 +570,7 @@ async fn run<'a>(
     statements: Vec<String>,
     resume: Option<u64>,
     paging: PagingMode,
+    opens: &[bool],
 ) -> Result<(), Halted<'a>> {
     let n = statements.len();
     if n == 0 {
@@ -509,6 +597,7 @@ async fn run<'a>(
             start: Instant::now(),
             skip: resume.unwrap_or(0),
             hold: paging == PagingMode::Hold,
+            opens: opens.get(i) == Some(&true),
         };
         if n > 1 {
             // Cancelled between two statements: the rest does not run. Nor on a connection that
@@ -519,6 +608,11 @@ async fn run<'a>(
                 return Ok(());
             }
             let _ = env.events.send(DbEvent::Started { id: reply.id, index: i });
+        }
+        // A transaction opened earlier in the run that a statement of the user's ended (`INSERT;
+        // COMMIT; …`): nothing of the run is left to undo; a later write opens a new one.
+        if !s.tx.open {
+            s.tx.opened = None;
         }
         reply = match statement(conn, link, env, s, reply, sql, step).await? {
             Some((reply, outcome)) => {
@@ -586,6 +680,31 @@ async fn statement<'a>(
         reply.fail(DbError::ReadWriteRefused, false);
         return Ok(None);
     }
+    // Manual commit: a transaction for the statement, as a request of its own. Not for one that
+    // commits implicitly (it would end it at once) nor for transaction control of the user's.
+    if step.opens && !s.tx.open && !risk.implicit_commit && risk.class != Class::Tx {
+        if let Err(e) = halt!(link.guard(None, conn.query_drop(START)).await, Some(reply)) {
+            return failed(conn, link, env, s, reply, &e, false, false).await;
+        }
+        s.tracked.update(conn);
+        let flags = conn.last_ok_packet().map(|p| p.status_flags());
+        if !flags.is_some_and(|f| f.contains(StatusFlags::SERVER_STATUS_IN_TRANS)) {
+            // Never run as autocommit what was to be rolled back on asking: nothing is sent.
+            reply.fail(DbError::TxNotOpened, false);
+            if let Some(error) = halt!(after(conn, link, env, s, START, false, false, true).await, None) {
+                return Err(Halted { stop: Stop::Lost(error), reply: None });
+            }
+            return Ok(None);
+        }
+        s.tx.open = true;
+        s.tx.opening = Some((reply.id, step.index));
+        s.tx.opened = Some(step.index);
+        // Cancelled while it opened: the statement is not sent, and the run's end rolls back.
+        if env.asked.load(Ordering::SeqCst) {
+            reply.fail(DbError::Cancelled, true);
+            return Ok(None);
+        }
+    }
     let undo = (explains(sql, s.mode) && risk.rolls_back()).then(|| Undo::of(s.tx.open));
     // The result is held: the user's transaction, a held last statement, a listing the app
     // cannot read on by running it again (`SHOW`, `DESCRIBE`), or a locking read (the limit
@@ -612,7 +731,7 @@ async fn statement<'a>(
     if limit_applies(sql, s.mode) && wanted != s.limit.current && !skip {
         let set = format!("SET SESSION sql_select_limit = {}", wanted.map_or("DEFAULT".to_string(), |n| n.to_string()));
         if let Err(e) = halt!(link.guard(None, conn.query_drop(set)).await, Some(reply)) {
-            return failed(conn, link, env, s, reply, &e, false).await;
+            return failed(conn, link, env, s, reply, &e, false, false).await;
         }
         s.tracked.update(conn);
         s.tracked.select_limit = None;
@@ -621,7 +740,7 @@ async fn statement<'a>(
     if let Some(u) = &undo
         && let Err(e) = halt!(link.guard(None, conn.query_drop(u.before.clone())).await, Some(reply))
     {
-        return failed(conn, link, env, s, reply, &e, false).await;
+        return failed(conn, link, env, s, reply, &e, false, false).await;
     }
     let was_open = s.tx.open;
     env.busy.store(true, Ordering::SeqCst);
@@ -633,7 +752,7 @@ async fn statement<'a>(
             if let Some(u) = &undo {
                 halt!(undone(conn, link, u).await, Some(reply));
             }
-            return failed(conn, link, env, s, reply, &e, was_open).await;
+            return failed(conn, link, env, s, reply, &e, was_open, risk.implicit_commit).await;
         }
     };
     let got = match qr.columns().filter(|c| !c.is_empty()) {
@@ -645,7 +764,7 @@ async fn statement<'a>(
                 Ok(sets) => info.more_results += sets,
                 Err(e) => {
                     drop(qr);
-                    return failed(conn, link, env, s, reply, &e, was_open).await;
+                    return failed(conn, link, env, s, reply, &e, was_open, risk.implicit_commit).await;
                 }
             }
             Got::Done { outcome, info }
@@ -682,7 +801,7 @@ async fn statement<'a>(
                     }
                     Err(e) => {
                         drop(qr);
-                        return failed(conn, link, env, s, reply, &e, was_open).await;
+                        return failed(conn, link, env, s, reply, &e, was_open, risk.implicit_commit).await;
                     }
                 }
             }
@@ -691,7 +810,7 @@ async fn statement<'a>(
                 Ok(sets) => info.more_results += sets,
                 Err(e) => {
                     drop(qr);
-                    return failed(conn, link, env, s, reply, &e, was_open).await;
+                    return failed(conn, link, env, s, reply, &e, was_open, risk.implicit_commit).await;
                 }
             }
             Got::Done { outcome: Outcome::Command(command_tag(sql, s.mode).0), info }
@@ -710,7 +829,7 @@ async fn statement<'a>(
                     }
                     Err(e) => {
                         drop(qr);
-                        return failed(conn, link, env, s, reply, &e, was_open).await;
+                        return failed(conn, link, env, s, reply, &e, was_open, risk.implicit_commit).await;
                     }
                 }
             }
@@ -723,7 +842,7 @@ async fn statement<'a>(
                     Ok(read) => read,
                     Err(e) => {
                         drop(qr);
-                        return failed(conn, link, env, s, reply, &e, was_open).await;
+                        return failed(conn, link, env, s, reply, &e, was_open, risk.implicit_commit).await;
                     }
                 }
             };
@@ -735,6 +854,11 @@ async fn statement<'a>(
                 let metas: Vec<ColumnMeta> = columns.iter().map(column_meta).collect();
                 if s.routine {
                     let _ = env.events.send(DbEvent::ValuesNotKnown { id: reply.id });
+                }
+                // The transaction opened for it is open while the app reads the result (said
+                // from `START TRANSACTION`'s answer; its end is said once the result ended).
+                if s.tx.opening.is_some() {
+                    env.report(&mut s.tx, false);
                 }
                 let paged = reply.page(metas, page, true, step.start.elapsed());
                 let id = paged.id;
@@ -757,7 +881,7 @@ async fn statement<'a>(
                     Ok(_) => {}
                     Err(e) => {
                         drop(qr);
-                        return failed(conn, link, env, s, reply, &e, was_open).await;
+                        return failed(conn, link, env, s, reply, &e, was_open, risk.implicit_commit).await;
                     }
                 }
             }
@@ -766,7 +890,7 @@ async fn statement<'a>(
                 Ok(sets) => info.more_results += sets,
                 Err(e) => {
                     drop(qr);
-                    return failed(conn, link, env, s, reply, &e, was_open).await;
+                    return failed(conn, link, env, s, reply, &e, was_open, risk.implicit_commit).await;
                 }
             }
             Got::Rows { columns, page, more, info }
@@ -830,6 +954,7 @@ async fn failed<'a>(
     reply: Reply<'a>,
     e: &mysql_async::Error,
     was_open: bool,
+    implicit_commit: bool,
 ) -> Result<Option<(Reply<'a>, Outcome)>, Halted<'a>> {
     idle(env, link).await;
     if e.is_fatal() {
@@ -839,7 +964,9 @@ async fn failed<'a>(
     }
     reply.fail_with(e);
     let cancelled = failure(e).1;
-    if let Some(error) = halt!(after(conn, link, env, s, "", false, was_open || cancelled, false).await, None) {
+    // Without autocommit the failed statement may have opened a transaction: asked too.
+    let ask = was_open || cancelled || !s.tx.autocommit;
+    if let Some(error) = halt!(after(conn, link, env, s, "", implicit_commit, ask, false).await, None) {
         return Err(Halted { stop: Stop::Lost(error), reply: None });
     }
     Ok(None)
@@ -912,9 +1039,44 @@ async fn after(
     }
     if let Some(st) = status {
         let open = st.contains(StatusFlags::SERVER_STATUS_IN_TRANS);
-        let chained = ok && s.tx.open && open && (implicit_commit || chains(sql, s.mode));
+        let was_open = s.tx.open;
+        let switches = ok && (implicit_commit || chains(sql, s.mode));
+        let chained = was_open && open && switches;
+        // The transaction the run opened is not the one open any more, or may not be (a
+        // procedure that commits and starts another): the run's end never rolls back what is
+        // open now (committed work, the user's own block).
+        if ok && was_open && (switches || routine) {
+            s.tx.opened = None;
+        }
+        if switches {
+            s.tx.opening = None;
+        }
+        // The server ended the transaction the UI knows open: a statement committed it
+        // implicitly, or a failure rolled all of it back (a deadlock).
+        if s.tx.reported && was_open && (!open || chained) {
+            // A statement that commits implicitly does so before it runs: failed or not, what the
+            // transaction did was kept. A procedure that failed may have committed it itself.
+            let how = match (ok, open) {
+                (_, _) if implicit_commit => Some(ServerEnd::Committed),
+                (false, false) if routine => Some(ServerEnd::Unknown),
+                (false, false) => Some(ServerEnd::RolledBack),
+                _ => None,
+            };
+            if let Some(how) = how {
+                let _ = env.events.send(DbEvent::TxClosedBy { id: s.request, how });
+            }
+        }
         s.tx.open = open;
-        env.report(&mut s.tx, chained);
+        let autocommit = st.contains(StatusFlags::SERVER_STATUS_AUTOCOMMIT);
+        if autocommit != s.tx.autocommit {
+            s.tx.autocommit = autocommit;
+            let _ = env.events.send(DbEvent::Autocommit(autocommit));
+        }
+        // A transaction opened for the run, which failed in it before it was reported, is never
+        // reported: it is rolled back once the run ends ([`settle`]).
+        if s.tx.opening.is_none() || !env.failed.load(Ordering::SeqCst) {
+            env.report(&mut s.tx, chained);
+        }
     }
     let writable = status.is_some_and(|st| {
         st.contains(StatusFlags::SERVER_STATUS_IN_TRANS) && !st.contains(StatusFlags::SERVER_STATUS_IN_TRANS_READONLY)
@@ -924,6 +1086,94 @@ async fn after(
         return Ok(Some(DbError::ReadOnlyLost));
     }
     Ok(None)
+}
+
+/// After run `id`: a run that failed or was cancelled in the transaction a statement of it opened
+/// for manual commit ([`Tx::opened`]) rolls that transaction back (`ROLLBACK`, then
+/// [`DbEvent::ManualRolledBack`] and the state): nothing the run did in it is kept. A
+/// transaction the server ended already (a deadlock) is not rolled back again, and one on a
+/// connection that runs nothing more is rolled back by the server as the connection ends.
+async fn settle<'a>(conn: &mut Conn, link: &mut Link, env: &Env<'a>, s: &mut State, id: u64) -> Result<(), Halted<'a>> {
+    s.tx.opening = None;
+    let Some(index) = s.tx.opened.take() else { return Ok(()) };
+    if !env.failed.load(Ordering::SeqCst) || !s.tx.open || link.tainted() {
+        return Ok(());
+    }
+    let error = match halt!(link.guard(None, conn.query_drop(ROLLBACK)).await, None) {
+        Ok(()) => {
+            let _ = env.events.send(DbEvent::ManualRolledBack { id, index });
+            halt!(after(conn, link, env, s, ROLLBACK, false, false, true).await, None)
+        }
+        Err(e) if e.is_fatal() => Some(my_error(&e)),
+        Err(_) => {
+            // Refused: the transaction may still be open, with what the run did in it. Said as
+            // the one opened for manual commit (`ManualBegun` first), never as the user's.
+            if !s.tx.reported {
+                s.tx.opening = Some((id, index));
+                env.failed.store(false, Ordering::SeqCst);
+            }
+            halt!(after(conn, link, env, s, "", false, true, false).await, None)
+        }
+    };
+    match error {
+        Some(error) => Err(Halted { stop: Stop::Lost(error), reply: None }),
+        None => Ok(()),
+    }
+}
+
+/// End the user's transaction (`DbCommand::EndTx` `id`; one the user opened, or the session for
+/// manual commit): `COMMIT` (`commit`) or `ROLLBACK` as a request of its own, answered with
+/// exactly one `TxEnded` or `Failed`, then the state from the answer's status flags. With none
+/// open, nothing is sent ([`DbError::NoTransaction`]). A connection that ends meanwhile leaves a
+/// commit's outcome unknown ([`DbError::CommitUnknown`]), and the session is lost after it.
+async fn end_tx(
+    conn: &mut Conn,
+    link: &mut Link,
+    env: &Env<'_>,
+    s: &mut State,
+    id: u64,
+    commit: bool,
+) -> Result<(), Stop> {
+    if !s.tx.open {
+        let _ = env.events.send(DbEvent::Failed { id, error: DbError::NoTransaction, cancelled: false });
+        return Ok(());
+    }
+    s.request = id;
+    let sql = if commit { COMMIT } else { ROLLBACK };
+    let unknown = |e: &mysql_async::Error| if commit { DbError::CommitUnknown } else { my_error(e) };
+    let error = match link.guard(None, conn.query_drop(sql)).await? {
+        Ok(()) => {
+            let outcome = if commit { TxOutcome::Committed } else { TxOutcome::RolledBack };
+            let _ = env.events.send(DbEvent::TxEnded { id, outcome });
+            after(conn, link, env, s, sql, false, false, true).await?
+        }
+        Err(e) if e.is_fatal() => {
+            let _ = env.events.send(DbEvent::Failed { id, error: unknown(&e), cancelled: false });
+            Some(my_error(&e))
+        }
+        // Refused: the server says what it left. A connection that does not answer that leaves
+        // a commit's outcome unknown.
+        Err(e) => match link.guard(None, conn.ping()).await? {
+            Ok(()) => {
+                let _ = env.events.send(DbEvent::Failed { id, error: my_error(&e), cancelled: false });
+                let open = conn
+                    .last_ok_packet()
+                    .is_some_and(|p| p.status_flags().contains(StatusFlags::SERVER_STATUS_IN_TRANS));
+                if !open && s.tx.reported {
+                    let _ = env.events.send(DbEvent::TxClosedBy { id, how: ServerEnd::RolledBack });
+                }
+                after(conn, link, env, s, "", false, false, true).await?
+            }
+            Err(dead) => {
+                let _ = env.events.send(DbEvent::Failed { id, error: unknown(&e), cancelled: false });
+                Some(my_error(&dead))
+            }
+        },
+    };
+    match error {
+        Some(error) => Err(Stop::Lost(error)),
+        None => Ok(()),
+    }
 }
 
 /// Undo an `EXPLAIN ANALYZE` ([`Undo`]): whether it was. A failure is not reported: only a
@@ -1473,8 +1723,8 @@ async fn count(
         Ok(None) => Err(DbError::NoResult),
         Err(e) if e.is_fatal() => return Err(Stop::Lost(my_error(&e))),
         Err(e) => {
-            let open = s.tx.open;
-            if let Some(error) = after(conn, link, env, s, "", false, open, false).await? {
+            let ask = s.tx.open || !s.tx.autocommit;
+            if let Some(error) = after(conn, link, env, s, "", false, ask, false).await? {
                 return Err(Stop::Lost(error));
             }
             Err(failure(&e).0)

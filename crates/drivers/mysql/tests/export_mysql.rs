@@ -7,7 +7,7 @@
 
 use datarig_core::driver::{
     Cell, ColumnMeta, ConnectOptions, DbCommand, DbError, DbEvent, Driver, ExportBatch, ExportGuard, ExportRead,
-    PagingMode, Session, SessionRole, TxRule,
+    PagingMode, Session, SessionRole, TxOutcome, TxRule, TxStep,
 };
 use datarig_core::export::keyset::{Keyset, table_key};
 use datarig_core::profile::ConnectionConfig;
@@ -418,4 +418,68 @@ impl Drop for FunctionGuard {
         })
         .join();
     }
+}
+
+/// The events of `c` up to the answer of export `id`.
+async fn export_events(c: &mut Conn, id: u64) -> Vec<DbEvent> {
+    let mut evs = Vec::new();
+    loop {
+        let ev = tokio::time::timeout(Duration::from_secs(60), c.rx.recv()).await.expect("an event").expect("open");
+        let end = matches!(ev, DbEvent::Exported { id: i, .. } if i == id);
+        evs.push(ev);
+        if end {
+            return evs;
+        }
+    }
+}
+
+/// Manual commit and exports: inside the open manual transaction an export reads there (its
+/// uncommitted rows) and neither opens nor ends anything; outside one its own read-only
+/// transaction ends unchained, so a session's `completion_type = CHAIN` leaves no transaction
+/// open after it.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_export_keeps_to_the_manual_transaction_and_never_chains_its_own() {
+    let Some((url, admin)) = urls("an_export_keeps_to_the_manual_transaction") else { return };
+    let t = numbers(&admin, "manual", 10).await;
+    let mut c = Conn::open(&url, SessionRole::Query, "manual").await;
+    let tx_events = |evs: &[DbEvent]| {
+        evs.iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    DbEvent::Block(_)
+                        | DbEvent::TxOpen(_)
+                        | DbEvent::ManualBegun { .. }
+                        | DbEvent::ManualRolledBack { .. }
+                        | DbEvent::TxClosedBy { .. }
+                )
+            })
+            .count()
+    };
+    c.ok("SET SESSION completion_type = 1").await;
+    let (id, mut rx) = c.export(&format!("SELECT * FROM {}", t.q()), ExportGuard::Repeatable, 2, 3);
+    assert_eq!(drain(&mut rx).await.1.len(), 10);
+    let evs = export_events(&mut c, id).await;
+    assert!(matches!(evs.last(), Some(DbEvent::Exported { result: Ok(_), .. })), "{evs:?}");
+    assert_eq!(tx_events(&evs), 0, "no transaction left open: {evs:?}");
+    // A manual transaction, then an export in it.
+    c.id += 1;
+    let run = c.id;
+    let insert = format!("INSERT INTO {} VALUES (11, 'new')", t.q());
+    let tx = TxRule::Manual { steps: vec![TxStep::Open], idle_timeout: None };
+    c.session.send(DbCommand::Execute { id: run, statements: vec![insert], paging: PagingMode::NoHold, tx });
+    c.wait(|e| matches!(e, DbEvent::TxOpen(true)), 30).await;
+    let (id, mut rx) = c.export(&format!("SELECT * FROM {}", t.q()), ExportGuard::Repeatable, 2, 3);
+    assert_eq!(drain(&mut rx).await.1.len(), 11, "the transaction's own row");
+    let evs = export_events(&mut c, id).await;
+    assert!(matches!(evs.last(), Some(DbEvent::Exported { result: Ok(_), .. })), "{evs:?}");
+    assert_eq!(tx_events(&evs), 0, "the transaction stays as it was: {evs:?}");
+    c.id += 1;
+    let end = c.id;
+    c.session.send(DbCommand::EndTx { id: end, commit: false });
+    match c.wait(|e| matches!(e, DbEvent::TxEnded { .. } | DbEvent::Failed { .. }), 30).await {
+        DbEvent::TxEnded { outcome: TxOutcome::RolledBack, .. } => {}
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(c.rows(&format!("SELECT COUNT(*) FROM {}", t.q())).await, [[Some("10".into())]]);
 }
