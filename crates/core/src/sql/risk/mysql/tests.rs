@@ -1,5 +1,5 @@
 use super::*;
-use crate::sql::risk::{Classifier, ReadOnlyBlock};
+use crate::sql::risk::{Classifier, ReadOnlyBlock, TxStep};
 
 include!("corpus.rs");
 
@@ -668,12 +668,13 @@ fn mysql_never_sets_the_postgres_transaction_flags() {
     for sql in CORPUS.iter().map(|(sql, _)| *sql).chain(extra) {
         let r = risk(sql);
         assert!(!r.no_tx_block && !r.adds_enum_value, "{sql}");
+        let step = c.tx_step(sql);
         if form(sql, MODE).is_none() {
-            assert!(c.opens_tx(sql), "{sql}");
+            assert_eq!(step, TxStep::Opens, "{sql}");
         } else if r.implicit_commit {
-            assert!(!c.opens_tx(sql), "{sql}");
+            assert_eq!(step, TxStep::Outside, "{sql}");
         } else if matches!(r.class, Class::Write | Class::Ddl | Class::Procedural | Class::Unknown) && !r.rolls_back() {
-            assert!(c.opens_tx(sql), "{sql}");
+            assert_eq!(step, TxStep::Opens, "{sql}");
         }
     }
 }

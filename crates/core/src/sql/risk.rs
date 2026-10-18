@@ -1694,8 +1694,9 @@ fn alter_table(b: &Value) -> Risk {
 ///   `SET`, `ADD` and `DROP PUBLICATION` unless `refresh` is false, and `SET (failover = …)`
 ///   (and `SET (two_phase = …)`, which PostgreSQL 18 refuses in a block).
 ///
-/// `CLUSTER` of a partitioned table is refused too, which only the catalog tells: it is not
-/// set. `ANALYZE`, `CHECKPOINT` and `REFRESH MATERIALIZED VIEW CONCURRENTLY` run in a block.
+/// `REINDEX TABLE` or `INDEX` and `CLUSTER` of a partitioned table (or its index) are refused
+/// too, which only the catalog tells: they are not set (the server's refusal is what the user
+/// sees). `ANALYZE`, `CHECKPOINT` and `REFRESH MATERIALIZED VIEW CONCURRENTLY` run in a block.
 fn no_tx_block(kind: &str, b: &Value) -> bool {
     use protobuf::{AlterSubscriptionType as S, ReindexObjectType as R};
     let concurrent = b["concurrent"] == Value::Bool(true);
@@ -1768,7 +1769,7 @@ fn option(options: &Value, name: &str) -> Option<bool> {
     })
 }
 
-/// The form of a text that is one statement, as far as [`opens_tx`] needs it.
+/// The form of a text that is one statement, as far as [`tx_step`] needs it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Form {
     /// A query at the top (`SELECT`, `VALUES`, `TABLE`, …): a read only if the plain-`SELECT`
@@ -1778,6 +1779,11 @@ enum Form {
     /// does not plan an `EXECUTE` (whose parameters the server evaluates). MySQL: also `HELP`
     /// and `DESCRIBE`.
     Plain,
+    /// A statement whose effect a rollback undoes although its risk does not say it changes
+    /// anything (PostgreSQL's `DISCARD TEMP` drops the session's temporary tables), or that
+    /// calls a function with an effect from a session statement (MySQL's `SET @a =
+    /// GET_LOCK(…)`, `SELECT SLEEP(1) INTO @a`): it runs inside the transaction.
+    Opens,
     /// Anything else.
     Other,
 }
@@ -1796,6 +1802,9 @@ fn form(sql: &str) -> Option<Form> {
             ("SelectStmt", _) => Form::Query,
             ("VariableShowStmt", _) => Form::Plain,
             ("ExplainStmt", b) if !has(&b["query"], "ExecuteStmt") => Form::Plain,
+            ("DiscardStmt", b) if b["target"].as_i64() == Some(protobuf::DiscardMode::DiscardTemp as i64) => {
+                Form::Opens
+            }
             _ => Form::Other,
         })
     };
@@ -1812,26 +1821,45 @@ fn form(sql: &str) -> Option<Form> {
     })
 }
 
-/// Whether a statement of risk `risk` must run inside the transaction when a session commits
-/// by hand and none is open yet: everything but what is known to be harmless outside one (an
-/// allowlist). `plain_read`: the statement is a read that runs nothing the risk does not show,
-/// as its dialect tells ([`Classifier::opens_tx`]: a query the plain-`SELECT` allowlist takes,
-/// or a `SHOW`, …).
-///
-/// It runs outside a transaction when it is transaction control (handled as the user wrote
-/// it), a session statement that calls nothing, such a plain read, an `EXPLAIN ANALYZE` (the
-/// driver rolls it back anyway), one that PostgreSQL refuses inside a block
-/// ([`Risk::no_tx_block`]) or one that MySQL commits a transaction before
-/// ([`Risk::implicit_commit`]): asking about those is the app's. Anything else opens it,
-/// unknown and unreadable statements included.
-pub fn opens_tx(risk: &Risk, plain_read: bool) -> bool {
+/// Where a statement runs on a session that commits by hand while no transaction is open
+/// ([`Classifier::tx_step`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TxStep {
+    /// Open the transaction first and run it inside: anything not known to be harmless
+    /// outside one (writes, locks, DDL that a rollback undoes, calls of code the text does not
+    /// show, unknown and unreadable text, several statements).
+    Opens,
+    /// A plain read: run it outside the transaction, read-only where the driver can (what the
+    /// text does not show, a view's query or a function of the user's behind a built-in's
+    /// name, may still write; a read-only transaction makes the server refuse that).
+    ReadOutside,
+    /// Run it as it is, outside any transaction the app opens: transaction control (as the
+    /// user wrote it), a session statement that calls nothing, an `EXPLAIN ANALYZE` (the driver
+    /// rolls it back), a statement PostgreSQL refuses inside a block ([`Risk::no_tx_block`]) or
+    /// one MySQL commits the open transaction before ([`Risk::implicit_commit`]): asking about
+    /// the last two is the app's.
+    Outside,
+}
+
+/// [`TxStep`] of a statement of risk `risk` (an allowlist: whatever is not known to be harmless
+/// opens the transaction). `plain_read`: as its dialect tells, the statement is a read that
+/// runs nothing its risk does not show (a query the plain-`SELECT` allowlist takes, a `SHOW`,
+/// …). `must_open`: its dialect tells it runs inside the transaction whatever its risk says,
+/// unless it cannot (`DISCARD TEMP`, …).
+pub fn tx_step(risk: &Risk, plain_read: bool, must_open: bool) -> TxStep {
     let calls = risk.runs_code || risk.unchecked_call;
+    if risk.class == Class::Tx || risk.rolls_back() || risk.no_tx_block || risk.implicit_commit {
+        return TxStep::Outside;
+    }
+    if must_open {
+        return TxStep::Opens;
+    }
+    if risk.class == Class::Session && !calls {
+        return TxStep::Outside;
+    }
     let read =
         risk.class == Class::Read && plain_read && !calls && !risk.writes && !risk.read_write && risk.danger.is_none();
-    let session = risk.class == Class::Session && !calls;
-    let skips =
-        risk.class == Class::Tx || session || read || risk.rolls_back() || risk.no_tx_block || risk.implicit_commit;
-    !skips
+    if read { TxStep::ReadOutside } else { TxStep::Opens }
 }
 
 #[cfg(test)]

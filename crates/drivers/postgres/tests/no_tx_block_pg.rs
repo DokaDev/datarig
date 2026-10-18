@@ -7,7 +7,8 @@
 //! inside the block, so the server never connects out).
 //!
 //! The objects the forms act on live in a schema `zz_ntx_<pid>` that the test creates and
-//! drops (also when it fails); other names are `zz_ntx_`-prefixed and never exist.
+//! drops (also when it fails; one left by a killed run is dropped by the next); other names are
+//! `zz_ntx_`-prefixed and never exist.
 //!
 //! [`Risk::no_tx_block`]: datarig_core::sql::risk::Risk::no_tx_block
 
@@ -39,6 +40,20 @@ fn pg_url(test: &str) -> Option<String> {
         }
     }
 }
+
+/// Drops the `zz_ntx_<pid>` schemas of earlier runs that were killed before their guard ran:
+/// those no connected session names (each run's own connection is tagged with its schema).
+const SWEEP: &str = r"DO $$
+DECLARE r record;
+BEGIN
+  FOR r IN
+    SELECT n.nspname FROM pg_catalog.pg_namespace n
+    WHERE n.nspname ~ '^zz_ntx_[0-9]+$'
+      AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_stat_activity a WHERE a.application_name = n.nspname)
+  LOOP
+    EXECUTE format('DROP SCHEMA IF EXISTS %I CASCADE', r.nspname);
+  END LOOP;
+END $$";
 
 /// Drops the test's schema when the test ends, also when it fails.
 struct SchemaGuard(String, String);
@@ -93,6 +108,11 @@ const SUBSCRIPTION_OFF: &str = "CREATE SUBSCRIPTION {sub} CONNECTION 'host=127.0
      PUBLICATION zz_ntx_p1, zz_ntx_p2 WITH (connect = false)";
 
 const ENABLE: &str = "ALTER SUBSCRIPTION {sub} ENABLE";
+
+/// Forms the server refuses inside a block only because of what the catalog says (a
+/// partitioned table): the classifier does not flag them, and the server's refusal is what the
+/// user sees. Held here so that a change on either side is noticed.
+const CATALOG_ONLY: &[&str] = &["REINDEX TABLE {s}.p", "REINDEX INDEX {s}.p_id", "CLUSTER {s}.p USING p_id"];
 
 /// Forms the server runs inside a block (some of them close to a refused one).
 const RUNS: &[(&[&str], &str)] = &[
@@ -153,8 +173,12 @@ async fn the_statements_said_to_need_no_transaction_block_are_refused_in_one() {
     let sub = format!("zz_ntx_sub_{}", std::process::id());
     let _guard = SchemaGuard(url.clone(), schema.clone());
     let fill = |sql: &str| sql.replace("{s}", &schema).replace("{sub}", &sub);
-    let (client, conn) = tokio_postgres::connect(&url, NoTls).await.expect("connect");
+    // Tagged with the schema's name while it lives, so that a parallel run's sweep keeps it.
+    let sep = if url.contains('?') { '&' } else { '?' };
+    let (client, conn) =
+        tokio_postgres::connect(&format!("{url}{sep}application_name={schema}"), NoTls).await.expect("connect");
     tokio::spawn(conn);
+    client.batch_execute(SWEEP).await.expect("sweep stale schemas");
     client
         .batch_execute(&fill(
             "CREATE SCHEMA {s};
@@ -165,6 +189,7 @@ async fn the_statements_said_to_need_no_transaction_block_are_refused_in_one() {
              CREATE UNIQUE INDEX mv_id ON {s}.mv (id);
              CREATE TABLE {s}.p (id int) PARTITION BY LIST (id);
              CREATE TABLE {s}.p1 PARTITION OF {s}.p FOR VALUES IN (1);
+             CREATE INDEX p_id ON {s}.p (id);
              CREATE TYPE {s}.e AS ENUM ('a');",
         ))
         .await
@@ -178,6 +203,17 @@ async fn the_statements_said_to_need_no_transaction_block_are_refused_in_one() {
             wrong.push(format!("classifier: not flagged: {sql}"));
         }
         match in_block(&client, &prefix, &sql).await {
+            Err(e) if e.code() == Some(&SqlState::ACTIVE_SQL_TRANSACTION) => {}
+            Err(e) => wrong.push(format!("server: not 25001: {sql}: {e:?}")),
+            Ok(()) => wrong.push(format!("server: ran in a block: {sql}")),
+        }
+    }
+    for sql in CATALOG_ONLY {
+        let sql = fill(sql);
+        if classify(&sql).no_tx_block {
+            wrong.push(format!("classifier: flagged a catalog-only form: {sql}"));
+        }
+        match in_block(&client, &[], &sql).await {
             Err(e) if e.code() == Some(&SqlState::ACTIVE_SQL_TRANSACTION) => {}
             Err(e) => wrong.push(format!("server: not 25001: {sql}: {e:?}")),
             Ok(()) => wrong.push(format!("server: ran in a block: {sql}")),

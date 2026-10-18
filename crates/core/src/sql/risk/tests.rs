@@ -1648,41 +1648,42 @@ fn what_adds_an_enum_value() {
 }
 
 /// The decision itself, from a risk: only what is known to be harmless outside a transaction
-/// stays outside.
+/// stays outside, and only a plain read runs outside as a read.
 #[test]
-fn what_opens_the_transaction_by_risk() {
+fn where_a_statement_runs_by_risk() {
+    use TxStep::{Opens, Outside, ReadOutside};
     let of = Risk::of;
-    // Stays outside.
-    for (risk, plain) in [
-        (of(Class::Tx), false),
-        (Risk { read_write: true, ..of(Class::Tx) }, false),
-        (of(Class::Session), false),
-        (Risk::danger(Class::Session, Danger::Setting), false),
-        (of(Class::Read), true),
-        (Risk { explain: Explain::Analyze, ..Risk::writing(Class::Write, None) }, false),
-        (Risk { no_tx_block: true, ..of(Class::Maintenance) }, false),
-        (Risk { implicit_commit: true, ..of(Class::Ddl) }, false),
+    // (risk, plain read, must open): step.
+    for (risk, plain, must, step) in [
+        (of(Class::Tx), false, false, Outside),
+        (Risk { read_write: true, ..of(Class::Tx) }, false, false, Outside),
+        (of(Class::Session), false, false, Outside),
+        (Risk::danger(Class::Session, Danger::Setting), false, false, Outside),
+        (of(Class::Read), true, false, ReadOutside),
+        (Risk { explain: Explain::Plan, ..of(Class::Read) }, true, false, ReadOutside),
+        (Risk { explain: Explain::Analyze, ..Risk::writing(Class::Write, None) }, false, false, Outside),
+        (Risk { no_tx_block: true, ..of(Class::Maintenance) }, false, false, Outside),
+        (Risk { no_tx_block: true, ..of(Class::Session) }, false, true, Outside),
+        (Risk { implicit_commit: true, ..of(Class::Ddl) }, false, false, Outside),
+        (Risk { implicit_commit: true, ..of(Class::Ddl) }, false, true, Outside),
+        (of(Class::Session), false, true, Opens),
+        (of(Class::Read), true, true, Opens),
+        (of(Class::Read), false, false, Opens),
+        (Risk { runs_code: true, ..of(Class::Read) }, true, false, Opens),
+        (Risk { unchecked_call: true, ..of(Class::Read) }, true, false, Opens),
+        (Risk::danger(Class::Read, Danger::ServerAction), true, false, Opens),
+        (Risk { read_write: true, ..of(Class::Read) }, true, false, Opens),
+        (Risk { unchecked_call: true, ..of(Class::Session) }, false, false, Opens),
+        (Risk { runs_code: true, ..of(Class::Session) }, false, false, Opens),
+        (Risk::writing(Class::Write, None), true, false, Opens),
+        (of(Class::Write), true, false, Opens),
+        (of(Class::Ddl), true, false, Opens),
+        (of(Class::Maintenance), true, false, Opens),
+        (Risk::danger(Class::Procedural, Danger::Procedural), true, false, Opens),
+        (of(Class::Unknown), true, false, Opens),
+        (Risk::danger(Class::Unknown, Danger::Unparsed), true, false, Opens),
+        (Risk { explain: Explain::Plan, ..Risk::writing(Class::Write, None) }, true, false, Opens),
     ] {
-        assert!(!opens_tx(&risk, plain), "{risk:?} {plain}");
-    }
-    // Opens it.
-    for (risk, plain) in [
-        (of(Class::Read), false),
-        (Risk { runs_code: true, ..of(Class::Read) }, true),
-        (Risk { unchecked_call: true, ..of(Class::Read) }, true),
-        (Risk::danger(Class::Read, Danger::ServerAction), true),
-        (Risk { read_write: true, ..of(Class::Read) }, true),
-        (Risk { unchecked_call: true, ..of(Class::Session) }, false),
-        (Risk { runs_code: true, ..of(Class::Session) }, false),
-        (Risk::writing(Class::Write, None), true),
-        (of(Class::Write), true),
-        (of(Class::Ddl), true),
-        (of(Class::Maintenance), true),
-        (Risk::danger(Class::Procedural, Danger::Procedural), true),
-        (of(Class::Unknown), true),
-        (Risk::danger(Class::Unknown, Danger::Unparsed), true),
-        (Risk { explain: Explain::Plan, ..Risk::writing(Class::Write, None) }, true),
-    ] {
-        assert!(opens_tx(&risk, plain), "{risk:?} {plain}");
+        assert_eq!(tx_step(&risk, plain, must), step, "{risk:?} {plain} {must}");
     }
 }
