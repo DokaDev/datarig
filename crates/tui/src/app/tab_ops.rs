@@ -298,6 +298,8 @@ impl App {
             self.finish_quit();
         }
         self.refresh_tab_list();
+        // An answer waiting for its transaction to end stops (said last: it matters most).
+        self.end_tab_gone(id);
     }
 
     /// The console `id` of a tab just closed, with `text`, goes to the trash. Text nobody

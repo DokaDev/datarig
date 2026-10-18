@@ -113,7 +113,7 @@ fn closing_a_tab_commits_or_rolls_back_first_and_closes_once_the_server_said() {
         );
         let screen = h.screen(100, 30);
         assert!(screen.contains("1 change (3 rows) uncommitted for 0:12"), "{screen}");
-        assert!(screen.contains("c commit first · r roll back first · y go on · Enter/n stay"), "{screen}");
+        assert!(screen.contains("c commit · r roll back · y close anyway (rolls back) · Enter/n stay"), "{screen}");
         // Enter stays.
         h.key(KeyCode::Enter);
         assert_eq!((h.overlay_kind(), h.app.tabs.len()), (None, tabs));
@@ -151,7 +151,7 @@ fn a_commit_that_does_not_happen_stops_and_the_tab_stays() {
     h.tab_db(i, DbEvent::Block(false));
     h.tab_db(i, DbEvent::TxOpen(false));
     assert_eq!(h.app.tabs.len(), tabs, "the tab stays");
-    assert_eq!(status(&h), Some(Msg::TxEndStopped { tab: (i + 1).to_string() }));
+    assert_eq!(status(&h), Some(Msg::TxEndStoppedCommit { tab: (i + 1).to_string() }));
     let notes: Vec<Msg> = h.app.tab().exec.run.notes.iter().map(|n| n.msg.clone()).collect();
     assert!(notes.contains(&Msg::TxCommitFailed { error: "deferred constraint".into() }), "{notes:?}");
     // Rolled back instead of committed: not what was asked, it stops too.
@@ -165,7 +165,7 @@ fn a_commit_that_does_not_happen_stops_and_the_tab_stays() {
     let i = h.app.tabs.active_index();
     ended(&mut h, i, id, TxOutcome::RolledBackInstead);
     assert_eq!(h.app.tabs.len(), tabs);
-    assert!(matches!(status(&h), Some(Msg::TxEndStopped { .. })));
+    assert!(matches!(status(&h), Some(Msg::TxEndStoppedCommit { .. })));
     // The connection drops while committing: unknown, it stops.
     let mut h = connected();
     h.ctrl('t');
@@ -176,7 +176,7 @@ fn a_commit_that_does_not_happen_stops_and_the_tab_stays() {
     let (id, _) = ends(&mut h)[0];
     let i = h.app.tabs.active_index();
     h.tab_db(i, DbEvent::Failed { id, error: DbError::CommitUnknown, cancelled: false });
-    assert!(matches!(status(&h), Some(Msg::TxEndStopped { .. })));
+    assert!(matches!(status(&h), Some(Msg::TxEndStoppedCommit { .. })));
     h.tab_db(i, DbEvent::Lost { error: DbError::Closed });
     assert_eq!(h.app.tabs.len(), tabs, "the tab stays");
     assert_eq!(status(&h), Some(Msg::Label(Label::DbCommitUnknown)), "what matters is that it is not known");
@@ -192,7 +192,7 @@ fn a_failed_transaction_offers_only_rollback_and_running_statements_keep_todays_
     h.tab_db(i, DbEvent::TxAborted(true));
     h.ctrl('w');
     assert_eq!(buttons(&h), [Label::DialogButtonKeep, Label::TxButtonRollback, Label::DialogButtonClose]);
-    assert!(h.screen(100, 30).contains("r roll back first · y go on · Enter/n stay"));
+    assert!(h.screen(100, 30).contains("r roll back · y close anyway (rolls back) · Enter/n stay"));
     h.keys("c");
     assert!(ends(&mut h).is_empty(), "no commit of a failed transaction");
     assert_eq!(h.overlay_kind(), Some(OverlayKind::Confirm));
@@ -213,6 +213,8 @@ fn quitting_commits_every_open_transaction_one_by_one_then_quits() {
     h.command("qa");
     assert_eq!(h.overlay_kind(), Some(OverlayKind::Confirm));
     let screen = h.screen(100, 30);
+    assert!(screen.contains("Transactions are open in 2 tabs. Quitting rolls them back"), "{screen}");
+    assert!(screen.contains("y quit anyway (rolls back)"), "{screen}");
     assert!(screen.contains("Tab 1: 1 change (3 rows) uncommitted for 0:00"), "{screen}");
     assert!(screen.contains("Tab 2: 1 change (1 row) uncommitted for 0:00"), "{screen}");
     for lang in [Lang::En, Lang::Ko] {
@@ -248,7 +250,7 @@ fn quitting_commits_every_open_transaction_one_by_one_then_quits() {
     let second = ends(&mut h);
     h.tab_db(1, DbEvent::Failed { id: second[0].0, error: DbError::Server("serialization".into()), cancelled: false });
     assert!(!h.app.quit);
-    assert_eq!(status(&h), Some(Msg::TxEndStopped { tab: "2".into() }));
+    assert_eq!(status(&h), Some(Msg::TxEndStoppedCommit { tab: "2".into() }));
 }
 
 #[test]
@@ -481,4 +483,108 @@ fn close_question_and_summary_snapshots() {
         h.keys(" xs");
         assert_screen!(format!("tx_summary_{code}_80x24"), lang, h.draw(80, 24));
     }
+}
+
+#[test]
+fn what_started_while_the_transactions_ended_asks_again_and_nothing_is_cancelled() {
+    let mut h = connected();
+    write(&mut h, "UPDATE shop.users SET name = 'x' WHERE id < 4", 3);
+    h.ctrl('t');
+    run(&mut h, "SELECT 1");
+    let i = h.app.tabs.active_index();
+    let id = h.app.tab().exec.query_id;
+    h.tab_db(i, DbEvent::Done { id, outcome: Outcome::Command("SELECT".into()), elapsed: MS });
+    h.command("qa");
+    h.keys("c");
+    let first = ends(&mut h);
+    assert_eq!(first.len(), 1);
+    // While tab 1 commits, a statement starts in tab 2.
+    run(&mut h, "SELECT pg_sleep(10)");
+    assert!(h.app.tab().exec.running.is_some());
+    ended(&mut h, 0, first[0].0, TxOutcome::Committed);
+    assert!(!h.app.quit, "not quit: something runs now");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Confirm), "asked again");
+    assert!(h.screen(100, 30).contains("A query is still running"), "{}", h.screen(100, 30));
+    assert!(!h.cancelled.load(std::sync::atomic::Ordering::SeqCst), "nothing cancelled");
+}
+
+#[test]
+fn a_pending_answer_says_it_waits_and_esc_stops_it() {
+    let mut h = connected();
+    write(&mut h, "UPDATE shop.users SET name = 'x' WHERE id < 4", 3);
+    h.ctrl('t');
+    write(&mut h, "DELETE FROM shop.orders WHERE id = 9", 1);
+    h.command("qa");
+    h.keys("c");
+    let first = ends(&mut h);
+    h.app.transient = None;
+    let bar = h.status(160, 45);
+    assert!(bar.contains("Committing tab 1 of 2 first, then quit anyway · Esc stops waiting"), "{bar}");
+    // Shown on the other tab too.
+    h.app.dispatch(Action::PrevTab);
+    h.app.transient = None;
+    assert!(h.status(160, 45).contains("Committing tab 1 of 2"), "{}", h.status(160, 45));
+    // A second question meanwhile offers no commit or rollback first.
+    h.app.dispatch(Action::NextTab);
+    h.ctrl('w');
+    assert!(!buttons(&h).contains(&Label::TxButtonCommit), "{:?}", buttons(&h));
+    h.key(KeyCode::Esc);
+    // Esc stops waiting: the commit still says how it ended, nothing quits, nothing else ends.
+    h.key(KeyCode::Esc);
+    assert_eq!(h.app.transient.as_ref().map(|t| t.0.msg.clone()), Some(Msg::Label(Label::TxEndDropped)));
+    ended(&mut h, 0, first[0].0, TxOutcome::Committed);
+    assert!(!h.app.quit);
+    assert!(ends(&mut h).is_empty(), "tab 2 is not ended");
+    assert!(h.app.tabs.iter().next().unwrap().exec.run.notes.iter().any(|n| matches!(n.msg, Msg::TxCommitted { .. })));
+}
+
+#[test]
+fn a_tab_the_answer_waits_for_that_closes_stops_it() {
+    let mut h = connected();
+    write(&mut h, "UPDATE shop.users SET name = 'x' WHERE id < 4", 3);
+    h.ctrl('t');
+    write(&mut h, "DELETE FROM shop.orders WHERE id = 9", 1);
+    h.command("qa");
+    h.keys("c");
+    let first = ends(&mut h);
+    // Tab 2, still to be ended, is closed meanwhile (the server rolls it back).
+    h.ctrl('w');
+    h.keys("y");
+    assert_eq!(h.app.transient.as_ref().map(|t| t.0.msg.clone()), Some(Msg::Label(Label::TxEndTabGone)));
+    ended(&mut h, 0, first[0].0, TxOutcome::Committed);
+    assert!(!h.app.quit);
+}
+
+#[test]
+fn the_summary_closes_when_its_transaction_ends() {
+    let mut h = connected();
+    write(&mut h, "UPDATE shop.users SET name = 'x' WHERE id < 4", 3);
+    h.keys(" xs");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::TxSummary));
+    // The server ends it (a connection lost, the user's COMMIT elsewhere): it closes.
+    h.tab_db(0, DbEvent::Block(false));
+    h.tab_db(0, DbEvent::TxOpen(false));
+    assert_eq!(h.overlay_kind(), None);
+}
+
+#[test]
+fn an_idle_failed_transaction_is_told_to_roll_back() {
+    let mut h = connected_in(Lang::En, Some(Duration::from_secs(60)));
+    write(&mut h, "UPDATE shop.users SET name = 'x' WHERE id < 4", 3);
+    h.tab_db(0, DbEvent::TxAborted(true));
+    h.advance(Duration::from_secs(60));
+    assert_eq!(
+        status(&h),
+        Some(Msg::TxIdleWarningAborted { tab: "1".into(), time: "1:00".into(), rollback: "Space x r".into() })
+    );
+}
+
+#[test]
+fn a_procedure_failing_otherwise_says_nothing_about_transactions() {
+    let mut h = connected();
+    write(&mut h, "UPDATE shop.users SET name = 'x' WHERE id < 4", 3);
+    let id = run(&mut h, "CALL shop.archive()");
+    h.tab_db(0, DbEvent::Failed { id, error: DbError::Server("division by zero".into()), cancelled: false });
+    h.tab_db(0, DbEvent::RunRolledBack { id });
+    assert!(!h.app.tab().exec.run.notes.iter().any(|n| n.msg == Msg::Label(Label::TxCallInTx)));
 }

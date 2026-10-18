@@ -217,6 +217,16 @@ impl App {
     pub(super) fn handle_key(&mut self, key: KeyEvent, repeat: bool) {
         let chord = KeyChord::from_event(&key);
         let ctx = self.key_context();
+        // An answer waits for transactions to end: `Esc` (outside text input, no dialog open)
+        // stops waiting.
+        if key.code == KeyCode::Esc
+            && self.overlays.is_empty()
+            && !matches!(ctx, Ctx::VimInsert)
+            && !ctx.is_text_input()
+            && self.end_dropped()
+        {
+            return;
+        }
         // The completion popup takes its keys before the editor.
         if self.tab().popup.is_some()
             && self.overlays.is_empty()

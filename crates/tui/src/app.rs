@@ -1803,6 +1803,10 @@ impl App {
         if let Some((m, _)) = &self.transient {
             return Some((m.render(&self.i18n), m.level, false));
         }
+        // An answer waits for transactions to end (whichever tab is shown).
+        if let Some(m) = self.end_pending_status() {
+            return Some((m, Level::Info, true));
+        }
         if let Some(r) = &self.tab().exec.running {
             let log = &self.tab().exec.run;
             let step = log.running().filter(|_| log.several() && !r.fetch);

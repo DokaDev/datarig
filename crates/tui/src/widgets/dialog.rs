@@ -110,7 +110,11 @@ pub(crate) fn draw_confirm(app: &mut App, area: Rect, buf: &mut Buffer) {
     let th = theme::cur();
     let when = (app.overlays.top().map(|o| o.kind()) == Some(OverlayKind::Confirm), app.now());
     let Some(c) = app.overlays.confirm() else { return };
-    let (title, text, keys) = (app.i18n.label(c.title), app.i18n.msg(&c.text), app.i18n.label(c.keys));
+    let keys = match c.tx {
+        Some(tx) => app.tx_choice_keys(c.action, tx.commit),
+        None => app.i18n.label(c.keys),
+    };
+    let (title, text) = (app.i18n.label(c.title), app.i18n.msg(&c.text));
     // Four buttons (commit or roll back first) need more room.
     let w = if c.tx.is_some() { area.width.saturating_sub(4).min(76) } else { area.width.saturating_sub(8).min(60) };
     let width = (w as usize).saturating_sub(4);
@@ -353,8 +357,12 @@ pub(crate) fn draw_tx_summary(app: &mut App, area: Rect, buf: &mut Buffer) {
     let th = theme::cur();
     let when = (app.overlays.top().map(|o| o.kind()) == Some(OverlayKind::TxSummary), app.now());
     let Some(s) = app.overlays.tx_summary() else { return };
+    // Its transaction ended (or its tab went): it closes, never left on top unseen.
+    let Some(tx) = app.tabs.get(s.tab).filter(|t| t.exec.user_tx()).and_then(|t| t.exec.tx.clone()) else {
+        app.overlays.close(OverlayKind::TxSummary);
+        return;
+    };
     let Some(t) = app.tabs.get(s.tab) else { return };
-    let Some(tx) = t.exec.tx.clone() else { return };
     let (tab, profile, aborted) = (s.tab, t.profile, t.exec.tx_aborted);
     let busy = app.tab_busy(tab);
     let how = app.i18n.label(if tx.manual { Label::TxHowManual } else { Label::TxHowUser }).to_string();

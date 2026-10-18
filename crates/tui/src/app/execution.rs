@@ -1059,13 +1059,22 @@ impl App {
                     // A procedure that failed in the open transaction may be one that commits by
                     // itself (it cannot run in one): how to run it.
                     let dialect = t.exec.prepared.language().dialect();
-                    let call = t.exec.run.failed().and_then(|(i, _)| t.exec.run.statements.get(i)).is_some_and(|s| {
-                        let first = datarig_core::sql::lexer::lex_in(&s.sql, dialect)
-                            .into_iter()
-                            .find(|w| w.is_word())
-                            .map(|w| w.text(&s.sql).to_ascii_uppercase());
-                        matches!(first.as_deref(), Some("CALL" | "DO"))
-                    });
+                    let call = t
+                        .exec
+                        .run
+                        .failed()
+                        .and_then(|(i, e)| {
+                            // PostgreSQL's 2D000, as its message says it.
+                            e.contains("invalid transaction termination").then_some(i)
+                        })
+                        .and_then(|i| t.exec.run.statements.get(i))
+                        .is_some_and(|s| {
+                            let first = datarig_core::sql::lexer::lex_in(&s.sql, dialect)
+                                .into_iter()
+                                .find(|w| w.is_word())
+                                .map(|w| w.text(&s.sql).to_ascii_uppercase());
+                            matches!(first.as_deref(), Some("CALL" | "DO"))
+                        });
                     if call {
                         t.exec.run.notes.push(Notice::new(Label::TxCallInTx, Level::Warning));
                     }
@@ -1699,6 +1708,12 @@ impl App {
             self.offer_outside(id);
         }
         self.end_answered(id);
+        // The summary of a transaction that ended closes.
+        if self.overlays.tx_summary().is_some_and(|s| s.tab == id)
+            && !self.tabs.get(id).is_some_and(|t| t.exec.user_tx())
+        {
+            self.overlays.close(OverlayKind::TxSummary);
+        }
         if rows_for == Some(None) {
             self.read_held_on(id);
         }
