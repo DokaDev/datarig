@@ -276,6 +276,27 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
   system clipboard or through OSC 52 over SSH. The copied cells flash briefly once the copy is
   sent to the clipboard and fade back (themes in RGB colours; with the terminal's own colours
   the flash goes off at once); `[ui] yank_flash = "off"` turns that off.
+- **Export to a file**: `Space r e`, the results menu, or `:export [format] [scope] [path]
+  [delim= quote= header= null=]` writes a result to disk. `:export` alone opens the dialog.
+  - Formats: CSV, TSV, JSON, indented JSON, JSON Lines, Markdown, HTML, XML, SQL `INSERT` and
+    `UPDATE` (the last two only where the result's keys allow them, as with copy). Excel (.xlsx)
+    and Parquet are planned, not there yet.
+  - Rows: all rows, the fetched rows, or the selection. The fetched rows and the selection come
+    from what is already loaded; nothing is sent to the server for them.
+  - CSV options: delimiter, quote style (as needed, always, all but numbers, none), a header line,
+    and the text written for NULL.
+  - The default path is `~/Downloads/<name>-<stamp>.<ext>`. An existing file is never replaced
+    without asking. The file is written as `<path>.partial` and renamed when the export
+    succeeds; a cancel or a failure keeps the `.partial` file with the rows written so far
+    (an export that wrote no rows leaves no file).
+  - All rows of a result with more on the server need the statement to run again. A table tab
+    showing its whole table, with a primary key or a unique key on NOT NULL columns and no
+    open transaction, is read in short chunks by that key (several short reads, not one
+    snapshot). Any other result runs its statement once and streams it: a plain `SELECT`
+    that is safe to repeat goes ahead, anything else asks first, saying it runs again.
+    Read-only and prod-like environments ask first too, because the statement holds a read
+    lock and a snapshot until the export finishes.
+  - Inside an open transaction the export reads inside it. Cancel sends a cancel to the server.
 - Transaction indicators in the tab bar and the status bar (open, aborted, "rollback required"),
   and questions before closing, quitting or disconnecting would roll back your work.
 - Query plans (PostgreSQL): `Space e x` (or `:explain`) runs the statement under the cursor as
@@ -387,6 +408,7 @@ Planned, in no particular order and with no dates:
 - Drivers for Valkey/Redis and Elasticsearch
 - TLS: passphrase-protected client keys, certificate revocation lists, `sslnegotiation=direct`
 - A server monitor (sessions, locks, activity)
+- Export to Excel (.xlsx) and Parquet
 - More of vim: `gv`, macros, Ex commands other than `:{n}` and `:s` (`:d`, `:g`, …)
 - DDL of objects the explorer does not list yet (functions on their own, sequences, types),
   and from the other drivers
