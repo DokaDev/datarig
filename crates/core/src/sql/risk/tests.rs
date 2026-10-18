@@ -1484,3 +1484,206 @@ fn what_sets_the_path_for_the_session() {
         assert!(!classify(sql).session_path, "{sql}");
     }
 }
+
+/// What PostgreSQL refuses inside a transaction block (SQLSTATE 25001). The driver's gated
+/// server test runs each of these forms inside `BEGIN` on PostgreSQL.
+#[test]
+fn what_cannot_run_in_a_transaction_block() {
+    for sql in [
+        "VACUUM",
+        "vacuum t",
+        "VACUUM FULL t",
+        "VACUUM FREEZE VERBOSE s.t",
+        "VACUUM ANALYZE t (a)",
+        "VACUUM (ANALYZE) t",
+        "VACUUM (FULL, VERBOSE false) t, u",
+        "CREATE INDEX CONCURRENTLY i ON t (a)",
+        "create unique index concurrently if not exists i on t (a)",
+        "CREATE INDEX CONCURRENTLY ON t (a)",
+        "DROP INDEX CONCURRENTLY i",
+        "DROP INDEX CONCURRENTLY IF EXISTS s.i CASCADE",
+        "REINDEX INDEX CONCURRENTLY i",
+        "REINDEX TABLE CONCURRENTLY t",
+        "REINDEX (CONCURRENTLY) TABLE t",
+        "REINDEX (VERBOSE, CONCURRENTLY true) INDEX i",
+        "REINDEX (\"concurrently\") INDEX i",
+        "REINDEX SCHEMA s",
+        "REINDEX SYSTEM",
+        "REINDEX DATABASE",
+        "REINDEX (VERBOSE) DATABASE d",
+        "CLUSTER",
+        "CLUSTER VERBOSE",
+        "CLUSTER (VERBOSE)",
+        "CREATE DATABASE zz",
+        "CREATE DATABASE zz TEMPLATE template0 ENCODING 'UTF8'",
+        "DROP DATABASE zz",
+        "DROP DATABASE IF EXISTS zz WITH (FORCE)",
+        "ALTER DATABASE d SET TABLESPACE ts",
+        "CREATE TABLESPACE ts LOCATION '/nowhere'",
+        "DROP TABLESPACE ts",
+        "DROP TABLESPACE IF EXISTS ts",
+        "ALTER SYSTEM SET work_mem = '64MB'",
+        "ALTER SYSTEM RESET ALL",
+        "DISCARD ALL",
+        "COMMIT PREPARED 'x'",
+        "ROLLBACK PREPARED 'x'",
+        "CREATE SUBSCRIPTION s CONNECTION 'host=h' PUBLICATION p",
+        "CREATE SUBSCRIPTION s CONNECTION 'host=h' PUBLICATION p WITH (create_slot = true)",
+        "CREATE SUBSCRIPTION s CONNECTION 'host=h' PUBLICATION p WITH (create_slot)",
+        "CREATE SUBSCRIPTION s CONNECTION 'host=h' PUBLICATION p WITH (enabled = false, copy_data = false)",
+        "CREATE SUBSCRIPTION s CONNECTION 'host=h' PUBLICATION p WITH (create_slot = false, create_slot = true)",
+        "DROP SUBSCRIPTION s",
+        "DROP SUBSCRIPTION IF EXISTS s CASCADE",
+        "ALTER SUBSCRIPTION s REFRESH PUBLICATION",
+        "ALTER SUBSCRIPTION s REFRESH PUBLICATION WITH (copy_data = false)",
+        "ALTER SUBSCRIPTION s SET PUBLICATION p",
+        "ALTER SUBSCRIPTION s ADD PUBLICATION p WITH (refresh = true)",
+        "ALTER SUBSCRIPTION s DROP PUBLICATION p, q",
+        "ALTER SUBSCRIPTION s SET (failover = true)",
+        "ALTER SUBSCRIPTION s SET (two_phase = false)",
+        "ALTER TABLE p DETACH PARTITION c CONCURRENTLY",
+        "ALTER TABLE IF EXISTS s.p DETACH PARTITION s.c CONCURRENTLY",
+        // Several statements: the worst counts.
+        "SELECT 1; VACUUM",
+    ] {
+        let risk = classify(sql);
+        assert!(risk.no_tx_block, "{sql}");
+        assert!(!risk.adds_enum_value, "{sql}");
+    }
+    for sql in [
+        "ANALYZE",
+        "ANALYZE t",
+        "ANALYSE VERBOSE t (a)",
+        "CHECKPOINT",
+        "REFRESH MATERIALIZED VIEW CONCURRENTLY mv",
+        "REFRESH MATERIALIZED VIEW mv WITH NO DATA",
+        "CREATE INDEX i ON t (a)",
+        "CREATE INDEX \"concurrently\" ON t (a)",
+        "DROP INDEX i",
+        "DROP TABLE \"concurrently\"",
+        "REINDEX TABLE t",
+        "REINDEX INDEX i",
+        "REINDEX (VERBOSE) TABLE t",
+        "REINDEX (CONCURRENTLY false) TABLE t",
+        "REINDEX (CONCURRENTLY off) INDEX i",
+        "REINDEX (CONCURRENTLY no) INDEX i",
+        "REINDEX (CONCURRENTLY 0) TABLE t",
+        "CLUSTER t",
+        "CLUSTER t USING i",
+        "CLUSTER VERBOSE t",
+        "CLUSTER (VERBOSE) t",
+        "DISCARD PLANS",
+        "DISCARD SEQUENCES",
+        "DISCARD TEMP",
+        "ALTER DATABASE d SET work_mem = '1MB'",
+        "ALTER DATABASE d CONNECTION LIMIT 5",
+        "ALTER DATABASE d RENAME TO e",
+        "ALTER TABLESPACE ts SET (seq_page_cost = 1)",
+        "CREATE SUBSCRIPTION s CONNECTION 'host=h' PUBLICATION p WITH (connect = false)",
+        "CREATE SUBSCRIPTION s CONNECTION 'host=h' PUBLICATION p WITH (connect = off)",
+        "CREATE SUBSCRIPTION s CONNECTION 'host=h' PUBLICATION p WITH (create_slot = true, create_slot = 'false')",
+        "CREATE SUBSCRIPTION s CONNECTION 'host=h' PUBLICATION p WITH (create_slot = false)",
+        "CREATE SUBSCRIPTION s CONNECTION 'host=h' PUBLICATION p WITH (create_slot = off, enabled = false)",
+        "ALTER SUBSCRIPTION s SET PUBLICATION p WITH (refresh = false)",
+        "ALTER SUBSCRIPTION s ADD PUBLICATION p WITH (refresh = false, copy_data = true)",
+        "ALTER SUBSCRIPTION s ENABLE",
+        "ALTER SUBSCRIPTION s DISABLE",
+        "ALTER SUBSCRIPTION s CONNECTION 'host=h'",
+        "ALTER SUBSCRIPTION s SET (binary = true)",
+        "ALTER SUBSCRIPTION s SKIP (lsn = '0/0')",
+        "ALTER SUBSCRIPTION s OWNER TO r",
+        "ALTER TABLE p DETACH PARTITION c",
+        "ALTER TABLE p DETACH PARTITION c FINALIZE",
+        "ALTER TABLE p ATTACH PARTITION c FOR VALUES IN (1)",
+        "ALTER TYPE e ADD VALUE 'x'",
+        "BEGIN",
+        "COMMIT",
+        "ROLLBACK",
+        "PREPARE TRANSACTION 'x'",
+        "SELECT 1",
+        "DELETE FROM t",
+        // The words in a comment, a string, a name or a body are not statements.
+        "SELECT 'VACUUM'",
+        "-- VACUUM\nSELECT 1",
+        "/* VACUUM; CREATE INDEX CONCURRENTLY i ON t (a) */ SELECT 1",
+        "SELECT $$VACUUM$$, $x$DROP DATABASE d$x$",
+        "SELECT 1 AS \"vacuum\" FROM \"cluster\"",
+        "CREATE FUNCTION f() RETURNS void LANGUAGE sql AS $$VACUUM$$",
+        "DO $$BEGIN EXECUTE 'VACUUM'; END$$",
+        // Unreadable: unknown, not this.
+        "VACUUM (",
+    ] {
+        assert!(!classify(sql).no_tx_block, "{sql}");
+    }
+    // Only the flag: the rest of the verdict is as before.
+    assert_eq!(classify("VACUUM t").class, Class::Maintenance);
+    assert_eq!(classify("DROP INDEX CONCURRENTLY i").danger, Some(Danger::Drop));
+    assert_eq!(classify("DISCARD ALL").read_only(), Ok(()));
+    assert_eq!(classify("COMMIT PREPARED 'x'").read_only(), Err(ReadOnlyBlock::ReadWrite));
+}
+
+/// `ALTER TYPE … ADD VALUE`: allowed in a block, but the value is not usable there until commit.
+#[test]
+fn what_adds_an_enum_value() {
+    for sql in [
+        "ALTER TYPE e ADD VALUE 'x'",
+        "alter type s.e add value if not exists 'x' before 'y'",
+        "SELECT 1; ALTER TYPE e ADD VALUE 'x' AFTER 'w'",
+    ] {
+        let risk = classify(sql);
+        assert!(risk.adds_enum_value, "{sql}");
+        assert!(!risk.no_tx_block, "{sql}");
+        assert_eq!(risk.class, Class::Ddl, "{sql}");
+    }
+    for sql in [
+        "ALTER TYPE e RENAME VALUE 'a' TO 'b'",
+        "ALTER TYPE e RENAME TO f",
+        "ALTER TYPE c ADD ATTRIBUTE a int",
+        "CREATE TYPE e AS ENUM ('a')",
+        "SELECT 'ALTER TYPE e ADD VALUE ''x'''",
+        "VACUUM",
+    ] {
+        assert!(!classify(sql).adds_enum_value, "{sql}");
+    }
+}
+
+/// The decision itself, from a risk: only what is known to be harmless outside a transaction
+/// stays outside, and only a plain read runs outside as a read.
+#[test]
+fn where_a_statement_runs_by_risk() {
+    use TxStep::{Opens, Outside, ReadOutside};
+    let of = Risk::of;
+    // (risk, plain read, must open): step.
+    for (risk, plain, must, step) in [
+        (of(Class::Tx), false, false, Outside),
+        (Risk { read_write: true, ..of(Class::Tx) }, false, false, Outside),
+        (of(Class::Session), false, false, Outside),
+        (Risk::danger(Class::Session, Danger::Setting), false, false, Outside),
+        (of(Class::Read), true, false, ReadOutside),
+        (Risk { explain: Explain::Plan, ..of(Class::Read) }, true, false, ReadOutside),
+        (Risk { explain: Explain::Analyze, ..Risk::writing(Class::Write, None) }, false, false, Outside),
+        (Risk { no_tx_block: true, ..of(Class::Maintenance) }, false, false, Outside),
+        (Risk { no_tx_block: true, ..of(Class::Session) }, false, true, Outside),
+        (Risk { implicit_commit: true, ..of(Class::Ddl) }, false, false, Outside),
+        (Risk { implicit_commit: true, ..of(Class::Ddl) }, false, true, Outside),
+        (of(Class::Session), false, true, Opens),
+        (of(Class::Read), true, true, Opens),
+        (of(Class::Read), false, false, Opens),
+        (Risk { runs_code: true, ..of(Class::Read) }, true, false, Opens),
+        (Risk { unchecked_call: true, ..of(Class::Read) }, true, false, Opens),
+        (Risk::danger(Class::Read, Danger::ServerAction), true, false, Opens),
+        (Risk { read_write: true, ..of(Class::Read) }, true, false, Opens),
+        (Risk { unchecked_call: true, ..of(Class::Session) }, false, false, Opens),
+        (Risk { runs_code: true, ..of(Class::Session) }, false, false, Opens),
+        (Risk::writing(Class::Write, None), true, false, Opens),
+        (of(Class::Write), true, false, Opens),
+        (of(Class::Ddl), true, false, Opens),
+        (of(Class::Maintenance), true, false, Opens),
+        (Risk::danger(Class::Procedural, Danger::Procedural), true, false, Opens),
+        (of(Class::Unknown), true, false, Opens),
+        (Risk::danger(Class::Unknown, Danger::Unparsed), true, false, Opens),
+        (Risk { explain: Explain::Plan, ..Risk::writing(Class::Write, None) }, true, false, Opens),
+    ] {
+        assert_eq!(tx_step(&risk, plain, must), step, "{risk:?} {plain} {must}");
+    }
+}

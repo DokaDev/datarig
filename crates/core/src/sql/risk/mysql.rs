@@ -1823,9 +1823,6 @@ fn names_of(stmts: &[Vec<W>], hint: bool) -> Result<Vec<String>, NotRepeatable> 
     if let Some(c) = calls(ws).into_iter().find(|c| VOLATILE.contains(&c.name.as_str())) {
         return Err(NotRepeatable::Volatile(c.name.to_ascii_lowercase()));
     }
-    if let Some(v) = ws.iter().find(|w| w.kind == Tok::Variable) {
-        return Err(NotRepeatable::Variable(v.text.to_string()));
-    }
     let mut out = Vec::new();
     let mut i = 0;
     while i < ws.len() {
@@ -1843,7 +1840,54 @@ fn names_of(stmts: &[Vec<W>], hint: bool) -> Result<Vec<String>, NotRepeatable> 
             _ => i += 1,
         }
     }
+    // Last: the app lets a read of a variable that passes every other check run outside a
+    // transaction ([`super::Classifier::tx_step`]).
+    if let Some(v) = ws.iter().find(|w| w.kind == Tok::Variable) {
+        return Err(NotRepeatable::Variable(v.text.to_string()));
+    }
     Ok(out)
+}
+
+/// The form of `sql` for [`super::tx_step`] when it is exactly one statement in every sql mode
+/// that reads it differently ([`readings`]; one the server would refuse as a syntax error does
+/// not count, unless it is `mode`) and the readings agree: one that calls a [`VOLATILE`]
+/// built-in (an effect, or a value of the moment: it runs inside the transaction like such a
+/// query, also when it only sets a variable), else a query, a `SHOW`, `HELP`, `DESCRIBE`/`DESC`
+/// or `EXPLAIN` (a plain read; what it calls and whether it runs anything is in its risk), or
+/// something else. `None` otherwise.
+pub(super) fn form(sql: &str, mode: MySqlMode) -> Option<super::Form> {
+    use super::Form;
+    guarded(
+        || None,
+        || {
+            let mut agreed = None;
+            for (k, m) in readings(sql, mode).into_iter().enumerate() {
+                let stmts = match statements(sql, m) {
+                    Ok((stmts, _)) => stmts,
+                    Err(Unread::Syntax) if k > 0 => continue,
+                    Err(_) => return None,
+                };
+                let [ws] = stmts.as_slice() else { return None };
+                let first = ws.first().map(|w| w.up.as_str());
+                let query = starts_query(ws, 0)
+                    || (first == Some("WITH") && with_main(ws).is_some_and(|i| starts_query(ws, i)));
+                let form = if calls(ws).iter().any(|c| VOLATILE.contains(&c.name.as_str())) {
+                    Form::Opens
+                } else if query {
+                    Form::Query
+                } else if matches!(first, Some("SHOW" | "HELP" | "DESCRIBE" | "DESC" | "EXPLAIN")) {
+                    Form::Plain
+                } else {
+                    Form::Other
+                };
+                if agreed.is_some_and(|a| a != form) {
+                    return None;
+                }
+                agreed = Some(form);
+            }
+            agreed
+        },
+    )
 }
 
 /// Whether the query `sql` sorts its rows at the top (`ORDER BY` outside every parenthesis,

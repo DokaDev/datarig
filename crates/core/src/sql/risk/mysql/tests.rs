@@ -1,5 +1,5 @@
 use super::*;
-use crate::sql::risk::{Classifier, ReadOnlyBlock};
+use crate::sql::risk::{Classifier, ReadOnlyBlock, TxStep};
 
 include!("corpus.rs");
 
@@ -655,4 +655,26 @@ fn rewritten_writes_are_never_reads() {
         }
     }
     assert!(checked > 15_000);
+}
+
+/// What PostgreSQL alone refuses in a transaction block, or adds to an enum: never a MySQL
+/// verdict. And on the corpus, a text of several statements opens the transaction, what commits
+/// the open one never opens one, and every write or schema change that does not opens it.
+#[test]
+fn mysql_never_sets_the_postgres_transaction_flags() {
+    let c = Classifier::new(crate::sql::dialect::Language::Sql(Dialect::MySql(MODE)));
+    let extra =
+        ["CREATE DATABASE zz", "DROP DATABASE zz", "OPTIMIZE TABLE t", "ALTER TABLE t ALTER COLUMN e SET DEFAULT 'x'"];
+    for sql in CORPUS.iter().map(|(sql, _)| *sql).chain(extra) {
+        let r = risk(sql);
+        assert!(!r.no_tx_block && !r.adds_enum_value, "{sql}");
+        let step = c.tx_step(sql);
+        if form(sql, MODE).is_none() {
+            assert_eq!(step, TxStep::Opens, "{sql}");
+        } else if r.implicit_commit {
+            assert_eq!(step, TxStep::Outside, "{sql}");
+        } else if matches!(r.class, Class::Write | Class::Ddl | Class::Procedural | Class::Unknown) && !r.rolls_back() {
+            assert_eq!(step, TxStep::Opens, "{sql}");
+        }
+    }
 }

@@ -5,7 +5,7 @@
 
 use super::mysql;
 use super::repeat::{self, NotRepeatable};
-use super::{Prepared, Risk};
+use super::{Form, Prepared, Risk, TxStep};
 use crate::sql::dialect::{Dialect, Language, MySqlMode};
 
 /// The classifier of one session's statements, with what the session prepared so far (see
@@ -90,6 +90,33 @@ impl Classifier {
             Self::Pg(_) => repeat::ordered(sql),
             Self::MySql(mode) => mysql::ordered(sql, *mode),
         }
+    }
+
+    /// Where the statement `sql` runs on a session that commits by hand while no transaction
+    /// is open ([`TxStep`], [`super::tx_step`]), with what the session prepared so far (an
+    /// `EXECUTE` has its statement's risk; one of a name not known to be prepared opens the
+    /// transaction). A read runs outside only when it is one statement that the plain-`SELECT`
+    /// allowlist takes ([`Classifier::repeatable`]; on MySQL also one that only reads a
+    /// variable), or a `SHOW`, a `HELP`, a `DESCRIBE` or an `EXPLAIN` without `ANALYZE` that
+    /// calls nothing. Several statements, a text that cannot be read and anything unknown open
+    /// it.
+    pub fn tx_step(&self, sql: &str) -> TxStep {
+        let (form, risk) = match self {
+            Self::Pg(p) => (super::form(sql), p.clone().classify(sql)),
+            Self::MySql(mode) => (mysql::form(sql, *mode), mysql::classify(sql, *mode)),
+        };
+        let plain_read = match form {
+            None => return TxStep::Opens,
+            Some(Form::Query) => match self.repeatable(sql) {
+                Ok(()) => true,
+                // A variable's value may differ on the next run; reading it changes nothing.
+                Err(NotRepeatable::Variable(_)) => matches!(self, Self::MySql(_)),
+                Err(_) => false,
+            },
+            Some(Form::Plain) => true,
+            Some(Form::Opens | Form::Other) => false,
+        };
+        super::tx_step(&risk, plain_read, form == Some(Form::Opens))
     }
 
     /// The query that counts the rows of `sql` ([`repeat::count_query`]).
