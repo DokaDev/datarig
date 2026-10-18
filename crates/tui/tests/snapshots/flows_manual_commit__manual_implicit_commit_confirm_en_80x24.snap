@@ -1,6 +1,5 @@
 ---
 source: crates/tui/tests/flows_manual_commit.rs
-assertion_line: 352
 expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ◆ ×                                        "
@@ -13,7 +12,7 @@ expression: backend
 "│ ╭ Run a statement that may do harm? ───────────────────────────────────────╮ │"
 "│ │ ● local-pg · stg                                                         │ │"
 "│ │                                                                          │─╯"
-"│ │ 1/1  commits the open transaction first: 1 statement (3 rows) is commit… │─╮"
+"│ │ 1/1  first commits 1 open statement (3 rows): can't be rolled back       │─╮"
 "│ │      ALTER TABLE users ADD COLUMN zz_c int                               │ │"
 "│ │                                                                          │s│"
 "│ │                           [ Cancel ]     Run                             │ │"
@@ -26,4 +25,4 @@ expression: backend
 "│                      ││                                                      │"
 "│                      ││                                                      │"
 "╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
-" NORMAL  local-pg │ TX open · 1 change · 3 rows · 0:00 │ 3 rows affec… · 3ms EN "
+" NORMAL  local-pg · stg │ TX open · 1 change · 3 rows · 0:00 │ 3 rows… · 3ms EN "

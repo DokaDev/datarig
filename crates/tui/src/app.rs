@@ -741,9 +741,6 @@ pub struct App {
     pub(crate) last_save_folder: Option<String>,
     /// The database and schema `:use` named for a tab, while the switch waits for its confirm.
     pending_context: Option<(TabId, datarig_core::driver::SessionContext)>,
-    /// A statement to run once outside a transaction if the user says so (`tx::offer_outside`):
-    /// its tab, the tab's binding then, and its text.
-    pending_outside: Option<(TabId, u64, String)>,
     /// A `:use` whose name a list read earlier does not have, while the server is asked again.
     pending_use: Option<cmdline::PendingUse>,
     /// A press on a tab of the tab bar, and the drag of that tab that may follow.
@@ -1038,7 +1035,6 @@ impl App {
             detail_picked: None,
             last_top: None,
             pending_context: None,
-            pending_outside: None,
             pending_use: None,
             last_save_folder: None,
         };

@@ -1,6 +1,5 @@
 ---
 source: crates/tui/tests/ui_snapshots.rs
-assertion_line: 1094
 expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×                                          "

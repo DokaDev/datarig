@@ -1,6 +1,5 @@
 ---
 source: crates/tui/tests/flows_manual_commit.rs
-assertion_line: 371
 expression: "h.draw(80, 24).backend()"
 ---
 "╭ Explorer ────────────╮ 1 console 1 ◆ ×                                        "
@@ -26,4 +25,4 @@ expression: "h.draw(80, 24).backend()"
 "│                      ││                                                      │"
 "│                      ││                                                      │"
 "╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
-" NORMAL  local-pg │ TX open · 2 changes · 4 rows · 4:12 │ 1 row affec… · 3ms EN "
+" NORMAL  local-pg · stg │ TX open · 2 changes · 4 rows · 4:12 │ 1 row… · 3ms EN "

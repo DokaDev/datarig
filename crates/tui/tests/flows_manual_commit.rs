@@ -212,12 +212,7 @@ fn a_statement_that_cannot_run_in_a_transaction_asks_with_manual_commit() {
     assert!(executes(&mut h).is_empty(), "nothing is sent before the answer");
     assert_eq!(h.overlay_kind(), Some(OverlayKind::RunConfirm));
     let screen = h.screen(160, 45);
-    assert!(
-        screen.contains(
-            "can't run inside a transaction: it runs on its own, takes effect at once and can't be rolled back"
-        ),
-        "{screen}"
-    );
+    assert!(screen.contains("runs outside a transaction, at once: can't be rolled back"), "{screen}");
     // Enter keeps it unrun.
     h.key(KeyCode::Enter);
     assert!(executes(&mut h).is_empty());
@@ -284,12 +279,7 @@ fn mysql_asks_before_a_statement_commits_the_open_transaction() {
     assert!(executes(&mut h).is_empty(), "asked first");
     assert_eq!(h.overlay_kind(), Some(OverlayKind::RunConfirm));
     let screen = h.screen(160, 45);
-    assert!(
-        screen.contains(
-            "commits the open transaction first: 2 statements (4 rows) are committed and can't be rolled back"
-        ),
-        "{screen}"
-    );
+    assert!(screen.contains("first commits 2 open statements (4 rows): can't be rolled back"), "{screen}");
     h.key(KeyCode::Esc);
     assert!(executes(&mut h).is_empty());
     run_all(&mut h, "ALTER TABLE users ADD COLUMN zz_c int");
@@ -308,6 +298,42 @@ fn mysql_asks_before_a_statement_commits_the_open_transaction() {
     assert_eq!(h.overlay_kind(), None);
     assert_eq!(executes(&mut h).len(), 1);
     assert!(notes(&h).iter().any(|m| matches!(m, Msg::QueryImplicitCommit { .. })));
+}
+
+/// The count of what an implicit commit commits starts over where a statement of the same run
+/// ends the transaction.
+#[test]
+fn the_implicit_commit_counts_only_the_transaction_it_ends() {
+    let reason = |h: &Harness| match h.app.overlays.run_confirm().map(|c| c.items.clone()) {
+        Some(items) => items.into_iter().filter_map(|d| d.tx.map(|t| (d.index, t))).collect::<Vec<_>>(),
+        None => Vec::new(),
+    };
+    use datarig_tui::app::tx::TxReason::ImplicitCommit;
+    let open = || {
+        let mut h = connected("stg", true);
+        write(&mut h, "UPDATE users SET name = 'x' WHERE id < 4", 3, true);
+        h
+    };
+    // COMMIT; INSERT; ALTER: the ALTER commits the INSERT only.
+    let mut h = open();
+    run_all(
+        &mut h,
+        "COMMIT;
+INSERT INTO users (name) VALUES ('a');
+ALTER TABLE users ADD COLUMN zz_c int;",
+    );
+    assert_eq!(reason(&h), [(2, ImplicitCommit { statements: 1, rows: 0 })]);
+    // ALTER; INSERT; ALTER: the first commits what was open, the second the INSERT.
+    let mut h = open();
+    run_all(
+        &mut h,
+        "ALTER TABLE users ADD COLUMN zz_c int;
+INSERT INTO users (name) VALUES ('a');
+ALTER TABLE users DROP COLUMN zz_c;",
+    );
+    let r = reason(&h);
+    assert_eq!(r[0], (0, ImplicitCommit { statements: 1, rows: 3 }));
+    assert_eq!(r[1], (2, ImplicitCommit { statements: 1, rows: 0 }));
 }
 
 #[test]
@@ -530,6 +556,20 @@ fn a_commit_that_fails_or_whose_outcome_is_unknown_says_so() {
     assert_eq!(status(&h), Some(Msg::Label(Label::DbCommitUnknown)));
     h.tab_db(0, DbEvent::Lost { error: DbError::Closed });
     assert!(!h.app.tab_busy(h.app.tab().id), "nothing waits after the connection is gone");
+    // Only that the outcome is unknown: never that the server rolled it back, nor (on the next
+    // run) that the transaction is gone.
+    assert_eq!(status(&h), Some(Msg::Label(Label::DbCommitUnknown)), "the status stays");
+    assert!(!notes(&h).contains(&Msg::Label(Label::TxLost)), "{:?}", notes(&h));
+    assert!(notes(&h).iter().any(|m| matches!(m, Msg::QueryLost { .. })), "{:?}", notes(&h));
+    assert!(!h.app.tab().exec.lost_tx && !h.app.tab().exec.user_tx() && h.app.tab().exec.tx.is_none());
+    let screen = h.screen(160, 45);
+    assert!(!screen.contains("rolled back") && !screen.contains("rolls back"), "{screen}");
+    run_all(&mut h, "SELECT 1");
+    assert_ne!(
+        h.app.transient.as_ref().map(|t| t.0.msg.clone()),
+        Some(Msg::Label(Label::QueryReconnectedTx)),
+        "the next run does not say the transaction is gone"
+    );
 }
 
 #[test]
@@ -591,8 +631,14 @@ fn a_procedure_that_commits_by_itself_can_run_outside_a_transaction() {
     h.tab_db(0, DbEvent::Failed { id: id2, error: DbError::NeedsNoTransaction(error.into()), cancelled: false });
     assert_eq!(h.overlay_kind(), None, "asked once the transaction is rolled back");
     h.tab_db(0, DbEvent::ManualRolledBack { id: id2, index: 0 });
-    assert_eq!(h.overlay_kind(), Some(OverlayKind::Confirm));
-    assert!(h.screen(100, 30).contains("This procedure commits by itself"), "{}", h.screen(100, 30));
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::RunConfirm));
+    // As the run confirmation: the connection with its environment, the statement, the reason.
+    let screen = h.screen(100, 30);
+    assert!(screen.contains("Run outside a transaction?"), "{screen}");
+    assert!(screen.contains("● local-pg · stg"), "{screen}");
+    assert!(screen.contains("commits by itself: runs outside, at once; can't be rolled back"), "{screen}");
+    assert!(screen.contains("     CALL shop.archive()"), "{screen}");
+    insta::assert_snapshot!("manual_outside_procedure_en_80x24", h.draw(80, 24).backend());
     // Enter keeps it unrun.
     h.key(KeyCode::Enter);
     assert!(executes(&mut h).is_empty());
@@ -612,7 +658,17 @@ fn a_procedure_that_commits_by_itself_can_run_outside_a_transaction() {
     h.tab_db(0, DbEvent::Done { id: runs[0].0, outcome: Outcome::Command("CALL".into()), elapsed: MS });
     run_all(&mut h, "CALL shop.archive()");
     h.keys("y");
-    assert_eq!(executes(&mut h).pop().unwrap().2, manual(&[TxStep::Open], Some(THIRTY_MIN)));
+    let (id4, _, tx) = executes(&mut h).pop().unwrap();
+    assert_eq!(tx, manual(&[TxStep::Open], Some(THIRTY_MIN)));
+    // Asked, then the connection is lost: y runs nothing (not on the next session either).
+    h.tab_db(0, DbEvent::Failed { id: id4, error: DbError::NeedsNoTransaction(error.into()), cancelled: false });
+    h.tab_db(0, DbEvent::ManualRolledBack { id: id4, index: 0 });
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::RunConfirm));
+    h.tab_db(0, DbEvent::Lost { error: DbError::Closed });
+    h.keys("y");
+    assert!(executes(&mut h).is_empty(), "stale: nothing runs");
+    assert_eq!(status(&h), Some(Msg::Label(Label::SafetyConfirmMoved)));
+    assert!(h.app.tab().exec.session.is_none(), "no new session was opened for it");
 }
 
 #[test]

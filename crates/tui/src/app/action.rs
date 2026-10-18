@@ -309,7 +309,6 @@ fn query_tab_profile(a: &App) -> bool {
     query_tab(a) && a.tab().profile.is_some()
 }
 
-/// The active tab runs on a profile.
 /// The active tab's transaction can be committed or rolled back now.
 fn tx_endable(a: &App) -> bool {
     in_workspace(a) && a.tx_endable()
@@ -320,6 +319,7 @@ fn tx_open(a: &App) -> bool {
     in_workspace(a) && has_tab(a) && a.tab().exec.user_tx()
 }
 
+/// The active tab runs on a profile.
 fn tab_profile(a: &App) -> bool {
     has_tab(a) && a.tab().profile.is_some()
 }

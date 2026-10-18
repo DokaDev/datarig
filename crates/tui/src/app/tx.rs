@@ -106,6 +106,9 @@ pub enum TxReason {
     OutsideTx,
     /// MySQL commits the open transaction before it runs: what the transaction did so far.
     ImplicitCommit { statements: u64, rows: u64 },
+    /// A procedure that commits by itself, to run once outside a transaction: it takes effect
+    /// at once and cannot be rolled back.
+    CommitsItself,
 }
 
 /// What [`App::tx_check`] found in a run.
@@ -243,7 +246,8 @@ impl App {
         let dialect = t.exec.prepared.language().dialect();
         let mysql = matches!(dialect, Dialect::MySql(_));
         let mut open = t.exec.user_tx();
-        let (changes, rows) = t.exec.tx.as_ref().map_or((0, 0), |x| (x.changes, x.rows));
+        // What the open transaction did before the run; once a statement of the run ends it, none.
+        let (mut changes, mut rows) = t.exec.tx.as_ref().map_or((0, 0), |x| (x.changes, x.rows));
         // Statements of this run that may write in the open transaction before a later one.
         let mut pending = 0u64;
         let mut c = self.classifier(id);
@@ -275,7 +279,7 @@ impl App {
                     out.notes.push(Notice::new(Msg::TxMysqlDdl { step: step_text(i) }, Level::Warning));
                 }
                 open = false;
-                pending = 0;
+                (changes, rows, pending) = (0, 0, 0);
             }
             if !mysql && r.adds_enum_value && (open || (manual && step == TxStep::Opens)) {
                 out.notes.push(Notice::new(Msg::TxEnumValue { step: step_text(i) }, Level::Warning));
@@ -283,7 +287,7 @@ impl App {
             match block_change(sql, dialect) {
                 Some(o) => {
                     open = o;
-                    pending = 0;
+                    (changes, rows, pending) = (0, 0, 0);
                 }
                 None if step == TxStep::Opens && (open || manual) => {
                     open = true;
@@ -382,30 +386,22 @@ impl App {
     }
 
     /// Ask whether to run the procedure that commits by itself, which failed as the first
-    /// statement of the transaction opened for it in tab `id`, once outside a transaction.
+    /// statement of the transaction opened for it in tab `id`, once outside a transaction: the
+    /// run confirmation (the connection, its environment, the statement), bound to the tab, its
+    /// binding and its session; `y` runs it as it is, anything else leaves it unrun.
     pub(super) fn offer_outside(&mut self, id: TabId) {
         let Some(t) = self.tabs.get_mut(id) else { return };
         let Some(sql) = t.exec.outside_offer.take() else { return };
-        self.pending_outside = Some((id, t.binding, sql));
-        self.confirm(
-            Label::TxOutsideTitle,
-            Label::TxOutsideText,
-            Label::TxOutsideKeys,
-            ConfirmAction::RunOutsideTx(id),
-        );
-    }
-
-    /// The question of [`App::offer_outside`] was answered: run the statement once as it is (on
-    /// the tab and binding it was asked for), or say it stays unrun.
-    pub(super) fn outside_answered(&mut self, run: bool) {
-        let Some((id, binding, sql)) = self.pending_outside.take() else { return };
-        if !run {
-            return self.tab_status(id, Notice::new(Label::TxOutsideKept, Level::Info));
-        }
-        match self.tabs.get(id).map(|t| t.binding) {
-            Some(b) if b == binding => self.run_approved_as(id, vec![sql], true),
-            Some(_) => self.tab_status(id, Notice::new(Label::SafetyConfirmMoved, Level::Warning)),
-            None => {}
-        }
+        let Some(pid) = t.profile else { return };
+        let item = super::safety::Dangerous {
+            index: 0,
+            why: None,
+            tx: Some(TxReason::CommitsItself),
+            no_where: None,
+            explain: false,
+            target: None,
+            sql: sql.clone(),
+        };
+        self.ask_before_run_as(id, pid, vec![sql], vec![item], true);
     }
 }

@@ -410,7 +410,6 @@ impl App {
                     ConfirmAction::KeychainSecurityTool => self.keychain_access_changed(KeychainAccess::SecurityTool),
                     ConfirmAction::ExportStart => self.export_answered(true, false),
                     ConfirmAction::ExportReplace => self.export_answered(true, true),
-                    ConfirmAction::RunOutsideTx(_) => self.outside_answered(true),
                     ConfirmAction::ScriptConflict(_) | ConfirmAction::KeychainOffer => {}
                 }
             }
@@ -434,9 +433,6 @@ impl App {
                 }
                 if matches!(action, ConfirmAction::ExportStart | ConfirmAction::ExportReplace) {
                     self.export_answered(false, action == ConfirmAction::ExportReplace);
-                }
-                if matches!(action, ConfirmAction::RunOutsideTx(_)) {
-                    self.outside_answered(false);
                 }
             }
             _ => {}

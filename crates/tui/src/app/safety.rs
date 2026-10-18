@@ -171,7 +171,20 @@ impl App {
     /// Ask before `statements` run in tab `id` (bound to profile `pid`); `items` are the ones
     /// that ask.
     pub(super) fn ask_before_run(&mut self, id: TabId, pid: ProfileId, statements: Vec<String>, items: Vec<Dangerous>) {
-        let Some(binding) = self.tabs.get(id).map(|t| t.binding) else { return };
+        self.ask_before_run_as(id, pid, statements, items, false)
+    }
+
+    /// [`App::ask_before_run`]; `as_is`: the statements are to run as they are, outside any
+    /// transaction, on the tab's session as it is now.
+    pub(super) fn ask_before_run_as(
+        &mut self,
+        id: TabId,
+        pid: ProfileId,
+        statements: Vec<String>,
+        items: Vec<Dangerous>,
+        as_is: bool,
+    ) {
+        let Some((binding, generation)) = self.tabs.get(id).map(|t| (t.binding, t.exec.generation)) else { return };
         self.overlays.close(OverlayKind::Commands);
         self.overlays.close(OverlayKind::WhichKey);
         self.key_state.clear();
@@ -182,6 +195,8 @@ impl App {
             statements,
             items,
             run_focused: false,
+            as_is,
+            generation,
             buttons: Default::default(),
         }));
     }
@@ -213,10 +228,16 @@ impl App {
         let Some(c) = self.overlays.take_run_confirm() else { return };
         if !run {
             self.unstage_run(c.tab);
-            return self.tab_status(c.tab, Notice::new(Label::SafetyConfirmCancelled, Level::Warning));
+            let label = if c.as_is { Label::TxOutsideKept } else { Label::SafetyConfirmCancelled };
+            return self.tab_status(c.tab, Notice::new(label, Level::Warning));
         }
-        match self.tabs.get(c.tab).map(|t| (t.profile, t.binding)) {
-            Some((Some(p), b)) if p == c.profile && b == c.binding => self.run_approved(c.tab, c.statements),
+        // Outside a transaction: only on the session it was asked for, still open (a new one
+        // has no part in what failed).
+        let same_session = |t: &Tab| !c.as_is || (t.exec.generation == c.generation && t.exec.session.is_some());
+        match self.tabs.get(c.tab).map(|t| (t.profile, t.binding, same_session(t))) {
+            Some((Some(p), b, true)) if p == c.profile && b == c.binding => {
+                self.run_approved_as(c.tab, c.statements, c.as_is)
+            }
             Some(_) => {
                 self.unstage_run(c.tab);
                 self.tab_status(c.tab, Notice::new(Label::SafetyConfirmMoved, Level::Warning))
@@ -261,6 +282,7 @@ pub(crate) fn why_text(i18n: &I18n, d: &Dangerous) -> String {
     }
     match d.tx {
         Some(super::tx::TxReason::OutsideTx) => parts.push(i18n.label(Label::SafetyWhyOutsideTx).to_string()),
+        Some(super::tx::TxReason::CommitsItself) => parts.push(i18n.label(Label::SafetyWhyCommitsItself).to_string()),
         Some(super::tx::TxReason::ImplicitCommit { statements, rows }) => {
             let rows = i18n.msg(&Msg::TxRows { count: rows }).to_string();
             parts.push(i18n.msg(&Msg::SafetyWhyImplicitCommit { count: statements, rows }).to_string());

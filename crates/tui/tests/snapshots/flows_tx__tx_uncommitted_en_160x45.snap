@@ -1,6 +1,5 @@
 ---
 source: crates/tui/tests/flows_tx.rs
-assertion_line: 78
 expression: "h.draw(160, 45).backend()"
 ---
 "╭ Explorer ────────────────────────────╮ 1 console 1 ◆ ×                                                                                                        "

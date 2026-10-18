@@ -146,7 +146,10 @@ pub(crate) fn draw_run_confirm(app: &mut App, area: Rect, buf: &mut Buffer) {
     let th = theme::cur();
     let when = (app.overlays.top().map(|o| o.kind()) == Some(OverlayKind::RunConfirm), app.now());
     let Some(c) = app.overlays.run_confirm() else { return };
-    let title = app.i18n.msg(&Msg::SafetyConfirmTitle { count: c.items.len() as u64 });
+    let title = match c.as_is {
+        true => app.i18n.label(Label::TxOutsideTitle),
+        false => app.i18n.msg(&Msg::SafetyConfirmTitle { count: c.items.len() as u64 }),
+    };
     let keys = app.i18n.label(Label::SafetyConfirmKeys);
     let w = area.width.saturating_sub(4).min(120);
     let iw = (w as usize).saturating_sub(4);

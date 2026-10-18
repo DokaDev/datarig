@@ -1,6 +1,5 @@
 ---
 source: crates/tui/tests/flows_environments.rs
-assertion_line: 531
 expression: backend
 ---
 "╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"

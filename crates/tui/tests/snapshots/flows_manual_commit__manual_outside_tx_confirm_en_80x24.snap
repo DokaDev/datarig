@@ -1,6 +1,5 @@
 ---
 source: crates/tui/tests/flows_manual_commit.rs
-assertion_line: 345
 expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×                                          "
@@ -12,7 +11,7 @@ expression: backend
 "│ ╭ Run 2 statements that may do harm? ──────────────────────────────────────╮ │"
 "│ │ ● local-pg · stg                                                         │ │"
 "│▾│                                                                          │ │"
-"│ │ 1/2  can't run inside a transaction: it runs on its own, takes effect a… │ │"
+"│ │ 1/2  runs outside a transaction, at once: can't be rolled back           │ │"
 "│ │      VACUUM shop.users                                                   │ │"
 "│ │ 2/2  drops it  target: shop.reviews                                      │ │"
 "│ │      DROP TABLE shop.reviews                                             │ │"

@@ -2003,18 +2003,17 @@
 "tx.server_rolled_back" = { one = "The server rolled back the whole transaction (a deadlock or a lock wait timeout): {count} change is gone", other = "The server rolled back the whole transaction (a deadlock or a lock wait timeout): {count} changes are gone" }
 "tx.committed_implicitly" = { one = "Statement {step} committed the open transaction implicitly: {count} change was kept", other = "Statement {step} committed the open transaction implicitly: {count} changes were kept" }
 "tx.closed_unknown" = "The transaction ended while server code failed: its changes may or may not have been kept, so check the data"
-"tx.manual_rolled_back" = "Nothing was changed: the transaction opened for statement {step} was rolled back"
+"tx.manual_rolled_back" = "Statement {step} and the ones after it were rolled back with the transaction opened for it"
 "tx.run_rolled_back" = "This run was undone; the open transaction keeps what earlier runs did"
 "tx.no_tx_block_refused" = "Not run: {sql} can't run inside a transaction. Commit ({commit}) or roll back ({rollback}) first"
 "tx.lock_tables_refused" = "Not run: LOCK TABLES doesn't work with manual commit (the next write would start a transaction and release the locks). Use automatic commit for this"
 "tx.enum_value" = "Statement {step} adds an enum value: it can't be used until the transaction commits"
 "tx.mysql_ddl" = "Statement {step}: MySQL applies DDL at once; it can't be rolled back"
 "tx.how_manual" = "manual commit"
-"tx.how_user" = "your BEGIN"
+"tx.how_user" = "your own transaction"
 "tx.summary" = { one = "Open transaction ({how}): {count} change · {rows} · open for {time}", other = "Open transaction ({how}): {count} changes · {rows} · open for {time}" }
 "tx.outside_title" = "Run outside a transaction?"
-"tx.outside_text" = "This procedure commits by itself, so it can't run inside a transaction. Run it once outside one? It takes effect at once and can't be rolled back."
-"tx.outside_keys" = "y run it outside · Enter/n/Esc keep it unrun"
 "tx.outside_kept" = "Not run: the procedure stays unrun"
-"safety.why_outside_tx" = "can't run inside a transaction: it runs on its own, takes effect at once and can't be rolled back"
-"safety.why_implicit_commit" = { one = "commits the open transaction first: {count} statement ({rows}) is committed and can't be rolled back", other = "commits the open transaction first: {count} statements ({rows}) are committed and can't be rolled back" }
+"safety.why_outside_tx" = "runs outside a transaction, at once: can't be rolled back"
+"safety.why_commits_itself" = "commits by itself: runs outside, at once; can't be rolled back"
+"safety.why_implicit_commit" = { one = "first commits {count} open statement ({rows}): can't be rolled back", other = "first commits {count} open statements ({rows}): can't be rolled back" }

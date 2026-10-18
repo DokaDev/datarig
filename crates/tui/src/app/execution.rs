@@ -106,6 +106,11 @@ impl App {
             return self.tab_status(id, refused);
         }
         let Some(t) = self.tabs.get(id) else { return };
+        // Outside a transaction: only on the session it was asked for, never queued for another.
+        if as_is && t.exec.session.is_none() {
+            self.unstage_run(id);
+            return self.tab_status(id, Notice::new(Label::SafetyConfirmMoved, Level::Warning));
+        }
         if t.exec.session.is_none() && self.conns.get(pid).is_none_or(|c| c.resolved.is_none()) {
             // Bound to this tab, this profile and this tab generation.
             let q = Queued { tab: id, profile: pid, binding: t.binding, statements };
@@ -293,9 +298,7 @@ impl App {
         t.exec.unsure();
         t.exec.state = SessionState::Lost;
         t.exec.lost_tx = t.exec.tx_at_risk();
-        t.exec.tx_open = false;
-        // The server rolls the user's transaction back when its session ends.
-        t.block_ended(true);
+        t.tx_reset();
         t.exec.paging = Paging::None;
         t.exec.resuming = None;
         t.exec.want_page = None;
@@ -1076,7 +1079,14 @@ impl App {
                 let commit = t.exec.ending.take().is_some_and(|e| e.commit);
                 let m = match error {
                     DbError::NoTransaction => Notice::new(Label::TxNone, Level::Warning),
-                    DbError::CommitUnknown => Notice::new(Label::DbCommitUnknown, Level::Error),
+                    // The connection ended while committing: the transaction may have been
+                    // committed. It is no longer followed, so the `Lost` that comes says nothing
+                    // of a rollback (nor does the next run): only that the outcome is unknown.
+                    DbError::CommitUnknown => {
+                        t.exec.tx_open = false;
+                        t.block_ended(false);
+                        Notice::new(Label::DbCommitUnknown, Level::Error)
+                    }
                     DbError::NotSupported => Notice::new(Label::TxNotSupported, Level::Warning),
                     // The server refused the commit (a deferred constraint, a serialization
                     // failure): it rolled the transaction back.
@@ -1241,7 +1251,16 @@ impl App {
                     if had_tx {
                         t.exec.run.notes.push(Notice::new(Label::TxLost, Level::Warning));
                     }
-                    Some(Notice::new(Msg::QueryLost { error: text }, Level::Warning))
+                    let lost = Notice::new(Msg::QueryLost { error: text }, Level::Warning);
+                    // Lost while committing: what matters is that the outcome is not known.
+                    let unknown = Msg::Label(Label::DbCommitUnknown);
+                    match t.exec.run.notes.last().filter(|n| n.msg == unknown).cloned() {
+                        Some(n) => {
+                            t.exec.run.notes.push(lost);
+                            Some(n)
+                        }
+                        None => Some(lost),
+                    }
                 }
             }
             DbEvent::Page { id: qid, .. }

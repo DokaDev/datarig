@@ -162,9 +162,6 @@ pub enum ConfirmAction {
     ExportStart,
     /// Replace the file an export would write. Keeping it is the default.
     ExportReplace,
-    /// Run the procedure that commits by itself once outside a transaction in tab `tab` (the
-    /// statement waits in `App::pending_outside`). Cancel is the default.
-    RunOutsideTx(super::TabId),
 }
 
 /// A yes/no question: `y` yes, `n`/`Esc` no; `Enter` no when the answer would lose something
@@ -226,9 +223,7 @@ impl Confirm {
             ConfirmAction::Copy => (Label::DialogButtonCancel, Label::DialogButtonCopy),
             ConfirmAction::FetchThenCopy => (Label::DialogButtonCancel, Label::DialogButtonFetchCopy),
             ConfirmAction::TrustHostKey => (Label::DialogButtonCancel, Label::DialogButtonTrust),
-            ConfirmAction::ExplainAgain | ConfirmAction::RunOutsideTx(_) => {
-                (Label::DialogButtonCancel, Label::SafetyConfirmRun)
-            }
+            ConfirmAction::ExplainAgain => (Label::DialogButtonCancel, Label::SafetyConfirmRun),
             ConfirmAction::KeychainSecurityTool => (Label::DialogButtonCancel, Label::DialogButtonTurnOn),
             ConfirmAction::ExportStart => (Label::DialogButtonCancel, Label::DialogButtonExport),
             ConfirmAction::ExportReplace => (Label::DialogButtonKeep, Label::DialogButtonReplace),
@@ -263,6 +258,10 @@ pub struct RunConfirm {
     pub items: Vec<super::safety::Dangerous>,
     /// "Run" has the focus (it starts on "Cancel").
     pub run_focused: bool,
+    /// The statements run as they are, outside any transaction (a procedure that commits by
+    /// itself): only on the tab's session `generation`, still open.
+    pub as_is: bool,
+    pub generation: u64,
     pub buttons: Buttons,
 }
 
