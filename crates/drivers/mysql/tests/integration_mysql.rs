@@ -1068,12 +1068,7 @@ async fn a_first_page_holds_no_metadata_lock_and_a_held_result_does_until_read()
     let (_, rows, more) = page_of(&evs);
     assert_eq!((rows.len(), more, released(&evs)), (PAGE, true, true));
     assert_eq!(table_locks(&mut a, id, &t.name).await, 0, "no metadata lock while the page is on screen");
-    let trx: u64 = a
-        .query_first(format!("SELECT COUNT(*) FROM information_schema.innodb_trx WHERE trx_mysql_thread_id = {id}"))
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(trx, 0, "no transaction");
+    assert_eq!(open_transactions(&mut a, id, 0).await, 0, "no transaction");
     let mut alter = side(&admin).await;
     alter.query_drop("SET SESSION lock_wait_timeout = 5").await.unwrap();
     let t0 = Instant::now();
@@ -1280,14 +1275,21 @@ async fn a_held_result_another_statement_ends_is_stopped_on_the_server() {
     let evs = c.run(2, &["SELECT 7"]).await;
     assert_eq!(page_of(&evs).1, &vec![vec![Some("7".to_string())]]);
     assert!(t0.elapsed() < Duration::from_secs(10), "{:?}", t0.elapsed());
-    let running: u64 = a
-        .query_first(format!(
-            "SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE ID = {id} AND COMMAND = 'Query'"
-        ))
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(running, 0);
+    // Nothing runs on the connection once it is done with the answer (the server may show the
+    // `SELECT 7` it just answered for a moment), and the held statement never again.
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let running: Vec<Option<String>> = a
+            .query(format!("SELECT INFO FROM information_schema.PROCESSLIST WHERE ID = {id} AND COMMAND = 'Query'"))
+            .await
+            .unwrap();
+        assert!(!running.iter().flatten().any(|q| q.contains("shop.events")), "the held statement runs: {running:?}");
+        if running.is_empty() {
+            break;
+        }
+        assert!(Instant::now() < deadline, "still running after 5 s: {running:?}");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
     // Closed by the app (its spill limit): the same.
     let evs = c.run_as(3, &["SELECT * FROM shop.events"], PagingMode::Hold).await;
     assert!(page_of(&evs).2);
@@ -3997,22 +3999,26 @@ fn tx_of(evs: &[DbEvent]) -> Vec<String> {
         .collect()
 }
 
-/// How many InnoDB transactions connection `id` has open (`information_schema.innodb_trx`),
-/// once that is `want` (the server refreshes the table only when it was not read for 100 ms),
-/// or after 2 s.
-async fn innodb_trx(a: &mut mysql_async::Conn, id: u64, want: u64) -> u64 {
-    let deadline = Instant::now() + Duration::from_secs(2);
+/// How many transactions connection `id` has open, once that is `want`, or after 5 s: the
+/// server's own record of its current transaction (`performance_schema`, read live; InnoDB's
+/// `information_schema.innodb_trx` is a cache the server refreshes only when nobody read it for
+/// 100 ms, which the tests running at once keep from happening).
+async fn open_transactions(a: &mut mysql_async::Conn, id: u64, want: u64) -> u64 {
+    let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         let n: u64 = a
-            .query_first(format!("SELECT COUNT(*) FROM information_schema.innodb_trx WHERE trx_mysql_thread_id = {id}"))
+            .query_first(format!(
+                "SELECT COUNT(*) FROM performance_schema.events_transactions_current t \
+                 JOIN performance_schema.threads th ON th.THREAD_ID = t.THREAD_ID \
+                 WHERE th.PROCESSLIST_ID = {id} AND t.STATE = 'ACTIVE'"
+            ))
             .await
             .unwrap()
             .unwrap();
         if n == want || Instant::now() > deadline {
             return n;
         }
-        // Read again within 100 ms, the server answers from the cache it did not refresh.
-        tokio::time::sleep(Duration::from_millis(150)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 }
 
@@ -4041,7 +4047,7 @@ async fn manual_commit_opens_a_transaction_at_the_first_write_only() {
     // Reads only: autocommit, nothing open on the server.
     let evs = c.manual(1, &[&format!("SELECT * FROM {q}"), "SELECT 1"], &[false, false]).await;
     assert!(tx_of(&evs).is_empty(), "{evs:?}");
-    assert_eq!(innodb_trx(&mut a, id, 0).await, 0);
+    assert_eq!(open_transactions(&mut a, id, 0).await, 0);
     // A read, a write, a read: the transaction opens at the write, the last read sees it.
     let insert = format!("INSERT INTO {q} VALUES (1)");
     let evs = c.manual(2, &[&count, &insert, &count], &[false, true, false]).await;
@@ -4058,13 +4064,13 @@ async fn manual_commit_opens_a_transaction_at_the_first_write_only() {
         page_of(&evs[..evs.iter().rposition(|e| matches!(e, DbEvent::Page { .. })).unwrap() + 1]).1,
         &vec![vec![Some("1".to_string())]]
     );
-    assert_eq!(innodb_trx(&mut a, id, 1).await, 1, "the transaction is open on the server");
+    assert_eq!(open_transactions(&mut a, id, 1).await, 1, "the transaction is open on the server");
     assert_eq!(seen(&url, &count).await, "0", "another session does not see it");
     // A later write joins it.
     let evs = c.manual(3, &[&format!("INSERT INTO {q} VALUES (2)")], &[true]).await;
     assert!(tx_of(&evs).is_empty(), "{evs:?}");
     assert_eq!(tx_of(&c.end_tx(4, true).await), ["ended Committed", "block false", "tx false"]);
-    assert_eq!(innodb_trx(&mut a, id, 0).await, 0);
+    assert_eq!(open_transactions(&mut a, id, 0).await, 0);
     assert_eq!(seen(&url, &count).await, "2", "committed");
     // Rolled back.
     let evs = c.manual(5, &[&format!("DELETE FROM {q}")], &[true]).await;
@@ -4103,7 +4109,7 @@ async fn manual_commit_failures_and_implicit_commits() {
     let evs = c.manual(1, &[&format!("INSERT INTO {q} VALUES (1)")], &[true]).await;
     assert!(matches!(failures(&evs, 1)[..], [DbEvent::Failed { error: DbError::Server(_), .. }]), "{evs:?}");
     assert_eq!(tx_of(&evs), ["rolled back 0"], "never said open: {evs:?}");
-    assert_eq!(innodb_trx(&mut a, id, 0).await, 0, "no transaction left");
+    assert_eq!(open_transactions(&mut a, id, 0).await, 0, "no transaction left");
     // Open, then a run whose second statement fails: its first one stays, the transaction too.
     c.manual(2, &[&format!("INSERT INTO {q} VALUES (10)")], &[true]).await;
     let evs = c
@@ -4120,7 +4126,7 @@ async fn manual_commit_failures_and_implicit_commits() {
     // A DDL flagged by mistake opens nothing either.
     let evs = c.manual(6, &[&format!("DROP TABLE {q}_x")], &[true]).await;
     assert!(tx_of(&evs).is_empty(), "{evs:?}");
-    assert_eq!(innodb_trx(&mut a, id, 0).await, 0);
+    assert_eq!(open_transactions(&mut a, id, 0).await, 0);
     a.disconnect().await.unwrap();
 }
 
@@ -4230,7 +4236,7 @@ async fn a_lock_wait_timeout_or_a_cancel_keeps_the_manual_transaction() {
     evs.extend(c.settled().await);
     assert!(matches!(failures(&evs, 7)[..], [DbEvent::Failed { cancelled: true, .. }]), "{evs:?}");
     assert_eq!(tx_of(&evs), ["rolled back 0"], "{evs:?}");
-    assert_eq!(innodb_trx(&mut a, id, 0).await, 0);
+    assert_eq!(open_transactions(&mut a, id, 0).await, 0);
     a.disconnect().await.unwrap();
 }
 
@@ -4365,9 +4371,9 @@ async fn a_held_result_of_the_opening_statement_says_the_transaction_open() {
     let evs = c.answer(1).await;
     assert!(page_of(&evs).2, "held, more to come: {evs:?}");
     assert_eq!(tx_of(&evs), ["begun 0", "block true", "tx true"], "{evs:?}");
-    assert_eq!(innodb_trx(&mut a, id, 1).await, 1);
+    assert_eq!(open_transactions(&mut a, id, 1).await, 1);
     assert_eq!(tx_of(&c.end_tx(2, true).await), ["ended Committed", "block false", "tx false"]);
-    assert_eq!(innodb_trx(&mut a, id, 0).await, 0);
+    assert_eq!(open_transactions(&mut a, id, 0).await, 0);
     a.disconnect().await.unwrap();
 }
 
