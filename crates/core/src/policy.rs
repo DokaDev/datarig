@@ -39,6 +39,19 @@
 //!   text the parser rejects: `sql::risk::Danger`) or `"writes"` (also every statement that is
 //!   not a read, transaction control or a session setting; unknown and procedural ones
 //!   included). Dangerous statements always ask.
+//! * `commit` — when what runs is committed: `"auto"` (default: each statement outside the
+//!   user's own `BEGIN` block commits by itself) or `"manual"`: the first statement that may
+//!   write opens a transaction that stays open until the user commits or rolls it back; plain
+//!   reads before it run without one. Needs a driver that can (`Capabilities::manual_commit`);
+//!   elsewhere it runs as `"auto"`.
+//! * `tx_idle_warning` — how long an open transaction may sit idle before the app warns that
+//!   it holds locks: a duration as `paging_idle_timeout` takes (at least
+//!   [`TX_IDLE_FLOOR`]), or `"off"`. Default 5m.
+//! * `tx_idle_timeout` — PostgreSQL only: the server's own limit for a transaction opened for
+//!   manual commit (`idle_in_transaction_session_timeout`, set for that transaction only):
+//!   past it the server ends the session and rolls the transaction back, also when the app
+//!   is gone. A duration (at least [`TX_IDLE_FLOOR`]) or `"off"` (the server's setting).
+//!   Default 30m.
 //! * `color` — the environment's color: one of the profile colors' 12 names or `#rrggbb`
 //!   ([`crate::profile::color`]). No default (no color).
 //! * `badge` — a short text the tabs and the status bar show for its profiles (`"PROD"`): no
@@ -60,6 +73,16 @@ use std::time::Duration;
 /// Default of `paging_idle_timeout`.
 pub const PAGING_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// Default of `tx_idle_warning`.
+pub const TX_IDLE_WARNING: Duration = Duration::from_secs(5 * 60);
+
+/// Default of `tx_idle_timeout`.
+pub const TX_IDLE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
+/// The shortest `tx_idle_warning` and `tx_idle_timeout` (a shorter one would warn about, or
+/// end, a transaction between two statements the user types).
+pub const TX_IDLE_FLOOR: Duration = Duration::from_secs(10);
+
 /// The name of the table of the default rules (`[policy.default]`), which a profile without an
 /// environment uses; never an environment's name.
 pub const DEFAULT: &str = "default";
@@ -78,6 +101,11 @@ pub struct Policy {
     /// Only reads run, and the server makes every transaction read-only.
     pub read_only: bool,
     pub confirm: Confirm,
+    pub commit: CommitRule,
+    /// `None`: no warning.
+    pub tx_idle_warning: Option<Duration>,
+    /// `None`: the server's own setting.
+    pub tx_idle_timeout: Option<Duration>,
 }
 
 impl Default for Policy {
@@ -88,6 +116,41 @@ impl Default for Policy {
             spill_limit: None,
             read_only: false,
             confirm: Confirm::Destructive,
+            commit: CommitRule::Auto,
+            tx_idle_warning: Some(TX_IDLE_WARNING),
+            tx_idle_timeout: Some(TX_IDLE_TIMEOUT),
+        }
+    }
+}
+
+/// `commit`: when what runs is committed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CommitRule {
+    /// Each statement outside the user's own block commits by itself.
+    #[default]
+    Auto,
+    /// The first statement that may write opens a transaction the user ends.
+    Manual,
+}
+
+impl CommitRule {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(CommitRule::Auto),
+            "manual" => Some(CommitRule::Manual),
+            _ => None,
+        }
+    }
+
+    pub fn manual(self) -> bool {
+        self == CommitRule::Manual
+    }
+
+    /// The value as written: `"auto"` or `"manual"`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CommitRule::Auto => "auto",
+            CommitRule::Manual => "manual",
         }
     }
 }
@@ -222,15 +285,16 @@ pub fn badge_ok(s: &str) -> bool {
 }
 
 /// The environments the app offers while there is none, in order: `dev` and `test` with the
-/// default rules (green, blue), `staging` asking before every write (orange, `STG`) and `prod`
-/// read-only and asking before every write (red, `PROD`).
+/// default rules (green, blue), `staging` asking before every write and committing by hand
+/// (orange, `STG`) and `prod` read-only, asking before every write and committing by hand
+/// (red, `PROD`).
 pub fn presets() -> Vec<Environment> {
     let env = |name: &str, policy: Policy, color: &str, badge: Option<&str>| Environment {
         color: Some(color.to_string()),
         badge: badge.map(str::to_string),
         ..Environment::new(name, policy)
     };
-    let writes = Policy { confirm: Confirm::Writes, ..Policy::default() };
+    let writes = Policy { confirm: Confirm::Writes, commit: CommitRule::Manual, ..Policy::default() };
     vec![
         env("dev", Policy::default(), "green", None),
         env("test", Policy::default(), "blue", None),
@@ -327,6 +391,22 @@ pub fn parse_timeout(v: &toml::Value) -> Result<Option<Duration>, String> {
         other => return Err(other.to_string()),
     };
     Ok((secs > 0).then(|| Duration::from_secs(secs)))
+}
+
+/// A `tx_idle_warning` or `tx_idle_timeout` value: as [`parse_timeout`] reads it (zero and
+/// `"off"` are `None`), and at least [`TX_IDLE_FLOOR`].
+pub fn parse_tx_idle(v: &toml::Value) -> Result<Option<Duration>, String> {
+    match parse_timeout(v)? {
+        Some(d) if d < TX_IDLE_FLOOR => {
+            Err(format!("{} (less than {}s)", format_timeout(Some(d)), TX_IDLE_FLOOR.as_secs()))
+        }
+        d => Ok(d),
+    }
+}
+
+/// A `tx_idle_warning` or `tx_idle_timeout` typed as text (a form's field).
+pub fn parse_tx_idle_text(s: &str) -> Result<Option<Duration>, String> {
+    parse_tx_idle(&toml::Value::String(s.to_string()))
 }
 
 /// A duration typed as text (a form's field): as [`parse_timeout`] reads a string.

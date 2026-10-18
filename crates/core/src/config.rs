@@ -139,6 +139,12 @@ struct PolicySection {
     #[serde(default)]
     confirm: Option<String>,
     #[serde(default)]
+    commit: Option<toml::Value>,
+    #[serde(default)]
+    tx_idle_warning: Option<toml::Value>,
+    #[serde(default)]
+    tx_idle_timeout: Option<toml::Value>,
+    #[serde(default)]
     color: Option<toml::Value>,
     #[serde(default)]
     badge: Option<toml::Value>,
@@ -154,6 +160,9 @@ impl PolicySection {
             ("spill_limit", self.spill_limit.clone()),
             ("read_only", self.read_only.clone()),
             ("confirm", s(&self.confirm)),
+            ("commit", self.commit.clone()),
+            ("tx_idle_warning", self.tx_idle_warning.clone()),
+            ("tx_idle_timeout", self.tx_idle_timeout.clone()),
             ("color", self.color.clone()),
             ("badge", self.badge.clone()),
         ]
@@ -165,6 +174,9 @@ impl PolicySection {
 
 /// `spill_limit`'s literal values, for errors.
 const SIZES: &str = "1073741824, \"512MB\", \"2GB\", \"off\"";
+
+/// `tx_idle_warning`'s and `tx_idle_timeout`'s literal values, for errors.
+const TX_IDLE: &str = "\"5m\", \"30m\", \"1h\" (10s at least), \"off\"";
 
 /// Item `key = v` of table `[policy.<name>]`, into `e`. A value the item does not take is a
 /// [`ConfigError::Value`] (the table's key in it).
@@ -188,6 +200,17 @@ fn policy_item(name: &str, key: &str, v: &toml::Value, e: &mut policy::Environme
         "confirm" => {
             let c = v.as_str().and_then(policy::Confirm::parse);
             e.policy.confirm = c.ok_or_else(|| err(&raw).allowed(Some("destructive, writes")))?;
+        }
+        "commit" => {
+            let c = v.as_str().and_then(policy::CommitRule::parse);
+            e.policy.commit = c.ok_or_else(|| err(&raw).allowed(Some("auto, manual")))?;
+        }
+        "tx_idle_warning" | "tx_idle_timeout" => {
+            let d = policy::parse_tx_idle(v).map_err(|x| err(&x).allowed(Some(TX_IDLE)))?;
+            match key {
+                "tx_idle_warning" => e.policy.tx_idle_warning = d,
+                _ => e.policy.tx_idle_timeout = d,
+            }
         }
         "color" => match v.as_str() {
             Some(c) if ProfileColor::parse(c).is_some() => e.color = Some(c.to_string()),
@@ -1521,7 +1544,7 @@ fn env_of(name: &str, t: &dyn toml_edit::TableLike) -> Option<policy::Environmen
 
 /// The items of an environment, in the file's key order: what each is in `e`, as written, and
 /// whether that is its default (an item at its default is left out).
-fn env_items(e: &policy::Environment) -> [(&'static str, Value, bool); 7] {
+fn env_items(e: &policy::Environment) -> [(&'static str, Value, bool); 10] {
     let d = Policy::default();
     let p = &e.policy;
     let size = |l: policy::SpillLimit| -> Value {
@@ -1536,6 +1559,9 @@ fn env_items(e: &policy::Environment) -> [(&'static str, Value, bool); 7] {
         ("badge", e.badge.clone().unwrap_or_default().into(), e.badge.is_none()),
         ("read_only", p.read_only.into(), p.read_only == d.read_only),
         ("confirm", p.confirm.as_str().into(), p.confirm == d.confirm),
+        ("commit", p.commit.as_str().into(), p.commit == d.commit),
+        ("tx_idle_warning", policy::format_timeout(p.tx_idle_warning).into(), p.tx_idle_warning == d.tx_idle_warning),
+        ("tx_idle_timeout", policy::format_timeout(p.tx_idle_timeout).into(), p.tx_idle_timeout == d.tx_idle_timeout),
         ("paging", policy::paging_str(p.paging).into(), p.paging == d.paging),
         (
             "paging_idle_timeout",
@@ -1581,6 +1607,9 @@ fn same_item(key: &str, a: &policy::Environment, b: &policy::Environment) -> boo
         "badge" => a.badge == b.badge,
         "read_only" => p.read_only == q.read_only,
         "confirm" => p.confirm == q.confirm,
+        "commit" => p.commit == q.commit,
+        "tx_idle_warning" => p.tx_idle_warning == q.tx_idle_warning,
+        "tx_idle_timeout" => p.tx_idle_timeout == q.tx_idle_timeout,
         "paging" => p.paging == q.paging,
         "paging_idle_timeout" => p.paging_idle_timeout == q.paging_idle_timeout,
         "spill_limit" => p.spill_limit == q.spill_limit,
