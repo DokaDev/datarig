@@ -175,7 +175,8 @@ pub(super) async fn export(
     Ok((Ok(read_rows), false))
 }
 
-/// End the export's own transaction (`own`): `COMMIT`, or `ROLLBACK` (nothing to keep).
+/// End the export's own transaction (`own`): `COMMIT`, or `ROLLBACK` (nothing to keep), never
+/// chained into another (whatever the session's `completion_type`), which would stay open.
 async fn end_own(
     conn: &mut Conn,
     link: &mut Link,
@@ -185,7 +186,7 @@ async fn end_own(
     if !own {
         return Ok(Ok(()));
     }
-    link.guard(None, conn.query_drop(if commit { "COMMIT" } else { "ROLLBACK" })).await
+    link.guard(None, conn.query_drop(if commit { super::COMMIT } else { super::ROLLBACK })).await
 }
 
 /// Up to `max` rows of the current result set, and fewer when they reach about
