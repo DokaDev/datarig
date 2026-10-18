@@ -1,7 +1,92 @@
 use super::{
-    TxAfter, command_tag, controls_tx, copies_with_client, forgets_prepared, idle_limit, plain_read, returns_no_rows,
-    split_page, tx_after,
+    Guard, Tx, TxAfter, command_tag, controls_tx, copies_with_client, forgets_prepared, idle_limit,
+    names_reserved_savepoint, plain_read, returns_no_rows, split_page, tx_after,
 };
+
+/// The session's own savepoints are told apart in every form of `SAVEPOINT`, `RELEASE` and
+/// `ROLLBACK TO`, quoted or not, in any statement of the text; other names and other statements
+/// (a role named so, a `TO` elsewhere) are not.
+#[test]
+fn the_sessions_own_savepoints_are_reserved() {
+    for sql in [
+        "SAVEPOINT datarig_run_1",
+        "savepoint DATARIG_x",
+        "RELEASE datarig_run_3",
+        "release savepoint datarig_run_3",
+        "ROLLBACK TO datarig_run_2",
+        "rollback work to savepoint datarig_count_0123",
+        "ROLLBACK TRANSACTION TO \"datarig_explain\"",
+        "ABORT TO SAVEPOINT datarig_resume",
+        "SELECT 1; RELEASE datarig_run_1",
+    ] {
+        assert!(names_reserved_savepoint(sql), "{sql:?}");
+    }
+    for sql in [
+        "SAVEPOINT x",
+        "RELEASE SAVEPOINT my_datarig_run",
+        "ROLLBACK TO SAVEPOINT x",
+        "ROLLBACK",
+        "COMMIT",
+        "GRANT SELECT ON t TO datarig_reader",
+        "ROLLBACK TO \"Datarig_x\"",
+        "SELECT 'SAVEPOINT datarig_run_1'",
+    ] {
+        assert!(!names_reserved_savepoint(sql), "{sql:?}");
+    }
+}
+
+/// Each run in a block opened for manual commit sets a savepoint of a new name, after the
+/// release of the last run's (so a failed setting never sends a run back to an earlier run's);
+/// a run with transaction control, an aborted block and a block of the user's set none, and a
+/// chained block has no savepoint left to release but its idle limit to set again.
+#[test]
+fn each_run_has_a_savepoint_of_its_own() {
+    let statements = |s: &[&str]| s.iter().map(|q| q.to_string()).collect::<Vec<_>>();
+    let mut tx = Tx { block: true, manual: true, ..Tx::default() };
+    assert_eq!(tx.begin_run(&statements(&["INSERT INTO t VALUES (1)"])), None);
+    assert_eq!(tx.queued, ["SAVEPOINT datarig_run_1"]);
+    assert_eq!(tx.guard, Guard::Savepoint(1));
+    // The run went well (as `settle` leaves it).
+    (tx.queued, tx.guard, tx.run_savepoint) = (Vec::new(), Guard::None, Some(1));
+    assert_eq!(tx.begin_run(&statements(&["UPDATE t SET x = 2"])), Some(1));
+    assert_eq!(tx.queued, ["RELEASE SAVEPOINT datarig_run_1", "SAVEPOINT datarig_run_2"]);
+    assert_eq!(tx.guard, Guard::Savepoint(2));
+    (tx.queued, tx.guard, tx.run_savepoint) = (Vec::new(), Guard::None, Some(2));
+    // Transaction control: only the release.
+    assert_eq!(tx.begin_run(&statements(&["INSERT INTO t VALUES (3)", "COMMIT"])), Some(2));
+    assert_eq!(tx.queued, ["RELEASE SAVEPOINT datarig_run_2"]);
+    assert_eq!(tx.guard, Guard::None);
+    (tx.queued, tx.run_savepoint) = (Vec::new(), None);
+    // Aborted: nothing.
+    tx.aborted = true;
+    assert_eq!(tx.begin_run(&statements(&["SELECT 1"])), None);
+    assert!(tx.queued.is_empty() && tx.guard == Guard::None);
+    // The user's block: nothing either.
+    let mut user = Tx { block: true, ..Tx::default() };
+    assert_eq!(user.begin_run(&statements(&["INSERT INTO t VALUES (1)"])), None);
+    assert!(user.queued.is_empty() && user.guard == Guard::None);
+    // No block: nothing.
+    let mut idle = Tx::default();
+    assert_eq!(idle.begin_run(&statements(&["INSERT INTO t VALUES (1)"])), None);
+    // A chained manual block: no savepoint to release, its idle limit is due again.
+    let mut chained = Tx {
+        block: true,
+        manual: true,
+        run_savepoint: Some(5),
+        idle: Some(std::time::Duration::from_secs(60)),
+        ..Tx::default()
+    };
+    chained.chained(false);
+    assert_eq!((chained.run_savepoint, chained.idle_due), (None, true));
+    assert!(chained.first_due());
+    // Ended: nothing of it is kept.
+    chained.set_block(false, false);
+    assert_eq!((chained.manual, chained.run_savepoint, chained.idle, chained.idle_due), (false, None, None, false));
+    // A chained user block: no idle limit.
+    let mut user = Tx { block: true, idle: None, ..Tx::default() };
+    user.chained(false);
+    assert!(!user.idle_due);
+}
 
 /// A run with transaction control of the user's (or text the session cannot tell has none)
 /// gets no run savepoint; `CALL` and `DO`, which cannot end a block, do.
@@ -31,13 +116,14 @@ fn transaction_control_keeps_the_run_savepoint_out() {
     }
 }
 
-/// The idle limit is whole milliseconds for the transaction only, never zero (which turns it
-/// off) and never past what the setting takes.
+/// The idle limit is whole milliseconds for the transaction only, at least a second (never zero,
+/// which turns it off) and never past what the setting takes.
 #[test]
 fn the_idle_limit_is_set_for_the_transaction() {
     use std::time::Duration;
     assert_eq!(idle_limit(Duration::from_secs(1800)), "SET LOCAL idle_in_transaction_session_timeout = 1800000");
-    assert_eq!(idle_limit(Duration::from_micros(10)), "SET LOCAL idle_in_transaction_session_timeout = 1");
+    assert_eq!(idle_limit(Duration::from_micros(10)), "SET LOCAL idle_in_transaction_session_timeout = 1000");
+    assert_eq!(idle_limit(Duration::from_millis(1500)), "SET LOCAL idle_in_transaction_session_timeout = 1500");
     assert_eq!(
         idle_limit(Duration::from_secs(u64::MAX)),
         format!("SET LOCAL idle_in_transaction_session_timeout = {}", i32::MAX)
@@ -301,9 +387,9 @@ fn statements_that_deallocate_prepared_statements() {
 // ── every run ends with exactly one terminal event ───────────────────────────
 
 mod terminal {
-    use super::super::{BeforeBind, Env, Job, Prepared, Reply, State, Tx, execute};
+    use super::super::{BeforeBind, Env, Job, Prepared, Reply, State, Tx, end_tx, execute};
     use crate::link::Link;
-    use datarig_core::driver::{DbCommand, DbError, DbEvent, PagingMode, TxRule};
+    use datarig_core::driver::{DbCommand, DbError, DbEvent, PagingMode, TxOutcome, TxRule, TxStep};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
@@ -351,6 +437,92 @@ mod terminal {
         }
     }
 
+    /// Drops the test's schema on a fresh connection, also when an assertion fails.
+    struct SchemaGuard(String, String);
+
+    impl Drop for SchemaGuard {
+        fn drop(&mut self) {
+            let (url, schema) = (self.0.clone(), self.1.clone());
+            let _ = std::thread::spawn(move || {
+                let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+                rt.block_on(async {
+                    let (c, ..) = connect(&url).await;
+                    let _ = c.batch_execute(&format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).await;
+                });
+            })
+            .join();
+        }
+    }
+
+    fn manual(steps: &[TxStep]) -> TxRule {
+        TxRule::Manual { steps: steps.to_vec(), idle_timeout: None }
+    }
+
+    /// Manual commit on a session whose search path is set in each transaction (as behind a
+    /// pooler that drops the startup option): the path goes out with the opening `BEGIN`, so the
+    /// write and the reads after it resolve names in it; a failed run is undone, and the commit
+    /// keeps the write.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn manual_commit_with_a_search_path_per_transaction() {
+        let Some(url) = pg_url("manual_commit_with_a_search_path_per_transaction") else { return };
+        let schema = format!("zz_mpath_{}", std::process::id());
+        let _guard = SchemaGuard(url.clone(), schema.clone());
+        let (c, ..) = connect(&url).await;
+        c.batch_execute(&format!(
+            "DROP SCHEMA IF EXISTS {schema} CASCADE; CREATE SCHEMA {schema}; CREATE TABLE {schema}.t (x int PRIMARY KEY)"
+        ))
+        .await
+        .expect("setup");
+        let mut s = Session::open(&url).await;
+        s.path = Some(format!("SET LOCAL search_path = {schema}"));
+        s.rule = manual(&[TxStep::Open]);
+        let events = s.run_all(&["INSERT INTO t VALUES (1)"], None).await;
+        assert!(events.iter().any(|e| matches!(e, DbEvent::ManualBegun { index: 0, .. })), "{events:?}");
+        s.rule = manual(&[TxStep::ReadOnly]);
+        let events = s.run_all(&["SELECT count(*) FROM t"], None).await;
+        assert!(
+            events.iter().any(|e| matches!(e, DbEvent::Page { rows, .. } if rows[0][0].as_deref() == Some("1"))),
+            "{events:?}"
+        );
+        s.rule = manual(&[TxStep::Open, TxStep::Open]);
+        let events = s.run_all(&["INSERT INTO t VALUES (2)", "INSERT INTO t VALUES (1)"], None).await;
+        assert!(events.iter().any(|e| matches!(e, DbEvent::RunRolledBack { .. })), "{events:?}");
+        let events = s.end(true).await;
+        assert!(
+            events.iter().any(|e| matches!(e, DbEvent::TxEnded { outcome: TxOutcome::Committed, .. })),
+            "{events:?}"
+        );
+        let rows = c.simple_query(&format!("SELECT count(*) FROM {schema}.t")).await.expect("count");
+        let count = rows.iter().find_map(|m| match m {
+            tokio_postgres::SimpleQueryMessage::Row(r) => r.get(0).map(str::to_string),
+            _ => None,
+        });
+        assert_eq!(count.as_deref(), Some("1"));
+    }
+
+    /// `EndTx` on a connection that is gone already sends nothing: the connection's error, never
+    /// "commit outcome unknown" (nothing was committed).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn ending_a_transaction_on_a_closed_connection_says_so() {
+        let Some(url) = pg_url("ending_a_transaction_on_a_closed_connection_says_so") else { return };
+        let mut s = Session::open(&url).await;
+        s.rule = manual(&[TxStep::Open]);
+        let events = s.run_all(&["SELECT 1"], None).await;
+        assert!(events.iter().any(|e| matches!(e, DbEvent::ManualBegun { .. })), "{events:?}");
+        s.rule = TxRule::Auto;
+        let _ = s.run_all(&["SELECT pg_catalog.pg_terminate_backend(pg_catalog.pg_backend_pid())"], None).await;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while !s.client.is_closed() {
+            assert!(std::time::Instant::now() < deadline, "the connection did not close");
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let events = s.end(true).await;
+        assert!(
+            matches!(&events[..], [DbEvent::Failed { error: DbError::Closed, cancelled: false, .. }]),
+            "{events:?}"
+        );
+    }
+
     /// A query session driven by hand: runs go through [`execute`] with a hook before each
     /// bind.
     struct Session {
@@ -365,6 +537,10 @@ mod terminal {
         id: u64,
         cancel: Arc<AtomicBool>,
         failed: AtomicBool,
+        /// The rule its runs go by (`Auto` unless a test says otherwise).
+        rule: TxRule,
+        /// The search path set per transaction, if any.
+        path: Option<String>,
         /// What a result with more rows keeps (`Hold` unless a test says otherwise).
         paging: PagingMode,
     }
@@ -392,6 +568,8 @@ mod terminal {
                 id: 0,
                 cancel: Arc::new(AtomicBool::new(false)),
                 failed: AtomicBool::new(false),
+                rule: TxRule::Auto,
+                path: None,
                 paging: PagingMode::Hold,
             }
         }
@@ -406,15 +584,38 @@ mod terminal {
                 failed: &self.failed,
                 page_size: 10,
                 read_only: false,
-                path: None,
+                path: self.path.as_deref(),
                 savepoint: "datarig_count_test",
                 before_bind: hook,
             };
             let mut s = State { tx: &mut self.tx, prepared: &mut self.prepared };
             let statements = statements.iter().map(|s| s.to_string()).collect();
-            let job = Job { statements, resume: None, paging: self.paging, rule: TxRule::Auto };
+            let job = Job { statements, resume: None, paging: self.paging, rule: self.rule.clone() };
             let run = execute(&mut self.client, &mut self.link, &env, &mut s, self.id, job);
             tokio::time::timeout(std::time::Duration::from_secs(20), run).await.expect("the run returns").ok();
+            let mut events = Vec::new();
+            while let Ok(ev) = self.rx.try_recv() {
+                events.push(ev);
+            }
+            events
+        }
+
+        /// End the open transaction (`commit` or roll back): every event it brought.
+        async fn end(&mut self, commit: bool) -> Vec<DbEvent> {
+            self.id += 1;
+            let env = Env {
+                events: &self.events,
+                token: &self.token,
+                cancel: &self.cancel,
+                failed: &self.failed,
+                page_size: 10,
+                read_only: false,
+                path: self.path.as_deref(),
+                savepoint: "datarig_count_test",
+                before_bind: None,
+            };
+            let ended = end_tx(&self.client, &mut self.link, &env, &mut self.tx, self.id, commit);
+            tokio::time::timeout(std::time::Duration::from_secs(20), ended).await.expect("it returns").ok();
             let mut events = Vec::new();
             while let Ok(ev) = self.rx.try_recv() {
                 events.push(ev);

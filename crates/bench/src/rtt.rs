@@ -6,7 +6,7 @@ use crate::proxy;
 use crate::stats::{Summary, ms};
 use datarig_core::driver::ddl::DdlObject;
 use datarig_core::driver::{ConnectOptions, DbCommand, DbEvent, Driver, Session, SessionRole};
-use datarig_core::driver::{PagingMode, TxRule};
+use datarig_core::driver::{PagingMode, TxRule, TxStep};
 use datarig_core::profile::ConnectionConfig;
 use datarig_driver_postgres::PgDriver;
 use serde_json::{Value, json};
@@ -388,7 +388,7 @@ pub async fn run(url: &str, one_way: Duration, runs: usize) -> Result<Value, Str
             id,
             statements: vec![format!("INSERT INTO zz_bench_rtt VALUES ({i})")],
             paging: PagingMode::NoHold,
-            tx: TxRule::Manual { opens: vec![true], idle_timeout: None },
+            tx: TxRule::Manual { steps: vec![TxStep::Open], idle_timeout: None },
         };
         let (c, ev) = s
             .measure(write, |e| matches!(e, DbEvent::Done { id: d, .. } | DbEvent::Failed { id: d, .. } if *d == id))

@@ -66,9 +66,16 @@
 //! path as the user's block's first statements, so the first write costs no round trip more.
 //! The block is reported (`ManualBegun`, then `Block`) once the statement succeeded; when the
 //! run fails it is rolled back at once. A run in such a block, opened before it, goes under a
-//! savepoint ([`RUN_SAVEPOINT`]) set with its first statement and released with the next run's
-//! first: a failed or cancelled run goes back to it and the block keeps what earlier runs did.
-//! The user's own `BEGIN` keeps the server's rules. `EndTx` commits or rolls back.
+//! savepoint of its own ([`run_savepoint`]) set with its first statement and released with the
+//! next run's first: a failed or cancelled run goes back to it and the block keeps what earlier
+//! runs did. The user's own `BEGIN` keeps the server's rules. `EndTx` commits or rolls back. A
+//! plain read outside a block (`TxStep::ReadOnly`) runs in a `BEGIN READ ONLY` transaction
+//! where it would run in a `BEGIN` one (the same write), so a write hidden in it fails.
+//!
+//! Each run under a savepoint that writes gets a subtransaction id of its own, and the server
+//! keeps them until the transaction ends: past 64 of them in one transaction the server's cache
+//! of them overflows, and other sessions' snapshots look them up in `pg_subtrans` (slower)
+//! until it ends. A long manual transaction of many writing runs is one more reason to commit.
 //!
 //! **The statement cache**: prepared row-returning statements are kept between
 //! transactions ([`Prepared`]) unless the profile turned the cache off or the session turned it
@@ -96,6 +103,7 @@ use crate::route::Cancel;
 use crate::values::{Raw, format_code, format_value, is_json, is_numeric, type_display, value_kind};
 use datarig_core::driver::{
     CancelFailure, Cell, ColumnMeta, ColumnOrigin, DbCommand, DbError, DbEvent, Outcome, PagingMode, TxOutcome, TxRule,
+    TxStep,
 };
 use datarig_core::sql::lexer::{Tok, Token, lex, lex_backslash_strings};
 use datarig_core::sql::risk::{self, Class};
@@ -110,7 +118,8 @@ use tokio_postgres::{Client, Column, FirstPage, Row, SimpleQueryMessage, Stateme
 /// Whether a transaction is open, and what the UI was last told.
 #[derive(Default)]
 struct Tx {
-    /// An explicit transaction block (the user's `BEGIN`), possibly aborted.
+    /// An explicit transaction block (the user's `BEGIN`, or one the session opened for manual
+    /// commit), possibly aborted.
     block: bool,
     /// The block is aborted (a statement in it failed): only `ROLLBACK` works.
     aborted: bool,
@@ -126,10 +135,18 @@ struct Tx {
     /// The block was opened by the session for manual commit ([`TxRule::Manual`]), not by the
     /// user's `BEGIN`.
     manual: bool,
-    /// The run savepoint ([`RUN_SAVEPOINT`]) of the last run, which went well, is still set in
-    /// the block: the next run releases it first, in the same write as its first statement (so
-    /// ending a run costs nothing).
-    run_savepoint: bool,
+    /// The run savepoint ([`run_savepoint`]) of the last run, which went well, is still set in
+    /// the block (its number): the next run releases it first, in the same write as its first
+    /// statement (so ending a run costs nothing).
+    run_savepoint: Option<u64>,
+    /// The number of the last run savepoint set in the session: each run's has a name of its
+    /// own, so undoing a run never goes back to an earlier run's savepoint.
+    runs: u64,
+    /// The idle limit of the block opened for manual commit ([`idle_limit`]), set again in a
+    /// block its `COMMIT AND CHAIN` opens.
+    idle: Option<std::time::Duration>,
+    /// A chained block opened for manual commit gets its idle limit with its next statement.
+    idle_due: bool,
     /// Statements that go out with the next statement, after the block's own first ones: the
     /// `BEGIN` the session opens a block with for manual commit, or the release of the last
     /// run's savepoint and the next one's.
@@ -149,9 +166,9 @@ enum Guard {
     /// It does not: the server's own rules apply (a failure aborts the block).
     #[default]
     None,
-    /// It runs under the run savepoint ([`RUN_SAVEPOINT`]), set with its first statement in a
-    /// block opened for manual commit before the run: it rolls back to it.
-    Savepoint,
+    /// It runs under its run savepoint (number `.0`, [`run_savepoint`]), set with its first
+    /// statement in a block opened for manual commit before the run: it rolls back to it.
+    Savepoint(u64),
     /// Its statement `index` opened the block for manual commit: it rolls the block back.
     Opened(usize),
 }
@@ -164,7 +181,7 @@ impl Tx {
         self.first_pending = due && open && (self.first_pending || !self.block);
         self.block = open;
         if !open {
-            (self.manual, self.run_savepoint) = (false, false);
+            (self.manual, self.run_savepoint, self.idle, self.idle_due) = (false, None, None, false);
         }
     }
 
@@ -172,18 +189,37 @@ impl Tx {
     /// the new one gets the session's first statements (`due`) as any new block does (a path
     /// set per transaction ended with the old one).
     ///
-    /// A block opened for manual commit stays one (the user's commit chained it); its savepoints
-    /// ended with the old one.
+    /// A block opened for manual commit stays one (the user's commit chained it), and gets its
+    /// idle limit again (the old one's ended with it); its savepoints ended with the old one.
     fn chained(&mut self, due: bool) {
         self.first_pending = due;
         self.block = true;
-        self.run_savepoint = false;
+        self.run_savepoint = None;
+        self.idle_due = self.manual && self.idle.is_some();
+    }
+
+    /// A statement of the user's ended the block (`COMMIT`, `ROLLBACK`, with or without `AND
+    /// CHAIN`): what the run did in a block it opened was committed or rolled back by the user,
+    /// so nothing of it is left to undo, and a later failure of the run goes by the server's rules.
+    fn user_ended(&mut self) {
+        if matches!(self.guard, Guard::Opened(_)) {
+            self.guard = Guard::None;
+            self.opening = None;
+        }
+    }
+
+    /// Something goes out first with the next statement of the block (see [`Tx::take_first`]).
+    fn first_due(&self) -> bool {
+        self.first_pending || self.idle_due || !self.queued.is_empty()
     }
 
     /// The statements to run first in the user's block, if they are due, then the queued ones
     /// (they are sent now).
     fn take_first(&mut self, env: &Env<'_>) -> Vec<String> {
         let mut first = if std::mem::take(&mut self.first_pending) { env.first_in_block() } else { Vec::new() };
+        if std::mem::take(&mut self.idle_due) {
+            first.extend(self.idle.map(idle_limit));
+        }
         first.append(&mut self.queued);
         first
     }
@@ -196,8 +232,29 @@ impl Tx {
         (self.block, self.aborted, self.first_pending) = (true, false, false);
         self.queued = env.begin();
         self.queued.extend(idle.map(idle_limit));
+        (self.idle, self.idle_due) = (idle, false);
         self.opening = Some((id, index));
         self.guard = Guard::Opened(index);
+    }
+
+    /// What a run (not the app's `Resume`) of `statements` sends first in a block opened for
+    /// manual commit: the release of the last run's savepoint, then its own (a new name), unless
+    /// it has transaction control of its own or the block is aborted. The number of the savepoint
+    /// it releases, if any.
+    fn begin_run(&mut self, statements: &[String]) -> Option<u64> {
+        if !self.block {
+            return None;
+        }
+        let released = self.run_savepoint;
+        if let Some(n) = released {
+            self.queued.push(format!("RELEASE SAVEPOINT {}", run_savepoint(n)));
+        }
+        if self.manual && !self.aborted && !statements.iter().any(|q| controls_tx(q)) {
+            self.runs += 1;
+            self.queued.push(format!("SAVEPOINT {}", run_savepoint(self.runs)));
+            self.guard = Guard::Savepoint(self.runs);
+        }
+        released
     }
 
     /// [`Tx::take_first`] as the start of a simple query (`…; `), or nothing.
@@ -212,27 +269,64 @@ const BEGIN_READ_ONLY: &str = "BEGIN READ ONLY";
 /// What a read-only session runs first in the user's block.
 const SET_READ_ONLY: &str = "SET TRANSACTION READ ONLY";
 
-/// The savepoint a run goes under in a block opened for manual commit before it: a failed or
-/// cancelled run goes back to it, and the block keeps what earlier runs did.
-const RUN_SAVEPOINT: &str = "SAVEPOINT datarig_run";
+/// The name of run savepoint `n`, which a run goes under in a block opened for manual commit
+/// before it: a failed or cancelled run goes back to it, and the block keeps what earlier runs
+/// did. Each run's has a name of its own: when the release of the last one and the setting of
+/// the next fail together (a cancel that lands on the release), going back to the run's own
+/// fails (`3B001`) and leaves the block aborted, rather than undoing the run before it.
+fn run_savepoint(n: u64) -> String {
+    format!("datarig_run_{n}")
+}
 
-/// Leaves [`RUN_SAVEPOINT`] of a run that went well (sent first in the next run).
-const RUN_RELEASE: &str = "RELEASE SAVEPOINT datarig_run";
-
-/// Back to before a run that failed or was cancelled ([`RUN_SAVEPOINT`]): the block is as it was
+/// Back to before run savepoint `n` (a run that failed or was cancelled): the block is as it was
 /// before the run (not aborted, what earlier runs did kept).
-const RUN_UNDO: &str = "ROLLBACK TO SAVEPOINT datarig_run; RELEASE SAVEPOINT datarig_run";
+fn run_undo(n: u64) -> String {
+    let name = run_savepoint(n);
+    format!("ROLLBACK TO SAVEPOINT {name}; RELEASE SAVEPOINT {name}")
+}
+
+/// Whether `sql` names a savepoint of the session's own (`datarig_…`) in `SAVEPOINT`, `RELEASE`
+/// or `ROLLBACK TO`: in a block opened for manual commit it is not sent, so the user's statement
+/// can neither drop the run savepoint (and abort the block at the next run's release) nor go back
+/// to one ([`DbError::ReservedSavepoint`]). Every statement of the text is looked at.
+fn names_reserved_savepoint(sql: &str) -> bool {
+    let toks: Vec<Token> = lex(sql).into_iter().filter(|t| !t.is_trivia()).collect();
+    toks.split(|t| t.kind == Tok::Semi).any(|stmt| {
+        let word = |i: usize| stmt.get(i).filter(|t| t.is_word()).map(|t| t.text(sql).to_ascii_uppercase());
+        let is = |i: usize, w: &str| word(i).as_deref() == Some(w);
+        // Where the savepoint's name is: after `SAVEPOINT`, after `RELEASE [SAVEPOINT]`, after
+        // `ROLLBACK [WORK | TRANSACTION] TO [SAVEPOINT]`.
+        let at = if is(0, "SAVEPOINT") {
+            Some(1)
+        } else if is(0, "RELEASE") {
+            Some(if is(1, "SAVEPOINT") { 2 } else { 1 })
+        } else if is(0, "ROLLBACK") || is(0, "ABORT") {
+            (1..=2).find(|&i| is(i, "TO")).map(|to| if is(to + 1, "SAVEPOINT") { to + 2 } else { to + 1 })
+        } else {
+            None
+        };
+        at.and_then(|i| stmt.get(i)).is_some_and(|t| {
+            let text = t.text(sql);
+            match t.kind {
+                Tok::QuotedIdent => text.trim_matches('"').starts_with("datarig_"),
+                _ => text.to_ascii_lowercase().starts_with("datarig_"),
+            }
+        })
+    })
+}
 
 /// The most a block opened for manual commit may sit idle, for that transaction only (gone at
-/// its end, so nothing is left on a pooled server connection): in milliseconds, at least one
-/// (zero would turn the limit off), at most what the setting takes.
+/// its end, so nothing is left on a pooled server connection): in milliseconds, at least a
+/// second (a shorter limit could end the transaction between two statements of a run; zero would
+/// turn it off), at most what the setting takes. PostgreSQL 9.6 has the setting; an older server
+/// refuses it, and the first write with it fails (its transaction is not kept).
 fn idle_limit(idle: std::time::Duration) -> String {
-    let ms = idle.as_millis().clamp(1, i32::MAX as u128);
+    let ms = idle.as_millis().clamp(1000, i32::MAX as u128);
     format!("SET LOCAL idle_in_transaction_session_timeout = {ms}")
 }
 
 /// Whether `sql` may end, open or move within the transaction itself, so a run with it gets no
-/// run savepoint ([`RUN_SAVEPOINT`]): transaction control (`COMMIT`, `ROLLBACK`, `SAVEPOINT`,
+/// run savepoint ([`run_savepoint`]): transaction control (`COMMIT`, `ROLLBACK`, `SAVEPOINT`,
 /// `ROLLBACK TO`, …, whose effect a savepoint of the session's would break or undo) and text the
 /// session cannot tell is not (no leading word, more than one statement). `CALL` and `DO` cannot
 /// end a block (the server refuses that inside one), so they get the savepoint.
@@ -287,6 +381,7 @@ pub(crate) struct Settings {
 }
 
 /// What a statement run needs besides the connection.
+#[derive(Clone, Copy)]
 struct Env<'a> {
     events: &'a UnboundedSender<DbEvent>,
     token: &'a Cancel,
@@ -1076,11 +1171,15 @@ async fn no_rows_done<'a>(
             tx.set_block(open, env.wraps());
             (tx.aborted, tx.unsure) = (false, false);
             env.report(tx, open);
+            if !open {
+                tx.user_ended();
+            }
         }
         TxAfter::Chain => {
             tx.chained(env.wraps());
             (tx.aborted, tx.unsure) = (false, false);
             env.report(tx, true);
+            tx.user_ended();
         }
         TxAfter::Ask => halt!(probe(client, link, env, tx).await, reply.map(|(r, _)| r)),
     }
@@ -1177,22 +1276,17 @@ async fn run<'a>(
             return Ok(());
         }
     }
-    let (opens, idle) = match &rule {
+    let (steps, idle) = match &rule {
         TxRule::Auto => (&[][..], None),
-        TxRule::Manual { opens, idle_timeout } => (&opens[..], *idle_timeout),
+        TxRule::Manual { steps, idle_timeout } => (&steps[..], *idle_timeout),
     };
     // A run (not the app's `Resume`) in a block opened for manual commit: the last run's
     // savepoint is released and the run's own set, both with its first statement. A run with
     // transaction control of its own gets none (its `COMMIT` would end the block under it, its
     // `ROLLBACK TO` an earlier savepoint drop it), nor does an aborted block (it takes nothing).
-    let released = resume.is_none() && s.tx.block && s.tx.run_savepoint;
-    if released {
-        s.tx.queued.push(RUN_RELEASE.to_string());
-    }
-    if resume.is_none() && s.tx.block && s.tx.manual && !s.tx.aborted && !statements.iter().any(|q| controls_tx(q)) {
-        s.tx.queued.push(RUN_SAVEPOINT.to_string());
-        s.tx.guard = Guard::Savepoint;
-    }
+    // Whatever the run's rule: an `Auto` run in such a block (the rule changed while the
+    // transaction stays open) is undone alike, rather than aborting what the block holds.
+    let released = if resume.is_none() { s.tx.begin_run(&statements) } else { None };
     let mut reply = reply;
     'steps: {
         for (i, sql) in statements.iter().enumerate() {
@@ -1212,9 +1306,19 @@ async fn run<'a>(
             if matches!(s.tx.guard, Guard::Opened(_)) && !s.tx.block {
                 s.tx.guard = Guard::None;
             }
-            if !s.tx.block && opens.get(i) == Some(&true) {
+            let tx_step = steps.get(i).copied().unwrap_or_default();
+            if !s.tx.block && tx_step == TxStep::Open {
                 s.tx.open_manual(env, id, i, idle);
             }
+            // A plain read outside a block: its transaction of its own is read-only, as on a
+            // read-only session (`BEGIN READ ONLY` where it would send `BEGIN`).
+            let read_only;
+            let env = if !s.tx.block && tx_step == TxStep::ReadOnly && !env.read_only {
+                read_only = Env { read_only: true, ..*env };
+                &read_only
+            } else {
+                env
+            };
             // `EXPLAIN ANALYZE` inside the user's block: a savepoint keeps the block as it was.
             let savepoint = s.tx.block && rolls_back(sql);
             if savepoint {
@@ -1266,15 +1370,17 @@ async fn run<'a>(
 /// run's savepoint is done when it went out (`released`), the run savepoint of a run that went
 /// well stays for the next run to release, and a block opened for the run is reported once
 /// (if no path did yet). A run that failed or was cancelled under a [`Guard`] is undone: the
-/// block it opened is rolled back ([`DbEvent::ManualRolledBack`]), or the block goes back to
-/// the run savepoint ([`DbEvent::RunRolledBack`]); when that fails, the server is asked.
+/// block it opened is rolled back ([`DbEvent::ManualRolledBack`]; when its statement failed
+/// before the block was known to be open, the server is asked first whether its `BEGIN` ran:
+/// when it did not, there is nothing to roll back and nothing is said), or the block goes back
+/// to the run savepoint ([`DbEvent::RunRolledBack`]); when that fails, the server is asked.
 async fn settle(
     client: &Client,
     link: &mut Link,
     env: &Env<'_>,
     tx: &mut Tx,
     id: u64,
-    released: bool,
+    released: Option<u64>,
 ) -> Result<(), Closed> {
     let guard = std::mem::take(&mut tx.guard);
     if !tx.queued.is_empty() {
@@ -1284,26 +1390,37 @@ async fn settle(
         }
         return Ok(());
     }
-    if released {
-        tx.run_savepoint = false;
+    if released.is_some() {
+        tx.run_savepoint = None;
     }
     let failed = env.failed.load(Ordering::SeqCst);
     match guard {
-        Guard::Savepoint if !failed => tx.run_savepoint = true,
+        Guard::Savepoint(n) if !failed => tx.run_savepoint = Some(n),
         _ if !failed => {}
         Guard::None => {}
         Guard::Opened(index) => {
-            tx.opening = None;
+            let opened = if tx.opening.take().is_some() { block_open(client, link).await? } else { Some(true) };
+            if opened == Some(false) {
+                // Its `BEGIN` did not run (or failed): no block was opened.
+                tx.set_block(false, env.wraps());
+                (tx.aborted, tx.unsure) = (false, false);
+                env.report(tx, false);
+                return Ok(());
+            }
             if link.guard(None, client.batch_execute("ROLLBACK")).await?.is_err() {
                 return probe(client, link, env, tx).await;
             }
             tx.set_block(false, env.wraps());
             (tx.aborted, tx.unsure) = (false, false);
-            let _ = env.events.send(DbEvent::ManualRolledBack { id, index });
+            if opened == Some(true) {
+                let _ = env.events.send(DbEvent::ManualRolledBack { id, index });
+            }
             env.report(tx, false);
         }
-        Guard::Savepoint => {
-            if link.guard(None, client.batch_execute(RUN_UNDO)).await?.is_err() {
+        Guard::Savepoint(n) => {
+            if link.guard(None, client.batch_execute(&run_undo(n))).await?.is_err() {
+                // Its savepoint is not there (its setting failed with the release before it):
+                // the block stays as the server has it, aborted, and nothing earlier is undone.
                 return probe(client, link, env, tx).await;
             }
             tx.aborted = false;
@@ -1317,13 +1434,24 @@ async fn settle(
     Ok(())
 }
 
+/// Whether a transaction block is open on the connection, asked as [`probe`] asks (an aborted one
+/// answers `25P02`); `None` when asking failed otherwise.
+async fn block_open(client: &Client, link: &mut Link) -> Result<Option<bool>, Closed> {
+    let sql = "SELECT pg_catalog.now() <> pg_catalog.statement_timestamp()";
+    Ok(match link.guard(None, client.simple_query(sql)).await? {
+        Ok(msgs) => Some(msgs.iter().any(|m| matches!(m, SimpleQueryMessage::Row(r) if r.get(0) == Some("t")))),
+        Err(e) if e.code() == Some(&SqlState::IN_FAILED_SQL_TRANSACTION) => Some(true),
+        Err(_) => None,
+    })
+}
+
 /// End the open block for the user (`DbCommand::EndTx` `id`): `COMMIT` (`commit`) or
 /// `ROLLBACK` as a query of its own, answered with exactly one `TxEnded` or `Failed`, then the
 /// state. The server's command tag tells a commit from the rollback it does instead of
 /// committing an aborted block ([`TxOutcome::RolledBackInstead`]). A refused commit (a deferred
 /// constraint, a serialization failure) ended the block on the server: the probe says so. A
 /// connection that ended meanwhile leaves a commit's outcome unknown ([`DbError::CommitUnknown`]),
-/// and `Lost` follows.
+/// and `Lost` follows; one that had ended before is the connection's error (nothing was sent).
 async fn end_tx(
     client: &Client,
     link: &mut Link,
@@ -1337,6 +1465,12 @@ async fn end_tx(
     }
     if !tx.block {
         let _ = env.events.send(DbEvent::Failed { id, error: DbError::NoTransaction, cancelled: false });
+        return Ok(());
+    }
+    // The connection is gone already: nothing is sent, so nothing was committed.
+    if client.is_closed() {
+        let _ = env.events.send(DbEvent::Failed { id, error: DbError::Closed, cancelled: false });
+        tx.unsure = true;
         return Ok(());
     }
     let sql = if commit { "COMMIT" } else { "ROLLBACK" };
@@ -1389,6 +1523,11 @@ async fn statement<'a>(
     // read-write before its first query, whatever `SET TRANSACTION READ ONLY` said.
     if env.read_only && risk::classify(sql).read_write {
         reply.fail(DbError::ReadWriteRefused, false);
+        return Ok(None);
+    }
+    // The session's own savepoints, in a block opened for manual commit: never the user's.
+    if s.tx.manual && names_reserved_savepoint(sql) {
+        reply.fail(DbError::ReservedSavepoint, false);
         return Ok(None);
     }
     if forgets_prepared(sql) {
@@ -1464,7 +1603,7 @@ async fn statement<'a>(
             let _ = halt!(link.guard(None, client.batch_execute("ROLLBACK")).await, Some(reply));
             return no_rows(client, link, env, s.tx, reply, sql, step).await;
         }
-        if stmt.columns().is_empty() && (s.tx.first_pending || !s.tx.block && env.wrapped(sql)) {
+        if stmt.columns().is_empty() && (s.tx.first_due() || !s.tx.block && env.wrapped(sql)) {
             return wrapped_no_rows(client, link, env, s.tx, reply, &stmt, sql, step).await;
         }
         if stmt.columns().is_empty() {
@@ -1636,7 +1775,7 @@ async fn prepare(
         }
         // What is queued (a manual commit's `BEGIN`, the run savepoint) goes out first: a
         // statement that fails to parse would abort the block without it.
-        _ if !tx.queued.is_empty() => {
+        _ if tx.first_due() => {
             let first = tx.take_first(env);
             client.prepare_wrapped(sql, &first, None).await
         }

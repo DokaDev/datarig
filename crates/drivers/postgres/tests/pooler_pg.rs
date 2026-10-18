@@ -14,7 +14,7 @@
 
 use datarig_core::driver::ddl::DdlObject;
 use datarig_core::driver::{ConnectOptions, DbCommand, DbError, DbEvent, Driver, Session, SessionContext, SessionRole};
-use datarig_core::driver::{PagingMode, TxOutcome, TxRule};
+use datarig_core::driver::{PagingMode, TxOutcome, TxRule, TxStep};
 use datarig_core::profile::ConnectionConfig;
 use datarig_driver_postgres::PgDriver;
 use std::io::Write;
@@ -585,8 +585,10 @@ async fn a_manual_transaction_stays_on_one_server_connection_behind_a_pooler() {
     let mut id = 1;
     for cache in [false, true] {
         let mut q = Conn::open(&url, SessionRole::Query, cache).await;
-        let rule =
-            |opens: &[bool]| TxRule::Manual { opens: opens.to_vec(), idle_timeout: Some(Duration::from_secs(90)) };
+        let rule = |opens: &[bool]| TxRule::Manual {
+            steps: opens.iter().map(|&o| if o { TxStep::Open } else { TxStep::AsIs }).collect(),
+            idle_timeout: Some(Duration::from_secs(90)),
+        };
         let run = |id, sqls: &[&str], tx| DbCommand::Execute {
             id,
             statements: sqls.iter().map(|s| s.to_string()).collect(),

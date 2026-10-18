@@ -84,7 +84,8 @@ pub enum DbError {
     /// transaction the driver opened only to set the session's search path (a session whose
     /// server ignored the path given at connect, a pooler: [`DbEvent::ContextPerTransaction`]),
     /// or one it opened right before the statement for manual commit ([`TxRule::Manual`], rolled
-    /// back since: [`DbEvent::ManualRolledBack`]). The server's message. The same failure in the user's own block is a plain `Server`.
+    /// back since: [`DbEvent::ManualRolledBack`]). The server's message. The same failure in the
+    /// user's own block is a plain `Server`.
     NeedsNoTransaction(String),
     /// A statement the app was to run again or count for the user (`Count`, `Resume`) is not
     /// on the allowlist of `sql::risk::repeat`, as the text says or as the server told when it
@@ -169,6 +170,10 @@ pub enum DbError {
     /// the server's own or the one [`TxRule::Manual`] set for the transaction): the server rolled
     /// the transaction back. The server's message. Comes as [`DbEvent::Lost`]'s reason.
     IdleInTransactionTimeout(String),
+    /// A statement in a transaction opened for manual commit names a savepoint whose name starts
+    /// with `datarig_` (`SAVEPOINT`, `RELEASE`, `ROLLBACK TO`): those are the session's own, and
+    /// using one would break how it undoes a failed run. It was not sent.
+    ReservedSavepoint,
 }
 
 /// Why a request to stop the running statement did not stop it ([`DbError::CancelNotTaken`]).
@@ -238,6 +243,7 @@ impl DbError {
             | DbError::ReadOnlyLost
             | DbError::NoTransaction
             | DbError::CommitUnknown
+            | DbError::ReservedSavepoint
             | DbError::CancelNotTaken(
                 CancelFailure::Refused
                 | CancelFailure::KeptSending
@@ -287,26 +293,50 @@ pub enum TxRule {
     /// transaction, as the server runs it.
     #[default]
     Auto,
-    /// Manual commit: right before statement `i` when `opens[i]` is true and no transaction
-    /// block is open on the session at that moment (the driver's own state, after the
-    /// statements before it in the run), the driver opens one, in the same write as the
-    /// statement ([`DbEvent::ManualBegun`] once the statement succeeded; when it fails, or the
-    /// run fails later, the new transaction is rolled back at once: [`DbEvent::ManualRolledBack`]).
-    /// The transaction then stays open after the run until the user ends it
-    /// ([`DbCommand::EndTx`], or a `COMMIT`/`ROLLBACK` the user runs). A statement past the end of
-    /// `opens` opens nothing.
+    /// Manual commit: `steps[i]` says how statement `i` stands to a transaction ([`TxStep`]; a
+    /// statement past the end of `steps` is [`TxStep::AsIs`]). Right before a statement that is
+    /// [`TxStep::Open`] while no transaction block is open on the session at that moment (the
+    /// driver's own state, after the statements before it in the run), the driver opens one, in
+    /// the same write as the statement ([`DbEvent::ManualBegun`] once the statement succeeded;
+    /// when it fails, or the run fails later, the new transaction is rolled back at once:
+    /// [`DbEvent::ManualRolledBack`]). The transaction then stays open after the run until the
+    /// user ends it ([`DbCommand::EndTx`], or a `COMMIT`/`ROLLBACK` the user runs).
     ///
     /// While a block the driver opened so is open when a run starts, the run goes under a
     /// savepoint of the driver's: a run that fails or is cancelled is undone, and the transaction
-    /// stays open with what it held before the run ([`DbEvent::RunRolledBack`]). A run with
-    /// transaction control of its own (`COMMIT`, `ROLLBACK`, `SAVEPOINT`, …) and a block the user
-    /// opened (`BEGIN`) get none: the server's own rules apply (a failure aborts the block).
+    /// stays open with what it held before the run ([`DbEvent::RunRolledBack`]). This holds for
+    /// any run in such a block, an [`TxRule::Auto`] one too (a rule changed while the transaction
+    /// stays open). A run with transaction control of its own (`COMMIT`, `ROLLBACK`, `SAVEPOINT`,
+    /// …) and a block the user opened (`BEGIN`) get none: the server's own rules apply (a failure
+    /// aborts the block). Savepoint names starting with `datarig_` are the driver's
+    /// ([`DbError::ReservedSavepoint`]).
     ///
     /// `idle_timeout`: the most the server lets the transaction sit idle (PostgreSQL's
-    /// `idle_in_transaction_session_timeout`, set for that transaction only): past it the server
-    /// ends the session and rolls back ([`DbError::IdleInTransactionTimeout`]). `None` leaves the
-    /// server's setting as it is.
-    Manual { opens: Vec<bool>, idle_timeout: Option<Duration> },
+    /// `idle_in_transaction_session_timeout`, set for that transaction only, again after a
+    /// `COMMIT AND CHAIN`; PostgreSQL 9.6 or later): past it the server ends the session and
+    /// rolls back ([`DbError::IdleInTransactionTimeout`]). Less than a second is taken as one
+    /// second (a shorter limit could end the transaction between two statements of a run).
+    /// `None` leaves the server's setting as it is.
+    Manual { steps: Vec<TxStep>, idle_timeout: Option<Duration> },
+}
+
+/// How a statement of a [`TxRule::Manual`] run stands to a transaction.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TxStep {
+    /// It may write: when no transaction block is open, the driver opens one right before it,
+    /// which stays open for the user to commit or roll back.
+    Open,
+    /// A plain read, as far as its text tells (a view, a row-level security policy or a function
+    /// of the user's with a built-in's name may still hide a write behind it): when no
+    /// transaction block is open it runs in a read-only transaction of its own (PostgreSQL:
+    /// `BEGIN READ ONLY` where the driver sends `BEGIN`, in the same write), so a write hidden
+    /// in it fails (`25006`) instead of being committed by itself. Inside an open block it runs
+    /// as it is. Drivers without read-only transactions run it as [`TxStep::AsIs`].
+    ReadOnly,
+    /// It runs as it would under [`TxRule::Auto`] (transaction control, session settings,
+    /// statements that cannot run in a transaction).
+    #[default]
+    AsIs,
 }
 
 /// How [`DbCommand::EndTx`] ended the transaction ([`DbEvent::TxEnded`]).
