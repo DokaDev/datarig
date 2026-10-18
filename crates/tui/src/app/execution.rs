@@ -1645,6 +1645,7 @@ impl App {
             DbError::NoTransaction => Label::DbNoTransaction,
             DbError::CommitUnknown => Label::DbCommitUnknown,
             DbError::ReservedSavepoint => Label::DbReservedSavepoint,
+            DbError::NotAPlainRead => Label::DbNotAPlainRead,
             DbError::CancelNotTaken(CancelFailure::Refused) => Label::DbCancelRefused,
             // Why it could not be sent, in its own words (logged as they log it).
             DbError::CancelNotTaken(CancelFailure::NotSent(why)) => {

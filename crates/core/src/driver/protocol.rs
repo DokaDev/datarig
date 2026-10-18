@@ -174,6 +174,10 @@ pub enum DbError {
     /// with `datarig_` (`SAVEPOINT`, `RELEASE`, `ROLLBACK TO`): those are the session's own, and
     /// using one would break how it undoes a failed run. It was not sent.
     ReservedSavepoint,
+    /// A statement sent as a plain read ([`TxStep::ReadOnly`]) asks for a read-write transaction
+    /// or turns read-only off (`SET TRANSACTION READ WRITE`, `set_config()` of it, …), as the
+    /// driver's own check reads it: it was not sent. Send it as [`TxStep::Open`] instead.
+    NotAPlainRead,
 }
 
 /// Why a request to stop the running statement did not stop it ([`DbError::CancelNotTaken`]).
@@ -244,6 +248,7 @@ impl DbError {
             | DbError::NoTransaction
             | DbError::CommitUnknown
             | DbError::ReservedSavepoint
+            | DbError::NotAPlainRead
             | DbError::CancelNotTaken(
                 CancelFailure::Refused
                 | CancelFailure::KeptSending

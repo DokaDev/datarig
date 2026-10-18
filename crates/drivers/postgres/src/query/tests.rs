@@ -500,6 +500,55 @@ mod terminal {
         assert_eq!(count.as_deref(), Some("1"));
     }
 
+    /// A plain read of manual commit starts its own transaction read-only and nothing else: what
+    /// the session sends in later transactions (`wraps`, the user's block's first statements) is
+    /// the session's own, so no `SET TRANSACTION READ ONLY` is ever queued for a session that is
+    /// not read-only.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_plain_reads_read_only_transaction_is_its_own() {
+        let Some(url) = pg_url("a_plain_reads_read_only_transaction_is_its_own") else { return };
+        let s = Session::open(&url).await;
+        let env = Env {
+            events: &s.events,
+            token: &s.token,
+            cancel: &s.cancel,
+            failed: &s.failed,
+            page_size: 10,
+            read_only: false,
+            own_read_only: true,
+            path: None,
+            savepoint: "datarig_count_test",
+            before_bind: None,
+        };
+        assert!(!env.wraps());
+        assert!(env.first_in_block().is_empty());
+        assert_eq!(env.begin(), ["BEGIN READ ONLY"]);
+        assert!(env.wrapped("SELECT 1") && !env.wrapped("COMMIT"));
+        let mut tx = Tx::default();
+        tx.set_block(true, env.wraps());
+        assert!(!tx.first_due(), "nothing queued for the block");
+    }
+
+    /// A statement sent as a plain read that asks for read-write is not sent (a manual-commit
+    /// error of its own, not the read-only session's), and nothing is opened.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_plain_read_that_asks_for_read_write_is_not_sent() {
+        let Some(url) = pg_url("a_plain_read_that_asks_for_read_write_is_not_sent") else { return };
+        let mut s = Session::open(&url).await;
+        s.rule = manual(&[TxStep::ReadOnly]);
+        let events = s.run_all(&["SELECT pg_catalog.set_config('transaction_read_only', 'off', false)"], None).await;
+        assert!(
+            matches!(&events[..], [DbEvent::Failed { error: DbError::NotAPlainRead, cancelled: false, .. }]),
+            "{events:?}"
+        );
+        s.rule = TxRule::Auto;
+        let events = s.run_all(&["SHOW transaction_read_only"], None).await;
+        assert!(
+            events.iter().any(|e| matches!(e, DbEvent::Page { rows, .. } if rows[0][0].as_deref() == Some("off"))),
+            "{events:?}"
+        );
+    }
+
     /// `EndTx` on a connection that is gone already sends nothing: the connection's error, never
     /// "commit outcome unknown" (nothing was committed).
     #[tokio::test(flavor = "multi_thread")]
@@ -584,6 +633,7 @@ mod terminal {
                 failed: &self.failed,
                 page_size: 10,
                 read_only: false,
+                own_read_only: false,
                 path: self.path.as_deref(),
                 savepoint: "datarig_count_test",
                 before_bind: hook,
@@ -610,6 +660,7 @@ mod terminal {
                 failed: &self.failed,
                 page_size: 10,
                 read_only: false,
+                own_read_only: false,
                 path: self.path.as_deref(),
                 savepoint: "datarig_count_test",
                 before_bind: None,
@@ -634,6 +685,7 @@ mod terminal {
                 failed: &self.failed,
                 page_size: 10,
                 read_only: false,
+                own_read_only: false,
                 path: None,
                 savepoint: "datarig_count_test",
                 before_bind: hook,

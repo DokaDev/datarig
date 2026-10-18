@@ -458,6 +458,7 @@
 "db.no_transaction" = "no transaction is open"
 "db.commit_unknown" = "the connection ended while committing: whether the commit happened is not known, so check the data"
 "db.reserved_savepoint" = "savepoint names starting with datarig_ are datarig's own: choose another name"
+"db.not_a_plain_read" = "this statement asks for a read-write transaction, so it was not run as a read"
 "db.cancel_refused" = "the server refused to stop the statement (it runs as another account, e.g. in a SQL SECURITY DEFINER routine) and it kept sending rows: datarig closed the connection instead of reading them. The statement may still run on the server, and outside a transaction block commit what it changes; an open transaction is rolled back once the server ends the session"
 "db.cancel_not_sent" = "the request to stop the statement could not reach the server ({reason}): datarig closed the connection. The statement may still run on the server, and outside a transaction block commit what it changes; an open transaction is rolled back once the server ends the session"
 "db.cancel_not_answered" = "the request to stop the statement got no answer from the server within {elapsed}: datarig closed the connection. The statement may still run on the server, and outside a transaction block commit what it changes; an open transaction is rolled back once the server ends the session"

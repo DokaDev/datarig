@@ -394,6 +394,11 @@ struct Env<'a> {
     page_size: usize,
     /// The session is read-only: every transaction it opens is `READ ONLY`.
     read_only: bool,
+    /// The statement is a plain read of manual commit (`TxStep::ReadOnly`) outside a block: the
+    /// transaction of its own it runs in is `READ ONLY`. Only how that transaction starts reads it
+    /// ([`Env::wrapped`], [`Env::begin`]); what the session does in later transactions
+    /// ([`Env::wraps`], the user's block's first statements) does not.
+    own_read_only: bool,
     /// Sent first in every transaction (a search path per transaction), if anything.
     path: Option<&'a str>,
     /// The name of the savepoint a count or the allowlist's question runs under inside a
@@ -418,13 +423,13 @@ impl Env<'_> {
     /// session's first statements ([`Env::begin`]): [`guarded`] on a read-only session,
     /// [`path_guarded`] with a search path per transaction.
     fn wrapped(&self, sql: &str) -> bool {
-        (self.read_only && guarded(sql)) || (self.path.is_some() && path_guarded(sql))
+        ((self.read_only || self.own_read_only) && guarded(sql)) || (self.path.is_some() && path_guarded(sql))
     }
 
     /// How a transaction of the session's own starts: `BEGIN` (`BEGIN READ ONLY`), then the
     /// search path when it is set per transaction.
     fn begin(&self) -> Vec<String> {
-        let begin = if self.read_only { BEGIN_READ_ONLY } else { "BEGIN" };
+        let begin = if self.read_only || self.own_read_only { BEGIN_READ_ONLY } else { "BEGIN" };
         std::iter::once(begin).chain(self.path).map(str::to_string).collect()
     }
 
@@ -653,6 +658,7 @@ pub(crate) async fn query_loop(
         failed: &failed,
         page_size: settings.page_size,
         read_only: settings.read_only,
+        own_read_only: false,
         path: settings.path.as_deref(),
         savepoint: count_savepoint(),
         #[cfg(test)]
@@ -1314,7 +1320,7 @@ async fn run<'a>(
             // read-only session (`BEGIN READ ONLY` where it would send `BEGIN`).
             let read_only;
             let env = if !s.tx.block && tx_step == TxStep::ReadOnly && !env.read_only {
-                read_only = Env { read_only: true, ..*env };
+                read_only = Env { own_read_only: true, ..*env };
                 &read_only
             } else {
                 env
@@ -1412,9 +1418,9 @@ async fn settle(
             }
             tx.set_block(false, env.wraps());
             (tx.aborted, tx.unsure) = (false, false);
-            if opened == Some(true) {
-                let _ = env.events.send(DbEvent::ManualRolledBack { id, index });
-            }
+            // Rolled back; when asking whether the block was open failed, it may have been, and
+            // whatever was there is gone now: said as rolled back, never as kept.
+            let _ = env.events.send(DbEvent::ManualRolledBack { id, index });
             env.report(tx, false);
         }
         Guard::Savepoint(n) => {
@@ -1523,6 +1529,12 @@ async fn statement<'a>(
     // read-write before its first query, whatever `SET TRANSACTION READ ONLY` said.
     if env.read_only && risk::classify(sql).read_write {
         reply.fail(DbError::ReadWriteRefused, false);
+        return Ok(None);
+    }
+    // A plain read of manual commit that asks for read-write is none (the app's classifier and
+    // the session's disagree): not sent, rather than failing in its read-only transaction.
+    if env.own_read_only && risk::classify(sql).read_write {
+        reply.fail(DbError::NotAPlainRead, false);
         return Ok(None);
     }
     // The session's own savepoints, in a block opened for manual commit: never the user's.
@@ -1936,7 +1948,7 @@ async fn portal<'a>(
         client.transaction_in_block_with(tx.take_first(env))
     } else if opened {
         client.transaction_opened()
-    } else if env.wraps() {
+    } else if env.wraps() || env.own_read_only {
         client.transaction_pipelined_with(env.begin())
     } else {
         client.transaction_pipelined()
