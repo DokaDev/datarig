@@ -153,11 +153,14 @@ fn the_fields_follow_the_format_and_the_file_name_its_extension() {
     assert!(made.starts_with("~/Downloads/console 1-") && made.ends_with(".csv"), "{made}");
     // Scope: no selection, no Selection.
     assert_eq!(h.app.overlays.export_form().unwrap().scopes.len(), 2);
-    // `→` on the format: TSV (its header only), then JSON past the formats still to come.
+    // `→` on the format: TSV (its header only), Excel, then JSON past the formats still to come.
     tab_to(&mut h, Format);
     h.key(KeyCode::Right);
     assert_eq!(fields(&h), vec![Scope, Format, Header, Path, Export, Cancel]);
     assert!(path_text(&h).ends_with(".tsv"));
+    h.key(KeyCode::Right);
+    assert_eq!(fields(&h), vec![Scope, Format, Null, Path, Export, Cancel], "Excel: its NULL text");
+    assert_eq!(path_text(&h), made.replace(".csv", ".xlsx"));
     h.key(KeyCode::Right);
     assert_eq!(fields(&h), vec![Scope, Format, Path, Export, Cancel]);
     assert_eq!(path_text(&h), made.replace(".csv", ".json"));
@@ -260,6 +263,8 @@ fn export_writes_the_rows_fetched_as_the_dialog_says() {
     h.key(KeyCode::Right);
     h.key(KeyCode::Right);
     tab_to(&mut h, ExportField::Format);
+    // TSV, Excel, JSON.
+    h.key(KeyCode::Right);
     h.key(KeyCode::Right);
     h.key(KeyCode::Right);
     tab_to(&mut h, ExportField::Path);

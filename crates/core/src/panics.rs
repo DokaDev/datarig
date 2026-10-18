@@ -43,3 +43,19 @@ impl<F: Future> Future for Caught<F> {
         self.inner.as_mut().poll(cx)
     }
 }
+
+/// `f`, run with [`caught_here`] true and its panic caught: a library that panics where it
+/// could fail (rust_xlsxwriter writing its temporary file on a full disk) fails instead, and
+/// nothing is printed over the screen.
+pub fn catch<R>(f: impl FnOnce() -> R) -> std::thread::Result<R> {
+    /// Ends the scope, also when `f` unwinds.
+    struct Scope;
+    impl Drop for Scope {
+        fn drop(&mut self) {
+            CAUGHT.with(|c| c.set(c.get().saturating_sub(1)));
+        }
+    }
+    CAUGHT.with(|c| c.set(c.get() + 1));
+    let _scope = Scope;
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f))
+}
