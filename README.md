@@ -1021,6 +1021,7 @@ The workspace layout:
 | `crates/bench` | benchmarks and the CI performance budgets |
 | `vendor/tokio-postgres` | a patched tokio-postgres (per-column result formats, pipelining); see [vendor/README.md](vendor/README.md) |
 | `vendor/mysql_async` | a patched mysql_async (connects over a stream the driver opens, so a tunnel needs no local port; never asks for multi-statements or `LOAD DATA LOCAL`); see [vendor/README.md](vendor/README.md) |
+| `vendor/ssh-key` | a patched ssh-key (reads OpenSSH ECDSA keys whose scalar has leading zero bytes); see [vendor/README.md](vendor/README.md) |
 | `locales` | the UI text catalogs (`en.toml`, `ko.toml`) |
 | `dev` | Docker Compose with PostgreSQL, MySQL, PgBouncer and an SSH bastion for the tests |
 | `docs` | [architecture](docs/architecture.md), [key bindings](docs/keybindings.md), [performance](docs/perf.md) |
@@ -1078,8 +1079,9 @@ at your option. Unless you explicitly state otherwise, any contribution intentio
 for inclusion in datarig by you, as defined in the Apache-2.0 license, shall be dual licensed as
 above, without any additional terms or conditions.
 
-Third-party code: `vendor/tokio-postgres` keeps its own MIT/Apache-2.0 licenses, and the C code
-built in through `pg_query` (libpg_query, PostgreSQL, protobuf-c, xxHash) has its notices in
-`vendor/licenses/pg_query/`. `scripts/third-party-notices.sh` (cargo-about) writes
-`THIRD-PARTY-NOTICES.html` with the licenses of every crate in the binary; CI builds it as an
-artifact. `cargo deny check` keeps the dependencies to permissive licenses.
+Third-party code: `vendor/tokio-postgres`, `vendor/mysql_async` and `vendor/ssh-key` keep their
+own MIT/Apache-2.0 licenses, and the C code built in through `pg_query` (libpg_query,
+PostgreSQL, protobuf-c, xxHash) has its notices in `vendor/licenses/pg_query/`.
+`scripts/third-party-notices.sh` (cargo-about) writes `THIRD-PARTY-NOTICES.html` with the
+licenses of every crate in the binary; CI builds it as an artifact. `cargo deny check` keeps the
+dependencies to permissive licenses.
