@@ -32,7 +32,10 @@ use datarig_core::sql::risk::{Class, Danger, NoWhere, ReadOnlyBlock, Why};
 pub struct Dangerous {
     /// Its place in the run (from 0).
     pub index: usize,
-    pub why: Why,
+    /// Why its risk asks (`None`: only what it does to the open transaction asks).
+    pub why: Option<Why>,
+    /// What it does to the open transaction that asks ([`super::tx::TxReason`]).
+    pub tx: Option<super::tx::TxReason>,
     /// Why it changes every row (or may), for an `UPDATE` or `DELETE`.
     pub no_where: Option<NoWhere>,
     /// An `EXPLAIN ANALYZE`: it runs, then it is rolled back.
@@ -127,7 +130,7 @@ impl App {
     /// The classifier of tab `tab`, with the statements its session has prepared (none without
     /// a session): each run's statements are checked in order against a copy, so an `EXPLAIN`
     /// or `EXECUTE` sees what the run prepared before it.
-    fn classifier(&self, tab: TabId) -> Classifier {
+    pub(super) fn classifier(&self, tab: TabId) -> Classifier {
         // A tab whose language was not pushed when its binding changed would be checked by the
         // rules of another language.
         debug_assert!(self.tabs.get(tab).is_none_or(|t| {
@@ -154,7 +157,8 @@ impl App {
                 let why = r.confirm(writes)?;
                 Some(Dangerous {
                     index,
-                    why,
+                    why: Some(why),
+                    tx: None,
                     no_where: r.no_where,
                     explain: r.rolls_back(),
                     target: r.target,
@@ -222,9 +226,53 @@ impl App {
     }
 }
 
-/// Why a statement asks, in words: what it does, and what makes it worse.
+/// `items` (the statements of `statements` that ask for their risk, in order) with what the
+/// run does to the open transaction that asks (`reasons`, by statement): one item per
+/// statement, in order.
+pub(super) fn with_tx_reasons(
+    mut items: Vec<Dangerous>,
+    statements: &[String],
+    reasons: Vec<(usize, super::tx::TxReason)>,
+) -> Vec<Dangerous> {
+    for (index, reason) in reasons {
+        match items.iter_mut().find(|d| d.index == index) {
+            Some(d) => d.tx = Some(reason),
+            None => items.push(Dangerous {
+                index,
+                why: None,
+                tx: Some(reason),
+                no_where: None,
+                explain: false,
+                target: None,
+                sql: statements.get(index).cloned().unwrap_or_default(),
+            }),
+        }
+    }
+    items.sort_by_key(|d| d.index);
+    items
+}
+
+/// Why a statement asks, in words: what it does, and what makes it worse, then what it does to
+/// the open transaction.
 pub(crate) fn why_text(i18n: &I18n, d: &Dangerous) -> String {
-    let what = match d.why {
+    let mut parts = Vec::new();
+    if let Some(why) = d.why {
+        parts.push(risk_text(i18n, d, why));
+    }
+    match d.tx {
+        Some(super::tx::TxReason::OutsideTx) => parts.push(i18n.label(Label::SafetyWhyOutsideTx).to_string()),
+        Some(super::tx::TxReason::ImplicitCommit { statements, rows }) => {
+            let rows = i18n.msg(&Msg::TxRows { count: rows }).to_string();
+            parts.push(i18n.msg(&Msg::SafetyWhyImplicitCommit { count: statements, rows }).to_string());
+        }
+        None => {}
+    }
+    parts.join(" · ")
+}
+
+/// Why a statement's risk `why` asks, in words: what it does, and what makes it worse.
+fn risk_text(i18n: &I18n, d: &Dangerous, why: Why) -> String {
+    let what = match why {
         Why::Danger(Danger::Drop) => Label::SafetyWhyDrop,
         Why::Danger(Danger::Truncate) => Label::SafetyWhyTruncate,
         Why::Danger(Danger::DeleteAll) => Label::SafetyWhyDeleteAll,
@@ -257,7 +305,7 @@ pub(crate) fn why_text(i18n: &I18n, d: &Dangerous) -> String {
         Why::Class(_) => Label::SafetyWhyUnknown,
     };
     let mut parts = vec![i18n.label(what).to_string()];
-    if let Why::Danger(Danger::DeleteAll | Danger::UpdateAll) = d.why {
+    if let Why::Danger(Danger::DeleteAll | Danger::UpdateAll) = why {
         let how = match d.no_where {
             Some(NoWhere::AlwaysTrue) => Label::SafetyWhyAlwaysTrue,
             Some(NoWhere::NoColumn) => Label::SafetyWhyNoColumn,

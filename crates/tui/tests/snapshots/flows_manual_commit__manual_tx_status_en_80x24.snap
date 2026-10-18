@@ -1,0 +1,29 @@
+---
+source: crates/tui/tests/flows_manual_commit.rs
+assertion_line: 371
+expression: "h.draw(80, 24).backend()"
+---
+"╭ Explorer ────────────╮ 1 console 1 ◆ ×                                        "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1       ││ local-pg / datarig  127.0.0.1:55432 · stg            │"
+"│  ▾ ●   local-pg      ││  1▎DELETE FROM shop.orders WHERE id = 7  ✓ 1 row aff…│"
+"│    ▾ datarig default ││                                                      │"
+"│      ▸ public        ││                                                      │"
+"│      ▸ shop          ││                                                      │"
+"│      Loading…        ││                                                      │"
+"│▾ Environments 2      ││                                                      │"
+"│    ○ Default rules (…│╰──────────────────────────────────────────────────────╯"
+"│  ▸ ○ stg  manual com…│╭ Results ─────────────────────────────────────────────╮"
+"│    ○ plain  standard…││ Result 1  Chart  [Messages]  · earlier run           │"
+"│                      ││ 1  DELETE FROM shop.orders WH…  1 row affected · 3ms │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" NORMAL  local-pg │ TX open · 2 changes · 4 rows · 4:12 │ 1 row affec… · 3ms EN "

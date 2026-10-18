@@ -61,11 +61,15 @@ pub(crate) fn draw_status(app: &mut App, area: Rect, buf: &mut Buffer) {
     let read_only =
         app.conn().is_some_and(|c| app.read_only(c.id)).then(|| crate::app::environments::read_only_badge(app));
     let exec = &app.tab().exec;
-    let tx = exec.user_tx().then(|| {
-        let (label, color) =
-            if exec.tx_aborted { (Label::StatusTxAborted, th.error) } else { (Label::StatusTxOpen, th.accent_warm) };
-        (app.i18n.label(label).to_string(), color)
+    // The open transaction: what it did and how long it has been open, or that it failed.
+    let tx = exec.user_tx().then(|| match app.tx_status() {
+        _ if exec.tx_aborted => (app.i18n.label(Label::StatusTxAborted).to_string(), th.error),
+        Some(text) => (text, th.accent_warm),
+        None => (app.i18n.label(Label::StatusTxOpen).to_string(), th.accent_warm),
     });
+    // The user turned autocommit off for the session (MySQL): every statement opens a
+    // transaction.
+    let autocommit = exec.autocommit_off.then(|| app.i18n.label(Label::StatusAutocommitOff).to_string());
     let lang = lang_segment(app);
     let hints = app.hints();
     let status = app.status_line();
@@ -117,6 +121,10 @@ pub(crate) fn draw_status(app: &mut App, area: Rect, buf: &mut Buffer) {
     if let Some((tx, color)) = tx {
         push_sep(&mut segs);
         segs.push((tx, Style::new().fg(color).bg(th.surface).add_modifier(Modifier::BOLD)));
+    }
+    if let Some(text) = autocommit {
+        push_sep(&mut segs);
+        segs.push((text, Style::new().fg(th.warning).bg(th.surface).add_modifier(Modifier::BOLD)));
     }
     let mut msg_segs: Vec<(String, Style)> = Vec::new();
     if let Some((text, level, running)) = status {

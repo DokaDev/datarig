@@ -69,6 +69,7 @@ mod tab_ops;
 pub mod tabs;
 pub mod themes;
 pub mod tunnel;
+pub mod tx;
 mod update;
 pub mod yank_flash;
 
@@ -404,6 +405,9 @@ pub type Clock = Arc<dyn Fn() -> Instant + Send + Sync>;
 /// fixed one).
 pub type TimeOfDay = Arc<dyn Fn() -> (u32, u32) + Send + Sync>;
 
+/// The wall clock (`SystemTime::now`; tests pass their own).
+pub type WallClock = Arc<dyn Fn() -> std::time::SystemTime + Send + Sync>;
+
 /// The local time of day by the system's clock and time zone.
 fn local_time_of_day() -> (u32, u32) {
     use chrono::Timelike;
@@ -585,6 +589,7 @@ pub struct App {
     pub policies: Policies,
     clock: Clock,
     time_of_day: TimeOfDay,
+    wall: WallClock,
     pub secrets: Secrets,
     /// Dialogs on top of the workspace (command line, profile form, password prompt, …).
     pub overlays: Overlays,
@@ -736,6 +741,9 @@ pub struct App {
     pub(crate) last_save_folder: Option<String>,
     /// The database and schema `:use` named for a tab, while the switch waits for its confirm.
     pending_context: Option<(TabId, datarig_core::driver::SessionContext)>,
+    /// A statement to run once outside a transaction if the user says so (`tx::offer_outside`):
+    /// its tab, the tab's binding then, and its text.
+    pending_outside: Option<(TabId, u64, String)>,
     /// A `:use` whose name a list read earlier does not have, while the server is asked again.
     pending_use: Option<cmdline::PendingUse>,
     /// A press on a tab of the tab bar, and the drag of that tab that may follow.
@@ -949,6 +957,7 @@ impl App {
             policies: cfg.policies.clone(),
             clock: Arc::new(Instant::now),
             time_of_day: Arc::new(local_time_of_day),
+            wall: Arc::new(std::time::SystemTime::now),
             secrets: Secrets::new(Arc::new(MemoryStore::new())),
             overlays: Overlays::default(),
             conn_test: None,
@@ -1029,6 +1038,7 @@ impl App {
             detail_picked: None,
             last_top: None,
             pending_context: None,
+            pending_outside: None,
             pending_use: None,
             last_save_folder: None,
         };
@@ -1167,6 +1177,11 @@ impl App {
     /// Read the local time of day from `time_of_day` (tests pass a fixed one).
     pub fn set_time_of_day(&mut self, time_of_day: TimeOfDay) {
         self.time_of_day = time_of_day;
+    }
+
+    /// Read the wall clock from `wall` (tests pass one that moves with their fake clock).
+    pub fn set_wall_clock(&mut self, wall: WallClock) {
+        self.wall = wall;
     }
 
     /// The local time of day as a run's hint shows it (`14:03`).
@@ -1628,6 +1643,8 @@ impl App {
             || self.conn_test.as_ref().is_some_and(|t| t.state == TestState::Running)
             || self.save_pending()
             || self.conns.auxes().any(|a| self.aux_idle(a))
+            // The open transaction's time in the status bar (the active tab's only).
+            || self.tx_tick_due(self.now()).is_some()
     }
 
     /// Aux session `a` is open and no tab works in its database: it closes
@@ -1643,8 +1660,8 @@ impl App {
     /// quit grace): [`FINE_TICK`] from `now`, or the next frame of a copy's flash or of sliding
     /// tabs when that is sooner. Otherwise the earliest deadline: a tab's or the workspace's
     /// autosave, an open portal's idle close, the next frame of a copy's flash (its end when it
-    /// cannot fade) or of sliding tabs, and the next second the active tab's countdown
-    /// shows. `None`: nothing waits.
+    /// cannot fade) or of sliding tabs, the next second the active tab's countdown shows, and
+    /// the next second of the active tab's open transaction's time. `None`: nothing waits.
     pub fn next_tick(&self, now: Instant) -> Option<Instant> {
         if !self.needs_tick() {
             return None;
@@ -1688,6 +1705,9 @@ impl App {
         }
         for a in self.conns.auxes().filter(|a| self.aux_idle(a)) {
             at(a.used + conn::AUX_IDLE);
+        }
+        if let Some(due) = self.tx_tick_due(now) {
+            at(due);
         }
         // Never sooner than a fine tick, never in the past.
         next.map(|n| n.max(now + Duration::from_millis(1)))

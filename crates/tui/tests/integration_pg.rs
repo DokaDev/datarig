@@ -241,6 +241,27 @@ impl Observer {
         }
     }
 
+    /// Run `sql`, which returns no rows, to its end.
+    async fn exec(&mut self, sql: &str) {
+        use datarig_core::driver::{DbCommand, DbEvent};
+        self.seq += 1;
+        let id = self.seq;
+        self.session.send(DbCommand::Execute {
+            id,
+            statements: vec![sql.to_string()],
+            paging: PagingMode::Hold,
+            tx: TxRule::Auto,
+        });
+        loop {
+            match tokio::time::timeout(Duration::from_secs(10), self.rx.recv()).await {
+                Ok(Some(DbEvent::Done { id: i, .. })) if i == id => return,
+                Ok(Some(DbEvent::Failed { id: i, error, .. })) if i == id => panic!("observer: {error:?}"),
+                Ok(Some(_)) => {}
+                other => panic!("observer: {other:?}"),
+            }
+        }
+    }
+
     /// Connections of the app instance `tag`, as `role count` lines.
     async fn connections(&mut self, tag: &str) -> Vec<String> {
         self.column(&format!(
@@ -2008,4 +2029,75 @@ async fn a_cancelled_update_in_a_transaction_aborts_the_block_and_keeps_the_sess
         app.handle_event(Event::Key(KeyEvent::new(KeyCode::Char('y'), KeyModifiers::NONE)));
     }
     pump(&mut app, &mut rx, 10, |a| !a.tab().exec.tx_open).await;
+}
+
+/// Manual commit on the real server: a plain read before the first write leaves the session
+/// idle (no transaction); the write opens one that other sessions cannot see into, the status
+/// bar counts it, and `tx.commit` makes it visible; `tx.rollback` undoes the next one.
+#[tokio::test(flavor = "multi_thread")]
+async fn manual_commit_keeps_a_write_to_itself_until_it_is_committed() {
+    use datarig_core::policy::{CommitRule, Policy};
+    use datarig_tui::app::action::Action;
+    let Some(url) = pg_url("manual_commit_keeps_a_write_to_itself_until_it_is_committed") else { return };
+    let pw = datarig_core::profile::dsn::parse(&url).unwrap().password.unwrap_or_default();
+    let tag = format!("manual{}", std::process::id());
+    let table = format!("public.it_manual_{tag}");
+    let _guard = pg_clean::TableGuard::new(&url, &[&table]);
+    let mut obs = Observer::open(&url).await;
+    obs.exec(&format!("CREATE TABLE {table} (x int)")).await;
+    let mut p = profile(&url);
+    p.policy = Some("it-manual".into());
+    let store = Arc::new(MemoryStore::new());
+    store.set(&p.id.account(), &pw).unwrap();
+    let mut cfg = Config { connections: vec![p], ..Config::default() };
+    cfg.policies.insert("it-manual", Policy { commit: CommitRule::Manual, ..Policy::default() });
+    let mut app = App::new(&cfg, None, Lang::En);
+    app.set_secret_store(store as Arc<dyn SecretStore>);
+    app.set_instance_tag(&tag);
+    let (tx, mut rx) = unbounded_channel();
+    app.start(tx, Startup::Normal);
+    let id = first(&app);
+    enter(&mut app);
+    pump(&mut app, &mut rx, 10, |a| a.conns.is_connected(id)).await;
+    let state = format!("SELECT state FROM pg_stat_activity WHERE application_name = 'datarig-q-{tag}'");
+    let count = format!("SELECT count(*) FROM {table}");
+
+    // A plain read: no transaction stays.
+    app.run(vec![format!("SELECT * FROM {table}")]);
+    pump(&mut app, &mut rx, 10, |a| idle(a, 0) && a.tab().exec.session.is_some()).await;
+    assert!(!app.tab().exec.user_tx());
+    assert_eq!(obs.column(&state).await, ["idle"]);
+    // The write opens the transaction, kept from other sessions.
+    app.run(vec![format!("INSERT INTO {table} VALUES (1), (2)")]);
+    pump(&mut app, &mut rx, 10, |a| idle(a, 0) && a.tab().exec.user_tx()).await;
+    let tx = app.tab().exec.tx.clone().expect("the open transaction");
+    assert!(tx.manual);
+    assert_eq!((tx.changes, tx.rows), (1, 2));
+    assert!(app.tx_status().is_some_and(|s| s.starts_with("TX open · 1 change · 2 rows · ")), "{:?}", app.tx_status());
+    assert_eq!(obs.column(&state).await, ["idle in transaction"]);
+    assert_eq!(obs.column(&count).await, ["0"], "not visible to another session");
+    // Its idle limit is the environment's, for this transaction.
+    app.run(vec!["SHOW idle_in_transaction_session_timeout".into()]);
+    pump(&mut app, &mut rx, 10, |a| idle(a, 0) && cell(a, 0).is_some()).await;
+    assert_eq!(cell(&app, 0).as_deref(), Some("30min"));
+    // Committed: visible.
+    app.dispatch(Action::TxCommit);
+    pump(&mut app, &mut rx, 10, |a| !a.tab_busy(a.tab().id) && !a.tab().exec.user_tx()).await;
+    assert!(
+        matches!(app.status.as_ref().map(|n| &n.msg), Some(datarig_core::i18n::Msg::TxCommitted { count: 1, .. })),
+        "{:?}",
+        app.status
+    );
+    assert_eq!(obs.column(&count).await, ["2"]);
+    assert_eq!(obs.column(&state).await, ["idle"]);
+    // The next write, rolled back: gone.
+    app.run(vec![format!("DELETE FROM {table} WHERE x > 0")]);
+    pump(&mut app, &mut rx, 10, |a| idle(a, 0) && a.tab().exec.user_tx()).await;
+    app.dispatch(Action::TxRollback);
+    pump(&mut app, &mut rx, 10, |a| !a.tab_busy(a.tab().id) && !a.tab().exec.user_tx()).await;
+    assert_eq!(obs.column(&count).await, ["2"]);
+    // The idle limit went with the transaction: the session has the server's setting again.
+    app.run(vec!["SHOW idle_in_transaction_session_timeout".into()]);
+    pump(&mut app, &mut rx, 10, |a| idle(a, 0) && cell(a, 0).as_deref() != Some("30min")).await;
+    assert_eq!(cell(&app, 0).as_deref(), Some("0"), "set for the transaction only");
 }

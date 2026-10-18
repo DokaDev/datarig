@@ -1,5 +1,6 @@
 ---
 source: crates/tui/tests/ui_snapshots.rs
+assertion_line: 1059
 expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ◆ ×                                        "
@@ -25,4 +26,4 @@ expression: backend
 "│                      ││                                                      │"
 "│                      ││                                                      │"
 "╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
-" NORMAL  local-pg │ TX open │ Connected to local-pg                          EN "
+" NORMAL  local-pg │ TX open · 0 changes · 0 rows · 0:00 │ Connected to loca… EN "

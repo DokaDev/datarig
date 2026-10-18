@@ -1,5 +1,6 @@
 ---
 source: crates/tui/tests/ui_snapshots.rs
+assertion_line: 1094
 expression: backend
 ---
 "╭ Explorer ────────────────────────────╮ 1 console 1 ×                                                                                                          "
@@ -40,8 +41,8 @@ expression: backend
 "│                                      ││                                                                                                                      │"
 "│                                      ││                                                                                                                      │"
 "╭ Space — Leader ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮"
-"│ ,      Settings           <      Narrow explorer    b      Toggle explorer    r      +Results           z      Toggle pane zoom                              │"
-"│ /      Commands           >      Widen explorer     c      +Connection        s      +Saved queries                                                          │"
+"│ ,      Settings           <      Narrow explorer    b      Toggle explorer    r      +Results           x      +Transaction                                  │"
+"│ /      Commands           >      Widen explorer     c      +Connection        s      +Saved queries     z      Toggle pane zoom                              │"
 "│ 1…9    Go to tab N        Space  Action menu        e      +Editor            t      +Tabs                                                                   │"
 "│──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────│"
 "│ ?      Keys on this screen                                                                                                                                   │"

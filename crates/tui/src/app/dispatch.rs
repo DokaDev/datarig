@@ -30,6 +30,9 @@ impl App {
                 Action::SetTabConnection | Action::SetTabContext if ddl => {
                     self.flash(Notice::new(Label::DdlNoRebind, Level::Info))
                 }
+                // No transaction, something runs, or it failed: said why.
+                Action::TxCommit | Action::TxRollback if !self.tabs.is_empty() => self.end_tx(a == Action::TxCommit),
+                Action::TxSummary if !self.tabs.is_empty() => self.tx_summary(),
                 // Another result: said, as a key that does nothing would leave the user guessing.
                 Action::ExplainAsPlan
                     if !self.tabs.is_empty() && self.tab().is_query() && self.tab_explains(self.tab().id) =>
@@ -52,6 +55,9 @@ impl App {
                 }
             }
             Action::CancelQuery => self.cancel(),
+            Action::TxCommit => self.end_tx(true),
+            Action::TxRollback => self.end_tx(false),
+            Action::TxSummary => self.tx_summary(),
             Action::OpenCommands => self.toggle_commands(),
             Action::ShowCompletions => {
                 if self.focus == Focus::Editor && self.tab().editor.mode == Mode::Insert {
@@ -404,6 +410,7 @@ impl App {
                     ConfirmAction::KeychainSecurityTool => self.keychain_access_changed(KeychainAccess::SecurityTool),
                     ConfirmAction::ExportStart => self.export_answered(true, false),
                     ConfirmAction::ExportReplace => self.export_answered(true, true),
+                    ConfirmAction::RunOutsideTx(_) => self.outside_answered(true),
                     ConfirmAction::ScriptConflict(_) | ConfirmAction::KeychainOffer => {}
                 }
             }
@@ -427,6 +434,9 @@ impl App {
                 }
                 if matches!(action, ConfirmAction::ExportStart | ConfirmAction::ExportReplace) {
                     self.export_answered(false, action == ConfirmAction::ExportReplace);
+                }
+                if matches!(action, ConfirmAction::RunOutsideTx(_)) {
+                    self.outside_answered(false);
                 }
             }
             _ => {}
@@ -466,9 +476,7 @@ impl App {
         }
         for t in self.tabs.iter_mut() {
             t.exec.running = None;
-            t.exec.tx_open = false;
-            // The server rolls the user's transaction back when its session ends.
-            t.block_ended(true);
+            t.tx_reset();
         }
         self.quit = true;
     }

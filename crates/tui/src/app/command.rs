@@ -76,6 +76,11 @@ pub enum Command {
     Theme,
     /// `:export [format] [all|fetched|selection] [path]`: export the result to a file.
     Export,
+    /// `:commit`, `:rollback` (`:rb`): end the active tab's open transaction.
+    Commit,
+    Rollback,
+    /// `:tx`: what the active tab's open transaction did.
+    Tx,
 }
 
 /// The type of a command's argument (it decides the completions).
@@ -338,6 +343,30 @@ pub const COMMANDS: &[CommandSpec] = &[
         arg: Some(ArgKind::Export),
         label: Label::CommandExport,
         action: Some(Action::Export),
+    },
+    CommandSpec {
+        command: Command::Commit,
+        name: "commit",
+        aliases: &[],
+        arg: None,
+        label: Label::ActionTxCommit,
+        action: Some(Action::TxCommit),
+    },
+    CommandSpec {
+        command: Command::Rollback,
+        name: "rollback",
+        aliases: &["rb"],
+        arg: None,
+        label: Label::ActionTxRollback,
+        action: Some(Action::TxRollback),
+    },
+    CommandSpec {
+        command: Command::Tx,
+        name: "tx",
+        aliases: &[],
+        arg: None,
+        label: Label::ActionTxSummary,
+        action: Some(Action::TxSummary),
     },
 ];
 

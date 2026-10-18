@@ -114,6 +114,9 @@ const QUERY_MENU: &[Action] = &[
     Action::ScriptSaveAs,
     Action::SetTabConnection,
     Action::SetTabContext,
+    Action::TxCommit,
+    Action::TxRollback,
+    Action::TxSummary,
     Action::Panel(PanelAction::Toggle),
 ];
 
@@ -129,6 +132,9 @@ const TAB_MENU: &[Action] = &[
     Action::ScriptDelete,
     Action::SetTabConnection,
     Action::SetTabContext,
+    Action::TxCommit,
+    Action::TxRollback,
+    Action::TxSummary,
     Action::ReconnectCurrent,
     Action::DisconnectCurrent,
 ];

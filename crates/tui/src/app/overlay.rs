@@ -162,6 +162,9 @@ pub enum ConfirmAction {
     ExportStart,
     /// Replace the file an export would write. Keeping it is the default.
     ExportReplace,
+    /// Run the procedure that commits by itself once outside a transaction in tab `tab` (the
+    /// statement waits in `App::pending_outside`). Cancel is the default.
+    RunOutsideTx(super::TabId),
 }
 
 /// A yes/no question: `y` yes, `n`/`Esc` no; `Enter` no when the answer would lose something
@@ -223,7 +226,9 @@ impl Confirm {
             ConfirmAction::Copy => (Label::DialogButtonCancel, Label::DialogButtonCopy),
             ConfirmAction::FetchThenCopy => (Label::DialogButtonCancel, Label::DialogButtonFetchCopy),
             ConfirmAction::TrustHostKey => (Label::DialogButtonCancel, Label::DialogButtonTrust),
-            ConfirmAction::ExplainAgain => (Label::DialogButtonCancel, Label::SafetyConfirmRun),
+            ConfirmAction::ExplainAgain | ConfirmAction::RunOutsideTx(_) => {
+                (Label::DialogButtonCancel, Label::SafetyConfirmRun)
+            }
             ConfirmAction::KeychainSecurityTool => (Label::DialogButtonCancel, Label::DialogButtonTurnOn),
             ConfirmAction::ExportStart => (Label::DialogButtonCancel, Label::DialogButtonExport),
             ConfirmAction::ExportReplace => (Label::DialogButtonKeep, Label::DialogButtonReplace),

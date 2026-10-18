@@ -2014,8 +2014,8 @@ fn which_key_appears_after_the_delay_and_steps_back() {
 #[test]
 fn unknown_leader_keys_are_reported() {
     let mut h = Harness::connected(Lang::En);
-    h.keys(" x");
-    assert!(h.status(160, 45).contains("Space x: no binding"), "{}", h.status(160, 45));
+    h.keys(" j");
+    assert!(h.status(160, 45).contains("Space j: no binding"), "{}", h.status(160, 45));
     // From the popup: it closes with the same notice.
     h.keys(" ");
     h.settle();

@@ -88,9 +88,7 @@ impl App {
         };
         t.exec.resuming = None;
         t.exec.want_page = None;
-        t.exec.tx_open = false;
-        // The server rolls the user's transaction back when its session ends.
-        t.block_ended(true);
+        t.tx_reset();
         t.exec.lost_tx = false;
         t.exec.paging = Paging::None;
         t.exec.context = None;

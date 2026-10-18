@@ -72,6 +72,11 @@ pub enum Action {
     /// Disconnect / reconnect the active tab's profile.
     DisconnectCurrent,
     ReconnectCurrent,
+    /// Commit / roll back the active tab's open transaction.
+    TxCommit,
+    TxRollback,
+    /// What the active tab's open transaction did.
+    TxSummary,
     /// A new console tab on the selected profile.
     OpenConsole,
     /// Pick another connection for the active tab.
@@ -305,6 +310,16 @@ fn query_tab_profile(a: &App) -> bool {
 }
 
 /// The active tab runs on a profile.
+/// The active tab's transaction can be committed or rolled back now.
+fn tx_endable(a: &App) -> bool {
+    in_workspace(a) && a.tx_endable()
+}
+
+/// A transaction is open in the active tab.
+fn tx_open(a: &App) -> bool {
+    in_workspace(a) && has_tab(a) && a.tab().exec.user_tx()
+}
+
 fn tab_profile(a: &App) -> bool {
     has_tab(a) && a.tab().profile.is_some()
 }
@@ -553,6 +568,9 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::TestCurrent, "conn.test_current", Label::ActionConnTestCurrent, tab_profile),
     act(Action::DisconnectCurrent, "conn.disconnect_current", Label::ActionConnDisconnectCurrent, tab_profile),
     act(Action::ReconnectCurrent, "conn.reconnect_current", Label::ActionConnReconnectCurrent, tab_profile),
+    act(Action::TxCommit, "tx.commit", Label::ActionTxCommit, tx_endable),
+    act(Action::TxRollback, "tx.rollback", Label::ActionTxRollback, tx_endable),
+    act(Action::TxSummary, "tx.summary", Label::ActionTxSummary, tx_open),
     act(Action::SetTabConnection, "tab.set_connection", Label::ActionTabSetConnection, query_tab),
     act(Action::SetTabContext, "tab.set_context", Label::ActionTabSetContext, query_tab_profile),
     act(Action::SetLanguage(LangSetting::En), "ui.language.en", Label::ActionUiLanguageEn, anywhere),

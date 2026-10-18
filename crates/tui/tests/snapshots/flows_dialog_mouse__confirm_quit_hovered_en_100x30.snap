@@ -1,5 +1,6 @@
 ---
 source: crates/tui/tests/flows_dialog_mouse.rs
+assertion_line: 279
 expression: "h.draw(W, H).backend()"
 ---
 "╭ Explorer ─────────────╮ 1 console 1 ◆ ×                                                           "
@@ -31,4 +32,4 @@ expression: "h.draw(W, H).backend()"
 "│                       ││                                                                         │"
 "│                       ││                                                                         │"
 "╰───────────────────────╯╰─────────────────────────────────────────────────────────────────────────╯"
-" NORMAL  local-pg │ TX open │ Connected to local-pg                                              EN "
+" NORMAL  local-pg │ TX open · 0 changes · 0 rows · 0:00 │ Connected to local-pg                  EN "

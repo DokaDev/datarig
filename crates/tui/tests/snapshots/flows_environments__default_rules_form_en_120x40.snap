@@ -1,5 +1,6 @@
 ---
 source: crates/tui/tests/flows_environments.rs
+assertion_line: 541
 expression: backend
 ---
 "╭ Explorer ──────────────────╮╭ Workspace ─────────────────────────────────────────────────────────────────────────────╮"
@@ -17,12 +18,12 @@ expression: backend
 "│    ● sta│                                                                                                  │         │"
 "│  ▾ ● pro│ Read-only            ‹ off ›  ←/→ change · only reads run; the server refuses writes too         │         │"
 "│      ○  │ Confirm              ‹dangerous statements only (default)› before every write   ←/→ change       │         │"
+"│         │ Commit               ‹automatic (default)› manual: commit yourself   reads run without a transa… │         │"
+"│         │ Idle warning         5m                                  warn about an idle open transaction: 5… │         │"
+"│         │ Idle limit           30m                                 PostgreSQL only: the server rolls back… │         │"
 "│         │ Paging               ‹no hold› hold   hold keeps a result's transaction open while you page      │         │"
 "│         │ Paging idle timeout  30s                                 with hold: 30s, 5m, 1h or off           │         │"
 "│         │ Spill limit                                              empty: the config's · 512MB, 2GB or off │         │"
-"│         │                                                                                                  │         │"
-"│         │                                                                                                  │         │"
-"│         │                                                                                                  │         │"
 "│         │                                                                                                  │         │"
 "│         │ Used by              分析-replica, v6                                                            │         │" Hidden by multi-width symbols: [(34, " "), (36, " ")]
 "│         │                                                                                                  │         │"

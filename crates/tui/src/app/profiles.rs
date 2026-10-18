@@ -14,7 +14,7 @@
 
 use crate::widgets::text_input::{InputResult, TextInput};
 use datarig_core::i18n::{Label, Msg};
-use datarig_core::policy::{self, Confirm, Environment, EnvironmentId, PagingMode, Policy};
+use datarig_core::policy::{self, CommitRule, Confirm, Environment, EnvironmentId, PagingMode, Policy};
 use datarig_core::profile::color::{self, ProfileColor};
 use datarig_core::profile::dsn::{self, Dsn, DsnError, Scheme};
 use datarig_core::profile::ssh::{SshAuth, SshSettings};
@@ -103,11 +103,15 @@ pub enum Field {
     SshEnv,
     SshKeepalive,
     SshTimeout,
-    /// An environment's badge, read-only switch, which statements ask, paging, idle timeout
-    /// and spill limit (the environment form).
+    /// An environment's badge, read-only switch, which statements ask, how it commits, how long
+    /// an open transaction may be idle (the app's warning, the server's limit), paging, idle
+    /// timeout and spill limit (the environment form).
     EnvBadge,
     EnvReadOnly,
     EnvConfirm,
+    EnvCommit,
+    EnvTxWarning,
+    EnvTxTimeout,
     EnvPaging,
     EnvIdle,
     EnvSpill,
@@ -144,12 +148,15 @@ pub const ADVANCED: [Field; 11] = [
     Field::Folder,
 ];
 /// The environment form's fields, in order.
-pub const ENVIRONMENT: [Field; 8] = [
+pub const ENVIRONMENT: [Field; 11] = [
     Field::Name,
     Field::Color,
     Field::EnvBadge,
     Field::EnvReadOnly,
     Field::EnvConfirm,
+    Field::EnvCommit,
+    Field::EnvTxWarning,
+    Field::EnvTxTimeout,
     Field::EnvPaging,
     Field::EnvIdle,
     Field::EnvSpill,
@@ -278,6 +285,9 @@ impl Field {
             Field::EnvBadge => Label::FormFieldBadge,
             Field::EnvReadOnly => Label::FormFieldReadOnly,
             Field::EnvConfirm => Label::FormFieldConfirm,
+            Field::EnvCommit => Label::FormFieldCommit,
+            Field::EnvTxWarning => Label::FormFieldTxIdleWarning,
+            Field::EnvTxTimeout => Label::FormFieldTxIdleTimeout,
             Field::EnvPaging => Label::FormFieldPaging,
             Field::EnvIdle => Label::FormFieldIdleTimeout,
             Field::EnvSpill => Label::FormFieldSpillLimit,
@@ -393,6 +403,8 @@ pub enum FieldError {
     Badge,
     /// Not a duration (`30s`, `5m`, `1h`, `off`).
     Duration,
+    /// Not a duration of at least `policy::TX_IDLE_FLOOR`, nor `off`.
+    TxIdle,
     /// Not a size (`512MB`, `2GB`, `off`).
     Size,
 }
@@ -415,6 +427,7 @@ impl FieldError {
             FieldError::Reserved => Label::ValidateEnvironmentReserved,
             FieldError::Badge => Label::ValidateBadge,
             FieldError::Duration => Label::ValidateDuration,
+            FieldError::TxIdle => Label::ValidateTxIdle,
             FieldError::Size => Label::ValidateSize,
         }
     }
@@ -536,6 +549,9 @@ pub struct ProfileForm {
     pub env_badge: TextInput,
     pub env_read_only: bool,
     pub env_confirm: Confirm,
+    pub env_commit: CommitRule,
+    pub env_tx_warning: TextInput,
+    pub env_tx_timeout: TextInput,
     pub env_paging: PagingMode,
     pub env_idle: TextInput,
     pub env_spill: TextInput,
@@ -702,6 +718,9 @@ impl ProfileForm {
             env_badge: TextInput::default(),
             env_read_only: false,
             env_confirm: Confirm::Destructive,
+            env_commit: CommitRule::Auto,
+            env_tx_warning: TextInput::new(&policy::format_timeout(Some(policy::TX_IDLE_WARNING))),
+            env_tx_timeout: TextInput::new(&policy::format_timeout(Some(policy::TX_IDLE_TIMEOUT))),
             env_paging: PagingMode::NoHold,
             env_idle: TextInput::new(&policy::format_timeout(policy::PAGING_IDLE_TIMEOUT.into())),
             env_spill: TextInput::default(),
@@ -798,6 +817,7 @@ impl ProfileForm {
         f.env_badge = TextInput::new(e.and_then(|e| e.badge.as_deref()).unwrap_or(""));
         f.env_read_only = rules.read_only;
         f.env_confirm = rules.confirm;
+        f.set_commit_rules(&rules);
         f.env_paging = rules.paging;
         f.env_idle = TextInput::new(&policy::format_timeout(rules.paging_idle_timeout));
         f.env_spill = TextInput::new(&rules.spill_limit.map(policy::format_size).unwrap_or_default());
@@ -812,11 +832,19 @@ impl ProfileForm {
         f.kind = FormKind::DefaultRules;
         f.env_read_only = p.read_only;
         f.env_confirm = p.confirm;
+        f.set_commit_rules(p);
         f.env_paging = p.paging;
         f.env_idle = TextInput::new(&policy::format_timeout(p.paging_idle_timeout));
         f.env_spill = TextInput::new(&p.spill_limit.map(policy::format_size).unwrap_or_default());
         f.focus = Field::EnvReadOnly;
         f
+    }
+
+    /// The commit rule and the idle times of `p` into the form.
+    fn set_commit_rules(&mut self, p: &Policy) {
+        self.env_commit = p.commit;
+        self.env_tx_warning = TextInput::new(&policy::format_timeout(p.tx_idle_warning));
+        self.env_tx_timeout = TextInput::new(&policy::format_timeout(p.tx_idle_timeout));
     }
 
     /// The form edits an environment's rules (an environment, or the default rules).
@@ -832,13 +860,27 @@ impl ProfileForm {
     /// The rules the form describes (`None`: a value that is not valid).
     pub fn to_rules(&self) -> Option<Policy> {
         let (Some(idle), Some(spill)) = self.env_values() else { return None };
+        let (Some(tx_idle_warning), Some(tx_idle_timeout)) = self.tx_idle_values() else { return None };
         Some(Policy {
             paging: self.env_paging,
             paging_idle_timeout: idle,
             spill_limit: spill,
             read_only: self.env_read_only,
             confirm: self.env_confirm,
+            commit: self.env_commit,
+            tx_idle_warning,
+            tx_idle_timeout,
         })
+    }
+
+    /// The idle warning and the idle limit typed in the environment form (`None`: not valid;
+    /// empty: the default).
+    fn tx_idle_values(&self) -> (Option<Option<std::time::Duration>>, Option<Option<std::time::Duration>>) {
+        let read = |input: &TextInput, default| match input.text().trim() {
+            "" => Some(Some(default)),
+            t => policy::parse_tx_idle_text(t).ok(),
+        };
+        (read(&self.env_tx_warning, policy::TX_IDLE_WARNING), read(&self.env_tx_timeout, policy::TX_IDLE_TIMEOUT))
     }
 
     /// The idle timeout and the spill limit typed in the environment form (`None`: not valid).
@@ -1196,6 +1238,8 @@ impl ProfileForm {
             Field::EnvBadge => &mut self.env_badge,
             Field::EnvIdle => &mut self.env_idle,
             Field::EnvSpill => &mut self.env_spill,
+            Field::EnvTxWarning => &mut self.env_tx_warning,
+            Field::EnvTxTimeout => &mut self.env_tx_timeout,
             Field::Name => &mut self.name,
             Field::Host => &mut self.host,
             Field::Port => &mut self.port,
@@ -1421,6 +1465,11 @@ impl ProfileForm {
                     self.env_paging = p;
                 }
             }
+            Field::EnvCommit => {
+                if let Some(&c) = COMMITS.get(i) {
+                    self.env_commit = c;
+                }
+            }
             _ => {}
         }
     }
@@ -1588,6 +1637,9 @@ impl ProfileForm {
             KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.focus == Field::EnvConfirm => {
                 self.env_confirm = if self.env_confirm.writes() { Confirm::Destructive } else { Confirm::Writes }
             }
+            KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.focus == Field::EnvCommit => {
+                self.env_commit = if self.env_commit.manual() { CommitRule::Auto } else { CommitRule::Manual }
+            }
             KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.focus == Field::EnvPaging => {
                 self.env_paging = match self.env_paging {
                     PagingMode::Hold => PagingMode::NoHold,
@@ -1643,6 +1695,13 @@ impl ProfileForm {
             }
             if spill.is_none() {
                 out.push((Field::EnvSpill, FieldError::Size));
+            }
+            let (warning, timeout) = self.tx_idle_values();
+            if warning.is_none() {
+                out.push((Field::EnvTxWarning, FieldError::TxIdle));
+            }
+            if timeout.is_none() {
+                out.push((Field::EnvTxTimeout, FieldError::TxIdle));
             }
             return out;
         }
@@ -1856,6 +1915,7 @@ impl ProfileForm {
 /// The values of the environment form's "Confirm" and "Paging", in the order they are shown.
 pub const CONFIRMS: [Confirm; 2] = [Confirm::Destructive, Confirm::Writes];
 pub const PAGINGS: [PagingMode; 2] = [PagingMode::NoHold, PagingMode::Hold];
+pub const COMMITS: [CommitRule; 2] = [CommitRule::Auto, CommitRule::Manual];
 
 /// The TLS mode a form shows for profile `c` ([`TlsMode::ALL`] index) and, when the profile's
 /// mode is one its driver does not know, that mode as written. A profile with no mode (or, for
