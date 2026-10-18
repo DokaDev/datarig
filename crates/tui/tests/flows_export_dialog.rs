@@ -355,6 +355,9 @@ fn insert_and_update_are_struck_with_the_copys_reason() {
     h.key(KeyCode::Enter);
     let s = screen(&mut h);
     assert!(s.contains("SQL INSERT") && s.contains("coming in a later version"), "{s}");
+    let reason = "a column is computed, not a column of the table";
+    assert!(s.lines().any(|l| l.contains("SQL INSERT") && l.contains(reason)), "{s}");
+    assert!(s.lines().any(|l| l.contains("SQL UPDATE") && l.contains(reason)), "{s}");
     insta::assert_snapshot!("export_dialog_insert_disabled_en_160x45", s);
     // `←`/`→` pass over them: from XML, `→` stays.
     h.key(KeyCode::Esc);
@@ -392,4 +395,203 @@ fn the_mouse_opens_a_list_and_presses_the_buttons() {
     assert_eq!(h.overlay_kind(), Some(OverlayKind::Export), "a button acts on its release");
     h.mouse(MouseEventKind::Up(MouseButton::Left), cancel.x + 1, cancel.y);
     assert_eq!(h.overlay_kind(), None);
+}
+
+/// The status bar's passing word, as text.
+fn flashed(h: &Harness) -> String {
+    h.app.transient.as_ref().map(|(n, _)| n.render(&h.app.i18n).to_string()).unwrap_or_default()
+}
+
+/// The dialog opened on a result that a statement already running replaces while it is open
+/// (`selection`: on a selected range): nothing is exported, and the dialog says why as it goes.
+fn a_new_result_under_the_dialog(selection: bool) {
+    let (mut h, home) = with_home(if selection { "stale-selection" } else { "stale-fetched" });
+    std::fs::create_dir_all(home.join("Downloads")).unwrap();
+    first_page(&mut h, 5, false);
+    h.key(KeyCode::Tab);
+    if selection {
+        h.keys("vj");
+    }
+    // Another run: the rows shown stay until it answers.
+    h.ctrl('e');
+    let qid = h.app.tab().exec.query_id;
+    h.sent();
+    h.keys(" re");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Export));
+    h.key(KeyCode::Right);
+    if selection {
+        h.key(KeyCode::Right);
+        assert_eq!(h.app.overlays.export_form().unwrap().scope, datarig_tui::app::export::ExportScope::Selection);
+    }
+    let index = h.app.tabs.active_index();
+    let rows = (100..103).map(|i| vec![Some(i.to_string()), Some(format!("new{i}"))]).collect();
+    h.tab_db(index, DbEvent::Page { id: qid, columns: Some(columns()), rows, more: false, elapsed: Duration::ZERO });
+    if h.overlay_kind() == Some(OverlayKind::Export) {
+        tab_to(&mut h, ExportField::Export);
+        h.key(KeyCode::Enter);
+        pump_until_done(&mut h);
+    }
+    assert_eq!(h.overlay_kind(), None, "the dialog closed with the result it showed");
+    assert!(flashed(&h).starts_with("Not exported: the result is not from this tab's session"), "{}", flashed(&h));
+    assert!(!h.app.exporting(h.app.tab().id));
+    assert_eq!(std::fs::read_dir(home.join("Downloads")).unwrap().count(), 0, "no file");
+}
+
+#[test]
+fn a_new_result_under_the_dialog_exports_nothing() {
+    a_new_result_under_the_dialog(false);
+}
+
+#[test]
+fn a_new_result_under_the_dialog_on_a_selection_exports_nothing() {
+    a_new_result_under_the_dialog(true);
+}
+
+#[test]
+fn the_dialog_closes_when_another_tab_becomes_the_active_one() {
+    let mut h = Harness::connected(Lang::En);
+    first_page(&mut h, 5, true);
+    open(&mut h);
+    h.command("tabnew");
+    assert_ne!(h.overlay_kind(), Some(OverlayKind::Export), "the dialog does not show another tab");
+    assert!(h.app.overlays.export_form().is_none());
+    assert!(flashed(&h).starts_with("Not exported"), "{}", flashed(&h));
+}
+
+/// A console tab inside the user's open transaction, the server with more rows.
+fn in_transaction(h: &mut Harness) {
+    first_page(h, 5, true);
+    h.tab_db(0, DbEvent::Block(true));
+    h.tab_db(0, DbEvent::TxOpen(true));
+    h.sent();
+}
+
+#[test]
+fn inside_the_transaction_the_note_says_when_it_asks_first() {
+    let (mut h, _home) = with_home("tx-ro");
+    h.app.policies.insert("default", datarig_core::policy::Policy { read_only: true, ..Default::default() });
+    in_transaction(&mut h);
+    open(&mut h);
+    let s = screen(&mut h);
+    assert!(s.contains("inside your open transaction"), "{s}");
+    assert!(s.contains("Asks first: default is a read-only or prod-like environment."), "{s}");
+    let (mut h, _home) = with_home("tx-rerun");
+    h.app.tab_mut().editor = Editor::new("SELECT random() AS id, 'x' AS name FROM generate_series(1, 5000)");
+    in_transaction(&mut h);
+    open(&mut h);
+    let s = screen(&mut h);
+    assert!(
+        s.contains("inside your open transaction") && s.contains("Asks first: the statement is not a plain read"),
+        "{s}"
+    );
+}
+
+#[test]
+fn every_row_in_a_read_only_environment_asks_and_enter_sends_nothing() {
+    let (mut h, _home) = with_home("ro-submit");
+    h.app.policies.insert("default", datarig_core::policy::Policy { read_only: true, ..Default::default() });
+    first_page(&mut h, 5, true);
+    open(&mut h);
+    tab_to(&mut h, ExportField::Export);
+    h.key(KeyCode::Enter);
+    assert_eq!(h.app.overlays.confirm().map(|c| c.action), Some(datarig_tui::app::overlay::ConfirmAction::ExportStart));
+    assert!(h.screen(220, 50).contains("Environment: default"));
+    h.key(KeyCode::Enter);
+    assert!(!h.app.exporting(h.app.tab().id));
+    assert!(!h.sent().iter().any(|c| matches!(c, DbCommand::Export { .. })), "Enter keeps it from running");
+}
+
+#[test]
+fn a_statement_off_the_allowlist_asks_before_it_runs_again() {
+    let (mut h, _home) = with_home("rerun-submit");
+    h.app.tab_mut().editor = Editor::new("SELECT random() AS id, 'x' AS name FROM generate_series(1, 5000)");
+    first_page(&mut h, 5, true);
+    open(&mut h);
+    tab_to(&mut h, ExportField::Path);
+    h.key(KeyCode::Enter);
+    assert_eq!(h.app.overlays.confirm().map(|c| c.action), Some(datarig_tui::app::overlay::ConfirmAction::ExportStart));
+    let s = h.screen(220, 50);
+    assert!(s.contains("runs the statement again") && s.contains("random"), "{s}");
+    h.key(KeyCode::Enter);
+    assert!(!h.sent().iter().any(|c| matches!(c, DbCommand::Export { .. })));
+}
+
+#[test]
+fn a_file_in_the_way_asks_and_enter_keeps_it() {
+    let (mut h, home) = with_home("exists");
+    std::fs::create_dir_all(home.join("Downloads")).unwrap();
+    first_page(&mut h, 5, true);
+    open(&mut h);
+    h.key(KeyCode::Right);
+    let made = path_text(&h);
+    let file = home.join("Downloads").join(made.trim_start_matches("~/Downloads/"));
+    std::fs::write(&file, "keep").unwrap();
+    tab_to(&mut h, ExportField::Export);
+    h.key(KeyCode::Enter);
+    let start = std::time::Instant::now();
+    while h.app.overlays.confirm().is_none() {
+        assert!(start.elapsed() < WAIT, "no question");
+        h.app.pump_exports(Duration::from_millis(20));
+    }
+    assert_eq!(
+        h.app.overlays.confirm().map(|c| c.action),
+        Some(datarig_tui::app::overlay::ConfirmAction::ExportReplace)
+    );
+    // Drawn first: the question is armed only once it was on screen.
+    h.draw(160, 45);
+    h.advance(Duration::from_millis(600));
+    h.key(KeyCode::Enter);
+    pump_until_done(&mut h);
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "keep");
+    assert!(status(&h).contains("the file is kept"), "{}", status(&h));
+}
+
+#[test]
+fn a_release_on_export_starts_the_export() {
+    let (mut h, home) = with_home("mouse-export");
+    std::fs::create_dir_all(home.join("Downloads")).unwrap();
+    first_page(&mut h, 5, false);
+    open(&mut h);
+    let made = path_text(&h);
+    h.draw(160, 45);
+    h.advance(Duration::from_millis(500));
+    let export = h.app.overlays.export_form().unwrap().buttons.rects[0];
+    h.mouse(MouseEventKind::Down(MouseButton::Left), export.x + 1, export.y);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Export));
+    h.mouse(MouseEventKind::Up(MouseButton::Left), export.x + 1, export.y);
+    assert_eq!(h.overlay_kind(), None);
+    pump_until_done(&mut h);
+    let file = home.join("Downloads").join(made.trim_start_matches("~/Downloads/"));
+    assert_eq!(std::fs::read_to_string(&file).unwrap().lines().count(), 6, "a header and 5 rows");
+}
+
+#[test]
+fn an_error_of_a_field_the_format_hides_goes_with_it() {
+    let (mut h, _home) = with_home("hidden-error");
+    first_page(&mut h, 5, false);
+    open(&mut h);
+    tab_to(&mut h, ExportField::Delimiter);
+    h.ctrl('u');
+    h.type_text("ab");
+    h.key(KeyCode::Enter);
+    assert!(h.app.overlays.export_form().unwrap().error.is_some());
+    tab_to(&mut h, ExportField::Format);
+    h.key(KeyCode::Right);
+    h.key(KeyCode::Left);
+    assert!(h.app.overlays.export_form().unwrap().error.is_none(), "not said again on the way back");
+}
+
+#[test]
+fn a_file_name_that_only_ends_like_the_made_one_keeps_its_extension() {
+    let (mut h, _home) = with_home("suffix");
+    first_page(&mut h, 5, false);
+    open(&mut h);
+    let made = path_text(&h);
+    let name = made.trim_start_matches("~/Downloads/").to_string();
+    tab_to(&mut h, ExportField::Path);
+    h.ctrl('u');
+    h.type_text(&format!("~/Downloads/my{name}"));
+    tab_to(&mut h, ExportField::Format);
+    h.key(KeyCode::Right);
+    assert_eq!(path_text(&h), format!("~/Downloads/my{name}"));
 }

@@ -454,7 +454,7 @@ Reserved — settings screen; c on the theme row: copy the theme to a new theme 
 
 ## `overlay.export` [text]
 
-The export dialog (`results.export`, `:export` alone): the rows (every row, the rows fetched, the selection while there is one), the format, CSV's options and the file. `Tab`/`Shift+Tab` and the arrows move between the fields, `Enter` or `Space` on a value lists what it can be (`←`/`→` step through them), `Space` ticks the header line, `Enter` in a text field or on Export exports, `Esc` cancels. Under the rows it says how they will be read, under the format what it cannot do here (a format that comes later, an INSERT or UPDATE the result's keys do not allow, struck through in the list). A click focuses a field, puts the cursor in a text, opens a value's list or ticks the checkbox; Export and Cancel act on the release. Inside `root`.
+The export dialog (`results.export`, `:export` alone): the rows (every row, the rows fetched, the selection while there is one), the format, CSV's options and the file. `Tab`/`Shift+Tab` and the arrows move between the fields, `Enter` or `Space` on a value lists what it can be (`←`/`→` step through them), `Space`, `Enter` or `←`/`→` tick the header line, `Enter` in a text field or `Enter`/`Space` on Export exports (on Cancel: closes), `Esc` cancels. Under the rows it says how they will be read, under the format what it cannot do here (a format that comes later, an INSERT or UPDATE the result's keys do not allow, struck through in the list). A click focuses a field, puts the cursor in a text, opens a value's list or ticks the checkbox; Export and Cancel act on the release. Inside `root`.
 
 Reserved — export dialog: `Tab` `Shift+Tab` `Down` `Up` `Enter` `Esc`
 

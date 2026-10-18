@@ -16,7 +16,7 @@
 //! relative path goes in `~/Downloads`. Anything that fills the path field from outside goes
 //! through [`ExportForm::set_path`].
 
-use super::copy::CopyWhat;
+use super::copy::{CopyWhat, Intent};
 use super::export::{ExportFormat, ExportRequest, ExportScope, LATER_FORMATS, expand_path};
 use super::overlay::Buttons;
 use super::picker::Picker;
@@ -146,6 +146,11 @@ pub enum ExportHit {
 pub struct ExportForm {
     /// The tab whose result it exports.
     pub tab: TabId,
+    /// The result it was opened on, on that tab's session, and the selected range then: the
+    /// dialog closes when either changes ([`App::sweep_export_dialog`]).
+    intent: Intent,
+    result: u64,
+    selection: Option<(std::ops::Range<usize>, Vec<usize>)>,
     /// The tab's or the table's name (the title).
     pub name: String,
     /// The scopes offered: the selection only while there is one.
@@ -221,12 +226,18 @@ impl ExportForm {
     /// before (its folder may have been changed) gets the one made for `f`.
     pub fn set_format(&mut self, f: ExportFormat) {
         let made = self.made_name(self.format);
-        if let Some(folder) = self.path.text().strip_suffix(made.as_str()) {
+        if let Some(folder) = self.path.text().strip_suffix(made.as_str())
+            && (folder.is_empty() || folder.ends_with(['/', '\\']))
+        {
             let text = format!("{folder}{}", self.made_name(f));
             self.path.set(&text);
         }
         self.format = f;
         self.clear_error(ExportField::Format);
+        // What was said at a field the format does not show is not said again later.
+        if self.error.as_ref().is_some_and(|(at, _)| !self.fields().contains(at)) {
+            self.error = None;
+        }
     }
 
     fn clear_error(&mut self, f: ExportField) {
@@ -281,9 +292,10 @@ impl App {
             Some(table) => table.name.clone(),
             None => crate::widgets::tabbar::document_name(self, t),
         };
-        let selection = t.grid.anchor.is_some();
+        let (intent, result) = (Intent::of(t), self.export_result_id());
+        let selection = self.export_selection();
         let scopes: Vec<ExportScope> =
-            ExportScope::ALL.into_iter().filter(|s| *s != ExportScope::Selection || selection).collect();
+            ExportScope::ALL.into_iter().filter(|s| *s != ExportScope::Selection || selection.is_some()).collect();
         // `/` on every system (Windows takes it too): the path reads the same everywhere.
         let folder = match self.home() {
             Some(_) => "~/Downloads/".to_string(),
@@ -291,6 +303,9 @@ impl App {
         };
         let mut form = ExportForm {
             tab: id,
+            intent,
+            result,
+            selection,
             name,
             scopes,
             scope: ExportScope::All,
@@ -335,6 +350,43 @@ impl App {
 
     fn close_export_dialog(&mut self) {
         self.overlays.close(OverlayKind::Export);
+        if matches!(self.overlays.picker(), Some(Picker::Export { .. })) {
+            self.overlays.close(OverlayKind::Picker);
+        }
+    }
+
+    /// The id of the active tab's result shown.
+    fn export_result_id(&self) -> u64 {
+        match &self.tab().results {
+            Results::Rows(rs) => rs.id,
+            _ => 0,
+        }
+    }
+
+    /// The active tab's selected range (rows, columns), while there is one.
+    fn export_selection(&self) -> Option<(std::ops::Range<usize>, Vec<usize>)> {
+        self.tab().grid.anchor?;
+        self.block(CopyWhat::Cell).map(|b| (b.rows, b.cols))
+    }
+
+    /// The dialog still shows what it was opened on: its tab is the active one, with the same
+    /// result on the same session, and the same selection.
+    fn export_form_holds(&self, f: &ExportForm) -> bool {
+        !self.tabs.is_empty()
+            && self.tab().id == f.tab
+            && f.intent.holds(self)
+            && self.export_result_id() == f.result
+            && (f.selection.is_none() || self.export_selection() == f.selection)
+    }
+
+    /// After every event: a dialog whose result, selection or tab changed under it (a statement
+    /// that answered, another tab made active over it) closes and says so; it never exports
+    /// what it did not show.
+    pub(super) fn sweep_export_dialog(&mut self) {
+        if self.overlays.export_form().is_some_and(|f| !self.export_form_holds(f)) {
+            self.close_export_dialog();
+            self.flash(Notice::new(Label::ExportStale, Level::Warning));
+        }
     }
 
     /// The dialog's scope notes: how its rows will be read.
@@ -363,9 +415,6 @@ impl App {
         }
         let Some(t) = self.tabs.get(id) else { return Vec::new() };
         let Some(pid) = t.profile else { return Vec::new() };
-        if t.exec.in_block {
-            return vec![Notice::new(Label::ExportNoteInTx, Level::Warning)];
-        }
         let mut estimate = self.table_estimate(t);
         if let Some((_, table)) = self.export_keyset_table(id) {
             let key = (table.schema.clone(), table.name.clone());
@@ -388,16 +437,15 @@ impl App {
                 }
             }
         }
-        let mut out = vec![Notice::new(Label::ExportNoteStatement, Level::Warning)];
+        // One statement (in the user's block: there): whether it asks first, as the export does.
+        let read = if t.exec.in_block { Label::ExportNoteInTx } else { Label::ExportNoteStatement };
+        let mut out = vec![Notice::new(read, Level::Warning)];
         out.extend(estimate.map(|count| Notice::new(Msg::ExportConfirmEstimate { count }, Level::Info)));
-        let rules = self.rules_of(pid);
-        if let Err(why) = t.exec.prepared.repeatable(t.shown_sql().trim()) {
-            let why = self.i18n.msg(&super::pages::why(&why)).to_string();
-            out.push(Notice::new(Msg::ExportNoteRerun { why }, Level::Warning));
-        } else if rules.read_only || rules.confirm.writes() {
-            let environment = self.environment_name(pid).unwrap_or_else(|| datarig_core::policy::DEFAULT.to_string());
-            out.push(Notice::new(Msg::ExportNoteEnvironment { environment }, Level::Warning));
-        }
+        let (rerun, environment) = self.export_asks(id, t.shown_sql().trim());
+        out.extend(rerun.map(|why| Notice::new(Msg::ExportNoteRerun { why }, Level::Warning)));
+        out.extend(
+            environment.map(|environment| Notice::new(Msg::ExportNoteEnvironment { environment }, Level::Warning)),
+        );
         out
     }
 
@@ -607,7 +655,7 @@ impl App {
     /// what is wrong with it stays in the dialog, at the field to change.
     fn export_form_submit(&mut self) {
         let Some(f) = self.overlays.export_form() else { return };
-        if self.tabs.is_empty() || self.tab().id != f.tab {
+        if !self.export_form_holds(f) {
             self.close_export_dialog();
             return self.flash(Notice::new(Label::ExportStale, Level::Warning));
         }

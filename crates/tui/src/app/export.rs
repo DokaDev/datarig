@@ -507,6 +507,8 @@ pub struct ExportArgs {
     /// CSV's options (`delim=;`, `quote=never`, `header=off`, `null=NULL`): the defaults when
     /// none is given.
     pub csv: Delimited,
+    /// The CSV options given, by key (`delim`, `quote`, `header`, `null`), whatever their value.
+    pub given: Vec<&'static str>,
     pub path: Option<String>,
 }
 
@@ -518,12 +520,12 @@ pub enum ArgsError {
     BadOption(String),
 }
 
-/// CSV option `word` (`key=value`) applied to `csv`: `Ok(false)` when it is not an option word
-/// (a path), an error for a known key with a value it does not take.
-fn csv_option(word: &str, csv: &mut Delimited) -> Result<bool, ArgsError> {
-    let Some((key, value)) = word.split_once('=') else { return Ok(false) };
+/// CSV option `word` (`key=value`) applied to `csv`: its key, `Ok(None)` when it is not an
+/// option word (a path), an error for a known key with a value it does not take.
+fn csv_option(word: &str, csv: &mut Delimited) -> Result<Option<&'static str>, ArgsError> {
+    let Some((key, value)) = word.split_once('=') else { return Ok(None) };
     let bad = || ArgsError::BadOption(word.to_string());
-    match key.to_ascii_lowercase().as_str() {
+    let given = match key.to_ascii_lowercase().as_str() {
         "delim" | "delimiter" => {
             csv.delimiter = match value {
                 "\\t" | "tab" => '\t',
@@ -532,7 +534,8 @@ fn csv_option(word: &str, csv: &mut Delimited) -> Result<bool, ArgsError> {
                 "pipe" => '|',
                 v if v.chars().count() == 1 => v.chars().next().ok_or_else(bad)?,
                 _ => return Err(bad()),
-            }
+            };
+            "delim"
         }
         "quote" => {
             csv.quote = match value.to_ascii_lowercase().replace('-', "_").as_str() {
@@ -541,19 +544,24 @@ fn csv_option(word: &str, csv: &mut Delimited) -> Result<bool, ArgsError> {
                 "non_numeric" => Quote::NonNumeric,
                 "never" | "none" => Quote::Never,
                 _ => return Err(bad()),
-            }
+            };
+            "quote"
         }
         "header" => {
             csv.header = match value.to_ascii_lowercase().as_str() {
                 "on" | "yes" | "true" => true,
                 "off" | "no" | "false" => false,
                 _ => return Err(bad()),
-            }
+            };
+            "header"
         }
-        "null" => csv.null = value.to_string(),
-        _ => return Ok(false),
-    }
-    Ok(true)
+        "null" => {
+            csv.null = value.to_string();
+            "null"
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some(given))
 }
 
 /// Read `:export [format] [all|fetched|selection] [path]`. The path is the rest (it may hold
@@ -583,9 +591,8 @@ pub fn parse_args(arg: &str) -> Result<ExportArgs, ArgsError> {
     }
     while !rest.is_empty() {
         let (w, r) = word(rest);
-        if !csv_option(&w, &mut out.csv)? {
-            break;
-        }
+        let Some(key) = csv_option(&w, &mut out.csv)? else { break };
+        out.given.push(key);
         rest = rest[rest.len() - r.len()..].trim();
     }
     if !rest.is_empty() {
@@ -627,8 +634,8 @@ impl App {
         // CSV's options are CSV's; TSV takes its header line only.
         let ignored = match format {
             ExportFormat::Csv => false,
-            ExportFormat::Tsv => Delimited { header: args.csv.header, ..Delimited::default() } != args.csv,
-            _ => args.csv != Delimited::default(),
+            ExportFormat::Tsv => args.given.iter().any(|k| *k != "header"),
+            _ => !args.given.is_empty(),
         };
         if ignored {
             return Err(Notice::new(Label::ExportCsvOptionsOnly, Level::Error));
@@ -885,18 +892,33 @@ impl App {
 
     /// Every row of tab `id`'s result with its statement `sql` once, streamed: asked first when
     /// it is not on the allowlist, or in a read-only or prod-like environment.
+    /// Why every row of tab `id`'s result read with `sql` once is asked first: the statement
+    /// is not on the allowlist (why, in words), and the profile's environment is read-only or
+    /// prod-like (its name). Neither: it is not asked. The dialog's note says the same.
+    pub(super) fn export_asks(&self, id: TabId, sql: &str) -> (Option<String>, Option<String>) {
+        let Some(t) = self.tabs.get(id) else { return (None, None) };
+        let rerun =
+            t.exec.prepared.repeatable(sql).err().map(|why| self.i18n.msg(&super::pages::why(&why)).to_string());
+        let environment = t.profile.filter(|pid| {
+            let rules = self.rules_of(*pid);
+            rules.read_only || rules.confirm.writes()
+        });
+        let environment = environment
+            .map(|pid| self.environment_name(pid).unwrap_or_else(|| datarig_core::policy::DEFAULT.to_string()));
+        (rerun, environment)
+    }
+
     fn export_stream(&mut self, id: TabId, sql: String, estimate: Option<u64>) {
-        let Some(t) = self.tabs.get(id) else { return };
-        let Some(pid) = t.profile else { return };
-        let repeat = t.exec.prepared.repeatable(&sql);
-        let rules = self.rules_of(pid);
-        let prod_like = rules.read_only || rules.confirm.writes();
-        let guard = if repeat.is_ok() { ExportGuard::Repeatable } else { ExportGuard::Confirmed };
+        if self.tabs.get(id).and_then(|t| t.profile).is_none() {
+            return;
+        }
+        let (rerun, environment) = self.export_asks(id, &sql);
+        let guard = if rerun.is_none() { ExportGuard::Repeatable } else { ExportGuard::Confirmed };
         let Some(j) = self.exports.jobs.get_mut(&id) else { return };
         j.plan = Plan::Stream { sql: sql.clone(), guard };
         j.estimate = j.estimate.or(estimate);
         j.total = j.estimate.map(|e| (e, false));
-        if repeat.is_ok() && !prod_like {
+        if rerun.is_none() && environment.is_none() {
             return self.export_launch(id);
         }
         // Another question is open (this one comes once the table's structure came): not asked
@@ -909,8 +931,7 @@ impl App {
         j.stage = Stage::Asking;
         let (in_block, estimate) = (j.in_block, j.estimate);
         let mut details = Vec::new();
-        if let Err(why) = &repeat {
-            let why = self.i18n.msg(&super::pages::why(why)).to_string();
+        if let Some(why) = rerun {
             details.push(Msg::ExportConfirmRerun { why, sql: super::runlog::excerpt(&sql, 80) });
         }
         details.push(Msg::Label(Label::ExportConfirmLock));
@@ -920,8 +941,7 @@ impl App {
         if in_block {
             details.push(Msg::Label(Label::ExportConfirmInTx));
         }
-        if prod_like {
-            let environment = self.environment_name(pid).unwrap_or_else(|| datarig_core::policy::DEFAULT.to_string());
+        if let Some(environment) = environment {
             details.push(Msg::ExportConfirmEnvironment { environment });
         }
         let format = self.exports.jobs.get(&id).map(|j| self.i18n.label(j.request.format.label()).to_string());
@@ -1230,6 +1250,7 @@ impl App {
     /// One waiting for its table's key whose metadata session is gone reads with one statement;
     /// one not started whose result changed ends, with a word.
     pub(super) fn sweep_exports(&mut self) {
+        self.sweep_export_dialog();
         let mut ended = Vec::new();
         let mut no_key = Vec::new();
         for (id, j) in &self.exports.jobs {

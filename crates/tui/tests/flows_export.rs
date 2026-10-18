@@ -938,4 +938,8 @@ fn csv_options_are_refused_for_the_other_formats() {
     h.key(KeyCode::Esc);
     h.command("export tsv quote=always out.tsv");
     assert!(h.cmdline().and_then(|c| c.error.clone()).is_some());
+    h.key(KeyCode::Esc);
+    // Even written as the default.
+    h.command("export json delim=, out.json");
+    assert!(h.cmdline().and_then(|c| c.error.clone()).is_some(), "an option given is refused");
 }
