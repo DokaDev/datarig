@@ -14,7 +14,8 @@
 //! The path starts as `~/Downloads/<table or tab>-<YYYYMMDD-HHMMSS>.<ext>`; while its file name
 //! is that, a format change gives it the new format's extension. `~` is the home folder, a
 //! relative path goes in `~/Downloads`. Anything that fills the path field from outside goes
-//! through [`ExportForm::set_path`].
+//! through [`ExportForm::set_path`]: the picker of where to write (`Ctrl+O`, `[Browse…]`, see
+//! `export_path_pick`), which also completes names typed in the field (`Tab`).
 
 use super::copy::{CopyWhat, Intent};
 use super::export::{ExportFormat, ExportRequest, ExportScope, LATER_FORMATS, expand_path};
@@ -141,6 +142,8 @@ pub enum ExportHit {
     Value(ExportField),
     /// A text input: the cursor goes under the pointer.
     Input(ExportField),
+    /// The path's `[Browse…]` button: the picker of where to write.
+    Browse,
 }
 
 pub struct ExportForm {
@@ -162,6 +165,8 @@ pub struct ExportForm {
     pub delimiter: TextInput,
     pub null: TextInput,
     pub path: TextInput,
+    /// `Tab` in the path field: what it completed to (`export_path_pick`).
+    pub completion: Option<super::export_path_pick::PathCompletion>,
     /// The folder of the path it started with, as typed (`~/Downloads/`), and the parts of the
     /// file name made for it: while the path is that folder and that name, it is the default
     /// one, and a format change makes the name again.
@@ -315,6 +320,7 @@ impl App {
             delimiter: TextInput::new(","),
             null: TextInput::default(),
             path: TextInput::default(),
+            completion: None,
             folder,
             stem: self.export_stem(),
             stamp: chrono::Local::now().format("%Y%m%d-%H%M%S").to_string(),
@@ -352,6 +358,16 @@ impl App {
         self.overlays.close(OverlayKind::Export);
         if matches!(self.overlays.picker(), Some(Picker::Export { .. })) {
             self.overlays.close(OverlayKind::Picker);
+        }
+        // The picker of where to write, and its new-folder prompt, go with it.
+        if matches!(self.overlays.script_tree().map(|t| t.mode), Some(super::script_tree::TreeMode::ExportPath(_))) {
+            self.overlays.close(OverlayKind::ScriptTree);
+        }
+        if matches!(
+            self.overlays.name_input().map(|n| &n.purpose),
+            Some(super::chooser::NamePurpose::NewExportFolder { .. })
+        ) {
+            self.overlays.close(OverlayKind::NameInput);
         }
     }
 
@@ -604,6 +620,11 @@ impl App {
 
     /// Keys of the export dialog (`overlay.export`, text input).
     pub(super) fn export_form_key(&mut self, key: KeyEvent, _repeat: bool) {
+        // The path completes the name typed before `Tab` moves the focus on.
+        let path = self.overlays.export_form().is_some_and(|f| f.focus == ExportField::Path);
+        if key.code == KeyCode::Tab && path && self.export_path_complete() {
+            return;
+        }
         let Some(f) = self.overlays.export_form_mut() else { return };
         let focus = f.focus;
         match key.code {
@@ -725,6 +746,7 @@ impl App {
                 f.focus = field;
                 self.open_export_picker(field);
             }
+            Some(ExportHit::Browse) => self.open_export_path_pick(),
             None => {}
         }
     }

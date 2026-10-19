@@ -197,6 +197,7 @@ const ACTIONS: &[(Ctx, &str, &str)] = &[
     // the profile form: the SSH key file picker
     (ProfileForm, "ctrl+o", "form.pick_key_file"),
     (ProfileForm, "ctrl+b", "form.save_as_tunnel"),
+    (Export, "ctrl+o", "export.pick_path"),
     // workspace
     (Workspace, "ctrl+enter", "query.execute_current"),
     (Workspace, "ctrl+e", "query.execute_current"),
@@ -544,10 +545,32 @@ const RESERVED: &[(Ctx, &[&str], &str)] = &[
     (NameInput, &["enter", "esc"], "name input"),
     (
         ScriptTree,
-        &["j", "k", "h", "l", "up", "down", "left", "right", "enter", "n", "/", "q", "tab", "shift+tab", "esc"],
+        &[
+            "j",
+            "k",
+            "h",
+            "l",
+            "up",
+            "down",
+            "left",
+            "right",
+            "enter",
+            "n",
+            "/",
+            "q",
+            "tab",
+            "shift+tab",
+            "esc",
+            ".",
+            "ctrl+s",
+        ],
         "saved-queries tree",
     ),
-    (ScriptTreeName, &["up", "down", "enter", "tab", "shift+tab", "esc"], "saved-queries tree: name or filter"),
+    (
+        ScriptTreeName,
+        &["up", "down", "enter", "tab", "shift+tab", "esc", "ctrl+s"],
+        "saved-queries tree: name or filter",
+    ),
     (ScriptTreeName, TEXT, "text input"),
     (
         Settings,

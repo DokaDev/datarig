@@ -133,6 +133,8 @@ pub enum Action {
     ScriptDelete,
     /// The profile form: pick the SSH key file in a tree of the file system.
     PickKeyFile,
+    /// The export dialog: pick where the file goes in a tree of the file system.
+    PickExportPath,
     /// A new tunnel preset (the tunnel form).
     NewTunnel,
     /// A new environment (the environment form).
@@ -419,6 +421,11 @@ fn key_file_field(a: &App) -> bool {
     })
 }
 
+/// The export dialog has the keyboard.
+fn export_dialog(a: &App) -> bool {
+    a.overlays.top().is_some_and(|o| o.kind() == super::overlay::OverlayKind::Export)
+}
+
 fn scripts(a: &App) -> bool {
     in_workspace(a) && a.scripts_available()
 }
@@ -649,6 +656,7 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::ScriptOpen, "script.open", Label::ActionScriptOpen, scripts),
     act(Action::ScriptDelete, "script.delete", Label::ActionScriptDelete, tab_script),
     act(Action::PickKeyFile, "form.pick_key_file", Label::ActionFormPickKeyFile, key_file_field),
+    act(Action::PickExportPath, "export.pick_path", Label::ActionExportPickPath, export_dialog),
     act(Action::SaveAsTunnel, "form.save_as_tunnel", Label::ActionFormSaveAsTunnel, own_tunnel_field),
     act(Action::Help, "help.context", Label::ActionHelpContext, help_available),
     act(Action::HelpAll, "help.all", Label::ActionHelpAll, help_available),

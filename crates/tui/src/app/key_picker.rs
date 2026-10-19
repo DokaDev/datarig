@@ -58,7 +58,7 @@ fn expand(text: &str, home: Option<&Path>) -> PathBuf {
 }
 
 /// `path` as the field shows it: under `home` as `~/…`.
-fn shown(path: &Path, home: Option<&Path>) -> String {
+pub(super) fn shown(path: &Path, home: Option<&Path>) -> String {
     match home.and_then(|h| path.strip_prefix(h).ok()) {
         Some(rest) if !rest.as_os_str().is_empty() => format!("~/{}", rest.to_string_lossy().replace('\\', "/")),
         _ => path.to_string_lossy().to_string(),
@@ -75,7 +75,7 @@ pub fn shown_dir(dir: &Path, home: Option<&Path>) -> String {
 
 /// The entries of folder `dir`: folders first, then files, each by name (case folded). Only
 /// the folder is read, and the kind of a link is asked for (`stat`); no file is opened.
-fn list(dir: &Path) -> std::io::Result<Vec<(String, bool)>> {
+pub(super) fn list(dir: &Path) -> std::io::Result<Vec<(String, bool)>> {
     let mut out = Vec::new();
     for e in std::fs::read_dir(dir)? {
         let Ok(e) = e else { continue };
@@ -103,6 +103,9 @@ impl ScriptTree {
                 if let Some(entry) = self.entries.iter_mut().find(|x| x.path == rel) {
                     entry.unreadable = true;
                 } else {
+                    // The folder shown: an entry of its own (no row) keeps it marked whatever
+                    // is pressed, so it never reads as empty.
+                    self.entries.push(Entry { path: String::new(), folder: true, unreadable: true });
                     self.error = Some(crate::app::fault_reason(&datarig_core::fault::Fault::io_at(&e, &dir)));
                 }
                 return;
@@ -134,6 +137,7 @@ impl ScriptTree {
         self.scroll = 0;
         self.detached = false;
         self.load("");
+        self.export_reveal(select);
         self.row = select
             .and_then(|n| self.entries.iter().find(|e| e.path == n))
             .map(|e| if e.folder { TreeRow::Folder(e.path.clone()) } else { TreeRow::File(e.path.clone()) })

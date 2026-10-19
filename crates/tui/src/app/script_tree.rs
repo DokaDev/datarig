@@ -13,6 +13,8 @@
 //! ([`TreeMode::KeyFile`], see `key_picker`): a folder of the file system instead of the
 //! saved-queries folder, listed a folder at a time as folders open, with `../` above it. And
 //! it picks a folder ([`TreeMode::Folder`], see `folder_pick`): folders only, below the top.
+//! And where an export is written ([`TreeMode::ExportPath`], see `export_path_pick`): a folder
+//! of the file system as for the key file, its files dimmed.
 
 use super::chooser::{NameInput, NamePurpose};
 use super::*;
@@ -31,6 +33,8 @@ pub enum TreeMode {
     KeyFile,
     /// Pick a folder.
     Folder(super::folder_pick::FolderPick),
+    /// Pick the folder or file of the export dialog's path.
+    ExportPath(super::export_path_pick::ExportPick),
 }
 
 /// Which part has the keyboard.
@@ -89,7 +93,7 @@ impl ScriptTree {
     /// with a filter: every file whose path matches, and the folders on the way).
     pub fn rows(&self) -> Vec<(TreeRow, usize)> {
         let mut out = Vec::new();
-        if self.mode == TreeMode::KeyFile && self.root.parent().is_some() {
+        if matches!(self.mode, TreeMode::KeyFile | TreeMode::ExportPath(_)) && self.root.parent().is_some() {
             out.push((TreeRow::Up, 0));
         }
         out.push((TreeRow::Top, 0));
@@ -97,6 +101,7 @@ impl ScriptTree {
         let filtering = self.filtering();
         let key_file = self.mode == TreeMode::KeyFile;
         let folder_mode = matches!(self.mode, TreeMode::Folder(_));
+        let export = matches!(self.mode, TreeMode::ExportPath(_));
         let matches = |p: &str| {
             let p = if key_file { p.rsplit('/').next().unwrap_or(p) } else { stem_path(p) };
             scripts::name::fold(p).contains(&q)
@@ -111,9 +116,16 @@ impl ScriptTree {
             }
             true
         };
+        let hits = (filtering && export).then(|| self.export_hits(&q));
         for e in &self.entries {
+            // The folder shown, when it cannot be listed: its mark, no row.
+            if e.path.is_empty() || (export && !self.export_listed(&e.path)) {
+                continue;
+            }
             let shown = if filtering && folder_mode {
                 self.folder_shown(&e.path, &q)
+            } else if let Some(hits) = &hits {
+                hits.contains(e.path.as_str())
             } else if filtering {
                 if e.folder {
                     self.entries.iter().any(|x| !x.folder && scripts::is_within(&x.path, &e.path) && matches(&x.path))
@@ -138,7 +150,7 @@ impl ScriptTree {
         !q.is_empty()
             && match self.mode {
                 TreeMode::Open | TreeMode::Folder(_) => true,
-                TreeMode::KeyFile => !super::key_picker::is_path(q),
+                TreeMode::KeyFile | TreeMode::ExportPath(_) => !super::key_picker::is_path(q),
                 TreeMode::Save { .. } => false,
             }
     }
@@ -168,7 +180,11 @@ impl ScriptTree {
 
     /// A folder whose contents could not be listed.
     pub fn unreadable(&self, row: &TreeRow) -> bool {
-        matches!(row, TreeRow::Folder(p) if self.entry(p).is_some_and(|e| e.unreadable))
+        match row {
+            TreeRow::Folder(p) => self.entry(p).is_some_and(|e| e.unreadable),
+            TreeRow::Top => self.entry("").is_some_and(|e| e.unreadable),
+            TreeRow::Up | TreeRow::File(_) => false,
+        }
     }
 
     /// Select row `i`; in save mode a file gives the name field its name.
@@ -197,7 +213,10 @@ impl ScriptTree {
         }
         let open = self.open.contains(&p);
         let want = want.unwrap_or(!open);
-        if want && self.mode == TreeMode::KeyFile && !self.loaded.contains(&p) {
+        if want && matches!(self.mode, TreeMode::ExportPath(_)) && !self.loaded.contains(&p) && self.loops(&p) {
+            return;
+        }
+        if want && matches!(self.mode, TreeMode::KeyFile | TreeMode::ExportPath(_)) && !self.loaded.contains(&p) {
             self.load(&p);
             if self.unreadable(&self.row) {
                 return;
@@ -218,6 +237,9 @@ impl App {
         if mode == TreeMode::KeyFile {
             return self.open_key_picker();
         }
+        if let TreeMode::ExportPath(_) = mode {
+            return self.open_export_path_pick();
+        }
         if !self.scripts_available() {
             return self.flash(Notice::new(Label::ScriptsNoDataDir, Level::Warning));
         }
@@ -225,11 +247,13 @@ impl App {
         let entries = self.scripts.as_ref().map(|s| s.list()).unwrap_or_default();
         let current = match mode {
             TreeMode::Save { tab, .. } => self.tabs.get(tab).and_then(|t| t.script().map(str::to_string)),
-            TreeMode::Open | TreeMode::KeyFile | TreeMode::Folder(_) => self.tab().script().map(str::to_string),
+            TreeMode::Open | TreeMode::KeyFile | TreeMode::Folder(_) | TreeMode::ExportPath(_) => {
+                self.tab().script().map(str::to_string)
+            }
         };
         let (row, name) = match (&current, mode) {
             (Some(p), TreeMode::Save { .. }) => (TreeRow::File(p.clone()), scripts::display_name(p, false).to_string()),
-            (Some(p), TreeMode::Open | TreeMode::KeyFile | TreeMode::Folder(_)) => {
+            (Some(p), TreeMode::Open | TreeMode::KeyFile | TreeMode::Folder(_) | TreeMode::ExportPath(_)) => {
                 (TreeRow::File(p.clone()), String::new())
             }
             (None, _) => (self.last_save_folder.clone().map_or(TreeRow::Top, TreeRow::Folder), String::new()),
@@ -278,6 +302,9 @@ impl App {
         let Some(t) = self.overlays.script_tree_mut() else { return };
         if let TreeMode::Folder(_) = t.mode {
             return self.folder_pick_key(key, repeat);
+        }
+        if let TreeMode::ExportPath(_) = t.mode {
+            return self.export_path_key(key, repeat);
         }
         let tree = t.focus == TreeFocus::Tree;
         let key_file = t.mode == TreeMode::KeyFile;
@@ -350,6 +377,7 @@ impl App {
         match mode {
             TreeMode::KeyFile => self.key_picker_enter(),
             TreeMode::Folder(_) => self.folder_picked(),
+            TreeMode::ExportPath(_) => self.export_path_enter(),
             TreeMode::Open => match row {
                 TreeRow::File(p) => {
                     self.overlays.close(OverlayKind::ScriptTree);
@@ -511,6 +539,9 @@ impl App {
                     TreeRow::Up if again => t.up(),
                     TreeRow::Folder(_) if arrow || again => t.set_open(None),
                     TreeRow::File(_) if again && t.mode == TreeMode::KeyFile => self.key_picker_enter(),
+                    TreeRow::Top | TreeRow::File(_) if again && matches!(t.mode, TreeMode::ExportPath(_)) => {
+                        self.export_path_enter()
+                    }
                     TreeRow::File(p) if again && t.mode == TreeMode::Open => {
                         self.overlays.close(OverlayKind::ScriptTree);
                         self.open_script(&p);

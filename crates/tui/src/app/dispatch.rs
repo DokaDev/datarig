@@ -193,6 +193,7 @@ impl App {
             }
             Action::ScriptOpen => self.open_script_chooser(),
             Action::PickKeyFile => self.open_key_picker(),
+            Action::PickExportPath => self.open_export_path_pick(),
             Action::ScriptDelete => {
                 if let Some(p) = self.current_script() {
                     self.request_delete_script(p);

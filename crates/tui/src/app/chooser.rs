@@ -67,6 +67,9 @@ pub enum NamePurpose {
     /// A new profile folder inside `parent` (`None`: at the top) in the folder picker: a row
     /// of the tree until it is picked.
     NewPickFolder { parent: Option<String> },
+    /// A new folder of the file system inside `parent` (relative to the folder shown; `None`:
+    /// that folder) in the export path picker, made at once.
+    NewExportFolder { parent: Option<String> },
     /// Rename (or move, with `/`) this saved query.
     RenameScript(String),
     /// Rename this folder of the saved queries.
@@ -345,6 +348,7 @@ impl App {
             NamePurpose::CopyTheme { from } => Some(self.copy_theme_named(&from.clone(), &typed)),
             NamePurpose::NewScriptFolder { parent } => Some(self.new_script_folder(parent.clone(), &typed)),
             NamePurpose::NewPickFolder { parent } => Some(self.new_pick_folder(parent.clone(), &typed)),
+            NamePurpose::NewExportFolder { parent } => Some(self.new_export_folder(parent.clone(), &typed)),
             NamePurpose::RenameScript(from) => Some(self.rename_script(&from.clone(), &typed, false)),
             NamePurpose::RenameScriptFolder(from) => Some(self.rename_script(&from.clone(), &typed, true)),
             _ => None,
