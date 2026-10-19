@@ -365,6 +365,9 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
   [Environments](#environments). **Read-only is enforced by the server**: every transaction of a
   read-only profile is opened `READ ONLY`, so even a function called from a `SELECT` cannot write.
 - `EXPLAIN ANALYZE` of a write is rolled back.
+- Manual commit per environment (`commit = "manual"`): reads run without a transaction, the
+  first write opens one, and it stays open until you commit (`Space x c`) or roll back
+  (`Space x r`); datarig never commits on its own. See [Manual commit](#manual-commit).
 
 **Keys**
 - A context keymap with a which-key popup after `Space`, keyboard help (`F1` or `Space ?`) with
@@ -564,7 +567,8 @@ paging_idle_timeout = "10s"    # with "hold": close it after 10 s without a page
 ### Environments
 
 An environment is a named set of rules that profiles share: whether the profile is read-only,
-which statements ask first, how results page, the spill limit, and an optional color and badge.
+which statements ask first, whether you commit by hand ([Manual commit](#manual-commit)), how
+results page, the spill limit, and an optional color and badge.
 Pick one in a profile's form (Advanced section, `Enter` on Environment): the list has
 "None (default rules)", every environment with its color, badge and rules, and "New
 environment…", which opens the environment form and comes back with the new one picked.
@@ -573,8 +577,9 @@ The explorer's **Environments** section starts with **Default rules (no environm
 rules of every profile without an environment (`e` edits them; `Enter` lists those profiles;
 they cannot be renamed, copied or deleted, and have no color or badge). Then it lists the
 environments, each with a chip in its color (a dot with icons off), its badge and its rules in a
-few words, colored by what they do: read-only in blue, "asks before every write" in the warning
-color, "holds locks while paging" in the error color (the same in the profile form's list)
+few words, colored by what they do: read-only in blue, "asks before every write" and
+"manual commit" in the warning color, "holds locks while paging" in the error color (the same
+in the profile form's list)
 (the same keys as the Tunnels section:
 `n` new, `e` edit, `c` copy, `R` rename, `d` delete, `Enter` or `l` to see the profiles that
 use one). A rename takes those profiles along; deleting one that profiles use asks first and
@@ -586,8 +591,8 @@ written together with the profile, and only when the profile is saved):
 |---|---|---|---|
 | `dev` | the defaults | green | |
 | `test` | the defaults | blue | |
-| `staging` | every write asks | orange | `STG` |
-| `prod` | read-only, every write asks | red | `PROD` |
+| `staging` | every write asks, manual commit | orange | `STG` |
+| `prod` | read-only, every write asks, manual commit | red | `PROD` |
 
 Nothing is written on its own: presets are added only when you ask, and once written they are
 ordinary environments you can edit, rename or delete. No behavior depends on an environment's
@@ -601,6 +606,9 @@ that name, so existing files keep working) with these keys, each optional:
 |---|---|---|
 | `read_only` | `true`, `false` | `false` |
 | `confirm` | `"destructive"` (dangerous statements), `"writes"` (every write too) | `"destructive"` |
+| `commit` | `"auto"`, `"manual"` ([Manual commit](#manual-commit)) | `"auto"` |
+| `tx_idle_warning` | as `paging_idle_timeout`, at least 10 s, or `"off"` | `"5m"` |
+| `tx_idle_timeout` | PostgreSQL only: as `paging_idle_timeout`, at least 10 s, or `"off"` | `"30m"` |
 | `paging` | `"no_hold"`, `"hold"` | `"no_hold"` |
 | `paging_idle_timeout` | seconds, or `"90s"`, `"5m"`, `"1h"`, `"off"` | `"30s"` |
 | `spill_limit` | bytes, or `"512MB"`, `"2GB"`, `"off"` | the top-level `spill_limit` |
@@ -616,7 +624,8 @@ written as dotted keys (`policy.prod.read_only = true`) or as an inline table
 (`policy = { prod = { read_only = true } }`) stay that way, where they are.
 
 `[policy.default]` holds the default rules, which every profile without an environment uses
-(the built-in defaults without it: writable, dangerous statements ask, no held pages). It is not
+(the built-in defaults without it: writable, dangerous statements ask, automatic commit, no held
+pages). It is not
 an environment: it is the section's first row, does not count as an environment (the presets
 are offered while it is the only table), and the app writes it only when you save a change in
 its form (only what changed, the table made then and removed once it is empty again); a `color`
@@ -781,6 +790,130 @@ when you walk a large result page by page (with no hold each page runs the state
 skips the rows before it, which costs more the deeper you go). A row count (`#`) never keeps
 anything open of its own.
 
+## Manual commit
+
+With `commit = "manual"` in an environment, what you change waits for you: datarig opens a
+transaction right before the first statement that may write, and it stays open until you
+commit or roll it back. datarig never commits on its own. The default, `commit = "auto"`, is
+how datarig always ran: each statement outside your own `BEGIN` block commits by itself.
+
+- **Reads before the first write keep nothing open.** A plain read (a `SELECT` that the paging
+  allowlist takes, `SHOW`, …) runs as it does with automatic commit, and nothing stays on the
+  server after it. Anything not known to be a plain read opens the transaction: writes, DDL
+  (PostgreSQL), `SELECT … FOR UPDATE`, a `SELECT` that calls a function of yours or a volatile
+  one, `CALL`, `DO`, an `EXECUTE` of a prepared write, text the parser rejects. Session
+  settings, transaction control and `EXPLAIN ANALYZE` (rolled back anyway) never open it.
+  Once open, every statement of the tab runs in it, reads too:
+  `SELECT …; UPDATE …; SELECT …` opens it before the `UPDATE`, and the last `SELECT` sees the
+  update. Results read in it are labelled uncommitted. Your own `BEGIN` still works as before,
+  with the server's rules.
+- **PostgreSQL**: DDL is transactional, so `CREATE`, `ALTER` and `DROP` can be rolled back with
+  the rest. Until then they hold their locks, and Messages says so: the lock mode for the
+  common cases (`ALTER TABLE … ADD COLUMN`, `DROP TABLE`, `TRUNCATE` hold an `ACCESS EXCLUSIVE`
+  lock, so other sessions' reads of the table wait; `CREATE INDEX` a `SHARE` lock, so their
+  writes wait), otherwise only that it keeps locks on the table. Opening the transaction goes
+  out with the statement: no round trip more.
+- **MySQL**: DDL (and `LOCK TABLES`, `START TRANSACTION`, …) commits the open transaction by
+  itself before it runs, and cannot be rolled back. It never opens a transaction. With changes
+  pending it asks first, saying what it would commit ("first commits the open transaction: 3
+  statements (120 rows)"; `Enter` leaves it unrun, `y` runs it); with no transaction open,
+  Messages notes that MySQL applies DDL at once. `START TRANSACTION` is a request of its own:
+  one round trip more, on the first write of each transaction only.
+
+**Settings**, per environment (its form's Commit, Idle warning and Idle limit, or the
+`[policy.<name>]` keys in [Environments](#environments)):
+
+| Key | Values | Default |
+|---|---|---|
+| `commit` | `"auto"`, `"manual"` | `"auto"` |
+| `tx_idle_warning` | a duration (`"90s"`, `"5m"`, `"1h"`; at least 10 s) or `"off"` | `"5m"` |
+| `tx_idle_timeout` | PostgreSQL only: a duration (at least 10 s) or `"off"` | `"30m"` |
+
+- `tx_idle_warning`: once an open transaction has sat idle that long, datarig warns once (again
+  only after it ran something and sat idle again), its `◆` turns red in the tab bar and the
+  explorer, and the status bar adds `idle 5:00 · holding locks` in the error color. It never
+  ends anything.
+- `tx_idle_timeout`: the server's own limit for a transaction opened for manual commit
+  (`SET LOCAL idle_in_transaction_session_timeout` with its `BEGIN`; it ends with the
+  transaction, so nothing stays on a pooled connection). Past it the server ends the session
+  and rolls the transaction back, and datarig says so. It works where datarig cannot: with the
+  laptop asleep or the tunnel gone. `"off"` leaves the server's setting.
+- The rule is read at each run (no reconnect). Switched to `"auto"` while a transaction is open,
+  that transaction stays until you end it, and datarig says so. With `read_only = true` no
+  transaction ever opens (every write is refused first), so the explorer shows only the
+  read-only rule.
+- Presets: `staging` and `prod` commit by hand in a new setup. Environments you have already
+  (and any without the key) stay automatic until you change them.
+
+**Keys**: `Space x c` or `:commit` commits, `Space x r` or `:rollback` (`:rb`) rolls back,
+`Space x s` or `:tx` shows what the open transaction did (its statements with their rows and
+times, how long it has been open and idle; `c` commits, `r` rolls back, `j`/`k` scroll, `Esc`
+or `q` closes). They work for your
+own `BEGIN` too, and are in the action menu. They are refused while a statement runs in the
+tab, and a transaction that failed can only be rolled back. While one is open the tab shows
+`◆`, the explorer shows `◆` after its profile, and the status bar shows
+`TX open · 3 changes · 120 rows · 4:12` (statements that may have written, the rows they
+changed, the time since it opened; `idle 1:30` once it has sat idle a minute).
+
+**When a run fails** in the open transaction:
+- PostgreSQL: each run goes under a savepoint of its own (no round trip more). A run that fails
+  or is cancelled is undone, and the transaction keeps what earlier runs did; it does not become
+  aborted. Your own `BEGIN` block has no such savepoint: a failure aborts it, as PostgreSQL
+  does.
+- MySQL: the server undoes only the statement that failed; earlier statements of the run keep
+  what they did. A deadlock (or a lock wait timeout with `innodb_rollback_on_timeout`) rolls
+  back the whole transaction, and datarig says how many changes are gone.
+- A run that opened the transaction and then fails (on either server) rolls it back at once:
+  nothing of it is kept, and no transaction is left open.
+
+**Statements that cannot run in a transaction** (PostgreSQL: `VACUUM`,
+`CREATE INDEX CONCURRENTLY`, `CREATE DATABASE`, `ALTER SYSTEM`, …): while a transaction is
+open they are refused before they are sent ("commit or roll back first"), with either commit
+rule. With manual commit and none open they ask first: they run on their own, at once, and
+cannot be rolled back. A procedure or `DO` block that ends transactions itself fails inside the
+transaction: when it was the first write, datarig rolls the transaction back and asks whether
+to run it once outside one; with changes pending, the run is undone and datarig says to commit
+or roll back first, then run it again.
+
+**How a commit ends**: committed, with the count, rows and time in Messages; refused by the
+server (a deferred constraint, a serialization failure), which then rolls back, with its error;
+a PostgreSQL transaction that had failed is reported as rolled back, never as committed. When
+the connection ends while a commit is on its way, whether it happened is not known, and datarig
+says so: check the data.
+
+**Closing, disconnecting, quitting** (also switching a tab's connection or database with
+`:use`, deleting the profile) with a transaction open asks first, with what it holds (`3
+changes (120 rows) uncommitted for 4:12`): `c` commits first, `r` rolls back first, `y` goes
+on anyway (the server rolls back), `Enter` or `n` stays. A failed transaction offers only `r`
+and `y`. After `c` or `r` it goes on only once the server confirmed; one that fails stops there
+with the error. Quitting with several tabs ends them one at a time and stops at the first that
+fails (the ones before it are done). While it waits the status bar says `Committing tab 1 of 3
+first, then quit anyway · Esc stops waiting`. A signal (SIGTERM, SIGHUP, the terminal gone), a
+crash or a kill cannot ask: the connection closes and the server rolls back. Nothing commits on
+its own, and no transaction comes back with a restored workspace.
+
+**Limits**
+- MySQL cannot run a plain read outside a transaction read-only without a round trip more for
+  every read, so it does not: a write hidden behind a read (a view that calls a stored function
+  that writes) commits by itself. PostgreSQL runs those reads read-only, so such a write fails.
+- MySQL: `LOCK TABLES` is refused with manual commit (the next write would start a transaction,
+  which releases the locks). A `CALL` of a procedure that runs DDL commits the transaction
+  without asking (datarig says so afterwards). A `SET autocommit = 0` of yours shows
+  "autocommit off (session)", and every statement then opens a transaction.
+- PgBouncer in transaction pooling: from the first write to the commit, one server connection is
+  yours, and the transaction holds that pool slot for as long as it stays open. Statement
+  pooling refuses transactions of several statements, so manual commit does not work through
+  it.
+- SSH tunnels: when the tunnel is lost, the link from the bastion to the database may stay open,
+  and the server may hold the transaction and its locks until it notices. `tx_idle_timeout` is
+  the safety net for that (PostgreSQL only).
+- PostgreSQL: each run that writes under its savepoint is a subtransaction, kept until the
+  transaction ends. Past about 64 in one transaction, other sessions' snapshots get slower until
+  it ends: commit long transactions of many runs.
+- PostgreSQL: `tx_idle_timeout` needs PostgreSQL 9.6 or later; older servers refuse it, and the
+  first write fails. Set it to `"off"` there. Savepoint names that start with `datarig_` are
+  datarig's own and are refused in a transaction opened for manual commit.
+
 ## MySQL
 
 MySQL 8.0, 8.4 and 9.x (tested on 8.0.45, 8.4.11 and 9.7.2). MySQL 5.7 and older are refused
@@ -818,7 +951,8 @@ is tested only lightly.
   block commit what it changes. An open transaction is rolled back once the server ends the
   session.
 - Transactions as the server reports them after each statement; a statement that commits your
-  open transaction by itself (DDL and others) is noted in Messages.
+  open transaction by itself (DDL and others) is noted in Messages, and with manual commit asks
+  first ([Manual commit](#manual-commit)).
 - The explorer: the server's databases right under the profile (a MySQL database is the
   schema), their tables and views with the server's estimates (`~rows · size`), and a table's
   structure (columns, keys, indexes, constraints, triggers); completion; `:use db` and the
