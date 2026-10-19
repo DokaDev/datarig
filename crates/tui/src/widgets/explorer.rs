@@ -78,6 +78,14 @@ fn row_parts(app: &App, row: &Row) -> Vec<(String, Style)> {
                 (icons::cell(p, app.icons_on()), fg(color)),
                 (p.name.clone(), app.profile_name_style(*id)),
             ];
+            // A tab of it has an open transaction (the tab bar's mark, the same with icons off):
+            // in the error color once it stayed idle past its environment's warning.
+            let tabs = || app.tabs.iter().filter(|t| t.profile == Some(*id) && t.exec.user_tx());
+            if tabs().next().is_some() {
+                let idle = tabs().any(App::tx_idle_warned);
+                let color = if idle { th.error } else { th.warning };
+                parts.push((format!(" {}", crate::widgets::tabbar::TX_OPEN), fg(color)));
+            }
             // Through an SSH tunnel: a small mark (in the error color when its tunnel setting is
             // wrong: a preset that is not there, or two tunnels).
             match app.route_of(p) {

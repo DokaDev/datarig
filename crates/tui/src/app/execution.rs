@@ -132,6 +132,7 @@ impl App {
         }
         let tx = self.tx_rule(id, &statements, as_is);
         let manual = self.manual_commit(id);
+        let now = self.now();
         self.query_seq += 1;
         let qid = self.query_seq;
         if let Some(t) = self.tabs.get_mut(id) {
@@ -175,6 +176,10 @@ impl App {
             // The statements of the run run in the open transaction from the first on.
             t.exec.tx_from = t.exec.user_tx().then_some(0);
             t.exec.sent_manual = tx != TxRule::Auto;
+            // A statement runs: the open transaction is not idle.
+            if let Some(open) = t.exec.tx.as_mut() {
+                open.touch(now);
+            }
             t.exec.run_id = qid;
             t.exec.outside_offer = None;
             t.exec.ddl = statements.iter().any(|s| changes_schema_in(s, lang.dialect()));
@@ -1051,12 +1056,37 @@ impl App {
                 }
                 if q == t.exec.run_id {
                     t.exec.run.notes.push(Notice::new(Label::TxRunRolledBack, Level::Info));
+                    // A procedure that failed in the open transaction may be one that commits by
+                    // itself (it cannot run in one): how to run it.
+                    let dialect = t.exec.prepared.language().dialect();
+                    let call = t
+                        .exec
+                        .run
+                        .failed()
+                        .and_then(|(i, e)| {
+                            // PostgreSQL's 2D000, as its message says it (the driver's error
+                            // carries no SQLSTATE).
+                            e.contains("invalid transaction termination").then_some(i)
+                        })
+                        .and_then(|i| t.exec.run.statements.get(i))
+                        .is_some_and(|s| {
+                            let first = datarig_core::sql::lexer::lex_in(&s.sql, dialect)
+                                .into_iter()
+                                .find(|w| w.is_word())
+                                .map(|w| w.text(&s.sql).to_ascii_uppercase());
+                            matches!(first.as_deref(), Some("CALL" | "DO"))
+                        });
+                    if call {
+                        t.exec.run.notes.push(Notice::new(Label::TxCallInTx, Level::Warning));
+                    }
                 }
                 None
             }
             // The answer to the commit or rollback asked for.
             DbEvent::TxEnded { id: q, outcome } if t.exec.ending.is_some_and(|e| e.id == q) => {
-                t.exec.ending = None;
+                let commit = t.exec.ending.take().is_some_and(|e| e.commit);
+                let asked = if commit { TxOutcome::Committed } else { TxOutcome::RolledBack };
+                t.exec.last_end = Some(outcome == asked);
                 t.exec.closing = Some(outcome != TxOutcome::Committed);
                 let (count, rows, began, began_wall) =
                     t.exec.tx.as_ref().map_or((0, 0, now, wall), |x| (x.changes, x.rows, x.began, x.began_wall));
@@ -1077,6 +1107,7 @@ impl App {
             // The commit or rollback asked for failed.
             DbEvent::Failed { id: q, error, .. } if t.exec.ending.is_some_and(|e| e.id == q) => {
                 let commit = t.exec.ending.take().is_some_and(|e| e.commit);
+                t.exec.last_end = Some(false);
                 let m = match error {
                     DbError::NoTransaction => Notice::new(Label::TxNone, Level::Warning),
                     // The connection ended while committing: the transaction may have been
@@ -1663,12 +1694,26 @@ impl App {
         if fetch_failed {
             self.fetch_copy_failed(id);
         }
-        // What the run did in the open transaction goes in its log.
-        if run_ended && let Some(t) = self.tabs.get_mut(id) {
-            t.book_tx();
+        // What the run did in the open transaction goes in its log; its idle time starts over.
+        if let Some(t) = self.tabs.get_mut(id) {
+            if run_ended {
+                t.book_tx();
+            }
+            if (run_ended || rows_for.is_some() || t.exec.running.is_some())
+                && let Some(open) = t.exec.tx.as_mut()
+            {
+                open.touch(now);
+            }
         }
         if offer {
             self.offer_outside(id);
+        }
+        self.end_answered(id);
+        // The summary of a transaction that ended closes.
+        if self.overlays.tx_summary().is_some_and(|s| s.tab == id)
+            && !self.tabs.get(id).is_some_and(|t| t.exec.user_tx())
+        {
+            self.overlays.close(OverlayKind::TxSummary);
         }
         if rows_for == Some(None) {
             self.read_held_on(id);

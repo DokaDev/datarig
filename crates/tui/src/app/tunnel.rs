@@ -885,6 +885,7 @@ impl App {
             action: ConfirmAction::TrustHostKey,
             folder: None,
             path: None,
+            tx: None,
             buttons: Default::default(),
         }));
     }

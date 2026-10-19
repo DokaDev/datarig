@@ -536,6 +536,12 @@ Before statements that may do harm run: each is listed; Cancel has the focus, `y
 
 Reserved — run confirmation (Cancel has the focus): `y` `n` `Enter` `Esc` `Tab` `Shift+Tab` `Left` `Right` `h` `l`
 
+## `overlay.tx_summary`
+
+What the open transaction did (its statements that may have written, rows, time; how long it has been open and idle): `c` commits, `r` rolls back, `Esc` closes; a click on a button does what its key does. Inside `root`.
+
+Reserved — transaction summary: `c` `r` `Esc` `q` `Enter` `j` `k` `Down` `Up`
+
 ## `overlay.icons_ask`
 
 Whether the terminal shows the Nerd Font icons (asked once, with a preview); No has the focus; a click on Yes or No answers. Inside `root`.

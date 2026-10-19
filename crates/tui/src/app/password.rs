@@ -470,6 +470,7 @@ impl App {
                     action: ConfirmAction::ChangeSource,
                     folder: None,
                     path: None,
+                    tx: None,
                     buttons: Default::default(),
                 }));
             }

@@ -5,7 +5,7 @@ expression: backend
 "╭ Explorer ────────────────────────────╮ ⠋ console 1 ◆ ×  2 console 2 ×  3 console 3 ! ×                                                                        "
 "│  ＋ New connection                   │╭ Query · console 3 ───────────────────────────────────────────────────────────────────────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
 "│▾ Connections 1                       ││ local-pg / datarig  127.0.0.1:55432                                                      Space c s switch connection │"
-"│  ▾ ●   local-pg                      ││  1▎select 3                                                                                                          │"
+"│  ▾ ●   local-pg ◆                    ││  1▎select 3                                                                                                          │"
 "│    ▾ datarig default                 ││                                                                                                                      │"
 "│      ▸ analytics                     ││                                                                                                                      │"
 "│      ▸ public                        ││                                                                                                                      │"

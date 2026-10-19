@@ -444,12 +444,15 @@ impl App {
         let texts =
             [Label::DisconnectRunning, Label::DisconnectTx, Label::DisconnectRunningTx, Label::DisconnectQueued];
         match tab_ops::at_risk(running, queued, tx, texts) {
-            Some(text) => self.confirm(
-                Label::DisconnectTitle,
-                text,
-                Label::DisconnectKeys,
-                ConfirmAction::Disconnect { id, reconnect },
-            ),
+            Some(text) => {
+                self.confirm(
+                    Label::DisconnectTitle,
+                    text,
+                    Label::DisconnectKeys,
+                    ConfirmAction::Disconnect { id, reconnect },
+                );
+                self.offer_tx_choices();
+            }
             None => self.disconnect(id, reconnect),
         }
     }
@@ -563,8 +566,10 @@ impl App {
             action: ConfirmAction::DeleteProfile(id),
             folder: None,
             path: None,
+            tx: None,
             buttons: Default::default(),
         }));
+        self.offer_tx_choices();
     }
 
     /// Delete profile `id` (confirmed): what waits for its connection is dropped, its tabs
@@ -657,6 +662,7 @@ impl App {
             action: ConfirmAction::DeleteFolder,
             folder: Some(f),
             path: None,
+            tx: None,
             buttons: Default::default(),
         }));
     }

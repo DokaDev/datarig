@@ -197,7 +197,9 @@ impl App {
             return self.flash(Notice::new(Msg::ConfigSaveFailed { error }, Level::Error));
         }
         self.overlays.close(OverlayKind::ProfileForm);
-        self.flash(Notice::new(Label::EnvDefaultSaved, Level::Success));
+        if !self.commit_rule_changed(&before) {
+            self.flash(Notice::new(Label::EnvDefaultSaved, Level::Success));
+        }
     }
 
     /// The profiles that name environment `name`.
@@ -305,7 +307,9 @@ impl App {
         if !self.close_form(Some(e.name.clone())) {
             self.reveal_environment(e.id);
         }
-        self.flash(Notice::new(Msg::EnvironmentSaved { name: e.name }, Level::Success));
+        if !self.commit_rule_changed(&policies) {
+            self.flash(Notice::new(Msg::EnvironmentSaved { name: e.name }, Level::Success));
+        }
     }
 
     /// The profiles naming environment `from` name `to` instead, and so do the copies their
@@ -380,6 +384,7 @@ impl App {
             action: ConfirmAction::DeleteEnvironment(id),
             folder: None,
             path: None,
+            tx: None,
             buttons: Default::default(),
         }));
     }

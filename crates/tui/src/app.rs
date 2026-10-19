@@ -741,6 +741,8 @@ pub struct App {
     pub(crate) last_save_folder: Option<String>,
     /// The database and schema `:use` named for a tab, while the switch waits for its confirm.
     pending_context: Option<(TabId, datarig_core::driver::SessionContext)>,
+    /// A question's answer waiting for open transactions to be committed or rolled back first.
+    pending_end: Option<tx::PendingEnd>,
     /// A `:use` whose name a list read earlier does not have, while the server is asked again.
     pending_use: Option<cmdline::PendingUse>,
     /// A press on a tab of the tab bar, and the drag of that tab that may follow.
@@ -1035,6 +1037,7 @@ impl App {
             detail_picked: None,
             last_top: None,
             pending_context: None,
+            pending_end: None,
             pending_use: None,
             last_save_folder: None,
         };
@@ -1549,6 +1552,7 @@ impl App {
             Some(Overlay::Busy(_)) => Ctx::Busy,
             Some(Overlay::Confirm(_)) => Ctx::Confirm,
             Some(Overlay::RunConfirm(_)) => Ctx::RunConfirm,
+            Some(Overlay::TxSummary(_)) => Ctx::TxSummary,
             Some(Overlay::IconsAsk(_)) => Ctx::IconsAsk,
             Some(Overlay::Help(h)) if h.filtering => Ctx::HelpFilter,
             Some(Overlay::Help(_)) => Ctx::Help,
@@ -1641,6 +1645,7 @@ impl App {
             || self.conns.auxes().any(|a| self.aux_idle(a))
             // The open transaction's time in the status bar (the active tab's only).
             || self.tx_tick_due(self.now()).is_some()
+            || self.tx_idle_due().is_some()
     }
 
     /// Aux session `a` is open and no tab works in its database: it closes
@@ -1705,6 +1710,9 @@ impl App {
         if let Some(due) = self.tx_tick_due(now) {
             at(due);
         }
+        if let Some(due) = self.tx_idle_due() {
+            at(due);
+        }
         // Never sooner than a fine tick, never in the past.
         next.map(|n| n.max(now + Duration::from_millis(1)))
     }
@@ -1713,6 +1721,7 @@ impl App {
     /// portals). Called on every tick with the current time.
     pub fn on_tick(&mut self, now: Instant) {
         self.which_key_tick(now);
+        self.tx_idle_tick(now);
         self.autosave_tick(now);
         // Aux sessions no tab works in, unused for a while, close; what they read stays.
         let idle: Vec<u64> = self
@@ -1793,6 +1802,10 @@ impl App {
         }
         if let Some((m, _)) = &self.transient {
             return Some((m.render(&self.i18n), m.level, false));
+        }
+        // An answer waits for transactions to end (whichever tab is shown).
+        if let Some(m) = self.end_pending_status() {
+            return Some((m, Level::Info, true));
         }
         if let Some(r) = &self.tab().exec.running {
             let log = &self.tab().exec.run;

@@ -148,7 +148,11 @@ impl App {
         if self.overlays.top().is_some_and(|o| {
             matches!(
                 o.kind(),
-                OverlayKind::Busy | OverlayKind::Confirm | OverlayKind::RunConfirm | OverlayKind::IconsAsk
+                OverlayKind::Busy
+                    | OverlayKind::Confirm
+                    | OverlayKind::RunConfirm
+                    | OverlayKind::TxSummary
+                    | OverlayKind::IconsAsk
             )
         }) {
             return;
@@ -213,6 +217,16 @@ impl App {
     pub(super) fn handle_key(&mut self, key: KeyEvent, repeat: bool) {
         let chord = KeyChord::from_event(&key);
         let ctx = self.key_context();
+        // An answer waits for transactions to end: `Esc` (outside text input, no dialog open)
+        // stops waiting.
+        if key.code == KeyCode::Esc
+            && self.overlays.is_empty()
+            && !matches!(ctx, Ctx::VimInsert)
+            && !ctx.is_text_input()
+            && self.end_dropped()
+        {
+            return;
+        }
         // The completion popup takes its keys before the editor.
         if self.tab().popup.is_some()
             && self.overlays.is_empty()
@@ -306,6 +320,7 @@ impl App {
             Ctx::ContextMenu => keys.iter().for_each(|k| self.menu_key(*k, repeat)),
             Ctx::Confirm => keys.iter().for_each(|k| self.confirm_key(k.to_event(), repeat)),
             Ctx::RunConfirm => keys.iter().for_each(|k| self.run_confirm_key(k.to_event(), repeat)),
+            Ctx::TxSummary => keys.iter().for_each(|k| self.tx_summary_key(k.to_event(), repeat)),
             Ctx::IconsAsk => keys.iter().for_each(|k| self.icons_ask_key(k.to_event(), repeat)),
             Ctx::ProfileForm => keys.iter().for_each(|k| self.form_key(k.to_event(), repeat)),
             Ctx::Settings => keys.iter().for_each(|k| self.settings_key(k.to_event(), repeat)),

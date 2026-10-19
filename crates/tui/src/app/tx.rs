@@ -30,6 +30,9 @@ use std::time::SystemTime;
 /// The most statements a tab's transaction log keeps (the oldest go first; the counts go on).
 pub const TX_LOG_CAP: usize = 200;
 
+/// From this long idle on, the status bar says for how long the open transaction is idle.
+pub const IDLE_SHOWN: Duration = Duration::from_secs(60);
+
 /// A statement the open transaction ran that may have written, and succeeded.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TxEntry {
@@ -60,11 +63,36 @@ pub struct OpenTx {
     /// What the last run booked into it: its id, statements and rows (undone when the session
     /// rolls that run back).
     last_run: Option<(u64, u64, u64)>,
+    /// When a statement last ran in it (or it began), by the app's clock: it is idle since.
+    pub last_active: Instant,
+    /// It stayed idle past the environment's `tx_idle_warning` since then (said once).
+    pub warned: bool,
 }
 
 impl OpenTx {
     pub fn new(manual: bool, began: Instant, began_wall: SystemTime) -> Self {
-        Self { manual, began, began_wall, log: VecDeque::new(), changes: 0, rows: 0, last_run: None }
+        Self {
+            manual,
+            began,
+            began_wall,
+            log: VecDeque::new(),
+            changes: 0,
+            rows: 0,
+            last_run: None,
+            last_active: began,
+            warned: false,
+        }
+    }
+
+    /// A statement ran in it at `now`: it is not idle (a new idle period starts after).
+    pub fn touch(&mut self, now: Instant) {
+        self.last_active = now;
+        self.warned = false;
+    }
+
+    /// How long it has been idle at `now` (nothing while a statement runs: `running`).
+    pub fn idle(&self, now: Instant, running: bool) -> Duration {
+        if running { Duration::ZERO } else { now.saturating_duration_since(self.last_active) }
     }
 
     fn push(&mut self, e: TxEntry) {
@@ -284,6 +312,22 @@ impl App {
             if !mysql && r.adds_enum_value && (open || (manual && step == TxStep::Opens)) {
                 out.notes.push(Notice::new(Msg::TxEnumValue { step: step_text(i) }, Level::Warning));
             }
+            // DDL in a transaction holds its lock until the transaction ends: said, with what
+            // waits for it.
+            if !mysql
+                && r.class == datarig_core::sql::risk::Class::Ddl
+                && (open || (manual && step == TxStep::Opens))
+                && let Some(lock) = ddl_lock(sql)
+            {
+                let step = step_text(i);
+                let m = match lock {
+                    DdlLock::Exclusive(target) => Msg::TxDdlLockExclusive { step, target },
+                    DdlLock::DropIndex(target) => Msg::TxDdlLockDropIndex { step, target },
+                    DdlLock::Share(target) => Msg::TxDdlLockShare { step, target },
+                    DdlLock::Kept(target) => Msg::TxDdlLockKept { step, target },
+                };
+                out.notes.push(Notice::new(m, Level::Warning));
+            }
             match block_change(sql, dialect) {
                 Some(o) => {
                     open = o;
@@ -321,41 +365,91 @@ impl App {
             return;
         }
         let id = self.tab().id;
-        if !self.tab().exec.user_tx() {
-            return self.flash(Notice::new(Label::TxNone, Level::Warning));
-        }
-        if self.tab_busy(id) {
-            return self.flash_busy();
-        }
-        if commit && self.tab().exec.tx_aborted {
+        self.end_tx_in(id, commit);
+    }
+
+    /// End tab `id`'s open transaction ([`App::end_tx`]): whether the request went out.
+    pub(super) fn end_tx_in(&mut self, id: TabId, commit: bool) -> bool {
+        let Some(t) = self.tabs.get(id) else { return false };
+        let refused = if !t.exec.user_tx() {
+            Some(Notice::new(Label::TxNone, Level::Warning))
+        } else if self.tab_busy(id) {
+            let key = self.key_for(Action::CancelQuery, Ctx::Nav);
+            Some(Notice::new(Msg::QueryBusy { key }, Level::Warning))
+        } else if commit && t.exec.tx_aborted {
             let key = self.key_for(Action::TxRollback, Ctx::Nav);
-            return self.flash(Notice::new(Msg::TxOnlyRollback { key }, Level::Warning));
-        }
-        if !self.tab().exec.session.as_ref().is_some_and(|s| s.caps.manual_commit) {
-            return self.flash(Notice::new(Label::TxNotSupported, Level::Warning));
+            Some(Notice::new(Msg::TxOnlyRollback { key }, Level::Warning))
+        } else if !t.exec.session.as_ref().is_some_and(|s| s.caps.manual_commit) {
+            Some(Notice::new(Label::TxNotSupported, Level::Warning))
+        } else {
+            None
+        };
+        if let Some(n) = refused {
+            if self.tab().id == id {
+                self.flash(n);
+            } else {
+                self.tab_status(id, n);
+            }
+            return false;
         }
         self.query_seq += 1;
         let qid = self.query_seq;
         if let Some(t) = self.tabs.get_mut(id) {
             t.exec.ending = Some(Ending { id: qid, commit });
+            t.exec.last_end = None;
         }
         let label = if commit { Label::TxCommitting } else { Label::TxRollingBack };
         self.tab_status(id, Notice::new(label, Level::Info));
         self.send_tab(id, DbCommand::EndTx { id: qid, commit });
+        true
     }
 
-    /// What the active tab's open transaction did, in a line.
+    /// What the active tab's open transaction did: the summary dialog ([`TxSummary`]).
+    ///
+    /// [`TxSummary`]: super::overlay::TxSummary
     pub(super) fn tx_summary(&mut self) {
-        let Some(tx) =
-            self.tabs.get(self.tab().id).and_then(|t| t.exec.tx.clone()).filter(|_| self.tab().exec.user_tx())
-        else {
+        if self.tabs.is_empty() || !self.tab().exec.user_tx() || self.tab().exec.tx.is_none() {
             return self.flash(Notice::new(Label::TxNone, Level::Info));
-        };
-        let how = self.i18n.label(if tx.manual { Label::TxHowManual } else { Label::TxHowUser }).to_string();
-        let rows = self.i18n.msg(&Msg::TxRows { count: tx.rows }).to_string();
-        let time = fmt_clock(self.tx_elapsed(&tx));
-        let id = self.tab().id;
-        self.tab_status(id, Notice::new(Msg::TxSummary { how, count: tx.changes, rows, time }, Level::Info));
+        }
+        let tab = self.tab().id;
+        self.overlays.close(OverlayKind::Commands);
+        self.overlays.close(OverlayKind::WhichKey);
+        self.key_state.clear();
+        let s = super::overlay::TxSummary { tab, scroll: 0, buttons: Default::default() };
+        self.overlays.push(Overlay::TxSummary(s));
+    }
+
+    /// The summary's buttons, the one that changes nothing first: Close, Roll back, Commit (not
+    /// for a failed transaction), each with the key it presses.
+    pub fn tx_summary_buttons(&self) -> Vec<(Label, KeyCode)> {
+        let aborted = self.overlays.tx_summary().and_then(|s| self.tabs.get(s.tab)).is_some_and(|t| t.exec.tx_aborted);
+        let mut b = vec![(Label::DialogButtonClose, KeyCode::Esc), (Label::TxButtonRollbackNow, KeyCode::Char('r'))];
+        if !aborted {
+            b.push((Label::TxButtonCommitNow, KeyCode::Char('c')));
+        }
+        b
+    }
+
+    /// Keys of the summary: `c` commits, `r` rolls back (both close it), `Esc`, `q` and `Enter`
+    /// close it, `j`/`k` and the arrows scroll. Held keys only scroll.
+    pub(super) fn tx_summary_key(&mut self, key: KeyEvent, repeat: bool) {
+        let Some(s) = self.overlays.tx_summary_mut() else { return };
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => s.scroll += 1,
+            KeyCode::Char('k') | KeyCode::Up => s.scroll = s.scroll.saturating_sub(1),
+            _ if repeat => {}
+            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => self.overlays.close(OverlayKind::TxSummary),
+            KeyCode::Char(c @ ('c' | 'r')) => {
+                let tab = s.tab;
+                if c == 'c' && !self.tx_summary_buttons().iter().any(|b| b.1 == KeyCode::Char('c')) {
+                    let key = self.key_for(Action::TxRollback, Ctx::Nav);
+                    return self.flash(Notice::new(Msg::TxOnlyRollback { key }, Level::Warning));
+                }
+                self.overlays.close(OverlayKind::TxSummary);
+                self.end_tx_in(tab, c == 'c');
+            }
+            _ => {}
+        }
     }
 
     /// The status bar's words for the active tab's open transaction: `TX open · 3 changes ·
@@ -363,13 +457,75 @@ impl App {
     pub fn tx_status(&self) -> Option<String> {
         let e = &self.tab().exec;
         let tx = e.tx.as_ref().filter(|_| e.user_tx() && !e.tx_aborted)?;
-        let parts = [
+        let mut parts = vec![
             self.i18n.label(Label::StatusTxOpen).to_string(),
             self.i18n.msg(&Msg::TxChanges { count: tx.changes }).to_string(),
             self.i18n.msg(&Msg::TxRows { count: tx.rows }).to_string(),
             fmt_clock(self.tx_elapsed(tx)),
         ];
+        // Idle a minute or more: for how long; past the warning, that it holds its locks.
+        let idle = tx.idle(self.now(), self.tab_busy(self.tab().id));
+        if idle >= IDLE_SHOWN || tx.warned {
+            parts.push(self.i18n.msg(&Msg::StatusTxIdle { time: fmt_clock(idle) }).to_string());
+        }
+        if tx.warned {
+            parts.push(self.i18n.label(Label::StatusTxHoldingLocks).to_string());
+        }
         Some(parts.join(" · "))
+    }
+
+    /// Tab `t`'s open transaction stayed idle past its environment's warning.
+    pub fn tx_idle_warned(t: &Tab) -> bool {
+        t.exec.user_tx() && t.exec.tx.as_ref().is_some_and(|x| x.warned)
+    }
+
+    /// When the next idle warning is due (the earliest over the tabs with an open, idle
+    /// transaction not warned yet, under their environments' `tx_idle_warning`).
+    pub(super) fn tx_idle_due(&self) -> Option<Instant> {
+        self.tabs
+            .iter()
+            .filter(|t| t.exec.user_tx() && !self.tab_busy(t.id))
+            .filter_map(|t| {
+                let tx = t.exec.tx.as_ref().filter(|x| !x.warned)?;
+                Some(tx.last_active + self.tab_rules(t).tx_idle_warning?)
+            })
+            .min()
+    }
+
+    /// The idle warnings due at `now`: one notice for each open transaction idle past its
+    /// environment's `tx_idle_warning` (once per idle period). Nothing is ended.
+    pub(super) fn tx_idle_tick(&mut self, now: Instant) {
+        let due: Vec<(TabId, usize, Duration)> = self
+            .tabs
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| t.exec.user_tx() && !self.tab_busy(t.id))
+            .filter_map(|(i, t)| {
+                let tx = t.exec.tx.as_ref().filter(|x| !x.warned)?;
+                let limit = self.tab_rules(t).tx_idle_warning?;
+                let idle = tx.idle(now, false);
+                (idle >= limit).then_some((t.id, i, idle))
+            })
+            .collect();
+        for (id, i, idle) in due {
+            if let Some(tx) = self.tabs.get_mut(id).and_then(|t| t.exec.tx.as_mut()) {
+                tx.warned = true;
+            }
+            let (commit, rollback) = self.tx_keys();
+            let (tab, time) = ((i + 1).to_string(), fmt_clock(idle));
+            // A failed transaction can only be rolled back.
+            let m = match self.tabs.get(id).is_some_and(|t| t.exec.tx_aborted) {
+                true => Msg::TxIdleWarningAborted { tab, time, rollback },
+                false => Msg::TxIdleWarning { tab, time, commit, rollback },
+            };
+            let n = Notice::new(m, Level::Warning);
+            if let Some(t) = self.tabs.get_mut(id) {
+                t.exec.run.notes.push(n.clone());
+            }
+            // Said where the user looks: the tab's status, and the status bar from another tab.
+            self.tab_status(id, n.clone());
+            self.status = Some(n);
+        }
     }
 
     /// When the active tab's open transaction's time shown next changes (its next whole
@@ -405,3 +561,353 @@ impl App {
         self.ask_before_run_as(id, pid, vec![sql], vec![item], true);
     }
 }
+
+/// A question's answer that goes on once the open transactions it ends were committed or
+/// rolled back, one tab at a time ([`App::tx_choice`]).
+pub(super) struct PendingEnd {
+    pub action: ConfirmAction,
+    pub commit: bool,
+    /// The tabs still to end, in order.
+    pub tabs: VecDeque<TabId>,
+    /// The tab whose end the server is asked for now.
+    pub current: Option<TabId>,
+    /// How many tabs it ends in all, and how many were asked for so far.
+    pub total: usize,
+    pub asked: usize,
+}
+
+impl App {
+    /// The tabs a yes to `action` would end the session of.
+    fn ended_by(&self, action: ConfirmAction) -> Vec<TabId> {
+        let of_profile = |p| self.tabs.iter().filter(|t| t.profile == Some(p)).map(|t| t.id).collect();
+        match action {
+            ConfirmAction::CloseTab(t) | ConfirmAction::SetConnection(t) | ConfirmAction::SetContext(t) => vec![t],
+            ConfirmAction::Disconnect { id, .. } | ConfirmAction::DeleteProfile(id) => of_profile(id),
+            ConfirmAction::Quit => self.tabs.iter().map(|t| t.id).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// What a yes to `action` does, as the keys and the waiting status say it.
+    fn go_label(action: ConfirmAction) -> Label {
+        match action {
+            ConfirmAction::Quit => Label::TxGoQuit,
+            ConfirmAction::Disconnect { .. } => Label::TxGoDisconnect,
+            ConfirmAction::DeleteProfile(_) => Label::TxGoDelete,
+            ConfirmAction::SetConnection(_) | ConfirmAction::SetContext(_) => Label::TxGoSwitch,
+            _ => Label::TxGoClose,
+        }
+    }
+
+    /// The open question (of `action`) offers to commit or roll back first when every
+    /// transaction its answer would end is one the app can end (the user's block on a session
+    /// that ends it on request), nothing runs or waits in those tabs (a running statement
+    /// keeps today's question: cancelling it comes first), and no other answer waits for its
+    /// transactions to end. Its lines say what each holds.
+    pub(super) fn offer_tx_choices(&mut self) {
+        let Some(action) = self.overlays.confirm().map(|c| c.action) else { return };
+        if self.pending_end.is_some() {
+            return;
+        }
+        let tabs = self.ended_by(action);
+        let at_risk: Vec<TabId> =
+            tabs.iter().copied().filter(|id| self.tabs.get(*id).is_some_and(|t| t.exec.tx_at_risk())).collect();
+        if at_risk.is_empty() || tabs.iter().any(|id| self.tab_busy(*id)) {
+            return;
+        }
+        let endable = |t: &Tab| t.exec.user_tx() && t.exec.session.as_ref().is_some_and(|s| s.caps.manual_commit);
+        if !at_risk.iter().all(|id| self.tabs.get(*id).is_some_and(endable)) {
+            return;
+        }
+        let commit = !at_risk.iter().any(|id| self.tabs.get(*id).is_some_and(|t| t.exec.tx_aborted));
+        let several =
+            matches!(action, ConfirmAction::Quit | ConfirmAction::Disconnect { .. } | ConfirmAction::DeleteProfile(_));
+        let mut lines = Vec::new();
+        for id in &at_risk {
+            let Some((i, t)) = self.tabs.iter().enumerate().find(|(_, t)| t.id == *id) else { continue };
+            let Some(tx) = t.exec.tx.as_ref() else { continue };
+            let rows = self.i18n.msg(&Msg::TxRows { count: tx.rows }).to_string();
+            let time = fmt_clock(self.tx_elapsed(tx));
+            lines.push(match several {
+                true => Msg::TxPendingTab { tab: (i + 1).to_string(), count: tx.changes, rows, time },
+                false => Msg::TxPending { count: tx.changes, rows, time },
+            });
+        }
+        let n = at_risk.len() as u64;
+        if let Some(c) = self.overlays.confirm_mut() {
+            c.tx = Some(super::overlay::TxChoices { commit });
+            // Several tabs' transactions: said so.
+            if action == ConfirmAction::Quit && n > 1 {
+                c.text = Msg::QuitTxTabs { count: n };
+            }
+            c.details.extend(lines);
+        }
+    }
+
+    /// The keys line of a question that offers to commit or roll back first.
+    pub fn tx_choice_keys(&self, action: ConfirmAction, commit: bool) -> Localized {
+        let go = self.i18n.label(Self::go_label(action)).to_string();
+        self.i18n.msg(&match commit {
+            true => Msg::TxChoiceKeys { go },
+            false => Msg::TxChoiceKeysRollback { go },
+        })
+    }
+
+    /// `c` (`commit`) or `r` on a question that offers it: end the open transactions its answer
+    /// would end, one tab at a time, and go on with the answer once the server confirmed each.
+    /// The first that does not end as asked (a failed commit, a rollback instead, an unknown
+    /// outcome, a lost connection) stops it all: nothing more is ended and the answer does not
+    /// go on; the tab says why. While it waits the status bar says so, and `Esc` stops waiting.
+    pub(super) fn tx_choice(&mut self, commit: bool) {
+        let Some(action) = self.overlays.confirm().map(|c| c.action) else { return };
+        self.overlays.close(OverlayKind::Confirm);
+        if self.pending_end.is_some() {
+            return self.flash(Notice::new(Label::TxEndBusy, Level::Warning));
+        }
+        let tabs: VecDeque<TabId> = self
+            .ended_by(action)
+            .into_iter()
+            .filter(|id| self.tabs.get(*id).is_some_and(|t| t.exec.user_tx()))
+            .collect();
+        let total = tabs.len();
+        self.pending_end = Some(PendingEnd { action, commit, tabs, current: None, total, asked: 0 });
+        self.end_next();
+    }
+
+    /// The next tab of the pending answer: its transaction ended next; with none left, the
+    /// answer goes on, unless something its answer would end runs or holds a transaction now
+    /// (started meanwhile): then the question is asked again, as it is now.
+    fn end_next(&mut self) {
+        let Some(p) = self.pending_end.as_mut() else { return };
+        let Some(id) = p.tabs.pop_front() else {
+            let Some(p) = self.pending_end.take() else { return };
+            let tabs = self.ended_by(p.action);
+            let changed =
+                tabs.iter().any(|id| self.tab_busy(*id) || self.tabs.get(*id).is_some_and(|t| t.exec.tx_at_risk()));
+            if changed {
+                return self.ask_again(p.action);
+            }
+            // Whatever ends the sessions now: nothing open is lost.
+            return self.confirmed(p.action, None, None);
+        };
+        let commit = p.commit;
+        p.current = Some(id);
+        p.asked += 1;
+        if !self.tabs.get(id).is_some_and(|t| t.exec.user_tx()) {
+            // Ended meanwhile (by the user, by the server): nothing to do there.
+            return self.end_next();
+        }
+        if !self.end_tx_in(id, commit) {
+            self.end_stopped(id);
+        }
+    }
+
+    /// Ask the question of `action` again (what its answer would end changed while the
+    /// transactions were ended).
+    fn ask_again(&mut self, action: ConfirmAction) {
+        match action {
+            ConfirmAction::Quit => self.request_quit(),
+            ConfirmAction::CloseTab(id) => self.request_close(id),
+            ConfirmAction::Disconnect { id, reconnect } => self.request_disconnect(id, reconnect),
+            ConfirmAction::DeleteProfile(id) => self.request_delete_profile(id),
+            ConfirmAction::SetConnection(tab) if self.tab().id == tab => self.request_set_connection(),
+            ConfirmAction::SetContext(tab) if self.tab().id == tab => {
+                let to = self.pending_context.clone().filter(|(t, _)| *t == tab).map(|(_, c)| c);
+                self.request_set_context(to)
+            }
+            // The tab is not the active one any more: nothing switches.
+            _ => self.flash(Notice::new(Label::TxEndChanged, Level::Warning)),
+        }
+    }
+
+    /// Tab `id`'s session said something: when the pending answer waits for its transaction to
+    /// end, go on (it ended as asked) or stop (it did not).
+    pub(super) fn end_answered(&mut self, id: TabId) {
+        if self.pending_end.as_ref().is_none_or(|p| p.current != Some(id)) {
+            return;
+        }
+        let Some(t) = self.tabs.get(id) else { return self.end_stopped(id) };
+        match t.exec.last_end {
+            // Once the session says no transaction is open any more (`TxOpen(false)` after the
+            // block's end): what goes on then sees nothing open, nothing rolled back.
+            Some(true) if !t.exec.tx_at_risk() => self.end_next(),
+            Some(true) => {}
+            Some(false) => self.end_stopped(id),
+            // Its session ended without an answer (closed, lost).
+            None if t.exec.ending.is_none() && !t.exec.user_tx() => self.end_stopped(id),
+            None => {}
+        }
+    }
+
+    /// The pending answer stops at tab `id`: nothing more ends, and nothing goes on.
+    fn end_stopped(&mut self, id: TabId) {
+        let commit = self.pending_end.take().is_some_and(|p| p.commit);
+        let tab = self.tabs.iter().position(|t| t.id == id).map_or_else(String::new, |i| (i + 1).to_string());
+        let m = if commit { Msg::TxEndStoppedCommit { tab } } else { Msg::TxEndStoppedRollback { tab } };
+        self.status = Some(Notice::new(m, Level::Error));
+    }
+
+    /// Tab `id` closes (or goes with its profile): a pending answer that ends it or waits for it
+    /// stops, and says so.
+    pub(super) fn end_tab_gone(&mut self, id: TabId) {
+        let Some(p) = self.pending_end.as_ref() else { return };
+        if p.current == Some(id) || p.tabs.contains(&id) {
+            self.pending_end = None;
+            self.flash(Notice::new(Label::TxEndTabGone, Level::Warning));
+        }
+    }
+
+    /// `Esc` while an answer waits for transactions to end: it does not go on. What was asked
+    /// of the server still ends as it does, and says so.
+    pub(super) fn end_dropped(&mut self) -> bool {
+        if self.pending_end.take().is_none() {
+            return false;
+        }
+        self.flash(Notice::new(Label::TxEndDropped, Level::Warning));
+        true
+    }
+
+    /// What the status bar says while an answer waits for transactions to end.
+    pub fn end_pending_status(&self) -> Option<Localized> {
+        let p = self.pending_end.as_ref()?;
+        let go = self.i18n.label(Self::go_label(p.action)).to_string();
+        let (n, total) = (p.asked.max(1).to_string(), p.total.to_string());
+        Some(self.i18n.msg(&match p.commit {
+            true => Msg::TxEndPendingCommit { n, total, go },
+            false => Msg::TxEndPendingRollback { n, total, go },
+        }))
+    }
+}
+
+impl App {
+    /// The rules changed from `before`: a tab whose transaction was opened for manual commit
+    /// while its rules now commit by themselves keeps that transaction (later statements join
+    /// it; the user ends it), and says so. Whether one did.
+    pub(super) fn commit_rule_changed(&mut self, before: &datarig_core::policy::Policies) -> bool {
+        let tabs: Vec<TabId> = self
+            .tabs
+            .iter()
+            .filter(|t| t.exec.user_tx() && t.exec.tx.as_ref().is_some_and(|x| x.manual))
+            .filter(|t| {
+                let name = t.profile.and_then(|p| self.profile(p)).and_then(|p| p.policy.clone());
+                let was = before.get(name.as_deref()).is_ok_and(|p| p.commit.manual());
+                was && !self.tab_rules(t).commit.manual()
+            })
+            .map(|t| t.id)
+            .collect();
+        for id in &tabs {
+            let n = Notice::new(Label::TxRuleChanged, Level::Warning);
+            if let Some(t) = self.tabs.get_mut(*id) {
+                t.exec.run.notes.push(n.clone());
+            }
+            self.tab_status(*id, n);
+        }
+        if !tabs.is_empty() {
+            self.flash(Notice::new(Label::TxRuleChanged, Level::Warning));
+        }
+        !tabs.is_empty()
+    }
+}
+
+/// What a PostgreSQL DDL statement holds until its transaction ends ([`ddl_lock`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum DdlLock {
+    /// `ACCESS EXCLUSIVE` on the object named: other sessions' reads of it wait.
+    Exclusive(String),
+    /// `DROP INDEX`: `ACCESS EXCLUSIVE` on the index's table.
+    DropIndex(String),
+    /// `CREATE INDEX`: `SHARE` on the table: other sessions' writes to it wait.
+    Share(String),
+    /// Some lock on the object named, which mode this text does not tell for sure.
+    Kept(String),
+}
+
+/// The lock PostgreSQL's DDL statement `sql` holds on what it changes, by its kind, as
+/// PostgreSQL's documentation gives it (no catalog is read). Only forms known to take
+/// `ACCESS EXCLUSIVE` say so: `ALTER TABLE` with one action of `ADD [COLUMN]`, `DROP [COLUMN]`,
+/// `DROP CONSTRAINT`, `ALTER [COLUMN] … TYPE`/`SET DATA TYPE`/`SET NOT NULL`/`DROP NOT NULL`,
+/// `RENAME`, `OWNER TO`, `SET TABLESPACE`, `SET LOGGED`/`UNLOGGED`, `DETACH PARTITION` (not
+/// `CONCURRENTLY`); `DROP TABLE`, `VIEW`, `MATERIALIZED VIEW`, `SEQUENCE`; `TRUNCATE`.
+/// `DROP INDEX` locks its table so; `CREATE INDEX` takes `SHARE`. Other `ALTER` forms keep some
+/// lock ([`DdlLock::Kept`]); anything else (a `CREATE` of something new, `… ALL IN
+/// TABLESPACE`, a name not read) has no note.
+pub(crate) fn ddl_lock(sql: &str) -> Option<DdlLock> {
+    use datarig_core::sql::lexer::Tok;
+    let toks: Vec<_> =
+        datarig_core::sql::lexer::lex_in(sql, Dialect::Postgres).into_iter().filter(|t| !t.is_trivia()).collect();
+    let up = |i: usize| toks.get(i).filter(|t| t.is_word()).map(|t| t.text(sql).to_ascii_uppercase());
+    let is = |i: usize, w: &str| up(i).as_deref() == Some(w);
+    // The name at `k` (past `IF EXISTS`, `ONLY`): the words and dots that touch; where it ends.
+    let name_at = |mut k: usize| -> Option<(String, usize)> {
+        while up(k).is_some_and(|w| ["IF", "EXISTS", "ONLY"].contains(&w.as_str())) {
+            k += 1;
+        }
+        let mut name = String::new();
+        let mut end = None;
+        let mut next = k;
+        for t in toks.iter().skip(k) {
+            let part = t.is_word() || matches!(t.kind, Tok::QuotedIdent | Tok::Dot);
+            if !part || end.is_some_and(|e| e != t.start) {
+                break;
+            }
+            name.push_str(t.text(sql));
+            end = Some(t.end);
+            next += 1;
+        }
+        (!name.is_empty() && name != "ALL" && !name.eq_ignore_ascii_case("all")).then_some((name, next))
+    };
+    // One action: no comma outside parentheses (several actions take the strongest of their
+    // locks; `numeric(10,2)`, `DEFAULT f(a, b)` are one).
+    let mut depth = 0i32;
+    let one_action = !toks.iter().any(|t| {
+        match t.kind {
+            Tok::LParen => depth += 1,
+            Tok::RParen => depth -= 1,
+            _ => {}
+        }
+        t.kind == Tok::Comma && depth == 0
+    });
+    match (up(0)?.as_str(), up(1).as_deref()) {
+        ("CREATE", Some("INDEX" | "UNIQUE")) => {
+            if toks.iter().any(|t| t.is_word() && t.text(sql).eq_ignore_ascii_case("CONCURRENTLY")) {
+                return None;
+            }
+            let on = toks.iter().position(|t| t.is_word() && t.text(sql).eq_ignore_ascii_case("ON"))?;
+            name_at(on + 1).map(|(n, _)| DdlLock::Share(n))
+        }
+        ("DROP", Some("INDEX")) => name_at(2).map(|(n, _)| DdlLock::DropIndex(n)),
+        ("DROP", Some("TABLE" | "VIEW" | "SEQUENCE")) => name_at(2).map(|(n, _)| DdlLock::Exclusive(n)),
+        ("DROP", Some("MATERIALIZED")) if is(2, "VIEW") => name_at(3).map(|(n, _)| DdlLock::Exclusive(n)),
+        ("TRUNCATE", _) => name_at(if is(1, "TABLE") { 2 } else { 1 }).map(|(n, _)| DdlLock::Exclusive(n)),
+        ("ALTER", Some("TABLE")) => {
+            let (name, a) = name_at(2)?;
+            let exclusive = one_action
+                && match up(a).as_deref() {
+                    Some("ADD") => !matches!(
+                        up(a + 1).as_deref(),
+                        Some("CONSTRAINT" | "PRIMARY" | "UNIQUE" | "FOREIGN" | "CHECK" | "EXCLUDE")
+                    ),
+                    Some("DROP") => true,
+                    Some("ALTER") => {
+                        let c = if is(a + 1, "COLUMN") { a + 3 } else { a + 2 };
+                        is(c, "TYPE")
+                            || (is(c, "SET") && (is(c + 1, "DATA") || is(c + 1, "NOT")))
+                            || (is(c, "DROP") && is(c + 1, "NOT"))
+                    }
+                    Some("RENAME" | "OWNER") => true,
+                    Some("SET") => matches!(up(a + 1).as_deref(), Some("TABLESPACE" | "LOGGED" | "UNLOGGED")),
+                    Some("DETACH") => !toks.iter().any(|t| {
+                        t.is_word() && ["CONCURRENTLY", "FINALIZE"].contains(&t.text(sql).to_ascii_uppercase().as_str())
+                    }),
+                    _ => false,
+                };
+            Some(if exclusive { DdlLock::Exclusive(name) } else { DdlLock::Kept(name) })
+        }
+        ("ALTER", Some("INDEX" | "VIEW" | "SEQUENCE")) => name_at(2).map(|(n, _)| DdlLock::Kept(n)),
+        ("ALTER", Some("MATERIALIZED")) if is(2, "VIEW") => name_at(3).map(|(n, _)| DdlLock::Kept(n)),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests;

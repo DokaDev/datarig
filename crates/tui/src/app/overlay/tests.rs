@@ -54,6 +54,7 @@ fn a_confirmations_buttons_put_the_safe_one_first_and_enter_on_it() {
         action,
         folder: None,
         path: None,
+        tx: None,
         buttons: Buttons::default(),
     };
     let (b, enter) = confirm(ConfirmAction::Quit, Label::QuitKeys).buttons();

@@ -78,9 +78,11 @@ fn connected(tab: &Tab) -> bool {
 
 /// The warning mark and color of `state`, if any (`user_tx`: the user's transaction is open,
 /// which a running statement does not hide).
-fn warning_mark(state: State, user_tx: bool) -> Option<(&'static str, Color)> {
+/// `idle`: it stayed idle past its environment's warning (the error color).
+fn warning_mark(state: State, user_tx: bool, idle: bool) -> Option<(&'static str, Color)> {
     let th = theme::cur();
     match state {
+        State::TxOpen if idle => Some((TX_OPEN, th.error)),
         State::TxOpen => Some((TX_OPEN, th.warning)),
         State::Running if user_tx => Some((TX_OPEN, th.warning)),
         State::Trouble => Some((TROUBLE, th.accent_warm)),
@@ -181,7 +183,7 @@ pub(crate) fn marks(app: &App, tab: &Tab, bg: Color) -> Vec<(String, Style)> {
             };
             out.push((format!(" {text}"), ro));
         }
-        if let Some((m, c)) = warning_mark(state(app, tab), tab.exec.user_tx()) {
+        if let Some((m, c)) = warning_mark(state(app, tab), tab.exec.user_tx(), App::tx_idle_warned(tab)) {
             out.push((format!(" {m}"), mark(c)));
         }
     }

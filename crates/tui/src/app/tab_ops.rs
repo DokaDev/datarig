@@ -121,7 +121,8 @@ impl App {
             None => self.open_quick(QuickPurpose::Bind { tab: id, run: None }),
             Some(text) => {
                 self.pending_context = None;
-                self.confirm(Label::TabRebindTitle, text, Label::TabRebindKeys, ConfirmAction::SetConnection(id))
+                self.confirm(Label::TabRebindTitle, text, Label::TabRebindKeys, ConfirmAction::SetConnection(id));
+                self.offer_tx_choices();
             }
         }
     }
@@ -144,7 +145,8 @@ impl App {
             },
             Some(text) => {
                 self.pending_context = to.map(|c| (id, c));
-                self.confirm(Label::TabContextTitle, text, Label::TabRebindKeys, ConfirmAction::SetContext(id))
+                self.confirm(Label::TabContextTitle, text, Label::TabRebindKeys, ConfirmAction::SetContext(id));
+                self.offer_tx_choices();
             }
         }
     }
@@ -237,7 +239,10 @@ impl App {
         let texts = [Label::TabCloseRunning, Label::TabCloseTx, Label::TabCloseRunningTx, Label::TabCloseQueued];
         match at_risk(t.exec.running.is_some(), self.is_queued(id), t.exec.tx_at_risk(), texts) {
             None => self.close_tab(id),
-            Some(text) => self.confirm(Label::TabCloseTitle, text, Label::TabCloseKeys, ConfirmAction::CloseTab(id)),
+            Some(text) => {
+                self.confirm(Label::TabCloseTitle, text, Label::TabCloseKeys, ConfirmAction::CloseTab(id));
+                self.offer_tx_choices();
+            }
         }
     }
 
@@ -293,6 +298,8 @@ impl App {
             self.finish_quit();
         }
         self.refresh_tab_list();
+        // An answer waiting for its transaction to end stops (said last: it matters most).
+        self.end_tab_gone(id);
     }
 
     /// The console `id` of a tab just closed, with `text`, goes to the trash. Text nobody
@@ -484,6 +491,7 @@ impl App {
             action,
             folder: None,
             path: None,
+            tx: None,
             buttons: Default::default(),
         }));
     }

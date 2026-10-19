@@ -424,6 +424,7 @@ impl App {
             action: ConfirmAction::OverwriteScript,
             folder: None,
             path: Some(path),
+            tx: None,
             buttons: Default::default(),
         }));
     }

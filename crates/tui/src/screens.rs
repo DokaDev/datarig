@@ -98,6 +98,10 @@ pub fn draw_overlays(f: &mut Frame, app: &mut App, screen_cursor: Option<(u16, u
                 crate::widgets::dialog::draw_run_confirm(app, content, f.buffer_mut());
                 None
             }
+            OverlayKind::TxSummary => {
+                crate::widgets::dialog::draw_tx_summary(app, content, f.buffer_mut());
+                None
+            }
             OverlayKind::IconsAsk => {
                 crate::widgets::dialog::draw_icons_ask(app, content, f.buffer_mut());
                 None

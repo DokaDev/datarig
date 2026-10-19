@@ -2017,3 +2017,43 @@
 "safety.why_outside_tx" = "runs outside a transaction, at once: can't be rolled back"
 "safety.why_commits_itself" = "commits by itself: runs outside, at once; can't be rolled back"
 "safety.why_implicit_commit" = { one = "first commits the open transaction: {count} statement ({rows})", other = "first commits the open transaction: {count} statements ({rows})" }
+
+# The open transaction's lifecycle
+"tx.button.rollback" = "Roll back first"
+"tx.button.commit" = "Commit first"
+"tx.pending" = { one = "{count} change ({rows}) uncommitted for {time}", other = "{count} changes ({rows}) uncommitted for {time}" }
+"tx.pending_tab" = { one = "Tab {tab}: {count} change ({rows}) uncommitted for {time}", other = "Tab {tab}: {count} changes ({rows}) uncommitted for {time}" }
+"status.tx_idle" = "idle {time}"
+"status.tx_holding_locks" = "holding locks"
+"tx.idle_warning" = "Tab {tab}: the open transaction has been idle for {time} and holds its locks: commit ({commit}) or roll back ({rollback})"
+"keyctx.overlay.tx_summary" = "Transaction summary"
+"tx.button.rollback_now" = "Roll back"
+"tx.button.commit_now" = "Commit"
+"tx.summary_title" = "Open transaction ({how})"
+"tx.summary_keys" = "c commit · r roll back · j/k scroll · Esc close"
+"tx.summary_keys_rollback" = "r roll back · j/k scroll · Esc close"
+"tx.summary_empty" = "Nothing that may write has run in it yet"
+"tx.summary_footer" = { one = "{count} change · {rows} · open {time} · idle {idle}", other = "{count} changes · {rows} · open {time} · idle {idle}" }
+"tx.rule_changed" = "The commit rule changed: the open transaction stays open until you commit or roll back"
+"tx.ddl_lock_exclusive" = "Statement {step} holds an ACCESS EXCLUSIVE lock on {target} until you commit or roll back: other sessions' reads of it wait"
+"tx.ddl_lock_share" = "Statement {step} holds a SHARE lock on {target} until you commit or roll back: other sessions' writes to it wait"
+"tx.call_in_tx" = "This procedure or DO block ends transactions itself, so it can't run in the open transaction: commit or roll back first, then run it again"
+"tx.choice_keys" = "c commit · r roll back · y {go} (rolls back) · Enter/n stay"
+"tx.choice_keys_rollback" = "r roll back · y {go} (rolls back) · Enter/n stay"
+"tx.go.close" = "close anyway"
+"tx.go.quit" = "quit anyway"
+"tx.go.disconnect" = "disconnect anyway"
+"tx.go.delete" = "delete anyway"
+"tx.go.switch" = "switch anyway"
+"quit.tx_tabs" = { one = "A transaction is open in {count} tab. Quitting rolls it back; its uncommitted changes are lost.", other = "Transactions are open in {count} tabs. Quitting rolls them back; their uncommitted changes are lost." }
+"tx.end_stopped_commit" = "Stopped at tab {tab}: its transaction did not commit as asked (that tab says why). The tabs before it were committed; nothing after it was done"
+"tx.end_stopped_rollback" = "Stopped at tab {tab}: its transaction did not roll back as asked (that tab says why). The tabs before it were rolled back; nothing after it was done"
+"tx.end_pending_commit" = "Committing tab {n} of {total} first, then {go} · Esc stops waiting"
+"tx.end_pending_rollback" = "Rolling back tab {n} of {total} first, then {go} · Esc stops waiting"
+"tx.end_busy" = "Another answer is waiting for transactions to end; Esc stops it first"
+"tx.end_dropped" = "Stopped waiting: what was asked of the server still says how it ended; nothing else is done"
+"tx.end_tab_gone" = "Stopped: a tab the answer waited for was closed; nothing else is done"
+"tx.end_changed" = "Not switched: the tab is not the active one any more"
+"tx.idle_warning_aborted" = "Tab {tab}: the failed transaction has been idle for {time} and holds its locks: roll back ({rollback})"
+"tx.ddl_lock_drop_index" = "Statement {step} holds an ACCESS EXCLUSIVE lock on the table of index {target} until you commit or roll back: other sessions' reads of it wait"
+"tx.ddl_lock_kept" = "Statement {step} keeps locks on {target} until you commit or roll back"

@@ -110,8 +110,13 @@ pub(crate) fn draw_confirm(app: &mut App, area: Rect, buf: &mut Buffer) {
     let th = theme::cur();
     let when = (app.overlays.top().map(|o| o.kind()) == Some(OverlayKind::Confirm), app.now());
     let Some(c) = app.overlays.confirm() else { return };
-    let (title, text, keys) = (app.i18n.label(c.title), app.i18n.msg(&c.text), app.i18n.label(c.keys));
-    let w = area.width.saturating_sub(8).min(60);
+    let keys = match c.tx {
+        Some(tx) => app.tx_choice_keys(c.action, tx.commit),
+        None => app.i18n.label(c.keys),
+    };
+    let (title, text) = (app.i18n.label(c.title), app.i18n.msg(&c.text));
+    // Four buttons (commit or roll back first) need more room.
+    let w = if c.tx.is_some() { area.width.saturating_sub(4).min(76) } else { area.width.saturating_sub(8).min(60) };
     let width = (w as usize).saturating_sub(4);
     let mut lines = wrap_words(&text, width);
     for d in &c.details {
@@ -342,4 +347,102 @@ pub(crate) fn draw_prompt(app: &mut App, area: Rect, buf: &mut Buffer) -> Option
     let bg = if save_focus { Style::new().bg(th.surface_alt) } else { th.selection };
     let cx = p.input.render(input, buf, Style::new().fg(th.fg).patch(bg), !save_focus, mask, None);
     cursor.or(Some((cx, y)))
+}
+
+/// The transaction summary: the connection and how the transaction began, its statements
+/// that may have written (number, first line, rows, time; as many as fit, scrolled with
+/// `j`/`k`), what it holds and for how long it has been open and idle, then the buttons
+/// (Close first).
+pub(crate) fn draw_tx_summary(app: &mut App, area: Rect, buf: &mut Buffer) {
+    let th = theme::cur();
+    let when = (app.overlays.top().map(|o| o.kind()) == Some(OverlayKind::TxSummary), app.now());
+    let Some(s) = app.overlays.tx_summary() else { return };
+    // Its transaction ended (or its tab went): it closes, never left on top unseen.
+    let Some(tx) = app.tabs.get(s.tab).filter(|t| t.exec.user_tx()).and_then(|t| t.exec.tx.clone()) else {
+        app.overlays.close(OverlayKind::TxSummary);
+        return;
+    };
+    let Some(t) = app.tabs.get(s.tab) else { return };
+    let (tab, profile, aborted) = (s.tab, t.profile, t.exec.tx_aborted);
+    let busy = app.tab_busy(tab);
+    let how = app.i18n.label(if tx.manual { Label::TxHowManual } else { Label::TxHowUser }).to_string();
+    let title = app.i18n.msg(&Msg::TxSummaryTitle { how });
+    let keys = app.i18n.label(if aborted { Label::TxSummaryKeysRollback } else { Label::TxSummaryKeys });
+    let w = area.width.saturating_sub(4).min(110);
+    let iw = (w as usize).saturating_sub(4);
+    let surface = |fg| Style::new().fg(fg).bg(th.surface);
+    // Border (2), the connection, a blank line, the list, a blank line, the footer, a blank
+    // line, the buttons.
+    let fixed = 8usize;
+    let room = (area.height as usize).saturating_sub(fixed).max(1);
+    let lines = tx.log.len().max(1);
+    let shown = lines.min(room);
+    let rect = centered(area, w, (fixed + shown) as u16);
+    let inner = modal(rect, &title, &keys, buf);
+    let x = inner.x + 1;
+    let end = inner.x + inner.width.saturating_sub(1);
+    let line = |buf: &mut Buffer, y: u16, parts: &[(String, Style)]| {
+        let mut cx = x;
+        for (text, style) in parts {
+            if cx >= end {
+                break;
+            }
+            cx += put(buf, cx, y, text, (end - cx) as usize, *style) as u16;
+        }
+    };
+    let mut y = inner.y;
+    if let Some(p) = profile.and_then(|p| app.profile(p)) {
+        let color = theme::profile_color(p.display_color());
+        let mut parts = vec![(
+            format!("{} {}", crate::widgets::explorer::CONNECTED, p.name),
+            surface(color).add_modifier(Modifier::BOLD),
+        )];
+        parts.extend(crate::widgets::statusbar::environment_parts(app, p.id, th.surface));
+        line(buf, y, &parts);
+    }
+    y += 2;
+    // The list: the scroll keeps the last line on screen.
+    let max_scroll = tx.log.len().saturating_sub(shown);
+    let scroll = app.overlays.tx_summary().map_or(0, |s| s.scroll).min(max_scroll);
+    if let Some(s) = app.overlays.tx_summary_mut() {
+        s.scroll = scroll;
+    }
+    let first = (tx.changes as usize).saturating_sub(tx.log.len());
+    if tx.log.is_empty() {
+        line(buf, y, &[(app.i18n.label(Label::TxSummaryEmpty).to_string(), surface(th.fg_muted))]);
+    }
+    let num_w = (first + tx.log.len()).to_string().len();
+    for (k, e) in tx.log.iter().enumerate().skip(scroll).take(shown) {
+        let rows = app.i18n.msg(&Msg::TxRows { count: e.rows }).to_string();
+        let time = e.elapsed.map(datarig_core::i18n::fmt_elapsed).unwrap_or_default();
+        let tail = format!("  {rows}  {time}");
+        let num = format!("{:>num_w$}  ", first + k + 1);
+        let room = iw.saturating_sub(crate::text::width(&num) + crate::text::width(&tail));
+        let sql = crate::app::runlog::excerpt(&e.sql, room.max(8));
+        let pad = room.saturating_sub(crate::text::width(&sql));
+        line(
+            buf,
+            y + (k - scroll) as u16,
+            &[
+                (num, surface(th.fg_dim)),
+                (format!("{sql}{}", " ".repeat(pad)), surface(th.fg)),
+                (tail, surface(th.fg_muted)),
+            ],
+        );
+    }
+    y += shown as u16 + 1;
+    // What it holds, for how long, and since when it is idle.
+    let rows = app.i18n.msg(&Msg::TxRows { count: tx.rows }).to_string();
+    let time = crate::app::tx::fmt_clock(app.tx_elapsed(&tx));
+    let idle = crate::app::tx::fmt_clock(tx.idle(app.now(), busy));
+    let mut footer = app.i18n.msg(&Msg::TxSummaryFooter { count: tx.changes, rows, time, idle }).to_string();
+    if tx.warned {
+        footer = format!("{footer} · {}", app.i18n.label(Label::StatusTxHoldingLocks));
+    }
+    let tone = if aborted || tx.warned { th.error } else { th.warning };
+    line(buf, y, &[(footer, surface(tone).add_modifier(Modifier::BOLD))]);
+    y += 2;
+    let labels: Vec<Localized> = app.tx_summary_buttons().iter().map(|(l, _)| app.i18n.label(*l)).collect();
+    let Some(s) = app.overlays.tx_summary_mut() else { return };
+    button_row(buf, inner, y, &labels, Some(0), &mut s.buttons, when);
 }

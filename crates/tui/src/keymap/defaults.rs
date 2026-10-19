@@ -567,6 +567,7 @@ const RESERVED: &[(Ctx, &[&str], &str)] = &[
         &["y", "n", "enter", "esc", "tab", "shift+tab", "left", "right", "h", "l"],
         "run confirmation (Cancel has the focus)",
     ),
+    (TxSummary, &["c", "r", "esc", "q", "enter", "j", "k", "down", "up"], "transaction summary"),
     (
         IconsAsk,
         &["y", "n", "enter", "esc", "tab", "shift+tab", "left", "right", "h", "l"],
