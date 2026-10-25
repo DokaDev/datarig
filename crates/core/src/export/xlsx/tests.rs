@@ -352,6 +352,178 @@ fn a_panic_of_the_library_breaks_the_writer() {
     assert!(w.broken);
 }
 
+#[test]
+fn a_cell_holds_32767_characters_as_excel_counts_them() {
+    // Excel counts UTF-16 units: a character outside the Basic Multilingual Plane counts two.
+    let columns = [col("e", Kind::Text)];
+    let fits = format!("{}a", "\u{1F600}".repeat(MAX_CELL_CHARS / 2));
+    let over = "\u{1F600}".repeat(MAX_CELL_CHARS / 2 + 1);
+    assert_eq!(fits.encode_utf16().count(), MAX_CELL_CHARS);
+    assert!(over.chars().count() < MAX_CELL_CHARS, "fewer characters than a cell holds");
+    let mut w = XlsxWriter::new(&columns, Vec::new()).unwrap();
+    w.begin().unwrap();
+    w.rows(&[vec![Some(&fits)]]).unwrap();
+    let e = w.rows(&[vec![Some(&over)]]).unwrap_err();
+    assert_eq!(TooLong::of(&e), Some(&TooLong { column: "e".to_string(), row: 2, chars: MAX_CELL_CHARS + 1 }));
+    w.end().unwrap();
+    assert_eq!(read(&w.into_inner().unwrap())[0].1[1], vec![s(&fits)]);
+}
+
+#[test]
+fn text_excel_would_read_otherwise_comes_back_as_it_was() {
+    // Control characters, a non-character, Excel's own escape written literally, and spaces at
+    // the ends (kept with xml:space).
+    let columns = [col("t", Kind::Text)];
+    let values = [
+        "a\u{1}b\u{1F}c",
+        "\u{FFFF}",
+        "\u{FFFE}x",
+        "_x0041_",
+        "_x005F_x0041_",
+        "  leading",
+        "trailing  ",
+        " both ",
+        "tab\there",
+        "line\nbreak\r\nend",
+        "<&>\"'",
+    ];
+    let rows: Vec<Row> = values.iter().map(|v| vec![Some(*v)]).collect();
+    let (bytes, _) = workbook(&columns, &rows, |w| w);
+    let cells = &read(&bytes)[0].1;
+    for (i, v) in values.iter().enumerate() {
+        assert_eq!(cells[i + 1], vec![s(v)], "{v:?}");
+    }
+}
+
+/// The local file headers of a ZIP archive: each part's name and the ids of its extra fields.
+/// Only for the writer's own archives, small ones whose compressed data holds no header by chance.
+fn local_headers(bytes: &[u8]) -> Vec<(String, Vec<u16>)> {
+    let u16_at = |i: usize| u16::from_le_bytes([bytes[i], bytes[i + 1]]);
+    let mut found = Vec::new();
+    let mut i = 0;
+    while let Some(at) = bytes[i..].windows(4).position(|w| w == b"PK\x03\x04") {
+        let h = i + at;
+        let (name_len, extra_len) = (u16_at(h + 26) as usize, u16_at(h + 28) as usize);
+        let name = String::from_utf8_lossy(&bytes[h + 30..h + 30 + name_len]).into_owned();
+        let extra = &bytes[h + 30 + name_len..h + 30 + name_len + extra_len];
+        let mut ids = Vec::new();
+        let mut e = 0;
+        while e + 4 <= extra.len() {
+            ids.push(u16::from_le_bytes([extra[e], extra[e + 1]]));
+            e += 4 + u16::from_le_bytes([extra[e + 2], extra[e + 3]]) as usize;
+        }
+        found.push((name, ids));
+        i = h + 4;
+    }
+    found
+}
+
+#[test]
+fn the_workbook_is_a_zip64_archive() {
+    // Without ZIP64 a part of more than 4 GiB fails the end (`a_sheet_over_4_gib_is_made`).
+    let columns = [col("a", Kind::Text)];
+    let (bytes, _) = workbook(&columns, &[vec![Some("x")]], |w| w);
+    let parts = zip::ZipArchive::new(io::Cursor::new(&bytes)).unwrap().len();
+    let headers = local_headers(&bytes);
+    assert_eq!(headers.len(), parts, "{headers:?}");
+    for (name, ids) in &headers {
+        assert_eq!(ids.first(), Some(&0x0001), "the ZIP64 extra field of {name}");
+    }
+    assert!(headers.iter().any(|(n, _)| n == "xl/worksheets/sheet1.xml"));
+}
+
+#[test]
+fn a_stop_while_the_workbook_is_made_drops_it() {
+    let columns = [col("n", Kind::Number)];
+    let mut w = XlsxWriter::new(&columns, Vec::new()).unwrap();
+    w.begin().unwrap();
+    w.rows(&[vec![Some("1")], vec![Some("2")]]).unwrap();
+    let mut asked = 0;
+    let mut stop = || {
+        asked += 1;
+        asked > 3
+    };
+    let e = w.end_unless(&mut stop).unwrap_err();
+    assert!(Dropped::of(&e), "{e}");
+    assert_eq!(asked, 4, "nothing written after the stop");
+    let out = w.into_inner().unwrap();
+    assert!(!out.is_empty() && read::sheets(&out).is_none(), "part of a workbook, not one");
+    assert!(!Dropped::of(&io::Error::other("disk full")));
+    // Never told to stop: the workbook is made.
+    let mut w = XlsxWriter::new(&columns, Vec::new()).unwrap();
+    w.begin().unwrap();
+    w.rows(&[vec![Some("1")]]).unwrap();
+    w.end_unless(&mut || false).unwrap();
+    assert_eq!(read(&w.into_inner().unwrap())[0].1, vec![vec![s("n")], vec![n(1.0)]]);
+}
+
+/// An output that fails once `room` bytes went in (a disk that filled up).
+struct Full {
+    room: usize,
+    written: Vec<u8>,
+}
+
+impl Write for Full {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if self.written.len() + buf.len() > self.room {
+            return Err(io::Error::from(io::ErrorKind::StorageFull));
+        }
+        self.written.extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn an_output_that_fails_while_the_workbook_is_made_fails_the_end() {
+    let columns = [col("n", Kind::Number)];
+    let mut w = XlsxWriter::new(&columns, Full { room: 600, written: Vec::new() }).unwrap();
+    w.begin().unwrap();
+    w.rows(&[vec![Some("1")]]).unwrap();
+    let e = w.end().unwrap_err();
+    assert!(!Dropped::of(&e), "{e}");
+    // The library hands the zip writer's error on as its text.
+    assert!(e.to_string().contains("no storage space"), "{e}");
+    let out = w.into_inner().unwrap();
+    assert!(out.written.len() <= 600 && read::sheets(&out.written).is_none());
+}
+
+/// A sheet of more than 4 GiB of XML (1,048,575 rows of 4,200 characters) is made, and reads as
+/// a ZIP64 archive: without ZIP64, its end fails. Slow (minutes, about 5 GiB in the temporary
+/// folder): `cargo test --release -p datarig-core -- --ignored over_4_gib`.
+#[test]
+#[ignore]
+fn a_sheet_over_4_gib_is_made() {
+    let columns: Vec<Column> = ["a", "b", "c", "d", "e", "f"].iter().map(|n| col(n, Kind::Text)).collect();
+    let value = "0123456789".repeat(70);
+    let row: Row = vec![Some(value.as_str()); columns.len()];
+    let chunk: Vec<Row> = vec![row; 1_000];
+    let total = (MAX_ROWS - 1) as usize;
+    let path = std::env::temp_dir().join(format!("datarig-xlsx-4gib-{}.xlsx", std::process::id()));
+    let file = std::fs::File::create(&path).unwrap();
+    let mut w = XlsxWriter::new(&columns, io::BufWriter::new(file)).unwrap();
+    w.begin().unwrap();
+    let mut written = 0;
+    while written < total {
+        let n = (total - written).min(chunk.len());
+        w.rows(&chunk[..n]).unwrap();
+        written += n;
+    }
+    w.end().unwrap();
+    assert_eq!(w.sheets(), 1);
+    drop(w);
+    let mut zip = zip::ZipArchive::new(std::fs::File::open(&path).unwrap()).unwrap();
+    let sheet = zip.by_name("xl/worksheets/sheet1.xml").unwrap();
+    let size = sheet.size();
+    drop(sheet);
+    drop(zip);
+    let _ = std::fs::remove_file(&path);
+    assert!(size > u64::from(u32::MAX), "{size} bytes of XML");
+}
+
 /// Excel's own number of rows, for real: the row after the 1,048,575th goes to `Sheet2`. Slow
 /// (a million rows): `cargo test -p datarig-core -- --ignored excels_own`.
 #[test]

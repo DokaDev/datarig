@@ -7,8 +7,13 @@
 //! The first row of every sheet holds the column names, bold, and stays in view (frozen). A sheet
 //! holds 1,048,576 rows with that header: the rows that follow go to `Sheet2`, `Sheet3`, …, each
 //! with the header again. A workbook holds 16,384 columns at most ([`XlsxWriter::new`] refuses
-//! more) and a cell 32,767 characters: a longer value fails the export ([`TooLong`]) and the rows
-//! before it make the workbook.
+//! more) and a cell 32,767 characters as Excel counts them (UTF-16 units: a character outside the
+//! Basic Multilingual Plane, an emoji, counts two): a longer value fails the export ([`TooLong`])
+//! and the rows before it make the workbook.
+//!
+//! The workbook is a ZIP64 container: a sheet of more than 4 GiB of XML, or a workbook of more than
+//! 4 GiB, is made like any other (without ZIP64 the library fails at the end, when every row was
+//! written already). A stop asked while the workbook is made ([`XlsxWriter::end_unless`]) drops it.
 //!
 //! The cells:
 //! * a number column's value is a number when Excel holds it exactly: at most 15 significant
@@ -35,7 +40,7 @@ pub const MAX_ROWS: u32 = 1_048_576;
 /// The columns of a sheet.
 pub const MAX_COLUMNS: usize = 16_384;
 
-/// The characters of a cell.
+/// The characters of a cell, as Excel counts them: UTF-16 units.
 pub const MAX_CELL_CHARS: usize = 32_767;
 
 /// The significant digits of a number Excel holds and shows as it is.
@@ -48,7 +53,7 @@ pub struct TooWide {
 }
 
 /// A value too long for a cell: its column, its row (the first row of the result is 1), its
-/// length in characters. It is the error inside the [`io::Error`] that [`XlsxWriter`]'s
+/// length in characters as Excel counts them (UTF-16 units). It is the error inside the [`io::Error`] that [`XlsxWriter`]'s
 /// [`RowSink::rows`] fails with ([`TooLong::of`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TooLong {
@@ -73,6 +78,57 @@ impl TooLong {
     /// The value too long in `e`, if that is what it is.
     pub fn of(e: &io::Error) -> Option<&TooLong> {
         e.get_ref().and_then(|inner| inner.downcast_ref::<TooLong>())
+    }
+}
+
+/// The workbook was dropped while it was made: [`XlsxWriter::end_unless`] was told to stop. It is
+/// the error inside the [`io::Error`] that it fails with ([`Dropped::of`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Dropped;
+
+impl fmt::Display for Dropped {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("the workbook was dropped before it was made")
+    }
+}
+
+impl std::error::Error for Dropped {}
+
+impl Dropped {
+    /// Whether `e` says the workbook was dropped.
+    pub fn of(e: &io::Error) -> bool {
+        e.get_ref().is_some_and(|inner| inner.is::<Dropped>())
+    }
+}
+
+/// The output while the workbook is zipped into it. A write fails once `stop` says so, and once
+/// the output failed; that failure ends the save, and what is written after it (the zip writer
+/// finishing the archive as it is dropped) goes nowhere: a zip writer that cannot finish prints
+/// so on stderr, over the screen.
+struct Stoppable<'s, W> {
+    out: &'s mut W,
+    stop: &'s mut (dyn FnMut() -> bool + Send),
+    stopped: bool,
+    failed: bool,
+}
+
+impl<W: Write> Write for Stoppable<'_, W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        if self.failed {
+            return Ok(buf.len());
+        }
+        if (self.stop)() {
+            (self.stopped, self.failed) = (true, true);
+            return Err(io::Error::other(Dropped));
+        }
+        self.out.write(buf).inspect_err(|_| self.failed = true)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        if self.failed {
+            return Ok(());
+        }
+        self.out.flush().inspect_err(|_| self.failed = true)
     }
 }
 
@@ -155,10 +211,12 @@ impl<'a, W: Write + Send> XlsxWriter<'a, W> {
         if columns.len() > MAX_COLUMNS {
             return Err(TooWide { columns: columns.len() });
         }
+        let mut workbook = Workbook::new();
+        workbook.use_zip_large_file(true);
         Ok(Self {
             columns,
             out: Some(out),
-            workbook: Workbook::new(),
+            workbook,
             bold: Format::new().set_bold(),
             null: String::new(),
             max_rows: MAX_ROWS,
@@ -232,13 +290,45 @@ impl<'a, W: Write + Send> XlsxWriter<'a, W> {
     fn check(&self, row: &Row, n: u64) -> io::Result<()> {
         for (v, c) in row.iter().zip(self.columns) {
             let v = v.unwrap_or(self.null.as_str());
-            // Bytes first: a value of fewer bytes has fewer characters.
+            // Bytes first: a value of fewer bytes has fewer UTF-16 units.
             if v.len() > MAX_CELL_CHARS {
-                let chars = v.chars().count();
+                let chars = v.encode_utf16().count();
                 if chars > MAX_CELL_CHARS {
                     return Err(io::Error::other(TooLong { column: c.name.to_string(), row: n, chars }));
                 }
             }
+        }
+        Ok(())
+    }
+
+    /// Make the workbook of the rows so far into the output ([`RowSink::end`]), unless `stop`
+    /// says to stop while it is made (it is asked before each write to the output): the workbook
+    /// is then dropped, the output holds part of it (not a workbook), and the error is
+    /// [`Dropped`].
+    pub fn end_unless(&mut self, stop: &mut (dyn FnMut() -> bool + Send)) -> io::Result<()> {
+        if self.ended {
+            return Ok(());
+        }
+        self.ended = true;
+        if self.sheets == 0 && !self.broken {
+            self.next_sheet()?;
+        }
+        let Some(mut out) = self.out.take() else { return Err(broken()) };
+        let mut to = Stoppable { out: &mut out, stop, stopped: false, failed: false };
+        let saved = self.guarded(|w| w.workbook.save_to_writer(&mut to));
+        let (stopped, failed) = (to.stopped, to.failed);
+        self.out = Some(out);
+        if stopped {
+            // Whatever error the library made of the failed write: the stop is what happened.
+            return Err(io::Error::other(Dropped));
+        }
+        saved?;
+        if failed {
+            // The library went on past a failed write.
+            return Err(io::Error::other("the workbook could not be written to its file"));
+        }
+        if let Some(out) = self.out.as_mut() {
+            out.flush()?;
         }
         Ok(())
     }
@@ -289,21 +379,7 @@ impl<W: Write + Send> RowSink for XlsxWriter<'_, W> {
     /// Make the workbook of the rows so far into the output. A workbook the library could not
     /// write ([`Self::rows`] failed in it) is not made: the output is then not a workbook.
     fn end(&mut self) -> io::Result<()> {
-        if self.ended {
-            return Ok(());
-        }
-        self.ended = true;
-        if self.sheets == 0 && !self.broken {
-            self.next_sheet()?;
-        }
-        let Some(mut out) = self.out.take() else { return Err(broken()) };
-        let saved = self.guarded(|w| w.workbook.save_to_writer(&mut out));
-        self.out = Some(out);
-        saved?;
-        if let Some(out) = self.out.as_mut() {
-            out.flush()?;
-        }
-        Ok(())
+        self.end_unless(&mut || false)
     }
 
     fn rows_written(&self) -> u64 {

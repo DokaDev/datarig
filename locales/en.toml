@@ -1944,8 +1944,14 @@
 "export.why.not_supported" = "the statement returns no rows to export"
 "export.why.key" = "the next chunk could not be asked for: a key value of the last row cannot be written back"
 "export.why.internal" = "the export stopped without saying why"
-"export.why.too_long" = "a value of column {column} (row {row}) has {length} characters, more than an Excel cell holds (32,767); the workbook has the rows before it"
+"export.why.too_long" = "a value of column {column} (row {row}) has {length} characters, more than an Excel cell holds (32,767)"
 "export.why.not_saved" = "the workbook could not be made: {error}; nothing was kept (a workbook reads only once it is complete)"
+"export.why.too_long_kept" = "a value of column {column} (row {row}) has {length} characters, more than an Excel cell holds (32,767); the workbook has the rows before it"
+"export.why.too_long_first" = "a value of column {column} in the first row has {length} characters, more than an Excel cell holds (32,767); no row was written"
+"export.why.not_saved_after" = "{first}; then the workbook could not be made: {error}; nothing was kept (a workbook reads only once it is complete)"
+"export.finishing" = { one = "Making the workbook {file} of {count} row… (a cancel now keeps nothing)", other = "Making the workbook {file} of {count} rows… (a cancel now keeps nothing)" }
+"export.dropped" = { one = "Export cancelled while the workbook of {count} row was being made; nothing was kept", other = "Export cancelled while the workbook of {count} rows was being made; nothing was kept" }
+"export.dropped_after" = { one = "Export cancelled while the workbook of {count} row was being made, after the export failed: {reason}; nothing was kept", other = "Export cancelled while the workbook of {count} rows was being made, after the export failed: {reason}; nothing was kept" }
 "export.too_wide" = { one = "Not exported: an Excel sheet holds 16,384 columns, and the result has {count}; export fewer columns, or another format", other = "Not exported: an Excel sheet holds 16,384 columns, and the result has {count}; export fewer columns, or another format" }
 "export.done_sheets" = { one = "Exported {count} row to {path} ({size}) on {sheets} sheets", other = "Exported {count} rows to {path} ({size}) on {sheets} sheets (a sheet holds 1,048,575 rows under its header)" }
 "dialog.button.export" = "Export"

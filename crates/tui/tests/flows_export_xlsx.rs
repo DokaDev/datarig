@@ -2,15 +2,21 @@
 //! driver and real files in a scratch folder, read back with a workbook reader: the cells'
 //! types, NULL, a cancel (the workbook of the rows so far in `<file>.partial`), a value too long
 //! for a cell (the export fails naming its column, the rows before it kept) and a result wider
-//! than a sheet (refused before anything is written). The sheets past 1,048,576 rows are the core
-//! writer's tests (`export::xlsx`).
+//! than a sheet (refused before anything is written), and a cancel while the workbook is made
+//! (dropped: nothing kept). The sheets past 1,048,576 rows are the core writer's tests
+//! (`export::xlsx`); their message, and those of a workbook that could not be made, are said
+//! from the writer's terminal event handed in.
 
 mod common;
 
 use common::*;
 use datarig_core::driver::{ColumnMeta, DbCommand, DbError, DbEvent, ExportBatch, ExportGuard, ExportSink};
+use datarig_core::export::xlsx::TooLong;
 use datarig_core::export::xlsx::read::{self, Cell as Data};
+use datarig_core::fault::Fault;
 use datarig_core::i18n::Lang;
+use datarig_tui::app::AppEvent;
+use datarig_tui::app::export::{ExportEvent, ExportNews, Failure, Outcome};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -241,4 +247,117 @@ fn a_workbook_takes_the_null_text_and_no_other_csv_option() {
     let err = h.cmdline().and_then(|c| c.error.clone()).map(|n| n.render(&h.app.i18n).to_string());
     assert!(err.as_deref().is_some_and(|e| e.contains("Excel null= only")), "{err:?}");
     assert!(!path.exists());
+}
+
+#[test]
+fn a_value_too_long_in_the_first_row_says_no_row_was_written() {
+    let dir = scratch("long-first");
+    let mut h = Harness::connected(Lang::En);
+    let mut page = rows(0, 3);
+    page[0][1] = Some("x".repeat(32_768));
+    first_page(&mut h, columns(), page, false);
+    let path = dir.join("first.xlsx");
+    h.command(&format!("export fetched {}", path.display()));
+    pump_until_done(&mut h);
+    assert!(!path.exists() && !dir.join("first.xlsx.partial").exists(), "nothing kept");
+    assert_eq!(
+        status(&h),
+        "Export failed: a value of column name in the first row has 32768 characters, more than an Excel cell holds (32,767); no row was written"
+    );
+}
+
+/// Rows whose text column holds `width` letters that hardly compress: enough for the workbook to
+/// take a while to be made.
+fn wide_rows(from: usize, n: usize, width: usize) -> Vec<Vec<Option<String>>> {
+    let mut seed = from as u64 + 1;
+    (from..from + n)
+        .map(|i| {
+            let mut r = row(i);
+            let text = (0..width)
+                .map(|_| {
+                    seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+                    char::from(b'a' + (seed >> 59) as u8 % 26)
+                })
+                .collect();
+            r[1] = Some(text);
+            r
+        })
+        .collect()
+}
+
+#[test]
+fn a_cancel_while_the_workbook_is_made_drops_it_and_keeps_nothing() {
+    let dir = scratch("drop");
+    let mut h = Harness::connected(Lang::En);
+    first_page(&mut h, columns(), rows(0, 100), true);
+    h.sent();
+    let path = dir.join("big.xlsx");
+    h.command(&format!("export all {}", path.display()));
+    let (id, _, sink) = wait_export(&mut h);
+    let feeder = std::thread::spawn(move || {
+        sink.blocking_send(ExportBatch::Columns(columns())).is_ok()
+            && (0..10).all(|b| sink.blocking_send(ExportBatch::Rows(wide_rows(b * 1_000, 1_000, 1_000))).is_ok())
+    });
+    assert!(feeder.join().unwrap());
+    // The first cancel stops the rows: the workbook of those is made, and the app says so.
+    h.ctrl('c');
+    assert!(h.session_cancelled(1), "the session's statement is cancelled");
+    h.tab_db(0, DbEvent::Exported { id, result: Err(DbError::Cancelled), cancelled: true });
+    let start = std::time::Instant::now();
+    let making = "Making the workbook big.xlsx of ";
+    while !status(&h).starts_with(making) {
+        assert!(h.app.exporting(h.app.tab().id), "ended before the workbook was made: {}", status(&h));
+        assert!(start.elapsed() < WAIT, "{}", status(&h));
+        h.app.pump_exports(Duration::from_millis(5));
+    }
+    // The rows the writer had taken when the cancel came.
+    let s = status(&h);
+    let count = s[making.len()..].split(' ').next().unwrap().to_string();
+    assert_eq!(s, format!("{making}{count} rows\u{2026} (a cancel now keeps nothing)"));
+    // The second drops it.
+    h.ctrl('c');
+    pump_until_done(&mut h);
+    assert!(!path.exists() && !dir.join("big.xlsx.partial").exists(), "nothing kept");
+    assert_eq!(
+        status(&h),
+        format!("Export cancelled while the workbook of {count} rows was being made; nothing was kept")
+    );
+    assert_eq!(h.app.pump_exports(Duration::from_millis(100)), 0, "one terminal event");
+}
+
+/// The message of the writer's terminal event `outcome` (in tab 1, the job not its own any more:
+/// what a late word says).
+fn said(h: &mut Harness, outcome: Outcome) -> String {
+    let tab = h.app.tab().id;
+    h.app.on_app_event(AppEvent::Export(ExportEvent { job: 99, tab, news: ExportNews::Ended(outcome) }));
+    status(h)
+}
+
+#[test]
+fn the_end_of_a_workbook_is_said_as_it_was() {
+    let mut h = Harness::connected(Lang::En);
+    let path = PathBuf::from("/d/big.xlsx");
+    let done = Outcome::Done { rows: 2_500_000, bytes: 3 << 20, path: path.clone(), damaged: 0, sheets: 3 };
+    assert_eq!(
+        said(&mut h, done),
+        "Exported 2,500,000 rows to /d/big.xlsx (3 MB) on 3 sheets (a sheet holds 1,048,575 rows under its header)"
+    );
+    let full = Fault::io_at(&std::io::Error::from(std::io::ErrorKind::StorageFull), Path::new("/d/big.xlsx.partial"));
+    let long = TooLong { column: "body".into(), row: 7, chars: 40_000 };
+    let not_saved = Failure::NotSaved { fault: full, first: Some(Box::new(Failure::TooLong(long))) };
+    let s = said(&mut h, Outcome::Failed { why: not_saved, rows: 6, partial: None });
+    assert!(
+        s.starts_with(
+            "Export failed: a value of column body (row 7) has 40000 characters, more than an Excel cell holds (32,767); then the workbook could not be made: "
+        ) && s.ends_with("; nothing was kept (a workbook reads only once it is complete)"),
+        "{s}"
+    );
+    assert!(!s.contains("rows before it"), "{s}");
+    let dropped = Outcome::Dropped { rows: 6, first: Some(Box::new(Failure::Key)) };
+    let s = said(&mut h, dropped);
+    assert!(
+        s.starts_with("Export cancelled while the workbook of 6 rows was being made, after the export failed: ")
+            && s.ends_with("; nothing was kept"),
+        "{s}"
+    );
 }

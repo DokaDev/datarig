@@ -255,6 +255,8 @@ pub enum ExportNews {
     Ready { path: PathBuf },
     /// Rows and bytes written so far.
     Progress { rows: u64, bytes: u64 },
+    /// Every row is written: the workbook of `rows` is being made (a cancel now drops it).
+    Finishing { rows: u64 },
     /// The job's one terminal event.
     Ended(Outcome),
 }
@@ -275,6 +277,12 @@ pub enum Outcome {
         rows: u64,
         /// The partial file with the rows so far; `None` when none was written (it was removed).
         partial: Option<PathBuf>,
+    },
+    /// Cancelled while the workbook of `rows` was made: it was dropped, and nothing was kept.
+    Dropped {
+        rows: u64,
+        /// What failed before (the rows had stopped for it).
+        first: Option<Box<Failure>>,
     },
     Failed {
         why: Failure,
@@ -320,8 +328,9 @@ pub enum Failure {
     /// A value is too long for a workbook's cell (its column and row).
     TooLong(xlsx::TooLong),
     /// The workbook could not be made from the rows written (the partial file is removed: a
-    /// workbook reads only once it is complete).
-    NotSaved(Fault),
+    /// workbook reads only once it is complete); `first`: what failed before (the rows had
+    /// stopped for it).
+    NotSaved { fault: Fault, first: Option<Box<Failure>> },
     /// The writer stopped without saying why (a bug).
     Internal,
 }
@@ -430,6 +439,8 @@ struct Job {
     /// the job any more.
     told: bool,
     cancelled: bool,
+    /// Its rows are all written, and its workbook is being made.
+    finishing: bool,
     /// It reads inside the user's transaction.
     in_block: bool,
     /// The last keyset chunk sent: the next one must differ, or the export would not move on.
@@ -771,6 +782,7 @@ impl App {
             db,
             told: false,
             cancelled: false,
+            finishing: false,
             in_block,
             last_chunk: None,
             estimate: None,
@@ -1093,6 +1105,19 @@ impl App {
                 }
                 let progress = self.export_progress(tab);
                 if let (Some(m), false) = (progress, self.exports.jobs.get(&tab).is_some_and(|j| j.db)) {
+                    self.tab_status(tab, Notice::new(m, Level::Info));
+                }
+            }
+            ExportNews::Finishing { rows } => {
+                if !ours {
+                    return;
+                }
+                if let Some(j) = self.exports.jobs.get_mut(&tab) {
+                    j.rows = rows;
+                    j.finishing = true;
+                }
+                // No statement runs any more: said whatever the rows came from.
+                if let Some(m) = self.export_progress(tab) {
                     self.tab_status(tab, Notice::new(m, Level::Info));
                 }
             }
@@ -1437,6 +1462,11 @@ impl App {
                 Notice::new(Msg::ExportCancelled { count: rows, path: p.display().to_string() }, Level::Warning)
             }
             Outcome::Cancelled { partial: None, .. } => Notice::new(Label::ExportCancelledEmpty, Level::Warning),
+            Outcome::Dropped { rows, first: None } => Notice::new(Msg::ExportDropped { count: rows }, Level::Warning),
+            Outcome::Dropped { rows, first: Some(why) } => {
+                let reason = self.export_first_text(&why);
+                Notice::new(Msg::ExportDroppedAfter { count: rows, reason }, Level::Warning)
+            }
             Outcome::Failed { why, rows, partial } => {
                 let reason = self.export_failure_text(&why);
                 let m = match partial {
@@ -1478,6 +1508,34 @@ impl App {
             Failure::Db(DbError::NotSupported) => self.i18n.label(Label::ExportWhyNotSupported).to_string(),
             Failure::Db(e) => self.db_error_text(e),
             Failure::Key => self.i18n.label(Label::ExportWhyKey).to_string(),
+            // The rows before it are kept (row 1: there are none).
+            Failure::TooLong(t) => {
+                let (column, row, length) = (t.column.clone(), t.row.to_string(), t.chars.to_string());
+                let m = if t.row > 1 {
+                    Msg::ExportWhyTooLongKept { column, row, length }
+                } else {
+                    Msg::ExportWhyTooLongFirst { column, length }
+                };
+                self.i18n.msg(&m).to_string()
+            }
+            Failure::NotSaved { fault, first } => {
+                let error = self.fault_text("export.xlsx_not_saved", fault);
+                match first {
+                    Some(first) => {
+                        let first = self.export_first_text(first);
+                        self.i18n.msg(&Msg::ExportWhyNotSavedAfter { first, error }).to_string()
+                    }
+                    None => self.i18n.msg(&Msg::ExportWhyNotSaved { error }).to_string(),
+                }
+            }
+            Failure::Internal => self.i18n.label(Label::ExportWhyInternal).to_string(),
+        }
+    }
+
+    /// What failed first in an export whose workbook was then not kept: nothing said of the rows
+    /// kept.
+    fn export_first_text(&self, why: &Failure) -> String {
+        match why {
             Failure::TooLong(t) => self
                 .i18n
                 .msg(&Msg::ExportWhyTooLong {
@@ -1486,11 +1544,7 @@ impl App {
                     length: t.chars.to_string(),
                 })
                 .to_string(),
-            Failure::NotSaved(fault) => {
-                let error = self.fault_text("export.xlsx_not_saved", fault);
-                self.i18n.msg(&Msg::ExportWhyNotSaved { error }).to_string()
-            }
-            Failure::Internal => self.i18n.label(Label::ExportWhyInternal).to_string(),
+            why => self.export_failure_text(why),
         }
     }
 
@@ -1501,6 +1555,9 @@ impl App {
         let file = j.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         let secs = self.now().saturating_duration_since(j.started).as_secs();
         let time = format!("{}:{:02}", secs / 60, secs % 60);
+        if j.finishing {
+            return Some(Msg::ExportFinishing { count: j.rows, file });
+        }
         let size = crate::text::human_bytes(j.bytes);
         Some(match j.total {
             Some((total, exact)) if total > 0 => {
@@ -1675,6 +1732,7 @@ impl Progress<'_> {
 }
 
 /// How a writer's rows stopped.
+#[derive(Debug)]
 enum Stopped {
     Done,
     Cancelled,
@@ -1791,26 +1849,22 @@ fn write(
             };
             let mut w = if spec.csv.null.is_empty() { w } else { w.null_text(&spec.csv.null) };
             let stopped = fill(&mut w, spec, source, ctl, &mut progress, &io);
-            let rows = w.rows_written();
-            // The workbook of the rows so far is made whatever stopped them. One that cannot be
-            // made leaves nothing that reads: nothing is kept.
-            let not_saved = |e: std::io::Error| Failure::NotSaved(Fault::io_at(&e, &partial));
-            let sheets = w.sheets();
-            let ended = w.end().map_err(not_saved).and_then(|()| {
-                let file = w.into_inner().ok_or_else(|| not_saved(std::io::Error::other("no output")))?;
-                let file = file.into_inner().map_err(|e| not_saved(e.into_error()))?;
-                file.sync_all().map_err(not_saved)?;
-                file.metadata().map_err(not_saved)
+            let (rows, sheets) = (w.rows_written(), w.sheets());
+            progress.tick(rows, w.bytes(), true);
+            // Zipping many rows takes a while: the app says so, and a cancel meanwhile drops it.
+            end.send(ExportNews::Finishing { rows });
+            let made = make_workbook(w, stopped, ctl, &partial, |file: std::fs::File| {
+                file.sync_all()?;
+                Ok(file.metadata()?.len())
             });
-            let ended = match ended {
-                Ok(m) => m.len(),
-                Err(f) => {
+            match made {
+                Ok((size, stopped)) => (stopped, rows, Ok(()), size, 0, sheets),
+                Err(outcome) => {
                     let _ = std::fs::remove_file(&partial);
                     progress.tick(rows, 0, true);
-                    return failed(f, rows, None);
+                    return outcome;
                 }
-            };
-            (stopped, rows, Ok(()), ended, 0, sheets)
+            }
         }
     };
     progress.tick(rows, bytes, true);
@@ -1849,6 +1903,38 @@ fn write(
         Stopped::Cancelled => Outcome::Cancelled { rows, partial: keep(rows) },
         Stopped::Failed(why) => failed(why, rows, keep(rows)),
     }
+}
+
+/// Make the workbook of the rows `w` took (`stopped`: what stopped them) into its output, then
+/// `finish` that (its size). The workbook is made whatever stopped the rows, but a cancel from
+/// the app while it is made drops it. A workbook dropped or not made leaves nothing that reads:
+/// the error is then the export's outcome (nothing kept, with what failed first, if anything).
+fn make_workbook<W: std::io::Write + Send>(
+    mut w: XlsxWriter<'_, BufWriter<W>>,
+    stopped: Stopped,
+    ctl: &mut tokio::sync::mpsc::UnboundedReceiver<Ctl>,
+    partial: &Path,
+    finish: impl FnOnce(W) -> std::io::Result<u64>,
+) -> Result<(u64, Stopped), Outcome> {
+    let rows = w.rows_written();
+    // Only a cancel matters now: every row is in.
+    let mut cancelled = || matches!(ctl.try_recv(), Ok(Ctl::Cancel));
+    let made = w.end_unless(&mut cancelled).and_then(|()| {
+        let out = w.into_inner().ok_or_else(|| std::io::Error::other("no output"))?;
+        finish(out.into_inner().map_err(|e| e.into_error())?)
+    });
+    let e = match made {
+        Ok(size) => return Ok((size, stopped)),
+        Err(e) => e,
+    };
+    let first = match stopped {
+        Stopped::Failed(f) => Some(Box::new(f)),
+        Stopped::Done | Stopped::Cancelled => None,
+    };
+    if xlsx::Dropped::of(&e) {
+        return Err(Outcome::Dropped { rows, first });
+    }
+    Err(failed(Failure::NotSaved { fault: Fault::io_at(&e, partial), first }, rows, None))
 }
 
 /// Begin the file and write the rows of `source` into it.
