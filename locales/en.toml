@@ -2000,7 +2000,6 @@
 "export.format.html" = "HTML table"
 "export.format.xlsx" = "Excel (.xlsx)"
 "export.format.parquet" = "Parquet"
-"export.format.later" = "coming in a later version"
 "export.note.every" = { one = "The result's {count} row is fetched: it is written from the result, and nothing is sent to the server.", other = "All {count} rows of the result are fetched: they are written from the result, and nothing is sent to the server." }
 "export.note.fetched" = { one = "The {count} row fetched so far (the server has more); nothing is sent to the server.", other = "The {count} rows fetched so far (the server has more); nothing is sent to the server." }
 "export.note.selection" = { one = "{count} row of the selection; nothing is sent to the server.", other = "{count} rows of the selection; nothing is sent to the server." }

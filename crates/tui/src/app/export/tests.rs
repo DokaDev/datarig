@@ -207,3 +207,34 @@ fn a_rows_failure_of_a_workbook_is_its_temporary_file_or_a_value_too_long() {
         other => panic!("{other:?}"),
     }
 }
+
+#[test]
+fn a_parquet_file_whose_disk_filled_up_keeps_nothing_and_says_the_disk_is_full() {
+    let dir = std::env::temp_dir().join(format!("datarig-export-parquet-full-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let partial = dir.join("x.parquet.partial");
+    std::fs::write(&partial, "PAR1").unwrap();
+    let columns = [ParquetColumn { name: "t", kind: ValueKind::Text, type_name: "text" }];
+    let out = BufWriter::new(Full { room: 1024, written: 0 });
+    let mut w = ParquetWriter::new(&columns, out).unwrap().row_groups(1, parquet::GROUP_BYTES);
+    // The row group of the first row does not fit: the rows stop for that.
+    let big = "x".repeat(64 * 1024);
+    let e = w.rows(&[vec![Some(&big)]]).unwrap_err();
+    assert_eq!(e.kind(), std::io::ErrorKind::StorageFull);
+    let mut finished = 0;
+    let ended = end_parquet(w, &partial, |_| {
+        finished += 1;
+        Ok(0)
+    });
+    // The first error is the failure (not "a row group failed" with no cause), and the partial
+    // file, which does not read, is gone.
+    match ended {
+        Err(Failure::NotFinished(f)) => {
+            assert_eq!(f.kind, datarig_core::fault::FaultKind::Io(std::io::ErrorKind::StorageFull), "{f:?}");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(finished, 0, "nothing synced");
+    assert!(!partial.exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}

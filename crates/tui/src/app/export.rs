@@ -199,12 +199,6 @@ impl ExportFormat {
     }
 }
 
-/// Formats the export dialog lists before the app writes them, by the name `:export` is to take
-/// for each: greyed, with a word that they come later, while [`ExportFormat::parse`] knows no
-/// format of that name.
-pub const LATER_FORMATS: [(&str, Label); 2] =
-    [("xlsx", Label::ExportFormatXlsx), ("parquet", Label::ExportFormatParquet)];
-
 /// What an export takes from the result.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExportScope {
@@ -1896,13 +1890,14 @@ fn write(
             };
             let stopped = fill(&mut w, spec, source, ctl, &mut progress, &io);
             let rows = w.rows_written();
-            // The row groups so far and the footer are written whatever stopped the rows. A file
-            // whose row group failed cannot be finished, and does not read: nothing is kept.
-            let ended = w.end();
-            let size = match saved(ended, w.into_inner(), |e| Failure::NotFinished(Fault::io_at(&e, &partial))) {
+            // The row groups so far and the footer are written whatever stopped the rows.
+            let finish = |file: std::fs::File| {
+                file.sync_all()?;
+                Ok(file.metadata()?.len())
+            };
+            let size = match end_parquet(w, &partial, finish) {
                 Ok(size) => size,
                 Err(f) => {
-                    let _ = std::fs::remove_file(&partial);
                     progress.tick(rows, 0, true);
                     return failed(f, rows, None);
                 }
@@ -2022,18 +2017,22 @@ fn make_workbook<W: std::io::Write + Send>(
     Err(Box::new(failed(Failure::NotSaved { fault: Fault::io_at(&e, partial), first }, rows, None)))
 }
 
-/// The file a writer that is not text ended into (`ended`, then its output), synced, and its size;
-/// `why` says what failed.
-fn saved(
-    ended: std::io::Result<()>,
-    out: Option<BufWriter<std::fs::File>>,
-    why: impl Fn(std::io::Error) -> Failure,
+/// End the Parquet file `w` wrote into `partial` (its last row group and its footer), then
+/// `finish` its output (its size). A file that cannot be finished does not read: `partial` is
+/// removed, and the failure is the first error writing it (a full disk, not what that left).
+fn end_parquet<W: std::io::Write + Send>(
+    mut w: ParquetWriter<'_, BufWriter<W>>,
+    partial: &Path,
+    finish: impl FnOnce(W) -> std::io::Result<u64>,
 ) -> Result<u64, Failure> {
-    ended.map_err(&why)?;
-    let file = out.ok_or_else(|| why(std::io::Error::other("no output")))?;
-    let file = file.into_inner().map_err(|e| why(e.into_error()))?;
-    file.sync_all().map_err(&why)?;
-    Ok(file.metadata().map_err(&why)?.len())
+    let ended = w.end().and_then(|()| {
+        let out = w.into_inner().ok_or_else(|| std::io::Error::other("no output"))?;
+        finish(out.into_inner().map_err(|e| e.into_error())?)
+    });
+    ended.map_err(|e| {
+        let _ = std::fs::remove_file(partial);
+        Failure::NotFinished(Fault::io_at(&e, partial))
+    })
 }
 
 /// Begin the file and write the rows of `source` into it.

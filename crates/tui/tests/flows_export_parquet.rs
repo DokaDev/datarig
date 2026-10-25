@@ -10,7 +10,10 @@ mod common;
 use common::*;
 use datarig_core::driver::{ColumnMeta, DbCommand, DbError, DbEvent, ExportBatch, ExportGuard, ExportSink, ValueKind};
 use datarig_core::export::parquet::read::{self, Field};
+use datarig_core::fault::Fault;
 use datarig_core::i18n::Lang;
+use datarig_tui::app::AppEvent;
+use datarig_tui::app::export::{ExportEvent, ExportNews, Failure, Outcome};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -183,4 +186,18 @@ fn a_value_its_type_cannot_hold_fails_naming_its_column_and_keeps_the_rows_befor
     let f = read(&dir.join("bad.parquet.partial"));
     assert_eq!(f.rows.len(), 4);
     assert_eq!(f.rows[3], values(3));
+}
+
+#[test]
+fn a_parquet_file_that_could_not_be_finished_says_why() {
+    let mut h = Harness::connected(Lang::En);
+    let tab = h.app.tab().id;
+    let partial = Path::new("/d/out.parquet.partial");
+    let full = Fault::io_at(&std::io::Error::from(std::io::ErrorKind::StorageFull), partial);
+    let outcome = Outcome::Failed { why: Failure::NotFinished(full), rows: 70_000, partial: None };
+    h.app.on_app_event(AppEvent::Export(ExportEvent { job: 99, tab, news: ExportNews::Ended(outcome) }));
+    assert_eq!(
+        status(&h),
+        "Export failed: the Parquet file could not be finished: the disk is full; nothing was kept (a Parquet file reads only once its footer is written)"
+    );
 }

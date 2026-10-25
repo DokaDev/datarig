@@ -363,7 +363,117 @@ fn a_file_that_cannot_be_written_is_not_finished() {
     w.begin().unwrap();
     let e = w.rows(&[vec![Some(&big)]]).unwrap_err();
     assert!(BadValue::of(&e).is_none());
-    assert!(w.rows(&[vec![Some("more")]]).is_err());
-    assert!(w.end().is_err());
+    assert_eq!((e.kind(), e.to_string()), (io::ErrorKind::StorageFull, "disk full".to_string()));
+    // What comes after is the first failure, its kind and its text: not a failure of its own.
+    let first = |e: io::Error| {
+        assert_eq!(e.kind(), io::ErrorKind::StorageFull, "{e}");
+        assert!(e.to_string().ends_with("(a row group failed: disk full)"), "{e}");
+    };
+    first(w.rows(&[vec![Some("more")]]).unwrap_err());
+    first(w.end().unwrap_err());
+    // A failed end stays failed.
+    first(w.end().unwrap_err());
     assert!(w.into_inner().is_none());
+    // Ending is what fails (the last row group, or the footer): the same.
+    let mut w = ParquetWriter::new(&columns, Full(4)).unwrap();
+    w.rows(&[vec![Some("x")]]).unwrap();
+    let e = w.end().unwrap_err();
+    assert_eq!(e.kind(), io::ErrorKind::StorageFull);
+    assert_eq!(w.end().unwrap_err().kind(), io::ErrorKind::StorageFull);
+    assert!(w.into_inner().is_none());
+}
+
+#[test]
+fn a_row_of_another_width_than_the_columns_fails_and_keeps_nothing_of_it() {
+    let columns = [col("a", ValueKind::Integer, "int4"), col("b", ValueKind::Text, "text")];
+    let mut w = ParquetWriter::new(&columns, Vec::new()).unwrap();
+    w.rows(&[vec![Some("1"), Some("x")]]).unwrap();
+    for row in [vec![Some("2")], vec![Some("2"), Some("y"), Some("z")]] {
+        let e = w.rows(&[row]).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::InvalidInput, "{e}");
+        assert!(BadValue::of(&e).is_none());
+    }
+    // The file goes on: the rows before are kept.
+    w.rows(&[vec![Some("3"), None]]).unwrap();
+    w.end().unwrap();
+    let f = read::file(&w.into_inner().unwrap()).unwrap();
+    assert_eq!(f.rows, vec![vec![Field::Int(1), s("x")], vec![Field::Int(3), Field::Null]]);
+}
+
+#[test]
+fn timestamps_bc_and_past_9999_go_through_the_writer() {
+    let columns = [col("tz", ValueKind::TimestampTz, "timestamptz"), col("t", ValueKind::Timestamp, "timestamp")];
+    let rows: Vec<super::super::Row> = vec![
+        vec![Some("0044-03-15 12:00:00+00:53:28 BC"), Some("10000-01-01 23:59:59.999999")],
+        vec![Some("0001-01-01 00:00:00+00 BC"), Some("0001-12-31 00:00:00 BC")],
+    ];
+    let (f, _) = file(&columns, &rows, |w| w);
+    // 44 BC is year -43: day -735,160; the offset +00:53:28 taken off.
+    assert_eq!(f.rows[0][0], Field::TimestampMicros(-63_517_784_008_000_000));
+    assert_eq!(f.rows[0][1], Field::TimestampMicros(micros(2_932_897, 23, 59, 59, 999_999)));
+    // 1 BC is year 0, a leap year: 366 days before 0001-01-01.
+    assert_eq!(f.rows[1][0], Field::TimestampMicros(micros(-719_162 - 366, 0, 0, 0, 0)));
+    assert_eq!(f.rows[1][1], Field::TimestampMicros(micros(-719_163, 0, 0, 0, 0)));
+}
+
+#[test]
+fn a_sign_or_a_space_the_driver_never_writes_is_not_a_date_or_a_time() {
+    for v in ["+2024-01-02", "-2024-01-02", " 2024-01-02", "2024-01-02 ", "2024-+1-02", "2024-01-+2", "2024-01-02  BC"]
+    {
+        assert_eq!(parse_date(v), None, "{v:?}");
+    }
+    for v in [" 12:00:00", "12:00:00 ", "+12:00:00", "12:+0:00", "12:00:+0", "12:00:00.+1"] {
+        assert_eq!(parse_time(v), None, "{v:?}");
+    }
+    for v in [
+        "2024-01-02 03:04:05 +09",
+        "2024-01-02 03:04:05+ 9",
+        "2024-01-02 03:04:05++09",
+        "2024-01-02 03:04:05+09:+0",
+        "2024-01-02 03:04:05+09 ",
+        "2024-01-02  03:04:05+09",
+        "2024-01-02 03:04:05",
+    ] {
+        assert_eq!(parse_timestamp(v, true), None, "{v:?}");
+    }
+    for v in ["2024-01-02 03:04:05 ", " 2024-01-02 03:04:05", "2024-01-02 03:04:05+00"] {
+        assert_eq!(parse_timestamp(v, false), None, "{v:?}");
+    }
+    // Numbers: a space fails; a minus is no unsigned integer.
+    let columns = [col("i", ValueKind::Integer, "int4"), col("u", ValueKind::Integer, "bigint unsigned")];
+    let mut w = ParquetWriter::new(&columns, Vec::new()).unwrap();
+    for (row, column) in [
+        (vec![Some(" 1"), None], "i"),
+        (vec![Some("1 "), None], "i"),
+        (vec![None, Some("-1")], "u"),
+        (vec![None, Some(" 1")], "u"),
+        (vec![None, Some("18446744073709551616")], "u"),
+    ] {
+        let e = w.rows(&[row]).unwrap_err();
+        assert_eq!(BadValue::of(&e).map(|b| b.column.as_str()), Some(column), "{e}");
+    }
+    assert_eq!(w.rows_written(), 0);
+}
+
+#[test]
+fn unsigned_64_bit_statistics_order_as_unsigned() {
+    use parquet::file::reader::{FileReader, SerializedFileReader};
+    use parquet::file::statistics::Statistics;
+    let columns = [col("u", ValueKind::Integer, "bigint unsigned")];
+    let max = u64::MAX.to_string();
+    let rows: Vec<super::super::Row> = vec![vec![Some("1")], vec![Some(&max)], vec![Some("9223372036854775808")]];
+    let mut w = ParquetWriter::new(&columns, Vec::new()).unwrap();
+    w.rows(&rows).unwrap();
+    w.end().unwrap();
+    let bytes = bytes::Bytes::from(w.into_inner().unwrap());
+    let reader = SerializedFileReader::new(bytes).unwrap();
+    let group = reader.metadata().row_group(0);
+    match group.column(0).statistics() {
+        // Signed, u64::MAX would be -1 and the least.
+        Some(Statistics::Int64(st)) => {
+            assert_eq!(st.min_opt().map(|v| *v as u64), Some(1));
+            assert_eq!(st.max_opt().map(|v| *v as u64), Some(u64::MAX));
+        }
+        other => panic!("{other:?}"),
+    }
 }

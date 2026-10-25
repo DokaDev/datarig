@@ -12,6 +12,8 @@
 //!   INT64; MySQL's `bigint unsigned` is INT64 marked unsigned (64-bit);
 //! * a float is FLOAT for a 32-bit type (`float4`, MySQL's `float`), else DOUBLE (`NaN` and the
 //!   infinities as they are);
+//! * a column of a PostgreSQL domain is known by the domain's name only, so a domain over an
+//!   integer is INT64 and one over a float DOUBLE, whatever its base type (wider, never cut);
 //! * a boolean is BOOLEAN;
 //! * a date is INT32 DATE; a time of day without a zone INT64 TIME (microseconds); a timestamp
 //!   INT64 TIMESTAMP (microseconds), adjusted to UTC for PostgreSQL's `timestamptz` (its offset
@@ -21,10 +23,13 @@
 //!   arrays, intervals, bits, a time with a zone, and decimals, every digit kept (a result does
 //!   not say a decimal's precision and scale, so a DECIMAL type could not be chosen up front).
 //!
-//! A value its column's type cannot hold (PostgreSQL's `infinity` dates and timestamps, a year
-//! before 1 AD's day count or past what a 64-bit count of microseconds holds, MySQL's zero date,
-//! `24:00:00`, bytes in another notation) is never written as NULL nor as another type: the export
-//! fails naming its column and row ([`BadValue`]), and the file keeps the rows before it.
+//! A value its column's type cannot hold (PostgreSQL's `infinity` dates and timestamps, MySQL's
+//! zero date, `24:00:00`, a timestamp past what a 64-bit count of microseconds holds, bytes not in
+//! hex) is never written as NULL nor as another type: the export fails naming its column and row
+//! ([`BadValue`]), and the file keeps the rows before it. Dates and timestamps BC are held.
+//!
+//! A row group that fails to be written (a full disk) leaves a file that cannot be finished: every
+//! later call fails with that first error (its kind and its text), [`RowSink::end`] included.
 
 use super::stream::RowSink;
 use crate::driver::ValueKind;
@@ -205,9 +210,9 @@ fn io_error(e: ParquetError) -> io::Error {
     }
 }
 
-/// What a failure to write a row group leaves: the file cannot be finished.
-fn broken() -> io::Error {
-    io::Error::other("the Parquet file could not be written (a row group failed)")
+/// What a failure to write a row group (its kind and text) leaves: the file cannot be finished.
+fn broken(kind: io::ErrorKind, text: &str) -> io::Error {
+    io::Error::new(kind, format!("the Parquet file could not be written (a row group failed: {text})"))
 }
 
 /// The days from 1970-01-01 to the proleptic Gregorian date `y-m-d` (a valid date).
@@ -473,8 +478,9 @@ pub struct ParquetWriter<'a, W: Write + Send> {
     groups: u32,
     rows: u64,
     bytes: u64,
-    /// A row group failed to be written: nothing more is, and the file cannot be finished.
-    broken: bool,
+    /// The first failure to write a row group or the footer (its kind and text): nothing more is
+    /// written, and the file cannot be finished.
+    broken: Option<(io::ErrorKind, String)>,
     ended: bool,
 }
 
@@ -504,7 +510,7 @@ impl<'a, W: Write + Send> ParquetWriter<'a, W> {
             groups: 0,
             rows: 0,
             bytes: 0,
-            broken: false,
+            broken: None,
             ended: false,
         })
     }
@@ -564,14 +570,30 @@ impl<'a, W: Write + Send> ParquetWriter<'a, W> {
         })
     }
 
-    /// Write the rows kept as a row group, and keep none.
-    fn flush(&mut self) -> io::Result<()> {
-        if self.broken {
-            return Err(broken());
+    /// The first failure, as an error, once there was one.
+    fn failed(&self) -> Option<io::Error> {
+        self.broken.as_ref().map(|(kind, text)| broken(*kind, text))
+    }
+
+    /// `e`, kept as the first failure (a later one is what the first left).
+    fn fail(&mut self, e: io::Error) -> io::Error {
+        if self.broken.is_none() {
+            self.broken = Some((e.kind(), e.to_string()));
         }
-        let Some(file) = self.file.as_mut() else { return Err(broken()) };
-        // Marked broken until the group is closed: a failure leaves a group that never ends.
-        self.broken = true;
+        e
+    }
+
+    /// Write the rows kept as a row group, and keep none. A failure leaves a group that never
+    /// ends: it is kept ([`ParquetWriter::fail`]).
+    fn flush(&mut self) -> io::Result<()> {
+        if let Some(e) = self.failed() {
+            return Err(e);
+        }
+        self.write_group().map_err(|e| self.fail(e))
+    }
+
+    fn write_group(&mut self) -> io::Result<()> {
+        let Some(file) = self.file.as_mut() else { return Err(io::Error::other("the Parquet file is ended")) };
         let mut group = file.next_row_group().map_err(io_error)?;
         for buffer in &mut self.buffers {
             let Some(mut col) = group.next_column().map_err(io_error)? else {
@@ -612,7 +634,6 @@ impl<'a, W: Write + Send> ParquetWriter<'a, W> {
             }
         }
         group.close().map_err(io_error)?;
-        self.broken = false;
         self.groups += 1;
         self.kept_rows = 0;
         self.kept_bytes = 0;
@@ -627,10 +648,20 @@ impl<W: Write + Send> RowSink for ParquetWriter<'_, W> {
     }
 
     fn rows(&mut self, rows: &[super::Row]) -> io::Result<()> {
-        if self.broken || self.ended {
-            return Err(broken());
+        if let Some(e) = self.failed() {
+            return Err(e);
+        }
+        if self.ended {
+            return Err(io::Error::other("the Parquet file is ended"));
         }
         for row in rows {
+            if row.len() != self.columns.len() {
+                let (values, columns) = (row.len(), self.columns.len());
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!("a row of {values} values for a Parquet file of {columns} columns"),
+                ));
+            }
             let n = self.rows + 1;
             // Every value parsed before any is kept: a value that does not fit leaves no part
             // of its row behind.
@@ -651,8 +682,12 @@ impl<W: Write + Send> RowSink for ParquetWriter<'_, W> {
     }
 
     /// Write the rows kept and the footer: the file of the rows so far reads. A file whose row
-    /// group failed to be written is not finished: the output is then not a Parquet file.
+    /// group or footer failed to be written is not finished (the output is then not a Parquet
+    /// file), and ending it again fails the same way.
     fn end(&mut self) -> io::Result<()> {
+        if let Some(e) = self.failed() {
+            return Err(e);
+        }
         if self.ended {
             return Ok(());
         }
@@ -660,13 +695,9 @@ impl<W: Write + Send> RowSink for ParquetWriter<'_, W> {
         if self.kept_rows > 0 {
             self.flush()?;
         }
-        if self.broken {
-            return Err(broken());
-        }
-        let Some(file) = self.file.take() else { return Err(broken()) };
-        let mut out = file.into_inner().map_err(io_error)?;
-        out.flush()?;
-        self.out = Some(out);
+        let Some(file) = self.file.take() else { return Err(io::Error::other("the Parquet file is ended")) };
+        let out = file.into_inner().map_err(io_error).and_then(|mut out| out.flush().map(|()| out));
+        self.out = Some(out.map_err(|e| self.fail(e))?);
         Ok(())
     }
 

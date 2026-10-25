@@ -46,8 +46,8 @@ tokio = { workspace = true, features = ["rt", "macros", "net", "io-util"] }
 zip.workspace = true
 
 [features]
-# `ConnectionConfig::test_db()`, `transport::TcpDialer` and `export::xlsx::read` for the tests of the
-# other crates.
+# `ConnectionConfig::test_db()`, `transport::TcpDialer`, `export::xlsx::read` and
+# `export::parquet::read` for the tests of the other crates.
 test-util = ["tokio/net", "dep:zip"]
 
 [lints]

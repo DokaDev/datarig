@@ -1997,7 +1997,6 @@
 "export.format.html" = "HTML 표"
 "export.format.xlsx" = "엑셀 (.xlsx)"
 "export.format.parquet" = "Parquet"
-"export.format.later" = "다음 버전에서 지원"
 "export.note.every" = "결과의 {count}행을 모두 가져왔습니다: 결과에서 쓰며 서버에는 아무것도 보내지 않습니다."
 "export.note.fetched" = "지금까지 가져온 {count}행 (서버에 더 있음). 서버에는 아무것도 보내지 않습니다."
 "export.note.selection" = "선택 영역의 {count}행. 서버에는 아무것도 보내지 않습니다."

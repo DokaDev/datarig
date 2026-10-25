@@ -278,9 +278,9 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
   the flash goes off at once); `[ui] yank_flash = "off"` turns that off.
 - **Export to a file**: `Space r e`, the results menu, or `:export [format] [scope] [path]
   [delim= quote= header= null=]` writes a result to disk. `:export` alone opens the dialog.
-  - Formats: CSV, TSV, Excel (.xlsx), JSON, indented JSON, JSON Lines, Markdown, HTML, XML, SQL
-    `INSERT` and `UPDATE` (the last two only where the result's keys allow them, as with copy).
-    Parquet is planned, not there yet.
+  - Formats: CSV, TSV, Excel (.xlsx), Parquet, JSON, indented JSON, JSON Lines, Markdown, HTML,
+    XML, SQL `INSERT` and `UPDATE` (the last two only where the result's keys allow them, as
+    with copy).
   - Excel: the header row is bold and stays in view; numbers Excel holds exactly are numbers,
     booleans are booleans, everything else (dates included) is the text the database wrote, and
     NULL is an empty cell (or the `null=` text, the one CSV option it takes). A sheet holds
@@ -288,6 +288,18 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
     than a cell holds (32,767 characters, as Excel counts them) stops the export there. Rows go
     to temporary files as they come and the workbook is zipped at the end (ZIP64, so a workbook
     past 4 GiB is fine); while it is zipped the status says so, and a cancel then keeps nothing.
+  - Parquet: every column may be NULL, and its type follows the result's column: integers are
+    INT32 or INT64 (MySQL's `bigint unsigned` an unsigned INT64), floats FLOAT or DOUBLE,
+    booleans BOOLEAN, dates DATE, times TIME and timestamps TIMESTAMP in microseconds
+    (`timestamptz` adjusted to UTC), binary data its bytes; everything else, decimals included,
+    is the text the database wrote (every digit kept). A column of a PostgreSQL domain is known
+    by the domain's name only, so a domain over an integer is INT64 and one over a float DOUBLE.
+    A value the type cannot hold (`infinity`, MySQL's zero date, `24:00:00`) stops the export
+    there, naming its column and row; it is never written as NULL. Rows are written in row
+    groups of 65,536 (Snappy), so memory stays at one group. A cancel or a value that does not
+    fit keeps a `.partial` file of the rows so far that reads; a file that could not be written
+    (a full disk) does not read, so it is removed, and the message says why. Two columns of one name are written as they
+    are; some readers (Spark, some pandas paths) refuse or rename them, so give them aliases.
   - Rows: all rows, the fetched rows, or the selection. The fetched rows and the selection come
     from what is already loaded; nothing is sent to the server for them.
   - CSV options: delimiter, quote style (as needed, always, all but numbers, none), a header line,
@@ -418,7 +430,6 @@ Planned, in no particular order and with no dates:
 - Drivers for Valkey/Redis and Elasticsearch
 - TLS: passphrase-protected client keys, certificate revocation lists, `sslnegotiation=direct`
 - A server monitor (sessions, locks, activity)
-- Export to Parquet
 - More of vim: `gv`, macros, Ex commands other than `:{n}` and `:s` (`:d`, `:g`, …)
 - DDL of objects the explorer does not list yet (functions on their own, sequences, types),
   and from the other drivers
