@@ -1,9 +1,10 @@
 //! Exporting every row of `analytics.events` (4,000,000 rows) to a CSV file as a user would
 //! (`:export all <file>`), with the headless app: once as a console's statement, read with one
-//! streaming statement, and once as a table tab, read in chunks by its key. What it measures:
-//! the rows written per second and the process's resident memory as the rows go by, which must
-//! stay flat (the rows go from the session through a bounded channel to the file, never into
-//! the app's result).
+//! streaming statement, and once as a table tab, read in chunks by its key; and to an Excel
+//! workbook (`<file>.xlsx`, four sheets), streamed. What it measures: the rows written per second
+//! and the process's resident memory as the rows go by, and each second nothing is said (a
+//! workbook is zipped at the end), which must stay flat (the rows go from the session through a
+//! bounded channel to the file, never into the app's result).
 
 use crate::apps;
 use crate::stats::rss_kb;
@@ -16,8 +17,13 @@ use std::time::{Duration, Instant};
 /// Rows between two samples of the resident memory.
 const SAMPLE_ROWS: u64 = 250_000;
 
-pub async fn run(url: &str, scratch: &std::path::Path, keyset: bool) -> Result<Value, String> {
-    let name = if keyset { "export_keyset" } else { "export_stream" };
+/// Every row as CSV (`keyset`: the table tab, read by its key), or (`xlsx`) a workbook streamed.
+pub async fn run(url: &str, scratch: &std::path::Path, keyset: bool, xlsx: bool) -> Result<Value, String> {
+    let name = match (keyset, xlsx) {
+        (_, true) => "export_xlsx",
+        (true, false) => "export_keyset",
+        (false, false) => "export_stream",
+    };
     let state = scratch.join(format!("{name}-state"));
     let _ = std::fs::remove_dir_all(&state);
     let (mut app, mut rx) = apps::connected(url, &state).await?;
@@ -33,7 +39,7 @@ pub async fn run(url: &str, scratch: &std::path::Path, keyset: bool) -> Result<V
         matches!(a.tab().results, Results::Rows(_)) && a.tab().exec.running.is_none()
     })
     .await?;
-    let path = scratch.join(format!("{name}.csv"));
+    let path = scratch.join(format!("{name}.{}", if xlsx { "xlsx" } else { "csv" }));
     let _ = std::fs::remove_file(&path);
     let _ = std::fs::remove_file(datarig_tui::app::export::partial_path(&path));
     let req = app.export_request(&format!("all {}", path.display())).map_err(|n| format!("{:?}", n.msg))?;
@@ -49,9 +55,14 @@ pub async fn run(url: &str, scratch: &std::path::Path, keyset: bool) -> Result<V
     let deadline = Instant::now() + Duration::from_secs(1_800);
     while app.exporting(tab) {
         let left = deadline.saturating_duration_since(Instant::now());
-        let ev = match tokio::time::timeout(left, rx.recv()).await {
+        let ev = match tokio::time::timeout(left.min(Duration::from_secs(1)), rx.recv()).await {
             Ok(Some(ev)) => ev,
             Ok(None) => return Err("the event channel closed".into()),
+            Err(_) if left > Duration::ZERO => {
+                // Nothing said for a second (a workbook being zipped): memory all the same.
+                samples.push(json!({ "rows": rows, "rss_kb": rss_kb(pid), "secs": t0.elapsed().as_secs_f64() }));
+                continue;
+            }
             Err(_) => return Err(format!("{name}: not done within 30 minutes")),
         };
         if let AppEvent::Export(ExportEvent { news: ExportNews::Progress { rows: r, .. }, .. }) = &ev {

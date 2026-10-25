@@ -35,6 +35,9 @@ fn a_path_names_its_format() {
     assert_eq!(of("a.htm"), Some(ExportFormat::Html));
     assert_eq!(of("a.xml"), Some(ExportFormat::Xml));
     assert_eq!(of("a.sql"), Some(ExportFormat::SqlInsert));
+    assert_eq!(of("a.XLSX"), Some(ExportFormat::Xlsx));
+    assert_eq!(ExportFormat::parse("excel"), Some(ExportFormat::Xlsx));
+    assert_eq!(ExportFormat::Xlsx.extension(), "xlsx");
     assert_eq!(of("a.txt"), None);
     assert_eq!(of("noext"), None);
     for f in ExportFormat::ALL {
@@ -97,4 +100,107 @@ fn a_writer_that_stops_without_its_word_says_where_its_partial_file_is() {
         other => panic!("{other:?}"),
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// An output that fails once `room` bytes went in (a disk that filled up).
+struct Full {
+    room: usize,
+    written: usize,
+}
+
+impl std::io::Write for Full {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if self.written + buf.len() > self.room {
+            return Err(std::io::Error::from(std::io::ErrorKind::StorageFull));
+        }
+        self.written += buf.len();
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// A workbook writer of one row into `out`, and the app's end of its control channel.
+fn workbook_of_a_row<'a, W: std::io::Write + Send>(
+    columns: &'a [core_export::Column<'a>],
+    out: W,
+) -> (XlsxWriter<'a, BufWriter<W>>, CtlSender, tokio::sync::mpsc::UnboundedReceiver<Ctl>) {
+    let mut w = XlsxWriter::new(columns, BufWriter::new(out)).unwrap();
+    w.begin().unwrap();
+    w.rows(&[vec![Some("1")]]).unwrap();
+    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+    (w, tx, rx)
+}
+
+#[test]
+fn a_workbook_that_cannot_be_made_keeps_nothing_and_says_what_failed_first() {
+    let columns = [core_export::Column { name: "n", kind: Kind::Number }];
+    let partial = Path::new("/d/x.xlsx.partial");
+    let (w, _tx, mut rx) = workbook_of_a_row(&columns, Full { room: 600, written: 0 });
+    let made = make_workbook(w, Stopped::Done, &mut rx, partial, |_| Ok(0)).map_err(|o| *o);
+    match made {
+        Err(Outcome::Failed { why: Failure::NotSaved { first: None, .. }, rows: 1, partial: None }) => {}
+        other => panic!("{other:?}"),
+    }
+    // The rows had stopped for a value too long: that is said too.
+    let (w, _tx, mut rx) = workbook_of_a_row(&columns, Full { room: 600, written: 0 });
+    let long = xlsx::TooLong { column: "n".into(), row: 2, chars: 40_000 };
+    let made =
+        make_workbook(w, Stopped::Failed(Failure::TooLong(long.clone())), &mut rx, partial, |_| Ok(0)).map_err(|o| *o);
+    match made {
+        Err(Outcome::Failed { why: Failure::NotSaved { first: Some(first), .. }, partial: None, .. }) => {
+            assert!(matches!(*first, Failure::TooLong(ref t) if *t == long), "{first:?}");
+        }
+        other => panic!("{other:?}"),
+    }
+    // Finishing it (its sync) fails: nothing is kept either.
+    let (w, _tx, mut rx) = workbook_of_a_row(&columns, Vec::new());
+    let made =
+        make_workbook(w, Stopped::Cancelled, &mut rx, partial, |_| Err(std::io::Error::other("sync"))).map_err(|o| *o);
+    assert!(matches!(made, Err(Outcome::Failed { why: Failure::NotSaved { first: None, .. }, .. })), "{made:?}");
+}
+
+#[test]
+fn a_drop_while_the_workbook_is_made_drops_it_and_a_stale_cancel_does_not() {
+    let columns = [core_export::Column { name: "n", kind: Kind::Number }];
+    let partial = Path::new("/d/x.xlsx.partial");
+    let make = |words: Vec<Ctl>, stopped: Stopped| {
+        let (w, tx, mut rx) = workbook_of_a_row(&columns, Vec::new());
+        for c in words {
+            tx.send(c).unwrap();
+        }
+        make_workbook(w, stopped, &mut rx, partial, |out| {
+            assert!(xlsx::read::sheets(&out).is_some(), "a workbook");
+            Ok(out.len() as u64)
+        })
+        .map_err(|o| *o)
+    };
+    // A cancel sent before the app said a cancel now keeps nothing (a second Ctrl+C, one that
+    // came while the last rows were written): the workbook is made, and stays the cancel's.
+    let made = make(vec![Ctl::Cancel], Stopped::Cancelled);
+    assert!(matches!(made, Ok((size, Stopped::Cancelled)) if size > 0), "{made:?}");
+    // The drop: nothing kept.
+    let made = make(vec![Ctl::Drop], Stopped::Cancelled);
+    assert!(matches!(made, Err(Outcome::Dropped { rows: 1, first: None })), "{made:?}");
+    // What a quit sends: the cancel the rows did not take, then the drop.
+    let made = make(vec![Ctl::Cancel, Ctl::Drop], Stopped::Done);
+    assert!(matches!(made, Err(Outcome::Dropped { rows: 1, first: None })), "{made:?}");
+    // After a failure: it is said with it.
+    let made = make(vec![Ctl::Drop], Stopped::Failed(Failure::Key));
+    assert!(matches!(made, Err(Outcome::Dropped { rows: 1, first: Some(ref f) }) if matches!(**f, Failure::Key)));
+    // Any other word is not a drop: the workbook is made, and how the rows stopped stays.
+    let made = make(vec![Ctl::Finish, Ctl::Fail(Failure::Stale)], Stopped::Cancelled);
+    assert!(matches!(made, Ok((size, Stopped::Cancelled)) if size > 0), "{made:?}");
+}
+
+#[test]
+fn a_rows_failure_of_a_workbook_is_its_temporary_file_or_a_value_too_long() {
+    let long = xlsx::TooLong { column: "c".into(), row: 3, chars: 40_000 };
+    assert!(matches!(workbook_failure(std::io::Error::other(long.clone())), Failure::TooLong(t) if t == long));
+    match workbook_failure(std::io::Error::from(std::io::ErrorKind::StorageFull)) {
+        Failure::TempFile(_, folder) => assert_eq!(folder, std::env::temp_dir()),
+        other => panic!("{other:?}"),
+    }
 }

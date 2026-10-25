@@ -19,6 +19,9 @@ keyring.workspace = true
 pg_query.workspace = true
 # Only for its feature: see the workspace manifest.
 prost.workspace = true
+rust_xlsxwriter.workspace = true
+# Only for `test-util` (`export::xlsx::read`).
+zip = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
 shell-words.workspace = true
@@ -38,10 +41,12 @@ toml.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt", "macros", "net", "io-util"] }
+zip.workspace = true
 
 [features]
-# `ConnectionConfig::test_db()` and `transport::TcpDialer` for the tests of the other crates.
-test-util = ["tokio/net"]
+# `ConnectionConfig::test_db()`, `transport::TcpDialer` and `export::xlsx::read` for the tests of the
+# other crates.
+test-util = ["tokio/net", "dep:zip"]
 
 [lints]
 workspace = true
