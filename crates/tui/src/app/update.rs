@@ -9,6 +9,10 @@ use crate::widgets::tree::Reveal;
 
 impl App {
     pub fn handle_event(&mut self, ev: Event) {
+        // What sat idle past its limit (the machine slept: no timer fired) closes before the
+        // input acts, so a run after waking connects again instead of using a closed session.
+        let now = self.now();
+        self.idle_tick(now);
         self.handle_event_here(ev);
         self.sweep_as_plan();
         self.sweep_exports();

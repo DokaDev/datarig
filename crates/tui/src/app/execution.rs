@@ -14,9 +14,11 @@ use datarig_core::transport::{DialError, Refusal};
 
 impl App {
     /// Send a tree or catalog request to profile `id`'s metadata session.
-    pub(super) fn send_meta(&self, id: ProfileId, cmd: DbCommand) {
+    pub(super) fn send_meta(&mut self, id: ProfileId, cmd: DbCommand) {
         if let Some(s) = self.conns.get(id).and_then(|c| c.meta.as_ref()) {
             s.send(cmd);
+            // A read asked for is a use, also before its answer comes.
+            self.touch_profile(id);
         }
     }
 
@@ -111,7 +113,10 @@ impl App {
             self.unstage_run(id);
             return self.tab_status(id, Notice::new(Label::SafetyConfirmMoved, Level::Warning));
         }
-        if t.exec.session.is_none() && self.conns.get(pid).is_none_or(|c| c.resolved.is_none()) {
+        // A profile whose sessions closed for being idle connects again first (its tunnel too).
+        if t.exec.session.is_none()
+            && self.conns.get(pid).is_none_or(|c| c.resolved.is_none() || c.idle_closed.is_some())
+        {
             // Bound to this tab, this profile and this tab generation.
             let q = Queued { tab: id, profile: pid, binding: t.binding, statements };
             let c = self.conns.entry(pid);
@@ -133,6 +138,7 @@ impl App {
         let tx = self.tx_rule(id, &statements, as_is);
         let manual = self.manual_commit(id);
         let now = self.now();
+        self.touch_tab(id);
         self.query_seq += 1;
         let qid = self.query_seq;
         if let Some(t) = self.tabs.get_mut(id) {
@@ -485,6 +491,18 @@ impl App {
 
     /// A driver event of the session `target` names (its generation already checked).
     pub(super) fn on_target_event(&mut self, target: EventTarget, ev: DbEvent) {
+        // An answer is a use of the session (a lost one is not).
+        if !matches!(ev, DbEvent::Lost { .. }) {
+            match target {
+                EventTarget::Meta(id) => self.touch_profile(id),
+                EventTarget::Tab(id) => self.touch_tab(id),
+                EventTarget::Aux(id) => {
+                    if let Some(p) = self.conns.aux_by_id_ref(id).map(|a| a.profile) {
+                        self.touch_profile(p);
+                    }
+                }
+            }
+        }
         match target {
             EventTarget::Meta(id) => self.meta_event(id, ev),
             EventTarget::Tab(id) => {
@@ -756,10 +774,16 @@ impl App {
                 self.conns.entry(id).keys = Keys::Failed(text.clone());
                 self.status = Some(Notice::new(Msg::KeysFailed { error: text }, Level::Warning));
             }
-            DbEvent::Lost { .. } => {
-                // Lost with its tunnel: the tunnel's words.
+            DbEvent::Lost { error } => {
+                // Lost with its tunnel: the tunnel's words; closed by the server for being idle,
+                // that.
                 let lost = self.conns.get(id).and_then(|c| c.tunnel_lost.clone());
-                let m = lost.unwrap_or_else(|| Notice::new(Msg::ConnLost { name, error: text }, Level::Error));
+                let m = lost.unwrap_or_else(|| match error {
+                    DbError::IdleSessionTimeout(_) => {
+                        Notice::new(Msg::ConnIdleClosedByServer { name, error: text }, Level::Info)
+                    }
+                    _ => Notice::new(Msg::ConnLost { name, error: text }, Level::Error),
+                });
                 let why = self.i18n.msg(&m.msg).to_string();
                 self.ddl_stop(id, Some(None), super::tabs::DdlState::Failed(why), true);
                 let c = self.conns.entry(id);
@@ -939,7 +963,19 @@ impl App {
         let connecting = profile.is_some_and(|p| self.conns.state(p) == NodeState::Connecting);
         let null = self.i18n.label(Label::ResultsNull);
         let now = self.now();
-        let text = self.event_error_text(&ev);
+        let text = match &ev {
+            // How long it waited, when the session was opened with a limit of the app's.
+            DbEvent::Failed { error: DbError::LockTimeout(s), .. } => {
+                match self.tabs.get(id).and_then(|t| t.exec.lock_wait) {
+                    Some(w) => {
+                        let wait = datarig_core::policy::format_timeout(Some(w));
+                        self.i18n.msg(&Msg::DbLockTimeout { wait, error: s.clone() }).to_string()
+                    }
+                    None => self.event_error_text(&ev),
+                }
+            }
+            _ => self.event_error_text(&ev),
+        };
         // A statement run again for the user that the allowlist refused (the server's side of
         // it, asked right before): said as a refusal, with the reason.
         let released = self.tabs.get(id).is_some_and(|t| t.exec.paging == Paging::Released);
@@ -1280,6 +1316,16 @@ impl App {
                 t.exec.paging = Paging::None;
                 if let DbError::IdleInTransactionTimeout(_) = error {
                     let m = Notice::new(Msg::TxIdleTimeout { error: text }, Level::Warning);
+                    t.exec.run.notes.push(m.clone());
+                    Some(m)
+                } else if let DbError::IdleSessionTimeout(_) = error {
+                    // The server's idle limit, not a failure: the next run connects again (and
+                    // does not say again that a transaction went).
+                    t.exec.lost_tx = false;
+                    let m = match had_tx {
+                        true => Notice::new(Msg::QueryIdleClosedByServerTx { error: text }, Level::Warning),
+                        false => Notice::new(Msg::QueryIdleClosedByServer { error: text }, Level::Info),
+                    };
                     t.exec.run.notes.push(m.clone());
                     Some(m)
                 } else {
@@ -1879,9 +1925,13 @@ impl App {
     /// anything else in words, with its raw detail in the error log.
     pub(super) fn db_error_text(&self, e: &DbError) -> String {
         let label = match e {
-            DbError::Server(s) | DbError::NeedsNoTransaction(s) | DbError::IdleInTransactionTimeout(s) => {
+            DbError::Server(s)
+            | DbError::NeedsNoTransaction(s)
+            | DbError::IdleInTransactionTimeout(s)
+            | DbError::IdleSessionTimeout(s) => {
                 return s.clone();
             }
+            DbError::LockTimeout(s) => return self.i18n.msg(&Msg::DbLockTimeoutAny { error: s.clone() }).to_string(),
             DbError::NoAnswer(d) => return self.i18n.msg(&Msg::DbNoAnswer { elapsed: *d }).to_string(),
             DbError::RowsNotRead(n) => return self.i18n.msg(&Msg::DbRowsNotRead { count: *n }).to_string(),
             DbError::Closed => Label::DbClosed,

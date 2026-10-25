@@ -19,6 +19,7 @@ use datarig_core::config::{
 };
 use datarig_core::i18n::Label;
 use datarig_core::secret::{DefaultSource, SourceKind};
+use std::time::Duration;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Command {
@@ -440,6 +441,15 @@ pub enum Setting {
     KeychainAccess(KeychainAccess),
     SizeHeat(SizeHeat),
     YankFlash(YankFlash),
+    /// `idle_disconnect` (`None`: off).
+    IdleDisconnect(Option<Duration>),
+    /// `lock_wait` (`None`: off).
+    LockWait(Option<Duration>),
+}
+
+/// A duration a setting's preset names.
+const fn secs(n: u64) -> Option<Duration> {
+    Some(Duration::from_secs(n))
 }
 
 /// The categories of the settings screen, in its order.
@@ -449,6 +459,7 @@ pub enum SettingGroup {
     Editor,
     Results,
     Clipboard,
+    Connections,
     Language,
     Secrets,
 }
@@ -460,6 +471,7 @@ impl SettingGroup {
             SettingGroup::Editor => Label::SettingsGroupEditor,
             SettingGroup::Results => Label::SettingsGroupResults,
             SettingGroup::Clipboard => Label::SettingsGroupClipboard,
+            SettingGroup::Connections => Label::SettingsGroupConnections,
             SettingGroup::Language => Label::SettingsGroupLanguage,
             SettingGroup::Secrets => Label::SettingsGroupSecrets,
         }
@@ -700,7 +712,45 @@ pub const SETTINGS: &[SettingSpec] = &[
             ("off", Setting::YankFlash(YankFlash::Off), Label::SettingYankFlashOff),
         ]),
     },
+    // `:set` also takes any other duration these two take (`7m`); the screen shows it as is.
+    SettingSpec {
+        key: "idle_disconnect",
+        label: Label::SettingIdleDisconnect,
+        about: Label::SettingIdleDisconnectAbout,
+        group: SettingGroup::Connections,
+        values: Values::Fixed(&[
+            ("off", Setting::IdleDisconnect(None), Label::SettingIdleDisconnectOff),
+            ("5m", Setting::IdleDisconnect(secs(300)), Label::SettingIdleDisconnectOn),
+            ("10m", Setting::IdleDisconnect(secs(600)), Label::SettingIdleDisconnectOn),
+            ("30m", Setting::IdleDisconnect(secs(1800)), Label::SettingIdleDisconnectOn),
+            ("1h", Setting::IdleDisconnect(secs(3600)), Label::SettingIdleDisconnectOn),
+        ]),
+    },
+    SettingSpec {
+        key: "lock_wait",
+        label: Label::SettingLockWait,
+        about: Label::SettingLockWaitAbout,
+        group: SettingGroup::Connections,
+        values: Values::Fixed(&[
+            ("off", Setting::LockWait(None), Label::SettingLockWaitOff),
+            ("5s", Setting::LockWait(secs(5)), Label::SettingLockWaitOn),
+            ("10s", Setting::LockWait(secs(10)), Label::SettingLockWaitOn),
+            ("30s", Setting::LockWait(secs(30)), Label::SettingLockWaitOn),
+            ("1m", Setting::LockWait(secs(60)), Label::SettingLockWaitOn),
+        ]),
+    },
 ];
+
+/// A duration setting's value typed for `:set` that is not one of its presets (`7m`, `300s`):
+/// the setting it applies, if `spec` is a duration setting and the value is valid for it.
+fn duration_setting(spec: &SettingSpec, value: &str) -> Option<Setting> {
+    use datarig_core::policy;
+    match spec.key {
+        "idle_disconnect" => policy::parse_idle_disconnect_text(value).ok().map(Setting::IdleDisconnect),
+        "lock_wait" => policy::parse_lock_wait_text(value).ok().map(Setting::LockWait),
+        _ => None,
+    }
+}
 
 impl SettingSpec {
     /// `en|ko|auto`, for messages (the built-in names for the theme).
@@ -754,7 +804,8 @@ pub fn parse_set(arg: &str) -> Result<SetValue<'_>, SetError> {
         ("explorer.size_heat", v) if v == "on" => "3".to_string(),
         (_, v) => v,
     };
-    values.iter().find(|v| v.0 == value_lc).map(|v| SetValue::Setting(v.1)).ok_or_else(|| SetError::BadValue {
+    let found = values.iter().find(|v| v.0 == value_lc).map(|v| v.1).or_else(|| duration_setting(spec, &value_lc));
+    found.map(SetValue::Setting).ok_or_else(|| SetError::BadValue {
         key: spec.key,
         value: value.to_string(),
         values: spec.value_list(),

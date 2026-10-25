@@ -158,6 +158,19 @@ pub struct ConnectOptions {
     /// connecting to it directly: the session's connection and its cancel requests each dial
     /// the profile's host and port through it.
     pub dialer: Option<DialerRef>,
+    /// The query session's lock wait limit: how long a statement waits for a lock another
+    /// session holds before the server cancels it ([`DbError::LockTimeout`]); `None` keeps the
+    /// server's setting. PostgreSQL: `lock_timeout`, for the session on a direct connection and
+    /// `SET LOCAL` in each transaction behind a pooler (nothing stays on a pooled server
+    /// connection); MySQL: `lock_wait_timeout` and `innodb_lock_wait_timeout` for the session.
+    /// Metadata sessions keep their own, shorter limit.
+    pub lock_wait: Option<std::time::Duration>,
+    /// The server's own idle limit for the session, a safety net behind the app's idle
+    /// disconnect: past it the server ends the session ([`DbError::IdleSessionTimeout`]).
+    /// PostgreSQL: `idle_session_timeout`, only from version 14 on and only on a direct
+    /// connection (behind a pooler it would end server connections other clients share);
+    /// MySQL: `wait_timeout`. `None` keeps the server's setting.
+    pub server_idle: Option<std::time::Duration>,
 }
 
 impl ConnectOptions {
@@ -171,7 +184,19 @@ impl ConnectOptions {
             context: SessionContext::default(),
             statement_cache: true,
             dialer: None,
+            lock_wait: None,
+            server_idle: None,
         }
+    }
+
+    /// The same options, with lock wait limit `lock_wait` (or the server's).
+    pub fn lock_wait(self, lock_wait: Option<std::time::Duration>) -> Self {
+        Self { lock_wait, ..self }
+    }
+
+    /// The same options, with the server's idle limit `server_idle` (or the server's own).
+    pub fn server_idle(self, server_idle: Option<std::time::Duration>) -> Self {
+        Self { server_idle, ..self }
     }
 
     /// The same options, read-only or not.

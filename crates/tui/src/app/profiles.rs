@@ -105,7 +105,7 @@ pub enum Field {
     SshTimeout,
     /// An environment's badge, read-only switch, which statements ask, how it commits, how long
     /// an open transaction may be idle (the app's warning, the server's limit), paging, idle
-    /// timeout and spill limit (the environment form).
+    /// timeout, spill limit, idle disconnect and lock wait limit (the environment form).
     EnvBadge,
     EnvReadOnly,
     EnvConfirm,
@@ -115,6 +115,8 @@ pub enum Field {
     EnvPaging,
     EnvIdle,
     EnvSpill,
+    EnvIdleDisconnect,
+    EnvLockWait,
     Test,
     Save,
     Cancel,
@@ -148,7 +150,7 @@ pub const ADVANCED: [Field; 11] = [
     Field::Folder,
 ];
 /// The environment form's fields, in order.
-pub const ENVIRONMENT: [Field; 11] = [
+pub const ENVIRONMENT: [Field; 13] = [
     Field::Name,
     Field::Color,
     Field::EnvBadge,
@@ -160,6 +162,8 @@ pub const ENVIRONMENT: [Field; 11] = [
     Field::EnvPaging,
     Field::EnvIdle,
     Field::EnvSpill,
+    Field::EnvIdleDisconnect,
+    Field::EnvLockWait,
 ];
 pub const BUTTONS: [Field; 3] = [Field::Test, Field::Save, Field::Cancel];
 pub const SSH: [Field; 12] = [
@@ -291,6 +295,8 @@ impl Field {
             Field::EnvPaging => Label::FormFieldPaging,
             Field::EnvIdle => Label::FormFieldIdleTimeout,
             Field::EnvSpill => Label::FormFieldSpillLimit,
+            Field::EnvIdleDisconnect => Label::FormFieldIdleDisconnect,
+            Field::EnvLockWait => Label::FormFieldLockWait,
             Field::Test => Label::FormButtonTest,
             Field::Save => Label::FormButtonSave,
             Field::Cancel => Label::FormButtonCancel,
@@ -407,6 +413,10 @@ pub enum FieldError {
     TxIdle,
     /// Not a size (`512MB`, `2GB`, `off`).
     Size,
+    /// Not an `idle_disconnect` (`policy::parse_idle_disconnect`).
+    IdleDisconnect,
+    /// Not a `lock_wait` (`policy::parse_lock_wait`).
+    LockWait,
 }
 
 impl FieldError {
@@ -429,6 +439,8 @@ impl FieldError {
             FieldError::Duration => Label::ValidateDuration,
             FieldError::TxIdle => Label::ValidateTxIdle,
             FieldError::Size => Label::ValidateSize,
+            FieldError::IdleDisconnect => Label::ValidateIdleDisconnect,
+            FieldError::LockWait => Label::ValidateLockWait,
         }
     }
 }
@@ -555,6 +567,9 @@ pub struct ProfileForm {
     pub env_paging: PagingMode,
     pub env_idle: TextInput,
     pub env_spill: TextInput,
+    /// `idle_disconnect` and `lock_wait` (empty: the config's).
+    pub env_idle_disconnect: TextInput,
+    pub env_lock_wait: TextInput,
     /// The color set (`None`: automatic from the name).
     pub color: Option<String>,
     /// The icon set (`None`: the driver's).
@@ -724,6 +739,8 @@ impl ProfileForm {
             env_paging: PagingMode::NoHold,
             env_idle: TextInput::new(&policy::format_timeout(policy::PAGING_IDLE_TIMEOUT.into())),
             env_spill: TextInput::default(),
+            env_idle_disconnect: TextInput::default(),
+            env_lock_wait: TextInput::default(),
             color: c.color.clone(),
             icon: c.icon.clone(),
             folder: c.folder.clone(),
@@ -821,6 +838,7 @@ impl ProfileForm {
         f.env_paging = rules.paging;
         f.env_idle = TextInput::new(&policy::format_timeout(rules.paging_idle_timeout));
         f.env_spill = TextInput::new(&rules.spill_limit.map(policy::format_size).unwrap_or_default());
+        f.set_session_limits(&rules);
         f.section = Section::Advanced;
         f.focus = Field::Name;
         f
@@ -836,6 +854,7 @@ impl ProfileForm {
         f.env_paging = p.paging;
         f.env_idle = TextInput::new(&policy::format_timeout(p.paging_idle_timeout));
         f.env_spill = TextInput::new(&p.spill_limit.map(policy::format_size).unwrap_or_default());
+        f.set_session_limits(p);
         f.focus = Field::EnvReadOnly;
         f
     }
@@ -845,6 +864,32 @@ impl ProfileForm {
         self.env_commit = p.commit;
         self.env_tx_warning = TextInput::new(&policy::format_timeout(p.tx_idle_warning));
         self.env_tx_timeout = TextInput::new(&policy::format_timeout(p.tx_idle_timeout));
+    }
+
+    /// The idle disconnect and the lock wait limit of `p` into the form (empty: the config's).
+    fn set_session_limits(&mut self, p: &Policy) {
+        let shown = |v: Option<Option<std::time::Duration>>| v.map(policy::format_timeout).unwrap_or_default();
+        self.env_idle_disconnect = TextInput::new(&shown(p.idle_disconnect));
+        self.env_lock_wait = TextInput::new(&shown(p.lock_wait));
+    }
+
+    /// The idle disconnect and the lock wait limit typed in the environment form (`None`: not
+    /// valid; `Some(None)`: empty, the config's).
+    #[allow(clippy::type_complexity)]
+    fn session_limits(
+        &self,
+    ) -> (Option<Option<Option<std::time::Duration>>>, Option<Option<Option<std::time::Duration>>>) {
+        let read = |input: &TextInput, parse: fn(&str) -> Result<Option<std::time::Duration>, String>| match input
+            .text()
+            .trim()
+        {
+            "" => Some(None),
+            t => parse(t).ok().map(Some),
+        };
+        (
+            read(&self.env_idle_disconnect, policy::parse_idle_disconnect_text),
+            read(&self.env_lock_wait, policy::parse_lock_wait_text),
+        )
     }
 
     /// The form edits an environment's rules (an environment, or the default rules).
@@ -861,6 +906,7 @@ impl ProfileForm {
     pub fn to_rules(&self) -> Option<Policy> {
         let (Some(idle), Some(spill)) = self.env_values() else { return None };
         let (Some(tx_idle_warning), Some(tx_idle_timeout)) = self.tx_idle_values() else { return None };
+        let (Some(idle_disconnect), Some(lock_wait)) = self.session_limits() else { return None };
         Some(Policy {
             paging: self.env_paging,
             paging_idle_timeout: idle,
@@ -870,6 +916,8 @@ impl ProfileForm {
             commit: self.env_commit,
             tx_idle_warning,
             tx_idle_timeout,
+            idle_disconnect,
+            lock_wait,
         })
     }
 
@@ -1238,6 +1286,8 @@ impl ProfileForm {
             Field::EnvBadge => &mut self.env_badge,
             Field::EnvIdle => &mut self.env_idle,
             Field::EnvSpill => &mut self.env_spill,
+            Field::EnvIdleDisconnect => &mut self.env_idle_disconnect,
+            Field::EnvLockWait => &mut self.env_lock_wait,
             Field::EnvTxWarning => &mut self.env_tx_warning,
             Field::EnvTxTimeout => &mut self.env_tx_timeout,
             Field::Name => &mut self.name,
@@ -1702,6 +1752,13 @@ impl ProfileForm {
             }
             if timeout.is_none() {
                 out.push((Field::EnvTxTimeout, FieldError::TxIdle));
+            }
+            let (idle, lock) = self.session_limits();
+            if idle.is_none() {
+                out.push((Field::EnvIdleDisconnect, FieldError::IdleDisconnect));
+            }
+            if lock.is_none() {
+                out.push((Field::EnvLockWait, FieldError::LockWait));
             }
             return out;
         }

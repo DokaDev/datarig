@@ -28,8 +28,57 @@ fn versions_before_mysql_8_and_mariadb_10_6_are_refused_with_their_name() {
 }
 
 #[test]
+fn the_lock_wait_limit_is_the_query_sessions_and_the_idle_limit_every_sessions() {
+    let q = Settings {
+        role: SessionRole::Query,
+        read_only: false,
+        select_limit: None,
+        lock_wait: Some(5),
+        wait_timeout: Some(360),
+    };
+    let sql = init_sql(&MYSQL_84, &q);
+    assert!(
+        sql.ends_with(
+            ", SESSION lock_wait_timeout = 5, SESSION innodb_lock_wait_timeout = 5, SESSION wait_timeout = 360"
+        ),
+        "{sql}"
+    );
+    let meta = Settings { role: SessionRole::Meta, ..q };
+    let sql = init_sql(&MYSQL_84, &meta);
+    // The metadata session keeps its own, shorter limit.
+    assert!(!sql.contains("innodb_lock_wait_timeout"), "{sql}");
+    assert!(sql.contains("SESSION lock_wait_timeout = 2"), "{sql}");
+    assert!(sql.contains("SESSION wait_timeout = 360"), "{sql}");
+    let none = Settings { lock_wait: None, wait_timeout: None, ..q };
+    assert!(!init_sql(&MYSQL_84, &none).contains("wait_timeout"));
+    assert_eq!(whole_secs(std::time::Duration::from_millis(1500)), 2);
+    assert_eq!(whole_secs(std::time::Duration::from_millis(1)), 1);
+    assert_eq!(whole_secs(std::time::Duration::from_secs(300)), 300);
+}
+
+#[test]
+fn a_lock_wait_past_the_limit_and_an_idle_close_are_told_apart_from_other_errors() {
+    let wait = server_error(1205, "HY000", "Lock wait timeout exceeded; try restarting transaction");
+    assert_eq!(
+        wait,
+        DbError::LockTimeout("ERROR 1205 (HY000): Lock wait timeout exceeded; try restarting transaction".into())
+    );
+    assert!(
+        matches!(server_error(4031, "HY000", "idle"), DbError::IdleSessionTimeout(m) if m == "ERROR 4031 (HY000): idle")
+    );
+    // `NOWAIT` did not wait.
+    assert!(matches!(server_error(3572, "HY000", "nowait"), DbError::Server(_)));
+}
+
+#[test]
 fn one_set_sets_the_session_up_by_role() {
-    let q = Settings { role: SessionRole::Query, read_only: false, select_limit: Some(501) };
+    let q = Settings {
+        role: SessionRole::Query,
+        read_only: false,
+        select_limit: Some(501),
+        lock_wait: None,
+        wait_timeout: None,
+    };
     assert_eq!(
         init_sql(&MYSQL_84, &q),
         "SET NAMES utf8mb4, SESSION session_track_system_variables = \
@@ -42,7 +91,8 @@ fn one_set_sets_the_session_up_by_role() {
     );
     let ro = Settings { read_only: true, ..q };
     assert!(init_sql(&MYSQL_84, &ro).ends_with(", SESSION sql_select_limit = 501, SESSION transaction_read_only = ON"));
-    let meta = Settings { role: SessionRole::Meta, read_only: false, select_limit: None };
+    let meta =
+        Settings { role: SessionRole::Meta, read_only: false, select_limit: None, lock_wait: None, wait_timeout: None };
     assert!(
         init_sql(&MYSQL_84, &meta).ends_with(
             ", SESSION lock_wait_timeout = 2, SESSION max_execution_time = 10000, SESSION sql_quote_show_create = 1, \

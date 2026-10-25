@@ -645,6 +645,8 @@ fn step_2_settings_are_read_checked_and_saved_only_when_set() {
             keychain_access: KeychainAccess::Direct,
             size_heat: SizeHeat::Three,
             yank_flash: YankFlash::On,
+            idle_disconnect: None,
+            lock_wait: None,
         }
     );
     assert_eq!(parse("osc52_max_bytes = 5000\n").unwrap().prefs.osc52_max_bytes, 5000);
@@ -1418,6 +1420,100 @@ fn environments_are_read_in_file_order_with_color_and_badge() {
     }
     // Names are not checked when read: an old file keeps loading.
     assert!(parse("[policy.\" odd \"]\n").is_ok());
+}
+
+/// `idle_disconnect` and `lock_wait`: off without the keys; the top-level ones are the config's,
+/// an environment's own win (`"off"` too) and one that leaves them out takes the config's
+/// (`None`); a value out of range or not a duration is an error naming the key (never read as
+/// absent); a save writes them only when set and reads them back the same.
+#[test]
+fn idle_disconnect_and_lock_wait_are_read_overridden_and_written() {
+    use std::time::Duration;
+    let cfg = parse("").unwrap();
+    assert_eq!((cfg.prefs.idle_disconnect, cfg.prefs.lock_wait), (None, None));
+    let cfg = parse(
+        r#"
+idle_disconnect = "300s"
+lock_wait = 5
+
+[policy.prod]
+idle_disconnect = "off"
+lock_wait = "30s"
+
+[policy.dev]
+"#,
+    )
+    .unwrap();
+    assert_eq!(cfg.prefs.idle_disconnect, Some(Duration::from_secs(300)));
+    assert_eq!(cfg.prefs.lock_wait, Some(Duration::from_secs(5)));
+    let prod = cfg.policies.get(Some("prod")).unwrap();
+    assert_eq!((prod.idle_disconnect, prod.lock_wait), (Some(None), Some(Some(Duration::from_secs(30)))));
+    let dev = cfg.policies.get(Some("dev")).unwrap();
+    assert_eq!((dev.idle_disconnect, dev.lock_wait), (None, None), "left out: the config's");
+    assert_eq!(cfg.policies.get(None).unwrap().idle_disconnect, None);
+    for (text, key) in [
+        ("idle_disconnect = \"30s\"", "idle_disconnect"),
+        ("idle_disconnect = \"2d\"", "idle_disconnect"),
+        ("idle_disconnect = \"25h\"", "idle_disconnect"),
+        ("idle_disconnect = true", "idle_disconnect"),
+        ("lock_wait = \"soon\"", "lock_wait"),
+        ("lock_wait = -1", "lock_wait"),
+        ("[policy.x]\nidle_disconnect = \"10s\"", "policy.x.idle_disconnect"),
+        ("[policy.x]\nlock_wait = \"500ms\"", "policy.x.lock_wait"),
+        ("[policy.x]\nlock_wait = \"48h\"", "policy.x.lock_wait"),
+    ] {
+        let e = parse(text).unwrap_err();
+        assert!(format!("{e:?}").contains(key), "{text}: {e:?}");
+    }
+    // Zero is off, as for the other durations.
+    assert_eq!(parse("lock_wait = 0").unwrap().prefs.lock_wait, None);
+
+    // Written: the top-level keys while set, an environment's own when it has them.
+    let path = temp_file("session-limits");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let text = "version = 2\n\n[policy.prod]\nconfirm = \"writes\"\n";
+    std::fs::write(&path, text).unwrap();
+    let (cfg, err) = load(Some(path.clone()));
+    assert!(err.is_none(), "{err:?}");
+    let prefs = Prefs {
+        idle_disconnect: Some(Duration::from_secs(300)),
+        lock_wait: Some(Duration::from_secs(5)),
+        ..Prefs::default()
+    };
+    let mut envs = cfg.policies.environments().to_vec();
+    envs[0].policy.idle_disconnect = Some(None);
+    envs[0].policy.lock_wait = Some(Some(Duration::from_secs(90)));
+    let save_all = |prefs: Prefs, envs: &[crate::policy::Environment]| {
+        save(
+            &path,
+            Settings { version: 2, prefs, ..settings("en") },
+            Some(Profiles {
+                connections: &cfg.connections,
+                tunnels: &cfg.tunnels,
+                environments: Some(envs),
+                default_rules: None,
+                folders: &cfg.folders,
+                last_used: None,
+            }),
+        )
+        .unwrap();
+        std::fs::read_to_string(&path).unwrap()
+    };
+    let out = save_all(prefs, &envs);
+    assert!(out.contains("idle_disconnect = \"5m\"\n"), "{out}");
+    assert!(out.contains("lock_wait = \"5s\"\n"), "{out}");
+    assert!(
+        out.contains("[policy.prod]\nconfirm = \"writes\"\nidle_disconnect = \"off\"\nlock_wait = \"90s\"\n"),
+        "{out}"
+    );
+    let (back, err) = load(Some(path.clone()));
+    assert!(err.is_none(), "{err:?}");
+    assert_eq!((back.prefs.idle_disconnect, back.prefs.lock_wait), (prefs.idle_disconnect, prefs.lock_wait));
+    assert!(back.policies.environments()[0].same_settings(&envs[0]));
+    // Back to the config's and off: the keys go.
+    envs[0].policy.idle_disconnect = None;
+    envs[0].policy.lock_wait = None;
+    assert_eq!(save_all(Prefs::default(), &envs), text);
 }
 
 /// `commit`, `tx_idle_warning` and `tx_idle_timeout`: read with their defaults when left out,

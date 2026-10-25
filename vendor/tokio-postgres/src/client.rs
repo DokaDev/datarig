@@ -818,6 +818,12 @@ impl Client {
         TransactionBuilder::new(self)
     }
 
+    /// datarig: the process id the server gave in its `BackendKeyData` at startup. A pooler
+    /// gives one of its own, so it differs from what `pg_backend_pid()` answers there.
+    pub fn backend_key_pid(&self) -> i32 {
+        self.process_id
+    }
+
     /// Constructs a cancellation token that can later be used to request cancellation of a query running on the
     /// connection associated with this client.
     pub fn cancel_token(&self) -> CancelToken {

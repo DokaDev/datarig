@@ -309,6 +309,44 @@ async fn apply_context(client: &Client, schema: Option<&str>) -> Result<Placed, 
     Ok(Placed { database: database.unwrap_or(placed.database), schemas, per_transaction: Some(set) })
 }
 
+/// A duration as a PostgreSQL setting in milliseconds takes it (at most what an `int` holds).
+fn millis(d: Duration) -> u128 {
+    d.as_millis().clamp(1, i32::MAX as u128)
+}
+
+/// `lock_timeout` for one transaction (gone at its end, so nothing stays on a pooled server
+/// connection).
+fn set_local_lock_timeout(wait: Duration) -> String {
+    format!("SET LOCAL lock_timeout = {}", millis(wait))
+}
+
+/// Set the session's lock wait limit (`lock_wait`) and the server's idle limit
+/// (`idle_session_timeout`, from version 14 on) for the session, in one round trip, only on a
+/// direct connection: the server process the session talks to is the one whose id came in the
+/// startup's `BackendKeyData` (a pooler sends an id of its own, and its server connections are
+/// shared). Whether the connection is direct; a failed check reads as not (the limit then goes
+/// in each transaction, which holds either way, and the idle limit is not set).
+async fn apply_limits(client: &Client, lock_wait: Option<Duration>, server_idle: Option<Duration>) -> bool {
+    let pid = client.backend_key_pid();
+    let set = |name: &str, d: Option<Duration>, also: &str| match d {
+        Some(d) => format!("CASE WHEN d.direct{also} THEN pg_catalog.set_config('{name}', '{}', false) END", millis(d)),
+        None => "NULL".to_string(),
+    };
+    let ask = format!(
+        "SELECT d.direct, {}, {} FROM (SELECT pg_catalog.pg_backend_pid() = {pid} AS direct) d",
+        set("lock_timeout", lock_wait, ""),
+        set(
+            "idle_session_timeout",
+            server_idle,
+            " AND pg_catalog.current_setting('server_version_num')::int >= 140000"
+        ),
+    );
+    match client.simple_query(&ask).await {
+        Ok(msgs) => msgs.iter().any(|m| matches!(m, SimpleQueryMessage::Row(r) if r.get(0) == Some("t"))),
+        Err(_) => false,
+    }
+}
+
 /// Whether the server made the session read-only (a pooler may drop startup options).
 async fn is_read_only(client: &Client) -> bool {
     match client.simple_query("SHOW default_transaction_read_only").await {
@@ -417,6 +455,13 @@ async fn run_session(
             }
         },
     };
+    // The lock wait limit (query sessions only: the metadata session sets its own, shorter one in
+    // each read) and the server's idle limit.
+    let lock_wait = opts.lock_wait.filter(|_| role == SessionRole::Query);
+    let direct = match lock_wait.is_some() || opts.server_idle.is_some() {
+        true => apply_limits(&client, lock_wait, opts.server_idle).await,
+        false => true,
+    };
     let _ = events.send(DbEvent::Encryption(tls.encryption()));
     let _ = events.send(DbEvent::Connected);
     if default_ignored {
@@ -440,10 +485,13 @@ async fn run_session(
             if let Ok(mut g) = canceller.0.lock() {
                 *g = Some(cancel.clone());
             }
+            // Behind a pooler the lock wait limit goes in each transaction, as the search path does.
+            let lock = lock_wait.filter(|_| !direct).map(set_local_lock_timeout);
             let settings = crate::query::Settings {
                 page_size: opts.page_size,
                 read_only: opts.read_only,
-                path,
+                path_per_tx: path.is_some(),
+                each_tx: path.into_iter().chain(lock).collect(),
                 statement_cache: opts.statement_cache,
             };
             query_loop(client, link, cancel, canceller.1.clone(), events, settings).await
@@ -466,6 +514,16 @@ pub(crate) fn db_error(e: &tokio_postgres::Error) -> DbError {
         // The server ended the session: its transaction sat idle past the limit.
         if db.code() == &SqlState::IDLE_IN_TRANSACTION_SESSION_TIMEOUT {
             return DbError::IdleInTransactionTimeout(s);
+        }
+        // The server ended the session: it sat idle past `idle_session_timeout`.
+        if db.code() == &SqlState::IDLE_SESSION_TIMEOUT {
+            return DbError::IdleSessionTimeout(s);
+        }
+        // A statement waited past `lock_timeout` (the server cancels it from its interrupt
+        // check). `NOWAIT` and `SKIP LOCKED` fail with the same code elsewhere: they did not
+        // wait.
+        if db.code() == &SqlState::LOCK_NOT_AVAILABLE && db.routine() == Some("ProcessInterrupts") {
+            return DbError::LockTimeout(s);
         }
         return DbError::Server(s);
     }

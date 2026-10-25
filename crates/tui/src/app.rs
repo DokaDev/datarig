@@ -43,6 +43,7 @@ pub mod folder_pick;
 mod format;
 pub mod guide;
 pub mod hover;
+pub mod idle;
 pub mod key_picker;
 mod keychain;
 mod keychain_offer;
@@ -1647,6 +1648,7 @@ impl App {
             // The open transaction's time in the status bar (the active tab's only).
             || self.tx_tick_due(self.now()).is_some()
             || self.tx_idle_due().is_some()
+            || self.idle_due(self.now()).is_some()
     }
 
     /// Aux session `a` is open and no tab works in its database: it closes
@@ -1714,6 +1716,9 @@ impl App {
         if let Some(due) = self.tx_idle_due() {
             at(due);
         }
+        if let Some(due) = self.idle_due(now) {
+            at(due);
+        }
         // Never sooner than a fine tick, never in the past.
         next.map(|n| n.max(now + Duration::from_millis(1)))
     }
@@ -1723,6 +1728,7 @@ impl App {
     pub fn on_tick(&mut self, now: Instant) {
         self.which_key_tick(now);
         self.tx_idle_tick(now);
+        self.idle_tick(now);
         self.autosave_tick(now);
         // Aux sessions no tab works in, unused for a while, close; what they read stays.
         let idle: Vec<u64> = self

@@ -39,6 +39,9 @@
 //! `result_window_rows` (rows of a result kept in memory, default 10,000;
 //! the rest go to a temporary file) and `spill_limit` (the most that file may take, default
 //! 1 GB; also a policy item).
+//! `idle_disconnect` (how long a profile's connection may sit unused before its sessions close,
+//! default off) and `lock_wait` (how long a query session's statement waits for another
+//! session's lock, default off) are also policy items; [`Prefs`] holds them.
 //! `[secrets] default_source` is the password source a new profile starts with (`auto`, the
 //! default: the keychain when it works, else `prompt`). A profile's own source is
 //! `password_source` (+ `password_command` / `password_env`), see [`crate::secret::source`].
@@ -93,6 +96,10 @@ struct FileConfig {
     #[serde(default)]
     spill_limit: Option<toml::Value>,
     #[serde(default)]
+    idle_disconnect: Option<toml::Value>,
+    #[serde(default)]
+    lock_wait: Option<toml::Value>,
+    #[serde(default)]
     folders: Vec<String>,
     #[serde(default)]
     connections: Vec<ConnectionConfig>,
@@ -145,6 +152,10 @@ struct PolicySection {
     #[serde(default)]
     tx_idle_timeout: Option<toml::Value>,
     #[serde(default)]
+    idle_disconnect: Option<toml::Value>,
+    #[serde(default)]
+    lock_wait: Option<toml::Value>,
+    #[serde(default)]
     color: Option<toml::Value>,
     #[serde(default)]
     badge: Option<toml::Value>,
@@ -163,6 +174,8 @@ impl PolicySection {
             ("commit", self.commit.clone()),
             ("tx_idle_warning", self.tx_idle_warning.clone()),
             ("tx_idle_timeout", self.tx_idle_timeout.clone()),
+            ("idle_disconnect", self.idle_disconnect.clone()),
+            ("lock_wait", self.lock_wait.clone()),
             ("color", self.color.clone()),
             ("badge", self.badge.clone()),
         ]
@@ -177,6 +190,12 @@ const SIZES: &str = "1073741824, \"512MB\", \"2GB\", \"off\"";
 
 /// `tx_idle_warning`'s and `tx_idle_timeout`'s literal values, for errors.
 const TX_IDLE: &str = "\"5m\", \"30m\", \"1h\" (10s at least), \"off\"";
+
+/// `idle_disconnect`'s literal values, for errors.
+const IDLE_DISCONNECT: &str = "\"300s\", \"5m\", \"1h\" (1m to 24h), \"off\"";
+
+/// `lock_wait`'s literal values, for errors.
+const LOCK_WAIT: &str = "\"5s\", \"30s\", \"1m\" (1s to 24h), \"off\"";
 
 /// Item `key = v` of table `[policy.<name>]`, into `e`. A value the item does not take is a
 /// [`ConfigError::Value`] (the table's key in it).
@@ -211,6 +230,14 @@ fn policy_item(name: &str, key: &str, v: &toml::Value, e: &mut policy::Environme
                 "tx_idle_warning" => e.policy.tx_idle_warning = d,
                 _ => e.policy.tx_idle_timeout = d,
             }
+        }
+        "idle_disconnect" => {
+            let d = policy::parse_idle_disconnect(v).map_err(|x| err(&x).allowed(Some(IDLE_DISCONNECT)))?;
+            e.policy.idle_disconnect = Some(d);
+        }
+        "lock_wait" => {
+            let d = policy::parse_lock_wait(v).map_err(|x| err(&x).allowed(Some(LOCK_WAIT)))?;
+            e.policy.lock_wait = Some(d);
         }
         "color" => match v.as_str() {
             Some(c) if ProfileColor::parse(c).is_some() => e.color = Some(c.to_string()),
@@ -635,6 +662,12 @@ pub struct Prefs {
     pub size_heat: SizeHeat,
     /// `[ui] yank_flash`.
     pub yank_flash: YankFlash,
+    /// `idle_disconnect`: how long a profile's connection may sit unused before its sessions
+    /// close (`None`: never); an environment may say otherwise.
+    pub idle_disconnect: Option<std::time::Duration>,
+    /// `lock_wait`: how long a query session's statement waits for a lock another session holds
+    /// (`None`: the server's setting); an environment may say otherwise.
+    pub lock_wait: Option<std::time::Duration>,
 }
 
 impl Default for Prefs {
@@ -655,6 +688,8 @@ impl Default for Prefs {
             keychain_access: KeychainAccess::default(),
             size_heat: SizeHeat::default(),
             yank_flash: YankFlash::default(),
+            idle_disconnect: None,
+            lock_wait: None,
         }
     }
 }
@@ -948,6 +983,15 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
             "3, 5, off",
         )?,
         yank_flash: choice("ui.yank_flash", f.ui.and_then(|u| u.yank_flash), "on, off")?,
+        idle_disconnect: match &f.idle_disconnect {
+            None => None,
+            Some(v) => policy::parse_idle_disconnect(v)
+                .map_err(|e| bad("idle_disconnect", e).allowed(Some(IDLE_DISCONNECT)))?,
+        },
+        lock_wait: match &f.lock_wait {
+            None => None,
+            Some(v) => policy::parse_lock_wait(v).map_err(|e| bad("lock_wait", e).allowed(Some(LOCK_WAIT)))?,
+        },
     };
     // The environments in the file's order (the deserializer sorts its map by name).
     let order: Vec<String> = text
@@ -1314,6 +1358,10 @@ pub fn save(path: &Path, settings: Settings, profiles: Option<Profiles>) -> Resu
         &setting(root, "copy_header", prefs.copy_header.as_str().into(), prefs.copy_header == CopyHeader::default())?;
     let osc = i64::try_from(prefs.osc52_max_bytes).unwrap_or(i64::MAX);
     orphans += &setting(root, "osc52_max_bytes", osc.into(), prefs.osc52_max_bytes == OSC52_MAX_BYTES)?;
+    let idle = prefs.idle_disconnect;
+    orphans += &setting(root, "idle_disconnect", policy::format_timeout(idle).into(), idle.is_none())?;
+    let lock = prefs.lock_wait;
+    orphans += &setting(root, "lock_wait", policy::format_timeout(lock).into(), lock.is_none())?;
     orphans += &retire(&mut doc, "editor", "mode");
     let shape = (prefs.cursor_shape.as_str().into(), prefs.cursor_shape == CursorShape::default());
     orphans += &nested_setting(&mut doc, "editor", "cursor_shape", shape)?;
@@ -1544,7 +1592,7 @@ fn env_of(name: &str, t: &dyn toml_edit::TableLike) -> Option<policy::Environmen
 
 /// The items of an environment, in the file's key order: what each is in `e`, as written, and
 /// whether that is its default (an item at its default is left out).
-fn env_items(e: &policy::Environment) -> [(&'static str, Value, bool); 10] {
+fn env_items(e: &policy::Environment) -> [(&'static str, Value, bool); 12] {
     let d = Policy::default();
     let p = &e.policy;
     let size = |l: policy::SpillLimit| -> Value {
@@ -1569,6 +1617,8 @@ fn env_items(e: &policy::Environment) -> [(&'static str, Value, bool); 10] {
             p.paging_idle_timeout == d.paging_idle_timeout,
         ),
         ("spill_limit", p.spill_limit.map_or_else(|| 0.into(), size), p.spill_limit.is_none()),
+        ("idle_disconnect", policy::format_timeout(p.idle_disconnect.flatten()).into(), p.idle_disconnect.is_none()),
+        ("lock_wait", policy::format_timeout(p.lock_wait.flatten()).into(), p.lock_wait.is_none()),
     ]
 }
 
@@ -1613,6 +1663,8 @@ fn same_item(key: &str, a: &policy::Environment, b: &policy::Environment) -> boo
         "paging" => p.paging == q.paging,
         "paging_idle_timeout" => p.paging_idle_timeout == q.paging_idle_timeout,
         "spill_limit" => p.spill_limit == q.spill_limit,
+        "idle_disconnect" => p.idle_disconnect == q.idle_disconnect,
+        "lock_wait" => p.lock_wait == q.lock_wait,
         _ => true,
     }
 }

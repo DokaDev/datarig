@@ -111,8 +111,14 @@ fn row_parts(app: &App, row: &Row) -> Vec<(String, Style)> {
             parts
         }
         RowKind::ProfileError(id) => {
-            let text = app.conns.get(*id).and_then(|c| c.error.as_ref()).map(|e| e.render(&app.i18n).to_string());
-            vec![(text.unwrap_or_default(), fg(th.error))]
+            let c = app.conns.get(*id);
+            // Closed for being idle (or by the server for that) is no failure.
+            let why = c.and_then(|c| c.error.as_ref().or(c.idle_closed.as_ref()));
+            let style = match why.map(|n| n.level) {
+                Some(crate::app::Level::Info) => fg(th.fg_dim).add_modifier(Modifier::ITALIC),
+                _ => fg(th.error),
+            };
+            vec![(why.map(|e| e.render(&app.i18n).to_string()).unwrap_or_default(), style)]
         }
         RowKind::Node(id, n) => match (app.conns.get(*id), n) {
             (Some(c), Node::Column(i, g, j, k)) => column_parts(app, (&c.tree, &c.catalog, &c.keys), (*i, *g, *j), *k),

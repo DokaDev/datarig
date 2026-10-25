@@ -191,6 +191,14 @@ pub struct TabSession {
     pub ddl_in_tx: bool,
     /// A transaction was open when the connection was lost (said once it reconnects).
     pub lost_tx: bool,
+    /// When the tab's session was last used (a run, an answer of its), by the app's clock and
+    /// the wall clock: idle since ([`super::idle`]).
+    pub used: Option<(std::time::Instant, std::time::SystemTime)>,
+    /// The tab was warned that its idle session closes soon with its open transaction (once
+    /// per idle period).
+    pub idle_warned: bool,
+    /// The lock wait limit the tab's session was opened with (`None`: the server's).
+    pub lock_wait: Option<std::time::Duration>,
     /// Whether the result's portal is open, and since when nobody fetched from it.
     pub paging: Paging,
     /// The statements of the last run and what each one did.
@@ -329,6 +337,9 @@ impl TabSession {
             ddl: false,
             ddl_in_tx: false,
             lost_tx: false,
+            used: None,
+            idle_warned: false,
+            lock_wait: None,
             paging: Paging::None,
             run: super::runlog::RunLog::default(),
             steps: std::collections::BTreeMap::new(),

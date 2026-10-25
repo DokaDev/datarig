@@ -456,7 +456,8 @@ impl App {
                 None => rows.push(Row::new(RowKind::Profile(p.id), depth)),
             }
             let Some(c) = c else { continue };
-            if c.state() == NodeState::Failed {
+            // Why it is not connected: a failure, or closed for being idle.
+            if c.state() == NodeState::Failed || c.state() == NodeState::Disconnected && c.idle_closed.is_some() {
                 rows.push(Row::new(RowKind::ProfileError(p.id), depth + 1));
             }
             if c.connected && c.expanded {

@@ -474,7 +474,7 @@ mod terminal {
         .await
         .expect("setup");
         let mut s = Session::open(&url).await;
-        s.path = Some(format!("SET LOCAL search_path = {schema}"));
+        s.each_tx = vec![format!("SET LOCAL search_path = {schema}")];
         s.rule = manual(&[TxStep::Open]);
         let events = s.run_all(&["INSERT INTO t VALUES (1)"], None).await;
         assert!(events.iter().any(|e| matches!(e, DbEvent::ManualBegun { index: 0, .. })), "{events:?}");
@@ -516,7 +516,8 @@ mod terminal {
             page_size: 10,
             read_only: false,
             own_read_only: true,
-            path: None,
+            each_tx: &[],
+            path_per_tx: false,
             savepoint: "datarig_count_test",
             before_bind: None,
         };
@@ -527,6 +528,40 @@ mod terminal {
         let mut tx = Tx::default();
         tx.set_block(true, env.wraps());
         assert!(!tx.first_due(), "nothing queued for the block");
+    }
+
+    /// With only the lock wait limit per transaction (behind a pooler), a statement runs in a
+    /// transaction that sets it, except one that cannot run in a block or may end its own
+    /// (`VACUUM`, `CREATE INDEX CONCURRENTLY`, `CALL`, `DO`): those run as they are, without it.
+    /// With the search path per transaction too, everything the path resolves for is wrapped as
+    /// before.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn the_lock_wait_limit_alone_never_wraps_what_cannot_run_in_a_block() {
+        let Some(url) = pg_url("the_lock_wait_limit_alone_never_wraps_what_cannot_run_in_a_block") else { return };
+        let s = Session::open(&url).await;
+        let lock = ["SET LOCAL lock_timeout = 5000".to_string()];
+        let env = |path_per_tx| Env {
+            events: &s.events,
+            token: &s.token,
+            cancel: &s.cancel,
+            failed: &s.failed,
+            page_size: 10,
+            read_only: false,
+            own_read_only: false,
+            each_tx: &lock,
+            path_per_tx,
+            savepoint: "datarig_count_test",
+            before_bind: None,
+        };
+        let only = env(false);
+        assert_eq!(only.begin(), ["BEGIN", "SET LOCAL lock_timeout = 5000"]);
+        for sql in ["UPDATE t SET x = 1", "DELETE FROM t", "LOCK TABLE t", "ALTER TABLE t ADD c int"] {
+            assert!(only.wrapped(sql), "{sql}");
+        }
+        for sql in ["VACUUM t", "CREATE INDEX CONCURRENTLY i ON t (x)", "CALL p()", "DO $$BEGIN END$$", "COMMIT"] {
+            assert!(!only.wrapped(sql), "{sql}");
+        }
+        assert!(env(true).wrapped("CALL p()"), "the search path still goes with everything it resolves");
     }
 
     /// A statement sent as a plain read that asks for read-write is not sent (a manual-commit
@@ -588,8 +623,8 @@ mod terminal {
         failed: AtomicBool,
         /// The rule its runs go by (`Auto` unless a test says otherwise).
         rule: TxRule,
-        /// The search path set per transaction, if any.
-        path: Option<String>,
+        /// What is set per transaction (a search path), if anything.
+        each_tx: Vec<String>,
         /// What a result with more rows keeps (`Hold` unless a test says otherwise).
         paging: PagingMode,
     }
@@ -618,7 +653,7 @@ mod terminal {
                 cancel: Arc::new(AtomicBool::new(false)),
                 failed: AtomicBool::new(false),
                 rule: TxRule::Auto,
-                path: None,
+                each_tx: Vec::new(),
                 paging: PagingMode::Hold,
             }
         }
@@ -634,7 +669,8 @@ mod terminal {
                 page_size: 10,
                 read_only: false,
                 own_read_only: false,
-                path: self.path.as_deref(),
+                each_tx: &self.each_tx,
+                path_per_tx: !self.each_tx.is_empty(),
                 savepoint: "datarig_count_test",
                 before_bind: hook,
             };
@@ -661,7 +697,8 @@ mod terminal {
                 page_size: 10,
                 read_only: false,
                 own_read_only: false,
-                path: self.path.as_deref(),
+                each_tx: &self.each_tx,
+                path_per_tx: !self.each_tx.is_empty(),
                 savepoint: "datarig_count_test",
                 before_bind: None,
             };
@@ -686,7 +723,8 @@ mod terminal {
                 page_size: 10,
                 read_only: false,
                 own_read_only: false,
-                path: None,
+                each_tx: &[],
+                path_per_tx: false,
                 savepoint: "datarig_count_test",
                 before_bind: hook,
             };

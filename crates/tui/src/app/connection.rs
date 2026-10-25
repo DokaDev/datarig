@@ -16,6 +16,11 @@ impl App {
     /// statements) stays with it.
     pub(super) fn connect(&mut self, id: ProfileId) {
         let Some(conn) = self.profile(id).cloned() else { return };
+        // After its sessions closed for being idle: again with the password it connected with
+        // where getting it would ask the user (the prompt, the keychain); a command, a variable
+        // or the secrets file is read again (a short-lived token).
+        let known = self.conns.get(id).filter(|c| c.idle_closed.is_some()).and_then(|c| c.resolved.as_ref());
+        let known = known.map(|r| r.password.clone());
         self.close_profile_sessions(id);
         self.conns.next_generation(id);
         self.notices.clear();
@@ -25,6 +30,7 @@ impl App {
         c.connecting = None;
         c.cache_off_said = false;
         c.prompted = false;
+        c.idle_closed = None;
         if self.driver(&conn.driver).is_none() {
             let m = Notice::new(Msg::ConnUnknownDriver { driver: conn.driver.clone() }, Level::Error);
             return self.attempt_failed(id, m);
@@ -48,7 +54,11 @@ impl App {
             return;
         }
         self.show_status(Notice::new(Msg::ConnConnecting { name: conn.name.clone() }, Level::Info));
-        match self.plan_password(&conn) {
+        let plan = match (self.plan_password(&conn), known) {
+            (password::Plan::Prompt | password::Plan::Keychain { .. }, Some(pw)) => password::Plan::Ready(pw),
+            (plan, _) => plan,
+        };
+        match plan {
             password::Plan::Ready(pw) => self.start_connect(conn, pw),
             password::Plan::Failed(e) => self.source_failed(id, e),
             password::Plan::Prompt => {
@@ -201,10 +211,12 @@ impl App {
         let context = t.context.clone();
         let session = self.open_session(cfg, SessionRole::Query, EventTarget::Tab(id), generation, context);
         let read_only = self.session_read_only(cfg);
+        let lock_wait = self.lock_wait_of(cfg.id);
         if let Some(t) = self.tabs.get_mut(id) {
             t.exec.state = if session.is_some() { SessionState::Opening } else { SessionState::Idle };
             t.exec.session = session;
             t.exec.read_only = read_only;
+            t.exec.lock_wait = lock_wait;
         }
         self.sync_tab_language(id);
     }
@@ -236,17 +248,23 @@ impl App {
             // Headless with test drivers: the test feeds the events.
             None => drop(erx),
         }
+        // The server's own idle limit, for the query sessions the app closes when idle (a
+        // metadata session is closed with its profile; one the server closed would cut the
+        // explorer off while the user works in a tab).
+        let server_idle = self.idle_disconnect_of(cfg.id).filter(|_| role == SessionRole::Query);
         let opts = ConnectOptions::new(self.page_size, role, &self.instance)
             .read_only(self.session_read_only(cfg))
             .context(context)
             .statement_cache(cfg.statement_cache)
-            .dialer(self.dialer_of(cfg));
+            .dialer(self.dialer_of(cfg))
+            .lock_wait(self.lock_wait_of(cfg.id))
+            .server_idle(server_idle.map(|d| d + super::idle::SERVER_IDLE_MARGIN));
         Some(driver.connect(cfg, role, opts, etx))
     }
 
     /// Close the query sessions of the tabs `which` selects. The tabs move to a new
     /// generation, so a late event of a closed session (e.g. `TxOpen(true)`) is dropped.
-    fn close_tab_sessions(&mut self, which: impl Fn(&Tab) -> bool) {
+    pub(super) fn close_tab_sessions(&mut self, which: impl Fn(&Tab) -> bool) {
         let generation = self.tabs.next_generation();
         let mut ended = Vec::new();
         for t in self.tabs.iter_mut().filter(|t| which(t)) {
@@ -435,6 +453,20 @@ impl App {
         self.flash(m);
     }
 
+    /// The explorer's cursor on a row under profile `id` (its tree, its error), which goes when
+    /// it disconnects: back on the profile.
+    pub(super) fn cursor_off_profile(&mut self, id: ProfileId) {
+        if matches!(self.explorer.cursor(), explorer::RowKind::Node(p, _)
+            | explorer::RowKind::AuxNode(p, _, _)
+            | explorer::RowKind::Database(p, _)
+            | explorer::RowKind::DatabasesNote(p)
+            | explorer::RowKind::DatabaseNote(p, _)
+            | explorer::RowKind::ProfileError(p) if *p == id)
+        {
+            self.explorer.select_kind(explorer::RowKind::Profile(id));
+        }
+    }
+
     /// `x`: disconnect profile `id` (and connect again with `reconnect`); with a query running
     /// or a transaction open in one of its tabs ask first.
     pub(super) fn request_disconnect(&mut self, id: ProfileId, reconnect: bool) {
@@ -497,15 +529,7 @@ impl App {
         for t in stopped {
             self.settle_run_hints(t);
         }
-        if matches!(self.explorer.cursor(), explorer::RowKind::Node(p, _)
-            | explorer::RowKind::AuxNode(p, _, _)
-            | explorer::RowKind::Database(p, _)
-            | explorer::RowKind::DatabasesNote(p)
-            | explorer::RowKind::DatabaseNote(p, _)
-            | explorer::RowKind::ProfileError(p) if *p == id)
-        {
-            self.explorer.select_kind(explorer::RowKind::Profile(id));
-        }
+        self.cursor_off_profile(id);
         let m = if tx {
             Notice::new(Msg::ConnDisconnectedTx { name }, Level::Warning)
         } else if running {
