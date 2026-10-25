@@ -102,7 +102,7 @@ impl Dropped {
 }
 
 /// The output while the workbook is zipped into it. A write fails once `stop` says so, and once
-/// the output failed; that failure ends the save, and what is written after it (the zip writer
+/// the output failed (an interrupted write is tried again by its caller, not a failure); that failure ends the save, and what is written after it (the zip writer
 /// finishing the archive as it is dropped) goes nowhere: a zip writer that cannot finish prints
 /// so on stderr, over the screen.
 struct Stoppable<'s, W> {
@@ -121,14 +121,14 @@ impl<W: Write> Write for Stoppable<'_, W> {
             (self.stopped, self.failed) = (true, true);
             return Err(io::Error::other(Dropped));
         }
-        self.out.write(buf).inspect_err(|_| self.failed = true)
+        self.out.write(buf).inspect_err(|e| self.failed = e.kind() != io::ErrorKind::Interrupted)
     }
 
     fn flush(&mut self) -> io::Result<()> {
         if self.failed {
             return Ok(());
         }
-        self.out.flush().inspect_err(|_| self.failed = true)
+        self.out.flush().inspect_err(|e| self.failed = e.kind() != io::ErrorKind::Interrupted)
     }
 }
 

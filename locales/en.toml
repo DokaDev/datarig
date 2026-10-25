@@ -1945,6 +1945,7 @@
 "export.why.key" = "the next chunk could not be asked for: a key value of the last row cannot be written back"
 "export.why.internal" = "the export stopped without saying why"
 "export.why.too_long" = "a value of column {column} (row {row}) has {length} characters, more than an Excel cell holds (32,767)"
+"export.why.temp_file" = "the workbook's temporary file in {folder} could not be written: {error}"
 "export.why.not_saved" = "the workbook could not be made: {error}; nothing was kept (a workbook reads only once it is complete)"
 "export.why.too_long_kept" = "a value of column {column} (row {row}) has {length} characters, more than an Excel cell holds (32,767); the workbook has the rows before it"
 "export.why.too_long_first" = "a value of column {column} in the first row has {length} characters, more than an Excel cell holds (32,767); no row was written"

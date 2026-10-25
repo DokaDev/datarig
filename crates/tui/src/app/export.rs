@@ -325,6 +325,8 @@ pub enum Failure {
     Db(DbError),
     /// A key value of the last row read cannot be written for the next chunk.
     Key,
+    /// A workbook's temporary file could not be written (the folder it is in).
+    TempFile(Fault, PathBuf),
     /// A value is too long for a workbook's cell (its column and row).
     TooLong(xlsx::TooLong),
     /// The workbook could not be made from the rows written (the partial file is removed: a
@@ -345,6 +347,9 @@ enum Ctl {
     /// Every row was sent: finish the file.
     Finish,
     Cancel,
+    /// Drop the workbook being made (a cancel the user gave once told it keeps nothing, or a
+    /// quit): only heard while it is made, so a cancel sent before cannot drop it.
+    Drop,
     Fail(Failure),
 }
 
@@ -1280,7 +1285,8 @@ impl App {
                 // Without a statement running, the writer stops on its own.
                 let db_running = self.tabs.get(id).is_some_and(|t| t.exec.running.is_some_and(|r| r.export));
                 if !db_running && let Some(ctl) = &j.ctl {
-                    let _ = ctl.send(Ctl::Cancel);
+                    // Its workbook being made (the status said a cancel keeps nothing): dropped.
+                    let _ = ctl.send(if j.finishing { Ctl::Drop } else { Ctl::Cancel });
                 }
             }
         }
@@ -1392,14 +1398,17 @@ impl App {
         }
     }
 
-    /// Quitting: every export stops and ends its file (a partial file whose format is ended),
-    /// waiting a moment for the writers.
+    /// Quitting: every export stops and ends its file (a partial file whose format is ended; a
+    /// workbook is dropped, its partial file removed), waiting a moment for the writers.
     pub(super) fn end_exports_for_quit(&mut self) {
         let jobs: Vec<Job> = self.exports.jobs.drain().map(|(_, j)| j).collect();
         let mut writers = Vec::new();
         for j in jobs {
             if let Some(ctl) = &j.ctl {
+                // The rows stop; a workbook still being made when the app exits would be part of a
+                // ZIP, so it is dropped (its partial file removed) rather than left half written.
                 let _ = ctl.send(Ctl::Cancel);
+                let _ = ctl.send(Ctl::Drop);
             }
             writers.extend(j.writer);
         }
@@ -1508,6 +1517,10 @@ impl App {
             Failure::Db(DbError::NotSupported) => self.i18n.label(Label::ExportWhyNotSupported).to_string(),
             Failure::Db(e) => self.db_error_text(e),
             Failure::Key => self.i18n.label(Label::ExportWhyKey).to_string(),
+            Failure::TempFile(fault, folder) => {
+                let error = self.fault_text("export.temp_failed", fault);
+                self.i18n.msg(&Msg::ExportWhyTempFile { folder: folder.display().to_string(), error }).to_string()
+            }
             // The rows before it are kept (row 1: there are none).
             Failure::TooLong(t) => {
                 let (column, row, length) = (t.column.clone(), t.row.to_string(), t.chars.to_string());
@@ -1822,10 +1835,7 @@ fn write(
         }
     };
     let mut progress = Progress { end, last: Instant::now() };
-    let io = |e: std::io::Error| match xlsx::TooLong::of(&e) {
-        Some(t) => Failure::TooLong(t.clone()),
-        None => Failure::Io(Fault::io_at(&e, &partial), partial.clone()),
-    };
+    let io = |e: std::io::Error| Failure::Io(Fault::io_at(&e, &partial), partial.clone());
     let out = BufWriter::with_capacity(BUFFER, file);
     let (stopped, rows, ended, bytes, damaged, sheets) = match format {
         Some(format) => {
@@ -1848,11 +1858,16 @@ fn write(
                 return failed(Failure::Internal, 0, None);
             };
             let mut w = if spec.csv.null.is_empty() { w } else { w.null_text(&spec.csv.null) };
-            let stopped = fill(&mut w, spec, source, ctl, &mut progress, &io);
+            // Before the end nothing is written to the partial file: the rows go to the workbook's
+            // temporary files.
+            let stopped = fill(&mut w, spec, source, ctl, &mut progress, &workbook_failure);
             let (rows, sheets) = (w.rows_written(), w.sheets());
             progress.tick(rows, w.bytes(), true);
             // Zipping many rows takes a while: the app says so, and a cancel meanwhile drops it.
-            end.send(ExportNews::Finishing { rows });
+            // Without a row there is nothing to wait for.
+            if rows > 0 {
+                end.send(ExportNews::Finishing { rows });
+            }
             let made = make_workbook(w, stopped, ctl, &partial, |file: std::fs::File| {
                 file.sync_all()?;
                 Ok(file.metadata()?.len())
@@ -1861,8 +1876,7 @@ fn write(
                 Ok((size, stopped)) => (stopped, rows, Ok(()), size, 0, sheets),
                 Err(outcome) => {
                     let _ = std::fs::remove_file(&partial);
-                    progress.tick(rows, 0, true);
-                    return outcome;
+                    return *outcome;
                 }
             }
         }
@@ -1905,6 +1919,18 @@ fn write(
     }
 }
 
+/// Why writing a row into a workbook failed: a value too long for a cell, or its temporary file
+/// (in the system's temporary folder) could not be written.
+fn workbook_failure(e: std::io::Error) -> Failure {
+    match xlsx::TooLong::of(&e) {
+        Some(t) => Failure::TooLong(t.clone()),
+        None => {
+            let folder = std::env::temp_dir();
+            Failure::TempFile(Fault::io_at(&e, &folder), folder)
+        }
+    }
+}
+
 /// Make the workbook of the rows `w` took (`stopped`: what stopped them) into its output, then
 /// `finish` that (its size). The workbook is made whatever stopped the rows, but a cancel from
 /// the app while it is made drops it. A workbook dropped or not made leaves nothing that reads:
@@ -1915,10 +1941,11 @@ fn make_workbook<W: std::io::Write + Send>(
     ctl: &mut tokio::sync::mpsc::UnboundedReceiver<Ctl>,
     partial: &Path,
     finish: impl FnOnce(W) -> std::io::Result<u64>,
-) -> Result<(u64, Stopped), Outcome> {
+) -> Result<(u64, Stopped), Box<Outcome>> {
     let rows = w.rows_written();
-    // Only a cancel matters now: every row is in.
-    let mut cancelled = || matches!(ctl.try_recv(), Ok(Ctl::Cancel));
+    // Only a drop matters now (every row is in): a cancel still queued was sent before the app
+    // said what a cancel does now, so it keeps the workbook.
+    let mut cancelled = || matches!(ctl.try_recv(), Ok(Ctl::Drop));
     let made = w.end_unless(&mut cancelled).and_then(|()| {
         let out = w.into_inner().ok_or_else(|| std::io::Error::other("no output"))?;
         finish(out.into_inner().map_err(|e| e.into_error())?)
@@ -1932,9 +1959,9 @@ fn make_workbook<W: std::io::Write + Send>(
         Stopped::Done | Stopped::Cancelled => None,
     };
     if xlsx::Dropped::of(&e) {
-        return Err(Outcome::Dropped { rows, first });
+        return Err(Box::new(Outcome::Dropped { rows, first }));
     }
-    Err(failed(Failure::NotSaved { fault: Fault::io_at(&e, partial), first }, rows, None))
+    Err(Box::new(failed(Failure::NotSaved { fault: Fault::io_at(&e, partial), first }, rows, None)))
 }
 
 /// Begin the file and write the rows of `source` into it.
@@ -1971,7 +1998,7 @@ fn local_rows<S: RowSink>(
     let mut stopped = Stopped::Done;
     let read = snap.for_each_chunk(BATCH_ROWS, |rows| {
         match ctl.try_recv() {
-            Ok(Ctl::Cancel) => {
+            Ok(Ctl::Cancel | Ctl::Drop) => {
                 stopped = Stopped::Cancelled;
                 return false;
             }
@@ -2082,7 +2109,7 @@ fn db_rows<S: RowSink>(
                 }
                 return Stopped::Done;
             }
-            Next::Ctl(Some(Ctl::Cancel)) => return Stopped::Cancelled,
+            Next::Ctl(Some(Ctl::Cancel | Ctl::Drop)) => return Stopped::Cancelled,
             Next::Ctl(Some(Ctl::Fail(why))) => return Stopped::Failed(why),
             // The app forgot the job (its tab, its session): what was written is kept.
             Next::Ctl(None) => return Stopped::Failed(Failure::SessionEnded),

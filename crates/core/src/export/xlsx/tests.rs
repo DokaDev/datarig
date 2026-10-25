@@ -502,7 +502,15 @@ fn a_sheet_over_4_gib_is_made() {
     let row: Row = vec![Some(value.as_str()); columns.len()];
     let chunk: Vec<Row> = vec![row; 1_000];
     let total = (MAX_ROWS - 1) as usize;
+    /// Removes the workbook, also when the test fails.
+    struct Removed(std::path::PathBuf);
+    impl Drop for Removed {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
     let path = std::env::temp_dir().join(format!("datarig-xlsx-4gib-{}.xlsx", std::process::id()));
+    let _removed = Removed(path.clone());
     let file = std::fs::File::create(&path).unwrap();
     let mut w = XlsxWriter::new(&columns, io::BufWriter::new(file)).unwrap();
     w.begin().unwrap();
@@ -520,7 +528,6 @@ fn a_sheet_over_4_gib_is_made() {
     let size = sheet.size();
     drop(sheet);
     drop(zip);
-    let _ = std::fs::remove_file(&path);
     assert!(size > u64::from(u32::MAX), "{size} bytes of XML");
 }
 

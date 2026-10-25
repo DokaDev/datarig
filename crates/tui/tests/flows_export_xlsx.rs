@@ -267,7 +267,8 @@ fn a_value_too_long_in_the_first_row_says_no_row_was_written() {
 }
 
 /// Rows whose text column holds `width` letters that hardly compress: enough for the workbook to
-/// take a while to be made.
+/// take a while to be made (20,000 rows of 2,000: more than ten seconds in a debug build, far
+/// longer than the app takes to see the status and hand the second cancel over).
 fn wide_rows(from: usize, n: usize, width: usize) -> Vec<Vec<Option<String>>> {
     let mut seed = from as u64 + 1;
     (from..from + n)
@@ -296,7 +297,7 @@ fn a_cancel_while_the_workbook_is_made_drops_it_and_keeps_nothing() {
     let (id, _, sink) = wait_export(&mut h);
     let feeder = std::thread::spawn(move || {
         sink.blocking_send(ExportBatch::Columns(columns())).is_ok()
-            && (0..10).all(|b| sink.blocking_send(ExportBatch::Rows(wide_rows(b * 1_000, 1_000, 1_000))).is_ok())
+            && (0..20).all(|b| sink.blocking_send(ExportBatch::Rows(wide_rows(b * 1_000, 1_000, 2_000))).is_ok())
     });
     assert!(feeder.join().unwrap());
     // The first cancel stops the rows: the workbook of those is made, and the app says so.
@@ -353,6 +354,18 @@ fn the_end_of_a_workbook_is_said_as_it_was() {
         "{s}"
     );
     assert!(!s.contains("rows before it"), "{s}");
+    // The rows' temporary file, not the partial file, failed: its folder is named.
+    let tmp = std::env::temp_dir();
+    let full = Fault::io_at(&std::io::Error::from(std::io::ErrorKind::StorageFull), &tmp);
+    let s = said(&mut h, Outcome::Failed { why: Failure::TempFile(full, tmp.clone()), rows: 0, partial: None });
+    assert!(
+        s.starts_with(&format!(
+            "Export failed: the workbook's temporary file in {} could not be written: ",
+            tmp.display()
+        )),
+        "{s}"
+    );
+    assert!(!s.contains("middle of a row"), "{s}");
     let dropped = Outcome::Dropped { rows: 6, first: Some(Box::new(Failure::Key)) };
     let s = said(&mut h, dropped);
     assert!(
