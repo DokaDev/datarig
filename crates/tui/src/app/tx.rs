@@ -256,8 +256,10 @@ impl App {
                 step
             })
             .collect();
+        // `tx_idle_rollback`: PostgreSQL's server keeps it for the transaction; elsewhere the app
+        // closes the idle session itself (`App::tx_rollback_of`).
         let pg = t.exec.prepared.language().dialect() == Dialect::Postgres;
-        let idle_timeout = self.tab_rules(t).tx_idle_timeout.filter(|_| pg);
+        let idle_timeout = self.tab_rules(t).tx_idle_rollback.filter(|_| pg);
         TxRule::Manual { steps, idle_timeout }
     }
 

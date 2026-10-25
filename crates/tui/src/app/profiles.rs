@@ -111,7 +111,7 @@ pub enum Field {
     EnvConfirm,
     EnvCommit,
     EnvTxWarning,
-    EnvTxTimeout,
+    EnvTxRollback,
     EnvPaging,
     EnvIdle,
     EnvSpill,
@@ -158,7 +158,7 @@ pub const ENVIRONMENT: [Field; 13] = [
     Field::EnvConfirm,
     Field::EnvCommit,
     Field::EnvTxWarning,
-    Field::EnvTxTimeout,
+    Field::EnvTxRollback,
     Field::EnvPaging,
     Field::EnvIdle,
     Field::EnvSpill,
@@ -291,7 +291,7 @@ impl Field {
             Field::EnvConfirm => Label::FormFieldConfirm,
             Field::EnvCommit => Label::FormFieldCommit,
             Field::EnvTxWarning => Label::FormFieldTxIdleWarning,
-            Field::EnvTxTimeout => Label::FormFieldTxIdleTimeout,
+            Field::EnvTxRollback => Label::FormFieldTxIdleRollback,
             Field::EnvPaging => Label::FormFieldPaging,
             Field::EnvIdle => Label::FormFieldIdleTimeout,
             Field::EnvSpill => Label::FormFieldSpillLimit,
@@ -563,7 +563,7 @@ pub struct ProfileForm {
     pub env_confirm: Confirm,
     pub env_commit: CommitRule,
     pub env_tx_warning: TextInput,
-    pub env_tx_timeout: TextInput,
+    pub env_tx_rollback: TextInput,
     pub env_paging: PagingMode,
     pub env_idle: TextInput,
     pub env_spill: TextInput,
@@ -735,7 +735,7 @@ impl ProfileForm {
             env_confirm: Confirm::Destructive,
             env_commit: CommitRule::Auto,
             env_tx_warning: TextInput::new(&policy::format_timeout(Some(policy::TX_IDLE_WARNING))),
-            env_tx_timeout: TextInput::new(&policy::format_timeout(Some(policy::TX_IDLE_TIMEOUT))),
+            env_tx_rollback: TextInput::new(&policy::format_timeout(Some(policy::TX_IDLE_ROLLBACK))),
             env_paging: PagingMode::NoHold,
             env_idle: TextInput::new(&policy::format_timeout(policy::PAGING_IDLE_TIMEOUT.into())),
             env_spill: TextInput::default(),
@@ -863,7 +863,7 @@ impl ProfileForm {
     fn set_commit_rules(&mut self, p: &Policy) {
         self.env_commit = p.commit;
         self.env_tx_warning = TextInput::new(&policy::format_timeout(p.tx_idle_warning));
-        self.env_tx_timeout = TextInput::new(&policy::format_timeout(p.tx_idle_timeout));
+        self.env_tx_rollback = TextInput::new(&policy::format_timeout(p.tx_idle_rollback));
     }
 
     /// The idle disconnect and the lock wait limit of `p` into the form (empty: the config's).
@@ -905,7 +905,7 @@ impl ProfileForm {
     /// The rules the form describes (`None`: a value that is not valid).
     pub fn to_rules(&self) -> Option<Policy> {
         let (Some(idle), Some(spill)) = self.env_values() else { return None };
-        let (Some(tx_idle_warning), Some(tx_idle_timeout)) = self.tx_idle_values() else { return None };
+        let (Some(tx_idle_warning), Some(tx_idle_rollback)) = self.tx_idle_values() else { return None };
         let (Some(idle_disconnect), Some(lock_wait)) = self.session_limits() else { return None };
         Some(Policy {
             paging: self.env_paging,
@@ -915,20 +915,20 @@ impl ProfileForm {
             confirm: self.env_confirm,
             commit: self.env_commit,
             tx_idle_warning,
-            tx_idle_timeout,
+            tx_idle_rollback,
             idle_disconnect,
             lock_wait,
         })
     }
 
-    /// The idle warning and the idle limit typed in the environment form (`None`: not valid;
+    /// The idle warning and the idle rollback typed in the environment form (`None`: not valid;
     /// empty: the default).
     fn tx_idle_values(&self) -> (Option<Option<std::time::Duration>>, Option<Option<std::time::Duration>>) {
         let read = |input: &TextInput, default| match input.text().trim() {
             "" => Some(Some(default)),
             t => policy::parse_tx_idle_text(t).ok(),
         };
-        (read(&self.env_tx_warning, policy::TX_IDLE_WARNING), read(&self.env_tx_timeout, policy::TX_IDLE_TIMEOUT))
+        (read(&self.env_tx_warning, policy::TX_IDLE_WARNING), read(&self.env_tx_rollback, policy::TX_IDLE_ROLLBACK))
     }
 
     /// The idle timeout and the spill limit typed in the environment form (`None`: not valid).
@@ -1289,7 +1289,7 @@ impl ProfileForm {
             Field::EnvIdleDisconnect => &mut self.env_idle_disconnect,
             Field::EnvLockWait => &mut self.env_lock_wait,
             Field::EnvTxWarning => &mut self.env_tx_warning,
-            Field::EnvTxTimeout => &mut self.env_tx_timeout,
+            Field::EnvTxRollback => &mut self.env_tx_rollback,
             Field::Name => &mut self.name,
             Field::Host => &mut self.host,
             Field::Port => &mut self.port,
@@ -1751,7 +1751,7 @@ impl ProfileForm {
                 out.push((Field::EnvTxWarning, FieldError::TxIdle));
             }
             if timeout.is_none() {
-                out.push((Field::EnvTxTimeout, FieldError::TxIdle));
+                out.push((Field::EnvTxRollback, FieldError::TxIdle));
             }
             let (idle, lock) = self.session_limits();
             if idle.is_none() {

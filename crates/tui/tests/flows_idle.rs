@@ -1,7 +1,9 @@
 //! Idle connections and the lock wait limit (`idle_disconnect`, `lock_wait`): what the sessions
 //! are opened with, a tab's session closing after its limit, then the profile's, the warning for
 //! an open transaction, connecting again on the next action without asking, a close the server
-//! made, the machine sleeping, and how a lock wait past the limit is said.
+//! made, the machine sleeping, and how a lock wait past the limit is said. Also MySQL's
+//! `tx_idle_rollback`, which the same timer keeps: the session of an idle transaction opened for
+//! manual commit closes (PostgreSQL's server keeps that limit itself).
 
 mod common;
 
@@ -14,6 +16,7 @@ use datarig_core::profile::ConnectionConfig;
 use datarig_tui::app::overlay::OverlayKind;
 use datarig_tui::widgets::editor::Editor;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::{Duration, SystemTime};
 
 const MS: Duration = Duration::from_millis(3);
@@ -263,4 +266,160 @@ fn set_takes_any_duration_in_range_and_refuses_the_rest() {
         assert_eq!(h.app.prefs.lock_wait, Some(Duration::from_secs(10)), "{bad}");
         assert_eq!(h.app.prefs.idle_disconnect, Some(Duration::from_secs(420)), "{bad}");
     }
+}
+
+const ROLLBACK: Duration = Duration::from_secs(90);
+
+/// Connected to the test profile on MySQL's driver (PostgreSQL's without `mysql`), in an
+/// environment that commits by hand and rolls back a transaction idle for [`ROLLBACK`], warned
+/// about after a minute (`idle_disconnect` the config's 5m, or `rules`' own).
+fn manual_on(mysql: bool, rules: Policy) -> Harness {
+    let mut cfg = config(rules);
+    if mysql {
+        cfg.connections[0].driver = "mysql".into();
+    }
+    let driver = FakeDriver::default();
+    driver.mysql.store(mysql, Ordering::SeqCst);
+    let mut h = Harness::with_driver(&cfg, Lang::En, driver);
+    h.db(DbEvent::Connected);
+    h.db(DbEvent::Schemas(Ok(vec!["public".into(), "shop".into()])));
+    h.db(DbEvent::Catalog(Ok(catalog())));
+    h.sent();
+    h
+}
+
+fn rollback_rules() -> Policy {
+    Policy {
+        commit: CommitRule::Manual,
+        tx_idle_warning: Some(Duration::from_secs(60)),
+        tx_idle_rollback: Some(ROLLBACK),
+        ..Policy::default()
+    }
+}
+
+/// A write that opens the transaction for manual commit in the active tab, answered.
+fn write_in_tx(h: &mut Harness) {
+    let id = run(h, "UPDATE users SET name = 'x' WHERE id < 4");
+    h.tab_db(0, DbEvent::Done { id, outcome: Outcome::Affected(3), elapsed: MS });
+    h.tab_db(0, DbEvent::ManualBegun { id, index: 0 });
+    h.tab_db(0, DbEvent::Block(true));
+    h.tab_db(0, DbEvent::TxOpen(true));
+    assert!(h.app.tab().exec.user_tx());
+}
+
+#[test]
+fn mysql_closes_the_session_of_a_transaction_idle_past_tx_idle_rollback_after_warning() {
+    let mut h = manual_on(true, rollback_rules());
+    write_in_tx(&mut h);
+    let now = h.clock.now();
+    h.app.transient = None;
+    assert!(h.app.next_tick(now).is_some_and(|t| t <= now + Duration::from_secs(60)), "a timer runs");
+    // The warning first, at a minute.
+    h.advance(Duration::from_secs(60));
+    let warning = Msg::TxIdleWarning {
+        tab: "1".into(),
+        time: "1:00".into(),
+        commit: "Space x c".into(),
+        rollback: "Space x r".into(),
+    };
+    assert_eq!(status(&h), Some(warning));
+    assert!(!h.session_closed(1));
+    // The deadline is the transaction's, not the 5m of `idle_disconnect`.
+    h.app.transient = None;
+    let now = h.clock.now();
+    assert!(h.app.next_tick(now).is_some_and(|t| t <= now + Duration::from_secs(30)));
+    h.advance(Duration::from_secs(29));
+    assert!(!h.session_closed(1));
+    h.advance(Duration::from_secs(1));
+    assert!(h.session_closed(1), "the tab's session closed after 90s idle in the transaction");
+    assert!(!h.session_closed(0), "the profile's metadata session stays");
+    let closed = Msg::QueryTxIdleClosed { time: "90s".into() };
+    assert!(said(&h, |m| *m == closed));
+    assert_eq!(status(&h), Some(closed));
+    assert!(!h.app.tab().exec.user_tx(), "the transaction is gone with its session");
+    assert!(!said(&h, |m| matches!(m, Msg::QueryIdleClosedTx { .. } | Msg::TxIdleCloseWarning { .. })));
+    let screen = h.screen(200, 45);
+    assert!(
+        screen.contains(
+            "This tab's session closed after 90s idle in a transaction, and the server rolled the transaction back"
+        ),
+        "{screen}"
+    );
+    // The next run opens a new session, nothing asked.
+    run(&mut h, "SELECT 1");
+    assert_eq!(h.overlay_kind(), None);
+    assert_eq!(h.roles(), [SessionRole::Meta, SessionRole::Query, SessionRole::Query]);
+}
+
+#[test]
+fn mysql_counts_the_idle_time_from_the_last_statement_and_the_time_asleep() {
+    let mut h = manual_on(true, rollback_rules());
+    write_in_tx(&mut h);
+    h.advance(Duration::from_secs(80));
+    // Another statement in the transaction: a new idle period.
+    let id = run(&mut h, "UPDATE users SET name = 'y' WHERE id = 1");
+    h.tab_db(0, DbEvent::Done { id, outcome: Outcome::Affected(1), elapsed: MS });
+    h.advance(Duration::from_secs(80));
+    assert!(!h.session_closed(1), "80s since the last statement");
+    assert!(h.app.tab().exec.user_tx());
+    h.advance(Duration::from_secs(10));
+    assert!(h.session_closed(1));
+    // Asleep (`idle_disconnect` off, else the whole connection closes for that first): the first
+    // key after waking closes it before it acts (a key that runs nothing, so the Messages stay).
+    let mut h = manual_on(true, Policy { idle_disconnect: Some(None), ..rollback_rules() });
+    write_in_tx(&mut h);
+    let later = SystemTime::now() + Duration::from_secs(3600);
+    h.app.set_wall_clock(Arc::new(move || later));
+    h.keys("l");
+    assert!(h.session_closed(1), "closed at the first key");
+    assert!(said(&h, |m| *m == Msg::QueryTxIdleClosed { time: "90s".into() }));
+    assert!(!h.session_closed(0));
+    // And a run after waking connects again instead of using the closed session.
+    let mut h = manual_on(true, Policy { idle_disconnect: Some(None), ..rollback_rules() });
+    write_in_tx(&mut h);
+    h.app.set_wall_clock(Arc::new(move || later));
+    run(&mut h, "SELECT 2");
+    assert!(h.session_closed(1), "closed before the run");
+    assert_eq!(h.roles(), [SessionRole::Meta, SessionRole::Query, SessionRole::Query]);
+}
+
+#[test]
+fn the_app_closes_no_session_for_tx_idle_rollback_on_postgresql_nor_without_its_transaction() {
+    // PostgreSQL: the server keeps the limit (sent with the `BEGIN`); the app closes nothing.
+    let mut h = manual_on(false, rollback_rules());
+    write_in_tx(&mut h);
+    h.advance(Duration::from_secs(200));
+    assert!(!h.session_closed(1));
+    assert!(h.app.tab().exec.user_tx());
+    // MySQL, off: nothing either (the 5m of `idle_disconnect` still closes it later).
+    let mut h = manual_on(true, Policy { tx_idle_rollback: None, ..rollback_rules() });
+    write_in_tx(&mut h);
+    h.advance(Duration::from_secs(200));
+    assert!(!h.session_closed(1));
+    // MySQL, the user's own `BEGIN` (automatic commit): not a transaction opened for manual
+    // commit, so not this limit.
+    let mut h = manual_on(true, Policy { commit: CommitRule::Auto, ..rollback_rules() });
+    let id = run(&mut h, "BEGIN");
+    h.tab_db(0, DbEvent::Done { id, outcome: Outcome::Command("BEGIN".into()), elapsed: MS });
+    h.tab_db(0, DbEvent::Block(true));
+    h.tab_db(0, DbEvent::TxOpen(true));
+    assert!(h.app.tab().exec.user_tx());
+    h.advance(Duration::from_secs(200));
+    assert!(!h.session_closed(1));
+    // MySQL, no transaction open: the session stays until `idle_disconnect`.
+    let mut h = manual_on(true, rollback_rules());
+    ran(&mut h, "SELECT 1");
+    h.advance(Duration::from_secs(200));
+    assert!(!h.session_closed(1));
+}
+
+#[test]
+fn mysql_idle_disconnect_shorter_than_tx_idle_rollback_closes_first_as_unused() {
+    let rules = Policy { tx_idle_rollback: Some(Duration::from_secs(600)), ..rollback_rules() };
+    let mut h = manual_on(true, rules);
+    write_in_tx(&mut h);
+    h.advance(Duration::from_secs(300));
+    assert!(h.session_closed(1));
+    assert!(said(&h, |m| *m == Msg::QueryIdleClosedTx { time: "5m".into() }));
+    assert!(!said(&h, |m| matches!(m, Msg::QueryTxIdleClosed { .. })));
 }

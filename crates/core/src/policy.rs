@@ -47,11 +47,12 @@
 //! * `tx_idle_warning` — how long an open transaction may sit idle before the app warns that
 //!   it holds locks: a duration as `paging_idle_timeout` takes (at least
 //!   [`TX_IDLE_FLOOR`]), or `"off"`. Default 5m.
-//! * `tx_idle_timeout` — PostgreSQL only: the server's own limit for a transaction opened for
-//!   manual commit (`idle_in_transaction_session_timeout`, set for that transaction only):
-//!   past it the server ends the session and rolls the transaction back, also when the app
-//!   is gone. A duration (at least [`TX_IDLE_FLOOR`]) or `"off"` (the server's setting).
-//!   Default 30m.
+//! * `tx_idle_rollback` — how long a transaction opened for manual commit may sit idle before
+//!   it is rolled back: its session ends and the server rolls it back. A duration (at least
+//!   [`TX_IDLE_FLOOR`]) or `"off"`. Default 30m. Each driver does it its own way: PostgreSQL's
+//!   server keeps the limit itself (`idle_in_transaction_session_timeout`, set for that
+//!   transaction only, so also when the app is gone); on MySQL the app closes the session
+//!   (while it runs). Its old name `tx_idle_timeout` is still read.
 //! * `idle_disconnect` — how long a profile's connection may sit unused before the app closes
 //!   its sessions (the next action connects again): a duration as `paging_idle_timeout` takes,
 //!   from [`IDLE_DISCONNECT_FLOOR`] to [`SESSION_LIMIT_MAX`], or `"off"`. Without it, the config's
@@ -84,10 +85,10 @@ pub const PAGING_IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 /// Default of `tx_idle_warning`.
 pub const TX_IDLE_WARNING: Duration = Duration::from_secs(5 * 60);
 
-/// Default of `tx_idle_timeout`.
-pub const TX_IDLE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+/// Default of `tx_idle_rollback`.
+pub const TX_IDLE_ROLLBACK: Duration = Duration::from_secs(30 * 60);
 
-/// The shortest `tx_idle_warning` and `tx_idle_timeout` (a shorter one would warn about, or
+/// The shortest `tx_idle_warning` and `tx_idle_rollback` (a shorter one would warn about, or
 /// end, a transaction between two statements the user types).
 pub const TX_IDLE_FLOOR: Duration = Duration::from_secs(10);
 
@@ -123,8 +124,8 @@ pub struct Policy {
     pub commit: CommitRule,
     /// `None`: no warning.
     pub tx_idle_warning: Option<Duration>,
-    /// `None`: the server's own setting.
-    pub tx_idle_timeout: Option<Duration>,
+    /// `None`: never rolled back for that (on PostgreSQL, the server's own setting).
+    pub tx_idle_rollback: Option<Duration>,
     /// `None`: the config's `idle_disconnect`; `Some(None)`: never closed for being idle.
     pub idle_disconnect: Option<Option<Duration>>,
     /// `None`: the config's `lock_wait`; `Some(None)`: the server's own setting.
@@ -141,7 +142,7 @@ impl Default for Policy {
             confirm: Confirm::Destructive,
             commit: CommitRule::Auto,
             tx_idle_warning: Some(TX_IDLE_WARNING),
-            tx_idle_timeout: Some(TX_IDLE_TIMEOUT),
+            tx_idle_rollback: Some(TX_IDLE_ROLLBACK),
             idle_disconnect: None,
             lock_wait: None,
         }
@@ -418,7 +419,7 @@ pub fn parse_timeout(v: &toml::Value) -> Result<Option<Duration>, String> {
     Ok((secs > 0).then(|| Duration::from_secs(secs)))
 }
 
-/// A `tx_idle_warning` or `tx_idle_timeout` value: as [`parse_timeout`] reads it (zero and
+/// A `tx_idle_warning` or `tx_idle_rollback` value: as [`parse_timeout`] reads it (zero and
 /// `"off"` are `None`), and at least [`TX_IDLE_FLOOR`].
 pub fn parse_tx_idle(v: &toml::Value) -> Result<Option<Duration>, String> {
     match parse_timeout(v)? {
@@ -463,7 +464,7 @@ pub fn parse_lock_wait_text(s: &str) -> Result<Option<Duration>, String> {
     parse_lock_wait(&toml::Value::String(s.to_string()))
 }
 
-/// A `tx_idle_warning` or `tx_idle_timeout` typed as text (a form's field).
+/// A `tx_idle_warning` or `tx_idle_rollback` typed as text (a form's field).
 pub fn parse_tx_idle_text(s: &str) -> Result<Option<Duration>, String> {
     parse_tx_idle(&toml::Value::String(s.to_string()))
 }

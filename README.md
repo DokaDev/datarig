@@ -610,7 +610,7 @@ that name, so existing files keep working) with these keys, each optional:
 | `confirm` | `"destructive"` (dangerous statements), `"writes"` (every write too) | `"destructive"` |
 | `commit` | `"auto"`, `"manual"` ([Manual commit](#manual-commit)) | `"auto"` |
 | `tx_idle_warning` | as `paging_idle_timeout`, at least 10 s, or `"off"` | `"5m"` |
-| `tx_idle_timeout` | PostgreSQL only: as `paging_idle_timeout`, at least 10 s, or `"off"` | `"30m"` |
+| `tx_idle_rollback` | as `paging_idle_timeout`, at least 10 s, or `"off"` (old name: `tx_idle_timeout`) | `"30m"` |
 | `paging` | `"no_hold"`, `"hold"` | `"no_hold"` |
 | `paging_idle_timeout` | seconds, or `"90s"`, `"5m"`, `"1h"`, `"off"` | `"30s"` |
 | `spill_limit` | bytes, or `"512MB"`, `"2GB"`, `"off"` | the top-level `spill_limit` |
@@ -868,24 +868,35 @@ how datarig always ran: each statement outside your own `BEGIN` block commits by
   Messages notes that MySQL applies DDL at once. `START TRANSACTION` is a request of its own:
   one round trip more, on the first write of each transaction only.
 
-**Settings**, per environment (its form's Commit, Idle warning and Idle limit, or the
+**Settings**, per environment (its form's Commit, Idle warning and Idle rollback, or the
 `[policy.<name>]` keys in [Environments](#environments)):
 
 | Key | Values | Default |
 |---|---|---|
 | `commit` | `"auto"`, `"manual"` | `"auto"` |
 | `tx_idle_warning` | a duration (`"90s"`, `"5m"`, `"1h"`; at least 10 s) or `"off"` | `"5m"` |
-| `tx_idle_timeout` | PostgreSQL only: a duration (at least 10 s) or `"off"` | `"30m"` |
+| `tx_idle_rollback` | a duration (at least 10 s) or `"off"` | `"30m"` |
 
 - `tx_idle_warning`: once an open transaction has sat idle that long, datarig warns once (again
   only after it ran something and sat idle again), its `◆` turns red in the tab bar and the
   explorer, and the status bar adds `idle 5:00 · holding locks` in the error color. It never
   ends anything.
-- `tx_idle_timeout`: the server's own limit for a transaction opened for manual commit
-  (`SET LOCAL idle_in_transaction_session_timeout` with its `BEGIN`; it ends with the
-  transaction, so nothing stays on a pooled connection). Past it the server ends the session
-  and rolls the transaction back, and datarig says so. It works where datarig cannot: with the
-  laptop asleep or the tunnel gone. `"off"` leaves the server's setting.
+- `tx_idle_rollback`: a transaction opened for manual commit that sat idle that long is rolled
+  back: its session ends and the server rolls the transaction back, and datarig says so. The
+  next run connects again. Your own `BEGIN` is not covered. How, per database:
+  - PostgreSQL: the server's own limit (`SET LOCAL idle_in_transaction_session_timeout` with the
+    `BEGIN`; it ends with the transaction, so nothing stays on a pooled connection). It works
+    where datarig cannot: with the laptop asleep, datarig killed or the tunnel gone. `"off"`
+    leaves the server's setting.
+  - MySQL: datarig closes the tab's session itself ("This tab's session closed after 30m idle in
+    a transaction, and the server rolled the transaction back"), after `tx_idle_warning` has
+    warned. Only while datarig runs and the machine is awake: nothing is set on the server for it
+    (its `wait_timeout` would also close sessions idle outside a transaction), so a transaction
+    left open by a datarig that was killed, or behind a lost tunnel, waits for the server's own
+    limits. Time asleep counts once the machine wakes: the session closes at the first key,
+    answer or timer after that. With `idle_disconnect` shorter, that closes the session first.
+  - `tx_idle_timeout`, the old name, is still read; a table with both is a config error. Saving
+    an environment from its form writes `tx_idle_rollback`.
 - The rule is read at each run (no reconnect). Switched to `"auto"` while a transaction is open,
   that transaction stays until you end it, and datarig says so. With `read_only = true` no
   transaction ever opens (every write is refused first), so the explorer shows only the
@@ -953,12 +964,13 @@ its own, and no transaction comes back with a restored workspace.
   pooling refuses transactions of several statements, so manual commit does not work through
   it.
 - SSH tunnels: when the tunnel is lost, the link from the bastion to the database may stay open,
-  and the server may hold the transaction and its locks until it notices. `tx_idle_timeout` is
-  the safety net for that (PostgreSQL only).
+  and the server may hold the transaction and its locks until it notices. On PostgreSQL
+  `tx_idle_rollback` is the safety net for that; on MySQL it is not (datarig closes the session
+  it has, not the server's side of a lost link).
 - PostgreSQL: each run that writes under its savepoint is a subtransaction, kept until the
   transaction ends. Past about 64 in one transaction, other sessions' snapshots get slower until
   it ends: commit long transactions of many runs.
-- PostgreSQL: `tx_idle_timeout` needs PostgreSQL 9.6 or later; older servers refuse it, and the
+- PostgreSQL: `tx_idle_rollback` needs PostgreSQL 9.6 or later; older servers refuse it, and the
   first write fails. Set it to `"off"` there. Savepoint names that start with `datarig_` are
   datarig's own and are refused in a transaction opened for manual commit.
 

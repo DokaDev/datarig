@@ -14,9 +14,16 @@
 //! The server gets its own limit for each query session, [`SERVER_IDLE_MARGIN`] past the app's
 //! (`ConnectOptions::server_idle`), for what the app cannot close itself (it was killed, the
 //! machine slept): a session the server closed says so as an idle close.
+//!
+//! The same timer rolls back a transaction opened for manual commit that sat idle for its
+//! environment's `tx_idle_rollback` where the server does not keep that limit itself (MySQL;
+//! PostgreSQL's gets it with its `BEGIN`, [`App::tx_rule`]): the app closes the tab's session and
+//! the server rolls the transaction back. Only while the app runs: nothing is set on the server
+//! for it, since a server limit would also close sessions idle outside a transaction.
 
 use super::*;
 use datarig_core::policy::format_timeout;
+use datarig_core::sql::dialect::Dialect;
 use std::time::SystemTime;
 
 /// The server's idle limit for a query session is the app's plus this: the app closes first and
@@ -41,6 +48,16 @@ impl App {
     /// `lock_wait`, else the config's); `None`: the server's setting.
     pub fn lock_wait_of(&self, id: ProfileId) -> Option<Duration> {
         self.rules_of(id).lock_wait.unwrap_or(self.prefs.lock_wait)
+    }
+
+    /// How long tab `t`'s transaction opened for manual commit may sit idle before the app closes
+    /// its session (the server rolls the transaction back): its environment's
+    /// `tx_idle_rollback`, on MySQL (PostgreSQL's server keeps that limit itself). `None`: no
+    /// such transaction is open, or the limit is off.
+    fn tx_rollback_of(&self, t: &Tab) -> Option<Duration> {
+        let manual = t.exec.user_tx() && t.exec.tx.as_ref().is_some_and(|x| x.manual);
+        let mysql = matches!(t.exec.prepared.language().dialect(), Dialect::MySql(_));
+        (manual && mysql).then(|| self.tab_rules(t).tx_idle_rollback).flatten()
     }
 
     /// How long something used at `used` has been idle at `now`: by the app's clock or the wall
@@ -71,16 +88,24 @@ impl App {
     }
 
     /// The tabs whose session may close for being idle: an open session, nothing running or
-    /// waiting, a limit; with that limit, when it was last used, and whether it holds an open
-    /// transaction not warned about yet.
-    fn idle_tabs(&self) -> Vec<(TabId, Duration, Used, bool)> {
+    /// waiting, a limit (the profile's `idle_disconnect`, or the transaction's
+    /// [`App::tx_rollback_of`] when that comes first); with that limit, when it was last used,
+    /// whether it holds an open transaction not warned about yet (a close for being unused only:
+    /// the transaction's own limit was warned about by `tx_idle_warning`), and whether it closes
+    /// for its transaction's limit.
+    fn idle_tabs(&self) -> Vec<(TabId, Duration, Used, bool, bool)> {
         self.tabs
             .iter()
             .filter(|t| t.exec.session.is_some() && !self.tab_busy(t.id))
             .filter_map(|t| {
-                let limit = self.idle_disconnect_of(t.profile?)?;
-                let warn = t.exec.tx_at_risk() && !t.exec.idle_warned;
-                Some((t.id, limit, t.exec.used?, warn))
+                let unused = self.idle_disconnect_of(t.profile?);
+                let (limit, tx) = match (unused, self.tx_rollback_of(t)) {
+                    (Some(u), Some(r)) => (u.min(r), r <= u),
+                    (Some(u), None) => (u, false),
+                    (None, r) => (r?, true),
+                };
+                let warn = !tx && t.exec.tx_at_risk() && !t.exec.idle_warned;
+                Some((t.id, limit, t.exec.used?, warn, tx))
             })
             .collect()
     }
@@ -98,7 +123,7 @@ impl App {
 
     /// When the next idle close or warning is due (`None`: nothing can close for being idle).
     pub(super) fn idle_due(&self, now: Instant) -> Option<Instant> {
-        let tabs = self.idle_tabs().into_iter().flat_map(|(_, limit, used, warn)| {
+        let tabs = self.idle_tabs().into_iter().flat_map(|(_, limit, used, warn, _)| {
             let idle = self.idle_for(used, now);
             let close = now + limit.saturating_sub(idle);
             let warning = warn.then(|| now + limit.saturating_sub(IDLE_WARN_LEAD.min(limit / 2)).saturating_sub(idle));
@@ -119,10 +144,10 @@ impl App {
                 self.close_idle_profile(id, limit);
             }
         }
-        for (id, limit, used, warn) in self.idle_tabs() {
+        for (id, limit, used, warn, tx) in self.idle_tabs() {
             let idle = self.idle_for(used, now);
             if idle >= limit {
-                self.close_idle_tab(id, limit);
+                self.close_idle_tab(id, limit, tx);
             } else if warn && idle >= limit.saturating_sub(IDLE_WARN_LEAD.min(limit / 2)) {
                 self.warn_idle_tab(id, limit - idle);
             }
@@ -146,13 +171,15 @@ impl App {
     }
 
     /// Close tab `id`'s session after it sat idle for `limit` (the server rolls back an open
-    /// transaction): said in its Messages and its status (and the status bar when a transaction
-    /// went with it). The next run opens a new session. Whether a transaction went with it.
-    fn close_idle_tab(&mut self, id: TabId, limit: Duration) -> bool {
+    /// transaction; `tx`: the limit was that transaction's, [`App::tx_rollback_of`]): said in
+    /// its Messages and its status (and the status bar when a transaction went with it). The
+    /// next run opens a new session. Whether a transaction went with it.
+    fn close_idle_tab(&mut self, id: TabId, limit: Duration, tx: bool) -> bool {
         let had_tx = self.tabs.get(id).is_some_and(|t| t.exec.tx_at_risk());
         self.close_tab_sessions(|t| t.id == id);
         let time = format_timeout(Some(limit));
         let n = match had_tx {
+            true if tx => Notice::new(Msg::QueryTxIdleClosed { time }, Level::Warning),
             true => Notice::new(Msg::QueryIdleClosedTx { time }, Level::Warning),
             false => Notice::new(Msg::QueryIdleClosed { time }, Level::Info),
         };
@@ -182,7 +209,7 @@ impl App {
             self.tabs.iter().filter(|t| t.profile == Some(id) && t.exec.session.is_some()).map(|t| t.id).collect();
         let mut had_tx = false;
         for t in tabs {
-            had_tx |= self.close_idle_tab(t, limit);
+            had_tx |= self.close_idle_tab(t, limit, false);
         }
         self.close_profile_sessions(id);
         self.close_tunnel(id);
