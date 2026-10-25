@@ -1676,6 +1676,51 @@ fn tx_idle_timeout_is_read_as_tx_idle_rollback() {
     assert!(out.contains("# keep this"), "a removed key's comment stays: {out}");
 }
 
+/// The default rules' `[policy.default]` the same way: its old `tx_idle_timeout` stays while
+/// the rules do not change, and is renamed in place (its comment kept) once they do.
+#[test]
+fn the_default_rules_rename_tx_idle_timeout_when_saved_changed() {
+    use std::time::Duration;
+    let path = temp_file("tx-idle-alias-default");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let text = "version = 2\n\n[policy.default]\n# ours\ntx_idle_timeout = \"1h\"\n";
+    std::fs::write(&path, text).unwrap();
+    let (cfg, err) = load(Some(path.clone()));
+    assert!(err.is_none(), "{err:?}");
+    let save_rules = |rules: &Policy| {
+        save(
+            &path,
+            Settings { version: 2, ..settings("en") },
+            Some(Profiles {
+                connections: &cfg.connections,
+                tunnels: &cfg.tunnels,
+                environments: None,
+                default_rules: Some(rules),
+                folders: &cfg.folders,
+                last_used: None,
+            }),
+        )
+        .unwrap();
+        std::fs::read_to_string(&path).unwrap()
+    };
+    let mut rules = cfg.policies.default_rules().clone();
+    assert_eq!(rules.tx_idle_rollback, Some(Duration::from_secs(3600)));
+    assert_eq!(save_rules(&rules), text, "unchanged: kept as written");
+    rules.tx_idle_rollback = Some(Duration::from_secs(7200));
+    let out = save_rules(&rules);
+    assert!(out.contains("[policy.default]\n# ours\ntx_idle_rollback = \"2h\"\n"), "{out}");
+    assert!(!out.contains("tx_idle_timeout"), "{out}");
+    let (back, err) = load(Some(path.clone()));
+    assert!(err.is_none(), "{err:?}");
+    assert_eq!(back.policies.default_rules().tx_idle_rollback, Some(Duration::from_secs(7200)));
+    // Another item changed: renamed too, its value kept.
+    std::fs::write(&path, text).unwrap();
+    let mut rules = cfg.policies.default_rules().clone();
+    rules.read_only = true;
+    let out = save_rules(&rules);
+    assert!(out.contains("# ours\ntx_idle_rollback = \"1h\"\n") && !out.contains("tx_idle_timeout"), "{out}");
+}
+
 /// Saving environments writes only what the user changed: an unchanged table and an
 /// unchanged value keep their text (`"5m"` stays `"5m"`), a changed value is set in place with
 /// its comment, a value back at its default goes (its comment kept), a rename moves the table

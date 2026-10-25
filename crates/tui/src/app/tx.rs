@@ -63,10 +63,17 @@ pub struct OpenTx {
     /// What the last run booked into it: its id, statements and rows (undone when the session
     /// rolls that run back).
     last_run: Option<(u64, u64, u64)>,
-    /// When a statement last ran in it (or it began), by the app's clock: it is idle since.
+    /// When a statement last ran in it (or it began), by the app's clock and the wall clock: it
+    /// is idle since.
     pub last_active: Instant,
+    pub last_active_wall: SystemTime,
     /// It stayed idle past the environment's `tx_idle_warning` since then (said once).
     pub warned: bool,
+    /// How long it may sit idle before the app closes its session (the server rolls it back):
+    /// the environment's `tx_idle_rollback` when it began, for a transaction opened for manual
+    /// commit where the server does not keep that limit itself (MySQL). A change of the
+    /// environment applies from the next transaction, as PostgreSQL's server limit does.
+    pub rollback: Option<Duration>,
 }
 
 impl OpenTx {
@@ -80,14 +87,25 @@ impl OpenTx {
             rows: 0,
             last_run: None,
             last_active: began,
+            last_active_wall: began_wall,
             warned: false,
+            rollback: None,
         }
     }
 
-    /// A statement ran in it at `now`: it is not idle (a new idle period starts after).
-    pub fn touch(&mut self, now: Instant) {
+    /// A statement ran in it at `now` (`wall` by the wall clock): it is not idle (a new idle
+    /// period starts after).
+    pub fn touch(&mut self, now: Instant, wall: SystemTime) {
         self.last_active = now;
+        self.last_active_wall = wall;
         self.warned = false;
+    }
+
+    /// How long it has been idle at `now` (`wall` by the wall clock), by whichever clock says
+    /// more: the app's clock stands still while the machine sleeps.
+    pub fn idle_either(&self, now: Instant, wall: SystemTime) -> Duration {
+        let app = now.saturating_duration_since(self.last_active);
+        app.max(wall.duration_since(self.last_active_wall).unwrap_or_default())
     }
 
     /// How long it has been idle at `now` (nothing while a statement runs: `running`).
@@ -482,14 +500,16 @@ impl App {
     }
 
     /// When the next idle warning is due (the earliest over the tabs with an open, idle
-    /// transaction not warned yet, under their environments' `tx_idle_warning`).
+    /// transaction not warned yet, under their environments' `tx_idle_warning`; idle time by the
+    /// app's clock or the wall clock, whichever says more).
     pub(super) fn tx_idle_due(&self) -> Option<Instant> {
+        let (now, wall) = (self.now(), self.wall_now());
         self.tabs
             .iter()
             .filter(|t| t.exec.user_tx() && !self.tab_busy(t.id))
             .filter_map(|t| {
                 let tx = t.exec.tx.as_ref().filter(|x| !x.warned)?;
-                Some(tx.last_active + self.tab_rules(t).tx_idle_warning?)
+                Some(now + self.tab_rules(t).tx_idle_warning?.saturating_sub(tx.idle_either(now, wall)))
             })
             .min()
     }
@@ -497,6 +517,7 @@ impl App {
     /// The idle warnings due at `now`: one notice for each open transaction idle past its
     /// environment's `tx_idle_warning` (once per idle period). Nothing is ended.
     pub(super) fn tx_idle_tick(&mut self, now: Instant) {
+        let wall = self.wall_now();
         let due: Vec<(TabId, usize, Duration)> = self
             .tabs
             .iter()
@@ -505,7 +526,7 @@ impl App {
             .filter_map(|(i, t)| {
                 let tx = t.exec.tx.as_ref().filter(|x| !x.warned)?;
                 let limit = self.tab_rules(t).tx_idle_warning?;
-                let idle = tx.idle(now, false);
+                let idle = tx.idle_either(now, wall);
                 (idle >= limit).then_some((t.id, i, idle))
             })
             .collect();
@@ -636,8 +657,9 @@ impl App {
             });
         }
         let n = at_risk.len() as u64;
+        let ends = at_risk.iter().filter_map(|id| self.tabs.get(*id).map(|t| (*id, t.exec.tx_epoch))).collect();
         if let Some(c) = self.overlays.confirm_mut() {
-            c.tx = Some(super::overlay::TxChoices { commit });
+            c.tx = Some(super::overlay::TxChoices { commit, ends });
             // Several tabs' transactions: said so.
             if action == ConfirmAction::Quit && n > 1 {
                 c.text = Msg::QuitTxTabs { count: n };
@@ -662,9 +684,20 @@ impl App {
     /// go on; the tab says why. While it waits the status bar says so, and `Esc` stops waiting.
     pub(super) fn tx_choice(&mut self, commit: bool) {
         let Some(action) = self.overlays.confirm().map(|c| c.action) else { return };
+        let ends = self.overlays.confirm().and_then(|c| c.tx.as_ref()).map(|x| x.ends.clone()).unwrap_or_default();
         self.overlays.close(OverlayKind::Confirm);
         if self.pending_end.is_some() {
             return self.flash(Notice::new(Label::TxEndBusy, Level::Warning));
+        }
+        // A transaction the question offered to end ended meanwhile (its session closed for
+        // being idle): nothing is done, and nothing is said to be committed.
+        let gone = ends
+            .iter()
+            .find(|(id, epoch)| !self.tabs.get(*id).is_some_and(|t| t.exec.user_tx() && t.exec.tx_epoch == *epoch));
+        if let Some((id, _)) = gone {
+            let tab = self.tabs.iter().position(|t| t.id == *id).map_or_else(String::new, |i| (i + 1).to_string());
+            self.status = Some(Notice::new(Msg::TxEndGone { tab }, Level::Warning));
+            return;
         }
         let tabs: VecDeque<TabId> = self
             .ended_by(action)

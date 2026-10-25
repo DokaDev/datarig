@@ -50,14 +50,19 @@ impl App {
         self.rules_of(id).lock_wait.unwrap_or(self.prefs.lock_wait)
     }
 
-    /// How long tab `t`'s transaction opened for manual commit may sit idle before the app closes
-    /// its session (the server rolls the transaction back): its environment's
-    /// `tx_idle_rollback`, on MySQL (PostgreSQL's server keeps that limit itself). `None`: no
-    /// such transaction is open, or the limit is off.
-    fn tx_rollback_of(&self, t: &Tab) -> Option<Duration> {
-        let manual = t.exec.user_tx() && t.exec.tx.as_ref().is_some_and(|x| x.manual);
+    /// The idle rollback limit a transaction opened for manual commit in tab `t` gets when it
+    /// begins (`OpenTx::rollback`): its environment's `tx_idle_rollback` now, on MySQL
+    /// (PostgreSQL's server keeps that limit itself). `None`: off, or not the app's to keep.
+    pub(super) fn tx_rollback_limit(&self, t: &Tab) -> Option<Duration> {
         let mysql = matches!(t.exec.prepared.language().dialect(), Dialect::MySql(_));
-        (manual && mysql).then(|| self.tab_rules(t).tx_idle_rollback).flatten()
+        mysql.then(|| self.tab_rules(t).tx_idle_rollback).flatten()
+    }
+
+    /// How long tab `t`'s open transaction may sit idle before the app closes its session (the
+    /// server rolls the transaction back): the limit it began with ([`App::tx_rollback_limit`]).
+    /// `None`: no such transaction is open, or it has no limit.
+    fn tx_rollback_of(&self, t: &Tab) -> Option<Duration> {
+        t.exec.tx.as_ref().filter(|_| t.exec.user_tx()).and_then(|x| x.rollback)
     }
 
     /// How long something used at `used` has been idle at `now`: by the app's clock or the wall
@@ -90,9 +95,9 @@ impl App {
     /// The tabs whose session may close for being idle: an open session, nothing running or
     /// waiting, a limit (the profile's `idle_disconnect`, or the transaction's
     /// [`App::tx_rollback_of`] when that comes first); with that limit, when it was last used,
-    /// whether it holds an open transaction not warned about yet (a close for being unused only:
-    /// the transaction's own limit was warned about by `tx_idle_warning`), and whether it closes
-    /// for its transaction's limit.
+    /// whether it holds an open transaction not warned about yet (for its transaction's limit:
+    /// nor by `tx_idle_warning` in this idle period), and whether it closes for its
+    /// transaction's limit.
     fn idle_tabs(&self) -> Vec<(TabId, Duration, Used, bool, bool)> {
         self.tabs
             .iter()
@@ -104,7 +109,8 @@ impl App {
                     (Some(u), None) => (u, false),
                     (None, r) => (r?, true),
                 };
-                let warn = !tx && t.exec.tx_at_risk() && !t.exec.idle_warned;
+                let tx_warned = tx && t.exec.tx.as_ref().is_some_and(|x| x.warned);
+                let warn = t.exec.tx_at_risk() && !t.exec.idle_warned && !tx_warned;
                 Some((t.id, limit, t.exec.used?, warn, tx))
             })
             .collect()
@@ -149,18 +155,22 @@ impl App {
             if idle >= limit {
                 self.close_idle_tab(id, limit, tx);
             } else if warn && idle >= limit.saturating_sub(IDLE_WARN_LEAD.min(limit / 2)) {
-                self.warn_idle_tab(id, limit - idle);
+                self.warn_idle_tab(id, limit - idle, tx);
             }
         }
     }
 
-    /// Tab `id`'s idle session holds an open transaction and closes in `left`: said in its
-    /// Messages, its status and the status bar (once per idle period).
-    fn warn_idle_tab(&mut self, id: TabId, left: Duration) {
+    /// Tab `id`'s idle session holds an open transaction and closes in `left` (`tx`: for that
+    /// transaction's limit): said in its Messages, its status and the status bar (once per idle
+    /// period).
+    fn warn_idle_tab(&mut self, id: TabId, left: Duration, tx: bool) {
         let Some(i) = self.tabs.iter().position(|t| t.id == id) else { return };
         let (commit, rollback) = self.tx_keys();
-        let m =
-            Msg::TxIdleCloseWarning { tab: (i + 1).to_string(), time: super::tx::fmt_clock(left), commit, rollback };
+        let (tab, time) = ((i + 1).to_string(), super::tx::fmt_clock(left));
+        let m = match tx {
+            true => Msg::TxIdleRollbackWarning { tab, time, commit, rollback },
+            false => Msg::TxIdleCloseWarning { tab, time, commit, rollback },
+        };
         let n = Notice::new(m, Level::Warning);
         if let Some(t) = self.tabs.get_mut(id) {
             t.exec.idle_warned = true;

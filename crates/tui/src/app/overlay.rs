@@ -185,10 +185,14 @@ pub struct Confirm {
 
 /// What a question whose answer ends open transactions offers besides yes and no
 /// ([`Confirm::tx`]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TxChoices {
     /// `c` too: none of them failed (a failed one can only be rolled back).
     pub commit: bool,
+    /// The transactions it offers to end: each tab and its transaction (`tx_epoch`). One that
+    /// ended meanwhile (its session closed for being idle, the server ended it) stops the
+    /// answer: nothing is said to be committed or rolled back that was not.
+    pub ends: Vec<(super::TabId, u64)>,
 }
 
 impl Confirm {
@@ -240,7 +244,7 @@ impl Confirm {
             ConfirmAction::ExportReplace => (Label::DialogButtonKeep, Label::DialogButtonReplace),
         };
         // Roll back first, commit first, then go on anyway (the server rolls back); Enter stays.
-        if let Some(tx) = self.tx {
+        if let Some(tx) = &self.tx {
             let mut b = vec![(no, KeyCode::Char('n')), (Label::TxButtonRollback, KeyCode::Char('r'))];
             if tx.commit {
                 b.push((Label::TxButtonCommit, KeyCode::Char('c')));

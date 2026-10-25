@@ -889,12 +889,17 @@ how datarig always ran: each statement outside your own `BEGIN` block commits by
     where datarig cannot: with the laptop asleep, datarig killed or the tunnel gone. `"off"`
     leaves the server's setting.
   - MySQL: datarig closes the tab's session itself ("This tab's session closed after 30m idle in
-    a transaction, and the server rolled the transaction back"), after `tx_idle_warning` has
-    warned. Only while datarig runs and the machine is awake: nothing is set on the server for it
-    (its `wait_timeout` would also close sessions idle outside a transaction), so a transaction
-    left open by a datarig that was killed, or behind a lost tunnel, waits for the server's own
+    a transaction, and the server rolled the transaction back"); the server rolls the transaction
+    back when it sees the connection close. A minute before (half the limit under two minutes)
+    datarig warns, unless `tx_idle_warning` already did. The limit is the one the transaction
+    began with: a change of the environment applies from the next transaction. Only while
+    datarig runs and the machine is awake: nothing is set on the server for it (its
+    `wait_timeout` would also close sessions idle outside a transaction), so a transaction left
+    open by a datarig that was killed, or behind a lost tunnel, waits for the server's own
     limits. Time asleep counts once the machine wakes: the session closes at the first key,
-    answer or timer after that. With `idle_disconnect` shorter, that closes the session first.
+    answer or timer after that, right after `tx_idle_warning`'s warning when that is due by then
+    (there was no time to warn earlier). With `idle_disconnect` shorter, that closes the session
+    first.
   - `tx_idle_timeout`, the old name, is still read; a table with both is a config error. Saving
     an environment from its form writes `tx_idle_rollback`.
 - The rule is read at each run (no reconnect). Switched to `"auto"` while a transaction is open,

@@ -751,13 +751,22 @@ impl Tab {
         ended
     }
 
-    /// The user's transaction began (`manual`: the session opened it for manual commit) at
-    /// `began` by the app's clock and `wall` by the wall clock.
-    pub fn block_began(&mut self, manual: bool, began: std::time::Instant, wall: std::time::SystemTime) {
+    /// The user's transaction began (`manual`: the session opened it for manual commit, with
+    /// the app's idle `rollback` limit) at `began` by the app's clock and `wall` by the wall
+    /// clock.
+    pub fn block_began(
+        &mut self,
+        manual: bool,
+        began: std::time::Instant,
+        wall: std::time::SystemTime,
+        rollback: Option<std::time::Duration>,
+    ) {
         if !self.exec.in_block {
             self.exec.tx_epoch += 1;
             self.exec.in_block = true;
-            self.exec.tx = Some(super::tx::OpenTx::new(manual, began, wall));
+            let mut tx = super::tx::OpenTx::new(manual, began, wall);
+            tx.rollback = rollback.filter(|_| manual);
+            self.exec.tx = Some(tx);
         }
     }
 

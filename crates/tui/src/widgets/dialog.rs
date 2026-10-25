@@ -110,7 +110,7 @@ pub(crate) fn draw_confirm(app: &mut App, area: Rect, buf: &mut Buffer) {
     let th = theme::cur();
     let when = (app.overlays.top().map(|o| o.kind()) == Some(OverlayKind::Confirm), app.now());
     let Some(c) = app.overlays.confirm() else { return };
-    let keys = match c.tx {
+    let keys = match &c.tx {
         Some(tx) => app.tx_choice_keys(c.action, tx.commit),
         None => app.i18n.label(c.keys),
     };

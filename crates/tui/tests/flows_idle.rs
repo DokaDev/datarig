@@ -337,7 +337,10 @@ fn mysql_closes_the_session_of_a_transaction_idle_past_tx_idle_rollback_after_wa
     assert!(said(&h, |m| *m == closed));
     assert_eq!(status(&h), Some(closed));
     assert!(!h.app.tab().exec.user_tx(), "the transaction is gone with its session");
-    assert!(!said(&h, |m| matches!(m, Msg::QueryIdleClosedTx { .. } | Msg::TxIdleCloseWarning { .. })));
+    assert!(!said(&h, |m| matches!(
+        m,
+        Msg::QueryIdleClosedTx { .. } | Msg::TxIdleCloseWarning { .. } | Msg::TxIdleRollbackWarning { .. }
+    )));
     let screen = h.screen(200, 45);
     assert!(
         screen.contains(
@@ -365,14 +368,18 @@ fn mysql_counts_the_idle_time_from_the_last_statement_and_the_time_asleep() {
     h.advance(Duration::from_secs(10));
     assert!(h.session_closed(1));
     // Asleep (`idle_disconnect` off, else the whole connection closes for that first): the first
-    // key after waking closes it before it acts (a key that runs nothing, so the Messages stay).
+    // key after waking closes it before it acts (a key that runs nothing, so the Messages stay),
+    // right after the warning, which counts the time asleep too.
     let mut h = manual_on(true, Policy { idle_disconnect: Some(None), ..rollback_rules() });
     write_in_tx(&mut h);
     let later = SystemTime::now() + Duration::from_secs(3600);
     h.app.set_wall_clock(Arc::new(move || later));
     h.keys("l");
     assert!(h.session_closed(1), "closed at the first key");
-    assert!(said(&h, |m| *m == Msg::QueryTxIdleClosed { time: "90s".into() }));
+    let notes: Vec<Msg> = h.app.tab().exec.run.notes.iter().map(|n| n.msg.clone()).collect();
+    let warned = notes.iter().position(|m| matches!(m, Msg::TxIdleWarning { .. }));
+    let closed = notes.iter().position(|m| *m == Msg::QueryTxIdleClosed { time: "90s".into() });
+    assert!(warned.is_some() && closed.is_some() && warned < closed, "warned, then closed: {notes:?}");
     assert!(!h.session_closed(0));
     // And a run after waking connects again instead of using the closed session.
     let mut h = manual_on(true, Policy { idle_disconnect: Some(None), ..rollback_rules() });
@@ -422,4 +429,96 @@ fn mysql_idle_disconnect_shorter_than_tx_idle_rollback_closes_first_as_unused() 
     assert!(h.session_closed(1));
     assert!(said(&h, |m| *m == Msg::QueryIdleClosedTx { time: "5m".into() }));
     assert!(!said(&h, |m| matches!(m, Msg::QueryTxIdleClosed { .. })));
+}
+
+#[test]
+fn mysql_warns_before_the_rollback_close_when_tx_idle_warning_does_not() {
+    // `tx_idle_warning` off, or longer than the rollback limit: the app's own warning, 45s
+    // before (half the limit under two minutes), then the close.
+    for warning in [None, Some(Duration::from_secs(300))] {
+        let rules = Policy { tx_idle_warning: warning, ..rollback_rules() };
+        let mut h = manual_on(true, rules);
+        write_in_tx(&mut h);
+        h.advance(Duration::from_secs(44));
+        assert!(!said(&h, |m| matches!(m, Msg::TxIdleRollbackWarning { .. })), "{warning:?}");
+        h.advance(Duration::from_secs(1));
+        let lead = Msg::TxIdleRollbackWarning {
+            tab: "1".into(),
+            time: "0:45".into(),
+            commit: "Space x c".into(),
+            rollback: "Space x r".into(),
+        };
+        assert_eq!(status(&h), Some(lead.clone()), "{warning:?}");
+        assert!(said(&h, |m| *m == lead));
+        let screen = h.screen(220, 45);
+        assert!(screen.contains("its session closes in 0:45; the server rolls the transaction back then"), "{screen}");
+        h.advance(Duration::from_secs(45));
+        assert!(h.session_closed(1), "{warning:?}");
+        assert!(said(&h, |m| *m == Msg::QueryTxIdleClosed { time: "90s".into() }));
+        assert!(!said(&h, |m| matches!(m, Msg::TxIdleWarning { .. })), "{warning:?}");
+    }
+}
+
+#[test]
+fn mysql_keeps_the_rollback_limit_its_transaction_began_with() {
+    let mut h = manual_on(true, rollback_rules());
+    write_in_tx(&mut h);
+    // The environment changes while the transaction is open: it keeps 90s.
+    h.app.policies.insert("stg", Policy { tx_idle_rollback: Some(Duration::from_secs(600)), ..rollback_rules() });
+    h.advance(Duration::from_secs(90));
+    assert!(h.session_closed(1));
+    assert!(said(&h, |m| *m == Msg::QueryTxIdleClosed { time: "90s".into() }));
+    // The next transaction gets the new limit: 10m, so `idle_disconnect`'s 5m closes it first.
+    let mut h = manual_on(true, rollback_rules());
+    h.app.policies.insert("stg", Policy { tx_idle_rollback: Some(Duration::from_secs(120)), ..rollback_rules() });
+    write_in_tx(&mut h);
+    assert_eq!(h.app.tab().exec.tx.as_ref().and_then(|x| x.rollback), Some(Duration::from_secs(120)));
+    h.app.policies.insert("stg", Policy { tx_idle_rollback: None, ..rollback_rules() });
+    h.advance(Duration::from_secs(120));
+    assert!(h.session_closed(1), "off later: still the 2m it began with");
+    assert!(said(&h, |m| *m == Msg::QueryTxIdleClosed { time: "2m".into() }));
+    // PostgreSQL's transaction keeps none of the app's (the server has it).
+    let mut h = manual_on(false, rollback_rules());
+    write_in_tx(&mut h);
+    assert_eq!(h.app.tab().exec.tx.as_ref().and_then(|x| x.rollback), None);
+}
+
+/// A question that offers to commit first stays open while the session closes for its idle
+/// transaction: answering `c` then commits nothing, does not go on, and says the transaction
+/// ended; the summary's `c` sends nothing either.
+#[test]
+fn a_commit_asked_for_after_the_rollback_close_is_not_pretended() {
+    use datarig_core::driver::DbCommand;
+    let ends = |h: &mut Harness| h.sent().into_iter().filter(|c| matches!(c, DbCommand::EndTx { .. })).count();
+    let mut h = manual_on(true, Policy { idle_disconnect: Some(None), ..rollback_rules() });
+    write_in_tx(&mut h);
+    // Another tab, so closing this one asks.
+    h.ctrl('t');
+    let tabs = h.app.tabs.len();
+    h.app.dispatch(datarig_tui::app::action::Action::PrevTab);
+    h.ctrl('w');
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Confirm));
+    let later = SystemTime::now() + Duration::from_secs(3600);
+    h.app.set_wall_clock(Arc::new(move || later));
+    h.keys("c");
+    assert!(h.session_closed(1), "closed before the answer acts");
+    assert_eq!(ends(&mut h), 0, "nothing to commit is sent");
+    assert_eq!(h.app.tabs.len(), tabs, "the answer does not go on");
+    assert_eq!(status(&h), Some(Msg::TxEndGone { tab: "1".into() }));
+    assert!(said(&h, |m| *m == Msg::QueryTxIdleClosed { time: "90s".into() }));
+    assert!(!said(&h, |m| matches!(m, Msg::TxCommitted { .. })));
+    let screen = h.screen(220, 45);
+    assert!(screen.contains("nothing was committed or rolled back on request"), "{screen}");
+    // The summary: `c` there sends nothing, and the tab says how the transaction ended.
+    let mut h = manual_on(true, Policy { idle_disconnect: Some(None), ..rollback_rules() });
+    write_in_tx(&mut h);
+    h.keys(" xs");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::TxSummary));
+    h.app.set_wall_clock(Arc::new(move || later));
+    h.keys("c");
+    assert!(h.session_closed(1));
+    assert_eq!(ends(&mut h), 0);
+    assert!(said(&h, |m| *m == Msg::QueryTxIdleClosed { time: "90s".into() }));
+    assert!(!said(&h, |m| matches!(m, Msg::TxCommitted { .. })));
+    assert_ne!(h.overlay_kind(), Some(OverlayKind::TxSummary), "{:?}", h.overlay_kind());
 }
