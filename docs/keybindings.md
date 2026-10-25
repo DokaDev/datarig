@@ -657,6 +657,8 @@ Settings of `:set` (saved to `config.toml` like the matching actions):
 | `secrets.macos_keychain_access` | `direct` `security_tool` | macOS keychain access |
 | `explorer.size_heat` | `3` `5` `off` | Explorer: size colors |
 | `ui.yank_flash` | `on` `off` | Flash copied cells |
+| `idle_disconnect` | `off` `5m` `10m` `30m` `1h` | Close idle connections |
+| `lock_wait` | `off` `5s` `10s` `30s` `1m` | Lock wait limit |
 
 ## Command line only
 

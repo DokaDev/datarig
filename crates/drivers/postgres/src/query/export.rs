@@ -124,7 +124,7 @@ pub(super) async fn export(
     }
     // Its own read-only transaction, opened in the request that parses the statement.
     let mut begin = vec![BEGIN_READ_ONLY.to_string()];
-    begin.extend(env.path.map(str::to_string));
+    begin.extend(env.each_tx.iter().cloned());
     if guard == ExportGuard::Keyset {
         begin.push(format!("SET LOCAL lock_timeout = '{LOCK_WAIT_SECS}s'"));
     }

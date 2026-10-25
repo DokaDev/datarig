@@ -159,6 +159,13 @@ pub struct ProfileConn {
     /// How the current attempt's metadata session's traffic goes (`DbEvent::Encryption`, sent
     /// right before `Connected`); `None` until it says.
     pub encryption: Option<datarig_core::tls::Encryption>,
+    /// When a session of the profile was last used (a run, an explorer read, an answer of any
+    /// of its sessions), by the app's clock and the wall clock: idle since
+    /// ([`super::idle`]).
+    pub used: Option<(Instant, std::time::SystemTime)>,
+    /// The profile's sessions were closed for being idle (why, for the explorer): the next
+    /// action connects again with the password the profile connected with.
+    pub idle_closed: Option<Notice>,
 }
 
 impl ProfileConn {
@@ -191,6 +198,8 @@ impl ProfileConn {
             tunnel_lost: None,
             language: None,
             encryption: None,
+            used: None,
+            idle_closed: None,
         }
     }
 

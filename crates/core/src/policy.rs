@@ -52,6 +52,14 @@
 //!   past it the server ends the session and rolls the transaction back, also when the app
 //!   is gone. A duration (at least [`TX_IDLE_FLOOR`]) or `"off"` (the server's setting).
 //!   Default 30m.
+//! * `idle_disconnect` — how long a profile's connection may sit unused before the app closes
+//!   its sessions (the next action connects again): a duration as `paging_idle_timeout` takes,
+//!   from [`IDLE_DISCONNECT_FLOOR`] to [`SESSION_LIMIT_MAX`], or `"off"`. Without it, the config's
+//!   top-level `idle_disconnect` applies (default off).
+//! * `lock_wait` — how long a statement of a query session waits for a lock another session
+//!   holds before the server cancels it: a duration from [`LOCK_WAIT_FLOOR`] to
+//!   [`SESSION_LIMIT_MAX`], or `"off"` (the server's setting). Without it, the config's top-level
+//!   `lock_wait` applies (default off).
 //! * `color` — the environment's color: one of the profile colors' 12 names or `#rrggbb`
 //!   ([`crate::profile::color`]). No default (no color).
 //! * `badge` — a short text the tabs and the status bar show for its profiles (`"PROD"`): no
@@ -83,6 +91,17 @@ pub const TX_IDLE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 /// end, a transaction between two statements the user types).
 pub const TX_IDLE_FLOOR: Duration = Duration::from_secs(10);
 
+/// The shortest `idle_disconnect` (a shorter one would close a connection between two
+/// statements the user types).
+pub const IDLE_DISCONNECT_FLOOR: Duration = Duration::from_secs(60);
+
+/// The shortest `lock_wait` (the servers count it in whole seconds or milliseconds; zero would
+/// mean no limit).
+pub const LOCK_WAIT_FLOOR: Duration = Duration::from_secs(1);
+
+/// The longest `idle_disconnect` and `lock_wait` (what every server's setting takes).
+pub const SESSION_LIMIT_MAX: Duration = Duration::from_secs(24 * 3600);
+
 /// The name of the table of the default rules (`[policy.default]`), which a profile without an
 /// environment uses; never an environment's name.
 pub const DEFAULT: &str = "default";
@@ -106,6 +125,10 @@ pub struct Policy {
     pub tx_idle_warning: Option<Duration>,
     /// `None`: the server's own setting.
     pub tx_idle_timeout: Option<Duration>,
+    /// `None`: the config's `idle_disconnect`; `Some(None)`: never closed for being idle.
+    pub idle_disconnect: Option<Option<Duration>>,
+    /// `None`: the config's `lock_wait`; `Some(None)`: the server's own setting.
+    pub lock_wait: Option<Option<Duration>>,
 }
 
 impl Default for Policy {
@@ -119,6 +142,8 @@ impl Default for Policy {
             commit: CommitRule::Auto,
             tx_idle_warning: Some(TX_IDLE_WARNING),
             tx_idle_timeout: Some(TX_IDLE_TIMEOUT),
+            idle_disconnect: None,
+            lock_wait: None,
         }
     }
 }
@@ -402,6 +427,40 @@ pub fn parse_tx_idle(v: &toml::Value) -> Result<Option<Duration>, String> {
         }
         d => Ok(d),
     }
+}
+
+/// A duration as [`parse_timeout`] reads it (zero and `"off"` are `None`), from `floor` to
+/// [`SESSION_LIMIT_MAX`].
+fn parse_limit(v: &toml::Value, floor: Duration) -> Result<Option<Duration>, String> {
+    match parse_timeout(v)? {
+        Some(d) if d < floor => Err(format!("{} (less than {})", format_timeout(Some(d)), format_timeout(Some(floor)))),
+        Some(d) if d > SESSION_LIMIT_MAX => {
+            Err(format!("{} (more than {})", format_timeout(Some(d)), format_timeout(Some(SESSION_LIMIT_MAX))))
+        }
+        d => Ok(d),
+    }
+}
+
+/// An `idle_disconnect` value: a duration from [`IDLE_DISCONNECT_FLOOR`] to
+/// [`SESSION_LIMIT_MAX`], or off (`None`).
+pub fn parse_idle_disconnect(v: &toml::Value) -> Result<Option<Duration>, String> {
+    parse_limit(v, IDLE_DISCONNECT_FLOOR)
+}
+
+/// A `lock_wait` value: a duration from [`LOCK_WAIT_FLOOR`] to [`SESSION_LIMIT_MAX`], or off
+/// (`None`).
+pub fn parse_lock_wait(v: &toml::Value) -> Result<Option<Duration>, String> {
+    parse_limit(v, LOCK_WAIT_FLOOR)
+}
+
+/// An `idle_disconnect` typed as text (`:set`, a form's field).
+pub fn parse_idle_disconnect_text(s: &str) -> Result<Option<Duration>, String> {
+    parse_idle_disconnect(&toml::Value::String(s.to_string()))
+}
+
+/// A `lock_wait` typed as text (`:set`, a form's field).
+pub fn parse_lock_wait_text(s: &str) -> Result<Option<Duration>, String> {
+    parse_lock_wait(&toml::Value::String(s.to_string()))
 }
 
 /// A `tx_idle_warning` or `tx_idle_timeout` typed as text (a form's field).

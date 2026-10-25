@@ -363,6 +363,15 @@ fn path_guarded(sql: &str) -> bool {
     }
 }
 
+/// Whether `sql`, outside the user's block on a session with only the lock wait limit per
+/// transaction, runs in a transaction of its own that sets it: as [`path_guarded`], but never a
+/// statement that cannot run in a block (`VACUUM`, `CREATE INDEX CONCURRENTLY`, …) nor one that
+/// may end the transaction it runs in (`CALL`, `DO`): the limit is not worth changing what they
+/// do, and they run without it.
+fn lock_guarded(sql: &str) -> bool {
+    !risk::classify(sql).no_tx_block && !matches!(first_word(sql).as_deref(), Some("CALL" | "DO"))
+}
+
 /// The first word of `sql`, upper case.
 fn first_word(sql: &str) -> Option<String> {
     lex(sql).into_iter().find(|t| !t.is_trivia()).filter(|t| t.is_word()).map(|t| t.text(sql).to_ascii_uppercase())
@@ -373,9 +382,12 @@ pub(crate) struct Settings {
     pub(crate) page_size: usize,
     /// The session is read-only: every transaction it opens is `READ ONLY`.
     pub(crate) read_only: bool,
-    /// The server dropped the search path's startup option: this goes first in each
-    /// transaction (`SET LOCAL search_path …`).
-    pub(crate) path: Option<String>,
+    /// What goes first in each transaction, because the session could not set it for itself
+    /// (a pooler): the search path when the server dropped its startup option (`SET LOCAL
+    /// search_path …`), the lock wait limit (`SET LOCAL lock_timeout …`).
+    pub(crate) each_tx: Vec<String>,
+    /// The search path is among [`Settings::each_tx`] (else only the lock wait limit is).
+    pub(crate) path_per_tx: bool,
     /// Keep prepared statements between transactions (the profile's statement cache).
     pub(crate) statement_cache: bool,
 }
@@ -399,8 +411,10 @@ struct Env<'a> {
     /// ([`Env::wrapped`], [`Env::begin`]); what the session does in later transactions
     /// ([`Env::wraps`], the user's block's first statements) does not.
     own_read_only: bool,
-    /// Sent first in every transaction (a search path per transaction), if anything.
-    path: Option<&'a str>,
+    /// Sent first in every transaction (a search path or lock wait limit per transaction).
+    each_tx: &'a [String],
+    /// The search path is among `each_tx` ([`Settings::path_per_tx`]).
+    path_per_tx: bool,
     /// The name of the savepoint a count or the allowlist's question runs under inside a
     /// transaction ([`count_savepoint`]): never one of the user's own.
     savepoint: &'a str,
@@ -416,32 +430,40 @@ type BeforeBind = dyn Fn() -> futures::future::BoxFuture<'static, ()> + Sync;
 impl Env<'_> {
     /// The session sends statements first in each transaction.
     fn wraps(&self) -> bool {
-        self.read_only || self.path.is_some()
+        self.read_only || self.per_tx()
+    }
+
+    /// Settings go first in every transaction ([`Settings::each_tx`]).
+    fn per_tx(&self) -> bool {
+        !self.each_tx.is_empty()
     }
 
     /// `sql`, outside the user's block, runs in a transaction of its own that starts with the
     /// session's first statements ([`Env::begin`]): [`guarded`] on a read-only session,
-    /// [`path_guarded`] with a search path per transaction.
+    /// [`path_guarded`] with a search path per transaction, [`lock_guarded`] with only the lock
+    /// wait limit per transaction.
     fn wrapped(&self, sql: &str) -> bool {
-        ((self.read_only || self.own_read_only) && guarded(sql)) || (self.path.is_some() && path_guarded(sql))
+        let per_tx = self.per_tx() && path_guarded(sql) && (self.path_per_tx || lock_guarded(sql));
+        ((self.read_only || self.own_read_only) && guarded(sql)) || per_tx
     }
 
     /// How a transaction of the session's own starts: `BEGIN` (`BEGIN READ ONLY`), then the
     /// search path when it is set per transaction.
     fn begin(&self) -> Vec<String> {
         let begin = if self.read_only || self.own_read_only { BEGIN_READ_ONLY } else { "BEGIN" };
-        std::iter::once(begin).chain(self.path).map(str::to_string).collect()
+        std::iter::once(begin).chain(self.each_tx.iter().map(String::as_str)).map(str::to_string).collect()
     }
 
     /// What goes first in the user's new block: `SET TRANSACTION READ ONLY`, the search path.
     fn first_in_block(&self) -> Vec<String> {
-        self.read_only.then_some(SET_READ_ONLY).into_iter().chain(self.path).map(str::to_string).collect()
+        let first = self.read_only.then_some(SET_READ_ONLY).into_iter();
+        first.chain(self.each_tx.iter().map(String::as_str)).map(str::to_string).collect()
     }
 
     /// The search path set for a simple query of its own (one implicit transaction), as its
     /// start (`…; `), or nothing.
     fn path_text(&self) -> String {
-        self.path.map(|p| format!("{p}; ")).unwrap_or_default()
+        self.each_tx.iter().map(|p| format!("{p}; ")).collect()
     }
 
     fn report(&self, tx: &mut Tx, open: bool) {
@@ -659,7 +681,8 @@ pub(crate) async fn query_loop(
         page_size: settings.page_size,
         read_only: settings.read_only,
         own_read_only: false,
-        path: settings.path.as_deref(),
+        each_tx: &settings.each_tx,
+        path_per_tx: settings.path_per_tx,
         savepoint: count_savepoint(),
         #[cfg(test)]
         before_bind: None,
@@ -1579,7 +1602,7 @@ async fn statement<'a>(
                 match prepared {
                     Ok(stmt) => stmt,
                     Err(e) => {
-                        if opened || env.path.is_some() && !s.tx.block {
+                        if opened || env.per_tx() && !s.tx.block {
                             // The failure left the transaction it was parsed in open and aborted.
                             let _ = halt!(link.guard(None, client.batch_execute("ROLLBACK")).await, Some(reply));
                         }
@@ -1751,7 +1774,7 @@ async fn no_rows<'a>(
             }
         },
         Err(e) => {
-            reply.fail_in(&e, after.is_some() && env.path.is_some() || tx.opening.is_some());
+            reply.fail_in(&e, after.is_some() && env.per_tx() || tx.opening.is_some());
             halt!(probe(client, link, env, tx).await, None);
             Ok(None)
         }
@@ -1776,12 +1799,12 @@ async fn prepare(
     if off && tx.block {
         return client.prepare_unnamed_wrapped(sql, &tx.take_first(env), None).await;
     }
-    match env.path {
-        Some(path) if !tx.block => {
-            let before = ["BEGIN".to_string(), path.to_string()];
+    match env.per_tx() {
+        true if !tx.block => {
+            let before: Vec<String> = std::iter::once("BEGIN".to_string()).chain(env.each_tx.iter().cloned()).collect();
             client.prepare_wrapped(sql, &before, Some("COMMIT")).await
         }
-        Some(_) if tx.first_pending => {
+        true if tx.first_pending => {
             let first = tx.take_first(env);
             client.prepare_wrapped(sql, &first, None).await
         }
@@ -1823,7 +1846,7 @@ async fn wrapped_no_rows<'a>(
 ) -> Result<Option<(Reply<'a>, Outcome)>, Halted<'a>> {
     // A transaction of the session's own that sets the path (not the user's block), or one
     // opened for it (manual commit).
-    let path_tx = !tx.block && env.path.is_some() || tx.opening.is_some();
+    let path_tx = !tx.block && env.per_tx() || tx.opening.is_some();
     let txn = if tx.block {
         client.transaction_in_block_with(tx.take_first(env))
     } else {
@@ -1980,7 +2003,7 @@ async fn portal<'a>(
                 env.report(tx, tx.block);
                 return Ok(After::Stale { all: gone(&e), reply });
             }
-            reply.fail_in(&e, !tx.block && env.path.is_some() || tx.opening.is_some());
+            reply.fail_in(&e, !tx.block && env.per_tx() || tx.opening.is_some());
             return Ok(After::Failed);
         }
     };

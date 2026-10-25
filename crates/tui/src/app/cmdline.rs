@@ -91,7 +91,9 @@ fn setting_action(s: Setting) -> Option<Action> {
         | Setting::RunHints(_)
         | Setting::KeychainAccess(_)
         | Setting::SizeHeat(_)
-        | Setting::YankFlash(_) => None,
+        | Setting::YankFlash(_)
+        | Setting::IdleDisconnect(_)
+        | Setting::LockWait(_) => None,
     }
 }
 
@@ -857,6 +859,8 @@ impl App {
             Setting::KeychainAccess(a) => self.set_keychain_access(a),
             Setting::SizeHeat(h) => self.set_prefs(s, |x| x.size_heat = h),
             Setting::YankFlash(f) => self.set_prefs(s, |x| x.yank_flash = f),
+            Setting::IdleDisconnect(d) => self.set_prefs(s, |x| x.idle_disconnect = d),
+            Setting::LockWait(d) => self.set_prefs(s, |x| x.lock_wait = d),
         }
     }
 
@@ -871,6 +875,16 @@ impl App {
                 name: self.i18n.label(spec.label).to_string(),
                 value: self.i18n.label(value.2).to_string(),
             })
+        });
+        // A duration that is not one of the presets: its value as written.
+        let custom = |label: Label, d: Option<std::time::Duration>| Msg::SettingChanged {
+            name: self.i18n.label(label).to_string(),
+            value: datarig_core::policy::format_timeout(d),
+        };
+        let msg = msg.or(match s {
+            Setting::IdleDisconnect(d) => Some(custom(Label::SettingIdleDisconnect, d)),
+            Setting::LockWait(d) => Some(custom(Label::SettingLockWait, d)),
+            _ => None,
         });
         if let Some(m) = saved.or(msg.map(|m| Notice::new(m, Level::Info))) {
             self.flash(m);

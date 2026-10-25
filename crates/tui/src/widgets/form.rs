@@ -601,6 +601,8 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
                 (Field::EnvTxWarning, _) => Some(Label::FormEnvTxIdleWarningHint.into()),
                 (Field::EnvTxTimeout, _) => Some(Label::FormEnvTxIdleTimeoutHint.into()),
                 (Field::EnvSpill, _) => Some(Label::FormEnvSpillHint.into()),
+                (Field::EnvIdleDisconnect, _) => Some(Label::FormEnvIdleDisconnectHint.into()),
+                (Field::EnvLockWait, _) => Some(Label::FormEnvLockWaitHint.into()),
                 (Field::ServerKey, _) => Some(Label::FormServerKeyHint.into()),
                 (Field::TlsCa, _) => Some(Label::FormTlsCaHint.into()),
                 (Field::TlsCert, _) => Some(Label::FormTlsCertHint.into()),

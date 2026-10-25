@@ -87,6 +87,8 @@ impl App {
             Setting::KeychainAccess(a) => *a == self.prefs.keychain_access,
             Setting::SizeHeat(h) => *h == self.prefs.size_heat,
             Setting::YankFlash(f) => *f == self.prefs.yank_flash,
+            Setting::IdleDisconnect(d) => *d == self.prefs.idle_disconnect,
+            Setting::LockWait(d) => *d == self.prefs.lock_wait,
         };
         SETTINGS.get(k)?.values.fixed().iter().position(|v| now(&v.1))
     }
@@ -96,10 +98,21 @@ impl App {
     pub fn setting_shown(&self, k: usize) -> Option<(String, Localized)> {
         let spec = SETTINGS.get(k)?;
         match spec.values {
-            Values::Fixed(values) => {
-                let (name, _, label) = values.get(self.setting_value(k)?)?;
-                Some((name.to_string(), self.i18n.label(*label)))
-            }
+            Values::Fixed(values) => match self.setting_value(k) {
+                Some(i) => {
+                    let (name, _, label) = values.get(i)?;
+                    Some((name.to_string(), self.i18n.label(*label)))
+                }
+                // A duration `:set` or the file gave that is not one of the presets.
+                None => {
+                    let (d, label) = match spec.key {
+                        "idle_disconnect" => (self.prefs.idle_disconnect, Label::SettingIdleDisconnectOn),
+                        "lock_wait" => (self.prefs.lock_wait, Label::SettingLockWaitOn),
+                        _ => return None,
+                    };
+                    Some((datarig_core::policy::format_timeout(d), self.i18n.label(label)))
+                }
+            },
             Values::Themes => {
                 let row = &self.overlays.settings()?.themes;
                 let name = match &row.preview {

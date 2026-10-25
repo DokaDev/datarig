@@ -132,6 +132,15 @@ impl Conn {
         c
     }
 
+    /// [`Conn::open`] with options `o`.
+    async fn open_opts(url: &str, role: SessionRole, o: ConnectOptions) -> Conn {
+        let (tx, rx) = unbounded_channel();
+        let session = MyDriver.connect(&profile(url), role, o, tx);
+        let mut c = Conn { session, rx };
+        c.wait(|e| matches!(e, DbEvent::Connected), 15).await;
+        c
+    }
+
     fn start(url: &str, role: SessionRole, read_only: bool, test: &str) -> Conn {
         let (tx, rx) = unbounded_channel();
         let session = MyDriver.connect(&profile(url), role, opts(role, test).read_only(read_only), tx);
@@ -4205,7 +4214,7 @@ async fn a_lock_wait_timeout_or_a_cancel_keeps_the_manual_transaction() {
     c.manual(2, &[&format!("UPDATE {q} SET v = 'c' WHERE id = 1")], &[true]).await;
     let evs = c.manual(3, &[&format!("UPDATE {q} SET v = 'c' WHERE id = 2")], &[true]).await;
     match failures(&evs, 3)[..] {
-        [DbEvent::Failed { error: DbError::Server(m), .. }] => assert!(m.starts_with("ERROR 1205 "), "{m}"),
+        [DbEvent::Failed { error: DbError::LockTimeout(m), .. }] => assert!(m.starts_with("ERROR 1205 "), "{m}"),
         _ => panic!("{evs:?}"),
     }
     assert!(tx_of(&evs).is_empty(), "the transaction stays: {evs:?}");
@@ -4407,4 +4416,59 @@ async fn a_failed_statement_that_commits_implicitly_says_the_transaction_committ
         "{evs:?}"
     );
     assert_eq!(seen(&url, &count).await, "2", "committed");
+}
+
+/// The lock wait limit is the query session's, for both kinds of locks (`lock_wait_timeout`,
+/// `innodb_lock_wait_timeout`; the metadata session keeps its own 2 s), and the server's idle
+/// limit every session's given one (`wait_timeout`). A statement waiting for a row another
+/// connection locked is cut short (`LockTimeout`) and the session stays.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_lock_wait_limit_cuts_a_wait_short_and_the_limits_are_the_sessions() {
+    let test = "the_lock_wait_limit_cuts_a_wait_short";
+    let Some((url, admin)) = urls(test) else { return };
+    let t = numbers(&admin, "lockcut", 3).await;
+    let _end = EndSessions { admin: admin.clone(), test };
+    let mut a = side(&admin).await;
+    let limits =
+        |role| opts(role, test).lock_wait(Some(Duration::from_secs(1))).server_idle(Some(Duration::from_secs(420)));
+    let mut c = Conn::open_opts(&url, SessionRole::Query, limits(SessionRole::Query)).await;
+    let id = only_session(&mut a, SessionRole::Query, test).await;
+    for (name, want) in [("lock_wait_timeout", "1"), ("innodb_lock_wait_timeout", "1"), ("wait_timeout", "420")] {
+        assert_eq!(variable_of(&mut a, id, name).await.as_deref(), Some(want), "{name}");
+    }
+    let mut m = Conn::open_opts(&url, SessionRole::Meta, limits(SessionRole::Meta)).await;
+    m.wait(|e| matches!(e, DbEvent::Keys(_)), 30).await;
+    let mid = only_session(&mut a, SessionRole::Meta, test).await;
+    assert_eq!(variable_of(&mut a, mid, "lock_wait_timeout").await.as_deref(), Some("2"), "the metadata session's own");
+    assert_eq!(variable_of(&mut a, mid, "wait_timeout").await.as_deref(), Some("420"));
+    let q = t.q();
+    let mut b = side(&url).await;
+    b.query_drop("START TRANSACTION").await.unwrap();
+    b.query_drop(format!("UPDATE {q} SET v = 'b' WHERE id = 2")).await.unwrap();
+    let start = Instant::now();
+    let evs = c.run(1, &[&format!("UPDATE {q} SET v = 'c' WHERE id = 2")]).await;
+    match failures(&evs, 1)[..] {
+        [DbEvent::Failed { error: DbError::LockTimeout(m), .. }] => assert!(m.starts_with("ERROR 1205 "), "{m}"),
+        _ => panic!("{evs:?}"),
+    }
+    assert!(start.elapsed() < Duration::from_secs(20), "{:?}", start.elapsed());
+    b.query_drop("ROLLBACK").await.unwrap();
+    b.disconnect().await.unwrap();
+    c.ok(2, "SELECT 1").await;
+    a.disconnect().await.unwrap();
+}
+
+/// A session idle past the server's idle limit is ended by the server, which says why (MySQL
+/// 8.0.24 and later): `Lost` with `IdleSessionTimeout`.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_servers_idle_limit_ends_an_idle_session() {
+    let test = "the_servers_idle_limit_ends_an_idle";
+    let Some((url, admin)) = urls(test) else { return };
+    let _end = EndSessions { admin: admin.clone(), test };
+    let o = opts(SessionRole::Query, test).server_idle(Some(Duration::from_secs(2)));
+    let mut c = Conn::open_opts(&url, SessionRole::Query, o).await;
+    c.ok(1, "SELECT 1").await;
+    let lost = c.wait(|e| matches!(e, DbEvent::Lost { .. }), 20).await;
+    let DbEvent::Lost { error: DbError::IdleSessionTimeout(m) } = lost else { panic!("{lost:?}") };
+    assert!(m.starts_with("ERROR 4031 "), "{m}");
 }

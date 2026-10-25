@@ -5907,3 +5907,82 @@ async fn manual_commit_with_the_statement_cache_off() {
     assert_eq!(facts(&q.end_tx(4, true).await), ["Committed", "block false", "open false"]);
     assert_eq!(q.value(5, &format!("SELECT count(*) FROM {s}.t")).await, "1");
 }
+
+// ── session limits: lock wait, the server's idle limit ──────────
+
+/// A query session of `tag` opened with these limits.
+async fn limited(url: &str, tag: &str, lock_wait: Option<Duration>, server_idle: Option<Duration>) -> Conn {
+    let cfg = ConnectionConfig { name: "it".into(), dsn: Some(url.to_string()), ..ConnectionConfig::test_db() };
+    let (tx, rx) = unbounded_channel();
+    let o = ConnectOptions::new(PAGE, SessionRole::Query, tag)
+        .dialer(dialer())
+        .lock_wait(lock_wait)
+        .server_idle(server_idle);
+    let mut q = Conn { session: PgDriver.connect(&cfg, SessionRole::Query, o, tx), rx };
+    q.wait(|e| matches!(e, DbEvent::Connected), 10).await;
+    q
+}
+
+/// The lock wait limit cancels a statement waiting for a row of a `zz_` table another session
+/// locked (`LockTimeout`, the session stays); `NOWAIT` is not one; inside a manual transaction
+/// only the run that waited is undone (its savepoint) and the transaction keeps what it did; the
+/// limit is the session's on a direct connection (`SHOW`), and a session without one has the
+/// server's.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_lock_wait_limit_cancels_a_statement_waiting_for_another_sessions_lock() {
+    let Some(url) = pg_url("the_lock_wait_limit_cancels_a_statement_waiting_for_another_sessions_lock") else {
+        return;
+    };
+    let (_schema, _end, s, tag) = scratch(&url, "lockw");
+    for sql in [format!("CREATE TABLE {s}.u (x int)"), format!("INSERT INTO {s}.t VALUES (1)")] {
+        pg_clean::run_fresh(&url, &sql).unwrap_or_else(|e| panic!("{e}: {sql}"));
+    }
+    let mut q = limited(&url, &tag, Some(Duration::from_secs(1)), None).await;
+    assert_eq!(q.value(1, "SHOW lock_timeout").await, "1s", "the session's own");
+    let mut holder = Conn::open(&url, SessionRole::Query).await;
+    let row = format!("SELECT x FROM {s}.t WHERE x = 1 FOR UPDATE");
+    assert_eq!(facts(&holder.manual(1, &[&row], &[true]).await), OPENED);
+    let update = format!("UPDATE {s}.t SET x = x WHERE x = 1");
+    let start = Instant::now();
+    let DbEvent::Failed { error: DbError::LockTimeout(msg), .. } = q.run(2, &update).await else {
+        panic!("the wait was not cut short")
+    };
+    assert!(start.elapsed() < Duration::from_secs(10), "{:?}", start.elapsed());
+    assert!(msg.contains("lock timeout"), "{msg}");
+    assert_eq!(q.value(3, "SELECT 1").await, "1", "the session stays");
+    // `NOWAIT` did not wait: the server's failure as it is.
+    let DbEvent::Failed { error, .. } = q.run(4, &format!("{row} NOWAIT")).await else { panic!("NOWAIT") };
+    assert!(matches!(error, DbError::Server(_)), "{error:?}");
+    // In a manual transaction: the run that waited goes back to its savepoint.
+    let events = q.manual(5, &[&format!("INSERT INTO {s}.u VALUES (1)")], &[true]).await;
+    assert_eq!(facts(&events), OPENED);
+    let events = q.manual(6, &[&update], &[true]).await;
+    assert!(matches!(answer(&events), DbEvent::Failed { error: DbError::LockTimeout(_), .. }), "{events:?}");
+    assert_eq!(facts(&events), ["run undone"]);
+    assert_eq!(facts(&holder.end_tx(2, false).await), ["RolledBack", "block false", "open false"]);
+    assert_eq!(facts(&q.end_tx(7, true).await), ["Committed", "block false", "open false"]);
+    assert_eq!(q.value(8, &format!("SELECT count(*) FROM {s}.u")).await, "1", "the transaction kept its insert");
+    // Without a limit: the server's (none on the dev server).
+    let mut plain = limited(&url, &format!("{tag}p"), None, None).await;
+    assert_eq!(plain.value(1, "SHOW lock_timeout").await, "0");
+}
+
+/// The server's idle limit ends a session that sat idle past it (`IdleSessionTimeout`, PostgreSQL
+/// 14 and later); a session without one stays.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_servers_idle_limit_ends_an_idle_session() {
+    let Some(url) = pg_url("the_servers_idle_limit_ends_an_idle_session") else { return };
+    let tag = format!("sidle{}", std::process::id());
+    let mut q = limited(&url, &tag, None, Some(Duration::from_secs(1))).await;
+    let version: u32 = q.value(1, "SHOW server_version_num").await.parse().expect("version");
+    if version < 140000 {
+        return;
+    }
+    assert_eq!(q.value(2, "SHOW idle_session_timeout").await, "1s");
+    let lost = q.wait(|e| matches!(e, DbEvent::Lost { .. }), 15).await;
+    let DbEvent::Lost { error: DbError::IdleSessionTimeout(msg) } = lost else { panic!("{lost:?}") };
+    assert!(msg.starts_with("FATAL"), "{msg}");
+    let mut plain = limited(&url, &format!("{tag}p"), None, None).await;
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    assert_eq!(plain.value(1, "SHOW idle_session_timeout").await, "0", "the server's");
+}

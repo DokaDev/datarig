@@ -639,3 +639,61 @@ async fn a_manual_transaction_stays_on_one_server_connection_behind_a_pooler() {
         }
     }
 }
+
+/// The lock wait limit behind the pooler goes in each transaction (`SET LOCAL`, nothing for the
+/// session): a read sees it, a wait for a transaction-level advisory lock another client holds is
+/// cut short (`LockTimeout`), and the pooled server connections keep the server's `lock_timeout`
+/// afterwards. The server's idle limit is not set behind a pooler (it would end server
+/// connections other clients share): the session outlives it.
+#[tokio::test(flavor = "multi_thread")]
+async fn behind_a_pooler_the_lock_wait_limit_is_per_transaction_and_no_idle_limit_is_set() {
+    let Some(url) = pooler_url("behind_a_pooler_the_lock_wait_limit_is_per_transaction_and_no_idle_limit_is_set")
+    else {
+        return;
+    };
+    let mut other = Conn::open(&url, SessionRole::Query, false).await;
+    let DbEvent::Page { rows, .. } = other.run(1, "SHOW lock_timeout").await else { panic!("lock_timeout") };
+    let server = rows[0][0].clone();
+    let tag = format!("poolw{}", std::process::id());
+    for cache in [false, true] {
+        let opts = ConnectOptions::new(PAGE, SessionRole::Query, &tag)
+            .statement_cache(cache)
+            .lock_wait(Some(Duration::from_secs(1)))
+            .server_idle(Some(Duration::from_secs(1)));
+        let mut q = Conn::open_with(&url, SessionRole::Query, opts).await;
+        let DbEvent::Page { rows, .. } = q.run(1, "SELECT pg_catalog.current_setting('lock_timeout')").await else {
+            panic!("cache {cache}")
+        };
+        assert_eq!(rows[0][0].as_deref(), Some("1s"), "cache {cache}: its transaction's");
+        // Another client holds a transaction-level advisory lock (gone with its transaction).
+        let key = 0x7a7a_0000_i64 + i64::from(std::process::id());
+        let hold = DbCommand::Execute {
+            id: 2,
+            statements: vec![format!("SELECT pg_catalog.pg_advisory_xact_lock({key})")],
+            paging: PagingMode::Hold,
+            tx: TxRule::Manual { steps: vec![TxStep::Open], idle_timeout: None },
+        };
+        let events = other.events_of(hold).await;
+        assert!(events.iter().any(|e| matches!(e, DbEvent::ManualBegun { id: 2, .. })), "{events:?}");
+        let start = Instant::now();
+        let waited = q.run(3, &format!("SELECT pg_catalog.pg_advisory_xact_lock({key})")).await;
+        assert!(matches!(waited, DbEvent::Failed { error: DbError::LockTimeout(_), .. }), "cache {cache}: {waited:?}");
+        assert!(start.elapsed() < Duration::from_secs(10), "{:?}", start.elapsed());
+        let events = other.events_of(DbCommand::EndTx { id: 4, commit: false }).await;
+        assert!(events.iter().any(|e| matches!(e, DbEvent::TxEnded { id: 4, .. })), "{events:?}");
+        // Past the idle limit it was given, the session still works.
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        assert!(matches!(q.run(5, "SELECT 1").await, DbEvent::Page { .. }), "cache {cache}");
+        // Another client goes round the pooled server connections (`q`'s own statements may run
+        // in a transaction of its own that sets the limit, with the cache off).
+        let mut id = 10;
+        for _ in 0..8 {
+            id += 1;
+            let DbEvent::Page { rows, .. } = other.run(id, "SHOW lock_timeout").await else { panic!() };
+            assert_eq!(rows[0][0], server, "cache {cache}: nothing left on the server connection");
+            id += 1;
+            let DbEvent::Page { rows, .. } = other.run(id, "SHOW idle_session_timeout").await else { panic!() };
+            assert_eq!(rows[0][0].as_deref(), Some("0"), "cache {cache}: never set behind the pooler");
+        }
+    }
+}

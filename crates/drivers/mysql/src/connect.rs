@@ -186,7 +186,13 @@ async fn run_session(
     let database = start_database(&target, &opts);
     let my_opts = target.opts(database.as_deref(), &opts.application_name, &route);
     let select_limit = (role == SessionRole::Query).then(|| opts.page_size as u64 + 1);
-    let settings = Settings { role, read_only: opts.read_only, select_limit };
+    let settings = Settings {
+        role,
+        read_only: opts.read_only,
+        select_limit,
+        lock_wait: opts.lock_wait.map(session::whole_secs),
+        wait_timeout: opts.server_idle.map(session::whole_secs),
+    };
     // A server that accepts TCP but never answers would otherwise keep this task alive forever
     // (the UI gives up earlier).
     let opened = match tokio::time::timeout(CONNECT_GUARD, session::open(&route, my_opts.clone(), settings)).await {

@@ -499,6 +499,8 @@ order are kept); you can also write it by hand. Passwords are never written to i
 version = 2
 language = "en"            # en | ko | auto
 theme = "catppuccin"       # see Themes below; terminal when left out
+idle_disconnect = "5m"     # close connections left unused this long (off by default)
+lock_wait = "5s"           # a statement waits this long for another session's lock (off by default)
 
 [explorer]
 size_heat = "3"            # colors for each schema's largest tables' estimates (3 | 5 | off)
@@ -612,6 +614,8 @@ that name, so existing files keep working) with these keys, each optional:
 | `paging` | `"no_hold"`, `"hold"` | `"no_hold"` |
 | `paging_idle_timeout` | seconds, or `"90s"`, `"5m"`, `"1h"`, `"off"` | `"30s"` |
 | `spill_limit` | bytes, or `"512MB"`, `"2GB"`, `"off"` | the top-level `spill_limit` |
+| `idle_disconnect` | a duration from `"1m"` to `"24h"`, or `"off"` ([Idle connections and lock waits](#idle-connections-and-lock-waits)) | the top-level `idle_disconnect` |
+| `lock_wait` | a duration from `"1s"` to `"24h"`, or `"off"` | the top-level `lock_wait` |
 | `color` | `red`, `orange`, `yellow`, `green`, `teal`, `cyan`, `blue`, `indigo`, `purple`, `pink`, `brown`, `gray`, or `#rrggbb` | none |
 | `badge` | up to 8 columns, no blanks around it | none |
 
@@ -789,6 +793,50 @@ A held transaction also keeps vacuum from cleaning up. Use `"hold"` for a local 
 when you walk a large result page by page (with no hold each page runs the statement again and
 skips the rows before it, which costs more the deeper you go). A row count (`#`) never keeps
 anything open of its own.
+
+### Idle connections and lock waits
+
+Two settings say how long a connection may wait, the same for every database (datarig turns
+them into each server's own settings). Both are off unless you set them: top level in the
+config, in the settings screen (Connections), with `:set idle_disconnect=5m` /
+`:set lock_wait=5s` (any duration in range, or `off`), and per environment (its form's Idle
+disconnect and Lock wait fields, empty for the config's value; `"off"` turns it off there).
+
+| Key | Values | What it does |
+|---|---|---|
+| `idle_disconnect` | `"1m"` to `"24h"`, or `"off"` | closes a connection nothing used for that long |
+| `lock_wait` | `"1s"` to `"24h"`, or `"off"` | a statement waits at most that long for a lock another session holds |
+
+- **`idle_disconnect`**: a tab's session closes once nothing ran in it (a run, a page, a commit)
+  for that long, and the tab says "This tab's session closed after 5m unused". Once the whole
+  connection sat unused that long (the explorer's reads count too), its metadata sessions and
+  its SSH tunnel close as well (a shared tunnel once no other connection uses it), and the
+  explorer shows "closed after 5m unused". The next run or explorer action connects again,
+  with the password it connected with where getting it would ask you (the prompt, the
+  keychain); a password command, variable or secrets file is read again. A tab with an open
+  transaction is warned a minute before (half the limit under two minutes), in the status bar and
+  its Messages: when the session closes, the server rolls the transaction back, and datarig says
+  so. Time spent asleep counts (the wall clock): a session left over a night closes at the first
+  key, answer or timer after the machine wakes. The server also gets its
+  own limit for each query session, a minute longer, for what datarig cannot close itself (it was
+  killed, the machine slept): PostgreSQL `idle_session_timeout` (version 14 or later, only on a
+  direct connection: behind a pooler it would end server connections other clients share), MySQL
+  `wait_timeout`. A session the server ended that way is said as closed for being idle, not as a
+  lost connection. A change of the setting applies to sessions opened after it (the app's own
+  timer follows it at once).
+- **`lock_wait`**: for the query sessions only (the explorer's lookups keep their own two
+  seconds). PostgreSQL: `lock_timeout`, set for the session on a direct connection; behind a
+  pooler (the server process is not the one the connection started with) it is `SET LOCAL` in each
+  transaction instead, so nothing stays on a pooled connection (a `SHOW lock_timeout` there shows
+  the server's value; `SELECT current_setting('lock_timeout')` shows the one in effect). A
+  `RESET ALL` or `DISCARD ALL` you run clears it until the session connects again. MySQL:
+  `lock_wait_timeout` (metadata locks) and `innodb_lock_wait_timeout` (row locks), in whole
+  seconds. A change applies to sessions opened after it. A statement that waited too long fails with "Waited longer than 5s for a lock another
+  session holds, so the server cancelled the statement", followed by the server's own error.
+  It does not change how commits work: with automatic commit only that statement failed; in a
+  manual transaction on PostgreSQL only that run is undone (its savepoint) and the transaction
+  keeps what earlier runs did; on MySQL the server undoes the statement only (unless
+  `innodb_rollback_on_timeout` is on, then the whole transaction, and datarig says so).
 
 ## Manual commit
 

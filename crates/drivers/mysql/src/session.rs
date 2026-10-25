@@ -194,6 +194,17 @@ pub(crate) struct Settings {
     pub(crate) read_only: bool,
     /// The query session's `sql_select_limit` (a page and one row more), `None` for none.
     pub(crate) select_limit: Option<u64>,
+    /// The query session's lock wait limit in seconds (`lock_wait_timeout` and
+    /// `innodb_lock_wait_timeout`), `None` for the server's.
+    pub(crate) lock_wait: Option<u64>,
+    /// The session's `wait_timeout` in seconds (the server's idle limit), `None` for the
+    /// server's.
+    pub(crate) wait_timeout: Option<u64>,
+}
+
+/// A duration in whole seconds as the servers' settings take it: rounded up, at least one.
+pub(crate) fn whole_secs(d: Duration) -> u64 {
+    d.as_secs().saturating_add(u64::from(d.subsec_nanos() > 0)).max(1)
 }
 
 /// How long a lookup of the metadata session waits for a metadata lock another session holds
@@ -209,7 +220,10 @@ pub(crate) const META_TIMEOUT_MS: u64 = 10_000;
 /// mode assigned to itself so the server reports it at once, and by role:
 ///
 /// * the query session: `sql_select_limit` (results stop after a page and one row more, so a
-///   statement ends, and with it every metadata lock it took);
+///   statement ends, and with it every metadata lock it took), and the profile's lock wait
+///   limit, if any, for both kinds of locks (a metadata lock's `lock_wait_timeout`, a row lock's
+///   `innodb_lock_wait_timeout`);
+/// * every session: the server's idle limit, if one is given (`wait_timeout`);
 /// * the metadata session: a lookup waits at most [`META_LOCK_WAIT`] seconds for a metadata
 ///   lock, a `SELECT` runs at most [`META_TIMEOUT_MS`], and the session is read-only (it only
 ///   reads the catalog);
@@ -235,6 +249,13 @@ pub(crate) fn init_sql(server: &Server, s: &Settings) -> String {
     ];
     if let Some(n) = s.select_limit {
         parts.push(format!("SESSION sql_select_limit = {n}"));
+    }
+    if let Some(n) = s.lock_wait.filter(|_| s.role == SessionRole::Query) {
+        parts.push(format!("SESSION lock_wait_timeout = {n}"));
+        parts.push(format!("SESSION innodb_lock_wait_timeout = {n}"));
+    }
+    if let Some(n) = s.wait_timeout {
+        parts.push(format!("SESSION wait_timeout = {n}"));
     }
     if s.role == SessionRole::Meta {
         parts.push(format!("SESSION lock_wait_timeout = {META_LOCK_WAIT}"));
@@ -490,13 +511,34 @@ pub(crate) fn connect_error(e: &mysql_async::Error) -> (DbError, bool) {
 /// ER_SECURE_TRANSPORT_REQUIRED: the server takes encrypted connections only.
 const SECURE_TRANSPORT_REQUIRED: u16 = 3159;
 
+/// ER_LOCK_WAIT_TIMEOUT: a statement waited for a lock past the session's limit (a row lock's
+/// `innodb_lock_wait_timeout`, a metadata lock's `lock_wait_timeout`). `NOWAIT` fails with an
+/// error of its own.
+const LOCK_WAIT_TIMEOUT: u16 = 1205;
+
+/// ER_CLIENT_INTERACTION_TIMEOUT: the server closed a session idle past its `wait_timeout`
+/// (MySQL 8.0.24 and later say so before they close it).
+const CLIENT_INTERACTION_TIMEOUT: u16 = 4031;
+
+/// The server's error `code` as the MySQL client shows it (`ERROR 1146 (42S02): Table 'shop.x'
+/// doesn't exist`): a lock wait past the limit and a close for being idle as what they are,
+/// anything else as the server's message.
+pub(crate) fn server_error(code: u16, state: &str, message: &str) -> DbError {
+    let text = format!("ERROR {code} ({state}): {message}");
+    match code {
+        LOCK_WAIT_TIMEOUT => DbError::LockTimeout(text),
+        CLIENT_INTERACTION_TIMEOUT => DbError::IdleSessionTimeout(text),
+        _ => DbError::Server(text),
+    }
+}
+
 /// A client error as a [`DbError`]: the server's own message as the MySQL client shows it
 /// (`ERROR 1146 (42S02): Table 'shop.x' doesn't exist`), a closed connection, else a fault
 /// (an io error's kind, the whole text as its detail).
 pub(crate) fn my_error(e: &mysql_async::Error) -> DbError {
     match e {
         mysql_async::Error::Server(s) if s.code == SECURE_TRANSPORT_REQUIRED => DbError::TlsRequired,
-        mysql_async::Error::Server(s) => DbError::Server(format!("ERROR {} ({}): {}", s.code, s.state, s.message)),
+        mysql_async::Error::Server(s) => server_error(s.code, &s.state, &s.message),
         mysql_async::Error::Driver(mysql_async::DriverError::ConnectionClosed) => DbError::Closed,
         // The TLS handshake's failure.
         mysql_async::Error::Io(mysql_async::IoError::Io(io)) if handshake_problem(io).is_some() => {

@@ -174,6 +174,15 @@ pub enum DbError {
     /// the server's own or the one [`TxRule::Manual`] set for the transaction): the server rolled
     /// the transaction back. The server's message. Comes as [`DbEvent::Lost`]'s reason.
     IdleInTransactionTimeout(String),
+    /// A statement waited for a lock another session holds longer than the session's lock wait
+    /// limit, and the server cancelled it (PostgreSQL's `lock_timeout`, SQLSTATE `55P03`;
+    /// MySQL's `innodb_lock_wait_timeout` / `lock_wait_timeout`, error 1205). The server's
+    /// message. The session stays (PostgreSQL: a block it ran in is aborted as by any failure).
+    LockTimeout(String),
+    /// The server ended the session because it sat idle longer than the server's idle limit
+    /// (PostgreSQL's `idle_session_timeout`, SQLSTATE `57P05`; MySQL's `wait_timeout`, error
+    /// 4031). The server's message. Comes as [`DbEvent::Lost`]'s reason.
+    IdleSessionTimeout(String),
     /// A statement in a transaction opened for manual commit names a savepoint whose name starts
     /// with `datarig_` (`SAVEPOINT`, `RELEASE`, `ROLLBACK TO`): those are the session's own, and
     /// using one would break how it undoes a failed run. It was not sent.
@@ -212,9 +221,11 @@ impl DbError {
     /// log only.
     pub fn raw(&self) -> Cow<'_, str> {
         match self {
-            DbError::Server(s) | DbError::NeedsNoTransaction(s) | DbError::IdleInTransactionTimeout(s) => {
-                Cow::Borrowed(s)
-            }
+            DbError::Server(s)
+            | DbError::NeedsNoTransaction(s)
+            | DbError::IdleInTransactionTimeout(s)
+            | DbError::LockTimeout(s)
+            | DbError::IdleSessionTimeout(s) => Cow::Borrowed(s),
             DbError::Settings(f) | DbError::Connection(f) => Cow::Borrowed(&f.detail),
             DbError::Transport(e) => Cow::Borrowed(e.raw()),
             DbError::CancelNotTaken(CancelFailure::NotSent(why)) => why.raw(),

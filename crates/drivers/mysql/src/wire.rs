@@ -216,7 +216,7 @@ impl AsyncWrite for WireStream {
 }
 
 /// The first packet of `bytes` when it is a complete `ERR` packet with an SQL state (the
-/// protocol after the handshake): `ERROR <code> (<state>): <message>`.
+/// protocol after the handshake), as [`crate::session::server_error`] reads it.
 fn err_packet(bytes: &[u8]) -> Option<DbError> {
     let len = usize::from(*bytes.first()?) | usize::from(*bytes.get(1)?) << 8 | usize::from(*bytes.get(2)?) << 16;
     let payload = bytes.get(4..4 + len)?;
@@ -225,7 +225,7 @@ fn err_packet(bytes: &[u8]) -> Option<DbError> {
     let code = u16::from_le_bytes([lo, hi]);
     let state = String::from_utf8_lossy(rest.get(..5)?);
     let message = String::from_utf8_lossy(rest.get(5..)?);
-    Some(DbError::Server(format!("ERROR {code} ({state}): {message}")))
+    Some(crate::session::server_error(code, &state, &message))
 }
 
 #[cfg(test)]
@@ -255,7 +255,7 @@ mod tests {
         packet.extend_from_slice(&payload);
         assert_eq!(
             err_packet(&packet),
-            Some(DbError::Server(
+            Some(DbError::IdleSessionTimeout(
                 "ERROR 4031 (HY000): The client was disconnected by the server because of inactivity.".into()
             ))
         );

@@ -74,9 +74,14 @@ impl Home {
         }
         let id = ProfileId::new();
         // The portal of a result with more rows is held, so its title counts down to the idle
-        // close (`paging = "hold"`).
-        let (mut config, mut password) =
-            (String::from("version = 2\nicons = \"off\"\n\n[policy.default]\npaging = \"hold\"\n"), String::new());
+        // close (`paging = "hold"`). The idle disconnect is armed (far past the measurement):
+        // its one deadline costs no wakeup before it, and the lock wait limit is set.
+        let (mut config, mut password) = (
+            String::from(
+                "version = 2\nicons = \"off\"\nidle_disconnect = \"10m\"\nlock_wait = \"5s\"\n\n[policy.default]\npaging = \"hold\"\n",
+            ),
+            String::new(),
+        );
         if let Some(url) = url {
             let d = datarig_core::profile::dsn::parse(url).map_err(|e| format!("{e:?}"))?;
             password = d.password.clone().unwrap_or_default();
