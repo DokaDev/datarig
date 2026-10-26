@@ -224,7 +224,7 @@ impl App {
         let context = t.context.clone();
         let session = self.open_session(cfg, SessionRole::Query, EventTarget::Tab(id), generation, context);
         let read_only = self.session_read_only(cfg);
-        let lock_wait = self.lock_wait_of(cfg.id);
+        let lock_wait = self.effective_lock_wait(cfg);
         if let Some(t) = self.tabs.get_mut(id) {
             t.exec.state = if session.is_some() { SessionState::Opening } else { SessionState::Idle };
             t.exec.session = session;

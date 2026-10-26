@@ -320,6 +320,12 @@ fn set_local_lock_timeout(wait: Duration) -> String {
     format!("SET LOCAL lock_timeout = {}", millis(wait))
 }
 
+/// Whether start-up statement `sql` sets the lock wait limit (`lock_timeout`).
+fn sets_lock_wait(sql: &str) -> bool {
+    datarig_core::sql::risk::session_set::session_set_pg(sql)
+        .is_ok_and(|set| set.settings.iter().any(|(name, _)| name == "lock_timeout"))
+}
+
 /// Set the session's lock wait limit (`lock_wait`) and the server's idle limit
 /// (`idle_session_timeout`, from version 14 on) for the session, in one round trip, only on a
 /// direct connection: the server process the session talks to is the one whose id came in the
@@ -541,14 +547,22 @@ async fn run_session(
                 *g = Some(cancel.clone());
             }
             // Behind a pooler the lock wait limit goes in each transaction, as the search path does,
-            // and the start-up statements after it.
-            let lock = lock_wait.filter(|_| !direct).map(set_local_lock_timeout);
+            // and the start-up statements after it. A start-up statement that sets the limit
+            // overrides it: the last one is the limit there, so a transaction that leaves the
+            // start-up statements out (`Settings::start_per_tx`) has the same limit as the others.
             let start = per_tx.map(|(each, _)| each).unwrap_or_default();
+            let own_lock = (!start.is_empty())
+                .then(|| {
+                    session_sql.iter().filter(|s| sets_lock_wait(&s.sql)).filter_map(|s| s.per_transaction.clone())
+                })
+                .and_then(Iterator::last);
+            let lock = own_lock.or_else(|| lock_wait.filter(|_| !direct).map(set_local_lock_timeout));
             let settings = crate::query::Settings {
                 page_size: opts.page_size,
                 read_only: opts.read_only,
                 path_per_tx: path.is_some(),
                 start_per_tx: start.len(),
+                lock_per_tx: lock.is_some(),
                 each_tx: path.into_iter().chain(lock).chain(start).collect(),
                 statement_cache: opts.statement_cache,
             };

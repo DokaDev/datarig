@@ -384,15 +384,20 @@ pub(crate) struct Settings {
     pub(crate) read_only: bool,
     /// What goes first in each transaction, because the session could not set it for itself
     /// (a pooler): the search path when the server dropped its startup option (`SET LOCAL
-    /// search_path …`), the lock wait limit (`SET LOCAL lock_timeout …`).
+    /// search_path …`), the lock wait limit (`SET LOCAL lock_timeout …`: the environment's, or
+    /// the last start-up statement's that sets it), the start-up statements.
     pub(crate) each_tx: Vec<String>,
     /// The search path is among [`Settings::each_tx`] (else only the lock wait limit is).
     pub(crate) path_per_tx: bool,
     /// How many of [`Settings::each_tx`], at its end, are the session's start-up statements
     /// behind a pooler (`SET LOCAL …` of a preset): left out of a transaction of the session's
     /// own for a statement [`lock_guarded`] leaves alone (`CALL`, `DO`, `VACUUM`, …), which one
-    /// opened for the search path wraps anyway.
+    /// opened for the search path wraps anyway (the lock wait limit before them stays: it is
+    /// the one they set, if they set one).
     pub(crate) start_per_tx: usize,
+    /// The lock wait limit is among [`Settings::each_tx`]: a statement run outside the
+    /// transactions that start with it runs with the server connection's own limit.
+    pub(crate) lock_per_tx: bool,
     /// Keep prepared statements between transactions (the profile's statement cache).
     pub(crate) statement_cache: bool,
 }
@@ -422,6 +427,8 @@ struct Env<'a> {
     path_per_tx: bool,
     /// The start-up statements at the end of `each_tx` ([`Settings::start_per_tx`]).
     start_per_tx: usize,
+    /// The lock wait limit is among `each_tx` ([`Settings::lock_per_tx`]).
+    lock_per_tx: bool,
     /// The name of the savepoint a count or the allowlist's question runs under inside a
     /// transaction ([`count_savepoint`]): never one of the user's own.
     savepoint: &'a str,
@@ -452,6 +459,14 @@ impl Env<'_> {
     fn wrapped(&self, sql: &str) -> bool {
         let per_tx = self.per_tx() && path_guarded(sql) && (self.path_per_tx || lock_guarded(sql));
         ((self.read_only || self.own_read_only) && guarded(sql)) || per_tx
+    }
+
+    /// Whether `sql`, run now outside the user's block (`block` false), misses the session's lock
+    /// wait limit: it goes in each transaction ([`Settings::lock_per_tx`]) and `sql` runs in no
+    /// transaction of the session's own ([`Env::wrapped`]). A statement with rows runs in one
+    /// all the same: said so it is not wrong, never that it had the limit when it did not.
+    fn without_limit(&self, sql: &str, block: bool) -> bool {
+        self.lock_per_tx && !block && !self.wrapped(sql)
     }
 
     /// How a transaction of the session's own starts: `BEGIN` (`BEGIN READ ONLY`), then the
@@ -530,13 +545,17 @@ struct Reply<'a> {
     /// Set when it answers with a failure ([`Env::failed`]).
     failed: &'a AtomicBool,
     id: u64,
+    /// The statement running did not get the session's lock wait limit (see
+    /// [`Env::without_limit`]): a lock wait cut short is the server's own limit's
+    /// ([`DbError::ServerLockTimeout`]).
+    without_limit: bool,
     /// An answer was given (or the UI closed the session): the drop guard stays quiet.
     answered: bool,
 }
 
 impl<'a> Reply<'a> {
     fn new(events: &'a UnboundedSender<DbEvent>, failed: &'a AtomicBool, id: u64) -> Self {
-        Self { events, failed, id, answered: false }
+        Self { events, failed, id, without_limit: false, answered: false }
     }
 
     /// The first page of the result; one failure may still follow ([`Paged::fail`]).
@@ -549,7 +568,7 @@ impl<'a> Reply<'a> {
     ) -> Paged<'a> {
         self.answered = true;
         let _ = self.events.send(DbEvent::Page { id: self.id, columns: Some(columns), rows, more, elapsed });
-        Paged { events: self.events, failed: self.failed, id: self.id }
+        Paged { events: self.events, failed: self.failed, id: self.id, without_limit: self.without_limit }
     }
 
     fn done(mut self, outcome: Outcome, elapsed: std::time::Duration) {
@@ -560,6 +579,7 @@ impl<'a> Reply<'a> {
     fn fail(mut self, error: DbError, cancelled: bool) {
         self.answered = true;
         self.failed.store(true, Ordering::SeqCst);
+        let error = whose_limit(error, self.without_limit);
         let _ = self.events.send(DbEvent::Failed { id: self.id, error, cancelled });
     }
 
@@ -610,11 +630,23 @@ struct Paged<'a> {
     events: &'a UnboundedSender<DbEvent>,
     failed: &'a AtomicBool,
     id: u64,
+    /// As [`Reply::without_limit`].
+    without_limit: bool,
+}
+
+/// `error` of a statement that ran without the session's lock wait limit (`without`): a lock
+/// wait cut short is then the server's own limit's.
+fn whose_limit(error: DbError, without: bool) -> DbError {
+    match error {
+        DbError::LockTimeout(s) if without => DbError::ServerLockTimeout(s),
+        e => e,
+    }
 }
 
 impl Paged<'_> {
     fn fail(self, error: DbError, cancelled: bool) {
         self.failed.store(true, Ordering::SeqCst);
+        let error = whose_limit(error, self.without_limit);
         let _ = self.events.send(DbEvent::Failed { id: self.id, error, cancelled });
     }
 
@@ -702,6 +734,7 @@ pub(crate) async fn query_loop(
         each_tx: &settings.each_tx,
         path_per_tx: settings.path_per_tx,
         start_per_tx: settings.start_per_tx,
+        lock_per_tx: settings.lock_per_tx,
         savepoint: count_savepoint(),
         #[cfg(test)]
         before_bind: None,
@@ -1380,6 +1413,7 @@ async fn run<'a>(
                     break 'steps;
                 }
             }
+            reply.without_limit = env.without_limit(sql, s.tx.block);
             let answer = statement(client, link, env, s, reply, sql, step).await?;
             if savepoint {
                 let undo = format!("ROLLBACK TO SAVEPOINT {SAVEPOINT}; RELEASE SAVEPOINT {SAVEPOINT}");

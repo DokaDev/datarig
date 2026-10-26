@@ -179,6 +179,11 @@ pub enum DbError {
     /// MySQL's `innodb_lock_wait_timeout` / `lock_wait_timeout`, error 1205). The server's
     /// message. The session stays (PostgreSQL: a block it ran in is aborted as by any failure).
     LockTimeout(String),
+    /// As [`DbError::LockTimeout`], but the statement ran without the session's lock wait limit:
+    /// the server connection's own cut it short (PostgreSQL behind a pooler: a statement outside
+    /// the transactions that start with the limit, such as `CALL`, `DO` or `VACUUM`). How long it
+    /// waited is not the app's to say.
+    ServerLockTimeout(String),
     /// The server ended the session because it sat idle longer than the server's idle limit
     /// (PostgreSQL's `idle_session_timeout`, SQLSTATE `57P05`; MySQL's `wait_timeout`, error
     /// 4031). The server's message. Comes as [`DbEvent::Lost`]'s reason.
@@ -229,6 +234,7 @@ impl DbError {
             | DbError::NeedsNoTransaction(s)
             | DbError::IdleInTransactionTimeout(s)
             | DbError::LockTimeout(s)
+            | DbError::ServerLockTimeout(s)
             | DbError::IdleSessionTimeout(s) => Cow::Borrowed(s),
             DbError::Settings(f) | DbError::Connection(f) => Cow::Borrowed(&f.detail),
             DbError::Transport(e) => Cow::Borrowed(e.raw()),

@@ -519,6 +519,7 @@ mod terminal {
             each_tx: &[],
             path_per_tx: false,
             start_per_tx: 0,
+            lock_per_tx: false,
             savepoint: "datarig_count_test",
             before_bind: None,
         };
@@ -552,6 +553,7 @@ mod terminal {
             each_tx: &lock,
             path_per_tx,
             start_per_tx: 0,
+            lock_per_tx: false,
             savepoint: "datarig_count_test",
             before_bind: None,
         };
@@ -564,6 +566,16 @@ mod terminal {
             assert!(!only.wrapped(sql), "{sql}");
         }
         assert!(env(true).wrapped("CALL p()"), "the search path still goes with everything it resolves");
+        // Without the session's lock wait limit: only what runs in no transaction of its own,
+        // outside the user's block.
+        let limited = |path: bool, read_only: bool| Env { lock_per_tx: true, read_only, ..env(path) };
+        assert!(limited(false, false).without_limit("CALL p()", false));
+        assert!(limited(false, false).without_limit("VACUUM t", false));
+        assert!(!limited(false, false).without_limit("CALL p()", true), "the user's block starts with it");
+        assert!(!limited(false, false).without_limit("UPDATE t SET x = 1", false));
+        assert!(!limited(true, false).without_limit("CALL p()", false), "wrapped for the search path");
+        assert!(!limited(false, true).without_limit("CALL p()", false), "wrapped read-only");
+        assert!(!env(false).without_limit("CALL p()", false), "no limit per transaction");
         // The session's start-up statements behind a pooler follow the lock wait limit: a
         // transaction the search path opens for what the limit leaves alone goes without them.
         let each = [
@@ -688,6 +700,7 @@ mod terminal {
                 each_tx: &self.each_tx,
                 path_per_tx: !self.each_tx.is_empty(),
                 start_per_tx: 0,
+                lock_per_tx: false,
                 savepoint: "datarig_count_test",
                 before_bind: hook,
             };
@@ -717,6 +730,7 @@ mod terminal {
                 each_tx: &self.each_tx,
                 path_per_tx: !self.each_tx.is_empty(),
                 start_per_tx: 0,
+                lock_per_tx: false,
                 savepoint: "datarig_count_test",
                 before_bind: None,
             };
@@ -744,6 +758,7 @@ mod terminal {
                 each_tx: &[],
                 path_per_tx: false,
                 start_per_tx: 0,
+                lock_per_tx: false,
                 savepoint: "datarig_count_test",
                 before_bind: hook,
             };

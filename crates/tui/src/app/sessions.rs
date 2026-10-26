@@ -89,6 +89,21 @@ impl App {
         session::plan(cfg, &rules, defaults, &self.session_presets)
     }
 
+    /// How long a statement of `cfg`'s query sessions waits for a lock: the environment's
+    /// `lock_wait` (else the config's), or what a statement of its plan sets in its place
+    /// (`None` then when the app cannot read it, or it is no limit). `None`: not known, or the
+    /// server's setting.
+    pub(super) fn effective_lock_wait(&self, cfg: &ConnectionConfig) -> Option<std::time::Duration> {
+        use datarig_core::profile::session::Wait;
+        match self.session_plan_of(cfg).ok().and_then(|p| p.lock_wait) {
+            Some(o) => match o.wait {
+                Wait::Limit(d) => Some(d),
+                Wait::NoLimit | Wait::Unknown => None,
+            },
+            None => self.lock_wait_of(cfg.id),
+        }
+    }
+
     /// Where an item of a plan comes from, in words.
     pub(super) fn session_source_text(&self, source: &Source) -> String {
         let m = match source {
@@ -127,16 +142,22 @@ impl App {
                 return self.i18n.msg(&Msg::SetTransactionOnly { setting: name.clone() }).to_string();
             }
             SetProblem::AppOwned { name, owner } => {
-                let owner = self.i18n.label(match owner {
-                    Owner::LockWait => Label::SetOwnerLockWait,
-                    Owner::IdleDisconnect => Label::SetOwnerIdleDisconnect,
-                    Owner::TxIdleRollback => Label::SetOwnerTxIdleRollback,
-                    Owner::ReadOnly => Label::SetOwnerReadOnly,
-                    Owner::Commit => Label::SetOwnerCommit,
-                    Owner::Schema => Label::SetOwnerSchema,
-                    Owner::App => Label::SetOwnerApp,
-                });
-                let m = Msg::SetAppOwned { setting: name.clone(), owner: owner.to_string() };
+                let setting = name.clone();
+                let m = match owner {
+                    Owner::IdleDisconnect => Msg::SetReasonIdleDisconnect { setting },
+                    Owner::Interactive => Msg::SetReasonInteractive { setting },
+                    Owner::TxIdleRollback => Msg::SetReasonTxIdleRollback { setting },
+                    Owner::ReadOnly => Msg::SetReasonReadOnly { setting },
+                    Owner::Commit => Msg::SetReasonCommit { setting },
+                    Owner::Completion => Msg::SetReasonCompletion { setting },
+                    Owner::Schema => Msg::SetReasonSchema { setting },
+                    Owner::Encoding => Msg::SetReasonEncoding { setting },
+                    Owner::TextFormat => Msg::SetReasonTextFormat { setting },
+                    Owner::Literals => Msg::SetReasonLiterals { setting },
+                    Owner::SessionName => Msg::SetReasonSessionName { setting },
+                    Owner::Paging => Msg::SetReasonPaging { setting },
+                    Owner::Reports => Msg::SetReasonReports { setting },
+                };
                 return self.i18n.msg(&m).to_string();
             }
         };
@@ -258,7 +279,7 @@ impl App {
     /// changes. An environment that is not defined says what the connect refuses with.
     fn open_session_view(&mut self, cfg: &ConnectionConfig, unsaved: bool, made: Option<datarig_core::policy::Policy>) {
         use super::overlay::{SessionLine, Tone};
-        use datarig_core::profile::session::{Intent, Planned};
+        use datarig_core::profile::session::{Intent, Planned, Wait};
         let label = |l: Label| self.i18n.label(l).to_string();
         let env = cfg.policy.as_deref().filter(|n| *n != datarig_core::policy::DEFAULT);
         let rules = self.policies.get(cfg.policy.as_deref()).or_else(|e| made.ok_or(e));
@@ -311,8 +332,25 @@ impl App {
                                     (Label::FormFieldTxIdleRollback, d, Label::SessionViewNever)
                                 }
                             };
-                            let value = d.map_or_else(|| label(off), |d| datarig_core::policy::format_timeout(Some(d)));
+                            let value = d.map_or_else(|| label(off), wait_text);
                             let source = self.session_source_text(&i.source);
+                            // A statement of the plan that sets the lock wait overrides it.
+                            let (value, source) = match (x, &plan.lock_wait) {
+                                (Intent::LockWait(_), Some(o)) => {
+                                    let effective = match o.wait {
+                                        Wait::Limit(d) => wait_text(d),
+                                        Wait::NoLimit => label(Label::SessionViewNoLimit),
+                                        Wait::Unknown => label(Label::SessionViewNotKnown),
+                                    };
+                                    let m = Msg::SessionViewOverrides {
+                                        source: self.session_source_text(&o.source),
+                                        overridden: source,
+                                        value,
+                                    };
+                                    (effective, self.i18n.msg(&m).to_string())
+                                }
+                                _ => (value, source),
+                            };
                             lines.push(SessionLine::Intent { what: label(what), value, source });
                         }
                         Planned::Sql(sql) => {
@@ -823,4 +861,10 @@ impl App {
         }
         self.report_test();
     }
+}
+
+/// A lock wait as the app says it: as the settings write it (`5s`, `2m`), or in milliseconds
+/// when it is not a whole number of seconds (`1500ms`).
+pub(super) fn wait_text(d: std::time::Duration) -> String {
+    if d.subsec_nanos() == 0 { datarig_core::policy::format_timeout(Some(d)) } else { format!("{}ms", d.as_millis()) }
 }

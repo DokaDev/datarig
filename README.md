@@ -606,7 +606,7 @@ that name, so existing files keep working) with these keys, each optional:
 | `paging_idle_timeout` | seconds, or `"90s"`, `"5m"`, `"1h"`, `"off"` | `"30s"` |
 | `spill_limit` | bytes, or `"512MB"`, `"2GB"`, `"off"` | the top-level `spill_limit` |
 | `idle_disconnect` | a duration from `"1m"` to `"24h"`, or `"off"` ([Idle connections and lock waits](#idle-connections-and-lock-waits)) | the top-level `idle_disconnect` |
-| `lock_wait` | a duration from `"1s"` to `"24h"`, or `"off"` | the top-level `lock_wait` |
+| `lock_wait` | a duration from `"1s"` to `"24h"`, or `"off"` (a session preset or a profile's `session_sql` may set its own for its sessions: [Session presets](#session-presets)) | the top-level `lock_wait` |
 | `session` | `{ postgres = "<preset>", mysql = "<preset>" }`, either left out ([Session presets](#session-presets)) | none |
 | `color` | `red`, `orange`, `yellow`, `green`, `teal`, `cyan`, `blue`, `indigo`, `purple`, `pink`, `brown`, `gray`, or `#rrggbb` | none |
 | `badge` | up to 8 columns, no blanks around it | none |
@@ -829,6 +829,18 @@ disconnect and Lock wait fields, empty for the config's value; `"off"` turns it 
   manual transaction on PostgreSQL only that run is undone (its savepoint) and the transaction
   keeps what earlier runs did; on MySQL the server undoes the statement only (unless
   `innodb_rollback_on_timeout` is on, then the whole transaction, and datarig says so).
+  A [session preset](#session-presets) or a profile's own `session_sql` may set the lock wait
+  itself (PostgreSQL `SET lock_timeout = '3s'`; MySQL `SET SESSION lock_wait_timeout = 3,
+  innodb_lock_wait_timeout = 3`): it runs after datarig's own limit, so it overrides the
+  environment's for those sessions (behind a pooler too, in every transaction), and the error
+  names its value ("Waited longer than 3s …"). PostgreSQL's `0` is no limit (`:session` says
+  so). When datarig cannot read the value (`DEFAULT`, an expression, a fraction or a unit it does
+  not read; on MySQL a value out of range, the two settings at different values, or one set while
+  the other is the server's), the error says the statement waited too long, without a time, as
+  it does for a statement that ran without datarig's limit (behind a pooler, a `CALL`, `DO`,
+  `VACUUM` or another statement that cannot run in a transaction, outside a transaction of the
+  session's own). `:session` shows the lock wait that
+  applies and what it overrides.
 
 ### Session presets
 
@@ -881,7 +893,10 @@ What a query session starts with, in order (a later setting of the same name win
 own limits (`lock_wait`, `idle_disconnect`, `tx_idle_rollback`: see above and [Manual
 commit](#manual-commit)), then the preset (the profile's `session`, else the one its
 environment maps for its database; `[policy.default]` may map one too), then the profile's
-`session_sql`. `none` is not a preset's name: `[sessions.none]` is an error of the file. The
+`session_sql`. So a preset's or the profile's own `SET` of the lock wait overrides the
+environment's `lock_wait` for its sessions (see [Idle connections and lock
+waits](#idle-connections-and-lock-waits)); the other limits stay datarig's (below). `none` is
+not a preset's name: `[sessions.none]` is an error of the file. The
 explorer's lookups (the metadata sessions) never get these settings.
 
 - **Only settings.** Each item is one statement that sets settings of the session and nothing
@@ -891,17 +906,35 @@ explorer's lookups (the metadata sessions) never get these settings.
   SESSION TRANSACTION …`. Not `SET LOCAL` (it would end with its transaction), a plain `SET
   TRANSACTION`, `SET GLOBAL`/`PERSIST`, `RESET`, `DISCARD`, a query or a call such as
   `set_config()`, nor several statements in one item. In a read-only environment only the
-  settings a read-only session may change at all (the same allowlist as statements you run).
-- **Not datarig's own settings**: what datarig keeps itself is refused, with what sets it:
-  `lock_timeout` / `lock_wait_timeout` / `innodb_lock_wait_timeout` (the environment's
-  `lock_wait`), `idle_session_timeout` / `wait_timeout` / `interactive_timeout`
-  (`idle_disconnect`), `idle_in_transaction_session_timeout` (`tx_idle_rollback`), the
-  read-only settings (`read_only`), MySQL's `autocommit` (`commit`), `search_path` (the tab's
-  schema), and what the app reads results in, writes literals with or tells sessions apart by
-  (`application_name`, `client_encoding`, `standard_conforming_strings`, `DateStyle`,
-  `IntervalStyle`, `bytea_output`, `extra_float_digits`, MySQL's character sets, `SET NAMES`,
-  `sql_select_limit`, `max_execution_time`, `resultset_metadata`, `completion_type`,
-  `session_track_*`), also written as a quoted name. Settings of one transaction only are
+  settings a read-only session may change at all (the same allowlist as statements you run; the
+  lock wait and statement time limits are on it).
+- **Not datarig's own settings**: what datarig keeps itself is refused, with why and where to
+  set it instead:
+  - `idle_session_timeout`, MySQL's `wait_timeout`: datarig closes idle sessions itself and
+    warns first; the server's limit is only its safety net (the environment's
+    `idle_disconnect`). MySQL's `interactive_timeout` has no effect on an open session.
+  - `idle_in_transaction_session_timeout`: datarig warns about an idle manual-commit
+    transaction, rolls it back itself and keeps the session; it sets this per transaction, 30 s
+    later, only as a backstop for when it cannot (`tx_idle_rollback`).
+  - the read-only settings (`default_transaction_read_only`, `transaction_read_only`, MySQL's
+    `tx_read_only`, `… TRANSACTION READ ONLY/WRITE`): read-only is the environment's guarantee
+    (`read_only`).
+  - MySQL's `autocommit` (datarig keeps it on and opens manual-commit transactions itself) and
+    `completion_type` (a `COMMIT` would open the next transaction or end the session): the
+    environment's `commit`.
+  - `search_path`: the tab's schema sets it (`:use`).
+  - what datarig reads results in, writes literals with or tells sessions apart by:
+    `client_encoding`, MySQL's character sets, `collation_connection` and `SET NAMES` (text is
+    sent and read as UTF-8), `DateStyle`, `IntervalStyle`, `bytea_output`,
+    `extra_float_digits` (values are read in the server's default text format),
+    `standard_conforming_strings` (literals are written assuming it is on),
+    `application_name` (datarig names its sessions), MySQL's `sql_select_limit` (results are
+    paged with it), `resultset_metadata` and `session_track_*` (datarig reads what the server
+    reports).
+
+  Also when written as a quoted name. The lock wait (`lock_timeout`, `lock_wait_timeout`,
+  `innodb_lock_wait_timeout`) and MySQL's `max_execution_time` are allowed. Settings of one
+  transaction only are
   refused too, with where the session's default is: PostgreSQL's `transaction_isolation` and
   `transaction_deferrable` (use `default_transaction_isolation`, … or `SET SESSION
   CHARACTERISTICS AS TRANSACTION …`), MySQL's `SET @@transaction_isolation` without a scope
@@ -932,9 +965,16 @@ explorer's lookups (the metadata sessions) never get these settings.
   the tab says so. As with `lock_wait`, statements that cannot run in a transaction (`VACUUM`,
   `CREATE INDEX CONCURRENTLY`, …), `CALL` and `DO`, and your own session statements (`SET`,
   `RESET`) run without them; in a tab whose schema is also set per transaction those still run
-  in a transaction that sets the schema (as before), but without the preset's settings. A statement that has no such form (`SET ROLE`, `SET SESSION
-  AUTHORIZATION`, `SET SESSION CHARACTERISTICS …`) is not sent there: the profile still connects
-  and the tab names what was not sent. MySQL connections are never treated as pooled (a proxy
+  in a transaction that sets the schema (as before), but without the preset's settings other
+  than its lock wait. A statement that has no such form (`SET ROLE`, `SET SESSION
+  AUTHORIZATION`, `SET SESSION CHARACTERISTICS …`), or that sets a default of the session's
+  transactions (`default_transaction_isolation`, `default_transaction_deferrable`: a transaction
+  takes its defaults when it begins, so a `SET LOCAL` after `BEGIN` would change nothing), or
+  whose value depends on what the pooled server connection did before (`temp_buffers`, refused
+  once that connection used a temporary table; PostgreSQL 17's `transaction_timeout`, whose
+  timer starts at `BEGIN`, so a `SET LOCAL` cannot make the connection's own limit longer), is not
+  sent there: the profile still connects and the tab names what was not sent. Behind a pooler, set
+  the isolation in your own block instead (`BEGIN ISOLATION LEVEL …`). MySQL connections are never treated as pooled (a proxy
   that multiplexes them, such as ProxySQL, is not detected).
 - On MySQL the classifier reads the session in the sql mode a preset set (`SET SESSION sql_mode
   = …`), and a read-only session is checked after its statements ran. A value that calls a
@@ -949,7 +989,10 @@ the form's values, saved or not (the title says when they are unsaved). The firs
 profile, its database and its environment (or the default rules), and says when that environment
 is read-only. Then, in the order they are applied: the app's limits (lock wait, idle disconnect,
 idle rollback) with their values and where each comes from (the environment, the default rules
-or the app setting), an environment's preset the profile turned off (`session = "none"`), and
+or the app setting; a lock wait a statement sets shows that value, the statement's source, and
+the value it overrides: "3s  its session preset “fast” — overrides environment prod: 5s", or
+"not known" when datarig cannot read it), an environment's preset the profile turned off
+(`session = "none"`), and
 each statement under where it comes from (the preset and who picked it, or the profile's own
 session SQL). Under a PostgreSQL statement a dim line says how it would go behind a pooler in
 transaction mode: per transaction as `SET LOCAL …`, or not sent and why. That line only applies

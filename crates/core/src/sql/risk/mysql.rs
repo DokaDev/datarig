@@ -151,9 +151,10 @@ pub const VOLATILE: &[&str] = &[
 
 /// Session variables a read-only policy lets a session change: none of them can turn read-only
 /// off, write anything, change how the server reads the text the app sends, or let a statement
-/// take more of the server's memory, time or locks than its defaults (buffer and result sizes,
-/// recursion and planning depth, join size, lock waits and idle timeouts are not here). Lower
-/// case.
+/// take more of the server's memory than its defaults (buffer and result sizes, recursion and
+/// planning depth, join size and idle timeouts are not here). How long a statement waits for a
+/// lock or may run is: a wait limit writes nothing and only bounds this session's own waits.
+/// Lower case.
 pub const SAFE_SETTINGS: &[&str] = &[
     "big_tables",
     "character_set_connection",
@@ -165,8 +166,10 @@ pub const SAFE_SETTINGS: &[&str] = &[
     "explain_format",
     "explain_json_format_version",
     "information_schema_stats_expiry",
+    "innodb_lock_wait_timeout",
     "lc_messages",
     "lc_time_names",
+    "lock_wait_timeout",
     "max_error_count",
     "max_execution_time",
     "net_read_timeout",
@@ -1757,20 +1760,20 @@ fn assignment(item: &[W]) -> Risk {
     Risk::session(SAFE_SETTINGS.contains(&name.as_str()))
 }
 
-/// MySQL's settings the app keeps itself (see [`super::session_set`]).
+/// MySQL's settings the app keeps itself, and why (see [`super::session_set`]).
 fn owned(name: &str) -> Option<Owner> {
     Some(match name {
-        "lock_wait_timeout" | "innodb_lock_wait_timeout" => Owner::LockWait,
-        "wait_timeout" | "interactive_timeout" => Owner::IdleDisconnect,
+        "wait_timeout" => Owner::IdleDisconnect,
+        "interactive_timeout" => Owner::Interactive,
         "transaction_read_only" | "tx_read_only" => Owner::ReadOnly,
         "autocommit" => Owner::Commit,
-        // Paging, the statement limit of the explorer's reads, what results are read in.
-        "sql_select_limit"
-        | "max_execution_time"
-        | "collation_connection"
-        | "resultset_metadata"
-        | "completion_type" => Owner::App,
-        n if n.starts_with("session_track_") || n.starts_with("character_set_") => Owner::App,
+        "completion_type" => Owner::Completion,
+        "sql_select_limit" => Owner::Paging,
+        // It sets the connection's character set too.
+        "collation_connection" => Owner::Encoding,
+        "resultset_metadata" => Owner::Reports,
+        n if n.starts_with("session_track_") => Owner::Reports,
+        n if n.starts_with("character_set_") => Owner::Encoding,
         _ => return None,
     })
 }
@@ -1798,7 +1801,9 @@ pub fn session_set(sql: &str) -> Result<SessionSet, SetProblem> {
         return Err(SetProblem::ModeDependent);
     }
     super::session_set::judge(&risk)?;
-    Ok(SessionSet { risk, per_transaction: None })
+    let settings = shapes.into_iter().next().and_then(Result::ok).unwrap_or_default();
+    let settings = settings.into_iter().filter_map(|(name, value)| Some((name?, value))).collect();
+    Ok(SessionSet { risk, per_transaction: None, settings })
 }
 
 /// [`session_set`]'s check of the statement's form in sql mode `mode`: what it sets, in order
@@ -1837,7 +1842,7 @@ fn set_shape(sql: &str, mode: MySqlMode) -> Result<Vec<(Option<String>, String)>
             }
         }
         if let Some(w) = item.first().filter(|w| w.is("NAMES") || w.is("CHARACTER") || w.is("CHARSET")) {
-            return Err(SetProblem::AppOwned { name: w.up.to_ascii_lowercase(), owner: Owner::App });
+            return Err(SetProblem::AppOwned { name: w.up.to_ascii_lowercase(), owner: Owner::Encoding });
         }
         // A quoted name (`` `lock_wait_timeout` ``) is the setting of that name.
         let Some((name, global, value)) = target(item).or_else(|| quoted_target(item)) else {

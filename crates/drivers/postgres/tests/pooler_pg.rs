@@ -843,3 +843,247 @@ async fn behind_a_pooler_start_up_statements_are_per_transaction() {
         assert_eq!(rows[0][0], work_mem);
     }
 }
+
+/// A start-up statement that sets the lock wait limit behind the pooler overrides the
+/// environment's in every transaction: after the environment's `SET LOCAL lock_timeout`, in the
+/// session's own transactions, and in the one opened only for the search path around a `DO`
+/// (which leaves the other start-up statements out). Nothing stays on the pooled server
+/// connections.
+#[tokio::test(flavor = "multi_thread")]
+async fn behind_a_pooler_a_start_up_lock_wait_overrides_the_environments_in_every_transaction() {
+    use datarig_core::driver::SessionStatement;
+    let Some(url) = pooler_url("behind_a_pooler_a_start_up_lock_wait_overrides_the_environments_in_every_transaction")
+    else {
+        return;
+    };
+    let _pool = POOL.read().await;
+    let mut other = Conn::open(&url, SessionRole::Query, false).await;
+    let DbEvent::Page { rows, .. } = other.run(1, "SHOW lock_timeout").await else { panic!("lock_timeout") };
+    let server = rows[0][0].clone();
+    assert_ne!(server.as_deref(), Some("3s"));
+    let sql = vec![
+        SessionStatement {
+            sql: "SET lock_timeout = '3s'".into(),
+            per_transaction: Some("SET LOCAL lock_timeout = '3s'".into()),
+        },
+        SessionStatement {
+            sql: "SET statement_timeout = '45s'".into(),
+            per_transaction: Some("SET LOCAL statement_timeout = '45s'".into()),
+        },
+    ];
+    let tag = format!("poolo{}", std::process::id());
+    for cache in [false, true] {
+        let context = SessionContext { database: None, schema: Some("shop".into()) };
+        let opts = ConnectOptions::new(PAGE, SessionRole::Query, &tag)
+            .statement_cache(cache)
+            .context(context)
+            .lock_wait(Some(Duration::from_secs(5)))
+            .session_sql(sql.clone());
+        let mut q = Conn::open_with(&url, SessionRole::Query, opts).await;
+        let DbEvent::Page { rows, .. } = q.run(1, "SHOW lock_timeout").await else { panic!("cache {cache}") };
+        assert_eq!(rows[0][0].as_deref(), Some("3s"), "cache {cache}: its transaction's");
+        let read = "SELECT pg_catalog.current_setting('lock_timeout') FROM users LIMIT 1";
+        let DbEvent::Page { rows, .. } = q.run(2, read).await else { panic!("cache {cache}") };
+        assert_eq!(rows[0][0].as_deref(), Some("3s"), "cache {cache}: a query in the schema sees it");
+        // A `DO` runs in a transaction opened for the search path: the override is there too.
+        let show = "DO $$ BEGIN RAISE EXCEPTION 'lock=% statement=%', pg_catalog.current_setting('lock_timeout'), \
+                    pg_catalog.current_setting('statement_timeout'); END $$";
+        let ev = q.run(3, show).await;
+        let DbEvent::Failed { error, .. } = &ev else { panic!("cache {cache}: {ev:?}") };
+        let said = format!("{error:?}");
+        assert!(said.contains("lock=3s"), "cache {cache}: {said}");
+        assert!(!said.contains("statement=45s"), "cache {cache}: the other start-up statements stay out: {said}");
+        let mut id = 10;
+        for _ in 0..8 {
+            id += 1;
+            let DbEvent::Page { rows, .. } = other.run(id, "SHOW lock_timeout").await else { panic!() };
+            assert_eq!(rows[0][0], server, "cache {cache}: nothing left on the server connection");
+        }
+    }
+}
+
+/// A transaction default a start-up statement sets (`default_transaction_isolation`,
+/// `default_transaction_deferrable`) behind the pooler: a `SET LOCAL` of it after `BEGIN` would
+/// change nothing of that transaction, so it either holds in each transaction (the session's own
+/// and the user's block) or is not sent and said so (`SessionPerTransaction`), never sent to no
+/// effect. Nothing stays on the pooled server connections.
+#[tokio::test(flavor = "multi_thread")]
+async fn behind_a_pooler_a_transaction_default_is_never_sent_to_no_effect() {
+    use datarig_core::profile::session::{Defaults, plan};
+    let Some(url) = pooler_url("behind_a_pooler_a_transaction_default_is_never_sent_to_no_effect") else { return };
+    let _pool = POOL.read().await;
+    let mut other = Conn::open(&url, SessionRole::Query, false).await;
+    let DbEvent::Page { rows, .. } = other.run(1, "SHOW default_transaction_isolation").await else { panic!() };
+    let server = rows[0][0].clone();
+    assert_ne!(server.as_deref(), Some("serializable"));
+    let profile = ConnectionConfig {
+        session_sql: vec![
+            "SET default_transaction_isolation = 'serializable'".into(),
+            "SET default_transaction_deferrable = on".into(),
+        ],
+        ..ConnectionConfig::default()
+    };
+    let sql = plan(&profile, &Default::default(), Defaults::default(), &[]).unwrap().statements();
+    let wants = [("transaction_isolation", "serializable"), ("transaction_deferrable", "on")];
+    let tag = format!("pooli{}", std::process::id());
+    for cache in [false, true] {
+        let opts = ConnectOptions::new(PAGE, SessionRole::Query, &tag).statement_cache(cache).session_sql(sql.clone());
+        let cfg = ConnectionConfig { name: "pooler".into(), dsn: Some(url.clone()), ..ConnectionConfig::default() };
+        let (tx, mut rx) = unbounded_channel();
+        let session = PgDriver.connect(&cfg, SessionRole::Query, opts, tx);
+        let mut refused = Vec::new();
+        loop {
+            match tokio::time::timeout(Duration::from_secs(10), rx.recv()).await.expect("an answer") {
+                Some(DbEvent::Connected) => break,
+                Some(DbEvent::ConnectFailed { error, .. }) => panic!("{error:?}"),
+                Some(DbEvent::SessionPerTransaction { refused: r }) => refused.extend(r),
+                Some(_) => {}
+                None => panic!("closed"),
+            }
+        }
+        let mut q = Conn { session, rx, cache_off: 0 };
+        let mut id = 0;
+        for block in [false, true] {
+            if block {
+                id += 1;
+                assert!(!matches!(q.run(id, "BEGIN").await, DbEvent::Failed { .. }));
+            }
+            for (i, (setting, want)) in wants.iter().enumerate() {
+                id += 1;
+                let DbEvent::Page { rows, .. } = q.run(id, &format!("SHOW {setting}")).await else { panic!() };
+                assert!(
+                    refused.contains(&i) || rows[0][0].as_deref() == Some(*want),
+                    "cache {cache}, block {block}: {} sent but {setting} is {:?} (said not sent: {refused:?})",
+                    sql[i].sql,
+                    rows[0][0]
+                );
+            }
+            if block {
+                id += 1;
+                assert!(!matches!(q.run(id, "ROLLBACK").await, DbEvent::Failed { .. }));
+            }
+        }
+        for _ in 0..8 {
+            id += 1;
+            let DbEvent::Page { rows, .. } = other.run(100 + id, "SHOW default_transaction_isolation").await else {
+                panic!()
+            };
+            assert_eq!(rows[0][0], server, "cache {cache}: nothing left on the server connection");
+        }
+    }
+}
+
+/// Behind the pooler with the lock wait limit per transaction and no search path, a `DO` runs
+/// in no transaction of the session's own, so without the session's limit: a lock wait cut
+/// short there is the server connection's own limit's (`ServerLockTimeout`, which names no time
+/// of the app's), while a statement in the session's transactions keeps `LockTimeout`. The `DO`
+/// sets its own limit for its implicit transaction only: nothing stays on the pooled server
+/// connections.
+#[tokio::test(flavor = "multi_thread")]
+async fn behind_a_pooler_a_lock_wait_outside_the_sessions_transactions_is_the_servers() {
+    let Some(url) = pooler_url("behind_a_pooler_a_lock_wait_outside_the_sessions_transactions_is_the_servers") else {
+        return;
+    };
+    let _pool = POOL.read().await;
+    let mut other = Conn::open(&url, SessionRole::Query, false).await;
+    let DbEvent::Page { rows, .. } = other.run(1, "SHOW lock_timeout").await else { panic!("lock_timeout") };
+    let server = rows[0][0].clone();
+    let key = 0x7a7b_0000_i64 + i64::from(std::process::id());
+    let tag = format!("poold{}", std::process::id());
+    for cache in [false, true] {
+        let opts = ConnectOptions::new(PAGE, SessionRole::Query, &tag)
+            .statement_cache(cache)
+            .lock_wait(Some(Duration::from_secs(1)));
+        let mut q = Conn::open_with(&url, SessionRole::Query, opts).await;
+        let hold = DbCommand::Execute {
+            id: 2,
+            statements: vec![format!("SELECT pg_catalog.pg_advisory_xact_lock({key})")],
+            paging: PagingMode::Hold,
+            tx: TxRule::Manual { steps: vec![TxStep::Open], idle_timeout: None },
+        };
+        let events = other.events_of(hold).await;
+        assert!(events.iter().any(|e| matches!(e, DbEvent::ManualBegun { id: 2, .. })), "{events:?}");
+        let wait = format!(
+            "DO $$ BEGIN PERFORM pg_catalog.set_config('lock_timeout', '300ms', true); \
+             PERFORM pg_catalog.pg_advisory_xact_lock({key}); END $$"
+        );
+        let ev = q.run(3, &wait).await;
+        assert!(matches!(ev, DbEvent::Failed { error: DbError::ServerLockTimeout(_), .. }), "cache {cache}: {ev:?}");
+        // In a transaction of the session's own: the session's limit, as before.
+        let ev = q.run(4, &format!("SELECT pg_catalog.pg_advisory_xact_lock({key})")).await;
+        assert!(matches!(ev, DbEvent::Failed { error: DbError::LockTimeout(_), .. }), "cache {cache}: {ev:?}");
+        let events = other.events_of(DbCommand::EndTx { id: 5, commit: false }).await;
+        assert!(events.iter().any(|e| matches!(e, DbEvent::TxEnded { id: 5, .. })), "{events:?}");
+        let mut id = 10;
+        for _ in 0..8 {
+            id += 1;
+            let DbEvent::Page { rows, .. } = other.run(id, "SHOW lock_timeout").await else { panic!() };
+            assert_eq!(rows[0][0], server, "cache {cache}: nothing left on the server connection");
+        }
+    }
+}
+
+/// Settings whose value behind the pooler depends on what the pooled server connection did
+/// before are not sent there, and said so: `temp_buffers` (refused once that connection used a
+/// temporary table, which would fail every transaction of the tab) and `transaction_timeout`
+/// (its timer starts at `BEGIN`). After another client used a temporary table (dropped with its
+/// transaction) on each pooled server connection, the session's statements still run; no
+/// setting stays on the pooled server connections.
+#[tokio::test(flavor = "multi_thread")]
+async fn behind_a_pooler_settings_the_server_connection_decides_are_not_sent() {
+    use datarig_core::profile::session::{Defaults, plan};
+    let Some(url) = pooler_url("behind_a_pooler_settings_the_server_connection_decides_are_not_sent") else { return };
+    let _pool = alone(&url).await;
+    let mut other = Conn::open(&url, SessionRole::Query, false).await;
+    let DbEvent::Page { rows, .. } = other.run(1, "SHOW temp_buffers").await else { panic!() };
+    let server = rows[0][0].clone();
+    assert_ne!(server.as_deref(), Some("17MB"));
+    // Another client's temporary table on each of the three server connections, at the
+    // server's `temp_buffers` (consecutive transactions go round them).
+    let mut id = 1;
+    let make = [
+        "BEGIN",
+        "CREATE TEMP TABLE zz_pool_tmp (x int) ON COMMIT DROP",
+        "INSERT INTO zz_pool_tmp VALUES (1)",
+        "COMMIT",
+    ];
+    for _ in 0..3 {
+        for sql in make {
+            id += 1;
+            let ev = other.run(id, sql).await;
+            assert!(!matches!(ev, DbEvent::Failed { .. }), "{sql}: {ev:?}");
+        }
+    }
+    let profile = ConnectionConfig {
+        session_sql: vec!["SET temp_buffers = '17MB'".into(), "SET transaction_timeout = '1h'".into()],
+        ..ConnectionConfig::default()
+    };
+    let sql = plan(&profile, &Default::default(), Defaults::default(), &[]).unwrap().statements();
+    let tag = format!("poolb{}", std::process::id());
+    let opts = ConnectOptions::new(PAGE, SessionRole::Query, &tag).session_sql(sql);
+    let cfg = ConnectionConfig { name: "pooler".into(), dsn: Some(url.clone()), ..ConnectionConfig::default() };
+    let (tx, mut rx) = unbounded_channel();
+    let session = PgDriver.connect(&cfg, SessionRole::Query, opts, tx);
+    let mut refused = Vec::new();
+    loop {
+        match tokio::time::timeout(Duration::from_secs(10), rx.recv()).await.expect("an answer") {
+            Some(DbEvent::Connected) => break,
+            Some(DbEvent::ConnectFailed { error, .. }) => panic!("{error:?}"),
+            Some(DbEvent::SessionPerTransaction { refused: r }) => refused.extend(r),
+            Some(_) => {}
+            None => panic!("closed"),
+        }
+    }
+    let mut q = Conn { session, rx, cache_off: 0 };
+    for _ in 0..6 {
+        id += 1;
+        let ev = q.run(id, "SELECT 1").await;
+        assert!(matches!(ev, DbEvent::Page { .. }), "after a temporary table (said not sent: {refused:?}): {ev:?}");
+    }
+    assert_eq!(refused, [0, 1], "both said not sent");
+    for _ in 0..8 {
+        id += 1;
+        let DbEvent::Page { rows, .. } = other.run(100 + id, "SHOW temp_buffers").await else { panic!() };
+        assert_eq!(rows[0][0], server, "nothing left on the server connection");
+    }
+}

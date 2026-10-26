@@ -64,7 +64,9 @@ fn connected(cfg: &Config) -> Harness {
 
 /// Run `sql` in the active tab and return the run's id.
 fn run(h: &mut Harness, sql: &str) -> u64 {
-    h.app.tab_mut().editor = Editor::new(sql);
+    let mut editor = Editor::new(sql);
+    editor.set_language(h.app.tab_language(h.app.tab().id));
+    h.app.tab_mut().editor = editor;
     h.keys("ggvG$");
     h.sent();
     h.ctrl('e');
@@ -143,8 +145,8 @@ fn a_profile_whose_plan_has_an_error_does_not_connect() {
             "local-pg does not connect: statement 2 of its own session SQL is not allowed (only SET of the session's own settings): DELETE FROM t",
         ),
         (
-            Box::new(|p| p.session_sql = vec!["SET lock_timeout = '1s'".into()]),
-            "local-pg does not connect: statement 1 of its own session SQL is not allowed (lock_timeout is set by the environment's lock_wait): SET lock_timeout = '1s'",
+            Box::new(|p| p.session_sql = vec!["SET idle_session_timeout = '1s'".into()]),
+            "local-pg does not connect: statement 1 of its own session SQL is not allowed (idle_session_timeout: datarig closes idle sessions itself and warns first; the server's limit is only its safety net — set the environment's idle_disconnect): SET idle_session_timeout = '1s'",
         ),
     ];
     for (change, want) in cases {
@@ -260,7 +262,7 @@ fn behind_a_pooler_the_tab_says_how_its_settings_go() {
     let notes: Vec<String> = h.app.tab().exec.run.notes.iter().map(|n| h.app.i18n.msg(&n.msg).to_string()).collect();
     assert!(
         notes.iter().any(|n| n
-            == "local-pg is behind a connection pooler: 1 session setting was not sent, as it has no form for one transaction: SET ROLE reporting"),
+            == "local-pg is behind a connection pooler: 1 session setting was not sent, as it cannot be set for one transaction there (:session says why): SET ROLE reporting"),
         "{notes:?}"
     );
     let mut h = connected(&config(|_| {}));
@@ -690,15 +692,15 @@ fn the_profile_forms_session_sql_is_checked_and_saved_one_per_item() {
     let dir = scratch("profile-sql");
     let mut h = section_harness(&dir);
     profile_field(&mut h, "local-pg", Field::SessionSql);
-    h.type_text("SET work_mem = '1MB'; SET lock_timeout = '1s'");
+    h.type_text("SET work_mem = '1MB'; SET search_path = x");
     let screen = h.screen(160, 45);
-    assert!(screen.contains("statement 2: lock_timeout is set by"), "{screen}");
+    assert!(screen.contains("statement 2: search_path: the tab"), "{screen}");
     let detail = h.app.overlays.form().and_then(|f| f.session_problem());
     assert!(matches!(detail, Some((2, datarig_core::sql::risk::SetProblem::AppOwned { .. }))), "{detail:?}");
     h.ctrl('s');
     assert!(h.form_open(), "not saved");
     assert_eq!(h.form().focus, Field::SessionSql);
-    for _ in 0.."; SET lock_timeout = '1s'".len() {
+    for _ in 0.."; SET search_path = x".len() {
         h.key(KeyCode::Backspace);
     }
     h.type_text("; SET jit = off");
@@ -1094,4 +1096,149 @@ fn the_form_shows_the_rules_of_the_environment_it_makes() {
     assert!(screen.contains("local-pg · PostgreSQL · environment prod"), "{screen}");
     assert!(screen.contains("Read-only environment"), "{screen}");
     assert!(screen.contains("Idle rollback") && !screen.contains("not found"), "{screen}");
+}
+
+// ── a lock wait of a preset's or a profile's own ───────────────────────────
+
+/// [`config`] with `prod`'s lock wait 5s, the profile on `driver` with `sql` of its own and the
+/// preset `fast` (`fast` statements, for that database) picked by the profile.
+fn lock_config(driver: &str, fast: &[&str], sql: &[&str]) -> Config {
+    let mut cfg = config(|p| {
+        p.driver = driver.into();
+        p.session = SessionRef::Named("fast".into());
+        p.session_sql = sql.iter().map(|s| s.to_string()).collect();
+    });
+    let dbms = Dbms::of_driver(driver).unwrap();
+    cfg.sessions.push(SessionPreset::new("fast", dbms, fast.iter().map(|s| s.to_string()).collect()));
+    let mut rules = cfg.policies.get(Some("prod")).unwrap();
+    rules.lock_wait = Some(Some(Duration::from_secs(5)));
+    cfg.policies.insert("prod", rules);
+    cfg
+}
+
+/// Connected to `cfg`'s profile, on MySQL's driver when it is a MySQL profile.
+fn connected_on(cfg: &Config) -> Harness {
+    let driver = FakeDriver::default();
+    driver.mysql.store(cfg.connections[0].driver == "mysql", std::sync::atomic::Ordering::SeqCst);
+    let mut h = Harness::with_driver(cfg, Lang::En, driver);
+    h.db(DbEvent::Connected);
+    h.db(DbEvent::Schemas(Ok(vec!["public".into()])));
+    h.db(DbEvent::Catalog(Ok(catalog())));
+    h.sent();
+    h
+}
+
+/// What a statement cut short by the lock wait limit says in the tab.
+fn lock_timeout_text(cfg: &Config) -> String {
+    let mut h = connected_on(cfg);
+    let id = run(&mut h, "UPDATE shop.users SET name = 'x' WHERE id = 1");
+    assert_eq!(h.roles(), [SessionRole::Meta, SessionRole::Query], "the query session opened");
+    let server = "ERROR: canceling statement due to lock timeout";
+    h.tab_db(0, DbEvent::Failed { id, error: DbError::LockTimeout(server.into()), cancelled: false });
+    h.screen(200, 45)
+}
+
+/// A preset or a profile's own statements may set the lock wait for its sessions: it overrides
+/// the environment's, and a wait cut short names the value the server used (the last one set),
+/// never the environment's. A value the app cannot read (`DEFAULT`, the server's own), or on
+/// MySQL the two limits set apart, names none.
+#[test]
+fn a_lock_wait_set_by_a_preset_is_the_one_a_cut_wait_names() {
+    let named =
+        |t: &str, wait: &str| t.contains(&format!("Waited longer than {wait} for a lock another session holds"));
+    let generic = |t: &str| t.contains("waited too long for a lock another session holds");
+    let pg = lock_config("postgres", &["SET lock_timeout = '3s'"], &[]);
+    let t = lock_timeout_text(&pg);
+    assert!(named(&t, "3s") && !named(&t, "5s"), "{t}");
+    // The profile's own statement comes after the preset's: it wins.
+    let t = lock_timeout_text(&lock_config("postgres", &["SET lock_timeout = '3s'"], &["SET lock_timeout = 1500"]));
+    assert!(named(&t, "1500ms"), "{t}");
+    let t = lock_timeout_text(&lock_config("postgres", &["SET lock_timeout TO '2 min'"], &[]));
+    assert!(named(&t, "2m"), "{t}");
+    // `DEFAULT` is the server's own value, 0 no limit: neither names a time.
+    for unknown in ["SET lock_timeout TO DEFAULT", "SET lock_timeout = 0"] {
+        let t = lock_timeout_text(&lock_config("postgres", &[unknown], &[]));
+        assert!(generic(&t) && !named(&t, "5s"), "{unknown}: {t}");
+    }
+    // MySQL: a number only when both limits are known and the same.
+    let both = ["SET SESSION lock_wait_timeout = 3, innodb_lock_wait_timeout = 3"];
+    let t = lock_timeout_text(&lock_config("mysql", &both, &[]));
+    assert!(named(&t, "3s"), "{t}");
+    let apart = lock_config("mysql", &["SET SESSION innodb_lock_wait_timeout = 3"], &[]);
+    let t = lock_timeout_text(&apart);
+    assert!(generic(&t) && !named(&t, "5s"), "{t}");
+    let joined =
+        lock_config("mysql", &["SET SESSION innodb_lock_wait_timeout = 3"], &["SET @@session.lock_wait_timeout = 3"]);
+    assert!(named(&lock_timeout_text(&joined), "3s"));
+}
+
+/// `:session` shows the lock wait the sessions get: the preset's, where it comes from, and the
+/// environment's value it overrides; one the app cannot read says so.
+#[test]
+fn the_session_view_shows_a_lock_wait_a_preset_overrides() {
+    let mut h = connected_on(&lock_config("postgres", &["SET lock_timeout = '3s'"], &[]));
+    h.command("session");
+    let screen = h.screen(120, 40);
+    for line in ["Lock wait        3s", "its session preset “fast” — overrides environment prod: 5s"] {
+        assert!(screen.contains(line), "{line}\n{screen}");
+    }
+    for (w, ht) in [(80, 24), (120, 40)] {
+        insta::assert_snapshot!(format!("session_view_lock_override_en_{w}x{ht}"), h.draw(w, ht).backend());
+    }
+    // Within 80 columns the source wraps under itself.
+    let screen = h.screen(80, 24);
+    assert!(screen.contains("“fast” — overrides") && screen.contains("environment prod: 5s"), "{screen}");
+    let mut h = connected_on(&lock_config("postgres", &["SET lock_timeout TO DEFAULT"], &[]));
+    h.command("session");
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("Lock wait        not known"), "{screen}");
+    assert!(screen.contains("overrides environment prod: 5s"), "{screen}");
+}
+
+/// A setting the app keeps refused says why, in plain words, and where to set it instead.
+#[test]
+fn a_refused_setting_says_why_and_where_to_set_it() {
+    let cases = [
+        ("postgres", "SET idle_session_timeout = 0", "set the environment's idle_disconnect"),
+        ("mysql", "SET SESSION wait_timeout = 10", "set the environment's idle_disconnect"),
+        ("mysql", "SET SESSION interactive_timeout = 10", "no effect on an open session"),
+        ("postgres", "SET idle_in_transaction_session_timeout = 0", "set the environment's tx_idle_rollback"),
+        ("mysql", "SET autocommit = 0", "set the environment's commit"),
+        ("mysql", "SET SESSION completion_type = 1", "set the environment's commit"),
+        ("postgres", "SET default_transaction_read_only = off", "set the environment's read_only"),
+        ("mysql", "SET SESSION TRANSACTION READ WRITE", "set the environment's read_only"),
+        ("postgres", "SET search_path = x", ":use"),
+        ("postgres", "SET client_encoding = 'LATIN1'", "UTF-8"),
+        ("mysql", "SET NAMES latin1", "UTF-8"),
+        ("postgres", "SET DateStyle = 'German'", "default text format"),
+        ("postgres", "SET standard_conforming_strings = off", "string literals"),
+        ("postgres", "SET application_name = 'x'", "names its sessions"),
+        ("mysql", "SET sql_select_limit = 10", "pages results"),
+        ("mysql", "SET resultset_metadata = NONE", "reads what the server reports"),
+    ];
+    for (driver, sql, why) in cases {
+        let cfg = config(|p| {
+            p.driver = driver.into();
+            p.session = SessionRef::Off;
+            p.session_sql = vec![sql.to_string()];
+        });
+        let mut h = launched(&cfg);
+        h.explore("local-pg");
+        h.key(KeyCode::Enter);
+        assert!(h.driver.sessions.lock().unwrap().is_empty(), "{sql}: nothing is opened");
+        let e = h.node_error("local-pg").unwrap_or_default();
+        assert!(e.contains(why) && !e.contains("is set by"), "{sql}: {e}");
+    }
+}
+
+/// A lock wait the server's own limit cut short (a statement that ran without the session's,
+/// behind a pooler) names no time, even with a limit of the environment's or a preset's.
+#[test]
+fn a_lock_wait_cut_by_the_servers_own_limit_names_no_time() {
+    let mut h = connected_on(&lock_config("postgres", &["SET lock_timeout = '3s'"], &[]));
+    let id = run(&mut h, "DO $$ BEGIN PERFORM 1; END $$");
+    let server = "ERROR: canceling statement due to lock timeout";
+    h.tab_db(0, DbEvent::Failed { id, error: DbError::ServerLockTimeout(server.into()), cancelled: false });
+    let t = h.screen(200, 45);
+    assert!(t.contains("waited too long for a lock another session holds") && !t.contains("Waited longer than"), "{t}");
 }
