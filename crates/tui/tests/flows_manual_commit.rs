@@ -160,11 +160,11 @@ fn a_manual_run_says_which_statements_open_the_transaction() {
 }
 
 #[test]
-fn the_idle_limit_goes_with_postgresql_only_and_can_be_off() {
+fn the_idle_rollback_is_sent_with_postgresql_only_and_can_be_off() {
     let mut cfg = config("stg", false);
     cfg.policies.insert(
         "stg",
-        Policy { commit: CommitRule::Manual, tx_idle_timeout: Some(Duration::from_secs(90)), ..Policy::default() },
+        Policy { commit: CommitRule::Manual, tx_idle_rollback: Some(Duration::from_secs(90)), ..Policy::default() },
     );
     let mut h = Harness::with_config(&cfg, Lang::En);
     h.db(DbEvent::Connected);
@@ -172,13 +172,13 @@ fn the_idle_limit_goes_with_postgresql_only_and_can_be_off() {
     assert_eq!(tx, manual(&[TxStep::Open], Some(Duration::from_secs(90))));
 
     let mut cfg = config("stg", false);
-    cfg.policies.insert("stg", Policy { commit: CommitRule::Manual, tx_idle_timeout: None, ..Policy::default() });
+    cfg.policies.insert("stg", Policy { commit: CommitRule::Manual, tx_idle_rollback: None, ..Policy::default() });
     let mut h = Harness::with_config(&cfg, Lang::En);
     h.db(DbEvent::Connected);
     let (.., tx) = sent_run(&mut h, "DELETE FROM shop.users WHERE id = 1");
     assert_eq!(tx, manual(&[TxStep::Open], None), "off: the server's own setting");
 
-    // MySQL has no such limit: none is sent.
+    // MySQL: none is sent (the app closes the idle session itself, see flows_idle.rs).
     let mut h = connected("stg", true);
     let (.., tx) = sent_run(&mut h, "INSERT INTO users (name) VALUES ('a'); SELECT 1;");
     assert_eq!(tx, manual(&[TxStep::Open, TxStep::ReadOnly], None));

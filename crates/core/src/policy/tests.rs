@@ -153,8 +153,8 @@ fn commit_rules() {
     assert!(CommitRule::Manual.manual() && !CommitRule::Auto.manual());
     let p = Policy::default();
     assert_eq!(p.commit, CommitRule::Auto, "a missing key commits by itself, as before");
-    assert_eq!((p.tx_idle_warning, p.tx_idle_timeout), (Some(TX_IDLE_WARNING), Some(TX_IDLE_TIMEOUT)));
-    assert_eq!((TX_IDLE_WARNING.as_secs(), TX_IDLE_TIMEOUT.as_secs()), (300, 1800));
+    assert_eq!((p.tx_idle_warning, p.tx_idle_rollback), (Some(TX_IDLE_WARNING), Some(TX_IDLE_ROLLBACK)));
+    assert_eq!((TX_IDLE_WARNING.as_secs(), TX_IDLE_ROLLBACK.as_secs()), (300, 1800));
 }
 
 #[test]
@@ -171,6 +171,6 @@ fn transaction_idle_times_have_a_floor() {
         assert!(parse_tx_idle(&bad).is_err(), "{bad:?}");
     }
     assert!(parse_tx_idle(&v("9s")).unwrap_err().contains("10s"), "says the floor");
-    assert_eq!(parse_tx_idle_text("30m"), Ok(Some(TX_IDLE_TIMEOUT)));
+    assert_eq!(parse_tx_idle_text("30m"), Ok(Some(TX_IDLE_ROLLBACK)));
     assert!(parse_tx_idle_text("3s").is_err());
 }

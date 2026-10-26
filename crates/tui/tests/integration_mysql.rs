@@ -56,7 +56,8 @@ fn profile(url: &str) -> ConnectionConfig {
 }
 
 /// An app with the one MySQL profile of `url` (under `policy`: `it-ro` read-only, `it-hold`
-/// held results, `it-manual` manual commit), connected.
+/// held results, `it-manual` manual commit, `it-rollback` manual commit with a `tx_idle_rollback`
+/// of 10s and no warning), connected.
 async fn app_on(url: &str, tag: &str, policy: Option<&str>) -> (App, UnboundedReceiver<AppEvent>) {
     use datarig_core::policy::Policy;
     let pw = datarig_core::profile::dsn::parse(url).unwrap().password.unwrap_or_default();
@@ -68,7 +69,9 @@ async fn app_on(url: &str, tag: &str, policy: Option<&str>) -> (App, UnboundedRe
     cfg.policies.insert("it-ro", Policy { read_only: true, ..Policy::default() });
     cfg.policies.insert("it-hold", Policy { paging: PagingMode::Hold, ..Policy::default() });
     let manual = Policy { commit: datarig_core::policy::CommitRule::Manual, ..Policy::default() };
-    cfg.policies.insert("it-manual", manual);
+    cfg.policies.insert("it-manual", manual.clone());
+    let rollback = Policy { tx_idle_warning: None, tx_idle_rollback: Some(Duration::from_secs(10)), ..manual };
+    cfg.policies.insert("it-rollback", rollback);
     let mut app = App::new(&cfg, None, Lang::En);
     app.set_secret_store(store as Arc<dyn SecretStore>);
     app.set_instance_tag(tag);
@@ -436,4 +439,34 @@ async fn manual_commit_keeps_a_write_to_itself_until_it_is_committed() {
     let seen: i64 = other.query_first(count.as_str()).await.unwrap().unwrap();
     assert_eq!(seen, 5, "rolled back");
     other.disconnect().await.unwrap();
+}
+
+/// `tx_idle_rollback` on the real server: the app closes the session of a transaction opened for
+/// manual commit once it sat idle that long (here the wall clock jumps, as after a sleep), the
+/// server rolls the transaction back and its row lock is free for another session, and the next
+/// run connects again.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_idle_manual_transaction_is_rolled_back_by_closing_its_session() {
+    let Some((url, admin)) = urls("an_idle_manual_transaction_is_rolled_back_by_closing_its_session") else { return };
+    let (_t, t) = numbers(&admin, "tuirollback", 3).await;
+    let (mut app, mut rx) = app_on(&url, &format!("rb{}", std::process::id()), Some("it-rollback")).await;
+    run(&mut app, &mut rx, &format!("UPDATE {t} SET id = 100 WHERE id = 1")).await;
+    pump(&mut app, &mut rx, 10, |a| a.tab().exec.user_tx()).await;
+    assert!(app.tab().exec.tx.as_ref().is_some_and(|x| x.manual));
+    let later = std::time::SystemTime::now() + Duration::from_secs(60);
+    app.set_wall_clock(Arc::new(move || later));
+    app.on_tick(app.now());
+    assert_eq!(app.status.as_ref().map(|n| n.msg.clone()), Some(Msg::QueryTxIdleClosed { time: "10s".into() }));
+    assert!(!app.tab().exec.user_tx());
+    // Another session gets the row lock and sees the row as it was (the server rolled back).
+    let mut other = side(&admin).await;
+    other.query_drop("SET SESSION innodb_lock_wait_timeout = 10").await.unwrap();
+    other.query_drop("START TRANSACTION").await.unwrap();
+    let id: Option<i64> = other.query_first(format!("SELECT id FROM {t} WHERE id = 1 FOR UPDATE")).await.unwrap();
+    assert_eq!(id, Some(1), "rolled back, and the lock is free");
+    other.query_drop("ROLLBACK").await.unwrap();
+    other.disconnect().await.unwrap();
+    // The next run opens a new session.
+    run(&mut app, &mut rx, &format!("SELECT COUNT(*) FROM {t} WHERE id = 100")).await;
+    assert_eq!(shown_page(&app).0.as_deref(), Some("0"), "{:?}", app.status);
 }

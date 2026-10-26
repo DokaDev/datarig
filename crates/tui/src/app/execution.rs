@@ -137,7 +137,7 @@ impl App {
         }
         let tx = self.tx_rule(id, &statements, as_is);
         let manual = self.manual_commit(id);
-        let now = self.now();
+        let (now, wall) = (self.now(), self.wall_now());
         self.touch_tab(id);
         self.query_seq += 1;
         let qid = self.query_seq;
@@ -184,7 +184,7 @@ impl App {
             t.exec.sent_manual = tx != TxRule::Auto;
             // A statement runs: the open transaction is not idle.
             if let Some(open) = t.exec.tx.as_mut() {
-                open.touch(now);
+                open.touch(now, wall);
             }
             t.exec.run_id = qid;
             t.exec.outside_offer = None;
@@ -1027,6 +1027,8 @@ impl App {
         let page_size = self.page_size;
         let origin = self.tabs.get(id).and_then(Self::origin_now);
         let wall = self.wall_now();
+        // A transaction opened for manual commit now keeps the rollback limit of this moment.
+        let rollback = self.tabs.get(id).and_then(|t| self.tx_rollback_limit(t));
         let tx_keys = matches!(ev, DbEvent::ManualBegun { .. }).then(|| self.tx_keys());
         // The transaction the session opened for the run was rolled back: ask about running the
         // procedure outside one now.
@@ -1267,7 +1269,7 @@ impl App {
             // change, so an aborted block is still known here.
             DbEvent::Block(true) => {
                 let manual = t.exec.manual_begun.take();
-                t.block_began(manual.is_some(), now, wall);
+                t.block_began(manual.is_some(), now, wall, rollback);
                 // Which statements of the last run ran in it: from the one that opened it on.
                 let query = t.exec.run_id;
                 match manual {
@@ -1748,7 +1750,7 @@ impl App {
             if (run_ended || rows_for.is_some() || t.exec.running.is_some())
                 && let Some(open) = t.exec.tx.as_mut()
             {
-                open.touch(now);
+                open.touch(now, wall);
             }
         }
         if offer {

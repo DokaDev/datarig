@@ -686,7 +686,7 @@ fn the_default_rules_are_a_row_of_their_own() {
             Field::EnvConfirm,
             Field::EnvCommit,
             Field::EnvTxWarning,
-            Field::EnvTxTimeout,
+            Field::EnvTxRollback,
             Field::EnvPaging,
             Field::EnvIdle,
             Field::EnvSpill,
@@ -741,7 +741,8 @@ fn the_commit_rule_and_the_idle_times_are_edited_in_the_form() {
         h.key(KeyCode::Tab);
     }
     let screen = h.screen(120, 40);
-    assert!(screen.contains("‹automatic (default)›") && screen.contains("PostgreSQL only"), "{screen}");
+    assert!(screen.contains("‹automatic (default)›") && screen.contains("roll back an idle transaction"), "{screen}");
+    assert!(!screen.contains("PostgreSQL only"), "every driver rolls it back: {screen}");
     h.key(KeyCode::Right);
     h.key(KeyCode::Tab);
     assert_eq!(h.form().focus, Field::EnvTxWarning);
@@ -759,12 +760,12 @@ fn the_commit_rule_and_the_idle_times_are_edited_in_the_form() {
     assert!(!h.form_open());
     let dev = h.app.environments().iter().find(|e| e.name == "dev").unwrap().policy.clone();
     assert_eq!(
-        (dev.commit, dev.tx_idle_warning, dev.tx_idle_timeout),
+        (dev.commit, dev.tx_idle_warning, dev.tx_idle_rollback),
         (datarig_core::policy::CommitRule::Manual, Some(std::time::Duration::from_secs(120)), None)
     );
     let text = dir.text();
     assert!(
-        text.contains("[policy.dev]\ncolor = \"green\"\ncommit = \"manual\"\ntx_idle_warning = \"2m\"\ntx_idle_timeout = \"off\"\n"),
+        text.contains("[policy.dev]\ncolor = \"green\"\ncommit = \"manual\"\ntx_idle_warning = \"2m\"\ntx_idle_rollback = \"off\"\n"),
         "{text}"
     );
     assert!(h.explorer_line().contains("manual commit"), "{}", h.explorer_line());

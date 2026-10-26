@@ -384,7 +384,8 @@ impl App {
             }
             // Roll back, or commit, the open transactions the answer ends first.
             KeyCode::Char(c @ ('r' | 'c'))
-                if !repeat && self.overlays.confirm().is_some_and(|q| q.tx.is_some_and(|t| c == 'r' || t.commit)) =>
+                if !repeat
+                    && self.overlays.confirm().is_some_and(|q| q.tx.as_ref().is_some_and(|t| c == 'r' || t.commit)) =>
             {
                 self.tx_choice(c == 'c')
             }

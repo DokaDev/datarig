@@ -150,6 +150,9 @@ struct PolicySection {
     #[serde(default)]
     tx_idle_warning: Option<toml::Value>,
     #[serde(default)]
+    tx_idle_rollback: Option<toml::Value>,
+    /// `tx_idle_rollback`'s old name, read the same ([`TX_IDLE_ROLLBACK_ALIAS`]).
+    #[serde(default)]
     tx_idle_timeout: Option<toml::Value>,
     #[serde(default)]
     idle_disconnect: Option<toml::Value>,
@@ -173,7 +176,8 @@ impl PolicySection {
             ("confirm", s(&self.confirm)),
             ("commit", self.commit.clone()),
             ("tx_idle_warning", self.tx_idle_warning.clone()),
-            ("tx_idle_timeout", self.tx_idle_timeout.clone()),
+            ("tx_idle_rollback", self.tx_idle_rollback.clone()),
+            (TX_IDLE_ROLLBACK_ALIAS, self.tx_idle_timeout.clone()),
             ("idle_disconnect", self.idle_disconnect.clone()),
             ("lock_wait", self.lock_wait.clone()),
             ("color", self.color.clone()),
@@ -188,7 +192,11 @@ impl PolicySection {
 /// `spill_limit`'s literal values, for errors.
 const SIZES: &str = "1073741824, \"512MB\", \"2GB\", \"off\"";
 
-/// `tx_idle_warning`'s and `tx_idle_timeout`'s literal values, for errors.
+/// The old name of `tx_idle_rollback`: still read as it, never written (a table that has both
+/// is an error, [`ConfigError::Alias`]).
+const TX_IDLE_ROLLBACK_ALIAS: &str = "tx_idle_timeout";
+
+/// `tx_idle_warning`'s and `tx_idle_rollback`'s literal values, for errors.
 const TX_IDLE: &str = "\"5m\", \"30m\", \"1h\" (10s at least), \"off\"";
 
 /// `idle_disconnect`'s literal values, for errors.
@@ -224,11 +232,11 @@ fn policy_item(name: &str, key: &str, v: &toml::Value, e: &mut policy::Environme
             let c = v.as_str().and_then(policy::CommitRule::parse);
             e.policy.commit = c.ok_or_else(|| err(&raw).allowed(Some("auto, manual")))?;
         }
-        "tx_idle_warning" | "tx_idle_timeout" => {
+        "tx_idle_warning" | "tx_idle_rollback" | TX_IDLE_ROLLBACK_ALIAS => {
             let d = policy::parse_tx_idle(v).map_err(|x| err(&x).allowed(Some(TX_IDLE)))?;
             match key {
                 "tx_idle_warning" => e.policy.tx_idle_warning = d,
-                _ => e.policy.tx_idle_timeout = d,
+                _ => e.policy.tx_idle_rollback = d,
             }
         }
         "idle_disconnect" => {
@@ -851,6 +859,8 @@ pub enum ConfigError {
     DuplicateTunnelId(String),
     /// Tunnel preset `tunnel` has no `<key>`.
     TunnelMissing { key: &'static str, tunnel: String },
+    /// Table `table` has both `key` and `alias`, its old name.
+    Alias { table: String, key: &'static str, alias: &'static str },
 }
 
 /// A [`ConfigError::Value`] for a top-level key.
@@ -1005,6 +1015,10 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
     sections.sort_by_key(|(name, _)| order.iter().position(|o| o == *name).unwrap_or(usize::MAX));
     let mut policies = Policies::default();
     for (name, p) in sections {
+        if p.tx_idle_rollback.is_some() && p.tx_idle_timeout.is_some() {
+            let table = format!("policy.{name}");
+            return Err(ConfigError::Alias { table, key: "tx_idle_rollback", alias: TX_IDLE_ROLLBACK_ALIAS });
+        }
         let mut e = policy::Environment::new(name, Policy::default());
         for (key, v) in p.items() {
             policy_item(name, key, &v, &mut e)?;
@@ -1609,7 +1623,11 @@ fn env_items(e: &policy::Environment) -> [(&'static str, Value, bool); 12] {
         ("confirm", p.confirm.as_str().into(), p.confirm == d.confirm),
         ("commit", p.commit.as_str().into(), p.commit == d.commit),
         ("tx_idle_warning", policy::format_timeout(p.tx_idle_warning).into(), p.tx_idle_warning == d.tx_idle_warning),
-        ("tx_idle_timeout", policy::format_timeout(p.tx_idle_timeout).into(), p.tx_idle_timeout == d.tx_idle_timeout),
+        (
+            "tx_idle_rollback",
+            policy::format_timeout(p.tx_idle_rollback).into(),
+            p.tx_idle_rollback == d.tx_idle_rollback,
+        ),
         ("paging", policy::paging_str(p.paging).into(), p.paging == d.paging),
         (
             "paging_idle_timeout",
@@ -1629,6 +1647,22 @@ fn env_items(e: &policy::Environment) -> [(&'static str, Value, bool); 12] {
 /// is not added. Returns the comments of removed items that had nowhere to go.
 fn write_env_keys(t: &mut Table, name: &str, e: &policy::Environment) -> String {
     let mut orphans = String::new();
+    // A table that changes says `tx_idle_rollback` instead of its old name (renamed in place, its
+    // comments kept; the value is then written as any other); one that does not keeps its text.
+    if t.contains_key(TX_IDLE_ROLLBACK_ALIAS) {
+        if env_of(name, &*t).is_some_and(|r| r.same_settings(e)) {
+            return orphans;
+        }
+        let old = t.clone();
+        t.clear();
+        for (k, item) in old.iter() {
+            let mut key = old.key(k).cloned().unwrap_or_else(|| toml_edit::Key::new(k));
+            if k == TX_IDLE_ROLLBACK_ALIAS {
+                key = toml_edit::Key::new("tx_idle_rollback").with_leaf_decor(key.leaf_decor().clone());
+            }
+            t.insert_formatted(&key, item.clone());
+        }
+    }
     for (key, value, default) in env_items(e) {
         let same = match t.get(key) {
             None => default,
@@ -1659,7 +1693,7 @@ fn same_item(key: &str, a: &policy::Environment, b: &policy::Environment) -> boo
         "confirm" => p.confirm == q.confirm,
         "commit" => p.commit == q.commit,
         "tx_idle_warning" => p.tx_idle_warning == q.tx_idle_warning,
-        "tx_idle_timeout" => p.tx_idle_timeout == q.tx_idle_timeout,
+        "tx_idle_rollback" => p.tx_idle_rollback == q.tx_idle_rollback,
         "paging" => p.paging == q.paging,
         "paging_idle_timeout" => p.paging_idle_timeout == q.paging_idle_timeout,
         "spill_limit" => p.spill_limit == q.spill_limit,

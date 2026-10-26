@@ -10,7 +10,7 @@ expression: backend
 "│ │ Confirm              ‹dangerous statements only (default)› before every… │ │"
 "│▾│ Commit               ‹automatic (default)› manual: commit yourself   re… │ │"
 "│ │ Idle warning         5m                     warn about an idle open tra… │ │"
-"│▾│ Idle limit           30m                    PostgreSQL only: the server… │ │"
+"│▾│ Idle rollback        30m                    roll back an idle transacti… │ │"
 "│ │ Paging               ‹no hold› hold   hold keeps a result's transaction… │ │"
 "│ │ Paging idle timeout  30s                    with hold: 30s, 5m, 1h or o… │ │"
 "│ │ Spill limit                                 empty: the config's · 512MB… │ │"

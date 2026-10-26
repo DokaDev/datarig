@@ -2004,5 +2004,8 @@ pub fn config_error_msg(i18n: &I18n, e: &ConfigError) -> Msg {
         ConfigError::TunnelMissing { key, tunnel } => {
             Msg::ConfigErrorTunnelMissing { key: key.to_string(), tunnel: tunnel.clone() }
         }
+        ConfigError::Alias { table, key, alias } => {
+            Msg::ConfigErrorAlias { table: table.clone(), key: key.to_string(), alias: alias.to_string() }
+        }
     }
 }

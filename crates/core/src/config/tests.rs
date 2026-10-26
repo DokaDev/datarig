@@ -1516,19 +1516,19 @@ lock_wait = "30s"
     assert_eq!(save_all(Prefs::default(), &envs), text);
 }
 
-/// `commit`, `tx_idle_warning` and `tx_idle_timeout`: read with their defaults when left out,
+/// `commit`, `tx_idle_warning` and `tx_idle_rollback`: read with their defaults when left out,
 /// garbage and too-short times are errors naming the item, and a save writes them only when
 /// they differ from the default (an existing file without them stays as it is).
 #[test]
 fn commit_rules_are_read_and_written() {
-    use crate::policy::{CommitRule, TX_IDLE_TIMEOUT, TX_IDLE_WARNING};
+    use crate::policy::{CommitRule, TX_IDLE_ROLLBACK, TX_IDLE_WARNING};
     use std::time::Duration;
     let cfg = parse(
         r#"
 [policy.careful]
 commit = "manual"
 tx_idle_warning = "2m"
-tx_idle_timeout = "off"
+tx_idle_rollback = "off"
 
 [policy.plain]
 
@@ -1539,13 +1539,13 @@ commit = "manual"
     .unwrap();
     let careful = cfg.policies.get(Some("careful")).unwrap();
     assert_eq!(
-        (careful.commit, careful.tx_idle_warning, careful.tx_idle_timeout),
+        (careful.commit, careful.tx_idle_warning, careful.tx_idle_rollback),
         (CommitRule::Manual, Some(Duration::from_secs(120)), None)
     );
     let plain = cfg.policies.get(Some("plain")).unwrap();
     assert_eq!(
-        (plain.commit, plain.tx_idle_warning, plain.tx_idle_timeout),
-        (CommitRule::Auto, Some(TX_IDLE_WARNING), Some(TX_IDLE_TIMEOUT)),
+        (plain.commit, plain.tx_idle_warning, plain.tx_idle_rollback),
+        (CommitRule::Auto, Some(TX_IDLE_WARNING), Some(TX_IDLE_ROLLBACK)),
         "missing keys: automatic commit, 5m, 30m"
     );
     assert_eq!(cfg.policies.get(None).unwrap().commit, CommitRule::Manual, "the default rules take it too");
@@ -1554,6 +1554,7 @@ commit = "manual"
         ("[policy.x]\ncommit = true", "policy.x.commit"),
         ("[policy.x]\ntx_idle_warning = \"soon\"", "policy.x.tx_idle_warning"),
         ("[policy.x]\ntx_idle_warning = \"5s\"", "policy.x.tx_idle_warning"),
+        ("[policy.x]\ntx_idle_rollback = 3", "policy.x.tx_idle_rollback"),
         ("[policy.x]\ntx_idle_timeout = 3", "policy.x.tx_idle_timeout"),
         ("[policy.x]\ntx_idle_timeout = \"1 day\"", "policy.x.tx_idle_timeout"),
     ] {
@@ -1588,11 +1589,11 @@ commit = "manual"
     let mut envs = cfg.policies.environments().to_vec();
     envs[0].policy.commit = CommitRule::Manual;
     envs[0].policy.tx_idle_warning = None;
-    envs[0].policy.tx_idle_timeout = Some(Duration::from_secs(3600));
+    envs[0].policy.tx_idle_rollback = Some(Duration::from_secs(3600));
     let out = save_envs(&envs);
     assert!(
         out.contains(
-            "[policy.old]\nconfirm = \"writes\"\ncommit = \"manual\"\ntx_idle_warning = \"off\"\ntx_idle_timeout = \"1h\"\n"
+            "[policy.old]\nconfirm = \"writes\"\ncommit = \"manual\"\ntx_idle_warning = \"off\"\ntx_idle_rollback = \"1h\"\n"
         ),
         "{out}"
     );
@@ -1602,9 +1603,122 @@ commit = "manual"
     // Back at the defaults: the keys go.
     envs[0].policy.commit = CommitRule::Auto;
     envs[0].policy.tx_idle_warning = Some(TX_IDLE_WARNING);
-    envs[0].policy.tx_idle_timeout = Some(TX_IDLE_TIMEOUT);
+    envs[0].policy.tx_idle_rollback = Some(TX_IDLE_ROLLBACK);
     let out = save_envs(&envs);
     assert!(!out.contains("commit") && !out.contains("tx_idle"), "{out}");
+}
+
+/// `tx_idle_timeout`, the old name of `tx_idle_rollback`: read the same; with both in one table,
+/// an error naming both (nothing is chosen); loading never rewrites it, an unchanged table keeps
+/// it on a save, and a table saved with a change says `tx_idle_rollback` instead (its comment
+/// kept).
+#[test]
+fn tx_idle_timeout_is_read_as_tx_idle_rollback() {
+    use crate::policy::TX_IDLE_ROLLBACK;
+    use std::time::Duration;
+    let cfg = parse("[policy.a]\ntx_idle_timeout = \"1h\"\n\n[policy.b]\ntx_idle_rollback = \"off\"\n").unwrap();
+    assert_eq!(cfg.policies.get(Some("a")).unwrap().tx_idle_rollback, Some(Duration::from_secs(3600)));
+    assert_eq!(cfg.policies.get(Some("b")).unwrap().tx_idle_rollback, None);
+    let cfg = parse("[policy.default]\ntx_idle_timeout = \"2m\"\n").unwrap();
+    assert_eq!(cfg.policies.get(None).unwrap().tx_idle_rollback, Some(Duration::from_secs(120)));
+    // Both: an error that names the table and both keys, whatever their values.
+    for text in [
+        "[policy.a]\ntx_idle_rollback = \"5m\"\ntx_idle_timeout = \"5m\"\n",
+        "[policy.a]\ntx_idle_timeout = \"off\"\ntx_idle_rollback = \"1h\"\n",
+    ] {
+        let e = parse(text).unwrap_err();
+        assert!(
+            matches!(&e, ConfigError::Alias { table, key: "tx_idle_rollback", alias: "tx_idle_timeout" } if table == "policy.a"),
+            "{text}: {e:?}"
+        );
+    }
+
+    let path = temp_file("tx-idle-alias");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let text = "version = 2\n\n[policy.old]\n# keep this\ntx_idle_timeout = \"1h\"\n\n[policy.other]\ntx_idle_timeout = \"2h\"\n";
+    std::fs::write(&path, text).unwrap();
+    let (cfg, err) = load(Some(path.clone()));
+    assert!(err.is_none(), "{err:?}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), text, "loading writes nothing");
+    let save_envs = |envs: &[crate::policy::Environment]| {
+        save(
+            &path,
+            Settings { version: 2, ..settings("en") },
+            Some(Profiles {
+                connections: &cfg.connections,
+                tunnels: &cfg.tunnels,
+                environments: Some(envs),
+                default_rules: None,
+                folders: &cfg.folders,
+                last_used: None,
+            }),
+        )
+        .unwrap();
+        std::fs::read_to_string(&path).unwrap()
+    };
+    let mut envs = cfg.policies.environments().to_vec();
+    assert_eq!(save_envs(&envs), text, "unchanged: kept as written");
+    envs[0].policy.tx_idle_rollback = Some(Duration::from_secs(5400));
+    let out = save_envs(&envs);
+    assert!(out.contains("[policy.old]\n# keep this\ntx_idle_rollback = \"90m\"\n"), "{out}");
+    assert!(out.contains("[policy.other]\ntx_idle_timeout = \"2h\"\n"), "the other table is untouched: {out}");
+    assert_eq!(out.matches("tx_idle_timeout").count(), 1, "{out}");
+    let (back, err) = load(Some(path.clone()));
+    assert!(err.is_none(), "{err:?}");
+    assert!(back.policies.environments()[0].same_settings(&envs[0]));
+    assert_eq!(back.policies.environments()[1].policy.tx_idle_rollback, Some(Duration::from_secs(7200)));
+    // A change of another item renames it in place too; back at the default, the key goes.
+    envs[0].policy.tx_idle_rollback = Some(TX_IDLE_ROLLBACK);
+    envs[1].policy.read_only = true;
+    let out = save_envs(&envs);
+    assert!(out.contains("[policy.other]\ntx_idle_rollback = \"2h\"\nread_only = true\n"), "{out}");
+    assert!(!out.contains("tx_idle_timeout") && out.matches("tx_idle_rollback").count() == 1, "{out}");
+    assert!(out.contains("# keep this"), "a removed key's comment stays: {out}");
+}
+
+/// The default rules' `[policy.default]` the same way: its old `tx_idle_timeout` stays while
+/// the rules do not change, and is renamed in place (its comment kept) once they do.
+#[test]
+fn the_default_rules_rename_tx_idle_timeout_when_saved_changed() {
+    use std::time::Duration;
+    let path = temp_file("tx-idle-alias-default");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let text = "version = 2\n\n[policy.default]\n# ours\ntx_idle_timeout = \"1h\"\n";
+    std::fs::write(&path, text).unwrap();
+    let (cfg, err) = load(Some(path.clone()));
+    assert!(err.is_none(), "{err:?}");
+    let save_rules = |rules: &Policy| {
+        save(
+            &path,
+            Settings { version: 2, ..settings("en") },
+            Some(Profiles {
+                connections: &cfg.connections,
+                tunnels: &cfg.tunnels,
+                environments: None,
+                default_rules: Some(rules),
+                folders: &cfg.folders,
+                last_used: None,
+            }),
+        )
+        .unwrap();
+        std::fs::read_to_string(&path).unwrap()
+    };
+    let mut rules = cfg.policies.default_rules().clone();
+    assert_eq!(rules.tx_idle_rollback, Some(Duration::from_secs(3600)));
+    assert_eq!(save_rules(&rules), text, "unchanged: kept as written");
+    rules.tx_idle_rollback = Some(Duration::from_secs(7200));
+    let out = save_rules(&rules);
+    assert!(out.contains("[policy.default]\n# ours\ntx_idle_rollback = \"2h\"\n"), "{out}");
+    assert!(!out.contains("tx_idle_timeout"), "{out}");
+    let (back, err) = load(Some(path.clone()));
+    assert!(err.is_none(), "{err:?}");
+    assert_eq!(back.policies.default_rules().tx_idle_rollback, Some(Duration::from_secs(7200)));
+    // Another item changed: renamed too, its value kept.
+    std::fs::write(&path, text).unwrap();
+    let mut rules = cfg.policies.default_rules().clone();
+    rules.read_only = true;
+    let out = save_rules(&rules);
+    assert!(out.contains("# ours\ntx_idle_rollback = \"1h\"\n") && !out.contains("tx_idle_timeout"), "{out}");
 }
 
 /// Saving environments writes only what the user changed: an unchanged table and an
