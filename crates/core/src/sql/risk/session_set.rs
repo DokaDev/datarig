@@ -96,6 +96,10 @@ pub enum NotLocal {
     /// transaction, a statement that runs outside one (`VACUUM`, `CALL`) would run as someone
     /// else.
     Identity,
+    /// A default of the session's transactions (`default_transaction_isolation`,
+    /// `default_transaction_deferrable`): a transaction takes it when it begins, so set after
+    /// its `BEGIN` it would change nothing of that transaction.
+    Default,
 }
 
 /// A statement that may be a session's start-up setting.
@@ -200,6 +204,9 @@ fn shape(sql: &str) -> Result<(Result<String, NotLocal>, Vec<(String, String)>),
     let settings = vec![(name.clone(), value_text(sql))];
     if matches!(name.as_str(), "role" | "session_authorization") {
         return Ok((Err(NotLocal::Identity), settings));
+    }
+    if name.starts_with("default_transaction_") {
+        return Ok((Err(NotLocal::Default), settings));
     }
     Ok((set_local(sql, b), settings))
 }

@@ -901,3 +901,74 @@ async fn behind_a_pooler_a_start_up_lock_wait_overrides_the_environments_in_ever
         }
     }
 }
+
+/// A transaction default a start-up statement sets (`default_transaction_isolation`,
+/// `default_transaction_deferrable`) behind the pooler: a `SET LOCAL` of it after `BEGIN` would
+/// change nothing of that transaction, so it either holds in each transaction (the session's own
+/// and the user's block) or is not sent and said so (`SessionPerTransaction`), never sent to no
+/// effect. Nothing stays on the pooled server connections.
+#[tokio::test(flavor = "multi_thread")]
+async fn behind_a_pooler_a_transaction_default_is_never_sent_to_no_effect() {
+    use datarig_core::profile::session::{Defaults, plan};
+    let Some(url) = pooler_url("behind_a_pooler_a_transaction_default_is_never_sent_to_no_effect") else { return };
+    let _pool = POOL.read().await;
+    let mut other = Conn::open(&url, SessionRole::Query, false).await;
+    let DbEvent::Page { rows, .. } = other.run(1, "SHOW default_transaction_isolation").await else { panic!() };
+    let server = rows[0][0].clone();
+    assert_ne!(server.as_deref(), Some("serializable"));
+    let profile = ConnectionConfig {
+        session_sql: vec![
+            "SET default_transaction_isolation = 'serializable'".into(),
+            "SET default_transaction_deferrable = on".into(),
+        ],
+        ..ConnectionConfig::default()
+    };
+    let sql = plan(&profile, &Default::default(), Defaults::default(), &[]).unwrap().statements();
+    let wants = [("transaction_isolation", "serializable"), ("transaction_deferrable", "on")];
+    let tag = format!("pooli{}", std::process::id());
+    for cache in [false, true] {
+        let opts = ConnectOptions::new(PAGE, SessionRole::Query, &tag).statement_cache(cache).session_sql(sql.clone());
+        let cfg = ConnectionConfig { name: "pooler".into(), dsn: Some(url.clone()), ..ConnectionConfig::default() };
+        let (tx, mut rx) = unbounded_channel();
+        let session = PgDriver.connect(&cfg, SessionRole::Query, opts, tx);
+        let mut refused = Vec::new();
+        loop {
+            match tokio::time::timeout(Duration::from_secs(10), rx.recv()).await.expect("an answer") {
+                Some(DbEvent::Connected) => break,
+                Some(DbEvent::ConnectFailed { error, .. }) => panic!("{error:?}"),
+                Some(DbEvent::SessionPerTransaction { refused: r }) => refused.extend(r),
+                Some(_) => {}
+                None => panic!("closed"),
+            }
+        }
+        let mut q = Conn { session, rx, cache_off: 0 };
+        let mut id = 0;
+        for block in [false, true] {
+            if block {
+                id += 1;
+                assert!(!matches!(q.run(id, "BEGIN").await, DbEvent::Failed { .. }));
+            }
+            for (i, (setting, want)) in wants.iter().enumerate() {
+                id += 1;
+                let DbEvent::Page { rows, .. } = q.run(id, &format!("SHOW {setting}")).await else { panic!() };
+                assert!(
+                    refused.contains(&i) || rows[0][0].as_deref() == Some(*want),
+                    "cache {cache}, block {block}: {} sent but {setting} is {:?} (said not sent: {refused:?})",
+                    sql[i].sql,
+                    rows[0][0]
+                );
+            }
+            if block {
+                id += 1;
+                assert!(!matches!(q.run(id, "ROLLBACK").await, DbEvent::Failed { .. }));
+            }
+        }
+        for _ in 0..8 {
+            id += 1;
+            let DbEvent::Page { rows, .. } = other.run(100 + id, "SHOW default_transaction_isolation").await else {
+                panic!()
+            };
+            assert_eq!(rows[0][0], server, "cache {cache}: nothing left on the server connection");
+        }
+    }
+}

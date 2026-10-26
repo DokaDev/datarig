@@ -2160,6 +2160,7 @@
 "session_view.pooled_refused" = "behind a pooler: not sent — {reason}"
 "session_view.not_local.form" = "only a plain SET name = value has a form for one transaction"
 "session_view.not_local.identity" = "it changes who the session is"
+"session_view.not_local.default" = "a transaction takes its default when it begins, so set after BEGIN it would change nothing"
 "session_view.order" = "Applied in this order: a later setting of the same name wins"
 "session_view.more_above" = { one = "↑ {count} more line", other = "↑ {count} more lines" }
 "session_view.more_below" = { one = "↓ {count} more line", other = "↓ {count} more lines" }

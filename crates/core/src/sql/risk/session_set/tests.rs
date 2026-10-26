@@ -85,6 +85,11 @@ fn pg_settings_without_a_transaction_form() {
     assert_eq!(auth.per_transaction, Some(Err(NotLocal::Identity)));
     let chars = pg("SET SESSION CHARACTERISTICS AS TRANSACTION ISOLATION LEVEL REPEATABLE READ").unwrap();
     assert_eq!(chars.per_transaction, Some(Err(NotLocal::Form)));
+    // A transaction takes its defaults at `BEGIN`: a `SET LOCAL` after it changes nothing.
+    for sql in ["SET default_transaction_isolation = 'serializable'", "SET default_transaction_deferrable = on"] {
+        let s = pg(sql).unwrap_or_else(|e| panic!("{sql}: {e:?}"));
+        assert_eq!(s.per_transaction, Some(Err(NotLocal::Default)), "{sql}");
+    }
 }
 
 #[test]

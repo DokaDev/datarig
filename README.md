@@ -963,8 +963,11 @@ explorer's lookups (the metadata sessions) never get these settings.
   `RESET`) run without them; in a tab whose schema is also set per transaction those still run
   in a transaction that sets the schema (as before), but without the preset's settings other
   than its lock wait. A statement that has no such form (`SET ROLE`, `SET SESSION
-  AUTHORIZATION`, `SET SESSION CHARACTERISTICS …`) is not sent there: the profile still connects
-  and the tab names what was not sent. MySQL connections are never treated as pooled (a proxy
+  AUTHORIZATION`, `SET SESSION CHARACTERISTICS …`), or that sets a default of the session's
+  transactions (`default_transaction_isolation`, `default_transaction_deferrable`: a transaction
+  takes its defaults when it begins, so a `SET LOCAL` after `BEGIN` would change nothing), is not
+  sent there: the profile still connects and the tab names what was not sent. Behind a pooler, set
+  the isolation in your own block instead (`BEGIN ISOLATION LEVEL …`). MySQL connections are never treated as pooled (a proxy
   that multiplexes them, such as ProxySQL, is not detected).
 - On MySQL the classifier reads the session in the sql mode a preset set (`SET SESSION sql_mode
   = …`), and a read-only session is checked after its statements ran. A value that calls a

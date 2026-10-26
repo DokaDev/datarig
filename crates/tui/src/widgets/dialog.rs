@@ -518,6 +518,7 @@ pub(crate) fn draw_session_view(app: &mut App, area: Rect, buf: &mut Buffer) {
                             let reason = app.i18n.label(match why {
                                 NotLocal::Form => Label::SessionViewNotLocalForm,
                                 NotLocal::Identity => Label::SessionViewNotLocalIdentity,
+                                NotLocal::Default => Label::SessionViewNotLocalDefault,
                             });
                             app.i18n.msg(&Msg::SessionViewPooledRefused { reason: reason.to_string() }).to_string()
                         }
