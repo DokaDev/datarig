@@ -2076,10 +2076,11 @@ async fn manual_commit_keeps_a_write_to_itself_until_it_is_committed() {
     assert!(app.tx_status().is_some_and(|s| s.starts_with("TX open · 1 change · 2 rows · ")), "{:?}", app.tx_status());
     assert_eq!(obs.column(&state).await, ["idle in transaction"]);
     assert_eq!(obs.column(&count).await, ["0"], "not visible to another session");
-    // Its idle limit is the environment's, for this transaction.
+    // The server's idle limit is the environment's plus 30s (the app rolls back first), for
+    // this transaction.
     app.run(vec!["SHOW idle_in_transaction_session_timeout".into()]);
     pump(&mut app, &mut rx, 10, |a| idle(a, 0) && cell(a, 0).is_some()).await;
-    assert_eq!(cell(&app, 0).as_deref(), Some("30min"));
+    assert_eq!(cell(&app, 0).as_deref(), Some("1830s"));
     // Committed: visible.
     app.dispatch(Action::TxCommit);
     pump(&mut app, &mut rx, 10, |a| !a.tab_busy(a.tab().id) && !a.tab().exec.user_tx()).await;
@@ -2098,6 +2099,101 @@ async fn manual_commit_keeps_a_write_to_itself_until_it_is_committed() {
     assert_eq!(obs.column(&count).await, ["2"]);
     // The idle limit went with the transaction: the session has the server's setting again.
     app.run(vec!["SHOW idle_in_transaction_session_timeout".into()]);
-    pump(&mut app, &mut rx, 10, |a| idle(a, 0) && cell(a, 0).as_deref() != Some("30min")).await;
+    pump(&mut app, &mut rx, 10, |a| idle(a, 0) && cell(a, 0).as_deref() != Some("1830s")).await;
     assert_eq!(cell(&app, 0).as_deref(), Some("0"), "set for the transaction only");
+}
+
+fn pooler_url(test: &str) -> Option<String> {
+    match std::env::var("DATARIG_TEST_POOLER_URL") {
+        Ok(u) if !u.is_empty() => Some(u),
+        _ => {
+            if std::env::var("DATARIG_REQUIRE_POOLER").is_ok_and(|v| v == "1") {
+                panic!("DATARIG_TEST_POOLER_URL must be set when DATARIG_REQUIRE_POOLER=1");
+            }
+            let _ = writeln!(std::io::stderr(), "SKIPPED {test} (pooler): set DATARIG_TEST_POOLER_URL");
+            None
+        }
+    }
+}
+
+/// `tx_idle_rollback` on the real server, direct and behind a transaction pooler: once a
+/// transaction opened for manual commit sat idle that long (here the wall clock jumps, as after
+/// a sleep), the app sends ROLLBACK on its session, which stays: the row lock is free for
+/// another session, the row is as it was, the next run goes on (on the same backend when
+/// direct), and the server's own limit (10s + 30s, for that transaction) is left on no
+/// connection, pooled ones included.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_idle_manual_transaction_is_rolled_back_and_its_session_stays() {
+    use datarig_core::i18n::Msg;
+    use datarig_core::policy::{CommitRule, Policy};
+    let test = "an_idle_manual_transaction_is_rolled_back_and_its_session_stays";
+    let Some(url) = pg_url(test) else { return };
+    let pw = datarig_core::profile::dsn::parse(&url).unwrap().password.unwrap_or_default();
+    let tag = format!("idlerb{}", std::process::id());
+    let table = format!("public.it_idlerb_{tag}");
+    let _guard = pg_clean::TableGuard::new(&url, &[&table]);
+    let mut obs = Observer::open(&url).await;
+    obs.exec(&format!("CREATE TABLE {table} (x int PRIMARY KEY)")).await;
+    obs.exec(&format!("INSERT INTO {table} VALUES (1)")).await;
+    let show = "SHOW idle_in_transaction_session_timeout";
+    let default = obs.column(show).await;
+    let mut targets = vec![(url.clone(), false)];
+    targets.extend(pooler_url(test).map(|u| (u, true)));
+    for (target, pooled) in targets {
+        let mut p = profile(&target);
+        p.policy = Some("it-rollback".into());
+        let store = Arc::new(MemoryStore::new());
+        store.set(&p.id.account(), &pw).unwrap();
+        let mut cfg = Config { connections: vec![p], ..Config::default() };
+        let rules = Policy {
+            commit: CommitRule::Manual,
+            tx_idle_warning: None,
+            tx_idle_rollback: Some(Duration::from_secs(10)),
+            ..Policy::default()
+        };
+        cfg.policies.insert("it-rollback", rules);
+        let mut app = App::new(&cfg, None, Lang::En);
+        app.set_secret_store(store as Arc<dyn SecretStore>);
+        app.set_instance_tag(&tag);
+        let (tx, mut rx) = unbounded_channel();
+        app.start(tx, Startup::Normal);
+        let id = first(&app);
+        enter(&mut app);
+        pump(&mut app, &mut rx, 10, |a| a.conns.is_connected(id)).await;
+        app.run(vec!["SELECT pg_backend_pid()".into()]);
+        pump(&mut app, &mut rx, 10, |a| idle(a, 0) && cell(a, 0).is_some()).await;
+        let pid = cell(&app, 0);
+        app.run(vec![format!("UPDATE {table} SET x = 100 WHERE x = 1")]);
+        pump(&mut app, &mut rx, 10, |a| idle(a, 0) && a.tab().exec.user_tx()).await;
+        app.run(vec![show.into()]);
+        pump(&mut app, &mut rx, 10, |a| idle(a, 0) && cell(a, 0).is_some()).await;
+        assert_eq!(cell(&app, 0).as_deref(), Some("40s"), "pooled {pooled}: the server's backstop");
+        // A closed session moves the tab to a new generation.
+        let generation = app.tab().exec.generation;
+        let later = std::time::SystemTime::now() + Duration::from_secs(60);
+        app.set_wall_clock(Arc::new(move || later));
+        app.on_tick(app.now());
+        assert_eq!(app.status.as_ref().map(|n| n.msg.clone()), Some(Msg::TxIdleRollingBack { time: "10s".into() }));
+        pump(&mut app, &mut rx, 10, |a| !a.tab_busy(a.tab().id) && !a.tab().exec.user_tx()).await;
+        let done = Msg::TxIdleRolledBack { count: 1, time: "10s".into() };
+        assert_eq!(app.status.as_ref().map(|n| n.msg.clone()), Some(done), "pooled {pooled}");
+        assert!(app.tab().exec.session.is_some() && app.tab().exec.generation == generation, "the session stays");
+        assert_eq!(app.tx_status(), None);
+        // Rolled back, and the row lock is free.
+        assert_eq!(obs.column(&format!("SELECT x FROM {table} FOR UPDATE NOWAIT")).await, ["1"], "pooled {pooled}");
+        // The next runs go on the same session, outside any transaction, with the server's
+        // own idle limit (on every pooled connection they land on).
+        for _ in 0..6 {
+            app.run(vec![show.into()]);
+            pump(&mut app, &mut rx, 10, |a| idle(a, 0) && cell(a, 0).is_some()).await;
+            assert_eq!(cell(&app, 0), default.first().cloned(), "pooled {pooled}: nothing left behind");
+        }
+        if !pooled {
+            app.run(vec!["SELECT pg_backend_pid()".into()]);
+            pump(&mut app, &mut rx, 10, |a| idle(a, 0) && cell(a, 0).is_some()).await;
+            assert_eq!(cell(&app, 0), pid, "the same backend");
+        }
+        assert!(!app.tab().exec.user_tx());
+        assert!(app.tab().exec.session.is_some() && app.tab().exec.generation == generation);
+    }
 }

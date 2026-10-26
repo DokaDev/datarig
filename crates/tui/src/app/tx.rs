@@ -19,9 +19,11 @@
 //! session rolled back leaves it.
 
 use super::action::Action;
+use super::idle::TX_ROLLBACK_SERVER_MARGIN;
 use super::*;
 use crate::keymap::Ctx;
 use datarig_core::driver::{TxRule, TxStep as Step};
+use datarig_core::policy::format_timeout;
 use datarig_core::sql::dialect::Dialect;
 use datarig_core::sql::risk::{Danger, TxStep};
 use std::collections::VecDeque;
@@ -69,10 +71,10 @@ pub struct OpenTx {
     pub last_active_wall: SystemTime,
     /// It stayed idle past the environment's `tx_idle_warning` since then (said once).
     pub warned: bool,
-    /// How long it may sit idle before the app closes its session (the server rolls it back):
-    /// the environment's `tx_idle_rollback` when it began, for a transaction opened for manual
-    /// commit where the server does not keep that limit itself (MySQL). A change of the
-    /// environment applies from the next transaction, as PostgreSQL's server limit does.
+    /// How long it may sit idle before the app rolls it back (the session stays): the
+    /// environment's `tx_idle_rollback` when it began, for a transaction opened for manual
+    /// commit. A change of the environment applies from the next transaction, as PostgreSQL's
+    /// server limit set with it does.
     pub rollback: Option<Duration>,
 }
 
@@ -141,6 +143,19 @@ impl OpenTx {
 pub struct Ending {
     pub id: u64,
     pub commit: bool,
+    /// The app rolls back by itself a transaction idle past its limit (else the user asked).
+    pub idle: Option<IdleEnd>,
+}
+
+/// A rollback the app sent for a transaction idle past its `tx_idle_rollback`
+/// ([`App::tx_rollback_limit`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IdleEnd {
+    /// The limit it sat idle for.
+    pub limit: Duration,
+    /// By when the session must answer (the app's clock); past it the app closes the session
+    /// instead (the server rolls back then).
+    pub by: Instant,
 }
 
 /// Why a statement of a run asks before it runs, beyond its risk: what it does to the open
@@ -274,10 +289,11 @@ impl App {
                 step
             })
             .collect();
-        // `tx_idle_rollback`: PostgreSQL's server keeps it for the transaction; elsewhere the app
-        // closes the idle session itself (`App::tx_rollback_of`).
+        // `tx_idle_rollback`: the app rolls the idle transaction back itself (`App::idle_tick`);
+        // PostgreSQL's server also gets the limit, [`TX_ROLLBACK_SERVER_MARGIN`] later, for the
+        // transaction only: it ends the session when the app could not (stalled, gone).
         let pg = t.exec.prepared.language().dialect() == Dialect::Postgres;
-        let idle_timeout = self.tab_rules(t).tx_idle_rollback.filter(|_| pg);
+        let idle_timeout = self.tab_rules(t).tx_idle_rollback.filter(|_| pg).map(|d| d + TX_ROLLBACK_SERVER_MARGIN);
         TxRule::Manual { steps, idle_timeout }
     }
 
@@ -393,6 +409,9 @@ impl App {
         let Some(t) = self.tabs.get(id) else { return false };
         let refused = if !t.exec.user_tx() {
             Some(Notice::new(Label::TxNone, Level::Warning))
+        } else if let Some(idle) = t.exec.ending.and_then(|e| e.idle) {
+            // The app rolls it back already: the tab says how that ends.
+            Some(Notice::new(Msg::TxIdleRollingBack { time: format_timeout(Some(idle.limit)) }, Level::Warning))
         } else if self.tab_busy(id) {
             let key = self.key_for(Action::CancelQuery, Ctx::Nav);
             Some(Notice::new(Msg::QueryBusy { key }, Level::Warning))
@@ -415,7 +434,7 @@ impl App {
         self.query_seq += 1;
         let qid = self.query_seq;
         if let Some(t) = self.tabs.get_mut(id) {
-            t.exec.ending = Some(Ending { id: qid, commit });
+            t.exec.ending = Some(Ending { id: qid, commit, idle: None });
             t.exec.last_end = None;
         }
         let label = if commit { Label::TxCommitting } else { Label::TxRollingBack };
@@ -689,8 +708,18 @@ impl App {
         if self.pending_end.is_some() {
             return self.flash(Notice::new(Label::TxEndBusy, Level::Warning));
         }
-        // A transaction the question offered to end ended meanwhile (its session closed for
-        // being idle): nothing is done, and nothing is said to be committed.
+        // A transaction the question offered to end is being rolled back for sitting idle: the
+        // tab says how that ends; nothing else is done.
+        let idle = ends
+            .iter()
+            .find(|(id, _)| self.tabs.get(*id).is_some_and(|t| t.exec.ending.is_some_and(|e| e.idle.is_some())));
+        if let Some((id, _)) = idle {
+            let tab = self.tabs.iter().position(|t| t.id == *id).map_or_else(String::new, |i| (i + 1).to_string());
+            self.status = Some(Notice::new(Msg::TxEndIdleRollingBack { tab }, Level::Warning));
+            return;
+        }
+        // A transaction the question offered to end ended meanwhile (rolled back for sitting
+        // idle, its session closed): nothing is done, and nothing is said to be committed.
         let gone = ends
             .iter()
             .find(|(id, epoch)| !self.tabs.get(*id).is_some_and(|t| t.exec.user_tx() && t.exec.tx_epoch == *epoch));

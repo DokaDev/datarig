@@ -441,24 +441,30 @@ async fn manual_commit_keeps_a_write_to_itself_until_it_is_committed() {
     other.disconnect().await.unwrap();
 }
 
-/// `tx_idle_rollback` on the real server: the app closes the session of a transaction opened for
-/// manual commit once it sat idle that long (here the wall clock jumps, as after a sleep), the
-/// server rolls the transaction back and its row lock is free for another session, and the next
-/// run connects again.
+/// `tx_idle_rollback` on the real server: once a transaction opened for manual commit sat idle
+/// that long (here the wall clock jumps, as after a sleep), the app rolls it back on its own
+/// session, which stays: its row lock is free for another session, the row is as it was, and the
+/// next run goes on the same connection.
 #[tokio::test(flavor = "multi_thread")]
-async fn an_idle_manual_transaction_is_rolled_back_by_closing_its_session() {
-    let Some((url, admin)) = urls("an_idle_manual_transaction_is_rolled_back_by_closing_its_session") else { return };
+async fn an_idle_manual_transaction_is_rolled_back_and_its_session_stays() {
+    let Some((url, admin)) = urls("an_idle_manual_transaction_is_rolled_back_and_its_session_stays") else { return };
     let (_t, t) = numbers(&admin, "tuirollback", 3).await;
     let (mut app, mut rx) = app_on(&url, &format!("rb{}", std::process::id()), Some("it-rollback")).await;
+    run(&mut app, &mut rx, "SELECT CONNECTION_ID()").await;
+    let connection = shown_page(&app).0.expect("the session's id");
     run(&mut app, &mut rx, &format!("UPDATE {t} SET id = 100 WHERE id = 1")).await;
     pump(&mut app, &mut rx, 10, |a| a.tab().exec.user_tx()).await;
     assert!(app.tab().exec.tx.as_ref().is_some_and(|x| x.manual));
     let later = std::time::SystemTime::now() + Duration::from_secs(60);
     app.set_wall_clock(Arc::new(move || later));
     app.on_tick(app.now());
-    assert_eq!(app.status.as_ref().map(|n| n.msg.clone()), Some(Msg::QueryTxIdleClosed { time: "10s".into() }));
-    assert!(!app.tab().exec.user_tx());
-    // Another session gets the row lock and sees the row as it was (the server rolled back).
+    assert_eq!(app.status.as_ref().map(|n| n.msg.clone()), Some(Msg::TxIdleRollingBack { time: "10s".into() }));
+    pump(&mut app, &mut rx, 10, |a| !a.tab_busy(a.tab().id) && !a.tab().exec.user_tx()).await;
+    let done = Msg::TxIdleRolledBack { count: 1, time: "10s".into() };
+    assert_eq!(app.status.as_ref().map(|n| n.msg.clone()), Some(done));
+    assert!(app.tab().exec.session.is_some(), "the session stays");
+    assert_eq!(app.tx_status(), None);
+    // Another session gets the row lock and sees the row as it was (rolled back).
     let mut other = side(&admin).await;
     other.query_drop("SET SESSION innodb_lock_wait_timeout = 10").await.unwrap();
     other.query_drop("START TRANSACTION").await.unwrap();
@@ -466,7 +472,10 @@ async fn an_idle_manual_transaction_is_rolled_back_by_closing_its_session() {
     assert_eq!(id, Some(1), "rolled back, and the lock is free");
     other.query_drop("ROLLBACK").await.unwrap();
     other.disconnect().await.unwrap();
-    // The next run opens a new session.
+    // The next run goes on the same connection, outside any transaction.
     run(&mut app, &mut rx, &format!("SELECT COUNT(*) FROM {t} WHERE id = 100")).await;
     assert_eq!(shown_page(&app).0.as_deref(), Some("0"), "{:?}", app.status);
+    run(&mut app, &mut rx, "SELECT CONNECTION_ID()").await;
+    assert_eq!(shown_page(&app).0, Some(connection), "the same connection");
+    assert!(!app.tab().exec.user_tx());
 }

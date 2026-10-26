@@ -48,11 +48,11 @@
 //!   it holds locks: a duration as `paging_idle_timeout` takes (at least
 //!   [`TX_IDLE_FLOOR`]), or `"off"`. Default 5m.
 //! * `tx_idle_rollback` — how long a transaction opened for manual commit may sit idle before
-//!   it is rolled back: its session ends and the server rolls it back. A duration (at least
-//!   [`TX_IDLE_FLOOR`]) or `"off"`. Default 30m. Each driver does it its own way: PostgreSQL's
-//!   server keeps the limit itself (`idle_in_transaction_session_timeout`, set for that
-//!   transaction only, so also when the app is gone); on MySQL the app closes the session
-//!   (while it runs). Its old name `tx_idle_timeout` is still read.
+//!   the app rolls it back (its session stays; one that cannot roll back in time is closed, and
+//!   the server rolls back). A duration (at least [`TX_IDLE_FLOOR`]) or `"off"`. Default 30m.
+//!   PostgreSQL's server also gets the limit, a little later, for that transaction only
+//!   (`idle_in_transaction_session_timeout`), so it ends there when the app is gone; MySQL has no
+//!   such server limit. Its old name `tx_idle_timeout` is still read.
 //! * `idle_disconnect` — how long a profile's connection may sit unused before the app closes
 //!   its sessions (the next action connects again): a duration as `paging_idle_timeout` takes,
 //!   from [`IDLE_DISCONNECT_FLOOR`] to [`SESSION_LIMIT_MAX`], or `"off"`. Without it, the config's
