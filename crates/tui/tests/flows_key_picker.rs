@@ -6,6 +6,7 @@
 mod common;
 
 use common::*;
+use datarig_core::config::IconsSetting;
 use datarig_core::i18n::Lang;
 use datarig_core::profile::ssh::{SshAuth, SshSettings};
 use datarig_core::secret::MemoryStore;
@@ -141,6 +142,19 @@ fn ctrl_o_opens_the_picker_in_ssh_and_enter_picks_a_key() {
     h.ctrl('s');
     assert!(h.app.overlays.form().is_none(), "saved");
     assert_eq!(h.app.profiles[0].ssh.as_ref().unwrap().key_file.as_deref(), Some("~/.ssh/id_ed25519"));
+}
+
+#[test]
+fn with_icons_folders_and_files_have_glyphs() {
+    let home = home("icons");
+    let mut h = form(&home, None);
+    h.ctrl('o');
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("▸ keys/") && !screen.contains('\u{f15b}'), "text only without icons:\n{screen}");
+    h.app.icons = IconsSetting::On;
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("▸ \u{f07b} keys/") && screen.contains("\u{f15b} id_ed25519 "), "{screen}");
+    assert!(screen.contains("\u{f15b} known_hosts"), "{screen}");
 }
 
 #[test]

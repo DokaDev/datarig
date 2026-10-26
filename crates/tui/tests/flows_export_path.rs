@@ -6,6 +6,7 @@
 mod common;
 
 use common::*;
+use datarig_core::config::IconsSetting;
 use datarig_core::driver::{ColumnMeta, DbEvent};
 use datarig_core::i18n::Lang;
 use datarig_tui::app::export_form::ExportField;
@@ -230,6 +231,11 @@ fn the_arrows_open_and_close_a_folder_while_the_empty_filter_has_the_keyboard() 
     h.keys("/");
     let focus = |h: &Harness| h.app.overlays.script_tree().unwrap().focus;
     assert_eq!(focus(&h), TreeFocus::Name);
+    // On the folder shown they do not go up (the tree's `←` does).
+    go_to(&mut h, TreeRow::Top);
+    h.key(KeyCode::Left);
+    assert_eq!(root(&h), home.0.join("Downloads"));
+    assert_eq!(row(&h), TreeRow::Top);
     go_to(&mut h, TreeRow::Folder("a".into()));
     // `a` was never listed: `→` reads it and opens it.
     h.key(KeyCode::Right);
@@ -237,6 +243,26 @@ fn the_arrows_open_and_close_a_folder_while_the_empty_filter_has_the_keyboard() 
     h.key(KeyCode::Left);
     assert!(!rows(&h).contains(&TreeRow::File("a/inner.csv".into())), "`←` closed it");
     assert_eq!(focus(&h), TreeFocus::Name, "the filter keeps the keyboard");
+}
+
+#[test]
+fn with_icons_folders_and_files_have_glyphs_and_the_arrow_still_takes_a_click() {
+    let home = home("icons");
+    let mut h = dialog(&home);
+    h.ctrl('o');
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("▸ a/") && screen.contains("  b.csv"), "text only without icons:\n{screen}");
+    assert!(!screen.contains('\u{f07b}') && !screen.contains('\u{f15b}'), "{screen}");
+    h.app.icons = IconsSetting::On;
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("▸ \u{f07b} a/") && screen.contains("\u{f15b} b.csv"), "{screen}");
+    assert!(screen.contains("▾ ~/Downloads/"), "the folder shown has none:\n{screen}");
+    // The arrow (two columns per level) still opens the folder.
+    let list = h.app.overlays.script_tree().unwrap().list;
+    let i = rows(&h).iter().position(|r| *r == TreeRow::Folder("a".into())).unwrap() as u16;
+    assert_ne!(row(&h), TreeRow::Folder("a".into()), "a first click, not a second one");
+    h.mouse(MouseEventKind::Down(MouseButton::Left), list.x + 2, list.y + i);
+    assert!(rows(&h).contains(&TreeRow::File("a/inner.csv".into())), "{:?}", rows(&h));
 }
 
 #[test]

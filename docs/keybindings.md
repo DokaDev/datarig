@@ -501,15 +501,15 @@ Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+
 
 ## `overlay.script_tree`
 
-The folder tree of the saved queries (save as, open) or of the file system (the SSH key file, where an export goes; there `.` shows hidden names and `Ctrl+S` saves in the selected folder): the tree has the keyboard. Inside `root`.
+The folder tree of the saved queries (save as, open), of the file system (the SSH key file, where an export goes) or of folders only (the folder chooser): the tree has the keyboard. `j`/`k` and the arrows move; `l`/`Right` opens the selected folder (one of the file system is read first); `h`/`Left` closes an open folder, else selects the folder the row is in. In a file system tree, `h`/`Left` on `../` or on the folder shown (and `l`/`Right` on `../`) goes up to the parent of the folder shown. `Enter`: save as saves into the selected folder, the folder chooser picks it; the other trees open or close a folder, go up on `../`, and pick a file (the saved query to open, the key file, the file the export replaces). In the export tree the top row (`Enter`) and `Ctrl+S` (any folder) save there, and `.` shows hidden names; `n` makes a folder (save as, folder chooser, export). `Tab` (and `/` in the folder chooser and the export tree) gives the keyboard to the name or filter field; `Esc` closes (`q` too in the folder chooser and the export tree). The mouse: a click selects a row, one on a folder's arrow opens or closes it; a second click on the selected row does what `Enter` does there, except in save as, where it only opens or closes a folder, and in the key file tree, where a path typed in the field is taken only by `Enter`; the wheel scrolls. Inside `root`.
 
-Reserved — saved-queries tree: `j` `k` `h` `l` `Up` `Down` `Left` `Right` `Enter` `n` `/` `q` `Tab` `Shift+Tab` `Esc` `.` `Ctrl+S`
+Reserved — tree: `j` `k` `h` `l` `Up` `Down` `Left` `Right` `Enter` `n` `/` `q` `Tab` `Shift+Tab` `Esc` `.` `Ctrl+S`
 
 ## `overlay.script_tree.name` [text]
 
-The folder tree of the saved queries: its name field (save as) or filter (open); of the file system: its filter, where a text with `/` or a leading `~` is a path `Enter` goes to. While the field is empty, `Left`/`Right` on a folder or file act as in the tree: they close or open the folder, `Left` selects the folder the row is in. Inside `root`.
+The folder tree of the saved queries: its name field (save as) or filter (open); of the folder chooser: its filter; of the file system: its filter, where a text with `/` or a leading `~` is a path `Enter` goes to. While the field is empty, `Left`/`Right` on a folder or file act as in the tree: they close or open the folder, `Left` selects the folder the row is in. Inside `root`.
 
-Reserved — saved-queries tree: name or filter: `Up` `Down` `Enter` `Tab` `Shift+Tab` `Esc` `Ctrl+S`
+Reserved — tree: name or filter: `Up` `Down` `Enter` `Tab` `Shift+Tab` `Esc` `Ctrl+S`
 
 Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
 

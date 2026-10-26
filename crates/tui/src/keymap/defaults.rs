@@ -566,13 +566,9 @@ const RESERVED: &[(Ctx, &[&str], &str)] = &[
             ".",
             "ctrl+s",
         ],
-        "saved-queries tree",
+        "tree",
     ),
-    (
-        ScriptTreeName,
-        &["up", "down", "enter", "tab", "shift+tab", "esc", "ctrl+s"],
-        "saved-queries tree: name or filter",
-    ),
+    (ScriptTreeName, &["up", "down", "enter", "tab", "shift+tab", "esc", "ctrl+s"], "tree: name or filter"),
     (ScriptTreeName, TEXT, "text input"),
     (
         Settings,
