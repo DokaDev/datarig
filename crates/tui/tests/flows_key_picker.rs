@@ -177,6 +177,10 @@ fn the_arrows_open_and_close_a_folder_while_the_empty_filter_has_the_keyboard() 
         h.app.overlays.script_tree().unwrap().rows().into_iter().map(|(r, _)| r).collect()
     };
     assert_eq!(focus(&h), TreeFocus::Name, "the filter has the keyboard");
+    // On the folder shown they do not go up (the tree's `←` does).
+    assert_eq!(h.app.overlays.script_tree().unwrap().row, TreeRow::Top);
+    h.key(KeyCode::Left);
+    assert_eq!(picker_root(&h), home.0.join(".ssh"));
     let keys = TreeRow::Folder("keys".into());
     while h.app.overlays.script_tree().unwrap().row != keys {
         h.key(KeyCode::Down);
@@ -187,6 +191,9 @@ fn the_arrows_open_and_close_a_folder_while_the_empty_filter_has_the_keyboard() 
     h.key(KeyCode::Left);
     assert!(!rows(&h).contains(&TreeRow::File("keys/deploy.key".into())), "`←` closed it");
     assert_eq!(focus(&h), TreeFocus::Name, "the filter keeps the keyboard");
+    // `←` on a closed folder: the folder it is in (here the top).
+    h.key(KeyCode::Left);
+    assert_eq!(h.app.overlays.script_tree().unwrap().row, TreeRow::Top);
     // With text in the filter they move its cursor.
     h.type_text("de");
     h.key(KeyCode::Left);
