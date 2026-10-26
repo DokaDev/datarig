@@ -477,7 +477,7 @@
 "query.idle_closed_tx" = "This tab's session closed after {time} unused, and the server rolled back its open transaction; the next run connects again"
 "query.tx_idle_closed" = "This tab's session closed after {time} idle in a transaction, and the server rolled the transaction back; the next run connects again"
 "query.tx_idle_rollback_unanswered" = "The rollback after {time} idle in a transaction got no answer within {wait}, so this tab's session was closed instead; the server rolls the transaction back once it sees the session end; the next run connects again"
-"query.tx_idle_rollback_failed" = "The rollback after {time} idle in a transaction failed ({error}), so this tab's session was closed instead; the server rolls the transaction back; the next run connects again"
+"query.tx_idle_rollback_failed" = "The rollback after {time} idle in a transaction failed ({error}), so this tab's session was closed instead; the server rolls the transaction back once it sees the session end; the next run connects again"
 "query.idle_closed_by_server" = "The server closed this tab's session because it sat idle; the next run connects again: {error}"
 "query.idle_closed_by_server_tx" = "The server closed this tab's session because it sat idle and rolled back its open transaction; the next run connects again: {error}"
 "query.info.insert_id" = "last insert id: {id}"

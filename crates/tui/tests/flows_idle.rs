@@ -436,21 +436,25 @@ fn a_rollback_not_answered_in_time_or_refused_closes_the_session() {
         h.advance(ROLLBACK);
         let sent = ends(&mut h);
         assert_eq!(sent.len(), 1, "{sent:?}");
+        // MySQL undoes the rows one by one: it gets longer.
+        let wait = Duration::from_secs(if mysql { 60 } else { 10 });
+        let wait_text = if mysql { "1m" } else { "10s" };
         h.app.transient = None;
         let now = h.clock.now();
-        assert!(h.app.next_tick(now).is_some_and(|t| t <= now + Duration::from_secs(10)), "the wait is bounded");
-        h.advance(Duration::from_secs(9));
+        assert!(h.app.next_tick(now).is_some_and(|t| t <= now + wait), "the wait is bounded");
+        h.advance(wait - Duration::from_secs(1));
         assert!(!h.session_closed(1), "{}", dbms(mysql));
         h.advance(Duration::from_secs(1));
-        assert!(h.session_closed(1), "{}: closed after 10s without an answer", dbms(mysql));
-        let closed = Msg::QueryTxIdleRollbackUnanswered { time: "90s".into(), wait: "10s".into() };
+        assert!(h.session_closed(1), "{}: closed after {wait:?} without an answer", dbms(mysql));
+        let closed = Msg::QueryTxIdleRollbackUnanswered { time: "90s".into(), wait: wait_text.into() };
         assert!(said(&h, |m| *m == closed));
         assert_eq!(status(&h), Some(closed));
         assert!(!h.app.tab().exec.user_tx());
         assert!(!h.app.tab_busy(h.app.tab().id));
         assert!(!said(&h, |m| matches!(m, Msg::TxIdleRolledBack { .. })));
         let screen = h.screen(220, 45);
-        assert!(screen.contains("got no answer within 10s, so this tab's session was closed instead"), "{screen}");
+        let want = format!("got no answer within {wait_text}, so this tab's session was closed instead");
+        assert!(screen.contains(&want), "{screen}");
         // A late answer of the closed session says nothing (another generation).
         let t = h.app.tabs.iter().next().unwrap().id;
         let target = datarig_tui::app::EventTarget::Tab(t);
@@ -473,7 +477,30 @@ fn a_rollback_not_answered_in_time_or_refused_closes_the_session() {
         assert!(!h.app.tab().exec.user_tx());
         assert!(!said(&h, |m| matches!(m, Msg::TxRollbackFailed { .. } | Msg::TxIdleRolledBack { .. })));
         // The bound went with it: nothing more is due for it.
-        h.advance(Duration::from_secs(10));
+        h.advance(Duration::from_secs(60));
+        assert!(!said(&h, |m| matches!(m, Msg::QueryTxIdleRollbackUnanswered { .. })));
+        // PostgreSQL's server ended the session for the idle time itself (its backstop, after a
+        // sleep): said as that, not as a refused rollback.
+        let mut h = manual_on(mysql, rollback_rules());
+        write_in_tx(&mut h);
+        h.advance(ROLLBACK);
+        let (end, _) = ends(&mut h)[0];
+        let error =
+            DbError::IdleInTransactionTimeout("terminating connection due to idle-in-transaction timeout".into());
+        h.tab_db(0, DbEvent::Failed { id: end, error, cancelled: false });
+        assert!(h.session_closed(1));
+        assert!(matches!(status(&h), Some(Msg::TxIdleTimeout { .. })), "{:?}", status(&h));
+        assert!(!said(&h, |m| matches!(m, Msg::QueryTxIdleRollbackFailed { .. })));
+        // Lost while the rollback is on its way: said in the status bar too, nothing more due.
+        let mut h = manual_on(mysql, rollback_rules());
+        write_in_tx(&mut h);
+        h.advance(ROLLBACK);
+        assert_eq!(ends(&mut h).len(), 1);
+        h.tab_db(0, DbEvent::Lost { error: DbError::Closed });
+        assert!(matches!(status(&h), Some(Msg::QueryLost { .. })), "{:?}", status(&h));
+        assert!(!h.app.tab().exec.user_tx());
+        assert!(!h.app.tab_busy(h.app.tab().id));
+        h.advance(Duration::from_secs(60));
         assert!(!said(&h, |m| matches!(m, Msg::QueryTxIdleRollbackUnanswered { .. })));
     }
 }
@@ -691,4 +718,76 @@ fn a_commit_asked_for_during_the_idle_rollback_is_not_pretended() {
     rolled_back(&mut h, sent[0].0);
     assert!(!said(&h, |m| matches!(m, Msg::TxCommitted { .. })));
     assert_ne!(h.overlay_kind(), Some(OverlayKind::TxSummary), "{:?}", h.overlay_kind());
+}
+
+/// After a sleep past both the transaction's limit and the connection's longer
+/// `idle_disconnect`: the rollback goes first (it was due first), and the connection stays.
+#[test]
+fn after_a_sleep_past_both_limits_the_rollback_goes_first_and_the_connection_stays() {
+    for mysql in [true, false] {
+        let mut h = manual_on(mysql, rollback_rules());
+        write_in_tx(&mut h);
+        let later = SystemTime::now() + Duration::from_secs(3600);
+        h.app.set_wall_clock(Arc::new(move || later));
+        h.keys("l");
+        let sent = ends(&mut h);
+        assert_eq!(sent.len(), 1, "{}: {sent:?}", dbms(mysql));
+        assert!(!h.session_closed(0) && !h.session_closed(1), "{}: nothing closed", dbms(mysql));
+        rolled_back(&mut h, sent[0].0);
+        assert!(said(&h, |m| *m == Msg::TxIdleRolledBack { count: 1, time: "90s".into() }));
+        assert!(!said(&h, |m| matches!(m, Msg::QueryIdleClosedTx { .. } | Msg::QueryIdleClosed { .. })));
+        // The answer was a use: the connection's 5m start over from it.
+        h.keys("l");
+        assert!(!h.session_closed(0) && !h.session_closed(1));
+    }
+}
+
+/// The rollback of a tab that is not the active one is said in the status bar too.
+#[test]
+fn another_tabs_idle_rollback_is_said_in_the_status_bar() {
+    let mut h = manual_on(false, rollback_rules());
+    write_in_tx(&mut h);
+    h.ctrl('t');
+    h.sent();
+    h.advance(ROLLBACK);
+    let sent = ends(&mut h);
+    assert_eq!(sent.len(), 1);
+    rolled_back(&mut h, sent[0].0);
+    assert_eq!(status(&h), Some(Msg::TxIdleRolledBack { count: 1, time: "90s".into() }));
+    assert_eq!(h.app.tabs.active_index(), 1);
+}
+
+/// Committing every tab before quitting: a tab whose transaction was rolled back for sitting
+/// idle meanwhile was not committed as asked, so the app does not quit and says where it stopped.
+#[test]
+fn a_commit_before_quitting_stops_at_a_tab_rolled_back_for_sitting_idle_meanwhile() {
+    let mut h = manual_on(false, Policy { idle_disconnect: Some(None), ..rollback_rules() });
+    write_in_tx(&mut h);
+    h.ctrl('t');
+    let id = run(&mut h, "DELETE FROM users WHERE id = 9");
+    h.tab_db(1, DbEvent::Done { id, outcome: Outcome::Affected(1), elapsed: MS });
+    h.tab_db(1, DbEvent::ManualBegun { id, index: 0 });
+    h.tab_db(1, DbEvent::Block(true));
+    h.tab_db(1, DbEvent::TxOpen(true));
+    h.sent();
+    h.command("qa");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Confirm));
+    h.keys("c");
+    let first = ends(&mut h);
+    assert_eq!(first.len(), 1, "{first:?}");
+    assert!(first[0].1, "tab 1's commit");
+    // Tab 2 reaches its limit while tab 1 commits: rolled back by the app.
+    h.advance(ROLLBACK);
+    let second = ends(&mut h);
+    assert_eq!(second.len(), 1, "{second:?}");
+    assert!(!second[0].1, "tab 2's idle rollback");
+    h.tab_db(1, DbEvent::TxEnded { id: second[0].0, outcome: TxOutcome::RolledBack });
+    h.tab_db(1, DbEvent::Block(false));
+    h.tab_db(1, DbEvent::TxOpen(false));
+    h.tab_db(0, DbEvent::TxEnded { id: first[0].0, outcome: TxOutcome::Committed });
+    h.tab_db(0, DbEvent::Block(false));
+    h.tab_db(0, DbEvent::TxOpen(false));
+    assert!(!h.app.quit, "tab 2 was not committed as asked");
+    assert!(ends(&mut h).is_empty());
+    assert_eq!(status(&h), Some(Msg::TxEndStoppedCommit { tab: "2".into() }));
 }

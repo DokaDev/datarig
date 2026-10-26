@@ -475,7 +475,7 @@
 "query.idle_closed_tx" = "이 탭의 세션을 {time} 동안 쓰지 않아 닫았고, 서버가 열린 트랜잭션을 롤백했습니다. 다음 실행에서 다시 연결합니다"
 "query.tx_idle_closed" = "트랜잭션이 {time} 동안 유휴 상태여서 이 탭의 세션을 닫았고, 서버가 그 트랜잭션을 롤백했습니다. 다음 실행에서 다시 연결합니다"
 "query.tx_idle_rollback_unanswered" = "트랜잭션이 {time} 동안 유휴 상태여서 롤백을 보냈지만 {wait} 안에 응답이 없어 이 탭의 세션을 대신 닫았습니다. 서버는 세션이 끝난 것을 알면 트랜잭션을 롤백합니다. 다음 실행에서 다시 연결합니다"
-"query.tx_idle_rollback_failed" = "트랜잭션이 {time} 동안 유휴 상태여서 롤백을 보냈지만 실패해서({error}) 이 탭의 세션을 대신 닫았습니다. 서버가 트랜잭션을 롤백합니다. 다음 실행에서 다시 연결합니다"
+"query.tx_idle_rollback_failed" = "트랜잭션이 {time} 동안 유휴 상태여서 롤백을 보냈지만 실패해서({error}) 이 탭의 세션을 대신 닫았습니다. 서버는 세션이 끝난 것을 알면 트랜잭션을 롤백합니다. 다음 실행에서 다시 연결합니다"
 "query.idle_closed_by_server" = "유휴 상태가 길어 서버가 이 탭의 세션을 닫았습니다. 다음 실행에서 다시 연결합니다: {error}"
 "query.idle_closed_by_server_tx" = "유휴 상태가 길어 서버가 이 탭의 세션을 닫고 열린 트랜잭션을 롤백했습니다. 다음 실행에서 다시 연결합니다: {error}"
 "query.info.insert_id" = "마지막 삽입 ID: {id}"

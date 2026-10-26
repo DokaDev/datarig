@@ -1060,7 +1060,7 @@ impl App {
         let mut offer = false;
         // The rollback the app sent for an idle transaction: confirmed (said in the status bar
         // too), or refused (`Err`: the session closes instead).
-        let mut idle_end: Option<Result<Notice, (Duration, String)>> = None;
+        let mut idle_end: Option<Result<Notice, (Duration, super::idle::RollbackFailed)>> = None;
         let Some(t) = self.tabs.get_mut(id) else { return };
         if outside.is_some() {
             t.exec.outside_offer = outside;
@@ -1182,10 +1182,15 @@ impl App {
             DbEvent::TxEnded { .. } => None,
             // The app's rollback of an idle transaction failed: the session closes instead (after
             // this event), whatever the error.
-            DbEvent::Failed { id: q, .. } if t.exec.ending.is_some_and(|e| e.id == q && e.idle.is_some()) => {
+            DbEvent::Failed { id: q, error, .. } if t.exec.ending.is_some_and(|e| e.id == q && e.idle.is_some()) => {
                 let limit = t.exec.ending.take().and_then(|e| e.idle).map_or(Duration::ZERO, |i| i.limit);
                 t.exec.last_end = Some(false);
-                idle_end = Some(Err((limit, text.clone())));
+                // The server's own idle limit ended the session first: said as such.
+                let why = match error {
+                    DbError::IdleInTransactionTimeout(_) => super::idle::RollbackFailed::ServerEnded(text.clone()),
+                    _ => super::idle::RollbackFailed::Refused(text.clone()),
+                };
+                idle_end = Some(Err((limit, why)));
                 None
             }
             // The commit or rollback asked for failed.
@@ -1366,11 +1371,17 @@ impl App {
                 t.exec.lost_tx = t.exec.tx_at_risk();
                 t.exec.running = None;
                 let had_tx = t.exec.user_tx();
+                // Lost while the app rolled its idle transaction back: said in the status bar
+                // too, as a failed rollback is.
+                let idle = t.exec.ending.is_some_and(|e| e.idle.is_some());
                 t.tx_reset();
                 t.exec.paging = Paging::None;
                 if let DbError::IdleInTransactionTimeout(_) = error {
                     let m = Notice::new(Msg::TxIdleTimeout { error: text }, Level::Warning);
                     t.exec.run.notes.push(m.clone());
+                    if idle {
+                        idle_end = Some(Ok(m.clone()));
+                    }
                     Some(m)
                 } else if let DbError::IdleSessionTimeout(_) = error {
                     // The server's idle limit, not a failure: the next run connects again (and
@@ -1387,6 +1398,9 @@ impl App {
                         t.exec.run.notes.push(Notice::new(Label::TxLost, Level::Warning));
                     }
                     let lost = Notice::new(Msg::QueryLost { error: text }, Level::Warning);
+                    if idle {
+                        idle_end = Some(Ok(lost.clone()));
+                    }
                     // Lost while committing: what matters is that the outcome is not known.
                     let unknown = Msg::Label(Label::DbCommitUnknown);
                     match t.exec.run.notes.last().filter(|n| n.msg == unknown).cloned() {
@@ -1781,7 +1795,7 @@ impl App {
         match idle_end {
             // Said where the user looks, from another tab too.
             Some(Ok(m)) => self.status = Some(m),
-            Some(Err((limit, error))) => return self.idle_rollback_failed(id, limit, Some(error)),
+            Some(Err((limit, why))) => return self.idle_rollback_failed(id, limit, why),
             None => {}
         }
         if let Some(qid) = close_portal {

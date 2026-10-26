@@ -38,8 +38,22 @@ pub const SERVER_IDLE_MARGIN: Duration = Duration::from_secs(60);
 pub const IDLE_WARN_LEAD: Duration = Duration::from_secs(60);
 
 /// How long the session may take to answer the `ROLLBACK` the app sends for an idle
-/// transaction before the app closes it instead.
+/// transaction before the app closes it instead (PostgreSQL's rollback only marks the
+/// transaction aborted: it answers at once).
 pub const TX_ROLLBACK_ANSWER_WAIT: Duration = Duration::from_secs(10);
+
+/// [`TX_ROLLBACK_ANSWER_WAIT`] on MySQL, whose rollback undoes the transaction's rows one by one
+/// and may take about as long as its writes did (closing the session would not make that
+/// faster: the server still undoes them, holding the locks).
+pub const TX_ROLLBACK_ANSWER_WAIT_MYSQL: Duration = Duration::from_secs(60);
+
+/// How long tab `t`'s session may take to answer the rollback of its idle transaction.
+fn rollback_wait(t: &Tab) -> Duration {
+    match t.exec.prepared.language().dialect() {
+        datarig_core::sql::dialect::Dialect::MySql(_) => TX_ROLLBACK_ANSWER_WAIT_MYSQL,
+        _ => TX_ROLLBACK_ANSWER_WAIT,
+    }
+}
 
 /// PostgreSQL's server ends a session whose transaction opened for manual commit sat idle for
 /// its `tx_idle_rollback` plus this (`idle_in_transaction_session_timeout`, for that transaction
@@ -47,6 +61,17 @@ pub const TX_ROLLBACK_ANSWER_WAIT: Duration = Duration::from_secs(10);
 /// the timer's and the network's delays (the server counts from its answer, before the app gets
 /// it), so it acts only when the app could not.
 pub const TX_ROLLBACK_SERVER_MARGIN: Duration = Duration::from_secs(30);
+
+/// Why the rollback the app sent for an idle transaction did not end it on its session.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RollbackFailed {
+    /// No answer within this long ([`rollback_wait`]).
+    Unanswered(Duration),
+    /// The server's error.
+    Refused(String),
+    /// The server ended the session for the transaction's idle time itself (its message).
+    ServerEnded(String),
+}
 
 /// When something was last used, by the app's clock and the wall clock.
 type Used = (Instant, SystemTime);
@@ -163,12 +188,19 @@ impl App {
     }
 
     /// The idle closes, rollbacks and warnings due at `now`: the sessions whose idle rollback
-    /// went unanswered, the profiles nothing used for their limit (with their tabs' sessions),
-    /// then each other tab on its own.
+    /// went unanswered, the idle transactions due a rollback (before the profiles' closes: when
+    /// both are due at once, after a sleep, the transaction's limit is the shorter one, so its
+    /// rollback would have come first; the tab is busy then, so its profile stays), the profiles
+    /// nothing used for their limit (with their tabs' sessions), then each other tab on its own.
     pub(super) fn idle_tick(&mut self, now: Instant) {
         for (id, e) in self.idle_endings() {
             if now >= e.by {
-                self.idle_rollback_failed(id, e.limit, None);
+                self.idle_rollback_failed(id, e.limit, RollbackFailed::Unanswered(e.wait));
+            }
+        }
+        for (id, limit, used, _, tx) in self.idle_tabs() {
+            if tx && self.idle_for(used, now) >= limit {
+                self.roll_back_idle_tab(id, limit);
             }
         }
         for (id, limit, used) in self.idle_profiles() {
@@ -178,10 +210,11 @@ impl App {
         }
         for (id, limit, used, warn, tx) in self.idle_tabs() {
             let idle = self.idle_for(used, now);
-            if idle >= limit && tx {
-                self.roll_back_idle_tab(id, limit);
-            } else if idle >= limit {
-                self.close_idle_tab(id, limit, false);
+            if idle >= limit {
+                // A transaction's limit was dealt with above.
+                if !tx {
+                    self.close_idle_tab(id, limit, false);
+                }
             } else if warn && idle >= limit.saturating_sub(IDLE_WARN_LEAD.min(limit / 2)) {
                 self.warn_idle_tab(id, limit - idle, tx);
             }
@@ -210,7 +243,7 @@ impl App {
 
     /// Tab `id`'s transaction opened for manual commit sat idle for its `limit`: the app sends
     /// `ROLLBACK` on its session, bound to that session and that request, to be answered within
-    /// [`TX_ROLLBACK_ANSWER_WAIT`] (the answer says the rest, `App::tab_event`). The tab stays
+    /// [`rollback_wait`] (the answer says the rest, `App::tab_event`). The tab stays
     /// busy meanwhile: nothing else is sent there. A session that cannot end it on request
     /// closes as before (the server rolls back).
     fn roll_back_idle_tab(&mut self, id: TabId, limit: Duration) {
@@ -223,7 +256,8 @@ impl App {
         }
         self.query_seq += 1;
         let qid = self.query_seq;
-        let idle = super::tx::IdleEnd { limit, by: self.now() + TX_ROLLBACK_ANSWER_WAIT };
+        let wait = self.tabs.get(id).map_or(TX_ROLLBACK_ANSWER_WAIT, rollback_wait);
+        let idle = super::tx::IdleEnd { limit, wait, by: self.now() + wait };
         if let Some(t) = self.tabs.get_mut(id) {
             t.exec.ending = Some(super::tx::Ending { id: qid, commit: false, idle: Some(idle) });
             t.exec.last_end = None;
@@ -233,14 +267,17 @@ impl App {
         self.send_tab(id, DbCommand::EndTx { id: qid, commit: false });
     }
 
-    /// The rollback the app sent for tab `id`'s transaction idle for `limit` was refused (the
-    /// server's `error`) or not answered in time (`None`): its session closes instead (the
-    /// server rolls back when it ends), said in its Messages, its status and the status bar.
-    pub(super) fn idle_rollback_failed(&mut self, id: TabId, limit: Duration, error: Option<String>) {
+    /// The rollback the app sent for tab `id`'s transaction idle for `limit` did not end it
+    /// (`why`): its session closes instead (the server rolls back when it sees it end), said in
+    /// its Messages, its status and the status bar.
+    pub(super) fn idle_rollback_failed(&mut self, id: TabId, limit: Duration, why: RollbackFailed) {
         let time = format_timeout(Some(limit));
-        let m = match error {
-            Some(error) => Msg::QueryTxIdleRollbackFailed { time, error },
-            None => Msg::QueryTxIdleRollbackUnanswered { time, wait: format_timeout(Some(TX_ROLLBACK_ANSWER_WAIT)) },
+        let m = match why {
+            RollbackFailed::Refused(error) => Msg::QueryTxIdleRollbackFailed { time, error },
+            RollbackFailed::ServerEnded(error) => Msg::TxIdleTimeout { error },
+            RollbackFailed::Unanswered(wait) => {
+                Msg::QueryTxIdleRollbackUnanswered { time, wait: format_timeout(Some(wait)) }
+            }
         };
         self.close_idle_tab_saying(id, Notice::new(m, Level::Warning), true);
     }

@@ -153,6 +153,8 @@ pub struct Ending {
 pub struct IdleEnd {
     /// The limit it sat idle for.
     pub limit: Duration,
+    /// How long the session may take to answer.
+    pub wait: Duration,
     /// By when the session must answer (the app's clock); past it the app closes the session
     /// instead (the server rolls back then).
     pub by: Instant,
@@ -758,8 +760,10 @@ impl App {
         p.current = Some(id);
         p.asked += 1;
         if !self.tabs.get(id).is_some_and(|t| t.exec.user_tx()) {
-            // Ended meanwhile (by the user, by the server): nothing to do there.
-            return self.end_next();
+            // Ended meanwhile (by the user, by the server, rolled back for sitting idle): a
+            // rollback has nothing to do there; a commit asked for did not happen, so nothing
+            // goes on.
+            return if commit { self.end_stopped(id) } else { self.end_next() };
         }
         if !self.end_tx_in(id, commit) {
             self.end_stopped(id);

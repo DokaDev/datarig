@@ -1137,9 +1137,11 @@ how datarig always ran: each statement outside your own `BEGIN` block commits by
   answer or timer after that, right after `tx_idle_warning`'s warning when that is due by then
   (there was no time to warn earlier). With `idle_disconnect` shorter, that closes the session
   first. Your own `BEGIN` is not covered.
-  - If the `ROLLBACK` fails, or gets no answer within 10 s (the network is gone, the server
-    hangs), datarig closes the tab's session instead and says so; the server rolls the
-    transaction back when it sees the session end. The next run connects again.
+  - If the `ROLLBACK` fails, or gets no answer in time (10 s; 60 s on MySQL, whose rollback
+    undoes the transaction row by row and can take about as long as its writes did), because the
+    network is gone or the server hangs, datarig closes the tab's session instead and says so;
+    the server rolls the transaction back once it sees the session end. The next run connects
+    again.
   - PostgreSQL also gets a server-side limit, 30 s later than datarig's
     (`SET LOCAL idle_in_transaction_session_timeout` with the `BEGIN`, so `"30m"` sets `1830s`;
     it ends with the transaction, so nothing stays on a pooled connection). It acts only when
