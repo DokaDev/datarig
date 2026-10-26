@@ -82,6 +82,9 @@ pub enum Command {
     Rollback,
     /// `:tx`: what the active tab's open transaction did.
     Tx,
+    /// `:session`: what the explorer's (else the active tab's) profile's query sessions start
+    /// with, and where each item comes from.
+    Session,
 }
 
 /// The type of a command's argument (it decides the completions).
@@ -368,6 +371,14 @@ pub const COMMANDS: &[CommandSpec] = &[
         arg: None,
         label: Label::ActionTxSummary,
         action: Some(Action::TxSummary),
+    },
+    CommandSpec {
+        command: Command::Session,
+        name: "session",
+        aliases: &[],
+        arg: None,
+        label: Label::ActionSessionShow,
+        action: Some(Action::SessionView),
     },
 ];
 

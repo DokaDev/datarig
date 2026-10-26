@@ -22,7 +22,7 @@
 //! └─ overlay.*              (which-key, help, help filter, command line, quick connect,
 //!                            tab list, profile form, settings, export dialog, chooser, chooser filter, name input,
 //!                            saved-queries tree and its name field, action menu, password,
-//!                            confirm, run confirm, completion)
+//!                            confirm, run confirm, transaction summary, session view, completion)
 //! ```
 
 use datarig_core::i18n::Label;
@@ -61,6 +61,7 @@ pub enum Ctx {
     Confirm,
     RunConfirm,
     TxSummary,
+    SessionView,
     IconsAsk,
     Busy,
     CellViewer,
@@ -71,7 +72,7 @@ pub enum Ctx {
 }
 
 impl Ctx {
-    pub const ALL: [Ctx; 39] = [
+    pub const ALL: [Ctx; 40] = [
         Ctx::Root,
         Ctx::Workspace,
         Ctx::Nav,
@@ -104,6 +105,7 @@ impl Ctx {
         Ctx::Confirm,
         Ctx::RunConfirm,
         Ctx::TxSummary,
+        Ctx::SessionView,
         Ctx::IconsAsk,
         Ctx::Busy,
         Ctx::CellViewer,
@@ -148,6 +150,7 @@ impl Ctx {
             Ctx::Confirm => "overlay.confirm",
             Ctx::RunConfirm => "overlay.run_confirm",
             Ctx::TxSummary => "overlay.tx_summary",
+            Ctx::SessionView => "overlay.session_view",
             Ctx::IconsAsk => "overlay.icons_ask",
             Ctx::Busy => "overlay.busy",
             Ctx::CellViewer => "overlay.cell_viewer",
@@ -289,6 +292,9 @@ impl Ctx {
             Ctx::TxSummary => {
                 "What the open transaction did (its statements that may have written, rows, time; how long it has been open and idle): `c` commits, `r` rolls back, `Esc` closes; a click on a button does what its key does."
             }
+            Ctx::SessionView => {
+                "What a profile's query sessions start with (`:session`; in the profile form `Ctrl+E`, for its unsaved values), in the order they are applied, each with where it comes from: the app's limits, the session preset's statements, the profile's own; behind a pooler in transaction mode, how each PostgreSQL statement goes there. `j`/`k` scroll, `Esc` closes; a click on Close closes too."
+            }
             Ctx::IconsAsk => {
                 "Whether the terminal shows the Nerd Font icons (asked once, with a preview); No has the focus; a click on Yes or No answers."
             }
@@ -340,6 +346,7 @@ impl Ctx {
             Ctx::Confirm => Label::KeyctxOverlayConfirm,
             Ctx::RunConfirm => Label::KeyctxOverlayRunConfirm,
             Ctx::TxSummary => Label::KeyctxOverlayTxSummary,
+            Ctx::SessionView => Label::KeyctxOverlaySessionView,
             Ctx::IconsAsk => Label::KeyctxOverlayIconsAsk,
             Ctx::Busy => Label::KeyctxOverlayBusy,
             Ctx::CellViewer => Label::KeyctxOverlayCellViewer,

@@ -143,6 +143,10 @@ pub enum Action {
     NewSession,
     /// The profile form: its own tunnel becomes a tunnel preset when the form is saved.
     SaveAsTunnel,
+    /// What the explorer's (else the active tab's) profile's query sessions start with.
+    SessionView,
+    /// The profile form: what its sessions would start with, by its values (saved or not).
+    FormSessionView,
     /// The settings screen.
     OpenSettings,
     /// Show or hide the result detail (the inspector panel, or the status bar preview).
@@ -400,6 +404,16 @@ fn action_profile(a: &App) -> bool {
         || (explorer_focused(a) && (a.selected_tunnel().is_some() || a.selected_session().is_some()))
 }
 
+/// There is a profile to act on: the explorer's selection, else the active tab's.
+fn profile_chosen(a: &App) -> bool {
+    a.action_profile().is_some()
+}
+
+/// A profile's form is open (not a tunnel's, an environment's or a preset's).
+fn profile_form(a: &App) -> bool {
+    a.overlays.form().is_some_and(|f| f.kind == super::profiles::FormKind::Profile)
+}
+
 /// The profile form's own tunnel can become a tunnel preset.
 fn own_tunnel_field(a: &App) -> bool {
     a.config_writable()
@@ -579,6 +593,7 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::NewTunnel, "tunnel.new", Label::ActionTunnelNew, presets_writable),
     act(Action::NewEnvironment, "env.new", Label::ActionEnvNew, environments_writable),
     act(Action::NewSession, "session.new", Label::ActionSessionNew, sessions_writable),
+    act(Action::SessionView, "session.show", Label::ActionSessionShow, profile_chosen),
     act(Action::TestConnection, "conn.test", Label::ActionConnTest, action_profile),
     act(Action::Disconnect, "conn.disconnect", Label::ActionConnDisconnect, explorer_profile),
     act(Action::OpenConsole, "conn.open_console", Label::ActionConnOpenConsole, explorer_profile),
@@ -669,6 +684,7 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::PickKeyFile, "form.pick_key_file", Label::ActionFormPickKeyFile, key_file_field),
     act(Action::PickExportPath, "export.pick_path", Label::ActionExportPickPath, export_dialog),
     act(Action::SaveAsTunnel, "form.save_as_tunnel", Label::ActionFormSaveAsTunnel, own_tunnel_field),
+    act(Action::FormSessionView, "form.session_view", Label::ActionFormSessionView, profile_form),
     act(Action::Help, "help.context", Label::ActionHelpContext, help_available),
     act(Action::HelpAll, "help.all", Label::ActionHelpAll, help_available),
     act(Action::PaneBack, "pane.back", Label::ActionPaneBack, results_focused),

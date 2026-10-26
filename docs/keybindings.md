@@ -445,6 +445,7 @@ Connection profile form. With the mouse: a click focuses a field (in a text, the
 |---|---|---|---|
 | `Ctrl+O` | `form.pick_key_file` | Pick the SSH key file |  |
 | `Ctrl+B` | `form.save_as_tunnel` | Profile form: save this profile's SSH tunnel as a tunnel preset |  |
+| `Ctrl+E` | `form.session_view` | Profile form: what its sessions would start with (its values, saved or not) |  |
 
 Reserved — profile form: `Tab` `Shift+Tab` `Down` `Up` `Enter` `Esc` `Ctrl+S` `Ctrl+T` `Ctrl+N` `Ctrl+P`
 
@@ -546,6 +547,12 @@ What the open transaction did (its statements that may have written, rows, time;
 
 Reserved — transaction summary: `c` `r` `Esc` `q` `Enter` `j` `k` `Down` `Up`
 
+## `overlay.session_view`
+
+What a profile's query sessions start with (`:session`; in the profile form `Ctrl+E`, for its unsaved values), in the order they are applied, each with where it comes from: the app's limits, the session preset's statements, the profile's own; behind a pooler in transaction mode, how each PostgreSQL statement goes there. `j`/`k` scroll, `Esc` closes; a click on Close closes too. Inside `root`.
+
+Reserved — session settings: `Esc` `q` `Enter` `j` `k` `Down` `Up`
+
 ## `overlay.icons_ask`
 
 Whether the terminal shows the Nerd Font icons (asked once, with a preview); No has the focus; a click on Yes or No answers. Inside `root`.
@@ -634,6 +641,7 @@ An editor command closes the line; what went wrong is said in the status bar.
 | `:commit` |  | Commit the open transaction |
 | `:rollback` | `:rb` | Roll back the open transaction |
 | `:tx` |  | What the open transaction did |
+| `:session` |  | What a profile's sessions start with, and where each setting comes from |
 
 Settings of `:set` (saved to `config.toml` like the matching actions):
 
@@ -669,6 +677,7 @@ Actions without a default key (the command line finds them by name).
 | `tunnel.new` | New SSH tunnel (shared by profiles) |
 | `env.new` | New environment (rules, color and badge that profiles share) |
 | `session.new` | New session preset (settings a profile's sessions start with) |
+| `session.show` | What a profile's sessions start with, and where each setting comes from |
 | `ui.language.en` | Change language → English |
 | `ui.language.ko` | Change language → Korean |
 | `ui.language.auto` | Change language → Auto (system locale) |

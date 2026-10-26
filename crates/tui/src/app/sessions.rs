@@ -89,9 +89,12 @@ impl App {
         session::plan(cfg, &rules, defaults, &self.session_presets)
     }
 
-    /// Where a plan's statement comes from, in words.
+    /// Where an item of a plan comes from, in words.
     pub(super) fn session_source_text(&self, source: &Source) -> String {
         let m = match source {
+            Source::Global => return self.i18n.label(Label::SessionSourceGlobal).to_string(),
+            Source::DefaultRules => return self.i18n.label(Label::SessionSourceDefaultRules).to_string(),
+            Source::Environment(e) => Msg::SessionSourceEnvironment { environment: e.clone() },
             Source::Preset { name, by: PickedBy::Profile } => Msg::SessionSourceProfilePreset { preset: name.clone() },
             Source::Preset { name, by: PickedBy::Environment(Some(e)) } => {
                 Msg::SessionSourceEnvironmentPreset { preset: name.clone(), environment: e.clone() }
@@ -99,7 +102,7 @@ impl App {
             Source::Preset { name, by: PickedBy::Environment(None) } => {
                 Msg::SessionSourceDefaultPreset { preset: name.clone() }
             }
-            _ => return self.i18n.label(Label::SessionSourceProfile).to_string(),
+            Source::Profile => return self.i18n.label(Label::SessionSourceProfile).to_string(),
         };
         self.i18n.msg(&m).to_string()
     }
@@ -225,6 +228,136 @@ impl App {
             Msg::SessionPooledRefused { name, count: refused.len() as u64, sql: sql.join("; ") },
             Level::Warning,
         )
+    }
+}
+
+impl App {
+    /// `:session`: what the explorer's (else the active tab's) profile's query sessions start
+    /// with ([`SessionView`]).
+    ///
+    /// [`SessionView`]: super::overlay::SessionView
+    pub(super) fn session_view(&mut self) {
+        let Some(cfg) = self.action_profile().and_then(|p| self.profile(p)).cloned() else {
+            return self.flash(Notice::new(Label::SessionViewNoProfile, Level::Info));
+        };
+        self.open_session_view(&cfg, false);
+    }
+
+    /// The profile form's values, saved or not: what its sessions would start with.
+    pub(super) fn form_session_view(&mut self) {
+        let Some(f) = self.overlays.form().filter(|f| f.kind == FormKind::Profile) else { return };
+        let cfg = f.to_test_profile();
+        // A value of the plan that differs from the saved profile's (or a new profile): unsaved.
+        let saved = f.editing.and_then(|i| self.profiles.get(i));
+        let unsaved = saved.is_none_or(|p| {
+            (Dbms::of_driver(&p.driver), &p.policy, &p.session, &p.session_sql)
+                != (Dbms::of_driver(&cfg.driver), &cfg.policy, &cfg.session, &cfg.session_sql)
+        });
+        self.open_session_view(&cfg, unsaved);
+    }
+
+    /// The session view of `cfg` (`unsaved`: a form's values the file does not have yet), made
+    /// now: it does not follow later changes.
+    fn open_session_view(&mut self, cfg: &ConnectionConfig, unsaved: bool) {
+        use super::overlay::{SessionLine, Tone};
+        use datarig_core::profile::session::{Intent, Planned};
+        let label = |l: Label| self.i18n.label(l).to_string();
+        let env = cfg.policy.as_deref().filter(|n| *n != datarig_core::policy::DEFAULT);
+        let rules = self.policies.get(cfg.policy.as_deref()).unwrap_or_else(|_| self.rules_of(cfg.id));
+        let title = match (unsaved, cfg.name.is_empty()) {
+            (false, _) => self.i18n.msg(&Msg::SessionViewTitle { name: cfg.name.clone() }),
+            (true, false) => self.i18n.msg(&Msg::SessionViewTitleUnsaved { name: cfg.name.clone() }),
+            (true, true) => self.i18n.label(Label::SessionViewTitleNew),
+        };
+        // The profile, its database, its environment.
+        let dbms = Dbms::of_driver(&cfg.driver).map_or(cfg.driver.clone(), |d| d.display().to_string());
+        let place = self.session_source_text(&match env {
+            Some(e) => Source::Environment(e.to_string()),
+            None => Source::DefaultRules,
+        });
+        let who = [cfg.name.as_str(), &dbms, &place].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>();
+        let mut head = vec![SessionLine::Text(who.join(" · "), Tone::Strong)];
+        if rules.read_only {
+            head.push(SessionLine::Text(label(Label::SessionViewReadOnly), Tone::Warning));
+        }
+        let mut lines = Vec::new();
+        let foot = match self.session_plan_of(cfg) {
+            Err(e) => {
+                let text = self.session_error_notice(&cfg.name, &e).render(&self.i18n).to_string();
+                lines.push(SessionLine::Text(text, Tone::Error));
+                SessionLine::Text(label(Label::SessionViewNoConnect), Tone::Warning)
+            }
+            Ok(plan) => {
+                let mut from: Option<&Source> = None;
+                for i in &plan.items {
+                    // A blank line after the app's limits.
+                    if !matches!(i.what, Planned::Intent(_)) && matches!(lines.last(), Some(SessionLine::Intent { .. }))
+                    {
+                        lines.push(SessionLine::Text(String::new(), Tone::Muted));
+                    }
+                    match &i.what {
+                        Planned::Intent(x) => {
+                            let (what, d, off) = match *x {
+                                Intent::LockWait(d) => (Label::FormFieldLockWait, d, Label::SessionViewServerSetting),
+                                Intent::IdleDisconnect(d) => {
+                                    (Label::FormFieldIdleDisconnect, d, Label::SessionViewNever)
+                                }
+                                Intent::TxIdleRollback(d) => {
+                                    (Label::FormFieldTxIdleRollback, d, Label::SessionViewNever)
+                                }
+                            };
+                            let value = d.map_or_else(|| label(off), |d| datarig_core::policy::format_timeout(Some(d)));
+                            let source = self.session_source_text(&i.source);
+                            lines.push(SessionLine::Intent { what: label(what), value, source });
+                        }
+                        Planned::Sql(sql) => {
+                            if from != Some(&i.source) {
+                                let source = self.session_source_text(&i.source);
+                                lines.push(SessionLine::Source(
+                                    self.i18n.msg(&Msg::SessionViewFrom { source }).to_string(),
+                                ));
+                                from = Some(&i.source);
+                            }
+                            lines.push(SessionLine::Statement(sql.clone()));
+                            if let Some(p) = &i.pooled {
+                                lines.push(SessionLine::Pooled(p.clone()));
+                            }
+                        }
+                        Planned::Skipped { preset } => {
+                            let by = PickedBy::Environment(env.map(str::to_string));
+                            let source = self.session_source_text(&Source::Preset { name: preset.clone(), by });
+                            let text = self.i18n.msg(&Msg::SessionViewSkipped { source }).to_string();
+                            lines.push(SessionLine::Text(text, Tone::Muted));
+                        }
+                    }
+                }
+                if plan.statements().is_empty() {
+                    if matches!(lines.last(), Some(SessionLine::Intent { .. })) {
+                        lines.push(SessionLine::Text(String::new(), Tone::Muted));
+                    }
+                    lines.push(SessionLine::Text(label(Label::SessionViewNoStatements), Tone::Muted));
+                }
+                SessionLine::Text(label(Label::SessionViewOrder), Tone::Muted)
+            }
+        };
+        self.overlays.close(OverlayKind::Commands);
+        self.overlays.close(OverlayKind::WhichKey);
+        self.key_state.clear();
+        let v = super::overlay::SessionView { title, head, lines, foot, scroll: 0, buttons: Default::default() };
+        self.overlays.push(Overlay::SessionView(v));
+    }
+
+    /// Keys of the session view: `Esc`, `q` and `Enter` close it, `j`/`k` and the arrows
+    /// scroll. Held keys only scroll.
+    pub(super) fn session_view_key(&mut self, key: KeyEvent, repeat: bool) {
+        let Some(s) = self.overlays.session_view_mut() else { return };
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => s.scroll += 1,
+            KeyCode::Char('k') | KeyCode::Up => s.scroll = s.scroll.saturating_sub(1),
+            _ if repeat => {}
+            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => self.overlays.close(OverlayKind::SessionView),
+            _ => {}
+        }
     }
 }
 

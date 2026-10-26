@@ -158,6 +158,7 @@ impl App {
                     | OverlayKind::Confirm
                     | OverlayKind::RunConfirm
                     | OverlayKind::TxSummary
+                    | OverlayKind::SessionView
                     | OverlayKind::IconsAsk
             )
         }) {
@@ -327,6 +328,7 @@ impl App {
             Ctx::Confirm => keys.iter().for_each(|k| self.confirm_key(k.to_event(), repeat)),
             Ctx::RunConfirm => keys.iter().for_each(|k| self.run_confirm_key(k.to_event(), repeat)),
             Ctx::TxSummary => keys.iter().for_each(|k| self.tx_summary_key(k.to_event(), repeat)),
+            Ctx::SessionView => keys.iter().for_each(|k| self.session_view_key(k.to_event(), repeat)),
             Ctx::IconsAsk => keys.iter().for_each(|k| self.icons_ask_key(k.to_event(), repeat)),
             Ctx::ProfileForm => keys.iter().for_each(|k| self.form_key(k.to_event(), repeat)),
             Ctx::Settings => keys.iter().for_each(|k| self.settings_key(k.to_event(), repeat)),

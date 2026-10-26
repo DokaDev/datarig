@@ -197,6 +197,8 @@ const ACTIONS: &[(Ctx, &str, &str)] = &[
     // the profile form: the SSH key file picker
     (ProfileForm, "ctrl+o", "form.pick_key_file"),
     (ProfileForm, "ctrl+b", "form.save_as_tunnel"),
+    // what its sessions would start with (the form's values, saved or not)
+    (ProfileForm, "ctrl+e", "form.session_view"),
     (Export, "ctrl+o", "export.pick_path"),
     // workspace
     (Workspace, "ctrl+enter", "query.execute_current"),
@@ -591,6 +593,7 @@ const RESERVED: &[(Ctx, &[&str], &str)] = &[
         "run confirmation (Cancel has the focus)",
     ),
     (TxSummary, &["c", "r", "esc", "q", "enter", "j", "k", "down", "up"], "transaction summary"),
+    (SessionView, &["esc", "q", "enter", "j", "k", "down", "up"], "session settings"),
     (
         IconsAsk,
         &["y", "n", "enter", "esc", "tab", "shift+tab", "left", "right", "h", "l"],

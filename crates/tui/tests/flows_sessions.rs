@@ -817,3 +817,141 @@ fn a_mysql_profiles_advanced_section_keeps_a_line_above_the_buttons() {
     assert_eq!(buttons, folder + 2, "{screen}");
     assert!(lines[folder + 1].trim_matches(|c| c == '│' || c == ' ').is_empty(), "{screen}");
 }
+
+// ── the session view ────────────────────────────────────────────────────
+
+/// The `prod` environment of [`config`] with a lock wait of its own and the profile's own
+/// statements (one with no form for one transaction).
+fn view_config() -> Config {
+    let mut cfg = config(|p| p.session_sql = vec!["SET work_mem = '256MB'".into(), "SET ROLE reporting".into()]);
+    let mut rules = cfg.policies.get(Some("prod")).unwrap();
+    rules.lock_wait = Some(Some(Duration::from_secs(5)));
+    cfg.policies.insert("prod", rules);
+    cfg
+}
+
+/// `:session` on the active tab's PostgreSQL profile: the app's limits with their sources,
+/// the preset's statements and then the profile's own, each under where it comes from, with
+/// how it goes behind a pooler; in order, and said once that a later setting wins.
+#[test]
+fn the_session_view_lists_what_a_profiles_sessions_start_with_and_from_where() {
+    let mut h = connected(&view_config());
+    h.command("session");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::SessionView));
+    let screen = h.screen(120, 40);
+    for line in [
+        "local-pg · PostgreSQL · the environment prod",
+        "Lock wait        5s     the environment prod",
+        "Idle disconnect  never  the app setting",
+        "Idle rollback    30m    the environment prod",
+        "From the session preset “reporting” of the environment prod:",
+        "  SET statement_timeout = '30s'",
+        "    behind a pooler: per transaction as SET LOCAL statement_timeout = '30s'",
+        "From its own session SQL:",
+        "  SET work_mem = '256MB'",
+        "    behind a pooler: per transaction as SET LOCAL work_mem = '256MB'",
+        "  SET ROLE reporting",
+        "    behind a pooler: not sent — it changes who the session is",
+        "Applied in this order: a later setting of the same name wins",
+    ] {
+        assert!(screen.contains(line), "{line}\n{screen}");
+    }
+    for (w, ht) in [(80, 24), (120, 40)] {
+        insta::assert_snapshot!(format!("session_view_en_{w}x{ht}"), h.draw(w, ht).backend());
+    }
+    remember_english("session_view_en_120x40", h.draw(120, 40).backend().buffer());
+    // `j` scrolls, `Esc` closes.
+    h.keys("j");
+    h.key(KeyCode::Esc);
+    assert_eq!(h.overlay_kind(), None);
+}
+
+#[test]
+fn the_session_view_is_in_korean() {
+    let mut h = connected(&view_config());
+    h.command("session");
+    remember_english("session_view_en_120x40", h.draw(120, 40).backend().buffer());
+    let mut h = Harness::with_config(&view_config(), Lang::Ko);
+    h.db(DbEvent::Connected);
+    h.command("session");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::SessionView));
+    let screen = h.screen(120, 40);
+    assert!(screen.contains(ko(datarig_core::i18n::Label::SessionViewOrder)), "{screen}");
+    check_localized("session_view_ko_120x40", Lang::Ko, h.draw(120, 40).backend().buffer());
+}
+
+/// MySQL's statements are sent as written: no pooler lines.
+#[test]
+fn a_mysql_profiles_session_view_has_no_pooler_lines() {
+    let cfg = config(|p| p.driver = "mysql".into());
+    let mut h = launched(&cfg);
+    h.explore("local-pg");
+    h.command("session");
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("local-pg · MySQL · the environment prod"), "{screen}");
+    assert!(screen.contains("From the session preset “my_ro” of the environment prod:"), "{screen}");
+    assert!(screen.contains("  SET SESSION sql_mode = 'ANSI_QUOTES'"), "{screen}");
+    assert!(!screen.contains("behind a pooler"), "{screen}");
+}
+
+/// `session = "none"`: the environment's preset is said to be skipped; with no statements left,
+/// that is said too (the app's limits still apply).
+#[test]
+fn the_session_view_says_a_skipped_preset_and_no_statements() {
+    let cfg = config(|p| p.session = SessionRef::Off);
+    let mut h = launched(&cfg);
+    h.explore("local-pg");
+    h.command("session");
+    let screen = h.screen(120, 40);
+    assert!(
+        screen.contains(
+            "Not used: the session preset “reporting” of the environment prod (the profile says session = \"none\")"
+        ),
+        "{screen}"
+    );
+    assert!(screen.contains("No session statements"), "{screen}");
+    assert!(screen.contains("Lock wait"), "{screen}");
+}
+
+/// A plan with an error: the words the connect refusal says, and that it does not connect.
+#[test]
+fn the_session_view_of_a_profile_that_does_not_connect_says_why() {
+    let cfg = config(|p| p.session = SessionRef::Named("gone".into()));
+    let mut h = launched(&cfg);
+    h.explore("local-pg");
+    h.command("session");
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("local-pg names the session preset “gone”, which does not exist"), "{screen}");
+    assert!(screen.contains("The profile does not connect until this is fixed"), "{screen}");
+    assert!(!screen.contains("Lock wait"), "{screen}");
+    insta::assert_snapshot!("session_view_error_en_80x24", h.draw(80, 24).backend());
+}
+
+/// From the profile form, `Ctrl+E` shows the form's values, unsaved ones too; `Esc` goes back
+/// to the form as it was.
+#[test]
+fn the_profile_forms_key_shows_its_unsaved_values() {
+    let dir = scratch("view-form");
+    let mut h = section_harness(&dir);
+    profile_field(&mut h, "local-pg", Field::SessionSql);
+    h.type_text("SET jit = off");
+    h.ctrl('e');
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::SessionView));
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("Session settings — local-pg (the form's unsaved values)"), "{screen}");
+    assert!(screen.contains("From its own session SQL:") && screen.contains("  SET jit = off"), "{screen}");
+    h.key(KeyCode::Esc);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ProfileForm));
+    assert_eq!(h.form().focus, Field::SessionSql);
+    assert_eq!(h.form().session_sql.text(), "SET jit = off");
+    assert!(h.app.profiles[0].session_sql.is_empty(), "nothing saved");
+}
+
+/// Without a profile to show, it says so.
+#[test]
+fn the_session_view_without_a_profile_says_so() {
+    let mut h = Harness::with_config(&Config::default(), Lang::En);
+    h.command("session");
+    assert_ne!(h.overlay_kind(), Some(OverlayKind::SessionView));
+    assert_eq!(said(&h), "No profile to show: select one in the explorer, or go to one of its tabs");
+}

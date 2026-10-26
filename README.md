@@ -943,6 +943,21 @@ explorer's lookups (the metadata sessions) never get these settings.
 - The form's one line shows a preset's statements without their line comments (`-- …`, `# …`,
   which would hide the statements after them), so saving the form writes them without.
 
+**Seeing what applies**: `:session` shows what the query sessions of the explorer's selected
+profile (else the active tab's) start with, and `Ctrl+E` in a profile's form shows the same for
+the form's values, saved or not (the title says when they are unsaved). The first line names the
+profile, its database and its environment (or the default rules), and says when that environment
+is read-only. Then, in the order they are applied: the app's limits (lock wait, idle disconnect,
+idle rollback) with their values and where each comes from (the environment, the default rules
+or the app setting), an environment's preset the profile turned off (`session = "none"`), and
+each statement under where it comes from (the preset and who picked it, or the profile's own
+session SQL). Under a PostgreSQL statement a dim line says how it would go behind a pooler in
+transaction mode: per transaction as `SET LOCAL …`, or not sent and why. That line only applies
+when a connection turns out to be behind one (known once it connects); otherwise each statement
+is sent as written. A profile whose plan has an error shows the words its connect would refuse
+with. The view is a snapshot of the config (or the form) when it opened; `j`/`k` scroll, `Esc`
+closes.
+
 ## Export
 
 `Space r e`, the results menu, or `:export` alone opens the export dialog for the active tab's

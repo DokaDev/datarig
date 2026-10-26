@@ -33,6 +33,7 @@ impl App {
                 // No transaction, something runs, or it failed: said why.
                 Action::TxCommit | Action::TxRollback if !self.tabs.is_empty() => self.end_tx(a == Action::TxCommit),
                 Action::TxSummary if !self.tabs.is_empty() => self.tx_summary(),
+                Action::SessionView => self.flash(Notice::new(Label::SessionViewNoProfile, Level::Info)),
                 // Another result: said, as a key that does nothing would leave the user guessing.
                 Action::ExplainAsPlan
                     if !self.tabs.is_empty() && self.tab().is_query() && self.tab_explains(self.tab().id) =>
@@ -87,6 +88,8 @@ impl App {
             Action::NewProfile => self.open_form(None, false),
             Action::NewTunnel => self.open_tunnel_form(None, false),
             Action::SaveAsTunnel => self.open_save_as_tunnel(),
+            Action::SessionView => self.session_view(),
+            Action::FormSessionView => self.form_session_view(),
             Action::TestConnection
                 if self.focus == Focus::Tree
                     && !self.overlays.is_open(OverlayKind::ProfileForm)

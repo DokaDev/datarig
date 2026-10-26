@@ -102,6 +102,10 @@ pub fn draw_overlays(f: &mut Frame, app: &mut App, screen_cursor: Option<(u16, u
                 crate::widgets::dialog::draw_tx_summary(app, content, f.buffer_mut());
                 None
             }
+            OverlayKind::SessionView => {
+                crate::widgets::dialog::draw_session_view(app, content, f.buffer_mut());
+                None
+            }
             OverlayKind::IconsAsk => {
                 crate::widgets::dialog::draw_icons_ask(app, content, f.buffer_mut());
                 None
