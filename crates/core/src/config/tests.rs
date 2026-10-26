@@ -129,7 +129,15 @@ fn settings(language: &str) -> Settings<'_> {
 }
 
 fn profiles<'a>(c: &'a [ConnectionConfig], folders: &'a Folders, last_used: Option<ProfileId>) -> Profiles<'a> {
-    Profiles { connections: c, tunnels: &[], environments: None, default_rules: None, folders, last_used }
+    Profiles {
+        connections: c,
+        tunnels: &[],
+        sessions: None,
+        environments: None,
+        default_rules: None,
+        folders,
+        last_used,
+    }
 }
 
 /// `<tmp>/datarig-cfg-<pid>-<tag>/sub/config.toml`, not created; the directory is removed when
@@ -1181,6 +1189,7 @@ fn tunnel_presets_are_read_checked_and_written() {
         Some(Profiles {
             connections: &cfg.connections,
             tunnels: &cfg.tunnels,
+            sessions: None,
             environments: None,
             default_rules: None,
             folders: &cfg.folders,
@@ -1214,6 +1223,7 @@ fn tunnel_presets_are_read_checked_and_written() {
         Some(Profiles {
             connections: &cfg.connections,
             tunnels: &cfg.tunnels,
+            sessions: None,
             environments: None,
             default_rules: None,
             folders: &cfg.folders,
@@ -1240,6 +1250,7 @@ fn tunnel_presets_are_read_checked_and_written() {
         Some(Profiles {
             connections: &conns,
             tunnels: &[],
+            sessions: None,
             environments: None,
             default_rules: None,
             folders: &back.folders,
@@ -1257,6 +1268,7 @@ fn tunnel_presets_are_read_checked_and_written() {
         Some(Profiles {
             connections: &conns,
             tunnels: std::slice::from_ref(&new),
+            sessions: None,
             environments: None,
             default_rules: None,
             folders: &back.folders,
@@ -1316,6 +1328,7 @@ fn bad_tunnel_presets_are_errors_of_the_file() {
             Some(Profiles {
                 connections: &[],
                 tunnels: std::slice::from_ref(&t),
+                sessions: None,
                 environments: None,
                 default_rules: None,
                 folders: &Folders::default(),
@@ -1363,6 +1376,7 @@ fn inline_tunnel_tables_are_rewritten_not_left_behind() {
                 Some(Profiles {
                     connections: &[],
                     tunnels: t,
+                    sessions: None,
                     environments: None,
                     default_rules: None,
                     folders: &cfg.folders,
@@ -1490,6 +1504,7 @@ lock_wait = "30s"
             Some(Profiles {
                 connections: &cfg.connections,
                 tunnels: &cfg.tunnels,
+                sessions: None,
                 environments: Some(envs),
                 default_rules: None,
                 folders: &cfg.folders,
@@ -1576,6 +1591,7 @@ commit = "manual"
             Some(Profiles {
                 connections: &cfg.connections,
                 tunnels: &cfg.tunnels,
+                sessions: None,
                 environments: Some(envs),
                 default_rules: None,
                 folders: &cfg.folders,
@@ -1647,6 +1663,7 @@ fn tx_idle_timeout_is_read_as_tx_idle_rollback() {
             Some(Profiles {
                 connections: &cfg.connections,
                 tunnels: &cfg.tunnels,
+                sessions: None,
                 environments: Some(envs),
                 default_rules: None,
                 folders: &cfg.folders,
@@ -1694,6 +1711,7 @@ fn the_default_rules_rename_tx_idle_timeout_when_saved_changed() {
             Some(Profiles {
                 connections: &cfg.connections,
                 tunnels: &cfg.tunnels,
+                sessions: None,
                 environments: None,
                 default_rules: Some(rules),
                 folders: &cfg.folders,
@@ -1746,6 +1764,7 @@ fn environments_are_written_only_where_they_changed() {
             Some(Profiles {
                 connections: &cfg.connections,
                 tunnels: &cfg.tunnels,
+                sessions: None,
                 environments: Some(envs),
                 default_rules: None,
                 folders: &cfg.folders,
@@ -1823,6 +1842,7 @@ fn new_environments_and_inline_tables() {
             Some(Profiles {
                 connections: &[],
                 tunnels: &[],
+                sessions: None,
                 environments: Some(envs),
                 default_rules: None,
                 folders: &cfg.folders,
@@ -1872,6 +1892,7 @@ fn dotted_and_inline_environments_stay_where_they_are() {
             Some(Profiles {
                 connections: &[],
                 tunnels: &[],
+                sessions: None,
                 environments: Some(envs),
                 default_rules: None,
                 folders: &Folders::default(),
@@ -1951,6 +1972,7 @@ fn the_default_rules_are_written_only_where_they_changed() {
             Some(Profiles {
                 connections: &[],
                 tunnels: &[],
+                sessions: None,
                 environments: Some(&[]),
                 default_rules: Some(rules),
                 folders: &Folders::default(),
@@ -1975,4 +1997,153 @@ fn the_default_rules_are_written_only_where_they_changed() {
         save_rules(&rules),
         "version = 2\n\n# mine\n[policy.default]\nbadge = \"X\" # not shown\npaging_idle_timeout = \"90s\"\nread_only = true\n"
     );
+}
+
+/// Session presets, environments' `session` and profiles' `session` / `session_sql`: read,
+/// with each load error of their own.
+#[test]
+fn session_presets_are_read() {
+    use crate::profile::session::{Dbms, SessionRef};
+    let text = r#"
+[sessions.reporting]
+dbms = "postgres"
+sql = ["SET statement_timeout = '30s'", "SET work_mem = '64MB'"]
+
+[sessions.empty]
+dbms = "mysql"
+
+[policy.prod]
+session = { postgres = "reporting", mysql = "empty" }
+
+[policy.default]
+session = { mysql = "empty" }
+
+[[connections]]
+name = "a"
+policy = "prod"
+session = "none"
+session_sql = ["SET work_mem = '256MB'"]
+
+[[connections]]
+name = "b"
+session = "reporting"
+
+[[connections]]
+name = "c"
+"#;
+    let cfg = parse(text).unwrap();
+    let names: Vec<_> = cfg.sessions.iter().map(|p| (p.name.as_str(), p.dbms, p.sql.len())).collect();
+    assert_eq!(names, [("empty", Dbms::MySql, 0), ("reporting", Dbms::Postgres, 2)]);
+    let prod = &cfg.policies.environment("prod").unwrap().policy.session;
+    assert_eq!((prod.postgres.as_deref(), prod.mysql.as_deref()), (Some("reporting"), Some("empty")));
+    assert_eq!(cfg.policies.default_rules().session.mysql.as_deref(), Some("empty"));
+    let c = &cfg.connections;
+    assert_eq!(
+        (&c[0].session, c[0].session_sql.as_slice()),
+        (&SessionRef::Off, ["SET work_mem = '256MB'".to_string()].as_slice())
+    );
+    assert_eq!(c[1].session, SessionRef::Named("reporting".into()));
+    assert_eq!((&c[2].session, c[2].session_sql.is_empty()), (&SessionRef::Inherit, true));
+}
+
+#[test]
+fn session_preset_errors() {
+    let err = |t: &str| parse(t).unwrap_err();
+    assert_eq!(err("[sessions.\" x\"]\ndbms = \"postgres\"\n"), ConfigError::SessionName(" x".into()));
+    // `none` (in any case) is what a profile's `session` says for no preset.
+    assert_eq!(err("[sessions.None]\ndbms = \"postgres\"\n"), ConfigError::SessionReserved("None".into()));
+    assert_eq!(err("[sessions.a]\nsql = []\n"), ConfigError::SessionMissing { key: "dbms", preset: "a".into() });
+    assert!(matches!(
+        err("[sessions.a]\ndbms = \"oracle\"\n"),
+        ConfigError::Value { key, .. } if key == "sessions.a.dbms"
+    ));
+    // Unknown keys and values that are not lists of strings: the parser's.
+    assert!(matches!(err("[sessions.a]\ndbms = \"mysql\"\nid = \"x\"\n"), ConfigError::Syntax(_)));
+    assert!(matches!(err("[sessions.a]\ndbms = \"mysql\"\nsql = \"SET a = 1\"\n"), ConfigError::Syntax(_)));
+    assert!(matches!(err("[[connections]]\nname = \"p\"\nsession_sql = [1]\n"), ConfigError::Syntax(_)));
+    assert!(matches!(err("[[connections]]\nname = \"p\"\nsession = false\n"), ConfigError::Syntax(_)));
+    assert!(matches!(
+        err("[[connections]]\nname = \"p\"\nsession = \"\"\n"),
+        ConfigError::Value { key, profile: Some(p), .. } if key == "session" && p == "p"
+    ));
+    for (bad, key) in [
+        ("session = \"reporting\"", "policy.prod.session"),
+        ("session = { oracle = \"x\" }", "policy.prod.session.oracle"),
+        ("session = { postgres = 3 }", "policy.prod.session.postgres"),
+        ("session = { postgres = \"none\" }", "policy.prod.session.postgres"),
+    ] {
+        assert!(
+            matches!(err(&format!("[policy.prod]\n{bad}\n")), ConfigError::Value { key: k, .. } if k == key),
+            "{bad}"
+        );
+    }
+    // Statements are not checked here: a profile's error when it connects.
+    assert!(parse("[sessions.a]\ndbms = \"postgres\"\nsql = [\"DELETE FROM t\"]\n").is_ok());
+}
+
+/// Saving: a preset's table moves with a rename (its comments too), a deleted one goes, a new
+/// one is added; profiles write `session` and `session_sql`, environments their `session` map.
+#[test]
+fn session_presets_are_written() {
+    use crate::profile::session::{Dbms, SessionPreset, SessionRef};
+    let path = temp_file("sessions");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let text = "version = 2\n\n# the reports\n[sessions.reporting]\ndbms = \"postgres\" # pg\nsql = [ 'SET work_mem = 64' ]\n\n[sessions.gone]\ndbms = \"mysql\"\nsql = []\n\n[policy.prod]\nread_only = true\n\n[[connections]]\nname = \"a\"\n";
+    std::fs::write(&path, text).unwrap();
+    let (cfg, err) = load(Some(path.clone()));
+    assert!(err.is_none(), "{err:?}");
+    let write = |cfg: &Config, sessions: &[SessionPreset], envs: Option<&[crate::policy::Environment]>| {
+        save(
+            &path,
+            Settings { version: 2, ..settings("en") },
+            Some(Profiles {
+                connections: &cfg.connections,
+                tunnels: &[],
+                sessions: Some(sessions),
+                environments: envs,
+                default_rules: None,
+                folders: &cfg.folders,
+                last_used: None,
+            }),
+        )
+        .unwrap();
+        std::fs::read_to_string(&path).unwrap()
+    };
+    // Unchanged: the tables keep their text.
+    let same = write(&cfg, &cfg.sessions, None);
+    assert!(
+        same.contains("# the reports\n[sessions.reporting]\ndbms = \"postgres\" # pg\nsql = [ 'SET work_mem = 64' ]\n"),
+        "{same}"
+    );
+    assert!(same.contains("[sessions.gone]\ndbms = \"mysql\"\nsql = []\n"), "{same}");
+    let mut presets = cfg.sessions.clone();
+    presets.retain(|p| p.name != "gone");
+    presets[0].name = "reports".into();
+    presets[0].sql.push("SET statement_timeout = '30s'".into());
+    presets.push(SessionPreset::new("my_ro", Dbms::MySql, vec!["SET SESSION sql_mode = 'ANSI_QUOTES'".into()]));
+    let mut cfg2 = cfg.clone();
+    cfg2.connections[0].session = SessionRef::Off;
+    cfg2.connections[0].session_sql = vec!["SET work_mem = '1MB'".into()];
+    let mut envs = cfg.policies.environments().to_vec();
+    envs[0].policy.session.postgres = Some("reports".into());
+    let out = write(&cfg2, &presets, Some(&envs));
+    assert!(out.contains("# the reports\n[sessions.reports]\ndbms = \"postgres\" # pg\nsql = [\"SET work_mem = 64\", \"SET statement_timeout = '30s'\"]\n"), "{out}");
+    assert!(!out.contains("gone"), "{out}");
+    assert!(
+        out.contains("[sessions.my_ro]\ndbms = \"mysql\"\nsql = [\"SET SESSION sql_mode = 'ANSI_QUOTES'\"]\n"),
+        "{out}"
+    );
+    assert!(out.contains("[policy.prod]\nread_only = true\nsession = { postgres = \"reports\" }\n"), "{out}");
+    assert!(out.contains("session = \"none\"\nsession_sql = [\"SET work_mem = '1MB'\"]\n"), "{out}");
+    // Read back as written.
+    let back = parse(&out).unwrap();
+    assert_eq!(back.sessions.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["my_ro", "reports"]);
+    assert_eq!(back.connections[0].session, SessionRef::Off);
+    assert_eq!(back.policies.environment("prod").unwrap().policy.session.postgres.as_deref(), Some("reports"));
+    // Back to no preset and no statements: the keys go.
+    cfg2.connections[0].session = SessionRef::Inherit;
+    cfg2.connections[0].session_sql.clear();
+    envs[0].policy.session = Default::default();
+    let out = write(&cfg2, &[], Some(&envs));
+    assert!(!out.contains("session"), "{out}");
 }

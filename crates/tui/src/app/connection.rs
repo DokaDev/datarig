@@ -53,6 +53,15 @@ impl App {
             self.status = Some(m);
             return;
         }
+        // What its query sessions start with names a preset that is not there (or one for the
+        // other database), or a statement that is not a setting: nothing is asked or sent (never
+        // without them instead).
+        if let Err(e) = self.session_plan_of(&conn) {
+            let m = self.session_error_notice(&conn.name, &e);
+            self.attempt_failed(id, m.clone());
+            self.status = Some(m);
+            return;
+        }
         self.show_status(Notice::new(Msg::ConnConnecting { name: conn.name.clone() }, Level::Info));
         let plan = match (self.plan_password(&conn), known) {
             (password::Plan::Prompt | password::Plan::Keychain { .. }, Some(pw)) => password::Plan::Ready(pw),
@@ -98,9 +107,13 @@ impl App {
         if self.driver(&conn.driver).is_none() {
             return;
         }
-        // Its environment went away while its password was asked for.
+        // Its environment went away while its password was asked for (or its session preset).
         if let Err(e) = self.policy_of(conn.id) {
             let m = self.unknown_environment_notice(&conn.name, &e);
+            return self.attempt_failed(conn.id, m);
+        }
+        if let Err(e) = self.session_plan_of(&conn) {
+            let m = self.session_error_notice(&conn.name, &e);
             return self.attempt_failed(conn.id, m);
         }
         let mut cfg = conn.clone();
@@ -231,6 +244,25 @@ impl App {
         generation: u64,
         context: datarig_core::driver::SessionContext,
     ) -> Option<Session> {
+        // What a query session starts with (a metadata session never gets it). A plan that cannot
+        // be made opens nothing (the caller checked it and said why).
+        let session_sql = match role {
+            SessionRole::Query => self.session_plan_of(cfg).ok()?.statements(),
+            SessionRole::Meta => Vec::new(),
+        };
+        self.open_session_as(cfg, role, target, generation, context, session_sql)
+    }
+
+    /// [`App::open_session`], the session starting with `session_sql` (a query session's).
+    pub(super) fn open_session_as(
+        &self,
+        cfg: &ConnectionConfig,
+        role: SessionRole,
+        target: EventTarget,
+        generation: u64,
+        context: datarig_core::driver::SessionContext,
+        session_sql: Vec<datarig_core::driver::SessionStatement>,
+    ) -> Option<Session> {
         let driver = self.driver(&cfg.driver)?;
         let (etx, mut erx) = unbounded_channel();
         match self.tx.clone() {
@@ -258,7 +290,8 @@ impl App {
             .statement_cache(cfg.statement_cache)
             .dialer(self.dialer_of(cfg))
             .lock_wait(self.lock_wait_of(cfg.id))
-            .server_idle(server_idle.map(|d| d + super::idle::SERVER_IDLE_MARGIN));
+            .server_idle(server_idle.map(|d| d + super::idle::SERVER_IDLE_MARGIN))
+            .session_sql(session_sql);
         Some(driver.connect(cfg, role, opts, etx))
     }
 
@@ -759,6 +792,12 @@ impl App {
     }
 
     pub(super) fn start_test(&mut self, cfg: ConnectionConfig) {
+        // What its sessions would start with must be valid first (the test itself opens no query
+        // session: it asks the server's version).
+        if let Err(e) = self.session_plan_of(&cfg) {
+            let text = self.session_error_notice(&cfg.name, &e).render(&self.i18n).to_string();
+            return self.test_refused(text);
+        }
         // Through its SSH tunnel (a throwaway one: the form may hold settings not saved yet).
         match self.route_of(&cfg) {
             Ok(datarig_core::profile::tunnel::Route::Direct) => {}

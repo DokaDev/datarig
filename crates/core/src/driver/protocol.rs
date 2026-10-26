@@ -191,6 +191,10 @@ pub enum DbError {
     /// or turns read-only off (`SET TRANSACTION READ WRITE`, `set_config()` of it, …), as the
     /// driver's own check reads it: it was not sent. Send it as [`TxStep::Open`] instead.
     NotAPlainRead,
+    /// Statement `index` (from 0) of what the query session starts with
+    /// ([`super::ConnectOptions::session_sql`]), `statement`, failed: the session was closed
+    /// before `Connected`. Why, as the server said it.
+    SessionSql { index: usize, statement: String, error: Box<DbError> },
 }
 
 /// Why a request to stop the running statement did not stop it ([`DbError::CancelNotTaken`]).
@@ -229,6 +233,7 @@ impl DbError {
             DbError::Settings(f) | DbError::Connection(f) => Cow::Borrowed(&f.detail),
             DbError::Transport(e) => Cow::Borrowed(e.raw()),
             DbError::CancelNotTaken(CancelFailure::NotSent(why)) => why.raw(),
+            DbError::SessionSql { error, .. } => error.raw(),
             DbError::AuthUnsupported(s) | DbError::AccessDenied(s) => Cow::Borrowed(s),
             DbError::Tls(p) => Cow::Borrowed(p.raw()),
             DbError::ServerKeyFile { fault, .. } => {
@@ -775,6 +780,14 @@ pub enum DbEvent {
     /// session runs instead (never for the session, which could outlive the transaction on a
     /// pooled connection).
     ContextPerTransaction,
+    /// Sent right before `Encryption` and `Connected` of a PostgreSQL query session with
+    /// start-up statements ([`super::ConnectOptions::session_sql`]) whose connection is not
+    /// known to be direct (a pooler): they go first in each transaction as `SET LOCAL` instead
+    /// of once for the session; `refused` are the indexes (from 0) of those that have no such
+    /// form and were not sent at all.
+    SessionPerTransaction {
+        refused: Vec<usize>,
+    },
     /// The query session stopped keeping prepared statements between transactions:
     /// the server lost them more than once (`26000`, invalid_sql_statement_name) or
     /// had one of the same name already (`42P05`), as behind a pooler in transaction mode that

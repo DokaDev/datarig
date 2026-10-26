@@ -171,6 +171,26 @@ pub struct ConnectOptions {
     /// connection (behind a pooler it would end server connections other clients share);
     /// MySQL: `wait_timeout`. `None` keeps the server's setting.
     pub server_idle: Option<std::time::Duration>,
+    /// What a query session starts with after the limits (its profile's session preset and own
+    /// statements, `profile::session::plan`), each statement alone and in order; any failure
+    /// fails the connect ([`DbError::SessionSql`]), so `Connected` means every one succeeded.
+    /// Metadata sessions never get them (the drivers also leave them out there). PostgreSQL
+    /// behind a pooler (a connection not known to be direct): each statement's
+    /// [`SessionStatement::per_transaction`] goes first in every transaction instead (nothing
+    /// stays on a pooled server connection), one without such a form is not sent, and
+    /// [`DbEvent::SessionPerTransaction`] comes before `Connected`.
+    pub session_sql: Vec<SessionStatement>,
+}
+
+/// A statement a query session starts with ([`ConnectOptions::session_sql`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionStatement {
+    /// As written, sent once for the session.
+    pub sql: String,
+    /// PostgreSQL: the same setting for one transaction (`SET LOCAL …`), what a session behind
+    /// a pooler sends first in each transaction instead; `None`: there is none (it is not sent
+    /// there), or a driver that does not need one.
+    pub per_transaction: Option<String>,
 }
 
 impl ConnectOptions {
@@ -186,7 +206,13 @@ impl ConnectOptions {
             dialer: None,
             lock_wait: None,
             server_idle: None,
+            session_sql: Vec::new(),
         }
+    }
+
+    /// The same options, with the statements a query session starts with.
+    pub fn session_sql(self, session_sql: Vec<SessionStatement>) -> Self {
+        Self { session_sql, ..self }
     }
 
     /// The same options, with lock wait limit `lock_wait` (or the server's).

@@ -578,6 +578,7 @@ impl App {
         let profiles = Profiles {
             connections: &self.profiles,
             tunnels: &self.presets,
+            sessions: Some(&self.session_presets),
             environments: Some(self.policies.environments()),
             default_rules: Some(self.policies.default_rules()),
             folders: &self.folders,
@@ -597,6 +598,9 @@ impl App {
         }
         for e in self.policies.environments_mut() {
             e.origin = Some(e.name.clone());
+        }
+        for p in &mut self.session_presets {
+            p.origin = Some(p.name.clone());
         }
         Ok(None)
     }

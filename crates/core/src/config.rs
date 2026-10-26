@@ -56,11 +56,18 @@
 //! is written the same way, once the default rules were edited in the app.
 //! `[tunnels.<name>]` tables are the tunnel presets profiles name with `tunnel = "<name>"` (see
 //! [`crate::profile::tunnel`]); each has a stable `id`, assigned like a profile's.
+//! `[sessions.<name>]` tables are the session presets (see [`crate::profile::session`]):
+//! profiles name them with `session = "<name>"` (`"none"`: none) and environments with
+//! `session = { postgres = "<name>", mysql = "<name>" }`; a profile's `session_sql` is its own
+//! list of statements. The statements are checked when a profile connects, not here: a
+//! classifier that reads one otherwise after an upgrade makes that profile's error, never the
+//! whole file's.
 
 use crate::fault::{Fault, FaultKind};
 use crate::policy::{self, Policies, Policy};
 use crate::profile::color::ProfileColor;
 use crate::profile::folder::{FolderPath, Folders};
+use crate::profile::session::{self, Dbms, SessionMap, SessionPreset, SessionPresetId, SessionRef, SessionSection};
 use crate::profile::ssh::{SshProblem, SshSettings};
 use crate::profile::tunnel::{self, TunnelId, TunnelPreset, TunnelSection};
 use crate::profile::{ConnectionConfig, ProfileId};
@@ -129,6 +136,8 @@ struct FileConfig {
     policy: BTreeMap<String, PolicySection>,
     #[serde(default)]
     tunnels: BTreeMap<String, TunnelSection>,
+    #[serde(default)]
+    sessions: BTreeMap<String, SessionSection>,
 }
 
 /// `[policy.<name>]`: an environment (or the default rules).
@@ -159,6 +168,8 @@ struct PolicySection {
     #[serde(default)]
     lock_wait: Option<toml::Value>,
     #[serde(default)]
+    session: Option<toml::Value>,
+    #[serde(default)]
     color: Option<toml::Value>,
     #[serde(default)]
     badge: Option<toml::Value>,
@@ -180,6 +191,7 @@ impl PolicySection {
             (TX_IDLE_ROLLBACK_ALIAS, self.tx_idle_timeout.clone()),
             ("idle_disconnect", self.idle_disconnect.clone()),
             ("lock_wait", self.lock_wait.clone()),
+            ("session", self.session.clone()),
             ("color", self.color.clone()),
             ("badge", self.badge.clone()),
         ]
@@ -247,6 +259,7 @@ fn policy_item(name: &str, key: &str, v: &toml::Value, e: &mut policy::Environme
             let d = policy::parse_lock_wait(v).map_err(|x| err(&x).allowed(Some(LOCK_WAIT)))?;
             e.policy.lock_wait = Some(d);
         }
+        "session" => e.policy.session = session_map(name, v)?,
         "color" => match v.as_str() {
             Some(c) if ProfileColor::parse(c).is_some() => e.color = Some(c.to_string()),
             _ => return Err(err(&raw).allowed(Some("red, green, blue, … #rrggbb"))),
@@ -258,6 +271,25 @@ fn policy_item(name: &str, key: &str, v: &toml::Value, e: &mut policy::Environme
         _ => {}
     }
     Ok(())
+}
+
+/// `session` of table `[policy.<name>]`: `{ postgres = "<preset>", mysql = "<preset>" }`, each
+/// a preset's name (never empty, never `"none"`, which is not one).
+fn session_map(name: &str, v: &toml::Value) -> Result<SessionMap, ConfigError> {
+    const ALLOWED: &str = "{ postgres = \"<preset>\", mysql = \"<preset>\" }";
+    let Some(t) = v.as_table() else {
+        return Err(bad(&format!("policy.{name}.session"), v).allowed(Some(ALLOWED)));
+    };
+    let mut map = SessionMap::default();
+    for (k, item) in t {
+        let key = format!("policy.{name}.session.{k}");
+        let Some(dbms) = Dbms::parse(k) else { return Err(bad(&key, item).allowed(Some("postgres, mysql"))) };
+        match item.as_str() {
+            Some(p) if !p.trim().is_empty() && p != session::NONE => map.set(dbms, Some(p.to_string())),
+            _ => return Err(bad(&key, item).allowed(Some("\"<preset>\""))),
+        }
+    }
+    Ok(map)
 }
 
 #[derive(Debug, Deserialize)]
@@ -758,6 +790,8 @@ pub struct Config {
     pub connections: Vec<ConnectionConfig>,
     /// `[tunnels.<name>]` tables, by name.
     pub tunnels: Vec<TunnelPreset>,
+    /// `[sessions.<name>]` tables, by name.
+    pub sessions: Vec<SessionPreset>,
     /// Every folder (`folders` plus the folders of the profiles).
     pub folders: Folders,
     /// Profile connected to most recently (the explorer puts its cursor there at launch). A v1
@@ -792,6 +826,7 @@ impl Default for Config {
             spill_limit: policy::SpillLimit::default(),
             connections: Vec::new(),
             tunnels: Vec::new(),
+            sessions: Vec::new(),
             folders: Folders::default(),
             last_used: None,
             default_source: DefaultSource::default(),
@@ -861,6 +896,12 @@ pub enum ConfigError {
     TunnelMissing { key: &'static str, tunnel: String },
     /// Table `table` has both `key` and `alias`, its old name.
     Alias { table: String, key: &'static str, alias: &'static str },
+    /// `[sessions.<name>]` has a name a preset cannot have.
+    SessionName(String),
+    /// `[sessions.<name>]` has the name a profile's `session` gives to "no preset" (`none`).
+    SessionReserved(String),
+    /// Session preset `preset` has no `<key>`.
+    SessionMissing { key: &'static str, preset: String },
 }
 
 /// A [`ConfigError::Value`] for a top-level key.
@@ -1062,6 +1103,27 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
         }
         tunnels.push(p);
     }
+    let mut sessions = Vec::new();
+    for (name, t) in f.sessions {
+        if session::name_problem(&name).is_some() {
+            return Err(ConfigError::SessionName(name));
+        }
+        if session::same_name(&name, session::NONE) {
+            return Err(ConfigError::SessionReserved(name));
+        }
+        let dbms = match t.dbms.as_deref() {
+            None => return Err(ConfigError::SessionMissing { key: "dbms", preset: name }),
+            Some(d) => Dbms::parse(d)
+                .ok_or_else(|| bad(&format!("sessions.{name}.dbms"), d).allowed(Some("\"postgres\", \"mysql\"")))?,
+        };
+        sessions.push(SessionPreset {
+            id: SessionPresetId::new(),
+            name: name.clone(),
+            dbms,
+            sql: t.sql,
+            origin: Some(name),
+        });
+    }
     let mut connections = f.connections;
     let mut seen = HashSet::new();
     for c in &mut connections {
@@ -1116,6 +1178,10 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
         if c.tunnel.as_deref().is_some_and(|t| t.trim().is_empty()) {
             return Err(bad("tunnel", "\"\"").in_profile(&c.name));
         }
+        // The same for a session preset (`"none"` is no preset).
+        if matches!(&c.session, SessionRef::Named(n) if n.trim().is_empty()) {
+            return Err(bad("session", "\"\"").in_profile(&c.name).allowed(Some("\"<preset>\", \"none\"")));
+        }
         c.origin = Some(c.name.clone());
         c.normalize();
     }
@@ -1135,6 +1201,7 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
         spill_limit,
         connections,
         tunnels,
+        sessions,
         folders,
         last_used,
         default_source,
@@ -1324,6 +1391,8 @@ pub struct Settings<'a> {
 pub struct Profiles<'a> {
     pub connections: &'a [ConnectionConfig],
     pub tunnels: &'a [TunnelPreset],
+    /// `None` leaves the `[sessions.*]` tables as they are.
+    pub sessions: Option<&'a [SessionPreset]>,
     /// `None` leaves the environments' `[policy.*]` tables as they are.
     pub environments: Option<&'a [policy::Environment]>,
     /// The default rules (`[policy.default]`); `None` leaves that table as it is.
@@ -1405,7 +1474,9 @@ pub fn save(path: &Path, settings: Settings, profiles: Option<Profiles>) -> Resu
         let trailing = doc.trailing().as_str().unwrap_or_default().to_string();
         doc.set_trailing(format!("{trailing}{orphans}"));
     }
-    if let Some(Profiles { connections: conns, tunnels, environments, default_rules, folders, last_used }) = profiles {
+    if let Some(Profiles { connections: conns, tunnels, sessions, environments, default_rules, folders, last_used }) =
+        profiles
+    {
         match last_used {
             Some(id) => set(doc.as_table_mut(), "last_used", id.to_string()),
             None => {
@@ -1463,6 +1534,8 @@ pub fn save(path: &Path, settings: Settings, profiles: Option<Profiles>) -> Resu
                 t.remove("allow_public_key_retrieval");
             }
             set_opt(&mut t, "tunnel", c.tunnel.as_deref());
+            set_opt(&mut t, "session", c.session.as_value());
+            set_statements(&mut t, "session_sql", &c.session_sql);
             match &c.ssh {
                 Some(ssh) => write_ssh(&mut t, ssh),
                 None => {
@@ -1490,6 +1563,9 @@ pub fn save(path: &Path, settings: Settings, profiles: Option<Profiles>) -> Resu
         }
         doc.insert("connections", Item::ArrayOfTables(arr));
         write_tunnels(&mut doc, tunnels)?;
+        if let Some(sessions) = sessions {
+            write_sessions(&mut doc, sessions)?;
+        }
         if environments.is_some() || default_rules.is_some() {
             let mut orphans = match environments {
                 Some(envs) => write_environments(&mut doc, envs)?,
@@ -1583,12 +1659,98 @@ fn write_tunnels(doc: &mut DocumentMut, presets: &[TunnelPreset]) -> Result<(), 
     Ok(())
 }
 
+/// Set `key` to the list `sql` (one string per statement), or remove it when it is empty. A
+/// list the file has already (its formatting aside) stays as written.
+fn set_statements(t: &mut Table, key: &str, sql: &[String]) {
+    if sql.is_empty() {
+        t.remove(key);
+        return;
+    }
+    let old: Option<Vec<String>> =
+        t.get(key).and_then(Item::as_array).and_then(|a| a.iter().map(|v| v.as_str().map(str::to_string)).collect());
+    if old.as_deref() != Some(sql) {
+        let arr: Array = sql.iter().map(String::as_str).collect();
+        set(t, key, arr);
+    }
+}
+
+/// The `[sessions.<name>]` tables: each preset's table is found by the name it was read with
+/// ([`SessionPreset::origin`]) and updated in place under its current name (a rename keeps its
+/// comments); a new one's is added; the tables of presets that are gone are removed. Tables keep
+/// their places in the file, handed out in the presets' order.
+fn write_sessions(doc: &mut DocumentMut, presets: &[SessionPreset]) -> Result<(), Fault> {
+    let shape = || Fault::new(FaultKind::Shape { key: "sessions".into() }, "sessions must be a table of tables");
+    let as_table = |v: &Item| match v {
+        Item::Table(t) => Some(t.clone()),
+        Item::Value(Value::InlineTable(t)) => Some(t.clone().into_table()),
+        _ => None,
+    };
+    let old: Vec<(String, Table)> = match doc.get("sessions") {
+        None => Vec::new(),
+        Some(item) => match item.as_table_like() {
+            Some(t) => t.iter().filter_map(|(k, v)| as_table(v).map(|t| (k.to_string(), t))).collect(),
+            None => return Err(shape()),
+        },
+    };
+    if presets.is_empty() && old.is_empty() {
+        return Ok(());
+    }
+    let mut parent = match doc.remove("sessions") {
+        Some(Item::Table(t)) => t,
+        Some(Item::Value(Value::InlineTable(t))) => t.into_table(),
+        _ => {
+            let mut t = Table::new();
+            t.set_implicit(true);
+            t
+        }
+    };
+    for (k, _) in &old {
+        parent.remove(k);
+    }
+    let mut positions: Vec<isize> = old.iter().filter_map(|(_, t)| t.position()).collect();
+    positions.sort_unstable();
+    let mut placed = 0;
+    for p in presets {
+        let found = p.origin.as_deref().and_then(|o| old.iter().find(|(k, _)| k == o));
+        let mut t = found.map(|(_, t)| t.clone()).unwrap_or_default();
+        if t.get("dbms").and_then(Item::as_str) != Some(p.dbms.as_str()) {
+            set(&mut t, "dbms", p.dbms.as_str());
+        }
+        if p.sql.is_empty() {
+            // An empty preset says so (`sql = []`).
+            if !t.get("sql").and_then(Item::as_array).is_some_and(|a| a.is_empty()) {
+                set(&mut t, "sql", Array::new());
+            }
+        } else {
+            set_statements(&mut t, "sql", &p.sql);
+        }
+        if found.is_some() {
+            t.set_position(positions.get(placed).copied());
+            placed += 1;
+        } else {
+            t.set_position(None);
+        }
+        parent.insert(&p.name, Item::Table(t));
+    }
+    let commented = [parent.decor().prefix(), parent.decor().suffix()]
+        .into_iter()
+        .flatten()
+        .any(|r| r.as_str().is_some_and(|s| s.contains('#')));
+    if !parent.is_empty() || commented {
+        doc.insert("sessions", Item::Table(parent));
+    }
+    Ok(())
+}
+
 /// A value of the file as the parser of [`parse`] reads it (`None`: a kind no item takes).
 fn to_toml(v: &Value) -> Option<toml::Value> {
     match v {
         Value::String(s) => Some(toml::Value::String(s.value().clone())),
         Value::Integer(i) => Some(toml::Value::Integer(*i.value())),
         Value::Boolean(b) => Some(toml::Value::Boolean(*b.value())),
+        Value::InlineTable(t) => {
+            t.iter().map(|(k, v)| to_toml(v).map(|v| (k.to_string(), v))).collect::<Option<_>>().map(toml::Value::Table)
+        }
         _ => None,
     }
 }
@@ -1606,7 +1768,7 @@ fn env_of(name: &str, t: &dyn toml_edit::TableLike) -> Option<policy::Environmen
 
 /// The items of an environment, in the file's key order: what each is in `e`, as written, and
 /// whether that is its default (an item at its default is left out).
-fn env_items(e: &policy::Environment) -> [(&'static str, Value, bool); 12] {
+fn env_items(e: &policy::Environment) -> [(&'static str, Value, bool); 13] {
     let d = Policy::default();
     let p = &e.policy;
     let size = |l: policy::SpillLimit| -> Value {
@@ -1637,7 +1799,17 @@ fn env_items(e: &policy::Environment) -> [(&'static str, Value, bool); 12] {
         ("spill_limit", p.spill_limit.map_or_else(|| 0.into(), size), p.spill_limit.is_none()),
         ("idle_disconnect", policy::format_timeout(p.idle_disconnect.flatten()).into(), p.idle_disconnect.is_none()),
         ("lock_wait", policy::format_timeout(p.lock_wait.flatten()).into(), p.lock_wait.is_none()),
+        ("session", session_value(&p.session), p.session.is_empty()),
     ]
+}
+
+/// An environment's `session` as written: `{ postgres = "…", mysql = "…" }`.
+fn session_value(map: &SessionMap) -> Value {
+    let mut t = toml_edit::InlineTable::new();
+    for (dbms, name) in map.iter() {
+        t.insert(dbms.as_str(), name.into());
+    }
+    Value::InlineTable(t)
 }
 
 /// The items of environment `e` into its table `t`: an item whose value the file already has
@@ -1699,6 +1871,7 @@ fn same_item(key: &str, a: &policy::Environment, b: &policy::Environment) -> boo
         "spill_limit" => p.spill_limit == q.spill_limit,
         "idle_disconnect" => p.idle_disconnect == q.idle_disconnect,
         "lock_wait" => p.lock_wait == q.lock_wait,
+        "session" => p.session == q.session,
         _ => true,
     }
 }

@@ -570,6 +570,8 @@ pub struct ProfileForm {
     /// `idle_disconnect` and `lock_wait` (empty: the config's).
     pub env_idle_disconnect: TextInput,
     pub env_lock_wait: TextInput,
+    /// The session preset of each database the environment's profiles start with.
+    pub env_session: policy::SessionMap,
     /// The color set (`None`: automatic from the name).
     pub color: Option<String>,
     /// The icon set (`None`: the driver's).
@@ -741,6 +743,7 @@ impl ProfileForm {
             env_spill: TextInput::default(),
             env_idle_disconnect: TextInput::default(),
             env_lock_wait: TextInput::default(),
+            env_session: policy::SessionMap::default(),
             color: c.color.clone(),
             icon: c.icon.clone(),
             folder: c.folder.clone(),
@@ -839,6 +842,7 @@ impl ProfileForm {
         f.env_idle = TextInput::new(&policy::format_timeout(rules.paging_idle_timeout));
         f.env_spill = TextInput::new(&rules.spill_limit.map(policy::format_size).unwrap_or_default());
         f.set_session_limits(&rules);
+        f.env_session = rules.session.clone();
         f.section = Section::Advanced;
         f.focus = Field::Name;
         f
@@ -855,6 +859,7 @@ impl ProfileForm {
         f.env_idle = TextInput::new(&policy::format_timeout(p.paging_idle_timeout));
         f.env_spill = TextInput::new(&p.spill_limit.map(policy::format_size).unwrap_or_default());
         f.set_session_limits(p);
+        f.env_session = p.session.clone();
         f.focus = Field::EnvReadOnly;
         f
     }
@@ -918,6 +923,7 @@ impl ProfileForm {
             tx_idle_rollback,
             idle_disconnect,
             lock_wait,
+            session: self.env_session.clone(),
         })
     }
 

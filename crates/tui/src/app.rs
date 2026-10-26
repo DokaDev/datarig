@@ -65,6 +65,7 @@ pub mod runlog;
 pub mod safety;
 mod script_ops;
 pub mod script_tree;
+pub mod sessions;
 pub mod settings;
 pub mod tab_drag;
 pub mod tab_list;
@@ -533,6 +534,8 @@ pub struct App {
     pub profiles: Vec<ConnectionConfig>,
     /// The tunnel presets (`[tunnels.<name>]`), by name.
     pub presets: Vec<datarig_core::profile::tunnel::TunnelPreset>,
+    /// The session presets (`[sessions.<name>]`), by name.
+    pub session_presets: Vec<datarig_core::profile::session::SessionPreset>,
     /// The presets' shared SSH connections.
     pub shared: tunnel::SharedTunnels,
     pub status: Option<Notice>,
@@ -931,6 +934,7 @@ impl App {
             explorer: Explorer::default(),
             profiles: cfg.connections.clone(),
             presets: cfg.tunnels.clone(),
+            session_presets: cfg.sessions.clone(),
             shared: tunnel::SharedTunnels::default(),
             status: status.clone(),
             transient: None,
@@ -2012,6 +2016,11 @@ pub fn config_error_msg(i18n: &I18n, e: &ConfigError) -> Msg {
         }
         ConfigError::Alias { table, key, alias } => {
             Msg::ConfigErrorAlias { table: table.clone(), key: key.to_string(), alias: alias.to_string() }
+        }
+        ConfigError::SessionName(name) => Msg::ConfigErrorSessionName { name: name.clone() },
+        ConfigError::SessionReserved(name) => Msg::ConfigErrorSessionReserved { name: name.clone() },
+        ConfigError::SessionMissing { key, preset } => {
+            Msg::ConfigErrorSessionMissing { key: key.to_string(), preset: preset.clone() }
         }
     }
 }
