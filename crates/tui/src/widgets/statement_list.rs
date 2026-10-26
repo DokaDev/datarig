@@ -1,7 +1,8 @@
 //! The statements of a Startup SQL form (a preset's, or a profile's own): a list of one-line
 //! inputs, one statement per row. A row read from the file keeps that text while it is not
 //! edited (its line comments and line breaks too, though it shows them flattened); an edited
-//! one is the row's one line. Each row's check (a statement that cannot be a start-up setting,
+//! one is the row's one line. A line break inside a string shows as `⏎` and is one again in
+//! what is saved. Each row's check (a statement that cannot be a start-up setting,
 //! or one a read-only environment refuses) is kept with it and redone only when the row or the
 //! database changes, never while drawing.
 
@@ -9,6 +10,9 @@ use crate::widgets::text_input::TextInput;
 use datarig_core::profile::session::{self, Dbms};
 use datarig_core::sql::risk::{Classifier, ReadOnlyBlock, SetProblem};
 use unicode_segmentation::UnicodeSegmentation;
+
+/// How a row shows a line break inside a string (one line break again when saved).
+const NEWLINE: &str = "⏎";
 
 /// What the check of a row says.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -22,8 +26,9 @@ pub enum Note {
 #[derive(Clone, Debug)]
 struct Row {
     input: TextInput,
-    /// The statement as the file has it, while the row shows it unedited.
-    original: Option<String>,
+    /// The statement as the file has it and the text the row showed for it: while the row still
+    /// shows that, the statement is the file's.
+    original: Option<(String, String)>,
     note: Option<Note>,
 }
 
@@ -47,7 +52,8 @@ impl StatementList {
         let mut list = StatementList { rows: Vec::new(), row: 0, scroll: 0, follow: true, dbms };
         for s in sql {
             let input = TextInput::new(&list.display(s));
-            list.rows.push(Row { input, original: Some(s.clone()), note: None });
+            let shown = input.text().to_string();
+            list.rows.push(Row { input, original: Some((s.clone(), shown)), note: None });
         }
         if list.rows.is_empty() {
             list.rows.push(Row { input: TextInput::default(), original: None, note: None });
@@ -56,9 +62,11 @@ impl StatementList {
         list
     }
 
-    /// Statement `s` as one row shows it: on one line, without its line comments.
+    /// Statement `s` as one row shows it: on one line, without its line comments, a line break
+    /// inside a string as [`NEWLINE`].
     fn display(&self, s: &str) -> String {
-        session::join_statements(self.dbms.unwrap_or(Dbms::Postgres), &[s.to_string()])
+        let one = session::join_statements(self.dbms.unwrap_or(Dbms::Postgres), &[s.to_string()]);
+        one.replace("\r\n", "\n").replace(['\n', '\r'], NEWLINE)
     }
 
     /// Check the statements again for `dbms` (the form's database changed).
@@ -117,17 +125,18 @@ impl StatementList {
         self.follow = true;
     }
 
-    /// Row `i`'s statement: the file's text while the row shows it unedited, else the row's
-    /// text without a closing `;` (`None`: an empty row).
+    /// Row `i`'s statement: the file's text while the row shows what it showed for it (whatever
+    /// the database became since), else the row's text without a closing `;`, each
+    /// [`NEWLINE`] a line break (`None`: an empty row).
     fn statement(&self, i: usize) -> Option<String> {
         let r = self.rows.get(i)?;
-        if let Some(o) = &r.original
-            && r.input.text() == self.display(o)
+        if let Some((file, shown)) = &r.original
+            && r.input.text() == shown
         {
-            return Some(o.clone());
+            return Some(file.clone());
         }
         let t = r.input.text().trim().trim_end_matches(';').trim_end();
-        (!t.is_empty()).then(|| t.to_string())
+        (!t.is_empty()).then(|| t.replace(NEWLINE, "\n"))
     }
 
     /// The statements, in order (empty rows left out).
@@ -187,8 +196,9 @@ impl StatementList {
         self.add_below();
     }
 
-    /// Remove row `i` (the only row is emptied instead); the focus stays on the row before it
-    /// when `i` was focused or above it.
+    /// Remove row `i` (the only row is emptied instead). The focus stays on the row it was on;
+    /// when that was row `i`, it goes to the row that took its place (the one after it, else the
+    /// new last row).
     pub fn remove(&mut self, i: usize) {
         if i >= self.rows.len() {
             return;
@@ -203,8 +213,8 @@ impl StatementList {
     }
 
     /// `Backspace` on the focused row when it is empty and not the only one: it goes, and the
-    /// cursor goes to the end of the row before it. `false`: nothing done (the row's input takes
-    /// the key).
+    /// cursor goes to the end of the row before it (the first row: to the row after it, its
+    /// cursor where it was). `false`: nothing done (the row's input takes the key).
     pub fn backspace_empty(&mut self) -> bool {
         if !self.text(self.row).is_empty() || self.rows.len() == 1 {
             return false;
@@ -212,6 +222,11 @@ impl StatementList {
         let i = self.row;
         self.rows.remove(i);
         self.focus(i.saturating_sub(1));
+        if i > 0 {
+            let input = &mut self.rows[i - 1].input;
+            let text = input.text().to_string();
+            input.set(&text);
+        }
         true
     }
 
@@ -298,6 +313,31 @@ mod tests {
         assert_eq!(l.statements(), ["SET a = 1 -- why\n", "SET b = 20"]);
     }
 
+    /// An unedited row stays the file's after the database changed (PostgreSQL and MySQL read
+    /// line comments differently, so the row would show another text for it now).
+    #[test]
+    fn an_unedited_row_stays_the_files_after_the_database_changed() {
+        let file = "SET a = 1 # mysql comment\n".to_string();
+        let mut l = StatementList::new(Some(Dbms::MySql), std::slice::from_ref(&file));
+        assert_eq!(l.text(0), "SET a = 1");
+        l.set_dbms(Some(Dbms::Postgres));
+        assert_eq!(l.statements(), [file]);
+    }
+
+    /// A line break inside a string shows as `⏎` on the row, and is one again when the row is
+    /// edited; unedited, the file's text is kept.
+    #[test]
+    fn a_line_break_in_a_string_shows_as_a_mark() {
+        let file = "SET application_name = 'a\nb'".to_string();
+        let mut l = StatementList::new(Some(Dbms::Postgres), std::slice::from_ref(&file));
+        assert_eq!(l.text(0), "SET application_name = 'a⏎b'");
+        assert_eq!(l.statements(), [file]);
+        l.focus(0);
+        l.current_mut().insert_str(" ");
+        l.edited();
+        assert_eq!(l.statements(), ["SET application_name = 'a\nb'"]);
+    }
+
     #[test]
     fn no_statements_is_one_empty_row_and_empty_rows_are_not_statements() {
         let mut l = list(&[]);
@@ -349,5 +389,16 @@ mod tests {
         assert!(l.backspace_empty());
         assert_eq!((l.row_count(), l.row), (1, 0));
         assert!(!l.step(true) && !l.step(false), "one row: the arrows leave");
+    }
+
+    #[test]
+    fn backspace_on_an_empty_row_puts_the_cursor_at_the_end_of_the_row_before() {
+        use ratatui::crossterm::event::{KeyCode, KeyEvent};
+        let mut l = list(&["SET a = 1"]);
+        l.current_mut().handle_key(&KeyEvent::from(KeyCode::Home));
+        l.add_below();
+        assert!(l.backspace_empty());
+        l.current_mut().insert_str("0");
+        assert_eq!(l.text(0), "SET a = 10");
     }
 }

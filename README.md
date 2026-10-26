@@ -999,7 +999,8 @@ explorer's lookups (the metadata sessions) never get these settings.
   = …`), and a read-only session is checked after its statements ran. A value that calls a
   function or has a subquery (`SET @x = (SELECT …)`) runs at connect like any other; one that
   takes long holds the connect up to its time limit.
-- A row shows its statement on one line, without its line comments (`-- …`, `# …`). A row you
+- A row shows its statement on one line, without its line comments (`-- …`, `# …`), and a line
+  break inside a string as `⏎` (a line break again when saved). A row you
   do not edit is saved as the file has it (its comments and line breaks too); one you edit is
   saved as its one line, so a comment in it is gone. A comment between the items of the file's
   `sql` list goes when the list is written again (any of its rows edited, added or removed).

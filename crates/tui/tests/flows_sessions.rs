@@ -377,10 +377,10 @@ fn the_section_lists_the_presets_with_their_users_and_problems() {
     on_preset(&mut h, "reporting");
     h.key(KeyCode::Char('l'));
     let rows = h.rows();
-    let at = rows.iter().position(|r| r == "[session presets]").expect("the section");
+    let at = rows.iter().position(|r| r == "[startup sql]").expect("the section");
     assert_eq!(
         rows[at..at + 7],
-        ["[session presets]", "  $broken", "    !", "  $fk_off", "  $my_ro", "  $reporting", "    @local-pg"],
+        ["[startup sql]", "  $broken", "    !", "  $fk_off", "  $my_ro", "  $reporting", "    @local-pg"],
         "{rows:?}"
     );
     on_preset(&mut h, "my_ro");
@@ -594,6 +594,10 @@ fn the_statement_list_takes_the_mouse() {
     let mut h = section_harness(&dir);
     on_preset(&mut h, "reporting");
     h.keys("e");
+    // A row's number focuses it too.
+    let at = find_on(&mut h, "2 SET work_mem", 0);
+    click_at(&mut h, at);
+    assert_eq!((h.form().focus, h.form().session_sql.row), (Field::SessionSql, 1));
     let at = find_on(&mut h, "+ Add statement", 0);
     click_at(&mut h, at);
     assert_eq!((h.form().focus, h.form().session_sql.row, h.form().session_sql.row_count()), (Field::SessionSql, 2, 3));
@@ -910,7 +914,8 @@ fn the_profile_forms_session_sql_is_checked_and_saved_one_per_item() {
     assert!(lines[row + 1].contains("search_path: the tab"), "{screen}");
     let detail = h.app.overlays.form().and_then(|f| f.session_problem());
     assert!(matches!(detail, Some((2, datarig_core::sql::risk::SetProblem::AppOwned { .. }))), "{detail:?}");
-    for (w, ht) in [(80, 24), (120, 40)] {
+    // With the room, a long reason takes a second line.
+    for (w, ht) in [(80, 24), (80, 30), (120, 40)] {
         insta::assert_snapshot!(format!("profile_form_startup_list_en_{w}x{ht}"), h.draw(w, ht).backend());
     }
     h.ctrl('s');

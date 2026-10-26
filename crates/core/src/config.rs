@@ -1070,13 +1070,14 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
             Some(v) => policy::parse_lock_wait(v).map_err(|e| bad("lock_wait", e).allowed(Some(LOCK_WAIT)))?,
         },
     };
-    let doc = text.parse::<DocumentMut>().ok();
+    // The file as written: the environments' order and which keys a profile has (a key and its
+    // old name together are an error, so a file that cannot be read this way is not read at all).
+    let doc = text.parse::<DocumentMut>().map_err(|e| ConfigError::Syntax(Fault::toml_edit(text, &e)))?;
     // The environments in the file's order (the deserializer sorts its map by name).
     let order: Vec<String> = doc
-        .as_ref()
-        .and_then(|d| {
-            d.get("policy").and_then(Item::as_table_like).map(|t| t.iter().map(|(k, _)| k.to_string()).collect())
-        })
+        .get("policy")
+        .and_then(Item::as_table_like)
+        .map(|t| t.iter().map(|(k, _)| k.to_string()).collect())
         .unwrap_or_default();
     let mut sections: Vec<(&String, &PolicySection)> = f.policy.iter().collect();
     sections.sort_by_key(|(name, _)| order.iter().position(|o| o == *name).unwrap_or(usize::MAX));
@@ -1159,7 +1160,7 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
     }
     let mut connections = f.connections;
     // Whether the table of profile `i` (the file's order) has `key`.
-    let profile_has = |i: usize, key: &str| match doc.as_ref().and_then(|d| d.get("connections")) {
+    let profile_has = |i: usize, key: &str| match doc.get("connections") {
         Some(Item::ArrayOfTables(a)) => a.get(i).is_some_and(|t| t.contains_key(key)),
         Some(Item::Value(Value::Array(a))) => {
             a.get(i).and_then(Value::as_inline_table).is_some_and(|t| t.contains_key(key))

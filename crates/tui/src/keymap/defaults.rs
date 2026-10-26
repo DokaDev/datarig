@@ -535,7 +535,8 @@ const RESERVED: &[(Ctx, &[&str], &str)] = &[
         &["tab", "shift+tab", "down", "up", "enter", "esc", "ctrl+s", "ctrl+t", "ctrl+n", "ctrl+p"],
         "profile form",
     ),
-    // A Startup SQL list: `Ctrl+D` removes the focused row.
+    // A Startup SQL list: `Ctrl+D` removes the focused row. The key is the list's only while it
+    // has the focus, but a binding cannot name a field, so the whole form keeps it free.
     (ProfileForm, &["ctrl+d"], "profile form: Startup SQL list"),
     (Export, &["tab", "shift+tab", "down", "up", "enter", "esc"], "export dialog"),
     // On a value `←`/`→` step through what it can be.
