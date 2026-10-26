@@ -18,7 +18,7 @@
 //! The same timer rolls back a transaction opened for manual commit that sat idle for its
 //! environment's `tx_idle_rollback` (idle as above: nothing running or waiting in the tab): the
 //! app sends `ROLLBACK` on the tab's session, which stays open, and says so once the server
-//! confirms it. A rollback not answered within [`TX_ROLLBACK_ANSWER_WAIT`], or refused, closes
+//! confirms it. A rollback not answered in time ([`rollback_wait`]), or refused, closes
 //! the session instead (the server rolls back when it ends), and says that. PostgreSQL's server
 //! also gets the limit with the transaction's `BEGIN`, [`TX_ROLLBACK_SERVER_MARGIN`] later
 //! ([`App::tx_rule`]), so a transaction the app cannot end (it stalled, it was killed) still
