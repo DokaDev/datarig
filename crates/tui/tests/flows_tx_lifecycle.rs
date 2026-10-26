@@ -333,12 +333,14 @@ fn an_idle_transaction_is_warned_about_once_per_idle_period() {
     ended(&mut h, 0, sent[0].0, TxOutcome::Committed);
     h.app.transient = None;
     assert_eq!(h.app.next_tick(h.clock.now()), None);
-    // `off`: no deadline.
+    // `off`: no warning deadline; from another tab the only wakeup is the idle rollback's
+    // warning, a minute before its 30m.
     let mut h = connected_in(Lang::En, None);
     write(&mut h, "UPDATE shop.users SET name = 'x' WHERE id < 4", 3);
     h.ctrl('t');
     h.app.transient = None;
-    assert_eq!(h.app.next_tick(h.clock.now()), None, "no warning: no wakeup from another tab");
+    let now = h.clock.now();
+    assert_eq!(h.app.next_tick(now), Some(now + Duration::from_secs(29 * 60)), "no warning: no earlier wakeup");
 }
 
 #[test]

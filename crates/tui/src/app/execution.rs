@@ -7,6 +7,7 @@ use super::*;
 use datarig_core::driver::structure::TableStructure;
 use datarig_core::driver::{CancelFailure, DbError, ReadIn, ServerEnd, TxOutcome, TxRule};
 use datarig_core::fault::{ErrorLog, FaultKind};
+use datarig_core::policy::format_timeout;
 use datarig_core::sql::lexer::changes_schema_in;
 use datarig_core::sql::values::check_values;
 use datarig_core::tls::{FileProblem, TlsFile, TlsProblem};
@@ -1057,6 +1058,9 @@ impl App {
         // The transaction the session opened for the run was rolled back: ask about running the
         // procedure outside one now.
         let mut offer = false;
+        // The rollback the app sent for an idle transaction: confirmed (said in the status bar
+        // too), or refused (`Err`: the session closes instead).
+        let mut idle_end: Option<Result<Notice, (Duration, super::idle::RollbackFailed)>> = None;
         let Some(t) = self.tabs.get_mut(id) else { return };
         if outside.is_some() {
             t.exec.outside_offer = outside;
@@ -1146,7 +1150,8 @@ impl App {
             }
             // The answer to the commit or rollback asked for.
             DbEvent::TxEnded { id: q, outcome } if t.exec.ending.is_some_and(|e| e.id == q) => {
-                let commit = t.exec.ending.take().is_some_and(|e| e.commit);
+                let ending = t.exec.ending.take();
+                let commit = ending.is_some_and(|e| e.commit);
                 let asked = if commit { TxOutcome::Committed } else { TxOutcome::RolledBack };
                 t.exec.last_end = Some(outcome == asked);
                 t.exec.closing = Some(outcome != TxOutcome::Committed);
@@ -1154,7 +1159,13 @@ impl App {
                     t.exec.tx.as_ref().map_or((0, 0, now, wall), |x| (x.changes, x.rows, x.began, x.began_wall));
                 let open = wall.duration_since(began_wall).unwrap_or_else(|_| now.saturating_duration_since(began));
                 let time = super::tx::fmt_clock(open);
+                let idle = ending.and_then(|e| e.idle);
                 let m = match outcome {
+                    // The app's rollback of an idle transaction: the session stays.
+                    _ if idle.is_some() => {
+                        let time = format_timeout(idle.map(|i| i.limit));
+                        Notice::new(Msg::TxIdleRolledBack { count, time }, Level::Warning)
+                    }
                     TxOutcome::Committed => {
                         let rows = self.i18n.msg(&Msg::TxRows { count: rows }).to_string();
                         Notice::new(Msg::TxCommitted { count, rows, time }, Level::Success)
@@ -1163,9 +1174,25 @@ impl App {
                     TxOutcome::RolledBackInstead => Notice::new(Label::TxRolledBackInstead, Level::Warning),
                 };
                 t.exec.run.notes.push(m.clone());
+                if idle.is_some() {
+                    idle_end = Some(Ok(m.clone()));
+                }
                 Some(m)
             }
             DbEvent::TxEnded { .. } => None,
+            // The app's rollback of an idle transaction failed: the session closes instead (after
+            // this event), whatever the error.
+            DbEvent::Failed { id: q, error, .. } if t.exec.ending.is_some_and(|e| e.id == q && e.idle.is_some()) => {
+                let limit = t.exec.ending.take().and_then(|e| e.idle).map_or(Duration::ZERO, |i| i.limit);
+                t.exec.last_end = Some(false);
+                // The server's own idle limit ended the session first: said as such.
+                let why = match error {
+                    DbError::IdleInTransactionTimeout(_) => super::idle::RollbackFailed::ServerEnded(text.clone()),
+                    _ => super::idle::RollbackFailed::Refused(text.clone()),
+                };
+                idle_end = Some(Err((limit, why)));
+                None
+            }
             // The commit or rollback asked for failed.
             DbEvent::Failed { id: q, error, .. } if t.exec.ending.is_some_and(|e| e.id == q) => {
                 let commit = t.exec.ending.take().is_some_and(|e| e.commit);
@@ -1344,11 +1371,17 @@ impl App {
                 t.exec.lost_tx = t.exec.tx_at_risk();
                 t.exec.running = None;
                 let had_tx = t.exec.user_tx();
+                // Lost while the app rolled its idle transaction back: said in the status bar
+                // too, as a failed rollback is.
+                let idle = t.exec.ending.is_some_and(|e| e.idle.is_some());
                 t.tx_reset();
                 t.exec.paging = Paging::None;
                 if let DbError::IdleInTransactionTimeout(_) = error {
                     let m = Notice::new(Msg::TxIdleTimeout { error: text }, Level::Warning);
                     t.exec.run.notes.push(m.clone());
+                    if idle {
+                        idle_end = Some(Ok(m.clone()));
+                    }
                     Some(m)
                 } else if let DbError::IdleSessionTimeout(_) = error {
                     // The server's idle limit, not a failure: the next run connects again (and
@@ -1365,6 +1398,9 @@ impl App {
                         t.exec.run.notes.push(Notice::new(Label::TxLost, Level::Warning));
                     }
                     let lost = Notice::new(Msg::QueryLost { error: text }, Level::Warning);
+                    if idle {
+                        idle_end = Some(Ok(lost.clone()));
+                    }
                     // Lost while committing: what matters is that the outcome is not known.
                     let unknown = Msg::Label(Label::DbCommitUnknown);
                     match t.exec.run.notes.last().filter(|n| n.msg == unknown).cloned() {
@@ -1755,6 +1791,12 @@ impl App {
         };
         if let Some(m) = notice {
             self.tab_status(id, m);
+        }
+        match idle_end {
+            // Said where the user looks, from another tab too.
+            Some(Ok(m)) => self.status = Some(m),
+            Some(Err((limit, why))) => return self.idle_rollback_failed(id, limit, why),
+            None => {}
         }
         if let Some(qid) = close_portal {
             self.send_tab(id, DbCommand::ClosePortal { id: qid });

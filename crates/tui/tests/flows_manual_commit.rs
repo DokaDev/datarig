@@ -20,7 +20,9 @@ use std::time::Duration;
 
 const MS: Duration = Duration::from_millis(3);
 const SEC: Duration = Duration::from_secs(1);
-const THIRTY_MIN: Duration = Duration::from_secs(30 * 60);
+/// PostgreSQL's server limit for a transaction opened for manual commit: the default 30m of
+/// `tx_idle_rollback`, plus the margin that leaves the rollback to the app first.
+const PG_IDLE_LIMIT: Duration = Duration::from_secs(30 * 60 + 30);
 
 /// The test profile in environment `env`: `stg` commits by hand, `plain` by itself.
 fn config(env: &str, mysql: bool) -> Config {
@@ -136,8 +138,8 @@ fn a_manual_run_says_which_statements_open_the_transaction() {
     assert_eq!(statements.len(), 4);
     assert_eq!(
         tx,
-        manual(&[TxStep::Open, TxStep::AsIs, TxStep::Open, TxStep::ReadOnly], Some(THIRTY_MIN)),
-        "the idle limit is PostgreSQL's 30m by default"
+        manual(&[TxStep::Open, TxStep::AsIs, TxStep::Open, TxStep::ReadOnly], Some(PG_IDLE_LIMIT)),
+        "the server's idle limit is the 30m by default, plus 30s"
     );
     let id = h.app.tab().exec.query_id;
     h.tab_db(0, DbEvent::Failed { id, error: DbError::Closed, cancelled: true });
@@ -154,13 +156,13 @@ fn a_manual_run_says_which_statements_open_the_transaction() {
         ("SELECT nextval('shop.users_id_seq')", TxStep::Open),
     ] {
         let (id, _, tx) = sent_run(&mut h, sql);
-        assert_eq!(tx, manual(&[step], Some(THIRTY_MIN)), "{sql}");
+        assert_eq!(tx, manual(&[step], Some(PG_IDLE_LIMIT)), "{sql}");
         h.tab_db(0, DbEvent::Done { id, outcome: Outcome::Command("X".into()), elapsed: MS });
     }
 }
 
 #[test]
-fn the_idle_rollback_is_sent_with_postgresql_only_and_can_be_off() {
+fn the_idle_rollback_backstop_is_sent_with_postgresql_only_and_can_be_off() {
     let mut cfg = config("stg", false);
     cfg.policies.insert(
         "stg",
@@ -169,7 +171,7 @@ fn the_idle_rollback_is_sent_with_postgresql_only_and_can_be_off() {
     let mut h = Harness::with_config(&cfg, Lang::En);
     h.db(DbEvent::Connected);
     let (.., tx) = sent_run(&mut h, "DELETE FROM shop.users WHERE id = 1");
-    assert_eq!(tx, manual(&[TxStep::Open], Some(Duration::from_secs(90))));
+    assert_eq!(tx, manual(&[TxStep::Open], Some(Duration::from_secs(120))), "90s, plus 30s for the app to act first");
 
     let mut cfg = config("stg", false);
     cfg.policies.insert("stg", Policy { commit: CommitRule::Manual, tx_idle_rollback: None, ..Policy::default() });
@@ -178,7 +180,8 @@ fn the_idle_rollback_is_sent_with_postgresql_only_and_can_be_off() {
     let (.., tx) = sent_run(&mut h, "DELETE FROM shop.users WHERE id = 1");
     assert_eq!(tx, manual(&[TxStep::Open], None), "off: the server's own setting");
 
-    // MySQL: none is sent (the app closes the idle session itself, see flows_idle.rs).
+    // MySQL: none is sent (it has no such limit; the app rolls back by itself, see
+    // flows_idle.rs).
     let mut h = connected("stg", true);
     let (.., tx) = sent_run(&mut h, "INSERT INTO users (name) VALUES ('a'); SELECT 1;");
     assert_eq!(tx, manual(&[TxStep::Open, TxStep::ReadOnly], None));
@@ -222,7 +225,7 @@ fn a_statement_that_cannot_run_in_a_transaction_asks_with_manual_commit() {
     h.keys("y");
     let runs = executes(&mut h);
     assert_eq!(runs.len(), 1);
-    assert_eq!(runs[0].2, manual(&[TxStep::AsIs], Some(THIRTY_MIN)));
+    assert_eq!(runs[0].2, manual(&[TxStep::AsIs], Some(PG_IDLE_LIMIT)));
     // With automatic commit nothing asks.
     let mut h = connected("plain", false);
     run_all(&mut h, "VACUUM shop.users");
@@ -626,7 +629,7 @@ fn a_procedure_that_commits_by_itself_can_run_outside_a_transaction() {
     assert_eq!(h.overlay_kind(), Some(OverlayKind::RunConfirm), "a CALL asks: it runs code");
     h.keys("y");
     let (id2, _, tx) = executes(&mut h).pop().unwrap();
-    assert_eq!(tx, manual(&[TxStep::Open], Some(THIRTY_MIN)));
+    assert_eq!(tx, manual(&[TxStep::Open], Some(PG_IDLE_LIMIT)));
     let error = "invalid transaction termination";
     h.tab_db(0, DbEvent::Failed { id: id2, error: DbError::NeedsNoTransaction(error.into()), cancelled: false });
     assert_eq!(h.overlay_kind(), None, "asked once the transaction is rolled back");
@@ -653,13 +656,13 @@ fn a_procedure_that_commits_by_itself_can_run_outside_a_transaction() {
     let runs = executes(&mut h);
     assert_eq!(runs.len(), 1);
     assert_eq!(runs[0].1, ["CALL shop.archive()"]);
-    assert_eq!(runs[0].2, manual(&[TxStep::AsIs], Some(THIRTY_MIN)));
+    assert_eq!(runs[0].2, manual(&[TxStep::AsIs], Some(PG_IDLE_LIMIT)));
     // The next run of it opens a transaction again.
     h.tab_db(0, DbEvent::Done { id: runs[0].0, outcome: Outcome::Command("CALL".into()), elapsed: MS });
     run_all(&mut h, "CALL shop.archive()");
     h.keys("y");
     let (id4, _, tx) = executes(&mut h).pop().unwrap();
-    assert_eq!(tx, manual(&[TxStep::Open], Some(THIRTY_MIN)));
+    assert_eq!(tx, manual(&[TxStep::Open], Some(PG_IDLE_LIMIT)));
     // Asked, then the connection is lost: y runs nothing (not on the next session either).
     h.tab_db(0, DbEvent::Failed { id: id4, error: DbError::NeedsNoTransaction(error.into()), cancelled: false });
     h.tab_db(0, DbEvent::ManualRolledBack { id: id4, index: 0 });
@@ -747,10 +750,12 @@ fn the_transaction_time_wakes_the_app_once_a_second_only_while_shown() {
         ticks += 1;
     }
     assert!((600..=601).contains(&ticks), "{ticks}");
-    // Another tab without one is shown: no timer.
+    // Another tab without one is shown: no timer a second, only the open transaction's idle
+    // rollback's, minutes away.
     h.ctrl('t');
     h.app.transient = None;
-    assert_eq!(h.app.next_tick(h.clock.now()), None);
+    let now = h.clock.now();
+    assert!(h.app.next_tick(now).is_some_and(|t| t > now + Duration::from_secs(600)), "{:?}", h.app.next_tick(now));
     // Back, then the transaction ends: no timer.
     h.app.dispatch(Action::PrevTab);
     h.app.transient = None;

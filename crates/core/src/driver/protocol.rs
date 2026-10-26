@@ -346,7 +346,9 @@ pub enum TxRule {
     /// `COMMIT AND CHAIN`; PostgreSQL 9.6 or later): past it the server ends the session and
     /// rolls back ([`DbError::IdleInTransactionTimeout`]). Less than a second is taken as one
     /// second (a shorter limit could end the transaction between two statements of a run).
-    /// `None` leaves the server's setting as it is. MySQL has no such limit and ignores it.
+    /// `None` leaves the server's setting as it is. MySQL has no such limit and ignores it. The
+    /// app sends a limit later than its own rollback of the idle transaction, as a backstop for
+    /// when it cannot send that.
     Manual { steps: Vec<TxStep>, idle_timeout: Option<Duration> },
 }
 

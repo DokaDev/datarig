@@ -535,8 +535,14 @@ impl App {
         }
     }
 
-    /// "A query is already running", with the key that cancels it.
+    /// "A query is already running", with the key that cancels it; or, while the app rolls back
+    /// the active tab's idle transaction, that.
     pub(super) fn flash_busy(&mut self) {
+        let idle = (!self.tabs.is_empty()).then(|| self.tab().exec.ending.and_then(|e| e.idle)).flatten();
+        if let Some(idle) = idle {
+            let time = datarig_core::policy::format_timeout(Some(idle.limit));
+            return self.flash(Notice::new(Msg::TxIdleRollingBack { time }, Level::Warning));
+        }
         let key = self.key_for(Action::CancelQuery, Ctx::Nav);
         self.flash(Notice::new(Msg::QueryBusy { key }, Level::Warning));
     }

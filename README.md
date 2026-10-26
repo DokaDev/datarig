@@ -1126,25 +1126,32 @@ how datarig always ran: each statement outside your own `BEGIN` block commits by
   only after it ran something and sat idle again), its `◆` turns red in the tab bar and the
   explorer, and the status bar adds `idle 5:00 · holding locks` in the error color. It never
   ends anything.
-- `tx_idle_rollback`: a transaction opened for manual commit that sat idle that long is rolled
-  back: its session ends and the server rolls the transaction back, and datarig says so. The
-  next run connects again. Your own `BEGIN` is not covered. How, per database:
-  - PostgreSQL: the server's own limit (`SET LOCAL idle_in_transaction_session_timeout` with the
-    `BEGIN`; it ends with the transaction, so nothing stays on a pooled connection). It works
-    where datarig cannot: with the laptop asleep, datarig killed or the tunnel gone. `"off"`
-    leaves the server's setting.
-  - MySQL: datarig closes the tab's session itself ("This tab's session closed after 30m idle in
-    a transaction, and the server rolled the transaction back"); the server rolls the transaction
-    back when it sees the connection close. A minute before (half the limit under two minutes)
-    datarig warns, unless `tx_idle_warning` already did. The limit is the one the transaction
-    began with: a change of the environment applies from the next transaction. Only while
-    datarig runs and the machine is awake: nothing is set on the server for it (its
-    `wait_timeout` would also close sessions idle outside a transaction), so a transaction left
-    open by a datarig that was killed, or behind a lost tunnel, waits for the server's own
-    limits. Time asleep counts once the machine wakes: the session closes at the first key,
-    answer or timer after that, right after `tx_idle_warning`'s warning when that is due by then
-    (there was no time to warn earlier). With `idle_disconnect` shorter, that closes the session
-    first.
+- `tx_idle_rollback`: a transaction opened for manual commit that sat idle that long (nothing
+  running in its tab) is rolled back, and the connection stays: datarig sends `ROLLBACK` on the
+  tab's session, which releases its locks, and once the server confirms it says "Rolled back after
+  30m idle: 3 changes undone; the session stays open". Until then the transaction still shows as
+  open, and the tab runs nothing else. The next run uses the same session. A minute before (half
+  the limit under two minutes) datarig warns, unless `tx_idle_warning` already did. The limit is
+  the one the transaction began with: a change of the environment applies from the next
+  transaction. Time asleep counts once the machine wakes: the rollback goes out at the first key,
+  answer or timer after that, right after `tx_idle_warning`'s warning when that is due by then
+  (there was no time to warn earlier). With `idle_disconnect` shorter, that closes the session
+  first. Your own `BEGIN` is not covered.
+  - If the `ROLLBACK` fails, or gets no answer in time (the network is gone, the server hangs;
+    the wait is 10 s, 60 s on MySQL, whose rollback undoes the transaction row by row and can
+    take about as long as its writes did), datarig closes the tab's session instead and says so;
+    the server rolls the transaction back once it sees the session end. The next run connects
+    again.
+  - PostgreSQL also gets a server-side limit, 30 s later than datarig's
+    (`SET LOCAL idle_in_transaction_session_timeout` with the `BEGIN`, so `"30m"` sets `1830s`;
+    it ends with the transaction, so nothing stays on a pooled connection). It acts only when
+    datarig could not: with the laptop asleep, datarig killed or stuck, or the tunnel gone; then
+    the server ends the session and rolls back, and datarig says so. `"off"` leaves the server's
+    setting.
+  - MySQL has no server-side limit for a transaction (its `wait_timeout` would also close
+    sessions idle outside one), so there the rule holds only while datarig runs and the machine
+    is awake: a transaction left open by a datarig that was killed, or behind a lost tunnel,
+    waits for the server's own limits.
   - `tx_idle_timeout`, the old name, is still read; a table with both is a config error. Saving
     an environment from its form writes `tx_idle_rollback`.
 - The rule is read at each run (no reconnect). Switched to `"auto"` while a transaction is open,
@@ -1214,9 +1221,9 @@ its own, and no transaction comes back with a restored workspace.
   pooling refuses transactions of several statements, so manual commit does not work through
   it.
 - SSH tunnels: when the tunnel is lost, the link from the bastion to the database may stay open,
-  and the server may hold the transaction and its locks until it notices. On PostgreSQL
-  `tx_idle_rollback` is the safety net for that; on MySQL it is not (datarig closes the session
-  it has, not the server's side of a lost link).
+  and the server may hold the transaction and its locks until it notices. On PostgreSQL the
+  server-side part of `tx_idle_rollback` is the safety net for that; on MySQL there is none
+  (datarig can end only the session it can still reach).
 - PostgreSQL: each run that writes under its savepoint is a subtransaction, kept until the
   transaction ends. Past about 64 in one transaction, other sessions' snapshots get slower until
   it ends: commit long transactions of many runs.
