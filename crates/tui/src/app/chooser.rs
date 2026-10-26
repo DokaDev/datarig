@@ -68,7 +68,7 @@ pub enum NamePurpose {
     /// of the tree until it is picked.
     NewPickFolder { parent: Option<String> },
     /// A new folder of the file system inside `parent` (relative to the folder shown; `None`:
-    /// that folder) in the export path picker, made at once.
+    /// that folder) in the export path picker, made on a worker (the prompt stays until then).
     NewExportFolder { parent: Option<String> },
     /// Rename (or move, with `/`) this saved query.
     RenameScript(String),

@@ -439,20 +439,26 @@ impl App {
 
     /// Folder `name` inside `parent` was made (`made`), or not: listed again and selected; a
     /// name that is taken is refused in the prompt, never reused.
+    /// The answer is the prompt's only while it still asks for that name.
     pub(super) fn export_folder_made(&mut self, parent: Option<String>, name: String, made: Result<(), Fault>) {
+        let asked = self.export_folder_prompt(&parent, &name).is_some();
         if let Err(f) = made {
             if f.kind == FaultKind::Io(std::io::ErrorKind::AlreadyExists) {
-                if let Some(n) = self.overlays.name_input_mut() {
+                if let Some(n) = self.export_folder_prompt(&parent, &name) {
                     n.error = Some(Label::ValidateFolderExists);
                 }
                 return;
             }
-            self.overlays.close(OverlayKind::NameInput);
+            if asked {
+                self.overlays.close(OverlayKind::NameInput);
+            }
             let error = self.fault_text("io", &f);
             self.flash(Notice::new(Msg::ScriptsFolderFailed { name, error }, Level::Error));
             return;
         }
-        self.overlays.close(OverlayKind::NameInput);
+        if asked {
+            self.overlays.close(OverlayKind::NameInput);
+        }
         let Some(t) = self.overlays.script_tree_mut() else { return };
         if name.starts_with('.')
             && let TreeMode::ExportPath(p) = &mut t.mode
@@ -468,6 +474,14 @@ impl App {
         t.error = None;
         t.export_reload(&rel, if rel.is_empty() { name } else { path });
         t.focus = TreeFocus::Tree;
+    }
+
+    /// The name prompt for a new folder `name` inside `parent`, while it still shows that name.
+    pub(super) fn export_folder_prompt(&mut self, parent: &Option<String>, name: &str) -> Option<&mut NameInput> {
+        self.overlays.name_input_mut().filter(|n| {
+            matches!(&n.purpose, NamePurpose::NewExportFolder { parent: p } if p == parent)
+                && n.input.text().trim() == name
+        })
     }
 
     /// `Tab` in the export dialog's path field: complete the name typed, then list the names it

@@ -853,6 +853,33 @@ fn a_new_folder_is_made_on_a_worker() {
     assert_eq!(row(&h), TreeRow::Folder("made".into()));
 }
 
+/// A folder made after its prompt was closed: the prompt open by then (another name) is left
+/// as it is, and the folder is made.
+#[test]
+fn a_late_new_folder_answer_leaves_another_prompt_alone() {
+    let home = home("make-late");
+    let (mut h, fake) = faked(&home);
+    let made = home.0.join("Downloads/x");
+    fake.hang.lock().unwrap().push(made.clone());
+    h.ctrl('o');
+    h.keys("n");
+    h.type_text("x");
+    press(&mut h, KeyCode::Enter);
+    press(&mut h, KeyCode::Esc);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ScriptTree));
+    press(&mut h, KeyCode::Char('n'));
+    h.app.pump_folder_reads(Duration::from_millis(500));
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::NameInput));
+    press(&mut h, KeyCode::Char('y'));
+    fake.release();
+    h.app.pump_folder_reads(WAIT);
+    assert!(made.is_dir());
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::NameInput), "the prompt for y stays");
+    let n = h.app.overlays.name_input().unwrap();
+    assert_eq!(n.input.text(), "y");
+    assert!(n.error.is_none(), "{:?}", n.error);
+}
+
 /// Listing a folder again (a folder made in it) drops the reads of what was inside it: their
 /// answers come to no row.
 #[test]
@@ -941,8 +968,8 @@ fn one_stuck_read_per_folder() {
     }
     assert_eq!(fake.lists_of(&a), 1, "one read of a, not one per try");
     fake.release();
-    // Once it returned, the next try reads again.
-    std::thread::sleep(Duration::from_millis(100));
+    // Once it returned, the next try reads again (within a limit it cannot miss).
+    h.app.set_folder_timeout(WAIT);
     h.key(KeyCode::Right);
     assert!(rows(&h).contains(&TreeRow::File("a/inner.csv".into())), "{:?}", rows(&h));
     assert_eq!(fake.lists_of(&a), 2);

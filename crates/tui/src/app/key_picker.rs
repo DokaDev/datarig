@@ -387,6 +387,10 @@ impl App {
             }
             (What::Open { rel, select }, Ok(Got::Listed(Ok(items)))) => {
                 let Some(t) = self.overlays.script_tree_mut() else { return };
+                // Its row went meanwhile (listed again): nothing to open.
+                if !rel.is_empty() && !t.entries.iter().any(|x| x.path == *rel) {
+                    return;
+                }
                 t.fill(rel, items);
                 t.open.insert(rel.clone());
                 if let Some(s) = select {
@@ -416,7 +420,11 @@ impl App {
             }
             (What::Create { .. }, Err(no)) => {
                 // Whether it was made is not known: the prompt closes and the picker says why.
-                self.overlays.close(OverlayKind::NameInput);
+                if let What::Create { parent, name, .. } = &what
+                    && self.export_folder_prompt(parent, name).is_some()
+                {
+                    self.overlays.close(OverlayKind::NameInput);
+                }
                 let Some(t) = self.overlays.script_tree_mut() else { return };
                 let dir = what_dir(&what, t);
                 t.error = Some(no_answer(no, shown(&dir, home.as_deref()), other));
@@ -429,24 +437,17 @@ impl App {
                         if let Some(d) = dirs.get(tried.load(Ordering::SeqCst)) {
                             t.root = d.clone();
                         }
-                        t.mark_unreadable("", true);
+                        t.mark_unreadable("", no == NoAnswer::TooSlow);
                         t.root.clone()
                     }
                     What::Open { rel, .. } => {
-                        t.mark_unreadable(rel, true);
+                        t.mark_unreadable(rel, no == NoAnswer::TooSlow);
                         t.root.join(rel)
                     }
                     What::SaveHere { .. } | What::NewFolder { .. } | What::Create { .. } | What::Typed { .. } => {
                         what_dir(&what, t)
                     }
                 };
-                if no == NoAnswer::Broke
-                    && let Some(rel) = what.rel()
-                {
-                    // Not slow: it failed.
-                    t.disk.slow.remove(rel);
-                    t.loaded.insert(rel.to_string());
-                }
                 Some(no_answer(no, shown(&dir, home.as_deref()), other))
             }
             // An answer of another kind than asked for: nothing is learned.
