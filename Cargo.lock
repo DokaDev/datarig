@@ -974,7 +974,7 @@ checksum = "4583a4551df46e2792f82ceeac45e850d2e2d5debba0b91f102385cda5b11f06"
 
 [[package]]
 name = "datarig-bench"
-version = "0.29.0"
+version = "0.30.0"
 dependencies = [
  "datarig-core",
  "datarig-driver-mysql",
@@ -990,7 +990,7 @@ dependencies = [
 
 [[package]]
 name = "datarig-core"
-version = "0.29.0"
+version = "0.30.0"
 dependencies = [
  "bytes",
  "futures",
@@ -1014,7 +1014,7 @@ dependencies = [
 
 [[package]]
 name = "datarig-driver-mysql"
-version = "0.29.0"
+version = "0.30.0"
 dependencies = [
  "datarig-core",
  "datarig-tls",
@@ -1027,7 +1027,7 @@ dependencies = [
 
 [[package]]
 name = "datarig-driver-postgres"
-version = "0.29.0"
+version = "0.30.0"
 dependencies = [
  "chrono",
  "datarig-core",
@@ -1043,7 +1043,7 @@ dependencies = [
 
 [[package]]
 name = "datarig-ssh"
-version = "0.29.0"
+version = "0.30.0"
 dependencies = [
  "data-encoding",
  "datarig-core",
@@ -1060,7 +1060,7 @@ dependencies = [
 
 [[package]]
 name = "datarig-tls"
-version = "0.29.0"
+version = "0.30.0"
 dependencies = [
  "datarig-core",
  "rcgen",
@@ -1074,7 +1074,7 @@ dependencies = [
 
 [[package]]
 name = "datarig-tui"
-version = "0.29.0"
+version = "0.30.0"
 dependencies = [
  "arboard",
  "chrono",
