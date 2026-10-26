@@ -45,7 +45,8 @@ async fn alone(url: &str) -> tokio::sync::RwLockWriteGuard<'static, ()> {
         let mut c = Conn::open(url, SessionRole::Query, false).await;
         let ev = c.run(1, "BEGIN").await;
         assert!(!matches!(ev, DbEvent::Failed { .. }), "{ev:?}");
-        let DbEvent::Page { rows, .. } = c.run(2, "SELECT pg_backend_pid()").await else { panic!() };
+        let ev = c.run(2, "SELECT pg_backend_pid()").await;
+        let DbEvent::Page { rows, .. } = ev else { panic!("{ev:?}") };
         pids.insert(rows[0][0].clone());
         held.push(c);
     }
