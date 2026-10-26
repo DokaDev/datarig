@@ -3,7 +3,7 @@
 //! export dialog <
 //! keyboard help < which-key < quick connect < tab list < context menu < saved-queries tree < name input <
 //! chooser < picker <
-//! confirmation < run confirmation < busy notice < password prompt < command line), so a dialog that opens later but ranks lower —
+//! confirmation < run confirmation < transaction summary < session view < icons question < busy notice < password prompt < command line), so a dialog that opens later but ranks lower —
 //! e.g. a password prompt raised by a connection event while the command line is open — goes
 //! below.
 //!
@@ -15,7 +15,7 @@ use super::menu::ContextMenu;
 use super::profiles::ProfileForm;
 use super::quick::QuickConnect;
 use super::{CommandLine, PasswordPrompt, Viewer};
-use datarig_core::i18n::{Label, Msg};
+use datarig_core::i18n::{Label, Localized, Msg};
 use datarig_core::profile::ProfileId;
 use datarig_core::profile::folder::FolderPath;
 use ratatui::crossterm::event::{KeyCode, MouseButton, MouseEventKind};
@@ -302,6 +302,45 @@ pub struct TxSummary {
     pub buttons: Buttons,
 }
 
+/// What a profile's query sessions start with and where each item comes from (`:session`, or
+/// the profile form's key for its unsaved values), as it was when it opened: it does not follow
+/// later changes. `Esc` (or `q`, `Enter`) closes; `j`/`k` scroll.
+pub struct SessionView {
+    pub title: Localized,
+    /// The profile, its database and environment, whether that one is read-only.
+    pub head: Vec<SessionLine>,
+    /// The items of its plan, in order (or why it has none).
+    pub lines: Vec<SessionLine>,
+    pub foot: SessionLine,
+    /// The first line of the list on screen, and the last first line it can be (as drawn).
+    pub scroll: usize,
+    pub max_scroll: usize,
+    pub buttons: Buttons,
+}
+
+/// A line of the session view.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SessionLine {
+    /// Words of their own (wrapped), in a tone.
+    Text(String, Tone),
+    /// An app limit: its name, its value and where it comes from.
+    Intent { what: String, value: String, source: String },
+    /// Where the statements below come from.
+    Source(String),
+    /// A statement, sent as written.
+    Statement(String),
+    /// How the statement above goes behind a pooler in transaction mode.
+    Pooled(datarig_core::profile::session::OnPooler),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Tone {
+    Strong,
+    Muted,
+    Warning,
+    Error,
+}
+
 /// A notice that waits for background work (moving passwords to the keychain). It has no keys
 /// of its own: only the `root` keys work while it is shown.
 pub struct Busy {
@@ -342,6 +381,8 @@ pub enum Overlay {
     RunConfirm(RunConfirm),
     /// What the open transaction did.
     TxSummary(TxSummary),
+    /// What a profile's sessions start with.
+    SessionView(SessionView),
     /// Do the Nerd Font icons show correctly? (asked once)
     IconsAsk(IconsAsk),
     /// Background work the user waits for.
@@ -370,6 +411,7 @@ pub enum OverlayKind {
     Confirm,
     RunConfirm,
     TxSummary,
+    SessionView,
     IconsAsk,
     Busy,
     Password,
@@ -395,6 +437,7 @@ impl Overlay {
             Overlay::Confirm(_) => OverlayKind::Confirm,
             Overlay::RunConfirm(_) => OverlayKind::RunConfirm,
             Overlay::TxSummary(_) => OverlayKind::TxSummary,
+            Overlay::SessionView(_) => OverlayKind::SessionView,
             Overlay::IconsAsk(_) => OverlayKind::IconsAsk,
             Overlay::Busy(_) => OverlayKind::Busy,
             Overlay::Password(_) => OverlayKind::Password,
@@ -443,6 +486,7 @@ impl Overlays {
             Some(Overlay::Confirm(c)) => c.buttons.press = Press::default(),
             Some(Overlay::RunConfirm(c)) => c.buttons.press = Press::default(),
             Some(Overlay::TxSummary(s)) => s.buttons.press = Press::default(),
+            Some(Overlay::SessionView(s)) => s.buttons.press = Press::default(),
             Some(Overlay::IconsAsk(q)) => q.buttons.press = Press::default(),
             Some(Overlay::Password(p)) => p.buttons.press = Press::default(),
             Some(Overlay::NameInput(n)) => n.buttons.press = Press::default(),
@@ -638,6 +682,14 @@ impl Overlays {
 
     pub fn tx_summary_mut(&mut self) -> Option<&mut TxSummary> {
         self.0.iter_mut().find_map(|o| if let Overlay::TxSummary(s) = o { Some(s) } else { None })
+    }
+
+    pub fn session_view(&self) -> Option<&SessionView> {
+        self.0.iter().find_map(|o| if let Overlay::SessionView(s) = o { Some(s) } else { None })
+    }
+
+    pub fn session_view_mut(&mut self) -> Option<&mut SessionView> {
+        self.0.iter_mut().find_map(|o| if let Overlay::SessionView(s) = o { Some(s) } else { None })
     }
 
     pub fn viewer(&self) -> Option<&Viewer> {

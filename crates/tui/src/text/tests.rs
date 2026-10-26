@@ -120,3 +120,19 @@ fn clip_middle_keeps_the_end() {
         assert!(width(&c) <= w && (w * 2 / 3 < tail || c.ends_with("))")), "{w}: {c}");
     }
 }
+
+#[test]
+fn wrap_exact_keeps_every_character() {
+    let sql = "SET search_path = 'a  b', \"x   y\", public, reporting_with_a_long_name";
+    for w in 2..=sql.len() {
+        let parts = wrap_exact(sql, w);
+        assert_eq!(parts.concat(), sql, "{w}");
+        assert!(parts.iter().all(|p| width(p) <= w), "{w}: {parts:?}");
+    }
+    // The blanks where it breaks start the next piece.
+    assert_eq!(wrap_exact("SET x = 'a  b'", 10), ["SET x = 'a", "  b'"]);
+    assert_eq!(wrap_exact("", 10), [""]);
+    let wide = "SET a = '構造を読めません'";
+    assert_eq!(wrap_exact(wide, 7).concat(), wide);
+    assert!(wrap_exact(wide, 7).iter().all(|p| width(p) <= 7));
+}

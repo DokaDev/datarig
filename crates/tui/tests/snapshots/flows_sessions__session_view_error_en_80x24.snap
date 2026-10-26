@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/flows_sessions.rs
+expression: "h.draw(80, 24).backend()"
+---
+"╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
+"│  ＋ New connection   ││                                                      │" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1       ││  No open tabs                                        │"
+"│  ▸ ○   local-pg      ││  Pick a connection in the explorer, or press         │"
+"│▾ Environments 1      ││  Ctrl+O.                                             │"
+"│    ○ Default rules (…││                                                      │"
+"│ ╭ Session settings — local-pg ─────────────────────────────────────────────╮ │"
+"│▾│ local-pg · PostgreSQL · environment prod                                 │ │"
+"│ │                                                                          │ │"
+"│ │ local-pg names the session preset “gone”, which does not exist: pick one │ │"
+"│ │ in its form, or none (it never connects without it instead)              │ │"
+"│ │                                                                          │ │"
+"│ │ The profile does not connect until this is fixed                         │ │"
+"│ │                                                                          │ │"
+"│ │                                [ Close ]                                 │ │"
+"│ ╰────────────────────────────────────────────────── j/k scroll · Esc close ╯ │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+"                                                                             EN "

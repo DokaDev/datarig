@@ -125,6 +125,8 @@ fn default_table_is_conflict_free() {
         "env.new",
         // `n` in the explorer's "Session presets" section makes one too.
         "session.new",
+        // `:session`; in the profile form `Ctrl+E` shows its values.
+        "session.show",
         // The DDL tab's menu; `y` yanks a part of the text (to the clipboard by default).
         "ddl.copy",
     ];

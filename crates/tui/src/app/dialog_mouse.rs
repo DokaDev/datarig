@@ -56,6 +56,7 @@ impl App {
             OverlayKind::Confirm => self.confirm_mouse(m),
             OverlayKind::RunConfirm => self.run_confirm_mouse(m),
             OverlayKind::TxSummary => self.tx_summary_mouse(m),
+            OverlayKind::SessionView => self.session_view_mouse(m),
             OverlayKind::IconsAsk => self.icons_ask_mouse(m),
             OverlayKind::Password => self.prompt_mouse(m),
             OverlayKind::NameInput => self.name_mouse(m),
@@ -100,6 +101,7 @@ impl App {
             Some(OverlayKind::Confirm) => self.overlays.confirm_mut().is_some_and(|c| c.buttons.hover(x, y)),
             Some(OverlayKind::RunConfirm) => self.overlays.run_confirm_mut().is_some_and(|c| c.buttons.hover(x, y)),
             Some(OverlayKind::TxSummary) => self.overlays.tx_summary_mut().is_some_and(|s| s.buttons.hover(x, y)),
+            Some(OverlayKind::SessionView) => self.overlays.session_view_mut().is_some_and(|s| s.buttons.hover(x, y)),
             Some(OverlayKind::IconsAsk) => self.overlays.icons_ask_mut().is_some_and(|q| q.buttons.hover(x, y)),
             Some(OverlayKind::Password) => self.overlays.prompt_mut().is_some_and(|p| p.buttons.hover(x, y)),
             Some(OverlayKind::NameInput) => self.overlays.name_input_mut().is_some_and(|n| n.buttons.hover(x, y)),
@@ -216,6 +218,20 @@ impl App {
         let Some(i) = s.buttons.press(m.kind, m.column, m.row, now) else { return };
         if let Some(code) = keys.get(i) {
             self.tx_summary_key(press(*code), false);
+        }
+    }
+
+    /// Close closes the session view; the wheel scrolls it.
+    fn session_view_mouse(&mut self, m: MouseEvent) {
+        match m.kind {
+            MouseEventKind::ScrollDown => return self.session_view_key(press(KeyCode::Down), false),
+            MouseEventKind::ScrollUp => return self.session_view_key(press(KeyCode::Up), false),
+            _ => {}
+        }
+        let now = self.now();
+        let Some(s) = self.overlays.session_view_mut() else { return };
+        if s.buttons.press(m.kind, m.column, m.row, now).is_some() {
+            self.session_view_key(press(KeyCode::Esc), false);
         }
     }
 

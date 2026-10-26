@@ -772,8 +772,15 @@ impl App {
                 self.open_script_named(arg)?;
                 self.overlays.close(OverlayKind::Commands);
             }
-            // Run whenever asked: what cannot run now says why (no transaction, one running).
-            (command::Command::Commit | command::Command::Rollback | command::Command::Tx, Some(a)) => {
+            // Run whenever asked: what cannot run now says why (no transaction, one running, no
+            // profile).
+            (
+                command::Command::Commit
+                | command::Command::Rollback
+                | command::Command::Tx
+                | command::Command::Session,
+                Some(a),
+            ) => {
                 if !arg.is_empty() {
                     return err(Msg::CommandsErrorNoArgs { name });
                 }
