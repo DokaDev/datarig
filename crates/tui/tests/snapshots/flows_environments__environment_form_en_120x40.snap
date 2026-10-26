@@ -1,5 +1,6 @@
 ---
 source: crates/tui/tests/flows_environments.rs
+assertion_line: 537
 expression: backend
 ---
 "╭ Explorer ──────────────────╮╭ Workspace ─────────────────────────────────────────────────────────────────────────────╮"
@@ -17,7 +18,7 @@ expression: backend
 "│    ● sta│ Badge                PROD                                shown on its tabs, e.g. PROD            │         │"
 "│  ▾ ● pro│ Read-only            ‹ on ›  ←/→ change · only reads run; the server refuses writes too          │         │"
 "│      ○  │ Confirm               dangerous statements only (default) ‹before every write›  ←/→ change       │         │"
-"│▾ Session│ Commit                automatic (default) ‹manual: commit yourself›  reads run without a transa… │         │"
+"│▾ Startup│ Commit                automatic (default) ‹manual: commit yourself›  reads run without a transa… │         │"
 "│    n her│ Idle warning         5m                                  warn about an idle open transaction: 5… │         │"
 "│         │ Idle rollback        30m                                 roll back an idle transaction: 30m, off │         │"
 "│         │ Paging               ‹no hold› hold   hold keeps a result's transaction open while you page      │         │"
@@ -25,8 +26,8 @@ expression: backend
 "│         │ Spill limit                                              empty: the config's · 512MB, 2GB or off │         │"
 "│         │ Idle disconnect                                          empty: the config's · close when unuse… │         │"
 "│         │ Lock wait                                                empty: the config's · wait for a lock:… │         │"
-"│         │ Preset (PostgreSQL)  None ▾   Enter list                                                         │         │"
-"│         │ Preset (MySQL)       None ▾   Enter list                                                         │         │"
+"│         │ Startup SQL (PG)     None ▾   Enter list                                                         │         │"
+"│         │ Startup SQL (MySQL)  None ▾   Enter list                                                         │         │"
 "│         │                                                                                                  │         │"
 "│         │ Used by              local-pg                                                                    │         │"
 "│         │                                                                                                  │         │"

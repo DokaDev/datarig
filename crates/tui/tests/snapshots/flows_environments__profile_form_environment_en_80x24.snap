@@ -1,5 +1,6 @@
 ---
 source: crates/tui/tests/flows_environments.rs
+assertion_line: 549
 expression: backend
 ---
 "╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
@@ -13,8 +14,8 @@ expression: backend
 "│▾│ Client key                                  PEM, without a passphrase    │ │"
 "│ │ Statement cache   ‹ on ›  ←/→ change · off behind PgBouncer in transact… │ │"
 "│ │ Environment       ● prod  PROD  ▾   Enter list · read-only · asks befor… │ │"
-"│ │ Session preset    Environment's (none) ▾   Enter list                    │ │"
-"│ │ Session SQL                                 its own SET …; after the pr… │ │"
+"│ │ Startup SQL       Environment's (none) ▾   Enter list                    │ │"
+"│ │ Own startup SQL                             its own SET …; after the St… │ │"
 "│ │ Color             ‹ ● auto (from the name) ›  ←/→ change · Enter list    │ │"
 "│ │ Icon              ‹ the driver's icon ›  ←/→ change · Enter list         │ │"
 "│▾│ Folder            ‹ (top level) ›  ←/→ change · Enter list               │ │"

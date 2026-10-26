@@ -225,7 +225,7 @@ impl Ctx {
             Ctx::Nav => "Every pane that is not text input (explorer, results, vim Normal/Visual).",
             Ctx::Explorer => "The explorer: folders, connection profiles, their databases and schema trees.",
             Ctx::ExplorerFilter => {
-                "The `/` filter of the explorer: profiles (name, host, database), folders, tunnels, environments, session presets (name, statements) and saved queries, and under connected profiles the databases, schemas, tables, views and structure items already loaded."
+                "The `/` filter of the explorer: profiles (name, host, database), folders, tunnels, environments, Startup SQL (name, statements) and saved queries, and under connected profiles the databases, schemas, tables, views and structure items already loaded."
             }
             Ctx::Grid => "The result grid.",
             Ctx::Inspector => {
@@ -293,7 +293,7 @@ impl Ctx {
                 "What the open transaction did (its statements that may have written, rows, time; how long it has been open and idle): `c` commits, `r` rolls back, `Esc` closes; a click on a button does what its key does."
             }
             Ctx::SessionView => {
-                "What a profile's query sessions start with (`:session`; in the profile form `Ctrl+E`, for its unsaved values), in the order they are applied, each with where it comes from: the app's limits, the session preset's statements, the profile's own; behind a pooler in transaction mode, how each PostgreSQL statement goes there. `j`/`k` scroll, `Esc` closes; a click on Close closes too."
+                "What a profile's query sessions start with (`:session` or `:startup`; in the profile form `Ctrl+E`, for its unsaved values), in the order they are applied, each with where it comes from: the app's limits, the Startup SQL's statements, the profile's own; behind a pooler in transaction mode, how each PostgreSQL statement goes there. `j`/`k` scroll, `Esc` closes; a click on Close closes too."
             }
             Ctx::IconsAsk => {
                 "Whether the terminal shows the Nerd Font icons (asked once, with a preview); No has the focus; a click on Yes or No answers."

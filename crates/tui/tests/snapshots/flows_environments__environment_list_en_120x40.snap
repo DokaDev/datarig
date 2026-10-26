@@ -1,5 +1,6 @@
 ---
 source: crates/tui/tests/flows_environments.rs
+assertion_line: 551
 expression: backend
 ---
 "╭ Explorer ──────────────────╮╭ Workspace ─────────────────────────────────────────────────────────────────────────────╮"
@@ -17,12 +18,12 @@ expression: backend
 "│    ● sta│                                                                                                  │         │"
 "│  ▾ ● pro│ SSL mode          disable ▾   ←/→ change · Enter list                                            │         │"
 "│      ○  │ CA file             ╭ Environment ─────────────────────────────────────────╮'s certificate       │         │"
-"│▾ Session│ Client cert         │ › type to filter                                     │ver asks             │         │"
+"│▾ Startup│ Client cert         │ › type to filter                                     │ver asks             │         │"
 "│    n her│ Client key          │                                                      │ase                  │         │"
 "│         │ Statement cache   ‹ │ ○ None (default rules)  standard rules               │ode                  │         │"
 "│         │ Environment       ● │ ● dev                   standard rules               │ry write             │         │"
-"│         │ Session preset    En│ ● test                  standard rules               │                     │         │"
-"│         │ Session SQL         │ ● staging  STG          asks before every write · m… │he preset's          │         │"
+"│         │ Startup SQL       En│ ● test                  standard rules               │                     │         │"
+"│         │ Own startup SQL     │ ● staging  STG          asks before every write · m… │he Startup SQL's     │         │"
 "│         │ Color             ‹ │ ● prod  PROD            read-only · asks before eve… │                     │         │"
 "│         │ Icon              ‹ │   New environment…                                   │                     │         │"
 "│         │ Folder            ‹ ╰───────────────── Enter pick · ↑↓ select · Esc cancel ╯                     │         │"

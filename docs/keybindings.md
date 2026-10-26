@@ -203,7 +203,7 @@ The explorer: folders, connection profiles, their databases and schema trees. In
 
 ## `explorer.filter` [text]
 
-The `/` filter of the explorer: profiles (name, host, database), folders, tunnels, environments, session presets (name, statements) and saved queries, and under connected profiles the databases, schemas, tables, views and structure items already loaded. Inside `workspace`.
+The `/` filter of the explorer: profiles (name, host, database), folders, tunnels, environments, Startup SQL (name, statements) and saved queries, and under connected profiles the databases, schemas, tables, views and structure items already loaded. Inside `workspace`.
 
 | Keys | Action | Description | R |
 |---|---|---|---|
@@ -549,7 +549,7 @@ Reserved — transaction summary: `c` `r` `Esc` `q` `Enter` `j` `k` `Down` `Up`
 
 ## `overlay.session_view`
 
-What a profile's query sessions start with (`:session`; in the profile form `Ctrl+E`, for its unsaved values), in the order they are applied, each with where it comes from: the app's limits, the session preset's statements, the profile's own; behind a pooler in transaction mode, how each PostgreSQL statement goes there. `j`/`k` scroll, `Esc` closes; a click on Close closes too. Inside `root`.
+What a profile's query sessions start with (`:session` or `:startup`; in the profile form `Ctrl+E`, for its unsaved values), in the order they are applied, each with where it comes from: the app's limits, the Startup SQL's statements, the profile's own; behind a pooler in transaction mode, how each PostgreSQL statement goes there. `j`/`k` scroll, `Esc` closes; a click on Close closes too. Inside `root`.
 
 Reserved — session settings: `Esc` `q` `Enter` `j` `k` `Down` `Up`
 
@@ -641,7 +641,7 @@ An editor command closes the line; what went wrong is said in the status bar.
 | `:commit` |  | Commit the open transaction |
 | `:rollback` | `:rb` | Roll back the open transaction |
 | `:tx` |  | What the open transaction did |
-| `:session` |  | What a profile's sessions start with, and where each setting comes from |
+| `:session` | `:startup` | What a profile's sessions start with, and where each setting comes from |
 
 Settings of `:set` (saved to `config.toml` like the matching actions):
 
@@ -676,7 +676,7 @@ Actions without a default key (the command line finds them by name).
 |---|---|
 | `tunnel.new` | New SSH tunnel (shared by profiles) |
 | `env.new` | New environment (rules, color and badge that profiles share) |
-| `session.new` | New session preset (settings a profile's sessions start with) |
+| `session.new` | New Startup SQL (settings a profile's sessions start with) |
 | `session.show` | What a profile's sessions start with, and where each setting comes from |
 | `ui.language.en` | Change language → English |
 | `ui.language.ko` | Change language → Korean |

@@ -1,5 +1,6 @@
 ---
 source: crates/tui/tests/flows_sessions.rs
+assertion_line: 670
 expression: "h.draw(w, ht).backend()"
 ---
 "╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
@@ -9,14 +10,14 @@ expression: "h.draw(w, ht).backend()"
 "│ │                                                                          │ │"
 "│ │ SSL mode          disable ▾   ←/→ change · Enter list                    │ │"
 "│▾│ CA file                                     PEM; checks the server's ce… │ │"
-"│ │ ╭ Session preset ──────────────────────────────────────────────────────╮ │ │"
+"│ │ ╭ Startup SQL ─────────────────────────────────────────────────────────╮ │ │"
 "│▾│ │ › type to filter                                                     │ │ │"
 "│ │ │                                                                      │ │ │"
-"│ │ │ Environment's (reporting)  what its environment maps for its databa… │ │ │"
-"│▾│ │ None                       no preset, even if the environment maps … │ │ │"
+"│ │ │ Environment's (reporting)  the Startup SQL its environment maps for… │ │ │"
+"│▾│ │ None                       no Startup SQL, even if the environment … │ │ │"
 "│ │ │ broken                     2 statements                              │ │ │"
 "│ │ │ reporting                  2 statements                              │ │ │"
-"│ │ │ New session preset…                                                  │ │ │"
+"│ │ │ New Startup SQL…                                                     │ │ │"
 "│ │ ╰───────────────────────────────── Enter pick · ↑↓ select · Esc cancel ╯ │ │"
 "│ │                                                                          │ │"
 "│ │                    Test    Save    Cancel                                │ │"

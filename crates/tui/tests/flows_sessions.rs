@@ -1,11 +1,11 @@
-//! Session presets, headless: what a profile's query sessions are opened with (its
+//! Startup SQL presets, headless: what a profile's query sessions are opened with (its
 //! environment's preset, its own, none, its own statements; metadata sessions never), a profile
 //! whose plan has an error (an unknown preset, one for the other database, a statement that is
 //! not a setting or that read-only refuses: nothing is opened), a start-up statement the server
 //! refused (said with its source and number), and a session behind a pooler that sets them per
-//! transaction. The explorer's "Session presets" section: its rows, the preset form (new,
+//! transaction. The explorer's "Startup SQL" section: its rows, the preset form (new,
 //! edit, rename, copy, a statement that is not allowed), delete and test. The profile form's
-//! session preset list and session SQL, and the environment form's lists.
+//! Startup SQL list and own startup SQL, and the environment form's lists; `:startup`.
 
 mod common;
 
@@ -134,19 +134,19 @@ fn a_profile_whose_plan_has_an_error_does_not_connect() {
     let cases: Vec<(Change, &str)> = vec![
         (
             Box::new(|p| p.session = SessionRef::Named("gone".into())),
-            "local-pg names the session preset “gone”, which does not exist: pick one in its form, or none (it never connects without it instead)",
+            "local-pg names the Startup SQL “gone”, which does not exist: pick one in its form, or none (it never connects without it instead)",
         ),
         (
             Box::new(|p| p.session = SessionRef::Named("my_ro".into())),
-            "local-pg is a PostgreSQL profile and its session preset “my_ro” is for MySQL: pick a preset for its database",
+            "local-pg is a PostgreSQL profile and its Startup SQL “my_ro” is for MySQL: pick a Startup SQL for its database",
         ),
         (
             Box::new(|p| p.session_sql = vec!["SET work_mem = '1MB'".into(), "DELETE FROM t".into()]),
-            "local-pg does not connect: statement 2 of its own session SQL is not allowed (only SET of the session's own settings): DELETE FROM t",
+            "local-pg does not connect: statement 2 of its own startup SQL is not allowed (only SET of the session's own settings): DELETE FROM t",
         ),
         (
             Box::new(|p| p.session_sql = vec!["SET idle_session_timeout = '1s'".into()]),
-            "local-pg does not connect: statement 1 of its own session SQL is not allowed (idle_session_timeout: datarig closes idle sessions itself and warns first; the server's limit is only its safety net — set the environment's idle_disconnect): SET idle_session_timeout = '1s'",
+            "local-pg does not connect: statement 1 of its own startup SQL is not allowed (idle_session_timeout: datarig closes idle sessions itself and warns first; the server's limit is only its safety net — set the environment's idle_disconnect): SET idle_session_timeout = '1s'",
         ),
     ];
     for (change, want) in cases {
@@ -168,7 +168,7 @@ fn a_profile_whose_plan_has_an_error_does_not_connect() {
     assert_eq!(
         h.node_error("local-pg").as_deref(),
         Some(
-            "The environment prod maps the session preset “reporting” for PostgreSQL, which does not exist: local-pg does not connect until it is fixed, or its form picks none"
+            "The environment prod maps the Startup SQL “reporting” for PostgreSQL, which does not exist: local-pg does not connect until it is fixed, or its form picks none"
         )
     );
     // A test of it tries nothing either.
@@ -194,7 +194,7 @@ fn read_only_refuses_a_setting_off_its_allowlist() {
     assert_eq!(
         h.node_error("local-pg").as_deref(),
         Some(
-            "local-pg does not connect: its environment is read-only and statement 1 of its own session SQL is refused (this setting is not on the read-only allowlist): SET session_replication_role = replica"
+            "local-pg does not connect: its environment is read-only and statement 1 of its own startup SQL is refused (this setting is not on the read-only allowlist): SET session_replication_role = replica"
         )
     );
 }
@@ -227,7 +227,7 @@ fn a_refused_start_up_statement_is_said_with_its_source_and_number() {
     h.tab_db(0, DbEvent::ConnectFailed { error, auth: false });
     let screen = h.screen(220, 40);
     assert!(
-        screen.contains("local-pg: statement 1 of its own session SQL failed, so the session was closed: ERROR: invalid value for parameter \"work_mem\": \"lots\" (SET work_mem = 'lots')"),
+        screen.contains("local-pg: statement 1 of its own startup SQL failed, so the session was closed: ERROR: invalid value for parameter \"work_mem\": \"lots\" (SET work_mem = 'lots')"),
         "{screen}"
     );
     assert!(h.app.tab().exec.session.is_none(), "closed");
@@ -241,7 +241,7 @@ fn a_refused_start_up_statement_is_said_with_its_source_and_number() {
     };
     h.tab_db(0, DbEvent::ConnectFailed { error, auth: false });
     assert!(
-        h.screen(220, 40).contains("statement 2 of the session preset “reporting” of the environment prod failed"),
+        h.screen(220, 40).contains("statement 2 of the Startup SQL “reporting” of the environment prod failed"),
         "{}",
         h.screen(220, 40)
     );
@@ -425,7 +425,7 @@ fn a_new_preset_is_made_in_its_form() {
     }
     h.ctrl('s');
     assert!(!h.form_open(), "saved and closed");
-    assert_eq!(said(&h), "Saved the session preset “analytics”");
+    assert_eq!(said(&h), "Saved the Startup SQL “analytics”");
     let p = h.app.session_presets().iter().find(|p| p.name == "analytics").expect("made").clone();
     assert_eq!(
         (p.dbms, p.sql.as_slice()),
@@ -433,7 +433,7 @@ fn a_new_preset_is_made_in_its_form() {
     );
     assert!(
         dir.text().contains(
-            "[sessions.analytics]\ndbms = \"postgres\"\nsql = [\"SET statement_timeout = '1min'\", \"SET jit = off\"]\n"
+            "[startup.analytics]\ndbms = \"postgres\"\nsql = [\"SET statement_timeout = '1min'\", \"SET jit = off\"]\n"
         ),
         "{}",
         dir.text()
@@ -454,7 +454,7 @@ fn the_form_refuses_statements_that_are_not_settings_and_the_reserved_name() {
     h.key(KeyCode::Tab);
     h.type_text("SET work_mem = '1MB'; RESET work_mem");
     let screen = h.screen(120, 40);
-    assert!(screen.contains("reserved: it means no preset"), "{screen}");
+    assert!(screen.contains("reserved: it means none"), "{screen}");
     assert!(screen.contains("statement 2: only SET of the session's own settings"), "{screen}");
     insta::assert_snapshot!("session_form_errors_en_80x24", h.draw(80, 24).backend());
     h.ctrl('s');
@@ -472,7 +472,7 @@ fn the_form_refuses_statements_that_are_not_settings_and_the_reserved_name() {
     // On MySQL neither is on the read-only allowlist: the first is said.
     let screen = h.screen(120, 40);
     assert!(screen.contains("Statement 1 would be refused in read-only environments"), "{screen}");
-    assert!(!dir.text().contains("[sessions.none]"));
+    assert!(!dir.text().contains("[startup.none]"));
 }
 
 /// A rename takes the profiles and environments that name the preset along, in the file too; a
@@ -500,9 +500,9 @@ fn a_rename_follows_into_profiles_and_environments_and_a_copy_gets_a_free_name()
     let rules = &h.app.policies.environment("prod").unwrap().policy.session;
     assert_eq!(rules.postgres.as_deref(), Some("reports"));
     let text = dir.text();
-    assert!(text.contains("[sessions.mysql_ro]") && !text.contains("[sessions.my_ro]"), "{text}");
-    assert!(text.contains("session = \"mysql_ro\""), "{text}");
-    assert!(text.contains("session = { postgres = \"reports\" }"), "{text}");
+    assert!(text.contains("[startup.mysql_ro]") && !text.contains("[startup.my_ro]"), "{text}");
+    assert!(text.contains("startup = \"mysql_ro\""), "{text}");
+    assert!(text.contains("startup = { postgres = \"reports\" }"), "{text}");
     // A copy.
     on_preset(&mut h, "reports");
     h.keys("c");
@@ -521,7 +521,7 @@ fn a_deleted_preset_leaves_its_names_and_its_profiles_do_not_connect() {
     on_preset(&mut h, "reporting");
     h.keys("d");
     let screen = h.screen(120, 40);
-    assert!(screen.contains("Delete the session preset “reporting”?"), "{screen}");
+    assert!(screen.contains("Delete the Startup SQL “reporting”?"), "{screen}");
     assert!(screen.contains("local-pg uses it: it will not connect until you pick"), "{screen}");
     assert!(screen.contains("Environments map it: prod; their profiles will not"), "{screen}");
     insta::assert_snapshot!("session_delete_en_80x24", h.draw(80, 24).backend());
@@ -533,10 +533,10 @@ fn a_deleted_preset_leaves_its_names_and_its_profiles_do_not_connect() {
     assert!(!h.app.session_presets().iter().any(|p| p.name == "reporting"));
     assert_eq!(
         said(&h),
-        "Deleted the session preset “reporting”; the profile that used it needs another preset or none"
+        "Deleted the Startup SQL “reporting”; the profile that used it needs another Startup SQL or none"
     );
-    assert!(!dir.text().contains("[sessions.reporting]"), "{}", dir.text());
-    assert!(dir.text().contains("session = { postgres = \"reporting\" }"), "the environment keeps the name");
+    assert!(!dir.text().contains("[startup.reporting]"), "{}", dir.text());
+    assert!(dir.text().contains("startup = { postgres = \"reporting\" }"), "the environment keeps the name");
     h.explore("local-pg");
     h.key(KeyCode::Enter);
     assert!(h.driver.sessions.lock().unwrap().is_empty(), "nothing is opened");
@@ -550,7 +550,7 @@ fn the_menu_of_a_preset_says_what_it_does() {
     let mut h = section_harness(&dir);
     h.right_click_row("$reporting");
     let labels = h.menu_labels();
-    for want in ["Edit session preset", "Duplicate session preset", "Test session preset", "Delete session preset"] {
+    for want in ["Edit Startup SQL", "Duplicate Startup SQL", "Test Startup SQL", "Delete Startup SQL"] {
         assert!(labels.iter().any(|l| l == want), "{want}: {labels:?}");
     }
     assert!(!labels.iter().any(|l| l.contains("SSH tunnel") || l.contains("console")), "{labels:?}");
@@ -569,7 +569,7 @@ fn a_test_runs_on_a_connected_profile_and_closes_its_session() {
     // MySQL: no profile of it.
     on_preset(&mut h, "pg_only");
     h.keys("t");
-    assert_eq!(said(&h), "No profile uses MySQL: nothing to test the preset with");
+    assert_eq!(said(&h), "No profile uses MySQL: nothing to test the Startup SQL with");
     assert!(h.driver.sessions.lock().unwrap().len() == 1, "nothing opened");
     // On the connected profile that uses it.
     on_preset(&mut h, "reporting");
@@ -584,7 +584,7 @@ fn a_test_runs_on_a_connected_profile_and_closes_its_session() {
         ev: DbEvent::Connected,
     });
     assert!(h.session_closed(1), "closed once it connected");
-    assert_eq!(said(&h), "Session preset “reporting” applied on local-pg (2 statements); the test session was closed");
+    assert_eq!(said(&h), "Startup SQL “reporting” applied on local-pg (2 statements); the test session was closed");
     // Its failure, in the server's words.
     h.keys("t");
     let seq = h.app.conn_test.as_ref().unwrap().seq;
@@ -599,8 +599,9 @@ fn a_test_runs_on_a_connected_profile_and_closes_its_session() {
         ev: DbEvent::ConnectFailed { error, auth: false },
     });
     assert!(
-        said(&h)
-            .starts_with("The preset could not be applied: statement 1 the session starts with failed: ERROR: nope"),
+        said(&h).starts_with(
+            "The Startup SQL could not be applied: statement 1 the session starts with failed: ERROR: nope"
+        ),
         "{}",
         said(&h)
     );
@@ -663,7 +664,7 @@ fn the_profile_form_picks_its_environments_preset_none_or_one_of_its_database() 
     h.key(KeyCode::Enter);
     assert_eq!(
         session_rows(&h),
-        ["Environment's (reporting)", "None", "broken", "reporting", "New session preset…"],
+        ["Environment's (reporting)", "None", "broken", "reporting", "New Startup SQL…"],
         "PostgreSQL's only"
     );
     for (w, ht) in [(80, 24), (120, 40)] {
@@ -671,11 +672,11 @@ fn the_profile_form_picks_its_environments_preset_none_or_one_of_its_database() 
     }
     pick_session(&mut h, "None");
     assert_eq!(h.form().session_ref, SessionRef::Off);
-    assert!(h.screen(120, 40).contains("Session preset    None ▾"), "{}", h.screen(120, 40));
+    assert!(h.screen(120, 40).contains("Startup SQL       None ▾"), "{}", h.screen(120, 40));
     h.ctrl('s');
     assert!(!h.form_open());
     assert_eq!(h.app.profiles[0].session, SessionRef::Off);
-    assert!(dir.text().contains("session = \"none\""), "{}", dir.text());
+    assert!(dir.text().contains("startup = \"none\""), "{}", dir.text());
     // The plan says the environment's was skipped.
     let plan = h.app.session_plan_of(&h.app.profiles[0].clone()).unwrap();
     assert!(
@@ -707,7 +708,7 @@ fn the_profile_forms_session_sql_is_checked_and_saved_one_per_item() {
     h.ctrl('s');
     assert!(!h.form_open(), "saved");
     assert_eq!(h.app.profiles[0].session_sql, ["SET work_mem = '1MB'", "SET jit = off"]);
-    assert!(dir.text().contains("session_sql = [\"SET work_mem = '1MB'\", \"SET jit = off\"]"), "{}", dir.text());
+    assert!(dir.text().contains("startup_sql = [\"SET work_mem = '1MB'\", \"SET jit = off\"]"), "{}", dir.text());
 }
 
 /// A preset of the other database (a driver changed in the form): marked, and not saved.
@@ -727,13 +728,13 @@ fn a_preset_of_the_other_database_is_marked_in_the_profile_form() {
     h.ctrl('n');
     let screen = h.screen(120, 40);
     assert!(screen.contains("reporting (for PostgreSQL) ▾"), "{screen}");
-    assert!(screen.contains("a preset for another database"), "{screen}");
+    assert!(screen.contains("a Startup SQL for another database"), "{screen}");
     h.ctrl('s');
     assert!(h.form_open(), "not saved");
     assert_eq!(h.app.profiles[0].driver, "postgres", "unchanged");
 }
 
-/// "New session preset…" opens the preset form for the profile's database over the profile
+/// "New Startup SQL…" opens the preset form for the profile's database over the profile
 /// form; saved, the profile form comes back with it picked.
 #[test]
 fn a_new_preset_from_the_profile_forms_list_comes_back_picked() {
@@ -742,7 +743,7 @@ fn a_new_preset_from_the_profile_forms_list_comes_back_picked() {
     profile_field(&mut h, "local-pg", Field::SessionPreset);
     h.key(KeyCode::Enter);
     h.key(KeyCode::End);
-    pick_session(&mut h, "New session preset…");
+    pick_session(&mut h, "New Startup SQL…");
     assert!(h.form().is_session());
     assert_eq!(h.form().session_dbms, Dbms::Postgres);
     h.type_text("own");
@@ -752,7 +753,7 @@ fn a_new_preset_from_the_profile_forms_list_comes_back_picked() {
     h.ctrl('s');
     assert!(!h.form().is_session(), "back in the profile form");
     assert_eq!(h.form().session_ref, SessionRef::Named("own".into()));
-    assert!(dir.text().contains("[sessions.own]"), "{}", dir.text());
+    assert!(dir.text().contains("[startup.own]"), "{}", dir.text());
     h.ctrl('s');
     assert_eq!(h.app.profiles[0].session, SessionRef::Named("own".into()));
 }
@@ -770,10 +771,10 @@ fn the_environment_form_maps_a_preset_per_database() {
         h.key(KeyCode::Tab);
     }
     let screen = h.screen(120, 40);
-    assert!(screen.contains("Preset (PostgreSQL)  reporting ▾"), "{screen}");
-    assert!(screen.contains("Preset (MySQL)       None ▾"), "{screen}");
+    assert!(screen.contains("Startup SQL (PG)     reporting ▾"), "{screen}");
+    assert!(screen.contains("Startup SQL (MySQL)  None ▾"), "{screen}");
     h.key(KeyCode::Enter);
-    assert_eq!(session_rows(&h), ["None", "fk_off", "my_ro", "New session preset…"], "MySQL's only");
+    assert_eq!(session_rows(&h), ["None", "fk_off", "my_ro", "New Startup SQL…"], "MySQL's only");
     for (w, ht) in [(80, 24), (120, 40)] {
         insta::assert_snapshot!(format!("environment_form_session_list_en_{w}x{ht}"), h.draw(w, ht).backend());
     }
@@ -784,7 +785,7 @@ fn the_environment_form_maps_a_preset_per_database() {
     h.ctrl('s');
     let map = &h.app.policies.environment("prod").unwrap().policy.session;
     assert_eq!((map.postgres.as_deref(), map.mysql.as_deref()), (None, Some("my_ro")));
-    assert!(dir.text().contains("session = { mysql = \"my_ro\" }"), "{}", dir.text());
+    assert!(dir.text().contains("startup = { mysql = \"my_ro\" }"), "{}", dir.text());
 }
 
 /// Names are matched exactly; a preset of the same name but for case is named as the one
@@ -846,10 +847,10 @@ fn the_session_view_lists_what_a_profiles_sessions_start_with_and_from_where() {
         "Lock wait        5s     environment prod",
         "Idle disconnect  never  app setting",
         "Idle rollback    30m    environment prod",
-        "From the session preset “reporting” of the environment prod:",
+        "From the Startup SQL “reporting” of the environment prod:",
         "  SET statement_timeout = '30s'",
         "    behind a pooler: per transaction as SET LOCAL statement_timeout = '30s'",
-        "From its own session SQL:",
+        "From its own startup SQL:",
         "  SET work_mem = '256MB'",
         "    behind a pooler: per transaction as SET LOCAL work_mem = '256MB'",
         "  SET ROLE reporting",
@@ -868,6 +869,18 @@ fn the_session_view_lists_what_a_profiles_sessions_start_with_and_from_where() {
     h.command("session");
     click_on(&mut h, "[ Close ]");
     assert_eq!(h.overlay_kind(), None);
+}
+
+/// `:startup` is another name of `:session`: the same view of the same profile.
+#[test]
+fn startup_opens_the_session_view() {
+    let mut h = connected(&view_config());
+    h.command("session");
+    let by_session = h.screen(120, 40);
+    h.key(KeyCode::Esc);
+    h.command("startup");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::SessionView));
+    assert_eq!(h.screen(120, 40), by_session);
 }
 
 /// Click the first `text` on a 100x30 screen (after the dialog's arming delay).
@@ -936,7 +949,7 @@ fn a_profile_without_an_environment_shows_the_default_rules() {
     let screen = h.screen(120, 40);
     assert!(screen.contains("local-pg · PostgreSQL · default rules"), "{screen}");
     assert!(screen.contains("Idle rollback    30m                   default rules"), "{screen}");
-    assert!(screen.contains("No session statements"), "{screen}");
+    assert!(screen.contains("No startup statements"), "{screen}");
 }
 
 /// An environment that is not defined: what the connect refuses with, from `:session` and from
@@ -983,7 +996,7 @@ fn a_mysql_profiles_session_view_has_no_pooler_lines() {
     h.command("session");
     let screen = h.screen(120, 40);
     assert!(screen.contains("local-pg · MySQL · environment prod"), "{screen}");
-    assert!(screen.contains("From the session preset “my_ro” of the environment prod:"), "{screen}");
+    assert!(screen.contains("From the Startup SQL “my_ro” of the environment prod:"), "{screen}");
     assert!(screen.contains("  SET SESSION sql_mode = 'ANSI_QUOTES'"), "{screen}");
     assert!(!screen.contains("behind a pooler"), "{screen}");
 }
@@ -999,11 +1012,11 @@ fn the_session_view_says_a_skipped_preset_and_no_statements() {
     let screen = h.screen(120, 40);
     assert!(
         screen.contains(
-            "Not used: the session preset “reporting” of the environment prod (the profile says session = \"none\")"
+            "Not used: the Startup SQL “reporting” of the environment prod (the profile says startup = \"none\")"
         ),
         "{screen}"
     );
-    assert!(screen.contains("No session statements"), "{screen}");
+    assert!(screen.contains("No startup statements"), "{screen}");
     assert!(screen.contains("Lock wait"), "{screen}");
 }
 
@@ -1015,7 +1028,7 @@ fn the_session_view_of_a_profile_that_does_not_connect_says_why() {
     h.explore("local-pg");
     h.command("session");
     let screen = h.screen(120, 40);
-    assert!(screen.contains("local-pg names the session preset “gone”, which does not exist"), "{screen}");
+    assert!(screen.contains("local-pg names the Startup SQL “gone”, which does not exist"), "{screen}");
     assert!(screen.contains("The profile does not connect until this is fixed"), "{screen}");
     assert!(!screen.contains("Lock wait"), "{screen}");
     insta::assert_snapshot!("session_view_error_en_80x24", h.draw(80, 24).backend());
@@ -1033,7 +1046,7 @@ fn the_profile_forms_key_shows_its_unsaved_values() {
     assert_eq!(h.overlay_kind(), Some(OverlayKind::SessionView));
     let screen = h.screen(120, 40);
     assert!(screen.contains("Session settings — local-pg (the form's unsaved values)"), "{screen}");
-    assert!(screen.contains("From its own session SQL:") && screen.contains("  SET jit = off"), "{screen}");
+    assert!(screen.contains("From its own startup SQL:") && screen.contains("  SET jit = off"), "{screen}");
     insta::assert_snapshot!("session_view_form_en_80x24", h.draw(80, 24).backend());
     h.key(KeyCode::Esc);
     assert_eq!(h.overlay_kind(), Some(OverlayKind::ProfileForm));
@@ -1179,7 +1192,7 @@ fn the_session_view_shows_a_lock_wait_a_preset_overrides() {
     let mut h = connected_on(&lock_config("postgres", &["SET lock_timeout = '3s'"], &[]));
     h.command("session");
     let screen = h.screen(120, 40);
-    for line in ["Lock wait        3s", "its session preset “fast” — overrides environment prod: 5s"] {
+    for line in ["Lock wait        3s", "its Startup SQL “fast” — overrides environment prod: 5s"] {
         assert!(screen.contains(line), "{line}\n{screen}");
     }
     for (w, ht) in [(80, 24), (120, 40)] {
@@ -1187,7 +1200,10 @@ fn the_session_view_shows_a_lock_wait_a_preset_overrides() {
     }
     // Within 80 columns the source wraps under itself.
     let screen = h.screen(80, 24);
-    assert!(screen.contains("“fast” — overrides") && screen.contains("environment prod: 5s"), "{screen}");
+    assert!(
+        screen.contains("“fast” — overrides environment") && screen.contains("                         prod: 5s"),
+        "{screen}"
+    );
     let mut h = connected_on(&lock_config("postgres", &["SET lock_timeout TO DEFAULT"], &[]));
     h.command("session");
     let screen = h.screen(120, 40);

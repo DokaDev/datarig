@@ -1,5 +1,6 @@
 ---
 source: crates/tui/tests/flows_environments.rs
+assertion_line: 551
 expression: backend
 ---
 "╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
@@ -13,8 +14,8 @@ expression: backend
 "│▾│ Client k│                                                      │hrase    │ │"
 "│ │ Statemen│ ○ None (default rules)  standard rules               │ransact… │ │"
 "│ │ Environm│ ● dev                   standard rules               │s befor… │ │"
-"│ │ Session │ ● test                  standard rules               │         │ │"
-"│ │ Session │ ● staging  STG          asks before every write · m… │ the pr… │ │"
+"│ │ Startup │ ● test                  standard rules               │         │ │"
+"│ │ Own star│ ● staging  STG          asks before every write · m… │ the St… │ │"
 "│ │ Color   │ ● prod  PROD            read-only · asks before eve… │ list    │ │"
 "│ │ Icon    │   New environment…                                   │         │ │"
 "│▾│ Folder  ╰───────────────── Enter pick · ↑↓ select · Esc cancel ╯         │ │"

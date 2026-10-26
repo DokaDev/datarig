@@ -1,5 +1,6 @@
 ---
 source: crates/tui/tests/flows_sessions.rs
+assertion_line: 1186
 expression: "h.draw(w, ht).backend()"
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×                                          "
@@ -8,12 +9,12 @@ expression: "h.draw(w, ht).backend()"
 "│ ╭ Session settings — local-pg ─────────────────────────────────────────────╮e│"
 "│ │ local-pg · PostgreSQL · environment prod                                 │ │"
 "│ │                                                                          │ │"
-"│ │ Lock wait        3s     its session preset “fast” — overrides            │ │"
-"│▾│                         environment prod: 5s                             │ │"
+"│ │ Lock wait        3s     its Startup SQL “fast” — overrides environment   │ │"
+"│▾│                         prod: 5s                                         │ │"
 "│ │ Idle disconnect  never  app setting                                      │ │"
 "│ │ Idle rollback    30m    environment prod                                 │ │"
 "│▾│                                                                          │ │"
-"│ │ From its session preset “fast”:                                          │ │"
+"│ │ From its Startup SQL “fast”:                                             │ │"
 "│ │   SET lock_timeout = '3s'                                                │ │"
 "│ │     behind a pooler: per transaction as SET LOCAL lock_timeout = '3s'    │t│"
 "│ │                                                                          │ │"

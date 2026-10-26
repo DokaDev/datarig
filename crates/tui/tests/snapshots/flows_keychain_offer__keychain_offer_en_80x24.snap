@@ -1,5 +1,6 @@
 ---
 source: crates/tui/tests/flows_keychain_offer.rs
+assertion_line: 202
 expression: "o.h.draw(w, hh).backend()"
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×                                          "
@@ -16,7 +17,7 @@ expression: "o.h.draw(w, hh).backend()"
 "│▾ Environ│ Other programs running as you could then read these      │         │"
 "│  ▸ ○ Def│ saved passwords through the `security` tool.             │         │"
 "│    ＋ Ad│                                                          │         │" Hidden by multi-width symbols: [(6, " ")]
-"│▾ Session│            No, keep asking       Yes, switch             │         │"
+"│▾ Startup│            No, keep asking       Yes, switch             │         │"
 "│    n her╰─────── y switch · n keep asking · Esc/Enter decide later ╯         │"
 "│▾ Saved queries 0     ││                                                      │"
 "│    Ctrl+S in a conso…││                                                      │"

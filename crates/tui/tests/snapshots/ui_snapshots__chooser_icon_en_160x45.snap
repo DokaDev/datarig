@@ -1,5 +1,6 @@
 ---
 source: crates/tui/tests/ui_snapshots.rs
+assertion_line: 887
 expression: backend
 ---
 "╭ Explorer ────────────────────────────╮ 1 console 1 ×                                                                                                          "
@@ -23,8 +24,8 @@ expression: backend
 "│                             │ Client key          │  bolt                                               │ase                  │                             │"
 "│                             │ Statement cache   ‹ │  shield                                             │ode                  │                             │"
 "│                             │ Environment       No│  lock                                               │                     │                             │"
-"│                             │ Session preset    En│  flask                                              │                     │                             │"
-"│                             │ Session SQL         │  bug                                                │he preset's          │                             │"
+"│                             │ Startup SQL       En│  flask                                              │                     │                             │"
+"│                             │ Own startup SQL     │  bug                                                │he Startup SQL's     │                             │"
 "│                             │ Color             ‹ │  rocket                                             │                     │                             │"
 "│                             │ Icon              ‹ │  home                                               │                     │                             │"
 "│                             │ Folder            ‹ │  laptop                                             │                     │                             │"

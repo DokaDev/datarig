@@ -1,5 +1,6 @@
 ---
 source: crates/tui/tests/flows_environments.rs
+assertion_line: 549
 expression: backend
 ---
 "╭ Explorer ──────────────────╮╭ Workspace ─────────────────────────────────────────────────────────────────────────────╮"
@@ -17,12 +18,12 @@ expression: backend
 "│    ● sta│                                                                                                  │         │"
 "│  ▾ ● pro│ SSL mode          disable ▾   ←/→ change · Enter list                                            │         │"
 "│      ○  │ CA file                                               PEM; checks the server's certificate       │         │"
-"│▾ Session│ Client cert                                           PEM, sent when the server asks             │         │"
+"│▾ Startup│ Client cert                                           PEM, sent when the server asks             │         │"
 "│    n her│ Client key                                            PEM, without a passphrase                  │         │"
 "│         │ Statement cache   ‹ on ›  ←/→ change · off behind PgBouncer in transaction mode                  │         │"
 "│         │ Environment       ● prod  PROD  ▾   Enter list · read-only · asks before every write             │         │"
-"│         │ Session preset    Environment's (none) ▾   Enter list                                            │         │"
-"│         │ Session SQL                                           its own SET …; after the preset's          │         │"
+"│         │ Startup SQL       Environment's (none) ▾   Enter list                                            │         │"
+"│         │ Own startup SQL                                       its own SET …; after the Startup SQL's     │         │"
 "│         │ Color             ‹ ● auto (from the name) ›  ←/→ change · Enter list                            │         │"
 "│         │ Icon              ‹ the driver's icon ›  ←/→ change · Enter list                                 │         │"
 "│         │ Folder            ‹ (top level) ›  ←/→ change · Enter list                                       │         │"

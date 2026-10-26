@@ -1,5 +1,6 @@
 ---
 source: crates/tui/tests/ui_snapshots.rs
+assertion_line: 825
 expression: backend
 ---
 "╭ Explorer ──────────────────╮ 1 console 1 ×                                                                            "
@@ -21,8 +22,8 @@ expression: backend
 "│         │ Client key          │ › type to filter                                     │ase                  │         │"
 "│         │ Statement cache   ‹ │                                                      │ode                  │         │"
 "│         │ Environment       No│ disable      not encrypted                           │                     │         │"
-"│         │ Session preset    En│ prefer       encrypted if the server offers it       │                     │         │"
-"│         │ Session SQL         │ require      encrypted, certificate not checked (wi… │he preset's          │         │"
+"│         │ Startup SQL       En│ prefer       encrypted if the server offers it       │                     │         │"
+"│         │ Own startup SQL     │ require      encrypted, certificate not checked (wi… │he Startup SQL's     │         │"
 "│         │ Color             ‹ │ verify-ca    encrypted, signed by the CA file (need… │                     │         │"
 "│         │ Icon              ‹ │ verify-full  CA-signed, and the host name matches    │                     │         │"
 "│         │ Folder            ‹ ╰───────────────── Enter pick · ↑↓ select · Esc cancel ╯                     │         │"

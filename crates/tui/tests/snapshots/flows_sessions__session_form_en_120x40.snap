@@ -1,5 +1,6 @@
 ---
 source: crates/tui/tests/flows_sessions.rs
+assertion_line: 424
 expression: "h.draw(w, ht).backend()"
 ---
 "╭ Explorer ──────────────────╮╭ Workspace ─────────────────────────────────────────────────────────────────────────────╮"
@@ -13,9 +14,9 @@ expression: "h.draw(w, ht).backend()"
 "│▾ Environments 1            ││  Space t u  Reopen a closed tab                                                        │"
 "│  ▸ ○ Default rules (no env…││  n          New connection                                                             │"
 "│  ▸ ○ prod  standard rules …││  F1         Keyboard help                                                              │"
-"│▾ Session presets 4         ││  :          Commands                                                                   │"
-"│    ◇ bro╭ New session preset ──────────────────────────────────────────────────────────────────────────────╮         │"
-"│      sta│  Session preset                               profiles that pick it start their sessions with it │         │"
+"│▾ Startup SQL 4             ││  :          Commands                                                                   │"
+"│    ◇ bro╭ New Startup SQL ─────────────────────────────────────────────────────────────────────────────────╮         │"
+"│      sta│  Startup SQL                                  profiles that pick it start their sessions with it │         │"
 "│    ◇ fk_│                                                                                                  │         │"
 "│  ▸ ◇ my_│ Name        analytics                                                                            │         │"
 "│  ▸ ◇ rep│ Database    PostgreSQL ▾   ←/→ change · Enter list                                               │         │"

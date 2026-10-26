@@ -1,27 +1,28 @@
-//! Session presets: named lists of settings a query session starts with, kept next to the
-//! profiles in the config file as `[sessions.<name>]` tables, for one kind of database each:
+//! Startup SQL presets (session presets in 0.31): named lists of settings a query session starts
+//! with, kept next to the profiles in the config file as `[startup.<name>]` tables (their 0.31
+//! name `[sessions.<name>]` is read too), for one kind of database each:
 //!
 //! ```toml
-//! [sessions.reporting]
+//! [startup.reporting]
 //! dbms = "postgres"                 # "postgres" | "mysql"
 //! sql = ["SET statement_timeout = '30s'", "SET work_mem = '64MB'"]
 //!
 //! [policy.prod]
-//! session = { postgres = "reporting", mysql = "my_reporting" }
+//! startup = { postgres = "reporting", mysql = "my_reporting" }
 //!
 //! [[connections]]
 //! name = "orders"
-//! session = "reporting"             # this profile's preset ("none": none, whatever its
+//! startup = "reporting"             # this profile's preset ("none": none, whatever its
 //!                                   # environment maps)
-//! session_sql = ["SET work_mem = '256MB'"]   # its own statements, after the preset's
+//! startup_sql = ["SET work_mem = '256MB'"]   # its own statements, after the preset's
 //! ```
 //!
 //! Presets are optional: a profile with none of these keys starts its sessions with the
 //! database's defaults. What a query session starts with is its [`plan`], in order (a later
 //! setting of the same name wins): the app's own limits (the intents `lock_wait`,
 //! `idle_disconnect`, `tx_idle_rollback`, from the environment or the config), then the preset
-//! (the profile's own `session`, else the one its environment maps for its database), then the
-//! profile's `session_sql`. A preset name that is not there, or one for the other database, is an
+//! (the profile's own `startup`, else the one its environment maps for its database), then the
+//! profile's `startup_sql`. A preset name that is not there, or one for the other database, is an
 //! error of that profile: it does not connect (never without the preset instead). Each
 //! statement must be one setting of the session ([`crate::sql::risk::session_set`]); in a
 //! read-only environment only the settings a read-only session may change. Metadata sessions
@@ -161,7 +162,7 @@ impl SessionPreset {
     }
 }
 
-/// `[sessions.<name>]` as the file has it.
+/// `[startup.<name>]` as the file has it.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct SessionSection {
@@ -171,7 +172,7 @@ pub(crate) struct SessionSection {
     pub sql: Vec<String>,
 }
 
-/// A profile's `session`.
+/// A profile's `startup`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum SessionRef {
     /// No key: the preset its environment maps for its database, if any.
@@ -206,7 +207,7 @@ impl<'de> Deserialize<'de> for SessionRef {
     }
 }
 
-/// An environment's `session`: the preset of each database its profiles start with.
+/// An environment's `startup`: the preset of each database its profiles start with.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SessionMap {
     pub postgres: Option<String>,

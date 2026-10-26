@@ -1,5 +1,6 @@
 ---
 source: crates/tui/tests/ui_snapshots.rs
+assertion_line: 1081
 expression: backend
 ---
 "╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
@@ -11,7 +12,7 @@ expression: backend
 "│▾ Environments 0      ││  Enter      Connect and open a console               │"
 "│  ▸ ○ Default rules (…││  Ctrl+O     Quick connect                            │"
 "│    ＋ Ad╭ Keychain ────────────────────────────────────────────────╮         │" Hidden by multi-width symbols: [(6, " ")]
-"│▾ Session│                                                          │         │"
+"│▾ Startup│                                                          │         │"
 "│    n her│ Moving saved passwords to the system keychain… (your OS  │         │"
 "│         │ may ask for permission)                                  │         │"
 "│         │                                                          │         │"
