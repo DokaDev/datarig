@@ -21,7 +21,8 @@ fn the_words_of_export_are_a_format_a_scope_and_a_path() {
     assert_eq!(args("out.csv"), ExportArgs { path: Some("out.csv".into()), ..Default::default() });
     assert_eq!(args("ndjson all a.txt").format, Some(ExportFormat::JsonLines));
     assert_eq!(args("SQL").format, Some(ExportFormat::SqlInsert));
-    assert_eq!(parse_args("parquet"), Err(ArgsError::UnknownFormat("parquet".into())));
+    assert_eq!(parse_args("avro"), Err(ArgsError::UnknownFormat("avro".into())));
+    assert_eq!(args("parquet").format, Some(ExportFormat::Parquet));
 }
 
 #[test]
@@ -38,6 +39,8 @@ fn a_path_names_its_format() {
     assert_eq!(of("a.XLSX"), Some(ExportFormat::Xlsx));
     assert_eq!(ExportFormat::parse("excel"), Some(ExportFormat::Xlsx));
     assert_eq!(ExportFormat::Xlsx.extension(), "xlsx");
+    assert_eq!(of("a.parquet"), Some(ExportFormat::Parquet));
+    assert_eq!(ExportFormat::Parquet.extension(), "parquet");
     assert_eq!(of("a.txt"), None);
     assert_eq!(of("noext"), None);
     for f in ExportFormat::ALL {
@@ -203,4 +206,35 @@ fn a_rows_failure_of_a_workbook_is_its_temporary_file_or_a_value_too_long() {
         Failure::TempFile(_, folder) => assert_eq!(folder, std::env::temp_dir()),
         other => panic!("{other:?}"),
     }
+}
+
+#[test]
+fn a_parquet_file_whose_disk_filled_up_keeps_nothing_and_says_the_disk_is_full() {
+    let dir = std::env::temp_dir().join(format!("datarig-export-parquet-full-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    let partial = dir.join("x.parquet.partial");
+    std::fs::write(&partial, "PAR1").unwrap();
+    let columns = [ParquetColumn { name: "t", kind: ValueKind::Text, type_name: "text" }];
+    let out = BufWriter::new(Full { room: 1024, written: 0 });
+    let mut w = ParquetWriter::new(&columns, out).unwrap().row_groups(1, parquet::GROUP_BYTES);
+    // The row group of the first row does not fit: the rows stop for that.
+    let big = "x".repeat(64 * 1024);
+    let e = w.rows(&[vec![Some(&big)]]).unwrap_err();
+    assert_eq!(e.kind(), std::io::ErrorKind::StorageFull);
+    let mut finished = 0;
+    let ended = end_parquet(w, &partial, |_| {
+        finished += 1;
+        Ok(0)
+    });
+    // The first error is the failure (not "a row group failed" with no cause), and the partial
+    // file, which does not read, is gone.
+    match ended {
+        Err(Failure::NotFinished(f)) => {
+            assert_eq!(f.kind, datarig_core::fault::FaultKind::Io(std::io::ErrorKind::StorageFull), "{f:?}");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(finished, 0, "nothing synced");
+    assert!(!partial.exists());
+    let _ = std::fs::remove_dir_all(&dir);
 }

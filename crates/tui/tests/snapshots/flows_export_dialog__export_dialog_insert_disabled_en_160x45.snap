@@ -22,7 +22,7 @@ expression: s
 │                             │ │ CSV            .csv                                                                          │ │─────────────────────────────╯
 │                             │ │ TSV            .tsv                                                                          │ │─────────────────────────────╮
 │                             │ │ Excel (.xlsx)  .xlsx                                                                         │ │                             │
-│                             │ │ Parquet        coming in a later version                                                     │ │                             │
+│                             │ │ Parquet        .parquet                                                                      │ │                             │
 │                             │ │ JSON           .json                                                                         │ │                             │
 │                             │ │ JSON Pretty    .json                                                                         │ │                             │
 │                             │ │ JSON Lines     .jsonl                                                                        │ │                             │

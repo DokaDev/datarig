@@ -40,8 +40,9 @@ use super::tabs::TableRef;
 use super::*;
 use datarig_core::driver::keys::{Generated, InsertPlan, insert_source, update_source};
 use datarig_core::driver::structure::TableStructure;
-use datarig_core::driver::{Cell, ColumnMeta, DbError, ExportBatch, ExportGuard, ExportRead, ReadIn};
+use datarig_core::driver::{Cell, ColumnMeta, DbError, ExportBatch, ExportGuard, ExportRead, ReadIn, ValueKind};
 use datarig_core::export::keyset::{self, Keyset};
+use datarig_core::export::parquet::{self, ParquetColumn, ParquetWriter};
 use datarig_core::export::stream::{BadDelimited, Delimited, Quote, RowSink, TextWriter};
 use datarig_core::export::xlsx::{self, XlsxWriter};
 use datarig_core::export::{self as core_export, Kind, Refused, SqlCells};
@@ -83,13 +84,16 @@ pub enum ExportFormat {
     SqlUpdate,
     /// An Excel workbook (`export::xlsx`).
     Xlsx,
+    /// A Parquet file (`export::parquet`).
+    Parquet,
 }
 
 impl ExportFormat {
-    pub const ALL: [ExportFormat; 11] = [
+    pub const ALL: [ExportFormat; 12] = [
         ExportFormat::Csv,
         ExportFormat::Tsv,
         ExportFormat::Xlsx,
+        ExportFormat::Parquet,
         ExportFormat::Json,
         ExportFormat::JsonPretty,
         ExportFormat::JsonLines,
@@ -114,6 +118,7 @@ impl ExportFormat {
             ExportFormat::SqlInsert => "insert",
             ExportFormat::SqlUpdate => "update",
             ExportFormat::Xlsx => "xlsx",
+            ExportFormat::Parquet => "parquet",
         }
     }
 
@@ -142,6 +147,7 @@ impl ExportFormat {
             ExportFormat::Xml => "xml",
             ExportFormat::SqlInsert | ExportFormat::SqlUpdate => "sql",
             ExportFormat::Xlsx => "xlsx",
+            ExportFormat::Parquet => "parquet",
         }
     }
 
@@ -158,6 +164,7 @@ impl ExportFormat {
             "xml" => ExportFormat::Xml,
             "sql" => ExportFormat::SqlInsert,
             "xlsx" => ExportFormat::Xlsx,
+            "parquet" => ExportFormat::Parquet,
             _ => return None,
         })
     }
@@ -187,15 +194,10 @@ impl ExportFormat {
             ExportFormat::SqlInsert => Label::CopyFormatSql,
             ExportFormat::SqlUpdate => Label::CopyFormatUpdate,
             ExportFormat::Xlsx => Label::ExportFormatXlsx,
+            ExportFormat::Parquet => Label::ExportFormatParquet,
         }
     }
 }
-
-/// Formats the export dialog lists before the app writes them, by the name `:export` is to take
-/// for each: greyed, with a word that they come later, while [`ExportFormat::parse`] knows no
-/// format of that name.
-pub const LATER_FORMATS: [(&str, Label); 2] =
-    [("xlsx", Label::ExportFormatXlsx), ("parquet", Label::ExportFormatParquet)];
 
 /// What an export takes from the result.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -333,6 +335,11 @@ pub enum Failure {
     /// workbook reads only once it is complete); `first`: what failed before (the rows had
     /// stopped for it).
     NotSaved { fault: Fault, first: Option<Box<Failure>> },
+    /// A value does not fit its Parquet column's type (its column, row and the type).
+    BadValue(parquet::BadValue),
+    /// The Parquet file could not be finished (the partial file is removed: a Parquet file reads
+    /// only once its footer is written).
+    NotFinished(Fault),
     /// The writer stopped without saying why (a bug).
     Internal,
 }
@@ -361,6 +368,8 @@ struct Spec {
     csv: Delimited,
     /// The written columns: name and kind.
     columns: Vec<(String, Kind)>,
+    /// Each written column's kind of value and type name, as the result says (Parquet's types).
+    types: Vec<(ValueKind, String)>,
     /// For each column, its place in a row of the source.
     pick: Vec<usize>,
     /// How SQL formats write each picked value (MySQL's rules).
@@ -1541,6 +1550,19 @@ impl App {
                     None => self.i18n.msg(&Msg::ExportWhyNotSaved { error }).to_string(),
                 }
             }
+            Failure::BadValue(b) => self
+                .i18n
+                .msg(&Msg::ExportWhyBadValue {
+                    column: b.column.clone(),
+                    row: b.row.to_string(),
+                    value: b.value.clone(),
+                    parquet_type: b.parquet_type.to_string(),
+                })
+                .to_string(),
+            Failure::NotFinished(fault) => {
+                let error = self.fault_text("export.parquet_not_finished", fault);
+                self.i18n.msg(&Msg::ExportWhyNotFinished { error }).to_string()
+            }
             Failure::Internal => self.i18n.label(Label::ExportWhyInternal).to_string(),
         }
     }
@@ -1653,6 +1675,7 @@ impl App {
             format: req.format,
             csv: req.csv.clone(),
             columns,
+            types: metas.iter().map(|m| (m.kind, m.type_name.clone())).collect(),
             pick: cols.to_vec(),
             cells,
             sql,
@@ -1801,7 +1824,7 @@ fn write(
     };
     let format = match (&spec.format, &spec.sql) {
         // Not text: its own writer below.
-        (ExportFormat::Xlsx, _) => None,
+        (ExportFormat::Xlsx | ExportFormat::Parquet, _) => None,
         (ExportFormat::Csv, _) => Some(core_export::Format::Delimited(spec.csv.clone())),
         (ExportFormat::Tsv, _) => Some(core_export::Format::Tsv { header: spec.csv.header }),
         (ExportFormat::Json, _) => Some(core_export::Format::Json),
@@ -1835,7 +1858,10 @@ fn write(
         }
     };
     let mut progress = Progress { end, last: Instant::now() };
-    let io = |e: std::io::Error| Failure::Io(Fault::io_at(&e, &partial), partial.clone());
+    let io = |e: std::io::Error| match parquet::BadValue::of(&e) {
+        Some(b) => Failure::BadValue(b.clone()),
+        None => Failure::Io(Fault::io_at(&e, &partial), partial.clone()),
+    };
     let out = BufWriter::with_capacity(BUFFER, file);
     let (stopped, rows, ended, bytes, damaged, sheets) = match format {
         Some(format) => {
@@ -1850,6 +1876,33 @@ fn write(
                 file.sync_all().map_err(io)
             });
             (stopped, rows, ended, bytes, damaged, 1)
+        }
+        None if spec.format == ExportFormat::Parquet => {
+            let columns: Vec<ParquetColumn> = (spec.columns.iter().zip(&spec.types))
+                .map(|((name, _), (kind, type_name))| ParquetColumn { name, kind: *kind, type_name })
+                .collect();
+            let mut w = match ParquetWriter::new(&columns, out) {
+                Ok(w) => w,
+                Err(e) => {
+                    let _ = std::fs::remove_file(&partial);
+                    return failed(Failure::NotFinished(Fault::io_at(&e, &partial)), 0, None);
+                }
+            };
+            let stopped = fill(&mut w, spec, source, ctl, &mut progress, &io);
+            let rows = w.rows_written();
+            // The row groups so far and the footer are written whatever stopped the rows.
+            let finish = |file: std::fs::File| {
+                file.sync_all()?;
+                Ok(file.metadata()?.len())
+            };
+            let size = match end_parquet(w, &partial, finish) {
+                Ok(size) => size,
+                Err(f) => {
+                    progress.tick(rows, 0, true);
+                    return failed(f, rows, None);
+                }
+            };
+            (stopped, rows, Ok(()), size, 0, 1)
         }
         None => {
             let Ok(w) = XlsxWriter::new(&written, out) else {
@@ -1962,6 +2015,24 @@ fn make_workbook<W: std::io::Write + Send>(
         return Err(Box::new(Outcome::Dropped { rows, first }));
     }
     Err(Box::new(failed(Failure::NotSaved { fault: Fault::io_at(&e, partial), first }, rows, None)))
+}
+
+/// End the Parquet file `w` wrote into `partial` (its last row group and its footer), then
+/// `finish` its output (its size). A file that cannot be finished does not read: `partial` is
+/// removed, and the failure is the first error writing it (a full disk, not what that left).
+fn end_parquet<W: std::io::Write + Send>(
+    mut w: ParquetWriter<'_, BufWriter<W>>,
+    partial: &Path,
+    finish: impl FnOnce(W) -> std::io::Result<u64>,
+) -> Result<u64, Failure> {
+    let ended = w.end().and_then(|()| {
+        let out = w.into_inner().ok_or_else(|| std::io::Error::other("no output"))?;
+        finish(out.into_inner().map_err(|e| e.into_error())?)
+    });
+    ended.map_err(|e| {
+        let _ = std::fs::remove_file(partial);
+        Failure::NotFinished(Fault::io_at(&e, partial))
+    })
 }
 
 /// Begin the file and write the rows of `source` into it.

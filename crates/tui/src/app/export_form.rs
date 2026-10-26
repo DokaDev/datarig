@@ -18,7 +18,7 @@
 //! `export_path_pick`), which also completes names typed in the field (`Tab`).
 
 use super::copy::{CopyWhat, Intent};
-use super::export::{ExportFormat, ExportRequest, ExportScope, LATER_FORMATS, expand_path};
+use super::export::{ExportFormat, ExportRequest, ExportScope, expand_path};
 use super::overlay::Buttons;
 use super::picker::Picker;
 use super::*;
@@ -74,27 +74,6 @@ impl ExportField {
 
 /// Why Export did not start, and the field to change.
 type Refusal = Box<(ExportField, Notice)>;
-
-/// An entry of the format list: a format the app writes, or one it lists greyed until it does.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FormatChoice {
-    Ready(ExportFormat),
-    Later(Label),
-}
-
-/// The format list, in order: every [`ExportFormat`], the formats of [`LATER_FORMATS`] still to
-/// come after the delimited ones and Excel.
-pub fn format_choices() -> Vec<FormatChoice> {
-    let mut out = Vec::new();
-    for f in ExportFormat::ALL {
-        out.push(FormatChoice::Ready(f));
-        if f == ExportFormat::Xlsx {
-            let later = LATER_FORMATS.iter().filter(|(name, _)| ExportFormat::parse(name).is_none());
-            out.extend(later.map(|&(_, label)| FormatChoice::Later(label)));
-        }
-    }
-    out
-}
 
 /// CSV's quoting, in the order the list shows it.
 pub const QUOTES: [Quote; 4] = [Quote::Necessary, Quote::Always, Quote::NonNumeric, Quote::Never];
@@ -518,29 +497,21 @@ impl App {
                 (entries, f.scopes.iter().position(|s| *s == f.scope))
             }
             ExportField::Format => {
-                let choices = format_choices();
-                let entries = choices
+                let entries = ExportFormat::ALL
                     .iter()
                     .enumerate()
-                    .map(|(i, c)| match c {
-                        FormatChoice::Ready(fmt) => {
-                            let refused = self.export_refusal_reason(f.scope, *fmt);
-                            let mut e = entry(
-                                i,
-                                fmt.dialog_label(),
-                                refused.clone().unwrap_or_else(|| format!(".{}", fmt.extension())),
-                            );
-                            e.disabled = refused.is_some();
-                            e
-                        }
-                        FormatChoice::Later(label) => {
-                            let mut e = entry(i, *label, i18n.label(Label::ExportFormatLater).to_string());
-                            e.disabled = true;
-                            e
-                        }
+                    .map(|(i, fmt)| {
+                        let refused = self.export_refusal_reason(f.scope, *fmt);
+                        let mut e = entry(
+                            i,
+                            fmt.dialog_label(),
+                            refused.clone().unwrap_or_else(|| format!(".{}", fmt.extension())),
+                        );
+                        e.disabled = refused.is_some();
+                        e
                     })
                     .collect();
-                (entries, choices.iter().position(|c| *c == FormatChoice::Ready(f.format)))
+                (entries, ExportFormat::ALL.iter().position(|fmt| *fmt == f.format))
             }
             ExportField::Quote => {
                 let entries = QUOTES
@@ -589,7 +560,7 @@ impl App {
                 }
             }
             ExportField::Format => {
-                if let Some(FormatChoice::Ready(fmt)) = format_choices().get(i) {
+                if let Some(fmt) = ExportFormat::ALL.get(i) {
                     f.set_format(*fmt);
                 }
             }
