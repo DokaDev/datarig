@@ -837,8 +837,9 @@ disconnect and Lock wait fields, empty for the config's value; `"off"` turns it 
   so). When datarig cannot read the value (`DEFAULT`, an expression, a fraction or a unit it does
   not read; on MySQL a value out of range, the two settings at different values, or one set while
   the other is the server's), the error says the statement waited too long, without a time, as
-  it does for a statement that ran without datarig's limit (behind a pooler, a `CALL`, `DO` or
-  `VACUUM` outside a transaction of the session's own). `:session` shows the lock wait that
+  it does for a statement that ran without datarig's limit (behind a pooler, a `CALL`, `DO`,
+  `VACUUM` or another statement that cannot run in a transaction, outside a transaction of the
+  session's own). `:session` shows the lock wait that
   applies and what it overrides.
 
 ### Session presets
@@ -968,7 +969,10 @@ explorer's lookups (the metadata sessions) never get these settings.
   than its lock wait. A statement that has no such form (`SET ROLE`, `SET SESSION
   AUTHORIZATION`, `SET SESSION CHARACTERISTICS …`), or that sets a default of the session's
   transactions (`default_transaction_isolation`, `default_transaction_deferrable`: a transaction
-  takes its defaults when it begins, so a `SET LOCAL` after `BEGIN` would change nothing), is not
+  takes its defaults when it begins, so a `SET LOCAL` after `BEGIN` would change nothing), or
+  whose value depends on what the pooled server connection did before (`temp_buffers`, refused
+  once that connection used a temporary table; PostgreSQL 17's `transaction_timeout`, whose
+  timer starts at `BEGIN`, so a `SET LOCAL` cannot make the connection's own limit longer), is not
   sent there: the profile still connects and the tab names what was not sent. Behind a pooler, set
   the isolation in your own block instead (`BEGIN ISOLATION LEVEL …`). MySQL connections are never treated as pooled (a proxy
   that multiplexes them, such as ProxySQL, is not detected).

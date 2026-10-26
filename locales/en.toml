@@ -2139,7 +2139,7 @@
 "session.driver" = "{name} has session settings, and its driver {driver} has no session presets"
 "session.failed" = "{name}: {statement} failed, so the session was closed: {error} ({sql})"
 "session.per_transaction" = "{name} is behind a connection pooler: its session settings go first in each transaction (SET LOCAL), not on the shared connection"
-"session.pooled_refused" = { one = "{name} is behind a connection pooler: {count} session setting was not sent, as it has no form for one transaction: {sql}", other = "{name} is behind a connection pooler: {count} session settings were not sent, as they have no form for one transaction: {sql}" }
+"session.pooled_refused" = { one = "{name} is behind a connection pooler: {count} session setting was not sent, as it cannot be set for one transaction there (:session says why): {sql}", other = "{name} is behind a connection pooler: {count} session settings were not sent, as they cannot be set for one transaction there (:session says why): {sql}" }
 "session.source.global" = "app setting"
 "session.source.default_rules" = "default rules"
 "session.source.environment" = "environment {environment}"
@@ -2161,6 +2161,8 @@
 "session_view.not_local.form" = "only a plain SET name = value has a form for one transaction"
 "session_view.not_local.identity" = "it changes who the session is"
 "session_view.not_local.default" = "a transaction takes its default when it begins, so set after BEGIN it would change nothing"
+"session_view.not_local.temp_buffers" = "the server refuses a new value once the server connection used a temporary table, which another client may have done"
+"session_view.not_local.transaction_timeout" = "its timer starts when the transaction begins, so set after BEGIN it cannot make the server connection's own limit longer"
 "session_view.order" = "Applied in this order: a later setting of the same name wins"
 "session_view.more_above" = { one = "↑ {count} more line", other = "↑ {count} more lines" }
 "session_view.more_below" = { one = "↓ {count} more line", other = "↓ {count} more lines" }

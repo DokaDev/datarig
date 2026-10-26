@@ -100,6 +100,12 @@ pub enum NotLocal {
     /// `default_transaction_deferrable`): a transaction takes it when it begins, so set after
     /// its `BEGIN` it would change nothing of that transaction.
     Default,
+    /// `temp_buffers`: the server refuses a new value once the server connection used a
+    /// temporary table, which another client of the pooler may have done.
+    TempBuffers,
+    /// `transaction_timeout` (PostgreSQL 17): its timer starts when the transaction begins, so
+    /// set after `BEGIN` it cannot make the server connection's own limit longer.
+    TransactionTimeout,
 }
 
 /// A statement that may be a session's start-up setting.
@@ -208,6 +214,11 @@ fn shape(sql: &str) -> Result<(Result<String, NotLocal>, Vec<(String, String)>),
     }
     if name.starts_with("default_transaction_") {
         return Ok((Err(NotLocal::Default), settings));
+    }
+    match name.as_str() {
+        "temp_buffers" => return Ok((Err(NotLocal::TempBuffers), settings)),
+        "transaction_timeout" => return Ok((Err(NotLocal::TransactionTimeout), settings)),
+        _ => {}
     }
     Ok((set_local(sql, b), settings))
 }

@@ -90,6 +90,12 @@ fn pg_settings_without_a_transaction_form() {
         let s = pg(sql).unwrap_or_else(|e| panic!("{sql}: {e:?}"));
         assert_eq!(s.per_transaction, Some(Err(NotLocal::Default)), "{sql}");
     }
+    // What the pooled server connection did before decides whether they hold.
+    assert_eq!(pg("SET temp_buffers = '16MB'").unwrap().per_transaction, Some(Err(NotLocal::TempBuffers)));
+    assert_eq!(
+        pg("SET transaction_timeout = '1min'").unwrap().per_transaction,
+        Some(Err(NotLocal::TransactionTimeout))
+    );
 }
 
 #[test]

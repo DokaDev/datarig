@@ -519,6 +519,8 @@ pub(crate) fn draw_session_view(app: &mut App, area: Rect, buf: &mut Buffer) {
                                 NotLocal::Form => Label::SessionViewNotLocalForm,
                                 NotLocal::Identity => Label::SessionViewNotLocalIdentity,
                                 NotLocal::Default => Label::SessionViewNotLocalDefault,
+                                NotLocal::TempBuffers => Label::SessionViewNotLocalTempBuffers,
+                                NotLocal::TransactionTimeout => Label::SessionViewNotLocalTransactionTimeout,
                             });
                             app.i18n.msg(&Msg::SessionViewPooledRefused { reason: reason.to_string() }).to_string()
                         }

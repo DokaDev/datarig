@@ -262,7 +262,7 @@ fn behind_a_pooler_the_tab_says_how_its_settings_go() {
     let notes: Vec<String> = h.app.tab().exec.run.notes.iter().map(|n| h.app.i18n.msg(&n.msg).to_string()).collect();
     assert!(
         notes.iter().any(|n| n
-            == "local-pg is behind a connection pooler: 1 session setting was not sent, as it has no form for one transaction: SET ROLE reporting"),
+            == "local-pg is behind a connection pooler: 1 session setting was not sent, as it cannot be set for one transaction there (:session says why): SET ROLE reporting"),
         "{notes:?}"
     );
     let mut h = connected(&config(|_| {}));

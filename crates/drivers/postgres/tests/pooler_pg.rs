@@ -1022,3 +1022,68 @@ async fn behind_a_pooler_a_lock_wait_outside_the_sessions_transactions_is_the_se
         }
     }
 }
+
+/// Settings whose value behind the pooler depends on what the pooled server connection did
+/// before are not sent there, and said so: `temp_buffers` (refused once that connection used a
+/// temporary table, which would fail every transaction of the tab) and `transaction_timeout`
+/// (its timer starts at `BEGIN`). After another client used a temporary table (dropped with its
+/// transaction) on each pooled server connection, the session's statements still run; no
+/// setting stays on the pooled server connections.
+#[tokio::test(flavor = "multi_thread")]
+async fn behind_a_pooler_settings_the_server_connection_decides_are_not_sent() {
+    use datarig_core::profile::session::{Defaults, plan};
+    let Some(url) = pooler_url("behind_a_pooler_settings_the_server_connection_decides_are_not_sent") else { return };
+    let _pool = alone(&url).await;
+    let mut other = Conn::open(&url, SessionRole::Query, false).await;
+    let DbEvent::Page { rows, .. } = other.run(1, "SHOW temp_buffers").await else { panic!() };
+    let server = rows[0][0].clone();
+    assert_ne!(server.as_deref(), Some("17MB"));
+    // Another client's temporary table on each of the three server connections, at the
+    // server's `temp_buffers` (consecutive transactions go round them).
+    let mut id = 1;
+    let make = [
+        "BEGIN",
+        "CREATE TEMP TABLE zz_pool_tmp (x int) ON COMMIT DROP",
+        "INSERT INTO zz_pool_tmp VALUES (1)",
+        "COMMIT",
+    ];
+    for _ in 0..3 {
+        for sql in make {
+            id += 1;
+            let ev = other.run(id, sql).await;
+            assert!(!matches!(ev, DbEvent::Failed { .. }), "{sql}: {ev:?}");
+        }
+    }
+    let profile = ConnectionConfig {
+        session_sql: vec!["SET temp_buffers = '17MB'".into(), "SET transaction_timeout = '1h'".into()],
+        ..ConnectionConfig::default()
+    };
+    let sql = plan(&profile, &Default::default(), Defaults::default(), &[]).unwrap().statements();
+    let tag = format!("poolb{}", std::process::id());
+    let opts = ConnectOptions::new(PAGE, SessionRole::Query, &tag).session_sql(sql);
+    let cfg = ConnectionConfig { name: "pooler".into(), dsn: Some(url.clone()), ..ConnectionConfig::default() };
+    let (tx, mut rx) = unbounded_channel();
+    let session = PgDriver.connect(&cfg, SessionRole::Query, opts, tx);
+    let mut refused = Vec::new();
+    loop {
+        match tokio::time::timeout(Duration::from_secs(10), rx.recv()).await.expect("an answer") {
+            Some(DbEvent::Connected) => break,
+            Some(DbEvent::ConnectFailed { error, .. }) => panic!("{error:?}"),
+            Some(DbEvent::SessionPerTransaction { refused: r }) => refused.extend(r),
+            Some(_) => {}
+            None => panic!("closed"),
+        }
+    }
+    let mut q = Conn { session, rx, cache_off: 0 };
+    for _ in 0..6 {
+        id += 1;
+        let ev = q.run(id, "SELECT 1").await;
+        assert!(matches!(ev, DbEvent::Page { .. }), "after a temporary table (said not sent: {refused:?}): {ev:?}");
+    }
+    assert_eq!(refused, [0, 1], "both said not sent");
+    for _ in 0..8 {
+        id += 1;
+        let DbEvent::Page { rows, .. } = other.run(100 + id, "SHOW temp_buffers").await else { panic!() };
+        assert_eq!(rows[0][0], server, "nothing left on the server connection");
+    }
+}
