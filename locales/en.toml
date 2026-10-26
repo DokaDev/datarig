@@ -1561,6 +1561,8 @@
 "form.ssh.both" = "This profile named a tunnel preset and had its own SSH tunnel on, so it did not connect. The preset is picked here and its own tunnel is off: save to keep that, or pick another."
 "config.error.tunnel_missing" = "tunnel “{tunnel}” has no {key}"
 "config.error.alias" = "[{table}] has both {key} and {alias}, its old name: keep only {key}"
+"config.error.alias_tables" = "the file has both [{key}.*] tables and [{alias}.*] tables, their old name: keep only [{key}.*]"
+"config.error.alias_profile" = "profile “{profile}” has both {key} and {alias}, its old name: keep only {key}"
 
 # Show DDL
 "action.explorer.show_ddl" = "Explorer: show the DDL of the table, view, index or trigger"

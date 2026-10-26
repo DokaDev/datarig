@@ -2086,13 +2086,13 @@ fn session_preset_errors() {
 }
 
 /// Saving: a preset's table moves with a rename (its comments too), a deleted one goes, a new
-/// one is added; profiles write `session` and `session_sql`, environments their `session` map.
+/// one is added; profiles write `startup` and `startup_sql`, environments their `startup` map.
 #[test]
 fn session_presets_are_written() {
     use crate::profile::session::{Dbms, SessionPreset, SessionRef};
     let path = temp_file("sessions");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-    let text = "version = 2\n\n# the reports\n[sessions.reporting]\ndbms = \"postgres\" # pg\nsql = [ 'SET work_mem = 64' ]\n\n[sessions.gone]\ndbms = \"mysql\"\nsql = []\n\n[policy.prod]\nread_only = true\n\n[[connections]]\nname = \"a\"\n";
+    let text = "version = 2\n\n# the reports\n[startup.reporting]\ndbms = \"postgres\" # pg\nsql = [ 'SET work_mem = 64' ]\n\n[startup.gone]\ndbms = \"mysql\"\nsql = []\n\n[policy.prod]\nread_only = true\n\n[[connections]]\nname = \"a\"\n";
     std::fs::write(&path, text).unwrap();
     let (cfg, err) = load(Some(path.clone()));
     assert!(err.is_none(), "{err:?}");
@@ -2116,10 +2116,10 @@ fn session_presets_are_written() {
     // Unchanged: the tables keep their text.
     let same = write(&cfg, &cfg.sessions, None);
     assert!(
-        same.contains("# the reports\n[sessions.reporting]\ndbms = \"postgres\" # pg\nsql = [ 'SET work_mem = 64' ]\n"),
+        same.contains("# the reports\n[startup.reporting]\ndbms = \"postgres\" # pg\nsql = [ 'SET work_mem = 64' ]\n"),
         "{same}"
     );
-    assert!(same.contains("[sessions.gone]\ndbms = \"mysql\"\nsql = []\n"), "{same}");
+    assert!(same.contains("[startup.gone]\ndbms = \"mysql\"\nsql = []\n"), "{same}");
     let mut presets = cfg.sessions.clone();
     presets.retain(|p| p.name != "gone");
     presets[0].name = "reports".into();
@@ -2131,14 +2131,14 @@ fn session_presets_are_written() {
     let mut envs = cfg.policies.environments().to_vec();
     envs[0].policy.session.postgres = Some("reports".into());
     let out = write(&cfg2, &presets, Some(&envs));
-    assert!(out.contains("# the reports\n[sessions.reports]\ndbms = \"postgres\" # pg\nsql = [\"SET work_mem = 64\", \"SET statement_timeout = '30s'\"]\n"), "{out}");
+    assert!(out.contains("# the reports\n[startup.reports]\ndbms = \"postgres\" # pg\nsql = [\"SET work_mem = 64\", \"SET statement_timeout = '30s'\"]\n"), "{out}");
     assert!(!out.contains("gone"), "{out}");
     assert!(
-        out.contains("[sessions.my_ro]\ndbms = \"mysql\"\nsql = [\"SET SESSION sql_mode = 'ANSI_QUOTES'\"]\n"),
+        out.contains("[startup.my_ro]\ndbms = \"mysql\"\nsql = [\"SET SESSION sql_mode = 'ANSI_QUOTES'\"]\n"),
         "{out}"
     );
-    assert!(out.contains("[policy.prod]\nread_only = true\nsession = { postgres = \"reports\" }\n"), "{out}");
-    assert!(out.contains("session = \"none\"\nsession_sql = [\"SET work_mem = '1MB'\"]\n"), "{out}");
+    assert!(out.contains("[policy.prod]\nread_only = true\nstartup = { postgres = \"reports\" }\n"), "{out}");
+    assert!(out.contains("startup = \"none\"\nstartup_sql = [\"SET work_mem = '1MB'\"]\n"), "{out}");
     // Read back as written.
     let back = parse(&out).unwrap();
     assert_eq!(back.sessions.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["my_ro", "reports"]);
@@ -2149,5 +2149,194 @@ fn session_presets_are_written() {
     cfg2.connections[0].session_sql.clear();
     envs[0].policy.session = Default::default();
     let out = write(&cfg2, &[], Some(&envs));
-    assert!(!out.contains("session"), "{out}");
+    assert!(!out.contains("session") && !out.contains("startup"), "{out}");
+}
+
+/// The Startup SQL keys under their own names: `[startup.<name>]`, an environment's `startup`
+/// and a profile's `startup` / `startup_sql`, read as their 0.31 names are, with the same errors
+/// (naming the key the file used).
+#[test]
+fn startup_keys_are_read() {
+    use crate::profile::session::{Dbms, SessionRef};
+    let text = r#"
+[startup.reporting]
+dbms = "postgres"
+sql = ["SET statement_timeout = '30s'", "SET work_mem = '64MB'"]
+
+[startup.empty]
+dbms = "mysql"
+
+[policy.prod]
+startup = { postgres = "reporting", mysql = "empty" }
+
+[policy.default]
+startup = { mysql = "empty" }
+
+[[connections]]
+name = "a"
+policy = "prod"
+startup = "none"
+startup_sql = ["SET work_mem = '256MB'"]
+
+[[connections]]
+name = "b"
+startup = "reporting"
+
+[[connections]]
+name = "c"
+session_sql = ["SET work_mem = '1MB'"]
+"#;
+    let cfg = parse(text).unwrap();
+    let names: Vec<_> = cfg.sessions.iter().map(|p| (p.name.as_str(), p.dbms, p.sql.len())).collect();
+    assert_eq!(names, [("empty", Dbms::MySql, 0), ("reporting", Dbms::Postgres, 2)]);
+    let prod = &cfg.policies.environment("prod").unwrap().policy.session;
+    assert_eq!((prod.postgres.as_deref(), prod.mysql.as_deref()), (Some("reporting"), Some("empty")));
+    assert_eq!(cfg.policies.default_rules().session.mysql.as_deref(), Some("empty"));
+    let c = &cfg.connections;
+    assert_eq!(
+        (&c[0].session, c[0].session_sql.as_slice()),
+        (&SessionRef::Off, ["SET work_mem = '256MB'".to_string()].as_slice())
+    );
+    assert_eq!(c[1].session, SessionRef::Named("reporting".into()));
+    // An old key next to a new one of the other pair: each read as it is.
+    assert_eq!(
+        (&c[2].session, c[2].session_sql.as_slice()),
+        (&SessionRef::Inherit, ["SET work_mem = '1MB'".to_string()].as_slice())
+    );
+    assert!(c.iter().all(|c| c.old_session.is_none() && c.old_session_sql.is_none()));
+
+    let err = |t: &str| parse(t).unwrap_err();
+    assert!(matches!(
+        err("[startup.a]\ndbms = \"oracle\"\n"),
+        ConfigError::Value { key, .. } if key == "startup.a.dbms"
+    ));
+    assert_eq!(err("[startup.None]\ndbms = \"postgres\"\n"), ConfigError::SessionReserved("None".into()));
+    assert!(matches!(
+        err("[[connections]]\nname = \"p\"\nstartup = \"None\"\n"),
+        ConfigError::Value { key, value, .. } if key == "startup" && value == "None"
+    ));
+    assert!(matches!(
+        err("[[connections]]\nname = \"p\"\nstartup = \"\"\n"),
+        ConfigError::Value { key, profile: Some(p), .. } if key == "startup" && p == "p"
+    ));
+    assert!(matches!(
+        err("[policy.prod]\nstartup = { postgres = \"none\" }\n"),
+        ConfigError::Value { key, .. } if key == "policy.prod.startup.postgres"
+    ));
+}
+
+/// A name and its 0.31 name in one place: an error naming both, whatever their values (nothing
+/// is chosen) — the preset tables, an environment's (the default rules' too) and a profile's.
+#[test]
+fn startup_keys_with_their_old_names_are_errors() {
+    let err = |t: &str| parse(t).unwrap_err();
+    assert_eq!(
+        err("[startup.a]\ndbms = \"postgres\"\n\n[sessions.b]\ndbms = \"mysql\"\n"),
+        ConfigError::AliasTables { key: "startup", alias: "sessions" }
+    );
+    assert_eq!(err("[startup]\n\n[sessions]\n"), ConfigError::AliasTables { key: "startup", alias: "sessions" });
+    for table in ["prod", "default"] {
+        let text = format!("[policy.{table}]\nsession = {{ mysql = \"a\" }}\nstartup = {{ mysql = \"a\" }}\n");
+        assert_eq!(
+            err(&text),
+            ConfigError::Alias { table: format!("policy.{table}"), key: "startup", alias: "session" },
+            "{text}"
+        );
+    }
+    for (keys, key, alias) in [
+        ("startup = \"a\"\nsession = \"none\"", "startup", "session"),
+        ("session_sql = []\nstartup_sql = [\"SET a = 1\"]", "startup_sql", "session_sql"),
+    ] {
+        for text in [
+            format!("[[connections]]\nname = \"p\"\n{keys}\n"),
+            format!("connections = [{{ name = \"p\", {} }}]\n", keys.replace('\n', ", ")),
+        ] {
+            assert_eq!(err(&text), ConfigError::AliasProfile { profile: "p".into(), key, alias }, "{text}");
+        }
+    }
+    // Only in one profile: another profile's keys are its own.
+    assert!(
+        parse(
+            "[[connections]]\nname = \"p\"\nsession = \"none\"\n\n[[connections]]\nname = \"q\"\nstartup = \"none\"\n"
+        )
+        .is_ok()
+    );
+}
+
+/// A file with the 0.31 names: loading and saving it unchanged leaves its text; a save that
+/// changes the presets moves every `[sessions.<name>]` table to `[startup.<name>]` in place
+/// (comments kept); a profile or an environment whose Startup SQL changed renames its keys in
+/// place (its comments kept), the others keep theirs.
+#[test]
+fn old_startup_keys_keep_their_text_until_what_they_say_changes() {
+    use crate::profile::session::SessionRef;
+    let path = temp_file("startup-alias");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let text = "version = 2\n\n# the reports\n[sessions.reporting]\ndbms = \"postgres\" # pg\nsql = [ 'SET work_mem = 64' ]\n\n# mine\n[sessions.mine]\ndbms = \"mysql\"\nsql = []\n\n[policy.prod]\n# roll back\ntx_idle_timeout = \"1h\"\n# reports\nsession = { postgres = \"reporting\" }\n\n[policy.test]\nsession = { mysql = \"mine\" }\n\n[[connections]]\nid = \"00000000-0000-4000-8000-000000000001\"\nname = \"a\"\ndriver = \"postgres\"\n# preset\nsession = \"reporting\"\n# own\nsession_sql = [ 'SET work_mem = 1' ]\nhost = \"h\"\nport = 5432\nuser = \"u\"\ndatabase = \"d\"\n\n[[connections]]\nid = \"00000000-0000-4000-8000-000000000002\"\nname = \"b\"\ndriver = \"postgres\"\nsession = \"none\"\nhost = \"h\"\nport = 5432\nuser = \"u\"\ndatabase = \"d\"\n";
+    std::fs::write(&path, text).unwrap();
+    let (cfg, err) = load(Some(path.clone()));
+    assert!(err.is_none(), "{err:?}");
+    assert_eq!(std::fs::read_to_string(&path).unwrap(), text, "loading writes nothing");
+    let write = |conns: &[ConnectionConfig], sessions: &[SessionPreset], envs: &[crate::policy::Environment]| {
+        save(
+            &path,
+            Settings { version: 2, ..settings("en") },
+            Some(Profiles {
+                connections: conns,
+                tunnels: &[],
+                sessions: Some(sessions),
+                environments: Some(envs),
+                default_rules: None,
+                folders: &cfg.folders,
+                last_used: None,
+            }),
+        )
+        .unwrap();
+        std::fs::read_to_string(&path).unwrap()
+    };
+    let envs = cfg.policies.environments().to_vec();
+    assert_eq!(write(&cfg.connections, &cfg.sessions, &envs), text, "unchanged: kept as written");
+    // Another profile's change (an unrelated save) leaves the old names where they are.
+    let mut conns = cfg.connections.clone();
+    conns[1].host = "other".into();
+    let out = write(&conns, &cfg.sessions, &envs);
+    assert_eq!(out.replace("host = \"other\"", "host = \"h\""), text, "only the host changed: {out}");
+
+    // A preset changed: every table moves to `[startup.*]` in place, with its comments.
+    let mut presets = cfg.sessions.clone();
+    let reporting = presets.iter_mut().find(|p| p.name == "reporting").unwrap();
+    reporting.sql.push("SET statement_timeout = '30s'".into());
+    let out = write(&conns, &presets, &envs);
+    assert!(
+        out.contains("# the reports\n[startup.reporting]\ndbms = \"postgres\" # pg\nsql = [\"SET work_mem = 64\", \"SET statement_timeout = '30s'\"]\n"),
+        "{out}"
+    );
+    assert!(out.contains("# mine\n[startup.mine]\ndbms = \"mysql\"\nsql = []\n"), "{out}");
+    assert!(!out.contains("[sessions"), "{out}");
+    assert!(out.contains("# preset\nsession = \"reporting\"\n# own\nsession_sql = [ 'SET work_mem = 1' ]\n"), "{out}");
+
+    // Profile `a`'s own statements changed: both its keys renamed in place; `b` keeps `session`.
+    conns[0].session_sql.push("SET work_mem = 2".into());
+    let out = write(&conns, &presets, &envs);
+    assert!(
+        out.contains(
+            "# preset\nstartup = \"reporting\"\n# own\nstartup_sql = [\"SET work_mem = 1\", \"SET work_mem = 2\"]\nhost"
+        ),
+        "{out}"
+    );
+    assert!(out.contains("name = \"b\"\ndriver = \"postgres\"\nsession = \"none\"\n"), "{out}");
+    // An environment that changed renames both its old keys in one pass; `test` keeps its own.
+    let mut envs2 = envs.clone();
+    envs2[0].policy.read_only = true;
+    let out = write(&conns, &presets, &envs2);
+    assert!(
+        out.contains("[policy.prod]\n# roll back\ntx_idle_rollback = \"1h\"\n# reports\nstartup = { postgres = \"reporting\" }\nread_only = true\n"),
+        "{out}"
+    );
+    assert!(out.contains("[policy.test]\nsession = { mysql = \"mine\" }\n"), "{out}");
+    let back = parse(&out).unwrap();
+    assert_eq!(back.connections[0].session_sql.len(), 2);
+    assert_eq!(back.connections[1].session, SessionRef::Off);
+    assert_eq!(back.policies.environment("test").unwrap().policy.session.mysql.as_deref(), Some("mine"));
+    assert_eq!(back.sessions.len(), 2);
 }

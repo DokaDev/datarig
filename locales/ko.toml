@@ -1558,6 +1558,8 @@
 "form.ssh.both" = "이 프로필은 터널 프리셋을 쓰면서 자체 SSH 터널도 켜져 있어 연결되지 않았습니다. 여기서는 프리셋을 고르고 자체 터널을 껐습니다: 저장하면 그대로 남고, 다른 것을 골라도 됩니다."
 "config.error.tunnel_missing" = "터널 “{tunnel}”에 {key}이(가) 없음"
 "config.error.alias" = "[{table}] 표에 키 {key}, 그리고 그 예전 이름인 키 {alias}이(가) 함께 있음: 키 {key} 하나만 남기세요"
+"config.error.alias_tables" = "파일에 [{key}.*] 표들과 그 예전 이름인 [{alias}.*] 표들이 함께 있음: [{key}.*] 하나만 남기세요"
+"config.error.alias_profile" = "프로필 “{profile}”에 키 {key}, 그리고 그 예전 이름인 키 {alias}이(가) 함께 있음: 키 {key} 하나만 남기세요"
 
 # Show DDL
 "action.explorer.show_ddl" = "탐색기: 테이블, 뷰, 인덱스, 트리거의 DDL 보기"
