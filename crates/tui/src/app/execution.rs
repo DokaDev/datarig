@@ -508,6 +508,7 @@ impl App {
                         self.touch_profile(p);
                     }
                 }
+                EventTarget::SessionTest(_) => {}
             }
         }
         match target {
@@ -517,6 +518,7 @@ impl App {
                 self.settle_run_hints(id);
             }
             EventTarget::Aux(id) => self.aux_event(id, ev),
+            EventTarget::SessionTest(seq) => self.session_test_event(seq, ev),
         }
         // A run that started or ended may show or hide a pane (a results zoom waiting for them).
         if !self.tabs.is_empty() && !self.profiles.is_empty() {
@@ -540,6 +542,9 @@ impl App {
             EventTarget::Tab(id) => self.tabs.get(id).is_some_and(|t| t.exec.generation == generation),
             // An aux session's id is its generation; a closed one is gone.
             EventTarget::Aux(id) => id == generation && self.conns.aux_by_id_ref(id).is_some(),
+            EventTarget::SessionTest(seq) => {
+                seq == generation && self.session_test.as_ref().is_some_and(|t| t.seq == seq)
+            }
         }
     }
 

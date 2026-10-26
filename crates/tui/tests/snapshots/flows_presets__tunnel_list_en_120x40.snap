@@ -14,8 +14,8 @@ expression: backend
 "│▾ Environments 0            ││  n          New connection                                                             │"
 "│  ▸ ○ Def╭ Edit connection — local-pg ──────────────────────────────────────────────────────────────────────╮         │"
 "│    ＋ Ad│  Basic   SSH   Advanced                                                    Ctrl+N/Ctrl+P section │         │" Hidden by multi-width symbols: [(6, " ")]
-"│         │                                                                                                  │         │"
-"│         │ SSH tunnel        office ▾   Enter list · shared: one SSH connection for every profile on it; e… │         │"
+"│▾ Session│                                                                                                  │         │"
+"│    n her│ SSH tunnel        office ▾   Enter list · shared: one SSH connection for every profile on it; e… │         │"
 "│         │ Bastion           ec2-user@bastion.example.com                                                   │         │"
 "│         │ Log in with       pa╭ SSH tunnel ──────────────────────────────────────────╮                     │         │"
 "│         │ Used by           v6│ › type to filter                                     │                     │         │"

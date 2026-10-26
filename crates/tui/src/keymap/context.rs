@@ -222,7 +222,7 @@ impl Ctx {
             Ctx::Nav => "Every pane that is not text input (explorer, results, vim Normal/Visual).",
             Ctx::Explorer => "The explorer: folders, connection profiles, their databases and schema trees.",
             Ctx::ExplorerFilter => {
-                "The `/` filter of the explorer: profiles (name, host, database), folders, tunnels, environments and saved queries, and under connected profiles the databases, schemas, tables, views and structure items already loaded."
+                "The `/` filter of the explorer: profiles (name, host, database), folders, tunnels, environments, session presets (name, statements) and saved queries, and under connected profiles the databases, schemas, tables, views and structure items already loaded."
             }
             Ctx::Grid => "The result grid.",
             Ctx::Inspector => {

@@ -17,7 +17,7 @@ expression: backend
 "│ │ Paging idle timeout  30s                    with hold: 30s, 5m, 1h or o… │ │"
 "│ │ Spill limit                                 empty: the config's · 512MB… │ │"
 "│ │ Idle disconnect                             empty: the config's · close… │ │"
-"│ │ Lock wait                                   empty: the config's · wait … │ │"
+"│▾│ Lock wait                                   empty: the config's · wait … │ │"
 "│ │                                                                          │ │"
 "│ │ Used by              local-pg                                            │ │"
 "│ │                                                                          │ │"

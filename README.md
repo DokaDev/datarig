@@ -851,6 +851,23 @@ session = "reporting"              # this profile's own preset, instead of its e
 session_sql = ["SET work_mem = '256MB'"]   # its own statements, after the preset's
 ```
 
+The explorer's **Session presets** section lists them (the same keys as the Tunnels section: `n`
+new, `e` edit, `c` copy, `d` delete, `t` test, `Enter` or `l` to see the profiles that use one,
+their own or through their environment), each with its database, how many statements and
+profiles it has (the statements in the warning color when one changes a setting a read-only
+environment refuses, such as MySQL's `foreign_key_checks = 0`), and under it the first statement
+that is not allowed and why. The `/` filter finds a preset by its name or a statement. Its form
+has the name, the database (`←`/`→`) and the statements in one line, separated by `;` (saved one
+per item); under them it says which statement is not allowed, or which one a read-only
+environment would refuse. A rename takes the profiles and environments that name the preset
+along; deleting one asks first and names them, and they keep the name (and do not connect until
+another preset, or none, is picked). **Test** opens one session on a connected profile that uses
+the preset (else any connected profile of its database; with several, you pick one), starting
+with the preset alone exactly as a tab's session would, and closes it again once it connected:
+"Session preset “reporting” applied on local-pg (2 statements); the test session was closed",
+or the statement and the server's error. A profile that is not connected is not connected for
+it: the test says which to connect first.
+
 What a query session starts with, in order (a later setting of the same name wins): datarig's
 own limits (`lock_wait`, `idle_disconnect`, `tx_idle_rollback`: see above and [Manual
 commit](#manual-commit)), then the preset (the profile's `session`, else the one its

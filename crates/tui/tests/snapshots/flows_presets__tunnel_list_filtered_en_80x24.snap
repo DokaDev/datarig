@@ -14,7 +14,7 @@ expression: backend
 "│▾│         │ › la                                                 │         │ │"
 "│ │         │                                                      │         │ │"
 "│ │         │ lab                ec2-user@lab-bastion.internal:22… │         │ │"
-"│ │         │ New SSH tunnel…                                      │         │ │"
+"│▾│         │ New SSH tunnel…                                      │         │ │"
 "│ │         ╰───────────────── Enter pick · ↑↓ select · Esc cancel ╯         │ │"
 "│ │                                                                          │ │"
 "│ │                                                                          │ │"

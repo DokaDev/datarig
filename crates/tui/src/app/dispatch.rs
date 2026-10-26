@@ -79,10 +79,23 @@ impl App {
             Action::NewProfile if self.focus == Focus::Tree && self.in_environments_section() => {
                 self.open_environment_form(None, false)
             }
+            Action::NewProfile if self.focus == Focus::Tree && self.in_sessions_section() => {
+                self.open_session_form(None, false)
+            }
+            Action::NewSession => self.open_session_form(None, false),
             Action::NewEnvironment => self.open_environment_form(None, false),
             Action::NewProfile => self.open_form(None, false),
             Action::NewTunnel => self.open_tunnel_form(None, false),
             Action::SaveAsTunnel => self.open_save_as_tunnel(),
+            Action::TestConnection
+                if self.focus == Focus::Tree
+                    && !self.overlays.is_open(OverlayKind::ProfileForm)
+                    && self.selected_session().is_some() =>
+            {
+                if let Some(id) = self.selected_session() {
+                    self.test_session(id)
+                }
+            }
             Action::TestConnection => match self.selected_tunnel().filter(|_| self.focus == Focus::Tree) {
                 Some(id) if !self.overlays.is_open(OverlayKind::ProfileForm) => self.test_tunnel(id),
                 _ => {
@@ -97,6 +110,9 @@ impl App {
             Action::QuickConnect => self.open_quick(QuickPurpose::Open),
             Action::EditProfile | Action::DuplicateProfile if self.selected_tunnel().is_some() => {
                 self.open_tunnel_form(self.selected_tunnel(), a == Action::DuplicateProfile)
+            }
+            Action::EditProfile | Action::DuplicateProfile if self.selected_session().is_some() => {
+                self.open_session_form(self.selected_session(), a == Action::DuplicateProfile)
             }
             Action::EditProfile if self.default_rules_selected() => self.open_default_rules_form(),
             Action::DuplicateProfile if self.default_rules_selected() => self.default_rules_fixed(),
@@ -454,6 +470,7 @@ impl App {
             ConfirmAction::TrustHostKey => self.host_key_answered(true),
             ConfirmAction::DeleteTunnel(id) => self.delete_tunnel(id),
             ConfirmAction::DeleteEnvironment(id) => self.delete_environment(id),
+            ConfirmAction::DeleteSession(id) => self.delete_session(id),
             ConfirmAction::ExplainAgain => self.explain_as_plan_confirmed(),
             ConfirmAction::KeychainSecurityTool => self.keychain_access_changed(KeychainAccess::SecurityTool),
             ConfirmAction::ExportStart => self.export_answered(true, false),

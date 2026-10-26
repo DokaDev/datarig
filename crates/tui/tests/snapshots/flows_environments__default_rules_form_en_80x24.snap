@@ -17,7 +17,7 @@ expression: backend
 "│ │ Idle disconnect                             empty: the config's · close… │ │"
 "│ │ Lock wait                                   empty: the config's · wait … │ │"
 "│ │                                                                          │ │"
-"│ │ Used by              分析-replica, v6                                    │ │" Hidden by multi-width symbols: [(26, " "), (28, " ")]
+"│▾│ Used by              分析-replica, v6                                    │ │" Hidden by multi-width symbols: [(26, " "), (28, " ")]
 "│ │                                                                          │ │"
 "│ │                       Save    Cancel                                     │ │"
 "│ │                                                                          │ │"

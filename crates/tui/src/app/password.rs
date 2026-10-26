@@ -421,6 +421,9 @@ impl App {
         if self.overlays.form().is_some_and(ProfileForm::is_environment) {
             return self.save_environment_form();
         }
+        if self.overlays.form().is_some_and(ProfileForm::is_session) {
+            return self.save_session_form();
+        }
         let Some(form) = self.overlays.form_mut().filter(|f| !f.saving) else { return };
         form.attempted = true;
         let editing = form.editing;

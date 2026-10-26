@@ -9,14 +9,16 @@
 //! here; `App` persists and tests.
 //!
 //! The same form edits a tunnel preset ([`FormKind::Tunnel`]): its name and the SSH section's
-//! bastion fields, nothing else; and an environment ([`FormKind::Environment`]): its name,
-//! color, badge and rules.
+//! bastion fields, nothing else; an environment ([`FormKind::Environment`]): its name,
+//! color, badge and rules; and a session preset ([`FormKind::Session`]): its name, its database
+//! and its statements (one field, `;` between them).
 
 use crate::widgets::text_input::{InputResult, TextInput};
 use datarig_core::i18n::{Label, Msg};
 use datarig_core::policy::{self, CommitRule, Confirm, Environment, EnvironmentId, PagingMode, Policy};
 use datarig_core::profile::color::{self, ProfileColor};
 use datarig_core::profile::dsn::{self, Dsn, DsnError, Scheme};
+use datarig_core::profile::session::{self, Dbms, SessionPreset, SessionPresetId};
 use datarig_core::profile::ssh::{SshAuth, SshSettings};
 use datarig_core::profile::tunnel::{self, TunnelId, TunnelPreset};
 use datarig_core::profile::{ConnectionConfig, SSL_MODES};
@@ -117,6 +119,9 @@ pub enum Field {
     EnvSpill,
     EnvIdleDisconnect,
     EnvLockWait,
+    /// A session preset's database (a selector) and its statements (the session preset form).
+    SessionDbms,
+    SessionSql,
     Test,
     Save,
     Cancel,
@@ -165,6 +170,8 @@ pub const ENVIRONMENT: [Field; 13] = [
     Field::EnvIdleDisconnect,
     Field::EnvLockWait,
 ];
+/// The session preset form's fields, in order.
+pub const SESSION: [Field; 3] = [Field::Name, Field::SessionDbms, Field::SessionSql];
 pub const BUTTONS: [Field; 3] = [Field::Test, Field::Save, Field::Cancel];
 pub const SSH: [Field; 12] = [
     Field::SshEnabled,
@@ -297,6 +304,8 @@ impl Field {
             Field::EnvSpill => Label::FormFieldSpillLimit,
             Field::EnvIdleDisconnect => Label::FormFieldIdleDisconnect,
             Field::EnvLockWait => Label::FormFieldLockWait,
+            Field::SessionDbms => Label::FormFieldSessionDbms,
+            Field::SessionSql => Label::FormFieldSessionSql,
             Field::Test => Label::FormButtonTest,
             Field::Save => Label::FormButtonSave,
             Field::Cancel => Label::FormButtonCancel,
@@ -328,7 +337,10 @@ impl Field {
     /// A field with a few fixed values (the driver, the SSL mode, the password's storage, the
     /// bastion login and its secret's storage): `Enter` lists them, `←`/`→` step through them.
     pub fn is_choice(self) -> bool {
-        matches!(self, Field::Driver | Field::SslMode | Field::Source | Field::SshAuth | Field::SshSource)
+        matches!(
+            self,
+            Field::Driver | Field::SslMode | Field::Source | Field::SshAuth | Field::SshSource | Field::SessionDbms
+        )
     }
 
     /// `Enter` (or a click on its value) opens a list to pick from: the pickers, the fields
@@ -379,6 +391,12 @@ pub enum FormKind {
     /// The default rules (`[policy.default]`): an environment's rules, without a name, a color
     /// or a badge.
     DefaultRules,
+    /// A session preset with this id (a new one for a new preset or a copy); `editing`: one
+    /// that exists.
+    Session {
+        id: SessionPresetId,
+        editing: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -417,6 +435,10 @@ pub enum FieldError {
     IdleDisconnect,
     /// Not a `lock_wait` (`policy::parse_lock_wait`).
     LockWait,
+    /// `none`: what a profile's `session` says for no preset, never a preset's name.
+    SessionReserved,
+    /// A statement that cannot be a session's start-up setting (the form says which and why).
+    SessionSql,
 }
 
 impl FieldError {
@@ -441,6 +463,8 @@ impl FieldError {
             FieldError::Size => Label::ValidateSize,
             FieldError::IdleDisconnect => Label::ValidateIdleDisconnect,
             FieldError::LockWait => Label::ValidateLockWait,
+            FieldError::SessionReserved => Label::ValidateSessionReserved,
+            FieldError::SessionSql => Label::ValidateSessionSql,
         }
     }
 }
@@ -572,6 +596,9 @@ pub struct ProfileForm {
     pub env_lock_wait: TextInput,
     /// The session preset of each database the environment's profiles start with.
     pub env_session: policy::SessionMap,
+    /// The session preset form: the preset's database and its statements (`;` between them).
+    pub session_dbms: Dbms,
+    pub session_sql: TextInput,
     /// The color set (`None`: automatic from the name).
     pub color: Option<String>,
     /// The icon set (`None`: the driver's).
@@ -686,7 +713,9 @@ impl ProfileForm {
         }
         let unsaved = match self.kind {
             FormKind::Profile => self.editing.is_none(),
-            FormKind::Tunnel { editing, .. } | FormKind::Environment { editing, .. } => !editing,
+            FormKind::Tunnel { editing, .. }
+            | FormKind::Environment { editing, .. }
+            | FormKind::Session { editing, .. } => !editing,
             FormKind::DefaultRules => false,
         };
         if unsaved && self.source == SourceKind::Keychain {
@@ -744,6 +773,8 @@ impl ProfileForm {
             env_idle_disconnect: TextInput::default(),
             env_lock_wait: TextInput::default(),
             env_session: policy::SessionMap::default(),
+            session_dbms: Dbms::Postgres,
+            session_sql: TextInput::default(),
             color: c.color.clone(),
             icon: c.icon.clone(),
             folder: c.folder.clone(),
@@ -846,6 +877,44 @@ impl ProfileForm {
         f.section = Section::Advanced;
         f.focus = Field::Name;
         f
+    }
+
+    /// A form for session preset `p` (`None`: a new one; `copy`: a new one with `p`'s settings
+    /// and `name`).
+    pub fn for_session(p: Option<&SessionPreset>, copy: Option<String>) -> Self {
+        let name = copy.clone().or_else(|| p.map(|p| p.name.clone())).unwrap_or_default();
+        let c = ConnectionConfig { name, ..ConnectionConfig::default() };
+        let editing = p.is_some() && copy.is_none();
+        let mut f = Self::from_profile(&c, String::new(), None);
+        f.kind = FormKind::Session { id: p.filter(|_| editing).map_or_else(SessionPresetId::new, |p| p.id), editing };
+        f.original_name = p.filter(|_| editing).map(|p| p.name.clone());
+        f.session_dbms = p.map_or(Dbms::Postgres, |p| p.dbms);
+        f.session_sql = TextInput::new(&session::join_statements(p.map_or(&[][..], |p| &p.sql)));
+        f.section = Section::Advanced;
+        f.focus = Field::Name;
+        f
+    }
+
+    /// The form edits a session preset.
+    pub fn is_session(&self) -> bool {
+        matches!(self.kind, FormKind::Session { .. })
+    }
+
+    /// The statements of the session preset form, one per item.
+    pub fn session_statements(&self) -> Vec<String> {
+        session::split_statements(self.session_dbms, self.session_sql.text())
+    }
+
+    /// The preset the session preset form describes.
+    pub fn to_session_preset(&self) -> Option<SessionPreset> {
+        let FormKind::Session { id, .. } = self.kind else { return None };
+        Some(SessionPreset {
+            id,
+            name: self.name.text().to_string(),
+            dbms: self.session_dbms,
+            sql: self.session_statements(),
+            origin: self.original_name.clone(),
+        })
     }
 
     /// A form for the default rules `p`.
@@ -1294,6 +1363,7 @@ impl ProfileForm {
             Field::EnvSpill => &mut self.env_spill,
             Field::EnvIdleDisconnect => &mut self.env_idle_disconnect,
             Field::EnvLockWait => &mut self.env_lock_wait,
+            Field::SessionSql => &mut self.session_sql,
             Field::EnvTxWarning => &mut self.env_tx_warning,
             Field::EnvTxRollback => &mut self.env_tx_rollback,
             Field::Name => &mut self.name,
@@ -1337,6 +1407,11 @@ impl ProfileForm {
         if self.is_tunnel() {
             let mut out = vec![Field::Name];
             out.extend(self.ssh_fields());
+            out.extend(BUTTONS);
+            return out;
+        }
+        if self.is_session() {
+            let mut out = SESSION.to_vec();
             out.extend(BUTTONS);
             return out;
         }
@@ -1526,6 +1601,11 @@ impl ProfileForm {
                     self.env_commit = c;
                 }
             }
+            Field::SessionDbms => {
+                if let Some(&d) = Dbms::ALL.get(i) {
+                    self.session_dbms = d;
+                }
+            }
             _ => {}
         }
     }
@@ -1687,6 +1767,12 @@ impl ProfileForm {
             KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.focus == Field::KeyRetrieval => {
                 self.key_retrieval = !self.key_retrieval
             }
+            KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.focus == Field::SessionDbms => {
+                self.session_dbms = match self.session_dbms {
+                    Dbms::Postgres => Dbms::MySql,
+                    Dbms::MySql => Dbms::Postgres,
+                }
+            }
             KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.focus == Field::EnvReadOnly => {
                 self.env_read_only = !self.env_read_only
             }
@@ -1768,6 +1854,22 @@ impl ProfileForm {
             }
             return out;
         }
+        if self.is_session() {
+            // Written as typed, as a tunnel preset's name; `none` is no preset.
+            let name = self.name.text();
+            match session::name_problem(name) {
+                Some(session::NameProblem::Empty) if self.attempted => out.push((Field::Name, FieldError::Required)),
+                Some(session::NameProblem::Empty) => {}
+                Some(_) => out.push((Field::Name, FieldError::TunnelName)),
+                None if session::same_name(name, session::NONE) => out.push((Field::Name, FieldError::SessionReserved)),
+                None if taken(name) => out.push((Field::Name, FieldError::NameTaken)),
+                None => {}
+            }
+            if self.session_problem().is_some() {
+                out.push((Field::SessionSql, FieldError::SessionSql));
+            }
+            return out;
+        }
         if self.is_tunnel() {
             // A preset's name is written as typed (blanks around it are an error, not trimmed).
             let name = self.name.text();
@@ -1829,6 +1931,17 @@ impl ProfileForm {
         out.extend(self.tls_errors(relative));
         out.extend(self.ssh_errors());
         out
+    }
+
+    /// The first statement of the session preset form that cannot be a start-up setting, and why
+    /// (`index` from 1).
+    pub fn session_problem(&self) -> Option<(usize, datarig_core::sql::risk::SetProblem)> {
+        self.to_session_preset()?.problem()
+    }
+
+    /// The first statement of the session preset form a read-only environment would refuse.
+    pub fn session_read_only_refused(&self) -> Option<(usize, datarig_core::sql::risk::ReadOnlyBlock)> {
+        self.to_session_preset()?.read_only_refused()
     }
 
     /// Errors of the TLS settings: a mode the driver does not know, files that are not

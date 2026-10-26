@@ -14,7 +14,7 @@ expression: backend
 "│▾│         │                                                      │         │ │"
 "│ │         │ off                connects to the database directly │         │ │"
 "│ │         │ office             ec2-user@bastion.example.com      │         │ │"
-"│ │         │ lab                ec2-user@lab-bastion.internal:22… │         │ │"
+"│▾│         │ lab                ec2-user@lab-bastion.internal:22… │         │ │"
 "│ │         │ this profile only                                    │         │ │"
 "│ │         │ New SSH tunnel…                                      │         │ │"
 "│ │         ╰───────────────── Enter pick · ↑↓ select · Esc cancel ╯         │ │"

@@ -13,8 +13,8 @@ expression: backend
 "│▾ Environments 0      ││  Ctrl+T     New console tab                          │"
 "│  ▸ ○ Default rules (…││  Space t u  Reopen a closed tab                      │"
 "│    ＋ Add presets: d…││  n          New connection                           │" Hidden by multi-width symbols: [(6, " ")]
-"│                      ││  F1         Keyboard help                            │"
-"│                      ││  :          Commands                                 │"
+"│▾ Session presets 0   ││  F1         Keyboard help                            │"
+"│    n here makes a li…││  :          Commands                                 │"
 "│                      ││                                                      │"
 "│                      ││                                                      │"
 "│                      ││                                                      │"

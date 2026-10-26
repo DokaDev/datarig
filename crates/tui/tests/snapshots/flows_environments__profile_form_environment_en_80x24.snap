@@ -17,7 +17,7 @@ expression: backend
 "│ │ Icon              ‹ the driver's icon ›  ←/→ change · Enter list         │ │"
 "│ │ Folder            ‹ (top level) ›  ←/→ change · Enter list               │ │"
 "│ │                                                                          │ │"
-"│ │                                                                          │ │"
+"│▾│                                                                          │ │"
 "│ │                                                                          │ │"
 "│ │                    Test    Save    Cancel                                │ │"
 "│ │                                                                          │ │"

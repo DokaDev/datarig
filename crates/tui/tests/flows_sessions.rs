@@ -3,7 +3,8 @@
 //! whose plan has an error (an unknown preset, one for the other database, a statement that is
 //! not a setting or that read-only refuses: nothing is opened), a start-up statement the server
 //! refused (said with its source and number), and a session behind a pooler that sets them per
-//! transaction.
+//! transaction. The explorer's "Session presets" section: its rows, the preset form (new,
+//! edit, rename, copy, a statement that is not allowed), delete and test.
 
 mod common;
 
@@ -15,10 +16,13 @@ use datarig_core::policy::Policy;
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::profile::session::{Dbms, SessionMap, SessionPreset, SessionRef};
 use datarig_core::secret::MemoryStore;
-use datarig_tui::app::overlay::OverlayKind;
-use datarig_tui::app::{NodeState, Startup};
+use datarig_tui::app::explorer::RowKind;
+use datarig_tui::app::overlay::{ConfirmAction, OverlayKind};
+use datarig_tui::app::profiles::Field;
+use datarig_tui::app::{Focus, NodeState, Startup, TestState};
 use datarig_tui::widgets::editor::Editor;
 use ratatui::crossterm::event::KeyCode;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -264,4 +268,348 @@ fn behind_a_pooler_the_tab_says_how_its_settings_go() {
     h.tab_db(0, DbEvent::Connected);
     let notes: Vec<String> = h.app.tab().exec.run.notes.iter().map(|n| h.app.i18n.msg(&n.msg).to_string()).collect();
     assert!(notes.iter().any(|n| n.contains("go first in each transaction (SET LOCAL)")), "{notes:?}");
+}
+
+// ── the explorer's section and the preset form ──────────────────────────
+
+/// A scratch directory, removed when dropped.
+struct Scratch(PathBuf);
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn scratch(tag: &str) -> Scratch {
+    let d = std::env::temp_dir().join(format!("datarig-sessions-{}-{tag}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&d);
+    std::fs::create_dir_all(&d).unwrap();
+    Scratch(d)
+}
+
+impl Scratch {
+    fn config(&self) -> PathBuf {
+        self.0.join("config.toml")
+    }
+
+    fn text(&self) -> String {
+        std::fs::read_to_string(self.config()).unwrap_or_default()
+    }
+}
+
+/// The sample profiles (`local-pg` in `prod`, which maps `reporting`; the replica naming
+/// `my_ro`, which is MySQL's), the presets with one that has a statement that is not allowed and
+/// one with a risky setting, written to `dir`.
+fn section_config(dir: &Scratch) -> Config {
+    let mut cfg = sample_config(None);
+    cfg.connections[0].policy = Some("prod".into());
+    cfg.connections[1].session = SessionRef::Named("my_ro".into());
+    cfg.sessions = presets();
+    cfg.sessions.push(SessionPreset::new(
+        "broken",
+        Dbms::Postgres,
+        vec!["SET work_mem = '1MB'".into(), "SET LOCAL work_mem = '2MB'".into()],
+    ));
+    cfg.sessions.push(SessionPreset::new("fk_off", Dbms::MySql, vec!["SET foreign_key_checks = 0".into()]));
+    cfg.sessions.sort_by(|a, b| a.name.cmp(&b.name));
+    let rules = Policy { session: SessionMap { postgres: Some("reporting".into()), mysql: None }, ..Policy::default() };
+    cfg.policies.insert("prod", rules);
+    cfg.path = Some(dir.config());
+    datarig_core::config::save(
+        &dir.config(),
+        datarig_core::config::Settings {
+            version: 2,
+            language: "en",
+            icons: Default::default(),
+            theme: datarig_core::theme::DEFAULT,
+            default_source: Default::default(),
+            prefs: Default::default(),
+        },
+        Some(datarig_core::config::Profiles {
+            connections: &cfg.connections,
+            tunnels: &[],
+            sessions: Some(&cfg.sessions),
+            environments: Some(cfg.policies.environments()),
+            default_rules: None,
+            folders: &cfg.folders,
+            last_used: None,
+        }),
+    )
+    .unwrap();
+    let (cfg, err) = datarig_core::config::load(Some(dir.config()));
+    assert!(err.is_none(), "{err:?}");
+    cfg
+}
+
+fn section_harness(dir: &Scratch) -> Harness {
+    launched(&section_config(dir))
+}
+
+fn preset_id(h: &Harness, name: &str) -> datarig_core::profile::session::SessionPresetId {
+    h.app.session_presets().iter().find(|p| p.name == name).expect("preset").id
+}
+
+fn on_row(h: &mut Harness, kind: RowKind) {
+    h.app.focus = Focus::Tree;
+    h.app.explorer.select_kind(kind);
+}
+
+fn on_preset(h: &mut Harness, name: &str) {
+    let id = preset_id(h, name);
+    on_row(h, RowKind::Session(id));
+}
+
+fn said(h: &Harness) -> String {
+    h.app.transient.as_ref().map(|(n, _)| n.render(&h.app.i18n).to_string()).unwrap_or_default()
+}
+
+/// The section lists the presets by name, each with its database, statements and profiles, the
+/// problem of one that has a statement not allowed under it, and, opened, its profiles; the
+/// filter finds a preset by a statement.
+#[test]
+fn the_section_lists_the_presets_with_their_users_and_problems() {
+    let dir = scratch("section");
+    let mut h = section_harness(&dir);
+    on_preset(&mut h, "reporting");
+    h.key(KeyCode::Char('l'));
+    let rows = h.rows();
+    let at = rows.iter().position(|r| r == "[session presets]").expect("the section");
+    assert_eq!(
+        rows[at..at + 7],
+        ["[session presets]", "  $broken", "    !", "  $fk_off", "  $my_ro", "  $reporting", "    @local-pg"],
+        "{rows:?}"
+    );
+    on_preset(&mut h, "my_ro");
+    let line = h.explorer_line();
+    assert!(line.contains("my_ro  MySQL · 1 statement · 1 profile"), "{line}");
+    on_preset(&mut h, "broken");
+    assert!(h.explorer_line().contains("broken  PostgreSQL · 2 statements"), "{}", h.explorer_line());
+    for (w, ht) in [(80, 24), (120, 40)] {
+        insta::assert_snapshot!(format!("sessions_section_en_{w}x{ht}"), h.draw(w, ht).backend());
+    }
+    // Its problem's line, whole in the status bar (the explorer is narrow).
+    let broken = preset_id(&h, "broken");
+    on_row(&mut h, RowKind::SessionError(broken));
+    let status = h.status(120, 40);
+    assert!(status.contains("statement 2: SET LOCAL ends with its transaction: write SET"), "{status}");
+    // The filter: by a statement.
+    on_preset(&mut h, "broken");
+    h.keys("/");
+    h.type_text("foreign_key");
+    let rows = h.rows();
+    assert!(rows.contains(&"  $fk_off".to_string()) && !rows.contains(&"  $reporting".to_string()), "{rows:?}");
+}
+
+/// `n` in the section opens the preset form; its statements are one field (`;` between them),
+/// saved one per item; the database is picked with ←/→.
+#[test]
+fn a_new_preset_is_made_in_its_form() {
+    let dir = scratch("new");
+    let mut h = section_harness(&dir);
+    on_row(&mut h, RowKind::SessionsHeader);
+    h.keys("n");
+    assert!(h.form().is_session(), "the preset form");
+    h.type_text("analytics");
+    h.key(KeyCode::Tab);
+    assert_eq!(h.form().focus, Field::SessionDbms);
+    h.key(KeyCode::Right);
+    h.key(KeyCode::Right);
+    h.key(KeyCode::Tab);
+    h.type_text("SET statement_timeout = '1min'; SET jit = off");
+    for (w, ht) in [(80, 24), (120, 40)] {
+        insta::assert_snapshot!(format!("session_form_en_{w}x{ht}"), h.draw(w, ht).backend());
+    }
+    h.ctrl('s');
+    assert!(!h.form_open(), "saved and closed");
+    assert_eq!(said(&h), "Saved the session preset “analytics”");
+    let p = h.app.session_presets().iter().find(|p| p.name == "analytics").expect("made").clone();
+    assert_eq!(
+        (p.dbms, p.sql.as_slice()),
+        (Dbms::Postgres, ["SET statement_timeout = '1min'".to_string(), "SET jit = off".to_string()].as_slice())
+    );
+    assert!(
+        dir.text().contains(
+            "[sessions.analytics]\ndbms = \"postgres\"\nsql = [\"SET statement_timeout = '1min'\", \"SET jit = off\"]\n"
+        ),
+        "{}",
+        dir.text()
+    );
+    assert_eq!(h.app.explorer.cursor(), &RowKind::Session(p.id), "revealed");
+}
+
+/// A statement that is not allowed is said under the field (which and why) and keeps the form
+/// from saving (the focus goes there); `none` is not a name.
+#[test]
+fn the_form_refuses_statements_that_are_not_settings_and_the_reserved_name() {
+    let dir = scratch("refuse");
+    let mut h = section_harness(&dir);
+    on_row(&mut h, RowKind::SessionsHeader);
+    h.keys("n");
+    h.type_text("none");
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Tab);
+    h.type_text("SET work_mem = '1MB'; RESET work_mem");
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("reserved: it means no preset"), "{screen}");
+    assert!(screen.contains("statement 2: only SET of the session's own settings"), "{screen}");
+    insta::assert_snapshot!("session_form_errors_en_80x24", h.draw(80, 24).backend());
+    h.ctrl('s');
+    assert!(h.form_open(), "not saved");
+    assert_eq!(h.form().focus, Field::Name, "the first field with an error");
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Tab);
+    for _ in 0.." RESET work_mem".len() {
+        h.key(KeyCode::Backspace);
+    }
+    h.type_text(" SET foreign_key_checks = 0");
+    // A risky MySQL setting: allowed, but read-only environments refuse it.
+    h.key(KeyCode::BackTab);
+    h.key(KeyCode::Right);
+    // On MySQL neither is on the read-only allowlist: the first is said.
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("Statement 1 would be refused in read-only environments"), "{screen}");
+    assert!(!dir.text().contains("[sessions.none]"));
+}
+
+/// A rename takes the profiles and environments that name the preset along, in the file too; a
+/// copy gets a free name and the same statements.
+#[test]
+fn a_rename_follows_into_profiles_and_environments_and_a_copy_gets_a_free_name() {
+    let dir = scratch("rename");
+    let mut h = section_harness(&dir);
+    on_preset(&mut h, "my_ro");
+    h.keys("e");
+    assert_eq!(h.form().original_name.as_deref(), Some("my_ro"));
+    for _ in 0.."my_ro".len() {
+        h.key(KeyCode::Backspace);
+    }
+    h.type_text("mysql_ro");
+    h.ctrl('s');
+    assert_eq!(h.app.profiles[1].session, SessionRef::Named("mysql_ro".into()));
+    on_preset(&mut h, "reporting");
+    h.keys("e");
+    for _ in 0.."reporting".len() {
+        h.key(KeyCode::Backspace);
+    }
+    h.type_text("reports");
+    h.ctrl('s');
+    let rules = &h.app.policies.environment("prod").unwrap().policy.session;
+    assert_eq!(rules.postgres.as_deref(), Some("reports"));
+    let text = dir.text();
+    assert!(text.contains("[sessions.mysql_ro]") && !text.contains("[sessions.my_ro]"), "{text}");
+    assert!(text.contains("session = \"mysql_ro\""), "{text}");
+    assert!(text.contains("session = { postgres = \"reports\" }"), "{text}");
+    // A copy.
+    on_preset(&mut h, "reports");
+    h.keys("c");
+    assert_eq!(h.form().name.text(), "reports-copy");
+    h.ctrl('s');
+    let copy = h.app.session_presets().iter().find(|p| p.name == "reports-copy").expect("copied");
+    assert_eq!(copy.sql, presets()[0].sql);
+}
+
+/// Deleting asks first and names the profiles and environments that use it; their references
+/// stay, and the profile then does not connect (never without it).
+#[test]
+fn a_deleted_preset_leaves_its_names_and_its_profiles_do_not_connect() {
+    let dir = scratch("delete");
+    let mut h = section_harness(&dir);
+    on_preset(&mut h, "reporting");
+    h.keys("d");
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("Delete the session preset “reporting”?"), "{screen}");
+    assert!(screen.contains("local-pg uses it: it will not connect until you pick"), "{screen}");
+    assert!(screen.contains("Environments map it: prod; their profiles will not"), "{screen}");
+    insta::assert_snapshot!("session_delete_en_80x24", h.draw(80, 24).backend());
+    assert!(matches!(
+        h.app.overlays.top(),
+        Some(datarig_tui::app::overlay::Overlay::Confirm(c)) if matches!(c.action, ConfirmAction::DeleteSession(_))
+    ));
+    h.keys("y");
+    assert!(!h.app.session_presets().iter().any(|p| p.name == "reporting"));
+    assert_eq!(
+        said(&h),
+        "Deleted the session preset “reporting”; the profile that used it needs another preset or none"
+    );
+    assert!(!dir.text().contains("[sessions.reporting]"), "{}", dir.text());
+    assert!(dir.text().contains("session = { postgres = \"reporting\" }"), "the environment keeps the name");
+    h.explore("local-pg");
+    h.key(KeyCode::Enter);
+    assert!(h.driver.sessions.lock().unwrap().is_empty(), "nothing is opened");
+    assert!(h.node_error("local-pg").is_some_and(|e| e.contains("“reporting” for PostgreSQL, which does not exist")));
+}
+
+/// The context menu of a preset has its own words.
+#[test]
+fn the_menu_of_a_preset_says_what_it_does() {
+    let dir = scratch("menu");
+    let mut h = section_harness(&dir);
+    h.right_click_row("$reporting");
+    let labels = h.menu_labels();
+    for want in ["Edit session preset", "Duplicate session preset", "Test session preset", "Delete session preset"] {
+        assert!(labels.iter().any(|l| l == want), "{want}: {labels:?}");
+    }
+    assert!(!labels.iter().any(|l| l.contains("SSH tunnel") || l.contains("console")), "{labels:?}");
+}
+
+// ── test ────────────────────────────────────────────────────────────────
+
+/// A test needs a connected profile: none of the database, or none connected, is said; on the
+/// one connected it opens a query session that starts with the preset alone, and once that
+/// connected it says so and closes it.
+#[test]
+fn a_test_runs_on_a_connected_profile_and_closes_its_session() {
+    let mut cfg = config(|p| p.session_sql = vec!["SET work_mem = '256MB'".into()]);
+    cfg.sessions.push(SessionPreset::new("pg_only", Dbms::MySql, vec!["SET @a = 1".into()]));
+    let mut h = connected(&cfg);
+    // MySQL: no profile of it.
+    on_preset(&mut h, "pg_only");
+    h.keys("t");
+    assert_eq!(said(&h), "No profile uses MySQL: nothing to test the preset with");
+    assert!(h.driver.sessions.lock().unwrap().len() == 1, "nothing opened");
+    // On the connected profile that uses it.
+    on_preset(&mut h, "reporting");
+    h.keys("t");
+    assert_eq!(h.roles(), [SessionRole::Meta, SessionRole::Query], "a throwaway query session");
+    assert_eq!(opened_with(&h, 1), ["SET statement_timeout = '30s'", "SET work_mem = '64MB'"], "the preset alone");
+    assert_eq!(h.app.conn_test.as_ref().map(|t| t.state.clone()), Some(TestState::Running));
+    let seq = h.app.conn_test.as_ref().unwrap().seq;
+    h.app.on_app_event(datarig_tui::app::AppEvent::Db {
+        target: datarig_tui::app::EventTarget::SessionTest(seq),
+        generation: seq,
+        ev: DbEvent::Connected,
+    });
+    assert!(h.session_closed(1), "closed once it connected");
+    assert_eq!(said(&h), "Session preset “reporting” applied on local-pg (2 statements); the test session was closed");
+    // Its failure, in the server's words.
+    h.keys("t");
+    let seq = h.app.conn_test.as_ref().unwrap().seq;
+    let error = DbError::SessionSql {
+        index: 0,
+        statement: "SET statement_timeout = '30s'".into(),
+        error: Box::new(DbError::Server("ERROR: nope".into())),
+    };
+    h.app.on_app_event(datarig_tui::app::AppEvent::Db {
+        target: datarig_tui::app::EventTarget::SessionTest(seq),
+        generation: seq,
+        ev: DbEvent::ConnectFailed { error, auth: false },
+    });
+    assert!(
+        said(&h)
+            .starts_with("The preset could not be applied: statement 1 the session starts with failed: ERROR: nope"),
+        "{}",
+        said(&h)
+    );
+}
+
+/// A profile that is not connected is not connected for a test: the test says which to connect.
+#[test]
+fn a_test_without_a_connection_says_which_to_connect() {
+    let dir = scratch("test-off");
+    let mut h = section_harness(&dir);
+    on_preset(&mut h, "reporting");
+    h.keys("t");
+    assert_eq!(said(&h), "Connect local-pg first: the test opens a session on that connection");
+    assert!(h.driver.sessions.lock().unwrap().is_empty());
 }

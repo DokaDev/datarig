@@ -343,7 +343,7 @@ fn risk_text(i18n: &I18n, d: &Dangerous, why: Why) -> String {
 }
 
 /// What a read-only environment says about a statement it refuses.
-pub(super) fn blocked_label(why: ReadOnlyBlock) -> Label {
+pub fn blocked_label(why: ReadOnlyBlock) -> Label {
     match why {
         ReadOnlyBlock::ReadWrite => Label::SafetyBlockedReadWrite,
         ReadOnlyBlock::Setting => Label::SafetyBlockedSetting,

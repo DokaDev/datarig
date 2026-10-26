@@ -17,7 +17,7 @@ expression: backend
 "│ │ Icon    │ ● staging  STG          asks before every write · m… │         │ │"
 "│ │ Folder  │ ● prod  PROD            read-only · asks before eve… │         │ │"
 "│ │         │   New environment…                                   │         │ │"
-"│ │         ╰───────────────── Enter pick · ↑↓ select · Esc cancel ╯         │ │"
+"│▾│         ╰───────────────── Enter pick · ↑↓ select · Esc cancel ╯         │ │"
 "│ │                                                                          │ │"
 "│ │                    Test    Save    Cancel                                │ │"
 "│ │                                                                          │ │"

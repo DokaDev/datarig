@@ -123,6 +123,8 @@ fn default_table_is_conflict_free() {
         "tunnel.new",
         // `n` in the explorer's "Environments" section makes one too.
         "env.new",
+        // `n` in the explorer's "Session presets" section makes one too.
+        "session.new",
         // The DDL tab's menu; `y` yanks a part of the text (to the clipboard by default).
         "ddl.copy",
     ];

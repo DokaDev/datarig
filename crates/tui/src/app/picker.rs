@@ -33,6 +33,8 @@ pub enum Picker {
     Choice { form: (FormKind, ProfileId), field: Field, list: ListPicker<usize> },
     /// A choice field of the export dialog: the value's index in its list.
     Export { field: super::export_form::ExportField, list: ListPicker<usize> },
+    /// The connected profile a session preset's test runs on.
+    SessionTest { preset: Box<datarig_core::profile::session::SessionPreset>, list: ListPicker<ProfileId> },
 }
 
 /// `$body` with the list of whichever picker `$p` is, as `$list`.
@@ -43,6 +45,7 @@ macro_rules! with_list {
             Picker::Environment { $list, .. } => $body,
             Picker::Choice { $list, .. } => $body,
             Picker::Export { $list, .. } => $body,
+            Picker::SessionTest { $list, .. } => $body,
         }
     };
 }
@@ -79,6 +82,7 @@ impl Picker {
             Picker::Environment { .. } => Label::FormFieldEnvironment,
             Picker::Choice { field, .. } => field.label(),
             Picker::Export { field, .. } => field.label(),
+            Picker::SessionTest { .. } => Label::TestSessionPick,
         }
     }
 
@@ -169,6 +173,10 @@ impl App {
                 let out = list.key(&key, repeat);
                 self.export_choice_picked(field, out);
             }
+            Some(Picker::SessionTest { list, .. }) => {
+                let out = list.key(&key, repeat);
+                self.session_test_picked(out);
+            }
             None => {}
         }
     }
@@ -200,7 +208,26 @@ impl App {
                 let out = list.mouse(&m, now);
                 self.export_choice_picked(field, out);
             }
+            Some(Picker::SessionTest { list, .. }) => {
+                let out = list.mouse(&m, now);
+                self.session_test_picked(out);
+            }
             None => {}
+        }
+    }
+
+    /// What the list of a session preset's test did: a pick runs the test on that profile.
+    fn session_test_picked(&mut self, out: Outcome<ProfileId>) {
+        if out == Outcome::Pending {
+            return;
+        }
+        let preset = match self.overlays.picker_mut() {
+            Some(Picker::SessionTest { preset, .. }) => (**preset).clone(),
+            _ => return,
+        };
+        self.overlays.close(OverlayKind::Picker);
+        if let Outcome::Picked(pid) = out {
+            self.run_session_test(preset, pid);
         }
     }
 
@@ -429,6 +456,12 @@ impl App {
                     })
                     .collect();
                 (entries, SshAuth::ALL.iter().position(|a| *a == f.ssh_auth))
+            }
+            Field::SessionDbms => {
+                use datarig_core::profile::session::Dbms;
+                let entries =
+                    Dbms::ALL.iter().enumerate().map(|(i, d)| entry(i, d.display().to_string(), None, true)).collect();
+                (entries, Dbms::ALL.iter().position(|d| *d == f.session_dbms))
             }
             _ => return,
         };

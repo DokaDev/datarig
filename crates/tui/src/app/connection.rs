@@ -768,6 +768,10 @@ impl App {
     }
 
     pub(super) fn clear_test(&mut self) {
+        // A session preset's test session closes with it.
+        if let Some(t) = self.session_test.take() {
+            t.session.close();
+        }
         if let Some(t) = self.conn_test.take() {
             if let Some(a) = t.abort {
                 a.abort();
@@ -784,6 +788,9 @@ impl App {
                 }
                 t.state = TestState::Cancelled;
                 let seq = t.seq;
+                if let Some(s) = self.session_test.take() {
+                    s.session.close();
+                }
                 self.drop_asks(|o| o == tunnel::Owner::Test(seq));
                 true
             }
@@ -853,6 +860,9 @@ impl App {
         }
         if self.overlays.form().is_some_and(super::profiles::ProfileForm::is_tunnel) {
             return self.test_tunnel_form();
+        }
+        if self.overlays.form().is_some_and(super::profiles::ProfileForm::is_session) {
+            return self.test_session_form();
         }
         // The form's fields a connection needs are checked as Save checks them: a missing
         // database host (or user, port, a tunnel field) is marked and nothing is tried.
@@ -957,7 +967,7 @@ impl App {
     }
 
     /// A test that tries nothing: it failed at once, for `text`.
-    fn test_refused(&mut self, text: String) {
+    pub(super) fn test_refused(&mut self, text: String) {
         self.clear_test();
         self.test_seq += 1;
         let seq = self.test_seq;
