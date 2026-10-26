@@ -5,8 +5,9 @@
 //! preset, or one of this profile only (its bastion's fields), which "save as tunnel preset"
 //! turns into a new preset when the form is saved. **Advanced**: SSL mode and the server-side
 //! statement cache (PostgreSQL), the server's public key file and key retrieval (MySQL),
-//! the environment (picked from a list, like the SSH tunnel), color, icon and folder. No I/O
-//! here; `App` persists and tests.
+//! the environment (picked from a list, like the SSH tunnel), the session preset (a list too:
+//! its environment's, none, or one of its database) and its own session SQL, color, icon and
+//! folder. No I/O here; `App` persists and tests.
 //!
 //! The same form edits a tunnel preset ([`FormKind::Tunnel`]): its name and the SSH section's
 //! bastion fields, nothing else; an environment ([`FormKind::Environment`]): its name,
@@ -18,7 +19,7 @@ use datarig_core::i18n::{Label, Msg};
 use datarig_core::policy::{self, CommitRule, Confirm, Environment, EnvironmentId, PagingMode, Policy};
 use datarig_core::profile::color::{self, ProfileColor};
 use datarig_core::profile::dsn::{self, Dsn, DsnError, Scheme};
-use datarig_core::profile::session::{self, Dbms, SessionPreset, SessionPresetId};
+use datarig_core::profile::session::{self, Dbms, SessionPreset, SessionPresetId, SessionRef};
 use datarig_core::profile::ssh::{SshAuth, SshSettings};
 use datarig_core::profile::tunnel::{self, TunnelId, TunnelPreset};
 use datarig_core::profile::{ConnectionConfig, SSL_MODES};
@@ -85,6 +86,9 @@ pub enum Field {
     KeyRetrieval,
     /// The environment, picked from a list (Advanced).
     Environment,
+    /// The session preset, picked from a list (Advanced; [`Field::SessionSql`] is its own
+    /// statements there).
+    SessionPreset,
     /// Color, icon and folder: pickers (Advanced).
     Color,
     Icon,
@@ -119,6 +123,9 @@ pub enum Field {
     EnvSpill,
     EnvIdleDisconnect,
     EnvLockWait,
+    /// The environment's session preset for each database, picked from a list.
+    EnvSessionPg,
+    EnvSessionMy,
     /// A session preset's database (a selector) and its statements (the session preset form).
     SessionDbms,
     SessionSql,
@@ -141,7 +148,7 @@ pub const BASIC: [Field; 10] = [
     Field::Env,
     Field::Database,
 ];
-pub const ADVANCED: [Field; 11] = [
+pub const ADVANCED: [Field; 13] = [
     Field::SslMode,
     Field::TlsCa,
     Field::TlsCert,
@@ -150,12 +157,14 @@ pub const ADVANCED: [Field; 11] = [
     Field::ServerKey,
     Field::KeyRetrieval,
     Field::Environment,
+    Field::SessionPreset,
+    Field::SessionSql,
     Field::Color,
     Field::Icon,
     Field::Folder,
 ];
 /// The environment form's fields, in order.
-pub const ENVIRONMENT: [Field; 13] = [
+pub const ENVIRONMENT: [Field; 15] = [
     Field::Name,
     Field::Color,
     Field::EnvBadge,
@@ -169,6 +178,8 @@ pub const ENVIRONMENT: [Field; 13] = [
     Field::EnvSpill,
     Field::EnvIdleDisconnect,
     Field::EnvLockWait,
+    Field::EnvSessionPg,
+    Field::EnvSessionMy,
 ];
 /// The session preset form's fields, in order.
 pub const SESSION: [Field; 3] = [Field::Name, Field::SessionDbms, Field::SessionSql];
@@ -189,7 +200,7 @@ pub const SSH: [Field; 12] = [
 ];
 
 /// Every field with a label, for the width of the label column.
-pub const FIELDS: [Field; 22] = [
+pub const FIELDS: [Field; 24] = [
     Field::Driver,
     Field::Name,
     Field::Host,
@@ -209,6 +220,8 @@ pub const FIELDS: [Field; 22] = [
     Field::ServerKey,
     Field::KeyRetrieval,
     Field::Environment,
+    Field::SessionPreset,
+    Field::SessionSql,
     Field::Color,
     Field::Icon,
     Field::Folder,
@@ -304,6 +317,9 @@ impl Field {
             Field::EnvSpill => Label::FormFieldSpillLimit,
             Field::EnvIdleDisconnect => Label::FormFieldIdleDisconnect,
             Field::EnvLockWait => Label::FormFieldLockWait,
+            Field::SessionPreset => Label::FormFieldSessionPreset,
+            Field::EnvSessionPg => Label::FormFieldEnvSessionPostgres,
+            Field::EnvSessionMy => Label::FormFieldEnvSessionMysql,
             Field::SessionDbms => Label::FormFieldSessionDbms,
             Field::SessionSql => Label::FormFieldSessionSql,
             Field::Test => Label::FormButtonTest,
@@ -346,7 +362,16 @@ impl Field {
     /// `Enter` (or a click on its value) opens a list to pick from: the pickers, the fields
     /// with a few fixed values, the SSH tunnel and the environment.
     pub fn has_list(self) -> bool {
-        self.is_picker() || self.is_choice() || matches!(self, Field::SshEnabled | Field::Environment)
+        self.is_picker()
+            || self.is_choice()
+            || matches!(
+                self,
+                Field::SshEnabled
+                    | Field::Environment
+                    | Field::SessionPreset
+                    | Field::EnvSessionPg
+                    | Field::EnvSessionMy
+            )
     }
 }
 
@@ -370,6 +395,29 @@ pub enum EnvChoice {
     Named(String),
     /// The preset of this name ([`policy::presets`]), written with the profile when it is saved.
     Preset(String),
+}
+
+/// What a session preset list picks: for a profile, its environment's preset, none, or a
+/// preset; for an environment, none or a preset.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SessionChoice {
+    /// The profile's environment's preset for its database (no `session` key).
+    Environment,
+    /// None (a profile's `session = "none"`; an environment that maps none).
+    Off,
+    /// The preset of this name (also one no preset has: the name the form had).
+    Named(String),
+}
+
+impl SessionChoice {
+    /// A profile's `session` of this choice.
+    pub fn profile_ref(&self) -> SessionRef {
+        match self {
+            SessionChoice::Environment => SessionRef::Inherit,
+            SessionChoice::Off => SessionRef::Off,
+            SessionChoice::Named(n) => SessionRef::Named(n.clone()),
+        }
+    }
 }
 
 /// What the form edits.
@@ -439,6 +487,8 @@ pub enum FieldError {
     SessionReserved,
     /// A statement that cannot be a session's start-up setting (the form says which and why).
     SessionSql,
+    /// A preset for another database than the profile's.
+    SessionDbms,
 }
 
 impl FieldError {
@@ -465,6 +515,7 @@ impl FieldError {
             FieldError::LockWait => Label::ValidateLockWait,
             FieldError::SessionReserved => Label::ValidateSessionReserved,
             FieldError::SessionSql => Label::ValidateSessionSql,
+            FieldError::SessionDbms => Label::ValidateSessionDbms,
         }
     }
 }
@@ -596,9 +647,17 @@ pub struct ProfileForm {
     pub env_lock_wait: TextInput,
     /// The session preset of each database the environment's profiles start with.
     pub env_session: policy::SessionMap,
-    /// The session preset form: the preset's database and its statements (`;` between them).
+    /// The session preset form: the preset's database and its statements (`;` between them);
+    /// a profile form's own session SQL is `session_sql` too.
     pub session_dbms: Dbms,
     pub session_sql: TextInput,
+    /// The profile's session preset (its `session`).
+    pub session_ref: SessionRef,
+    /// The saved session presets the pickers offer.
+    pub session_presets: Vec<SessionPreset>,
+    /// Put aside under a new session preset's form: the field of this form whose list made it,
+    /// which picks it once it is saved.
+    pub session_new_for: Option<Field>,
     /// The color set (`None`: automatic from the name).
     pub color: Option<String>,
     /// The icon set (`None`: the driver's).
@@ -774,7 +833,10 @@ impl ProfileForm {
             env_lock_wait: TextInput::default(),
             env_session: policy::SessionMap::default(),
             session_dbms: Dbms::Postgres,
-            session_sql: TextInput::default(),
+            session_sql: TextInput::new(&session::join_statements(&c.session_sql)),
+            session_ref: c.session.clone(),
+            session_presets: Vec::new(),
+            session_new_for: None,
             color: c.color.clone(),
             icon: c.icon.clone(),
             folder: c.folder.clone(),
@@ -1929,14 +1991,101 @@ impl ProfileForm {
             out.push((Field::ServerKey, FieldError::AbsolutePath));
         }
         out.extend(self.tls_errors(relative));
+        // Its session preset must be one of its database's (a name no preset has is shown as
+        // such, and kept), and its own statements settings.
+        if let SessionRef::Named(n) = &self.session_ref
+            && let Some(p) = self.session_presets.iter().find(|p| p.name == *n)
+            && Some(p.dbms) != self.profile_dbms()
+        {
+            out.push((Field::SessionPreset, FieldError::SessionDbms));
+        }
+        if self.session_problem().is_some() {
+            out.push((Field::SessionSql, FieldError::SessionSql));
+        }
         out.extend(self.ssh_errors());
         out
     }
 
-    /// The first statement of the session preset form that cannot be a start-up setting, and why
-    /// (`index` from 1).
+    /// The first statement of the session preset form (or of a profile form's own session SQL)
+    /// that cannot be a start-up setting, and why (`index` from 1).
     pub fn session_problem(&self) -> Option<(usize, datarig_core::sql::risk::SetProblem)> {
+        if self.kind == FormKind::Profile {
+            let dbms = self.profile_dbms()?;
+            let own = SessionPreset::new("", dbms, session::split_statements(dbms, self.session_sql.text()));
+            return own.problem();
+        }
         self.to_session_preset()?.problem()
+    }
+
+    /// The database of the profile's driver, which its session presets are for.
+    pub fn profile_dbms(&self) -> Option<Dbms> {
+        Dbms::of_driver(DRIVERS[self.driver].0)
+    }
+
+    /// The profile form's session preset choice.
+    pub fn session_choice(&self) -> SessionChoice {
+        match &self.session_ref {
+            SessionRef::Inherit => SessionChoice::Environment,
+            SessionRef::Off => SessionChoice::Off,
+            SessionRef::Named(n) => SessionChoice::Named(n.clone()),
+        }
+    }
+
+    /// An environment form's preset for `dbms`.
+    pub fn env_session_choice(&self, dbms: Dbms) -> SessionChoice {
+        match self.env_session.get(dbms) {
+            Some(n) => SessionChoice::Named(n.to_string()),
+            None => SessionChoice::Off,
+        }
+    }
+
+    /// The database of a session preset list `f` of this form: the profile's, or the
+    /// environment field's.
+    pub fn session_field_dbms(&self, f: Field) -> Option<Dbms> {
+        match f {
+            Field::EnvSessionPg => Some(Dbms::Postgres),
+            Field::EnvSessionMy => Some(Dbms::MySql),
+            _ => self.profile_dbms(),
+        }
+    }
+
+    /// Pick `c` in the session preset list of field `f`.
+    pub fn set_session_choice(&mut self, f: Field, c: SessionChoice) {
+        match f {
+            Field::EnvSessionPg | Field::EnvSessionMy => {
+                let Some(dbms) = self.session_field_dbms(f) else { return };
+                let name = match c {
+                    SessionChoice::Named(n) => Some(n),
+                    _ => None,
+                };
+                self.env_session.set(dbms, name);
+            }
+            _ => self.session_ref = c.profile_ref(),
+        }
+    }
+
+    /// What the session preset list of field `f` offers before "New session preset…": a
+    /// profile's environment's and none, an environment's none; then the presets of its
+    /// database, and the name it has when no preset has it.
+    pub fn session_choices(&self, f: Field) -> Vec<SessionChoice> {
+        let dbms = self.session_field_dbms(f);
+        let mut out = match f {
+            Field::EnvSessionPg | Field::EnvSessionMy => vec![SessionChoice::Off],
+            _ => vec![SessionChoice::Environment, SessionChoice::Off],
+        };
+        out.extend(
+            self.session_presets.iter().filter(|p| Some(p.dbms) == dbms).map(|p| SessionChoice::Named(p.name.clone())),
+        );
+        let current = match f {
+            Field::EnvSessionPg | Field::EnvSessionMy => dbms.map(|d| self.env_session_choice(d)),
+            _ => Some(self.session_choice()),
+        };
+        if let Some(c @ SessionChoice::Named(_)) = current
+            && !out.contains(&c)
+        {
+            out.push(c);
+        }
+        out
     }
 
     /// The first statement of the session preset form a read-only environment would refuse.
@@ -2053,6 +2202,11 @@ impl ProfileForm {
             // moved into the preset this form makes, when that one is picked.
             ssh: (!self.new_preset_picked() && (self.ssh_had || self.ssh_enabled)).then(|| self.ssh_settings()),
             tunnel: self.ssh_preset.clone(),
+            session: self.session_ref.clone(),
+            session_sql: session::split_statements(
+                self.profile_dbms().unwrap_or(Dbms::Postgres),
+                self.session_sql.text(),
+            ),
             dsn: None,
             ..self.base.clone()
         };

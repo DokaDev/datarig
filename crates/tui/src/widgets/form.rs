@@ -9,7 +9,9 @@
 //! color's dot, its name and badge shown). The environment form is the same dialog with an
 //! environment's fields: its name, color, badge and rules. The session preset form has its name,
 //! its database and its statements (one line, `;` between them), and under them the first
-//! statement that is not allowed, or one a read-only environment would refuse.
+//! statement that is not allowed, or one a read-only environment would refuse. A profile's
+//! session preset (its environment's, none, or a preset of its database) and an environment's,
+//! for each database, are picked from a list; a profile's own session SQL is one line.
 
 use crate::app::action::Action;
 use crate::app::environments::{RuleTone, rules_tones};
@@ -145,8 +147,17 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
     let top = app.overlays.top().map(|o| o.kind()) == Some(crate::app::overlay::OverlayKind::ProfileForm);
     // A session preset form's profiles and what it says of its statements, read before the form
     // is borrowed for drawing.
-    let (session_users, session_note) = match app.overlays.form().filter(|f| f.is_session()) {
-        Some(f) => {
+    let (session_users, session_note) = match app.overlays.form() {
+        // A profile's own session SQL: which statement is not allowed.
+        Some(f) if f.kind == FormKind::Profile => {
+            let note = f.session_problem().map(|(index, p)| {
+                let problem = app.set_problem_text(&p);
+                let m = Msg::ExplorerSessionProblem { index: index.to_string(), problem };
+                (i18n.msg(&m).to_string(), Level::Error)
+            });
+            (Vec::new(), note)
+        }
+        Some(f) if f.is_session() => {
             let users: Vec<String> = f
                 .original_name
                 .as_deref()
@@ -167,9 +178,10 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
             };
             (users, note)
         }
-        None => (Vec::new(), None),
+        _ => (Vec::new(), None),
     };
     let session_presets = &app.session_presets;
+    let default_session = app.policies.default_rules().session.clone();
     let form = app.overlays.form_mut()?;
     form.press.drawn(top, now);
     let mut hits: Vec<(Rect, FormHit)> = Vec::new();
@@ -324,6 +336,7 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
         hits.push((Rect::new(inner.x, y, inner.width, 1), FormHit::Field(f)));
         let label = match f {
             Field::SshSecret if form.ssh_auth == SshAuth::Password => Label::FormFieldSshPassword,
+            Field::SessionSql if !session_form => Label::FormFieldProfileSessionSql,
             f => f.label(),
         };
         put(buf, inner.x + 1, y, &i18n.label(label), label_w, label_style(focused));
@@ -604,6 +617,69 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
                 let used = drawn.0;
                 x + used
             }
+            // A session preset, picked from a list: its name (marked when no preset has it, or
+            // when it is for another database), a profile's environment's with its name, none.
+            Field::SessionPreset | Field::EnvSessionPg | Field::EnvSessionMy => {
+                use crate::app::profiles::SessionChoice;
+                let dbms = form.session_field_dbms(f);
+                let choice = match f {
+                    Field::SessionPreset => form.session_choice(),
+                    _ => dbms.map_or(SessionChoice::Off, |d| form.env_session_choice(d)),
+                };
+                let (value, bad) = match &choice {
+                    SessionChoice::Environment => {
+                        let rules = form.picked_environment().map_or(&default_session, |e| &e.policy.session);
+                        match dbms.and_then(|d| rules.get(d)) {
+                            Some(name) => {
+                                (i18n.msg(&Msg::PickerSessionEnvironment { name: name.to_string() }).to_string(), false)
+                            }
+                            None => (i18n.label(Label::PickerSessionEnvironmentNone).to_string(), false),
+                        }
+                    }
+                    SessionChoice::Off => (i18n.label(Label::PickerSessionNone).to_string(), false),
+                    SessionChoice::Named(name) => match form.session_presets.iter().find(|p| p.name == *name) {
+                        Some(p) if Some(p.dbms) == dbms => (name.clone(), false),
+                        Some(p) => (
+                            i18n.msg(&Msg::FormSessionWrongDbms {
+                                name: name.clone(),
+                                dbms: p.dbms.display().to_string(),
+                            })
+                            .to_string(),
+                            true,
+                        ),
+                        None => (i18n.msg(&Msg::FormSessionMissing { name: name.clone() }).to_string(), true),
+                    },
+                };
+                let style = if bad { Style::new().fg(th.error) } else { Style::new().fg(th.fg) };
+                let used = put(buf, x, y, &value, room_from(x), style.patch(field_bg));
+                let used = used
+                    + put(buf, x + used, y, " ▾ ", room_from(x + used), Style::new().fg(th.fg_muted).patch(field_bg));
+                hits.push((Rect::new(x, y, used, 1), FormHit::Value(f)));
+                x + used
+            }
+            // A profile's own statements: one input, which statement is not allowed after it.
+            Field::SessionSql if !session_form => {
+                let inp = form.input_mut(f)?;
+                let cx = inp.render(
+                    Rect::new(x, y, input_w, 1),
+                    buf,
+                    Style::new().fg(th.fg).patch(field_bg),
+                    focused,
+                    false,
+                    None,
+                );
+                if focused {
+                    cursor = Some((cx, y));
+                }
+                hits.push((Rect::new(x, y, input_w, 1), FormHit::Input(f)));
+                let after = x + input_w + 2;
+                let (text, style) = match &session_note {
+                    Some((t, level)) => (t.clone(), Style::new().fg(level_color(*level)).bg(th.surface)),
+                    None => (i18n.label(Label::FormProfileSessionSqlHint).to_string(), dim),
+                };
+                put(buf, after, y, &text, room_from(after), style);
+                continue;
+            }
             // The statements take the line; what they are goes below them.
             Field::SessionSql => {
                 let w = inner.width.saturating_sub(label_w as u16 + 2);
@@ -678,6 +754,9 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
                 (Field::EnvSpill, _) => Some(Label::FormEnvSpillHint.into()),
                 (Field::EnvIdleDisconnect, _) => Some(Label::FormEnvIdleDisconnectHint.into()),
                 (Field::EnvLockWait, _) => Some(Label::FormEnvLockWaitHint.into()),
+                (Field::SessionPreset | Field::EnvSessionPg | Field::EnvSessionMy, _) => {
+                    Some(Label::FormSshListHint.into())
+                }
                 (Field::ServerKey, _) => Some(Label::FormServerKeyHint.into()),
                 (Field::TlsCa, _) => Some(Label::FormTlsCaHint.into()),
                 (Field::TlsCert, _) => Some(Label::FormTlsCertHint.into()),

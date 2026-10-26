@@ -377,6 +377,9 @@ impl App {
             FormOutcome::Test => self.test_in_context(None),
             FormOutcome::Choose(profiles::Field::SshEnabled) => self.open_tunnel_picker(),
             FormOutcome::Choose(profiles::Field::Environment) => self.open_environment_picker(),
+            FormOutcome::Choose(
+                f @ (profiles::Field::SessionPreset | profiles::Field::EnvSessionPg | profiles::Field::EnvSessionMy),
+            ) => self.open_session_picker(f),
             FormOutcome::Choose(profiles::Field::Folder) => self.open_form_folder_pick(),
             FormOutcome::Choose(f) if f.is_choice() => self.open_choice_picker(f),
             FormOutcome::Choose(f) => self.open_form_chooser(f),

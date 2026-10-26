@@ -4,7 +4,8 @@
 //! not a setting or that read-only refuses: nothing is opened), a start-up statement the server
 //! refused (said with its source and number), and a session behind a pooler that sets them per
 //! transaction. The explorer's "Session presets" section: its rows, the preset form (new,
-//! edit, rename, copy, a statement that is not allowed), delete and test.
+//! edit, rename, copy, a statement that is not allowed), delete and test. The profile form's
+//! session preset list and session SQL, and the environment form's lists.
 
 mod common;
 
@@ -612,4 +613,174 @@ fn a_test_without_a_connection_says_which_to_connect() {
     h.keys("t");
     assert_eq!(said(&h), "Connect local-pg first: the test opens a session on that connection");
     assert!(h.driver.sessions.lock().unwrap().is_empty());
+}
+
+// ── the profile form's and the environment form's lists ────────────────
+
+/// The session preset list of the form on top (its rows' labels).
+fn session_rows(h: &Harness) -> Vec<String> {
+    let Some(datarig_tui::app::picker::Picker::Session { list, .. }) = h.app.overlays.picker() else {
+        panic!("the session preset list is open")
+    };
+    list.rows().iter().map(|r| list.label(*r).to_string()).collect()
+}
+
+/// Pick the row labelled `label` in the open session preset list.
+fn pick_session(h: &mut Harness, label: &str) {
+    h.type_text(label);
+    let rows = session_rows(h);
+    assert!(rows.iter().any(|r| r == label), "{label}: {rows:?}");
+    while {
+        let Some(datarig_tui::app::picker::Picker::Session { list, .. }) = h.app.overlays.picker() else { panic!() };
+        list.selected().map(|r| list.label(r).to_string()).as_deref() != Some(label)
+    } {
+        h.key(KeyCode::Down);
+    }
+    h.key(KeyCode::Enter);
+}
+
+/// The profile form of `name` on field `field` (Advanced).
+fn profile_field(h: &mut Harness, name: &str, field: Field) {
+    h.explore(name);
+    h.keys("e");
+    h.ctrl('n');
+    h.ctrl('n');
+    while h.form().focus != field {
+        h.key(KeyCode::Tab);
+    }
+}
+
+/// The profile form's list: its environment's preset (named), none (even when the environment
+/// maps one), the presets of its database, a new one; none picked is written as `"none"`.
+#[test]
+fn the_profile_form_picks_its_environments_preset_none_or_one_of_its_database() {
+    let dir = scratch("profile-list");
+    let mut h = section_harness(&dir);
+    profile_field(&mut h, "local-pg", Field::SessionPreset);
+    assert!(h.screen(120, 40).contains("Environment's (reporting) ▾"), "{}", h.screen(120, 40));
+    h.key(KeyCode::Enter);
+    assert_eq!(
+        session_rows(&h),
+        ["Environment's (reporting)", "None", "broken", "reporting", "New session preset…"],
+        "PostgreSQL's only"
+    );
+    for (w, ht) in [(80, 24), (120, 40)] {
+        insta::assert_snapshot!(format!("profile_form_session_list_en_{w}x{ht}"), h.draw(w, ht).backend());
+    }
+    pick_session(&mut h, "None");
+    assert_eq!(h.form().session_ref, SessionRef::Off);
+    assert!(h.screen(120, 40).contains("Session preset    None ▾"), "{}", h.screen(120, 40));
+    h.ctrl('s');
+    assert!(!h.form_open());
+    assert_eq!(h.app.profiles[0].session, SessionRef::Off);
+    assert!(dir.text().contains("session = \"none\""), "{}", dir.text());
+    // The plan says the environment's was skipped.
+    let plan = h.app.session_plan_of(&h.app.profiles[0].clone()).unwrap();
+    assert!(
+        plan.items
+            .iter()
+            .any(|i| i.what == datarig_core::profile::session::Planned::Skipped { preset: "reporting".into() })
+    );
+}
+
+/// The profile's own session SQL: a statement that is not allowed is said after the field and
+/// keeps the form from saving; saved, one statement per item.
+#[test]
+fn the_profile_forms_session_sql_is_checked_and_saved_one_per_item() {
+    let dir = scratch("profile-sql");
+    let mut h = section_harness(&dir);
+    profile_field(&mut h, "local-pg", Field::SessionSql);
+    h.type_text("SET work_mem = '1MB'; SET lock_timeout = '1s'");
+    let screen = h.screen(160, 45);
+    assert!(screen.contains("statement 2: lock_timeout is set by"), "{screen}");
+    let detail = h.app.overlays.form().and_then(|f| f.session_problem());
+    assert!(matches!(detail, Some((2, datarig_core::sql::risk::SetProblem::AppOwned { .. }))), "{detail:?}");
+    h.ctrl('s');
+    assert!(h.form_open(), "not saved");
+    assert_eq!(h.form().focus, Field::SessionSql);
+    for _ in 0.."; SET lock_timeout = '1s'".len() {
+        h.key(KeyCode::Backspace);
+    }
+    h.type_text("; SET jit = off");
+    h.ctrl('s');
+    assert!(!h.form_open(), "saved");
+    assert_eq!(h.app.profiles[0].session_sql, ["SET work_mem = '1MB'", "SET jit = off"]);
+    assert!(dir.text().contains("session_sql = [\"SET work_mem = '1MB'\", \"SET jit = off\"]"), "{}", dir.text());
+}
+
+/// A preset of the other database (a driver changed in the form): marked, and not saved.
+#[test]
+fn a_preset_of_the_other_database_is_marked_in_the_profile_form() {
+    let dir = scratch("profile-dbms");
+    let mut h = section_harness(&dir);
+    profile_field(&mut h, "local-pg", Field::SessionPreset);
+    h.key(KeyCode::Enter);
+    pick_session(&mut h, "reporting");
+    h.ctrl('p');
+    h.ctrl('p');
+    h.key(KeyCode::BackTab);
+    assert_eq!(h.form().focus, Field::Driver);
+    h.key(KeyCode::Right); // MySQL
+    h.ctrl('n');
+    h.ctrl('n');
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("reporting (for PostgreSQL) ▾"), "{screen}");
+    assert!(screen.contains("a preset for another database"), "{screen}");
+    h.ctrl('s');
+    assert!(h.form_open(), "not saved");
+    assert_eq!(h.app.profiles[0].driver, "postgres", "unchanged");
+}
+
+/// "New session preset…" opens the preset form for the profile's database over the profile
+/// form; saved, the profile form comes back with it picked.
+#[test]
+fn a_new_preset_from_the_profile_forms_list_comes_back_picked() {
+    let dir = scratch("profile-new");
+    let mut h = section_harness(&dir);
+    profile_field(&mut h, "local-pg", Field::SessionPreset);
+    h.key(KeyCode::Enter);
+    h.key(KeyCode::End);
+    pick_session(&mut h, "New session preset…");
+    assert!(h.form().is_session());
+    assert_eq!(h.form().session_dbms, Dbms::Postgres);
+    h.type_text("own");
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Tab);
+    h.type_text("SET jit = off");
+    h.ctrl('s');
+    assert!(!h.form().is_session(), "back in the profile form");
+    assert_eq!(h.form().session_ref, SessionRef::Named("own".into()));
+    assert!(dir.text().contains("[sessions.own]"), "{}", dir.text());
+    h.ctrl('s');
+    assert_eq!(h.app.profiles[0].session, SessionRef::Named("own".into()));
+}
+
+/// The environment form has a list per database: none and that database's presets; picked,
+/// the environment maps it (in the file as `session = { … }`).
+#[test]
+fn the_environment_form_maps_a_preset_per_database() {
+    let dir = scratch("env-list");
+    let mut h = section_harness(&dir);
+    let prod = h.app.environments().iter().find(|e| e.name == "prod").unwrap().id;
+    on_row(&mut h, RowKind::Environment(prod));
+    h.keys("e");
+    while h.form().focus != Field::EnvSessionMy {
+        h.key(KeyCode::Tab);
+    }
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("Preset (PostgreSQL)  reporting ▾"), "{screen}");
+    assert!(screen.contains("Preset (MySQL)       None ▾"), "{screen}");
+    h.key(KeyCode::Enter);
+    assert_eq!(session_rows(&h), ["None", "fk_off", "my_ro", "New session preset…"], "MySQL's only");
+    for (w, ht) in [(80, 24), (120, 40)] {
+        insta::assert_snapshot!(format!("environment_form_session_list_en_{w}x{ht}"), h.draw(w, ht).backend());
+    }
+    pick_session(&mut h, "my_ro");
+    h.key(KeyCode::BackTab);
+    h.key(KeyCode::Enter);
+    pick_session(&mut h, "None");
+    h.ctrl('s');
+    let map = &h.app.policies.environment("prod").unwrap().policy.session;
+    assert_eq!((map.postgres.as_deref(), map.mysql.as_deref()), (None, Some("my_ro")));
+    assert!(dir.text().contains("session = { mysql = \"my_ro\" }"), "{}", dir.text());
 }

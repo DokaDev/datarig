@@ -868,6 +868,15 @@ with the preset alone exactly as a tab's session would, and closes it again once
 or the statement and the server's error. A profile that is not connected is not connected for
 it: the test says which to connect first.
 
+A profile's form picks its preset in the Advanced section (`Enter` on Session preset): its
+environment's (named, the default), **None** (no preset, even if the environment maps one), the
+presets of its database, or "New session preset…", which opens the preset form for its database
+and comes back with the new one picked; a preset of the other database (the driver changed) is
+marked and the form does not save. Its own statements are the Session SQL line below it (`;`
+between them; one that is not allowed is said after it, and the form does not save). The
+environment form has one list per database (Preset (PostgreSQL), Preset (MySQL)): none, that
+database's presets, or a new one.
+
 What a query session starts with, in order (a later setting of the same name wins): datarig's
 own limits (`lock_wait`, `idle_disconnect`, `tx_idle_rollback`: see above and [Manual
 commit](#manual-commit)), then the preset (the profile's `session`, else the one its

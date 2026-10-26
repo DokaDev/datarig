@@ -1048,6 +1048,7 @@ impl App {
         form.folders = self.folders.iter().map(ToString::to_string).collect();
         form.presets = self.presets.clone();
         form.environments = self.environments().to_vec();
+        form.session_presets = self.session_presets.clone();
         for (i, (name, _)) in crate::app::profiles::DRIVERS.iter().enumerate() {
             form.drivers_enabled[i] = self.driver(name).is_some();
         }
