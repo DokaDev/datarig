@@ -40,6 +40,7 @@ pub mod export;
 pub mod export_form;
 pub mod export_path_pick;
 pub mod folder_pick;
+pub mod folder_read;
 mod format;
 pub mod guide;
 pub mod hover;
@@ -387,6 +388,8 @@ pub enum AppEvent {
     TestProbe { seq: u64, probes: Vec<tunnel::Probe> },
     /// An export's writer (its file, how far, its end).
     Export(export::ExportEvent),
+    /// A folder read of a file-system picker answered.
+    Folder(folder_read::FolderAnswer),
 }
 
 /// Which session a driver event comes from.
@@ -584,6 +587,8 @@ pub struct App {
     fetch_copy: Option<(copy::Intent, copy::CopyRequest)>,
     /// The exports to files, one per tab at most.
     exports: export::Exports,
+    /// The folder reads of the file-system pickers, on workers.
+    folder_reads: folder_read::FolderReads,
     /// Why the config file could not be used (the settings screen says so; nothing is saved).
     config_problem: Option<Notice>,
     /// The default rules and the environments (`[policy.<name>]`); a profile's environment
@@ -954,6 +959,7 @@ impl App {
             text_plan_cache: Default::default(),
             fetch_copy: None,
             exports: export::Exports::default(),
+            folder_reads: Default::default(),
             config_problem: status.clone(),
             policies: cfg.policies.clone(),
             clock: Arc::new(Instant::now),

@@ -18,6 +18,7 @@ use datarig_core::secret::{MemoryStore, SecretStore};
 use datarig_core::sql::complete::{Catalog, ColumnInfo, Relation};
 use datarig_core::sql::dialect::{Dialect, Language};
 use datarig_tui::app::explorer::RowKind;
+use datarig_tui::app::folder_read::{FileSystem, Kind, RealFileSystem};
 use datarig_tui::app::overlay::{Overlay, OverlayKind};
 use datarig_tui::app::profiles::ProfileForm;
 use datarig_tui::app::{App, AppEvent, CommandLine, EventTarget, Focus, PasswordPrompt, Popup, Startup, Viewer};
@@ -26,6 +27,8 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
 use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -646,14 +649,21 @@ impl Harness {
 
     pub fn key_mod(&mut self, code: KeyCode, modifiers: KeyModifiers) {
         let k = KeyEvent { code, modifiers, kind: KeyEventKind::Press, state: KeyEventState::NONE };
-        self.app.handle_event(Event::Key(k));
+        self.event(Event::Key(k));
+    }
+
+    /// Hand `ev` to the app, then the answers of the folder reads it started (the pickers read
+    /// folders on workers; tests that look at a read still out use `app.handle_event`).
+    pub fn event(&mut self, ev: Event) {
+        self.app.handle_event(ev);
+        self.app.pump_folder_reads(Duration::from_secs(30));
     }
 
     /// A mouse event at (x, y), no modifiers.
     pub fn mouse(&mut self, kind: ratatui::crossterm::event::MouseEventKind, x: u16, y: u16) {
         use ratatui::crossterm::event::MouseEvent;
         let m = MouseEvent { kind, column: x, row: y, modifiers: KeyModifiers::NONE };
-        self.app.handle_event(Event::Mouse(m));
+        self.event(Event::Mouse(m));
     }
 
     /// Press the left button at `from`, drag through `path`, release at the last point.
@@ -672,7 +682,7 @@ impl Harness {
     }
 
     pub fn key_kind(&mut self, code: KeyCode, modifiers: KeyModifiers, kind: KeyEventKind) {
-        self.app.handle_event(Event::Key(KeyEvent { code, modifiers, kind, state: KeyEventState::NONE }));
+        self.event(Event::Key(KeyEvent { code, modifiers, kind, state: KeyEventState::NONE }));
     }
 
     /// Move the app's clock by `d` and run its timers at the new time.
@@ -1252,4 +1262,80 @@ pub fn with_edge_results(lang: Lang) -> Harness {
     let (cols, rows) = edge_rows();
     h.db(DbEvent::Page { id: 1, columns: Some(cols), rows, more: false, elapsed: Duration::from_millis(12) });
     h
+}
+
+// ── A file system for the pickers' folder reads ────────────────────────────────────────
+
+/// What a faked folder answers: its entries, or an error of this kind.
+pub type Listing = Result<Vec<(String, Kind)>, std::io::ErrorKind>;
+
+/// The real file system, except that the folders in `hang` do not answer until the gate opens
+/// (a test that forgets to open it fails after a while instead of hanging), those in `fake`
+/// answer what is put there, and a list of one in `broken` fails inside. `lists` counts the
+/// lists of each folder.
+#[derive(Default)]
+pub struct FakeFs {
+    pub hang: Mutex<Vec<PathBuf>>,
+    gate: (Mutex<bool>, std::sync::Condvar),
+    pub fake: Mutex<HashMap<PathBuf, Listing>>,
+    pub broken: Mutex<Vec<PathBuf>>,
+    pub lists: Mutex<HashMap<PathBuf, usize>>,
+}
+
+impl FakeFs {
+    fn wait(&self, p: &Path) {
+        if !self.hang.lock().unwrap().iter().any(|h| h == p) {
+            return;
+        }
+        let (open, cv) = &self.gate;
+        let g = open.lock().unwrap();
+        let (g, _) = cv.wait_timeout_while(g, Duration::from_secs(60), |open| !*open).unwrap();
+        assert!(*g, "the gate of {} was never opened", p.display());
+    }
+
+    /// The hanging folders answer from now on.
+    pub fn release(&self) {
+        let (open, cv) = &self.gate;
+        *open.lock().unwrap() = true;
+        cv.notify_all();
+    }
+
+    /// How many times folder `dir` was listed.
+    pub fn lists_of(&self, dir: &Path) -> usize {
+        self.lists.lock().unwrap().get(dir).copied().unwrap_or(0)
+    }
+}
+
+impl FileSystem for FakeFs {
+    fn list(&self, dir: &Path) -> std::io::Result<Vec<(String, Kind)>> {
+        *self.lists.lock().unwrap().entry(dir.to_path_buf()).or_default() += 1;
+        self.wait(dir);
+        assert!(!self.broken.lock().unwrap().iter().any(|b| b == dir), "a list that fails inside");
+        match self.fake.lock().unwrap().get(dir) {
+            Some(Ok(v)) => Ok(v.clone()),
+            Some(Err(k)) => Err(std::io::Error::from(*k)),
+            None => RealFileSystem.list(dir),
+        }
+    }
+    fn readable(&self, dir: &Path) -> std::io::Result<()> {
+        self.wait(dir);
+        match self.fake.lock().unwrap().get(dir) {
+            Some(Err(k)) => Err(std::io::Error::from(*k)),
+            _ => RealFileSystem.readable(dir),
+        }
+    }
+    fn is_dir(&self, path: &Path) -> bool {
+        self.wait(path);
+        RealFileSystem.is_dir(path)
+    }
+    fn is_link(&self, path: &Path) -> bool {
+        RealFileSystem.is_link(path)
+    }
+    fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf> {
+        RealFileSystem.canonicalize(path)
+    }
+    fn create_dir(&self, path: &Path) -> std::io::Result<()> {
+        self.wait(path);
+        RealFileSystem.create_dir(path)
+    }
 }

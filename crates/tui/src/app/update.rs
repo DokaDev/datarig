@@ -142,6 +142,7 @@ impl App {
             AppEvent::SharedTunnel { serial, ev } => self.on_shared_event(serial, ev),
             AppEvent::TestProbe { seq, probes } => self.on_test_probe(seq, probes),
             AppEvent::Export(ev) => self.on_export_event(ev),
+            AppEvent::Folder(a) => self.on_folder_answer(a),
         }
         // What an open quick connect list waits for may have arrived.
         if self.overlays.quick().is_some() {

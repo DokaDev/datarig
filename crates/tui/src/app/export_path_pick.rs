@@ -15,7 +15,8 @@
 //!
 //! A folder that cannot be listed says so and is never shown empty; nothing is saved into it.
 //! A link to a folder is opened like a folder, one level at a time; one that leads back to a
-//! folder on the way to it is not opened. Nothing is read but folder listings.
+//! folder on the way to it is not opened. Nothing is read but folder listings, each on a
+//! worker (see `folder_read`): a folder being read says so, one that takes too long too.
 //!
 //! The path field completes names too (`Tab`): the longest text the names that start with what
 //! was typed share, then (`Tab` again) a list of them below the field, then each in turn.
@@ -23,10 +24,12 @@
 use super::chooser::{NameInput, NamePurpose};
 use super::export::expand_path;
 use super::export_form::ExportField;
-use super::key_picker::{self, is_path};
+use super::folder_read::{self, Got, Kind, NoAnswer};
+use super::key_picker::{self, Disk, What, is_path};
 use super::script_tree::{ScriptTree, TreeFocus, TreeMode, TreeRow};
 use super::*;
 use crate::widgets::text_input::InputResult;
+use datarig_core::fault::{Fault, FaultKind};
 use datarig_core::scripts::{self, display_name, is_within};
 use std::collections::{BTreeSet, HashSet};
 use std::path::{Path, PathBuf};
@@ -46,6 +49,10 @@ pub struct PathCompletion {
     /// The field's text completed to each name (a folder with `/`).
     pub matches: Vec<String>,
     pub at: Option<usize>,
+    /// The folder read for these, while it is being read.
+    pub wait: Option<u64>,
+    /// What to say below the field instead of the names (being read, could not be read).
+    pub note: Option<Notice>,
 }
 
 impl PathCompletion {
@@ -60,24 +67,25 @@ impl PathCompletion {
     }
 }
 
-/// What `text` completes to: the entries of its folder (`~/Downloads` for a bare name) whose
-/// name starts with its last part, a folder with `/`. Hidden ones only when that part starts
-/// with `.`.
-pub fn path_matches(text: &str, home: Option<&Path>, folder: &Path) -> Vec<String> {
-    if text == "~" {
-        return home.map(|_| vec!["~/".to_string()]).unwrap_or_default();
-    }
+/// The folder `text` completes in (`~/Downloads` for a bare name), the text before its last
+/// part, and that part.
+fn completion_dir(text: &str, home: Option<&Path>, folder: &Path) -> Option<(PathBuf, String, String)> {
     let cut = text.rfind(['/', '\\']).map_or(0, |i| i + 1);
     let (dir_text, prefix) = text.split_at(cut);
     let dir = match dir_text {
         "" => Some(folder.to_path_buf()),
         d => expand_path(d, home, folder),
-    };
-    let Some(Ok(entries)) = dir.map(|d| key_picker::list(&d)) else { return Vec::new() };
+    }?;
+    Some((dir, dir_text.to_string(), prefix.to_string()))
+}
+
+/// What `prefix` completes to among `entries` (of the folder `dir_text` names): the names that
+/// start with it, a folder with `/`. Hidden ones only when it starts with `.`.
+pub fn path_matches(entries: Vec<(String, Kind)>, dir_text: &str, prefix: &str) -> Vec<String> {
     entries
         .into_iter()
         .filter(|(n, _)| n.starts_with(prefix) && (prefix.starts_with('.') || !n.starts_with('.')))
-        .map(|(n, dir)| format!("{dir_text}{n}{}", if dir { "/" } else { "" }))
+        .map(|(n, kind)| format!("{dir_text}{n}{}", if kind == Kind::Folder { "/" } else { "" }))
         .collect()
 }
 
@@ -138,30 +146,8 @@ impl ScriptTree {
         }
     }
 
-    /// Folder `rel` is a link to a folder on the way to it (the folder shown, or one between it
-    /// and the link, as they really are: through any number of links): it is not opened, and
-    /// says so.
-    pub(super) fn loops(&mut self, rel: &str) -> bool {
-        let dir = self.root.join(rel);
-        if !std::fs::symlink_metadata(&dir).is_ok_and(|m| m.file_type().is_symlink()) {
-            return false;
-        }
-        let Ok(target) = std::fs::canonicalize(&dir) else { return false };
-        let mut way = vec![self.root.clone()];
-        let parts: Vec<&str> = rel.split('/').collect();
-        for part in &parts[..parts.len() - 1] {
-            let next = way[way.len() - 1].join(part);
-            way.push(next);
-        }
-        if !way.iter().filter_map(|p| std::fs::canonicalize(p).ok()).any(|p| p.starts_with(&target)) {
-            return false;
-        }
-        self.error = Some(Msg::ExportPathLoop { name: rel.to_string() });
-        true
-    }
-
     /// The folder the selection stands for, on disk.
-    fn export_dir(&self) -> PathBuf {
+    pub(super) fn export_dir(&self) -> PathBuf {
         match self.folder() {
             Some(rel) => self.root.join(rel),
             None => self.root.clone(),
@@ -174,13 +160,15 @@ impl ScriptTree {
             return self.show_dir(self.root.clone(), Some(&select));
         }
         self.entries.retain(|e| e.path == rel || !is_within(&e.path, rel));
-        self.loaded.retain(|l| l == rel || !is_within(l, rel));
-        self.loaded.remove(rel);
-        // Listed again below: what was open inside it is closed, never open and empty.
-        self.open.retain(|o| o == rel || !is_within(o, rel));
-        self.load(rel);
-        self.open.insert(rel.to_string());
-        self.row = TreeRow::Folder(select);
+        self.loaded.retain(|l| l != rel && !is_within(l, rel));
+        // Listed again below: it and what was open inside it are closed until then, never
+        // open and empty.
+        self.open.retain(|o| o != rel && !is_within(o, rel));
+        // What was being read inside it (or of it) has no row to go to any more.
+        self.disk.waiting.retain(|(_, w)| !w.rel().is_some_and(|r| r == rel || is_within(r, rel)));
+        self.disk.slow.retain(|p| p != rel && !is_within(p, rel));
+        self.disk.unknown.retain(|p| !is_within(p, rel));
+        self.load(rel, Some(select));
     }
 
     /// The selection goes to the first row that matches the filter, unless it is on one.
@@ -211,19 +199,14 @@ impl App {
         f.completion = None;
         let typed = f.path.text().trim().to_string();
         let current = expand_path(&typed, home.as_deref(), &folder);
-        let is_dir = |p: &Path| std::fs::metadata(p).is_ok_and(|m| m.is_dir());
-        let (dir, select) = match &current {
-            Some(p) if is_dir(p) => (Some(p.clone()), None),
-            Some(p) => (
-                p.parent().filter(|d| !d.as_os_str().is_empty() && is_dir(d)).map(Path::to_path_buf),
-                p.file_name().map(|n| n.to_string_lossy().to_string()),
-            ),
-            None => (None, None),
-        };
-        let dir = dir
-            .or_else(|| Some(folder).filter(|d| is_dir(d)))
-            .or_else(|| home.clone().filter(|h| is_dir(h)))
-            .unwrap_or_else(|| PathBuf::from(std::path::MAIN_SEPARATOR_STR));
+        // The field's folder, else the folder of its file, else ~/Downloads, else home (asked
+        // on the worker, in this order).
+        let (mut dirs, select) = key_picker::start_dirs(current.as_deref());
+        for d in [Some(folder), home].into_iter().flatten() {
+            dirs.push((d, select.clone()));
+        }
+        dirs.push((PathBuf::from(std::path::MAIN_SEPARATOR_STR), select));
+        let disk = Disk::new(self.folder_reader());
         let mut t = ScriptTree {
             mode: TreeMode::ExportPath(ExportPick::default()),
             entries: Vec::new(),
@@ -239,8 +222,9 @@ impl App {
             root: PathBuf::new(),
             loaded: BTreeSet::new(),
             moving: None,
+            disk,
         };
-        t.show_dir(dir, select.as_deref());
+        t.show_first(dirs);
         self.overlays.push(Overlay::ScriptTree(t));
     }
 
@@ -319,12 +303,24 @@ impl App {
         }
     }
 
-    /// A path typed in the filter: a folder is shown, anything else is taken as the file.
+    /// A path typed in the filter: a folder is shown, anything else is taken as the file
+    /// (which it is is asked on a worker).
     fn export_path_typed(&mut self) {
         let (home, folder) = (self.home(), self.export_folder());
         let Some(t) = self.overlays.script_tree_mut() else { return };
-        let Some(path) = expand_path(t.input.text().trim(), home.as_deref(), &folder) else { return };
-        if std::fs::metadata(&path).is_ok_and(|m| m.is_dir()) {
+        let text = t.input.text().trim().to_string();
+        let Some(path) = expand_path(&text, home.as_deref(), &folder) else { return };
+        // The latest `Enter` is the one answered.
+        t.disk.waiting.retain(|(_, w)| !matches!(w, What::Typed { .. }));
+        let p = path.clone();
+        t.error = None;
+        t.ask(What::Typed { path: path.clone(), text }, path, move |fs| Got::IsDir(fs.is_dir(&p)));
+    }
+
+    /// The path typed in the filter is a folder (`dir`) or not.
+    pub(super) fn export_path_typed_is(&mut self, path: PathBuf, dir: bool) {
+        let Some(t) = self.overlays.script_tree_mut() else { return };
+        if dir {
             t.input.set("");
             t.focus = TreeFocus::Tree;
             return t.show_dir(path, None);
@@ -333,22 +329,40 @@ impl App {
     }
 
     /// "Save here" (`Ctrl+S`): the selected folder, with the file name the field has (the one
-    /// made for the format when it names no file).
+    /// made for the format when it names no file). Whether the folder can be listed, and
+    /// whether the field names a folder, is asked on a worker.
     fn export_path_save_here(&mut self) {
         let (home, folder) = (self.home(), self.export_folder());
+        let Some(f) = self.overlays.export_form() else { return };
+        let typed = f.path.text().trim().to_string();
+        let typed_path = if typed.is_empty() || typed.ends_with(['/', '\\']) {
+            None
+        } else {
+            expand_path(&typed, home.as_deref(), &folder)
+        };
         let Some(t) = self.overlays.script_tree_mut() else { return };
-        let dir = t.export_dir();
-        // Unknown is not empty: a folder that cannot be listed is not saved into.
-        if std::fs::read_dir(&dir).is_err() {
-            t.error = Some(Msg::ExportPathUnreadable { path: key_picker::shown(&dir, home.as_deref()) });
+        let (rel, dir) = (t.folder().unwrap_or_default(), t.export_dir());
+        // While the folder shown is first read, which one it is is not known yet.
+        if t.disk.reading_shown() {
             return;
         }
+        // The latest one is the one answered.
+        t.disk.waiting.retain(|(_, w)| !matches!(w, What::SaveHere { .. }));
+        let d = dir.clone();
+        t.error = None;
+        t.ask(What::SaveHere { rel, dir: dir.clone() }, dir, move |fs| Got::Readable {
+            // Unknown is not empty: a folder that cannot be listed is not saved into.
+            result: fs.readable(&d).map_err(|e| datarig_core::fault::Fault::io_at(&e, &d)),
+            typed_dir: typed_path.is_some_and(|p| fs.is_dir(&p)),
+        });
+    }
+
+    /// Save into folder `dir` (it can be listed); `typed_dir`: the field names a folder.
+    pub(super) fn export_path_save_into(&mut self, dir: PathBuf, typed_dir: bool) {
         let Some(f) = self.overlays.export_form() else { return };
         let typed = f.path.text().trim();
         // A field that names a folder (with or without `/`) has no file name of its own.
-        let folder_typed = typed.is_empty()
-            || typed.ends_with(['/', '\\'])
-            || expand_path(typed, home.as_deref(), &folder).is_some_and(|p| p.is_dir());
+        let folder_typed = typed.is_empty() || typed.ends_with(['/', '\\']) || typed_dir;
         let named = if folder_typed { f.default_text(f.format) } else { typed.to_string() };
         let cut = named.rfind(['/', '\\']).map_or(0, |i| i + 1);
         let name = named[cut..].to_string();
@@ -366,16 +380,26 @@ impl App {
         }
     }
 
-    /// `n`: name a new folder inside the selected one (not in one that cannot be read).
+    /// `n`: name a new folder inside the selected one (not in one that cannot be read: asked on
+    /// a worker).
     fn export_path_new_folder(&mut self) {
-        let home = self.home();
         let Some(t) = self.overlays.script_tree_mut() else { return };
-        let parent = t.folder();
-        // Not in a folder that cannot be listed (the new one could not be shown).
-        if std::fs::read_dir(t.export_dir()).is_err() {
-            t.error = Some(Msg::ExportPathUnreadable { path: key_picker::shown(&t.export_dir(), home.as_deref()) });
+        if t.disk.reading_shown() {
             return;
         }
+        t.disk.waiting.retain(|(_, w)| !matches!(w, What::NewFolder { .. }));
+        let (parent, dir) = (t.folder(), t.export_dir());
+        let d = dir.clone();
+        t.error = None;
+        // Not in a folder that cannot be listed (the new one could not be shown).
+        t.ask(What::NewFolder { parent, dir: dir.clone() }, dir, move |fs| Got::Readable {
+            result: fs.readable(&d).map_err(|e| datarig_core::fault::Fault::io_at(&e, &d)),
+            typed_dir: false,
+        });
+    }
+
+    /// Ask for the name of a new folder inside `parent` (it can be listed).
+    pub(super) fn export_path_name_folder(&mut self, parent: Option<String>) {
         let title = match &parent {
             Some(p) => Msg::NameNewFolderIn { parent: p.clone() },
             None => Msg::Label(Label::NameNewFolder),
@@ -398,35 +422,67 @@ impl App {
             t if t.contains(['/', '\\']) => return Err(Label::ValidateExportFolderOne),
             _ => {}
         }
-        let Some(t) = self.overlays.script_tree() else { return Ok(()) };
+        let Some(t) = self.overlays.script_tree_mut() else { return Ok(()) };
         let dir = match &parent {
             Some(p) => t.root.join(p).join(typed),
             None => t.root.join(typed),
         };
-        if let Err(e) = std::fs::create_dir(&dir) {
-            if e.kind() == std::io::ErrorKind::AlreadyExists {
-                return Err(Label::ValidateFolderExists);
-            }
-            let (name, error) = (typed.to_string(), self.io_text(&e));
-            self.flash(Notice::new(Msg::ScriptsFolderFailed { name, error }, Level::Error));
+        // Made on a worker; the prompt stays until it answers (a name taken is said there).
+        // `Enter` again for the same folder waits for the first; another name is made too.
+        if t.disk.waiting.iter().any(|(_, w)| matches!(w, What::Create { dir: d, .. } if *d == dir)) {
             return Ok(());
         }
-        let Some(t) = self.overlays.script_tree_mut() else { return Ok(()) };
-        if typed.starts_with('.')
+        let d = dir.clone();
+        let what = What::Create { parent, name: typed.to_string(), dir: dir.clone() };
+        t.ask(what, dir, move |fs| Got::Made(fs.create_dir(&d).map_err(|e| Fault::io_at(&e, &d))));
+        Ok(())
+    }
+
+    /// Folder `name` inside `parent` was made (`made`), or not: listed again and selected; a
+    /// name that is taken is refused in the prompt, never reused.
+    /// The answer is the prompt's only while it still asks for that name.
+    pub(super) fn export_folder_made(&mut self, parent: Option<String>, name: String, made: Result<(), Fault>) {
+        let asked = self.export_folder_prompt(&parent, &name).is_some();
+        if let Err(f) = made {
+            if f.kind == FaultKind::Io(std::io::ErrorKind::AlreadyExists) {
+                if let Some(n) = self.export_folder_prompt(&parent, &name) {
+                    n.error = Some(Label::ValidateFolderExists);
+                }
+                return;
+            }
+            if asked {
+                self.overlays.close(OverlayKind::NameInput);
+            }
+            let error = self.fault_text("io", &f);
+            self.flash(Notice::new(Msg::ScriptsFolderFailed { name, error }, Level::Error));
+            return;
+        }
+        if asked {
+            self.overlays.close(OverlayKind::NameInput);
+        }
+        let Some(t) = self.overlays.script_tree_mut() else { return };
+        if name.starts_with('.')
             && let TreeMode::ExportPath(p) = &mut t.mode
         {
             p.hidden = true;
         }
         let rel = parent.clone().unwrap_or_default();
         let path = match &parent {
-            Some(p) => format!("{p}/{typed}"),
-            None => typed.to_string(),
+            Some(p) => format!("{p}/{name}"),
+            None => name.clone(),
         };
         t.input.set("");
         t.error = None;
-        t.export_reload(&rel, if rel.is_empty() { typed.to_string() } else { path });
+        t.export_reload(&rel, if rel.is_empty() { name } else { path });
         t.focus = TreeFocus::Tree;
-        Ok(())
+    }
+
+    /// The name prompt for a new folder `name` inside `parent`, while it still shows that name.
+    pub(super) fn export_folder_prompt(&mut self, parent: &Option<String>, name: &str) -> Option<&mut NameInput> {
+        self.overlays.name_input_mut().filter(|n| {
+            matches!(&n.purpose, NamePurpose::NewExportFolder { parent: p } if p == parent)
+                && n.input.text().trim() == name
+        })
     }
 
     /// `Tab` in the export dialog's path field: complete the name typed, then list the names it
@@ -439,6 +495,14 @@ impl App {
             f.completion = None;
             return false;
         }
+        if f.completion.as_ref().is_some_and(|c| c.text == text && c.wait.is_some()) {
+            return true;
+        }
+        // Its folder could not be read, as said below the field: `Tab` again moves on.
+        if f.completion.as_ref().is_some_and(|c| c.text == text && c.note.is_some()) {
+            f.completion = None;
+            return false;
+        }
         if let Some(c) = f.completion.as_mut().filter(|c| c.text == text && c.matches.len() > 1) {
             let i = c.at.map_or(0, |i| (i + 1) % c.matches.len());
             c.at = Some(i);
@@ -447,19 +511,85 @@ impl App {
             f.set_path(&next);
             return true;
         }
-        let matches = path_matches(&text, home.as_deref(), &folder);
-        let common = common_prefix(&matches);
-        if common.len() > text.len() && common.starts_with(&text) {
-            f.set_path(&common);
+        if text == "~" {
+            if home.is_none() {
+                f.completion = None;
+                return false;
+            }
+            f.set_path("~/");
             f.completion = None;
             return true;
         }
-        if matches.len() > 1 {
-            f.completion = Some(PathCompletion { text, matches, at: None });
-            return true;
-        }
+        let Some((dir, ..)) = completion_dir(&text, home.as_deref(), &folder) else {
+            f.completion = None;
+            return false;
+        };
+        // The folder is read on a worker; until it answers, the field says so.
+        let path = key_picker::shown_dir(&dir, home.as_deref());
+        let reader = self.folder_reader();
+        let d = dir.clone();
+        let id = reader.ask(dir, move |fs| Got::Listed(folder_read::sorted(fs, &d)));
+        let Some(f) = self.overlays.export_form_mut() else { return true };
+        let note = Notice::new(Msg::FolderReading { path }, Level::Info);
+        f.completion = Some(PathCompletion { text, matches: Vec::new(), at: None, wait: Some(id), note: Some(note) });
+        true
+    }
+
+    /// The folder `Tab` read answered: complete the name typed, or list the names it may be,
+    /// or (none, or no such folder) move the focus on; a folder that could not be read says so
+    /// below the field, and the focus stays (`Tab` again moves it on).
+    /// The field's text changed meanwhile: the answer is dropped.
+    pub(super) fn export_path_completed(&mut self, got: Result<Got, NoAnswer>) {
+        let (home, folder) = (self.home(), self.export_folder());
+        let Some(f) = self.overlays.export_form() else { return };
+        let Some(c) = f.completion.clone() else { return };
+        let text = c.text.clone();
+        let current = f.path.text() == text;
+        let Some((dir, dir_text, prefix)) = completion_dir(&text, home.as_deref(), &folder) else { return };
+        let path = key_picker::shown_dir(&dir, home.as_deref());
+        let note = match got {
+            Ok(Got::Listed(Ok(items))) => Some(Ok(path_matches(items, &dir_text, &prefix))),
+            // No such folder: nothing to complete (that is known, not unknown).
+            Ok(Got::Listed(Err(fault)))
+                if matches!(
+                    fault.kind,
+                    FaultKind::Io(std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory)
+                ) =>
+            {
+                Some(Ok(Vec::new()))
+            }
+            Ok(Got::Listed(Err(fault))) => {
+                let error = self.reason_text(&crate::app::fault_reason(&fault));
+                Some(Err(Notice::new(Msg::ExportPathCompleteUnreadable { path, error }, Level::Warning)))
+            }
+            Err(NoAnswer::TooSlow) => Some(Err(Notice::new(Msg::ExportPathCompleteTooSlow { path }, Level::Warning))),
+            Err(NoAnswer::Broke) => {
+                let error = self.reason_text(&Label::FaultOther.into());
+                Some(Err(Notice::new(Msg::ExportPathCompleteUnreadable { path, error }, Level::Warning)))
+            }
+            Ok(_) => None,
+        };
+        let Some(f) = self.overlays.export_form_mut() else { return };
         f.completion = None;
-        false
+        // The text changed, or the focus left the field: nothing is put in.
+        if !current || f.focus != ExportField::Path {
+            return;
+        }
+        match note {
+            Some(Ok(matches)) => {
+                let common = common_prefix(&matches);
+                if common.len() > text.len() && common.starts_with(&text) {
+                    f.set_path(&common);
+                } else if matches.len() > 1 {
+                    f.completion = Some(PathCompletion { text, matches, ..Default::default() });
+                } else {
+                    // Nothing to complete: `Tab` moves on.
+                    f.step_focus(1);
+                }
+            }
+            Some(Err(n)) => f.completion = Some(PathCompletion { text, note: Some(n), ..Default::default() }),
+            None => {}
+        }
     }
 }
 
@@ -503,6 +633,7 @@ mod tests {
             root: PathBuf::from("/"),
             loaded: BTreeSet::new(),
             moving: None,
+            disk: Default::default(),
         };
         let start = std::time::Instant::now();
         let rows = t.rows();

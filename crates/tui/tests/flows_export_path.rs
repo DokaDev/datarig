@@ -9,10 +9,12 @@ use common::*;
 use datarig_core::driver::{ColumnMeta, DbEvent};
 use datarig_core::i18n::Lang;
 use datarig_tui::app::export_form::ExportField;
+use datarig_tui::app::folder_read::Kind;
 use datarig_tui::app::overlay::{ConfirmAction, OverlayKind};
 use datarig_tui::app::script_tree::{TreeFocus, TreeMode, TreeRow};
-use ratatui::crossterm::event::{KeyCode, MouseButton, MouseEventKind};
+use ratatui::crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEventKind};
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 const WAIT: Duration = Duration::from_secs(10);
@@ -644,4 +646,386 @@ fn tab_on_an_empty_path_moves_on() {
     set_path(&mut h, "");
     h.key(KeyCode::Tab);
     assert_eq!(focus(&h), ExportField::Export);
+}
+
+// ── Folder reads on a worker ─────────────────────────────────────────────────────────────
+
+/// The dialog over `home` with `fake` as the file system.
+fn faked(home: &Home) -> (Harness, Arc<FakeFs>) {
+    let mut h = dialog(home);
+    let fake = Arc::new(FakeFs::default());
+    h.app.set_file_system(fake.clone());
+    (h, fake)
+}
+
+/// A key straight to the app: what a read started by it says is not waited for.
+fn press(h: &mut Harness, code: KeyCode) {
+    let k = KeyEvent::new(code, KeyModifiers::NONE);
+    let start = std::time::Instant::now();
+    h.app.handle_event(Event::Key(k));
+    assert!(start.elapsed() < Duration::from_secs(2), "the key waited for the disk: {:?}", start.elapsed());
+}
+
+fn said(h: &Harness) -> Option<String> {
+    h.app.overlays.script_tree().and_then(|t| t.error.as_ref()).map(|m| h.app.i18n.msg(m).to_string())
+}
+
+/// A folder that does not answer is read on a worker: its row says it is being read, the keys
+/// keep answering, and its entries come in once it answers.
+#[test]
+fn keys_answer_while_a_folder_read_hangs() {
+    let home = home("hang");
+    let (mut h, fake) = faked(&home);
+    fake.hang.lock().unwrap().push(home.0.join("Downloads/a"));
+    h.ctrl('o');
+    go_to(&mut h, TreeRow::Folder("a".into()));
+    press(&mut h, KeyCode::Right);
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("a/ (reading…)"), "{screen}");
+    insta::assert_snapshot!("export_path_reading_en_120x40", h.draw(120, 40).backend());
+    let t = h.app.overlays.script_tree().unwrap();
+    assert_eq!(t.is_open(&TreeRow::Folder("a".into())), Some(false), "not open and empty");
+    // The keys answer meanwhile: moves, the hidden names, the filter.
+    press(&mut h, KeyCode::Down);
+    assert_ne!(row(&h), TreeRow::Folder("a".into()));
+    press(&mut h, KeyCode::Char('.'));
+    assert!(rows(&h).contains(&TreeRow::Folder(".cache".into())));
+    press(&mut h, KeyCode::Char('.'));
+    press(&mut h, KeyCode::Up);
+    assert_eq!(row(&h), TreeRow::Folder("a".into()));
+    // It answers: listed and open.
+    fake.release();
+    h.app.pump_folder_reads(WAIT);
+    assert!(rows(&h).contains(&TreeRow::File("a/inner.csv".into())), "{:?}", rows(&h));
+    assert_eq!(h.app.overlays.script_tree().unwrap().is_open(&TreeRow::Folder("a".into())), Some(true));
+    assert!(!h.screen(120, 40).contains("(reading…)"));
+}
+
+/// An answer nobody waits for any more is dropped: the picker went up to another folder, or
+/// closed; the field's text changed under a `Tab`.
+#[test]
+fn a_stale_answer_is_dropped() {
+    let home = home("stale-read");
+    let (mut h, fake) = faked(&home);
+    fake.hang.lock().unwrap().push(home.0.join("Downloads/a"));
+    h.ctrl('o');
+    go_to(&mut h, TreeRow::Folder("a".into()));
+    press(&mut h, KeyCode::Right);
+    // Up to the home folder while `a` is still being read.
+    press(&mut h, KeyCode::Up);
+    assert_eq!(row(&h), TreeRow::Top);
+    press(&mut h, KeyCode::Left);
+    h.app.pump_folder_reads(Duration::from_millis(500));
+    assert_eq!(root(&h), home.0);
+    assert!(rows(&h).contains(&TreeRow::Folder("Downloads".into())), "{:?}", rows(&h));
+    fake.release();
+    h.app.pump_folder_reads(WAIT);
+    let t = h.app.overlays.script_tree().unwrap();
+    assert!(t.entries.iter().all(|e| !e.path.starts_with("a/")), "{:?}", t.entries);
+    assert!(!t.disk.reading("a"));
+    h.key(KeyCode::Esc);
+    // Tab, then more typed before the folder answers: the answer is not put in.
+    let (mut h, fake) = faked(&home);
+    fake.hang.lock().unwrap().push(home.0.join("Downloads"));
+    set_path(&mut h, "~/Downloads/rep");
+    press(&mut h, KeyCode::Tab);
+    assert!(h.screen(160, 45).contains("Reading ~/Downloads…"), "{}", h.screen(160, 45));
+    assert_eq!(focus(&h), ExportField::Path);
+    press(&mut h, KeyCode::Char('x'));
+    fake.release();
+    h.app.pump_folder_reads(WAIT);
+    assert_eq!(path_text(&h), "~/Downloads/repx", "the old answer is not put in");
+    assert_eq!(focus(&h), ExportField::Path);
+}
+
+/// A read that takes longer than the limit says so, never as an empty folder; asked again, it
+/// is read again.
+#[test]
+fn a_read_that_takes_too_long_says_so() {
+    let home = home("slow");
+    let (mut h, fake) = faked(&home);
+    h.app.set_folder_timeout(Duration::from_millis(200));
+    fake.hang.lock().unwrap().push(home.0.join("Downloads/a"));
+    h.ctrl('o');
+    go_to(&mut h, TreeRow::Folder("a".into()));
+    press(&mut h, KeyCode::Right);
+    assert_eq!(h.app.pump_folder_reads(WAIT), 1, "answered within the limit");
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("a/ (took too long to read)"), "{screen}");
+    assert!(said(&h).is_some_and(|e| e.contains("~/Downloads/a took too long to read")), "{:?}", said(&h));
+    let t = h.app.overlays.script_tree().unwrap();
+    assert_eq!(t.is_open(&TreeRow::Folder("a".into())), Some(false));
+    assert!(t.unreadable(&TreeRow::Folder("a".into())));
+    assert!(!rows(&h).iter().any(|r| matches!(r, TreeRow::File(p) if p.starts_with("a/"))));
+    // Save here into it is refused (it is not known what it holds).
+    h.ctrl('s');
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ScriptTree), "not picked");
+    // The drive answers again: `→` reads it again.
+    fake.release();
+    h.key(KeyCode::Right);
+    assert!(rows(&h).contains(&TreeRow::File("a/inner.csv".into())), "{:?}", rows(&h));
+    // The folder shown itself: marked, no rows taken for its contents.
+    h.key(KeyCode::Esc);
+    let (mut h, fake) = faked(&home);
+    h.app.set_folder_timeout(Duration::from_millis(200));
+    fake.hang.lock().unwrap().push(home.0.join("Downloads"));
+    h.ctrl('o');
+    assert_eq!(rows(&h), vec![TreeRow::Up, TreeRow::Top]);
+    let screen = h.screen(120, 40);
+    assert!(screen.lines().any(|l| l.contains("~/Downloads/") && l.contains("(took too long to read)")), "{screen}");
+}
+
+/// A folder whose read fails says why, and is marked; one that holds an entry of unknown kind
+/// shows it so (never as a file or dropped).
+#[test]
+fn a_read_that_fails_says_why_and_an_unknown_kind_is_shown() {
+    let home = home("fails");
+    let (mut h, fake) = faked(&home);
+    let d = home.0.join("Downloads");
+    fake.fake.lock().unwrap().insert(d.join("a"), Err(std::io::ErrorKind::PermissionDenied));
+    fake.fake.lock().unwrap().insert(
+        d.clone(),
+        Ok(vec![("a".into(), Kind::Folder), ("odd".into(), Kind::Unknown), ("b.csv".into(), Kind::File)]),
+    );
+    h.ctrl('o');
+    assert!(rows(&h).contains(&TreeRow::File("odd".into())), "{:?}", rows(&h));
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("odd (kind unknown)"), "{screen}");
+    assert!(!screen.contains("b.csv (kind unknown)"), "{screen}");
+    go_to(&mut h, TreeRow::Folder("a".into()));
+    h.key(KeyCode::Right);
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("a/ (can't be read)"), "{screen}");
+    assert!(said(&h).is_some_and(|e| e.starts_with("~/Downloads/a could not be read: ")), "{:?}", said(&h));
+    assert_eq!(h.app.overlays.script_tree().unwrap().is_open(&TreeRow::Folder("a".into())), Some(false));
+}
+
+/// `Tab` in the path field in a folder that cannot be read says so below the field; the focus
+/// stays, and `Tab` again moves it on. No such folder moves it on at once.
+#[test]
+fn tab_in_an_unreadable_folder_says_so() {
+    let home = home("tab-locked");
+    let (mut h, fake) = faked(&home);
+    fake.fake.lock().unwrap().insert(home.0.join("Downloads"), Err(std::io::ErrorKind::PermissionDenied));
+    set_path(&mut h, "~/Downloads/rep");
+    h.key(KeyCode::Tab);
+    assert_eq!(focus(&h), ExportField::Path, "the focus stays");
+    assert_eq!(path_text(&h), "~/Downloads/rep");
+    let screen = h.screen(160, 45);
+    assert!(screen.contains("~/Downloads could not be read, so nothing is completed"), "{screen}");
+    h.key(KeyCode::Tab);
+    assert_eq!(focus(&h), ExportField::Export, "Tab again moves on");
+    set_path(&mut h, "~/nowhere/x");
+    h.key(KeyCode::Tab);
+    assert_eq!(focus(&h), ExportField::Export, "no such folder: nothing to complete");
+}
+
+/// The real file system: a link that leads nowhere is of unknown kind (it was shown as a file).
+#[cfg(unix)]
+#[test]
+fn a_broken_link_is_of_unknown_kind() {
+    let home = home("broken");
+    std::os::unix::fs::symlink(home.0.join("gone"), home.0.join("Downloads/dangling")).unwrap();
+    let mut h = dialog(&home);
+    h.ctrl('o');
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("dangling (kind unknown)"), "{screen}");
+}
+
+/// `n`: the new folder is made on a worker; the prompt stays until it is made, then the folder
+/// is listed and selected.
+#[test]
+fn a_new_folder_is_made_on_a_worker() {
+    let home = home("make-hang");
+    let (mut h, fake) = faked(&home);
+    let made = home.0.join("Downloads/made");
+    fake.hang.lock().unwrap().push(made.clone());
+    h.ctrl('o');
+    h.keys("n");
+    h.type_text("made");
+    press(&mut h, KeyCode::Enter);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::NameInput), "the prompt waits");
+    assert!(!made.exists(), "not made on the UI thread");
+    fake.release();
+    h.app.pump_folder_reads(WAIT);
+    assert!(made.is_dir());
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ScriptTree));
+    assert_eq!(row(&h), TreeRow::Folder("made".into()));
+}
+
+/// A folder made after its prompt was closed: the prompt open by then (another name) is left
+/// as it is, and the folder is made.
+#[test]
+fn a_late_new_folder_answer_leaves_another_prompt_alone() {
+    let home = home("make-late");
+    let (mut h, fake) = faked(&home);
+    let made = home.0.join("Downloads/x");
+    fake.hang.lock().unwrap().push(made.clone());
+    h.ctrl('o');
+    h.keys("n");
+    h.type_text("x");
+    press(&mut h, KeyCode::Enter);
+    press(&mut h, KeyCode::Esc);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ScriptTree));
+    press(&mut h, KeyCode::Char('n'));
+    h.app.pump_folder_reads(Duration::from_millis(500));
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::NameInput));
+    press(&mut h, KeyCode::Char('y'));
+    fake.release();
+    h.app.pump_folder_reads(WAIT);
+    assert!(made.is_dir());
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::NameInput), "the prompt for y stays");
+    let n = h.app.overlays.name_input().unwrap();
+    assert_eq!(n.input.text(), "y");
+    assert!(n.error.is_none(), "{:?}", n.error);
+}
+
+/// A second new folder (another name) while the first is still being made: made too, and
+/// its prompt closes once it is.
+#[test]
+fn a_second_new_folder_is_made_while_the_first_hangs() {
+    let home = home("make-second");
+    let (mut h, fake) = faked(&home);
+    let (x, y) = (home.0.join("Downloads/x"), home.0.join("Downloads/y"));
+    fake.hang.lock().unwrap().push(x.clone());
+    h.ctrl('o');
+    h.keys("n");
+    h.type_text("x");
+    press(&mut h, KeyCode::Enter);
+    press(&mut h, KeyCode::Esc);
+    press(&mut h, KeyCode::Char('n'));
+    h.app.pump_folder_reads(Duration::from_millis(500));
+    press(&mut h, KeyCode::Char('y'));
+    press(&mut h, KeyCode::Enter);
+    h.app.pump_folder_reads(Duration::from_millis(500));
+    assert!(y.is_dir() && !x.exists());
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ScriptTree));
+    assert_eq!(row(&h), TreeRow::Folder("y".into()));
+    fake.release();
+    h.app.pump_folder_reads(WAIT);
+    assert!(x.is_dir());
+}
+
+/// Listing a folder again (a folder made in it) drops the reads of what was inside it: their
+/// answers come to no row.
+#[test]
+fn a_reload_drops_the_reads_inside_it() {
+    let home = home("reload-hang");
+    std::fs::create_dir_all(home.0.join("Downloads/a/sub")).unwrap();
+    std::fs::write(home.0.join("Downloads/a/sub/deep.csv"), "x").unwrap();
+    let (mut h, fake) = faked(&home);
+    fake.hang.lock().unwrap().push(home.0.join("Downloads/a/sub"));
+    h.ctrl('o');
+    go_to(&mut h, TreeRow::Folder("a".into()));
+    h.key(KeyCode::Right);
+    go_to(&mut h, TreeRow::Folder("a/sub".into()));
+    press(&mut h, KeyCode::Right);
+    press(&mut h, KeyCode::Up);
+    assert_eq!(row(&h), TreeRow::Folder("a".into()));
+    press(&mut h, KeyCode::Char('n'));
+    h.app.pump_folder_reads(Duration::from_millis(500));
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::NameInput));
+    for c in "new".chars() {
+        press(&mut h, KeyCode::Char(c));
+    }
+    press(&mut h, KeyCode::Enter);
+    h.app.pump_folder_reads(Duration::from_millis(500));
+    assert_eq!(row(&h), TreeRow::Folder("a/new".into()), "{:?}", rows(&h));
+    fake.release();
+    h.app.pump_folder_reads(WAIT);
+    let t = h.app.overlays.script_tree().unwrap();
+    assert!(!t.entries.iter().any(|e| e.path == "a/sub/deep.csv"), "the old answer was put in: {:?}", t.entries);
+    assert!(!t.loaded.contains("a/sub"));
+}
+
+/// A typed path, or Save here, answered after the text or the selection changed: dropped.
+#[test]
+fn an_answer_after_the_user_moved_on_is_dropped() {
+    let home = home("moved");
+    let (mut h, fake) = faked(&home);
+    let before = path_text(&h);
+    fake.hang.lock().unwrap().push(home.0.join("Downloads/x.csv"));
+    fake.hang.lock().unwrap().push(home.0.join("Downloads/a"));
+    h.ctrl('o');
+    h.keys("/");
+    h.type_text("~/Downloads/x.csv");
+    press(&mut h, KeyCode::Enter);
+    assert!(h.screen(120, 40).contains("(reading…)"), "{}", h.screen(120, 40));
+    press(&mut h, KeyCode::Esc);
+    // Save here into `a`, then the selection moves on.
+    go_to_raw(&mut h, TreeRow::Folder("a".into()));
+    h.app.handle_event(Event::Key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL)));
+    press(&mut h, KeyCode::Down);
+    fake.release();
+    h.app.pump_folder_reads(WAIT);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ScriptTree), "neither answer picked anything");
+    assert_eq!(path_text(&h), before);
+}
+
+/// Select row `r` with keys straight to the app (reads still out are not waited for).
+fn go_to_raw(h: &mut Harness, r: TreeRow) {
+    for _ in 0..rows(h).len() {
+        press(h, KeyCode::Up);
+    }
+    for _ in 0..rows(h).len() {
+        if row(h) == r {
+            return;
+        }
+        press(h, KeyCode::Down);
+    }
+    panic!("no row {r:?} in {:?}", rows(h));
+}
+
+/// A folder that does not answer is read by one thread: asked again (after it took too long),
+/// the new read waits for the one still out instead of starting another.
+#[test]
+fn one_stuck_read_per_folder() {
+    let home = home("one-stuck");
+    let (mut h, fake) = faked(&home);
+    h.app.set_folder_timeout(Duration::from_millis(200));
+    let a = home.0.join("Downloads/a");
+    fake.hang.lock().unwrap().push(a.clone());
+    h.ctrl('o');
+    go_to(&mut h, TreeRow::Folder("a".into()));
+    for _ in 0..3 {
+        press(&mut h, KeyCode::Right);
+        assert_eq!(h.app.pump_folder_reads(WAIT), 1);
+        assert!(h.screen(120, 40).contains("a/ (took too long to read)"));
+    }
+    assert_eq!(fake.lists_of(&a), 1, "one read of a, not one per try");
+    fake.release();
+    // Once it returned, the next try reads again (within a limit it cannot miss).
+    h.app.set_folder_timeout(WAIT);
+    h.key(KeyCode::Right);
+    assert!(rows(&h).contains(&TreeRow::File("a/inner.csv".into())), "{:?}", rows(&h));
+    assert_eq!(fake.lists_of(&a), 2);
+}
+
+/// A late `Tab` answer, after the focus left the field: nothing is put in.
+#[test]
+fn a_late_tab_answer_after_the_focus_left_is_dropped() {
+    let home = home("tab-left");
+    let (mut h, fake) = faked(&home);
+    fake.hang.lock().unwrap().push(home.0.join("Downloads"));
+    set_path(&mut h, "~/Downloads/rep");
+    press(&mut h, KeyCode::Tab);
+    press(&mut h, KeyCode::Down);
+    assert_ne!(focus(&h), ExportField::Path);
+    fake.release();
+    h.app.pump_folder_reads(WAIT);
+    assert_eq!(path_text(&h), "~/Downloads/rep");
+}
+
+/// A read that fails inside says it could not read the folder, not that it took too long.
+#[test]
+fn a_read_that_breaks_is_not_called_slow() {
+    let home = home("broke");
+    let (mut h, fake) = faked(&home);
+    fake.broken.lock().unwrap().push(home.0.join("Downloads/a"));
+    h.ctrl('o');
+    go_to(&mut h, TreeRow::Folder("a".into()));
+    h.key(KeyCode::Right);
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("a/ (can't be read)"), "{screen}");
+    assert!(said(&h).is_some_and(|e| e.contains("could not be read")), "{:?}", said(&h));
 }

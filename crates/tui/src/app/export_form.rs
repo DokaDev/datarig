@@ -187,7 +187,7 @@ impl ExportForm {
     }
 
     /// The focus `d` fields on (around the ends).
-    fn step_focus(&mut self, d: isize) {
+    pub(super) fn step_focus(&mut self, d: isize) {
         let fields = self.fields();
         let i = fields.iter().position(|f| *f == self.focus).unwrap_or(0) as isize;
         self.focus = fields[(i + d).rem_euclid(fields.len() as isize) as usize];
