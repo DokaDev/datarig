@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/flows_sessions.rs
+expression: "h.draw(w, ht).backend()"
+---
+"╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
+"│  ＋ New connection   ││                                                      │" Hidden by multi-width symbols: [(4, " ")]
+"│▾╭ Edit connection — local-pg ──────────────────────────────────────────────╮ │"
+"│ │  Basic   SSH   Advanced                            Ctrl+N/Ctrl+P section │ │"
+"│ │                                                                          │ │"
+"│ │ SSL mode          disable ▾   ←/→ change · Enter list                    │ │"
+"│▾│ CA file                                     PEM; checks the server's ce… │ │"
+"│ │ ╭ Session preset ──────────────────────────────────────────────────────╮ │ │"
+"│▾│ │ › type to filter                                                     │ │ │"
+"│ │ │                                                                      │ │ │"
+"│ │ │ Environment's (reporting)  what its environment maps for its databa… │ │ │"
+"│▾│ │ None                       no preset, even if the environment maps … │ │ │"
+"│ │ │ broken                     2 statements                              │ │ │"
+"│ │ │ reporting                  2 statements                              │ │ │"
+"│ │ │ New session preset…                                                  │ │ │"
+"│ │ ╰───────────────────────────────── Enter pick · ↑↓ select · Esc cancel ╯ │ │"
+"│ │                                                                          │ │"
+"│ │                    Test    Save    Cancel                                │ │"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ ╰─ Tab/↑↓ move · Ctrl+N/P section · Ctrl+T test · Ctrl+S save · Esc cancel ╯ │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+"                                                                             EN "

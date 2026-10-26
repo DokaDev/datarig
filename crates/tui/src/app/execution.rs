@@ -233,6 +233,13 @@ impl App {
         if let Some(db) = self.tabs.get(id).and_then(|t| self.other_database(t)).map(str::to_string) {
             self.ensure_aux(pid, &db);
         }
+        // What the session starts with is checked again (a preset may have changed since the
+        // profile connected): nothing opens without it.
+        if let Err(e) = self.session_plan_of(&cfg) {
+            let m = self.session_error_notice(&cfg.name, &e);
+            self.tab_status(id, m);
+            return false;
+        }
         self.open_tab_session(id, &cfg);
         let Some(t) = self.tabs.get_mut(id) else { return false };
         if t.exec.session.is_none() {
@@ -501,6 +508,7 @@ impl App {
                         self.touch_profile(p);
                     }
                 }
+                EventTarget::SessionTest(_) => {}
             }
         }
         match target {
@@ -510,6 +518,7 @@ impl App {
                 self.settle_run_hints(id);
             }
             EventTarget::Aux(id) => self.aux_event(id, ev),
+            EventTarget::SessionTest(seq) => self.session_test_event(seq, ev),
         }
         // A run that started or ended may show or hide a pane (a results zoom waiting for them).
         if !self.tabs.is_empty() && !self.profiles.is_empty() {
@@ -533,6 +542,9 @@ impl App {
             EventTarget::Tab(id) => self.tabs.get(id).is_some_and(|t| t.exec.generation == generation),
             // An aux session's id is its generation; a closed one is gone.
             EventTarget::Aux(id) => id == generation && self.conns.aux_by_id_ref(id).is_some(),
+            EventTarget::SessionTest(seq) => {
+                seq == generation && self.session_test.as_ref().is_some_and(|t| t.seq == seq)
+            }
         }
     }
 
@@ -673,6 +685,8 @@ impl App {
             DbEvent::ReadOnlyPerTransaction => {
                 self.status = Some(Notice::new(Msg::DbReadOnlyPerTransaction { name }, Level::Info));
             }
+            // Only a query session has start-up statements.
+            DbEvent::SessionPerTransaction { .. } => {}
             DbEvent::ConnectFailed { error, auth } => {
                 let had_password =
                     self.conns.get(id).and_then(|c| c.connecting.as_ref()).is_none_or(|a| a.had_password);
@@ -974,7 +988,17 @@ impl App {
                     None => self.event_error_text(&ev),
                 }
             }
+            // A start-up statement failed: which one, of what.
+            DbEvent::ConnectFailed { error: DbError::SessionSql { index, statement, error }, .. } => {
+                self.session_failed_text(profile, *index, statement, &self.db_error_text(error))
+            }
             _ => self.event_error_text(&ev),
+        };
+        // Behind a pooler the start-up statements go in each transaction: said once, with those
+        // that were not sent.
+        let per_transaction = match &ev {
+            DbEvent::SessionPerTransaction { refused } => Some(self.session_per_transaction_notice(profile, refused)),
+            _ => None,
         };
         // A statement run again for the user that the allowlist refused (the server's side of
         // it, asked right before): said as a refusal, with the reason.
@@ -1198,6 +1222,12 @@ impl App {
             }
             // The server dropped the schema's startup option (a pooler): the driver sets the
             // path in each transaction instead. Said in the run's Messages.
+            DbEvent::SessionPerTransaction { .. } => {
+                if let Some(m) = &per_transaction {
+                    t.exec.run.notes.push(m.clone());
+                }
+                per_transaction.clone()
+            }
             DbEvent::ContextPerTransaction => {
                 let schema = t.context.schema.clone().unwrap_or_default();
                 let m = Notice::new(Msg::ContextPerTransaction { schema }, Level::Info);
@@ -1951,6 +1981,14 @@ impl App {
             DbError::CommitUnknown => Label::DbCommitUnknown,
             DbError::ReservedSavepoint => Label::DbReservedSavepoint,
             DbError::NotAPlainRead => Label::DbNotAPlainRead,
+            DbError::SessionSql { index, statement, error } => {
+                let m = Msg::DbSessionSql {
+                    index: (index + 1).to_string(),
+                    error: self.db_error_text(error),
+                    sql: super::runlog::excerpt(statement, 60),
+                };
+                return self.i18n.msg(&m).to_string();
+            }
             DbError::CancelNotTaken(CancelFailure::Refused) => Label::DbCancelRefused,
             // Why it could not be sent, in its own words (logged as they log it).
             DbError::CancelNotTaken(CancelFailure::NotSent(why)) => {

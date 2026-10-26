@@ -109,8 +109,10 @@
 mod classifier;
 pub mod mysql;
 pub mod repeat;
+pub mod session_set;
 
 pub use classifier::Classifier;
+pub use session_set::{NotLocal, Owner, SessionSet, SetProblem};
 
 use super::lexer::{Tok, lex, lex_backslash_strings};
 use pg_query::protobuf;

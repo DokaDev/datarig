@@ -380,7 +380,17 @@ pub(crate) struct Opened {
 /// Open a connection to `target` over a stream of `route` with `opts`, check the server's
 /// version and set the session up ([`init_sql`]); the session's read-only is checked with the
 /// server. A failure says whether it is about the password (`true`: a prompt can help).
-pub(crate) async fn open(route: &Route, opts: Opts, settings: Settings) -> Result<Opened, (DbError, bool)> {
+///
+/// A query session then runs its start-up statements (`session_sql`, each alone and in order,
+/// [`datarig_core::driver::ConnectOptions::session_sql`]) before the read-only check, which so
+/// also catches one that turned read-only off; a statement the server refuses fails the open
+/// ([`DbError::SessionSql`]).
+pub(crate) async fn open(
+    route: &Route,
+    opts: Opts,
+    settings: Settings,
+    session_sql: &[String],
+) -> Result<Opened, (DbError, bool)> {
     let stream = route.dial(DIAL_TIMEOUT).await.map_err(|e| (e, false))?;
     let (wire, conn, encryption) = login(route, stream, opts).await;
     let mut conn = conn.map_err(|e| connect_error(&e))?;
@@ -393,6 +403,14 @@ pub(crate) async fn open(route: &Route, opts: Opts, settings: Settings) -> Resul
     let set = conn.query_drop(init_sql(&server, &settings)).await;
     set.map_err(|e| (my_error(&e), false))?;
     tracked.update(&conn);
+    for (index, sql) in session_sql.iter().enumerate() {
+        if let Err(e) = conn.query_drop(sql.as_str()).await {
+            let error = DbError::SessionSql { index, statement: sql.clone(), error: Box::new(my_error(&e)) };
+            quit(conn).await;
+            return Err((error, false));
+        }
+        tracked.update(&conn);
+    }
     let read_only = settings.read_only || settings.role == SessionRole::Meta;
     // A server (or a proxy in front of it) that did not report them is asked.
     if tracked.sql_mode.is_none() || tracked.values().is_none() || (read_only && tracked.read_only.is_none()) {

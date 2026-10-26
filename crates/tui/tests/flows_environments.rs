@@ -692,6 +692,8 @@ fn the_default_rules_are_a_row_of_their_own() {
             Field::EnvSpill,
             Field::EnvIdleDisconnect,
             Field::EnvLockWait,
+            Field::EnvSessionPg,
+            Field::EnvSessionMy,
             Field::Save,
             Field::Cancel
         ]

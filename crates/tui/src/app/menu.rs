@@ -385,6 +385,28 @@ impl App {
                 _ => false,
             };
         }
+        // A profile listed under a session preset: `Enter` goes to it, nothing else.
+        if matches!(row, R::SessionUser(..)) {
+            return a == Action::Explorer(ExplorerAction::Activate);
+        }
+        // The "Session presets" section: a new preset, and a preset's edit, copy, test and
+        // delete.
+        let session = matches!(row, R::Session(_) | R::SessionError(_));
+        if session || matches!(row, R::SessionsHeader | R::SessionsEmpty) {
+            return match a {
+                Action::NewProfile | Action::NewSession => true,
+                Action::Explorer(ExplorerAction::Activate) => match row {
+                    R::SessionsEmpty | R::SessionError(_) => false,
+                    R::Session(_) => self.explorer_arrow(&explorer::Row::new(row.clone(), 1)).is_some(),
+                    _ => true,
+                },
+                Action::EditProfile
+                | Action::DuplicateProfile
+                | Action::TestConnection
+                | Action::Explorer(ExplorerAction::Delete) => session,
+                _ => false,
+            };
+        }
         let tunnels = preset || matches!(row, R::TunnelsHeader | R::TunnelsEmpty);
         // The "Tunnels" section: a new preset, and a preset's edit, copy, delete and test.
         if tunnels {
@@ -506,6 +528,13 @@ impl App {
             (Action::Explorer(ExplorerAction::Rename), R::Environment(_)) => Label::MenuRenameEnvironment,
             (Action::Explorer(ExplorerAction::Delete), R::Environment(_)) => Label::MenuDeleteEnvironment,
             (Action::Explorer(ExplorerAction::Activate), R::EnvironmentPresets) => Label::MenuAddEnvironmentPresets,
+            (Action::NewProfile, R::SessionsHeader | R::SessionsEmpty | R::Session(_) | R::SessionError(_)) => {
+                Label::MenuNewSession
+            }
+            (Action::EditProfile, R::Session(_) | R::SessionError(_)) => Label::MenuEditSession,
+            (Action::DuplicateProfile, R::Session(_) | R::SessionError(_)) => Label::MenuDuplicateSession,
+            (Action::TestConnection, R::Session(_) | R::SessionError(_)) => Label::MenuTestSession,
+            (Action::Explorer(ExplorerAction::Delete), R::Session(_) | R::SessionError(_)) => Label::MenuDeleteSession,
             _ => return None,
         };
         Some(self.i18n.label(label))

@@ -388,6 +388,11 @@ pub(crate) struct Settings {
     pub(crate) each_tx: Vec<String>,
     /// The search path is among [`Settings::each_tx`] (else only the lock wait limit is).
     pub(crate) path_per_tx: bool,
+    /// How many of [`Settings::each_tx`], at its end, are the session's start-up statements
+    /// behind a pooler (`SET LOCAL …` of a preset): left out of a transaction of the session's
+    /// own for a statement [`lock_guarded`] leaves alone (`CALL`, `DO`, `VACUUM`, …), which one
+    /// opened for the search path wraps anyway.
+    pub(crate) start_per_tx: usize,
     /// Keep prepared statements between transactions (the profile's statement cache).
     pub(crate) statement_cache: bool,
 }
@@ -415,6 +420,8 @@ struct Env<'a> {
     each_tx: &'a [String],
     /// The search path is among `each_tx` ([`Settings::path_per_tx`]).
     path_per_tx: bool,
+    /// The start-up statements at the end of `each_tx` ([`Settings::start_per_tx`]).
+    start_per_tx: usize,
     /// The name of the savepoint a count or the allowlist's question runs under inside a
     /// transaction ([`count_savepoint`]): never one of the user's own.
     savepoint: &'a str,
@@ -452,6 +459,17 @@ impl Env<'_> {
     fn begin(&self) -> Vec<String> {
         let begin = if self.read_only || self.own_read_only { BEGIN_READ_ONLY } else { "BEGIN" };
         std::iter::once(begin).chain(self.each_tx.iter().map(String::as_str)).map(str::to_string).collect()
+    }
+
+    /// [`Env::begin`] for a transaction of the session's own that `sql` runs in: without the
+    /// start-up statements when `sql` is one [`lock_guarded`] leaves alone (only the search path
+    /// wraps it), as the lock wait limit leaves it alone.
+    fn begin_for(&self, sql: &str) -> Vec<String> {
+        let mut out = self.begin();
+        if self.start_per_tx > 0 && !lock_guarded(sql) {
+            out.truncate(out.len().saturating_sub(self.start_per_tx));
+        }
+        out
     }
 
     /// What goes first in the user's new block: `SET TRANSACTION READ ONLY`, the search path.
@@ -683,6 +701,7 @@ pub(crate) async fn query_loop(
         own_read_only: false,
         each_tx: &settings.each_tx,
         path_per_tx: settings.path_per_tx,
+        start_per_tx: settings.start_per_tx,
         savepoint: count_savepoint(),
         #[cfg(test)]
         before_bind: None,
@@ -1733,7 +1752,7 @@ async fn no_rows<'a>(
     let (before, after) = if tx.block {
         (tx.take_first(env), None)
     } else if env.wrapped(sql) {
-        (env.begin(), Some("COMMIT"))
+        (env.begin_for(sql), Some("COMMIT"))
     } else {
         (Vec::new(), None)
     };
@@ -1825,7 +1844,7 @@ async fn prepare(
 /// keeps the server connection the statement is on; nothing is left there afterwards. A
 /// failure leaves the block open and aborted, for the caller to roll back.
 async fn prepare_opened(client: &Client, env: &Env<'_>, sql: &str) -> Result<Statement, tokio_postgres::Error> {
-    client.prepare_unnamed_wrapped(sql, &env.begin(), None).await
+    client.prepare_unnamed_wrapped(sql, &env.begin_for(sql), None).await
 }
 
 /// A prepared statement without rows on a session that sends statements first in each
@@ -1850,7 +1869,7 @@ async fn wrapped_no_rows<'a>(
     let txn = if tx.block {
         client.transaction_in_block_with(tx.take_first(env))
     } else {
-        client.transaction_pipelined_with(env.begin())
+        client.transaction_pipelined_with(env.begin_for(sql))
     };
     let ran = halt!(link.guard(Some(env.token), txn.bind_first_page(stmt, &[], 0)).await, Some(reply));
     let count = match ran {
@@ -1972,7 +1991,7 @@ async fn portal<'a>(
     } else if opened {
         client.transaction_opened()
     } else if env.wraps() || env.own_read_only {
-        client.transaction_pipelined_with(env.begin())
+        client.transaction_pipelined_with(env.begin_for(sql))
     } else {
         client.transaction_pipelined()
     };

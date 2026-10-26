@@ -139,6 +139,8 @@ pub enum Action {
     NewTunnel,
     /// A new environment (the environment form).
     NewEnvironment,
+    /// A new session preset (the session preset form).
+    NewSession,
     /// The profile form: its own tunnel becomes a tunnel preset when the form is saved.
     SaveAsTunnel,
     /// The settings screen.
@@ -380,19 +382,22 @@ fn explorer_profile(a: &App) -> bool {
     explorer_focused(a) && a.selected_profile().is_some()
 }
 
-/// The explorer has the focus and its cursor is on a profile, a tunnel preset or an environment.
+/// The explorer has the focus and its cursor is on a profile, a tunnel preset, an environment
+/// or a session preset.
 fn explorer_profile_or_tunnel(a: &App) -> bool {
     explorer_focused(a)
         && (a.selected_profile().is_some()
             || a.selected_tunnel().is_some()
             || a.selected_environment().is_some()
+            || a.selected_session().is_some()
             || a.default_rules_selected())
 }
 
 /// There is a profile to act on (the explorer's selection, else the active tab's), or the
-/// explorer's cursor is on a tunnel preset.
+/// explorer's cursor is on a tunnel or session preset.
 fn action_profile(a: &App) -> bool {
-    a.action_profile().is_some() || (explorer_focused(a) && a.selected_tunnel().is_some())
+    a.action_profile().is_some()
+        || (explorer_focused(a) && (a.selected_tunnel().is_some() || a.selected_session().is_some()))
 }
 
 /// The profile form's own tunnel can become a tunnel preset.
@@ -411,6 +416,11 @@ fn presets_writable(a: &App) -> bool {
 /// Environments can be made: the config file can be written.
 fn environments_writable(a: &App) -> bool {
     a.environments_shown() && a.config_writable()
+}
+
+/// Session presets can be made: there are profiles and the config file can be written.
+fn sessions_writable(a: &App) -> bool {
+    a.sessions_shown() && a.config_writable()
 }
 
 /// Saved queries can be kept (there is a data directory).
@@ -568,6 +578,7 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::DuplicateProfile, "conn.duplicate", Label::ActionConnDuplicate, explorer_profile_or_tunnel),
     act(Action::NewTunnel, "tunnel.new", Label::ActionTunnelNew, presets_writable),
     act(Action::NewEnvironment, "env.new", Label::ActionEnvNew, environments_writable),
+    act(Action::NewSession, "session.new", Label::ActionSessionNew, sessions_writable),
     act(Action::TestConnection, "conn.test", Label::ActionConnTest, action_profile),
     act(Action::Disconnect, "conn.disconnect", Label::ActionConnDisconnect, explorer_profile),
     act(Action::OpenConsole, "conn.open_console", Label::ActionConnOpenConsole, explorer_profile),

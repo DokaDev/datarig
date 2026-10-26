@@ -11,7 +11,7 @@ use crate::route::{Cancel, Route, route};
 use crate::tls::{PgTls, TlsError};
 use datarig_core::driver::{
     Canceller, Capabilities, ConnectOptions, DbCommand, DbError, DbEvent, Driver, ExplainFormat, Hierarchy, PingError,
-    PingInfo, Session, SessionRole,
+    PingInfo, Session, SessionRole, SessionStatement,
 };
 use datarig_core::fault::{Fault, FaultKind};
 use datarig_core::profile::ConnectionConfig;
@@ -347,6 +347,46 @@ async fn apply_limits(client: &Client, lock_wait: Option<Duration>, server_idle:
     }
 }
 
+/// The statements a query session starts with ([`ConnectOptions::session_sql`]): on a direct
+/// connection each sent alone, for the session, in order; behind a pooler (`direct` false: not
+/// known to be direct) none is set for the session, which would stay on a server connection
+/// other clients share. There each one's `SET LOCAL` form goes first in every transaction
+/// instead: returned (with the indexes of those that have none, which are not sent), each tried
+/// once now in a transaction of its own (one simple query of two statements, which ends with
+/// it), so a value the server refuses fails the connect here too. A statement the server refuses
+/// fails the connect ([`DbError::SessionSql`]); the connection then closes with the task.
+async fn start_up(
+    client: &Client,
+    sql: &[SessionStatement],
+    direct: bool,
+) -> Result<Option<(Vec<String>, Vec<usize>)>, DbError> {
+    let failed = |index: usize, s: &SessionStatement, e: &tokio_postgres::Error| DbError::SessionSql {
+        index,
+        statement: s.sql.clone(),
+        error: Box::new(db_error(e)),
+    };
+    if sql.is_empty() {
+        return Ok(None);
+    }
+    if direct {
+        for (i, s) in sql.iter().enumerate() {
+            client.simple_query(&s.sql).await.map_err(|e| failed(i, s, &e))?;
+        }
+        return Ok(None);
+    }
+    let (mut each, mut refused) = (Vec::new(), Vec::new());
+    for (i, s) in sql.iter().enumerate() {
+        match &s.per_transaction {
+            Some(local) => {
+                client.simple_query(&format!("{local}; SELECT 1")).await.map_err(|e| failed(i, s, &e))?;
+                each.push(local.clone());
+            }
+            None => refused.push(i),
+        }
+    }
+    Ok(Some((each, refused)))
+}
+
 /// Whether the server made the session read-only (a pooler may drop startup options).
 async fn is_read_only(client: &Client) -> bool {
     match client.simple_query("SHOW default_transaction_read_only").await {
@@ -456,12 +496,27 @@ async fn run_session(
         },
     };
     // The lock wait limit (query sessions only: the metadata session sets its own, shorter one in
-    // each read) and the server's idle limit.
+    // each read) and the server's idle limit; whether the connection is direct is asked too when
+    // a query session has start-up statements (they are set for the session only then).
     let lock_wait = opts.lock_wait.filter(|_| role == SessionRole::Query);
-    let direct = match lock_wait.is_some() || opts.server_idle.is_some() {
+    let session_sql: &[SessionStatement] = match role {
+        SessionRole::Query => &opts.session_sql,
+        SessionRole::Meta => &[],
+    };
+    let direct = match lock_wait.is_some() || opts.server_idle.is_some() || !session_sql.is_empty() {
         true => apply_limits(&client, lock_wait, opts.server_idle).await,
         false => true,
     };
+    let per_tx = match start_up(&client, session_sql, direct).await {
+        Ok(per_tx) => per_tx,
+        Err(error) => {
+            let _ = events.send(DbEvent::ConnectFailed { error, auth: false });
+            return;
+        }
+    };
+    if let Some((_, refused)) = &per_tx {
+        let _ = events.send(DbEvent::SessionPerTransaction { refused: refused.clone() });
+    }
     let _ = events.send(DbEvent::Encryption(tls.encryption()));
     let _ = events.send(DbEvent::Connected);
     if default_ignored {
@@ -485,13 +540,16 @@ async fn run_session(
             if let Ok(mut g) = canceller.0.lock() {
                 *g = Some(cancel.clone());
             }
-            // Behind a pooler the lock wait limit goes in each transaction, as the search path does.
+            // Behind a pooler the lock wait limit goes in each transaction, as the search path does,
+            // and the start-up statements after it.
             let lock = lock_wait.filter(|_| !direct).map(set_local_lock_timeout);
+            let start = per_tx.map(|(each, _)| each).unwrap_or_default();
             let settings = crate::query::Settings {
                 page_size: opts.page_size,
                 read_only: opts.read_only,
                 path_per_tx: path.is_some(),
-                each_tx: path.into_iter().chain(lock).collect(),
+                start_per_tx: start.len(),
+                each_tx: path.into_iter().chain(lock).chain(start).collect(),
                 statement_cache: opts.statement_cache,
             };
             query_loop(client, link, cancel, canceller.1.clone(), events, settings).await

@@ -203,7 +203,7 @@ The explorer: folders, connection profiles, their databases and schema trees. In
 
 ## `explorer.filter` [text]
 
-The `/` filter of the explorer: profiles (name, host, database), folders, tunnels, environments and saved queries, and under connected profiles the databases, schemas, tables, views and structure items already loaded. Inside `workspace`.
+The `/` filter of the explorer: profiles (name, host, database), folders, tunnels, environments, session presets (name, statements) and saved queries, and under connected profiles the databases, schemas, tables, views and structure items already loaded. Inside `workspace`.
 
 | Keys | Action | Description | R |
 |---|---|---|---|
@@ -668,6 +668,7 @@ Actions without a default key (the command line finds them by name).
 |---|---|
 | `tunnel.new` | New SSH tunnel (shared by profiles) |
 | `env.new` | New environment (rules, color and badge that profiles share) |
+| `session.new` | New session preset (settings a profile's sessions start with) |
 | `ui.language.en` | Change language → English |
 | `ui.language.ko` | Change language → Korean |
 | `ui.language.auto` | Change language → Auto (system locale) |

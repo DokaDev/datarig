@@ -744,3 +744,102 @@ async fn behind_a_pooler_the_lock_wait_limit_is_per_transaction_and_no_idle_limi
         }
     }
 }
+
+/// A query session with start-up statements behind the pooler: each goes first in every
+/// transaction as `SET LOCAL` (in order: a later one of the same setting wins), one with no such
+/// form (`SET ROLE`) is not sent and said so (`SessionPerTransaction`, before `Connected`), and
+/// the session still connects; another client going round the pooled server connections finds
+/// the server's settings on each (nothing stays). A value the server refuses fails the connect
+/// there too.
+#[tokio::test(flavor = "multi_thread")]
+async fn behind_a_pooler_start_up_statements_are_per_transaction() {
+    use datarig_core::driver::SessionStatement;
+    use datarig_core::profile::session::{Defaults, plan};
+    let Some(url) = pooler_url("behind_a_pooler_start_up_statements_are_per_transaction") else { return };
+    let mut other = Conn::open(&url, SessionRole::Query, false).await;
+    let DbEvent::Page { rows, .. } = other.run(1, "SHOW work_mem").await else { panic!("work_mem") };
+    let work_mem = rows[0][0].clone();
+    let DbEvent::Page { rows, .. } = other.run(2, "SHOW statement_timeout").await else { panic!("timeout") };
+    let timeout = rows[0][0].clone();
+    assert_ne!(work_mem.as_deref(), Some("9MB"));
+    let profile = ConnectionConfig {
+        session_sql: vec![
+            "SET work_mem = '7MB'".into(),
+            "SET ROLE datarig".into(),
+            "SET statement_timeout = '45s'".into(),
+            "SET work_mem TO '9MB'".into(),
+        ],
+        ..ConnectionConfig::default()
+    };
+    let sql = plan(&profile, &Default::default(), Defaults::default(), &[]).unwrap().statements();
+    assert_eq!(sql[1].per_transaction, None, "an identity has no form for one transaction");
+    let tag = format!("pools{}", std::process::id());
+    for cache in [false, true] {
+        let opts = ConnectOptions::new(PAGE, SessionRole::Query, &tag).statement_cache(cache).session_sql(sql.clone());
+        let cfg = ConnectionConfig { name: "pooler".into(), dsn: Some(url.clone()), ..ConnectionConfig::default() };
+        let (tx, mut rx) = unbounded_channel();
+        let session = PgDriver.connect(&cfg, SessionRole::Query, opts, tx);
+        // Said before `Connected`, with the one not sent.
+        let mut said = Vec::new();
+        loop {
+            match tokio::time::timeout(Duration::from_secs(10), rx.recv()).await.expect("an answer") {
+                Some(DbEvent::Connected) => break,
+                Some(DbEvent::ConnectFailed { error, .. }) => panic!("{error:?}"),
+                Some(DbEvent::SessionPerTransaction { refused }) => said.push(refused),
+                Some(_) => {}
+                None => panic!("closed"),
+            }
+        }
+        assert_eq!(said, [vec![1]], "cache {cache}");
+        let mut q = Conn { session, rx, cache_off: 0 };
+        let mut id = 1;
+        for (setting, want) in [("work_mem", "9MB"), ("statement_timeout", "45s")] {
+            id += 1;
+            let DbEvent::Page { rows, .. } = q.run(id, &format!("SHOW {setting}")).await else { panic!("{setting}") };
+            assert_eq!(rows[0][0].as_deref(), Some(want), "cache {cache}: {setting} in its transaction");
+            id += 1;
+            let read = format!("SELECT pg_catalog.current_setting('{setting}') FROM generate_series(1, 2)");
+            let DbEvent::Page { rows, .. } = q.run(id, &read).await else { panic!("{setting}") };
+            assert_eq!(rows[0][0].as_deref(), Some(want), "cache {cache}: a query sees it");
+        }
+        // Not sent: the session's user stays the login's.
+        let DbEvent::Page { rows, .. } = q.run(20, "SELECT current_user::text").await else { panic!("user") };
+        assert_eq!(rows[0][0].as_deref(), Some("datarig"));
+        let mut id = 30;
+        for _ in 0..8 {
+            id += 1;
+            let DbEvent::Page { rows, .. } = other.run(id, "SHOW work_mem").await else { panic!() };
+            assert_eq!(rows[0][0], work_mem, "cache {cache}: nothing left on the server connection");
+            id += 1;
+            let DbEvent::Page { rows, .. } = other.run(id, "SHOW statement_timeout").await else { panic!() };
+            assert_eq!(rows[0][0], timeout, "cache {cache}: nothing left on the server connection");
+        }
+    }
+    // The server checks each `SET LOCAL` once at connect: a value it refuses fails it.
+    let bad = vec![SessionStatement {
+        sql: "SET work_mem = 'lots'".into(),
+        per_transaction: Some("SET LOCAL work_mem = 'lots'".into()),
+    }];
+    let cfg = ConnectionConfig { name: "pooler".into(), dsn: Some(url.clone()), ..ConnectionConfig::default() };
+    let (tx, mut rx) = unbounded_channel();
+    let _s = PgDriver.connect(
+        &cfg,
+        SessionRole::Query,
+        ConnectOptions::new(PAGE, SessionRole::Query, &tag).session_sql(bad),
+        tx,
+    );
+    loop {
+        match tokio::time::timeout(Duration::from_secs(10), rx.recv()).await.expect("an answer") {
+            Some(DbEvent::ConnectFailed { error: DbError::SessionSql { index: 0, .. }, .. }) => break,
+            Some(DbEvent::Connected) => panic!("connected with a refused value"),
+            Some(DbEvent::ConnectFailed { error, .. }) => panic!("{error:?}"),
+            Some(_) => {}
+            None => panic!("closed"),
+        }
+    }
+    // And still nothing on the pooled connections.
+    for id in 60..64 {
+        let DbEvent::Page { rows, .. } = other.run(id, "SHOW work_mem").await else { panic!() };
+        assert_eq!(rows[0][0], work_mem);
+    }
+}

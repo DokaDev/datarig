@@ -11,8 +11,13 @@
 //! environment's has the default rules, each environment (its color, badge and rules), the
 //! name the profile has when no environment has it, and while there is no environment the
 //! presets (`dev`, `test`, `staging`, `prod`): a preset picked is written with the profile.
+//!
+//! A profile's session preset list has its environment's (named), none (even when its
+//! environment maps one), and the presets of its database; an environment's has none and the
+//! presets of that field's database. Each ends with "New session preset…", whose form comes back
+//! with the new preset picked.
 
-use super::profiles::{DRIVERS, EnvChoice, Field, FormKind, SshChoice, source_choice, ssh_auth_choice};
+use super::profiles::{DRIVERS, EnvChoice, Field, FormKind, SessionChoice, SshChoice, source_choice, ssh_auth_choice};
 use super::*;
 use crate::theme;
 use crate::widgets::list_picker::{Entry, ListPicker, Outcome};
@@ -33,6 +38,10 @@ pub enum Picker {
     Choice { form: (FormKind, ProfileId), field: Field, list: ListPicker<usize> },
     /// A choice field of the export dialog: the value's index in its list.
     Export { field: super::export_form::ExportField, list: ListPicker<usize> },
+    /// The connected profile a session preset's test runs on.
+    SessionTest { preset: Box<datarig_core::profile::session::SessionPreset>, list: ListPicker<ProfileId> },
+    /// A session preset field of the form `form` names (a profile's, an environment's).
+    Session { form: (FormKind, ProfileId), field: Field, list: ListPicker<SessionChoice> },
 }
 
 /// `$body` with the list of whichever picker `$p` is, as `$list`.
@@ -43,6 +52,8 @@ macro_rules! with_list {
             Picker::Environment { $list, .. } => $body,
             Picker::Choice { $list, .. } => $body,
             Picker::Export { $list, .. } => $body,
+            Picker::SessionTest { $list, .. } => $body,
+            Picker::Session { $list, .. } => $body,
         }
     };
 }
@@ -79,6 +90,8 @@ impl Picker {
             Picker::Environment { .. } => Label::FormFieldEnvironment,
             Picker::Choice { field, .. } => field.label(),
             Picker::Export { field, .. } => field.label(),
+            Picker::SessionTest { .. } => Label::TestSessionPick,
+            Picker::Session { field, .. } => field.label(),
         }
     }
 
@@ -169,6 +182,14 @@ impl App {
                 let out = list.key(&key, repeat);
                 self.export_choice_picked(field, out);
             }
+            Some(Picker::SessionTest { list, .. }) => {
+                let out = list.key(&key, repeat);
+                self.session_test_picked(out);
+            }
+            Some(&mut Picker::Session { form, field, ref mut list }) => {
+                let out = list.key(&key, repeat);
+                self.session_picked(form, field, out);
+            }
             None => {}
         }
     }
@@ -200,7 +221,123 @@ impl App {
                 let out = list.mouse(&m, now);
                 self.export_choice_picked(field, out);
             }
+            Some(Picker::SessionTest { list, .. }) => {
+                let out = list.mouse(&m, now);
+                self.session_test_picked(out);
+            }
+            Some(&mut Picker::Session { form, field, ref mut list }) => {
+                let out = list.mouse(&m, now);
+                self.session_picked(form, field, out);
+            }
             None => {}
+        }
+    }
+
+    /// `Enter` on a session preset field (a profile's, an environment's): the list of what it can
+    /// be, the current one selected.
+    pub(super) fn open_session_picker(&mut self, field: Field) {
+        let Some(f) = self.overlays.form() else { return };
+        let i18n = &self.i18n;
+        let dbms = f.session_field_dbms(field);
+        // What the profile's environment maps for its database (the one picked in the form).
+        let mapped = || {
+            let rules = match f.picked_environment() {
+                Some(e) => e.policy.session.clone(),
+                None => self.policies.default_rules().session.clone(),
+            };
+            dbms.and_then(|d| rules.get(d).map(str::to_string))
+        };
+        let statements = |n: usize| match n {
+            0 => i18n.label(Label::ExplorerSessionNone).to_string(),
+            n => i18n.msg(&Msg::ExplorerSessionStatements { count: n as u64 }).to_string(),
+        };
+        let entries = f
+            .session_choices(field)
+            .into_iter()
+            .map(|c| {
+                let (label, hint) = match &c {
+                    SessionChoice::Environment => {
+                        let label = match mapped() {
+                            Some(name) => i18n.msg(&Msg::PickerSessionEnvironment { name }).to_string(),
+                            None => i18n.label(Label::PickerSessionEnvironmentNone).to_string(),
+                        };
+                        (label, i18n.label(Label::PickerSessionEnvironmentHint).to_string())
+                    }
+                    SessionChoice::Off => {
+                        let hint = match field {
+                            Field::EnvSessionPg | Field::EnvSessionMy => Label::PickerSessionEnvNoneHint,
+                            _ => Label::PickerSessionNoneHint,
+                        };
+                        (i18n.label(Label::PickerSessionNone).to_string(), i18n.label(hint).to_string())
+                    }
+                    SessionChoice::Named(name) => match f.session_presets.iter().find(|p| p.name == *name) {
+                        Some(p) => (name.clone(), statements(p.sql.len())),
+                        None => (i18n.msg(&Msg::FormSessionMissing { name: name.clone() }).to_string(), String::new()),
+                    },
+                };
+                Entry::new(c, label, hint)
+            })
+            .collect();
+        let current = match field {
+            Field::EnvSessionPg | Field::EnvSessionMy => dbms.map(|d| f.env_session_choice(d)),
+            _ => Some(f.session_choice()),
+        };
+        let new = self.config_writable().then(|| i18n.label(Label::PickerSessionNew).to_string());
+        // Wide enough for "Environment's (<name>)" next to its hint.
+        let list = ListPicker::new(entries, new, current.as_ref()).with_max_width(72);
+        let form = (f.kind, f.profile_id());
+        self.overlays.push(Overlay::Picker(Picker::Session { form, field, list }));
+    }
+
+    /// What the session preset list of `field` of the form `form` names did: a pick sets that
+    /// field; "New session preset…" puts the form aside under a new preset's form (for that
+    /// field's database), which picks the preset once it is saved. Either only while that form is
+    /// the dialog on top once the list closed.
+    fn session_picked(&mut self, form: (FormKind, ProfileId), field: Field, out: Outcome<SessionChoice>) {
+        if out == Outcome::Pending {
+            return;
+        }
+        self.overlays.close(OverlayKind::Picker);
+        let on_top = matches!(self.overlays.top(), Some(Overlay::ProfileForm(f)) if (f.kind, f.profile_id()) == form);
+        if !on_top {
+            return;
+        }
+        match out {
+            Outcome::Picked(c) => {
+                if let Some(f) = self.overlays.form_mut() {
+                    f.set_session_choice(field, c);
+                }
+            }
+            Outcome::New => {
+                let Some(mut back) = self.overlays.take_form() else { return };
+                self.cancel_test();
+                back.parked_test = self.conn_test.take();
+                back.session_new_for = Some(field);
+                let dbms = back.session_field_dbms(field);
+                self.open_session_form(None, false);
+                if let Some(f) = self.overlays.form_mut() {
+                    if let Some(d) = dbms {
+                        f.session_dbms = d;
+                    }
+                    f.back_to = Some(back);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// What the list of a session preset's test did: a pick runs the test on that profile.
+    fn session_test_picked(&mut self, out: Outcome<ProfileId>) {
+        if out == Outcome::Pending {
+            return;
+        }
+        let preset = match self.overlays.picker_mut() {
+            Some(Picker::SessionTest { preset, .. }) => (**preset).clone(),
+            _ => return,
+        };
+        self.overlays.close(OverlayKind::Picker);
+        if let Outcome::Picked(pid) = out {
+            self.run_session_test(preset, pid);
         }
     }
 
@@ -429,6 +566,12 @@ impl App {
                     })
                     .collect();
                 (entries, SshAuth::ALL.iter().position(|a| *a == f.ssh_auth))
+            }
+            Field::SessionDbms => {
+                use datarig_core::profile::session::Dbms;
+                let entries =
+                    Dbms::ALL.iter().enumerate().map(|(i, d)| entry(i, d.display().to_string(), None, true)).collect();
+                (entries, Dbms::ALL.iter().position(|d| *d == f.session_dbms))
             }
             _ => return,
         };

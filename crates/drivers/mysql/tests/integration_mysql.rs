@@ -4472,3 +4472,85 @@ async fn the_servers_idle_limit_ends_an_idle_session() {
     let DbEvent::Lost { error: DbError::IdleSessionTimeout(m) } = lost else { panic!("{lost:?}") };
     assert!(m.starts_with("ERROR 4031 "), "{m}");
 }
+
+// ── session presets: what a query session starts with ──────────
+
+/// A session of `role` for test `test` whose options start it with `sql`: connected with its
+/// first `Language` (what its text is read in once its statements ran), or why not (no
+/// `Connected` came before the failure).
+async fn starting(
+    url: &str,
+    role: SessionRole,
+    test: &str,
+    read_only: bool,
+    sql: &[&str],
+) -> Result<(Conn, Option<Language>), DbError> {
+    use datarig_core::driver::SessionStatement;
+    let sql = sql.iter().map(|s| SessionStatement { sql: s.to_string(), per_transaction: None }).collect();
+    let o = opts(role, test).read_only(read_only).session_sql(sql);
+    let (tx, mut rx) = unbounded_channel();
+    let session = MyDriver.connect(&profile(url), role, o, tx);
+    let mut connected = false;
+    loop {
+        match tokio::time::timeout(Duration::from_secs(15), rx.recv()).await.expect("an answer") {
+            Some(DbEvent::Connected) => connected = true,
+            Some(DbEvent::Language(l)) if connected => return Ok((Conn { session, rx }, Some(l))),
+            Some(DbEvent::ConnectFailed { error, .. }) => {
+                assert!(!connected, "a failure after Connected: {error:?}");
+                return Err(error);
+            }
+            Some(_) => {}
+            None => panic!("closed"),
+        }
+    }
+}
+
+/// A query session starts with its statements in order (a later one of the same setting wins),
+/// and what it is read in follows them (`sql_mode` with `ANSI_QUOTES`); a metadata session gets
+/// none of them.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_query_session_starts_with_its_session_statements() {
+    let test = "a_query_session_starts_with_its_session_statements";
+    let Some(url) = my_url(test) else { return };
+    let sql = [
+        "SET SESSION group_concat_max_len = 4096",
+        "SET SESSION sql_mode = CONCAT(@@sql_mode, ',ANSI_QUOTES')",
+        "SET @@session.group_concat_max_len = 8192",
+    ];
+    let (mut c, lang) = starting(&url, SessionRole::Query, test, false, &sql).await.expect("connects");
+    let Some(Language::Sql(Dialect::MySql(mode))) = lang else { panic!("{lang:?}") };
+    assert!(mode.ansi_quotes, "the classifier reads the session's mode");
+    let ev = c.ok(1, "SELECT @@session.group_concat_max_len, @@session.sql_mode").await;
+    let DbEvent::Page { rows, .. } = ev else { panic!("{ev:?}") };
+    let cell = |i: usize| rows[0][i].clone().unwrap_or_default();
+    assert_eq!(cell(0), "8192", "the later one");
+    assert!(cell(1).contains("ANSI_QUOTES"), "{}", cell(1));
+    // The metadata session never gets them.
+    let (_m, lang) = starting(&url, SessionRole::Meta, test, false, &sql).await.expect("connects");
+    let Some(Language::Sql(Dialect::MySql(mode))) = lang else { panic!("{lang:?}") };
+    assert!(!mode.ansi_quotes, "the account's own mode");
+}
+
+/// A start-up statement the server refuses fails the connect (which one, the server's words);
+/// a read-only session is checked after them, so one that turned read-only off (which the app
+/// never sends) fails it too.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failing_start_up_statement_fails_the_connect() {
+    let test = "a_failing_start_up_statement_fails_the_connect";
+    let Some(url) = my_url(test) else { return };
+    let sql = ["SET SESSION group_concat_max_len = 4096", "SET SESSION no_such_variable = 1"];
+    match starting(&url, SessionRole::Query, test, false, &sql).await {
+        Err(DbError::SessionSql { index: 1, statement, error }) => {
+            assert_eq!(statement, sql[1]);
+            assert!(error.raw().contains("no_such_variable"), "{error:?}");
+        }
+        Err(e) => panic!("{e:?}"),
+        Ok(_) => panic!("connected"),
+    }
+    let off = ["SET SESSION transaction_read_only = 0"];
+    match starting(&url, SessionRole::Query, test, true, &off).await {
+        Err(DbError::Connection(f)) => assert!(f.detail.contains("read-only"), "{f:?}"),
+        Err(e) => panic!("{e:?}"),
+        Ok(_) => panic!("a read-only session connected read-write"),
+    }
+}

@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/flows_sessions.rs
+expression: "h.draw(w, ht).backend()"
+---
+"╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
+"│  ＋ New connection   ││                                                      │" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 3       ││  No open tabs                                        │"
+"│  ▸ ○   local-pg      ││  Pick a connection in the explorer, or press         │"
+"│  ▸ ○   v6            ││  Ctrl+O.                                             │"
+"│  ▸ ○   分析-replica  ││                                                      │" Hidden by multi-width symbols: [(10, " "), (12, " ")]
+"│▾ Tunnels 0           ││  Enter      Connect and open a console               │"
+"│    n here makes an S…││  Ctrl+O     Quick connect                            │"
+"│▾ Environments 1      ││  Ctrl+T     New console tab                          │"
+"│  ▸ ○ Default rules (…││  Space t u  Reopen a closed tab                      │"
+"│  ▸ ○ prod  standard …││  n          New connection                           │"
+"│▾ Session presets 4   ││  F1         Keyboard help                            │"
+"│    ◇ broken  Postgre…││  :          Commands                                 │"
+"│      statement 2: SE…││                                                      │"
+"│    ◇ fk_off  MySQL · ││                                                      │"
+"│  ▸ ◇ my_ro  MySQL · …││                                                      │"
+"│  ▾ ◇ reporting  Post…││                                                      │"
+"│      ○   local-pg    ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" ◇ broken  PostgreSQL · 2 statements     │ Enter open · : commands · F1 help EN "

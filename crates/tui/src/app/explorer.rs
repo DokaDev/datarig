@@ -6,7 +6,10 @@
 //! its shared connection and, opened, the profiles connected through it now; the same keys
 //! make, edit, copy, delete and test them. The "Environments" section below it lists the environments, each
 //! with its color, badge and rules and, opened, the profiles that name it; the same keys make,
-//! edit, copy, rename and delete them, and while there is none a row adds the presets.
+//! edit, copy, rename and delete them, and while there is none a row adds the presets. The
+//! "Session presets" section below it lists the session presets, each with its database, how
+//! many statements and profiles it has and, opened, the profiles that use it; the same keys make,
+//! edit, copy, test and delete them.
 //!
 //! The rows are built from the profiles, the folders and the connections whenever they are
 //! needed ([`App::explorer_rows`]). The cursor remembers its row, not its index, so it stays on
@@ -72,6 +75,16 @@ pub enum RowKind {
     DefaultRulesUser(ProfileId),
     /// The section is open and has no environment: `Enter` adds the presets.
     EnvironmentPresets,
+    /// "Session presets", the head of the session presets' section.
+    SessionsHeader,
+    /// A session preset.
+    Session(datarig_core::profile::session::SessionPresetId),
+    /// The first of its statements that is not allowed, under it.
+    SessionError(datarig_core::profile::session::SessionPresetId),
+    /// A profile that uses the preset (its own or its environment's), under it (opened).
+    SessionUser(datarig_core::profile::session::SessionPresetId, ProfileId),
+    /// The section is open and has no preset: how to make one.
+    SessionsEmpty,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -261,6 +274,7 @@ impl App {
         }
         self.push_tunnels(&mut rows);
         self.push_environments(&mut rows);
+        self.push_sessions(&mut rows);
         self.push_scripts(&mut rows);
         rows
     }
@@ -685,6 +699,11 @@ impl App {
                 .environment(*id)
                 .filter(|e| !self.environment_users(&e.name).is_empty())
                 .map(|_| self.environments_open.contains(id)),
+            RowKind::SessionsHeader => Some(self.sessions_expanded || self.filtering_on()),
+            RowKind::Session(id) => self
+                .session_preset(*id)
+                .filter(|p| !self.session_users(&p.name).is_empty())
+                .map(|_| self.sessions_open.contains(id)),
             _ => None,
         }
     }
@@ -820,7 +839,21 @@ impl App {
                     }
                 }
             }
+            RowKind::SessionsHeader => self.sessions_expanded = want.unwrap_or(!self.sessions_expanded),
+            RowKind::Session(id) => {
+                let open = self.sessions_open.contains(id);
+                if self.row_expanded(row).is_some() && want.unwrap_or(!open) != open {
+                    if open {
+                        self.sessions_open.remove(id);
+                    } else {
+                        self.sessions_open.insert(*id);
+                    }
+                }
+            }
             RowKind::NewConnection
+            | RowKind::SessionError(_)
+            | RowKind::SessionUser(..)
+            | RowKind::SessionsEmpty
             | RowKind::Script(_)
             | RowKind::ScriptsEmpty
             | RowKind::TunnelError(_)
@@ -928,6 +961,7 @@ impl App {
                 RowKind::Profile(id) => self.request_delete_profile(id),
                 RowKind::Tunnel(id) | RowKind::TunnelError(id) => self.request_delete_tunnel(id),
                 RowKind::Environment(id) => self.request_delete_environment(id),
+                RowKind::Session(id) | RowKind::SessionError(id) => self.request_delete_session(id),
                 RowKind::DefaultRules => self.default_rules_fixed(),
                 RowKind::Folder(f) => self.request_delete_folder(f),
                 RowKind::Script(p) => self.request_delete_script(p),
@@ -1063,9 +1097,16 @@ impl App {
                 let p = p.clone();
                 self.open_script(&p);
             }
-            RowKind::ScriptsEmpty | RowKind::TunnelsEmpty | RowKind::TunnelError(_) => {}
+            RowKind::ScriptsEmpty
+            | RowKind::TunnelsEmpty
+            | RowKind::TunnelError(_)
+            | RowKind::SessionsEmpty
+            | RowKind::SessionError(_) => {}
             // The profile's own row, in the connections above.
-            RowKind::TunnelUser(_, id) | RowKind::EnvironmentUser(_, id) | RowKind::DefaultRulesUser(id) => {
+            RowKind::TunnelUser(_, id)
+            | RowKind::EnvironmentUser(_, id)
+            | RowKind::DefaultRulesUser(id)
+            | RowKind::SessionUser(_, id) => {
                 let id = *id;
                 self.reveal_profile(id);
             }

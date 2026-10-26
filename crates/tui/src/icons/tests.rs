@@ -74,13 +74,16 @@ fn the_tunnel_mark_is_pinned_and_has_a_text_form_without_icons() {
 #[test]
 fn the_explorer_section_and_read_only_glyphs_are_pinned() {
     // Nerd Fonts 3.4.0 glyphnames.json: "md-server_network" f048d, "md-tunnel" f183d,
-    // "md-script_text" f0bc2, "md-square_rounded" f14fb, "md-lock" f033e.
+    // "md-script_text" f0bc2, "md-square_rounded" f14fb, "md-lock" f033e, "md-tune" f062e,
+    // "md-tune_variant" f1542.
     assert_eq!(CONNECTIONS, "\u{f048d}");
+    assert_eq!(SESSIONS, "\u{f062e}");
+    assert_eq!(SESSION, "\u{f1542}");
     assert_eq!(TUNNELS, "\u{f183d}");
     assert_eq!(SCRIPTS, "\u{f0bc2}");
     assert_eq!(ENVIRONMENT_CHIP, "\u{f14fb}");
     assert_eq!(READ_ONLY, "\u{f033e}");
-    for g in [CONNECTIONS, TUNNELS, SCRIPTS, ENVIRONMENT_CHIP, READ_ONLY, TUNNEL] {
+    for g in [CONNECTIONS, TUNNELS, SCRIPTS, ENVIRONMENT_CHIP, READ_ONLY, TUNNEL, SESSIONS, SESSION] {
         let c = g.chars().next().unwrap();
         assert!(('\u{f0001}'..='\u{f1af0}').contains(&c), "{g:?}: Material Design range");
         assert_eq!(width(g), 1, "{g:?}");

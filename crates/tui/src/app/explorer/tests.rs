@@ -42,6 +42,11 @@ fn rows(a: &App) -> Vec<String> {
                 RowKind::EnvironmentPresets => "(add presets)".to_string(),
                 RowKind::DefaultRules => "(default rules)".to_string(),
                 RowKind::DefaultRulesUser(id) => format!("@{}", a.profile(id).unwrap().name),
+                RowKind::SessionsHeader => "[session presets]".to_string(),
+                RowKind::Session(id) => format!("${}", a.session_preset(id).unwrap().name),
+                RowKind::SessionError(_) => "!".to_string(),
+                RowKind::SessionUser(_, id) => format!("@{}", a.profile(id).unwrap().name),
+                RowKind::SessionsEmpty => "(no session presets)".to_string(),
             };
             assert!(r.depth >= usize::from(inside), "a Connections row below its head");
             format!("{}{t}", "  ".repeat(r.depth.saturating_sub(usize::from(inside))))

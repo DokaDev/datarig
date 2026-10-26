@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/flows_sessions.rs
+expression: "h.draw(80, 24).backend()"
+---
+"╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
+"│  ＋ New connection   ││                                                      │" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 3       ││  No open tabs                                        │"
+"│  ▸ ○   local-pg      ││  Pick a connection in the explorer, or press         │"
+"│ ╭ New session preset ──────────────────────────────────────────────────────╮ │"
+"│ │  Session preset       profiles that pick it start their sessions with it │ │"
+"│▾│                                                                          │ │"
+"│ │ Name        none                            reserved: it means no preset │ │"
+"│▾│ Database    PostgreSQL ▾   ←/→ change · Enter list                       │ │"
+"│ │ Statements  SET work_mem = '1MB'; RESET work_mem                         │ │"
+"│ │             statement 2: only SET of the session's own settings          │ │"
+"│▾│                                                                          │ │"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ │              Test    Save    Cancel                                      │ │"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ ╰──────────────────── Tab/↑↓ move · Ctrl+T test · Ctrl+S save · Esc cancel ╯ │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+"                                                                             EN "

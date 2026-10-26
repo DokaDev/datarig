@@ -195,7 +195,13 @@ async fn run_session(
     };
     // A server that accepts TCP but never answers would otherwise keep this task alive forever
     // (the UI gives up earlier).
-    let opened = match tokio::time::timeout(CONNECT_GUARD, session::open(&route, my_opts.clone(), settings)).await {
+    // What a query session starts with (a metadata session never gets it).
+    let session_sql: Vec<String> = match role {
+        SessionRole::Query => opts.session_sql.iter().map(|s| s.sql.clone()).collect(),
+        SessionRole::Meta => Vec::new(),
+    };
+    let open = session::open(&route, my_opts.clone(), settings, &session_sql);
+    let opened = match tokio::time::timeout(CONNECT_GUARD, open).await {
         Ok(Ok(opened)) => opened,
         Ok(Err((error, auth))) => {
             let _ = events.send(DbEvent::ConnectFailed { error, auth });

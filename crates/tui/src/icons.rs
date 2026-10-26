@@ -91,6 +91,12 @@ pub const CONNECTIONS: &str = "\u{f048d}";
 /// The head of the explorer's "Tunnels" section (nf-md-tunnel).
 pub const TUNNELS: &str = "\u{f183d}";
 
+/// The head of the explorer's "Session presets" section (nf-md-tune).
+pub const SESSIONS: &str = "\u{f062e}";
+
+/// A session preset of the explorer (nf-md-tune_variant).
+pub const SESSION: &str = "\u{f1542}";
+
 /// The head of the explorer's "Saved queries" section (nf-md-script_text).
 pub const SCRIPTS: &str = "\u{f0bc2}";
 

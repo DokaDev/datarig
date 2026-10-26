@@ -5986,3 +5986,98 @@ async fn the_servers_idle_limit_ends_an_idle_session() {
     tokio::time::sleep(Duration::from_secs(2)).await;
     assert_eq!(plain.value(1, "SHOW idle_session_timeout").await, "0", "the server's");
 }
+
+// ── session presets: what a query session starts with ──────────
+
+/// The statements `profile` (its own `session_sql`, a preset it names) starts its query sessions
+/// with, as the app makes them (`profile::session::plan`).
+fn start_up_of(
+    profile: &ConnectionConfig,
+    presets: &[datarig_core::profile::session::SessionPreset],
+) -> Vec<datarig_core::driver::SessionStatement> {
+    use datarig_core::profile::session::{Defaults, plan};
+    plan(profile, &Default::default(), Defaults::default(), presets).expect("a valid plan").statements()
+}
+
+/// A session of `role` that starts with `sql` (and lock wait limit `lock_wait`): connected, or
+/// why not (no `Connected` came before the failure).
+async fn starting(
+    url: &str,
+    role: SessionRole,
+    tag: &str,
+    sql: Vec<datarig_core::driver::SessionStatement>,
+    lock_wait: Option<Duration>,
+) -> Result<Conn, DbError> {
+    let cfg = ConnectionConfig { name: "it".into(), dsn: Some(url.to_string()), ..ConnectionConfig::test_db() };
+    let (tx, mut rx) = unbounded_channel();
+    let o = ConnectOptions::new(PAGE, role, tag).dialer(dialer()).lock_wait(lock_wait).session_sql(sql);
+    let session = PgDriver.connect(&cfg, role, o, tx);
+    loop {
+        match tokio::time::timeout(Duration::from_secs(10), rx.recv()).await {
+            Ok(Some(DbEvent::Connected)) => return Ok(Conn { session, rx }),
+            Ok(Some(DbEvent::ConnectFailed { error, .. })) => return Err(error),
+            Ok(Some(_)) => {}
+            Ok(None) => panic!("event channel closed"),
+            Err(_) => panic!("timed out connecting"),
+        }
+    }
+}
+
+/// On a direct connection the preset's statements, then the profile's, are the session's own, in
+/// that order (a later one of the same setting wins), after the app's lock wait limit (a setting
+/// of its own, which they leave as it is); a metadata session gets none of them.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_query_session_starts_with_its_preset_then_its_own_statements() {
+    use datarig_core::profile::session::{Dbms, SessionPreset, SessionRef};
+    let Some(url) = pg_url("a_query_session_starts_with_its_preset_then_its_own_statements") else { return };
+    let tag = format!("sess{}", std::process::id());
+    let preset = SessionPreset::new(
+        "reporting",
+        Dbms::Postgres,
+        vec!["SET statement_timeout = '45s'".into(), "SET work_mem = '7MB'".into()],
+    );
+    let profile = ConnectionConfig {
+        session: SessionRef::Named("reporting".into()),
+        session_sql: vec!["SET work_mem = '9MB'".into()],
+        ..ConnectionConfig::test_db()
+    };
+    let sql = start_up_of(&profile, std::slice::from_ref(&preset));
+    assert_eq!(sql.len(), 3);
+    let mut q =
+        starting(&url, SessionRole::Query, &tag, sql.clone(), Some(Duration::from_secs(2))).await.expect("connects");
+    assert_eq!(q.value(1, "SHOW statement_timeout").await, "45s", "the preset's");
+    assert_eq!(q.value(2, "SHOW work_mem").await, "9MB", "the profile's, after the preset's");
+    assert_eq!(q.value(3, "SHOW lock_timeout").await, "2s", "the app's limit stays");
+    // Each was the session's own setting (not a transaction's): the source says so.
+    assert_eq!(q.value(4, "SELECT source FROM pg_settings WHERE name = 'work_mem'").await, "session");
+    // A metadata session never starts with them.
+    let meta = starting(&url, SessionRole::Meta, &tag, sql, None).await;
+    assert!(meta.is_ok(), "the metadata session connects");
+    let mut plain = starting(&url, SessionRole::Query, &format!("{tag}p"), Vec::new(), None).await.unwrap();
+    assert_eq!(plain.value(1, "SHOW statement_timeout").await, "0", "the server's");
+}
+
+/// A start-up statement the server refuses fails the connect: which one and the server's words,
+/// and no `Connected` before it (the session never runs without it).
+#[tokio::test(flavor = "multi_thread")]
+async fn a_failing_start_up_statement_fails_the_connect() {
+    use datarig_core::driver::SessionStatement;
+    let Some(url) = pg_url("a_failing_start_up_statement_fails_the_connect") else { return };
+    let tag = format!("sessf{}", std::process::id());
+    let st = |sql: &str| SessionStatement { sql: sql.into(), per_transaction: None };
+    let sql = vec![st("SET work_mem = '7MB'"), st("SET work_mem = 'lots'"), st("SET statement_timeout = '1s'")];
+    match starting(&url, SessionRole::Query, &tag, sql, None).await {
+        Err(DbError::SessionSql { index: 1, statement, error }) => {
+            assert_eq!(statement, "SET work_mem = 'lots'");
+            assert!(matches!(*error, DbError::Server(ref m) if m.contains("work_mem")), "{error:?}");
+        }
+        Err(e) => panic!("{e:?}"),
+        Ok(_) => panic!("connected"),
+    }
+    // A setting the server does not know is refused the same way.
+    let unknown = vec![st("SET no_such_setting = 1")];
+    assert!(matches!(
+        starting(&url, SessionRole::Query, &tag, unknown, None).await,
+        Err(DbError::SessionSql { index: 0, .. })
+    ));
+}

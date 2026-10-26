@@ -65,6 +65,7 @@ pub mod runlog;
 pub mod safety;
 mod script_ops;
 pub mod script_tree;
+pub mod sessions;
 pub mod settings;
 pub mod tab_drag;
 pub mod tab_list;
@@ -330,6 +331,8 @@ pub enum TestState {
     /// A tunnel preset's test: what it reached through the tunnel, each address with its time
     /// or why not (in words).
     Reached(Vec<(String, Result<Duration, String>)>),
+    /// A session preset's test: what its session said, at this level.
+    Applied(Msg, Level),
 }
 
 pub struct ConnTest {
@@ -401,6 +404,8 @@ pub enum EventTarget {
     Tab(TabId),
     /// A profile's metadata session in another database, by its id.
     Aux(u64),
+    /// The throwaway query session of a session preset's test, by the test's serial.
+    SessionTest(u64),
 }
 
 /// Where the app reads the time for its timers and countdowns (tests use a fake one).
@@ -533,6 +538,8 @@ pub struct App {
     pub profiles: Vec<ConnectionConfig>,
     /// The tunnel presets (`[tunnels.<name>]`), by name.
     pub presets: Vec<datarig_core::profile::tunnel::TunnelPreset>,
+    /// The session presets (`[sessions.<name>]`), by name.
+    pub session_presets: Vec<datarig_core::profile::session::SessionPreset>,
     /// The presets' shared SSH connections.
     pub shared: tunnel::SharedTunnels,
     pub status: Option<Notice>,
@@ -694,6 +701,14 @@ pub struct App {
     pub default_rules_open: bool,
     /// The environments whose profiles the explorer lists under them.
     pub environments_open: std::collections::BTreeSet<datarig_core::policy::EnvironmentId>,
+    /// The explorer's "Session presets" section is open.
+    pub sessions_expanded: bool,
+    /// The session presets whose profiles the explorer lists under them.
+    pub sessions_open: std::collections::BTreeSet<datarig_core::profile::session::SessionPresetId>,
+    /// What each session preset's statements are, checked once each time the presets change.
+    pub(crate) session_checks: sessions::Checks,
+    /// The session of a session preset's test that runs, with what it tests.
+    pub(crate) session_test: Option<sessions::SessionTest>,
     /// The profile form's tunnel secret, applied once its save went through.
     pending_tunnel_secret: Option<tunnel::FormSecret>,
     /// Host key questions of tunnels, the first one shown.
@@ -839,6 +854,7 @@ fn test_msg(i18n: &I18n, t: &ConnTest) -> Notice {
             None => Notice::new(Msg::TestReached { targets: reached_targets(v) }, Level::Success),
             Some(error) => Notice::new(Msg::TestFailed { error }, Level::Error),
         },
+        TestState::Applied(m, level) => Notice::new(m.clone(), *level),
     }
 }
 
@@ -931,6 +947,7 @@ impl App {
             explorer: Explorer::default(),
             profiles: cfg.connections.clone(),
             presets: cfg.tunnels.clone(),
+            session_presets: cfg.sessions.clone(),
             shared: tunnel::SharedTunnels::default(),
             status: status.clone(),
             transient: None,
@@ -1012,6 +1029,10 @@ impl App {
             environments_expanded: true,
             default_rules_open: false,
             environments_open: std::collections::BTreeSet::new(),
+            sessions_expanded: true,
+            sessions_open: std::collections::BTreeSet::new(),
+            session_checks: sessions::Checks::of(&cfg.sessions),
+            session_test: None,
             pending_tunnel_secret: None,
             host_keys: VecDeque::new(),
             secret_waits: VecDeque::new(),
@@ -2012,6 +2033,11 @@ pub fn config_error_msg(i18n: &I18n, e: &ConfigError) -> Msg {
         }
         ConfigError::Alias { table, key, alias } => {
             Msg::ConfigErrorAlias { table: table.clone(), key: key.to_string(), alias: alias.to_string() }
+        }
+        ConfigError::SessionName(name) => Msg::ConfigErrorSessionName { name: name.clone() },
+        ConfigError::SessionReserved(name) => Msg::ConfigErrorSessionReserved { name: name.clone() },
+        ConfigError::SessionMissing { key, preset } => {
+            Msg::ConfigErrorSessionMissing { key: key.to_string(), preset: preset.clone() }
         }
     }
 }

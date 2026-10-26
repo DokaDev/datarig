@@ -517,6 +517,8 @@ policy = "prod"                # its environment (see Environments below)
 password_source = "command"
 password_command = "op read op://work/prod-db/password"
 tunnel = "office"              # the tunnel preset below
+session = "reporting"          # the session preset below ("none": none, whatever its environment maps)
+session_sql = ["SET work_mem = '256MB'"]   # its own session settings, after the preset's
 sslmode = "verify-full"        # TLS: disable | prefer | require | verify-ca | verify-full
 sslrootcert = "~/certs/company-ca.pem"
 
@@ -538,6 +540,10 @@ host = "bastion.example.com"
 user = "ec2-user"
 auth = "key"
 key_file = "~/.ssh/prod.pem"
+
+[sessions.reporting]           # what a query session starts with (see Session presets below)
+dbms = "postgres"              # postgres | mysql
+sql = ["SET statement_timeout = '30s'", "SET work_mem = '64MB'"]
 
 [policy.prod]                  # an environment
 read_only = true
@@ -601,6 +607,7 @@ that name, so existing files keep working) with these keys, each optional:
 | `spill_limit` | bytes, or `"512MB"`, `"2GB"`, `"off"` | the top-level `spill_limit` |
 | `idle_disconnect` | a duration from `"1m"` to `"24h"`, or `"off"` ([Idle connections and lock waits](#idle-connections-and-lock-waits)) | the top-level `idle_disconnect` |
 | `lock_wait` | a duration from `"1s"` to `"24h"`, or `"off"` | the top-level `lock_wait` |
+| `session` | `{ postgres = "<preset>", mysql = "<preset>" }`, either left out ([Session presets](#session-presets)) | none |
 | `color` | `red`, `orange`, `yellow`, `green`, `teal`, `cyan`, `blue`, `indigo`, `purple`, `pink`, `brown`, `gray`, or `#rrggbb` | none |
 | `badge` | up to 8 columns, no blanks around it | none |
 
@@ -822,6 +829,119 @@ disconnect and Lock wait fields, empty for the config's value; `"off"` turns it 
   manual transaction on PostgreSQL only that run is undone (its savepoint) and the transaction
   keeps what earlier runs did; on MySQL the server undoes the statement only (unless
   `innodb_rollback_on_timeout` is on, then the whole transaction, and datarig says so).
+
+### Session presets
+
+A session preset is a named list of settings a profile's query sessions (each tab's) start with,
+for one kind of database. Presets are optional: a profile without any of these keys starts its
+sessions with the database's own defaults.
+
+```toml
+[sessions.reporting]
+dbms = "postgres"                  # "postgres" or "mysql"
+sql = ["SET statement_timeout = '30s'", "SET work_mem = '64MB'"]   # one statement per item
+
+[policy.prod]
+session = { postgres = "reporting", mysql = "my_reporting" }   # its profiles' preset per database
+
+[[connections]]
+name = "orders"
+session = "reporting"              # this profile's own preset, instead of its environment's
+# session = "none"                 # no preset, even when its environment maps one
+session_sql = ["SET work_mem = '256MB'"]   # its own statements, after the preset's
+```
+
+The explorer's **Session presets** section lists them (the same keys as the Tunnels section: `n`
+new, `e` edit, `c` copy, `d` delete, `t` test, `Enter` or `l` to see the profiles that use one,
+their own or through their environment), each with its database, how many statements and
+profiles it has (the statements in the warning color when one changes a setting a read-only
+environment refuses, such as MySQL's `foreign_key_checks = 0`), and under it the first statement
+that is not allowed and why. The `/` filter finds a preset by its name or a statement. Its form
+has the name, the database (`←`/`→`) and the statements in one line, separated by `;` (saved one
+per item); under them it says which statement is not allowed, or which one a read-only
+environment would refuse. A rename takes the profiles and environments that name the preset
+along; deleting one asks first and names them, and they keep the name (and do not connect until
+another preset, or none, is picked). **Test** opens one session on a connected profile that uses
+the preset (else any connected profile of its database; with several, you pick one), starting
+with the preset alone exactly as a tab's session would, and closes it again once it connected:
+"Session preset “reporting” applied on local-pg (2 statements); the test session was closed",
+or the statement and the server's error. A profile that is not connected is not connected for
+it: the test says which to connect first.
+
+A profile's form picks its preset in the Advanced section (`Enter` on Session preset): its
+environment's (named, the default), **None** (no preset, even if the environment maps one), the
+presets of its database, or "New session preset…", which opens the preset form for its database
+and comes back with the new one picked; a preset of the other database (the driver changed) is
+marked and the form does not save. Its own statements are the Session SQL line below it (`;`
+between them; one that is not allowed is said after it, and the form does not save). The
+environment form has one list per database (Preset (PostgreSQL), Preset (MySQL)): none, that
+database's presets, or a new one.
+
+What a query session starts with, in order (a later setting of the same name wins): datarig's
+own limits (`lock_wait`, `idle_disconnect`, `tx_idle_rollback`: see above and [Manual
+commit](#manual-commit)), then the preset (the profile's `session`, else the one its
+environment maps for its database; `[policy.default]` may map one too), then the profile's
+`session_sql`. `none` is not a preset's name: `[sessions.none]` is an error of the file. The
+explorer's lookups (the metadata sessions) never get these settings.
+
+- **Only settings.** Each item is one statement that sets settings of the session and nothing
+  else, as datarig's own classifier reads it: PostgreSQL `SET [SESSION] name = value` (or `TO`,
+  `TO DEFAULT`), `SET TIME ZONE …`, `SET SESSION CHARACTERISTICS AS TRANSACTION …`; MySQL
+  `SET [SESSION | LOCAL] name = value[, …]`, `SET @@session.name = …`, `SET @var = …`, `SET
+  SESSION TRANSACTION …`. Not `SET LOCAL` (it would end with its transaction), a plain `SET
+  TRANSACTION`, `SET GLOBAL`/`PERSIST`, `RESET`, `DISCARD`, a query or a call such as
+  `set_config()`, nor several statements in one item. In a read-only environment only the
+  settings a read-only session may change at all (the same allowlist as statements you run).
+- **Not datarig's own settings**: what datarig keeps itself is refused, with what sets it:
+  `lock_timeout` / `lock_wait_timeout` / `innodb_lock_wait_timeout` (the environment's
+  `lock_wait`), `idle_session_timeout` / `wait_timeout` / `interactive_timeout`
+  (`idle_disconnect`), `idle_in_transaction_session_timeout` (`tx_idle_rollback`), the
+  read-only settings (`read_only`), MySQL's `autocommit` (`commit`), `search_path` (the tab's
+  schema), and what the app reads results in, writes literals with or tells sessions apart by
+  (`application_name`, `client_encoding`, `standard_conforming_strings`, `DateStyle`,
+  `IntervalStyle`, `bytea_output`, `extra_float_digits`, MySQL's character sets, `SET NAMES`,
+  `sql_select_limit`, `max_execution_time`, `resultset_metadata`, `completion_type`,
+  `session_track_*`), also written as a quoted name. Settings of one transaction only are
+  refused too, with where the session's default is: PostgreSQL's `transaction_isolation` and
+  `transaction_deferrable` (use `default_transaction_isolation`, … or `SET SESSION
+  CHARACTERISTICS AS TRANSACTION …`), MySQL's `SET @@transaction_isolation` without a scope
+  (use `SET SESSION …`).
+- **MySQL in every sql mode.** A statement is read with and without `ANSI_QUOTES` and
+  `NO_BACKSLASH_ESCAPES` (the session's mode is not known before it connects); what any reading
+  refuses is refused, and so is one the readings take for different settings (a backslash that
+  ends a string in one mode only).
+- **Who the session is.** `SET ROLE` is allowed in a read-only environment (every transaction
+  stays `READ ONLY` on the server whatever the role); `SET SESSION AUTHORIZATION` is not.
+- **Errors are the profile's.** A preset name that does not exist (in the profile or in its
+  environment's mapping; names are matched exactly, and one of another case is named as the one
+  likely meant), a preset for the other database, or a statement that is not allowed:
+  the profile does not connect (nothing is asked or sent) and says which preset or statement,
+  from where, and why; it never connects without the preset instead. Statements are checked when
+  a profile connects and again before each tab's session opens, not when the file is read, so a
+  stricter check after an upgrade never makes the whole file unreadable. A test connection
+  checks them too (it opens no tab session, so it does not run them).
+- **Sent ≠ applied.** Each statement runs alone, in order, when a tab's session opens (and
+  again when it reconnects). One the server refuses (an unknown setting, a bad value) closes
+  that session before anything else runs, and the tab says "local-pg: statement 1 of its own
+  session SQL failed, so the session was closed: …" with the server's words. The run that opened
+  it does not happen.
+- **Behind a connection pooler** (PostgreSQL, a connection whose server process is not the one
+  it started with, e.g. PgBouncer in transaction mode): nothing is set for the session, which
+  would stay on server connections other clients share. Each `SET` goes first in every
+  transaction as `SET LOCAL` instead (the same way as `lock_wait`, checked once at connect), and
+  the tab says so. As with `lock_wait`, statements that cannot run in a transaction (`VACUUM`,
+  `CREATE INDEX CONCURRENTLY`, …), `CALL` and `DO`, and your own session statements (`SET`,
+  `RESET`) run without them; in a tab whose schema is also set per transaction those still run
+  in a transaction that sets the schema (as before), but without the preset's settings. A statement that has no such form (`SET ROLE`, `SET SESSION
+  AUTHORIZATION`, `SET SESSION CHARACTERISTICS …`) is not sent there: the profile still connects
+  and the tab names what was not sent. MySQL connections are never treated as pooled (a proxy
+  that multiplexes them, such as ProxySQL, is not detected).
+- On MySQL the classifier reads the session in the sql mode a preset set (`SET SESSION sql_mode
+  = …`), and a read-only session is checked after its statements ran. A value that calls a
+  function or has a subquery (`SET @x = (SELECT …)`) runs at connect like any other; one that
+  takes long holds the connect up to its time limit.
+- The form's one line shows a preset's statements without their line comments (`-- …`, `# …`,
+  which would hide the statements after them), so saving the form writes them without.
 
 ## Export
 

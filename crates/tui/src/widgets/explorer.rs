@@ -20,7 +20,11 @@
 //! under it, opened, the profiles connected through it now. The "Environments" section lists the
 //! environments the same way: each with its chip in its color (`●` with icons off), its badge,
 //! its rules in a few words and how many profiles name it; without one, a row that adds the
-//! presets. Circles stand for a profile's connection alone (and for the marks with icons off).
+//! presets. The "Session presets" section lists the session presets: each with its icon (`◇` with
+//! icons off), its database, how many statements (in the warning color when one changes a
+//! setting the server's checks depend on) and profiles it has, under it the first statement that
+//! is not allowed, in the error color, and, opened, the profiles that use it. Circles stand for a
+//! profile's connection alone (and for the marks with icons off).
 
 use crate::app::action::Action;
 use crate::app::environments::rules_parts;
@@ -226,7 +230,48 @@ fn row_parts(app: &App, row: &Row) -> Vec<(String, Style)> {
             vec![(text.unwrap_or_default(), fg(th.error))]
         }
         RowKind::TunnelUser(_, pid) => user_parts(app, *pid),
+        RowKind::SessionsHeader => {
+            header_parts(app, icons::SESSIONS, Label::ExplorerSessions, app.session_presets().len())
+        }
+        RowKind::SessionsEmpty => {
+            let key = app.key_for(Action::NewProfile, Ctx::Explorer);
+            vec![(app.i18n.msg(&Msg::ExplorerSessionsEmpty { key }).to_string(), fg(th.fg_dim))]
+        }
+        RowKind::Session(id) => session_parts(app, *id),
+        RowKind::SessionError(id) => {
+            let text = app.session_check(*id).problem.map(|(index, p)| {
+                let problem = app.set_problem_text(&p);
+                app.i18n.msg(&Msg::ExplorerSessionProblem { index: index.to_string(), problem }).to_string()
+            });
+            vec![(text.unwrap_or_default(), fg(th.error))]
+        }
+        RowKind::SessionUser(_, pid) => user_parts(app, *pid),
     }
+}
+
+/// A session preset: its icon (`◇` with icons off), its name, its database, how many statements
+/// (in the warning color when one changes a setting the server's checks depend on, which a
+/// read-only environment refuses) and how many profiles use it.
+fn session_parts(app: &App, id: datarig_core::profile::session::SessionPresetId) -> Vec<(String, Style)> {
+    let th = theme::cur();
+    let fg = |c: Color| Style::new().fg(c);
+    let Some(p) = app.session_preset(id) else { return Vec::new() };
+    let check = app.session_check(id);
+    let mark = if app.icons_on() { icons::SESSION } else { "◇" };
+    let color = if check.problem.is_some() { th.error } else { th.fg_muted };
+    let mut parts = vec![(mark.to_string(), fg(color)), (" ".into(), fg(th.fg)), (p.name.clone(), fg(th.fg))];
+    parts.push((format!("  {}", p.dbms.display()), fg(th.fg_dim)));
+    let statements = match p.sql.len() {
+        0 => app.i18n.label(Label::ExplorerSessionNone).to_string(),
+        n => app.i18n.msg(&Msg::ExplorerSessionStatements { count: n as u64 }).to_string(),
+    };
+    parts.push((" · ".into(), fg(th.fg_dim)));
+    parts.push((statements, fg(if check.risky { th.warning } else { th.fg_dim })));
+    let users = app.session_users(&p.name).len() as u64;
+    if users > 0 {
+        parts.push((format!(" · {}", app.i18n.msg(&Msg::ExplorerTunnelUsers { count: users })), fg(th.fg_dim)));
+    }
+    parts
 }
 
 /// A profile listed under a tunnel preset or an environment: its state and icon in its color,
@@ -792,7 +837,12 @@ pub(crate) fn line_preview(app: &App) -> Option<String> {
     // state, or its badge and rules, follow the name), or why its connection was lost.
     if matches!(
         row.kind,
-        RowKind::Tunnel(_) | RowKind::TunnelError(_) | RowKind::Environment(_) | RowKind::DefaultRules
+        RowKind::Tunnel(_)
+            | RowKind::TunnelError(_)
+            | RowKind::Environment(_)
+            | RowKind::DefaultRules
+            | RowKind::Session(_)
+            | RowKind::SessionError(_)
     ) {
         let text: String = row_parts(app, &row).into_iter().map(|(t, _)| t).collect();
         return Some(text.trim().to_string()).filter(|t| !t.is_empty());

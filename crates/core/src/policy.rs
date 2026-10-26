@@ -61,6 +61,10 @@
 //!   holds before the server cancels it: a duration from [`LOCK_WAIT_FLOOR`] to
 //!   [`SESSION_LIMIT_MAX`], or `"off"` (the server's setting). Without it, the config's top-level
 //!   `lock_wait` applies (default off).
+//! * `session` — the session preset its profiles' query sessions start with, for each database:
+//!   `{ postgres = "<name>", mysql = "<name>" }` (either may be left out; see
+//!   [`crate::profile::session`]). A profile may name its own (`session = "<name>"`) or none
+//!   (`session = "none"`). No default (none).
 //! * `color` — the environment's color: one of the profile colors' 12 names or `#rrggbb`
 //!   ([`crate::profile::color`]). No default (no color).
 //! * `badge` — a short text the tabs and the status bar show for its profiles (`"PROD"`): no
@@ -76,6 +80,7 @@
 
 pub use crate::driver::PagingMode;
 use crate::profile::color::ProfileColor;
+pub use crate::profile::session::SessionMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
@@ -130,6 +135,9 @@ pub struct Policy {
     pub idle_disconnect: Option<Option<Duration>>,
     /// `None`: the config's `lock_wait`; `Some(None)`: the server's own setting.
     pub lock_wait: Option<Option<Duration>>,
+    /// The session preset of each database its profiles start with (a profile may name its
+    /// own, or none).
+    pub session: SessionMap,
 }
 
 impl Default for Policy {
@@ -145,6 +153,7 @@ impl Default for Policy {
             tx_idle_rollback: Some(TX_IDLE_ROLLBACK),
             idle_disconnect: None,
             lock_wait: None,
+            session: SessionMap::default(),
         }
     }
 }

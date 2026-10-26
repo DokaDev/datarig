@@ -620,7 +620,8 @@ fn the_form_has_basic_and_advanced_sections() {
     h.key(KeyCode::Right);
     assert_eq!(h.form().driver, 0, "the others are not supported yet: back to PostgreSQL");
     assert!(h.form().dsn.text().starts_with("postgres://"), "{}", h.form().dsn.text());
-    // Ctrl+N: the SSH section, then the advanced one (SSL mode, environment, color, icon, folder).
+    // Ctrl+N: the SSH section, then the advanced one (SSL mode, environment, session preset and
+    // session SQL, color, icon, folder).
     h.ctrl('n');
     assert_eq!((h.form().section, h.form().focus), (Section::Ssh, Field::SshEnabled));
     h.ctrl('n');
@@ -636,6 +637,13 @@ fn the_form_has_basic_and_advanced_sections() {
     h.key(KeyCode::Enter); // environment: the list (the default rules only: no file to write one in)
     assert_eq!(h.overlay_kind(), Some(OverlayKind::Picker));
     h.key(KeyCode::Esc);
+    h.key(KeyCode::Tab);
+    assert_eq!(h.form().focus, Field::SessionPreset);
+    h.key(KeyCode::Enter); // session preset: the list (its environment's, none)
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Picker));
+    h.key(KeyCode::Esc);
+    h.key(KeyCode::Tab);
+    assert_eq!(h.form().focus, Field::SessionSql);
     h.key(KeyCode::Tab);
     h.key(KeyCode::Right); // color: auto -> red
     h.key(KeyCode::Tab);

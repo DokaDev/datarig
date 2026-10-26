@@ -174,7 +174,8 @@ impl App {
         if self.form_open_already() {
             return;
         }
-        let f = ProfileForm::for_default_rules(self.policies.default_rules());
+        let mut f = ProfileForm::for_default_rules(self.policies.default_rules());
+        f.session_presets = self.session_presets.clone();
         self.overlays.close(OverlayKind::Commands);
         self.overlays.close(OverlayKind::WhichKey);
         self.overlays.push(Overlay::ProfileForm(Box::new(f)));
@@ -256,7 +257,8 @@ impl App {
         let e = id.and_then(|id| self.environment(id)).cloned();
         let taken = |n: &str| self.environments().iter().any(|q| same_name(&q.name, n));
         let copy = e.as_ref().filter(|_| duplicate).map(|e| profiles::copy_name(&e.name, taken));
-        let f = ProfileForm::for_environment(e.as_ref(), copy);
+        let mut f = ProfileForm::for_environment(e.as_ref(), copy);
+        f.session_presets = self.session_presets.clone();
         self.overlays.close(OverlayKind::Commands);
         self.overlays.close(OverlayKind::WhichKey);
         self.overlays.push(Overlay::ProfileForm(Box::new(f)));

@@ -98,6 +98,7 @@
 //! ([`NoWhere::OtherTables`]). `ALTER TABLE … ENGINE = BLACKHOLE` empties the table.
 
 use super::repeat::NotRepeatable;
+use super::session_set::{Owner, SessionSet, SetProblem};
 use super::{Class, Danger, Explain, MAX_BYTES, MAX_DEPTH, NoWhere, Risk, THREAD};
 use crate::sql::dialect::{Dialect, MySqlMode};
 use crate::sql::lexer::{Tok, is_space, lex_in};
@@ -1677,16 +1678,20 @@ fn on(value: &[W]) -> Option<bool> {
     }
 }
 
-/// One assignment of a `SET` (`[scope] name = value`, `@@scope.name = value`, `@x := value`).
-fn assignment(item: &[W]) -> Risk {
-    let Some(eq) = item.iter().position(|w| w.is_op("=")) else { return unrecognized() };
+/// The target of one assignment of a `SET` (`[scope] name = value`, `@@scope.name = value`,
+/// `@x := value`): the setting's name in lower case (`None`: a user variable, the session's own
+/// state), whether its own scope is the server's (`GLOBAL`, `PERSIST`), and its value; `None`:
+/// no assignment this module knows.
+#[allow(clippy::type_complexity)]
+fn target<'c, 'a>(item: &'c [W<'a>]) -> Option<(Option<String>, bool, &'c [W<'a>])> {
+    let eq = item.iter().position(|w| w.is_op("="))?;
     let mut target = &item[..eq];
     if target.last().is_some_and(|w| w.is_op(":")) {
         target = &target[..target.len() - 1];
     }
     let value = &item[eq + 1..];
     if value.is_empty() || target.is_empty() {
-        return unrecognized();
+        return None;
     }
     const SCOPES: [&str; 5] = ["GLOBAL", "PERSIST", "PERSIST_ONLY", "SESSION", "LOCAL"];
     // A variable alone, or a name or names joined by dots after an optional scope: anything else
@@ -1700,12 +1705,12 @@ fn assignment(item: &[W]) -> Risk {
         || (names.len() % 2 == 1
             && names.iter().enumerate().all(|(k, w)| if k % 2 == 0 { w.is_name() } else { w.kind == Tok::Dot }));
     if !shaped {
-        return unrecognized();
+        return None;
     }
     let mut global = target.first().is_some_and(|w| ["GLOBAL", "PERSIST", "PERSIST_ONLY"].iter().any(|k| w.is(k)));
     let name = match variable {
         // A user variable: the session's own state.
-        Some(v) if !v.starts_with("@@") => return Risk::session(true),
+        Some(v) if !v.starts_with("@@") => return Some((None, global, value)),
         // `@@name`, `@@scope.name` (the lexer keeps the dots in the variable).
         Some(v) => {
             let lower = v.trim_start_matches('@').to_ascii_lowercase();
@@ -1720,8 +1725,16 @@ fn assignment(item: &[W]) -> Risk {
         None => names.iter().map(|w| w.text).collect::<String>().to_ascii_lowercase(),
     };
     if name.is_empty() || name.starts_with('`') {
-        return unrecognized();
+        return None;
     }
+    Some((Some(name), global, value))
+}
+
+/// One assignment of a `SET` (`[scope] name = value`, `@@scope.name = value`, `@x := value`).
+fn assignment(item: &[W]) -> Risk {
+    let Some((name, global, value)) = target(item) else { return unrecognized() };
+    // A user variable: the session's own state.
+    let Some(name) = name else { return Risk::session(true) };
     if global {
         return maintenance(Some(Danger::ServerCommand));
     }
@@ -1742,6 +1755,125 @@ fn assignment(item: &[W]) -> Risk {
         return Risk::danger(Class::Session, Danger::Setting);
     }
     Risk::session(SAFE_SETTINGS.contains(&name.as_str()))
+}
+
+/// MySQL's settings the app keeps itself (see [`super::session_set`]).
+fn owned(name: &str) -> Option<Owner> {
+    Some(match name {
+        "lock_wait_timeout" | "innodb_lock_wait_timeout" => Owner::LockWait,
+        "wait_timeout" | "interactive_timeout" => Owner::IdleDisconnect,
+        "transaction_read_only" | "tx_read_only" => Owner::ReadOnly,
+        "autocommit" => Owner::Commit,
+        // Paging, the statement limit of the explorer's reads, what results are read in.
+        "sql_select_limit"
+        | "max_execution_time"
+        | "collation_connection"
+        | "resultset_metadata"
+        | "completion_type" => Owner::App,
+        n if n.starts_with("session_track_") || n.starts_with("character_set_") => Owner::App,
+        _ => return None,
+    })
+}
+
+/// Whether MySQL statement `sql` may be a session's start-up setting ([`super::session_set`]):
+/// one `SET` of session settings or user variables, or `SET SESSION TRANSACTION …`, read in
+/// every sql mode that changes how text is read (`ANSI_QUOTES`, `NO_BACKSLASH_ESCAPES`, both,
+/// neither: the session's mode is not known yet). What any reading refuses is refused, and so is
+/// a text the readings take for different settings (`SET @x = 'a\', @@global.y = 1 -- '`).
+pub fn session_set(sql: &str) -> Result<SessionSet, SetProblem> {
+    let d = MySqlMode::default();
+    let modes = [
+        d,
+        MySqlMode { ansi_quotes: true, ..d },
+        MySqlMode { no_backslash_escapes: true, ..d },
+        MySqlMode { ansi_quotes: true, no_backslash_escapes: true, ..d },
+    ];
+    let risk = modes.iter().map(|m| classify(sql, *m)).reduce(worse).unwrap_or_else(unrecognized);
+    let shapes =
+        guarded(|| vec![Err(SetProblem::Unread)], || modes.iter().map(|m| set_shape(sql, *m)).collect::<Vec<_>>());
+    if let Some(Err(p)) = shapes.iter().find(|s| s.is_err()) {
+        return Err(p.clone());
+    }
+    if shapes.windows(2).any(|w| w[0] != w[1]) {
+        return Err(SetProblem::ModeDependent);
+    }
+    super::session_set::judge(&risk)?;
+    Ok(SessionSet { risk, per_transaction: None })
+}
+
+/// [`session_set`]'s check of the statement's form in sql mode `mode`: what it sets, in order
+/// (the settings' names, `None` for a user variable, with each value's text).
+#[allow(clippy::type_complexity)]
+fn set_shape(sql: &str, mode: MySqlMode) -> Result<Vec<(Option<String>, String)>, SetProblem> {
+    let (stmts, _) = statements(sql, mode).map_err(|_| SetProblem::Unread)?;
+    let [ws] = stmts.as_slice() else { return Err(SetProblem::NotOne) };
+    if !ws.first().is_some_and(|w| w.is("SET")) {
+        return Err(SetProblem::NotSet);
+    }
+    let word = |i: usize| ws.get(i).map_or("", |w| w.up.as_str());
+    let scoped = matches!(word(1), "GLOBAL" | "PERSIST" | "PERSIST_ONLY" | "SESSION" | "LOCAL");
+    if word(if scoped { 2 } else { 1 }) == "TRANSACTION" {
+        // A plain `SET TRANSACTION` is the next transaction's only; `GLOBAL` the server's.
+        if !matches!(word(1), "SESSION" | "LOCAL") {
+            return Err(SetProblem::NotSet);
+        }
+        if ws.windows(2).any(|w| w[0].is("READ") && (w[1].is("ONLY") || w[1].is("WRITE"))) {
+            return Err(SetProblem::AppOwned { name: "transaction_read_only".into(), owner: Owner::ReadOnly });
+        }
+        return Ok(vec![(Some("transaction".into()), ws.iter().map(|w| w.text).collect())]);
+    }
+    if matches!(word(1), "PASSWORD" | "DEFAULT" | "ROLE" | "RESOURCE" | "STATEMENT") {
+        return Err(SetProblem::NotSet);
+    }
+    // A scope keyword holds for the assignments after it that have none of their own.
+    let mut server = false;
+    let mut out = Vec::new();
+    for item in split_commas(&ws[1..]) {
+        if let Some(scope) = item.first().filter(|w| w.kind != Tok::Variable) {
+            match scope.up.as_str() {
+                "GLOBAL" | "PERSIST" | "PERSIST_ONLY" => server = true,
+                "SESSION" | "LOCAL" => server = false,
+                _ => {}
+            }
+        }
+        if let Some(w) = item.first().filter(|w| w.is("NAMES") || w.is("CHARACTER") || w.is("CHARSET")) {
+            return Err(SetProblem::AppOwned { name: w.up.to_ascii_lowercase(), owner: Owner::App });
+        }
+        // A quoted name (`` `lock_wait_timeout` ``) is the setting of that name.
+        let Some((name, global, value)) = target(item).or_else(|| quoted_target(item)) else {
+            return Err(SetProblem::NotSet);
+        };
+        if server || global {
+            return Err(SetProblem::NotSet);
+        }
+        if let Some(owner) = name.as_deref().and_then(owned) {
+            return Err(SetProblem::AppOwned { name: name.unwrap_or_default(), owner });
+        }
+        // `SET @@transaction_isolation = …` without a scope: the next transaction only.
+        let bare =
+            item.first().is_some_and(|w| w.kind == Tok::Variable && w.text.starts_with("@@") && !w.text.contains('.'));
+        if let Some(n) = name.as_deref().filter(|n| bare && matches!(*n, "transaction_isolation" | "tx_isolation")) {
+            return Err(SetProblem::TransactionOnly { name: n.to_string() });
+        }
+        out.push((name, value.iter().map(|w| w.text).collect::<Vec<_>>().join(" ")));
+    }
+    Ok(out)
+}
+
+/// The target of an assignment whose name is quoted (`` `name` = value ``, `` SESSION `name` =
+/// value ``), which [`target`] does not take: the name unquoted, lower case.
+#[allow(clippy::type_complexity)]
+fn quoted_target<'c, 'a>(item: &'c [W<'a>]) -> Option<(Option<String>, bool, &'c [W<'a>])> {
+    let eq = item.iter().position(|w| w.is_op("="))?;
+    let target = match &item[..eq] {
+        [scope, name] if scope.is("SESSION") || scope.is("LOCAL") => name,
+        [name] => name,
+        _ => return None,
+    };
+    if target.kind != Tok::QuotedIdent || eq + 1 >= item.len() {
+        return None;
+    }
+    Some((Some(unquote(target.text).to_ascii_lowercase()), false, &item[eq + 1..]))
 }
 
 /// Whether the app may run `sql` again (to fetch a later page) or count its rows, as far as its

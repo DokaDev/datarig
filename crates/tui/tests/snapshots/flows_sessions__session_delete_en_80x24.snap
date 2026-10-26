@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/flows_sessions.rs
+expression: "h.draw(80, 24).backend()"
+---
+"╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
+"│  ＋ New connection   ││                                                      │" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 3       ││  No open tabs                                        │"
+"│  ▸ ○   local-pg      ││  Pick a connection in the explorer, or press         │"
+"│  ▸ ○   v6            ││  Ctrl+O.                                             │"
+"│  ▸ ○   分析-replica  ││                                                      │" Hidden by multi-width symbols: [(10, " "), (12, " ")]
+"│▾ Tunnels╭ Delete ──────────────────────────────────────────────────╮         │"
+"│    n her│                                                          │         │"
+"│▾ Environ│ Delete the session preset “reporting”?                   │         │"
+"│  ▸ ○ Def│ local-pg uses it: it will not connect until you pick     │         │"
+"│  ▸ ○ pro│ another preset or none in its form (never without it     │         │"
+"│▾ Session│ instead).                                                │         │"
+"│    ◇ bro│ Environments map it: prod; their profiles will not       │         │"
+"│      sta│ connect until that is changed.                           │         │"
+"│    ◇ fk_│                                                          │         │"
+"│  ▸ ◇ my_│                 [ Cancel ]     Delete                    │         │"
+"│  ▸ ◇ rep╰─────────────────────────────── y delete · n/Enter cancel ╯         │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" ◇ reporting  PostgreSQL · 2 statements · 1 profile                          EN "

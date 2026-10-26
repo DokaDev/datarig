@@ -8,6 +8,7 @@ pub mod color;
 pub mod dsn;
 pub mod folder;
 pub mod name;
+pub mod session;
 pub mod ssh;
 pub mod tunnel;
 
@@ -181,6 +182,13 @@ pub struct ConnectionConfig {
     /// [`tunnel::route`]).
     #[serde(default)]
     pub tunnel: Option<String>,
+    /// The session preset its query sessions start with (`session = "<name>"`, `"none"`, or no
+    /// key: its environment's; see [`session::plan`]).
+    #[serde(default)]
+    pub session: session::SessionRef,
+    /// Its own statements its query sessions start with, after the preset's.
+    #[serde(default)]
+    pub session_sql: Vec<String>,
     /// Name of this profile's table in the file, used to update it in place on save when the
     /// table has no `id` yet (the first save after the migration).
     #[serde(skip)]
@@ -214,6 +222,8 @@ impl fmt::Debug for ConnectionConfig {
             .field("allow_public_key_retrieval", &self.allow_public_key_retrieval)
             .field("ssh", &self.ssh)
             .field("tunnel", &self.tunnel)
+            .field("session", &self.session)
+            .field("session_sql", &self.session_sql)
             .field("origin", &self.origin)
             .finish()
     }
@@ -264,6 +274,8 @@ impl Default for ConnectionConfig {
             allow_public_key_retrieval: false,
             ssh: None,
             tunnel: None,
+            session: session::SessionRef::Inherit,
+            session_sql: Vec::new(),
             origin: None,
         }
     }
