@@ -312,6 +312,19 @@ impl App {
     /// Keys of the tree dialog (`overlay.script_tree`, `overlay.script_tree.name`).
     pub(super) fn script_tree_key(&mut self, key: KeyEvent, repeat: bool) {
         let Some(t) = self.overlays.script_tree_mut() else { return };
+        // An empty name or filter has nothing for `←`/`→` to move over: on a folder or a file
+        // they work as in the tree (open, close, the folder it is in), and the field keeps the
+        // keyboard. On the top row or `../` they do nothing (in the tree they go up a folder).
+        let arrow = matches!(key.code, KeyCode::Left | KeyCode::Right) && key.modifiers.is_empty();
+        let on_entry = matches!(t.row, TreeRow::Folder(_) | TreeRow::File(_));
+        if arrow && t.focus == TreeFocus::Name && t.input.text().is_empty() && on_entry {
+            t.focus = TreeFocus::Tree;
+            self.script_tree_key(key, repeat);
+            if let Some(t) = self.overlays.script_tree_mut() {
+                t.focus = TreeFocus::Name;
+            }
+            return;
+        }
         if let TreeMode::Folder(_) = t.mode {
             return self.folder_pick_key(key, repeat);
         }

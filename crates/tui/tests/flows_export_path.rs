@@ -223,6 +223,23 @@ fn a_missing_folder_opens_downloads_and_a_path_beside_it_opens_there() {
 }
 
 #[test]
+fn the_arrows_open_and_close_a_folder_while_the_empty_filter_has_the_keyboard() {
+    let home = home("arrows");
+    let mut h = dialog(&home);
+    h.ctrl('o');
+    h.keys("/");
+    let focus = |h: &Harness| h.app.overlays.script_tree().unwrap().focus;
+    assert_eq!(focus(&h), TreeFocus::Name);
+    go_to(&mut h, TreeRow::Folder("a".into()));
+    // `a` was never listed: `→` reads it and opens it.
+    h.key(KeyCode::Right);
+    assert!(rows(&h).contains(&TreeRow::File("a/inner.csv".into())), "{:?}", rows(&h));
+    h.key(KeyCode::Left);
+    assert!(!rows(&h).contains(&TreeRow::File("a/inner.csv".into())), "`←` closed it");
+    assert_eq!(focus(&h), TreeFocus::Name, "the filter keeps the keyboard");
+}
+
+#[test]
 fn folders_open_one_level_at_a_time_and_esc_leaves_the_dialog_as_it_was() {
     let home = home("nav");
     let mut h = dialog(&home);

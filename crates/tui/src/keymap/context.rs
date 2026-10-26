@@ -268,7 +268,7 @@ impl Ctx {
                 "The folder tree of the saved queries (save as, open) or of the file system (the SSH key file, where an export goes; there `.` shows hidden names and `Ctrl+S` saves in the selected folder): the tree has the keyboard."
             }
             Ctx::ScriptTreeName => {
-                "The folder tree of the saved queries: its name field (save as) or filter (open); of the file system: its filter, where a text with `/` or a leading `~` is a path `Enter` goes to."
+                "The folder tree of the saved queries: its name field (save as) or filter (open); of the file system: its filter, where a text with `/` or a leading `~` is a path `Enter` goes to. While the field is empty, `Left`/`Right` on a folder or file act as in the tree: they close or open the folder, `Left` selects the folder the row is in."
             }
             Ctx::ContextMenu => {
                 "The action menu: a right click (an explorer node, the grid, a tab, the editor) opens it at the pointer; `Space Space`, `Shift+F10` or the Menu key next to the selection, `Space t m` under the active tab. The selection's actions come first, then the pane's, each with its key in that pane. Typing filters it (when nothing in it matches, every action is searched); the arrows, `Ctrl+N`/`Ctrl+P` and `Tab` move, `Enter` runs, `Esc` closes (`Backspace` on an empty filter does not); a shown key that is not a character (`Ctrl+…`, `F…`) runs its item; the pointer selects the item under it."
