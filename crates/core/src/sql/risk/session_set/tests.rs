@@ -121,6 +121,20 @@ fn mysql_allows_session_sets() {
     }
 }
 
+/// Two statements in one item without a `;` between them (as one line or on two) are not one
+/// setting, in either database, and read-only does not change that.
+#[test]
+fn two_statements_without_a_semicolon_are_not_one_setting() {
+    for sql in ["SET @c=3 SET @d=4", "SET @c = 3\nSET @d = 4", "SET SESSION a = 1 set b = 2"] {
+        assert_eq!(mysql(sql).map(|_| ()), Err(SetProblem::NotOne), "{sql}");
+    }
+    for sql in ["SET a = 1 SET b = 2", "SET a = 1\nSET b = 2"] {
+        assert!(pg(sql).is_err(), "{sql}");
+    }
+    // A string that says SET is a value.
+    assert!(mysql("SET @c = 'SET @d = 4'").is_ok());
+}
+
 #[test]
 fn mysql_refuses_what_is_not_a_session_set() {
     let cases = [

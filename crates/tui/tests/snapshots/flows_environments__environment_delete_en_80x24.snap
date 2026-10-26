@@ -1,5 +1,6 @@
 ---
 source: crates/tui/tests/flows_environments.rs
+assertion_line: 546
 expression: backend
 ---
 "╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
@@ -17,7 +18,7 @@ expression: backend
 "│    ● sta│ rules instead).                                          │         │"
 "│  ▾ ● pro│                                                          │         │"
 "│      ○  │                 [ Cancel ]     Delete                    │         │"
-"│▾ Session╰─────────────────────────────── y delete · n/Enter cancel ╯         │"
+"│▾ Startup╰─────────────────────────────── y delete · n/Enter cancel ╯         │"
 "│    n here makes a li…││                                                      │"
 "│                      ││                                                      │"
 "│                      ││                                                      │"

@@ -1,5 +1,6 @@
 ---
 source: crates/tui/tests/flows_environments.rs
+assertion_line: 541
 expression: backend
 ---
 "╭ ╭ Default rules ───────────────────────────────────────────────────────────╮─╮"
@@ -15,8 +16,8 @@ expression: backend
 "│ │ Spill limit                                 empty: the config's · 512MB… │ │"
 "│ │ Idle disconnect                             empty: the config's · close… │ │"
 "│ │ Lock wait                                   empty: the config's · wait … │ │"
-"│ │ Preset (PostgreSQL)  None ▾   Enter list                                 │ │"
-"│ │ Preset (MySQL)       None ▾   Enter list                                 │ │"
+"│ │ Startup SQL (PG)     None ▾   Enter list                                 │ │"
+"│ │ Startup SQL (MySQL)  None ▾   Enter list                                 │ │"
 "│▾│                                                                          │ │"
 "│ │ Used by              分析-replica, v6                                    │ │" Hidden by multi-width symbols: [(26, " "), (28, " ")]
 "│ │                                                                          │ │"

@@ -1,20 +1,21 @@
 ---
 source: crates/tui/tests/ui_snapshots.rs
+assertion_line: 887
 expression: backend
 ---
 "╭ Explorer ────────────╮ 1 console 1 ×                                          "
-"│  ＋ New co╭ Icon ────────────────────────────────────────────────╮───────────╮" Hidden by multi-width symbols: [(4, " ")]
-"│▾╭ Edit con│ /                                                    │─────────╮ │"
-"│ │  Basic  │                                                      │ section │e│"
-"│ │         │  the driver's icon                                  │         │ │"
-"│ │ SSL mode│  database                                           │         │ │"
-"│ │ CA file │  server                                             │er's ce… │ │"
-"│ │ Client c│  cloud                                              │erver a… │ │"
-"│ │ Client k│  cube                                               │hrase    │ │"
-"│ │ Statemen│  cubes                                              │ransact… │ │"
-"│ │ Environm│  leaf                                               │ rules   │ │"
-"│ │ Session │  fire                                               │         │ │"
-"│ │ Session │  bolt                                               │ the pr… │ │"
+"│ ╭ Edit con╭ Icon ────────────────────────────────────────────────╮─────────╮─╮"
+"│▾│  Basic  │ /                                                    │ section │ │"
+"│ │         │                                                      │         │e│"
+"│ │ SSL mode│  the driver's icon                                  │         │ │"
+"│ │ CA file │  database                                           │er's ce… │ │"
+"│ │ Client c│  server                                             │erver a… │ │"
+"│ │ Client k│  cloud                                              │hrase    │ │"
+"│ │ Statemen│  cube                                               │ransact… │ │"
+"│ │ Environm│  cubes                                              │ rules   │ │"
+"│ │ Startup │  leaf                                               │         │ │"
+"│ │ Own star│  fire                                               │       × │ │"
+"│ │         │  bolt                                               │er adds  │ │"
 "│ │ Color   │  shield                                             │ list    │t│"
 "│ │ Icon    │  lock                                               │st       │ │"
 "│ │ Folder  │  flask                                              │         │ │"

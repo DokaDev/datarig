@@ -1,5 +1,6 @@
 ---
 source: crates/tui/tests/ui_snapshots.rs
+assertion_line: 887
 expression: backend
 ---
 "╭ Explorer ────────────────────────────╮ 1 console 1 ×                                                                                                          "
@@ -23,17 +24,17 @@ expression: backend
 "│                             │ Client key          │  bolt                                               │ase                  │                             │"
 "│                             │ Statement cache   ‹ │  shield                                             │ode                  │                             │"
 "│                             │ Environment       No│  lock                                               │                     │                             │"
-"│                             │ Session preset    En│  flask                                              │                     │                             │"
-"│                             │ Session SQL         │  bug                                                │he preset's          │                             │"
-"│                             │ Color             ‹ │  rocket                                             │                     │                             │"
-"│                             │ Icon              ‹ │  home                                               │                     │                             │"
-"│                             │ Folder            ‹ │  laptop                                             │                     │                             │"
-"│                             │                     │  building                                           │                     │                             │"
-"│                             │                    T│  briefcase                                          │                     │                             │"
-"│                             │                     │  globe                                              │                     │                             │"
+"│                             │ Startup SQL       En│  flask                                              │                     │                             │"
+"│                             │ Own startup SQL     │  bug                                                │                   × │                             │"
+"│                             │                     │  rocket                                             │                     │                             │"
+"│                             │ Color             ‹ │  home                                               │                     │                             │"
+"│                             │ Icon              ‹ │  laptop                                             │                     │                             │"
+"│                             │ Folder            ‹ │  building                                           │                     │                             │"
+"│                             │                     │  briefcase                                          │                     │                             │"
+"│                             │                    T│  globe                                              │                     │                             │"
 "│                             │                     │  chart                                              │                     │                             │"
-"│                             ╰─────────────────────│  archive                                            │+S save · Esc cancel ╯                             │"
-"│                                      ││           │  bookmark                                           │                                                   │"
+"│                             │                     │  archive                                            │                     │                             │"
+"│                             ╰─────────────────────│  bookmark                                           │+S save · Esc cancel ╯                             │"
 "│                                      ││           │  star                                               │                                                   │"
 "│                                      ││           │  heart                                              │                                                   │"
 "│                                      ││           │  warning                                            │                                                   │"

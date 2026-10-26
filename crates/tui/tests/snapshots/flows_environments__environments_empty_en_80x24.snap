@@ -1,5 +1,6 @@
 ---
 source: crates/tui/tests/flows_environments.rs
+assertion_line: 531
 expression: backend
 ---
 "╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
@@ -13,7 +14,7 @@ expression: backend
 "│▾ Environments 0      ││  Ctrl+T     New console tab                          │"
 "│  ▸ ○ Default rules (…││  Space t u  Reopen a closed tab                      │"
 "│    ＋ Add presets: d…││  n          New connection                           │" Hidden by multi-width symbols: [(6, " ")]
-"│▾ Session presets 0   ││  F1         Keyboard help                            │"
+"│▾ Startup SQL 0       ││  F1         Keyboard help                            │"
 "│    n here makes a li…││  :          Commands                                 │"
 "│                      ││                                                      │"
 "│                      ││                                                      │"

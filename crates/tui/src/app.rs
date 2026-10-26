@@ -2035,6 +2035,12 @@ pub fn config_error_msg(i18n: &I18n, e: &ConfigError) -> Msg {
         ConfigError::Alias { table, key, alias } => {
             Msg::ConfigErrorAlias { table: table.clone(), key: key.to_string(), alias: alias.to_string() }
         }
+        ConfigError::AliasTables { key, alias } => {
+            Msg::ConfigErrorAliasTables { key: key.to_string(), alias: alias.to_string() }
+        }
+        ConfigError::AliasProfile { profile, key, alias } => {
+            Msg::ConfigErrorAliasProfile { profile: profile.clone(), key: key.to_string(), alias: alias.to_string() }
+        }
         ConfigError::SessionName(name) => Msg::ConfigErrorSessionName { name: name.clone() },
         ConfigError::SessionReserved(name) => Msg::ConfigErrorSessionReserved { name: name.clone() },
         ConfigError::SessionMissing { key, preset } => {

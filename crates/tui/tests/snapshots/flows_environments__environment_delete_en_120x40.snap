@@ -1,5 +1,6 @@
 ---
 source: crates/tui/tests/flows_environments.rs
+assertion_line: 546
 expression: backend
 ---
 "╭ Explorer ──────────────────╮╭ Workspace ─────────────────────────────────────────────────────────────────────────────╮"
@@ -17,7 +18,7 @@ expression: backend
 "│    ● staging  STG   asks b…││                                                                                        │"
 "│  ▾ ● prod  PROD   read-only││                                                                                        │"
 "│      ○   local-pg          ││                                                                                        │"
-"│▾ Session presets 0         │╭ Delete ──────────────────────────────────────────────────╮                             │"
+"│▾ Startup SQL 0             │╭ Delete ──────────────────────────────────────────────────╮                             │"
 "│    n here makes a list of …││                                                          │                             │"
 "│                            ││ Delete the environment “prod”?                           │                             │"
 "│                            ││ local-pg uses it: it will not connect until you pick     │                             │"

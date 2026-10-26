@@ -1,5 +1,6 @@
 ---
 source: crates/tui/tests/flows_keychain_offer.rs
+assertion_line: 202
 expression: "o.h.draw(w, hh).backend()"
 ---
 "╭ Explorer ──────────────────╮ 1 console 1 ×                                                                            "
@@ -16,7 +17,7 @@ expression: "o.h.draw(w, hh).backend()"
 "│▾ Environments 0            ││                                                                                        │"
 "│  ▸ ○ Default rules (no env…││                                                                                        │"
 "│    ＋ Add presets: dev, te…││                                                                                        │" Hidden by multi-width symbols: [(6, " ")]
-"│▾ Session presets 0         ││                                                                                        │"
+"│▾ Startup SQL 0             ││                                                                                        │"
 "│    n here makes a list of …│╭ Keychain access through security ────────────────────────╮                             │"
 "│▾ Saved queries 0           ││                                                          │                             │"
 "│    Ctrl+S in a console sav…││ macOS likely asked for your login password because       │                             │"

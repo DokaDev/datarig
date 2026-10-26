@@ -182,13 +182,20 @@ pub struct ConnectionConfig {
     /// [`tunnel::route`]).
     #[serde(default)]
     pub tunnel: Option<String>,
-    /// The session preset its query sessions start with (`session = "<name>"`, `"none"`, or no
-    /// key: its environment's; see [`session::plan`]).
-    #[serde(default)]
+    /// The Startup SQL preset its query sessions start with (`startup = "<name>"`, `"none"`, or
+    /// no key: its environment's; see [`session::plan`]).
+    #[serde(default, rename = "startup")]
     pub session: session::SessionRef,
-    /// Its own statements its query sessions start with, after the preset's.
-    #[serde(default)]
+    /// Its own statements its query sessions start with, after the preset's (`startup_sql`).
+    #[serde(default, rename = "startup_sql")]
     pub session_sql: Vec<String>,
+    /// `session`, the 0.31 name of `startup`, as the file has it: the loader moves it to
+    /// [`Self::session`] (`None` once loaded).
+    #[serde(default, rename = "session")]
+    pub old_session: Option<session::SessionRef>,
+    /// `session_sql`, the 0.31 name of `startup_sql`, the same way.
+    #[serde(default, rename = "session_sql")]
+    pub old_session_sql: Option<Vec<String>>,
     /// Name of this profile's table in the file, used to update it in place on save when the
     /// table has no `id` yet (the first save after the migration).
     #[serde(skip)]
@@ -276,6 +283,8 @@ impl Default for ConnectionConfig {
             tunnel: None,
             session: session::SessionRef::Inherit,
             session_sql: Vec::new(),
+            old_session: None,
+            old_session_sql: None,
             origin: None,
         }
     }

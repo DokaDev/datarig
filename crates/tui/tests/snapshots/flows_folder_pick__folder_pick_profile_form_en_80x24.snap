@@ -1,13 +1,14 @@
 ---
 source: crates/tui/tests/flows_folder_pick.rs
+assertion_line: 355
 expression: "h.draw(80, 24).backend()"
 ---
 "╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
-"│  ＋ New connection   ││                                                      │" Hidden by multi-width symbols: [(4, " ")]
-"│▾╭ Edit connection — v6 ────────────────────────────────────────────────────╮ │"
-"│ │  Basic   SSH   Advanced                            Ctrl+N/Ctrl+P section │ │"
+"│ ╭ Edit connection — v6 ────────────────────────────────────────────────────╮ │"
+"│▾│  Basic   SSH   Advanced                            Ctrl+N/Ctrl+P section │ │"
 "│ │                                                                          │ │"
 "│ │ SSL mode          disable ▾   ←/→ change · Enter list                    │ │"
+"│ │ CA file                                     PEM; checks the server's ce… │ │"
 "│ │ ╭ Folder ──────────────────────────────────────────────────────────────╮ │ │"
 "│ │ │▾ (top level)                                                         │ │ │"
 "│ │ │  ▾ a/                                                                │ │ │"

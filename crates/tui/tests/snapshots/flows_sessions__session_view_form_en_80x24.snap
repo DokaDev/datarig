@@ -1,5 +1,6 @@
 ---
 source: crates/tui/tests/flows_sessions.rs
+assertion_line: 1037
 expression: "h.draw(80, 24).backend()"
 ---
 "╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
@@ -10,13 +11,13 @@ expression: "h.draw(80, 24).backend()"
 "│ │ Idle disconnect  never                 app setting                       │ │"
 "│▾│ Idle rollback    30m                   environment prod                  │ │"
 "│ │                                                                          │ │"
-"│▾│ From the session preset “reporting” of the environment prod:             │ │"
+"│▾│ From the Startup SQL “reporting” of the environment prod:                │ │"
 "│ │   SET statement_timeout = '30s'                                          │ │"
 "│ │     behind a pooler: per transaction as SET LOCAL statement_timeout =    │ │"
 "│▾│        '30s'                                                             │ │"
 "│ │   SET work_mem = '64MB'                                                  │ │"
 "│ │     behind a pooler: per transaction as SET LOCAL work_mem = '64MB'      │ │"
-"│ │ From its own session SQL:                                                │ │"
+"│ │ From its own startup SQL:                                                │ │"
 "│ │   SET jit = off                                                          │ │"
 "│ │     behind a pooler: per transaction as SET LOCAL jit = off              │ │"
 "│ │                                                                          │ │"

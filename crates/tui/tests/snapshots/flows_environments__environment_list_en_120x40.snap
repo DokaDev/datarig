@@ -1,5 +1,6 @@
 ---
 source: crates/tui/tests/flows_environments.rs
+assertion_line: 551
 expression: backend
 ---
 "╭ Explorer ──────────────────╮╭ Workspace ─────────────────────────────────────────────────────────────────────────────╮"
@@ -11,18 +12,18 @@ expression: backend
 "│▾ Tunnels 0                 ││  Ctrl+O     Quick connect                                                              │"
 "│    n here makes an SSH tun…││  Ctrl+T     New console tab                                                            │"
 "│▾ Environments 4            ││  Space t u  Reopen a closed tab                                                        │"
-"│  ▸ ○ Default rules (no env…││  n          New connection                                                             │"
-"│    ● dev╭ Edit connection — local-pg ──────────────────────────────────────────────────────────────────────╮         │"
-"│    ● tes│  Basic   SSH   Advanced                                                    Ctrl+N/Ctrl+P section │         │"
-"│    ● sta│                                                                                                  │         │"
-"│  ▾ ● pro│ SSL mode          disable ▾   ←/→ change · Enter list                                            │         │"
-"│      ○  │ CA file             ╭ Environment ─────────────────────────────────────────╮'s certificate       │         │"
-"│▾ Session│ Client cert         │ › type to filter                                     │ver asks             │         │"
-"│    n her│ Client key          │                                                      │ase                  │         │"
-"│         │ Statement cache   ‹ │ ○ None (default rules)  standard rules               │ode                  │         │"
-"│         │ Environment       ● │ ● dev                   standard rules               │ry write             │         │"
-"│         │ Session preset    En│ ● test                  standard rules               │                     │         │"
-"│         │ Session SQL         │ ● staging  STG          asks before every write · m… │he preset's          │         │"
+"│  ▸ ○ Def╭ Edit connection — local-pg ──────────────────────────────────────────────────────────────────────╮         │"
+"│    ● dev│  Basic   SSH   Advanced                                                    Ctrl+N/Ctrl+P section │         │"
+"│    ● tes│                                                                                                  │         │"
+"│    ● sta│ SSL mode          disable ▾   ←/→ change · Enter list                                            │         │"
+"│  ▾ ● pro│ CA file                                               PEM; checks the server's certificate       │         │"
+"│      ○  │ Client cert         ╭ Environment ─────────────────────────────────────────╮ver asks             │         │"
+"│▾ Startup│ Client key          │ › type to filter                                     │ase                  │         │"
+"│    n her│ Statement cache   ‹ │                                                      │ode                  │         │"
+"│         │ Environment       ● │ ○ None (default rules)  standard rules               │ry write             │         │"
+"│         │ Startup SQL       En│ ● dev                   standard rules               │                     │         │"
+"│         │ Own startup SQL     │ ● test                  standard rules               │                   × │         │"
+"│         │                     │ ● staging  STG          asks before every write · m… │                     │         │"
 "│         │ Color             ‹ │ ● prod  PROD            read-only · asks before eve… │                     │         │"
 "│         │ Icon              ‹ │   New environment…                                   │                     │         │"
 "│         │ Folder            ‹ ╰───────────────── Enter pick · ↑↓ select · Esc cancel ╯                     │         │"

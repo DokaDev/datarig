@@ -517,8 +517,8 @@ policy = "prod"                # its environment (see Environments below)
 password_source = "command"
 password_command = "op read op://work/prod-db/password"
 tunnel = "office"              # the tunnel preset below
-session = "reporting"          # the session preset below ("none": none, whatever its environment maps)
-session_sql = ["SET work_mem = '256MB'"]   # its own session settings, after the preset's
+startup = "reporting"          # the Startup SQL below ("none": none, whatever its environment maps)
+startup_sql = ["SET work_mem = '256MB'"]   # its own session settings, after the Startup SQL's
 sslmode = "verify-full"        # TLS: disable | prefer | require | verify-ca | verify-full
 sslrootcert = "~/certs/company-ca.pem"
 
@@ -541,7 +541,7 @@ user = "ec2-user"
 auth = "key"
 key_file = "~/.ssh/prod.pem"
 
-[sessions.reporting]           # what a query session starts with (see Session presets below)
+[startup.reporting]            # what a query session starts with (see Startup SQL below)
 dbms = "postgres"              # postgres | mysql
 sql = ["SET statement_timeout = '30s'", "SET work_mem = '64MB'"]
 
@@ -606,8 +606,8 @@ that name, so existing files keep working) with these keys, each optional:
 | `paging_idle_timeout` | seconds, or `"90s"`, `"5m"`, `"1h"`, `"off"` | `"30s"` |
 | `spill_limit` | bytes, or `"512MB"`, `"2GB"`, `"off"` | the top-level `spill_limit` |
 | `idle_disconnect` | a duration from `"1m"` to `"24h"`, or `"off"` ([Idle connections and lock waits](#idle-connections-and-lock-waits)) | the top-level `idle_disconnect` |
-| `lock_wait` | a duration from `"1s"` to `"24h"`, or `"off"` (a session preset or a profile's `session_sql` may set its own for its sessions: [Session presets](#session-presets)) | the top-level `lock_wait` |
-| `session` | `{ postgres = "<preset>", mysql = "<preset>" }`, either left out ([Session presets](#session-presets)) | none |
+| `lock_wait` | a duration from `"1s"` to `"24h"`, or `"off"` (a Startup SQL or a profile's `startup_sql` may set its own for its sessions: [Startup SQL](#startup-sql)) | the top-level `lock_wait` |
+| `startup` | `{ postgres = "<name>", mysql = "<name>" }`, either left out ([Startup SQL](#startup-sql); old name: `session`) | none |
 | `color` | `red`, `orange`, `yellow`, `green`, `teal`, `cyan`, `blue`, `indigo`, `purple`, `pink`, `brown`, `gray`, or `#rrggbb` | none |
 | `badge` | up to 8 columns, no blanks around it | none |
 
@@ -829,7 +829,7 @@ disconnect and Lock wait fields, empty for the config's value; `"off"` turns it 
   manual transaction on PostgreSQL only that run is undone (its savepoint) and the transaction
   keeps what earlier runs did; on MySQL the server undoes the statement only (unless
   `innodb_rollback_on_timeout` is on, then the whole transaction, and datarig says so).
-  A [session preset](#session-presets) or a profile's own `session_sql` may set the lock wait
+  A [Startup SQL](#startup-sql) or a profile's own `startup_sql` may set the lock wait
   itself (PostgreSQL `SET lock_timeout = '3s'`; MySQL `SET SESSION lock_wait_timeout = 3,
   innodb_lock_wait_timeout = 3`): it runs after datarig's own limit, so it overrides the
   environment's for those sessions (behind a pooler too, in every transaction), and the error
@@ -842,61 +842,91 @@ disconnect and Lock wait fields, empty for the config's value; `"off"` turns it 
   session's own). `:session` shows the lock wait that
   applies and what it overrides.
 
-### Session presets
+### Startup SQL
 
-A session preset is a named list of settings a profile's query sessions (each tab's) start with,
-for one kind of database. Presets are optional: a profile without any of these keys starts its
-sessions with the database's own defaults.
+A Startup SQL is a named list of settings a profile's query sessions (each tab's) start with,
+for one kind of database (called a session preset in 0.31). It is optional: a profile
+without any of these keys starts its sessions with the database's own defaults.
 
 ```toml
-[sessions.reporting]
+[startup.reporting]
 dbms = "postgres"                  # "postgres" or "mysql"
 sql = ["SET statement_timeout = '30s'", "SET work_mem = '64MB'"]   # one statement per item
 
 [policy.prod]
-session = { postgres = "reporting", mysql = "my_reporting" }   # its profiles' preset per database
+startup = { postgres = "reporting", mysql = "my_reporting" }   # its profiles' Startup SQL per database
 
 [[connections]]
 name = "orders"
-session = "reporting"              # this profile's own preset, instead of its environment's
-# session = "none"                 # no preset, even when its environment maps one
-session_sql = ["SET work_mem = '256MB'"]   # its own statements, after the preset's
+startup = "reporting"              # this profile's own Startup SQL, instead of its environment's
+# startup = "none"                 # none, even when its environment maps one
+startup_sql = ["SET work_mem = '256MB'"]   # its own statements, after the Startup SQL's
 ```
 
-The explorer's **Session presets** section lists them (the same keys as the Tunnels section: `n`
+The keys had other names in 0.31, still read the same: `[sessions.<name>]` for
+`[startup.<name>]`, an environment's `session` for `startup`, a profile's `session` and
+`session_sql` for `startup` and `startup_sql`. A file that has a key and its old name in one
+place (both kinds of tables, or both keys in one environment or profile) is an error that names
+both. Saving from the app leaves the old names as they are while what they say does not change,
+and renames them in place (values and comments kept) once it does, a whole place at a time:
+
+- the presets: once any of them is added, changed, renamed or deleted, every `[sessions.<name>]`
+  table becomes `[startup.<name>]` (the file cannot have both);
+- an environment (or `[policy.default]`): once anything in its table changes, its `session`
+  becomes `startup` (and `tx_idle_timeout` becomes `tx_idle_rollback`);
+- a profile: once its preset or its own statements change, both its `session` and its
+  `session_sql` are renamed, even the one that kept its value.
+
+The explorer's **Startup SQL** section lists them (the same keys as the Tunnels section: `n`
 new, `e` edit, `c` copy, `d` delete, `t` test, `Enter` or `l` to see the profiles that use one,
 their own or through their environment), each with its database, how many statements and
 profiles it has (the statements in the warning color when one changes a setting a read-only
 environment refuses, such as MySQL's `foreign_key_checks = 0`), and under it the first statement
 that is not allowed and why. The `/` filter finds a preset by its name or a statement. Its form
-has the name, the database (`←`/`→`) and the statements in one line, separated by `;` (saved one
-per item); under them it says which statement is not allowed, or which one a read-only
-environment would refuse. A rename takes the profiles and environments that name the preset
+has the name, the database (`←`/`→`) and the statements, a list with one statement per row
+(saved one per item); under each row that is not allowed it says why, and under each one a
+read-only environment would refuse, that it would. In the list:
+
+- `Enter` on a row with a statement adds an empty row below it; on an empty row it removes the
+  row and moves to the next field (type, `Enter`, type, `Enter`, `Enter`).
+- `↑`/`↓` go from row to row and leave the list past its first or last row; `Tab` leaves it.
+- `Backspace` on an empty row and `Ctrl+D` on any row remove it.
+- A paste makes a row of each statement in it: a `;` ends one, and so does a line break before a
+  line that starts with `SET` (a statement that goes on over several lines stays one). A paste
+  with a line break is rows of its own (in the focused row when it is empty, else below it); one
+  on a single line goes in at the cursor. A row that still holds two statements (`SET a = 1 SET
+  b = 2`) is refused.
+- The mouse: a click on a row puts the cursor there, `×` removes the row, **+ Add statement**
+  adds one at the end, and the wheel scrolls a list longer than its room (the lines out of view
+  are counted at its top and bottom). A long row scrolls sideways while you edit it.
+
+A rename takes the profiles and environments that name the preset
 along; deleting one asks first and names them, and they keep the name (and do not connect until
 another preset, or none, is picked). **Test** opens one session on a connected profile that uses
 the preset (else any connected profile of its database; with several, you pick one), starting
 with the preset alone exactly as a tab's session would, and closes it again once it connected:
-"Session preset “reporting” applied on local-pg (2 statements); the test session was closed",
+"Startup SQL “reporting” applied on local-pg (2 statements); the test session was closed",
 or the statement and the server's error. A profile that is not connected is not connected for
 it: the test says which to connect first.
 
-A profile's form picks its preset in the Advanced section (`Enter` on Session preset): its
-environment's (named, the default), **None** (no preset, even if the environment maps one), the
-presets of its database, or "New session preset…", which opens the preset form for its database
+A profile's form picks its Startup SQL in the Advanced section (`Enter` on Startup SQL): its
+environment's (named, the default), **None** (none, even if the environment maps one), the
+presets of its database, or "New Startup SQL…", which opens the preset form for its database
 and comes back with the new one picked; a preset of the other database (the driver changed) is
-marked and the form does not save. Its own statements are the Session SQL line below it (`;`
-between them; one that is not allowed is said after it, and the form does not save). The
-environment form has one list per database (Preset (PostgreSQL), Preset (MySQL)): none, that
-database's presets, or a new one.
+marked and the form does not save. Its own statements are the Own startup SQL list below it, the
+same list as the preset form's (one that is not allowed says why under its row, and the form does
+not save); it takes the lines the screen leaves, and scrolls past them. The
+environment form has one list per database (Startup SQL (PG), Startup SQL (MySQL)):
+none, that database's presets, or a new one.
 
 What a query session starts with, in order (a later setting of the same name wins): datarig's
 own limits (`lock_wait`, `idle_disconnect`, `tx_idle_rollback`: see above and [Manual
-commit](#manual-commit)), then the preset (the profile's `session`, else the one its
+commit](#manual-commit)), then the preset (the profile's `startup`, else the one its
 environment maps for its database; `[policy.default]` may map one too), then the profile's
-`session_sql`. So a preset's or the profile's own `SET` of the lock wait overrides the
+`startup_sql`. So a preset's or the profile's own `SET` of the lock wait overrides the
 environment's `lock_wait` for its sessions (see [Idle connections and lock
 waits](#idle-connections-and-lock-waits)); the other limits stay datarig's (below). `none` is
-not a preset's name: `[sessions.none]` is an error of the file. The
+not a preset's name: `[startup.none]` is an error of the file. The
 explorer's lookups (the metadata sessions) never get these settings.
 
 - **Only settings.** Each item is one statement that sets settings of the session and nothing
@@ -956,7 +986,7 @@ explorer's lookups (the metadata sessions) never get these settings.
 - **Sent ≠ applied.** Each statement runs alone, in order, when a tab's session opens (and
   again when it reconnects). One the server refuses (an unknown setting, a bad value) closes
   that session before anything else runs, and the tab says "local-pg: statement 1 of its own
-  session SQL failed, so the session was closed: …" with the server's words. The run that opened
+  startup SQL failed, so the session was closed: …" with the server's words. The run that opened
   it does not happen.
 - **Behind a connection pooler** (PostgreSQL, a connection whose server process is not the one
   it started with, e.g. PgBouncer in transaction mode): nothing is set for the session, which
@@ -980,21 +1010,24 @@ explorer's lookups (the metadata sessions) never get these settings.
   = …`), and a read-only session is checked after its statements ran. A value that calls a
   function or has a subquery (`SET @x = (SELECT …)`) runs at connect like any other; one that
   takes long holds the connect up to its time limit.
-- The form's one line shows a preset's statements without their line comments (`-- …`, `# …`,
-  which would hide the statements after them), so saving the form writes them without.
+- A row shows its statement on one line, without its line comments (`-- …`, `# …`), and a line
+  break inside a string as `⏎` (a line break again when saved). A row you
+  do not edit is saved as the file has it (its comments and line breaks too); one you edit is
+  saved as its one line, so a comment in it is gone. A comment between the items of the file's
+  `sql` list goes when the list is written again (any of its rows edited, added or removed).
 
-**Seeing what applies**: `:session` shows what the query sessions of the explorer's selected
+**Seeing what applies**: `:session` (or `:startup`) shows what the query sessions of the explorer's selected
 profile (else the active tab's) start with, and `Ctrl+E` in a profile's form shows the same for
 the form's values, saved or not (the title says when they are unsaved). The first line names the
 profile, its database and its environment (or the default rules), and says when that environment
 is read-only. Then, in the order they are applied: the app's limits (lock wait, idle disconnect,
 idle rollback) with their values and where each comes from (the environment, the default rules
 or the app setting; a lock wait a statement sets shows that value, the statement's source, and
-the value it overrides: "3s  its session preset “fast” — overrides environment prod: 5s", or
+the value it overrides: "3s  its Startup SQL “fast” — overrides environment prod: 5s", or
 "not known" when datarig cannot read it), an environment's preset the profile turned off
-(`session = "none"`), and
+(`startup = "none"`), and
 each statement under where it comes from (the preset and who picked it, or the profile's own
-session SQL). Under a PostgreSQL statement a dim line says how it would go behind a pooler in
+startup SQL). Under a PostgreSQL statement a dim line says how it would go behind a pooler in
 transaction mode: per transaction as `SET LOCAL …`, or not sent and why. That line only applies
 when a connection turns out to be behind one (known once it connects); otherwise each statement
 is sent as written. A profile whose plan has an error shows the words its connect would refuse

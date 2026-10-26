@@ -888,14 +888,26 @@ fn draw_row(app: &App, row: &Row, line: Rect, bg: Style, buf: &mut Buffer) {
         put(buf, x + cx as u16, y, arrow, w - cx, Style::new().fg(th.fg_muted).patch(bg));
     }
     cx += 2;
-    for (text, style) in row_parts(app, row) {
+    let parts = row_parts(app, row);
+    // Where the last part drawn starts, and whether it is a separator (` · `).
+    let mut last: Option<(usize, bool)> = None;
+    for (k, (text, style)) in parts.iter().enumerate() {
         if cx >= w {
+            // A separator left at the end, before parts the row has no room for: `…` in its
+            // place, as a part cut short ends.
+            if let Some((at, true)) = last
+                && parts[k..].iter().any(|(t, _)| !t.is_empty())
+            {
+                let dim = Style::new().fg(th.fg_dim).patch(bg);
+                put(buf, x + at as u16, y, &fit(" …", w - at, Align::Left), w - at, dim);
+            }
             break;
         }
         // A part with a background of its own (an environment's badge) keeps it: the row's would
         // leave the chip's text on the row's background.
-        let style = if style.bg.is_some() { style } else { style.patch(bg) };
-        let used = put(buf, x + cx as u16, y, &text, w - cx, style);
+        let style = if style.bg.is_some() { *style } else { style.patch(bg) };
+        let used = put(buf, x + cx as u16, y, text, w - cx, style);
+        last = Some((cx, text.trim() == "·"));
         cx += used as usize;
     }
     // An object's estimates on the right, in the room its name leaves: never over the name;

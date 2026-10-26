@@ -225,7 +225,7 @@ impl Ctx {
             Ctx::Nav => "Every pane that is not text input (explorer, results, vim Normal/Visual).",
             Ctx::Explorer => "The explorer: folders, connection profiles, their databases and schema trees.",
             Ctx::ExplorerFilter => {
-                "The `/` filter of the explorer: profiles (name, host, database), folders, tunnels, environments, session presets (name, statements) and saved queries, and under connected profiles the databases, schemas, tables, views and structure items already loaded."
+                "The `/` filter of the explorer: profiles (name, host, database), folders, tunnels, environments, Startup SQL (name, statements) and saved queries, and under connected profiles the databases, schemas, tables, views and structure items already loaded."
             }
             Ctx::Grid => "The result grid.",
             Ctx::Inspector => {
@@ -274,7 +274,7 @@ impl Ctx {
                 "The action menu: a right click (an explorer node, the grid, a tab, the editor) opens it at the pointer; `Space Space`, `Shift+F10` or the Menu key next to the selection, `Space t m` under the active tab. The selection's actions come first, then the pane's, each with its key in that pane. Typing filters it (when nothing in it matches, every action is searched); the arrows, `Ctrl+N`/`Ctrl+P` and `Tab` move, `Enter` runs, `Esc` closes (`Backspace` on an empty filter does not); a shown key that is not a character (`Ctrl+…`, `F…`) runs its item; the pointer selects the item under it."
             }
             Ctx::ProfileForm => {
-                "Connection profile form. With the mouse: a click focuses a field (in a text, the cursor goes there), picks a value, opens the list of a `value ▾`, steps a `‹ value ›` (its arrows; the value opens a list), switches the section or presses a button."
+                "Connection profile form. With the mouse: a click focuses a field (in a text, the cursor goes there), picks a value, opens the list of a `value ▾`, steps a `‹ value ›` (its arrows; the value opens a list), switches the section or presses a button. A Startup SQL list (the preset form's statements, a profile's own startup SQL) has one statement per row: `Enter` after a filled row adds one below, on an empty row removes it and moves on; `↑`/`↓` go from row to row and leave the list at its first and last; `Tab` leaves it; `Backspace` on an empty row and `Ctrl+D` remove a row; a paste of several statements makes a row of each. With the mouse: a click on a row puts the cursor there, `×` removes it, \"+ Add statement\" adds one at the end (both on the release), the wheel scrolls a list longer than its room."
             }
             Ctx::Settings => {
                 "The settings screen: one list by category, each setting with its description; a click selects a row and its `‹`/`›` change the value, the wheel selects, the pointer only highlights."
@@ -293,7 +293,7 @@ impl Ctx {
                 "What the open transaction did (its statements that may have written, rows, time; how long it has been open and idle): `c` commits, `r` rolls back, `Esc` closes; a click on a button does what its key does."
             }
             Ctx::SessionView => {
-                "What a profile's query sessions start with (`:session`; in the profile form `Ctrl+E`, for its unsaved values), in the order they are applied, each with where it comes from: the app's limits, the session preset's statements, the profile's own; behind a pooler in transaction mode, how each PostgreSQL statement goes there. `j`/`k` scroll, `Esc` closes; a click on Close closes too."
+                "What a profile's query sessions start with (`:session` or `:startup`; in the profile form `Ctrl+E`, for its unsaved values), in the order they are applied, each with where it comes from: the app's limits, the Startup SQL's statements, the profile's own; behind a pooler in transaction mode, how each PostgreSQL statement goes there. `j`/`k` scroll, `Esc` closes; a click on Close closes too."
             }
             Ctx::IconsAsk => {
                 "Whether the terminal shows the Nerd Font icons (asked once, with a preview); No has the focus; a click on Yes or No answers."

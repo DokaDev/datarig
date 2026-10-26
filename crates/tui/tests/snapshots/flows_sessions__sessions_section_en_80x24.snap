@@ -1,5 +1,6 @@
 ---
 source: crates/tui/tests/flows_sessions.rs
+assertion_line: 392
 expression: "h.draw(w, ht).backend()"
 ---
 "╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
@@ -13,10 +14,10 @@ expression: "h.draw(w, ht).backend()"
 "│▾ Environments 1      ││  Ctrl+T     New console tab                          │"
 "│  ▸ ○ Default rules (…││  Space t u  Reopen a closed tab                      │"
 "│  ▸ ○ prod  standard …││  n          New connection                           │"
-"│▾ Session presets 4   ││  F1         Keyboard help                            │"
+"│▾ Startup SQL 4       ││  F1         Keyboard help                            │"
 "│    ◇ broken  Postgre…││  :          Commands                                 │"
 "│      statement 2: SE…││                                                      │"
-"│    ◇ fk_off  MySQL · ││                                                      │"
+"│    ◇ fk_off  MySQL … ││                                                      │"
 "│  ▸ ◇ my_ro  MySQL · …││                                                      │"
 "│  ▾ ◇ reporting  Post…││                                                      │"
 "│      ○   local-pg    ││                                                      │"

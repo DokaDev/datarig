@@ -1815,6 +1815,11 @@ fn set_shape(sql: &str, mode: MySqlMode) -> Result<Vec<(Option<String>, String)>
     if !ws.first().is_some_and(|w| w.is("SET")) {
         return Err(SetProblem::NotSet);
     }
+    // `SET` is reserved: another one is the next statement, with no `;` before it (the server
+    // refuses the text, so it is never one setting).
+    if ws[1..].iter().any(|w| w.is("SET")) {
+        return Err(SetProblem::NotOne);
+    }
     let word = |i: usize| ws.get(i).map_or("", |w| w.up.as_str());
     let scoped = matches!(word(1), "GLOBAL" | "PERSIST" | "PERSIST_ONLY" | "SESSION" | "LOCAL");
     if word(if scoped { 2 } else { 1 }) == "TRANSACTION" {

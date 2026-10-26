@@ -1,5 +1,6 @@
 ---
 source: crates/tui/tests/flows_sessions.rs
+assertion_line: 1186
 expression: "h.draw(w, ht).backend()"
 ---
 "╭ Explorer ──────────────────╮ 1 console 1 ×                                                                            "
@@ -12,16 +13,16 @@ expression: "h.draw(w, ht).backend()"
 "│▾ Environments 1            ││  5 FROM shop.orders o                                                                  │"
 "│    ○ Default rules (no env…││  6 JOIN shop.users u ON u.id = o.user_id                                               │"
 "│  ▸ ○ prod  standard rules …││  7 WHERE o.status = 'paid';                                                            │"
-"│▾ Session presets 3         ││  8                                                                                     │"
+"│▾ Startup SQL 3             ││  8                                                                                     │"
 "│    ◇ reporting  PostgreSQL…││  9 SELECT * FROM analytics.events;                                                     │"
 "│    ╭ Session settings — local-pg ───────────────────────────────────────────────────────────────────────────────╮    │"
 "│  ▸ │ local-pg · PostgreSQL · environment prod                                                                   │    │"
 "│    │                                                                                                            │    │"
-"│    │ Lock wait        3s     its session preset “fast” — overrides environment prod: 5s                         │    │"
+"│    │ Lock wait        3s     its Startup SQL “fast” — overrides environment prod: 5s                            │    │"
 "│    │ Idle disconnect  never  app setting                                                                        │    │"
 "│    │ Idle rollback    30m    environment prod                                                                   │    │"
 "│    │                                                                                                            │    │"
-"│    │ From its session preset “fast”:                                                                            │    │"
+"│    │ From its Startup SQL “fast”:                                                                               │    │"
 "│    │   SET lock_timeout = '3s'                                                                                  │    │"
 "│    │     behind a pooler: per transaction as SET LOCAL lock_timeout = '3s'                                      │    │"
 "│    │                                                                                                            │    │"

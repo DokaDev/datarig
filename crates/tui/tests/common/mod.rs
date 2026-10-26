@@ -796,7 +796,7 @@ impl Harness {
                         format!("@{}", self.app.profile(*id).map(|p| p.name.clone()).unwrap_or_default())
                     }
                     // Session presets: `$name` (its problem's line `!`), its profiles `@name`.
-                    RowKind::SessionsHeader => "[session presets]".to_string(),
+                    RowKind::SessionsHeader => "[startup sql]".to_string(),
                     RowKind::Session(id) => {
                         format!("${}", self.app.session_preset(*id).map(|p| p.name.clone()).unwrap_or_default())
                     }
@@ -804,7 +804,7 @@ impl Harness {
                     RowKind::SessionUser(_, id) => {
                         format!("@{}", self.app.profile(*id).map(|p| p.name.clone()).unwrap_or_default())
                     }
-                    RowKind::SessionsEmpty => "(no session presets)".to_string(),
+                    RowKind::SessionsEmpty => "(no startup sql)".to_string(),
                 };
                 let inside = usize::from(in_connections(&r.kind));
                 assert!(r.depth >= inside, "a Connections row below its head: {:?}", r.kind);

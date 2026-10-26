@@ -1,5 +1,6 @@
 ---
 source: crates/tui/tests/ui_snapshots.rs
+assertion_line: 873
 expression: backend
 ---
 "╭ Explorer ────────────────────────────╮ 1 console 1 ×                                                                                                          "
@@ -23,8 +24,9 @@ expression: backend
 "│                             │ Client key                                            PEM, without a passphrase                  │                             │"
 "│                             │ Statement cache   ‹ off ›  ←/→ change · off behind PgBouncer in transaction mode                 │                             │"
 "│                             │ Environment       None (default rules) ▾   Enter list · standard rules                           │                             │"
-"│                             │ Session preset    Environment's (none) ▾   Enter list                                            │                             │"
-"│                             │ Session SQL                                           its own SET …; after the preset's          │                             │"
+"│                             │ Startup SQL       Environment's (none) ▾   Enter list                                            │                             │"
+"│                             │ Own startup SQL     1 SET name = value                                                         × │                             │"
+"│                             │                     + Add statement  after the Startup SQL · Enter adds                          │                             │"
 "│                             │ Color             ‹ ● orange ›  ←/→ change · Enter list                                          │                             │"
 "│                             │ Icon              ‹ the driver's icon ›  ←/→ change · Enter list                                 │                             │"
 "│                             │ Folder            ‹ (top level) ›  ←/→ change · Enter list                                       │                             │"
@@ -33,7 +35,6 @@ expression: backend
 "│                             │                                                                                                  │                             │"
 "│                             │                                                                                                  │                             │"
 "│                             ╰───────────────────────── Tab/↑↓ move · Ctrl+N/P section · Ctrl+T test · Ctrl+S save · Esc cancel ╯                             │"
-"│                                      ││                                                                                                                      │"
 "│                                      ││                                                                                                                      │"
 "│                                      ││                                                                                                                      │"
 "│                                      ││                                                                                                                      │"

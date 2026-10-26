@@ -318,6 +318,7 @@ impl App {
                 if let Some(f) = self.overlays.form_mut() {
                     if let Some(d) = dbms {
                         f.session_dbms = d;
+                        f.session_sql.set_dbms(Some(d));
                     }
                     f.back_to = Some(back);
                 }

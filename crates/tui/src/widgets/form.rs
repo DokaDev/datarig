@@ -7,11 +7,12 @@
 //! a preset of them). The tunnel form is the same dialog with the SSH section alone, the
 //! preset's name first. The Advanced section's environment is picked from a list too (its
 //! color's dot, its name and badge shown). The environment form is the same dialog with an
-//! environment's fields: its name, color, badge and rules. The session preset form has its name,
-//! its database and its statements (one line, `;` between them), and under them the first
-//! statement that is not allowed, or one a read-only environment would refuse. A profile's
-//! session preset (its environment's, none, or a preset of its database) and an environment's,
-//! for each database, are picked from a list; a profile's own session SQL is one line.
+//! environment's fields: its name, color, badge and rules. The Startup SQL form has its name,
+//! its database and its statements, a list of one statement per row ([`statement_list`]), each
+//! row that is not allowed, or that a read-only environment would refuse, saying why under it. A
+//! profile's Startup SQL (its environment's, none, or a preset of its database) and an
+//! environment's, for each database, are picked from a list; a profile's own startup SQL is the
+//! same list (what is not allowed only), its row as tall as the screen leaves room for.
 
 use crate::app::action::Action;
 use crate::app::environments::{RuleTone, rules_tones};
@@ -24,9 +25,10 @@ use crate::keymap::Ctx;
 use crate::text::{width, wrap};
 use crate::theme;
 use crate::widgets::dialog::{centered, modal};
+use crate::widgets::statement_list::{Note, StatementList};
 use crate::widgets::statusbar::level_color;
 use crate::widgets::{SPINNER, put};
-use datarig_core::i18n::{Label, Msg};
+use datarig_core::i18n::{I18n, Label, Msg};
 use datarig_core::profile::ssh::SshAuth;
 use datarig_core::secret::SourceKind;
 use ratatui::buffer::Buffer;
@@ -124,6 +126,125 @@ fn drop_down(
     put(buf, x + used + 2, y, hint, room(x + used + 2), Style::new().fg(th.fg_dim).bg(th.surface));
 }
 
+/// A Startup SQL list in `area`: a row per statement (its number, its input, a `×` that removes
+/// it) with its note under it, then "+ Add statement" and `hint`. A list longer than the area
+/// scrolls (the focused row kept in view unless the wheel moved it), and the lines out of view
+/// are counted on its first and last line, at their right end (a list of fewer than three lines:
+/// over its last). Returns the hardware cursor (the focused row's).
+fn statement_list(
+    buf: &mut Buffer,
+    hits: &mut Vec<(Rect, FormHit)>,
+    list: &mut StatementList,
+    area: Rect,
+    notes: &[Option<(Vec<String>, Level)>],
+    (i18n, hint): (&I18n, &str),
+    (focused, hover): (bool, Option<FormHit>),
+) -> Option<(u16, u16)> {
+    let th = theme::cur();
+    let dim = Style::new().fg(th.fg_dim).bg(th.surface);
+    // Each line: a row, a line of the note of a row, or the add line.
+    let mut lines: Vec<(usize, Option<usize>)> = Vec::new();
+    for i in 0..list.row_count() {
+        lines.push((i, None));
+        let note_lines = notes.get(i).and_then(Option::as_ref).map_or(0, |(l, _)| l.len());
+        lines.extend((0..note_lines).map(|k| (i, Some(k))));
+    }
+    lines.push((usize::MAX, None));
+    // Longer than the area (of three lines at least): its first and last line count the lines
+    // out of view.
+    let marked = lines.len() > usize::from(area.height) && area.height >= 3;
+    let (top, h) = if marked { (1, usize::from(area.height) - 2) } else { (0, usize::from(area.height)) };
+    let max_scroll = lines.len().saturating_sub(h);
+    if list.follow {
+        let first = lines.iter().position(|(i, _)| *i == list.row).unwrap_or(0);
+        // The last row keeps the add line in view too.
+        let last = match list.row + 1 == list.row_count() {
+            true => lines.len() - 1,
+            false => lines.iter().rposition(|(i, _)| *i == list.row).unwrap_or(first),
+        };
+        if first < list.scroll {
+            list.scroll = first;
+        } else if last >= list.scroll + h {
+            list.scroll = last + 1 - h.min(last + 1);
+        }
+    }
+    list.scroll = list.scroll.min(max_scroll);
+    let num_w: u16 = 4;
+    let input_x = area.x + num_w;
+    let input_w = area.width.saturating_sub(num_w + 2);
+    let right = area.x + area.width;
+    let mut cursor = None;
+    for (k, &(i, note)) in lines.iter().skip(list.scroll).take(h).enumerate() {
+        let y = area.y + top + k as u16;
+        if i == usize::MAX {
+            let add = i18n.label(Label::FormStatementAdd);
+            let on = hover == Some(FormHit::AddStatement);
+            // Under the numbers, so that the hint has room.
+            let ax = area.x + 2;
+            let style = hovered(Style::new().fg(th.accent).bg(th.surface), on);
+            let used = put(buf, ax, y, &add, usize::from(right.saturating_sub(ax)), style);
+            hits.push((Rect::new(ax, y, used, 1), FormHit::AddStatement));
+            let hx = ax + used + 2;
+            put(buf, hx, y, hint, usize::from(right.saturating_sub(hx)), dim);
+            continue;
+        }
+        if let Some(k) = note {
+            if let Some(Some((text, level))) = notes.get(i) {
+                let w = usize::from(right - input_x);
+                let line = text.get(k).map_or("", String::as_str);
+                put(buf, input_x, y, line, w, Style::new().fg(level_color(*level)).bg(th.surface));
+            }
+            continue;
+        }
+        let on_row = focused && i == list.row;
+        let number = Style::new().fg(if on_row { th.accent } else { th.fg_dim }).bg(th.surface);
+        put(buf, area.x, y, &format!("{:>3} ", i + 1), usize::from(num_w), number);
+        let field_bg = if on_row { th.selection } else { Style::new().bg(th.surface_alt) };
+        let empty = list.text(i).is_empty();
+        let Some(input) = list.input_mut(i) else { continue };
+        let cx = input.render(
+            Rect::new(input_x, y, input_w, 1),
+            buf,
+            Style::new().fg(th.fg).patch(field_bg),
+            on_row,
+            false,
+            None,
+        );
+        if on_row {
+            cursor = Some((cx, y));
+        } else if empty {
+            let placeholder = i18n.label(Label::FormStatementPlaceholder);
+            put(buf, input_x, y, &placeholder, usize::from(input_w), Style::new().fg(th.fg_dim).patch(field_bg));
+        }
+        // Its number too.
+        hits.push((Rect::new(area.x, y, num_w + input_w, 1), FormHit::Statement(i)));
+        let on = hover == Some(FormHit::RemoveStatement(i));
+        let bx = input_x + input_w + 1;
+        let used = put(buf, bx, y, "×", usize::from(right.saturating_sub(bx)), hovered(dim, on));
+        hits.push((Rect::new(bx, y, used, 1), FormHit::RemoveStatement(i)));
+    }
+    // The lines out of view, at the right end of the first and the last line; a list of one
+    // or two lines says the lines below (else above) at the right end of its last.
+    let below = lines.len().saturating_sub(list.scroll + h);
+    let last_y = area.y + area.height.saturating_sub(1);
+    let counts = match marked {
+        true => [(list.scroll, area.y, true), (below, last_y, false)],
+        false if below > 0 => [(0, area.y, true), (below, last_y, false)],
+        false => [(list.scroll, last_y, true), (0, last_y, false)],
+    };
+    for (count, y, up) in counts {
+        if count == 0 || area.height == 0 {
+            continue;
+        }
+        let count = count as u64;
+        let m = if up { Msg::SessionViewMoreAbove { count } } else { Msg::SessionViewMoreBelow { count } };
+        let text = i18n.msg(&m).to_string();
+        let x = right.saturating_sub(width(&text) as u16).max(input_x);
+        put(buf, x, y, &text, usize::from(right - x), dim);
+    }
+    cursor
+}
+
 /// The profile form: a large centered dialog with its section tabs (Basic / Advanced), the
 /// fields of the current section, the buttons and the test-connection line. Returns the
 /// hardware cursor (the focused text input).
@@ -145,40 +266,31 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
         .unwrap_or_default();
     let now = app.now();
     let top = app.overlays.top().map(|o| o.kind()) == Some(crate::app::overlay::OverlayKind::ProfileForm);
-    // A session preset form's profiles and what it says of its statements, read before the form
-    // is borrowed for drawing.
-    let (session_users, session_note) = match app.overlays.form() {
-        // A profile's own session SQL: which statement is not allowed.
-        Some(f) if f.kind == FormKind::Profile => {
-            let note = f.session_problem().map(|(index, p)| {
-                let problem = app.set_problem_text(&p);
-                let m = Msg::ExplorerSessionProblem { index: index.to_string(), problem };
-                (i18n.msg(&m).to_string(), Level::Error)
-            });
-            (Vec::new(), note)
-        }
-        Some(f) if f.is_session() => {
+    // A Startup SQL form's profiles and what its list says under each statement (a profile's own
+    // list: only what is not allowed), read before the form is borrowed for drawing.
+    let (session_users, statement_notes, edited_row) = match app.overlays.form() {
+        Some(f) if f.kind == FormKind::Profile || f.is_session() => {
             let users: Vec<String> = f
                 .original_name
                 .as_deref()
+                .filter(|_| f.is_session())
                 .map(|n| app.session_users(n).iter().map(|c| c.name.clone()).collect())
                 .unwrap_or_default();
-            let note = match (f.session_problem(), f.session_read_only_refused()) {
-                (Some((index, p)), _) => {
-                    let problem = app.set_problem_text(&p);
-                    let m = Msg::ExplorerSessionProblem { index: index.to_string(), problem };
-                    Some((i18n.msg(&m).to_string(), Level::Error))
-                }
-                (None, Some((index, block))) => {
-                    let what = i18n.label(crate::app::safety::blocked_label(block)).to_string();
-                    let m = Msg::FormSessionReadOnlyNote { index: index.to_string(), what };
-                    Some((i18n.msg(&m).to_string(), Level::Warning))
-                }
-                (None, None) => None,
-            };
-            (users, note)
+            let list = &f.session_sql;
+            let notes: Vec<Option<(String, Level)>> = (0..list.row_count())
+                .map(|i| match list.note(i) {
+                    Some(Note::Refused(p)) => Some((app.set_problem_text(p), Level::Error)),
+                    Some(Note::ReadOnly(b)) if f.is_session() => {
+                        let what = i18n.label(crate::app::safety::blocked_label(*b)).to_string();
+                        Some((i18n.msg(&Msg::FormStatementReadOnly { what }).to_string(), Level::Warning))
+                    }
+                    _ => None,
+                })
+                .collect();
+            let edited = (f.focus == Field::SessionSql).then_some(list.row);
+            (users, notes, edited)
         }
-        _ => (Vec::new(), None),
+        _ => (Vec::new(), Vec::new(), None),
     };
     let session_presets = &app.session_presets;
     let default_session = app.policies.default_rules().session.clone();
@@ -207,20 +319,6 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
         _ => Label::FormKeys,
     });
     let w = area.width.saturating_sub(4).min(100);
-    // An environment's fields, then a blank line and the profiles that use it, then the
-    // buttons: below the other forms' rows when there are more of them.
-    let env_rows = if env_form { form.fields().iter().filter(|f| !f.is_button()).count() as u16 } else { 0 };
-    // A session preset form: its three fields, the line about its statements, its profiles.
-    let used_by_row = if session_form { 7 } else { (env_rows + 3).max(11) };
-    // A profile's Advanced section of many rows (MySQL's) keeps a blank line above the buttons.
-    let adv_rows = match (form.kind, form.section) {
-        (FormKind::Profile, Section::Advanced) => form.fields().iter().filter(|f| !f.is_button()).count() as u16,
-        _ => 0,
-    };
-    let buttons_row = if session_form { 9 } else { (used_by_row + 2).max(14).max(adv_rows + 3) };
-    let rect = centered(area, w, buttons_row + 5);
-    let inner = modal(rect, &title, &footer, buf);
-    let iw = inner.width as usize;
     // The environment form has its own fields (its labels set its column).
     let labelled: &[Field] = if env_form {
         &ENVIRONMENT
@@ -237,6 +335,65 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
         .max()
         .unwrap_or(8)
         + 2;
+    // The notes of a Startup SQL list, wrapped to the columns under its inputs (two lines at
+    // most; one when the list would not fit its room then; the row being edited says all of its
+    // reason), and the list's lines: its rows, the notes under them and the line that adds one.
+    let note_w = usize::from(w.saturating_sub(2)).saturating_sub(label_w + 2 + 4).max(1);
+    let wrapped = |two: bool| -> Vec<Option<(Vec<String>, Level)>> {
+        let lines = |text: &str, whole: bool| {
+            let lines = crate::text::wrap_words(text, note_w);
+            match lines.len() {
+                0 | 1 => lines,
+                _ if whole => lines,
+                2 if two => lines,
+                _ if two => vec![lines[0].clone(), crate::text::clip(&lines[1..].join(" "), note_w)],
+                _ => vec![crate::text::clip(text, note_w)],
+            }
+        };
+        let notes = statement_notes.iter().enumerate();
+        notes.map(|(i, n)| n.as_ref().map(|(t, level)| (lines(t, edited_row == Some(i)), *level))).collect()
+    };
+    let count = |notes: &[Option<(Vec<String>, Level)>]| {
+        notes.len() + notes.iter().flatten().map(|(l, _)| l.len()).sum::<usize>() + 1
+    };
+    // An environment's fields, then a blank line and the profiles that use it, then the
+    // buttons: below the other forms' rows when there are more of them.
+    let env_rows = if env_form { form.fields().iter().filter(|f| !f.is_button()).count() as u16 } else { 0 };
+    // The lines a Startup SQL list has room for: what the preset form's other rows leave, or
+    // the profile form's Advanced section's.
+    let adv_fields = match (form.kind, form.section) {
+        (FormKind::Profile, Section::Advanced) => form.fields().iter().filter(|f| !f.is_button()).count(),
+        _ => 0,
+    };
+    let room = match session_form {
+        true => usize::from(area.height.saturating_sub(12)),
+        false => usize::from(area.height).saturating_sub(7 + adv_fields),
+    };
+    let statement_notes = match wrapped(true) {
+        notes if count(&notes) <= room => notes,
+        _ => wrapped(false),
+    };
+    let list_lines = count(&statement_notes);
+    // A Startup SQL form: its name and database, its statements (at least three lines, as many
+    // as they take when the screen has room), a blank line, its profiles.
+    let preset_list_h = list_lines.max(3).min(usize::from(area.height.saturating_sub(12)).max(1)) as u16;
+    let used_by_row = if session_form { 4 + preset_list_h + 1 } else { (env_rows + 3).max(11) };
+    // A profile's Advanced section of many rows (MySQL's) keeps a blank line above the buttons;
+    // its own statements take the lines the screen leaves (one at least).
+    let list_h = if session_form {
+        preset_list_h
+    } else {
+        list_lines.min(usize::from(area.height).saturating_sub(7 + adv_fields).max(1)) as u16
+    };
+    let adv_rows = match adv_fields {
+        0 => 0,
+        n if form.fields().contains(&Field::SessionSql) => n as u16 + list_h - 1,
+        n => n as u16,
+    };
+    let buttons_row = if session_form { used_by_row + 2 } else { (used_by_row + 2).max(14).max(adv_rows + 3) };
+    let rect = centered(area, w, buttons_row + 5);
+    let inner = modal(rect, &title, &footer, buf);
+    let iw = inner.width as usize;
     let editing = form.editing;
     let errors = match form.kind {
         FormKind::Tunnel { id, .. } => {
@@ -328,8 +485,10 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
         // retrieval MySQL's (`ProfileForm::fields`).
         Section::Advanced => form.fields().into_iter().filter(|f| !f.is_button()).map(Some).collect(),
     };
+    // The lines a Startup SQL list took above the row drawn, past its first.
+    let mut taller = 0;
     for (row, f) in rows.iter().enumerate() {
-        let y = inner.y + 2 + row as u16;
+        let y = inner.y + 2 + row as u16 + taller;
         let x = inner.x + 1 + label_w as u16;
         let Some(f) = *f else {
             // `prompt`: nothing to enter.
@@ -662,52 +821,27 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
                 hits.push((Rect::new(x, y, used, 1), FormHit::Value(f)));
                 x + used
             }
-            // A profile's own statements: one input, which statement is not allowed after it.
-            Field::SessionSql if !session_form => {
-                let inp = form.input_mut(f)?;
-                let cx = inp.render(
-                    Rect::new(x, y, input_w, 1),
-                    buf,
-                    Style::new().fg(th.fg).patch(field_bg),
-                    focused,
-                    false,
-                    None,
-                );
-                if focused {
-                    cursor = Some((cx, y));
-                }
-                hits.push((Rect::new(x, y, input_w, 1), FormHit::Input(f)));
-                let after = x + input_w + 2;
-                let (text, style) = match &session_note {
-                    Some((t, level)) => (t.clone(), Style::new().fg(level_color(*level)).bg(th.surface)),
-                    None => (i18n.label(Label::FormProfileSessionSqlHint).to_string(), dim),
-                };
-                put(buf, after, y, &text, room_from(after), style);
-                continue;
-            }
-            // The statements take the line; what they are goes below them.
+            // The statements, one per row, with what is wrong under each.
             Field::SessionSql => {
-                let w = inner.width.saturating_sub(label_w as u16 + 2);
-                let inp = form.input_mut(f)?;
-                let cx = inp.render(
-                    Rect::new(x, y, w, 1),
+                let area = Rect::new(x, y, inner.width.saturating_sub(label_w as u16 + 2), list_h);
+                hits.push((Rect::new(inner.x, y, inner.width, list_h), FormHit::Field(f)));
+                let hint = i18n.label(match session_form {
+                    true => Label::FormSessionSqlHint,
+                    false => Label::FormProfileSessionSqlHint,
+                });
+                let drawn = statement_list(
                     buf,
-                    Style::new().fg(th.fg).patch(field_bg),
-                    focused,
-                    false,
-                    None,
+                    &mut hits,
+                    &mut form.session_sql,
+                    area,
+                    &statement_notes,
+                    (i18n, &hint),
+                    (focused, hover),
                 );
-                if focused {
-                    cursor = Some((cx, y));
+                if drawn.is_some() {
+                    cursor = drawn;
                 }
-                hits.push((Rect::new(x, y, w, 1), FormHit::Input(f)));
-                let (text, style) = match &session_note {
-                    Some((t, level)) => (t.clone(), Style::new().fg(level_color(*level)).bg(th.surface)),
-                    None => (i18n.label(Label::FormSessionSqlHint).to_string(), dim),
-                };
-                for (i, l) in crate::text::wrap_words(&text, w as usize).iter().take(2).enumerate() {
-                    put(buf, x, y + 1 + i as u16, l, w as usize, style);
-                }
+                taller += list_h - 1;
                 continue;
             }
             _ => {
@@ -913,4 +1047,30 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
         test_line(app, inner.x + 1, inner.y + buttons_row + 1, iw.saturating_sub(2), 2, buf);
     }
     cursor
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datarig_core::i18n::Lang;
+    use datarig_core::profile::session::Dbms;
+
+    /// A list given one or two lines (a long Advanced section on a short screen) still counts the
+    /// lines it does not show, at the right end of its last line.
+    #[test]
+    fn a_list_of_one_or_two_lines_counts_the_lines_out_of_view() {
+        let sql = ["SET a = 1", "SET b = 2", "SET c = 3"].map(String::from);
+        let i18n = I18n::new(Lang::En);
+        for (height, below) in [(1, "↓ 3 more lines"), (2, "↓ 2 more lines")] {
+            let mut list = StatementList::new(Some(Dbms::Postgres), &sql);
+            let area = Rect::new(0, 0, 50, height);
+            let mut buf = Buffer::empty(area);
+            let notes = vec![None; 3];
+            statement_list(&mut buf, &mut Vec::new(), &mut list, area, &notes, (&i18n, ""), (false, None));
+            let line = |y: u16| (0..50).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>();
+            let last = line(height - 1);
+            assert!(last.trim_end().ends_with(below), "{height}: {last:?}");
+            assert!(line(0).contains("SET a = 1"), "{height}: {:?}", line(0));
+        }
+    }
 }

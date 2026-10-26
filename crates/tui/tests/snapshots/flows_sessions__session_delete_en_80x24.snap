@@ -1,5 +1,6 @@
 ---
 source: crates/tui/tests/flows_sessions.rs
+assertion_line: 527
 expression: "h.draw(80, 24).backend()"
 ---
 "╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
@@ -10,10 +11,10 @@ expression: "h.draw(80, 24).backend()"
 "│  ▸ ○   分析-replica  ││                                                      │" Hidden by multi-width symbols: [(10, " "), (12, " ")]
 "│▾ Tunnels╭ Delete ──────────────────────────────────────────────────╮         │"
 "│    n her│                                                          │         │"
-"│▾ Environ│ Delete the session preset “reporting”?                   │         │"
+"│▾ Environ│ Delete the Startup SQL “reporting”?                      │         │"
 "│  ▸ ○ Def│ local-pg uses it: it will not connect until you pick     │         │"
-"│  ▸ ○ pro│ another preset or none in its form (never without it     │         │"
-"│▾ Session│ instead).                                                │         │"
+"│  ▸ ○ pro│ another Startup SQL or none in its form (never without   │         │"
+"│▾ Startup│ it instead).                                             │         │"
 "│    ◇ bro│ Environments map it: prod; their profiles will not       │         │"
 "│      sta│ connect until that is changed.                           │         │"
 "│    ◇ fk_│                                                          │         │"

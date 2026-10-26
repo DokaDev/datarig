@@ -1,11 +1,11 @@
-//! Session presets, headless: what a profile's query sessions are opened with (its
+//! Startup SQL presets, headless: what a profile's query sessions are opened with (its
 //! environment's preset, its own, none, its own statements; metadata sessions never), a profile
 //! whose plan has an error (an unknown preset, one for the other database, a statement that is
 //! not a setting or that read-only refuses: nothing is opened), a start-up statement the server
 //! refused (said with its source and number), and a session behind a pooler that sets them per
-//! transaction. The explorer's "Session presets" section: its rows, the preset form (new,
+//! transaction. The explorer's "Startup SQL" section: its rows, the preset form (new,
 //! edit, rename, copy, a statement that is not allowed), delete and test. The profile form's
-//! session preset list and session SQL, and the environment form's lists.
+//! Startup SQL list and own startup SQL, and the environment form's lists; `:startup`.
 
 mod common;
 
@@ -22,7 +22,7 @@ use datarig_tui::app::overlay::{ConfirmAction, OverlayKind};
 use datarig_tui::app::profiles::Field;
 use datarig_tui::app::{Focus, NodeState, Startup, TestState};
 use datarig_tui::widgets::editor::Editor;
-use ratatui::crossterm::event::KeyCode;
+use ratatui::crossterm::event::{Event, KeyCode};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -134,19 +134,19 @@ fn a_profile_whose_plan_has_an_error_does_not_connect() {
     let cases: Vec<(Change, &str)> = vec![
         (
             Box::new(|p| p.session = SessionRef::Named("gone".into())),
-            "local-pg names the session preset “gone”, which does not exist: pick one in its form, or none (it never connects without it instead)",
+            "local-pg names the Startup SQL “gone”, which does not exist: pick one in its form, or none (it never connects without it instead)",
         ),
         (
             Box::new(|p| p.session = SessionRef::Named("my_ro".into())),
-            "local-pg is a PostgreSQL profile and its session preset “my_ro” is for MySQL: pick a preset for its database",
+            "local-pg is a PostgreSQL profile and its Startup SQL “my_ro” is for MySQL: pick a Startup SQL for its database",
         ),
         (
             Box::new(|p| p.session_sql = vec!["SET work_mem = '1MB'".into(), "DELETE FROM t".into()]),
-            "local-pg does not connect: statement 2 of its own session SQL is not allowed (only SET of the session's own settings): DELETE FROM t",
+            "local-pg does not connect: statement 2 of its own startup SQL is not allowed (only SET of the session's own settings): DELETE FROM t",
         ),
         (
             Box::new(|p| p.session_sql = vec!["SET idle_session_timeout = '1s'".into()]),
-            "local-pg does not connect: statement 1 of its own session SQL is not allowed (idle_session_timeout: datarig closes idle sessions itself and warns first; the server's limit is only its safety net — set the environment's idle_disconnect): SET idle_session_timeout = '1s'",
+            "local-pg does not connect: statement 1 of its own startup SQL is not allowed (idle_session_timeout: datarig closes idle sessions itself and warns first; the server's limit is only its safety net — set the environment's idle_disconnect): SET idle_session_timeout = '1s'",
         ),
     ];
     for (change, want) in cases {
@@ -168,7 +168,7 @@ fn a_profile_whose_plan_has_an_error_does_not_connect() {
     assert_eq!(
         h.node_error("local-pg").as_deref(),
         Some(
-            "The environment prod maps the session preset “reporting” for PostgreSQL, which does not exist: local-pg does not connect until it is fixed, or its form picks none"
+            "The environment prod maps the Startup SQL “reporting” for PostgreSQL, which does not exist: local-pg does not connect until it is fixed, or its form picks none"
         )
     );
     // A test of it tries nothing either.
@@ -194,7 +194,7 @@ fn read_only_refuses_a_setting_off_its_allowlist() {
     assert_eq!(
         h.node_error("local-pg").as_deref(),
         Some(
-            "local-pg does not connect: its environment is read-only and statement 1 of its own session SQL is refused (this setting is not on the read-only allowlist): SET session_replication_role = replica"
+            "local-pg does not connect: its environment is read-only and statement 1 of its own startup SQL is refused (this setting is not on the read-only allowlist): SET session_replication_role = replica"
         )
     );
 }
@@ -227,7 +227,7 @@ fn a_refused_start_up_statement_is_said_with_its_source_and_number() {
     h.tab_db(0, DbEvent::ConnectFailed { error, auth: false });
     let screen = h.screen(220, 40);
     assert!(
-        screen.contains("local-pg: statement 1 of its own session SQL failed, so the session was closed: ERROR: invalid value for parameter \"work_mem\": \"lots\" (SET work_mem = 'lots')"),
+        screen.contains("local-pg: statement 1 of its own startup SQL failed, so the session was closed: ERROR: invalid value for parameter \"work_mem\": \"lots\" (SET work_mem = 'lots')"),
         "{screen}"
     );
     assert!(h.app.tab().exec.session.is_none(), "closed");
@@ -241,7 +241,7 @@ fn a_refused_start_up_statement_is_said_with_its_source_and_number() {
     };
     h.tab_db(0, DbEvent::ConnectFailed { error, auth: false });
     assert!(
-        h.screen(220, 40).contains("statement 2 of the session preset “reporting” of the environment prod failed"),
+        h.screen(220, 40).contains("statement 2 of the Startup SQL “reporting” of the environment prod failed"),
         "{}",
         h.screen(220, 40)
     );
@@ -377,10 +377,10 @@ fn the_section_lists_the_presets_with_their_users_and_problems() {
     on_preset(&mut h, "reporting");
     h.key(KeyCode::Char('l'));
     let rows = h.rows();
-    let at = rows.iter().position(|r| r == "[session presets]").expect("the section");
+    let at = rows.iter().position(|r| r == "[startup sql]").expect("the section");
     assert_eq!(
         rows[at..at + 7],
-        ["[session presets]", "  $broken", "    !", "  $fk_off", "  $my_ro", "  $reporting", "    @local-pg"],
+        ["[startup sql]", "  $broken", "    !", "  $fk_off", "  $my_ro", "  $reporting", "    @local-pg"],
         "{rows:?}"
     );
     on_preset(&mut h, "my_ro");
@@ -404,8 +404,8 @@ fn the_section_lists_the_presets_with_their_users_and_problems() {
     assert!(rows.contains(&"  $fk_off".to_string()) && !rows.contains(&"  $reporting".to_string()), "{rows:?}");
 }
 
-/// `n` in the section opens the preset form; its statements are one field (`;` between them),
-/// saved one per item; the database is picked with ←/→.
+/// `n` in the section opens the preset form; its statements are a list, one per row (`Enter`
+/// after one starts the next), saved one per item; the database is picked with ←/→.
 #[test]
 fn a_new_preset_is_made_in_its_form() {
     let dir = scratch("new");
@@ -419,13 +419,15 @@ fn a_new_preset_is_made_in_its_form() {
     h.key(KeyCode::Right);
     h.key(KeyCode::Right);
     h.key(KeyCode::Tab);
-    h.type_text("SET statement_timeout = '1min'; SET jit = off");
+    h.type_text("SET statement_timeout = '1min'");
+    h.key(KeyCode::Enter);
+    h.type_text("SET jit = off");
     for (w, ht) in [(80, 24), (120, 40)] {
         insta::assert_snapshot!(format!("session_form_en_{w}x{ht}"), h.draw(w, ht).backend());
     }
     h.ctrl('s');
     assert!(!h.form_open(), "saved and closed");
-    assert_eq!(said(&h), "Saved the session preset “analytics”");
+    assert_eq!(said(&h), "Saved the Startup SQL “analytics”");
     let p = h.app.session_presets().iter().find(|p| p.name == "analytics").expect("made").clone();
     assert_eq!(
         (p.dbms, p.sql.as_slice()),
@@ -433,7 +435,7 @@ fn a_new_preset_is_made_in_its_form() {
     );
     assert!(
         dir.text().contains(
-            "[sessions.analytics]\ndbms = \"postgres\"\nsql = [\"SET statement_timeout = '1min'\", \"SET jit = off\"]\n"
+            "[startup.analytics]\ndbms = \"postgres\"\nsql = [\"SET statement_timeout = '1min'\", \"SET jit = off\"]\n"
         ),
         "{}",
         dir.text()
@@ -441,8 +443,9 @@ fn a_new_preset_is_made_in_its_form() {
     assert_eq!(h.app.explorer.cursor(), &RowKind::Session(p.id), "revealed");
 }
 
-/// A statement that is not allowed is said under the field (which and why) and keeps the form
-/// from saving (the focus goes there); `none` is not a name.
+/// Each statement that is not allowed says why under its own row and keeps the form from
+/// saving (the focus goes to the first field with an error, the first such row in the list);
+/// `none` is not a name; on MySQL each row a read-only environment refuses says so.
 #[test]
 fn the_form_refuses_statements_that_are_not_settings_and_the_reserved_name() {
     let dir = scratch("refuse");
@@ -452,27 +455,232 @@ fn the_form_refuses_statements_that_are_not_settings_and_the_reserved_name() {
     h.type_text("none");
     h.key(KeyCode::Tab);
     h.key(KeyCode::Tab);
-    h.type_text("SET work_mem = '1MB'; RESET work_mem");
+    for (i, sql) in ["SET work_mem = '1MB'", "RESET work_mem", "DELETE FROM t"].into_iter().enumerate() {
+        if i > 0 {
+            h.key(KeyCode::Enter);
+        }
+        h.type_text(sql);
+    }
     let screen = h.screen(120, 40);
-    assert!(screen.contains("reserved: it means no preset"), "{screen}");
-    assert!(screen.contains("statement 2: only SET of the session's own settings"), "{screen}");
-    insta::assert_snapshot!("session_form_errors_en_80x24", h.draw(80, 24).backend());
+    assert!(screen.contains("reserved: it means none"), "{screen}");
+    let lines: Vec<&str> = screen.lines().collect();
+    let row = |sql: &str| lines.iter().position(|l| l.contains(sql)).unwrap_or_else(|| panic!("{sql}\n{screen}"));
+    for sql in ["RESET work_mem", "DELETE FROM t"] {
+        assert!(lines[row(sql) + 1].contains("only SET of the session's own settings"), "under {sql}:\n{screen}");
+    }
+    assert_eq!(row("SET work_mem = '1MB'") + 1, row("RESET work_mem"), "nothing under an allowed one");
+    for (w, ht) in [(80, 24), (120, 40)] {
+        insta::assert_snapshot!(format!("session_form_errors_en_{w}x{ht}"), h.draw(w, ht).backend());
+    }
     h.ctrl('s');
     assert!(h.form_open(), "not saved");
     assert_eq!(h.form().focus, Field::Name, "the first field with an error");
-    h.key(KeyCode::Tab);
-    h.key(KeyCode::Tab);
-    for _ in 0.." RESET work_mem".len() {
+    for _ in 0.."none".len() {
         h.key(KeyCode::Backspace);
     }
-    h.type_text(" SET foreign_key_checks = 0");
+    h.type_text("ro");
+    h.ctrl('s');
+    assert!(h.form_open(), "not saved");
+    assert_eq!((h.form().focus, h.form().session_sql.row), (Field::SessionSql, 1), "the first refused row");
+    h.ctrl('d');
+    assert_eq!(h.form().session_sql.statements(), ["SET work_mem = '1MB'", "DELETE FROM t"]);
+    h.ctrl('d');
+    assert_eq!(h.form().session_sql.statements(), ["SET work_mem = '1MB'"]);
+    h.key(KeyCode::Enter);
+    h.type_text("SET foreign_key_checks = 0");
     // A risky MySQL setting: allowed, but read-only environments refuse it.
     h.key(KeyCode::BackTab);
+    assert_eq!(h.form().focus, Field::SessionDbms);
     h.key(KeyCode::Right);
-    // On MySQL neither is on the read-only allowlist: the first is said.
+    // On MySQL neither is on the read-only allowlist: each says so.
     let screen = h.screen(120, 40);
-    assert!(screen.contains("Statement 1 would be refused in read-only environments"), "{screen}");
-    assert!(!dir.text().contains("[sessions.none]"));
+    assert_eq!(screen.matches("refused in read-only environments").count(), 2, "{screen}");
+    h.ctrl('s');
+    assert!(!h.form_open(), "a warning does not keep it from saving");
+    assert!(
+        dir.text().contains(
+            "[startup.ro]\ndbms = \"mysql\"\nsql = [\"SET work_mem = '1MB'\", \"SET foreign_key_checks = 0\"]\n"
+        ),
+        "{}",
+        dir.text()
+    );
+    assert!(!dir.text().contains("[startup.none]"));
+}
+
+/// The list's keys: `↑`/`↓` go from row to row and leave the list at its ends (coming back
+/// from above on the first row, from below on the last), `Tab` leaves it, `Enter` on an empty
+/// row removes it and moves on, `Backspace` on an empty row removes it.
+#[test]
+fn the_statement_lists_keys_add_move_and_remove_rows() {
+    let dir = scratch("list-keys");
+    let mut h = section_harness(&dir);
+    on_row(&mut h, RowKind::SessionsHeader);
+    h.keys("n");
+    h.type_text("keys");
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Tab);
+    h.type_text("SET a = 1");
+    h.key(KeyCode::Enter);
+    h.type_text("SET b = 2");
+    h.key(KeyCode::Enter);
+    let at = |h: &Harness| (h.form().focus, h.form().session_sql.row, h.form().session_sql.row_count());
+    assert_eq!(at(&h), (Field::SessionSql, 2, 3));
+    h.key(KeyCode::Up);
+    h.key(KeyCode::Up);
+    assert_eq!(at(&h), (Field::SessionSql, 0, 3));
+    h.key(KeyCode::Up);
+    assert_eq!(h.form().focus, Field::SessionDbms, "past the first row");
+    h.key(KeyCode::Down);
+    assert_eq!(at(&h), (Field::SessionSql, 0, 3), "back on the first row");
+    h.key(KeyCode::Down);
+    h.key(KeyCode::Down);
+    h.key(KeyCode::Backspace);
+    assert_eq!(at(&h), (Field::SessionSql, 1, 2), "the empty row went");
+    assert_eq!(h.form().session_sql.text(1), "SET b = 2", "nothing of the row before was deleted");
+    h.key(KeyCode::Down);
+    assert_eq!(h.form().focus, Field::Test, "past the last row");
+    h.key(KeyCode::BackTab);
+    assert_eq!(at(&h), (Field::SessionSql, 1, 2), "back on the last row");
+    h.key(KeyCode::Enter);
+    assert_eq!(at(&h), (Field::SessionSql, 2, 3));
+    h.key(KeyCode::Enter);
+    assert_eq!((h.form().focus, h.form().session_sql.row_count()), (Field::Test, 2), "an empty row's Enter moves on");
+    h.key(KeyCode::BackTab);
+    h.key(KeyCode::Tab);
+    assert_eq!(h.form().focus, Field::Test, "Tab leaves the list");
+    assert_eq!(h.form().session_sql.statements(), ["SET a = 1", "SET b = 2"]);
+    // A paste of several statements: a row each, after the focused one.
+    h.key(KeyCode::BackTab);
+    h.key(KeyCode::Enter);
+    h.app.handle_event(Event::Paste("SET c = 3;\n-- the next\nSET d = 4; SET e = 5\n".into()));
+    assert_eq!(h.form().session_sql.statements(), ["SET a = 1", "SET b = 2", "SET c = 3", "SET d = 4", "SET e = 5"]);
+    assert_eq!(h.form().session_sql.row, 4);
+    h.ctrl('s');
+    assert!(!h.form_open(), "saved");
+    assert!(
+        dir.text().contains("sql = [\"SET a = 1\", \"SET b = 2\", \"SET c = 3\", \"SET d = 4\", \"SET e = 5\"]"),
+        "{}",
+        dir.text()
+    );
+}
+
+/// The position of the `n`-th `text` on a 100x30 screen.
+fn find_on(h: &mut Harness, text: &str, n: usize) -> (u16, u16) {
+    let screen = h.screen(100, 30);
+    screen
+        .lines()
+        .enumerate()
+        .flat_map(|(y, row)| row.match_indices(text).map(move |(i, _)| (row, i, y)))
+        .nth(n)
+        .map(|(row, i, y)| (datarig_tui::text::width(&row[..i]) as u16, y as u16))
+        .unwrap_or_else(|| panic!("no {text:?} #{n}:\n{screen}"))
+}
+
+/// A click at (x, y) after the dialog's arming delay.
+fn click_at(h: &mut Harness, (x, y): (u16, u16)) {
+    use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+    h.advance(Duration::from_millis(500));
+    h.mouse(MouseEventKind::Down(MouseButton::Left), x, y);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), x, y);
+}
+
+/// The mouse on the list: "+ Add statement" adds a row at the end, `×` removes its row, a click
+/// on a row puts the cursor under the pointer, and the wheel scrolls a list longer than its
+/// room (the lines out of view counted under the label).
+#[test]
+fn the_statement_list_takes_the_mouse() {
+    use ratatui::crossterm::event::MouseEventKind;
+    let dir = scratch("list-mouse");
+    let mut h = section_harness(&dir);
+    on_preset(&mut h, "reporting");
+    h.keys("e");
+    // A row's number focuses it too.
+    let at = find_on(&mut h, "2 SET work_mem", 0);
+    click_at(&mut h, at);
+    assert_eq!((h.form().focus, h.form().session_sql.row), (Field::SessionSql, 1));
+    let at = find_on(&mut h, "+ Add statement", 0);
+    click_at(&mut h, at);
+    assert_eq!((h.form().focus, h.form().session_sql.row, h.form().session_sql.row_count()), (Field::SessionSql, 2, 3));
+    h.type_text("SET jit = off");
+    let screen = h.screen(100, 30);
+    let (y, line) = screen.lines().enumerate().find(|(_, l)| l.contains("SET statement_timeout")).expect("the row");
+    let x = datarig_tui::text::width(&line[..line.rfind('×').expect("its ×")]) as u16;
+    click_at(&mut h, (x, y as u16));
+    assert_eq!(h.form().session_sql.statements(), ["SET work_mem = '64MB'", "SET jit = off"]);
+    let at = find_on(&mut h, "jit = off", 0);
+    click_at(&mut h, at);
+    h.type_text("_");
+    assert_eq!((h.form().session_sql.row, h.form().session_sql.text(1)), (1, "SET _jit = off"));
+    // Twenty rows: more than the room at 80x24.
+    h.key(KeyCode::End);
+    h.key(KeyCode::Enter);
+    let many: Vec<String> = (1..=18).map(|i| format!("SET work_mem = '{i}MB'")).collect();
+    h.app.handle_event(Event::Paste(many.join(";\n")));
+    assert_eq!(h.form().session_sql.row_count(), 20);
+    let screen = h.screen(80, 24);
+    assert!(
+        screen.contains("↑ 13 more lines")
+            && screen.matches("more line").count() == 1
+            && screen.contains("+ Add statement"),
+        "the focused last row in view, and the line that adds one:\n{screen}"
+    );
+    let (x, y) = {
+        let lines: Vec<&str> = screen.lines().collect();
+        let y = lines.iter().position(|l| l.contains("'15MB'")).expect("a row in view");
+        (40, y as u16)
+    };
+    let before = h.form().session_sql.scroll;
+    h.mouse(MouseEventKind::ScrollUp, x, y);
+    h.mouse(MouseEventKind::ScrollUp, x, y);
+    let screen = h.screen(80, 24);
+    assert_eq!(h.form().session_sql.scroll, before - 2, "{screen}");
+    assert!(screen.contains("↓ 2 more lines"), "{screen}");
+    insta::assert_snapshot!("session_form_list_scrolled_en_80x24", h.draw(80, 24).backend());
+}
+
+/// Rows not edited are saved as the file has them (their comments and line breaks too, though
+/// a row shows them on one line), in a preset and in a profile's own list; an edited one is
+/// saved as its one line.
+#[test]
+fn unedited_statements_are_saved_as_the_file_has_them() {
+    let dir = scratch("verbatim");
+    section_config(&dir);
+    let own = "name = \"local-pg\"\nstartup_sql = [\"SET work_mem = '1MB' -- mine\", \"\"\"SET jit\n  = off\"\"\"]\n";
+    let text = dir.text().replacen("name = \"local-pg\"\n", own, 1)
+        + "\n# kept\n[startup.zz_commented]\ndbms = \"postgres\"\nsql = [\n  \"SET statement_timeout = '30s' -- a comment\",  # why\n  \"\"\"SET work_mem\n  = '64MB'\"\"\",\n]\n";
+    std::fs::write(dir.config(), &text).unwrap();
+    let (cfg, err) = datarig_core::config::load(Some(dir.config()));
+    assert!(err.is_none(), "{err:?}");
+    let mut h = launched(&cfg);
+    on_preset(&mut h, "zz_commented");
+    h.keys("e");
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("SET statement_timeout = '30s'  ") && screen.contains("SET work_mem = '64MB'"), "{screen}");
+    h.ctrl('s');
+    assert!(!h.form_open(), "saved");
+    assert_eq!(dir.text(), text, "unedited: as written");
+    profile_field(&mut h, "local-pg", Field::SessionSql);
+    assert_eq!(h.form().session_sql.text(1), "SET jit = off");
+    h.ctrl('s');
+    assert!(!h.form_open(), "saved");
+    assert_eq!(dir.text(), text, "unedited: as written");
+    // An edited row is its one line; the other keeps its text.
+    on_preset(&mut h, "zz_commented");
+    h.keys("e");
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Down);
+    for _ in 0.."64MB'".len() {
+        h.key(KeyCode::Backspace);
+    }
+    h.type_text("32MB'");
+    h.ctrl('s');
+    assert!(!h.form_open(), "saved");
+    assert!(
+        dir.text().contains("# kept\n[startup.zz_commented]\ndbms = \"postgres\"\nsql = [\"SET statement_timeout = '30s' -- a comment\", \"SET work_mem = '32MB'\"]\n"),
+        "{}",
+        dir.text()
+    );
 }
 
 /// A rename takes the profiles and environments that name the preset along, in the file too; a
@@ -500,9 +708,9 @@ fn a_rename_follows_into_profiles_and_environments_and_a_copy_gets_a_free_name()
     let rules = &h.app.policies.environment("prod").unwrap().policy.session;
     assert_eq!(rules.postgres.as_deref(), Some("reports"));
     let text = dir.text();
-    assert!(text.contains("[sessions.mysql_ro]") && !text.contains("[sessions.my_ro]"), "{text}");
-    assert!(text.contains("session = \"mysql_ro\""), "{text}");
-    assert!(text.contains("session = { postgres = \"reports\" }"), "{text}");
+    assert!(text.contains("[startup.mysql_ro]") && !text.contains("[startup.my_ro]"), "{text}");
+    assert!(text.contains("startup = \"mysql_ro\""), "{text}");
+    assert!(text.contains("startup = { postgres = \"reports\" }"), "{text}");
     // A copy.
     on_preset(&mut h, "reports");
     h.keys("c");
@@ -521,7 +729,7 @@ fn a_deleted_preset_leaves_its_names_and_its_profiles_do_not_connect() {
     on_preset(&mut h, "reporting");
     h.keys("d");
     let screen = h.screen(120, 40);
-    assert!(screen.contains("Delete the session preset “reporting”?"), "{screen}");
+    assert!(screen.contains("Delete the Startup SQL “reporting”?"), "{screen}");
     assert!(screen.contains("local-pg uses it: it will not connect until you pick"), "{screen}");
     assert!(screen.contains("Environments map it: prod; their profiles will not"), "{screen}");
     insta::assert_snapshot!("session_delete_en_80x24", h.draw(80, 24).backend());
@@ -533,10 +741,10 @@ fn a_deleted_preset_leaves_its_names_and_its_profiles_do_not_connect() {
     assert!(!h.app.session_presets().iter().any(|p| p.name == "reporting"));
     assert_eq!(
         said(&h),
-        "Deleted the session preset “reporting”; the profile that used it needs another preset or none"
+        "Deleted the Startup SQL “reporting”; the profile that used it needs another Startup SQL or none"
     );
-    assert!(!dir.text().contains("[sessions.reporting]"), "{}", dir.text());
-    assert!(dir.text().contains("session = { postgres = \"reporting\" }"), "the environment keeps the name");
+    assert!(!dir.text().contains("[startup.reporting]"), "{}", dir.text());
+    assert!(dir.text().contains("startup = { postgres = \"reporting\" }"), "the environment keeps the name");
     h.explore("local-pg");
     h.key(KeyCode::Enter);
     assert!(h.driver.sessions.lock().unwrap().is_empty(), "nothing is opened");
@@ -550,7 +758,7 @@ fn the_menu_of_a_preset_says_what_it_does() {
     let mut h = section_harness(&dir);
     h.right_click_row("$reporting");
     let labels = h.menu_labels();
-    for want in ["Edit session preset", "Duplicate session preset", "Test session preset", "Delete session preset"] {
+    for want in ["Edit Startup SQL", "Duplicate Startup SQL", "Test Startup SQL", "Delete Startup SQL"] {
         assert!(labels.iter().any(|l| l == want), "{want}: {labels:?}");
     }
     assert!(!labels.iter().any(|l| l.contains("SSH tunnel") || l.contains("console")), "{labels:?}");
@@ -569,7 +777,7 @@ fn a_test_runs_on_a_connected_profile_and_closes_its_session() {
     // MySQL: no profile of it.
     on_preset(&mut h, "pg_only");
     h.keys("t");
-    assert_eq!(said(&h), "No profile uses MySQL: nothing to test the preset with");
+    assert_eq!(said(&h), "No profile uses MySQL: nothing to test the Startup SQL with");
     assert!(h.driver.sessions.lock().unwrap().len() == 1, "nothing opened");
     // On the connected profile that uses it.
     on_preset(&mut h, "reporting");
@@ -584,7 +792,7 @@ fn a_test_runs_on_a_connected_profile_and_closes_its_session() {
         ev: DbEvent::Connected,
     });
     assert!(h.session_closed(1), "closed once it connected");
-    assert_eq!(said(&h), "Session preset “reporting” applied on local-pg (2 statements); the test session was closed");
+    assert_eq!(said(&h), "Startup SQL “reporting” applied on local-pg (2 statements); the test session was closed");
     // Its failure, in the server's words.
     h.keys("t");
     let seq = h.app.conn_test.as_ref().unwrap().seq;
@@ -599,8 +807,9 @@ fn a_test_runs_on_a_connected_profile_and_closes_its_session() {
         ev: DbEvent::ConnectFailed { error, auth: false },
     });
     assert!(
-        said(&h)
-            .starts_with("The preset could not be applied: statement 1 the session starts with failed: ERROR: nope"),
+        said(&h).starts_with(
+            "The Startup SQL could not be applied: statement 1 the session starts with failed: ERROR: nope"
+        ),
         "{}",
         said(&h)
     );
@@ -663,7 +872,7 @@ fn the_profile_form_picks_its_environments_preset_none_or_one_of_its_database() 
     h.key(KeyCode::Enter);
     assert_eq!(
         session_rows(&h),
-        ["Environment's (reporting)", "None", "broken", "reporting", "New session preset…"],
+        ["Environment's (reporting)", "None", "broken", "reporting", "New Startup SQL…"],
         "PostgreSQL's only"
     );
     for (w, ht) in [(80, 24), (120, 40)] {
@@ -671,11 +880,11 @@ fn the_profile_form_picks_its_environments_preset_none_or_one_of_its_database() 
     }
     pick_session(&mut h, "None");
     assert_eq!(h.form().session_ref, SessionRef::Off);
-    assert!(h.screen(120, 40).contains("Session preset    None ▾"), "{}", h.screen(120, 40));
+    assert!(h.screen(120, 40).contains("Startup SQL       None ▾"), "{}", h.screen(120, 40));
     h.ctrl('s');
     assert!(!h.form_open());
     assert_eq!(h.app.profiles[0].session, SessionRef::Off);
-    assert!(dir.text().contains("session = \"none\""), "{}", dir.text());
+    assert!(dir.text().contains("startup = \"none\""), "{}", dir.text());
     // The plan says the environment's was skipped.
     let plan = h.app.session_plan_of(&h.app.profiles[0].clone()).unwrap();
     assert!(
@@ -685,29 +894,39 @@ fn the_profile_form_picks_its_environments_preset_none_or_one_of_its_database() 
     );
 }
 
-/// The profile's own session SQL: a statement that is not allowed is said after the field and
-/// keeps the form from saving; saved, one statement per item.
+/// The profile's own startup SQL is the same list: a statement that is not allowed says why
+/// under its row and keeps the form from saving (the focus goes to that row); saved, one
+/// statement per item.
 #[test]
 fn the_profile_forms_session_sql_is_checked_and_saved_one_per_item() {
     let dir = scratch("profile-sql");
     let mut h = section_harness(&dir);
     profile_field(&mut h, "local-pg", Field::SessionSql);
-    h.type_text("SET work_mem = '1MB'; SET search_path = x");
+    for (i, sql) in ["SET work_mem = '1MB'", "SET search_path = x", "SET jit = off"].into_iter().enumerate() {
+        if i > 0 {
+            h.key(KeyCode::Enter);
+        }
+        h.type_text(sql);
+    }
     let screen = h.screen(160, 45);
-    assert!(screen.contains("statement 2: search_path: the tab"), "{screen}");
+    let lines: Vec<&str> = screen.lines().collect();
+    let row = lines.iter().position(|l| l.contains("SET search_path = x")).expect("the row");
+    assert!(lines[row + 1].contains("search_path: the tab"), "{screen}");
     let detail = h.app.overlays.form().and_then(|f| f.session_problem());
     assert!(matches!(detail, Some((2, datarig_core::sql::risk::SetProblem::AppOwned { .. }))), "{detail:?}");
+    // With the room, a long reason takes a second line.
+    for (w, ht) in [(80, 24), (80, 30), (120, 40)] {
+        insta::assert_snapshot!(format!("profile_form_startup_list_en_{w}x{ht}"), h.draw(w, ht).backend());
+    }
     h.ctrl('s');
     assert!(h.form_open(), "not saved");
-    assert_eq!(h.form().focus, Field::SessionSql);
-    for _ in 0.."; SET search_path = x".len() {
-        h.key(KeyCode::Backspace);
-    }
-    h.type_text("; SET jit = off");
+    h.key(KeyCode::Up);
+    assert_eq!((h.form().focus, h.form().session_sql.row), (Field::SessionSql, 1));
+    h.ctrl('d');
     h.ctrl('s');
     assert!(!h.form_open(), "saved");
     assert_eq!(h.app.profiles[0].session_sql, ["SET work_mem = '1MB'", "SET jit = off"]);
-    assert!(dir.text().contains("session_sql = [\"SET work_mem = '1MB'\", \"SET jit = off\"]"), "{}", dir.text());
+    assert!(dir.text().contains("startup_sql = [\"SET work_mem = '1MB'\", \"SET jit = off\"]"), "{}", dir.text());
 }
 
 /// A preset of the other database (a driver changed in the form): marked, and not saved.
@@ -727,13 +946,13 @@ fn a_preset_of_the_other_database_is_marked_in_the_profile_form() {
     h.ctrl('n');
     let screen = h.screen(120, 40);
     assert!(screen.contains("reporting (for PostgreSQL) ▾"), "{screen}");
-    assert!(screen.contains("a preset for another database"), "{screen}");
+    assert!(screen.contains("a Startup SQL for another database"), "{screen}");
     h.ctrl('s');
     assert!(h.form_open(), "not saved");
     assert_eq!(h.app.profiles[0].driver, "postgres", "unchanged");
 }
 
-/// "New session preset…" opens the preset form for the profile's database over the profile
+/// "New Startup SQL…" opens the preset form for the profile's database over the profile
 /// form; saved, the profile form comes back with it picked.
 #[test]
 fn a_new_preset_from_the_profile_forms_list_comes_back_picked() {
@@ -742,7 +961,7 @@ fn a_new_preset_from_the_profile_forms_list_comes_back_picked() {
     profile_field(&mut h, "local-pg", Field::SessionPreset);
     h.key(KeyCode::Enter);
     h.key(KeyCode::End);
-    pick_session(&mut h, "New session preset…");
+    pick_session(&mut h, "New Startup SQL…");
     assert!(h.form().is_session());
     assert_eq!(h.form().session_dbms, Dbms::Postgres);
     h.type_text("own");
@@ -752,7 +971,7 @@ fn a_new_preset_from_the_profile_forms_list_comes_back_picked() {
     h.ctrl('s');
     assert!(!h.form().is_session(), "back in the profile form");
     assert_eq!(h.form().session_ref, SessionRef::Named("own".into()));
-    assert!(dir.text().contains("[sessions.own]"), "{}", dir.text());
+    assert!(dir.text().contains("[startup.own]"), "{}", dir.text());
     h.ctrl('s');
     assert_eq!(h.app.profiles[0].session, SessionRef::Named("own".into()));
 }
@@ -770,10 +989,10 @@ fn the_environment_form_maps_a_preset_per_database() {
         h.key(KeyCode::Tab);
     }
     let screen = h.screen(120, 40);
-    assert!(screen.contains("Preset (PostgreSQL)  reporting ▾"), "{screen}");
-    assert!(screen.contains("Preset (MySQL)       None ▾"), "{screen}");
+    assert!(screen.contains("Startup SQL (PG)     reporting ▾"), "{screen}");
+    assert!(screen.contains("Startup SQL (MySQL)  None ▾"), "{screen}");
     h.key(KeyCode::Enter);
-    assert_eq!(session_rows(&h), ["None", "fk_off", "my_ro", "New session preset…"], "MySQL's only");
+    assert_eq!(session_rows(&h), ["None", "fk_off", "my_ro", "New Startup SQL…"], "MySQL's only");
     for (w, ht) in [(80, 24), (120, 40)] {
         insta::assert_snapshot!(format!("environment_form_session_list_en_{w}x{ht}"), h.draw(w, ht).backend());
     }
@@ -784,7 +1003,7 @@ fn the_environment_form_maps_a_preset_per_database() {
     h.ctrl('s');
     let map = &h.app.policies.environment("prod").unwrap().policy.session;
     assert_eq!((map.postgres.as_deref(), map.mysql.as_deref()), (None, Some("my_ro")));
-    assert!(dir.text().contains("session = { mysql = \"my_ro\" }"), "{}", dir.text());
+    assert!(dir.text().contains("startup = { mysql = \"my_ro\" }"), "{}", dir.text());
 }
 
 /// Names are matched exactly; a preset of the same name but for case is named as the one
@@ -846,10 +1065,10 @@ fn the_session_view_lists_what_a_profiles_sessions_start_with_and_from_where() {
         "Lock wait        5s     environment prod",
         "Idle disconnect  never  app setting",
         "Idle rollback    30m    environment prod",
-        "From the session preset “reporting” of the environment prod:",
+        "From the Startup SQL “reporting” of the environment prod:",
         "  SET statement_timeout = '30s'",
         "    behind a pooler: per transaction as SET LOCAL statement_timeout = '30s'",
-        "From its own session SQL:",
+        "From its own startup SQL:",
         "  SET work_mem = '256MB'",
         "    behind a pooler: per transaction as SET LOCAL work_mem = '256MB'",
         "  SET ROLE reporting",
@@ -868,6 +1087,18 @@ fn the_session_view_lists_what_a_profiles_sessions_start_with_and_from_where() {
     h.command("session");
     click_on(&mut h, "[ Close ]");
     assert_eq!(h.overlay_kind(), None);
+}
+
+/// `:startup` is another name of `:session`: the same view of the same profile.
+#[test]
+fn startup_opens_the_session_view() {
+    let mut h = connected(&view_config());
+    h.command("session");
+    let by_session = h.screen(120, 40);
+    h.key(KeyCode::Esc);
+    h.command("startup");
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::SessionView));
+    assert_eq!(h.screen(120, 40), by_session);
 }
 
 /// Click the first `text` on a 100x30 screen (after the dialog's arming delay).
@@ -936,7 +1167,7 @@ fn a_profile_without_an_environment_shows_the_default_rules() {
     let screen = h.screen(120, 40);
     assert!(screen.contains("local-pg · PostgreSQL · default rules"), "{screen}");
     assert!(screen.contains("Idle rollback    30m                   default rules"), "{screen}");
-    assert!(screen.contains("No session statements"), "{screen}");
+    assert!(screen.contains("No startup statements"), "{screen}");
 }
 
 /// An environment that is not defined: what the connect refuses with, from `:session` and from
@@ -983,7 +1214,7 @@ fn a_mysql_profiles_session_view_has_no_pooler_lines() {
     h.command("session");
     let screen = h.screen(120, 40);
     assert!(screen.contains("local-pg · MySQL · environment prod"), "{screen}");
-    assert!(screen.contains("From the session preset “my_ro” of the environment prod:"), "{screen}");
+    assert!(screen.contains("From the Startup SQL “my_ro” of the environment prod:"), "{screen}");
     assert!(screen.contains("  SET SESSION sql_mode = 'ANSI_QUOTES'"), "{screen}");
     assert!(!screen.contains("behind a pooler"), "{screen}");
 }
@@ -999,11 +1230,11 @@ fn the_session_view_says_a_skipped_preset_and_no_statements() {
     let screen = h.screen(120, 40);
     assert!(
         screen.contains(
-            "Not used: the session preset “reporting” of the environment prod (the profile says session = \"none\")"
+            "Not used: the Startup SQL “reporting” of the environment prod (the profile says startup = \"none\")"
         ),
         "{screen}"
     );
-    assert!(screen.contains("No session statements"), "{screen}");
+    assert!(screen.contains("No startup statements"), "{screen}");
     assert!(screen.contains("Lock wait"), "{screen}");
 }
 
@@ -1015,7 +1246,7 @@ fn the_session_view_of_a_profile_that_does_not_connect_says_why() {
     h.explore("local-pg");
     h.command("session");
     let screen = h.screen(120, 40);
-    assert!(screen.contains("local-pg names the session preset “gone”, which does not exist"), "{screen}");
+    assert!(screen.contains("local-pg names the Startup SQL “gone”, which does not exist"), "{screen}");
     assert!(screen.contains("The profile does not connect until this is fixed"), "{screen}");
     assert!(!screen.contains("Lock wait"), "{screen}");
     insta::assert_snapshot!("session_view_error_en_80x24", h.draw(80, 24).backend());
@@ -1033,12 +1264,12 @@ fn the_profile_forms_key_shows_its_unsaved_values() {
     assert_eq!(h.overlay_kind(), Some(OverlayKind::SessionView));
     let screen = h.screen(120, 40);
     assert!(screen.contains("Session settings — local-pg (the form's unsaved values)"), "{screen}");
-    assert!(screen.contains("From its own session SQL:") && screen.contains("  SET jit = off"), "{screen}");
+    assert!(screen.contains("From its own startup SQL:") && screen.contains("  SET jit = off"), "{screen}");
     insta::assert_snapshot!("session_view_form_en_80x24", h.draw(80, 24).backend());
     h.key(KeyCode::Esc);
     assert_eq!(h.overlay_kind(), Some(OverlayKind::ProfileForm));
     assert_eq!(h.form().focus, Field::SessionSql);
-    assert_eq!(h.form().session_sql.text(), "SET jit = off");
+    assert_eq!(h.form().session_sql.statements(), ["SET jit = off"]);
     assert!(h.app.profiles[0].session_sql.is_empty(), "nothing saved");
 }
 
@@ -1179,7 +1410,7 @@ fn the_session_view_shows_a_lock_wait_a_preset_overrides() {
     let mut h = connected_on(&lock_config("postgres", &["SET lock_timeout = '3s'"], &[]));
     h.command("session");
     let screen = h.screen(120, 40);
-    for line in ["Lock wait        3s", "its session preset “fast” — overrides environment prod: 5s"] {
+    for line in ["Lock wait        3s", "its Startup SQL “fast” — overrides environment prod: 5s"] {
         assert!(screen.contains(line), "{line}\n{screen}");
     }
     for (w, ht) in [(80, 24), (120, 40)] {
@@ -1187,7 +1418,10 @@ fn the_session_view_shows_a_lock_wait_a_preset_overrides() {
     }
     // Within 80 columns the source wraps under itself.
     let screen = h.screen(80, 24);
-    assert!(screen.contains("“fast” — overrides") && screen.contains("environment prod: 5s"), "{screen}");
+    assert!(
+        screen.contains("“fast” — overrides environment") && screen.contains("                         prod: 5s"),
+        "{screen}"
+    );
     let mut h = connected_on(&lock_config("postgres", &["SET lock_timeout TO DEFAULT"], &[]));
     h.command("session");
     let screen = h.screen(120, 40);
@@ -1241,4 +1475,166 @@ fn a_lock_wait_cut_by_the_servers_own_limit_names_no_time() {
     h.tab_db(0, DbEvent::Failed { id, error: DbError::ServerLockTimeout(server.into()), cancelled: false });
     let t = h.screen(200, 45);
     assert!(t.contains("waited too long for a lock another session holds") && !t.contains("Waited longer than"), "{t}");
+}
+
+/// In a list that scrolls, the terminal cursor is on the row being edited (its line, after its
+/// text), whichever row that is.
+#[test]
+fn the_cursor_is_on_the_edited_row_of_a_scrolled_list() {
+    let dir = scratch("list-cursor");
+    let mut h = section_harness(&dir);
+    on_preset(&mut h, "my_ro");
+    h.keys("e");
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Tab);
+    let check = |h: &mut Harness, what: &str| {
+        let mut t = h.draw(80, 24);
+        let c = t.get_cursor_position().unwrap();
+        let row = h.form().session_sql.row;
+        let text = format!("{:>3} {}", row + 1, h.form().session_sql.text(row));
+        let screen = h.screen(80, 24);
+        let line = screen.lines().nth(usize::from(c.y)).unwrap_or_default().to_string();
+        assert!(line.contains(&text), "{what}: cursor at {c:?} on {line:?}, editing {text:?}\n{screen}");
+    };
+    // Refused rows say why under them, on one line or two.
+    for i in 1..=8 {
+        h.key(KeyCode::Enter);
+        let sql = if i % 2 == 1 { "SET autocommit = 0".to_string() } else { format!("SET @x{i} = 1") };
+        h.type_text(&sql);
+        check(&mut h, &format!("row {i}"));
+    }
+    for i in 0..8 {
+        h.key(KeyCode::Up);
+        check(&mut h, &format!("up {i}"));
+    }
+    for i in 0..6 {
+        h.key(KeyCode::Down);
+        check(&mut h, &format!("down {i}"));
+    }
+    h.key(KeyCode::Enter);
+    check(&mut h, "a new row in the middle");
+    h.type_text("SET x = 1");
+    check(&mut h, "typed");
+}
+
+/// Two statements in one item without a `;` between them are refused, as one line or on two,
+/// in a read-only environment too: the profile does not connect.
+#[test]
+fn two_statements_in_one_item_do_not_connect() {
+    for read_only in [false, true] {
+        for sql in ["SET @c=3 SET @d=4", "SET @c=3\nSET @d=4"] {
+            let mut cfg = config(|p| {
+                p.driver = "mysql".into();
+                p.port = 3306;
+                p.session = SessionRef::Off;
+                p.session_sql = vec![sql.into()];
+            });
+            let mut rules = cfg.policies.environment("prod").unwrap().policy.clone();
+            rules.read_only = read_only;
+            cfg.policies.insert("prod", rules);
+            let mut h = launched(&cfg);
+            h.explore("local-pg");
+            h.key(KeyCode::Enter);
+            assert!(h.driver.sessions.lock().unwrap().is_empty(), "{sql}");
+            let e = h.node_error("local-pg").unwrap_or_default();
+            assert!(e.contains("statement 1 of its own startup SQL is not allowed (one statement per item)"), "{e}");
+        }
+    }
+}
+
+/// Ctrl+S that a refused statement keeps from saving says so, in the preset form and in the
+/// profile form; the row being edited says all of its reason, even where the others are cut.
+#[test]
+fn a_save_a_refused_statement_stops_says_why() {
+    let dir = scratch("refused-save");
+    let mut h = section_harness(&dir);
+    on_preset(&mut h, "my_ro");
+    h.keys("e");
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::End);
+    h.key(KeyCode::Enter);
+    h.type_text("SET autocommit = 0");
+    let screen = h.screen(80, 24);
+    assert!(screen.contains("(manual or auto)"), "the whole reason:\n{screen}");
+    h.ctrl('s');
+    assert!(h.form_open(), "not saved");
+    assert_eq!(said(&h), "Not saved: a statement is not allowed (said under it)");
+    h.key(KeyCode::Esc);
+    profile_field(&mut h, "local-pg", Field::SessionSql);
+    h.type_text("SET search_path = x");
+    h.ctrl('s');
+    assert!(h.form_open(), "not saved");
+    assert_eq!(said(&h), "Not saved: a statement is not allowed (said under it)");
+}
+
+/// A Startup SQL row cut at a separator ends with `…` like any other cut row, not with a bare
+/// ` · `.
+#[test]
+fn a_cut_preset_row_ends_with_an_ellipsis() {
+    let dir = scratch("cut-row");
+    section_config(&dir);
+    let text = dir.text() + "\n[startup.pg_fast]\ndbms = \"postgres\"\nsql = [\"SET work_mem = '1MB'\"]\n";
+    std::fs::write(dir.config(), &text).unwrap();
+    let (cfg, err) = datarig_core::config::load(Some(dir.config()));
+    assert!(err.is_none(), "{err:?}");
+    let mut h = launched(&cfg);
+    for (w, ht) in [(80, 24), (100, 30), (120, 40), (160, 45)] {
+        let screen = h.screen(w, ht);
+        let line = screen.lines().find(|l| l.contains("pg_fast")).unwrap_or_else(|| panic!("{screen}"));
+        let row = line.split('│').nth(1).unwrap_or_default().trim_end();
+        assert!(!row.ends_with('·'), "{w}x{ht}: {row:?}");
+        assert!(row.ends_with('…') || row.ends_with("statement"), "{w}x{ht}: {row:?}");
+    }
+}
+
+/// Saves from the Startup SQL form and the profile form change only what they edit: in a file
+/// with `[editor]`, `[keymap.*]`, two profiles and `[sessions.*]` (the 0.31 name), the preset
+/// tables move to `[startup.*]` and an edited profile's keys are renamed or added, and everything
+/// else (settings, key map, the other profile, comments) stays byte for byte.
+#[test]
+fn form_saves_leave_the_rest_of_the_file_as_written() {
+    let dir = scratch("rest-of-file");
+    let head = "version = 2\nlanguage = \"en\"\n\n# my editor\n[editor]\nclipboard = \"off\" # never the system clipboard\n\n[keymap.explorer]\n\"x\" = \"conn.disconnect\"\n\n";
+    let profile = |id: u8, name: &str, keys: &str| {
+        format!(
+            "[[connections]]\nid = \"00000000-0000-4000-8000-00000000000{id}\"\nname = \"{name}\"\ndriver = \"postgres\"\n{keys}host = \"127.0.0.1\"\nport = 55432\nuser = \"datarig\"\ndatabase = \"datarig\"\nsslmode = \"disable\"\n"
+        )
+    };
+    let a = profile(1, "a", "# its preset\nsession = \"x\"\n");
+    let b = profile(2, "b", "");
+    let preset = |table: &str, sql: &str| format!("# the preset\n[{table}.x]\ndbms = \"postgres\"\nsql = [{sql}]\n");
+    let text = format!("{head}{a}\n{b}\n{}", preset("sessions", "\"SET work_mem = '1MB'\""));
+    std::fs::write(dir.config(), &text).unwrap();
+    let (cfg, err) = datarig_core::config::load(Some(dir.config()));
+    assert!(err.is_none(), "{err:?}");
+    let mut h = launched(&cfg);
+    assert_eq!(dir.text(), text, "launching writes nothing");
+    // The preset form: a statement more, so `[sessions.x]` moves to `[startup.x]`.
+    on_preset(&mut h, "x");
+    h.keys("e");
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Enter);
+    h.type_text("SET jit = off");
+    h.ctrl('s');
+    assert!(!h.form_open(), "saved");
+    let presets = preset("startup", "\"SET work_mem = '1MB'\", \"SET jit = off\"");
+    let want = format!("{head}{a}\n{b}\n{presets}");
+    assert_eq!(dir.text(), want);
+    // Profile `b`'s own statements: its new key, at the end of its table.
+    profile_field(&mut h, "b", Field::SessionSql);
+    h.type_text("SET jit = off");
+    h.ctrl('s');
+    assert!(!h.form_open(), "saved");
+    let b2 = format!("{b}startup_sql = [\"SET jit = off\"]\n");
+    let want = format!("{head}{a}\n{b2}\n{presets}");
+    assert_eq!(dir.text(), want);
+    // Profile `a`: its `session` is renamed in place (its comment kept), the new key added.
+    profile_field(&mut h, "a", Field::SessionSql);
+    h.type_text("SET work_mem = '2MB'");
+    h.ctrl('s');
+    assert!(!h.form_open(), "saved");
+    let a2 = profile(1, "a", "# its preset\nstartup = \"x\"\n") + "startup_sql = [\"SET work_mem = '2MB'\"]\n";
+    assert_eq!(dir.text(), format!("{head}{a2}\n{b2}\n{presets}"));
 }

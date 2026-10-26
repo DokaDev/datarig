@@ -56,12 +56,14 @@
 //! is written the same way, once the default rules were edited in the app.
 //! `[tunnels.<name>]` tables are the tunnel presets profiles name with `tunnel = "<name>"` (see
 //! [`crate::profile::tunnel`]); each has a stable `id`, assigned like a profile's.
-//! `[sessions.<name>]` tables are the session presets (see [`crate::profile::session`]):
-//! profiles name them with `session = "<name>"` (`"none"`: none) and environments with
-//! `session = { postgres = "<name>", mysql = "<name>" }`; a profile's `session_sql` is its own
+//! `[startup.<name>]` tables are the Startup SQL presets (see [`crate::profile::session`]):
+//! profiles name them with `startup = "<name>"` (`"none"`: none) and environments with
+//! `startup = { postgres = "<name>", mysql = "<name>" }`; a profile's `startup_sql` is its own
 //! list of statements. The statements are checked when a profile connects, not here: a
 //! classifier that reads one otherwise after an upgrade makes that profile's error, never the
-//! whole file's.
+//! whole file's. Their names in 0.31 (`[sessions.<name>]`, `session`, `session_sql`) are still
+//! read the same, and renamed in place by a save that changes what they say ([`STARTUP_ALIASES`]); a
+//! place that has a name and its old one is an error.
 
 use crate::fault::{Fault, FaultKind};
 use crate::policy::{self, Policies, Policy};
@@ -137,7 +139,10 @@ struct FileConfig {
     #[serde(default)]
     tunnels: BTreeMap<String, TunnelSection>,
     #[serde(default)]
-    sessions: BTreeMap<String, SessionSection>,
+    startup: Option<BTreeMap<String, SessionSection>>,
+    /// `startup`'s old name, read the same.
+    #[serde(default)]
+    sessions: Option<BTreeMap<String, SessionSection>>,
 }
 
 /// `[policy.<name>]`: an environment (or the default rules).
@@ -168,6 +173,9 @@ struct PolicySection {
     #[serde(default)]
     lock_wait: Option<toml::Value>,
     #[serde(default)]
+    startup: Option<toml::Value>,
+    /// `startup`'s old name, read the same ([`SESSION_ALIAS`]).
+    #[serde(default)]
     session: Option<toml::Value>,
     #[serde(default)]
     color: Option<toml::Value>,
@@ -191,7 +199,8 @@ impl PolicySection {
             (TX_IDLE_ROLLBACK_ALIAS, self.tx_idle_timeout.clone()),
             ("idle_disconnect", self.idle_disconnect.clone()),
             ("lock_wait", self.lock_wait.clone()),
-            ("session", self.session.clone()),
+            ("startup", self.startup.clone()),
+            (SESSION_ALIAS, self.session.clone()),
             ("color", self.color.clone()),
             ("badge", self.badge.clone()),
         ]
@@ -207,6 +216,19 @@ const SIZES: &str = "1073741824, \"512MB\", \"2GB\", \"off\"";
 /// The old name of `tx_idle_rollback`: still read as it, never written (a table that has both
 /// is an error, [`ConfigError::Alias`]).
 const TX_IDLE_ROLLBACK_ALIAS: &str = "tx_idle_timeout";
+
+/// The old name of an environment's `startup`, read and written the same way as
+/// [`TX_IDLE_ROLLBACK_ALIAS`].
+const SESSION_ALIAS: &str = "session";
+
+/// The items of an environment that have an old name: `(key, its old name)`.
+const ENV_ALIASES: [(&str, &str); 2] = [("tx_idle_rollback", TX_IDLE_ROLLBACK_ALIAS), ("startup", SESSION_ALIAS)];
+
+/// The Startup SQL keys that had other names in 0.31: `(key, its old name)`, for the
+/// top-level tables and a profile's two keys. The old ones are read the same; a save that changes
+/// what they say renames them in place (their comments kept), one that does not leaves them.
+pub const STARTUP_ALIASES: [(&str, &str); 3] =
+    [("startup", "sessions"), ("startup", "session"), ("startup_sql", "session_sql")];
 
 /// `tx_idle_warning`'s and `tx_idle_rollback`'s literal values, for errors.
 const TX_IDLE: &str = "\"5m\", \"30m\", \"1h\" (10s at least), \"off\"";
@@ -259,7 +281,7 @@ fn policy_item(name: &str, key: &str, v: &toml::Value, e: &mut policy::Environme
             let d = policy::parse_lock_wait(v).map_err(|x| err(&x).allowed(Some(LOCK_WAIT)))?;
             e.policy.lock_wait = Some(d);
         }
-        "session" => e.policy.session = session_map(name, v)?,
+        "startup" | SESSION_ALIAS => e.policy.session = session_map(name, key, v)?,
         "color" => match v.as_str() {
             Some(c) if ProfileColor::parse(c).is_some() => e.color = Some(c.to_string()),
             _ => return Err(err(&raw).allowed(Some("red, green, blue, … #rrggbb"))),
@@ -273,16 +295,16 @@ fn policy_item(name: &str, key: &str, v: &toml::Value, e: &mut policy::Environme
     Ok(())
 }
 
-/// `session` of table `[policy.<name>]`: `{ postgres = "<preset>", mysql = "<preset>" }`, each
-/// a preset's name (never empty, never `"none"`, which is not one).
-fn session_map(name: &str, v: &toml::Value) -> Result<SessionMap, ConfigError> {
+/// `startup` (or its old name `key`) of table `[policy.<name>]`: `{ postgres = "<preset>",
+/// mysql = "<preset>" }`, each a preset's name (never empty, never `"none"`, which is not one).
+fn session_map(name: &str, key: &str, v: &toml::Value) -> Result<SessionMap, ConfigError> {
     const ALLOWED: &str = "{ postgres = \"<preset>\", mysql = \"<preset>\" }";
     let Some(t) = v.as_table() else {
-        return Err(bad(&format!("policy.{name}.session"), v).allowed(Some(ALLOWED)));
+        return Err(bad(&format!("policy.{name}.{key}"), v).allowed(Some(ALLOWED)));
     };
     let mut map = SessionMap::default();
     for (k, item) in t {
-        let key = format!("policy.{name}.session.{k}");
+        let key = format!("policy.{name}.{key}.{k}");
         let Some(dbms) = Dbms::parse(k) else { return Err(bad(&key, item).allowed(Some("postgres, mysql"))) };
         match item.as_str() {
             Some(p) if !p.trim().is_empty() && p != session::NONE => map.set(dbms, Some(p.to_string())),
@@ -790,7 +812,7 @@ pub struct Config {
     pub connections: Vec<ConnectionConfig>,
     /// `[tunnels.<name>]` tables, by name.
     pub tunnels: Vec<TunnelPreset>,
-    /// `[sessions.<name>]` tables, by name.
+    /// `[startup.<name>]` tables (or `[sessions.<name>]`, their old name), by name.
     pub sessions: Vec<SessionPreset>,
     /// Every folder (`folders` plus the folders of the profiles).
     pub folders: Folders,
@@ -896,11 +918,15 @@ pub enum ConfigError {
     TunnelMissing { key: &'static str, tunnel: String },
     /// Table `table` has both `key` and `alias`, its old name.
     Alias { table: String, key: &'static str, alias: &'static str },
-    /// `[sessions.<name>]` has a name a preset cannot have.
+    /// The file has both `[<key>.*]` tables and `[<alias>.*]` tables, their old name.
+    AliasTables { key: &'static str, alias: &'static str },
+    /// Profile `profile` has both `key` and `alias`, its old name.
+    AliasProfile { profile: String, key: &'static str, alias: &'static str },
+    /// `[startup.<name>]` has a name a preset cannot have.
     SessionName(String),
-    /// `[sessions.<name>]` has the name a profile's `session` gives to "no preset" (`none`).
+    /// `[startup.<name>]` has the name a profile's `startup` gives to "no preset" (`none`).
     SessionReserved(String),
-    /// Session preset `preset` has no `<key>`.
+    /// Startup SQL preset `preset` has no `<key>`.
     SessionMissing { key: &'static str, preset: String },
 }
 
@@ -1044,24 +1070,26 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
             Some(v) => policy::parse_lock_wait(v).map_err(|e| bad("lock_wait", e).allowed(Some(LOCK_WAIT)))?,
         },
     };
+    // The file as written: the environments' order and which keys a profile has (a key and its
+    // old name together are an error, so a file that cannot be read this way is not read at all).
+    let doc = text.parse::<DocumentMut>().map_err(|e| ConfigError::Syntax(Fault::toml_edit(text, &e)))?;
     // The environments in the file's order (the deserializer sorts its map by name).
-    let order: Vec<String> = text
-        .parse::<DocumentMut>()
-        .ok()
-        .and_then(|d| {
-            d.get("policy").and_then(Item::as_table_like).map(|t| t.iter().map(|(k, _)| k.to_string()).collect())
-        })
+    let order: Vec<String> = doc
+        .get("policy")
+        .and_then(Item::as_table_like)
+        .map(|t| t.iter().map(|(k, _)| k.to_string()).collect())
         .unwrap_or_default();
     let mut sections: Vec<(&String, &PolicySection)> = f.policy.iter().collect();
     sections.sort_by_key(|(name, _)| order.iter().position(|o| o == *name).unwrap_or(usize::MAX));
     let mut policies = Policies::default();
     for (name, p) in sections {
-        if p.tx_idle_rollback.is_some() && p.tx_idle_timeout.is_some() {
-            let table = format!("policy.{name}");
-            return Err(ConfigError::Alias { table, key: "tx_idle_rollback", alias: TX_IDLE_ROLLBACK_ALIAS });
+        let items = p.items();
+        let has = |key: &str| items.iter().any(|(k, _)| *k == key);
+        if let Some(&(key, alias)) = ENV_ALIASES.iter().find(|(key, alias)| has(key) && has(alias)) {
+            return Err(ConfigError::Alias { table: format!("policy.{name}"), key, alias });
         }
         let mut e = policy::Environment::new(name, Policy::default());
-        for (key, v) in p.items() {
+        for (key, v) in items {
             policy_item(name, key, &v, &mut e)?;
         }
         e.origin = Some(name.clone());
@@ -1103,8 +1131,13 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
         }
         tunnels.push(p);
     }
+    let (presets_key, presets) = match (f.startup, f.sessions) {
+        (Some(_), Some(_)) => return Err(ConfigError::AliasTables { key: "startup", alias: "sessions" }),
+        (Some(t), None) => ("startup", t),
+        (None, t) => ("sessions", t.unwrap_or_default()),
+    };
     let mut sessions = Vec::new();
-    for (name, t) in f.sessions {
+    for (name, t) in presets {
         if session::name_problem(&name).is_some() {
             return Err(ConfigError::SessionName(name));
         }
@@ -1113,8 +1146,9 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
         }
         let dbms = match t.dbms.as_deref() {
             None => return Err(ConfigError::SessionMissing { key: "dbms", preset: name }),
-            Some(d) => Dbms::parse(d)
-                .ok_or_else(|| bad(&format!("sessions.{name}.dbms"), d).allowed(Some("\"postgres\", \"mysql\"")))?,
+            Some(d) => Dbms::parse(d).ok_or_else(|| {
+                bad(&format!("{presets_key}.{name}.dbms"), d).allowed(Some("\"postgres\", \"mysql\""))
+            })?,
         };
         sessions.push(SessionPreset {
             id: SessionPresetId::new(),
@@ -1125,8 +1159,29 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
         });
     }
     let mut connections = f.connections;
+    // Whether the table of profile `i` (the file's order) has `key`.
+    let profile_has = |i: usize, key: &str| match doc.get("connections") {
+        Some(Item::ArrayOfTables(a)) => a.get(i).is_some_and(|t| t.contains_key(key)),
+        Some(Item::Value(Value::Array(a))) => {
+            a.get(i).and_then(Value::as_inline_table).is_some_and(|t| t.contains_key(key))
+        }
+        _ => false,
+    };
     let mut seen = HashSet::new();
-    for c in &mut connections {
+    for (i, c) in connections.iter_mut().enumerate() {
+        for &(key, alias) in &STARTUP_ALIASES[1..] {
+            if profile_has(i, key) && profile_has(i, alias) {
+                return Err(ConfigError::AliasProfile { profile: c.name.clone(), key, alias });
+            }
+        }
+        // The key the profile names its preset with, for its errors.
+        let session_key = if c.old_session.is_some() { "session" } else { "startup" };
+        if let Some(r) = c.old_session.take() {
+            c.session = r;
+        }
+        if let Some(sql) = c.old_session_sql.take() {
+            c.session_sql = sql;
+        }
         if c.id.is_unset() {
             c.id = ProfileId::new();
             ids_assigned = true;
@@ -1180,13 +1235,13 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
         }
         // The same for a session preset (`"none"` is no preset).
         if matches!(&c.session, SessionRef::Named(n) if n.trim().is_empty()) {
-            return Err(bad("session", "\"\"").in_profile(&c.name).allowed(Some("\"<preset>\", \"none\"")));
+            return Err(bad(session_key, "\"\"").in_profile(&c.name).allowed(Some("\"<preset>\", \"none\"")));
         }
         // `"None"`, `"NONE"`: meant as none, which is written `"none"` (never a preset's name).
         if let SessionRef::Named(n) = &c.session
             && session::same_name(n, session::NONE)
         {
-            return Err(bad("session", n).in_profile(&c.name).allowed(Some("\"none\"")));
+            return Err(bad(session_key, n).in_profile(&c.name).allowed(Some("\"none\"")));
         }
         c.origin = Some(c.name.clone());
         c.normalize();
@@ -1540,8 +1595,7 @@ pub fn save(path: &Path, settings: Settings, profiles: Option<Profiles>) -> Resu
                 t.remove("allow_public_key_retrieval");
             }
             set_opt(&mut t, "tunnel", c.tunnel.as_deref());
-            set_opt(&mut t, "session", c.session.as_value());
-            set_statements(&mut t, "session_sql", &c.session_sql);
+            write_startup(&mut t, c);
             match &c.ssh {
                 Some(ssh) => write_ssh(&mut t, ssh),
                 None => {
@@ -1665,6 +1719,43 @@ fn write_tunnels(doc: &mut DocumentMut, presets: &[TunnelPreset]) -> Result<(), 
     Ok(())
 }
 
+/// A profile's `startup` and `startup_sql`. A table that still has their 0.31 names (`session`,
+/// `session_sql`) keeps its text while what it says is what the profile has; once that changes,
+/// the old keys are renamed in place (their comments kept) and written as any other.
+fn write_startup(t: &mut Table, c: &ConnectionConfig) {
+    let [_, (key, alias), (sql_key, sql_alias)] = STARTUP_ALIASES;
+    if t.contains_key(alias) || t.contains_key(sql_alias) {
+        let says =
+            t.get(key).or_else(|| t.get(alias)).and_then(Item::as_str).map_or(SessionRef::Inherit, SessionRef::of);
+        let says_sql: Vec<String> = t
+            .get(sql_key)
+            .or_else(|| t.get(sql_alias))
+            .and_then(Item::as_array)
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+            .unwrap_or_default();
+        if says == c.session && says_sql == c.session_sql {
+            return;
+        }
+        rename_in_place(t, &STARTUP_ALIASES[1..]);
+    }
+    set_opt(t, key, c.session.as_value());
+    set_statements(t, sql_key, &c.session_sql);
+}
+
+/// Rename each key of `t` that has an old name of `names` (`(key, old name)`) to its key, in
+/// place: it keeps its place in the table and its comments.
+fn rename_in_place(t: &mut Table, names: &[(&str, &str)]) {
+    let old = t.clone();
+    t.clear();
+    for (k, item) in old.iter() {
+        let mut key = old.key(k).cloned().unwrap_or_else(|| toml_edit::Key::new(k));
+        if let Some((new, _)) = names.iter().find(|(_, alias)| *alias == k) {
+            key = toml_edit::Key::new(*new).with_leaf_decor(key.leaf_decor().clone());
+        }
+        t.insert_formatted(&key, item.clone());
+    }
+}
+
 /// Set `key` to the list `sql` (one string per statement), or remove it when it is empty. A
 /// list the file has already (its formatting aside) stays as written.
 fn set_statements(t: &mut Table, key: &str, sql: &[String]) {
@@ -1680,18 +1771,23 @@ fn set_statements(t: &mut Table, key: &str, sql: &[String]) {
     }
 }
 
-/// The `[sessions.<name>]` tables: each preset's table is found by the name it was read with
+/// The `[startup.<name>]` tables: each preset's table is found by the name it was read with
 /// ([`SessionPreset::origin`]) and updated in place under its current name (a rename keeps its
 /// comments); a new one's is added; the tables of presets that are gone are removed. Tables keep
-/// their places in the file, handed out in the presets' order.
+/// their places in the file, handed out in the presets' order. A file that still has them as
+/// `[sessions.<name>]` (their 0.31 name) keeps its text while they are these presets; once they
+/// change, every table moves to `[startup.<name>]` in place, with its comments.
 fn write_sessions(doc: &mut DocumentMut, presets: &[SessionPreset]) -> Result<(), Fault> {
-    let shape = || Fault::new(FaultKind::Shape { key: "sessions".into() }, "sessions must be a table of tables");
+    let [(key, alias), ..] = STARTUP_ALIASES;
+    let read_key = if doc.contains_key(alias) && !doc.contains_key(key) { alias } else { key };
+    let shape =
+        || Fault::new(FaultKind::Shape { key: read_key.into() }, format!("{read_key} must be a table of tables"));
     let as_table = |v: &Item| match v {
         Item::Table(t) => Some(t.clone()),
         Item::Value(Value::InlineTable(t)) => Some(t.clone().into_table()),
         _ => None,
     };
-    let old: Vec<(String, Table)> = match doc.get("sessions") {
+    let old: Vec<(String, Table)> = match doc.get(read_key) {
         None => Vec::new(),
         Some(item) => match item.as_table_like() {
             Some(t) => t.iter().filter_map(|(k, v)| as_table(v).map(|t| (k.to_string(), t))).collect(),
@@ -1701,7 +1797,10 @@ fn write_sessions(doc: &mut DocumentMut, presets: &[SessionPreset]) -> Result<()
     if presets.is_empty() && old.is_empty() {
         return Ok(());
     }
-    let mut parent = match doc.remove("sessions") {
+    if read_key == alias && same_presets(&old, presets) {
+        return Ok(());
+    }
+    let mut parent = match doc.remove(read_key) {
         Some(Item::Table(t)) => t,
         Some(Item::Value(Value::InlineTable(t))) => t.into_table(),
         _ => {
@@ -1743,9 +1842,28 @@ fn write_sessions(doc: &mut DocumentMut, presets: &[SessionPreset]) -> Result<()
         .flatten()
         .any(|r| r.as_str().is_some_and(|s| s.contains('#')));
     if !parent.is_empty() || commented {
-        doc.insert("sessions", Item::Table(parent));
+        doc.insert(key, Item::Table(parent));
     }
     Ok(())
+}
+
+/// Whether the file's preset tables `old` (by name) are `presets`, as the loader reads them.
+fn same_presets(old: &[(String, Table)], presets: &[SessionPreset]) -> bool {
+    old.len() == presets.len()
+        && presets.iter().all(|p| {
+            p.origin.as_deref() == Some(p.name.as_str())
+                && old.iter().any(|(k, t)| {
+                    let sql: Option<Vec<String>> = match t.get("sql") {
+                        None => Some(Vec::new()),
+                        Some(i) => {
+                            i.as_array().and_then(|a| a.iter().map(|v| v.as_str().map(str::to_string)).collect())
+                        }
+                    };
+                    *k == p.name
+                        && t.get("dbms").and_then(Item::as_str).and_then(Dbms::parse) == Some(p.dbms)
+                        && sql.as_deref() == Some(p.sql.as_slice())
+                })
+        })
 }
 
 /// A value of the file as the parser of [`parse`] reads it (`None`: a kind no item takes).
@@ -1805,11 +1923,11 @@ fn env_items(e: &policy::Environment) -> [(&'static str, Value, bool); 13] {
         ("spill_limit", p.spill_limit.map_or_else(|| 0.into(), size), p.spill_limit.is_none()),
         ("idle_disconnect", policy::format_timeout(p.idle_disconnect.flatten()).into(), p.idle_disconnect.is_none()),
         ("lock_wait", policy::format_timeout(p.lock_wait.flatten()).into(), p.lock_wait.is_none()),
-        ("session", session_value(&p.session), p.session.is_empty()),
+        ("startup", session_value(&p.session), p.session.is_empty()),
     ]
 }
 
-/// An environment's `session` as written: `{ postgres = "…", mysql = "…" }`.
+/// An environment's `startup` as written: `{ postgres = "…", mysql = "…" }`.
 fn session_value(map: &SessionMap) -> Value {
     let mut t = toml_edit::InlineTable::new();
     for (dbms, name) in map.iter() {
@@ -1825,21 +1943,14 @@ fn session_value(map: &SessionMap) -> Value {
 /// is not added. Returns the comments of removed items that had nowhere to go.
 fn write_env_keys(t: &mut Table, name: &str, e: &policy::Environment) -> String {
     let mut orphans = String::new();
-    // A table that changes says `tx_idle_rollback` instead of its old name (renamed in place, its
-    // comments kept; the value is then written as any other); one that does not keeps its text.
-    if t.contains_key(TX_IDLE_ROLLBACK_ALIAS) {
+    // A table that changes says `tx_idle_rollback` and `startup` instead of their old names
+    // (renamed in place, their comments kept; the values are then written as any other); one that
+    // does not keeps its text.
+    if ENV_ALIASES.iter().any(|(_, alias)| t.contains_key(alias)) {
         if env_of(name, &*t).is_some_and(|r| r.same_settings(e)) {
             return orphans;
         }
-        let old = t.clone();
-        t.clear();
-        for (k, item) in old.iter() {
-            let mut key = old.key(k).cloned().unwrap_or_else(|| toml_edit::Key::new(k));
-            if k == TX_IDLE_ROLLBACK_ALIAS {
-                key = toml_edit::Key::new("tx_idle_rollback").with_leaf_decor(key.leaf_decor().clone());
-            }
-            t.insert_formatted(&key, item.clone());
-        }
+        rename_in_place(t, &ENV_ALIASES);
     }
     for (key, value, default) in env_items(e) {
         let same = match t.get(key) {
@@ -1877,7 +1988,7 @@ fn same_item(key: &str, a: &policy::Environment, b: &policy::Environment) -> boo
         "spill_limit" => p.spill_limit == q.spill_limit,
         "idle_disconnect" => p.idle_disconnect == q.idle_disconnect,
         "lock_wait" => p.lock_wait == q.lock_wait,
-        "session" => p.session == q.session,
+        "startup" => p.session == q.session,
         _ => true,
     }
 }

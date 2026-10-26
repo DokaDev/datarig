@@ -553,8 +553,12 @@ impl App {
         let FormKind::Session { id, editing } = form.kind else { return };
         let (presets, original) = (&self.session_presets, form.original_name.clone());
         let taken = |n: &str| name_taken(presets, id, original.as_deref(), n);
-        if let Some((field, _)) = form.errors(taken).into_iter().next() {
+        let errors = form.errors(taken);
+        if let Some(&(field, _)) = errors.first() {
             form.focus_field(field);
+            if errors.iter().any(|(f, _)| *f == profiles::Field::SessionSql) {
+                self.flash(Notice::new(Label::FormStatementsNotSaved, Level::Warning));
+            }
             return;
         }
         let Some(mut p) = form.to_session_preset() else { return };

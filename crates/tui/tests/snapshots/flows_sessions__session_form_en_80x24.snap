@@ -1,26 +1,27 @@
 ---
 source: crates/tui/tests/flows_sessions.rs
+assertion_line: 426
 expression: "h.draw(w, ht).backend()"
 ---
 "╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
 "│  ＋ New connection   ││                                                      │" Hidden by multi-width symbols: [(4, " ")]
 "│▾ Connections 3       ││  No open tabs                                        │"
 "│  ▸ ○   local-pg      ││  Pick a connection in the explorer, or press         │"
-"│ ╭ New session preset ──────────────────────────────────────────────────────╮ │"
-"│ │  Session preset       profiles that pick it start their sessions with it │ │"
+"│ ╭ New Startup SQL ─────────────────────────────────────────────────────────╮ │"
+"│ │  Startup SQL          profiles that pick it start their sessions with it │ │"
 "│▾│                                                                          │ │"
 "│ │ Name        analytics                                                    │ │"
 "│▾│ Database    PostgreSQL ▾   ←/→ change · Enter list                       │ │"
-"│ │ Statements  SET statement_timeout = '1min'; SET jit = off                │ │"
-"│ │             SET …; one or more, separated by ;                           │ │"
-"│▾│                                                                          │ │"
+"│ │ Statements    1 SET statement_timeout = '1min'                         × │ │"
+"│ │               2 SET jit = off                                          × │ │"
+"│▾│               + Add statement  one per row · Enter adds · Ctrl+D deletes │ │"
+"│ │                                                                          │ │"
 "│ │                                                                          │ │"
 "│ │                                                                          │ │"
 "│ │              Test    Save    Cancel                                      │ │"
 "│ │                                                                          │ │"
 "│ │                                                                          │ │"
 "│ ╰──────────────────── Tab/↑↓ move · Ctrl+T test · Ctrl+S save · Esc cancel ╯ │"
-"│                      ││                                                      │"
 "│                      ││                                                      │"
 "│                      ││                                                      │"
 "│                      ││                                                      │"

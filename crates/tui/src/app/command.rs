@@ -375,7 +375,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec {
         command: Command::Session,
         name: "session",
-        aliases: &[],
+        aliases: &["startup"],
         arg: None,
         label: Label::ActionSessionShow,
         action: Some(Action::SessionView),

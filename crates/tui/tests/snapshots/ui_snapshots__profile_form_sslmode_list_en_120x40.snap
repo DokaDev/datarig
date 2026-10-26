@@ -1,5 +1,6 @@
 ---
 source: crates/tui/tests/ui_snapshots.rs
+assertion_line: 825
 expression: backend
 ---
 "╭ Explorer ──────────────────╮ 1 console 1 ×                                                                            "
@@ -11,18 +12,18 @@ expression: backend
 "│      ▸ public              ││  4 SELECT u.name, o.status, o.total_amount                                             │"
 "│      ▸ shop                ││  5 FROM shop.orders o                                                                  │"
 "│  ▸ ○   分析-replica        ││  6 JOIN shop.users u ON u.id = o.user_id                                               │" Hidden by multi-width symbols: [(10, " "), (12, " ")]
-"│  ▸ ○   分析-replica        ││  7 WHERE o.status = 'paid';                                                            │" Hidden by multi-width symbols: [(10, " "), (12, " ")]
-"│         ╭ Edit connection — local-pg ──────────────────────────────────────────────────────────────────────╮         │"
+"│  ▸ ○    ╭ Edit connection — local-pg ──────────────────────────────────────────────────────────────────────╮         │"
 "│         │  Basic   SSH   Advanced                                                    Ctrl+N/Ctrl+P section │         │"
 "│         │                                                                                                  │         │"
 "│         │ SSL mode          disable ▾   ←/→ change · Enter list                                            │         │"
 "│         │ CA file                                               PEM; checks the server's certificate       │         │"
-"│         │ Client cert         ╭ SSL mode ────────────────────────────────────────────╮ver asks             │         │"
-"│         │ Client key          │ › type to filter                                     │ase                  │         │"
-"│         │ Statement cache   ‹ │                                                      │ode                  │         │"
-"│         │ Environment       No│ disable      not encrypted                           │                     │         │"
-"│         │ Session preset    En│ prefer       encrypted if the server offers it       │                     │         │"
-"│         │ Session SQL         │ require      encrypted, certificate not checked (wi… │he preset's          │         │"
+"│         │ Client cert                                           PEM, sent when the server asks             │         │"
+"│         │ Client key          ╭ SSL mode ────────────────────────────────────────────╮ase                  │         │"
+"│         │ Statement cache   ‹ │ › type to filter                                     │ode                  │         │"
+"│         │ Environment       No│                                                      │                     │         │"
+"│         │ Startup SQL       En│ disable      not encrypted                           │                     │         │"
+"│         │ Own startup SQL     │ prefer       encrypted if the server offers it       │                   × │         │"
+"│         │                     │ require      encrypted, certificate not checked (wi… │                     │         │"
 "│         │ Color             ‹ │ verify-ca    encrypted, signed by the CA file (need… │                     │         │"
 "│         │ Icon              ‹ │ verify-full  CA-signed, and the host name matches    │                     │         │"
 "│         │ Folder            ‹ ╰───────────────── Enter pick · ↑↓ select · Esc cancel ╯                     │         │"
