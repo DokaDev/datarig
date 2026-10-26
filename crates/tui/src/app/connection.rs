@@ -57,7 +57,7 @@ impl App {
         // other database), or a statement that is not a setting: nothing is asked or sent (never
         // without them instead).
         if let Err(e) = self.session_plan_of(&conn) {
-            let m = self.session_error_notice(&conn.name, &e);
+            let m = self.session_error_notice(&conn, &e);
             self.attempt_failed(id, m.clone());
             self.status = Some(m);
             return;
@@ -113,7 +113,7 @@ impl App {
             return self.attempt_failed(conn.id, m);
         }
         if let Err(e) = self.session_plan_of(&conn) {
-            let m = self.session_error_notice(&conn.name, &e);
+            let m = self.session_error_notice(&conn, &e);
             return self.attempt_failed(conn.id, m);
         }
         let mut cfg = conn.clone();
@@ -802,7 +802,7 @@ impl App {
         // What its sessions would start with must be valid first (the test itself opens no query
         // session: it asks the server's version).
         if let Err(e) = self.session_plan_of(&cfg) {
-            let text = self.session_error_notice(&cfg.name, &e).render(&self.i18n).to_string();
+            let text = self.session_error_notice(&cfg, &e).render(&self.i18n).to_string();
             return self.test_refused(text);
         }
         // Through its SSH tunnel (a throwaway one: the form may hold settings not saved yet).

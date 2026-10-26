@@ -2135,9 +2135,9 @@
 "session.failed" = "{name}: {statement} failed, so the session was closed: {error} ({sql})"
 "session.per_transaction" = "{name} is behind a connection pooler: its session settings go first in each transaction (SET LOCAL), not on the shared connection"
 "session.pooled_refused" = { one = "{name} is behind a connection pooler: {count} session setting was not sent, as it has no form for one transaction: {sql}", other = "{name} is behind a connection pooler: {count} session settings were not sent, as they have no form for one transaction: {sql}" }
-"session.source.global" = "the app setting"
-"session.source.default_rules" = "the default rules"
-"session.source.environment" = "the environment {environment}"
+"session.source.global" = "app setting"
+"session.source.default_rules" = "default rules"
+"session.source.environment" = "environment {environment}"
 "session_view.title" = "Session settings — {name}"
 "session_view.title_unsaved" = "Session settings — {name} (the form's unsaved values)"
 "session_view.title_new" = "Session settings — new profile (the form's unsaved values)"

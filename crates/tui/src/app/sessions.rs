@@ -143,21 +143,16 @@ impl App {
         self.i18n.label(label).to_string()
     }
 
-    /// What profile `name` says when its plan has error `e`.
-    pub(super) fn session_error_notice(&self, name: &str, e: &SessionError) -> Notice {
-        let name = name.to_string();
+    /// What profile `cfg` says when its plan has error `e`.
+    pub(super) fn session_error_notice(&self, cfg: &ConnectionConfig, e: &SessionError) -> Notice {
+        let name = cfg.name.clone();
         let sql = |s: &str| super::runlog::excerpt(s, 60);
         let m = match e {
             SessionError::NotFound { preset, by: PickedBy::Profile } => {
                 Msg::SessionNotFoundProfile { name, preset: preset.clone() }
             }
             SessionError::NotFound { preset, by: PickedBy::Environment(env) } => {
-                let dbms = self
-                    .profiles
-                    .iter()
-                    .find(|c| c.name == name)
-                    .and_then(|c| Dbms::of_driver(&c.driver))
-                    .map_or_else(String::new, |d| d.display().to_string());
+                let dbms = Dbms::of_driver(&cfg.driver).map_or_else(String::new, |d| d.display().to_string());
                 match env {
                     Some(e) => {
                         Msg::SessionNotFoundEnvironment { name, preset: preset.clone(), environment: e.clone(), dbms }
@@ -240,7 +235,7 @@ impl App {
         let Some(cfg) = self.action_profile().and_then(|p| self.profile(p)).cloned() else {
             return self.flash(Notice::new(Label::SessionViewNoProfile, Level::Info));
         };
-        self.open_session_view(&cfg, false);
+        self.open_session_view(&cfg, false, None);
     }
 
     /// The profile form's values, saved or not: what its sessions would start with.
@@ -250,20 +245,23 @@ impl App {
         // A value of the plan that differs from the saved profile's (or a new profile): unsaved.
         let saved = f.editing.and_then(|i| self.profiles.get(i));
         let unsaved = saved.is_none_or(|p| {
-            (Dbms::of_driver(&p.driver), &p.policy, &p.session, &p.session_sql)
-                != (Dbms::of_driver(&cfg.driver), &cfg.policy, &cfg.session, &cfg.session_sql)
+            (&p.name, Dbms::of_driver(&p.driver), &p.policy, &p.session, &p.session_sql)
+                != (&cfg.name, Dbms::of_driver(&cfg.driver), &cfg.policy, &cfg.session, &cfg.session_sql)
         });
-        self.open_session_view(&cfg, unsaved);
+        // The environment the form makes when it is saved has its rules there only.
+        let made = f.made_environment().map(|e| e.policy.clone());
+        self.open_session_view(&cfg, unsaved, made);
     }
 
-    /// The session view of `cfg` (`unsaved`: a form's values the file does not have yet), made
-    /// now: it does not follow later changes.
-    fn open_session_view(&mut self, cfg: &ConnectionConfig, unsaved: bool) {
+    /// The session view of `cfg` (`unsaved`: a form's values the file does not have yet; `made`:
+    /// the rules of the environment that form makes), made now: it does not follow later
+    /// changes. An environment that is not defined says what the connect refuses with.
+    fn open_session_view(&mut self, cfg: &ConnectionConfig, unsaved: bool, made: Option<datarig_core::policy::Policy>) {
         use super::overlay::{SessionLine, Tone};
         use datarig_core::profile::session::{Intent, Planned};
         let label = |l: Label| self.i18n.label(l).to_string();
         let env = cfg.policy.as_deref().filter(|n| *n != datarig_core::policy::DEFAULT);
-        let rules = self.policies.get(cfg.policy.as_deref()).unwrap_or_else(|_| self.rules_of(cfg.id));
+        let rules = self.policies.get(cfg.policy.as_deref()).or_else(|e| made.ok_or(e));
         let title = match (unsaved, cfg.name.is_empty()) {
             (false, _) => self.i18n.msg(&Msg::SessionViewTitle { name: cfg.name.clone() }),
             (true, false) => self.i18n.msg(&Msg::SessionViewTitleUnsaved { name: cfg.name.clone() }),
@@ -277,17 +275,24 @@ impl App {
         });
         let who = [cfg.name.as_str(), &dbms, &place].iter().filter(|s| !s.is_empty()).copied().collect::<Vec<_>>();
         let mut head = vec![SessionLine::Text(who.join(" · "), Tone::Strong)];
-        if rules.read_only {
+        if rules.as_ref().is_ok_and(|r| r.read_only) {
             head.push(SessionLine::Text(label(Label::SessionViewReadOnly), Tone::Warning));
         }
         let mut lines = Vec::new();
-        let foot = match self.session_plan_of(cfg) {
+        let defaults = Defaults { lock_wait: self.prefs.lock_wait, idle_disconnect: self.prefs.idle_disconnect };
+        let plan = rules.map(|r| session::plan(cfg, &r, defaults, &self.session_presets));
+        let foot = match plan {
             Err(e) => {
-                let text = self.session_error_notice(&cfg.name, &e).render(&self.i18n).to_string();
+                let text = self.unknown_environment_notice(&cfg.name, &e).render(&self.i18n).to_string();
                 lines.push(SessionLine::Text(text, Tone::Error));
                 SessionLine::Text(label(Label::SessionViewNoConnect), Tone::Warning)
             }
-            Ok(plan) => {
+            Ok(Err(e)) => {
+                let text = self.session_error_notice(cfg, &e).render(&self.i18n).to_string();
+                lines.push(SessionLine::Text(text, Tone::Error));
+                SessionLine::Text(label(Label::SessionViewNoConnect), Tone::Warning)
+            }
+            Ok(Ok(plan)) => {
                 let mut from: Option<&Source> = None;
                 for i in &plan.items {
                     // A blank line after the app's limits.
@@ -343,7 +348,15 @@ impl App {
         self.overlays.close(OverlayKind::Commands);
         self.overlays.close(OverlayKind::WhichKey);
         self.key_state.clear();
-        let v = super::overlay::SessionView { title, head, lines, foot, scroll: 0, buttons: Default::default() };
+        let v = super::overlay::SessionView {
+            title,
+            head,
+            lines,
+            foot,
+            scroll: 0,
+            max_scroll: 0,
+            buttons: Default::default(),
+        };
         self.overlays.push(Overlay::SessionView(v));
     }
 
@@ -352,7 +365,7 @@ impl App {
     pub(super) fn session_view_key(&mut self, key: KeyEvent, repeat: bool) {
         let Some(s) = self.overlays.session_view_mut() else { return };
         match key.code {
-            KeyCode::Char('j') | KeyCode::Down => s.scroll += 1,
+            KeyCode::Char('j') | KeyCode::Down => s.scroll = (s.scroll + 1).min(s.max_scroll),
             KeyCode::Char('k') | KeyCode::Up => s.scroll = s.scroll.saturating_sub(1),
             _ if repeat => {}
             KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => self.overlays.close(OverlayKind::SessionView),
@@ -735,7 +748,7 @@ impl App {
         let statements: Vec<SessionStatement> = match session::plan(&cfg, &rules, defaults, &presets) {
             Ok(plan) => plan.statements(),
             Err(e) => {
-                let text = self.session_error_notice(&cfg.name, &e).render(&self.i18n).to_string();
+                let text = self.session_error_notice(&cfg, &e).render(&self.i18n).to_string();
                 return self.test_refused(text);
             }
         };

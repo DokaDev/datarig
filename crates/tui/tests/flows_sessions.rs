@@ -840,10 +840,10 @@ fn the_session_view_lists_what_a_profiles_sessions_start_with_and_from_where() {
     assert_eq!(h.overlay_kind(), Some(OverlayKind::SessionView));
     let screen = h.screen(120, 40);
     for line in [
-        "local-pg · PostgreSQL · the environment prod",
-        "Lock wait        5s     the environment prod",
-        "Idle disconnect  never  the app setting",
-        "Idle rollback    30m    the environment prod",
+        "local-pg · PostgreSQL · environment prod",
+        "Lock wait        5s     environment prod",
+        "Idle disconnect  never  app setting",
+        "Idle rollback    30m    environment prod",
         "From the session preset “reporting” of the environment prod:",
         "  SET statement_timeout = '30s'",
         "    behind a pooler: per transaction as SET LOCAL statement_timeout = '30s'",
@@ -860,10 +860,92 @@ fn the_session_view_lists_what_a_profiles_sessions_start_with_and_from_where() {
         insta::assert_snapshot!(format!("session_view_en_{w}x{ht}"), h.draw(w, ht).backend());
     }
     remember_english("session_view_en_120x40", h.draw(120, 40).backend().buffer());
-    // `j` scrolls, `Esc` closes.
-    h.keys("j");
     h.key(KeyCode::Esc);
     assert_eq!(h.overlay_kind(), None);
+    // A click on Close closes it too.
+    h.command("session");
+    click_on(&mut h, "[ Close ]");
+    assert_eq!(h.overlay_kind(), None);
+}
+
+/// Click the first `text` on a 100x30 screen (after the dialog's arming delay).
+fn click_on(h: &mut Harness, text: &str) {
+    use ratatui::crossterm::event::{MouseButton, MouseEventKind};
+    let screen = h.screen(100, 30);
+    let (x, y) = screen
+        .lines()
+        .enumerate()
+        .find_map(|(y, row)| row.find(text).map(|i| (datarig_tui::text::width(&row[..i]) as u16 + 1, y as u16)))
+        .unwrap_or_else(|| panic!("no {text:?}:\n{screen}"));
+    h.advance(Duration::from_millis(500));
+    h.mouse(MouseEventKind::Down(MouseButton::Left), x, y);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), x, y);
+}
+
+/// A plan longer than the screen: `j` and the wheel scroll it, never past its last line; a
+/// statement on several lines is shown whole, wrapped.
+#[test]
+fn a_long_session_view_scrolls_and_shows_statements_whole() {
+    let cfg = config(|p| {
+        p.session_sql = (1..=12).map(|i| format!("SET work_mem = '{i}MB'")).collect();
+        p.session_sql.push("SET statement_timeout\n  TO '5min'".into());
+    });
+    let mut h = launched(&cfg);
+    h.explore("local-pg");
+    h.command("session");
+    let first = h.screen(80, 24);
+    assert!(first.contains("SET LOCAL work_mem = '1MB'"), "{first}");
+    assert!(!first.contains("TO '5min'"), "below: {first}");
+    h.keys("j");
+    let second = h.screen(80, 24);
+    assert_ne!(first, second);
+    for _ in 0..60 {
+        h.keys("j");
+    }
+    h.mouse(ratatui::crossterm::event::MouseEventKind::ScrollDown, 40, 12);
+    let last = h.screen(80, 24);
+    assert!(last.contains("  SET statement_timeout") && last.contains("    TO '5min'"), "{last}");
+    // At the end already: one `k` shows one line more above.
+    h.keys("k");
+    assert_ne!(h.screen(80, 24), last, "the scroll stopped at the last line");
+    h.mouse(ratatui::crossterm::event::MouseEventKind::ScrollUp, 40, 12);
+    h.mouse(ratatui::crossterm::event::MouseEventKind::ScrollDown, 40, 12);
+    h.mouse(ratatui::crossterm::event::MouseEventKind::ScrollDown, 40, 12);
+    assert_eq!(h.screen(80, 24), last);
+}
+
+/// A profile with no environment: the default rules are where its limits come from.
+#[test]
+fn a_profile_without_an_environment_shows_the_default_rules() {
+    let cfg = Config { connections: vec![ConnectionConfig::test_db()], sessions: presets(), ..Config::default() };
+    let mut h = launched(&cfg);
+    h.explore("local-pg");
+    h.command("session");
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("local-pg · PostgreSQL · default rules"), "{screen}");
+    assert!(screen.contains("Idle rollback    30m                   default rules"), "{screen}");
+    assert!(screen.contains("No session statements"), "{screen}");
+}
+
+/// An environment that is not defined: what the connect refuses with, from `:session` and from
+/// the form (never the plan of other rules).
+#[test]
+fn an_undefined_environment_says_what_the_connect_refuses_with() {
+    let cfg = config(|p| p.policy = Some("gone".into()));
+    let mut h = launched(&cfg);
+    h.explore("local-pg");
+    h.command("session");
+    let refused = "Environment “gone” not found for local-pg";
+    let screen = h.screen(120, 40);
+    assert!(screen.contains(refused), "{screen}");
+    assert!(screen.contains("The profile does not connect until this is fixed"), "{screen}");
+    assert!(!screen.contains("Lock wait") && !screen.contains("SET "), "{screen}");
+    h.key(KeyCode::Esc);
+    profile_field(&mut h, "local-pg", Field::SessionSql);
+    h.type_text("SET jit = off");
+    h.ctrl('e');
+    let screen = h.screen(120, 40);
+    assert!(screen.contains(refused) && !screen.contains("SET jit"), "{screen}");
 }
 
 #[test]
@@ -888,7 +970,7 @@ fn a_mysql_profiles_session_view_has_no_pooler_lines() {
     h.explore("local-pg");
     h.command("session");
     let screen = h.screen(120, 40);
-    assert!(screen.contains("local-pg · MySQL · the environment prod"), "{screen}");
+    assert!(screen.contains("local-pg · MySQL · environment prod"), "{screen}");
     assert!(screen.contains("From the session preset “my_ro” of the environment prod:"), "{screen}");
     assert!(screen.contains("  SET SESSION sql_mode = 'ANSI_QUOTES'"), "{screen}");
     assert!(!screen.contains("behind a pooler"), "{screen}");
@@ -940,6 +1022,7 @@ fn the_profile_forms_key_shows_its_unsaved_values() {
     let screen = h.screen(120, 40);
     assert!(screen.contains("Session settings — local-pg (the form's unsaved values)"), "{screen}");
     assert!(screen.contains("From its own session SQL:") && screen.contains("  SET jit = off"), "{screen}");
+    insta::assert_snapshot!("session_view_form_en_80x24", h.draw(80, 24).backend());
     h.key(KeyCode::Esc);
     assert_eq!(h.overlay_kind(), Some(OverlayKind::ProfileForm));
     assert_eq!(h.form().focus, Field::SessionSql);

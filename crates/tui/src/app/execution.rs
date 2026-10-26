@@ -236,7 +236,7 @@ impl App {
         // What the session starts with is checked again (a preset may have changed since the
         // profile connected): nothing opens without it.
         if let Err(e) = self.session_plan_of(&cfg) {
-            let m = self.session_error_notice(&cfg.name, &e);
+            let m = self.session_error_notice(&cfg, &e);
             self.tab_status(id, m);
             return false;
         }

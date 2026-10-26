@@ -473,13 +473,18 @@ pub(crate) fn draw_session_view(app: &mut App, area: Rect, buf: &mut Buffer) {
     let what_w = col(|l| if let SessionLine::Intent { what, .. } = l { Some(what) } else { None }).unwrap_or(0);
     let value_w = col(|l| if let SessionLine::Intent { value, .. } = l { Some(value) } else { None }).unwrap_or(0);
     let pad = |t: &str, w: usize| format!("{t}{}", " ".repeat(w.saturating_sub(width(t)) + 2));
-    // A statement whole when it fits, else its first line cut short.
-    let fit = |sql: &str, room: usize| {
-        if !sql.trim().contains('\n') && width(sql) <= room {
-            sql.to_string()
-        } else {
-            crate::app::runlog::excerpt(sql, room.saturating_sub(1).max(8))
+    // A text whole, wrapped: its first row indented by `first`, the rest (its own lines, with
+    // their indent, and what wraps) by `more`.
+    let block = |text: &str, first: usize, more: usize, style: Style| {
+        let mut out: Vec<Vec<(String, Style)>> = Vec::new();
+        for l in text.trim().lines().map(str::trim_end).filter(|l| !l.trim().is_empty()) {
+            let indent = more + (width(l) - width(l.trim_start())).min(iw / 4);
+            for r in wrap_words(l.trim_start(), iw.saturating_sub(indent)) {
+                let at = if out.is_empty() { first } else { indent };
+                out.push(vec![(" ".repeat(at), style), (r, style)]);
+            }
         }
+        out
     };
     let rows = |lines: &[SessionLine]| {
         let mut out: Vec<Vec<(String, Style)>> = Vec::new();
@@ -493,15 +498,11 @@ pub(crate) fn draw_session_view(app: &mut App, area: Rect, buf: &mut Buffer) {
                     (source.clone(), surface(th.fg_muted)),
                 ]),
                 SessionLine::Source(t) => out.push(vec![(t.clone(), surface(th.accent))]),
-                SessionLine::Statement(sql) => {
-                    out.push(vec![("  ".into(), surface(th.fg)), (fit(sql, iw.saturating_sub(2)), surface(th.fg))])
-                }
+                SessionLine::Statement(sql) => out.extend(block(sql, 2, 4, surface(th.fg))),
                 SessionLine::Pooled(p) => {
                     let text = match p {
                         OnPooler::PerTransaction(local) => {
-                            let empty = Msg::SessionViewPooledLocal { sql: String::new() };
-                            let room = iw.saturating_sub(4 + width(&app.i18n.msg(&empty)));
-                            app.i18n.msg(&Msg::SessionViewPooledLocal { sql: fit(local, room) }).to_string()
+                            app.i18n.msg(&Msg::SessionViewPooledLocal { sql: local.clone() }).to_string()
                         }
                         OnPooler::Refused(why) => {
                             let reason = app.i18n.label(match why {
@@ -511,7 +512,7 @@ pub(crate) fn draw_session_view(app: &mut App, area: Rect, buf: &mut Buffer) {
                             app.i18n.msg(&Msg::SessionViewPooledRefused { reason: reason.to_string() }).to_string()
                         }
                     };
-                    out.push(vec![("    ".into(), surface(th.fg_dim)), (text, surface(th.fg_dim))]);
+                    out.extend(block(&text, 4, 6, surface(th.fg_dim)));
                 }
             }
         }
@@ -558,6 +559,6 @@ pub(crate) fn draw_session_view(app: &mut App, area: Rect, buf: &mut Buffer) {
     y += 1;
     let labels = [app.i18n.label(Label::DialogButtonClose)];
     let Some(s) = app.overlays.session_view_mut() else { return };
-    s.scroll = scroll;
+    (s.scroll, s.max_scroll) = (scroll, max_scroll);
     button_row(buf, inner, y, &labels, Some(0), &mut s.buttons, when);
 }

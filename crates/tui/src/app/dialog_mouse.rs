@@ -221,8 +221,13 @@ impl App {
         }
     }
 
-    /// Close closes the session view.
+    /// Close closes the session view; the wheel scrolls it.
     fn session_view_mouse(&mut self, m: MouseEvent) {
+        match m.kind {
+            MouseEventKind::ScrollDown => return self.session_view_key(press(KeyCode::Down), false),
+            MouseEventKind::ScrollUp => return self.session_view_key(press(KeyCode::Up), false),
+            _ => {}
+        }
         let now = self.now();
         let Some(s) = self.overlays.session_view_mut() else { return };
         if s.buttons.press(m.kind, m.column, m.row, now).is_some() {

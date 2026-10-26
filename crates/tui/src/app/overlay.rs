@@ -312,8 +312,9 @@ pub struct SessionView {
     /// The items of its plan, in order (or why it has none).
     pub lines: Vec<SessionLine>,
     pub foot: SessionLine,
-    /// The first line of the list on screen.
+    /// The first line of the list on screen, and the last first line it can be (as drawn).
     pub scroll: usize,
+    pub max_scroll: usize,
     pub buttons: Buttons,
 }
 
