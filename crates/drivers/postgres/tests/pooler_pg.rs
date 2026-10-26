@@ -11,17 +11,52 @@
 //!
 //! The tests only read: nothing is created behind the pooler (a temporary table dropped with
 //! its transaction at most).
+//!
+//! The pool has three server connections, shared by the tests here as they run side by side.
+//! While other clients hold some of them (an open block, a cancel, a lock wait) or run in
+//! between, one client's transactions can land on the same server connection run after run,
+//! so the tests that count on landing elsewhere run alone ([`alone`]); the others share
+//! ([`POOL`]).
 
 use datarig_core::driver::ddl::DdlObject;
 use datarig_core::driver::{ConnectOptions, DbCommand, DbError, DbEvent, Driver, Session, SessionContext, SessionRole};
 use datarig_core::driver::{PagingMode, TxOutcome, TxRule, TxStep};
 use datarig_core::profile::ConnectionConfig;
 use datarig_driver_postgres::PgDriver;
+use std::collections::HashSet;
 use std::io::Write;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
 const PAGE: usize = 50;
+
+/// Shared by the tests that do not count on landing on different server connections, taken
+/// alone by those that do ([`alone`]).
+static POOL: tokio::sync::RwLock<()> = tokio::sync::RwLock::const_new(());
+
+/// Run alone among the tests here, with each of the pool's three server connections open and
+/// idle (each held by a client of its own once, then given back): consecutive transactions of
+/// one client then land on different ones (round robin).
+async fn alone(url: &str) -> tokio::sync::RwLockWriteGuard<'static, ()> {
+    let pool = POOL.write().await;
+    let mut held = Vec::new();
+    let mut pids = HashSet::new();
+    for _ in 0..3 {
+        let mut c = Conn::open(url, SessionRole::Query, false).await;
+        let ev = c.run(1, "BEGIN").await;
+        assert!(!matches!(ev, DbEvent::Failed { .. }), "{ev:?}");
+        let ev = c.run(2, "SELECT pg_backend_pid()").await;
+        let DbEvent::Page { rows, .. } = ev else { panic!("{ev:?}") };
+        pids.insert(rows[0][0].clone());
+        held.push(c);
+    }
+    assert_eq!(pids.len(), 3, "three server connections, one held by each client");
+    for c in &mut held {
+        let ev = c.run(3, "COMMIT").await;
+        assert!(!matches!(ev, DbEvent::Failed { .. }), "{ev:?}");
+    }
+    pool
+}
 
 fn pooler_url(test: &str) -> Option<String> {
     match std::env::var("DATARIG_TEST_POOLER_URL") {
@@ -138,6 +173,7 @@ const TEXTS: [&str; 7] = [
 #[tokio::test(flavor = "multi_thread")]
 async fn metadata_session_reads_the_catalog_behind_a_pooler() {
     let Some(url) = pooler_url("metadata_session_reads_the_catalog_behind_a_pooler") else { return };
+    let _pool = POOL.read().await;
     let mut other = Conn::open(&url, SessionRole::Query, false).await;
     let mut id = 0;
     let DbEvent::Page { rows, .. } = other.run(id, "SHOW jit").await else { panic!() };
@@ -200,6 +236,7 @@ async fn metadata_session_reads_the_catalog_behind_a_pooler() {
 #[tokio::test(flavor = "multi_thread")]
 async fn statement_cache_off_runs_behind_a_pooler() {
     let Some(url) = pooler_url("statement_cache_off_runs_behind_a_pooler") else { return };
+    let _pool = alone(&url).await;
     let mut c = Conn::open(&url, SessionRole::Query, false).await;
     let mut id = 0;
     for round in 0..20 {
@@ -223,6 +260,7 @@ async fn statement_cache_off_runs_behind_a_pooler() {
 #[tokio::test(flavor = "multi_thread")]
 async fn statement_cache_turns_itself_off_behind_a_pooler() {
     let Some(url) = pooler_url("statement_cache_turns_itself_off_behind_a_pooler") else { return };
+    let _pool = alone(&url).await;
     let mut c = Conn::open(&url, SessionRole::Query, true).await;
     let mut id = 0;
     for round in 0..20 {
@@ -240,6 +278,7 @@ async fn statement_cache_turns_itself_off_behind_a_pooler() {
 #[tokio::test(flavor = "multi_thread")]
 async fn connect_checks_and_ping_work_behind_a_pooler() {
     let Some(url) = pooler_url("connect_checks_and_ping_work_behind_a_pooler") else { return };
+    let _pool = POOL.read().await;
     let cfg = ConnectionConfig { name: "pooler".into(), dsn: Some(url.clone()), ..ConnectionConfig::default() };
     for _ in 0..20 {
         let info = PgDriver.ping(&cfg, Duration::from_secs(10), None).await.expect("ping");
@@ -262,6 +301,7 @@ async fn connect_checks_and_ping_work_behind_a_pooler() {
 #[tokio::test(flavor = "multi_thread")]
 async fn read_only_session_in_a_schema_behind_a_pooler() {
     let Some(url) = pooler_url("read_only_session_in_a_schema_behind_a_pooler") else { return };
+    let _pool = POOL.read().await;
     for cache in [false, true] {
         let context = SessionContext { database: None, schema: Some("shop".into()) };
         let opts = ConnectOptions::new(PAGE, SessionRole::Query, "pool")
@@ -294,6 +334,7 @@ async fn read_only_session_in_a_schema_behind_a_pooler() {
 #[tokio::test(flavor = "multi_thread")]
 async fn results_not_held_page_behind_a_pooler() {
     let Some(url) = pooler_url("results_not_held_page_behind_a_pooler") else { return };
+    let _pool = POOL.read().await;
     let sql = "SELECT id, current_setting('transaction_read_only') AS ro, current_setting('search_path') AS path \
                FROM users ORDER BY id";
     for cache in [false, true] {
@@ -364,6 +405,7 @@ async fn results_not_held_page_behind_a_pooler() {
 #[tokio::test(flavor = "multi_thread")]
 async fn copy_to_the_client_is_refused_behind_a_pooler() {
     let Some(url) = pooler_url("copy_to_the_client_is_refused_behind_a_pooler") else { return };
+    let _pool = POOL.read().await;
     let copy = "COPY (SELECT g FROM generate_series(1, 10) g) TO STDOUT";
     for (cache, read_only) in [(false, false), (true, false), (false, true)] {
         let opts = ConnectOptions::new(PAGE, SessionRole::Query, "pool").read_only(read_only).statement_cache(cache);
@@ -432,6 +474,7 @@ impl Drop for TerminateGuard {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_copy_hidden_by_backslash_strings_is_refused_behind_a_pooler() {
     let Some(url) = pooler_url("a_copy_hidden_by_backslash_strings_is_refused_behind_a_pooler") else { return };
+    let _pool = POOL.read().await;
     let Ok(pg) = std::env::var("DATARIG_TEST_PG_URL") else {
         let _ = writeln!(std::io::stderr(), "SKIPPED: DATARIG_TEST_PG_URL watches the server behind the pooler");
         return;
@@ -481,6 +524,7 @@ async fn a_copy_hidden_by_backslash_strings_is_refused_behind_a_pooler() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_copy_of_a_table_named_to_is_refused_behind_a_pooler() {
     let Some(url) = pooler_url("a_copy_of_a_table_named_to_is_refused_behind_a_pooler") else { return };
+    let _pool = POOL.read().await;
     let mut c = Conn::open(&url, SessionRole::Query, false).await;
     for (id, sql) in [(1, "BEGIN"), (2, r#"CREATE TEMP TABLE "to" (a int) ON COMMIT DROP"#)] {
         let ev = c.run(id, sql).await;
@@ -521,6 +565,7 @@ async fn a_copy_of_a_table_named_to_is_refused_behind_a_pooler() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_cancel_goes_through_the_pooler_and_the_session_works_on() {
     let Some(url) = pooler_url("a_cancel_goes_through_the_pooler_and_the_session_works_on") else { return };
+    let _pool = POOL.read().await;
     let mut c = Conn::open(&url, SessionRole::Query, false).await;
     c.session.send(DbCommand::Execute {
         id: 1,
@@ -578,6 +623,7 @@ async fn a_manual_transaction_stays_on_one_server_connection_behind_a_pooler() {
     let Some(url) = pooler_url("a_manual_transaction_stays_on_one_server_connection_behind_a_pooler") else {
         return;
     };
+    let _pool = POOL.read().await;
     let mut other = Conn::open(&url, SessionRole::Query, false).await;
     let show = "SHOW idle_in_transaction_session_timeout";
     let DbEvent::Page { rows, .. } = other.run(1, show).await else { panic!("{show}") };
@@ -651,6 +697,7 @@ async fn behind_a_pooler_the_lock_wait_limit_is_per_transaction_and_no_idle_limi
     else {
         return;
     };
+    let _pool = POOL.read().await;
     let mut other = Conn::open(&url, SessionRole::Query, false).await;
     let DbEvent::Page { rows, .. } = other.run(1, "SHOW lock_timeout").await else { panic!("lock_timeout") };
     let server = rows[0][0].clone();
