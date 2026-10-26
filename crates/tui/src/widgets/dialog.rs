@@ -473,13 +473,15 @@ pub(crate) fn draw_session_view(app: &mut App, area: Rect, buf: &mut Buffer) {
     let what_w = col(|l| if let SessionLine::Intent { what, .. } = l { Some(what) } else { None }).unwrap_or(0);
     let value_w = col(|l| if let SessionLine::Intent { value, .. } = l { Some(value) } else { None }).unwrap_or(0);
     let pad = |t: &str, w: usize| format!("{t}{}", " ".repeat(w.saturating_sub(width(t)) + 2));
-    // A text whole, wrapped: its first row indented by `first`, the rest (its own lines, with
-    // their indent, and what wraps) by `more`.
+    // A text whole and exactly as written, wrapped: its first row indented by `first`, the rest
+    // (its own lines, with their indent, and what wraps) by `more`.
     let block = |text: &str, first: usize, more: usize, style: Style| {
         let mut out: Vec<Vec<(String, Style)>> = Vec::new();
         for l in text.trim().lines().map(str::trim_end).filter(|l| !l.trim().is_empty()) {
-            let indent = more + (width(l) - width(l.trim_start())).min(iw / 4);
-            for r in wrap_words(l.trim_start(), iw.saturating_sub(indent)) {
+            // Its own indent joins the row's (up to a quarter of the width); the rest is shown.
+            let lead = (l.len() - l.trim_start_matches(' ').len()).min(iw / 4);
+            let indent = more + lead;
+            for r in crate::text::wrap_exact(&l[lead..], iw.saturating_sub(indent)) {
                 let at = if out.is_empty() { first } else { indent };
                 out.push(vec![(" ".repeat(at), style), (r, style)]);
             }

@@ -1038,3 +1038,50 @@ fn the_session_view_without_a_profile_says_so() {
     assert_ne!(h.overlay_kind(), Some(OverlayKind::SessionView));
     assert_eq!(said(&h), "No profile to show: select one in the explorer, or go to one of its tabs");
 }
+
+/// A statement is shown exactly as written, wrapped where it is too wide: its blanks and every
+/// character are there, the wrapped pieces put together give it back.
+#[test]
+fn a_wrapped_statement_keeps_every_character() {
+    let sql = "SET myapp.note = 'a  b, then   a tail long enough to wrap past an eighty column screen'";
+    let cfg = config(|p| p.session_sql = vec![sql.into()]);
+    let mut h = launched(&cfg);
+    h.explore("local-pg");
+    h.command("session");
+    for _ in 0..20 {
+        h.keys("j");
+    }
+    let screen = h.screen(80, 24);
+    let rows: Vec<Vec<char>> = screen.lines().map(|l| l.chars().collect()).collect();
+    let (y, x) = rows
+        .iter()
+        .enumerate()
+        .find_map(|(y, r)| r.windows(9).position(|w| w.iter().collect::<String>() == "SET myapp").map(|x| (y, x)))
+        .unwrap_or_else(|| panic!("{screen}"));
+    let end = x + rows[y][x..].iter().position(|c| *c == '│').expect("the right border");
+    let mut shown: String = rows[y][x..end].iter().collect::<String>().trim_end().to_string();
+    for r in &rows[y + 1..] {
+        if shown.len() >= sql.len() {
+            break;
+        }
+        shown.push_str(r[x + 2..end].iter().collect::<String>().trim_end());
+    }
+    assert_eq!(shown, sql, "{screen}");
+}
+
+/// The form names an environment it makes when it is saved (a preset picked): the view shows
+/// that environment's rules, not an error.
+#[test]
+fn the_form_shows_the_rules_of_the_environment_it_makes() {
+    let cfg = Config { connections: vec![ConnectionConfig::test_db()], sessions: presets(), ..Config::default() };
+    let mut h = launched(&cfg);
+    profile_field(&mut h, "local-pg", Field::SessionSql);
+    let f = h.app.overlays.form_mut().expect("form");
+    f.set_env_choice(datarig_tui::app::profiles::EnvChoice::Preset("prod".into()));
+    assert!(h.form().made_environment().is_some());
+    h.ctrl('e');
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("local-pg · PostgreSQL · environment prod"), "{screen}");
+    assert!(screen.contains("Read-only environment"), "{screen}");
+    assert!(screen.contains("Idle rollback") && !screen.contains("not found"), "{screen}");
+}

@@ -156,6 +156,52 @@ pub fn wrap_words(s: &str, w: usize) -> Vec<String> {
     out
 }
 
+/// Wrap one line at blanks to `w` columns keeping every character: the pieces joined give `s`
+/// back. A run of blanks where it breaks starts the next piece; a word wider than `w`, or one
+/// that follows only blanks, is broken like [`wrap`] (tabs kept as they are).
+pub fn wrap_exact(s: &str, w: usize) -> Vec<String> {
+    let w = w.max(2);
+    let mut out: Vec<String> = Vec::new();
+    let mut line = String::new();
+    // The words, each with the blanks before it.
+    let mut runs: Vec<&str> = Vec::new();
+    let mut rest = s;
+    while !rest.is_empty() {
+        let lead = rest.len() - rest.trim_start_matches(' ').len();
+        let end = lead + rest[lead..].find(' ').unwrap_or(rest.len() - lead);
+        let (run, tail) = rest.split_at(end);
+        runs.push(run);
+        rest = tail;
+    }
+    for run in runs {
+        if width(&line) + width(run) <= w {
+            line.push_str(run);
+            continue;
+        }
+        if !line.trim().is_empty() {
+            out.push(std::mem::take(&mut line));
+        }
+        line.push_str(run);
+        // Too wide on its own: cut at grapheme boundaries, the last part goes on.
+        while width(&line) > w {
+            let mut acc = 0;
+            let at = line
+                .grapheme_indices(true)
+                .find(|(_, g)| {
+                    acc += grapheme_width(g);
+                    acc > w
+                })
+                .map_or(line.len(), |(i, _)| i);
+            let next = line.split_off(at.max(line.chars().next().map_or(0, char::len_utf8)));
+            out.push(std::mem::replace(&mut line, next));
+        }
+    }
+    if !line.is_empty() || out.is_empty() {
+        out.push(line);
+    }
+    out
+}
+
 /// `v` with one decimal under 10 and none above (`4.2`, `11`), without a trailing `.0`.
 fn short_number(v: f64) -> String {
     let one = (v * 10.0).round() / 10.0;
