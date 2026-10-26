@@ -1587,3 +1587,54 @@ fn a_cut_preset_row_ends_with_an_ellipsis() {
         assert!(row.ends_with('…') || row.ends_with("statement"), "{w}x{ht}: {row:?}");
     }
 }
+
+/// Saves from the Startup SQL form and the profile form change only what they edit: in a file
+/// with `[editor]`, `[keymap.*]`, two profiles and `[sessions.*]` (the 0.31 name), the preset
+/// tables move to `[startup.*]` and an edited profile's keys are renamed or added, and everything
+/// else (settings, key map, the other profile, comments) stays byte for byte.
+#[test]
+fn form_saves_leave_the_rest_of_the_file_as_written() {
+    let dir = scratch("rest-of-file");
+    let head = "version = 2\nlanguage = \"en\"\n\n# my editor\n[editor]\nclipboard = \"off\" # never the system clipboard\n\n[keymap.explorer]\n\"x\" = \"conn.disconnect\"\n\n";
+    let profile = |id: u8, name: &str, keys: &str| {
+        format!(
+            "[[connections]]\nid = \"00000000-0000-4000-8000-00000000000{id}\"\nname = \"{name}\"\ndriver = \"postgres\"\n{keys}host = \"127.0.0.1\"\nport = 55432\nuser = \"datarig\"\ndatabase = \"datarig\"\nsslmode = \"disable\"\n"
+        )
+    };
+    let a = profile(1, "a", "# its preset\nsession = \"x\"\n");
+    let b = profile(2, "b", "");
+    let preset = |table: &str, sql: &str| format!("# the preset\n[{table}.x]\ndbms = \"postgres\"\nsql = [{sql}]\n");
+    let text = format!("{head}{a}\n{b}\n{}", preset("sessions", "\"SET work_mem = '1MB'\""));
+    std::fs::write(dir.config(), &text).unwrap();
+    let (cfg, err) = datarig_core::config::load(Some(dir.config()));
+    assert!(err.is_none(), "{err:?}");
+    let mut h = launched(&cfg);
+    assert_eq!(dir.text(), text, "launching writes nothing");
+    // The preset form: a statement more, so `[sessions.x]` moves to `[startup.x]`.
+    on_preset(&mut h, "x");
+    h.keys("e");
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Enter);
+    h.type_text("SET jit = off");
+    h.ctrl('s');
+    assert!(!h.form_open(), "saved");
+    let presets = preset("startup", "\"SET work_mem = '1MB'\", \"SET jit = off\"");
+    let want = format!("{head}{a}\n{b}\n{presets}");
+    assert_eq!(dir.text(), want);
+    // Profile `b`'s own statements: its new key, at the end of its table.
+    profile_field(&mut h, "b", Field::SessionSql);
+    h.type_text("SET jit = off");
+    h.ctrl('s');
+    assert!(!h.form_open(), "saved");
+    let b2 = format!("{b}startup_sql = [\"SET jit = off\"]\n");
+    let want = format!("{head}{a}\n{b2}\n{presets}");
+    assert_eq!(dir.text(), want);
+    // Profile `a`: its `session` is renamed in place (its comment kept), the new key added.
+    profile_field(&mut h, "a", Field::SessionSql);
+    h.type_text("SET work_mem = '2MB'");
+    h.ctrl('s');
+    assert!(!h.form_open(), "saved");
+    let a2 = profile(1, "a", "# its preset\nstartup = \"x\"\n") + "startup_sql = [\"SET work_mem = '2MB'\"]\n";
+    assert_eq!(dir.text(), format!("{head}{a2}\n{b2}\n{presets}"));
+}
