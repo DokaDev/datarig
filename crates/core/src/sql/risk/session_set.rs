@@ -113,7 +113,8 @@ pub struct SessionSet {
     pub per_transaction: Option<Result<String, NotLocal>>,
     /// What it sets, in order: each setting's name (lower case) and its value as written (the
     /// words after `=` or `TO`, joined by a blank: `'3s'`, `DEFAULT`). User variables are not
-    /// among them.
+    /// among them. The value is only reliable for a setting of one scalar value (a list such as
+    /// `search_path`'s, or `SET TIME ZONE …`, is not read as one).
     pub settings: Vec<(String, String)>,
 }
 
@@ -213,7 +214,7 @@ fn shape(sql: &str) -> Result<(Result<String, NotLocal>, Vec<(String, String)>),
 
 /// The value of a PostgreSQL `SET name = value` (or `TO value`) as written: the words after the
 /// first `=` or `TO`, without comments or a closing `;`, joined by a blank; empty when there is
-/// none (`SET TIME ZONE …`).
+/// none (`SET TIME ZONE …`). Only reliable for a setting of one scalar value.
 fn value_text(sql: &str) -> String {
     let toks: Vec<_> = lex(sql).into_iter().filter(|t| !t.is_trivia() && t.kind != Tok::Semi).collect();
     let at = toks.iter().position(|t| t.text(sql) == "=" || (t.is_word() && t.text(sql).eq_ignore_ascii_case("TO")));

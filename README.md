@@ -833,10 +833,13 @@ disconnect and Lock wait fields, empty for the config's value; `"off"` turns it 
   itself (PostgreSQL `SET lock_timeout = '3s'`; MySQL `SET SESSION lock_wait_timeout = 3,
   innodb_lock_wait_timeout = 3`): it runs after datarig's own limit, so it overrides the
   environment's for those sessions (behind a pooler too, in every transaction), and the error
-  names its value ("Waited longer than 3s …"). When datarig cannot read the value (`DEFAULT`,
-  `0`, an expression or a unit it does not know; on MySQL the two settings at different values,
-  or one set while the other is the server's), the error says the statement waited too long,
-  without a time. `:session` shows the lock wait that applies and what it overrides.
+  names its value ("Waited longer than 3s …"). PostgreSQL's `0` is no limit (`:session` says
+  so). When datarig cannot read the value (`DEFAULT`, an expression, a fraction or a unit it does
+  not read; on MySQL a value out of range, the two settings at different values, or one set while
+  the other is the server's), the error says the statement waited too long, without a time, as
+  it does for a statement that ran without datarig's limit (behind a pooler, a `CALL`, `DO` or
+  `VACUUM` outside a transaction of the session's own). `:session` shows the lock wait that
+  applies and what it overrides.
 
 ### Session presets
 

@@ -153,8 +153,8 @@ pub const VOLATILE: &[&str] = &[
 /// off, write anything, change how the server reads the text the app sends, or let a statement
 /// take more of the server's memory than its defaults (buffer and result sizes, recursion and
 /// planning depth, join size and idle timeouts are not here). How long a statement waits for a
-/// lock or may run is: a limit writes nothing, and a read-only session holds no row locks for
-/// others to wait on. Lower case.
+/// lock or may run is: a wait limit writes nothing and only bounds this session's own waits.
+/// Lower case.
 pub const SAFE_SETTINGS: &[&str] = &[
     "big_tables",
     "character_set_connection",

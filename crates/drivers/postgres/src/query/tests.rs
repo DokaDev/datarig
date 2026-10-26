@@ -519,6 +519,7 @@ mod terminal {
             each_tx: &[],
             path_per_tx: false,
             start_per_tx: 0,
+            lock_per_tx: false,
             savepoint: "datarig_count_test",
             before_bind: None,
         };
@@ -552,6 +553,7 @@ mod terminal {
             each_tx: &lock,
             path_per_tx,
             start_per_tx: 0,
+            lock_per_tx: false,
             savepoint: "datarig_count_test",
             before_bind: None,
         };
@@ -688,6 +690,7 @@ mod terminal {
                 each_tx: &self.each_tx,
                 path_per_tx: !self.each_tx.is_empty(),
                 start_per_tx: 0,
+                lock_per_tx: false,
                 savepoint: "datarig_count_test",
                 before_bind: hook,
             };
@@ -717,6 +720,7 @@ mod terminal {
                 each_tx: &self.each_tx,
                 path_per_tx: !self.each_tx.is_empty(),
                 start_per_tx: 0,
+                lock_per_tx: false,
                 savepoint: "datarig_count_test",
                 before_bind: None,
             };
@@ -744,6 +748,7 @@ mod terminal {
                 each_tx: &[],
                 path_per_tx: false,
                 start_per_tx: 0,
+                lock_per_tx: false,
                 savepoint: "datarig_count_test",
                 before_bind: hook,
             };

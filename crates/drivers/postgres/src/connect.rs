@@ -562,6 +562,7 @@ async fn run_session(
                 read_only: opts.read_only,
                 path_per_tx: path.is_some(),
                 start_per_tx: start.len(),
+                lock_per_tx: lock.is_some(),
                 each_tx: path.into_iter().chain(lock).chain(start).collect(),
                 statement_cache: opts.statement_cache,
             };

@@ -331,7 +331,8 @@ pub enum Wait {
     /// No limit (PostgreSQL's `0`).
     NoLimit,
     /// Not known: a value the app does not read (`DEFAULT`, the server's own; an expression, an
-    /// odd unit), or on MySQL two limits that differ or one the app does not know.
+    /// odd unit), on MySQL two limits that differ or one the app does not know, or a value that
+    /// differs between a direct connection and one behind a pooler (a statement not sent there).
     Unknown,
 }
 
@@ -456,8 +457,9 @@ pub fn plan(
 struct LockWaits {
     dbms: Dbms,
     /// PostgreSQL's `lock_timeout` (twice); MySQL's `lock_wait_timeout` and
-    /// `innodb_lock_wait_timeout`.
-    values: [Wait; 2],
+    /// `innodb_lock_wait_timeout`: on a direct connection, and behind a pooler in transaction mode
+    /// (where a PostgreSQL statement with no form for one transaction is not sent).
+    values: [[Wait; 2]; 2],
     /// Where the last statement that set one comes from.
     source: Option<Source>,
 }
@@ -466,11 +468,11 @@ impl LockWaits {
     /// The limits the app sets before the statements (`lock_wait`; `None`: the server's).
     fn new(dbms: Dbms, lock_wait: Option<Duration>) -> Self {
         let first = lock_wait.map_or(Wait::Unknown, Wait::Limit);
-        LockWaits { dbms, values: [first; 2], source: None }
+        LockWaits { dbms, values: [[first; 2]; 2], source: None }
     }
 
     /// A statement of `source` that sets `settings`; `pooled` its way behind a pooler (one that
-    /// is not sent there sets nothing there: what it sets is then not known).
+    /// is not sent there sets nothing there).
     fn set(&mut self, source: &Source, settings: &[(String, String)], pooled: Option<&OnPooler>) {
         for (name, value) in settings {
             let at = match (self.dbms, name.as_str()) {
@@ -479,19 +481,21 @@ impl LockWaits {
                 (Dbms::MySql, "innodb_lock_wait_timeout") => 1..2,
                 _ => continue,
             };
-            let wait = match pooled {
-                Some(OnPooler::Refused(_)) => Wait::Unknown,
-                _ => wait_of(self.dbms, value),
-            };
-            self.values[at].fill(wait);
+            let wait = wait_of(self.dbms, value);
+            self.values[0][at.clone()].fill(wait);
+            if !matches!(pooled, Some(OnPooler::Refused(_))) {
+                self.values[1][at].fill(wait);
+            }
             self.source = Some(source.clone());
         }
     }
 
-    /// The override, if a statement set a limit: known when both limits are the same.
+    /// The override, if a statement set a limit: known when both limits are the same, and the
+    /// same on a direct connection and behind a pooler (whether a connection is behind one is
+    /// known only once it connects).
     fn overridden(self) -> Option<LockWaitOverride> {
-        let [a, b] = self.values;
-        let wait = if a == b { a } else { Wait::Unknown };
+        let [[a, b], [c, d]] = self.values;
+        let wait = if a == b && a == c && c == d { a } else { Wait::Unknown };
         self.source.map(|source| LockWaitOverride { source, wait })
     }
 }
@@ -499,7 +503,9 @@ impl LockWaits {
 /// The lock wait limit `value` (as written) sets on `dbms`, as far as the app reads it.
 /// PostgreSQL's `lock_timeout`: a whole number of milliseconds, or one in quotes with one of
 /// the units `ms`, `s`, `min`, `h`, `d` (`0`: no limit). MySQL's: a whole number of seconds, from
-/// 1 up to a year (the largest `lock_wait_timeout` takes).
+/// 1 up to a year (the largest `lock_wait_timeout` takes). Other forms the server takes too
+/// (`' 3s'`, `'1.5s'`, `'3us'`, an expression) are `Unknown` on purpose: reading them as the
+/// server does is not worth getting a value wrong; unknown only drops the time from a message.
 fn wait_of(dbms: Dbms, value: &str) -> Wait {
     let digits = |t: &str| !t.is_empty() && t.len() <= 12 && t.bytes().all(|b| b.is_ascii_digit());
     match dbms {

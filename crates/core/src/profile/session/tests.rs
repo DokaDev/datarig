@@ -327,3 +327,21 @@ fn a_statement_that_sets_the_lock_wait_overrides_the_intent() {
     let p = plan(&c, &Policy::default(), Defaults::default(), &[]).unwrap();
     assert_eq!(p.lock_wait, of(&Source::Profile, Wait::Limit(secs(3))));
 }
+
+/// A lock statement not sent behind a pooler (no form for one transaction) still runs on a
+/// direct connection: its value is known when both ways end the same, else not known.
+#[test]
+fn a_lock_wait_not_sent_behind_a_pooler_is_known_only_when_both_ways_agree() {
+    let secs = Duration::from_secs;
+    let refused = OnPooler::Refused(NotLocal::Form);
+    let wait = |value: &str, pooled: Option<&OnPooler>| {
+        let mut w = LockWaits::new(Dbms::Postgres, Some(secs(5)));
+        w.set(&Source::Profile, &[("lock_timeout".into(), value.into())], pooled);
+        w.overridden().map(|o| o.wait)
+    };
+    assert_eq!(wait("'3s'", Some(&refused)), Some(Wait::Unknown), "3s direct, 5s behind a pooler");
+    assert_eq!(wait("'5s'", Some(&refused)), Some(Wait::Limit(secs(5))), "5s either way");
+    let sent = OnPooler::PerTransaction("SET LOCAL lock_timeout = '3s'".into());
+    assert_eq!(wait("'3s'", Some(&sent)), Some(Wait::Limit(secs(3))));
+    assert_eq!(wait("'3s'", None), Some(Wait::Limit(secs(3))));
+}

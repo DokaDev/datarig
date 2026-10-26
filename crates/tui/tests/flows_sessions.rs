@@ -1230,3 +1230,15 @@ fn a_refused_setting_says_why_and_where_to_set_it() {
         assert!(e.contains(why) && !e.contains("is set by"), "{sql}: {e}");
     }
 }
+
+/// A lock wait the server's own limit cut short (a statement that ran without the session's,
+/// behind a pooler) names no time, even with a limit of the environment's or a preset's.
+#[test]
+fn a_lock_wait_cut_by_the_servers_own_limit_names_no_time() {
+    let mut h = connected_on(&lock_config("postgres", &["SET lock_timeout = '3s'"], &[]));
+    let id = run(&mut h, "DO $$ BEGIN PERFORM 1; END $$");
+    let server = "ERROR: canceling statement due to lock timeout";
+    h.tab_db(0, DbEvent::Failed { id, error: DbError::ServerLockTimeout(server.into()), cancelled: false });
+    let t = h.screen(200, 45);
+    assert!(t.contains("waited too long for a lock another session holds") && !t.contains("Waited longer than"), "{t}");
+}

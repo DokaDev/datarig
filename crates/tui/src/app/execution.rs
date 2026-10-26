@@ -2005,7 +2005,9 @@ impl App {
             | DbError::IdleSessionTimeout(s) => {
                 return s.clone();
             }
-            DbError::LockTimeout(s) => return self.i18n.msg(&Msg::DbLockTimeoutAny { error: s.clone() }).to_string(),
+            DbError::LockTimeout(s) | DbError::ServerLockTimeout(s) => {
+                return self.i18n.msg(&Msg::DbLockTimeoutAny { error: s.clone() }).to_string();
+            }
             DbError::NoAnswer(d) => return self.i18n.msg(&Msg::DbNoAnswer { elapsed: *d }).to_string(),
             DbError::RowsNotRead(n) => return self.i18n.msg(&Msg::DbRowsNotRead { count: *n }).to_string(),
             DbError::Closed => Label::DbClosed,

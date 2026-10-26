@@ -972,3 +972,53 @@ async fn behind_a_pooler_a_transaction_default_is_never_sent_to_no_effect() {
         }
     }
 }
+
+/// Behind the pooler with the lock wait limit per transaction and no search path, a `DO` runs
+/// in no transaction of the session's own, so without the session's limit: a lock wait cut
+/// short there is the server connection's own limit's (`ServerLockTimeout`, which names no time
+/// of the app's), while a statement in the session's transactions keeps `LockTimeout`. The `DO`
+/// sets its own limit for its implicit transaction only: nothing stays on the pooled server
+/// connections.
+#[tokio::test(flavor = "multi_thread")]
+async fn behind_a_pooler_a_lock_wait_outside_the_sessions_transactions_is_the_servers() {
+    let Some(url) = pooler_url("behind_a_pooler_a_lock_wait_outside_the_sessions_transactions_is_the_servers") else {
+        return;
+    };
+    let _pool = POOL.read().await;
+    let mut other = Conn::open(&url, SessionRole::Query, false).await;
+    let DbEvent::Page { rows, .. } = other.run(1, "SHOW lock_timeout").await else { panic!("lock_timeout") };
+    let server = rows[0][0].clone();
+    let key = 0x7a7b_0000_i64 + i64::from(std::process::id());
+    let tag = format!("poold{}", std::process::id());
+    for cache in [false, true] {
+        let opts = ConnectOptions::new(PAGE, SessionRole::Query, &tag)
+            .statement_cache(cache)
+            .lock_wait(Some(Duration::from_secs(1)));
+        let mut q = Conn::open_with(&url, SessionRole::Query, opts).await;
+        let hold = DbCommand::Execute {
+            id: 2,
+            statements: vec![format!("SELECT pg_catalog.pg_advisory_xact_lock({key})")],
+            paging: PagingMode::Hold,
+            tx: TxRule::Manual { steps: vec![TxStep::Open], idle_timeout: None },
+        };
+        let events = other.events_of(hold).await;
+        assert!(events.iter().any(|e| matches!(e, DbEvent::ManualBegun { id: 2, .. })), "{events:?}");
+        let wait = format!(
+            "DO $$ BEGIN PERFORM pg_catalog.set_config('lock_timeout', '300ms', true); \
+             PERFORM pg_catalog.pg_advisory_xact_lock({key}); END $$"
+        );
+        let ev = q.run(3, &wait).await;
+        assert!(matches!(ev, DbEvent::Failed { error: DbError::ServerLockTimeout(_), .. }), "cache {cache}: {ev:?}");
+        // In a transaction of the session's own: the session's limit, as before.
+        let ev = q.run(4, &format!("SELECT pg_catalog.pg_advisory_xact_lock({key})")).await;
+        assert!(matches!(ev, DbEvent::Failed { error: DbError::LockTimeout(_), .. }), "cache {cache}: {ev:?}");
+        let events = other.events_of(DbCommand::EndTx { id: 5, commit: false }).await;
+        assert!(events.iter().any(|e| matches!(e, DbEvent::TxEnded { id: 5, .. })), "{events:?}");
+        let mut id = 10;
+        for _ in 0..8 {
+            id += 1;
+            let DbEvent::Page { rows, .. } = other.run(id, "SHOW lock_timeout").await else { panic!() };
+            assert_eq!(rows[0][0], server, "cache {cache}: nothing left on the server connection");
+        }
+    }
+}
