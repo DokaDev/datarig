@@ -4,17 +4,21 @@
 //! back as [`AppEvent::Folder`] (headless: [`App::pump_folder_reads`]), and one the picker no
 //! longer waits for (it closed, showed another folder, or stopped waiting) is dropped. A read
 //! that does not answer within the limit ([`App::set_folder_timeout`], 10 s, as a keychain
-//! call) is answered [`TooSlow`]: its thread is left behind, and what it did not say is never
-//! taken for an empty folder.
+//! call) is answered [`NoAnswer::TooSlow`]: its thread is left behind, and what it did not say
+//! is never taken for an empty folder. One path is read by one thread at a time: a read of a
+//! path whose earlier read has not returned waits for it (within its own limit) instead of
+//! starting another, so a mount that does not answer holds one thread per path, not one per
+//! key pressed.
 //!
 //! The reads go through a [`FileSystem`] ([`App::set_file_system`]; tests put in one that
 //! hangs). Only folders are listed and kinds asked for (`stat`); no file is opened.
 
 use super::*;
 use datarig_core::fault::Fault;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::mpsc;
+use std::sync::{Condvar, Mutex, mpsc};
 
 /// How long a folder read may take.
 pub const FOLDER_TIMEOUT: Duration = Duration::from_secs(10);
@@ -39,6 +43,8 @@ pub trait FileSystem: Send + Sync {
     /// `path` itself is a link.
     fn is_link(&self, path: &Path) -> bool;
     fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf>;
+    /// Make folder `path` (its parent exists).
+    fn create_dir(&self, path: &Path) -> std::io::Result<()>;
 }
 
 /// The real file system.
@@ -80,6 +86,10 @@ impl FileSystem for RealFileSystem {
     fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf> {
         std::fs::canonicalize(path)
     }
+
+    fn create_dir(&self, path: &Path) -> std::io::Result<()> {
+        std::fs::create_dir(path)
+    }
 }
 
 /// The entries of `dir` as the pickers list them: folders first, then the rest, each by name
@@ -106,17 +116,24 @@ pub enum Got {
     Readable { result: Result<(), Fault>, typed_dir: bool },
     /// Whether a typed path is a folder.
     IsDir(bool),
+    /// A new folder was made, or why not.
+    Made(Result<(), Fault>),
 }
 
-/// A read that did not answer within the limit.
+/// A read that gave no answer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct TooSlow;
+pub enum NoAnswer {
+    /// Not within the limit.
+    TooSlow,
+    /// It ended without one (it failed inside).
+    Broke,
+}
 
 /// The answer of read `id`.
 #[derive(Debug)]
 pub struct FolderAnswer {
     pub id: u64,
-    pub got: Result<Got, TooSlow>,
+    pub got: Result<Got, NoAnswer>,
 }
 
 /// Where answers go: the event loop, or (headless) the app's own channel.
@@ -135,25 +152,43 @@ pub struct FolderReader {
     next: Arc<AtomicU64>,
     /// Headless reads not handed to the app yet.
     pending: Arc<AtomicUsize>,
+    /// Paths a thread is reading now (one at a time each).
+    busy: Busy,
 }
 
+/// The paths being read, and a signal when one is done.
+type Busy = Arc<(Mutex<HashSet<PathBuf>>, Condvar)>;
+
 impl FolderReader {
-    /// Run `work` on a worker; its answer (or [`TooSlow`]) comes back under the number given.
-    pub fn ask(&self, work: impl FnOnce(&dyn FileSystem) -> Got + Send + 'static) -> u64 {
+    /// Run `work` (a read of `path`) on a worker; its answer (or [`NoAnswer`]) comes back
+    /// under the number given.
+    pub fn ask(&self, path: PathBuf, work: impl FnOnce(&dyn FileSystem) -> Got + Send + 'static) -> u64 {
         let id = self.next.fetch_add(1, Ordering::SeqCst) + 1;
-        let (fs, timeout, out) = (self.fs.clone(), self.timeout, self.out.clone());
+        let (fs, timeout, out, busy) = (self.fs.clone(), self.timeout, self.out.clone(), self.busy.clone());
         if matches!(out, Out::Local(_)) {
             self.pending.fetch_add(1, Ordering::SeqCst);
         }
-        // Two threads: one reads (and may hang for good), the other waits for it within the
-        // limit and answers either way.
+        // A waiter that answers within the limit either way, and (once no other thread reads
+        // `path`) a reader, which may hang for good.
         std::thread::spawn(move || {
-            let (tx, rx) = mpsc::channel();
-            std::thread::spawn(move || {
-                let _ = tx.send(work(&*fs));
-            });
-            // A read that ended without an answer (it panicked) did not answer either.
-            let got = rx.recv_timeout(timeout).map_err(|_| TooSlow);
+            let deadline = std::time::Instant::now() + timeout;
+            let got = match take(&busy, &path, deadline) {
+                false => Err(NoAnswer::TooSlow),
+                true => {
+                    let (tx, rx) = mpsc::channel();
+                    let done = busy.clone();
+                    std::thread::spawn(move || {
+                        // Given back even if `work` fails inside.
+                        let _turn = Turn(done, path);
+                        let _ = tx.send(work(&*fs));
+                    });
+                    let left = deadline.saturating_duration_since(std::time::Instant::now());
+                    rx.recv_timeout(left).map_err(|e| match e {
+                        mpsc::RecvTimeoutError::Timeout => NoAnswer::TooSlow,
+                        mpsc::RecvTimeoutError::Disconnected => NoAnswer::Broke,
+                    })
+                }
+            };
             let answer = FolderAnswer { id, got };
             match out {
                 Out::App(tx) => {
@@ -168,12 +203,39 @@ impl FolderReader {
     }
 }
 
+/// Wait until no thread reads `path` (`false`: not before `deadline`), then mark it read.
+fn take(busy: &Busy, path: &Path, deadline: std::time::Instant) -> bool {
+    let (set, cv) = &**busy;
+    let mut set = set.lock().unwrap_or_else(|e| e.into_inner());
+    while set.contains(path) {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            return false;
+        }
+        set = cv.wait_timeout(set, left).unwrap_or_else(|e| e.into_inner()).0;
+    }
+    set.insert(path.to_path_buf());
+    true
+}
+
+/// A reader's hold on its path, given back when it ends.
+struct Turn(Busy, PathBuf);
+
+impl Drop for Turn {
+    fn drop(&mut self) {
+        let (set, cv) = &*self.0;
+        set.lock().unwrap_or_else(|e| e.into_inner()).remove(&self.1);
+        cv.notify_all();
+    }
+}
+
 /// The app's side of the reads.
 pub struct FolderReads {
     fs: Arc<dyn FileSystem>,
     timeout: Duration,
     next: Arc<AtomicU64>,
     pending: Arc<AtomicUsize>,
+    busy: Busy,
     local: Option<(mpsc::Sender<FolderAnswer>, mpsc::Receiver<FolderAnswer>)>,
 }
 
@@ -184,6 +246,7 @@ impl Default for FolderReads {
             timeout: FOLDER_TIMEOUT,
             next: Arc::default(),
             pending: Arc::default(),
+            busy: Arc::default(),
             local: None,
         }
     }
@@ -224,7 +287,14 @@ impl App {
             Some(tx) => Out::App(tx.clone()),
             None => Out::Local(r.local.get_or_insert_with(mpsc::channel).0.clone()),
         };
-        FolderReader { fs: r.fs.clone(), timeout: r.timeout, out, next: r.next.clone(), pending: r.pending.clone() }
+        FolderReader {
+            fs: r.fs.clone(),
+            timeout: r.timeout,
+            out,
+            next: r.next.clone(),
+            pending: r.pending.clone(),
+            busy: r.busy.clone(),
+        }
     }
 
     /// Headless (without the event loop's channel): hand the answers of the folder reads to the

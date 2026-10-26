@@ -1270,12 +1270,16 @@ pub fn with_edge_results(lang: Lang) -> Harness {
 pub type Listing = Result<Vec<(String, Kind)>, std::io::ErrorKind>;
 
 /// The real file system, except that the folders in `hang` do not answer until the gate opens
-/// and those in `fake` answer what is put there.
+/// (a test that forgets to open it fails after a while instead of hanging), those in `fake`
+/// answer what is put there, and a list of one in `broken` fails inside. `lists` counts the
+/// lists of each folder.
 #[derive(Default)]
 pub struct FakeFs {
     pub hang: Mutex<Vec<PathBuf>>,
     gate: (Mutex<bool>, std::sync::Condvar),
     pub fake: Mutex<HashMap<PathBuf, Listing>>,
+    pub broken: Mutex<Vec<PathBuf>>,
+    pub lists: Mutex<HashMap<PathBuf, usize>>,
 }
 
 impl FakeFs {
@@ -1284,10 +1288,9 @@ impl FakeFs {
             return;
         }
         let (open, cv) = &self.gate;
-        let mut g = open.lock().unwrap();
-        while !*g {
-            g = cv.wait(g).unwrap();
-        }
+        let g = open.lock().unwrap();
+        let (g, _) = cv.wait_timeout_while(g, Duration::from_secs(60), |open| !*open).unwrap();
+        assert!(*g, "the gate of {} was never opened", p.display());
     }
 
     /// The hanging folders answer from now on.
@@ -1296,11 +1299,18 @@ impl FakeFs {
         *open.lock().unwrap() = true;
         cv.notify_all();
     }
+
+    /// How many times folder `dir` was listed.
+    pub fn lists_of(&self, dir: &Path) -> usize {
+        self.lists.lock().unwrap().get(dir).copied().unwrap_or(0)
+    }
 }
 
 impl FileSystem for FakeFs {
     fn list(&self, dir: &Path) -> std::io::Result<Vec<(String, Kind)>> {
+        *self.lists.lock().unwrap().entry(dir.to_path_buf()).or_default() += 1;
         self.wait(dir);
+        assert!(!self.broken.lock().unwrap().iter().any(|b| b == dir), "a list that fails inside");
         match self.fake.lock().unwrap().get(dir) {
             Some(Ok(v)) => Ok(v.clone()),
             Some(Err(k)) => Err(std::io::Error::from(*k)),
@@ -1324,10 +1334,8 @@ impl FileSystem for FakeFs {
     fn canonicalize(&self, path: &Path) -> std::io::Result<PathBuf> {
         RealFileSystem.canonicalize(path)
     }
-}
-
-impl Drop for FakeFs {
-    fn drop(&mut self) {
-        self.release();
+    fn create_dir(&self, path: &Path) -> std::io::Result<()> {
+        self.wait(path);
+        RealFileSystem.create_dir(path)
     }
 }

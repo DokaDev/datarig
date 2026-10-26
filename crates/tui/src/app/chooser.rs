@@ -348,7 +348,15 @@ impl App {
             NamePurpose::CopyTheme { from } => Some(self.copy_theme_named(&from.clone(), &typed)),
             NamePurpose::NewScriptFolder { parent } => Some(self.new_script_folder(parent.clone(), &typed)),
             NamePurpose::NewPickFolder { parent } => Some(self.new_pick_folder(parent.clone(), &typed)),
-            NamePurpose::NewExportFolder { parent } => Some(self.new_export_folder(parent.clone(), &typed)),
+            // Made on a worker: the prompt closes once it answers.
+            NamePurpose::NewExportFolder { parent } => {
+                if let Err(label) = self.new_export_folder(parent.clone(), &typed)
+                    && let Some(n) = self.overlays.name_input_mut()
+                {
+                    n.error = Some(label);
+                }
+                return;
+            }
             NamePurpose::RenameScript(from) => Some(self.rename_script(&from.clone(), &typed, false)),
             NamePurpose::RenameScriptFolder(from) => Some(self.rename_script(&from.clone(), &typed, true)),
             _ => None,

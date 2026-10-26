@@ -362,3 +362,26 @@ fn the_picker_opens_and_answers_keys_while_its_folder_hangs() {
     h.ctrl('o');
     assert!(h.screen(120, 40).contains("id_ed25519"));
 }
+
+/// Closed and opened again while the first read hangs: the first answer is dropped, the second
+/// fills the new picker once (nothing twice).
+#[test]
+fn closed_and_opened_again_while_its_folder_hangs() {
+    use ratatui::crossterm::event::{Event, KeyEvent, KeyModifiers};
+    let home = home("reopen");
+    let mut h = form(&home, None);
+    let fake = Arc::new(FakeFs::default());
+    fake.hang.lock().unwrap().push(home.0.join(".ssh"));
+    h.app.set_file_system(fake.clone());
+    let press =
+        |h: &mut Harness, code: KeyCode, m: KeyModifiers| h.app.handle_event(Event::Key(KeyEvent::new(code, m)));
+    press(&mut h, KeyCode::Char('o'), KeyModifiers::CONTROL);
+    press(&mut h, KeyCode::Esc, KeyModifiers::NONE);
+    press(&mut h, KeyCode::Char('o'), KeyModifiers::CONTROL);
+    fake.release();
+    h.app.pump_folder_reads(std::time::Duration::from_secs(10));
+    assert_eq!(picker_root(&h), home.0.join(".ssh"));
+    let t = h.app.overlays.script_tree().unwrap();
+    assert_eq!(t.entries.iter().filter(|e| e.path == "id_ed25519").count(), 1, "{:?}", t.entries);
+    assert!(t.disk.waiting.is_empty());
+}

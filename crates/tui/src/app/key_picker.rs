@@ -11,7 +11,7 @@
 //! tunnel refuses it) and a PuTTY key (`.ppk`) are said so below the field, and the text is
 //! kept either way.
 
-use super::folder_read::{self, FileSystem, FolderReader, Got, Kind, TooSlow};
+use super::folder_read::{self, FileSystem, FolderReader, Got, Kind, NoAnswer};
 use super::script_tree::{ScriptTree, TreeFocus, TreeMode, TreeRow};
 use super::*;
 use datarig_core::scripts::Entry;
@@ -87,17 +87,19 @@ pub enum What {
     SaveHere { rel: String, dir: PathBuf },
     /// A new folder inside `parent` (`dir` on disk).
     NewFolder { parent: Option<String>, dir: PathBuf },
-    /// Whether a path typed in the filter is a folder.
-    Typed { path: PathBuf },
+    /// Folder `name` made inside `parent` (`dir`: the new folder on disk).
+    Create { parent: Option<String>, name: String, dir: PathBuf },
+    /// Whether path `text` typed in the filter (`path` on disk) is a folder.
+    Typed { path: PathBuf, text: String },
 }
 
 impl What {
     /// The folder whose row says it is being read (`""`: the folder shown; `None`: no row).
-    fn rel(&self) -> Option<&str> {
+    pub(super) fn rel(&self) -> Option<&str> {
         match self {
             What::Show { .. } => Some(""),
             What::Open { rel, .. } | What::SaveHere { rel, .. } => Some(rel),
-            What::NewFolder { parent, .. } => Some(parent.as_deref().unwrap_or("")),
+            What::NewFolder { parent, .. } | What::Create { parent, .. } => Some(parent.as_deref().unwrap_or("")),
             What::Typed { .. } => None,
         }
     }
@@ -143,10 +145,15 @@ impl Disk {
 }
 
 impl ScriptTree {
-    /// Run `work` on a worker for `what`.
-    pub(super) fn ask(&mut self, what: What, work: impl FnOnce(&dyn FileSystem) -> Got + Send + 'static) {
+    /// Run `work` (a read of `path`) on a worker for `what`.
+    pub(super) fn ask(
+        &mut self,
+        what: What,
+        path: PathBuf,
+        work: impl FnOnce(&dyn FileSystem) -> Got + Send + 'static,
+    ) {
         let Some(reader) = &self.disk.reader else { return };
-        let id = reader.ask(work);
+        let id = reader.ask(path, work);
         self.disk.waiting.push((id, what));
     }
 
@@ -159,7 +166,7 @@ impl ScriptTree {
         }
         let (root, r) = (self.root.clone(), rel.to_string());
         let guard = matches!(self.mode, TreeMode::ExportPath(_));
-        self.ask(What::Open { rel: rel.to_string(), select }, move |fs| {
+        self.ask(What::Open { rel: rel.to_string(), select }, root.join(rel), move |fs| {
             if guard && folder_read::loops(fs, &root, &r) {
                 return Got::Loops;
             }
@@ -172,13 +179,14 @@ impl ScriptTree {
         self.disk.waiting.retain(|(_, w)| !matches!(w, What::Open { rel: r, .. } if r == rel));
     }
 
-    /// Put the entries of folder `rel` below it.
+    /// Put the entries of folder `rel` below it (not when its row is gone).
     pub(super) fn fill(&mut self, rel: &str, children: Vec<(String, Kind)>) {
-        self.loaded.insert(rel.to_string());
         let at = match self.entries.iter().position(|x| x.path == rel) {
             Some(i) => i + 1,
-            None => 0,
+            None if rel.is_empty() => 0,
+            None => return,
         };
+        self.loaded.insert(rel.to_string());
         let mut items = Vec::new();
         for (name, kind) in children {
             let path = if rel.is_empty() { name } else { format!("{rel}/{name}") };
@@ -225,7 +233,7 @@ impl ScriptTree {
         self.disk.unknown.clear();
         let tried = Arc::new(AtomicUsize::new(0));
         let what = What::Show { dirs: dirs.iter().map(|(d, _)| d.clone()).collect(), tried: tried.clone() };
-        self.ask(what, move |fs| {
+        self.ask(what, first.clone(), move |fs| {
             let last = dirs.len() - 1;
             let i = dirs
                 .iter()
@@ -347,8 +355,19 @@ pub(super) fn start_dirs(current: Option<&Path>) -> (Vec<(PathBuf, Option<String
 
 impl App {
     /// A read of the picker answered (`what` it was for, still waited for).
-    pub(super) fn tree_answer(&mut self, what: What, got: Result<Got, TooSlow>) {
+    pub(super) fn tree_answer(&mut self, what: What, got: Result<Got, NoAnswer>) {
         let home = self.home();
+        let other = self.reason_text(&Label::FaultOther.into());
+        // Asked for the selection or the text as they were: dropped once either changed.
+        let Some(t) = self.overlays.script_tree() else { return };
+        let moved = match &what {
+            What::SaveHere { dir, .. } | What::NewFolder { dir, .. } => t.export_dir() != *dir,
+            What::Typed { text, .. } => t.input.text().trim() != text,
+            What::Show { .. } | What::Open { .. } | What::Create { .. } => false,
+        };
+        if moved {
+            return;
+        }
         let reason = |app: &App, f: &datarig_core::fault::Fault| app.reason_text(&crate::app::fault_reason(f));
         let error = match (&what, got) {
             (What::Show { .. }, Ok(Got::Shown { root, select, items })) => {
@@ -391,8 +410,19 @@ impl App {
             (What::SaveHere { dir, .. } | What::NewFolder { dir, .. }, Ok(Got::Readable { result: Err(_), .. })) => {
                 Some(Msg::ExportPathUnreadable { path: shown(dir, home.as_deref()) })
             }
-            (What::Typed { path }, Ok(Got::IsDir(dir))) => return self.export_path_typed_is(path.clone(), dir),
-            (_, Err(TooSlow)) => {
+            (What::Typed { path, .. }, Ok(Got::IsDir(dir))) => return self.export_path_typed_is(path.clone(), dir),
+            (What::Create { parent, name, .. }, Ok(Got::Made(made))) => {
+                return self.export_folder_made(parent.clone(), name.clone(), made);
+            }
+            (What::Create { .. }, Err(no)) => {
+                // Whether it was made is not known: the prompt closes and the picker says why.
+                self.overlays.close(OverlayKind::NameInput);
+                let Some(t) = self.overlays.script_tree_mut() else { return };
+                let dir = what_dir(&what, t);
+                t.error = Some(no_answer(no, shown(&dir, home.as_deref()), other));
+                return;
+            }
+            (_, Err(no)) => {
                 let Some(t) = self.overlays.script_tree_mut() else { return };
                 let dir = match &what {
                     What::Show { dirs, tried } => {
@@ -406,10 +436,18 @@ impl App {
                         t.mark_unreadable(rel, true);
                         t.root.join(rel)
                     }
-                    What::SaveHere { dir, .. } | What::NewFolder { dir, .. } => dir.clone(),
-                    What::Typed { path } => path.clone(),
+                    What::SaveHere { .. } | What::NewFolder { .. } | What::Create { .. } | What::Typed { .. } => {
+                        what_dir(&what, t)
+                    }
                 };
-                Some(Msg::FolderTooSlow { path: shown(&dir, home.as_deref()) })
+                if no == NoAnswer::Broke
+                    && let Some(rel) = what.rel()
+                {
+                    // Not slow: it failed.
+                    t.disk.slow.remove(rel);
+                    t.loaded.insert(rel.to_string());
+                }
+                Some(no_answer(no, shown(&dir, home.as_deref()), other))
             }
             // An answer of another kind than asked for: nothing is learned.
             _ => None,
@@ -417,6 +455,25 @@ impl App {
         if let Some(t) = self.overlays.script_tree_mut() {
             t.error = error;
         }
+    }
+}
+
+/// Where read `what` was made, on disk (`t`: the picker).
+fn what_dir(what: &What, t: &ScriptTree) -> PathBuf {
+    match what {
+        What::Show { .. } => t.root.clone(),
+        What::Open { rel, .. } => t.root.join(rel),
+        What::SaveHere { dir, .. } | What::NewFolder { dir, .. } | What::Create { dir, .. } => dir.clone(),
+        What::Typed { path, .. } => path.clone(),
+    }
+}
+
+/// What a read of `path` that gave no answer says (`other`: the reason of one that failed
+/// inside).
+fn no_answer(no: NoAnswer, path: String, other: String) -> Msg {
+    match no {
+        NoAnswer::TooSlow => Msg::FolderTooSlow { path },
+        NoAnswer::Broke => Msg::FolderUnreadable { path, error: other },
     }
 }
 
