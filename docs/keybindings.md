@@ -439,7 +439,7 @@ Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+
 
 ## `overlay.profile_form` [text]
 
-Connection profile form. With the mouse: a click focuses a field (in a text, the cursor goes there), picks a value, opens the list of a `value ▾`, steps a `‹ value ›` (its arrows; the value opens a list), switches the section or presses a button. Inside `root`.
+Connection profile form. With the mouse: a click focuses a field (in a text, the cursor goes there), picks a value, opens the list of a `value ▾`, steps a `‹ value ›` (its arrows; the value opens a list), switches the section or presses a button. A Startup SQL list (the preset form's statements, a profile's own startup SQL) has one statement per row: `Enter` after a filled row adds one below, on an empty row removes it and moves on; `↑`/`↓` go from row to row and leave the list at its first and last; `Tab` leaves it; `Backspace` on an empty row and `Ctrl+D` remove a row; a paste of several statements makes a row of each. With the mouse: a click on a row puts the cursor there, `×` removes it, "+ Add statement" adds one at the end (both on the release), the wheel scrolls a list longer than its room. Inside `root`.
 
 | Keys | Action | Description | R |
 |---|---|---|---|
@@ -448,6 +448,8 @@ Connection profile form. With the mouse: a click focuses a field (in a text, the
 | `Ctrl+E` | `form.session_view` | Profile form: what its sessions would start with (its values, saved or not) |  |
 
 Reserved — profile form: `Tab` `Shift+Tab` `Down` `Up` `Enter` `Esc` `Ctrl+S` `Ctrl+T` `Ctrl+N` `Ctrl+P`
+
+Reserved — profile form: Startup SQL list: `Ctrl+D`
 
 Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
 

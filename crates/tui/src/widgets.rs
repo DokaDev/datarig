@@ -25,6 +25,7 @@ pub(crate) mod popup;
 pub(crate) mod quick;
 pub(crate) mod script_tree;
 pub(crate) mod settings;
+pub mod statement_list;
 pub(crate) mod statusbar;
 pub(crate) mod tab_list;
 

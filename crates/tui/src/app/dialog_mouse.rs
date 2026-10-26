@@ -11,7 +11,7 @@
 //! help, where it selects, aside); a change of the list drops the highlight. A move that changes
 //! nothing draws no frame.
 
-use super::profiles::FormHit;
+use super::profiles::{Field, FormHit};
 use super::quick::QuickRow;
 use super::*;
 use ratatui::layout::Position;
@@ -134,11 +134,28 @@ impl App {
     /// picked; a selector's `‹`/`›` are the arrow keys and its value is `Space` (`Enter` on a
     /// picker opens its list); a button (on the release over the button pressed, as on the other
     /// dialogs) is pressed as `Enter` presses it, `[…]` opens the key file picker and "save as
-    /// tunnel preset" asks for the preset's name. Nothing while it saves.
+    /// tunnel preset" asks for the preset's name. In a Startup SQL list a click on a row puts
+    /// the cursor there, `×` removes the row and "+ Add statement" adds one (both on the
+    /// release), and the wheel scrolls it. Nothing while it saves.
     pub(super) fn form_mouse(&mut self, m: MouseEvent) {
         let now = self.now();
         let Some(f) = self.overlays.form_mut().filter(|f| !f.saving) else { return };
         let at = f.hit_at(m.column, m.row);
+        let on_list = matches!(
+            at,
+            Some(
+                FormHit::Field(Field::SessionSql)
+                    | FormHit::Statement(_)
+                    | FormHit::RemoveStatement(_)
+                    | FormHit::AddStatement
+            )
+        );
+        if let Some(d) = wheel(&m).filter(|_| on_list) {
+            let list = &mut f.session_sql;
+            list.follow = false;
+            list.scroll = list.scroll.saturating_add_signed(d);
+            return;
+        }
         // Buttons act on the release; the other parts (they focus, place the cursor, pick a
         // value) on the press.
         let hit = match m.kind {
@@ -183,6 +200,21 @@ impl App {
             }
             FormHit::KeyFile => self.open_key_picker(),
             FormHit::SaveAsPreset => self.open_save_as_tunnel(),
+            FormHit::Statement(i) => {
+                f.focus = Field::SessionSql;
+                f.session_sql.focus(i);
+                if let Some(input) = f.session_sql.input_mut(i) {
+                    input.click(m.column, m.row);
+                }
+            }
+            FormHit::RemoveStatement(i) => {
+                f.focus = Field::SessionSql;
+                f.session_sql.remove(i);
+            }
+            FormHit::AddStatement => {
+                f.focus = Field::SessionSql;
+                f.session_sql.add_last();
+            }
         }
     }
 

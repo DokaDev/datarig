@@ -1,6 +1,6 @@
 ---
 source: crates/tui/tests/flows_sessions.rs
-assertion_line: 424
+assertion_line: 426
 expression: "h.draw(w, ht).backend()"
 ---
 "╭ Explorer ──────────────────╮╭ Workspace ─────────────────────────────────────────────────────────────────────────────╮"
@@ -20,8 +20,9 @@ expression: "h.draw(w, ht).backend()"
 "│    ◇ fk_│                                                                                                  │         │"
 "│  ▸ ◇ my_│ Name        analytics                                                                            │         │"
 "│  ▸ ◇ rep│ Database    PostgreSQL ▾   ←/→ change · Enter list                                               │         │"
-"│         │ Statements  SET statement_timeout = '1min'; SET jit = off                                        │         │"
-"│         │             SET …; one or more, separated by ;                                                   │         │"
+"│         │ Statements    1 SET statement_timeout = '1min'                                                 × │         │"
+"│         │               2 SET jit = off                                                                  × │         │"
+"│         │               + Add statement  one per row · Enter adds · Ctrl+D deletes                         │         │"
 "│         │                                                                                                  │         │"
 "│         │                                                                                                  │         │"
 "│         │                                                                                                  │         │"
@@ -29,7 +30,6 @@ expression: "h.draw(w, ht).backend()"
 "│         │                                                                                                  │         │"
 "│         │                                                                                                  │         │"
 "│         ╰──────────────────────────────────────────── Tab/↑↓ move · Ctrl+T test · Ctrl+S save · Esc cancel ╯         │"
-"│                            ││                                                                                        │"
 "│                            ││                                                                                        │"
 "│                            ││                                                                                        │"
 "│                            ││                                                                                        │"

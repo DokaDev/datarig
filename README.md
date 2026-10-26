@@ -876,9 +876,20 @@ their own or through their environment), each with its database, how many statem
 profiles it has (the statements in the warning color when one changes a setting a read-only
 environment refuses, such as MySQL's `foreign_key_checks = 0`), and under it the first statement
 that is not allowed and why. The `/` filter finds a preset by its name or a statement. Its form
-has the name, the database (`←`/`→`) and the statements in one line, separated by `;` (saved one
-per item); under them it says which statement is not allowed, or which one a read-only
-environment would refuse. A rename takes the profiles and environments that name the preset
+has the name, the database (`←`/`→`) and the statements, a list with one statement per row
+(saved one per item); under each row that is not allowed it says why, and under each one a
+read-only environment would refuse, that it would. In the list:
+
+- `Enter` on a row with a statement adds an empty row below it; on an empty row it removes the
+  row and moves to the next field (type, `Enter`, type, `Enter`, `Enter`).
+- `↑`/`↓` go from row to row and leave the list past its first or last row; `Tab` leaves it.
+- `Backspace` on an empty row and `Ctrl+D` on any row remove it.
+- Pasting several statements (`SET a = 1; SET b = 2`, or one per line) makes a row of each.
+- The mouse: a click on a row puts the cursor there, `×` removes the row, **+ Add statement**
+  adds one at the end, and the wheel scrolls a list longer than its room (the lines out of view
+  are counted at its top and bottom). A long row scrolls sideways while you edit it.
+
+A rename takes the profiles and environments that name the preset
 along; deleting one asks first and names them, and they keep the name (and do not connect until
 another preset, or none, is picked). **Test** opens one session on a connected profile that uses
 the preset (else any connected profile of its database; with several, you pick one), starting
@@ -891,8 +902,9 @@ A profile's form picks its Startup SQL in the Advanced section (`Enter` on Start
 environment's (named, the default), **None** (none, even if the environment maps one), the
 presets of its database, or "New Startup SQL…", which opens the preset form for its database
 and comes back with the new one picked; a preset of the other database (the driver changed) is
-marked and the form does not save. Its own statements are the Own startup SQL line below it (`;`
-between them; one that is not allowed is said after it, and the form does not save). The
+marked and the form does not save. Its own statements are the Own startup SQL list below it, the
+same list as the preset form's (one that is not allowed says why under its row, and the form does
+not save); it takes the lines the screen leaves, and scrolls past them. The
 environment form has one list per database (Startup SQL (PG), Startup SQL (MySQL)):
 none, that database's presets, or a new one.
 
@@ -987,8 +999,10 @@ explorer's lookups (the metadata sessions) never get these settings.
   = …`), and a read-only session is checked after its statements ran. A value that calls a
   function or has a subquery (`SET @x = (SELECT …)`) runs at connect like any other; one that
   takes long holds the connect up to its time limit.
-- The form's one line shows a preset's statements without their line comments (`-- …`, `# …`,
-  which would hide the statements after them), so saving the form writes them without.
+- A row shows its statement on one line, without its line comments (`-- …`, `# …`). A row you
+  do not edit is saved as the file has it (its comments and line breaks too); one you edit is
+  saved as its one line, so a comment in it is gone. A comment between the items of the file's
+  `sql` list goes when the list is written again (any of its rows edited, added or removed).
 
 **Seeing what applies**: `:session` (or `:startup`) shows what the query sessions of the explorer's selected
 profile (else the active tab's) start with, and `Ctrl+E` in a profile's form shows the same for

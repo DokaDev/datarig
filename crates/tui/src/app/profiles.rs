@@ -14,6 +14,7 @@
 //! color, badge and rules; and a session preset ([`FormKind::Session`]): its name, its database
 //! and its statements (one field, `;` between them).
 
+use crate::widgets::statement_list::StatementList;
 use crate::widgets::text_input::{InputResult, TextInput};
 use datarig_core::i18n::{Label, Msg};
 use datarig_core::policy::{self, CommitRule, Confirm, Environment, EnvironmentId, PagingMode, Policy};
@@ -563,12 +564,25 @@ pub enum FormHit {
     KeyFile,
     /// "Save as tunnel preset".
     SaveAsPreset,
+    /// A statement's row of a Startup SQL list: the focus, and the cursor under the pointer.
+    Statement(usize),
+    /// A statement's `×`: the row goes.
+    RemoveStatement(usize),
+    /// "+ Add statement": an empty row at the end.
+    AddStatement,
 }
 
 impl FormHit {
     /// A button: drawn highlighted under the pointer.
     pub fn is_button(self) -> bool {
-        matches!(self, FormHit::Button(_) | FormHit::KeyFile | FormHit::SaveAsPreset)
+        matches!(
+            self,
+            FormHit::Button(_)
+                | FormHit::KeyFile
+                | FormHit::SaveAsPreset
+                | FormHit::RemoveStatement(_)
+                | FormHit::AddStatement
+        )
     }
 }
 
@@ -647,10 +661,10 @@ pub struct ProfileForm {
     pub env_lock_wait: TextInput,
     /// The session preset of each database the environment's profiles start with.
     pub env_session: policy::SessionMap,
-    /// The session preset form: the preset's database and its statements (`;` between them);
-    /// a profile form's own session SQL is `session_sql` too.
+    /// The Startup SQL form: the preset's database and its statements, one per row; a profile
+    /// form's own startup SQL is `session_sql` too.
     pub session_dbms: Dbms,
-    pub session_sql: TextInput,
+    pub session_sql: StatementList,
     /// The profile's session preset (its `session`).
     pub session_ref: SessionRef,
     /// The saved session presets the pickers offer.
@@ -833,10 +847,7 @@ impl ProfileForm {
             env_lock_wait: TextInput::default(),
             env_session: policy::SessionMap::default(),
             session_dbms: Dbms::Postgres,
-            session_sql: TextInput::new(&session::join_statements(
-                Dbms::of_driver(&c.driver).unwrap_or(Dbms::Postgres),
-                &c.session_sql,
-            )),
+            session_sql: StatementList::new(Dbms::of_driver(&c.driver), &c.session_sql),
             session_ref: c.session.clone(),
             session_presets: Vec::new(),
             session_new_for: None,
@@ -954,7 +965,7 @@ impl ProfileForm {
         f.kind = FormKind::Session { id: p.filter(|_| editing).map_or_else(SessionPresetId::new, |p| p.id), editing };
         f.original_name = p.filter(|_| editing).map(|p| p.name.clone());
         f.session_dbms = p.map_or(Dbms::Postgres, |p| p.dbms);
-        f.session_sql = TextInput::new(&session::join_statements(f.session_dbms, p.map_or(&[][..], |p| &p.sql)));
+        f.session_sql = StatementList::new(Some(f.session_dbms), p.map_or(&[][..], |p| &p.sql));
         f.section = Section::Advanced;
         f.focus = Field::Name;
         f
@@ -967,7 +978,7 @@ impl ProfileForm {
 
     /// The statements of the session preset form, one per item.
     pub fn session_statements(&self) -> Vec<String> {
-        session::split_statements(self.session_dbms, self.session_sql.text())
+        self.session_sql.statements()
     }
 
     /// The preset the session preset form describes.
@@ -1229,6 +1240,9 @@ impl ProfileForm {
             self.section = s;
         }
         self.focus = f;
+        if f == Field::SessionSql {
+            self.session_sql.focus_problem();
+        }
     }
 
     /// A new profile from a pasted connection URL: the fields, the password (out of
@@ -1321,6 +1335,7 @@ impl ProfileForm {
         }
         self.follow_default_mode();
         self.sync_dsn();
+        self.session_sql.set_dbms(self.profile_dbms());
     }
 
     /// Fields -> DSN (never includes the password).
@@ -1393,7 +1408,10 @@ impl ProfileForm {
                 Scheme::MySql => "mysql",
             };
             match DRIVERS.iter().position(|x| x.0 == name).filter(|i| self.drivers_enabled[*i]) {
-                Some(i) => self.driver = i,
+                Some(i) => {
+                    self.driver = i;
+                    self.session_sql.set_dbms(self.profile_dbms());
+                }
                 None => {
                     self.dsn_problem = Some(DsnProblem::Parse(DsnError::Scheme));
                     return;
@@ -1428,7 +1446,7 @@ impl ProfileForm {
             Field::EnvSpill => &mut self.env_spill,
             Field::EnvIdleDisconnect => &mut self.env_idle_disconnect,
             Field::EnvLockWait => &mut self.env_lock_wait,
-            Field::SessionSql => &mut self.session_sql,
+            Field::SessionSql => self.session_sql.current_mut(),
             Field::EnvTxWarning => &mut self.env_tx_warning,
             Field::EnvTxRollback => &mut self.env_tx_rollback,
             Field::Name => &mut self.name,
@@ -1669,6 +1687,7 @@ impl ProfileForm {
             Field::SessionDbms => {
                 if let Some(&d) = Dbms::ALL.get(i) {
                     self.session_dbms = d;
+                    self.session_sql.set_dbms(Some(d));
                 }
             }
             _ => {}
@@ -1774,6 +1793,7 @@ impl ProfileForm {
             Field::TlsCa | Field::TlsCert | Field::TlsKey => self.sync_dsn(),
             Field::ServerKey => self.follow_default_mode(),
             Field::SshKeyFile => self.ssh_key_note = None,
+            Field::SessionSql => self.session_sql.edited(),
             _ => {}
         }
     }
@@ -1782,6 +1802,9 @@ impl ProfileForm {
         let fields = self.fields();
         let i = fields.iter().position(|f| *f == self.focus).unwrap_or(0) as isize;
         self.focus = fields[(i + d).rem_euclid(fields.len() as isize) as usize];
+        if self.focus == Field::SessionSql {
+            self.session_sql.enter(d > 0);
+        }
     }
 
     fn cycle_sslmode(&mut self, d: isize) {
@@ -1793,6 +1816,9 @@ impl ProfileForm {
 
     pub fn paste(&mut self, text: &str) {
         let f = self.focus;
+        if f == Field::SessionSql {
+            return self.session_sql.paste(text);
+        }
         if let Some(inp) = self.input_mut(f) {
             inp.insert_str(text);
             self.after_edit(f);
@@ -1801,6 +1827,9 @@ impl ProfileForm {
 
     pub fn key(&mut self, k: &KeyEvent) -> FormOutcome {
         let ctrl = k.modifiers.contains(KeyModifiers::CONTROL);
+        if self.focus == Field::SessionSql && self.statement_key(k) {
+            return FormOutcome::None;
+        }
         match k.code {
             KeyCode::Char('s') if ctrl => return FormOutcome::Save,
             KeyCode::Char('t') if ctrl && !self.is_environment() => return FormOutcome::Test,
@@ -1836,7 +1865,8 @@ impl ProfileForm {
                 self.session_dbms = match self.session_dbms {
                     Dbms::Postgres => Dbms::MySql,
                     Dbms::MySql => Dbms::Postgres,
-                }
+                };
+                self.session_sql.set_dbms(Some(self.session_dbms));
             }
             KeyCode::Left | KeyCode::Right | KeyCode::Char(' ') if self.focus == Field::EnvReadOnly => {
                 self.env_read_only = !self.env_read_only
@@ -1874,6 +1904,39 @@ impl ProfileForm {
             }
         }
         FormOutcome::None
+    }
+
+    /// The keys of a Startup SQL list that are its own (`false`: the form's, or its row's
+    /// input's): `Enter` adds a row below a filled one, and on an empty one removes it and moves
+    /// on; `↑`/`↓` move between the rows and leave the list at its ends; `Backspace` on an empty
+    /// row removes it; `Ctrl+D` removes the focused row.
+    fn statement_key(&mut self, k: &KeyEvent) -> bool {
+        let plain = k.modifiers.difference(KeyModifiers::SHIFT).is_empty();
+        let list = &mut self.session_sql;
+        match k.code {
+            KeyCode::Enter if plain => {
+                if !list.enter_key() {
+                    self.move_focus(1);
+                }
+            }
+            KeyCode::Down if plain => {
+                if !list.step(true) {
+                    self.move_focus(1);
+                }
+            }
+            KeyCode::Up if plain => {
+                if !list.step(false) {
+                    self.move_focus(-1);
+                }
+            }
+            KeyCode::Backspace if plain => return list.backspace_empty(),
+            KeyCode::Char('d') if k.modifiers == KeyModifiers::CONTROL => {
+                let row = list.row;
+                list.remove(row);
+            }
+            _ => return false,
+        }
+        true
     }
 
     /// Field errors. `taken(name)` says whether another profile already uses `name`.
@@ -2013,11 +2076,9 @@ impl ProfileForm {
     /// that cannot be a start-up setting, and why (`index` from 1).
     pub fn session_problem(&self) -> Option<(usize, datarig_core::sql::risk::SetProblem)> {
         if self.kind == FormKind::Profile {
-            let dbms = self.profile_dbms()?;
-            let own = SessionPreset::new("", dbms, session::split_statements(dbms, self.session_sql.text()));
-            return own.problem();
+            self.profile_dbms()?;
         }
-        self.to_session_preset()?.problem()
+        self.session_sql.problem()
     }
 
     /// The database of the profile's driver, which its session presets are for.
@@ -2093,7 +2154,7 @@ impl ProfileForm {
 
     /// The first statement of the session preset form a read-only environment would refuse.
     pub fn session_read_only_refused(&self) -> Option<(usize, datarig_core::sql::risk::ReadOnlyBlock)> {
-        self.to_session_preset()?.read_only_refused()
+        self.session_sql.read_only_refused()
     }
 
     /// Errors of the TLS settings: a mode the driver does not know, files that are not
@@ -2206,10 +2267,7 @@ impl ProfileForm {
             ssh: (!self.new_preset_picked() && (self.ssh_had || self.ssh_enabled)).then(|| self.ssh_settings()),
             tunnel: self.ssh_preset.clone(),
             session: self.session_ref.clone(),
-            session_sql: session::split_statements(
-                self.profile_dbms().unwrap_or(Dbms::Postgres),
-                self.session_sql.text(),
-            ),
+            session_sql: self.session_sql.statements(),
             dsn: None,
             ..self.base.clone()
         };
