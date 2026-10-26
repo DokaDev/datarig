@@ -428,7 +428,8 @@ impl App {
             None => t.root.join(typed),
         };
         // Made on a worker; the prompt stays until it answers (a name taken is said there).
-        if t.disk.waiting.iter().any(|(_, w)| matches!(w, What::Create { .. })) {
+        // `Enter` again for the same folder waits for the first; another name is made too.
+        if t.disk.waiting.iter().any(|(_, w)| matches!(w, What::Create { dir: d, .. } if *d == dir)) {
             return Ok(());
         }
         let d = dir.clone();

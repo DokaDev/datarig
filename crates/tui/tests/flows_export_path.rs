@@ -880,6 +880,32 @@ fn a_late_new_folder_answer_leaves_another_prompt_alone() {
     assert!(n.error.is_none(), "{:?}", n.error);
 }
 
+/// A second new folder (another name) while the first is still being made: made too, and
+/// its prompt closes once it is.
+#[test]
+fn a_second_new_folder_is_made_while_the_first_hangs() {
+    let home = home("make-second");
+    let (mut h, fake) = faked(&home);
+    let (x, y) = (home.0.join("Downloads/x"), home.0.join("Downloads/y"));
+    fake.hang.lock().unwrap().push(x.clone());
+    h.ctrl('o');
+    h.keys("n");
+    h.type_text("x");
+    press(&mut h, KeyCode::Enter);
+    press(&mut h, KeyCode::Esc);
+    press(&mut h, KeyCode::Char('n'));
+    h.app.pump_folder_reads(Duration::from_millis(500));
+    press(&mut h, KeyCode::Char('y'));
+    press(&mut h, KeyCode::Enter);
+    h.app.pump_folder_reads(Duration::from_millis(500));
+    assert!(y.is_dir() && !x.exists());
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ScriptTree));
+    assert_eq!(row(&h), TreeRow::Folder("y".into()));
+    fake.release();
+    h.app.pump_folder_reads(WAIT);
+    assert!(x.is_dir());
+}
+
 /// Listing a folder again (a folder made in it) drops the reads of what was inside it: their
 /// answers come to no row.
 #[test]
