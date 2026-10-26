@@ -882,8 +882,9 @@ fn click_on(h: &mut Harness, text: &str) {
     h.mouse(MouseEventKind::Up(MouseButton::Left), x, y);
 }
 
-/// A plan longer than the screen: `j` and the wheel scroll it, never past its last line; a
-/// statement on several lines is shown whole, wrapped.
+/// A plan longer than the screen: `j` and the wheel scroll it, never past its last line, and
+/// the lines out of view above and below are counted; a statement on several lines is shown
+/// whole, wrapped.
 #[test]
 fn a_long_session_view_scrolls_and_shows_statements_whole() {
     let cfg = config(|p| {
@@ -896,15 +897,24 @@ fn a_long_session_view_scrolls_and_shows_statements_whole() {
     let first = h.screen(80, 24);
     assert!(first.contains("SET LOCAL work_mem = '1MB'"), "{first}");
     assert!(!first.contains("TO '5min'"), "below: {first}");
+    let hidden = h.app.overlays.session_view().expect("open").max_scroll;
+    assert!(hidden > 1, "{first}");
+    assert!(first.contains(&format!("↓ {hidden} more lines")) && !first.contains('↑'), "{first}");
+    insta::assert_snapshot!("session_view_long_en_80x24", h.draw(80, 24).backend());
     h.keys("j");
     let second = h.screen(80, 24);
-    assert_ne!(first, second);
+    assert!(second.contains("↑ 1 more line ") || second.contains("↑ 1 more line│"), "{second}");
+    assert!(second.contains(&format!("↓ {} more lines", hidden - 1)), "{second}");
     for _ in 0..60 {
         h.keys("j");
     }
     h.mouse(ratatui::crossterm::event::MouseEventKind::ScrollDown, 40, 12);
     let last = h.screen(80, 24);
     assert!(last.contains("  SET statement_timeout") && last.contains("    TO '5min'"), "{last}");
+    assert!(
+        last.contains(&format!("↑ {hidden} more lines")) && !last.contains("more lines ↓") && !last.contains('↓'),
+        "{last}"
+    );
     // At the end already: one `k` shows one line more above.
     h.keys("k");
     assert_ne!(h.screen(80, 24), last, "the scroll stopped at the last line");

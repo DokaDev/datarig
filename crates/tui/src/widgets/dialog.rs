@@ -553,6 +553,18 @@ pub(crate) fn draw_session_view(app: &mut App, area: Rect, buf: &mut Buffer) {
     for (k, r) in list.iter().skip(scroll).take(shown).enumerate() {
         line(buf, y + k as u16, r);
     }
+    // Lines out of view, said on the blank rows above and below the list, at their right end.
+    let below = list.len().saturating_sub(scroll + shown);
+    for (count, at, up) in [(scroll, y - 1, true), (below, y + shown as u16, false)] {
+        if count == 0 {
+            continue;
+        }
+        let count = count as u64;
+        let m = if up { Msg::SessionViewMoreAbove { count } } else { Msg::SessionViewMoreBelow { count } };
+        let text = app.i18n.msg(&m).to_string();
+        let cx = end.saturating_sub(width(&text) as u16).max(x);
+        put(buf, cx, at, &text, (end - cx) as usize, surface(th.fg_dim));
+    }
     y += shown as u16 + 1;
     for r in &foot {
         line(buf, y, r);

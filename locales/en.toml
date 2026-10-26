@@ -2153,6 +2153,8 @@
 "session_view.not_local.form" = "only a plain SET name = value has a form for one transaction"
 "session_view.not_local.identity" = "it changes who the session is"
 "session_view.order" = "Applied in this order: a later setting of the same name wins"
+"session_view.more_above" = { one = "↑ {count} more line", other = "↑ {count} more lines" }
+"session_view.more_below" = { one = "↓ {count} more line", other = "↓ {count} more lines" }
 "session_view.no_connect" = "The profile does not connect until this is fixed"
 "session_view.no_profile" = "No profile to show: select one in the explorer, or go to one of its tabs"
 "action.session.show" = "What a profile's sessions start with, and where each setting comes from"
