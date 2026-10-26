@@ -531,10 +531,12 @@ impl App {
         }
     }
 
-    /// The mouse on the tree dialog: a click selects a row (on a folder's arrow, or again on
-    /// the selected folder, it opens or closes it; again on a file of the open dialog, it opens
-    /// it; again on the selected row of the folder picker, it picks it), one on the name or
-    /// filter puts the keyboard and the cursor there; the wheel scrolls the rows.
+    /// The mouse on the tree dialog: a click selects a row. On a folder's arrow, or again on
+    /// the selected folder, it opens or closes it; again on another selected row it does what
+    /// `Enter` does there (`../` goes up; a file is opened or picked; the export tree's top row
+    /// saves there), except in save as; again on any row of the folder picker, it picks it.
+    /// A click on the name or filter puts the keyboard and the cursor there; the wheel scrolls
+    /// the rows.
     pub(super) fn script_tree_mouse(&mut self, m: MouseEvent) {
         let Some(t) = self.overlays.script_tree_mut() else { return };
         let (x, y) = (m.column, m.row);

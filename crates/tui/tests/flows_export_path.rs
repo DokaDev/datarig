@@ -231,6 +231,11 @@ fn the_arrows_open_and_close_a_folder_while_the_empty_filter_has_the_keyboard() 
     h.keys("/");
     let focus = |h: &Harness| h.app.overlays.script_tree().unwrap().focus;
     assert_eq!(focus(&h), TreeFocus::Name);
+    // On the folder shown they do not go up (the tree's `←` does).
+    go_to(&mut h, TreeRow::Top);
+    h.key(KeyCode::Left);
+    assert_eq!(root(&h), home.0.join("Downloads"));
+    assert_eq!(row(&h), TreeRow::Top);
     go_to(&mut h, TreeRow::Folder("a".into()));
     // `a` was never listed: `→` reads it and opens it.
     h.key(KeyCode::Right);
