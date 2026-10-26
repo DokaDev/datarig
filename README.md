@@ -276,46 +276,13 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
   system clipboard or through OSC 52 over SSH. The copied cells flash briefly once the copy is
   sent to the clipboard and fade back (themes in RGB colours; with the terminal's own colours
   the flash goes off at once); `[ui] yank_flash = "off"` turns that off.
-- **Export to a file**: `Space r e`, the results menu, or `:export [format] [scope] [path]
-  [delim= quote= header= null=]` writes a result to disk. `:export` alone opens the dialog.
-  - Formats: CSV, TSV, Excel (.xlsx), Parquet, JSON, indented JSON, JSON Lines, Markdown, HTML,
-    XML, SQL `INSERT` and `UPDATE` (the last two only where the result's keys allow them, as
-    with copy).
-  - Excel: the header row is bold and stays in view; numbers Excel holds exactly are numbers,
-    booleans are booleans, everything else (dates included) is the text the database wrote, and
-    NULL is an empty cell (or the `null=` text, the one CSV option it takes). A sheet holds
-    1,048,575 rows under its header; the rest go on in `Sheet2`, `Sheet3`, …. A value longer
-    than a cell holds (32,767 characters, as Excel counts them) stops the export there. Rows go
-    to temporary files as they come and the workbook is zipped at the end (ZIP64, so a workbook
-    past 4 GiB is fine); while it is zipped the status says so, and a cancel then keeps nothing.
-  - Parquet: every column may be NULL, and its type follows the result's column: integers are
-    INT32 or INT64 (MySQL's `bigint unsigned` an unsigned INT64), floats FLOAT or DOUBLE,
-    booleans BOOLEAN, dates DATE, times TIME and timestamps TIMESTAMP in microseconds
-    (`timestamptz` adjusted to UTC), binary data its bytes; everything else, decimals included,
-    is the text the database wrote (every digit kept). A column of a PostgreSQL domain is known
-    by the domain's name only, so a domain over an integer is INT64 and one over a float DOUBLE.
-    A value the type cannot hold (`infinity`, MySQL's zero date, `24:00:00`) stops the export
-    there, naming its column and row; it is never written as NULL. Rows are written in row
-    groups of 65,536 (Snappy), so memory stays at one group. A cancel or a value that does not
-    fit keeps a `.partial` file of the rows so far that reads; a file that could not be written
-    (a full disk) does not read, so it is removed, and the message says why. Two columns of one name are written as they
-    are; some readers (Spark, some pandas paths) refuse or rename them, so give them aliases.
-  - Rows: all rows, the fetched rows, or the selection. The fetched rows and the selection come
-    from what is already loaded; nothing is sent to the server for them.
-  - CSV options: delimiter, quote style (as needed, always, all but numbers, none), a header line,
-    and the text written for NULL.
-  - The default path is `~/Downloads/<name>-<stamp>.<ext>`. An existing file is never replaced
-    without asking. The file is written as `<path>.partial` and renamed when the export
-    succeeds; a cancel or a failure keeps the `.partial` file with the rows written so far
-    (an export that wrote no rows leaves no file).
-  - All rows of a result with more on the server need the statement to run again. A table tab
-    showing its whole table, with a primary key or a unique key on NOT NULL columns and no
-    open transaction, is read in short chunks by that key (several short reads, not one
-    snapshot). Any other result runs its statement once and streams it: a plain `SELECT`
-    that is safe to repeat goes ahead, anything else asks first, saying it runs again.
-    Read-only and prod-like environments ask first too, because the statement holds a read
-    lock and a snapshot until the export finishes.
-  - Inside an open transaction the export reads inside it. Cancel sends a cancel to the server.
+- **Export to a file**: `Space r e`, the results menu, or `:export [format] [scope] [delim= quote=
+  header= null=] [path]` writes a result to disk: CSV, TSV, Excel (.xlsx), Parquet, JSON, indented
+  JSON, JSON Lines, Markdown, HTML, XML, SQL `INSERT` and `UPDATE`. `:export` alone opens the
+  dialog, where `Ctrl+O` (or `[Browse…]`) picks the folder in a tree and `Tab` completes names in
+  the path field. The file is written beside its name as `.partial` and renamed when the export
+  succeeds. See [Export](#export) for the formats, where the rows come from and what is kept when an
+  export stops.
 - Transaction indicators in the tab bar and the status bar (open, aborted, "rollback required"),
   and questions before closing, quitting or disconnecting would roll back your work.
 - Query plans (PostgreSQL): `Space e x` (or `:explain`) runs the statement under the cursor as
@@ -855,6 +822,131 @@ disconnect and Lock wait fields, empty for the config's value; `"off"` turns it 
   manual transaction on PostgreSQL only that run is undone (its savepoint) and the transaction
   keeps what earlier runs did; on MySQL the server undoes the statement only (unless
   `innodb_rollback_on_timeout` is on, then the whole transaction, and datarig says so).
+
+## Export
+
+`Space r e`, the results menu, or `:export` alone opens the export dialog for the active tab's
+result: the rows, the format, CSV's options, and the file. `:export [format] [all|fetched|selection]
+[delim= quote= header= null=] [path]` exports without the dialog (every row by default; with no
+format the file's extension names it, `.xlsx` and `.parquet` included). An export runs in the
+background, one per tab, with its rows, size and time in the tab's status.
+
+### Formats
+
+CSV, TSV, Excel (.xlsx), Parquet, JSON, indented JSON, JSON Lines, Markdown, HTML, XML, SQL
+`INSERT` and `UPDATE` (the last two only where the result's keys allow them, as with copy). CSV
+takes a delimiter, a quote style (as needed, always, all but numbers, none), a header line and
+the text written for NULL; TSV takes the header line; Excel takes the NULL text; the other
+formats take no options.
+
+**Excel (.xlsx)**
+- The header row is bold and stays in view. A sheet holds 1,048,575 rows under its header; the
+  rows after that go on in `Sheet2`, `Sheet3`, …, each with the header again.
+- A value of a number column is a number only when Excel holds it exactly: at most 15
+  significant digits, within a double's normal range. Anything else (a `bigint` past 15 digits,
+  a `numeric` with more digits, `NaN`, `Infinity`) is text, every digit kept. Booleans are
+  booleans. Everything else, dates and timestamps included, is the text the database wrote,
+  written as inline strings. NULL is an empty cell, or the `null=` text when one is given.
+- A sheet holds 16,384 columns: a wider result is refused before anything is written. A cell
+  holds 32,767 characters as Excel counts them (UTF-16 units: an emoji counts two); a longer
+  value stops the export there, naming its column and row, and the workbook keeps the rows
+  before it.
+- Rows go to temporary files in the system's temporary folder (`TMPDIR`) as they come, so
+  memory stays at about one row. The workbook is made from them at the end ("Making the
+  workbook…" in the status); it is a ZIP64 container, so a workbook or a sheet past 4 GiB is
+  fine. A cancel while the workbook is made keeps nothing (the status says so before you
+  press it).
+
+**Parquet**
+- Typed columns, every one of them nullable, compressed with Snappy. Integers are INT32 or INT64
+  (MySQL's `bigint unsigned` an unsigned INT64), floats FLOAT or DOUBLE, booleans BOOLEAN, dates
+  DATE, times without a zone TIME (a time with a zone is text) and timestamps TIMESTAMP in
+  microseconds, binary data its bytes. PostgreSQL's `timestamptz` is converted to UTC; MySQL's
+  `TIMESTAMP` is the session's local time and is not converted. Everything else, decimals included,
+  is the text the database wrote (every digit kept: a result does not say a decimal's precision and
+  scale).
+- A column of a PostgreSQL domain is known by the domain's name only, so a domain over an
+  integer is INT64 and one over a float DOUBLE (wider, never cut).
+- A value the column's type cannot hold (`infinity`, MySQL's zero date, `24:00:00`) stops the
+  export there, naming its column and row; it is never written as NULL.
+- Rows are written in row groups of at most 65,536 rows or 32 MiB of values, so memory stays at
+  about one group.
+- Two columns of one name are written as they are; some readers (Spark, some pandas paths)
+  refuse or rename them, so give them aliases.
+
+### Where the rows come from
+
+- **Fetched rows** and **the selection** are read from what is already loaded; nothing is sent
+  to the server.
+- **All rows** of a result with more on the server need the statement to run again. A table tab
+  showing its whole table of the connection's own database, with a primary key or a unique key on
+  NOT NULL columns and no open transaction, is read in short chunks by that key, each a read of its
+  own that waits at most 5 s for a lock (rows changed meanwhile may be read in a later state). Any
+  other result runs its statement once and streams it: a plain `SELECT` that is safe to repeat goes
+  ahead, anything else asks first, saying it runs again. Read-only and prod-like environments ask
+  first too, because the statement holds a read lock and a snapshot until the export finishes.
+- An export only reads: a statement that writes or locks rows is refused unsent. Outside a
+  transaction of yours each statement it runs (or each chunk of a table read by its key) is a
+  read-only transaction of its own (`BEGIN READ ONLY` on PostgreSQL, `START TRANSACTION READ ONLY`
+  on MySQL), so a statement's rows are one snapshot and a function that writes fails. Inside your
+  open transaction it reads there and sees what you changed so far; on PostgreSQL under a savepoint,
+  so a failed or cancelled export does not abort your transaction. An aborted transaction refuses an
+  export until you roll it back.
+- A slow file holds the statement back instead of piling rows up in memory. A server may end a
+  slow export (MySQL's `net_write_timeout`, 60 s by default; PostgreSQL's
+  `idle_in_transaction_session_timeout` or a pooler's idle timeout); it then fails as below.
+
+### Choosing where to save
+
+The path starts as `~/Downloads/<table or tab>-<YYYYMMDD-HHMMSS>.<ext>` (in the home folder when
+there is no `~/Downloads`), and while it is that name a format change gives it the new extension.
+`~` is the home folder; a relative path goes in `~/Downloads`.
+
+- `Tab` in the path field completes a name: first the longest text the matching names share,
+  then (`Tab` again) a list of them under the field, then each in turn. With nothing to
+  complete, `Tab` moves to the next field.
+- `Ctrl+O` in the dialog (or its `[Browse…]` button) opens a tree of the file system at the
+  field's folder (else `~/Downloads`, else the home folder). `↑`/`↓` (`j`/`k`) move, `→`/`←`
+  (`l`/`h`) open and close a folder, `../` goes up. `Enter` on the top row ("Save here") or
+  `Ctrl+S` anywhere puts the selected folder in the field with the file name the field had (or
+  the default name, when the field names a folder); `Enter` on a file takes that file. `n`
+  makes a new folder, `.` shows hidden names, `/` filters (a text with `/` or a leading `~` is a
+  path that `Enter` opens or takes), `Esc` leaves the field as it was. Files are dimmed: they
+  are what a file of that name would replace.
+- A folder that cannot be listed says so and is never saved into. A path that names a folder
+  (or a link) is refused: name a file.
+
+### When an export stops
+
+- The file is written as `<path>.partial`, created new, and renamed to the path when the export
+  succeeds. An existing file is never replaced without asking (`y` replaces it, `Enter` keeps
+  it); a `.partial` file left by an earlier export is not written over (move or delete it); a
+  file that appears at the path meanwhile is not replaced, and the rows stay in the `.partial`
+  file.
+- A cancel stops the statement on the server and keeps the `.partial` file with the rows
+  written so far, ended so that it reads (a JSON array closed, an Excel workbook of those rows,
+  a Parquet file with its footer), except while an Excel workbook is being made: a cancel then
+  keeps nothing. An export that wrote no rows leaves no file.
+- A failure says why and where the rows are:
+  - text formats keep the `.partial` file; one that failed to be written (a full disk) may end
+    in the middle of a row;
+  - a Parquet value that does not fit, or an Excel value too long for a cell, keeps a file of
+    the rows before it that reads;
+  - an Excel or Parquet export stopped by the server or the session (its error, a timeout,
+    a lost connection) keeps a file of the rows before it that reads, as a cancel does;
+  - a Parquet file that could not be written (a full disk) does not read, so it is removed; an
+    Excel workbook that could not be made is removed too. Nothing is kept.
+
+### Limits
+
+- Excel needs room in `TMPDIR` for the sheets' uncompressed XML until the workbook is made, as
+  well as room for the workbook itself where it is saved. Point `TMPDIR` at a larger disk for a
+  very large export.
+- Excel's dates and timestamps are text, not Excel dates (they have no time zone and a range of
+  their own). Parquet has no DECIMAL columns; decimals are exact text.
+- A local export cannot be cancelled while the tab runs another statement.
+- Exports are tested on macOS and Linux. Running datarig on Windows is untested (see
+  [Status](#status)), exports included.
 
 ## Manual commit
 
