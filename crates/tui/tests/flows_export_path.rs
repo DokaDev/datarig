@@ -255,6 +255,7 @@ fn with_icons_folders_and_files_have_glyphs_and_the_arrow_still_takes_a_click() 
     // The arrow (two columns per level) still opens the folder.
     let list = h.app.overlays.script_tree().unwrap().list;
     let i = rows(&h).iter().position(|r| *r == TreeRow::Folder("a".into())).unwrap() as u16;
+    assert_ne!(row(&h), TreeRow::Folder("a".into()), "a first click, not a second one");
     h.mouse(MouseEventKind::Down(MouseButton::Left), list.x + 2, list.y + i);
     assert!(rows(&h).contains(&TreeRow::File("a/inner.csv".into())), "{:?}", rows(&h));
 }

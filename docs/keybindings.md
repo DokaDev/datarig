@@ -203,7 +203,7 @@ The explorer: folders, connection profiles, their databases and schema trees. In
 
 ## `explorer.filter` [text]
 
-The `/` filter of the explorer: profiles (name, host, database), folders, tunnels, environments, session presets (name, statements) and saved queries, and under connected profiles the databases, schemas, tables, views and structure items already loaded. Inside `workspace`.
+The `/` filter of the explorer: profiles (name, host, database), folders, tunnels, environments and saved queries, and under connected profiles the databases, schemas, tables, views and structure items already loaded. Inside `workspace`.
 
 | Keys | Action | Description | R |
 |---|---|---|---|
@@ -445,7 +445,6 @@ Connection profile form. With the mouse: a click focuses a field (in a text, the
 |---|---|---|---|
 | `Ctrl+O` | `form.pick_key_file` | Pick the SSH key file |  |
 | `Ctrl+B` | `form.save_as_tunnel` | Profile form: save this profile's SSH tunnel as a tunnel preset |  |
-| `Ctrl+E` | `form.session_view` | Profile form: what its sessions would start with (its values, saved or not) |  |
 
 Reserved — profile form: `Tab` `Shift+Tab` `Down` `Up` `Enter` `Esc` `Ctrl+S` `Ctrl+T` `Ctrl+N` `Ctrl+P`
 
@@ -501,13 +500,13 @@ Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+
 
 ## `overlay.script_tree`
 
-The folder tree of the saved queries (save as, open), of the file system (the SSH key file, where an export goes) or of folders only (the folder chooser): the tree has the keyboard. `j`/`k` and the arrows move; `l`/`Right` opens the selected folder (one of the file system is read first) and on `../` goes up; `h`/`Left` closes an open folder, else selects the folder the row is in (on the folder shown, a file system tree goes up to its parent). `Enter`: save as saves into the selected folder, the folder chooser picks it; the other trees open or close a folder, go up on `../`, and pick a file (the saved query to open, the key file, the file the export replaces), and the top row of the export tree saves there, as `Ctrl+S` saves in the selected folder. In the export tree `.` shows hidden names; `n` makes a folder (save as, folder chooser, export). `Tab` (and `/` in the folder chooser and the export tree) gives the keyboard to the name or filter field; `Esc` closes (`q` too in the folder chooser and the export tree). The mouse: a click on a folder's arrow opens or closes it; a second click on the selected row opens or closes a folder (the folder chooser picks it) and picks a file (open, key file, export). Inside `root`.
+The folder tree of the saved queries (save as, open), of the file system (the SSH key file, where an export goes) or of folders only (the folder chooser): the tree has the keyboard. `j`/`k` and the arrows move; `l`/`Right` opens the selected folder (one of the file system is read first); `h`/`Left` closes an open folder, else selects the folder the row is in. In a file system tree `../` and the folder shown go up to its parent folder (`l`/`Right` on `../` too). `Enter`: save as saves into the selected folder, the folder chooser picks it; the other trees open or close a folder, go up on `../`, and pick a file (the saved query to open, the key file, the file the export replaces). In the export tree the top row (`Enter`) and `Ctrl+S` (any folder) save there, and `.` shows hidden names; `n` makes a folder (save as, folder chooser, export). `Tab` (and `/` in the folder chooser and the export tree) gives the keyboard to the name or filter field; `Esc` closes (`q` too in the folder chooser and the export tree). The mouse: a click selects a row, one on a folder's arrow opens or closes it; a second click on the selected row does what `Enter` does there, except in save as, where it only opens or closes a folder; the wheel scrolls. Inside `root`.
 
 Reserved — tree: `j` `k` `h` `l` `Up` `Down` `Left` `Right` `Enter` `n` `/` `q` `Tab` `Shift+Tab` `Esc` `.` `Ctrl+S`
 
 ## `overlay.script_tree.name` [text]
 
-The folder tree of the saved queries: its name field (save as) or filter (open); of the file system: its filter, where a text with `/` or a leading `~` is a path `Enter` goes to. While the field is empty, `Left`/`Right` on a folder or file act as in the tree: they close or open the folder, `Left` selects the folder the row is in. Inside `root`.
+The folder tree of the saved queries: its name field (save as) or filter (open); of the folder chooser: its filter; of the file system: its filter, where a text with `/` or a leading `~` is a path `Enter` goes to. Inside `root`.
 
 Reserved — tree: name or filter: `Up` `Down` `Enter` `Tab` `Shift+Tab` `Esc` `Ctrl+S`
 
@@ -546,12 +545,6 @@ Reserved — run confirmation (Cancel has the focus): `y` `n` `Enter` `Esc` `Tab
 What the open transaction did (its statements that may have written, rows, time; how long it has been open and idle): `c` commits, `r` rolls back, `Esc` closes; a click on a button does what its key does. Inside `root`.
 
 Reserved — transaction summary: `c` `r` `Esc` `q` `Enter` `j` `k` `Down` `Up`
-
-## `overlay.session_view`
-
-What a profile's query sessions start with (`:session`; in the profile form `Ctrl+E`, for its unsaved values), in the order they are applied, each with where it comes from: the app's limits, the session preset's statements, the profile's own; behind a pooler in transaction mode, how each PostgreSQL statement goes there. `j`/`k` scroll, `Esc` closes; a click on Close closes too. Inside `root`.
-
-Reserved — session settings: `Esc` `q` `Enter` `j` `k` `Down` `Up`
 
 ## `overlay.icons_ask`
 
@@ -641,7 +634,6 @@ An editor command closes the line; what went wrong is said in the status bar.
 | `:commit` |  | Commit the open transaction |
 | `:rollback` | `:rb` | Roll back the open transaction |
 | `:tx` |  | What the open transaction did |
-| `:session` |  | What a profile's sessions start with, and where each setting comes from |
 
 Settings of `:set` (saved to `config.toml` like the matching actions):
 
@@ -676,8 +668,6 @@ Actions without a default key (the command line finds them by name).
 |---|---|
 | `tunnel.new` | New SSH tunnel (shared by profiles) |
 | `env.new` | New environment (rules, color and badge that profiles share) |
-| `session.new` | New session preset (settings a profile's sessions start with) |
-| `session.show` | What a profile's sessions start with, and where each setting comes from |
 | `ui.language.en` | Change language → English |
 | `ui.language.ko` | Change language → Korean |
 | `ui.language.auto` | Change language → Auto (system locale) |
