@@ -12,7 +12,7 @@ use datarig_core::secret::MemoryStore;
 use datarig_tui::app::Startup;
 use datarig_tui::app::overlay::OverlayKind;
 use datarig_tui::app::profiles::Field;
-use datarig_tui::app::script_tree::{TreeMode, TreeRow};
+use datarig_tui::app::script_tree::{TreeFocus, TreeMode, TreeRow};
 use ratatui::crossterm::event::{KeyCode, MouseButton, MouseEventKind};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -165,6 +165,33 @@ fn a_key_others_may_read_or_a_putty_key_is_said_so_below_the_field() {
     h.type_text("ppk");
     h.key(KeyCode::Enter);
     assert!(note(&h).is_some_and(|n| n.contains("PuTTY")), "{:?}", note(&h));
+}
+
+#[test]
+fn the_arrows_open_and_close_a_folder_while_the_empty_filter_has_the_keyboard() {
+    let home = home("arrows");
+    let mut h = form(&home, None);
+    h.ctrl('o');
+    let focus = |h: &Harness| h.app.overlays.script_tree().unwrap().focus;
+    let rows = |h: &Harness| -> Vec<TreeRow> {
+        h.app.overlays.script_tree().unwrap().rows().into_iter().map(|(r, _)| r).collect()
+    };
+    assert_eq!(focus(&h), TreeFocus::Name, "the filter has the keyboard");
+    let keys = TreeRow::Folder("keys".into());
+    while h.app.overlays.script_tree().unwrap().row != keys {
+        h.key(KeyCode::Down);
+    }
+    // `keys` was never listed: `→` reads it and opens it.
+    h.key(KeyCode::Right);
+    assert!(rows(&h).contains(&TreeRow::File("keys/deploy.key".into())), "{:?}", rows(&h));
+    h.key(KeyCode::Left);
+    assert!(!rows(&h).contains(&TreeRow::File("keys/deploy.key".into())), "`←` closed it");
+    assert_eq!(focus(&h), TreeFocus::Name, "the filter keeps the keyboard");
+    // With text in the filter they move its cursor.
+    h.type_text("de");
+    h.key(KeyCode::Left);
+    assert_eq!(h.app.overlays.script_tree().unwrap().input.cursor(), 1);
+    assert_eq!(picker_root(&h), home.0.join(".ssh"));
 }
 
 #[test]
