@@ -979,11 +979,11 @@ impl App {
         let null = self.i18n.label(Label::ResultsNull);
         let now = self.now();
         let text = match &ev {
-            // How long it waited, when the session was opened with a limit of the app's.
+            // How long it waited, when the session was opened with a limit the app knows.
             DbEvent::Failed { error: DbError::LockTimeout(s), .. } => {
                 match self.tabs.get(id).and_then(|t| t.exec.lock_wait) {
                     Some(w) => {
-                        let wait = datarig_core::policy::format_timeout(Some(w));
+                        let wait = super::sessions::wait_text(w);
                         self.i18n.msg(&Msg::DbLockTimeout { wait, error: s.clone() }).to_string()
                     }
                     None => self.event_error_text(&ev),

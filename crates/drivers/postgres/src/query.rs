@@ -384,14 +384,16 @@ pub(crate) struct Settings {
     pub(crate) read_only: bool,
     /// What goes first in each transaction, because the session could not set it for itself
     /// (a pooler): the search path when the server dropped its startup option (`SET LOCAL
-    /// search_path …`), the lock wait limit (`SET LOCAL lock_timeout …`).
+    /// search_path …`), the lock wait limit (`SET LOCAL lock_timeout …`: the environment's, or
+    /// the last start-up statement's that sets it), the start-up statements.
     pub(crate) each_tx: Vec<String>,
     /// The search path is among [`Settings::each_tx`] (else only the lock wait limit is).
     pub(crate) path_per_tx: bool,
     /// How many of [`Settings::each_tx`], at its end, are the session's start-up statements
     /// behind a pooler (`SET LOCAL …` of a preset): left out of a transaction of the session's
     /// own for a statement [`lock_guarded`] leaves alone (`CALL`, `DO`, `VACUUM`, …), which one
-    /// opened for the search path wraps anyway.
+    /// opened for the search path wraps anyway (the lock wait limit before them stays: it is
+    /// the one they set, if they set one).
     pub(crate) start_per_tx: usize,
     /// Keep prepared statements between transactions (the profile's statement cache).
     pub(crate) statement_cache: bool,

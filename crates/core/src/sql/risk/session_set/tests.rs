@@ -58,14 +58,15 @@ fn pg_refuses_what_is_not_a_session_set() {
 fn pg_refuses_the_settings_the_app_keeps() {
     let cases = [
         ("SET search_path = a", Owner::Schema),
-        ("SET lock_timeout = '5s'", Owner::LockWait),
         ("SET idle_session_timeout = 0", Owner::IdleDisconnect),
         ("SET idle_in_transaction_session_timeout = 0", Owner::TxIdleRollback),
         ("SET default_transaction_read_only = off", Owner::ReadOnly),
         ("SET SESSION transaction_read_only = on", Owner::ReadOnly),
-        ("SET application_name = 'x'", Owner::App),
-        ("SET client_encoding = 'LATIN1'", Owner::App),
-        ("SET DateStyle = 'German'", Owner::App),
+        ("SET application_name = 'x'", Owner::SessionName),
+        ("SET client_encoding = 'LATIN1'", Owner::Encoding),
+        ("SET DateStyle = 'German'", Owner::TextFormat),
+        ("SET bytea_output = 'escape'", Owner::TextFormat),
+        ("SET standard_conforming_strings = off", Owner::Literals),
         ("SET SESSION CHARACTERISTICS AS TRANSACTION READ WRITE", Owner::ReadOnly),
     ];
     for (sql, owner) in cases {
@@ -130,14 +131,18 @@ fn mysql_refuses_what_is_not_a_session_set() {
 #[test]
 fn mysql_refuses_the_settings_the_app_keeps() {
     let cases = [
-        ("SET innodb_lock_wait_timeout = 1", Owner::LockWait),
         ("SET SESSION wait_timeout = 10", Owner::IdleDisconnect),
+        ("SET SESSION interactive_timeout = 10", Owner::Interactive),
         ("SET @@session.transaction_read_only = 0", Owner::ReadOnly),
         ("SET SESSION TRANSACTION READ WRITE", Owner::ReadOnly),
         ("SET autocommit = 0", Owner::Commit),
-        ("SET sql_select_limit = 10", Owner::App),
-        ("SET NAMES latin1", Owner::App),
-        ("SET character_set_results = latin1", Owner::App),
+        ("SET SESSION completion_type = 1", Owner::Completion),
+        ("SET sql_select_limit = 10", Owner::Paging),
+        ("SET NAMES latin1", Owner::Encoding),
+        ("SET character_set_results = latin1", Owner::Encoding),
+        ("SET collation_connection = latin1_swedish_ci", Owner::Encoding),
+        ("SET resultset_metadata = NONE", Owner::Reports),
+        ("SET session_track_schema = OFF", Owner::Reports),
     ];
     for (sql, owner) in cases {
         match mysql(sql) {
@@ -187,19 +192,60 @@ fn transaction_only_settings_are_refused_with_where_the_default_is() {
 
 #[test]
 fn more_settings_the_app_keeps() {
-    assert!(matches!(pg("SET standard_conforming_strings = off"), Err(SetProblem::AppOwned { owner: Owner::App, .. })));
+    assert!(matches!(
+        pg("SET standard_conforming_strings = off"),
+        Err(SetProblem::AppOwned { owner: Owner::Literals, .. })
+    ));
     for sql in [
         "SET resultset_metadata = NONE",
         "SET SESSION completion_type = 1",
-        "SET `lock_wait_timeout` = 1",
+        "SET `autocommit` = 1",
         "SET SESSION `wait_timeout` = 1",
     ] {
         assert!(matches!(mysql(sql), Err(SetProblem::AppOwned { .. })), "{sql}: {:?}", mysql(sql));
     }
-    match mysql("SET `innodb_lock_wait_timeout` = 1") {
+    match mysql("SET `sql_select_limit` = 1") {
         Err(SetProblem::AppOwned { name, owner }) => {
-            assert_eq!((name.as_str(), owner), ("innodb_lock_wait_timeout", Owner::LockWait))
+            assert_eq!((name.as_str(), owner), ("sql_select_limit", Owner::Paging))
         }
         other => panic!("{other:?}"),
     }
+}
+
+/// The lock wait limits (and MySQL's statement time limit) are a preset's to set for its
+/// sessions: they override the environment's, and a read-only environment allows them (a limit
+/// writes nothing).
+#[test]
+fn lock_wait_limits_are_a_presets_to_set() {
+    for sql in ["SET lock_timeout = '3s'", "SET SESSION lock_timeout TO 500", "SET lock_timeout TO DEFAULT"] {
+        let s = pg(sql).unwrap_or_else(|e| panic!("{sql}: {e:?}"));
+        assert!(s.risk.read_only().is_ok(), "{sql}");
+        assert!(matches!(s.per_transaction, Some(Ok(_))), "{sql}");
+    }
+    for sql in [
+        "SET SESSION lock_wait_timeout = 3",
+        "SET innodb_lock_wait_timeout = 3",
+        "SET @@session.innodb_lock_wait_timeout = 3",
+        "SET lock_wait_timeout = 3, innodb_lock_wait_timeout = 3",
+        "SET SESSION max_execution_time = 1000",
+    ] {
+        let s = mysql(sql).unwrap_or_else(|e| panic!("{sql}: {e:?}"));
+        assert!(s.risk.read_only().is_ok(), "{sql}: {:?}", s.risk.read_only());
+    }
+}
+
+/// What an allowed statement sets: each setting's name and its value as written, in order (not a
+/// user variable).
+#[test]
+fn an_allowed_statement_says_what_it_sets() {
+    let set = |s: SessionSet| s.settings;
+    let pairs = |p: &[(&str, &str)]| p.iter().map(|(n, v)| (n.to_string(), v.to_string())).collect::<Vec<_>>();
+    assert_eq!(set(pg("SET lock_timeout = '3s';").unwrap()), pairs(&[("lock_timeout", "'3s'")]));
+    assert_eq!(set(pg("SET SESSION Lock_Timeout TO /* ms */ 500").unwrap()), pairs(&[("lock_timeout", "500")]));
+    assert_eq!(set(pg("SET lock_timeout TO DEFAULT").unwrap()), pairs(&[("lock_timeout", "DEFAULT")]));
+    assert_eq!(
+        set(mysql("SET SESSION lock_wait_timeout = 3, @x = 1, @@session.innodb_lock_wait_timeout = 4").unwrap()),
+        pairs(&[("lock_wait_timeout", "3"), ("innodb_lock_wait_timeout", "4")])
+    );
+    assert_eq!(set(mysql("SET lock_wait_timeout = DEFAULT").unwrap()), pairs(&[("lock_wait_timeout", "DEFAULT")]));
 }

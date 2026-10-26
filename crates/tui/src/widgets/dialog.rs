@@ -494,11 +494,19 @@ pub(crate) fn draw_session_view(app: &mut App, area: Rect, buf: &mut Buffer) {
             match l {
                 SessionLine::Text(t, _) if t.is_empty() => out.push(Vec::new()),
                 SessionLine::Text(t, k) => out.extend(wrap_words(t, iw).into_iter().map(|r| vec![(r, tone(*k))])),
-                SessionLine::Intent { what, value, source } => out.push(vec![
-                    (pad(what, what_w), surface(th.fg)),
-                    (pad(value, value_w), surface(th.fg).add_modifier(Modifier::BOLD)),
-                    (source.clone(), surface(th.fg_muted)),
-                ]),
+                SessionLine::Intent { what, value, source } => {
+                    // The source wraps under itself (a long one: a preset's that overrides it).
+                    let at = what_w + value_w + 4;
+                    let mut wrapped = wrap_words(source, iw.saturating_sub(at)).into_iter();
+                    out.push(vec![
+                        (pad(what, what_w), surface(th.fg)),
+                        (pad(value, value_w), surface(th.fg).add_modifier(Modifier::BOLD)),
+                        (wrapped.next().unwrap_or_default(), surface(th.fg_muted)),
+                    ]);
+                    out.extend(
+                        wrapped.map(|r| vec![(" ".repeat(at), surface(th.fg_muted)), (r, surface(th.fg_muted))]),
+                    );
+                }
                 SessionLine::Source(t) => out.push(vec![(t.clone(), surface(th.accent))]),
                 SessionLine::Statement(sql) => out.extend(block(sql, 2, 4, surface(th.fg))),
                 SessionLine::Pooled(p) => {

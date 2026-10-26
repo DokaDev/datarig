@@ -197,7 +197,8 @@ pub struct TabSession {
     /// The tab was warned that its idle session closes soon with its open transaction (once
     /// per idle period).
     pub idle_warned: bool,
-    /// The lock wait limit the tab's session was opened with (`None`: the server's).
+    /// The lock wait limit the tab's session was opened with: the environment's, or what its
+    /// start-up statements set in its place (`None`: the server's, or one the app does not know).
     pub lock_wait: Option<std::time::Duration>,
     /// Whether the result's portal is open, and since when nobody fetched from it.
     pub paging: Paging,

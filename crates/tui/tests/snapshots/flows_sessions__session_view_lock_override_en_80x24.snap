@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/flows_sessions.rs
+expression: "h.draw(w, ht).backend()"
+---
+"╭ Explorer ────────────╮ 1 console 1 ×                                          "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1       ││ local-pg / datarig  127.0.0.1:55432 · prod           │"
+"│ ╭ Session settings — local-pg ─────────────────────────────────────────────╮e│"
+"│ │ local-pg · PostgreSQL · environment prod                                 │ │"
+"│ │                                                                          │ │"
+"│ │ Lock wait        3s     its session preset “fast” — overrides            │ │"
+"│▾│                         environment prod: 5s                             │ │"
+"│ │ Idle disconnect  never  app setting                                      │ │"
+"│ │ Idle rollback    30m    environment prod                                 │ │"
+"│▾│                                                                          │ │"
+"│ │ From its session preset “fast”:                                          │ │"
+"│ │   SET lock_timeout = '3s'                                                │ │"
+"│ │     behind a pooler: per transaction as SET LOCAL lock_timeout = '3s'    │t│"
+"│ │                                                                          │ │"
+"│ │ Applied in this order: a later setting of the same name wins             │ │"
+"│ │                                                                          │ │"
+"│ │                                [ Close ]                                 │t│"
+"│ ╰────────────────────────────────────────────────── j/k scroll · Esc close ╯ │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" NORMAL  local-pg · prod │ Connected to local-pg                             EN "

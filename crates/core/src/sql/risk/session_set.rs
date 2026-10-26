@@ -7,7 +7,9 @@
 //! list of them) and `SET SESSION TRANSACTION …` ([`super::mysql::session_set`]). Anything else
 //! is refused with why ([`SetProblem`]): what only one transaction keeps (`SET LOCAL`, a plain
 //! `SET TRANSACTION`), what acts on the server (`SET GLOBAL`), resets (`RESET`, `DISCARD`), a
-//! call (`SELECT set_config(…)`), and the settings the app keeps itself ([`Owner`]).
+//! call (`SELECT set_config(…)`), and the settings the app keeps itself ([`Owner`], which says
+//! why). The lock wait limits are not among them: a preset's value overrides the environment's
+//! `lock_wait` for its sessions; what it sets is returned ([`SessionSet::settings`]).
 //!
 //! PostgreSQL behind a pooler in transaction mode keeps nothing of a session: there the same
 //! setting goes first in each transaction as `SET LOCAL` ([`SessionSet::per_transaction`]),
@@ -31,7 +33,7 @@ pub enum SetProblem {
     NotSet,
     /// PostgreSQL's `SET LOCAL`: it would end with the transaction it runs in.
     Local,
-    /// A setting the app keeps itself: `name` (lower case), and what sets it.
+    /// A setting the app keeps itself: `name` (lower case), and why.
     AppOwned { name: String, owner: Owner },
     /// It may change data or run code the text does not show.
     Writes,
@@ -47,23 +49,41 @@ pub enum SetProblem {
     TransactionOnly { name: String },
 }
 
-/// What keeps a setting the app does not let a start-up statement change.
+/// Why the app does not let a start-up statement change a setting, and what sets it instead.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Owner {
-    /// The environment's `lock_wait`.
-    LockWait,
-    /// The environment's `idle_disconnect`.
+    /// The app closes idle sessions itself and warns first; the server's limit is only its
+    /// safety net (the environment's `idle_disconnect`).
     IdleDisconnect,
-    /// The environment's `tx_idle_rollback`.
+    /// MySQL's `interactive_timeout`: the server reads it when a session starts, so it does
+    /// nothing on one that is open (the environment's `idle_disconnect` is the limit).
+    Interactive,
+    /// The app warns about an idle manual-commit transaction, rolls it back itself and keeps
+    /// the session; it sets this per transaction, 30 s later, only as a backstop (the
+    /// environment's `tx_idle_rollback`).
     TxIdleRollback,
-    /// The environment's `read_only`.
+    /// Read-only is the environment's guarantee (its `read_only`).
     ReadOnly,
-    /// The environment's `commit`.
+    /// MySQL's `autocommit`: the app keeps it on and opens manual-commit transactions itself
+    /// (the environment's `commit`).
     Commit,
+    /// MySQL's `completion_type`: a `COMMIT` would open the next transaction or end the
+    /// session (the environment's `commit` is how a session commits).
+    Completion,
     /// The tab's schema (`:use`).
     Schema,
-    /// The app itself (what it reads results in, how it tells sessions apart, paging).
-    App,
+    /// The client's character set: the app sends and reads text as UTF-8.
+    Encoding,
+    /// How the server writes values as text: the app reads them as its defaults write them.
+    TextFormat,
+    /// How the app writes string literals (`''`, never a backslash escape) depends on it.
+    Literals,
+    /// The app names its sessions to tell them apart.
+    SessionName,
+    /// The app pages results with it.
+    Paging,
+    /// What the server reports of a result or of the session, which the app reads.
+    Reports,
 }
 
 /// Why a PostgreSQL start-up setting has no form for one transaction (so it is not sent behind a
@@ -87,25 +107,26 @@ pub struct SessionSet {
     /// PostgreSQL: the same setting for one transaction (`SET LOCAL …`), or why there is none.
     /// `None` for MySQL, whose sessions are never set per transaction.
     pub per_transaction: Option<Result<String, NotLocal>>,
+    /// What it sets, in order: each setting's name (lower case) and its value as written (the
+    /// words after `=` or `TO`, joined by a blank: `'3s'`, `DEFAULT`). User variables are not
+    /// among them.
+    pub settings: Vec<(String, String)>,
 }
 
 /// PostgreSQL's settings the app keeps itself.
 const OWNED: &[(&str, Owner)] = &[
     ("search_path", Owner::Schema),
-    ("lock_timeout", Owner::LockWait),
     ("idle_session_timeout", Owner::IdleDisconnect),
     ("idle_in_transaction_session_timeout", Owner::TxIdleRollback),
     ("default_transaction_read_only", Owner::ReadOnly),
-    // How the app writes string literals (`''`, never a backslash escape) depends on it.
-    ("standard_conforming_strings", Owner::App),
+    ("standard_conforming_strings", Owner::Literals),
     ("transaction_read_only", Owner::ReadOnly),
-    ("application_name", Owner::App),
-    ("client_encoding", Owner::App),
-    // How the server writes values as text: the app reads them as the defaults write them.
-    ("datestyle", Owner::App),
-    ("intervalstyle", Owner::App),
-    ("bytea_output", Owner::App),
-    ("extra_float_digits", Owner::App),
+    ("application_name", Owner::SessionName),
+    ("client_encoding", Owner::Encoding),
+    ("datestyle", Owner::TextFormat),
+    ("intervalstyle", Owner::TextFormat),
+    ("bytea_output", Owner::TextFormat),
+    ("extra_float_digits", Owner::TextFormat),
 ];
 
 /// What the classifier's risk says against a start-up setting: a write or code, or a danger
@@ -132,14 +153,16 @@ pub fn session_set_pg(sql: &str) -> Result<SessionSet, SetProblem> {
         let worker = std::thread::Builder::new().name(THREAD.to_string()).stack_size(STACK);
         worker.spawn_scoped(scope, || shape(sql)).ok().and_then(|h| h.join().ok())
     });
-    let per_transaction = shape.unwrap_or(Err(SetProblem::Unread))?;
+    let (per_transaction, settings) = shape.unwrap_or(Err(SetProblem::Unread))?;
     judge(&risk)?;
-    Ok(SessionSet { risk, per_transaction: Some(per_transaction) })
+    Ok(SessionSet { risk, per_transaction: Some(per_transaction), settings })
 }
 
 /// The shape of `sql`: one `VariableSetStmt` that sets a setting for the session, not one the
-/// app keeps; its form for one transaction, or why it has none.
-fn shape(sql: &str) -> Result<Result<String, NotLocal>, SetProblem> {
+/// app keeps; its form for one transaction, or why it has none, and what it sets
+/// ([`SessionSet::settings`]).
+#[allow(clippy::type_complexity)]
+fn shape(sql: &str) -> Result<(Result<String, NotLocal>, Vec<(String, String)>), SetProblem> {
     use pg_query::protobuf::VariableSetKind as K;
     let statements = parse(sql).ok_or(SetProblem::Unread)?;
     let [stmt] = statements.as_slice() else { return Err(SetProblem::NotOne) };
@@ -166,7 +189,7 @@ fn shape(sql: &str) -> Result<Result<String, NotLocal>, SetProblem> {
         if read_only {
             return Err(SetProblem::AppOwned { name: "transaction_read_only".into(), owner: Owner::ReadOnly });
         }
-        return Ok(Err(NotLocal::Form));
+        return Ok((Err(NotLocal::Form), Vec::new()));
     }
     if let Some((_, owner)) = OWNED.iter().find(|(n, _)| *n == name) {
         return Err(SetProblem::AppOwned { name, owner: *owner });
@@ -174,10 +197,20 @@ fn shape(sql: &str) -> Result<Result<String, NotLocal>, SetProblem> {
     if matches!(name.as_str(), "transaction_isolation" | "transaction_deferrable") {
         return Err(SetProblem::TransactionOnly { name });
     }
+    let settings = vec![(name.clone(), value_text(sql))];
     if matches!(name.as_str(), "role" | "session_authorization") {
-        return Ok(Err(NotLocal::Identity));
+        return Ok((Err(NotLocal::Identity), settings));
     }
-    Ok(set_local(sql, b))
+    Ok((set_local(sql, b), settings))
+}
+
+/// The value of a PostgreSQL `SET name = value` (or `TO value`) as written: the words after the
+/// first `=` or `TO`, without comments or a closing `;`, joined by a blank; empty when there is
+/// none (`SET TIME ZONE …`).
+fn value_text(sql: &str) -> String {
+    let toks: Vec<_> = lex(sql).into_iter().filter(|t| !t.is_trivia() && t.kind != Tok::Semi).collect();
+    let at = toks.iter().position(|t| t.text(sql) == "=" || (t.is_word() && t.text(sql).eq_ignore_ascii_case("TO")));
+    at.map(|i| toks[i + 1..].iter().map(|t| t.text(sql)).collect::<Vec<_>>().join(" ")).unwrap_or_default()
 }
 
 /// `sql` (a `SET` of the session, read as `b`) for one transaction: its words without comments

@@ -27,6 +27,11 @@
 //! read-only environment only the settings a read-only session may change. Metadata sessions
 //! never get them.
 //!
+//! A statement may set the lock wait limit itself (PostgreSQL's `lock_timeout`, MySQL's
+//! `lock_wait_timeout` and `innodb_lock_wait_timeout`): it overrides the environment's
+//! `lock_wait` for those sessions, and the plan says so with the value the server then has, as
+//! far as the app can read it ([`SessionPlan::lock_wait`]).
+//!
 //! On PostgreSQL behind a pooler in transaction mode the session's settings would stay on server
 //! connections other clients share: there each statement goes first in every transaction as
 //! `SET LOCAL` instead ([`OnPooler`]), and one that has no such form is not sent (the profile
@@ -304,6 +309,30 @@ pub struct PlanItem {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SessionPlan {
     pub items: Vec<PlanItem>,
+    /// The lock wait its statements set in place of the intent's `lock_wait` (`None`: none of
+    /// them sets it).
+    pub lock_wait: Option<LockWaitOverride>,
+}
+
+/// A lock wait limit a plan's statements set, which overrides the environment's `lock_wait`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LockWaitOverride {
+    /// Where the last statement that sets it comes from.
+    pub source: Source,
+    /// What the server's limit then is.
+    pub wait: Wait,
+}
+
+/// A lock wait limit as the app reads a statement's value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Wait {
+    /// A statement waits this long at most.
+    Limit(Duration),
+    /// No limit (PostgreSQL's `0`).
+    NoLimit,
+    /// Not known: a value the app does not read (`DEFAULT`, the server's own; an expression, an
+    /// odd unit), or on MySQL two limits that differ or one the app does not know.
+    Unknown,
 }
 
 /// A statement of a plan as the driver gets it.
@@ -387,8 +416,9 @@ pub fn plan(
         if c.session != SessionRef::Inherit || !c.session_sql.is_empty() {
             return Err(SessionError::Driver(c.driver.clone()));
         }
-        return Ok(SessionPlan { items });
+        return Ok(SessionPlan { items, lock_wait: None });
     };
+    let mut waits = LockWaits::new(dbms, rules.lock_wait.unwrap_or(defaults.lock_wait));
     let mapped = rules.session.get(dbms);
     let picked = match &c.session {
         SessionRef::Off => {
@@ -413,17 +443,103 @@ pub fn plan(
         }
         let source = Source::Preset { name: p.name.clone(), by };
         for (i, s) in p.sql.iter().enumerate() {
-            items.push(statement(dbms, rules, &source, i + 1, s)?);
+            items.push(statement(dbms, rules, &source, i + 1, s, &mut waits)?);
         }
     }
     for (i, s) in c.session_sql.iter().enumerate() {
-        items.push(statement(dbms, rules, &Source::Profile, i + 1, s)?);
+        items.push(statement(dbms, rules, &Source::Profile, i + 1, s, &mut waits)?);
     }
-    Ok(SessionPlan { items })
+    Ok(SessionPlan { items, lock_wait: waits.overridden() })
 }
 
-/// Statement `index` (from 1) of `source`, checked.
-fn statement(dbms: Dbms, rules: &Policy, source: &Source, index: usize, sql: &str) -> Result<PlanItem, SessionError> {
+/// The lock wait limits of a session as a plan's statements set them, one after another.
+struct LockWaits {
+    dbms: Dbms,
+    /// PostgreSQL's `lock_timeout` (twice); MySQL's `lock_wait_timeout` and
+    /// `innodb_lock_wait_timeout`.
+    values: [Wait; 2],
+    /// Where the last statement that set one comes from.
+    source: Option<Source>,
+}
+
+impl LockWaits {
+    /// The limits the app sets before the statements (`lock_wait`; `None`: the server's).
+    fn new(dbms: Dbms, lock_wait: Option<Duration>) -> Self {
+        let first = lock_wait.map_or(Wait::Unknown, Wait::Limit);
+        LockWaits { dbms, values: [first; 2], source: None }
+    }
+
+    /// A statement of `source` that sets `settings`; `pooled` its way behind a pooler (one that
+    /// is not sent there sets nothing there: what it sets is then not known).
+    fn set(&mut self, source: &Source, settings: &[(String, String)], pooled: Option<&OnPooler>) {
+        for (name, value) in settings {
+            let at = match (self.dbms, name.as_str()) {
+                (Dbms::Postgres, "lock_timeout") => 0..2,
+                (Dbms::MySql, "lock_wait_timeout") => 0..1,
+                (Dbms::MySql, "innodb_lock_wait_timeout") => 1..2,
+                _ => continue,
+            };
+            let wait = match pooled {
+                Some(OnPooler::Refused(_)) => Wait::Unknown,
+                _ => wait_of(self.dbms, value),
+            };
+            self.values[at].fill(wait);
+            self.source = Some(source.clone());
+        }
+    }
+
+    /// The override, if a statement set a limit: known when both limits are the same.
+    fn overridden(self) -> Option<LockWaitOverride> {
+        let [a, b] = self.values;
+        let wait = if a == b { a } else { Wait::Unknown };
+        self.source.map(|source| LockWaitOverride { source, wait })
+    }
+}
+
+/// The lock wait limit `value` (as written) sets on `dbms`, as far as the app reads it.
+/// PostgreSQL's `lock_timeout`: a whole number of milliseconds, or one in quotes with one of
+/// the units `ms`, `s`, `min`, `h`, `d` (`0`: no limit). MySQL's: a whole number of seconds, from
+/// 1 up to a year (the largest `lock_wait_timeout` takes).
+fn wait_of(dbms: Dbms, value: &str) -> Wait {
+    let digits = |t: &str| !t.is_empty() && t.len() <= 12 && t.bytes().all(|b| b.is_ascii_digit());
+    match dbms {
+        Dbms::Postgres => {
+            let quoted = value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')).filter(|v| !v.contains('\''));
+            let text = quoted.unwrap_or(value);
+            let at = text.find(|c: char| !c.is_ascii_digit()).unwrap_or(text.len());
+            let (number, unit) = text.split_at(at);
+            let unit = if quoted.is_some() { unit.trim() } else { unit };
+            let ms: u64 = match unit {
+                "" | "ms" => 1,
+                "s" => 1_000,
+                "min" => 60_000,
+                "h" => 3_600_000,
+                "d" => 86_400_000,
+                _ => return Wait::Unknown,
+            };
+            match number.parse::<u64>().ok().filter(|_| digits(number)).and_then(|n| n.checked_mul(ms)) {
+                Some(0) => Wait::NoLimit,
+                Some(n) if n <= i32::MAX as u64 => Wait::Limit(Duration::from_millis(n)),
+                _ => Wait::Unknown,
+            }
+        }
+        Dbms::MySql => match value.parse::<u64>() {
+            Ok(n) if digits(value) && (1..=31_536_000).contains(&n) => Wait::Limit(Duration::from_secs(n)),
+            _ => Wait::Unknown,
+        },
+    }
+}
+
+/// Statement `index` (from 1) of `source`, checked; what it sets of the lock wait goes in
+/// `waits`.
+fn statement(
+    dbms: Dbms,
+    rules: &Policy,
+    source: &Source,
+    index: usize,
+    sql: &str,
+    waits: &mut LockWaits,
+) -> Result<PlanItem, SessionError> {
     let set = Classifier::session_set(dbms.language(), sql).map_err(|problem| SessionError::Statement {
         source: source.clone(),
         index,
@@ -439,6 +555,7 @@ fn statement(dbms: Dbms, rules: &Policy, source: &Source, index: usize, sql: &st
         Ok(local) => OnPooler::PerTransaction(local),
         Err(why) => OnPooler::Refused(why),
     });
+    waits.set(source, &set.settings, pooled.as_ref());
     Ok(PlanItem { what: Planned::Sql(sql.to_string()), source: source.clone(), pooled })
 }
 

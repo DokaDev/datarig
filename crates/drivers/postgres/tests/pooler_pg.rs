@@ -843,3 +843,61 @@ async fn behind_a_pooler_start_up_statements_are_per_transaction() {
         assert_eq!(rows[0][0], work_mem);
     }
 }
+
+/// A start-up statement that sets the lock wait limit behind the pooler overrides the
+/// environment's in every transaction: after the environment's `SET LOCAL lock_timeout`, in the
+/// session's own transactions, and in the one opened only for the search path around a `DO`
+/// (which leaves the other start-up statements out). Nothing stays on the pooled server
+/// connections.
+#[tokio::test(flavor = "multi_thread")]
+async fn behind_a_pooler_a_start_up_lock_wait_overrides_the_environments_in_every_transaction() {
+    use datarig_core::driver::SessionStatement;
+    let Some(url) = pooler_url("behind_a_pooler_a_start_up_lock_wait_overrides_the_environments_in_every_transaction")
+    else {
+        return;
+    };
+    let _pool = POOL.read().await;
+    let mut other = Conn::open(&url, SessionRole::Query, false).await;
+    let DbEvent::Page { rows, .. } = other.run(1, "SHOW lock_timeout").await else { panic!("lock_timeout") };
+    let server = rows[0][0].clone();
+    assert_ne!(server.as_deref(), Some("3s"));
+    let sql = vec![
+        SessionStatement {
+            sql: "SET lock_timeout = '3s'".into(),
+            per_transaction: Some("SET LOCAL lock_timeout = '3s'".into()),
+        },
+        SessionStatement {
+            sql: "SET statement_timeout = '45s'".into(),
+            per_transaction: Some("SET LOCAL statement_timeout = '45s'".into()),
+        },
+    ];
+    let tag = format!("poolo{}", std::process::id());
+    for cache in [false, true] {
+        let context = SessionContext { database: None, schema: Some("shop".into()) };
+        let opts = ConnectOptions::new(PAGE, SessionRole::Query, &tag)
+            .statement_cache(cache)
+            .context(context)
+            .lock_wait(Some(Duration::from_secs(5)))
+            .session_sql(sql.clone());
+        let mut q = Conn::open_with(&url, SessionRole::Query, opts).await;
+        let DbEvent::Page { rows, .. } = q.run(1, "SHOW lock_timeout").await else { panic!("cache {cache}") };
+        assert_eq!(rows[0][0].as_deref(), Some("3s"), "cache {cache}: its transaction's");
+        let read = "SELECT pg_catalog.current_setting('lock_timeout') FROM users LIMIT 1";
+        let DbEvent::Page { rows, .. } = q.run(2, read).await else { panic!("cache {cache}") };
+        assert_eq!(rows[0][0].as_deref(), Some("3s"), "cache {cache}: a query in the schema sees it");
+        // A `DO` runs in a transaction opened for the search path: the override is there too.
+        let show = "DO $$ BEGIN RAISE EXCEPTION 'lock=% statement=%', pg_catalog.current_setting('lock_timeout'), \
+                    pg_catalog.current_setting('statement_timeout'); END $$";
+        let ev = q.run(3, show).await;
+        let DbEvent::Failed { error, .. } = &ev else { panic!("cache {cache}: {ev:?}") };
+        let said = format!("{error:?}");
+        assert!(said.contains("lock=3s"), "cache {cache}: {said}");
+        assert!(!said.contains("statement=45s"), "cache {cache}: the other start-up statements stay out: {said}");
+        let mut id = 10;
+        for _ in 0..8 {
+            id += 1;
+            let DbEvent::Page { rows, .. } = other.run(id, "SHOW lock_timeout").await else { panic!() };
+            assert_eq!(rows[0][0], server, "cache {cache}: nothing left on the server connection");
+        }
+    }
+}
