@@ -784,3 +784,36 @@ fn the_environment_form_maps_a_preset_per_database() {
     assert_eq!((map.postgres.as_deref(), map.mysql.as_deref()), (None, Some("my_ro")));
     assert!(dir.text().contains("session = { mysql = \"my_ro\" }"), "{}", dir.text());
 }
+
+/// Names are matched exactly; a preset of the same name but for case is named as the one
+/// likely meant.
+#[test]
+fn an_unknown_preset_of_another_case_says_which_one_was_meant() {
+    let cfg = config(|p| p.session = SessionRef::Named("Reporting".into()));
+    let mut h = launched(&cfg);
+    h.explore("local-pg");
+    h.key(KeyCode::Enter);
+    assert!(h.driver.sessions.lock().unwrap().is_empty());
+    let e = h.node_error("local-pg").unwrap_or_default();
+    assert!(
+        e.contains("“Reporting”, which does not exist")
+            && e.ends_with("(did you mean “reporting”? names are matched exactly)"),
+        "{e}"
+    );
+}
+
+/// A MySQL profile's Advanced section (its longest) keeps a blank line above the buttons, at the
+/// smallest screen too.
+#[test]
+fn a_mysql_profiles_advanced_section_keeps_a_line_above_the_buttons() {
+    let mut cfg = config(|p| p.driver = "mysql".into());
+    cfg.policies = Default::default();
+    let mut h = launched(&cfg);
+    profile_field(&mut h, "local-pg", Field::Folder);
+    let screen = h.screen(80, 24);
+    let lines: Vec<&str> = screen.lines().collect();
+    let folder = lines.iter().position(|l| l.contains("Folder")).expect("Folder");
+    let buttons = lines.iter().position(|l| l.contains("Test    Save    Cancel")).expect("buttons");
+    assert_eq!(buttons, folder + 2, "{screen}");
+    assert!(lines[folder + 1].trim_matches(|c| c == '│' || c == ' ').is_empty(), "{screen}");
+}

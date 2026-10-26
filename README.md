@@ -897,11 +897,24 @@ explorer's lookups (the metadata sessions) never get these settings.
   `lock_wait`), `idle_session_timeout` / `wait_timeout` / `interactive_timeout`
   (`idle_disconnect`), `idle_in_transaction_session_timeout` (`tx_idle_rollback`), the
   read-only settings (`read_only`), MySQL's `autocommit` (`commit`), `search_path` (the tab's
-  schema), and what the app reads results in or tells sessions apart by (`application_name`,
-  `client_encoding`, `DateStyle`, `IntervalStyle`, `bytea_output`, `extra_float_digits`, MySQL's
-  character sets, `SET NAMES`, `sql_select_limit`, `max_execution_time`, `session_track_*`).
+  schema), and what the app reads results in, writes literals with or tells sessions apart by
+  (`application_name`, `client_encoding`, `standard_conforming_strings`, `DateStyle`,
+  `IntervalStyle`, `bytea_output`, `extra_float_digits`, MySQL's character sets, `SET NAMES`,
+  `sql_select_limit`, `max_execution_time`, `resultset_metadata`, `completion_type`,
+  `session_track_*`), also written as a quoted name. Settings of one transaction only are
+  refused too, with where the session's default is: PostgreSQL's `transaction_isolation` and
+  `transaction_deferrable` (use `default_transaction_isolation`, … or `SET SESSION
+  CHARACTERISTICS AS TRANSACTION …`), MySQL's `SET @@transaction_isolation` without a scope
+  (use `SET SESSION …`).
+- **MySQL in every sql mode.** A statement is read with and without `ANSI_QUOTES` and
+  `NO_BACKSLASH_ESCAPES` (the session's mode is not known before it connects); what any reading
+  refuses is refused, and so is one the readings take for different settings (a backslash that
+  ends a string in one mode only).
+- **Who the session is.** `SET ROLE` is allowed in a read-only environment (every transaction
+  stays `READ ONLY` on the server whatever the role); `SET SESSION AUTHORIZATION` is not.
 - **Errors are the profile's.** A preset name that does not exist (in the profile or in its
-  environment's mapping), a preset for the other database, or a statement that is not allowed:
+  environment's mapping; names are matched exactly, and one of another case is named as the one
+  likely meant), a preset for the other database, or a statement that is not allowed:
   the profile does not connect (nothing is asked or sent) and says which preset or statement,
   from where, and why; it never connects without the preset instead. Statements are checked when
   a profile connects and again before each tab's session opens, not when the file is read, so a
@@ -918,12 +931,17 @@ explorer's lookups (the metadata sessions) never get these settings.
   transaction as `SET LOCAL` instead (the same way as `lock_wait`, checked once at connect), and
   the tab says so. As with `lock_wait`, statements that cannot run in a transaction (`VACUUM`,
   `CREATE INDEX CONCURRENTLY`, …), `CALL` and `DO`, and your own session statements (`SET`,
-  `RESET`) run without them. A statement that has no such form (`SET ROLE`, `SET SESSION
+  `RESET`) run without them; in a tab whose schema is also set per transaction those still run
+  in a transaction that sets the schema (as before), but without the preset's settings. A statement that has no such form (`SET ROLE`, `SET SESSION
   AUTHORIZATION`, `SET SESSION CHARACTERISTICS …`) is not sent there: the profile still connects
   and the tab names what was not sent. MySQL connections are never treated as pooled (a proxy
   that multiplexes them, such as ProxySQL, is not detected).
 - On MySQL the classifier reads the session in the sql mode a preset set (`SET SESSION sql_mode
-  = …`), and a read-only session is checked after its statements ran.
+  = …`), and a read-only session is checked after its statements ran. A value that calls a
+  function or has a subquery (`SET @x = (SELECT …)`) runs at connect like any other; one that
+  takes long holds the connect up to its time limit.
+- The form's one line shows a preset's statements without their line comments (`-- …`, `# …`,
+  which would hide the statements after them), so saving the form writes them without.
 
 ## Export
 

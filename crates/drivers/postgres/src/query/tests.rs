@@ -518,6 +518,7 @@ mod terminal {
             own_read_only: true,
             each_tx: &[],
             path_per_tx: false,
+            start_per_tx: 0,
             savepoint: "datarig_count_test",
             before_bind: None,
         };
@@ -550,6 +551,7 @@ mod terminal {
             own_read_only: false,
             each_tx: &lock,
             path_per_tx,
+            start_per_tx: 0,
             savepoint: "datarig_count_test",
             before_bind: None,
         };
@@ -562,6 +564,20 @@ mod terminal {
             assert!(!only.wrapped(sql), "{sql}");
         }
         assert!(env(true).wrapped("CALL p()"), "the search path still goes with everything it resolves");
+        // The session's start-up statements behind a pooler follow the lock wait limit: a
+        // transaction the search path opens for what the limit leaves alone goes without them.
+        let each = [
+            "SET LOCAL search_path = a".to_string(),
+            "SET LOCAL work_mem = '7MB'".to_string(),
+            "SET LOCAL statement_timeout = '45s'".to_string(),
+        ];
+        let both = Env { each_tx: &each, path_per_tx: true, start_per_tx: 2, ..env(true) };
+        assert_eq!(both.begin_for("CALL p()"), ["BEGIN", "SET LOCAL search_path = a"]);
+        assert_eq!(both.begin_for("VACUUM t"), ["BEGIN", "SET LOCAL search_path = a"]);
+        assert_eq!(
+            both.begin_for("SELECT 1"),
+            ["BEGIN", "SET LOCAL search_path = a", "SET LOCAL work_mem = '7MB'", "SET LOCAL statement_timeout = '45s'"]
+        );
     }
 
     /// A statement sent as a plain read that asks for read-write is not sent (a manual-commit
@@ -671,6 +687,7 @@ mod terminal {
                 own_read_only: false,
                 each_tx: &self.each_tx,
                 path_per_tx: !self.each_tx.is_empty(),
+                start_per_tx: 0,
                 savepoint: "datarig_count_test",
                 before_bind: hook,
             };
@@ -699,6 +716,7 @@ mod terminal {
                 own_read_only: false,
                 each_tx: &self.each_tx,
                 path_per_tx: !self.each_tx.is_empty(),
+                start_per_tx: 0,
                 savepoint: "datarig_count_test",
                 before_bind: None,
             };
@@ -725,6 +743,7 @@ mod terminal {
                 own_read_only: false,
                 each_tx: &[],
                 path_per_tx: false,
+                start_per_tx: 0,
                 savepoint: "datarig_count_test",
                 before_bind: hook,
             };

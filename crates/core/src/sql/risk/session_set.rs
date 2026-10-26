@@ -37,6 +37,14 @@ pub enum SetProblem {
     Writes,
     /// It is dangerous in a way no start-up setting may be.
     Danger(Danger),
+    /// MySQL: it reads as other settings in another sql mode (a backslash or a quote it has).
+    ModeDependent,
+    /// A setting of the next (or current) transaction only (`transaction_isolation`,
+    /// `transaction_deferrable`, MySQL's `@@transaction_isolation` without a scope): the session's
+    /// own default is `default_transaction_*` or `SET SESSION CHARACTERISTICS AS TRANSACTION …`
+    /// (MySQL: `SET SESSION TRANSACTION …`). Set per session, it would not hold the same on a
+    /// direct connection and behind a pooler.
+    TransactionOnly { name: String },
 }
 
 /// What keeps a setting the app does not let a start-up statement change.
@@ -88,6 +96,8 @@ const OWNED: &[(&str, Owner)] = &[
     ("idle_session_timeout", Owner::IdleDisconnect),
     ("idle_in_transaction_session_timeout", Owner::TxIdleRollback),
     ("default_transaction_read_only", Owner::ReadOnly),
+    // How the app writes string literals (`''`, never a backslash escape) depends on it.
+    ("standard_conforming_strings", Owner::App),
     ("transaction_read_only", Owner::ReadOnly),
     ("application_name", Owner::App),
     ("client_encoding", Owner::App),
@@ -160,6 +170,9 @@ fn shape(sql: &str) -> Result<Result<String, NotLocal>, SetProblem> {
     }
     if let Some((_, owner)) = OWNED.iter().find(|(n, _)| *n == name) {
         return Err(SetProblem::AppOwned { name, owner: *owner });
+    }
+    if matches!(name.as_str(), "transaction_isolation" | "transaction_deferrable") {
+        return Err(SetProblem::TransactionOnly { name });
     }
     if matches!(name.as_str(), "role" | "session_authorization") {
         return Ok(Err(NotLocal::Identity));

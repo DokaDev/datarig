@@ -2063,6 +2063,10 @@ fn session_preset_errors() {
     assert!(matches!(err("[[connections]]\nname = \"p\"\nsession_sql = [1]\n"), ConfigError::Syntax(_)));
     assert!(matches!(err("[[connections]]\nname = \"p\"\nsession = false\n"), ConfigError::Syntax(_)));
     assert!(matches!(
+        err("[[connections]]\nname = \"p\"\nsession = \"None\"\n"),
+        ConfigError::Value { key, value, allowed: Some("\"none\""), .. } if key == "session" && value == "None"
+    ));
+    assert!(matches!(
         err("[[connections]]\nname = \"p\"\nsession = \"\"\n"),
         ConfigError::Value { key, profile: Some(p), .. } if key == "session" && p == "p"
     ));

@@ -119,6 +119,10 @@ impl App {
             SetProblem::Local => Label::SetLocal,
             SetProblem::Writes => Label::SetWrites,
             SetProblem::Danger(_) => Label::SetDanger,
+            SetProblem::ModeDependent => Label::SetModeDependent,
+            SetProblem::TransactionOnly { name } => {
+                return self.i18n.msg(&Msg::SetTransactionOnly { setting: name.clone() }).to_string();
+            }
             SetProblem::AppOwned { name, owner } => {
                 let owner = self.i18n.label(match owner {
                     Owner::LockWait => Label::SetOwnerLockWait,
@@ -177,6 +181,18 @@ impl App {
             },
             SessionError::Driver(driver) => Msg::SessionDriver { name, driver: driver.clone() },
         };
+        // A preset of the same name but for case: the one meant, most likely (names are matched
+        // exactly).
+        let like = match e {
+            SessionError::NotFound { preset, .. } => {
+                self.session_presets.iter().find(|p| session::same_name(&p.name, preset)).map(|p| p.name.clone())
+            }
+            _ => None,
+        };
+        if let Some(like) = like {
+            let text = self.i18n.msg(&m).to_string();
+            return Notice::new(Msg::SessionDidYouMean { text, like }, Level::Error);
+        }
         Notice::new(m, Level::Error)
     }
 
@@ -413,6 +429,13 @@ impl App {
         self.policies.insert(datarig_core::policy::DEFAULT, rules);
         for e in self.policies.environments_mut() {
             follow(&mut e.policy.session);
+        }
+        // A form put aside under this one (it opened from that form's list) that names it.
+        if let Some(back) = self.overlays.form_mut().and_then(|f| f.back_to.as_mut()) {
+            if named(&back.session_ref) {
+                back.session_ref = SessionRef::Named(to.to_string());
+            }
+            follow(&mut back.env_session);
         }
         let mut moved = Vec::new();
         for (id, c) in self.conns.iter_mut() {

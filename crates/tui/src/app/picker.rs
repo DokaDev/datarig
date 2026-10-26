@@ -283,7 +283,8 @@ impl App {
             _ => Some(f.session_choice()),
         };
         let new = self.config_writable().then(|| i18n.label(Label::PickerSessionNew).to_string());
-        let list = ListPicker::new(entries, new, current.as_ref());
+        // Wide enough for "Environment's (<name>)" next to its hint.
+        let list = ListPicker::new(entries, new, current.as_ref()).with_max_width(72);
         let form = (f.kind, f.profile_id());
         self.overlays.push(Overlay::Picker(Picker::Session { form, field, list }));
     }

@@ -1765,27 +1765,46 @@ fn owned(name: &str) -> Option<Owner> {
         "transaction_read_only" | "tx_read_only" => Owner::ReadOnly,
         "autocommit" => Owner::Commit,
         // Paging, the statement limit of the explorer's reads, what results are read in.
-        "sql_select_limit" | "max_execution_time" | "collation_connection" => Owner::App,
+        "sql_select_limit"
+        | "max_execution_time"
+        | "collation_connection"
+        | "resultset_metadata"
+        | "completion_type" => Owner::App,
         n if n.starts_with("session_track_") || n.starts_with("character_set_") => Owner::App,
         _ => return None,
     })
 }
 
 /// Whether MySQL statement `sql` may be a session's start-up setting ([`super::session_set`]):
-/// one `SET` of session settings or user variables, or `SET SESSION TRANSACTION …`, read in the
-/// default sql mode and with `ANSI_QUOTES` (the session's mode is not known yet): what either
-/// reading refuses is refused.
+/// one `SET` of session settings or user variables, or `SET SESSION TRANSACTION …`, read in
+/// every sql mode that changes how text is read (`ANSI_QUOTES`, `NO_BACKSLASH_ESCAPES`, both,
+/// neither: the session's mode is not known yet). What any reading refuses is refused, and so is
+/// a text the readings take for different settings (`SET @x = 'a\', @@global.y = 1 -- '`).
 pub fn session_set(sql: &str) -> Result<SessionSet, SetProblem> {
-    let modes = [MySqlMode::default(), MySqlMode { ansi_quotes: true, ..MySqlMode::default() }];
+    let d = MySqlMode::default();
+    let modes = [
+        d,
+        MySqlMode { ansi_quotes: true, ..d },
+        MySqlMode { no_backslash_escapes: true, ..d },
+        MySqlMode { ansi_quotes: true, no_backslash_escapes: true, ..d },
+    ];
     let risk = modes.iter().map(|m| classify(sql, *m)).reduce(worse).unwrap_or_else(unrecognized);
-    let shapes = guarded(|| Err(SetProblem::Unread), || modes.iter().try_for_each(|m| set_shape(sql, *m)));
-    shapes?;
+    let shapes =
+        guarded(|| vec![Err(SetProblem::Unread)], || modes.iter().map(|m| set_shape(sql, *m)).collect::<Vec<_>>());
+    if let Some(Err(p)) = shapes.iter().find(|s| s.is_err()) {
+        return Err(p.clone());
+    }
+    if shapes.windows(2).any(|w| w[0] != w[1]) {
+        return Err(SetProblem::ModeDependent);
+    }
     super::session_set::judge(&risk)?;
     Ok(SessionSet { risk, per_transaction: None })
 }
 
-/// [`session_set`]'s check of the statement's form in sql mode `mode`.
-fn set_shape(sql: &str, mode: MySqlMode) -> Result<(), SetProblem> {
+/// [`session_set`]'s check of the statement's form in sql mode `mode`: what it sets, in order
+/// (the settings' names, `None` for a user variable, with each value's text).
+#[allow(clippy::type_complexity)]
+fn set_shape(sql: &str, mode: MySqlMode) -> Result<Vec<(Option<String>, String)>, SetProblem> {
     let (stmts, _) = statements(sql, mode).map_err(|_| SetProblem::Unread)?;
     let [ws] = stmts.as_slice() else { return Err(SetProblem::NotOne) };
     if !ws.first().is_some_and(|w| w.is("SET")) {
@@ -1801,13 +1820,14 @@ fn set_shape(sql: &str, mode: MySqlMode) -> Result<(), SetProblem> {
         if ws.windows(2).any(|w| w[0].is("READ") && (w[1].is("ONLY") || w[1].is("WRITE"))) {
             return Err(SetProblem::AppOwned { name: "transaction_read_only".into(), owner: Owner::ReadOnly });
         }
-        return Ok(());
+        return Ok(vec![(Some("transaction".into()), ws.iter().map(|w| w.text).collect())]);
     }
     if matches!(word(1), "PASSWORD" | "DEFAULT" | "ROLE" | "RESOURCE" | "STATEMENT") {
         return Err(SetProblem::NotSet);
     }
     // A scope keyword holds for the assignments after it that have none of their own.
     let mut server = false;
+    let mut out = Vec::new();
     for item in split_commas(&ws[1..]) {
         if let Some(scope) = item.first().filter(|w| w.kind != Tok::Variable) {
             match scope.up.as_str() {
@@ -1819,15 +1839,41 @@ fn set_shape(sql: &str, mode: MySqlMode) -> Result<(), SetProblem> {
         if let Some(w) = item.first().filter(|w| w.is("NAMES") || w.is("CHARACTER") || w.is("CHARSET")) {
             return Err(SetProblem::AppOwned { name: w.up.to_ascii_lowercase(), owner: Owner::App });
         }
-        let Some((name, global, _)) = target(item) else { return Err(SetProblem::NotSet) };
+        // A quoted name (`` `lock_wait_timeout` ``) is the setting of that name.
+        let Some((name, global, value)) = target(item).or_else(|| quoted_target(item)) else {
+            return Err(SetProblem::NotSet);
+        };
         if server || global {
             return Err(SetProblem::NotSet);
         }
         if let Some(owner) = name.as_deref().and_then(owned) {
             return Err(SetProblem::AppOwned { name: name.unwrap_or_default(), owner });
         }
+        // `SET @@transaction_isolation = …` without a scope: the next transaction only.
+        let bare =
+            item.first().is_some_and(|w| w.kind == Tok::Variable && w.text.starts_with("@@") && !w.text.contains('.'));
+        if let Some(n) = name.as_deref().filter(|n| bare && matches!(*n, "transaction_isolation" | "tx_isolation")) {
+            return Err(SetProblem::TransactionOnly { name: n.to_string() });
+        }
+        out.push((name, value.iter().map(|w| w.text).collect::<Vec<_>>().join(" ")));
     }
-    Ok(())
+    Ok(out)
+}
+
+/// The target of an assignment whose name is quoted (`` `name` = value ``, `` SESSION `name` =
+/// value ``), which [`target`] does not take: the name unquoted, lower case.
+#[allow(clippy::type_complexity)]
+fn quoted_target<'c, 'a>(item: &'c [W<'a>]) -> Option<(Option<String>, bool, &'c [W<'a>])> {
+    let eq = item.iter().position(|w| w.is_op("="))?;
+    let target = match &item[..eq] {
+        [scope, name] if scope.is("SESSION") || scope.is("LOCAL") => name,
+        [name] => name,
+        _ => return None,
+    };
+    if target.kind != Tok::QuotedIdent || eq + 1 >= item.len() {
+        return None;
+    }
+    Some((Some(unquote(target.text).to_ascii_lowercase()), false, &item[eq + 1..]))
 }
 
 /// Whether the app may run `sql` again (to fetch a later page) or count its rows, as far as its

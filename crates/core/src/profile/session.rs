@@ -452,9 +452,27 @@ pub fn split_statements(dbms: Dbms, text: &str) -> Vec<String> {
         .collect()
 }
 
-/// Statements as one field shows them: joined by `; `.
-pub fn join_statements(sql: &[String]) -> String {
-    sql.join("; ")
+/// Statements of `dbms` as one field shows them: joined by `; `, each without its line comments
+/// (`-- …`, MySQL's `# …`), which would hide the statements after it on the one line, and with
+/// its line breaks as blanks (outside strings they are blanks to the server too; a string that
+/// holds one keeps it).
+pub fn join_statements(dbms: Dbms, sql: &[String]) -> String {
+    use crate::sql::lexer::{Tok, lex_in};
+    let one = |s: &String| {
+        let mut out = String::new();
+        for t in lex_in(s, dbms.language().dialect()) {
+            match t.kind {
+                Tok::LineComment | Tok::Whitespace => {
+                    if !out.is_empty() && !out.ends_with(' ') {
+                        out.push(' ');
+                    }
+                }
+                _ => out.push_str(t.text(s)),
+            }
+        }
+        out.trim_end().to_string()
+    };
+    sql.iter().map(one).collect::<Vec<_>>().join("; ")
 }
 
 #[cfg(test)]

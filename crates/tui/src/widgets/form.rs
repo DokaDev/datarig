@@ -212,7 +212,12 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
     let env_rows = if env_form { form.fields().iter().filter(|f| !f.is_button()).count() as u16 } else { 0 };
     // A session preset form: its three fields, the line about its statements, its profiles.
     let used_by_row = if session_form { 7 } else { (env_rows + 3).max(11) };
-    let buttons_row = if session_form { 9 } else { (used_by_row + 2).max(14) };
+    // A profile's Advanced section of many rows (MySQL's) keeps a blank line above the buttons.
+    let adv_rows = match (form.kind, form.section) {
+        (FormKind::Profile, Section::Advanced) => form.fields().iter().filter(|f| !f.is_button()).count() as u16,
+        _ => 0,
+    };
+    let buttons_row = if session_form { 9 } else { (used_by_row + 2).max(14).max(adv_rows + 3) };
     let rect = centered(area, w, buttons_row + 5);
     let inner = modal(rect, &title, &footer, buf);
     let iw = inner.width as usize;
@@ -904,10 +909,8 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
         !r.is_empty()
     });
     form.hits = hits;
-    if session_form {
+    if !env_form {
         test_line(app, inner.x + 1, inner.y + buttons_row + 1, iw.saturating_sub(2), 2, buf);
-    } else if !env_form {
-        test_line(app, inner.x + 1, inner.y + 15, iw.saturating_sub(2), 2, buf);
     }
     cursor
 }

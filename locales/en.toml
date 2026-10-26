@@ -2199,3 +2199,6 @@
 "picker.session_none_hint" = "no preset, even if the environment maps one"
 "picker.session_env_none_hint" = "its profiles start without a preset"
 "picker.session_new" = "New session preset…"
+"set.mode_dependent" = "it reads as other settings in another sql mode (a backslash or a quote)"
+"set.transaction_only" = "{setting} holds for one transaction only: set default_{setting} or SET SESSION CHARACTERISTICS AS TRANSACTION (MySQL: SET SESSION TRANSACTION)"
+"session.did_you_mean" = "{text} (did you mean “{like}”? names are matched exactly)"

@@ -208,7 +208,18 @@ fn read_only_allows_only_safe_settings() {
 fn statements_split_and_join_as_a_field_shows_them() {
     let text = "SET a.b = 'x;y'; SET c.d = 1 ;; ";
     assert_eq!(split_statements(Dbms::Postgres, text), ["SET a.b = 'x;y'", "SET c.d = 1"]);
-    assert_eq!(join_statements(&split_statements(Dbms::Postgres, text)), "SET a.b = 'x;y'; SET c.d = 1");
+    assert_eq!(
+        join_statements(Dbms::Postgres, &split_statements(Dbms::Postgres, text)),
+        "SET a.b = 'x;y'; SET c.d = 1"
+    );
+    // A line comment would hide the statements after it on the field's one line: it goes.
+    let file = ["SET a.b = 1 -- one".to_string(), "SET c.d = 2".to_string()];
+    let field = join_statements(Dbms::Postgres, &file);
+    assert_eq!(field, "SET a.b = 1; SET c.d = 2");
+    assert_eq!(split_statements(Dbms::Postgres, &field), ["SET a.b = 1", "SET c.d = 2"]);
+    assert_eq!(join_statements(Dbms::Postgres, &["SET a.b = 'x  y'\n  -- c\n".to_string()]), "SET a.b = 'x  y'");
+    let my = ["SET @a = 1 # one".to_string(), "SET @b = '#'".to_string()];
+    assert_eq!(split_statements(Dbms::MySql, &join_statements(Dbms::MySql, &my)), ["SET @a = 1", "SET @b = '#'"]);
     assert_eq!(split_statements(Dbms::MySql, "SET @a = \"q;\"; SET @b = 2"), ["SET @a = \"q;\"", "SET @b = 2"]);
 }
 
@@ -220,4 +231,16 @@ fn session_values_as_written() {
     assert_eq!(SessionRef::Inherit.as_value(), None);
     assert_eq!(Dbms::of_driver("PG"), Some(Dbms::Postgres));
     assert_eq!(Dbms::of_driver("redis"), None);
+}
+
+/// Who the session is: `SET ROLE` is on the read-only allowlist (every transaction stays
+/// `READ ONLY` on the server whatever the role), `SET SESSION AUTHORIZATION` is not.
+#[test]
+fn read_only_takes_a_role_but_not_another_authorization() {
+    let rules = Policy { read_only: true, ..Policy::default() };
+    let mut c = profile("postgres");
+    c.session_sql = vec!["SET ROLE reporting".into()];
+    assert!(plan(&c, &rules, Defaults::default(), &[]).is_ok());
+    c.session_sql = vec!["SET SESSION AUTHORIZATION reporting".into()];
+    assert!(matches!(plan(&c, &rules, Defaults::default(), &[]), Err(SessionError::ReadOnly { .. })));
 }

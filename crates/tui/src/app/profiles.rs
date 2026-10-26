@@ -833,7 +833,10 @@ impl ProfileForm {
             env_lock_wait: TextInput::default(),
             env_session: policy::SessionMap::default(),
             session_dbms: Dbms::Postgres,
-            session_sql: TextInput::new(&session::join_statements(&c.session_sql)),
+            session_sql: TextInput::new(&session::join_statements(
+                Dbms::of_driver(&c.driver).unwrap_or(Dbms::Postgres),
+                &c.session_sql,
+            )),
             session_ref: c.session.clone(),
             session_presets: Vec::new(),
             session_new_for: None,
@@ -951,7 +954,7 @@ impl ProfileForm {
         f.kind = FormKind::Session { id: p.filter(|_| editing).map_or_else(SessionPresetId::new, |p| p.id), editing };
         f.original_name = p.filter(|_| editing).map(|p| p.name.clone());
         f.session_dbms = p.map_or(Dbms::Postgres, |p| p.dbms);
-        f.session_sql = TextInput::new(&session::join_statements(p.map_or(&[][..], |p| &p.sql)));
+        f.session_sql = TextInput::new(&session::join_statements(f.session_dbms, p.map_or(&[][..], |p| &p.sql)));
         f.section = Section::Advanced;
         f.focus = Field::Name;
         f

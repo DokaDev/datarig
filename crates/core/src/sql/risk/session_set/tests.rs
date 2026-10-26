@@ -156,3 +156,50 @@ fn mysql_reads_with_ansi_quotes_too() {
     assert!(s.risk.read_only().is_err());
     assert_eq!(mysql("SET x = (SELECT 1); DROP TABLE t"), Err(SetProblem::NotOne));
 }
+
+/// Read in every sql mode: a backslash that ends a string in one mode and not in another must not
+/// hide a server setting (`NO_BACKSLASH_ESCAPES` reads `'a\'` as a whole string).
+#[test]
+fn mysql_reads_every_mode_and_refuses_what_they_read_differently() {
+    let hidden = r"SET @x = 'a\', @@global.max_connections = 1 -- '";
+    assert_eq!(mysql(hidden), Err(SetProblem::NotSet), "the global setting another mode reads");
+    // Readable both ways but as other settings: refused.
+    let differs = r#"SET @x = 'a\', @y = 'b'"#;
+    assert!(mysql(differs).is_err(), "{:?}", mysql(differs));
+    assert!(mysql("SET @x = 'plain'").is_ok());
+}
+
+#[test]
+fn transaction_only_settings_are_refused_with_where_the_default_is() {
+    for sql in ["SET transaction_isolation = 'serializable'", "SET transaction_deferrable = on"] {
+        assert!(matches!(pg(sql), Err(SetProblem::TransactionOnly { .. })), "{sql}: {:?}", pg(sql));
+    }
+    assert!(pg("SET default_transaction_isolation = 'serializable'").is_ok());
+    assert!(matches!(
+        pg("SET SESSION transaction_read_only = off"),
+        Err(SetProblem::AppOwned { owner: Owner::ReadOnly, .. })
+    ));
+    // MySQL: `@@name` without a scope is the next transaction only; with SESSION, the session's.
+    assert!(matches!(mysql("SET @@transaction_isolation = 'READ-COMMITTED'"), Err(SetProblem::TransactionOnly { .. })));
+    assert!(mysql("SET @@session.transaction_isolation = 'READ-COMMITTED'").is_ok());
+    assert!(mysql("SET SESSION transaction_isolation = 'READ-COMMITTED'").is_ok());
+}
+
+#[test]
+fn more_settings_the_app_keeps() {
+    assert!(matches!(pg("SET standard_conforming_strings = off"), Err(SetProblem::AppOwned { owner: Owner::App, .. })));
+    for sql in [
+        "SET resultset_metadata = NONE",
+        "SET SESSION completion_type = 1",
+        "SET `lock_wait_timeout` = 1",
+        "SET SESSION `wait_timeout` = 1",
+    ] {
+        assert!(matches!(mysql(sql), Err(SetProblem::AppOwned { .. })), "{sql}: {:?}", mysql(sql));
+    }
+    match mysql("SET `innodb_lock_wait_timeout` = 1") {
+        Err(SetProblem::AppOwned { name, owner }) => {
+            assert_eq!((name.as_str(), owner), ("innodb_lock_wait_timeout", Owner::LockWait))
+        }
+        other => panic!("{other:?}"),
+    }
+}

@@ -1182,6 +1182,12 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
         if matches!(&c.session, SessionRef::Named(n) if n.trim().is_empty()) {
             return Err(bad("session", "\"\"").in_profile(&c.name).allowed(Some("\"<preset>\", \"none\"")));
         }
+        // `"None"`, `"NONE"`: meant as none, which is written `"none"` (never a preset's name).
+        if let SessionRef::Named(n) = &c.session
+            && session::same_name(n, session::NONE)
+        {
+            return Err(bad("session", n).in_profile(&c.name).allowed(Some("\"none\"")));
+        }
         c.origin = Some(c.name.clone());
         c.normalize();
     }
