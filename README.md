@@ -276,13 +276,13 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
   system clipboard or through OSC 52 over SSH. The copied cells flash briefly once the copy is
   sent to the clipboard and fade back (themes in RGB colours; with the terminal's own colours
   the flash goes off at once); `[ui] yank_flash = "off"` turns that off.
-- **Export to a file**: `Space r e`, the results menu, or `:export [format] [scope] [path]
-  [delim= quote= header= null=]` writes a result to disk: CSV, TSV, Excel (.xlsx), Parquet, JSON,
-  indented JSON, JSON Lines, Markdown, HTML, XML, SQL `INSERT` and `UPDATE`. `:export` alone
-  opens the dialog, where `Ctrl+O` (or `[Browse…]`) picks the folder in a tree and `Tab`
-  completes names in the path field. The file is written beside its name as `.partial` and
-  renamed when the export succeeds. See [Export](#export) for the formats, where the rows come
-  from and what is kept when an export stops.
+- **Export to a file**: `Space r e`, the results menu, or `:export [format] [scope] [delim= quote=
+  header= null=] [path]` writes a result to disk: CSV, TSV, Excel (.xlsx), Parquet, JSON, indented
+  JSON, JSON Lines, Markdown, HTML, XML, SQL `INSERT` and `UPDATE`. `:export` alone opens the
+  dialog, where `Ctrl+O` (or `[Browse…]`) picks the folder in a tree and `Tab` completes names in
+  the path field. The file is written beside its name as `.partial` and renamed when the export
+  succeeds. See [Export](#export) for the formats, where the rows come from and what is kept when an
+  export stops.
 - Transaction indicators in the tab bar and the status bar (open, aborted, "rollback required"),
   and questions before closing, quitting or disconnecting would roll back your work.
 - Query plans (PostgreSQL): `Space e x` (or `:explain`) runs the statement under the cursor as
@@ -858,12 +858,13 @@ formats take no options.
   press it).
 
 **Parquet**
-- Typed columns, every one of them nullable, compressed with Snappy. Integers are INT32 or
-  INT64 (MySQL's `bigint unsigned` an unsigned INT64), floats FLOAT or DOUBLE, booleans
-  BOOLEAN, dates DATE, times TIME and timestamps TIMESTAMP in microseconds, binary data its
-  bytes. PostgreSQL's `timestamptz` is converted to UTC; MySQL's `TIMESTAMP` is the session's
-  local time and is not converted. Everything else, decimals included, is the text the database
-  wrote (every digit kept: a result does not say a decimal's precision and scale).
+- Typed columns, every one of them nullable, compressed with Snappy. Integers are INT32 or INT64
+  (MySQL's `bigint unsigned` an unsigned INT64), floats FLOAT or DOUBLE, booleans BOOLEAN, dates
+  DATE, times without a zone TIME (a time with a zone is text) and timestamps TIMESTAMP in
+  microseconds, binary data its bytes. PostgreSQL's `timestamptz` is converted to UTC; MySQL's
+  `TIMESTAMP` is the session's local time and is not converted. Everything else, decimals included,
+  is the text the database wrote (every digit kept: a result does not say a decimal's precision and
+  scale).
 - A column of a PostgreSQL domain is known by the domain's name only, so a domain over an
   integer is INT64 and one over a float DOUBLE (wider, never cut).
 - A value the column's type cannot hold (`infinity`, MySQL's zero date, `24:00:00`) stops the
@@ -877,28 +878,29 @@ formats take no options.
 
 - **Fetched rows** and **the selection** are read from what is already loaded; nothing is sent
   to the server.
-- **All rows** of a result with more on the server need the statement to run again. A table
-  tab showing its whole table, with a primary key or a unique key on NOT NULL columns and no
-  open transaction, is read in short chunks by that key, each a read of its own that waits at
-  most 5 s for a lock (rows changed meanwhile may be read in a later state). Any other result
-  runs its statement once and streams it: a plain `SELECT` that is safe to repeat goes ahead,
-  anything else asks first, saying it runs again. Read-only and prod-like environments ask
+- **All rows** of a result with more on the server need the statement to run again. A table tab
+  showing its whole table of the connection's own database, with a primary key or a unique key on
+  NOT NULL columns and no open transaction, is read in short chunks by that key, each a read of its
+  own that waits at most 5 s for a lock (rows changed meanwhile may be read in a later state). Any
+  other result runs its statement once and streams it: a plain `SELECT` that is safe to repeat goes
+  ahead, anything else asks first, saying it runs again. Read-only and prod-like environments ask
   first too, because the statement holds a read lock and a snapshot until the export finishes.
 - An export only reads: a statement that writes or locks rows is refused unsent. Outside a
-  transaction of yours it runs in a read-only transaction of its own (`BEGIN READ ONLY` on
-  PostgreSQL, `START TRANSACTION READ ONLY` on MySQL), so one snapshot holds every row and a
-  function that writes fails. Inside your open transaction it reads there and sees what you
-  changed so far; on PostgreSQL under a savepoint, so a failed or cancelled export does not
-  abort your transaction. An aborted transaction refuses an export until you roll it back.
+  transaction of yours each statement it runs (or each chunk of a table read by its key) is a
+  read-only transaction of its own (`BEGIN READ ONLY` on PostgreSQL, `START TRANSACTION READ ONLY`
+  on MySQL), so a statement's rows are one snapshot and a function that writes fails. Inside your
+  open transaction it reads there and sees what you changed so far; on PostgreSQL under a savepoint,
+  so a failed or cancelled export does not abort your transaction. An aborted transaction refuses an
+  export until you roll it back.
 - A slow file holds the statement back instead of piling rows up in memory. A server may end a
   slow export (MySQL's `net_write_timeout`, 60 s by default; PostgreSQL's
   `idle_in_transaction_session_timeout` or a pooler's idle timeout); it then fails as below.
 
 ### Choosing where to save
 
-The path starts as `~/Downloads/<table or tab>-<YYYYMMDD-HHMMSS>.<ext>`, and while it is that
-name a format change gives it the new extension. `~` is the home folder; a relative path goes
-in `~/Downloads`.
+The path starts as `~/Downloads/<table or tab>-<YYYYMMDD-HHMMSS>.<ext>` (in the home folder when
+there is no `~/Downloads`), and while it is that name a format change gives it the new extension.
+`~` is the home folder; a relative path goes in `~/Downloads`.
 
 - `Tab` in the path field completes a name: first the longest text the matching names share,
   then (`Tab` again) a list of them under the field, then each in turn. With nothing to
@@ -930,6 +932,8 @@ in `~/Downloads`.
     in the middle of a row;
   - a Parquet value that does not fit, or an Excel value too long for a cell, keeps a file of
     the rows before it that reads;
+  - an Excel or Parquet export stopped by the server or the session (its error, a timeout,
+    a lost connection) keeps a file of the rows before it that reads, as a cancel does;
   - a Parquet file that could not be written (a full disk) does not read, so it is removed; an
     Excel workbook that could not be made is removed too. Nothing is kept.
 
