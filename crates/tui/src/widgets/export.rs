@@ -57,12 +57,19 @@ pub(crate) fn draw_export_dialog(app: &mut App, area: Rect, buf: &mut Buffer) ->
             ExportField::Quote if f.quote == Quote::Never => {
                 vec![Notice::new(Label::ExportNoteNoQuotes, Level::Warning)]
             }
-            // `Tab` found more than one name: they are listed.
+            // `Tab` found more than one name: they are listed; its folder is being read, or
+            // could not be: that is said.
             ExportField::Path => f
                 .completion
                 .as_ref()
-                .filter(|c| c.text == f.path.text() && c.matches.len() > 1)
-                .map(|c| Notice::new(Msg::ExportPathMatches { names: c.names() }, Level::Info))
+                .filter(|c| c.text == f.path.text())
+                .and_then(|c| match &c.note {
+                    Some(n) => Some(n.clone()),
+                    None if c.matches.len() > 1 => {
+                        Some(Notice::new(Msg::ExportPathMatches { names: c.names() }, Level::Info))
+                    }
+                    None => None,
+                })
                 .into_iter()
                 .collect(),
             _ => Vec::new(),

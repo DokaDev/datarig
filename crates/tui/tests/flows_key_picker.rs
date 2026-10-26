@@ -328,3 +328,37 @@ fn an_unreadable_folder_shown_stays_marked() {
     let _ = std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755));
     assert!(ok, "{screen}");
 }
+
+/// The folder the picker opens at does not answer: the picker opens at once, says it is being
+/// read, keeps answering keys, and closes on `Esc`; the answer that comes later is dropped.
+#[test]
+fn the_picker_opens_and_answers_keys_while_its_folder_hangs() {
+    use ratatui::crossterm::event::{Event, KeyEvent, KeyModifiers};
+    let home = home("hang");
+    let mut h = form(&home, None);
+    let fake = Arc::new(FakeFs::default());
+    fake.hang.lock().unwrap().push(home.0.join(".ssh"));
+    h.app.set_file_system(fake.clone());
+    let press = |h: &mut Harness, code: KeyCode, m: KeyModifiers| {
+        let start = std::time::Instant::now();
+        h.app.handle_event(Event::Key(KeyEvent::new(code, m)));
+        assert!(start.elapsed() < std::time::Duration::from_secs(2), "waited for the disk");
+    };
+    press(&mut h, KeyCode::Char('o'), KeyModifiers::CONTROL);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ScriptTree), "open at once");
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("(reading…)"), "{screen}");
+    assert!(!screen.contains("id_ed25519"), "nothing listed yet:\n{screen}");
+    // The filter takes keys meanwhile.
+    press(&mut h, KeyCode::Char('i'), KeyModifiers::NONE);
+    assert_eq!(h.app.overlays.script_tree().unwrap().input.text(), "i");
+    press(&mut h, KeyCode::Esc, KeyModifiers::NONE);
+    assert!(h.app.overlays.script_tree().is_none(), "closed while the read hangs");
+    fake.release();
+    h.app.pump_folder_reads(std::time::Duration::from_secs(10));
+    assert!(h.app.overlays.script_tree().is_none(), "the late answer opened nothing");
+    assert_eq!(key_field(&h), "", "and put nothing in the field");
+    // Asked again, it answers.
+    h.ctrl('o');
+    assert!(h.screen(120, 40).contains("id_ed25519"));
+}

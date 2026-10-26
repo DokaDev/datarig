@@ -54,6 +54,9 @@ pub(crate) fn draw_script_tree(app: &mut App, area: Rect, buf: &mut Buffer) -> O
         app.i18n.label(Label::ExplorerScripts).to_string()
     };
     let unreadable = app.i18n.label(Label::ScriptTreeUnreadable).to_string();
+    let too_slow = app.i18n.label(Label::ScriptTreeTooSlow).to_string();
+    let reading = app.i18n.label(Label::ScriptTreeReading).to_string();
+    let kind_unknown = app.i18n.label(Label::ScriptTreeKindUnknown).to_string();
     let save_here = app.i18n.label(Label::ExportPathSaveHere).to_string();
     let error = t.error.as_ref().map(|e| app.i18n.msg(e).to_string());
     let rows = t.rows();
@@ -100,6 +103,9 @@ pub(crate) fn draw_script_tree(app: &mut App, area: Rect, buf: &mut Buffer) -> O
         x += put(buf, x, y, arrow, room(x), dim);
         let (text, style) = match row {
             TreeRow::Up => ("../".to_string(), Style::new().fg(th.accent).patch(bg)),
+            // The folder shown, while it is first read: not known yet (the first of those
+            // tried is shown only once it is known to be the one).
+            TreeRow::Top if t.disk.reading_shown() => (String::new(), Style::new().fg(th.fg).patch(bg)),
             TreeRow::Top => (
                 if top.ends_with('/') || folder_mode { top.clone() } else { format!("{top}/") },
                 Style::new().fg(th.fg).patch(bg).add_modifier(Modifier::BOLD),
@@ -131,11 +137,26 @@ pub(crate) fn draw_script_tree(app: &mut App, area: Rect, buf: &mut Buffer) -> O
             }
         };
         x += put(buf, x, y, &text, room(x), style);
-        if export && *row == TreeRow::Top && !t.unreadable(row) {
+        // Key file and export path modes: a folder being read, one that took too long, an
+        // entry of unknown kind.
+        let rel = match row {
+            TreeRow::Top => Some(""),
+            TreeRow::Folder(p) => Some(p.as_str()),
+            TreeRow::Up | TreeRow::File(_) => None,
+        };
+        let being_read = rel.is_some_and(|r| t.disk.reading(r));
+        if export && *row == TreeRow::Top && !t.unreadable(row) && !being_read {
             put(buf, x + 2, y, &save_here, room(x + 2), Style::new().fg(th.accent).patch(bg));
         }
-        if t.unreadable(row) {
-            put(buf, x + 1, y, &unreadable, room(x + 1), Style::new().fg(th.warning).patch(bg));
+        if being_read {
+            let at = if text.is_empty() { x } else { x + 1 };
+            put(buf, at, y, &reading, room(at), Style::new().fg(th.fg_muted).patch(bg));
+        } else if t.unreadable(row) {
+            let mark = if rel.is_some_and(|r| t.disk.slow.contains(r)) { &too_slow } else { &unreadable };
+            put(buf, x + 1, y, mark, room(x + 1), Style::new().fg(th.warning).patch(bg));
+        }
+        if matches!(row, TreeRow::File(p) if t.disk.unknown.contains(p)) {
+            put(buf, x + 1, y, &kind_unknown, room(x + 1), Style::new().fg(th.warning).patch(bg));
         }
     }
     let rule = inner.y + list_h;
@@ -147,6 +168,10 @@ pub(crate) fn draw_script_tree(app: &mut App, area: Rect, buf: &mut Buffer) -> O
     let lines = error.as_ref().map(|e| crate::text::wrap_words(e, iw.saturating_sub(2))).unwrap_or_default();
     for (i, l) in lines.iter().take(2).enumerate() {
         put(buf, inner.x + 1, fy + 1 + i as u16, l, iw.saturating_sub(2), Style::new().fg(th.error).bg(th.surface));
+    }
+    // A typed path being looked at.
+    if lines.is_empty() && t.disk.busy() {
+        put(buf, inner.x + 1, fy + 1, &reading, iw.saturating_sub(2), Style::new().fg(th.fg_muted).bg(th.surface));
     }
     // The folder the name goes into, before the name.
     let folder = t.folder().map(|f| format!("{f}/")).filter(|_| save).unwrap_or_default();

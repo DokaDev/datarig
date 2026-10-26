@@ -82,6 +82,8 @@ pub struct ScriptTree {
     pub loaded: BTreeSet<String>,
     /// Folder mode: the saved query or folder being moved.
     pub moving: Option<String>,
+    /// Key file and export path modes: the folder reads, on a worker.
+    pub disk: super::key_picker::Disk,
 }
 
 impl ScriptTree {
@@ -93,7 +95,10 @@ impl ScriptTree {
     /// with a filter: every file whose path matches, and the folders on the way).
     pub fn rows(&self) -> Vec<(TreeRow, usize)> {
         let mut out = Vec::new();
-        if matches!(self.mode, TreeMode::KeyFile | TreeMode::ExportPath(_)) && self.root.parent().is_some() {
+        if matches!(self.mode, TreeMode::KeyFile | TreeMode::ExportPath(_))
+            && self.root.parent().is_some()
+            && !self.disk.reading_shown()
+        {
             out.push((TreeRow::Up, 0));
         }
         out.push((TreeRow::Top, 0));
@@ -205,22 +210,28 @@ impl ScriptTree {
         self.select(i as usize);
     }
 
-    /// Open (`Some(true)`), close or toggle the selected folder.
+    /// Open (`Some(true)`), close or toggle the selected folder. Key file and export path
+    /// modes: a folder not listed yet is read on a worker and opens once listed; closing it
+    /// meanwhile stops the wait. One that took too long to read is read again.
     pub(super) fn set_open(&mut self, want: Option<bool>) {
         let TreeRow::Folder(p) = self.row.clone() else { return };
+        let disk = matches!(self.mode, TreeMode::KeyFile | TreeMode::ExportPath(_));
+        let reading = disk && self.disk.reading(&p);
+        let want = want.unwrap_or(!(self.open.contains(&p) || reading));
+        if !want && reading {
+            return self.stop_loading(&p);
+        }
+        if want && disk && self.disk.slow.remove(&p) {
+            if let Some(e) = self.entries.iter_mut().find(|e| e.path == p) {
+                e.unreadable = false;
+            }
+            self.error = None;
+        }
         if self.unreadable(&self.row) {
             return;
         }
-        let open = self.open.contains(&p);
-        let want = want.unwrap_or(!open);
-        if want && matches!(self.mode, TreeMode::ExportPath(_)) && !self.loaded.contains(&p) && self.loops(&p) {
-            return;
-        }
-        if want && matches!(self.mode, TreeMode::KeyFile | TreeMode::ExportPath(_)) && !self.loaded.contains(&p) {
-            self.load(&p);
-            if self.unreadable(&self.row) {
-                return;
-            }
+        if want && disk && !self.loaded.contains(&p) {
+            return self.load(&p, None);
         }
         match want {
             true => self.open.insert(p),
@@ -294,6 +305,7 @@ impl App {
             root: Default::default(),
             loaded: BTreeSet::new(),
             moving: None,
+            disk: Default::default(),
         }));
     }
 

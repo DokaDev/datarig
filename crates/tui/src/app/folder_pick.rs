@@ -130,6 +130,7 @@ impl App {
             root: Default::default(),
             loaded: BTreeSet::new(),
             moving,
+            disk: Default::default(),
         };
         if let Some(c) = current.filter(|c| t.entries.iter().any(|e| e.path == *c)) {
             t.open_to(&c);
