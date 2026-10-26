@@ -268,7 +268,7 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
     let top = app.overlays.top().map(|o| o.kind()) == Some(crate::app::overlay::OverlayKind::ProfileForm);
     // A Startup SQL form's profiles and what its list says under each statement (a profile's own
     // list: only what is not allowed), read before the form is borrowed for drawing.
-    let (session_users, statement_notes) = match app.overlays.form() {
+    let (session_users, statement_notes, edited_row) = match app.overlays.form() {
         Some(f) if f.kind == FormKind::Profile || f.is_session() => {
             let users: Vec<String> = f
                 .original_name
@@ -287,9 +287,10 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
                     _ => None,
                 })
                 .collect();
-            (users, notes)
+            let edited = (f.focus == Field::SessionSql).then_some(list.row);
+            (users, notes, edited)
         }
-        _ => (Vec::new(), Vec::new()),
+        _ => (Vec::new(), Vec::new(), None),
     };
     let session_presets = &app.session_presets;
     let default_session = app.policies.default_rules().session.clone();
@@ -335,20 +336,22 @@ pub(crate) fn draw_profile_form(app: &mut App, area: Rect, buf: &mut Buffer) -> 
         .unwrap_or(8)
         + 2;
     // The notes of a Startup SQL list, wrapped to the columns under its inputs (two lines at
-    // most; one when the list would not fit its room then), and the list's lines: its rows, the
-    // notes under them and the line that adds one.
+    // most; one when the list would not fit its room then; the row being edited says all of its
+    // reason), and the list's lines: its rows, the notes under them and the line that adds one.
     let note_w = usize::from(w.saturating_sub(2)).saturating_sub(label_w + 2 + 4).max(1);
     let wrapped = |two: bool| -> Vec<Option<(Vec<String>, Level)>> {
-        let lines = |text: &str| {
+        let lines = |text: &str, whole: bool| {
             let lines = crate::text::wrap_words(text, note_w);
             match lines.len() {
                 0 | 1 => lines,
+                _ if whole => lines,
                 2 if two => lines,
                 _ if two => vec![lines[0].clone(), crate::text::clip(&lines[1..].join(" "), note_w)],
                 _ => vec![crate::text::clip(text, note_w)],
             }
         };
-        statement_notes.iter().map(|n| n.as_ref().map(|(t, level)| (lines(t), *level))).collect()
+        let notes = statement_notes.iter().enumerate();
+        notes.map(|(i, n)| n.as_ref().map(|(t, level)| (lines(t, edited_row == Some(i)), *level))).collect()
     };
     let count = |notes: &[Option<(Vec<String>, Level)>]| {
         notes.len() + notes.iter().flatten().map(|(l, _)| l.len()).sum::<usize>() + 1

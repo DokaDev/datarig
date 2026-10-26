@@ -1476,3 +1476,114 @@ fn a_lock_wait_cut_by_the_servers_own_limit_names_no_time() {
     let t = h.screen(200, 45);
     assert!(t.contains("waited too long for a lock another session holds") && !t.contains("Waited longer than"), "{t}");
 }
+
+/// In a list that scrolls, the terminal cursor is on the row being edited (its line, after its
+/// text), whichever row that is.
+#[test]
+fn the_cursor_is_on_the_edited_row_of_a_scrolled_list() {
+    let dir = scratch("list-cursor");
+    let mut h = section_harness(&dir);
+    on_preset(&mut h, "my_ro");
+    h.keys("e");
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Tab);
+    let check = |h: &mut Harness, what: &str| {
+        let mut t = h.draw(80, 24);
+        let c = t.get_cursor_position().unwrap();
+        let row = h.form().session_sql.row;
+        let text = format!("{:>3} {}", row + 1, h.form().session_sql.text(row));
+        let screen = h.screen(80, 24);
+        let line = screen.lines().nth(usize::from(c.y)).unwrap_or_default().to_string();
+        assert!(line.contains(&text), "{what}: cursor at {c:?} on {line:?}, editing {text:?}\n{screen}");
+    };
+    // Refused rows say why under them, on one line or two.
+    for i in 1..=8 {
+        h.key(KeyCode::Enter);
+        let sql = if i % 2 == 1 { "SET autocommit = 0".to_string() } else { format!("SET @x{i} = 1") };
+        h.type_text(&sql);
+        check(&mut h, &format!("row {i}"));
+    }
+    for i in 0..8 {
+        h.key(KeyCode::Up);
+        check(&mut h, &format!("up {i}"));
+    }
+    for i in 0..6 {
+        h.key(KeyCode::Down);
+        check(&mut h, &format!("down {i}"));
+    }
+    h.key(KeyCode::Enter);
+    check(&mut h, "a new row in the middle");
+    h.type_text("SET x = 1");
+    check(&mut h, "typed");
+}
+
+/// Two statements in one item without a `;` between them are refused, as one line or on two,
+/// in a read-only environment too: the profile does not connect.
+#[test]
+fn two_statements_in_one_item_do_not_connect() {
+    for read_only in [false, true] {
+        for sql in ["SET @c=3 SET @d=4", "SET @c=3\nSET @d=4"] {
+            let mut cfg = config(|p| {
+                p.driver = "mysql".into();
+                p.port = 3306;
+                p.session = SessionRef::Off;
+                p.session_sql = vec![sql.into()];
+            });
+            let mut rules = cfg.policies.environment("prod").unwrap().policy.clone();
+            rules.read_only = read_only;
+            cfg.policies.insert("prod", rules);
+            let mut h = launched(&cfg);
+            h.explore("local-pg");
+            h.key(KeyCode::Enter);
+            assert!(h.driver.sessions.lock().unwrap().is_empty(), "{sql}");
+            let e = h.node_error("local-pg").unwrap_or_default();
+            assert!(e.contains("statement 1 of its own startup SQL is not allowed (one statement per item)"), "{e}");
+        }
+    }
+}
+
+/// Ctrl+S that a refused statement keeps from saving says so, in the preset form and in the
+/// profile form; the row being edited says all of its reason, even where the others are cut.
+#[test]
+fn a_save_a_refused_statement_stops_says_why() {
+    let dir = scratch("refused-save");
+    let mut h = section_harness(&dir);
+    on_preset(&mut h, "my_ro");
+    h.keys("e");
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::Tab);
+    h.key(KeyCode::End);
+    h.key(KeyCode::Enter);
+    h.type_text("SET autocommit = 0");
+    let screen = h.screen(80, 24);
+    assert!(screen.contains("(manual or auto)"), "the whole reason:\n{screen}");
+    h.ctrl('s');
+    assert!(h.form_open(), "not saved");
+    assert_eq!(said(&h), "Not saved: a statement is not allowed (said under it)");
+    h.key(KeyCode::Esc);
+    profile_field(&mut h, "local-pg", Field::SessionSql);
+    h.type_text("SET search_path = x");
+    h.ctrl('s');
+    assert!(h.form_open(), "not saved");
+    assert_eq!(said(&h), "Not saved: a statement is not allowed (said under it)");
+}
+
+/// A Startup SQL row cut at a separator ends with `…` like any other cut row, not with a bare
+/// ` · `.
+#[test]
+fn a_cut_preset_row_ends_with_an_ellipsis() {
+    let dir = scratch("cut-row");
+    section_config(&dir);
+    let text = dir.text() + "\n[startup.pg_fast]\ndbms = \"postgres\"\nsql = [\"SET work_mem = '1MB'\"]\n";
+    std::fs::write(dir.config(), &text).unwrap();
+    let (cfg, err) = datarig_core::config::load(Some(dir.config()));
+    assert!(err.is_none(), "{err:?}");
+    let mut h = launched(&cfg);
+    for (w, ht) in [(80, 24), (100, 30), (120, 40), (160, 45)] {
+        let screen = h.screen(w, ht);
+        let line = screen.lines().find(|l| l.contains("pg_fast")).unwrap_or_else(|| panic!("{screen}"));
+        let row = line.split('│').nth(1).unwrap_or_default().trim_end();
+        assert!(!row.ends_with('·'), "{w}x{ht}: {row:?}");
+        assert!(row.ends_with('…') || row.ends_with("statement"), "{w}x{ht}: {row:?}");
+    }
+}

@@ -2214,6 +2214,7 @@
 "form.statement_read_only" = "읽기 전용 환경에서 거부됨 ({what})"
 "validate.session_reserved" = "예약된 이름: 없음을 뜻합니다"
 "validate.session_sql" = "허용되지 않음 (아래 참고)"
+"form.statements_not_saved" = "저장하지 않음: 허용되지 않는 문장이 있습니다 (그 아래에 이유 표시)"
 "session.saved" = "접속 시 SQL “{name}”을(를) 저장했습니다"
 "session.delete" = "접속 시 SQL “{name}”을(를) 삭제할까요?"
 "session.delete_users" = "{names}이(가) 사용 중입니다 (프로필 {count}개): 폼에서 다른 접속 시 SQL이나 없음을 고를 때까지 연결하지 않습니다 (그것 없이 대신 연결하지 않습니다)."

@@ -255,14 +255,63 @@ impl StatementList {
         true
     }
 
-    /// Text pasted into the focused row: several statements become rows of their own, after it
-    /// (what followed the cursor goes at the end of the last); one goes in at the cursor, on one line.
+    /// Statement text `text` cut before each line that starts with `SET` (outside strings and
+    /// comments): a statement of its own, which no `;` ended.
+    fn split_lines(&self, text: &str) -> Vec<String> {
+        use datarig_core::sql::lexer::{Tok, lex_in};
+        let dialect = self.dbms.unwrap_or(Dbms::Postgres).language().dialect();
+        let mut cuts = vec![0];
+        let mut line_start = false;
+        for t in lex_in(text, dialect) {
+            match t.kind {
+                Tok::Whitespace => line_start |= t.text(text).contains(['\n', '\r']),
+                Tok::LineComment | Tok::BlockComment => {}
+                _ => {
+                    if line_start && t.start > 0 && t.is_word() && t.text(text).eq_ignore_ascii_case("SET") {
+                        cuts.push(t.start);
+                    }
+                    line_start = false;
+                }
+            }
+        }
+        cuts.push(text.len());
+        cuts.windows(2).map(|w| text[w[0]..w[1]].trim().to_string()).filter(|p| !p.is_empty()).collect()
+    }
+
+    /// Text pasted into the focused row. Its statements are those `;` ends, and each line that
+    /// starts with `SET` starts one too. A text with a line break is rows of its own: in the
+    /// focused row when that is empty, else after it. On one line, several statements become rows
+    /// after the focused one (what followed the cursor goes at the end of the last); one goes in
+    /// at the cursor.
     pub fn paste(&mut self, text: &str) {
         let dbms = self.dbms.unwrap_or(Dbms::Postgres);
-        let parts = session::split_statements(dbms, text);
+        let parts: Vec<String> = session::split_statements(dbms, text)
+            .iter()
+            .flat_map(|p| self.split_lines(p))
+            .map(|p| self.display(&p))
+            .filter(|p| !p.is_empty())
+            .collect();
+        if text.contains(['\n', '\r']) {
+            if parts.is_empty() {
+                return;
+            }
+            let i = self.row.min(self.rows.len() - 1);
+            let mut at = if self.text(i).trim().is_empty() {
+                self.rows.remove(i);
+                i
+            } else {
+                i + 1
+            };
+            for p in parts {
+                self.rows.insert(at, Row { input: TextInput::new(&p), original: None, note: None });
+                self.check(at);
+                at += 1;
+            }
+            self.focus(at - 1);
+            return;
+        }
         if parts.len() < 2 {
-            let one = if text.contains(['\n', '\r']) { self.display(text) } else { text.to_string() };
-            self.current_mut().insert_str(&one);
+            self.current_mut().insert_str(text);
             self.edited();
             return;
         }
@@ -272,7 +321,7 @@ impl StatementList {
             let at: usize = t.graphemes(true).take(self.rows[i].input.cursor()).map(str::len).sum();
             (t[..at].to_string(), t[at..].to_string())
         };
-        let shown: Vec<String> = parts.iter().map(|p| self.display(p)).collect();
+        let shown = parts;
         let last = shown.len() - 1;
         for (n, s) in shown.iter().enumerate() {
             let text = match n {
@@ -372,6 +421,23 @@ mod tests {
         assert_eq!(l.row, 2);
         l.paste("SET d = 4");
         assert_eq!(l.text(2), "SET c = 3SET d = 4", "one goes in at the cursor");
+    }
+
+    /// Lines that each start with `SET` are statements of their own without a `;`; a pasted
+    /// block (a text with a line break) never joins the row it lands on.
+    #[test]
+    fn a_paste_of_lines_makes_a_row_of_each() {
+        let mut l = StatementList::new(Some(Dbms::MySql), &[]);
+        l.paste("SET @c=3\nSET @d=4\n");
+        assert_eq!(l.statements(), ["SET @c=3", "SET @d=4"]);
+        // A statement on two lines stays one; a SET in a string starts nothing.
+        let mut l = StatementList::new(Some(Dbms::MySql), &[]);
+        l.paste("SET @a = 1,\n  @b = 2\nSET @c = 'x\nSET y'");
+        assert_eq!(l.statements(), ["SET @a = 1, @b = 2", "SET @c = 'x\nSET y'"]);
+        let mut l = StatementList::new(Some(Dbms::MySql), &["SET autocommit = 0".to_string()]);
+        l.paste("\nSET @x1 = 1");
+        assert_eq!(l.statements(), ["SET autocommit = 0", "SET @x1 = 1"]);
+        assert_eq!(l.row, 1);
     }
 
     #[test]

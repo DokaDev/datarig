@@ -868,7 +868,14 @@ The keys had other names in 0.31, still read the same: `[sessions.<name>]` for
 `session_sql` for `startup` and `startup_sql`. A file that has a key and its old name in one
 place (both kinds of tables, or both keys in one environment or profile) is an error that names
 both. Saving from the app leaves the old names as they are while what they say does not change,
-and writes the new ones (renamed in place, comments kept) once it does.
+and renames them in place (values and comments kept) once it does, a whole place at a time:
+
+- the presets: once any of them is added, changed, renamed or deleted, every `[sessions.<name>]`
+  table becomes `[startup.<name>]` (the file cannot have both);
+- an environment (or `[policy.default]`): once anything in its table changes, its `session`
+  becomes `startup` (and `tx_idle_timeout` becomes `tx_idle_rollback`);
+- a profile: once its preset or its own statements change, both its `session` and its
+  `session_sql` are renamed, even the one that kept its value.
 
 The explorer's **Startup SQL** section lists them (the same keys as the Tunnels section: `n`
 new, `e` edit, `c` copy, `d` delete, `t` test, `Enter` or `l` to see the profiles that use one,
@@ -884,7 +891,11 @@ read-only environment would refuse, that it would. In the list:
   row and moves to the next field (type, `Enter`, type, `Enter`, `Enter`).
 - `↑`/`↓` go from row to row and leave the list past its first or last row; `Tab` leaves it.
 - `Backspace` on an empty row and `Ctrl+D` on any row remove it.
-- Pasting several statements (`SET a = 1; SET b = 2`, or one per line) makes a row of each.
+- A paste makes a row of each statement in it: a `;` ends one, and so does a line break before a
+  line that starts with `SET` (a statement that goes on over several lines stays one). A paste
+  with a line break is rows of its own (in the focused row when it is empty, else below it); one
+  on a single line goes in at the cursor. A row that still holds two statements (`SET a = 1 SET
+  b = 2`) is refused.
 - The mouse: a click on a row puts the cursor there, `×` removes the row, **+ Add statement**
   adds one at the end, and the wheel scrolls a list longer than its room (the lines out of view
   are counted at its top and bottom). A long row scrolls sideways while you edit it.

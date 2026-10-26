@@ -2217,6 +2217,7 @@
 "form.statement_read_only" = "refused in read-only environments ({what})"
 "validate.session_reserved" = "reserved: it means none"
 "validate.session_sql" = "not allowed (see below)"
+"form.statements_not_saved" = "Not saved: a statement is not allowed (said under it)"
 "session.saved" = "Saved the Startup SQL “{name}”"
 "session.delete" = "Delete the Startup SQL “{name}”?"
 "session.delete_users" = { one = "{names} uses it: it will not connect until you pick another Startup SQL or none in its form (never without it instead).", other = "{count} profiles use it ({names}): they will not connect until you pick another Startup SQL or none in their forms (never without it instead)." }

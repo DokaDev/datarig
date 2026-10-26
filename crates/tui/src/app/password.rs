@@ -429,7 +429,11 @@ impl App {
         let editing = form.editing;
         let profiles = &self.profiles;
         let taken = |n: &str| profiles.iter().enumerate().any(|(i, p)| p.name == n && Some(i) != editing);
-        if !form.errors(taken).is_empty() || form.dsn_problem.is_some() {
+        let errors = form.errors(taken);
+        if !errors.is_empty() || form.dsn_problem.is_some() {
+            if errors.iter().any(|(f, _)| *f == super::profiles::Field::SessionSql) {
+                self.flash(Notice::new(Label::FormStatementsNotSaved, Level::Warning));
+            }
             return;
         }
         // One move at a time: the database password's (a change of its storage), then (another
