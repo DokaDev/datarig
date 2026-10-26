@@ -60,8 +60,11 @@ pub const UNKNOWN_DRIVER: &str = "\u{f1c0}";
 /// A saved query (nf-fa-file_code_o).
 pub const SCRIPT: &str = "\u{f1c9}";
 
-/// A folder of the folder picker (nf-fa-folder).
+/// A folder of the folder picker and of the file pickers (nf-fa-folder).
 pub const FOLDER: &str = "\u{f07b}";
+
+/// A file of the file pickers: the SSH key file, where an export goes (nf-fa-file).
+pub const FILE: &str = "\u{f15b}";
 
 /// A table tab (nf-fa-table); with icons off the tab shows the name alone.
 pub const TABLE: &str = "\u{f0ce}";

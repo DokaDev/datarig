@@ -111,7 +111,7 @@ pub(crate) fn draw_script_tree(app: &mut App, area: Rect, buf: &mut Buffer) -> O
                 Style::new().fg(th.fg).patch(bg).add_modifier(Modifier::BOLD),
             ),
             TreeRow::Folder(p) => {
-                if folder_mode && icons_on {
+                if (folder_mode || key_file || export) && icons_on {
                     x += put(buf, x, y, &format!("{} ", icons::FOLDER), room(x), Style::new().fg(th.accent).patch(bg));
                 }
                 (format!("{}/", scripts::display_name(p, true)), Style::new().fg(th.accent).patch(bg))
@@ -125,10 +125,18 @@ pub(crate) fn draw_script_tree(app: &mut App, area: Rect, buf: &mut Buffer) -> O
                     KeyLook::Dim => Style::new().fg(th.fg_dim).patch(bg),
                     KeyLook::Other => Style::new().fg(th.fg).patch(bg),
                 };
+                if icons_on {
+                    x += put(buf, x, y, &format!("{} ", icons::FILE), room(x), style);
+                }
                 (name, style)
             }
             // Export path mode: files are dimmed (a file of that name would be replaced).
-            TreeRow::File(p) if export => (p.rsplit('/').next().unwrap_or(p).to_string(), dim),
+            TreeRow::File(p) if export => {
+                if icons_on {
+                    x += put(buf, x, y, &format!("{} ", icons::FILE), room(x), dim);
+                }
+                (p.rsplit('/').next().unwrap_or(p).to_string(), dim)
+            }
             TreeRow::File(p) => {
                 if icons_on {
                     x += put(buf, x, y, &format!("{} ", icons::SCRIPT), room(x), dim);

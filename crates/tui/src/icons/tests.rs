@@ -106,6 +106,13 @@ fn the_folder_picker_icon_is_pinned() {
 }
 
 #[test]
+fn the_file_picker_icon_is_pinned() {
+    // nf-fa-file (Nerd Fonts 3.4.0 glyphnames.json: "fa-file", code f15b).
+    assert_eq!(FILE, "\u{f15b}");
+    assert_eq!(width(FILE), 1);
+}
+
+#[test]
 fn the_ddl_tab_icon_is_pinned() {
     // nf-fa-code (Nerd Fonts 3.5.1 glyphnames.json: "fa-code", code f121).
     assert_eq!(DDL, "\u{f121}");
