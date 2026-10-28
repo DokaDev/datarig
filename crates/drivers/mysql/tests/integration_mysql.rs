@@ -1952,11 +1952,15 @@ async fn explain_analyze_of_a_write_a_rollback_cannot_undo_is_refused() {
         other => panic!("{other:?}"),
     }
     assert_eq!(rows_in(&mut c, 6, &format!("{} WHERE v = 'z'", t.q())).await, "0");
-    // An `ANALYZE` the classifier cannot read (in an executable comment) is checked too.
+    // An `ANALYZE` the classifier cannot read (in an executable comment) is not sent: its tables
+    // cannot be read either, whatever their engine.
     let hidden =
         format!("EXPLAIN /*!80000 ANALYZE */ DELETE x FROM {q} x JOIN {q} y ON y.id = x.id WHERE x.id > 1", q = t.q());
     let evs = c.run(70, &[&hidden]).await;
-    assert!(matches!(evs.last(), Some(DbEvent::Failed { error: DbError::NotUndoable(_), .. })), "{evs:?}");
+    assert!(
+        matches!(evs.last(), Some(DbEvent::Failed { error: DbError::NotUndoable(t), .. }) if t.is_empty()),
+        "{evs:?}"
+    );
     assert_eq!(rows_in(&mut c, 71, &t.q()).await, "3");
     // Its plan without ANALYZE stays available, and a read is measured as it is.
     let evs = c.run(7, &[&format!("EXPLAIN FORMAT=TREE DELETE FROM {} WHERE id > 1", t.q())]).await;
@@ -2001,6 +2005,35 @@ async fn explain_analyze_checks_keyword_names_and_triggers() {
         other => panic!("{other:?}"),
     }
     assert_eq!(rows_in(&mut c, 4, &t.q()).await, "3");
+    // Both in one statement: each said.
+    let both = format!("EXPLAIN ANALYZE DELETE x FROM {q} x JOIN last y ON y.id = x.id", q = t.q());
+    match c.run(5, &[&both]).await.last() {
+        Some(DbEvent::Failed { error: DbError::NotUndoable(tables), .. }) => {
+            assert_eq!(tables, &["shop.last (MyISAM)".to_string(), format!("shop.{} (trigger)", t.name)]);
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// Without the `TRIGGER` privilege the data dictionary lists no trigger of a table: its triggers
+/// are not known, and an `EXPLAIN ANALYZE` that writes it is not sent.
+#[tokio::test(flavor = "multi_thread")]
+async fn explain_analyze_without_seeing_triggers_is_refused() {
+    let Some((url, admin)) = urls("explain_analyze_no_trigger_privilege") else { return };
+    let t = numbers(&admin, "notrig", 3).await;
+    let account = Account::make(&admin, "notrig", "WITH caching_sha2_password BY 'pw'").await.unwrap();
+    let mut a = side(&admin).await;
+    a.query_drop(format!("GRANT DELETE ON {} TO '{}'@'%'", t.q(), account.name)).await.unwrap();
+    a.disconnect().await.unwrap();
+    let mut c = Conn::open(&as_user(&url, &account.name, "pw"), SessionRole::Query, false, "notrig").await;
+    let evs = c.run(1, &[&format!("EXPLAIN ANALYZE DELETE x FROM {q} x JOIN {q} y ON y.id = x.id", q = t.q())]).await;
+    match evs.last() {
+        Some(DbEvent::Failed { error: DbError::NotUndoable(tables), .. }) => {
+            assert_eq!(tables, &[format!("shop.{} (triggers not visible)", t.name)]);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(rows_in(&mut c, 2, &t.q()).await, "3");
 }
 
 /// The tree text the server gives for the plan statements the app sends reads as a plan:

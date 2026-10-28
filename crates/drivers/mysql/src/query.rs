@@ -644,26 +644,28 @@ const NOT_UNDONE: NotUndone = NotUndone::Refuse;
 
 /// The tables `sql` names that keep their changes past a rollback, as the server tells
 /// (`schema.table (engine)`): base tables of an engine that is not transactional (InnoDB, NDB
-/// are), views (whose tables are not known), and tables with triggers (`schema.table (trigger)`,
-/// whose code may write elsewhere). A text whose names cannot be read counts as one such table,
-/// unknown. The question reads the data dictionary only (no table is opened or locked). Not
-/// seen: a session's temporary tables, which the data dictionary does not list.
+/// are), views (whose tables are not known), tables with triggers (`schema.table (trigger)`,
+/// whose code may write elsewhere) and tables whose triggers the session may not see (without
+/// the `TRIGGER` privilege the data dictionary lists none: `schema.table (triggers not
+/// visible)`). A text whose names cannot be read (an executable comment, a text too long to
+/// read) gives no list: `None`. The question reads the data dictionary only (no table is opened
+/// or locked). Not seen: a session's temporary tables, which the data dictionary does not list.
 async fn not_undone(
     conn: &mut Conn,
     link: &mut Link,
     env: &Env<'_>,
     s: &State,
     sql: &str,
-) -> Result<Vec<String>, Closed> {
-    let Some(names) = risk::named(sql, s.mode) else { return Ok(vec!["?".to_string()]) };
+) -> Result<Option<Vec<String>>, Closed> {
+    let Some(names) = risk::named(sql, s.mode) else { return Ok(None) };
     let ask = not_undone_sql(&names, Dialect::MySql(s.mode));
     env.busy.store(true, Ordering::SeqCst);
     let answer = link.guard(Some(env.killer), conn.query::<String, _>(ask)).await?;
     idle(env, link).await;
     Ok(match answer {
-        Ok(tables) => tables,
+        Ok(tables) => Some(tables),
         // Not known: as one that is not undone.
-        Err(e) => vec![format!("? ({})", failure(&e).0.raw())],
+        Err(e) => Some(vec![format!("? ({})", failure(&e).0.raw())]),
     })
 }
 
@@ -671,13 +673,27 @@ async fn not_undone(
 /// as [`check_sql`] reads them.
 fn not_undone_sql(names: &[String], d: Dialect) -> String {
     let cond = name_condition(names, d);
+    // The session's account as the privilege tables write a grantee (`'user'@'host'`); a grant
+    // that reaches it otherwise (through a role) is not seen, so the table counts as one whose
+    // triggers are not visible.
+    let me =
+        "CONCAT(QUOTE(SUBSTRING_INDEX(CURRENT_USER(), '@', 1)), '@', QUOTE(SUBSTRING_INDEX(CURRENT_USER(), '@', -1)))";
     format!(
         "SELECT {OWN_READ_HINTS} CONCAT(t.TABLE_SCHEMA, '.', t.TABLE_NAME, ' (', COALESCE(t.ENGINE, t.TABLE_TYPE), ')') \
          FROM information_schema.TABLES t WHERE (t.TABLE_TYPE = 'VIEW' \
          OR UPPER(COALESCE(t.ENGINE, '')) NOT IN ('INNODB', 'NDBCLUSTER', 'NDB')) AND ({cond}) \
          UNION SELECT CONCAT(t.TABLE_SCHEMA, '.', t.TABLE_NAME, ' (trigger)') FROM information_schema.TABLES t \
          WHERE EXISTS (SELECT 1 FROM information_schema.TRIGGERS g WHERE g.EVENT_OBJECT_SCHEMA = t.TABLE_SCHEMA \
-         AND g.EVENT_OBJECT_TABLE = t.TABLE_NAME) AND ({cond}) ORDER BY 1 LIMIT 20"
+         AND g.EVENT_OBJECT_TABLE = t.TABLE_NAME) AND ({cond}) \
+         UNION SELECT CONCAT(t.TABLE_SCHEMA, '.', t.TABLE_NAME, ' (triggers not visible)') \
+         FROM information_schema.TABLES t WHERE t.TABLE_TYPE = 'BASE TABLE' AND ({cond}) \
+         AND NOT EXISTS (SELECT 1 FROM information_schema.USER_PRIVILEGES p \
+         WHERE p.GRANTEE = {me} AND p.PRIVILEGE_TYPE = 'TRIGGER') \
+         AND NOT EXISTS (SELECT 1 FROM information_schema.SCHEMA_PRIVILEGES p \
+         WHERE p.GRANTEE = {me} AND p.PRIVILEGE_TYPE = 'TRIGGER' AND p.TABLE_SCHEMA = t.TABLE_SCHEMA) \
+         AND NOT EXISTS (SELECT 1 FROM information_schema.TABLE_PRIVILEGES p \
+         WHERE p.GRANTEE = {me} AND p.PRIVILEGE_TYPE = 'TRIGGER' AND p.TABLE_SCHEMA = t.TABLE_SCHEMA \
+         AND p.TABLE_NAME = t.TABLE_NAME) ORDER BY 1 LIMIT 20"
     )
 }
 
@@ -758,20 +774,27 @@ async fn statement<'a>(
             return Ok(None);
         }
     }
-    // An `EXPLAIN` the classifier could not read (an executable comment may hold `ANALYZE`) is
-    // undone and checked as one that runs.
-    let unread = matches!(risk.danger, Some(Danger::Unrecognized | Danger::ExecutableComment | Danger::TooComplex));
+    // An `EXPLAIN` whose text could not be read (an executable comment may hold `ANALYZE`, a text
+    // too long) is undone and checked as one that runs: its names cannot be read either, so it is
+    // not sent.
+    let unread = matches!(risk.danger, Some(Danger::ExecutableComment | Danger::TooComplex));
     let undo = (explains(sql, s.mode) && (risk.rolls_back() || unread)).then(|| Undo::of(s.tx.open));
     // A write measured by `EXPLAIN ANALYZE` is undone by the rollback only on transactional
     // tables: the others are asked about first.
     let mut not_undone_on = Vec::new();
     if undo.is_some() && (risk.rollback_matters() || unread) {
-        not_undone_on = halt!(not_undone(conn, link, env, s, sql).await, Some(reply));
+        let found = halt!(not_undone(conn, link, env, s, sql).await, Some(reply));
         // Cancelled while the server was asked: the statement is not sent.
         if env.asked.load(Ordering::SeqCst) {
             reply.fail(DbError::Cancelled, true);
             return Ok(None);
         }
+        // Names that cannot be read: which tables it would change is not known.
+        let Some(found) = found else {
+            reply.fail(DbError::NotUndoable(Vec::new()), false);
+            return Ok(None);
+        };
+        not_undone_on = found;
         if !not_undone_on.is_empty() && NOT_UNDONE == NotUndone::Refuse {
             reply.fail(DbError::NotUndoable(not_undone_on), false);
             return Ok(None);

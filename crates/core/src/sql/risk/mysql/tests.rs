@@ -689,6 +689,8 @@ fn named_gives_every_name_of_every_statement() {
         assert!(names.iter().any(|m| m == n), "{n}: {names:?}");
     }
     assert!(named("UPDATE a SET v = 1; DELETE FROM b", MODE).unwrap().iter().any(|n| n == "b"));
+    // Every word counts (a keyword may be a table's name).
+    assert_eq!(named("SELECT 1", MODE), Some(vec!["SELECT".to_string()]));
     // Text the session's mode cannot read gives no names: the driver counts it as not undone.
     assert_eq!(named("EXPLAIN /*!80000 ANALYZE */ DELETE FROM t", MODE), None);
     // A keyword is a table name unquoted.

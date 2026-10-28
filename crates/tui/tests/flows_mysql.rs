@@ -358,11 +358,32 @@ fn an_analyze_a_rollback_cannot_undo_says_which_tables() {
     let id = sent_run(&mut h);
     let error = DbError::NotUndoable(vec!["shop.t (MyISAM)".into(), "shop.v (VIEW)".into()]);
     h.tab_db(0, DbEvent::Failed { id, error, cancelled: false });
-    let screen = h.screen(160, 40);
-    assert!(
-        screen.contains("a rollback cannot undo what it would change in shop.t (MyISAM), shop.v (VIEW)"),
-        "{screen}"
-    );
+    // The failure as the UI words it (the editor's hint shows its start, Messages all of it).
+    let failed = |h: &Harness| match &h.app.tab().exec.run.statements[0].outcome {
+        datarig_tui::app::runlog::StatementOutcome::Failed(text) => text.clone(),
+        other => panic!("{other:?}"),
+    };
+    let text = failed(&h);
+    assert!(text.contains("a rollback cannot undo what it would change in shop.t (MyISAM), shop.v (VIEW)"), "{text}");
+    // Tables whose triggers the account cannot see: what to do.
+    h.ctrl('e');
+    if h.app.overlays.run_confirm().is_some() {
+        h.keys("y");
+    }
+    let id = sent_run(&mut h);
+    let error = DbError::NotUndoable(vec!["shop.t (trigger)".into(), "shop.u (triggers not visible)".into()]);
+    h.tab_db(0, DbEvent::Failed { id, error, cancelled: false });
+    let text = failed(&h);
+    assert!(text.contains("shop.t (has triggers), shop.u (its triggers are not visible to this account)"), "{text}");
+    assert!(text.contains("use an account or role with the TRIGGER privilege"), "{text}");
+    // Text whose tables cannot be read.
+    h.ctrl('e');
+    if h.app.overlays.run_confirm().is_some() {
+        h.keys("y");
+    }
+    let id = sent_run(&mut h);
+    h.tab_db(0, DbEvent::Failed { id, error: DbError::NotUndoable(Vec::new()), cancelled: false });
+    assert!(failed(&h).contains("cannot be read from its text"), "{}", failed(&h));
     // Let run (the driver's other choice): Messages names the tables.
     h.ctrl('e');
     if h.app.overlays.run_confirm().is_some() {

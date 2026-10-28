@@ -194,7 +194,9 @@ pub enum DbError {
     ReservedSavepoint,
     /// MySQL: an `EXPLAIN ANALYZE` of a write names tables whose changes a rollback does not undo
     /// (an engine that is not InnoDB, such as MyISAM or MEMORY, or a view, whose tables are not
-    /// known): it was not sent. The tables, `schema.table (engine)`.
+    /// known), or tables whose triggers may write elsewhere: it was not sent. The tables,
+    /// `schema.table (engine)`; none when the text could not be read for its names (an
+    /// executable comment, a text too long).
     NotUndoable(Vec<String>),
     /// A statement sent as a plain read ([`TxStep::ReadOnly`]) asks for a read-write transaction
     /// or turns read-only off (`SET TRANSACTION READ WRITE`, `set_config()` of it, …), as the
