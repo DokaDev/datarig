@@ -100,6 +100,8 @@ pub(super) fn draw(cx: &Look, p: &PlanTab, area: Rect, beside: bool, buf: &mut B
                 let msg = Msg::PlanDetailRowsMeasured { est, actual, loops, all };
                 v.push((Label::PlanDetailRows, cx.i18n.msg(&msg).to_string(), base));
             }
+            // Neither estimated nor measured (a line the server gives no numbers): nothing to say.
+            None if n.plan_rows.is_none() => {}
             None => {
                 v.push((Label::PlanDetailRows, cx.i18n.msg(&Msg::PlanDetailRowsEstimated { est }).to_string(), base))
             }

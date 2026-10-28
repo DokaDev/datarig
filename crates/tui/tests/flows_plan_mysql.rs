@@ -455,3 +455,40 @@ fn a_postgres_plan_without_its_execution_time_still_says_it_is_unknown() {
     assert!(screen.contains("execution ? · planning 7.803 ms"), "{screen}");
     assert!(!screen.contains("measured"), "{screen}");
 }
+
+/// A node the server gives no numbers (the sort's line of an estimated tree) has no rows line in
+/// its detail; one with an estimate keeps it.
+#[test]
+fn a_node_without_numbers_has_no_rows_line_in_its_detail() {
+    let mut h = shown("join_group_sort.tree.txt", " ex");
+    h.key(KeyCode::Enter);
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("≈273: the sum of its children"), "the sort's detail:\n{screen}");
+    assert!(!screen.contains("per loop"), "no empty estimate:\n{screen}");
+    h.keys("j");
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("estimated 7 per loop"), "the next node's estimate:\n{screen}");
+}
+
+/// The summary's cards cut a long node name to one line: their numbers stay in the card.
+#[test]
+fn a_long_node_name_leaves_the_cards_numbers_in_view() {
+    let long = "Covering index lookup on o using orders_user_id_idx (user_id=u.id)";
+    let tree = format!(
+        "-> Nested loop inner join  (cost=10 rows=10) (actual time=0.1..2 rows=1000 loops=1)\n    \
+         -> Table scan on u  (cost=1 rows=10) (actual time=0.01..0.02 rows=10 loops=1)\n    \
+         -> {long}  (cost=9 rows=1) (actual time=0.09..0.18 rows=100 loops=10)\n"
+    );
+    let mut h = mysql();
+    let (id, _) = keyed(&mut h, "SELECT 1;", " ea");
+    h.db(tree_page(id, &tree));
+    h.app.focus = Focus::Results;
+    h.keys("2");
+    let screen = h.screen(120, 40);
+    for want in ["Slowest node", "of the whole", "Worst row estimate", "×100 more rows", "Covering index lookup on o"]
+    {
+        assert!(screen.contains(want), "{want}:\n{screen}");
+    }
+    assert!(!screen.contains(long) && screen.contains('…'), "the name is cut, not wrapped:\n{screen}");
+    insta::assert_snapshot!("plan_mysql_long_name_summary_en_120x40", h.draw(120, 40).backend());
+}
