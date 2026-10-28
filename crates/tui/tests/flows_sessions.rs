@@ -241,7 +241,7 @@ fn a_refused_start_up_statement_is_said_with_its_source_and_number() {
     };
     h.tab_db(0, DbEvent::ConnectFailed { error, auth: false });
     assert!(
-        h.screen(220, 40).contains("statement 2 of the Startup SQL “reporting” of the environment prod failed"),
+        h.screen(220, 40).contains("statement 2 of Startup SQL “reporting” of environment prod failed"),
         "{}",
         h.screen(220, 40)
     );
@@ -1065,7 +1065,7 @@ fn the_session_view_lists_what_a_profiles_sessions_start_with_and_from_where() {
         "Lock wait        5s     environment prod",
         "Idle disconnect  never  app setting",
         "Idle rollback    30m    environment prod",
-        "From the Startup SQL “reporting” of the environment prod:",
+        "From Startup SQL “reporting” of environment prod:",
         "  SET statement_timeout = '30s'",
         "    behind a pooler: per transaction as SET LOCAL statement_timeout = '30s'",
         "From its own startup SQL:",
@@ -1214,7 +1214,7 @@ fn a_mysql_profiles_session_view_has_no_pooler_lines() {
     h.command("session");
     let screen = h.screen(120, 40);
     assert!(screen.contains("local-pg · MySQL · environment prod"), "{screen}");
-    assert!(screen.contains("From the Startup SQL “my_ro” of the environment prod:"), "{screen}");
+    assert!(screen.contains("From Startup SQL “my_ro” of environment prod:"), "{screen}");
     assert!(screen.contains("  SET SESSION sql_mode = 'ANSI_QUOTES'"), "{screen}");
     assert!(!screen.contains("behind a pooler"), "{screen}");
 }
@@ -1229,9 +1229,7 @@ fn the_session_view_says_a_skipped_preset_and_no_statements() {
     h.command("session");
     let screen = h.screen(120, 40);
     assert!(
-        screen.contains(
-            "Not used: the Startup SQL “reporting” of the environment prod (the profile says startup = \"none\")"
-        ),
+        screen.contains("Not used: Startup SQL “reporting” of environment prod (the profile says startup = \"none\")"),
         "{screen}"
     );
     assert!(screen.contains("No startup statements"), "{screen}");
