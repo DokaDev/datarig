@@ -42,7 +42,6 @@ fn every_fixture_of_every_version_is_a_plan() {
                 // A subquery in the select list is a tree of its own after the query's.
                 let roots = if name == "scalar_sub" { 2 } else { 1 };
                 assert_eq!(plan.roots().count(), roots, "mysql{v} {file}");
-                // An INSERT's tree has no measures at all.
                 let measured = plan.nodes.iter().any(|n| n.actual.is_some());
                 assert_eq!(plan.analyzed, measured, "mysql{v} {file}");
                 assert!(analyzed || !measured, "mysql{v} {file}");
@@ -60,11 +59,16 @@ fn every_fixture_of_every_version_is_a_plan() {
                         assert!(n.self_ms.is_some_and(|s| s >= 0.0), "mysql{v} {file} node {i}");
                     }
                 }
-                // Self times add up to the roots' totals.
-                if measured {
+                // Self times add up to the roots' totals, unless a node's children took longer than
+                // it (a self time cut at zero).
+                let cut = plan.nodes.iter().any(|n| {
+                    let below: f64 = n.children.iter().filter_map(|&c| plan.nodes[c].total_ms).sum();
+                    n.total_ms.is_some_and(|t| t < below)
+                });
+                if measured && !cut {
                     let selfs: f64 = plan.nodes.iter().filter_map(|n| n.self_ms).sum();
                     let roots: f64 = plan.roots().filter_map(|r| plan.nodes[r].total_ms).sum();
-                    assert!(selfs + 1e-9 >= roots, "mysql{v} {file}: {selfs} < {roots}");
+                    assert!((selfs - roots).abs() < 1e-9 * roots.max(1.0), "mysql{v} {file}: {selfs} != {roots}");
                 }
             }
         }
@@ -110,6 +114,8 @@ fn numbers_in_every_form_are_read() {
     let n = node("Filter: (x)  (cost=268..268 rows=1) (actual time=0.0266..0.0266 rows=0.116 loops=43)");
     let a = n.actual.unwrap();
     assert!(a.rows_decimals && a.rows == 0.116 && a.loops == 43.0);
+    let a = node("Table scan on t  (cost=1 rows=1) (actual time=1..2 rows=1e+06 loops=1)").actual.unwrap();
+    assert!(!a.rows_decimals && a.rows == 1e6);
     let n = node("Index lookup on o using c_id (c_id=c.id)  (cost=2.52 rows=10) (never executed)");
     assert_eq!(n.actual.map(|a| a.loops), Some(0.0));
     assert_eq!(n.cost, Some((2.52, 2.52)));
@@ -120,8 +126,8 @@ fn numbers_in_every_form_are_read() {
 #[test]
 fn a_literal_cannot_forge_nodes_or_numbers() {
     let text = "-> Filter: (c.`name` = 'a\\n    -> Fake node  (cost=1 rows=1) (actual time=1..2 rows=3 loops=1)')  \
-                (cost=20.2 rows=200) (actual time=1.82..1.83 rows=5 loops=1)\n    -> Table scan on c  (cost=20.2 rows=200) \
-                (actual time=0.027..0.0414 rows=42 loops=1)\n";
+                (cost=20.2 rows=200) (actual time=1.82..1.83 rows=5 loops=1)\n    \
+                -> Table scan on c  (cost=20.2 rows=200) (actual time=0.027..0.0414 rows=42 loops=1)\n";
     let plan = parse(text).unwrap();
     assert_eq!(plan.nodes.len(), 2);
     assert_eq!(plan.nodes[0].plan_rows, Some(200.0));
@@ -143,8 +149,11 @@ fn what_is_not_a_tree_is_refused() {
         assert_eq!(parse(bad), Err(PlanError::NotAPlan), "{bad:?}");
     }
     assert!(!is_tree("{\"query\": 1}") && !is_tree("") && is_tree("\n-> Table scan on c"));
-    let deep: String = (0..super::super::MAX_NODES + 1).map(|_| "-> Hash\n").collect();
-    assert_eq!(parse(&deep), Err(PlanError::TooBig));
+    let many: String = (0..super::super::MAX_NODES + 1).map(|_| "-> Hash\n").collect();
+    assert_eq!(parse(&many), Err(PlanError::TooBig));
+    // A deep tree is read without recursion.
+    let deep: String = (0..2_000).map(|d| format!("{}-> Filter: (x)  (cost=1 rows=1)\n", " ".repeat(d * 4))).collect();
+    assert_eq!(parse(&deep).map(|p| p.nodes.last().map(|n| n.depth)), Ok(Some(1_999)));
 }
 
 /// A node the server writes no measure for holds what is under it; the plan is still timed.
@@ -158,8 +167,8 @@ fn unmeasured_nodes_hold_their_children() {
     assert_eq!(plan.measure(), Measure::Time);
 }
 
-/// Under a limit and on the inner side of a semi join, fewer rows than estimated is no
-/// misestimate.
+/// Under a limit and on the inner side of a nested loop semi or anti join, fewer rows than
+/// estimated is no misestimate; what a node reading its input in full reads is read in full.
 #[test]
 fn early_stops_are_marked() {
     let plan = parse(&fixture("8.4", "subquery_in.analyze.txt")).unwrap();
@@ -167,6 +176,41 @@ fn early_stops_are_marked() {
     for &c in &plan.nodes[limit].children {
         assert!(plan.nodes[c].early_stop);
     }
+    // Under the materialization the subquery is read in full.
+    let scan = plan.nodes.iter().position(|n| n.op == "Table scan" && n.target.as_deref() == Some("on o")).unwrap();
+    assert!(!plan.nodes[scan].early_stop);
+    let plan = parse(&fixture("8.4", "not_exists.analyze.txt")).unwrap();
+    assert!(plan.nodes[plan.nodes[0].children[1]].early_stop, "inner side of the antijoin");
+    assert!(!plan.nodes[plan.nodes[0].children[0]].early_stop, "outer side");
+    // The antijoin itself thought 400000 rows and gave 180.
+    assert!(plan.misestimate(0).is_some_and(|o| !o.under && o.ratio > 1_000.0));
+    // A hash join whose condition says "semijoin" is no semi join.
+    let plan = parse(
+        "-> Inner hash join (t.a = 'semijoin')  (cost=9 rows=9) (actual time=1..2 rows=9 loops=1)\n    \
+         -> Table scan on t  (cost=1 rows=9) (actual time=1..1 rows=9 loops=1)\n    \
+         -> Hash\n        -> Table scan on u  (cost=1 rows=9) (actual time=1..1 rows=1 loops=1)\n",
+    )
+    .unwrap();
+    assert!(plan.nodes.iter().all(|n| !n.early_stop));
+}
+
+/// A measure on a tree that has none elsewhere is a name's text (8.0 writes sort keys
+/// unquoted): the plan stays estimates only.
+#[test]
+fn a_lone_measure_is_not_believed() {
+    let text = "-> Sort: t.x  (actual time=1..2 rows=3 loops=1)\n    -> Table scan on t  (cost=1 rows=9)\n";
+    let plan = parse(text).unwrap();
+    assert!(!plan.analyzed && plan.nodes.iter().all(|n| n.actual.is_none()));
+    assert_eq!(plan.measure(), Measure::Cost);
+}
+
+/// Only a result that reads as a tree with an estimate or a measure is a plan.
+#[test]
+fn a_column_named_explain_is_not_enough() {
+    use crate::driver::ExplainFormat::MySqlTree;
+    assert!(!MySqlTree.holds("EXPLAIN", "VARCHAR", "-> hi"));
+    assert!(!MySqlTree.holds("EXPLAIN", "VARCHAR", "-> <not executable by iterator executor>"));
+    assert!(MySqlTree.holds("explain", "VARCHAR", "-> Table scan on c  (cost=20.2 rows=200)"));
 }
 
 /// The format seam: how MySQL's tree is asked for, told in a result and read.
@@ -174,7 +218,7 @@ fn early_stops_are_marked() {
 fn the_tree_format_asks_tells_and_reads() {
     use crate::driver::ExplainFormat::{MySqlTree, PostgresJson};
     assert_eq!(MySqlTree.explain_sql("SELECT 1", false), "EXPLAIN FORMAT=TREE SELECT 1");
-    assert_eq!(MySqlTree.explain_sql("SELECT 1", true), "EXPLAIN ANALYZE SELECT 1");
+    assert_eq!(MySqlTree.explain_sql("SELECT 1", true), "EXPLAIN ANALYZE FORMAT=TREE SELECT 1");
     assert_eq!(PostgresJson.explain_sql("SELECT 1", false), "EXPLAIN (FORMAT JSON) SELECT 1");
     let text = fixture("9.7", "scan.analyze.txt");
     assert!(MySqlTree.holds("EXPLAIN", "TEXT", &text));

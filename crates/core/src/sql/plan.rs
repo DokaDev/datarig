@@ -1,8 +1,8 @@
 //! Query plans: what a database did (or would do) for one statement, as a tree of nodes, in a
 //! model that does not depend on the database ([`Plan`], [`PlanNode`]). PostgreSQL's
 //! `EXPLAIN (FORMAT JSON)` is one source ([`pg`]), MySQL's tree text another ([`mysql`]); the
-//! format a driver gives picks the reader ([`ExplainFormat::read`]). [`text`] writes a plan the way `psql` shows a text `EXPLAIN`, from the
-//! model alone: nothing is asked of the server again.
+//! format a driver gives picks the reader ([`ExplainFormat::read`]). [`text`] writes a plan the
+//! way `psql` shows a text `EXPLAIN`, from the model alone: nothing is asked of the server again.
 //!
 //! **Time and cost.** A plan read with `ANALYZE` (and timing) has measured times: each node's
 //! total time ([`PlanNode::total_ms`], its subtree's) and self time ([`PlanNode::self_ms`],
@@ -352,19 +352,23 @@ impl ExplainFormat {
     pub fn explain_sql(self, statement: &str, analyze: bool) -> String {
         match self {
             ExplainFormat::PostgresJson => explain_sql(statement, analyze),
-            // `EXPLAIN ANALYZE` has only the tree form on MySQL 8.0 (and it is the default on
-            // later versions).
-            ExplainFormat::MySqlTree if analyze => format!("EXPLAIN ANALYZE {statement}"),
+            // Named, as from 8.3 on the session's `explain_format` picks the form otherwise.
+            ExplainFormat::MySqlTree if analyze => format!("EXPLAIN ANALYZE FORMAT=TREE {statement}"),
             ExplainFormat::MySqlTree => format!("EXPLAIN FORMAT=TREE {statement}"),
         }
     }
 
     /// Whether a result of one column (`column`, its type `type_name`) holding `text` is a plan
-    /// in this format.
+    /// in this format. MySQL's tree: a column `EXPLAIN` whose text reads as a tree with at least
+    /// one estimate or measure (not any text that starts with `-> `).
     pub fn holds(self, column: &str, type_name: &str, text: &str) -> bool {
         match self {
             ExplainFormat::PostgresJson => pg::is_plan_column(column, type_name),
-            ExplainFormat::MySqlTree => column.eq_ignore_ascii_case("EXPLAIN") && mysql::is_tree(text),
+            ExplainFormat::MySqlTree => {
+                column.eq_ignore_ascii_case("EXPLAIN")
+                    && mysql::is_tree(text)
+                    && mysql::parse(text).is_ok_and(|p| p.nodes.iter().any(|n| n.cost.is_some() || n.actual.is_some()))
+            }
         }
     }
 

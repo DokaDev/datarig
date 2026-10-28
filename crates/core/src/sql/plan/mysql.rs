@@ -6,6 +6,9 @@
 //! `(actual time=F..L rows=R loops=N)` or `(never executed)`. The groups are read from the end of
 //! the line only, and only in that exact shape: a string literal in a condition is written on
 //! the same line (a newline in it as `\n`), so whatever it holds stays part of the operation.
+//! A name the server writes unquoted (8.0 writes sort keys so) could still end a line that has
+//! no group of its own like one: a measure is believed only when every node with an estimate
+//! has one too, as in a real `EXPLAIN ANALYZE`.
 //! Lines the server adds without `-> ` (none are known) are kept under the node above them.
 //!
 //! Times are per loop, like PostgreSQL's: a node's total time is its last-row time times its
@@ -36,8 +39,8 @@ pub fn parse(text: &str) -> Result<Plan, PlanError> {
             return Err(PlanError::NotAPlan);
         }
         let depth = indent / 4;
-        // A node is at most one level under the one before it.
-        if depth > open.len() || (plan.nodes.is_empty() && depth != 0) {
+        // A node is at most one level under the one before it (the first at the top).
+        if depth > open.len() {
             return Err(PlanError::NotAPlan);
         }
         if plan.nodes.len() >= super::MAX_NODES {
@@ -59,7 +62,16 @@ pub fn parse(text: &str) -> Result<Plan, PlanError> {
     if plan.nodes.is_empty() || plan.nodes.iter().any(|n| n.op.starts_with("<not executable")) {
         return Err(PlanError::NotAPlan);
     }
-    plan.analyzed = plan.nodes.iter().any(|n| n.actual.is_some());
+    // Measured when every node with an estimate is (a real `EXPLAIN ANALYZE`); otherwise what
+    // looked like a measure is text of a node's own.
+    let measured = plan.nodes.iter().any(|n| n.actual.is_some())
+        && plan.nodes.iter().all(|n| n.cost.is_none() || n.actual.is_some());
+    if !measured {
+        for n in &mut plan.nodes {
+            n.actual = None;
+        }
+    }
+    plan.analyzed = measured;
     plan.timed = plan.analyzed;
     derive(&mut plan);
     plan.finish();
@@ -138,7 +150,7 @@ fn actual(g: &str) -> Option<Actual> {
         startup_ms: Some(number(first)?),
         total_ms: Some(number(last)?),
         rows: number(rows)?,
-        rows_decimals: rows.contains(['.', 'e']),
+        rows_decimals: number(rows)?.fract() != 0.0,
         loops: number(loops)?,
     })
 }
@@ -161,16 +173,26 @@ fn number(s: &str) -> Option<f64> {
     ok.then(|| s.parse::<f64>().ok()).flatten().filter(|v| v.is_finite() && *v >= 0.0)
 }
 
+/// Operations that read their input to its end before they give a row: what is under one is
+/// read in full, whatever stops reading it.
+const READS_ALL: &[&str] = &["Sort", "Materialize", "Aggregate", "Hash", "Temporary table"];
+
 /// Whether node `i`'s parent may stop reading it before its end: under a limit (within its own
-/// subquery), or the inner side of a semi or anti join.
+/// subquery, with nothing between that reads its input in full), or the inner side of a nested
+/// loop semi or anti join.
 fn stops_early(plan: &Plan, i: usize) -> bool {
     let mut at = i;
     while let Some(p) = plan.nodes[at].parent {
         let (node, parent) = (&plan.nodes[at], &plan.nodes[p]);
-        if parent.op.starts_with("Limit") {
+        // The operation without what it is about (`Inner hash join (t.a = 'semijoin')`).
+        let kind = parent.op.split('(').next().unwrap_or_default();
+        if kind.starts_with("Limit") {
             return true;
         }
-        let semi = parent.op.contains("semijoin") || parent.op.contains("antijoin");
+        if READS_ALL.iter().any(|r| kind.starts_with(r)) {
+            return false;
+        }
+        let semi = kind.starts_with("Nested loop") && (kind.contains("semijoin") || kind.contains("antijoin"));
         if semi && parent.children.last() == Some(&at) {
             return true;
         }
