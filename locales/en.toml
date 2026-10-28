@@ -243,6 +243,7 @@
 "safety.why.locks" = "takes locks that block other sessions until released (LOCK TABLES, HANDLER, …)"
 "safety.why.privileges" = "changes accounts or privileges"
 "safety.why.rename" = "renames it: what uses the old name breaks"
+"safety.why.analyze_runs_code" = "EXPLAIN ANALYZE runs it, with a function that is not a built-in: what the function writes to a non-transactional table (MyISAM) is not rolled back"
 "safety.why.setting" = "changes a session setting that turns a server check off or changes how SQL is read"
 "safety.why.dynamic_sql" = "prepares SQL given as text that cannot be checked (PREPARE)"
 "safety.why.server_command" = "acts on the whole database server, beyond this session (KILL, FLUSH, SET GLOBAL, …)"
@@ -395,6 +396,11 @@
 "db.connection" = "could not talk to the server (details in errors.log)"
 "db.not_supported" = "this session does not run statements"
 "db.server_too_old" = "PostgreSQL 12 or newer is required for key markers and INSERT copy"
+"db.not_undoable_unread" = "not run: EXPLAIN ANALYZE runs the statement, and which tables it would change cannot be read from its text (an executable comment, or a text too long). EXPLAIN without ANALYZE shows the plan"
+"db.not_undoable.trigger" = "has triggers"
+"db.not_undoable.triggers_hidden" = "its triggers are not visible to this account"
+"db.not_undoable_no_trigger" = "not run: EXPLAIN ANALYZE runs the statement, and whether a rollback undoes all it would change in {tables} cannot be checked (triggers are listed only to an account with the TRIGGER privilege). EXPLAIN without ANALYZE shows the plan; to measure it, use an account granted the TRIGGER privilege on those tables directly (a grant through a role is not seen)"
+"db.not_undoable" = "not run: EXPLAIN ANALYZE runs the statement, and a rollback cannot undo what it would change in {tables} (not InnoDB, a view, or a table with triggers). EXPLAIN without ANALYZE shows the plan"
 "db.rows_not_read" = { one = "the statement ran and returned rows after all: only its first row was read, the rest cannot be fetched", other = "the statement ran and returned rows after all: only its first {count} rows were read, the rest cannot be fetched" }
 "db.schema_changed" = "the table changed while the query was running; run it again"
 "db.no_result" = "the query ended without a result; run it again"
@@ -483,6 +489,7 @@
 "query.info.insert_id" = "last insert id: {id}"
 "query.info.warnings" = { one = "{count} warning: SHOW WARNINGS shows it", other = "{count} warnings: SHOW WARNINGS shows them" }
 "query.info.server" = "the server says: {text}"
+"query.info.not_undone" = "EXPLAIN ANALYZE ran this on {tables}: changes there were not rolled back"
 "query.info.more_results" = { one = "{count} more result set was read and not shown", other = "{count} more result sets were read and not shown" }
 "query.info.step" = "statement {step}: {info}"
 "query.implicit_commit" = "statement {step} commits the open transaction before it runs (MySQL commits before DDL, LOCK TABLES, another BEGIN, …)"

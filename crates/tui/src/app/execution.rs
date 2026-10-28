@@ -1962,6 +1962,9 @@ fn info_notices(info: &datarig_core::driver::StatementInfo) -> Vec<Notice> {
     if info.more_results > 0 {
         out.push(Notice::new(Msg::QueryInfoMoreResults { count: u64::from(info.more_results) }, Level::Warning));
     }
+    if !info.not_undone.is_empty() {
+        out.push(Notice::new(Msg::QueryInfoNotUndone { tables: info.not_undone.join(", ") }, Level::Warning));
+    }
     out
 }
 
@@ -1995,6 +1998,29 @@ impl App {
         }
     }
 
+    /// Why an `EXPLAIN ANALYZE` was not sent, naming its tables (`schema.table (engine)`) in the
+    /// UI's language; with tables whose triggers the account cannot see, what to do about it.
+    fn not_undoable_text(&self, tables: &[String]) -> String {
+        const TRIGGER: &str = " (trigger)";
+        const HIDDEN: &str = " (triggers not visible)";
+        let hidden = tables.iter().any(|t| t.ends_with(HIDDEN));
+        let named: Vec<String> = tables
+            .iter()
+            .map(|t| {
+                if let Some(name) = t.strip_suffix(HIDDEN) {
+                    format!("{name} ({})", self.i18n.label(Label::DbNotUndoableTriggersHidden))
+                } else if let Some(name) = t.strip_suffix(TRIGGER) {
+                    format!("{name} ({})", self.i18n.label(Label::DbNotUndoableTrigger))
+                } else {
+                    t.clone()
+                }
+            })
+            .collect();
+        let tables = named.join(", ");
+        let m = if hidden { Msg::DbNotUndoableNoTrigger { tables } } else { Msg::DbNotUndoable { tables } };
+        self.i18n.msg(&m).to_string()
+    }
+
     /// A database failure as the UI says it: the server's own message as it is (it is data),
     /// anything else in words, with its raw detail in the error log.
     pub(super) fn db_error_text(&self, e: &DbError) -> String {
@@ -2010,6 +2036,8 @@ impl App {
             }
             DbError::NoAnswer(d) => return self.i18n.msg(&Msg::DbNoAnswer { elapsed: *d }).to_string(),
             DbError::RowsNotRead(n) => return self.i18n.msg(&Msg::DbRowsNotRead { count: *n }).to_string(),
+            DbError::NotUndoable(t) if t.is_empty() => Label::DbNotUndoableUnread,
+            DbError::NotUndoable(t) => return self.not_undoable_text(t),
             DbError::Closed => Label::DbClosed,
             DbError::NotSupported => Label::DbNotSupported,
             DbError::ServerTooOld => Label::DbServerTooOld,

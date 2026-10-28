@@ -233,6 +233,10 @@ pub enum Danger {
     /// MySQL: changes accounts or privileges (`GRANT`, `REVOKE`, `CREATE USER`, `SET
     /// PASSWORD`, …).
     Privileges,
+    /// MySQL: `EXPLAIN ANALYZE` of a statement that calls a function that is not a built-in:
+    /// the statement runs, and what the function writes to a table that is not transactional
+    /// (MyISAM, MEMORY, …) the rollback does not undo.
+    AnalyzeRunsCode,
     /// MySQL: renames a table, a column, an index or another object (`RENAME TABLE`, `ALTER …
     /// RENAME`): what uses the old name breaks.
     Rename,

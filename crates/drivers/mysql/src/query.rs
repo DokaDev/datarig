@@ -103,9 +103,9 @@ use datarig_core::driver::{
 };
 use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
 use datarig_core::sql::lexer::{Tok, Token, lex_in};
-use datarig_core::sql::risk::Class;
 use datarig_core::sql::risk::mysql as risk;
 use datarig_core::sql::risk::repeat::NotRepeatable;
+use datarig_core::sql::risk::{Class, Danger};
 use futures::future::BoxFuture;
 use mysql_async::consts::StatusFlags;
 use mysql_async::prelude::Queryable;
@@ -628,6 +628,76 @@ async fn run<'a>(
     Ok(())
 }
 
+/// What an `EXPLAIN ANALYZE` of a write does when a table it names keeps its changes past a
+/// rollback (an engine that is not InnoDB, or a view whose tables are not known).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NotUndone {
+    /// It is not sent; the run fails saying which tables ([`DbError::NotUndoable`]).
+    Refuse,
+    /// It runs; what it says of the statement names them ([`StatementInfo::not_undone`]).
+    #[allow(dead_code)]
+    Warn,
+}
+
+/// How this session treats such a statement.
+const NOT_UNDONE: NotUndone = NotUndone::Refuse;
+
+/// The tables `sql` names that keep their changes past a rollback, as the server tells
+/// (`schema.table (engine)`): base tables of an engine that is not transactional (InnoDB, NDB
+/// are), views (whose tables are not known), tables with triggers (`schema.table (trigger)`,
+/// whose code may write elsewhere) and tables whose triggers the session may not see (without
+/// the `TRIGGER` privilege the data dictionary lists none: `schema.table (triggers not
+/// visible)`). A text whose names cannot be read (an executable comment, a text too long to
+/// read) gives no list: `None`. The question reads the data dictionary only (no table is opened
+/// or locked). Not seen: a session's temporary tables, which the data dictionary does not list.
+async fn not_undone(
+    conn: &mut Conn,
+    link: &mut Link,
+    env: &Env<'_>,
+    s: &State,
+    sql: &str,
+) -> Result<Option<Vec<String>>, Closed> {
+    let Some(names) = risk::named(sql, s.mode) else { return Ok(None) };
+    let ask = not_undone_sql(&names, Dialect::MySql(s.mode));
+    env.busy.store(true, Ordering::SeqCst);
+    let answer = link.guard(Some(env.killer), conn.query::<String, _>(ask)).await?;
+    idle(env, link).await;
+    Ok(match answer {
+        Ok(tables) => Some(tables),
+        // Not known: as one that is not undone.
+        Err(e) => Some(vec![format!("? ({})", failure(&e).0.raw())]),
+    })
+}
+
+/// The question [`not_undone`] asks about `names` (as `risk::mysql::named` gives them), read
+/// as [`check_sql`] reads them.
+fn not_undone_sql(names: &[String], d: Dialect) -> String {
+    let cond = name_condition(names, d);
+    // The session's account as the privilege tables write a grantee (`'user'@'host'`); a grant
+    // that reaches it otherwise (through a role) is not seen, so the table counts as one whose
+    // triggers are not visible. A global grant counts only without partial revokes: with them on,
+    // it may be revoked for the table's schema, which the privilege tables do not show.
+    let me =
+        "CONCAT(QUOTE(SUBSTRING_INDEX(CURRENT_USER(), '@', 1)), '@', QUOTE(SUBSTRING_INDEX(CURRENT_USER(), '@', -1)))";
+    format!(
+        "SELECT {OWN_READ_HINTS} CONCAT(t.TABLE_SCHEMA, '.', t.TABLE_NAME, ' (', COALESCE(t.ENGINE, t.TABLE_TYPE), ')') \
+         FROM information_schema.TABLES t WHERE (t.TABLE_TYPE = 'VIEW' \
+         OR UPPER(COALESCE(t.ENGINE, '')) NOT IN ('INNODB', 'NDBCLUSTER', 'NDB')) AND ({cond}) \
+         UNION SELECT CONCAT(t.TABLE_SCHEMA, '.', t.TABLE_NAME, ' (trigger)') FROM information_schema.TABLES t \
+         WHERE EXISTS (SELECT 1 FROM information_schema.TRIGGERS g WHERE g.EVENT_OBJECT_SCHEMA = t.TABLE_SCHEMA \
+         AND g.EVENT_OBJECT_TABLE = t.TABLE_NAME) AND ({cond}) \
+         UNION SELECT CONCAT(t.TABLE_SCHEMA, '.', t.TABLE_NAME, ' (triggers not visible)') \
+         FROM information_schema.TABLES t WHERE t.TABLE_TYPE = 'BASE TABLE' AND ({cond}) \
+         AND NOT EXISTS (SELECT 1 FROM information_schema.USER_PRIVILEGES p \
+         WHERE p.GRANTEE = {me} AND p.PRIVILEGE_TYPE = 'TRIGGER' AND @@GLOBAL.partial_revokes = 0) \
+         AND NOT EXISTS (SELECT 1 FROM information_schema.SCHEMA_PRIVILEGES p \
+         WHERE p.GRANTEE = {me} AND p.PRIVILEGE_TYPE = 'TRIGGER' AND p.TABLE_SCHEMA = t.TABLE_SCHEMA) \
+         AND NOT EXISTS (SELECT 1 FROM information_schema.TABLE_PRIVILEGES p \
+         WHERE p.GRANTEE = {me} AND p.PRIVILEGE_TYPE = 'TRIGGER' AND p.TABLE_SCHEMA = t.TABLE_SCHEMA \
+         AND p.TABLE_NAME = t.TABLE_NAME) ORDER BY 1 LIMIT 20"
+    )
+}
+
 /// How an `EXPLAIN ANALYZE` is undone: what goes before it, and after it.
 struct Undo {
     before: String,
@@ -705,7 +775,32 @@ async fn statement<'a>(
             return Ok(None);
         }
     }
-    let undo = (explains(sql, s.mode) && risk.rolls_back()).then(|| Undo::of(s.tx.open));
+    // An `EXPLAIN` whose text could not be read (an executable comment may hold `ANALYZE`, a text
+    // too long) is undone and checked as one that runs: its names cannot be read either, so it is
+    // not sent.
+    let unread = matches!(risk.danger, Some(Danger::ExecutableComment | Danger::TooComplex));
+    let undo = (explains(sql, s.mode) && (risk.rolls_back() || unread)).then(|| Undo::of(s.tx.open));
+    // A write measured by `EXPLAIN ANALYZE` is undone by the rollback only on transactional
+    // tables: the others are asked about first.
+    let mut not_undone_on = Vec::new();
+    if undo.is_some() && (risk.rollback_matters() || unread) {
+        let found = halt!(not_undone(conn, link, env, s, sql).await, Some(reply));
+        // Cancelled while the server was asked: the statement is not sent.
+        if env.asked.load(Ordering::SeqCst) {
+            reply.fail(DbError::Cancelled, true);
+            return Ok(None);
+        }
+        // Names that cannot be read: which tables it would change is not known.
+        let Some(found) = found else {
+            reply.fail(DbError::NotUndoable(Vec::new()), false);
+            return Ok(None);
+        };
+        not_undone_on = found;
+        if !not_undone_on.is_empty() && NOT_UNDONE == NotUndone::Refuse {
+            reply.fail(DbError::NotUndoable(not_undone_on), false);
+            return Ok(None);
+        }
+    }
     // The result is held: the user's transaction, a held last statement, a listing the app
     // cannot read on by running it again (`SHOW`, `DESCRIBE`), or a locking read (the limit
     // would lock fewer rows than asked, and its next page would lock them again): read to its
@@ -917,6 +1012,10 @@ async fn statement<'a>(
         return Err(Halted { stop: Stop::Lost(error), reply: None });
     }
     let elapsed = step.start.elapsed();
+    let mut got = got;
+    match &mut got {
+        Got::Done { info, .. } | Got::Rows { info, .. } => info.not_undone = not_undone_on,
+    }
     match got {
         Got::Done { outcome, info } => {
             send_info(env, reply.id, step.index, &info);
@@ -1431,6 +1530,7 @@ fn info_of(qr: &QueryResult<'_, 'static, TextProtocol>) -> StatementInfo {
         warnings: qr.warnings(),
         message: (!message.trim().is_empty()).then(|| message.into_owned()),
         more_results: 0,
+        not_undone: Vec::new(),
     }
 }
 
@@ -1649,6 +1749,16 @@ fn name_parts(name: &str) -> Vec<String> {
 /// database's table (`db.t`), a column of a table (`t.c`, `db.t.c`) or an alias: every reading
 /// that can name a table is asked about.
 fn check_sql(names: &[String], d: Dialect) -> String {
+    let cond = name_condition(names, d);
+    format!(
+        "SELECT {OWN_READ_HINTS} @@SESSION.transaction_isolation, (SELECT CONCAT(t.TABLE_SCHEMA, '.', t.TABLE_NAME) \
+         FROM information_schema.TABLES t WHERE t.TABLE_TYPE <> 'BASE TABLE' AND ({cond}) LIMIT 1)"
+    )
+}
+
+/// The rows of `information_schema.TABLES t` that `names` may name, without case: a bare name a
+/// table of the current database, a qualified one a database's table (or a table's column).
+fn name_condition(names: &[String], d: Dialect) -> String {
     let mut bare: Vec<String> = Vec::new();
     let mut qualified: Vec<(String, String)> = Vec::new();
     for name in names {
@@ -1680,11 +1790,7 @@ fn check_sql(names: &[String], d: Dialect) -> String {
         let list: Vec<String> = qualified.iter().map(|(a, b)| format!("({}, {})", lit(a), lit(b))).collect();
         cond.push(format!("(LOWER(t.TABLE_SCHEMA), LOWER(t.TABLE_NAME)) IN ({})", list.join(", ")));
     }
-    let cond = if cond.is_empty() { "FALSE".to_string() } else { cond.join(" OR ") };
-    format!(
-        "SELECT {OWN_READ_HINTS} @@SESSION.transaction_isolation, (SELECT CONCAT(t.TABLE_SCHEMA, '.', t.TABLE_NAME) \
-         FROM information_schema.TABLES t WHERE t.TABLE_TYPE <> 'BASE TABLE' AND ({cond}) LIMIT 1)"
-    )
+    if cond.is_empty() { "FALSE".to_string() } else { cond.join(" OR ") }
 }
 
 /// Count with `sql` (the app's `SELECT COUNT(*) FROM (…) AS datarig_count` of a statement on the

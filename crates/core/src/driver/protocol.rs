@@ -192,6 +192,12 @@ pub enum DbError {
     /// with `datarig_` (`SAVEPOINT`, `RELEASE`, `ROLLBACK TO`): those are the session's own, and
     /// using one would break how it undoes a failed run. It was not sent.
     ReservedSavepoint,
+    /// MySQL: an `EXPLAIN ANALYZE` of a write names tables whose changes a rollback does not undo
+    /// (an engine that is not InnoDB, such as MyISAM or MEMORY, or a view, whose tables are not
+    /// known), or tables whose triggers may write elsewhere: it was not sent. The tables,
+    /// `schema.table (engine)`; none when the text could not be read for its names (an
+    /// executable comment, a text too long).
+    NotUndoable(Vec<String>),
     /// A statement sent as a plain read ([`TxStep::ReadOnly`]) asks for a read-write transaction
     /// or turns read-only off (`SET TRANSACTION READ WRITE`, `set_config()` of it, …), as the
     /// driver's own check reads it: it was not sent. Send it as [`TxStep::Open`] instead.
@@ -275,6 +281,7 @@ impl DbError {
             | DbError::TxNotOpened
             | DbError::CommitUnknown
             | DbError::ReservedSavepoint
+            | DbError::NotUndoable(_)
             | DbError::NotAPlainRead
             | DbError::CancelNotTaken(
                 CancelFailure::Refused
@@ -713,6 +720,9 @@ pub struct StatementInfo {
     pub message: Option<String>,
     /// Result sets after its first one (a procedure's) that were read and dropped, with rows.
     pub more_results: u32,
+    /// MySQL: an `EXPLAIN ANALYZE` of a write ran on these tables, whose changes the rollback did
+    /// not undo (`schema.table (engine)`), when the driver lets such a statement run.
+    pub not_undone: Vec<String>,
 }
 
 /// What a MySQL query session's values were read in, as copying them as SQL needs it: the

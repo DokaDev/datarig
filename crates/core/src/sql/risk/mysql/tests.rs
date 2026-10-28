@@ -45,6 +45,7 @@ fn render(r: &Risk) -> String {
             Danger::Locks => "locks",
             Danger::Privileges => "privileges",
             Danger::Rename => "rename",
+            Danger::AnalyzeRunsCode => "analyze-code",
             Danger::Setting => "setting",
             Danger::DynamicSql => "dynamic-sql",
             Danger::ServerCommand => "server-command",
@@ -677,4 +678,40 @@ fn mysql_never_sets_the_postgres_transaction_flags() {
             assert_eq!(step, TxStep::Opens, "{sql}");
         }
     }
+}
+
+/// Every name a statement writes, for the driver's question of which tables a write measured by
+/// `EXPLAIN ANALYZE` touches: a superset (columns and aliases too), in any statement.
+#[test]
+fn named_gives_every_name_of_every_statement() {
+    let names = named("EXPLAIN ANALYZE DELETE x FROM `shop`.`t` x JOIN u ON u.id = x.id", MODE).unwrap();
+    for n in ["`shop`.`t`", "x", "u", "u.id", "x.id"] {
+        assert!(names.iter().any(|m| m == n), "{n}: {names:?}");
+    }
+    assert!(named("UPDATE a SET v = 1; DELETE FROM b", MODE).unwrap().iter().any(|n| n == "b"));
+    // Every word counts (a keyword may be a table's name).
+    assert_eq!(named("SELECT 1", MODE), Some(vec!["SELECT".to_string()]));
+    // Text the session's mode cannot read gives no names: the driver counts it as not undone.
+    assert_eq!(named("EXPLAIN /*!80000 ANALYZE */ DELETE FROM t", MODE), None);
+    // A keyword is a table name unquoted.
+    assert!(
+        named("EXPLAIN ANALYZE DELETE FROM transaction WHERE id = 1", MODE).unwrap().iter().any(|n| n == "transaction")
+    );
+    assert!(named("UPDATE view SET a = 1", MODE).unwrap().iter().any(|n| n.eq_ignore_ascii_case("view")));
+}
+
+/// `EXPLAIN ANALYZE` that calls a function that is not a built-in asks (it runs the function,
+/// whose writes to a non-transactional table no rollback undoes) and read-only refuses it; a
+/// built-in alone does neither.
+#[test]
+fn analyze_of_a_users_function_asks_and_read_only_refuses_it() {
+    for sql in ["EXPLAIN ANALYZE SELECT f(1)", "EXPLAIN ANALYZE FORMAT=TREE SELECT db.f(id) FROM t"] {
+        let r = risk(sql);
+        assert_eq!(r.danger, Some(Danger::AnalyzeRunsCode), "{sql}");
+        assert!(r.confirm(false).is_some() && r.read_only().is_err(), "{sql}");
+    }
+    let r = risk("EXPLAIN ANALYZE SELECT ABS(a) FROM t");
+    assert!(r.confirm(false).is_none() && r.read_only().is_ok());
+    // Without ANALYZE nothing runs: no question.
+    assert_eq!(risk("EXPLAIN SELECT f(1)").danger, None);
 }
