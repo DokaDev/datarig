@@ -103,9 +103,9 @@ use datarig_core::driver::{
 };
 use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
 use datarig_core::sql::lexer::{Tok, Token, lex_in};
-use datarig_core::sql::risk::Class;
 use datarig_core::sql::risk::mysql as risk;
 use datarig_core::sql::risk::repeat::NotRepeatable;
+use datarig_core::sql::risk::{Class, Danger};
 use futures::future::BoxFuture;
 use mysql_async::consts::StatusFlags;
 use mysql_async::prelude::Queryable;
@@ -643,9 +643,11 @@ enum NotUndone {
 const NOT_UNDONE: NotUndone = NotUndone::Refuse;
 
 /// The tables `sql` names that keep their changes past a rollback, as the server tells
-/// (`schema.table (engine)`): base tables of an engine other than InnoDB, and views. A text whose
-/// names cannot be read counts as one such table, unknown. The question reads the data
-/// dictionary only (no table is opened or locked).
+/// (`schema.table (engine)`): base tables of an engine that is not transactional (InnoDB, NDB
+/// are), views (whose tables are not known), and tables with triggers (`schema.table (trigger)`,
+/// whose code may write elsewhere). A text whose names cannot be read counts as one such table,
+/// unknown. The question reads the data dictionary only (no table is opened or locked). Not
+/// seen: a session's temporary tables, which the data dictionary does not list.
 async fn not_undone(
     conn: &mut Conn,
     link: &mut Link,
@@ -671,8 +673,11 @@ fn not_undone_sql(names: &[String], d: Dialect) -> String {
     let cond = name_condition(names, d);
     format!(
         "SELECT {OWN_READ_HINTS} CONCAT(t.TABLE_SCHEMA, '.', t.TABLE_NAME, ' (', COALESCE(t.ENGINE, t.TABLE_TYPE), ')') \
-         FROM information_schema.TABLES t WHERE (t.TABLE_TYPE = 'VIEW' OR UPPER(COALESCE(t.ENGINE, '')) <> 'INNODB') \
-         AND ({cond}) ORDER BY 1 LIMIT 20"
+         FROM information_schema.TABLES t WHERE (t.TABLE_TYPE = 'VIEW' \
+         OR UPPER(COALESCE(t.ENGINE, '')) NOT IN ('INNODB', 'NDBCLUSTER', 'NDB')) AND ({cond}) \
+         UNION SELECT CONCAT(t.TABLE_SCHEMA, '.', t.TABLE_NAME, ' (trigger)') FROM information_schema.TABLES t \
+         WHERE EXISTS (SELECT 1 FROM information_schema.TRIGGERS g WHERE g.EVENT_OBJECT_SCHEMA = t.TABLE_SCHEMA \
+         AND g.EVENT_OBJECT_TABLE = t.TABLE_NAME) AND ({cond}) ORDER BY 1 LIMIT 20"
     )
 }
 
@@ -753,12 +758,20 @@ async fn statement<'a>(
             return Ok(None);
         }
     }
-    let undo = (explains(sql, s.mode) && risk.rolls_back()).then(|| Undo::of(s.tx.open));
+    // An `EXPLAIN` the classifier could not read (an executable comment may hold `ANALYZE`) is
+    // undone and checked as one that runs.
+    let unread = matches!(risk.danger, Some(Danger::Unrecognized | Danger::ExecutableComment | Danger::TooComplex));
+    let undo = (explains(sql, s.mode) && (risk.rolls_back() || unread)).then(|| Undo::of(s.tx.open));
     // A write measured by `EXPLAIN ANALYZE` is undone by the rollback only on transactional
     // tables: the others are asked about first.
     let mut not_undone_on = Vec::new();
-    if undo.is_some() && risk.rollback_matters() {
+    if undo.is_some() && (risk.rollback_matters() || unread) {
         not_undone_on = halt!(not_undone(conn, link, env, s, sql).await, Some(reply));
+        // Cancelled while the server was asked: the statement is not sent.
+        if env.asked.load(Ordering::SeqCst) {
+            reply.fail(DbError::Cancelled, true);
+            return Ok(None);
+        }
         if !not_undone_on.is_empty() && NOT_UNDONE == NotUndone::Refuse {
             reply.fail(DbError::NotUndoable(not_undone_on), false);
             return Ok(None);

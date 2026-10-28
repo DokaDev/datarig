@@ -1913,8 +1913,8 @@ async fn explain_analyze_keeps_nothing_it_ran() {
 }
 
 /// A write measured by `EXPLAIN ANALYZE` on a table a rollback does not undo (MyISAM) or
-/// through a view is not sent: the run says which, and the table keeps its rows. On InnoDB it
-/// runs (above).
+/// through a view is not sent: the run says which, and the table keeps its rows (on InnoDB it
+/// runs: `explain_analyze_keeps_nothing_it_ran`).
 #[tokio::test(flavor = "multi_thread")]
 async fn explain_analyze_of_a_write_a_rollback_cannot_undo_is_refused() {
     let Some((url, admin)) = urls("explain_analyze_not_undone") else { return };
@@ -1952,11 +1952,55 @@ async fn explain_analyze_of_a_write_a_rollback_cannot_undo_is_refused() {
         other => panic!("{other:?}"),
     }
     assert_eq!(rows_in(&mut c, 6, &format!("{} WHERE v = 'z'", t.q())).await, "0");
+    // An `ANALYZE` the classifier cannot read (in an executable comment) is checked too.
+    let hidden =
+        format!("EXPLAIN /*!80000 ANALYZE */ DELETE x FROM {q} x JOIN {q} y ON y.id = x.id WHERE x.id > 1", q = t.q());
+    let evs = c.run(70, &[&hidden]).await;
+    assert!(matches!(evs.last(), Some(DbEvent::Failed { error: DbError::NotUndoable(_), .. })), "{evs:?}");
+    assert_eq!(rows_in(&mut c, 71, &t.q()).await, "3");
     // Its plan without ANALYZE stays available, and a read is measured as it is.
     let evs = c.run(7, &[&format!("EXPLAIN FORMAT=TREE DELETE FROM {} WHERE id > 1", t.q())]).await;
     assert!(!matches!(evs.last(), Some(DbEvent::Failed { .. })), "{evs:?}");
     let evs = c.run(8, &[&format!("EXPLAIN ANALYZE FORMAT=TREE SELECT * FROM {}", t.q())]).await;
     assert!(!matches!(evs.last(), Some(DbEvent::Failed { .. })), "{evs:?}");
+}
+
+/// A table named by a keyword (`last`) is checked like any other, and a table with a trigger
+/// (whose code may write where the rollback does not reach) is refused like a MyISAM one.
+#[tokio::test(flavor = "multi_thread")]
+async fn explain_analyze_checks_keyword_names_and_triggers() {
+    let Some((url, admin)) = urls("explain_analyze_keyword_trigger") else { return };
+    let _last = Cleanup { url: admin.clone(), sql: "DROP TABLE IF EXISTS shop.`last`".to_string() };
+    let t = numbers(&admin, "trig", 3).await;
+    let trig = format!("zz_it_trig_{}", std::process::id());
+    let _trig = Cleanup { url: admin.clone(), sql: format!("DROP TRIGGER IF EXISTS shop.{trig}") };
+    let mut a = side(&admin).await;
+    a.query_drop("DROP TABLE IF EXISTS shop.`last`").await.unwrap();
+    a.query_drop("CREATE TABLE shop.`last` (id INT PRIMARY KEY) ENGINE=MyISAM").await.unwrap();
+    a.query_drop("INSERT INTO shop.`last` VALUES (1), (2)").await.unwrap();
+    a.query_drop(format!("CREATE TRIGGER shop.{trig} BEFORE DELETE ON {} FOR EACH ROW SET @zz_it_trig = 1", t.q()))
+        .await
+        .unwrap();
+    a.disconnect().await.unwrap();
+    let mut c = Conn::open(&url, SessionRole::Query, false, "kwtrig").await;
+    c.ok(1, "USE shop").await;
+    let evs = c.run(2, &["EXPLAIN ANALYZE DELETE x FROM last x JOIN last y ON y.id = x.id WHERE x.id > 1"]).await;
+    match evs.last() {
+        Some(DbEvent::Failed { error: DbError::NotUndoable(tables), .. }) => {
+            assert_eq!(tables, &["shop.last (MyISAM)"])
+        }
+        other => panic!("{other:?}"),
+    }
+    let evs = c
+        .run(3, &[&format!("EXPLAIN ANALYZE DELETE x FROM {q} x JOIN {q} y ON y.id = x.id WHERE x.id > 1", q = t.q())])
+        .await;
+    match evs.last() {
+        Some(DbEvent::Failed { error: DbError::NotUndoable(tables), .. }) => {
+            assert_eq!(tables, &[format!("shop.{} (trigger)", t.name)]);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(rows_in(&mut c, 4, &t.q()).await, "3");
 }
 
 /// The tree text the server gives for the plan statements the app sends reads as a plan:

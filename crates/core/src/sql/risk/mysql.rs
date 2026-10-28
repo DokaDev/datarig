@@ -1934,20 +1934,26 @@ pub fn names(sql: &str, mode: MySqlMode) -> Result<Vec<String>, NotRepeatable> {
 
 /// Every name `sql` writes in any of its statements, in every sql mode that reads it differently
 /// (each table, column, alias or schema, as written, qualified ones joined with `.`): a superset of
-/// the tables it reads and writes, for a driver to ask the server about. `None` when no reading of
-/// the text gives a name.
+/// the tables it reads and writes, for a driver to ask the server about. A keyword counts too: many
+/// are valid table names unquoted (`transaction`, `view`, `first`). `None` when the text cannot be
+/// read in the session's own mode, or no reading gives a name.
 pub fn named(sql: &str, mode: MySqlMode) -> Option<Vec<String>> {
     guarded(
         || None,
         || {
             let mut all: Vec<String> = Vec::new();
-            for m in readings(sql, mode) {
-                let Ok((stmts, _)) = statements(sql, m) else { continue };
+            for (k, m) in readings(sql, mode).into_iter().enumerate() {
+                let Ok((stmts, _)) = statements(sql, m) else {
+                    if k == 0 {
+                        return None;
+                    }
+                    continue;
+                };
                 for ws in &stmts {
                     let mut i = 0;
                     while i < ws.len() {
                         match name_at(ws, i) {
-                            Some((name, next)) if ws[i].kind == Tok::QuotedIdent || ws[i].kind == Tok::Ident => {
+                            Some((name, next)) if ws[i].is_name() => {
                                 if !all.contains(&name) {
                                     all.push(name);
                                 }

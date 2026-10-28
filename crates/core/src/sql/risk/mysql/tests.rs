@@ -689,7 +689,13 @@ fn named_gives_every_name_of_every_statement() {
         assert!(names.iter().any(|m| m == n), "{n}: {names:?}");
     }
     assert!(named("UPDATE a SET v = 1; DELETE FROM b", MODE).unwrap().iter().any(|n| n == "b"));
-    assert_eq!(named("SELECT 1", MODE), None);
+    // Text the session's mode cannot read gives no names: the driver counts it as not undone.
+    assert_eq!(named("EXPLAIN /*!80000 ANALYZE */ DELETE FROM t", MODE), None);
+    // A keyword is a table name unquoted.
+    assert!(
+        named("EXPLAIN ANALYZE DELETE FROM transaction WHERE id = 1", MODE).unwrap().iter().any(|n| n == "transaction")
+    );
+    assert!(named("UPDATE view SET a = 1", MODE).unwrap().iter().any(|n| n.eq_ignore_ascii_case("view")));
 }
 
 /// `EXPLAIN ANALYZE` that calls a function that is not a built-in asks (it runs the function,
