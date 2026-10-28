@@ -237,14 +237,54 @@ fn quitting_with_an_edited_form_asks_before_discarding() {
     }
 }
 
-/// A form left as it opened does not hold up a quit.
+/// A form left as it opened, or changed back, does not hold up a quit.
 #[test]
 fn quitting_with_an_unchanged_form_quits_at_once() {
-    let dir = scratch("quit-unchanged");
+    for changed_back in [false, true] {
+        let dir = scratch("quit-unchanged");
+        let mut h = harness(&dir);
+        h.explore("local-pg");
+        h.keys("e");
+        h.key(KeyCode::Tab);
+        if changed_back {
+            h.type_text("x");
+            h.key(KeyCode::Backspace);
+        }
+        h.ctrl('q');
+        assert!(h.app.quit, "changed back: {changed_back}\n{}", h.screen(120, 40));
+    }
+}
+
+/// Quitting while a connection test runs: the test stops before the question, so a question
+/// the test raises cannot take its place.
+#[test]
+fn quitting_while_a_test_runs_stops_the_test_before_asking() {
+    let dir = scratch("quit-testing");
     let mut h = harness(&dir);
     h.explore("local-pg");
     h.keys("e");
-    h.key(KeyCode::Tab);
+    h.type_text("-x");
+    h.ctrl('t');
+    assert!(h.app.conn_test.as_ref().is_some_and(|t| t.state == TestState::Running), "a test runs");
     h.ctrl('q');
-    assert!(h.app.quit, "{}", h.screen(120, 40));
+    assert!(asking(&mut h), "{}", h.screen(120, 40));
+    assert!(h.app.conn_test.as_ref().is_some_and(|t| t.state == TestState::Cancelled), "stopped first");
+}
+
+/// The session view over an edited form: quitting closes it so the question is seen and takes
+/// the keys.
+#[test]
+fn quitting_from_the_session_view_over_an_edited_form_asks_where_it_is_seen() {
+    let dir = scratch("quit-session");
+    let mut h = harness(&dir);
+    h.explore("local-pg");
+    h.keys("e");
+    h.type_text("-x");
+    h.ctrl('e');
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::SessionView), "{}", h.screen(120, 40));
+    h.ctrl('q');
+    assert!(asking(&mut h), "{}", h.screen(120, 40));
+    h.key(KeyCode::Char('n'));
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ProfileForm));
+    assert!(!h.app.quit);
 }

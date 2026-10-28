@@ -304,9 +304,23 @@ impl App {
     /// be lost; otherwise quit at once.
     pub(super) fn request_quit(&mut self) {
         if self.quitting.is_none() && self.form_edited() {
+            // A question already up (or a password asked) is answered first: replacing it would
+            // drop what its answer does.
+            let asked = self.overlays.confirm().is_some()
+                || self.overlays.run_confirm().is_some()
+                || self.overlays.tx_summary().is_some()
+                || self.overlays.prompt().is_some_and(|p| !matches!(p.purpose, PromptPurpose::Test(_)));
+            if asked {
+                return;
+            }
             // Asked while a test runs, a question the test raises (a host key to trust) would
             // take the place of this one: the test stops first, as the form's `Esc` stops it.
             self.cancel_test();
+            // What would cover the question goes: the session view, the test's password prompt.
+            self.overlays.close(OverlayKind::SessionView);
+            if self.overlays.prompt().is_some() {
+                self.prompt_closed();
+            }
             return self.confirm(
                 Label::FormDiscardTitle,
                 Label::FormDiscardText,
@@ -359,14 +373,19 @@ impl App {
     }
 
     /// The open form, or one waiting under it for it to close, has changes that are not saved.
+    /// A form being saved has none to lose: its save goes on (the quit does not wait for it).
     fn form_edited(&self) -> bool {
-        std::iter::successors(self.overlays.form(), |f| f.back_to.as_deref()).any(|f| f.edited())
+        let Some(open) = self.overlays.form().filter(|f| !f.saving) else { return false };
+        std::iter::successors(Some(open), |f| f.back_to.as_deref()).any(|f| f.edited())
     }
 
     /// `y` to quitting with a form's changes not saved: the form (and any waiting under it)
     /// goes without saving, then the quit goes on and asks what else would be lost.
     fn discard_forms_and_quit(&mut self) {
         while self.overlays.take_form().is_some() {}
+        // Lists the form opened go with it.
+        self.overlays.close(OverlayKind::Picker);
+        self.overlays.close(OverlayKind::Chooser);
         self.clear_test();
         self.request_quit();
     }
