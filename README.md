@@ -1017,8 +1017,9 @@ explorer's lookups (the metadata sessions) never get these settings.
   `sql` list goes when the list is written again (any of its rows edited, added or removed).
 
 **Seeing what applies**: `:session` (or `:startup`) shows what the query sessions of the explorer's selected
-profile (else the active tab's) start with, and `Ctrl+E` in a profile's form shows the same for
-the form's values, saved or not (the title says when they are unsaved). The first line names the
+profile (else the active tab's) start with (with neither, the view opens and says there is no
+profile to show), and `Ctrl+E` in a profile's form shows the same for the form's values, saved or
+not (the title says when they are unsaved). The first line names the
 profile, its database and its environment (or the default rules), and says when that environment
 is read-only. Then, in the order they are applied: the app's limits (lock wait, idle disconnect,
 idle rollback) with their values and where each comes from (the environment, the default rules

@@ -254,9 +254,29 @@ impl App {
     /// [`SessionView`]: super::overlay::SessionView
     pub(super) fn session_view(&mut self) {
         let Some(cfg) = self.action_profile().and_then(|p| self.profile(p)).cloned() else {
-            return self.flash(Notice::new(Label::SessionViewNoProfile, Level::Info));
+            return self.session_view_without_profile();
         };
         self.open_session_view(&cfg, false, None);
+    }
+
+    /// `:session` with no profile to show: the view opens and says so (a status line that
+    /// fades is easily missed), with what it would show.
+    pub(super) fn session_view_without_profile(&mut self) {
+        use super::overlay::{SessionLine, Tone};
+        let label = |l: Label| self.i18n.label(l).to_string();
+        let v = super::overlay::SessionView {
+            title: self.i18n.label(Label::SessionViewTitleNone),
+            head: Vec::new(),
+            lines: vec![SessionLine::Text(label(Label::SessionViewNoProfile), Tone::Warning)],
+            foot: SessionLine::Text(label(Label::SessionViewNoProfileHint), Tone::Muted),
+            scroll: 0,
+            max_scroll: 0,
+            buttons: Default::default(),
+        };
+        self.overlays.close(OverlayKind::Commands);
+        self.overlays.close(OverlayKind::WhichKey);
+        self.key_state.clear();
+        self.overlays.push(Overlay::SessionView(v));
     }
 
     /// The profile form's values, saved or not: what its sessions would start with.

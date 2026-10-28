@@ -1273,13 +1273,27 @@ fn the_profile_forms_key_shows_its_unsaved_values() {
     assert!(h.app.profiles[0].session_sql.is_empty(), "nothing saved");
 }
 
-/// Without a profile to show, it says so.
+/// Without a profile to show (none selected, no tab), the view opens and says so, with what
+/// it would show; `:startup` too. A status line that fades was easy to miss.
 #[test]
 fn the_session_view_without_a_profile_says_so() {
     let mut h = Harness::with_config(&Config::default(), Lang::En);
+    for command in ["session", "startup"] {
+        h.command(command);
+        assert_eq!(h.overlay_kind(), Some(OverlayKind::SessionView), ":{command}");
+        let screen = h.screen(120, 40);
+        assert!(screen.contains("Session settings"), "{screen}");
+        assert!(
+            screen.contains("No profile to show: select one in the explorer, or go to one of its tabs"),
+            "{screen}"
+        );
+        h.key(KeyCode::Esc);
+        assert_eq!(h.overlay_kind(), None);
+    }
     h.command("session");
-    assert_ne!(h.overlay_kind(), Some(OverlayKind::SessionView));
-    assert_eq!(said(&h), "No profile to show: select one in the explorer, or go to one of its tabs");
+    for (w, ht) in [(80, 24), (120, 40)] {
+        insta::assert_snapshot!(format!("session_view_no_profile_en_{w}x{ht}"), h.draw(w, ht).backend());
+    }
 }
 
 /// A statement is shown exactly as written, wrapped where it is too wide: its blanks and every

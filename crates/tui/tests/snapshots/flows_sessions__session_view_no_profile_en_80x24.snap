@@ -1,0 +1,29 @@
+---
+source: crates/tui/tests/flows_sessions.rs
+assertion_line: 1292
+expression: "h.draw(w, ht).backend()"
+---
+"╭ Explorer ────────────╮╭ Welcome ─────────────────────────────────────────────╮"
+"│  ＋ New connection   ││                                                      │" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 0       ││  datarig                                             │"
+"│                      ││  Dive into any database — right from your terminal.  │"
+"│ No connection        ││                                                      │"
+"│ profiles yet         ││  No connection profiles yet.                         │"
+"│ Press n to create    ││                                                      │"
+"│ ╭ Session settings ────────────────────────────────────────────────────────╮ │"
+"│ │                                                                          │ │"
+"│ │ No profile to show: select one in the explorer, or go to one of its tabs │ │"
+"│ │                                                                          │ │"
+"│ │ :session shows what the selected profile's query sessions start with:    │ │"
+"│ │ the app's limits and its Startup SQL                                     │ │"
+"│ │                                                                          │ │"
+"│ │                                [ Close ]                                 │ │"
+"│ ╰────────────────────────────────────────────────── j/k scroll · Esc close ╯ │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+"                                                                             EN "
