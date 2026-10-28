@@ -374,6 +374,11 @@ impl App {
             return;
         }
         let edited = f.edited();
+        // Asked while a test runs, a question the test raises (a host key to trust) would take
+        // the place of this one: the test stops first, as `Esc` stops it.
+        if out == FormOutcome::Cancel && edited && test_running {
+            self.cancel_test();
+        }
         match out {
             FormOutcome::None => {}
             FormOutcome::Save => self.save_form(),

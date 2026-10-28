@@ -514,7 +514,8 @@ fn the_tunnel_form_makes_renames_and_tests_a_preset() {
     assert!(h.form_open(), "refused");
     assert!(h.screen(100, 30).contains("name already used"));
     h.key(KeyCode::Esc);
-    h.key(KeyCode::Char('y')); // discard the changes
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Confirm), "asked first");
+    h.key(KeyCode::Char('y'));
     // Its test: the login, then a channel to each database address of its profiles.
     h.app.explorer.select_kind(datarig_tui::app::explorer::RowKind::Tunnel(p.id));
     h.keys("t");
@@ -1191,7 +1192,8 @@ fn a_new_tunnel_cancelled_gives_the_profile_form_back_unchanged() {
     assert!(h.form().is_tunnel());
     h.type_text("hq");
     h.key(KeyCode::Esc);
-    h.key(KeyCode::Char('y')); // discard the changes
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Confirm), "asked first");
+    h.key(KeyCode::Char('y'));
     let f = h.form();
     assert!(!f.is_tunnel());
     assert_eq!(

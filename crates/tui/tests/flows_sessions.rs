@@ -1006,6 +1006,30 @@ fn the_environment_form_maps_a_preset_per_database() {
     assert!(dir.text().contains("startup = { mysql = \"my_ro\" }"), "{}", dir.text());
 }
 
+/// A new MySQL preset from the environment form's list starts on MySQL without that counting
+/// as a change: `Esc` closes it at once and gives the environment form back, which, left as it
+/// opened, closes at once too.
+#[test]
+fn a_new_preset_from_a_list_is_not_a_change_of_its_own() {
+    let dir = scratch("new-untouched");
+    let mut h = section_harness(&dir);
+    let prod = h.app.environments().iter().find(|e| e.name == "prod").unwrap().id;
+    on_row(&mut h, RowKind::Environment(prod));
+    h.keys("e");
+    while h.form().focus != Field::EnvSessionMy {
+        h.key(KeyCode::Tab);
+    }
+    h.key(KeyCode::Enter);
+    pick_session(&mut h, "New Startup SQL…");
+    assert!(h.form().is_session());
+    assert_eq!(h.form().session_dbms, Dbms::MySql);
+    h.key(KeyCode::Esc);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ProfileForm), "no question");
+    assert!(h.form().is_environment(), "the environment form is back");
+    h.key(KeyCode::Esc);
+    assert!(!h.form_open(), "no question");
+}
+
 /// Names are matched exactly; a preset of the same name but for case is named as the one
 /// likely meant.
 #[test]

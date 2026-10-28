@@ -316,9 +316,12 @@ impl App {
                 let dbms = back.session_field_dbms(field);
                 self.open_session_form(None, false);
                 if let Some(f) = self.overlays.form_mut() {
+                    // The database the list was for: where the new preset starts, not a change.
                     if let Some(d) = dbms {
-                        f.session_dbms = d;
-                        f.session_sql.set_dbms(Some(d));
+                        f.settle(|f| {
+                            f.session_dbms = d;
+                            f.session_sql.set_dbms(Some(d));
+                        });
                     }
                     f.back_to = Some(back);
                 }

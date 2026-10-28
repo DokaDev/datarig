@@ -11,7 +11,7 @@ use datarig_core::i18n::Lang;
 use datarig_core::secret::MemoryStore;
 use datarig_tui::app::explorer::RowKind;
 use datarig_tui::app::overlay::OverlayKind;
-use datarig_tui::app::{Focus, Startup};
+use datarig_tui::app::{Focus, Startup, TestState};
 use ratatui::crossterm::event::{KeyCode, MouseButton, MouseEventKind};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -179,4 +179,20 @@ fn every_form_asks_before_discarding() {
         h.key(KeyCode::Char('y'));
         assert!(!h.form_open(), "{row:?}");
     }
+}
+
+/// The Cancel button pressed while a test runs: the test stops before the question comes, so a
+/// question the test would raise (a host key to trust) cannot take its place under a `y`.
+#[test]
+fn cancel_while_a_test_runs_stops_the_test_before_asking() {
+    let dir = scratch("testing");
+    let mut h = harness(&dir);
+    h.explore("local-pg");
+    h.keys("e");
+    h.type_text("-x");
+    h.ctrl('t');
+    assert!(h.app.conn_test.as_ref().is_some_and(|t| t.state == TestState::Running), "a test runs");
+    click_on(&mut h, "Cancel");
+    assert!(asking(&mut h), "{}", h.screen(120, 40));
+    assert!(h.app.conn_test.as_ref().is_some_and(|t| t.state == TestState::Cancelled), "stopped first");
 }
