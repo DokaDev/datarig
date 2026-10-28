@@ -485,8 +485,14 @@ fn a_long_node_name_leaves_the_cards_numbers_in_view() {
     h.app.focus = Focus::Results;
     h.keys("2");
     let screen = h.screen(120, 40);
-    for want in ["Slowest node", "of the whole", "Worst row estimate", "×100 more rows", "Covering index lookup on o"]
-    {
+    // Both cards keep their numbers whole: the actual rows of the worst estimate above all.
+    for want in [
+        "Slowest node",
+        "90% of the whole · 1.800 ms itself",
+        "Worst row estimate",
+        "×100↑ est 10 · actual 1000",
+        "Covering index lookup on o",
+    ] {
         assert!(screen.contains(want), "{want}:\n{screen}");
     }
     assert!(!screen.contains(long) && screen.contains('…'), "the name is cut, not wrapped:\n{screen}");

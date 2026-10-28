@@ -19,6 +19,8 @@ struct Card {
     /// The node it names, on one line (cut to fit): its numbers below it stay in the card.
     name: Option<(String, Style)>,
     lines: Vec<(String, Style)>,
+    /// The numbers in one short line, shown instead of `lines` when they do not fit the card.
+    short: Option<(String, Style)>,
     node: Option<usize>,
 }
 
@@ -35,35 +37,45 @@ fn cards(cx: &Look, p: &PlanTab) -> Vec<Card> {
     let title = i18n.label(if time { Label::PlanCardSlowest } else { Label::PlanCardCostliest }).to_string();
     let mut lines = Vec::new();
     let mut name = None;
+    let mut short = None;
     if let Some(i) = slowest {
         let style = if plan.is_hot(i) { base.patch(th.plan_hot) } else { base.add_modifier(Modifier::BOLD) };
         name = Some((plan.label(i), style));
         let (share, own) = (fmt_share(plan.share(i)), fmt_weight(plan, i));
-        lines.push((i18n.msg(&Msg::PlanCardShare { share, own }).to_string(), muted));
+        lines.push((i18n.msg(&Msg::PlanCardShare { share: share.clone(), own: own.clone() }).to_string(), muted));
+        short = Some((i18n.msg(&Msg::PlanCardShareShort { share, own }).to_string(), muted));
     }
-    out.push(Card { title, name, lines, node: slowest });
+    out.push(Card { title, name, lines, short, node: slowest });
     // The worst row estimate.
     let title = i18n.label(Label::PlanCardMisestimate).to_string();
     let worst = plan.worst_misestimate();
-    let (name, lines) = match worst {
-        _ if !plan.analyzed => (None, vec![(i18n.label(Label::PlanCardNeedsAnalyze).to_string(), muted)]),
-        None => (None, vec![(i18n.label(Label::PlanCardNoMisestimate).to_string(), muted)]),
+    let (name, lines, short) = match worst {
+        _ if !plan.analyzed => (None, vec![(i18n.label(Label::PlanCardNeedsAnalyze).to_string(), muted)], None),
+        None => (None, vec![(i18n.label(Label::PlanCardNoMisestimate).to_string(), muted)], None),
         Some((i, off)) => {
             let n = &plan.nodes[i];
             let (ratio, est) = (fmt_num(off.ratio), n.plan_rows.map(fmt_num).unwrap_or_default());
             let actual = n.actual.map(|a| fmt_num(a.rows)).unwrap_or_default();
-            let msg = if off.under {
-                Msg::PlanCardUnder { ratio, est, actual }
+            let (msg, brief) = if off.under {
+                (
+                    Msg::PlanCardUnder { ratio: ratio.clone(), est: est.clone(), actual: actual.clone() },
+                    Msg::PlanCardUnderShort { ratio, est, actual },
+                )
             } else {
-                Msg::PlanCardOver { ratio, est, actual }
+                (
+                    Msg::PlanCardOver { ratio: ratio.clone(), est: est.clone(), actual: actual.clone() },
+                    Msg::PlanCardOverShort { ratio, est, actual },
+                )
             };
+            let style = base.patch(th.plan_misestimate);
             (
                 Some((plan.label(i), base.add_modifier(Modifier::BOLD))),
-                vec![(i18n.msg(&msg).to_string(), base.patch(th.plan_misestimate))],
+                vec![(i18n.msg(&msg).to_string(), style)],
+                Some((i18n.msg(&brief).to_string(), style)),
             )
         }
     };
-    out.push(Card { title, name, lines, node: worst.map(|w| w.0) });
+    out.push(Card { title, name, lines, short, node: worst.map(|w| w.0) });
     // Disk reads (a format that never counts them has no card for them).
     let title = i18n.label(Label::PlanCardReads).to_string();
     let lines = match plan.buffers() {
@@ -84,7 +96,7 @@ fn cards(cx: &Look, p: &PlanTab) -> Vec<Card> {
         None => vec![(i18n.label(Label::PlanCardNoBuffers).to_string(), muted)],
     };
     if !lines.is_empty() {
-        out.push(Card { title, name: None, lines, node: None });
+        out.push(Card { title, name: None, lines, short: None, node: None });
     }
     // The whole.
     let measured_only = time && !p.format.reports_statement_times();
@@ -115,7 +127,7 @@ fn cards(cx: &Look, p: &PlanTab) -> Vec<Card> {
         (false, _) => Label::PlanCardCostTotal,
     };
     let title = i18n.label(title).to_string();
-    out.push(Card { title, name: None, lines, node: None });
+    out.push(Card { title, name: None, lines, short: None, node: None });
     out
 }
 
@@ -164,6 +176,14 @@ fn card(cx: &Look, c: &Card, r: Rect, buf: &mut Buffer) {
         for l in wrap_words(t, inner_w.saturating_sub(1)) {
             lines.push((l, *style));
         }
+    }
+    // The numbers are what the card is for: in their short form when the full ones would be cut.
+    let room = r.height.saturating_sub(2) as usize;
+    if lines.len() > room
+        && let Some((t, style)) = &c.short
+    {
+        lines.truncate(usize::from(c.name.is_some()));
+        lines.push((crate::text::clip(t, inner_w.saturating_sub(1)), *style));
     }
     for k in 0..(r.height.saturating_sub(2)) {
         buf.set_stringn(r.x, y, "│", 1, frame);
