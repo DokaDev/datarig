@@ -1,0 +1,15 @@
+scan|SELECT * FROM c
+join_group_sort|SELECT c.city, SUM(o.amount) FROM c JOIN o ON o.c_id=c.id WHERE c.city IN ('city1','city2') GROUP BY c.city ORDER BY 2 DESC
+hash_join|SELECT COUNT(*) FROM o o1 JOIN o o2 ON o1.amount=o2.amount WHERE o1.id<50
+subquery_in|SELECT * FROM c WHERE id IN (SELECT c_id FROM o WHERE amount > 90) LIMIT 5
+not_exists|SELECT * FROM c WHERE NOT EXISTS (SELECT 1 FROM o WHERE o.c_id=c.id AND o.amount=96)
+union|SELECT id FROM c WHERE id<3 UNION SELECT c_id FROM o WHERE id<3
+cte_recursive|WITH RECURSIVE s(n) AS (SELECT 1 UNION ALL SELECT n+1 FROM s WHERE n<20) SELECT SUM(n) FROM s
+window|SELECT id, c_id, RANK() OVER (PARTITION BY c_id ORDER BY amount DESC) r FROM o WHERE c_id<4
+derived|SELECT d.city, d.n FROM (SELECT city, COUNT(*) n FROM c GROUP BY city) d WHERE d.n>10
+never_executed|SELECT * FROM c JOIN o ON o.c_id=c.id WHERE c.id=-1
+scalar_sub|SELECT id, (SELECT MAX(amount) FROM o WHERE o.c_id=c.id) FROM c WHERE id<5
+update_multi|UPDATE o JOIN c ON c.id=o.c_id SET o.amount=o.amount WHERE c.id=3
+delete_multi|DELETE o FROM o JOIN c ON c.id=o.c_id WHERE c.id=-5
+update_single|UPDATE o SET amount=amount WHERE c_id=3
+insert_select|INSERT INTO m SELECT id+100, 1 FROM c WHERE id<0

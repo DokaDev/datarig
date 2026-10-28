@@ -1,0 +1,3 @@
+-> Delete from o (immediate)  (cost=0..0 rows=0)
+    -> Zero rows (no matching row in const table)  (cost=0..0 rows=0)
+

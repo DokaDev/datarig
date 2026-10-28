@@ -1,0 +1,7 @@
+-> Table scan on <union temporary>  (cost=2.86..4.77 rows=4) (actual time=0.0738..0.0741 rows=3 loops=1)
+    -> Union materialize with deduplication  (cost=2.22..2.22 rows=4) (actual time=0.0615..0.0615 rows=3 loops=1)
+        -> Filter: (c.id < 3)  (cost=0.91 rows=2) (actual time=0.0229..0.032 rows=2 loops=1)
+            -> Covering index range scan on c using PRIMARY over (id < 3)  (cost=0.91 rows=2) (actual time=0.0211..0.0296 rows=2 loops=1)
+        -> Filter: (o.id < 3)  (cost=0.91 rows=2) (actual time=0.00575..0.00617 rows=2 loops=1)
+            -> Index range scan on o using PRIMARY over (id < 3)  (cost=0.91 rows=2) (actual time=0.00546..0.00567 rows=2 loops=1)
+

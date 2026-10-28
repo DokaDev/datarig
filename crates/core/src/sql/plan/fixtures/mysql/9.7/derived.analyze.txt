@@ -1,0 +1,6 @@
+-> Table scan on d  (cost=68.3..70.5 rows=7) (actual time=0.116..0.117 rows=7 loops=1)
+    -> Materialize  (cost=67.9..67.9 rows=7) (actual time=0.115..0.115 rows=7 loops=1)
+        -> Filter: (count(0) > 10)  (cost=66.3 rows=7) (actual time=0.0462..0.0946 rows=7 loops=1)
+            -> Group aggregate: count(0)  (cost=66.3 rows=7) (actual time=0.04..0.0878 rows=7 loops=1)
+                -> Covering index scan on c using city  (cost=20.2 rows=200) (actual time=0.0255..0.0593 rows=200 loops=1)
+

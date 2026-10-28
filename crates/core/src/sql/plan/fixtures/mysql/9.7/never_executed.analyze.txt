@@ -1,0 +1,2 @@
+-> Zero rows (no matching row in const table)  (cost=0..0 rows=0) (actual time=0.00412..0.00412 rows=0 loops=1)
+

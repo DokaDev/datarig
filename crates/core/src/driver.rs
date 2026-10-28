@@ -93,6 +93,10 @@ pub enum ExplainFormat {
     /// [`Dialect::explain_sql`](crate::sql::dialect::Dialect::explain_sql). Another database's
     /// JSON plan (MySQL's `FORMAT=JSON`) is shaped otherwise and would be a format of its own.
     PostgresJson,
+    /// MySQL's tree text: `EXPLAIN FORMAT=TREE` and `EXPLAIN ANALYZE` (8.0.18 on), read by
+    /// `sql::plan::mysql`. Each format a server may give (MySQL's JSON, MariaDB's) is a variant
+    /// of its own, read by a reader of its own: see `sql::plan` for the seam.
+    MySqlTree,
 }
 
 /// Where a session works: a database and a schema of the profile's server,

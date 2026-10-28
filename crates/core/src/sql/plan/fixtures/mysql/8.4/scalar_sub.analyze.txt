@@ -1,0 +1,6 @@
+-> Filter: (c.id < 5)  (cost=1.06 rows=4) (actual time=0.0132..0.0147 rows=4 loops=1)
+    -> Covering index range scan on c using PRIMARY over (id < 5)  (cost=1.06 rows=4) (actual time=0.0115..0.0125 rows=4 loops=1)
+-> Select #2 (subquery in projection; dependent)
+    -> Aggregate: max(o.amount)  (cost=4.5 rows=1) (actual time=0.0199..0.0199 rows=1 loops=4)
+        -> Index lookup on o using c_id (c_id=c.id)  (cost=3.5 rows=10) (actual time=0.0138..0.015 rows=10 loops=4)
+

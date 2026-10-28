@@ -1,0 +1,8 @@
+-> Aggregate: sum(s.n)  (cost=5.65..5.65 rows=1) (actual time=0.5..0.5 rows=1 loops=1)
+    -> Table scan on s  (cost=4.19..5.45 rows=2) (actual time=0.471..0.473 rows=20 loops=1)
+        -> Materialize recursive CTE s  (cost=2.93..2.93 rows=2) (actual time=0.469..0.469 rows=20 loops=1)
+            -> Rows fetched before execution  (cost=0..0 rows=1) (actual time=126e-6..168e-6 rows=1 loops=1)
+            -> Repeat until convergence
+                -> Filter: (s.n < 20)  (cost=2.73 rows=1) (actual time=0.136..0.138 rows=9.5 loops=2)
+                    -> Scan new records on s  (cost=2.73 rows=2) (actual time=0.00592..0.00644 rows=10 loops=2)
+

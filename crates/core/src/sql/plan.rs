@@ -1,7 +1,7 @@
 //! Query plans: what a database did (or would do) for one statement, as a tree of nodes, in a
 //! model that does not depend on the database ([`Plan`], [`PlanNode`]). PostgreSQL's
-//! `EXPLAIN (FORMAT JSON)` is one source ([`pg`]); another database's plan output can be read
-//! into the same model. [`text`] writes a plan the way `psql` shows a text `EXPLAIN`, from the
+//! `EXPLAIN (FORMAT JSON)` is one source ([`pg`]), MySQL's tree text another ([`mysql`]); the
+//! format a driver gives picks the reader ([`ExplainFormat::read`]). [`text`] writes a plan the way `psql` shows a text `EXPLAIN`, from the
 //! model alone: nothing is asked of the server again.
 //!
 //! **Time and cost.** A plan read with `ANALYZE` (and timing) has measured times: each node's
@@ -14,11 +14,13 @@
 //! statement's execution time (by cost: of the plan's total cost). Its row estimate is off when
 //! the estimated and actual rows per loop differ by a factor of [`MISESTIMATE`] or more.
 
+use crate::driver::ExplainFormat;
 use crate::sql::dialect::Dialect;
 use crate::sql::lexer::Tok;
 
 pub mod explain;
 pub mod json;
+pub mod mysql;
 pub mod pg;
 pub mod text;
 
@@ -75,6 +77,10 @@ pub struct PlanNode {
     pub subplan: Option<String>,
     /// Estimated startup and total cost.
     pub cost: Option<(f64, f64)>,
+    /// [`PlanNode::cost`] is not the server's: the node has none of its own and carries its
+    /// children's together (so shares and heat still add up). Views must say so wherever they
+    /// show it; the raw view shows the server's text as it came.
+    pub cost_derived: bool,
     /// Estimated rows per loop and their width in bytes.
     pub plan_rows: Option<f64>,
     pub plan_width: Option<f64>,
@@ -333,6 +339,47 @@ impl Plan {
             Some(t) => format!("{} {t}", n.op),
             None => n.op.clone(),
         }
+    }
+}
+
+/// The seam between plan formats and the rest of the app: everything that depends on how a
+/// server writes its plans goes through the format ([`ExplainFormat`]) a driver says it gives —
+/// how to ask for one, how to tell one in a result and how to read it. A new format (MySQL's
+/// JSON, MariaDB's) is a variant, a reader module and its fixtures (`fixtures/<flavour>/…`).
+impl ExplainFormat {
+    /// The statement that asks for `statement`'s plan in this format (`analyze`: run it and
+    /// measure).
+    pub fn explain_sql(self, statement: &str, analyze: bool) -> String {
+        match self {
+            ExplainFormat::PostgresJson => explain_sql(statement, analyze),
+            // `EXPLAIN ANALYZE` has only the tree form on MySQL 8.0 (and it is the default on
+            // later versions).
+            ExplainFormat::MySqlTree if analyze => format!("EXPLAIN ANALYZE {statement}"),
+            ExplainFormat::MySqlTree => format!("EXPLAIN FORMAT=TREE {statement}"),
+        }
+    }
+
+    /// Whether a result of one column (`column`, its type `type_name`) holding `text` is a plan
+    /// in this format.
+    pub fn holds(self, column: &str, type_name: &str, text: &str) -> bool {
+        match self {
+            ExplainFormat::PostgresJson => pg::is_plan_column(column, type_name),
+            ExplainFormat::MySqlTree => column.eq_ignore_ascii_case("EXPLAIN") && mysql::is_tree(text),
+        }
+    }
+
+    /// Read a plan written in this format.
+    pub fn read(self, text: &str) -> Result<Plan, PlanError> {
+        match self {
+            ExplainFormat::PostgresJson => pg::parse(text),
+            ExplainFormat::MySqlTree => mysql::parse(text),
+        }
+    }
+
+    /// The plan's text came from the server as it is shown (a text format): the raw view and
+    /// a copy show it as it came. Otherwise (JSON) the raw view writes the model as text.
+    pub fn is_text(self) -> bool {
+        matches!(self, ExplainFormat::MySqlTree)
     }
 }
 

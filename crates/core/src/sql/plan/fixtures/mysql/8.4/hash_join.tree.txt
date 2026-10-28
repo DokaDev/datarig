@@ -1,0 +1,7 @@
+-> Aggregate: count(0)  (cost=10792 rows=1)
+    -> Inner hash join (o2.amount = o1.amount)  (cost=9812 rows=9800)
+        -> Table scan on o2  (cost=0.439 rows=2000)
+        -> Hash
+            -> Filter: (o1.id < 50)  (cost=10.1 rows=49)
+                -> Index range scan on o1 using PRIMARY over (id < 50)  (cost=10.1 rows=49)
+

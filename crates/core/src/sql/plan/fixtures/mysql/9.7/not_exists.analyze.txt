@@ -1,0 +1,8 @@
+-> Nested loop antijoin  (cost=40040 rows=400000) (actual time=0.874..1.09 rows=180 loops=1)
+    -> Table scan on c  (cost=20.2 rows=200) (actual time=0.0203..0.0988 rows=200 loops=1)
+    -> Single-row index lookup on <subquery2> using <auto_distinct_key> (c_id = c.id)  (cost=662..662 rows=1) (actual time=0.00469..0.00469 rows=0.1 loops=200)
+        -> Materialize with deduplication  (cost=662..662 rows=2000) (actual time=0.845..0.845 rows=20 loops=1)
+            -> Filter: (o.c_id is not null)  (cost=202 rows=2000) (actual time=0.19..0.817 rows=20 loops=1)
+                -> Filter: (o.amount = 96)  (cost=202 rows=2000) (actual time=0.189..0.814 rows=20 loops=1)
+                    -> Table scan on o  (cost=202 rows=2000) (actual time=0.172..0.584 rows=2000 loops=1)
+
