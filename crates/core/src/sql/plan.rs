@@ -385,6 +385,31 @@ impl ExplainFormat {
     pub fn is_text(self) -> bool {
         matches!(self, ExplainFormat::MySqlTree)
     }
+
+    /// The format can count the blocks a node read (PostgreSQL's `BUFFERS`): a plan without
+    /// them was asked without, rather than from a server that has none.
+    pub fn has_buffers(self) -> bool {
+        matches!(self, ExplainFormat::PostgresJson)
+    }
+
+    /// A text `EXPLAIN` the user ran (`sql`, in dialect `d`), asked again for a plan in this
+    /// format ([`explain::json`], [`explain::tree`]); text of another dialect is not read.
+    pub fn again(self, sql: &str, d: Dialect) -> Result<explain::JsonExplain, explain::NotJson> {
+        match (self, d) {
+            (ExplainFormat::PostgresJson, Dialect::Postgres) => explain::json(sql),
+            (ExplainFormat::MySqlTree, Dialect::MySql(mode)) => explain::tree(sql, mode),
+            _ => Err(explain::NotJson::Unreadable),
+        }
+    }
+
+    /// [`ExplainFormat::again`] as the lexer alone reads `sql` (cheap enough for every frame).
+    pub fn again_text(self, sql: &str, d: Dialect) -> Result<explain::JsonExplain, explain::NotJson> {
+        match (self, d) {
+            (ExplainFormat::PostgresJson, Dialect::Postgres) => explain::json_text(sql),
+            (ExplainFormat::MySqlTree, Dialect::MySql(mode)) => explain::tree_text(sql, mode),
+            _ => Err(explain::NotJson::Unreadable),
+        }
+    }
 }
 
 /// The SQL that asks PostgreSQL for `statement`'s plan as JSON (`analyze`: run it and measure,

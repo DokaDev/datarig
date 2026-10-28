@@ -200,3 +200,81 @@ fn only_what_the_repeat_allowlist_takes_is_free_of_the_question() {
     let j = json("explain analyze verbose /* c */ select 1").unwrap();
     assert_eq!(j.statement, "select 1");
 }
+
+fn my(sql: &str) -> Result<JsonExplain, NotJson> {
+    tree(sql, MySqlMode::default())
+}
+
+#[test]
+fn a_mysql_explain_of_a_statement_asks_for_the_tree() {
+    for (from, statement) in [
+        ("EXPLAIN SELECT * FROM t WHERE a > 1", "SELECT * FROM t WHERE a > 1"),
+        ("describe select 1;", "select 1"),
+        ("DESC SELECT 1", "SELECT 1"),
+        ("EXPLAIN FORMAT=JSON SELECT 1", "SELECT 1"),
+        ("EXPLAIN FORMAT = 'traditional' SELECT 1", "SELECT 1"),
+        ("EXPLAIN EXTENDED SELECT 1", "SELECT 1"),
+        ("EXPLAIN PARTITIONS SELECT 1", "SELECT 1"),
+        ("EXPLAIN /* why */ FORMAT=JSON (SELECT 1) UNION (SELECT 2)", "(SELECT 1) UNION (SELECT 2)"),
+        ("EXPLAIN TABLE t", "TABLE t"),
+        ("EXPLAIN WITH c AS (SELECT 1) SELECT * FROM c", "WITH c AS (SELECT 1) SELECT * FROM c"),
+        ("EXPLAIN SELECT 'EXPLAIN ANALYZE; FOR CONNECTION 1' AS s", "SELECT 'EXPLAIN ANALYZE; FOR CONNECTION 1' AS s"),
+    ] {
+        let j = my(from).unwrap_or_else(|e| panic!("{from}: {e:?}"));
+        assert_eq!(j.sql, format!("EXPLAIN FORMAT=TREE {statement}"), "{from}");
+        assert_eq!(j.statement, statement, "{from}");
+        assert!(!j.analyze, "never ANALYZE: {from}");
+    }
+}
+
+#[test]
+fn what_a_mysql_tree_cannot_be_asked_for_is_refused() {
+    for (sql, why) in [
+        ("SELECT 1", NotJson::NotExplain),
+        ("EXPLAIN t", NotJson::NotExplain),
+        ("DESC t a", NotJson::NotExplain),
+        ("EXPLAIN ANALYZE SELECT 1", NotJson::AlreadyJson),
+        ("EXPLAIN FORMAT=TREE SELECT 1", NotJson::AlreadyJson),
+        ("EXPLAIN FORMAT='tree' SELECT 1", NotJson::AlreadyJson),
+        ("EXPLAIN FORMAT=JSON INTO @p SELECT 1", NotJson::Unreadable),
+        ("EXPLAIN FOR CONNECTION 1", NotJson::Unreadable),
+        ("EXPLAIN FOR SCHEMA s SELECT 1", NotJson::Unreadable),
+        ("EXPLAIN /*!80000 ANALYZE */ SELECT 1", NotJson::Unreadable),
+        ("/*!80000 EXPLAIN */ SELECT 1", NotJson::Unreadable),
+        ("EXPLAIN SELECT 1; SELECT 2", NotJson::Several),
+        ("EXPLAIN", NotJson::Unreadable),
+        ("EXPLAIN FORMAT SELECT 1", NotJson::Unreadable),
+    ] {
+        assert_eq!(my(sql).map(|j| j.sql), Err(why), "{sql}");
+    }
+    // A comment or a string is not an option: what it holds is the statement's.
+    assert_eq!(my("EXPLAIN /* ANALYZE */ SELECT 1").unwrap().sql, "EXPLAIN FORMAT=TREE SELECT 1");
+    assert_eq!(my("EXPLAIN -- ANALYZE\nSELECT 1").unwrap().sql, "EXPLAIN FORMAT=TREE SELECT 1");
+    assert_eq!(my("EXPLAIN # INTO @v\nSELECT 1").unwrap().sql, "EXPLAIN FORMAT=TREE SELECT 1");
+}
+
+#[test]
+fn a_mysql_tree_asked_again_is_free_of_the_question_only_on_the_allowlist() {
+    let j = my("EXPLAIN SELECT * FROM t WHERE a > 1").unwrap();
+    assert!(!j.evaluates);
+    for sql in [
+        "EXPLAIN DELETE FROM t WHERE a = 1",
+        "EXPLAIN UPDATE t SET a = 1",
+        "EXPLAIN SELECT f(a) FROM t",
+        "EXPLAIN SELECT * FROM t FOR UPDATE",
+        "EXPLAIN SELECT RAND()",
+    ] {
+        assert!(my(sql).unwrap_or_else(|e| panic!("{sql}: {e:?}")).evaluates, "{sql}");
+    }
+    // The format asks in its own dialect only.
+    use crate::driver::ExplainFormat::{MySqlTree, PostgresJson};
+    let mysql = Dialect::MySql(MySqlMode::default());
+    assert_eq!(MySqlTree.again("EXPLAIN SELECT 1", mysql).unwrap().sql, "EXPLAIN FORMAT=TREE SELECT 1");
+    assert_eq!(MySqlTree.again("EXPLAIN SELECT 1", Dialect::Postgres), Err(NotJson::Unreadable));
+    assert_eq!(PostgresJson.again("EXPLAIN SELECT 1", mysql), Err(NotJson::Unreadable));
+    assert_eq!(
+        PostgresJson.again_text("EXPLAIN SELECT 1", Dialect::Postgres).unwrap().sql,
+        "EXPLAIN (FORMAT JSON) SELECT 1"
+    );
+    assert_eq!(MySqlTree.again_text("DESC SELECT 1", mysql).unwrap().sql, "EXPLAIN FORMAT=TREE SELECT 1");
+}
