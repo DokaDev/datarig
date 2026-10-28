@@ -744,6 +744,40 @@ pub struct ProfileForm {
     /// Put aside under a tunnel form: the test it showed (stopped if it still ran), shown again
     /// when it comes back.
     pub parked_test: Option<super::ConnTest>,
+    /// The values as they were when the form opened ([`Self::mark_opened`]): `Esc` asks before
+    /// it throws away changes made since.
+    opened: Option<Box<FormValues>>,
+}
+
+/// What the user can change in a form, as it is now ([`ProfileForm::edited`]): every value it
+/// saves, picked or typed (a field added to the form belongs here too).
+#[derive(Clone, PartialEq, Eq)]
+struct FormValues {
+    texts: Vec<String>,
+    sslmode: usize,
+    unknown_sslmode: Option<String>,
+    statement_cache: bool,
+    key_retrieval: bool,
+    driver: usize,
+    environment: Option<String>,
+    env_preset: Option<Environment>,
+    env_read_only: bool,
+    env_confirm: Confirm,
+    env_commit: CommitRule,
+    env_paging: PagingMode,
+    env_session: policy::SessionMap,
+    session_dbms: Dbms,
+    statements: Vec<String>,
+    session_ref: SessionRef,
+    color: Option<String>,
+    icon: Option<String>,
+    folder: Option<String>,
+    source: SourceKind,
+    ssh_enabled: bool,
+    ssh_preset: Option<String>,
+    new_preset: Option<String>,
+    ssh_auth: SshAuth,
+    ssh_source: SourceKind,
 }
 
 impl ProfileForm {
@@ -755,6 +789,92 @@ impl ProfileForm {
     /// The id of the profile the form edits (a new one for a new profile or a copy).
     pub fn profile_id(&self) -> datarig_core::profile::ProfileId {
         self.base.id
+    }
+
+    /// The values the user can change, as they are now.
+    fn values(&self) -> FormValues {
+        let texts = [
+            &self.name,
+            &self.host,
+            &self.port,
+            &self.user,
+            &self.password,
+            &self.database,
+            &self.dsn,
+            &self.tls_ca,
+            &self.tls_cert,
+            &self.tls_key,
+            &self.server_key,
+            &self.env_badge,
+            &self.env_tx_warning,
+            &self.env_tx_rollback,
+            &self.env_idle,
+            &self.env_spill,
+            &self.env_idle_disconnect,
+            &self.env_lock_wait,
+            &self.command,
+            &self.env,
+            &self.ssh_host,
+            &self.ssh_port,
+            &self.ssh_user,
+            &self.ssh_key,
+            &self.ssh_secret,
+            &self.ssh_command,
+            &self.ssh_env,
+            &self.ssh_keepalive,
+            &self.ssh_timeout,
+        ];
+        FormValues {
+            texts: texts.iter().map(|t| t.text().to_string()).collect(),
+            sslmode: self.sslmode,
+            unknown_sslmode: self.unknown_sslmode.clone(),
+            statement_cache: self.statement_cache,
+            key_retrieval: self.key_retrieval,
+            driver: self.driver,
+            environment: self.environment.clone(),
+            env_preset: self.env_preset.clone(),
+            env_read_only: self.env_read_only,
+            env_confirm: self.env_confirm,
+            env_commit: self.env_commit,
+            env_paging: self.env_paging,
+            env_session: self.env_session.clone(),
+            session_dbms: self.session_dbms,
+            statements: self.session_sql.statements(),
+            session_ref: self.session_ref.clone(),
+            color: self.color.clone(),
+            icon: self.icon.clone(),
+            folder: self.folder.clone(),
+            source: self.source,
+            ssh_enabled: self.ssh_enabled,
+            ssh_preset: self.ssh_preset.clone(),
+            new_preset: self.new_preset.clone(),
+            ssh_auth: self.ssh_auth,
+            ssh_source: self.ssh_source,
+        }
+    }
+
+    /// The form is shown: what it holds now is what `Esc` compares with (once; a form that
+    /// comes back from under another keeps what it opened with).
+    pub fn mark_opened(&mut self) {
+        if self.opened.is_none() {
+            self.opened = Some(Box::new(self.values()));
+        }
+    }
+
+    /// Something was changed since the form opened (changed back: nothing was).
+    pub fn edited(&self) -> bool {
+        self.opened.as_deref().is_some_and(|o| *o != self.values())
+    }
+
+    /// A change the app makes by itself (the keychain's password filled in, a storage that
+    /// stopped working): a form nobody edited stays unedited.
+    pub fn settle<R>(&mut self, change: impl FnOnce(&mut Self) -> R) -> R {
+        let edited = self.edited();
+        let r = change(self);
+        if !edited && self.opened.is_some() {
+            self.opened = Some(Box::new(self.values()));
+        }
+        r
     }
 
     /// A new profile whose storage selector starts on `source`; `keychain_ok` says whether
@@ -784,6 +904,11 @@ impl ProfileForm {
         if std::mem::replace(&mut self.keychain_ok, ok) == ok || ok {
             return;
         }
+        self.settle(|f| f.keychain_stopped(default));
+    }
+
+    /// The keychain stopped working: see [`Self::follow_keychain`].
+    fn keychain_stopped(&mut self, default: SourceKind) {
         let unsaved = match self.kind {
             FormKind::Profile => self.editing.is_none(),
             FormKind::Tunnel { editing, .. }
@@ -892,6 +1017,7 @@ impl ProfileForm {
             attempted: false,
             back_to: None,
             parked_test: None,
+            opened: None,
         };
         if c.tunnel.is_some() && f.ssh_enabled {
             f.ssh_enabled = false;

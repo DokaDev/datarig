@@ -716,7 +716,9 @@ fn a_mysql_profile_takes_its_port_and_url_and_has_no_postgresql_settings() {
     h.app.handle_event(ratatui::crossterm::event::Event::Paste("mysql://me:pw@db.example/sales".into()));
     let f = h.form();
     assert_eq!((f.driver, f.port.text(), f.database.text(), f.password.text()), (1, "3306", "sales", "pw"));
+    // The pasted URL is a change: Esc asks, `y` discards it.
     h.key(KeyCode::Esc);
+    h.key(KeyCode::Char('y'));
     h.app.handle_event(ratatui::crossterm::event::Event::Paste("mariadb://h/db?ssl-mode=REQUIRED".into()));
     let problem = h.form().dsn_problem.clone().map(|p| h.app.i18n.msg(&p.message()).to_string());
     assert_eq!(problem.as_deref(), Some("unsupported parameter “ssl-mode” (a mysql:// URL takes none)"));

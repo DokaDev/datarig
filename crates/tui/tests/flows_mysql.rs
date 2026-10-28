@@ -163,6 +163,7 @@ fn the_form_warns_of_an_unencrypted_connection() {
     h.type_text("localhost");
     assert!(!h.screen(120, 40).contains(short));
     h.key(KeyCode::Esc);
+    h.key(KeyCode::Char('y')); // discard the changes
     // PostgreSQL: a new profile prefers TLS; with it off, the same warning.
     h.command("conn.new");
     h.app.overlays.form_mut().unwrap().focus_field(Field::Host);

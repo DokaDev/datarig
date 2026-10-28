@@ -373,6 +373,7 @@ impl App {
         if repeat && out != FormOutcome::None {
             return;
         }
+        let edited = f.edited();
         match out {
             FormOutcome::None => {}
             FormOutcome::Save => self.save_form(),
@@ -385,11 +386,21 @@ impl App {
             FormOutcome::Choose(profiles::Field::Folder) => self.open_form_folder_pick(),
             FormOutcome::Choose(f) if f.is_choice() => self.open_choice_picker(f),
             FormOutcome::Choose(f) => self.open_form_chooser(f),
-            FormOutcome::Cancel => {
-                if !self.close_form(None) {
-                    self.clear_test();
-                }
-            }
+            // Changes would be lost: asked first (`Enter` keeps editing, `y` discards).
+            FormOutcome::Cancel if edited => self.confirm(
+                Label::FormDiscardTitle,
+                Label::FormDiscardText,
+                Label::FormDiscardKeys,
+                ConfirmAction::DiscardForm,
+            ),
+            FormOutcome::Cancel => self.cancel_form(),
+        }
+    }
+
+    /// Close the form without saving it (a form it was opened from comes back).
+    pub(super) fn cancel_form(&mut self) {
+        if !self.close_form(None) {
+            self.clear_test();
         }
     }
 

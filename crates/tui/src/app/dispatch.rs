@@ -478,6 +478,7 @@ impl App {
             ConfirmAction::KeychainSecurityTool => self.keychain_access_changed(KeychainAccess::SecurityTool),
             ConfirmAction::ExportStart => self.export_answered(true, false),
             ConfirmAction::ExportReplace => self.export_answered(true, true),
+            ConfirmAction::DiscardForm => self.cancel_form(),
             ConfirmAction::ScriptConflict(_) | ConfirmAction::KeychainOffer => {}
         }
     }

@@ -159,6 +159,9 @@ pub enum ConfirmAction {
     /// `/usr/bin/security` (`App::keychain_offer_key`): `y` switches, `n` declines for good,
     /// `Esc`/`Enter` decide later.
     KeychainOffer,
+    /// Close the open form although it has changes that are not saved (its `Esc` or Cancel).
+    /// Keeping on editing is the default.
+    DiscardForm,
     /// Start an export that runs its statement again (or reads in a prod-like environment):
     /// the tab's export waits for the answer. Cancel is the default.
     ExportStart,
@@ -245,6 +248,7 @@ impl Confirm {
             ConfirmAction::KeychainSecurityTool => (Label::DialogButtonCancel, Label::DialogButtonTurnOn),
             ConfirmAction::ExportStart => (Label::DialogButtonCancel, Label::DialogButtonExport),
             ConfirmAction::ExportReplace => (Label::DialogButtonKeep, Label::DialogButtonReplace),
+            ConfirmAction::DiscardForm => (Label::DialogButtonKeepEditing, Label::DialogButtonDiscard),
         };
         // Roll back first, commit first, then go on anyway (the server rolls back); Enter stays.
         if let Some(tx) = &self.tx {
@@ -450,8 +454,12 @@ impl Overlay {
 pub struct Overlays(Vec<Overlay>);
 
 impl Overlays {
-    /// Open `o`, replacing an open overlay of the same kind.
-    pub fn push(&mut self, o: Overlay) {
+    /// Open `o`, replacing an open overlay of the same kind. A form shown for the first time
+    /// keeps its values to tell later whether it was edited.
+    pub fn push(&mut self, mut o: Overlay) {
+        if let Overlay::ProfileForm(f) = &mut o {
+            f.mark_opened();
+        }
         let kind = o.kind();
         self.close(kind);
         let at = self.0.iter().position(|x| x.kind() > kind).unwrap_or(self.0.len());

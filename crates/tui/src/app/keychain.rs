@@ -561,7 +561,7 @@ impl App {
         if let Ok(pw) = result
             && f.password.text().is_empty()
         {
-            f.password.set(&pw.map(|s| s.0).unwrap_or_default());
+            f.settle(|f| f.password.set(&pw.map(|s| s.0).unwrap_or_default()));
             f.password_unread = false;
         }
     }

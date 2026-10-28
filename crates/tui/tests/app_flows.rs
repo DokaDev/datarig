@@ -810,7 +810,11 @@ fn add_edit_duplicate_delete_profiles_with_secret_store() {
     h.type_text("prod-eu");
     h.ctrl('s');
     assert!(h.form_open(), "still in the form");
+    // Its changes are not saved: Esc asks, `y` discards them.
     h.key(KeyCode::Esc);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Confirm));
+    h.keys("y");
+    assert!(!h.form_open());
 
     // Delete (`d`) asks first; 'n' keeps, 'y' deletes (and removes the secret).
     h.explore("prod-eu-copy");
@@ -905,10 +909,6 @@ fn launch(cfg: &Config, startup: Startup) -> Harness {
     Harness::launched(cfg, Lang::En, Arc::new(MemoryStore::new()), startup)
 }
 
-#[test]
-fn startup_focuses_the_explorer_on_the_last_used_profile() {
-    let mut h = launch(&sample_config(Some("v6")), Startup::Normal);
-    let id = |h: &Harness, n: &str| h.app.profiles.iter().find(|p| p.name == n).unwrap().id;
 /// A launch message on the welcome panel (a config error) wraps at words: no word is cut over
 /// two lines.
 #[test]
@@ -928,6 +928,10 @@ fn a_config_error_on_the_welcome_panel_wraps_at_words() {
     }
 }
 
+#[test]
+fn startup_focuses_the_explorer_on_the_last_used_profile() {
+    let mut h = launch(&sample_config(Some("v6")), Startup::Normal);
+    let id = |h: &Harness, n: &str| h.app.profiles.iter().find(|p| p.name == n).unwrap().id;
     assert_eq!(h.app.focus, Focus::Tree);
     assert!(h.app.conns.attempt().is_none() && h.app.tab().exec.session.is_none(), "nothing connects by itself");
     assert_eq!(h.app.selected_profile(), Some(id(&h, "v6")), "cursor on last_used");

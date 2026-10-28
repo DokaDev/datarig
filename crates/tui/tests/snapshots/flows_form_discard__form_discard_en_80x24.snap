@@ -1,0 +1,29 @@
+---
+source: crates/tui/tests/flows_form_discard.rs
+assertion_line: 108
+expression: "h.draw(w, ht).backend()"
+---
+"╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
+"│  ＋ New connection   ││                                                      │" Hidden by multi-width symbols: [(4, " ")]
+"│▾╭ Edit connection — local-pg ──────────────────────────────────────────────╮ │"
+"│ │  Basic   SSH   Advanced                            Ctrl+N/Ctrl+P section │ │"
+"│ │                                                                          │ │"
+"│ │ Driver            PostgreSQL ▾   ←/→ change · Enter list                 │ │"
+"│▾│ Name              local-pg-x                                             │ │"
+"│ │ Host              127.0.0.1                                              │ │"
+"│▾│ Port  ╭ Discard changes? ────────────────────────────────────────╮       │ │"
+"│ │ User  │                                                          │       │ │"
+"│ │ Passwo│ The changes in this form are not saved. Discard them?    │       │ │"
+"│▾│ Passwo│                                                          │n      │ │"
+"│ │ Databa│              [ Keep editing ]     Discard                │       │ │"
+"│ │       ╰──────────────────────── y discard · n/Enter keep editing ╯       │ │"
+"│ │ DSN               postgres://datarig@127.0.0.1:55432/datarig?sslmode=dis │ │"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ │                    Test    Save    Cancel                                │ │"
+"│ │                                                                          │ │"
+"│ │                                                                          │ │"
+"│ ╰─ Tab/↑↓ move · Ctrl+N/P section · Ctrl+T test · Ctrl+S save · Esc cancel ╯ │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+"                                                                             EN "

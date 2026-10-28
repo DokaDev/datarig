@@ -213,6 +213,7 @@ fn a_pasted_url_with_tls_parameters_fills_the_tls_fields() {
     assert_eq!(f.dsn_problem, None);
     // Another parameter is still refused.
     h.key(KeyCode::Esc);
+    h.key(KeyCode::Char('y')); // discard the pasted profile
     h.app.handle_event(ratatui::crossterm::event::Event::Paste("postgres://h/db?connect_timeout=3".into()));
     let problem = h.form().dsn_problem.clone().map(|p| h.app.i18n.msg(&p.message()).to_string());
     assert_eq!(

@@ -209,7 +209,10 @@ fn the_buttons_press_test_save_and_cancel() {
     h.type_text("app");
     click_on(&mut h, " Test ", 2);
     assert!(h.app.conn_test.is_some(), "a test started");
+    // Filled in and not saved: Cancel asks first; `y` discards.
     click_on(&mut h, " Cancel ", 2);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Confirm));
+    h.key(KeyCode::Char('y'));
     assert!(!h.form_open());
     // Saved by a click once it is filled in.
     let mut h = new_form();
