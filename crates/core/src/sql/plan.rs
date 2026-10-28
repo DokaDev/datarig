@@ -386,6 +386,12 @@ impl ExplainFormat {
         matches!(self, ExplainFormat::MySqlTree)
     }
 
+    /// The format reports the statement's own times (planning, execution) beside its nodes':
+    /// without them (MySQL's tree) the measured total is the roots' times.
+    pub fn reports_statement_times(self) -> bool {
+        matches!(self, ExplainFormat::PostgresJson)
+    }
+
     /// The format can count the blocks a node read (PostgreSQL's `BUFFERS`): a plan without
     /// them was asked without, rather than from a server that has none.
     pub fn has_buffers(self) -> bool {

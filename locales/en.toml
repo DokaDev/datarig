@@ -1667,6 +1667,9 @@
 "plan.view.raw" = "Raw"
 "plan.estimates_only" = "estimated cost, not time (no ANALYZE)"
 "plan.cost_derived" = "≈ = sum of its children"
+"plan.cost_derived_short" = "≈ sum"
+"plan.measured" = "measured {total} (the server reports no statement time)"
+"plan.card.measured" = "Measured time"
 "plan.times" = "execution {execution} · planning {planning}"
 "plan.more_plans" = { one = "{count} more plan of the statement is not shown", other = "{count} more plans of the statement are not shown" }
 "plan.hot_mark" = "hot"

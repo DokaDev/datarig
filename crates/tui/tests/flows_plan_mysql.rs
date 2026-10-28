@@ -174,9 +174,11 @@ fn explain_analyze_asks_for_the_measured_tree_through_the_run_checks() {
     let p = plan(&h);
     assert!(p.plan.analyzed);
     let screen = h.screen(120, 40);
-    for want in ["rows ×loops", "10 ×58", "execution ? · planning ?"] {
+    for want in ["rows ×loops", "10 ×58", "measured 1.420 ms (the server reports no statement time)"] {
         assert!(screen.contains(want), "{want}:\n{screen}");
     }
+    // MySQL reports no planning or execution time of its own: none is shown as unknown.
+    assert!(!screen.contains("planning") && !screen.contains('?'), "{screen}");
     // No buffer counts in MySQL's plans: no column for them, and no card saying they are
     // missing.
     assert!(!screen.contains("hit/read"), "{screen}");
@@ -184,6 +186,8 @@ fn explain_analyze_asks_for_the_measured_tree_through_the_run_checks() {
     h.keys("2");
     let screen = h.screen(160, 45);
     assert!(screen.contains("Slowest node") && !screen.contains("Disk reads"), "{screen}");
+    assert!(screen.contains("Measured time") && !screen.contains("planning"), "{screen}");
+    insta::assert_snapshot!("plan_mysql_analyze_summary_en_160x45", h.draw(160, 45).backend());
     // A DELETE of every row asks first: Esc sends nothing, `y` runs it under EXPLAIN ANALYZE.
     let mut h = mysql();
     edit(&mut h, "DELETE FROM o;");
@@ -376,4 +380,28 @@ fn a_server_without_a_plan_the_app_reads_offers_no_plan_action() {
     assert!(menu_now.contains(&explain) && menu_now.contains(&analyze), "{menu_now:?}");
     h.keys(" ex");
     assert_eq!(sent_one(&mut h).1, "EXPLAIN FORMAT=TREE SELECT * FROM c");
+}
+
+/// A format that reports the statement's own times keeps saying one it lacks as unknown
+/// (PostgreSQL without its execution time), never the roots' total in its place.
+#[test]
+fn a_postgres_plan_without_its_execution_time_still_says_it_is_unknown() {
+    let path = format!("{}/../core/src/sql/plan/fixtures/pg18/parallel.analyze.json", env!("CARGO_MANIFEST_DIR"));
+    let json = std::fs::read_to_string(&path).unwrap().replace(",\n    \"Execution Time\": 133.009", "");
+    assert!(!json.contains("Execution Time"), "the fixture's time is taken out");
+    let mut h = Harness::connected(Lang::En);
+    edit(&mut h, "SELECT * FROM t;");
+    h.sent();
+    h.keys(" ea");
+    let (id, _) = sent_one(&mut h);
+    h.db(DbEvent::Page {
+        id,
+        columns: Some(vec![meta("QUERY PLAN", "json", false, true)]),
+        rows: vec![vec![Some(json)]],
+        more: false,
+        elapsed: Duration::from_millis(3),
+    });
+    let screen = h.screen(160, 45);
+    assert!(screen.contains("execution ? · planning 7.803 ms"), "{screen}");
+    assert!(!screen.contains("measured"), "{screen}");
 }

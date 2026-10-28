@@ -128,31 +128,45 @@ fn view_bar(cx: &Look, p: &mut PlanTab, area: Rect, buf: &mut Buffer) {
     let th = cx.th;
     buf.set_style(area, Style::new().bg(th.surface));
     let plan = p.plan.clone();
-    let (note, note_style) = match plan.measure() {
+    // The note, longest first: a shorter one is shown where the longer does not fit.
+    let (notes, note_style): (Vec<String>, Style) = match plan.measure() {
         // A cost that is not the server's is marked `≈` where it shows: said once here.
         Measure::Cost if plan.nodes.iter().any(|n| n.cost_derived) => {
-            let note =
-                format!("{} · {}", cx.i18n.label(Label::PlanEstimatesOnly), cx.i18n.label(Label::PlanCostDerived));
-            (note, Style::new().fg(th.warning).bg(th.surface))
+            let estimates = cx.i18n.label(Label::PlanEstimatesOnly).to_string();
+            let notes = vec![
+                format!("{estimates} · {}", cx.i18n.label(Label::PlanCostDerived)),
+                format!("{estimates} · {}", cx.i18n.label(Label::PlanCostDerivedShort)),
+                estimates,
+            ];
+            (notes, Style::new().fg(th.warning).bg(th.surface))
         }
         Measure::Cost => {
-            (cx.i18n.label(Label::PlanEstimatesOnly).to_string(), Style::new().fg(th.warning).bg(th.surface))
+            (vec![cx.i18n.label(Label::PlanEstimatesOnly).to_string()], Style::new().fg(th.warning).bg(th.surface))
+        }
+        // No statement times from the server: what its nodes measured, nothing made up.
+        Measure::Time if !p.format.reports_statement_times() => {
+            let total = fmt_ms(plan.total());
+            (vec![cx.i18n.msg(&Msg::PlanMeasured { total }).to_string()], Style::new().fg(th.fg_muted).bg(th.surface))
         }
         Measure::Time => {
             let execution = plan.execution_ms.map_or_else(|| "?".into(), fmt_ms);
             let planning = plan.planning_ms.map_or_else(|| "?".into(), fmt_ms);
             (
-                cx.i18n.msg(&Msg::PlanTimes { execution, planning }).to_string(),
+                vec![cx.i18n.msg(&Msg::PlanTimes { execution, planning }).to_string()],
                 Style::new().fg(th.fg_muted).bg(th.surface),
             )
         }
     };
     let more =
         (plan.more_plans > 0).then(|| cx.i18n.msg(&Msg::PlanMorePlans { count: plan.more_plans as u64 }).to_string());
-    let note = match more {
-        Some(m) => format!("{note} · {m}"),
-        None => note,
-    };
+    let notes: Vec<String> = notes
+        .into_iter()
+        .map(|n| match &more {
+            Some(m) => format!("{n} · {m}"),
+            None => n,
+        })
+        .collect();
+    let note = notes[0].clone();
     let end = area.x + area.width;
     // The note on the right comes first (it says whether the numbers are times or costs); the
     // views' names take the rest: all of them, or the shown one and as many around it as fit,
@@ -226,7 +240,10 @@ fn view_bar(cx: &Look, p: &mut PlanTab, area: Rect, buf: &mut Buffer) {
     }
     let room = end.saturating_sub(x + 1) as usize;
     if room >= 4 {
-        let t = clip(&note, room);
+        let t = match notes.iter().find(|n| width(n) <= room) {
+            Some(n) => n.clone(),
+            None => clip(&notes[notes.len() - 1], room),
+        };
         let at = end - 1 - width(&t) as u16;
         put(buf, at, area.y, &t, room, note_style);
     }

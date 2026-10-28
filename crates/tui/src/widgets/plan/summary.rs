@@ -84,7 +84,11 @@ fn cards(cx: &Look, p: &PlanTab) -> Vec<Card> {
         out.push(Card { title, lines, node: None });
     }
     // The whole.
-    let lines = if time {
+    let measured_only = time && !p.format.reports_statement_times();
+    let lines = if measured_only {
+        // No statement times from the server: the roots' measured total.
+        vec![(i18n.msg(&Msg::PlanMeasured { total: fmt_ms(plan.total()) }).to_string(), base)]
+    } else if time {
         let planning = plan.planning_ms.map_or_else(|| "?".into(), fmt_ms);
         let execution = plan.execution_ms.map_or_else(|| "?".into(), fmt_ms);
         let mut v = vec![(i18n.msg(&Msg::PlanCardTimes { planning, execution }).to_string(), base)];
@@ -102,7 +106,12 @@ fn cards(cx: &Look, p: &PlanTab) -> Vec<Card> {
         };
         vec![(i18n.msg(&Msg::PlanCardCost { total }).to_string(), Style::new().fg(th.warning).bg(th.bg))]
     };
-    let title = i18n.label(if time { Label::PlanCardTime } else { Label::PlanCardCostTotal }).to_string();
+    let title = match (time, measured_only) {
+        (true, true) => Label::PlanCardMeasured,
+        (true, false) => Label::PlanCardTime,
+        (false, _) => Label::PlanCardCostTotal,
+    };
+    let title = i18n.label(title).to_string();
     out.push(Card { title, lines, node: None });
     out
 }
