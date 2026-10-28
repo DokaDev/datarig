@@ -1962,6 +1962,9 @@ fn info_notices(info: &datarig_core::driver::StatementInfo) -> Vec<Notice> {
     if info.more_results > 0 {
         out.push(Notice::new(Msg::QueryInfoMoreResults { count: u64::from(info.more_results) }, Level::Warning));
     }
+    if !info.not_undone.is_empty() {
+        out.push(Notice::new(Msg::QueryInfoNotUndone { tables: info.not_undone.join(", ") }, Level::Warning));
+    }
     out
 }
 
@@ -2010,6 +2013,7 @@ impl App {
             }
             DbError::NoAnswer(d) => return self.i18n.msg(&Msg::DbNoAnswer { elapsed: *d }).to_string(),
             DbError::RowsNotRead(n) => return self.i18n.msg(&Msg::DbRowsNotRead { count: *n }).to_string(),
+            DbError::NotUndoable(t) => return self.i18n.msg(&Msg::DbNotUndoable { tables: t.join(", ") }).to_string(),
             DbError::Closed => Label::DbClosed,
             DbError::NotSupported => Label::DbNotSupported,
             DbError::ServerTooOld => Label::DbServerTooOld,

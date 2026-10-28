@@ -316,7 +316,7 @@ fn what_the_server_said_of_a_statement_goes_to_messages() {
         h.keys("y");
     }
     let id = sent_run(&mut h);
-    let info = StatementInfo { insert_id: Some(5), warnings: 2, message: None, more_results: 0 };
+    let info = StatementInfo { insert_id: Some(5), warnings: 2, ..Default::default() };
     h.tab_db(0, DbEvent::Started { id, index: 0 });
     h.tab_db(0, DbEvent::Info { id, index: 0, info });
     h.tab_db(0, DbEvent::Finished { id, index: 0, outcome: Outcome::Affected(1), elapsed: Default::default() });
@@ -336,6 +336,49 @@ fn what_the_server_said_of_a_statement_goes_to_messages() {
     // An answer of an earlier run says nothing here.
     h.tab_db(0, DbEvent::Info { id: id - 1, index: 0, info: StatementInfo { warnings: 1, ..Default::default() } });
     assert_eq!(h.app.tab().exec.run.notes.len(), 3);
+}
+
+/// An `EXPLAIN ANALYZE` of a write the driver did not send, as its tables keep changes past a
+/// rollback, says which and what to run instead; one it let run names them in Messages.
+#[test]
+fn an_analyze_a_rollback_cannot_undo_says_which_tables() {
+    use datarig_core::driver::{DbError, Outcome, StatementInfo};
+    let mut h = mysql();
+    h.db(DbEvent::Connected);
+    let tab = h.app.tab().id;
+    let mut editor =
+        datarig_tui::widgets::editor::Editor::new("EXPLAIN ANALYZE DELETE x FROM t x JOIN u ON u.id = x.id");
+    editor.set_language(h.app.tab_language(tab));
+    h.app.tab_mut().editor = editor;
+    h.sent();
+    h.ctrl('e');
+    if h.app.overlays.run_confirm().is_some() {
+        h.keys("y");
+    }
+    let id = sent_run(&mut h);
+    let error = DbError::NotUndoable(vec!["shop.t (MyISAM)".into(), "shop.v (VIEW)".into()]);
+    h.tab_db(0, DbEvent::Failed { id, error, cancelled: false });
+    let screen = h.screen(160, 40);
+    assert!(
+        screen.contains("a rollback cannot undo what it would change in shop.t (MyISAM), shop.v (VIEW)"),
+        "{screen}"
+    );
+    // Let run (the driver's other choice): Messages names the tables.
+    h.ctrl('e');
+    if h.app.overlays.run_confirm().is_some() {
+        h.keys("y");
+    }
+    let id = sent_run(&mut h);
+    let info = StatementInfo { not_undone: vec!["shop.t (MyISAM)".into()], ..Default::default() };
+    h.tab_db(0, DbEvent::Info { id, index: 0, info });
+    h.tab_db(0, DbEvent::Done { id, outcome: Outcome::Command("EXPLAIN".into()), elapsed: Default::default() });
+    let notes: Vec<String> = h.app.tab().exec.run.notes.iter().map(|n| n.render(&h.app.i18n).to_string()).collect();
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.contains("EXPLAIN ANALYZE ran this on shop.t (MyISAM): changes there were not rolled back")),
+        "{notes:?}"
+    );
 }
 
 /// MySQL's databases are its schemas: the explorer lists them right under the profile (no

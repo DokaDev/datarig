@@ -925,6 +925,11 @@ fn with_calls(mut risk: Risk, ws: &[W]) -> Risk {
         } else if !schema {
             risk.runs_code = true;
             risk.unchecked_call = true;
+            // `EXPLAIN ANALYZE` runs it: what it writes where the rollback does not reach (a
+            // MyISAM table) stays, so it asks like code it cannot see.
+            if risk.explain == Explain::Analyze {
+                risk.danger = risk.danger.or(Some(Danger::AnalyzeRunsCode));
+            }
         }
     }
     risk
@@ -1923,6 +1928,37 @@ pub fn names(sql: &str, mode: MySqlMode) -> Result<Vec<String>, NotRepeatable> {
                 }
             }
             Ok(all)
+        },
+    )
+}
+
+/// Every name `sql` writes in any of its statements, in every sql mode that reads it differently
+/// (each table, column, alias or schema, as written, qualified ones joined with `.`): a superset of
+/// the tables it reads and writes, for a driver to ask the server about. `None` when no reading of
+/// the text gives a name.
+pub fn named(sql: &str, mode: MySqlMode) -> Option<Vec<String>> {
+    guarded(
+        || None,
+        || {
+            let mut all: Vec<String> = Vec::new();
+            for m in readings(sql, mode) {
+                let Ok((stmts, _)) = statements(sql, m) else { continue };
+                for ws in &stmts {
+                    let mut i = 0;
+                    while i < ws.len() {
+                        match name_at(ws, i) {
+                            Some((name, next)) if ws[i].kind == Tok::QuotedIdent || ws[i].kind == Tok::Ident => {
+                                if !all.contains(&name) {
+                                    all.push(name);
+                                }
+                                i = next;
+                            }
+                            _ => i += 1,
+                        }
+                    }
+                }
+            }
+            (!all.is_empty()).then_some(all)
         },
     )
 }

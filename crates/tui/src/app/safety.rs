@@ -316,6 +316,7 @@ fn risk_text(i18n: &I18n, d: &Dangerous, why: Why) -> String {
         Why::Danger(Danger::Locks) => Label::SafetyWhyLocks,
         Why::Danger(Danger::Privileges) => Label::SafetyWhyPrivileges,
         Why::Danger(Danger::Rename) => Label::SafetyWhyRename,
+        Why::Danger(Danger::AnalyzeRunsCode) => Label::SafetyWhyAnalyzeRunsCode,
         Why::Danger(Danger::Setting) => Label::SafetyWhySetting,
         Why::Danger(Danger::DynamicSql) => Label::SafetyWhyDynamicSql,
         Why::Danger(Danger::ServerCommand) => Label::SafetyWhyServerCommand,

@@ -241,6 +241,7 @@
 "safety.why.locks" = "해제할 때까지 다른 세션을 막는 잠금을 잡음(LOCK TABLES, HANDLER 등)"
 "safety.why.privileges" = "계정이나 권한을 바꿈"
 "safety.why.rename" = "이름을 바꿈: 옛 이름을 쓰는 곳이 깨짐"
+"safety.why.analyze_runs_code" = "EXPLAIN ANALYZE가 내장이 아닌 함수와 함께 실제로 실행함: 함수가 트랜잭션을 지원하지 않는 테이블(MyISAM)에 쓴 것은 되돌려지지 않음"
 "safety.why.setting" = "서버 검사를 끄거나 SQL을 읽는 방식을 바꾸는 세션 설정을 바꿈"
 "safety.why.dynamic_sql" = "확인할 수 없는, 텍스트로 받은 SQL을 준비함(PREPARE)"
 "safety.why.server_command" = "이 세션을 넘어 데이터베이스 서버 전체에 작용함(KILL, FLUSH, SET GLOBAL 등)"
@@ -393,6 +394,7 @@
 "db.connection" = "서버와 통신하지 못했습니다 (자세한 내용은 errors.log)"
 "db.not_supported" = "이 세션은 문을 실행하지 않습니다"
 "db.server_too_old" = "키 표시와 INSERT 복사에는 PostgreSQL 12 이상이 필요합니다"
+"db.not_undoable" = "실행하지 않음: EXPLAIN ANALYZE는 문을 실제로 실행하는데, {tables}에서 바뀌는 것은 롤백으로 되돌릴 수 없습니다(InnoDB가 아니거나 뷰). ANALYZE 없는 EXPLAIN으로 플랜을 볼 수 있습니다"
 "db.rows_not_read" = "문은 실행되었고 행을 돌려주었습니다: 처음 {count}행만 읽었고 나머지는 가져올 수 없습니다"
 "db.schema_changed" = "쿼리를 실행하는 동안 테이블이 바뀌었습니다. 다시 실행하세요"
 "db.no_result" = "쿼리가 결과 없이 끝났습니다. 다시 실행하세요"
@@ -481,6 +483,7 @@
 "query.info.insert_id" = "마지막 삽입 ID: {id}"
 "query.info.warnings" = { one = "경고 {count}개: SHOW WARNINGS로 볼 수 있습니다", other = "경고 {count}개: SHOW WARNINGS로 볼 수 있습니다" }
 "query.info.server" = "서버 메시지: {text}"
+"query.info.not_undone" = "EXPLAIN ANALYZE가 {tables}에서 실행되었습니다: 그곳의 변경은 되돌려지지 않았습니다"
 "query.info.more_results" = { one = "결과 집합 {count}개를 더 읽었지만 표시하지 않았습니다", other = "결과 집합 {count}개를 더 읽었지만 표시하지 않았습니다" }
 "query.info.step" = "{step}번째 문장: {info}"
 "query.implicit_commit" = "{step}번째 문장은 실행 전에 열린 트랜잭션을 커밋합니다 (MySQL은 DDL, LOCK TABLES, 새 BEGIN 등의 앞에서 커밋합니다)"

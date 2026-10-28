@@ -1912,6 +1912,101 @@ async fn explain_analyze_keeps_nothing_it_ran() {
     assert_eq!(rows_in(&mut c, 9, &t.q()).await, "10");
 }
 
+/// A write measured by `EXPLAIN ANALYZE` on a table a rollback does not undo (MyISAM) or
+/// through a view is not sent: the run says which, and the table keeps its rows. On InnoDB it
+/// runs (above).
+#[tokio::test(flavor = "multi_thread")]
+async fn explain_analyze_of_a_write_a_rollback_cannot_undo_is_refused() {
+    let Some((url, admin)) = urls("explain_analyze_not_undone") else { return };
+    let fill = "INSERT INTO {t} VALUES (1, 'a'), (2, 'b'), (3, 'c')";
+    let t = Table::make(&admin, "myisam", &["CREATE TABLE {t} (id INT PRIMARY KEY, v VARCHAR(9)) ENGINE=MyISAM", fill])
+        .await;
+    let v = format!("zz_it_undo_v_{}", std::process::id());
+    let _v = Cleanup { url: admin.clone(), sql: format!("DROP VIEW IF EXISTS shop.{v}") };
+    let mut a = side(&admin).await;
+    a.query_drop(format!("CREATE VIEW shop.{v} AS SELECT id, v FROM {}", t.q())).await.unwrap();
+    a.disconnect().await.unwrap();
+    let mut c = Conn::open(&url, SessionRole::Query, false, "undo").await;
+    let delete = format!("EXPLAIN ANALYZE DELETE x FROM {q} x JOIN {q} y ON y.id = x.id WHERE x.id > 1", q = t.q());
+    let evs = c.run(1, &[&delete]).await;
+    match evs.last() {
+        Some(DbEvent::Failed { error: DbError::NotUndoable(tables), .. }) => {
+            assert_eq!(tables, &[format!("shop.{} (MyISAM)", t.name)]);
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(rows_in(&mut c, 2, &t.q()).await, "3");
+    // Unqualified, in the current database: the same.
+    c.ok(3, "USE shop").await;
+    let evs =
+        c.run(4, &[&format!("EXPLAIN ANALYZE UPDATE {n} a JOIN {n} b ON b.id = a.id SET a.v = 'z'", n = t.name)]).await;
+    assert!(matches!(evs.last(), Some(DbEvent::Failed { error: DbError::NotUndoable(_), .. })), "{evs:?}");
+    // Through a view: its tables are not known.
+    let evs = c
+        .run(5, &[&format!("EXPLAIN ANALYZE UPDATE shop.{v} a JOIN {q} b ON b.id = a.id SET a.v = 'z'", q = t.q())])
+        .await;
+    match evs.last() {
+        Some(DbEvent::Failed { error: DbError::NotUndoable(tables), .. }) => {
+            assert!(tables.contains(&format!("shop.{v} (VIEW)")), "{tables:?}");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(rows_in(&mut c, 6, &format!("{} WHERE v = 'z'", t.q())).await, "0");
+    // Its plan without ANALYZE stays available, and a read is measured as it is.
+    let evs = c.run(7, &[&format!("EXPLAIN FORMAT=TREE DELETE FROM {} WHERE id > 1", t.q())]).await;
+    assert!(!matches!(evs.last(), Some(DbEvent::Failed { .. })), "{evs:?}");
+    let evs = c.run(8, &[&format!("EXPLAIN ANALYZE FORMAT=TREE SELECT * FROM {}", t.q())]).await;
+    assert!(!matches!(evs.last(), Some(DbEvent::Failed { .. })), "{evs:?}");
+}
+
+/// The tree text the server gives for the plan statements the app sends reads as a plan:
+/// estimates for `FORMAT=TREE`, measures for `ANALYZE`.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_servers_tree_reads_as_a_plan() {
+    use datarig_core::driver::ExplainFormat;
+    let Some((url, admin)) = urls("the_servers_tree_reads_as_a_plan") else { return };
+    let t = numbers(&admin, "tree", 50).await;
+    let mut c = Conn::open(&url, SessionRole::Query, false, "tree").await;
+    let stmt =
+        format!("SELECT a.v, COUNT(*) FROM {q} a JOIN {q} b ON b.id = a.id WHERE a.id > 10 GROUP BY a.v", q = t.q());
+    for (id, analyze) in [(1, false), (2, true)] {
+        let sql = ExplainFormat::MySqlTree.explain_sql(&stmt, analyze);
+        let evs = c.run(id, &[&sql]).await;
+        let (cols, rows, _) = page_of(&evs);
+        let text = rows[0][0].as_deref().unwrap();
+        assert!(ExplainFormat::MySqlTree.holds(&cols[0].name, &cols[0].type_name, text), "{cols:?}\n{text}");
+        let plan = ExplainFormat::MySqlTree.read(text).unwrap();
+        assert_eq!(plan.analyzed, analyze, "{text}");
+        assert!(plan.nodes.len() > 2, "{text}");
+    }
+}
+
+/// `EXPLAIN ANALYZE` of a query that calls a function that is not a built-in runs the
+/// function, whose writes to a non-transactional table no rollback undoes: a read-only session
+/// does not send it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_read_only_session_does_not_analyze_a_call_of_a_users_function() {
+    let Some((url, admin)) = urls("analyze_users_function") else { return };
+    let log =
+        Table::make(&admin, "fnlog", &["CREATE TABLE {t} (id INT AUTO_INCREMENT PRIMARY KEY) ENGINE=MyISAM"]).await;
+    let f = format!("zz_it_fnw_{}", std::process::id());
+    let _f = Cleanup { url: admin.clone(), sql: format!("DROP FUNCTION IF EXISTS shop.{f}") };
+    let mut a = side(&admin).await;
+    a.query_drop(format!(
+        "CREATE FUNCTION shop.{f}(x INT) RETURNS INT DETERMINISTIC MODIFIES SQL DATA \
+         BEGIN INSERT INTO {} () VALUES (); RETURN x; END",
+        log.q()
+    ))
+    .await
+    .unwrap();
+    a.disconnect().await.unwrap();
+    let mut c = Conn::open(&url, SessionRole::Query, true, "fnro").await;
+    let evs = c.run(1, &[&format!("EXPLAIN ANALYZE FORMAT=TREE SELECT shop.{f}(1)")]).await;
+    assert!(matches!(evs.last(), Some(DbEvent::Failed { error: DbError::ReadWriteRefused, .. })), "{evs:?}");
+    let mut w = Conn::open(&url, SessionRole::Query, false, "fnrw").await;
+    assert_eq!(rows_in(&mut w, 1, &log.q()).await, "0", "nothing ran");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_changed_sql_mode_changes_the_language() {
     let Some(url) = my_url("a_changed_sql_mode_changes_the_language") else { return };
