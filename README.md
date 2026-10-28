@@ -285,7 +285,8 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
   export stops.
 - Transaction indicators in the tab bar and the status bar (open, aborted, "rollback required"),
   and questions before closing, quitting or disconnecting would roll back your work.
-- Query plans (PostgreSQL): `Space e x` (or `:explain`) runs the statement under the cursor as
+- Query plans (PostgreSQL; MySQL 8.0.18 and later, see [MySQL](#mysql)): `Space e x` (or
+  `:explain`) runs the statement under the cursor as
   `EXPLAIN (FORMAT JSON)`, `Space e a` (or `:explain analyze`) as `EXPLAIN (ANALYZE, BUFFERS,
   FORMAT JSON)`, through the same checks as any run (a write under `ANALYZE` is rolled back, a
   read-only profile refuses it); an `EXPLAIN (FORMAT JSON …)` you type yourself shows the same
@@ -315,7 +316,11 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
   rows its filters removed); `7` a treemap (area = each node's own time); `8` a box diagram
   (boxes joined by lines; a large plan is moved around in with the selection, `<` `>` and the
   wheel); `9` the plan as `psql` prints it (written from the JSON; nothing is run again).
-  `y`/`Y` copy it as text or JSON. Large plans stay readable and fast: names are cut, layouts
+  `y`/`Y` copy it as text or JSON. On MySQL the plan is the server's tree (`EXPLAIN
+  FORMAT=TREE`, `EXPLAIN ANALYZE FORMAT=TREE`): the raw view and both copies are the server's
+  text as it came, there are no buffers, and a node the server gives no cost (a sort, a
+  subquery's head) shows its children's together marked `≈`, never as a number of the server's.
+  Large plans stay readable and fast: names are cut, layouts
   are bounded, and only what is on screen is drawn.
 - Charts of a result: the Chart tab of the results pane (or `c` in the results, `Space r c`, or
   the action menu) draws the rows the result has fetched as vertical bars, horizontal bars or
@@ -393,7 +398,7 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
 
 Planned, in no particular order and with no dates:
 
-- MySQL: the plan view; MariaDB as a driver of its own
+- MariaDB: the plan view, and MariaDB as a driver of its own
 - Drivers for Valkey/Redis and Elasticsearch
 - TLS: passphrase-protected client keys, certificate revocation lists, `sslnegotiation=direct`
 - A server monitor (sessions, locks, activity)
@@ -1393,9 +1398,21 @@ is tested only lightly.
   Windows) is not tested. A temporary table that shadows a table of the same name is not told
   apart from it.
 - The row count (`#`), key marks, hints, charts, and copying rows in every other format.
+- The plan view (MySQL 8.0.18 and later; `EXPLAIN FORMAT=TREE` needs 8.0.16, `EXPLAIN ANALYZE`
+  8.0.18, and an older server's error is shown as it comes): `Space e x` asks for
+  `EXPLAIN FORMAT=TREE`, `Space e a` for `EXPLAIN ANALYZE FORMAT=TREE`, through the same checks
+  as any run. `EXPLAIN ANALYZE` runs the statement: a write runs in a transaction of its own
+  that is rolled back (inside your open transaction, under a savepoint rolled back to), and a
+  read-only profile refuses it for a write or a call of a function that is not built in. An
+  `EXPLAIN ANALYZE` or `EXPLAIN FORMAT=TREE` you type yourself shows as a plan without running
+  again. A table `EXPLAIN` (or `FORMAT=JSON`, `TRADITIONAL`) is viewed as a plan (`P`) by asking
+  for `EXPLAIN FORMAT=TREE` of the same statement, never with `ANALYZE`, under the same rule
+  as on PostgreSQL (no question only for a plain `SELECT` on the allowlist); `INTO @v`,
+  `FOR CONNECTION`, an `EXPLAIN` of a table and an executable comment are refused.
 
 **What does not work yet**
-- The plan view (`EXPLAIN` runs and shows its text).
+- The plan view on MariaDB (its plans are shaped otherwise): the plan actions are not offered
+  there, and `EXPLAIN` runs and shows its text.
 - A `USE` typed in a console is not followed by the header and completion; use `:use`.
 - The estimates are the server's (`TABLE_ROWS`), which can be far off for InnoDB. A view whose
   table was dropped is listed without columns, and a database that does not exist or that you
