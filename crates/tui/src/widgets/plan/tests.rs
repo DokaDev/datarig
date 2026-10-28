@@ -80,14 +80,26 @@ fn icicle_children_share_their_parents_width() {
         leaf(50.0),
         leaf(25.0)
     );
-    let p = crate::app::plan::PlanTab::new(parse(&json).unwrap(), 0, 0, &json);
+    let p = crate::app::plan::PlanTab::new(
+        parse(&json).unwrap(),
+        0,
+        0,
+        &json,
+        datarig_core::driver::ExplainFormat::PostgresJson,
+    );
     let s = icicle::spans(&p, 100.0);
     assert_eq!(s[0], (0.0, 100.0));
     assert_eq!(s[1], (0.0, 50.0));
     assert_eq!(s[2], (50.0, 75.0), "the rest is the parent's own time");
     // Children that say they took longer than their parent share its width.
     let json = json.replace(r#""Actual Total Time": 25"#, r#""Actual Total Time": 150"#);
-    let p = crate::app::plan::PlanTab::new(parse(&json).unwrap(), 0, 0, &json);
+    let p = crate::app::plan::PlanTab::new(
+        parse(&json).unwrap(),
+        0,
+        0,
+        &json,
+        datarig_core::driver::ExplainFormat::PostgresJson,
+    );
     let s = icicle::spans(&p, 100.0);
     assert!((s[2].1 - 100.0).abs() < 1e-9, "{s:?}");
 }
@@ -98,7 +110,13 @@ fn icicle_children_share_their_parents_width() {
 fn icicle_ctes_do_not_shrink_their_siblings() {
     use datarig_core::sql::plan::pg::parse;
     let json = include_str!("../../../../core/src/sql/plan/fixtures/pg18/cte.analyze.json");
-    let p = crate::app::plan::PlanTab::new(parse(json).unwrap(), 0, 0, json);
+    let p = crate::app::plan::PlanTab::new(
+        parse(json).unwrap(),
+        0,
+        0,
+        json,
+        datarig_core::driver::ExplainFormat::PostgresJson,
+    );
     let s = icicle::spans(&p, 100.0);
     let plan = &p.plan;
     // Hash Join: CTE big (InitPlan), CTE Scan b (170.3 of 171.4 ms), Hash.
@@ -162,7 +180,13 @@ fn every_view_stays_inside_its_area_at_every_small_size() {
         for detail in [false, true] {
             for w in 0..48u16 {
                 for h in 0..14u16 {
-                    let mut p = PlanTab::new(parse(json).unwrap(), 0, 0, json);
+                    let mut p = PlanTab::new(
+                        parse(json).unwrap(),
+                        0,
+                        0,
+                        json,
+                        datarig_core::driver::ExplainFormat::PostgresJson,
+                    );
                     p.view = view;
                     p.detail = detail;
                     let outer = Rect { x: 0, y: 0, width: w + 6, height: h + 4 };
@@ -202,7 +226,7 @@ fn boxes_keep_their_edges_with_wide_characters() {
     let json = r#"{"Plan": {"Node Type": "Seq Scan", "Relation Name": "\uC8FC\uBB38\uB0B4\uC5ED\uD14C\uC774\uBE14", "Alias": "\uC8FC", "Startup Cost": 0, "Total Cost": 1, "Plan Rows": 1, "Plan Width": 4}}"#;
     let target = "on \"\u{C8FC}\u{BB38}\u{B0B4}\u{C5ED}\u{D14C}\u{C774}\u{BE14}\" \"\u{C8FC}\"";
     assert_eq!(parse(json).unwrap().nodes[0].target.as_deref(), Some(target));
-    let mut p = PlanTab::new(parse(json).unwrap(), 0, 0, json);
+    let mut p = PlanTab::new(parse(json).unwrap(), 0, 0, json, datarig_core::driver::ExplainFormat::PostgresJson);
     p.view = PlanView::Boxes;
     let th = crate::theme::DARK;
     let i18n = datarig_core::i18n::I18n::new(datarig_core::i18n::Lang::En);

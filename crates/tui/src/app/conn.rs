@@ -156,6 +156,10 @@ pub struct ProfileConn {
     /// (`DbEvent::Language`: a MySQL server's sql mode): what a tab of the profile reads its text
     /// in until its own session says. Kept while the profile is not connected.
     pub language: Option<datarig_core::sql::dialect::Language>,
+    /// The plan format the current attempt's server gives, as a session of it said
+    /// (`DbEvent::Explain`: none on MariaDB); `None` until one says, when the driver's
+    /// (`Capabilities::explain`) holds.
+    pub explain: Option<Option<datarig_core::driver::ExplainFormat>>,
     /// How the current attempt's metadata session's traffic goes (`DbEvent::Encryption`, sent
     /// right before `Connected`); `None` until it says.
     pub encryption: Option<datarig_core::tls::Encryption>,
@@ -197,6 +201,7 @@ impl ProfileConn {
             tunnel_wait: None,
             tunnel_lost: None,
             language: None,
+            explain: None,
             encryption: None,
             used: None,
             idle_closed: None,
@@ -293,6 +298,7 @@ impl ConnectionManager {
         let c = self.entry(id);
         c.generation = generation;
         c.encryption = None;
+        c.explain = None;
         generation
     }
 

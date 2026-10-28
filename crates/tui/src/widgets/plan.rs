@@ -129,6 +129,12 @@ fn view_bar(cx: &Look, p: &mut PlanTab, area: Rect, buf: &mut Buffer) {
     buf.set_style(area, Style::new().bg(th.surface));
     let plan = p.plan.clone();
     let (note, note_style) = match plan.measure() {
+        // A cost that is not the server's is marked `≈` where it shows: said once here.
+        Measure::Cost if plan.nodes.iter().any(|n| n.cost_derived) => {
+            let note =
+                format!("{} · {}", cx.i18n.label(Label::PlanEstimatesOnly), cx.i18n.label(Label::PlanCostDerived));
+            (note, Style::new().fg(th.warning).bg(th.surface))
+        }
         Measure::Cost => {
             (cx.i18n.label(Label::PlanEstimatesOnly).to_string(), Style::new().fg(th.warning).bg(th.surface))
         }
@@ -241,8 +247,8 @@ pub(crate) fn info_line(cx: &Look, plan: &Plan, i: usize, area: Rect, buf: &mut 
             Msg::PlanInfoTime { label, own, share, total }
         }
         Measure::Cost => {
-            let own = n.self_cost.map_or_else(String::new, fmt_num);
-            let total = n.cost.map_or_else(String::new, |c| fmt_num(c.1));
+            let own = n.self_cost.map_or_else(String::new, |c| fmt_cost(plan, i, c));
+            let total = n.cost.map_or_else(String::new, |c| fmt_cost(plan, i, c.1));
             Msg::PlanInfoCost { label, own, share, total }
         }
     };
@@ -341,11 +347,23 @@ pub(crate) fn fmt_share(share: f64) -> String {
     }
 }
 
-/// A node's own weight as its column says it: a time, or a cost.
-pub(crate) fn fmt_weight(plan: &Plan, w: f64) -> String {
+/// Node `i`'s own weight as its column says it: a time, or a cost ([`fmt_cost`]).
+pub(crate) fn fmt_weight(plan: &Plan, i: usize) -> String {
+    let w = plan.weight(i);
     match plan.measure() {
         Measure::Time => fmt_ms(w),
-        Measure::Cost => fmt_num(w),
+        Measure::Cost => fmt_cost(plan, i, w),
+    }
+}
+
+/// A cost of node `i` (its own or its total): `≈` first when the server gave the node none
+/// and it is its children's together ([`PlanNode::cost_derived`]), never like the server's.
+///
+/// [`PlanNode::cost_derived`]: datarig_core::sql::plan::PlanNode::cost_derived
+pub(crate) fn fmt_cost(plan: &Plan, i: usize, cost: f64) -> String {
+    match plan.nodes.get(i).is_some_and(|n| n.cost_derived) {
+        true => format!("≈{}", fmt_num(cost)),
+        false => fmt_num(cost),
     }
 }
 

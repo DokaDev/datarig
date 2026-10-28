@@ -102,7 +102,7 @@ Every pane that is not text input (explorer, results, vim Normal/Visual). Inside
 | `Space e c` | `editor.comment_toggle` | Comment the line or the selected lines out with -- (or back in) |  |
 | `Space e x` | `query.explain` | Explain: the statement's plan (nothing runs) |  |
 | `Space e a` | `query.explain_analyze` | Explain analyze: run and measure the statement (writes rolled back) |  |
-| `Space e p` | `results.view_as_plan` | View as plan: the text EXPLAIN again as JSON |  |
+| `Space e p` | `results.view_as_plan` | View as plan: the text EXPLAIN again as a plan |  |
 | `Space Space` | `menu.open` | Action menu |  |
 | `Shift+F10` | `menu.open` | Action menu |  |
 | `Menu` | `menu.open` | Action menu |  |
@@ -252,7 +252,7 @@ The result grid. Inside `nav`.
 | `n` | `results.page.next` | Results → next page | ✓ |
 | `p` | `results.page.prev` | Results → previous page | ✓ |
 | `#` | `results.count` | Results → count every row (runs a count query) |  |
-| `P` | `results.view_as_plan` | View as plan: the text EXPLAIN again as JSON |  |
+| `P` | `results.view_as_plan` | View as plan: the text EXPLAIN again as a plan |  |
 | `c` | `results.chart` | Results → show as a chart / as rows |  |
 | `L` | `results.tab.next` | Result tabs → next |  |
 | `H` | `results.tab.prev` | Result tabs → previous |  |
@@ -309,11 +309,11 @@ The Plan tab of the results pane (an `EXPLAIN (FORMAT JSON)` result): `j`/`k` se
 | `6` | `plan.view.rows` | Plan view: row flow (rows between nodes) |  |
 | `7` | `plan.view.treemap` | Plan view: treemap (area = own time) |  |
 | `8` | `plan.view.boxes` | Plan view: box diagram |  |
-| `9` | `plan.view.raw` | Plan view: raw text (as psql shows it) |  |
+| `9` | `plan.view.raw` | Plan view: raw (the server's own words, or as psql shows a JSON plan) |  |
 | `<` | `plan.pan_left` | Plan: move the view left | ✓ |
 | `>` | `plan.pan_right` | Plan: move the view right | ✓ |
-| `y` | `plan.copy_text` | Plan: copy as text (as psql shows it) |  |
-| `Y` | `plan.copy_json` | Plan: copy its JSON |  |
+| `y` | `plan.copy_text` | Plan: copy as the raw view shows it |  |
+| `Y` | `plan.copy_json` | Plan: copy as the server sent it (its JSON, or its text) |  |
 | `z` | `results.panel.maximize` | Results pane → zoom (maximise) / restore |  |
 | `+` | `results.panel.grow` | Results pane → taller | ✓ |
 | `-` | `results.panel.shrink` | Results pane → shorter | ✓ |

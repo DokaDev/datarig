@@ -1,5 +1,5 @@
-//! The raw view: the text `psql` shows for `EXPLAIN`, written from the plan (never asked of the
-//! server again). The selected node's lines are marked, its node line most; `<` and `>` move
+//! The raw view: the server's own text for a text format (MySQL's tree, as it came), else the
+//! text `psql` shows for `EXPLAIN`, written from the plan (never asked of the server again). The selected node's lines are marked, its node line most; `<` and `>` move
 //! long lines sideways.
 
 use super::{Look, on_line, selected_style, work};
@@ -20,7 +20,7 @@ pub(super) fn draw(cx: &Look, p: &mut PlanTab, area: Rect, buf: &mut Buffer) {
     p.pan = p.pan.min(raw.widest.saturating_sub(area.width.saturating_sub(2) as usize));
     let pan = p.pan;
     let lines = &raw.lines;
-    let head = raw.node_line(&plan, selected);
+    let head = raw.node_line(selected);
     let top = super::follow(p, head, lines.len(), area.height as usize);
     for (row, (text, node)) in lines.iter().enumerate().skip(top).take(area.height as usize) {
         work(1);
@@ -38,7 +38,7 @@ pub(super) fn draw(cx: &Look, p: &mut PlanTab, area: Rect, buf: &mut Buffer) {
         }
         let shown = skip_cols(text, pan);
         let w = area.width.saturating_sub(1) as usize;
-        let header = node.is_some_and(|n| row == raw.node_line(&plan, n));
+        let header = node.is_some_and(|n| row == raw.node_line(n));
         if header {
             let hot = node.is_some_and(|n| plan.is_hot(n));
             let style =

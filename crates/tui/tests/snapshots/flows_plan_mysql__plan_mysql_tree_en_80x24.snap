@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/flows_plan_mysql.rs
+expression: "h.draw(80, 24).backend()"
+---
+"╭ Explorer ────────────╮ 1 console 1 ×                                          "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1       ││ local-my / datarig  127.0.0.1:55432                  │"
+"│  ▾ ●   local-my      ││  1 SELECT 1;                                         │"
+"│      Loading…        ││  2▎SELECT c.city, SUM(o.amount) FROM c JOIN o ON o.c_│"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      │╰──────────────────────────────────────────────────────╯"
+"│                      │╭ Plan · Tree ─────────────────────────────────────────╮"
+"│                      ││ Result 1  [Plan]  Chart  Messages                    │"
+"│                      ││ [Tree] … estimated cost, not time (no ANALYZE) · ≈ … │"
+"│                      ││ Node                         self cost share         │"
+"│                      ││ ▾ Sort                              ≈0             0%│"
+"│                      ││ └─▾ Stream results                   0             0%│"
+"│                      ││   └─▾ Group aggregate hot           58 █▉         21%│"
+"│                      ││     └─▾ Nested loop in… hot        200 ██████▋    73%│"
+"│                      ││       ├─▾ Filter                     0             0%│"
+"│                      ││       │ └── Covering index…         12 ▍           4%│"
+"│                      ││       └── Index lookup on …        2.5 ▏          <1%│"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" NORMAL  local-my │ 1 row · 3ms        │ i type · Ctrl+E run · Tab next pane EN "

@@ -76,7 +76,11 @@ pub(super) fn draw(cx: &Look, p: &PlanTab, area: Rect, beside: bool, buf: &mut B
                 ));
             }
         }
-        if let Some((startup, total)) = n.cost {
+        if let Some((_, total)) = n.cost.filter(|_| n.cost_derived) {
+            // Not the server's: said so, never as its numbers.
+            let total = fmt_num(total);
+            v.push((Label::PlanDetailCostLabel, cx.i18n.msg(&Msg::PlanDetailCostDerived { total }).to_string(), muted));
+        } else if let Some((startup, total)) = n.cost {
             let own = n.self_cost.map_or_else(String::new, fmt_num);
             let (startup, total) = (format!("{startup:.2}"), format!("{total:.2}"));
             let msg = if plan.measure() == Measure::Cost {

@@ -60,10 +60,6 @@ fn postgres_tools() {
     assert_eq!(d.line_comment_at("--x"), Some("--"));
     assert_eq!(d.line_comment_at("# x"), None);
     assert!(matches!(d.sqlformat_dialect(), sqlformat::Dialect::PostgreSql));
-    for analyze in [false, true] {
-        assert_eq!(d.explain_sql("SELECT 1", analyze), Some(crate::sql::plan::explain_sql("SELECT 1", analyze)));
-    }
-    assert_eq!(d.explain_sql("SELECT 1", false).as_deref(), Some("EXPLAIN (FORMAT JSON) SELECT 1"));
 }
 
 /// How a string literal opens: its prefix, its quote and whether a backslash escapes, in each

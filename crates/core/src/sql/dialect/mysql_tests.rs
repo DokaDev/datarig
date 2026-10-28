@@ -115,7 +115,6 @@ fn mysql_tools() {
     assert_eq!(MY.line_comment_at("--x"), None, "minus minus x");
     assert_eq!(MY.line_comment_at("x -- y"), None);
     assert!(matches!(MY.sqlformat_dialect(), sqlformat::Dialect::Generic));
-    assert_eq!(MY.explain_sql("SELECT 1", false), None, "the plan view does not read MySQL's plans yet");
     assert!(MY.keywords().windows(2).all(|w| w[0] < w[1]), "sorted");
     for w in ["SELECT", "LIMIT", "STRAIGHT_JOIN", "DUPLICATE", "REGEXP", "AUTO_INCREMENT"] {
         assert!(MY.is_keyword(w), "{w}");

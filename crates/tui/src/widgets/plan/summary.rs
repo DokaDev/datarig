@@ -35,7 +35,7 @@ fn cards(cx: &Look, p: &PlanTab) -> Vec<Card> {
     if let Some(i) = slowest {
         let style = if plan.is_hot(i) { base.patch(th.plan_hot) } else { base.add_modifier(Modifier::BOLD) };
         lines.push((plan.label(i), style));
-        let (share, own) = (fmt_share(plan.share(i)), fmt_weight(plan, plan.weight(i)));
+        let (share, own) = (fmt_share(plan.share(i)), fmt_weight(plan, i));
         lines.push((i18n.msg(&Msg::PlanCardShare { share, own }).to_string(), muted));
     }
     out.push(Card { title, lines, node: slowest });
@@ -61,9 +61,10 @@ fn cards(cx: &Look, p: &PlanTab) -> Vec<Card> {
         }
     };
     out.push(Card { title, lines, node: worst.map(|w| w.0) });
-    // Disk reads.
+    // Disk reads (a format that never counts them has no card for them).
     let title = i18n.label(Label::PlanCardReads).to_string();
     let lines = match plan.buffers() {
+        None if !p.format.has_buffers() => Vec::new(),
         Some(b) => {
             let read = fmt_num(b.reads() as f64);
             let hit = b.hit_ratio().map_or_else(|| "-".into(), fmt_share);
@@ -79,7 +80,9 @@ fn cards(cx: &Look, p: &PlanTab) -> Vec<Card> {
         }
         None => vec![(i18n.label(Label::PlanCardNoBuffers).to_string(), muted)],
     };
-    out.push(Card { title, lines, node: None });
+    if !lines.is_empty() {
+        out.push(Card { title, lines, node: None });
+    }
     // The whole.
     let lines = if time {
         let planning = plan.planning_ms.map_or_else(|| "?".into(), fmt_ms);
@@ -92,7 +95,11 @@ fn cards(cx: &Look, p: &PlanTab) -> Vec<Card> {
         }
         v
     } else {
-        let total = fmt_num(plan.total());
+        // The roots' cost, marked when one of them is not the server's.
+        let total = match plan.roots().any(|r| plan.nodes[r].cost_derived) {
+            true => format!("≈{}", fmt_num(plan.total())),
+            false => fmt_num(plan.total()),
+        };
         vec![(i18n.msg(&Msg::PlanCardCost { total }).to_string(), Style::new().fg(th.warning).bg(th.bg))]
     };
     let title = i18n.label(if time { Label::PlanCardTime } else { Label::PlanCardCostTotal }).to_string();
@@ -104,7 +111,7 @@ pub(super) fn draw(cx: &Look, p: &mut PlanTab, area: Rect, buf: &mut Buffer) {
     let cards = cards(cx, p);
     work(cards.len() as u64);
     // Four in a row when they fit, else two by two; none in a pane too short for them.
-    let per_row = if area.width >= 4 * 30 { 4 } else { 2 };
+    let per_row = if area.width >= 4 * 30 { cards.len().clamp(1, 4) } else { 2 };
     let rows = cards.len().div_ceil(per_row) as u16;
     let card_h = 4;
     let cards_h = rows * card_h;

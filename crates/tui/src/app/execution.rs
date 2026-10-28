@@ -471,6 +471,7 @@ impl App {
         let target = match &ev {
             DbEvent::Page { .. }
             | DbEvent::Language(_)
+            | DbEvent::Explain(_)
             | DbEvent::SessionValues(_)
             | DbEvent::ValuesNotKnown { .. }
             | DbEvent::Info { .. }
@@ -812,6 +813,8 @@ impl App {
             // The mode a new session of the profile starts in (MySQL): a tab's first run is
             // checked in it before the tab's own session says.
             DbEvent::Language(lang) => self.set_profile_language(id, lang),
+            // The plan format its server gives (the plan actions follow it).
+            DbEvent::Explain(format) => self.conns.entry(id).explain = Some(format),
             // A query session's own (copying its values as SQL needs it).
             DbEvent::SessionValues(_) | DbEvent::ValuesNotKnown { .. } => {}
             // Statement events never come from the metadata session.
@@ -906,6 +909,13 @@ impl App {
         }
         if matches!(ev, DbEvent::StatementCacheOff) {
             return self.statement_cache_off(id, profile);
+        }
+        // The plan format of the profile's server: a query session's word is the profile's.
+        if let DbEvent::Explain(format) = ev {
+            if let Some(p) = profile {
+                self.conns.entry(p).explain = Some(format);
+            }
+            return;
         }
         // The editor and the risk classifier read the text as the session does from now on.
         if let DbEvent::Language(lang) = ev {
@@ -1061,6 +1071,8 @@ impl App {
         // The rollback the app sent for an idle transaction: confirmed (said in the status bar
         // too), or refused (`Err`: the session closes instead).
         let mut idle_end: Option<Result<Notice, (Duration, super::idle::RollbackFailed)>> = None;
+        // The plan format a result of the tab may be in (one shows as a plan).
+        let explain = self.tab_explain(id);
         let Some(t) = self.tabs.get_mut(id) else { return };
         if outside.is_some() {
             t.exec.outside_offer = outside;
@@ -1087,6 +1099,7 @@ impl App {
             // Handled first (`statement_cache_off`, `sync_tab_language`, the cancel's clock).
             DbEvent::StatementCacheOff
             | DbEvent::Language(_)
+            | DbEvent::Explain(_)
             | DbEvent::SessionValues(_)
             | DbEvent::Stopping { .. }
             | DbEvent::CancelRefused { .. }
@@ -1452,8 +1465,9 @@ impl App {
                 }
                 let count = match (columns, t.exec.steps.get_mut(&index)) {
                     (Some(cols), _) => {
-                        if let Some((plan, json)) = super::plan::plan_of(&cols, &rows, more) {
-                            t.exec.plan = Some(super::plan::PlanTab::new(plan, t.exec.query_id, index, &json));
+                        if let Some((plan, source, format)) = super::plan::plan_of(&cols, &rows, more, explain) {
+                            t.exec.plan =
+                                Some(super::plan::PlanTab::new(plan, t.exec.query_id, index, &source, format));
                         }
                         let store = datarig_core::results::RowStore::new(rows, spill, limits);
                         let mut rs = ResultSet::new(cols, store, more, &null);
@@ -1571,8 +1585,9 @@ impl App {
                 t.exec.running = None;
                 t.exec.released = false;
                 let count = rows.len();
-                // A plan (`EXPLAIN (FORMAT JSON)`): shown as one; its rows stay a result tab.
-                let plan = if t.is_table() { None } else { super::plan::plan_of(&cols, &rows, more) };
+                // A plan (`EXPLAIN (FORMAT JSON)`, MySQL's tree): shown as one; its rows stay a
+                // result tab.
+                let plan = if t.is_table() { None } else { super::plan::plan_of(&cols, &rows, more, explain) };
                 let store = datarig_core::results::RowStore::new(rows, spill, limits);
                 // The run's answer: its own result tab, shown.
                 if t.exec.replace_pending {
@@ -1596,9 +1611,9 @@ impl App {
                 // The Chart tab shown before stays: it draws these rows.
                 let charted = t.exec.view == super::tabs::ResultView::Chart;
                 t.exec.view = if charted { super::tabs::ResultView::Chart } else { super::tabs::ResultView::Rows };
-                if let Some((plan, json)) = plan {
+                if let Some((plan, source, format)) = plan {
                     let (query, index) = (t.exec.query_id, t.exec.shown.unwrap_or(0));
-                    t.exec.plan = Some(super::plan::PlanTab::new(plan, query, index, &json));
+                    t.exec.plan = Some(super::plan::PlanTab::new(plan, query, index, &source, format));
                     t.exec.view = super::tabs::ResultView::Plan;
                 }
                 t.exec.run.answered(StatementOutcome::Rows { count: count as u64, more }, Some(elapsed));

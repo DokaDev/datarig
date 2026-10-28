@@ -5,7 +5,9 @@
 //! Narrow panes drop columns from the least needed (buffers, total, estimate, actual rows); a
 //! deep node's guides are cut at the left (`…`) so its name keeps room.
 
-use super::{Look, bar, fmt_ms, fmt_num, fmt_share, fmt_weight, heat, markers, on_line, selected_style, work};
+use super::{
+    Look, bar, fmt_cost, fmt_ms, fmt_num, fmt_share, fmt_weight, heat, markers, on_line, selected_style, work,
+};
 use crate::app::plan::PlanTab;
 use crate::text::{Align, fit, width};
 use crate::widgets::put;
@@ -175,12 +177,12 @@ fn cell(cx: &Look, plan: &Plan, i: usize, c: Col, base: Style) -> (String, Style
         },
         Col::SelfW => {
             let style = if plan.is_hot(i) { base.patch(th.plan_hot) } else { base };
-            (fmt_weight(plan, plan.weight(i)), style)
+            (fmt_weight(plan, i), style)
         }
         Col::Total => {
             let total = match plan.measure() {
                 Measure::Time => n.total_ms.map(fmt_ms),
-                Measure::Cost => n.cost.map(|c| fmt_num(c.1)),
+                Measure::Cost => n.cost.map(|c| fmt_cost(plan, i, c.1)),
             };
             (total.unwrap_or_default(), base.fg(th.fg_muted))
         }

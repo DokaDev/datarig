@@ -1,17 +1,22 @@
 //! The plan of a statement, in the results pane's Plan tab.
 //!
+//! Everything that depends on how a server writes its plans is asked of the plan format the
+//! tab's server gives ([`App::tab_explain`]: PostgreSQL's JSON, MySQL's tree text), never of
+//! its dialect.
+//!
 //! `query.explain` and `query.explain_analyze` run the statement under the cursor (or the one
-//! statement selected) as `EXPLAIN (FORMAT JSON)` or `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)`
-//! through the normal path of a run: the same read-only refusal, the same confirmation of
-//! what may do harm, and the driver's rollback of what an `EXPLAIN ANALYZE` ran. Any result of
-//! one row with one `json` column named `QUERY PLAN` that reads as a plan is shown as one, so
-//! an `EXPLAIN (FORMAT JSON …)` typed by hand is too.
+//! statement selected) as the format asks for its plan (PostgreSQL: `EXPLAIN (FORMAT JSON)` or
+//! `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)`; MySQL: `EXPLAIN FORMAT=TREE` or `EXPLAIN ANALYZE
+//! FORMAT=TREE`) through the normal path of a run: the same read-only refusal, the same
+//! confirmation of what may do harm, and the driver's rollback of what an `EXPLAIN ANALYZE`
+//! ran. Any result of one row and one column that the format reads as its plan is shown as
+//! one, so an `EXPLAIN` typed by hand in that format is too (never run again).
 //!
 //! A text `EXPLAIN` (any other format) stays rows, with a line under them that offers
 //! `results.view_as_plan`: the statement that produced those rows (not the editor's text) is
-//! asked again with `FORMAT JSON` and its other options kept, through the same path of a run.
-//! Never by itself: with `ANALYZE` the statement runs again, so it asks first; a result whose
-//! tab moved to another connection or database since is refused.
+//! asked again in the format, through the same path of a run. Never by itself: with `ANALYZE`
+//! the statement runs again, so it asks first; a result whose tab moved to another connection
+//! or database since is refused.
 //!
 //! A plan belongs to the run it came from, like its rows: a later run that delivers rows
 //! replaces it; one that delivers none leaves it (from an earlier run). Its views are drawn
@@ -19,6 +24,7 @@
 //! again.
 
 use super::*;
+use datarig_core::driver::ExplainFormat;
 use datarig_core::sql::plan::{self, Plan};
 
 /// How a plan is shown.
@@ -41,7 +47,8 @@ pub enum PlanView {
     Treemap,
     /// Boxes joined by lines, a large plan moved around in.
     Boxes,
-    /// The text `psql` shows for `EXPLAIN`, written from the plan.
+    /// The plan as text: the server's own text for a text format (MySQL's tree), else the text
+    /// `psql` shows for `EXPLAIN`, written from the plan.
     Raw,
 }
 
@@ -107,23 +114,25 @@ pub enum PlanAction {
     /// Move the view sideways (long lines, wide layouts).
     PanLeft,
     PanRight,
-    /// The plan as `psql` shows it, or its JSON, to the clipboard.
+    /// The plan as the raw view shows it, or as the server sent it (JSON, a text format's
+    /// text), to the clipboard.
     CopyText,
     CopyJson,
 }
 
-/// A plan as `psql` shows it: its lines, each with its node, and each node's first line.
+/// A plan as the raw view shows it: its lines, each with its node, and each node's own line.
 pub struct RawText {
     pub lines: Vec<(String, Option<usize>)>,
-    pub first: Vec<usize>,
+    /// Node `i`'s own line (`psql` writes a subplan's name on a line before it).
+    pub own: Vec<usize>,
     /// The widest line, in columns.
     pub widest: usize,
 }
 
 impl RawText {
-    /// Node `i`'s own line (after the name of its subplan, when it has one).
-    pub fn node_line(&self, plan: &Plan, i: usize) -> usize {
-        self.first.get(i).copied().unwrap_or(0) + usize::from(plan.nodes.get(i).is_some_and(|n| n.subplan.is_some()))
+    /// Node `i`'s own line.
+    pub fn node_line(&self, i: usize) -> usize {
+        self.own.get(i).copied().unwrap_or(0)
     }
 }
 
@@ -133,8 +142,9 @@ pub struct PlanTab {
     /// The run it came from (its query id) and the statement of that run.
     pub query: u64,
     pub index: usize,
-    /// The JSON as the server sent it (copied as it is).
-    pub json: Arc<str>,
+    /// The plan as the server sent it (copied as it is), in `format`.
+    pub source: Arc<str>,
+    pub format: ExplainFormat,
     pub view: PlanView,
     pub selected: usize,
     /// Nodes whose children the tree hides.
@@ -150,7 +160,7 @@ pub struct PlanTab {
     /// The wheel moved the view away from the selection: it is not brought back into view
     /// until a key moves the selection.
     pub detached: bool,
-    /// The `psql` text, written once.
+    /// The raw view's text, made once.
     raw: Option<Arc<RawText>>,
     /// Where the last frame drew each node (the pointer selects them).
     pub hits: Vec<(Rect, usize)>,
@@ -159,13 +169,14 @@ pub struct PlanTab {
 }
 
 impl PlanTab {
-    pub fn new(plan: Plan, query: u64, index: usize, json: &str) -> Self {
+    pub fn new(plan: Plan, query: u64, index: usize, source: &str, format: ExplainFormat) -> Self {
         let n = plan.nodes.len();
         Self {
             plan: Arc::new(plan),
             query,
             index,
-            json: json.into(),
+            source: source.into(),
+            format,
             view: PlanView::Tree,
             selected: 0,
             collapsed: vec![false; n],
@@ -180,20 +191,44 @@ impl PlanTab {
         }
     }
 
-    /// The text `psql` shows, each line with its node.
+    /// The raw view's text, each line with its node: a text format's text as the server sent
+    /// it, else the text `psql` shows, written from the plan.
     pub fn raw(&mut self) -> Arc<RawText> {
-        let plan = &self.plan;
+        let (plan, source, format) = (&self.plan, &self.source, self.format);
         self.raw
             .get_or_insert_with(|| {
-                let lines = plan::text::lines(plan);
-                let mut first = vec![0; plan.nodes.len()];
-                for (at, (_, n)) in lines.iter().enumerate().rev() {
-                    if let Some(n) = n {
-                        first[*n] = at;
+                let nodes = plan.nodes.len();
+                let mut own = vec![0; nodes];
+                let lines = if format.is_text() {
+                    // A node per line that starts with `-> ` (as the reader reads it); a line
+                    // that does not belongs to the node above it.
+                    let mut node: Option<usize> = None;
+                    let mut next = 0;
+                    let mut lines = Vec::new();
+                    for (at, l) in source.lines().enumerate() {
+                        if l.trim_start_matches(' ').starts_with("-> ") && next < nodes {
+                            own[next] = at;
+                            node = Some(next);
+                            next += 1;
+                        }
+                        lines.push((l.to_string(), node.filter(|_| !l.trim().is_empty())));
                     }
-                }
+                    lines
+                } else {
+                    let lines = plan::text::lines(plan);
+                    for (at, (_, n)) in lines.iter().enumerate().rev() {
+                        if let Some(n) = n {
+                            own[*n] = at;
+                        }
+                    }
+                    // The subplan's name comes on a line before the node's own.
+                    for (i, n) in plan.nodes.iter().enumerate() {
+                        own[i] += usize::from(n.subplan.is_some());
+                    }
+                    lines
+                };
                 let widest = lines.iter().map(|(l, _)| crate::text::width(l)).max().unwrap_or(0);
-                Arc::new(RawText { lines, first, widest })
+                Arc::new(RawText { lines, own, widest })
             })
             .clone()
     }
@@ -286,7 +321,7 @@ impl PlanTab {
     }
 }
 
-/// An `EXPLAIN` waiting for its confirmation to run again as JSON, and the result it
+/// An `EXPLAIN` waiting for its confirmation to run again in the plan format, and the result it
 /// was asked from: it runs only while the tab still shows that result, on the same binding.
 pub struct AsPlan {
     tab: TabId,
@@ -327,10 +362,11 @@ impl AsPlan {
 }
 
 /// [`App::text_plan`] of one result: the tab, its run, the result tab, whether its rows are
-/// from an earlier run, and the length of its statement name the result.
+/// from an earlier run, and the length of its statement name the result; the plan format it
+/// would be asked again in, the tab's server's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct TextPlan {
-    key: (TabId, u64, Option<usize>, bool, usize),
+    key: (TabId, u64, Option<usize>, bool, usize, Option<ExplainFormat>),
     explain: bool,
     rewritable: bool,
 }
@@ -346,25 +382,28 @@ fn not_json(e: plan::explain::NotJson) -> Notice {
     }
 }
 
-/// The plan a result is, when it is one: one row of one `json` column the source names as its
-/// plan (PostgreSQL: `QUERY PLAN`), complete, whose text reads as a plan. Its JSON comes too.
+/// The plan a result is, when it is one: one row of one column, complete, whose text plan
+/// format `format` (the tab's server's) holds and reads (PostgreSQL: a `json` column named
+/// `QUERY PLAN`; MySQL: a column `EXPLAIN` holding a tree). Its text and format come too.
 pub(super) fn plan_of(
     columns: &[datarig_core::driver::ColumnMeta],
     rows: &[Vec<datarig_core::driver::Cell>],
     more: bool,
-) -> Option<(Plan, String)> {
+    format: Option<ExplainFormat>,
+) -> Option<(Plan, String, ExplainFormat)> {
+    let format = format?;
     let [c] = columns else { return None };
     let [row] = rows else { return None };
-    if more || !plan::pg::is_plan_column(&c.name, &c.type_name) {
+    let text = row.first()?.as_deref()?;
+    if more || !format.holds(&c.name, &c.type_name, text) {
         return None;
     }
-    let json = row.first()?.as_deref()?;
-    plan::pg::parse(json).ok().map(|p| (p, json.to_string()))
+    format.read(text).ok().map(|p| (p, text.to_string(), format))
 }
 
 impl App {
     /// `query.explain` / `query.explain_analyze`: the statement under the cursor, or the one
-    /// statement selected, as `EXPLAIN (… FORMAT JSON)`, run like any statement.
+    /// statement selected, as the tab's plan format asks for its plan, run like any statement.
     pub(super) fn explain(&mut self, analyze: bool) {
         let (stmts, spans) = self.tab_mut().editor.run_statements();
         let stmt = match &stmts[..] {
@@ -382,19 +421,21 @@ impl App {
         if self.tab_busy(self.tab().id) {
             return self.flash_busy();
         }
-        // A dialect without a plan statement has a driver without a plan format, and the action
-        // is not offered there (`App::tab_explains`): the dispatcher does nothing, as here.
-        let Some(sql) = self.tab_dialect(self.tab().id).explain_sql(&stmt, analyze) else { return };
+        // A server without a plan format is not offered the action (`App::tab_explains`): the
+        // dispatcher does nothing, as here.
+        let Some(format) = self.tab_explain(self.tab().id) else { return };
+        let sql = format.explain_sql(&stmt, analyze);
         self.tab_mut().editor.stage_run(std::slice::from_ref(&sql), spans);
         self.run(vec![sql]);
     }
 
     /// What the active tab's shown rows are for `results.view_as_plan`, worked out once per
     /// result (the hint asks every frame): their statement is an `EXPLAIN` that is not a plan
-    /// yet, and the lexer can ask it again as JSON.
+    /// yet, and the lexer can ask it again in the tab's plan format.
     fn text_plan(&self) -> TextPlan {
         let t = self.tab();
-        let key = (t.id, t.exec.query_id, t.exec.shown, t.exec.kept_log.is_some(), t.shown_sql().len());
+        let format = self.tab_explain(t.id);
+        let key = (t.id, t.exec.query_id, t.exec.shown, t.exec.kept_log.is_some(), t.shown_sql().len(), format);
         if let Some(c) = self.text_plan_cache.get().filter(|c| c.key == key) {
             return c;
         }
@@ -406,7 +447,8 @@ impl App {
         // Rows of an earlier run (statements ran since) or of a run of several are not asked
         // again: no offer.
         let alone = t.exec.kept_log.is_none() && !t.rows_log().several();
-        let rewritable = explain && alone && plan::explain::json_text_in(sql, dialect).is_ok();
+        let again = |f: ExplainFormat| f.again_text(sql, dialect).is_ok();
+        let rewritable = explain && alone && format.is_some_and(again);
         let c = TextPlan { key, explain, rewritable };
         self.text_plan_cache.set(Some(c));
         c
@@ -489,8 +531,9 @@ impl App {
         self.flash(notice);
     }
 
-    /// `results.view_as_plan`: the statement of the shown text plan with `FORMAT JSON`, run like
-    /// any statement. What the editor holds now does not matter. It is refused unless the tab
+    /// `results.view_as_plan`: the statement of the shown text plan asked again in the tab's plan
+    /// format (PostgreSQL: with `FORMAT JSON`; MySQL: as `EXPLAIN FORMAT=TREE`), run like any
+    /// statement. What the editor holds now does not matter. It is refused unless the tab
     /// is still where those rows were read, on the same session, with nothing run since or
     /// beside it (a setting, a temporary table, a prepared statement would make it another
     /// plan); what runs more than the planner (`ANALYZE`, an `EXECUTE`'s parameters) asks first.
@@ -503,7 +546,8 @@ impl App {
         if self.tab_busy(id) {
             return self.flash_busy();
         }
-        let json = match plan::explain::json_in(&sql, self.tab_dialect(id)) {
+        let Some(format) = self.tab_explain(id) else { return };
+        let json = match format.again(&sql, self.tab_dialect(id)) {
             Ok(j) => j,
             Err(e) => return self.flash(not_json(e)),
         };
@@ -687,11 +731,13 @@ impl App {
         p.act(a);
     }
 
-    /// The plan as `psql` shows it (or its JSON) to the clipboard.
-    fn copy_plan(&mut self, json: bool) {
+    /// The plan as the raw view shows it (or as the server sent it) to the clipboard. A text
+    /// format's plan is the same text either way.
+    fn copy_plan(&mut self, sent: bool) {
         let Some(p) = self.tab_mut().exec.plan.as_mut() else { return };
-        let text = match json {
-            true => p.json.to_string(),
+        let json = sent && !p.format.is_text();
+        let text = match sent || p.format.is_text() {
+            true => p.source.to_string(),
             false => p.raw().lines.iter().map(|(l, _)| l.as_str()).collect::<Vec<_>>().join("\n"),
         };
         let count = text.lines().count() as u64;
