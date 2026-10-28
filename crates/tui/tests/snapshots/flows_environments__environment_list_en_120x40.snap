@@ -1,6 +1,6 @@
 ---
 source: crates/tui/tests/flows_environments.rs
-assertion_line: 551
+assertion_line: 559
 expression: backend
 ---
 "╭ Explorer ──────────────────╮╭ Workspace ─────────────────────────────────────────────────────────────────────────────╮"
@@ -17,16 +17,16 @@ expression: backend
 "│    ● tes│                                                                                                  │         │"
 "│    ● sta│ SSL mode          disable ▾   ←/→ change · Enter list                                            │         │"
 "│  ▾ ● pro│ CA file                                               PEM; checks the server's certificate       │         │"
-"│      ○  │ Client cert         ╭ Environment ─────────────────────────────────────────╮ver asks             │         │"
-"│▾ Startup│ Client key          │ › type to filter                                     │ase                  │         │"
-"│    n her│ Statement cache   ‹ │                                                      │ode                  │         │"
-"│         │ Environment       ● │ ○ None (default rules)  standard rules               │ry write             │         │"
-"│         │ Startup SQL       En│ ● dev                   standard rules               │                     │         │"
-"│         │ Own startup SQL     │ ● test                  standard rules               │                   × │         │"
-"│         │                     │ ● staging  STG          asks before every write · m… │                     │         │"
-"│         │ Color             ‹ │ ● prod  PROD            read-only · asks before eve… │                     │         │"
-"│         │ Icon              ‹ │   New environment…                                   │                     │         │"
-"│         │ Folder            ‹ ╰───────────────── Enter pick · ↑↓ select · Esc cancel ╯                     │         │"
+"│      ○  │ Client c╭ Environment ─────────────────────────────────────────────────────────────────╮         │         │"
+"│▾ Startup│ Client k│ › type to filter                                                             │         │         │"
+"│    n her│ Statemen│                                                                              │         │         │"
+"│         │ Environm│ ○ None (default rules)  standard rules                                       │         │         │"
+"│         │ Startup │ ● dev                   standard rules                                       │         │         │"
+"│         │ Own star│ ● test                  standard rules                                       │       × │         │"
+"│         │         │ ● staging  STG          asks before every write · manual commit              │         │         │"
+"│         │ Color   │ ● prod  PROD            read-only · asks before every write                  │         │         │"
+"│         │ Icon    │   New environment…                                                           │         │         │"
+"│         │ Folder  ╰───────────────────────────────────────── Enter pick · ↑↓ select · Esc cancel ╯         │         │"
 "│         │                                                                                                  │         │"
 "│         │                    Test    Save    Cancel                                                        │         │"
 "│         │                                                                                                  │         │"

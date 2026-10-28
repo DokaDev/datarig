@@ -1,6 +1,6 @@
 ---
 source: crates/tui/tests/flows_environments.rs
-assertion_line: 551
+assertion_line: 559
 expression: backend
 ---
 "╭ Explorer ────────────╮╭ Workspace ───────────────────────────────────────────╮"
@@ -9,16 +9,16 @@ expression: backend
 "│ │                                                                          │ │"
 "│ │ SSL mode          disable ▾   ←/→ change · Enter list                    │ │"
 "│ │ CA file                                     PEM; checks the server's ce… │ │"
-"│▾│ Client c╭ Environment ─────────────────────────────────────────╮erver a… │ │"
-"│ │ Client k│ › type to filter                                     │hrase    │ │"
-"│▾│ Statemen│                                                      │ransact… │ │"
-"│ │ Environm│ ○ None (default rules)  standard rules               │s befor… │ │"
-"│ │ Startup │ ● dev                   standard rules               │         │ │"
-"│ │ Own star│ ● test                  standard rules               │       × │ │"
-"│ │         │ ● staging  STG          asks before every write · m… │er adds  │ │"
-"│ │ Color   │ ● prod  PROD            read-only · asks before eve… │ list    │ │"
-"│ │ Icon    │   New environment…                                   │         │ │"
-"│▾│ Folder  ╰───────────────── Enter pick · ↑↓ select · Esc cancel ╯         │ │"
+"│▾│ ╭ Environment ─────────────────────────────────────────────────────────╮ │ │"
+"│ │ │ › type to filter                                                     │ │ │"
+"│▾│ │                                                                      │ │ │"
+"│ │ │ ○ None (default rules)  standard rules                               │ │ │"
+"│ │ │ ● dev                   standard rules                               │ │ │"
+"│ │ │ ● test                  standard rules                               │ │ │"
+"│ │ │ ● staging  STG          asks before every write · manual commit      │ │ │"
+"│ │ │ ● prod  PROD            read-only · asks before every write          │ │ │"
+"│ │ │   New environment…                                                   │ │ │"
+"│▾│ ╰───────────────────────────────── Enter pick · ↑↓ select · Esc cancel ╯ │ │"
 "│ │                                                                          │ │"
 "│ │                    Test    Save    Cancel                                │ │"
 "│ │                                                                          │ │"

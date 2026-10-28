@@ -428,6 +428,9 @@ fn a_preset_picked_in_the_profile_form_is_written_with_the_profile() {
         "the presets"
     );
     assert_eq!(env_list(&h).entries()[4].hint, "preset · read-only · asks before every write");
+    // A preset's rules are shown whole at 120x40 (the list is wide enough).
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("preset · asks before every write · manual commit"), "{screen}");
     h.type_text("prod");
     h.key(KeyCode::Enter);
     assert_eq!(h.form().env_choice(), EnvChoice::Preset("prod".into()));

@@ -461,7 +461,9 @@ impl App {
             entries.push(e);
         }
         let new = self.config_writable().then(|| i18n.label(Label::EnvPickerNew).to_string());
-        let list = ListPicker::new(entries, new, Some(&f.env_choice()));
+        // Wide enough for a preset's whole rules ("preset · asks before every write · manual
+        // commit") after the longest label.
+        let list = ListPicker::new(entries, new, Some(&f.env_choice())).with_max_width(80);
         let form = f.profile_id();
         self.overlays.push(Overlay::Picker(Picker::Environment { form, list }));
     }
