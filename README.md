@@ -1405,7 +1405,14 @@ is tested only lightly.
   `EXPLAIN FORMAT=TREE`, `Space e a` for `EXPLAIN ANALYZE FORMAT=TREE`, through the same checks
   as any run. `EXPLAIN ANALYZE` runs the statement: a write runs in a transaction of its own
   that is rolled back (inside your open transaction, under a savepoint rolled back to), and a
-  read-only profile refuses it for a write or a call of a function that is not built in. An
+  read-only profile refuses it for a write or a call of a function that is not built in. What a
+  rollback cannot undo is not run: `EXPLAIN ANALYZE` of a write that names a table of another
+  engine than InnoDB (MyISAM, MEMORY, …; NDB is fine), a view, or a table with triggers is
+  refused, saying which; so is one whose table's triggers your account cannot see (the server
+  lists triggers only to an account with the `TRIGGER` privilege: accounts without it get every
+  `EXPLAIN ANALYZE` of a write refused, and `EXPLAIN` without `ANALYZE` shows the plan). A call
+  of a function that is not built in asks first under `ANALYZE` (it runs, and what it writes to
+  such a table stays). An
   `EXPLAIN ANALYZE` or `EXPLAIN FORMAT=TREE` you type yourself shows as a plan without running
   again. A table `EXPLAIN` (or `FORMAT=JSON`, `TRADITIONAL`) is viewed as a plan (`P`) by asking
   for `EXPLAIN FORMAT=TREE` of the same statement, never with `ANALYZE`, under the same rule
