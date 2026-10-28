@@ -162,6 +162,9 @@ pub enum ConfirmAction {
     /// Close the open form although it has changes that are not saved (its `Esc` or Cancel).
     /// Keeping on editing is the default.
     DiscardForm,
+    /// Quit although the open form (or one waiting under it) has changes that are not saved:
+    /// `y` throws them away and the quit goes on. Keeping on editing is the default.
+    DiscardFormQuit,
     /// Start an export that runs its statement again (or reads in a prod-like environment):
     /// the tab's export waits for the answer. Cancel is the default.
     ExportStart,
@@ -248,7 +251,9 @@ impl Confirm {
             ConfirmAction::KeychainSecurityTool => (Label::DialogButtonCancel, Label::DialogButtonTurnOn),
             ConfirmAction::ExportStart => (Label::DialogButtonCancel, Label::DialogButtonExport),
             ConfirmAction::ExportReplace => (Label::DialogButtonKeep, Label::DialogButtonReplace),
-            ConfirmAction::DiscardForm => (Label::DialogButtonKeepEditing, Label::DialogButtonDiscard),
+            ConfirmAction::DiscardForm | ConfirmAction::DiscardFormQuit => {
+                (Label::DialogButtonKeepEditing, Label::DialogButtonDiscard)
+            }
         };
         // Roll back first, commit first, then go on anyway (the server rolls back); Enter stays.
         if let Some(tx) = &self.tx {

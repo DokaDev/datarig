@@ -1,7 +1,8 @@
 //! Closing a form that has changes not saved, headless: `Esc` (or its Cancel button) asks
 //! first in every form (profile, SSH tunnel, environment, default rules, Startup SQL); `Enter`
 //! and `n` keep editing, `y` discards; the question's buttons take the mouse. A form left as it
-//! opened, or changed back, closes at once as before.
+//! opened, or changed back, closes at once as before. Quitting with an edited form open asks
+//! the same question.
 
 mod common;
 
@@ -195,4 +196,55 @@ fn cancel_while_a_test_runs_stops_the_test_before_asking() {
     click_on(&mut h, "Cancel");
     assert!(asking(&mut h), "{}", h.screen(120, 40));
     assert!(h.app.conn_test.as_ref().is_some_and(|t| t.state == TestState::Cancelled), "stopped first");
+}
+
+/// Quitting (`Ctrl+Q`, `:q`, `:qa`) with an edited form open asks the same question: `Enter`
+/// and `n` keep editing and the app runs on, `y` discards and the quit goes on.
+#[test]
+fn quitting_with_an_edited_form_asks_before_discarding() {
+    let dir = scratch("quit");
+    for quit in ["ctrl+q", "q", "qa"] {
+        let mut h = harness(&dir);
+        h.explore("local-pg");
+        h.keys("e");
+        h.type_text("-x");
+        let ask = |h: &mut Harness| match quit {
+            "ctrl+q" => h.ctrl('q'),
+            cmd => h.command(cmd),
+        };
+        ask(&mut h);
+        assert!(asking(&mut h), "{quit}\n{}", h.screen(120, 40));
+        assert!(!h.app.quit, "{quit}");
+        h.key(KeyCode::Enter);
+        assert_eq!(h.overlay_kind(), Some(OverlayKind::ProfileForm), "{quit}: Enter keeps editing");
+        assert_eq!(h.form().name.text(), "local-pg-x");
+        ask(&mut h);
+        h.key(KeyCode::Char('n'));
+        assert_eq!(h.overlay_kind(), Some(OverlayKind::ProfileForm), "{quit}: n keeps editing");
+        assert!(!h.app.quit, "{quit}");
+        ask(&mut h);
+        assert!(asking(&mut h), "{quit}");
+        if quit == "ctrl+q" {
+            // Asked again while the question is up: still one question, one `n` answers it.
+            h.ctrl('q');
+            h.key(KeyCode::Char('n'));
+            assert_eq!(h.overlay_kind(), Some(OverlayKind::ProfileForm), "one question");
+            ask(&mut h);
+        }
+        h.key(KeyCode::Char('y'));
+        assert!(h.app.quit, "{quit}: y discards and quits");
+        assert!(h.app.profiles.iter().any(|p| p.name == "local-pg"), "{quit}: nothing saved");
+    }
+}
+
+/// A form left as it opened does not hold up a quit.
+#[test]
+fn quitting_with_an_unchanged_form_quits_at_once() {
+    let dir = scratch("quit-unchanged");
+    let mut h = harness(&dir);
+    h.explore("local-pg");
+    h.keys("e");
+    h.key(KeyCode::Tab);
+    h.ctrl('q');
+    assert!(h.app.quit, "{}", h.screen(120, 40));
 }
