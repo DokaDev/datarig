@@ -375,7 +375,7 @@ fn an_analyze_a_rollback_cannot_undo_says_which_tables() {
     h.tab_db(0, DbEvent::Failed { id, error, cancelled: false });
     let text = failed(&h);
     assert!(text.contains("shop.t (has triggers), shop.u (its triggers are not visible to this account)"), "{text}");
-    assert!(text.contains("use an account or role with the TRIGGER privilege"), "{text}");
+    assert!(text.contains("use an account granted the TRIGGER privilege on those tables directly"), "{text}");
     // Text whose tables cannot be read.
     h.ctrl('e');
     if h.app.overlays.run_confirm().is_some() {

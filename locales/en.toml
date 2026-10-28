@@ -399,7 +399,7 @@
 "db.not_undoable_unread" = "not run: EXPLAIN ANALYZE runs the statement, and which tables it would change cannot be read from its text (an executable comment, or a text too long). EXPLAIN without ANALYZE shows the plan"
 "db.not_undoable.trigger" = "has triggers"
 "db.not_undoable.triggers_hidden" = "its triggers are not visible to this account"
-"db.not_undoable_no_trigger" = "not run: EXPLAIN ANALYZE runs the statement, and whether a rollback undoes all it would change in {tables} cannot be checked (triggers are listed only to an account with the TRIGGER privilege). EXPLAIN without ANALYZE shows the plan; to measure it, use an account or role with the TRIGGER privilege on those tables"
+"db.not_undoable_no_trigger" = "not run: EXPLAIN ANALYZE runs the statement, and whether a rollback undoes all it would change in {tables} cannot be checked (triggers are listed only to an account with the TRIGGER privilege). EXPLAIN without ANALYZE shows the plan; to measure it, use an account granted the TRIGGER privilege on those tables directly (a grant through a role is not seen)"
 "db.not_undoable" = "not run: EXPLAIN ANALYZE runs the statement, and a rollback cannot undo what it would change in {tables} (not InnoDB, a view, or a table with triggers). EXPLAIN without ANALYZE shows the plan"
 "db.rows_not_read" = { one = "the statement ran and returned rows after all: only its first row was read, the rest cannot be fetched", other = "the statement ran and returned rows after all: only its first {count} rows were read, the rest cannot be fetched" }
 "db.schema_changed" = "the table changed while the query was running; run it again"
