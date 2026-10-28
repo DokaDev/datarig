@@ -241,7 +241,7 @@ fn a_refused_start_up_statement_is_said_with_its_source_and_number() {
     };
     h.tab_db(0, DbEvent::ConnectFailed { error, auth: false });
     assert!(
-        h.screen(220, 40).contains("statement 2 of the Startup SQL “reporting” of the environment prod failed"),
+        h.screen(220, 40).contains("statement 2 of Startup SQL “reporting” of environment prod failed"),
         "{}",
         h.screen(220, 40)
     );
@@ -1006,6 +1006,30 @@ fn the_environment_form_maps_a_preset_per_database() {
     assert!(dir.text().contains("startup = { mysql = \"my_ro\" }"), "{}", dir.text());
 }
 
+/// A new MySQL preset from the environment form's list starts on MySQL without that counting
+/// as a change: `Esc` closes it at once and gives the environment form back, which, left as it
+/// opened, closes at once too.
+#[test]
+fn a_new_preset_from_a_list_is_not_a_change_of_its_own() {
+    let dir = scratch("new-untouched");
+    let mut h = section_harness(&dir);
+    let prod = h.app.environments().iter().find(|e| e.name == "prod").unwrap().id;
+    on_row(&mut h, RowKind::Environment(prod));
+    h.keys("e");
+    while h.form().focus != Field::EnvSessionMy {
+        h.key(KeyCode::Tab);
+    }
+    h.key(KeyCode::Enter);
+    pick_session(&mut h, "New Startup SQL…");
+    assert!(h.form().is_session());
+    assert_eq!(h.form().session_dbms, Dbms::MySql);
+    h.key(KeyCode::Esc);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ProfileForm), "no question");
+    assert!(h.form().is_environment(), "the environment form is back");
+    h.key(KeyCode::Esc);
+    assert!(!h.form_open(), "no question");
+}
+
 /// Names are matched exactly; a preset of the same name but for case is named as the one
 /// likely meant.
 #[test]
@@ -1065,7 +1089,7 @@ fn the_session_view_lists_what_a_profiles_sessions_start_with_and_from_where() {
         "Lock wait        5s     environment prod",
         "Idle disconnect  never  app setting",
         "Idle rollback    30m    environment prod",
-        "From the Startup SQL “reporting” of the environment prod:",
+        "From Startup SQL “reporting” of environment prod:",
         "  SET statement_timeout = '30s'",
         "    behind a pooler: per transaction as SET LOCAL statement_timeout = '30s'",
         "From its own startup SQL:",
@@ -1214,7 +1238,7 @@ fn a_mysql_profiles_session_view_has_no_pooler_lines() {
     h.command("session");
     let screen = h.screen(120, 40);
     assert!(screen.contains("local-pg · MySQL · environment prod"), "{screen}");
-    assert!(screen.contains("From the Startup SQL “my_ro” of the environment prod:"), "{screen}");
+    assert!(screen.contains("From Startup SQL “my_ro” of environment prod:"), "{screen}");
     assert!(screen.contains("  SET SESSION sql_mode = 'ANSI_QUOTES'"), "{screen}");
     assert!(!screen.contains("behind a pooler"), "{screen}");
 }
@@ -1229,9 +1253,7 @@ fn the_session_view_says_a_skipped_preset_and_no_statements() {
     h.command("session");
     let screen = h.screen(120, 40);
     assert!(
-        screen.contains(
-            "Not used: the Startup SQL “reporting” of the environment prod (the profile says startup = \"none\")"
-        ),
+        screen.contains("Not used: Startup SQL “reporting” of environment prod (the profile says startup = \"none\")"),
         "{screen}"
     );
     assert!(screen.contains("No startup statements"), "{screen}");
@@ -1273,13 +1295,27 @@ fn the_profile_forms_key_shows_its_unsaved_values() {
     assert!(h.app.profiles[0].session_sql.is_empty(), "nothing saved");
 }
 
-/// Without a profile to show, it says so.
+/// Without a profile to show (none selected, no tab), the view opens and says so, with what
+/// it would show; `:startup` too. A status line that fades was easy to miss.
 #[test]
 fn the_session_view_without_a_profile_says_so() {
     let mut h = Harness::with_config(&Config::default(), Lang::En);
+    for command in ["session", "startup"] {
+        h.command(command);
+        assert_eq!(h.overlay_kind(), Some(OverlayKind::SessionView), ":{command}");
+        let screen = h.screen(120, 40);
+        assert!(screen.contains("Session settings"), "{screen}");
+        assert!(
+            screen.contains("No profile to show: select one in the explorer, or go to one of its tabs"),
+            "{screen}"
+        );
+        h.key(KeyCode::Esc);
+        assert_eq!(h.overlay_kind(), None);
+    }
     h.command("session");
-    assert_ne!(h.overlay_kind(), Some(OverlayKind::SessionView));
-    assert_eq!(said(&h), "No profile to show: select one in the explorer, or go to one of its tabs");
+    for (w, ht) in [(80, 24), (120, 40)] {
+        insta::assert_snapshot!(format!("session_view_no_profile_en_{w}x{ht}"), h.draw(w, ht).backend());
+    }
 }
 
 /// A statement is shown exactly as written, wrapped where it is too wide: its blanks and every

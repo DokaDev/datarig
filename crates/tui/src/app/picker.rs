@@ -316,9 +316,12 @@ impl App {
                 let dbms = back.session_field_dbms(field);
                 self.open_session_form(None, false);
                 if let Some(f) = self.overlays.form_mut() {
+                    // The database the list was for: where the new preset starts, not a change.
                     if let Some(d) = dbms {
-                        f.session_dbms = d;
-                        f.session_sql.set_dbms(Some(d));
+                        f.settle(|f| {
+                            f.session_dbms = d;
+                            f.session_sql.set_dbms(Some(d));
+                        });
                     }
                     f.back_to = Some(back);
                 }
@@ -461,7 +464,9 @@ impl App {
             entries.push(e);
         }
         let new = self.config_writable().then(|| i18n.label(Label::EnvPickerNew).to_string());
-        let list = ListPicker::new(entries, new, Some(&f.env_choice()));
+        // Wide enough for a preset's whole rules ("preset · asks before every write · manual
+        // commit") after the longest label.
+        let list = ListPicker::new(entries, new, Some(&f.env_choice())).with_max_width(80);
         let form = f.profile_id();
         self.overlays.push(Overlay::Picker(Picker::Environment { form, list }));
     }

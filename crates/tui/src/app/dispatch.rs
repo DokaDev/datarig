@@ -33,7 +33,7 @@ impl App {
                 // No transaction, something runs, or it failed: said why.
                 Action::TxCommit | Action::TxRollback if !self.tabs.is_empty() => self.end_tx(a == Action::TxCommit),
                 Action::TxSummary if !self.tabs.is_empty() => self.tx_summary(),
-                Action::SessionView => self.flash(Notice::new(Label::SessionViewNoProfile, Level::Info)),
+                Action::SessionView => self.session_view_without_profile(),
                 // Another result: said, as a key that does nothing would leave the user guessing.
                 Action::ExplainAsPlan
                     if !self.tabs.is_empty() && self.tab().is_query() && self.tab_explains(self.tab().id) =>
@@ -478,6 +478,7 @@ impl App {
             ConfirmAction::KeychainSecurityTool => self.keychain_access_changed(KeychainAccess::SecurityTool),
             ConfirmAction::ExportStart => self.export_answered(true, false),
             ConfirmAction::ExportReplace => self.export_answered(true, true),
+            ConfirmAction::DiscardForm => self.cancel_form(),
             ConfirmAction::ScriptConflict(_) | ConfirmAction::KeychainOffer => {}
         }
     }

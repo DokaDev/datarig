@@ -810,7 +810,11 @@ fn add_edit_duplicate_delete_profiles_with_secret_store() {
     h.type_text("prod-eu");
     h.ctrl('s');
     assert!(h.form_open(), "still in the form");
+    // Its changes are not saved: Esc asks, `y` discards them.
     h.key(KeyCode::Esc);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Confirm));
+    h.keys("y");
+    assert!(!h.form_open());
 
     // Delete (`d`) asks first; 'n' keeps, 'y' deletes (and removes the secret).
     h.explore("prod-eu-copy");
@@ -903,6 +907,25 @@ fn disconnect_keeps_the_tabs_and_resets_the_connection() {
 
 fn launch(cfg: &Config, startup: Startup) -> Harness {
     Harness::launched(cfg, Lang::En, Arc::new(MemoryStore::new()), startup)
+}
+
+/// A launch message on the welcome panel (a config error) wraps at words: no word is cut over
+/// two lines.
+#[test]
+fn a_config_error_on_the_welcome_panel_wraps_at_words() {
+    use datarig_core::i18n::Msg;
+    use datarig_tui::app::{Level, Notice};
+    let mut h = launch(&sample_config(None), Startup::Normal);
+    let error = "connections.analytics: unknown field olden_name, expected one of tabsize, \
+                 startup_sql, environment, tunnel, sslrootcert, statement_cache, password_command"
+        .to_string();
+    h.app.notices.push(Notice::new(Msg::ErrorConfig { error: error.clone() }, Level::Error));
+    for (w, ht) in [(80, 24), (120, 40)] {
+        let screen = h.screen(w, ht);
+        for word in error.split(' ') {
+            assert!(screen.contains(word), "{word:?} cut at {w}x{ht}:\n{screen}");
+        }
+    }
 }
 
 #[test]

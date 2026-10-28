@@ -428,12 +428,17 @@ fn a_preset_picked_in_the_profile_form_is_written_with_the_profile() {
         "the presets"
     );
     assert_eq!(env_list(&h).entries()[4].hint, "preset · read-only · asks before every write");
+    // A preset's rules are shown whole at 120x40 (the list is wide enough).
+    let screen = h.screen(120, 40);
+    assert!(screen.contains("preset · asks before every write · manual commit"), "{screen}");
     h.type_text("prod");
     h.key(KeyCode::Enter);
     assert_eq!(h.form().env_choice(), EnvChoice::Preset("prod".into()));
     assert!(h.screen(100, 30).contains("prod (new)"), "{}", h.screen(100, 30));
-    // Cancelled: nothing written.
+    // Cancelled (the pick is a change: asked, then discarded): nothing written.
     h.key(KeyCode::Esc);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Confirm));
+    h.key(KeyCode::Char('y'));
     assert!(names(&h).is_empty() && !dir.text().contains("[policy.prod]"));
     // Picked again, the file cannot be written: neither the profile nor the preset.
     env_field(&mut h, "v6");
@@ -482,7 +487,10 @@ fn a_new_environment_from_the_list_comes_back_picked() {
     h.key(KeyCode::Enter);
     assert!(h.form().is_environment());
     h.type_text("qa");
+    // The typed name is a change: asked, then discarded; the profile form comes back.
     h.key(KeyCode::Esc);
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::Confirm));
+    h.key(KeyCode::Char('y'));
     assert!(!h.form().is_environment());
     assert_eq!((h.form().env_choice(), h.form().host.text()), (EnvChoice::Default, host.as_str()));
     assert_eq!(h.form().focus, Field::Environment);

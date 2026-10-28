@@ -439,7 +439,7 @@ Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+
 
 ## `overlay.profile_form` [text]
 
-Connection profile form. With the mouse: a click focuses a field (in a text, the cursor goes there), picks a value, opens the list of a `value ▾`, steps a `‹ value ›` (its arrows; the value opens a list), switches the section or presses a button. A Startup SQL list (the preset form's statements, a profile's own startup SQL) has one statement per row: `Enter` after a filled row adds one below, on an empty row removes it and moves on; `↑`/`↓` go from row to row and leave the list at its first and last; `Tab` leaves it; `Backspace` on an empty row and `Ctrl+D` remove a row; a paste of several statements makes a row of each. With the mouse: a click on a row puts the cursor there, `×` removes it, "+ Add statement" adds one at the end (both on the release), the wheel scrolls a list longer than its room. Inside `root`.
+Connection profile form (also the SSH tunnel, environment, default rules and Startup SQL forms). `Esc` or Cancel closes it; with changes not saved it asks first (`Enter` keeps editing, `y` discards). With the mouse: a click focuses a field (in a text, the cursor goes there), picks a value, opens the list of a `value ▾`, steps a `‹ value ›` (its arrows; the value opens a list), switches the section or presses a button. A Startup SQL list (the preset form's statements, a profile's own startup SQL) has one statement per row: `Enter` after a filled row adds one below, on an empty row removes it and moves on; `↑`/`↓` go from row to row and leave the list at its first and last; `Tab` leaves it; `Backspace` on an empty row and `Ctrl+D` remove a row; a paste of several statements makes a row of each. With the mouse: a click on a row puts the cursor there, `×` removes it, "+ Add statement" adds one at the end (both on the release), the wheel scrolls a list longer than its room. Inside `root`.
 
 | Keys | Action | Description | R |
 |---|---|---|---|
@@ -533,7 +533,7 @@ Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+
 
 ## `overlay.confirm`
 
-Yes/no confirmation: `y` does it; Enter keeps what the answer would lose (quit, delete, disconnect, close, switch, replace); for a copy it says yes. A button acts on its release (pressed and released on it, not right after the question appeared) and does what its key does; the pointer only lights its background (Enter stays on the safe one). Inside `root`.
+Yes/no confirmation: `y` does it; Enter keeps what the answer would lose (quit, delete, disconnect, close, switch, replace, discard); for a copy it says yes. A button acts on its release (pressed and released on it, not right after the question appeared) and does what its key does; the pointer only lights its background (Enter stays on the safe one). Inside `root`.
 
 Reserved — confirmation (Enter keeps what would be lost): `y` `n` `Enter` `Esc`
 

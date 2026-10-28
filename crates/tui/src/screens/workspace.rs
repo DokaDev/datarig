@@ -860,12 +860,12 @@ fn results_title(app: &App, width: u16) -> (datarig_core::i18n::Localized, Optio
     (title, Some((texts.collect(), style)))
 }
 
-/// Launch messages (migration, key map problems, an unknown profile) from line `y` down to
-/// `bottom`; returns the next free line.
+/// Launch messages (migration, key map problems, an unknown profile, a config error) from line
+/// `y` down to `bottom`, wrapped at words; returns the next free line.
 fn draw_notices(app: &App, x: u16, mut y: u16, w: usize, bottom: u16, buf: &mut Buffer) -> u16 {
     let th = theme::cur();
     for n in &app.notices {
-        for l in wrap(&n.render(&app.i18n), w) {
+        for l in wrap_words(&n.render(&app.i18n), w) {
             if y >= bottom {
                 return y;
             }

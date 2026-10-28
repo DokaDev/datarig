@@ -652,11 +652,15 @@ fn an_own_tunnel_starts_its_secret_on_the_default_source() {
         h.app.overlays.form_mut().unwrap().set_ssh_choice(SshChoice::Inline);
         assert_eq!(h.form().ssh_source, SourceKind::Prompt, "new profile, {default:?}");
         h.key(KeyCode::Esc);
+        assert_eq!(h.overlay_kind(), Some(OverlayKind::Confirm), "asked first");
+        h.key(KeyCode::Char('y'));
         // A profile without a tunnel of its own.
         h.keys("e");
         h.app.overlays.form_mut().unwrap().set_ssh_choice(SshChoice::Inline);
         assert_eq!(h.form().ssh_source, SourceKind::Prompt, "existing profile, {default:?}");
         h.key(KeyCode::Esc);
+        assert_eq!(h.overlay_kind(), Some(OverlayKind::Confirm), "asked first");
+        h.key(KeyCode::Char('y'));
         // A new tunnel preset.
         h.command("tunnel.new");
         assert!(h.form().is_tunnel());
