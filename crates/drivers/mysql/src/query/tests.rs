@@ -115,3 +115,21 @@ fn limits_the_server_reports() {
     assert_eq!(limit_value("18446744073709551615"), None);
     assert_eq!(limit_value("x"), None);
 }
+
+/// The question about tables a rollback does not undo: each kind is asked for, and a global
+/// TRIGGER grant counts only while partial revokes are off (with them on it may be revoked for
+/// the table's schema, which the privilege tables do not show).
+#[test]
+fn the_not_undone_question_asks_for_every_kind() {
+    let sql = not_undone_sql(&["shop.t".into(), "u".into()], Dialect::MySql(MODE));
+    for part in ["'INNODB', 'NDBCLUSTER', 'NDB'", "TABLE_TYPE = 'VIEW'", "' (trigger)'", "' (triggers not visible)'"] {
+        assert!(sql.contains(part), "{part}: {sql}");
+    }
+    assert!(
+        sql.contains("p.PRIVILEGE_TYPE = 'TRIGGER' AND @@GLOBAL.partial_revokes = 0)"),
+        "a global grant counts only without partial revokes: {sql}"
+    );
+    // Schema and table grants count whatever partial revokes are.
+    assert_eq!(sql.matches("@@GLOBAL.partial_revokes").count(), 1, "{sql}");
+    assert!(sql.ends_with("ORDER BY 1 LIMIT 20"), "{sql}");
+}

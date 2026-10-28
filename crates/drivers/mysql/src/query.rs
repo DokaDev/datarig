@@ -675,7 +675,8 @@ fn not_undone_sql(names: &[String], d: Dialect) -> String {
     let cond = name_condition(names, d);
     // The session's account as the privilege tables write a grantee (`'user'@'host'`); a grant
     // that reaches it otherwise (through a role) is not seen, so the table counts as one whose
-    // triggers are not visible.
+    // triggers are not visible. A global grant counts only without partial revokes: with them on,
+    // it may be revoked for the table's schema, which the privilege tables do not show.
     let me =
         "CONCAT(QUOTE(SUBSTRING_INDEX(CURRENT_USER(), '@', 1)), '@', QUOTE(SUBSTRING_INDEX(CURRENT_USER(), '@', -1)))";
     format!(
@@ -688,7 +689,7 @@ fn not_undone_sql(names: &[String], d: Dialect) -> String {
          UNION SELECT CONCAT(t.TABLE_SCHEMA, '.', t.TABLE_NAME, ' (triggers not visible)') \
          FROM information_schema.TABLES t WHERE t.TABLE_TYPE = 'BASE TABLE' AND ({cond}) \
          AND NOT EXISTS (SELECT 1 FROM information_schema.USER_PRIVILEGES p \
-         WHERE p.GRANTEE = {me} AND p.PRIVILEGE_TYPE = 'TRIGGER') \
+         WHERE p.GRANTEE = {me} AND p.PRIVILEGE_TYPE = 'TRIGGER' AND @@GLOBAL.partial_revokes = 0) \
          AND NOT EXISTS (SELECT 1 FROM information_schema.SCHEMA_PRIVILEGES p \
          WHERE p.GRANTEE = {me} AND p.PRIVILEGE_TYPE = 'TRIGGER' AND p.TABLE_SCHEMA = t.TABLE_SCHEMA) \
          AND NOT EXISTS (SELECT 1 FROM information_schema.TABLE_PRIVILEGES p \
