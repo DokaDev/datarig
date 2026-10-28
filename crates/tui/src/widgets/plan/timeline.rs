@@ -5,6 +5,7 @@
 
 use super::{Look, fmt_ms, fmt_num, heat, indented_name, label_column, on_line, selected_style, work};
 use crate::app::plan::PlanTab;
+use crate::text::width;
 use crate::widgets::put;
 use datarig_core::i18n::{Label, Msg};
 use datarig_core::sql::plan::Measure;
@@ -48,11 +49,12 @@ pub(super) fn draw(cx: &Look, p: &mut PlanTab, area: Rect, buf: &mut Buffer) {
     let (mid, end) = (at(max / 2.0), at(max));
     // `0`, the middle and the end, when they fit apart (a number far larger than a server
     // writes may not).
-    if axis_w >= 12 && mid.len() + end.len() + 4 <= axis_w {
+    let (mid_w, end_w) = (width(&mid), width(&end));
+    if axis_w >= 12 && mid_w + end_w + 4 <= axis_w {
         put(buf, axis_x, area.y, "0", 1, muted);
-        let half = (axis_w / 2).saturating_sub(mid.len() / 2) as u16;
-        put(buf, axis_x + half, area.y, &mid, mid.len(), muted);
-        put(buf, axis_x + (axis_w - end.len()) as u16, area.y, &end, end.len(), muted);
+        let half = (axis_w / 2).saturating_sub(mid_w / 2) as u16;
+        put(buf, axis_x + half, area.y, &mid, mid_w, muted);
+        put(buf, axis_x + (axis_w - end_w) as u16, area.y, &end, end_w, muted);
     }
     let rows = Rect { y: area.y + 1, height: area.height - 1, ..area };
     let order = p.visible();

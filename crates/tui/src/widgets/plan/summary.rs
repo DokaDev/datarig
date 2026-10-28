@@ -14,14 +14,14 @@ use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 
 /// A card: its title, its lines, and the node it names.
-struct Card {
-    title: String,
+pub(super) struct Card {
+    pub(super) title: String,
     /// The node it names, on one line (cut to fit): its numbers below it stay in the card.
-    name: Option<(String, Style)>,
-    lines: Vec<(String, Style)>,
+    pub(super) name: Option<(String, Style)>,
+    pub(super) lines: Vec<(String, Style)>,
     /// The numbers in one short line, shown instead of `lines` when they do not fit the card.
-    short: Option<(String, Style)>,
-    node: Option<usize>,
+    pub(super) short: Option<(String, Style)>,
+    pub(super) node: Option<usize>,
 }
 
 fn cards(cx: &Look, p: &PlanTab) -> Vec<Card> {
@@ -156,7 +156,7 @@ pub(super) fn draw(cx: &Look, p: &mut PlanTab, area: Rect, buf: &mut Buffer) {
 }
 
 /// One card in `r`: a frame with its title, and its lines inside.
-fn card(cx: &Look, c: &Card, r: Rect, buf: &mut Buffer) {
+pub(super) fn card(cx: &Look, c: &Card, r: Rect, buf: &mut Buffer) {
     let th = cx.th;
     if r.width < 6 {
         return;
@@ -182,7 +182,8 @@ fn card(cx: &Look, c: &Card, r: Rect, buf: &mut Buffer) {
     if lines.len() > room
         && let Some((t, style)) = &c.short
     {
-        lines.truncate(usize::from(c.name.is_some()));
+        // With room for one line only, that is the numbers' (the name is the node selected).
+        lines.truncate(usize::from(c.name.is_some() && room > 1));
         lines.push((crate::text::clip(t, inner_w.saturating_sub(1)), *style));
     }
     for k in 0..(r.height.saturating_sub(2)) {

@@ -251,3 +251,34 @@ fn boxes_keep_their_edges_with_wide_characters() {
     let row: String = (r.x..r.x + boxes::BOX_W as u16).map(|x| buf[(x, r.y + 1)].symbol().to_string()).collect();
     assert!(row.contains('\u{C8FC}'), "{row}");
 }
+
+/// A card with room for one line inside shows its numbers there in their short form, not the
+/// node's name.
+#[test]
+fn a_card_of_one_line_keeps_its_numbers() {
+    use ratatui::buffer::Buffer;
+    use ratatui::style::Style;
+    let th = crate::theme::DARK;
+    let i18n = datarig_core::i18n::I18n::new(datarig_core::i18n::Lang::En);
+    let cx = Look { i18n: &i18n, th: &th, icons: true, focused: true, hover: None };
+    let c = summary::Card {
+        title: "Worst row estimate".into(),
+        name: Some(("Covering index lookup on o using orders_user_id_idx".into(), Style::new())),
+        lines: vec![("×100 more rows: estimated 10, actual 1000 per loop".into(), Style::new())],
+        short: Some(("×100↑ est 10 · actual 1000".into(), Style::new())),
+        node: None,
+    };
+    let row = |buf: &Buffer, y: u16| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>();
+    for (h, want) in
+        [(3u16, vec!["×100↑ est 10 · actual 1000"]), (4, vec!["Covering index", "×100↑ est 10 · actual 1000"])]
+    {
+        let r = Rect { x: 0, y: 0, width: 32, height: h };
+        let mut buf = Buffer::empty(r);
+        summary::card(&cx, &c, r, &mut buf);
+        let inside: Vec<String> = (1..h - 1).map(|y| row(&buf, y)).collect();
+        assert_eq!(inside.len(), want.len());
+        for (line, w) in inside.iter().zip(&want) {
+            assert!(line.contains(w), "{h} lines: {line:?} has {w:?}");
+        }
+    }
+}

@@ -105,9 +105,9 @@ pub fn tree(sql: &str, mode: MySqlMode) -> Result<JsonExplain, NotJson> {
 }
 
 /// [`tree`] as the lexer reads `sql`, without the classifier's check. Refused: `ANALYZE` (it
-/// ran already; a tree it gave is read as one), `INTO @v`, `FOR CONNECTION`, `FOR SCHEMA`, an `EXPLAIN` of a
-/// table (its columns, not a plan), an executable comment (the server's version picks what it
-/// holds) and more than one statement.
+/// ran already; a tree it gave is read as one), `INTO @v`, `FOR CONNECTION`, `FOR SCHEMA`, an
+/// `EXPLAIN` of a table (its columns, not a plan), an executable comment (the server's version
+/// picks what it holds) and more than one statement.
 pub fn tree_text(sql: &str, mode: MySqlMode) -> Result<JsonExplain, NotJson> {
     let toks: Vec<Token> = lex_in(sql, Dialect::MySql(mode)).into_iter().filter(|t| !t.is_trivia()).collect();
     let word = |t: &Token, w: &str| t.is_word() && t.text(sql).eq_ignore_ascii_case(w);

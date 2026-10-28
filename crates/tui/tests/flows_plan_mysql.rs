@@ -498,3 +498,25 @@ fn a_long_node_name_leaves_the_cards_numbers_in_view() {
     assert!(!screen.contains(long) && screen.contains('…'), "the name is cut, not wrapped:\n{screen}");
     insta::assert_snapshot!("plan_mysql_long_name_summary_en_120x40", h.draw(120, 40).backend());
 }
+
+/// The timeline by cost marks an axis whose end is a cost the server did not give, and its
+/// labels end where the axis does (a mark is one column, whatever its bytes).
+#[test]
+fn the_timeline_marks_a_derived_axis_and_keeps_its_labels_in_place() {
+    let mut h = shown("join_group_sort.tree.txt", " ex");
+    h.keys("5");
+    assert_eq!(plan(&h).view, PlanView::Timeline);
+    let screen = h.screen(120, 40);
+    let lines: Vec<&str> = screen.lines().collect();
+    let axis = lines.iter().find(|l| l.contains("startup cost")).unwrap_or_else(|| panic!("the axis:\n{screen}"));
+    assert_eq!(axis.matches('≈').count(), 2, "the middle and the end are marked: {axis}");
+    // The end label's last column is the root's bar's last column (the root spans the axis).
+    let col = |l: &str, at: usize| datarig_tui::text::width(&l[..at]);
+    let end = axis.rfind("273").map(|at| col(axis, at + 3)).expect("the end label");
+    let root = lines
+        .iter()
+        .find(|l| l.contains(" Sort ") && l.contains('█'))
+        .unwrap_or_else(|| panic!("the root's row:\n{screen}"));
+    let bar_end = root.rfind('█').map(|at| col(root, at + '█'.len_utf8())).expect("the root's bar");
+    assert_eq!(end, bar_end, "\n{axis}\n{root}");
+}
