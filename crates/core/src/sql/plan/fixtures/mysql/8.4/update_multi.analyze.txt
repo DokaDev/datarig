@@ -1,0 +1,3 @@
+-> Update o (buffered)  (actual time=0.08..0.08 rows=0 loops=1)
+    -> Index lookup on o using c_id (c_id=3)  (cost=3.5 rows=10) (actual time=0.0498..0.0772 rows=10 loops=1)
+

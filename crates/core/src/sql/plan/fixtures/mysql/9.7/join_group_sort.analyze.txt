@@ -1,0 +1,8 @@
+-> Sort: `SUM(o.amount)` DESC  (actual time=3.67..3.67 rows=2 loops=1)
+    -> Stream results  (cost=349 rows=7) (actual time=2.37..3.16 rows=2 loops=1)
+        -> Group aggregate: sum(o.amount)  (cost=349 rows=7) (actual time=2.3..3.08 rows=2 loops=1)
+            -> Nested loop inner join  (cost=215 rows=580) (actual time=0.713..2.87 rows=580 loops=1)
+                -> Filter: (c.city in ('city1','city2'))  (cost=12 rows=58) (actual time=0.499..1.08 rows=58 loops=1)
+                    -> Covering index range scan on c using city over (city = 'city1') OR (city = 'city2')  (cost=12 rows=58) (actual time=0.486..1.04 rows=58 loops=1)
+                -> Index lookup on o using c_id (c_id = c.id)  (cost=2.52 rows=10) (actual time=0.0234..0.0281 rows=10 loops=58)
+

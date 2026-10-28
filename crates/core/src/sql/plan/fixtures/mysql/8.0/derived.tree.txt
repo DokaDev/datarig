@@ -1,0 +1,6 @@
+-> Table scan on d  (cost=41.3..43.5 rows=7)
+    -> Materialize  (cost=41..41 rows=7)
+        -> Filter: (count(0) > 10)  (cost=40.2 rows=7)
+            -> Group aggregate: count(0)  (cost=40.2 rows=7)
+                -> Index scan on c using city  (cost=20.2 rows=200)
+

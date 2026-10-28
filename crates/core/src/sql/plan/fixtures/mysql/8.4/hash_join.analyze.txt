@@ -1,0 +1,7 @@
+-> Aggregate: count(0)  (cost=10792 rows=1) (actual time=0.972..0.972 rows=1 loops=1)
+    -> Inner hash join (o2.amount = o1.amount)  (cost=9812 rows=9800) (actual time=0.347..0.88 rows=1029 loops=1)
+        -> Table scan on o2  (cost=0.439 rows=2000) (actual time=0.0422..0.313 rows=2000 loops=1)
+        -> Hash
+            -> Filter: (o1.id < 50)  (cost=10.1 rows=49) (actual time=0.0499..0.0694 rows=49 loops=1)
+                -> Index range scan on o1 using PRIMARY over (id < 50)  (cost=10.1 rows=49) (actual time=0.0374..0.0519 rows=49 loops=1)
+

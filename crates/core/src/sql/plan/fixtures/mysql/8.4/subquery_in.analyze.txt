@@ -1,0 +1,9 @@
+-> Limit: 5 row(s)  (cost=13372 rows=5) (actual time=1.17..1.18 rows=5 loops=1)
+    -> Nested loop inner join  (cost=13372 rows=133320) (actual time=1.17..1.17 rows=5 loops=1)
+        -> Table scan on c  (cost=20.2 rows=200) (actual time=0.0285..0.067 rows=42 loops=1)
+        -> Single-row index lookup on <subquery2> using <auto_distinct_key> (c_id=c.id)  (cost=268..268 rows=1) (actual time=0.0198..0.0198 rows=0.119 loops=42)
+            -> Materialize with deduplication  (cost=268..268 rows=667) (actual time=0.805..0.805 rows=120 loops=1)
+                -> Filter: (o.c_id is not null)  (cost=202 rows=667) (actual time=0.0793..0.727 rows=120 loops=1)
+                    -> Filter: (o.amount > 90)  (cost=202 rows=667) (actual time=0.0782..0.719 rows=120 loops=1)
+                        -> Table scan on o  (cost=202 rows=2000) (actual time=0.0425..0.574 rows=2000 loops=1)
+

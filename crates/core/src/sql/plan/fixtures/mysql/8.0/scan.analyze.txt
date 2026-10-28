@@ -1,0 +1,2 @@
+-> Table scan on c  (cost=20.2 rows=200) (actual time=0.261..0.327 rows=200 loops=1)
+

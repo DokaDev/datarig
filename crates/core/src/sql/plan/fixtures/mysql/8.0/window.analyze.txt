@@ -1,0 +1,4 @@
+-> Window aggregate: rank() OVER (PARTITION BY o.c_id ORDER BY o.amount desc )   (actual time=0.368..0.375 rows=30 loops=1)
+    -> Sort: o.c_id, o.amount DESC  (cost=13.8 rows=30) (actual time=0.351..0.352 rows=30 loops=1)
+        -> Index range scan on o using c_id over (NULL < c_id < 4), with index condition: (o.c_id < 4)  (cost=13.8 rows=30) (actual time=0.288..0.316 rows=30 loops=1)
+

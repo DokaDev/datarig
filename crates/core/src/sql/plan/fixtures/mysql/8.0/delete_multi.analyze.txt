@@ -1,0 +1,3 @@
+-> Delete from o (immediate)  (cost=0..0 rows=0) (actual time=0.00583..0.00583 rows=0 loops=1)
+    -> Zero rows (no matching row in const table)  (cost=0..0 rows=0) (actual time=82e-6..82e-6 rows=0 loops=1)
+

@@ -1,0 +1,9 @@
+-> Limit: 5 row(s)  (cost=13372 rows=5)
+    -> Nested loop inner join  (cost=13372 rows=133320)
+        -> Table scan on c  (cost=20.2 rows=200)
+        -> Single-row index lookup on <subquery2> using <auto_distinct_key> (c_id = c.id)  (cost=355..355 rows=1)
+            -> Materialize with deduplication  (cost=355..355 rows=667)
+                -> Filter: (o.c_id is not null)  (cost=202 rows=667)
+                    -> Filter: (o.amount > 90)  (cost=202 rows=667)
+                        -> Table scan on o  (cost=202 rows=2000)
+
