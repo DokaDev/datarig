@@ -909,6 +909,25 @@ fn launch(cfg: &Config, startup: Startup) -> Harness {
 fn startup_focuses_the_explorer_on_the_last_used_profile() {
     let mut h = launch(&sample_config(Some("v6")), Startup::Normal);
     let id = |h: &Harness, n: &str| h.app.profiles.iter().find(|p| p.name == n).unwrap().id;
+/// A launch message on the welcome panel (a config error) wraps at words: no word is cut over
+/// two lines.
+#[test]
+fn a_config_error_on_the_welcome_panel_wraps_at_words() {
+    use datarig_core::i18n::Msg;
+    use datarig_tui::app::{Level, Notice};
+    let mut h = launch(&sample_config(None), Startup::Normal);
+    let error = "connections.analytics: unknown field olden_name, expected one of tabsize, \
+                 startup_sql, environment, tunnel, sslrootcert, statement_cache, password_command"
+        .to_string();
+    h.app.notices.push(Notice::new(Msg::ErrorConfig { error: error.clone() }, Level::Error));
+    for (w, ht) in [(80, 24), (120, 40)] {
+        let screen = h.screen(w, ht);
+        for word in error.split(' ') {
+            assert!(screen.contains(word), "{word:?} cut at {w}x{ht}:\n{screen}");
+        }
+    }
+}
+
     assert_eq!(h.app.focus, Focus::Tree);
     assert!(h.app.conns.attempt().is_none() && h.app.tab().exec.session.is_none(), "nothing connects by itself");
     assert_eq!(h.app.selected_profile(), Some(id(&h, "v6")), "cursor on last_used");
