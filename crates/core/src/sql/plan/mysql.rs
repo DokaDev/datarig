@@ -174,42 +174,41 @@ fn number(s: &str) -> Option<f64> {
 }
 
 /// Operations that read their input to its end before they give a row: what is under one is
-/// read in full, whatever stops reading it.
-const READS_ALL: &[&str] = &["Sort", "Materialize", "Aggregate", "Hash", "Temporary table"];
+/// read in full, whatever stops reading it. `Hash` is the build side of a hash join (not a
+/// `Hash semijoin`, which is a join).
+const READS_ALL: &[&str] = &["Sort", "Materialize", "Aggregate", "Temporary table"];
 
-/// Whether node `i`'s parent may stop reading it before its end: under a limit (within its own
-/// subquery, with nothing between that reads its input in full), or the inner side of a nested
-/// loop semi or anti join.
-fn stops_early(plan: &Plan, i: usize) -> bool {
-    let mut at = i;
-    while let Some(p) = plan.nodes[at].parent {
-        let (node, parent) = (&plan.nodes[at], &plan.nodes[p]);
-        // The operation without what it is about (`Inner hash join (t.a = 'semijoin')`).
-        let kind = parent.op.split('(').next().unwrap_or_default();
-        if kind.starts_with("Limit") {
-            return true;
-        }
-        if READS_ALL.iter().any(|r| kind.starts_with(r)) {
-            return false;
-        }
-        let semi = kind.starts_with("Nested loop") && (kind.contains("semijoin") || kind.contains("antijoin"));
-        if semi && parent.children.last() == Some(&at) {
-            return true;
-        }
-        // A subquery runs on its own: what is above it does not stop it.
-        if node.subplan.is_some() {
-            return false;
-        }
-        at = p;
+/// Whether node `i`'s parent may stop reading it before its end, given whether its parent may
+/// itself be stopped (`parent_stops`): under a limit (within its own subquery, with nothing
+/// between that reads its input in full), or the inner side of a nested loop semi or anti join.
+/// Worked out from the root down, one step per node.
+fn stops_early(plan: &Plan, i: usize, parent_stops: bool) -> bool {
+    let node = &plan.nodes[i];
+    let Some(p) = node.parent else { return false };
+    let parent = &plan.nodes[p];
+    // The operation without what it is about (`Inner hash join (t.a = 'semijoin')`).
+    let kind = parent.op.split('(').next().unwrap_or_default().trim_end();
+    if kind.starts_with("Limit") {
+        return true;
     }
-    false
+    if kind == "Hash" || READS_ALL.iter().any(|r| kind.starts_with(r)) {
+        return false;
+    }
+    let semi = kind.starts_with("Nested loop") && (kind.contains("semijoin") || kind.contains("antijoin"));
+    if semi && parent.children.last() == Some(&i) {
+        return true;
+    }
+    // A subquery runs on its own: what is above it does not stop it.
+    node.subplan.is_none() && parent_stops
 }
 
 /// Total and self times and costs (see the module's comment), children before parents.
 fn derive(plan: &mut Plan) {
     let len = plan.nodes.len();
+    // Parents come before their children.
     for i in 0..len {
-        plan.nodes[i].early_stop = stops_early(plan, i);
+        let parent_stops = plan.nodes[i].parent.is_some_and(|p| plan.nodes[p].early_stop);
+        plan.nodes[i].early_stop = stops_early(plan, i, parent_stops);
     }
     for i in (0..len).rev() {
         let kids = plan.nodes[i].children.clone();

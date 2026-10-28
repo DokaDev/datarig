@@ -192,6 +192,18 @@ fn early_stops_are_marked() {
     )
     .unwrap();
     assert!(plan.nodes.iter().all(|n| !n.early_stop));
+    // A hash semi join under a limit is a join, not the build side: its probe side may stop.
+    let plan = parse(
+        "-> Limit: 10 row(s)  (cost=9 rows=9) (actual time=1..2 rows=9 loops=1)\n    \
+         -> Hash semijoin (t2.a = t1.a)  (cost=9 rows=9) (actual time=1..2 rows=9 loops=1)\n        \
+         -> Table scan on t1  (cost=1 rows=900) (actual time=1..1 rows=9 loops=1)\n        \
+         -> Hash\n            -> Table scan on t2  (cost=1 rows=9) (actual time=1..1 rows=9 loops=1)\n",
+    )
+    .unwrap();
+    let probe = plan.nodes.iter().position(|n| n.target.as_deref() == Some("on t1")).unwrap();
+    let build = plan.nodes.iter().position(|n| n.target.as_deref() == Some("on t2")).unwrap();
+    assert!(plan.nodes[probe].early_stop && plan.misestimate(probe).is_none());
+    assert!(!plan.nodes[build].early_stop, "the build side is read in full");
 }
 
 /// A measure on a tree that has none elsewhere is a name's text (8.0 writes sort keys
