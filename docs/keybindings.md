@@ -277,7 +277,7 @@ The result inspector next to the grid, after a click on it: `j`/`k` move between
 
 ## `plan`
 
-The Plan tab of the results pane (an `EXPLAIN (FORMAT JSON)` result): `j`/`k` select a node, `h`/`l` close and open its children, `Enter` shows its detail, `v`/`V` and the digits pick a view, `y`/`Y` copy the plan as text or JSON. Inside `nav`.
+The Plan tab of the results pane (a plan result: PostgreSQL's JSON, MySQL's tree): `j`/`k` select a node, `h`/`l` close and open its children, `Enter` shows its detail, `v`/`V` and the digits pick a view, `y` copies the plan as the raw view shows it, `Y` as the server sent it. Inside `nav`.
 
 | Keys | Action | Description | R |
 |---|---|---|---|

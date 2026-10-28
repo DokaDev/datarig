@@ -12,10 +12,10 @@ use datarig_core::config::Config;
 use datarig_core::driver::{DbCommand, DbEvent, ExplainFormat};
 use datarig_core::i18n::{Label, Lang, Msg};
 use datarig_core::policy::Policy;
-use datarig_tui::app::Focus;
 use datarig_tui::app::overlay::{ConfirmAction, OverlayKind};
 use datarig_tui::app::plan::PlanView;
 use datarig_tui::app::tabs::ResultView;
+use datarig_tui::app::{AppEvent, EventTarget, Focus};
 use datarig_tui::widgets::editor::Editor;
 use ratatui::crossterm::event::KeyCode;
 use std::sync::atomic::Ordering;
@@ -317,6 +317,8 @@ fn what_cannot_be_asked_for_as_a_tree_is_refused_with_a_reason() {
         ("DESC c;", Label::PlanAsPlanNotExplain),
         ("EXPLAIN /*!80000 FORMAT=JSON */ SELECT 1;", Label::PlanAsPlanUnreadable),
         ("EXPLAIN FOR CONNECTION 12;", Label::PlanAsPlanUnreadable),
+        // It ran already (a JSON result the plan view does not read): never run again.
+        ("EXPLAIN ANALYZE FORMAT=JSON SELECT 1;", Label::PlanAsPlanAnalyzed),
     ] {
         let mut h = table_plan(sql);
         h.keys("P");
@@ -325,6 +327,43 @@ fn what_cannot_be_asked_for_as_a_tree_is_refused_with_a_reason() {
         let line = h.status(220, 30);
         assert!(line.contains(why.text(Lang::En)), "{sql}: {why:?}: {line}");
     }
+    // A table described (`DESC t`) is no text plan: view as plan is not offered for it.
+    let as_plan = Label::ActionResultsViewAsPlan.text(Lang::En).to_string();
+    let mut h = table_plan("DESC c;");
+    assert!(!h.screen(100, 30).contains("view as plan"), "no hint");
+    h.key_mod(KeyCode::F(10), ratatui::crossterm::event::KeyModifiers::SHIFT);
+    assert!(!h.menu_labels().contains(&as_plan), "not in the menu");
+    h.key(KeyCode::Esc);
+}
+
+#[test]
+fn a_statement_without_a_tree_says_so() {
+    let mut h = mysql();
+    edit(&mut h, "EXPLAIN FORMAT=TREE UPDATE o SET amount = 1 WHERE id = 3;");
+    h.sent();
+    h.ctrl('e');
+    if h.app.overlays.run_confirm().is_some() {
+        h.keys("y");
+    }
+    let (id, _) = sent_one(&mut h);
+    h.db(tree_page(id, &fixture("update_single.tree.txt")));
+    assert_eq!(h.app.tab().exec.view, ResultView::Rows, "its text stays rows");
+    assert!(h.app.tab().exec.plan.is_none());
+    assert_eq!(status(&h), Some(Label::PlanNoTree.into()));
+    // A plan-shaped text of another column is just rows, said nothing about.
+    let mut h = mysql();
+    edit(&mut h, "SELECT 1;");
+    h.sent();
+    h.ctrl('e');
+    let (id, _) = sent_one(&mut h);
+    h.db(DbEvent::Page {
+        id,
+        columns: Some(vec![meta("x", "TEXT", false, false)]),
+        rows: vec![vec![Some(fixture("update_single.tree.txt"))]],
+        more: false,
+        elapsed: Duration::from_millis(1),
+    });
+    assert_ne!(status(&h), Some(Label::PlanNoTree.into()));
 }
 
 #[test]
@@ -374,6 +413,17 @@ fn a_server_without_a_plan_the_app_reads_offers_no_plan_action() {
     let (id, _) = sent_one(&mut h);
     h.db(tree_page(id, &fixture("scan.tree.txt")));
     assert_eq!(h.app.tab().exec.view, ResultView::Rows);
+    // A word of an older attempt is dropped; a new attempt forgets the last one's (the driver's
+    // holds until a session says).
+    let id = h.app.profiles[0].id;
+    let old = h.app.conns.get(id).unwrap().generation;
+    h.app.conns.next_generation(id);
+    let menu_now = menu(&mut h);
+    assert!(menu_now.contains(&explain), "forgotten at a new attempt: {menu_now:?}");
+    h.app.on_app_event(AppEvent::Db { target: EventTarget::Meta(id), generation: old, ev: DbEvent::Explain(None) });
+    assert!(menu(&mut h).contains(&explain), "an older attempt's word is dropped");
+    h.meta_db("local-my", DbEvent::Explain(None));
+    assert!(!menu(&mut h).contains(&explain), "the current attempt's counts");
     // The metadata session's word counts too: a server that gives the tree offers it all again.
     h.meta_db("local-my", DbEvent::Explain(Some(ExplainFormat::MySqlTree)));
     let menu_now = menu(&mut h);

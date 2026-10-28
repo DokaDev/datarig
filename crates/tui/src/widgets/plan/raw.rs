@@ -1,6 +1,7 @@
 //! The raw view: the server's own text for a text format (MySQL's tree, as it came), else the
-//! text `psql` shows for `EXPLAIN`, written from the plan (never asked of the server again). The selected node's lines are marked, its node line most; `<` and `>` move
-//! long lines sideways.
+//! text `psql` shows for `EXPLAIN`, written from the plan (never asked of the server again).
+//! The selected node's lines are marked, its node line most; `<` and `>` move long lines
+//! sideways.
 
 use super::{Look, on_line, selected_style, work};
 use crate::app::plan::PlanTab;

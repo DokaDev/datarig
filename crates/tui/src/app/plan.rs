@@ -377,6 +377,7 @@ fn not_json(e: plan::explain::NotJson) -> Notice {
     match e {
         NotJson::NotExplain => Notice::new(Label::PlanAsPlanNotExplain, Level::Info),
         NotJson::AlreadyJson => Notice::new(Label::PlanAsPlanAlreadyJson, Level::Info),
+        NotJson::Analyzed => Notice::new(Label::PlanAsPlanAnalyzed, Level::Info),
         NotJson::Several => Notice::new(Label::PlanAsPlanSeveral, Level::Warning),
         NotJson::Unreadable => Notice::new(Label::PlanAsPlanUnreadable, Level::Warning),
     }
@@ -395,10 +396,29 @@ pub(super) fn plan_of(
     let [c] = columns else { return None };
     let [row] = rows else { return None };
     let text = row.first()?.as_deref()?;
-    if more || !format.holds(&c.name, &c.type_name, text) {
+    if more {
         return None;
     }
-    format.read(text).ok().map(|p| (p, text.to_string(), format))
+    format.plan_in(&c.name, &c.type_name, text).map(|p| (p, text.to_string(), format))
+}
+
+/// `sql` (in dialect `d`) is an `EXPLAIN` of a statement, as format `format` reads it: not
+/// MySQL's `DESC t`, which describes a table.
+fn explains_statement(sql: &str, d: datarig_core::sql::dialect::Dialect, format: Option<ExplainFormat>) -> bool {
+    plan::is_explain_in(sql, d)
+        && format.is_none_or(|f| !matches!(f.again_text(sql, d), Err(plan::explain::NotJson::NotExplain)))
+}
+
+/// A result of one row and one column in which the server says it has no plan of format
+/// `format` for the statement (`ExplainFormat::says_no_plan`).
+pub(super) fn says_no_plan(
+    columns: &[datarig_core::driver::ColumnMeta],
+    rows: &[Vec<datarig_core::driver::Cell>],
+    format: Option<ExplainFormat>,
+) -> bool {
+    let ([c], [row]) = (columns, rows) else { return false };
+    let text = row.first().and_then(|t| t.as_deref());
+    format.zip(text).is_some_and(|(f, text)| f.says_no_plan(&c.name, text))
 }
 
 impl App {
@@ -443,7 +463,7 @@ impl App {
         let dialect = self.tab_dialect(t.id);
         let explain = t.exec.shown.is_some()
             && t.exec.plan.as_ref().is_none_or(|p| Some(p.index) != t.exec.shown)
-            && plan::is_explain_in(sql, dialect);
+            && explains_statement(sql, dialect, format);
         // Rows of an earlier run (statements ran since) or of a run of several are not asked
         // again: no offer.
         let alone = t.exec.kept_log.is_none() && !t.rows_log().several();
@@ -509,11 +529,11 @@ impl App {
         let t = self.tab();
         let log = t.rows_log();
         let is_plan = |i: usize| t.exec.plan.as_ref().is_some_and(|p| p.index == i);
-        let dialect = self.tab_dialect(t.id);
+        let (dialect, format) = (self.tab_dialect(t.id), self.tab_explain(t.id));
         let text_plan = t
             .result_tabs()
             .into_iter()
-            .any(|i| !is_plan(i) && log.statements.get(i).is_some_and(|s| plan::is_explain_in(&s.sql, dialect)));
+            .any(|i| !is_plan(i) && log.statements.get(i).is_some_and(|s| explains_statement(&s.sql, dialect, format)));
         let notice = if text_plan && !self.results_shown() {
             let key = self.key_or_commands(Action::Panel(super::action::PanelAction::Toggle));
             Notice::new(Msg::PlanAsPlanShowFirst { key }, Level::Info)

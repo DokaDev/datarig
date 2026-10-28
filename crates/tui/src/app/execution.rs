@@ -1588,6 +1588,9 @@ impl App {
                 // A plan (`EXPLAIN (FORMAT JSON)`, MySQL's tree): shown as one; its rows stay a
                 // result tab.
                 let plan = if t.is_table() { None } else { super::plan::plan_of(&cols, &rows, more, explain) };
+                // The server said it has no plan of the format for the statement: said, not just
+                // left as rows.
+                let no_plan = plan.is_none() && !t.is_table() && super::plan::says_no_plan(&cols, &rows, explain);
                 let store = datarig_core::results::RowStore::new(rows, spill, limits);
                 // The run's answer: its own result tab, shown.
                 if t.exec.replace_pending {
@@ -1636,6 +1639,13 @@ impl App {
                     );
                     t.exec.run.notes.push(m.clone());
                     t.exec.explain_rolled_back = false;
+                    Some(m)
+                } else if no_plan {
+                    if std::mem::take(&mut t.exec.explain_rolled_back) {
+                        t.exec.run.notes.push(Notice::new(Label::SafetyExplainRolledBack, Level::Info));
+                    }
+                    let m = Notice::new(Label::PlanNoTree, Level::Info);
+                    t.exec.run.notes.push(m.clone());
                     Some(m)
                 } else {
                     Some(if std::mem::take(&mut t.exec.explain_rolled_back) {

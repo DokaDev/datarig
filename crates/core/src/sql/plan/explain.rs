@@ -47,9 +47,11 @@ pub enum NotJson {
     NotExplain,
     /// More than one statement.
     Several,
-    /// It asks for a plan the plan view reads already (JSON; MySQL: the tree, or `ANALYZE`,
-    /// which gives the tree).
+    /// It asks for a plan the plan view reads already (JSON; MySQL: the tree).
     AlreadyJson,
+    /// It ran its statement with `ANALYZE` already (MySQL, whose result the plan view reads
+    /// when it is the tree): never run again.
+    Analyzed,
     /// Its options or its statement cannot be read (nothing after them, a list that does not
     /// end, an empty option, a text PostgreSQL's parser reads otherwise).
     Unreadable,
@@ -102,8 +104,8 @@ pub fn tree(sql: &str, mode: MySqlMode) -> Result<JsonExplain, NotJson> {
     Ok(JsonExplain { evaluates: !plain || !allowed, ..out })
 }
 
-/// [`tree`] as the lexer reads `sql`, without the classifier's check. Refused: `ANALYZE` (its
-/// result is the tree already), `INTO @v`, `FOR CONNECTION`, `FOR SCHEMA`, an `EXPLAIN` of a
+/// [`tree`] as the lexer reads `sql`, without the classifier's check. Refused: `ANALYZE` (it
+/// ran already; a tree it gave is read as one), `INTO @v`, `FOR CONNECTION`, `FOR SCHEMA`, an `EXPLAIN` of a
 /// table (its columns, not a plan), an executable comment (the server's version picks what it
 /// holds) and more than one statement.
 pub fn tree_text(sql: &str, mode: MySqlMode) -> Result<JsonExplain, NotJson> {
@@ -128,7 +130,7 @@ pub fn tree_text(sql: &str, mode: MySqlMode) -> Result<JsonExplain, NotJson> {
     let mut i = 0;
     loop {
         match rest.get(i) {
-            Some(t) if word(t, "ANALYZE") => return Err(NotJson::AlreadyJson),
+            Some(t) if word(t, "ANALYZE") => return Err(NotJson::Analyzed),
             Some(t) if word(t, "EXTENDED") || word(t, "PARTITIONS") => i += 1,
             Some(t) if word(t, "FORMAT") => {
                 let is = rest.get(i + 1).is_some_and(|t| t.kind == Tok::Op && t.text(sql) == "=");

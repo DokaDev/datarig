@@ -174,42 +174,51 @@ fn every_view_stays_inside_its_area_at_every_small_size() {
          "Actual Rows": 0, "Actual Loops": 0}]}, "Execution Time": 9.1e9}]"#;
     // The JSON escapes are wide characters in the name.
     assert_eq!(parse(json).unwrap().nodes[1].target.as_deref(), Some("on \"\u{D45C}\u{C2DC}\" \"\u{8868}\""));
+    // MySQL's tree: a root without a cost (its children's, marked), a wide name, huge numbers.
+    let tree = "-> Sort: \u{D45C} DESC\n    -> Nested loop inner join  (cost=1e+39 rows=3e+15)\n        \
+                -> Table scan on \u{8868}  (cost=5e+38 rows=7)\n        -> Index lookup on t using k (k=\u{8868}.a)  \
+                (cost=0.25 rows=1)\n";
+    use datarig_core::driver::ExplainFormat::{MySqlTree, PostgresJson};
+    assert!(MySqlTree.read(tree).unwrap().nodes[0].cost_derived);
     let th = crate::theme::DARK;
     let i18n = datarig_core::i18n::I18n::new(datarig_core::i18n::Lang::En);
-    for view in PlanView::ALL {
-        for detail in [false, true] {
-            for w in 0..48u16 {
-                for h in 0..14u16 {
-                    let mut p = PlanTab::new(
-                        parse(json).unwrap(),
-                        0,
-                        0,
-                        json,
-                        datarig_core::driver::ExplainFormat::PostgresJson,
-                    );
-                    p.view = view;
-                    p.detail = detail;
-                    let outer = Rect { x: 0, y: 0, width: w + 6, height: h + 4 };
-                    let mut buf = Buffer::empty(outer);
-                    for c in buf.content.iter_mut() {
-                        c.set_symbol("X");
-                    }
-                    let area = Rect { x: 3, y: 2, width: w, height: h };
-                    let cx = Look { i18n: &i18n, th: &th, icons: true, focused: true, hover: None };
-                    draw_into(&cx, &mut p, area, &mut buf);
-                    for y in 0..outer.height {
-                        for x in 0..outer.width {
-                            let inside = x >= area.x && x < area.x + w && y >= area.y && y < area.y + h;
-                            if !inside {
-                                assert_eq!(buf[(x, y)].symbol(), "X", "{view:?} detail {detail} at {w}x{h}: ({x},{y})");
+    for (text, format) in [(json, PostgresJson), (tree, MySqlTree)] {
+        for view in PlanView::ALL {
+            for detail in [false, true] {
+                for w in 0..48u16 {
+                    for h in 0..14u16 {
+                        let mut p = PlanTab::new(format.read(text).unwrap(), 0, 0, text, format);
+                        p.view = view;
+                        p.detail = detail;
+                        let outer = Rect { x: 0, y: 0, width: w + 6, height: h + 4 };
+                        let mut buf = Buffer::empty(outer);
+                        for c in buf.content.iter_mut() {
+                            c.set_symbol("X");
+                        }
+                        let area = Rect { x: 3, y: 2, width: w, height: h };
+                        let cx = Look { i18n: &i18n, th: &th, icons: true, focused: true, hover: None };
+                        draw_into(&cx, &mut p, area, &mut buf);
+                        for y in 0..outer.height {
+                            for x in 0..outer.width {
+                                let inside = x >= area.x && x < area.x + w && y >= area.y && y < area.y + h;
+                                if !inside {
+                                    assert_eq!(
+                                        buf[(x, y)].symbol(),
+                                        "X",
+                                        "{format:?} {view:?} detail {detail} at {w}x{h}: ({x},{y})"
+                                    );
+                                }
                             }
                         }
-                    }
-                    for (r, _) in &p.hits {
-                        assert!(
-                            r.x >= area.x && r.y >= area.y && r.right() <= area.right() && r.bottom() <= area.bottom(),
-                            "{view:?} {w}x{h}: {r:?}"
-                        );
+                        for (r, _) in &p.hits {
+                            assert!(
+                                r.x >= area.x
+                                    && r.y >= area.y
+                                    && r.right() <= area.right()
+                                    && r.bottom() <= area.bottom(),
+                                "{format:?} {view:?} {w}x{h}: {r:?}"
+                            );
+                        }
                     }
                 }
             }

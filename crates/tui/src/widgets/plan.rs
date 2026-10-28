@@ -133,10 +133,14 @@ fn view_bar(cx: &Look, p: &mut PlanTab, area: Rect, buf: &mut Buffer) {
         // A cost that is not the server's is marked `≈` where it shows: said once here.
         Measure::Cost if plan.nodes.iter().any(|n| n.cost_derived) => {
             let estimates = cx.i18n.label(Label::PlanEstimatesOnly).to_string();
+            let (full, short) = (cx.i18n.label(Label::PlanCostDerived), cx.i18n.label(Label::PlanCostDerivedShort));
+            let brief = cx.i18n.label(Label::PlanEstimatesShort);
+            // The mark keeps its word as long as anything fits.
             let notes = vec![
-                format!("{estimates} · {}", cx.i18n.label(Label::PlanCostDerived)),
-                format!("{estimates} · {}", cx.i18n.label(Label::PlanCostDerivedShort)),
-                estimates,
+                format!("{estimates} · {full}"),
+                format!("{estimates} · {short}"),
+                format!("{brief} · {short}"),
+                short.to_string(),
             ];
             (notes, Style::new().fg(th.warning).bg(th.surface))
         }

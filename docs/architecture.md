@@ -646,15 +646,19 @@ and "The MySQL classifier" below).
   `Capabilities::explain` (`Some(ExplainFormat::PostgresJson)`, `Some(ExplainFormat::MySqlTree)`:
   the plan the driver's sessions produce; `None`: no plan view). A session may say otherwise for
   its server once connected (`DbEvent::Explain`: MySQL's driver says none on MariaDB), kept per
-  profile (`ProfileConn::explain`, forgotten at the next attempt). `query.explain`,
+  profile (`ProfileConn::explain`, forgotten at the next attempt). Until a session of the
+  profile said it, the driver's holds: before a MariaDB profile's first connect the plan
+  actions are offered, and the server refuses `EXPLAIN FORMAT=TREE` with a syntax error
+  (nothing runs). `query.explain`,
   `query.explain_analyze` and `results.view_as_plan` are offered only on a tab whose server
   gives one (`App::tab_explain`; a tab without a known driver is in the default language,
   PostgreSQL, and counts as one).
 - **The plan format seam**: everything that depends on how a server writes its plans goes
   through `ExplainFormat` (core `sql::plan`): `explain_sql` (how to ask), `holds` (whether a
-  one-cell result is a plan), `read` (the reader: `plan::pg`, `plan::mysql`), `is_text` (the raw
-  view and the copies show the server's text as it came, MySQL's tree, instead of writing the
-  model as `psql` text), `has_buffers`, and `again`/`again_text` (a text `EXPLAIN` asked again
+  one-cell result is a plan), `read` (the reader: `plan::pg`, `plan::mysql`), `plan_in` (both, read once), `says_no_plan` (the server's word that it has no
+  plan of the format for a statement), `is_text` (the raw view and the copies show the server's
+  text as it came, MySQL's tree, instead of writing the model as `psql` text), `has_buffers`,
+  `reports_statement_times`, and `again`/`again_text` (a text `EXPLAIN` asked again
   in the format: `explain::json`, `explain::tree`). The TUI asks the tab's format, never its
   dialect. A new format is a variant, a reader, its fixtures (`fixtures/<flavour>/<version>/`)
   and the session that reports it. Nothing reads `hierarchy` yet: the explorer and the context

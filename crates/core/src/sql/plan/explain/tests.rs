@@ -233,7 +233,9 @@ fn what_a_mysql_tree_cannot_be_asked_for_is_refused() {
         ("SELECT 1", NotJson::NotExplain),
         ("EXPLAIN t", NotJson::NotExplain),
         ("DESC t a", NotJson::NotExplain),
-        ("EXPLAIN ANALYZE SELECT 1", NotJson::AlreadyJson),
+        ("EXPLAIN ANALYZE SELECT 1", NotJson::Analyzed),
+        ("EXPLAIN ANALYZE FORMAT=JSON SELECT 1", NotJson::Analyzed),
+        ("EXPLAIN FORMAT=JSON ANALYZE SELECT 1", NotJson::Analyzed),
         ("EXPLAIN FORMAT=TREE SELECT 1", NotJson::AlreadyJson),
         ("EXPLAIN FORMAT='tree' SELECT 1", NotJson::AlreadyJson),
         ("EXPLAIN FORMAT=JSON INTO @p SELECT 1", NotJson::Unreadable),
@@ -277,4 +279,31 @@ fn a_mysql_tree_asked_again_is_free_of_the_question_only_on_the_allowlist() {
         "EXPLAIN (FORMAT JSON) SELECT 1"
     );
     assert_eq!(MySqlTree.again_text("DESC SELECT 1", mysql).unwrap().sql, "EXPLAIN FORMAT=TREE SELECT 1");
+}
+
+#[test]
+fn a_mysql_tree_reads_quotes_as_the_sql_mode_does() {
+    let ansi = MySqlMode { ansi_quotes: true, ..MySqlMode::default() };
+    // `"…"` is a name under ANSI_QUOTES: what it holds is not an option nor a statement's end.
+    let j = tree(r#"EXPLAIN SELECT "a; ANALYZE" FROM t"#, ansi).unwrap();
+    assert_eq!(j.sql, r#"EXPLAIN FORMAT=TREE SELECT "a; ANALYZE" FROM t"#);
+    // Without backslash escapes `\'` ends the string: the rest is text of the statement's own,
+    // read as the server reads it (two statements here).
+    let raw = MySqlMode { no_backslash_escapes: true, ..MySqlMode::default() };
+    assert_eq!(tree_text(r"EXPLAIN SELECT 'a\'; FOR CONNECTION 1'", raw).map(|j| j.sql), Err(NotJson::Several));
+    // With them, it is all one string.
+    let j = tree_text(r"EXPLAIN SELECT 'a\'; FOR CONNECTION 1'", MySqlMode::default()).unwrap();
+    assert_eq!(j.sql, r"EXPLAIN FORMAT=TREE SELECT 'a\'; FOR CONNECTION 1'");
+}
+
+#[test]
+fn a_server_without_a_tree_for_the_statement_says_so() {
+    use crate::driver::ExplainFormat::{MySqlTree, PostgresJson};
+    let none = "-> <not executable by iterator executor>\n";
+    assert!(MySqlTree.says_no_plan("EXPLAIN", none));
+    assert!(MySqlTree.plan_in("EXPLAIN", "TEXT", none).is_none());
+    assert!(!MySqlTree.says_no_plan("EXPLAIN", "-> Table scan on c  (cost=20.2 rows=200)"));
+    assert!(!MySqlTree.says_no_plan("x", none) && !PostgresJson.says_no_plan("EXPLAIN", none));
+    let tree = "-> Table scan on c  (cost=20.2 rows=200)";
+    assert_eq!(MySqlTree.plan_in("EXPLAIN", "TEXT", tree).map(|p| p.nodes.len()), Some(1));
 }

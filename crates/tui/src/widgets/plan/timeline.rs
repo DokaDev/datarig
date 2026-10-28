@@ -34,7 +34,14 @@ pub(super) fn draw(cx: &Look, p: &mut PlanTab, area: Rect, buf: &mut Buffer) {
     let axis_w = (area.x + area.width).saturating_sub(axis_x + 1) as usize;
     // The axis: 0, half way and the end, and the legend.
     let muted = Style::new().fg(th.fg_dim).bg(th.bg);
-    let at = |v: f64| if time { fmt_ms(v) } else { fmt_num(v) };
+    // The axis' end is a node's total cost: marked when the server did not give it.
+    let derived =
+        !time && (0..plan.nodes.len()).any(|i| plan.nodes[i].cost_derived && span(i).is_some_and(|s| s.1 >= max));
+    let at = |v: f64| match (time, derived) {
+        (true, _) => fmt_ms(v),
+        (false, true) => format!("≈{}", fmt_num(v)),
+        (false, false) => fmt_num(v),
+    };
     let legend = cx.i18n.label(if time { Label::PlanTimelineLegend } else { Label::PlanTimelineLegendCost });
     let legend_style = if time { muted } else { Style::new().fg(th.warning).bg(th.bg) };
     put(buf, area.x + 1, area.y, &legend, name_w, legend_style);

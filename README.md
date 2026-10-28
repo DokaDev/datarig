@@ -285,9 +285,9 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
   export stops.
 - Transaction indicators in the tab bar and the status bar (open, aborted, "rollback required"),
   and questions before closing, quitting or disconnecting would roll back your work.
-- Query plans (PostgreSQL; MySQL 8.0.18 and later, see [MySQL](#mysql)): `Space e x` (or
-  `:explain`) runs the statement under the cursor as
-  `EXPLAIN (FORMAT JSON)`, `Space e a` (or `:explain analyze`) as `EXPLAIN (ANALYZE, BUFFERS,
+- Query plans (PostgreSQL; MySQL, see [MySQL](#mysql); below in PostgreSQL's words):
+  `Space e x` (or `:explain`) runs the statement under the cursor as `EXPLAIN (FORMAT JSON)`,
+  `Space e a` (or `:explain analyze`) as `EXPLAIN (ANALYZE, BUFFERS,
   FORMAT JSON)`, through the same checks as any run (a write under `ANALYZE` is rolled back, a
   read-only profile refuses it); an `EXPLAIN (FORMAT JSON …)` you type yourself shows the same
   way. A text `EXPLAIN` you ran stays rows, with a line under them: `P` in the results (or
@@ -317,9 +317,11 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
   (boxes joined by lines; a large plan is moved around in with the selection, `<` `>` and the
   wheel); `9` the plan as `psql` prints it (written from the JSON; nothing is run again).
   `y`/`Y` copy it as text or JSON. On MySQL the plan is the server's tree (`EXPLAIN
-  FORMAT=TREE`, `EXPLAIN ANALYZE FORMAT=TREE`): the raw view and both copies are the server's
-  text as it came, there are no buffers, and a node the server gives no cost (a sort, a
-  subquery's head) shows its children's together marked `≈`, never as a number of the server's.
+  FORMAT=TREE`, `EXPLAIN ANALYZE FORMAT=TREE`; a table `EXPLAIN` is viewed as a plan by asking
+  for the tree): the raw view and both copies are the server's text as it came, there are no
+  buffers and no planning or execution time (the measured total is shown), and a node the server
+  gives no cost (a sort, a subquery's head) shows its children's together marked `≈`, never as
+  a number of the server's.
   Large plans stay readable and fast: names are cut, layouts
   are bounded, and only what is on screen is drawn.
 - Charts of a result: the Chart tab of the results pane (or `c` in the results, `Space r c`, or
