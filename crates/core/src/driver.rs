@@ -58,7 +58,8 @@ pub struct Capabilities {
     /// picker show databases holding schemas, as PostgreSQL has them.
     pub hierarchy: Hierarchy,
     /// The plan the driver's sessions can produce for a statement, `None` for none: the plan
-    /// view (`query.explain`, `results.view_as_plan`) is offered only with one.
+    /// view (`query.explain`, `results.view_as_plan`) is offered only with one. A session may
+    /// say otherwise for its server once connected ([`DbEvent::Explain`]).
     pub explain: Option<ExplainFormat>,
     /// A result held open (`PagingMode::Hold`, or read inside the user's transaction block) keeps
     /// its statement running on the server, and with it the locks the statement took, until it
@@ -89,9 +90,9 @@ pub enum Hierarchy {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ExplainFormat {
     /// PostgreSQL's `EXPLAIN (FORMAT JSON)`: a list holding one object whose `Plan` is the tree
-    /// of nodes, read by `sql::plan::pg`, asked with
-    /// [`Dialect::explain_sql`](crate::sql::dialect::Dialect::explain_sql). Another database's
-    /// JSON plan (MySQL's `FORMAT=JSON`) is shaped otherwise and would be a format of its own.
+    /// of nodes, read by `sql::plan::pg`, asked with [`ExplainFormat::explain_sql`]. Another
+    /// database's JSON plan (MySQL's `FORMAT=JSON`) is shaped otherwise and would be a format of
+    /// its own.
     PostgresJson,
     /// MySQL's tree text: `EXPLAIN FORMAT=TREE` and `EXPLAIN ANALYZE` (8.0.18 on), read by
     /// `sql::plan::mysql`. Each format a server may give (MySQL's JSON, MariaDB's) is a variant

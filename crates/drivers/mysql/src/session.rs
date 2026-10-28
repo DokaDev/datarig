@@ -5,7 +5,7 @@
 
 use crate::route::{Route, io_fault};
 use crate::wire::{TlsFailed, Wire};
-use datarig_core::driver::{CancelFailure, DbError, SessionRole, SessionValues};
+use datarig_core::driver::{CancelFailure, DbError, ExplainFormat, SessionRole, SessionValues};
 use datarig_core::fault::{Fault, FaultKind};
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::profile::dsn::{self, Scheme};
@@ -146,6 +146,13 @@ const MYSQL_MIN: (u16, u16, u16) = (8, 0, 0);
 const MARIADB_MIN: (u16, u16, u16) = (10, 6, 0);
 
 impl Server {
+    /// The plan format the server gives: MySQL's tree from 8.0.16 on (`EXPLAIN FORMAT=TREE`;
+    /// `EXPLAIN ANALYZE` from 8.0.18, an older one's error is the server's), none on MariaDB
+    /// (its plans are shaped otherwise).
+    pub(crate) fn explain(&self) -> Option<ExplainFormat> {
+        (!self.mariadb && self.version >= (8, 0, 16)).then_some(ExplainFormat::MySqlTree)
+    }
+
     /// `MySQL 8.4.6`, `MariaDB 11.4.2`.
     pub(crate) fn label(&self) -> String {
         let (a, b, c) = self.version;

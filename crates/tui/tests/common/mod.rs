@@ -84,8 +84,9 @@ pub struct FakeDriver {
     pub no_ddl: Arc<AtomicBool>,
     /// Without `Capabilities::explain` (as a driver that cannot produce a statement's plan).
     pub no_explain: Arc<AtomicBool>,
-    /// A MySQL driver's language and namespaces (the default sql mode until a session says
-    /// otherwise, `DbEvent::Language`), without plans. Set before the app reads the driver.
+    /// A MySQL driver's language, namespaces and plan format (the default sql mode until a
+    /// session says otherwise, `DbEvent::Language`; MySQL's tree until one says otherwise,
+    /// `DbEvent::Explain`). Set before the app reads the driver.
     pub mysql: Arc<AtomicBool>,
     /// Without `Capabilities::manual_commit` (as a driver that cannot commit by hand).
     pub no_manual: Arc<AtomicBool>,
@@ -109,8 +110,10 @@ impl Driver for FakeDriver {
                 true => Hierarchy::SchemaOnly,
                 false => Hierarchy::DatabaseSchema,
             },
-            explain: (!self.no_explain.load(Ordering::SeqCst) && !self.mysql.load(Ordering::SeqCst))
-                .then_some(ExplainFormat::PostgresJson),
+            explain: (!self.no_explain.load(Ordering::SeqCst)).then(|| match self.mysql.load(Ordering::SeqCst) {
+                true => ExplainFormat::MySqlTree,
+                false => ExplainFormat::PostgresJson,
+            }),
             reads_held_to_end: self.mysql.load(Ordering::SeqCst),
             export: true,
             manual_commit: !self.no_manual.load(Ordering::SeqCst),

@@ -80,14 +80,26 @@ fn icicle_children_share_their_parents_width() {
         leaf(50.0),
         leaf(25.0)
     );
-    let p = crate::app::plan::PlanTab::new(parse(&json).unwrap(), 0, 0, &json);
+    let p = crate::app::plan::PlanTab::new(
+        parse(&json).unwrap(),
+        0,
+        0,
+        &json,
+        datarig_core::driver::ExplainFormat::PostgresJson,
+    );
     let s = icicle::spans(&p, 100.0);
     assert_eq!(s[0], (0.0, 100.0));
     assert_eq!(s[1], (0.0, 50.0));
     assert_eq!(s[2], (50.0, 75.0), "the rest is the parent's own time");
     // Children that say they took longer than their parent share its width.
     let json = json.replace(r#""Actual Total Time": 25"#, r#""Actual Total Time": 150"#);
-    let p = crate::app::plan::PlanTab::new(parse(&json).unwrap(), 0, 0, &json);
+    let p = crate::app::plan::PlanTab::new(
+        parse(&json).unwrap(),
+        0,
+        0,
+        &json,
+        datarig_core::driver::ExplainFormat::PostgresJson,
+    );
     let s = icicle::spans(&p, 100.0);
     assert!((s[2].1 - 100.0).abs() < 1e-9, "{s:?}");
 }
@@ -98,7 +110,13 @@ fn icicle_children_share_their_parents_width() {
 fn icicle_ctes_do_not_shrink_their_siblings() {
     use datarig_core::sql::plan::pg::parse;
     let json = include_str!("../../../../core/src/sql/plan/fixtures/pg18/cte.analyze.json");
-    let p = crate::app::plan::PlanTab::new(parse(json).unwrap(), 0, 0, json);
+    let p = crate::app::plan::PlanTab::new(
+        parse(json).unwrap(),
+        0,
+        0,
+        json,
+        datarig_core::driver::ExplainFormat::PostgresJson,
+    );
     let s = icicle::spans(&p, 100.0);
     let plan = &p.plan;
     // Hash Join: CTE big (InitPlan), CTE Scan b (170.3 of 171.4 ms), Hash.
@@ -156,36 +174,51 @@ fn every_view_stays_inside_its_area_at_every_small_size() {
          "Actual Rows": 0, "Actual Loops": 0}]}, "Execution Time": 9.1e9}]"#;
     // The JSON escapes are wide characters in the name.
     assert_eq!(parse(json).unwrap().nodes[1].target.as_deref(), Some("on \"\u{D45C}\u{C2DC}\" \"\u{8868}\""));
+    // MySQL's tree: a root without a cost (its children's, marked), a wide name, huge numbers.
+    let tree = "-> Sort: \u{D45C} DESC\n    -> Nested loop inner join  (cost=1e+39 rows=3e+15)\n        \
+                -> Table scan on \u{8868}  (cost=5e+38 rows=7)\n        -> Index lookup on t using k (k=\u{8868}.a)  \
+                (cost=0.25 rows=1)\n";
+    use datarig_core::driver::ExplainFormat::{MySqlTree, PostgresJson};
+    assert!(MySqlTree.read(tree).unwrap().nodes[0].cost_derived);
     let th = crate::theme::DARK;
     let i18n = datarig_core::i18n::I18n::new(datarig_core::i18n::Lang::En);
-    for view in PlanView::ALL {
-        for detail in [false, true] {
-            for w in 0..48u16 {
-                for h in 0..14u16 {
-                    let mut p = PlanTab::new(parse(json).unwrap(), 0, 0, json);
-                    p.view = view;
-                    p.detail = detail;
-                    let outer = Rect { x: 0, y: 0, width: w + 6, height: h + 4 };
-                    let mut buf = Buffer::empty(outer);
-                    for c in buf.content.iter_mut() {
-                        c.set_symbol("X");
-                    }
-                    let area = Rect { x: 3, y: 2, width: w, height: h };
-                    let cx = Look { i18n: &i18n, th: &th, icons: true, focused: true, hover: None };
-                    draw_into(&cx, &mut p, area, &mut buf);
-                    for y in 0..outer.height {
-                        for x in 0..outer.width {
-                            let inside = x >= area.x && x < area.x + w && y >= area.y && y < area.y + h;
-                            if !inside {
-                                assert_eq!(buf[(x, y)].symbol(), "X", "{view:?} detail {detail} at {w}x{h}: ({x},{y})");
+    for (text, format) in [(json, PostgresJson), (tree, MySqlTree)] {
+        for view in PlanView::ALL {
+            for detail in [false, true] {
+                for w in 0..48u16 {
+                    for h in 0..14u16 {
+                        let mut p = PlanTab::new(format.read(text).unwrap(), 0, 0, text, format);
+                        p.view = view;
+                        p.detail = detail;
+                        let outer = Rect { x: 0, y: 0, width: w + 6, height: h + 4 };
+                        let mut buf = Buffer::empty(outer);
+                        for c in buf.content.iter_mut() {
+                            c.set_symbol("X");
+                        }
+                        let area = Rect { x: 3, y: 2, width: w, height: h };
+                        let cx = Look { i18n: &i18n, th: &th, icons: true, focused: true, hover: None };
+                        draw_into(&cx, &mut p, area, &mut buf);
+                        for y in 0..outer.height {
+                            for x in 0..outer.width {
+                                let inside = x >= area.x && x < area.x + w && y >= area.y && y < area.y + h;
+                                if !inside {
+                                    assert_eq!(
+                                        buf[(x, y)].symbol(),
+                                        "X",
+                                        "{format:?} {view:?} detail {detail} at {w}x{h}: ({x},{y})"
+                                    );
+                                }
                             }
                         }
-                    }
-                    for (r, _) in &p.hits {
-                        assert!(
-                            r.x >= area.x && r.y >= area.y && r.right() <= area.right() && r.bottom() <= area.bottom(),
-                            "{view:?} {w}x{h}: {r:?}"
-                        );
+                        for (r, _) in &p.hits {
+                            assert!(
+                                r.x >= area.x
+                                    && r.y >= area.y
+                                    && r.right() <= area.right()
+                                    && r.bottom() <= area.bottom(),
+                                "{format:?} {view:?} {w}x{h}: {r:?}"
+                            );
+                        }
                     }
                 }
             }
@@ -202,7 +235,7 @@ fn boxes_keep_their_edges_with_wide_characters() {
     let json = r#"{"Plan": {"Node Type": "Seq Scan", "Relation Name": "\uC8FC\uBB38\uB0B4\uC5ED\uD14C\uC774\uBE14", "Alias": "\uC8FC", "Startup Cost": 0, "Total Cost": 1, "Plan Rows": 1, "Plan Width": 4}}"#;
     let target = "on \"\u{C8FC}\u{BB38}\u{B0B4}\u{C5ED}\u{D14C}\u{C774}\u{BE14}\" \"\u{C8FC}\"";
     assert_eq!(parse(json).unwrap().nodes[0].target.as_deref(), Some(target));
-    let mut p = PlanTab::new(parse(json).unwrap(), 0, 0, json);
+    let mut p = PlanTab::new(parse(json).unwrap(), 0, 0, json, datarig_core::driver::ExplainFormat::PostgresJson);
     p.view = PlanView::Boxes;
     let th = crate::theme::DARK;
     let i18n = datarig_core::i18n::I18n::new(datarig_core::i18n::Lang::En);
@@ -217,4 +250,35 @@ fn boxes_keep_their_edges_with_wide_characters() {
     }
     let row: String = (r.x..r.x + boxes::BOX_W as u16).map(|x| buf[(x, r.y + 1)].symbol().to_string()).collect();
     assert!(row.contains('\u{C8FC}'), "{row}");
+}
+
+/// A card with room for one line inside shows its numbers there in their short form, not the
+/// node's name.
+#[test]
+fn a_card_of_one_line_keeps_its_numbers() {
+    use ratatui::buffer::Buffer;
+    use ratatui::style::Style;
+    let th = crate::theme::DARK;
+    let i18n = datarig_core::i18n::I18n::new(datarig_core::i18n::Lang::En);
+    let cx = Look { i18n: &i18n, th: &th, icons: true, focused: true, hover: None };
+    let c = summary::Card {
+        title: "Worst row estimate".into(),
+        name: Some(("Covering index lookup on o using orders_user_id_idx".into(), Style::new())),
+        lines: vec![("×100 more rows: estimated 10, actual 1000 per loop".into(), Style::new())],
+        short: Some(("×100↑ est 10 · actual 1000".into(), Style::new())),
+        node: None,
+    };
+    let row = |buf: &Buffer, y: u16| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>();
+    for (h, want) in
+        [(3u16, vec!["×100↑ est 10 · actual 1000"]), (4, vec!["Covering index", "×100↑ est 10 · actual 1000"])]
+    {
+        let r = Rect { x: 0, y: 0, width: 32, height: h };
+        let mut buf = Buffer::empty(r);
+        summary::card(&cx, &c, r, &mut buf);
+        let inside: Vec<String> = (1..h - 1).map(|y| row(&buf, y)).collect();
+        assert_eq!(inside.len(), want.len());
+        for (line, w) in inside.iter().zip(&want) {
+            assert!(line.contains(w), "{h} lines: {line:?} has {w:?}");
+        }
+    }
 }

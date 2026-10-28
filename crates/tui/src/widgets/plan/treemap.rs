@@ -155,7 +155,7 @@ pub(super) fn draw(cx: &Look, p: &mut PlanTab, area: Rect, buf: &mut Buffer) {
         p.hits.push((cell, id));
         put(buf, x, inner.y, &plan.label(id), w, style);
         if inner.height >= 2 {
-            let line = format!("{} · {}", fmt_share(plan.share(id)), fmt_weight(&plan, plan.weight(id)));
+            let line = format!("{} · {}", fmt_share(plan.share(id)), fmt_weight(&plan, id));
             put(buf, x, inner.y + 1, &line, w, style);
         }
     }

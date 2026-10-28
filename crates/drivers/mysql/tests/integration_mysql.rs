@@ -14,8 +14,8 @@
 //! suite both ways.
 
 use datarig_core::driver::{
-    CancelFailure, Cell, ConnectOptions, DbCommand, DbError, DbEvent, Driver, PagingMode, PingError, Session,
-    SessionRole, StatementInfo, TxRule, ValueKind,
+    CancelFailure, Cell, ConnectOptions, DbCommand, DbError, DbEvent, Driver, ExplainFormat, PagingMode, PingError,
+    Session, SessionRole, StatementInfo, TxRule, ValueKind,
 };
 use datarig_core::profile::ConnectionConfig;
 use datarig_core::sql::dialect::{Dialect, Language, MySqlMode};
@@ -285,6 +285,9 @@ async fn the_metadata_session_reads_the_databases_and_the_catalog() {
     assert!(matches!(c.next(15).await, DbEvent::Connected));
     let lang = c.next(15).await;
     assert!(matches!(lang, DbEvent::Language(Language::Sql(Dialect::MySql(_)))), "{lang:?}");
+    // The plan format of the server (the dev server is MySQL, not MariaDB).
+    let explain = c.next(15).await;
+    assert!(matches!(explain, DbEvent::Explain(Some(ExplainFormat::MySqlTree))), "{explain:?}");
     match c.next(15).await {
         DbEvent::Schemas(Ok(s)) => {
             assert!(s.contains(&"shop".to_string()), "{s:?}");

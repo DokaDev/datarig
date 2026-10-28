@@ -511,17 +511,17 @@ fn the_plans_menu_acts_on_the_plan_it_was_opened_on() {
     let labels = h.menu_labels();
     for want in [
         "Plan: show or hide the selected node's detail",
-        "Plan: copy as text (as psql shows it)",
-        "Plan: copy its JSON",
+        "Plan: copy as the raw view shows it",
+        "Plan: copy as the server sent it (its JSON, or its text)",
         "Plan view: tree",
-        "Plan view: raw text (as psql shows it)",
+        "Plan view: raw (the server's own words, or as psql shows a JSON plan)",
     ] {
         assert!(labels.iter().any(|l| l == want), "{want}: {labels:?}");
     }
     let heading = h.app.menu_lines()[0].1.to_string();
     assert_eq!(heading, plan(&h).plan.label(1), "the selected node");
     insta::assert_snapshot!("plan_menu_en_120x34", h.draw(120, 34).backend());
-    h.menu_pick("Plan view: raw text (as psql shows it)");
+    h.menu_pick("Plan view: raw (the server's own words, or as psql shows a JSON plan)");
     assert_eq!(plan(&h).view, PlanView::Raw);
     // Copies: the text as psql shows it, and the JSON as the server sent it.
     h.keys("y");
@@ -579,7 +579,7 @@ fn a_menu_opened_on_a_plan_is_stale_once_the_running_runs_plan_arrives() {
     h.keys("  ");
     assert_eq!(h.overlay_kind(), Some(OverlayKind::ContextMenu));
     h.db(plan_page(id, &fixture(17, "join.plan.json")));
-    h.menu_pick("Plan view: raw text (as psql shows it)");
+    h.menu_pick("Plan view: raw (the server's own words, or as psql shows a JSON plan)");
     assert!(h.status(160, 45).contains("Not run: what the menu was opened on has changed"), "{}", h.status(160, 45));
     assert_eq!(plan(&h).view, PlanView::Tree);
 }

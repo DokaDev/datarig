@@ -362,12 +362,29 @@ impl ExplainFormat {
     /// in this format. MySQL's tree: a column `EXPLAIN` whose text reads as a tree with at least
     /// one estimate or measure (not any text that starts with `-> `).
     pub fn holds(self, column: &str, type_name: &str, text: &str) -> bool {
+        self.plan_in(column, type_name, text).is_some()
+    }
+
+    /// The plan a result of one column holds ([`ExplainFormat::holds`]), read once.
+    pub fn plan_in(self, column: &str, type_name: &str, text: &str) -> Option<Plan> {
         match self {
-            ExplainFormat::PostgresJson => pg::is_plan_column(column, type_name),
+            ExplainFormat::PostgresJson if pg::is_plan_column(column, type_name) => pg::parse(text).ok(),
+            ExplainFormat::PostgresJson => None,
+            ExplainFormat::MySqlTree if column.eq_ignore_ascii_case("EXPLAIN") && mysql::is_tree(text) => {
+                mysql::parse(text).ok().filter(|p| p.nodes.iter().any(|n| n.cost.is_some() || n.actual.is_some()))
+            }
+            ExplainFormat::MySqlTree => None,
+        }
+    }
+
+    /// A result of one column holding `text` is the server saying it has no plan of this format
+    /// for the statement (MySQL: `-> <not executable by iterator executor>`, a single-table
+    /// `UPDATE` or `DELETE`, an `INSERT … VALUES`).
+    pub fn says_no_plan(self, column: &str, text: &str) -> bool {
+        match self {
+            ExplainFormat::PostgresJson => false,
             ExplainFormat::MySqlTree => {
-                column.eq_ignore_ascii_case("EXPLAIN")
-                    && mysql::is_tree(text)
-                    && mysql::parse(text).is_ok_and(|p| p.nodes.iter().any(|n| n.cost.is_some() || n.actual.is_some()))
+                column.eq_ignore_ascii_case("EXPLAIN") && text.trim() == "-> <not executable by iterator executor>"
             }
         }
     }
@@ -384,6 +401,37 @@ impl ExplainFormat {
     /// a copy show it as it came. Otherwise (JSON) the raw view writes the model as text.
     pub fn is_text(self) -> bool {
         matches!(self, ExplainFormat::MySqlTree)
+    }
+
+    /// The format reports the statement's own times (planning, execution) beside its nodes':
+    /// without them (MySQL's tree) the measured total is the roots' times.
+    pub fn reports_statement_times(self) -> bool {
+        matches!(self, ExplainFormat::PostgresJson)
+    }
+
+    /// The format can count the blocks a node read (PostgreSQL's `BUFFERS`): a plan without
+    /// them was asked without, rather than from a server that has none.
+    pub fn has_buffers(self) -> bool {
+        matches!(self, ExplainFormat::PostgresJson)
+    }
+
+    /// A text `EXPLAIN` the user ran (`sql`, in dialect `d`), asked again for a plan in this
+    /// format ([`explain::json`], [`explain::tree`]); text of another dialect is not read.
+    pub fn again(self, sql: &str, d: Dialect) -> Result<explain::JsonExplain, explain::NotJson> {
+        match (self, d) {
+            (ExplainFormat::PostgresJson, Dialect::Postgres) => explain::json(sql),
+            (ExplainFormat::MySqlTree, Dialect::MySql(mode)) => explain::tree(sql, mode),
+            _ => Err(explain::NotJson::Unreadable),
+        }
+    }
+
+    /// [`ExplainFormat::again`] as the lexer alone reads `sql` (cheap enough for every frame).
+    pub fn again_text(self, sql: &str, d: Dialect) -> Result<explain::JsonExplain, explain::NotJson> {
+        match (self, d) {
+            (ExplainFormat::PostgresJson, Dialect::Postgres) => explain::json_text(sql),
+            (ExplainFormat::MySqlTree, Dialect::MySql(mode)) => explain::tree_text(sql, mode),
+            _ => Err(explain::NotJson::Unreadable),
+        }
     }
 }
 

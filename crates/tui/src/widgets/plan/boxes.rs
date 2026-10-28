@@ -166,7 +166,7 @@ pub(super) fn draw(cx: &Look, p: &mut PlanTab, area: Rect, buf: &mut Buffer) {
             }
         }
         let inner = BOX_W - 2;
-        let numbers = format!("{} · {}", fmt_weight(&plan, plan.weight(i)), fmt_share(share));
+        let numbers = format!("{} · {}", fmt_weight(&plan, i), fmt_share(share));
         let marks: String = markers(cx, &plan, i).into_iter().map(|(t, _)| format!(" {t}")).collect();
         // A subplan's name in its top border (`╭ InitPlan 1 ───╮`).
         if let Some(sub) = &plan.nodes[i].subplan {

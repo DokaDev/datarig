@@ -585,7 +585,7 @@ pub struct App {
     pending_copy: Option<(copy::Intent, copy::CopyRequest)>,
     /// "Fetch every row, then copy" waiting for its confirmation: the format.
     pending_fetch_copy: Option<(copy::Intent, copy::CopyFormat)>,
-    /// An `EXPLAIN ANALYZE` to run again as JSON once confirmed, with the result it was
+    /// An `EXPLAIN ANALYZE` to run again in the plan format once confirmed, with the result it was
     /// asked from.
     pending_as_plan: Option<plan::AsPlan>,
     /// Whether the shown rows are a text plan, for the result it was worked out for.
@@ -1150,13 +1150,25 @@ impl App {
         self.tabs.get(tab).map_or_else(|| self.tab_language(tab), |t| t.exec.prepared.language()).dialect()
     }
 
-    /// Whether tab `tab`'s driver produces a statement's plan (`Capabilities::explain`), which
-    /// the plan actions need. A tab without a profile, or whose profile or driver is unknown,
-    /// counts as one that does: its text is in the default language, PostgreSQL
-    /// ([`App::tab_language`]), whose driver produces plans, so the plan actions stay offered
-    /// as they always were (running one asks for a connection first).
+    /// Whether tab `tab`'s server gives a statement's plan ([`App::tab_explain`]), which the
+    /// plan actions need.
     pub(crate) fn tab_explains(&self, tab: TabId) -> bool {
-        self.profile_capabilities(self.tabs.get(tab).and_then(|t| t.profile)).is_none_or(|c| c.explain.is_some())
+        self.tab_explain(tab).is_some()
+    }
+
+    /// The plan format tab `tab`'s server gives: as a session of its profile said
+    /// (`DbEvent::Explain`: none on MariaDB), else its driver's (`Capabilities::explain`). A
+    /// tab without a profile, or whose profile or driver is unknown, counts as PostgreSQL's:
+    /// its text is in the default language, PostgreSQL ([`App::tab_language`]), so the plan
+    /// actions stay offered as they always were (running one asks for a connection first).
+    pub(crate) fn tab_explain(&self, tab: TabId) -> Option<datarig_core::driver::ExplainFormat> {
+        let profile = self.tabs.get(tab).and_then(|t| t.profile);
+        let Some(caps) = self.profile_capabilities(profile) else {
+            return Some(datarig_core::driver::ExplainFormat::PostgresJson);
+        };
+        // Only a driver with a format has servers that say theirs.
+        let said = profile.and_then(|p| self.conns.get(p)).and_then(|c| c.explain);
+        caps.explain.and(said.unwrap_or(caps.explain))
     }
 
     /// The language of a tab bound to `profile` ([`App::tab_language`]), before the tab exists.

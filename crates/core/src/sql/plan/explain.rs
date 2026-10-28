@@ -20,11 +20,12 @@
 //!
 //! [`risk`]: crate::sql::risk
 
-use crate::sql::dialect::Dialect;
-use crate::sql::lexer::{Tok, Token, lex};
+use crate::sql::dialect::{Dialect, MySqlMode};
+use crate::sql::lexer::{Tok, Token, lex, lex_in};
 use crate::sql::risk::{self, Explain};
 
-/// An `EXPLAIN` that asks for the plan as JSON.
+/// An `EXPLAIN` that asks for the plan in a format the plan view reads (PostgreSQL's JSON,
+/// MySQL's tree).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct JsonExplain {
     pub sql: String,
@@ -46,8 +47,11 @@ pub enum NotJson {
     NotExplain,
     /// More than one statement.
     Several,
-    /// It asks for JSON already.
+    /// It asks for a plan the plan view reads already (JSON; MySQL: the tree).
     AlreadyJson,
+    /// It ran its statement with `ANALYZE` already (MySQL, whose result the plan view reads
+    /// when it is the tree): never run again.
+    Analyzed,
     /// Its options or its statement cannot be read (nothing after them, a list that does not
     /// end, an empty option, a text PostgreSQL's parser reads otherwise).
     Unreadable,
@@ -84,6 +88,72 @@ pub fn json_text_in(sql: &str, d: Dialect) -> Result<JsonExplain, NotJson> {
         Dialect::Postgres => json_text(sql),
         Dialect::MySql(_) => Err(NotJson::Unreadable),
     }
+}
+
+/// MySQL `sql` (one `EXPLAIN`, `DESCRIBE` or `DESC` of a statement, in sql mode `mode`) asked
+/// again as `EXPLAIN FORMAT=TREE` of its statement, checked by MySQL's classifier: both texts
+/// are a plan of a statement that runs nothing (no `ANALYZE`).
+pub fn tree(sql: &str, mode: MySqlMode) -> Result<JsonExplain, NotJson> {
+    let out = tree_text(sql, mode)?;
+    let risk = risk::mysql::classify(sql, mode);
+    if risk.explain != Explain::Plan || risk::mysql::classify(&out.sql, mode).explain != Explain::Plan {
+        return Err(NotJson::Unreadable);
+    }
+    let plain = risk.class == risk::Class::Read && risk.danger.is_none() && !risk.runs_code && !risk.writes;
+    let allowed = risk::mysql::repeatable(&out.statement, mode).is_ok();
+    Ok(JsonExplain { evaluates: !plain || !allowed, ..out })
+}
+
+/// [`tree`] as the lexer reads `sql`, without the classifier's check. Refused: `ANALYZE` (it
+/// ran already; a tree it gave is read as one), `INTO @v`, `FOR CONNECTION`, `FOR SCHEMA`, an
+/// `EXPLAIN` of a table (its columns, not a plan), an executable comment (the server's version
+/// picks what it holds) and more than one statement.
+pub fn tree_text(sql: &str, mode: MySqlMode) -> Result<JsonExplain, NotJson> {
+    let toks: Vec<Token> = lex_in(sql, Dialect::MySql(mode)).into_iter().filter(|t| !t.is_trivia()).collect();
+    let word = |t: &Token, w: &str| t.is_word() && t.text(sql).eq_ignore_ascii_case(w);
+    let Some(first) = toks.first() else { return Err(NotJson::NotExplain) };
+    if first.kind == Tok::ExecComment {
+        return Err(NotJson::Unreadable);
+    }
+    if !["EXPLAIN", "DESCRIBE", "DESC"].iter().any(|w| word(first, w)) {
+        return Err(NotJson::NotExplain);
+    }
+    if toks.iter().any(|t| t.kind == Tok::ExecComment) {
+        return Err(NotJson::Unreadable);
+    }
+    if let Some(semi) = toks.iter().position(|t| t.kind == Tok::Semi)
+        && toks[semi..].iter().any(|t| t.kind != Tok::Semi)
+    {
+        return Err(NotJson::Several);
+    }
+    let rest = &toks[1..];
+    let mut i = 0;
+    loop {
+        match rest.get(i) {
+            Some(t) if word(t, "ANALYZE") => return Err(NotJson::Analyzed),
+            Some(t) if word(t, "EXTENDED") || word(t, "PARTITIONS") => i += 1,
+            Some(t) if word(t, "FORMAT") => {
+                let is = rest.get(i + 1).is_some_and(|t| t.kind == Tok::Op && t.text(sql) == "=");
+                let Some(v) = rest.get(i + 2).filter(|_| is) else { return Err(NotJson::Unreadable) };
+                let v = v.text(sql).trim_matches(|c| matches!(c, '\'' | '"' | '`'));
+                if v.eq_ignore_ascii_case("TREE") {
+                    return Err(NotJson::AlreadyJson);
+                }
+                i += 3;
+            }
+            Some(t) if word(t, "INTO") || word(t, "FOR") => return Err(NotJson::Unreadable),
+            _ => break,
+        }
+    }
+    let Some(next) = rest.get(i).filter(|t| t.kind != Tok::Semi) else { return Err(NotJson::Unreadable) };
+    let opens = next.kind == Tok::LParen
+        || ["SELECT", "TABLE", "VALUES", "WITH", "INSERT", "REPLACE", "UPDATE", "DELETE"].iter().any(|w| word(next, w));
+    if !opens {
+        // `EXPLAIN t`: the table's columns.
+        return Err(NotJson::NotExplain);
+    }
+    let statement = statement(sql, next);
+    Ok(JsonExplain { sql: format!("EXPLAIN FORMAT=TREE {statement}"), analyze: false, evaluates: false, statement })
 }
 
 /// [`json`] as the lexer reads `sql`, without the parser's check.

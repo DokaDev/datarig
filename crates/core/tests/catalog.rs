@@ -311,6 +311,7 @@ const SAME_IN_KO: &[&str] = &[
     "app.title",
     // Placeholders and punctuation only.
     "results.title.page_short",
+    "plan.card.share_short",
     "query.done_command",
     "editor.hint.command",
     "setting.changed",

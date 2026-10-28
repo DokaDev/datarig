@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/flows_plan_mysql.rs
+expression: "h.draw(80, 24).backend()"
+---
+"╭ Explorer ────────────╮ 1 console 1 ×                                          "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1       ││ local-my / datarig  127.0.0.1:55432                  │"
+"│  ▾ ●   local-my      ││  1▎SELECT c.city, SUM(o.amount) FROM c JOIN o ON o.c_│"
+"│      Loading…        ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      │╰──────────────────────────────────────────────────────╯"
+"│                      │╭ Plan · Raw ──────────────────────────────────────────╮"
+"│                      ││ Result 1  [Plan]  Chart  Messages                H/L │"
+"│                      ││ … [Raw]                       estimated cost · ≈ sum │"
+"│                      ││ -> Sort: SUM(o.amount) DESC                          │"
+"│                      ││     -> Stream results  (cost=273 rows=7)             │"
+"│                      ││         -> Group aggregate: sum(o.amount)  (cost=273…│"
+"│                      ││             -> Nested loop inner join  (cost=215 row…│"
+"│                      ││                 -> Filter: (c.city in ('city1','city…│"
+"│                      ││                     -> Covering index range scan on …│"
+"│                      ││                 -> Index lookup on o using c_id (c_i…│"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" NORMAL  local-my │ 1 row · 3ms   │ Enter detail · v views · h fold · y copy EN "

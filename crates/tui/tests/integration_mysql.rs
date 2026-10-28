@@ -479,3 +479,34 @@ async fn an_idle_manual_transaction_is_rolled_back_and_its_session_stays() {
     assert_eq!(shown_page(&app).0, Some(connection), "the same connection");
     assert!(!app.tab().exec.user_tx());
 }
+
+/// The explain actions on a real server: `EXPLAIN FORMAT=TREE` and `EXPLAIN ANALYZE FORMAT=TREE`
+/// of the statement under the cursor come back as a plan in the Plan tab, the raw view being the
+/// server's text.
+#[tokio::test(flavor = "multi_thread")]
+async fn the_explain_actions_show_mysqls_tree_as_a_plan() {
+    let Some((url, _)) = urls("the_explain_actions_show_mysqls_tree_as_a_plan") else { return };
+    let (mut app, mut rx) = app_on(&url, &format!("mx{}", std::process::id()), None).await;
+    let sql = "SELECT u.id, COUNT(*) FROM users u JOIN orders o ON o.user_id = u.id GROUP BY u.id ORDER BY 2 DESC;";
+    for (keys, analyzed) in [(" ex", false), (" ea", true)] {
+        let mut editor = datarig_tui::widgets::editor::Editor::new(sql);
+        editor.set_language(app.tab_language(app.tab().id));
+        app.tab_mut().editor = editor;
+        app.focus = Focus::Editor;
+        for c in keys.chars() {
+            press(&mut app, c);
+        }
+        pump(&mut app, &mut rx, 30, |a| {
+            idle(a) && a.tab().exec.plan.as_ref().is_some_and(|p| p.plan.analyzed == analyzed)
+        })
+        .await;
+        let t = app.tab();
+        assert_eq!(t.exec.view, datarig_tui::app::tabs::ResultView::Plan, "{keys}: {:?}", app.status);
+        let p = t.exec.plan.as_ref().unwrap();
+        assert!(p.plan.nodes.len() > 2, "{keys}: {:?}", p.plan.nodes);
+        assert!(p.source.starts_with("-> "), "{keys}: the server's tree: {}", p.source);
+        let sent = t.exec.run.statements.last().map(|s| s.sql.clone()).unwrap_or_default();
+        let want = if analyzed { "EXPLAIN ANALYZE FORMAT=TREE SELECT" } else { "EXPLAIN FORMAT=TREE SELECT" };
+        assert!(sent.starts_with(want), "{keys}: {sent}");
+    }
+}

@@ -5,8 +5,8 @@
 use crate::link::Link;
 use crate::session::{self, CONNECT_GUARD, Killer, Opened, Settings, Target, connect_error, my_error};
 use datarig_core::driver::{
-    Canceller, Capabilities, ConnectOptions, DbCommand, DbError, DbEvent, Driver, Hierarchy, PingError, PingInfo,
-    Session, SessionRole,
+    Canceller, Capabilities, ConnectOptions, DbCommand, DbError, DbEvent, Driver, ExplainFormat, Hierarchy, PingError,
+    PingInfo, Session, SessionRole,
 };
 use datarig_core::fault::Fault;
 use datarig_core::panics::caught;
@@ -66,7 +66,7 @@ impl Driver for MyDriver {
             ddl: true,
             language: Language::Sql(Dialect::MySql(MySqlMode::default())),
             hierarchy: Hierarchy::SchemaOnly,
-            explain: None,
+            explain: Some(ExplainFormat::MySqlTree),
             reads_held_to_end: true,
             export: true,
             manual_commit: true,
@@ -225,6 +225,7 @@ async fn run_session(
     // The mode the session starts in; the metadata session's is what a new session of this
     // account starts in, which the app checks a tab's first run in.
     let _ = events.send(DbEvent::Language(Language::Sql(Dialect::MySql(tracked.mode(&server)))));
+    let _ = events.send(DbEvent::Explain(server.explain()));
     // What a query session's values are read in (copying them as SQL needs it).
     if let Some(values) = tracked.values().filter(|_| role == SessionRole::Query) {
         let _ = events.send(DbEvent::SessionValues(values));

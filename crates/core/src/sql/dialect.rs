@@ -4,15 +4,15 @@
 //!
 //! A dialect holds what each tool needs to know about it: its keywords, the search path a
 //! session starts with ([`Dialect::default_path`]), the comment markers the editor writes and
-//! strips, the `sqlformat` dialect it is laid out as, and the SQL the app writes to ask for a
-//! statement's plan ([`Dialect::explain_sql`]).
+//! strips and the `sqlformat` dialect it is laid out as. How a statement's plan is asked for
+//! is the plan format's (`driver::ExplainFormat`), not the dialect's.
 //!
 //! A dialect also says how names and strings are written in its SQL ([`Dialect::quote_ident`],
 //! [`Dialect::quote_literal`]) and how the server reads a name back ([`Dialect::fold`],
 //! [`Dialect::unquote`]): every piece of SQL the app writes, and every name it reads out of
 //! SQL text, goes through these.
 
-use super::{ident, lexer, plan};
+use super::{ident, lexer};
 
 /// The SQL dialect a tab's text is in. An exhaustive `match` makes every tool decide what to do
 /// with each.
@@ -341,17 +341,6 @@ impl Dialect {
         match self {
             Self::Postgres => sqlformat::Dialect::PostgreSql,
             Self::MySql(_) => sqlformat::Dialect::Generic,
-        }
-    }
-
-    /// The SQL that asks the server for `statement`'s plan in the format the plan view reads
-    /// (`analyze`: run it and measure), `None` when the dialect has no such statement.
-    /// PostgreSQL: [`plan::explain_sql`]. MySQL: none yet, as the plan view does not read
-    /// MySQL's plans.
-    pub fn explain_sql(self, statement: &str, analyze: bool) -> Option<String> {
-        match self {
-            Self::Postgres => Some(plan::explain_sql(statement, analyze)),
-            Self::MySql(_) => None,
         }
     }
 }
