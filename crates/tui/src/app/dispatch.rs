@@ -299,10 +299,39 @@ impl App {
         }
     }
 
-    /// Every quit goes through here. With a query running, a transaction open or a
-    /// tab whose text could not be saved, ask first and say what would be lost; otherwise quit
-    /// at once.
+    /// Every quit goes through here. With a form whose changes are not saved, a query running,
+    /// a transaction open or a tab whose text could not be saved, ask first and say what would
+    /// be lost; otherwise quit at once.
     pub(super) fn request_quit(&mut self) {
+        if self.quitting.is_none() && self.form_edited() {
+            // A question already up (or a password asked) is answered first: replacing it would
+            // drop what its answer does.
+            let asked = self.overlays.confirm().is_some()
+                || self.overlays.run_confirm().is_some()
+                || self.overlays.tx_summary().is_some()
+                || self.overlays.prompt().is_some_and(|p| !matches!(p.purpose, PromptPurpose::Test(_)));
+            if asked {
+                return;
+            }
+            // Asked while a test runs, a question the test raises (a host key to trust) would
+            // take the place of this one: the test stops first, as the form's `Esc` stops it.
+            self.cancel_test();
+            // What would cover the question goes: the session view, the test's password prompt.
+            self.overlays.close(OverlayKind::SessionView);
+            if self.overlays.prompt().is_some() {
+                self.prompt_closed();
+                // Another prompt waited behind it (a tunnel's secret): it is answered first.
+                if self.overlays.prompt().is_some() {
+                    return;
+                }
+            }
+            return self.confirm(
+                Label::FormDiscardTitle,
+                Label::FormDiscardText,
+                Label::FormDiscardKeys,
+                ConfirmAction::DiscardFormQuit,
+            );
+        }
         // Everything is written first; a saved query that changed on disk is not, and asks.
         self.save_workspace();
         if self.overlays.confirm().is_some_and(|c| matches!(c.action, ConfirmAction::ScriptConflict(_))) {
@@ -345,6 +374,26 @@ impl App {
         if text == Label::QuitTx {
             self.offer_tx_choices();
         }
+    }
+
+    /// The open form, or one waiting under it for it to close, has changes that are not saved.
+    /// A form being saved is not asked about: the quit goes on as it did before, and a save that
+    /// waits for the keychain is left unfinished.
+    fn form_edited(&self) -> bool {
+        let Some(open) = self.overlays.form().filter(|f| !f.saving) else { return false };
+        std::iter::successors(Some(open), |f| f.back_to.as_deref()).any(|f| f.edited())
+    }
+
+    /// `y` to quitting with a form's changes not saved: the form (and any waiting under it)
+    /// goes without saving, then the quit goes on and asks what else would be lost.
+    fn discard_forms_and_quit(&mut self) {
+        while self.overlays.take_form().is_some() {}
+        // Lists the form opened go with it.
+        self.overlays.close(OverlayKind::Picker);
+        self.overlays.close(OverlayKind::Chooser);
+        self.overlays.close(OverlayKind::NameInput);
+        self.clear_test();
+        self.request_quit();
     }
 
     /// Keys of a yes/no confirmation.
@@ -479,6 +528,7 @@ impl App {
             ConfirmAction::ExportStart => self.export_answered(true, false),
             ConfirmAction::ExportReplace => self.export_answered(true, true),
             ConfirmAction::DiscardForm => self.cancel_form(),
+            ConfirmAction::DiscardFormQuit => self.discard_forms_and_quit(),
             ConfirmAction::ScriptConflict(_) | ConfirmAction::KeychainOffer => {}
         }
     }

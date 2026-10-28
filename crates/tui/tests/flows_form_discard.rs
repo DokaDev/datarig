@@ -1,7 +1,8 @@
 //! Closing a form that has changes not saved, headless: `Esc` (or its Cancel button) asks
 //! first in every form (profile, SSH tunnel, environment, default rules, Startup SQL); `Enter`
 //! and `n` keep editing, `y` discards; the question's buttons take the mouse. A form left as it
-//! opened, or changed back, closes at once as before.
+//! opened, or changed back, closes at once as before. Quitting with an edited form open asks
+//! the same question.
 
 mod common;
 
@@ -195,4 +196,112 @@ fn cancel_while_a_test_runs_stops_the_test_before_asking() {
     click_on(&mut h, "Cancel");
     assert!(asking(&mut h), "{}", h.screen(120, 40));
     assert!(h.app.conn_test.as_ref().is_some_and(|t| t.state == TestState::Cancelled), "stopped first");
+}
+
+/// Quitting (`Ctrl+Q`, `:q`, `:qa`) with an edited form open asks the same question: `Enter`
+/// and `n` keep editing and the app runs on, `y` discards and the quit goes on.
+#[test]
+fn quitting_with_an_edited_form_asks_before_discarding() {
+    let dir = scratch("quit");
+    for quit in ["ctrl+q", "q", "qa"] {
+        let mut h = harness(&dir);
+        h.explore("local-pg");
+        h.keys("e");
+        h.type_text("-x");
+        let ask = |h: &mut Harness| match quit {
+            "ctrl+q" => h.ctrl('q'),
+            cmd => h.command(cmd),
+        };
+        ask(&mut h);
+        assert!(asking(&mut h), "{quit}\n{}", h.screen(120, 40));
+        assert!(!h.app.quit, "{quit}");
+        h.key(KeyCode::Enter);
+        assert_eq!(h.overlay_kind(), Some(OverlayKind::ProfileForm), "{quit}: Enter keeps editing");
+        assert_eq!(h.form().name.text(), "local-pg-x");
+        ask(&mut h);
+        h.key(KeyCode::Char('n'));
+        assert_eq!(h.overlay_kind(), Some(OverlayKind::ProfileForm), "{quit}: n keeps editing");
+        assert!(!h.app.quit, "{quit}");
+        ask(&mut h);
+        assert!(asking(&mut h), "{quit}");
+        if quit == "ctrl+q" {
+            // Asked again while the question is up: still one question, one `n` answers it.
+            h.ctrl('q');
+            h.key(KeyCode::Char('n'));
+            assert_eq!(h.overlay_kind(), Some(OverlayKind::ProfileForm), "one question");
+            ask(&mut h);
+        }
+        h.key(KeyCode::Char('y'));
+        assert!(h.app.quit, "{quit}: y discards and quits");
+        assert!(h.app.profiles.iter().any(|p| p.name == "local-pg"), "{quit}: nothing saved");
+    }
+}
+
+/// A form left as it opened, or changed back, does not hold up a quit.
+#[test]
+fn quitting_with_an_unchanged_form_quits_at_once() {
+    for changed_back in [false, true] {
+        let dir = scratch("quit-unchanged");
+        let mut h = harness(&dir);
+        h.explore("local-pg");
+        h.keys("e");
+        h.key(KeyCode::Tab);
+        if changed_back {
+            h.type_text("x");
+            h.key(KeyCode::Backspace);
+        }
+        h.ctrl('q');
+        assert!(h.app.quit, "changed back: {changed_back}\n{}", h.screen(120, 40));
+    }
+}
+
+/// Quitting while a connection test runs: the test stops before the question, so a question
+/// the test raises cannot take its place.
+#[test]
+fn quitting_while_a_test_runs_stops_the_test_before_asking() {
+    let dir = scratch("quit-testing");
+    let mut h = harness(&dir);
+    h.explore("local-pg");
+    h.keys("e");
+    h.type_text("-x");
+    h.ctrl('t');
+    assert!(h.app.conn_test.as_ref().is_some_and(|t| t.state == TestState::Running), "a test runs");
+    h.ctrl('q');
+    assert!(asking(&mut h), "{}", h.screen(120, 40));
+    assert!(h.app.conn_test.as_ref().is_some_and(|t| t.state == TestState::Cancelled), "stopped first");
+}
+
+/// The session view over an edited form: quitting closes it so the question is seen and takes
+/// the keys.
+#[test]
+fn quitting_from_the_session_view_over_an_edited_form_asks_where_it_is_seen() {
+    let dir = scratch("quit-session");
+    let mut h = harness(&dir);
+    h.explore("local-pg");
+    h.keys("e");
+    h.type_text("-x");
+    h.ctrl('e');
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::SessionView), "{}", h.screen(120, 40));
+    h.ctrl('q');
+    assert!(asking(&mut h), "{}", h.screen(120, 40));
+    h.key(KeyCode::Char('n'));
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ProfileForm));
+    assert!(!h.app.quit);
+}
+
+/// A question already up is answered first: quitting does not take its place.
+#[test]
+fn quitting_over_an_open_question_leaves_it_to_be_answered() {
+    let dir = scratch("quit-asked");
+    let mut h = harness(&dir);
+    h.explore("local-pg");
+    h.keys("e");
+    h.type_text("-x");
+    h.key(KeyCode::Esc);
+    assert!(asking(&mut h));
+    h.ctrl('q');
+    assert!(asking(&mut h) && !h.app.quit, "{}", h.screen(120, 40));
+    h.key(KeyCode::Char('n'));
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ProfileForm), "the question that was up answered");
+    assert!(!h.app.quit);
 }
