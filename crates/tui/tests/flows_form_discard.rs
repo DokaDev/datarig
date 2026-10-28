@@ -288,3 +288,20 @@ fn quitting_from_the_session_view_over_an_edited_form_asks_where_it_is_seen() {
     assert_eq!(h.overlay_kind(), Some(OverlayKind::ProfileForm));
     assert!(!h.app.quit);
 }
+
+/// A question already up is answered first: quitting does not take its place.
+#[test]
+fn quitting_over_an_open_question_leaves_it_to_be_answered() {
+    let dir = scratch("quit-asked");
+    let mut h = harness(&dir);
+    h.explore("local-pg");
+    h.keys("e");
+    h.type_text("-x");
+    h.key(KeyCode::Esc);
+    assert!(asking(&mut h));
+    h.ctrl('q');
+    assert!(asking(&mut h) && !h.app.quit, "{}", h.screen(120, 40));
+    h.key(KeyCode::Char('n'));
+    assert_eq!(h.overlay_kind(), Some(OverlayKind::ProfileForm), "the question that was up answered");
+    assert!(!h.app.quit);
+}

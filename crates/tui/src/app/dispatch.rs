@@ -320,6 +320,10 @@ impl App {
             self.overlays.close(OverlayKind::SessionView);
             if self.overlays.prompt().is_some() {
                 self.prompt_closed();
+                // Another prompt waited behind it (a tunnel's secret): it is answered first.
+                if self.overlays.prompt().is_some() {
+                    return;
+                }
             }
             return self.confirm(
                 Label::FormDiscardTitle,
@@ -373,7 +377,8 @@ impl App {
     }
 
     /// The open form, or one waiting under it for it to close, has changes that are not saved.
-    /// A form being saved has none to lose: its save goes on (the quit does not wait for it).
+    /// A form being saved is not asked about: the quit goes on as it did before, and a save that
+    /// waits for the keychain is left unfinished.
     fn form_edited(&self) -> bool {
         let Some(open) = self.overlays.form().filter(|f| !f.saving) else { return false };
         std::iter::successors(Some(open), |f| f.back_to.as_deref()).any(|f| f.edited())
@@ -386,6 +391,7 @@ impl App {
         // Lists the form opened go with it.
         self.overlays.close(OverlayKind::Picker);
         self.overlays.close(OverlayKind::Chooser);
+        self.overlays.close(OverlayKind::NameInput);
         self.clear_test();
         self.request_quit();
     }
