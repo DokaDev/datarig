@@ -742,14 +742,18 @@ impl App {
             }
             Purpose::Preview => t.find.stop_jobs(),
         }
-        let Some(rs) = shown_rows(t) else { return };
+        // A job that does not start: nothing will come for the presses that waited.
+        let Some(rs) = shown_rows(t) else { return t.find.pending.clear() };
         let (result, rows, ncols) = (rs.id, rs.rows.len(), rs.columns.len());
         if ncols == 0 {
-            return;
+            return t.find.pending.clear();
         }
         let snap = match rs.rows.snapshot(0..rows) {
             Ok(s) => s,
-            Err(f) => return self.results_read_failed(&f),
+            Err(f) => {
+                t.find.pending.clear();
+                return self.results_read_failed(&f);
+            }
         };
         self.grid_jobs.next += 1;
         let id = self.grid_jobs.next;
