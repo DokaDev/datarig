@@ -1013,27 +1013,46 @@ fn draw_search_strip(app: &mut App, strip: &crate::app::grid_search::Strip, area
     let th = theme::cur();
     let style = Style::new().fg(th.fg).bg(th.surface);
     buf.set_style(area, style);
-    let w = area.width.saturating_sub(1) as usize;
-    // The count, and the note after it where the pattern keeps its room.
-    let count_w = width(&strip.count);
-    let fits = |n: &String| strip.text_width.max(8) + 3 + count_w + 1 + width(n) <= w;
-    let status = match strip.notes.iter().find(|n| fits(n)) {
-        Some(n) if count_w > 0 => format!("{} {n}", strip.count),
-        Some(n) => n.clone(),
-        None => strip.count.clone(),
-    };
-    let status = clip(&status, w.saturating_sub(4));
+    // `/` at the second column, then the pattern (and the cursor after it while typed), then
+    // the status at the right: the count with the first note that fits, the count alone, and
+    // (while typed) nothing, so the pattern keeps its room first.
+    let room = (area.width as usize).saturating_sub(3);
+    let typing = strip.pattern.is_none();
+    let need = strip.text_width + usize::from(typing);
+    let mut options: Vec<String> = strip
+        .notes
+        .iter()
+        .map(|n| if strip.count.is_empty() { n.clone() } else { format!("{} {n}", strip.count) })
+        .collect();
+    options.push(strip.count.clone());
+    let status = options
+        .iter()
+        .find(|s| !s.is_empty() && need + 2 + width(s) <= room)
+        .cloned()
+        .unwrap_or_else(|| if typing { String::new() } else { strip.count.clone() });
+    let status = clip(&status, room.saturating_sub(4));
     let status_w = width(&status);
     let x = area.x + 1;
     buf.set_stringn(x, area.y, strip.mark.to_string(), 1, style.fg(th.accent));
-    let input_w = w.saturating_sub(1 + status_w + usize::from(status_w > 0) * 2);
+    let input_w = room.saturating_sub(status_w + usize::from(status_w > 0) * 2);
     let input = Rect { x: x + 1, y: area.y, width: input_w as u16, height: 1 };
     match &strip.pattern {
         Some(p) => {
             buf.set_stringn(input.x, input.y, clip(p, input_w), input_w, style);
         }
+        // A pattern longer than its room: the part before what is shown is marked, never
+        // silently left out.
+        None if need > input_w && input_w > 1 => {
+            let rest = Rect { x: input.x + 1, width: input.width - 1, ..input };
+            if let Some((cx, scrolled)) = app.draw_grid_prompt(rest, buf, style) {
+                if scrolled {
+                    buf.set_stringn(input.x, input.y, "\u{2026}", 1, style.fg(th.fg_muted));
+                }
+                app.layout.grid_prompt_cursor = Some((cx, area.y));
+            }
+        }
         None => {
-            if let Some(cx) = app.draw_grid_prompt(input, buf, style) {
+            if let Some((cx, _)) = app.draw_grid_prompt(input, buf, style) {
                 app.layout.grid_prompt_cursor = Some((cx, area.y));
             }
         }

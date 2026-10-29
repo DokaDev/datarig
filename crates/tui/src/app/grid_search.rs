@@ -918,15 +918,17 @@ impl App {
         if self.grid_search_on() { Ctx::GridMatches } else { Ctx::Grid }
     }
 
-    /// Draw the open prompt's input into `area`; where its cursor is.
+    /// Draw the open prompt's input into `area`; where its cursor is, and whether the start of
+    /// the pattern is scrolled out of `area`.
     pub(crate) fn draw_grid_prompt(
         &mut self,
         area: Rect,
         buf: &mut ratatui::buffer::Buffer,
         style: ratatui::style::Style,
-    ) -> Option<u16> {
+    ) -> Option<(u16, bool)> {
         let p = self.tabs.active_mut().find.prompt.as_mut()?;
-        Some(p.input.render(area, buf, style, true, false, None))
+        let cx = p.input.render(area, buf, style, true, false, None);
+        Some((cx, p.input.scrolled()))
     }
 }
 

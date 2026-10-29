@@ -1151,7 +1151,7 @@
 "action.grid.search_prev" = "Grid search: previous match"
 "action.grid.search_clear" = "Grid search: end it (n shows the next page again)"
 "grid.search.more" = { one = "in {count} row read · more rows on the server ({key}: next page)", other = "in {count} rows read · more rows on the server ({key}: next page)" }
-"grid.search.more_short" = "more on the server"
+"grid.search.more_short" = "more on server"
 "grid.search.no_room" = "No room for the search line under the grid: make the results taller ({key} zooms them)"
 "command.copy" = "Copy the selected range, or every fetched row, as… (:copy <format> [selection|all])"
 "commands.arg.format" = "<format>"

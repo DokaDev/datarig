@@ -219,7 +219,7 @@ fn esc_ends_the_search_and_n_is_the_next_page_again() {
         "{line:?}"
     );
     let line = strip(&mut h);
-    assert!(line.contains("/^42$") && line.contains(" 1/1 more on the server "), "{line:?}");
+    assert!(line.contains("/^42$") && line.contains(" 1/1 more on server "), "{line:?}");
     assert!(!h.screen(120, 40).contains("n: next page"), "never `n` for the next page while it is the search's");
     h.key(KeyCode::Esc);
     assert_eq!(h.app.key_context(), Ctx::Grid);
@@ -636,5 +636,72 @@ fn the_search_line_says_what_the_paging_line_would() {
     let line = screen.lines().nth((r.y + r.height - 2) as usize).unwrap_or_default();
     assert!(line.contains("/^42$") && line.contains("1/1 Showing 500 rows \u{b7} fetching stopped"), "{line:?}");
     let line = strip(&mut h);
-    assert!(line.contains(" 1/1 more on the server "), "{line:?}");
+    assert!(line.contains(" 1/1 more on server "), "{line:?}");
+}
+
+/// The line under the grid as drawn at `w`×`hh`.
+fn strip_at(h: &mut Harness, w: u16, hh: u16) -> String {
+    let screen = h.screen(w, hh);
+    let r = h.app.layout.results;
+    screen.lines().nth((r.y + r.height - 2) as usize).unwrap_or_default().to_string()
+}
+
+/// The view's last row, as drawn at 120×40.
+fn view_end(h: &mut Harness) -> usize {
+    h.draw(120, 40);
+    let g = &h.app.tab().grid;
+    g.top + g.page_rows
+}
+
+#[test]
+fn a_match_on_another_page_fills_the_view_up_to_the_pages_end() {
+    let mut h = numbers(1_200, false);
+    h.keys("/");
+    h.type_text("^1100$");
+    h.key(KeyCode::Enter);
+    assert_eq!(h.app.tab().grid.page, 2);
+    view_end(&mut h);
+    // Back to the last row of the first page: the view ends there, no blank lines below.
+    h.keys("?");
+    h.type_text("^499$");
+    h.key(KeyCode::Enter);
+    assert_eq!((cursor(&h), h.app.tab().grid.page), ((499, 0), 0));
+    assert_eq!(view_end(&mut h), 500, "top {}", h.app.tab().grid.top);
+    // A match late on the next page.
+    h.keys("/");
+    h.type_text("^999$");
+    h.key(KeyCode::Enter);
+    assert_eq!((cursor(&h), h.app.tab().grid.page), ((999, 0), 1));
+    assert_eq!(view_end(&mut h), 1_000);
+    // A preview on another page, then `Esc`: back with the view as it was.
+    let top = h.app.tab().grid.top;
+    h.keys("/");
+    h.type_text("^5$");
+    assert_eq!(h.app.tab().grid.page, 0);
+    view_end(&mut h);
+    h.key(KeyCode::Esc);
+    assert_eq!((cursor(&h), view_end(&mut h), h.app.tab().grid.top), ((999, 0), 1_000, top));
+}
+
+#[test]
+fn the_short_note_fits_a_small_terminal() {
+    let mut h = numbers(500, true);
+    h.keys("/");
+    h.type_text("^42$");
+    h.key(KeyCode::Enter);
+    let line = strip_at(&mut h, 80, 24);
+    assert!(line.contains("/^42$") && line.contains(" 1/1 more on server "), "{line:?}");
+}
+
+#[test]
+fn a_long_pattern_keeps_its_end_and_marks_its_cut_start() {
+    let mut h = numbers(500, true);
+    h.keys("/");
+    h.type_text("(?i)(needle|haystack|1234567890)");
+    let line = strip_at(&mut h, 80, 24);
+    assert!(line.contains("/\u{2026}") && line.contains("1234567890)"), "the end typed, the start marked: {line:?}");
+    assert!(!line.contains("/?i)") && !line.contains("more on"), "{line:?}");
+    // Wide enough: the whole pattern, then the count.
+    let line = strip_at(&mut h, 200, 40);
+    assert!(line.contains("/(?i)(needle|haystack|1234567890)"), "{line:?}");
 }

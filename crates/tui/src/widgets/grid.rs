@@ -428,12 +428,13 @@ pub fn render(
     st.row = st.row.clamp(win.start, win.end.saturating_sub(1).max(win.start));
     st.col = st.col.min(rs.columns.len() - 1);
     st.top = st.top.max(win.start);
-    if st.detached {
-        // Scrolled by the wheel: the view stays, within the page.
-        st.top = st.top.min(win.end.saturating_sub(page_rows).max(win.start));
-    } else if st.row < st.top {
+    // The view stays within the page, filled to its last row (a jump to another page, as a
+    // search's, may leave it past the rows there).
+    st.top = st.top.min(win.end.saturating_sub(page_rows).max(win.start));
+    // Scrolled by the wheel (detached), the view stays; else it follows the selected row.
+    if !st.detached && st.row < st.top {
         st.top = st.row;
-    } else if st.row >= st.top + page_rows {
+    } else if !st.detached && st.row >= st.top + page_rows {
         st.top = st.row + 1 - page_rows;
     }
     // The rows on screen (the selected one among them) from the spill file, when they are not
