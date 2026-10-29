@@ -782,3 +782,31 @@ fn the_search_line_keeps_the_paging_state_in_short() {
         assert_eq!(buf[(x, y)].fg, theme::DARK.warning, "{paging:?}");
     }
 }
+
+/// The part of the line under the grid that is the grid's (between its pane's borders).
+fn search_part(h: &mut Harness) -> String {
+    let line = strip_at(h, 80, 24);
+    line.split("\u{2502}\u{2502}").find(|p| p.trim_start().starts_with('/')).unwrap_or_default().trim_end().to_string()
+}
+
+#[test]
+fn a_long_pattern_marks_each_end_it_cuts() {
+    let mut h = numbers(500, true);
+    h.keys("/");
+    h.type_text("(?i)(needle|haystack|1234567890)");
+    // The cursor at the end: the start is cut and marked.
+    let part = search_part(&mut h);
+    assert!(part.starts_with(" /\u{2026}") && part.ends_with("567890)"), "{part:?}");
+    // At the start: the text from the first column, its end cut and marked.
+    h.key(KeyCode::Home);
+    let part = search_part(&mut h);
+    assert!(part.starts_with(" /(?i)(ne") && part.ends_with('\u{2026}'), "{part:?}");
+    // In the middle of a longer one: both.
+    h.key(KeyCode::End);
+    h.type_text("|abcdefghijklmnopqrstuvwxyz|0123456789");
+    for _ in 0..30 {
+        h.key(KeyCode::Left);
+    }
+    let part = search_part(&mut h);
+    assert!(part.starts_with(" /\u{2026}") && part.ends_with('\u{2026}'), "{part:?}");
+}

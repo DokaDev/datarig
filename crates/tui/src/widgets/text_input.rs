@@ -45,9 +45,10 @@ impl TextInput {
         &self.text
     }
 
-    /// The start of the text is scrolled out of the area it was drawn in last.
-    pub fn scrolled(&self) -> bool {
-        self.scroll > 0
+    /// Whether the text was cut at its start and at its end where it was drawn last.
+    pub fn cut(&self) -> (bool, bool) {
+        let total: usize = cells(&self.text, self.drawn_mask, self.drawn_hide).iter().map(|c| c.1).sum();
+        (self.scroll > 0, total > self.scroll + self.drawn.width as usize)
     }
 
     pub fn cursor(&self) -> usize {

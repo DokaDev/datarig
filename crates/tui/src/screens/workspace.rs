@@ -1041,15 +1041,27 @@ fn draw_search_strip(app: &mut App, strip: &crate::app::grid_search::Strip, area
         Some(p) => {
             buf.set_stringn(input.x, input.y, clip(p, input_w), input_w, style);
         }
-        // A pattern longer than its room: the part before what is shown is marked, never
-        // silently left out.
-        None if need > input_w && input_w > 1 => {
-            let rest = Rect { x: input.x + 1, width: input.width - 1, ..input };
-            if let Some((cx, scrolled)) = app.draw_grid_prompt(rest, buf, style) {
-                if scrolled {
-                    buf.set_stringn(input.x, input.y, "\u{2026}", 1, style.fg(th.fg_muted));
-                }
+        // A pattern longer than its room: each end it is cut at is marked, never silently left
+        // out. Drawn first with a column kept for each mark, then again with the room of the
+        // ends it is really cut at.
+        None if need > input_w && input_w > 2 => {
+            let inner = Rect { x: input.x + 1, width: input.width - 2, ..input };
+            let (left, right) = app.draw_grid_prompt(inner, buf, style).map_or((false, false), |(_, cut)| cut);
+            let drawn = Rect {
+                x: input.x + u16::from(left),
+                width: input.width - u16::from(left) - u16::from(right),
+                ..input
+            };
+            buf.set_stringn(input.x, input.y, " ".repeat(input_w), input_w, style);
+            if let Some((cx, _)) = app.draw_grid_prompt(drawn, buf, style) {
                 app.layout.grid_prompt_cursor = Some((cx, area.y));
+            }
+            let mark = style.fg(th.fg_muted);
+            if left {
+                buf.set_stringn(input.x, input.y, "\u{2026}", 1, mark);
+            }
+            if right {
+                buf.set_stringn(input.x + input.width - 1, input.y, "\u{2026}", 1, mark);
             }
         }
         None => {
