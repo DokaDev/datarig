@@ -773,7 +773,7 @@ impl App {
                     // A drag goes on: the selection follows the rows that came under the
                     // pointer.
                     if let (Some(Drag::Grid { .. }), Some((dx, dy))) = (self.drag, self.drag_at) {
-                        self.drag_to(dx, dy);
+                        self.drag_to(dx, dy, false);
                     }
                 }
             }
@@ -822,7 +822,7 @@ impl App {
             }
             MouseEventKind::Drag(MouseButton::Left) => {
                 if !self.tab_drag_to(x, y) {
-                    self.drag_to(x, y)
+                    self.drag_to(x, y, true)
                 }
             }
             MouseEventKind::Up(MouseButton::Left) => {
@@ -1025,7 +1025,9 @@ impl App {
 
     /// The left button moved to (x, y) while held: extend the drag's selection. Past the
     /// editor's top or bottom the selection goes one line further, so the view scrolls.
-    fn drag_to(&mut self, x: u16, y: u16) {
+    /// `moved`: the pointer moved (a drag event, not the wheel): only then does a pointer past
+    /// the grid's left or right edge move its view sideways.
+    fn drag_to(&mut self, x: u16, y: u16, moved: bool) {
         match self.drag {
             Some(Drag::Editor { anchor }) if self.focus == Focus::Editor && !self.tabs.is_empty() => {
                 let i = self.layout.editor_text;
@@ -1044,11 +1046,10 @@ impl App {
                 let Results::Rows(rs) = &t.results else { return };
                 let (total, cols) = (rs.rows.len(), rs.columns.len());
                 let (row, mut col) = t.grid.drag_target(x, y, total, cols);
-                // Past the left or right edge the view moves a few characters that way.
-                if shape != Shape::Rows
-                    && let Some(c) = t.grid.drag_edge(x)
-                {
-                    col = c;
+                // Past the left or right edge a drag event moves the view a few characters that
+                // way; the wheel moves the rows only (the column stays).
+                if shape != Shape::Rows && t.grid.beside(x) {
+                    col = if moved { t.grid.drag_edge(x).unwrap_or(col) } else { t.grid.col };
                 }
                 // Whole rows follow the pointer's row only, whole columns its column only.
                 let to = match shape {

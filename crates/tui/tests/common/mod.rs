@@ -999,7 +999,6 @@ pub fn row_text(buf: &Buffer, y: u16) -> String {
     s
 }
 
-/// Three profiles: the test DB, a CJK-named replica and an IPv6 host.
 /// Whether column `c` of the grid shows whole (from its separator to its last blank), as laid
 /// out last.
 pub fn whole_on_screen(g: &datarig_tui::widgets::grid::GridState, c: usize) -> bool {
@@ -1007,6 +1006,7 @@ pub fn whole_on_screen(g: &datarig_tui::widgets::grid::GridState, c: usize) -> b
     g.col_x.get(c + 1).is_some_and(|&to| g.col_x[c] >= g.x_off && to <= end)
 }
 
+/// Three profiles: the test DB, a CJK-named replica and an IPv6 host.
 pub fn sample_profiles() -> Vec<datarig_core::profile::ConnectionConfig> {
     use datarig_core::profile::ConnectionConfig;
     // Each profile has its own id (`..Default::default()` makes a new one).

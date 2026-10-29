@@ -203,6 +203,9 @@ pub struct GridState {
     /// the selected cell off screen, until a key or a click moves the selection (which brings
     /// the view back to it).
     pub detached: bool,
+    /// How many cells (a column's part on screen on one row, its header's two rows counted as
+    /// one) the last render drew: the benchmark's measure of a frame's work.
+    pub drawn_cells: usize,
 }
 
 /// What a grid selection spans.
@@ -281,15 +284,25 @@ impl GridState {
 
     /// Bring the selected column into view, moving the view as little as it takes: a column
     /// cut on the left shows from its start, one cut on the right up to its end, one wider
-    /// than the view from its start. A column already whole on screen moves nothing.
+    /// than the view from its start unless it fills the view already. A column already whole
+    /// on screen moves nothing.
     fn follow(&mut self) {
         let (Some(&start), Some(&end)) = (self.col_x.get(self.col), self.col_x.get(self.col + 1)) else { return };
         let view = self.view_w as usize;
-        if start < self.x_off || end - start > view {
+        if end - start > view {
+            if !(start <= self.x_off && self.x_off + view <= end) {
+                self.x_off = start;
+            }
+        } else if start < self.x_off {
             self.x_off = start;
         } else if end > self.x_off + view {
             self.x_off = end - view;
         }
+    }
+
+    /// Whether column `x` of the screen is left or right of the view (as laid out last).
+    pub fn beside(&self, x: u16) -> bool {
+        x < self.gutter_x.1 || x >= self.gutter_x.1 + self.view_w
     }
 
     /// A drag at column `x` of the screen past the left or right edge of the view: the view
@@ -472,6 +485,7 @@ pub fn render(
     buf.set_style(area, th.base());
     st.hit_cols.clear();
     st.cut_col = None;
+    st.drawn_cells = 0;
     if area.height < 3 || area.width < 8 || rs.columns.is_empty() {
         return;
     }
@@ -555,8 +569,11 @@ pub fn render(
             st.cut_col = Some(ci);
         }
         layout.push((x, ci, w));
-        let to = (x + 3 + w as i32).min(i32::from(right));
-        st.hit_cols.push((x.max(i32::from(from)) as u16, to as u16, ci));
+        // A column of which only the separator shows is no cell to point at.
+        if x + 1 < i32::from(right) {
+            let to = (x + 3 + w as i32).min(i32::from(right));
+            st.hit_cols.push((x.max(i32::from(from)) as u16, to as u16, ci));
+        }
     }
     // `s` drawn from column `x` of the screen (left of the view when the view cut it), only
     // what falls between the gutter and the right edge.
@@ -588,6 +605,7 @@ pub fn render(
     // A selected range (`v`, `V`, the gutter, a header), from its anchor to the cursor.
     let range = st.selection(total, rs.columns.len());
     for &(cx, ci, w) in &layout {
+        st.drawn_cells += 1;
         let col = &rs.columns[ci];
         // Whole selected columns: their headers too.
         let whole = st.shape == Shape::Cols && range.as_ref().is_some_and(|(_, cr)| cr.contains(&ci));
@@ -637,6 +655,7 @@ pub fn render(
         let num_style = num_bg.fg(if r == st.row { th.accent } else { th.fg_muted });
         buf.set_stringn(area.x, y, fit(&(r + 1).to_string(), gutter - 1, Align::Right), gutter - 1, num_style);
         for &(cx, ci, w) in &layout {
+            st.drawn_cells += 1;
             let col = &rs.columns[ci];
             let selected = r == st.row && ci == st.col;
             let in_range = range.as_ref().is_some_and(|(rr, cr)| rr.contains(&r) && cr.contains(&ci));
@@ -699,3 +718,6 @@ impl GridState {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

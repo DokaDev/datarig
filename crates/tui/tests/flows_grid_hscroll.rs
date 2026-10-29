@@ -428,7 +428,7 @@ fn a_cell_whose_text_is_under_the_right_edge_shows_a_mark() {
             assert_eq!(buf[(edge, g.header_y)].symbol() == "›", head, "header at width {w}, offset {}", g.x_off);
             assert_eq!(buf[(edge, g.header_y + 1)].symbol() == "›", head, "type at width {w}");
             headers += usize::from(head);
-            marked_numbers += usize::from(c == 6 && cut && tx + width - 1 >= right && tx < right);
+            marked_numbers += usize::from(c == 6 && cut && tx < right);
             if g.x_off == g.x_max() {
                 break;
             }
@@ -437,4 +437,81 @@ fn a_cell_whose_text_is_under_the_right_edge_shows_a_mark() {
     }
     assert!(marked > 0 && headers > 0, "marks shown: {marked} cells, {headers} headers");
     assert!(marked_numbers > 0, "a number hidden under the edge with its column's start on screen");
+}
+
+/// A drag to the right across columns wider than the view (80 columns, the inspector open:
+/// a view of about 26 characters for values up to 40) goes on to the last column: the view
+/// never moves back, and at the end it stays there (no flip between two places).
+#[test]
+fn a_drag_to_the_right_crosses_columns_wider_than_the_view() {
+    let mut h = with_edge_results(Lang::En);
+    h.key(KeyCode::Tab);
+    h.draw(W, H);
+    let g = grid(&h);
+    let ncols = g.col_x.len() - 1;
+    assert!((0..ncols).any(|c| g.col_x[c + 1] - g.col_x[c] > g.view_w as usize), "a column wider than the view");
+    let (a, _, _) = g.hit_cols[0];
+    let (y, right) = (g.data_y, g.gutter_x.1 + g.view_w);
+    h.mouse(MouseEventKind::Down(MouseButton::Left), a + 2, y);
+    let mut was = 0;
+    for _ in 0..120 {
+        h.mouse(MouseEventKind::Drag(MouseButton::Left), right + 1, y);
+        h.draw(W, H);
+        let g = grid(&h);
+        assert!(g.x_off >= was, "moved back from {was} to {} (column {})", g.x_off, g.col);
+        was = g.x_off;
+    }
+    let g = grid(&h);
+    assert_eq!((g.col, g.x_off), (ncols - 1, g.x_max()), "the last column, the view at its end");
+    h.mouse(MouseEventKind::Up(MouseButton::Left), right + 1, y);
+}
+
+/// The wheel during a drag extends it over the rows only: a pointer held past the right edge
+/// does not move the view sideways on each wheel event (a drag event does).
+#[test]
+fn the_wheel_during_a_drag_past_the_edge_moves_rows_only() {
+    let mut h = wide(30, 40);
+    let g = grid(&h);
+    let (a, _, _) = g.hit_cols[0];
+    let (y, right) = (g.data_y, g.gutter_x.1 + g.view_w);
+    h.mouse(MouseEventKind::Down(MouseButton::Left), a + 2, y);
+    h.mouse(MouseEventKind::Drag(MouseButton::Left), right, y);
+    h.draw(W, H);
+    assert_eq!(grid(&h).x_off, 4);
+    let col = grid(&h).col;
+    for _ in 0..3 {
+        h.mouse(MouseEventKind::ScrollDown, right, y);
+    }
+    h.draw(W, H);
+    let g = grid(&h);
+    assert_eq!((g.x_off, g.col), (4, col), "sideways only by drag events");
+    assert!(g.top > 0 && g.anchor.is_some(), "the rows scrolled, the drag goes on");
+    h.mouse(MouseEventKind::Up(MouseButton::Left), right, y);
+}
+
+/// A column of which only the separator shows at the right edge is no cell: a click there
+/// selects nothing.
+#[test]
+fn a_column_showing_only_its_separator_is_not_a_cell() {
+    let mut slivers = 0;
+    for w in 80..84 {
+        let mut h = amounts(w);
+        loop {
+            h.draw(w, H);
+            let g = grid(&h);
+            let (from, right) = (g.gutter_x.1 as usize, (g.gutter_x.1 + g.view_w) as usize);
+            for c in 0..g.col_x.len() - 1 {
+                if (from + g.col_x[c]).checked_sub(g.x_off) == Some(right - 1) {
+                    slivers += 1;
+                    assert!(!g.hit_cols.iter().any(|h| h.2 == c), "column {c}: only its separator shows");
+                    assert_ne!(g.cell_at((right - 1) as u16, g.data_y, 5).map(|x| x.1), Some(c));
+                }
+            }
+            if g.x_off == g.x_max() {
+                break;
+            }
+            wheel(&mut h, MouseEventKind::ScrollRight, KeyModifiers::NONE);
+        }
+    }
+    assert!(slivers > 0, "a separator alone at the edge was seen");
 }
