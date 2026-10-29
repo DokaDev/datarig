@@ -635,8 +635,9 @@ fn the_search_line_says_what_the_paging_line_would() {
     let r = h.app.layout.results;
     let line = screen.lines().nth((r.y + r.height - 2) as usize).unwrap_or_default();
     assert!(line.contains("/^42$") && line.contains("1/1 Showing 500 rows \u{b7} fetching stopped"), "{line:?}");
+    // Narrower, the results title's word for the state.
     let line = strip(&mut h);
-    assert!(line.contains(" 1/1 more on server "), "{line:?}");
+    assert!(line.contains(" 1/1 fetching stopped "), "{line:?}");
 }
 
 /// The line under the grid as drawn at `w`×`hh`.
@@ -750,4 +751,34 @@ fn a_background_tabs_idle_close_names_the_next_page_key_of_its_search() {
     assert_eq!((h.app.tabs.active_index(), h.app.key_context()), (0, Ctx::GridMatches));
     let status = h.status(200, 40);
     assert!(status.contains("Space r n runs the SELECT again"), "{status}");
+}
+
+#[test]
+fn the_search_line_keeps_the_paging_state_in_short() {
+    let cases = [
+        (Paging::Stopped, false, "fetching stopped"),
+        (Paging::Released, true, "next page re-runs"),
+        (Paging::Released, false, "first page only"),
+        (Paging::Replaced, false, "paging closed"),
+        (Paging::Interrupted, false, "paging closed"),
+        (Paging::ClosedIdle, false, "paging closed"),
+    ];
+    for (paging, rerun, short) in cases {
+        let mut h = numbers(500, true);
+        h.app.tab_mut().exec.paging = paging;
+        h.app.tab_mut().exec.rerun_ok = rerun;
+        h.keys("/");
+        h.type_text("^42$");
+        h.key(KeyCode::Enter);
+        let line = strip_at(&mut h, 120, 40);
+        assert!(line.contains(&format!(" 1/1 {short} ")) && !line.contains("more on server"), "{paging:?}: {line:?}");
+        // In the warning's color, as the paging line says it.
+        let t = h.draw(120, 40);
+        let buf = t.backend().buffer();
+        let r = h.app.layout.results;
+        let y = r.y + r.height - 2;
+        let at = line.find(&format!(" 1/1 {short} ")).unwrap();
+        let x = (line[..at].chars().count() + 5) as u16;
+        assert_eq!(buf[(x, y)].fg, theme::DARK.warning, "{paging:?}");
+    }
 }

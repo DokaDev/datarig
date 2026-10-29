@@ -513,9 +513,10 @@ pub struct Strip {
     /// The cursor's match among the matches: `3/120`, `-/120` off a match, `…` while they are
     /// counted, `1,000,000+` past the cap.
     pub count: String,
-    /// What is not searched (the rows still on the server), the longest first: the first that
-    /// fits is drawn, none where none does.
-    pub notes: Vec<String>,
+    /// What is not searched (the rows still on the server), the longest first, each with
+    /// whether it is a warning (the paging's): the first that fits is drawn, none where none
+    /// does.
+    pub notes: Vec<(String, bool)>,
 }
 
 impl App {
@@ -894,8 +895,8 @@ impl App {
             // The rows the matches are of (rows may have come since).
             let read = matches.filter(|m| m.result == rs.id && !counting).map_or(rs.rows.len(), |m| m.rows);
             let key = self.next_page_key(Ctx::GridMatches);
-            notes.push(self.i18n.msg(&Msg::GridSearchMore { count: read as u64, key }).to_string());
-            notes.push(self.i18n.label(Label::GridSearchMoreShort).to_string());
+            notes.push((self.i18n.msg(&Msg::GridSearchMore { count: read as u64, key }).to_string(), false));
+            notes.push((self.i18n.label(Label::GridSearchMoreShort).to_string(), false));
         }
         let text = match (&pattern, &t.find.prompt) {
             (Some(p), _) => p.as_str(),
