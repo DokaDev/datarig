@@ -183,6 +183,15 @@ subst_ms_max = 1000.0
 # worker, `n` is a lookup in the matches found).
 search_highlight_lookups_max = 1720
 search_p95_ms_max = 50.0
+# Sideways wheel bursts over the grid (a trackpad swipe; the same scenario, the search ended):
+# 100 bursts of 24 `ScrollRight`, Shift+`ScrollDown`, `ScrollLeft` and Shift+`ScrollUp` events,
+# handed over as the event loop reads them (`input::burst`). Each burst is one frame, and it moves
+# the view by all of its events (four characters each, unless it reached an end; checked as 0
+# bursts that moved short). The most cells one frame drew: the columns on screen, those cut by
+# the view's edges included, times the rows drawn (measured 84; bounded like the highlight's
+# lookups by the cells on screen).
+hscroll_frames_per_burst_max = 1
+hscroll_cells_per_frame_max = 1720
 
 [idle]
 secs = 20
