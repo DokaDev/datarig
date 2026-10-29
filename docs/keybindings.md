@@ -217,7 +217,7 @@ Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+
 
 ## `grid`
 
-The result grid. `/` searches the fetched rows forward, `?` backward (a Rust regular expression, case sensitive unless it starts with `(?i)`; NULL never matches). Inside `nav`.
+The result grid. The wheel scrolls the rows; a sideways wheel (a trackpad) or Shift+wheel scrolls the view sideways, four characters a step, the columns at its edges partly shown, until a key or a click moves the cell (`h`/`l` bring its column into view, moving the view as little as it takes). `/` searches the fetched rows forward, `?` backward (a Rust regular expression, case sensitive unless it starts with `(?i)`; NULL never matches). Inside `nav`.
 
 | Keys | Action | Description | R |
 |---|---|---|---|

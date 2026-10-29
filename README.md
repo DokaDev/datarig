@@ -264,6 +264,12 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
   and why. An environment can keep the server-side cursor open instead (`paging = "hold"`, see
   [Paging and locks](#paging-and-locks)).
 - A row count on demand, with a label that says whether it matches the pages you saw.
+- The wheel scrolls the grid's rows (three a notch); a trackpad's sideways swipe, a tilting
+  wheel or Shift+wheel scrolls it sideways by character, four a step, smoothly: the columns at
+  the edges show the part that fits (a value simply runs under the edge; `…` marks only a value
+  longer than a column's 40 characters), and the headers scroll with the rows. The selected
+  cell stays where it is until a key or a click moves it; `h`/`l`, a click on a partly shown
+  cell or a search's jump then move the view just enough to show that cell whole.
 - Search inside the grid with `/` and `?`: a prompt under the grid, the cursor on the first
   matching cell as you type, `Enter` to search, then `n` and `N` from match to match (across
   pages, around the ends with a warning) and `Esc` to end the search; while no search is on,

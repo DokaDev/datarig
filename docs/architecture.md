@@ -240,6 +240,20 @@ Held by CI budgets (`docs/perf.md`).
   every copy and the drawing read. The render records the gutter's columns and the headers'
   row (`gutter_x`, `header_y`) for the clicks; `Drag::Grid` carries the shape, and `drag_at`
   lets the wheel extend a drag.
+- **The grid scrolls sideways by character.** The columns are laid out as one row of
+  `"│ " + value + " "` (`GridState::col_x`, the start of each, from the widths the render
+  computes) and `GridState::x_off` is how many characters of it the view starts after; the
+  row-number gutter stays. The render clamps `x_off` to `0..=x_max()` (the last column's end at
+  the view's right edge) every frame, so a resize, the inspector or wider values never leave an
+  empty band, and draws the columns at the edges through `text::slice_cols` (a wide character
+  cut there is a blank). `hit_cols` holds the part of each column on screen and `cut_col` the
+  one cut on the left, so `cell_at`, `cell_rect` (hover, the search's highlight, the copy flash),
+  `header_col` and the context menu work on that part. Unless the wheel detached the view
+  (`detached`), the render follows the cursor's column as little as it takes (`follow`): cut on
+  the left, from its start; cut on the right, up to its end. The wheel (`ScrollLeft`/`Right`,
+  Shift+vertical) and a drag past the left or right edge (`drag_edge`) move it
+  `grid::SIDE_STEP` characters. The binary hands a burst of wheel events of one kind (as of
+  pointer motions) to the app and draws once (`input::burst`, at most `PER_FRAME` events).
 - **The tab bar** (`widgets::tabbar`): `tabbar::state` reads a tab's session into a `State`
   (idle, connected, running, open transaction, trouble). The number carries the connection:
   the profile's color while the tab's session is connected, `fg_muted` while it is not, the
