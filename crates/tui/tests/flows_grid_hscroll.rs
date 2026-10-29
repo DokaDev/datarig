@@ -389,15 +389,16 @@ fn amounts(w: u16) -> Harness {
     h
 }
 
-/// A cell cut by the right edge whose part on screen is blank (a right-aligned number under the
-/// edge) shows a dim `›` in its last column on screen, so it never reads as empty; NULL keeps
-/// its own look and an empty value is not hidden (no mark); a cell whose text shows gets none.
-/// A header whose name (or type) is all under the edge gets the mark too.
+/// A cell cut by the right edge whose text columns on screen are blank (a right-aligned number
+/// under the edge) shows a dim `›` in its last column on screen, so it never reads as empty;
+/// NULL keeps its own look and an empty value is not hidden (no mark); a cell whose text shows
+/// gets none. Neither does a cell of which only the separator or the blank before its text
+/// shows (no text column to put it in), nor ever a header.
 #[test]
 fn a_cell_whose_text_is_under_the_right_edge_shows_a_mark() {
     let theme = datarig_tui::theme::DARK;
     let values = [Some(1), None, Some(0), Some(5), Some(1)];
-    let (mut marked, mut headers, mut marked_numbers) = (0, 0, 0);
+    let (mut marked, mut slivers) = (0, 0);
     for w in 80..84 {
         let mut h = amounts(w);
         loop {
@@ -406,37 +407,38 @@ fn a_cell_whose_text_is_under_the_right_edge_shows_a_mark() {
             let g = grid(&h);
             assert!(g.page_rows >= 5);
             let (from, right) = (i32::from(g.gutter_x.1), i32::from(g.gutter_x.1 + g.view_w));
-            // The column at the right edge, its text from `tx`, `width` wide.
-            let c = g.hit_cols.last().unwrap().2;
+            let edge = (right - 1) as u16;
+            // The column whose separator is last on screen, its text from `tx`, `width` wide.
+            let c =
+                (0..g.col_x.len() - 1).rev().find(|&c| from + g.col_x[c] as i32 - (g.x_off as i32) < right).unwrap();
             let width = (g.col_x[c + 1] - g.col_x[c] - 3) as i32;
             let tx = from + g.col_x[c] as i32 - g.x_off as i32 + 2;
-            let cut = tx + width > right && tx <= right;
-            let edge = (right - 1) as u16;
+            // Cut by the edge with a text column on screen.
+            let cut = tx + width > right && tx < right;
+            slivers += usize::from(tx >= right);
             for (r, n) in values.iter().enumerate() {
                 let y = g.data_y + r as u16;
-                // The numbers right-aligned; the other columns' values (`r0c1`…) from `tx`.
-                let want =
-                    cut && if c == 6 { n.is_some_and(|n| n > 0 && tx + width - n >= right) } else { tx == right };
+                // The numbers right-aligned; the other columns' values (`r0c1`…) from `tx`, on
+                // screen whenever a text column is.
+                let want = cut && c == 6 && n.is_some_and(|n| n > 0 && tx + width - n >= right);
                 let mark = buf[(edge, y)].symbol() == "›";
-                assert_eq!(mark, want, "row {r} at width {w}, offset {}", g.x_off);
+                assert_eq!(mark, want, "row {r} at width {w}, offset {} (text at {tx}, edge {right})", g.x_off);
                 if want {
                     marked += 1;
                     assert_ne!(Some(buf[(edge, y)].fg), theme.fg.into(), "dim, not the text's color");
                 }
             }
-            let head = cut && tx == right;
-            assert_eq!(buf[(edge, g.header_y)].symbol() == "›", head, "header at width {w}, offset {}", g.x_off);
-            assert_eq!(buf[(edge, g.header_y + 1)].symbol() == "›", head, "type at width {w}");
-            headers += usize::from(head);
-            marked_numbers += usize::from(c == 6 && cut && tx < right);
+            for y in [g.header_y, g.header_y + 1] {
+                assert_ne!(buf[(edge, y)].symbol(), "›", "a header at width {w}, offset {}", g.x_off);
+            }
             if g.x_off == g.x_max() {
                 break;
             }
             wheel(&mut h, MouseEventKind::ScrollRight, KeyModifiers::NONE);
         }
     }
-    assert!(marked > 0 && headers > 0, "marks shown: {marked} cells, {headers} headers");
-    assert!(marked_numbers > 0, "a number hidden under the edge with its column's start on screen");
+    assert!(marked > 0, "marks shown");
+    assert!(slivers > 0, "a column showing its separator or blank only was seen");
 }
 
 /// A drag to the right across columns wider than the view (80 columns, the inspector open:

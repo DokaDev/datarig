@@ -585,14 +585,15 @@ pub fn render(
             buf.set_stringn(at as u16, y, &part, room, style);
         }
     };
-    // A cell cut by the right edge whose part on screen is blank though its text is not (a
-    // right-aligned number under the edge, a value after blanks): a dim `›` in its last
+    // A cell cut by the right edge whose text columns on screen are blank though its text is
+    // not (a right-aligned number under the edge, a value after blanks): a dim `›` in its last
     // column on screen (the muted text, made to read on the cell's background), so it never
-    // reads as empty. `s` is its text as drawn from column `x`, `w` wide; text of blanks only
-    // (an empty value) is not hidden and gets none.
+    // reads as empty. Only where at least one of its text columns shows (not its separator or
+    // blank alone). `s` is its text as drawn from column `x`, `w` wide; text of blanks only (an
+    // empty value) is not hidden and gets none.
     let edge_mark = |buf: &mut Buffer, x: i32, w: usize, s: &str, y: u16, style: Style| {
         let r = i32::from(right);
-        if x + w as i32 <= r || x > r || s.trim().is_empty() {
+        if x + w as i32 <= r || x >= r || s.trim().is_empty() {
             return;
         }
         let at = x.max(i32::from(from));
@@ -620,7 +621,6 @@ pub fn render(
         // The key marks in their colors, then the name.
         let mut hx = cx + 2;
         let mut left = w;
-        let mut head = String::new();
         for m in crate::icons::key_marks(look.marks.get(ci).copied().unwrap_or_default()) {
             let text = format!("{} ", m.text(look.icons));
             let mw = width(&text);
@@ -628,17 +628,11 @@ pub fn render(
                 break;
             }
             put(buf, hx, y0, &text, header_style.fg(th.key_color(m)));
-            head.push_str(&text);
             hx += mw as i32;
             left -= mw;
         }
-        let name = fit(&col.meta.name, left, Align::Left);
-        put(buf, hx, y0, &name, header_style);
-        head.push_str(&name);
-        let type_name = fit(&col.meta.type_name, w, Align::Left);
-        put(buf, cx + 2, y0 + 1, &type_name, type_style);
-        edge_mark(buf, cx + 2, w, &head, y0, header_style);
-        edge_mark(buf, cx + 2, w, &type_name, y0 + 1, type_style);
+        put(buf, hx, y0, &fit(&col.meta.name, left, Align::Left), header_style);
+        put(buf, cx + 2, y0 + 1, &fit(&col.meta.type_name, w, Align::Left), type_style);
     }
 
     for vy in 0..page_rows {
