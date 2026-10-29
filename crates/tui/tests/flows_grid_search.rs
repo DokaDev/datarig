@@ -890,6 +890,17 @@ fn a_queued_n_after_more_rows_came_keeps_the_presses_after_it() {
 }
 
 #[test]
+fn the_idle_close_names_the_search_key_while_the_prompt_is_open() {
+    let mut h = held(500);
+    h.keys("/");
+    h.type_text("^42$");
+    assert_eq!(h.app.key_context(), Ctx::GridSearch);
+    h.advance(Duration::from_secs(31));
+    let status = h.status(200, 40);
+    assert!(status.contains("Space r n runs the SELECT again"), "{status}");
+}
+
+#[test]
 fn queued_presses_go_with_a_moved_cursor_noh_or_a_new_prompt_and_wrap_and_cap() {
     let pattern = "^(7|17)$";
     // The cursor moved before the first match came: the presses go, the cursor stays (one row

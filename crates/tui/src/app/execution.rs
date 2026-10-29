@@ -442,8 +442,9 @@ impl App {
         let qid = t.exec.query_id;
         self.send_tab(id, DbCommand::ClosePortal { id: qid });
         let m = if rerun {
-            // `n` is the search's in a tab whose search is on, shown or not.
-            let on = self.tabs.get(id).is_some_and(super::grid_search::search_on);
+            // `n` is the search's in a tab whose search is on (shown or not), and typed while its
+            // prompt is open.
+            let on = self.tabs.get(id).is_some_and(|t| t.find.prompting() || super::grid_search::search_on(t));
             let key = self.next_page_key(if on { Ctx::GridMatches } else { Ctx::Grid });
             Msg::ResultsPagingClosedRerun { count, key }
         } else {
