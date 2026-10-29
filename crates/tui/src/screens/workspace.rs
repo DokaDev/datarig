@@ -1028,7 +1028,7 @@ fn draw_search_strip(app: &mut App, strip: &crate::app::grid_search::Strip, area
     options.push((strip.count.clone(), None));
     let (status, note) = options
         .iter()
-        .find(|(s, _)| !s.is_empty() && need + 2 + width(s) <= room)
+        .find(|(s, _)| !s.is_empty() && need + 2 + width(s) <= room && width(s) <= room.saturating_sub(4))
         .cloned()
         .unwrap_or_else(|| if typing { (String::new(), None) } else { (strip.count.clone(), None) });
     let status = clip(&status, room.saturating_sub(4));
