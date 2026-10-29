@@ -611,15 +611,21 @@ fn past_the_cap_n_and_shift_n_seek_from_the_cursor() {
 fn n_while_the_matches_are_being_found_does_not_start_over() {
     let mut h = numbers(500, false);
     h.keys("/");
-    h.type_text("^(7|17|27)$");
+    h.type_text("^(7|17|27|37|47)$");
     let scans = h.app.grid_search_scans();
+    // `Enter` and three `n` before any answer came: each `n` goes on from where the one before
+    // it lands.
     raw(&mut h, "\nnnn");
     h.app.pump_grid_search(Duration::from_secs(30));
+    assert_eq!(cursor(&h), (37, 0), "the first match, then three more");
     assert_eq!(h.app.grid_search_scans(), scans + 1, "one search of every row, the n keys beside it");
-    assert!(strip(&mut h).contains("/3"), "the count came: {}", strip(&mut h));
-    h.keys("n");
-    let at = cursor(&h);
-    assert!([(7, 0), (17, 0), (27, 0)].contains(&at), "{at:?}");
+    assert!(strip(&mut h).contains("4/5"), "the count came: {}", strip(&mut h));
+    // `N` the same way, around the start.
+    h.keys("gg/");
+    h.type_text("^(7|17|27|37|47)$");
+    raw(&mut h, "\nNN");
+    h.app.pump_grid_search(Duration::from_secs(30));
+    assert_eq!(cursor(&h), (37, 0), "7, then around to 47, then 37");
 }
 
 #[test]

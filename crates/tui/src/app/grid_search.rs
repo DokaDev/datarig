@@ -29,6 +29,9 @@ use std::sync::mpsc;
 /// The most matches a search keeps; past them the count says `1,000,000+`.
 pub const MAX_MATCHES: usize = 1_000_000;
 
+/// The most `n`/`N` presses kept while the cursor waits for a first match (a held key).
+const MAX_PENDING: usize = 64;
+
 /// Rows read at a time by a job (it checks whether to stop between them).
 const CHUNK: usize = 1024;
 
@@ -169,6 +172,9 @@ pub struct GridFind {
     job: Option<Running>,
     /// A job of `n`/`N` that looks for the next match only, beside it.
     seek: Option<Running>,
+    /// `n` (`true`) and `N` pressed while the cursor waits for a first match: each goes on from
+    /// where the one before it lands.
+    pending: Vec<bool>,
 }
 
 impl GridFind {
@@ -182,10 +188,11 @@ impl GridFind {
         *self = Self::default();
     }
 
-    /// Stop the jobs out (their answers are dropped).
+    /// Stop the jobs out (their answers are dropped), and the presses waiting for them.
     fn stop_jobs(&mut self) {
         self.job = None;
         self.seek = None;
+        self.pending.clear();
     }
 
     /// The matches to highlight in result `rs`: those of the pattern typed so far while the
@@ -584,6 +591,16 @@ impl App {
         if ncols == 0 {
             return;
         }
+        // The cursor waits for a first match (of `Enter`, or of an `n` before): this press goes
+        // on from where that one lands.
+        let waiting = t.find.seek.is_some()
+            || t.find.job.as_ref().is_some_and(|j| j.purpose == Purpose::Search && !j.found_one && j.result == rs.id);
+        if waiting {
+            if t.find.pending.len() < MAX_PENDING {
+                t.find.pending.push(same);
+            }
+            return;
+        }
         let at = cell(t.grid.row, t.grid.col, ncols);
         let current = a.found.as_ref().filter(|m| m.current(rs));
         let known = current.and_then(|m| step(&m.cells, m.capped, at, forward));
@@ -596,8 +613,13 @@ impl App {
         match known {
             Some(Some((to, wrapped))) => {
                 goto(&mut t.grid, to, ncols);
+                let next = (!t.find.pending.is_empty()).then(|| t.find.pending.remove(0));
                 if wrapped {
                     self.flash(super::update::search_notice(SearchNotice::Wrapped { bottom: forward }));
+                }
+                // Presses that waited for the cursor go on from here.
+                if let Some(same) = next {
+                    self.grid_search_next(same);
                 }
             }
             Some(None) => {
@@ -805,11 +827,27 @@ impl App {
                 let Some(job) = slot.as_mut() else { return };
                 job.found_one = true;
                 if (t.grid.row, t.grid.col) != job.from {
+                    // The cursor moved meanwhile: the presses that waited go too.
+                    t.find.pending.clear();
                     return;
                 }
                 let said = (wrapped && job.purpose != Purpose::Preview).then_some(job.forward);
                 goto(&mut t.grid, cell, job.ncols);
-                said.map(|bottom| SearchNotice::Wrapped { bottom })
+                // A seek has said all it had to: its end is not waited for.
+                if job.purpose == Purpose::Seek {
+                    *slot = None;
+                }
+                let next = (!t.find.pending.is_empty()).then(|| t.find.pending.remove(0));
+                let active = self.tabs.active().id == a.tab;
+                if let Some(n) = said.map(|bottom| SearchNotice::Wrapped { bottom }) {
+                    self.flash(super::update::search_notice(n));
+                }
+                match next {
+                    Some(same) if active => self.grid_search_next(same),
+                    Some(_) => self.tabs.iter_mut().filter(|t| t.id == a.tab).for_each(|t| t.find.pending.clear()),
+                    None => {}
+                }
+                return;
             }
             News::Done(r) => {
                 let Some(job) = slot.take() else { return };
