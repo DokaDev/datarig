@@ -84,6 +84,30 @@ pub fn fit(s: &str, w: usize, align: Align) -> String {
     }
 }
 
+/// The part of `s` from its column `skip` on, at most `w` columns of it (no padding, no `…`):
+/// what a view showing those columns shows. A wide grapheme cut by either edge is a blank on
+/// its visible column, never half of it.
+pub fn slice_cols(s: &str, skip: usize, w: usize) -> String {
+    let end = skip + w;
+    let mut out = String::new();
+    let mut acc = 0;
+    for g in s.graphemes(true) {
+        if acc >= end {
+            break;
+        }
+        let gw = grapheme_width(g);
+        if acc >= skip && acc + gw <= end {
+            out.push_str(g);
+        } else if acc + gw > skip {
+            // Cut by an edge: blanks on the columns of it that show.
+            let shown = (acc + gw).min(end) - acc.max(skip);
+            out.extend(std::iter::repeat_n(' ', shown));
+        }
+        acc += gw;
+    }
+    out
+}
+
 /// Clip `s` to at most `w` columns (no padding). Adds `…` when clipped.
 pub fn clip(s: &str, w: usize) -> String {
     if width(s) <= w { s.to_string() } else { truncate_exact(s, w).trim_end_matches(' ').to_string() }

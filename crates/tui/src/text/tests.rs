@@ -136,3 +136,34 @@ fn wrap_exact_keeps_every_character() {
     assert_eq!(wrap_exact(wide, 7).concat(), wide);
     assert!(wrap_exact(wide, 7).iter().all(|p| width(p) <= 7));
 }
+
+#[test]
+fn slice_cols_shows_a_window_of_columns() {
+    assert_eq!(slice_cols("abcdef", 0, 3), "abc");
+    assert_eq!(slice_cols("abcdef", 2, 3), "cde");
+    assert_eq!(slice_cols("abcdef", 4, 9), "ef", "no padding past the end");
+    assert_eq!(slice_cols("abc", 5, 3), "");
+    assert_eq!(slice_cols("abc", 1, 0), "");
+    // A combining mark stays with its base.
+    assert_eq!(slice_cols("e\u{301}xe\u{301}", 1, 2), "xe\u{301}");
+}
+
+#[test]
+fn slice_cols_blanks_a_wide_character_cut_by_an_edge() {
+    // Three wide characters (columns 0-1, 2-3, 4-5).
+    let s = "\u{6F22}\u{5B57}\u{AC00}";
+    assert_eq!(slice_cols(s, 0, 6), s);
+    // The left edge cuts the first one: its right half shows as a blank.
+    assert_eq!(slice_cols(s, 1, 5), " \u{5B57}\u{AC00}");
+    // The right edge cuts the last one: its left half shows as a blank.
+    assert_eq!(slice_cols(s, 0, 5), "\u{6F22}\u{5B57} ");
+    // Both edges cut one.
+    assert_eq!(slice_cols(s, 1, 4), " \u{5B57} ");
+    assert_eq!(slice_cols(s, 3, 1), " ");
+    for skip in 0..7 {
+        for w in 0..7 {
+            let part = slice_cols(s, skip, w);
+            assert_eq!(width(&part), w.min(6usize.saturating_sub(skip)), "slice_cols({skip}, {w}) = {part:?}");
+        }
+    }
+}
