@@ -102,3 +102,5 @@ Each writes a new file and never replaces one: a name that is taken, that is not
 | `size_mild` | With five size levels, explorer size estimates of 1 MiB or more. |
 | `size_heated` | With five size levels, explorer size estimates of 1 GiB or more. |
 | `tab_active` | The active tab's fill (its bg; the alternate surface without one). An fg replaces every text color on it but the environment's badge (a connected tab's number becomes a chip of its profile's color); without one the tab's colors stay, made to read on it. A file that leaves it out but sets bg or accent, both RGB, gets that accent blended into that bg; else the fill of the theme it extends stays. |
+| `grid_match` | A cell of the result grid that the grid's search matches (the whole cell is tinted: its value may be cut). Keep it apart from the selection, a selected range, the alternate rows, the hover and the copy flash. |
+| `grid_match_current` | The grid's cursor cell while it is a match of the grid's search. |

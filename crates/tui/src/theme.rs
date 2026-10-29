@@ -145,6 +145,10 @@ pub struct Theme {
     pub mode_fg: Color,
     /// A match of the editor's search (`/`, `n`, `*`, …) on the lines on screen.
     pub search_match: Style,
+    /// A cell of the result grid that the grid's search (`/`, `n`, …) matches, on screen.
+    pub grid_match: Style,
+    /// The grid's cursor cell while it is a match of the grid's search.
+    pub grid_match_current: Style,
     /// The bracket matching the one at the editor's cursor (not drawn yet).
     pub match_paren: Style,
     /// The mark of read-only rules: the lock on a profile's explorer row and its tabs, and the
@@ -226,6 +230,13 @@ pub const DARK: Theme = Theme {
     mode_fg: rgb(0x14161B),
     // The accent-warm of numbers under the background's text: loud, as a search hit is.
     search_match: Style::new().fg(rgb(0x14161B)).bg(rgb(0xE0A96D)),
+    // The grid's matches as loud as the editor's; the cursor's one keeps the selection, its
+    // text in bold and underlined.
+    grid_match: Style::new().fg(rgb(0x14161B)).bg(rgb(0xE0A96D)),
+    grid_match_current: Style::new()
+        .fg(rgb(0xD8DEE9))
+        .bg(rgb(0x2A3B4D))
+        .add_modifier(Modifier::BOLD.union(Modifier::UNDERLINED)),
     // The border tone as a background, lighter than the cursor line, in bold.
     match_paren: Style::new().bg(rgb(0x2E3440)).add_modifier(Modifier::BOLD),
     // Blue (the foreign key's), bold: a state to notice, not a warning.
@@ -545,6 +556,8 @@ tokens! {
         size_mild => "With five size levels, explorer size estimates of 1 MiB or more.",
         size_heated => "With five size levels, explorer size estimates of 1 GiB or more.",
         tab_active => "The active tab's fill (its bg; the alternate surface without one). An fg replaces every text color on it but the environment's badge (a connected tab's number becomes a chip of its profile's color); without one the tab's colors stay, made to read on it. A file that leaves it out but sets bg or accent, both RGB, gets that accent blended into that bg; else the fill of the theme it extends stays.",
+        grid_match => "A cell of the result grid that the grid's search matches (the whole cell is tinted: its value may be cut). Keep it apart from the selection, a selected range, the alternate rows, the hover and the copy flash.",
+        grid_match_current => "The grid's cursor cell while it is a match of the grid's search.",
 }
 
 /// The token names of a theme file.

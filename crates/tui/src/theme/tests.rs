@@ -358,6 +358,8 @@ fn every_token_of_a_theme_can_be_set_by_name() {
         mode_command: _,
         mode_fg: _,
         search_match: _,
+        grid_match: _,
+        grid_match_current: _,
         match_paren: _,
         read_only_mark: _,
         danger_mark: _,
@@ -378,7 +380,7 @@ fn every_token_of_a_theme_can_be_set_by_name() {
         dim: _,
     } = DARK;
     // Every field above but `dim`.
-    assert_eq!(COLOR_TOKENS.len() + STYLE_TOKENS.len(), 57);
+    assert_eq!(COLOR_TOKENS.len() + STYLE_TOKENS.len(), 59);
     let mut th = DARK;
     for (i, name) in COLOR_TOKENS.iter().enumerate() {
         *color_token(&mut th, name).unwrap() = Color::Indexed(i as u8);
@@ -567,6 +569,36 @@ fn search_matches_show_in_every_theme() {
         let s = th.search_match;
         assert!(s.bg.is_some_and(|bg| bg != th.bg) && s.fg.is_some(), "{name}: {s:?}");
         assert!(s != th.selection && s.bg != th.cursor_line.bg && s.bg != th.current_stmt.bg, "{name}");
+    }
+}
+
+/// A match of the grid's search shows on any cell: its own background, apart from the
+/// selection, a selected range, the alternate rows, the hover and the copy flash (a copy must
+/// not look like a match), its text readable on it. The cursor's match stands apart from the
+/// other matches and from the plain cursor, its text readable too.
+#[test]
+fn grid_matches_show_in_every_theme() {
+    for (name, th) in BUILTINS.iter().copied() {
+        let (m, cur) = (th.grid_match, th.grid_match_current);
+        assert!(m.bg.is_some() && m.fg.is_some(), "{name}: {m:?}");
+        for other in [Some(th.bg), Some(th.surface_alt), th.selection.bg, th.range.bg, th.hover.bg, th.yank_flash.bg] {
+            assert_ne!(m.bg, other, "{name}: the match's background");
+        }
+        assert!(m != th.selection && m != th.range && m != th.hover && m != th.yank_flash, "{name}");
+        assert!(cur != m && cur != th.selection && cur != th.selection_unfocused(), "{name}");
+        assert!(!cur.add_modifier.is_empty(), "{name}: the cursor's match shows without color");
+    }
+    for (name, th) in rgb_themes() {
+        let m = th.grid_match;
+        for other in [th.bg, th.surface_alt, bg(th.selection), bg(th.range), bg(th.hover), bg(th.yank_flash)] {
+            let d = delta_e(bg(m), other);
+            assert!(d >= 8.0, "{name}: a match and {other:?} are too close ({d:.2})");
+        }
+        let k = contrast(fg(m), bg(m));
+        assert!(k >= 4.5, "{name}: a match's text: {k:.2}");
+        let cur = th.grid_match_current;
+        let k = contrast(fg(cur), bg(cur));
+        assert!(k >= 4.5, "{name}: the cursor's match's text: {k:.2}");
     }
 }
 
