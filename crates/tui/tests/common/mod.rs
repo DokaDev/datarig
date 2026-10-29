@@ -665,9 +665,19 @@ impl Harness {
 
     /// A mouse event at (x, y), no modifiers.
     pub fn mouse(&mut self, kind: ratatui::crossterm::event::MouseEventKind, x: u16, y: u16) {
+        self.mouse_mod(kind, x, y, KeyModifiers::NONE);
+    }
+
+    /// A mouse event at (x, y) with `modifiers` held.
+    pub fn mouse_mod(
+        &mut self,
+        kind: ratatui::crossterm::event::MouseEventKind,
+        x: u16,
+        y: u16,
+        modifiers: KeyModifiers,
+    ) {
         use ratatui::crossterm::event::MouseEvent;
-        let m = MouseEvent { kind, column: x, row: y, modifiers: KeyModifiers::NONE };
-        self.event(Event::Mouse(m));
+        self.event(Event::Mouse(MouseEvent { kind, column: x, row: y, modifiers }));
     }
 
     /// Press the left button at `from`, drag through `path`, release at the last point.
@@ -990,6 +1000,13 @@ pub fn row_text(buf: &Buffer, y: u16) -> String {
 }
 
 /// Three profiles: the test DB, a CJK-named replica and an IPv6 host.
+/// Whether column `c` of the grid shows whole (from its separator to its last blank), as laid
+/// out last.
+pub fn whole_on_screen(g: &datarig_tui::widgets::grid::GridState, c: usize) -> bool {
+    let end = g.x_off + g.view_w as usize;
+    g.col_x.get(c + 1).is_some_and(|&to| g.col_x[c] >= g.x_off && to <= end)
+}
+
 pub fn sample_profiles() -> Vec<datarig_core::profile::ConnectionConfig> {
     use datarig_core::profile::ConnectionConfig;
     // Each profile has its own id (`..Default::default()` makes a new one).

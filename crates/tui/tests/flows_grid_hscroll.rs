@@ -1,0 +1,368 @@
+//! The result grid scrolled sideways by character: a sideways wheel (or Shift+wheel) moves the
+//! view four characters an event, a burst of them in one frame; the columns at the view's edges
+//! show their part on screen (a wide character cut there is a blank); keys and clicks bring the
+//! selected column into view moving the view as little as it takes; hit tests, the search's
+//! highlight and the copy flash cover the part on screen only.
+
+mod common;
+
+use common::*;
+use datarig_core::driver::{DbEvent, Outcome};
+use datarig_core::i18n::Lang;
+use datarig_tui::app::Focus;
+use datarig_tui::input::burst;
+use datarig_tui::widgets::editor::Editor;
+use datarig_tui::widgets::grid::GridState;
+use ratatui::crossterm::event::{Event, KeyCode, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use std::time::Duration;
+
+const W: u16 = 80;
+const H: u16 = 24;
+
+/// `n` rows of `cols` text columns named `column_00`… (each `"│ " + 9 + " "`: 12 characters),
+/// the values `r{row}c{col}`; the inspector hidden, the grid focused and drawn at `W`×`H`.
+fn wide(cols: usize, n: usize) -> Harness {
+    let mut h = Harness::connected(Lang::En);
+    h.app.detail.visible = false;
+    let metas = (0..cols).map(|i| meta(&format!("column_{i:02}"), "text", false, false)).collect();
+    let rows = (0..n).map(|r| (0..cols).map(|c| Some(format!("r{r}c{c}"))).collect()).collect();
+    h.ctrl('e');
+    let id = h.app.tab().exec.query_id;
+    h.tab_db(0, DbEvent::Page { id, columns: Some(metas), rows, more: false, elapsed: Duration::from_millis(2) });
+    h.sent();
+    h.app.focus = Focus::Results;
+    h.draw(W, H);
+    h
+}
+
+fn grid(h: &Harness) -> &GridState {
+    &h.app.tab().grid
+}
+
+/// A point in the middle of the results pane.
+fn middle(h: &Harness) -> (u16, u16) {
+    let r = h.app.layout.results;
+    (r.x + r.width / 2, r.y + r.height / 2)
+}
+
+fn wheel(h: &mut Harness, kind: MouseEventKind, modifiers: KeyModifiers) {
+    let (x, y) = middle(h);
+    h.mouse_mod(kind, x, y, modifiers);
+}
+
+/// The text of screen row `y` as drawn at `W`×`H`.
+fn line(h: &mut Harness, y: u16) -> String {
+    let t = h.draw(W, H);
+    row_text(t.backend().buffer(), y)
+}
+
+/// What the grid's view shows on screen row `y` (right of the row numbers), drawn at `W`×`H`.
+fn shown(h: &mut Harness, y: u16) -> String {
+    let t = h.draw(W, H);
+    let (g, buf) = (grid(h), t.backend().buffer());
+    (g.gutter_x.1..g.gutter_x.1 + g.view_w).map(|x| buf[(x, y)].symbol().to_string()).collect()
+}
+
+#[test]
+fn the_sideways_wheel_and_shift_wheel_move_the_view_four_characters() {
+    let mut h = wide(30, 20);
+    assert_eq!(grid(&h).x_off, 0);
+    wheel(&mut h, MouseEventKind::ScrollRight, KeyModifiers::NONE);
+    assert_eq!(grid(&h).x_off, 4);
+    wheel(&mut h, MouseEventKind::ScrollDown, KeyModifiers::SHIFT);
+    assert_eq!(grid(&h).x_off, 8, "Shift+wheel down: right");
+    wheel(&mut h, MouseEventKind::ScrollUp, KeyModifiers::SHIFT);
+    assert_eq!(grid(&h).x_off, 4, "Shift+wheel up: left");
+    h.draw(W, H);
+    let g = grid(&h);
+    assert_eq!((g.x_off, g.row, g.col), (4, 0, 0), "the view stays where the wheel put it, the cell too");
+    // The first column shows its last characters: "│ co" is under the left edge.
+    let y = grid(&h).data_y;
+    let row = shown(&mut h, y);
+    assert!(row.starts_with("c0      │ r0c1"), "{row}");
+    // Clamped at both ends: never left of the first column, never past the last one's end.
+    for _ in 0..3 {
+        wheel(&mut h, MouseEventKind::ScrollLeft, KeyModifiers::NONE);
+    }
+    assert_eq!(grid(&h).x_off, 0);
+    for _ in 0..200 {
+        wheel(&mut h, MouseEventKind::ScrollRight, KeyModifiers::NONE);
+    }
+    h.draw(W, H);
+    let g = grid(&h);
+    assert_eq!(g.x_off, g.x_max());
+    assert_eq!(g.x_off, 30 * 12 - g.view_w as usize, "the last column ends at the view's right edge");
+    assert!(whole_on_screen(g, 29));
+    let y = grid(&h).header_y;
+    let header = line(&mut h, y);
+    assert!(header.contains("│ column_29 │"), "the last column whole, no empty band after it: {header}");
+    // Plain wheel still scrolls rows.
+    wheel(&mut h, MouseEventKind::ScrollDown, KeyModifiers::NONE);
+    assert_eq!((grid(&h).top, grid(&h).x_off), (3, grid(&h).x_max()));
+}
+
+/// A trackpad sends dozens of sideways events a swipe: the event loop handles those of one
+/// burst together and draws once (bounded), and the view moves by all of them.
+#[test]
+fn a_burst_of_wheel_events_is_one_frame() {
+    let mut h = wide(30, 20);
+    let (x, y) = middle(&h);
+    let ev = |kind, modifiers| Event::Mouse(MouseEvent { kind, column: x, row: y, modifiers });
+    let swipe: Vec<_> = std::iter::repeat_n(ev(MouseEventKind::ScrollRight, KeyModifiers::NONE), 10).collect();
+    assert_eq!(burst::frames(&swipe), 1);
+    for e in swipe {
+        h.event(e);
+    }
+    h.draw(W, H);
+    assert_eq!(grid(&h).x_off, 40, "ten events, four characters each, one frame");
+    // Shift+wheel bursts too; a key between two bursts makes them two frames.
+    let shift = ev(MouseEventKind::ScrollUp, KeyModifiers::SHIFT);
+    let key = Event::Key(ratatui::crossterm::event::KeyEvent::new(KeyCode::Char('j'), KeyModifiers::NONE));
+    let mixed = [shift.clone(), shift.clone(), key, shift.clone()];
+    assert_eq!(burst::frames(&mixed), 3);
+    let long: Vec<_> = std::iter::repeat_n(shift, burst::PER_FRAME + 1).collect();
+    assert_eq!(burst::frames(&long), 2, "bounded");
+}
+
+/// `l` at the right edge scrolls just enough to show the next column whole (never a jump of
+/// several columns); `h` back moves nothing until the cursor's column is cut on the left, then
+/// just enough to show it whole.
+#[test]
+fn h_and_l_bring_the_column_into_view_moving_as_little_as_it_takes() {
+    let mut h = wide(30, 20);
+    let view = grid(&h).view_w as usize;
+    let mut was = 0;
+    for _ in 0..20 {
+        h.keys("l");
+        h.draw(W, H);
+        let g = grid(&h);
+        assert!(whole_on_screen(g, g.col), "column {} whole", g.col);
+        let end = g.col_x[g.col + 1];
+        let want = end.saturating_sub(view);
+        assert_eq!(g.x_off, want.max(was), "column {}: just far enough", g.col);
+        assert!(g.x_off - was <= 12, "never more than one column's width at a time");
+        was = g.x_off;
+    }
+    assert_eq!(grid(&h).col, 20);
+    assert!(was > 0);
+    // Back: the view stays while the cursor's column is whole on screen.
+    let first_whole = (0..30).find(|&c| whole_on_screen(grid(&h), c)).unwrap();
+    for _ in 0..(20 - first_whole) {
+        h.keys("h");
+        h.draw(W, H);
+        assert_eq!(grid(&h).x_off, was, "column {} is whole: the view stays", grid(&h).col);
+    }
+    h.keys("h");
+    h.draw(W, H);
+    let g = grid(&h);
+    assert_eq!(g.col, first_whole - 1);
+    assert_eq!(g.x_off, g.col_x[g.col], "the column cut on the left shows from its start");
+    // `0` and `$` follow the same rule.
+    h.keys("$");
+    h.draw(W, H);
+    assert_eq!(grid(&h).x_off, grid(&h).x_max());
+    h.keys("0");
+    h.draw(W, H);
+    assert_eq!(grid(&h).x_off, 0);
+}
+
+/// A click on a column cut by an edge selects its cell, and the view moves just enough to show
+/// it whole (a header click selects the whole column the same way).
+#[test]
+fn a_click_on_a_partly_shown_cell_selects_it_and_shows_it_whole() {
+    let mut h = wide(30, 20);
+    // The column cut by the right edge.
+    let g = grid(&h);
+    let &(a, _, c) = g.hit_cols.iter().find(|h| !whole_on_screen(g, h.2)).expect("a column cut on the right");
+    let y = g.data_y + 2;
+    h.mouse(MouseEventKind::Down(MouseButton::Left), a + 2, y);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), a + 2, y);
+    h.draw(W, H);
+    let g = grid(&h);
+    assert_eq!((g.row, g.col), (2, c));
+    assert!(whole_on_screen(g, c));
+    assert_eq!(g.x_off, g.col_x[c + 1] - g.view_w as usize, "just far enough");
+    // Now the first column shown is cut on the left: a click on its part selects it.
+    let first = g.hit_cols[0];
+    assert!(!whole_on_screen(g, first.2));
+    assert_eq!(first.0, g.gutter_x.1, "its part starts after the row numbers");
+    h.mouse(MouseEventKind::Down(MouseButton::Left), first.0, y + 1);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), first.0, y + 1);
+    h.draw(W, H);
+    let g = grid(&h);
+    assert_eq!((g.row, g.col), (3, first.2));
+    assert_eq!(g.x_off, g.col_x[first.2], "shown from its start");
+    // A header cut on the right: the whole column, shown whole.
+    let g = grid(&h);
+    let &(a, _, c) = g.hit_cols.iter().rev().find(|h| !whole_on_screen(g, h.2)).unwrap();
+    let hy = g.header_y;
+    h.mouse(MouseEventKind::Down(MouseButton::Left), a + 1, hy);
+    h.mouse(MouseEventKind::Up(MouseButton::Left), a + 1, hy);
+    h.draw(W, H);
+    let g = grid(&h);
+    assert_eq!((g.col, g.shape), (c, datarig_tui::widgets::grid::Shape::Cols));
+    assert!(whole_on_screen(g, c));
+    // The row numbers are not a cell of a column cut under them.
+    let gutter = (g.gutter_x.1 - 1, g.data_y);
+    let total = 20;
+    assert_eq!(g.cell_at(gutter.0, gutter.1, total), None);
+}
+
+/// The search's highlight and the copy flash paint the part of a cell on screen, never the
+/// row numbers left of it.
+#[test]
+fn the_highlight_and_the_copy_flash_cover_the_part_on_screen() {
+    let theme = datarig_tui::theme::DARK;
+    let mut h = wide(30, 20);
+    h.keys("/");
+    h.type_text("r2c0");
+    h.key(KeyCode::Enter);
+    // Then the view moved by the wheel: column 0 is cut on the left.
+    wheel(&mut h, MouseEventKind::ScrollRight, KeyModifiers::NONE);
+    let t = h.draw(W, H);
+    let buf = t.backend().buffer();
+    let g = grid(&h);
+    assert_eq!(g.cut_col, Some(0));
+    let cell = g.cell_rect(2, 0, 20).expect("its part on screen");
+    assert_eq!(cell.x, g.gutter_x.1, "from the row numbers' end");
+    assert_eq!(cell.width, 12 - 4, "the part on screen: its last eight characters");
+    let bg = |x: u16| buf[(x, cell.y)].bg;
+    assert_eq!(bg(cell.x), theme.grid_match_current.bg.unwrap());
+    assert_eq!(bg(cell.x + cell.width - 1), theme.grid_match_current.bg.unwrap());
+    assert_ne!(bg(cell.x - 1), theme.grid_match_current.bg.unwrap(), "the row numbers stay");
+    assert_ne!(bg(cell.x + cell.width), theme.grid_match_current.bg.unwrap(), "the next cell stays");
+    h.key(KeyCode::Esc);
+    // A copy of the row: its cells flash, the one cut on the left on its part only.
+    let _clip = FakeClipboard::attach(&mut h, false, &[]);
+    h.keys("Y");
+    wheel(&mut h, MouseEventKind::ScrollRight, KeyModifiers::NONE);
+    let t = h.draw(W, H);
+    let buf = t.backend().buffer();
+    let g = grid(&h);
+    let row = g.row;
+    let cell = g.cell_rect(row, 0, 20).expect("its part on screen");
+    assert_eq!((cell.x, cell.width as usize), (g.gutter_x.1, 12 - g.x_off));
+    let bg = |x: u16| buf[(x, cell.y)].bg;
+    assert_eq!(Some(bg(cell.x)), theme.yank_flash.bg);
+    assert_ne!(Some(bg(cell.x - 1)), theme.yank_flash.bg, "the row numbers do not flash");
+    // The column cut on the right flashes up to the view's edge.
+    let last = *g.hit_cols.last().unwrap();
+    let cell = g.cell_rect(row, last.2, 20).unwrap();
+    assert_eq!(cell.x + cell.width, g.gutter_x.1 + g.view_w);
+    assert_eq!(Some(buf[(cell.x + cell.width - 1, cell.y)].bg), theme.yank_flash.bg);
+}
+
+/// `Esc` in the search prompt puts the view back where it was, scrolled sideways too.
+#[test]
+fn esc_in_the_search_prompt_restores_the_view() {
+    let mut h = wide(30, 20);
+    for _ in 0..2 {
+        wheel(&mut h, MouseEventKind::ScrollRight, KeyModifiers::NONE);
+    }
+    h.draw(W, H);
+    assert_eq!(grid(&h).x_off, 8);
+    h.keys("/");
+    h.type_text("r5c25");
+    h.draw(W, H);
+    assert_eq!(grid(&h).col, 25, "the preview jumps to the match");
+    assert!(grid(&h).x_off > 8 && whole_on_screen(grid(&h), 25));
+    h.key(KeyCode::Esc);
+    h.draw(W, H);
+    let g = grid(&h);
+    assert_eq!((g.row, g.col, g.x_off, g.detached), (0, 0, 8, true));
+}
+
+/// A wider view (the terminal resized) takes the view back so the last column still ends at
+/// its right edge.
+#[test]
+fn a_resize_keeps_the_view_within_the_columns() {
+    let mut h = wide(30, 20);
+    for _ in 0..200 {
+        wheel(&mut h, MouseEventKind::ScrollRight, KeyModifiers::NONE);
+    }
+    h.draw(W, H);
+    let narrow = grid(&h).x_off;
+    assert_eq!(narrow, grid(&h).x_max());
+    h.draw(120, 40);
+    let g = grid(&h);
+    assert_eq!(g.x_off, 30 * 12 - g.view_w as usize);
+    assert!(g.x_off < narrow);
+    // So wide that every column fits: no scrolling at all.
+    let mut h = wide(4, 5);
+    wheel(&mut h, MouseEventKind::ScrollRight, KeyModifiers::NONE);
+    assert_eq!(grid(&h).x_off, 0);
+}
+
+/// Each result of a run keeps its own place sideways.
+#[test]
+fn every_result_tab_keeps_its_own_view() {
+    let mut h = Harness::connected(Lang::En);
+    h.app.detail.visible = false;
+    h.app.tab_mut().editor = Editor::new("SELECT 1;\nSELECT 2;");
+    h.keys("ggvG$");
+    h.ctrl('e');
+    let id = h.app.tab().exec.query_id;
+    let metas = || Some((0..30).map(|i| meta(&format!("column_{i:02}"), "text", false, false)).collect());
+    let rows = |n: usize| (0..n).map(|r| (0..30).map(|c| Some(format!("r{r}c{c}"))).collect()).collect::<Vec<_>>();
+    let ms = Duration::from_millis(1);
+    h.db(DbEvent::Started { id, index: 0 });
+    h.db(DbEvent::StepRows { id, index: 0, columns: metas(), rows: rows(3), more: false });
+    h.db(DbEvent::Finished { id, index: 0, outcome: Outcome::Command("SELECT".into()), elapsed: ms });
+    h.db(DbEvent::Started { id, index: 1 });
+    h.db(DbEvent::Page { id, columns: metas(), rows: rows(4), more: false, elapsed: ms });
+    h.key(KeyCode::Tab);
+    assert_eq!(h.app.focus, Focus::Results);
+    h.draw(W, H);
+    for _ in 0..3 {
+        wheel(&mut h, MouseEventKind::ScrollRight, KeyModifiers::NONE);
+    }
+    h.draw(W, H);
+    assert_eq!(grid(&h).x_off, 12);
+    h.keys("H");
+    h.draw(W, H);
+    assert_eq!(grid(&h).x_off, 0, "the first result: its own view");
+    wheel(&mut h, MouseEventKind::ScrollRight, KeyModifiers::NONE);
+    h.keys("L");
+    h.draw(W, H);
+    assert_eq!(grid(&h).x_off, 12, "the view the second one had");
+    h.keys("H");
+    h.draw(W, H);
+    assert_eq!(grid(&h).x_off, 4);
+}
+
+/// A wide character cut by the view's left or right edge is drawn as a blank, never half of it;
+/// the pane's border stays in place on every row.
+#[test]
+fn a_wide_character_cut_by_an_edge_is_a_blank() {
+    let mut h = Harness::connected(Lang::En);
+    h.app.detail.visible = false;
+    // "a" then Hangul syllables (two columns each): in column 0 they start at characters 3,
+    // 5, 7… of the row of columns, so an offset of 4 cuts the first one.
+    let hangul: String = (0..18).map(|i| char::from_u32(0xAC00 + i).unwrap()).collect();
+    let value = format!("a{hangul}");
+    let metas = (0..6).map(|i| meta(&format!("column_{i:02}"), "text", false, false)).collect();
+    let rows = (0..5).map(|_| (0..6).map(|_| Some(value.clone())).collect()).collect();
+    h.ctrl('e');
+    let id = h.app.tab().exec.query_id;
+    h.tab_db(0, DbEvent::Page { id, columns: Some(metas), rows, more: false, elapsed: Duration::from_millis(2) });
+    h.app.focus = Focus::Results;
+    h.draw(W, H);
+    let right = grid(&h).gutter_x.1 + grid(&h).view_w;
+    for step in 0..12 {
+        let t = h.draw(W, H);
+        let buf = t.backend().buffer();
+        let g = grid(&h);
+        for y in g.header_y..g.data_y + 5 {
+            assert_eq!(buf[(right, y)].symbol(), "│", "the pane's border at offset {}", g.x_off);
+            // The row numbers' last column is a blank, never the second half of a character.
+            assert_eq!(buf[(g.gutter_x.1 - 1, y)].symbol(), " ");
+        }
+        if step == 1 {
+            assert_eq!(g.x_off, 4);
+            let y = g.data_y;
+            assert_eq!(buf[(g.gutter_x.1, y)].symbol(), " ", "the first syllable cut: a blank");
+            assert_eq!(buf[(g.gutter_x.1 + 1, y)].symbol(), "\u{AC01}");
+        }
+        wheel(&mut h, MouseEventKind::ScrollRight, KeyModifiers::NONE);
+    }
+}

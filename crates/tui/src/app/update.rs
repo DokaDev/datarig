@@ -4,7 +4,7 @@
 use super::explorer::RowKind;
 use super::*;
 use crate::widgets::editor::{MarkNotice, RegProblem, SearchNotice};
-use crate::widgets::grid::Shape;
+use crate::widgets::grid::{SIDE_STEP, Shape};
 use crate::widgets::tree::Reveal;
 
 impl App {
@@ -737,7 +737,7 @@ impl App {
         let inside = |r: Rect| x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height;
         let l = self.layout;
         match m.kind {
-            // Sideways (a trackpad, a tilting wheel): the grid's columns.
+            // Sideways (a trackpad, a tilting wheel): the grid's view, a few characters an event.
             MouseEventKind::ScrollLeft | MouseEventKind::ScrollRight if inside(l.results) => {
                 let d = if m.kind == MouseEventKind::ScrollRight { 1 } else { -1 };
                 if self.plan_shown() {
@@ -745,7 +745,7 @@ impl App {
                 } else if self.chart_shown() {
                     self.chart_scroll(d);
                 } else {
-                    self.scroll_grid(0, d);
+                    self.scroll_grid(0, d * SIDE_STEP as isize);
                 }
             }
             MouseEventKind::ScrollDown | MouseEventKind::ScrollUp => {
@@ -766,8 +766,8 @@ impl App {
                 } else if inside(l.results) && self.chart_shown() {
                     self.chart_scroll(d);
                 } else if inside(l.results) && m.modifiers.contains(KeyModifiers::SHIFT) {
-                    // Shift+wheel: the columns, one a notch.
-                    self.scroll_grid(0, d.signum());
+                    // Shift+wheel: sideways, as a horizontal wheel.
+                    self.scroll_grid(0, d.signum() * SIDE_STEP as isize);
                 } else if inside(l.results) {
                     self.scroll_grid(d, 0);
                     // A drag goes on: the selection follows the rows that came under the
@@ -860,17 +860,16 @@ impl App {
     }
 
     /// The wheel over the grid (as DataGrip and a browser): the view scrolls `rows`
-    /// rows and `cols` columns within the page; the selected cell stays on its row, also off
-    /// screen, until a key or a click moves it. Nothing is fetched (pages are explicit).
-    fn scroll_grid(&mut self, rows: isize, cols: isize) {
+    /// rows and `chars` characters within the page; the selected cell stays on its row, also
+    /// off screen, until a key or a click moves it. Nothing is fetched (pages are explicit).
+    fn scroll_grid(&mut self, rows: isize, chars: isize) {
         let t = self.tabs.active_mut();
         if let Results::Rows(rs) = &t.results {
-            let (total, ncols) = (rs.rows.len(), rs.columns.len());
-            let was = (t.grid.top, t.grid.left);
-            t.grid.scroll(rows, cols, total, ncols);
+            let was = (t.grid.top, t.grid.x_off);
+            t.grid.scroll(rows, chars, rs.rows.len());
             // The cells moved under the pointer: the one it lit is not under it any more (the
             // frame keeps the scrolled view, so it cannot tell).
-            if (t.grid.top, t.grid.left) != was && matches!(self.pointer_on, Some(hover::PointerOn::Cell(..))) {
+            if (t.grid.top, t.grid.x_off) != was && matches!(self.pointer_on, Some(hover::PointerOn::Cell(..))) {
                 self.pointer_on = None;
             }
         }
@@ -1044,7 +1043,13 @@ impl App {
                 let t = self.tabs.active_mut();
                 let Results::Rows(rs) = &t.results else { return };
                 let (total, cols) = (rs.rows.len(), rs.columns.len());
-                let (row, col) = t.grid.drag_target(x, y, total, cols);
+                let (row, mut col) = t.grid.drag_target(x, y, total, cols);
+                // Past the left or right edge the view moves a few characters that way.
+                if shape != Shape::Rows
+                    && let Some(c) = t.grid.drag_edge(x)
+                {
+                    col = c;
+                }
                 // Whole rows follow the pointer's row only, whole columns its column only.
                 let to = match shape {
                     Shape::Cells => (row, col),

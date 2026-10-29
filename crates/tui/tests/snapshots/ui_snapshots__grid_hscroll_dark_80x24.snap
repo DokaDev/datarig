@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/ui_snapshots.rs
+expression: t.backend()
+---
+"╭ Explorer ────────────╮ 1 console 1 ×                                          "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1       ││ local-pg / datarig  127.0.0.1:55432                  │"
+"│  ▾ ●   local-pg      ││  1 -- datarig 🐘  Ctrl+E: run the statement under the│" Hidden by multi-width symbols: [(41, " ")]
+"│    ▾ datarig default ││  2▎SELECT * FROM shop.users WHERE id <= 8;  ✓ 8 rows…│"
+"│      ▸ analytics     ││  3                                                   │"
+"│      ▸ public        ││  4 SELECT u.name, o.status, o.total_amount           │"
+"│      ▸ shop          ││  5 FROM shop.orders o                                │"
+"│                      ││  6 JOIN shop.users u ON u.id = o.user_id             │"
+"│                      │╰──────────────────────────────────────────────────────╯"
+"│                      │╭ Results · 8 rows ────────────╮╭ Cell [Row] · I ──────╮"
+"│                      ││ [Result 1]  Chart  Messages  ││ id: 2                │"
+"│                      ││   e                 │ nicknam││ name: 林美玲         │" Hidden by multi-width symbols: [(65, " "), (67, " "), (69, " ")]
+"│                      ││   t                 │ text   ││ nickname: NULL       │"
+"│                      ││ 1  文               │ 大文🐘 ││ address: 高雄市前鎮… │" Hidden by multi-width symbols: [(30, " "), (49, " "), (51, " "), (53, " "), (68, " "), (70, " "), (72, " "), (74, " "), (76, " ")]
+"│                      ││ 2  玲               │ NULL   ││ profile: {}          │" Hidden by multi-width symbols: [(30, " ")]
+"│                      ││ 3  明               │ 👨‍👩‍👧‍👦 fami││                      │" Hidden by multi-width symbols: [(30, " "), (49, " ")]
+"│                      ││ 4 ji テスト         │ 🔥🚀✨ ││                      │" Hidden by multi-width symbols: [(32, " "), (34, " "), (36, " "), (49, " "), (51, " "), (53, " ")]
+"│                      ││ 5  太郎             │ やまだ ││                      │" Hidden by multi-width symbols: [(30, " "), (32, " "), (49, " "), (51, " "), (53, " ")]
+"│                      ││ 6  明               │ NULL   ││                      │" Hidden by multi-width symbols: [(30, " ")]
+"│                      ││ 7 in ASCII User     │ ascii_o││                      │"
+"│                      ││ 8   ＡＢＣ 半角 ｱｲｳ │ é combi││                      │" Hidden by multi-width symbols: [(31, " "), (33, " "), (35, " "), (38, " "), (40, " ")]
+"╰──────────────────────╯╰──────────────────────────────╯╰──────────────────────╯"
+" NORMAL  local-pg │ Selecting: move to extend · y copies · Esc cancels       EN "

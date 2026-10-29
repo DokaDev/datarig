@@ -16,7 +16,7 @@ expression: backend
 "│                      ││ [Result 1]  Chart  Messages  ││ profile              │"
 "│                      ││   │ profile                  ││ jsonb · 37 characters│"
 "│                      ││   │ jsonb                    ││                      │"
-"│                      ││ 1 │ {"lang": "ko", "tags": […││ {                    │"
+"│                      ││ 1 │ {"lang": "ko", "tags": ["││ {                    │"
 "│                      ││ 2 │ {}                       ││   "lang": "ko",      │"
 "│                      ││ 3 │ {"vip": true, "level": 7}││   "tags": [          │"
 "│                      ││ 4 │ {"flags": ["🇰🇷", "🇺🇸"]}  ││     "dev",           │" Hidden by multi-width symbols: [(43, " "), (49, " ")]

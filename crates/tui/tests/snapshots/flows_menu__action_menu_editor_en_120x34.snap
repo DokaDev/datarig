@@ -26,8 +26,8 @@ expression: "h.draw(120, 34).backend()"
 "│                            ││ │  Toggle pane zoom                                                            Space z │"
 "│                            ││ │  Toggle explorer                                                             Space b │"
 "│                            ││ ╰──────────────────────────────────────────────────────────────────────────────────────╯"
-"│                            ││ 7 │    7 │ Plain ASCII User     │ ascii_only  │ 16…││                                  │"
-"│                            ││ 8 │    8 │ 全角 ＡＢＣ 半角 ｱｲｳ │ é combining │ タ…││                                  │" Hidden by multi-width symbols: [(44, " "), (46, " "), (49, " "), (51, " "), (53, " "), (56, " "), (58, " "), (81, " ")]
+"│                            ││ 7 │    7 │ Plain ASCII User     │ ascii_only  │ 160││                                  │"
+"│                            ││ 8 │    8 │ 全角 ＡＢＣ 半角 ｱｲｳ │ é combining │ タ ││                                  │" Hidden by multi-width symbols: [(44, " "), (46, " "), (49, " "), (51, " "), (53, " "), (56, " "), (58, " "), (81, " ")]
 "│                            ││                                                    ││                                  │"
 "│                            ││                                                    ││                                  │"
 "│                            ││                                                    ││                                  │"

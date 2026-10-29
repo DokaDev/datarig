@@ -22,11 +22,11 @@ expression: backend
 "│                                      │╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯"
 "│                                      │╭ Results · 3 rows ────────────────────────────────────────────────────╮╭ Cell [Row] · I ──────────────────────────────╮"
 "│                                      ││ [Result 1]  Chart  Messages                                      H/L ││ PK id: 1                                     │"
-"│                                      ││   │ PK id │ FK user_id │ UQ email           │ name       │ PK FK ord…││ FK user_id: 1                                │"
+"│                                      ││   │ PK id │ FK user_id │ UQ email           │ name       │ PK FK orde││ FK user_id: 1                                │"
 "│                                      ││   │ int8  │ int8       │ text               │ text       │ int8      ││ UQ email: user01@example.com                 │"
-"│                                      ││ 1 │     1 │          1 │ user01@example.com │ ユーザー 1 │          1││ name: ユーザー 1                             │" Hidden by multi-width symbols: [(89, " "), (91, " "), (93, " "), (95, " "), (121, " "), (123, " "), (125, " "), (127, " ")]
-"│                                      ││ 2 │     2 │          1 │ user02@example.com │ ユーザー 2 │          2││ PK FK order_id: 1                            │" Hidden by multi-width symbols: [(89, " "), (91, " "), (93, " "), (95, " ")]
-"│                                      ││ 3 │     3 │          1 │ user03@example.com │ ユーザー 3 │          3││ PK line_no: 1                                │" Hidden by multi-width symbols: [(89, " "), (91, " "), (93, " "), (95, " ")]
+"│                                      ││ 1 │     1 │          1 │ user01@example.com │ ユーザー 1 │           ││ name: ユーザー 1                             │" Hidden by multi-width symbols: [(89, " "), (91, " "), (93, " "), (95, " "), (121, " "), (123, " "), (125, " "), (127, " ")]
+"│                                      ││ 2 │     2 │          1 │ user02@example.com │ ユーザー 2 │           ││ PK FK order_id: 1                            │" Hidden by multi-width symbols: [(89, " "), (91, " "), (93, " "), (95, " ")]
+"│                                      ││ 3 │     3 │          1 │ user03@example.com │ ユーザー 3 │           ││ PK line_no: 1                                │" Hidden by multi-width symbols: [(89, " "), (91, " "), (93, " "), (95, " ")]
 "│                                      ││                                                                      ││ FK product_id: 7                             │"
 "│                                      ││                                                                      ││ doubled: 2                                   │"
 "│                                      ││                                                                      ││                                              │"

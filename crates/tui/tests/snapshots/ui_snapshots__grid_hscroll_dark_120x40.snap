@@ -1,0 +1,44 @@
+---
+source: crates/tui/tests/ui_snapshots.rs
+expression: t.backend()
+---
+"╭ Explorer ──────────────────╮ 1 console 1 ×                                                                            "
+"│  ＋ New connection         │╭ Query · console 1 ─────────────────────────────────────────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1             ││ local-pg / datarig  127.0.0.1:55432                        Space c s switch connection │"
+"│  ▾ ●   local-pg            ││  1 -- datarig 🐘  Ctrl+E: run the statement under the cursor                           │" Hidden by multi-width symbols: [(47, " ")]
+"│    ▾ datarig default       ││  2▎SELECT * FROM shop.users WHERE id <= 8;  ✓ 8 rows · 12ms · 14:03                    │"
+"│      ▸ analytics           ││  3                                                                                     │"
+"│      ▸ public              ││  4 SELECT u.name, o.status, o.total_amount                                             │"
+"│      ▸ shop                ││  5 FROM shop.orders o                                                                  │"
+"│                            ││  6 JOIN shop.users u ON u.id = o.user_id                                               │"
+"│                            ││  7 WHERE o.status = 'paid';                                                            │"
+"│                            ││  8                                                                                     │"
+"│                            ││  9 SELECT * FROM analytics.events;                                                     │"
+"│                            ││ 10                                                                                     │"
+"│                            ││ 11 SELECT * FROM analytics.events ORDER BY created_at DESC;                            │"
+"│                            ││ 12                                                                                     │"
+"│                            │╰────────────────────────────────────────────────────────────────────────────────────────╯"
+"│                            │╭ Results · 8 rows ──────────────────────────────────╮╭ Cell [Row] · I ──────────────────╮"
+"│                            ││ [Result 1]  Chart  Messages                    H/L ││ id: 2                            │"
+"│                            ││   e                 │ nickname    │ address        ││ name: 林美玲                     │" Hidden by multi-width symbols: [(93, " "), (95, " "), (97, " ")]
+"│                            ││   t                 │ text        │ text           ││ nickname: NULL                   │"
+"│                            ││ 1  文               │ 大文🐘      │ 臺北市信義區信 ││ address: 高雄市前鎮區成功二路 55…│" Hidden by multi-width symbols: [(36, " "), (55, " "), (57, " "), (59, " "), (69, " "), (71, " "), (73, " "), (75, " "), (77, " "), (79, " "), (81, " "), (96, " "), (98, " "), (100, " "), (102, " "), (104, " "), (106, " "), (108, " "), (110, " "), (112, " "), (114, " ")]
+"│                            ││ 2  玲               │ NULL        │ 高雄市前鎮區成 ││ profile: {}                      │" Hidden by multi-width symbols: [(36, " "), (69, " "), (71, " "), (73, " "), (75, " "), (77, " "), (79, " "), (81, " ")]
+"│                            ││ 3  明               │ 👨‍👩‍👧‍👦 family   │ NULL           ││                                  │" Hidden by multi-width symbols: [(36, " "), (55, " ")]
+"│                            ││ 4 ji テスト         │ 🔥🚀✨🎉    │ 沖縄県那覇市お ││                                  │" Hidden by multi-width symbols: [(38, " "), (40, " "), (42, " "), (55, " "), (57, " "), (59, " "), (61, " "), (69, " "), (71, " "), (73, " "), (75, " "), (77, " "), (79, " "), (81, " ")]
+"│                            ││ 5  太郎             │ やまだ      │ 東京都渋谷区道 ││                                  │" Hidden by multi-width symbols: [(36, " "), (38, " "), (55, " "), (57, " "), (59, " "), (69, " "), (71, " "), (73, " "), (75, " "), (77, " "), (79, " "), (81, " ")]
+"│                            ││ 6  明               │ NULL        │ 北京市海淀区中 ││                                  │" Hidden by multi-width symbols: [(36, " "), (69, " "), (71, " "), (73, " "), (75, " "), (77, " "), (79, " "), (81, " ")]
+"│                            ││ 7 in ASCII User     │ ascii_only  │ 1600 Amphitheat││                                  │"
+"│                            ││ 8   ＡＢＣ 半角 ｱｲｳ │ é combining │ タブ→入り住所 (││                                  │" Hidden by multi-width symbols: [(37, " "), (39, " "), (41, " "), (44, " "), (46, " "), (69, " "), (71, " "), (74, " "), (76, " "), (78, " "), (80, " ")]
+"│                            ││                                                    ││                                  │"
+"│                            ││                                                    ││                                  │"
+"│                            ││                                                    ││                                  │"
+"│                            ││                                                    ││                                  │"
+"│                            ││                                                    ││                                  │"
+"│                            ││                                                    ││                                  │"
+"│                            ││                                                    ││                                  │"
+"│                            ││                                                    ││                                  │"
+"│                            ││                                                    ││                                  │"
+"│                            ││                                                    ││                                  │"
+"╰────────────────────────────╯╰────────────────────────────────────────────────────╯╰──────────────────────────────────╯"
+" NORMAL  local-pg │ Selecting: move to extend · y copies · Esc cancels      │ Enter view cell · n next page · y copy EN "

@@ -1802,6 +1802,44 @@ fn grid_search_prompt_and_matches_dark_terminal_sizes() {
     }
 }
 
+/// The grid scrolled sideways by twelve characters (three wheel events) with two whole rows
+/// selected: the first column under the left edge, the name column cut in the middle of a wide
+/// character (a blank there), the range's background on the parts on screen, the headers
+/// scrolled with the rows, the column at the right edge cut with no `…`.
+#[test]
+fn grid_scrolled_sideways_dark_terminal_sizes() {
+    use ratatui::crossterm::event::MouseEventKind;
+    for (name, th) in [("dark", &theme::DARK), ("terminal", &theme::TERMINAL)] {
+        for (w, hh) in [(80, 24), (120, 40)] {
+            let mut h = with_edge_results(Lang::En);
+            h.app.theme = std::sync::Arc::new(th.clone());
+            h.key(KeyCode::Tab);
+            h.keys("Vj");
+            h.draw(w, hh);
+            let r = h.app.layout.results;
+            for _ in 0..3 {
+                h.mouse(MouseEventKind::ScrollRight, r.x + r.width / 2, r.y + r.height / 2);
+            }
+            let t = h.draw(w, hh);
+            insta::assert_snapshot!(format!("grid_hscroll_{name}_{w}x{hh}"), t.backend());
+            let g = &h.app.tab().grid;
+            let buf = t.backend().buffer();
+            let (x, y) = (g.gutter_x.1, g.data_y);
+            assert_eq!(g.x_off, 12, "{name}");
+            // Row 1's name: the second half of its second character at the edge, a blank.
+            assert_eq!(buf[(x, y)].symbol(), " ", "{name}");
+            assert_eq!(buf[(x + 1, y)].symbol(), "\u{6587}", "{name}");
+            // The selected rows' cells on the range's background from the edge on, the next
+            // row not.
+            if let Some(bg) = th.range.bg {
+                assert_eq!(buf[(x, y)].bg, bg, "{name}: the range");
+                assert_eq!(buf[(x, y + 1)].bg, bg, "{name}: the range");
+                assert_ne!(buf[(x, y + 2)].bg, bg, "{name}: not selected");
+            }
+        }
+    }
+}
+
 /// The settings screen: categories, current values and what they mean, the selected
 /// setting's description; `icons` shows a preview of the glyphs and the hint (icons on and
 /// off), the theme the terminal's background and a preview, the clipboard its tmux note, the macOS

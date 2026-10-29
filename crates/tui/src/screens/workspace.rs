@@ -1147,7 +1147,7 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
     // result), the cell under the pointer is not there any more.
     let grid_was = |t: &crate::app::Tab| {
         let id = if let Results::Rows(rs) = &t.results { Some(rs.id) } else { None };
-        (id, t.grid.top, t.grid.data_y, t.grid.hit_cols.clone())
+        (id, t.grid.top, t.grid.x_off, t.grid.data_y, t.grid.hit_cols.clone())
     };
     let before = grid_was(app.tab());
     let t = app.tabs.active_mut();

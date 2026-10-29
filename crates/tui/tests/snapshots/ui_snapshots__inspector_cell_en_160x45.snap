@@ -22,16 +22,16 @@ expression: backend
 "│                                      │╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯"
 "│                                      │╭ Results · 8 rows ────────────────────────────────────────────────────╮╭ [Cell] Row · I ──────────────────────────────╮"
 "│                                      ││ [Result 1]  Chart  Messages                                      H/L ││ profile                                      │"
-"│                                      ││   │ profile                                                          ││ jsonb · 37 characters                        │"
-"│                                      ││   │ jsonb                                                            ││                                              │"
-"│                                      ││ 1 │ {"lang": "ko", "tags": ["dev", "db"]}                            ││ {                                            │"
-"│                                      ││ 2 │ {}                                                               ││   "lang": "ko",                              │"
-"│                                      ││ 3 │ {"vip": true, "level": 7}                                        ││   "tags": [                                  │"
-"│                                      ││ 4 │ {"flags": ["🇰🇷", "🇺🇸"]}                                          ││     "dev",                                   │" Hidden by multi-width symbols: [(59, " "), (65, " ")]
-"│                                      ││ 5 │ {"lang": "ja"}                                                   ││     "db"                                     │"
-"│                                      ││ 6 │ {"lang": "zh"}                                                   ││   ]                                          │"
-"│                                      ││ 7 │ {"lang": "en"}                                                   ││ }                                            │"
-"│                                      ││ 8 │ {"multiline": true}                                              ││                                              │"
+"│                                      ││                              │ profile                               ││ jsonb · 37 characters                        │"
+"│                                      ││                              │ jsonb                                 ││                                              │"
+"│                                      ││ 1 義路五段7號, 台北101大樓 … │ {"lang": "ko", "tags": ["dev", "db"]} ││ {                                            │" Hidden by multi-width symbols: [(45, " "), (47, " "), (49, " "), (51, " "), (54, " "), (58, " "), (60, " "), (65, " "), (67, " ")]
+"│                                      ││ 2 功二路 55號                │ {}                                    ││   "lang": "ko",                              │" Hidden by multi-width symbols: [(45, " "), (47, " "), (49, " "), (54, " ")]
+"│                                      ││ 3                            │ {"vip": true, "level": 7}             ││   "tags": [                                  │"
+"│                                      ││ 4 もろまち 242 🏝️            │ {"flags": ["🇰🇷", "🇺🇸"]}               ││     "dev",                                   │" Hidden by multi-width symbols: [(45, " "), (47, " "), (49, " "), (51, " "), (58, " "), (86, " "), (92, " ")]
+"│                                      ││ 5 玄坂1-2-3                  │ {"lang": "ja"}                        ││     "db"                                     │" Hidden by multi-width symbols: [(45, " "), (47, " ")]
+"│                                      ││ 6 关村大街1号                │ {"lang": "zh"}                        ││   ]                                          │" Hidden by multi-width symbols: [(45, " "), (47, " "), (49, " "), (51, " "), (54, " ")]
+"│                                      ││ 7 tre Pkwy, Mountain View, … │ {"lang": "en"}                        ││ }                                            │"
+"│                                      ││ 8 (tab inside)               │ {"multiline": true}                   ││                                              │"
 "│                                      ││                                                                      ││                                              │"
 "│                                      ││                                                                      ││                                              │"
 "│                                      ││                                                                      ││                                              │"

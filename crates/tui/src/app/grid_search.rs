@@ -58,7 +58,7 @@ struct Spot {
     row: usize,
     col: usize,
     top: usize,
-    left: usize,
+    x_off: usize,
     anchor: Option<(usize, usize)>,
     shape: crate::widgets::grid::Shape,
     detached: bool,
@@ -71,7 +71,7 @@ impl Spot {
             row: g.row,
             col: g.col,
             top: g.top,
-            left: g.left,
+            x_off: g.x_off,
             anchor: g.anchor,
             shape: g.shape,
             detached: g.detached,
@@ -79,7 +79,7 @@ impl Spot {
     }
 
     fn restore(self, g: &mut GridState) {
-        (g.page, g.row, g.col, g.top, g.left) = (self.page, self.row, self.col, self.top, self.left);
+        (g.page, g.row, g.col, g.top, g.x_off) = (self.page, self.row, self.col, self.top, self.x_off);
         (g.anchor, g.shape, g.detached) = (self.anchor, self.shape, self.detached);
     }
 }
