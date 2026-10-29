@@ -1148,6 +1148,8 @@
 "action.grid.search_prev" = "그리드 검색: 이전 일치"
 "action.grid.search_clear" = "그리드 검색: 끝내기 (n은 다시 다음 페이지)"
 "grid.search.more" = "읽은 {count}행 중 · 서버에 행이 더 있음 ({key}: 다음 페이지)"
+"grid.search.more_short" = "서버에 더 있음"
+"grid.search.no_room" = "그리드 아래에 검색 줄을 둘 자리가 없음: 결과 창을 키우세요 ({key}로 확대)"
 "command.copy" = "선택한 범위나 가져온 모든 행을 다른 형식으로 복사 (:copy <형식> [selection|all])"
 "commands.arg.format" = "<형식>"
 "hint.copy" = "복사"

@@ -22,6 +22,7 @@ use crate::widgets::text_input::InputResult;
 use datarig_core::fault::Fault;
 use datarig_core::results::RowsSnapshot;
 use regex::Regex;
+use std::ops::Range;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 
@@ -45,7 +46,8 @@ pub enum SearchAction {
     Clear,
 }
 
-/// Where the cursor and the view were: the prompt's `Esc` goes back there.
+/// Where the cursor and the view were, and the range selected then: the prompt's `Esc` goes
+/// back there.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Spot {
     page: usize,
@@ -53,16 +55,28 @@ struct Spot {
     col: usize,
     top: usize,
     left: usize,
+    anchor: Option<(usize, usize)>,
+    shape: crate::widgets::grid::Shape,
+    detached: bool,
 }
 
 impl Spot {
     fn of(g: &GridState) -> Self {
-        Self { page: g.page, row: g.row, col: g.col, top: g.top, left: g.left }
+        Self {
+            page: g.page,
+            row: g.row,
+            col: g.col,
+            top: g.top,
+            left: g.left,
+            anchor: g.anchor,
+            shape: g.shape,
+            detached: g.detached,
+        }
     }
 
     fn restore(self, g: &mut GridState) {
         (g.page, g.row, g.col, g.top, g.left) = (self.page, self.row, self.col, self.top, self.left);
-        g.detached = false;
+        (g.anchor, g.shape, g.detached) = (self.anchor, self.shape, self.detached);
     }
 }
 
@@ -112,11 +126,15 @@ struct Active {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Purpose {
-    /// The pattern being typed: the cursor previews its first match, nothing is said.
+    /// The pattern being typed: the cursor previews its first match, nothing is said; every
+    /// match is found.
     Preview,
-    /// `Enter`, `n` or `N`: the cursor goes to the match; going around an end or finding
-    /// nothing is said.
+    /// `Enter`, or `n`/`N` once rows came since the matches were found: the cursor goes to the
+    /// match (going around an end or finding nothing is said) and every match is found.
     Search,
+    /// `n`/`N` where the matches found cannot tell (past the cap, or while they are still
+    /// being found): only the next match from the cursor is looked for.
+    Seek,
 }
 
 /// A job out on a worker.
@@ -124,8 +142,13 @@ struct Running {
     id: u64,
     purpose: Purpose,
     result: u64,
+    /// The rows (and columns) it reads: its matches are of these.
+    rows: usize,
+    ncols: usize,
     forward: bool,
     pattern: String,
+    /// The cursor when it started: its first match moves only a cursor that is still there.
+    from: (usize, usize),
     /// Its first match came.
     found_one: bool,
     stop: Arc<AtomicBool>,
@@ -142,7 +165,10 @@ impl Drop for Running {
 pub struct GridFind {
     prompt: Option<Prompt>,
     active: Option<Active>,
+    /// The job that finds every match (of the prompt's pattern or of the search that is on).
     job: Option<Running>,
+    /// A job of `n`/`N` that looks for the next match only, beside it.
+    seek: Option<Running>,
 }
 
 impl GridFind {
@@ -151,9 +177,15 @@ impl GridFind {
         self.prompt.is_some()
     }
 
-    /// End everything: the prompt (the cursor stays), the search, its job.
+    /// End everything: the prompt (the cursor stays), the search, its jobs.
     pub fn end(&mut self) {
         *self = Self::default();
+    }
+
+    /// Stop the jobs out (their answers are dropped).
+    fn stop_jobs(&mut self) {
+        self.job = None;
+        self.seek = None;
     }
 
     /// The matches to highlight in result `rs`: those of the pattern typed so far while the
@@ -243,6 +275,10 @@ pub struct GridJobs {
     last: Option<String>,
     /// Cells the frames looked up for the highlight since the work was last taken.
     lookups: usize,
+    /// Jobs that read every row for every match, since the app started.
+    scans: u64,
+    /// The most matches kept (tests make it small); [`MAX_MATCHES`] when not set.
+    cap: Option<usize>,
 }
 
 /// The index of cell (row, col) of a result of `ncols` columns.
@@ -328,6 +364,95 @@ pub fn scan(
     Ok(Some((cells, capped)))
 }
 
+/// The first match from cell `origin` in the search's direction, without collecting the
+/// others: forward, the cells after it to the end, then from the start up to it (`wrapped`);
+/// backward, the cells before it back to the start, then from the end back to it. The rows are
+/// read a chunk at a time from the cursor's row on (backward: chunks from the end of each part
+/// back). `Ok(None)` when `stop` was set, `Ok(Some(None))` when nothing matches. NULL never
+/// matches.
+pub fn seek(
+    snap: &RowsSnapshot,
+    ncols: usize,
+    re: &Regex,
+    origin: CellIdx,
+    forward: bool,
+    stop: &AtomicBool,
+) -> Result<Option<Option<(CellIdx, bool)>>, Fault> {
+    let len = snap.len();
+    if len == 0 || ncols == 0 {
+        return Ok(Some(None));
+    }
+    let orow = ((origin / ncols as CellIdx) as usize).min(len - 1);
+    let find = |range: Range<usize>, last: bool, keep: &dyn Fn(CellIdx) -> bool| {
+        find_in(snap, ncols, re, stop, range, last, keep)
+    };
+    let first =
+        if forward { find(orow..len, false, &|c| c > origin)? } else { find(0..orow + 1, true, &|c| c < origin)? };
+    match first {
+        None => Ok(None),
+        Some(Some(c)) => Ok(Some(Some((c, false)))),
+        Some(None) => {
+            let around = if forward {
+                find(0..orow + 1, false, &|c| c <= origin)?
+            } else {
+                find(orow..len, true, &|c| c >= origin)?
+            };
+            Ok(around.map(|f| f.map(|c| (c, true))))
+        }
+    }
+}
+
+/// The first matching cell of rows `range` that `keep` takes, or the last one (`last`: the
+/// rows are read a chunk at a time from the end of the range back). `Ok(None)` when `stop` was
+/// set.
+fn find_in(
+    snap: &RowsSnapshot,
+    ncols: usize,
+    re: &Regex,
+    stop: &AtomicBool,
+    range: Range<usize>,
+    last: bool,
+    keep: &dyn Fn(CellIdx) -> bool,
+) -> Result<Option<Option<CellIdx>>, Fault> {
+    // One part of the range: its first (or last) cell kept, and whether it was told to stop.
+    let part = |range: Range<usize>| -> Result<(Option<CellIdx>, bool), Fault> {
+        let (mut found, mut stopped) = (None, false);
+        snap.for_each_chunk_in(range, CHUNK, |at, rows| {
+            if stop.load(Ordering::Relaxed) {
+                stopped = true;
+                return false;
+            }
+            for (i, r) in rows.iter().enumerate() {
+                for (c, v) in r.iter().take(ncols).enumerate() {
+                    let at = cell(at + i, c, ncols);
+                    if v.as_deref().is_some_and(|v| re.is_match(v)) && keep(at) {
+                        found = Some(at);
+                        if !last {
+                            return false;
+                        }
+                    }
+                }
+            }
+            true
+        })?;
+        Ok((found, stopped))
+    };
+    if !last {
+        let (found, stopped) = part(range)?;
+        return Ok((!stopped).then_some(found));
+    }
+    let mut end = range.end;
+    while end > range.start {
+        let start = end.saturating_sub(CHUNK).max(range.start);
+        match part(start..end)? {
+            (_, true) => return Ok(None),
+            (Some(c), _) => return Ok(Some(Some(c))),
+            (None, _) => end = start,
+        }
+    }
+    Ok(Some(None))
+}
+
 /// Where `n` or `N` goes from cell `at` among `cells` (sorted): the next match in the
 /// direction (`wrapped`: around an end), `Some(None)` when there is none at all, `None` when
 /// the list cannot tell (it is capped and the answer may lie past its last cell).
@@ -383,8 +508,9 @@ pub struct Strip {
     /// The cursor's match among the matches: `3/120`, `-/120` off a match, `…` while they are
     /// counted, `1,000,000+` past the cap.
     pub count: String,
-    /// What is not searched: the rows still on the server (left out where it does not fit).
-    pub note: Option<String>,
+    /// What is not searched (the rows still on the server), the longest first: the first that
+    /// fits is drawn, none where none does.
+    pub notes: Vec<String>,
 }
 
 impl App {
@@ -419,10 +545,17 @@ impl App {
     pub(super) fn grid_search_action(&mut self, s: SearchAction) {
         match s {
             SearchAction::Open { forward } => {
+                // The prompt is drawn on the line under the grid: none where the grid has no
+                // line to spare (it would take keys unseen).
+                let room = self.layout.grid_area;
+                if room.width > 0 && room.height <= 3 {
+                    let key = self.key_for(Action::Panel(action::PanelAction::Maximize), Ctx::Grid);
+                    return self.flash(Notice::new(Msg::GridSearchNoRoom { key }, Level::Info));
+                }
                 let t = self.tabs.active_mut();
                 let Some(rs) = shown_rows(t) else { return };
                 let result = rs.id;
-                t.find.job = None;
+                t.find.stop_jobs();
                 t.find.prompt = Some(Prompt {
                     input: TextInput::default(),
                     forward,
@@ -436,8 +569,10 @@ impl App {
         }
     }
 
-    /// `n` (`same`) or `N`: the next match from the cursor, from the matches found when no row
-    /// came since (and the list can tell), else by a job over the rows as they are now.
+    /// `n` (`same`) or `N`: the next match from the cursor. From the matches found while no
+    /// row came since and the list can tell; past the cap of the list, or while every match is
+    /// still being found for these rows, a job looks for the next one only (the one finding them
+    /// goes on); after rows came, a job finds every match again from the cursor.
     fn grid_search_next(&mut self, same: bool) {
         let t = self.tabs.active_mut();
         let Some(rs) = shown_rows(t) else { return };
@@ -448,7 +583,14 @@ impl App {
             return;
         }
         let at = cell(t.grid.row, t.grid.col, ncols);
-        let known = a.found.as_ref().filter(|m| m.current(rs)).and_then(|m| step(&m.cells, m.capped, at, forward));
+        let current = a.found.as_ref().filter(|m| m.current(rs));
+        let known = current.and_then(|m| step(&m.cells, m.capped, at, forward));
+        let finding = t
+            .find
+            .job
+            .as_ref()
+            .is_some_and(|j| j.purpose == Purpose::Search && j.result == rs.id && j.rows == rs.rows.len());
+        let seek = current.is_some() || finding;
         match known {
             Some(Some((to, wrapped))) => {
                 goto(&mut t.grid, to, ncols);
@@ -457,18 +599,22 @@ impl App {
                 }
             }
             Some(None) => {
+                // Nothing matches: the search ends (`n` is the next page again).
                 let pattern = a.re.as_str().to_string();
+                t.find.end();
                 self.flash(super::update::search_notice(SearchNotice::NotFound(pattern)));
             }
             None => {
                 let re = a.re.clone();
-                self.start_grid_job(Purpose::Search, re, forward, at);
+                let purpose = if seek { Purpose::Seek } else { Purpose::Search };
+                self.start_grid_job(purpose, re, forward, at);
             }
         }
     }
 
     /// A key while the prompt is open: `Enter` searches, `Esc` (or `Backspace` on an empty
-    /// pattern) goes back to where the cursor was, any other key edits the pattern.
+    /// pattern) goes back to where the cursor was, `Ctrl+W` deletes the word before the cursor,
+    /// any other key edits the pattern.
     pub(super) fn grid_prompt_key(&mut self, key: KeyEvent) {
         let Some(p) = self.tabs.active_mut().find.prompt.as_mut() else { return };
         match key.code {
@@ -476,7 +622,9 @@ impl App {
             KeyCode::Backspace if p.input.text().is_empty() => self.close_grid_prompt(),
             KeyCode::Enter => self.grid_prompt_enter(),
             _ => {
-                if p.input.handle_key(&key) == InputResult::Changed {
+                let ctrl_w = key.code == KeyCode::Char('w') && key.modifiers.contains(KeyModifiers::CONTROL);
+                let r = if ctrl_w { p.input.delete_word_back() } else { p.input.handle_key(&key) };
+                if r == InputResult::Changed {
                     self.grid_preview();
                 }
             }
@@ -496,7 +644,7 @@ impl App {
     pub(super) fn close_grid_prompt(&mut self) {
         let t = self.tabs.active_mut();
         if let Some(p) = t.find.prompt.take() {
-            t.find.job = None;
+            t.find.stop_jobs();
             p.origin.restore(&mut t.grid);
         }
     }
@@ -507,6 +655,7 @@ impl App {
         let t = self.tabs.active_mut();
         let Some(p) = t.find.prompt.as_mut() else { return };
         t.find.job = None;
+        t.find.seek = None;
         p.preview = None;
         p.origin.restore(&mut t.grid);
         let (forward, origin) = (p.forward, p.origin);
@@ -520,7 +669,7 @@ impl App {
     fn grid_prompt_enter(&mut self) {
         let t = self.tabs.active_mut();
         let Some(p) = t.find.prompt.take() else { return };
-        t.find.job = None;
+        t.find.stop_jobs();
         let pattern = match p.input.text() {
             "" => self.grid_jobs.last.clone().ok_or(SearchNotice::NoPrevious),
             s => Ok(s.to_string()),
@@ -548,37 +697,71 @@ impl App {
         }
     }
 
-    /// A job over the rows the active tab's grid shows, as they are now, from cell `origin`.
+    /// A job over the rows the active tab's grid shows, as they are now, from cell `origin`
+    /// (a job that finds every match replaces both jobs; one that seeks, only the other seek).
     fn start_grid_job(&mut self, purpose: Purpose, re: Regex, forward: bool, origin: CellIdx) {
         let out = self.grid_out();
         let tab = self.tab().id;
+        let cap = self.grid_jobs.cap.unwrap_or(MAX_MATCHES);
         let t = self.tabs.active_mut();
-        t.find.job = None;
+        match purpose {
+            Purpose::Seek => t.find.seek = None,
+            _ => t.find.stop_jobs(),
+        }
         let Some(rs) = shown_rows(t) else { return };
-        let (result, ncols) = (rs.id, rs.columns.len());
+        let (result, rows, ncols) = (rs.id, rs.rows.len(), rs.columns.len());
         if ncols == 0 {
             return;
         }
-        let snap = match rs.rows.snapshot(0..rs.rows.len()) {
+        let snap = match rs.rows.snapshot(0..rows) {
             Ok(s) => s,
             Err(f) => return self.results_read_failed(&f),
         };
         self.grid_jobs.next += 1;
         let id = self.grid_jobs.next;
+        if purpose != Purpose::Seek {
+            self.grid_jobs.scans += 1;
+        }
         let stop = Arc::new(AtomicBool::new(false));
         let pattern = re.as_str().to_string();
-        self.tabs.active_mut().find.job =
-            Some(Running { id, purpose, result, forward, pattern, found_one: false, stop: stop.clone() });
+        let t = self.tabs.active_mut();
+        let from = (t.grid.row, t.grid.col);
+        let job =
+            Running { id, purpose, result, rows, ncols, forward, pattern, from, found_one: false, stop: stop.clone() };
+        match purpose {
+            Purpose::Seek => t.find.seek = Some(job),
+            _ => t.find.job = Some(job),
+        }
         if matches!(out, Out::Local(_)) {
             self.grid_jobs.pending.fetch_add(1, Ordering::SeqCst);
         }
         let reply = Reply { out, job: id, tab, done: false };
         std::thread::spawn(move || {
-            let r = scan(&snap, ncols, &re, origin, forward, MAX_MATCHES, &stop, |cell, wrapped| {
-                reply.send(News::First { cell, wrapped })
-            });
+            let first = |cell, wrapped| reply.send(News::First { cell, wrapped });
+            let r = match purpose {
+                Purpose::Seek => seek(&snap, ncols, &re, origin, forward, &stop).map(|found| {
+                    found.map(|f| {
+                        if let Some((cell, wrapped)) = f {
+                            first(cell, wrapped);
+                        }
+                        (Vec::new(), false)
+                    })
+                }),
+                _ => scan(&snap, ncols, &re, origin, forward, cap, &stop, first),
+            };
             reply.done(r);
         });
+    }
+
+    /// Jobs that read every row for every match since the app started (`n` past the cap only
+    /// seeks).
+    pub fn grid_search_scans(&self) -> u64 {
+        self.grid_jobs.scans
+    }
+
+    /// Keep at most `cap` matches (tests; [`MAX_MATCHES`] otherwise).
+    pub fn set_grid_search_cap(&mut self, cap: usize) {
+        self.grid_jobs.cap = Some(cap);
     }
 
     /// Headless (without the event loop's channel): hand the answers of the grid's search jobs
@@ -600,29 +783,37 @@ impl App {
     }
 
     /// An answer of a job: for the tab that waits for it, about the result it still shows;
-    /// any other is dropped.
+    /// any other is dropped. A first match moves the cursor only when it is still where it was
+    /// when the job started.
     pub(super) fn on_grid_search_answer(&mut self, a: Answer) {
         let Some(t) = self.tabs.iter_mut().find(|t| t.id == a.tab) else { return };
-        let Some(result) = t.find.job.as_ref().filter(|j| j.id == a.job).map(|j| j.result) else { return };
-        let Some((rows, ncols)) =
-            shown_rows(t).filter(|rs| rs.id == result).map(|rs| (rs.rows.len(), rs.columns.len()))
-        else {
-            t.find.job = None;
+        let seeking = t.find.seek.as_ref().is_some_and(|j| j.id == a.job);
+        let slot = if seeking { &t.find.seek } else { &t.find.job };
+        let Some(result) = slot.as_ref().filter(|j| j.id == a.job).map(|j| j.result) else { return };
+        if shown_rows(t).is_none_or(|rs| rs.id != result) {
+            match seeking {
+                true => t.find.seek = None,
+                false => t.find.job = None,
+            }
             return;
-        };
-        let Some(job) = t.find.job.as_mut() else { return };
+        }
+        let slot = if seeking { &mut t.find.seek } else { &mut t.find.job };
         let notice = match a.news {
             News::First { cell, wrapped } => {
+                let Some(job) = slot.as_mut() else { return };
                 job.found_one = true;
-                let said = (wrapped && job.purpose == Purpose::Search).then_some(job.forward);
-                goto(&mut t.grid, cell, ncols);
+                if (t.grid.row, t.grid.col) != job.from {
+                    return;
+                }
+                let said = (wrapped && job.purpose != Purpose::Preview).then_some(job.forward);
+                goto(&mut t.grid, cell, job.ncols);
                 said.map(|bottom| SearchNotice::Wrapped { bottom })
             }
             News::Done(r) => {
-                let Some(job) = t.find.job.take() else { return };
+                let Some(job) = slot.take() else { return };
                 match r {
                     Ok(Some((cells, capped))) => {
-                        let m = Matches { result: job.result, rows, ncols, cells, capped };
+                        let m = Matches { result: job.result, rows: job.rows, ncols: job.ncols, cells, capped };
                         match job.purpose {
                             Purpose::Preview => {
                                 if let Some(p) = t.find.prompt.as_mut() {
@@ -634,9 +825,14 @@ impl App {
                                     a.found = Some(m);
                                 }
                             }
+                            Purpose::Seek => {}
                         }
-                        (!job.found_one && job.purpose == Purpose::Search)
-                            .then(|| SearchNotice::NotFound(job.pattern.clone()))
+                        // A search that matches nothing ends (`n` is the next page again).
+                        let none = !job.found_one && job.purpose != Purpose::Preview;
+                        if none {
+                            t.find.end();
+                        }
+                        none.then(|| SearchNotice::NotFound(job.pattern.clone()))
                     }
                     Ok(None) => None,
                     Err(f) => return self.results_read_failed(&f),
@@ -655,8 +851,8 @@ impl App {
             let f = &t.find;
             let bound = f.prompt.as_ref().map(|p| p.result).or(f.active.as_ref().map(|a| a.result));
             let Some(result) = bound else {
-                if f.job.is_some() && shown_rows(t).is_none() {
-                    t.find.job = None;
+                if (f.job.is_some() || f.seek.is_some()) && shown_rows(t).is_none() {
+                    t.find.stop_jobs();
                 }
                 continue;
             };
@@ -692,21 +888,34 @@ impl App {
             }
             None => String::new(),
         };
-        let note = (!count.is_empty() && (typed || pattern.is_some()) && rs.more).then(|| {
-            let key = self
-                .keymap
-                .hint_keys(Action::PageNext, Ctx::GridMatches, self.enhanced_keys)
-                .map(|k| crate::keymap::keys::label(&k))
-                .unwrap_or_default();
-            self.i18n.msg(&Msg::GridSearchMore { count: rs.rows.len() as u64, key }).to_string()
-        });
+        let mut notes = Vec::new();
+        if !count.is_empty() && (typed || pattern.is_some()) && rs.more {
+            // The rows the matches are of (rows may have come since).
+            let read = matches.filter(|m| m.result == rs.id && !counting).map_or(rs.rows.len(), |m| m.rows);
+            let key = self.next_page_key(Ctx::GridMatches);
+            notes.push(self.i18n.msg(&Msg::GridSearchMore { count: read as u64, key }).to_string());
+            notes.push(self.i18n.label(Label::GridSearchMoreShort).to_string());
+        }
         let text = match (&pattern, &t.find.prompt) {
             (Some(p), _) => p.as_str(),
             (None, Some(p)) => p.input.text(),
             _ => "",
         };
         let text_width = crate::text::width(text);
-        Some(Strip { mark: if mark { '/' } else { '?' }, pattern, text_width, count, note })
+        Some(Strip { mark: if mark { '/' } else { '?' }, pattern, text_width, count, notes })
+    }
+
+    /// The key of the next page as `ctx` resolves it (`Space r n` while `n` is the search's).
+    pub(crate) fn next_page_key(&self, ctx: Ctx) -> String {
+        self.keymap
+            .hint_keys(Action::PageNext, ctx, self.enhanced_keys)
+            .map(|k| crate::keymap::keys::label(&k))
+            .unwrap_or_default()
+    }
+
+    /// The grid's key context as it is now: `grid.matches` while a search is on.
+    pub(crate) fn grid_ctx(&self) -> Ctx {
+        if self.grid_search_on() { Ctx::GridMatches } else { Ctx::Grid }
     }
 
     /// Draw the open prompt's input into `area`; where its cursor is.

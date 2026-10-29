@@ -115,3 +115,39 @@ fn a_match_on_another_page_shows_that_page() {
     goto(&mut g, cell(1300, 0, 5), 5);
     assert_eq!((g.page, g.row, g.anchor), (2, 1300, Some((1100, 0))), "the same page keeps a range");
 }
+
+/// The next match from `origin` as [`seek`] finds it.
+fn seeks(snap: &RowsSnapshot, ncols: usize, pattern: &str, origin: CellIdx, forward: bool) -> Option<(CellIdx, bool)> {
+    let re = compile(pattern).unwrap();
+    seek(snap, ncols, &re, origin, forward, &AtomicBool::new(false)).unwrap().unwrap()
+}
+
+#[test]
+fn seeking_finds_the_next_match_from_the_cursor_and_around_the_ends() {
+    // 3,000 rows of 2 columns (more than a chunk): `x` in column 1 of rows 5, 1500 and 2990.
+    let rows: Vec<Vec<Option<String>>> = (0..3_000)
+        .map(|r| vec![None, Some(if [5, 1500, 2990].contains(&r) { "x".into() } else { "y".into() })])
+        .collect();
+    let snap = RowStore::in_memory(rows).snapshot(0..3_000).unwrap();
+    let at = |r: usize| cell(r, 1, 2);
+    assert_eq!(seeks(&snap, 2, "x", at(0), true), Some((at(5), false)));
+    assert_eq!(seeks(&snap, 2, "x", at(5), true), Some((at(1500), false)), "after the cursor's own cell");
+    assert_eq!(seeks(&snap, 2, "x", at(2995), true), Some((at(5), true)));
+    assert_eq!(seeks(&snap, 2, "x", at(1500), false), Some((at(5), false)));
+    assert_eq!(seeks(&snap, 2, "x", at(3), false), Some((at(2990), true)));
+    assert_eq!(seeks(&snap, 2, "x", cell(1500, 0, 2), false), Some((at(5), false)), "before it on its row");
+    // The only match is the cursor's: found again around the end; none at all: none.
+    let one = rows_of(&[&[Some("z")], &[Some("q")]]);
+    assert_eq!(seeks(&one, 1, "z", 0, true), Some((0, true)));
+    assert_eq!(seeks(&one, 1, "z", 0, false), Some((0, true)));
+    assert_eq!(seeks(&one, 1, "nothing", 0, true), None);
+    // NULL never matches.
+    assert_eq!(seeks(&snap, 2, "^$", 0, true), None);
+    // Told to stop: nothing said.
+    let re = compile("x").unwrap();
+    assert!(seek(&snap, 2, &re, 0, true, &AtomicBool::new(true)).unwrap().is_none());
+}
+
+fn rows_of(cells: &[&[Option<&str>]]) -> RowsSnapshot {
+    rows(cells)
+}

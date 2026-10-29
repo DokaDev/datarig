@@ -1016,9 +1016,11 @@ fn draw_search_strip(app: &mut App, strip: &crate::app::grid_search::Strip, area
     let w = area.width.saturating_sub(1) as usize;
     // The count, and the note after it where the pattern keeps its room.
     let count_w = width(&strip.count);
-    let status = match &strip.note {
-        Some(n) if strip.text_width.max(8) + 3 + count_w + 1 + width(n) <= w => format!("{} {n}", strip.count),
-        _ => strip.count.clone(),
+    let fits = |n: &String| strip.text_width.max(8) + 3 + count_w + 1 + width(n) <= w;
+    let status = match strip.notes.iter().find(|n| fits(n)) {
+        Some(n) if count_w > 0 => format!("{} {n}", strip.count),
+        Some(n) => n.clone(),
+        None => strip.count.clone(),
     };
     let status = clip(&status, w.saturating_sub(4));
     let status_w = width(&status);
@@ -1068,16 +1070,39 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
     let look = crate::widgets::grid::Look { marks: &marks, icons: app.icons_on() };
     // The portal belongs to the last statement of the rows' run: only its rows page.
     let answer = app.tab().exec.shown.is_some() && app.tab().exec.shown == app.tab().answer_index();
-    let next_key = app
-        .keymap
-        .hint_keys(Action::PageNext, Ctx::Grid, app.enhanced_keys)
-        .map(|k| crate::keymap::keys::label(&k))
-        .unwrap_or_default();
+    // `n` is the search's while one is on: the next page's key there.
+    let next_key = app.next_page_key(app.grid_ctx());
     let run_again = app.can_run_again();
     let text_plan = app.text_plan_hint();
-    // The grid's search: its prompt or the search that is on, on the line under the grid (in
-    // place of a note about the paging there).
-    let strip = app.grid_search_strip().filter(|_| area.height > 3);
+    // A result whose portal was closed for being idle (or never held), or whose fetching
+    // stopped at its spill limit, keeps its rows and says so below them.
+    let paging_note = match &app.tab().results {
+        Results::Rows(rs)
+            if answer && ((rs.more && app.tab().exec.paging.closed()) || app.tab().exec.paging == Paging::Stopped) =>
+        {
+            let count = rs.rows.len() as u64;
+            let key = next_key.clone();
+            Some(match app.tab().exec.paging {
+                Paging::Stopped => app.i18n.msg(&Msg::ResultsPagingStopped { count }),
+                Paging::Released if run_again => app.i18n.msg(&Msg::ResultsPagingNoHold { count, key }),
+                Paging::Released => app.i18n.msg(&Msg::ResultsPagingFirstPageOnly { count }),
+                // The next page runs the statement again when it may.
+                _ if run_again => app.i18n.msg(&Msg::ResultsPagingClosedRerun { count, key }),
+                Paging::Replaced => app.i18n.msg(&Msg::ResultsPagingReplaced { count }),
+                Paging::Interrupted => app.i18n.msg(&Msg::ResultsPagingInterrupted { count }),
+                _ => app.i18n.msg(&Msg::ResultsPagingClosed { count }),
+            })
+        }
+        _ => None,
+    };
+    // The grid's search: its prompt or the search that is on, on the line under the grid; a
+    // note about the paging goes on that line too, first among what is not searched.
+    let mut strip = app.grid_search_strip().filter(|_| area.height > 3);
+    if let (Some(s), Some(p)) = (strip.as_mut(), &paging_note) {
+        let short = s.notes.pop();
+        s.notes = std::iter::once(p.to_string()).chain(short).collect();
+    }
+    app.layout.grid_area = area;
     // Where the grid's cells were before this frame: laid out otherwise (scrolled, another
     // result), the cell under the pointer is not there any more.
     let grid_was = |t: &crate::app::Tab| {
@@ -1106,28 +1131,10 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
             let grid = Rect { height: area.height - 1, ..area };
             crate::widgets::grid::render(rs, &mut t.grid, grid, buf, &app.i18n, focused, look);
         }
-        // A result whose portal was closed for being idle (or never held), or whose fetching
-        // stopped at its spill limit, keeps its rows and says so below them.
-        Results::Rows(rs)
-            if answer
-                && ((rs.more && t.exec.paging.closed()) || t.exec.paging == Paging::Stopped)
-                && area.height > 3 =>
-        {
+        Results::Rows(rs) if area.height > 3 && paging_note.is_some() => {
             let grid = Rect { height: area.height - 1, ..area };
             crate::widgets::grid::render(rs, &mut t.grid, grid, buf, &app.i18n, focused, look);
-            let count = rs.rows.len() as u64;
-            let text = match t.exec.paging {
-                Paging::Stopped => app.i18n.msg(&Msg::ResultsPagingStopped { count }),
-                Paging::Released if run_again => {
-                    app.i18n.msg(&Msg::ResultsPagingNoHold { count, key: next_key.clone() })
-                }
-                Paging::Released => app.i18n.msg(&Msg::ResultsPagingFirstPageOnly { count }),
-                // The next page runs the statement again when it may.
-                _ if run_again => app.i18n.msg(&Msg::ResultsPagingClosedRerun { count, key: next_key.clone() }),
-                Paging::Replaced => app.i18n.msg(&Msg::ResultsPagingReplaced { count }),
-                Paging::Interrupted => app.i18n.msg(&Msg::ResultsPagingInterrupted { count }),
-                _ => app.i18n.msg(&Msg::ResultsPagingClosed { count }),
-            };
+            let text = paging_note.as_ref().map(ToString::to_string).unwrap_or_default();
             let y = area.y + area.height - 1;
             buf.set_style(Rect { y, height: 1, ..area }, Style::new().bg(th.surface));
             let w = area.width.saturating_sub(1) as usize;
@@ -1181,7 +1188,18 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
                 if !m.has(r, c) {
                     continue;
                 }
-                let style = if (r, c) == (g.row, g.col) && focused { th.grid_match_current } else { th.grid_match };
+                // The cursor of an unfocused grid keeps its own look, as a selected range keeps
+                // its background (a match there is underlined only).
+                let style = if (r, c) == (g.row, g.col) {
+                    if !focused {
+                        continue;
+                    }
+                    th.grid_match_current
+                } else if g.in_range((r, c), len, rs.columns.len()) {
+                    Style::new().add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+                } else {
+                    th.grid_match
+                };
                 if let Some(cell) = g.cell_rect(r, c, len) {
                     buf.set_style(cell.intersection(area), style);
                 }

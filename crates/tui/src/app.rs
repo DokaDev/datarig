@@ -450,6 +450,8 @@ pub struct Layout {
     pub editor_cursor: (u16, u16),
     /// Where the cursor of the grid's search prompt was drawn last, while it is open.
     pub grid_prompt_cursor: Option<(u16, u16)>,
+    /// The grid's rows and the lines under them, as drawn last (inside the results pane).
+    pub grid_area: Rect,
     /// The editor and the results pane together (a query tab), for resizing the pane.
     pub body: Rect,
     /// The results pane's top border while both panes are drawn: dragging it resizes them.
