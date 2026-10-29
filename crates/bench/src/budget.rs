@@ -178,7 +178,8 @@ pub fn editor(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
 
 /// The result grid's search: the cells one frame looked up for its highlight (those on screen
 /// only), none at all without a search, and its keys with their frames held to the editor's
-/// keystroke budget.
+/// keystroke budget. Its sideways wheel: one frame a burst, the cells a frame drew (those on
+/// screen only), every burst moving the view by all of its events.
 pub fn grid(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
     match (f(result, &["search", "lookups_per_frame_max"]), result["search"]["on"].as_bool()) {
         // A frame that looked nothing up did not highlight the matches.
@@ -197,6 +198,25 @@ pub fn grid(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
     match f(result, &["search", "key_ms", "p95"]) {
         Some(m) => c.check("grid search key+frame p95", m, num(b, "grid", "search_p95_ms_max")?, " ms"),
         None => c.missing("grid search key+frame p95"),
+    }
+    match f(result, &["hscroll", "frames_per_burst_max"]) {
+        Some(n) => c.check(
+            "grid frames per sideways wheel burst",
+            n,
+            num(b, "grid", "hscroll_frames_per_burst_max")?,
+            " frames",
+        ),
+        None => c.missing("grid frames per sideways wheel burst"),
+    }
+    match f(result, &["hscroll", "cells_per_frame_max"]) {
+        Some(n) if n > 0.0 => {
+            c.check("grid cells drawn per sideways frame", n, num(b, "grid", "hscroll_cells_per_frame_max")?, " cells")
+        }
+        _ => c.missing("grid cells drawn per sideways frame"),
+    }
+    match f(result, &["hscroll", "short_bursts"]) {
+        Some(n) => c.check("grid sideways bursts that moved short", n, 0.0, " bursts"),
+        None => c.missing("grid sideways bursts that moved short"),
     }
     Ok(())
 }

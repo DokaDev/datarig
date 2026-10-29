@@ -16,7 +16,7 @@ expression: t.backend()
 "│                      ││ [Result 1]  Chart  Messages  ││ id: 1                │"
 "│                      ││   │ profile                  ││ name: 陳大文         │" Hidden by multi-width symbols: [(65, " "), (67, " "), (69, " ")]
 "│                      ││   │ jsonb                    ││ nickname: 大文🐘     │" Hidden by multi-width symbols: [(69, " "), (71, " "), (73, " ")]
-"│                      ││ 1 │ {"lang": "ko", "tags": […││ address: 臺北市信義… │" Hidden by multi-width symbols: [(68, " "), (70, " "), (72, " "), (74, " "), (76, " ")]
+"│                      ││ 1 │ {"lang": "ko", "tags": ["││ address: 臺北市信義… │" Hidden by multi-width symbols: [(68, " "), (70, " "), (72, " "), (74, " "), (76, " ")]
 "│                      ││ 2 │ {}                       ││ profile: {"lang": "k…│"
 "│                      ││ 3 │ {"vip": true, "level": 7}││                      │"
 "│                      ││ 4 │ {"flags": ["🇰🇷", "🇺🇸"]}  ││                      │" Hidden by multi-width symbols: [(43, " "), (49, " ")]

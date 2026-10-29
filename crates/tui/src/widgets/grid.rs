@@ -1,9 +1,10 @@
-//! Result grid: virtualized rows, column-wise horizontal scroll, CJK-safe cells. A
+//! Result grid: virtualized rows, horizontal scroll by character (the columns at the view's
+//! edges partly shown), CJK-safe cells. A
 //! header shows the column's key marks (PK/FK/UQ) before its name. The
 //! grid shows one page of the result at a time ([`GridState::page`]); row
 //! numbers stay those of the whole result.
 
-use crate::text::{Align, fit, sanitize_cell, width};
+use crate::text::{Align, fit, sanitize_cell, slice_cols, width};
 use crate::theme;
 use datarig_core::driver::{Cell, ColumnMeta, KeyMarks};
 use datarig_core::fault::Fault;
@@ -15,6 +16,8 @@ use ratatui::style::{Modifier, Style};
 use std::ops::Range;
 
 pub const MAX_COL_WIDTH: usize = 40;
+/// Characters the view moves sideways per wheel event (and per drag event past its edge).
+pub const SIDE_STEP: usize = 4;
 
 #[derive(Clone, Debug)]
 pub struct Column {
@@ -167,7 +170,15 @@ pub struct GridState {
     pub row: usize,
     pub col: usize,
     pub top: usize,
-    pub left: usize,
+    /// How many characters of the row of all columns (each `"│ " + value + " "`) the view
+    /// starts after, right of the row-number gutter.
+    pub x_off: usize,
+    /// Where each column starts in that row, and where the last one ends (set on render).
+    pub col_x: Vec<usize>,
+    /// How many characters of it the view shows (set on render).
+    pub view_w: u16,
+    /// The column whose separator is hidden left of the view, as drawn last (it shows a part).
+    pub cut_col: Option<usize>,
     /// Visible data rows (set on render).
     pub page_rows: usize,
     /// Where a selection started (`v`, `V`, a drag): the range is from here to the cursor.
@@ -178,7 +189,8 @@ pub struct GridState {
     /// last (a click there selects whole rows or whole columns).
     pub gutter_x: (u16, u16),
     pub header_y: u16,
-    /// Hit-test info from the last render: (x_start, x_end, column index), data origin y.
+    /// Hit-test info from the last render: (x_start, x_end, column index) of the part of each
+    /// column on screen, data origin y.
     pub hit_cols: Vec<(u16, u16, usize)>,
     pub data_y: u16,
     /// The last render could not read the rows it shows from the result's spill file.
@@ -191,6 +203,12 @@ pub struct GridState {
     /// the selected cell off screen, until a key or a click moves the selection (which brings
     /// the view back to it).
     pub detached: bool,
+    /// How many cells (a column's part on screen on one row, its header's two rows counted as
+    /// one) the last render drew: the benchmark's measure of a frame's work.
+    pub drawn_cells: usize,
+    /// A search's match the next render shows: (row, column, where the match starts in the
+    /// cell's text as drawn, in columns). Taken by that render; only for the cursor's cell.
+    pub reveal: Option<(usize, usize, usize)>,
 }
 
 /// What a grid selection spans.
@@ -250,14 +268,65 @@ impl GridState {
         self.detached = false;
     }
 
-    /// Scroll the view `rows` rows and `cols` columns (the wheel): the selected cell
-    /// stays on its data row, the view stops at the page's ends and fetches nothing.
-    pub fn scroll(&mut self, rows: isize, cols: isize, total: usize, ncols: usize) {
+    /// Scroll the view `rows` rows and `chars` characters (the wheel): the selected cell
+    /// stays on its data row, the view stops at the page's ends and at the columns' ends
+    /// (as drawn last) and fetches nothing.
+    pub fn scroll(&mut self, rows: isize, chars: isize, total: usize) {
         let w = self.window(total);
         let last_top = w.end.saturating_sub(self.page_rows.max(1)).max(w.start);
         self.top = (self.top as isize + rows).clamp(w.start as isize, last_top as isize) as usize;
-        self.left = (self.left as isize + cols).clamp(0, ncols.saturating_sub(1) as isize) as usize;
+        self.x_off = self.x_off.saturating_add_signed(chars).min(self.x_max());
         self.detached = true;
+    }
+
+    /// The farthest the view can be scrolled right: the last column's end at the view's right
+    /// edge (as laid out last).
+    pub fn x_max(&self) -> usize {
+        self.col_x.last().map_or(0, |end| end.saturating_sub(self.view_w as usize))
+    }
+
+    /// Bring the selected column into view, moving the view as little as it takes: a column
+    /// cut on the left shows from its start, one cut on the right up to its end, one wider
+    /// than the view from its start unless it fills the view already. A column already whole
+    /// on screen moves nothing.
+    fn follow(&mut self) {
+        let (Some(&start), Some(&end)) = (self.col_x.get(self.col), self.col_x.get(self.col + 1)) else { return };
+        let view = self.view_w as usize;
+        if end - start > view {
+            if !(start <= self.x_off && self.x_off + view <= end) {
+                self.x_off = start;
+            }
+        } else if start < self.x_off {
+            self.x_off = start;
+        } else if end > self.x_off + view {
+            self.x_off = end - view;
+        }
+    }
+
+    /// Whether column `x` of the screen is left or right of the view (as laid out last).
+    pub fn beside(&self, x: u16) -> bool {
+        x < self.gutter_x.1 || x >= self.gutter_x.1 + self.view_w
+    }
+
+    /// A drag at column `x` of the screen past the left or right edge of the view: the view
+    /// moves [`SIDE_STEP`] characters that way and the cursor goes to the column at that edge
+    /// that shows whole (the one cut there when none does). `None` within the view.
+    pub fn drag_edge(&mut self, x: u16) -> Option<usize> {
+        let ncols = self.col_x.len().checked_sub(1).filter(|n| *n > 0)?;
+        let (from, view) = (self.gutter_x.1, self.view_w as usize);
+        let at = |vx: usize| (0..ncols).find(|&c| self.col_x[c + 1] > vx).unwrap_or(ncols - 1);
+        if x < from {
+            self.x_off = self.x_off.saturating_sub(SIDE_STEP);
+            let whole = (0..ncols).find(|&c| self.col_x[c] >= self.x_off && self.col_x[c + 1] <= self.x_off + view);
+            Some(whole.unwrap_or_else(|| at(self.x_off)))
+        } else if x >= from + self.view_w {
+            self.x_off = (self.x_off + SIDE_STEP).min(self.x_max());
+            let whole =
+                (0..ncols).rev().find(|&c| self.col_x[c] >= self.x_off && self.col_x[c + 1] <= self.x_off + view);
+            Some(whole.unwrap_or_else(|| at((self.x_off + view).saturating_sub(1))))
+        } else {
+            None
+        }
     }
 
     pub fn move_row(&mut self, delta: isize, total: usize) {
@@ -294,11 +363,13 @@ impl GridState {
         self.hit_cols.iter().find(|(a, b, _)| x >= *a && x < *b).map(|&(_, _, c)| (r, c))
     }
 
-    /// Where cell (row, col) was drawn last (between its separators), if it was.
+    /// Where cell (row, col) was drawn last (between its separators; of a column at an edge of
+    /// the view, the part on screen), if it was.
     pub fn cell_rect(&self, row: usize, col: usize, total: usize) -> Option<Rect> {
         let shown = self.top..(self.top + self.page_rows).min(self.window(total).end);
         let &(a, b, _) = self.hit_cols.iter().find(|h| h.2 == col).filter(|_| shown.contains(&row))?;
-        Some(Rect::new(a + 1, self.data_y + (row - self.top) as u16, b.saturating_sub(a + 1), 1))
+        let x = if self.cut_col == Some(col) { a } else { a + 1 };
+        Some(Rect::new(x, self.data_y + (row - self.top) as u16, b.saturating_sub(x), 1)).filter(|r| r.width > 0)
     }
 
     /// Where a drag at (x, y) takes the cursor: the cell there, clamped to
@@ -416,6 +487,8 @@ pub fn render(
     let th = theme::cur();
     buf.set_style(area, th.base());
     st.hit_cols.clear();
+    st.cut_col = None;
+    st.drawn_cells = 0;
     if area.height < 3 || area.width < 8 || rs.columns.is_empty() {
         return;
     }
@@ -456,17 +529,42 @@ pub fn render(
         .zip(&marks)
         .map(|(c, m)| c.width.max(width(m) + width(&c.meta.name)).min(MAX_COL_WIDTH))
         .collect();
-    // Keep the selected column fully visible (column-wise horizontal scroll).
-    let span = |from: usize, to: usize| -> usize { widths[from..=to].iter().map(|w| w + 3).sum() };
-    st.left = st.left.min(rs.columns.len() - 1);
+    // The row of all columns, scrolled by character: the selected column whole in view unless
+    // the wheel moved the view, never past the last column's end (also when the widths or the
+    // view's width changed).
+    st.col_x.clear();
+    let mut end = 0;
+    for w in &widths {
+        st.col_x.push(end);
+        end += w + 3;
+    }
+    st.col_x.push(end);
+    st.view_w = avail as u16;
     if !st.detached {
-        if st.col < st.left {
-            st.left = st.col;
-        }
-        while st.left < st.col && span(st.left, st.col) > avail {
-            st.left += 1;
+        st.follow();
+    }
+    // A search's match in a column wider than the view: its start in view, a little of what
+    // comes before it too (past a value's cut, the cut's `…`).
+    if let Some((r, c, at)) = st.reveal.take()
+        && (r, c) == (st.row, st.col)
+        && !st.detached
+        && let CellRef::Here(Some(v)) = rs.cell(r, c)
+    {
+        let (text, w) = (sanitize_cell(v), widths[c]);
+        let tw = width(&text);
+        let k = if tw > w {
+            at.min(w - 1)
+        } else if rs.columns[c].meta.numeric {
+            w - tw + at
+        } else {
+            at
+        };
+        let p = st.col_x[c] + 2 + k;
+        if p < st.x_off || p >= st.x_off + avail {
+            st.x_off = p.saturating_sub((avail / 4).min(8)).max(st.col_x[c]);
         }
     }
+    st.x_off = st.x_off.min(st.x_max());
 
     let header_style = Style::new().bg(th.surface).fg(th.fg).add_modifier(Modifier::BOLD);
     let type_style = Style::new().bg(th.surface).fg(th.fg_muted);
@@ -478,32 +576,72 @@ pub fn render(
     st.gutter_x = (area.x, area.x + gutter as u16);
 
     let right = area.x + area.width;
-    // Column layout: "│ " + cell + " "
-    let mut x = area.x + gutter as u16;
-    let mut layout: Vec<(u16, usize, usize)> = Vec::new(); // (x, col index, drawn width)
-    for (ci, cw) in widths.iter().enumerate().skip(st.left) {
-        if x + 2 >= right {
+    // Column layout: "│ " + cell + " ", from the gutter's end, `x_off` characters of it hidden;
+    // the columns at the edges show their part on screen.
+    let from = area.x + gutter as u16;
+    let mut layout: Vec<(i32, usize, usize)> = Vec::new(); // (x of its separator, col index, width)
+    for (ci, &w) in widths.iter().enumerate() {
+        let (start, end) = (st.col_x[ci], st.col_x[ci + 1]);
+        if end <= st.x_off {
+            continue;
+        }
+        if start >= st.x_off + avail {
             break;
         }
-        let w = (*cw).min((right - x - 2) as usize);
+        let x = i32::from(from) + start as i32 - st.x_off as i32;
+        if x < i32::from(from) {
+            st.cut_col = Some(ci);
+        }
         layout.push((x, ci, w));
-        st.hit_cols.push((x, (x + 3 + w as u16).min(right), ci));
-        x += 3 + w as u16;
+        // A column of which only the separator shows is no cell to point at.
+        if x + 1 < i32::from(right) {
+            let to = (x + 3 + w as i32).min(i32::from(right));
+            st.hit_cols.push((x.max(i32::from(from)) as u16, to as u16, ci));
+        }
     }
+    // `s` drawn from column `x` of the screen (left of the view when the view cut it), only
+    // what falls between the gutter and the right edge.
+    let put = |buf: &mut Buffer, x: i32, y: u16, s: &str, style: Style| {
+        let at = x.max(i32::from(from));
+        let room = (i32::from(right) - at).max(0) as usize;
+        let part = slice_cols(s, (at - x) as usize, room);
+        if !part.is_empty() {
+            buf.set_stringn(at as u16, y, &part, room, style);
+        }
+    };
+    // A cell cut by the right edge whose text columns on screen are blank though its text is
+    // not (a right-aligned number under the edge, a value after blanks): a dim `›` in its last
+    // column on screen (the muted text, made to read on the cell's background), so it never
+    // reads as empty. Only where at least one of its text columns shows (not its separator or
+    // blank alone). `s` is its text as drawn from column `x`, `w` wide; text of blanks only (an
+    // empty value) is not hidden and gets none.
+    let edge_mark = |buf: &mut Buffer, x: i32, w: usize, s: &str, y: u16, style: Style| {
+        let r = i32::from(right);
+        if x + w as i32 <= r || x >= r || s.trim().is_empty() {
+            return;
+        }
+        let at = x.max(i32::from(from));
+        if slice_cols(s, (at - x) as usize, (r - at).max(0) as usize).trim().is_empty() {
+            let fg = theme::Theme::readable_on(th.fg_muted, style.bg.unwrap_or(th.bg), 3.0);
+            buf.set_stringn(right - 1, y, "›", 1, style.fg(fg));
+        }
+    };
 
     // A selected range (`v`, `V`, the gutter, a header), from its anchor to the cursor.
     let range = st.selection(total, rs.columns.len());
     for &(cx, ci, w) in &layout {
+        st.drawn_cells += 1;
         let col = &rs.columns[ci];
         // Whole selected columns: their headers too.
         let whole = st.shape == Shape::Cols && range.as_ref().is_some_and(|(_, cr)| cr.contains(&ci));
         let (header_style, type_style) =
             if whole { (header_style.patch(th.range), type_style.patch(th.range)) } else { (header_style, type_style) };
         if whole {
-            buf.set_style(Rect::new(cx + 1, y0, (w + 2) as u16, 2), th.range);
+            let (a, b) = ((cx + 1).max(i32::from(from)), (cx + 3 + w as i32).min(i32::from(right)));
+            buf.set_style(Rect::new(a as u16, y0, (b - a).max(0) as u16, 2), th.range);
         }
-        buf.set_stringn(cx, y0, "│", 1, sep_style(th.surface));
-        buf.set_stringn(cx, y0 + 1, "│", 1, sep_style(th.surface));
+        put(buf, cx, y0, "│", sep_style(th.surface));
+        put(buf, cx, y0 + 1, "│", sep_style(th.surface));
         // The key marks in their colors, then the name.
         let mut hx = cx + 2;
         let mut left = w;
@@ -513,12 +651,12 @@ pub fn render(
             if mw >= left {
                 break;
             }
-            buf.set_stringn(hx, y0, &text, mw, header_style.fg(th.key_color(m)));
-            hx += mw as u16;
+            put(buf, hx, y0, &text, header_style.fg(th.key_color(m)));
+            hx += mw as i32;
             left -= mw;
         }
-        buf.set_stringn(hx, y0, fit(&col.meta.name, left, Align::Left), left, header_style);
-        buf.set_stringn(cx + 2, y0 + 1, fit(&col.meta.type_name, w, Align::Left), w, type_style);
+        put(buf, hx, y0, &fit(&col.meta.name, left, Align::Left), header_style);
+        put(buf, cx + 2, y0 + 1, &fit(&col.meta.type_name, w, Align::Left), type_style);
     }
 
     for vy in 0..page_rows {
@@ -535,6 +673,7 @@ pub fn render(
         let num_style = num_bg.fg(if r == st.row { th.accent } else { th.fg_muted });
         buf.set_stringn(area.x, y, fit(&(r + 1).to_string(), gutter - 1, Align::Right), gutter - 1, num_style);
         for &(cx, ci, w) in &layout {
+            st.drawn_cells += 1;
             let col = &rs.columns[ci];
             let selected = r == st.row && ci == st.col;
             let in_range = range.as_ref().is_some_and(|(rr, cr)| rr.contains(&r) && cr.contains(&ci));
@@ -545,7 +684,7 @@ pub fn render(
             } else {
                 Style::new().bg(zebra)
             };
-            buf.set_stringn(cx, y, "│", 1, sep_style(zebra));
+            put(buf, cx, y, "│", sep_style(zebra));
             let (text, is_null) = match rs.cell(r, ci) {
                 CellRef::Here(c) => cell_text(c, &null_label),
                 CellRef::NotRead => (not_read.to_string(), true),
@@ -558,9 +697,13 @@ pub fn render(
                 Style::new().fg(th.fg)
             }
             .patch(bg);
-            let cell_w = (w + 2).min((right - cx - 1) as usize);
-            buf.set_stringn(cx + 1, y, " ".repeat(cell_w), cell_w, bg);
-            buf.set_stringn(cx + 2, y, fit(&text, w, align), w, style);
+            put(buf, cx + 1, y, &" ".repeat(w + 2), bg);
+            let text = fit(&text, w, align);
+            put(buf, cx + 2, y, &text, style);
+            // NULL (and a row not read) keeps its own look.
+            if !is_null {
+                edge_mark(buf, cx + 2, w, &text, y, bg);
+            }
         }
     }
 }
@@ -593,3 +736,6 @@ impl GridState {
         }
     }
 }
+
+#[cfg(test)]
+mod tests;

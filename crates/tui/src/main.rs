@@ -10,17 +10,18 @@ use datarig_core::{config, i18n};
 use datarig_tui::app::effects::Effect;
 use datarig_tui::app::{App, Startup};
 use datarig_tui::external::{self, Edited, Handover};
+use datarig_tui::input::burst::{burst, take_burst};
 use datarig_tui::screens;
 use datarig_tui::terminal::{Cursor, cursor_shape};
 use futures::StreamExt;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use ratatui::crossterm::event::{Event, EventStream, MouseEventKind};
+use ratatui::crossterm::event::{Event, EventStream};
 use ratatui::crossterm::terminal::{Clear, ClearType};
 use std::io::{self, IsTerminal, Stdout, Write};
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::task::Poll;
+use std::task::{Context, Poll};
 use std::time::Instant;
 
 fn main() -> ExitCode {
@@ -225,41 +226,40 @@ async fn wait(
     Ok(false)
 }
 
-/// The most pointer motions drawn as one frame.
-const MOTIONS_PER_FRAME: usize = 64;
-
 /// Hand input event `ev` to the app. A pointer motion (a drag, or a move without a button)
 /// takes the motions already read after it along: one frame shows where the pointer is now,
-/// not each place it went through (a terminal over SSH sends them in bursts). The first other
-/// event read is kept in `pending` for the next turn. `true` when the input stream ended.
+/// not each place it went through (a terminal over SSH sends them in bursts); a wheel event
+/// takes the wheel events of its kind already read after it along (a trackpad swipe), so the
+/// view moves by all of them in one frame (`input::burst::take_burst`). The first other event
+/// read is kept in `pending` for the next turn. `true` when the input stream ended.
 /// (The stream is asked with this task's own waker: one asked with another waker that answers
 /// "not yet" would leave its wake-up to that waker and never wake the loop.)
 async fn input(app: &mut App, events: &mut EventStream, ev: Event, pending: &mut Option<Event>) -> io::Result<bool> {
-    let motion =
-        |ev: &Event| matches!(ev, Event::Mouse(m) if matches!(m.kind, MouseEventKind::Drag(_) | MouseEventKind::Moved));
-    let mut more = motion(&ev);
+    let kind = burst(&ev);
     app.handle_event(ev);
-    if !more {
-        return Ok(false);
-    }
+    let Some(kind) = kind else { return Ok(false) };
     let mut changed = !app.take_idle_event();
-    for _ in 1..MOTIONS_PER_FRAME {
-        match futures::poll!(events.next()) {
-            Poll::Ready(Some(Ok(ev))) if motion(&ev) => {
-                app.handle_event(ev);
-                changed |= !app.take_idle_event();
-            }
-            Poll::Ready(Some(Ok(ev))) => {
-                *pending = Some(ev);
-                more = false;
-            }
-            Poll::Ready(Some(Err(e))) => return Err(e),
-            Poll::Ready(None) => return Ok(true),
-            Poll::Pending => more = false,
+    let waker = std::future::poll_fn(|cx| Poll::Ready(cx.waker().clone())).await;
+    let mut cx = Context::from_waker(&waker);
+    let mut end = None;
+    let next = || match events.poll_next_unpin(&mut cx) {
+        Poll::Ready(Some(Ok(ev))) => Some(ev),
+        Poll::Ready(Some(Err(e))) => {
+            end = Some(Err(e));
+            None
         }
-        if !more {
-            break;
+        Poll::Ready(None) => {
+            end = Some(Ok(true));
+            None
         }
+        Poll::Pending => None,
+    };
+    *pending = take_burst(kind, next, |ev| {
+        app.handle_event(ev);
+        changed |= !app.take_idle_event();
+    });
+    if let Some(end) = end {
+        return end;
     }
     app.set_idle_event(!changed);
     Ok(false)

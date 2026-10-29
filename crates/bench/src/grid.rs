@@ -1,13 +1,18 @@
 //! The result grid with wide rows of CJK text: the time to draw a frame at 160x45 while the
 //! cursor moves down, pages and moves right; then its search (`/` typed key by key, `Enter`,
 //! `n`): the time of each key with its frame (the jobs answered first), and the cells one frame
-//! looked up for the matches' highlight (only the cells on screen; none without a search).
+//! looked up for the matches' highlight (only the cells on screen; none without a search); then
+//! bursts of sideways wheel events (a trackpad swipe): the frames each burst drew (the event loop
+//! draws a burst once, `input::burst::take_burst`) and the cells one frame drew (as the grid
+//! counts them: the columns on screen, those cut by the edges included, on each row drawn and the
+//! header), and that each burst moved the view by all of its events.
 
 use crate::apps;
 use crate::stats::{Summary, ms};
 use datarig_core::driver::{ColumnMeta, DbEvent, ValueKind};
 use datarig_tui::app::Focus;
-use ratatui::crossterm::event::{KeyCode, KeyModifiers};
+use datarig_tui::input::burst;
+use ratatui::crossterm::event::{Event, KeyCode, KeyModifiers, MouseEvent, MouseEventKind};
 use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 
@@ -123,11 +128,70 @@ pub fn run(n_rows: usize, cols: usize, n: usize) -> Result<Value, String> {
         "  search     {} (cells looked up per frame: at most {lookups}; without a search {idle_lookups})",
         s.line(" ms")
     );
+    // Sideways: the search ended, bursts of `PER_BURST` wheel events right then left (and with
+    // Shift on the vertical wheel), each burst handed over as the event loop does.
+    apps::key(&mut app, KeyCode::Esc, KeyModifiers::NONE);
+    apps::draw(&mut term, &mut app);
+    let r = app.layout.results;
+    let (x, y) = (r.x + r.width / 2, r.y + r.height / 2);
+    let ev = |kind, modifiers| Event::Mouse(MouseEvent { kind, column: x, row: y, modifiers });
+    let kinds = [
+        ev(MouseEventKind::ScrollRight, KeyModifiers::NONE),
+        ev(MouseEventKind::ScrollDown, KeyModifiers::SHIFT),
+        ev(MouseEventKind::ScrollLeft, KeyModifiers::NONE),
+        ev(MouseEventKind::ScrollUp, KeyModifiers::SHIFT),
+    ];
+    let (mut frames_max, mut cells_max, mut short) = (0, 0, 0);
+    let mut side = Vec::new();
+    let bursts = n.min(100);
+    for i in 0..bursts {
+        let mut events = std::iter::repeat_n(kinds[(i / 4) % 4].clone(), PER_BURST);
+        let was = app.tab().grid.x_off;
+        let t = Instant::now();
+        let mut frames = 0;
+        let mut pending = None;
+        // A frame: an event and the rest of its burst as the event loop takes them
+        // (`burst::take_burst`), then one draw.
+        while let Some(ev) = pending.take().or_else(|| events.next()) {
+            let kind = burst::burst(&ev);
+            app.handle_event(ev);
+            if let Some(kind) = kind {
+                pending = burst::take_burst(kind, || events.next(), |e| app.handle_event(e));
+            }
+            apps::draw(&mut term, &mut app);
+            frames += 1;
+            cells_max = cells_max.max(app.tab().grid.drawn_cells);
+        }
+        side.push(ms(t.elapsed()));
+        frames_max = frames_max.max(frames);
+        // Each burst moves the view by all of its events, unless it stopped at an end.
+        let g = &app.tab().grid;
+        let at_end = g.x_off == 0 || g.x_off == g.x_max();
+        if g.x_off.abs_diff(was) != PER_BURST * datarig_tui::widgets::grid::SIDE_STEP && !at_end {
+            short += 1;
+        }
+    }
+    let sd = Summary::of(&side);
+    println!(
+        "  sideways   {} a burst of {PER_BURST} (frames per burst: at most {frames_max}; cells drawn per frame: at most {cells_max}; bursts that moved short: {short})",
+        sd.line(" ms")
+    );
     Ok(json!({
         "rows": n_rows,
         "cols": cols,
         "frame_ms": f.json(),
         "draw_ms": d.json(),
         "search": { "on": on, "key_ms": s.json(), "lookups_per_frame_max": lookups, "idle_lookups_max": idle_lookups },
+        "hscroll": {
+            "bursts": bursts,
+            "events_per_burst": PER_BURST,
+            "frames_per_burst_max": frames_max,
+            "cells_per_frame_max": cells_max,
+            "short_bursts": short,
+            "burst_ms": sd.json(),
+        },
     }))
 }
+
+/// Wheel events in one sideways burst (a trackpad sends a few dozen a swipe).
+const PER_BURST: usize = 24;

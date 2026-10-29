@@ -131,13 +131,35 @@ fn dragging_past_the_grids_edges_scrolls_that_way() {
     let mut h = grid();
     let r = h.app.layout.results;
     let from = cell_pos(&h, 2, 1);
-    // Past the right edge: one column beyond the last one shown (drawing then scrolls to it);
-    // past the top: one row up.
-    let last = h.app.tab().grid.hit_cols.last().unwrap().2;
-    h.drag(from, &[(r.x + r.width + 3, from.1)]);
-    assert_eq!(h.app.tab().grid.col, last + 1);
+    // The last column whole on screen.
+    let last_whole = |h: &Harness| {
+        let g = &h.app.tab().grid;
+        let end = g.x_off + g.view_w as usize;
+        (0..g.col_x.len() - 1).rev().find(|&c| g.col_x[c] >= g.x_off && g.col_x[c + 1] <= end).unwrap()
+    };
+    // Past the right edge: the view moves four characters a drag event, the cursor on the
+    // last column whole on screen (no jump of whole columns); past the top: one row up.
+    assert_eq!(h.app.tab().grid.x_off, 0);
+    let past = (r.x + r.width + 3, from.1);
+    h.drag(from, &[past]);
     h.draw(100, 30);
-    assert!(h.app.tab().grid.left > 0, "the grid scrolled right");
+    assert_eq!(h.app.tab().grid.x_off, 4, "four characters");
+    assert_eq!(h.app.tab().grid.col, last_whole(&h));
+    let from = cell_pos(&h, 2, h.app.tab().grid.hit_cols[1].2);
+    h.drag(from, &[past, past, past]);
+    h.draw(100, 30);
+    let g = &h.app.tab().grid;
+    assert_eq!(g.x_off, 16, "four characters each drag event, the view where the drag put it");
+    assert_eq!(g.col, last_whole(&h));
+    // Past the left edge (over the row numbers): back four characters an event, the cursor on
+    // the first column whole on screen.
+    let from = cell_pos(&h, 2, h.app.tab().grid.hit_cols[2].2);
+    h.drag(from, &[(r.x, from.1), (r.x, from.1)]);
+    h.draw(100, 30);
+    let g = &h.app.tab().grid;
+    assert_eq!(g.x_off, 8);
+    let first_whole = (0..g.col_x.len() - 1).find(|&c| g.col_x[c] >= g.x_off).unwrap();
+    assert_eq!(g.col, first_whole);
     // (Another cell: a second press on the same one would be a double click.)
     let h_pos = cell_pos(&h, 3, h.app.tab().grid.hit_cols[0].2);
     h.drag(h_pos, &[(h_pos.0, r.y)]);

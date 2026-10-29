@@ -17,6 +17,8 @@
 //! benches), [`App::pump_grid_search`] hands the answers to the app.
 
 use super::*;
+use crate::text::{sanitize_cell, width};
+use crate::widgets::grid::CellRef;
 use crate::widgets::search::{SearchNotice, compile};
 use crate::widgets::text_input::InputResult;
 use datarig_core::fault::Fault;
@@ -58,7 +60,7 @@ struct Spot {
     row: usize,
     col: usize,
     top: usize,
-    left: usize,
+    x_off: usize,
     anchor: Option<(usize, usize)>,
     shape: crate::widgets::grid::Shape,
     detached: bool,
@@ -71,7 +73,7 @@ impl Spot {
             row: g.row,
             col: g.col,
             top: g.top,
-            left: g.left,
+            x_off: g.x_off,
             anchor: g.anchor,
             shape: g.shape,
             detached: g.detached,
@@ -79,7 +81,7 @@ impl Spot {
     }
 
     fn restore(self, g: &mut GridState) {
-        (g.page, g.row, g.col, g.top, g.left) = (self.page, self.row, self.col, self.top, self.left);
+        (g.page, g.row, g.col, g.top, g.x_off) = (self.page, self.row, self.col, self.top, self.x_off);
         (g.anchor, g.shape, g.detached) = (self.anchor, self.shape, self.detached);
     }
 }
@@ -151,6 +153,7 @@ struct Running {
     ncols: usize,
     forward: bool,
     pattern: String,
+    re: Regex,
     /// The cursor when it started: its first match moves only a cursor that is still there.
     from: (usize, usize),
     /// Its first match came.
@@ -496,6 +499,20 @@ fn goto(g: &mut GridState, at: CellIdx, ncols: usize) {
     g.detached = false;
 }
 
+/// The cursor went to a match of `re`: the next frame shows the match itself, not only its
+/// column (in a column wider than the view, where it starts in the value as drawn: newlines and
+/// tabs as their marks, wide characters two columns).
+fn reveal(t: &mut Tab, re: &Regex) {
+    let g = &mut t.grid;
+    let Results::Rows(rs) = &mut t.results else { return };
+    g.load_selected(rs);
+    if let CellRef::Here(Some(v)) = rs.cell(g.row, g.col)
+        && let Some(m) = re.find(v)
+    {
+        g.reveal = Some((g.row, g.col, width(&sanitize_cell(&v[..m.start()]))));
+    }
+}
+
 /// The row result a tab shows in its grid, if it shows one.
 fn shown_rows(t: &Tab) -> Option<&ResultSet> {
     match &t.results {
@@ -589,7 +606,7 @@ impl App {
         let t = self.tabs.active_mut();
         let Some(rs) = shown_rows(t) else { return };
         let Some(a) = t.find.active.as_ref() else { return };
-        let forward = a.forward == same;
+        let (forward, re) = (a.forward == same, a.re.clone());
         let ncols = rs.columns.len();
         if ncols == 0 {
             return;
@@ -616,6 +633,7 @@ impl App {
         match known {
             Some(Some((to, wrapped))) => {
                 goto(&mut t.grid, to, ncols);
+                reveal(t, &re);
                 let next = t.find.pending.pop_front();
                 if wrapped {
                     self.flash(super::update::search_notice(SearchNotice::Wrapped { bottom: forward }));
@@ -632,7 +650,6 @@ impl App {
                 self.flash(super::update::search_notice(SearchNotice::NotFound(pattern)));
             }
             None => {
-                let re = a.re.clone();
                 let purpose = if seek { Purpose::Seek } else { Purpose::Search };
                 self.start_grid_job(purpose, re, forward, at);
             }
@@ -764,8 +781,19 @@ impl App {
         let pattern = re.as_str().to_string();
         let t = self.tabs.active_mut();
         let from = (t.grid.row, t.grid.col);
-        let job =
-            Running { id, purpose, result, rows, ncols, forward, pattern, from, found_one: false, stop: stop.clone() };
+        let job = Running {
+            id,
+            purpose,
+            result,
+            rows,
+            ncols,
+            forward,
+            pattern,
+            re: re.clone(),
+            from,
+            found_one: false,
+            stop: stop.clone(),
+        };
         match purpose {
             Purpose::Seek => t.find.seek = Some(job),
             _ => t.find.job = Some(job),
@@ -856,6 +884,7 @@ impl App {
                 let Some(job) = slot.as_mut() else { return };
                 job.found_one = true;
                 let (purpose, from, forward, ncols) = (job.purpose, job.from, job.forward, job.ncols);
+                let re = job.re.clone();
                 // A seek has said all it had to: its end is not waited for.
                 if purpose == Purpose::Seek {
                     *slot = None;
@@ -867,6 +896,7 @@ impl App {
                 }
                 let said = (wrapped && purpose != Purpose::Preview).then_some(forward);
                 goto(&mut t.grid, cell, ncols);
+                reveal(t, &re);
                 let next = t.find.pending.pop_front();
                 let active = self.tabs.active().id == a.tab;
                 if let Some(n) = said.map(|bottom| SearchNotice::Wrapped { bottom }) {

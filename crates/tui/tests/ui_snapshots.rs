@@ -1802,6 +1802,83 @@ fn grid_search_prompt_and_matches_dark_terminal_sizes() {
     }
 }
 
+/// The grid scrolled sideways by twelve characters (three wheel events) with two whole rows
+/// selected: the first column under the left edge, the name column cut in the middle of a wide
+/// character (a blank there), the range's background on the parts on screen, the headers
+/// scrolled with the rows, the column at the right edge cut with no `…`.
+#[test]
+fn grid_scrolled_sideways_dark_terminal_sizes() {
+    use ratatui::crossterm::event::MouseEventKind;
+    for (name, th) in [("dark", &theme::DARK), ("terminal", &theme::TERMINAL)] {
+        for (w, hh) in [(80, 24), (120, 40)] {
+            let mut h = with_edge_results(Lang::En);
+            h.app.theme = std::sync::Arc::new(th.clone());
+            h.key(KeyCode::Tab);
+            h.keys("Vj");
+            h.draw(w, hh);
+            let r = h.app.layout.results;
+            for _ in 0..3 {
+                h.mouse(MouseEventKind::ScrollRight, r.x + r.width / 2, r.y + r.height / 2);
+            }
+            let t = h.draw(w, hh);
+            insta::assert_snapshot!(format!("grid_hscroll_{name}_{w}x{hh}"), t.backend());
+            let g = &h.app.tab().grid;
+            let buf = t.backend().buffer();
+            let (x, y) = (g.gutter_x.1, g.data_y);
+            assert_eq!(g.x_off, 12, "{name}");
+            // Row 1's name: the second half of its second character at the edge, a blank.
+            assert_eq!(buf[(x, y)].symbol(), " ", "{name}");
+            assert_eq!(buf[(x + 1, y)].symbol(), "\u{6587}", "{name}");
+            // The selected rows' cells on the range's background from the edge on, the next
+            // row not.
+            if let Some(bg) = th.range.bg {
+                assert_eq!(buf[(x, y)].bg, bg, "{name}: the range");
+                assert_eq!(buf[(x, y + 1)].bg, bg, "{name}: the range");
+                assert_ne!(buf[(x, y + 2)].bg, bg, "{name}: not selected");
+            }
+        }
+    }
+}
+
+/// A number column cut by the grid's right edge with its numbers under the edge: a dim `›` at
+/// the edge on each row whose value is hidden there; the NULL keeps its look and the empty value
+/// gets none (80x24, the inspector hidden, scrolled 24 characters).
+#[test]
+fn grid_edge_mark_dark_terminal_80x24() {
+    use ratatui::crossterm::event::MouseEventKind;
+    for (name, th) in [("dark", &theme::DARK), ("terminal", &theme::TERMINAL)] {
+        let mut h = Harness::connected(Lang::En);
+        h.app.theme = std::sync::Arc::new(th.clone());
+        h.app.detail.visible = false;
+        let mut metas: Vec<_> = (0..6).map(|i| meta(&format!("column_{i:02}"), "text", false, false)).collect();
+        metas.push(meta("amount_in_cents_total", "int8", true, false));
+        metas.extend((7..11).map(|i| meta(&format!("column_{i:02}"), "text", false, false)));
+        let amounts = [Some("7"), None, Some(""), Some("12345"), Some("7")];
+        let rows = amounts
+            .iter()
+            .enumerate()
+            .map(|(r, a)| {
+                (0..11).map(|c| if c == 6 { a.map(str::to_string) } else { Some(format!("r{r}c{c}")) }).collect()
+            })
+            .collect();
+        h.ctrl('e');
+        let id = h.app.tab().exec.query_id;
+        h.tab_db(0, DbEvent::Page { id, columns: Some(metas), rows, more: false, elapsed: Duration::from_millis(2) });
+        h.app.focus = datarig_tui::app::Focus::Results;
+        h.draw(80, 24);
+        let r = h.app.layout.results;
+        for _ in 0..6 {
+            h.mouse(MouseEventKind::ScrollRight, r.x + r.width / 2, r.y + r.height / 2);
+        }
+        let t = h.draw(80, 24);
+        insta::assert_snapshot!(format!("grid_hscroll_edge_mark_{name}_80x24"), t.backend());
+        let g = &h.app.tab().grid;
+        let (edge, buf) = (g.gutter_x.1 + g.view_w - 1, t.backend().buffer());
+        let marks: Vec<bool> = (0..5).map(|r| buf[(edge, g.data_y + r)].symbol() == "\u{203A}").collect();
+        assert_eq!(marks, [true, false, false, true, true], "{name}: the numbers, not the NULL or the empty value");
+    }
+}
+
 /// The settings screen: categories, current values and what they mean, the selected
 /// setting's description; `icons` shows a preview of the glyphs and the hint (icons on and
 /// off), the theme the terminal's background and a preview, the clipboard its tmux note, the macOS

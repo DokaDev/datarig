@@ -749,7 +749,8 @@ fn a_count_says_when_it_may_differ_from_the_pages() {
 /// The wheel scrolls the grid's view (three rows a notch), as
 /// DataGrip and a browser do: the selected cell stays on its data row, also off screen, the view
 /// stops at the ends of the page and fetches nothing; the next key brings the view back to the
-/// selection. Shift+wheel and a sideways wheel scroll the columns.
+/// selection. Shift+wheel and a sideways wheel scroll the view sideways, four characters an
+/// event.
 #[test]
 fn the_wheel_scrolls_the_view_not_the_selection() {
     let mut h = Harness::connected(Lang::En);
@@ -793,7 +794,8 @@ fn the_wheel_scrolls_the_view_not_the_selection() {
     h.draw(120, 40);
     let g = &h.app.tab().grid;
     assert_eq!((g.row, g.top), (1, 1));
-    // Shift+wheel and the sideways wheel scroll the columns; the selected column stays.
+    // Shift+wheel and the sideways wheel scroll sideways by characters; the selected column
+    // stays.
     use ratatui::crossterm::event::{KeyModifiers, MouseEvent};
     h.app.handle_event(ratatui::crossterm::event::Event::Mouse(MouseEvent {
         kind: MouseEventKind::ScrollDown,
@@ -804,17 +806,23 @@ fn the_wheel_scrolls_the_view_not_the_selection() {
     h.mouse(MouseEventKind::ScrollRight, x, y);
     h.draw(120, 40);
     let g = &h.app.tab().grid;
-    assert_eq!((g.col, g.left), (0, 2));
+    assert_eq!((g.col, g.x_off), (0, 8));
+    // Each column is "│ " + 9 characters + " ": the first one shows its last characters.
     let t = h.draw(120, 40);
     let header = row_text(t.backend().buffer(), h.app.tab().grid.data_y - 2);
-    assert!(!header.contains("│ column_00 │") && header.contains("│ column_02 │"), "{header}");
+    assert!(header.contains("│    _00 │ column_01 │") && !header.contains("column_00"), "{header}");
     h.mouse(MouseEventKind::ScrollLeft, x, y);
     h.draw(120, 40);
-    assert_eq!(h.app.tab().grid.left, 1);
+    assert_eq!(h.app.tab().grid.x_off, 4);
+    // A key on a column whole on screen leaves the view; one on a cut column shows it whole.
     h.keys("l");
     h.draw(120, 40);
     let g = &h.app.tab().grid;
-    assert_eq!((g.col, g.left), (1, 1), "a key shows the selected column again");
+    assert_eq!((g.col, g.x_off), (1, 4), "column 1 is whole on screen: the view stays");
+    h.keys("h");
+    h.draw(120, 40);
+    let g = &h.app.tab().grid;
+    assert_eq!((g.col, g.x_off), (0, 0), "a key shows the selected column whole again");
 }
 
 /// After the tab switched its database or schema, `n` is refused (the

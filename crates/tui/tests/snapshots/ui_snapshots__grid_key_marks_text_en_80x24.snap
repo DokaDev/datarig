@@ -16,9 +16,9 @@ expression: backend
 "│                      ││ [Result 1]  Chart  Messages                      H/L │"
 "│                      ││   │ PK id │ FK user_id │ UQ email           │ name   │"
 "│                      ││   │ int8  │ int8       │ text               │ text   │"
-"│                      ││ 1 │     1 │          1 │ user01@example.com │ ユーザ…│" Hidden by multi-width symbols: [(73, " "), (75, " "), (77, " ")]
-"│                      ││ 2 │     2 │          1 │ user02@example.com │ ユーザ…│" Hidden by multi-width symbols: [(73, " "), (75, " "), (77, " ")]
-"│                      ││ 3 │     3 │          1 │ user03@example.com │ ユーザ…│" Hidden by multi-width symbols: [(73, " "), (75, " "), (77, " ")]
+"│                      ││ 1 │     1 │          1 │ user01@example.com │ ユーザ │" Hidden by multi-width symbols: [(73, " "), (75, " "), (77, " ")]
+"│                      ││ 2 │     2 │          1 │ user02@example.com │ ユーザ │" Hidden by multi-width symbols: [(73, " "), (75, " "), (77, " ")]
+"│                      ││ 3 │     3 │          1 │ user03@example.com │ ユーザ │" Hidden by multi-width symbols: [(73, " "), (75, " "), (77, " ")]
 "│                      ││                                                      │"
 "│                      ││                                                      │"
 "│                      ││                                                      │"

@@ -22,12 +22,12 @@ expression: "h.draw(120, 34).backend()"
 "│                                            ││   │ int8 │ text                 │ text    ││ nickname: 大文🐘          │" Hidden by multi-width symbols: [(104, " "), (106, " "), (108, " ")]
 "│                                            ││ 1 │    1 │ 陳大文               │ 大文🐘  ││ address: 臺北市信義區信義…│" Hidden by multi-width symbols: [(60, " "), (62, " "), (64, " "), (83, " "), (85, " "), (87, " "), (103, " "), (105, " "), (107, " "), (109, " "), (111, " "), (113, " "), (115, " "), (117, " ")]
 "│                                            ││ 2 │    2 │ 林美玲               │ NULL    ││ profile: {"lang": "ko", "…│" Hidden by multi-width symbols: [(60, " "), (62, " "), (64, " ")]
-"│                                            ││ 3 │    3 │ 張志明               │ 👨‍👩‍👧‍👦 fami…││                           │" Hidden by multi-width symbols: [(60, " "), (62, " "), (64, " "), (83, " ")]
+"│                                            ││ 3 │    3 │ 張志明               │ 👨‍👩‍👧‍👦 famil││                           │" Hidden by multi-width symbols: [(60, " "), (62, " "), (64, " "), (83, " ")]
 "│                                            ││ 4 │    4 │ Emoji テスト         │ 🔥🚀✨🎉││                           │" Hidden by multi-width symbols: [(66, " "), (68, " "), (70, " "), (83, " "), (85, " "), (87, " "), (89, " ")]
 "│                                            ││ 5 │    5 │ 山田太郎             │ やまだ  ││                           │" Hidden by multi-width symbols: [(60, " "), (62, " "), (64, " "), (66, " "), (83, " "), (85, " "), (87, " ")]
 "│                                            ││ 6 │    6 │ 王小明               │ NULL    ││                           │" Hidden by multi-width symbols: [(60, " "), (62, " "), (64, " ")]
-"│                                            ││ 7 │    7 │ Plain ASCII User     │ ascii_o…││                           │"
-"│                                            ││ 8 │    8 │ 全角 ＡＢＣ 半角 ｱｲｳ │ é combi…││                           │" Hidden by multi-width symbols: [(60, " "), (62, " "), (65, " "), (67, " "), (69, " "), (72, " "), (74, " ")]
+"│                                            ││ 7 │    7 │ Plain ASCII User     │ ascii_on││                           │"
+"│                                            ││ 8 │    8 │ 全角 ＡＢＣ 半角 ｱｲｳ │ é combin││                           │" Hidden by multi-width symbols: [(60, " "), (62, " "), (65, " "), (67, " "), (69, " "), (72, " "), (74, " ")]
 "│                                            ││                                           ││                           │"
 "│                                            ││                                           ││                           │"
 "│                                            ││                                           ││                           │"

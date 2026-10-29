@@ -16,7 +16,7 @@ expression: backend
 "│                      ││ [1]  Plan  Chart  Msgs       ││ QUERY PLAN           │"
 "│                      ││   │ QUERY PLAN               ││ json · 6,913 charact…│"
 "│                      ││   │ json                     ││                      │"
-"│                      ││ 1 │ [↵  {↵    "Plan": {↵    …││ [                    │"
+"│                      ││ 1 │ [↵  {↵    "Plan": {↵     ││ [                    │"
 "│                      ││                              ││   {                  │"
 "│                      ││                              ││     "Execution Time":│"
 "│                      ││                              ││  86.623,             │"

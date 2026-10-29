@@ -20,16 +20,16 @@ expression: t.backend()
 "│                            │╰────────────────────────────────────────────────────────────────────────────────────────╯"
 "│                            │╭ Results · 8 rows ──────────────────────────────────╮╭ Cell [Row] · I ──────────────────╮"
 "│                            ││ [Result 1]  Chart  Messages                    H/L ││ id: 5                            │"
-"│                            ││   │ profile                                        ││ name: 山田太郎                   │" Hidden by multi-width symbols: [(93, " "), (95, " "), (97, " "), (99, " ")]
-"│                            ││   │ jsonb                                          ││ nickname: やまだ                 │" Hidden by multi-width symbols: [(97, " "), (99, " "), (101, " ")]
-"│                            ││ 1 │ {"lang": "ko", "tags": ["dev", "db"]}          ││ address: 東京都渋谷区道玄坂1-2-3 │" Hidden by multi-width symbols: [(96, " "), (98, " "), (100, " "), (102, " "), (104, " "), (106, " "), (108, " "), (110, " "), (112, " ")]
-"│                            ││ 2 │ {}                                             ││ profile: {"lang": "ja"}          │"
-"│                            ││ 3 │ {"vip": true, "level": 7}                      ││                                  │"
-"│                            ││ 4 │ {"flags": ["🇰🇷", "🇺🇸"]}                        ││                                  │" Hidden by multi-width symbols: [(49, " "), (55, " ")]
-"│                            ││ 5 │ {"lang": "ja"}                                 ││                                  │"
-"│                            ││ 6 │ {"lang": "zh"}                                 ││                                  │"
-"│                            ││ 7 │ {"lang": "en"}                                 ││                                  │"
-"│                            ││ 8 │ {"multiline": true}                            ││                                  │"
+"│                            ││            │ profile                               ││ name: 山田太郎                   │" Hidden by multi-width symbols: [(93, " "), (95, " "), (97, " "), (99, " ")]
+"│                            ││            │ jsonb                                 ││ nickname: やまだ                 │" Hidden by multi-width symbols: [(97, " "), (99, " "), (101, " ")]
+"│                            ││ 1 01大樓 … │ {"lang": "ko", "tags": ["dev", "db"]} ││ address: 東京都渋谷区道玄坂1-2-3 │" Hidden by multi-width symbols: [(37, " "), (39, " "), (96, " "), (98, " "), (100, " "), (102, " "), (104, " "), (106, " "), (108, " "), (110, " "), (112, " ")]
+"│                            ││ 2          │ {}                                    ││ profile: {"lang": "ja"}          │"
+"│                            ││ 3          │ {"vip": true, "level": 7}             ││                                  │"
+"│                            ││ 4          │ {"flags": ["🇰🇷", "🇺🇸"]}               ││                                  │" Hidden by multi-width symbols: [(58, " "), (64, " ")]
+"│                            ││ 5          │ {"lang": "ja"}                        ││                                  │"
+"│                            ││ 6          │ {"lang": "zh"}                        ││                                  │"
+"│                            ││ 7  View, … │ {"lang": "en"}                        ││                                  │"
+"│                            ││ 8          │ {"multiline": true}                   ││                                  │"
 "│                            ││                                                    ││                                  │"
 "│                            ││                                                    ││                                  │"
 "│                            ││                                                    ││                                  │"

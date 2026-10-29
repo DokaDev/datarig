@@ -153,12 +153,14 @@ fn j_and_k_in_the_inspector_move_the_grids_column() {
     h.keys(&"j".repeat(50));
     assert_eq!(cell(&h), (1, 39), "stops at the last column");
     h.draw(W, H);
-    assert!(h.app.tab().grid.left > 0 && h.app.tab().grid.hit_cols.iter().any(|c| c.2 == 39));
+    let g = &h.app.tab().grid;
+    assert!(g.x_off > 0 && whole_on_screen(g, 39), "scrolled to the last column, shown whole");
+    assert_eq!(g.x_off, g.x_max(), "just far enough");
     assert_eq!(entry(&mut h, 39).1, selected());
     h.keys(&"k".repeat(50));
     assert_eq!(cell(&h), (1, 0));
     h.draw(W, H);
-    assert_eq!((h.app.tab().grid.left, h.app.detail.first), (0, 0));
+    assert_eq!((h.app.tab().grid.x_off, h.app.detail.first), (0, 0));
 }
 
 /// A click on an entry (released on it) moves the grid's cell to that column of the same row,
@@ -178,7 +180,10 @@ fn a_click_on_an_entry_moves_the_grids_cell_and_scrolls_the_grid() {
     assert_eq!(h.app.focus, Focus::Inspector);
     assert!(h.viewer().is_none(), "one click selects");
     h.draw(W, H);
-    assert!(h.app.tab().grid.left > 0 && h.app.tab().grid.hit_cols.iter().any(|c| c.2 == k));
+    let g = &h.app.tab().grid;
+    assert!(g.x_off > 0 && whole_on_screen(g, k), "scrolled to column {k}, shown whole");
+    // Just far enough: the column ends at the view's right edge.
+    assert_eq!(g.col_x[k + 1], g.x_off + g.view_w as usize);
     assert_eq!(entry(&mut h, k).1, selected());
     // Again on the same entry: the cell viewer, as a second click on a grid cell.
     click(&mut h, l.x + 3, l.y + k as u16);

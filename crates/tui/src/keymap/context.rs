@@ -252,7 +252,7 @@ impl Ctx {
                 "The `/` filter of the explorer: profiles (name, host, database), folders, tunnels, environments, Startup SQL (name, statements) and saved queries, and under connected profiles the databases, schemas, tables, views and structure items already loaded."
             }
             Ctx::Grid => {
-                "The result grid. `/` searches the fetched rows forward, `?` backward (a Rust regular expression, case sensitive unless it starts with `(?i)`; NULL never matches)."
+                "The result grid. The wheel scrolls the rows; a sideways wheel (a trackpad) or Shift+wheel scrolls the view sideways, four characters a step, the columns at its edges partly shown, until a key or a click moves the cell (`h`/`l` bring its column into view, moving the view as little as it takes). `/` searches the fetched rows forward, `?` backward (a Rust regular expression, case sensitive unless it starts with `(?i)`; NULL never matches)."
             }
             Ctx::GridMatches => {
                 "The result grid while a search is on (after `/` or `?`): `n` goes to the next matching cell in the search's direction, `N` the other way, from page to page through every fetched row (in the spill file too), around the ends with a warning; `Esc` ends the search, and `n` shows the next page again."
