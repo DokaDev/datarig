@@ -1089,8 +1089,10 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
     let look = crate::widgets::grid::Look { marks: &marks, icons: app.icons_on() };
     // The portal belongs to the last statement of the rows' run: only its rows page.
     let answer = app.tab().exec.shown.is_some() && app.tab().exec.shown == app.tab().answer_index();
-    // `n` is the search's while one is on: the next page's key there.
-    let next_key = app.next_page_key(app.grid_ctx());
+    // `n` is the search's while one is on, and typed while its prompt is open: the next page's
+    // key there.
+    let searching = app.grid_prompt_open() || app.grid_search_on();
+    let next_key = app.next_page_key(if searching { Ctx::GridMatches } else { Ctx::Grid });
     let run_again = app.can_run_again();
     let text_plan = app.text_plan_hint();
     // A result whose portal was closed for being idle (or never held), or whose fetching

@@ -705,3 +705,49 @@ fn a_long_pattern_keeps_its_end_and_marks_its_cut_start() {
     let line = strip_at(&mut h, 200, 40);
     assert!(line.contains("/(?i)(needle|haystack|1234567890)"), "{line:?}");
 }
+
+/// Numbers `0..n` in a column `id` read with the portal held open (the policy's idle timeout
+/// closes it), the grid focused.
+fn held(n: usize) -> Harness {
+    let mut h = Harness::connected(Lang::En);
+    h.ctrl('e');
+    let id = h.app.tab().exec.query_id;
+    let index = h.app.tabs.active_index();
+    h.tab_db(index, DbEvent::TxOpen(true));
+    let columns = Some(vec![meta("id", "int8", true, false)]);
+    let rows = (0..n).map(|i| vec![Some(i.to_string())]).collect();
+    h.tab_db(index, DbEvent::Page { id, columns, rows, more: true, elapsed: Duration::from_millis(2) });
+    h.key(KeyCode::Tab);
+    h
+}
+
+#[test]
+fn the_prompt_names_the_next_page_key_of_the_search() {
+    let mut h = held(500);
+    // The portal closes for being idle: the next page runs the SELECT again, by its key.
+    h.advance(Duration::from_secs(31));
+    assert!(strip_at(&mut h, 200, 40).contains("paging closed \u{2014} n runs the SELECT again"));
+    // While the prompt is open `n` is typed, and after `Enter` it is the search's.
+    h.keys("/");
+    h.type_text("^42$");
+    let line = strip_at(&mut h, 200, 40);
+    assert!(line.contains("/^42$") && line.contains("Space r n runs the SELECT again"), "{line:?}");
+}
+
+#[test]
+fn a_background_tabs_idle_close_names_the_next_page_key_of_its_search() {
+    let mut h = held(500);
+    h.keys("/");
+    h.type_text("^42$");
+    h.key(KeyCode::Enter);
+    assert_eq!(h.app.key_context(), Ctx::GridMatches);
+    // Another tab is active when the portal of the first one closes for being idle.
+    h.ctrl('t');
+    assert_eq!(h.app.tabs.active_index(), 1);
+    h.advance(Duration::from_secs(31));
+    h.keys("gT");
+    h.app.focus = Focus::Results;
+    assert_eq!((h.app.tabs.active_index(), h.app.key_context()), (0, Ctx::GridMatches));
+    let status = h.status(200, 40);
+    assert!(status.contains("Space r n runs the SELECT again"), "{status}");
+}

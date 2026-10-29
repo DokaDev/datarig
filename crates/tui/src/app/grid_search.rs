@@ -496,6 +496,11 @@ fn shown_rows(t: &Tab) -> Option<&ResultSet> {
     }
 }
 
+/// A search of tab `t`'s grid is on: its prompt is closed and the search is of the rows shown.
+pub(crate) fn search_on(t: &Tab) -> bool {
+    t.find.prompt.is_none() && t.find.active.as_ref().zip(shown_rows(t)).is_some_and(|(a, rs)| a.result == rs.id)
+}
+
 /// What the line under the grid shows of a search.
 pub struct Strip {
     /// `/` or `?`.
@@ -521,11 +526,7 @@ impl App {
 
     /// A search of the active tab's grid is on (its `n` and `N` go to its matches).
     pub fn grid_search_on(&self) -> bool {
-        if self.tabs.is_empty() {
-            return false;
-        }
-        let t = self.tab();
-        t.find.prompt.is_none() && t.find.active.as_ref().zip(shown_rows(t)).is_some_and(|(a, rs)| a.result == rs.id)
+        !self.tabs.is_empty() && search_on(self.tab())
     }
 
     /// The pattern of the search that is on in the active tab's grid, if one is.
