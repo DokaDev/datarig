@@ -2,8 +2,8 @@
 //! ancestors must not:
 //!
 //! 1. bind the same keys twice in one context ([`ConflictKind::Duplicate`]);
-//! 2. hide an ancestor's keys, unless the inner context is the editor or the inner binding is
-//!    a user's `"none"` ([`ConflictKind::Shadow`]);
+//! 2. hide an ancestor's keys, unless the inner context is the editor or a mode of its parent
+//!    ([`Ctx::is_mode`]) or the inner binding is a user's `"none"` ([`ConflictKind::Shadow`]);
 //! 3. make one sequence a prefix of another, e.g. `g` and `g t` ([`ConflictKind::Prefix`]);
 //! 4. put an app binding on a reserved key ([`ConflictKind::Reserved`]);
 //! 5. name an action that does not exist ([`ConflictKind::UnknownAction`], see [`check_ids`]);
@@ -138,7 +138,7 @@ pub fn check_contexts(bindings: &[Bound], contexts: &[Ctx]) -> Vec<Conflict> {
                     Some(ConflictKind::Prefix)
                 } else if dx == dy {
                     Some(if reserved(x) || reserved(y) { ConflictKind::Reserved } else { ConflictKind::Duplicate })
-                } else if inner.target == Target::Disabled || inner.ctx.is_editor() {
+                } else if inner.target == Target::Disabled || inner.ctx.is_editor() || inner.ctx.is_mode() {
                     None
                 } else if reserved(inner) || reserved(outer) {
                     Some(ConflictKind::Reserved)

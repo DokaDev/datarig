@@ -6,7 +6,7 @@ use crate::app::hover::PointerOn;
 use crate::app::tabs::{DdlState, ResultView};
 use crate::app::{App, Focus, Layout, Paging, Results};
 use crate::keymap::Ctx;
-use crate::text::{clip, wrap, wrap_words};
+use crate::text::{clip, width, wrap, wrap_words};
 use crate::theme;
 use crate::widgets::explorer::draw_explorer;
 use crate::widgets::popup::draw_popup;
@@ -164,7 +164,10 @@ pub(crate) fn draw_workspace(f: &mut Frame, app: &mut App) -> Option<(u16, u16)>
     if app.focus == Focus::Tree {
         filter_cursor
     } else {
-        (app.focus == Focus::Editor && editor_area.is_some()).then_some(cursor)
+        match app.focus {
+            Focus::Results => app.layout.grid_prompt_cursor,
+            _ => (app.focus == Focus::Editor && editor_area.is_some()).then_some(cursor),
+        }
     }
 }
 
@@ -1003,6 +1006,42 @@ fn draw_welcome(app: &mut App, area: Rect, buf: &mut Buffer) {
     draw_notices(app, x, y, w, bottom, buf);
 }
 
+/// The line under the grid while its search has something to show: `/` and the prompt's input
+/// (the terminal's cursor in it) or the pattern of the search that is on, and on the right
+/// where the cursor is among the matches.
+fn draw_search_strip(app: &mut App, strip: &crate::app::grid_search::Strip, area: Rect, buf: &mut Buffer) {
+    let th = theme::cur();
+    let style = Style::new().fg(th.fg).bg(th.surface);
+    buf.set_style(area, style);
+    let w = area.width.saturating_sub(1) as usize;
+    // The count, and the note after it where the pattern keeps its room.
+    let count_w = width(&strip.count);
+    let status = match &strip.note {
+        Some(n) if strip.text_width.max(8) + 3 + count_w + 1 + width(n) <= w => format!("{} {n}", strip.count),
+        _ => strip.count.clone(),
+    };
+    let status = clip(&status, w.saturating_sub(4));
+    let status_w = width(&status);
+    let x = area.x + 1;
+    buf.set_stringn(x, area.y, strip.mark.to_string(), 1, style.fg(th.accent));
+    let input_w = w.saturating_sub(1 + status_w + usize::from(status_w > 0) * 2);
+    let input = Rect { x: x + 1, y: area.y, width: input_w as u16, height: 1 };
+    match &strip.pattern {
+        Some(p) => {
+            buf.set_stringn(input.x, input.y, clip(p, input_w), input_w, style);
+        }
+        None => {
+            if let Some(cx) = app.draw_grid_prompt(input, buf, style) {
+                app.layout.grid_prompt_cursor = Some((cx, area.y));
+            }
+        }
+    }
+    if status_w > 0 {
+        let sx = area.x + area.width - 1 - status_w as u16;
+        buf.set_stringn(sx, area.y, &status, status_w, Style::new().fg(th.fg_muted).bg(th.surface));
+    }
+}
+
 pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
     let th = theme::cur();
     let msg_line = |buf: &mut Buffer, text: &str, color| {
@@ -1036,6 +1075,9 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
         .unwrap_or_default();
     let run_again = app.can_run_again();
     let text_plan = app.text_plan_hint();
+    // The grid's search: its prompt or the search that is on, on the line under the grid (in
+    // place of a note about the paging there).
+    let strip = app.grid_search_strip().filter(|_| area.height > 3);
     // Where the grid's cells were before this frame: laid out otherwise (scrolled, another
     // result), the cell under the pointer is not there any more.
     let grid_was = |t: &crate::app::Tab| {
@@ -1059,6 +1101,10 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
             let lines = wrap(&t, area.width as usize).len() as u16;
             let w = area.width.saturating_sub(1) as usize;
             draw_notices(app, area.x + 1, area.y + lines + 1, w, area.y + area.height, buf);
+        }
+        Results::Rows(rs) if strip.is_some() => {
+            let grid = Rect { height: area.height - 1, ..area };
+            crate::widgets::grid::render(rs, &mut t.grid, grid, buf, &app.i18n, focused, look);
         }
         // A result whose portal was closed for being idle (or never held), or whose fetching
         // stopped at its spill limit, keeps its rows and says so below them.
@@ -1114,6 +1160,34 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
             msg_line(buf, &app.i18n.msg(&msg), th.error)
         }
         Results::Cancelled => msg_line(buf, &app.i18n.label(Label::QueryCancelled), th.warning),
+    }
+    if let Some(strip) = &strip {
+        draw_search_strip(app, strip, Rect { y: area.y + area.height - 1, height: 1, ..area }, buf);
+    }
+    // The matches of the grid's search on screen: the whole cell tinted (a value may be cut
+    // where it matches), the cursor's own match apart.
+    let t = app.tab();
+    if let Results::Rows(rs) = &t.results
+        && let Some(m) = t.find.shown(rs)
+        && t.exec.view == ResultView::Rows
+    {
+        let g = &t.grid;
+        let len = rs.rows.len();
+        let shown = g.top..(g.top + g.page_rows).min(g.window(len).end);
+        let mut lookups = 0;
+        for r in shown {
+            for &(_, _, c) in &g.hit_cols {
+                lookups += 1;
+                if !m.has(r, c) {
+                    continue;
+                }
+                let style = if (r, c) == (g.row, g.col) && focused { th.grid_match_current } else { th.grid_match };
+                if let Some(cell) = g.cell_rect(r, c, len) {
+                    buf.set_style(cell.intersection(area), style);
+                }
+            }
+        }
+        app.count_grid_lookups(lookups);
     }
     if grid_was(app.tab()) != before && matches!(app.pointer_on, Some(PointerOn::Cell(..))) {
         app.pointer_on = None;

@@ -453,6 +453,8 @@ pub struct Tab {
     pub values_wait: Option<ValuesWait>,
     pub results: Results,
     pub grid: GridState,
+    /// The search of the grid (`/`, `?`, `n`, `N`).
+    pub find: super::grid_search::GridFind,
     pub exec: TabSession,
     /// The last statement outcome of this tab (the status bar shows it while the tab is active).
     pub status: Option<Notice>,
@@ -580,6 +582,7 @@ impl Tab {
             values_wait: None,
             results: Results::Empty,
             grid: GridState::default(),
+            find: Default::default(),
             exec: TabSession::new(),
             status: None,
             doc: Doc::new(),

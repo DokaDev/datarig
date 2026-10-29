@@ -12,6 +12,9 @@
 use super::buffer::graphemes;
 use super::motion::{Motion, Pos};
 use super::{EdEvent, Editor, Mode, vim};
+pub use crate::widgets::search::SearchNotice;
+use crate::widgets::search::compile;
+pub(super) use crate::widgets::search::summary;
 use crate::widgets::text_input::{InputResult, TextInput};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use regex::Regex;
@@ -40,38 +43,12 @@ impl Last {
     }
 }
 
-/// What a search has to say, for the app to show.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum SearchNotice {
-    /// It went past the end of the text (`bottom`) or its start, and on from the other end.
-    Wrapped {
-        bottom: bool,
-    },
-    NotFound(String),
-    /// The pattern is not a valid regular expression: what is wrong with it.
-    Invalid(String),
-    /// `n`, `N` or an empty pattern without a search before.
-    NoPrevious,
-    /// `*` or `#` with nothing but blanks from the cursor to the end of the line.
-    NoWord,
-}
-
 /// The work searches did since it was last taken: bytes a search searched (each line with its
 /// line break), and lines a frame highlighted.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct SearchWork {
     pub bytes: usize,
     pub highlighted: usize,
-}
-
-/// A summary of a pattern error on one line: the regex crate's own message without the
-/// pattern and the caret drawn under it.
-pub(super) fn summary(e: &regex::Error) -> String {
-    let s = e.to_string();
-    match s.lines().rev().find_map(|l| l.trim().strip_prefix("error: ")) {
-        Some(m) => m.to_string(),
-        None => s.split_whitespace().collect::<Vec<_>>().join(" "),
-    }
 }
 
 /// Bytes of the grapheme of `line` at byte `at` (1 at its end, as Vim counts it there).
@@ -295,7 +272,7 @@ impl Editor {
         let origin = p.origin;
         p.preview = match p.input.text() {
             "" => None,
-            t => Regex::new(t).ok(),
+            t => compile(t).ok(),
         };
         self.back_to(origin);
         if self.rec.replaying() {
@@ -320,7 +297,7 @@ impl Editor {
         self.back_to(p.origin);
         let re = match p.input.text() {
             "" => self.last_search.as_ref().map(|l| l.re.clone()).ok_or(SearchNotice::NoPrevious),
-            t => Regex::new(t).map_err(|e| SearchNotice::Invalid(summary(&e))),
+            t => compile(t).map_err(SearchNotice::Invalid),
         };
         let re = match re {
             Ok(re) => re,
@@ -390,10 +367,10 @@ impl Editor {
         let text = regex::escape(&gs[a..b].concat());
         let pattern = if word && whole { format!(r"\b{text}\b") } else { text };
         // An escaped literal within `\b` always compiles; the size limit is the only way out.
-        match Regex::new(&pattern) {
+        match compile(&pattern) {
             Ok(re) => self.set_search(re, forward),
             Err(e) => {
-                self.search_notice = Some(SearchNotice::Invalid(summary(&e)));
+                self.search_notice = Some(SearchNotice::Invalid(e));
                 return None;
             }
         }

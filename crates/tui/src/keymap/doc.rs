@@ -21,13 +21,15 @@ pub fn render() -> String {
          viewer is not modal: it sits under `workspace`, so the workspace keys (run, …) keep working.\n\n\
          - **[text]** text input: letters, digits, symbols and `Space` are typed. No leader, no Hangul mapping.\n\
          - **[editor]** the query editor: its keys may hide keys of the contexts around it, except protected keys.\n\
+         - **grid.matches** the result grid while a search is on: its keys (`n`, `N`, `Esc`) hide the grid's \
+         until the search ends.\n\
          - **Hangul**: outside text input a Korean 2-set jamo or syllable counts as the QWERTY key(s) at its \
          place (U+3153 = `j`, U+D558 = `g k`); the status bar then shows the Korean input-source mark. The \
          character vim's `f t F T r` wait for is taken as typed.\n\
          - **R**: repeats while the key is held (terminal auto-repeat).\n\
          - **Key guide**: after `Space` a which-key popup lists the keys that may follow (after 300 ms; \
          `Backspace` goes up a level, `Esc` closes). `Space ?` or `F1` open the keyboard help, the same \
-         way everywhere (`?` alone is left to vim's backward search). The help is one list: the sections of \
+         way everywhere (`?` alone is left to the backward search of the editor and of the result grid). The help is one list: the sections of \
          the current context first and open, every other context closed below (`Enter`/`l`/`h` or a click \
          opens and closes a section); `/` searches all of them. The status bar shows the most relevant keys \
          of the current context.\n\

@@ -89,6 +89,12 @@ fn contexts_form_the_planned_tree() {
     assert!(Ctx::VimInsert.is_text_input() && Ctx::VimInsert.is_editor());
     assert!(!Ctx::VimNormal.is_text_input() && Ctx::VimNormal.is_editor());
     assert!(!Ctx::Explorer.is_editor() && !Ctx::Explorer.is_text_input());
+    // The grid's search: its prompt is text input beside the editor's, its matches a mode of the
+    // grid (whose `n` and `Esc` it may hide).
+    assert_eq!(Ctx::GridSearch.chain(), [Ctx::GridSearch, Ctx::Workspace, Ctx::Root]);
+    assert!(Ctx::GridSearch.is_text_input() && !Ctx::GridSearch.is_editor());
+    assert_eq!(Ctx::GridMatches.chain(), [Ctx::GridMatches, Ctx::Grid, Ctx::Nav, Ctx::Workspace, Ctx::Root]);
+    assert!(Ctx::GridMatches.is_mode() && !Ctx::GridMatches.is_text_input() && !Ctx::Grid.is_mode());
 }
 
 // ── the default table ────────────────────────────────────────────────────────

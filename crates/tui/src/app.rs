@@ -42,6 +42,7 @@ pub mod export_path_pick;
 pub mod folder_pick;
 pub mod folder_read;
 mod format;
+pub mod grid_search;
 pub mod guide;
 pub mod hover;
 pub mod idle;
@@ -393,6 +394,8 @@ pub enum AppEvent {
     Export(export::ExportEvent),
     /// A folder read of a file-system picker answered.
     Folder(folder_read::FolderAnswer),
+    /// A search job of a result grid answered.
+    GridSearch(grid_search::Answer),
 }
 
 /// Which session a driver event comes from.
@@ -445,6 +448,8 @@ pub struct Layout {
     pub editor_text: Rect,
     /// Where the editor's cursor was drawn last (the action menu opens there).
     pub editor_cursor: (u16, u16),
+    /// Where the cursor of the grid's search prompt was drawn last, while it is open.
+    pub grid_prompt_cursor: Option<(u16, u16)>,
     /// The editor and the results pane together (a query tab), for resizing the pane.
     pub body: Rect,
     /// The results pane's top border while both panes are drawn: dragging it resizes them.
@@ -596,6 +601,8 @@ pub struct App {
     exports: export::Exports,
     /// The folder reads of the file-system pickers, on workers.
     folder_reads: folder_read::FolderReads,
+    /// The search jobs of the result grids, on workers.
+    grid_jobs: grid_search::GridJobs,
     /// Why the config file could not be used (the settings screen says so; nothing is saved).
     config_problem: Option<Notice>,
     /// The default rules and the environments (`[policy.<name>]`); a profile's environment
@@ -977,6 +984,7 @@ impl App {
             fetch_copy: None,
             exports: export::Exports::default(),
             folder_reads: Default::default(),
+            grid_jobs: Default::default(),
             config_problem: status.clone(),
             policies: cfg.policies.clone(),
             clock: Arc::new(Instant::now),
@@ -1621,6 +1629,8 @@ impl App {
                 _ if self.tabs.is_empty() => Ctx::Explorer,
                 Focus::Results | Focus::Inspector if self.plan_shown() => Ctx::Plan,
                 Focus::Results | Focus::Inspector if self.chart_shown() => Ctx::Chart,
+                Focus::Results if self.grid_prompt_open() => Ctx::GridSearch,
+                Focus::Results if self.grid_search_on() => Ctx::GridMatches,
                 Focus::Results => Ctx::Grid,
                 Focus::Inspector if self.inspector_shown() => Ctx::Inspector,
                 Focus::Inspector => Ctx::Grid,
