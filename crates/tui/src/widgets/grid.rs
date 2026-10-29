@@ -206,6 +206,9 @@ pub struct GridState {
     /// How many cells (a column's part on screen on one row, its header's two rows counted as
     /// one) the last render drew: the benchmark's measure of a frame's work.
     pub drawn_cells: usize,
+    /// A search's match the next render shows: (row, column, where the match starts in the
+    /// cell's text as drawn, in columns). Taken by that render; only for the cursor's cell.
+    pub reveal: Option<(usize, usize, usize)>,
 }
 
 /// What a grid selection spans.
@@ -539,6 +542,27 @@ pub fn render(
     st.view_w = avail as u16;
     if !st.detached {
         st.follow();
+    }
+    // A search's match in a column wider than the view: its start in view, a little of what
+    // comes before it too (past a value's cut, the cut's `…`).
+    if let Some((r, c, at)) = st.reveal.take()
+        && (r, c) == (st.row, st.col)
+        && !st.detached
+        && let CellRef::Here(Some(v)) = rs.cell(r, c)
+    {
+        let (text, w) = (sanitize_cell(v), widths[c]);
+        let tw = width(&text);
+        let k = if tw > w {
+            at.min(w - 1)
+        } else if rs.columns[c].meta.numeric {
+            w - tw + at
+        } else {
+            at
+        };
+        let p = st.col_x[c] + 2 + k;
+        if p < st.x_off || p >= st.x_off + avail {
+            st.x_off = p.saturating_sub((avail / 4).min(8)).max(st.col_x[c]);
+        }
     }
     st.x_off = st.x_off.min(st.x_max());
 

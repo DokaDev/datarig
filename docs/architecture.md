@@ -254,8 +254,10 @@ Held by CI budgets (`docs/perf.md`).
   unless it fills the view already. The wheel (`ScrollLeft`/`Right`, Shift+vertical) and a drag
   event past the left or right edge (`drag_edge`; not the wheel extending a drag) move it
   `grid::SIDE_STEP` characters. A column of which only the separator shows is not in `hit_cols`.
-  A cell cut by the right edge whose part on screen is blank though its text is not gets a dim
-  `›` at the edge. The binary hands a burst of wheel events of one kind (as of pointer motions)
+  A cell cut by the right edge whose text columns on screen are blank though its text is not
+  gets a dim `›` at the edge (never a header, never a cell showing only its separator or
+  blank). A search's jump (`grid_search::reveal`) sets `GridState::reveal`, the match's start in
+  the value as drawn, and the next render shows it in a column wider than the view. The binary hands a burst of wheel events of one kind (as of pointer motions)
   to the app and draws once (`input::burst::take_burst`, at most `PER_FRAME` events; the
   benchmark uses it too).
 - **The tab bar** (`widgets::tabbar`): `tabbar::state` reads a tab's session into a `State`

@@ -517,3 +517,60 @@ fn a_column_showing_only_its_separator_is_not_a_cell() {
     }
     assert!(slivers > 0, "a separator alone at the edge was seen");
 }
+
+/// A search's jump shows the match itself, not only its column: in a column wider than the view
+/// (80 columns, the inspector open) the view moves to where the match starts in the value as
+/// drawn (wide characters two columns), and past a value's 40-column cut to the cut's `…`.
+#[test]
+fn a_search_jump_shows_the_match_in_a_column_wider_than_the_view() {
+    let mut h = Harness::connected(Lang::En);
+    let metas =
+        vec![meta("id", "int8", true, false), meta("note", "text", false, false), meta("tail", "text", false, false)];
+    let hangul: String = (0..15).map(|i| char::from_u32(0xAC00 + i).unwrap()).collect();
+    let notes = [
+        "start".to_string(),
+        "needle at the start of a long value here".to_string(),
+        format!("{} needle", "x".repeat(30)),
+        format!("{hangul} needle"),
+        format!("{} needle", "y".repeat(50)),
+    ];
+    let rows =
+        notes.iter().enumerate().map(|(r, n)| vec![Some(r.to_string()), Some(n.clone()), Some("t".into())]).collect();
+    h.ctrl('e');
+    let id = h.app.tab().exec.query_id;
+    h.tab_db(0, DbEvent::Page { id, columns: Some(metas), rows, more: false, elapsed: Duration::from_millis(2) });
+    h.app.focus = Focus::Results;
+    h.draw(W, H);
+    let g = grid(&h);
+    assert!(g.col_x[2] - g.col_x[1] > g.view_w as usize, "the note column is wider than the view");
+    // The part of row `r` on screen.
+    let shown_row = |h: &mut Harness, r: u16| {
+        let y = grid(h).data_y + r;
+        shown(h, y)
+    };
+    h.keys("/");
+    h.type_text("needle");
+    h.key(KeyCode::Enter);
+    assert_eq!((grid(&h).row, grid(&h).col), (1, 1));
+    assert!(shown_row(&mut h, 1).contains("needle"), "{}", shown_row(&mut h, 1));
+    // `n`: the next match, near the end of the same column.
+    h.keys("n");
+    assert_eq!((grid(&h).row, grid(&h).col), (2, 1));
+    let row = shown_row(&mut h, 2);
+    assert!(row.contains("needle"), "{row}");
+    // After fifteen wide characters: at column 31 of the value as drawn.
+    h.keys("n");
+    assert_eq!(grid(&h).row, 3);
+    let row = shown_row(&mut h, 3);
+    assert!(row.contains("needle") && row.contains('\u{AC0E}'), "{row}");
+    // Past the 40-column cut: the cut's end, its `…`, on screen.
+    h.keys("n");
+    assert_eq!(grid(&h).row, 4);
+    let row = shown_row(&mut h, 4);
+    assert!(row.contains("yyy…"), "{row}");
+    // Keys keep the column-wise rule: `h` then `l` show the column from its start again.
+    h.keys("hl");
+    h.draw(W, H);
+    let g = grid(&h);
+    assert_eq!(g.x_off, g.col_x[1]);
+}
