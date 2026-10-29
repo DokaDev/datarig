@@ -105,6 +105,19 @@ pub const HINTS: &[(Ctx, &[(&str, Label)])] = &[
         ],
     ),
     (
+        GridMatches,
+        &[
+            ("grid.search_next", Label::HintNextMatch),
+            ("grid.search_clear", Label::HintClear),
+            ("grid.view_cell", Label::HintView),
+            ("grid.copy_cell", Label::HintCopy),
+            ("pane.back", Label::HintBack),
+            ("pane.next", Label::HintPane),
+            ("commands.open", Label::HintCommands),
+            ("help.context", Label::HintHelp),
+        ],
+    ),
+    (
         VimNormal,
         &[
             ("query.execute_current", Label::HintRun),
@@ -330,6 +343,13 @@ const ACTIONS: &[(Ctx, &str, &str)] = &[
     (Grid, "v", "grid.select"),
     (Grid, "V", "grid.select_rows"),
     (Grid, "ctrl+a", "grid.select_all"),
+    // search the fetched rows; while a search is on (`grid.matches`) `n`/`N` go to its matches
+    // and `Esc` ends it, `n` is the next page again after that
+    (Grid, "/", "grid.search"),
+    (Grid, "?", "grid.search_back"),
+    (GridMatches, "n", "grid.search_next"),
+    (GridMatches, "N", "grid.search_prev"),
+    (GridMatches, "esc", "grid.search_clear"),
     (Nav, "space r y t", "results.copy.selection.tsv"),
     (Nav, "space r y T", "results.copy.selection.tsv_header"),
     (Nav, "space r y l", "results.copy.selection.list"),
@@ -522,6 +542,8 @@ const RESERVED: &[(Ctx, &[&str], &str)] = &[
     (Commands, &["esc", "enter", "up", "down", "ctrl+p", "ctrl+n", "tab", "shift+tab"], "command line"),
     (Commands, TEXT, "text input"),
     (ExplorerFilter, TEXT, "text input"),
+    (GridSearch, &["esc", "enter", "ctrl+w"], "grid search"),
+    (GridSearch, TEXT, "text input"),
     (QuickConnect, &["esc", "enter", "up", "down", "ctrl+p", "ctrl+n"], "quick connect"),
     // `→`/`←` open and close the databases and schemas; the filter keeps its other
     // editing keys.

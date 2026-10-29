@@ -89,6 +89,12 @@ fn contexts_form_the_planned_tree() {
     assert!(Ctx::VimInsert.is_text_input() && Ctx::VimInsert.is_editor());
     assert!(!Ctx::VimNormal.is_text_input() && Ctx::VimNormal.is_editor());
     assert!(!Ctx::Explorer.is_editor() && !Ctx::Explorer.is_text_input());
+    // The grid's search: its prompt is text input beside the editor's, its matches a mode of the
+    // grid (whose `n` and `Esc` it may hide).
+    assert_eq!(Ctx::GridSearch.chain(), [Ctx::GridSearch, Ctx::Workspace, Ctx::Root]);
+    assert!(Ctx::GridSearch.is_text_input() && !Ctx::GridSearch.is_editor());
+    assert_eq!(Ctx::GridMatches.chain(), [Ctx::GridMatches, Ctx::Grid, Ctx::Nav, Ctx::Workspace, Ctx::Root]);
+    assert!(Ctx::GridMatches.is_mode() && !Ctx::GridMatches.is_text_input() && !Ctx::Grid.is_mode());
 }
 
 // ── the default table ────────────────────────────────────────────────────────
@@ -188,6 +194,17 @@ fn conflict_check_catches_all_seven_kinds() {
     assert_eq!(kinds(&with(vec![bound(Ctx::VimNormal, "ctrl+e", res)])), [ConflictKind::Protected]);
     assert_eq!(kinds(&with(vec![bound(Ctx::VimNormal, "space", res)])), [ConflictKind::Protected], "the leader");
     assert_eq!(kinds(&with(vec![bound(Ctx::VimInsert, "f1", res)])), [ConflictKind::Protected]);
+    // A mode of the grid may hide the grid's keys, never a reserved one with an action of its own.
+    let res_grid = bound(Ctx::Grid, "x", res);
+    let in_mode = check_contexts(&[res_grid.clone(), bound(Ctx::GridMatches, "x", refresh)], &[Ctx::GridMatches]);
+    assert!(in_mode.iter().any(|c| c.kind == ConflictKind::Reserved), "{in_mode:?}");
+    assert!(
+        check_contexts(&[bound(Ctx::Grid, "x", refresh), bound(Ctx::GridMatches, "x", refresh)], &[Ctx::GridMatches])
+            .is_empty()
+    );
+    // The grid's search prompt keeps its `Ctrl+W` over the workspace's tab close.
+    assert!(kinds(&with(vec![])).is_empty());
+    assert_eq!(Keymap::default().resolve_seq(Ctx::GridSearch, &k("ctrl+w")).0, Some(Target::Reserved("grid search")));
     // The message names the context, the keys and both sides.
     let msg = check(&dup)[0].to_string();
     assert!(msg.contains("explorer") && msg.contains("x = explorer.refresh"), "{msg}");

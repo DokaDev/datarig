@@ -423,11 +423,8 @@ impl App {
         if !t.grid.at_page_end(len) || (t.grid.window(len).end == len && !rs.more) {
             return;
         }
-        let key = self
-            .keymap
-            .hint_keys(Action::PageNext, Ctx::Grid, self.enhanced_keys)
-            .map(|k| crate::keymap::keys::label(&k))
-            .unwrap_or_default();
+        // `n` is the search's while one is on: the next page's key there.
+        let key = self.next_page_key(self.grid_ctx());
         self.flash(Notice::new(Msg::ResultsPageHint { key }, Level::Info));
     }
 
@@ -445,11 +442,7 @@ impl App {
         let qid = t.exec.query_id;
         self.send_tab(id, DbCommand::ClosePortal { id: qid });
         let m = if rerun {
-            let key = self
-                .keymap
-                .hint_keys(Action::PageNext, Ctx::Grid, self.enhanced_keys)
-                .map(|k| crate::keymap::keys::label(&k))
-                .unwrap_or_default();
+            let key = self.next_page_key(if self.tab().id == id { self.grid_ctx() } else { Ctx::Grid });
             Msg::ResultsPagingClosedRerun { count, key }
         } else {
             Msg::ResultsPagingClosed { count }

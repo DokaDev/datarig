@@ -570,6 +570,8 @@ impl App {
     /// results have the focus; a tab only made active while the explorer keeps the
     /// focus connects nothing.
     pub(super) fn after_input(&mut self) {
+        // A search of a grid that no longer shows its result goes.
+        self.sweep_grid_search();
         // The input moved the focus itself (not one of the corrections below).
         let moved = self.focus != self.last_focus;
         // Without a tab only the explorer can have the focus (the welcome panel stands in for

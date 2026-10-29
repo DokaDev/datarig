@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/ui_snapshots.rs
+expression: t.backend()
+---
+"╭ Explorer ────────────╮ 1 console 1 ×                                          "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1       ││ local-pg / datarig  127.0.0.1:55432                  │"
+"│  ▾ ●   local-pg      ││  1 -- datarig 🐘  Ctrl+E: run the statement under the│" Hidden by multi-width symbols: [(41, " ")]
+"│    ▾ datarig default ││  2▎SELECT * FROM shop.users WHERE id <= 8;  ✓ 8 rows…│"
+"│      ▸ analytics     ││  3                                                   │"
+"│      ▸ public        ││  4 SELECT u.name, o.status, o.total_amount           │"
+"│      ▸ shop          ││  5 FROM shop.orders o                                │"
+"│                      ││  6 JOIN shop.users u ON u.id = o.user_id             │"
+"│                      │╰──────────────────────────────────────────────────────╯"
+"│                      │╭ Results · 8 rows ────────────╮╭ Cell [Row] · I ──────╮"
+"│                      ││ [Result 1]  Chart  Messages  ││ id: 5                │"
+"│                      ││   │ profile                  ││ name: 山田太郎       │" Hidden by multi-width symbols: [(65, " "), (67, " "), (69, " "), (71, " ")]
+"│                      ││   │ jsonb                    ││ nickname: やまだ     │" Hidden by multi-width symbols: [(69, " "), (71, " "), (73, " ")]
+"│                      ││ 1 │ {"lang": "ko", "tags": […││ address: 東京都渋谷… │" Hidden by multi-width symbols: [(68, " "), (70, " "), (72, " "), (74, " "), (76, " ")]
+"│                      ││ 2 │ {}                       ││ profile: {"lang": "j…│"
+"│                      ││ 3 │ {"vip": true, "level": 7}││                      │"
+"│                      ││ 4 │ {"flags": ["🇰🇷", "🇺🇸"]}  ││                      │" Hidden by multi-width symbols: [(43, " "), (49, " ")]
+"│                      ││ 5 │ {"lang": "ja"}           ││                      │"
+"│                      ││ 6 │ {"lang": "zh"}           ││                      │"
+"│                      ││ 7 │ {"lang": "en"}           ││                      │"
+"│                      ││ /lang                    2/4 ││                      │"
+"╰──────────────────────╯╰──────────────────────────────╯╰──────────────────────╯"
+" NORMAL  local-pg │ 8 rows · 12ms                 │ n next match · Esc clear EN "

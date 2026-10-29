@@ -280,6 +280,33 @@ fn a_snapshot_reads_the_rows_of_its_range_from_another_thread() {
 }
 
 #[test]
+fn a_snapshot_reads_a_part_of_its_rows_with_their_numbers() {
+    let state = temp_dir("snapshot-part");
+    for n in [700, 9_000] {
+        let (s, _dir) = paged(&state, n, 300, MIN_WINDOW);
+        let snap = s.snapshot(100..n).unwrap();
+        let mut got = Vec::new();
+        let mut starts = Vec::new();
+        snap.for_each_chunk_in(250..520, 100, |at, c| {
+            starts.push(at);
+            got.extend_from_slice(c);
+            true
+        })
+        .unwrap();
+        assert_eq!(starts, [250, 350, 450], "{n}: numbered from the snapshot's first row");
+        assert_eq!(got, rows(350..620), "{n}");
+        let mut past = 0;
+        snap.for_each_chunk_in(n - 120..n + 10, 7, |_, c| {
+            past += c.len();
+            true
+        })
+        .unwrap();
+        assert_eq!(past, 20, "{n}: clamped to the snapshot");
+    }
+    let _ = std::fs::remove_dir_all(&state);
+}
+
+#[test]
 fn a_snapshot_leaves_out_rows_appended_later_and_stops_when_asked() {
     let state = temp_dir("snapshot-later");
     let (mut s, _dir) = paged(&state, 4_000, 500, MIN_WINDOW);

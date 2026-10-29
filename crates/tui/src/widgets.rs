@@ -8,6 +8,7 @@ pub mod editor;
 pub mod grid;
 pub mod list_picker;
 pub mod plan;
+pub mod search;
 pub mod tabbar;
 pub mod text_input;
 pub mod tree;

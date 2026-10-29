@@ -2,10 +2,11 @@
 //! ancestors must not:
 //!
 //! 1. bind the same keys twice in one context ([`ConflictKind::Duplicate`]);
-//! 2. hide an ancestor's keys, unless the inner context is the editor or the inner binding is
-//!    a user's `"none"` ([`ConflictKind::Shadow`]);
+//! 2. hide an ancestor's keys, unless the inner context is the editor or a mode of its parent
+//!    ([`Ctx::is_mode`]) or the inner binding is a user's `"none"` ([`ConflictKind::Shadow`]);
+//!    a search prompt ([`Ctx::is_prompt`]) may keep its own editing keys (reserved) over them;
 //! 3. make one sequence a prefix of another, e.g. `g` and `g t` ([`ConflictKind::Prefix`]);
-//! 4. put an app binding on a reserved key ([`ConflictKind::Reserved`]);
+//! 4. put an app binding on a reserved key ([`ConflictKind::Reserved`]), a mode's too;
 //! 5. name an action that does not exist ([`ConflictKind::UnknownAction`], see [`check_ids`]);
 //! 6. bind a character key or a `Space` sequence in a text input context
 //!    ([`ConflictKind::TextKey`]);
@@ -140,8 +141,14 @@ pub fn check_contexts(bindings: &[Bound], contexts: &[Ctx]) -> Vec<Conflict> {
                     Some(if reserved(x) || reserved(y) { ConflictKind::Reserved } else { ConflictKind::Duplicate })
                 } else if inner.target == Target::Disabled || inner.ctx.is_editor() {
                     None
+                } else if reserved(inner) && inner.ctx.is_prompt() {
+                    // A search prompt's own editing keys are typed into it (`Ctrl+W`), as in the
+                    // editor's prompt.
+                    None
                 } else if reserved(inner) || reserved(outer) {
                     Some(ConflictKind::Reserved)
+                } else if inner.ctx.is_mode() {
+                    None
                 } else {
                     Some(ConflictKind::Shadow)
                 };

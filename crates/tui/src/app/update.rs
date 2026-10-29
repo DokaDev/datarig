@@ -116,6 +116,7 @@ impl App {
 
     pub fn on_app_event(&mut self, ev: AppEvent) {
         self.on_app_event_here(ev);
+        self.sweep_grid_search();
         self.sweep_as_plan();
         self.sweep_exports();
         self.keychain_offer_check();
@@ -143,6 +144,7 @@ impl App {
             AppEvent::TestProbe { seq, probes } => self.on_test_probe(seq, probes),
             AppEvent::Export(ev) => self.on_export_event(ev),
             AppEvent::Folder(a) => self.on_folder_answer(a),
+            AppEvent::GridSearch(a) => self.on_grid_search_answer(a),
         }
         // What an open quick connect list waits for may have arrived.
         if self.overlays.quick().is_some() {
@@ -205,6 +207,8 @@ impl App {
         } else if self.overlays.is_empty() && (self.focus == Focus::Tree || self.profiles.is_empty()) {
             // The explorer or the welcome panel: a connection URL makes a new profile.
             self.paste_dsn(text);
+        } else if self.overlays.is_empty() && self.focus == Focus::Results && self.grid_prompt_open() {
+            self.grid_prompt_paste(text);
         } else if self.overlays.is_empty() && self.focus == Focus::Editor && !self.profiles.is_empty() {
             let t = self.tab_mut();
             let ev = t.editor.paste(text);
@@ -296,8 +300,13 @@ impl App {
         }
     }
 
-    /// Close the active editor's search prompt as `Esc` does; whether it was open.
+    /// Close the search prompt of the active tab's editor or grid as `Esc` does; whether one
+    /// was open.
     pub(super) fn close_search_prompt(&mut self) -> bool {
+        if self.grid_prompt_open() {
+            self.close_grid_prompt();
+            return true;
+        }
         if self.tabs.is_empty() || !self.tab().editor.searching() {
             return false;
         }
@@ -316,6 +325,7 @@ impl App {
             Ctx::Commands => keys.iter().for_each(|k| self.command_key(k.to_event(), repeat)),
             Ctx::Password => keys.iter().for_each(|k| self.prompt_key(k.to_event(), repeat)),
             Ctx::ExplorerFilter => keys.iter().for_each(|k| self.explorer_filter_key(k.to_event())),
+            Ctx::GridSearch => keys.iter().for_each(|k| self.grid_prompt_key(k.to_event())),
             Ctx::QuickConnect => keys.iter().for_each(|k| self.quick_key(k.to_event(), repeat)),
             Ctx::TabList => keys.iter().for_each(|k| self.tab_list_key(k.to_event(), repeat)),
             Ctx::Chooser | Ctx::ChooserFilter => keys.iter().for_each(|k| self.chooser_key(k.to_event(), repeat)),
@@ -601,17 +611,7 @@ impl App {
             self.flash(Notice::new(msg, Level::Warning));
         }
         if let Some(n) = search {
-            let (msg, level) = match n {
-                SearchNotice::Wrapped { bottom: true } => {
-                    (Msg::Label(Label::EditorSearchWrappedBottom), Level::Warning)
-                }
-                SearchNotice::Wrapped { bottom: false } => (Msg::Label(Label::EditorSearchWrappedTop), Level::Warning),
-                SearchNotice::NotFound(pattern) => (Msg::EditorSearchNotFound { pattern }, Level::Error),
-                SearchNotice::Invalid(error) => (Msg::EditorSearchInvalid { error }, Level::Error),
-                SearchNotice::NoPrevious => (Msg::Label(Label::EditorSearchNoPrevious), Level::Error),
-                SearchNotice::NoWord => (Msg::Label(Label::EditorSearchNoWord), Level::Error),
-            };
-            self.flash(Notice::new(msg, level));
+            self.flash(search_notice(n));
         }
         if let Some(n) = mark {
             let msg = match n {
@@ -1062,4 +1062,17 @@ impl App {
             _ => {}
         }
     }
+}
+
+/// What a search has to say, as the status bar flashes it (the editor's and the grid's).
+pub(super) fn search_notice(n: SearchNotice) -> Notice {
+    let (msg, level) = match n {
+        SearchNotice::Wrapped { bottom: true } => (Msg::Label(Label::EditorSearchWrappedBottom), Level::Warning),
+        SearchNotice::Wrapped { bottom: false } => (Msg::Label(Label::EditorSearchWrappedTop), Level::Warning),
+        SearchNotice::NotFound(pattern) => (Msg::EditorSearchNotFound { pattern }, Level::Error),
+        SearchNotice::Invalid(error) => (Msg::EditorSearchInvalid { error }, Level::Error),
+        SearchNotice::NoPrevious => (Msg::Label(Label::EditorSearchNoPrevious), Level::Error),
+        SearchNotice::NoWord => (Msg::Label(Label::EditorSearchNoWord), Level::Error),
+    };
+    Notice::new(msg, level)
 }

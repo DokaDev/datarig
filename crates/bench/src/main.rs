@@ -210,6 +210,8 @@ async fn budget(o: &Opts) -> Result<Vec<String>, String> {
     budget::editor_block(&mut c, &b, &run("editor_block", r))?;
     let r = editor::run_mysql_in_own_process(&o.scratch, 5 * 1024 * 1024, 100)?;
     budget::editor_mysql(&mut c, &b, &run("editor_mysql", r))?;
+    let r = grid::run(2_000, 24, 200)?;
+    budget::grid(&mut c, &b, &run("grid", r))?;
     let r = plan::run(PLAN_JOINS, PLAN_PARTITIONS, 200)?;
     budget::plan(&mut c, &b, &run("plan", r))?;
     let r = chart::run_in_own_process(&o.scratch, CHART_ROWS, 200)?;

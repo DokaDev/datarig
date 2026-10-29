@@ -172,6 +172,18 @@ block_passes_max = 4.0
 subst_passes_max = 1.0
 subst_ms_max = 1000.0
 
+[grid]
+# The search inside the result grid (2,000 rows of 24 columns of wide text at 160x45; the
+# `grid` scenario): `/` with a pattern typed key by key, `Enter`, then `n` (each key's jobs
+# answered before its frame). The most cells one frame looked up for the matches' highlight:
+# the cells on screen only (at most 43 rows of at most 40 columns here; measured 60, the
+# results pane under the editor shows a few rows), never the matches or the rows; without a
+# search none at all (checked as 0). The key with its frame has a wide margin (a debug build
+# on a loaded developer machine: 13 ms p95; the pattern keys search the 48,000 cells on a
+# worker, `n` is a lookup in the matches found).
+search_highlight_lookups_max = 1720
+search_p95_ms_max = 50.0
+
 [idle]
 secs = 20
 rss_mib_max = 48

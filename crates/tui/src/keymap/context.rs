@@ -9,6 +9,7 @@
 //! │  ├─ nav                 (non-text panes: leader, `:`, Tab)
 //! │  │  ├─ explorer
 //! │  │  ├─ grid
+//! │  │  │  └─ grid.matches     (a search of the grid is on: `n`/`N` go to its matches)
 //! │  │  ├─ inspector          (the result inspector panel, once clicked)
 //! │  │  ├─ plan               (the Plan tab of the results pane)
 //! │  │  ├─ welcome            (no profiles: the panel on the right)
@@ -18,6 +19,7 @@
 //! │  ├─ editor.vim.insert     [editor][text]
 //! │  ├─ editor.vim.search     [editor][text]   (the `/` and `?` prompt)
 //! │  ├─ explorer.filter       [text]
+//! │  ├─ grid.search           [text]   (the grid's `/` and `?` prompt)
 //! │  └─ overlay.cell_viewer
 //! └─ overlay.*              (which-key, help, help filter, command line, quick connect,
 //!                            tab list, profile form, settings, export dialog, chooser, chooser filter, name input,
@@ -35,6 +37,8 @@ pub enum Ctx {
     Explorer,
     ExplorerFilter,
     Grid,
+    GridMatches,
+    GridSearch,
     Inspector,
     Plan,
     Chart,
@@ -72,13 +76,15 @@ pub enum Ctx {
 }
 
 impl Ctx {
-    pub const ALL: [Ctx; 40] = [
+    pub const ALL: [Ctx; 42] = [
         Ctx::Root,
         Ctx::Workspace,
         Ctx::Nav,
         Ctx::Explorer,
         Ctx::ExplorerFilter,
         Ctx::Grid,
+        Ctx::GridMatches,
+        Ctx::GridSearch,
         Ctx::Inspector,
         Ctx::Plan,
         Ctx::Chart,
@@ -124,6 +130,8 @@ impl Ctx {
             Ctx::Explorer => "explorer",
             Ctx::ExplorerFilter => "explorer.filter",
             Ctx::Grid => "grid",
+            Ctx::GridMatches => "grid.matches",
+            Ctx::GridSearch => "grid.search",
             Ctx::Inspector => "inspector",
             Ctx::Plan => "plan",
             Ctx::Chart => "chart",
@@ -169,7 +177,10 @@ impl Ctx {
         match self {
             Ctx::Root => None,
             Ctx::Workspace => Some(Ctx::Root),
-            Ctx::Nav | Ctx::VimInsert | Ctx::VimSearch | Ctx::ExplorerFilter | Ctx::CellViewer => Some(Ctx::Workspace),
+            Ctx::Nav | Ctx::VimInsert | Ctx::VimSearch | Ctx::ExplorerFilter | Ctx::GridSearch | Ctx::CellViewer => {
+                Some(Ctx::Workspace)
+            }
+            Ctx::GridMatches => Some(Ctx::Grid),
             Ctx::Explorer
             | Ctx::Grid
             | Ctx::Inspector
@@ -196,6 +207,7 @@ impl Ctx {
             Ctx::VimInsert
                 | Ctx::VimSearch
                 | Ctx::ExplorerFilter
+                | Ctx::GridSearch
                 | Ctx::Commands
                 | Ctx::QuickConnect
                 | Ctx::TabList
@@ -217,6 +229,18 @@ impl Ctx {
         matches!(self, Ctx::VimNormal | Ctx::VimVisual | Ctx::VimInsert | Ctx::VimSearch | Ctx::Ddl)
     }
 
+    /// A mode of its parent: while it is on, its keys may hide the parent's (the grid while a
+    /// search is on: `n` and `Esc` there are the search's, not the grid's).
+    pub fn is_mode(self) -> bool {
+        self == Ctx::GridMatches
+    }
+
+    /// A search prompt outside the editor: its reserved editing keys (`Ctrl+W`) win over the
+    /// workspace's, as they do in the editor's own prompt.
+    pub fn is_prompt(self) -> bool {
+        self == Ctx::GridSearch
+    }
+
     /// One line for `docs/keybindings.md`.
     pub fn describe(self) -> &'static str {
         match self {
@@ -227,7 +251,15 @@ impl Ctx {
             Ctx::ExplorerFilter => {
                 "The `/` filter of the explorer: profiles (name, host, database), folders, tunnels, environments, Startup SQL (name, statements) and saved queries, and under connected profiles the databases, schemas, tables, views and structure items already loaded."
             }
-            Ctx::Grid => "The result grid.",
+            Ctx::Grid => {
+                "The result grid. `/` searches the fetched rows forward, `?` backward (a Rust regular expression, case sensitive unless it starts with `(?i)`; NULL never matches)."
+            }
+            Ctx::GridMatches => {
+                "The result grid while a search is on (after `/` or `?`): `n` goes to the next matching cell in the search's direction, `N` the other way, from page to page through every fetched row (in the spill file too), around the ends with a warning; `Esc` ends the search, and `n` shows the next page again."
+            }
+            Ctx::GridSearch => {
+                "The search prompt of `/` and `?` on the line under the grid: the cursor goes to the first matching cell while the pattern is typed, `Enter` searches (an empty pattern: the last one), `Esc` goes back to where the cursor was, `Ctrl+W` deletes the word before the cursor. The full values are searched as fetched (not the shown cut), cell by cell, row by row."
+            }
             Ctx::Inspector => {
                 "The result inspector next to the grid, after a click on it: `j`/`k` move between the columns and the grid's cell follows (on the Row tab, a click on a column moves it there too), `Enter` shows the value whole."
             }
@@ -320,6 +352,8 @@ impl Ctx {
             Ctx::Explorer => Label::KeyctxExplorer,
             Ctx::ExplorerFilter => Label::KeyctxExplorerFilter,
             Ctx::Grid => Label::KeyctxGrid,
+            Ctx::GridMatches => Label::KeyctxGridMatches,
+            Ctx::GridSearch => Label::KeyctxGridSearch,
             Ctx::Inspector => Label::KeyctxInspector,
             Ctx::Plan => Label::KeyctxPlan,
             Ctx::Chart => Label::KeyctxChart,

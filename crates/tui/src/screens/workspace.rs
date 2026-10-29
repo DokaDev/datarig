@@ -6,7 +6,7 @@ use crate::app::hover::PointerOn;
 use crate::app::tabs::{DdlState, ResultView};
 use crate::app::{App, Focus, Layout, Paging, Results};
 use crate::keymap::Ctx;
-use crate::text::{clip, wrap, wrap_words};
+use crate::text::{clip, width, wrap, wrap_words};
 use crate::theme;
 use crate::widgets::explorer::draw_explorer;
 use crate::widgets::popup::draw_popup;
@@ -164,7 +164,10 @@ pub(crate) fn draw_workspace(f: &mut Frame, app: &mut App) -> Option<(u16, u16)>
     if app.focus == Focus::Tree {
         filter_cursor
     } else {
-        (app.focus == Focus::Editor && editor_area.is_some()).then_some(cursor)
+        match app.focus {
+            Focus::Results => app.layout.grid_prompt_cursor,
+            _ => (app.focus == Focus::Editor && editor_area.is_some()).then_some(cursor),
+        }
     }
 }
 
@@ -1003,6 +1006,63 @@ fn draw_welcome(app: &mut App, area: Rect, buf: &mut Buffer) {
     draw_notices(app, x, y, w, bottom, buf);
 }
 
+/// The line under the grid while its search has something to show: `/` and the prompt's input
+/// (the terminal's cursor in it) or the pattern of the search that is on, and on the right
+/// where the cursor is among the matches.
+fn draw_search_strip(app: &mut App, strip: &crate::app::grid_search::Strip, area: Rect, buf: &mut Buffer) {
+    let th = theme::cur();
+    let style = Style::new().fg(th.fg).bg(th.surface);
+    buf.set_style(area, style);
+    // `/` at the second column, then the pattern (and the cursor after it while typed), then
+    // the status at the right: the count with the first note that fits, the count alone, and
+    // (while typed) nothing, so the pattern keeps its room first.
+    let room = (area.width as usize).saturating_sub(3);
+    let typing = strip.pattern.is_none();
+    let need = strip.text_width + usize::from(typing);
+    let mut options: Vec<String> = strip
+        .notes
+        .iter()
+        .map(|n| if strip.count.is_empty() { n.clone() } else { format!("{} {n}", strip.count) })
+        .collect();
+    options.push(strip.count.clone());
+    let status = options
+        .iter()
+        .find(|s| !s.is_empty() && need + 2 + width(s) <= room)
+        .cloned()
+        .unwrap_or_else(|| if typing { String::new() } else { strip.count.clone() });
+    let status = clip(&status, room.saturating_sub(4));
+    let status_w = width(&status);
+    let x = area.x + 1;
+    buf.set_stringn(x, area.y, strip.mark.to_string(), 1, style.fg(th.accent));
+    let input_w = room.saturating_sub(status_w + usize::from(status_w > 0) * 2);
+    let input = Rect { x: x + 1, y: area.y, width: input_w as u16, height: 1 };
+    match &strip.pattern {
+        Some(p) => {
+            buf.set_stringn(input.x, input.y, clip(p, input_w), input_w, style);
+        }
+        // A pattern longer than its room: the part before what is shown is marked, never
+        // silently left out.
+        None if need > input_w && input_w > 1 => {
+            let rest = Rect { x: input.x + 1, width: input.width - 1, ..input };
+            if let Some((cx, scrolled)) = app.draw_grid_prompt(rest, buf, style) {
+                if scrolled {
+                    buf.set_stringn(input.x, input.y, "\u{2026}", 1, style.fg(th.fg_muted));
+                }
+                app.layout.grid_prompt_cursor = Some((cx, area.y));
+            }
+        }
+        None => {
+            if let Some((cx, _)) = app.draw_grid_prompt(input, buf, style) {
+                app.layout.grid_prompt_cursor = Some((cx, area.y));
+            }
+        }
+    }
+    if status_w > 0 {
+        let sx = area.x + area.width - 1 - status_w as u16;
+        buf.set_stringn(sx, area.y, &status, status_w, Style::new().fg(th.fg_muted).bg(th.surface));
+    }
+}
+
 pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
     let th = theme::cur();
     let msg_line = |buf: &mut Buffer, text: &str, color| {
@@ -1029,13 +1089,39 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
     let look = crate::widgets::grid::Look { marks: &marks, icons: app.icons_on() };
     // The portal belongs to the last statement of the rows' run: only its rows page.
     let answer = app.tab().exec.shown.is_some() && app.tab().exec.shown == app.tab().answer_index();
-    let next_key = app
-        .keymap
-        .hint_keys(Action::PageNext, Ctx::Grid, app.enhanced_keys)
-        .map(|k| crate::keymap::keys::label(&k))
-        .unwrap_or_default();
+    // `n` is the search's while one is on: the next page's key there.
+    let next_key = app.next_page_key(app.grid_ctx());
     let run_again = app.can_run_again();
     let text_plan = app.text_plan_hint();
+    // A result whose portal was closed for being idle (or never held), or whose fetching
+    // stopped at its spill limit, keeps its rows and says so below them.
+    let paging_note = match &app.tab().results {
+        Results::Rows(rs)
+            if answer && ((rs.more && app.tab().exec.paging.closed()) || app.tab().exec.paging == Paging::Stopped) =>
+        {
+            let count = rs.rows.len() as u64;
+            let key = next_key.clone();
+            Some(match app.tab().exec.paging {
+                Paging::Stopped => app.i18n.msg(&Msg::ResultsPagingStopped { count }),
+                Paging::Released if run_again => app.i18n.msg(&Msg::ResultsPagingNoHold { count, key }),
+                Paging::Released => app.i18n.msg(&Msg::ResultsPagingFirstPageOnly { count }),
+                // The next page runs the statement again when it may.
+                _ if run_again => app.i18n.msg(&Msg::ResultsPagingClosedRerun { count, key }),
+                Paging::Replaced => app.i18n.msg(&Msg::ResultsPagingReplaced { count }),
+                Paging::Interrupted => app.i18n.msg(&Msg::ResultsPagingInterrupted { count }),
+                _ => app.i18n.msg(&Msg::ResultsPagingClosed { count }),
+            })
+        }
+        _ => None,
+    };
+    // The grid's search: its prompt or the search that is on, on the line under the grid; a
+    // note about the paging goes on that line too, first among what is not searched.
+    let mut strip = app.grid_search_strip().filter(|_| area.height > 3);
+    if let (Some(s), Some(p)) = (strip.as_mut(), &paging_note) {
+        let short = s.notes.pop();
+        s.notes = std::iter::once(p.to_string()).chain(short).collect();
+    }
+    app.layout.grid_area = area;
     // Where the grid's cells were before this frame: laid out otherwise (scrolled, another
     // result), the cell under the pointer is not there any more.
     let grid_was = |t: &crate::app::Tab| {
@@ -1060,28 +1146,14 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
             let w = area.width.saturating_sub(1) as usize;
             draw_notices(app, area.x + 1, area.y + lines + 1, w, area.y + area.height, buf);
         }
-        // A result whose portal was closed for being idle (or never held), or whose fetching
-        // stopped at its spill limit, keeps its rows and says so below them.
-        Results::Rows(rs)
-            if answer
-                && ((rs.more && t.exec.paging.closed()) || t.exec.paging == Paging::Stopped)
-                && area.height > 3 =>
-        {
+        Results::Rows(rs) if strip.is_some() => {
             let grid = Rect { height: area.height - 1, ..area };
             crate::widgets::grid::render(rs, &mut t.grid, grid, buf, &app.i18n, focused, look);
-            let count = rs.rows.len() as u64;
-            let text = match t.exec.paging {
-                Paging::Stopped => app.i18n.msg(&Msg::ResultsPagingStopped { count }),
-                Paging::Released if run_again => {
-                    app.i18n.msg(&Msg::ResultsPagingNoHold { count, key: next_key.clone() })
-                }
-                Paging::Released => app.i18n.msg(&Msg::ResultsPagingFirstPageOnly { count }),
-                // The next page runs the statement again when it may.
-                _ if run_again => app.i18n.msg(&Msg::ResultsPagingClosedRerun { count, key: next_key.clone() }),
-                Paging::Replaced => app.i18n.msg(&Msg::ResultsPagingReplaced { count }),
-                Paging::Interrupted => app.i18n.msg(&Msg::ResultsPagingInterrupted { count }),
-                _ => app.i18n.msg(&Msg::ResultsPagingClosed { count }),
-            };
+        }
+        Results::Rows(rs) if area.height > 3 && paging_note.is_some() => {
+            let grid = Rect { height: area.height - 1, ..area };
+            crate::widgets::grid::render(rs, &mut t.grid, grid, buf, &app.i18n, focused, look);
+            let text = paging_note.as_ref().map(ToString::to_string).unwrap_or_default();
             let y = area.y + area.height - 1;
             buf.set_style(Rect { y, height: 1, ..area }, Style::new().bg(th.surface));
             let w = area.width.saturating_sub(1) as usize;
@@ -1114,6 +1186,45 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
             msg_line(buf, &app.i18n.msg(&msg), th.error)
         }
         Results::Cancelled => msg_line(buf, &app.i18n.label(Label::QueryCancelled), th.warning),
+    }
+    if let Some(strip) = &strip {
+        draw_search_strip(app, strip, Rect { y: area.y + area.height - 1, height: 1, ..area }, buf);
+    }
+    // The matches of the grid's search on screen: the whole cell tinted (a value may be cut
+    // where it matches), the cursor's own match apart.
+    let t = app.tab();
+    if let Results::Rows(rs) = &t.results
+        && let Some(m) = t.find.shown(rs)
+        && t.exec.view == ResultView::Rows
+    {
+        let g = &t.grid;
+        let len = rs.rows.len();
+        let shown = g.top..(g.top + g.page_rows).min(g.window(len).end);
+        let mut lookups = 0;
+        for r in shown {
+            for &(_, _, c) in &g.hit_cols {
+                lookups += 1;
+                if !m.has(r, c) {
+                    continue;
+                }
+                // The cursor of an unfocused grid keeps its own look, as a selected range keeps
+                // its background (a match there is underlined only).
+                let style = if (r, c) == (g.row, g.col) {
+                    if !focused {
+                        continue;
+                    }
+                    th.grid_match_current
+                } else if g.in_range((r, c), len, rs.columns.len()) {
+                    Style::new().add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+                } else {
+                    th.grid_match
+                };
+                if let Some(cell) = g.cell_rect(r, c, len) {
+                    buf.set_style(cell.intersection(area), style);
+                }
+            }
+        }
+        app.count_grid_lookups(lookups);
     }
     if grid_was(app.tab()) != before && matches!(app.pointer_on, Some(PointerOn::Cell(..))) {
         app.pointer_on = None;

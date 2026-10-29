@@ -655,11 +655,12 @@ impl Harness {
         self.event(Event::Key(k));
     }
 
-    /// Hand `ev` to the app, then the answers of the folder reads it started (the pickers read
-    /// folders on workers; tests that look at a read still out use `app.handle_event`).
+    /// Hand `ev` to the app, then the answers of the folder reads and the grid searches it
+    /// started (both run on workers; tests that look at one still out use `app.handle_event`).
     pub fn event(&mut self, ev: Event) {
         self.app.handle_event(ev);
         self.app.pump_folder_reads(Duration::from_secs(30));
+        self.app.pump_grid_search(Duration::from_secs(30));
     }
 
     /// A mouse event at (x, y), no modifiers.

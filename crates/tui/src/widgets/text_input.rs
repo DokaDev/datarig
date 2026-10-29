@@ -45,6 +45,11 @@ impl TextInput {
         &self.text
     }
 
+    /// The start of the text is scrolled out of the area it was drawn in last.
+    pub fn scrolled(&self) -> bool {
+        self.scroll > 0
+    }
+
     pub fn cursor(&self) -> usize {
         self.cursor
     }
@@ -193,6 +198,9 @@ impl TextInput {
         buf.set_stringn(area.x, area.y, " ".repeat(w), w, style);
         let cells = cells(&self.text, mask, hide);
         let cursor_x: usize = cells.iter().take(self.cursor).map(|c| c.1).sum();
+        // Never scrolled further than the text (and the cursor after it) needs.
+        let total: usize = cells.iter().map(|c| c.1).sum();
+        self.scroll = self.scroll.min((total + 1).saturating_sub(w));
         // Keep one column free for the cursor at the end.
         if !focused {
             self.scroll = 0;

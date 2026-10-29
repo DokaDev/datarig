@@ -1,5 +1,7 @@
 //! The result grid with wide rows of CJK text: the time to draw a frame at 160x45 while the
-//! cursor moves down, pages and moves right.
+//! cursor moves down, pages and moves right; then its search (`/` typed key by key, `Enter`,
+//! `n`): the time of each key with its frame (the jobs answered first), and the cells one frame
+//! looked up for the matches' highlight (only the cells on screen; none without a search).
 
 use crate::apps;
 use crate::stats::{Summary, ms};
@@ -78,6 +80,9 @@ pub fn run(n_rows: usize, cols: usize, n: usize) -> Result<Value, String> {
         draw_only.push(ms(d.elapsed()));
         frame.push(ms(t.elapsed()));
     };
+    // Without a search, the highlight looks nothing up.
+    app.take_grid_search_work();
+    let mut idle_lookups = 0;
     for i in 0..n {
         let code = match i % 20 {
             0..=11 => KeyCode::Char('j'),
@@ -86,11 +91,43 @@ pub fn run(n_rows: usize, cols: usize, n: usize) -> Result<Value, String> {
             _ => KeyCode::Char('h'),
         };
         step(&mut app, code);
+        idle_lookups = idle_lookups.max(app.take_grid_search_work());
     }
     let f = Summary::of(&frame);
     let d = Summary::of(&draw_only);
     println!("grid: {n_rows} rows x {cols} columns at {}x{}", apps::WIDTH, apps::HEIGHT);
     println!("  key+frame  {}", f.line(" ms"));
     println!("  draw only  {}", d.line(" ms"));
-    Ok(json!({ "rows": n_rows, "cols": cols, "frame_ms": f.json(), "draw_ms": d.json() }))
+    // The search: a pattern of the numbers column typed key by key, `Enter`, then `n`.
+    let mut search = Vec::new();
+    let mut lookups = 0;
+    let mut timed = |app: &mut datarig_tui::app::App, code: KeyCode| {
+        let t = Instant::now();
+        apps::key(app, code, KeyModifiers::NONE);
+        app.pump_grid_search(Duration::from_secs(60));
+        apps::draw(&mut term, app);
+        search.push(ms(t.elapsed()));
+        lookups = lookups.max(app.take_grid_search_work());
+    };
+    timed(&mut app, KeyCode::Char('/'));
+    for c in "7919".chars() {
+        timed(&mut app, KeyCode::Char(c));
+    }
+    timed(&mut app, KeyCode::Enter);
+    for _ in 0..n.min(100) {
+        timed(&mut app, KeyCode::Char('n'));
+    }
+    let on = app.grid_search_pattern().is_some();
+    let s = Summary::of(&search);
+    println!(
+        "  search     {} (cells looked up per frame: at most {lookups}; without a search {idle_lookups})",
+        s.line(" ms")
+    );
+    Ok(json!({
+        "rows": n_rows,
+        "cols": cols,
+        "frame_ms": f.json(),
+        "draw_ms": d.json(),
+        "search": { "on": on, "key_ms": s.json(), "lookups_per_frame_max": lookups, "idle_lookups_max": idle_lookups },
+    }))
 }

@@ -159,6 +159,8 @@ pub enum Action {
     DetailStep(bool),
     Explorer(ExplorerAction),
     Grid(GridAction),
+    /// The search of the result grid.
+    GridSearch(super::grid_search::SearchAction),
     /// The results pane of a query tab.
     Panel(PanelAction),
     /// The next (`true`) or previous result tab of the results pane: the row results of the
@@ -463,6 +465,16 @@ fn grid_focused(a: &App) -> bool {
     in_workspace(a) && a.focus == Focus::Results
 }
 
+/// The grid has the focus and shows rows (not the Messages): `/` and `?` search them.
+fn grid_rows_focused(a: &App) -> bool {
+    grid_focused(a) && rows_shown(a)
+}
+
+/// A search of the focused grid is on: `n` and `N` go to its matches.
+fn grid_searching(a: &App) -> bool {
+    grid_rows_focused(a) && a.grid_search_on()
+}
+
 /// The grid or the inspector next to it has the focus.
 fn results_focused(a: &App) -> bool {
     in_workspace(a) && matches!(a.focus, Focus::Results | Focus::Inspector)
@@ -571,6 +583,7 @@ const fn mv(action: Action, id: &'static str, label: Label, when: fn(&App) -> bo
     ActionSpec { action, id, label, when, repeatable: true }
 }
 
+use super::grid_search::SearchAction as S;
 use ChartAction as C;
 use ExplorerAction as E;
 use GridAction as G;
@@ -753,6 +766,16 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::Grid(G::Select), "grid.select", Label::ActionGridSelect, grid_focused),
     act(Action::Grid(G::SelectRows), "grid.select_rows", Label::ActionGridSelectRows, grid_focused),
     act(Action::Grid(G::SelectAll), "grid.select_all", Label::ActionGridSelectAll, grid_focused),
+    act(Action::GridSearch(S::Open { forward: true }), "grid.search", Label::ActionGridSearch, grid_rows_focused),
+    act(
+        Action::GridSearch(S::Open { forward: false }),
+        "grid.search_back",
+        Label::ActionGridSearchBack,
+        grid_rows_focused,
+    ),
+    mv(Action::GridSearch(S::Next { same: true }), "grid.search_next", Label::ActionGridSearchNext, grid_searching),
+    mv(Action::GridSearch(S::Next { same: false }), "grid.search_prev", Label::ActionGridSearchPrev, grid_searching),
+    act(Action::GridSearch(S::Clear), "grid.search_clear", Label::ActionGridSearchClear, grid_searching),
     act(
         Action::Copy(CopyScope::Selection, CopyFormat::TsvPlain),
         "results.copy.selection.tsv",

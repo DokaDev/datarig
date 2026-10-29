@@ -563,7 +563,10 @@ impl App {
                     return err(Msg::CommandsErrorNoArgs { name });
                 }
                 self.overlays.close(OverlayKind::Commands);
-                self.tabs.iter_mut().for_each(|t| t.editor.clear_highlight());
+                self.tabs.iter_mut().for_each(|t| {
+                    t.editor.clear_highlight();
+                    t.find.end();
+                });
             }
             (command::Command::Suspend, _) => {
                 if !arg.is_empty() {

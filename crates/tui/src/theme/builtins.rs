@@ -3,7 +3,9 @@
 //! contrast says so. The hover backgrounds are not from the palettes: each is chosen to stand
 //! apart from the theme's backgrounds and selections; so are the backgrounds of copied cells
 //! (`yank_flash`, the warm accent blended into the background) and of the active tab
-//! (`tab_active`, mostly the accent blended into the background). Every theme passes the checks of
+//! (`tab_active`, mostly the accent blended into the background). The result grid's search
+//! matches (`grid_match`) take each theme's search colors, and the cursor's match
+//! (`grid_match_current`) the selection with its text in bold and underlined. Every theme passes the checks of
 //! `theme/tests.rs`.
 
 use super::{Dim, Theme, rgb};
@@ -15,7 +17,9 @@ use ratatui::style::{Color, Modifier, Style};
 /// is bold, what is under the pointer is on the bright black with the terminal's text color (so
 /// text in bright black never vanishes on it; a hovered row or tab shows that text color, so its
 /// colored marks go plain while it is hovered), copied cells flash in black on the yellow (a
-/// selection's reversed text would not show on the cursor's cell), the active tab is black on the
+/// selection's reversed text would not show on the cursor's cell), the result grid's search
+/// matches are black on the magenta (the yellow is the copy flash's) and the cursor's match is
+/// reversed, bold and underlined, the active tab is black on the
 /// cyan of the accent (its colored marks go plain there, as on a hovered tab, and a connected
 /// number is a chip of its profile's color; dark text reads on the cyan of common palettes,
 /// light or dark, where the bright black is the hover's and a reversed tab would look like a
@@ -63,6 +67,9 @@ pub const TERMINAL: Theme = Theme {
     mode_command: Color::Yellow,
     mode_fg: Color::Black,
     search_match: Style::new().fg(Color::Black).bg(Color::Yellow),
+    // The magenta of the warm accent: the yellow is the search's and the copy flash's.
+    grid_match: Style::new().fg(Color::Black).bg(Color::Magenta),
+    grid_match_current: Style::new().add_modifier(Modifier::REVERSED.union(Modifier::BOLD).union(Modifier::UNDERLINED)),
     match_paren: Style::new().fg(Color::Cyan).add_modifier(Modifier::BOLD.union(Modifier::UNDERLINED)),
     // The bright blue: the plain one is too dark on many terminals' black.
     read_only_mark: Style::new().fg(Color::LightBlue).add_modifier(Modifier::BOLD),
@@ -127,6 +134,11 @@ pub const LIGHT: Theme = Theme {
     mode_command: rgb(0xBC4C00),
     mode_fg: rgb(0xFFFFFF),
     search_match: Style::new().fg(rgb(0xFBFBFC)).bg(rgb(0xA45A00)),
+    grid_match: Style::new().fg(rgb(0xFBFBFC)).bg(rgb(0xA45A00)),
+    grid_match_current: Style::new()
+        .fg(rgb(0x1F2328))
+        .bg(rgb(0xD5E3F0))
+        .add_modifier(Modifier::BOLD.union(Modifier::UNDERLINED)),
     match_paren: Style::new().bg(rgb(0xC9CED6)).add_modifier(Modifier::BOLD),
     read_only_mark: Style::new().fg(rgb(0x0550AE)).add_modifier(Modifier::BOLD),
     danger_mark: Style::new().fg(rgb(0xC0262D)).add_modifier(Modifier::BOLD),
@@ -190,6 +202,11 @@ pub const HIGH_CONTRAST: Theme = Theme {
     mode_command: rgb(0xFFB000),
     mode_fg: rgb(0x000000),
     search_match: Style::new().fg(rgb(0x0A0A0A)).bg(rgb(0xFFB000)),
+    grid_match: Style::new().fg(rgb(0x0A0A0A)).bg(rgb(0xFFB000)),
+    grid_match_current: Style::new()
+        .fg(rgb(0xFFFFFF))
+        .bg(rgb(0x0033CC))
+        .add_modifier(Modifier::BOLD.union(Modifier::UNDERLINED)),
     match_paren: Style::new().bg(rgb(0xFFFFFF)).add_modifier(Modifier::BOLD),
     read_only_mark: Style::new().fg(rgb(0x66B3FF)).add_modifier(Modifier::BOLD),
     danger_mark: Style::new().fg(rgb(0xFF4040)).add_modifier(Modifier::BOLD),
@@ -254,6 +271,11 @@ pub const CATPPUCCIN_MOCHA: Theme = Theme {
     mode_command: rgb(0xFAB387),
     mode_fg: rgb(0x11111B),
     search_match: Style::new().fg(rgb(0x1E1E2E)).bg(rgb(0xFAB387)),
+    grid_match: Style::new().fg(rgb(0x1E1E2E)).bg(rgb(0xFAB387)),
+    grid_match_current: Style::new()
+        .fg(rgb(0xCDD6F4))
+        .bg(rgb(0x45475A))
+        .add_modifier(Modifier::BOLD.union(Modifier::UNDERLINED)),
     match_paren: Style::new().bg(rgb(0x45475A)).add_modifier(Modifier::BOLD),
     read_only_mark: Style::new().fg(rgb(0x89B4FA)).add_modifier(Modifier::BOLD),
     danger_mark: Style::new().fg(rgb(0xF38BA8)).add_modifier(Modifier::BOLD),
@@ -320,6 +342,12 @@ pub const CATPPUCCIN_LATTE: Theme = Theme {
     mode_command: rgb(0xFE640B),
     mode_fg: rgb(0x11111B),
     search_match: Style::new().fg(rgb(0xEFF1F5)).bg(rgb(0xFE640B)),
+    // The peach darkened (from FE640B) so the base's text reads on a whole cell of it.
+    grid_match: Style::new().fg(rgb(0xEFF1F5)).bg(rgb(0xB84A00)),
+    grid_match_current: Style::new()
+        .fg(rgb(0x4C4F69))
+        .bg(rgb(0xCCD0DA))
+        .add_modifier(Modifier::BOLD.union(Modifier::UNDERLINED)),
     match_paren: Style::new().bg(rgb(0xBCC0CC)).add_modifier(Modifier::BOLD),
     read_only_mark: Style::new().fg(rgb(0x1A5AD8)).add_modifier(Modifier::BOLD),
     danger_mark: Style::new().fg(rgb(0xD20F39)).add_modifier(Modifier::BOLD),
@@ -386,6 +414,11 @@ pub const TOKYO_NIGHT_NIGHT: Theme = Theme {
     mode_command: rgb(0xFF9E64),
     mode_fg: rgb(0x15161E),
     search_match: Style::new().fg(rgb(0x1A1B26)).bg(rgb(0xFF9E64)),
+    grid_match: Style::new().fg(rgb(0x1A1B26)).bg(rgb(0xFF9E64)),
+    grid_match_current: Style::new()
+        .fg(rgb(0xC0CAF5))
+        .bg(rgb(0x394B70))
+        .add_modifier(Modifier::BOLD.union(Modifier::UNDERLINED)),
     match_paren: Style::new().bg(rgb(0x414868)).add_modifier(Modifier::BOLD),
     read_only_mark: Style::new().fg(rgb(0x7AA2F7)).add_modifier(Modifier::BOLD),
     danger_mark: Style::new().fg(rgb(0xF7768E)).add_modifier(Modifier::BOLD),
@@ -453,6 +486,12 @@ pub const TOKYO_NIGHT_DAY: Theme = Theme {
     mode_command: rgb(0x884A0A),
     mode_fg: rgb(0xE1E2E7),
     search_match: Style::new().fg(rgb(0xE1E2E7)).bg(rgb(0xB15C00)),
+    // The search's orange darkened (from B15C00) so the text reads on a whole cell of it.
+    grid_match: Style::new().fg(rgb(0xE1E2E7)).bg(rgb(0x965000)),
+    grid_match_current: Style::new()
+        .fg(rgb(0x2E4B91))
+        .bg(rgb(0xB7C1E3))
+        .add_modifier(Modifier::BOLD.union(Modifier::UNDERLINED)),
     match_paren: Style::new().bg(rgb(0xA8AECB)).add_modifier(Modifier::BOLD),
     read_only_mark: Style::new().fg(rgb(0x285FAD)).add_modifier(Modifier::BOLD),
     danger_mark: Style::new().fg(rgb(0xC64343)).add_modifier(Modifier::BOLD),
@@ -518,6 +557,11 @@ pub const GRUVBOX_DARK: Theme = Theme {
     mode_command: rgb(0xFE8019),
     mode_fg: rgb(0x282828),
     search_match: Style::new().fg(rgb(0x282828)).bg(rgb(0xFE8019)),
+    grid_match: Style::new().fg(rgb(0x282828)).bg(rgb(0xFE8019)),
+    grid_match_current: Style::new()
+        .fg(rgb(0xEBDBB2))
+        .bg(rgb(0x504945))
+        .add_modifier(Modifier::BOLD.union(Modifier::UNDERLINED)),
     match_paren: Style::new().bg(rgb(0x504945)).add_modifier(Modifier::BOLD),
     read_only_mark: Style::new().fg(rgb(0x83A598)).add_modifier(Modifier::BOLD),
     danger_mark: Style::new().fg(rgb(0xFB4934)).add_modifier(Modifier::BOLD),
@@ -584,6 +628,11 @@ pub const GRUVBOX_LIGHT: Theme = Theme {
     mode_command: rgb(0xAF3A03),
     mode_fg: rgb(0xFBF1C7),
     search_match: Style::new().fg(rgb(0xFBF1C7)).bg(rgb(0xAF3A03)),
+    grid_match: Style::new().fg(rgb(0xFBF1C7)).bg(rgb(0xAF3A03)),
+    grid_match_current: Style::new()
+        .fg(rgb(0x3C3836))
+        .bg(rgb(0xD5C4A1))
+        .add_modifier(Modifier::BOLD.union(Modifier::UNDERLINED)),
     match_paren: Style::new().bg(rgb(0xD5C4A1)).add_modifier(Modifier::BOLD),
     read_only_mark: Style::new().fg(rgb(0x076678)).add_modifier(Modifier::BOLD),
     danger_mark: Style::new().fg(rgb(0x9D0006)).add_modifier(Modifier::BOLD),
@@ -650,6 +699,12 @@ pub const NORD: Theme = Theme {
     mode_command: rgb(0xD08770),
     mode_fg: rgb(0x22262F),
     search_match: Style::new().fg(rgb(0x2E3440)).bg(rgb(0xD08770)),
+    // Nord's orange lightened (from D08770) so the text reads on a whole cell of it.
+    grid_match: Style::new().fg(rgb(0x2E3440)).bg(rgb(0xDB9A84)),
+    grid_match_current: Style::new()
+        .fg(rgb(0xD8DEE9))
+        .bg(rgb(0x434C5E))
+        .add_modifier(Modifier::BOLD.union(Modifier::UNDERLINED)),
     match_paren: Style::new().bg(rgb(0x4C566A)).add_modifier(Modifier::BOLD),
     read_only_mark: Style::new().fg(rgb(0x88C0D0)).add_modifier(Modifier::BOLD),
     danger_mark: Style::new().fg(rgb(0xBF616A)).add_modifier(Modifier::BOLD),
@@ -717,6 +772,11 @@ pub const DRACULA: Theme = Theme {
     mode_command: rgb(0xFFB86C),
     mode_fg: rgb(0x282A36),
     search_match: Style::new().fg(rgb(0x282A36)).bg(rgb(0xFFB86C)),
+    grid_match: Style::new().fg(rgb(0x282A36)).bg(rgb(0xFFB86C)),
+    grid_match_current: Style::new()
+        .fg(rgb(0xF8F8F2))
+        .bg(rgb(0x44475A))
+        .add_modifier(Modifier::BOLD.union(Modifier::UNDERLINED)),
     match_paren: Style::new().bg(rgb(0x44475A)).add_modifier(Modifier::BOLD),
     read_only_mark: Style::new().fg(rgb(0x8BE9FD)).add_modifier(Modifier::BOLD),
     danger_mark: Style::new().fg(rgb(0xFF5555)).add_modifier(Modifier::BOLD),

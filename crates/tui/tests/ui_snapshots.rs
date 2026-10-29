@@ -1765,6 +1765,43 @@ fn grid_copy_menu_and_range_en_ko_sizes() {
     assert_eq!(buf[(x, y)].bg, theme::DARK.range.bg.unwrap(), "the range's first cell");
 }
 
+/// The grid's search: the prompt under the grid while the pattern is typed (the cursor on the
+/// first match), then the search that is on after `n` (its pattern and the cursor's match
+/// among them), in a small terminal and a large one, with the dark theme and the terminal's
+/// colors; each match is tinted, the cursor's one apart.
+#[test]
+fn grid_search_prompt_and_matches_dark_terminal_sizes() {
+    for (name, th) in [("dark", &theme::DARK), ("terminal", &theme::TERMINAL)] {
+        for (w, hh) in [(80, 24), (120, 40)] {
+            let mut h = with_edge_results(Lang::En);
+            h.app.theme = std::sync::Arc::new(th.clone());
+            h.key(KeyCode::Tab);
+            h.keys("/");
+            h.type_text("lang");
+            let t = h.draw(w, hh);
+            insta::assert_snapshot!(format!("grid_search_prompt_{name}_{w}x{hh}"), t.backend());
+            let r = h.app.layout.results;
+            let y = r.y + r.height - 2;
+            assert_eq!(t.backend().buffer()[(r.x + 2, y)].symbol(), "/");
+            assert_eq!(t.backend().buffer()[(r.x + 2, y)].bg, th.surface, "{name}: the prompt's line");
+            h.key(KeyCode::Enter);
+            h.keys("n");
+            let t = h.draw(w, hh);
+            insta::assert_snapshot!(format!("grid_search_matches_{name}_{w}x{hh}"), t.backend());
+            let g = &h.app.tab().grid;
+            let buf = t.backend().buffer();
+            let cell = |r: usize, c: usize| {
+                let a = g.cell_rect(r, c, 8).expect("on screen");
+                buf[(a.x + 1, a.y)].clone()
+            };
+            assert_eq!(cell(0, 4).bg, th.grid_match.bg.unwrap(), "{name}: a match");
+            assert_eq!(cell(0, 4).fg, th.grid_match.fg.unwrap(), "{name}: a match's text");
+            assert!(cell(4, 4).modifier.contains(th.grid_match_current.add_modifier), "{name}: the cursor's match");
+            assert_ne!(cell(1, 4).bg, th.grid_match.bg.unwrap(), "{name}: not a match");
+        }
+    }
+}
+
 /// The settings screen: categories, current values and what they mean, the selected
 /// setting's description; `icons` shows a preview of the glyphs and the hint (icons on and
 /// off), the theme the terminal's background and a preview, the clipboard its tmux note, the macOS

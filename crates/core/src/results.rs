@@ -280,24 +280,37 @@ impl RowsSnapshot {
 
     /// Call `f` with the rows in order, `chunk` at a time, until it returns `false`.
     pub fn for_each_chunk(&self, chunk: usize, mut f: impl FnMut(&[Vec<Cell>]) -> bool) -> Result<(), Fault> {
+        self.for_each_chunk_in(0..self.len(), chunk, |_, rows| f(rows))
+    }
+
+    /// Call `f` with the rows of `range` (numbered from the snapshot's first row) in order,
+    /// `chunk` at a time with the number of the chunk's first row, until it returns `false`.
+    pub fn for_each_chunk_in(
+        &self,
+        range: Range<usize>,
+        chunk: usize,
+        mut f: impl FnMut(usize, &[Vec<Cell>]) -> bool,
+    ) -> Result<(), Fault> {
         let chunk = chunk.max(1);
+        let (from, to) = (range.start.min(self.len()), range.end.min(self.len()));
         match self {
-            RowsSnapshot::Rows { rows, range } => {
-                for c in rows.get(range.clone()).unwrap_or_default().chunks(chunk) {
-                    if !f(c) {
+            RowsSnapshot::Rows { rows, range: own } => {
+                let rows = rows.get(own.start + from..own.start + to).unwrap_or_default();
+                for (i, c) in rows.chunks(chunk).enumerate() {
+                    if !f(from + i * chunk, c) {
                         break;
                     }
                 }
             }
-            RowsSnapshot::Spill { reader, range } => {
-                let mut a = range.start;
-                while a < range.end {
-                    let e = range.end.min(a + chunk);
-                    let rows = reader.read(a..e).map_err(|err| Fault::io(&err))?;
+            RowsSnapshot::Spill { reader, range: own } => {
+                let mut a = from;
+                while a < to {
+                    let e = to.min(a + chunk);
+                    let rows = reader.read(own.start + a..own.start + e).map_err(|err| Fault::io(&err))?;
                     if rows.len() != e - a {
                         return Err(Fault::other("spill file: fewer rows than written"));
                     }
-                    if !f(&rows) {
+                    if !f(a, &rows) {
                         break;
                     }
                     a = e;
