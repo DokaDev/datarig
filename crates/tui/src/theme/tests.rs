@@ -255,6 +255,23 @@ fn body_and_muted_text_read_on_every_surface() {
     }
 }
 
+/// The mark at the grid's right edge for a cell whose text is under it is the muted text made
+/// to read (`Theme::readable_on`, 3:1) on every background a cell can have there: the rows, the
+/// alternate rows, the cursor's cell (focused or not), a selected range and the headers; and it
+/// stays dimmer than the body text there.
+#[test]
+fn the_grids_edge_mark_reads_on_every_cell_background_and_stays_dim() {
+    for (name, th) in rgb_themes() {
+        let backs = [th.bg, th.surface, th.surface_alt, bg(th.selection), bg(th.selection_unfocused()), bg(th.range)];
+        for back in backs {
+            let m = Theme::readable_on(th.fg_muted, back, 3.0);
+            let k = contrast(m, back);
+            assert!(k >= 3.0, "{name}: the mark on {back:?}: {k:.2}");
+            assert!(k <= contrast(th.fg, back) + 0.01, "{name}: the mark brighter than the text on {back:?}");
+        }
+    }
+}
+
 /// The theme of the terminal's colors is about roles: which ANSI color, not which RGB.
 #[test]
 fn the_terminal_theme_uses_the_terminal_colors_by_role() {

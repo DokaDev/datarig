@@ -366,3 +366,75 @@ fn a_wide_character_cut_by_an_edge_is_a_blank() {
         wheel(&mut h, MouseEventKind::ScrollRight, KeyModifiers::NONE);
     }
 }
+
+/// Six text columns, a number column with a long name (21 wide), then four more text columns;
+/// the numbers `7`, NULL, an empty string, `12345`, `7`. The inspector hidden, drawn at `w`×`H`.
+fn amounts(w: u16) -> Harness {
+    let mut h = Harness::connected(Lang::En);
+    h.app.detail.visible = false;
+    let mut metas: Vec<_> = (0..6).map(|i| meta(&format!("column_{i:02}"), "text", false, false)).collect();
+    metas.push(meta("amount_in_cents_total", "int8", true, false));
+    metas.extend((7..11).map(|i| meta(&format!("column_{i:02}"), "text", false, false)));
+    let amounts = [Some("7"), None, Some(""), Some("12345"), Some("7")];
+    let rows = amounts
+        .iter()
+        .enumerate()
+        .map(|(r, a)| (0..11).map(|c| if c == 6 { a.map(str::to_string) } else { Some(format!("r{r}c{c}")) }).collect())
+        .collect();
+    h.ctrl('e');
+    let id = h.app.tab().exec.query_id;
+    h.tab_db(0, DbEvent::Page { id, columns: Some(metas), rows, more: false, elapsed: Duration::from_millis(2) });
+    h.app.focus = Focus::Results;
+    h.draw(w, H);
+    h
+}
+
+/// A cell cut by the right edge whose part on screen is blank (a right-aligned number under the
+/// edge) shows a dim `›` in its last column on screen, so it never reads as empty; NULL keeps
+/// its own look and an empty value is not hidden (no mark); a cell whose text shows gets none.
+/// A header whose name (or type) is all under the edge gets the mark too.
+#[test]
+fn a_cell_whose_text_is_under_the_right_edge_shows_a_mark() {
+    let theme = datarig_tui::theme::DARK;
+    let values = [Some(1), None, Some(0), Some(5), Some(1)];
+    let (mut marked, mut headers, mut marked_numbers) = (0, 0, 0);
+    for w in 80..84 {
+        let mut h = amounts(w);
+        loop {
+            let t = h.draw(w, H);
+            let buf = t.backend().buffer();
+            let g = grid(&h);
+            assert!(g.page_rows >= 5);
+            let (from, right) = (i32::from(g.gutter_x.1), i32::from(g.gutter_x.1 + g.view_w));
+            // The column at the right edge, its text from `tx`, `width` wide.
+            let c = g.hit_cols.last().unwrap().2;
+            let width = (g.col_x[c + 1] - g.col_x[c] - 3) as i32;
+            let tx = from + g.col_x[c] as i32 - g.x_off as i32 + 2;
+            let cut = tx + width > right && tx <= right;
+            let edge = (right - 1) as u16;
+            for (r, n) in values.iter().enumerate() {
+                let y = g.data_y + r as u16;
+                // The numbers right-aligned; the other columns' values (`r0c1`…) from `tx`.
+                let want =
+                    cut && if c == 6 { n.is_some_and(|n| n > 0 && tx + width - n >= right) } else { tx == right };
+                let mark = buf[(edge, y)].symbol() == "›";
+                assert_eq!(mark, want, "row {r} at width {w}, offset {}", g.x_off);
+                if want {
+                    marked += 1;
+                    assert_ne!(Some(buf[(edge, y)].fg), theme.fg.into(), "dim, not the text's color");
+                }
+            }
+            let head = cut && tx == right;
+            assert_eq!(buf[(edge, g.header_y)].symbol() == "›", head, "header at width {w}, offset {}", g.x_off);
+            assert_eq!(buf[(edge, g.header_y + 1)].symbol() == "›", head, "type at width {w}");
+            headers += usize::from(head);
+            marked_numbers += usize::from(c == 6 && cut && tx + width - 1 >= right && tx < right);
+            if g.x_off == g.x_max() {
+                break;
+            }
+            wheel(&mut h, MouseEventKind::ScrollRight, KeyModifiers::NONE);
+        }
+    }
+    assert!(marked > 0 && headers > 0, "marks shown: {marked} cells, {headers} headers");
+    assert!(marked_numbers > 0, "a number hidden under the edge with its column's start on screen");
+}

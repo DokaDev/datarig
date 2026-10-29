@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/ui_snapshots.rs
+expression: t.backend()
+---
+"╭ Explorer ────────────╮ 1 console 1 ×                                          "
+"│  ＋ New connection   │╭ Query · console 1 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1       ││ local-pg / datarig  127.0.0.1:55432                  │"
+"│  ▾ ●   local-pg      ││  1 -- datarig 🐘  Ctrl+E: run the statement under the│" Hidden by multi-width symbols: [(41, " ")]
+"│    ▾ datarig default ││  2▎SELECT * FROM shop.users WHERE id <= 8;  ✓ 5 rows…│"
+"│      ▸ analytics     ││  3                                                   │"
+"│      ▸ public        ││  4 SELECT u.name, o.status, o.total_amount           │"
+"│      ▸ shop          ││  5 FROM shop.orders o                                │"
+"│                      ││  6 JOIN shop.users u ON u.id = o.user_id             │"
+"│                      │╰──────────────────────────────────────────────────────╯"
+"│                      │╭ Results · 5 rows ────────────────────────────────────╮"
+"│                      ││ [Result 1]  Chart  Messages                      H/L │"
+"│                      ││   │ column_02 │ column_03 │ column_04 │ column_05 │ a│"
+"│                      ││   │ text      │ text      │ text      │ text      │ i│"
+"│                      ││ 1 │ r0c2      │ r0c3      │ r0c4      │ r0c5      │ ›│"
+"│                      ││ 2 │ r1c2      │ r1c3      │ r1c4      │ r1c5      │ N│"
+"│                      ││ 3 │ r2c2      │ r2c3      │ r2c4      │ r2c5      │  │"
+"│                      ││ 4 │ r3c2      │ r3c3      │ r3c4      │ r3c5      │ ›│"
+"│                      ││ 5 │ r4c2      │ r4c3      │ r4c4      │ r4c5      │ ›│"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" NORMAL  local-pg │ 5 rows · 2ms    │ Enter view cell · n next page · y copy EN "
