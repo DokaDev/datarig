@@ -176,6 +176,31 @@ pub fn editor(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
     Ok(())
 }
 
+/// The result grid's search: the cells one frame looked up for its highlight (those on screen
+/// only), none at all without a search, and its keys with their frames held to the editor's
+/// keystroke budget.
+pub fn grid(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
+    match (f(result, &["search", "lookups_per_frame_max"]), result["search"]["on"].as_bool()) {
+        // A frame that looked nothing up did not highlight the matches.
+        (Some(l), Some(true)) if l > 0.0 => c.check(
+            "grid search cells looked up per frame",
+            l,
+            num(b, "grid", "search_highlight_lookups_max")?,
+            " cells",
+        ),
+        _ => c.missing("grid search cells looked up per frame"),
+    }
+    match f(result, &["search", "idle_lookups_max"]) {
+        Some(l) => c.check("grid cells looked up per frame without a search", l, 0.0, " cells"),
+        None => c.missing("grid cells looked up per frame without a search"),
+    }
+    match f(result, &["search", "key_ms", "p95"]) {
+        Some(m) => c.check("grid search key+frame p95", m, num(b, "grid", "search_p95_ms_max")?, " ms"),
+        None => c.missing("grid search key+frame p95"),
+    }
+    Ok(())
+}
+
 /// The editor with a MySQL script: its keystrokes and memory are held to the editor's budgets.
 pub fn editor_mysql(c: &mut Checks, b: &Table, result: &Value) -> Result<(), String> {
     let max = num(b, "editor", "p95_ms_max")?;
