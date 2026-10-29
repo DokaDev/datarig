@@ -816,3 +816,120 @@ fn a_long_pattern_marks_each_end_it_cuts() {
     let part = search_part(&mut h);
     assert!(part.starts_with(" /\u{2026}") && part.ends_with('\u{2026}'), "{part:?}");
 }
+
+#[test]
+fn a_seek_whose_match_came_after_the_cursor_moved_holds_no_press_back() {
+    let mut h = numbers(500, false);
+    h.app.set_grid_search_cap(3);
+    h.keys("/");
+    h.type_text("7$");
+    h.key(KeyCode::Enter);
+    h.keys("nn");
+    assert_eq!(cursor(&h), (27, 0));
+    // Past the matches kept: a seek, then the cursor moves before its match comes.
+    raw(&mut h, "nj");
+    assert!(h.app.pump_grid_search_once(Duration::from_secs(30)), "the seek's first match");
+    assert_eq!(cursor(&h), (28, 0), "the moved cursor stays");
+    // The seek has nothing more to say: the next `n` seeks at once instead of waiting for it.
+    raw(&mut h, "n");
+    assert_eq!(h.app.grid_search_queued(), 0, "no press waits behind the seek that ended");
+    h.app.pump_grid_search(Duration::from_secs(30));
+    assert_eq!(cursor(&h), (37, 0));
+}
+
+#[test]
+fn a_seek_that_fails_drops_the_presses_waiting_for_it() {
+    let state = TempState::new("seek-fails");
+    let mut cfg = test_db_config();
+    cfg.result_window_rows = 1_000;
+    let mut h = Harness::with_config(&cfg, Lang::En);
+    h.app.set_paths(Paths { data: None, state: Some(state.0.clone()) });
+    h.db(DbEvent::Connected);
+    h.ctrl('e');
+    let id = h.app.tab().exec.query_id;
+    let mut columns = Some(vec![meta("id", "text", false, false)]);
+    for p in 0..4 {
+        let rows = (p * 500..p * 500 + 500).map(|i| vec![Some(format!("r{i:05}"))]).collect();
+        h.tab_db(
+            0,
+            DbEvent::Page { id, columns: columns.take(), rows, more: p < 3, elapsed: Duration::from_millis(1) },
+        );
+    }
+    h.app.set_grid_search_cap(2);
+    h.key(KeyCode::Tab);
+    h.keys("/");
+    h.type_text("7$");
+    h.key(KeyCode::Enter);
+    h.keys("n");
+    assert_eq!(cursor(&h), (17, 0));
+    // The spill file cannot be read any more: the next seek fails, with presses waiting for it.
+    let Results::Rows(rs) = &h.app.tab().results else { panic!("rows") };
+    let path = rs.rows.spill_path().expect("spilled").to_path_buf();
+    std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_len(0).unwrap();
+    raw(&mut h, "nnn");
+    assert_eq!(h.app.grid_search_queued(), 2);
+    h.app.pump_grid_search(Duration::from_secs(30));
+    assert_eq!(h.app.grid_search_queued(), 0, "the presses went with the seek");
+    assert_eq!(cursor(&h), (17, 0));
+}
+
+#[test]
+fn a_queued_n_after_more_rows_came_keeps_the_presses_after_it() {
+    let mut h = numbers(500, true);
+    h.keys("/");
+    h.type_text("^(7|17|27|600|700)$");
+    raw(&mut h, "\nnn");
+    // Rows come while the first search runs: the presses then search the rows there are now.
+    let id = h.app.tab().exec.query_id;
+    let rows = (500..1_000).map(|i| vec![Some(i.to_string())]).collect();
+    h.tab_db(0, DbEvent::Page { id, columns: None, rows, more: false, elapsed: Duration::from_millis(1) });
+    h.app.pump_grid_search(Duration::from_secs(30));
+    assert_eq!(cursor(&h), (27, 0), "7, then two more");
+    h.keys("nn");
+    assert_eq!(cursor(&h), (700, 0));
+}
+
+#[test]
+fn queued_presses_go_with_a_moved_cursor_noh_or_a_new_prompt_and_wrap_and_cap() {
+    let pattern = "^(7|17)$";
+    // The cursor moved before the first match came: the presses go, the cursor stays (one row
+    // under the preview's match, where `Enter` left it).
+    let mut h = numbers(500, false);
+    h.keys("/");
+    h.type_text(pattern);
+    raw(&mut h, "\nnnj");
+    h.app.pump_grid_search(Duration::from_secs(30));
+    assert_eq!((cursor(&h), h.app.grid_search_queued()), ((8, 0), 0));
+    // `:noh` while presses wait: the search and the presses go.
+    let mut h = numbers(500, false);
+    h.keys("/");
+    h.type_text(pattern);
+    raw(&mut h, "\nnn:noh\n");
+    assert_eq!(h.app.grid_search_queued(), 0);
+    h.app.pump_grid_search(Duration::from_secs(30));
+    assert_eq!((cursor(&h), h.app.key_context()), ((7, 0), Ctx::Grid), "where `Enter` left it, on the preview's match");
+    // `/` again while presses wait: they go with the search's jobs.
+    let mut h = numbers(500, false);
+    h.keys("/");
+    h.type_text(pattern);
+    raw(&mut h, "\nnn/");
+    assert_eq!(h.app.grid_search_queued(), 0);
+    h.app.pump_grid_search(Duration::from_secs(30));
+    assert_eq!(h.app.key_context(), Ctx::GridSearch);
+    // Presses that go around the end say so.
+    let mut h = numbers(500, false);
+    h.keys("/");
+    h.type_text(pattern);
+    raw(&mut h, "\nnn");
+    h.app.pump_grid_search(Duration::from_secs(30));
+    assert_eq!(cursor(&h), (7, 0), "7, 17, then around to 7");
+    assert!(h.status(120, 40).contains("Search hit the bottom, continuing at the top"));
+    // At most 64 presses wait.
+    let mut h = numbers(500, false);
+    h.keys("/");
+    h.type_text("7$");
+    raw(&mut h, &format!("\n{}", "n".repeat(100)));
+    assert_eq!(h.app.grid_search_queued(), 64);
+    h.app.pump_grid_search(Duration::from_secs(30));
+    assert_eq!(cursor(&h), (147, 0), "the first match, then 64 more around the 50 there are");
+}
