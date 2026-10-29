@@ -29,19 +29,35 @@ pub fn burst(ev: &Event) -> Option<Burst> {
     }
 }
 
-/// How many frames the event loop draws for `events`, all read at once: one per burst of at
-/// most [`PER_FRAME`] events, one per other event.
-pub fn frames(events: &[Event]) -> usize {
-    let mut frames = 0;
-    let mut i = 0;
-    while i < events.len() {
-        let kind = burst(&events[i]);
-        let mut n = 1;
-        while kind.is_some() && n < PER_FRAME && events.get(i + n).is_some_and(|e| burst(e) == kind) {
-            n += 1;
+/// The rest of a burst of `kind` whose first event was handled: the events `next` has ready
+/// (`None`: nothing more for now) are handed to `handle` while they go on with the burst, at
+/// most [`PER_FRAME`] events in all with the first. Returns the first event read that does not
+/// (it is the next turn's). The event loop draws once after this.
+pub fn take_burst(
+    kind: Burst,
+    mut next: impl FnMut() -> Option<Event>,
+    mut handle: impl FnMut(Event),
+) -> Option<Event> {
+    for _ in 1..PER_FRAME {
+        let ev = next()?;
+        if burst(&ev) != Some(kind) {
+            return Some(ev);
         }
+        handle(ev);
+    }
+    None
+}
+
+/// How many frames the event loop draws for `events`, all read at once ([`take_burst`]): one
+/// per burst of at most [`PER_FRAME`] events, one per other event.
+pub fn frames(events: &[Event]) -> usize {
+    let mut it = events.iter().cloned();
+    let (mut frames, mut pending) = (0, None);
+    while let Some(ev) = pending.take().or_else(|| it.next()) {
         frames += 1;
-        i += n;
+        if let Some(kind) = burst(&ev) {
+            pending = take_burst(kind, || it.next(), |_| {});
+        }
     }
     frames
 }
@@ -74,5 +90,34 @@ mod tests {
         assert_eq!(frames(&[right.clone(), right.clone(), left.clone(), left]), 2);
         assert_eq!(frames(&[shift_down.clone(), shift_down, down.clone(), down]), 2);
         assert_eq!(frames(&[right.clone(), key.clone(), key, right]), 4);
+    }
+
+    /// The event loop's grouping: the wheel events of a burst are handed over, the first other
+    /// event comes back for the next turn, nothing more is read once none is ready.
+    #[test]
+    fn take_burst_hands_over_the_burst_and_returns_what_ends_it() {
+        let right = mouse(MouseEventKind::ScrollRight, KeyModifiers::NONE);
+        let shift_down = mouse(MouseEventKind::ScrollDown, KeyModifiers::SHIFT);
+        let moved = mouse(MouseEventKind::Moved, KeyModifiers::NONE);
+        let mut queue = vec![right.clone(), right.clone(), shift_down.clone(), right.clone()].into_iter();
+        let mut handled = Vec::new();
+        let rest = take_burst(
+            Burst::Wheel(MouseEventKind::ScrollRight, KeyModifiers::NONE),
+            || queue.next(),
+            |e| handled.push(e),
+        );
+        assert_eq!(handled, [right.clone(), right.clone()]);
+        assert_eq!(rest, Some(shift_down.clone()));
+        assert_eq!(queue.next(), Some(right.clone()), "nothing read past the event that ended it");
+        // Nothing ready: the burst ends there.
+        let mut handled = 0;
+        assert_eq!(take_burst(Burst::Motion, || None, |_| handled += 1), None);
+        assert_eq!(handled, 0);
+        // Motions mix drags and moves; at most PER_FRAME events in all.
+        let drag = mouse(MouseEventKind::Drag(MouseButton::Left), KeyModifiers::NONE);
+        let mut motions = std::iter::repeat_n([drag, moved], PER_FRAME).flatten();
+        let mut n = 1;
+        assert_eq!(take_burst(Burst::Motion, || motions.next(), |_| n += 1), None);
+        assert_eq!(n, PER_FRAME);
     }
 }

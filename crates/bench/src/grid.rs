@@ -3,15 +3,14 @@
 //! `n`): the time of each key with its frame (the jobs answered first), and the cells one frame
 //! looked up for the matches' highlight (only the cells on screen; none without a search); then
 //! bursts of sideways wheel events (a trackpad swipe): the frames each burst drew (the event loop
-//! draws a burst once, `input::burst`) and the cells one frame drew (the columns on screen, the
-//! ones cut by the edges included, times the rows), and that each burst moved the view by all of
-//! its events.
+//! draws a burst once, `input::burst::take_burst`) and the cells one frame drew (as the grid
+//! counts them: the columns on screen, those cut by the edges included, on each row drawn and the
+//! header), and that each burst moved the view by all of its events.
 
 use crate::apps;
 use crate::stats::{Summary, ms};
 use datarig_core::driver::{ColumnMeta, DbEvent, ValueKind};
 use datarig_tui::app::Focus;
-use datarig_tui::app::Results;
 use datarig_tui::input::burst;
 use ratatui::crossterm::event::{Event, KeyCode, KeyModifiers, MouseEvent, MouseEventKind};
 use serde_json::{Value, json};
@@ -146,29 +145,22 @@ pub fn run(n_rows: usize, cols: usize, n: usize) -> Result<Value, String> {
     let mut side = Vec::new();
     let bursts = n.min(100);
     for i in 0..bursts {
-        let events: Vec<Event> = std::iter::repeat_n(kinds[(i / 4) % 4].clone(), PER_BURST).collect();
+        let mut events = std::iter::repeat_n(kinds[(i / 4) % 4].clone(), PER_BURST);
         let was = app.tab().grid.x_off;
         let t = Instant::now();
         let mut frames = 0;
-        let mut at = 0;
-        while at < events.len() {
-            // A frame: the events of one burst (as the event loop reads them), then one draw.
-            let kind = burst::burst(&events[at]);
-            let mut end = at + 1;
-            while kind.is_some()
-                && end < events.len()
-                && end - at < burst::PER_FRAME
-                && burst::burst(&events[end]) == kind
-            {
-                end += 1;
-            }
-            for e in &events[at..end] {
-                app.handle_event(e.clone());
+        let mut pending = None;
+        // A frame: an event and the rest of its burst as the event loop takes them
+        // (`burst::take_burst`), then one draw.
+        while let Some(ev) = pending.take().or_else(|| events.next()) {
+            let kind = burst::burst(&ev);
+            app.handle_event(ev);
+            if let Some(kind) = kind {
+                pending = burst::take_burst(kind, || events.next(), |e| app.handle_event(e));
             }
             apps::draw(&mut term, &mut app);
             frames += 1;
-            cells_max = cells_max.max(cells_drawn(&app));
-            at = end;
+            cells_max = cells_max.max(app.tab().grid.drawn_cells);
         }
         side.push(ms(t.elapsed()));
         frames_max = frames_max.max(frames);
@@ -203,13 +195,3 @@ pub fn run(n_rows: usize, cols: usize, n: usize) -> Result<Value, String> {
 
 /// Wheel events in one sideways burst (a trackpad sends a few dozen a swipe).
 const PER_BURST: usize = 24;
-
-/// The cells the grid drew in the last frame: the columns on screen (also those cut by an edge)
-/// times the rows drawn.
-fn cells_drawn(app: &datarig_tui::app::App) -> usize {
-    let t = app.tab();
-    let Results::Rows(rs) = &t.results else { return 0 };
-    let g = &t.grid;
-    let rows = g.window(rs.rows.len()).end.saturating_sub(g.top).min(g.page_rows);
-    g.hit_cols.len() * rows
-}

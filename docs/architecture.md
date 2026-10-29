@@ -250,10 +250,14 @@ Held by CI budgets (`docs/perf.md`).
   one cut on the left, so `cell_at`, `cell_rect` (hover, the search's highlight, the copy flash),
   `header_col` and the context menu work on that part. Unless the wheel detached the view
   (`detached`), the render follows the cursor's column as little as it takes (`follow`): cut on
-  the left, from its start; cut on the right, up to its end. The wheel (`ScrollLeft`/`Right`,
-  Shift+vertical) and a drag past the left or right edge (`drag_edge`) move it
-  `grid::SIDE_STEP` characters. The binary hands a burst of wheel events of one kind (as of
-  pointer motions) to the app and draws once (`input::burst`, at most `PER_FRAME` events).
+  the left, from its start; cut on the right, up to its end; wider than the view, from its start
+  unless it fills the view already. The wheel (`ScrollLeft`/`Right`, Shift+vertical) and a drag
+  event past the left or right edge (`drag_edge`; not the wheel extending a drag) move it
+  `grid::SIDE_STEP` characters. A column of which only the separator shows is not in `hit_cols`.
+  A cell cut by the right edge whose part on screen is blank though its text is not gets a dim
+  `›` at the edge. The binary hands a burst of wheel events of one kind (as of pointer motions)
+  to the app and draws once (`input::burst::take_burst`, at most `PER_FRAME` events; the
+  benchmark uses it too).
 - **The tab bar** (`widgets::tabbar`): `tabbar::state` reads a tab's session into a `State`
   (idle, connected, running, open transaction, trouble). The number carries the connection:
   the profile's color while the tab's session is connected, `fg_muted` while it is not, the
