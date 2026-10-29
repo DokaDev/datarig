@@ -22,12 +22,16 @@ use crate::widgets::text_input::InputResult;
 use datarig_core::fault::Fault;
 use datarig_core::results::RowsSnapshot;
 use regex::Regex;
+use std::collections::VecDeque;
 use std::ops::Range;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
 
 /// The most matches a search keeps; past them the count says `1,000,000+`.
 pub const MAX_MATCHES: usize = 1_000_000;
+
+/// The most `n`/`N` presses kept while the cursor waits for a first match (a held key).
+const MAX_PENDING: usize = 64;
 
 /// Rows read at a time by a job (it checks whether to stop between them).
 const CHUNK: usize = 1024;
@@ -169,6 +173,9 @@ pub struct GridFind {
     job: Option<Running>,
     /// A job of `n`/`N` that looks for the next match only, beside it.
     seek: Option<Running>,
+    /// `n` (`true`) and `N` pressed while the cursor waits for a first match: each goes on from
+    /// where the one before it lands.
+    pending: VecDeque<bool>,
 }
 
 impl GridFind {
@@ -182,10 +189,11 @@ impl GridFind {
         *self = Self::default();
     }
 
-    /// Stop the jobs out (their answers are dropped).
+    /// Stop the jobs out (their answers are dropped), and the presses waiting for them.
     fn stop_jobs(&mut self) {
         self.job = None;
         self.seek = None;
+        self.pending.clear();
     }
 
     /// The matches to highlight in result `rs`: those of the pattern typed so far while the
@@ -496,6 +504,11 @@ fn shown_rows(t: &Tab) -> Option<&ResultSet> {
     }
 }
 
+/// A search of tab `t`'s grid is on: its prompt is closed and the search is of the rows shown.
+pub(crate) fn search_on(t: &Tab) -> bool {
+    t.find.prompt.is_none() && t.find.active.as_ref().zip(shown_rows(t)).is_some_and(|(a, rs)| a.result == rs.id)
+}
+
 /// What the line under the grid shows of a search.
 pub struct Strip {
     /// `/` or `?`.
@@ -508,9 +521,10 @@ pub struct Strip {
     /// The cursor's match among the matches: `3/120`, `-/120` off a match, `…` while they are
     /// counted, `1,000,000+` past the cap.
     pub count: String,
-    /// What is not searched (the rows still on the server), the longest first: the first that
-    /// fits is drawn, none where none does.
-    pub notes: Vec<String>,
+    /// What is not searched (the rows still on the server), the longest first, each with
+    /// whether it is a warning (the paging's): the first that fits is drawn, none where none
+    /// does.
+    pub notes: Vec<(String, bool)>,
 }
 
 impl App {
@@ -521,11 +535,7 @@ impl App {
 
     /// A search of the active tab's grid is on (its `n` and `N` go to its matches).
     pub fn grid_search_on(&self) -> bool {
-        if self.tabs.is_empty() {
-            return false;
-        }
-        let t = self.tab();
-        t.find.prompt.is_none() && t.find.active.as_ref().zip(shown_rows(t)).is_some_and(|(a, rs)| a.result == rs.id)
+        !self.tabs.is_empty() && search_on(self.tab())
     }
 
     /// The pattern of the search that is on in the active tab's grid, if one is.
@@ -569,10 +579,12 @@ impl App {
         }
     }
 
-    /// `n` (`same`) or `N`: the next match from the cursor. From the matches found while no
-    /// row came since and the list can tell; past the cap of the list, or while every match is
-    /// still being found for these rows, a job looks for the next one only (the one finding them
-    /// goes on); after rows came, a job finds every match again from the cursor.
+    /// `n` (`same`) or `N`: the next match from the cursor. While the cursor waits for a first
+    /// match (of `Enter`, or of a press before) the press is queued and goes on from where that
+    /// one lands. From the matches found while no row came since and the list can tell; past
+    /// the cap of the list, or while every match is still being found for these rows, a job
+    /// looks for the next one only (the one finding them goes on); after rows came, a job finds
+    /// every match again from the cursor.
     fn grid_search_next(&mut self, same: bool) {
         let t = self.tabs.active_mut();
         let Some(rs) = shown_rows(t) else { return };
@@ -580,6 +592,16 @@ impl App {
         let forward = a.forward == same;
         let ncols = rs.columns.len();
         if ncols == 0 {
+            return;
+        }
+        // The cursor waits for a first match (of `Enter`, or of an `n` before): this press goes
+        // on from where that one lands.
+        let waiting = t.find.seek.is_some()
+            || t.find.job.as_ref().is_some_and(|j| j.purpose == Purpose::Search && !j.found_one && j.result == rs.id);
+        if waiting {
+            if t.find.pending.len() < MAX_PENDING {
+                t.find.pending.push_back(same);
+            }
             return;
         }
         let at = cell(t.grid.row, t.grid.col, ncols);
@@ -594,8 +616,13 @@ impl App {
         match known {
             Some(Some((to, wrapped))) => {
                 goto(&mut t.grid, to, ncols);
+                let next = t.find.pending.pop_front();
                 if wrapped {
                     self.flash(super::update::search_notice(SearchNotice::Wrapped { bottom: forward }));
+                }
+                // Presses that waited for the cursor go on from here.
+                if let Some(same) = next {
+                    self.grid_search_next(same);
                 }
             }
             Some(None) => {
@@ -706,16 +733,27 @@ impl App {
         let t = self.tabs.active_mut();
         match purpose {
             Purpose::Seek => t.find.seek = None,
-            _ => t.find.stop_jobs(),
+            // A press that waited may start a new search of every row (rows came since): the
+            // presses after it keep waiting, for its first match.
+            Purpose::Search => {
+                let pending = std::mem::take(&mut t.find.pending);
+                t.find.stop_jobs();
+                t.find.pending = pending;
+            }
+            Purpose::Preview => t.find.stop_jobs(),
         }
-        let Some(rs) = shown_rows(t) else { return };
+        // A job that does not start: nothing will come for the presses that waited.
+        let Some(rs) = shown_rows(t) else { return t.find.pending.clear() };
         let (result, rows, ncols) = (rs.id, rs.rows.len(), rs.columns.len());
         if ncols == 0 {
-            return;
+            return t.find.pending.clear();
         }
         let snap = match rs.rows.snapshot(0..rows) {
             Ok(s) => s,
-            Err(f) => return self.results_read_failed(&f),
+            Err(f) => {
+                t.find.pending.clear();
+                return self.results_read_failed(&f);
+            }
         };
         self.grid_jobs.next += 1;
         let id = self.grid_jobs.next;
@@ -767,9 +805,24 @@ impl App {
     /// Headless (without the event loop's channel): hand the answers of the grid's search jobs
     /// to the app, waiting up to `wait` while one is still out. How many came.
     pub fn pump_grid_search(&mut self, wait: Duration) -> usize {
+        self.pump_grid_answers(wait, usize::MAX)
+    }
+
+    /// Headless: hand the next answer of the grid's search jobs to the app, waiting up to
+    /// `wait` for it (tests look at what one answer does). Whether one came.
+    pub fn pump_grid_search_once(&mut self, wait: Duration) -> bool {
+        self.pump_grid_answers(wait, 1) == 1
+    }
+
+    /// `n` and `N` presses of the active tab's search that wait for a first match.
+    pub fn grid_search_queued(&self) -> usize {
+        if self.tabs.is_empty() { 0 } else { self.tab().find.pending.len() }
+    }
+
+    fn pump_grid_answers(&mut self, wait: Duration, most: usize) -> usize {
         let deadline = Instant::now() + wait;
         let mut n = 0;
-        while self.grid_jobs.pending.load(Ordering::SeqCst) > 0 {
+        while n < most && self.grid_jobs.pending.load(Ordering::SeqCst) > 0 {
             let Some((_, rx)) = &self.grid_jobs.local else { break };
             let left = deadline.saturating_duration_since(Instant::now());
             let Ok(ev) = rx.recv_timeout(left) else { break };
@@ -802,15 +855,37 @@ impl App {
             News::First { cell, wrapped } => {
                 let Some(job) = slot.as_mut() else { return };
                 job.found_one = true;
-                if (t.grid.row, t.grid.col) != job.from {
+                let (purpose, from, forward, ncols) = (job.purpose, job.from, job.forward, job.ncols);
+                // A seek has said all it had to: its end is not waited for.
+                if purpose == Purpose::Seek {
+                    *slot = None;
+                }
+                if (t.grid.row, t.grid.col) != from {
+                    // The cursor moved meanwhile: the presses that waited go too.
+                    t.find.pending.clear();
                     return;
                 }
-                let said = (wrapped && job.purpose != Purpose::Preview).then_some(job.forward);
-                goto(&mut t.grid, cell, job.ncols);
-                said.map(|bottom| SearchNotice::Wrapped { bottom })
+                let said = (wrapped && purpose != Purpose::Preview).then_some(forward);
+                goto(&mut t.grid, cell, ncols);
+                let next = t.find.pending.pop_front();
+                let active = self.tabs.active().id == a.tab;
+                if let Some(n) = said.map(|bottom| SearchNotice::Wrapped { bottom }) {
+                    self.flash(super::update::search_notice(n));
+                }
+                match next {
+                    Some(same) if active => self.grid_search_next(same),
+                    Some(_) => self.tabs.iter_mut().filter(|t| t.id == a.tab).for_each(|t| t.find.pending.clear()),
+                    None => {}
+                }
+                return;
             }
             News::Done(r) => {
                 let Some(job) = slot.take() else { return };
+                // A seek that ended before its first match, or a job that failed: nothing will
+                // come for the presses that waited.
+                if job.purpose == Purpose::Seek || r.is_err() {
+                    t.find.pending.clear();
+                }
                 match r {
                     Ok(Some((cells, capped))) => {
                         let m = Matches { result: job.result, rows: job.rows, ncols: job.ncols, cells, capped };
@@ -893,8 +968,8 @@ impl App {
             // The rows the matches are of (rows may have come since).
             let read = matches.filter(|m| m.result == rs.id && !counting).map_or(rs.rows.len(), |m| m.rows);
             let key = self.next_page_key(Ctx::GridMatches);
-            notes.push(self.i18n.msg(&Msg::GridSearchMore { count: read as u64, key }).to_string());
-            notes.push(self.i18n.label(Label::GridSearchMoreShort).to_string());
+            notes.push((self.i18n.msg(&Msg::GridSearchMore { count: read as u64, key }).to_string(), false));
+            notes.push((self.i18n.label(Label::GridSearchMoreShort).to_string(), false));
         }
         let text = match (&pattern, &t.find.prompt) {
             (Some(p), _) => p.as_str(),
@@ -918,17 +993,17 @@ impl App {
         if self.grid_search_on() { Ctx::GridMatches } else { Ctx::Grid }
     }
 
-    /// Draw the open prompt's input into `area`; where its cursor is, and whether the start of
-    /// the pattern is scrolled out of `area`.
+    /// Draw the open prompt's input into `area`; where its cursor is, and whether the pattern
+    /// is cut at its start and at its end there.
     pub(crate) fn draw_grid_prompt(
         &mut self,
         area: Rect,
         buf: &mut ratatui::buffer::Buffer,
         style: ratatui::style::Style,
-    ) -> Option<(u16, bool)> {
+    ) -> Option<(u16, (bool, bool))> {
         let p = self.tabs.active_mut().find.prompt.as_mut()?;
         let cx = p.input.render(area, buf, style, true, false, None);
-        Some((cx, p.input.scrolled()))
+        Some((cx, p.input.cut()))
     }
 }
 

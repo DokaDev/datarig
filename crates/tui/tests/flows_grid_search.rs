@@ -611,15 +611,21 @@ fn past_the_cap_n_and_shift_n_seek_from_the_cursor() {
 fn n_while_the_matches_are_being_found_does_not_start_over() {
     let mut h = numbers(500, false);
     h.keys("/");
-    h.type_text("^(7|17|27)$");
+    h.type_text("^(7|17|27|37|47)$");
     let scans = h.app.grid_search_scans();
+    // `Enter` and three `n` before any answer came: each `n` goes on from where the one before
+    // it lands.
     raw(&mut h, "\nnnn");
     h.app.pump_grid_search(Duration::from_secs(30));
+    assert_eq!(cursor(&h), (37, 0), "the first match, then three more");
     assert_eq!(h.app.grid_search_scans(), scans + 1, "one search of every row, the n keys beside it");
-    assert!(strip(&mut h).contains("/3"), "the count came: {}", strip(&mut h));
-    h.keys("n");
-    let at = cursor(&h);
-    assert!([(7, 0), (17, 0), (27, 0)].contains(&at), "{at:?}");
+    assert!(strip(&mut h).contains("4/5"), "the count came: {}", strip(&mut h));
+    // `N` the same way, around the start.
+    h.keys("gg/");
+    h.type_text("^(7|17|27|37|47)$");
+    raw(&mut h, "\nNN");
+    h.app.pump_grid_search(Duration::from_secs(30));
+    assert_eq!(cursor(&h), (37, 0), "7, then around to 47, then 37");
 }
 
 #[test]
@@ -635,8 +641,9 @@ fn the_search_line_says_what_the_paging_line_would() {
     let r = h.app.layout.results;
     let line = screen.lines().nth((r.y + r.height - 2) as usize).unwrap_or_default();
     assert!(line.contains("/^42$") && line.contains("1/1 Showing 500 rows \u{b7} fetching stopped"), "{line:?}");
+    // Narrower, the results title's word for the state.
     let line = strip(&mut h);
-    assert!(line.contains(" 1/1 more on server "), "{line:?}");
+    assert!(line.contains(" 1/1 fetching stopped "), "{line:?}");
 }
 
 /// The line under the grid as drawn at `w`×`hh`.
@@ -704,4 +711,236 @@ fn a_long_pattern_keeps_its_end_and_marks_its_cut_start() {
     // Wide enough: the whole pattern, then the count.
     let line = strip_at(&mut h, 200, 40);
     assert!(line.contains("/(?i)(needle|haystack|1234567890)"), "{line:?}");
+}
+
+/// Numbers `0..n` in a column `id` read with the portal held open (the policy's idle timeout
+/// closes it), the grid focused.
+fn held(n: usize) -> Harness {
+    let mut h = Harness::connected(Lang::En);
+    h.ctrl('e');
+    let id = h.app.tab().exec.query_id;
+    let index = h.app.tabs.active_index();
+    h.tab_db(index, DbEvent::TxOpen(true));
+    let columns = Some(vec![meta("id", "int8", true, false)]);
+    let rows = (0..n).map(|i| vec![Some(i.to_string())]).collect();
+    h.tab_db(index, DbEvent::Page { id, columns, rows, more: true, elapsed: Duration::from_millis(2) });
+    h.key(KeyCode::Tab);
+    h
+}
+
+#[test]
+fn the_prompt_names_the_next_page_key_of_the_search() {
+    let mut h = held(500);
+    // The portal closes for being idle: the next page runs the SELECT again, by its key.
+    h.advance(Duration::from_secs(31));
+    assert!(strip_at(&mut h, 200, 40).contains("paging closed \u{2014} n runs the SELECT again"));
+    // While the prompt is open `n` is typed, and after `Enter` it is the search's.
+    h.keys("/");
+    h.type_text("^42$");
+    let line = strip_at(&mut h, 200, 40);
+    assert!(line.contains("/^42$") && line.contains("Space r n runs the SELECT again"), "{line:?}");
+}
+
+#[test]
+fn a_background_tabs_idle_close_names_the_next_page_key_of_its_search() {
+    let mut h = held(500);
+    h.keys("/");
+    h.type_text("^42$");
+    h.key(KeyCode::Enter);
+    assert_eq!(h.app.key_context(), Ctx::GridMatches);
+    // Another tab is active when the portal of the first one closes for being idle.
+    h.ctrl('t');
+    assert_eq!(h.app.tabs.active_index(), 1);
+    h.advance(Duration::from_secs(31));
+    h.keys("gT");
+    h.app.focus = Focus::Results;
+    assert_eq!((h.app.tabs.active_index(), h.app.key_context()), (0, Ctx::GridMatches));
+    let status = h.status(200, 40);
+    assert!(status.contains("Space r n runs the SELECT again"), "{status}");
+}
+
+#[test]
+fn the_search_line_keeps_the_paging_state_in_short() {
+    let cases = [
+        (Paging::Stopped, false, "fetching stopped"),
+        (Paging::Released, true, "next page re-runs"),
+        (Paging::Released, false, "first page only"),
+        (Paging::Replaced, false, "paging closed"),
+        (Paging::Interrupted, false, "paging closed"),
+        (Paging::ClosedIdle, false, "paging closed"),
+    ];
+    for (paging, rerun, short) in cases {
+        let mut h = numbers(500, true);
+        h.app.tab_mut().exec.paging = paging;
+        h.app.tab_mut().exec.rerun_ok = rerun;
+        h.keys("/");
+        h.type_text("^42$");
+        h.key(KeyCode::Enter);
+        let line = strip_at(&mut h, 120, 40);
+        assert!(line.contains(&format!(" 1/1 {short} ")) && !line.contains("more on server"), "{paging:?}: {line:?}");
+        // In the warning's color, as the paging line says it.
+        let t = h.draw(120, 40);
+        let buf = t.backend().buffer();
+        let r = h.app.layout.results;
+        let y = r.y + r.height - 2;
+        let at = line.find(&format!(" 1/1 {short} ")).unwrap();
+        let x = (line[..at].chars().count() + 5) as u16;
+        assert_eq!(buf[(x, y)].fg, theme::DARK.warning, "{paging:?}");
+    }
+}
+
+/// The part of the line under the grid that is the grid's (between its pane's borders).
+fn search_part(h: &mut Harness) -> String {
+    let line = strip_at(h, 80, 24);
+    line.split("\u{2502}\u{2502}").find(|p| p.trim_start().starts_with('/')).unwrap_or_default().trim_end().to_string()
+}
+
+#[test]
+fn a_long_pattern_marks_each_end_it_cuts() {
+    let mut h = numbers(500, true);
+    h.keys("/");
+    h.type_text("(?i)(needle|haystack|1234567890)");
+    // The cursor at the end: the start is cut and marked.
+    let part = search_part(&mut h);
+    assert!(part.starts_with(" /\u{2026}") && part.ends_with("567890)"), "{part:?}");
+    // At the start: the text from the first column, its end cut and marked.
+    h.key(KeyCode::Home);
+    let part = search_part(&mut h);
+    assert!(part.starts_with(" /(?i)(ne") && part.ends_with('\u{2026}'), "{part:?}");
+    // In the middle of a longer one: both.
+    h.key(KeyCode::End);
+    h.type_text("|abcdefghijklmnopqrstuvwxyz|0123456789");
+    for _ in 0..30 {
+        h.key(KeyCode::Left);
+    }
+    let part = search_part(&mut h);
+    assert!(part.starts_with(" /\u{2026}") && part.ends_with('\u{2026}'), "{part:?}");
+}
+
+#[test]
+fn a_seek_whose_match_came_after_the_cursor_moved_holds_no_press_back() {
+    let mut h = numbers(500, false);
+    h.app.set_grid_search_cap(3);
+    h.keys("/");
+    h.type_text("7$");
+    h.key(KeyCode::Enter);
+    h.keys("nn");
+    assert_eq!(cursor(&h), (27, 0));
+    // Past the matches kept: a seek, then the cursor moves before its match comes.
+    raw(&mut h, "nj");
+    assert!(h.app.pump_grid_search_once(Duration::from_secs(30)), "the seek's first match");
+    assert_eq!(cursor(&h), (28, 0), "the moved cursor stays");
+    // The seek has nothing more to say: the next `n` seeks at once instead of waiting for it.
+    raw(&mut h, "n");
+    assert_eq!(h.app.grid_search_queued(), 0, "no press waits behind the seek that ended");
+    h.app.pump_grid_search(Duration::from_secs(30));
+    assert_eq!(cursor(&h), (37, 0));
+}
+
+#[test]
+fn a_seek_that_fails_drops_the_presses_waiting_for_it() {
+    let state = TempState::new("seek-fails");
+    let mut cfg = test_db_config();
+    cfg.result_window_rows = 1_000;
+    let mut h = Harness::with_config(&cfg, Lang::En);
+    h.app.set_paths(Paths { data: None, state: Some(state.0.clone()) });
+    h.db(DbEvent::Connected);
+    h.ctrl('e');
+    let id = h.app.tab().exec.query_id;
+    let mut columns = Some(vec![meta("id", "text", false, false)]);
+    for p in 0..4 {
+        let rows = (p * 500..p * 500 + 500).map(|i| vec![Some(format!("r{i:05}"))]).collect();
+        h.tab_db(
+            0,
+            DbEvent::Page { id, columns: columns.take(), rows, more: p < 3, elapsed: Duration::from_millis(1) },
+        );
+    }
+    h.app.set_grid_search_cap(2);
+    h.key(KeyCode::Tab);
+    h.keys("/");
+    h.type_text("7$");
+    h.key(KeyCode::Enter);
+    h.keys("n");
+    assert_eq!(cursor(&h), (17, 0));
+    // The spill file cannot be read any more: the next seek fails, with presses waiting for it.
+    let Results::Rows(rs) = &h.app.tab().results else { panic!("rows") };
+    let path = rs.rows.spill_path().expect("spilled").to_path_buf();
+    std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_len(0).unwrap();
+    raw(&mut h, "nnn");
+    assert_eq!(h.app.grid_search_queued(), 2);
+    h.app.pump_grid_search(Duration::from_secs(30));
+    assert_eq!(h.app.grid_search_queued(), 0, "the presses went with the seek");
+    assert_eq!(cursor(&h), (17, 0));
+}
+
+#[test]
+fn a_queued_n_after_more_rows_came_keeps_the_presses_after_it() {
+    let mut h = numbers(500, true);
+    h.keys("/");
+    h.type_text("^(7|17|27|600|700)$");
+    raw(&mut h, "\nnn");
+    // Rows come while the first search runs: the presses then search the rows there are now.
+    let id = h.app.tab().exec.query_id;
+    let rows = (500..1_000).map(|i| vec![Some(i.to_string())]).collect();
+    h.tab_db(0, DbEvent::Page { id, columns: None, rows, more: false, elapsed: Duration::from_millis(1) });
+    h.app.pump_grid_search(Duration::from_secs(30));
+    assert_eq!(cursor(&h), (27, 0), "7, then two more");
+    h.keys("nn");
+    assert_eq!(cursor(&h), (700, 0));
+}
+
+#[test]
+fn the_idle_close_names_the_search_key_while_the_prompt_is_open() {
+    let mut h = held(500);
+    h.keys("/");
+    h.type_text("^42$");
+    assert_eq!(h.app.key_context(), Ctx::GridSearch);
+    h.advance(Duration::from_secs(31));
+    let status = h.status(200, 40);
+    assert!(status.contains("Space r n runs the SELECT again"), "{status}");
+}
+
+#[test]
+fn queued_presses_go_with_a_moved_cursor_noh_or_a_new_prompt_and_wrap_and_cap() {
+    let pattern = "^(7|17)$";
+    // The cursor moved before the first match came: the presses go, the cursor stays (one row
+    // under the preview's match, where `Enter` left it).
+    let mut h = numbers(500, false);
+    h.keys("/");
+    h.type_text(pattern);
+    raw(&mut h, "\nnnj");
+    h.app.pump_grid_search(Duration::from_secs(30));
+    assert_eq!((cursor(&h), h.app.grid_search_queued()), ((8, 0), 0));
+    // `:noh` while presses wait: the search and the presses go.
+    let mut h = numbers(500, false);
+    h.keys("/");
+    h.type_text(pattern);
+    raw(&mut h, "\nnn:noh\n");
+    assert_eq!(h.app.grid_search_queued(), 0);
+    h.app.pump_grid_search(Duration::from_secs(30));
+    assert_eq!((cursor(&h), h.app.key_context()), ((7, 0), Ctx::Grid), "where `Enter` left it, on the preview's match");
+    // `/` again while presses wait: they go with the search's jobs.
+    let mut h = numbers(500, false);
+    h.keys("/");
+    h.type_text(pattern);
+    raw(&mut h, "\nnn/");
+    assert_eq!(h.app.grid_search_queued(), 0);
+    h.app.pump_grid_search(Duration::from_secs(30));
+    assert_eq!(h.app.key_context(), Ctx::GridSearch);
+    // Presses that go around the end say so.
+    let mut h = numbers(500, false);
+    h.keys("/");
+    h.type_text(pattern);
+    raw(&mut h, "\nnn");
+    h.app.pump_grid_search(Duration::from_secs(30));
+    assert_eq!(cursor(&h), (7, 0), "7, 17, then around to 7");
+    assert!(h.status(120, 40).contains("Search hit the bottom, continuing at the top"));
+    // At most 64 presses wait.
+    let mut h = numbers(500, false);
+    h.keys("/");
+    h.type_text("7$");
+    raw(&mut h, &format!("\n{}", "n".repeat(100)));
+    assert_eq!(h.app.grid_search_queued(), 64);
+    h.app.pump_grid_search(Duration::from_secs(30));
+    assert_eq!(cursor(&h), (147, 0), "the first match, then 64 more around the 50 there are");
 }

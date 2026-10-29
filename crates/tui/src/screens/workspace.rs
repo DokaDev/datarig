@@ -1019,17 +1019,18 @@ fn draw_search_strip(app: &mut App, strip: &crate::app::grid_search::Strip, area
     let room = (area.width as usize).saturating_sub(3);
     let typing = strip.pattern.is_none();
     let need = strip.text_width + usize::from(typing);
-    let mut options: Vec<String> = strip
+    // Each option: the count and a note (whether it is a warning).
+    let mut options: Vec<(String, Option<&(String, bool)>)> = strip
         .notes
         .iter()
-        .map(|n| if strip.count.is_empty() { n.clone() } else { format!("{} {n}", strip.count) })
+        .map(|n| (if strip.count.is_empty() { n.0.clone() } else { format!("{} {}", strip.count, n.0) }, Some(n)))
         .collect();
-    options.push(strip.count.clone());
-    let status = options
+    options.push((strip.count.clone(), None));
+    let (status, note) = options
         .iter()
-        .find(|s| !s.is_empty() && need + 2 + width(s) <= room)
+        .find(|(s, _)| !s.is_empty() && need + 2 + width(s) <= room && width(s) <= room.saturating_sub(4))
         .cloned()
-        .unwrap_or_else(|| if typing { String::new() } else { strip.count.clone() });
+        .unwrap_or_else(|| if typing { (String::new(), None) } else { (strip.count.clone(), None) });
     let status = clip(&status, room.saturating_sub(4));
     let status_w = width(&status);
     let x = area.x + 1;
@@ -1040,15 +1041,24 @@ fn draw_search_strip(app: &mut App, strip: &crate::app::grid_search::Strip, area
         Some(p) => {
             buf.set_stringn(input.x, input.y, clip(p, input_w), input_w, style);
         }
-        // A pattern longer than its room: the part before what is shown is marked, never
-        // silently left out.
-        None if need > input_w && input_w > 1 => {
-            let rest = Rect { x: input.x + 1, width: input.width - 1, ..input };
-            if let Some((cx, scrolled)) = app.draw_grid_prompt(rest, buf, style) {
-                if scrolled {
-                    buf.set_stringn(input.x, input.y, "\u{2026}", 1, style.fg(th.fg_muted));
-                }
+        // A pattern longer than its room: each end it is cut at is marked, never silently left
+        // out. Drawn first with a column kept for each mark, then again with the room of the
+        // ends it is really cut at.
+        None if need > input_w && input_w > 2 => {
+            let inner = Rect { x: input.x + 1, width: input.width - 2, ..input };
+            let (left, right) = app.draw_grid_prompt(inner, buf, style).map_or((false, false), |(_, cut)| cut);
+            let drawn =
+                Rect { x: input.x + u16::from(left), width: input.width - u16::from(left) - u16::from(right), ..input };
+            buf.set_stringn(input.x, input.y, " ".repeat(input_w), input_w, style);
+            if let Some((cx, _)) = app.draw_grid_prompt(drawn, buf, style) {
                 app.layout.grid_prompt_cursor = Some((cx, area.y));
+            }
+            let mark = style.fg(th.fg_muted);
+            if left {
+                buf.set_stringn(input.x, input.y, "\u{2026}", 1, mark);
+            }
+            if right {
+                buf.set_stringn(input.x + input.width - 1, input.y, "\u{2026}", 1, mark);
             }
         }
         None => {
@@ -1060,6 +1070,12 @@ fn draw_search_strip(app: &mut App, strip: &crate::app::grid_search::Strip, area
     if status_w > 0 {
         let sx = area.x + area.width - 1 - status_w as u16;
         buf.set_stringn(sx, area.y, &status, status_w, Style::new().fg(th.fg_muted).bg(th.surface));
+        // A note about the paging in the warning's color, as the paging line has it.
+        if let Some((n, true)) = note {
+            let nw = width(n).min(status_w);
+            let nx = area.x + area.width - 1 - nw as u16;
+            buf.set_style(Rect { x: nx, y: area.y, width: nw as u16, height: 1 }, Style::new().fg(th.warning));
+        }
     }
 }
 
@@ -1089,8 +1105,10 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
     let look = crate::widgets::grid::Look { marks: &marks, icons: app.icons_on() };
     // The portal belongs to the last statement of the rows' run: only its rows page.
     let answer = app.tab().exec.shown.is_some() && app.tab().exec.shown == app.tab().answer_index();
-    // `n` is the search's while one is on: the next page's key there.
-    let next_key = app.next_page_key(app.grid_ctx());
+    // `n` is the search's while one is on, and typed while its prompt is open: the next page's
+    // key there.
+    let searching = app.grid_prompt_open() || app.grid_search_on();
+    let next_key = app.next_page_key(if searching { Ctx::GridMatches } else { Ctx::Grid });
     let run_again = app.can_run_again();
     let text_plan = app.text_plan_hint();
     // A result whose portal was closed for being idle (or never held), or whose fetching
@@ -1101,25 +1119,28 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
         {
             let count = rs.rows.len() as u64;
             let key = next_key.clone();
-            Some(match app.tab().exec.paging {
-                Paging::Stopped => app.i18n.msg(&Msg::ResultsPagingStopped { count }),
-                Paging::Released if run_again => app.i18n.msg(&Msg::ResultsPagingNoHold { count, key }),
-                Paging::Released => app.i18n.msg(&Msg::ResultsPagingFirstPageOnly { count }),
+            // With the results title's word for the state, where the whole note does not fit.
+            let (long, short) = match app.tab().exec.paging {
+                Paging::Stopped => (Msg::ResultsPagingStopped { count }, Label::ResultsTitlePagingStopped),
+                Paging::Released if run_again => {
+                    (Msg::ResultsPagingNoHold { count, key }, Label::ResultsTitlePagingNoHold)
+                }
+                Paging::Released => (Msg::ResultsPagingFirstPageOnly { count }, Label::ResultsTitleFirstPageOnly),
                 // The next page runs the statement again when it may.
-                _ if run_again => app.i18n.msg(&Msg::ResultsPagingClosedRerun { count, key }),
-                Paging::Replaced => app.i18n.msg(&Msg::ResultsPagingReplaced { count }),
-                Paging::Interrupted => app.i18n.msg(&Msg::ResultsPagingInterrupted { count }),
-                _ => app.i18n.msg(&Msg::ResultsPagingClosed { count }),
-            })
+                _ if run_again => (Msg::ResultsPagingClosedRerun { count, key }, Label::ResultsTitlePagingClosed),
+                Paging::Replaced => (Msg::ResultsPagingReplaced { count }, Label::ResultsTitlePagingClosed),
+                Paging::Interrupted => (Msg::ResultsPagingInterrupted { count }, Label::ResultsTitlePagingClosed),
+                _ => (Msg::ResultsPagingClosed { count }, Label::ResultsTitlePagingClosed),
+            };
+            Some((app.i18n.msg(&long), app.i18n.label(short)))
         }
         _ => None,
     };
     // The grid's search: its prompt or the search that is on, on the line under the grid; a
     // note about the paging goes on that line too, first among what is not searched.
     let mut strip = app.grid_search_strip().filter(|_| area.height > 3);
-    if let (Some(s), Some(p)) = (strip.as_mut(), &paging_note) {
-        let short = s.notes.pop();
-        s.notes = std::iter::once(p.to_string()).chain(short).collect();
+    if let (Some(s), Some((long, short))) = (strip.as_mut(), &paging_note) {
+        s.notes = vec![(long.to_string(), true), (short.to_string(), true)];
     }
     app.layout.grid_area = area;
     // Where the grid's cells were before this frame: laid out otherwise (scrolled, another
@@ -1153,7 +1174,7 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
         Results::Rows(rs) if area.height > 3 && paging_note.is_some() => {
             let grid = Rect { height: area.height - 1, ..area };
             crate::widgets::grid::render(rs, &mut t.grid, grid, buf, &app.i18n, focused, look);
-            let text = paging_note.as_ref().map(ToString::to_string).unwrap_or_default();
+            let text = paging_note.as_ref().map(|(long, _)| long.to_string()).unwrap_or_default();
             let y = area.y + area.height - 1;
             buf.set_style(Rect { y, height: 1, ..area }, Style::new().bg(th.surface));
             let w = area.width.saturating_sub(1) as usize;
