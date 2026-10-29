@@ -264,6 +264,14 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
   and why. An environment can keep the server-side cursor open instead (`paging = "hold"`, see
   [Paging and locks](#paging-and-locks)).
 - A row count on demand, with a label that says whether it matches the pages you saw.
+- Search inside the grid with `/` and `?`: a prompt under the grid, the cursor on the first
+  matching cell as you type, `Enter` to search, then `n` and `N` from match to match (across
+  pages, around the ends with a warning) and `Esc` to end the search; while no search is on,
+  `n` is the next page as before. It searches every row already fetched (the spilled ones
+  too), each cell's full value as the server sent it (not the cut the grid shows); NULL never
+  matches, and nothing is fetched or run again for it: when the server has more rows the line
+  under the grid says so. Patterns are the editor's (Rust regular expressions, case sensitive
+  unless they start with `(?i)`); matching cells are tinted, and `:noh` ends the search too.
 - An inspector for the selected row or cell (JSON pretty-printed; it starts on the Row tab for
   every result, `I` switches, and the tab you pick stays for the session; `Tab` there moves to
   the next pane as everywhere), a cell viewer, and cell,
