@@ -235,6 +235,12 @@ impl Ctx {
         self == Ctx::GridMatches
     }
 
+    /// A search prompt outside the editor: its reserved editing keys (`Ctrl+W`) win over the
+    /// workspace's, as they do in the editor's own prompt.
+    pub fn is_prompt(self) -> bool {
+        self == Ctx::GridSearch
+    }
+
     /// One line for `docs/keybindings.md`.
     pub fn describe(self) -> &'static str {
         match self {
@@ -252,7 +258,7 @@ impl Ctx {
                 "The result grid while a search is on (after `/` or `?`): `n` goes to the next matching cell in the search's direction, `N` the other way, from page to page through every fetched row (in the spill file too), around the ends with a warning; `Esc` ends the search, and `n` shows the next page again."
             }
             Ctx::GridSearch => {
-                "The search prompt of `/` and `?` on the line under the grid: the cursor goes to the first matching cell while the pattern is typed, `Enter` searches (an empty pattern: the last one), `Esc` goes back to where the cursor was. The full values are searched as fetched (not the shown cut), cell by cell, row by row."
+                "The search prompt of `/` and `?` on the line under the grid: the cursor goes to the first matching cell while the pattern is typed, `Enter` searches (an empty pattern: the last one), `Esc` goes back to where the cursor was, `Ctrl+W` deletes the word before the cursor. The full values are searched as fetched (not the shown cut), cell by cell, row by row."
             }
             Ctx::Inspector => {
                 "The result inspector next to the grid, after a click on it: `j`/`k` move between the columns and the grid's cell follows (on the Row tab, a click on a column moves it there too), `Enter` shows the value whole."

@@ -274,9 +274,9 @@ The result grid while a search is on (after `/` or `?`): `n` goes to the next ma
 
 ## `grid.search` [text]
 
-The search prompt of `/` and `?` on the line under the grid: the cursor goes to the first matching cell while the pattern is typed, `Enter` searches (an empty pattern: the last one), `Esc` goes back to where the cursor was. The full values are searched as fetched (not the shown cut), cell by cell, row by row. Inside `workspace`.
+The search prompt of `/` and `?` on the line under the grid: the cursor goes to the first matching cell while the pattern is typed, `Enter` searches (an empty pattern: the last one), `Esc` goes back to where the cursor was, `Ctrl+W` deletes the word before the cursor. The full values are searched as fetched (not the shown cut), cell by cell, row by row. Inside `workspace`.
 
-Reserved — grid search: `Esc` `Enter`
+Reserved — grid search: `Esc` `Enter` `Ctrl+W`
 
 Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
 

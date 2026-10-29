@@ -542,7 +542,7 @@ const RESERVED: &[(Ctx, &[&str], &str)] = &[
     (Commands, &["esc", "enter", "up", "down", "ctrl+p", "ctrl+n", "tab", "shift+tab"], "command line"),
     (Commands, TEXT, "text input"),
     (ExplorerFilter, TEXT, "text input"),
-    (GridSearch, &["esc", "enter"], "grid search"),
+    (GridSearch, &["esc", "enter", "ctrl+w"], "grid search"),
     (GridSearch, TEXT, "text input"),
     (QuickConnect, &["esc", "enter", "up", "down", "ctrl+p", "ctrl+n"], "quick connect"),
     // `→`/`←` open and close the databases and schemas; the filter keeps its other
