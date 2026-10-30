@@ -26,8 +26,8 @@ For example `changes/added/grid-copy-tsv.md`:
 ```
 
 A change of the configuration formats always has a `changed` fragment that says so: what
-changed, and that datarig migrates the old files (keeping a backup). The README promises that
-the release notes say it.
+changed, and that datarig migrates the old files (keeping a backup), so that What's new and
+the release notes tell users before they upgrade.
 
 Check fragments with `scripts/changes.sh check changes/*/*.md`; the docs rule of pull requests
 checks them too.
