@@ -3,9 +3,13 @@
 //! looked up: `:commands` (and `:set` assignments), action ids, context names, config keys and
 //! tables (`[table] key`, `table.key`), key chords (which must be bound by default) and theme names. A span that is meant as
 //! something else goes in [`ALLOWED`] with the reason. The same files hold no Hangul and no
-//! absolute paths of a local machine.
+//! absolute paths of a local machine, and every `{{#include}}` of the site resolves.
+//!
+//! Known limits: a key sequence passes when it is bound by default in any context, also as the
+//! start of a longer one (`Space`), and keys written as plain letters (`gg`, `dd`) are not
+//! looked up.
 
-use datarig_core::config::doc::{self as config_doc, TABLES};
+use datarig_core::config::doc::{self as config_doc, KEYS, TABLES};
 use datarig_tui::app::{action, command};
 use datarig_tui::keymap::{Ctx, Keymap, parse_keys};
 use std::collections::BTreeSet;
@@ -16,6 +20,7 @@ const ALLOWED: &[(&str, &str)] = &[
     (":cq", "Vim's own command, named as Vim's"),
     (":d", "the roadmap: an Ex command datarig does not have yet"),
     (":g", "the roadmap: an Ex command datarig does not have yet"),
+    ("[workspace.package]", "a table of Cargo.toml, not of the config file"),
 ];
 
 fn root() -> PathBuf {
@@ -63,11 +68,28 @@ fn pages() -> Vec<(String, String)> {
         .collect()
 }
 
-/// `(line, span)` for every inline code span outside fenced blocks (a span may go on over a
-/// line break; its text then has a space there).
+/// `text` with its HTML comments blanked out (their line breaks kept).
+fn uncommented(text: &str) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    while let Some(start) = rest.find("<!--") {
+        out.push_str(&rest[..start]);
+        let end = rest[start..].find("-->").map_or(rest.len(), |e| start + e + 3);
+        out.extend(rest[start..end].chars().filter(|c| *c == '\n'));
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// `(line, span)` for every inline code span outside fenced blocks and HTML comments (a span
+/// may go on over a line break; its text then has a space there). A backslash before a backtick
+/// outside a span makes it plain text. Indented code blocks are read as text.
 fn spans(text: &str) -> Vec<(usize, String)> {
+    let text = uncommented(text);
     let mut out = Vec::new();
-    let mut fence: Option<String> = None;
+    // The open fence: its character and length (it closes on at least as many).
+    let mut fence: Option<(char, usize)> = None;
     // The paragraph so far: its first line's number and its lines.
     let mut para: Vec<(usize, &str)> = Vec::new();
     let flush = |para: &mut Vec<(usize, &str)>, out: &mut Vec<(usize, String)>| {
@@ -75,6 +97,10 @@ fn spans(text: &str) -> Vec<(usize, String)> {
             para.iter().flat_map(|(n, l)| l.chars().map(move |c| (*n, c)).chain([(*n, '\n')])).collect();
         let mut i = 0;
         while i < joined.len() {
+            if joined[i].1 == '\\' {
+                i += 2;
+                continue;
+            }
             if joined[i].1 != '`' {
                 i += 1;
                 continue;
@@ -112,20 +138,17 @@ fn spans(text: &str) -> Vec<(usize, String)> {
     };
     for (n, line) in text.lines().enumerate() {
         let t = line.trim_start();
-        let marker = if t.starts_with("```") {
-            Some("```")
-        } else if t.starts_with("~~~") {
-            Some("~~~")
-        } else {
-            None
-        };
-        match (&fence, marker) {
+        let marker = ['`', '~'].into_iter().find_map(|c| {
+            let n = t.chars().take_while(|x| *x == c).count();
+            (n >= 3).then_some((c, n))
+        });
+        match (fence, marker) {
             (None, Some(m)) => {
                 flush(&mut para, &mut out);
-                fence = Some(m.to_string());
+                fence = Some(m);
                 continue;
             }
-            (Some(f), Some(m)) if f == m => {
+            (Some((c, n)), Some((mc, mn))) if c == mc && mn >= n && t[mn * c.len_utf8()..].trim().is_empty() => {
                 fence = None;
                 continue;
             }
@@ -200,6 +223,17 @@ fn config_path(span: &str) -> bool {
     }
 }
 
+/// Whether `a` and `b` differ by one insertion, deletion or change (not equal).
+fn one_off(a: &str, b: &str) -> bool {
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    if a == b || a.len().abs_diff(b.len()) > 1 {
+        return false;
+    }
+    let prefix = a.iter().zip(&b).take_while(|(x, y)| x == y).count();
+    let suffix = a.iter().rev().zip(b.iter().rev()).take_while(|(x, y)| x == y).count();
+    prefix + suffix >= a.len().max(b.len()) - 1
+}
+
 /// What is wrong with `span`, or `None` when it names something that exists (or is not a name
 /// of the app at all).
 fn problem(span: &str) -> Option<String> {
@@ -251,16 +285,19 @@ fn problem(span: &str) -> Option<String> {
             return None;
         }
         let table = table.replace('"', "");
-        let (tables, _) = heads();
-        let head = table.split('.').next().unwrap_or_default();
-        if !tables.contains(head) {
-            // `[x]` of a checkbox: not a table, unless a key follows as in `[table] key`.
-            let keyish = !rest.is_empty() && rest.chars().all(|c| c.is_ascii_lowercase() || c == '_');
-            return keyish.then(|| format!("`[{table}]` is not a table of the config file"));
+        // `[x]` of a checkbox.
+        if table == "x" && rest.is_empty() {
+            return None;
         }
         let Some(t) = config_doc::table(&table) else {
             return Some(format!("`[{table}]` is not a table of the config file"));
         };
+        if t.name == "keymap.<context>" {
+            let ctx = &table["keymap.".len()..];
+            if !ctx.starts_with('<') && Ctx::from_name(ctx).is_none() {
+                return Some(format!("`{ctx}` is not a context"));
+            }
+        }
         let key = rest.split([' ', '=']).next().unwrap_or_default();
         if key.is_empty() || !key.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_') {
             return None;
@@ -307,6 +344,26 @@ fn problem(span: &str) -> Option<String> {
         if tables.contains(head) || actions.contains(head) {
             return Some(format!("`{s}` is no action id, context or config key"));
         }
+        // A typo in the first part (`editr.cursor_shape`); short heads (`db.name`) are left be.
+        let contexts = Ctx::ALL.iter().map(|c| c.name().split('.').next().unwrap());
+        if let Some(near) = tables
+            .iter()
+            .copied()
+            .chain(actions.iter().copied())
+            .chain(contexts)
+            .find(|h| head.len() >= 4 && one_off(head, h))
+        {
+            return Some(format!("`{s}`: `{head}` is not a name the app has (`{near}`?)"));
+        }
+    }
+    // A bare config key with a typo (`idle_disconect`): one edit from a documented key.
+    if s.contains('_') && s.len() >= 6 && s.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_') {
+        let keys: BTreeSet<&str> = KEYS.iter().map(|k| k.key).collect();
+        if !keys.contains(s)
+            && let Some(near) = keys.iter().find(|k| one_off(s, k))
+        {
+            return Some(format!("`{s}` is not a config key (`{near}`?)"));
+        }
     }
     None
 }
@@ -337,9 +394,10 @@ fn hand_written_docs_name_what_exists() {
 
 #[test]
 fn spans_and_problems_are_found() {
-    let text = "a `:conn x` b ``a `b` c``\n`Ctrl+E`\n\n```toml\n`:nope`\n```\nc `ui.\ntips`";
+    let text = "a `:conn x` b ``a `b` c``\n`Ctrl+E`\n\n```toml\n`:nope`\n```\nc `ui.\ntips`\n\n\
+                ````md\n```\n`:in4`\n````\n<!-- `:hidden` -->\\`not `:last`";
     let spans: Vec<String> = spans(text).into_iter().map(|(_, s)| s).collect();
-    assert_eq!(spans, [":conn x", "a `b` c", "Ctrl+E", "ui. tips"]);
+    assert_eq!(spans, [":conn x", "a `b` c", "Ctrl+E", "ui. tips", ":last"]);
     for ok in [":conn x", ":set ui.tips=off", ":set theme", ":%s/a/b/", ":s#a#b#", "editor.format", "editor.vim.normal"]
     {
         assert_eq!(problem(ok), None, "{ok}");
@@ -347,13 +405,21 @@ fn spans_and_problems_are_found() {
     for ok in ["ui.tips", "[editor] format_indent", "[policy.prod] read_only", "[[connections]]", "Space", "Ctrl+E"] {
         assert_eq!(problem(ok), None, "{ok}");
     }
-    for ok in ["theme = \"nord\"", "config.toml", "[x]", "x.y", "Ctrl+K", "[explorer] size_heat = \"5\""] {
+    for ok in ["theme = \"nord\"", "config.toml", "[x]", "x.y", "Ctrl+K", "[explorer] size_heat = \"5\"", "db.name"] {
+        assert_eq!(problem(ok), None, "{ok}");
+    }
+    for ok in ["[keymap.editor.vim.normal]", "[keymap.<context>]", "idle_disconnect", "work_mem", "lock_timeout"] {
         assert_eq!(problem(ok), None, "{ok}");
     }
     for bad in [":nope", ":set ui.tips=maybe", ":set nope", "grid.nope", "ui.nope", "[editor] nope", "[nope] key"] {
         assert!(problem(bad).is_some(), "{bad}");
     }
-    for bad in ["theme = \"nope\"", "[policy.prod] nope", "[ui] tips = \"maybe\"", "Alt+Home"] {
+    for bad in
+        ["theme = \"nope\"", "[policy.prod] nope", "[ui] tips = \"maybe\"", "Alt+Home", "[secret]", "[polcy.prod]"]
+    {
+        assert!(problem(bad).is_some(), "{bad}");
+    }
+    for bad in ["[keymap.nope]", "editr.cursor_shape", "gridd.copy", "idle_disconect", "password_sorce"] {
         assert!(problem(bad).is_some(), "{bad}");
     }
 }
@@ -363,12 +429,21 @@ fn hangul(c: char) -> bool {
     matches!(c as u32, 0x1100..=0x11FF | 0x3130..=0x318F | 0xAC00..=0xD7AF)
 }
 
-/// The docs are English and name no file of the machine they were written on.
+/// The docs (the site, `docs/*.md`, README, CONTRIBUTING, `changes/`) and the workflows are
+/// English and name no file of the machine they were written on. The sources are not read here:
+/// the Hangul key mapping has Korean in its tests, and `tests/no_emoji.rs` covers the UI text.
 #[test]
 fn docs_have_no_hangul_and_no_local_paths() {
     let mut files = Vec::new();
     walk(&root().join("docs/site"), &mut files);
     walk(&root().join("changes"), &mut files);
+    walk(&root().join(".github"), &mut files);
+    for f in std::fs::read_dir(root().join("docs")).unwrap() {
+        let f = f.unwrap().path();
+        if f.extension().is_some_and(|e| e == "md") {
+            files.push(f);
+        }
+    }
     files.push(root().join("README.md"));
     files.push(root().join("CONTRIBUTING.md"));
     const LOCAL: &[&str] = &["/Users/", "/home/", "/private/tmp", "/var/folders", "C:\\Users", "C:/Users"];
@@ -379,10 +454,67 @@ fn docs_have_no_hangul_and_no_local_paths() {
             if line.chars().any(hangul) {
                 wrong.push(format!("{}:{}: Hangul", rel(&f), n + 1));
             }
+            // Homebrew's own prefix on Linux runners is not a user's home.
+            let line = line.replace("/home/linuxbrew/", "");
             if let Some(p) = LOCAL.iter().find(|p| line.contains(**p)) {
                 wrong.push(format!("{}:{}: a local path ({p})", rel(&f), n + 1));
             }
         }
     }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+}
+
+/// Every `{{#include path}}`, `{{#include path:anchor}}` and `{{#include path:a:b}}` of the site
+/// names a file that exists (from the including page), an anchor that has both its lines and
+/// something between them, or lines the file has. mdBook itself leaves a missing file as text and
+/// an unknown anchor as nothing, and still succeeds.
+#[test]
+fn every_include_of_the_site_resolves() {
+    let mut files = Vec::new();
+    walk(&root().join("docs/site/src"), &mut files);
+    let include = regex::Regex::new(r"\{\{#include ([^}:]+)(?::([^}]*))?\}\}").unwrap();
+    let mut wrong = Vec::new();
+    let mut found = 0;
+    for f in files.iter().filter(|f| f.extension().is_some_and(|e| e == "md")) {
+        let text = std::fs::read_to_string(f).unwrap();
+        for c in include.captures_iter(&text) {
+            found += 1;
+            let target = f.parent().unwrap().join(c[1].trim());
+            let place = format!("{}: {}", rel(f), &c[0]);
+            let Ok(body) = std::fs::read_to_string(&target) else {
+                wrong.push(format!("{place}: no file {}", rel(&target)));
+                continue;
+            };
+            let body = body.replace("\r\n", "\n");
+            match c.get(2).map(|m| m.as_str()) {
+                None => {}
+                // Lines `a:b`, `:b`, `a:`.
+                Some(r) if r.chars().all(|c| c.is_ascii_digit() || c == ':') => {
+                    let n = body.lines().count();
+                    let first: usize = r.split(':').next().unwrap().parse().unwrap_or(1);
+                    if first > n {
+                        wrong.push(format!("{place}: the file has {n} lines"));
+                    }
+                }
+                Some(anchor) => {
+                    let line = |tag: &str| {
+                        body.lines().position(|l| {
+                            l.contains(&format!("{tag}: {anchor} ")) || l.ends_with(&format!("{tag}: {anchor}"))
+                        })
+                    };
+                    match (line("ANCHOR"), line("ANCHOR_END")) {
+                        (Some(a), Some(b)) if a < b => {
+                            let inside: Vec<&str> = body.lines().skip(a + 1).take(b - a - 1).collect();
+                            if inside.iter().all(|l| l.trim().is_empty()) {
+                                wrong.push(format!("{place}: anchor {anchor} is empty"));
+                            }
+                        }
+                        _ => wrong.push(format!("{place}: no ANCHOR / ANCHOR_END pair {anchor}")),
+                    }
+                }
+            }
+        }
+    }
+    assert!(found >= 3, "only {found} includes found");
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
 }
