@@ -304,10 +304,19 @@ impl App {
     /// Read the usage file (launch). A file that cannot be read leaves the usage empty for this
     /// session and is never written over; the error log says so. No file and connections or a
     /// workspace already there: someone who used an earlier version, for whom the first steps
-    /// are done. A first launch writes the file at the first save, so the next one knows.
+    /// are done. A first launch writes the file at once, so the next one knows even after a
+    /// crash. A file whose presence cannot be checked counts as unreadable.
     pub(super) fn load_usage(&mut self) {
         let Some(path) = self.paths.usage_file() else { return };
-        let existed = path.exists();
+        let existed = match path.try_exists() {
+            Ok(e) => e,
+            Err(e) => {
+                self.tips.unreadable = true;
+                datarig_core::fault::ErrorLog::new(self.paths.errors_log())
+                    .record("usage.unreadable", &datarig_core::fault::Fault::io(&e));
+                return;
+            }
+        };
         match usage::load(&path) {
             Ok(u) => self.tips.usage = u,
             Err(usage::Unreadable) => {
@@ -318,9 +327,15 @@ impl App {
             }
         }
         if !existed {
-            let workspace = self.paths.state.as_ref().is_some_and(|s| s.join(datarig_core::workspace::FILE).exists());
+            // A workspace that cannot be checked is not taken as an earlier user's.
+            let workspace = self
+                .paths
+                .state
+                .as_ref()
+                .is_some_and(|s| matches!(s.join(datarig_core::workspace::FILE).try_exists(), Ok(true)));
             self.tips.usage.onboarding_done = !self.profiles.is_empty() || workspace;
             self.tips.dirty = true;
+            self.save_usage();
         }
         // A launch turns a page: where the counts are now decides.
         self.tips.epoch = self.tips.usage.total();

@@ -492,3 +492,15 @@ fn returning_users_get_no_first_steps_and_newcomers_do() {
     let h = launch_at(&test_db_config(), &state);
     assert!(h.app.onboarding_shown());
 }
+
+#[test]
+fn a_first_launch_that_ends_without_a_save_still_counts_as_new_the_next_time() {
+    let state = State::new("newcomer-crash");
+    let h = launch_at(&no_profiles(), &state);
+    // Written at launch, before any save: a crash after a connection is added keeps the steps.
+    assert!(state.usage().exists());
+    // A crash: nothing runs on the way out.
+    std::mem::forget(h);
+    let h = launch_at(&test_db_config(), &state);
+    assert!(h.app.onboarding_shown());
+}
