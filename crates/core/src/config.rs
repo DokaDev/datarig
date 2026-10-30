@@ -66,6 +66,8 @@
 //! read the same, and renamed in place by a save that changes what they say ([`STARTUP_ALIASES`]); a
 //! place that has a name and its old one is an error.
 
+pub mod doc;
+
 use crate::fault::{Fault, FaultKind};
 use crate::policy::{self, Policies, Policy};
 use crate::profile::color::ProfileColor;
@@ -223,7 +225,7 @@ const TX_IDLE_ROLLBACK_ALIAS: &str = "tx_idle_timeout";
 const SESSION_ALIAS: &str = "session";
 
 /// The items of an environment that have an old name: `(key, its old name)`.
-const ENV_ALIASES: [(&str, &str); 2] = [("tx_idle_rollback", TX_IDLE_ROLLBACK_ALIAS), ("startup", SESSION_ALIAS)];
+pub const ENV_ALIASES: [(&str, &str); 2] = [("tx_idle_rollback", TX_IDLE_ROLLBACK_ALIAS), ("startup", SESSION_ALIAS)];
 
 /// The Startup SQL keys that had other names in 0.31: `(key, its old name)`, for the
 /// top-level tables and a profile's two keys. The old ones are read the same; a save that changes

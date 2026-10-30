@@ -13,4 +13,5 @@ the version they were built from:
 
 - [Keybindings](reference/keybindings.md): every key, by context.
 - [Commands](reference/commands.md): the `:` command line and `:set`.
+- [Configuration](reference/configuration.md): every key of `config.toml`.
 - [Theme file format](reference/theme-files.md): writing your own theme.
