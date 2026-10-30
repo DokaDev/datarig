@@ -18,6 +18,7 @@ const SCREENS: &[(&str, &str)] = &[
     ("main-layout", "ui_snapshots__main_layout_160x45_en"),
     ("editor", "ui_snapshots__current_statement_is_marked_in_the_gutter"),
     ("grid-range", "ui_snapshots__grid_range_en_160x45"),
+    ("grid-keys", "ui_snapshots__grid_key_marks_text_en_160x45"),
     ("inspector", "ui_snapshots__inspector_row_en_160x45"),
     ("grid-search", "ui_snapshots__grid_search_matches_terminal_120x40"),
     ("plan-tree-postgres", "flows_plan__plan_tree_analyze_en_160x45"),
