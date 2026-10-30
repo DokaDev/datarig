@@ -35,12 +35,12 @@ jobs:
       - uses: actions/checkout@v7
       - run: cargo fmt --all --check
 
-  # The docs site (docs/site): built with mdBook, then every link and anchor of the HTML, the
-  # README and CONTRIBUTING checked offline with lychee (external links are not fetched). Runs
-  # on every push and pull request like the other jobs: the release gate wants each one to
-  # succeed. mdBook's 404 page links to /datarig/…, so the check resolves root-relative links in
-  # a directory where the build is datarig/. The generated pages and screens are compared with
-  # their sources by the `test` jobs (tests/*_doc.rs, tests/book_*.rs).
+  # The docs site (docs/site): built with mdBook and checked (.github/scripts/docs-build.sh: no
+  # include left as text, every link and anchor of the HTML, the README and CONTRIBUTING
+  # offline), the same build release.yml deploys. Runs on every push and pull request like the
+  # other jobs: the release gate wants each one to succeed. The generated pages and screens are
+  # compared with their sources by the `test` jobs (tests/*_doc.rs, tests/book_*.rs). Also the
+  # tests of the docs rule of pull requests (docs-rule.yml) and of scripts/changes.sh.
   docs:
     name: docs site
     runs-on: ubuntu-latest
@@ -48,21 +48,12 @@ jobs:
       - uses: actions/checkout@v7
       - name: mdBook and lychee
         run: bash .github/scripts/docs-tools.sh
-      - run: mdbook build docs/site
-      # mdBook leaves an include whose file is missing as its text and still succeeds (an
-      # unknown anchor includes nothing: tests/book_refs.rs checks those).
-      - name: No include left as text
+      - name: Build and check
+        run: bash .github/scripts/docs-build.sh
+      - name: Tests of docs-rule.sh and changes.sh
         run: |
-          if grep -rlF '{{#' docs/site/book --include='*.html'; then
-            echo "an {{#...}} of mdBook was not resolved in the pages above" >&2
-            exit 1
-          fi
-      - name: Links
-        run: |
-          mkdir -p "$RUNNER_TEMP/site"
-          ln -s "$PWD/docs/site/book" "$RUNNER_TEMP/site/datarig"
-          lychee --offline --include-fragments --no-progress --root-dir "$RUNNER_TEMP/site" \
-            docs/site/book README.md CONTRIBUTING.md
+          bash .github/scripts/tests/docs-rule-test.sh
+          bash .github/scripts/tests/changes-test.sh
 
   # On every OS the tests run on: code behind `cfg(unix)` / `cfg(windows)` warns differently.
   clippy:

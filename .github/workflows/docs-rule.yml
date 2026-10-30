@@ -1,0 +1,47 @@
+name: Docs rule
+
+# Every pull request: a change users can see updates the docs site, a change to crates/ or
+# locales/ adds a changelog fragment, and a release pull request moves the fragments to What's
+# new, unless the description says why not (`no doc change: <reason>`, `no changelog: <reason>`)
+# (.github/scripts/docs-rule.sh, which explains each failure). Editing the description runs it
+# again. A workflow of its own, not a job of ci.yml: the release gate checks the push runs of
+# ci.yml on main, where this rule has nothing to judge.
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-rule-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  docs-rule:
+    name: docs and changelog
+    runs-on: ubuntu-latest
+    steps:
+      # The whole history: the rule diffs the base and head commits of the pull request.
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # The description and the commits come in through the environment, never pasted into
+      # the script.
+      - name: Check
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        # A base branch rewritten since (a stacked pull request) may have dropped the base
+        # commit from the branches; GitHub still serves it by its id.
+        run: |
+          for c in "$BASE" "$HEAD"; do
+            git cat-file -e "$c^{commit}" 2>/dev/null || git fetch -q --no-tags origin "$c"
+          done
+          bash .github/scripts/docs-rule.sh
