@@ -6,7 +6,8 @@ small fix, please open an issue first to agree on the approach.
 ## Build
 
 You need the Rust toolchain of `rust-toolchain.toml` (rustup installs it on the first `cargo`
-command), a C compiler and libclang (for the `pg_query` crate; see the README).
+command), a C compiler and libclang (for the `pg_query` crate; see
+[Install](https://dokadev.github.io/datarig/install.html#from-source) on the docs site).
 
 ```sh
 cargo build
@@ -22,8 +23,36 @@ cargo test --workspace
 ```
 
 The PostgreSQL, PgBouncer and SSH integration tests need the services of `dev/` and the
-environment variables listed in [dev/README.md](dev/README.md); without them they are skipped.
-CI runs all of them, the performance budgets, `cargo deny check` and `cargo audit`.
+environment variables listed in [dev/README.md](dev/README.md); without them they print
+`SKIPPED`. CI runs all of them, the performance budgets, `cargo deny check` and `cargo audit`.
+
+```sh
+cd dev
+docker compose up -d
+docker compose --profile pooler up -d pgbouncer
+sh ssh/make-fixture.sh                       # prints the fixture directory
+docker compose --profile ssh up -d --build ssh-bastion
+cd ..
+
+export DATARIG_TEST_PG_URL=postgres://datarig:datarig@127.0.0.1:55432/datarig
+export DATARIG_TEST_POOLER_URL=postgres://datarig:datarig@127.0.0.1:56432/datarig
+export DATARIG_TEST_SSH_BASTION=127.0.0.1:52222
+export DATARIG_SSH_FIXTURE=$PWD/dev/ssh/.fixture
+export DATARIG_REQUIRE_PG=1 DATARIG_REQUIRE_POOLER=1 DATARIG_REQUIRE_SSH=1   # fail instead of skipping
+cargo test --workspace
+
+# a driver's suite again with every connection going through a dialer, as through a tunnel
+DATARIG_TEST_DIAL=tcp cargo test -p datarig-driver-postgres --test integration_pg
+DATARIG_TEST_DIAL=tcp cargo test -p datarig-driver-mysql --test integration_mysql   # with DATARIG_TEST_MYSQL_URL set
+```
+
+The performance budgets of `crates/bench/budgets.toml` (needs tmux and the PostgreSQL above;
+see [docs/perf.md](docs/perf.md)):
+
+```sh
+cargo build --release -p datarig-tui -p datarig-bench
+./target/release/datarig-bench budget
+```
 
 - Unit tests live next to the code in `<module>/tests.rs`; integration tests in each crate's
   `tests/`.
@@ -61,7 +90,8 @@ CI runs all of them, the performance budgets, `cargo deny check` and `cargo audi
 
 Maintainers release by pushing a tag; `.github/workflows/release.yml` does the rest.
 
-1. Set `version` in `[workspace.package]` of `Cargo.toml` (see "Versioning" in the README),
+1. Set `version` in `[workspace.package]` of `Cargo.toml` (see
+   [Versions](https://dokadev.github.io/datarig/install.html#versions) on the docs site),
    run `cargo build` so that `Cargo.lock` follows, and merge that change.
 2. Tag that commit `v<version>` and push the tag (`git tag v0.2.0 && git push origin v0.2.0`).
 
