@@ -31,8 +31,20 @@ CI runs all of them, the performance budgets, `cargo deny check` and `cargo audi
   rendering change run `INSTA_UPDATE=always cargo test -p datarig-tui` and review the snapshot
   diff as part of the change. Other languages are checked against their catalogs, not
   snapshots.
-- `docs/keybindings.md` is generated from the keymap:
-  `DATARIG_BLESS=1 cargo test -p datarig-tui --test keybindings_doc`.
+- Some docs are generated, and a test fails when one is out of date. Regenerate with
+  `DATARIG_BLESS=1 cargo test -p datarig-tui --test <test>`:
+
+  | Generated file | From | `<test>` |
+  |---|---|---|
+  | `docs/keybindings.md` | the keymap, actions and `:` commands | `keybindings_doc` |
+  | `docs/themes.md` | the theme tokens | `themes_doc` |
+  | `docs/site/src/reference/configuration.md` | `crates/core/src/config/doc.rs` and the `:set` settings | `config_doc` |
+  | `docs/site/src/reference/command-line.md` | `datarig --help` and `ENV_VARS` (`crates/tui/src/lib.rs`) | `cli_doc` |
+  | `docs/site/src/screens/*.txt` | the snapshots listed in `tests/book_screens.rs` | `book_screens` |
+
+  The docs site (`docs/site`, [mdBook](https://rust-lang.github.io/mdBook/)) is built with
+  `mdbook build docs/site`; `tests/book_refs.rs` checks that its hand-written pages, the README
+  and this file name only commands, actions, keys and config keys that exist.
 - UI text goes through the catalogs in `locales/` (`en.toml` is the source of truth; every
   locale must have the same keys). See "UI strings (i18n)" in
   [docs/architecture.md](docs/architecture.md).
