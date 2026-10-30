@@ -6,7 +6,8 @@ small fix, please open an issue first to agree on the approach.
 ## Build
 
 You need the Rust toolchain of `rust-toolchain.toml` (rustup installs it on the first `cargo`
-command), a C compiler and libclang (for the `pg_query` crate; see the README).
+command), a C compiler and libclang (for the `pg_query` crate; see
+[Install](https://dokadev.github.io/datarig/install.html#from-source) on the docs site).
 
 ```sh
 cargo build
@@ -21,9 +22,57 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 ```
 
-The PostgreSQL, PgBouncer and SSH integration tests need the services of `dev/` and the
-environment variables listed in [dev/README.md](dev/README.md); without them they are skipped.
-CI runs all of them, the performance budgets, `cargo deny check` and `cargo audit`.
+The PostgreSQL, PgBouncer, MySQL, SSH and TLS integration tests need the services of `dev/` and
+the environment variables listed in [dev/README.md](dev/README.md); without them they print
+`SKIPPED`. CI runs all of them, the performance budgets, `cargo deny check` and `cargo audit`.
+
+The integration job of `.github/workflows/ci.yml`, run locally against the services of `dev/`
+(the values are those of [dev/README.md](dev/README.md)):
+
+```sh
+cd dev
+docker compose up -d                         # PostgreSQL and MySQL
+docker compose --profile pooler up -d pgbouncer
+sh ssh/make-fixture.sh                       # prints the fixture directory
+docker compose --profile ssh up -d --build ssh-bastion
+sh tls/make-certs.sh                         # prints the certificates' directory
+sh tls/up.sh tls/.fixture                    # the scratch TLS servers
+cd ..
+
+export DATARIG_TEST_PG_URL=postgres://datarig:datarig@127.0.0.1:55432/datarig
+export DATARIG_TEST_POOLER_URL=postgres://datarig:datarig@127.0.0.1:56432/datarig
+export DATARIG_TEST_MYSQL_URL=mysql://datarig:datarig@127.0.0.1:53306/shop
+export DATARIG_TEST_MYSQL_ADMIN_URL=mysql://root:datarig-root@127.0.0.1:53306/
+export DATARIG_TEST_MYSQL_CLIENT='docker exec -i datarig-mysql mysql -udatarig -pdatarig shop'
+export DATARIG_TEST_SSH_BASTION=127.0.0.1:52222
+export DATARIG_SSH_FIXTURE=$PWD/dev/ssh/.fixture
+export DATARIG_TEST_PG_TLS_URL=postgres://datarig:datarig@localhost:55433/datarig
+export DATARIG_TEST_MYSQL_TLS_URL=mysql://datarig:datarig@localhost:53307/datarig
+export DATARIG_TEST_MYSQL_TLS_ADMIN_URL=mysql://root:datarig-root@localhost:53307/
+export DATARIG_TEST_TLS_CERTS=$PWD/dev/tls/.fixture
+# a missing service fails its tests instead of skipping them
+export DATARIG_REQUIRE_PG=1 DATARIG_REQUIRE_POOLER=1 DATARIG_REQUIRE_MYSQL=1 DATARIG_REQUIRE_SSH=1 DATARIG_REQUIRE_TLS=1
+cargo test --workspace --locked
+
+# each driver's suite again with every connection going through a dialer, as through a tunnel
+DATARIG_TEST_DIAL=tcp cargo test -p datarig-driver-postgres --test integration_pg --locked
+DATARIG_TEST_DIAL=tcp cargo test -p datarig-driver-mysql --test integration_mysql --locked
+# the MySQL suite once more over TLS
+DATARIG_TEST_MYSQL_SSLMODE=PREFERRED cargo test -p datarig-driver-mysql --test integration_mysql --locked
+```
+
+The performance budgets of `crates/bench/budgets.toml`, as the `perf` job runs them (tmux,
+PostgreSQL with `dev/init/*.sql` loaded, MySQL and the SSH bastion above; see
+[docs/perf.md](docs/perf.md)). Note the MySQL database: `datarig`, not `shop`.
+
+```sh
+cargo build --release --locked -p datarig-tui -p datarig-bench
+DATARIG_TEST_PG_URL=postgres://datarig:datarig@127.0.0.1:55432/datarig \
+DATARIG_TEST_MYSQL_URL=mysql://datarig:datarig@127.0.0.1:53306/datarig \
+DATARIG_TEST_SSH_BASTION=127.0.0.1:52222 DATARIG_SSH_FIXTURE=$PWD/dev/ssh/.fixture \
+DATARIG_SECRET_STORE=memory \
+  ./target/release/datarig-bench budget
+```
 
 - Unit tests live next to the code in `<module>/tests.rs`; integration tests in each crate's
   `tests/`.
@@ -61,7 +110,8 @@ CI runs all of them, the performance budgets, `cargo deny check` and `cargo audi
 
 Maintainers release by pushing a tag; `.github/workflows/release.yml` does the rest.
 
-1. Set `version` in `[workspace.package]` of `Cargo.toml` (see "Versioning" in the README),
+1. Set `version` in `[workspace.package]` of `Cargo.toml` (see
+   [Versions](https://dokadev.github.io/datarig/install.html#versions) on the docs site),
    run `cargo build` so that `Cargo.lock` follows, and merge that change.
 2. Tag that commit `v<version>` and push the tag (`git tag v0.2.0 && git push origin v0.2.0`).
 
