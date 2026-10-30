@@ -15,3 +15,4 @@ the version they were built from:
 - [Commands](reference/commands.md): the `:` command line and `:set`.
 - [Configuration](reference/configuration.md): every key of `config.toml`.
 - [Theme file format](reference/theme-files.md): writing your own theme.
+- [Command line](reference/command-line.md): `datarig --help` and the environment variables.
