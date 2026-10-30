@@ -4,17 +4,17 @@ name: Release
 # installing it from the fresh archives, publishes a GitHub release (archives, checksums and
 # its notes) and updates the formula in the tap. The notes start with the version's section of
 # What's new (docs/site/src/whats-new.md, written by scripts/changes.sh release in the release
-# pull request); without one the run stops before the builds. After a stable release,
-# the docs site is deployed to GitHub Pages from the tag. A `vX.Y.0-rc.N` tag is always a
-# pre-release on GitHub; whether it also updates the tap depends on whether a stable release
-# exists yet (.github/scripts/release-tap-eligible.sh): until the first one ships, the tap
-# tracks the latest release candidate, so it stays installable during this pre-1.0 phase; once
-# a stable release exists, the tap only tracks stable and later rc tags leave it alone. The tag
-# must be the workspace version (.github/scripts/release-version.sh). Before anything else, a
-# tag waits for the CI run on main for its commit and stops unless the commit is on main and
-# every CI job passed (.github/scripts/release-ci-gate.sh). A pull request that changes the
-# release files, or a manual run, does everything except publishing and deploying (and skips
-# that wait; a missing What's new section only warns).
+# pull request); without one the run stops before the builds (a release candidate needs none).
+# After a stable release, the docs site is deployed to GitHub Pages from the tag. A
+# `vX.Y.0-rc.N` tag is always a pre-release on GitHub; whether it also updates the tap depends
+# on whether a stable release exists yet (.github/scripts/release-tap-eligible.sh): until the
+# first one ships, the tap tracks the latest release candidate, so it stays installable during
+# this pre-1.0 phase; once a stable release exists, the tap only tracks stable and later rc tags
+# leave it alone. The tag must be the workspace version (.github/scripts/release-version.sh).
+# Before anything else, a tag waits for the CI run on main for its commit and stops unless the
+# commit is on main and every CI job passed (.github/scripts/release-ci-gate.sh). A pull request
+# that changes the release files, or a manual run, does everything except publishing and
+# deploying (and skips that wait; a missing What's new section only warns).
 on:
   push:
     tags: ["v*"]
@@ -86,12 +86,24 @@ jobs:
           PRERELEASE: ${{ steps.version.outputs.prerelease }}
         run: bash .github/scripts/release-tap-eligible.sh
       # The version's section of What's new, the top of the release notes. A tag without one
-      # stops here, before the builds; a run that publishes nothing only warns.
+      # stops here, before the builds; a run that publishes nothing only warns. A release
+      # candidate needs none: its notes are GitHub's generated list, and the fragments wait for
+      # the stable release. Fragments still in changes/ at a tag (merged after the release pull
+      # request) are not in these notes: a warning says so.
       - name: What's new
         env:
           VERSION: ${{ steps.version.outputs.version }}
           PUBLISH: ${{ steps.version.outputs.publish }}
+          PRERELEASE: ${{ steps.version.outputs.prerelease }}
         run: |
+          if [[ $PRERELEASE == true ]]; then
+            echo "A release candidate: its notes are GitHub's generated list only." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          left=$( (find changes -type f ! -path changes/README.md ! -name '.*' 2>/dev/null || true) | sort | tr '\n' ' ')
+          if [[ -n $left && $PUBLISH == true ]]; then
+            echo "::warning title=Fragments left out::These fragments are not in the notes of $VERSION (merged after its release pull request); they go into the next release: $left"
+          fi
           if notes=$(bash scripts/changes.sh notes "$VERSION"); then
             { echo "## What's new in $VERSION"; echo; echo "$notes"; } >> "$GITHUB_STEP_SUMMARY"
           else
@@ -205,6 +217,8 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@v8
         with:
           pattern: dist-*
@@ -229,8 +243,11 @@ jobs:
           fi
           body=$RUNNER_TEMP/notes.md
           {
-            bash scripts/changes.sh notes "$VERSION"
-            echo
+            # A release candidate's notes are GitHub's list only (see the plan job).
+            if [[ $PRERELEASE != true ]]; then
+              bash scripts/changes.sh notes "$VERSION"
+              echo
+            fi
             echo "$notes"
           } > "$body"
           gh release create "$TAG" --verify-tag --title "$TAG" --generate-notes --notes-file "$body" "${flags[@]}" dist/*
@@ -286,6 +303,8 @@ jobs:
       cancel-in-progress: false
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - name: mdBook and lychee
         run: bash .github/scripts/docs-tools.sh
       - name: Build and check
