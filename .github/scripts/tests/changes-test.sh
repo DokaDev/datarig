@@ -128,13 +128,18 @@ expect_out "--allow-empty with a note" "Fix the build." run notes 0.36.2
 
 setup note-and-fragments
 fragment changed/config.md $'- The config format of [ui] changed: rename `x` to `y`.\n'
-run release 0.37.0-rc.1 --note "The first candidate of 0.37.0." 2>/dev/null
-expect_out "a note above the groups, an rc version" "The first candidate of 0.37.0.
+expect_fail "release refuses a release candidate" 'release candidate' run release 0.37.0-rc.1 --note x
+if [[ -f $case_dir/changes/changed/config.md ]]; then ok "an rc leaves the fragments"; else bad "an rc leaves the fragments"; fi
+expect_fail "release refuses a note that is a heading" 'not a heading' run release 0.37.0 --note "## x"
+run release 0.37.0 --note "The config changes." 2>/dev/null
+expect_out "a note above the groups" "The config changes.
 
 ### Changed
 
-- The config format of [ui] changed: rename \`x\` to \`y\`." run notes 0.37.0-rc.1
-expect_fail "the rc section is not the 0.37.0 section" 'no "## 0.37.0" section' run notes 0.37.0
+- The config format of [ui] changed: rename \`x\` to \`y\`." run notes 0.37.0
+printf '\n## 0.36.5-rc.1 — 2026-09-01\n\n- Candidate.\n' >> "$case_dir/docs/site/src/whats-new.md"
+expect_fail "an rc heading is not the 0.36.5 section" 'no "## 0.36.5" section' run notes 0.36.5
+expect_out "notes of a hand-written rc section" "- Candidate." run notes 0.36.5-rc.1
 
 setup invalid
 fragment added/ok.md $'- Fine.\n'
@@ -203,6 +208,19 @@ expect_out "a release next to \"0.36.0 and earlier\"" "### Fixed
 - A fix." run notes 0.36.0
 printf '\n## 0.35.0\n\n- Old.\n' >> "$case_dir/docs/site/src/whats-new.md"
 expect_out "a heading of the version alone" "- Old." run notes 0.35.0
+
+setup large
+# Over 1 MB of older sections after the one asked for: nothing may stop reading early.
+{
+  for i in $(seq 1 20000); do printf '## 0.0.%d — 2020-01-01\n\n- Old entry %d with some text to make it longer.\n\n' "$i" "$i"; done
+} >> "$case_dir/docs/site/src/whats-new.md"
+fragment fixed/big.md $'- A fix.\n'
+run release 0.37.0 2>/dev/null
+expect_out "notes on a page over 1 MB" "### Fixed
+
+- A fix." run notes 0.37.0
+expect_out "notes of a section deep in a page over 1 MB" "- Old entry 19999 with some text to make it longer." run notes 0.0.19999
+expect_fail "check of an unmatched glob" 'no fragments match' run check 'changes/*/*.md'
 
 setup empty-section
 printf '\n## 0.36.1 — 2026-10-02\n\n' >> "$case_dir/docs/site/src/whats-new.md"

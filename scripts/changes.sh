@@ -9,13 +9,16 @@
 #       order, the bullets as written) and deletes them. --note puts a one-line paragraph at the
 #       top of the section. Without fragments it refuses, unless a --note is given (the urgent
 #       patch path: `scripts/changes.sh release 0.36.1 --note "Fix ..."`); --allow-empty says
-#       so explicitly and still needs the --note. Refuses when the section exists already.
+#       so explicitly and still needs the --note. Refuses when the section exists already, and
+#       for a release candidate (X.Y.0-rc.N): its notes are GitHub's generated list only, and
+#       the fragments wait for the stable release.
 #   scripts/changes.sh notes X.Y.Z
 #       Prints the body of that section (release.yml uses it); fails when it is missing.
 #   scripts/changes.sh check FILE...
 #       Checks fragments: the path (changes/<kind>/<slug>.md) and the content.
 #
-# Plain bash 3.2 (the macOS one) and POSIX tools, so it runs anywhere.
+# Plain bash 3.2 (the macOS one) and POSIX tools, so it runs anywhere. No pipe ends early
+# (`| head`, `grep -q`): under pipefail the writer's SIGPIPE would fail it on a large page.
 set -euo pipefail
 
 kinds="added changed fixed removed security"
@@ -28,7 +31,7 @@ die() {
 }
 
 usage() {
-  sed -n '6,16p' "$0" | sed 's/^# \{0,1\}//' >&2
+  sed -n '6,18p' "$0" | sed 's/^# \{0,1\}//' >&2
   exit 2
 }
 
@@ -104,6 +107,11 @@ cmd_check() {
   [[ $# -gt 0 ]] || usage
   local f bad=0
   for f in "$@"; do
+    if [[ $f == *'*'* && ! -e $f ]]; then
+      echo "$f: no fragments match" >&2
+      bad=1
+      continue
+    fi
     check_one "$f" >&2 || bad=1
   done
   return $bad
@@ -112,8 +120,8 @@ cmd_check() {
 # The line number of the heading of a version in $page, `## <version>` alone or followed by
 # ` — <date>` (not `## 0.36.0 and earlier`), empty when there is none.
 heading_line() {
-  local re=${1//./\\.}
-  grep -nE "^## $re( — .*)?[[:space:]]*$" "$page" | head -n 1 | cut -d: -f1 || true
+  awk -v h="## $1" '{ l = $0; sub(/[ \t\r]+$/, "", l) }
+    l == h || index(l, h " — ") == 1 { print NR; exit }' "$page"
 }
 
 cmd_release() {
@@ -135,9 +143,15 @@ cmd_release() {
     esac
   done
   [[ $version =~ $semver ]] || die "$version is not MAJOR.MINOR.PATCH or MAJOR.MINOR.0-rc.N"
+  if [[ $version == *-rc.* ]]; then
+    die "$version is a release candidate: its notes are GitHub's generated list only, and the fragments stay for the stable release (scripts/changes.sh release ${version%-rc.*})"
+  fi
   [[ -f $page ]] || die "$page is missing"
   if [[ $note == *$'\n'* || -n $note && -z ${note//[[:space:]]/} ]]; then
     die "--note is one line of text"
+  fi
+  if [[ $note =~ ^[[:space:]]*# ]]; then
+    die "--note is a line of text, not a heading"
   fi
   if [[ -n $(heading_line "$version") ]]; then
     die "$page has a \"## $version\" section already"
@@ -148,7 +162,7 @@ cmd_release() {
     [[ -n $f ]] || continue
     fragments+=("$f")
     check_one "$f" >&2 || bad=1
-  done < <(find changes -type f ! -path changes/README.md 2>/dev/null | LC_ALL=C sort)
+  done < <(find changes -type f ! -path changes/README.md ! -name '.*' 2>/dev/null | LC_ALL=C sort)
   [[ $bad -eq 0 ]] || die "fix the fragments above first"
   if [[ ${#fragments[@]} -eq 0 ]]; then
     if [[ -z $note ]]; then
@@ -185,7 +199,7 @@ cmd_release() {
   } > "$section"
 
   # Above the first `## ` section, below the intro; at the end when there is none yet.
-  at=$(grep -n '^## ' "$page" | head -n 1 | cut -d: -f1 || true)
+  at=$(awk '/^## / { print NR; exit }' "$page")
   if [[ -n $at ]]; then
     { head -n $((at - 1)) "$page"; cat "$section"; tail -n +"$at" "$page"; } > "$section.page"
   else
@@ -214,13 +228,12 @@ cmd_notes() {
     die "$page has no \"## $version\" section. In the release pull request run: scripts/changes.sh release $version (or, without fragments, an urgent patch: scripts/changes.sh release $version --note \"Fix ...\")"
   fi
   # The lines after the heading up to the next `## ` heading, without blank lines around them.
-  tail -n +"$((start + 1))" "$page" |
-    awk '/^## /{exit} {lines[++n]=$0} END {
+  awk -v s="$start" 'NR <= s { next } /^## / { exit } { lines[++n] = $0 } END {
       first=1; while (first<=n && lines[first] ~ /^[ \t]*$/) first++
       last=n; while (last>=first && lines[last] ~ /^[ \t]*$/) last--
       if (first>last) exit 3
       for (i=first; i<=last; i++) print lines[i]
-    }' || die "the \"## $version\" section of $page is empty"
+    }' "$page" || die "the \"## $version\" section of $page is empty"
 }
 
 [[ $# -gt 0 ]] || usage
