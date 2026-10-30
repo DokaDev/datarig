@@ -135,7 +135,7 @@ color = "red"
 folder = "work/prod"           # nested folders are written with /
 policy = "prod"                # its environment (see Environments and safety)
 password_source = "command"
-password_command = "op read op://work/prod-db/password"
+password_command = "my-password-tool get prod-db"   # your password manager's command line
 tunnel = "office"              # a tunnel preset (see SSH tunnels)
 sslmode = "verify-full"        # see TLS
 ```

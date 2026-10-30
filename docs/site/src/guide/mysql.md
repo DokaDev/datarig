@@ -20,7 +20,7 @@ A MySQL profile has `driver = "mysql"`, and a URL starts with `mysql://` (or `ma
   interval (negative, or over 24 hours), zero dates (`0000-00-00`) as text, `ENUM`/`SET` as
   text, `GEOMETRY` as bytes.
 - **Messages**: rows affected, the last insert id, warnings and the server's info line; errors
-  as the `mysql` client shows them (`ERROR 1146 (42S02): …`).
+  with the server's error number and SQL state (`ERROR 1146 (42S02): …`).
 - **Transactions** as the server reports them after each statement. A statement that commits
   your open transaction by itself (DDL and others) is noted in Messages, and with manual commit
   asks first ([Manual commit](manual-commit.md)).
@@ -34,7 +34,7 @@ A MySQL profile has `driver = "mysql"`, and a URL starts with `mysql://` (or `ma
 ### Cancel
 
 `Ctrl+C` sends `KILL QUERY` from a connection of its own, never `KILL`. A `SLEEP()` that is
-stopped returns 1, as in the `mysql` client. A cancel the server takes is waited for, however
+stopped returns 1. A cancel the server takes is waited for, however
 long the statement then takes to roll back.
 
 A statement that runs as another account (in a `SQL SECURITY DEFINER` routine; stopping it

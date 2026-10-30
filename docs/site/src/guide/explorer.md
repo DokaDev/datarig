@@ -76,12 +76,11 @@ opened; `Esc` gives the tree back as it was.
 `D` on a table, view, materialized view, index or trigger (or its menu, or `:ddl [schema.name]`)
 opens its `CREATE` statements in a read-only tab; `F` on a trigger shows its function's.
 
-- On PostgreSQL the DDL is rebuilt from the catalog in one round trip and marked as such
-  in a first comment line: owned sequences, columns with
-  their collations, defaults, identity and generated expressions, constraints, partitioning or
-  inheritance, storage parameters, owner, indexes, triggers, row-level security and policies,
-  comments and grants. Not included: rows, sequence values, rules, extended statistics, security
-  labels. Every name is qualified.
+- On PostgreSQL the DDL is rebuilt from the catalog in one round trip, and its first line says
+  so. It covers owned sequences, columns with their collations, defaults, identity and generated
+  expressions, constraints, partitioning or inheritance, storage parameters, owner, indexes,
+  triggers, row-level security and policies, comments and grants. Not included: rows, sequence
+  values, rules, extended statistics, security labels. Every name is qualified.
 - On MySQL it is the server's own `SHOW CREATE` text (see [MySQL](mysql.md#show-ddl)).
 - The text can be moved in, searched and yanked; edits are refused. `o` opens it in a new
   console on the same connection, and `r` reads it again.
