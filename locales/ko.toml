@@ -2308,7 +2308,7 @@
 "onboarding.connect" = "연결 추가하기"
 "onboarding.run" = "첫 쿼리 실행하기"
 "onboarding.menu" = "작업 메뉴 열기"
-"onboarding.help" = "키보드 도움말에서 모든 키 보기"
+"onboarding.help" = "키보드 도움말 열기"
 "onboarding.dismiss" = "이 단계 숨기기"
 "onboarding.next" = "다음 단계: {step} — {key} ({dismiss}: 단계 숨기기)"
 "onboarding.next_step" = "다음 단계: {step} — {key}"

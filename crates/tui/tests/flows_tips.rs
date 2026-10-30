@@ -32,11 +32,15 @@ fn no_profiles() -> Config {
     Config { connections: Vec::new(), ..Default::default() }
 }
 
-/// Launched with `cfg` and tips on (the harness keeps them off).
+/// Launched with tips on from the start (no state directory: the usage lives in memory).
 fn launched(cfg: &Config, lang: Lang) -> Harness {
-    let mut h = Harness::launched(cfg, lang, Arc::new(MemoryStore::new()), Startup::Normal);
-    h.app.tips.paused = false;
-    h
+    let (mut app, clock) = new_app_with_clock(cfg, lang);
+    app.tips.paused = false;
+    let store = Arc::new(MemoryStore::new());
+    app.set_secret_store(store.clone() as Arc<dyn SecretStore>);
+    app.launch(Startup::Normal);
+    let driver = FakeDriver::default();
+    Harness { app, cancelled: driver.any_cancel.clone(), driver, store, clock }
 }
 
 /// Connected to the test profile, tips on, the first steps out of the way.
@@ -85,17 +89,16 @@ fn launch_at(cfg: &Config, state: &State) -> Harness {
 fn the_welcome_panel_shows_the_first_steps_until_they_are_hidden() {
     for lang in [Lang::En, Lang::Ko] {
         let mut h = launched(&no_profiles(), lang);
-        // The first run still opens the new-connection form at once.
-        assert!(h.form_open());
-        h.key(KeyCode::Esc);
+        // A first run starts on the welcome panel's first steps, not the form.
+        assert!(!h.form_open());
         for (w, hh) in [(80, 24), (160, 45)] {
             assert_screen!(format!("welcome_first_steps_{}_{w}x{hh}", lang_tag(lang)), lang, h.draw(w, hh));
         }
-        // The help opened by its key: that step is taken.
+        // The help opened by another of its keys: that step (named by its leader key) is taken.
         h.key(KeyCode::F(1));
         h.key(KeyCode::Esc);
         let screen = h.screen(80, 24);
-        let help = screen.lines().find(|l| l.contains(" F1 ")).unwrap().to_string();
+        let help = screen.lines().find(|l| l.contains(" Space ? ")).unwrap().to_string();
         assert!(help.contains("[x]"), "{help}");
         assert!(screen.lines().filter(|l| l.contains("[ ]")).count() == 3, "{screen}");
         // Its key hides them for good: the welcome panel's keys are back.
@@ -503,4 +506,19 @@ fn a_first_launch_that_ends_without_a_save_still_counts_as_new_the_next_time() {
     std::mem::forget(h);
     let h = launch_at(&test_db_config(), &state);
     assert!(h.app.onboarding_shown());
+}
+
+#[test]
+fn a_key_of_the_users_own_is_the_one_the_first_steps_name() {
+    // The defaults' function keys turned off, the Menu key left: the user's F9 is named, not the
+    // Menu key the hint line would pick.
+    let mut cfg = no_profiles();
+    let nav = cfg.keymap.entry("nav".into()).or_default();
+    for (key, action) in [("shift+f10", "none"), ("space space", "none"), ("f9", "menu.open")] {
+        nav.insert(key.into(), action.into());
+    }
+    let mut h = launched(&cfg, Lang::En);
+    let screen = h.screen(80, 24);
+    let menu = screen.lines().find(|l| l.contains("Open the action menu")).unwrap().to_string();
+    assert!(menu.contains(" F9 "), "{menu}");
 }

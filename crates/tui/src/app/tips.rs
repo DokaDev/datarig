@@ -5,7 +5,7 @@
 //! **The catalog.** [`catalog`] lists every tip: where it shows ([`Place`]), what it is about
 //! ([`Subject`]: an action with the context whose key it names, a command, a setting's value)
 //! and its text, a catalog entry with a `{key}`, `{command}` or `{setting}` placeholder. No text
-//! names a key itself: the key is the one the hint line would show ([`App::key_for`]), so a
+//! names a key itself: the key comes from the keymap ([`App::tip_key`]), so a
 //! remapped key shows remapped. Tests check every subject against the action registry, the
 //! command table and the settings.
 //!
@@ -35,11 +35,6 @@ use datarig_core::config::Tips;
 use datarig_core::i18n::Lang;
 use datarig_core::usage::{self, Usage, Via};
 use std::cell::RefCell;
-
-/// A first run (no profile): the new-connection form opens at once over the welcome panel, whose
-/// first steps show once it is closed. `false` would leave the welcome panel with its first steps
-/// in front, its new-connection key one press away.
-pub const FIRST_RUN_OPENS_FORM: bool = true;
 
 /// Runs of an action from a menu or the command line, without its key ever used, before a status
 /// line names its key (once per action).
@@ -289,7 +284,7 @@ impl App {
         if runs < NUDGE_AFTER || u.count(Via::Key, id) > 0 || u.nudged.contains(id) {
             return;
         }
-        let Some(k) = self.keymap.hint_keys(a, ctx, self.enhanced_keys) else { return };
+        let Some(k) = self.keymap.tip_keys(a, ctx, self.enhanced_keys) else { return };
         self.tips.usage.nudged.insert(id.to_string());
         self.tips.dirty = true;
         let (mark, key) = (self.tip_mark(), keys::label(&k));
@@ -493,10 +488,10 @@ impl App {
         (t.text)(self.subject_text(t.subject))
     }
 
-    /// What a subject fills in: the key ([`App::key_for`]), `:name`, or `:set key=value`.
+    /// What a subject fills in: the key ([`App::tip_key`]), `:name`, or `:set key=value`.
     pub fn subject_text(&self, s: Subject) -> String {
         match s {
-            Subject::Action(a, ctx) => self.key_for(a, ctx),
+            Subject::Action(a, ctx) => self.tip_key(a, ctx),
             Subject::Command(name) => format!(":{name}"),
             Subject::Setting(s) => match setting_assignment(s) {
                 Some((key, value)) => format!(":set {key}={value}"),
@@ -549,7 +544,7 @@ impl App {
     /// Step `s` as the tip of a place whose keys go to `ctx`: its key there, and the key that
     /// hides the steps where there is one.
     fn step_msg(&self, s: &Step, ctx: Ctx) -> Msg {
-        let label = |a: Action| self.keymap.hint_keys(a, ctx, self.enhanced_keys).map(|k| keys::label(&k));
+        let label = |a: Action| self.keymap.tip_keys(a, ctx, self.enhanced_keys).map(|k| keys::label(&k));
         let (step, key) = (self.i18n.label(s.label).to_string(), label(s.action).unwrap_or_default());
         match label(Action::DismissOnboarding) {
             Some(dismiss) => Msg::OnboardingNext { step, key, dismiss },

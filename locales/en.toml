@@ -2314,7 +2314,7 @@
 "onboarding.connect" = "Add a connection"
 "onboarding.run" = "Run your first query"
 "onboarding.menu" = "Open the action menu"
-"onboarding.help" = "See every key in the keyboard help"
+"onboarding.help" = "Open the keyboard help"
 "onboarding.dismiss" = "Hide these steps"
 "onboarding.next" = "Next step: {step} with {key} ({dismiss} hides the steps)"
 "onboarding.next_step" = "Next step: {step} with {key}"

@@ -522,6 +522,33 @@ fn hint_keys_prefer_the_innermost_usable_key() {
 }
 
 #[test]
+fn tip_keys_prefer_keys_a_laptop_reaches_and_the_users_own() {
+    let menu = action::by_id("menu.open").unwrap().action;
+    let tip = |km: &Keymap, ctx| km.tip_keys(menu, ctx, false).map(|k| keys::label(&k));
+    let km = Keymap::default();
+    // The hint line keeps its single key; a tip names the one without a function key.
+    assert_eq!(km.hint_keys(menu, Ctx::Explorer, false).map(|k| keys::label(&k)).as_deref(), Some("Shift+F10"));
+    assert_eq!(tip(&km, Ctx::Explorer).as_deref(), Some("Space Space"));
+    // A key of the user's own comes first, even a function key.
+    let (km, issues) = user(&[("nav", "alt+m", "menu.open")]);
+    assert!(issues.is_empty(), "{issues:?}");
+    assert_eq!(tip(&km, Ctx::Explorer).as_deref(), Some("Alt+m"));
+    let (km, issues) = user(&[("nav", "f5", "menu.open")]);
+    assert!(issues.is_empty(), "{issues:?}");
+    assert_eq!(tip(&km, Ctx::Explorer).as_deref(), Some("F5"));
+    let (km, issues) = user(&[("nav", "f9", "menu.open")]);
+    assert!(issues.is_empty(), "{issues:?}");
+    assert_eq!(tip(&km, Ctx::Welcome).as_deref(), Some("F9"));
+    // Every hint still has a tip key.
+    let km = Keymap::default();
+    for (ctx, list) in HINTS {
+        for (id, _) in *list {
+            assert!(km.tip_keys(action::by_id(id).unwrap().action, *ctx, false).is_some(), "{} {id}", ctx.name());
+        }
+    }
+}
+
+#[test]
 fn help_sections_show_keys_the_editor_takes() {
     let km = Keymap::default();
     let close = action::by_id("tab.close").unwrap().action;

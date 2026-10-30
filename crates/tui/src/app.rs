@@ -1397,8 +1397,9 @@ impl App {
             None => {}
         }
         match startup {
-            // Nothing to connect to: the new-profile form opens over the welcome panel.
-            Startup::Normal if self.profiles.is_empty() && !self.config_broken && tips::FIRST_RUN_OPENS_FORM => {
+            // Nothing to connect to: the welcome panel's first steps when they show (its
+            // new-connection key one press away), else the new-profile form over it.
+            Startup::Normal if self.profiles.is_empty() && !self.config_broken && !self.onboarding_shown() => {
                 self.open_form(None, false)
             }
             Startup::Normal => {}

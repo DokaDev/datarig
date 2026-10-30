@@ -1,5 +1,6 @@
 ---
 source: crates/tui/tests/flows_tips.rs
+assertion_line: 95
 expression: backend
 ---
 "╭ Explorer ────────────────────────────╮╭ Welcome ─────────────────────────────────────────────────────────────────────────────────────────────────────────────╮"
@@ -10,13 +11,13 @@ expression: backend
 "│ Press n to create one, or paste a    ││  No connection profiles yet.                                                                                         │"
 "│ postgres:// or mysql:// URL          ││                                                                                                                      │"
 "│                                      ││  First steps                                                                                                         │"
-"│                                      ││  [ ] n          Add a connection                                                                                     │"
-"│                                      ││  [ ] Ctrl+E     Run your first query                                                                                 │"
-"│                                      ││  [ ] Shift+F10  Open the action menu                                                                                 │"
-"│                                      ││  [ ] F1         See every key in the keyboard help                                                                   │"
-"│                                      ││      X          Hide these steps                                                                                     │"
-"│                                      ││      :          Commands                                                                                             │"
-"│                                      ││      q          Quit                                                                                                 │"
+"│                                      ││  [ ] n            Add a connection                                                                                   │"
+"│                                      ││  [ ] Ctrl+E       Run your first query                                                                               │"
+"│                                      ││  [ ] Space Space  Open the action menu                                                                               │"
+"│                                      ││  [ ] Space ?      Open the keyboard help                                                                             │"
+"│                                      ││      X            Hide these steps                                                                                   │"
+"│                                      ││      :            Commands                                                                                           │"
+"│                                      ││      q            Quit                                                                                               │"
 "│                                      ││  Paste a connection URL (postgres://, mysql://)                                                                      │"
 "│                                      ││                                                                                                                      │"
 "│                                      ││                                                                                                                      │"

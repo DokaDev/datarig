@@ -408,6 +408,39 @@ impl Keymap {
         sequence
     }
 
+    /// The keys a tip names for `a` in `ctx`: a key of the user's own first; else one that needs
+    /// no function or Menu key (laptop keyboards hide those behind another key), the innermost
+    /// single key before a sequence (`Space Space` rather than `Shift+F10`); else what the hint
+    /// line shows.
+    pub fn tip_keys(&self, a: Action, ctx: Ctx, enhanced: bool) -> Option<Vec<KeyChord>> {
+        let chain = ctx.chain();
+        let ctrl_enter = parse_keys("ctrl+enter").ok()?;
+        let reachable = |k: &[KeyChord]| {
+            !k.iter().any(|c| {
+                matches!(c.code, ratatui::crossterm::event::KeyCode::F(_) | ratatui::crossterm::event::KeyCode::Menu)
+            })
+        };
+        let mut found: Vec<&Bound> = Vec::new();
+        for (depth, c) in chain.iter().enumerate() {
+            for b in self.bindings.iter().filter(|b| b.ctx == *c && b.target == Target::Action(a)) {
+                let hidden = chain[..depth]
+                    .iter()
+                    .any(|inner| self.bindings.iter().any(|x| x.ctx == *inner && x.keys == b.keys));
+                if !hidden && (enhanced || b.keys != ctrl_enter) {
+                    found.push(b);
+                }
+            }
+        }
+        let pick = |user: bool| {
+            let ok = |b: &&&Bound| (!user || b.user) && reachable(&b.keys);
+            found.iter().find(|b| ok(b) && b.keys.len() == 1).or_else(|| found.iter().find(ok))
+        };
+        match pick(true).or_else(|| found.iter().find(|b| b.user)).or_else(|| pick(false)) {
+            Some(b) => Some(b.keys.clone()),
+            None => self.hint_keys(a, ctx, enhanced),
+        }
+    }
+
     /// The actions bound in `ctx` itself, each with its keys, for the keyboard help. With
     /// `from` (the context the help was opened in), keys hidden by a context inside `from`'s
     /// chain are left out, except keys the editor takes, which come back separately.
