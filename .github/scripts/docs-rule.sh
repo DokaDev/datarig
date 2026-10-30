@@ -14,11 +14,11 @@
 #      `## <new version>`: scripts/changes.sh release <version> does both.
 # Reads BASE and HEAD (commits) and BODY (the pull request's text) from the environment and only
 # git objects, never the working tree, so it judges exactly HEAD. HTML comments (the template's
-# hints) and fenced code blocks of the body are ignored, and the line prefixes are matched
-# without regard to case. A stacked pull request is judged against its base branch as it is
-# now: after that branch was rewritten, rebase onto it (or re-run) for an exact verdict. No
-# pipe here ends early (`grep -q`): under pipefail the writer's SIGPIPE would fail it. Exits 1 with what to do when a rule fails; the verdict
-# also goes to $GITHUB_STEP_SUMMARY when it is set.
+# hints) and code blocks of the body are ignored, and the line prefixes are matched without
+# regard to case. A stacked pull request is judged against its base branch as it is now: after
+# that branch was rewritten, rebase onto it (or re-run) for an exact verdict. No pipe here ends
+# early (`grep -q`): under pipefail the writer's SIGPIPE would fail it. Exits 1 with what to do
+# when a rule fails; the verdict also goes to $GITHUB_STEP_SUMMARY when it is set.
 set -euo pipefail
 
 : "${BASE:?BASE (the base commit) is not set}" "${HEAD:?HEAD (the head commit) is not set}"
@@ -43,17 +43,17 @@ notes=()
 fail() { errors+=("$1"); }
 
 # A body line `<prefix>: <reason>` with a real reason (not empty, not the template's
-# `<reason>`), outside HTML comments (an unclosed one runs to the end) and fenced code blocks;
-# prints the reason.
+# `<reason>`), outside HTML comments (an unclosed one runs to the end) and code blocks (fenced
+# with ``` or ~~~, or indented by four spaces or a tab); prints the reason.
 body_reason() {
   BODY_TEXT=$body perl -e '
     my $prefix = shift;
     my $t = $ENV{BODY_TEXT};
     $t =~ s/\r//g;
     $t =~ s/<!--.*?(?:-->|\z)//gs;
-    $t =~ s/^[ \t]*```.*?(?:^[ \t]*```[^\n]*$|\z)//gms;
+    $t =~ s/^[ \t]*(```|~~~).*?(?:^[ \t]*\1[^\n]*$|\z)//gms;
     for (split /\n/, $t) {
-      next unless /^\s*\Q$prefix\E:\s*(.*\S)\s*$/i;
+      next unless /^ {0,3}\Q$prefix\E:\s*(.*\S)\s*$/i;
       next if $1 =~ /^<.*>$/;
       print $1;
       last;
@@ -88,8 +88,9 @@ user_visible() {
 }
 
 # A hand-written page of the site: Markdown under docs/site/src, not SUMMARY.md, not screens/,
-# not What's new (scripts/changes.sh writes it), not a page with the "Generated ... Do not edit" header, not a page that only includes a
-# generated file. Judged at HEAD, or at BASE for a page the pull request deletes.
+# not What's new (scripts/changes.sh writes it), not a page with the "Generated ... Do not
+# edit" header, not a page that only includes a generated file. Judged at HEAD, or at the merge
+# base for a page the pull request deletes.
 hand_written_page() {
   local path=$1 rev=$2 file=$tmp/page
   case $path in
@@ -122,6 +123,9 @@ deleted_blobs=" "
 bad_fragments=0
 # First, so that a failing diff stops here (set -e) instead of judging nothing.
 diff=$(git diff --name-status --no-renames "$BASE...$HEAD")
+# What the three-dot diff compares HEAD with: a file it lists as deleted is there, while BASE
+# may have dropped it since.
+merge_base=$(git merge-base "$BASE" "$HEAD")
 while IFS=$'\t' read -r status path; do
   [[ -n $path ]] || continue
   if user_visible "$path"; then visible+=("$path"); fi
@@ -129,13 +133,13 @@ while IFS=$'\t' read -r status path; do
     crates/* | locales/*) crates+=("$path") ;;
   esac
   rev=$HEAD
-  [[ $status == D ]] && rev=$BASE
+  [[ $status == D ]] && rev=$merge_base
   if hand_written_page "$path" "$rev"; then docs+=("$path"); fi
   case $path in
     changes/README.md | changes/.* | changes/*/.*) ;;
     changes/*)
       if [[ $status == D ]]; then
-        deleted_blobs+="$(git rev-parse "$BASE:$path") "
+        deleted_blobs+="$(git rev-parse "$merge_base:$path") "
         continue
       fi
       mkdir -p "$tmp/${path%/*}"

@@ -174,6 +174,33 @@ put changes/added/.gitkeep ""
 put changes/added/x.md "$frag"
 expect pass "dotfiles under changes/ are ignored" ""
 
+case_start fenced-tilde
+put crates/tui/src/app.rs $'// app 2\n'
+expect fail "a line in a ~~~ block does not count" $'~~~\nno changelog: example\n~~~\n'
+
+case_start indented-code
+put crates/tui/src/app.rs $'// app 2\n'
+expect fail "a line in an indented code block does not count" $'Example:\n\n    no changelog: example\n'
+
+# The pull request rewords a fragment of main under a new name, while main's release pull
+# request has consumed the old one: the diff lists it deleted, BASE no longer has it.
+case_start fragment-gone-from-base
+put crates/tui/src/app.rs $'// app 2\n'
+g rm -q changes/fixed/kept.md
+put changes/fixed/kept-reworded.md $'- The next release\'s entry, reworded.\n'
+g add -A
+g commit -q -m "reword a fragment"
+pr_head=$(g rev-parse HEAD)
+g checkout -q -B main-moved "$base"
+g rm -q changes/fixed/kept.md
+g commit -q -m "release consumed the fragment"
+base_saved=$base
+base=$(g rev-parse HEAD)
+g checkout -q "case-fragment-gone-from-base"
+[[ $(g rev-parse HEAD) == "$pr_head" ]]
+expect pass "a fragment deleted by the pull request and by BASE" "" "kept-reworded.md"
+base=$base_saved
+
 case_start visible-escape-placeholder
 put crates/tui/src/keymap/defaults.rs $'// keys 2\n'
 put changes/fixed/keys.md "$frag"
