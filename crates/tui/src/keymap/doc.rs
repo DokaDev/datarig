@@ -152,6 +152,11 @@ fn code(text: &str) -> String {
     if text.contains('`') { format!("`` {text} ``") } else { format!("`{text}`") }
 }
 
+/// [`code`] in a table cell, where a `|` ends the cell even inside code unless escaped.
+fn cell_code(text: &str) -> String {
+    code(text).replace('|', "\\|")
+}
+
 /// The `:` commands and the settings of `:set`.
 fn commands(s: &mut String) {
     s.push_str(
@@ -250,8 +255,8 @@ fn section(s: &mut String, km: &Keymap, ctx: Ctx) {
             let Target::Action(a) = b.target else { continue };
             let spec = action::spec(a);
             s.push_str(&format!(
-                "| `{}` | `{}` | {} | {} |\n",
-                keys::label(&b.keys),
+                "| {} | `{}` | {} | {} |\n",
+                cell_code(&keys::label(&b.keys)),
                 spec.id,
                 en(spec.label),
                 if spec.repeatable { "✓" } else { "" }
@@ -271,7 +276,7 @@ fn section(s: &mut String, km: &Keymap, ctx: Ctx) {
     if !groups.is_empty() {
         s.push_str("\nLeader groups (the which-key popup lists what follows):\n\n| Keys | Group |\n|---|---|\n");
         for (g, l) in groups {
-            s.push_str(&format!("| `{}` | {} |\n", keys::label(&g.keys), en(l)));
+            s.push_str(&format!("| {} | {} |\n", cell_code(&keys::label(&g.keys)), en(l)));
         }
     }
     let mut notes: Vec<&str> = Vec::new();
