@@ -187,8 +187,9 @@ disconnect and Lock wait fields; empty takes the config's value, `"off"` turns i
 
 - For the query sessions only; the explorer's lookups keep their own two seconds.
 - PostgreSQL: `lock_timeout`, set for the session on a direct connection. Behind a
-  [pooler](poolers.md) it is `SET LOCAL` in each transaction instead. A `RESET ALL` or
-  `DISCARD ALL` you run puts it back to the value datarig set when the session connected.
+  [pooler](poolers.md) it is `SET LOCAL` in each transaction instead. On a direct connection,
+  a `RESET ALL` or `DISCARD ALL` you run clears it (back to the server's default) until the
+  session connects again; behind a pooler the next transaction gets it again.
 - MySQL: `lock_wait_timeout` (metadata locks) and `innodb_lock_wait_timeout` (row locks), in
   whole seconds.
 - A statement that waited too long fails with "Waited longer than 5s for a lock another

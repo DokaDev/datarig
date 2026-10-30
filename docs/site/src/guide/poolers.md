@@ -43,8 +43,9 @@ share, so behind a pooler datarig keeps them inside each transaction:
 - Statements that cannot run in a transaction (`VACUUM`, `CREATE INDEX CONCURRENTLY`, …),
   `CALL`, `DO`, and your own `SET` and `RESET` run without these per-transaction settings.
 
-A `SHOW lock_timeout` on a pooled connection shows the server's value;
-`SELECT current_setting('lock_timeout')` inside a transaction shows the one in effect.
+In datarig, `SHOW lock_timeout` and `current_setting('lock_timeout')` show the limit in effect.
+Another client of the same pooled server connection sees the server's value, because nothing
+stays on it.
 
 ## Manual commit and pooling
 
