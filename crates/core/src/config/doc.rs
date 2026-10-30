@@ -178,10 +178,16 @@ pub const KEYS: &[KeyDoc] = &[
         "",
         "idle_disconnect",
         "\"off\"",
-        "a duration from `\"1m\"` to `\"24h\"` (`\"300s\"`, `\"5m\"`), or `\"off\"`",
+        "a duration from `\"1m\"` to `\"24h\"` (`\"300s\"`, `\"5m\"`), or `0` or `\"off\"`",
         "",
     ),
-    key("", "lock_wait", "\"off\"", "a duration from `\"1s\"` to `\"24h\"` (`\"5s\"`, `\"1m\"`), or `\"off\"`", ""),
+    key(
+        "",
+        "lock_wait",
+        "\"off\"",
+        "a duration from `\"1s\"` to `\"24h\"` (`\"5s\"`, `\"1m\"`), or `0` or `\"off\"`",
+        "",
+    ),
     key(
         "",
         "folders",
@@ -265,7 +271,7 @@ pub const KEYS: &[KeyDoc] = &[
         "connections",
         "port",
         "5432",
-        "1 to 65535",
+        "a port number",
         "The server's port. Left out it is 5432 whatever the driver, so a MySQL profile says `3306`.",
     ),
     key("connections", "user", "\"\"", "text", "The database user."),
@@ -413,7 +419,7 @@ pub const KEYS: &[KeyDoc] = &[
     // [connections.ssh]
     key("connections.ssh", "enabled", "false", "`true`, `false`", "Whether the profile connects through this tunnel."),
     unset("connections.ssh", "host", "none (required when enabled)", "a host name or address", "The bastion's host."),
-    key("connections.ssh", "port", "22", "1 to 65535", "The bastion's SSH port."),
+    key("connections.ssh", "port", "22", "a port number (`0` is refused when enabled)", "The bastion's SSH port."),
     unset("connections.ssh", "user", "none (required when enabled)", "text", "The user on the bastion."),
     key(
         "connections.ssh",
@@ -453,7 +459,13 @@ pub const KEYS: &[KeyDoc] = &[
         "With `secret_source = \"env\"` (required then).",
     ),
     key("connections.ssh", "keepalive", "15", "seconds; `0` for none", "Seconds between keepalives."),
-    key("connections.ssh", "timeout", "10", "seconds", "Seconds each step of opening the tunnel may take."),
+    key(
+        "connections.ssh",
+        "timeout",
+        "10",
+        "seconds (`0` counts as 1)",
+        "Seconds each step of opening the tunnel may take.",
+    ),
     // [policy.<env>]
     key(
         "policy.<env>",
@@ -511,14 +523,14 @@ pub const KEYS: &[KeyDoc] = &[
         "policy.<env>",
         "tx_idle_warning",
         "\"5m\"",
-        "a duration as `paging_idle_timeout` takes, at least 10 seconds, or `\"off\"`",
+        "a duration as `paging_idle_timeout` takes, at least 10 seconds, or `0` or `\"off\"`",
         "How long an open transaction may sit idle before the app warns that it holds locks.",
     ),
     key(
         "policy.<env>",
         "tx_idle_rollback",
         "\"30m\"",
-        "a duration as `paging_idle_timeout` takes, at least 10 seconds, or `\"off\"`",
+        "a duration as `paging_idle_timeout` takes, at least 10 seconds, or `0` or `\"off\"`",
         "How long a transaction opened for manual commit may sit idle before the app rolls it back. \
          PostgreSQL's server also gets the limit, a little later, so it ends there when the app is \
          gone.",
@@ -610,7 +622,13 @@ pub const KEYS: &[KeyDoc] = &[
         "With `secret_source = \"env\"` (required then).",
     ),
     key("tunnels.<name>", "keepalive", "15", "seconds; `0` for none", "Seconds between keepalives."),
-    key("tunnels.<name>", "timeout", "10", "seconds", "Seconds each step of opening the tunnel may take."),
+    key(
+        "tunnels.<name>",
+        "timeout",
+        "10",
+        "seconds (`0` counts as 1)",
+        "Seconds each step of opening the tunnel may take.",
+    ),
     // [startup.<name>]
     unset(
         "startup.<name>",

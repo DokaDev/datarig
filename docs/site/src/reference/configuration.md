@@ -20,8 +20,8 @@ Keys before the first table header.
 | `page_size` | `500` | 1 to 2147483647 | Rows a result fetches from the server at a time (one page of the grid). |
 | `result_window_rows` | `10000` | 1000 to 10000000 | Rows of a result kept in memory; the rest go to a temporary file on disk. |
 | `spill_limit` | `"1GB"` | bytes as a number, or `"512MB"`, `"2GB"` (KB, MB and GB are powers of 1024); `0` or `"off"` for no limit | The most a result's temporary file may take; fetching stops when it is reached. An environment may set its own. |
-| `idle_disconnect` | `"off"` | a duration from `"1m"` to `"24h"` (`"300s"`, `"5m"`), or `"off"` | How long a connection may sit unused before the app closes it: each tab's session on its own, then the connection's other sessions and its SSH tunnel. The next run or explorer action connects again. A tab with an open transaction is warned a minute before; the server rolls the transaction back when its session closes. The server also gets a limit a minute longer for each query session (PostgreSQL 14 or later on a direct connection, MySQL). An environment can set its own. Also `:set idle_disconnect`. |
-| `lock_wait` | `"off"` | a duration from `"1s"` to `"24h"` (`"5s"`, `"1m"`), or `"off"` | How long a statement of a query session waits for a lock another session holds before the server cancels it (PostgreSQL lock_timeout; MySQL lock_wait_timeout and innodb_lock_wait_timeout). Off keeps the server's setting. Explorer lookups keep their own two seconds. An environment can set its own, and a Startup SQL or a profile's own startup SQL its own for its sessions. Also `:set lock_wait`. |
+| `idle_disconnect` | `"off"` | a duration from `"1m"` to `"24h"` (`"300s"`, `"5m"`), or `0` or `"off"` | How long a connection may sit unused before the app closes it: each tab's session on its own, then the connection's other sessions and its SSH tunnel. The next run or explorer action connects again. A tab with an open transaction is warned a minute before; the server rolls the transaction back when its session closes. The server also gets a limit a minute longer for each query session (PostgreSQL 14 or later on a direct connection, MySQL). An environment can set its own. Also `:set idle_disconnect`. |
+| `lock_wait` | `"off"` | a duration from `"1s"` to `"24h"` (`"5s"`, `"1m"`), or `0` or `"off"` | How long a statement of a query session waits for a lock another session holds before the server cancels it (PostgreSQL lock_timeout; MySQL lock_wait_timeout and innodb_lock_wait_timeout). Off keeps the server's setting. Explorer lookups keep their own two seconds. An environment can set its own, and a Startup SQL or a profile's own startup SQL its own for its sessions. Also `:set lock_wait`. |
 | `folders` | `[]` | a list of folder paths (`"work/prod"`) | Every folder of the explorer, so that empty folders are kept. A profile's own `folder` adds its folder too. |
 | `last_used` | none | a profile's `id` | Written by datarig: the profile connected to most recently, where the explorer's cursor starts. A version 1 file has the profile's name here. |
 | `detail_view` | `"panel"` | `"panel"`, `"statusbar"` | How the result inspector (i in the grid) shows the selected cell: a panel with Cell and Row tabs, or a one-line preview in the status bar. Also `:set detail_view`. |
@@ -88,7 +88,7 @@ One table per connection profile, in the explorer's order. Passwords are never w
 | `name` | `"local-pg"` | text | The name the explorer shows and `datarig <profile>` takes. |
 | `driver` | `"postgres"` | `"postgres"` (also `"postgresql"`, `"pg"`), `"mysql"` (also `"mariadb"`) | The kind of database. |
 | `host` | `"127.0.0.1"` | a host name or address | The server's host. |
-| `port` | `5432` | 1 to 65535 | The server's port. Left out it is 5432 whatever the driver, so a MySQL profile says `3306`. |
+| `port` | `5432` | a port number | The server's port. Left out it is 5432 whatever the driver, so a MySQL profile says `3306`. |
 | `user` | `""` | text | The database user. |
 | `password` | none | text | A plaintext password from an older file. At launch it is moved to the profile's password store (the keychain or the secrets file) and removed from the file; datarig never writes it. |
 | `database` | `""` | text | The database to connect to. |
@@ -121,7 +121,7 @@ The SSH tunnel of the profile above it only (a preset several profiles share is 
 |---|---|---|---|
 | `enabled` | `false` | `true`, `false` | Whether the profile connects through this tunnel. |
 | `host` | none (required when enabled) | a host name or address | The bastion's host. |
-| `port` | `22` | 1 to 65535 | The bastion's SSH port. |
+| `port` | `22` | a port number (`0` is refused when enabled) | The bastion's SSH port. |
 | `user` | none (required when enabled) | text | The user on the bastion. |
 | `auth` | `"key"` | `"key"`, `"password"`, `"agent"`, `"keyboard-interactive"` | How the tunnel logs in: a private key file (OpenSSH or PEM, maybe with a passphrase), a password, the keys of the ssh-agent, or the bastion's own questions (a one-time code). |
 | `key_file` | none (required with `auth = "key"`) | a file path (`~` is the home directory) | The private key file. |
@@ -129,7 +129,7 @@ The SSH tunnel of the profile above it only (a preset several profiles share is 
 | `secret_command` | none | a command | With `secret_source = "command"` (required then). |
 | `secret_env` | none | an environment variable's name | With `secret_source = "env"` (required then). |
 | `keepalive` | `15` | seconds; `0` for none | Seconds between keepalives. |
-| `timeout` | `10` | seconds | Seconds each step of opening the tunnel may take. |
+| `timeout` | `10` | seconds (`0` counts as 1) | Seconds each step of opening the tunnel may take. |
 
 ## `[policy.<env>]`
 
@@ -143,8 +143,8 @@ An environment that profiles name with `policy = "<env>"`. Every key is optional
 | `read_only` | `false` | `true`, `false` | Run only reads, transaction control and safe session settings, and refuse the rest before sending anything; the server also makes every transaction of the query sessions read-only. |
 | `confirm` | `"destructive"` | `"destructive"`, `"writes"` | Which statements ask before they run: destructive ones (`DROP`, `TRUNCATE`, an `UPDATE` or `DELETE` of every row, …), or also every other statement that may write. Dangerous statements always ask. |
 | `commit` | `"auto"` | `"auto"`, `"manual"` | `"auto"`: each statement outside your own `BEGIN` block commits by itself. `"manual"`: the first statement that may write opens a transaction that stays open until you commit or roll it back. A driver that cannot runs it as `"auto"`. |
-| `tx_idle_warning` | `"5m"` | a duration as `paging_idle_timeout` takes, at least 10 seconds, or `"off"` | How long an open transaction may sit idle before the app warns that it holds locks. |
-| `tx_idle_rollback` | `"30m"` | a duration as `paging_idle_timeout` takes, at least 10 seconds, or `"off"` | How long a transaction opened for manual commit may sit idle before the app rolls it back. PostgreSQL's server also gets the limit, a little later, so it ends there when the app is gone. |
+| `tx_idle_warning` | `"5m"` | a duration as `paging_idle_timeout` takes, at least 10 seconds, or `0` or `"off"` | How long an open transaction may sit idle before the app warns that it holds locks. |
+| `tx_idle_rollback` | `"30m"` | a duration as `paging_idle_timeout` takes, at least 10 seconds, or `0` or `"off"` | How long a transaction opened for manual commit may sit idle before the app rolls it back. PostgreSQL's server also gets the limit, a little later, so it ends there when the app is gone. |
 | `tx_idle_timeout` |  |  | Old name of `tx_idle_rollback`, read the same; a table may not have both. |
 | `idle_disconnect` | the top-level `idle_disconnect` | as the top-level `idle_disconnect` | How long its profiles' connections may sit unused before the app closes their sessions. |
 | `lock_wait` | the top-level `lock_wait` | as the top-level `lock_wait` | How long a statement of its profiles' query sessions waits for another session's lock. A Startup SQL statement that sets the server's own limit overrides it for those sessions. |
@@ -169,7 +169,7 @@ An SSH tunnel preset that profiles name with `tunnel = "<name>"`: the keys of `[
 | `secret_command` | none | a command | With `secret_source = "command"` (required then). |
 | `secret_env` | none | an environment variable's name | With `secret_source = "env"` (required then). |
 | `keepalive` | `15` | seconds; `0` for none | Seconds between keepalives. |
-| `timeout` | `10` | seconds | Seconds each step of opening the tunnel may take. |
+| `timeout` | `10` | seconds (`0` counts as 1) | Seconds each step of opening the tunnel may take. |
 
 ## `[startup.<name>]`
 

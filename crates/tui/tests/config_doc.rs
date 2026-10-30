@@ -30,6 +30,10 @@ fn setting(path: &str) -> Option<&'static SettingSpec> {
 /// `|` would end a table cell.
 fn cell(text: &str) -> String {
     assert!(!text.contains('|'), "a `|` in a cell: {text}");
+    // `<word>` outside code would be read as HTML (the setting texts are escaped before).
+    for (i, part) in text.split('`').enumerate() {
+        assert!(i % 2 == 1 || !part.contains('<'), "a `<` outside code: {text}");
+    }
     text.to_string()
 }
 
@@ -268,4 +272,193 @@ fn named_tables_resolve_to_their_placeholder() {
     assert!(find("policy.prod", "read_only").is_some());
     assert!(find("", "page_size").is_some());
     assert!(find("editor", "nope").is_none());
+}
+
+/// The TOML literals of a values text written as a list (`` `"on"`, `"off"` ``): `(listed,
+/// mentioned in parentheses)`. Placeholders (`"#rrggbb"`) are left out. `None` for a text
+/// that is not a list (`a duration from …`).
+fn literals(values: &str) -> Option<(Vec<String>, Vec<String>)> {
+    if !values.starts_with('`') {
+        return None;
+    }
+    let (mut listed, mut aside) = (Vec::new(), Vec::new());
+    let mut depth = 0;
+    for (i, part) in values.split('`').enumerate() {
+        if i % 2 == 0 {
+            depth += part.matches('(').count() as i32 - part.matches(')').count() as i32;
+            continue;
+        }
+        let literal = part.starts_with('"')
+            || part.starts_with(|c: char| c.is_ascii_digit())
+            || part == "true"
+            || part == "false";
+        if literal && !part.contains("rrggbb") && !part.contains('<') {
+            if depth > 0 { aside.push(part.to_string()) } else { listed.push(part.to_string()) }
+        }
+    }
+    Some((listed, aside))
+}
+
+/// The values the code has for a key, where it keeps them in a list: `(path, names)`. Keys whose
+/// values are a match in the parser only (`driver`, `paging`, `confirm`, `commit`, `language`)
+/// have no list; for them every listed literal must read, as for all keys.
+fn code_values() -> Vec<(String, Vec<String>)> {
+    use datarig_core::profile::dsn::Scheme;
+    use datarig_core::profile::session::Dbms;
+    use datarig_core::profile::ssh::SshAuth;
+    use datarig_core::secret::SourceKind;
+    use datarig_core::tls::TlsMode;
+    let quoted = |v: &mut dyn Iterator<Item = &str>| v.map(|n| format!("\"{n}\"")).collect::<Vec<_>>();
+    let mut out: Vec<(String, Vec<String>)> = SETTINGS
+        .iter()
+        .filter(|st| matches!(st.values, Values::Fixed(_)) && !matches!(st.key, "idle_disconnect" | "lock_wait"))
+        .map(|st| {
+            // An integer setting is written without quotes.
+            let names = st.values.fixed().iter().map(|v| v.0);
+            let names = names.map(|n| if n.parse::<i64>().is_ok() { n.to_string() } else { format!("\"{n}\"") });
+            (st.key.to_string(), names.collect())
+        })
+        .collect();
+    let sources = quoted(&mut SourceKind::ALL.iter().map(|k| k.as_str()));
+    let auth = quoted(&mut SshAuth::ALL.iter().map(|a| a.as_str()));
+    out.push(("connections.password_source".into(), sources));
+    out.push(("connections.ssh.auth".into(), auth.clone()));
+    out.push(("tunnels.<name>.auth".into(), auth));
+    out.push(("startup.<name>.dbms".into(), quoted(&mut Dbms::ALL.iter().map(|d| d.as_str()))));
+    let mut colors = quoted(&mut datarig_core::profile::color::NAMES.iter().copied());
+    colors.sort();
+    out.push(("connections.color".into(), colors));
+    out.push(("version".into(), (1..=config::CONFIG_VERSION).map(|v| v.to_string()).collect()));
+    // Both drivers' spellings of the TLS modes, in the values text (not a list of literals).
+    let modes: Vec<String> = [Scheme::Postgres, Scheme::MySql]
+        .iter()
+        .flat_map(|s| TlsMode::ALL.iter().map(move |m| format!("`\"{}\"`", m.name(*s))))
+        .collect();
+    out.push(("connections.sslmode".into(), modes));
+    out
+}
+
+/// Every literal a key's values list names reads (in its table), and where the code keeps the
+/// values in a list, the documented ones are that list.
+#[test]
+fn documented_values_are_the_ones_the_code_takes() {
+    for k in KEYS.iter().filter(|k| k.kind == Kind::Key && !k.table.starts_with("keymap.")) {
+        let Some((listed, aside)) = literals(k.values) else { continue };
+        for v in listed.iter().chain(&aside) {
+            // A source that names its command or variable.
+            let needs = match v.as_str() {
+                "\"command\"" => format!("\n{}_command = \"x\"", k.key.trim_end_matches("_source")),
+                "\"env\"" => format!("\n{}_env = \"X\"", k.key.trim_end_matches("_source")),
+                _ => String::new(),
+            };
+            let needs = match (k.path().as_str(), v.as_str()) {
+                ("connections.ssh.enabled", "true") => "\nhost = \"h\"\nuser = \"u\"\nauth = \"agent\"".to_string(),
+                _ if k.key.ends_with("_source") && k.table != "secrets" => needs,
+                _ => String::new(),
+            };
+            // The table's own lines without the key (a preset's `dbms` is in them).
+            let own = format!("{} = ", k.key);
+            let mut text: String =
+                file(k.table, "").lines().filter(|l| !l.starts_with(&own)).map(|l| format!("{l}\n")).collect();
+            text.push_str(&format!("{own}{v}{needs}\n"));
+            assert!(config::parse(&text).is_ok(), "{} = {v} does not read", k.path());
+        }
+    }
+    for (path, mut names) in code_values() {
+        let k = KEYS.iter().find(|k| k.path() == path).unwrap_or_else(|| panic!("{path}: not documented"));
+        if path == "connections.sslmode" {
+            for n in names {
+                assert!(k.values.contains(&n), "{path}: {n} is not listed");
+            }
+            continue;
+        }
+        let (mut listed, _) = literals(k.values).unwrap_or_else(|| panic!("{path}: values are not a list"));
+        listed.sort();
+        names.sort();
+        assert_eq!(listed, names, "{path}");
+    }
+}
+
+/// `n` seconds of a duration as the values texts write one (`"1m"`, `"24h"`).
+fn seconds(d: &str) -> i64 {
+    let (n, unit) = d.split_at(d.find(|c: char| !c.is_ascii_digit()).unwrap_or(d.len()));
+    let n: i64 = n.parse().unwrap();
+    n * match unit {
+        "" | "s" => 1,
+        "m" => 60,
+        "h" => 3600,
+        u => panic!("unit {u}"),
+    }
+}
+
+/// The bounds a values text names hold: `A to B`, a duration `from "A" to "B"`, `at least N
+/// seconds`, `at most N columns`. Inside them a value reads, just outside it does not.
+#[test]
+fn documented_bounds_are_the_parsers() {
+    let reads = |k: &KeyDoc, v: &str| config::parse(&file(k.table, &format!("{} = {v}", k.key))).is_ok();
+    let range = regex::Regex::new(r"^(\d+) to (\d+)$").unwrap();
+    let from = regex::Regex::new(r#"from `"(\w+)"` to `"(\w+)"`"#).unwrap();
+    let least = regex::Regex::new(r"at least (\d+) seconds").unwrap();
+    let most = regex::Regex::new(r"at most (\d+) columns").unwrap();
+    let mut probed = 0;
+    for k in KEYS.iter().filter(|k| k.kind == Kind::Key) {
+        let mut bounds: Option<(i64, i64)> = None;
+        if let Some(c) = range.captures(k.values) {
+            bounds = Some((c[1].parse().unwrap(), c[2].parse().unwrap()));
+        } else if let Some(c) = from.captures(k.values) {
+            bounds = Some((seconds(&c[1]), seconds(&c[2])));
+        } else if let Some(c) = least.captures(k.values) {
+            let min: i64 = c[1].parse().unwrap();
+            assert!(reads(k, &min.to_string()) && !reads(k, &(min - 1).to_string()), "{}: at least {min}", k.path());
+            probed += 1;
+        } else if let Some(c) = most.captures(k.values) {
+            let max: usize = c[1].parse().unwrap();
+            let text = |n: usize| format!("\"{}\"", "W".repeat(n));
+            assert!(reads(k, &text(max)) && !reads(k, &text(max + 1)), "{}: at most {max} columns", k.path());
+            probed += 1;
+        }
+        if let Some((min, max)) = bounds {
+            // Just below a bound of 1 is 0, which some keys read as "off".
+            for (v, ok) in [(min - 1, false), (min, true), (max, true), (max + 1, false)] {
+                if v == 0 && k.values.contains("`0` or") {
+                    continue;
+                }
+                assert_eq!(reads(k, &v.to_string()), ok, "{} = {v}", k.path());
+            }
+            probed += 1;
+        }
+    }
+    assert!(probed >= 8, "only {probed} bounds found");
+}
+
+/// A retired key is read with any value and changes nothing; an old name reads as its key.
+#[test]
+fn retired_keys_and_old_names_read_as_documented() {
+    for k in KEYS.iter().filter(|k| k.kind != Kind::Key) {
+        let without = state(&parse(&file(k.table, "")), k.table);
+        match k.kind {
+            Kind::Retired => {
+                for v in ["1", "\"x\"", "true"] {
+                    let with = parse(&file(k.table, &format!("{} = {v}", k.key)));
+                    assert_eq!(state(&with, k.table), without, "{} = {v}", k.path());
+                }
+            }
+            Kind::Alias(of) => {
+                let now = KEYS.iter().find(|n| n.table == k.table && n.key == of).expect("its key");
+                // A value that is not the default, so that reading it shows.
+                let v = match (k.table, of) {
+                    ("policy.<env>", "tx_idle_rollback") => "\"1h\"",
+                    ("policy.<env>", "startup") => "{ postgres = \"reporting\" }",
+                    (_, "startup") => "\"none\"",
+                    (_, "startup_sql") => "[\"SET work_mem = '1MB'\"]",
+                    other => panic!("{other:?}: no value to try"),
+                };
+                let old = parse(&file(k.table, &format!("{} = {v}", k.key)));
+                let new = parse(&file(k.table, &format!("{} = {v}", now.key)));
+                assert_eq!(state(&old, k.table), state(&new, k.table), "{} = {v}", k.path());
+                assert_ne!(state(&new, k.table), without, "{} = {v} changes nothing", now.path());
+            }
+            Kind::Key => {}
+        }
+    }
 }
