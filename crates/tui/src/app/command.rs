@@ -15,7 +15,7 @@
 use super::action::{Action, LangSetting};
 use datarig_core::config::{
     AutoPairs, ClipboardSetting, CommandsPosition, CopyHeader, CursorShape, DetailView, EditorClipboard, FormatIndent,
-    IconsSetting, KeychainAccess, KeywordCase, RunHints, SizeHeat, SoftTabBackspace, YankFlash,
+    IconsSetting, KeychainAccess, KeywordCase, RunHints, SizeHeat, SoftTabBackspace, Tips, YankFlash,
 };
 use datarig_core::i18n::Label;
 use datarig_core::secret::{DefaultSource, SourceKind};
@@ -452,6 +452,7 @@ pub enum Setting {
     KeychainAccess(KeychainAccess),
     SizeHeat(SizeHeat),
     YankFlash(YankFlash),
+    Tips(Tips),
     /// `idle_disconnect` (`None`: off).
     IdleDisconnect(Option<Duration>),
     /// `lock_wait` (`None`: off).
@@ -721,6 +722,16 @@ pub const SETTINGS: &[SettingSpec] = &[
         values: Values::Fixed(&[
             ("on", Setting::YankFlash(YankFlash::On), Label::SettingYankFlashOn),
             ("off", Setting::YankFlash(YankFlash::Off), Label::SettingYankFlashOff),
+        ]),
+    },
+    SettingSpec {
+        key: "ui.tips",
+        label: Label::SettingTips,
+        about: Label::SettingTipsAbout,
+        group: SettingGroup::Display,
+        values: Values::Fixed(&[
+            ("on", Setting::Tips(Tips::On), Label::SettingTipsOn),
+            ("off", Setting::Tips(Tips::Off), Label::SettingTipsOff),
         ]),
     },
     // `:set` also takes any other duration these two take (`7m`); the screen shows it as is.

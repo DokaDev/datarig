@@ -145,6 +145,25 @@ pub fn warning(on: bool) -> &'static str {
     if on { WARNING } else { "!" }
 }
 
+/// A tip (nf-md-lightbulb_outline): before the tip of an empty place and of the status bar; the
+/// word `Tip:` of the catalog with icons off.
+pub const TIP: &str = "\u{f0336}";
+
+/// A first step of the welcome panel taken (nf-md-check_circle) and not yet
+/// (nf-md-checkbox_blank_circle_outline).
+pub const STEP_DONE: &str = "\u{f05e0}";
+pub const STEP_TODO: &str = "\u{f0130}";
+
+/// The mark of a first step: the glyph, or `[x]` / `[ ]` with icons off.
+pub fn step(done: bool, on: bool) -> &'static str {
+    match (on, done) {
+        (true, true) => STEP_DONE,
+        (true, false) => STEP_TODO,
+        (false, true) => "[x]",
+        (false, false) => "[ ]",
+    }
+}
+
 /// Key column marks (nf-fa-key, nf-fa-link, nf-fa-fingerprint), each followed by a space;
 /// `PK`, `FK` and `UQ` with icons off.
 pub const KEY_PK: &str = "\u{f084}";

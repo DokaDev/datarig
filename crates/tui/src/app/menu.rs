@@ -1048,11 +1048,11 @@ impl App {
             }
             MenuItem::Action(a) => {
                 self.overlays.close(OverlayKind::ContextMenu);
-                self.dispatch(a);
+                self.dispatch_from(a, tips::Source::Menu);
             }
             MenuItem::Copy(MenuScope::Copy(scope), f) => {
                 self.overlays.close(OverlayKind::ContextMenu);
-                self.dispatch(Action::Copy(scope, f));
+                self.dispatch_from(Action::Copy(scope, f), tips::Source::Menu);
             }
             MenuItem::Copy(MenuScope::FetchFirst, f) => {
                 self.overlays.close(OverlayKind::ContextMenu);

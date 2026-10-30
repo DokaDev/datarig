@@ -653,6 +653,7 @@ fn step_2_settings_are_read_checked_and_saved_only_when_set() {
             keychain_access: KeychainAccess::Direct,
             size_heat: SizeHeat::Three,
             yank_flash: YankFlash::On,
+            tips: Tips::On,
             idle_disconnect: None,
             lock_wait: None,
         }
@@ -857,6 +858,27 @@ fn the_yank_flash_is_on_by_default_and_can_be_turned_off() {
     assert_eq!(load(Some(path.clone())).0.prefs, prefs);
     save(&path, settings("en"), None).unwrap();
     assert!(!std::fs::read_to_string(&path).unwrap().contains("yank_flash"), "on is the default: the key goes");
+}
+
+#[test]
+fn tips_are_on_by_default_and_can_be_turned_off() {
+    assert_eq!(parse("").unwrap().prefs.tips, Tips::On);
+    assert_eq!(parse("[ui]\ntips = \"off\"\n").unwrap().prefs.tips, Tips::Off);
+    assert_eq!(parse("[ui]\ntips = \"on\"\n").unwrap().prefs.tips, Tips::On);
+    assert_eq!(
+        parse("[ui]\ntips = \"some\"\n").unwrap_err(),
+        ConfigError::Value { key: "ui.tips".into(), value: "some".into(), profile: None, allowed: Some("on, off") }
+    );
+    let path = temp_file("tips");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, "[ui]\nyank_flash = \"off\"\n").unwrap();
+    let prefs = Prefs { tips: Tips::Off, yank_flash: YankFlash::Off, ..Prefs::default() };
+    save(&path, Settings { prefs, ..settings("en") }, None).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("[ui]\nyank_flash = \"off\"\ntips = \"off\"\n"), "{text}");
+    assert_eq!(load(Some(path.clone())).0.prefs, prefs);
+    save(&path, settings("en"), None).unwrap();
+    assert!(!std::fs::read_to_string(&path).unwrap().contains("tips"), "on is the default: the key goes");
 }
 
 #[test]

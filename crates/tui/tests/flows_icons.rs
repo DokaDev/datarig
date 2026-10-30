@@ -37,6 +37,7 @@ fn launched(cfg: &Config, lang: Lang, ask: bool) -> Harness {
 /// [`launched`] on a config that loaded with `error`.
 fn launched_with(cfg: &Config, error: Option<config::ConfigError>, lang: Lang, ask: bool) -> Harness {
     let mut app = App::new(cfg, error, lang);
+    app.tips.paused = true;
     let clock = FakeClock::new();
     let c = clock.clone();
     app.set_clock(Arc::new(move || c.now()));

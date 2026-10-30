@@ -137,7 +137,7 @@ impl App {
                         // An item that cannot run now does nothing.
                         if (action::spec(a).when)(self) {
                             self.overlays.close(OverlayKind::WhichKey);
-                            self.dispatch(a);
+                            self.dispatch_from(a, tips::Source::Key);
                         }
                     }
                     (None, true) => {
@@ -148,7 +148,7 @@ impl App {
                     // The key that opens the command line here (`:`, as the footer says) opens it.
                     _ if self.keymap.resolve_seq(origin, &[k]).0 == Some(Target::Action(Action::OpenCommands)) => {
                         self.overlays.close(OverlayKind::WhichKey);
-                        self.dispatch(Action::OpenCommands);
+                        self.dispatch_from(Action::OpenCommands, tips::Source::Key);
                     }
                     _ => {
                         self.overlays.close(OverlayKind::WhichKey);

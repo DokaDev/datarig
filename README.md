@@ -380,6 +380,9 @@ Everything below works today with PostgreSQL; [MySQL](#mysql) says which parts w
 - A context keymap with a which-key popup after `Space`, keyboard help (`F1` or `Space ?`) with
   search, a `:` command line (`Ctrl+K` everywhere) that runs commands and finds every action by
   name, and remapping in the config file. See [docs/keybindings.md](docs/keybindings.md).
+- Tips (`[ui] tips`): a dim line about a key in empty places, the welcome panel's first steps,
+  and one status line naming the key of an action you keep running from a menu. Keys follow
+  your key map; nothing is sent anywhere (see the state directory below).
 - One action menu for the mouse and the keyboard: a right click on an explorer node, the result
   grid, a tab or the editor opens it at the pointer; `Space Space` (or `Shift+F10`, or the Menu
   key where the terminal reports it) opens it next to the selection, and `Space t m` under the
@@ -513,6 +516,7 @@ size_heat = "3"            # colors for each schema's largest tables' estimates 
 
 [ui]
 yank_flash = "on"          # copied grid cells flash briefly (on | off)
+tips = "on"                # a tip about a key in empty places, first steps on the welcome panel (on | off)
 
 [[connections]]
 name = "local"
@@ -577,6 +581,17 @@ badge = "PROD"                 # shown on its tabs and in the status bar (8 colu
 paging = "hold"                # keep the cursor (and its transaction) open while you page
 paging_idle_timeout = "10s"    # with "hold": close it after 10 s without a page (default 30 s)
 ```
+
+`[ui] tips` (on by default; also `:set ui.tips=off` and the settings screen) shows one dim line
+about a key where the screen is empty anyway: the workspace without tabs, an empty console, a
+result with nothing to show or still running, and the status bar's spare room when every key
+hint fits beside it (so not at 80 columns). The key is the one bound now, remapped keys
+included. A tip stays while you stay on the same tab and pane and moves on when you switch
+or a run starts or ends; no timer runs for it. A tip about a key you have pressed once is not
+shown again. The welcome panel lists four first steps (add a connection, run a query, open the
+action menu, the keyboard help), marked once done; `X` there or in the explorer hides them for
+good. An action you ran three times from the action menu or the `:` command line without its
+key gets one status line naming its key, once. With `tips = "off"` none of this shows.
 
 ### Environments
 
@@ -658,6 +673,13 @@ Data (saved queries, datarig's own `known_hosts`) and state (tabs, console buffe
 platform's data and state directories (`~/.local/share/datarig` and `~/.local/state/datarig`
 on Linux, `~/Library/Application Support/datarig` on macOS; on Windows, untested,
 `%APPDATA%\datarig` and `%LOCALAPPDATA%\datarig`), or under `$XDG_DATA_HOME` / `$XDG_STATE_HOME` when set.
+The state directory's `usage.toml` is what the tips remember: for each action id (and command
+name) how often it ran by key, from the action menu and from the command line (each count stops at
+9999), the actions whose key a status line named, and `onboarding = "done"` once the first steps
+are done or hidden. It holds no times, no statements and no names of connections or anything else
+of yours, is written when the workspace is saved and when the first steps are hidden (never per
+key), and is never sent anywhere. Delete it to see every tip again. A file that cannot be read is
+left as it is.
 `DATARIG_SECRET_STORE=memory` keeps passwords in memory only and never touches the OS keychain.
 An `[editor] mode` key from an older version is ignored (the editor has vim keys only) and
 dropped the next time the app saves the file.

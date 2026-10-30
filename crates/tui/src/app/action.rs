@@ -6,6 +6,7 @@ pub use super::chart::ChartAction;
 use super::copy::{CopyFormat, CopyScope};
 use super::overlay::OverlayKind;
 pub use super::plan::{PlanAction, PlanView};
+use super::tips::onboarding_open;
 use super::{App, Focus};
 use datarig_core::chart::Kind;
 use datarig_core::config::IconsSetting;
@@ -53,6 +54,8 @@ pub enum Action {
     ToggleComment,
     /// The action menu of the focused pane, next to its selection.
     OpenMenu,
+    /// Hide the welcome panel's first steps for good.
+    DismissOnboarding,
     /// The action menu of the active tab, under it in the tab bar.
     TabMenu,
     NewProfile,
@@ -700,6 +703,7 @@ pub const REGISTRY: &[ActionSpec] = &[
     act(Action::FormSessionView, "form.session_view", Label::ActionFormSessionView, profile_form),
     act(Action::Help, "help.context", Label::ActionHelpContext, help_available),
     act(Action::HelpAll, "help.all", Label::ActionHelpAll, help_available),
+    act(Action::DismissOnboarding, "tips.dismiss_onboarding", Label::ActionTipsDismissOnboarding, onboarding_open),
     act(Action::PaneBack, "pane.back", Label::ActionPaneBack, results_focused),
     act(Action::Zoom, "pane.zoom", Label::ActionPaneZoom, zoomable),
     act(Action::ToggleExplorer, "explorer.toggle", Label::ActionExplorerToggle, tab_drawn),

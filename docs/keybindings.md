@@ -199,6 +199,7 @@ The explorer: folders, connection profiles, their databases and schema trees. In
 | `O` | `explorer.new_console_here` | Explorer: new console in this database or schema |  |
 | `D` | `explorer.show_ddl` | Explorer: show the DDL of the table, view, index or trigger |  |
 | `F` | `explorer.show_function_ddl` | Explorer: show the DDL of the trigger's function |  |
+| `X` | `tips.dismiss_onboarding` | Hide the first steps of the welcome panel |  |
 | `Esc` | `explorer.back` | Explorer: back (cancel a test or connecting, clear the filter) |  |
 | `q` | `app.quit` | Quit |  |
 
@@ -391,6 +392,7 @@ The welcome panel shown while there is no connection profile. Inside `nav`.
 | `n` | `conn.new` | New connection profile |  |
 | `Enter` | `conn.new` | New connection profile |  |
 | `q` | `app.quit` | Quit |  |
+| `X` | `tips.dismiss_onboarding` | Hide the first steps of the welcome panel |  |
 
 ## `editor.vim.normal` [editor]
 
@@ -688,6 +690,7 @@ Settings of `:set` (saved to `config.toml` like the matching actions):
 | `secrets.macos_keychain_access` | `direct` `security_tool` | macOS keychain access |
 | `explorer.size_heat` | `3` `5` `off` | Explorer: size colors |
 | `ui.yank_flash` | `on` `off` | Flash copied cells |
+| `ui.tips` | `on` `off` | Tips |
 | `idle_disconnect` | `off` `5m` `10m` `30m` `1h` | Close idle connections |
 | `lock_wait` | `off` `5s` `10s` `30s` `1m` | Lock wait limit |
 

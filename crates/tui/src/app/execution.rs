@@ -458,6 +458,7 @@ impl App {
     /// events to the active tab's query session.
     pub fn on_db_event(&mut self, ev: DbEvent) {
         self.on_db_event_here(ev);
+        self.tips_follow();
         self.sweep_as_plan();
         self.sweep_exports();
         self.keychain_offer_check();

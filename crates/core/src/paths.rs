@@ -85,6 +85,12 @@ impl Paths {
         self.state.as_ref().map(|s| s.join(crate::secret::offer::STATE_FILE))
     }
 
+    /// `<state>/usage.toml`: how often actions ran by key, menu and command line, for the tips
+    /// ([`crate::usage`]).
+    pub fn usage_file(&self) -> Option<PathBuf> {
+        self.state.as_ref().map(|s| s.join(crate::usage::FILE))
+    }
+
     /// `<state>/errors.log`: the raw detail of failures the UI reported in words
     /// ([`crate::fault::ErrorLog`]).
     pub fn errors_log(&self) -> Option<PathBuf> {

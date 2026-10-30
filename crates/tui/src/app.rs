@@ -73,6 +73,7 @@ pub mod tab_list;
 mod tab_ops;
 pub mod tabs;
 pub mod themes;
+pub mod tips;
 pub mod tunnel;
 pub mod tx;
 mod update;
@@ -797,6 +798,8 @@ pub struct App {
     detail_picked: Option<(u64, usize)>,
     /// The kind of the top dialog the last frame saw (`App::note_top`).
     last_top: Option<OverlayKind>,
+    /// The tips: usage counts, the page they turn with, each place's pick ([`tips`]).
+    pub tips: tips::TipState,
 }
 
 fn test_msg(i18n: &I18n, t: &ConnTest) -> Notice {
@@ -1075,6 +1078,7 @@ impl App {
             detail_press: overlay::Press::default(),
             detail_picked: None,
             last_top: None,
+            tips: tips::TipState::default(),
             pending_context: None,
             pending_end: None,
             pending_use: None,
@@ -1394,7 +1398,9 @@ impl App {
         }
         match startup {
             // Nothing to connect to: the new-profile form opens over the welcome panel.
-            Startup::Normal if self.profiles.is_empty() && !self.config_broken => self.open_form(None, false),
+            Startup::Normal if self.profiles.is_empty() && !self.config_broken && tips::FIRST_RUN_OPENS_FORM => {
+                self.open_form(None, false)
+            }
             Startup::Normal => {}
             Startup::Profile(name) => match self.profiles.iter().find(|p| p.name == name).map(|p| p.id) {
                 Some(id) => {
