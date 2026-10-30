@@ -20,7 +20,7 @@ startup_sql = ["SET work_mem = '256MB'"]   # its own statements, after the Start
 ```
 
 `none` is not a preset name: `[startup.none]` is an error of the file. The keys were named
-differently in 0.31 and are still read: `[sessions.<name>]` for `[startup.<name>]`, an
+differently in older versions and are still read: `[sessions.<name>]` for `[startup.<name>]`, an
 environment's `session` for `startup`, and a profile's `session` and `session_sql` for
 `startup` and `startup_sql`. A place that has a key and its old name is an error. Saving from
 the app renames the old names in place once what they say changes.

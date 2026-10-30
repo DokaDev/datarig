@@ -96,7 +96,7 @@ auth = "agent"
 - The app never rewrites tunnels on its own: presets change only when you save a form, rename
   or delete one.
 
-## Not yet
+## Not supported
 
 - Several hops (a bastion behind a bastion).
 - Reading hosts from `~/.ssh/config`: the bastion is always entered in the profile or preset.

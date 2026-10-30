@@ -152,10 +152,10 @@ tunnel) for any server that is not on your own machine.
 `ERROR 1045` may also mean the account requires TLS (`REQUIRE SSL`) on a connection without it.
 After a typed password is refused, datarig shows the error instead of asking again.
 
-## What does not work yet
+## Not supported
 
 - The plan view on MariaDB: the plan actions are not offered there, and `EXPLAIN` runs and
-  shows its text. MariaDB as a driver of its own is planned.
+  shows its text. MariaDB is reached through the MySQL driver.
 - A `USE` typed in a console is not followed by the tab's header and completion; use `:use`.
 - The estimates are the server's (`TABLE_ROWS`), which can be far off for InnoDB.
 - A view whose table was dropped is listed without columns, and a database that does not exist

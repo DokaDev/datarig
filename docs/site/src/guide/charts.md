@@ -47,4 +47,4 @@ The mouse works too: a click picks a point, a kind or a column choice.
 The series' colors are the theme tokens `chart_1` to `chart_6` (see
 [theme files](../reference/theme-files.md)).
 
-Not yet: a chart builder that writes the SQL of a chart into a console.
+Not supported: writing the SQL of a chart into a console.

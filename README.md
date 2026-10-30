@@ -15,9 +15,9 @@ anything is sent and, on PostgreSQL, also enforced by the server.
 ## Status
 
 **Early, pre-1.0.** Releases have binaries for macOS, Linux and Windows and a Homebrew formula.
-**PostgreSQL** is implemented, and **MySQL** in part (see
-[MySQL](https://dokadev.github.io/datarig/guide/mysql.html) for what it does and does not do
-yet). The configuration format, key bindings and behaviour may still change between releases.
+**PostgreSQL** is implemented (a table's structure, its DDL and the key marks need
+PostgreSQL 12 or newer), and **MySQL** in part (see
+[MySQL](https://dokadev.github.io/datarig/guide/mysql.html) for what it supports). The configuration format, key bindings and behaviour may still change between releases.
 
 Platforms: developed and tested on macOS; CI runs the full test suite on Linux. On Windows CI
 builds datarig, lints it and runs the tests that need no database, but running datarig there is
@@ -54,12 +54,6 @@ Paste a URL such as `postgres://me@127.0.0.1:5432/app` into the new-connection f
 `:q` closes a tab and `:qa` quits. Press `Space` and wait to see what follows, or `F1` for the
 keyboard help. Next: [Getting started](https://dokadev.github.io/datarig/getting-started.html).
 
-## Not yet
-
-Planned, with no dates: MariaDB plans and a MariaDB driver of its own, Valkey/Redis and
-Elasticsearch drivers, more TLS options, a server monitor, more of vim (macros, more Ex
-commands), multi-hop SSH. The full list is in the
-[Introduction](https://dokadev.github.io/datarig/introduction.html#not-yet).
 
 ## Development
 

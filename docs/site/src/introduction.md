@@ -16,9 +16,11 @@ it.
 datarig is early and pre-1.0. The configuration format, key bindings and behaviour may still
 change between releases.
 
-- **PostgreSQL** is implemented.
-- **MySQL** is implemented in part; [MySQL](guide/mysql.md) says what works and what does not
-  yet. MariaDB is a best effort.
+- **PostgreSQL** is implemented. CI tests it against PostgreSQL 17. Not supported before
+  PostgreSQL 12: a table's structure, its DDL, the key marks and copying rows as `INSERT`
+  (datarig says the server is too old).
+- **MySQL** is implemented in part; [MySQL](guide/mysql.md) says what it supports and what not.
+  MariaDB is a best effort.
 
 **Platforms.** datarig is developed and tested on macOS. CI runs the full test suite on Linux.
 On Windows, CI builds datarig, lints it and runs the tests that need no database, but running
@@ -40,21 +42,6 @@ explained in [docs/perf.md](https://github.com/DokaDev/datarig/blob/main/docs/pe
 - Idle: under 48 MiB and 1% CPU, and fewer than 0.2 wakeups a second when nothing is waiting.
 - First frame under 250 ms (p95); the release binary is at most 24 MiB.
 
-## Not yet
-
-Planned, in no particular order and with no dates:
-
-- MariaDB: the plan view, and MariaDB as a driver of its own
-- Drivers for Valkey/Redis and Elasticsearch
-- TLS: passphrase-protected client keys, certificate revocation lists, `sslnegotiation=direct`
-- A server monitor (sessions, locks, activity)
-- More of vim: `gv`, macros, Ex commands other than line numbers and `:s` (such as delete and global)
-- DDL of objects the explorer does not list yet (functions on their own, sequences, types), and
-  from the other drivers
-- Table profiling from the planner's statistics, and a chart builder that writes the SQL of a
-  chart into a console
-- Comparing two plans of a statement, and plans of the other drivers
-- Multi-hop SSH and importing hosts from `~/.ssh/config`
 
 ## Where to go next
 

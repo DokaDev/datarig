@@ -87,7 +87,7 @@ opens its `CREATE` statements in a read-only tab; `F` on a trigger shows its fun
 - Reading never waits on another session: when the object, or a table its definition reads, is
   locked, the tab says so and shows nothing.
 
-Not yet: DDL of objects the explorer does not list (functions on their own, sequences, types).
+Not supported: DDL of objects the explorer does not list (functions on their own, sequences, types).
 
 ## Layout
 

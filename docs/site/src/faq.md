@@ -51,7 +51,7 @@ clipboard otherwise. Your terminal must allow OSC 52; `osc52_max_bytes` caps how
 ## MySQL or MariaDB: something is missing
 
 MySQL support is partial and MariaDB is a best effort (10.6 and newer). MySQL 5.7 and older are
-refused. See [MySQL](guide/mysql.md) for what works and what does not yet, including the plan
+refused. See [MySQL](guide/mysql.md) for what it supports and what not, including the plan
 view (not on MariaDB) and a typed `USE` (use `:use`).
 
 ## `COPY … FROM STDIN` or `COPY … TO STDOUT` fails

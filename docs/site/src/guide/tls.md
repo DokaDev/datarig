@@ -80,7 +80,7 @@ between datarig and the pooler, and Windows.
 
 ## Limits
 
-- Not yet: passphrase-protected client keys, certificate revocation lists, and
+- Not supported: passphrase-protected client keys, certificate revocation lists, and
   `sslnegotiation=direct` (refused).
 - Only TLS 1.2 and 1.3 are offered: no TLS 1.0 or 1.1.
 - On macOS, `verify-full` against the system's certificates follows Apple's rules, which

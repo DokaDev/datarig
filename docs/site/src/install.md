@@ -51,6 +51,9 @@ cargo install --locked --path crates/tui   # installs the datarig binary
 
 ## Requirements
 
+- PostgreSQL 12 or newer for a table's structure, its DDL, the key marks and copying rows as
+  `INSERT`; MySQL 8.0 or newer; MariaDB 10.6 or newer (a best effort). See
+  [Introduction](introduction.md#status) and [MySQL](guide/mysql.md).
 - A terminal of at least 80×24. A smaller window shows only a note saying how large it must
   be.
 - A [Nerd Font](https://www.nerdfonts.com) is optional. datarig asks once whether your
@@ -63,7 +66,6 @@ patch release only fixes things. A minor release before 1.0 may change the confi
 format; datarig keeps reading older files and migrates them itself. For example, a version 1
 config file is copied to `config.toml.v1.bak` before it is upgraded. A release candidate
 (`vX.Y.0-rc.N`), when there is one, is a GitHub pre-release only. The Homebrew tap installs
-stable releases. 1.0 is planned once several databases are supported and the configuration
-is stable.
+stable releases.
 
 See [What's new](whats-new.md) for the changes in each release.

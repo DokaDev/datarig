@@ -98,7 +98,7 @@ node the server gives no cost (a sort, a subquery's head) shows its children's t
 {{#include ../screens/plan-tree-mysql.txt}}
 ```
 
-## Not yet
+## Not supported
 
 - Plans on MariaDB (its plans are shaped otherwise): the plan actions are not offered there,
   and `EXPLAIN` runs and shows its text.
