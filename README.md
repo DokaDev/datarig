@@ -2,13 +2,13 @@
 
 [![CI](https://github.com/DokaDev/datarig/actions/workflows/ci.yml/badge.svg)](https://github.com/DokaDev/datarig/actions/workflows/ci.yml)
 
-A terminal database client: a workspace for your databases, in the terminal.
+A full-featured database client that lives in your terminal — light, fast, and safe by default.
 
 datarig is written in Rust with [Ratatui](https://ratatui.rs). It keeps several connections
 open side by side, each with its own tabs, a schema explorer, a SQL editor with vim keys and a
 results grid that pages through large results explicitly instead of loading them whole. It is
-careful by default: dangerous statements ask first, and read-only profiles are enforced by the
-server.
+careful by default: dangerous statements ask first, and read-only profiles are checked before
+anything is sent and, on PostgreSQL, also enforced by the server.
 
 **Documentation: <https://dokadev.github.io/datarig/>**
 
@@ -34,13 +34,15 @@ Or download an archive for macOS, Linux or Windows from
 checksums), or build from source with Rust 1.93 and libclang:
 
 ```sh
+git clone https://github.com/DokaDev/datarig
+cd datarig
 cargo install --locked --path crates/tui
 ```
 
 Details: [Install](https://dokadev.github.io/datarig/install.html). A terminal of at least
 80×24 is required; a Nerd Font is optional.
 
-## Start in 30 seconds
+## Quick start
 
 ```sh
 datarig                # open the workspace; the explorer offers "＋ New connection"
@@ -68,6 +70,8 @@ commands), multi-hop SSH. The full list is in the
 | `crates/ssh`, `crates/tls` | SSH tunnels, TLS (rustls) |
 | `crates/tui` | the terminal UI and the `datarig` binary |
 | `crates/bench` | benchmarks and the CI performance budgets |
+| `locales/` | the UI text catalogs (`en.toml`, `ko.toml`) |
+| `dev/` | Docker Compose with PostgreSQL, MySQL, PgBouncer and an SSH bastion for the tests; see [dev/README.md](https://github.com/DokaDev/datarig/blob/main/dev/README.md) |
 | `vendor/` | patched tokio-postgres, mysql_async and ssh-key; see [vendor/README.md](https://github.com/DokaDev/datarig/blob/main/vendor/README.md) |
 | `docs/` | [architecture](https://github.com/DokaDev/datarig/blob/main/docs/architecture.md), [performance](https://github.com/DokaDev/datarig/blob/main/docs/perf.md), the generated [key bindings](https://github.com/DokaDev/datarig/blob/main/docs/keybindings.md) and [theme tokens](https://github.com/DokaDev/datarig/blob/main/docs/themes.md), and the documentation site (`docs/site`) |
 
