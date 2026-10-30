@@ -29,3 +29,6 @@ Thumbs.db
 .env.*
 *.pem
 *.key
+
+# Docs site build output (mdbook build docs/site)
+/docs/site/book/
