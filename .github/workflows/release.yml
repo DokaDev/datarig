@@ -2,7 +2,10 @@ name: Release
 
 # A pushed tag `vX.Y.Z` builds datarig for every target, checks the Homebrew formula by
 # installing it from the fresh archives, publishes a GitHub release (archives, checksums and
-# GitHub's generated notes) and updates the formula in the tap. A `vX.Y.0-rc.N` tag is always a
+# its notes) and updates the formula in the tap. The notes start with the version's section of
+# What's new (docs/site/src/whats-new.md, written by scripts/changes.sh release in the release
+# pull request); without one the run stops before the builds. After a stable release,
+# the docs site is deployed to GitHub Pages from the tag. A `vX.Y.0-rc.N` tag is always a
 # pre-release on GitHub; whether it also updates the tap depends on whether a stable release
 # exists yet (.github/scripts/release-tap-eligible.sh): until the first one ships, the tap
 # tracks the latest release candidate, so it stays installable during this pre-1.0 phase; once
@@ -10,7 +13,8 @@ name: Release
 # must be the workspace version (.github/scripts/release-version.sh). Before anything else, a
 # tag waits for the CI run on main for its commit and stops unless the commit is on main and
 # every CI job passed (.github/scripts/release-ci-gate.sh). A pull request that changes the
-# release files, or a manual run, does everything except publishing (and skips that wait).
+# release files, or a manual run, does everything except publishing and deploying (and skips
+# that wait; a missing What's new section only warns).
 on:
   push:
     tags: ["v*"]
@@ -21,6 +25,7 @@ on:
       - .github/scripts/homebrew-formula.sh
       - .github/scripts/pg-query-build-deps.sh
       - scripts/third-party-notices.sh
+      - scripts/changes.sh
   workflow_dispatch:
 
 permissions:
@@ -80,6 +85,23 @@ jobs:
           GH_REPO: ${{ github.repository }}
           PRERELEASE: ${{ steps.version.outputs.prerelease }}
         run: bash .github/scripts/release-tap-eligible.sh
+      # The version's section of What's new, the top of the release notes. A tag without one
+      # stops here, before the builds; a run that publishes nothing only warns.
+      - name: What's new
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          PUBLISH: ${{ steps.version.outputs.publish }}
+        run: |
+          if notes=$(bash scripts/changes.sh notes "$VERSION"); then
+            { echo "## What's new in $VERSION"; echo; echo "$notes"; } >> "$GITHUB_STEP_SUMMARY"
+          else
+            how="docs/site/src/whats-new.md has no section for $VERSION. In a pull request, run scripts/changes.sh release $VERSION (or, for an urgent patch without fragments, scripts/changes.sh release $VERSION --note \"Fix ...\"), merge it, then tag again."
+            if [[ $PUBLISH == true ]]; then
+              echo "::error title=No release notes::$how"
+              exit 1
+            fi
+            echo "::warning title=No release notes::$how"
+          fi
 
   # THIRD-PARTY-NOTICES.html, the same for every archive (cargo-about reads the dependencies of
   # every target).
@@ -182,6 +204,7 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           pattern: dist-*
@@ -192,7 +215,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.plan.outputs.tag }}
+          VERSION: ${{ needs.plan.outputs.version }}
           PRERELEASE: ${{ needs.plan.outputs.prerelease }}
+        # The body: the What's new section, the paragraph about the archives, then GitHub's
+        # generated list of pull requests (gh puts --notes-file text before the generated notes).
         run: |
           (cd dist && cat ./*.sha256 > SHA256SUMS)
           notes="The archives are for macOS and Linux (arm64 and x86_64) and Windows (x86_64); SHA256SUMS lists their checksums. The Windows build is untested: CI builds it and runs its tests, but nobody has used datarig on Windows yet."
@@ -201,7 +227,13 @@ jobs:
             notes="A release candidate: not published to Homebrew. $notes"
             flags+=(--prerelease)
           fi
-          gh release create "$TAG" --verify-tag --title "$TAG" --generate-notes --notes "$notes" "${flags[@]}" dist/*
+          body=$RUNNER_TEMP/notes.md
+          {
+            bash scripts/changes.sh notes "$VERSION"
+            echo
+            echo "$notes"
+          } > "$body"
+          gh release create "$TAG" --verify-tag --title "$TAG" --generate-notes --notes-file "$body" "${flags[@]}" dist/*
 
   # Skipped when plan.outputs.tap is false: a release candidate once a stable release exists
   # (release-tap-eligible.sh), or a candidate whose eligibility check itself failed (fail
@@ -231,3 +263,36 @@ jobs:
           base="https://github.com/$REPO/releases/download/$TAG"
           bash .github/scripts/homebrew-formula.sh "$TAG" "$base" dist > datarig.rb
           bash .github/scripts/release-tap.sh "$TAG" datarig.rb
+
+  # The docs site of a stable release, from its tag: built and checked like the `docs` job of
+  # ci.yml, then deployed to GitHub Pages (https://dokadev.github.io/datarig/). Only after the
+  # release is published, never for a release candidate, a pull request or a manual run. The
+  # Homebrew tap does not wait for it: a failed deploy leaves the release and the tap as they
+  # are and can be re-run on its own. The `github-pages` environment must allow tags `v*`.
+  pages:
+    name: docs site (GitHub Pages)
+    needs: [plan, release]
+    if: needs.plan.outputs.publish == 'true' && needs.plan.outputs.prerelease == 'false'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+      - name: mdBook and lychee
+        run: bash .github/scripts/docs-tools.sh
+      - name: Build and check
+        run: bash .github/scripts/docs-build.sh
+      - uses: actions/configure-pages@v6
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: docs/site/book
+      - id: deployment
+        uses: actions/deploy-pages@v5
