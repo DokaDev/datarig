@@ -35,6 +35,27 @@ jobs:
       - uses: actions/checkout@v7
       - run: cargo fmt --all --check
 
+  # The docs site (docs/site): built with mdBook, then every link and anchor of the HTML, the
+  # README and CONTRIBUTING checked offline with lychee (external links are not fetched). Runs
+  # on every push and pull request like the other jobs: the release gate wants each one to
+  # succeed. mdBook's 404 page links to /datarig/…, so the check resolves root-relative links in
+  # a directory where the build is datarig/. The generated pages and screens are compared with
+  # their sources by the `test` jobs (tests/*_doc.rs, tests/book_*.rs).
+  docs:
+    name: docs site
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: mdBook and lychee
+        run: bash .github/scripts/docs-tools.sh
+      - run: mdbook build docs/site
+      - name: Links
+        run: |
+          mkdir -p "$RUNNER_TEMP/site"
+          ln -s "$PWD/docs/site/book" "$RUNNER_TEMP/site/datarig"
+          lychee --offline --include-fragments --no-progress --root-dir "$RUNNER_TEMP/site" \
+            docs/site/book README.md CONTRIBUTING.md
+
   # On every OS the tests run on: code behind `cfg(unix)` / `cfg(windows)` warns differently.
   clippy:
     name: clippy -D warnings (${{ matrix.os }})
