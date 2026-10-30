@@ -49,6 +49,14 @@ jobs:
       - name: mdBook and lychee
         run: bash .github/scripts/docs-tools.sh
       - run: mdbook build docs/site
+      # mdBook leaves an include whose file is missing as its text and still succeeds (an
+      # unknown anchor includes nothing: tests/book_refs.rs checks those).
+      - name: No include left as text
+        run: |
+          if grep -rlF '{{#' docs/site/book --include='*.html'; then
+            echo "an {{#...}} of mdBook was not resolved in the pages above" >&2
+            exit 1
+          fi
       - name: Links
         run: |
           mkdir -p "$RUNNER_TEMP/site"
