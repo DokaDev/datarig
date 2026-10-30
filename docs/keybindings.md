@@ -333,7 +333,7 @@ The Plan tab of the results pane (a plan result: PostgreSQL's JSON, MySQL's tree
 | `6` | `plan.view.rows` | Plan view: row flow (rows between nodes) |  |
 | `7` | `plan.view.treemap` | Plan view: treemap (area = own time) |  |
 | `8` | `plan.view.boxes` | Plan view: box diagram |  |
-| `9` | `plan.view.raw` | Plan view: raw (the server's own words, or as psql shows a JSON plan) |  |
+| `9` | `plan.view.raw` | Plan view: raw (the server's own words, or the text form of a JSON plan) |  |
 | `<` | `plan.pan_left` | Plan: move the view left | ✓ |
 | `>` | `plan.pan_right` | Plan: move the view right | ✓ |
 | `y` | `plan.copy_text` | Plan: copy as the raw view shows it |  |

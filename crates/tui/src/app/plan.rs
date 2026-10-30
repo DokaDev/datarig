@@ -48,7 +48,7 @@ pub enum PlanView {
     /// Boxes joined by lines, a large plan moved around in.
     Boxes,
     /// The plan as text: the server's own text for a text format (MySQL's tree), else the text
-    /// `psql` shows for `EXPLAIN`, written from the plan.
+    /// form of `EXPLAIN`, written from the plan.
     Raw,
 }
 

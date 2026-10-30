@@ -971,7 +971,7 @@ fn aux_event(h: &mut Harness, db: &str, ev: DbEvent) {
     });
 }
 
-/// DataGrip's databases level: under a connected profile its own database first (marked, the
+/// The databases level: under a connected profile its own database first (marked, the
 /// schema tree the explorer had), then the server's other databases, asked for when the node
 /// opens (loading until they come). Another database opens through its own aux metadata
 /// session: its schemas, a schema's tables, and a table opens in a table tab bound to that

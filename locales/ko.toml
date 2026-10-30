@@ -1671,7 +1671,7 @@
 "action.plan.view.next" = "실행 계획: 다음 보기"
 "action.plan.view.prev" = "실행 계획: 이전 보기"
 "action.plan.view.tree" = "실행 계획 보기: 트리"
-"action.plan.view.raw" = "실행 계획 보기: 원문 (서버가 쓴 그대로, JSON 계획은 psql 형식)"
+"action.plan.view.raw" = "실행 계획 보기: 원문 (서버가 쓴 그대로, JSON 계획은 텍스트 형식)"
 "action.plan.pan_left" = "실행 계획: 화면을 왼쪽으로"
 "action.plan.pan_right" = "실행 계획: 화면을 오른쪽으로"
 "action.plan.copy_text" = "실행 계획: 텍스트로 복사 (원문 보기 그대로)"
