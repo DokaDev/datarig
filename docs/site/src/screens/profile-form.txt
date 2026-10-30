@@ -1,0 +1,45 @@
+╭ Explorer ────────────────────────────╮ 1 console 1 ×
+│  ＋ New connection                   │╭ Query · console 1 ───────────────────────────────────────────────────────────────────────────────────────────────────╮
+│▾ Connections 3                       ││ local-pg / datarig  127.0.0.1:55432                                                      Space c s switch connection │
+│  ▾ ●   local-pg                      ││  1 -- datarig 🐘  Ctrl+E: run the statement under the cursor                                                         │
+│    ▾ datarig default                 ││  2▎SELECT * FROM shop.users WHERE id <= 8;                                                                           │
+│      ▸ analytics                     ││  3                                                                                                                   │
+│      ▸ public                        ││  4 SELECT u.name, o.status, o.total_amount                                                                           │
+│      ▸ shop                          ││  5 FROM shop.orders o                                                                                                │
+│  ▸ ○   分析-replica                  ││  6 JOIN shop.users u ON u.id = o.user_id                                                                             │
+│  ▸ ○   分析-replica                  ││  7 WHERE o.status = 'paid';                                                                                          │
+│                                      ││  8                                                                                                                   │
+│                                      ││  9 SELECT * FROM analytics.events;                                                                                   │
+│                             ╭ Edit connection — 分析-replica ──────────────────────────────────────────────────────────────────╮                             │
+│                             │  Basic   SSH   Advanced                                                    Ctrl+N/Ctrl+P section │                             │
+│                             │                                                                                                  │                             │
+│                             │ Driver            PostgreSQL ▾   ←/→ change · Enter list                                         │                             │
+│                             │ Name              分析-replica                                                                   │                             │
+│                             │ Host              analytics.internal                                                             │                             │
+│                             │ Port              6432                                                                           │                             │
+│                             │ User              report                                                                         │                             │
+│                             │ Password storage  Keychain ▾   ←/→ change · Enter list                                           │                             │
+│                             │ Password                                              kept in the OS keychain                    │                             │
+│                             │ Database          warehouse                                                                      │                             │
+│                             │                                                                                                  │                             │
+│                             │ DSN               postgres://report@analytics.internal:6432/warehouse?sslmode=require            │                             │
+│                             │                                                                                                  │                             │
+│                             │                                                                                                  │                             │
+│                             │                    Test    Save    Cancel                                                        │                             │
+│                             │                                                                                                  │                             │
+│                             │                                                                                                  │                             │
+│                             ╰───────────────────────── Tab/↑↓ move · Ctrl+N/P section · Ctrl+T test · Ctrl+S save · Esc cancel ╯                             │
+│                                      ││                                                                                                                      │
+│                                      ││                                                                                                                      │
+│                                      ││                                                                                                                      │
+│                                      ││                                                                                                                      │
+│                                      ││                                                                                                                      │
+│                                      ││                                                                                                                      │
+│                                      ││                                                                                                                      │
+│                                      ││                                                                                                                      │
+│                                      ││                                                                                                                      │
+│                                      ││                                                                                                                      │
+│                                      ││                                                                                                                      │
+│                                      ││                                                                                                                      │
+╰──────────────────────────────────────╯╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+ NORMAL  local-pg │ Connected to local-pg                                                                                                                    EN

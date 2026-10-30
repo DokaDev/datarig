@@ -1,0 +1,14 @@
+[book]
+title = "datarig"
+description = "A terminal database client for PostgreSQL and MySQL"
+language = "en"
+src = "src"
+
+[build]
+build-dir = "book"
+# A page listed in SUMMARY.md that does not exist fails the build instead of being made empty.
+create-missing = false
+
+[output.html]
+site-url = "/datarig/"
+git-repository-url = "https://github.com/DokaDev/datarig"

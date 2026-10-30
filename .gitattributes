@@ -4,3 +4,6 @@
 docs/keybindings.md text eol=lf
 # EXPLAIN output captured from the servers; the test compares the text form byte for byte.
 crates/core/src/sql/plan/fixtures/** text eol=lf
+# The docs site's generated pages and screens (tests/*_doc.rs, tests/book_screens.rs).
+docs/site/src/reference/*.md text eol=lf
+docs/site/src/screens/*.txt text eol=lf

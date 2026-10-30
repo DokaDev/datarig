@@ -3,6 +3,8 @@
 <!-- Generated from crates/tui/src/keymap/defaults.rs and the action registry. Do not edit;
      run `DATARIG_BLESS=1 cargo test -p datarig-tui --test keybindings_doc` at the repository root. -->
 
+<!-- ANCHOR: contexts -->
+
 Keys resolve from the current context outwards to `root`; the first binding found wins. Dialogs (`overlay.*`) sit directly under `root`, so only `root` keys pass through them. The cell viewer is not modal: it sits under `workspace`, so the workspace keys (run, …) keep working.
 
 - **[text]** text input: letters, digits, symbols and `Space` are typed. No leader, no Hangul mapping.
@@ -624,7 +626,38 @@ Reserved — keyboard help filter: `Esc` `Enter` `Down` `Up`
 
 Reserved — text input: `Backspace` `Delete` `Left` `Right` `Home` `End` `Ctrl+U` `Ctrl+A`
 
+## Command line only
+
+Actions without a default key (the command line finds them by name).
+
+| Action | Description |
+|---|---|
+| `tunnel.new` | New SSH tunnel (shared by profiles) |
+| `env.new` | New environment (rules, color and badge that profiles share) |
+| `session.new` | New Startup SQL (settings a profile's sessions start with) |
+| `session.show` | What a profile's sessions start with, and where each setting comes from |
+| `ui.language.en` | Change language → English |
+| `ui.language.ko` | Change language → Korean |
+| `ui.language.auto` | Change language → Auto (system locale) |
+| `ui.icons.toggle` | Nerd Font icons → on/off |
+| `ui.icons.on` | Nerd Font icons → on |
+| `ui.icons.off` | Nerd Font icons → off |
+| `ui.icons.auto` | Nerd Font icons → ask again (with a preview) |
+| `secrets.default.auto` | New profiles' password → auto (keychain when available) |
+| `secrets.default.keychain` | New profiles' password → OS keychain |
+| `secrets.default.file` | New profiles' password → secrets file |
+| `secrets.default.command` | New profiles' password → command |
+| `secrets.default.env` | New profiles' password → environment variable |
+| `secrets.default.prompt` | New profiles' password → prompt on every connect |
+| `help.all` | Keyboard help: expand all |
+| `explorer.context_menu` | Explorer: actions of this node (menu) |
+| `ddl.copy` | DDL tab: copy the whole DDL |
+
+<!-- ANCHOR_END: contexts -->
+
 ## `:` commands
+
+<!-- ANCHOR: commands -->
 
 Type them after `:` (or `Ctrl+K`). `Tab`/`Shift+Tab`, `↑`/`↓` or `Ctrl+N`/`Ctrl+P` pick an entry, `Enter` runs it (a command that still needs its argument is completed instead), `Esc` or `Backspace` on an empty line closes. Text that is not a command searches the actions by name. A command that cannot run shows an error and the line stays open.
 
@@ -654,7 +687,7 @@ An editor command closes the line; what went wrong is said in the status bar.
 | `:tabmove [N / +N / -N / $]` | `:tabm` | Move this tab (:tabmove N: after tab N, 0 first; +N / -N: N places; alone: last) |
 | `:recover` |  | Bring back a closed console (also from earlier runs) |
 | `:settings` |  | Open the settings |
-| `:copy <format>` |  | Copy the selected range, or every fetched row, as… (:copy <format> [selection|all]) |
+| `:copy <format>` |  | Copy the selected range, or every fetched row, as… (:copy &lt;format> [selection\|all]) |
 | `:use [db][.schema]` |  | Choose this tab's database and schema |
 | `:nohlsearch` | `:noh` `:nohl` | Clear the search highlight in the editor (until the next search) and end the result grid's search |
 | `:suspend` | `:sus` `:stop` | Suspend datarig (the shell's fg brings it back) |
@@ -662,7 +695,7 @@ An editor command closes the line; what went wrong is said in the status bar.
 | `:ddl [schema.name]` |  | Show the DDL of the explorer's object, the table tab's table, or a name (:ddl [schema.name]) |
 | `:explain [analyze]` |  | The plan of the statement under the cursor (:explain analyze runs and measures it; a write is rolled back) |
 | `:theme copy <from> <name> / new <name>` |  | Write a theme file: a full copy of a theme, or a new one to fill in |
-| `:export [format] [all / fetched / selection] [delim= quote= header= null=] [path]` |  | Export the result to a file: alone, the export dialog; else every row by default, the format from the file's extension (:export [format] [all|fetched|selection] [delim=… quote=… header=… null=…] [path]) |
+| `:export [format] [all / fetched / selection] [delim= quote= header= null=] [path]` |  | Export the result to a file: alone, the export dialog; else every row by default, the format from the file's extension (:export [format] [all\|fetched\|selection] [delim=… quote=… header=… null=…] [path]) |
 | `:commit` |  | Commit the open transaction |
 | `:rollback` | `:rb` | Roll back the open transaction |
 | `:tx` |  | What the open transaction did |
@@ -694,29 +727,4 @@ Settings of `:set` (saved to `config.toml` like the matching actions):
 | `idle_disconnect` | `off` `5m` `10m` `30m` `1h` | Close idle connections |
 | `lock_wait` | `off` `5s` `10s` `30s` `1m` | Lock wait limit |
 
-## Command line only
-
-Actions without a default key (the command line finds them by name).
-
-| Action | Description |
-|---|---|
-| `tunnel.new` | New SSH tunnel (shared by profiles) |
-| `env.new` | New environment (rules, color and badge that profiles share) |
-| `session.new` | New Startup SQL (settings a profile's sessions start with) |
-| `session.show` | What a profile's sessions start with, and where each setting comes from |
-| `ui.language.en` | Change language → English |
-| `ui.language.ko` | Change language → Korean |
-| `ui.language.auto` | Change language → Auto (system locale) |
-| `ui.icons.toggle` | Nerd Font icons → on/off |
-| `ui.icons.on` | Nerd Font icons → on |
-| `ui.icons.off` | Nerd Font icons → off |
-| `ui.icons.auto` | Nerd Font icons → ask again (with a preview) |
-| `secrets.default.auto` | New profiles' password → auto (keychain when available) |
-| `secrets.default.keychain` | New profiles' password → OS keychain |
-| `secrets.default.file` | New profiles' password → secrets file |
-| `secrets.default.command` | New profiles' password → command |
-| `secrets.default.env` | New profiles' password → environment variable |
-| `secrets.default.prompt` | New profiles' password → prompt on every connect |
-| `help.all` | Keyboard help: expand all |
-| `explorer.context_menu` | Explorer: actions of this node (menu) |
-| `ddl.copy` | DDL tab: copy the whole DDL |
+<!-- ANCHOR_END: commands -->
