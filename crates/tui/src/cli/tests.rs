@@ -22,3 +22,10 @@ fn cli_arguments() {
     assert!(parse(&["a", "b"]).is_err());
     assert!(parse(&["--config"]).is_err());
 }
+
+#[test]
+fn help_names_every_supported_database() {
+    let first = HELP.lines().next().unwrap();
+    assert!(first.contains("PostgreSQL") && first.contains("MySQL"), "{first}");
+    assert!(!HELP.contains("for now"), "{HELP}");
+}
