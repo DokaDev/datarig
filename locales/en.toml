@@ -1674,7 +1674,7 @@
 "action.plan.view.next" = "Plan: next view"
 "action.plan.view.prev" = "Plan: previous view"
 "action.plan.view.tree" = "Plan view: tree"
-"action.plan.view.raw" = "Plan view: raw (the server's own words, or as psql shows a JSON plan)"
+"action.plan.view.raw" = "Plan view: raw (the server's own words, or the text form of a JSON plan)"
 "action.plan.pan_left" = "Plan: move the view left"
 "action.plan.pan_right" = "Plan: move the view right"
 "action.plan.copy_text" = "Plan: copy as the raw view shows it"

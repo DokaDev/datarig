@@ -861,7 +861,7 @@ impl App {
         }
     }
 
-    /// The wheel over the grid (as DataGrip and a browser): the view scrolls `rows`
+    /// The wheel over the grid (as in a browser): the view scrolls `rows`
     /// rows and `chars` characters within the page; the selected cell stays on its row, also
     /// off screen, until a key or a click moves it. Nothing is fetched (pages are explicit).
     fn scroll_grid(&mut self, rows: isize, chars: isize) {

@@ -747,7 +747,7 @@ fn a_count_says_when_it_may_differ_from_the_pages() {
 }
 
 /// The wheel scrolls the grid's view (three rows a notch), as
-/// DataGrip and a browser do: the selected cell stays on its data row, also off screen, the view
+/// a browser does: the selected cell stays on its data row, also off screen, the view
 /// stops at the ends of the page and fetches nothing; the next key brings the view back to the
 /// selection. Shift+wheel and a sideways wheel scroll the view sideways, four characters an
 /// event.

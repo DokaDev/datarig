@@ -24,7 +24,7 @@ linux_intel=$(sha x86_64-unknown-linux-gnu)
 
 cat << FORMULA
 class Datarig < Formula
-  desc "Terminal database client with a DataGrip-style workspace"
+  desc "Full-featured database client for the terminal: light, fast, safe"
   homepage "https://github.com/DokaDev/datarig"
   license any_of: ["MIT", "Apache-2.0"]
 

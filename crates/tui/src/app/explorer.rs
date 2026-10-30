@@ -480,7 +480,7 @@ impl App {
         }
     }
 
-    /// The databases of connected profile `id` at `depth` (DataGrip's level): its
+    /// The databases of connected profile `id` at `depth` (the databases level): its
     /// own first (its schema tree from the profile's metadata session), then the others the
     /// server lists, each opening to its schema tree through that database's aux session.
     fn push_databases(&self, id: ProfileId, c: &ProfileConn, depth: usize, rows: &mut Vec<Row>) {

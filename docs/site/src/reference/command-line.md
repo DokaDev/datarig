@@ -6,7 +6,7 @@
 `datarig --help` prints:
 
 ```text
-datarig — dive into any database, right from your terminal (PostgreSQL and MySQL)
+datarig — a full-featured database client that lives in your terminal (PostgreSQL and MySQL)
 
 usage: datarig [--config <path>] [<profile>]
 
