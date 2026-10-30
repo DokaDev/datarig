@@ -308,6 +308,8 @@ const ACTIONS: &[(Ctx, &str, &str)] = &[
     (Explorer, "O", "explorer.new_console_here"),
     (Explorer, "D", "explorer.show_ddl"),
     (Explorer, "F", "explorer.show_function_ddl"),
+    // the first steps of the welcome panel (also the empty workspace's tip): hidden for good
+    (Explorer, "X", "tips.dismiss_onboarding"),
     (Explorer, "esc", "explorer.back"),
     (Explorer, "q", "app.quit"),
     (ExplorerFilter, "esc", "explorer.filter_clear"),
@@ -318,6 +320,7 @@ const ACTIONS: &[(Ctx, &str, &str)] = &[
     (Welcome, "n", "conn.new"),
     (Welcome, "enter", "conn.new"),
     (Welcome, "q", "app.quit"),
+    (Welcome, "X", "tips.dismiss_onboarding"),
     // result grid
     (Grid, "h", "grid.left"),
     (Grid, "left", "grid.left"),

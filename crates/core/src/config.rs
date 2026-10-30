@@ -30,7 +30,8 @@
 //! dropped by the next save. `[explorer] size_heat` says whether, and in how many levels, the
 //! explorer colors the estimates of the largest tables of each schema (`on`, its old value,
 //! reads as `3`). `[ui] yank_flash` says whether the cells a copy took from the results grid
-//! flash briefly.
+//! flash briefly, `[ui] tips` whether empty places show a tip about a key (and the welcome
+//! panel its first steps).
 //! [`Prefs`] holds `[commands] position` (the `:` command line as a popup near
 //! the top, or the bottom line), `detail_view` (the result inspector as a panel or a status bar
 //! preview), `clipboard` (how copies reach the clipboard) and `copy_header`
@@ -349,6 +350,8 @@ struct ExplorerSection {
 struct UiSection {
     #[serde(default)]
     yank_flash: Option<String>,
+    #[serde(default)]
+    tips: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -634,6 +637,26 @@ impl Choice for YankFlash {
     }
 }
 
+/// `[ui] tips`: whether empty places (the welcome panel, an empty editor or result, the status
+/// bar's spare room) show a tip about a key, and running an action from the menu a few times
+/// names its key (on by default).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Tips {
+    #[default]
+    On,
+    Off,
+}
+
+impl Choice for Tips {
+    const ALL: &'static [Self] = &[Tips::On, Tips::Off];
+    fn as_str(self) -> &'static str {
+        match self {
+            Tips::On => "on",
+            Tips::Off => "off",
+        }
+    }
+}
+
 /// `[secrets] macos_keychain_access`: how datarig reaches the macOS keychain. Accepted on every
 /// platform; only the macOS keychain store reads it (see [`crate::secret::SwitchedKeychain`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -724,6 +747,8 @@ pub struct Prefs {
     pub size_heat: SizeHeat,
     /// `[ui] yank_flash`.
     pub yank_flash: YankFlash,
+    /// `[ui] tips`.
+    pub tips: Tips,
     /// `idle_disconnect`: how long a profile's connection may sit unused before its sessions
     /// close (`None`: never); an environment may say otherwise.
     pub idle_disconnect: Option<std::time::Duration>,
@@ -750,6 +775,7 @@ impl Default for Prefs {
             keychain_access: KeychainAccess::default(),
             size_heat: SizeHeat::default(),
             yank_flash: YankFlash::default(),
+            tips: Tips::default(),
             idle_disconnect: None,
             lock_wait: None,
         }
@@ -1021,6 +1047,7 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
             )
         })
         .unwrap_or_default();
+    let (ui_flash, ui_tips) = f.ui.map(|u| (u.yank_flash, u.tips)).unwrap_or_default();
     let (default_source, keychain_access) =
         f.secrets.map(|s| (s.default_source, s.macos_keychain_access)).unwrap_or_default();
     let default_source = match default_source {
@@ -1059,7 +1086,8 @@ pub fn parse(text: &str) -> Result<Config, ConfigError> {
             }),
             "3, 5, off",
         )?,
-        yank_flash: choice("ui.yank_flash", f.ui.and_then(|u| u.yank_flash), "on, off")?,
+        yank_flash: choice("ui.yank_flash", ui_flash, "on, off")?,
+        tips: choice("ui.tips", ui_tips, "on, off")?,
         idle_disconnect: match &f.idle_disconnect {
             None => None,
             Some(v) => policy::parse_idle_disconnect(v)
@@ -1525,6 +1553,8 @@ pub fn save(path: &Path, settings: Settings, profiles: Option<Profiles>) -> Resu
     orphans += &nested_setting(&mut doc, "explorer", "size_heat", heat)?;
     let flash = (prefs.yank_flash.as_str().into(), prefs.yank_flash == YankFlash::default());
     orphans += &nested_setting(&mut doc, "ui", "yank_flash", flash)?;
+    let tips = (prefs.tips.as_str().into(), prefs.tips == Tips::default());
+    orphans += &nested_setting(&mut doc, "ui", "tips", tips)?;
     let source = (default_source.as_str().into(), default_source == DefaultSource::Auto);
     orphans += &nested_setting(&mut doc, "secrets", "default_source", source)?;
     let access = (prefs.keychain_access.as_str().into(), prefs.keychain_access == KeychainAccess::default());

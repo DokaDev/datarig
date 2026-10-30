@@ -1,0 +1,28 @@
+---
+source: crates/tui/tests/flows_tips.rs
+expression: backend
+---
+"╭ Explorer ────────────╮ 1 console 1 ×  2 console 2 ×                           "
+"│  ＋ New connection   │╭ Query · console 2 ───────────────────────────────────╮" Hidden by multi-width symbols: [(4, " ")]
+"│▾ Connections 1       ││ local-pg / datarig  127.0.0.1:55432                  │"
+"│  ▾ ●   local-pg      ││  1                                                   │"
+"│    ▾ datarig default ││                                                      │"
+"│      ▸ analytics     ││    Tip: Ctrl+G opens this text in your own editor    │"
+"│      ▸ public        ││                                                      │"
+"│      ▸ shop          ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"│                      ││                                                      │"
+"╰──────────────────────╯╰──────────────────────────────────────────────────────╯"
+" NORMAL  local-pg │       │ i type · Ctrl+E run · Tab next pane · : commands EN "

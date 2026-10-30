@@ -4,6 +4,7 @@
 use crate::app::action::Action;
 use crate::app::hover::PointerOn;
 use crate::app::tabs::{DdlState, ResultView};
+use crate::app::tips::{Place, STEPS};
 use crate::app::{App, Focus, Layout, Paging, Results};
 use crate::keymap::Ctx;
 use crate::text::{clip, width, wrap, wrap_words};
@@ -250,8 +251,18 @@ fn draw_editor(app: &mut App, area: Rect, buf: &mut Buffer) -> (u16, u16) {
         _ if ddl => None,
         _ => editor.current_statement().map(|(start, end, _)| (start, end)),
     };
-    editor.render(einner, buf, stmt)
+    let cursor = editor.render(einner, buf, stmt);
+    // A console with no text, focused: a tip on its lines (gone with the first character).
+    let empty = editor.lines.iter().all(String::is_empty);
+    if empty && !ddl && app.focus == Focus::Editor && einner.height > 3 {
+        let (x, w) = (einner.x + EDITOR_TIP_INDENT, einner.width.saturating_sub(EDITOR_TIP_INDENT + 1) as usize);
+        draw_tip(app, Place::EmptyEditor, x, einner.y + 2, w, einner.y + einner.height, buf);
+    }
+    cursor
 }
+
+/// Where the empty editor's tip starts: past the line number column of its one line.
+const EDITOR_TIP_INDENT: u16 = 4;
 
 /// What a DDL tab shows instead of its text while it has none: not read yet, waiting, locked
 /// (only that: nothing was read) or why it could not be read, with the key that reads it.
@@ -945,7 +956,23 @@ fn draw_empty(app: &mut App, area: Rect, buf: &mut Buffer) {
         y += 1;
     }
     y += 1;
+    y = draw_tip(app, Place::NoTab, x, y, w, bottom, buf);
     draw_notices(app, x, y, w, bottom, buf);
+}
+
+/// The tip of `place` from line `y` down to `bottom`, dim and wrapped at words, then a blank
+/// line; returns the next free line (`y` without a tip).
+fn draw_tip(app: &App, place: Place, x: u16, mut y: u16, w: usize, bottom: u16, buf: &mut Buffer) -> u16 {
+    let Some(text) = app.tip_line(place) else { return y };
+    let th = theme::cur();
+    for l in wrap_words(&text, w) {
+        if y >= bottom {
+            return y;
+        }
+        put(buf, x, y, &l, w, Style::new().fg(th.fg_dim).bg(th.bg));
+        y += 1;
+    }
+    y + 1
 }
 
 /// The welcome panel (no profile yet): what datarig is, and the keys that get
@@ -983,6 +1010,9 @@ fn draw_welcome(app: &mut App, area: Rect, buf: &mut Buffer) {
             .map(|k| crate::keymap::keys::label(&k))
             .unwrap_or_default()
     };
+    if app.onboarding_shown() {
+        return draw_first_steps(app, x, y, w, bottom, buf);
+    }
     let entries = [
         (keys(Action::NewProfile), app.i18n.label(Label::WelcomeNew)),
         (keys(Action::Help), app.i18n.label(Label::WelcomeHelp)),
@@ -997,6 +1027,56 @@ fn draw_welcome(app: &mut App, area: Rect, buf: &mut Buffer) {
         put(buf, x, y, k, key_w, Style::new().fg(th.accent_warm).bg(th.bg).add_modifier(Modifier::BOLD));
         let lx = x + key_w as u16 + 2;
         put(buf, lx, y, label, w.saturating_sub(key_w + 2), Style::new().fg(th.fg).bg(th.bg));
+        y += 1;
+    }
+    if y < bottom {
+        put(buf, x, y, &app.i18n.label(Label::WelcomePaste), w, Style::new().fg(th.fg_muted).bg(th.bg));
+    }
+    y += 2;
+    draw_notices(app, x, y, w, bottom, buf);
+}
+
+/// The welcome panel's first steps (tips on, not dismissed): each with its mark (taken or not)
+/// and its key, then the commands and quit keys, the key that hides the steps and the paste
+/// line, from line `y` down.
+fn draw_first_steps(app: &App, x: u16, mut y: u16, w: usize, bottom: u16, buf: &mut Buffer) {
+    let th = theme::cur();
+    let on = app.icons_on();
+    let title = Style::new().fg(th.fg).bg(th.bg).add_modifier(Modifier::BOLD);
+    put(buf, x, y, &app.i18n.label(Label::OnboardingTitle), w, title);
+    y += 1;
+    let mut rows: Vec<(Option<bool>, String, String)> = STEPS
+        .iter()
+        .map(|s| (Some(app.step_done(s)), app.tip_key(s.action, s.ctx), app.i18n.label(s.label).to_string()))
+        .collect();
+    // The key that hides the steps, under them (its label muted).
+    let dismiss = rows.len();
+    for (a, label) in [
+        (Action::DismissOnboarding, Label::OnboardingDismiss),
+        (Action::OpenCommands, Label::WelcomeCommands),
+        (Action::Quit, Label::WelcomeQuit),
+    ] {
+        rows.push((None, app.tip_key(a, Ctx::Welcome), app.i18n.label(label).to_string()));
+    }
+    let mark_w = crate::text::width(crate::icons::step(false, on));
+    let key_w = rows.iter().map(|(_, k, _)| crate::text::width(k)).max().unwrap_or(0).min(w / 2);
+    for (i, (done, k, label)) in rows.iter().enumerate() {
+        if y >= bottom {
+            return;
+        }
+        let mut lx = x;
+        // Cut at the panel's edge however narrow it is.
+        let room = |lx: u16| w.saturating_sub(usize::from(lx - x));
+        if let Some(done) = *done {
+            let color = if done { th.success } else { th.fg_dim };
+            put(buf, lx, y, crate::icons::step(done, on), mark_w.min(w), Style::new().fg(color).bg(th.bg));
+        }
+        lx = lx.saturating_add(mark_w as u16 + 1).min(x + w as u16);
+        let key_style = Style::new().fg(th.accent_warm).bg(th.bg).add_modifier(Modifier::BOLD);
+        put(buf, lx, y, k, key_w.min(room(lx)), key_style);
+        lx = lx.saturating_add(key_w as u16 + 2).min(x + w as u16);
+        let fg = if i == dismiss { th.fg_muted } else { th.fg };
+        put(buf, lx, y, label, room(lx), Style::new().fg(fg).bg(th.bg));
         y += 1;
     }
     if y < bottom {
@@ -1165,7 +1245,13 @@ pub(crate) fn draw_results(app: &mut App, area: Rect, buf: &mut Buffer) {
             msg_line(buf, &t, th.fg_dim);
             let lines = wrap(&t, area.width as usize).len() as u16;
             let w = area.width.saturating_sub(1) as usize;
-            draw_notices(app, area.x + 1, area.y + lines + 1, w, area.y + area.height, buf);
+            let bottom = area.y + area.height;
+            let place = if app.tab().exec.running.is_some() { Place::Running } else { Place::EmptyResults };
+            let y = match app.tab().is_table() {
+                true => area.y + lines + 1,
+                false => draw_tip(app, place, area.x + 1, area.y + lines + 1, w, bottom, buf),
+            };
+            draw_notices(app, area.x + 1, y, w, bottom, buf);
         }
         Results::Rows(rs) if strip.is_some() => {
             let grid = Rect { height: area.height - 1, ..area };

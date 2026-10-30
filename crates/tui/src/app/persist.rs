@@ -62,6 +62,7 @@ impl App {
             self.scripts = Some(store);
             self.refresh_scripts();
         }
+        self.load_usage();
         let Some(state) = self.paths.state.clone() else { return };
         self.sweep_spill(&state);
         match workspace::acquire(&state) {
@@ -373,6 +374,7 @@ impl App {
             self.sync_binding(id);
         }
         let Some(state) = self.state_dir() else { return false };
+        self.save_usage();
         if let Err(e) = workspace::save(&state, &self.workspace_state()) {
             let error = self.io_text(&e);
             self.flash(Notice::new(Msg::WorkspaceSaveFailed { error }, Level::Error));

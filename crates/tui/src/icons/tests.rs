@@ -265,3 +265,17 @@ fn the_encryption_glyphs_are_pinned() {
         assert_eq!(width(g), 1, "{g:?}");
     }
 }
+
+#[test]
+fn the_tip_and_first_step_marks_are_pinned_and_have_a_text_form_without_icons() {
+    // Nerd Fonts 3.4.0 glyphnames.json: "md-lightbulb_outline" f0336, "md-check_circle" f05e0,
+    // "md-checkbox_blank_circle_outline" f0130.
+    assert_eq!((TIP, STEP_DONE, STEP_TODO), ("\u{f0336}", "\u{f05e0}", "\u{f0130}"));
+    assert_eq!((step(true, true), step(false, true)), (STEP_DONE, STEP_TODO));
+    assert_eq!((step(true, false), step(false, false)), ("[x]", "[ ]"));
+    for g in [TIP, STEP_DONE, STEP_TODO] {
+        let c = g.chars().next().unwrap();
+        assert!(('\u{f0001}'..='\u{f1af0}').contains(&c), "{g:?}: Material Design range");
+        assert_eq!(width(g), 1, "{g:?}");
+    }
+}

@@ -701,6 +701,8 @@ impl App {
         if own.is_empty() && pane.is_empty() {
             return;
         }
+        // However it opened (a right click too): the first step about the menu is taken.
+        self.step_taken(Action::OpenMenu);
         if !self.tabs.is_empty() {
             let t = self.tab_mut();
             t.popup = None;
@@ -1048,11 +1050,11 @@ impl App {
             }
             MenuItem::Action(a) => {
                 self.overlays.close(OverlayKind::ContextMenu);
-                self.dispatch(a);
+                self.dispatch_from(a, tips::Source::Menu);
             }
             MenuItem::Copy(MenuScope::Copy(scope), f) => {
                 self.overlays.close(OverlayKind::ContextMenu);
-                self.dispatch(Action::Copy(scope, f));
+                self.dispatch_from(Action::Copy(scope, f), tips::Source::Menu);
             }
             MenuItem::Copy(MenuScope::FetchFirst, f) => {
                 self.overlays.close(OverlayKind::ContextMenu);

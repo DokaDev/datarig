@@ -74,7 +74,7 @@ fn set_accepts_known_settings_and_values_only() {
     );
     assert_eq!(
         setting_keys(),
-        "language|icons|secrets.default_source|commands.position|detail_view|clipboard|copy_header|editor.cursor_shape|editor.clipboard|theme|editor.format_keyword_case|editor.format_indent|editor.auto_pairs|editor.soft_tab_backspace|editor.run_hints|secrets.macos_keychain_access|explorer.size_heat|ui.yank_flash|idle_disconnect|lock_wait"
+        "language|icons|secrets.default_source|commands.position|detail_view|clipboard|copy_header|editor.cursor_shape|editor.clipboard|theme|editor.format_keyword_case|editor.format_indent|editor.auto_pairs|editor.soft_tab_backspace|editor.run_hints|secrets.macos_keychain_access|explorer.size_heat|ui.yank_flash|ui.tips|idle_disconnect|lock_wait"
     );
     // The duration settings: a preset, any other duration in range, off; not out of range.
     let secs = |n| Some(std::time::Duration::from_secs(n));
@@ -87,6 +87,7 @@ fn set_accepts_known_settings_and_values_only() {
         assert!(matches!(set(bad), Err(SetError::BadValue { .. })), "{bad}");
     }
     assert_eq!(set("ui.yank_flash=off"), Ok(Setting::YankFlash(datarig_core::config::YankFlash::Off)));
+    assert_eq!(set("ui.tips=off"), Ok(Setting::Tips(datarig_core::config::Tips::Off)));
     assert_eq!(set("editor.run_hints=off"), Ok(Setting::RunHints(datarig_core::config::RunHints::Off)));
     assert_eq!(set("explorer.size_heat=off"), Ok(Setting::SizeHeat(datarig_core::config::SizeHeat::Off)));
     assert_eq!(set("explorer.size_heat=5"), Ok(Setting::SizeHeat(datarig_core::config::SizeHeat::Five)));
@@ -157,7 +158,7 @@ fn completes_setting_keys_then_values() {
     let got = |arg: &str| complete_arg(ArgKind::Setting, arg, &[]);
     assert_eq!(
         got(""),
-        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19].map(ArgCompletion::SetKey)
+        [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20].map(ArgCompletion::SetKey)
     );
     assert_eq!(got("c"), [3, 5, 6].map(ArgCompletion::SetKey));
     assert_eq!(got("commands.position="), [ArgCompletion::SetValue(3, 0), ArgCompletion::SetValue(3, 1)]);
@@ -166,7 +167,7 @@ fn completes_setting_keys_then_values() {
     assert_eq!(got("secrets.default_source=p"), [ArgCompletion::SetValue(2, 5)]);
     assert_eq!(got("icons=o"), [ArgCompletion::SetValue(1, 0), ArgCompletion::SetValue(1, 1)]);
     assert_eq!(set("icons=OFF"), Ok(Setting::Icons(datarig_core::config::IconsSetting::Off)));
-    assert_eq!(got("l"), [ArgCompletion::SetKey(0), ArgCompletion::SetKey(19)], "language, lock_wait");
+    assert_eq!(got("l"), [ArgCompletion::SetKey(0), ArgCompletion::SetKey(20)], "language, lock_wait");
     assert_eq!(got("ed"), [7, 8, 10, 11, 12, 13, 14].map(ArgCompletion::SetKey));
     assert_eq!(set("editor.format_indent=2"), Ok(Setting::FormatIndent(datarig_core::config::FormatIndent::Two)));
     assert_eq!(got("editor.cursor_shape="), [ArgCompletion::SetValue(7, 0), ArgCompletion::SetValue(7, 1)]);

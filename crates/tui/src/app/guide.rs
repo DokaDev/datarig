@@ -137,7 +137,7 @@ impl App {
                         // An item that cannot run now does nothing.
                         if (action::spec(a).when)(self) {
                             self.overlays.close(OverlayKind::WhichKey);
-                            self.dispatch(a);
+                            self.dispatch_from(a, tips::Source::Key);
                         }
                     }
                     (None, true) => {
@@ -148,7 +148,7 @@ impl App {
                     // The key that opens the command line here (`:`, as the footer says) opens it.
                     _ if self.keymap.resolve_seq(origin, &[k]).0 == Some(Target::Action(Action::OpenCommands)) => {
                         self.overlays.close(OverlayKind::WhichKey);
-                        self.dispatch(Action::OpenCommands);
+                        self.dispatch_from(Action::OpenCommands, tips::Source::Key);
                     }
                     _ => {
                         self.overlays.close(OverlayKind::WhichKey);
@@ -242,6 +242,7 @@ impl App {
             }));
         }
         self.help_select_first_entry();
+        self.step_taken(Action::Help);
     }
 
     /// The rows of the keyboard help: a header per context, then (when the section is open)
@@ -500,7 +501,16 @@ impl App {
     /// there: the command that runs it (`:cancel`), else its name, which the command line
     /// finds.
     pub fn key_for(&self, a: Action, ctx: Ctx) -> String {
-        if let Some(k) = self.keymap.hint_keys(a, ctx, self.enhanced_keys) {
+        self.key_text(a, self.keymap.hint_keys(a, ctx, self.enhanced_keys))
+    }
+
+    /// The key a tip names for `a` in `ctx` ([`Keymap::tip_keys`]), else like [`App::key_for`].
+    pub fn tip_key(&self, a: Action, ctx: Ctx) -> String {
+        self.key_text(a, self.keymap.tip_keys(a, ctx, self.enhanced_keys))
+    }
+
+    fn key_text(&self, a: Action, k: Option<Vec<crate::keymap::KeyChord>>) -> String {
+        if let Some(k) = k {
             return keys::label(&k);
         }
         match command::COMMANDS.iter().find(|c| c.action == Some(a)) {

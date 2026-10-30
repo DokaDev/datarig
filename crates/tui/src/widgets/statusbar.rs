@@ -180,10 +180,12 @@ pub(crate) fn draw_status(app: &mut App, area: Rect, buf: &mut Buffer) {
     };
     let seg_w = |v: &[(String, Style)]| v.iter().map(|(s, _)| width(s)).sum::<usize>();
     let mut hint = Vec::new();
+    let mut hints_shown = 0;
     for n in (1..=hints.len()).rev() {
         let v = hint_segs(n);
         if avail > msg_w + seg_w(&v) + width(sep) {
             hint = v;
+            hints_shown = n;
             break;
         }
     }
@@ -192,6 +194,15 @@ pub(crate) fn draw_status(app: &mut App, area: Rect, buf: &mut Buffer) {
 
     segs.push((lead.to_string(), sep_style));
     let msg_room = avail - hint_w;
+    // Nothing to say and every hint shown: a tip may take the spare room, dim, when it fits
+    // whole (never at a hint's cost).
+    if msg_segs.is_empty()
+        && hints_shown == hints.len()
+        && let Some(tip) = app.tip_line(crate::app::tips::Place::StatusIdle)
+        && width(&tip) < msg_room
+    {
+        msg_segs.push((tip, Style::new().fg(th.fg_dim).bg(th.surface)));
+    }
     let mut used = 0;
     for (s, st) in msg_segs {
         // Cut in the middle: the end of a message says what to do.

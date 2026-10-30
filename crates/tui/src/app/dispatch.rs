@@ -168,6 +168,7 @@ impl App {
             Action::SetDefaultSource(d) => self.set_default_source(d),
             Action::ToggleIcons => self.set_icons(if self.icons_on() { IconsSetting::Off } else { IconsSetting::On }),
             Action::Help => self.open_help(false),
+            Action::DismissOnboarding => self.dismiss_onboarding(),
             Action::HelpAll => self.open_help(true),
             // A selected range goes first, then the grid.
             // The inspector goes back to its grid; the grid drops a selected range first, then

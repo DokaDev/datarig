@@ -87,6 +87,7 @@ impl App {
             Setting::KeychainAccess(a) => *a == self.prefs.keychain_access,
             Setting::SizeHeat(h) => *h == self.prefs.size_heat,
             Setting::YankFlash(f) => *f == self.prefs.yank_flash,
+            Setting::Tips(t) => *t == self.prefs.tips,
             Setting::IdleDisconnect(d) => *d == self.prefs.idle_disconnect,
             Setting::LockWait(d) => *d == self.prefs.lock_wait,
         };

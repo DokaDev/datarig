@@ -92,6 +92,7 @@ fn setting_action(s: Setting) -> Option<Action> {
         | Setting::KeychainAccess(_)
         | Setting::SizeHeat(_)
         | Setting::YankFlash(_)
+        | Setting::Tips(_)
         | Setting::IdleDisconnect(_)
         | Setting::LockWait(_) => None,
     }
@@ -443,7 +444,7 @@ impl App {
             }
             Some(CommandItem::Action(i)) => {
                 self.overlays.close(OverlayKind::Commands);
-                self.dispatch(REGISTRY[i].action);
+                self.dispatch_from(REGISTRY[i].action, tips::Source::Command);
                 Ok(())
             }
             Some(CommandItem::Command(i)) if COMMANDS[i].arg.is_some_and(|k| !k.optional()) => {
@@ -517,7 +518,16 @@ impl App {
 
     /// Run command `spec` with argument `arg`, closing the command line first. An argument
     /// that does not fit, or a command that cannot run here, is an error (and nothing runs).
+    /// A command without an action of its own is counted by its name once it ran (its tip goes).
     fn run_command(&mut self, spec: &'static CommandSpec, arg: &str) -> Result<(), Notice> {
+        self.run_command_here(spec, arg)?;
+        if spec.action.is_none() {
+            self.count_command(spec.name);
+        }
+        Ok(())
+    }
+
+    fn run_command_here(&mut self, spec: &'static CommandSpec, arg: &str) -> Result<(), Notice> {
         let name = spec.name.to_string();
         let err = |m: Msg| Err(Notice::new(m, Level::Error));
         match (spec.command, spec.action) {
@@ -576,7 +586,7 @@ impl App {
                     return err(Msg::Label(Label::SuspendUnsupported));
                 }
                 self.overlays.close(OverlayKind::Commands);
-                self.dispatch(Action::Suspend);
+                self.dispatch_from(Action::Suspend, tips::Source::Command);
             }
             (command::Command::Format, _) => {
                 if !arg.is_empty() {
@@ -584,7 +594,7 @@ impl App {
                 }
                 self.overlays.close(OverlayKind::Commands);
                 self.focus = Focus::Editor;
-                self.dispatch(Action::FormatSql);
+                self.dispatch_from(Action::FormatSql, tips::Source::Command);
             }
             (command::Command::Ddl, _) => {
                 self.ddl_command(arg.trim())?;
@@ -598,7 +608,7 @@ impl App {
                 };
                 self.overlays.close(OverlayKind::Commands);
                 self.focus = Focus::Editor;
-                self.dispatch(Action::Explain(analyze));
+                self.dispatch_from(Action::Explain(analyze), tips::Source::Command);
             }
             (command::Command::TabMove, _) => {
                 if !action::has_tab(self) {
@@ -788,7 +798,7 @@ impl App {
                     return err(Msg::CommandsErrorNoArgs { name });
                 }
                 self.overlays.close(OverlayKind::Commands);
-                self.dispatch(a);
+                self.dispatch_from(a, tips::Source::Command);
             }
             (_, Some(a)) => {
                 if !arg.is_empty() {
@@ -798,7 +808,7 @@ impl App {
                     return err(Msg::CommandsErrorUnavailable { name });
                 }
                 self.overlays.close(OverlayKind::Commands);
-                self.dispatch(a);
+                self.dispatch_from(a, tips::Source::Command);
             }
             (_, None) => {}
         }
@@ -869,6 +879,7 @@ impl App {
             Setting::KeychainAccess(a) => self.set_keychain_access(a),
             Setting::SizeHeat(h) => self.set_prefs(s, |x| x.size_heat = h),
             Setting::YankFlash(f) => self.set_prefs(s, |x| x.yank_flash = f),
+            Setting::Tips(t) => self.set_prefs(s, |x| x.tips = t),
             Setting::IdleDisconnect(d) => self.set_prefs(s, |x| x.idle_disconnect = d),
             Setting::LockWait(d) => self.set_prefs(s, |x| x.lock_wait = d),
         }

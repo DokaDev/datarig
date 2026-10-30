@@ -15,6 +15,7 @@ impl App {
         self.tx_idle_tick(now);
         self.idle_tick(now);
         self.handle_event_here(ev);
+        self.tips_follow();
         self.sweep_as_plan();
         self.sweep_exports();
         self.keychain_offer_check();
@@ -116,6 +117,7 @@ impl App {
 
     pub fn on_app_event(&mut self, ev: AppEvent) {
         self.on_app_event_here(ev);
+        self.tips_follow();
         self.sweep_grid_search();
         self.sweep_as_plan();
         self.sweep_exports();
@@ -289,7 +291,7 @@ impl App {
                 // it. `Ctrl+C` there still cancels the running query.
                 self.close_search_prompt();
                 if !repeat || action::spec(a).repeatable {
-                    self.dispatch(a);
+                    self.dispatch_from(a, tips::Source::Key);
                 }
             }
             // A held key does not start a sequence.

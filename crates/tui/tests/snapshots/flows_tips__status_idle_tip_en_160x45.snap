@@ -1,0 +1,6 @@
+---
+source: crates/tui/tests/flows_tips.rs
+assertion_line: 250
+expression: status
+---
+ NORMAL  local-pg │ Tip: Space Space opens the actions of what is selected         │ i type · Ctrl+E run · Tab next pane · : commands · F1 help · Space more EN
