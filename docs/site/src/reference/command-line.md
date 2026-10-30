@@ -28,7 +28,7 @@ environment:
 
 | Variable | What it does |
 |---|---|
-| `DATARIG_SECRET_STORE` | `memory` keeps passwords in memory only: the OS keychain and the secrets file are never touched. `keychain`, or unset: the profiles' own password stores. Any other value is an error and datarig does not start. |
+| `DATARIG_SECRET_STORE` | `memory` keeps passwords in memory only: the OS keychain and the secrets file are never touched. `keychain`, or unset (or empty): the profiles' own password stores. Any other value is an error and datarig does not start. |
 | `XDG_CONFIG_HOME` | The config file is `$XDG_CONFIG_HOME/datarig/config.toml` when it is set (and `--config` is not given). |
 | `HOME` | The home directory: the config file is `~/.config/datarig/config.toml` without `XDG_CONFIG_HOME`, the data and state directories default to places under it, and `~` in an SSH key file is it. |
 | `USERPROFILE` | The home directory where `HOME` is not set (Windows). |

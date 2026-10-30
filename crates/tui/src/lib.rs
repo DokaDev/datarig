@@ -28,14 +28,14 @@ pub mod widgets;
 
 /// The environment variables datarig reads, with what each does, for the generated command line
 /// reference (`tests/cli_doc.rs`). That test fails when the code reads a variable that is not
-/// here (or in its short list of variables only the tests and the benchmarks read). Text is
-/// Markdown: no `|`.
+/// here (or in its short list of internal ones: the performance harness's). A variable set to
+/// an empty value counts as unset. Text is Markdown: no `|`.
 pub const ENV_VARS: &[(&str, &str)] = &[
     (
         "DATARIG_SECRET_STORE",
         "`memory` keeps passwords in memory only: the OS keychain and the secrets file are never \
-         touched. `keychain`, or unset: the profiles' own password stores. Any other value is an \
-         error and datarig does not start.",
+         touched. `keychain`, or unset (or empty): the profiles' own password stores. Any other \
+         value is an error and datarig does not start.",
     ),
     (
         "XDG_CONFIG_HOME",
