@@ -79,8 +79,9 @@ status.
     columns and no open transaction, is read in chunks by that key, each a read of its own that
     waits at most 5 s for a lock (rows changed meanwhile may be read in a later state).
   - Any other result runs its statement once and streams it: a plain `SELECT` that is safe to
-    repeat goes ahead, anything else asks first. Read-only and prod-like environments ask first
-    too, because the statement holds a read lock and a snapshot until the export finishes.
+    repeat goes ahead, anything else asks first. Environments with `read_only = true` or
+    `confirm = "writes"` ask first too, because the statement holds a read lock and a snapshot
+    until the export finishes.
 - An export only reads: a statement that writes or locks rows is refused unsent. Outside a
   transaction of yours each statement it runs is a read-only transaction of its own
   (`BEGIN READ ONLY` on PostgreSQL, `START TRANSACTION READ ONLY` on MySQL), so its rows are one

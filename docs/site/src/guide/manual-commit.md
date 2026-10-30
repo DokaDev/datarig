@@ -2,7 +2,8 @@
 
 With `commit = "manual"` in an [environment](environments.md), what you change waits for you:
 datarig opens a transaction right before the first statement that may write, and it stays open
-until you commit or roll it back. **datarig never commits on its own.** The default,
+until you commit or roll it back. **datarig never sends a `COMMIT` on its own**; on MySQL,
+statements that commit by themselves are covered [below](#limits). The default,
 `commit = "auto"`, commits each statement that runs outside your own `BEGIN` block by itself.
 
 ```toml

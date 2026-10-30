@@ -30,7 +30,10 @@ PostgreSQL's `allow` is not supported. MySQL's mode names are read in any case.
   self-signed certificate copied to your machine works too). Without one, `verify-full` /
   `VERIFY_IDENTITY` checks the certificate against the certificates your system trusts: the
   macOS trust settings, the Windows certificate store, the system's certificate files on
-  Linux. `sslrootcert = "system"` says so explicitly.
+  Linux. `sslrootcert = "system"` names those explicitly and makes the mode `verify-full`
+  whatever the profile's mode says (unless TLS is off).
+- The CA, certificate and key files are absolute paths or start with `~/`; a relative path is
+  an error of the profile.
 - The name checked is the profile's host, also through an SSH tunnel (never `127.0.0.1`). An
   IP address is checked against the certificate's IP addresses.
 - The client certificate and key are PEM files (PKCS#8, RSA or EC keys). A key protected by a

@@ -65,7 +65,7 @@ A profile that names an environment, a Startup SQL preset or a tunnel preset tha
 exist is an error of that profile. It never connects with the default rules, without the
 preset, or directly instead. Pick an existing one in the profile's form.
 
-## A second datarig opened read-only
+## A second datarig does not restore my tabs
 
 Only one instance keeps the workspace (tabs, console buffers) at a time. A second instance
 started while the first runs restores no tabs and writes none of the workspace files.

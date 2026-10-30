@@ -28,9 +28,12 @@ the app renames the old names in place once what they say changes.
 ## Manage presets
 
 The explorer's **Startup SQL** section lists the presets with their database and how many
-statements and profiles each has. `n` makes one, `e` edits, `c` copies, `d` deletes, `t` tests,
-and `Enter` or `l` lists the profiles that use it (their own or through their environment). The
-`/` filter finds a preset by its name or a statement. The command line also finds `session.new`.
+statements and profiles each has (the statements in the warning color when one changes a setting
+a read-only environment refuses, such as MySQL's `foreign_key_checks = 0`), and under each
+preset the first statement that is not allowed and why. `n` makes one, `e` edits, `c` copies,
+`d` deletes, `t` tests, and `Enter` or `l` lists the profiles that use it (their own or through
+their environment). The `/` filter finds a preset by its name or a statement. The command line
+also finds `session.new`.
 
 Its form has the name, the database and the statements, one per row:
 
@@ -39,7 +42,8 @@ Its form has the name, the database and the statements, one per row:
 - `Up`/`Down` go from row to row, `Tab` leaves the list, `Backspace` on an empty row or
   `Ctrl+D` on any row removes it.
 - A paste of several statements makes a row of each: a `;` ends one, and so does a line break
-  before a line that starts with `SET`.
+  before a line that starts with `SET`. A row that still holds two statements
+  (`SET a = 1 SET b = 2`) is refused.
 - With the mouse, a click puts the cursor in a row, `×` removes it and **+ Add statement**
   adds one at the end.
 
@@ -96,6 +100,7 @@ an error shows the words its connect would refuse with.
 - **Not datarig's own settings.** What datarig manages itself is refused, with why and where to
   set it instead:
   - `idle_session_timeout` and MySQL's `wait_timeout`: use the environment's `idle_disconnect`.
+    MySQL's `interactive_timeout` has no effect on an open session.
   - `idle_in_transaction_session_timeout`: use `tx_idle_rollback`.
   - the read-only settings (`default_transaction_read_only`, `transaction_read_only`, MySQL's
     `tx_read_only`, `… TRANSACTION READ ONLY/WRITE`): use the environment's `read_only`.
@@ -132,8 +137,9 @@ Statements that cannot run in a transaction, `CALL`, `DO`, and your own `SET` an
 without them.
 
 These are not sent there at all (the profile still connects, and the tab names what was not
-sent): statements with no `SET LOCAL` form (`SET ROLE`, `SET SESSION AUTHORIZATION`,
-`SET SESSION CHARACTERISTICS …`), defaults of the session's transactions
+sent): statements that change who the session is (`SET ROLE`, `SET SESSION AUTHORIZATION`:
+a statement run outside a transaction would run as someone else), statements with no
+`SET LOCAL` form (`SET SESSION CHARACTERISTICS …`), defaults of the session's transactions
 (`default_transaction_isolation`, `default_transaction_deferrable`), and values that depend on
 what the pooled connection did before (`temp_buffers`, PostgreSQL 17's `transaction_timeout`).
 Behind a pooler, set the isolation in your own block instead (`BEGIN ISOLATION LEVEL …`).

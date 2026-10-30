@@ -46,7 +46,8 @@ is implemented, all with counts:
 
 The complete list, with every key's exact behaviour, is in the
 [keybindings reference](../reference/keybindings.md). Not yet: macros (their keys are
-reserved), `gv`, and Ex commands other than line numbers, `:s` and `:format` (such as :d and :g).
+reserved), `gv`, and Ex commands other than line numbers, `:s` and `:format` (such as delete and
+global).
 
 ## Ex commands
 
@@ -93,7 +94,7 @@ selection, as one undo step. It never runs on its own.
   keyword case if you ask for it (`[editor] format_keyword_case = "upper"` or `"lower"`). Names,
   strings, comments and dollar-quoted bodies stay exactly as written.
 - Every result is checked token by token against the original. When anything else would change
-  (an operator split, strings joined across a line break, `U&'...'`, psql meta-commands) it
+  (an operator split, strings joined across a line break, `U&'...'`, backslash meta-commands) it
   refuses, says on which line, and leaves the text alone.
 
 ## Running statements

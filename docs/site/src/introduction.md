@@ -1,13 +1,15 @@
 # Introduction
 
-datarig is a terminal database client: a workspace for your databases in the terminal, written
-in Rust with [Ratatui](https://ratatui.rs). It keeps several connections open side by side,
-each with its own tabs, a schema explorer, a SQL editor with vim keys, and a results grid that
-pages through large results explicitly instead of loading them whole.
+A full-featured database client that lives in your terminal — light, fast, and safe by default.
+
+datarig is written in Rust with [Ratatui](https://ratatui.rs). It keeps several connections
+open side by side, each with its own tabs, a schema explorer, a SQL editor with vim keys, and a
+results grid that pages through large results explicitly instead of loading them whole.
 
 It is careful by default: statements that may do harm ask before they run, read-only profiles
-are enforced by the server, and paging a result leaves no transaction, lock or snapshot open on
-the server unless you ask for it.
+are checked before anything is sent and, on PostgreSQL, also enforced by the server, and
+paging a result leaves no transaction, lock or snapshot open on the server unless you ask for
+it.
 
 ## Status
 
@@ -46,7 +48,7 @@ Planned, in no particular order and with no dates:
 - Drivers for Valkey/Redis and Elasticsearch
 - TLS: passphrase-protected client keys, certificate revocation lists, `sslnegotiation=direct`
 - A server monitor (sessions, locks, activity)
-- More of vim: `gv`, macros, Ex commands other than line numbers and `:s` (such as :d and :g)
+- More of vim: `gv`, macros, Ex commands other than line numbers and `:s` (such as delete and global)
 - DDL of objects the explorer does not list yet (functions on their own, sequences, types), and
   from the other drivers
 - Table profiling from the planner's statistics, and a chart builder that writes the SQL of a
@@ -58,10 +60,10 @@ Planned, in no particular order and with no dates:
 
 - [Install](install.md) datarig, then follow [Getting started](getting-started.md).
 - The [user guide](guide/connections.md) explains each part of the workspace, task by task.
-- The reference pages list every [key](reference/keybindings.md),
-  [`:` command](reference/commands.md), [configuration key](reference/configuration.md) and
-  [command-line option](reference/command-line.md). They are generated from the code, so they
-  always match the release they come with.
+- The reference pages list every [key](reference/keybindings.md), [`:`
+  command](reference/commands.md), [configuration key](reference/configuration.md) and
+  [command-line option](reference/command-line.md). They are generated from the code, and the
+  site is published from each release.
 
 Source code, issues and releases are on GitHub:
 <https://github.com/DokaDev/datarig>.

@@ -23,12 +23,12 @@ opens or toggles, `r` reloads. The full key list is in the
 
 ## Row and size estimates
 
-Each table and materialized view shows the server's estimates of its rows and its size on
-disk, dim and on the right (`orders   ~50k rows · 19 MB`). They are read with the schema's list
-in the same round trip, from the statistics that `VACUUM` and `ANALYZE` keep, without opening
-the table and without a lock on it. A table that has grown to more than twice the rows its last
-`ANALYZE` saw shows the live rows of the server's statistics instead. A table with no statistics yet shows nothing,
-and the status bar says "rows and size unknown (no statistics yet)".
+Each table and materialized view shows the server's estimates of its rows and its size on disk,
+dim and on the right (`orders   ~50k rows · 19 MB`). They are read with the schema's list in the
+same round trip, from the statistics that `VACUUM` and `ANALYZE` keep, without opening the table
+and without a lock on it. A table that has grown to more than twice the rows its last `ANALYZE`
+saw shows the live rows of the server's statistics instead. A table with no statistics yet shows
+nothing, and the status bar says "rows and size unknown (no statistics yet)".
 
 The largest tables of each schema stand out. With `[explorer] size_heat = "3"` (the default),
 the largest tenth of those with a known size (one at least) shows its estimates in amber from
@@ -77,7 +77,7 @@ opened; `Esc` gives the tree back as it was.
 opens its `CREATE` statements in a read-only tab; `F` on a trigger shows its function's.
 
 - On PostgreSQL the DDL is rebuilt from the catalog in one round trip and marked as such
-  (`-- Reconstructed by datarig from the catalog (not pg_dump)`): owned sequences, columns with
+  in a first comment line: owned sequences, columns with
   their collations, defaults, identity and generated expressions, constraints, partitioning or
   inheritance, storage parameters, owner, indexes, triggers, row-level security and policies,
   comments and grants. Not included: rows, sequence values, rules, extended statistics, security

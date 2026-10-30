@@ -1,9 +1,8 @@
 # MySQL
 
-**Versions.** MySQL 8.0, 8.4 and 9.x. CI runs the driver's tests against MySQL 8.4;
-parts of the driver were also checked by hand against 8.0 and 9.7. MySQL 5.7 and older are
-refused with their version. MariaDB 10.6 and newer is a best effort: it connects and runs
-statements, and is tested only lightly.
+**Versions.** MySQL 8.0, 8.4 and 9.x. CI runs the driver's tests against MySQL 8.4. MySQL 5.7
+and older are refused with their version. MariaDB 10.6 and newer is a best effort: it connects
+and runs statements, and is tested only lightly.
 
 A MySQL profile has `driver = "mysql"`, and a URL starts with `mysql://` (or `mariadb://`).
 
@@ -59,8 +58,8 @@ the tab's database; `kind` is `table`, `view`, `procedure`, `function`, `trigger
 needed only when one name names several), opens the server's own `SHOW CREATE` text.
 
 - MySQL has no DDL of an index of its own: `D` on an index row shows its table's.
-- A trigger's, routine's or event's text is wrapped as `mysqldump` writes it
-  (`DELIMITER ;;` … `;;` / `DELIMITER ;`).
+- A trigger's, routine's or event's text is wrapped in delimiter statements
+  (`DELIMITER ;;` … `;;` / `DELIMITER ;`), so it runs again as one statement.
 - An object made under another `sql_mode` than the connection's default starts with a
   `-- sql_mode: …` line: its body is read in that mode.
 - The server writes the strings of a table's or view's text with backslash escapes whatever
@@ -68,7 +67,7 @@ needed only when one name names several), opens the server's own `SHOW CREATE` t
   console in the object's database with every string written as that console's `sql_mode`
   reads it, so it makes the same object there; the DDL tab keeps the server's text.
 - The `DEFINER` is kept, so running it again as another user needs `SET_USER_ID` (MySQL 8.0)
-  or `SET_ANY_DEFINER` (8.2 and later), as with `mysqldump`. A routine you may run but not see
+  or `SET_ANY_DEFINER` (8.2 and later). A routine you may run but not see
   says its definition is hidden.
 - Reading waits at most 2 s on another session: an object whose table is locked shows
   "locked", and `r` reads it again.
@@ -85,8 +84,8 @@ A copy is refused, naming the column, where a value would not be written whole: 
 server sends it rounded to about six digits), a `TIMESTAMP` while the session's time zone is not
 a fixed offset (`SET time_zone = '+00:00'` first), text while the session's results are not
 `utf8mb4`, and an `AUTO_INCREMENT` value of 0. A whole result is refused when it was read while
-a procedure, an `EXECUTE` or an executable comment ran, or when a `SET time_zone` or `SET NAMES`
-ran while it was read: run the statement again.
+a procedure, an `EXECUTE` or an executable comment ran, before the session said its values, or
+when a `SET time_zone` or `SET NAMES` ran while it was read: run the statement again.
 
 The keys this needs are read for every database when the connection opens (and again after DDL
 run in datarig), so a table created elsewhere later needs `r` on the connection in the explorer
@@ -128,8 +127,8 @@ still refuses their writes.
 
 ## Passwords on a direct connection
 
-A MySQL profile uses TLS when the server offers it (`PREFERRED`, the mysql client's default;
-see [TLS](tls.md)). A `caching_sha2_password` login the server has not cached (the first one,
+A MySQL profile uses TLS when the server offers it (`PREFERRED`; see
+[TLS](tls.md)). A `caching_sha2_password` login the server has not cached (the first one,
 or after a restart) needs the password itself:
 
 - **Over TLS** it goes inside TLS, but to another machine only when the server's certificate
