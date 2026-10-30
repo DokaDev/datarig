@@ -142,12 +142,16 @@ is edited):
 
 - A change users can see (the English catalog, key bindings, actions, `:` commands, config and
   policy keys, connection profiles, the command line and environment variables, themes) also
-  changes a hand-written page under `docs/site/src` (generated pages and screens do not count),
-  or the description has the line `no doc change: <reason>`.
+  changes a hand-written page under `docs/site/src` (generated pages, screens and What's new do
+  not count), or the description has the line `no doc change: <reason>`.
 - A change to `crates/` or `locales/` adds a changelog fragment, or the description has the line
   `no changelog: <reason>`.
 - A release pull request leaves no fragments in `changes/`, and What's new has the version's
   section.
+
+The two lines count anywhere in the description, in any case, but not inside an HTML comment
+or a code block. A pull request stacked on another is judged against its base branch as it is
+now; after that branch is rewritten, rebase onto it.
 
 ### Changelog fragments
 
@@ -156,7 +160,7 @@ A fragment is a file `changes/<kind>/<slug>.md`, `<kind>` one of `added`, `chang
 [changes/README.md](changes/README.md)). A change of the configuration formats always has a
 `changed` fragment that says so, and that datarig migrates the old files, so that What's
 new and the release notes tell users. `scripts/changes.sh check changes/*/*.md` checks them
-locally.
+locally. A fragment merged after the release pull request goes into the next release.
 
 ## Releases
 
@@ -172,7 +176,9 @@ Maintainers release by pushing a tag; `.github/workflows/release.yml` does the r
 The release notes are that section of What's new, the paragraph about the archives, then the
 list of pull requests GitHub generates. A tag whose version has no section fails before the
 builds. An urgent patch without fragments still gets its one line:
-`scripts/changes.sh release 0.36.1 --note "Fix …"`.
+`scripts/changes.sh release 0.36.1 --note "Fix …"`. A release candidate (if one is ever
+tagged) needs no section: its notes are GitHub's list only, and the fragments wait for the
+stable release.
 
 The workflow fails unless the tag is exactly `v` and the workspace version. It builds the
 archives (macOS and Linux, arm64 and x86_64; Windows x86_64), installs and tests the Homebrew

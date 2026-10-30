@@ -30,7 +30,7 @@ changed, and that datarig migrates the old files (keeping a backup), so that Wha
 the release notes tell users before they upgrade.
 
 Check fragments with `scripts/changes.sh check changes/*/*.md`; the docs rule of pull requests
-checks them too.
+checks them too. Files whose names start with a dot are ignored.
 
 ## Releasing
 
@@ -47,3 +47,5 @@ fragments, such as an urgent patch, gives the one line its section says:
 ```sh
 scripts/changes.sh release 0.36.1 --note "Fix the crash when a query returns no columns."
 ```
+
+A release candidate takes no section and leaves the fragments for the stable release.
